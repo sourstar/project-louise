@@ -3133,8 +3133,33 @@ def cmd_show(a) -> int:
     # 07 §7.3 (2026-11-07, one status): the copy's stages as `node show`
     # counts them and with what holds each — app/status.py, live and bounded
     out["status"] = _collection_status(a.root, name, codex)
+    # 07 §7.8 (2026-11-07): what the encoder spends on, out of what is held —
+    # the slice scope's own reading (`slice_scope.embed_view`), the one the
+    # Library's card and grow dialog show
+    out.update(_embed_choice(a.root, name))
     _print(out)
     return 0
+
+
+def _embed_choice(root, name: str) -> dict:
+    """`embed_slices`: the slices embedded here, as the passes resolve them
+    — the held ones the file names, every held one where it names none
+    (`"all"` where the held slices cannot be listed); `embed_slices_not_held`
+    what the file names that is not held; `embed_select`: "all" or "smart".
+    All null for a copy this node's collection files do not name."""
+    from app import collections as collections_mod, slice_scope
+    from app.hold import records as rec
+    none = {"embed_slices": None, "embed_slices_not_held": [], "embed_select": None}
+    try:
+        held = collections_mod.by_name(name)
+    except Exception:   # noqa: BLE001 — no node here: nothing embeds
+        return none
+    manifest = rec._paths(root, name)[1] / "manifest.sqlite"
+    if held is None or Path(held.manifest_path).resolve() != manifest.resolve():
+        return none
+    view = slice_scope.embed_view(held)
+    return {"embed_slices": view["embedded"] if view["embedded"] is not None else "all",
+            "embed_slices_not_held": view["not_held"], "embed_select": view["select"]}
 
 
 def _collection_status(root, name: str, codex) -> dict:
