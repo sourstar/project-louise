@@ -172,3 +172,104 @@ from the HDD per query.)
   the first shard with EXDEV.
 - **Not automatic**: a new collection's `drag/` is on the fast pool until
   its mount is added. Add it before the collection's first `records build`.
+
+## 8. ssd3, the 8 TB SSD pool: measured before deciding (2026-11-07)
+
+The operator: "Check ssd3 speed before deciding and estimate the performance
+loss if any". The proposal under decision: the Lance vector tables and the
+derived cache (`LOUISE_CACHE_DIR`) on ssd3; the manifests and text indexes stay
+on ssd4. Raw files: /root/measure/fio-ssd.txt, ssd-rerun.txt, real-ab.txt and
+fio/*.json on the node.
+
+**The disks.**
+
+| pool | device | interface | NAND | written | rated | free (before) |
+|---|---|---|---|---|---|---|
+| ssd3 | Samsung SSD 870 QVO 8TB (fw SVQ02B6Q), single disk, ashift 12 | SATA 3.3, 6 Gb/s | QLC | 53 GB (103,444,305 LBAs), 5,765 h | 2,880 TBW (Samsung's rating for the 8 TB QVO) | 7.14 TiB |
+| ssd4 | Kingston FURY Renegade 2 TB, SFYRDK2000G (fw EIFK51.2), single disk, ashift 12 | NVMe, PCIe 4.0 x4 (LnkSta 16 GT/s x4) | TLC | 36.4 TB, 2 % used, 1,653 h | 2,000 TBW | 592 GiB |
+
+**Method.** Test datasets `ssd3/louise-fio` and `ssd4/louise-fio`,
+primarycache=metadata (ARC holds no data), compression off, recordsize 128K,
+atime off, incompressible buffers; created for this and destroyed after. Reads
+use O_DIRECT (OpenZFS 2.4.4): buffered libaio does its read at submission, so
+its latency and queue depth mean nothing (the first attempt measured 1 µs and
+was thrown away). The ssd3 reads and its sustained write ran with the node
+running (nothing of Louise is on ssd3); everything touching ssd4 ran with the
+node paused.
+
+**fio, two runs each (MEASURED).**
+
+| job | ssd3 | ssd4 | ssd3 against ssd4 |
+|---|---|---|---|
+| a. randread 4K QD1 (point reads) | 1,676–2,033 IOPS; p50 424 µs, p99 2.7–4.0 ms | 2,500–2,596 IOPS; p50 399–403 µs, p99 0.51–0.83 ms | p50 the same; p99 5–8× worse |
+| b. randread 64K QD4 (vector reads) | 76–123 MiB/s; p50 1.7 ms, p99 9.8–16 ms | 158–160 MiB/s; p50 1.6 ms, p99 1.9 ms | −23 % to −52 %; p99 5–8× worse |
+| c. randread 4K QD32 × 4 (IOPS ceiling) | 3,894–3,960 IOPS | 9,718–9,945 IOPS | −60 % |
+| d. seqread 1M QD8 | 460–473 MiB/s (SATA's ceiling) | 1,401–1,609 MiB/s | −68 % |
+| e. seqwrite 1M QD8 sustained, O_DIRECT | 287 MiB/s the first minute; the cache cliff at 60 s after 18 GiB; then flat at **158 MiB/s** to 1 TiB (6,593 s) | 79–125 MiB/s over 143 GiB: ZFS's direct-write path, not the disk (below) | — |
+| e'. seqwrite 1M, 120 s, BUFFERED (as Louise writes) | 535 MiB/s | 733 MiB/s | −27 % (both inside a cache) |
+| e''. seqwrite 1M QD8, 120 s, O_DIRECT | 261 MiB/s | 260 MiB/s | the same: ZFS's direct path is the cap |
+
+The 1 TiB written to ssd3 is 0.035 % of its rated 2,880 TBW. ssd3's QLC cache
+had refilled by the buffered run (an hour later, after the file's delete), so
+its 535 MiB/s is cache speed; the sustained rate is the 158 MiB/s.
+
+**f. A manifest's WAL commit on ssd4 (4K randwrite, fsync each, QD1), 60 s
+(MEASURED, noisy).**
+
+| | buffered (SQLite's case), the rerun | O_DIRECT, phase 2 |
+|---|---|---|
+| alone | 56 IOPS; fsync p50 2.8 ms, p99 338 ms | 317 IOPS; fsync p50 2.3 ms, p99 21 ms |
+| beside a seq write on ssd4 (today) | 23 IOPS; fsync p50 2.9 ms, p99 200 ms | 105 IOPS; fsync p50 4.9 ms, p99 31 ms |
+| beside a seq write on ssd3 (the proposal) | **98 IOPS**; fsync p50 3.0 ms, p99 111 ms | 2 IOPS; fsync p50 422 ms, p99 1.28 s |
+
+Buffered, which is how SQLite writes, moving the bulk write to ssd3 helps
+ssd4's commits: 98 IOPS against 23. The direct-I/O collapse (2 IOPS) did not
+repeat buffered; it is read as the O_DIRECT path waiting on the slow pool's
+transaction group (`zfs_dirty_data_max` 4 GiB, one limit for every pool), not
+as what a manifest sees. The two "alone" rows disagree (56 against 317 IOPS),
+so these rows show direction, not a figure to plan on.
+
+**Real workloads, identical copies on both (MEASURED).**
+
+- **2a, a vector search:** normattiva's Lance table (19 GiB copied, the tree
+  sha256 `991c35658d0c7966` on both), its own indices (IvfPq, BTree, Bitmap)
+  and settings (nprobes 30, refine 30), k=50, 200 real queries (titles of 200
+  random normattiva documents, embedded once through its query side, 768
+  dims), node paused, four passes each:
+
+  | | p50 | p95 |
+  |---|---|---|
+  | ssd3 | 352–384 ms | 415–479 ms |
+  | ssd4 | 96–101 ms | 119–126 ms |
+  | ssd3 against ssd4 | **×3.7–3.8** | ×3.5–3.8 |
+
+- **2b, the derived cache:** wikidata's pack (there is no labels.sqlite; the
+  cache is 122 GiB of Parquet files), 40 files (4.8 GiB, the tree sha256
+  `8df8c2b1f81a02c1` on both), 200 random row groups read as the parse reads
+  them (pyarrow `read_row_group`):
+
+  | | 1 thread | 11 threads (the parse pool) |
+  |---|---|---|
+  | ssd3 | 72.5 row groups/s, 80 MB/s | 180.3 row groups/s, 204 MB/s |
+  | ssd4 | 113.1 row groups/s, 125 MB/s | 296.2 row groups/s, 335 MB/s |
+  | ssd3 against ssd4 | −36 % | −39 % |
+
+**The estimate, one row per workload.**
+
+| workload | ssd4 today | ssd3 | loss or gain | kind |
+|---|---|---|---|---|
+| a search's dense step, one collection, cold | ~98 ms p50, ~122 ms p95 | ~370 ms p50, ~450 ms p95 | **+~270 ms a collection, ×3.8**; a search over several collections pays it in each, in parallel | measured (2a) |
+| embedding writes | card-bound: wikidata 34 chunks/s × 2,048 × 2 B ≈ 0.14 MB/s | 158 MiB/s sustained | none: ssd3's margin is ~1,000× | modelled |
+| a 355 GiB table rewrite or carry copy (wikipedia's) | ~11 GiB/min measured (2026-10-31), ~32 min | 18 GiB at cache speed, then 158 MiB/s (9.3 GiB/min); a copy inside ssd3 also reads over the same SATA link (~465 MiB/s in all) | ~39–60 min against ~32 min: **+20 % to +85 %** | modelled from 1e and 1d |
+| a label-bound wikidata parse | 296 row groups/s at the pool's width | 180 row groups/s | **−39 %** where the parse waits on the pack; nothing where it is CPU-bound | measured (2b) |
+| a manifest commit under a vector copy | 23 IOPS, fsync p99 200 ms (buffered) | the copy on ssd3: 98 IOPS, p99 111 ms | **gain**: the commits stop sharing the NVMe with the bulk write | measured (1f), noisy |
+
+**Reading.** ssd3 is a SATA QLC disk: 158 MiB/s sustained writes after an
+18 GiB cache, about a third of ssd4's sequential reads and of its reads at
+depth. The placement it costs visibly is the one the proposal puts first:
+Lance tables on ssd3 make a cold dense search about 3.8× slower (+270 ms p50
+per collection). The derived cache loses 36–39 % on pack reads, which matters
+only while a wikidata parse waits on them. What the proposal gains is ssd4's
+commits under bulk vector writes (1f) and 7 TiB of room. Vectors ARC already
+holds would not pay the loss; ARC's size against the tables was not measured
+here.
