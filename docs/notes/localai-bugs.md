@@ -44,9 +44,10 @@ the source):*
 | **P3** | **patch we carry** | llama.cpp backend: the encoder of an encoder-decoder model runs (B16), as a llama.cpp patch in the backend's own `patches/` | MADLAD on llama.cpp (operator, 2026-10-27: "we need anyway a patched llama.cpp") | not filed; [`deploy/localai/patches/0003-llama-cpp-encoder-decoder.patch`](../../deploy/localai/patches/0003-llama-cpp-encoder-decoder.patch) |
 | **P4** | **patch we carry** | llama.cpp backend: encoder-decoder slots are encoded together, in WAVES, and decode in one batch (on P3, which ran one slot) | MADLAD on llama.cpp at torch's speed: a question's 7 languages in one wave instead of 7 × 3 s | not filed; [`deploy/localai/patches/0004-llama-cpp-encoder-decoder-waves.patch`](../../deploy/localai/patches/0004-llama-cpp-encoder-decoder-waves.patch) |
 | **P5** | **patch we carry** | llama.cpp backend (ggml-sycl): the batched F16 matmul converts a non-contiguous src1 for the GEMM that RUNS — the oneDNN flat copy only when oneDNN's GEMM runs, the gather for oneMKL (`GGML_SYCL_ENABLE_DNN=0`); before, the KQ product of two or more decoder tokens over an F16 K cache read the wrong queries (the P4 card fault, upstream-bugs.md S1) | the root cause of the wrong text in waves, found by code reading 2026-10-28 and matched by the 32-case pattern of upstream's own suite; the F16 KV cache back for MADLAD (−44 % per token against the f32 workaround) once the rebuilt tar passes its gates | **to file at ggml-org/llama.cpp as a PR** ([upstream-reports/ggml-llama-cpp-sycl.md](upstream-reports/ggml-llama-cpp-sycl.md), second section); [`deploy/localai/patches/0005-llama-cpp-sycl-batched-mul-mat-src1.patch`](../../deploy/localai/patches/0005-llama-cpp-sycl-batched-mul-mat-src1.patch) |
-| **P7 (staged)** | **patch staged, not in the series yet** | llama.cpp backend: the encoder output is kept PER SEQUENCE (`llama_memory_enc_dec`, stage 1 of llama-cpp-encoder-decoder.md), so a slot is encoded while others decode; on P3 and P4 | a late request joins the next decode step instead of waiting for the wave; the upstream shape (no public API) | not filed; [`deploy/localai/patches/staged/0006-llama-cpp-encoder-decoder-memory.patch`](../../deploy/localai/patches/staged/0006-llama-cpp-encoder-decoder-memory.patch); moves into the series after its card gates |
-| **P8 (staged)** | **patch staged, not in the series yet** | llama.cpp backend: the encoder outputs live ON THE DEVICE (stage 2: a persistent store written by the encoder graph, read by the decoder's `ggml_get_rows`; no host copies), on P5 | the shape upstream asked for (a persistent buffer, no host copies); the per-step upload gone | not filed; [`deploy/localai/patches/staged/0007-llama-cpp-encoder-decoder-store.patch`](../../deploy/localai/patches/staged/0007-llama-cpp-encoder-decoder-store.patch); moves into the series with P5 after the card gates |
+| **P8 (staged)** | **patch staged, not in the series yet** | llama.cpp backend: the encoder output is kept PER SEQUENCE (`llama_memory_enc_dec`, stage 1 of llama-cpp-encoder-decoder.md), so a slot is encoded while others decode; on P3 and P4 | a late request joins the next decode step instead of waiting for the wave; the upstream shape (no public API) | not filed; [`deploy/localai/patches/staged/0006-llama-cpp-encoder-decoder-memory.patch`](../../deploy/localai/patches/staged/0006-llama-cpp-encoder-decoder-memory.patch); moves into the series after its card gates |
+| **P9 (staged)** | **patch staged, not in the series yet** | llama.cpp backend: the encoder outputs live ON THE DEVICE (stage 2: a persistent store written by the encoder graph, read by the decoder's `ggml_get_rows`; no host copies), on P5 | the shape upstream asked for (a persistent buffer, no host copies); the per-step upload gone | not filed; [`deploy/localai/patches/staged/0007-llama-cpp-encoder-decoder-store.patch`](../../deploy/localai/patches/staged/0007-llama-cpp-encoder-decoder-store.patch); moves into the series with P5 after the card gates |
 | **P6** | **patch we carry** | llama.cpp (common/chat): Command R7B / Command A ("Command 3") tool calls are parsed by llama.cpp's own Cohere2 MoE parser; before, the autoparser preserved `<\|START_THINKING\|><\|END_THINKING\|><\|START_ACTION\|>` as ONE token string, the server dropped the three markers, and every R7B tool call was an HTTP 500 | Command R7B as a chat candidate (operator, 2026-11-03: "B, check vllm parser before reinventing") | **to file at ggml-org/llama.cpp as a PR** once proven on the node (#20786, closed unreproduced, was this); [`deploy/localai/patches/0006-llama-cpp-chat-cohere-command3.patch`](../../deploy/localai/patches/0006-llama-cpp-chat-cohere-command3.patch); in the series since 2026-11-06: engine ea2417d91dcc, every live model byte-identical, every gate passed |
+| **P7** | **upstream, carried ahead of the pin** | llama.cpp (ggml-sycl, dmmv.cpp): upstream's "sycl: dmmv code cleanup" (ggml-org/llama.cpp#31325, commit 5e18eb02, merged 2026-11-02, after our pin ddf48f8): the q8_0 reorder dmmv folded into the generic template, the non-K launchers templated, +41/−411, "a no-op for performance" | the operator, 2026-11-07: "Add the patch 1 as well", in the same engine as the B70 AOT build and the pinned Intel stack, so every space is gated once | **upstream**; drops out of the series when LocalAI's pin passes 5e18eb02; [`deploy/localai/patches/0007-llama-cpp-sycl-dmmv-cleanup.patch`](../../deploy/localai/patches/0007-llama-cpp-sycl-dmmv-cleanup.patch); gated with the a+b engine (quantized dmmv bytes can move: the chat models' decode) |
 | R1 | request | a response header naming the backend instance (pid and start time) that answered | optional: the model pool checks before and after instead | not filed |
 | R2 | request | a batched `Embedding` call: one backend call for N texts, where `/v1/embeddings` now makes N in sequence | only if the node measures a loss (model-pool-over-localai.md@c572c3b §8.2) | not filed |
 | R3 | request | read API keys from a file, not only from `LOCALAI_API_KEY` | only if LocalAI's own UI is published (invariant 8) | not filed |
@@ -453,7 +454,7 @@ rebased onto `ddf48f8`'s `server-context.cpp` (P3 re-anchored; two hunks of P4
 re-placed by hand around upstream's new audio-stream and realtime conditions),
 their code unchanged, and pass the P3/P4 CPU checks again at `ddf48f8` (each
 entry below). The series as committed applies with no fuzz and no rejected
-hunk at every level. P6 and P8 (staged) are NOT rebased yet.
+hunk at every level. P6 and P9 (staged) are NOT rebased yet.
 
 ### P1. `GET /system` lists the options each loaded model was given
 
@@ -941,7 +942,7 @@ rebuilt for this alone — every space on it would be re-gated — the next
 rebuild carries P5 (approved-encoders.md "Known limits").
 
 
-### P7 (staged). llama.cpp backend: the encoder output is kept per sequence
+### P8 (staged). llama.cpp backend: the encoder output is kept per sequence
 
 *Base: `v4.12.1` (`ec92740`), after P1–P4. NOT yet rebased onto `16acc89`:
 at `ddf48f8` its llama.cpp patch has 4 rejected hunks; it is rebased before
@@ -1010,7 +1011,7 @@ f32-cache MADLAD backend rebuilt with it AND P6 — T3, in-wave vs alone (bar
 90 %), a lone request against P4's bytes, seconds per question — then
 the retrieval comparison. Stage 2 (the device store) is P6 below.
 
-### P8 (staged). llama.cpp backend: the encoder outputs live on the device
+### P9 (staged). llama.cpp backend: the encoder outputs live on the device
 
 *Base: `v4.12.1` (`ec92740`), after P1–P5. NOT yet rebased onto `16acc89`
 (with P6). File:
@@ -1112,6 +1113,30 @@ session, 2026-11-03: identical bytes = the same arithmetic, RULE 1; any
 difference = the full re-gate). (2) Command R7B walked (no `tools_failed`)
 and piloted (15 answers), read before any whole run.
 
+
+### P7. llama.cpp (ggml-sycl, dmmv.cpp): upstream's dmmv cleanup, carried ahead of the pin
+
+*Base: master `16acc89` (llama.cpp `ddf48f8`), after P1–P6 (independent of
+them: dmmv.cpp only; P5 is in ggml-sycl.cpp). File:
+`deploy/localai/patches/0007-llama-cpp-sycl-dmmv-cleanup.patch`, which adds
+`backend/cpp/llama-cpp/patches/0009-sycl-dmmv-cleanup.patch`: upstream's
+commit `5e18eb021b021a133cfa4d9ac84dab644bc24318` (ggml-org/llama.cpp#31325,
+merged 2026-11-02, after our pin) byte for byte in its changed lines.*
+
+**What.** "sycl: dmmv code cleanup": the q8_0 reorder dmmv folded into the
+generic template and the non-K launchers templated, +41/−411, "a no-op for
+performance" upstream.
+
+**Why it is carried.** The operator, 2026-11-07: "Add the patch 1 as well",
+built into the same engine as the B70 AOT build and the pinned Intel stack,
+so that every space is gated once rather than twice.
+
+**Risk.** Quantized dmmv bytes can move: the chat models' decode. A gate
+that is not exact on that engine has three candidate causes (AOT, the stack,
+P7), and attributing it costs a bisect build.
+
+**Upstream.** Already upstream. It drops out of the series when LocalAI's
+llama.cpp pin passes `5e18eb02`.
 ---
 
 ## Requests

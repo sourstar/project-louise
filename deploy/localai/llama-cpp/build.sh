@@ -120,6 +120,13 @@ if [ -n "${INTEL_STACK:-}" ]; then
 oneapi_image_digest $(docker buildx imagetools inspect "$ONEAPI_IMAGE" | awk '/^Digest:/ {print $2; exit}')
 ocloc_igc $(docker run --rm --entrypoint cat "$BUILDER" /intel-stack.ocloc)"
 fi
+if [ -n "${SYCL_DEVICE_ARCH:-}" ]; then
+  # the AOT path itself, in the builder the device code was compiled in: the ocloc the SYCL driver execs and the
+  # libigc that ocloc loads (aot-proof.sh); a build whose proof cannot be read writes no lock and fails
+  PROOF=$(docker run --rm -v "$HERE/aot-proof.sh:/aot-proof.sh:ro" --entrypoint bash "$BUILDER" /aot-proof.sh "$SYCL_DEVICE_ARCH")
+  LOCK="$LOCK
+$PROOF"
+fi
 if [ -n "$LOCK" ]; then
   printf 'series %s\nbase %s\n%s\n' "$HEAD" "$BASE" "$LOCK" > "$OUT/louise-llama-cpp-$NAME.tar.stack.lock"
 fi

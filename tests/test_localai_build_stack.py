@@ -77,6 +77,29 @@ def test_one_igc_the_pinned_one_compiles_and_ships():
     assert "ENV CCACHE_DISABLE=1" in text
 
 
+def test_an_aot_build_records_the_ocloc_and_igc_its_driver_used():
+    # the real path, not the layer's plain environment: oneAPI's image carries other ocloc/libigc copies (GTPin)
+    proof = (HERE / "aot-proof.sh").read_text(encoding="utf-8")
+    assert "source /opt/intel/oneapi/setvars.sh" in proof
+    assert "-fsycl-targets=spir64_gen" in proof and "strace -f -e trace=execve" in proof
+    assert "LD_DEBUG=libs" in proof
+    assert 'echo "aot_ocloc ' in proof and 'echo "aot_igc ' in proof
+    build = BUILD.read_text(encoding="utf-8")
+    assert '/aot-proof.sh "$SYCL_DEVICE_ARCH"' in build
+
+
+def test_p7_is_upstreams_dmmv_cleanup_and_in_the_series():
+    patches = HERE.parent / "patches"
+    series = (patches / "series").read_text(encoding="utf-8").split()
+    assert "0007-llama-cpp-sycl-dmmv-cleanup.patch" in series
+    p7 = (patches / "0007-llama-cpp-sycl-dmmv-cleanup.patch").read_text(encoding="utf-8")
+    # it adds the llama.cpp patch beside the others, and that patch is upstream's commit, dmmv.cpp only
+    assert "backend/cpp/llama-cpp/patches/0009-sycl-dmmv-cleanup.patch" in p7
+    assert "5e18eb021b021a133cfa4d9ac84dab644bc24318" in p7
+    inner = [l for l in p7.splitlines() if l.startswith("+diff --git ")]
+    assert inner == ["+diff --git a/ggml/src/ggml-sycl/dmmv.cpp b/ggml/src/ggml-sycl/dmmv.cpp"]
+
+
 def test_the_switches_are_refused_outside_sycl():
     r = subprocess.run(["sh", str(BUILD), "cpu", "/nonexistent"], capture_output=True, text=True,
                        env={"SYCL_DEVICE_ARCH": "bmg-g31", "PATH": "/usr/bin:/bin"})
