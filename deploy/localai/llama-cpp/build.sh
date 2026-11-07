@@ -23,6 +23,13 @@
 # 16acc89, llama.cpp ddf48f8, passed its checks and became the series, the
 # operator's A: one llama.cpp engine for every model.)
 #
+# SYCL_DEVICE_ARCH=<arch> (sycl_f16 only) compiles the device code ahead of time for that card
+# (-DGGML_SYCL_DEVICE_ARCH, e.g. bmg-g31 for the B70) instead of shipping SPIR-V the driver compiles at first use.
+# INTEL_STACK=<file> (sycl_f16 only) builds on a pinned Intel stack (intel-stack-*.conf): LocalAI's own
+# Dockerfile.base-grpc-builder on the file's ONEAPI_IMAGE, then its debs, each checked against its sha256, on top
+# (Dockerfile.intel-stack). Either one makes ANOTHER engine: its tag says so (-aot-<arch>, -stack-<digest>), and
+# <out dir>/<tar>.stack.lock records the arch, the image and every deb's sha256. Unset, the build is unchanged.
+#
 # Needs git, docker (BuildKit) and the network; nothing from Louise's image.
 # The engine it builds is a NEW engine (another tree than upstream's): each
 # model on it is a new run, gated once (docs/03 §3.3), measured for bitwise
@@ -45,6 +52,9 @@ case $VARIANT in
             BUILDER=quay.io/go-skynet/ci-cache:base-grpc-rocm-amd64 ;;
   *) echo "unknown variant: $VARIANT" >&2; exit 2 ;;
 esac
+if [ -n "${SYCL_DEVICE_ARCH:-}${INTEL_STACK:-}" ] && [ "$VARIANT" != sycl_f16 ]; then
+  echo "SYCL_DEVICE_ARCH and INTEL_STACK are for the sycl_f16 variant" >&2; exit 2
+fi
 
 WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT
@@ -57,13 +67,52 @@ for p in $SERIES; do
 done
 # the series' own digest names the build: the same patches, the same tag
 HEAD=$(cd "$PATCHES" && cat "$SERIES_FILE" $SERIES | sha256sum | cut -c1-12)
-TAG=louise-llama-cpp:$VARIANT-$HEAD
+NAME=$VARIANT-$HEAD
+CMAKE_ARGS=
+LOCK=
+if [ -n "${SYCL_DEVICE_ARCH:-}" ]; then
+  CMAKE_ARGS="-DGGML_SYCL_DEVICE_ARCH=$SYCL_DEVICE_ARCH"
+  NAME=$NAME-aot-$SYCL_DEVICE_ARCH
+  LOCK="sycl_device_arch $SYCL_DEVICE_ARCH"
+fi
+if [ -n "${INTEL_STACK:-}" ]; then
+  . "$INTEL_STACK"
+  mkdir -p "$WORK/stack/debs"
+  LOCK="$LOCK
+oneapi_image $ONEAPI_IMAGE"
+  echo "$DEBS" | while read -r want url; do
+    [ -n "$url" ] || continue
+    f="$WORK/stack/debs/$(basename "$url")"
+    curl -fsSL -o "$f" "$url"
+    got=$(sha256sum "$f" | cut -d' ' -f1)
+    if [ "$want" != - ] && [ "$want" != "$got" ]; then
+      echo "sha256 mismatch: $url ($got, the stack pins $want)" >&2; exit 3
+    fi
+    echo "deb $got $(basename "$url")" >> "$WORK/stack/debs.lock"
+  done
+  LOCK="$LOCK
+$(cat "$WORK/stack/debs.lock")"
+  STACK=$(printf '%s\n' "$LOCK" | sha256sum | cut -c1-12)
+  NAME=$NAME-stack-$STACK
+  # LocalAI's own grpc builder base, on the stack's oneAPI image, then the pinned debs on top
+  DOCKER_BUILDKIT=1 docker build --progress=plain -f "$WORK/backend/Dockerfile.base-grpc-builder" \
+    --build-arg BASE_IMAGE="$ONEAPI_IMAGE" --build-arg BUILD_TYPE="$BUILD_TYPE" --build-arg UBUNTU_VERSION=2404 \
+    -t "louise-base-grpc-intel:$STACK-base" "$WORK"
+  DOCKER_BUILDKIT=1 docker build --progress=plain -f "$HERE/Dockerfile.intel-stack" \
+    --build-arg BUILDER_BASE="louise-base-grpc-intel:$STACK-base" -t "louise-base-grpc-intel:$STACK" "$WORK/stack"
+  BUILDER=louise-base-grpc-intel:$STACK
+fi
+TAG=louise-llama-cpp:$NAME
 
 DOCKER_BUILDKIT=1 docker build --progress=plain -f "$WORK/backend/Dockerfile.llama-cpp" \
   --build-arg BUILD_TYPE="$BUILD_TYPE" --build-arg BASE_IMAGE="$BASE_IMAGE" \
   --build-arg BUILDER_TARGET=builder-prebuilt --build-arg BUILDER_BASE_IMAGE="$BUILDER" \
   --build-arg UBUNTU_VERSION=2404 ${AMDGPU_TARGETS:+--build-arg AMDGPU_TARGETS="$AMDGPU_TARGETS"} \
+  ${CMAKE_ARGS:+--build-arg CMAKE_ARGS="$CMAKE_ARGS"} \
   -t "$TAG" "$WORK"
 mkdir -p "$OUT"
-docker save "$TAG" -o "$OUT/louise-llama-cpp-$VARIANT-$HEAD.tar"
-echo "built $TAG from $BASE + $(echo $SERIES | wc -w) patch(es): $OUT/louise-llama-cpp-$VARIANT-$HEAD.tar"
+docker save "$TAG" -o "$OUT/louise-llama-cpp-$NAME.tar"
+if [ -n "$LOCK" ]; then
+  printf 'series %s\nbase %s\n%s\n' "$HEAD" "$BASE" "$LOCK" > "$OUT/louise-llama-cpp-$NAME.tar.stack.lock"
+fi
+echo "built $TAG from $BASE + $(echo $SERIES | wc -w) patch(es): $OUT/louise-llama-cpp-$NAME.tar"

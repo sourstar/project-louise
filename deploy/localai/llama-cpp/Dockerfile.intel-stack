@@ -1,0 +1,13 @@
+# The pinned Intel stack (intel-stack-*.conf) installed on top of LocalAI's grpc builder base, which build.sh builds
+# from LocalAI's own backend/Dockerfile.base-grpc-builder on the stack's ONEAPI_IMAGE. The debs come from build.sh's
+# download directory, already checked against their sha256; installing them by file lets a pinned version replace
+# (or downgrade) whatever Intel's apt repository gave install-base-deps.sh.
+ARG BUILDER_BASE
+FROM ${BUILDER_BASE}
+COPY debs/ /tmp/intel-stack-debs/
+RUN apt-get update \
+ && apt-get install -y --allow-downgrades --no-install-recommends /tmp/intel-stack-debs/*.deb \
+ && rm -rf /tmp/intel-stack-debs /var/lib/apt/lists/* \
+ && dpkg-query -W -f='${Package} ${Version}\n' intel-opencl-icd libze-intel-gpu1 intel-igc-core-2 libze1 \
+      > /intel-stack.versions \
+ && cat /intel-stack.versions
