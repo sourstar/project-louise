@@ -214,7 +214,12 @@ def test_a_sample_worse_than_the_tolerance_refuses_and_carries_nothing(held, ste
     steps["encoder"].fn = lambda texts: fake_embed(texts, tag=b"another function")
     assert _new(root, _new_recipe(tmp_path)) == 1
     assert "carry" not in steps["order"] and "cpu-reference" not in steps["order"]
-    assert "below tolerance 0.999" in capsys.readouterr().err
+    first = capsys.readouterr().err
+    assert "below tolerance 0.999" in first
+    assert _new(root, _new_recipe(tmp_path)) == 1
+    seed_of = lambda err: err.split("(seed ", 1)[1].split(";", 1)[0].split(")", 1)[0]  # noqa: E731
+    assert seed_of(capsys.readouterr().err) == seed_of(first), \
+        "the same request on the same run draws the same chunks: a failure is not drawn away"
     assert not (root / "old.next" / "lance").exists(), "not a vector copied"
     assert recreate.counts(root, "old.next")["documents"] in (None, 0)
     assert recreate.counts(root, "old")["vectors"] == chunks

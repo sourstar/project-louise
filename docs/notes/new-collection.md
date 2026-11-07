@@ -213,8 +213,10 @@ to expect:
 - what stays: the parts, which `normattiva.next` hard-linked, and
   `/corpora/normattiva`, which it reads.
 
-It also prints what still keeps `normattiva.next` in quarantine, typically
-`louise hold check normattiva.next --checks roots,chunks`; run that first.
+It also prints what still keeps `normattiva.next` in quarantine; run that
+first, with A1's attested check of the carried table under the validated
+run beside it: `louise hold check normattiva.next --checks
+roots,chunks,vectors-sample`.
 The forget is the operator's yes, with that size, in the session that runs
 it. The workflow deletes nothing.
 

@@ -974,7 +974,7 @@ def _recreate_carry(a, run, name: str, codex, pred, measured: dict, say) -> None
     is checked by its counts, never redone. Both collections' write locks are
     taken for the step and given back after it (the gate takes the new one's
     again)."""
-    import os as _os
+    import hashlib
 
     from app import embeddings
     from app.hold import carry as carry_mod, lock as lock_mod, recreate, records as rec, seed
@@ -1007,10 +1007,19 @@ def _recreate_carry(a, run, name: str, codex, pred, measured: dict, say) -> None
                              f"its unit. Then run this again: it resumes at the carry") from None
         run.at("carry", f"from {a.name}: its parts, a sample of {a.sample} chunk(s) re-encoded by the new "
                         f"run, then its manifest, text index and vector table")
+        # the pass over the parts (the snapshot's roots, the sample's cuts) on
+        # the whole CPU quota, as `hold snapshot create --shards-from` runs it
+        _whole_quota()
         parts = recreate.seed_parts(root, a.name, name, now=_utc_now(), log=say)
         origin = recreate.share_origin(root, a.name, name)
         local = rec.local_collection(root, a.name, pred)
-        sample_seed = _os.urandom(32)
+        calibrated = set(((measured or {}).get("reference") or {}).get("runs") or ())
+        # THE SAME REQUEST ON THE SAME RUN DRAWS THE SAME CHUNKS: a sample that
+        # failed is not drawn away by running again; a re-calibrated run (the
+        # operator fixed the engine) draws anew. Its own check, no adversary to
+        # out-guess, so the seed needs no secrecy — it is recorded either way
+        sample_seed = hashlib.sha256("\0".join(("louise recreate sample", run.digest,
+                                                *sorted(calibrated))).encode("utf-8")).digest()
         with _carry_sample_embed(root, name, codex) as embed:
             checked = recreate.sample(
                 codex, seed.latest_snapshot(root, name), col.shard_dir_of(root, name), n=int(a.sample),
@@ -1022,7 +1031,6 @@ def _recreate_carry(a, run, name: str, codex, pred, measured: dict, say) -> None
                 f"and nothing was carried (seed {checked['seed']}"
                 + (f"; below: {', '.join(checked.get('below_ids') or ())}" if checked.get("below_ids") else "")
                 + ")")
-        calibrated = set(((measured or {}).get("reference") or {}).get("runs") or ())
         stray = sorted(r for r in checked.get("runs") or () if r and calibrated and r not in calibrated)
         if stray:
             raise recreate.SampleFailed(

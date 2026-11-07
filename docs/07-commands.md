@@ -431,7 +431,10 @@ reader needs at the command line:
   running node it runs in the worker, the one writer of a collection's
   indexes (§7.4's deposit writes go the same way), which retires the
   collection's threads first; `--here` runs it in this process when no
-  worker runs; `--dry-run` names what would go. A never-share
+  worker runs; `--dry-run` names what would go — the folders its links
+  name under the shared roots included, and the origin folders it keeps
+  because another held collection links them (*amended 2026-11-07*: it
+  named the directory alone). A never-share
   collection's deposits are erased first (02 §2.9). `--kinds` takes
   `vectors` today. Nothing is announced yet, so nothing is withdrawn.
   `--here` exits 2 while the node holds the collection (§7.7), as the
