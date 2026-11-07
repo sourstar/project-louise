@@ -38,16 +38,20 @@ HOW. Two phases, each resumable (invariant 2):
 
 A TABLE LANCE CANNOT MERGE INTO FIRST (the node, 2026-11-07: pubmed's
 `add_columns` refused "Missing too many rows in merge, run compaction to
-materialize deletions first"): a legacy-format (0.1) table with deletions
+materialize deletions first", on a format-2.1 table): Lance refuses a
+fragment whose first read batch is all deleted (measured, vector_index
+`MERGE_REFUSED`). A table of format 2.x is merged in read batches longer
+than the longest deleted head of its fragments (`merge_batch_rows`, said
+in the dry run) and is not rewritten; a legacy-format (0.1) table with
+deletions, or a 2.x fragment whose deleted head is past MERGE_BATCH_MAX,
 is compacted before phase 2, every deletion made physical
 (`vector_index.materialize_deletions`, Lance's own `compact_files`), under
-the same pause and locks; a table of a later format merges beside its
-deletions and is not rewritten. Should Lance refuse the merge anyway, the
+the same pause and locks. Should Lance refuse the merge anyway, the
 table is compacted and the merge tried once more. A stop after the
 compaction reruns into the merge alone (nothing is left to materialize),
 and phase 1's work file is read, not redone. The add_columns checkpoint is
-named by the table and its VERSION: one made before a compaction never
-stands for fragments the compaction replaced. Nothing reads Lance's row
+named by the table, its VERSION and the read batch: one made before a
+compaction, or in other batches, never stands for this merge. Nothing reads Lance's row
 ids or addresses (checked 2026-11-07: the only positional reads, the
 rewrite's verify and two measurement tools, take fresh offsets of one
 open version); Lance re-maps the indexes in the compaction's commit.
@@ -255,8 +259,12 @@ def _merge(view, keys, vals, con, state_dir: Path, say, name: str) -> int:
         say(f"[source-hashes] {name}: {where}: {plan['why']}: compacting first")
         vector_index.materialize_deletions(view, con, log=lambda m: say(f"[source-hashes] {name}: "
                                                                         f"{where}: {m}"))
+        plan = vector_index.deletions_plan(view)
+    batch = (plan or {}).get("merge_batch_rows") or vector_index.MERGE_BATCH_MIN
+    if batch > vector_index.MERGE_BATCH_MIN:
+        say(f"[source-hashes] {name}: {where}: {plan['why']}")
     try:
-        return _add_column(view, keys, vals, con, _checkpoint(state_dir, view))
+        return _add_column(view, keys, vals, con, _checkpoint(state_dir, view, batch), batch)
     except Exception as e:                              # noqa: BLE001 — one refusal is handled
         if vector_index.MERGE_REFUSED not in str(e):
             raise
@@ -264,15 +272,23 @@ def _merge(view, keys, vals, con, state_dir: Path, say, name: str) -> int:
             f"made physical, then the merge again")
         vector_index.materialize_deletions(view, con, force=True,
                                            log=lambda m: say(f"[source-hashes] {name}: {where}: {m}"))
-        return _add_column(view, keys, vals, con, _checkpoint(state_dir, view))
+        batch = vector_index.MERGE_BATCH_MIN
+        return _add_column(view, keys, vals, con, _checkpoint(state_dir, view, batch), batch)
 
 
-def _checkpoint(state_dir: Path, view) -> Path:
-    """The add_columns checkpoint for this table AT ITS VERSION: a pass
-    stopped before its commit resumes from it; a table that has moved since
-    (a compaction, any commit) starts a fresh one."""
+def _checkpoint(state_dir: Path, view, batch: int | None = None) -> Path:
+    """The add_columns checkpoint for this table AT ITS VERSION and read
+    batch: a pass stopped before its commit resumes from it; a table that
+    has moved since (a compaction, any commit), or a merge read in other
+    batches, starts a fresh one."""
     tbl = _table_of(view)
-    return Path(state_dir) / f"source-hashes.{Path(view.lance_dir).name}.v{tbl.version}.ckpt.sqlite"
+    b = f".b{batch}" if batch and batch != _min_batch() else ""
+    return Path(state_dir) / f"source-hashes.{Path(view.lance_dir).name}.v{tbl.version}{b}.ckpt.sqlite"
+
+
+def _min_batch() -> int:
+    from app import vector_index
+    return vector_index.MERGE_BATCH_MIN
 
 
 def _compaction_summary(plan: dict | None) -> dict | None:
@@ -280,7 +296,8 @@ def _compaction_summary(plan: dict | None) -> dict | None:
     if plan is None:
         return None
     out = {k: plan[k] for k in ("needed", "why", "format", "stable_row_ids", "fragments",
-                                "fragments_with_deletions", "deleted_rows")}
+                                "fragments_with_deletions", "deleted_rows", "longest_deleted_head",
+                                "merge_batch_rows")}
     if plan["needed"]:
         rw = plan["rewrite"]
         out.update({"rewrites_fragments": rw["fragments"], "rewrites_rows": rw["rows"],
@@ -292,12 +309,13 @@ def _compaction_summary(plan: dict | None) -> dict | None:
     return out
 
 
-def _add_column(view, keys, vals, con, checkpoint: Path) -> int:
+def _add_column(view, keys, vals, con, checkpoint: Path, batch: int | None = None) -> int:
     """`source_hash` onto one table, in the vector store's own layer
-    (`embeddings.add_source_column`: Lance is opened there and nowhere else);
-    the rows given a source."""
+    (`embeddings.add_source_column`: Lance is opened there and nowhere else),
+    read `batch` rows at a time; the rows given a source."""
     from app import embeddings
-    return embeddings.add_source_column(view, keys, vals, lock_con=con, checkpoint=checkpoint)
+    return embeddings.add_source_column(view, keys, vals, lock_con=con, checkpoint=checkpoint,
+                                        batch_size=batch)
 
 
 def _clean(state_dir: Path) -> None:

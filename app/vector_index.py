@@ -318,16 +318,45 @@ def purge_deleted(collection, lock_con=None) -> dict:
             "index_retrained": retrained}
 
 
-#: Lance's merge of a new column (`add_columns`) REFUSES a fragment of the
-#: LEGACY file format (0.1) where a deletion run empties a whole row group:
-#: "Not supported: Missing too many rows in merge, run compaction to
-#: materialize deletions first" (pubmed on the node, 2026-11-07, `hold vectors
-#: source-hashes --apply`). Measured, pylance 9.0.1: format 0.1 with a
-#: 2,000-row run deleted (a document's rows, as delete-then-insert leaves
-#: them) fails, with or without stable row ids; scattered deletions pass;
-#: formats 2.0 and 2.1 pass with the same deletions. The route Lance's error
-#: names, and what `materialize_deletions` does.
+#: Lance's merge of a new column (`add_columns`) REFUSES "Not supported:
+#: Missing too many rows in merge, run compaction to materialize deletions
+#: first" (pubmed on the node, 2026-11-07, `hold vectors source-hashes
+#: --apply`, a format-2.1 table). Measured, pylance 9.0.1:
+#:   - formats 2.0 and 2.1: refused exactly when a fragment's FIRST READ
+#:     BATCH is all deleted — its first `batch_size` rows (1,024 by
+#:     default; a deleted head of 4,095 rows passes at 4,096 and is refused
+#:     at 4,096 rows). Runs anywhere else, aligned or not, the tail
+#:     included, pass, and the merged values are right at any batch size.
+#:     So the merge reads in batches longer than the longest deleted head
+#:     (`merge_batch_rows`) and nothing is rewritten;
+#:   - the legacy format (0.1): refused by a deleted run in a row group at
+#:     any batch size — the route Lance's error names, `materialize_deletions`.
+#: The first diagnosis (#375) read pubmed as legacy; it is 2.1, and its
+#: refusal was a fragment whose head a document's delete-then-insert emptied.
 MERGE_REFUSED = "Missing too many rows in merge"
+#: the merge's read batch at least: Lance's own default
+MERGE_BATCH_MIN = 1024
+#: the longest batch the merge is given (book_id in, 16 bytes out: ~100 MB);
+#: a fragment whose deleted head is longer is compacted instead
+MERGE_BATCH_MAX = 1 << 22
+
+
+def deleted_head(frag) -> int:
+    """How many rows at the head of a fragment are deleted: the offset of
+    its first live row (its physical rows when none is live)."""
+    t = frag.to_table(columns=[], with_row_address=True, limit=1)
+    if t.num_rows == 0:
+        return int(frag.physical_rows)
+    return int(t.column("_rowaddr")[0].as_py()) & 0xFFFFFFFF
+
+
+def merge_batch_rows(head: int) -> int:
+    """The read batch a merge needs beside a deleted head of `head` rows:
+    the smallest power of two above it, MERGE_BATCH_MIN at least."""
+    b = MERGE_BATCH_MIN
+    while b <= head:
+        b <<= 1
+    return b
 
 
 class CompactionNoRoom(RuntimeError):
@@ -394,18 +423,27 @@ def deletions_plan(collection, *, force: bool = False) -> dict | None:
     frags = ds.get_fragments()
     with_del = [f for f in frags if f.num_deletions]
     fmt = str(ds.data_storage_version)
-    legacy = fmt.startswith("0.")
-    needed = bool(with_del) and (legacy or force)
+    legacy = fmt.startswith("0.") or fmt == "legacy"
+    heads = {} if legacy else {f.fragment_id: deleted_head(f) for f in with_del}
+    too_long = sorted(i for i, h in heads.items() if merge_batch_rows(h) > MERGE_BATCH_MAX)
+    longest = max((h for i, h in heads.items() if i not in too_long), default=0)
+    needed = bool(with_del) and (legacy or force or bool(too_long))
     out = {"format": fmt, "legacy_format": legacy, "stable_row_ids": bool(ds.has_stable_row_ids),
            "version": ds.version, "fragments": len(frags),
            "fragments_with_deletions": len(with_del),
            "deleted_rows": sum(int(f.num_deletions) for f in with_del),
+           "longest_deleted_head": None if legacy else max(heads.values(), default=0),
+           "merge_batch_rows": MERGE_BATCH_MIN if needed else merge_batch_rows(longest),
            "needed": needed,
            "why": ("a legacy-format (0.1) table with deletions: Lance's merge refuses a "
-                   "deleted run that empties a row group" if needed and legacy else
+                   "deleted run in a row group at any batch size" if needed and legacy else
+                   f"{len(too_long)} fragment(s) whose deleted head is longer than "
+                   f"{MERGE_BATCH_MAX:,} rows" if needed and too_long else
                    "Lance refused the merge" if needed else
                    "no deletion" if not with_del else
-                   f"format {fmt} merges beside deletions (measured)")}
+                   f"format {fmt}: the merge reads {merge_batch_rows(longest):,} rows a batch, more "
+                   f"than the longest deleted head of a fragment ({longest:,}); Lance refuses only a "
+                   f"fragment whose first batch is all deleted (measured)")}
     if not needed:
         return out
     plan = Compaction.plan(ds, materialize_options())

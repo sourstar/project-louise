@@ -44,13 +44,13 @@ def test_per_collection_mounts_leave_and_the_shared_roots_come_in():
 
 
 def test_no_build_dataset_leaves_the_build_area_unset():
-    """The ssd3 dataset's name is München's to report (2026-11-07): until it
-    is named and mounted, nothing is mounted at /build and nothing set."""
-    assert fm.BUILD_HOST is None
-    assert fm.build_area() == ((), {})
+    """Until the dataset is mounted on the host, nothing is mounted at /build
+    and nothing set (a host without ssd3, or before its pool imports)."""
+    assert fm.BUILD_HOST == "/mnt/ssd3/louise-build", "München's dataset, 2026-11-07"
+    assert fm.build_area(is_dataset=lambda p: False) == ((), {})
     assert fm.build_area("/mnt/ssd3/not-there", is_dataset=lambda p: False) == ((), {})
     c = cfg()
-    shared, env = fm.build_area()
+    shared, env = fm.build_area(is_dataset=lambda p: False)
     fm.apply(c, shared=shared, env={"LOUISE_CACHE_DIR": "/data/cache", **env})
     for svc in (c["services"]["web"], c["services"]["worker"]):
         assert "LOUISE_BUILD_DIR" not in svc["environment"]
