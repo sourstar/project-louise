@@ -1,6 +1,7 @@
 """Speech for the programs that read Louise aloud (app/speech.py; operator,
-2026-11-06): no citations read, a voice that speaks the text's language, the
-model kept loaded while sentences come."""
+2026-11-06, 2026-11-07): no citations read, in whatever shape the answer's
+language writes them; one voice for every language; the model kept loaded
+while sentences come."""
 import time
 
 import pytest
@@ -22,6 +23,16 @@ PROFILES = [{"name": "Valentina", "language": "it-IT", "voice": "localai://voice
     ("See [3,4] and [6-8].", "See and."),
     ("A record [gutenberg:1001], quoted.", "A record, quoted."),
     ("Chapter [IV] stays, and so does a list [a].", "Chapter [IV] stays, and so does a list [a]."),
+    # French answers (operator 2026-11-07: "[7] the number is pronounced")
+    ("Selon la loi [7], c'est vrai.", "Selon la loi, c'est vrai."),
+    ("C'est vrai [7 ; 8].", "C'est vrai."),
+    ("C'est vrai [7 et 8] et [9, 10 et 11].", "C'est vrai et."),
+    ("C'est vrai [ 7 ].", "C'est vrai."),
+    ("C'est vrai\u202f[7] !", "C'est vrai!"),
+    ("C'est vrai [réf. 7] [source 8] [n° 9].", "C'est vrai."),
+    ("C'est vrai \\[7\\].", "C'est vrai."),
+    ("C'est vrai 【7】【8】.", "C'est vrai."),
+    ("La legge [art. 3] resta.", "La legge [art. 3] resta."),
 ])
 def test_the_citations_are_not_read(text, said):
     assert speech.speakable(text) == said
@@ -32,6 +43,17 @@ def test_adjacent_citations_get_a_space_even_across_two_chunks():
     assert speech.spaced_citations("Dante [3][4][5].") == "Dante [3] [4] [5]."
     assert speech.spaced_citations("[4] then", tail="Dante [3]") == " [4] then"
     assert speech.spaced_citations("[link][ref] and a[1]") == "[link][ref] and a[1]"
+    # "[3](art. 2)" is a link to Open WebUI too, which keeps "3" and says it
+    assert speech.spaced_citations("Dante [3](art. 2).") == "Dante [3] (art. 2)."
+    assert speech.spaced_citations("(art. 2)", tail="Dante [3]") == " (art. 2)"
+    assert speech.spaced_citations("a list (b) [link](x)") == "a list (b) [link](x)"
+
+
+def test_a_bracket_with_a_number_left_in_the_text_is_said(capsys):
+    assert speech.speakable("La legge [art. 3] resta.") == "La legge [art. 3] resta."
+    assert "'[art. 3]'" in capsys.readouterr().err
+    speech.speakable("Dante [3].")
+    assert capsys.readouterr().err == ""
 
 
 @pytest.mark.parametrize("text, lang", [
@@ -44,13 +66,15 @@ def test_the_language_is_told_by_its_commonest_words(text, lang):
     assert speech.language(text) == lang
 
 
-def test_the_voice_follows_the_text_s_language():
-    assert speech.voice_for(PHILIPPE, "it", PROFILES) == PHILIPPE, "the voice asked for, when it speaks it"
-    assert speech.voice_for("localai://voice-profiles/db55", "it", PROFILES) == "localai://voice-profiles/db55"
-    assert speech.voice_for(PHILIPPE, "en", PROFILES) is None, "no English profile: the model's own voice"
-    assert speech.voice_for(None, "it", PROFILES) == PHILIPPE, "the first recorded Italian profile"
-    assert speech.voice_for(PHILIPPE, None, PROFILES) == PHILIPPE, "a language not told: as asked"
-    assert speech.voice_for("alloy", "en", PROFILES) == "alloy", "a model's named voice is kept"
+def test_one_voice_for_every_language():
+    """Operator, 2026-11-07: "Use the same omnivoice philippe voice for all the
+    languages" — French had no profile and got the model's own voice, a
+    different speaker at every sentence."""
+    assert speech.voice_for(PHILIPPE, PROFILES) == PHILIPPE
+    assert speech.voice_for("localai://voice-profiles/db55", PROFILES) == "localai://voice-profiles/db55"
+    assert speech.voice_for(None, PROFILES) == PHILIPPE, "none asked: the first profile recorded"
+    assert speech.voice_for("alloy", PROFILES) == "alloy", "a model's named voice is kept"
+    assert speech.voice_for(None, []) is None, "no profile: the model's own"
 
 
 @pytest.fixture
@@ -83,8 +107,12 @@ def test_a_sentence_is_relayed_clean_in_its_language_s_voice_and_the_model_stays
                            "voice": PHILIPPE, "language": "it"}
     english = speech.synthesize({"model": "omnivoice-cpp", "input": "The poem was written by Dante [1].",
                                  "voice": PHILIPPE}, url="http://ai:8080")
-    assert english[0] == 200 and "voice" not in calls[-1][1] and calls[-1][1]["language"] == "en"
-    assert pins == [("hold", "omnivoice-cpp", "speech")] * 3, "pinned from the first sentence, not released between"
+    assert english[0] == 200 and calls[-1][1]["voice"] == PHILIPPE and calls[-1][1]["language"] == "en"
+    for text in ("La Divine Comédie est le poème de Dante [7 ; 8].", "Elle est écrite en toscan [9]."):
+        speech.synthesize({"model": "omnivoice-cpp", "input": text}, url="http://ai:8080")
+    assert [c[1]["voice"] for c in calls[-2:]] == [PHILIPPE, PHILIPPE], "the same voice, sentence after sentence"
+    assert calls[-2][1]["input"] == "La Divine Comédie est le poème de Dante."
+    assert pins == [("hold", "omnivoice-cpp", "speech")] * 5, "pinned from the first sentence, not released between"
     time.sleep(0.5)
     assert pins[-1] == ("release", "speech"), "released once the sentences stop"
 
