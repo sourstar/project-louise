@@ -121,8 +121,9 @@ def held_slices(collection) -> tuple[str, ...] | None:
 
 def embed_view(collection) -> dict[str, Any]:
     """WHAT THIS NODE EMBEDS OF WHAT IT HOLDS, slice by slice, as the passes
-    decide it — the one reading the Library's card, its checklist and `hold
-    collection show` print (invariant 10: the value shown is the worker's).
+    decide it — the one reading the Library's card, the grow dialog's
+    "embed" group and `hold collection show` print (invariant 10: the value
+    shown is the worker's).
 
     `embedded`: the held slices whose documents are offered to the encoder —
     `is_held(slice, embed_slices)`, the test this pass (and, under "smart",
