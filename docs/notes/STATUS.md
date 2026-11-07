@@ -18,6 +18,26 @@ build at 12 cores, the GPU uncapped. The card's noise (operator): 0.2 sone
 idle, 3.1 sone at full load, coil whine ~0.9 sone; its fan range is being
 measured (published figures disagree).
 
+### 2026-11-07: voice on the Ask page — a microphone and a speaker, the node's models (operator)
+
+- **Built:** a microphone beside the question (WebAudio, downsampled in the
+  page to a 16 kHz mono 16-bit WAV, stops by itself 1.5 s after the speech;
+  the text goes into the box, nothing is asked) and a speaker on the answer
+  (`/v1/audio/speech` per sentence, `Intl.Segmenter`, played in order, tap to
+  stop). `POST /v1/audio/transcriptions` relays OpenAI's shape; with a VAD
+  model, LocalAI's `/v1/vad` trims the clip to its speech and an all-silent
+  clip is answered empty without the STT model (`Louise-VAD` says which).
+  Models pinned while used, released 120 s after (app/transcribe.py,
+  app/static/voice.js, 07 §7.4 "Speech").
+- **The models are the node's:** `[speech]` in platform.toml, one
+  resolution (app/voice.py), `louise node speech show|set`; the TTS takes
+  `tts_model`/`tts_voice` when a request names none. Unset: no button.
+- **München, to switch it on** once the models are chosen on the B70:
+  `louise node speech set --stt <model> --vad <model> --tts <model>`, then
+  `node speech show` (`listed` says whether LocalAI serves each). The
+  microphone needs the Ask page over **https** (or localhost): browsers
+  give no microphone to plain http on the LAN. Not measured on the card yet.
+
 ### 2026-11-07: the development watchdog — `node checkpoint` (operator: "Build it")
 
 - **Ordered**: "when the limit of usage approaches, and you are going to be

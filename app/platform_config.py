@@ -154,6 +154,22 @@ class ModelsConfig:
 
 
 @dataclass(frozen=True)
+class SpeechConfig:
+    """`[speech]` (07 §7.8, added 2026-11-07): the models the Ask page's
+    voice uses on the node's model server (CHAT_URL's) — speech to text,
+    voice activity, text to speech and its voice. THE NODE'S CHOICE, never
+    a reader's (CLAUDE.md RULE 2): `louise node speech set` writes them,
+    and a model unset is a voice the page does not offer (app/voice.py)."""
+    stt_model: str | None = None
+    vad_model: str | None = None
+    tts_model: str | None = None
+    tts_voice: str | None = None
+
+
+SPEECH_KEYS = ("stt_model", "vad_model", "tts_model", "tts_voice")
+
+
+@dataclass(frozen=True)
 class DepositConfig:
     """`[deposit]` (07 §7.8; 02 §2.9): what a deposit collection is created
     with when the creator names nothing — a client's create carries no
@@ -229,6 +245,7 @@ class PlatformConfig:
     admission: AdmissionConfig = AdmissionConfig()
     ask: AskConfig = AskConfig()
     models: ModelsConfig = ModelsConfig()
+    speech: SpeechConfig = SpeechConfig()
     certifier: CertifierConfig = CertifierConfig()
     deposit: DepositConfig = DepositConfig()
     peers: PeersConfig = PeersConfig()
@@ -488,6 +505,8 @@ def _load_one(path: Path) -> PlatformConfig:
     models = ModelsConfig(load_timeout_s=_positive_int(
         models_raw, "load_timeout_s", ModelsConfig().load_timeout_s))
 
+    speech = _speech(raw.get("speech", {}) or {})
+
     cert_raw = raw.get("certifier", {}) or {}
     if not isinstance(cert_raw, dict):
         raise schedule_mod.ScheduleError("certifier must be a table (07 §7.8)")
@@ -561,6 +580,7 @@ def _load_one(path: Path) -> PlatformConfig:
                           admission=admission,
                           ask=ask,
                           models=models,
+                          speech=speech,
                           certifier=certifier,
                           embed_defaults=embed_raw,
                           codex_only=codex_only_raw,
@@ -575,6 +595,23 @@ def _profiles(raw: dict[str, Any]):
     typo is refused at boot, not at the next quiet period."""
     from . import node_profile
     return node_profile.parse(raw)
+
+
+def _speech(raw: Any) -> SpeechConfig:
+    """`[speech]`, checked at load: a misspelt key would leave the page
+    without the voice the operator set, and nobody told why."""
+    if not isinstance(raw, dict):
+        raise schedule_mod.ScheduleError("[speech] is a table (07 §7.8)")
+    unknown = sorted(set(raw) - set(SPEECH_KEYS))
+    if unknown:
+        raise schedule_mod.ScheduleError(
+            f"[speech]: unknown key(s) {', '.join(unknown)}; it takes {', '.join(SPEECH_KEYS)} "
+            f"(`louise node speech set` writes them)")
+    for k, v in raw.items():
+        if not isinstance(v, str) or not v.strip():
+            raise schedule_mod.ScheduleError(
+                f"speech.{k} is a model's (or a voice's) name, a non-empty string, got {v!r}")
+    return SpeechConfig(**{k: raw[k].strip() for k in raw})
 
 
 def _deposit(raw: Any, path: Path) -> DepositConfig:

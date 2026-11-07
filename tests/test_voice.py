@@ -1,0 +1,242 @@
+"""The node's voice (app/voice.py; operator, 2026-11-07): the speech models
+are the node's, in platform.toml's `[speech]`, resolved by one function and
+written by `louise node speech set`; a model unset is a voice the Ask page
+does not offer — no button, nothing asked — and the reason is the
+operator's, with the command that supplies it."""
+from __future__ import annotations
+
+import json
+import re
+
+import pytest
+from fastapi.testclient import TestClient
+
+from app import api, gpu_models, louise, platform_config, speech, voice
+from app.platform_config import SpeechConfig
+
+OTHER = """# the node
+[node]
+name = "nas"   # its label
+
+[ask]
+latency_budget_ms = 8000
+"""
+
+
+@pytest.fixture
+def cfgdir(tmp_path, monkeypatch):
+    monkeypatch.setenv("CONFIG_DIR", str(tmp_path))
+    return tmp_path
+
+
+@pytest.fixture
+def no_server(monkeypatch):
+    """The model server's `/v1/models`: `listed` names, or unreachable (None)."""
+    state = {"listed": ["whisper-large-v3", "silero-vad"]}
+
+    class R:
+        status_code = 200
+
+        def json(self):
+            return {"data": [{"id": m} for m in state["listed"]]}
+
+    def get(url, **kw):
+        assert url.endswith("/v1/models"), url
+        if state["listed"] is None:
+            raise ConnectionError("refused")
+        return R()
+    monkeypatch.setattr(voice.httpc, "get", get)
+    return state
+
+
+def run(capsys, *argv) -> tuple[int, dict | None, str]:
+    code = louise.main(list(argv))
+    out, err = capsys.readouterr()
+    return code, (json.loads(out) if out.strip() else None), err
+
+
+# ---- the one resolution ------------------------------------------------------
+
+def test_the_speech_models_are_read_from_the_platform_file(cfgdir):
+    assert voice.settings() == SpeechConfig(), "no file: none set"
+    (cfgdir / "platform.toml").write_text(
+        '[speech]\nstt_model = "whisper-large-v3"\nvad_model = " silero-vad "\n'
+        'tts_model = "omnivoice-cpp"\ntts_voice = "localai://voice-profiles/1c834741"\n', encoding="utf-8")
+    assert voice.settings() == SpeechConfig(stt_model="whisper-large-v3", vad_model="silero-vad",
+                                            tts_model="omnivoice-cpp",
+                                            tts_voice="localai://voice-profiles/1c834741")
+    assert voice.settings() == platform_config.load().speech
+
+
+@pytest.mark.parametrize("table, says", [
+    ('[speech]\nstt = "whisper"\n', "unknown key(s) stt"),
+    ('[speech]\nstt_model = ""\n', "a non-empty string"),
+    ('[speech]\ntts_model = 3\n', "a non-empty string"),
+    ('speech = "whisper"\n', "[speech] is a table"),
+])
+def test_a_wrong_speech_table_is_refused_at_load(cfgdir, table, says):
+    (cfgdir / "platform.toml").write_text(table, encoding="utf-8")
+    with pytest.raises(platform_config.schedule_mod.ScheduleError, match=re.escape(says)):
+        platform_config.load()
+
+
+def test_a_voice_not_set_is_not_offered_and_the_operator_is_told_how(cfgdir):
+    got = voice.offered()
+    assert got == {
+        "input": {"available": False, "trimmed": False,
+                  "why": "no speech-to-text model is set on this node: `louise node speech set --stt <model>`"},
+        "output": {"available": False,
+                   "why": "no text-to-speech model is set on this node: `louise node speech set --tts <model>`"}}
+    (cfgdir / "platform.toml").write_text('[speech]\nstt_model = "w"\nvad_model = "v"\n', encoding="utf-8")
+    got = voice.offered()
+    assert got["input"] == {"available": True, "why": None, "trimmed": True}
+    assert got["output"]["available"] is False
+    (cfgdir / "platform.toml").write_text("[speech\n", encoding="utf-8")
+    got = voice.offered()
+    assert not got["input"]["available"] and "platform.toml does not load" in got["input"]["why"]
+    assert voice.settings_or_none() == SpeechConfig()
+
+
+def test_the_page_asks_the_node_what_it_offers(cfgdir):
+    (cfgdir / "platform.toml").write_text('[speech]\ntts_model = "omnivoice-cpp"\n', encoding="utf-8")
+    r = TestClient(api.app).get("/ask/voice")
+    assert r.status_code == 200 and r.json() == voice.offered()
+    assert r.json()["output"]["available"] and not r.json()["input"]["available"]
+
+
+# ---- `louise node speech` --------------------------------------------------
+
+def test_set_writes_the_table_and_keeps_every_other_line(cfgdir, capsys, no_server):
+    (cfgdir / "platform.toml").write_text(OTHER, encoding="utf-8")
+    code, out, _ = run(capsys, "node", "speech", "set", "--stt", "whisper-large-v3", "--vad", "silero-vad")
+    assert code == 0
+    assert out["changed"] == ["stt_model", "vad_model"]
+    assert out["speech"] == {"stt_model": "whisper-large-v3", "vad_model": "silero-vad",
+                             "tts_model": None, "tts_voice": None}
+    assert out["offered"]["input"]["available"] and not out["offered"]["output"]["available"]
+    assert out["listed"] == {"silero-vad": True, "whisper-large-v3": True}
+    text = (cfgdir / "platform.toml").read_text(encoding="utf-8")
+    assert text.startswith(OTHER), "every other line byte for byte"
+    assert voice.settings() == SpeechConfig(stt_model="whisper-large-v3", vad_model="silero-vad")
+    # again, in place: the table where it stood, once
+    code, out, _ = run(capsys, "node", "speech", "set", "--tts", "omnivoice-cpp", "--voice", 'Phi "lippe"')
+    assert code == 0 and out["changed"] == ["tts_model", "tts_voice"]
+    text = (cfgdir / "platform.toml").read_text(encoding="utf-8")
+    assert text.count("[speech]") == 1 and text.startswith(OTHER)
+    assert voice.settings().tts_voice == 'Phi "lippe"'
+    assert out["listed"] == {"omnivoice-cpp": False, "silero-vad": True, "whisper-large-v3": True}
+    assert out["listed_note"] == "not listed by the model server: omnivoice-cpp"
+
+
+def test_an_empty_value_removes_a_model_and_the_last_one_the_table(cfgdir, capsys, no_server):
+    (cfgdir / "platform.toml").write_text(OTHER, encoding="utf-8")
+    run(capsys, "node", "speech", "set", "--stt", "whisper-large-v3", "--tts", "omnivoice-cpp")
+    code, out, _ = run(capsys, "node", "speech", "set", "--stt", "")
+    assert code == 0 and out["changed"] == ["stt_model"]
+    assert not out["offered"]["input"]["available"], "no model: the microphone is no longer offered"
+    code, out, _ = run(capsys, "node", "speech", "set", "--tts", "")
+    assert (cfgdir / "platform.toml").read_text(encoding="utf-8") == OTHER, "the file as it was"
+    code, out, _ = run(capsys, "node", "speech", "set", "--tts", "")
+    assert code == 0 and out["changed"] == [], "nothing to change: nothing written"
+
+
+def test_set_with_nothing_to_set_and_a_file_that_would_not_load_are_refused(cfgdir, capsys, no_server):
+    code, out, err = run(capsys, "node", "speech", "set")
+    assert code == 2 and out is None and "nothing to set" in err
+    # the table written another way, as a dotted key: the node reads it, a
+    # second [speech] would not load — refused, the file untouched
+    (cfgdir / "platform.toml").write_text('speech.stt_model = "a"\n' + OTHER, encoding="utf-8")
+    assert voice.settings().stt_model == "a"
+    before = (cfgdir / "platform.toml").read_text(encoding="utf-8")
+    code, out, err = run(capsys, "node", "speech", "set", "--tts", "omnivoice-cpp")
+    assert code == 2 and "Nothing was changed" in err
+    assert (cfgdir / "platform.toml").read_text(encoding="utf-8") == before
+    assert not list(cfgdir.glob("*.tmp")), "no temporary file left"
+    (cfgdir / "platform.toml").write_text("[speech]\nstt = 1\n", encoding="utf-8")
+    code, out, err = run(capsys, "node", "speech", "show")
+    assert code == 2 and "unknown key(s) stt" in err
+
+
+def test_show_says_where_the_models_run_and_what_the_page_offers(cfgdir, capsys, no_server, monkeypatch):
+    monkeypatch.setattr(voice.config, "CHAT_URL", "http://ai:8080/")
+    (cfgdir / "platform.toml").write_text('[speech]\nstt_model = "whisper-large-v3"\n', encoding="utf-8")
+    code, out, _ = run(capsys, "node", "speech", "show")
+    assert code == 0
+    assert out["server"] == "http://ai:8080" and out["file"] == str(cfgdir / "platform.toml")
+    assert out["speech"]["stt_model"] == "whisper-large-v3" and out["listed"] == {"whisper-large-v3": True}
+    assert out["offered"] == voice.offered() and "https" in out["note"]
+    no_server["listed"] = None
+    code, out, _ = run(capsys, "node", "speech", "show")
+    assert out["listed"] is None and out["listed_note"] == \
+        "the model server at http://ai:8080 did not answer GET /v1/models"
+
+
+def test_rewrite_puts_the_table_where_it_stood():
+    text = '[a]\nx = 1\n\n[speech]   # old\nstt_model = "old"\n# a comment\n\n[b]\ny = 2\n'
+    got = voice.rewrite(text, {"stt_model": "new", "vad_model": None, "tts_model": None, "tts_voice": None})
+    assert got.startswith('[a]\nx = 1\n\n[speech]') and got.endswith('stt_model = "new"\n\n[b]\ny = 2\n')
+    assert "old" not in got
+    assert voice.rewrite("[a]\nx = 1", {"tts_model": "t"}).startswith("[a]\nx = 1\n\n[speech]")
+    assert voice.rewrite(text, {}) == "[a]\nx = 1\n\n[b]\ny = 2\n"
+
+
+def test_the_route_of_the_command_tree_answers_show(cfgdir, monkeypatch, no_server):
+    from app import api_commands
+    path, _ = api_commands.resolve(["node", "speech", "show"])
+    assert path == ("node", "speech", "show")
+    path, _ = api_commands.resolve(["node", "speech", "set"])
+    assert path == ("node", "speech", "set")
+
+
+# ---- the speech the page asks for --------------------------------------------
+
+def test_a_speech_request_naming_no_model_or_voice_gets_the_nodes(cfgdir, monkeypatch):
+    (cfgdir / "platform.toml").write_text(
+        '[speech]\ntts_model = "omnivoice-cpp"\ntts_voice = "localai://voice-profiles/1c834741"\n', encoding="utf-8")
+    calls, pins = [], []
+
+    class R:
+        status_code, content, headers = 200, b"RIFF", {"content-type": "audio/wav"}
+
+        def json(self):
+            return {"data": [{"voice": "localai://voice-profiles/first", "created_at": "2026-01-01"}]}
+    monkeypatch.setattr(speech.httpc, "get", lambda url, **kw: R())
+    monkeypatch.setattr(speech.httpc, "post", lambda url, json, **kw: calls.append(json) or R())
+    monkeypatch.setattr(speech.model_pins, "hold", lambda url, model, holder: pins.append(model) or True)
+    monkeypatch.setattr(speech.model_pins, "release", lambda holder: None)
+    monkeypatch.setattr(speech, "_profiles", (0.0, []))
+    assert speech.synthesize({"input": "Dante wrote it [3]."}, url="http://ai")[0] == 200
+    assert calls[-1] == {"input": "Dante wrote it.", "model": "omnivoice-cpp",
+                         "voice": "localai://voice-profiles/1c834741"}
+    assert pins == ["omnivoice-cpp"], "the node's model pinned while it speaks"
+    speech.synthesize({"input": "Dante.", "model": "kokoro", "voice": "alloy"}, url="http://ai")
+    assert (calls[-1]["model"], calls[-1]["voice"]) == ("kokoro", "alloy"), "a client's own choice is kept"
+    (cfgdir / "platform.toml").write_text('[speech]\ntts_model = "omnivoice-cpp"\n', encoding="utf-8")
+    speech.synthesize({"input": "Dante."}, url="http://ai")
+    assert calls[-1]["voice"] == "localai://voice-profiles/first", "no voice set: the first profile, as before"
+
+
+# ---- the Ask page ------------------------------------------------------------
+
+def page(config_dir, table: str) -> str:
+    (config_dir / "platform.toml").write_text(table, encoding="utf-8")
+    return TestClient(api.app).get("/ask").text
+
+
+def test_the_page_has_no_button_for_a_voice_the_node_does_not_offer(isolated_config, config_dir):
+    html = page(config_dir, "")
+    assert 'id="mic"' not in html and 'id="speak"' not in html and "voice.js" not in html
+    assert 'id="q"' in html, "the question box as before"
+    html = page(config_dir, '[speech]\nstt_model = "whisper-large-v3"\n')
+    assert 'id="mic"' in html and 'id="speak"' not in html and "/static/voice.js" in html
+    html = page(config_dir, '[speech]\ntts_model = "omnivoice-cpp"\n')
+    assert 'id="mic"' not in html and 'id="speak"' in html and "/static/voice.js" in html
+    html = page(config_dir, '[speech]\nstt_model = "w"\ntts_model = "t"\nvad_model = "v"\n')
+    assert 'id="mic"' in html and 'id="speak"' in html
+    for forbidden in ("model", "server", "protocol"):   # RULE 2: nothing asks
+        assert not re.search(rf'<(input|select)[^>]*{forbidden}', html, re.I)
+
+
+def test_the_gpu_panel_counts_the_speech_models_as_louises():
+    uses = gpu_models.louise_uses([], speech={"speech to text": "whisper-large-v3", "speech": "omnivoice-cpp"})
+    assert uses == {"whisper-large-v3": ["speech to text"], "omnivoice-cpp": ["speech"]}

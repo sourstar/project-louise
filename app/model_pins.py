@@ -147,6 +147,13 @@ def _queued(level: str, text: str) -> None:
 _say: Callable[[str, str], None] = _queued
 
 
+def node_event(level: str, text: str) -> None:
+    """A line of the node's event log under `models`, written off the
+    caller's thread by the queue above — for another model caller that has
+    something to say (app/transcribe.py: a VAD that failed)."""
+    _queued(level, text)
+
+
 def set_log(fn: Callable[[str, str], None]) -> None:
     """`fn(level, text)`; tests capture it."""
     global _say

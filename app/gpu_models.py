@@ -35,9 +35,10 @@ class ModelRow:
 
 
 def louise_uses(collections, *, chat_model: str = "", translate_model: str = "",
-                reading: dict[str, str] | None = None) -> dict[str, list[str]]:
-    """model name -> what Louise uses it for, from the collection files and
-    the chat and translation settings."""
+                reading: dict[str, str] | None = None,
+                speech: dict[str, str] | None = None) -> dict[str, list[str]]:
+    """model name -> what Louise uses it for, from the collection files, the
+    chat and translation settings and `[speech]` ({use: model})."""
     out: dict[str, list[str]] = {}
 
     def add(model, what):
@@ -59,6 +60,8 @@ def louise_uses(collections, *, chat_model: str = "", translate_model: str = "",
     add(translate_model, "translation")
     for src, model in sorted((reading or {}).items()):
         add(model, f"translation (reading {src})")
+    for use, model in (speech or {}).items():
+        add(model, use)
     return out
 
 
@@ -113,12 +116,13 @@ def _get_json(url: str):
 
 
 def panel(collections, *, extra_urls=(), chat_model: str = "", translate_model: str = "",
-          reading: dict[str, str] | None = None, get_json=None) -> dict:
+          reading: dict[str, str] | None = None, speech: dict[str, str] | None = None,
+          get_json=None) -> dict:
     """The breakdown: rows from every LocalAI that answers `/system`, the two
     sums, and the origins that did not answer (named, never silent)."""
     get_json = get_json or _get_json
     uses = louise_uses(collections, chat_model=chat_model, translate_model=translate_model,
-                       reading=reading)
+                       reading=reading, speech=speech)
     rows: list[ModelRow] = []
     seen: set = set()
     asked, failed = [], []

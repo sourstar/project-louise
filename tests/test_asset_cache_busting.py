@@ -24,12 +24,15 @@ def test_it_changes_when_a_static_file_changes(tmp_path, monkeypatch):
     before = web._asset_version()
     assert web._asset_version() == before, "not stable for unchanged files"
 
-    css = Path(web.__file__).parent / "static" / "admin.css"
+    static = Path(web.__file__).parent / "static"
+    css = static / "admin.css"
     original = css.stat()
+    # past the NEWEST file: another static file just edited (voice.js) is
+    # newer than admin.css + 1 s, and the tag is the newest mtime
+    newest = max(p.stat().st_mtime_ns for p in static.rglob("*") if p.is_file())
     try:
         import os
-        os.utime(css, ns=(original.st_atime_ns,
-                          original.st_mtime_ns + 1_000_000_000))
+        os.utime(css, ns=(original.st_atime_ns, newest + 1_000_000_000))
         assert web._asset_version() != before
     finally:
         os.utime(css, ns=(original.st_atime_ns, original.st_mtime_ns))

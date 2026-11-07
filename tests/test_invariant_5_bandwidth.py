@@ -48,6 +48,8 @@ EXEMPT: dict[str, str] = {
     "app/api.py": f"{MODEL_CALLS} — `GET /v1/models` of the node's model container",
     "app/web.py": f"{MODEL_CALLS} — the System page's health pings of the model endpoints",
     "app/speech.py": f"{MODEL_CALLS} — the speech model and its voice profiles",
+    "app/transcribe.py": f"{MODEL_CALLS} — the speech-to-text model and LocalAI's voice-activity /vad",
+    "app/voice.py": f"{MODEL_CALLS} — the model server's /v1/models, for `node speech show`",
 }
 
 _NET_BINARIES = {"git", "rsync", "curl", "wget", "ssh", "scp", "sftp", "aria2c"}
