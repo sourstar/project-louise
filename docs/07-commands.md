@@ -281,6 +281,16 @@ louise dev                                                             operator 
   genesis recount <collection> [--yes]                                 an archive ledger's docs and chunks recounted from chunk_verification; writes only with --yes (added 2026-10-08)
   drop-rows <collection> --ids FILE [--yes]                            02 §2.4's remedy: the rows FILE lists (a chunk id a line) dropped and their documents marked to embed
                                                                        again — what `vectors check --drop`, which leaves an empty row, does not; the collection's lock held; writes (added 2026-10-19)
+                                                                       — a document left with no row has its embed_version set to 0, as a document never embedded has (2026-11-07)
+  superseded-repair <collection> [--apply]                             the documents the manifest counts SUPERSEDED (§7.3 "One status": an earlier version still held and searched,
+                                                                       the Library's grey) that hold no vector — a wipe that cleared the marks and kept the version (wikidata,
+                                                                       2026-11-07) — counted, a sample of each kind printed; with --apply their embed_version set to 0, as a
+                                                                       document never embedded has. Rowid windows of 50,000 (at most 1,000 candidates, fewer on a table of many
+                                                                       fragments): one vector-table question each (`book_id IN (…)`, a store that cannot answer stops the run),
+                                                                       then one short write guarded `embed_done = 0` and the version read, the predicate re-checked inside it;
+                                                                       resumable from its cursor in the manifest's control table, keyed on the manifest's path; beside a running
+                                                                       worker — no lock, no stop; SIGINT/SIGTERM end it after the window in flight (exit 130); read-only without
+                                                                       --apply (added 2026-11-07)
   reindex <collection> --ids FILE [--yes]                              the documents FILE lists (a uid a line) queued for the text-index stage again — fts_done = 0, embedding untouched; for rows indexed under an earlier parse (`index-drift --ids-out` lists them); writes (added 2026-10-25)
   index-drift <collection> [--shards S,…] [--cut-all] [--sample F] [--seed HEX] [--snapshot ID] [--ids-out FILE]
                                                                        the documents whose SERVED state disagrees with the latest held snapshot's records (added
@@ -334,7 +344,8 @@ louise dev                                                             operator 
                                                                        refuses it, nothing written — dropped too where every input was embedded alone (a pair layer)
                                                                        --resliced (A1g): into a collection differing only by its slicing, every vector carried, then `records build <to>
                                                                        --records-from <from>`; --unembedded (A1h): from a collection holding NO vector into one with the same records, layers and
-                                                                       cleaning (the encoder side of the space alone differing), the manifest and text index carried, no vector table, then `records build <to> --records-from <from>`; --scan: with --keep, one pass over the vector table instead of a walk by document
+                                                                       cleaning (the encoder side of the space alone differing), the manifest and text index carried, no vector table, every document not embedded set to embed_version 0 (none holds an earlier version; 2026-11-07), then `records build <to> --records-from <from>`; --scan: with --keep, one pass over the vector table instead of a walk by document.
+                                                                       Every drop above — --keep, --scan, --reconcile, --recut — sets a document left with no row to embed_version 0, after its rows are gone (2026-11-07)
 ```
 
 `--dry-run`, `--json` and `--yes` are not shown per line; §7.7 says which
@@ -804,7 +815,11 @@ reader needs at the command line:
   or upstream), **superseded** (not done here, the earlier version still
   held — its text in the lexical index, its vectors in the table — and
   searched until the stage redoes it; the card draws it grey,
-  "present but not active", operator, 2026-11-07) and, for embed,
+  "present but not active", operator, 2026-11-07 — for embed, held to
+  that: a command that deletes a document's last vector sets its version
+  back to 0, a vector store holding no row counts none on every surface,
+  and `dev superseded-repair` repairs a state database written before,
+  2026-11-07) and, for embed,
   **reembed** (done at an older embedding version, which the worker takes
   again). What holds a stage is one list in one order — the node's mode,
   the collection's own pause, the node profile, the embed setting, the

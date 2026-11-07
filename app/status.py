@@ -115,15 +115,36 @@ UNINDEXABLE = f"(error IS NOT NULL AND NOT {STAGE_ERROR} AND retries<:max)"
 
 #: NOT DONE HERE, AN EARLIER VERSION STILL HELD (operator, 2026-11-07).
 #:
-#: `<stage>_version` is written ONLY together with `<stage>_done = 1` — the
-#: fts stage (worker `fts_version`), the embed stage, `embed_marks`, the
-#: bundle importer and the archive import (`embed_version`) — and nothing
-#: ever writes it back to 0. So a document whose mark is 0 and whose version
-#: is not was completed once and has had its mark cleared since: by a
-#: re-parse (discovery, the origin republished it), validity, a reset or a
-#: reindex. None of those deletes what the stage wrote — the lexical
-#: entries and the vectors stay, and stay searched, until the stage redoes
-#: the document (delete-then-insert on its book id, invariant 2).
+#: THE CONTRACT. `<stage>_version` is written NON-ZERO only together with
+#: `<stage>_done = 1` — the fts stage (worker `fts_version`), the embed stage,
+#: `embed_marks`, the bundle importer and the archive import
+#: (`embed_version`). A mark cleared since — a re-parse (discovery, the origin
+#: republished it), validity, a reset, a reindex, a re-queue after a
+#: quarantine — deletes nothing: the lexical entries and the vectors stay,
+#: and stay searched, until the stage redoes the document (delete-then-insert
+#: on its book id, invariant 2). So a document whose mark is 0 and whose
+#: version is not was completed once and still holds what it wrote.
+#:
+#: FOR EMBED, WHAT KEEPS IT TRUE (2026-11-07, München: wikidata's 458,636
+#: grey documents held no vector). Every app path that deletes a document's
+#: LAST vector and leaves it `embed_done = 0` writes its `embed_version`
+#: back to 0, guarded `embed_done = 0`, AFTER the delete is durable
+#: (app/embed_marks.py, "NOT HELD": 0 before the delete would let `may_reuse`
+#: keep an older EMBED_VERSION's rows) — `dev carry`'s `--reconcile`, `--keep`
+#: (walk and `--scan`), `--recut` and `dev drop-rows` (a row list asks the
+#: table, once, after its delete), `dev unindexable` and the worker's
+#: withdraw. `dev carry --unembedded`, from a collection proven to hold no
+#: vector, zeroes every not-embedded document of the target. A wipe made
+#: OUTSIDE the app (a table removed by hand) is caught by the table itself:
+#: a vector store holding no row counts 0 superseded on every surface
+#: (`lance_dir`, below), whatever the manifest says. A manifest written
+#: before is repaired by `louise dev superseded-repair <collection>`.
+#:
+#: Still not exact, and on the safe side (an overstatement, never a vector
+#: counted away): a stop between a delete and its reset leaves the version
+#: until the document is embedded again or the repair runs; a document a
+#: delete took in PART keeps its version, and counts grey while it holds
+#: any row.
 #:
 #: `<> 0`, not `> 0`: REPLACED_VERSION (-1, `hold vectors reembed`) is a
 #: document whose vectors are held and being replaced. 0 is never completed
@@ -132,10 +153,6 @@ UNINDEXABLE = f"(error IS NOT NULL AND NOT {STAGE_ERROR} AND retries<:max)"
 #: done with no vector or entry written. NOT UNINDEXABLE: `unindexable.
 #: withdraw` deletes a document's entries and vectors before writing its
 #: corpus error, and an unindexable document is in no target anyway.
-#:
-#: Known not-exact: `dev drop-rows` and `dev carry` delete a document's rows
-#: and clear its mark, keeping the version, until it is embedded again — an
-#: operator pass, minutes long; the grey part then overstates by those.
 SUPERSEDED = {
     "fts": ("in_scope=1 AND fts_done=0 AND COALESCE(fts_version,0)<>0 "
             f"AND COALESCE(chunks,0)>0 AND NOT {UNINDEXABLE}"),
@@ -348,10 +365,34 @@ def _n(counts: dict, key: str) -> int | None:
     return None if v is None else int(v or 0)
 
 
-def from_counts(counts: dict | None, *, fetched: dict | None = None) -> dict[str, StageStatus]:
+def holds_no_vector(lance_dir) -> bool:
+    """True only when the collection's vector store is PROVEN to hold no row
+    (`spaces.known_lance_rows` == 0: no table, or tables of 0 rows — a
+    metadata read, no row scanned); False when it holds one or cannot be
+    read. Then no earlier version's vectors are held, whatever the manifest's
+    versions say, and superseded embed is 0 (the SUPERSEDED contract, above).
+    MEASURED (2026-11-07, pylance 9.0.1): 0.01 ms with no store; 2.5 ms on a
+    table of 200 fragments, 100 of them with deletions (1 M rows), 1.9 ms on
+    the same table emptied by a delete — a split store pays it per part. Asked
+    only where the manifest counts any superseded, so a surface showing none
+    pays nothing. Never raises."""
+    if lance_dir is None:
+        return False
+    try:
+        from pathlib import Path
+        from . import spaces
+        return spaces.known_lance_rows(Path(lance_dir)) == 0
+    except Exception:   # noqa: BLE001 — not proven empty
+        return False
+
+
+def from_counts(counts: dict | None, *, fetched: dict | None = None,
+                lance_dir=None) -> dict[str, StageStatus]:
     """Every stage from the full scan's counts (`full_scan_sql`), or {} for
     no counts yet. A count the scan's row does not carry (a stored row from
-    before it was added) is None, never 0."""
+    before it was added) is None, never 0. `lance_dir`: the collection's
+    vector store — one that holds no row makes superseded embed 0
+    (`holds_no_vector`)."""
     if counts is None:
         return {}
     in_scope = _n(counts, "in_scope") or 0
@@ -368,6 +409,8 @@ def from_counts(counts: dict | None, *, fetched: dict | None = None) -> dict[str
             declined=declined if k == "embed" else None,
             superseded=_n(counts, f"superseded_{k}") if k != "rdf" else None,
             reembed=_n(counts, "reembed") if k == "embed" else None)
+    if out["embed"].superseded and holds_no_vector(lance_dir):
+        out["embed"].superseded = 0
     # FILES, always — the unit that moves when bytes move, and the one
     # `fetched["complete"]` is judged on (web.py `_collection_shelf`)
     out["fetch"] = StageStatus(
@@ -383,7 +426,8 @@ def _count(con, where: str, params: dict | None = None, *, cap: int | None = Non
 
 
 def bounded(con, *, cap: int = WAITING_CAP, exact_below: int = ERRORED_EXACT_BELOW,
-            stored: tuple[dict, float, float] | None | bool = True) -> dict[str, StageStatus | Exception]:
+            stored: tuple[dict, float, float] | None | bool = True,
+            lance_dir=None) -> dict[str, StageStatus | Exception]:
     """The live count `node show` can afford: per document stage, `waiting`
     along the covering index (capped), the errored among them made exact
     below `exact_below`, and `superseded` where its candidates are under the
@@ -391,7 +435,9 @@ def bounded(con, *, cap: int = WAITING_CAP, exact_below: int = ERRORED_EXACT_BEL
     over the bound) comes from the stored full count `stored` (True: read
     it from the manifest) with its time in `from_scan`. A stage that cannot
     be counted at all is the exception it raised — NAMED by the caller,
-    never skipped (an absent `idx_documents_scope` raises outright)."""
+    never skipped (an absent `idx_documents_scope` raises outright).
+    `lance_dir`: the collection's vector store — one that holds no row makes
+    superseded embed 0, counted live (`holds_no_vector`)."""
     out: dict[str, StageStatus | Exception] = {}
     for name, where in AT.items():
         try:
@@ -463,6 +509,11 @@ def bounded(con, *, cap: int = WAITING_CAP, exact_below: int = ERRORED_EXACT_BEL
             # document (57.8 s on pubmed, worker `_REEMBED_WINDOWED`)
             st.reembed = int(counts["reembed"])
             st.from_scan["reembed"] = at
+    st = out.get("embed")
+    if isinstance(st, StageStatus) and st.superseded and holds_no_vector(lance_dir):
+        # no row held: nothing earlier is searched, whatever the versions say
+        st.superseded = 0
+        st.from_scan.pop("superseded", None)
     return out
 
 
@@ -968,7 +1019,7 @@ def view(collection, con=None, *, mode: str | None = None, pause: Any = _READ,
                     embed_mode = db.get_scope(con).get("embed_mode")
                 except Exception:   # noqa: BLE001
                     embed_mode = None
-            got = bounded(con)
+            got = bounded(con, lance_dir=getattr(collection, "lance_dir", None))
             stages = {k: v for k, v in got.items() if isinstance(v, StageStatus)}
             judged(stages, collection.name, collection=collection if gates else None, mode=mode,
                    pause=pause, embed_mode=embed_mode)

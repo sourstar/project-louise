@@ -2038,7 +2038,8 @@ def _collection_shelf(collection: collections_mod.Collection,
     #: copy of the arithmetic — which is how the two came to disagree.
     stage_targets: dict[str, int] = {k: 0 for k in _RATE_FIELDS}
     embed_mode = db.get_scope(con)["embed_mode"]
-    stages = status_mod.from_counts(None if counts_pending else counts, fetched=fetched)
+    stages = status_mod.from_counts(None if counts_pending else counts, fetched=fetched,
+                                    lance_dir=getattr(collection, "lance_dir", None))
     if not counts_pending:
         cur, stage_targets, remaining, workable = status_mod.progress(
             stages, fetched=fetched, embed_mode=embed_mode)
