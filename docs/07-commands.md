@@ -602,9 +602,15 @@ reader needs at the command line:
   is taken. Two resumable phases: the parts of the snapshot read in the
   parse pool, each committed to a work file under `state/` (a rerun skips
   the parts done); then Lance's own `add_columns`, one commit, every other
-  column untouched (a kill leaves the table as it was; its checkpoint keeps
-  the fragments done). A table that has the column is left as it is; the
-  work files go at the end. Run it before a collection's records change —
+  column untouched (a kill leaves the table as it was; its checkpoint,
+  named by the table's version, keeps the fragments done). A table of the
+  legacy file format (0.1) with deletions is first COMPACTED, every
+  deletion made physical (Lance's merge refuses a deleted run that empties a
+  row group: pubmed, 2026-11-07): the dry run says whether, and what it
+  rewrites — fragments, rows, GiB, the index it re-maps, the free space it
+  needs (exit 2, nothing written, when short); the partial files a killed
+  writer left in `data/` are removed first. A table that has the column is
+  left as it is; the work files go at the end. Run it before a collection's records change —
   a document re-opened since the last build has no provable source.
 - **`vectors show`.** Prints the coverage map (09 §9.10): per part of
   the current snapshot the chunks accepted here, whether it is open, and

@@ -194,6 +194,16 @@ def test_a_hit_never_carries_the_column(collection, encoder, pair_layer):
 
 # ---------------------------------------------------------------- the writers
 
+def test_sixteen_zero_bytes_are_no_source():
+    """A legacy-format table's NULL (`embeddings.NO_SOURCE`) never stands for
+    a record, however it is spelled."""
+    assert embeddings.source_bytes("00" * 16) is None and embeddings.source_bytes(bytes(16)) is None
+    assert land._source_bytes("00" * 16) is None and land._source_bytes(H1) == bytes.fromhex(H1)
+    at = pa.table({embeddings.SOURCE_COLUMN: pa.array([bytes(16), bytes.fromhex(H1), None],
+                                                     embeddings.SOURCE_TYPE)})
+    assert embeddings._sources_of(at) == [None, bytes.fromhex(H1), None]
+
+
 def test_a_bundle_import_writes_the_possessed_records_hash():
     codex = type("C", (), {"space": type("S", (), {"dim": 2})()})()
     cut = {"pubmed:1:0:1": {"text": "t", "seq": 0, "chapter": "", "book_id": 1, "lang": "en",
@@ -235,6 +245,10 @@ def test_a_pair_parse_gives_the_records_build_hash(tmp_path):
 
 @pytest.fixture
 def held(tmp_path, pubmed_root):
+    return _held(tmp_path, pubmed_root)
+
+
+def _held(tmp_path, pubmed_root, *, legacy: bool = False):
     """A pubmed collection: SHARD, snapshot 2026-08, manifest, and a vector
     table as it was written before the column. Four records:
 
@@ -270,14 +284,60 @@ def held(tmp_path, pubmed_root):
                          "seq": int(c["seq"]), "chapter": c["chapter"] or "", "text": c["text"],
                          "vector": (v / np.linalg.norm(v)).tolist()})
     Path(local.lance_dir).mkdir(parents=True, exist_ok=True)
-    d = lancedb.connect(str(local.lance_dir))
-    d.create_table(embeddings.TABLE, data=rows, schema=pa.schema([
+    schema = pa.schema([
         pa.field("id", pa.string()), pa.field("book_id", pa.int64()),
         pa.field("lang", pa.string()), pa.field("seq", pa.int64()),
         pa.field("chapter", pa.string()), pa.field("text", pa.string()),
-        pa.field("vector", pa.list_(pa.float32(), DIM))]))
+        pa.field("vector", pa.list_(pa.float32(), DIM))])
     hashes = {r["uid"]: r["content_hash"] for r in records}
-    return root, local, con, snap, shard_dir, hashes, [r["id"] for r in rows]
+    if not legacy:
+        lancedb.connect(str(local.lance_dir)).create_table(embeddings.TABLE, data=rows, schema=schema)
+        return root, local, con, snap, shard_dir, hashes, [r["id"] for r in rows]
+    ids = _legacy_table(local, rows, schema)
+    return root, local, con, snap, shard_dir, hashes, ids
+
+
+#: filler documents beside the four records: three of 2,000 rows (a long
+#: document's chunks, contiguous in one fragment) and 400 of 4
+LONG, SHORT = (1, 2, 3), range(10, 410)
+
+
+def _filler(books, per: int) -> list[dict]:
+    out = []
+    for b in books:
+        for q in range(per):
+            v = np.random.default_rng(b * 10_000 + q).standard_normal(DIM).astype(np.float32)
+            out.append({"id": f"pubmed:{b}:{q}:1", "book_id": b, "lang": "en", "seq": q,
+                        "chapter": "", "text": f"filler {b} {q}", "vector": v / np.linalg.norm(v)})
+    return out
+
+
+def _legacy_table(local, rows, schema) -> list[str]:
+    """The vector table as pubmed's is on the node: the LEGACY file format
+    (0.1), no stable row ids, several fragments, a vector index and the
+    book_id index — and deletions as the embed stage's delete-then-insert
+    leaves them: a long document's 2,000 contiguous rows (more than a row
+    group: what Lance's merge refuses) and 20 short documents scattered,
+    each written again into a fragment of its own."""
+    import lance
+    from app import vector_index
+    path = str(Path(local.lance_dir) / f"{embeddings.TABLE}.lance")
+    first = pa.Table.from_pylist(rows + _filler(LONG, 2000), schema=schema)
+    lance.write_dataset(first, path, mode="create", data_storage_version="legacy",
+                        max_rows_per_group=1024)
+    lance.write_dataset(pa.Table.from_pylist(_filler(SHORT, 4), schema=schema), path, mode="append")
+    ds = lance.dataset(path)
+    again = [2] + list(range(20, 400, 19))
+    ds.delete(f"book_id IN ({','.join(map(str, again))})")
+    lance.write_dataset(pa.Table.from_pylist(_filler([2], 2000) + _filler(again[1:], 4), schema=schema),
+                        path, mode="append")
+    tbl = embeddings._conn(local).open_table(embeddings.TABLE)
+    vector_index.build_table(tbl, partitions=8)
+    vector_index.build_scalar_table(tbl)
+    got = lance.dataset(path)
+    assert str(got.data_storage_version) == "0.1" and not got.has_stable_row_ids
+    assert sum(1 for f in got.get_fragments() if f.num_deletions) == 2
+    return sorted(tbl.to_arrow().column("id").to_pylist())
 
 
 def _tree(d: Path) -> dict[str, bytes]:
@@ -390,6 +450,205 @@ def test_a_kill_inside_lances_pass_leaves_the_table_and_the_rerun_completes(held
     assert tbl.version == version and embeddings.SOURCE_COLUMN not in tbl.schema.names
     monkeypatch.setattr(lance, "batch_udf", real)
     assert vector_sources.apply(root, "pubmed", local, con, state_dir=state)["rows_with_source"] == 2
+
+
+# ---------------------------------------------------------------- a table Lance cannot merge into
+
+@pytest.fixture
+def held_legacy(tmp_path, pubmed_root):
+    return _held(tmp_path, pubmed_root, legacy=True)
+
+
+def _sources(local, con, root):
+    """phase 1's arrays, as `apply` loads them, for a direct merge"""
+    from app.hold import collection as col
+    from app.share import possession
+    snap = possession.current_snapshot(Path(root), "pubmed")
+    shard_dir = col.shard_dir_of(Path(root), "pubmed")
+    kept = sorted(k for e in snap.shards
+                  for k in vector_sources._judge(con, vector_sources.part_sources(str(shard_dir / e.path))))
+    keys = np.array([k for k, _ in kept], dtype=np.int64)
+    vals = np.frombuffer(b"".join(h for _, h in kept), dtype=np.uint8).reshape(len(kept), 16)
+    return keys, vals
+
+
+def _rows_by_id(local) -> dict:
+    """Every row, every stored column but the new one, by chunk id."""
+    at = embeddings._conn(local).open_table(embeddings.TABLE).to_arrow()
+    cols = [c for c in at.schema.names if c != embeddings.SOURCE_COLUMN]
+    out = {}
+    for r in at.select(cols).to_pylist():
+        r["vector"] = np.asarray(r["vector"], dtype=np.float32).tobytes()
+        out[r["id"]] = r
+    return out
+
+
+QUERIES = [np.random.default_rng(100 + i).standard_normal(DIM).astype(np.float32) for i in range(8)]
+
+
+def _answers(local) -> list:
+    """The fixed query set through the search path (the index's nprobes and
+    refine, `vector_index.query`), ids and distances."""
+    return [[(h["id"], h["_distance"]) for h in
+             embeddings._search_table(local, q / np.linalg.norm(q), 10, None, None, None)]
+            for q in QUERIES]
+
+
+def _plans(local) -> tuple[str, str]:
+    from app import vector_index
+    tbl = embeddings._conn(local).open_table(embeddings.TABLE)
+    ann = vector_index.query(tbl.search(QUERIES[0]), local).limit(10).explain_plan(True)
+    scalar = tbl.search().where("book_id IN (1, 2, 31000001)", prefilter=True).limit(10).explain_plan(True)
+    return ann, scalar
+
+
+def _deleted(local) -> int:
+    ds = embeddings._conn(local).open_table(embeddings.TABLE).to_lance()
+    return sum(1 for f in ds.get_fragments() if f.num_deletions)
+
+
+def test_a_legacy_table_with_deletions_refuses_the_merge(held_legacy):
+    """THE NODE'S DEFECT, reproduced (2026-11-07): Lance's add_columns on a
+    legacy-format table whose deletions empty a row group."""
+    from app import vector_index
+    root, local, con, *_ = held_legacy
+    version = embeddings._conn(local).open_table(embeddings.TABLE).version
+    with pytest.raises(OSError, match=vector_index.MERGE_REFUSED):
+        embeddings.add_source_column(local, *_sources(local, con, root))
+    tbl = embeddings._conn(local).open_table(embeddings.TABLE)
+    assert tbl.version == version and embeddings.SOURCE_COLUMN not in tbl.schema.names
+
+
+def test_the_dry_run_says_the_compaction_and_what_it_rewrites(held_legacy):
+    root, local, con, *_ = held_legacy
+    out = vector_sources.survey(root, "pubmed", local, con)
+    (t,) = out["tables"]
+    c = t["compaction"]
+    assert out["compaction_needed"] and c["needed"] and c["format"] == "0.1"
+    assert c["fragments_with_deletions"] == 2 and c["deleted_rows"] == 2000 + 20 * 4
+    assert c["rewrites_fragments"] >= 2 and c["rewrites_rows"] >= 2000 and c["room"]
+    assert c["remaps_index_gib"] >= 0 and not c["stable_row_ids"]
+    assert _deleted(local) == 2, "a dry run writes nothing"
+
+
+def test_the_compacting_backfill_changes_nothing_that_matters(held_legacy, tmp_path):
+    """Compaction, then the merge: the vectors byte for byte by chunk id,
+    the search answers on a fixed query set, the vector index and the
+    book_id index still used (the plans, the index statistics), and every
+    bundle byte, the SHARD and space_id as they were."""
+    from app import vector_index
+    from app.hold import collection as col
+    root, local, con, snap, shard_dir, hashes, ids = held_legacy
+    rows_before, answers_before = _rows_by_id(local), _answers(local)
+    travels_before = _what_travels(root, local, snap, ids, tmp_path / "before")
+    shard_before, space_before = _tree(shard_dir), col.read(root, "pubmed").space_id
+    ann, scalar = _plans(local)
+    # the plans name the index each read goes through
+    assert "ANNIvfPartition" in ann and "book_id_idx(BTree)" in scalar, (ann, scalar)
+    assert vector_index.stats(local)["unindexed_rows"] == 0
+
+    out = vector_sources.apply(root, "pubmed", local, con, state_dir=tmp_path / "work")
+    assert out["added"] == 1 and out["rows_with_source"] == 2
+    tbl = embeddings._conn(local).open_table(embeddings.TABLE)
+    assert embeddings.SOURCE_COLUMN in tbl.schema.names and _deleted(local) == 0
+
+    # the legacy format stores a NULL as 16 zero bytes: read as NULL
+    held = embeddings.held_chunks(local, [1, 31000001, 31000002]).by_book
+    assert {r[embeddings.SOURCE_COLUMN] for r in held[1].values()} == {None}
+    assert {r[embeddings.SOURCE_COLUMN] for r in held[31000002].values()} == {None}
+    assert {r[embeddings.SOURCE_COLUMN] for r in held[31000001].values()} == \
+        {bytes.fromhex(hashes["pubmed:31000001"])}
+    assert _rows_by_id(local) == rows_before, "every vector, text and column, by chunk id"
+    assert _answers(local) == answers_before, "the same answers, the same distances"
+    ann, scalar = _plans(local)
+    assert "ANNIvfPartition" in ann and "book_id_idx(BTree)" in scalar, \
+        f"the indexes answer, no flat scan: {ann}\n{scalar}"
+    st = vector_index.stats(local)
+    assert st["indexed"] and st["unindexed_rows"] == 0 and st["book_id_indexed"]
+    assert _what_travels(root, local, snap, ids, tmp_path / "after") == travels_before
+    assert _tree(shard_dir) == shard_before and col.read(root, "pubmed").space_id == space_before
+
+
+def test_a_stop_after_the_compaction_reruns_into_the_merge_alone(held_legacy, tmp_path, monkeypatch):
+    from app import vector_index
+    root, local, con, *_ = held_legacy
+    state = tmp_path / "work"
+    real = vector_sources._add_column
+
+    def stopped(*a, **kw):
+        raise KeyboardInterrupt("stopped after the compaction (test)")
+    monkeypatch.setattr(vector_sources, "_add_column", stopped)
+    with pytest.raises(KeyboardInterrupt):
+        vector_sources.apply(root, "pubmed", local, con, state_dir=state)
+    tbl = embeddings._conn(local).open_table(embeddings.TABLE)
+    assert _deleted(local) == 0 and embeddings.SOURCE_COLUMN not in tbl.schema.names
+    # the rerun: no part read again, no compaction, the merge
+    monkeypatch.setattr(vector_sources, "_add_column", real)
+    monkeypatch.setattr(vector_sources, "part_sources", lambda *_a: pytest.fail("phase 1 redone"))
+    monkeypatch.setattr(vector_index, "materialize_deletions",
+                        lambda *a, **kw: pytest.fail("compacted twice"))
+    assert vector_sources.apply(root, "pubmed", local, con, state_dir=state)["rows_with_source"] == 2
+    assert not list(state.glob("*")), "the work files go"
+
+
+def test_the_add_columns_checkpoint_is_the_tables_at_its_version(held, tmp_path):
+    root, local, con, *_ = held
+    a = vector_sources._checkpoint(tmp_path, local)
+    embeddings.delete_book(31000004, local)                 # any commit moves it
+    b = vector_sources._checkpoint(tmp_path, local)
+    assert a != b and a.name.startswith("source-hashes.lance.v")
+    (tmp_path / vector_sources.CHECKPOINT).write_text("")    # the name the node's first run left
+    a.write_text("")
+    vector_sources._clean(tmp_path)
+    assert not list(tmp_path.glob("source-hashes*"))
+
+
+def _with_a_deletion(local):
+    """A later-format table with a document deleted and written again."""
+    tbl = embeddings._conn(local).open_table(embeddings.TABLE)
+    row = tbl.search().where("book_id = 31000004").limit(10).to_arrow().to_pylist()
+    tbl.delete("book_id = 31000004")
+    tbl.add([{k: v for k, v in r.items() if not k.startswith("_")} for r in row])
+    assert _deleted(local) == 1
+
+
+def test_a_later_format_merges_beside_its_deletions(held, tmp_path, monkeypatch):
+    from app import vector_index
+    root, local, con, *_ = held
+    _with_a_deletion(local)
+    assert vector_index.deletions_plan(local)["needed"] is False
+    monkeypatch.setattr(vector_index, "materialize_deletions",
+                        lambda *a, **kw: pytest.fail("a v2 table rewritten for nothing"))
+    assert vector_sources.apply(root, "pubmed", local, con, state_dir=tmp_path / "w")["rows_with_source"] == 2
+    assert _deleted(local) == 1, "its fragments as they were"
+
+
+def test_a_refused_merge_is_compacted_and_tried_once_more(held, tmp_path, monkeypatch):
+    from app import vector_index
+    root, local, con, *_ = held
+    _with_a_deletion(local)
+    real, calls = vector_sources._add_column, []
+
+    def refused_once(*a, **kw):
+        calls.append(1)
+        if len(calls) == 1:
+            raise OSError(f"Not supported: {vector_index.MERGE_REFUSED}, run compaction (test)")
+        return real(*a, **kw)
+    monkeypatch.setattr(vector_sources, "_add_column", refused_once)
+    assert vector_sources.apply(root, "pubmed", local, con, state_dir=tmp_path / "w")["rows_with_source"] == 2
+    assert len(calls) == 2 and _deleted(local) == 0
+
+
+def test_no_room_for_the_compaction_writes_nothing(held_legacy, tmp_path, monkeypatch, capsys):
+    from app import louise, node_state, vector_index
+    root, local, con, *_ = held_legacy
+    version = embeddings._conn(local).open_table(embeddings.TABLE).version
+    monkeypatch.setattr(vector_index, "free_bytes", lambda c: 1024)
+    node_state.set_paused("pubmed", True, by="test")
+    assert louise.main(["hold", "vectors", "source-hashes", "pubmed", "--root", str(root),
+                        "--apply"]) == 2
+    assert "GiB needed" in capsys.readouterr().err
+    assert embeddings._conn(local).open_table(embeddings.TABLE).version == version
 
 
 def test_the_command_is_a_dry_run_and_asks_for_a_pause(held, capsys):

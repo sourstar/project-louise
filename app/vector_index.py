@@ -318,6 +318,188 @@ def purge_deleted(collection, lock_con=None) -> dict:
             "index_retrained": retrained}
 
 
+#: Lance's merge of a new column (`add_columns`) REFUSES a fragment of the
+#: LEGACY file format (0.1) where a deletion run empties a whole row group:
+#: "Not supported: Missing too many rows in merge, run compaction to
+#: materialize deletions first" (pubmed on the node, 2026-11-07, `hold vectors
+#: source-hashes --apply`). Measured, pylance 9.0.1: format 0.1 with a
+#: 2,000-row run deleted (a document's rows, as delete-then-insert leaves
+#: them) fails, with or without stable row ids; scattered deletions pass;
+#: formats 2.0 and 2.1 pass with the same deletions. The route Lance's error
+#: names, and what `materialize_deletions` does.
+MERGE_REFUSED = "Missing too many rows in merge"
+
+
+class CompactionNoRoom(RuntimeError):
+    """Not enough free space for the compaction a merge needs first."""
+
+
+def materialize_options() -> dict:
+    """`compact_files` options that make EVERY deletion physical: the full
+    compaction's own target fragment size (`compact`), with the
+    materialize threshold at 0 — Lance's default, 10 % of a fragment
+    deleted, would leave the fragments below it, and one of those is
+    enough to refuse the merge."""
+    return {"target_rows_per_fragment": config.VECTOR_INDEX_FRAGMENT_ROWS,
+            "materialize_deletions": True, "materialize_deletions_threshold": 0.0}
+
+
+def _dir_bytes(path: str) -> int:
+    import os
+    total = 0
+    for base, _, files in os.walk(path):
+        for f in files:
+            try:
+                total += os.path.getsize(os.path.join(base, f))
+            except OSError:
+                pass
+    return total
+
+
+def stray_temp_files(collection) -> list[Path]:
+    """The partial files a KILLED Lance writer leaves in the table's
+    `data/` (`.tmp*`, the object store's write-then-rename): no version
+    references them, so `cleanup_old_versions` never sees them. Measured
+    2026-11-07: four compactions killed by SIGKILL left 2.5 GiB of them on a
+    1.1 GiB table, and the rerun then refused for room. Only a pass that
+    holds the table alone may remove them (`materialize_deletions`: the
+    collection paused, its lock held)."""
+    import os
+    tbl = _table(collection)
+    if tbl is None:
+        return []
+    data = Path(_dataset(tbl).uri) / "data"
+    try:
+        return [data / n for n in os.listdir(data) if n.startswith(".tmp")]
+    except OSError:
+        return []
+
+
+def deletions_plan(collection, *, force: bool = False) -> dict | None:
+    """What a column merge on this table needs first, read-only (the dry run
+    of `hold vectors source-hashes`): the table's file format and row ids,
+    its fragments with deletions, and — when a compaction is NEEDED (the
+    legacy format with a deletion, or `force`) — what Lance's own planner
+    (`lance.optimize.Compaction.plan`, `materialize_options`) would rewrite:
+    fragments, rows, data bytes, and the index bytes a compaction re-maps
+    (a table without stable row ids; with them the index stays). `room`:
+    free space for all of it, written before anything old is dropped.
+    None without a table."""
+    import os
+    from lance.optimize import Compaction
+    tbl = _table(collection)
+    if tbl is None:
+        return None
+    ds = _dataset(tbl)
+    frags = ds.get_fragments()
+    with_del = [f for f in frags if f.num_deletions]
+    fmt = str(ds.data_storage_version)
+    legacy = fmt.startswith("0.")
+    needed = bool(with_del) and (legacy or force)
+    out = {"format": fmt, "legacy_format": legacy, "stable_row_ids": bool(ds.has_stable_row_ids),
+           "version": ds.version, "fragments": len(frags),
+           "fragments_with_deletions": len(with_del),
+           "deleted_rows": sum(int(f.num_deletions) for f in with_del),
+           "needed": needed,
+           "why": ("a legacy-format (0.1) table with deletions: Lance's merge refuses a "
+                   "deleted run that empties a row group" if needed and legacy else
+                   "Lance refused the merge" if needed else
+                   "no deletion" if not with_del else
+                   f"format {fmt} merges beside deletions (measured)")}
+    if not needed:
+        return out
+    plan = Compaction.plan(ds, materialize_options())
+    ids = {m.id for t in plan.tasks for m in t.fragments}
+    by_id = {f.fragment_id: f for f in frags}
+    data = os.path.join(ds.uri, "data")
+    rows = data_bytes = 0
+    for i in ids:
+        f = by_id[i]
+        rows += int(f.physical_rows)
+        for d in f.data_files():
+            size = d.file_size_bytes
+            if not size:
+                try:
+                    size = os.path.getsize(os.path.join(data, d.path))
+                except OSError:
+                    size = 0
+            data_bytes += int(size)
+    index_bytes = 0
+    if not ds.has_stable_row_ids:
+        for ix in ds.list_indices():
+            uuid = ix.get("uuid") if isinstance(ix, dict) else getattr(ix, "uuid", None)
+            if uuid:
+                index_bytes += _dir_bytes(os.path.join(ds.uri, "_indices", str(uuid)))
+    stray = 0
+    for f in stray_temp_files(collection):
+        try:
+            stray += f.stat().st_size
+        except OSError:
+            pass
+    # the strays are removed before the compaction: their space counts as free
+    free = free_bytes(collection)
+    free = None if free is None else free + stray
+    need = data_bytes + index_bytes + int(config.VECTOR_INDEX_MIN_FREE_GB * 2**30)
+    out.update({"rewrite": {"fragments": len(ids), "rows": rows, "data_bytes": data_bytes,
+                            "index_bytes_remapped": index_bytes,
+                            "deletions_left": sum(1 for f in with_del if f.fragment_id not in ids)},
+                "free_bytes": free, "needed_bytes": need, "stray_temp_bytes": stray,
+                "room": free is None or free >= need})
+    return out
+
+
+def materialize_deletions(collection, lock_con=None, *, log=None, force: bool = False) -> dict:
+    """Every deletion of the table made physical, so a column can be merged
+    beside every fragment (`MERGE_REFUSED`): Lance's own route, the one its
+    error names — `compact_files` with `materialize_options` — under
+    `rewrite` (this process's writers stand down; across processes the
+    caller's collection is paused and its lock held) and the manifest's
+    vector write lock. One commit: a stop before it leaves the table as it
+    was, and the rerun plans it again. Lance re-maps the indexes in that
+    commit (a table without stable row ids; with them they stay), so the
+    vector index and the book_id index still answer. Old versions are kept,
+    as after every compaction: the maintainer's prune drops them
+    (VECTOR_INDEX_KEEP_VERSIONS_H). Raises CompactionNoRoom before writing
+    anything when the free space is short, RuntimeError when a deletion is
+    left."""
+    plan = deletions_plan(collection, force=force)
+    if plan is None or not plan["needed"]:
+        return {"compacted": False, "plan": plan}
+    rw = plan["rewrite"]
+    say = log or (lambda _m: None)
+    strays = stray_temp_files(collection)
+    if strays:
+        size = sum(f.stat().st_size for f in strays if f.exists())
+        for f in strays:
+            f.unlink(missing_ok=True)
+        say(f"removed {len(strays)} partial file(s) a killed writer left, {size / 2**30:.2f} GiB")
+    if not plan["room"]:
+        raise CompactionNoRoom(
+            f"the compaction this merge needs rewrites {rw['data_bytes'] / 2**30:.1f} GiB of data "
+            f"and re-maps {rw['index_bytes_remapped'] / 2**30:.1f} GiB of index before anything old "
+            f"is dropped: {plan['needed_bytes'] / 2**30:.1f} GiB needed, "
+            f"{(plan['free_bytes'] or 0) / 2**30:.1f} GiB free")
+    say(f"compaction started (deletions materialized): {rw['fragments']} of {plan['fragments']} "
+        f"fragment(s), {rw['rows']:,} rows, {rw['data_bytes'] / 2**30:.1f} GiB, "
+        f"{plan['deleted_rows']:,} deleted rows dropped; this collection's vector writes wait")
+    t0 = time.monotonic()
+    with rewrite(collection), embeddings._write_lock(lock_con):
+        metrics = _dataset(_table(collection)).optimize.compact_files(**materialize_options())
+    forget(collection)
+    dt = time.monotonic() - t0
+    after = deletions_plan(collection, force=True)
+    if after and after["fragments_with_deletions"]:
+        raise RuntimeError(f"{after['fragments_with_deletions']} fragment(s) still have deletions "
+                           f"after the compaction")
+    say(f"compacted in {dt:.0f} s: {getattr(metrics, 'fragments_removed', '?')} fragment(s) "
+        f"rewritten into {getattr(metrics, 'fragments_added', '?')}; version {plan['version']} -> "
+        f"{after['version'] if after else '?'}")
+    return {"compacted": True, "seconds": round(dt, 1), "plan": plan,
+            "fragments_removed": getattr(metrics, "fragments_removed", None),
+            "fragments_added": getattr(metrics, "fragments_added", None),
+            "version": after["version"] if after else None}
+
+
 def _vector_indices(tbl) -> list:
     try:
         return [ix for ix in tbl.list_indices()

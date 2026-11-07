@@ -1375,6 +1375,14 @@ VALIDITY_COLUMNS = ("valid_from", "valid_to", "shown")
 #: not change (`upsert_book`); a text layer keeps its vectors by text, as before.
 SOURCE_COLUMN = "source_hash"
 SOURCE_TYPE = pa.binary(16)
+#: A LEGACY-format (0.1) table cannot hold a NULL of this type: Lance writes
+#: 16 zero bytes in its place, and `IS NOT NULL` counts them (measured
+#: 2026-11-07, pylance 9.0.1; formats 2.x keep the NULL). Pubmed's table is
+#: legacy, so 16 zero bytes READ AS NULL everywhere (`_sources_of`,
+#: `source_bytes`, `SOURCE_PRESENT`): no record's `content_hash` is all zeros,
+#: and "NULL never matches" stays true in either format.
+NO_SOURCE = bytes(16)
+SOURCE_PRESENT = f"{SOURCE_COLUMN} IS NOT NULL AND {SOURCE_COLUMN} != X'{NO_SOURCE.hex()}'"
 
 
 def add_source_column(collection, keys, vals, *, lock_con=None, checkpoint=None) -> int:
@@ -1413,7 +1421,7 @@ def add_source_column(collection, keys, vals, *, lock_con=None, checkpoint=None)
         tbl.to_lance().add_columns(fill, read_columns=[BOOK_COLUMN_NAME])
     if checkpoint is not None:
         Path(checkpoint).unlink(missing_ok=True)
-    return db.open_table(TABLE).count_rows(f"{SOURCE_COLUMN} IS NOT NULL")
+    return db.open_table(TABLE).count_rows(SOURCE_PRESENT)
 
 
 def fit_source(tbl, rows: list[dict]) -> "list[dict] | pa.Table":
@@ -1448,15 +1456,18 @@ def _without_source(rows: list[dict]) -> "pa.Table":
 
 def source_bytes(content_hash) -> bytes | None:
     """A record's `content_hash` (32 hex, as the manifest and the record line
-    hold it) as the column's 16 bytes; None for anything else."""
+    hold it) as the column's 16 bytes; None for anything else — 16 zero
+    bytes included, which a legacy-format table stores for NULL (`NO_SOURCE`)."""
     if isinstance(content_hash, (bytes, bytearray)):
-        return bytes(content_hash) if len(content_hash) == 16 else None
-    if not isinstance(content_hash, str) or len(content_hash) != 32:
+        got = bytes(content_hash) if len(content_hash) == 16 else None
+    elif not isinstance(content_hash, str) or len(content_hash) != 32:
         return None
-    try:
-        return bytes.fromhex(content_hash)
-    except ValueError:
-        return None
+    else:
+        try:
+            got = bytes.fromhex(content_hash)
+        except ValueError:
+            return None
+    return None if got == NO_SOURCE else got
 
 
 class ValidityColumnsMissing(RuntimeError):
@@ -1700,10 +1711,11 @@ def _source_select(tbl) -> list[str]:
 
 def _sources_of(at: "pa.Table") -> list:
     """Each row's `source_hash` (16 bytes or None) of a read; all None for a
-    read of a table without the column."""
+    read of a table without the column. 16 zero bytes, a legacy-format
+    table's NULL, read as None (`NO_SOURCE`)."""
     if SOURCE_COLUMN not in at.schema.names:
         return [None] * at.num_rows
-    return at.column(SOURCE_COLUMN).to_pylist()
+    return [None if v == NO_SOURCE else v for v in at.column(SOURCE_COLUMN).to_pylist()]
 
 
 def record_chunk_hashes(con, book_id: int, chunks) -> None:

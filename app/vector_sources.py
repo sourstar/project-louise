@@ -36,6 +36,22 @@ HOW. Two phases, each resumable (invariant 2):
    and its checkpoint file keeps the fragments done, which the rerun does
    not recompute. A table that already has the column is left as it is.
 
+A TABLE LANCE CANNOT MERGE INTO FIRST (the node, 2026-11-07: pubmed's
+`add_columns` refused "Missing too many rows in merge, run compaction to
+materialize deletions first"): a legacy-format (0.1) table with deletions
+is compacted before phase 2, every deletion made physical
+(`vector_index.materialize_deletions`, Lance's own `compact_files`), under
+the same pause and locks; a table of a later format merges beside its
+deletions and is not rewritten. Should Lance refuse the merge anyway, the
+table is compacted and the merge tried once more. A stop after the
+compaction reruns into the merge alone (nothing is left to materialize),
+and phase 1's work file is read, not redone. The add_columns checkpoint is
+named by the table and its VERSION: one made before a compaction never
+stands for fragments the compaction replaced. Nothing reads Lance's row
+ids or addresses (checked 2026-11-07: the only positional reads, the
+rewrite's verify and two measurement tools, take fresh offsets of one
+open version); Lance re-maps the indexes in the compaction's commit.
+
 It writes the vector table, so `--apply` asks for the collection paused
 and takes its write lock (louise.py); the work files go when it finishes.
 """
@@ -48,7 +64,8 @@ from typing import Any
 
 #: the work database and the add_columns checkpoint, under `state/`
 WORK_DB = "source-hashes.sqlite"
-CHECKPOINT = "source-hashes.ckpt.sqlite"
+CHECKPOINT = "source-hashes.ckpt.sqlite"       # the name before 2026-11-07, removed by _clean
+CHECKPOINT_GLOB = "source-hashes*.ckpt.sqlite"
 #: manifest rows looked up per query
 _LOOKUP = 900
 
@@ -132,21 +149,27 @@ def survey(root, name: str, local, con) -> dict[str, Any]:
     """The dry run: what `--apply` would do, read-only — the tables, their
     rows and whether each has the column, the documents whose vectors are
     marked current, and the snapshot the sources come from."""
-    from app import embeddings
+    from app import embeddings, vector_index
     from app.share import possession
     tables = []
     for view in _tables(local):
         tbl = _table_of(view)
         if tbl is None:
             continue
-        tables.append({"table": str(Path(view.lance_dir)), "rows": tbl.count_rows(),
-                       "column": embeddings.SOURCE_COLUMN in tbl.schema.names})
+        column = embeddings.SOURCE_COLUMN in tbl.schema.names
+        entry = {"table": str(Path(view.lance_dir)), "rows": tbl.count_rows(), "column": column}
+        if not column:
+            # what Lance needs before it can merge the column: a compaction
+            # of every deletion, for a legacy-format table that has one
+            entry["compaction"] = _compaction_summary(vector_index.deletions_plan(view))
+        tables.append(entry)
     snap = possession.current_snapshot(Path(root), name)
     embedded = con.execute("SELECT COUNT(*) FROM documents WHERE embed_done=1 AND error IS NULL"
                            ).fetchone()[0]
     return {"collection": name, "tables": tables,
             "rows": sum(t["rows"] for t in tables),
             "without_column": sum(1 for t in tables if not t["column"]),
+            "compaction_needed": any((t.get("compaction") or {}).get("needed") for t in tables),
             "embedded_documents": embedded,
             "snapshot": snap.snapshot_id if snap is not None else None,
             "parts": len(snap.shards) if snap is not None else 0}
@@ -190,7 +213,7 @@ def apply(root, name: str, local, con, *, state_dir: Path, log=None, stop=None) 
         keys, vals = _load(work, found)
         added = filled = 0
         for view in todo_tables:
-            got = _add_column(view, keys, vals, con, state_dir / CHECKPOINT)
+            got = _merge(view, keys, vals, con, state_dir, say, name)
             added += 1
             filled += got
             say(f"[source-hashes] {name}: {Path(view.lance_dir).name}: column added, "
@@ -222,6 +245,53 @@ def _load(work: sqlite3.Connection, n: int):
     return keys[:at], vals[:at]
 
 
+def _merge(view, keys, vals, con, state_dir: Path, say, name: str) -> int:
+    """Phase 2 on one table: the compaction Lance needs first, if any, then
+    the column (the module note)."""
+    from app import vector_index
+    where = Path(view.lance_dir).name
+    plan = vector_index.deletions_plan(view)
+    if plan is not None and plan["needed"]:
+        say(f"[source-hashes] {name}: {where}: {plan['why']}: compacting first")
+        vector_index.materialize_deletions(view, con, log=lambda m: say(f"[source-hashes] {name}: "
+                                                                        f"{where}: {m}"))
+    try:
+        return _add_column(view, keys, vals, con, _checkpoint(state_dir, view))
+    except Exception as e:                              # noqa: BLE001 — one refusal is handled
+        if vector_index.MERGE_REFUSED not in str(e):
+            raise
+        say(f"[source-hashes] {name}: {where}: Lance refused the merge ({e}); every deletion "
+            f"made physical, then the merge again")
+        vector_index.materialize_deletions(view, con, force=True,
+                                           log=lambda m: say(f"[source-hashes] {name}: {where}: {m}"))
+        return _add_column(view, keys, vals, con, _checkpoint(state_dir, view))
+
+
+def _checkpoint(state_dir: Path, view) -> Path:
+    """The add_columns checkpoint for this table AT ITS VERSION: a pass
+    stopped before its commit resumes from it; a table that has moved since
+    (a compaction, any commit) starts a fresh one."""
+    tbl = _table_of(view)
+    return Path(state_dir) / f"source-hashes.{Path(view.lance_dir).name}.v{tbl.version}.ckpt.sqlite"
+
+
+def _compaction_summary(plan: dict | None) -> dict | None:
+    """The dry run's line about the compaction, in GiB."""
+    if plan is None:
+        return None
+    out = {k: plan[k] for k in ("needed", "why", "format", "stable_row_ids", "fragments",
+                                "fragments_with_deletions", "deleted_rows")}
+    if plan["needed"]:
+        rw = plan["rewrite"]
+        out.update({"rewrites_fragments": rw["fragments"], "rewrites_rows": rw["rows"],
+                    "rewrites_gib": round(rw["data_bytes"] / 2**30, 2),
+                    "remaps_index_gib": round(rw["index_bytes_remapped"] / 2**30, 2),
+                    "free_gib": None if plan["free_bytes"] is None else round(plan["free_bytes"] / 2**30, 1),
+                    "needs_gib": round(plan["needed_bytes"] / 2**30, 1), "room": plan["room"],
+                    "removes_stray_temp_gib": round(plan["stray_temp_bytes"] / 2**30, 2)})
+    return out
+
+
 def _add_column(view, keys, vals, con, checkpoint: Path) -> int:
     """`source_hash` onto one table, in the vector store's own layer
     (`embeddings.add_source_column`: Lance is opened there and nowhere else);
@@ -233,3 +303,5 @@ def _add_column(view, keys, vals, con, checkpoint: Path) -> int:
 def _clean(state_dir: Path) -> None:
     for n in (WORK_DB, WORK_DB + "-wal", WORK_DB + "-shm", CHECKPOINT):
         (Path(state_dir) / n).unlink(missing_ok=True)
+    for f in Path(state_dir).glob(CHECKPOINT_GLOB) if Path(state_dir).is_dir() else ():
+        f.unlink(missing_ok=True)
