@@ -1,0 +1,22 @@
+{
+  "backend": "vega-louise-pytorch",
+  "context_size": 8192,
+  "embeddings": true,
+  "env": {
+    "LOUISE_TORCH_DETERMINISTIC": "1",
+    "NEO_CACHE_DIR": "/data/louise-cache/neo-cache"
+  },
+  "gpu_layers": 0,
+  "name": "vega-dar-legal-it-cpu",
+  "options": [
+    "task:dar-legal-it",
+    "device:cpu"
+  ],
+  "parameters": {
+    "batch": 1,
+    "model": "weights/dar-legal-it",
+    "seed": 0
+  },
+  "threads": 6,
+  "pinned": false
+}

@@ -71,6 +71,9 @@ louise hold collection new wikidata --recipe recipes/wikidata-nemo.json --name w
 # its endpoint, model and platform image are the predecessor's
 louise hold collection new normattiva --recipe normattiva-recreate.toml --name normattiva \
     --re-create --cpu-model vega-dar-legal-it-cpu
+# (its CPU twin is deploy/vega/stage/models/vega-dar-legal-it-cpu.yaml: the live
+# vega-dar-legal-it with device:cpu and nothing else changed — the same backend,
+# weights, env and threads; staged into LocalAI's models folder, then a restart)
 
 # G — a private collection, from LocalAGI or any OpenAI SDK: only a name
 curl -X POST http://node/api/collections -H "Authorization: Bearer $(cat deposit.token)" \
