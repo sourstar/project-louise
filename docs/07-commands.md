@@ -284,6 +284,22 @@ louise node
                                                                        taken in from peers; parsed, indexed, embedded here, searched and checked as it is; shared, only its parts
                                                                        still current upstream (04 §4.3); it survives a restart (§7.8) (added 2026-11-07, operator)
   unfreeze <collection>                                                the collection follows its origin and its peers again and catches up: a fetch, a scan, the newer snapshot and its members
+  checkpoint save [--note TEXT] [--dev-unit UNIT …] [--replace]        THE DEVELOPMENT WATCHDOG (operator, 2026-11-07; below): record the node's state now as its working state — the mode, the
+                                                                       collections' own pauses and freezes, each held collection's embed as its file states it, the host's dev units (louise-…) —
+                                                                       open the checkpoint and beat; refused while one is open unless --replace (its units carried) (added 2026-11-07)
+  checkpoint beat [--for DURATION | --hold-until ISO] [--dev-unit UNIT …] [--dev-pid PID …]
+                                                                       the heartbeat; --for / --hold-until declare a known-long unattended step (at most 24 h, capped and said; --for 0
+                                                                       withdraws it); --dev-pid records a process of this container a step runs; refused with no checkpoint open
+  checkpoint run [--note TEXT] -- <command…>                           a development step inside the container: started as a child, recorded in the open checkpoint (pid, command
+                                                                       line, start time), SIGTERM/SIGINT forwarded, its exit code returned; refused, nothing started, with none open;
+                                                                       it does not beat
+  checkpoint status [--json]                                           open or closed, saved and last beaten when, the deadline, the dev units, what restore would change; writes nothing
+  checkpoint restore [--dry-run] [--by TEXT]                           the recorded steps stopped first (SIGTERM, up to 300 s, then SIGKILL; a reused pid never signalled), then the node
+                                                                       put back to the checkpoint and closed: only what differs, through `pause`/`resume`'s and `hold config apply
+                                                                       --set embed=`'s own functions; with none open, nothing (exit 0); a change that fails leaves it open (exit 1)
+  checkpoint close                                                     development finished, the node in a good state: closed, nothing restored, no unit stopped
+  checkpoint watch [--after 2h] [--dry-run] [--json]                   the watchdog's one check: no beat for --after and past any declared step -> the dev units on stdout one a line (or
+                                                                       JSON) and the restore; exit 0 nothing to do, 10 restored, 11 expired under --dry-run, 1 the restore failed in part
   health [<collection>] [--errors]                                     every stage's state per collection; exit 1 when a stage has work it cannot start (added 2026-10-08)
 
 louise dev                                                             operator instruments; read-only unless the line says otherwise
@@ -950,6 +966,35 @@ reader needs at the command line:
   read by `node_state.frozen_since`. A command a person types — `records
   fetch`, `share fetch`, `records build` — is not stopped: freeze governs
   what the node does on its own.
+- **`node checkpoint`.** *Added 2026-11-07* (operator: "when the limit of
+  usage approaches, and you are going to be frozen for more than 2 hours,
+  put all the developments on hold and resume the last working state before
+  freezing"; app/working_state.py, deploy/watchdog/). An agent cannot see
+  its own usage limit, so the node keeps the watch. Before a development
+  changes anything, the agent runs `save`, naming the host's systemd units
+  the development runs; it `beat`s at least every hour. When no beat has
+  come for two hours and no declared step (`beat --for`) is still running,
+  the host's timer (deploy/watchdog/louise-watchdog.sh, every 10 min) stops
+  those units — `louise-…` names only, never the watchdog's own — and
+  `watch` restores the node: its mode, each collection's own pause and its
+  embed setting, through the functions `pause`, `resume` and `hold config
+  apply --set embed=…` use, and nothing else (§7.8). A collection held now
+  and not at the save is left as it is; one held then and not now is
+  skipped; a freeze, an operator decision, is recorded and never changed.
+  Each write names the restore in the mode's and the pause's history.
+  Before any of it, the restore stops the steps recorded inside the
+  container (`run`, `beat --dev-pid`): stopping a host unit that runs
+  `docker exec` does not stop the process it started there (München,
+  2026-11-07). A step is named by its pid, command line and start time and
+  pid namespace, so a reused pid, or one of another container, is said and
+  never signalled; one still running gets SIGTERM — a pass ends its unit and
+  exits 130 (§7.7) —, at most 300 s, then SIGKILL, each said. `run` does not
+  beat: the agent's beat is the liveness signal. The
+  record is `state/working-state.json`, written whole and renamed, every
+  change under an exclusive lock (exit 3 while another checkpoint command
+  holds it); one that cannot be read is refused (exit 2), never taken for
+  none — `save --replace` writes a new one. `watch`'s exits 10 and 11 are
+  its own, for the timer: restored, and expired under `--dry-run`.
 - **`dev migrate schema`.** Creating the schema of a new state database
   is not a migration and happens on first open. Changing an existing
   schema happens here only; a process that finds a schema other than its
@@ -1830,7 +1875,7 @@ collection is another name.
 │       ├── index/           the text index of the parts held, and the facet values (05 §5.7)
 │       ├── lance/           the vector table search reads; while it is built, a link into the build area (`LOUISE_BUILD_DIR`, below)
 │       └── origin/          the origin files the records are parsed from — 06 §6.2's corpus directory, kept for records-vs-origin; the bytes may live on other storage, mounted here
-├── state/                   node.sqlite: the catalogue, coverage maps (09 §9.10), peers seen, runtime overrides; trust.json; web-sources-ack.json (09 §9.13)
+├── state/                   node.sqlite: the catalogue, coverage maps (09 §9.10), peers seen, runtime overrides; trust.json; web-sources-ack.json (09 §9.13); working-state.json (`node checkpoint`, §7.3)
 └── keys/                    the peer key, at NODE_KEY_PATH
 ```
 

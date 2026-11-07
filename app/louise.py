@@ -2698,6 +2698,80 @@ def cmd_node_unfreeze(a) -> int:
     return 0
 
 
+def cmd_node_checkpoint(a) -> int:
+    """`node checkpoint save|beat|run|status|restore|close|watch` (07 §7.3;
+    operator, 2026-11-07: "when the limit of usage approaches, and you are
+    going to be frozen for more than 2 hours, put all the developments on
+    hold and resume the last working state before freezing"). The record
+    and its rules are app/working_state.py; the host's half is
+    deploy/watchdog/. Exit 2 refused, 3 another checkpoint command holds the
+    record; `watch` also 10 (restored) and 11 (expired, dry run); `run` the
+    step's own."""
+    from app import node_state, working_state as ws
+    verb = a.checkpoint_verb
+    try:
+        if verb == "save":
+            rec = ws.save(note=a.note or "", units=a.dev_unit or [], replace=a.replace,
+                          by=f"louise node checkpoint save ({node_state.invoker()})")
+            _print({"checkpoint": "open", "file": str(ws.path()), "saved_at": ws.iso(rec["saved_at"]),
+                    "deadline": ws.iso(ws.deadline(rec)), "dev_units": rec["dev_units"],
+                    "state": rec["state"], "note": rec["note"],
+                    "says": "beat at least every hour (`louise node checkpoint beat`); no beat for 2 h "
+                            "and the watchdog restores this state and stops the dev units"})
+            return 0
+        if verb == "beat":
+            for_s = ws.parse_duration(a.for_) if a.for_ is not None else None
+            until = ws.parse_when(a.hold_until) if a.hold_until is not None else None
+            rec = ws.beat(for_s=for_s, until=until, units=a.dev_unit or [], pids=a.dev_pid or [])
+            out = {"checkpoint": rec["status"], "last_beat": ws.iso(rec["last_beat"]),
+                   "hold_until": ws.iso(rec.get("hold_until")),
+                   "deadline": ws.iso(ws.deadline(rec)), "dev_units": rec["dev_units"],
+                   "dev_processes": [{"pid": e["pid"], "cmdline": " ".join(e["cmdline"])[:200]}
+                                     for e in rec.get("dev_processes") or []]}
+            if rec["capped"]:
+                out["says"] = f"capped: an unattended step is declared for {ws.span(ws.MAX_HOLD_S)} at most"
+            _print(out)
+            return 0
+        if verb == "run":
+            cmd = list(a.command or [])
+            return ws.run(cmd[1:] if cmd[:1] == ["--"] else cmd, note=a.note or "")
+        if verb == "status":
+            st = ws.status()
+            if a.json:
+                _print(st)
+            else:
+                print("\n".join(ws.lines(st)))
+            return 0
+        if verb == "restore":
+            got = ws.restore(by=a.by or f"louise node checkpoint restore ({node_state.invoker()})",
+                             dry_run=a.dry_run)
+            _print(got if got is not None else
+                   {"restored": None, "says": "no checkpoint is open: nothing to restore"})
+            return 1 if got is not None and got.get("failed") else 0
+        if verb == "close":
+            rec = ws.close(by=f"louise node checkpoint close ({node_state.invoker()})")
+            _print({"closed": None, "says": "no checkpoint is open: nothing to close"} if rec is None else
+                   {"closed": ws.iso(rec["closed_at"]), "dev_units": rec["dev_units"],
+                    "says": "the current state is the working state; the dev units are not stopped "
+                            "by this" if rec["dev_units"] else "the current state is the working state"})
+            return 0
+        # watch: the units on stdout one a line, or the whole answer as JSON
+        code, out = ws.watch(after_s=ws.parse_duration(a.after), dry_run=a.dry_run)
+        if a.json:
+            _print(out)
+        else:
+            for unit in out["units"]:
+                print(unit)
+            print(f"louise node checkpoint watch: {out['says']}", file=sys.stderr)
+        return code
+    except ws.Refused as e:
+        print(f"louise node checkpoint {verb}: {e}", file=sys.stderr)
+        return 2
+    except ws.Busy as e:
+        print(f"louise node checkpoint {verb}: deferred: {e}", file=sys.stderr)
+        return 3
+
+
 #: 07 §7.3 writes `share <collection>`: the collection stands where a verb would
 _SHARE_VERBS = ("collection", "serve", "fetch", "contribute", "attest", "peers", "-h", "--help", "offer")
 
@@ -5589,19 +5663,17 @@ def cmd_config_apply(a) -> int:
     the file only (invariant 10): the state database changes only by the
     apply, as at start."""
     from app import collection_file, effective_config
-    written = None
     if getattr(a, "set", None):
         if not a.collection:
             raise CodexError("--set writes one collection's file: `hold config apply <collection> "
                              f"--set KEY=VALUE`; the keys are {collection_file.accepted()} (07 §7.8)")
         try:
-            written = collection_file.set_values(a.collection,
+            out = effective_config.set_and_apply(a.collection,
                                                  collection_file.parse_assignments(a.set))
         except collection_file.SetRefused as e:
             raise CodexError(str(e)) from None
-    out = effective_config.apply(a.collection)
-    if written is not None:
-        out = {"written": written, **out}
+    else:
+        out = effective_config.apply(a.collection)
     _print(out)
     return 1 if out["refused"] else 0
 
@@ -5834,6 +5906,55 @@ def build_parser() -> argparse.ArgumentParser:
                                           "and catches up")
     p.add_argument("collection")
     p.set_defaults(fn=cmd_node_unfreeze)
+    ck = nverbs.add_parser("checkpoint", help="the node's last working state and an agent's heartbeat: "
+                                             "no beat for 2 h and the watchdog restores the state "
+                                             "(operator, 2026-11-07)")
+    cverbs = ck.add_subparsers(dest="checkpoint_verb", required=True)
+    p = cverbs.add_parser("save", help="record the current state as the working state, open the "
+                                       "checkpoint and beat")
+    p.add_argument("--note", default=None, metavar="TEXT", help="what the development is, who runs it")
+    p.add_argument("--dev-unit", dest="dev_unit", action="extend", nargs="+", default=None,
+                   metavar="UNIT", help="a host systemd unit of the development (louise-…): stopped "
+                                        "by the watchdog when it restores")
+    p.add_argument("--replace", action="store_true",
+                   help="while one is open: the current state IS the working state (its units carried)")
+    p.set_defaults(fn=cmd_node_checkpoint)
+    p = cverbs.add_parser("beat", help="the heartbeat; refused with no checkpoint open")
+    hold_for = p.add_mutually_exclusive_group()
+    hold_for.add_argument("--for", dest="for_", default=None, metavar="DURATION",
+                          help="a known-long unattended step: the watchdog waits for it too (at most "
+                               "24 h; 0 withdraws one)")
+    hold_for.add_argument("--hold-until", dest="hold_until", default=None, metavar="ISO",
+                          help="the same, until a time with its offset (…Z, …+01:00)")
+    p.add_argument("--dev-unit", dest="dev_unit", action="extend", nargs="+", default=None,
+                   metavar="UNIT", help="a development unit started since the save")
+    p.add_argument("--dev-pid", dest="dev_pid", action="extend", nargs="+", type=int, default=None,
+                   metavar="PID", help="a process of this container a step runs (not started by "
+                                       "`run`): stopped by the restore")
+    p.set_defaults(fn=cmd_node_checkpoint)
+    p = cverbs.add_parser("run", help="run a development step as a child recorded in the open "
+                                      "checkpoint (pid, command line, start time): the restore stops "
+                                      "it; SIGTERM/SIGINT forwarded; exits with its code")
+    p.add_argument("--note", default=None, metavar="TEXT")
+    p.add_argument("command", nargs=argparse.REMAINDER, help="-- then the command and its arguments")
+    p.set_defaults(fn=cmd_node_checkpoint)
+    p = cverbs.add_parser("status", help="open or closed, the last beat, the deadline, the dev units, "
+                                         "what restore would change")
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(fn=cmd_node_checkpoint)
+    p = cverbs.add_parser("restore", help="put the node back to the checkpoint's state, then close it")
+    p.add_argument("--dry-run", dest="dry_run", action="store_true")
+    p.add_argument("--by", default=None, metavar="TEXT", help="who restores, for the history entries")
+    p.set_defaults(fn=cmd_node_checkpoint)
+    p = cverbs.add_parser("close", help="development finished, the node in a good state: nothing to "
+                                        "restore")
+    p.set_defaults(fn=cmd_node_checkpoint)
+    p = cverbs.add_parser("watch", help="the watchdog's check: no beat for --after (2h) -> the dev "
+                                        "units printed and the state restored; exit 0, 10, 11")
+    p.add_argument("--after", default="2h", metavar="DURATION")
+    p.add_argument("--dry-run", dest="dry_run", action="store_true")
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(fn=cmd_node_checkpoint)
     p = nverbs.add_parser("health", help="every stage's state per collection; exit 1 when a stage has "
                                         "work it cannot start")
     p.add_argument("collection", nargs="?", default=None)
