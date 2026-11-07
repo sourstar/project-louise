@@ -369,7 +369,9 @@ at boot) and all of Louise's searched data (ssd4).
 Datasets: ssd3/apps (recordsize 128K, primarycache all: programs need the
 ARC) and ssd3/attic (recordsize 1M, zstd). Not louise-build, whose
 primarycache=metadata is right for tables read once and wrong for programs.
-ssd3 gets a replication task to tank/backup, as ssd5 has.
+ssd3 is already replicated to tank nightly (operator, 2026-11-07), the build
+area included. That is worth keeping: a table being built there represents
+days of card time.
 
 Measured before and after (two runs each): a LocalAI model load, cold right
 after a restart and warm; a deploy's total time and its test stage. If a model
