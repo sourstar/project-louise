@@ -271,6 +271,11 @@ def _report(result: dict) -> int:
     adopted = result.get("adopted", 0)
     print(f"fetched={result['fetched']} skipped={result['skipped']} "
           f"failed={result['failed']} aborted={aborted} total={result['total']}")
+    if result.get("waiting"):
+        # their last attempt failed: each is tried again once its backoff has passed
+        # (engine.RETRY_BACKOFF_S: 1, 5, 10, 30, 60, 120 min, then every 120)
+        print(f"  ({result['waiting']} waiting out the backoff of a failed attempt: retried on a later pass, "
+              f"not now)")
     if adopted:
         # "fetched" counts these, and an operator watching a 200 GB profile
         # finish in seconds deserves to know why

@@ -255,7 +255,7 @@ def test_every_byte_of_an_update_file_draws_from_the_one_budget(tmp_path, origin
     assert granted >= moved + sum(p.stat().st_size for p in (root / "baseline").iterdir())
 
 
-def test_an_md5_mismatch_is_refused_and_the_pair_fetched_again(tmp_path, origin):
+def test_an_md5_mismatch_is_refused_and_the_pair_fetched_again(tmp_path, origin, monkeypatch):
     root, transport = origin
     c = _collection(tmp_path)
     con = db.connect(c)
@@ -265,8 +265,16 @@ def test_an_md5_mismatch_is_refused_and_the_pair_fetched_again(tmp_path, origin)
     landed = c.corpus_dir / UPDATES_SUBDIR / "pubmed26n0004.xml.gz"
     assert not landed.exists() and not Path(str(landed) + ".md5").exists(), \
         "refused, and its sidecar too: a stale sidecar would mismatch forever"
+    # the operator's retry rule (2026-11-07, engine.RETRY_BACKOFF_S): the pass
+    # right after the failure waits, and tries nothing of it
+    waiting = engine.run_acquisition(con, c, _spec(root), "full")
+    assert waiting["waiting"] == 1 and waiting["failed"] == 0
+    assert not landed.exists(), "the failed data file waits out its backoff"
+    # its wait over, the pair is complete again (the sidecar, which did not
+    # fail, may already have come back on the waiting pass)
+    monkeypatch.setattr(engine, "RETRY_BACKOFF_S", (0,) * len(engine.RETRY_BACKOFF_S))
     second = engine.run_acquisition(con, c, _spec(root), "full")
-    assert second["failed"] == 0 and second["fetched"] == 2
+    assert second["failed"] == 0 and waiting["fetched"] + second["fetched"] == 2
     assert landed.read_bytes() == (root / "updatefiles" / "pubmed26n0004.xml.gz").read_bytes()
 
 
