@@ -1370,6 +1370,123 @@ def _embed_select_view(collection) -> dict | None:
             "stated": getattr(collection, "embed_select", None)}
 
 
+#: the word for a source's slices, by the key its delivered slices carry
+#: (`spec.slice_profiles`): what the card and the grow dialog call them
+_SLICE_NOUNS = {"family": ("family", "families"), "lang": ("language", "languages")}
+
+
+def _slice_noun(spec) -> tuple[str, str]:
+    keys = list(getattr(spec, "slice_profiles", None) or ())
+    return _SLICE_NOUNS.get(keys[0].split("=", 1)[0] if keys else "", ("slice", "slices"))
+
+
+#: report path -> (its mtime, each family's records): `_slice_sizes`
+_slice_sizes_cache: dict[str, tuple[int, dict[str, int]]] = {}
+
+
+def _slice_sizes(collection) -> dict[str, int]:
+    """Each slice's documents where a STORED count gives them cheaply —
+    wikidata's family report (`families-<map>.report.json`, written with
+    the pack's family codes: each family's records in the dump) — else {}.
+    One small file read, cached on its path and mtime; never the manifest
+    in a request."""
+    if getattr(collection, "plugin", None) != "wikidata":
+        return {}
+    try:
+        from .pack import slicing
+        from .plugins.wikidata import pack as wd_pack
+        ctx = slicing.router_context(collection)
+        if ctx is None:
+            return {}
+        path = wd_pack.report_path(wd_pack.pack_dir(ctx.dump), ctx.fmap.sha256)
+        mtime = path.stat().st_mtime_ns
+        hit = _slice_sizes_cache.get(str(path))
+        if hit is not None and hit[0] == mtime:
+            return hit[1]
+        report = json.loads(path.read_text(encoding="utf-8"))
+        sizes = {f"family={f['family']}": int(f.get("records") or 0)
+                 for f in report.get("families", ()) if f.get("family")}
+        _slice_sizes_cache[str(path)] = (mtime, sizes)
+        return sizes
+    except Exception:   # noqa: BLE001 — a count the card can do without
+        return {}
+
+
+def _slice_short(spec, s: str) -> str:
+    """A slice as the grow dialog names it: its profile (`person`, `it`);
+    one the source does not deliver, by its value (`lang=fr` → `fr`)."""
+    return (spec.slice_profiles.get(s) if spec is not None else None) or s.split("=", 1)[-1]
+
+
+def _slice_label(spec, s: str) -> str:
+    """…with the profile's gloss where the source gives one: "person — people"."""
+    short = _slice_short(spec, s)
+    gloss = spec.profile_labels.get(short) if spec is not None else None
+    return f"{short} — {gloss}" if gloss else short
+
+
+def _embed_slices_view(collection, declined: int | None = None) -> dict | None:
+    """WHICH HELD SLICES ARE EMBEDDED, on the card and in the grow dialog
+    (07 §7.8 `embed_slices`; operator, 2026-11-07: "we agreed to embed only
+    certain families, but the grow profile shows that all the families are
+    checked"). Read from the worker's own resolution (`slice_scope.
+    embed_view`: absent = every slice held) — invariant 10 — for a
+    collection whose origin delivers slices apart and whose node holds more
+    than one; None elsewhere. `declined`: the stored count of documents not
+    embedded here, which is what goes back to the encoder when every slice
+    is embedded again (no "smart" choice declining others)."""
+    from . import slice_scope
+    view = slice_scope.embed_view(collection)
+    held = view["held"]
+    if not held or len(held) < 2:
+        return None
+    spec = ACQUIRE_REGISTRY.get(collection.plugin)
+    one, many = _slice_noun(spec)
+    sizes = _slice_sizes(collection)
+    embedded = view["embedded"]
+    rows = [{"name": s, "short": _slice_short(spec, s), "label": _slice_label(spec, s),
+             "embedded": s in embedded, "part": s in view["part"], "documents": sizes.get(s)}
+            for s in held]
+    if view["stated"] is None:
+        line = f"Embedded: {len(held)} of {len(held)} {many} — every {one} held"
+    else:
+        line = f"Embedded: {len(embedded)} of {len(held)} {many}"
+        if embedded:
+            line += ": " + ", ".join(_slice_short(spec, s) for s in embedded)
+    if view["part"]:
+        line += "; and part of " + ", ".join(_slice_short(spec, s) for s in view["part"])
+    if view["smart"]:
+        line += " — within them, the smart choice of “Embed which”"
+    if view["not_held"]:
+        line += (" · also chosen but not held here, so not embedded until grown: "
+                 + ", ".join(_slice_short(spec, s) for s in view["not_held"]))
+    return {"noun": one, "nouns": many, "all": view["stated"] is None, "rows": rows,
+            "embedded": list(embedded), "smart": view["smart"], "line": line,
+            "declined": declined,
+            # every slice from ONE archive (slice_scope.ONE_ORIGIN: wikidata's
+            # one dump holds every family): the grow dialog offers no false
+            # choice of what to hold, only this one (operator, 2026-11-07)
+            "one_archive": collection.plugin in slice_scope.ONE_ORIGIN,
+            "total": len(spec.slice_profiles) if spec is not None else len(held)}
+
+
+def _grow_view(collection) -> dict:
+    """What the grow dialog says beyond its options (operator, 2026-11-07:
+    "add a short comment or tag about the meaning of checking/unchecking
+    (download+embed, or embed)", "like at the top of the checkboxes"): the
+    header of the group that holds slices — a check downloads and embeds,
+    as "Embed which" chooses where it applies — and whether every slice
+    comes from one archive, where nothing is chosen to hold."""
+    from . import slice_scope
+    spec = ACQUIRE_REGISTRY.get(collection.plugin)
+    one, many = _slice_noun(spec)
+    return {"tag": "download + embed" + (" (per Embed which)" if _embed_select_view(collection) else ""),
+            "one_archive": collection.plugin in slice_scope.ONE_ORIGIN,
+            "noun": one, "nouns": many,
+            "total": len(spec.slice_profiles) if spec is not None else 0,
+            "held": len(slice_scope.held_slices(collection) or ())}
+
+
 def _profile_label(collection: collections_mod.Collection) -> str:
     """The card's profile: the file's, else the profiles of the slices it
     holds, by name (operator, 2026-11-02: wikipedia read "(hand-populated)"
@@ -2125,6 +2242,12 @@ def _collection_shelf(collection: collections_mod.Collection,
         # WHICH documents the encoder spends on (07 §7.8 `embed_select`,
         # app/embed_select.py): offered where the plugin can group them
         "embed_select": _embed_select_view(collection),
+        # WHICH HELD SLICES the encoder spends on (07 §7.8 `embed_slices`),
+        # as the worker resolves them: the card's line, the grow dialog's
+        # "embed" group (operator, 2026-11-07)
+        "embed_slices": _embed_slices_view(collection,
+                                           None if counts_pending else counts.get("declined")),
+        "grow": _grow_view(collection),
         "stage_rates": stage_rates,
         "stage_etas": stage_etas,
         # the tooltip for the slot above, in words — built HERE because
@@ -2888,6 +3011,52 @@ def collection_embed_select(name: str, body: EmbedSelectBody):
     except collection_file.SetRefused as e:
         raise HTTPException(400, str(e)) from None
     return {"ok": True, "embed_select": body.value, "persisted": True}
+
+
+class EmbedSlicesBody(BaseModel):
+    #: the held slices to embed, by name; None = every slice held (the key
+    #: leaves the file, and a slice grown later is embedded too)
+    slices: list[str] | None = None
+
+
+@admin_router.post("/library/{name}/embed-slices")
+def collection_embed_slices(name: str, body: EmbedSlicesBody):
+    """The grow dialog's "embed" group (07 §7.8 `embed_slices`; operator,
+    2026-11-07): written to the collection's file as `hold config apply
+    --set embed_slices=…` writes it, through its one writer. Only slices
+    held here, and at least one. The worker scans the collection on seeing
+    the edit (worker._sync_collections), and its slice scope — or, under
+    "smart", the embed selection — marks what is not embedded here; until
+    then the collection's pipeline waits. Returns the card's line as the
+    file now reads."""
+    from . import slice_scope
+    collection = _collection_or_404(name)
+    spec = ACQUIRE_REGISTRY.get(collection.plugin)
+    one, many = _slice_noun(spec)
+    held = slice_scope.held_slices(collection) or ()
+    if len(held) < 2:
+        raise HTTPException(400, f"{name} holds {'one' if held else 'no'} {one} apart from the "
+                                 f"others: there is nothing to choose between")
+    if body.slices is not None:
+        if not body.slices:
+            raise HTTPException(400, f"Choose at least one {one} to embed. To embed nothing, "
+                                     f"set the embed mode to off.")
+        unheld = [s for s in body.slices if s not in held]
+        if unheld:
+            shown = ", ".join(_slice_short(spec, s) for s in unheld)
+            raise HTTPException(400, f"{shown} {'is' if len(unheld) == 1 else 'are'} not held on this "
+                                     f"node, so {'it' if len(unheld) == 1 else 'they'} cannot be "
+                                     f"embedded here: grow adds {'it' if len(unheld) == 1 else 'them'} first")
+    value = "all" if body.slices is None else ",".join(dict.fromkeys(body.slices))
+    try:
+        collection_file.set_values(name, {"embed_slices": value})
+    except collection_file.SetRefused as e:
+        raise HTTPException(400, str(e)) from None
+    after = collections_mod.by_name(name)
+    view = _embed_slices_view(after) if after is not None else None
+    return {"ok": True, "persisted": True,
+            "embed_slices": list(after.embed_slices) if after is not None and after.embed_slices else None,
+            "line": view["line"] if view else None}
 
 
 class ShareBody(BaseModel):

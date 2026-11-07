@@ -5070,6 +5070,22 @@ def _sync_collections(all_collections, cons, last_discover, pipeline: bool = Fal
             else:
                 _discover(cons[kept.name], kept, "config-changed")
             last_discover[kept.name] = time.time()
+        if (prev.embed_slices, prev.embed_select) != (kept.embed_slices, kept.embed_select):
+            # WHAT THE ENCODER SPENDS ON changed (07 §7.8 `embed_slices`,
+            # `embed_select`: the Library's grow dialog, `hold config apply`).
+            # Their passes run after a scan (_scan_only) and the pipeline
+            # waits for them meanwhile (`slice_scope.ready`), so the scan is
+            # asked for NOW: left to the interval (DISCOVER_INTERVAL_MIN,
+            # 360 min by default) the collection would stand still for hours.
+            # A plain scan, no fetch; one per edit, never per round
+            db.log_event(cons[kept.name], "info", "worker",
+                         f"collection {kept.name!r}: what is embedded changed — "
+                         f"scanning to apply it")
+            if pipeline:
+                _request_discovery(kept.name, "embed choice changed", acquire=False)
+            else:
+                _scan_only(cons[kept.name], kept, "embed choice changed")
+                last_discover[kept.name] = time.time()
 
     for name in sorted(replaced):
         _leave(name, cons, current, previous_by_name, last_discover, "replaced by another collection")

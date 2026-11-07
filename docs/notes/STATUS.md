@@ -18,6 +18,31 @@ build at 12 cores, the GPU uncapped. The card's noise (operator): 0.2 sone
 idle, 3.1 sone at full load, coil whine ~0.9 sone; its fan range is being
 measured (published figures disagree).
 
+### 2026-11-07: the Library shows and offers which slices are embedded (operator)
+
+- **The operator**: "we agreed to embed only certain families, but the grow
+  profile shows that all the families are checked, and they cannot be
+  unchecked"; then "For wikidata the archive is unique, thus it makes no
+  sense to show a false choice, but it makes sense to show the embedding
+  options there", with a tag on what a check means, "at the top of the
+  checkboxes". The dialog listed the 14 HELD families; `embed_slices` (the
+  9 embedded) was shown nowhere.
+- **Built**: the card's line "Embedded: 9 of 14 families: …" and the grow
+  dialog's `embed` group both read `slice_scope.embed_view`, the passes' own
+  test (invariant 10); `hold collection show` prints the same as
+  `embed_slices` / `embed_slices_not_held` / `embed_select` (09 §9.3). One
+  archive (`slice_scope.ONE_ORIGIN`: wikidata) shows no box to hold, only
+  the `embed` group; separate downloads (wikipedia) keep their held boxes,
+  checked and grey, under `download + embed (per Embed which)`, then the
+  `embed` group. `POST /admin/library/<name>/embed-slices` writes the file
+  through `collection_file.set_values`; nothing, or a slice not held, is
+  refused in a sentence.
+- **Found and fixed**: an `embed_slices` edit made `slice_scope.ready` false
+  and nothing asked for a scan (the embed selection's wait does), so a
+  collection that is not "smart" stood still until the interval scan
+  (`DISCOVER_INTERVAL_MIN`, 360 min). `_sync_collections` now asks for a
+  plain scan when `embed_slices` or `embed_select` changes: one per edit.
+
 ### 2026-11-07: one status — `app/status.py`
 
 - **The operator**: "The interface with which a model status is queried
@@ -76,6 +101,33 @@ measured (published figures disagree).
   bounded count: 45 ms both ways at 4 M (over the bound, no new lookups);
   9 → 23 ms on 80 k rows with 17 k documents at a stage (the superseded
   lookups, bounded by ERRORED_EXACT_BELOW).
+
+### 2026-11-07: pubmed's update files — fetched, applied in NLM's order; a deleted citation's part and a baseline year decided
+
+- **The defect** (München, read-only): pubmed's origin copy is the 2026
+  baseline alone; no update file was ever fetched, though the spec and the
+  Codex declare `updatefiles-dir`. So the node held less than the origin
+  gives (invariant 11), and its snapshot 2026-08 is not its cutoff's state
+  (the cutoff rule takes every update file published before 2026-09-01).
+- **Built** ([pubmed-updatefiles.md](pubmed-updatefiles.md)): the update
+  directory listed whole with the baseline (`delta.subdir` resolved against
+  `url` by RFC 3986), landed under `updatefiles/`, checked, resumed by byte,
+  through the budget; applied in NLM's (year, number) order — a file only
+  after its predecessor and its own `.md5`; last write wins by the origin's
+  order, so a cleared cursor re-opens no revised record; a DeleteCitation is
+  the deletion signal (`retracted`), out of every index before its tombstone
+  commits. Fixed on the way: with a staging area, fetched files were never
+  md5-checked. 06 §6.1, §6.2 and 09 §9.17 amended.
+- **Decided (operator, 2026-11-07)** ([pubmed-updatefiles.md](pubmed-updatefiles.md)
+  §5): **B** — a deleted citation leaves its part at the next snapshot,
+  tombstoned `retracted` (02 §2.2, 09 §9.4, 04 amended; what the build
+  did; no peer reads a tombstone for a record still in a part); **C** — a
+  superseded version is kept while NLM keeps the files that verify it and
+  dropped at the next baseline: `origin_versions = "history-until-baseline"`
+  with the plugin's `origin_period` (06 §6.2, 02 §2.3, 09 §9.5, 01 promise
+  7 amended; `shard.drop_past_period`, at the freeze that re-issues a part
+  and at a peer's promotion). The hold on pubmed's snapshots over the update
+  files is lifted; the deploy order is the note's §9.
 
 ### 2026-11-02 (morning): harrier evaluation under acquire-only; the web alone on 938c525
 
