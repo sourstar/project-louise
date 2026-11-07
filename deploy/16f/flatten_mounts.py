@@ -40,7 +40,9 @@ SERVICES = ("web", "worker")
 #: until it moves. The dataset's NAME IS MÜNCHEN'S TO REPORT: until it is
 #: written here (or given as LOUISE_BUILD_HOST to the deploy), `build_area`
 #: sees no dataset and the setting stays unset — nothing mounted, nothing set.
-BUILD_HOST: str | None = None          # "/mnt/ssd3/<dataset>"
+#: München created it 2026-11-07: ssd3/louise-build (atime off, lz4,
+#: recordsize 1M, primarycache metadata), 7.14 TiB free.
+BUILD_HOST: str | None = "/mnt/ssd3/louise-build"
 BUILD_TARGET = "/build"
 
 

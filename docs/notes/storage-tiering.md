@@ -313,6 +313,9 @@ Nemotron re-embeds of gutenberg and wikipedia (wikipedia's old table was
   removed. Dry run by default, with the estimate at the rates above.
   `forget` and `rename` follow the link.
 
+**Done 2026-11-07:** München created `ssd3/louise-build` with the
+properties below (7.14 TiB free); `BUILD_HOST = "/mnt/ssd3/louise-build"`.
+
 **For München, before the first use:** the dataset, then its name in
 deploy/16f/flatten_mounts.py `BUILD_HOST` (or `LOUISE_BUILD_HOST=` to the
 deploy), then a deploy, which mounts it at /build in web and worker and
