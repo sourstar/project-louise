@@ -112,6 +112,12 @@ DOCKER_BUILDKIT=1 docker build --progress=plain -f "$WORK/backend/Dockerfile.lla
   -t "$TAG" "$WORK"
 mkdir -p "$OUT"
 docker save "$TAG" -o "$OUT/louise-llama-cpp-$NAME.tar"
+if [ -n "${INTEL_STACK:-}" ]; then
+  # what the tag cannot say: the image's content digest, and the libigc ocloc compiled the device code with
+  LOCK="$LOCK
+oneapi_image_digest $(docker image inspect --format '{{index .RepoDigests 0}}' "$ONEAPI_IMAGE")
+ocloc_igc $(docker run --rm --entrypoint cat "$BUILDER" /intel-stack.ocloc)"
+fi
 if [ -n "$LOCK" ]; then
   printf 'series %s\nbase %s\n%s\n' "$HEAD" "$BASE" "$LOCK" > "$OUT/louise-llama-cpp-$NAME.tar.stack.lock"
 fi
