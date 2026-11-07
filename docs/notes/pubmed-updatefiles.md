@@ -394,39 +394,49 @@ checked" gains "for as long as the plugin's `origin_versions` keeps it";
 
 ## 9. Deploy and the first run
 
-**Pending.** The 2026 baseline was published in mid-December 2025, so
-every update file since — `pubmed26n1335` on, **~320–360 files, ~8–11 GB**
-(estimate; the dry run counts them) — is pending, not only the ~8 months
-since the node's fetch: ~250–280 of them are dated before 2026-09-01 and
-belong to snapshot 2026-08 already. As records: ~5–9 M refs, perhaps
-**3–4 M distinct PMIDs** (a citation revised several times is applied
-once at its last version if embedding waits), **~22–30 hours of card** at
-26 ms each, once.
+**Measured on the node (2026-11-07, `records fetch pubmed --slice all
+--dry-run`): 512 update files pending of 3,432, 16.7 GB** (16,744,601,220
+bytes). That is more than this note's estimate of ~320–360 files and 8–11 GB,
+which was not counted. NLM's 2026 baseline was published in mid-December
+2025, so every update file since then is pending, not only the ~8 months since
+the node's fetch. As records, scaled from the counted files (an estimate; the
+discovery pass counts them): ~8–14 M refs, ~5–6 M distinct PMIDs, ~35–45 hours
+of card at 26 ms each, once. The SHARD's record parts are 40 G
+(`du -sh /shards/pubmed/records`), not the ~14 GB estimated.
 
-**Order** (RULE 1: the node and the peers may be stopped; nothing
-official was published from pubmed — `share = false` since 2026-10-20):
+**2026-08 IS SUPERSEDED, NOT DISCARDED (2026-11-07).** This note assumed
+nothing official was published from pubmed ("`share = false` since
+2026-10-20"). That was wrong: pubmed.toml says `share = true`, and
+`hold snapshot discard pubmed 2026-08` refused: "this node served it
+(seeding control: 2026-08); a snapshot a peer may hold is superseded, never
+recalled (01 promise 8)". Rebuilding 2026-08 under the same id would put two
+different snapshots 2026-08 in the network. RULE 1's shortcut does not apply,
+because the result is not indistinguishable from the by-the-book one. 2026-08
+stays as published: the 2026 baseline without its update files, verifiable
+against those baseline files. 2026-09 supersedes it, and it is never rebuilt.
+The chain is consecutive periods (app/hold/snapshot.py `verify_chain`), so
+2026-09 is built before 2026-10. Superseding also saves the 2026-08 rebuild
+the discard route needed.
 
-1. Deploy the image. Nothing runs on its own for pubmed: it is paused.
+**Order** (RULE 1: the node and the peers may be stopped):
+
+1. Deploy the image. Nothing runs on its own for pubmed: it is paused. Done
+   (6780613), with the vectors' `source_hash` backfilled (§10).
 2. `louise hold records fetch pubmed --slice all --dry-run`: the real count
-   and bytes, said in the report.
-3. Snapshot 2026-08 is not its cutoff's state (§1): it still applies.
-   `louise hold snapshot discard pubmed 2026-08` — it refuses by itself if
-   this node ever served or attested it, which München confirms first. It
-   MOVES every part the snapshot lists under `<SHARD>/.discarded/2026-08/`,
-   on the SHARD's own filesystem (`/shards/pubmed`): nothing is copied and
-   nothing freed until that directory is removed after step 4's 2026-08
-   rebuild has taken its lines. Its size is the SHARD's record parts —
-   `du -sh /shards/pubmed/records` on München before the discard; not
-   measured from here (an estimate: ~14 GB of records at pack-format.md's
-   measured scale for 40 M PubMed records; the retired v6 SHARD was 40 GB).
-4. Per cutoff, in turn — 2026-08, 2026-09, 2026-10: `records fetch pubmed
-   --slice all --snapshot ID` (the files dated before it), a discovery pass
-   with pubmed's `embed` off (the text index follows; the card waits),
-   then `records build` (for 2026-08 with `--records-from-discarded
-   2026-08`: only the changed records parsed) and `snapshot create ID`. A
-   cutoff's build comes before the next cutoff's fetch: the manifest then
-   holds that cutoff's state and no later one. (Held until the operator
-   decided a deleted citation's part; lifted: §5, decision 1.)
+   and bytes. Done: see above.
+3. No discard (above).
+4. Per cutoff, in turn — 2026-09, then 2026-10:
+   - `records fetch pubmed --slice all --snapshot ID` (the files dated before
+     its cutoff; 2026-09's take every file since the baseline);
+   - a discovery pass with pubmed's `embed` off (the text index follows, the
+     card waits);
+   - `records build` (the delta build: only the parts holding a changed
+     record are re-issued, 2026-08's other parts taken as they are);
+   - `snapshot create ID`.
+   A cutoff's build comes before the next cutoff's fetch, so the manifest
+   holds that cutoff's state and no later one. The superseded part versions
+   stay in the SHARD until the 2027 baseline (history-until-baseline, §5
+   decision 2). They need room at `/shards`, checked before the build.
 5. Then `embed` back to `all`: each distinct PMID re-encoded once, ~1 day of
    card; and `acquire_enabled` for the daily files (~10 card-minutes a day).
 6. NLM's 2027 baseline (mid-December 2026) lands at the corpus root by the
