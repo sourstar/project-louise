@@ -146,10 +146,13 @@ def _load_chunks(row, collection):
     plugin = collection.plugin_instance()
     # ONE PARSE (docs/notes/one-parse.md): the fresh record where there is one
     from . import record_source
-    chapters = record_source.sections(collection, row, lambda: plugin_io.sections(plugin, row))
+    pair = layers_mod.has_pair_layer(collection)
+    chapters, source = record_source.sections_and_source(
+        collection, row, lambda: record_source.parsed_with_source(plugin, row, pair=pair))
     # the document's LAYER decides the chunker (amendment 41); one layer =
-    # the plugin's chunker, exactly as before
-    return layers_mod.chunks_for_document(collection, row, chapters)
+    # the plugin's chunker, exactly as before. Each chunk carries the record's
+    # `content_hash`, written beside its vector (embeddings.SOURCE_COLUMN)
+    return layers_mod.with_source(layers_mod.chunks_for_document(collection, row, chapters), source)
 
 _RDF_BATCH_PEERS = (
     "SELECT * FROM documents WHERE in_scope=1 AND rdf_done=0 AND error IS NULL "

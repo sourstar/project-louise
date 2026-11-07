@@ -536,6 +536,24 @@ reader needs at the command line:
   no search as of a date is answered from vectors (the leg is withheld
   and says so). Takes the collection's lock: the node must not be running
   it (`node pause <collection>` releases the lock).
+- **`vectors source-hashes <collection> [--apply]`** (*amended
+  2026-11-07*, operator: A; docs/notes/pubmed-updatefiles.md §10). The
+  `source_hash` column (09 §9.6) for a vector table written before it:
+  each row gets the 09 §9.5 `content_hash` of the record its vector stands
+  for, wherever the current snapshot's line and the manifest prove it — the
+  document `embed_done`, in error nowhere, its manifest `content_hash` the
+  line's and its origin bytes the line's — and NULL elsewhere, which never
+  matches; no encoder is called. A dry run by default (the tables, their
+  rows, which lack the column, the documents marked embedded, the snapshot
+  the sources come from). `--apply` writes the table, so the collection
+  must be paused (`node pause <collection>`; exit 2 otherwise) and its lock
+  is taken. Two resumable phases: the parts of the snapshot read in the
+  parse pool, each committed to a work file under `state/` (a rerun skips
+  the parts done); then Lance's own `add_columns`, one commit, every other
+  column untouched (a kill leaves the table as it was; its checkpoint keeps
+  the fragments done). A table that has the column is left as it is; the
+  work files go at the end. Run it before a collection's records change —
+  a document re-opened since the last build has no provable source.
 - **`vectors show`.** Prints the coverage map (09 §9.10): per part of
   the current snapshot the chunks accepted here, whether it is open, and
   — among the live peers whose digests carry a benchmark for the space,

@@ -1,0 +1,371 @@
+"""`source_hash` on the vector table (09 §9.6, amended 2026-11-07, operator:
+A; docs/notes/pubmed-updatefiles.md §10).
+
+A pair layer's stored vector is kept for a chunk whose id and text are the
+stored row's AND whose record's `content_hash` is the row's `source_hash`;
+NULL never matches, a text layer keeps by text as before, and EMBED_VERSION
+still decides whether anything is kept. `hold vectors source-hashes`
+backfills a table written before the column, without the encoder,
+resumably — and nothing hashed, signed, attested or shipped reads it.
+"""
+from __future__ import annotations
+
+import hashlib
+import json
+import threading
+from pathlib import Path
+
+import lancedb
+import numpy as np
+import pyarrow as pa
+import pytest
+
+from app import db, embeddings, layers as layers_mod, vector_sources
+from app.hold import land
+from tests.hold.test_history_until_baseline import pubmed_root  # noqa: F401
+from tests.test_embed_reuse import _pair, collection, encoder, pair_layer  # noqa: F401
+
+H1, H2 = "11" * 16, "22" * 16
+#: the test Codex's space (tests/hold/test_template.py SPACE)
+DIM = 768
+
+
+def _src(chunks, h):
+    return layers_mod.with_source(chunks, h)
+
+
+def _stored(coll) -> dict:
+    tbl = embeddings._conn(coll).open_table(embeddings.TABLE)
+    return {r["id"]: r for r in tbl.to_arrow().to_pylist()}
+
+
+# ---------------------------------------------------------------- the keep
+
+def test_a_pair_vector_is_kept_while_its_record_is_the_same(collection, encoder, pair_layer):
+    embeddings.upsert_book(1, "en", _src(_pair("T", "A"), H1), collection)
+    assert encoder == [("T", "A")]
+    (row,) = _stored(collection).values()
+    assert row[embeddings.SOURCE_COLUMN] == bytes.fromhex(H1), "written in the vector's commit"
+    version = embeddings._conn(collection).open_table(embeddings.TABLE).version
+    encoder.clear()
+    counts = embeddings.EmbedCounts()
+    embeddings.upsert_book(1, "en", _src(_pair("T", "A"), H1), collection, counts=counts)
+    assert encoder == [] and (counts.embedded, counts.reused) == (0, 1)
+    assert embeddings._conn(collection).open_table(embeddings.TABLE).version == version
+
+
+def test_a_changed_abstract_is_encoded_again(collection, encoder, pair_layer):
+    embeddings.upsert_book(1, "en", _src(_pair("T", "A"), H1), collection)
+    encoder.clear()
+    embeddings.upsert_book(1, "en", _src(_pair("T", "A, corrected"), H2), collection)
+    assert encoder == [("T", "A, corrected")]
+    (row,) = _stored(collection).values()
+    assert row[embeddings.SOURCE_COLUMN] == bytes.fromhex(H2)
+
+
+def test_the_same_text_of_another_record_is_encoded_again(collection, encoder, pair_layer):
+    """A record whose `content_hash` moved (a heading, a section the pair
+    joins differently) is not this vector's record, whatever its text."""
+    embeddings.upsert_book(1, "en", _src(_pair("T", "A"), H1), collection)
+    encoder.clear()
+    embeddings.upsert_book(1, "en", _src(_pair("T", "A"), H2), collection)
+    assert encoder == [("T", "A")]
+
+
+def test_null_never_matches(collection, encoder, pair_layer):
+    embeddings.upsert_book(1, "en", _pair("T", "A"), collection)          # no source
+    assert next(iter(_stored(collection).values()))[embeddings.SOURCE_COLUMN] is None
+    encoder.clear()
+    embeddings.upsert_book(1, "en", _src(_pair("T", "A"), H1), collection)
+    assert encoder == [("T", "A")], "a stored NULL is not this record"
+    encoder.clear()
+    embeddings.upsert_book(1, "en", _pair("T", "A"), collection)
+    assert encoder == [("T", "A")], "a chunk without a source keeps nothing"
+
+
+def test_one_text_two_pairs_never_shares_a_vector(collection, encoder, pair_layer):
+    embeddings.upsert_book(1, "en", _src(_pair("A", "B\n\nC"), H1), collection)
+    encoder.clear()
+    embeddings.upsert_book(1, "en", _src(_pair("A\n\nB", "C"), H2), collection)
+    assert encoder == [("A\n\nB", "C")]
+
+
+def test_embed_version_still_decides(collection, encoder, pair_layer):
+    embeddings.upsert_book(1, "en", _src(_pair("T", "A"), H1), collection)
+    encoder.clear()
+    embeddings.upsert_book(1, "en", _src(_pair("T", "A"), H1), collection, reuse=False)
+    assert encoder == [("T", "A")], "vectors of another EMBED_VERSION are made again"
+
+
+def test_the_batched_path_writes_the_source(collection, encoder, pair_layer):
+    sink = embeddings.PendingWrites()
+    embeddings.upsert_book(1, "en", _src(_pair("T", "A"), H1), collection, sink=sink)
+    embeddings.write_pending(sink.take([1]), collection)
+    (row,) = _stored(collection).values()
+    assert row[embeddings.SOURCE_COLUMN] == bytes.fromhex(H1)
+
+
+def test_a_text_layer_keeps_by_text_as_before(collection, encoder):
+    chunks = [{"id": "gutenberg:1:0:1", "seq": 0, "chapter": "", "text": "a"}]
+    embeddings.upsert_book(1, "en", chunks, collection)
+    encoder.clear()
+    embeddings.upsert_book(1, "en", [dict(c) for c in chunks], collection)
+    assert encoder == [], "no source needed for a text chunk"
+
+
+# ---------------------------------------------------------------- an old table
+
+def _old_table(coll, rows: int = 2, dim: int = 4) -> None:
+    """A vector table as every node wrote it before the column."""
+    d = lancedb.connect(str(coll.lance_dir))
+    schema = pa.schema([pa.field("id", pa.string()), pa.field("book_id", pa.int64()),
+                        pa.field("lang", pa.string()), pa.field("seq", pa.int64()),
+                        pa.field("chapter", pa.string()), pa.field("text", pa.string()),
+                        pa.field("vector", pa.list_(pa.float32(), dim))])
+    d.create_table(embeddings.TABLE, schema=schema, data=[
+        {"id": f"x:{100 + i}:0:1", "book_id": 100 + i, "lang": "en", "seq": 0, "chapter": "",
+         "text": f"old {i}", "vector": [1.0, float(i), 0.0, 0.0]} for i in range(rows)])
+
+
+def test_a_table_without_the_column_still_reads_and_writes(collection, encoder, pair_layer):
+    Path(collection.lance_dir).mkdir(parents=True, exist_ok=True)
+    _old_table(collection)
+    embeddings.upsert_book(1, "en", _src(_pair("T", "A"), H1), collection)
+    tbl = embeddings._conn(collection).open_table(embeddings.TABLE)
+    assert embeddings.SOURCE_COLUMN not in tbl.schema.names, "an old table keeps its schema"
+    held = embeddings.held_chunks(collection, [1])
+    assert {r[embeddings.SOURCE_COLUMN] for r in held.of(1).values()} == {None}
+    encoder.clear()
+    embeddings.upsert_book(1, "en", _src(_pair("T", "A"), H1), collection)
+    assert encoder == [("T", "A")], "no source held: re-encoded, never wrongly kept"
+    # an import into it (a peer's bundle) drops the key and writes
+    embeddings.upsert_chunks([{"id": "pubmed:2:0:1", "book_id": 2, "lang": "en", "seq": 0,
+                               "chapter": "", "text": "x", "vector": [0.0, 1.0, 0.0, 0.0],
+                               embeddings.SOURCE_COLUMN: bytes.fromhex(H2)}], collection)
+    assert "pubmed:2:0:1" in embeddings.vectors_by_chunk_id(["pubmed:2:0:1"], collection)
+    hits = embeddings._search_table(collection, [1.0, 0.0, 0.0, 0.0], 5, None, None, None)
+    assert hits and all(embeddings.SOURCE_COLUMN not in h for h in hits)
+
+
+def test_a_hit_never_carries_the_column(collection, encoder, pair_layer):
+    embeddings.upsert_book(1, "en", _src(_pair("T", "A"), H1), collection)
+    hits = embeddings._search_table(collection, [1.0, 0.0, 0.0, 0.0], 5, None, None, None)
+    assert hits and all(embeddings.SOURCE_COLUMN not in h for h in hits)
+
+
+# ---------------------------------------------------------------- the writers
+
+def test_a_bundle_import_writes_the_possessed_records_hash():
+    codex = type("C", (), {"space": type("S", (), {"dim": 2})()})()
+    cut = {"pubmed:1:0:1": {"text": "t", "seq": 0, "chapter": "", "book_id": 1, "lang": "en",
+                            "source": H1},
+           "pubmed:2:0:1": {"text": "u", "seq": 0, "chapter": "", "book_id": 2, "lang": "en"}}
+    rows, _ = land.rows_to_write(codex, [("pubmed:1:0:1", [1.0, 0.0]), ("pubmed:2:0:1", [0.0, 1.0])], cut)
+    assert [r[land.SOURCE_COLUMN] for r in rows] == [bytes.fromhex(H1), None]
+    assert land.SOURCE_COLUMN == embeddings.SOURCE_COLUMN
+
+
+def test_the_cut_of_a_held_record_names_its_hash():
+    from tests.hold.conftest import pubmed
+    rec = {"uid": "pubmed:7", "native_id": "7", "lang": "en", "content_hash": H1,
+           "sections": [["title", "T"], ["abstract", "A"]]}
+    cut = land.cut(pubmed(), [rec])
+    assert {c["source"] for c in cut.values()} == {H1}
+    from app.hold import vectors_build
+    assert {c["source"] for c in vectors_build.chunks_of(pubmed(), [rec])} == {H1}
+
+
+def test_a_pair_parse_gives_the_records_build_hash(tmp_path):
+    """The embed stage's parse hashes the record as `hold records build`
+    does (09 §9.5), so a backfilled row and a freshly embedded one agree."""
+    from app import plugin_io, record_source
+    from app.hold import records as hold_records
+    from app.plugins.pubmed import SOURCE
+    from tests.test_pubmed_updatefiles import _article, _container
+    c = _container(tmp_path / "pubmed26n0001.xml.gz", _article(31000001, "Widgets."))
+    row = {"uid": "pubmed:31000001", "native_id": "31000001", "path": f"{c}::0"}
+    sections, h = record_source.parsed_with_source(SOURCE, row, pair=True)
+    doc = plugin_io.canonical_doc(SOURCE, row)
+    assert h == hold_records.content_hash(doc.title or "", [[a or "", b or ""] for a, b in doc.sections])
+    assert record_source.parsed_with_source(SOURCE, row, pair=False) == (
+        plugin_io.sections(SOURCE, row), None), "any other parse is what it was"
+    assert layers_mod.with_source([{"id": "a"}], None) == [{"id": "a"}]
+
+
+# ---------------------------------------------------------------- the backfill, the invariants
+
+@pytest.fixture
+def held(tmp_path, pubmed_root):
+    """A pubmed collection: SHARD, snapshot 2026-08, manifest, and a vector
+    table as it was written before the column. Four records:
+
+      31000001  embedded, unchanged since the build       -> its hash
+      31000002  embedded, its origin bytes moved since    -> NULL
+      31000003  not embedded (embed_done = 0)             -> NULL
+      31000004  embedded, unchanged                       -> its hash
+    """
+    from tests.hold.test_history_until_baseline import _build_and_freeze, _source
+    from tests.test_pubmed_updatefiles import _article, _container
+    root = pubmed_root
+    corpus = tmp_path / "corpus"
+    _container(corpus / "pubmed26n0001.xml.gz", _article(31000001, "One."), _article(31000002, "Two."))
+    _container(corpus / "pubmed26n0002.xml.gz", _article(31000003, "Three."), _article(31000004, "Four."))
+    snap, _ = _build_and_freeze(root, corpus, "2026-08")
+    local = _source(root, corpus)
+    con = db.connect(local)
+    con.execute("UPDATE documents SET embed_done=1, rdf_done=1, fts_done=1")
+    con.execute("UPDATE documents SET txt_hash='ff' WHERE uid='pubmed:31000002'")
+    con.execute("UPDATE documents SET embed_done=0 WHERE uid='pubmed:31000003'")
+    con.commit()
+    from app.hold import collection as col
+    from app.pack import records as pack_records
+    shard_dir = col.shard_dir_of(root, "pubmed")
+    records = [r for e in snap.shards for r in pack_records.iter_records(shard_dir / e.path)]
+    rows = []
+    for rec in records:
+        row = {"uid": rec["uid"], "native_id": rec["native_id"]}
+        for c in layers_mod.chunks_for_document(local, row, [tuple(s) for s in rec["sections"]]):
+            seed = int.from_bytes(hashlib.sha256(c["id"].encode()).digest()[:4], "big")
+            v = np.random.default_rng(seed).standard_normal(DIM).astype(np.float32)
+            rows.append({"id": c["id"], "book_id": int(rec["native_id"]), "lang": "en",
+                         "seq": int(c["seq"]), "chapter": c["chapter"] or "", "text": c["text"],
+                         "vector": (v / np.linalg.norm(v)).tolist()})
+    Path(local.lance_dir).mkdir(parents=True, exist_ok=True)
+    d = lancedb.connect(str(local.lance_dir))
+    d.create_table(embeddings.TABLE, data=rows, schema=pa.schema([
+        pa.field("id", pa.string()), pa.field("book_id", pa.int64()),
+        pa.field("lang", pa.string()), pa.field("seq", pa.int64()),
+        pa.field("chapter", pa.string()), pa.field("text", pa.string()),
+        pa.field("vector", pa.list_(pa.float32(), DIM))]))
+    hashes = {r["uid"]: r["content_hash"] for r in records}
+    return root, local, con, snap, shard_dir, hashes, [r["id"] for r in rows]
+
+
+def _tree(d: Path) -> dict[str, bytes]:
+    return {p.relative_to(d).as_posix(): p.read_bytes() for p in sorted(d.rglob("*")) if p.is_file()}
+
+
+def _what_travels(root, local, snap, ids, tmp: Path) -> dict:
+    """Every digest-, root-, bundle- and search-facing output of the table."""
+    from app.hold import export as exp
+    from tests.hold.conftest import KEY
+    out = {}
+    for e in snap.shards:
+        dest = tmp / f"bundle-{e.slice}-{e.n}"
+        exp.export(root, "pubmed", shard=f"{e.slice}/{e.n:05d}", dest=dest,
+                   vectors_for=lambda w: embeddings.vectors_by_chunk_id(w, collection=local),
+                   embed=lambda texts: [[1.0] + [0.0] * (DIM - 1) for _ in texts],
+                   key=KEY, created_at=1756713600)
+        out[f"bundle {e.slice}/{e.n}"] = _tree(dest)
+    got = embeddings.vectors_by_chunk_id(ids, collection=local)
+    out["vectors"] = {k: np.asarray(v, dtype=np.float32).tobytes() for k, v in sorted(got.items())}
+    hits = embeddings._search_table(local, [1.0] + [0.0] * (DIM - 1), 10, None, None, None)
+    out["search"] = json.dumps([{k: (np.asarray(v).tolist() if k == "vector" else v)
+                                 for k, v in sorted(h.items())} for h in hits], sort_keys=True)
+    return out
+
+
+def test_the_backfill_fills_what_it_can_prove_and_moves_nothing_that_travels(held, tmp_path):
+    from app.hold import collection as col
+    root, local, con, snap, shard_dir, hashes, ids = held
+    codex_before = col.read(root, "pubmed")
+    shard_before = _tree(shard_dir)
+    before = _what_travels(root, local, snap, ids, tmp_path / "before")
+
+    survey = vector_sources.survey(root, "pubmed", local, con)
+    assert (survey["rows"], survey["without_column"], survey["snapshot"]) == (4, 1, "2026-08")
+    state = tmp_path / "state-work"
+    out = vector_sources.apply(root, "pubmed", local, con, state_dir=state)
+    assert out["added"] == 1 and out["rows_with_source"] == 2
+    tbl = embeddings._conn(local).open_table(embeddings.TABLE)
+    got = {r["book_id"]: r[embeddings.SOURCE_COLUMN] for r in tbl.to_arrow().to_pylist()}
+    assert got == {31000001: bytes.fromhex(hashes["pubmed:31000001"]), 31000002: None,
+                   31000003: None, 31000004: bytes.fromhex(hashes["pubmed:31000004"])}
+    assert not any(state.iterdir()), "the work files go"
+
+    # nothing hashed, signed, attested, shipped or searched reads it
+    assert _what_travels(root, local, snap, ids, tmp_path / "after") == before
+    assert _tree(shard_dir) == shard_before, "the SHARD — every root `hold check` reads"
+    assert col.read(root, "pubmed").space_id == codex_before.space_id
+
+    # idempotent
+    assert vector_sources.apply(root, "pubmed", local, con, state_dir=state)["unchanged"] is True
+
+
+def test_a_stopped_backfill_resumes_where_it_was(held, tmp_path, monkeypatch):
+    root, local, con, snap, shard_dir, hashes, ids = held
+    state = tmp_path / "state-work"
+    real = vector_sources._add_column
+
+    def killed(*a, **kw):
+        raise KeyboardInterrupt("killed (test)")
+    monkeypatch.setattr(vector_sources, "_add_column", killed)
+    with pytest.raises(KeyboardInterrupt):
+        vector_sources.apply(root, "pubmed", local, con, state_dir=state)
+    tbl = embeddings._conn(local).open_table(embeddings.TABLE)
+    assert embeddings.SOURCE_COLUMN not in tbl.schema.names, "the table as it was"
+    work = vector_sources._work(state)
+    assert work.execute("SELECT COUNT(*) FROM done").fetchone()[0] == len(snap.shards)
+    work.close()
+    # the rerun reads no part again, and finishes
+    monkeypatch.setattr(vector_sources, "_add_column", real)
+    monkeypatch.setattr(vector_sources, "part_sources",
+                        lambda *_a: pytest.fail("a part read twice"))
+    out = vector_sources.apply(root, "pubmed", local, con, state_dir=state)
+    assert out["rows_with_source"] == 2
+
+
+def test_a_stop_between_parts_keeps_the_parts_done(held, tmp_path):
+    root, local, con, snap, shard_dir, hashes, ids = held
+    assert len(snap.shards) >= 2
+    state = tmp_path / "state-work"
+    stop = threading.Event()
+    stop.set()
+    with pytest.raises(InterruptedError):
+        vector_sources.apply(root, "pubmed", local, con, state_dir=state, stop=stop)
+    out = vector_sources.apply(root, "pubmed", local, con, state_dir=state)
+    assert out["rows_with_source"] == 2
+
+
+def test_a_kill_inside_lances_pass_leaves_the_table_and_the_rerun_completes(held, tmp_path, monkeypatch):
+    """pylance 9.0.1's add_columns commits once, at its end: a pass that
+    dies inside the batch function leaves the table at its version."""
+    import lance
+    root, local, con, snap, shard_dir, hashes, ids = held
+    state = tmp_path / "state-work"
+    real = lance.batch_udf
+
+    def dying(**kw):
+        wrap = real(**kw)
+
+        def deco(fn):
+            def boom(batch):
+                raise RuntimeError("killed inside the pass (test)")
+            return wrap(boom)
+        return deco
+    monkeypatch.setattr(lance, "batch_udf", dying)
+    version = embeddings._conn(local).open_table(embeddings.TABLE).version
+    with pytest.raises(Exception):
+        vector_sources.apply(root, "pubmed", local, con, state_dir=state)
+    tbl = embeddings._conn(local).open_table(embeddings.TABLE)
+    assert tbl.version == version and embeddings.SOURCE_COLUMN not in tbl.schema.names
+    monkeypatch.setattr(lance, "batch_udf", real)
+    assert vector_sources.apply(root, "pubmed", local, con, state_dir=state)["rows_with_source"] == 2
+
+
+def test_the_command_is_a_dry_run_and_asks_for_a_pause(held, capsys):
+    from app import louise, node_state
+    root, local, con, snap, shard_dir, hashes, ids = held
+    assert louise.main(["hold", "vectors", "source-hashes", "pubmed", "--root", str(root)]) == 0
+    said = json.loads(capsys.readouterr().out)
+    assert said["dry_run"] and said["without_column"] == 1
+    tbl = embeddings._conn(local).open_table(embeddings.TABLE)
+    assert embeddings.SOURCE_COLUMN not in tbl.schema.names, "a dry run writes nothing"
+    node_state.set_worker_state("running", by="test")
+    assert louise.main(["hold", "vectors", "source-hashes", "pubmed", "--root", str(root),
+                        "--apply"]) == 2, "not paused: refused"
+    node_state.set_paused("pubmed", True, by="test")
+    assert louise.main(["hold", "vectors", "source-hashes", "pubmed", "--root", str(root),
+                        "--apply"]) == 0
+    tbl = embeddings._conn(local).open_table(embeddings.TABLE)
+    assert embeddings.SOURCE_COLUMN in tbl.schema.names

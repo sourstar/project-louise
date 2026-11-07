@@ -1364,6 +1364,47 @@ def _np_dtype_of_recipe(recipe):
 VALIDITY_COLUMNS = ("valid_from", "valid_to", "shown")
 
 
+#: 09 §9.6 (amended 2026-11-07, operator: A; docs/notes/pubmed-updatefiles.md
+#: §10): the `content_hash` (09 §9.5) of the record a row's vector was computed
+#: or admitted for, 16 raw bytes, written in the same commit as the vector;
+#: NULL where the writer could not know it, and NULL never matches. LOCAL: no
+#: digest, root, signature, attestation or bundle byte reads it — a bundle's
+#: `possession.json` already carries the same hash per record (§9.7). It lets a
+#: PAIR layer's stored vector be kept for a record whose title and sections did
+#: not change (`upsert_book`); a text layer keeps its vectors by text, as before.
+SOURCE_COLUMN = "source_hash"
+SOURCE_TYPE = pa.binary(16)
+
+
+def fit_source(tbl, rows: list[dict]) -> list[dict]:
+    """Rows for THIS table as to `source_hash` alone: the key dropped for a
+    table written before the column, NULL where a row lacks it — for the
+    writers that add rows of their own shape (genesis, the bundle importer);
+    `_conform` does the same within its wider work."""
+    return fit_source_for(tbl.schema, rows)
+
+
+def fit_source_for(schema, rows: list[dict]) -> list[dict]:
+    """`fit_source` against a schema (a table about to be created)."""
+    if SOURCE_COLUMN in schema.names:
+        return [r if SOURCE_COLUMN in r else dict(r, **{SOURCE_COLUMN: None}) for r in rows]
+    return [{k: v for k, v in r.items() if k != SOURCE_COLUMN} if SOURCE_COLUMN in r else r
+            for r in rows]
+
+
+def source_bytes(content_hash) -> bytes | None:
+    """A record's `content_hash` (32 hex, as the manifest and the record line
+    hold it) as the column's 16 bytes; None for anything else."""
+    if isinstance(content_hash, (bytes, bytearray)):
+        return bytes(content_hash) if len(content_hash) == 16 else None
+    if not isinstance(content_hash, str) or len(content_hash) != 32:
+        return None
+    try:
+        return bytes.fromhex(content_hash)
+    except ValueError:
+        return None
+
+
 class ValidityColumnsMissing(RuntimeError):
     """The vector table was written before the collection's validity
     columns existed: it cannot be filtered by validity until rebuilt."""
@@ -1383,6 +1424,11 @@ def _create_table(db, rows):
     ]
     if all(c in rows[0] for c in VALIDITY_COLUMNS):
         fields += [pa.field(c, pa.int64()) for c in VALIDITY_COLUMNS]
+    # every table made from now on carries `source_hash` (NULL where the
+    # writer could not know it); one written before has none and is read and
+    # written as before (`_conform`, `_sources_of`)
+    fields.append(pa.field(SOURCE_COLUMN, SOURCE_TYPE))
+    rows = [r if SOURCE_COLUMN in r else dict(r, **{SOURCE_COLUMN: None}) for r in rows]
     return db.create_table(TABLE, data=rows, schema=pa.schema(fields),
                            storage_options=NEW_TABLE_STORAGE)
 
@@ -1398,18 +1444,26 @@ def _conform(tbl, rows: list[dict]) -> list[dict]:
     rebuilds the table with the columns, every vector kept."""
     names = set(tbl.schema.names)
     have = set(rows[0]) if rows else set()
-    if have <= names and all(c in have for c in VALIDITY_COLUMNS if c in names):
+    if have <= names and all(c in have for c in VALIDITY_COLUMNS if c in names) \
+            and (SOURCE_COLUMN not in names or SOURCE_COLUMN in have):
         return rows
     if rows and all(c in have for c in VALIDITY_COLUMNS) and not all(c in names for c in VALIDITY_COLUMNS):
         raise ValidityColumnsMissing(_COLUMNS_MISSING)
     from app import validity as validity_mod
+    validity_missing = [c for c in VALIDITY_COLUMNS if c in names and c not in have]
     out = []
     for r in rows:
+        # `source_hash` is dropped for a table written before it (an old
+        # node's, a peer's import): that table keeps no source, and a pair
+        # chunk's vector is then never kept — never a wrong one
         r2 = {k: v for k, v in r.items() if k in names}
-        defaults = validity_mod.current_columns(int(r["book_id"]))
-        for c in VALIDITY_COLUMNS:
-            if c in names and c not in r2:
-                r2[c] = defaults[c]
+        if validity_missing:
+            defaults = validity_mod.current_columns(int(r["book_id"]))
+            for c in validity_missing:
+                if c not in r2:
+                    r2[c] = defaults[c]
+        if SOURCE_COLUMN in names and SOURCE_COLUMN not in r2:
+            r2[SOURCE_COLUMN] = None
         out.append(r2)
     return out
 
@@ -1544,11 +1598,27 @@ def _written_chunks(db, book_id: int) -> dict[str, dict]:
         return {}
     try:
         tbl = db.open_table(TABLE)
+        cols = ["id", "text", "vector"] + _source_select(tbl)
         at = (tbl.search().where(_book_filter(book_id))
-              .select(["id", "text", "vector"]).limit(_RESUME_SCAN_MAX).to_arrow())
-        return {i: {"text": t, "vector": v} for i, t, v in _held_columns(at)}
+              .select(cols).limit(_RESUME_SCAN_MAX).to_arrow())
+        return {i: {"text": t, "vector": v, SOURCE_COLUMN: src}
+                for (i, t, v), src in zip(_held_columns(at), _sources_of(at))}
     except Exception:   # noqa: BLE001 — a resume is an optimisation
         return {}
+
+
+def _source_select(tbl) -> list[str]:
+    """`[SOURCE_COLUMN]` for a table that has it, `[]` for one written
+    before it."""
+    return [SOURCE_COLUMN] if SOURCE_COLUMN in tbl.schema.names else []
+
+
+def _sources_of(at: "pa.Table") -> list:
+    """Each row's `source_hash` (16 bytes or None) of a read; all None for a
+    read of a table without the column."""
+    if SOURCE_COLUMN not in at.schema.names:
+        return [None] * at.num_rows
+    return at.column(SOURCE_COLUMN).to_pylist()
 
 
 def record_chunk_hashes(con, book_id: int, chunks) -> None:
@@ -1851,12 +1921,36 @@ def mark_for_reembed(con, *, window: int = 50_000) -> int:
 
 
 def _reusable(chunk: dict) -> bool:
-    """Can a stored row stand for this chunk? Only a TEXT-form chunk: the
-    stored row keeps its text, and a pair layer's vector is made from its
-    `fields`, which the row does not keep and the text does not determine —
-    `chunk_abstract` joins the sections' bodies, so ("A", "B\\n\\nC") and
-    ("A\\n\\nB", "C") cut to one text and two pairs (09 §9.3)."""
+    """Can a stored row stand for this chunk BY ITS TEXT? Only a TEXT-form
+    chunk: the stored row keeps its text, and a pair layer's vector is made
+    from its `fields`, which the row does not keep and the text does not
+    determine — `chunk_abstract` joins the sections' bodies, so ("A",
+    "B\\n\\nC") and ("A\\n\\nB", "C") cut to one text and two pairs (09 §9.3).
+    A pair chunk is kept by its record instead (`_kept`)."""
     return chunk.get("fields") is None
+
+
+def chunk_source(chunks) -> bytes | None:
+    """The `source_hash` of a document's chunks: the record's `content_hash`
+    the loader put on each (`layers.with_source`), when every chunk carries
+    the same one; None otherwise."""
+    got = {c.get("source") for c in chunks}
+    if len(got) != 1:
+        return None
+    return source_bytes(next(iter(got)))
+
+
+def _kept(chunk: dict, stored: dict, source: bytes | None) -> bool:
+    """May the stored row stand for this chunk? Its text is the chunk's, and
+    for a PAIR chunk (`fields`) the row was made for this very record: its
+    `source_hash` is the current record's `content_hash` (06 §6.3's reuse,
+    amended 2026-11-07, operator: A). Equal `content_hash` means equal title
+    and sections, so equal fields; a NULL on either side never matches."""
+    if stored.get("text") != chunk["text"]:
+        return False
+    if _reusable(chunk):
+        return True
+    return source is not None and stored.get(SOURCE_COLUMN) == source
 
 
 def upsert_book(book_id: int, lang: str, chunks: list[dict], collection=None,
@@ -1939,8 +2033,9 @@ def upsert_book(book_id: int, lang: str, chunks: list[dict], collection=None,
         dtype = held.dtype if held.dtype is not None else _np_dtype_of_recipe(recipe)
         seen = held.seen_of(book_id)
         have = held.of(book_id)
-    wanted = ({c["id"]: c["text"] for c in chunks if _reusable(c)} if reuse else {})
-    done = {i for i, r in have.items() if wanted.get(i) == r["text"]}
+    source = chunk_source(chunks)
+    wanted = {c["id"]: c for c in chunks} if reuse else {}
+    done = {i for i, r in have.items() if i in wanted and _kept(wanted[i], r, source)}
     # Anything stored that is not a byte-exact chunk of the CURRENT document
     # means the document changed under us: the stored rows are positional and
     # now stale, so they go. What does NOT have to go is the WORK behind
@@ -1996,7 +2091,7 @@ def upsert_book(book_id: int, lang: str, chunks: list[dict], collection=None,
         # one slice: embedded here, committed with the rest of its batch
         sink.put(PendingDoc(int(book_id),
                             _rows_for(book_id, lang, todo, recipe, carry, dtype,
-                                      collection, counts, columns),
+                                      collection, counts, columns, source=source),
                             purge=rebuild, seen=seen))
         if versioned:
             record_chunk_hashes(lock_con, book_id, chunks)
@@ -2006,7 +2101,8 @@ def upsert_book(book_id: int, lang: str, chunks: list[dict], collection=None,
     purge = rebuild
     for start in range(0, len(todo), config.EMBED_SLICE_CHUNKS):
         part = todo[start:start + config.EMBED_SLICE_CHUNKS]
-        rows = _rows_for(book_id, lang, part, recipe, carry, dtype, collection, counts, columns)
+        rows = _rows_for(book_id, lang, part, recipe, carry, dtype, collection, counts, columns,
+                         source=source)
 
         with _write_lock(lock_con, collection):
             # existence re-checked INSIDE the lock: the pre-lock check picked
@@ -2079,7 +2175,7 @@ def _by_run(collection) -> bool:
 
 def _rows_for(book_id: int, lang: str, part: list[dict], recipe, carry: dict,
               dtype, collection=None, counts: "EmbedCounts | None" = None,
-              columns: dict | None = None) -> list[dict]:
+              columns: dict | None = None, *, source: bytes | None = None) -> list[dict]:
     """One slice's rows. Embedding happens OUTSIDE the lock: it is the slow
     part, it touches the network, and holding a cross-process write lock
     across it would serialize every writer on the slowest endpoint call.
@@ -2120,6 +2216,8 @@ def _rows_for(book_id: int, lang: str, part: list[dict], recipe, carry: dict,
         "vector": np.asarray(
             embedded[c["id"]] if c["id"] in embedded
             else carry[chunk_text_hash(c["text"])], dtype=dtype),
+        # the record this vector was made (or, carried by its text, kept) for
+        SOURCE_COLUMN: source,
         **({k: int(v) for k, v in columns.items()} if columns else {}),
     } for c in part]
 
@@ -2176,14 +2274,15 @@ def held_chunks(collection, book_ids) -> HeldRead:
     for i in range(0, len(ids), 500):
         part = ",".join(str(b) for b in ids[i:i + 500])
         at = (tbl.search().where(f"{BOOK_COLUMN_NAME} IN ({part})", prefilter=True)
-              .select(["id", "book_id", "text", "vector"])
+              .select(["id", "book_id", "text", "vector"] + _source_select(tbl))
               .limit(_RESUME_SCAN_MAX).to_arrow())
         if at.num_rows >= _RESUME_SCAN_MAX:
             raise RuntimeError(f"{at.num_rows} stored rows for {len(ids[i:i + 500])} "
                                f"documents: more than one read returns")
         books = at.column("book_id").to_pylist() if at.num_rows else []
-        for book, (cid, text, vector) in zip(books, _held_columns(at)):
-            by_book.setdefault(int(book), {})[cid] = {"text": text, "vector": vector}
+        for book, (cid, text, vector), src in zip(books, _held_columns(at), _sources_of(at)):
+            by_book.setdefault(int(book), {})[cid] = {"text": text, "vector": vector,
+                                                      SOURCE_COLUMN: src}
     return HeldRead(by_book, seen, _np_dtype_of_table(tbl))
 
 
@@ -2730,7 +2829,14 @@ def _search_table(collection, vector, k: int, langs, book_ids, validity) -> list
                 "nothing re-embedded; until then no search as of a date")
         from app import validity as validity_mod
         q = q.where(validity_mod.lance_where(validity), prefilter=True)
-    return q.to_list()
+    hits = q.to_list()
+    if SOURCE_COLUMN in tbl.schema.names:
+        # a hit is what it was before the column: `source_hash` is the embed
+        # stage's bookkeeping, never part of an answer (and bytes in a hit
+        # would reach the JSON of every caller that returns one)
+        for h in hits:
+            h.pop(SOURCE_COLUMN, None)
+    return hits
 
 def search_records(query: str, depth: int, langs: list[str] | None = None, collection=None,
                    **restrict) -> list[dict]:

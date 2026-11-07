@@ -18,6 +18,27 @@ build at 12 cores, the GPU uncapped. The card's noise (operator): 0.2 sone
 idle, 3.1 sone at full load, coil whine ~0.9 sone; its fan range is being
 measured (published figures disagree).
 
+### 2026-11-07: a pair vector kept while its record is the same — `source_hash` (operator: A)
+
+- **Built** ([pubmed-updatefiles.md](pubmed-updatefiles.md) §10): the vector
+  table's `source_hash` (09 §9.6 amended), the record's `content_hash`
+  written in the vector's commit by every writer of rows (NULL where one
+  cannot know it, and NULL never matches); a pair chunk's vector is kept
+  when its id, text and `source_hash` equal the current record's — for
+  pubmed, every revision NLM made to the MeSH and not the abstract. Local:
+  no digest, root, signature, attestation or bundle byte reads it (tested
+  byte for byte before and after a backfill).
+- **The backfill**, `louise hold vectors source-hashes <collection>
+  [--apply]` (07 §7.3): a dry run by default; `--apply` refuses unless the
+  collection is paused; sources from the current snapshot's lines where the
+  manifest agrees, no encoder; part by part, then Lance's `add_columns`.
+  Measured: a kill inside Lance's pass leaves the table as it was;
+  1,000,000 rows in 8.7 s at best, 21–37 s on this loaded 4-core container;
+  pubmed's 40 M, ~6–25 min (estimate).
+- **München, before the update-file catch-up's step 2:** deploy, confirm
+  pubmed paused, the dry run, `--apply`; it must precede the discard of
+  2026-08 (step 3).
+
 ### 2026-11-07: one status — `app/status.py`
 
 - **The operator**: "The interface with which a model status is queried
