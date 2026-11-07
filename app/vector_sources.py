@@ -29,7 +29,8 @@ HOW. Two phases, each resumable (invariant 2):
    into a work database under the collection's `state/` — a rerun skips the
    parts done.
 2. Lance's own schema evolution (`LanceDataset.add_columns` with a batch
-   function over `book_id`): new column files per fragment, the vectors and
+   function over `book_id`, in `embeddings.add_source_column`: the vector
+   store's layer, the one place Lance is opened): new column files per fragment, the vectors and
    every other column untouched, one commit (pylance 9.0.1). Measured: a
    kill mid-pass leaves the table as it was (the commit is the last step)
    and its checkpoint file keeps the fragments done, which the rerun does
@@ -222,39 +223,11 @@ def _load(work: sqlite3.Connection, n: int):
 
 
 def _add_column(view, keys, vals, con, checkpoint: Path) -> int:
-    """`source_hash` onto one table, filled from (keys -> vals) by `book_id`;
+    """`source_hash` onto one table, in the vector store's own layer
+    (`embeddings.add_source_column`: Lance is opened there and nowhere else);
     the rows given a source."""
-    import lance
-    import numpy as np
-    import pyarrow as pa
-    import pyarrow.compute as pc
     from app import embeddings
-
-    @lance.batch_udf(output_schema=pa.schema([pa.field(embeddings.SOURCE_COLUMN,
-                                                       embeddings.SOURCE_TYPE)]),
-                     checkpoint_file=str(checkpoint))
-    def fill(batch: pa.RecordBatch) -> pa.RecordBatch:
-        b = batch.column("book_id").to_numpy(zero_copy_only=False)
-        n = len(b)
-        if len(keys) == 0:
-            out = pa.nulls(n, embeddings.SOURCE_TYPE)
-        else:
-            j = np.minimum(np.searchsorted(keys, b), len(keys) - 1)
-            ok = keys[j] == b
-            out = pa.FixedSizeBinaryArray.from_buffers(
-                embeddings.SOURCE_TYPE, n, [None, pa.py_buffer(np.ascontiguousarray(vals[j]).tobytes())])
-            if not ok.all():
-                out = pc.if_else(pa.array(ok), out, pa.nulls(n, embeddings.SOURCE_TYPE))
-        return pa.RecordBatch.from_arrays([out], names=[embeddings.SOURCE_COLUMN])
-
-    tbl = _table_of(view)
-    # through the writer registration, as every vector write: a compaction
-    # waits for this commit (embeddings._write_lock)
-    with embeddings._write_lock(con, view):
-        tbl.to_lance().add_columns(fill, read_columns=["book_id"])
-    checkpoint.unlink(missing_ok=True)
-    t = _table_of(view)
-    return t.count_rows(f"{embeddings.SOURCE_COLUMN} IS NOT NULL")
+    return embeddings.add_source_column(view, keys, vals, lock_con=con, checkpoint=checkpoint)
 
 
 def _clean(state_dir: Path) -> None:

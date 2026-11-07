@@ -1376,6 +1376,45 @@ SOURCE_COLUMN = "source_hash"
 SOURCE_TYPE = pa.binary(16)
 
 
+def add_source_column(collection, keys, vals, *, lock_con=None, checkpoint=None) -> int:
+    """`SOURCE_COLUMN` onto a table written before it, filled by `book_id`
+    from `keys` (sorted native ids, int64) -> `vals` (their 16-byte hashes,
+    uint8 rows); NULL for every other row. Lance's own schema evolution
+    (`LanceDataset.add_columns` with a batch function): new column files per
+    fragment, the vectors and every other column untouched, one commit — a
+    kill before it leaves the table at its version (measured, pylance
+    9.0.1), and `checkpoint` keeps the fragments done for the rerun. The
+    rows given a source. `hold vectors source-hashes` (app/vector_sources.py)
+    is the caller."""
+    import lance
+
+    @lance.batch_udf(output_schema=pa.schema([pa.field(SOURCE_COLUMN, SOURCE_TYPE)]),
+                     checkpoint_file=str(checkpoint) if checkpoint is not None else None)
+    def fill(batch: pa.RecordBatch) -> pa.RecordBatch:
+        b = batch.column(BOOK_COLUMN_NAME).to_numpy(zero_copy_only=False)
+        n = len(b)
+        if len(keys) == 0:
+            out = pa.nulls(n, SOURCE_TYPE)
+        else:
+            j = np.minimum(np.searchsorted(keys, b), len(keys) - 1)
+            ok = keys[j] == b
+            out = pa.FixedSizeBinaryArray.from_buffers(
+                SOURCE_TYPE, n, [None, pa.py_buffer(np.ascontiguousarray(vals[j]).tobytes())])
+            if not ok.all():
+                out = pc.if_else(pa.array(ok), out, pa.nulls(n, SOURCE_TYPE))
+        return pa.RecordBatch.from_arrays([out], names=[SOURCE_COLUMN])
+
+    db = _conn(collection)
+    tbl = db.open_table(TABLE)
+    # through the writer registration, as every vector write: a compaction
+    # waits for this commit
+    with _write_lock(lock_con, collection):
+        tbl.to_lance().add_columns(fill, read_columns=[BOOK_COLUMN_NAME])
+    if checkpoint is not None:
+        Path(checkpoint).unlink(missing_ok=True)
+    return db.open_table(TABLE).count_rows(f"{SOURCE_COLUMN} IS NOT NULL")
+
+
 def fit_source(tbl, rows: list[dict]) -> list[dict]:
     """Rows for THIS table as to `source_hash` alone: the key dropped for a
     table written before the column, NULL where a row lacks it — for the

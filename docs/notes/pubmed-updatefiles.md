@@ -551,7 +551,9 @@ monthly 1.3–4.4 hours remain. So: deploy, backfill, then step 2 on.
   current snapshot's parts in the parse pool and judges each line against
   the manifest (`embed_done = 1`, no error, the same `content_hash`, the
   same origin bytes), committing part by part to a work file — a rerun
-  skips the parts done; phase 2 is Lance's `add_columns`, one commit;
+  skips the parts done; phase 2 is Lance's `add_columns`, one commit, in
+  the vector store's layer (`embeddings.add_source_column`: Lance is opened
+  there and nowhere else, as `tests/test_invariant_guards.py` holds);
 - **measured, pylance 9.0.1:** a SIGKILL inside `add_columns` left the table
   at its version, without the column, one orphan data file; its checkpoint
   held the fragment done; the rerun completed. The table's other columns
