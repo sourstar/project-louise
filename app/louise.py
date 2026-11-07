@@ -680,6 +680,14 @@ def cmd_collection_new(a) -> int:
                       f"{model} with its CPU twin {a.cpu_model}"
                       + (f"; re-creates {a.name} ({pred.collection_id[:23]}…)" if pred is not None else
                          f"; re-creates {a.name}, forgotten since" if re_create else ""))
+    # BOTH ENGINES AS 09 §9.3 OBJECTS NOW, through the recipe reader (TOML has
+    # no null: `variant` absent is null, template._engine_from_recipe), so the
+    # dry run refuses exactly what the run refuses. München, 2026-11-07: the
+    # recipe's engine went to engine_from_dict raw, the dry run never built it,
+    # passed, and the run stopped at calibrate on "missing field(s) variant"
+    ref_engine = cx.engine_from_dict(tpl._engine_from_recipe(enc["engine"], "space.encoder.engine"),
+                                     "space.encoder.engine")
+    twin_engine = cx.engine_from_dict(stated.engine, "the twin's run")
 
     # check: BEFORE ANY MEASUREMENT, so a refusal costs no card lane
     existing = dry_codex = None
@@ -714,9 +722,9 @@ def cmd_collection_new(a) -> int:
     # calibrate, on the inputs the gate sends
     reference = calib.Endpoint(file=f"{a.recipe} (space.encoder)", url=a.encoder, api=api, model=model,
                                weights=enc["weights"],
-                               engine=cx.engine_from_dict(enc["engine"], "space.encoder.engine"))
+                               engine=ref_engine)
     twin = calib.Endpoint(file=f"the CPU twin {a.cpu_model}", url=a.encoder, api=api, model=a.cpu_model,
-                          weights=stated.weights, engine=cx.engine_from_dict(stated.engine, "the twin's run"))
+                          weights=stated.weights, engine=twin_engine)
     measured = run.done("calibrate")
     if measured is not None:
         card = run_check.stated_run(collections_mod.EmbedRecipe(

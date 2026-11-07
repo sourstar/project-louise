@@ -365,6 +365,42 @@ def test_a_dry_run_refuses_what_the_run_refuses(held, steps, tmp_path, monkeypat
     assert rc == 2 and says in dry
 
 
+def test_a_toml_recipe_with_no_variant_runs_as_its_dry_run_said(held, steps, tmp_path, capsys):
+    """München, 2026-11-07: the recipe is TOML, which has no null, so its
+    engine table carries no `variant`; the dry run passed and the run stopped
+    at calibrate on "missing field(s) variant" — the engine went to
+    engine_from_dict raw. Both now read it through the recipe reader
+    (`variant` absent is null) at resolve, and the run gets as far as its
+    dry run said."""
+    root, _old, _n = held
+    no_variant = {k: v for k, v in NEW_ENGINE.items() if k != "variant"}
+    space = {k: v for k, v in OLD_SPACE.items() if k != "tolerance"}
+    space["encoder"] = {**OLD_SPACE["encoder"], "engine": no_variant}
+    recipe_path = _new_recipe(tmp_path, space=space)
+    assert _new(root, recipe_path, "--dry-run") == 0
+    capsys.readouterr()
+    assert _new(root, recipe_path) == 2, "the run stops at the swap, as a re-creation does"
+    assert "missing field" not in capsys.readouterr().err
+    assert "carry" in steps["order"] and "gate" in steps["order"]
+
+
+def test_a_malformed_engine_is_refused_by_the_dry_run_as_by_the_run(held, steps, tmp_path, capsys):
+    """The dry run builds both engines, so an engine the run cannot use is
+    refused before calibrate, with the run's own sentence and exit."""
+    root, _old, _n = held
+    bad = {**NEW_ENGINE, "args": "llama-server"}
+    space = {k: v for k, v in OLD_SPACE.items() if k != "tolerance"}
+    space["encoder"] = {**OLD_SPACE["encoder"], "engine": bad}
+    recipe_path = _new_recipe(tmp_path, space=space)
+    before = recreate.tree_digest(tmp_path)
+    dry_rc = _new(root, recipe_path, "--dry-run")
+    dry = _louise_error(capsys.readouterr().err)
+    assert recreate.tree_digest(tmp_path) == before and steps["order"] == []
+    rc = _new(root, recipe_path)
+    assert (dry_rc, dry) == (rc, _louise_error(capsys.readouterr().err)) and rc == 2
+    assert "args is a list of strings" in dry
+
+
 # ---- the pieces ---------------------------------------------------------------
 
 def test_the_carried_file_is_the_predecessors_but_its_codex_and_embed():
