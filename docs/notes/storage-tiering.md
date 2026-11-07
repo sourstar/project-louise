@@ -376,4 +376,41 @@ days of card time.
 Measured before and after (two runs each): a LocalAI model load, cold right
 after a restart and warm; a deploy's total time and its test stage. If a model
 load is more than ~2 s slower cold, or slower warm, localai/backends alone goes
-back to NVMe. The numbers go here when München has them.
+back to NVMe.
+
+**Done 2026-11-07 (München).** The operator said yes in München's session to
+the moves and to the prune. The prune removed 44.13 GB of non-Louise images and
+99.68 GB of build cache; every louise-rag and vega tag was kept.
+- A: copied to ssd3/attic with rsync -aHAX, then each verified (file count,
+  bytes, sha256 listing) before its source went. On ssd4: rebuild 195.9 GB,
+  bakeoff 7.3, measure 1.3. On ssd5: apps/llama-cpp 41.7, bakeoff 7.4,
+  dar-legal-it-models 1.2, dnabert2-models 0.9 and the small ones. data/staging
+  (live: ACQUIRE_STAGING_DIR) and data/hub stay on ssd4.
+- Apps:
+  - ix-apps was moved by TrueNAS's own migration. It did not carry the local
+    images; they were recovered from the old dataset, with the same image IDs
+    (node-runbook.md §10).
+  - localai/backends and open_webui_data were moved with zfs send, then an
+    incremental after the stop. The engines' tree digests are equal on both
+    sides (ea2417d91dcc 0e705989 / 32b0caf3, louise-python-20261021a
+    dfb5e81a / 4724a9b9).
+  - The sources are kept as `*.moved`; destroying them is the operator's yes,
+    with their size.
+  - Down 20:47–21:24 (37 min, the image recovery included). On start, the
+    worker re-checked every kept run with the same ids.
+
+Measured, first answer's wall clock, the node paused; BEFORE two runs, AFTER
+three:
+
+| | BEFORE | AFTER |
+|---|---|---|
+| LocalAI ready after a restart | 2.03, 1.02 s | 1.03, 1.02, 1.02 s |
+| reranker, cold | 7.71, 6.80 | 6.92, 6.99, 6.89 |
+| chat, cold | 5.81, 5.61 | 11.22 (the first read after the move), 5.60, 5.60 |
+| reranker, warm | 5.03, 6.89 | 7.10, 6.89, 6.89 |
+| chat, warm | 5.70, 5.60 | 5.79, 5.69, 5.59 |
+
+No AFTER run is more than 2 s above the slowest BEFORE one, except the first
+read after the move. **The backends stay on ssd3.** Free space right after,
+before the snapshots expire and the `*.moved` datasets go: ssd4 594 G (~205 G
+more once its 2-hour snapshots release), ssd5 107 G, ssd3 6.8 T.

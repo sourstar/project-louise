@@ -98,9 +98,10 @@ import sys
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 
-#: The node's paths (node-runbook.md §3: LocalAI's models and backends on
-#: ssd5). Argument defaults only: nothing below reads them.
-NODE_BACKENDS = Path("/mnt/ssd5/apps/localai/backends")
+#: The node's paths (node-runbook.md §1: LocalAI's models on ssd5, its
+#: backends on ssd3 since 2026-11-07, storage-tiering.md §9). Argument
+#: defaults only: nothing below reads them.
+NODE_BACKENDS = Path("/mnt/ssd3/apps/localai-backends")
 NODE_MODELS = Path("/mnt/ssd5/apps/localai/models")
 #: The same directory as LocalAI's container, and every backend it starts,
 #: sees it (rollout-p2.sh: `ocifile:///backends/…`, the wrappers' SOCKET).
