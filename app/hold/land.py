@@ -40,6 +40,21 @@ from . import snapshot as snap
 from .codex import CodexError
 
 
+#: `app.embeddings.SOURCE_COLUMN`, named here as this module names no vector
+#: store (the note above): the record's `content_hash` beside each vector
+SOURCE_COLUMN = "source_hash"
+
+
+def _source_bytes(content_hash) -> bytes | None:
+    """A record's `content_hash` (32 hex) as the column's 16 bytes, or None."""
+    if not isinstance(content_hash, str) or len(content_hash) != 32:
+        return None
+    try:
+        return bytes.fromhex(content_hash)
+    except ValueError:
+        return None
+
+
 class LandError(CodexError):
     """The admitted rows cannot be placed against this peer's records."""
 
@@ -142,6 +157,12 @@ def cut(codex, records: Sequence[dict]) -> dict[str, dict]:
             }
             if c.get("fields") is not None:
                 out[c["id"]]["fields"] = tuple(c["fields"])
+            if rec.get("content_hash"):
+                # the record the vector is admitted for: the bundle's
+                # `possession.json` names this very hash for the uid, or the
+                # ladder refused its rows (03 §3.5) — written beside the
+                # vector (embeddings.SOURCE_COLUMN)
+                out[c["id"]]["source"] = rec["content_hash"]
     return out
 
 
@@ -188,7 +209,8 @@ def rows_to_write(codex, admitted, mine_cut: dict[str, dict],
             continue
         rows.append({"id": cid, "book_id": c["book_id"], "lang": c["lang"],
                      "seq": c["seq"], "chapter": c["chapter"],
-                     "text": c["text"], "vector": v})
+                     "text": c["text"], "vector": v,
+                     SOURCE_COLUMN: _source_bytes(c.get("source"))})
     return rows, unplaceable
 
 

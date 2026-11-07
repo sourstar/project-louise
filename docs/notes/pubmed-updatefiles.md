@@ -290,10 +290,9 @@ fetch pubmed --dry-run` on the node lists the real files and bytes.
 - **The speed-up, named.** Most revisions change MeSH or status, not the
   title or abstract — the pair's two fields. A vector keyed on the record's
   `content_hash` could be kept (`content_hash` equal ⇒ sections equal ⇒
-  fields equal), saving perhaps 60–80 % of the re-encodes (~5–10 card
-  minutes a day, and most of the backlog). It needs the stored row to carry
-  the hash it was made from — a vector-table column, a schema change, so it
-  is asked first, not built here.
+  fields equal). It saves on REVISIONS only — a new citation has no vector
+  to keep — so 60–80 % of the revisions, not of every re-encode (corrected
+  2026-11-07): §10, for the operator.
 
 ## 7. How a revision and a deletion reach every layer
 
@@ -451,3 +450,145 @@ official was published from pubmed — `share = false` since 2026-10-20):
   holds one, so a later version replaces the earlier in the current
   snapshot (kept only as a superseded part, until the next baseline) — an invariant
   11 question for the operator, pre-existing, not changed here.
+
+## 10. Keeping the vector of a revision whose title and abstract did not change
+
+*2026-11-07. Decided: A (operator, 2026-11-07), and built — "Built",
+at the end of this section.*
+
+**What changes.** One column on the vector table (`chunks.lance`, every
+table of a split space): `source_hash`, `binary(16)` — the `content_hash`
+(09 §9.5) of the record the row's vector was computed or admitted for,
+written in the same commit as the vector. The embed stage keeps a pair
+chunk's stored row when its id, its text and its `source_hash` equal the
+current record's (today it never keeps one: `embeddings._reusable`). It
+stays LOCAL: 09 §9.6's rest form ("nothing hashed, signed or moved
+changes"); bundles are unchanged, since `possession.json` (09 §9.7)
+already carries `uid → content_hash of the record the vectors were
+computed from` — an imported row takes its value from there. The record's
+hash, not a digest of the pair's two fields: it is what the node can
+backfill (below), and for pubmed (one chunk a record) it is the same test.
+
+**Backfill, without the encoder.** A row of a document with `embed_done =
+1` was made, or admitted, for the record the manifest holds now (that is
+what the mark asserts; discovery resets it on any change), so its
+`source_hash` is that record's `content_hash` — taken from the current
+snapshot's line, and only where the manifest agrees with it (built: the
+manifest's `content_hash` is written by the records build, never by the rdf
+stage, so a document changed and re-embedded since the last build would
+otherwise carry the old build's hash). Lance's own schema
+evolution writes it — `add_columns` with a batch function over `book_id`,
+new column files per fragment, the vectors not rewritten (pylance 9.0.1 is
+installed; its checkpoint file makes the pass resumable) — instead of the
+full rewrite `hold vectors validity-columns` does. On pubmed: 39,994,988
+documents, one vector each (counted, 2026-10-20), a 79.3 GiB table
+(counted, after the 2026-10 cleanup); the column adds 16 B × 40 M ≈ 0.64 GB
+(+0.8 %); the pass reads 0.32 GB of `book_id` and the manifest's hashes:
+~10–30 minutes (estimate), a writer on the table, pubmed paused (it is). A
+document re-opened before the pass has no source to give — its old vector
+was made for a record the manifest no longer holds — and gets NULL, which
+never matches: no reuse, never a wrong one.
+
+**The saving** (26 ms a record on the Arc, the brief's figure; September's
+pubmed embedding ran 23–41 documents/s, counted, consistent with it):
+
+| | status quo | kept with the column | card saved |
+|---|---|---|---|
+| catch-up, once | 3–4 M distinct PMIDs re-encoded: **22–30 h** | of them ~1.6 M new (11 months × ~150 k), 1.4–2.4 M revised; 60–80 % of the revised kept | **6–14 h** (8–23 h left) |
+| per month after | 15–30 k records a day: **3.3–6.6 h** | ~5 k new a day; 60–80 % of the 10–25 k revised kept | **1.3–4.4 h** a month |
+
+Counted: the 26 ms (brief), the documents and table size. Estimated: every
+volume (§6, §9 — the dry run counts the files, not the revisions), the
+new/revised split, and the 60–80 % (NLM's revisions are mostly MeSH
+indexing and status; not counted here). Once built, the first rdf pass of
+step 4 COUNTS it: the re-opened documents whose row's `source_hash` equals
+their new `content_hash`, before step 5 spends any card.
+
+| choice | pros | cons |
+|---|---|---|
+| status quo | nothing to build, no schema change, no migration | every revision re-encoded: 6–14 card-hours on the catch-up, 1.3–4.4 a month after (estimate); a revision's re-encode queues ahead of new citations |
+| **A — `source_hash` on the vector table** | the hash bound to its vector in one commit, no second store to keep in step; any pair layer, not only pubmed; backfilled by Lance's own `add_columns`, vectors untouched; wire unchanged | a schema change to the vector table; +0.8 % on pubmed's; a 10–30 min backfill (estimate); every writer of rows must fill it (one missed writes NULL: no reuse, never a wrong one) |
+| B — `embedded_hash` on the manifest's `documents` | the reuse decided in SQLite, before the vector table is read; a windowed UPDATE | two stores kept in step — cleared before a write, set at the mark — the skew this project has paid for; a 40 M-row UPDATE rewrites the table's pages (the 2026-10-20 rename's 40 M-row rewrite: 11 min, a 24.8 GB WAL, counted) |
+| C — no schema change: honour a held bundle's vectors for pair chunks (`possession.held_vectors` already matches `content_hash`) | nothing stored anew; what the wire carries | only records whose vectors sit in a bundle held on the node (München's coverage not known from here); a bundle file read per record; a record embedded since its last bundle not covered |
+
+**Decided: A** (operator, 2026-11-07). **What it was estimated to cost:** `app/embeddings.py` (the
+column in `_create_table` and `_conform`, written by `_rows_for` and by the
+bundle-import path from `possession.json`, read by `_written_chunks` /
+`held_chunks`, the keep in `upsert_book`), `app/worker.py` (the row's
+`content_hash` passed), `app/bundles/genesis.py` (filled at import), a
+backfill command (`hold vectors source-hashes`, 07), one sentence in 09
+§9.6; ~300–500 lines, ~10–12 tests — a revision with the same hash keeps
+its vector with no encoder call; a changed one, a NULL and a table without
+the column re-encode; the backfill fills only `embed_done = 1` documents;
+idempotent; a stop resumed; genesis and bundle import fill it. About one
+session (estimate).
+
+**When it must land.** Before step 4 of §9 — the first discovery pass over
+the update files — not merely before step 5's re-embed: discovery re-opens
+every revised record and its rdf pass replaces the hash its vector was
+made for, so a backfill after step 4 gives those rows NULL. Landed after,
+it saves nothing on the catch-up (6–14 card-hours lost) and only the
+monthly 1.3–4.4 hours remain. So: deploy, backfill, then step 2 on.
+
+**Built** (branch `pubmed-vector-reuse`, 2026-11-07):
+
+- the column on every table made from now on (`embeddings.SOURCE_COLUMN`,
+  `binary(16)`), written in the vector's commit by every writer of rows:
+  the embed stage (the record's hash on each chunk, `layers.with_source` —
+  the fresh record's own, or the pair parse's; a text layer's parse is
+  left as it was and writes NULL), the batched path, genesis, a bundle's
+  import (`land.cut`: the record the ladder admitted against
+  `possession.json`), `hold vectors build`. The older bundle importer,
+  whose possession is the ORIGIN bytes' hash, writes NULL. A table written
+  before the column is read and written as before (the key dropped); a hit
+  never carries it;
+- the keep (`embeddings._kept`): a pair chunk's row stands when its id, its
+  text and its `source_hash` equal the current record's; a text chunk's by
+  text, as before; EMBED_VERSION decides first (`may_reuse`), as before;
+- `louise hold vectors source-hashes <collection> [--apply]` (07 §7.3,
+  `app/vector_sources.py`): a dry run by default; `--apply` refuses unless
+  the collection is paused (exit 2) and takes its lock. Phase 1 reads the
+  current snapshot's parts in the parse pool and judges each line against
+  the manifest (`embed_done = 1`, no error, the same `content_hash`, the
+  same origin bytes), committing part by part to a work file — a rerun
+  skips the parts done; phase 2 is Lance's `add_columns`, one commit, in
+  the vector store's layer (`embeddings.add_source_column`: Lance is opened
+  there and nowhere else, as `tests/test_invariant_guards.py` holds);
+- **measured, pylance 9.0.1:** a SIGKILL inside `add_columns` left the table
+  at its version, without the column, one orphan data file; its checkpoint
+  held the fragment done; the rerun completed. The table's other columns
+  are untouched (no rewrite);
+- **measured, the rate** (a 1,000,000-row fixture shaped like pubmed's —
+  34 parts of 30,000 record lines, a 1 M-row manifest, 768 × f16 vectors —
+  on this 4-core container, shared, load average 7–14): **8.7 s at best
+  (phase 1 6.6 s, phase 2 2.0 s), 21–37 s typical** under the load, ~0.37
+  GB peak; with the pool down to one process, 36.8 s. **Pubmed's 40 M,
+  linearly: ~6 min at best, ~15–25 min under load** (estimate; München's
+  pool has 8 processes, its manifest is larger), and ~1 GB for the sources
+  held during phase 2 (24 bytes a document);
+- **measured, the old-schema write** — every collection not backfilled
+  (wikidata, wikipedia, gutenberg write all day): `write_pending` on a
+  table without the column, main against this branch, rows built by each
+  tree's own `_rows_for`; three interleaved rounds per shape, 300 batches
+  of 16 rows or 60 of 1,024, f16, dims 1,024 / 2,048 / 2,560. The whole
+  commit, 23–31 ms a batch, stays within main's own round-to-round spread
+  at every shape (differences of either sign). The Python side that
+  reaches Lance's writer (`_conform`, then the list's conversion) was
+  +0.02–0.04 ms a 16-row batch and +0.80–0.91 ms a 1,024-row one, a dict
+  copy per row; it is now main's (−0.41 to +0.04 ms): the column is
+  dropped once for the batch, from the one Arrow table lancedb would have
+  made of the rows (`embeddings._without_source`), byte for byte the same
+  table written (test). One document's held-row read pays one `tbl.schema`
+  call, +0.15 ms median on a 28 ms read (at 300 fragments); left as it is
+  (`_source_select` says why);
+- invariants, by test (`tests/test_source_hash.py`): a bundle's three files,
+  `vectors_by_chunk_id` (what `vectors-sample` reads), the SHARD tree (every
+  root `hold check` reads), a search and `space_id`, all byte-identical
+  before and after a backfill.
+
+**München's order** (before §9's step 2): deploy; `louise node pause
+pubmed` (it is paused already: confirm); `louise hold vectors source-hashes
+pubmed` (the dry run: rows, documents, snapshot 2026-08); `louise hold
+vectors source-hashes pubmed --apply`; then §9 from step 2. It must run
+before step 3, the discard of 2026-08: the sources come from the current
+snapshot's lines.

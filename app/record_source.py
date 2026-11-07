@@ -171,6 +171,16 @@ def sections(collection, row, parse) -> list[tuple]:
     """The row's sections: from its fresh record where there is one, else
     `parse()` (the plugin's, as before). A sampled row is parsed as well and
     compared; a mismatch stops the shortcut for the collection."""
+    return sections_and_source(collection, row, lambda: (parse(), None))[0]
+
+
+def sections_and_source(collection, row, parse) -> tuple[list[tuple], str | None]:
+    """`sections`, with the record's 09 §9.5 `content_hash` beside them — the
+    `source_hash` the embed stage writes with the vectors cut from them
+    (app/embeddings.py, amended 2026-11-07, operator: A). `parse()` returns
+    `(sections, content_hash or None)`. The fresh record's own hash where
+    the record is used: its sections ARE that record's; the parse's
+    otherwise, None where the parse cannot give one."""
     rec = record_for(collection, row)
     if rec is None:
         _count("parsed")
@@ -178,13 +188,32 @@ def sections(collection, row, parse) -> list[tuple]:
     got = [tuple(s) for s in rec.get("sections") or []]
     if _sampled(row["uid"]):
         _count("sampled")
-        parsed = [tuple(s) for s in parse()]
+        parsed, source = parse()
+        parsed = [tuple(s) for s in parsed]
         if parsed != got:
             _count("mismatch")
             _stop(collection, row["uid"], got, parsed)
-            return parsed
+            return parsed, source
     _count("record")
-    return got
+    return got, rec.get("content_hash")
+
+
+def parsed_with_source(plugin, row, *, pair: bool) -> tuple[list[tuple], str | None]:
+    """The plugin's parse as `(sections, content_hash)`. For a collection
+    whose layer feeds the encoder PAIRS — the one kind whose stored vector
+    is kept by its record (embeddings `_kept`) — the canonical document's
+    title and sections, hashed as the records build hashes them (09 §9.5),
+    one parse for both. Any other parse is exactly what it was
+    (`plugin_io.sections`), with no hash: its vectors are kept by their text,
+    and a plugin that reads its chapters without a document (gutenberg)
+    gives no title to hash."""
+    from . import plugin_io
+    if not pair or hasattr(plugin, "read_chapters"):
+        return plugin_io.sections(plugin, row), None
+    from .hold import records as hold_records
+    doc = plugin_io.canonical_doc(plugin, row)
+    return doc.sections, hold_records.content_hash(
+        doc.title or "", [[name or "", body or ""] for name, body in doc.sections])
 
 
 def _stop(collection, uid: str, from_record, from_parse) -> None:
