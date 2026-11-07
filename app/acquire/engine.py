@@ -579,6 +579,38 @@ class _WorkItem:
     sidecar: RemoteFile | None = None
 
 
+#: THE WAIT AFTER A FAILED ATTEMPT (operator, 2026-11-07: "Be gentle, if it fails and there is no wait and
+#: retry logic, retry every 1, 5, 10, 30, 60, 120 minutes, then every 120 minutes only. This for all the
+#: collections, since fetching must be a common engine"). A file whose last attempt failed (its `retries`
+#: count, kept by _upsert_failed) is not pending again until this long after that attempt (`updated_at`):
+#: the n-th failure waits RETRY_BACKOFF_S[n-1], and every later one the last entry. Until 2026-11-07 nothing
+#: waited: `_is_pending` never read `retries`, so each pass retried a failing file at once, and an agent that
+#: re-ran a failing fetch hammered the origin (a block, earlier). One rule for every collection, here, where
+#: every pass selects its files. A clean stop (_upsert_aborted) does not add an attempt, so a file stopped
+#: mid-transfer with no failure behind it resumes at once.
+RETRY_BACKOFF_S = (60, 300, 600, 1800, 3600, 7200)
+
+
+def retry_wait_s(failures: int) -> int:
+    """Seconds to wait after the `failures`-th failed attempt (0: none failed, no wait)."""
+    if failures <= 0:
+        return 0
+    return RETRY_BACKOFF_S[min(failures, len(RETRY_BACKOFF_S)) - 1]
+
+
+def _backing_off(con, spec: AcquisitionSpec, f: RemoteFile, *, now: float | None = None) -> bool:
+    """Is this file, pending by its listing, still waiting out the backoff of its last failure?"""
+    row = con.execute(
+        "SELECT fetch_done,retries,updated_at,remote_size,remote_mtime FROM fetch_files "
+        "WHERE source_id=? AND rel_path=?", (spec.source_id, f.rel_path)).fetchone()
+    if row is None or row["fetch_done"] or not row["retries"]:
+        return False
+    if row["remote_size"] != f.size or row["remote_mtime"] != f.mtime:
+        return False            # the origin published another file: a new file, tried at once
+    now = time.time() if now is None else now
+    return now < int(row["updated_at"] or 0) + retry_wait_s(int(row["retries"]))
+
+
 def _is_pending(con, spec: AcquisitionSpec, f: RemoteFile) -> bool:
     if export_job.is_export(f):
         # a file the origin builds on request names no size or date either:
@@ -1057,7 +1089,7 @@ def _no_counts() -> dict:
     has. A stopped multi-torrent pass once returned `{"stopped": ...}`
     alone, and `corpus add` died on `result['fetched']` (review, 2026-09-13)."""
     return {"fetched": 0, "skipped": 0, "failed": 0, "aborted": 0,
-            "adopted": 0, "total": 0}
+            "adopted": 0, "waiting": 0, "total": 0}
 
 
 def _run_acquisition(con, collection, spec: AcquisitionSpec, profile: str,
@@ -1209,7 +1241,10 @@ def _run_acquisition_claimed(con, collection, spec: AcquisitionSpec, profile: st
     # thread. (Cross-process overlap is prevented by the caller's claim; see
     # app/acquire/claim.py.)
     pending = {f.rel_path for f in files if _is_pending(con, spec, f)}
-    skipped = len(files) - len(pending)
+    # a file whose last attempt failed waits out its backoff (RETRY_BACKOFF_S); it is counted, not tried
+    waiting = {f.rel_path for f in files if f.rel_path in pending and _backing_off(con, spec, f)}
+    pending -= waiting
+    skipped = len(files) - len(pending) - len(waiting)
     items = _build_work_items(files, pending, spec)
 
     manager = get_manager()
@@ -1291,4 +1326,4 @@ def _run_acquisition_claimed(con, collection, spec: AcquisitionSpec, profile: st
     # moved, nothing recorded, the copy stands — not a failure of the file
     return {"fetched": counters["fetched"], "skipped": skipped + counters["deferred"],
             "failed": counters["failed"], "aborted": counters["aborted"],
-            "adopted": counters["adopted"], "total": len(files)}
+            "adopted": counters["adopted"], "waiting": len(waiting), "total": len(files)}

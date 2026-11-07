@@ -112,7 +112,7 @@ def test_fetch_refused_without_license_ack(tmp_path, monkeypatch, capsys):
 
 # ---- the stop ---------------------------------------------------------------
 
-_ZERO = {"fetched": 0, "skipped": 0, "failed": 0, "aborted": 0, "adopted": 0, "total": 0}
+_ZERO = {"fetched": 0, "skipped": 0, "failed": 0, "aborted": 0, "adopted": 0, "waiting": 0, "total": 0}
 
 
 def _run(monkeypatch, tmp_path, result: dict, signalled: bool) -> int:
