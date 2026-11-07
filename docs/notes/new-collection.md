@@ -199,9 +199,13 @@ to expect:
 - **make**: `normattiva.next`, paused until the swap.
 - **carry**: the 2026-09 parts seeded as hard links. Then 200 chunks
   (`--sample`, the default) are re-encoded and held to the stored vectors at
-  the measured tolerance, before any copy. Then **341,959 documents and
-  8,178,785 vectors** are copied (16 GB, as a reflink where the filesystem
-  has one; the room is checked first). The vector table and the text index
+  the measured tolerance, before any copy. Then the manifest, text index and
+  vector table are copied (as a reflink where the filesystem has one; the
+  room is checked first, from the bytes counted). Not counted for this
+  runbook: 341,959 documents (STATUS, 2026-10-14) and 8,178,785 rows
+  (scheduling-log, 2026-10-23, when old versions held 78 GB of the table's
+  82 GB; a table not cleaned since copies them all). The carry counts and
+  prints both, and the size. The vector table and the text index
   are proven byte for byte by digest, which reads both tables once. All of
   it is recorded in `<LOUISE_ROOT>/state/new/normattiva.json`.
 - **cpu-reference**, then **gate**.
@@ -209,7 +213,8 @@ to expect:
 
 **4. The forget, with the operator's yes.** The swap prints
 `louise hold collection forget normattiva --yes` and its size:
-- what goes: the vectors, index and manifest (~16 GB freed);
+- what goes: the vectors, index and manifest (the size freed is the one the
+  swap prints, counted once per inode, not a figure from this note);
 - what stays: the parts, which `normattiva.next` hard-linked, and
   `/corpora/normattiva`, which it reads.
 
