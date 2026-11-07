@@ -304,6 +304,9 @@ def isolated_config(request, monkeypatch, corpus_dir, data_dir, config_dir):
     # an EXPORT_DIR in the environment running the suite must not send the
     # tests' exports to it; the tests that want one set their own
     monkeypatch.setattr(config, "EXPORT_DIR", None)
+    # a build area in the environment running the suite must not place the
+    # tests' vector tables there; the tests that want one set their own
+    monkeypatch.setattr(config, "BUILD_DIR", None)
     # the parse pool (app/parallel.py) is exercised by its own tests; every
     # other test runs the in-process serial path — same results, no children
     monkeypatch.setattr(config, "PARSE_PROCESSES", 1)

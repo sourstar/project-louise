@@ -612,6 +612,30 @@ reader needs at the command line:
   writer left in `data/` are removed first. A table that has the column is
   left as it is; the work files go at the end. Run it before a collection's records change —
   a document re-opened since the last build has no provable source.
+- **`vectors move <collection> --to hot|build [--apply]`** (*added
+  2026-11-07*, operator: B, docs/notes/storage-tiering.md §8). The
+  collection's vector table moved between the data pool (`hot`, beside the
+  collection, where searches read it) and the build area (`build`,
+  `LOUISE_BUILD_DIR`, §7.8). A dry run by default: the files and bytes, what
+  is still to copy, the free space on the destination against the vectors'
+  floor, the time at the rates measured on the node, and the bytes the
+  source's removal frees; exit 2, nothing written, where the room or the
+  build area is missing. `--apply` needs the collection paused (`node pause
+  <collection>`; exit 2 otherwise) and takes its lock: a COPY into a staging
+  name on the destination, a file a unit, each hashed as it is read and
+  journalled under `state/` once in place; a VERIFICATION, every copied file
+  read back and hashed — the tree digest of both sides and the rows Lance
+  counts; then, under the vector write lock, the source re-checked against
+  the journal (a write since is copied first) and an ATOMIC SWITCH — one
+  `renameat2(RENAME_EXCHANGE)` of `lance` and its replacement, so the name
+  holds the old table or the new, never neither (three renames where the
+  filesystem has no exchange, finished by the next run after a stop
+  between them); then the SOURCE REMOVED, part of the move, its bytes
+  printed. Resumable at every step: SIGTERM finishes the file in flight and
+  exits 130, a kill anywhere leaves one valid table under the name, and a
+  run again goes on from the journal. A table already where `--to` says is
+  nothing to do. `rename` refuses while a move is begun; `forget` takes the
+  build area's folder with the collection.
 - **`vectors show`.** Prints the coverage map (09 §9.10): per part of
   the current snapshot the chunks accepted here, whether it is open, and
   — among the live peers whose digests carry a benchmark for the space,
@@ -1506,7 +1530,7 @@ one home.
 
 | tier | carries | changes by |
 |---|---|---|
-| **environment** — identity | `LOUISE_ROOT` (the one directory), `NODE_KEY_PATH`, `NODE_PUBLIC_KEY_PATH`, `ADMIN_TOKEN_FILE`, `DEPOSIT_TOKEN_FILE`, `GIT_PRIVATE_KEY_FILE`, `CHAT_URL`, `TRANSLATE_URL`, `TRANSLATE_MODEL` (the model TRANSLATE_URL's server is asked for, as `CHAT_MODEL` is for chat; amended 2026-10-09), `RERANK_URL`, `GPU_PROBE_URL`, `VEGA_URL` | restart |
+| **environment** — identity | `LOUISE_ROOT` (the one directory), `LOUISE_BUILD_DIR` (the build area, *amended 2026-11-07*), `NODE_KEY_PATH`, `NODE_PUBLIC_KEY_PATH`, `ADMIN_TOKEN_FILE`, `DEPOSIT_TOKEN_FILE`, `GIT_PRIVATE_KEY_FILE`, `CHAT_URL`, `TRANSLATE_URL`, `TRANSLATE_MODEL` (the model TRANSLATE_URL's server is asked for, as `CHAT_MODEL` is for chat; amended 2026-10-09), `RERANK_URL`, `GPU_PROBE_URL`, `VEGA_URL` | restart |
 | **files** — desired state | `platform.toml` and `collections/<name>.toml` under `LOUISE_ROOT` | editing the file; `hold config apply` |
 | **files** — desired state | `users.toml` beside `platform.toml` (*amended 2026-10-22*): the users of §7.4, each token as its SHA-256 only; when each was last seen is `state/users-seen.json`, not desired state | `louise user …`, the admin API — never by hand |
 | **files** — desired state | `recipes/<plugin>.toml` beside `collections/` (*amended 2026-10-25, RULE 2*): this node's recipe for a plugin (06 §6.6) — what the Library's *new collection*, which names a plugin and a local name only, creates from | editing the file |
@@ -1804,7 +1828,7 @@ collection is another name.
 │       ├── shard/           the copy, the SHARD (`drag/` until 2026-10-11): exactly the tree of 02 §2.6 — what `share` serves, and nothing else; the bytes may live on other storage, mounted here
 │       ├── state/           manifest.sqlite (with the origin's flagged issues, 06 §6.1), cursor, ack.json, attestations/, bundles/, lock — this peer's alone; frozen/: while the collection is frozen, the newer snapshot its alignment is read against, never in the copy (04 §4.3, added 2026-11-07)
 │       ├── index/           the text index of the parts held, and the facet values (05 §5.7)
-│       ├── lance/           the vector table search reads
+│       ├── lance/           the vector table search reads; while it is built, a link into the build area (`LOUISE_BUILD_DIR`, below)
 │       └── origin/          the origin files the records are parsed from — 06 §6.2's corpus directory, kept for records-vs-origin; the bytes may live on other storage, mounted here
 ├── state/                   node.sqlite: the catalogue, coverage maps (09 §9.10), peers seen, runtime overrides; trust.json; web-sources-ack.json (09 §9.13)
 └── keys/                    the peer key, at NODE_KEY_PATH
@@ -1843,6 +1867,27 @@ and left where it was for the operator to delete; a plugin's own setting
 (`PUBMED_PACK_DIR`) wins where set. Measured on the node: wikidata's parse
 is ~95 % label lookups, 133–179 entities/s a core from the HDD pool while
 the scan writes, 1,763 from RAM.
+
+A build area for vector tables (*amended 2026-11-07*, operator: "B, ssd3
+as the build area", docs/notes/storage-tiering.md §8): with
+`LOUISE_BUILD_DIR` set (environment: this node's path; app/vector_place.py
+alone resolves it), a vector table BEING BUILT — a collection `hold
+collection new` makes, case A or F's `<name>.next`, not yet the one people
+search — is written under `<LOUISE_BUILD_DIR>/lance/<name>`, and
+`<name>/lance` is a link to it, made before the collection's file exists.
+Every reader and writer opens `<name>/lance` as before, so nothing that
+caches on that path re-reads anything when the table moves. It moves to
+the data pool when it takes over: case F's swap moves it, after the
+operator's forget of the predecessor made the room; a case A collection
+moves with `hold vectors move <name> --to hot`. The searched tables stay
+on the data pool (a cold dense search measured ×3.8 slower on the build
+area's disk). Only the node's own root is placed; `rename` carries the
+folder with the name and `forget` removes it. When `LOUISE_BUILD_DIR` is
+set but not a directory, nothing is placed (exit 2), never built in the
+container's own storage; a collection whose `lance` link reaches nothing
+— the area not mounted — is refused, named in the refusals, never served
+with an empty table in its place. Unset, every table stays beside its
+collection, as before.
 
 `dev mark-embedded <collection> [--dry-run]` (amended 2026-10-19): the
 documents whose every chunk has a vector here and whose manifest row still

@@ -273,3 +273,69 @@ only while a wikidata parse waits on them. What the proposal gains is ssd4's
 commits under bulk vector writes (1f) and 7 TiB of room. Vectors ARC already
 holds would not pay the loss; ARC's size against the tables was not measured
 here.
+
+### Decided (operator, 2026-11-07): B, ssd3 as the build area
+
+"I agree." The SEARCHED vector tables stay on ssd4: a cold dense search is
+×3.8 slower on ssd3 (2a). ssd3 is the BUILD AREA: a table being built — a
+collection `hold collection new` makes (case A) or re-creates under
+`<name>.next` (case F), not yet the one people search — is written there,
+which costs nothing (embedding writes ~0.1 MB/s against ssd3's 158 MiB/s
+sustained), and moves to ssd4 when it takes over. The coming uses: the
+Nemotron re-embeds of gutenberg and wikipedia (wikipedia's old table was
+355.6 GiB; at 2,048 dimensions a new one is about twice that, beyond ssd4's
+604 GB free) and the re-creation copies. The derived cache
+(`LOUISE_CACHE_DIR`) stays on ssd4.
+
+**Built** (app/vector_place.py; 07 §7.3 `vectors move`, §7.8):
+
+- `LOUISE_BUILD_DIR` (identity tier), resolved by app/vector_place.py alone
+  (invariant 6's guard, tests/test_invariant_6_storage.py). Unset: every
+  path is today's.
+- **A symbolic link**, the pattern of SHARDS_ROOT/ORIGINS_ROOT/BUNDLES_ROOT:
+  `<name>/lance` → `<LOUISE_BUILD_DIR>/lance/<name>`. Every reader and writer
+  keeps opening `<name>/lance` (`vector_place.table_dir`, the one function),
+  so the caches keyed on that path — LanceDB connections, index state,
+  writer registrations — stay right across a move: the key does not change
+  and the bytes behind it are proven the same. LanceDB does not resolve the
+  link (measured, lancedb 0.40.0 / pylance 9.0.1: a connection and a table
+  opened before a switch answered the same rows and neighbours after it,
+  the original deleted; a write after it landed behind the new link). The
+  alternative, a placement recorded in the collection's state, would change
+  `Collection.lance_dir` on a move and leave every other process's caches on
+  a deleted path.
+- `new` places the link before the collection's file exists; the carry
+  copies onto the build area through it; case F's swap, after the
+  operator's forget, moves the table to ssd4; `hold vectors move <c> --to
+  hot|build` moves any table: copy (a file a unit, hashed as read, a
+  journal), verify (tree digest both sides, rows), switch (one
+  `renameat2(RENAME_EXCHANGE)` under the vector write lock), the source
+  removed. Dry run by default, with the estimate at the rates above.
+  `forget` and `rename` follow the link.
+
+**For München, before the first use:** the dataset, then its name in
+deploy/16f/flatten_mounts.py `BUILD_HOST` (or `LOUISE_BUILD_HOST=` to the
+deploy), then a deploy, which mounts it at /build in web and worker and
+sets `LOUISE_BUILD_DIR=/build`:
+
+    zfs create -o atime=off -o compression=lz4 -o recordsize=1M \
+               -o primarycache=metadata ssd3/<dataset>
+
+- `atime=off`: reads never write.
+- `compression=lz4`: f16 vectors barely compress, and lz4 gives up early on
+  incompressible blocks; the text column does compress.
+- `recordsize=1M`: what the build area sees is sequential — Lance writes
+  whole data files and never rewrites one, a compaction or index build
+  scans, and a move reads every file end to end at SATA's ceiling. Large
+  records cut the metadata and the QLC's read-modify-write. The cost is on
+  random reads of a table SEARCHED from ssd3 (case A before it takes over,
+  or the hour of a swap's move): a 4 KiB vector read pulls a 1 MiB
+  record. Those searches are the ones this decision keeps off ssd3.
+- `primarycache=metadata`: a table on ssd3 is read once (built, moved); its
+  data in the ARC would evict the searched tables' on ssd4. The cost: a
+  table searched from ssd3 hits the disk each time — measured as such in 2a.
+
+**Not measured yet:** `RENAME_EXCHANGE` on the node's OpenZFS 2.4.4 inside
+the containers (supported on Linux by OpenZFS; where it is not, the switch
+is three renames, a window of microseconds with no `lance`, finished by the
+next run); the move's real rates, which its output reports.

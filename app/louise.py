@@ -627,7 +627,7 @@ def cmd_collection_new(a) -> int:
     import copy
     import decimal
 
-    from app import collections as collections_mod, node_state, run_check
+    from app import collections as collections_mod, node_state, run_check, vector_place
     from app.hold import calibrate as calib, codex as cx, recreate, workflow as wf
     say = (lambda line: print(line, file=sys.stderr))
     recipe = _recipe(a.recipe)
@@ -772,13 +772,24 @@ def cmd_collection_new(a) -> int:
             # whose manifest, index and vectors are about to be carried in
             node_state.set_paused(interim, True, by=f"louise hold collection new --re-create {a.name} "
                                                     f"(case F: paused until the swap)")
-        codex, held = create_from(a.root, a.plugin, recipe, platform_image=a.platform_image,
-                                  encoder=a.encoder, name=interim if re_create else a.name, api=api,
-                                  embed_model=a.embed_model)
+        # THE BUILD AREA (storage-tiering.md §8, operator 2026-11-07): the new
+        # collection's vector table is built there, placed BEFORE its file
+        # exists so no writer can have begun one elsewhere; it moves to the
+        # data pool when it takes over (case F's swap; `hold vectors move`)
+        target = interim if re_create else a.name
+        placed = vector_place.place_new(a.root, target)
+        try:
+            codex, held = create_from(a.root, a.plugin, recipe, platform_image=a.platform_image,
+                                      encoder=a.encoder, name=target, api=api,
+                                      embed_model=a.embed_model)
+        except BaseException:
+            vector_place.unplace_new(a.root, target)
+            raise
         name = col.name_of(a.root, codex.collection_id)
         run.at("make", f"{name}  {codex.collection_id}  (held: {held})"
                        + (f"; engine {codex.space.encoder.engine.engine_id[:23]}…, paused until the swap"
-                          if re_create else ""))
+                          if re_create else "")
+                       + (f"; its vector table built in the build area, {placed}" if placed else ""))
     state = a.root / name / "state"
     state.mkdir(parents=True, exist_ok=True)
     (state / "calibration.json").write_text(json.dumps(measured, indent=1, sort_keys=True), encoding="utf-8")
@@ -803,6 +814,10 @@ def cmd_collection_new(a) -> int:
                                                model=None, query_model=None))
     run.record("gate", {"rc": rc})
     say(f"{name}: {'the gate PASSED; embedding stays off until the operator turns it on' if rc == 0 else f'the gate exited {rc}: nothing may be embedded'}")
+    if not re_create and vector_place.tier(vector_place.table_dir(a.root, name)) == vector_place.BUILD:
+        say(f"{name}: its vector table is built in the build area "
+            f"({vector_place.physical(vector_place.table_dir(a.root, name))}); when it takes over from the "
+            f"collection people search: louise hold vectors move {name} --to hot")
     # swap (case F): the predecessor forgotten by the operator, then its name
     if re_create and rc == 0:
         rc = _recreate_swap(a, run, name, codex, say)
@@ -904,14 +919,19 @@ def _new_dry_run(a, run, recipe: dict, pred, dry, changed: list[str], existing, 
             t0 = time_mod.monotonic()
             src = recreate.counts(a.root, a.name, write_free=True)
             sizes = recreate.to_copy(a.root, a.name, target)
+            fs = recreate.rooms(a.root, a.name, target, make=False)
             need, free = recreate.room(a.root, a.name, target, make=False)
             took = time_mod.monotonic() - t0
             out(f"  to carry    {num(src['documents'])} documents, {num(src['vectors'])} vector rows; "
                 f"{recreate.human(sum(sizes.values()))} to copy ("
                 + ", ".join(f"{rel} {recreate.human(n)}" for rel, n in sizes.items())
                 + f"); counted from {a.name} at {_utc_now()} in {took:.2f} s")
-            out(f"  room        {recreate.human(need)} needed, {recreate.human(free)} free where {target} "
-                f"is made: " + ("enough" if free >= need else "SHORT, the carry refuses"))
+            if len(fs) == 1:
+                out(f"  room        {recreate.human(need)} needed, {recreate.human(free)} free where {target} "
+                    f"is made: " + ("enough" if free >= need else "SHORT, the carry refuses"))
+            for r in fs if len(fs) > 1 else ():
+                out(f"  room        {recreate.human(r['need'])} needed, {recreate.human(r['free'])} free at "
+                    f"{r['where']}: " + ("enough" if r["free"] >= r["need"] else "SHORT, the carry refuses"))
             if free < need:
                 refusal = recreate.no_room(a.name, target, need, free)
             # the seed the carry draws with: the runs calibrate measures, which
@@ -928,6 +948,18 @@ def _new_dry_run(a, run, recipe: dict, pred, dry, changed: list[str], existing, 
                 f"`louise node pause {a.name}` first (exit 3 while the worker holds one)")
     else:
         out(f"  space_id    {dry.space_id}" + (f" ({existing[0]}, held)" if existing else " (new)"))
+    # where the new table is built (storage-tiering.md §8): refused here as the
+    # run refuses it when the build area is named and not mounted
+    from app import vector_place
+    made_as = (existing[0] if existing else interim) if re_create else a.name
+    if existing is None and vector_place.applies(a.root):
+        vector_place.mounted()
+        out(f"  vectors     built in the build area, {vector_place.home(made_as)}; "
+            + ("moved to the data pool at the swap" if re_create else
+               f"`louise hold vectors move {made_as} --to hot` when it takes over"))
+    elif existing is None:
+        out(f"  vectors     built beside the collection, {vector_place.table_dir(a.root, made_as)} "
+            f"(no build area: LOUISE_BUILD_DIR is unset, or this is not the node's root)")
     out("  steps")
     by_key = {s.key: s for s in wf.STEPS}
     for i, key in enumerate(run.steps, 1):
@@ -1242,13 +1274,58 @@ def _recreate_swap(a, run, name: str, codex, say) -> int:
         tmp = path.with_suffix(".toml.swap")
         tmp.write_text(body, encoding="utf-8")
         os.replace(tmp, path)
-    run.record("swap", {**kept, "done": True, "renamed": [name, a.name]})
+    moved = _recreate_take_over(root, a.name, codex, say)
+    if moved.get("interrupted"):
+        return 130
+    run.record("swap", {**kept, "done": True, "renamed": [name, a.name],
+                        **({"vectors": {k: moved.get(k) for k in ("tier", "path", "rows", "freed")}}
+                           if moved.get("moved") else {})})
     run.at("swap", f"{a.name} is {codex.collection_id[:23]}… now, with its predecessor's collection file "
                    + ("(its codex and embed \"off\" excepted)" if text else "(none was kept: its own)"))
     if mode and mode != "off":
         say(f"  the predecessor embedded {mode!r}; to embed so again: "
             f"louise hold config apply {a.name} --set embed={mode}")
     return 0
+
+
+def _recreate_take_over(root: Path, name: str, codex, say) -> dict:
+    """Case F's swap, its last part (storage-tiering.md §8, operator
+    2026-11-07): the re-created collection, now under the name people
+    search, takes its vector table from the build area onto the data pool
+    (`vector_place.move`) — under its write lock, paused since it was made
+    (the rename carried the pause), the predecessor forgotten first, which
+    is what makes the room. Nothing to do for a table already there. A
+    stop (SIGTERM) finishes the file in flight and the swap is run again; a
+    refusal (no room) leaves the table in the build area, searched from
+    there, and the swap not done."""
+    import signal
+    import threading
+
+    from app import node_state, vector_place
+    from app.hold import lock as lock_mod, records as rec
+    if vector_place.tier(vector_place.table_dir(root, name)) != vector_place.BUILD \
+            and not vector_place.begun(lock_mod.state_dir(root, name)):
+        return {"nothing": "the vector table is on the data pool"}
+    if name not in node_state.paused_collections() and node_state.worker_state() != "paused":
+        raise CodexError(f"swap: {name} is not paused, and its vector table moves from the build area "
+                         f"now: `louise node pause {name}`, then run this again")
+    try:
+        lk = lock_mod.take(lock_mod.state_dir(root, name), name,
+                           f"louise hold collection new --re-create {name} (swap: the vector table)")
+    except lock_mod.Held as e:
+        raise _defer(f"{e}. Then run this again: it resumes at the swap") from None
+    stop = threading.Event()
+    before = {sig: signal.signal(sig, lambda *_: stop.set()) for sig in (signal.SIGTERM, signal.SIGINT)}
+    try:
+        say(f"  the vector table moves from the build area to the data pool "
+            f"({vector_place.plan(root, name, vector_place.HOT).get('say', '')})")
+        return vector_place.move(root, name, vector_place.HOT, stop=stop,
+                                 collection=rec._local_collection(root, name, codex),
+                                 log=lambda m: say(f"  {m}"))
+    finally:
+        for sig, h in before.items():
+            signal.signal(sig, h)
+        lk.release()
 
 
 def _encoder_key_args(p) -> None:
@@ -4076,6 +4153,49 @@ def cmd_vectors_reembed(a) -> int:
     return 0
 
 
+def cmd_vectors_move(a) -> int:
+    """`hold vectors move <collection> --to hot|build [--apply]` (07 §7.3;
+    storage-tiering.md §8, operator 2026-11-07): the collection's vector
+    table moved between the data pool (`hot`, where searches read it) and
+    the build area (`build`, LOUISE_BUILD_DIR) — app/vector_place.py. A dry
+    run by default: the bytes, the room on the destination, the time at the
+    rates measured on the node, and the bytes the source's removal frees
+    (exit 2 when it would be refused). `--apply` needs the collection paused
+    (`node pause <collection>`; exit 2 otherwise) and takes its lock: a copy,
+    verified by tree digest and rows, an atomic switch under the vector
+    write lock, then the source removed — the removal is part of the move.
+    Resumable at every step: a stop (SIGTERM) finishes the file in flight
+    and exits 130, and a run again goes on from there."""
+    from app import node_state, vector_place
+    from app.hold import collection as col, records as rec
+
+    root = Path(a.root) if a.root else _default_root()
+    name, codex = col.resolve(root, a.collection)
+    if not a.apply:
+        out = vector_place.plan(root, name, a.to)
+        if out.get("say"):
+            print(out["say"], file=sys.stderr)
+        _print(out)
+        if out.get("refusal"):
+            print(f"louise: {out['refusal']}", file=sys.stderr)
+            return 2
+        return 0
+    paused = name in node_state.paused_collections() or node_state.worker_state() == "paused"
+    if not paused:
+        print(f"louise: {name} is not paused: `hold vectors move --apply` copies its vector table and "
+              f"switches it. `louise node pause {name}` first (it releases the collection's lock at "
+              f"the end of the current unit), then run this again", file=sys.stderr)
+        return 2
+    _take_write_lock(root, name, "hold vectors move", exit_code=2)
+    stop = threading.Event()
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        signal.signal(sig, lambda *_: stop.set())
+    out = vector_place.move(root, name, a.to, stop=stop, collection=rec._local_collection(root, name, codex),
+                            log=lambda m: print(m, file=sys.stderr))
+    _print(out)
+    return 130 if out.get("interrupted") else 0
+
+
 def cmd_vectors_build(a) -> int:
     """`hold vectors build` — this peer's own chunks, embedded here.
 
@@ -6363,6 +6483,17 @@ def build_parser() -> argparse.ArgumentParser:
                                "them; a versioned collection's shared texts once each")
     root_arg(p); p.add_argument("collection")
     p.set_defaults(fn=cmd_vectors_reembed)
+    p = vverbs.add_parser("move",
+                          help="the vector table moved between the data pool (hot, searched) and "
+                               "the build area (LOUISE_BUILD_DIR): copied, verified, switched, the "
+                               "source removed; a dry run unless --apply (the collection paused)")
+    root_arg(p); p.add_argument("collection")
+    p.add_argument("--to", required=True, choices=("hot", "build"),
+                   help="hot: beside the collection, where searches read it; build: the build area")
+    p.add_argument("--apply", action="store_true",
+                   help="move it (the collection must be paused); without it, what it would move, "
+                        "the room, the time and the bytes freed")
+    p.set_defaults(fn=cmd_vectors_move)
 
     key = nouns.add_parser("key", help="this peer's key, the trust list, a certifier's anchor")
     kverbs = key.add_subparsers(dest="verb", required=True)

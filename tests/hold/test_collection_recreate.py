@@ -450,3 +450,75 @@ def test_the_forget_plan_names_the_shared_folders_and_frees_only_what_is_not_lin
     plan = recreate.forget_plan(root, "p")
     assert str(shards / "p") in plan["would_remove"] and str(origins / "p") in plan["kept"]
     assert plan["bytes"] >= 4096 + 1024 and plan["freed"] == plan["bytes"] - 4096
+
+
+# ---- the build area (storage-tiering.md §8, operator 2026-11-07) ----
+
+def _the_nodes_own(root, monkeypatch) -> None:
+    """`root` made the node's own (`<LOUISE_ROOT>/collections`): the build
+    area places only there; its collection files then live in CONFIG_DIR."""
+    from app import collections as collections_mod
+    monkeypatch.setenv("LOUISE_ROOT", str(root.parent))
+    dst = collections_mod.config_toml_path("old")
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    os.replace(root / "old.toml", dst)
+
+
+def test_with_a_build_area_the_copy_is_built_there_and_the_swap_moves_it_to_the_data_pool(
+        held, steps, tmp_path, monkeypatch, capsys):
+    """Case F: `<name>.next`'s table is carried onto the build area, proven
+    byte for byte there; at the swap, after the operator's forget, it moves
+    to the data pool under the name — the same bytes, the build area
+    emptied."""
+    from app import config, node_state, vector_place
+    root, _old, chunks = held
+    _the_nodes_own(root, monkeypatch)
+    build = tmp_path / "ssd3"
+    build.mkdir()
+    monkeypatch.setattr(config, "BUILD_DIR", build)
+    recipe_path = _new_recipe(tmp_path)
+    assert _new(root, recipe_path, "--dry-run") == 0
+    said = capsys.readouterr().out
+    assert f"vectors     built in the build area, {build / 'lance' / 'old.next'}; moved to the data pool " \
+           f"at the swap" in said
+    assert "free where old.next is made: enough" in said, "one filesystem here: one line"
+    assert _new(root, recipe_path) == 2
+    link = root / "old.next" / "lance"
+    assert link.is_symlink() and vector_place.physical(link) == build / "lance" / "old.next"
+    digest = recreate.tree_digest(root / "old" / "lance")
+    assert recreate.tree_digest(link) == digest, "carried onto the build area, byte for byte"
+    assert recreate.counts(root, "old.next")["vectors"] == chunks
+    forget_mod.forget(root, "old")
+    capsys.readouterr()
+    assert _new(root, recipe_path) == 0
+    lance = root / "old" / "lance"
+    assert lance.is_dir() and not lance.is_symlink(), "the swap moved the table to the data pool"
+    assert recreate.tree_digest(lance) == digest
+    assert recreate.counts(root, "old")["vectors"] == chunks
+    assert not any((build / "lance").iterdir()), "nothing left in the build area"
+    assert "old" in node_state.paused_collections()
+    kept = json.loads(wf.progress_path("old").read_text())["steps"]["swap"]["result"]
+    assert kept["vectors"]["tier"] == "hot" and kept["vectors"]["rows"] == chunks
+
+
+def test_a_swap_whose_move_is_refused_is_not_done_and_resumes(held, steps, tmp_path, monkeypatch, capsys):
+    from app import config, vector_place
+    root, _old, chunks = held
+    _the_nodes_own(root, monkeypatch)
+    build = tmp_path / "ssd3"
+    build.mkdir()
+    monkeypatch.setattr(config, "BUILD_DIR", build)
+    recipe_path = _new_recipe(tmp_path)
+    assert _new(root, recipe_path) == 2
+    forget_mod.forget(root, "old")
+    real = vector_place._free
+    monkeypatch.setattr(vector_place, "_free", lambda path: (1024, 0))
+    assert _new(root, recipe_path) == 2
+    assert "nothing was copied" in capsys.readouterr().err
+    link = root / "old" / "lance"
+    assert link.is_symlink() and recreate.counts(root, "old")["vectors"] == chunks, \
+        "renamed, searched from the build area meanwhile"
+    assert not (json.loads(wf.progress_path("old").read_text())["steps"].get("swap") or {}).get("result", {}).get("done")
+    monkeypatch.setattr(vector_place, "_free", real)
+    assert _new(root, recipe_path) == 0
+    assert not link.is_symlink() and recreate.counts(root, "old")["vectors"] == chunks

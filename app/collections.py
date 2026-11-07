@@ -14,7 +14,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
-from . import config
+from . import config, vector_place
 from .plugins import deposit, embedded, gutenberg, normattiva, pubmed, wikidata, wikipedia
 from .plugins.base import CorpusSource
 
@@ -685,6 +685,15 @@ def _codex_collection(path: Path, raw: dict[str, Any], name: str) -> Collection:
 
     embed_mode, embed_note = effective_embed_mode(
         _embed_mode(raw.get("embed", raw.get("embed_mode")), path), share, where)
+    # THE VECTOR TABLE'S PATH (app/vector_place.py): beside the collection, or
+    # a link into the build area — one that does not reach its table (the
+    # area not mounted) refuses THIS collection, never a warning: searched,
+    # it would answer with no dense leg and say nothing (invariant 1's rule)
+    lance = vector_place.table_dir(d.parent, name)
+    unreachable = vector_place.unreachable(lance)
+    if unreachable:
+        raise VectorsUnreachable(f"{where}: {unreachable}; the collection is not served, shared or "
+                                 f"searched until it is")
     from . import layers as layers_mod
     return Collection(
         name=name,
@@ -699,7 +708,7 @@ def _codex_collection(path: Path, raw: dict[str, Any], name: str) -> Collection:
         corpus_dir=corpus,
         manifest_path=d / "state" / "manifest.sqlite",
         fts_dir=d / "index",
-        lance_dir=d / "lance",
+        lance_dir=lance,
         acquire_enabled=acquire,
         license_ack=_codex_ack(codex, d / "state"),
         embed=_codex_encoder(raw.get("embed_recipe") or raw.get("encoder"),
@@ -748,7 +757,7 @@ def _annotations_collection(path: Path, raw: dict[str, Any], name: str, codex,
     return Collection(
         name=name, plugin=codex.plugin, profile=None, embed_mode_default="off",
         corpus_dir=d / "shard", manifest_path=d / "state" / "manifest.sqlite",
-        fts_dir=d / "index", lance_dir=d / "lance", acquire_enabled=False,
+        fts_dir=d / "index", lance_dir=vector_place.table_dir(d.parent, name), acquire_enabled=False,
         license_ack=_codex_ack(codex, d / "state"), embed=None, codex=codex,
         title=title, slices=slices, kinds=kinds, share=share,
         share_slices=share_slices, share_kinds=share_kinds,
@@ -1010,6 +1019,12 @@ class NotConverted(ValueError):
     """A collection file that names no Codex: refused, never fatal."""
 
 
+class VectorsUnreachable(ValueError):
+    """A collection whose vector table is a link into the build area that
+    reaches nothing (app/vector_place.py): the area not mounted, or its
+    folder gone. Refused for THAT collection (`refusals()`), never fatal."""
+
+
 def _load_one(path: Path) -> Collection:
     with open(path, "rb") as f:
         raw: dict[str, Any] = tomllib.load(f)
@@ -1103,7 +1118,7 @@ def load_all(*, skip_unreadable: bool = False):
         # must not be reported the same way.
         try:
             c = _load_one(p)
-        except (NotConverted, ModelKeys) as e:
+        except (NotConverted, ModelKeys, VectorsUnreachable) as e:
             # a POLICY refusal, like NO_ENCODER below: a file whose
             # [encoder]/[reranker] does not name its models as 07 §7.8 says
             # (2026-10-08) is not served, and the node keeps its others

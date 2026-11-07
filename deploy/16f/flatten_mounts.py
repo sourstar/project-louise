@@ -33,6 +33,30 @@ SHARED = (("/mnt/tank/louise-corpora", "/corpora", True),
 ENV = {"SHARDS_ROOT": "/shards", "ORIGINS_ROOT": "/corpora", "BUNDLES_ROOT": "/bundles"}
 SERVICES = ("web", "worker")
 
+#: THE BUILD AREA (operator, 2026-11-07, docs/notes/storage-tiering.md §8:
+#: "B, ssd3 as the build area"): a dataset on ssd3 mounted at /build in web
+#: and worker, LOUISE_BUILD_DIR=/build (app/vector_place.py). Read and
+#: written by both, as /data is: a table built there is searched from there
+#: until it moves. The dataset's NAME IS MÜNCHEN'S TO REPORT: until it is
+#: written here (or given as LOUISE_BUILD_HOST to the deploy), `build_area`
+#: sees no dataset and the setting stays unset — nothing mounted, nothing set.
+BUILD_HOST: str | None = None          # "/mnt/ssd3/<dataset>"
+BUILD_TARGET = "/build"
+
+
+def build_area(host: str | None = None, *, is_dataset=None) -> tuple[tuple, dict]:
+    """`(shared, env)` for `apply`: the build area's mount and its variable
+    when `host` (else BUILD_HOST) is a mounted dataset on this host, else
+    nothing. `is_dataset` (tests): the check, `os.path.ismount` by default —
+    a plain directory is not a dataset, and its properties are not the build
+    area's (atime off, lz4, recordsize 1M, primarycache metadata)."""
+    import os
+    host = host or BUILD_HOST
+    check = is_dataset or os.path.ismount
+    if not host or not check(host):
+        return (), {}
+    return ((host, BUILD_TARGET, False),), {"LOUISE_BUILD_DIR": BUILD_TARGET}
+
 
 def _parts(v) -> tuple[str | None, str | None]:
     if isinstance(v, str):

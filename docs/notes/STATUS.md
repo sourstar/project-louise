@@ -18,6 +18,29 @@ build at 12 cores, the GPU uncapped. The card's noise (operator): 0.2 sone
 idle, 3.1 sone at full load, coil whine ~0.9 sone; its fan range is being
 measured (published figures disagree).
 
+### 2026-11-07: ssd3 is the build area — `LOUISE_BUILD_DIR`, `hold vectors move` (operator: B)
+
+- **Decided** ([storage-tiering.md](storage-tiering.md) §8): searched vector
+  tables stay on ssd4 (×3.8 slower dense search on ssd3); a table being
+  BUILT — `new`'s case A, case F's `<name>.next` — is written on ssd3 and
+  moves to ssd4 when it takes over. For the Nemotron re-embeds of gutenberg
+  and wikipedia (~710 GiB at 2,048 dims, beyond ssd4's 604 GB free).
+- **Built** (app/vector_place.py): `<name>/lance` a link into
+  `<LOUISE_BUILD_DIR>/lance/<name>`, placed by `new` before the file exists;
+  the carry copies through it; case F's swap moves it to ssd4 after the
+  operator's forget; `hold vectors move <c> --to hot|build [--apply]`
+  (copy, verify by tree digest and rows, `RENAME_EXCHANGE` under the vector
+  write lock, source removed; dry run with the measured-rate estimate;
+  resumable, a stop leaves one valid table — tested at every step and with
+  a SIGKILL). `forget`/`rename` follow the link; a link that reaches
+  nothing refuses its collection. Unset: today's paths, byte for byte.
+- **München, before the first use:** `zfs create -o atime=off -o
+  compression=lz4 -o recordsize=1M -o primarycache=metadata ssd3/<dataset>`,
+  its name into deploy/16f/flatten_mounts.py `BUILD_HOST` (or
+  `LOUISE_BUILD_HOST=` to the deploy), deploy: /build in web and worker,
+  `LOUISE_BUILD_DIR=/build`. Then `new`. Check `RENAME_EXCHANGE` on the
+  node with the first move (its output says `exchanged` or `renamed`).
+
 ### 2026-11-07: `hold vectors source-hashes --apply` failed on pubmed — fixed: a legacy table is compacted first
 
 - **The defect** ([pubmed-updatefiles.md](pubmed-updatefiles.md) §10, the

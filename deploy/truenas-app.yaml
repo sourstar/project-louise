@@ -114,6 +114,17 @@
 # After the app restarts with the mount, the folder appears in the Library
 # page's corpus dropdown (folders in use by a collection are not selectable).
 # Collections themselves hot-reload — only the mount needs this app edit.
+#
+# THE BUILD AREA (operator, 2026-11-07, docs/notes/storage-tiering.md §8): a
+# vector table being built (`hold collection new`, cases A and F) is written
+# on ssd3 and moves to /data (ssd4) when it takes over. One dataset, mounted in
+# BOTH services, and its variable — deploy/16f/flatten_mounts.py adds both once
+# the dataset is named (BUILD_HOST, or LOUISE_BUILD_HOST to the deploy) and
+# mounted; without it nothing is set and every table stays on /data:
+#     zfs create -o atime=off -o compression=lz4 -o recordsize=1M \
+#                -o primarycache=metadata ssd3/<dataset>
+#     - /mnt/ssd3/<dataset>:/build          # web and worker volumes, read-write
+#     LOUISE_BUILD_DIR: /build              # the shared environment
 
 services:
   web:

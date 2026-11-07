@@ -104,14 +104,18 @@ def _forget_vectors(root: Path, name: str, codex, base: Path, *, kinds, dry_run:
     shard_tree = shard_mod.shard_dir(base)
     members = [p for p in (sorted(shard_tree.iterdir()) if shard_tree.is_dir() else [])
                if p.name.startswith(VECTOR_MEMBER_PREFIXES)]
-    store = base / "lance"
+    from app import vector_place
+    store = vector_place.table_dir(root, name)
     aside = sorted(base.glob(f"{ASIDE}*"))              # an earlier run's, stopped before its removal
     mode = _embed_mode(name)
     manifest = (rec._local_collection(root, name, codex) if codex is not None else None)
     marks = manifest is not None and Path(manifest.manifest_path).is_file()
     if dry_run:
+        # a table in the build area goes with its folder there (app/vector_place.py)
+        stores = [p for p in [store, *aside] if p.exists() or p.is_symlink()]
+        behind = [vector_place.physical(p) for p in stores if p.is_symlink()]
         return {"collection": name, "dry_run": True,
-                "would_remove": [str(p) for p in members + ([store] if store.exists() else []) + aside],
+                "would_remove": [str(p) for p in members + stores + behind],
                 "would_reset": ("every document marked embedded here: embed_done 0, embed_version 0"
                                 if marks else "nothing: no state database"),
                 "embed": mode, "next": next_after_vectors(name, mode), "removed": []}
@@ -127,11 +131,15 @@ def _forget_vectors(root: Path, name: str, codex, base: Path, *, kinds, dry_run:
         if marks:
             from app import db
             con = db.connect(manifest)
-        if store.exists():
+        if store.exists() or store.is_symlink():
             aside.append(_set_aside(store, manifest, con))
             removed.append(str(store))
+        # a move of the table begun and not finished goes with it
+        removed += vector_place.discard_move(root, name)
         for p in aside:
-            shutil.rmtree(p, ignore_errors=True)
+            # a link into the build area: its folder there first, then the link
+            # (shutil.rmtree refuses a link, and ignoring that left the folder)
+            vector_place.remove_table(p)
         reset = 0
         if con is not None:
             from app import embed_marks
@@ -196,6 +204,10 @@ def shared_folders(root: Path, name: str) -> tuple[list[Path], list[Path]]:
             continue
         if target.is_dir():
             removed.append(target)
+    # the vector table built in the build area (app/vector_place.py): its
+    # folder there, and a begun move's, go with the collection
+    from app import vector_place
+    removed += [t for t in vector_place.held_in_area(root, name) if t not in removed]
     return removed, kept
 
 
@@ -257,7 +269,10 @@ def forget(root: Path, name: str, *, kinds=None, dry_run: bool = False,
     #    an origin folder goes too unless another held collection links it
     #    (both Normattiva collections read /corpora/normattiva)
     for target in shared_folders(root, name)[0]:
-        shutil.rmtree(target)
+        if target.is_symlink():
+            target.unlink()
+        elif target.is_dir():
+            shutil.rmtree(target)
         removed.append(str(target))
     # 5. the directory, whole
     if base.exists():
