@@ -51,6 +51,32 @@ def test_a_sum_mismatch_stops_the_build():
     assert "set -eu" in text
 
 
+def test_the_stack_pins_every_deb_by_its_sum():
+    # the first a+b build recorded the IGC and Level Zero sums; the stack now pins them (no "-")
+    for f in sorted(HERE.glob("intel-stack-*.conf")):
+        assert all(want != "-" for want, _ in _stack_lines(f)), f
+
+
+def test_one_igc_the_pinned_one_compiles_and_ships():
+    # 2026-11-07: the PPA's libigc 2.41.16 beside the pinned 2.41.5 was both packaged and (AOT) used by ocloc
+    text = (HERE / "Dockerfile.intel-stack").read_text(encoding="utf-8")
+    for name in ("libigc.so*", "libiga64.so*", "libigdfcl.so*"):
+        assert name in text
+    assert "apt-get remove -y $owners" in text and "ldconfig" in text
+    assert "another IGC remains" in text
+    assert "ocloc compile -file k.cl -device bmg-g31" in text
+    assert "grep -q '/usr/local/lib/libigc.so' /intel-stack.ocloc" in text
+    assert 'ENV INTEL_DRIVER_LIB_DIRS="/usr/local/lib ' in text
+    build = BUILD.read_text(encoding="utf-8")
+    assert "oneapi_image_digest" in build and "ocloc_igc" in build
+    # BuildKit keeps a pulled base out of docker's image store: the digest comes from the registry
+    assert "docker buildx imagetools inspect" in build
+    # a changed layer is another engine (the IGC fix first rebuilt under the old tag)
+    assert 'stack_layer $(sha256sum "$HERE/Dockerfile.intel-stack"' in build
+    # and its device code is compiled, never taken from another build's ccache
+    assert "ENV CCACHE_DISABLE=1" in text
+
+
 def test_the_switches_are_refused_outside_sycl():
     r = subprocess.run(["sh", str(BUILD), "cpu", "/nonexistent"], capture_output=True, text=True,
                        env={"SYCL_DEVICE_ARCH": "bmg-g31", "PATH": "/usr/bin:/bin"})
