@@ -91,7 +91,9 @@ oneapi_image $ONEAPI_IMAGE"
     echo "deb $got $(basename "$url")" >> "$WORK/stack/debs.lock"
   done
   LOCK="$LOCK
-$(cat "$WORK/stack/debs.lock")"
+$(cat "$WORK/stack/debs.lock")
+stack_layer $(sha256sum "$HERE/Dockerfile.intel-stack" | cut -d' ' -f1)"
+  # the stack is its debs AND the layer that installs them: a changed layer is another engine, another tag
   STACK=$(printf '%s\n' "$LOCK" | sha256sum | cut -c1-12)
   NAME=$NAME-stack-$STACK
   # LocalAI's own grpc builder base, on the stack's oneAPI image, then the pinned debs on top
@@ -115,7 +117,7 @@ docker save "$TAG" -o "$OUT/louise-llama-cpp-$NAME.tar"
 if [ -n "${INTEL_STACK:-}" ]; then
   # what the tag cannot say: the image's content digest, and the libigc ocloc compiled the device code with
   LOCK="$LOCK
-oneapi_image_digest $(docker image inspect --format '{{index .RepoDigests 0}}' "$ONEAPI_IMAGE")
+oneapi_image_digest $(docker buildx imagetools inspect "$ONEAPI_IMAGE" | awk '/^Digest:/ {print $2; exit}')
 ocloc_igc $(docker run --rm --entrypoint cat "$BUILDER" /intel-stack.ocloc)"
 fi
 if [ -n "$LOCK" ]; then

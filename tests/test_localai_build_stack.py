@@ -69,6 +69,12 @@ def test_one_igc_the_pinned_one_compiles_and_ships():
     assert 'ENV INTEL_DRIVER_LIB_DIRS="/usr/local/lib ' in text
     build = BUILD.read_text(encoding="utf-8")
     assert "oneapi_image_digest" in build and "ocloc_igc" in build
+    # BuildKit keeps a pulled base out of docker's image store: the digest comes from the registry
+    assert "docker buildx imagetools inspect" in build
+    # a changed layer is another engine (the IGC fix first rebuilt under the old tag)
+    assert 'stack_layer $(sha256sum "$HERE/Dockerfile.intel-stack"' in build
+    # and its device code is compiled, never taken from another build's ccache
+    assert "ENV CCACHE_DISABLE=1" in text
 
 
 def test_the_switches_are_refused_outside_sycl():

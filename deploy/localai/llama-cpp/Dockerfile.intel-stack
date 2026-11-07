@@ -39,3 +39,7 @@ RUN set -e \
       intel-ocloc libze1 > /intel-stack.versions \
  && cat /intel-stack.versions
 ENV INTEL_DRIVER_LIB_DIRS="/usr/local/lib /usr/lib/x86_64-linux-gnu /usr/lib"
+# no object from another build: LocalAI's compile step shares one ccache across every sycl_f16 build, and ccache's key
+# (the compiler and its flags) does not see the libigc ocloc loads, so an AOT build would reuse device code another
+# IGC compiled (2026-11-07: the IGC fix rebuilt in 76 s against 1,058 s, every object a cache hit)
+ENV CCACHE_DISABLE=1
