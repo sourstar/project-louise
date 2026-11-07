@@ -114,7 +114,7 @@ def test_several_torrents_are_fetched_one_after_the_other_in_listed_order(isolat
 
     def fake_claimed(con_, coll, spec_, profile, stop, priority, until=None):
         seen.append([e.url for e in spec_.endpoints])
-        return {"fetched": 1, "skipped": 0, "failed": 0, "aborted": 0, "adopted": 0, "total": 1}
+        return {"fetched": 1, "skipped": 0, "failed": 0, "aborted": 0, "adopted": 0, "waiting": 0, "total": 1}
     monkeypatch.setattr(engine, "_run_acquisition_claimed", fake_claimed)
     result = engine.run_acquisition(con, c, spec, "demo")
     assert seen == [["magnet:?xt=urn:btih:aaa"], ["magnet:?xt=urn:btih:bbb"]], seen

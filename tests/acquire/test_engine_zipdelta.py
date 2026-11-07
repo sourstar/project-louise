@@ -262,7 +262,7 @@ def test_a_directory_that_cannot_be_read_leaves_a_complete_copy_standing(tmp_pat
     mock_server.answer_next("m.zip", 500, 1000)                 # ...and is having an episode
     before = mock_server.request_count("m.zip")
     got = engine.run_acquisition(con, collection, spec, "demo")
-    assert got == {"fetched": 0, "skipped": 1, "failed": 0, "aborted": 0, "adopted": 0, "total": 1}
+    assert got == {"fetched": 0, "skipped": 1, "failed": 0, "aborted": 0, "adopted": 0, "waiting": 0, "total": 1}
     assert _members(collection.corpus_dir / "m.zip") == V1, "the copy stands"
     after = con.execute("SELECT fetch_done, retries, error, updated_at FROM fetch_files "
                         "WHERE rel_path='m.zip'").fetchone()
@@ -321,7 +321,7 @@ def test_an_unchanged_zip_is_adopted_by_its_directory_and_left_untouched(tmp_pat
     assert row["blake2"], "the fetch wrote the digest"
     before = mock_server.request_count("m.zip")
     again = engine.run_acquisition(con, collection, spec, "demo")       # nothing changed at the origin
-    assert again == {"fetched": 1, "skipped": 0, "failed": 0, "aborted": 0, "adopted": 1, "total": 1}
+    assert again == {"fetched": 1, "skipped": 0, "failed": 0, "aborted": 0, "adopted": 1, "waiting": 0, "total": 1}
     after = dest.stat()
     assert (after.st_ino, after.st_mtime_ns, after.st_size) == (st.st_ino, st.st_mtime_ns, st.st_size), \
         "the file is exactly the one that was there: no rewrite"

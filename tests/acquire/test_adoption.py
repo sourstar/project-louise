@@ -58,7 +58,7 @@ def test_a_preseeded_file_is_verified_and_recorded_without_a_download(
     # and it is now indistinguishable from a fetched file: the next run skips
     again = engine.run_acquisition(con, collection, spec, "demo")
     assert again == {"fetched": 0, "skipped": 1, "failed": 0, "aborted": 0,
-                      "adopted": 0, "total": 1}
+                      "adopted": 0, "waiting": 0, "total": 1}
 
 
 def test_a_wrong_sized_local_file_is_downloaded_not_adopted(tmp_path, mock_server):
