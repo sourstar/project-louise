@@ -276,6 +276,13 @@ byte-identical (`tools/measure/records_ab.py`).
   the image IDs. A dataset that holds backends gets the sources' ACL type
   (`acltype=nfsv4`, `aclmode`/`aclinherit=passthrough`): an engine's tree digest
   reads the exec bits.
+- **A recovery dockerd** (a second daemon on an old image store) runs with its
+  own network state, or not at all: on 2026-11-07 one started with
+  `--bridge none` on the old store's network db removed the live `docker0`.
+  After that, a plain `docker run` failed with "Device does not exist"; the
+  apps' compose networks were unaffected. Prefer `docker load` from tars on
+  tank. A vanished `docker0` is recreated from Docker's bridge record
+  (172.16.0.1/24, fdd0::1/64, MTU 1500) and made permanent by a Docker restart.
 - **Never make a ZFS clone inside ssd4 or ssd5**: the recursive snapshot task picks
   it up and replicates it in full (it happened, 2026-10-23). Measurement scratch goes
   on tank (`/mnt/tank/scratch-*`), which is redundant and not replicated.
