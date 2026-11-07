@@ -799,10 +799,15 @@ def cmd_collection_new(a) -> int:
     if re_create:
         _recreate_carry(a, run, name, codex, pred, measured, say)
 
-    # cpu-reference, from the store entry calibrate made
+    # cpu-reference, from the store entry calibrate made, and the gate,
+    # against the run that answers now: both run again on a rerun. Each runs
+    # in this process and its write lock is released when it returns
+    # (`_sub_command`): normattiva's swap, 2026-11-07, found the collection
+    # held by the gate of its own run
     run.at("cpu-reference", "from the node's store")
-    rc = cmd_embedder_cpu_reference(argparse.Namespace(root=a.root, collection=name, model=a.cpu_model,
-                                                       query_model=None, again=False, refresh=True))
+    with _sub_command():
+        rc = cmd_embedder_cpu_reference(argparse.Namespace(root=a.root, collection=name, model=a.cpu_model,
+                                                           query_model=None, again=False, refresh=True))
     if rc != 0:
         say(f"stopped at cpu-reference: it exited {rc}")
         return rc
@@ -810,8 +815,9 @@ def cmd_collection_new(a) -> int:
 
     # gate
     run.at("gate", "hold embedder check")
-    rc = cmd_embedder_check(argparse.Namespace(root=a.root, collection=name, accept=False,
-                                               model=None, query_model=None))
+    with _sub_command():
+        rc = cmd_embedder_check(argparse.Namespace(root=a.root, collection=name, accept=False,
+                                                   model=None, query_model=None))
     run.record("gate", {"rc": rc})
     say(f"{name}: {'the gate PASSED; embedding stays off until the operator turns it on' if rc == 0 else f'the gate exited {rc}: nothing may be embedded'}")
     if not re_create and vector_place.tier(vector_place.table_dir(a.root, name)) == vector_place.BUILD:
@@ -964,6 +970,7 @@ def _new_dry_run(a, run, recipe: dict, pred, dry, changed: list[str], existing, 
     by_key = {s.key: s for s in wf.STEPS}
     for i, key in enumerate(run.steps, 1):
         state = ("ran in this dry run" if key in ("resolve", "check") else
+                 "runs again (on every run)" if key in _NEW_RERUN else
                  "kept from an earlier run" if run.done(key) is not None else "would run")
         out(f"    {i}/{len(run.steps)} {key:<13} {state}: {by_key[key].does}")
     if refusal:
@@ -1887,6 +1894,26 @@ def _take_write_lock(root, name: str, what: str, *, exit_code: int = 3):
 def _release_cli_locks() -> None:
     while _cli_locks:
         _cli_locks.pop().release()
+
+
+#: `new`'s steps run on every run, a rerun included: the CPU reference from
+#: the node's store and the gate against the run that answers now (03 §3.3)
+_NEW_RERUN = ("cpu-reference", "gate")
+
+
+@contextlib.contextmanager
+def _sub_command():
+    """A command another runs in-process (`new`'s cpu-reference and gate):
+    the write locks it takes are released when it returns, as `main`
+    releases a command's own at its end. Without it the next step finds the
+    collection held by this very process — normattiva's swap, 2026-11-07,
+    refused by the gate of its own run, rerun after rerun."""
+    n = len(_cli_locks)
+    try:
+        yield
+    finally:
+        while len(_cli_locks) > n:
+            _cli_locks.pop().release()
 
 
 def _run_releasing(a) -> int:

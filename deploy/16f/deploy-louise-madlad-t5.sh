@@ -290,15 +290,28 @@ grep -v "^#" "$ROOT/src.new/constraints.txt" | grep -v "^$" | diff - /tmp/staged
 docker run --rm louise-rag:staged lbzip2 --version 2>&1 | head -1
 
 say "3. the live config loads every collection in the staged code"
+# what the LIVE code loads now is the floor (a collection mid-re-creation is
+# loaded as <name>.next until its swap: normattiva, 2026-11-07); the named
+# pipeline collections, each as itself or <name>.next, when the web is down
+LIVE_NAMES=$(docker exec ix-louise-rag-web-1 python -c "
+from app import collections as c
+print(' '.join(sorted(x.name for x in c.load_all())))" 2>/dev/null || true)
+echo "live load_all: ${LIVE_NAMES:-(the live web did not answer)}"
 LIVE_MOUNTS=$(docker inspect ix-louise-rag-web-1 \
   --format '{{range .Mounts}}-v {{.Source}}:{{.Destination}}{{if eq .Destination "/config"}}:ro{{else if not .RW}}:ro{{end}} {{end}}')
 docker run --rm -v "$ROOT/src.new:/srv" -w /srv -e PYTHONPATH=/srv $LIVE_MOUNTS \
-  -e CONFIG_DIR=/config -e DATA_DIR=/data louise-rag:staged python -c "
+  -e CONFIG_DIR=/config -e DATA_DIR=/data -e LIVE_NAMES="$LIVE_NAMES" louise-rag:staged python -c "
+import os
 from app import collections as c
 names = sorted(x.name for x in c.load_all())
 print('load_all:', names)
 print('refusals:', [str(r)[:200] for r in c.refusals()])
-assert {'gutenberg', 'normattiva', 'pubmed', 'wikidata', 'wikipedia'} <= set(names), names   # annotations collections are not pipeline collections
+live = set(os.environ['LIVE_NAMES'].split())
+if live:
+    assert live <= set(names), ('the live code loads', sorted(live - set(names)), 'and the staged does not')
+else:   # annotations collections are not pipeline collections
+    for n in ('gutenberg', 'normattiva', 'pubmed', 'wikidata', 'wikipedia'):
+        assert n in names or n + '.next' in names, (n, names)
 assert not c.refusals(), c.refusals()
 "
 docker run --rm -v "$ROOT/src.new:/srv" -w /srv -e PYTHONPATH=/srv \

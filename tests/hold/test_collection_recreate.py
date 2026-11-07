@@ -137,6 +137,10 @@ def steps(held, monkeypatch):
     monkeypatch.setattr(louise, "cmd_embedder_cpu_reference", cpu_reference)
 
     def gate(a):
+        # as the real gate does: its collection's write lock, held until the
+        # command ends (normattiva's swap, 2026-11-07, refused by it)
+        from app.hold import collection as col_
+        louise._take_write_lock(a.root, col_.resolve(a.root, a.collection)[0], "hold embedder check")
         seen["order"].append("gate")
         return seen.get("gate_rc", 0)
     monkeypatch.setattr(louise, "cmd_embedder_check", gate)
@@ -187,10 +191,13 @@ def test_after_the_operators_forget_the_swap_takes_the_name_and_the_file(held, s
     assert f"kept from the earlier run: {recreate.counts(root, 'old.next')['documents']:,} documents, " \
            f"{chunks:,} vector rows" in said
     assert all(f"{k:<13} kept from an earlier run" in said
-               for k in ("calibrate", "tolerance", "make", "carry", "cpu-reference", "gate"))
+               for k in ("calibrate", "tolerance", "make", "carry"))
+    assert all(f"{k:<13} runs again (on every run)" in said for k in ("cpu-reference", "gate")), \
+        "the dry run says what the run does: the gate against the run that answers now"
     assert steps["order"] == []
-    assert _new(root, recipe_path) == 0
+    assert _new(root, recipe_path) == 0, "the swap is not refused by the gate of its own run"
     assert "carry" not in steps["order"] and steps["encoder"].texts == 4, "carried once"
+    assert steps["order"][-2:] == ["cpu-reference", "gate"]
     name, codex = col.resolve(root, "old")
     assert (name, codex.collection_id) == ("old", made.collection_id)
     assert not (root / "old.next").exists()
