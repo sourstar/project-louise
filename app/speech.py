@@ -7,18 +7,16 @@ pinned as long as there is text to process").
 `POST /v1/audio/speech`, OpenAI's shape, is relayed to the model server's
 own `/v1/audio/speech` after the three things only Louise knows:
 
-- THE CITATIONS GO. "[3]", "[3] [4]", "[3]-[5]", "[gutenberg:123]" are
-  references for the eye; read aloud they are noise. A client cleans the
-  text before sending it, but not of these: Open WebUI drops markdown and
-  footnotes, keeps "[7]", and turns two adjacent ones into a bare number
-  (its link pattern reads "[3][4]" as a reference link). So `/v1` writes
-  adjacent citations with a space between them (`spaced_citations`), and
-  this module removes them.
-  In French answers they come in more shapes ("[7 ; 8]", "[7 et 8]",
-  "[ 7 ]", "[réf. 7]", "【7】"; operator, 2026-11-07: "pronounces the
-  citations"): a bracket holding numbers and only the words that join or
-  name them is a citation (`_is_citation`). A bracket with a number that is
-  left in the text is said in a warn line, so the next shape is seen.
+- NOTHING IN SQUARE BRACKETS IS READ (operator, 2026-11-07: "citations
+  shall be skipped in the speech"). In an answer a bracket is a citation,
+  whatever the language writes inside it: "[3]", "[3]-[5]", "[7 ; 8]",
+  "[7 et 8]", "[ 7 ]", "[réf. 7]", "[gutenberg:123]", "\\[7\\]", "【7】".
+  No list of shapes to keep up: every bracket goes, and a run of them
+  joined by a dash or a comma with it. A client cleans the text before
+  sending it, but not of these: Open WebUI drops markdown and footnotes,
+  keeps "[7]", and reads "[3][4]" or "[3](…)" as a link, keeping the bare
+  "3" — so `/v1` writes a space after a citation followed by a bracket or
+  a parenthesis (`spaced_citations`), and this module removes the brackets.
 - ONE VOICE FOR EVERY LANGUAGE (operator, 2026-11-07: "Use the same
   omnivoice philippe voice for all the languages, let's see how it goes",
   replacing 11-06's voice per language). The voice asked for is used
@@ -43,7 +41,6 @@ wrong language.
 from __future__ import annotations
 
 import re
-import sys
 import threading
 import time
 from typing import Any
@@ -59,9 +56,13 @@ CALL_TIMEOUT_S = 180.0
 PROFILES_TTL_S = 60.0
 HOLDER = "speech"
 
-# a bracket, with the space before it: "[…]", "\\[…\\]" (escaped markdown),
-# "【…】" (the brackets some chat models cite with)
-_BRACKET = re.compile(r"\s*(?:\\?\[([^\[\]\\\n]{1,48})\\?\]|【([^【】\n]{1,48})】)")
+# every bracket, with the space before it: "[…]", "\\[…\\]" (escaped
+# markdown), "【…】" (the brackets some chat models cite with)
+_BRACKET = re.compile(r"\s*(?:\\?\[[^\[\]\n]{0,160}?\\?\]|【[^【】\n]{0,160}】)")
+# a run of removed brackets joined by a dash or a comma: "[3]-[5]", "[3], [4]"
+_RUN = re.compile("\x00(?:\\s*[-–—,;]?\\s*\x00)*")
+# a citation the stream must keep apart from a "[" or "(" after it
+_CITE_THEN = re.compile(r"\[([^\[\]\n]{1,48})\](?=[\[(])")
 # a record's key: "[gutenberg:123]"
 _KEY = re.compile(r"[a-z][\w.-]*:[^\]\s]+")
 # the words that join or name the numbers of a citation, in the languages
@@ -75,8 +76,6 @@ _CITE_WORDS = frozenset("""
     nº
 """.split())
 _CITE_MARKS = frozenset(" \t,;:.-–—/&+°º")
-_RUN = re.compile("\x00(?:\\s*[-–—,;]?\\s*\x00)*")
-_DIGIT_BRACKET = re.compile(r"[\[【][^\[\]【】]*\d[^\[\]【】]*[\]】]")
 _SPACE_BEFORE_MARK = re.compile(r"\s+([.,;:!?»)])")
 
 _WORDS = {
@@ -91,9 +90,10 @@ _LEXICON = {lang: frozenset(words.split()) for lang, words in _WORDS.items()}
 
 
 def _is_citation(inner: str) -> bool:
-    """A bracket's content is a citation: a record's key, or numbers with
-    only the words and marks that join or name them ("7", "7 ; 8",
-    "7 et 8", "réf. 7", "3-5"). "[IV]", "[a]", "[art. 3]" are not."""
+    """A bracket's content is a citation (for the stream's spacing): a
+    record's key, or numbers with only the words and marks that join or
+    name them ("7", "7 ; 8", "7 et 8", "réf. 7", "3-5"). A link's text,
+    "[Dante](…)", is not one and is left as written."""
     s = inner.strip()
     if _KEY.fullmatch(s):
         return True
@@ -107,31 +107,33 @@ def _is_citation(inner: str) -> bool:
 
 
 def speakable(text: str) -> str:
-    """The text without its citations, spaced as prose: each citation, and a
-    run of them joined by a dash or a comma ("[3]-[5]"), goes with the space
-    before it."""
-    def one(m: re.Match) -> str:
-        return "\x00" if _is_citation(m.group(1) or m.group(2) or "") else m.group(0)
-    out = _RUN.sub("", _BRACKET.sub(one, text.replace("\x00", "")))
+    """The text without anything in square brackets, spaced as prose: each
+    bracket, and a run of them joined by a dash or a comma, goes with the
+    space before it."""
+    out = _RUN.sub("", _BRACKET.sub("\x00", text.replace("\x00", "")))
     out = _SPACE_BEFORE_MARK.sub(r"\1", out)
-    out = re.sub(r"[ \t]{2,}", " ", out).strip()
-    left = _DIGIT_BRACKET.search(out)
-    if left:
-        print(f"[speech] warn: a bracket with a number is read aloud: {left.group(0)!r} "
-              f"(app/speech.py _is_citation)", file=sys.stderr)
-    return out
+    return re.sub(r"[ \t]{2,}", " ", out).strip()
 
 
 def spaced_citations(text: str, tail: str = "") -> str:
-    """Adjacent citations with a space between them ("[3][4]" → "[3] [4]"),
-    and a citation followed by a parenthesis ("[3](" → "[3] ("), so a
-    client's markdown cleaning does not read them as a link and keep the
-    number alone.
-    `tail`: what came before `text` in a stream, so a pair split across two
-    chunks is spaced too."""
-    if text[:1] in "[(" and text and re.search(r"\d\]$", tail):
-        text = " " + text
-    return re.sub(r"(?<=\d\])(?=\[\d|\()", " ", text)
+    """A space after a citation followed by a bracket or a parenthesis
+    ("[3][4]" → "[3] [4]", "[réf. 3](" → "[réf. 3] ("), so a client's
+    markdown cleaning does not read the pair as a link and keep the bare
+    number. `tail`: what came before `text` in a stream (TAIL characters),
+    so a citation split across two chunks is spaced too."""
+    whole = tail + text
+    out, last = [], 0
+    for m in _CITE_THEN.finditer(whole):
+        at = m.end() - len(tail)
+        if at >= 0 and _is_citation(m.group(1)):
+            out += [text[last:at], " "]
+            last = at
+    out.append(text[last:])
+    return "".join(out)
+
+
+#: the stream's tail `spaced_citations` needs: a citation's length
+TAIL = 64
 
 
 def language(text: str) -> str | None:
