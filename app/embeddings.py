@@ -1733,12 +1733,22 @@ def _by_chunk_id(chunk_ids, collection=None, *, with_text: bool = False) -> dict
 BOOK_COLUMN_NAME = "book_id"
 
 
-def books_with_vectors(native_ids, collection=None) -> set[int]:
+def books_with_vectors(native_ids, collection=None, *, strict: bool = False,
+                       batch: int = 200) -> set[int]:
     """Of these documents (their `book_id`s), the ones with at least one
     vector here — the indexed `book_id` filter, the `book_id` column alone,
     no chunk id derived. The holder pass asks this BEFORE it chunks a
     part's documents: chunking whole books in pure Python to learn that
-    nothing of them is held cost Perugia 9.5 minutes a pass (2026-10-19)."""
+    nothing of them is held cost Perugia 9.5 minutes a pass (2026-10-19).
+
+    `strict` (2026-11-07), for a caller that WRITES on a "holds nothing"
+    answer — the version reset of a document whose vectors are gone
+    (`hold.carry`, `louise dev superseded-repair`): a store that cannot
+    answer RAISES, never reads as empty. The holder pass's wrong "nothing"
+    costs a part bundled again; theirs would zero the version of a
+    document that still holds vectors, and `may_reuse` would then keep
+    them. `batch`: book ids per `book_id IN (…)` query. The answer is read
+    as Arrow, the one column, never as a dict a row."""
     books = sorted({int(b) for b in native_ids})
     if not books:
         return set()
@@ -1755,7 +1765,7 @@ def books_with_vectors(native_ids, collection=None) -> set[int]:
             part = vector_parts.view(collection, value)
             ask = groups.get(value, []) + lost      # an unplaced book may be in any part
             if ask:
-                found |= books_with_vectors(ask, part)
+                found |= books_with_vectors(ask, part, strict=strict, batch=batch)
         return found
     db = _conn(collection)
     if TABLE not in db.table_names():
@@ -1767,20 +1777,23 @@ def books_with_vectors(native_ids, collection=None) -> set[int]:
         if not part:
             return
         try:
-            rows = (tbl.search().where(f"{BOOK_COLUMN_NAME} IN ({','.join(str(b) for b in part)})",
-                                       prefilter=True)
-                    .select([BOOK_COLUMN_NAME]).limit(_RESUME_SCAN_MAX).to_list())
+            got = (tbl.search().where(f"{BOOK_COLUMN_NAME} IN ({','.join(str(b) for b in part)})",
+                                      prefilter=True)
+                   .select([BOOK_COLUMN_NAME]).limit(_RESUME_SCAN_MAX).to_arrow())
         except Exception:                       # noqa: BLE001 — a store that cannot answer holds nothing
+            if strict:
+                raise
             return
-        found = {int(r[BOOK_COLUMN_NAME]) for r in rows}
-        if len(rows) >= _RESUME_SCAN_MAX and len(part) > 1:
+        found = {int(b) for b in got.column(BOOK_COLUMN_NAME).unique().to_pylist()}
+        if got.num_rows >= _RESUME_SCAN_MAX and len(part) > 1:
             # the answer was cut: ask in halves until every book is seen
             _ask(part[:len(part) // 2])
             _ask(part[len(part) // 2:])
             return
         out.update(found)
-    for i in range(0, len(books), 200):
-        _ask(books[i:i + 200])
+    step = max(1, int(batch))
+    for i in range(0, len(books), step):
+        _ask(books[i:i + step])
     return out
 
 

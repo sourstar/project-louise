@@ -116,3 +116,81 @@ def mark_present(con, collection, codex, records: Sequence[dict], present: Itera
         if own:
             con.execute("ROLLBACK")
         raise
+
+
+# ---- NOT HELD: a document whose vectors are gone (2026-11-07) ----------------
+#
+# `embed_version` with `embed_done = 0` is what app/status.py's SUPERSEDED reads
+# as "an earlier version's vectors are still held and searched" — the grey on
+# the Library's dense bar. A writer that DELETES every vector of a document and
+# leaves it not embedded therefore writes its version back to 0, as a document
+# never embedded has: wikidata's re-creation (2026-11-03) wiped its 1.44 M bge
+# vectors and cleared the marks, kept version 2, and the card painted 458,636
+# documents of plain waiting work grey (München, 2026-11-07).
+#
+# ALWAYS AFTER THE DELETE IS DURABLE, never before: 0 is what `may_reuse` reads
+# as "never completed — keep its slices", so a version zeroed while an older
+# EMBED_VERSION's rows still exist would let the next embedding keep them. A
+# stop between the delete and the reset leaves the version: the grey then
+# overstates by those documents until they are embedded, which is harmless, and
+# `louise dev superseded-repair` finds them.
+
+#: uids per UPDATE of `mark_unheld`; rowids per window of `unheld_manifest`
+UNHELD_UIDS = 500
+UNHELD_WINDOW = 50_000
+
+_NOT_HELD = "embed_done=0 AND COALESCE(embed_version,0)<>0"
+
+
+def mark_unheld(con, uids: Iterable[str], *, window: int = UNHELD_UIDS) -> int:
+    """`embed_version = 0` for each of `uids` that is not embedded
+    (`embed_done = 0`: a declined -1 and a document marked meanwhile are
+    left alone) — documents the CALLER has proven hold no vector here, after
+    the delete committed (see above). One BEGIN IMMEDIATE per `window` of
+    uids, by the primary key; `con` in autocommit (db.connect's). Returns
+    how many rows changed; a second call changes none."""
+    ids = sorted({str(u) for u in uids})
+    n = 0
+    for i in range(0, len(ids), max(1, window)):
+        part = ids[i:i + max(1, window)]
+        con.execute("BEGIN IMMEDIATE")
+        try:
+            n += con.execute(f"UPDATE documents SET embed_version=0 WHERE uid IN "
+                             f"({','.join('?' * len(part))}) AND {_NOT_HELD}", part).rowcount
+            con.execute("COMMIT")
+        except BaseException:
+            con.execute("ROLLBACK")
+            raise
+    return n
+
+
+#: the window statement of `unheld_manifest`: the rowid range of the primary
+#: key, nothing else (tests/test_superseded_repair.py checks its plan)
+UNHELD_WINDOW_SQL = (f"UPDATE documents SET embed_version=0 WHERE rowid>? AND rowid<=? "
+                     f"AND {_NOT_HELD}")
+
+
+def unheld_manifest(con, *, window: int = UNHELD_WINDOW,
+                    log: Callable[[str], None] | None = None) -> int:
+    """Every document of this manifest that is not embedded, version 0 — for
+    a manifest whose collection is PROVEN to hold no vector (`dev carry
+    --unembedded`, A1h: `unembedded_why_not` found no row and no mark). In
+    rowid windows, one BEGIN IMMEDIATE each, so a 76 M-row manifest
+    (wikidata) is ~1,500 short writes and the worker's own interleave, as
+    `embeddings.mark_for_reembed`. Idempotent and resumable without a
+    cursor: what an interrupted run left is found by the next, and a second
+    run finds nothing. Returns how many rows changed."""
+    top = con.execute("SELECT MAX(rowid) FROM documents").fetchone()[0] or 0
+    step = max(1, window)
+    n = 0
+    for start in range(0, top, step):
+        con.execute("BEGIN IMMEDIATE")
+        try:
+            n += con.execute(UNHELD_WINDOW_SQL, (start, start + step)).rowcount
+            con.execute("COMMIT")
+        except BaseException:
+            con.execute("ROLLBACK")
+            raise
+        if log and (start // step) % 200 == 199:
+            log(f"{start + step:,} of {top:,} rowids, {n:,} version(s) cleared")
+    return n

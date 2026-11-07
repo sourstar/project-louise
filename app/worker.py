@@ -4085,8 +4085,12 @@ def _execute_step(con, collection, stage, row) -> bool:
                              f"{stage} deferred — not indexable, but its index entries could "
                              f"not be withdrawn yet ({type(w).__name__}: {w})", row["uid"])
                 return False
+            # its vectors went with the withdraw: a document not embedded holds
+            # no earlier version, so its version goes to 0 (app/embed_marks.py,
+            # "NOT HELD"); a mark the stage never cleared is left as it is
             con.execute(
-                "UPDATE documents SET error=?, updated_at=? WHERE uid=?",
+                "UPDATE documents SET error=?, updated_at=?, embed_version="
+                "CASE WHEN embed_done=0 THEN 0 ELSE embed_version END WHERE uid=?",
                 (str(e)[:500], int(time.time()), row["uid"]))
             db.log_event(con, "info", stage,
                          f"not indexable: {e}", row["uid"])

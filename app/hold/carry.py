@@ -30,6 +30,12 @@ the reset committed first (the safe direction: a document marked not done
 whose vectors still exist is re-embedded, never lost), the rows deleted under
 the vector write lock, the cursor committed last. Never one transaction over
 the corpus (db.py's apply_reset says what that did on pubmed).
+
+EVERY PATH HERE THAT DELETES A DOCUMENT'S LAST ROW then sets its
+`embed_version` to 0, AFTER the delete (app/embed_marks.py, "NOT HELD";
+2026-11-07): a version with the mark cleared is what the Library paints grey
+as "an earlier version, searched until re-embedded" (app/status.py
+SUPERSEDED). `--unembedded` does it for the whole target manifest.
 """
 from __future__ import annotations
 
@@ -342,6 +348,18 @@ def _transfer(src: Path, dst: Path, *, copy: bool) -> str:
         return "copied"
     shutil.rmtree(src) if src.is_dir() else src.unlink()
     return "moved"
+
+
+def _clear_versions(manifest: Path, *, log: Callable[[str], None]) -> int:
+    """`embed_marks.unheld_manifest` on the manifest at `manifest`: every
+    document not embedded, version 0, in short rowid windows."""
+    from app import db, embed_marks
+    con = sqlite3.connect(manifest, timeout=60, isolation_level=None)
+    try:
+        db.wal(con)                                     # invariant 6: a manifest is WAL
+        return embed_marks.unheld_manifest(con, log=log)
+    finally:
+        con.close()
 
 
 def _checkpoint(manifest: Path) -> None:
@@ -659,6 +677,18 @@ def carry(root, from_ref: str, to_ref: str, *, copy: bool = False, apply: bool =
             f"carry: {tp['manifest']} holds {_documents(tp['manifest'])} document(s) and "
             f"{from_name}'s manifest {src_docs}: the copy is not the source's. Nothing is "
             f"marked done; pause both collections and run the carry again")
+    if unembedded:
+        # A1h: the source holds NO vector (`unembedded_why_not` proved it), so
+        # no document of the target holds an earlier version's vectors,
+        # whatever `embed_version` its marks kept. Kept, it painted every
+        # document the source had embedded once and then wiped grey on the
+        # card — "searched until re-embedded" — for plain waiting work:
+        # wikidata's 458,636 after its re-creation (München, 2026-11-07).
+        # The declined (-1) keep theirs. Repeatable: a second run finds none.
+        plan["versions_cleared"] = _clear_versions(
+            tp["manifest"], log=lambda m: log(f"[carry] {to_name}: {m}"))
+        log(f"[carry] {to_name}: {plan['versions_cleared']} document(s) not embedded set to "
+            f"embed_version 0 — {from_name} held no vector, so none holds an earlier version (A1h)")
 
     if shares and not copy:
         for k in SHARED_STATE:
@@ -737,7 +767,7 @@ def reconcile(root, from_ref: str, to_ref: str, *, window: int = WINDOW,
     documents at a time, each in keep_producer's three repeatable steps;
     resumable from its cursor."""
     from . import collection as col, records as rec
-    from app import db, embeddings
+    from app import db, embed_marks, embeddings
 
     root = Path(root)
     from_name, src = col.resolve(root, from_ref)
@@ -794,6 +824,10 @@ def reconcile(root, from_ref: str, to_ref: str, *, window: int = WINDOW,
                 gone = [c for c in embeddings.chunk_ids_of_books(books, collection=coll)
                         if c.rsplit(":", 2)[0] in {r["uid"] for r in stale}]
                 embeddings.delete_chunks(gone, collection=coll, lock_con=con)
+                # step 2b: EVERY row of theirs went (read, then deleted, under
+                # the lock this pass holds), so none holds an earlier version:
+                # version 0, AFTER the delete (embed_marks, "NOT HELD")
+                embed_marks.mark_unheld(con, [r["uid"] for r in stale])
             # step 3: the cursor
             state = {"rowid": last, "kept": state["kept"] + len(same),
                      "reset": state["reset"] + pending["reset"],
@@ -1016,7 +1050,7 @@ def keep_producer(root, to_ref: str, producer: str, *, window: int = WINDOW,
     """Keep only the vectors `producer` produced (G2). Resumable from its
     cursor in the manifest's `control` table."""
     from . import collection as col, records as rec
-    from app import db, embeddings
+    from app import db, embed_marks, embeddings
 
     root = Path(root)
     name, codex = col.resolve(root, to_ref)
@@ -1087,13 +1121,22 @@ def keep_producer(root, to_ref: str, producer: str, *, window: int = WINDOW,
                     part = drop[i:i + 500]
                     con.execute(f"DELETE FROM chunk_verification WHERE chunk_id IN "
                                 f"({','.join('?' * len(part))})", part)
+                # the documents that keep NO row once these go: every row of a
+                # dropped document was read above (`present_short`), so it is
+                # the ones none of whose rows is the producer's. Recorded with
+                # the window, so a run resumed after step 2 still resets them
+                still = {c.rsplit(":", 2)[0] for c in present_short & kept}
                 pending = {"rowid": last, "dropped": len(drop),
-                           "documents_reset": len(drop_uids)}
+                           "documents_reset": len(drop_uids),
+                           "unheld": sorted(set(drop_uids) - still)}
                 db.set_control(con, key, json.dumps({**state, "pending": pending},
                                                      sort_keys=True))
                 con.execute("COMMIT")
             # step 2: the rows, under the vector write lock
             embeddings.delete_chunks(drop, collection=coll, lock_con=con)
+            # step 2b: a document left with no row holds no earlier version:
+            # version 0, AFTER the delete (embed_marks, "NOT HELD")
+            embed_marks.mark_unheld(con, pending.get("unheld") or [])
             # step 3: the cursor
             state = {"rowid": last, "kept": state["kept"] + len(present & kept),
                      "dropped": state["dropped"] + pending["dropped"],
@@ -1190,7 +1233,7 @@ def keep_producer_scan(root, to_ref: str, producer: str, *, run: int = SORT_RUN,
     what is left."""
     import shutil
     from . import collection as col, records as rec
-    from app import db, embeddings
+    from app import db, embed_marks, embeddings
 
     root = Path(root)
     name, codex = col.resolve(root, to_ref)
@@ -1247,6 +1290,7 @@ def keep_producer_scan(root, to_ref: str, producer: str, *, run: int = SORT_RUN,
             (partial if n else whole).append(b)
         whole.sort()
         partial.sort()
+        whole_uids = sorted({c.rsplit(":", 2)[0] for b in whole for c in drop_ids[b]})
         dropped = sum(len(v) for v in drop_ids.values())
         log(f"[carry] {name}: {seen} rows read, {kept} kept, {dropped} to drop — "
             f"{len(whole)} document(s) whole, {len(partial)} in part")
@@ -1292,12 +1336,20 @@ def keep_producer_scan(root, to_ref: str, producer: str, *, run: int = SORT_RUN,
                 part = ids_part[i:i + batch]
                 quoted = ",".join("'" + c.replace("'", "''") + "'" for c in part)
                 tbl.delete(f"id IN ({quoted})")
+        # step 3: a document deleted WHOLE, by book_id, holds no row and so no
+        # earlier version: version 0, AFTER the deletes (embed_marks, "NOT
+        # HELD"); one in part keeps its producer's rows and its version. A stop
+        # before this leaves the versions (the scan run again drops nothing
+        # more): `louise dev superseded-repair` finds them
+        unheld = embed_marks.mark_unheld(con, whole_uids)
     finally:
         con.close()
         shutil.rmtree(workdir, ignore_errors=True)
     rows_now = embeddings.stats(coll)["vectors"]
     out = {"collection": name, "producer": producer, "kept": kept, "dropped": dropped,
            "documents_reset": len(uids), "vectors": rows_now, "verified": rows_now == kept}
+    if unheld:
+        log(f"[carry] {name}: {unheld} document(s) left with no row set to embed_version 0")
     log(f"[carry] {name}: kept {kept} vector(s) of {producer}, dropped {dropped}, "
         f"{len(uids)} document(s) to embed again; the table holds {rows_now}")
     if not out["verified"]:
@@ -1428,10 +1480,11 @@ def recut(root, to_ref: str, *, budget: int, apply: bool = False, window: int = 
 def _drop_and_reset(con, coll, ids: list[str], *, window: int,
                     log: Callable[[str], None]) -> int:
     """`ids`' rows dropped and their documents marked to embed again, a window
-    of rows at a time, each in two steps that can be repeated: the reset
+    of rows at a time, each in three steps that can be repeated: the reset
     committed FIRST (a document marked not done whose rows still exist is
     embedded again, never lost), with a bundle's provenance of the rows; then
-    the rows, under the vector write lock. Returns the documents reset."""
+    the rows, under the vector write lock; then the documents left with no
+    row at all, version 0 (`_unheld_after`). Returns the documents reset."""
     from app import embeddings
     ids = sorted(ids)
     reset = 0
@@ -1446,9 +1499,38 @@ def _drop_and_reset(con, coll, ids: list[str], *, window: int,
         con.execute("COMMIT")
         reset += len(uids)
         embeddings.delete_chunks(part_ids, collection=coll, lock_con=con)
+        _unheld_after(con, coll, uids, log)
         if (i // window) % 200 == 0:
             log(f"{i + len(part_ids)}/{len(ids)} row(s)")
     return reset
+
+
+def _unheld_after(con, coll, uids: list[str], log: Callable[[str], None]) -> int:
+    """Of `uids`, whose rows a delete just took in part or whole, those of
+    which the table now holds NO row: version 0 (embed_marks, "NOT HELD").
+    A row list names chunks, not documents, so the table is asked once, after
+    the delete (`books_with_vectors`, strict: `book_id IN (…)`, the one
+    column) — a document whose rest lies in the next window is reset by that
+    window's ask. An ask that cannot be read keeps every version and says so:
+    the grey then overstates by those, and `louise dev superseded-repair`
+    resets them. Returns how many were reset."""
+    from app import embed_marks, embeddings
+    by_book: dict[int, list[str]] = {}
+    for u in uids:
+        try:
+            by_book.setdefault(int(u.rsplit(":", 1)[1]), []).append(u)
+        except (IndexError, ValueError):
+            continue                       # no numeric book id: never a row of the table
+    if not by_book:
+        return 0
+    try:
+        held = embeddings.books_with_vectors(by_book, coll, strict=True, batch=len(by_book))
+    except Exception as e:                 # noqa: BLE001 — not proven gone: the versions stay
+        log(f"{len(by_book)} document(s)' rows could not be read after the delete "
+            f"({type(e).__name__}: {e}); their versions are kept — `louise dev "
+            f"superseded-repair` resets them")
+        return 0
+    return embed_marks.mark_unheld(con, [u for b, us in by_book.items() if b not in held for u in us])
 
 
 def drop_rows(root, ref: str, ids: list[str], *, window: int = WINDOW,

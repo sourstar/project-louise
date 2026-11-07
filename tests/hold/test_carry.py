@@ -1288,3 +1288,171 @@ def test_unembedded_resumes_a_move_stopped_between_the_index_and_the_manifest(pa
     out = carry.carry(root, "old", "bge", unembedded=True, apply=True, log=quiet)
     assert out["done"] == {"index": "present", "manifest": "moved"}
     assert not (root / "old" / "state" / "manifest.sqlite").exists()
+
+
+# ---- NOT HELD: a document left with no row holds no earlier version ----------
+#
+# München, 2026-11-07: wikidata's 458,636 "superseded" documents (grey on the
+# card: "an earlier version, searched until re-embedded") held no vector — the
+# re-creation wiped the table and cleared the marks, kept embed_version 2, and
+# `carry --unembedded` carried the manifest. Every carry path that deletes a
+# document's last row now zeroes its version, after the delete
+# (app/embed_marks.py, "NOT HELD"); status.SUPERSEDED reads what they leave.
+
+E = 7                                                  # an EMBED_VERSION that is not 0
+
+
+def _versions(coll) -> dict[str, int]:
+    con = db.connect(coll)
+    try:
+        return {r[0]: int(r[1] or 0) for r in con.execute("SELECT uid, embed_version FROM documents")}
+    finally:
+        con.close()
+
+
+def _superseded(coll) -> int:
+    from app import status
+    con = db.connect(coll)
+    try:
+        return status.bounded(con, stored=None)["embed"].superseded
+    finally:
+        con.close()
+
+
+def _embedded_at(coll, version=E) -> None:
+    """Every document parsed, indexed, chunked and embedded at `version`."""
+    con = db.connect(coll)
+    try:
+        con.execute("UPDATE documents SET in_scope=1, rdf_done=1, fts_done=1, chunks=3, error=NULL, "
+                    "retries=0, embed_done=1, embed_version=?", (version,))
+    finally:
+        con.close()
+
+
+def test_a_recreation_wipe_carried_unembedded_counts_nothing_superseded(pair):
+    """The wikidata case whole: embedded, the vectors wiped and the marks
+    cleared with the versions kept, then `carry --unembedded`: the source reads
+    superseded (the defect), the target reads 0, its declined keep theirs."""
+    import shutil
+    root, old, _new = pair
+    _bge_space(root)
+    uids, _ids = _vectors(root, old)
+    src = _local(root, "old")
+    _embedded_at(src)
+    # the wipe (operator, 2026-11-03: "Wipe wikidata vectors … rule 1")
+    embeddings._dbs.pop(str(src.lance_dir), None)
+    shutil.rmtree(src.lance_dir)
+    con = db.connect(src)
+    con.execute("UPDATE documents SET embed_done=0")
+    con.execute("UPDATE documents SET embed_done=-1 WHERE uid=?", (uids[0],))   # declined, version kept
+    con.close()
+    assert _superseded(src) == len(uids) - 1, "the defect: plain waiting work counted as held"
+
+    out = carry.carry(root, "old", "bge", unembedded=True, apply=True, log=quiet)
+    assert out["versions_cleared"] == len(uids) - 1
+    tgt = _local(root, "bge")
+    assert _superseded(tgt) == 0
+    assert _versions(tgt) == {uids[0]: E, **{u: 0 for u in uids[1:]}}, "the declined keep theirs"
+    again = carry.carry(root, "old", "bge", unembedded=True, apply=True, log=quiet)
+    assert again["versions_cleared"] == 0, "a second run finds nothing"
+
+
+def test_keep_zeroes_the_version_of_a_document_left_with_no_row(pair):
+    """doc 0 keeps every row, doc 1 keeps one (the archive's verified), doc 2
+    keeps none: only doc 2 holds no earlier version afterwards."""
+    root, uids, ids = _carried(pair)
+    coll, _kept = _provenance(root, uids, ids)
+    _embedded_at(coll)
+    carry.keep_producer(root, "new", ARCHIVE, window=1, log=quiet)
+    assert _versions(coll) == {uids[0]: E, uids[1]: E, uids[2]: 0}
+    assert _superseded(coll) == 1, "doc 1 still holds a row: an earlier version, searched"
+
+
+def test_keep_by_scan_zeroes_the_version_of_a_document_dropped_whole(pair):
+    root, uids, ids = _carried(pair)
+    coll, _kept = _provenance(root, uids, ids)
+    _embedded_at(coll)
+    carry.keep_producer_scan(root, "new", ARCHIVE, log=quiet)
+    assert _versions(coll) == {uids[0]: E, uids[1]: E, uids[2]: 0}
+
+
+def test_keep_zeroes_a_version_only_after_the_rows_are_gone_and_resumes_it(pair, monkeypatch):
+    """invariant 2's order: marked first, rows deleted, version zeroed last. A
+    stop at the delete leaves the version (the harmless overstatement); the
+    resumed window zeroes it from what it recorded."""
+    root, uids, ids = _carried(pair)
+    coll, _kept = _provenance(root, uids, ids)
+    _embedded_at(coll)
+    real, calls = embeddings.delete_chunks, []
+
+    def dies_on_the_third(chunk_ids, **kw):
+        calls.append(list(chunk_ids))
+        if len(calls) == 3:                            # doc 2's window, the one that goes whole
+            raise Stopped
+        return real(chunk_ids, **kw)
+    monkeypatch.setattr(embeddings, "delete_chunks", dies_on_the_third)
+    with pytest.raises(Stopped):
+        carry.keep_producer(root, "new", ARCHIVE, window=1, log=quiet)
+    con = db.connect(coll)
+    try:
+        assert con.execute("SELECT embed_done, embed_version FROM documents WHERE uid=?",
+                           (uids[2],)).fetchone()[:] == (0, E), "marked, its rows still held: version kept"
+    finally:
+        con.close()
+    monkeypatch.setattr(embeddings, "delete_chunks", real)
+    carry.keep_producer(root, "new", ARCHIVE, window=1, log=quiet)
+    assert _versions(coll)[uids[2]] == 0
+
+
+def test_reconcile_zeroes_the_version_of_a_document_whose_vectors_go(pair, corpus_dir):
+    root, _old, _re, uids, _ids = _rebuilt_pair(pair)
+    carry.carry(root, "old", "re", rebuilt=True, copy=True, apply=True, log=quiet)
+    refused = uids[1]
+    coll = _local(root, "re")
+    _embedded_at(coll)
+    con = db.connect(coll)
+    try:      # what the scan writes for an UnindexableDocument: refused at the rebuild
+        con.execute("UPDATE documents SET error=? WHERE uid=?", ("UnindexableDocument: broken", refused))
+    finally:
+        con.close()
+    _build_and_freeze(root, "re", corpus_dir)
+    carry.reconcile(root, "old", "re", log=quiet)
+    got = _versions(coll)
+    assert got[refused] == 0 and all(got[u] == E for u in uids if u != refused), got
+
+
+def test_drop_rows_zeroes_the_version_of_a_document_left_with_no_row(pair, monkeypatch):
+    """A row list names chunks: doc 0 loses all three rows, one window each, and
+    is zeroed by the window that took its last; doc 1 loses one of three and
+    keeps its version — it still holds rows."""
+    root, uids, ids = _carried(pair)
+    coll, _kept = _provenance(root, uids, ids)
+    _embedded_at(coll)
+    real, seen = embeddings.books_with_vectors, []
+
+    def asked(books, collection=None, **kw):
+        seen.append(sorted(books))
+        assert kw.get("strict") is True, "a write follows: an unreadable store must raise"
+        return real(books, collection, **kw)
+    monkeypatch.setattr(embeddings, "books_with_vectors", asked)
+    out = carry.drop_rows(root, "new", [ids[0], ids[1], ids[2], ids[3]], window=1, log=quiet)
+    assert out["verified"] and out["dropped"] == 4
+    assert _versions(coll) == {uids[0]: 0, uids[1]: E, uids[2]: E}
+    assert len(seen) == 4, "the table asked once a window, after its delete"
+
+
+def test_drop_rows_keeps_the_versions_when_the_table_cannot_say(pair, monkeypatch):
+    """Not proven gone, never zeroed: the drop stands, the versions stay (the
+    overstatement `dev superseded-repair` repairs), and the log says so."""
+    root, uids, ids = _carried(pair)
+    coll, _kept = _provenance(root, uids, ids)
+    _embedded_at(coll)
+
+    def broken(*_a, **_k):
+        raise OSError("the store cannot be read")
+    monkeypatch.setattr(embeddings, "books_with_vectors", broken)
+    said: list[str] = []
+    out = carry.drop_rows(root, "new", ids[:3], log=said.append)
+    assert out["verified"] and out["dropped"] == 3
+    assert _versions(coll)[uids[0]] == E
+    assert any("superseded-repair" in m for m in said), said

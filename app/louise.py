@@ -1671,6 +1671,38 @@ def cmd_dev_drop_rows(a) -> int:
     return 0
 
 
+def cmd_dev_superseded_repair(a) -> int:
+    """`louise dev superseded-repair <collection> [--apply]` (07 §7.3;
+    app/hold/superseded_repair.py): the documents counted as an earlier
+    version still held (the Library's grey) that hold no vector, and with
+    --apply their embed_version set to 0, in short windows, resumable from
+    its cursor. Beside a running worker — no lock is taken and no stop is
+    needed (the module says why); SIGINT/SIGTERM end it after the window in
+    flight, exit 130. Read-only without --apply."""
+    import signal
+    import threading
+    from app.hold import records as rec, superseded_repair
+    name, codex = col.resolve(a.root, a.collection)
+    coll = rec.local_collection(a.root, name, codex)
+    stop = threading.Event()
+    before = {}
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        try:
+            before[sig] = signal.signal(sig, lambda *_a: stop.set())
+        except (ValueError, OSError):    # not the main thread
+            pass
+    try:
+        out = superseded_repair.repair(coll, apply=a.apply, stop=stop.is_set,
+                                       log=lambda m: print(f"[superseded-repair] {name}: {m}",
+                                                           file=sys.stderr, flush=True))
+    finally:
+        for sig, handler in before.items():
+            signal.signal(sig, handler)
+    print(superseded_repair.summary(out), file=sys.stderr)
+    _print(out)
+    return 130 if out["interrupted"] else 0
+
+
 def cmd_dev_wikidata_regroup(a) -> int:
     """`louise dev wikidata-regroup <collection> [--row-group N] [--workers N]`:
     the collection's wikidata pack rewritten file by file with small row
@@ -1817,8 +1849,10 @@ def cmd_dev_unindexable(a) -> int:
             return 0
         out = unindexable.withdraw(con, coll, a.uid)
         con.execute("BEGIN IMMEDIATE")
-        con.execute("UPDATE documents SET error=?, embed_done=0, updated_at=? WHERE uid=?",
-                    (reason, int(time.time()), a.uid))
+        # its vectors are gone (withdraw, just above): no earlier version is
+        # held, so the version goes with the mark (app/embed_marks.py, "NOT HELD")
+        con.execute("UPDATE documents SET error=?, embed_done=0, embed_version=0, updated_at=? "
+                    "WHERE uid=?", (reason, int(time.time()), a.uid))
         con.execute("COMMIT")
         db.log_event(con, "info", "unindexable", f"not indexable: {reason}", a.uid)
         _print({**out, "collection": name, "error": reason})
@@ -5890,6 +5924,14 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--ids", required=True, metavar="FILE", help="one chunk id a line")
     p.add_argument("--yes", action="store_true")
     p.set_defaults(fn=cmd_dev_drop_rows)
+    p = dverbs.add_parser("superseded-repair", help="the documents counted as an earlier version "
+                                                    "still held that hold no vector, and with --apply "
+                                                    "their embed_version set to 0; resumable, beside "
+                                                    "a running worker; read-only without --apply")
+    root_arg(p)
+    p.add_argument("collection")
+    p.add_argument("--apply", action="store_true", help="write the resets (short windows, a cursor)")
+    p.set_defaults(fn=cmd_dev_superseded_repair)
     p = dverbs.add_parser("wikidata-regroup", help="a wikidata collection's pack rewritten with small row "
                                                    "groups, file by file, lines unchanged (resumable)")
     root_arg(p)
