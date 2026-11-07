@@ -30,10 +30,10 @@ checked against the one before it, and each says what it found.
 | 3 | calibrate | The card against the CPU twin, for each role (document; also query when the space has a query encoder). Uses the space's own ctx, cut, instruction, dtype, and set or pairs. The CPU lane is kept in the node's store. | An endpoint does not answer (exit 3). |
 | 4 | tolerance | Takes the measured tolerance. A recipe that states none takes it. | The recipe states another tolerance: a tolerance is measured, never typed. |
 | 5 | make | Does one of: create, copy a held space, reuse a held reference, deposit, annotations, peer fetch. | The plugin or recipe is refused (07 §7.3). |
-| 6 | carry | Re-creation only: takes from the predecessor what is provably identical (RULE 1). | — |
+| 6 | carry | Re-creation only: takes from the predecessor what is provably identical (RULE 1). Its parts are seeded, each checked against its root. A sample of chunks is re-encoded by the new run and held to the stored vectors. Then the manifest, text index and vectors are copied and proven by digest. | The sample falls below the space's tolerance (exit 1). The copy is not its source's. There is no room for it. |
 | 7 | cpu-reference | Writes the collection's copy of the CPU reference from the store. Nothing is computed twice. | The twin is not reproducible. |
 | 8 | gate | `hold embedder check`, for each role. | The gate fails (exit 1). |
-| 9 | swap | Re-creation only: forgets the predecessor and takes its name. | — |
+| 9 | swap | Re-creation only: prints the predecessor's `forget` and its size, for the operator. After it, takes the predecessor's name and its collection file. It deletes nothing. | The predecessor is still held (exit 2, until the operator forgets it). |
 
 The workflow is resumable. Its progress is kept in
 `<LOUISE_ROOT>/state/new/<name>.json`, from before the collection exists. Run it
@@ -53,7 +53,7 @@ The operator gives the first column; the workflow finds everything else.
 | **C. A pair space** | The calibration set is query–document pairs | as A, plus the pair file | as B | pubmed (MedCPT) |
 | **D. The same document side as a held collection** | A re-creation whose document side is unchanged | as A, plus the held collection | 1, 2, 5 (the member reused), 7, 8 | wikidata, parser 2 |
 | **E. A copy of a held space** | A second collection in an existing space | plugin, recipe, the space's collection, name | 1, 2, 5 (copied), 7, 8 | a second collection in wikipedia's space |
-| **F. A re-creation** | A collection replaced, nothing official published from it (RULE 1) | as A, D or E, plus the predecessor | that case, then 6, 9 | wikipedia-v8 → wikipedia |
+| **F. A re-creation** | A collection replaced, nothing official published from it (RULE 1). Built on A: the same records and space, another engine | plugin, recipe, the predecessor's name (`--re-create`) | 1–9 (A's, then 6 and 9); on D or E, theirs, then 6 and 9 | normattiva on its archived engine; wikipedia-v8 → wikipedia |
 | **G. A private collection** | LocalAGI or an OpenAI vector store; not shared | name only | as E (the served model's held space); the first on an encoder is A | `notes` |
 | **H. Annotations** | Claims about another collection; no encoder | claims file, name | 1, 2, 5 | gutenberg-book-editions |
 | **I. A peer's collection** | A copy fetched from a peer | collection id, name | 1, 5 (fetched), 7, 8, on this node's encoder | Perugia's gutenberg |
@@ -66,6 +66,11 @@ The operator gives the first column; the workflow finds everything else.
 louise hold collection new wikidata --recipe recipes/wikidata-nemo.json --name wikidata \
     --encoder http://node:30286 --api vega --embed-model vega-nemotron-3-embed-1b \
     --cpu-model vega-nemotron-3-embed-1b-cpu
+
+# F — a re-creation: the collection held under --name, on another engine;
+# its endpoint, model and platform image are the predecessor's
+louise hold collection new normattiva --recipe normattiva-recreate.toml --name normattiva \
+    --re-create --cpu-model vega-dar-legal-it-cpu
 
 # G — a private collection, from LocalAGI or any OpenAI SDK: only a name
 curl -X POST http://node/api/collections -H "Authorization: Bearer $(cat deposit.token)" \
@@ -111,7 +116,8 @@ The wizard comes later, on the same declarations.
 |---|---|
 | A | Built: `new` (#331, #333, #334; on the framework in phase 1). Run on the node: wikidata, 2026-11-06, exit 0, the gate PASSED (tolerance 0.999995, exact, CPU worst 0.999996). |
 | B | Refused at resolve, before anything is asked (phase 1); built in phase 3. |
-| C–J | Planned, phases below. |
+| F | Built: `new --re-create` (2026-11-07, pulled forward from phase 3 for normattiva; app/hold/recreate.py, tests/hold/test_collection_recreate.py). On A's steps: the predecessor's records and space, another engine. A recipe that moves the records (a parser) is refused at check: its carry is `dev carry --rebuilt`'s, by hand, until F on D. Not yet run on the node: the runbook below. |
+| C–E, G–J | Planned, phases below. |
 
 **The plan.** Each phase ships with tests and is measured on the node before
 the next one starts.
@@ -135,7 +141,8 @@ the next one starts.
 3. **B, C, F, H.**
    - The query role measured (calibrate measures the document side only
      today), and pairs.
-   - Re-creation with the carry and the swap.
+   - Re-creation with the carry and the swap: built on A (2026-11-07, for
+     normattiva). On D and E with them.
    - Annotations.
 4. **J; the hand route closed.**
    - Lineage.
@@ -144,6 +151,78 @@ the next one starts.
    - The guard test's allow-list is empty.
 5. **The wizard.** The command line (`new --wizard`) first, then the Library
    dialog.
+
+## Runbook: normattiva on its archived engine (case F)
+
+**The decision** (operator, 2026-11-07): "B: re-create normattiva with a
+Codex naming the archived current engine, and carry its vectors over
+unchanged". Nothing official was published from it, so this is a
+re-creation, not a daughter (RULE 1).
+
+- Its Codex names the backend `louise-dar-legal-it` (`sha256:173c04c1…`).
+  Its files are lost, so 09 §9.3 (an engine kept for the Codex's life)
+  cannot hold.
+- The engine serving it now is archived and verified:
+  `vega-dar-legal-it` → `louise-python-20261021a`, wrapper
+  `vega-louise-pytorch` (bare `sha256:dfb5e81a…`, with the wrapper
+  `sha256:4724a9b9…`).
+- By hand, it reproduced 200 random stored vectors: 196 byte-identical, 4
+  within cos 0.99999, worst 0.9999999995.
+
+**1. The recipe.** Take the one normattiva was created from
+(`normattiva-recipe.toml`, as `normattiva-1861` used it), and change two
+things:
+- replace `[space.encoder.engine]` (and its `env`) with the `engine` that
+  `louise hold embedder run --encoder http://192.168.178.10:30286 --api vega
+  --model vega-dar-legal-it` prints;
+- delete `tolerance`, which is measured.
+
+Keep the rest. The check refuses, before anything is measured, a recipe
+whose records or space are not normattiva's. It names the field, for example
+a plugin default that has moved since 2026-10-14; pin that field in the
+recipe (`[parser]`, …).
+
+**2. The twin.** `vega-dar-legal-it-cpu` (the one
+`tools/cross_device_check.py` names) must state a CPU run of the same
+weights. Resolve refuses otherwise.
+
+**3. Pause, then run.** The carry needs normattiva's write lock:
+
+```bash
+louise node pause normattiva
+louise hold collection new normattiva --recipe /config/recipes/normattiva-recreate.toml \
+    --name normattiva --re-create --cpu-model vega-dar-legal-it-cpu
+```
+
+The endpoint, the model and the platform image are normattiva's own. What
+to expect:
+- **make**: `normattiva.next`, paused until the swap.
+- **carry**: the 2026-09 parts seeded as hard links. Then 200 chunks
+  (`--sample`, the default) are re-encoded and held to the stored vectors at
+  the measured tolerance, before any copy. Then **341,959 documents and
+  8,178,785 vectors** are copied (16 GB, as a reflink where the filesystem
+  has one; the room is checked first). The vector table and the text index
+  are proven byte for byte by digest, which reads both tables once. All of
+  it is recorded in `<LOUISE_ROOT>/state/new/normattiva.json`.
+- **cpu-reference**, then **gate**.
+- **swap**: stops with exit 2.
+
+**4. The forget, with the operator's yes.** The swap prints
+`louise hold collection forget normattiva --yes` and its size:
+- what goes: the vectors, index and manifest (~16 GB freed);
+- what stays: the parts, which `normattiva.next` hard-linked, and
+  `/corpora/normattiva`, which it reads.
+
+It also prints what still keeps `normattiva.next` in quarantine, typically
+`louise hold check normattiva.next --checks roots,chunks`; run that first.
+The forget is the operator's yes, with that size, in the session that runs
+it. The workflow deletes nothing.
+
+**5. Run step 3's command again.** `normattiva.next` becomes `normattiva`,
+with normattiva's collection file (its codex, and `embed = "off"`, excepted).
+Then:
+- `louise node resume normattiva`;
+- `louise hold config apply normattiva --set embed=<the mode it printed>`.
 
 ## What the review found (2026-11-06)
 

@@ -50,6 +50,7 @@ step 3). Until then a new space is given whole, by `--space` or
 from __future__ import annotations
 
 import argparse
+import contextlib
 import dataclasses
 import json
 import os
@@ -600,16 +601,38 @@ def cmd_collection_new(a) -> int:
     refusal, 3 when an endpoint cannot be reached. Run again after a stop: a
     step already done is checked, not redone (the calibration is reused when
     the card states the run it was measured on), and the CPU lane resumes
-    from the store's journal."""
+    from the store's journal.
+
+    `--re-create` is case F, A RE-CREATION (RULE 1: a collection nothing
+    official was published from is re-created, never continued by a
+    daughter): the collection held under `--name` is the PREDECESSOR. The
+    recipe must make its space (`space_id`) and its records; the engine, and
+    what its run computes, may change (normattiva, 2026-11-07: its engine's
+    files were lost). Its encoder endpoint, model and platform image are the
+    predecessor's unless given. Case A's steps run under `<name>.next`,
+    paused until the swap, and two more (app/hold/recreate.py):
+      carry     the parts seeded from the predecessor's snapshot; `--sample`
+                chunks re-encoded by the new run and held to the stored
+                vectors at the space's tolerance BEFORE anything is copied
+                (exit 1 below it); then the manifest, text index, vector
+                table and bundles copied (hold/carry.py, the source left
+                whole), proven byte for byte by digest, and the counts.
+                Both collections' write locks: `node pause` them first.
+      swap      after the gate: the predecessor is forgotten by the operator
+                — this step prints the exact `forget` and its size and exits
+                2, deleting nothing; run again after it, and the new
+                collection takes the name and the predecessor's file (its
+                codex, and embed "off", excepted)."""
     import argparse
     import copy
     import decimal
 
     from app import collections as collections_mod, node_state, run_check
-    from app.hold import calibrate as calib, codex as cx, workflow as wf
+    from app.hold import calibrate as calib, codex as cx, recreate, workflow as wf
     say = (lambda line: print(line, file=sys.stderr))
     recipe = _recipe(a.recipe)
     given = copy.deepcopy(recipe)
+    re_create = bool(getattr(a, "re_create", False))
 
     # resolve: the recipe's inputs, and nothing typed twice
     space = recipe.get("space") or {}
@@ -628,11 +651,21 @@ def cmd_collection_new(a) -> int:
     if not a.cpu_model:
         raise CodexError("--cpu-model names the encoder's CPU twin (gpu_layers 0, the device "
                          "hidden): the tolerance and the CPU reference are measured against it")
+    if re_create:
+        _recreate_encoder(a)
+    elif not a.encoder:
+        raise CodexError("--encoder URL names the endpoint of the recipe's encoder")
     api = check_api(a.api)
     model = model_keys(a.encoder, embed_model=a.embed_model)[0]
-    run = wf.Run(wf.case("A"), a.name, {
-        "plugin": a.plugin, "recipe": given, "name": a.name, "encoder": a.encoder, "api": api,
-        "embed_model": model, "cpu_model": a.cpu_model, "platform_image": a.platform_image}, say=say)
+    inputs = {"plugin": a.plugin, "recipe": given, "name": a.name, "encoder": a.encoder, "api": api,
+              "embed_model": model, "cpu_model": a.cpu_model, "platform_image": a.platform_image}
+    if re_create:
+        inputs.update(re_create=True, sample=int(a.sample))
+    run = wf.Run(wf.case("F" if re_create else "A"), a.name, inputs, say=say)
+    pred = kept = None
+    interim = recreate.interim_name(a.name)
+    if re_create:
+        pred, kept = _recreate_predecessor(a.root, a.name, run)
     set_id, texts = calib.load_set(set_id)
     twin_recipe = collections_mod.EmbedRecipe(url=a.encoder, api=api, model=a.cpu_model, dtype="f32",
                                               ctx=ctx, document_instruction=instruction, cut=cut)
@@ -643,16 +676,23 @@ def cmd_collection_new(a) -> int:
         raise CodexError(f"--cpu-model {a.cpu_model} runs weights {stated.weights[:23]}…, the "
                          f"recipe's are {enc['weights'][:23]}…: a twin is the same weights")
     run.at("resolve", f"ctx {ctx}, cut {cut}, document instruction {instruction!r}, set {set_id[:23]}…; "
-                      f"{model} with its CPU twin {a.cpu_model}")
+                      f"{model} with its CPU twin {a.cpu_model}"
+                      + (f"; re-creates {a.name} ({pred.collection_id[:23]}…)" if pred is not None else
+                         f"; re-creates {a.name}, forgotten since" if re_create else ""))
 
     # check: BEFORE ANY MEASUREMENT, so a refusal costs no card lane
-    a.platform_image = preflight_create(recipe, a.platform_image)
     existing = None
-    try:
-        existing = col.resolve(a.root, a.name)
-    except CodexError:
-        existing = None
-    if existing is not None:
+    if re_create:
+        existing = _recreate_check(a, run, recipe, pred, kept, interim)
+    else:
+        a.platform_image = preflight_create(recipe, a.platform_image)
+        try:
+            existing = col.resolve(a.root, a.name)
+        except CodexError:
+            existing = None
+    if existing is not None and re_create:
+        pass                                # held to the recipe by `_recreate_check`
+    elif existing is not None:
         dry = copy.deepcopy(recipe)
         # the tolerance is outside space_id (02 §2.4) and not measured yet
         dry["space"].setdefault("tolerance", "0.99")
@@ -662,7 +702,7 @@ def cmd_collection_new(a) -> int:
                              f"{'; '.join(differs)}. A collection is not changed in place; forget it "
                              f"and run `new` again (RULE 1 for one nothing was published from)")
         run.at("check", f"{existing[0]} exists, space {existing[1].space_id[:23]}…: the recipe's")
-    else:
+    elif not re_create:
         run.at("check", f"{a.name} is new; platform image {a.platform_image[:23]}…")
 
     # calibrate, on the inputs the gate sends
@@ -712,14 +752,27 @@ def cmd_collection_new(a) -> int:
                              f"it and run `new` again (RULE 1 for one nothing was published from)")
         run.at("make", f"{name} exists, its space the recipe's: kept")
     else:
+        if re_create:
+            # case F: made under its interim name and PAUSED until the swap —
+            # the worker must not discover, fetch or embed for a collection
+            # whose manifest, index and vectors are about to be carried in
+            node_state.set_paused(interim, True, by=f"louise hold collection new --re-create {a.name} "
+                                                    f"(case F: paused until the swap)")
         codex, held = create_from(a.root, a.plugin, recipe, platform_image=a.platform_image,
-                                  encoder=a.encoder, name=a.name, api=api, embed_model=a.embed_model)
+                                  encoder=a.encoder, name=interim if re_create else a.name, api=api,
+                                  embed_model=a.embed_model)
         name = col.name_of(a.root, codex.collection_id)
-        run.at("make", f"{name}  {codex.collection_id}  (held: {held})")
+        run.at("make", f"{name}  {codex.collection_id}  (held: {held})"
+                       + (f"; engine {codex.space.encoder.engine.engine_id[:23]}…, paused until the swap"
+                          if re_create else ""))
     state = a.root / name / "state"
     state.mkdir(parents=True, exist_ok=True)
     (state / "calibration.json").write_text(json.dumps(measured, indent=1, sort_keys=True), encoding="utf-8")
     run.record("make", {"collection_id": codex.collection_id})
+
+    # carry (case F): what the predecessor holds that is provably identical
+    if re_create:
+        _recreate_carry(a, run, name, codex, pred, measured, say)
 
     # cpu-reference, from the store entry calibrate made
     run.at("cpu-reference", "from the node's store")
@@ -736,6 +789,12 @@ def cmd_collection_new(a) -> int:
                                                model=None, query_model=None))
     run.record("gate", {"rc": rc})
     say(f"{name}: {'the gate PASSED; embedding stays off until the operator turns it on' if rc == 0 else f'the gate exited {rc}: nothing may be embedded'}")
+    # swap (case F): the predecessor forgotten by the operator, then its name
+    if re_create and rc == 0:
+        rc = _recreate_swap(a, run, name, codex, say)
+        if rc != 0:
+            return rc
+        name = a.name
     # RULE 2 (2026-11-06): what would still stop it once turned on, said now —
     # wikidata was turned on after `new` and sat paused for hours. The setting
     # is said on the line above, so it is left out here
@@ -776,6 +835,312 @@ def _differs_from(held, dry) -> list[str]:
     if sp.calibration.set != want.calibration.set:
         out.append(f"calibration set {sp.calibration.set[:23]}…, the recipe's {want.calibration.set[:23]}…")
     return out
+
+
+# ---- case F, a re-creation (docs/notes/new-collection.md; app/hold/recreate.py) ----
+
+def _recreate_encoder(a) -> None:
+    """Case F's encoder: the predecessor's endpoint, wire format and model,
+    from its file's `[encoder]` (RULE 2: what the node knows is not asked) —
+    the same model, whatever engine now runs it. A flag given must agree:
+    the swap carries the predecessor's file, and its `[encoder]` must be the
+    endpoint the calibration and the gate measured. Between the operator's
+    forget and the swap the name has no file: the interim's, written from the
+    same values at make, answers."""
+    from app.hold import deposit, recreate
+    block = (deposit._encoder_block(a.root, a.name)
+             or deposit._encoder_block(a.root, recreate.interim_name(a.name)))
+    if not block:
+        raise CodexError(f"--re-create: nothing held under {a.name!r} names an [encoder] "
+                         f"({deposit.held_file(a.root, a.name)}): there is no predecessor to re-create")
+    for attr, key, flag in (("encoder", "url", "--encoder"), ("api", "api", "--api"),
+                            ("embed_model", "embed_model", "--embed-model")):
+        have, given = block.get(key), getattr(a, attr, None)
+        if given and have and given != have:
+            raise CodexError(
+                f"--re-create {a.name}: {flag} {given}, and its file's [encoder] {key} is {have}. A "
+                f"re-creation keeps the predecessor's endpoint (the swap carries its file, and the "
+                f"gate measures that endpoint): leave {flag} out, or move the predecessor first "
+                f"(`louise hold config apply {a.name} --set encoder.{key}={given}`)")
+        setattr(a, attr, given or have)
+
+
+def _recreate_predecessor(root, name: str, run):
+    """`(predecessor, kept)`: the collection held under `name` that case F
+    re-creates, and what an earlier run of the same request recorded of it
+    (its `check`). After the operator's forget the name holds nothing, and
+    after the swap the re-created collection: the predecessor is then the
+    record alone (None)."""
+    kept = run.done("check")
+    made = (run.done("make") or {}).get("collection_id")
+    try:
+        held_name, held = col.resolve(root, name)
+    except CodexError:
+        held_name, held = None, None
+    if held is not None and (held_name != name or (made and held.collection_id == made)):
+        held = None                         # swapped: the name holds the re-created collection
+    if held is None and kept is None:
+        raise CodexError(f"--re-create: nothing is held under {name!r} here, so there is nothing to "
+                         f"re-create (a new collection is case A: leave --re-create out)")
+    was = (kept or {}).get("predecessor") or {}
+    if held is not None and was and held.collection_id != was.get("collection_id"):
+        raise CodexError(f"--re-create {name}: {name} holds {held.collection_id[:23]}…, and this run "
+                         f"re-creates {str(was.get('collection_id'))[:23]}…; nothing is done to either "
+                         f"({run.path} is the run's record)")
+    if held is not None and held.space is None:
+        raise CodexError(f"--re-create {name}: an annotations collection has no space and no vectors "
+                         f"to carry (case H)")
+    return held, kept
+
+
+def _recreate_check(a, run, recipe: dict, pred, kept, interim: str):
+    """Case F's step 2, before anything is measured: the platform image the
+    records were built with (the recipe's, the flag's, else the
+    predecessor's — another image is other records); the recipe held to the
+    predecessor (app/hold/recreate.py `refusal`: the same space, the same
+    records, something to re-create); the interim name free, or holding this
+    run's own collection. Returns the collection already made, or None."""
+    import copy
+
+    from app.hold import recreate
+    was = (kept or {}).get("predecessor") or {}
+    stated = (recipe.get("toolchain") or {}).get("platform_image")
+    a.platform_image = preflight_create(recipe, stated or a.platform_image or (
+        pred.toolchain.platform_image if pred is not None else was.get("platform_image")))
+    dry_recipe = copy.deepcopy(recipe)
+    # the tolerance is outside space_id (02 §2.4) and not measured yet: the
+    # predecessor's, so it is not counted as a change before it is one
+    dry_recipe["space"].setdefault("tolerance", pred.space.tolerance if pred is not None
+                                   else was.get("tolerance") or "0.99")
+    dry = col.dry_codex(a.plugin, dry_recipe, platform_image=a.platform_image)
+    if pred is not None:
+        why = recreate.refusal(a.name, pred, dry)
+        if why:
+            raise CodexError(f"--re-create {a.name}: {why}. Nothing was measured")
+        changed = recreate.differences(pred, dry)["changed"]
+    elif dry.space_id != was.get("space_id"):
+        raise CodexError(f"--re-create {a.name}: the recipe's space {dry.space_id[:23]}… is not the one "
+                         f"this run re-creates, {str(was.get('space_id'))[:23]}…")
+    else:
+        changed = list(kept.get("changed") or ())
+    made = (run.done("make") or {}).get("collection_id")
+    now = col.where_now(a.root, interim, made) if made else None
+    existing = None
+    if now is not None:
+        existing = (now, col.read(a.root, now))
+    else:
+        try:
+            existing = col.resolve(a.root, interim)
+        except CodexError:
+            existing = None
+        if existing is not None and existing[0] != interim:
+            existing = None
+    if existing is not None:
+        differs = _differs_from(existing[1], dry)
+        if differs:
+            raise CodexError(f"{existing[0]} exists and is not the collection this recipe makes: "
+                             f"{'; '.join(differs)}. Forget it and run `new --re-create` again")
+    run.at("check", f"the space {dry.space_id[:23]}… and the records are {a.name}'s; it changes "
+                    f"{', '.join(changed)}; made as {existing[0] if existing else interim}"
+                    + (" (made already)" if existing else "")
+                    + f"; platform image {a.platform_image[:23]}…")
+    if kept is None:
+        run.record("check", {"predecessor": {"name": a.name, "collection_id": pred.collection_id,
+                                             "space_id": pred.space_id, "tolerance": pred.space.tolerance,
+                                             "platform_image": pred.toolchain.platform_image},
+                             "interim": interim, "changed": changed})
+    return existing
+
+
+def _defer(message: str) -> CodexError:
+    """07 §7.7's exit 3: nothing is wrong, nothing was done; retry later."""
+    e = CodexError(message)
+    e.exit_code = 3                         # type: ignore[attr-defined]
+    return e
+
+
+def _held_text(root, name: str) -> str | None:
+    from app.hold import deposit
+    p = deposit.held_file(root, name)
+    return p.read_text(encoding="utf-8") if p.is_file() else None
+
+
+def _recreate_carry(a, run, name: str, codex, pred, measured: dict, say) -> None:
+    """Case F's step 6 (RULE 1): from the predecessor, what is provably
+    identical — its parts (seeded, each checked against its root), a sample
+    of its vectors reproduced by the new engine's run, then its manifest,
+    text index, vector table and bundles, copied and proven byte for byte
+    (app/hold/recreate.py, hold/carry.py, hold/seed.py). A step already done
+    is checked by its counts, never redone. Both collections' write locks are
+    taken for the step and given back after it (the gate takes the new one's
+    again)."""
+    import os as _os
+
+    from app import embeddings
+    from app.hold import carry as carry_mod, lock as lock_mod, recreate, records as rec, seed
+    root = Path(a.root)
+    done = run.done("carry")
+    if done is not None:
+        s = done.get("sample") or {}
+        if not (run.done("swap") or {}).get("done"):
+            now = recreate.counts(root, name)
+            if now != (done.get("counts") or {}).get("to"):
+                raise recreate.CopyMismatch(
+                    f"carry: {name} holds {now}, and the carry recorded {done['counts']['to']}: something "
+                    f"wrote to it since. Nothing is done; pause it and look before anything else")
+        run.at("carry", f"kept from the earlier run: {done['counts']['to']['documents']} documents, "
+                        f"{done['counts']['to']['vectors']} vectors; sample {s.get('exact')} of "
+                        f"{s.get('checked')} byte-identical, worst {s.get('worst')}")
+        return
+    if pred is None:
+        raise CodexError(f"carry: {a.name}, the predecessor, is no longer held and nothing was carried "
+                         f"from it. Forget {name} and make the collection as case A")
+    locks = []
+    try:
+        for n in sorted({a.name, name}):
+            try:
+                locks.append(lock_mod.take(lock_mod.state_dir(root, n), n,
+                                           f"louise hold collection new --re-create {a.name} (carry)"))
+            except lock_mod.Held as e:
+                raise _defer(f"{e}. The carry needs both collections still: `louise node pause {a.name}` "
+                             f"({name} is paused since it was made); the worker lets go at the end of "
+                             f"its unit. Then run this again: it resumes at the carry") from None
+        run.at("carry", f"from {a.name}: its parts, a sample of {a.sample} chunk(s) re-encoded by the new "
+                        f"run, then its manifest, text index and vector table")
+        parts = recreate.seed_parts(root, a.name, name, now=_utc_now(), log=say)
+        origin = recreate.share_origin(root, a.name, name)
+        local = rec.local_collection(root, a.name, pred)
+        sample_seed = _os.urandom(32)
+        with _carry_sample_embed(root, name, codex) as embed:
+            checked = recreate.sample(
+                codex, seed.latest_snapshot(root, name), col.shard_dir_of(root, name), n=int(a.sample),
+                seed=sample_seed, embed=embed,
+                vectors_for=lambda ids: embeddings.vectors_by_chunk_id(ids, collection=local))
+        if checked["verdict"] != "pass":
+            raise recreate.SampleFailed(
+                f"carry: {checked['why']}: the new engine's run does not reproduce {a.name}'s vectors, "
+                f"and nothing was carried (seed {checked['seed']}"
+                + (f"; below: {', '.join(checked.get('below_ids') or ())}" if checked.get("below_ids") else "")
+                + ")")
+        calibrated = set(((measured or {}).get("reference") or {}).get("runs") or ())
+        stray = sorted(r for r in checked.get("runs") or () if r and calibrated and r not in calibrated)
+        if stray:
+            raise recreate.SampleFailed(
+                f"carry: the sample was answered by {', '.join(stray)}, not the run calibrate measured "
+                f"({', '.join(sorted(calibrated))}): nothing was carried; run again on one run")
+        say(f"[carry] sample: {checked['exact']} of {checked['checked']} byte-identical, {checked['near']} "
+            f"more within cos {recreate.NEAR}, worst {checked['worst']:.10f} (tolerance "
+            f"{codex.space.tolerance}), over {len(checked['parts'])} part(s)")
+        need, free = recreate.room(root, a.name, name)
+        if free < need:
+            raise CodexError(f"carry: copying {a.name}'s vector table, text index and manifest needs "
+                             f"{recreate.human(need)} and {recreate.human(free)} is free where {name} "
+                             f"lives: nothing was copied. Free the space, then run this again")
+        out = carry_mod.carry(root, a.name, name, copy=True, apply=True, log=say)
+        proof = recreate.prove_copy(root, a.name, name)
+        ack = recreate.carry_ack(root, a.name, name, codex)
+        run.record("carry", {
+            "from": {"name": a.name, "collection_id": pred.collection_id}, "parts": parts,
+            "origin": origin, "sample": checked, "carried": out.get("done"),
+            "counts": {"from": proof["from"], "to": proof["to"]}, "lance": proof["lance"],
+            "index": proof["index"], "ack": ack, "file": _held_text(root, a.name)})
+        run.at("carry", f"{proof['to']['documents']} documents and {proof['to']['vectors']} vectors carried, "
+                        f"none re-encoded: the vector table ({proof['lance']['files']} files, "
+                        f"{str(proof['lance']['sha256'])[:23]}…) and the text index the source's byte "
+                        f"for byte; parts {parts['seeded']}, origin {origin}, licence ack {ack}")
+    finally:
+        for lk in locks:
+            lk.release()
+
+
+@contextlib.contextmanager
+def _carry_sample_embed(root, name: str, codex):
+    """The new engine's run for the carry's sample: the collection's own
+    encoder (its file's `[encoder]`), its chunks fed in their layer's form
+    and normalised as a write stores them (`run_check.answers`), each
+    answer's run kept (`.runs`), leased for the whole sample."""
+    from app import encoder_use, run_check
+    recipe = _recipe_for(codex, name)
+    with encoder_use.held(recipe, collection=name, holder=_lease_holder("hold collection new")):
+        yield run_check.answers(recipe, collection=codex)
+
+
+def _recreate_swap(a, run, name: str, codex, say) -> int:
+    """Case F's step 9. While the predecessor is held it is FORGOTTEN BY THE
+    OPERATOR, never here: the exact `forget` and what it removes and frees
+    are printed and the step stops (exit 2: a rule stands in the way — the
+    operator's yes in the session that deletes, with the size). Run again
+    after it: the re-created collection takes the name (`hold collection
+    rename`: its directory, its shared folders, its pause) and the
+    predecessor's collection file, its codex and embed mode excepted
+    (recreate.carried_file)."""
+    from app.hold import deposit, lock as lock_mod, recreate, rename as rename_mod
+    root = Path(a.root)
+    kept = run.done("swap") or {}
+    if kept.get("done"):
+        run.at("swap", f"done: {a.name} is {codex.collection_id[:23]}…")
+        return 0
+    was = (run.done("check") or {}).get("predecessor") or {}
+    try:
+        held_name, held = col.resolve(root, a.name)
+    except CodexError:
+        held_name, held = None, None
+    if held is not None and held_name == a.name and held.collection_id == was.get("collection_id"):
+        plan = recreate.forget_plan(root, a.name)
+        forget = f"louise hold collection forget {a.name} --yes"
+        run.record("swap", {"done": False, "file": _held_text(root, a.name), "forget": forget,
+                            "bytes": plan["bytes"], "freed": plan["freed"]})
+        run.at("swap", f"{a.name} ({held.collection_id[:23]}…) is still held: {name} takes its name once "
+                       f"the operator has forgotten it. Nothing was deleted")
+        say(f"  forget, with the operator's yes:  {forget}   (with --here when no worker runs)")
+        say(f"  it removes {recreate.human(plan['bytes'])} in {plan['files']} file(s), of which "
+            f"{recreate.human(plan['freed'])} is freed (the rest: the parts and bundles {name} "
+            f"hard-linked, which stay):")
+        for p in plan["would_remove"]:
+            say(f"    {p}")
+        for p in plan["kept"]:
+            say(f"    kept: {p} ({name} reads it)")
+        from types import SimpleNamespace
+
+        from app import copy_state
+        try:
+            st = copy_state.held(root, name, codex)
+        except Exception as e:                          # noqa: BLE001 — a line said, never the step
+            st = SimpleNamespace(in_use=False, state="an unknown state", reasons=(f"{type(e).__name__}: {e}",))
+        if not st.in_use:
+            say(f"  before it: {name} is in {st.state} on this peer ({'; '.join(st.reasons)}), so "
+                f"{a.name} would not be {'searched' if copy_state.enforced() else 'in use'} until that "
+                f"clears (`louise hold collection show {name}`)")
+        say(f"  then run this command again: {name} becomes {a.name}")
+        return 2
+    if held is not None and held_name == a.name and held.collection_id != codex.collection_id:
+        raise CodexError(f"swap: {a.name} holds {held.collection_id[:23]}…, neither the predecessor nor "
+                         f"the re-created collection: nothing is renamed over it")
+    text = kept.get("file") or (run.done("carry") or {}).get("file")
+    if name != a.name:
+        try:
+            lk = lock_mod.take(lock_mod.state_dir(root, name), name,
+                               f"louise hold collection new --re-create {a.name} (swap)")
+        except lock_mod.Held as e:
+            raise _defer(f"{e}. Then run this again: it resumes at the swap") from None
+        try:
+            rename_mod.rename(root, name, a.name)
+        finally:
+            lk.release()
+    mode = None
+    if text:
+        body, mode = recreate.carried_file(text, codex.collection_id)
+        path = deposit.held_file(root, a.name)
+        tmp = path.with_suffix(".toml.swap")
+        tmp.write_text(body, encoding="utf-8")
+        os.replace(tmp, path)
+    run.record("swap", {**kept, "done": True, "renamed": [name, a.name]})
+    run.at("swap", f"{a.name} is {codex.collection_id[:23]}… now, with its predecessor's collection file "
+                   + ("(its codex and embed \"off\" excepted)" if text else "(none was kept: its own)"))
+    if mode and mode != "off":
+        say(f"  the predecessor embedded {mode!r}; to embed so again: "
+            f"louise hold config apply {a.name} --set embed={mode}")
+    return 0
 
 
 def _encoder_key_args(p) -> None:
@@ -5130,10 +5495,19 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--recipe", required=True, metavar="FILE")
     p.add_argument("--name", required=True, help="the collection's local name: the one thing only the "
                                                   "operator knows (RULE 2)")
-    p.add_argument("--encoder", required=True, metavar="URL", help="the endpoint of the recipe's encoder")
+    p.add_argument("--encoder", default=None, metavar="URL",
+                   help="the endpoint of the recipe's encoder (required; with --re-create, the "
+                        "predecessor's file's unless given)")
     p.add_argument("--cpu-model", required=True, metavar="NAME",
                    help="its CPU twin (gpu_layers 0): the tolerance and the CPU reference")
     p.add_argument("--platform-image", default=None)
+    p.add_argument("--re-create", dest="re_create", action="store_true",
+                   help="case F: re-create the collection held under --name (RULE 1): its parts, "
+                        "manifest, index and vectors carried, then its name")
+    from app.hold.recreate import SAMPLE
+    p.add_argument("--sample", type=int, default=SAMPLE, metavar="N",
+                   help=f"with --re-create: chunks re-encoded by the new run and held to the stored "
+                        f"vectors before the carry (default {SAMPLE})")
     _encoder_key_args(p)
     p.set_defaults(fn=cmd_collection_new)
 
