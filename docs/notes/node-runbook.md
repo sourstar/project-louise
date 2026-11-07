@@ -17,7 +17,12 @@ Read first: `CLAUDE.md` (the rules), `docs/notes/STATUS.md` (where things stand)
   always check by PCI address.
 - **Pools**:
   - `ssd4` (NVMe, **not redundant**): Louise's app and data (`/mnt/ssd4/apps/louise-rag`);
-  - `ssd5` (**not redundant**): LocalAI's models and backends (`/mnt/ssd5/apps/localai`);
+  - `ssd5` (**not redundant**): LocalAI's models (`/mnt/ssd5/apps/localai/models`);
+  - `ssd3` (Samsung 870 QVO 8 TB, SATA QLC, **not redundant**; since 2026-11-07,
+    storage-tiering.md §9): the TrueNAS apps pool (`ssd3/ix-apps`: Docker's
+    images, app_mounts), LocalAI's backends (`/mnt/ssd3/apps/localai-backends`),
+    Open WebUI's data (`/mnt/ssd3/apps/open-webui-data`), the vector build area
+    (`/mnt/ssd3/louise-build` → `/build`), and cold files (`ssd3/attic`);
   - `tank` (ZFS, redundant): corpora (`louise-corpora` → `/corpora`, Project Gutenberg's
     mirror → `/corpora-custom/gutenberg`), SHARDs, backups, scratch.
 - **Reach**: ssh as root with the operator's key (path in DEPLOYMENT.md); the root shell
@@ -257,9 +262,20 @@ byte-identical (`tools/measure/records_ab.py`).
 - **Snapshots**: task 3 takes `ssd4` recursively every hour and keeps 2 hours; task 2
   takes `ssd5` daily at 01:00 and keeps a week.
 - **Replication**: 5 copies `ssd4` → `tank/backup/ssd4`, 4 copies `ssd5` →
-  `tank/backup/ssd5`, both local push. These replications are the ONLY backup of the
-  two non-redundant pools: check them after any intervention
+  `tank/backup/ssd5`, both local push; `ssd3` → `tank/backup/ssd3` daily at 00:00,
+  recursive, no excludes. These replications are the ONLY backup of the
+  non-redundant pools: check them after any intervention
   (`midclt call replication.query`, state FINISHED).
+- **Moving the TrueNAS apps pool** (`docker.update {pool, migrate_applications:
+  true}`, TrueNAS 27.0.0-RC.1, 2026-11-07): it carries app_mounts but **NOT the
+  locally built images**. Docker came up with an empty image store and
+  louise-rag, louise-vega and the governor failed with "No such image:
+  louise-rag:local". Before the old pool's docker dataset is destroyed, save
+  every local tag (`docker save | docker load` from a temporary dockerd on the
+  old dataset: separate socket, exec-root and containerd namespace) and check
+  the image IDs. A dataset that holds backends gets the sources' ACL type
+  (`acltype=nfsv4`, `aclmode`/`aclinherit=passthrough`): an engine's tree digest
+  reads the exec bits.
 - **Never make a ZFS clone inside ssd4 or ssd5**: the recursive snapshot task picks
   it up and replicates it in full (it happened, 2026-10-23). Measurement scratch goes
   on tank (`/mnt/tank/scratch-*`), which is redundant and not replicated.
