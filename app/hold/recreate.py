@@ -434,8 +434,7 @@ def _documents_write_free(manifest: Path) -> int | None:
     if not manifest.is_file():
         return None
     at_rest = not any(Path(f"{manifest}{s}").exists() for s in ("-wal", "-shm"))
-    uri = f"file:{manifest.as_posix()}?{'immutable=1' if at_rest else 'mode=ro'}"
-    con = sqlite3.connect(uri, uri=True)
+    con = sqlite3.connect(f"file:{manifest.as_posix()}?mode=ro{'&immutable=1' if at_rest else ''}", uri=True)
     try:
         return int(con.execute("SELECT COUNT(*) FROM documents").fetchone()[0])
     except sqlite3.OperationalError:
