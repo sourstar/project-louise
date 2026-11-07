@@ -248,7 +248,13 @@ def held(tmp_path, pubmed_root):
     return _held(tmp_path, pubmed_root)
 
 
-def _held(tmp_path, pubmed_root, *, legacy: bool = False):
+@pytest.fixture
+def held_big(tmp_path, pubmed_root):
+    """`held` with long documents' rows first: a 2.x fragment of 6,000+ rows."""
+    return _held(tmp_path, pubmed_root, big=True)
+
+
+def _held(tmp_path, pubmed_root, *, legacy: bool = False, big: bool = False):
     """A pubmed collection: SHARD, snapshot 2026-08, manifest, and a vector
     table as it was written before the column. Four records:
 
@@ -291,7 +297,8 @@ def _held(tmp_path, pubmed_root, *, legacy: bool = False):
         pa.field("vector", pa.list_(pa.float32(), DIM))])
     hashes = {r["uid"]: r["content_hash"] for r in records}
     if not legacy:
-        lancedb.connect(str(local.lance_dir)).create_table(embeddings.TABLE, data=rows, schema=schema)
+        data = pa.Table.from_pylist(_filler(LONG, 2000) + rows if big else rows, schema=schema)
+        lancedb.connect(str(local.lance_dir)).create_table(embeddings.TABLE, data=data, schema=schema)
         return root, local, con, snap, shard_dir, hashes, [r["id"] for r in rows]
     ids = _legacy_table(local, rows, schema)
     return root, local, con, snap, shard_dir, hashes, ids
@@ -610,6 +617,56 @@ def _with_a_deletion(local):
     tbl.delete("book_id = 31000004")
     tbl.add([{k: v for k, v in r.items() if not k.startswith("_")} for r in row])
     assert _deleted(local) == 1
+
+
+def _with_a_deleted_head(local, rows: int):
+    """A later-format table whose first fragment's first `rows` rows are
+    deleted, as a document's delete-then-insert leaves them (pubmed on the
+    node, 2026-11-07, format 2.1)."""
+    import lance
+    ds = embeddings._conn(local).open_table(embeddings.TABLE).to_lance()
+    first = ds.get_fragments()[0]
+    assert first.physical_rows > rows
+    first_rows = first.to_table(columns=["id"], with_row_address=True)
+    gone = [r["id"] for r in first_rows.to_pylist()
+            if (r["_rowaddr"] & 0xFFFFFFFF) < rows]
+    ids = ", ".join("'" + i.replace("'", "''") + "'" for i in gone)
+    lance.dataset(ds.uri).delete(f"id IN ({ids})")
+    return gone
+
+
+def test_a_later_format_with_a_deleted_fragment_head_is_merged_in_longer_batches(
+        held_big, tmp_path, monkeypatch):
+    """THE NODE'S DEFECT, as it is (2026-11-07): pubmed is format 2.1, and
+    Lance refuses the merge when a fragment's first read batch is all
+    deleted. The planner reads the longest deleted head and the merge reads
+    longer batches: no compaction, nothing rewritten, every row given its
+    source."""
+    from app import vector_index
+    root, local, con, *_ = held_big
+    _with_a_deleted_head(local, 1500)
+    plan = vector_index.deletions_plan(local)
+    assert plan["format"].startswith("2.") and plan["needed"] is False
+    assert plan["longest_deleted_head"] >= 1500 and plan["merge_batch_rows"] == 2048
+    # Lance's own default refuses it: the defect is real at 1,024
+    with pytest.raises(OSError, match=vector_index.MERGE_REFUSED):
+        embeddings.add_source_column(local, *_sources(local, con, root), batch_size=1024)
+    survey = vector_sources.survey(root, "pubmed", local, con)
+    assert survey["tables"][0]["compaction"]["merge_batch_rows"] == 2048
+    fragments = [f.fragment_id for f in
+                 embeddings._conn(local).open_table(embeddings.TABLE).to_lance().get_fragments()]
+    monkeypatch.setattr(vector_index, "materialize_deletions",
+                        lambda *a, **kw: pytest.fail("a v2 table rewritten for nothing"))
+    out = vector_sources.apply(root, "pubmed", local, con, state_dir=tmp_path / "w")
+    tbl = embeddings._conn(local).open_table(embeddings.TABLE)
+    assert embeddings.SOURCE_COLUMN in tbl.schema.names and out["rows_with_source"] > 0
+    assert [f.fragment_id for f in tbl.to_lance().get_fragments()] == fragments, "no fragment rewritten"
+
+
+def test_merge_batch_rows():
+    from app import vector_index as vi
+    assert [vi.merge_batch_rows(h) for h in (0, 1023, 1024, 1500, 4095, 4096)] == \
+        [1024, 1024, 2048, 2048, 4096, 8192]
 
 
 def test_a_later_format_merges_beside_its_deletions(held, tmp_path, monkeypatch):

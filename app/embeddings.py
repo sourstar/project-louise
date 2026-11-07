@@ -1385,15 +1385,18 @@ NO_SOURCE = bytes(16)
 SOURCE_PRESENT = f"{SOURCE_COLUMN} IS NOT NULL AND {SOURCE_COLUMN} != X'{NO_SOURCE.hex()}'"
 
 
-def add_source_column(collection, keys, vals, *, lock_con=None, checkpoint=None) -> int:
+def add_source_column(collection, keys, vals, *, lock_con=None, checkpoint=None,
+                      batch_size: int | None = None) -> int:
     """`SOURCE_COLUMN` onto a table written before it, filled by `book_id`
     from `keys` (sorted native ids, int64) -> `vals` (their 16-byte hashes,
     uint8 rows); NULL for every other row. Lance's own schema evolution
     (`LanceDataset.add_columns` with a batch function): new column files per
     fragment, the vectors and every other column untouched, one commit — a
     kill before it leaves the table at its version (measured, pylance
-    9.0.1), and `checkpoint` keeps the fragments done for the rerun. The
-    rows given a source. `hold vectors source-hashes` (app/vector_sources.py)
+    9.0.1), and `checkpoint` keeps the fragments done for the rerun.
+    `batch_size`: the rows read at a time, longer than any fragment's deleted
+    head (`vector_index.merge_batch_rows`), else Lance refuses. The rows
+    given a source. `hold vectors source-hashes` (app/vector_sources.py)
     is the caller."""
     import lance
 
@@ -1418,7 +1421,7 @@ def add_source_column(collection, keys, vals, *, lock_con=None, checkpoint=None)
     # through the writer registration, as every vector write: a compaction
     # waits for this commit
     with _write_lock(lock_con, collection):
-        tbl.to_lance().add_columns(fill, read_columns=[BOOK_COLUMN_NAME])
+        tbl.to_lance().add_columns(fill, read_columns=[BOOK_COLUMN_NAME], batch_size=batch_size)
     if checkpoint is not None:
         Path(checkpoint).unlink(missing_ok=True)
     return db.open_table(TABLE).count_rows(SOURCE_PRESENT)
