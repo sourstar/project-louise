@@ -119,6 +119,31 @@ def test_a_write_during_the_rewrite_refuses_the_swap(legacy, monkeypatch):
     assert "2250:0:1" in _rows(_src(legacy)), "the restart copies the write (row 9000)"
 
 
+def test_a_stop_between_the_two_renames_of_the_swap_finishes_it_on_the_next_run(legacy, monkeypatch):
+    """The swap is two renames: the source aside, the copy in. A stop between
+    them left NO table under the collection's name — every document marked
+    embedded with no vector to search — and the next run refused ("has no
+    vector table"). The version check passed before the first rename, so the
+    copy IS the source: the next run puts it in (2026-11-07)."""
+    import os
+    before = _rows(_src(legacy))
+    real = os.replace
+    tmp = str(legacy.lance_dir / f"{vector_rewrite.TMP}.lance")
+
+    def dies_moving_the_copy_in(a, b):
+        if str(a) == tmp:
+            raise KeyboardInterrupt
+        return real(a, b)
+    monkeypatch.setattr(vector_rewrite.os, "replace", dies_moving_the_copy_in)
+    with pytest.raises(KeyboardInterrupt):
+        vector_rewrite.run(legacy, group=2)
+    monkeypatch.setattr(vector_rewrite.os, "replace", real)
+    assert not (legacy.lance_dir / f"{embeddings.TABLE}.lance").exists(), "the window"
+    out = vector_rewrite.run(legacy, group=2)
+    assert out["stage"] == "swapped" and _src(legacy).has_stable_row_ids
+    assert _rows(_src(legacy)) == before
+
+
 def test_no_room_means_nothing_written(legacy, monkeypatch):
     Usage = namedtuple("Usage", "total used free")
     monkeypatch.setattr(vector_rewrite.shutil, "disk_usage", lambda p: Usage(1, 1, 0))

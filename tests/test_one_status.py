@@ -68,6 +68,20 @@ def _seed(con) -> None:
                 (f"{NAME}:{i}", NAME, str(i), f"/x/{i}", scope, rdf, fts, emb, fv, ev, chunks, err))
 
 
+def _held(c, con) -> None:
+    """The earlier version IS held: a vector for every document the manifest
+    says completed once (version not 0) — the SUPERSEDED contract
+    (app/status.py, 2026-11-07); a vector store holding no row counts no
+    superseded at all."""
+    import numpy as np
+    from app import embeddings
+    rows = [{"id": f"{r['uid']}:0:1", "book_id": int(r["native_id"]), "lang": "en", "seq": 0,
+             "chapter": "", "text": "t", "vector": np.zeros(768, dtype="float32")}
+            for r in con.execute("SELECT uid, native_id FROM documents WHERE "
+                                 "COALESCE(embed_version,0)<>0 AND embed_done<>-1")]
+    embeddings.upsert_chunks(rows, collection=c, dtype="f16")
+
+
 #: what the fixture holds, counted by hand
 WAITING = {"rdf": 3 + 4, "fts": 2, "embed": 2}
 ERRORED = {"rdf": 1, "fts": 2, "embed": 0}
@@ -80,6 +94,7 @@ def node(isolated_config):
     c = collections_mod.by_name(NAME)
     con = db.connect(c)
     _seed(con)
+    _held(c, con)
     scope = db.get_scope(con)
     db.set_scope(con, {**scope, "embed_mode": "all"})
     con.close()
@@ -316,6 +331,44 @@ def test_every_surface_reports_the_same_superseded_number(node):
     for k in ("fts", "embed"):
         assert shelf["stage_superseded"][k] == shown[k]["superseded"] == held[k]["superseded"] \
             == SUPERSEDED[k], k
+
+
+def test_a_vector_store_holding_no_row_counts_no_superseded_anywhere(node):
+    """München, 2026-11-07: wikidata's vectors wiped, its marks cleared, its
+    versions kept — 458,636 documents grey. A store PROVEN to hold no row
+    (`spaces.known_lance_rows` == 0) holds no earlier version, whatever the
+    manifest says: superseded embed is 0 on the full scan and the bounded
+    count alike; the lexical index's earlier version is still counted."""
+    import shutil
+    from pathlib import Path
+    from app import embeddings, status
+    _counted(node)
+    assert _node_show()["embed"]["superseded"] == SUPERSEDED["embed"], "held: counted"
+    embeddings._dbs.pop(str(node.lance_dir), None)
+    shutil.rmtree(node.lance_dir)
+    Path(node.lance_dir).mkdir()
+    assert status.holds_no_vector(node.lance_dir) and not status.holds_no_vector(None)
+    _counted(node)
+    shelf, html = _card(node, "running")
+    shown = _node_show()
+    held = _collection_show(node)
+    reports, _ = health.check([node], mode="running")
+    by = {s.name: s for s in reports[0].stages}
+    assert shelf["stage_superseded"]["embed"] == shown["embed"]["superseded"] == \
+        held["embed"]["superseded"] == by["embed"].superseded == 0
+    assert 'data-superseded-bar="embed"' not in html
+    assert shelf["stage_superseded"]["fts"] == shown["fts"]["superseded"] == SUPERSEDED["fts"], \
+        "the text index still holds its earlier version"
+    con = db.connect(node)
+    # the stored count over the bound, the live count below it: both 0
+    for got in (status.bounded(con, lance_dir=node.lance_dir),
+                status.bounded(con, exact_below=3, lance_dir=node.lance_dir)):
+        assert got["embed"].superseded == 0 and "superseded" not in got["embed"].from_scan
+    assert status.bounded(con, stored=None)["embed"].superseded == SUPERSEDED["embed"], \
+        "no store named: the manifest's own count"
+    counts = status.read_stored(con)[0]
+    assert status.from_counts(counts, lance_dir=node.lance_dir)["embed"].superseded == 0
+    assert status.from_counts(counts)["embed"].superseded == SUPERSEDED["embed"]
 
 
 def test_superseded_over_the_bound_comes_from_the_stored_scan_and_says_when(node, monkeypatch):

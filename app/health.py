@@ -199,7 +199,8 @@ def inspect(con, collection, *, errors: bool = False, mode: str | None = None,
     said = _copy_state(collection)[1]
     if said:
         report.note = (report.note + "   " if report.note else "") + said
-    counted = status.bounded(con, cap=WAITING_CAP, exact_below=ERRORED_EXACT_BELOW)
+    counted = status.bounded(con, cap=WAITING_CAP, exact_below=ERRORED_EXACT_BELOW,
+                             lance_dir=getattr(collection, "lance_dir", None))
     for name in _WAITING:
         st = counted.get(name)
         if not isinstance(st, status.StageStatus):

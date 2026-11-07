@@ -64,6 +64,36 @@ measured (published figures disagree).
   <stage>_version<>0 AND chunks>0 AND NOT unindexable`, fts and embed.
   Over-counts only during `dev drop-rows` / `dev carry` drops (rows gone,
   version kept, until re-embedded).
+- **Superseded that held nothing, fixed the same day** (München: wikidata
+  grey at 458,636, 0 of 50 sampled holding a row; gutenberg's 11,109 real,
+  50 of 50). The re-creation on Nemotron wiped the 1.44 M bge vectors and
+  cleared the marks but kept embed_version 2, and `carry --unembedded`
+  carried it. Now every app path that deletes a document's last vector
+  sets its version to 0 after the delete (`embed_marks.mark_unheld`:
+  carry's reconcile, keep, keep `--scan`, recut, `dev drop-rows`, `dev
+  unindexable`, the worker's withdraw); `carry --unembedded` zeroes every
+  not-embedded document of the target; a vector store holding no row
+  counts 0 superseded on every surface (2.5 ms a table, read only where the
+  manifest counts some). Manifests written before: `louise dev
+  superseded-repair <collection>`, then `--apply` — beside the running
+  worker, no stop (1.2 M-row fixture: 60 windows, 1.25 s applied, ≤ 2.6 ms
+  a write).
+- **Done without vectors, the worse half** (coordinator review, the same
+  day): four app paths deleted vectors and left `embed_done = 1` — never
+  embedded again, missing from dense search without a word: share's
+  withdraw of a faulty bundle (03 §3.6, "return to without vectors"),
+  `hold collection forget --kinds vectors`, `hold vectors check --drop`,
+  the worker's not-indexable withdraw. Each now clears the mark after its
+  delete (`embed_marks.mark_dropped`: the table asked after; no row left →
+  0/0, some left → 0, version kept; `unmark_manifest` for forget, 0.64 s on
+  1.2 M rows). Two swaps had a stop window with NO table under the name
+  (`add_validity_columns` dropped then renamed; `dev rewrite-vectors`'s
+  two renames): both now finish on the next run. `forget --kinds vectors`
+  leaves `embed` as set and says what follows (`all` embeds everything
+  again; `--set embed=off` to stop holding vectors). Manifests written
+  before: `louise dev superseded-repair <c> --done-without-vectors`, then
+  `--apply` (1.14 M marked embedded: 1,141 windows, 15.3 s applied, ≤ 4.1 ms
+  a write; beside the worker).
 - **Cost, measured** (4 M synthetic rows, SQLite 3.45): the card's scan
   3.12 s on 960bb09; with the twelve new counts as SUM(CASE) 5.45 s; as
   `COUNT(*) FILTER`, most selective column first, 2.47 s — every old key

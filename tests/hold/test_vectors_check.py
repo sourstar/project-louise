@@ -250,6 +250,42 @@ def test_delete_chunks_refuses_an_id_that_is_not_9_5s_shape(stocked):
 
 # ---- the verb ------------------------------------------------------------
 
+def test_the_command_s_drop_marks_its_documents_to_embed_again(stocked, monkeypatch, capsys):
+    """`--drop` empties a failing row; its document is then NOT done — still
+    marked `embed_done = 1` it would never be embedded again and dense
+    search would miss the row without a word (2026-11-07). Rows left: not
+    done, the version kept; none left: not embedded, version 0; the rest
+    untouched."""
+    from app import db
+    from app.hold import records as rec
+    root, snapshot, codex, ids = stocked
+    local = rec.local_collection(root, "gutenberg", codex)
+    by_uid: dict[str, list[str]] = {}
+    for c in sorted(ids):
+        by_uid.setdefault(c.rsplit(":", 2)[0], []).append(c)
+    several = [u for u, cs in by_uid.items() if len(cs) >= 2]
+    assert several and len(by_uid) >= 2, by_uid
+    part_uid = several[0]
+    whole_uid = next(u for u in sorted(by_uid) if u != part_uid)
+    gone = [by_uid[part_uid][0], *by_uid[whole_uid]]
+    con = db.connect(local)
+    con.execute("UPDATE documents SET embed_done=1, embed_version=7")
+
+    def fake_check(codex_, snapshot_, *, drop, **_kw):
+        drop(list(gone))
+        return vck.Report(verdict=vck.PASS, seed=SEED, tolerance=0.9, min_pass=1, n=16, shards=(),
+                          dropped=tuple(gone), why="pass")
+    monkeypatch.setattr(vck, "check", fake_check)
+    assert _check(root, "--drop") == 0
+    assert set(_stored(root, codex)) == set(ids) - set(gone)
+    marks = {r[0]: (int(r[1]), int(r[2] or 0))
+             for r in con.execute("SELECT uid, embed_done, embed_version FROM documents")}
+    con.close()
+    assert marks[part_uid] == (0, 7), "a row left: not done, its version kept"
+    assert marks[whole_uid] == (0, 0), "no row left: not embedded, no earlier version"
+    assert all(v == (1, 7) for u, v in marks.items() if u not in (part_uid, whole_uid))
+
+
 def test_the_verb_is_in_the_tree():
     a = louise.build_parser().parse_args(["hold", "vectors", "check", "g"])
     assert a.fn is not None and a.drop is False
