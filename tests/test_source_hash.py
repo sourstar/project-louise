@@ -147,6 +147,45 @@ def test_a_table_without_the_column_still_reads_and_writes(collection, encoder, 
     assert hits and all(embeddings.SOURCE_COLUMN not in h for h in hits)
 
 
+def test_an_old_table_takes_the_batch_whole_and_writes_the_same_bytes(collection, tmp_path):
+    """The old-schema write (every collection not backfilled) drops the
+    column ONCE for the batch — one Arrow table, no copy per row — and what
+    lands is byte for byte what the same rows without the key write (main's
+    path: the list lancedb converts itself)."""
+    from dataclasses import replace
+    rng = np.random.default_rng(7)
+    vecs = rng.standard_normal((40, 4)).astype(np.float16)
+
+    def rows(with_source: bool) -> list[dict]:
+        return [{"id": f"g:{i}:0:1", "book_id": i, "lang": "en", "seq": 0, "chapter": "",
+                 "text": f"t{i}", "vector": vecs[i],
+                 **({embeddings.SOURCE_COLUMN: bytes([i]) * 16 if i % 3 else None}
+                    if with_source else {})} for i in range(40)]
+    got = {}
+    for name, with_source in (("old", False), ("new", True)):
+        coll = replace(collection, lance_dir=tmp_path / name)
+        coll.lance_dir.mkdir()
+        lancedb.connect(str(coll.lance_dir)).create_table(embeddings.TABLE, schema=pa.schema([
+            pa.field("id", pa.string()), pa.field("book_id", pa.int64()),
+            pa.field("lang", pa.string()), pa.field("seq", pa.int64()),
+            pa.field("chapter", pa.string()), pa.field("text", pa.string()),
+            pa.field("vector", pa.list_(pa.float16(), 4))]))
+        tbl = embeddings._conn(coll).open_table(embeddings.TABLE)
+        shaped = embeddings._conform(tbl, rows(with_source))
+        if with_source:
+            assert isinstance(shaped, pa.Table), "one Arrow table for the batch, not a copy per row"
+            assert set(shaped.schema.names) == set(tbl.schema.names)
+            assert isinstance(embeddings.fit_source(tbl, rows(True)), pa.Table)
+        else:
+            assert isinstance(shaped, list), "rows without the key go as they are, as on main"
+        embeddings.write_pending([embeddings.PendingDoc(1, rows(with_source), purge=False, seen=0)], coll)
+        got[name] = embeddings._conn(coll).open_table(embeddings.TABLE).to_arrow().sort_by("id")
+    assert got["new"].schema == got["old"].schema
+    assert got["new"].equals(got["old"]), "the same bytes as the rows without the key"
+    assert got["new"].column("vector").combine_chunks().flatten().to_numpy().tobytes() == \
+        vecs[np.argsort([f"g:{i}:0:1" for i in range(40)], kind="stable")].tobytes()
+
+
 def test_a_hit_never_carries_the_column(collection, encoder, pair_layer):
     embeddings.upsert_book(1, "en", _src(_pair("T", "A"), H1), collection)
     hits = embeddings._search_table(collection, [1.0, 0.0, 0.0, 0.0], 5, None, None, None)

@@ -566,6 +566,21 @@ monthly 1.3–4.4 hours remain. So: deploy, backfill, then step 2 on.
   linearly: ~6 min at best, ~15–25 min under load** (estimate; München's
   pool has 8 processes, its manifest is larger), and ~1 GB for the sources
   held during phase 2 (24 bytes a document);
+- **measured, the old-schema write** — every collection not backfilled
+  (wikidata, wikipedia, gutenberg write all day): `write_pending` on a
+  table without the column, main against this branch, rows built by each
+  tree's own `_rows_for`; three interleaved rounds per shape, 300 batches
+  of 16 rows or 60 of 1,024, f16, dims 1,024 / 2,048 / 2,560. The whole
+  commit, 23–31 ms a batch, stays within main's own round-to-round spread
+  at every shape (differences of either sign). The Python side that
+  reaches Lance's writer (`_conform`, then the list's conversion) was
+  +0.02–0.04 ms a 16-row batch and +0.80–0.91 ms a 1,024-row one, a dict
+  copy per row; it is now main's (−0.41 to +0.04 ms): the column is
+  dropped once for the batch, from the one Arrow table lancedb would have
+  made of the rows (`embeddings._without_source`), byte for byte the same
+  table written (test). One document's held-row read pays one `tbl.schema`
+  call, +0.15 ms median on a 28 ms read (at 300 fragments); left as it is
+  (`_source_select` says why);
 - invariants, by test (`tests/test_source_hash.py`): a bundle's three files,
   `vectors_by_chunk_id` (what `vectors-sample` reads), the SHARD tree (every
   root `hold check` reads), a search and `space_id`, all byte-identical

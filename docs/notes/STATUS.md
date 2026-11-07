@@ -35,6 +35,10 @@ measured (published figures disagree).
   Measured: a kill inside Lance's pass leaves the table as it was;
   1,000,000 rows in 8.7 s at best, 21–37 s on this loaded 4-core container;
   pubmed's 40 M, ~6–25 min (estimate).
+- **The old-schema write** (every collection but pubmed until backfilled)
+  measured against main: the commit within main's own spread at every
+  batch shape; the per-row copy the column first cost (+0.8 ms a 1,024-row
+  commit) removed, one Arrow table per batch.
 - **München, before the update-file catch-up's step 2:** deploy, confirm
   pubmed paused, the dry run, `--apply`; it must precede the discard of
   2026-08 (step 3).

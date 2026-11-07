@@ -1415,7 +1415,7 @@ def add_source_column(collection, keys, vals, *, lock_con=None, checkpoint=None)
     return db.open_table(TABLE).count_rows(f"{SOURCE_COLUMN} IS NOT NULL")
 
 
-def fit_source(tbl, rows: list[dict]) -> list[dict]:
+def fit_source(tbl, rows: list[dict]) -> "list[dict] | pa.Table":
     """Rows for THIS table as to `source_hash` alone: the key dropped for a
     table written before the column, NULL where a row lacks it — for the
     writers that add rows of their own shape (genesis, the bundle importer);
@@ -1423,12 +1423,26 @@ def fit_source(tbl, rows: list[dict]) -> list[dict]:
     return fit_source_for(tbl.schema, rows)
 
 
-def fit_source_for(schema, rows: list[dict]) -> list[dict]:
+def fit_source_for(schema, rows: list[dict]) -> "list[dict] | pa.Table":
     """`fit_source` against a schema (a table about to be created)."""
     if SOURCE_COLUMN in schema.names:
         return [r if SOURCE_COLUMN in r else dict(r, **{SOURCE_COLUMN: None}) for r in rows]
-    return [{k: v for k, v in r.items() if k != SOURCE_COLUMN} if SOURCE_COLUMN in r else r
-            for r in rows]
+    if rows and SOURCE_COLUMN in rows[0]:
+        return _without_source(rows)
+    return rows
+
+
+def _without_source(rows: list[dict]) -> "pa.Table":
+    """Rows that carry `source_hash`, for a table without it, as the Arrow
+    table `tbl.add` would make of them, the column dropped: lancedb 0.40
+    converts a list of dicts with `pa.Table.from_pylist(rows)` (no schema;
+    `_into_pyarrow_reader`) and casts to the table's schema, and an Arrow
+    table goes to the same cast. The conversion is done once, here instead
+    of there, and the drop is zero-copy: the old-schema write pays no
+    per-row copy for the column (measured, 2026-11-07: a dict copy per row
+    was +0.8 ms a 1,024-row commit). Keys from the first row, as
+    `from_pylist` takes them."""
+    return pa.Table.from_pylist(rows).drop_columns([SOURCE_COLUMN])
 
 
 def source_bytes(content_hash) -> bytes | None:
@@ -1472,7 +1486,7 @@ def _create_table(db, rows):
                            storage_options=NEW_TABLE_STORAGE)
 
 
-def _conform(tbl, rows: list[dict]) -> list[dict]:
+def _conform(tbl, rows: list[dict]) -> "list[dict] | pa.Table":
     """Rows shaped for THIS table: a column the table has and a row lacks is
     filled as "current" until synced (app/validity.py). A row that CARRIES the
     validity columns for a table that lacks them is refused
@@ -1480,7 +1494,10 @@ def _conform(tbl, rows: list[dict]) -> list[dict]:
     was written without it — stripping the columns silently is how
     Normattiva's table grew 40,000 rows no date could filter (2026-10-13);
     the writer defers the document, and `hold vectors validity-columns`
-    rebuilds the table with the columns, every vector kept."""
+    rebuilds the table with the columns, every vector kept. Rows that carry
+    `source_hash` for a table written before it go as one Arrow table with
+    the column dropped (`_without_source`): decided once for the batch, no
+    copy per row — the hot path of every collection not backfilled."""
     names = set(tbl.schema.names)
     have = set(rows[0]) if rows else set()
     if have <= names and all(c in have for c in VALIDITY_COLUMNS if c in names) \
@@ -1488,8 +1505,12 @@ def _conform(tbl, rows: list[dict]) -> list[dict]:
         return rows
     if rows and all(c in have for c in VALIDITY_COLUMNS) and not all(c in names for c in VALIDITY_COLUMNS):
         raise ValidityColumnsMissing(_COLUMNS_MISSING)
-    from app import validity as validity_mod
     validity_missing = [c for c in VALIDITY_COLUMNS if c in names and c not in have]
+    if have - names == {SOURCE_COLUMN} and not validity_missing:
+        # a table written before `source_hash` (every collection's but those
+        # backfilled): the one difference, decided once for the batch
+        return _without_source(rows)
+    from app import validity as validity_mod
     out = []
     for r in rows:
         # `source_hash` is dropped for a table written before it (an old
@@ -1648,7 +1669,12 @@ def _written_chunks(db, book_id: int) -> dict[str, dict]:
 
 def _source_select(tbl) -> list[str]:
     """`[SOURCE_COLUMN]` for a table that has it, `[]` for one written
-    before it."""
+    before it. One `tbl.schema` call (measured 2026-11-07, an old table at
+    300 fragments: +0.15 ms median on a 28 ms read of one document). Read
+    without a projection instead, the column's presence would come free
+    with the answer, but the read was +4.8 ms; a memo per table would go
+    stale across `hold vectors source-hashes`, which runs in another
+    process."""
     return [SOURCE_COLUMN] if SOURCE_COLUMN in tbl.schema.names else []
 
 
@@ -2310,10 +2336,11 @@ def held_chunks(collection, book_ids) -> HeldRead:
     seen = tbl.version
     by_book: dict[int, dict[str, dict]] = {}
     ids = sorted({int(b) for b in book_ids})
+    cols = ["id", "book_id", "text", "vector"] + _source_select(tbl)    # once a call
     for i in range(0, len(ids), 500):
         part = ",".join(str(b) for b in ids[i:i + 500])
         at = (tbl.search().where(f"{BOOK_COLUMN_NAME} IN ({part})", prefilter=True)
-              .select(["id", "book_id", "text", "vector"] + _source_select(tbl))
+              .select(cols)
               .limit(_RESUME_SCAN_MAX).to_arrow())
         if at.num_rows >= _RESUME_SCAN_MAX:
             raise RuntimeError(f"{at.num_rows} stored rows for {len(ids[i:i + 500])} "
