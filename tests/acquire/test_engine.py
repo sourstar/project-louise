@@ -229,12 +229,12 @@ def test_idempotent_rerun_skips_unchanged_files(tmp_path, mock_server):
     # nonzero (CLAUDE.md invariant 2). Purely additive to this dict.
     r1 = engine.run_acquisition(con, collection, spec, "demo")
     assert r1 == {"fetched": 1, "skipped": 0, "failed": 0, "aborted": 0,
-                  "adopted": 0, "total": 1}
+                  "adopted": 0, "waiting": 0, "total": 1}
     assert mock_server.request_count("a.txt") == 1
 
     r2 = engine.run_acquisition(con, collection, spec, "demo")
     assert r2 == {"fetched": 0, "skipped": 1, "failed": 0, "aborted": 0,
-                  "adopted": 0, "total": 1}
+                  "adopted": 0, "waiting": 0, "total": 1}
     assert mock_server.request_count("a.txt") == 1   # never re-fetched
 
 
@@ -288,6 +288,11 @@ def test_kill_mid_acquisition_then_restart_resumes(tmp_path, mock_server):
     assert row["bytes_fetched"] == part_size
 
     mock_server.unstall("bigfile.dat")
+    # a restart at once does not retry the failed file: it waits out its backoff (1 min after a first failure,
+    # engine.RETRY_BACKOFF_S; operator 2026-11-07) and says so
+    early = engine.run_acquisition(con, collection, spec, "demo")
+    assert early["waiting"] == 1 and early["fetched"] == 0
+    con.execute("UPDATE fetch_files SET updated_at=updated_at-61 WHERE rel_path='bigfile.dat'")   # a minute on
     result2 = engine.run_acquisition(con, collection, spec, "demo")
     assert result2["fetched"] == 1     # bigfile.dat completes now
     assert result2["skipped"] == 1     # already_done.txt is NOT re-downloaded
@@ -330,6 +335,7 @@ def test_staged_fetch_streams_into_staging_and_lands_in_the_corpus(tmp_path, moc
 
     # resume from the staging partial; the finished file lands in the corpus
     mock_server.unstall("big.dat")
+    con.execute("UPDATE fetch_files SET updated_at=updated_at-61 WHERE rel_path='big.dat'")   # past its backoff
     result2 = engine.run_acquisition(con, collection, spec, "demo")
     assert result2["fetched"] == 1 and result2["skipped"] == 1
     assert mock_server.last_range("big.dat").startswith("bytes=")

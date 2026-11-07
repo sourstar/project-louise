@@ -185,6 +185,46 @@ byte-identical (`tools/measure/records_ab.py`).
   resumable script and SIGTERMs only its own containers at END (label
   `louise.in-window=<id>`).
 
+## 6a. The development watchdog (2026-11-07)
+
+The operator: *"when the limit of usage approaches, and you are going to be
+frozen for more than 2 hours, put all the developments on hold and resume the
+last working state before freezing."* No agent sees its own usage limit, so
+the node watches (`louise node checkpoint`, docs/07 §7.3; files and install
+in `deploy/watchdog/README.md`).
+
+- **Install, once** (and again after a TrueNAS update, which resets
+  `/etc/systemd/system`): the script to `/root/louise-watchdog/`, the two
+  units to `/etc/systemd/system/`, `systemctl daemon-reload`, `systemctl
+  enable --now louise-watchdog.timer`.
+- **Every 10 min** the timer runs `louise-watchdog.sh`: with a checkpoint open
+  and no beat for 2 h (and no declared step running), it `systemctl stop`s
+  the checkpoint's dev units (`louise-…` only, never `louise-watchdog`), then
+  the node restores its mode, its collections' pauses and embed settings, and
+  closes the checkpoint. Freezes are never changed. A worker container that
+  is down is logged (exit 1); no app is started.
+- **Log**: `/root/measure/watchdog.log` (actions only); `journalctl -u
+  louise-watchdog` (every run); `… node checkpoint status` (open?, deadline,
+  what a restore would change).
+- **Agents (this session and München)**, through `docker exec
+  ix-louise-rag-worker-1 python -m app.louise node checkpoint …`:
+  `save --note "<what, who>" --dev-unit <unit> …` BEFORE changing anything;
+  `beat` at least hourly; `beat --dev-unit <unit>` for a unit started later;
+  `beat --for 5h` before a known-long unattended step (at most 24 h);
+  `close` when done and the node is good. One checkpoint per node: a second
+  agent beats the open one, or `save --replace`s it when the state now IS
+  the working state.
+- **A step inside the container** (a gate, `hold embedder check`, a fetch, a
+  measurement) runs under the checkpoint:
+  `docker exec ix-louise-rag-worker-1 python -m app.louise node checkpoint run --note "<what>" -- python -m app.louise …`.
+  Stopping a systemd unit that runs
+  `docker exec` does NOT stop the process in the container (München,
+  2026-11-07: the docker CLI does not forward the signal), so the restore
+  stops each recorded step itself first: SIGTERM, up to 300 s for its unit,
+  then SIGKILL, each logged; a reused pid is never signalled. One started
+  otherwise: `beat --dev-pid <pid>` (the worker container's pid). `run` does
+  not beat.
+
 ## 7. The records build container (wikipedia-v8)
 
 - `deploy/scheduled/wikipedia-build.sh start|stop` (log: `/root/louise-scheduled/wikipedia-build.log`).

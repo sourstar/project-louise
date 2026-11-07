@@ -38,6 +38,29 @@ measured (published figures disagree).
   microphone needs the Ask page over **https** (or localhost): browsers
   give no microphone to plain http on the LAN. Not measured on the card yet.
 
+### 2026-11-07: the development watchdog — `node checkpoint` (operator: "Build it")
+
+- **Ordered**: "when the limit of usage approaches, and you are going to be
+  frozen for more than 2 hours, put all the developments on hold and resume
+  the last working state before freezing". No agent sees its usage limit.
+- **Built**: `louise node checkpoint save|beat|status|restore|close|watch`
+  (app/working_state.py; 07 §7.3): the mode, the collections' own pauses and
+  each one's embed as its file states it, recorded with the host's dev units
+  in `state/working-state.json`; no beat for 2 h and `watch` restores them
+  through `set_worker_state`, `set_paused` and `effective_config.set_and_apply`
+  (now also `hold config apply --set`'s one path). Freezes recorded, never
+  changed. Host half: deploy/watchdog/ (script, a 10-min timer; units stopped
+  `louise-…` only). Runbook §6a.
+- **Steps inside the container** (München: "stopping the systemd unit does
+  NOT stop a docker exec'd fetch"): `checkpoint run -- <command…>` and `beat
+  --dev-pid` record the process (pid, command line, start time, pid
+  namespace; app/dev_processes.py); the restore SIGTERMs each still the
+  same process, waits at most 300 s, SIGKILLs what is left, each said,
+  before any state changes. `run` does not beat.
+- **München, to do**: install it (deploy/watchdog/README.md); both agents
+  `save` before a development, `beat` hourly, and start container steps
+  with `docker exec ix-louise-rag-worker-1 … node checkpoint run -- …`.
+
 ### 2026-11-07: ssd3 is the build area — `LOUISE_BUILD_DIR`, `hold vectors move` (operator: B)
 
 - **Decided** ([storage-tiering.md](storage-tiering.md) §8): searched vector

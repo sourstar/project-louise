@@ -160,8 +160,8 @@ def test_a_dry_run_names_the_record_and_writes_nothing(origin, capsys):
 
 
 @pytest.mark.parametrize("result", [
-    {"fetched": 0, "skipped": 0, "failed": 1, "aborted": 0, "adopted": 0, "total": 1},
-    {"fetched": 0, "skipped": 0, "failed": 0, "aborted": 0, "adopted": 0, "total": 0,
+    {"fetched": 0, "skipped": 0, "failed": 1, "aborted": 0, "adopted": 0, "waiting": 0, "total": 1},
+    {"fetched": 0, "skipped": 0, "failed": 0, "aborted": 0, "adopted": 0, "waiting": 0, "total": 0,
      "stopped": "stopped in the listing"},
 ])
 def test_an_incomplete_fetch_records_nothing(origin, monkeypatch, capsys, result):
