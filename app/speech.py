@@ -14,27 +14,36 @@ own `/v1/audio/speech` after the three things only Louise knows:
   (its link pattern reads "[3][4]" as a reference link). So `/v1` writes
   adjacent citations with a space between them (`spaced_citations`), and
   this module removes them.
-- THE VOICE FOLLOWS THE TEXT'S LANGUAGE. LocalAI's voice profiles carry
-  their language (`/api/voice-profiles`): the voice asked for is kept when
-  it speaks the text's language, another profile in that language is used
-  when there is one, and the model's own voice otherwise. Nothing to
-  configure: a profile recorded in LocalAI is used by itself.
+  In French answers they come in more shapes ("[7 ; 8]", "[7 et 8]",
+  "[ 7 ]", "[réf. 7]", "【7】"; operator, 2026-11-07: "pronounces the
+  citations"): a bracket holding numbers and only the words that join or
+  name them is a citation (`_is_citation`). A bracket with a number that is
+  left in the text is said in a warn line, so the next shape is seen.
+- ONE VOICE FOR EVERY LANGUAGE (operator, 2026-11-07: "Use the same
+  omnivoice philippe voice for all the languages, let's see how it goes",
+  replacing 11-06's voice per language). The voice asked for is used
+  whatever the text's language; none asked, the first profile recorded in
+  LocalAI (`/api/voice-profiles`). Never the model's own voice where a
+  profile exists: OmniVoice without one is a different speaker at every
+  sentence, which is what French got while it had no French profile. The
+  text's language still goes as `language`, so the voice speaks it.
 - THE MODEL STAYS LOADED WHILE IT SPEAKS. A client sends an answer one
   sentence at a time, and LocalAI's reclaimer may evict a model between two
   calls; the model is pinned (app/model_pins.py) from the first sentence and
   released IDLE_S after the last.
 
 THE LANGUAGE is told by the commonest words of the languages Louise's
-collections hold — enough to pick between a handful of voices. THE
+collections hold — enough to tell the model which language it reads. THE
 STANDARD ALTERNATIVE (CLAUDE.md, "Do not reinvent the wheel"): a language
 identifier — lingua-py (n-gram models, 75 languages) or langid.py — is the
 named tool; it is a new dependency and pays once voices exist for more
 languages than these word lists cover, or once a short sentence picks the
-wrong voice.
+wrong language.
 """
 from __future__ import annotations
 
 import re
+import sys
 import threading
 import time
 from typing import Any
@@ -50,10 +59,24 @@ CALL_TIMEOUT_S = 180.0
 PROFILES_TTL_S = 60.0
 HOLDER = "speech"
 
-# "[3]", "[3,4]", "[3-5]", "[3]-[5]", "[gutenberg:123]", with the space before
-_CITATION = re.compile(
-    r"\s*\[(?:\d+(?:\s*[-–,]\s*\d+)*|[a-z][\w.-]*:[^\]\s]+)\]"
-    r"(?:\s*[-–]\s*\[\d+\])?")
+# a bracket, with the space before it: "[…]", "\\[…\\]" (escaped markdown),
+# "【…】" (the brackets some chat models cite with)
+_BRACKET = re.compile(r"\s*(?:\\?\[([^\[\]\\\n]{1,48})\\?\]|【([^【】\n]{1,48})】)")
+# a record's key: "[gutenberg:123]"
+_KEY = re.compile(r"[a-z][\w.-]*:[^\]\s]+")
+# the words that join or name the numbers of a citation, in the languages
+# Louise answers in: "[7 et 8]", "[réf. 7]", "[fonte 3]", "[n° 7]"
+_CITE_WORDS = frozenset("""
+    and or to see cf ref refs source sources doc docs no nr n p pp
+    et ou à a réf voir
+    e ed o al rif vedi fonte fonti
+    und oder bis siehe quelle quellen
+    y fuente fuentes
+    nº
+""".split())
+_CITE_MARKS = frozenset(" \t,;:.-–—/&+°º")
+_RUN = re.compile("\x00(?:\\s*[-–—,;]?\\s*\x00)*")
+_DIGIT_BRACKET = re.compile(r"[\[【][^\[\]【】]*\d[^\[\]【】]*[\]】]")
 _SPACE_BEFORE_MARK = re.compile(r"\s+([.,;:!?»)])")
 
 _WORDS = {
@@ -67,21 +90,48 @@ _WORDS = {
 _LEXICON = {lang: frozenset(words.split()) for lang, words in _WORDS.items()}
 
 
+def _is_citation(inner: str) -> bool:
+    """A bracket's content is a citation: a record's key, or numbers with
+    only the words and marks that join or name them ("7", "7 ; 8",
+    "7 et 8", "réf. 7", "3-5"). "[IV]", "[a]", "[art. 3]" are not."""
+    s = inner.strip()
+    if _KEY.fullmatch(s):
+        return True
+    if not any(c.isdigit() for c in s):
+        return False
+    words = re.findall(r"[^\W\d_]+", s.casefold())
+    if any(w not in _CITE_WORDS for w in words):
+        return False
+    rest = re.sub(r"[^\W\d_]+|\d+", "", s)
+    return all(c in _CITE_MARKS for c in rest)
+
+
 def speakable(text: str) -> str:
-    """The text without its citations, spaced as prose."""
-    out = _CITATION.sub("", text)
+    """The text without its citations, spaced as prose: each citation, and a
+    run of them joined by a dash or a comma ("[3]-[5]"), goes with the space
+    before it."""
+    def one(m: re.Match) -> str:
+        return "\x00" if _is_citation(m.group(1) or m.group(2) or "") else m.group(0)
+    out = _RUN.sub("", _BRACKET.sub(one, text.replace("\x00", "")))
     out = _SPACE_BEFORE_MARK.sub(r"\1", out)
-    return re.sub(r"[ \t]{2,}", " ", out).strip()
+    out = re.sub(r"[ \t]{2,}", " ", out).strip()
+    left = _DIGIT_BRACKET.search(out)
+    if left:
+        print(f"[speech] warn: a bracket with a number is read aloud: {left.group(0)!r} "
+              f"(app/speech.py _is_citation)", file=sys.stderr)
+    return out
 
 
 def spaced_citations(text: str, tail: str = "") -> str:
     """Adjacent citations with a space between them ("[3][4]" → "[3] [4]"),
-    so a client's markdown cleaning does not read them as a reference link.
+    and a citation followed by a parenthesis ("[3](" → "[3] ("), so a
+    client's markdown cleaning does not read them as a link and keep the
+    number alone.
     `tail`: what came before `text` in a stream, so a pair split across two
     chunks is spaced too."""
-    if text.startswith("[") and re.search(r"\d\]$", tail):
+    if text[:1] in "[(" and text and re.search(r"\d\]$", tail):
         text = " " + text
-    return re.sub(r"(?<=\d\])(?=\[\d)", " ", text)
+    return re.sub(r"(?<=\d\])(?=\[\d|\()", " ", text)
 
 
 def language(text: str) -> str | None:
@@ -96,21 +146,14 @@ def language(text: str) -> str | None:
     return best[1]
 
 
-def _lang_of(profile: dict) -> str:
-    return str(profile.get("language") or "").split("-")[0].casefold()
-
-
-def voice_for(asked: str | None, lang: str | None, profiles: list[dict]) -> str | None:
-    """The voice to speak `lang` in: the one asked for when it speaks it,
-    else a profile in that language, else the model's own (None). A voice
-    that is not a profile (a model's named voice) is kept as asked."""
-    by_voice = {p.get("voice"): p for p in profiles}
-    if lang is None or (asked and asked not in by_voice):
-        return asked
-    if asked in by_voice and _lang_of(by_voice[asked]) == lang:
+def voice_for(asked: str | None, profiles: list[dict]) -> str | None:
+    """THE ONE VOICE, whatever the language (operator, 2026-11-07): the
+    voice asked for; none asked, the first profile recorded; no profile,
+    the model's own (None)."""
+    if asked:
         return asked
     for p in sorted(profiles, key=lambda p: str(p.get("created_at") or "")):
-        if _lang_of(p) == lang:
+        if p.get("voice"):
             return p.get("voice")
     return None
 
@@ -162,7 +205,7 @@ def synthesize(body: dict[str, Any], url: str | None = None) -> tuple[int, bytes
             "application/json"
     out = {**body, "input": text}
     lang = language(text)
-    voice = voice_for(body.get("voice"), lang, profiles(url))
+    voice = voice_for(body.get("voice") or None, profiles(url))
     if voice:
         out["voice"] = voice
     else:
