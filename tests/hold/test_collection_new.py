@@ -247,6 +247,25 @@ def test_the_steps_are_the_workflows_numbered_in_case_as_order(tmp_path, steps, 
     assert said == list(wf.ordered(wf.case("A")))
 
 
+def test_a_dry_run_stops_before_calibrate_writes_nothing_and_refuses_as_the_run(tmp_path, steps, capsys):
+    """`new --dry-run` (the pilot rule: a dry run before every whole run)."""
+    from app.hold import recreate
+    recipe = _recipe(tmp_path)
+    before = recreate.tree_digest(tmp_path)
+    assert _new(tmp_path, recipe, "--name", "wd", "--dry-run") == 0
+    assert recreate.tree_digest(tmp_path) == before, "no progress file, no collection directory"
+    assert steps["order"] == []
+    said = capsys.readouterr().out
+    assert f"space_id    {_codex(**json.loads(open(recipe).read())['space']).space_id} (new)" in said
+    plan = [line.split()[1] for line in said.splitlines() if line.startswith("    ")]
+    assert plan == list(wf.ordered(wf.case("A")))
+    assert "3/7 calibrate     would run" in said
+    case_b = _recipe(tmp_path, query={"instruction": "query: ", "encoder": {"weights": WEIGHTS}})
+    assert _new(tmp_path, case_b, "--name", "wd", "--dry-run") == _new(tmp_path, case_b) == 2
+    err = [line for line in capsys.readouterr().err.splitlines() if line.startswith("louise: ")]
+    assert len(err) == 2 and err[0] == err[1] and "case B" in err[0]
+
+
 def test_the_dry_codex_is_the_space_create_makes(tmp_path):
     """`col.dry_codex`, which `new` holds an existing collection to, gives
     the `space_id` and the engine `create` writes."""

@@ -60,11 +60,16 @@ STEPS: tuple[Step, ...] = (
          "the recipe states another tolerance: a tolerance is measured, never typed"),
     Step("make", "create, copy a held space, reuse a held reference, deposit, annotations, or peer fetch",
          "the plugin or recipe is refused (07 §7.3)"),
-    Step("carry", "re-creation only: takes from the predecessor what is provably identical (RULE 1)", ""),
+    Step("carry", "re-creation only: takes from the predecessor what is provably identical (RULE 1): "
+                  "its parts, then — once a sample re-encoded by the new run reproduces its vectors — its "
+                  "manifest, text index and vectors, copied and proven by digest",
+         "the sample falls below the space's tolerance (exit 1); the copy is not its source's; no room"),
     Step("cpu-reference", "writes the collection's copy of the CPU reference from the store; nothing is "
                           "computed twice", "the twin is not reproducible"),
     Step("gate", "`hold embedder check`, for each role", "the gate fails (exit 1)"),
-    Step("swap", "re-creation only: forgets the predecessor and takes its name", ""),
+    Step("swap", "re-creation only: the predecessor's `forget` and its size printed for the operator; "
+                 "after it, takes its name and its collection file",
+         "the predecessor is still held (exit 2: the operator forgets it; this step deletes nothing)"),
 )
 STEP_KEYS: tuple[str, ...] = tuple(s.key for s in STEPS)
 
@@ -103,9 +108,12 @@ CASES: tuple[Case, ...] = (
     Case("E", "A copy of a held space", "a second collection in an existing space",
          ("plugin", "recipe", "the space's collection", "name"), _COPY,
          "a second collection in wikipedia's space", phase=2),
+    # built on A (2026-11-07, pulled forward from phase 3 for normattiva): the
+    # predecessor's space and records, another engine; on D or E with them
     Case("F", "A re-creation", "a collection replaced, nothing official published from it (RULE 1)",
-         ("plugin", "recipe", "name", "predecessor"), _A + ("carry", "swap"),
-         "wikipedia-v8 → wikipedia", phase=3),
+         ("plugin", "recipe", "the predecessor's name"), _A + ("carry", "swap"),
+         "louise hold collection new normattiva --recipe recipes/normattiva.toml --name normattiva "
+         "--re-create --cpu-model vega-dar-legal-it-cpu", built=True, phase=3),
     Case("G", "A private collection", "LocalAGI or an OpenAI vector store; not shared", ("name",), _COPY,
          "notes", phase=2),
     Case("H", "Annotations", "claims about another collection; no encoder", ("claims file", "name"),
@@ -148,8 +156,10 @@ class Run:
     another request and is not resumed."""
 
     def __init__(self, c: Case, name: str, inputs: dict[str, Any], *,
-                 say: Callable[[str], None], path: Path | None = None):
-        self.case, self.name, self.say = c, name, say
+                 say: Callable[[str], None], path: Path | None = None, dry: bool = False):
+        # `dry`: `new --dry-run` — the steps it runs (resolve, check) said,
+        # what earlier runs kept read, and nothing recorded
+        self.case, self.name, self.say, self.dry = c, name, say, dry
         self.steps = ordered(c)
         self.path = path or progress_path(name)
         self.digest = inputs_digest(inputs)
@@ -178,7 +188,9 @@ class Run:
 
     def record(self, step: str, result: dict[str, Any] | None = None) -> None:
         """Kept AFTER the step's own durable effect (invariant 2), written
-        whole and renamed into place."""
+        whole and renamed into place. A dry run records nothing."""
+        if self.dry:
+            return
         self.kept[step] = {"at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "result": result or {}}
         self.path.parent.mkdir(parents=True, exist_ok=True)
         tmp = self.path.with_suffix(".json.tmp")
