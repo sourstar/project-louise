@@ -134,3 +134,13 @@ patch_cache_s = 604800
 # TRANSLATE_MODEL (one item per call; a failure falls back to it). Searches
 # always use TRANSLATE_MODEL. Node-wide, in no Codex.
 # reading = { la = "index-translate-9b", grc = "index-translate-9b" }
+
+# [speech] — the Ask page's voice, on CHAT_URL's model server (07 §7.8). Each
+# model optional: one unset is a voice the page does not offer (no button,
+# nothing asked). `louise node speech set --stt … --vad … --tts … --voice …`
+# writes this table; `louise node speech show` says what the page offers.
+# [speech]
+# stt_model = "whisper-large-v3"   # speech to text: the microphone
+# vad_model = "silero-vad"         # voice activity: a clip trimmed to its speech
+# tts_model = "omnivoice-cpp"      # text to speech: the answer read aloud
+# tts_voice = "localai://voice-profiles/1c834741"

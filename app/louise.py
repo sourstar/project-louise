@@ -2606,6 +2606,33 @@ def cmd_node_show(a) -> int:
     return 0
 
 
+def cmd_node_speech(a) -> int:
+    """`node speech show` and `node speech set` (07 §7.3): the Ask page's
+    voice — its models the node's, in platform.toml's `[speech]` (07 §7.8;
+    app/voice.py, the one resolution). `set` is desired state written into
+    the file; the page offers what it says at its next load."""
+    from app import platform_config, voice
+    from app.platform_config import SPEECH_KEYS
+    try:
+        if a.speech_verb == "set":
+            changes = {k: getattr(a, k) for k in SPEECH_KEYS if getattr(a, k) is not None}
+            if not changes:
+                print("louise node speech set: nothing to set — give --stt, --vad, --tts or --voice "
+                      "(an empty value removes one)", file=sys.stderr)
+                return 2
+            out = voice.write(platform_config.platform_path(), changes)
+            shown = voice.show()
+            out.update({k: shown[k] for k in ("server", "offered", "listed", "note", "listed_note")
+                        if k in shown})
+            _print(out)
+            return 0
+        _print(voice.show())
+        return 0
+    except voice.LOAD_ERRORS as e:
+        print(f"louise node speech {a.speech_verb}: {e}", file=sys.stderr)
+        return 2
+
+
 #: The web process `node start` runs beside the worker: the image's own
 #: command (Dockerfile), so one node started either way serves the same app.
 WEB_COMMAND = ("-m", "uvicorn", "app.api:app", "--host", "0.0.0.0")
@@ -5840,6 +5867,22 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--errors", action="store_true", help="also count errored documents (43 s on a 40M manifest: `error` is in "
                         "no index, so proving there are none walks the whole scope range)")
     p.set_defaults(fn=cmd_node_health)
+    p = nverbs.add_parser("speech", help="the Ask page's voice: the node's speech models, in platform.toml [speech]")
+    spverbs = p.add_subparsers(dest="speech_verb", required=True)
+    q = spverbs.add_parser("show", help="the speech models as the node resolves them, what the Ask page offers, "
+                                        "and whether the model server lists each")
+    q.set_defaults(fn=cmd_node_speech)
+    q = spverbs.add_parser("set", help="write the speech models into platform.toml [speech]; an empty value "
+                                       "removes one, and its voice is no longer offered")
+    q.add_argument("--stt", dest="stt_model", default=None, metavar="MODEL",
+                   help="speech to text (/v1/audio/transcriptions): the microphone is offered with it")
+    q.add_argument("--vad", dest="vad_model", default=None, metavar="MODEL",
+                   help="voice activity (LocalAI's /v1/vad): a clip trimmed to its speech, silence never transcribed")
+    q.add_argument("--tts", dest="tts_model", default=None, metavar="MODEL",
+                   help="text to speech (/v1/audio/speech): the answer is read aloud with it")
+    q.add_argument("--voice", dest="tts_voice", default=None, metavar="VOICE",
+                   help="the voice, for every language; unset, the model server's first voice profile")
+    q.set_defaults(fn=cmd_node_speech)
 
     hold = surfaces.add_parser("hold", help="your own copy: complete, current, checked")
     nouns = hold.add_subparsers(dest="noun", required=True)

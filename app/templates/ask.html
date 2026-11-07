@@ -24,8 +24,21 @@
   </div>
   {% endif %}
   <label>Question</label>
+  {# THE MICROPHONE (operator, 2026-11-07: voice support), beside the box,
+     where the node sets a speech-to-text model (app/voice.py) — none set,
+     no button, and nothing asks. Hidden until /static/voice.js finds a
+     browser that will open a microphone for this page. #}
+  <div class="q-row">
   <textarea id="q" rows="3" placeholder="Ask across every collection in scope… Ctrl/Cmd+Enter to ask"
     onkeydown="if(event.key==='Enter'&&(event.ctrlKey||event.metaKey)){event.preventDefault();go()}"></textarea>
+  {% if voice.input.available %}
+  <button id="mic" class="voice-btn" type="button" hidden aria-pressed="false" aria-label="speak the question"
+          title="speak the question"><svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" fill="none"
+          stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="2"
+          width="6" height="12" rx="3"/><path d="M5 10v1a7 7 0 0 0 14 0v-1M12 18v4M8 22h8"/></svg></button>
+  {% endif %}
+  </div>
+  {% if voice.input.available %}<div id="mic-status" class="note" role="status" aria-live="polite" hidden></div>{% endif %}
   {# ONE QUESTION, ONE BUTTON (operator, 2026-10-30: "ask and search are
      confusing" — "Search only", "AI summary"). The switch says what Ask
      gives: the passages alone, or the passages at once and an answer
@@ -101,7 +114,17 @@
 <div id="report"></div>
 
 <div id="answer-pane" style="display:none" class="panel">
+  <div class="answer-head">
   <h2>Answer</h2>
+  {# the answer read aloud, sentence by sentence, in the node's voice
+     (app/speech.py), where the node sets a text-to-speech model #}
+  {% if voice.output.available %}
+  <button id="speak" class="voice-btn" type="button" hidden aria-pressed="false" title="read the answer aloud"><svg
+          viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor"
+          stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5 6 9H2v6h4l5 4V5z"/><path
+          d="M15.5 8.5a5 5 0 0 1 0 7M19 5a10 10 0 0 1 0 14"/></svg> <span class="speak-label">read aloud</span></button>
+  {% endif %}
+  </div>
   <div id="answer" style="white-space:pre-wrap;line-height:1.6"></div>
 </div>
 
@@ -140,6 +163,20 @@
      the anchor, so the answer pushes them down instead. */
   #results{overflow-anchor:none}
   #reader-lang{margin-left:8px}
+  /* the question box and its microphone on one row, at any width */
+  .q-row{display:flex;gap:6px;align-items:stretch}
+  .q-row textarea{flex:1 1 auto;min-width:0}
+  .voice-btn{display:inline-flex;align-items:center;justify-content:center;gap:6px}
+  .voice-btn[hidden]{display:none}
+  #mic{flex:0 0 auto;min-width:44px;padding:0 10px}
+  #mic.rec{border-color:var(--err);color:var(--err);animation:mic-pulse 1.2s ease-in-out infinite}
+  @keyframes mic-pulse{50%{box-shadow:0 0 0 3px rgba(224,80,80,.35)}}
+  #mic-status{margin:4px 0 0}
+  .answer-head{display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap}
+  .answer-head h2{margin-bottom:0}
+  #answer-pane .answer-head{margin-bottom:10px}
+  #speak{padding:4px 10px}
+  #speak.on{border-color:var(--brass);color:var(--brass)}
   #reader .translating{border-left:2px solid var(--lapis,#3a6ea5);padding-left:4px}
   .reader-chunk{white-space:pre-wrap;line-height:1.55;margin:0 0 12px}
   .reader-chunk.hl{background:rgba(246,196,83,.22);border-left:3px solid var(--brass);padding:6px 8px;border-radius:4px}
@@ -334,6 +371,7 @@ async function search(){
   // its [n] to the NEW hits by position - a link that looks right and
   // opens the wrong document.
   answerRaw=''; answerLang=null; answerShown=null; answerNote='';
+  if(window.louiseVoice)louiseVoice.answerCleared();     // nothing left to read aloud
   document.getElementById('answer-pane').style.display='none';
   document.getElementById('answer').textContent='';
   document.getElementById('report').replaceChildren();
@@ -360,6 +398,7 @@ async function search(){
 let lastSearch=null;
 function startAnswer(){
   const pane=document.getElementById('answer-pane'), a=document.getElementById('answer');
+  if(window.louiseVoice)louiseVoice.answerCleared();
   pane.style.display='block'; a.textContent='thinking…';
   let started=false;
   return {pane,a,delta:t=>{if(!started){a.textContent='';started=true} a.textContent+=t}};
@@ -370,6 +409,7 @@ function finishAnswer(a,want){
   if(a.textContent==='thinking…')a.textContent='';
   answerRaw=a.textContent; answerLang=want; answerShown=want;
   linkCitations();
+  if(window.louiseVoice)louiseVoice.answerReady(want);    // the speaker, where the node offers it
 }
 // THE SWITCH: what Ask gives, remembered in the reader's browser
 function howAsk(){const r=document.querySelector('input[name="how"]:checked'); return r?r.value:'summary'}
@@ -557,6 +597,7 @@ function markTranslated(u,text,lang){
 function showAnswer(text,lang){
   const a=document.getElementById('answer');
   a.classList.remove('translating'); a.textContent=text; answerShown=lang; linkCitations();
+  if(window.louiseVoice)louiseVoice.answerReady(lang);
 }
 
 // A clamped passage in two: what its clamp shows, to the end of that
@@ -1014,4 +1055,7 @@ placeReport();
 wireHits();
 relayRestore();
 </script>
+{% if voice.input.available or voice.output.available %}
+<script src="/static/voice.js?v={{ asset_v }}"></script>
+{% endif %}
 {% endblock %}

@@ -283,14 +283,28 @@ RESULT_LANGUAGES = (
 
 @ask_router.get("/ask", response_class=HTMLResponse)
 def ask_page(request: Request):
+    from . import voice
     return TEMPLATES.TemplateResponse(request, "ask.html", {
         "active": "ask", "collections": collections_mod.load_public(), "result": None,
         "annotations": _ask_annotations(),
+        # the microphone and the speaker, where the node sets their models
+        # (app/voice.py `offered`): a voice not offered has no button
+        "voice": voice.offered(),
         "result_languages": RESULT_LANGUAGES,
         "default_results": retrieval.DEFAULT_RESULTS,
         "default_rerank_depth": retrieval.RERANK_TOP_N,
         "max_results": retrieval.MAX_RESULTS,
         "max_rerank_depth": retrieval.MAX_RERANK_DEPTH})
+
+
+@ask_router.get("/ask/voice")
+def ask_voice():
+    """What the Ask page offers of voice — `input` (the microphone), `output`
+    (the answer read aloud) — each `available` or not, and `why` not in the
+    operator's words with the command that supplies it (app/voice.py). The
+    page only hides a button; the models are the node's, never asked."""
+    from . import voice
+    return voice.offered()
 
 
 def _ask_annotations() -> list[dict]:
@@ -3710,6 +3724,14 @@ def _reading_models() -> dict[str, str]:
         return {}
 
 
+def _speech_models() -> dict[str, str]:
+    """`[speech]`'s models by use, for the GPU panel (app/voice.py)."""
+    from . import voice
+    s = voice.settings_or_none()
+    return {use: m for use, m in (("speech to text", s.stt_model), ("voice activity", s.vad_model),
+                                  ("speech", s.tts_model)) if m}
+
+
 @admin_router.get("/system/gpu", response_class=HTMLResponse)
 def system_gpu_fragment(request: Request):
     # asked of the probe over HTTP, bounded (app/gpu.py): this process never
@@ -3720,7 +3742,7 @@ def system_gpu_fragment(request: Request):
     models = gpu_models.panel(collections_mod.load_all(),
                               extra_urls=(config.CHAT_URL, config.TRANSLATE_URL, config.RERANK_URL),
                               chat_model=config.CHAT_MODEL, translate_model=config.TRANSLATE_MODEL,
-                              reading=_reading_models())
+                              reading=_reading_models(), speech=_speech_models())
     return TEMPLATES.TemplateResponse(request, "_fragments/gpu.html",
                                        gpu.panel(config.GPU_PROBE_URL)
                                        | {"governor": gpu.governor(),

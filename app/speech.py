@@ -28,7 +28,12 @@ own `/v1/audio/speech` after the three things only Louise knows:
 - THE MODEL STAYS LOADED WHILE IT SPEAKS. A client sends an answer one
   sentence at a time, and LocalAI's reclaimer may evict a model between two
   calls; the model is pinned (app/model_pins.py) from the first sentence and
-  released IDLE_S after the last.
+  released IDLE_S after the end of the last (`pinned`, which the
+  microphone's models use too: app/transcribe.py).
+- THE NODE'S MODEL AND VOICE WHEN THE REQUEST NAMES NONE (2026-11-07): the
+  Ask page sends the text alone, and `[speech] tts_model` / `tts_voice`
+  (app/voice.py, the one resolution) fill them in. A client that names its
+  own (Open WebUI) keeps it.
 
 THE LANGUAGE is told by the commonest words of the languages Louise's
 collections hold — enough to tell the model which language it reads. THE
@@ -43,7 +48,8 @@ from __future__ import annotations
 import re
 import threading
 import time
-from typing import Any
+from contextlib import contextmanager
+from typing import Any, Iterable, Iterator
 
 from app import config, httpc, model_pins
 
@@ -162,7 +168,6 @@ def voice_for(asked: str | None, profiles: list[dict]) -> str | None:
 
 _profiles: tuple[float, list[dict]] = (0.0, [])
 _lock = threading.Lock()
-_timer: threading.Timer | None = None
 
 
 def profiles(url: str) -> list[dict]:
@@ -184,37 +189,63 @@ def profiles(url: str) -> list[dict]:
     return got
 
 
-def _keep_loaded(url: str, model: str) -> None:
-    """Pinned while sentences come; released IDLE_S after the last."""
-    global _timer
-    model_pins.hold(url, model, HOLDER)
+_timers: dict[str, threading.Timer] = {}
+
+
+def _arm(holder: str) -> None:
+    """`holder`'s pins released IDLE_S from now, unless a call re-arms it."""
     with _lock:
-        if _timer is not None:
-            _timer.cancel()
-        _timer = threading.Timer(IDLE_S, model_pins.release, args=(HOLDER,))
-        _timer.daemon = True
-        _timer.start()
+        old = _timers.pop(holder, None)
+        if old is not None:
+            old.cancel()
+        t = threading.Timer(IDLE_S, model_pins.release, args=(holder,))
+        t.daemon = True
+        _timers[holder] = t
+        t.start()
+
+
+@contextmanager
+def pinned(url: str, models: Iterable[str | None], holder: str = HOLDER) -> Iterator[None]:
+    """`with pinned(url, [model], holder):` around one call of a run of them
+    (the sentences of an answer, the clips a reader speaks): each model
+    pinned as the call starts, and the holder released IDLE_S after the END
+    of the last call — a call longer than IDLE_S is never unpinned under it."""
+    for m in models:
+        if m:
+            model_pins.hold(url, m, holder)
+    _arm(holder)
+    try:
+        yield
+    finally:
+        _arm(holder)
 
 
 def synthesize(body: dict[str, Any], url: str | None = None) -> tuple[int, bytes, str]:
     """(status, audio or error body, content type) for an OpenAI speech
-    request, relayed to the model server."""
+    request, relayed to the model server; the model and the voice the
+    node's (`[speech]`, app/voice.py) where the request names none."""
+    from app import voice as node_voice
     url = (url or config.CHAT_URL).rstrip("/")
     text = speakable(str(body.get("input") or ""))
-    model = str(body.get("model") or "")
+    node = node_voice.settings_or_none()
+    model = str(body.get("model") or "") or (node.tts_model or "")
     if not text:
         return 400, b'{"error": {"message": "no text to speak once its citations are removed"}}', \
             "application/json"
     out = {**body, "input": text}
+    if model:
+        out["model"] = model
     lang = language(text)
-    voice = voice_for(body.get("voice") or None, profiles(url))
+    voice = voice_for(body.get("voice") or node.tts_voice or None, profiles(url))
     if voice:
         out["voice"] = voice
     else:
         out.pop("voice", None)
     if lang and "language" not in out:
         out["language"] = lang
-    if model:
-        _keep_loaded(url, model)
-    r = httpc.post(f"{url}/v1/audio/speech", json=out, timeout=CALL_TIMEOUT_S)
+    if not model:
+        r = httpc.post(f"{url}/v1/audio/speech", json=out, timeout=CALL_TIMEOUT_S)
+    else:
+        with pinned(url, [model]):
+            r = httpc.post(f"{url}/v1/audio/speech", json=out, timeout=CALL_TIMEOUT_S)
     return r.status_code, r.content, r.headers.get("content-type", "application/octet-stream")

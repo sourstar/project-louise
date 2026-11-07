@@ -285,6 +285,12 @@ louise node
                                                                        still current upstream (04 §4.3); it survives a restart (§7.8) (added 2026-11-07, operator)
   unfreeze <collection>                                                the collection follows its origin and its peers again and catches up: a fetch, a scan, the newer snapshot and its members
   health [<collection>] [--errors]                                     every stage's state per collection; exit 1 when a stage has work it cannot start (added 2026-10-08)
+  speech show                                                          the Ask page's voice: the speech models as the node resolves them (platform.toml `[speech]`, §7.8),
+                                                                       the model server they run on, what the page offers and why not, whether the server lists each
+                                                                       model (`GET /v1/models`) (added 2026-11-07, operator)
+  speech set [--stt M] [--vad M] [--tts M] [--voice V]                 the models into `[speech]`, every other line of the file kept; an empty value removes one, and its
+                                                                       voice is no longer offered; nothing given is exit 2, and a file the result would not load is
+                                                                       refused, unchanged (exit 2)
 
 louise dev                                                             operator instruments; read-only unless the line says otherwise
   schedule-report      what the worker spent its rounds on; --gpu [--minutes N]: the card's busy, gaps and who held it, per minute;
@@ -950,6 +956,20 @@ reader needs at the command line:
   read by `node_state.frozen_since`. A command a person types — `records
   fetch`, `share fetch`, `records build` — is not stopped: freeze governs
   what the node does on its own.
+- **`node speech show`, `node speech set`.** *Added 2026-11-07* (operator:
+  "voice support in Louise's web GUI, after the node's speech models run on
+  the GPU"). The Ask page's microphone and speaker run on the node's model
+  server (CHAT_URL's), with models that are the NODE's choice, never a
+  reader's (RULE 2): `--stt` speech to text (`POST /v1/audio/transcriptions`),
+  `--vad` voice activity (LocalAI's `POST /v1/vad`), `--tts` text to speech
+  (`POST /v1/audio/speech`), `--voice` its voice for every language (unset,
+  the server's first voice profile). One resolution (`app/voice.py`
+  `settings`) for every reader of them. A model unset is a voice the page
+  does not offer: no button, nothing asked; `show` says why, with the
+  `set` that supplies it. `set` writes desired state into the file
+  (§7.8), not the database: the page offers what the file says at its next
+  load, with no restart. The browser opens a microphone only for a page
+  reached over https or at localhost; `show` says so.
 - **`dev migrate schema`.** Creating the schema of a new state database
   is not a migration and happens on first open. Changing an existing
   schema happens here only; a process that finds a schema other than its
@@ -1238,6 +1258,33 @@ format, app/ask/SKILL.md), with the node's address in it and no token.
 It says how a model searches with the three tools and how it cites.
 The MCP server's `initialize` gives the same text as its
 `instructions`.
+
+**Speech** (*added 2026-11-06, -07*; `app/speech.py`, `app/transcribe.py`,
+`app/voice.py`). OpenAI's two audio endpoints, relayed to the node's model
+server with what only Louise knows. `POST /v1/audio/speech` `{input, model,
+voice, language}`: nothing in square brackets is read (a citation, in
+whatever shape the language writes it), one voice for every language, the
+text's language sent as `language`, the model pinned from the first
+sentence until 120 s after the end of the last; a request naming no model
+or voice gets `[speech] tts_model` and `tts_voice` (§7.8); 400 for a text
+that is only citations. `POST /v1/audio/transcriptions` (multipart `file`,
+`model`, `language`, `response_format`, … — OpenAI's shape; at most 25 MB,
+413 above): the node's `stt_model` where none is named, 400 where there is
+neither. Where `[speech] vad_model` is set, a clip that is a WAV of 16-bit
+samples at 16 kHz, mono (the Ask page's) goes first to LocalAI's `POST
+/v1/vad` (`{model, audio: [float32 samples]}` → `{segments: [{start, end}]}`
+in seconds, an `end` of 0 being a segment still open at the clip's end), and
+only its speech is transcribed — the segments in order, 0.2 s of silence
+between two; a clip with no speech is answered empty (`{"text": ""}`, or the
+format's empty form) and the speech-to-text model is not called. Any other
+audio goes on untouched; a VAD that fails sends the clip whole and writes a
+warn line under `models`. The answer's `Louise-VAD` header says which:
+`off`, `skipped: …`, `failed: …`, `silence: …`, `trimmed: …`. The models
+are pinned while a reader speaks and released 120 s after the last clip.
+`GET /ask/voice` is what the Ask page offers: `{input: {available, why,
+trimmed}, output: {available, why}}`, `why` in the operator's words with the
+`node speech set` that supplies it; the page renders a button only for an
+available voice.
 - the LocalAGI routes below require the token read from
   `DEPOSIT_TOKEN_FILE`, reads included, and that token opens nothing
   else: an agent that can write its memory cannot pause the node.
@@ -1616,6 +1663,11 @@ variable, a file, a log line or a message.
              # (app/model_loads.json, docs/notes/model-profile.md), this is every other's. A load past it is a
              # deferral (embedding) or a fallback that says "model loading took longer than N s" (05 §5.6)
              # (added 2026-10-09)
+[speech]     stt_model = "whisper-large-v3"   vad_model = "silero-vad"   tts_model = "omnivoice-cpp"
+             tts_voice = "localai://voice-profiles/1c834741"
+             # the Ask page's voice, on CHAT_URL's model server (§7.4 "Speech"; added 2026-11-07): speech to text,
+             # voice activity (a clip trimmed to its speech, silence never transcribed), text to speech and its
+             # voice. Each optional: a model unset is a voice the page does not offer. `node speech set` writes here
 [certifier]  valid_from = "2026-10-07T00:00:00Z"        # this node as a certifier (09 §9.11): from when its own key certifies, and
              # revoked_at = "…"                          # when it was revoked — the anchor document it serves at
                                                         # /.well-known/louise-certifier.json says so; the collections listed there are

@@ -1116,6 +1116,48 @@ async def audio_speech(request: Request):
     return Response(content=content, status_code=status, media_type=ctype)
 
 
+def _openai_error(status: int, message: str) -> JSONResponse:
+    return JSONResponse({"error": {"message": message, "type": "invalid_request_error"}},
+                        status_code=status)
+
+
+@app.post("/v1/audio/transcriptions")
+async def audio_transcriptions(request: Request):
+    """OpenAI's transcription endpoint (multipart: `file`, `model`,
+    `language`, `response_format`, …), relayed to the node's model server
+    with the node's speech-to-text model where none is named, the clip
+    trimmed to its speech first where the node sets a voice-activity model,
+    an all-silent clip answered empty without the model; the models kept
+    loaded while a reader speaks (app/transcribe.py). `Louise-VAD` says
+    what the trim did."""
+    from . import transcribe
+    if not request.headers.get("content-type", "").lower().startswith("multipart/form-data"):
+        return _openai_error(400, "the upload is multipart/form-data with a `file` field (OpenAI's shape)")
+    try:
+        declared = int(request.headers.get("content-length") or 0)
+    except ValueError:
+        declared = 0
+    if declared > transcribe.MAX_BYTES + (1 << 20):
+        return _openai_error(413, f"the upload is over {transcribe.MAX_BYTES >> 20} MB")
+    form = await request.form()
+    try:
+        up = form.get("file")
+        if up is None or isinstance(up, str):
+            return _openai_error(400, "the upload has no `file`")
+        audio = await up.read(transcribe.MAX_BYTES + 1)
+        if len(audio) > transcribe.MAX_BYTES:
+            return _openai_error(413, f"the upload is over {transcribe.MAX_BYTES >> 20} MB")
+        fields = [(k, v) for k, v in form.multi_items() if isinstance(v, str)]
+        got = await run_in_threadpool(transcribe.transcribe, audio, up.filename or "audio",
+                                      up.content_type or "application/octet-stream", fields)
+    finally:
+        await form.close()
+    # a header is latin-1: a failure's text is said in ASCII
+    note = got.vad.encode("ascii", "replace").decode("ascii")
+    return Response(content=got.body, status_code=got.status, media_type=got.content_type,
+                    headers={"Louise-VAD": note})
+
+
 def source_entries(hits: list[dict]) -> list[dict]:
     """The answer's [n], in order: what a client shows as its sources —
     the passage, where it is (a path of this node's reader), the work's
