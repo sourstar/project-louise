@@ -353,7 +353,10 @@ def connect(collection=None, *, shared: bool = False) -> sqlite3.Connection:
         collection = collections_mod.default_collection()
     collection.manifest_path.parent.mkdir(parents=True, exist_ok=True)
     collection.fts_dir.mkdir(parents=True, exist_ok=True)
-    collection.lance_dir.mkdir(parents=True, exist_ok=True)
+    # a table in the build area that cannot be reached is refused, never
+    # replaced by a new empty one (app/vector_place.py)
+    from . import vector_place
+    vector_place.ensure(collection.lance_dir)
     con = sqlite3.connect(collection.manifest_path, timeout=30, isolation_level=None,
                           factory=ManifestConnection, check_same_thread=not shared)
     con.collection_name = collection.name

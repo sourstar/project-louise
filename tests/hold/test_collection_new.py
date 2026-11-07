@@ -288,3 +288,54 @@ def test_the_name_is_the_operators_and_is_asked_for(tmp_path, steps):
                      "--recipe", _recipe(tmp_path), "--encoder", "http://localai:8080",
                      "--cpu-model", "vega-nemo-cpu"])
     assert steps["order"] == []
+
+
+# ---- the build area (storage-tiering.md §8, operator 2026-11-07) ----
+
+def _new_at(root, recipe, *extra):
+    return louise.main(["hold", "collection", "new", "wikidata", "--root", str(root), "--recipe", recipe,
+                        "--encoder", "http://localai:8080", "--api", "vega", "--embed-model", "vega-nemo",
+                        "--cpu-model", "vega-nemo-cpu", "--name", "wd", *extra])
+
+
+def test_with_a_build_area_the_new_collections_table_is_built_there(tmp_path, steps, monkeypatch, capsys):
+    """Case A: the table is placed in the build area before the collection's
+    file exists, and `new` says how it moves when it takes over."""
+    from app import config, vector_place
+    root = tmp_path / "louise" / "collections"          # the node's own root (LOUISE_ROOT)
+    root.mkdir(parents=True)
+    build = tmp_path / "ssd3"
+    build.mkdir()
+    monkeypatch.setattr(config, "BUILD_DIR", build)
+    assert _new_at(root, _recipe(tmp_path), "--dry-run") == 0
+    assert f"vectors     built in the build area, {build / 'lance' / 'wd'}" in capsys.readouterr().out
+    assert not (root / "wd").exists(), "the dry run made nothing"
+    assert _new_at(root, _recipe(tmp_path)) == 0
+    link = root / "wd" / "lance"
+    assert link.is_symlink() and vector_place.physical(link) == build / "lance" / "wd"
+    assert "louise hold vectors move wd --to hot" in capsys.readouterr().err
+
+
+def test_without_a_build_area_the_table_is_beside_the_collection(tmp_path, steps, capsys):
+    root = tmp_path / "louise" / "collections"
+    root.mkdir(parents=True)
+    assert _new_at(root, _recipe(tmp_path), "--dry-run") == 0
+    assert f"vectors     built beside the collection, {root / 'wd' / 'lance'}" in capsys.readouterr().out
+    assert _new_at(root, _recipe(tmp_path)) == 0
+    assert not (root / "wd" / "lance").is_symlink()
+
+
+def test_a_create_that_fails_takes_its_placement_back(tmp_path, steps, monkeypatch):
+    from app import config
+    from app.hold.codex import CodexError
+    root = tmp_path / "louise" / "collections"
+    root.mkdir(parents=True)
+    build = tmp_path / "ssd3"
+    build.mkdir()
+    monkeypatch.setattr(config, "BUILD_DIR", build)
+
+    def refused(*a, **k):
+        raise CodexError("refused by create")
+    monkeypatch.setattr(louise, "create_from", refused)
+    assert _new_at(root, _recipe(tmp_path)) == 2
+    assert not (root / "wd").exists() and not (build / "lance" / "wd").exists()

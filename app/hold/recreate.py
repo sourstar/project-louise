@@ -384,35 +384,71 @@ def sample_seed(request_digest: str, runs) -> bytes:
                                      *sorted(runs))).encode("utf-8")).digest()
 
 
+def _tree(root: Path, name: str, rel: str) -> Path:
+    """One of `COPIED` of a collection: its vector table at the one path
+    every reader opens (app/vector_place.py `table_dir`), the rest beside it."""
+    from app import vector_place
+    return vector_place.table_dir(root, name) if rel == "lance" else Path(root) / name / rel
+
+
 def to_copy(root: Path, pred_name: str, name: str) -> dict[str, int]:
     """The bytes of each of `COPIED` the target does not hold yet (a resumed
     carry counts only what is left), counted from the predecessor's files by
     their size."""
-    src, dst = Path(root) / pred_name, Path(root) / name
     out: dict[str, int] = {}
     for rel in COPIED:
-        there = dst / rel
+        there, src = _tree(root, name, rel), _tree(root, pred_name, rel)
         if not there.exists() or (there.is_dir() and not any(there.iterdir())):
-            out[rel] = _bytes_under(src / rel) if (src / rel).exists() else 0
+            out[rel] = _bytes_under(src) if src.exists() else 0
     return out
 
 
-def room(root: Path, pred_name: str, name: str, *, make: bool = True) -> tuple[int, int]:
-    """`(bytes the carry's copy needs, bytes free where it writes)`: the
+def _lands(root: Path, name: str, rel: str) -> Path:
+    """Where the copy of `rel` is written: beside the target, but its vector
+    table where its bytes live — the build area for a re-created collection
+    placed there (`vector_place.place_new`), and, before it is made (the dry
+    run), where `new` will place it."""
+    from app import vector_place
+    if rel != "lance":
+        return Path(root) / name / rel
+    link = vector_place.table_dir(root, name)
+    if link.exists() or link.is_symlink():
+        return vector_place.physical(link)
+    if vector_place.applies(root):
+        vector_place.mounted()                      # refused, not counted on the container's disk
+    return vector_place.destination_for_new(root, name)
+
+
+def rooms(root: Path, pred_name: str, name: str, *, make: bool = True) -> list[dict[str, Any]]:
+    """`[{where, need, free}]`, one per filesystem the carry writes to: the
     predecessor's vector table, text index and manifest, each counted only
-    where the target does not hold it yet (a resumed carry). A copy-on-write
-    filesystem may need none of it (`cp --reflink`); it is not counted on.
-    `make=False` (the dry run) makes nothing: the free space is read where
-    the target would be made."""
+    where the target does not hold it yet (a resumed carry), on the
+    filesystem it lands on (the vector table in the build area, the rest on
+    the data pool, `_lands`). A copy-on-write filesystem may need none of it
+    (`cp --reflink`); it is not counted on. `make=False` (the dry run)
+    makes nothing: the free space is read where the target would be made."""
     import shutil
     dst = Path(root) / name
-    need = sum(to_copy(root, pred_name, name).values())
+    sizes = to_copy(root, pred_name, name)
     if make:
         dst.mkdir(parents=True, exist_ok=True)
-    where = dst
-    while not where.exists() and where != where.parent:
-        where = where.parent
-    return need, shutil.disk_usage(where).free
+    by_fs: dict[int, dict[str, Any]] = {}
+    for rel in COPIED:
+        where = _lands(root, name, rel)
+        while not where.exists() and where != where.parent:
+            where = where.parent
+        row = by_fs.setdefault(where.stat().st_dev, {"where": str(where), "need": 0,
+                                                     "free": shutil.disk_usage(where).free})
+        row["need"] += sizes.get(rel, 0)
+    return list(by_fs.values())
+
+
+def room(root: Path, pred_name: str, name: str, *, make: bool = True) -> tuple[int, int]:
+    """`(bytes the carry's copy needs, bytes free where it writes)` on the
+    filesystem with the least to spare (`rooms`): one that cannot hold its
+    share refuses the whole carry."""
+    worst = min(rooms(root, pred_name, name, make=make), key=lambda r: r["free"] - r["need"])
+    return worst["need"], worst["free"]
 
 
 def no_room(pred_name: str, name: str, need: int, free: int) -> str:
@@ -451,10 +487,11 @@ def counts(root: Path, name: str, *, write_free: bool = False) -> dict[str, int 
     the manifest read so that not a file changes."""
     from app import spaces
     from .carry import _documents
+    from app import vector_place
     base = Path(root) / name
     manifest = base / "state" / "manifest.sqlite"
     return {"documents": _documents_write_free(manifest) if write_free else _documents(manifest),
-            "vectors": spaces.known_lance_rows(base / "lance")}
+            "vectors": spaces.known_lance_rows(vector_place.table_dir(root, name))}
 
 
 def prove_copy(root: Path, pred_name: str, name: str) -> dict[str, Any]:
@@ -466,8 +503,8 @@ def prove_copy(root: Path, pred_name: str, name: str) -> dict[str, Any]:
     out: dict[str, Any] = {"from": counts(root, pred_name), "to": counts(root, name)}
     bad = [k for k in ("documents", "vectors") if out["from"][k] != out["to"][k]]
     for tree in ("lance", "index"):
-        a = tree_digest(Path(root) / pred_name / tree)
-        b = tree_digest(Path(root) / name / tree)
+        a = tree_digest(_tree(root, pred_name, tree))
+        b = tree_digest(_tree(root, name, tree))
         out[tree] = b
         if a != b:
             bad.append(f"{tree}/ ({a['files']} files {a['sha256']} against {b['files']} files {b['sha256']})")

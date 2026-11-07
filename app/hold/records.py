@@ -463,7 +463,7 @@ def _local_collection(root, name: str, codex, *, corpus_dir=None):
 
     from app import collections as collections_mod
 
-    from app import layers as layers_mod
+    from app import layers as layers_mod, vector_place
 
     _, state_dir, _ = _paths(root, name)
     return collections_mod.Collection(
@@ -471,7 +471,7 @@ def _local_collection(root, name: str, codex, *, corpus_dir=None):
         corpus_dir=Path(corpus_dir) if corpus_dir is not None else None,
         manifest_path=state_dir / "manifest.sqlite",
         fts_dir=Path(root) / name / "index",
-        lance_dir=Path(root) / name / "lance",
+        lance_dir=vector_place.table_dir(root, name),
         acquire_enabled=False,
         license_ack=_ack_of(codex, state_dir),
         # THE CODEX'S LAYERS, and the Codex itself — the worker's loader

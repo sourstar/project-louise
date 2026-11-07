@@ -94,6 +94,15 @@ def plan(root: Path, old: str, new: str) -> dict[str, Any]:
     if bundles and t is not None and t.name == old and Path(os.path.normpath(t.parent)) == \
             Path(os.path.normpath(bundles)):
         moves["bundles"] = [str(t), str(t.with_name(new))]
+    # the vector table built in the build area (app/vector_place.py): its
+    # folder there follows the name, a folder per collection, as the SHARD's
+    from app import vector_place
+    if not resuming and vector_place.begun(base / "state"):
+        raise CodexError(f"rename: a move of {old}'s vector table is begun (`hold vectors move`): finish "
+                         f"it first, then rename")
+    t = _link_target(src / vector_place.TABLE_DIR)
+    if t is not None and vector_place.in_area(t) and t.name == old:
+        moves["lance"] = [str(t), str(t.with_name(new))]
     origins = os.getenv("ORIGINS_ROOT", "").strip()
     t = _link_target(src / "origin")
     if origins and t is not None and t.name == old and Path(os.path.normpath(t.parent)) == \
@@ -213,7 +222,7 @@ def rename(root: Path, old: str, new: str, *, dry_run: bool = False) -> dict[str
     done: dict[str, Any] = {}
     # 1. the shared folders, then the links that name them
     for kind, link_name in (("shard", col.SHARD_DIR), ("origin", "origin"),
-                            ("bundles", f"state/{col.BUNDLES_DIR}")):
+                            ("bundles", f"state/{col.BUNDLES_DIR}"), ("lance", "lance")):
         if kind in moves:
             a, b = Path(moves[kind][0]), Path(moves[kind][1])
             done[kind] = _move(a, b)

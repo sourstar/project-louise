@@ -115,9 +115,15 @@ def _part_entries(snap) -> dict[str, list]:
 # ---- the files -------------------------------------------------------------
 
 def _paths(root: Path, name: str) -> dict[str, Path]:
+    """The collection's local files. `lance` is the DIRECTORY that holds its
+    vector table's bytes (app/vector_place.py): the table itself, or, for one
+    built in the build area, the folder its `lance` link names — so a carry
+    into a re-created collection placed there copies onto the build area,
+    and its link never dangles."""
+    from app import vector_place
     base = Path(root) / name
     return {"manifest": base / "state" / MANIFEST, "index": base / "index",
-            "lance": base / "lance", "state": base / "state"}
+            "lance": vector_place.physical(vector_place.table_dir(root, name)), "state": base / "state"}
 
 
 def _empty_dir(p: Path) -> bool:
@@ -330,8 +336,10 @@ def _transfer(src: Path, dst: Path, *, copy: bool) -> str:
         return "present"
     if not src.exists():
         return "present" if dst.exists() else "absent"
-    if dst.is_dir():
+    if dst.is_dir() and not src.is_dir():
         dst.rmdir()                                   # empty: db.connect makes them
+    # an empty directory is replaced whole by the rename below (rename(2)), so
+    # it stays until then: a build area's link to it never dangles meanwhile
     dst.parent.mkdir(parents=True, exist_ok=True)
     if not copy:
         try:
@@ -638,6 +646,12 @@ def carry(root, from_ref: str, to_ref: str, *, copy: bool = False, apply: bool =
     # A1h: no vector crosses spaces; the target's table is its own, of its width
     for k in (("index",) if unembedded else ("lance", "index")):
         done[k] = _transfer(sp[k], tp[k], copy=copy)
+    if not copy:
+        # a source whose table was in the build area keeps a link to nothing
+        from app import vector_place
+        link = vector_place.table_dir(root, from_name)
+        if link.is_symlink() and not link.exists():
+            link.unlink()
     # Moving: the companions before the main file — the main file in place is
     # what says the manifest arrived — so none is left beside a source that no
     # longer has its database. After the checkpoint the WAL is empty, so a copy

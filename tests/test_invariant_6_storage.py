@@ -10,6 +10,10 @@
   file's and the first opener of a fresh file decides it: a rollback-
   journal manifest blocks every reader while anyone writes. Read-only
   opens (`mode=ro`) are exempt — they cannot create the file.
+- LOUISE_BUILD_DIR (the build area, operator 2026-11-07) is resolved by
+  app/vector_place.py alone, and holds vector tables only: with it set, a
+  node's manifests, indexes, corpora and state land outside it, and an
+  existing collection's table stays where it is until it is moved.
 - THE ARCHIVE AND THE AUTHORITATIVE STATE ARE NEVER UNDER LOUISE_CACHE_DIR.
   `config.CACHE_DIR` is read by app/derived.py alone (app/parallel.py
   hands the knob to its children, app/config.py defines it); everything
@@ -224,3 +228,67 @@ def test_with_a_cache_dir_set_the_archive_and_state_land_outside_it(isolated_con
     assert sorted(cache.rglob("*")) == [], "something authoritative was written to the cache dir"
     # and the one thing that does go there, goes there
     assert derived.place("pack", tmp_path / "origin") .parent.parent == cache
+
+
+# ---------------- LOUISE_BUILD_DIR: vector tables only, one resolver ----------------
+
+_BUILD_READERS = {
+    "app/config.py": "defines it (identity tier, 07 §7.8)",
+    "app/vector_place.py": "the one place that resolves it: `vector_place.area()`",
+}
+
+
+def resolves_build_dir(source: str) -> bool:
+    """`config.BUILD_DIR` read (an attribute of a name that says config), or
+    imported from the config module — not any other module's BUILD_DIR
+    (app/pack/build.py has its own, the pack's `.build/`)."""
+    for n in ast.walk(ast.parse(source)):
+        if isinstance(n, ast.Attribute) and n.attr == "BUILD_DIR" and isinstance(n.value, ast.Name) \
+                and "config" in n.value.id:
+            return True
+        if isinstance(n, ast.ImportFrom) and (n.module or "").endswith("config") \
+                and any(a.name == "BUILD_DIR" for a in n.names):
+            return True
+    return False
+
+
+def test_only_vector_place_resolves_the_build_dir():
+    readers = {p.relative_to(ROOT).as_posix() for p in APP.rglob("*.py")
+               if resolves_build_dir(p.read_text(encoding="utf-8"))}
+    env_readers = {p.relative_to(ROOT).as_posix() for p in APP.rglob("*.py")
+                   if re.search(r"""(getenv\(|environ(\.get\(|\[))\s*["']LOUISE_BUILD_DIR""",
+                                p.read_text(encoding="utf-8"))}
+    assert env_readers == {"app/config.py"}, f"LOUISE_BUILD_DIR read from the env by {env_readers}"
+    assert readers - set(_BUILD_READERS) == set(), (
+        "invariant 6: only app/vector_place.py resolves LOUISE_BUILD_DIR (config.BUILD_DIR); "
+        f"these read it too: {sorted(readers - set(_BUILD_READERS))}")
+    assert "app/vector_place.py" in readers, "the guard is wrong: vector_place.py was not seen"
+
+
+def test_the_build_dir_guard_tells_the_cases_apart():
+    assert resolves_build_dir("from app import config\nx = config.BUILD_DIR\n")
+    assert resolves_build_dir("from app import config as _config\nx = _config.BUILD_DIR\n")
+    assert resolves_build_dir("from app.config import BUILD_DIR\n")
+    assert not resolves_build_dir("BUILD_DIR = '.build'\nx = pack_build.BUILD_DIR\n")
+
+
+def test_with_a_build_dir_set_only_vector_tables_go_there(isolated_config, tmp_path, monkeypatch):
+    """Set, nothing moves by itself: every collection's manifest, index,
+    corpus and table stay where they are, and the node writes nothing in
+    the build area; what goes there is a table `new` places or a move."""
+    from app import collections as collections_mod, config, db, node_state, vector_place
+    build = tmp_path / "build-area"
+    build.mkdir()
+    monkeypatch.setattr(config, "BUILD_DIR", build)
+    collections = collections_mod.load_all()
+    assert collections, "no collection loaded — the fixture is wrong"
+    for c in collections:
+        for p in (c.manifest_path, c.fts_dir, c.lance_dir, c.corpus_dir):
+            assert build not in Path(p).resolve().parents, f"{c.name}: {p} is under LOUISE_BUILD_DIR"
+        assert not Path(c.lance_dir).is_symlink(), "an existing table is not moved by the setting"
+        db.connect(c).close()
+    node_state.connect().close()
+    assert sorted(build.rglob("*")) == [], "something was written to the build area"
+    root = config.louise_root() / "collections"
+    placed = vector_place.place_new(root, "new-one")
+    assert placed.parent.parent == build and sorted(p.name for p in build.rglob("*")) == ["lance", "new-one"]

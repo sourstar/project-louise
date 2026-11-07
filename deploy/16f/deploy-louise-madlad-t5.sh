@@ -420,15 +420,22 @@ heal() {
 trap heal EXIT
 trap 'exit 130' INT TERM
 if [ "${DEPLOY_TEST_DIE_AFTER_STOP:-}" = 1 ]; then echo "TEST: the deploy dies here, after the stop"; kill -TERM $$; sleep 10; fi
-# the fast drive for derived data (07 §7.8; operator 2026-10-20): /data is on NVMe (ssd4)
+# the fast drive for derived data (07 §7.8; operator 2026-10-20): /data is on NVMe (ssd4);
+# THE BUILD AREA (operator 2026-11-07, storage-tiering.md §8): the ssd3 dataset, when
+# flatten_mounts.BUILD_HOST or LOUISE_BUILD_HOST names one that is mounted on this host, at
+# /build in web and worker with LOUISE_BUILD_DIR=/build; no dataset, nothing set
 python3 - "$ROOT/src/deploy/16f" <<'PY'
+import os
 import sys
 sys.path.insert(0, sys.argv[1])
 import flatten_mounts as fm
 from truenas_api_client import Client
+shared, build_env = fm.build_area(os.environ.get("LOUISE_BUILD_HOST") or None)
+print(f"build area: {shared[0][0]} -> {shared[0][1]}" if shared else
+      "build area: no ssd3 dataset named or mounted, LOUISE_BUILD_DIR left unset")
 with Client() as c:
     cfg = c.call("app.config", fm.APP)
-    said = fm.apply(cfg, shared=(), env={"LOUISE_CACHE_DIR": "/data/cache"})
+    said = fm.apply(cfg, shared=shared, env={"LOUISE_CACHE_DIR": "/data/cache", **build_env})
     print("\n".join(said) or "LOUISE_CACHE_DIR already set")
     if said:
         c.call("app.update", fm.APP, {"custom_compose_config": cfg}, job=True)
@@ -457,6 +464,8 @@ for c in ix-louise-rag-web-1 ix-louise-rag-worker-1; do
   m=$(docker inspect "$c" --format '{{.HostConfig.Memory}} {{.HostConfig.MemorySwap}}'); echo "$c memory cap (bytes, with swap) $m"
   case "$c" in *web*) [ "$m" = "12884901888 12884901888" ];; *worker*) [ "$m" = "25769803776 25769803776" ];; esac
   v=$(docker exec "$c" printenv LOUISE_CACHE_DIR || true); echo "$c LOUISE_CACHE_DIR $v"; [ "$v" = "/data/cache" ]
+  b=$(docker exec "$c" printenv LOUISE_BUILD_DIR || true); echo "$c LOUISE_BUILD_DIR ${b:-unset}"
+  if [ -n "$b" ]; then docker exec "$c" test -d "$b" || { echo "$c: LOUISE_BUILD_DIR $b is not a directory: the build area is not mounted"; exit 1; }; fi
 done
 for i in $(seq 1 60); do w=$(curl -s -m 5 -o /dev/null -w "%{http_code}" http://127.0.0.1:30042/healthz); [ "$w" = 200 ] && break; sleep 2; done
 echo "web /healthz $w, worker $(docker inspect -f '{{.State.Status}}' ix-louise-rag-worker-1)"; [ "$w" = 200 ]

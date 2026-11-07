@@ -22,6 +22,15 @@ PUBMED_PACK_DIR = Path(os.getenv("PUBMED_PACK_DIR")) if os.getenv("PUBMED_PACK_D
 # it (app/derived.py), keyed on the origin's physical identity. Unset: each
 # stays beside its origin, as before. Identity tier: this node's path.
 CACHE_DIR = Path(os.getenv("LOUISE_CACHE_DIR")) if os.getenv("LOUISE_CACHE_DIR") else None
+# The BUILD AREA (07 §7.8; operator, 2026-11-07, docs/notes/storage-tiering.md
+# §8: "B, ssd3 as the build area"): a vector table a collection is BUILDING —
+# made by `hold collection new` (cases A and F), not yet the one people search
+# — lives under it, `<LOUISE_BUILD_DIR>/lance/<name>`, behind the collection's
+# own `lance` path (app/vector_place.py, the one module that resolves it), and
+# moves to the data pool when it takes over (`hold vectors move`, case F's
+# swap). Unset: every vector table stays beside its collection, as before.
+# Identity tier: this node's path.
+BUILD_DIR = Path(os.getenv("LOUISE_BUILD_DIR")) if os.getenv("LOUISE_BUILD_DIR") else None
 #: the tokenizer files a token-cutting chunker names by sha256 (wikidata-text,
 #: 06 §6.3): `<dir>/<hex>.json`, fetched by the platform image at build from
 #: the Hub at a pinned revision and checked against the layer's sha256
