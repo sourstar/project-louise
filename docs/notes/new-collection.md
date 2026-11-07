@@ -159,6 +159,10 @@ Codex naming the archived current engine, and carry its vectors over
 unchanged". Nothing official was published from it, so this is a
 re-creation, not a daughter (RULE 1).
 
+**It starts with the dry run** (the pilot rule: München reads a dry run
+before every whole run). Each `new` below is run first with `--dry-run`,
+which stops before calibrate, writes nothing and takes no lock.
+
 - Its Codex names the backend `louise-dar-legal-it` (`sha256:173c04c1…`).
   Its files are lost, so 09 §9.3 (an engine kept for the Codex's life)
   cannot hold.
@@ -169,22 +173,42 @@ re-creation, not a daughter (RULE 1).
 - By hand, it reproduced 200 random stored vectors: 196 byte-identical, 4
   within cos 0.99999, worst 0.9999999995.
 
-**1. The recipe.** Take the one normattiva was created from
-(`normattiva-recipe.toml`, as `normattiva-1861` used it), and change two
-things:
+**1. The recipe and the twin** (files, nothing run). Take the recipe
+normattiva was created from (`normattiva-recipe.toml`, as `normattiva-1861`
+used it), and change two things:
 - replace `[space.encoder.engine]` (and its `env`) with the `engine` that
   `louise hold embedder run --encoder http://192.168.178.10:30286 --api vega
   --model vega-dar-legal-it` prints;
 - delete `tolerance`, which is measured.
 
-Keep the rest. The check refuses, before anything is measured, a recipe
-whose records or space are not normattiva's. It names the field, for example
-a plugin default that has moved since 2026-10-14; pin that field in the
-recipe (`[parser]`, …).
+Keep the rest. The twin, `vega-dar-legal-it-cpu` (the one
+`tools/cross_device_check.py` names), must state a CPU run of the same
+weights.
 
-**2. The twin.** `vega-dar-legal-it-cpu` (the one
-`tools/cross_device_check.py` names) must state a CPU run of the same
-weights. Resolve refuses otherwise.
+**2. The dry run, read before anything runs.**
+
+```bash
+louise hold collection new normattiva --recipe /config/recipes/normattiva-recreate.toml \
+    --name normattiva --re-create --cpu-model vega-dar-legal-it-cpu --dry-run
+```
+
+It runs resolve and check, which refuse exactly as the whole run does, with
+the same exit and sentence. A recipe whose records or space are not
+normattiva's is refused, naming the field (for example a plugin default that
+has moved since 2026-10-14; pin it in the recipe, `[parser]`, …). Then it
+prints:
+- `differs`: the fields the recipe changes. Expected: `space.encoder.engine`
+  alone. Anything else is named, and is read before the run.
+- `space_id`: kept, normattiva's.
+- `to carry`: the documents, the vector rows and the bytes to copy, per tree
+  (`lance`, `index`, the manifest), counted from normattiva, with the time
+  the count took. These are the counts this runbook does not have.
+- `room`: needed against free. Short is the carry's refusal (exit 2).
+- `sample`: its size and seed. The seed is the one the carry draws with if
+  calibrate measures the run the card states now.
+- `locks`, then the steps in order, each `would run` or `kept`.
+
+Go on only when it exits 0 and `differs` is the engine alone.
 
 **3. Pause, then run.** The carry needs normattiva's write lock:
 
@@ -201,13 +225,13 @@ to expect:
   (`--sample`, the default) are re-encoded and held to the stored vectors at
   the measured tolerance, before any copy. Then the manifest, text index and
   vector table are copied (as a reflink where the filesystem has one; the
-  room is checked first, from the bytes counted). Not counted for this
-  runbook: 341,959 documents (STATUS, 2026-10-14) and 8,178,785 rows
-  (scheduling-log, 2026-10-23, when old versions held 78 GB of the table's
-  82 GB; a table not cleaned since copies them all). The carry counts and
-  prints both, and the size. The vector table and the text index
-  are proven byte for byte by digest, which reads both tables once. All of
-  it is recorded in `<LOUISE_ROOT>/state/new/normattiva.json`.
+  room is checked first). The counts and bytes are the dry run's.
+  For reference only, not counted for this runbook: 341,959 documents
+  (STATUS, 2026-10-14) and 8,178,785 rows (scheduling-log, 2026-10-23, when
+  old versions held 78 GB of the table's 82 GB; a table not cleaned since
+  copies them all). The vector table and the text index are proven byte for
+  byte by digest, which reads both tables once. All of it is recorded in
+  `<LOUISE_ROOT>/state/new/normattiva.json`.
 - **cpu-reference**, then **gate**.
 - **swap**: stops with exit 2.
 
@@ -221,13 +245,15 @@ to expect:
 It also prints what still keeps `normattiva.next` in quarantine; run that
 first, with A1's attested check of the carried table under the validated
 run beside it: `louise hold check normattiva.next --checks
-roots,chunks,vectors-sample`.
+roots,chunks,vectors-sample`. `louise hold collection forget normattiva
+--dry-run` names what goes before the yes.
 The forget is the operator's yes, with that size, in the session that runs
 it. The workflow deletes nothing.
 
-**5. Run step 3's command again.** `normattiva.next` becomes `normattiva`,
-with normattiva's collection file (its codex, and `embed = "off"`, excepted).
-Then:
+**5. Run step 3's command again**, after its dry run (step 2's command:
+the steps up to the gate now show as `kept`, the carry with its counts). `normattiva.next`
+becomes `normattiva`, with normattiva's collection file (its codex, and
+`embed = "off"`, excepted). Then:
 - `louise node resume normattiva`;
 - `louise hold config apply normattiva --set embed=<the mode it printed>`.
 

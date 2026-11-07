@@ -181,6 +181,14 @@ def test_after_the_operators_forget_the_swap_takes_the_name_and_the_file(held, s
     made = col.read(root, "old.next")
     forget_mod.forget(root, "old")                     # the operator's, in the session that deletes
     steps["order"].clear()
+    capsys.readouterr()
+    assert _new(root, recipe_path, "--dry-run") == 0, "the runbook's step 5 reads its dry run first"
+    said = capsys.readouterr().out
+    assert f"kept from the earlier run: {recreate.counts(root, 'old.next')['documents']:,} documents, " \
+           f"{chunks:,} vector rows" in said
+    assert all(f"{k:<13} kept from an earlier run" in said
+               for k in ("calibrate", "tolerance", "make", "carry", "cpu-reference", "gate"))
+    assert steps["order"] == []
     assert _new(root, recipe_path) == 0
     assert "carry" not in steps["order"] and steps["encoder"].texts == 4, "carried once"
     name, codex = col.resolve(root, "old")
@@ -256,7 +264,7 @@ def test_the_carry_asks_for_the_predecessors_pause_while_the_worker_holds_it(hel
 
 def test_a_copy_with_no_room_is_refused_before_a_byte_moves(held, steps, tmp_path, monkeypatch, capsys):
     root, _old, _n = held
-    monkeypatch.setattr(recreate, "room", lambda *a: (10 << 30, 1 << 30))
+    monkeypatch.setattr(recreate, "room", lambda *a, **k: (10 << 30, 1 << 30))
     assert _new(root, _new_recipe(tmp_path)) == 2
     assert "needs 10.0 GiB and 1.0 GiB is free" in capsys.readouterr().err
     assert "carry" not in steps["order"] and not (root / "old.next" / "lance").exists()
@@ -281,6 +289,80 @@ def test_the_steps_are_case_fs_numbered_in_its_order(held, steps, tmp_path, caps
     said = [line.split()[1] for line in capsys.readouterr().err.splitlines()
             if line[:2] in {f"{i}/" for i in range(1, 10)}]
     assert list(dict.fromkeys(said)) == list(wf.ordered(wf.case("F")))
+
+
+# ---- the dry run (the pilot rule: München reads a dry run before every whole run) ----
+
+def _louise_error(err: str) -> str:
+    """The refusal `main` printed: its last `louise: ` line."""
+    return [line for line in err.splitlines() if line.startswith("louise: ")][-1]
+
+
+def test_a_dry_run_writes_nothing_and_says_what_the_run_would_do(held, steps, tmp_path, capsys):
+    root, old, chunks = held
+    recipe_path = _new_recipe(tmp_path)
+    before = recreate.tree_digest(tmp_path)
+    assert _new(root, recipe_path, "--dry-run") == 0
+    assert recreate.tree_digest(tmp_path) == before, "not a byte written under the node's roots"
+    assert steps["order"] == [] and steps["encoder"].calls == 0, "stopped before calibrate"
+    said = capsys.readouterr().out
+    documents = recreate.counts(root, "old")["documents"]
+    assert "space.encoder.engine (the engine alone, as expected)" in said
+    assert f"space_id    {old.space_id} kept (old's)" in said
+    assert f"{documents:,} documents, {chunks:,} vector rows" in said and "counted from old at " in said
+    assert "free where old.next is made: enough" in said
+    assert "louise node pause old" in said
+    plan = [line.split()[1] for line in said.splitlines() if line.startswith("    ") and "/" in line.split()[0]]
+    assert plan == list(wf.ordered(wf.case("F")))
+    assert "1/9 resolve       ran in this dry run" in said and "3/9 calibrate     would run" in said
+    seed = said.split("seed ", 1)[1].split()[0]
+    # the whole run, after it, draws with the seed the dry run printed
+    assert _new(root, recipe_path) == 2
+    assert json.loads(wf.progress_path("old").read_text())["steps"]["carry"]["result"]["sample"]["seed"] == seed
+
+
+def test_a_dry_run_takes_no_lock(held, steps, tmp_path, capsys):
+    """While the worker holds the predecessor's write lock the whole run
+    stops at the carry (exit 3); the dry run reads, and is not stopped."""
+    from app.hold import lock as lock_mod
+    root, _old, _n = held
+    recipe_path = _new_recipe(tmp_path)
+    worker = lock_mod.take(lock_mod.state_dir(root, "old"), "old", "the worker")
+    try:
+        before = recreate.tree_digest(tmp_path)
+        assert _new(root, recipe_path, "--dry-run") == 0
+        assert recreate.tree_digest(tmp_path) == before
+    finally:
+        worker.release()
+
+
+@pytest.mark.parametrize("over, extra, name, says", [
+    ({"space": {"dim": 384}}, (), "old", "space is not old's"),
+    ({"parser": {"id": "gutenberg", "version": 99}}, (), "old", "records are not old's"),
+    ({"space": {"encoder": {**OLD_SPACE["encoder"]}}}, (), "old", "nothing to re-create"),
+    ({}, ("--encoder", "http://elsewhere:9"), "old", "keeps the predecessor's endpoint"),
+    ({}, (), "nothing", "nothing held under 'nothing'"),
+    ({}, (), "old", "needs 10.0 GiB and 1.0 GiB is free"),
+], ids=["space", "records", "itself", "endpoint", "no-predecessor", "no-room"])
+def test_a_dry_run_refuses_what_the_run_refuses(held, steps, tmp_path, monkeypatch, capsys,
+                                                 over, extra, name, says):
+    root, _old, _n = held
+    if says.startswith("needs"):
+        monkeypatch.setattr(recreate, "room", lambda *a, **k: (10 << 30, 1 << 30))
+    recipe_path = _new_recipe(tmp_path, **over)
+
+    def new(*more):
+        return louise.main(["hold", "collection", "new", "gutenberg", "--root", str(root), "--recipe",
+                            recipe_path, "--name", name, "--re-create", "--cpu-model", "vega-m-cpu",
+                            "--sample", "4", *extra, *more])
+    before = recreate.tree_digest(tmp_path)
+    dry_rc = new("--dry-run")
+    dry = _louise_error(capsys.readouterr().err)
+    assert recreate.tree_digest(tmp_path) == before, "a refused dry run writes nothing either"
+    assert steps["order"] == []
+    rc = new()
+    assert (dry_rc, dry) == (rc, _louise_error(capsys.readouterr().err)), "the same exit, the same sentence"
+    assert rc == 2 and says in dry
 
 
 # ---- the pieces ---------------------------------------------------------------

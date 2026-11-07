@@ -156,8 +156,10 @@ class Run:
     another request and is not resumed."""
 
     def __init__(self, c: Case, name: str, inputs: dict[str, Any], *,
-                 say: Callable[[str], None], path: Path | None = None):
-        self.case, self.name, self.say = c, name, say
+                 say: Callable[[str], None], path: Path | None = None, dry: bool = False):
+        # `dry`: `new --dry-run` — the steps it runs (resolve, check) said,
+        # what earlier runs kept read, and nothing recorded
+        self.case, self.name, self.say, self.dry = c, name, say, dry
         self.steps = ordered(c)
         self.path = path or progress_path(name)
         self.digest = inputs_digest(inputs)
@@ -186,7 +188,9 @@ class Run:
 
     def record(self, step: str, result: dict[str, Any] | None = None) -> None:
         """Kept AFTER the step's own durable effect (invariant 2), written
-        whole and renamed into place."""
+        whole and renamed into place. A dry run records nothing."""
+        if self.dry:
+            return
         self.kept[step] = {"at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "result": result or {}}
         self.path.parent.mkdir(parents=True, exist_ok=True)
         tmp = self.path.with_suffix(".json.tmp")

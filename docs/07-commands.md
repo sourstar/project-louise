@@ -75,7 +75,7 @@ louise hold
                                                                        gate. Exit 0 only on a pass; embedding stays off. Kept: <collection>/state/calibration.json and
                                                                        the run's progress, <LOUISE_ROOT>/state/new/<name>.json (run again: a done step is checked, not
                                                                        redone). A space.query.encoder is case B, refused until phase 3; the other cases: the note
-              new <plugin> --recipe FILE --name N --re-create --cpu-model T [--sample N] [--encoder URL] [--api A] [--embed-model M]
+              new <plugin> --recipe FILE --name N --re-create --cpu-model T [--sample N] [--encoder URL] [--api A] [--embed-model M] [--dry-run]
                                                                        case F, A RE-CREATION (RULE 1; added 2026-11-07, normattiva): the collection held under --name is the
                                                                        predecessor; the recipe must make its space_id and its records (another engine, refused otherwise,
                                                                        before anything is measured); its endpoint, model and platform image are the predecessor's unless
@@ -87,6 +87,12 @@ louise hold
                                                                        held it prints its exact `forget` and the size it removes and frees and exits 2, deleting nothing;
                                                                        run again after the operator's forget: <name>.next takes the name and the predecessor's file
                                                                        (its codex, and embed "off", excepted)
+                                                                       --dry-run (either form; added 2026-11-07, the pilot rule: a dry run before every whole run):
+                                                                       resolve and check, refusing as the run refuses (the same exit and sentence), then prints what
+                                                                       the run would do and the steps in order, and stops before calibrate. With --re-create: the fields
+                                                                       that differ (the engine alone expected), the space_id kept, the documents, vector rows and
+                                                                       bytes to carry counted from the predecessor with the time the count took, the room (short: exit
+                                                                       2, the carry's refusal), the sample and its seed. It writes nothing and takes no lock
               create <plugin> --recipe FILE --encoder URL [--query-encoder URL] [--api A] [--embed-model M] [--query-model M]
               [--space-from CODEX] [--calibration-set FILE]
                                                                        the model flags: required where a URL names no model (§7.8, amended 2026-10-09)

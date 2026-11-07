@@ -661,7 +661,8 @@ def cmd_collection_new(a) -> int:
               "embed_model": model, "cpu_model": a.cpu_model, "platform_image": a.platform_image}
     if re_create:
         inputs.update(re_create=True, sample=int(a.sample))
-    run = wf.Run(wf.case("F" if re_create else "A"), a.name, inputs, say=say)
+    run = wf.Run(wf.case("F" if re_create else "A"), a.name, inputs, say=say,
+                 dry=bool(getattr(a, "dry_run", False)))
     pred = kept = None
     interim = recreate.interim_name(a.name)
     if re_create:
@@ -681,9 +682,10 @@ def cmd_collection_new(a) -> int:
                          f"; re-creates {a.name}, forgotten since" if re_create else ""))
 
     # check: BEFORE ANY MEASUREMENT, so a refusal costs no card lane
-    existing = None
+    existing = dry_codex = None
+    changed: list[str] = []
     if re_create:
-        existing = _recreate_check(a, run, recipe, pred, kept, interim)
+        existing, dry_codex, changed = _recreate_check(a, run, recipe, pred, kept, interim)
     else:
         a.platform_image = preflight_create(recipe, a.platform_image)
         try:
@@ -704,6 +706,10 @@ def cmd_collection_new(a) -> int:
         run.at("check", f"{existing[0]} exists, space {existing[1].space_id[:23]}…: the recipe's")
     elif not re_create:
         run.at("check", f"{a.name} is new; platform image {a.platform_image[:23]}…")
+    if run.dry:
+        # the pilot rule: München reads a dry run before every whole run
+        return _new_dry_run(a, run, recipe, pred, dry_codex, changed, existing, interim, api=api,
+                            model=model, ctx=ctx, cut=cut, instruction=instruction)
 
     # calibrate, on the inputs the gate sends
     reference = calib.Endpoint(file=f"{a.recipe} (space.encoder)", url=a.encoder, api=api, model=model,
@@ -837,6 +843,99 @@ def _differs_from(held, dry) -> list[str]:
     return out
 
 
+def _new_dry_run(a, run, recipe: dict, pred, dry, changed: list[str], existing, interim: str, *,
+                 api: str, model: str, ctx: int, cut: str, instruction) -> int:
+    """`new --dry-run` (the pilot rule, 2026-11-07: München reads a dry run
+    before every whole run). Resolve and check have run, each refusal raised
+    as the whole run raises it; this prints what the run would do and stops
+    before calibrate. It WRITES NOTHING — the run's record is not kept
+    (`wf.Run(dry=True)`), no directory is made (`recreate.room(make=False)`),
+    the manifest is read so that no file changes
+    (`recreate.counts(write_free=True)`) — and takes no lock: the counts are
+    reads. For a re-creation: what the recipe changes (the engine alone is
+    what is expected), the space kept, the documents, vector rows and bytes
+    the carry takes, counted from the predecessor and timed, the room, the
+    sample and its seed, and the steps in order. Exit 0 where the run would
+    go on; 2 where the carry would refuse it (its own sentence)."""
+    import time as time_mod
+
+    from app import collections as collections_mod, run_check
+    from app.hold import recreate, workflow as wf
+
+    def out(line: str = "") -> None:
+        print(line)
+
+    def num(n) -> str:
+        return "?" if n is None else f"{n:,}"
+    re_create = bool(getattr(a, "re_create", False))
+    if dry is None:                         # case A: the Codex the recipe makes, to name its space
+        dry_recipe = dict(recipe, space=dict(recipe["space"]))
+        dry_recipe["space"].setdefault("tolerance", "0.99")
+        dry = col.dry_codex(a.plugin, dry_recipe, platform_image=a.platform_image)
+    out(f"dry run: case {run.case.key}, {run.case.title.lower()}"
+        + (f" of {a.name}, made as {existing[0] if existing else interim}" if re_create else f": {a.name}")
+        + "; it stops before calibrate, writes nothing and takes no lock")
+    refusal = None
+    if re_create:
+        engine = "space.encoder.engine"
+        other = [c for c in changed if not (c == engine or c.startswith(engine + "."))]
+        out(f"  differs     {', '.join(changed) or 'nothing'}"
+            + (" (the engine alone, as expected)" if changed and not other else
+               f" — NOT the engine alone: {', '.join(other)}; read them before the run" if other else ""))
+        out(f"  space_id    {dry.space_id} kept"
+            + (f" ({a.name}'s)" if pred is not None and pred.space_id == dry.space_id else ""))
+        target = existing[0] if existing else interim
+        carried = run.done("carry")
+        if carried is not None:
+            c = (carried.get("counts") or {}).get("to") or {}
+            out(f"  carry       kept from the earlier run: {num(c.get('documents'))} documents, "
+                f"{num(c.get('vectors'))} vector rows")
+        elif pred is None:
+            refusal = _no_predecessor(a.name, target)
+        else:
+            t0 = time_mod.monotonic()
+            src = recreate.counts(a.root, a.name, write_free=True)
+            sizes = recreate.to_copy(a.root, a.name, target)
+            need, free = recreate.room(a.root, a.name, target, make=False)
+            took = time_mod.monotonic() - t0
+            out(f"  to carry    {num(src['documents'])} documents, {num(src['vectors'])} vector rows; "
+                f"{recreate.human(sum(sizes.values()))} to copy ("
+                + ", ".join(f"{rel} {recreate.human(n)}" for rel, n in sizes.items())
+                + f"); counted from {a.name} at {_utc_now()} in {took:.2f} s")
+            out(f"  room        {recreate.human(need)} needed, {recreate.human(free)} free where {target} "
+                f"is made: " + ("enough" if free >= need else "SHORT, the carry refuses"))
+            if free < need:
+                refusal = recreate.no_room(a.name, target, need, free)
+            # the seed the carry draws with: the runs calibrate measures, which
+            # are the run the card states now (a calibration kept on that run
+            # is reused; on another run, calibrate measures again)
+            card = run_check.stated_run(collections_mod.EmbedRecipe(
+                url=a.encoder, api=api, model=model, dtype="f32", ctx=ctx, document_instruction=instruction,
+                cut=cut), probe_item=run_check.PROBE)
+            kept_runs = ((run.done("calibrate") or {}).get("reference") or {}).get("runs") or ()
+            runs = list(kept_runs) if card.run_id in kept_runs else [card.run_id]
+            out(f"  sample      {int(a.sample)} chunk(s), seed {recreate.sample_seed(run.digest, runs).hex()} "
+                f"(for the run the card states now, {', '.join(runs)}; another run draws another seed)")
+            out(f"  locks       the carry takes {a.name}'s and {target}'s write locks: "
+                f"`louise node pause {a.name}` first (exit 3 while the worker holds one)")
+    else:
+        out(f"  space_id    {dry.space_id}" + (f" ({existing[0]}, held)" if existing else " (new)"))
+    out("  steps")
+    by_key = {s.key: s for s in wf.STEPS}
+    for i, key in enumerate(run.steps, 1):
+        state = ("ran in this dry run" if key in ("resolve", "check") else
+                 "kept from an earlier run" if run.done(key) is not None else "would run")
+        out(f"    {i}/{len(run.steps)} {key:<13} {state}: {by_key[key].does}")
+    if refusal:
+        raise CodexError(refusal)
+    return 0
+
+
+def _no_predecessor(pred_name: str, name: str) -> str:
+    return (f"carry: {pred_name}, the predecessor, is no longer held and nothing was carried from it. "
+            f"Forget {name} and make the collection as case A")
+
+
 # ---- case F, a re-creation (docs/notes/new-collection.md; app/hold/recreate.py) ----
 
 def _recreate_encoder(a) -> None:
@@ -899,7 +998,8 @@ def _recreate_check(a, run, recipe: dict, pred, kept, interim: str):
     predecessor's — another image is other records); the recipe held to the
     predecessor (app/hold/recreate.py `refusal`: the same space, the same
     records, something to re-create); the interim name free, or holding this
-    run's own collection. Returns the collection already made, or None."""
+    run's own collection. Returns `(the collection already made or None, the
+    Codex the recipe makes, the fields it changes)`."""
     import copy
 
     from app.hold import recreate
@@ -949,7 +1049,7 @@ def _recreate_check(a, run, recipe: dict, pred, kept, interim: str):
                                              "space_id": pred.space_id, "tolerance": pred.space.tolerance,
                                              "platform_image": pred.toolchain.platform_image},
                              "interim": interim, "changed": changed})
-    return existing
+    return existing, dry, changed
 
 
 def _defer(message: str) -> CodexError:
@@ -974,8 +1074,6 @@ def _recreate_carry(a, run, name: str, codex, pred, measured: dict, say) -> None
     is checked by its counts, never redone. Both collections' write locks are
     taken for the step and given back after it (the gate takes the new one's
     again)."""
-    import hashlib
-
     from app import embeddings
     from app.hold import carry as carry_mod, lock as lock_mod, recreate, records as rec, seed
     root = Path(a.root)
@@ -993,8 +1091,7 @@ def _recreate_carry(a, run, name: str, codex, pred, measured: dict, say) -> None
                         f"{s.get('checked')} byte-identical, worst {s.get('worst')}")
         return
     if pred is None:
-        raise CodexError(f"carry: {a.name}, the predecessor, is no longer held and nothing was carried "
-                         f"from it. Forget {name} and make the collection as case A")
+        raise CodexError(_no_predecessor(a.name, name))
     locks = []
     try:
         for n in sorted({a.name, name}):
@@ -1014,12 +1111,9 @@ def _recreate_carry(a, run, name: str, codex, pred, measured: dict, say) -> None
         origin = recreate.share_origin(root, a.name, name)
         local = rec.local_collection(root, a.name, pred)
         calibrated = set(((measured or {}).get("reference") or {}).get("runs") or ())
-        # THE SAME REQUEST ON THE SAME RUN DRAWS THE SAME CHUNKS: a sample that
-        # failed is not drawn away by running again; a re-calibrated run (the
-        # operator fixed the engine) draws anew. Its own check, no adversary to
-        # out-guess, so the seed needs no secrecy — it is recorded either way
-        sample_seed = hashlib.sha256("\0".join(("louise recreate sample", run.digest,
-                                                *sorted(calibrated))).encode("utf-8")).digest()
+        # the same request on the same run draws the same chunks (the dry run
+        # prints this seed for the run the card states)
+        sample_seed = recreate.sample_seed(run.digest, calibrated)
         with _carry_sample_embed(root, name, codex) as embed:
             checked = recreate.sample(
                 codex, seed.latest_snapshot(root, name), col.shard_dir_of(root, name), n=int(a.sample),
@@ -1041,9 +1135,7 @@ def _recreate_carry(a, run, name: str, codex, pred, measured: dict, say) -> None
             f"{codex.space.tolerance}), over {len(checked['parts'])} part(s)")
         need, free = recreate.room(root, a.name, name)
         if free < need:
-            raise CodexError(f"carry: copying {a.name}'s vector table, text index and manifest needs "
-                             f"{recreate.human(need)} and {recreate.human(free)} is free where {name} "
-                             f"lives: nothing was copied. Free the space, then run this again")
+            raise CodexError(recreate.no_room(a.name, name, need, free))
         out = carry_mod.carry(root, a.name, name, copy=True, apply=True, log=say)
         proof = recreate.prove_copy(root, a.name, name)
         ack = recreate.carry_ack(root, a.name, name, codex)
@@ -5516,6 +5608,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--sample", type=int, default=SAMPLE, metavar="N",
                    help=f"with --re-create: chunks re-encoded by the new run and held to the stored "
                         f"vectors before the carry (default {SAMPLE})")
+    p.add_argument("--dry-run", dest="dry_run", action="store_true",
+                   help="resolve and check, then print what the run would do (with --re-create: what "
+                        "differs, the space kept, the counts and bytes to carry, the room, the sample "
+                        "and its seed) and the steps; stops before calibrate, writes nothing, takes no lock")
     _encoder_key_args(p)
     p.set_defaults(fn=cmd_collection_new)
 

@@ -370,29 +370,91 @@ def _bytes_under(path: Path) -> int:
     return total
 
 
-def room(root: Path, pred_name: str, name: str) -> tuple[int, int]:
+#: what the carry copies and `room` counts, by its path in the collection
+COPIED = ("lance", "index", "state/manifest.sqlite")
+
+
+def sample_seed(request_digest: str, runs) -> bytes:
+    """The carry's sample seed: THE SAME REQUEST ON THE SAME RUN DRAWS THE
+    SAME CHUNKS, so a sample that failed is not drawn away by running again,
+    and a re-calibrated run (the operator fixed the engine) draws anew. Its
+    own check, no adversary to out-guess, so it needs no secrecy and is
+    recorded either way. `runs`: the runs calibrate measured."""
+    return hashlib.sha256("\0".join(("louise recreate sample", request_digest,
+                                     *sorted(runs))).encode("utf-8")).digest()
+
+
+def to_copy(root: Path, pred_name: str, name: str) -> dict[str, int]:
+    """The bytes of each of `COPIED` the target does not hold yet (a resumed
+    carry counts only what is left), counted from the predecessor's files by
+    their size."""
+    src, dst = Path(root) / pred_name, Path(root) / name
+    out: dict[str, int] = {}
+    for rel in COPIED:
+        there = dst / rel
+        if not there.exists() or (there.is_dir() and not any(there.iterdir())):
+            out[rel] = _bytes_under(src / rel) if (src / rel).exists() else 0
+    return out
+
+
+def room(root: Path, pred_name: str, name: str, *, make: bool = True) -> tuple[int, int]:
     """`(bytes the carry's copy needs, bytes free where it writes)`: the
     predecessor's vector table, text index and manifest, each counted only
     where the target does not hold it yet (a resumed carry). A copy-on-write
-    filesystem may need none of it (`cp --reflink`); it is not counted on."""
+    filesystem may need none of it (`cp --reflink`); it is not counted on.
+    `make=False` (the dry run) makes nothing: the free space is read where
+    the target would be made."""
     import shutil
-    src, dst = Path(root) / pred_name, Path(root) / name
-    need = 0
-    for rel in ("lance", "index", "state/manifest.sqlite"):
-        there = dst / rel
-        if not there.exists() or (there.is_dir() and not any(there.iterdir())):
-            need += _bytes_under(src / rel) if (src / rel).exists() else 0
-    dst.mkdir(parents=True, exist_ok=True)
-    return need, shutil.disk_usage(dst).free
+    dst = Path(root) / name
+    need = sum(to_copy(root, pred_name, name).values())
+    if make:
+        dst.mkdir(parents=True, exist_ok=True)
+    where = dst
+    while not where.exists() and where != where.parent:
+        where = where.parent
+    return need, shutil.disk_usage(where).free
 
 
-def counts(root: Path, name: str) -> dict[str, int | None]:
+def no_room(pred_name: str, name: str, need: int, free: int) -> str:
+    """The carry's refusal when the copy does not fit (the run's and the dry
+    run's one sentence)."""
+    return (f"carry: copying {pred_name}'s vector table, text index and manifest needs {human(need)} "
+            f"and {human(free)} is free where {name} lives: nothing was copied. Free the space, then "
+            f"run this again")
+
+
+def _documents_write_free(manifest: Path) -> int | None:
+    """`carry._documents`, writing nothing: a read-only SQLite open of a WAL
+    database at rest CREATES its -wal and -shm files (and cannot remove
+    them), so where neither exists — no connection is open, every commit is
+    in the main file — it is read `immutable=1` (no -shm, no lock). Where
+    they exist, a connection has it open: read `mode=ro`, whose only write
+    is the read mark every reader takes in the -shm."""
+    import sqlite3
+    if not manifest.is_file():
+        return None
+    at_rest = not any(Path(f"{manifest}{s}").exists() for s in ("-wal", "-shm"))
+    uri = f"file:{manifest.as_posix()}?{'immutable=1' if at_rest else 'mode=ro'}"
+    con = sqlite3.connect(uri, uri=True)
+    try:
+        return int(con.execute("SELECT COUNT(*) FROM documents").fetchone()[0])
+    except sqlite3.OperationalError:
+        return 0                                    # no documents table: nothing held
+    except sqlite3.DatabaseError:
+        return None                                 # a checkpoint under an immutable read
+    finally:
+        con.close()
+
+
+def counts(root: Path, name: str, *, write_free: bool = False) -> dict[str, int | None]:
     """The documents a collection's manifest holds and the rows its vector
-    table holds (None where it cannot be read)."""
+    table holds (None where it cannot be read). `write_free` (the dry run):
+    the manifest read so that not a file changes."""
     from app import spaces
     from .carry import _documents
     base = Path(root) / name
-    return {"documents": _documents(base / "state" / "manifest.sqlite"),
+    manifest = base / "state" / "manifest.sqlite"
+    return {"documents": _documents_write_free(manifest) if write_free else _documents(manifest),
             "vectors": spaces.known_lance_rows(base / "lance")}
 
 
