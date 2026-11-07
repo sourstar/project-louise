@@ -1099,7 +1099,8 @@ bundle's `possession.json` already says the same per record — by which a
 pair layer's vector is kept for a record whose title and sections did not
 change (*amended 2026-11-07*, operator: A; docs/notes/pubmed-updatefiles.md
 §10; a table written before it is read and written without it, `hold
-vectors source-hashes` adds it, 07 §7.3). Labels are computed by the
+vectors source-hashes` adds it, 07 §7.3). A table of Lance's legacy file
+format stores a NULL of it as 16 zero bytes, which read as NULL. Labels are computed by the
 importer against the centres it holds, never read from a bundle.
 
 **The quantised types.** `i8`, `i5` and `i4` are symmetric absmax

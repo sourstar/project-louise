@@ -18,6 +18,25 @@ build at 12 cores, the GPU uncapped. The card's noise (operator): 0.2 sone
 idle, 3.1 sone at full load, coil whine ~0.9 sone; its fan range is being
 measured (published figures disagree).
 
+### 2026-11-07: `hold vectors source-hashes --apply` failed on pubmed — fixed: a legacy table is compacted first
+
+- **The defect** ([pubmed-updatefiles.md](pubmed-updatefiles.md) §10, the
+  end): Lance's `add_columns` refuses a LEGACY-format (0.1) table whose
+  deletions empty a row group ("Missing too many rows in merge, run
+  compaction to materialize deletions first"). Reproduced; formats 2.x
+  merge beside the same deletions. #371's fixtures were 2.1.
+- **The fix:** every deletion made physical first, Lance's `compact_files`
+  with the full compaction's target and threshold 0, under the pause and
+  the locks; the dry run prints Lance's plan and the space it needs; one
+  commit, resumable (four SIGKILLs left the table as it was); a killed
+  compaction's `data/.tmp*` files removed first. Vectors, answers, both
+  indexes, bundles, SHARD and `space_id` unchanged (test).
+- **Also:** the legacy format stores a NULL `binary(16)` as 16 zero bytes;
+  they now read as NULL.
+- **Measured:** 1.03 GiB compacted in 2.1–2.3 s here; pubmed's ~79 GiB
+  estimated ~3–25 min. München reruns the same `--apply` after the dry run;
+  nothing to clean first.
+
 ### 2026-11-07: a pair vector kept while its record is the same — `source_hash` (operator: A)
 
 - **Built** ([pubmed-updatefiles.md](pubmed-updatefiles.md) §10): the vector

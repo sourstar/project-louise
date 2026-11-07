@@ -592,3 +592,71 @@ pubmed` (the dry run: rows, documents, snapshot 2026-08); `louise hold
 vectors source-hashes pubmed --apply`; then §9 from step 2. It must run
 before step 3, the discard of 2026-08: the sources come from the current
 snapshot's lines.
+
+**Defect on the node, fixed** (2026-11-07, after #371). `--apply` failed in
+phase 2: Lance's `add_columns` raised "Not supported: Missing too many rows
+in merge, run compaction to materialize deletions first" (pubmed's
+`chunks.lance`: version 335,625, 39,993,645 rows, 57 fragments, 47 with
+deletions, 123,716 rows deleted). The table was untouched (one commit).
+
+- **The cause, measured** (pylance 9.0.1, `tests/test_source_hash.py` and a
+  probe): the LEGACY file format (0.1) with a deleted run that empties a
+  whole row group (a document's rows, as delete-then-insert leaves them) —
+  2,000 contiguous rows fail, scattered deletions pass, with or without
+  stable row ids; formats 2.0 and 2.1 pass with the same deletions. The
+  fixtures of #371 were format 2.1.
+- **The fix, Lance's own route** (the one its error names): a legacy table
+  with a deletion is compacted first, `compact_files` with the full
+  compaction's own target and `materialize_deletions_threshold=0` (every
+  fragment with a deletion; the default 10 % would leave some), under the
+  pause, the collection's lock, `vector_index.rewrite` and the manifest's
+  vector write lock (`vector_index.materialize_deletions`); then the merge.
+  A later format is not rewritten; should Lance refuse anyway, the table is
+  compacted and the merge tried once more. The dry run prints Lance's own
+  plan (`lance.optimize.Compaction.plan`): fragments, rows, GiB, the index
+  it re-maps, the free space it needs; `--apply` exits 2 before writing
+  when it is short.
+- **Resumable:** one commit; four SIGKILLs inside the compaction each left
+  the table at its version, and the rerun planned and did it whole; a stop
+  after the compaction reruns into the merge alone; phase 1's work file is
+  read, not redone; the add_columns checkpoint is named by the table and
+  its version. A killed compaction leaves partial `data/.tmp*` files that
+  no version references (2.5 GiB from four kills on a 1.1 GiB table; the
+  rerun then refused for room): the command removes them first, under the
+  pause and the lock.
+- **Nothing that matters moves** (test, a legacy table with deletions, an
+  IVF_PQ index and the book_id BTREE): every row by chunk id, vectors byte
+  for byte; the answers to a fixed set of eight queries, ids and
+  distances; the plans still name both indexes (`ANNIvfPartition`,
+  `book_id_idx(BTree)`) and no row is unindexed by it; every bundle byte,
+  the SHARD tree and `space_id`. Nothing reads Lance's row ids or
+  addresses: the only positional reads (`vector_rewrite`'s verify,
+  `tools/encoder_bakeoff.py`, `tools/measure/wikidata_encoder_ab.py`) draw
+  fresh offsets within one open version; Lance re-maps the indexes in the
+  compaction's commit.
+- **A second finding:** the legacy format cannot hold a NULL of
+  `binary(16)` — it writes 16 zero bytes and `IS NOT NULL` counts them. 16
+  zero bytes now READ AS NULL (`embeddings.NO_SOURCE`), in the reads, the
+  count and `source_bytes`: "NULL never matches" holds in either format.
+- **Measured** (a legacy table of 500,000 rows, 768 × f16 and ~600
+  characters a row as pubmed's ~2.1 kB, 10 fragments, 0.3 % deleted in 8 of
+  them with three 2,000-row runs, IVF_PQ and BTREE; this shared 4-core
+  container): the plan 0.01 s; the compaction 2.1–2.3 s for 1.03 GiB of
+  data and 0.06 GiB of index re-mapped (three runs), ~0.45 GiB/s; the merge
+  0.3–0.4 s. **Pubmed, estimated:** Lance's plan with a 1,048,576-row target
+  takes in every fragment under it, so with pubmed's ~700,000-row average
+  it may rewrite most of the 79 GiB, and re-map its index (3.7 GiB on
+  2026-09-10): ~3 min at the rate measured here, up to ~25 min at the rate
+  of wikipedia's full compaction on the node (155 GiB in 40–51 min,
+  2026-09). The dry run prints the exact size. The free space it needs is
+  held until the maintainer's prune drops the old version, two hours after
+  pubmed is running again (VECTOR_INDEX_KEEP_VERSIONS_H).
+
+**München:** deploy; confirm pubmed paused (`louise node pause pubmed`);
+`louise hold vectors source-hashes pubmed` — the dry run: `compaction`
+should say `needed: true`, format `0.1`, what it rewrites and `room: true`;
+then `louise hold vectors source-hashes pubmed --apply`. Nothing to clean
+first: phase 1's `state/source-hashes.sqlite` is read as it is, the first
+run's `source-hashes.ckpt.sqlite` is not used and is removed at the end, and
+the column files the failed merge wrote are referenced by no version (the
+prune drops them).

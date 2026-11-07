@@ -46,13 +46,16 @@ SOURCE_COLUMN = "source_hash"
 
 
 def _source_bytes(content_hash) -> bytes | None:
-    """A record's `content_hash` (32 hex) as the column's 16 bytes, or None."""
+    """A record's `content_hash` (32 hex) as the column's 16 bytes, or None
+    — 16 zero bytes included (`app.embeddings.NO_SOURCE`: a legacy-format
+    table's NULL)."""
     if not isinstance(content_hash, str) or len(content_hash) != 32:
         return None
     try:
-        return bytes.fromhex(content_hash)
+        got = bytes.fromhex(content_hash)
     except ValueError:
         return None
+    return None if got == bytes(16) else got
 
 
 class LandError(CodexError):
