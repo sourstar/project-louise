@@ -10,3 +10,4 @@ base 16acc8926bb8a27b67dc4d419dbceaeb4110f7af
 0004-llama-cpp-encoder-decoder-waves.patch
 0005-llama-cpp-sycl-batched-mul-mat-src1.patch
 0006-llama-cpp-chat-cohere-command3.patch
+0007-llama-cpp-sycl-dmmv-cleanup.patch
