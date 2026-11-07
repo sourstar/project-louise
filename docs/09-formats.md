@@ -594,7 +594,13 @@ place. *Amended 2026-10-09*: it also carries `annotates`. For an annotations
 collection (02 §2.10) it is `{collection_id, from_snapshot, target}`, where
 `target` is the annotated collection's local name when this peer holds it
 and null otherwise; for every other collection it is null. An annotations
-collection's `space_id` is null.
+collection's `space_id` is null. *Amended 2026-11-07*: it also carries
+what this node embeds of what it holds (07 §7.8), as the slice scope and
+the embed selection resolve it: `embed_slices`, the held slices embedded
+(every held one where the file names none; `"all"` where the held slices
+cannot be listed), `embed_slices_not_held`, what the file names that is not
+held, and `embed_select`, `"all"` or `"smart"` — all null, `[]` for the
+list, for a copy no collection file of this node names.
 
 **Worked example.** The PubMed collection's Codex, abbreviated to the
 fields that carry its choices (every other field is present in the file):

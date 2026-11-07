@@ -220,6 +220,13 @@
     </div>
     {% endif %}
   </div>
+  {# WHICH HELD SLICES ARE EMBEDDED (07 §7.8 `embed_slices`; operator,
+     2026-11-07: wikidata's grow dialog showed its 14 held families checked,
+     read as the 9 embedded) — as the worker resolves it, in sight beside
+     the mode it narrows; changed in the grow dialog's "embed" group #}
+  {% if c.embed_slices %}
+  <div class="note" data-embed-slices title="changed under Options › grow profile…">{{ c.embed_slices.line }}</div>
+  {% endif %}
   {# RULE 2 (2026-11-06: wikidata turned on here sat paused for hours, the
      card silent): what still stops it embedding, in words, where the
      setting is shown (node_state.embedding_blockers — a pause among them,
@@ -559,7 +566,11 @@ const PROFILE_MODE={};
 const PROFILE_HELD={};
 const EXTRAS_OFFERED={};
 const EXTRAS_HELD={};
+const EMBED_SLICES={};
+const GROW={};
 {% for c in shelves %}GROW_OPTIONS["{{ c.name }}"]={{ c.grow_options|tojson }};
+EMBED_SLICES["{{ c.name }}"]={{ c.embed_slices|tojson }};
+GROW["{{ c.name }}"]={{ c.grow|tojson }};
 PROFILE_MODE["{{ c.name }}"]={{ c.profile_mode|tojson }};
 PROFILE_HELD["{{ c.name }}"]={{ c.profile_parts|tojson }};
 EXTRAS_OFFERED["{{ c.name }}"]={{ c.extras_offered|tojson }};
@@ -645,6 +656,10 @@ function openGrow(name){
   // server-filtered: current profile and larger only — profiles are
   // incremental, rolling back would misdescribe a corpus that only grows
   const opts=GROW_OPTIONS[name]||[];
+  // ONE ARCHIVE HOLDS EVERY SLICE (slice_scope.ONE_ORIGIN — wikidata: one
+  // dump, every family): nothing is chosen to hold, so no false choice is
+  // shown; what is chosen is what to embed (operator, 2026-11-07)
+  if((GROW[name]||{}).one_archive){openGrowOneArchive(name);return}
   if(!opts.length){
     showModal(`<h2>Grow ${esc(name)}</h2>
       <div class="note">no acquisition profiles (hand-populated corpus) — grow does not apply.</div>
@@ -668,7 +683,7 @@ function growExtrasBlock(name){
   const offered=EXTRAS_OFFERED[name]||[];
   if(!offered.length) return '';
   const held=new Set(EXTRAS_HELD[name]||[]);
-  return `<label style="margin-top:8px">Extra formats (local only — see Help)</label>`
+  return groupTag('download — extra formats, kept here only (see Help)')
     + offered.map(x=>
       `<label style="text-transform:none;letter-spacing:0;display:flex;align-items:center;gap:6px;margin:2px 0">
          <input type="checkbox" class="grow_extra" value="${esc(x)}" style="width:auto"
@@ -678,27 +693,152 @@ function growExtrasBlock(name){
 function growExtrasValue(){
   return [...document.querySelectorAll('.grow_extra:checked')].map(e=>e.value);
 }
+// WHAT A CHECK MEANS, once at the top of each group of checkboxes
+// (operator, 2026-11-07: "a short comment or tag about the meaning of
+// checking/unchecking (download+embed, or embed)", "like at the top of the
+// checkboxes")
+function groupTag(tag){
+  return `<label data-group-tag style="margin-top:10px">${esc(tag)}</label>`;
+}
 function openGrowAdditive(name,opts){
   // profiles COMBINE here (each is a language slice): what is already held
-  // stays checked, and checking another ADDS it instead of replacing.
+  // stays checked, and disabled — grow only adds, and a held slice is not
+  // removed here (operator, 2026-11-07: "all the families are checked, and
+  // they cannot be unchecked", with nothing saying why); checking another
+  // ADDS it instead of replacing.
+  const g=GROW[name]||{};
   const held=new Set(PROFILE_HELD[name]||[]);
-  const rows=opts.filter(o=>o.name!=='all'&&o.name!=='demo').map(o=>
-    `<label style="text-transform:none;letter-spacing:0;display:flex;align-items:center;gap:8px;margin:2px 0">
+  const all=held.has('all');
+  const rows=opts.filter(o=>o.name!=='all'&&o.name!=='demo').map(o=>{
+    const h=all||held.has(o.name);
+    return `<label style="text-transform:none;letter-spacing:0;display:flex;align-items:center;gap:8px;margin:2px 0">
        <input type="checkbox" class="grow_lang" value="${esc(o.name)}" style="width:auto"
-              ${held.has(o.name)?'checked':''}> ${esc(o.label)}
-       ${held.has(o.name)?'<span class="badge ok">held</span>':''}
-     </label>`).join('');
+              ${h?'checked disabled':''}> ${esc(o.label)}
+       ${h?'<span class="badge ok">held</span>':''}
+     </label>`}).join('');
+  const heldLine=held.size?`<div class="note" data-grow-held>Checked and greyed: held here — downloaded,
+      kept and searched by words. Grow adds ${esc(g.nouns||'slices')}; a held one is not removed here,
+      because removing it deletes its data.</div>`:'';
   showModal(`<h2>Grow ${esc(name)}</h2>
-    <div style="max-height:260px;overflow-y:auto;margin:8px 0">${rows}</div>
+    ${heldLine}
+    ${groupTag(g.tag||'download + embed')}
+    <div data-grow-group="hold" style="max-height:260px;overflow-y:auto;margin:4px 0 8px">${rows}</div>
     <label style="text-transform:none;letter-spacing:0;display:flex;align-items:center;gap:8px">
-      <input type="checkbox" id="grow_all" style="width:auto" ${held.has('all')?'checked':''}> everything (all slices)
+      <input type="checkbox" id="grow_all" style="width:auto" ${all?'checked disabled':''}> everything (all slices)
     </label>
     ${growExtrasBlock(name)}
     <div class="actions">
       <button onclick="previewGrow('${esc(name)}')">Preview (dry-run)</button>
       <button onclick="hideModal()">Cancel</button>
     </div>
-    <div id="grow_result"></div>`);
+    <div id="grow_result"></div>
+    ${embedSlicesBlock(name)}`);
+}
+function openGrowOneArchive(name){
+  // one archive: downloaded whole, every slice in it held and searched by
+  // words; the checks choose what the encoder spends on (07 §7.8
+  // `embed_slices`). A node processing part of it (`slices` a list, from
+  // `hold records fetch --slice`) may still take everything
+  const g=GROW[name]||{}, es=EMBED_SLICES[name];
+  const whole=g.total>0&&g.held>=g.total;
+  const intro=whole
+    ? `The archive is downloaded whole: every ${g.noun} is held and searchable by words. The checks choose which ${g.nouns} are embedded.`
+    : `The archive is downloaded whole; this node processes ${g.held} of its ${g.total} ${g.nouns}, searchable by words. The checks choose which of them are embedded.`;
+  const more=whole?'':`${groupTag('download + embed')}
+    <label style="text-transform:none;letter-spacing:0;display:flex;align-items:center;gap:8px">
+      <input type="checkbox" id="grow_all" style="width:auto"> everything (all ${g.total} ${esc(g.nouns)})
+    </label>
+    <div class="actions"><button onclick="previewGrow('${esc(name)}')">Preview (dry-run)</button></div>
+    <div id="grow_result"></div>`;
+  showModal(`<h2>Grow ${esc(name)}</h2>
+    <div class="note" data-grow-one-archive>${esc(intro)}</div>
+    ${es?embedSlicesBlock(name):`<div class="note">It holds one ${esc(g.noun)}: there is nothing to choose to embed.</div>`}
+    ${more}
+    <div class="actions"><button onclick="hideModal()">Cancel</button></div>`);
+}
+// THE "EMBED" GROUP: which held slices the encoder spends on (07 §7.8
+// `embed_slices`, as the worker resolves it — EMBED_SLICES comes from
+// slice_scope.embed_view): the one place the Library changes it
+function embedSlicesBlock(name){
+  const es=EMBED_SLICES[name];
+  if(!es)return '';
+  const rows=es.rows.map(r=>
+    `<label style="text-transform:none;letter-spacing:0;display:flex;align-items:center;gap:8px;margin:2px 0">
+       <input type="checkbox" class="embed_slice" value="${esc(r.name)}" style="width:auto"
+              ${es.all||r.embedded?'checked':''} ${es.all?'disabled':''}> ${esc(r.label)}
+       ${r.part?'<span class="badge">part embedded</span>':''}
+     </label>`).join('');
+  return `${groupTag('embed')}
+    <div data-grow-group="embed" style="max-height:260px;overflow-y:auto;margin:4px 0 8px">${rows}</div>
+    <label style="text-transform:none;letter-spacing:0;display:flex;align-items:center;gap:8px">
+      <input type="checkbox" id="embed_slices_all" style="width:auto" ${es.all?'checked':''}
+             onchange="embedSlicesAll(this.checked)"> every ${esc(es.noun)} held${growsMore(es)?', and any grown later':''}
+    </label>
+    <div class="note">Unchecked: held and searched by words, not embedded here.</div>
+    ${es.smart?`<div class="note">${esc(smartCombines(es))}</div>`:''}
+    <div class="actions"><button class="primary" onclick="saveEmbedSlices('${esc(name)}')">Save the embedded ${esc(es.nouns)}…</button></div>
+    <div id="embed_slices_result"></div>`;
+}
+function smartCombines(es){
+  // app/embed_select.py `decide`: the smart choice over every language
+  // held, then narrowed to embed_slices — one writer of the marks
+  return `With “Embed which” on smart, the smart choice is made over every ${es.noun} held, `
+    + `then only its articles in the checked ${es.nouns} are embedded: unchecking one does not `
+    + `hand its articles to another.`;
+}
+function growsMore(es){
+  // can a slice still be grown? Not where one archive's every slice is held
+  return !(es.one_archive&&es.rows.length>=es.total);
+}
+function embedSlicesAll(on){
+  document.querySelectorAll('.embed_slice').forEach(e=>{if(on)e.checked=true;e.disabled=on});
+}
+function dotted(n){return String(n).replace(/\B(?=(\d{3})+(?!\d))/g,'.')}
+function saveEmbedSlices(name){
+  const es=EMBED_SLICES[name];if(!es)return;
+  const every=document.getElementById('embed_slices_all').checked;
+  const picked=every?null:[...document.querySelectorAll('.embed_slice:checked')].map(e=>e.value);
+  const box=document.getElementById('embed_slices_result');
+  if(picked&&!picked.length){
+    box.innerHTML=`<div class="note" style="color:var(--err)">Choose at least one ${esc(es.noun)} to embed. To embed nothing, set the embed mode to off.</div>`;
+    return}
+  const now=new Set(es.embedded), next=new Set(picked===null?es.rows.map(r=>r.name):picked);
+  const dropped=es.rows.filter(r=>now.has(r.name)&&!next.has(r.name));
+  const added=es.rows.filter(r=>!now.has(r.name)&&next.has(r.name));
+  const names=rs=>rs.map(r=>r.short).join(', ');
+  const them=rs=>rs.length===1?'it':'them';
+  const notes=[];
+  if(dropped.length) notes.push(`<b>${esc(names(dropped))}: not embedded here</b> from now on. What is
+      already embedded of ${them(dropped)} keeps its vectors and stays searchable; the rest stays held
+      and searched by words.`);
+  if(added.length){
+    // a STORED count only, never a scan: every document not embedded here
+    // when nothing stays declined, else the dump's own count per family
+    let n='';
+    if(!es.smart&&es.declined!=null&&next.size===es.rows.length) n=` — ${dotted(es.declined)} documents`;
+    else if(added.every(r=>r.documents!=null)) n=` — about ${dotted(added.reduce((a,r)=>a+r.documents,0))} documents`;
+    notes.push(`<b>${esc(names(added))}: queued for the encoder</b>${n}: what of ${them(added)} is not
+      embedded yet goes to the encoder, as the embed mode allows.`);
+  }
+  if(picked===null&&!es.all) notes.push(`Every ${esc(es.noun)} held is embedded${growsMore(es)?', and any grown later':''}.`);
+  if(picked!==null&&es.all&&growsMore(es)) notes.push(`A ${esc(es.noun)} grown later is not embedded until it is checked here.`);
+  if(!notes.length){box.innerHTML='<div class="note">Nothing changed.</div>';return}
+  if(es.smart) notes.push(esc(smartCombines(es)));
+  notes.push(`The worker applies it after a scan it starts on seeing the change; until then the rest
+      of the work on ${esc(name)} waits.`);
+  showModal(`<h2>${esc(name)}: the ${esc(es.nouns)} embedded</h2>
+    ${notes.map(t=>`<div class="note">${t}</div>`).join('')}
+    <div class="actions">
+      <button class="primary" id="confirm-cancel" onclick="hideModal()">Cancel</button>
+      <button id="confirm-go">Save</button>
+    </div>`);
+  document.getElementById('confirm-go').onclick=()=>postEmbedSlices(name,picked);
+  document.getElementById('confirm-cancel').focus();
+}
+async function postEmbedSlices(name,slices){
+  try{const d=await postJSON('/admin/library/'+name+'/embed-slices',{slices});
+    hideModal();toast(name+': '+(d.line||'saved')+' — saved to collections/'+name+'.toml');location.reload()}
+  catch(e){toast('embed choice failed: '+e)}
 }
 function growProfileValue(name){
   if(PROFILE_MODE[name]!=='additive'){
