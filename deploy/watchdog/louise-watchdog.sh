@@ -13,7 +13,9 @@
 #   1. `checkpoint watch --dry-run --json`: 0 nothing to do (exit 0, silent); 11 expired
 #   2. `systemctl stop` each dev unit it names — only `louise-…` names, never the watchdog's
 #      own; anything else is refused and logged
-#   3. `checkpoint watch --json` again, which restores (10) — NOT `restore`: a beat that came
+#   3. `checkpoint watch --json` again, which stops the steps recorded INSIDE the container
+#      (`checkpoint run`: a unit's `docker exec` stopped leaves its process running there; SIGTERM,
+#      up to 300 s, SIGKILL) and restores (10) — NOT `restore`: a beat that came
 #      meanwhile means the agent is back, and `watch` sees it where `restore` would not. Units
 #      first, restore second: a run killed between the two finds the checkpoint still open
 #      and does both again (stopping a stopped unit is nothing), so no unit is left running

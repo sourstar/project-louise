@@ -2699,13 +2699,14 @@ def cmd_node_unfreeze(a) -> int:
 
 
 def cmd_node_checkpoint(a) -> int:
-    """`node checkpoint save|beat|status|restore|close|watch` (07 §7.3;
+    """`node checkpoint save|beat|run|status|restore|close|watch` (07 §7.3;
     operator, 2026-11-07: "when the limit of usage approaches, and you are
     going to be frozen for more than 2 hours, put all the developments on
     hold and resume the last working state before freezing"). The record
     and its rules are app/working_state.py; the host's half is
     deploy/watchdog/. Exit 2 refused, 3 another checkpoint command holds the
-    record; `watch` also 10 (restored) and 11 (expired, dry run)."""
+    record; `watch` also 10 (restored) and 11 (expired, dry run); `run` the
+    step's own."""
     from app import node_state, working_state as ws
     verb = a.checkpoint_verb
     try:
@@ -2721,14 +2722,19 @@ def cmd_node_checkpoint(a) -> int:
         if verb == "beat":
             for_s = ws.parse_duration(a.for_) if a.for_ is not None else None
             until = ws.parse_when(a.hold_until) if a.hold_until is not None else None
-            rec = ws.beat(for_s=for_s, until=until, units=a.dev_unit or [])
+            rec = ws.beat(for_s=for_s, until=until, units=a.dev_unit or [], pids=a.dev_pid or [])
             out = {"checkpoint": rec["status"], "last_beat": ws.iso(rec["last_beat"]),
                    "hold_until": ws.iso(rec.get("hold_until")),
-                   "deadline": ws.iso(ws.deadline(rec)), "dev_units": rec["dev_units"]}
+                   "deadline": ws.iso(ws.deadline(rec)), "dev_units": rec["dev_units"],
+                   "dev_processes": [{"pid": e["pid"], "cmdline": " ".join(e["cmdline"])[:200]}
+                                     for e in rec.get("dev_processes") or []]}
             if rec["capped"]:
                 out["says"] = f"capped: an unattended step is declared for {ws.span(ws.MAX_HOLD_S)} at most"
             _print(out)
             return 0
+        if verb == "run":
+            cmd = list(a.command or [])
+            return ws.run(cmd[1:] if cmd[:1] == ["--"] else cmd, note=a.note or "")
         if verb == "status":
             st = ws.status()
             if a.json:
@@ -5922,6 +5928,15 @@ def build_parser() -> argparse.ArgumentParser:
                           help="the same, until a time with its offset (…Z, …+01:00)")
     p.add_argument("--dev-unit", dest="dev_unit", action="extend", nargs="+", default=None,
                    metavar="UNIT", help="a development unit started since the save")
+    p.add_argument("--dev-pid", dest="dev_pid", action="extend", nargs="+", type=int, default=None,
+                   metavar="PID", help="a process of this container a step runs (not started by "
+                                       "`run`): stopped by the restore")
+    p.set_defaults(fn=cmd_node_checkpoint)
+    p = cverbs.add_parser("run", help="run a development step as a child recorded in the open "
+                                      "checkpoint (pid, command line, start time): the restore stops "
+                                      "it; SIGTERM/SIGINT forwarded; exits with its code")
+    p.add_argument("--note", default=None, metavar="TEXT")
+    p.add_argument("command", nargs=argparse.REMAINDER, help="-- then the command and its arguments")
     p.set_defaults(fn=cmd_node_checkpoint)
     p = cverbs.add_parser("status", help="open or closed, the last beat, the deadline, the dev units, "
                                          "what restore would change")

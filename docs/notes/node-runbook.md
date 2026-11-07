@@ -214,6 +214,16 @@ in `deploy/watchdog/README.md`).
   `close` when done and the node is good. One checkpoint per node: a second
   agent beats the open one, or `save --replace`s it when the state now IS
   the working state.
+- **A step inside the container** (a gate, `hold embedder check`, a fetch, a
+  measurement) runs under the checkpoint:
+  `docker exec ix-louise-rag-worker-1 python -m app.louise node checkpoint run --note "<what>" -- python -m app.louise …`.
+  Stopping a systemd unit that runs
+  `docker exec` does NOT stop the process in the container (München,
+  2026-11-07: the docker CLI does not forward the signal), so the restore
+  stops each recorded step itself first: SIGTERM, up to 300 s for its unit,
+  then SIGKILL, each logged; a reused pid is never signalled. One started
+  otherwise: `beat --dev-pid <pid>` (the worker container's pid). `run` does
+  not beat.
 
 ## 7. The records build container (wikipedia-v8)
 

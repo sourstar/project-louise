@@ -287,11 +287,15 @@ louise node
   checkpoint save [--note TEXT] [--dev-unit UNIT …] [--replace]        THE DEVELOPMENT WATCHDOG (operator, 2026-11-07; below): record the node's state now as its working state — the mode, the
                                                                        collections' own pauses and freezes, each held collection's embed as its file states it, the host's dev units (louise-…) —
                                                                        open the checkpoint and beat; refused while one is open unless --replace (its units carried) (added 2026-11-07)
-  checkpoint beat [--for DURATION | --hold-until ISO] [--dev-unit UNIT …]
+  checkpoint beat [--for DURATION | --hold-until ISO] [--dev-unit UNIT …] [--dev-pid PID …]
                                                                        the heartbeat; --for / --hold-until declare a known-long unattended step (at most 24 h, capped and said; --for 0
-                                                                       withdraws it); refused with no checkpoint open
+                                                                       withdraws it); --dev-pid records a process of this container a step runs; refused with no checkpoint open
+  checkpoint run [--note TEXT] -- <command…>                           a development step inside the container: started as a child, recorded in the open checkpoint (pid, command
+                                                                       line, start time), SIGTERM/SIGINT forwarded, its exit code returned; refused, nothing started, with none open;
+                                                                       it does not beat
   checkpoint status [--json]                                           open or closed, saved and last beaten when, the deadline, the dev units, what restore would change; writes nothing
-  checkpoint restore [--dry-run] [--by TEXT]                           the node put back to the checkpoint, then closed: only what differs, through `pause`/`resume`'s and `hold config apply
+  checkpoint restore [--dry-run] [--by TEXT]                           the recorded steps stopped first (SIGTERM, up to 300 s, then SIGKILL; a reused pid never signalled), then the node
+                                                                       put back to the checkpoint and closed: only what differs, through `pause`/`resume`'s and `hold config apply
                                                                        --set embed=`'s own functions; with none open, nothing (exit 0); a change that fails leaves it open (exit 1)
   checkpoint close                                                     development finished, the node in a good state: closed, nothing restored, no unit stopped
   checkpoint watch [--after 2h] [--dry-run] [--json]                   the watchdog's one check: no beat for --after and past any declared step -> the dev units on stdout one a line (or
@@ -977,7 +981,15 @@ reader needs at the command line:
   apply --set embed=…` use, and nothing else (§7.8). A collection held now
   and not at the save is left as it is; one held then and not now is
   skipped; a freeze, an operator decision, is recorded and never changed.
-  Each write names the restore in the mode's and the pause's history. The
+  Each write names the restore in the mode's and the pause's history.
+  Before any of it, the restore stops the steps recorded inside the
+  container (`run`, `beat --dev-pid`): stopping a host unit that runs
+  `docker exec` does not stop the process it started there (München,
+  2026-11-07). A step is named by its pid, command line and start time and
+  pid namespace, so a reused pid, or one of another container, is said and
+  never signalled; one still running gets SIGTERM — a pass ends its unit and
+  exits 130 (§7.7) —, at most 300 s, then SIGKILL, each said. `run` does not
+  beat: the agent's beat is the liveness signal. The
   record is `state/working-state.json`, written whole and renamed, every
   change under an exclusive lock (exit 3 while another checkpoint command
   holds it); one that cannot be read is refused (exit 2), never taken for

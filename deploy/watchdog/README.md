@@ -31,9 +31,9 @@ starts an app. Otherwise it asks `checkpoint watch --dry-run`; when a
 checkpoint is open and no beat has come for 2 h (and no declared step is
 still running), it `systemctl stop`s each dev unit — `louise-…` names only,
 never `louise-watchdog`, anything else refused and logged — and then
-`checkpoint watch` restores the node's mode, its collections' pauses and
-their embed settings to the checkpoint, and closes it. Freezes are never
-changed.
+`checkpoint watch` stops the steps recorded inside the container (below),
+restores the node's mode, its collections' pauses and their embed settings
+to the checkpoint, and closes it. Freezes are never changed.
 
 ## The log
 
@@ -52,10 +52,28 @@ $L beat                          # at least every hour while working
 $L beat --dev-unit louise-onednn-arms   # a unit started later
 $L beat --for 5h                 # before a known-long unattended step (at most 24 h)
 $L close                         # done, and the node is in a good state
+
+# A STEP INSIDE THE CONTAINER (a gate, `hold embedder check`, a fetch, a measurement):
+docker exec ix-louise-rag-worker-1 python -m app.louise node checkpoint run --note "pubmed gate" -- \
+    python -m app.louise hold embedder check pubmed
+# one started some other way: record its pid as the worker container sees it
+$L beat --dev-pid 4242
 ```
+
+**Why `run`** (München, 2026-11-07): `systemctl stop` of a unit whose command
+is `docker exec … python -m app.louise …` does NOT stop the process in the
+container — the docker CLI does not forward the signal. `run` records the
+step's pid, command line and start time in the checkpoint, forwards SIGTERM
+and SIGINT to it and exits with its code; the restore SIGTERMs each recorded
+step still running (the same pid, command line and start time: a reused pid
+is never signalled), waits up to 300 s for it to end its unit, then SIGKILLs
+what is left, and says each — before it changes any state. `run` does not
+beat: the agent's beat is the liveness signal. Run steps in the WORKER
+container, where `watch` runs: a pid of another container is said and
+skipped.
 
 `save` records the state as it is NOW, so it comes first; a second `save`
 while one is open is refused unless `--replace` (the current state is the
-working state; the open one's units are carried). `restore` puts the
-checkpoint back by hand; `restore --dry-run` and `status` show what it would
-change.
+working state; the open one's units and processes are carried). `restore`
+puts the checkpoint back by hand; `restore --dry-run` and `status` show what
+it would change and stop.

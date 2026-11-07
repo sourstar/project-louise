@@ -31,8 +31,15 @@ measured (published figures disagree).
   (now also `hold config apply --set`'s one path). Freezes recorded, never
   changed. Host half: deploy/watchdog/ (script, a 10-min timer; units stopped
   `louise-…` only). Runbook §6a.
+- **Steps inside the container** (München: "stopping the systemd unit does
+  NOT stop a docker exec'd fetch"): `checkpoint run -- <command…>` and `beat
+  --dev-pid` record the process (pid, command line, start time, pid
+  namespace; app/dev_processes.py); the restore SIGTERMs each still the
+  same process, waits at most 300 s, SIGKILLs what is left, each said,
+  before any state changes. `run` does not beat.
 - **München, to do**: install it (deploy/watchdog/README.md); both agents
-  `save` before a development and `beat` hourly.
+  `save` before a development, `beat` hourly, and start container steps
+  with `docker exec ix-louise-rag-worker-1 … node checkpoint run -- …`.
 
 ### 2026-11-07: ssd3 is the build area — `LOUISE_BUILD_DIR`, `hold vectors move` (operator: B)
 
