@@ -8,7 +8,7 @@ names it. To build a test backend with one: append its path, relative to
 `deploy/localai/patches` (`staged/0006-llama-cpp-encoder-decoder-memory.patch`, then `staged/0006-…`),
 to a LOCAL, uncommitted copy of `series`, then `build.sh` as usual. When its
 gates pass, `git mv` it up one level, add its line to `series`, and rename its
-entry in docs/notes/localai-bugs.md from "P7 (staged)" to the next P number (and P8 alike; renumbered 2026-11-06 when the Command 3 parser joined the series as P6).
+entry in docs/notes/localai-bugs.md from "P8 (staged)" to the next P number (and P9 alike; renumbered 2026-11-06 when the Command 3 parser joined the series as P6, and 2026-11-07 when upstream's dmmv cleanup joined as P7).
 
 **Not rebased yet (2026-11-02).** Both were written on `v4.12.1` (llama.cpp
 `c0fd786`). The series moved to LocalAI `16acc89` (llama.cpp `ddf48f8`), where

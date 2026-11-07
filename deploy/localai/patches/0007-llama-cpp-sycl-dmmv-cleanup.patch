@@ -1,4 +1,4 @@
-From 7585c7e10b3515184761afc24712763eb796b33f Mon Sep 17 00:00:00 2001
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Claude <noreply@anthropic.com>
 Date: Sat, 7 Nov 2026 23:27:44 +0100
 Subject: [PATCH] feat(llama-cpp): carry upstream's SYCL dmmv cleanup
