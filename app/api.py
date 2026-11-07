@@ -1194,7 +1194,7 @@ def _chat_answer(body: ChatBody, query: str, result: dict, t0: float):
                     yield ": keepalive\n\n"
                 elif kind == "delta":
                     value = speech.spaced_citations(value, tail)
-                    tail = (tail + value)[-8:]
+                    tail = (tail + value)[-speech.TAIL:]
                     yield chunk(value)
                 elif kind == "cut":
                     yield chunk(f"\n[answer cut: {value}]")

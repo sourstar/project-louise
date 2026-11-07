@@ -1,7 +1,7 @@
 """Speech for the programs that read Louise aloud (app/speech.py; operator,
-2026-11-06, 2026-11-07): no citations read, in whatever shape the answer's
-language writes them; one voice for every language; the model kept loaded
-while sentences come."""
+2026-11-06, 2026-11-07): nothing in square brackets read, in whatever shape
+the answer's language writes its citations; one voice for every language;
+the model kept loaded while sentences come."""
 import time
 
 import pytest
@@ -22,7 +22,7 @@ PROFILES = [{"name": "Valentina", "language": "it-IT", "voice": "localai://voice
     ("It is [3]-[5] there.", "It is there."),
     ("See [3,4] and [6-8].", "See and."),
     ("A record [gutenberg:1001], quoted.", "A record, quoted."),
-    ("Chapter [IV] stays, and so does a list [a].", "Chapter [IV] stays, and so does a list [a]."),
+    ("Chapter [IV] and a list [a] are not read either.", "Chapter and a list are not read either."),
     # French answers (operator 2026-11-07: "[7] the number is pronounced")
     ("Selon la loi [7], c'est vrai.", "Selon la loi, c'est vrai."),
     ("C'est vrai [7 ; 8].", "C'est vrai."),
@@ -32,28 +32,37 @@ PROFILES = [{"name": "Valentina", "language": "it-IT", "voice": "localai://voice
     ("C'est vrai [réf. 7] [source 8] [n° 9].", "C'est vrai."),
     ("C'est vrai \\[7\\].", "C'est vrai."),
     ("C'est vrai 【7】【8】.", "C'est vrai."),
-    ("La legge [art. 3] resta.", "La legge [art. 3] resta."),
+    ("La legge [art. 3] resta.", "La legge resta."),
+    ("Selon [Dupont, 1998, p. 7 ; voir aussi 9], c'est vrai.", "Selon, c'est vrai."),
+    ("Avant [7]–[9], [10] ; après.", "Avant; après."),
 ])
 def test_the_citations_are_not_read(text, said):
     assert speech.speakable(text) == said
 
 
-def test_adjacent_citations_get_a_space_even_across_two_chunks():
-    """Open WebUI reads "[3][4]" as a reference link and speaks "3"."""
+def test_a_citation_before_a_bracket_or_a_parenthesis_gets_a_space_even_across_chunks():
+    """Open WebUI reads "[3][4]" and "[3](…)" as links and speaks "3"."""
     assert speech.spaced_citations("Dante [3][4][5].") == "Dante [3] [4] [5]."
     assert speech.spaced_citations("[4] then", tail="Dante [3]") == " [4] then"
-    assert speech.spaced_citations("[link][ref] and a[1]") == "[link][ref] and a[1]"
-    # "[3](art. 2)" is a link to Open WebUI too, which keeps "3" and says it
     assert speech.spaced_citations("Dante [3](art. 2).") == "Dante [3] (art. 2)."
     assert speech.spaced_citations("(art. 2)", tail="Dante [3]") == " (art. 2)"
-    assert speech.spaced_citations("a list (b) [link](x)") == "a list (b) [link](x)"
+    assert speech.spaced_citations("vrai [7][réf. 8] [7 ; 8](x)") == "vrai [7] [réf. 8] [7 ; 8] (x)"
+    assert speech.spaced_citations("f. 7][8]", tail="vrai [ré") == "f. 7] [8]", "a citation split in two"
+    assert speech.spaced_citations("[link][ref] and a[1]") == "[link][ref] and a[1]"
+    assert speech.spaced_citations("a list (b) [Dante](x)") == "a list (b) [Dante](x)", "a link stays a link"
 
 
-def test_a_bracket_with_a_number_left_in_the_text_is_said(capsys):
-    assert speech.speakable("La legge [art. 3] resta.") == "La legge [art. 3] resta."
-    assert "'[art. 3]'" in capsys.readouterr().err
-    speech.speakable("Dante [3].")
-    assert capsys.readouterr().err == ""
+def test_a_stream_spaces_what_its_chunks_split():
+    """The answer's stream through spaced_citations chunk by chunk, with the
+    tail /v1 keeps, says what the whole text spaced at once says."""
+    text = "Vrai [réf. 7][8] et [9](art. 2) ; [Dante](x) [10][11]."
+    for size in (1, 2, 3, 5, 8):
+        tail, out = "", []
+        for i in range(0, len(text), size):
+            v = speech.spaced_citations(text[i:i + size], tail)
+            tail = (tail + v)[-speech.TAIL:]
+            out.append(v)
+        assert "".join(out) == speech.spaced_citations(text), size
 
 
 @pytest.mark.parametrize("text, lang", [
