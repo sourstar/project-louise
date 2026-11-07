@@ -1546,7 +1546,11 @@ slices = ["year=1975-1979", "year=1980-1984"]  # or "all"; a list is PART of the
 embed_slices = ["family=person", "family=work"]  # optional (2026-10-31): the slices the encoder spends on, out of those held;
                                                # absent = every slice held. A document outside them is marked "not embedded
                                                # here" (embed_done = -1): never an embed candidate, never counted embedded,
-                                               # back to 0 when the list grows; one already embedded keeps its vectors
+                                               # back to 0 when the list grows; one already embedded keeps its vectors.
+                                               # The Library shows it on the card ("Embedded: 9 of 14 families: …") and
+                                               # offers it in the grow dialog's "embed" group, both read from
+                                               # `slice_scope.embed_view` (amended 2026-11-07); an edit makes the worker
+                                               # scan at once, the pipeline waiting until it is applied
 embed_select = "smart"                         # optional (2026-11-02): which documents held are embedded — "all", or "smart"
                                                # (wikipedia's default): every English article, plus for each Wikidata item the
                                                # longest article in another language when the English one is missing or shorter;
