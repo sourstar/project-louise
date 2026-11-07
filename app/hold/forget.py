@@ -38,6 +38,36 @@ def _linked_by_others(root: Path, name: str, target: Path) -> list[str]:
     return _origin_shared(Path(root), name, target)
 
 
+def shared_folders(root: Path, name: str) -> tuple[list[Path], list[Path]]:
+    """`(removed, kept)`: the folders under the shared roots (one mount per
+    kind, a folder per collection, 2026-10-12) that `<root>/<name>`'s links
+    point at and a forget removes — its SHARD, origin and bundles folders —
+    and the origin folders it keeps because another held collection links
+    them (both Normattiva collections read /corpora/normattiva). A link to a
+    folder not named after the collection (a custom origin, linked by hand)
+    is not ours and is in neither list. One list for the forget and its dry
+    run, so the two cannot disagree."""
+    from . import shard as shard_mod
+    base = Path(root) / name
+    removed: list[Path] = []
+    kept: list[Path] = []
+    for link_name, env in ((shard_mod.SHARD_DIR if hasattr(shard_mod, "SHARD_DIR") else "shard",
+                            "SHARDS_ROOT"), ("origin", "ORIGINS_ROOT"), ("state/bundles", "BUNDLES_ROOT")):
+        link = base / link_name
+        shared_root = os.getenv(env, "").strip()
+        if not (shared_root and link.is_symlink()):
+            continue
+        target = Path(os.readlink(link))
+        if target.name != name or os.path.normpath(target.parent) != os.path.normpath(shared_root):
+            continue                         # a custom origin, linked by hand: not ours
+        if link_name == "origin" and _linked_by_others(root, name, target):
+            kept.append(target)
+            continue
+        if target.is_dir():
+            removed.append(target)
+    return removed, kept
+
+
 def forget(root: Path, name: str, *, kinds=None, dry_run: bool = False,
            retire: Callable[[str], None] | None = None) -> dict[str, Any]:
     """Remove the copy at `<root>/<name>` and its held file — or, with
@@ -69,8 +99,17 @@ def forget(root: Path, name: str, *, kinds=None, dry_run: bool = False,
     else:
         plan = [p for p in (held, base) if p.exists()]
     if dry_run:
-        return {"collection": name, "dry_run": True,
-                "would_remove": [str(p) for p in plan], "removed": []}
+        out: dict[str, Any] = {"collection": name, "dry_run": True,
+                               "would_remove": [str(p) for p in plan], "removed": []}
+        if not kinds:
+            # the folders under the shared roots too (step 4 below): a dry run
+            # naming the directory alone under-said what goes, the SHARD,
+            # origin and bundles folders its links point at (2026-11-07,
+            # found sizing normattiva's forget for its re-creation)
+            gone, kept = shared_folders(root, name)
+            out["would_remove"] += [str(p) for p in gone]
+            out["kept"] = [str(p) for p in kept]
+        return out
     removed: list[str] = []
     if kinds:
         for p in plan:
@@ -99,20 +138,9 @@ def forget(root: Path, name: str, *, kinds=None, dry_run: bool = False,
     #    (2026-10-13). The SHARD folder is this collection's copy and goes;
     #    an origin folder goes too unless another held collection links it
     #    (both Normattiva collections read /corpora/normattiva)
-    for link_name, env in ((shard_mod.SHARD_DIR if hasattr(shard_mod, "SHARD_DIR") else "shard",
-                            "SHARDS_ROOT"), ("origin", "ORIGINS_ROOT"), ("state/bundles", "BUNDLES_ROOT")):
-        link = base / link_name
-        shared_root = os.getenv(env, "").strip()
-        if not (shared_root and link.is_symlink()):
-            continue
-        target = Path(os.readlink(link))
-        if target.name != name or os.path.normpath(target.parent) != os.path.normpath(shared_root):
-            continue                         # a custom origin, linked by hand: not ours
-        if link_name == "origin" and _linked_by_others(root, name, target):
-            continue
-        if target.is_dir():
-            shutil.rmtree(target)
-            removed.append(str(target))
+    for target in shared_folders(root, name)[0]:
+        shutil.rmtree(target)
+        removed.append(str(target))
     # 5. the directory, whole
     if base.exists():
         shutil.rmtree(base)
