@@ -3998,6 +3998,40 @@ def cmd_vectors_validity_columns(a) -> int:
     return 0
 
 
+def cmd_vectors_source_hashes(a) -> int:
+    """`hold vectors source-hashes <collection> [--apply]` (07 §7.3; 09 §9.6,
+    amended 2026-11-07, operator: A): the `source_hash` column a vector table
+    written before it lacks — the record each row's vector was made for, from
+    the current snapshot's lines and the manifest, never the encoder
+    (app/vector_sources.py). A dry run by default: what it would do. With
+    `--apply` it writes the table, so the collection must be paused (`node
+    pause <collection>`, which releases its lock) and its write lock is
+    taken; exit 2 otherwise. Resumable; a table that has the column is left
+    as it is."""
+    from app import db, node_state, vector_sources
+    from app.hold import collection as col, lock as lock_mod, records as rec
+
+    name, codex = col.resolve(a.root, a.collection)
+    local = rec.local_collection(a.root, name, codex)
+    con = db.connect(local)
+    if not a.apply:
+        _print({**vector_sources.survey(a.root, name, local, con), "dry_run": True,
+                "next": f"louise node pause {name}; louise hold vectors source-hashes {name} --apply"})
+        return 0
+    paused = name in node_state.paused_collections() or node_state.worker_state() == "paused"
+    if not paused:
+        print(f"louise: {name} is not paused: `hold vectors source-hashes --apply` writes its "
+              f"vector table. `louise node pause {name}` first (it releases the collection's "
+              f"lock at the end of the current unit), then run this again", file=sys.stderr)
+        return 2
+    _take_write_lock(a.root, name, "hold vectors source-hashes", exit_code=2)
+    log = lambda m: print(m, file=sys.stderr)       # noqa: E731
+    out = vector_sources.apply(a.root, name, local, con,
+                               state_dir=lock_mod.state_dir(a.root, name), log=log)
+    _print(out)
+    return 0
+
+
 def cmd_vectors_reembed(a) -> int:
     """`hold vectors reembed <collection>`: every vector of the collection
     made again by the encoder that serves it now — for vectors a run made
@@ -6296,6 +6330,15 @@ def build_parser() -> argparse.ArgumentParser:
                                "every vector kept; then `hold index build --vector`")
     root_arg(p); p.add_argument("collection")
     p.set_defaults(fn=cmd_vectors_validity_columns)
+    p = vverbs.add_parser("source-hashes",
+                          help="the source_hash column a vector table written before it "
+                               "lacks: the record each vector was made for, from the "
+                               "snapshot and the manifest, no encoder; a dry run unless "
+                               "--apply (the collection paused)")
+    root_arg(p); p.add_argument("collection")
+    p.add_argument("--apply", action="store_true",
+                   help="write the column (the collection must be paused)")
+    p.set_defaults(fn=cmd_vectors_source_hashes)
     p = vverbs.add_parser("reembed",
                           help="every vector made again by the encoder that serves the "
                                "collection now: documents marked, the embed stage replaces "

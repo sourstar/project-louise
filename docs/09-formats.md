@@ -1091,7 +1091,15 @@ little-endian, row-major, header metadata values strings.
 
 The row for a chunk is the vector from the first bundle accepted for it
 (04 §4.5); a later bundle for the same chunk is compared and not
-stored, unless the first is flagged. Labels are computed by the
+stored, unless the first is flagged. A row carries `source_hash`, the
+§9.5 `content_hash` of the record its vector was computed or admitted for
+(16 bytes; NULL where the writer could not know it), a LOCAL column
+outside every digest, root, signature, attestation and bundle — the
+bundle's `possession.json` already says the same per record — by which a
+pair layer's vector is kept for a record whose title and sections did not
+change (*amended 2026-11-07*, operator: A; docs/notes/pubmed-updatefiles.md
+§10; a table written before it is read and written without it, `hold
+vectors source-hashes` adds it, 07 §7.3). Labels are computed by the
 importer against the centres it holds, never read from a bundle.
 
 **The quantised types.** `i8`, `i5` and `i4` are symmetric absmax

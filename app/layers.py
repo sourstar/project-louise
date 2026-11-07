@@ -479,6 +479,18 @@ def chunks_for_document(collection, row, sections) -> list[dict]:
         row["uid"], native_id, sections))
 
 
+def with_source(chunks: list[dict], content_hash: str | None) -> list[dict]:
+    """The chunks, each carrying `source`: the 09 §9.5 `content_hash` of the
+    record they were cut from, which the embed stage writes beside their
+    vectors (`embeddings.SOURCE_COLUMN`, amended 2026-11-07, operator: A). A
+    key BESIDE the chunk, as `fields` is: neither its id, nor its text, nor
+    any root covers it. None leaves the chunks as they are."""
+    if content_hash:
+        for c in chunks:
+            c["source"] = content_hash
+    return chunks
+
+
 def space_payload(collection) -> dict:
     """What the space id records about chunking. ONE layer: exactly the
     pre-layers payload (the chunker, grandfathered names omitted), so every

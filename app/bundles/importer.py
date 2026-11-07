@@ -319,7 +319,7 @@ def _write_rows(collection, native_id: int, lance_rows: list[dict], header) -> N
     if embeddings.TABLE in conn.table_names():
         table = conn.open_table(embeddings.TABLE)
         table.delete(embeddings._book_filter(native_id))
-        table.add(lance_rows)
+        table.add(embeddings.fit_source(table, lance_rows))
         return
     value_type = pa.float16() if header.dtype == "f16" else pa.float32()
     schema = pa.schema([
@@ -327,9 +327,10 @@ def _write_rows(collection, native_id: int, lance_rows: list[dict], header) -> N
         pa.field("lang", pa.string()), pa.field("seq", pa.int64()),
         pa.field("chapter", pa.string()), pa.field("text", pa.string()),
         pa.field("vector", pa.list_(value_type, header.dim)),
+        pa.field(embeddings.SOURCE_COLUMN, embeddings.SOURCE_TYPE),
     ])
-    conn.create_table(embeddings.TABLE, data=lance_rows, schema=schema,
-                      storage_options=embeddings.NEW_TABLE_STORAGE)
+    conn.create_table(embeddings.TABLE, data=embeddings.fit_source_for(schema, lance_rows),
+                      schema=schema, storage_options=embeddings.NEW_TABLE_STORAGE)
 
 
 def import_bundle(con, collection, bundle_dir, *, embed_fn=None,
@@ -524,6 +525,10 @@ def _import_checked(con, collection, bundle_dir: Path, *, embed_fn, strict,
             "vector": np.asarray(vector_by_id[cid],
                                   dtype=np.float16 if header.dtype == "f16"
                                   else np.float32),
+            # this bundle format's possession is the ORIGIN bytes' hash, not
+            # the record's `content_hash`: this path cannot know the source,
+            # so NULL, which never matches (embeddings.SOURCE_COLUMN)
+            embeddings.SOURCE_COLUMN: None,
         } for cid in ids]
 
         # through the writer registration, as every vector write: a

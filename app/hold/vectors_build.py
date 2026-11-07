@@ -48,6 +48,7 @@ from typing import Any, Callable, Iterable, Sequence
 
 from .. import layers as layers_mod
 from . import codex as cx
+from . import land
 from . import snapshot as snap
 from .codex import CodexError
 
@@ -122,7 +123,8 @@ def chunks_of(codex, records: Sequence[dict]) -> list[dict]:
                "lang": rec.get("lang") or "und"}
         sections = [tuple(s) for s in rec.get("sections") or []]
         for c in layers_mod.chunks_for_document(codex, row, sections):
-            out.append(dict(c, lang=row["lang"]))
+            # the record the vector will be made for (embeddings.SOURCE_COLUMN)
+            out.append(dict(c, lang=row["lang"], source=rec.get("content_hash")))
     return out
 
 
@@ -211,7 +213,8 @@ def build(codex, *, shards: Iterable[snap.Shard],
             rows = [{"id": c["id"], "book_id": int(c["book_id"]),
                      "lang": c["lang"], "seq": int(c["seq"]),
                      "chapter": c["chapter"] or "", "text": c["text"],
-                     "vector": list(v)}
+                     "vector": list(v),
+                     land.SOURCE_COLUMN: land._source_bytes(c.get("source"))}
                     for c, v in zip(part, vectors)]
             write(rows)
             written += len(rows)

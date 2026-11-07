@@ -391,10 +391,14 @@ def _one(kind: str, collection, row: dict):
     plugin = collection.plugin_instance()
     if kind == "chunks":
         # ONE PARSE (docs/notes/one-parse.md): the fresh record's sections
-        # where there is one, the plugin's parse otherwise
+        # where there is one, the plugin's parse otherwise — and the record's
+        # `content_hash` on each chunk, which the embed stage and genesis
+        # write beside its vector (embeddings.SOURCE_COLUMN)
         from . import record_source
-        sections = record_source.sections(collection, row, lambda: plugin_io.sections(plugin, row))
-        return layers.chunks_for_document(collection, row, sections)
+        pair = layers.has_pair_layer(collection)
+        sections, source = record_source.sections_and_source(
+            collection, row, lambda: record_source.parsed_with_source(plugin, row, pair=pair))
+        return layers.with_source(layers.chunks_for_document(collection, row, sections), source)
     if kind == "chunks+names":
         # one parse for both: the chunks the text index cuts, and the names a
         # record is found by (fts.index_names_of; wikidata)

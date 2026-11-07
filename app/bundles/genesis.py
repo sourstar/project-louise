@@ -1755,7 +1755,7 @@ def import_shard(con, collection, archive: GenesisArchive, shard: str, *,
             if ids:
                 table.delete(f"book_id IN ({ids})")
             if rows:
-                table.add(rows)
+                table.add(embeddings.fit_source(table, rows))
         elif rows:
             value_type = pa.float16() if recipe.dtype == "f16" else pa.float32()
             schema = pa.schema([
@@ -1763,9 +1763,10 @@ def import_shard(con, collection, archive: GenesisArchive, shard: str, *,
                 pa.field("lang", pa.string()), pa.field("seq", pa.int64()),
                 pa.field("chapter", pa.string()), pa.field("text", pa.string()),
                 pa.field("vector", pa.list_(value_type, header_dim)),
+                pa.field(embeddings.SOURCE_COLUMN, embeddings.SOURCE_TYPE),
             ])
-            conn.create_table(embeddings.TABLE, data=rows, schema=schema,
-                              storage_options=embeddings.NEW_TABLE_STORAGE)
+            conn.create_table(embeddings.TABLE, data=embeddings.fit_source_for(schema, rows),
+                              schema=schema, storage_options=embeddings.NEW_TABLE_STORAGE)
 
     def flush():
         nonlocal batch_rows, batch_native, batch_uids, batch_chunk_ids
@@ -1957,6 +1958,9 @@ def import_shard(con, collection, archive: GenesisArchive, shard: str, *,
                     "id": chunk_id, "book_id": int(row["native_id"]),
                     "lang": row["lang"] or "en", "seq": seq, "chapter": "",
                     "text": text, "vector": unit,
+                    # the record the archive's vector is admitted for: the one
+                    # its chunks were cut from now (embeddings.SOURCE_COLUMN)
+                    embeddings.SOURCE_COLUMN: embeddings.source_bytes(chunk.get("source")),
                 })
                 batch_chunk_ids.setdefault(uid, []).append(chunk_id)
                 chunks_written += 1
