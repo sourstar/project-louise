@@ -17,7 +17,7 @@ int main() { sycl::queue q; int *a = sycl::malloc_shared<int>(4, q);
              q.parallel_for(4, [=](sycl::id<1> i) { a[i] += 1; }).wait(); return 0; }
 K
 LD_DEBUG=libs strace -f -e trace=execve -o exec.txt \
-  icpx -fsycl -fsycl-targets=spir64_gen -Xsycl-target-backend=spir64_gen "-device $ARCH" k.cpp -o k 2> ld.txt
+  icpx -fsycl -fsycl-targets=spir64_gen -Xsycl-target-backend=spir64_gen "-device $ARCH" k.cpp -o k > /dev/null 2> ld.txt
 ocloc=$(grep -oE 'execve\("[^"]*ocloc[^"]*"' exec.txt | head -1 | sed 's/execve("//; s/"$//')
 igc=$(grep -oE 'calling init: [^ ]*libigc\.so[^ ]*' ld.txt | head -1 | sed 's/calling init: //')
 [ -n "$ocloc" ] && [ -n "$igc" ]
