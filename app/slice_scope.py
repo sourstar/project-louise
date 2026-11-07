@@ -92,6 +92,70 @@ def embedded(collection) -> tuple[str, ...] | None:
     return embedded_slices(collection)
 
 
+def held_slices(collection) -> tuple[str, ...] | None:
+    """The slices this node holds, named at the depth its origin delivers
+    them apart (the acquisition spec's `slice_profiles`: wikidata's
+    families, wikipedia's languages), in the spec's order: every one for
+    `slices = "all"`, the file's otherwise (one under a delivered slice,
+    `lang=it/pages=3M`, as that slice). None where they cannot be listed:
+    `"all"` of an origin that delivers none apart (PubMed's years), or a
+    file that names none. Reads the file and the spec, never the manifest."""
+    from .acquire import spec as acquire_spec
+    from .acquire.specs import ACQUIRE_REGISTRY
+    spec = ACQUIRE_REGISTRY.get(getattr(collection, "plugin", None) or "")
+    slices = getattr(collection, "slices", None)
+    if slices is None and spec is not None:
+        slices = acquire_spec.slices_for_profile(spec, getattr(collection, "profile", None))
+    keys = list(spec.slice_profiles) if spec is not None else []
+    if slices == "all":
+        return tuple(keys) or None
+    if not slices:
+        return None
+    out: list[str] = []
+    for s in slices:
+        key = (acquire_spec.delivered_slice(spec, str(s)) if spec is not None else None) or str(s)
+        if key not in out:
+            out.append(key)
+    return tuple(sorted(out, key=lambda k: (keys.index(k) if k in keys else len(keys), k)))
+
+
+def embed_view(collection) -> dict[str, Any]:
+    """WHAT THIS NODE EMBEDS OF WHAT IT HOLDS, slice by slice, as the passes
+    decide it — the one reading the Library's card, the grow dialog's
+    "embed" group and `hold collection show` print (invariant 10: the value
+    shown is the worker's).
+
+    `embedded`: the held slices whose documents are offered to the encoder —
+    `is_held(slice, embed_slices)`, the test this pass (and, under "smart",
+    app/embed_select.py's) puts every document's slice to; every held slice
+    when the file states none. `part`: a held slice of which the file names
+    only a part (`family=person/range=3`), embedded only there — never under
+    "smart", which tests each language whole. `not_held`: what the file
+    names that this node does not hold, embedding nothing until it is grown
+    (the slice scope keeps it out of scope). `held` None: the slices cannot
+    be listed, and `embedded` is then the file's list, or None for all."""
+    from . import embed_select
+    held_ = held_slices(collection)
+    stated = embedded_slices(collection)
+    smart = embed_select.owns_marks(collection)
+    out: dict[str, Any] = {"held": list(held_) if held_ is not None else None,
+                           "stated": list(stated) if stated is not None else None,
+                           "select": embed_select.policy(collection), "smart": smart,
+                           "part": {}, "not_held": []}
+    if held_ is None:
+        out["embedded"] = list(stated) if stated is not None else None
+        return out
+    out["embedded"] = [s for s in held_ if stated is None or is_held(s, stated)]
+    for s in stated or ():
+        under = [h for h in held_ if is_held(s, (h,))]
+        if under:
+            if s not in held_ and not smart and under[0] not in out["embedded"]:
+                out["part"].setdefault(under[0], []).append(s)
+        elif not any(is_held(h, (s,)) for h in held_):
+            out["not_held"].append(s)
+    return out
+
+
 def signature(slices: tuple[str, ...] | None, embed: tuple[str, ...] | None,
               context: Any) -> str:
     """What the columns are computed for: the slices held (in_scope), the

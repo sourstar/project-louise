@@ -132,6 +132,35 @@ def test_config_change_triggers_immediate_rediscover(isolated_config, config_dir
     assert last_discover["pm"] > 0
 
 
+def test_an_embed_choice_edit_asks_for_a_scan_not_a_fetch(isolated_config, config_dir,
+                                                          quiet_discover, monkeypatch):
+    """`embed_slices` / `embed_select` edited (the Library's grow dialog,
+    `hold config apply`): their passes run after a scan and the pipeline
+    waits for them (`slice_scope.ready`), so a plain scan is asked for at
+    once — never left to the interval's six hours, and no fetch."""
+    monkeypatch.setattr(spaces, "resolve_embed_model_hash", lambda *a: ("abc", False))
+    scans = []
+    monkeypatch.setattr(worker, "_scan_only",
+                        lambda con, collection, reason, stop=None: scans.append((collection.name, reason)))
+    _write_toml(config_dir, "pm")
+    start = collections_mod.load_all()
+    cons = {c.name: db.connect(c) for c in start}
+    last_discover = {c.name: 0.0 for c in start}
+    result = worker._sync_collections(start, cons, last_discover)
+    assert scans == []
+
+    _write_toml(config_dir, "pm", extra='embed_slices = ["lang=en"]\n')
+    result = worker._sync_collections(result, cons, last_discover)
+    assert scans == [("pm", "embed choice changed")]
+    assert quiet_discover == [], "a scan, not a fetch"
+
+    # on the pipeline threads: a plain discovery request
+    worker._take_discovery_request("pm")
+    _write_toml(config_dir, "pm", extra='embed_slices = ["lang=en", "lang=it"]\n')
+    worker._sync_collections(result, cons, last_discover, pipeline=True)
+    assert worker._take_discovery_request("pm") == ("embed choice changed", False)
+
+
 def test_invalid_new_collection_is_skipped_not_fatal(isolated_config, config_dir,
                                                       quiet_discover, monkeypatch):
     monkeypatch.setattr(spaces, "resolve_embed_model_hash", lambda *a: ("abc", False))

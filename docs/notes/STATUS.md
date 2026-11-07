@@ -39,6 +39,31 @@ measured (published figures disagree).
   pubmed paused, the dry run, `--apply`; it must precede the discard of
   2026-08 (step 3).
 
+### 2026-11-07: the Library shows and offers which slices are embedded (operator)
+
+- **The operator**: "we agreed to embed only certain families, but the grow
+  profile shows that all the families are checked, and they cannot be
+  unchecked"; then "For wikidata the archive is unique, thus it makes no
+  sense to show a false choice, but it makes sense to show the embedding
+  options there", with a tag on what a check means, "at the top of the
+  checkboxes". The dialog listed the 14 HELD families; `embed_slices` (the
+  9 embedded) was shown nowhere.
+- **Built**: the card's line "Embedded: 9 of 14 families: …" and the grow
+  dialog's `embed` group both read `slice_scope.embed_view`, the passes' own
+  test (invariant 10); `hold collection show` prints the same as
+  `embed_slices` / `embed_slices_not_held` / `embed_select` (09 §9.3). One
+  archive (`slice_scope.ONE_ORIGIN`: wikidata) shows no box to hold, only
+  the `embed` group; separate downloads (wikipedia) keep their held boxes,
+  checked and grey, under `download + embed (per Embed which)`, then the
+  `embed` group. `POST /admin/library/<name>/embed-slices` writes the file
+  through `collection_file.set_values`; nothing, or a slice not held, is
+  refused in a sentence.
+- **Found and fixed**: an `embed_slices` edit made `slice_scope.ready` false
+  and nothing asked for a scan (the embed selection's wait does), so a
+  collection that is not "smart" stood still until the interval scan
+  (`DISCOVER_INTERVAL_MIN`, 360 min). `_sync_collections` now asks for a
+  plain scan when `embed_slices` or `embed_select` changes: one per edit.
+
 ### 2026-11-07: one status — `app/status.py`
 
 - **The operator**: "The interface with which a model status is queried
