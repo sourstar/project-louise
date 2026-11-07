@@ -342,3 +342,36 @@ sets `LOUISE_BUILD_DIR=/build`:
 the containers (supported on Linux by OpenZFS; where it is not, the switch
 is three renames, a window of microseconds with no `lance`, finished by the
 next run); the move's real rates, which its output reports.
+
+## 9. Apps to ssd3: decided (operator, 2026-11-07): "A + all apps"
+
+München's read-only inventory (2026-11-07, raw output on the node at
+/root/measure/inventory.txt): ssd4 1.81 T, 663 G free (64 % used); ssd5 944 G,
+139 G free (85 %). The choices put to the operator:
+
+| choice | free after | pros | cons |
+|---|---|---|---|
+| A: what nothing reads | ssd4 ~806 G, ssd5 ~280 G | nothing slows | ssd5 still the tight one |
+| **A + all apps (chosen)** | ssd5 ~480 G (~530 G once the backends' snapshots expire) | doubles ssd5's room | backends start from SATA (first start after a reboot); deploy builds and tests on ssd3; ~25 min outage for the move; writes past the 18 GB SLC cache at 158 MiB/s |
+| nothing | ssd5 139 G | no work | ssd5 85 % full |
+
+What moves:
+- A: ssd4 louise-rag/rebuild (134 G, untouched since 09-21) and the
+  measurement folders (~9 G); ssd5 apps/llama-cpp (39 G, unmounted) and old
+  model folders (~9 G).
+- All apps: the TrueNAS apps pool (Docker images, build cache, app_mounts,
+  including the stopped ComfyUI, Jellyfin and Immich), localai/backends
+  (87 G), open_webui_data.
+
+What stays on NVMe: every LocalAI model (read at every model load, not only
+at boot) and all of Louise's searched data (ssd4).
+
+Datasets: ssd3/apps (recordsize 128K, primarycache all: programs need the
+ARC) and ssd3/attic (recordsize 1M, zstd). Not louise-build, whose
+primarycache=metadata is right for tables read once and wrong for programs.
+ssd3 gets a replication task to tank/backup, as ssd5 has.
+
+Measured before and after (two runs each): a LocalAI model load, cold right
+after a restart and warm; a deploy's total time and its test stage. If a model
+load is more than ~2 s slower cold, or slower warm, localai/backends alone goes
+back to NVMe. The numbers go here when München has them.
