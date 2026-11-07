@@ -4006,17 +4006,22 @@ def cmd_vectors_source_hashes(a) -> int:
     (app/vector_sources.py). A dry run by default: what it would do. With
     `--apply` it writes the table, so the collection must be paused (`node
     pause <collection>`, which releases its lock) and its write lock is
-    taken; exit 2 otherwise. Resumable; a table that has the column is left
-    as it is."""
-    from app import db, node_state, vector_sources
+    taken; exit 2 otherwise. A legacy-format table with deletions is
+    compacted first, every deletion made physical (Lance cannot merge the
+    column beside them; the dry run says what it rewrites); exit 2, nothing
+    written, when the disk cannot hold that. Resumable; a table that has
+    the column is left as it is."""
+    from app import db, node_state, vector_index, vector_sources
     from app.hold import collection as col, lock as lock_mod, records as rec
 
     name, codex = col.resolve(a.root, a.collection)
     local = rec.local_collection(a.root, name, codex)
     con = db.connect(local)
     if not a.apply:
-        _print({**vector_sources.survey(a.root, name, local, con), "dry_run": True,
-                "next": f"louise node pause {name}; louise hold vectors source-hashes {name} --apply"})
+        out = vector_sources.survey(a.root, name, local, con)
+        _print({**out, "dry_run": True,
+                "next": f"louise node pause {name}; louise hold vectors source-hashes {name} --apply"
+                        + ("  (compacts first: see `compaction`)" if out.get("compaction_needed") else "")})
         return 0
     paused = name in node_state.paused_collections() or node_state.worker_state() == "paused"
     if not paused:
@@ -4026,8 +4031,13 @@ def cmd_vectors_source_hashes(a) -> int:
         return 2
     _take_write_lock(a.root, name, "hold vectors source-hashes", exit_code=2)
     log = lambda m: print(m, file=sys.stderr)       # noqa: E731
-    out = vector_sources.apply(a.root, name, local, con,
-                               state_dir=lock_mod.state_dir(a.root, name), log=log)
+    try:
+        out = vector_sources.apply(a.root, name, local, con,
+                                   state_dir=lock_mod.state_dir(a.root, name), log=log)
+    except vector_index.CompactionNoRoom as e:
+        print(f"louise: {name}: {e}. Nothing was written; free the space and run this again "
+              f"(phase 1's sources are kept)", file=sys.stderr)
+        return 2
     _print(out)
     return 0
 
