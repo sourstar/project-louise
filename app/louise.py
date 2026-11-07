@@ -2136,6 +2136,42 @@ def cmd_dev_drop_rows(a) -> int:
     return 0
 
 
+def cmd_dev_superseded_repair(a) -> int:
+    """`louise dev superseded-repair <collection> [--done-without-vectors]
+    [--apply]` (07 §7.3; app/hold/superseded_repair.py): the documents
+    counted as an earlier version still held (the Library's grey) that hold
+    no vector, and with --apply their embed_version set to 0 — or, with
+    --done-without-vectors, the documents marked embedded that hold none,
+    marked not embedded. Short windows, resumable from each mode's cursor.
+    Beside a running worker — no lock is taken and no stop is needed (the
+    module says why); SIGINT/SIGTERM end it after the window in flight,
+    exit 130. Read-only without --apply."""
+    import signal
+    import threading
+    from app.hold import records as rec, superseded_repair
+    name, codex = col.resolve(a.root, a.collection)
+    coll = rec.local_collection(a.root, name, codex)
+    stop = threading.Event()
+    before = {}
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        try:
+            before[sig] = signal.signal(sig, lambda *_a: stop.set())
+        except (ValueError, OSError):    # not the main thread
+            pass
+    mode = "done" if getattr(a, "done_without_vectors", False) else "superseded"
+    tag = "done-without-vectors" if mode == "done" else "superseded-repair"
+    try:
+        out = superseded_repair.repair(coll, apply=a.apply, mode=mode, stop=stop.is_set,
+                                       log=lambda m: print(f"[{tag}] {name}: {m}",
+                                                           file=sys.stderr, flush=True))
+    finally:
+        for sig, handler in before.items():
+            signal.signal(sig, handler)
+    print(superseded_repair.summary(out), file=sys.stderr)
+    _print(out)
+    return 130 if out["interrupted"] else 0
+
+
 def cmd_dev_wikidata_regroup(a) -> int:
     """`louise dev wikidata-regroup <collection> [--row-group N] [--workers N]`:
     the collection's wikidata pack rewritten file by file with small row
@@ -2282,8 +2318,10 @@ def cmd_dev_unindexable(a) -> int:
             return 0
         out = unindexable.withdraw(con, coll, a.uid)
         con.execute("BEGIN IMMEDIATE")
-        con.execute("UPDATE documents SET error=?, embed_done=0, updated_at=? WHERE uid=?",
-                    (reason, int(time.time()), a.uid))
+        # its vectors are gone (withdraw, just above): no earlier version is
+        # held, so the version goes with the mark (app/embed_marks.py, "NOT HELD")
+        con.execute("UPDATE documents SET error=?, embed_done=0, embed_version=0, updated_at=? "
+                    "WHERE uid=?", (reason, int(time.time()), a.uid))
         con.execute("COMMIT")
         db.log_event(con, "info", "unindexable", f"not indexable: {reason}", a.uid)
         _print({**out, "collection": name, "error": reason})
@@ -4152,12 +4190,16 @@ def cmd_vectors_check(a) -> int:
         pass
 
     _whole_quota()
+    from app.hold import carry
     report = vck.check(
         codex, snapshot, seed=bytes.fromhex(a.seed) if a.seed else os.urandom(32),
         shard_tree=col.shard_dir_of(Path(a.root), name),
         vectors_for=lambda ids: embeddings.vectors_by_chunk_id(ids, collection=local),
         embed=embed, fraction=a.sample,
-        drop=(lambda ids: embeddings.delete_chunks(ids, collection=local))
+        # the rows emptied AND their documents marked not embedded, as
+        # `dev drop-rows` does (carry.drop_and_reset, 2026-11-07)
+        drop=(lambda ids: carry.drop_and_reset(
+            local, ids, log=lambda m: print(f"[drop] {name}: {m}", file=sys.stderr)))
         if a.drop else None)
 
     print(f"{report.verdict.upper()}  {report.why}")
@@ -6393,6 +6435,17 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--ids", required=True, metavar="FILE", help="one chunk id a line")
     p.add_argument("--yes", action="store_true")
     p.set_defaults(fn=cmd_dev_drop_rows)
+    p = dverbs.add_parser("superseded-repair", help="the documents counted as an earlier version "
+                                                    "still held that hold no vector, and with --apply "
+                                                    "their embed_version set to 0; resumable, beside "
+                                                    "a running worker; read-only without --apply")
+    root_arg(p)
+    p.add_argument("collection")
+    p.add_argument("--done-without-vectors", action="store_true", dest="done_without_vectors",
+                   help="instead: the documents marked embedded that hold no vector, marked not "
+                        "embedded (embed_done 0, embed_version 0)")
+    p.add_argument("--apply", action="store_true", help="write the resets (short windows, a cursor)")
+    p.set_defaults(fn=cmd_dev_superseded_repair)
     p = dverbs.add_parser("wikidata-regroup", help="a wikidata collection's pack rewritten with small row "
                                                    "groups, file by file, lines unchanged (resumable)")
     root_arg(p)

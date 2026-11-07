@@ -4085,8 +4085,17 @@ def _execute_step(con, collection, stage, row) -> bool:
                              f"{stage} deferred — not indexable, but its index entries could "
                              f"not be withdrawn yet ({type(w).__name__}: {w})", row["uid"])
                 return False
+            # its vectors went with the withdraw, whole (`delete_book`): it is
+            # not embedded and holds no earlier version — embed_done 0, version
+            # 0, as `dev unindexable` writes (app/embed_marks.py, "NOT HELD"
+            # and "NOT DONE"); left 1 it read as embedded with nothing behind
+            # it. A declined document (-1) keeps what it was. The error keeps
+            # it out of every selection; readmission resets the marks anyway
             con.execute(
-                "UPDATE documents SET error=?, updated_at=? WHERE uid=?",
+                "UPDATE documents SET error=?, updated_at=?, "
+                "embed_done=CASE WHEN embed_done=1 THEN 0 ELSE embed_done END, "
+                "embed_version=CASE WHEN embed_done IN (0, 1) THEN 0 ELSE embed_version END "
+                "WHERE uid=?",
                 (str(e)[:500], int(time.time()), row["uid"]))
             db.log_event(con, "info", stage,
                          f"not indexable: {e}", row["uid"])

@@ -104,7 +104,7 @@ def test_publish_writes_one_attestation_publishes_it_and_drops_the_bundles_here(
     # idempotent: nothing left to withdraw; the beat's receiving side finds nothing held
     assert withdraw.duplicates(root, "gutenberg", codex, kw["con"], own_key=OUR_KEY) == []
     assert withdraw.drop_withdrawn(root, "gutenberg", codex, kw["con"], delete_chunks=lambda ids: 0) == \
-        {"dropped": 0, "vectors": 0, "not_the_producer": 0}
+        {"dropped": 0, "vectors": 0, "not_the_producer": 0, "documents_reset": 0}
     # copy state and trust ignore it: a withdraw is neither a pass nor a fail
     from app import copy_state
     bodies = copy_state.attestations(root, "gutenberg", codex)
@@ -142,13 +142,13 @@ def test_a_peer_drops_a_withdrawn_bundle_only_on_its_producer_s_word(ready):
     write_withdraw(PEER, [dup])
     said: list[str] = []
     got = withdraw.drop_withdrawn(root, "gutenberg", codex, kw["con"], delete_chunks=delete, log=said.append)
-    assert got == {"dropped": 0, "vectors": 0, "not_the_producer": 1} and cov.row(kw["con"], dup) and dup_dir.is_dir()
+    assert got == {"dropped": 0, "vectors": 0, "not_the_producer": 1, "documents_reset": 0} and cov.row(kw["con"], dup) and dup_dir.is_dir()
     assert any("not its producer" in s for s in said) and deleted == []
     # the producer's: the duplicate goes, its vectors stay — the kept bundle claims the same records
     write_withdraw(OURS, [dup])
     assert withdraw.withdrawn(root, "gutenberg", codex) == {dup: frozenset({OUR_KEY, PEER_KEY})}
     got = withdraw.drop_withdrawn(root, "gutenberg", codex, kw["con"], delete_chunks=delete)
-    assert got == {"dropped": 1, "vectors": 0, "not_the_producer": 0}
+    assert got == {"dropped": 1, "vectors": 0, "not_the_producer": 0, "documents_reset": 0}
     assert cov.row(kw["con"], dup) is None and not dup_dir.exists() and deleted == []
     assert len(embeddings.vectors_by_chunk_id(dup_chunks, collection=local)) == len(dup_chunks)
     # a faulty bundle: the only one for its part — its chunks return to without vectors
@@ -163,6 +163,54 @@ def test_a_peer_drops_a_withdrawn_bundle_only_on_its_producer_s_word(ready):
     assert view[cov.shard_id(codex, sid_b)]["open"] and not view[cov.shard_id(codex, sid_a)]["open"]
     # again: nothing held that is withdrawn — the beat's cost when nothing is
     assert withdraw.drop_withdrawn(root, "gutenberg", codex, kw["con"], delete_chunks=delete)["dropped"] == 0
+
+
+def test_a_withdrawn_bundle_s_documents_are_not_embedded_once_their_vectors_go(ready):
+    """03 §3.6: a faulty bundle's records "return to without vectors" — and
+    so to NOT EMBEDDED: marked `embed_done = 1` they would never be embedded
+    again and dense search would miss them without a word (2026-11-07).
+    After the delete, a document left with no row: embed_done 0, version 0;
+    one keeping a row the bundle did not carry: embed_done 0, its version
+    kept (still held and searched — the card's grey); no other touched."""
+    from app import config
+    from app.hold import records as rec
+    root, snapshot, codex, kw = ready
+    first = _alone(root, codex, snapshot, kw)
+    local = rec.local_collection(root, "gutenberg", codex)
+    con = kw["con"]
+    # every bundle withdrawn by its producer: each is the only one for its part
+    bids, uids, chunks = [], [], []
+    for b in first["bundles"]:
+        b_dir = contribute.bundle_dir(root, "gutenberg", codex, b["shard"], b["bundle_id"])
+        mine = sorted(json.loads((b_dir / "possession.json").read_bytes()))
+        bids.append(b["bundle_id"])
+        uids += mine
+        chunks += withdraw._chunk_ids(b_dir, set(mine))
+    uids = sorted(set(uids))
+    assert len(uids) >= 2 and chunks
+    E = config.EMBED_VERSION
+    con.execute("UPDATE documents SET embed_done=1, embed_version=?", (E,))
+    keeper = uids[0]
+    one = next(c for c in chunks if c.rsplit(":", 2)[0] == keeper)
+    vec = embeddings.vectors_by_chunk_id([one], collection=local)[one]
+    kw["write"]([{"id": f"{keeper}:999:1", "book_id": int(keeper.rsplit(":", 1)[1]), "lang": "en",
+                  "seq": 999, "chapter": "", "text": "this peer's own", "vector": vec}])
+    body = withdraw.attestation_body(codex, snapshot, bids, [], own_key=OUR_KEY,
+                                     platform_image=IMAGE, now=time.time())
+    p = attest.attestation_path(root, "gutenberg", codex, env.body_id(body))
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_bytes(json.dumps(env.sign(env.ATTESTATION, body, OURS)).encode())
+
+    got = withdraw.drop_withdrawn(root, "gutenberg", codex, con,
+                                  delete_chunks=lambda ids: embeddings.delete_chunks(ids, collection=local))
+    assert got["dropped"] == len(bids) and got["vectors"] == len(chunks)
+    assert embeddings.vectors_by_chunk_id(chunks, collection=local) == {}
+    marks = {r[0]: (int(r[1]), int(r[2] or 0))
+             for r in con.execute("SELECT uid, embed_done, embed_version FROM documents")}
+    assert marks[keeper] == (0, E), "a row left: not done, its version kept"
+    assert all(marks[u] == (0, 0) for u in uids[1:]), "no row left: not embedded, no earlier version"
+    assert all(v == (1, E) for u, v in marks.items() if u not in uids), "no other document touched"
+    assert got["documents_reset"] == len(uids)
 
 
 def test_digests_and_events_never_bring_a_withdrawn_bundle_back(ready):

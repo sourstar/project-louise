@@ -30,7 +30,12 @@ put it there — this peer's own encoder included — so a failure is not a
 verdict about a sender. It is a row that no longer reproduces, and 02
 §2.4's remedy is to empty it so that nothing claims it: `--drop`.
 Without `--drop` the check reports and changes nothing, because deleting
-a stranger's vectors on a cosine is a decision an operator makes.
+a stranger's vectors on a cosine is a decision an operator makes. The
+command's drop (louise.cmd_vectors_check, `carry.drop_and_reset`) also
+marks the row's document NOT EMBEDDED (2026-11-07): left `embed_done = 1`
+it would never be embedded again and dense search would miss the row
+without a word; under `embed = all` the worker embeds it again, under
+`off` it waits, counted as waiting.
 
 INCONCLUSIVE IS A RESULT (03 §3.1). No compliant encoder, or a sample
 that turned up no stored vectors at all, is "neither a failure nor a

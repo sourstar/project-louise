@@ -612,6 +612,41 @@ def test_a_table_without_the_columns_is_refused_and_repaired_with_every_vector_k
     assert _vector_books(c, 20260101) == {V12_ID}
 
 
+def test_a_stop_while_the_rebuilt_table_is_swapped_in_keeps_every_vector(versioned, monkeypatch):
+    """The swap dropped the table, then renamed the rebuilt one in: a stop
+    between them left NO table under the collection's name — every document
+    marked embedded with no vector to search — and the next run, finding
+    none, answered "unchanged" (2026-11-07). The table is set aside, not
+    dropped, and the next run finishes the swap or puts it back."""
+    import os
+    from pathlib import Path
+    c, con, _ = versioned
+    _distinct_vectors(monkeypatch)
+    _run(con, c, "rdf", "fts")
+    first = con.execute("SELECT * FROM documents WHERE in_scope=1 ORDER BY rowid LIMIT 1").fetchone()
+    embeddings.upsert_book(int(first["native_id"]), first["lang"], worker._load_chunks(first, c), c,
+                           lock_con=con)
+    before = _vectors_of(c)
+    real = os.replace
+    dst = str(Path(c.lance_dir) / f"{embeddings.TABLE}.lance")
+
+    def dies_moving_the_rebuilt_table_in(a, b):
+        if str(b) == dst:
+            raise KeyboardInterrupt
+        return real(a, b)
+    monkeypatch.setattr(embeddings.os, "replace", dies_moving_the_rebuilt_table_in)
+    with pytest.raises(KeyboardInterrupt):
+        embeddings.add_validity_columns(c, con, lock_con=con, batch_rows=2)
+    monkeypatch.setattr(embeddings.os, "replace", real)
+    out = embeddings.add_validity_columns(c, con, lock_con=con, batch_rows=2)
+    assert "unchanged" not in out or out["rows"] == len(before), out
+    tbl = embeddings._conn(c).open_table(embeddings.TABLE)
+    assert set(embeddings.VALIDITY_COLUMNS) <= set(tbl.schema.names)
+    assert _vectors_of(c) == before, "every vector kept, byte for byte"
+    assert sorted(p.name for p in Path(c.lance_dir).iterdir() if p.name.startswith(embeddings.TABLE)) == \
+        [f"{embeddings.TABLE}.lance"], "nothing left aside"
+
+
 def test_every_vector_writer_in_app_passes_the_columns():
     """The guard: a writer that calls `upsert_book` without `columns=` is the
     defect again — the first write makes a table without the columns and
