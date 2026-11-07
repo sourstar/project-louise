@@ -57,6 +57,32 @@ windows' questions and writes (~5 s) — ~25 s here; the node's rows are wider
 and its pages colder, so the read costs about what the card's own full scan
 of the manifest costs, minutes, never a lock held longer than one window's
 write. The run prints what it took (`seconds`).
+
+`--done-without-vectors` (mode "done", 2026-11-07): the same walk over the
+documents marked EMBEDDED (`embed_done = 1`, `chunks > 0`) that hold no
+vector — what share's withdraw, `forget --kinds vectors`, `vectors check
+--drop` and the worker's not-indexable withdraw left before they cleared the
+mark (app/embed_marks.py, "NOT DONE"), and what a stop between a delete and
+its mark still leaves. Such a document is never embedded again and dense
+search misses it without a word. With `apply` each gets `embed_done = 0,
+embed_version = 0`, guarded `embed_done = 1 AND embed_version = <read>` with
+the predicate re-checked; what the worker does next is the collection's
+embed setting (`all` embeds them again, `lazy` what a search needs, `off`
+leaves them waiting — counted as waiting, not done). Its own cursor
+(DONE_CURSOR_KEY). Beside a running worker: a document whose rows a re-embed
+or an import deletes and adds again, in two commits, may be asked between
+them and reset though it holds rows a moment later — embedded again, its
+rows reused (version 0): the safe direction, never the reverse. A document
+whose layers cut no chunk to embed although its text has chunks would be
+marked again by the worker and found again by the next repair; none is
+known. MEASURED on the fixture above, its 1,140,000 documents marked
+embedded (190,000 holding rows, 950,000 none): the candidates are dense, so
+every window is capped at 1,000 — its SELECT 1.0 ms, the question 8.4 ms
+(all held) / 6.4 ms (none), the write 4.1 ms; the whole pass 1,141 windows,
+11.3 s dry, 15.3 s applied (~75,000 candidates a second). It scales with
+the documents marked embedded, not the manifest: a collection of 10 M
+embedded documents is ~2.5 minutes here, more on a table of many fragments
+(fewer books a question).
 """
 from __future__ import annotations
 
@@ -72,29 +98,43 @@ SPAN = 50_000
 #: (carry._delete_batch: ~1 GB a question at most) — so a dense stretch is cut
 #: into windows of this many
 PER_QUERY = 1_000
-#: the manifest's control row holding the cursor
+#: the manifest's control rows holding each mode's cursor
 CURSOR_KEY = "superseded_repair"
+DONE_CURSOR_KEY = "done_without_vectors_repair"
 #: uids shown of each kind
 SAMPLE = 10
+#: the two walks: "superseded" (the default) and "done" (`--done-without-vectors`)
+MODES = ("superseded", "done")
+#: a document marked embedded that has text to embed: it must hold a row
+DONE = "embed_done=1 AND COALESCE(chunks,0)>0"
 
 
-def window_sql() -> str:
+def _candidates(mode: str) -> str:
+    if mode == "done":
+        return DONE
+    if mode != "superseded":
+        raise ValueError(f"mode is one of {MODES}, not {mode!r}")
+    from app import status
+    return status.SUPERSEDED["embed"]
+
+
+def window_sql(mode: str = "superseded") -> str:
     """The window's read: the candidates among `span` rowids, by the INTEGER
     PRIMARY KEY (`NOT INDEXED`: the scope index would answer `in_scope=1` and
     sort the rest in a TEMP B-TREE), in rowid order, at most :n of them."""
-    from app import status
     return ("SELECT rowid, uid, native_id, embed_version FROM documents NOT INDEXED "
-            f"WHERE rowid>:lo AND rowid<=:hi AND {status.SUPERSEDED['embed']} "
+            f"WHERE rowid>:lo AND rowid<=:hi AND {_candidates(mode)} "
             "ORDER BY rowid LIMIT :n")
 
 
-def reset_sql() -> str:
+def reset_sql(mode: str = "superseded") -> str:
     """One candidate's reset: the row by its rowid, the version as it was read,
-    and the whole predicate again — `embed_done = 0` among it — so a document
-    marked or changed since the read is left as it is."""
-    from app import status
-    return ("UPDATE documents SET embed_version=0 WHERE rowid=:rowid AND embed_version=:version "
-            f"AND {status.SUPERSEDED['embed']}")
+    and the whole predicate again — `embed_done` among it — so a document
+    marked or changed since the read is left as it is. "superseded": the
+    version to 0; "done": the mark cleared and the version to 0."""
+    sets = "embed_done=0, embed_version=0" if mode == "done" else "embed_version=0"
+    return (f"UPDATE documents SET {sets} WHERE rowid=:rowid "
+            f"AND COALESCE(embed_version,0)=COALESCE(:version,0) AND {_candidates(mode)}")
 
 
 def _fresh(path: str) -> dict[str, Any]:
@@ -102,13 +142,13 @@ def _fresh(path: str) -> dict[str, Any]:
             "without": 0, "reset": 0, "skipped": 0, "done": False}
 
 
-def _cursor(con, path: str) -> dict[str, Any]:
+def _cursor(con, path: str, key: str = CURSOR_KEY) -> dict[str, Any]:
     """The run to resume: this manifest's unfinished cursor, else a fresh one —
     a cursor naming another manifest (the file was copied) or a finished pass
     starts over."""
     from app import db
     try:
-        got = json.loads(db.get_control(con, CURSOR_KEY) or "{}")
+        got = json.loads(db.get_control(con, key) or "{}")
     except (TypeError, ValueError):
         got = {}
     if not isinstance(got, dict) or got.get("manifest") != path or got.get("done"):
@@ -116,27 +156,29 @@ def _cursor(con, path: str) -> dict[str, Any]:
     return {**_fresh(path), **got}
 
 
-def repair(collection, *, apply: bool = False, span: int = SPAN, per_query: int | None = None,
-           sample: int = SAMPLE, stop: Callable[[], bool] | None = None,
+def repair(collection, *, apply: bool = False, mode: str = "superseded", span: int = SPAN,
+           per_query: int | None = None, sample: int = SAMPLE, stop: Callable[[], bool] | None = None,
            log: Callable[[str], None] | None = None) -> dict[str, Any]:
-    """Walk `collection`'s superseded candidates and say which hold vectors;
-    with `apply`, reset the version of those that hold none (see the module).
-    `per_query` None: PER_QUERY, fewer on a table of many fragments. Returns
-    the pass's counts, a sample of each kind, and how long it took."""
+    """Walk `collection`'s candidates of `mode` — "superseded" (the default)
+    or "done" (marked embedded) — and say which hold vectors; with `apply`,
+    reset those that hold none (see the module). `per_query` None:
+    PER_QUERY, fewer on a table of many fragments. Returns the pass's
+    counts, a sample of each kind, and how long it took."""
     from app import config, db, embeddings, spaces
     from .carry import _delete_batch
+    select, update = window_sql(mode), reset_sql(mode)
+    key = DONE_CURSOR_KEY if mode == "done" else CURSOR_KEY
     if per_query is None:
         per_query = min(PER_QUERY, _delete_batch(embeddings.fragment_count(collection)))
     say = log or (lambda _m: None)
     path = str(Path(collection.manifest_path).resolve())
     lance_dir = Path(collection.lance_dir)
     params = {"max": config.MAX_RETRIES}
-    select, update = window_sql(), reset_sql()
     t0 = time.monotonic()
     shown: dict[str, list[str]] = {"without_vectors": [], "holding_vectors": []}
     con = db.connect(collection)
     try:
-        state = _cursor(con, path) if apply else _fresh(path)
+        state = _cursor(con, path, key) if apply else _fresh(path)
         resumed = int(state["rowid"])
         if resumed:
             say(f"resuming at rowid {resumed:,} ({state['candidates']:,} candidate(s) walked before)")
@@ -185,7 +227,7 @@ def repair(collection, *, apply: bool = False, span: int = SPAN, per_query: int 
                         {**params, "rowid": int(r["rowid"]), "version": r["embed_version"]}
                         for r in without]).rowcount if without else 0
                     nxt["reset"] = state["reset"] + max(0, changed)
-                    db.set_control(con, CURSOR_KEY, json.dumps(nxt, sort_keys=True))
+                    db.set_control(con, key, json.dumps(nxt, sort_keys=True))
                     con.execute("COMMIT")
                 except BaseException:
                     if con.in_transaction:
@@ -202,7 +244,7 @@ def repair(collection, *, apply: bool = False, span: int = SPAN, per_query: int 
             if apply:
                 con.execute("BEGIN IMMEDIATE")
                 try:
-                    db.set_control(con, CURSOR_KEY, json.dumps(state, sort_keys=True))
+                    db.set_control(con, key, json.dumps(state, sort_keys=True))
                     con.execute("COMMIT")
                 except BaseException:
                     if con.in_transaction:
@@ -211,7 +253,7 @@ def repair(collection, *, apply: bool = False, span: int = SPAN, per_query: int 
     finally:
         con.close()
     out: dict[str, Any] = {
-        "collection": collection.name, "manifest": path, "apply": apply,
+        "collection": collection.name, "manifest": path, "mode": mode, "apply": apply,
         "resumed_from_rowid": resumed, "rowid": int(state["rowid"]), "top_rowid": top,
         "windows": state["windows"], "candidates": state["candidates"],
         "holding_vectors": state["holding"], "without_vectors": state["without"],
@@ -227,10 +269,15 @@ def repair(collection, *, apply: bool = False, span: int = SPAN, per_query: int 
 
 def summary(out: dict[str, Any]) -> str:
     """One line for stderr: what the pass found and did."""
-    did = (f"{out['reset']:,} reset to embed_version 0"
+    done = out.get("mode") == "done"
+    what = "marked not embedded, embed_version 0" if done else "reset to embed_version 0"
+    would = "marked not embedded" if done else "reset"
+    did = (f"{out['reset']:,} {what}"
            + (f" ({out['changed_meanwhile']:,} changed meanwhile, left)" if out.get("changed_meanwhile") else "")
-           if out["apply"] else f"{out['without_vectors']:,} would be reset (--apply)")
-    return (f"[superseded-repair] {out['collection']}: {out['candidates']:,} superseded candidate(s), "
+           if out["apply"] else f"{out['without_vectors']:,} would be {would} (--apply)")
+    tag = "done-without-vectors" if done else "superseded-repair"
+    kind = "document(s) marked embedded" if done else "superseded candidate(s)"
+    return (f"[{tag}] {out['collection']}: {out['candidates']:,} {kind}, "
             f"{out['holding_vectors']:,} holding vectors (kept), {out['without_vectors']:,} without; "
             f"{did}; {out['windows']:,} window(s), {out['seconds']} s"
             + ("; interrupted — run it again to resume" if out["interrupted"] else ""))

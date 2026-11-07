@@ -987,6 +987,10 @@ def beat(collections, cons: dict, node_con, *, session_factory, root: Path, stop
                 from app.hold import records as rec
                 local = rec.local_collection(root, c.name, c.codex)
                 return embeddings.delete_chunks(ids, collection=local)
+            # the documents whose vectors go are marked not embedded after the
+            # delete (drop_withdrawn, 2026-11-07); the local collection is
+            # resolved there, as here, only when a row goes — it is the
+            # invariant-9 gate, never asked of every collection every beat
             got = withdraw_mod.drop_withdrawn(root, c.name, codex, cons[c.name], delete_chunks=_delete, log=log)
             if got["dropped"] or got["not_the_producer"]:
                 out.setdefault("withdrawn", {})[c.name] = got

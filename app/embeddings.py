@@ -11,6 +11,7 @@ import hashlib
 import math
 import os
 import re
+import shutil
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -1470,6 +1471,26 @@ def add_validity_columns(collection, con, *, lock_con=None, batch_rows: int = 50
             return {"rows": sum(o["rows"] for o in outs), "unchanged": True}
         return {"rows": sum(o["rows"] for o in outs), "documents": sum(o.get("documents", 0) for o in outs),
                 "versions": max((o.get("versions", 0) for o in outs), default=0), "parts": len(outs)}
+    lance_dir = Path(collection.lance_dir)
+    tmp = f"{TABLE}__validity"
+    live, built, aside = (lance_dir / f"{TABLE}.lance", lance_dir / f"{tmp}.lance",
+                          lance_dir / f"{TABLE}.lance.validity-replaced")
+    # THE SWAP SETS THE OLD TABLE ASIDE, never drops it before the new one is
+    # in (2026-11-07): drop-then-rename left NO table under the collection's
+    # name if a stop fell between them — every embedded document with nothing
+    # to search — and the next run, finding none, answered "unchanged". A run
+    # finds what a stopped one left: the old aside and the rebuilt one built
+    # (the first rename happens only once it is complete) — the swap is
+    # finished; both in place — the old one goes
+    if aside.exists():
+        with _write_lock(lock_con, collection):
+            if not live.exists() and built.exists():
+                os.replace(built, live)
+            if live.exists():
+                shutil.rmtree(aside)
+            else:
+                os.replace(aside, live)                 # nothing rebuilt: the old table back
+            _dbs.pop(str(collection.lance_dir), None)
     db = _conn(collection)
     if TABLE not in db.table_names():
         return {"rows": 0, "unchanged": True}
@@ -1477,7 +1498,6 @@ def add_validity_columns(collection, con, *, lock_con=None, batch_rows: int = 50
     if set(VALIDITY_COLUMNS) <= set(tbl.schema.names):
         return {"rows": tbl.count_rows(), "unchanged": True}
     say = log or (lambda _m: None)
-    tmp = f"{TABLE}__validity"
     with _write_lock(lock_con, collection):
         if tmp in db.table_names():
             db.drop_table(tmp)
@@ -1503,10 +1523,10 @@ def add_validity_columns(collection, con, *, lock_con=None, batch_rows: int = 50
         if new is None:                              # an empty table: recreated with the columns
             new = db.create_table(tmp, schema=schema, storage_options=NEW_TABLE_STORAGE)
         versions = tbl.version
-        db.drop_table(TABLE)
-        src, dst = Path(collection.lance_dir) / f"{tmp}.lance", Path(collection.lance_dir) / f"{TABLE}.lance"
-        os.replace(src, dst)
+        os.replace(live, aside)                         # aside, not dropped (above)
+        os.replace(built, live)
         _dbs.pop(str(collection.lance_dir), None)       # the connection re-reads the directory
+        shutil.rmtree(aside)
     return {"rows": rows, "documents": len(seen), "versions": versions}
 
 def _book_filter(book_id) -> str:

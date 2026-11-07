@@ -18,7 +18,11 @@ ledger). For each, over the documents in scope:
                the origin gave no text for (`unindexable`), and for embed
                less those not embedded here by choice (`declined`, 07 §7.8
                `embed_slices` / `embed_select`, embed_done = -1);
-  done         the stage's mark set (embed_done = 1, whatever its version);
+  done         the stage's mark set (embed_done = 1, whatever its version) —
+               for embed, held to "its vectors are here": a delete that
+               takes a document's rows clears the mark (app/embed_marks.py,
+               "NOT DONE", 2026-11-07; `dev superseded-repair
+               --done-without-vectors` repairs a manifest written before);
   waiting      cleared the stage before, not this one, no error recorded:
                what the worker's own selection takes now (`AT`, below);
   errored      at this stage with an error recorded — out of every

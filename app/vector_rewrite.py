@@ -109,6 +109,19 @@ def run(collection, lock_con=None, *, stop=None, log: Callable[[str], None] | No
     import lance
     say = log or (lambda m: None)
     src, tmp, old, state_path = _paths(collection)
+    if not src.exists() and old.exists() and tmp.exists() and _load(state_path).get("stage") == "swap":
+        # stopped between the swap's two renames (2026-11-07): the source is
+        # aside, the copy not yet in, and the collection had NO table under
+        # its name — every embedded document with nothing to search. The
+        # version check passed before the first rename, so the copy IS the
+        # source: the swap is finished, not begun again
+        with embeddings._write_lock(lock_con, collection):
+            os.replace(tmp, src)
+            embeddings.forget(collection)
+            vector_index.forget(collection)
+        state = {**_load(state_path), "stage": "swapped"}
+        _save(state_path, state)
+        say(f"swapped: the swap a stop interrupted finished; the old table kept at {old}")
     if not src.exists():
         raise RewriteError(f"{collection.name} has no vector table")
     live = lance.dataset(str(src))

@@ -280,9 +280,9 @@ louise dev                                                             operator 
   genesis recheck <collection>                                         reopen final archive shards that still have documents the archive could serve; writes
   genesis recount <collection> [--yes]                                 an archive ledger's docs and chunks recounted from chunk_verification; writes only with --yes (added 2026-10-08)
   drop-rows <collection> --ids FILE [--yes]                            02 §2.4's remedy: the rows FILE lists (a chunk id a line) dropped and their documents marked to embed
-                                                                       again — what `vectors check --drop`, which leaves an empty row, does not; the collection's lock held; writes (added 2026-10-19)
+                                                                       again — as `vectors check --drop` also does since 2026-11-07; the collection's lock held; writes (added 2026-10-19)
                                                                        — a document left with no row has its embed_version set to 0, as a document never embedded has (2026-11-07)
-  superseded-repair <collection> [--apply]                             the documents the manifest counts SUPERSEDED (§7.3 "One status": an earlier version still held and searched,
+  superseded-repair <collection> [--done-without-vectors] [--apply]    the documents the manifest counts SUPERSEDED (§7.3 "One status": an earlier version still held and searched,
                                                                        the Library's grey) that hold no vector — a wipe that cleared the marks and kept the version (wikidata,
                                                                        2026-11-07) — counted, a sample of each kind printed; with --apply their embed_version set to 0, as a
                                                                        document never embedded has. Rowid windows of 50,000 (at most 1,000 candidates, fewer on a table of many
@@ -290,7 +290,10 @@ louise dev                                                             operator 
                                                                        then one short write guarded `embed_done = 0` and the version read, the predicate re-checked inside it;
                                                                        resumable from its cursor in the manifest's control table, keyed on the manifest's path; beside a running
                                                                        worker — no lock, no stop; SIGINT/SIGTERM end it after the window in flight (exit 130); read-only without
-                                                                       --apply (added 2026-11-07)
+                                                                       --apply (added 2026-11-07). --done-without-vectors: instead the documents marked EMBEDDED (embed_done = 1,
+                                                                       chunks > 0) that hold no vector — never embedded again, missing from dense search — with --apply marked not
+                                                                       embedded (embed_done 0, embed_version 0), guarded `embed_done = 1` and the version read; its own cursor
+                                                                       (added 2026-11-07)
   reindex <collection> --ids FILE [--yes]                              the documents FILE lists (a uid a line) queued for the text-index stage again — fts_done = 0, embedding untouched; for rows indexed under an earlier parse (`index-drift --ids-out` lists them); writes (added 2026-10-25)
   index-drift <collection> [--shards S,…] [--cut-all] [--sample F] [--seed HEX] [--snapshot ID] [--ids-out FILE]
                                                                        the documents whose SERVED state disagrees with the latest held snapshot's records (added
@@ -433,6 +436,18 @@ reader needs at the command line:
   worker runs; `--dry-run` names what would go. A never-share
   collection's deposits are erased first (02 §2.9). `--kinds` takes
   `vectors` today. Nothing is announced yet, so nothing is withdrawn.
+  *Amended 2026-11-07:* `--kinds vectors` renames the vector store aside
+  under the vector write lock, removes it, and then marks every document
+  not embedded (`embed_done = 0`, `embed_version = 0`; the declined keep
+  theirs) — left marked embedded with its vectors gone, a document is
+  never embedded again and dense search misses it without a word. It
+  does not change the collection's `embed`: under `all` the worker embeds
+  every document again, under `p2p` the parts rendezvous gives the node,
+  under `on-demand` what a search needs, under `off` nothing — they wait,
+  counted as waiting. The output names the setting (`embed`) and what
+  follows (`next`); to stop holding vectors here, `hold config apply
+  <collection> --set embed=off`. A run stopped after the removal resets
+  the marks when run again.
   `--here` exits 2 while the node holds the collection (§7.7), as the
   other three do.
 - **`records fetch`.** Runs the acquisition spec (06 §6.2) for the
@@ -529,7 +544,12 @@ reader needs at the command line:
   which is why it is off by default.
 - **`vectors check`.** Is `hold check --checks vectors-sample` over this
   peer's own vectors; `--drop` turns a failing row into an empty one
-  (02 §2.4) so the coverage map stops claiming it.
+  (02 §2.4) so the coverage map stops claiming it, and — *amended
+  2026-11-07* — marks its document not embedded, as `dev drop-rows`
+  does (its version 0 when no row of it is left, kept when some are):
+  left marked embedded, the document would never be embedded again.
+  What follows is the collection's `embed`: `all` embeds it again,
+  `off` leaves it waiting, counted as waiting.
 - **`vectors reembed`.** Every vector of a collection made again by the
   encoder that serves it now — for vectors whose run does not give back
   its own bytes (invariant 12). It marks every embedded document; the

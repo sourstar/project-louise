@@ -26,9 +26,15 @@ E = 7
 #: (kind, embed_done, embed_version, error, holds vectors) — round-robin by rowid
 KINDS = (("without", 0, 2, None, False), ("held", 0, 2, None, True), ("without", 0, 2, None, False),
          ("done", 1, E, None, True), ("without", 0, 2, None, False), ("waiting", 0, 0, None, False),
-         ("declined", -1, 2, None, False), ("unindexable", 0, 2, "no txt file", False))
+         ("declined", -1, 2, None, False), ("unindexable", 0, 2, "no txt file", False),
+         # marked embedded, no vector: what a delete left before it cleared the mark
+         ("gone", 1, E, None, False),
+         # marked embedded with no text to embed (chunks 0): rightly holds nothing
+         ("empty", 1, E, None, False))
+CHUNKLESS = {"empty"}
 ROUNDS = 10
 WITHOUT, HELD = 3 * ROUNDS, 1 * ROUNDS
+GONE, DONE_HELD = 1 * ROUNDS, 1 * ROUNDS
 
 
 @pytest.fixture
@@ -42,8 +48,9 @@ def coll(isolated_config):
             i += 1
             con.execute(
                 "INSERT INTO documents(uid,source,native_id,path,in_scope,rdf_done,fts_done,embed_done,"
-                "embed_version,chunks,error) VALUES(?,?,?,?,1,1,1,?,?,2,?)",
-                (f"{NAME}:{i}", NAME, str(i), f"/x/{i}", done, version, error))
+                "embed_version,chunks,error) VALUES(?,?,?,?,1,1,1,?,?,?,?)",
+                (f"{NAME}:{i}", NAME, str(i), f"/x/{i}", done, version,
+                 0 if kind in CHUNKLESS else 2, error))
             if held:
                 vectors += [{"id": f"{NAME}:{i}:{s}:1", "book_id": i, "lang": "en", "seq": s,
                              "chapter": "", "text": "t", "vector": np.zeros(768, dtype="float32")}
@@ -104,7 +111,7 @@ def test_apply_resets_only_the_documents_without_vectors_and_is_idempotent(coll)
     after = _rows(coll)
     for uid, kind in kinds.items():
         want = {"without": (0, 0), "held": (0, 2), "done": (1, E), "waiting": (0, 0),
-                "declined": (-1, 2), "unindexable": (0, 2)}[kind]
+                "declined": (-1, 2), "unindexable": (0, 2), "gone": (1, E), "empty": (1, E)}[kind]
         assert after[uid] == want, (uid, kind, after[uid])
     assert _superseded(coll) == HELD, "what is left grey holds its vectors (gutenberg's)"
     assert _cursor(coll)["done"] is True
@@ -237,6 +244,12 @@ def test_the_window_statements_keep_their_plans(coll):
         (embed_marks.UNHELD_WINDOW_SQL, (0, 10), "INTEGER PRIMARY KEY (rowid>? AND rowid<?)"),
         ("UPDATE documents SET embed_version=0 WHERE uid IN (?,?) AND " + embed_marks._NOT_HELD,
          ("a", "b"), "(uid=?)"),
+        (repair_mod.window_sql("done"), {**p, "lo": 0, "hi": 10, "n": 5},
+         "INTEGER PRIMARY KEY (rowid>? AND rowid<?)"),
+        (repair_mod.reset_sql("done"), {**p, "rowid": 1, "version": 2}, "INTEGER PRIMARY KEY (rowid=?)"),
+        (embed_marks.UNMARK_WINDOW_SQL, (0, 10), "INTEGER PRIMARY KEY (rowid>? AND rowid<?)"),
+        (embed_marks._DROPPED_GONE.format(marks="?,?"), ("a", "b"), "(uid=?)"),
+        (embed_marks._DROPPED_PART.format(marks="?,?"), ("a", "b"), "(uid=?)"),
     ]
     for sql, params, want in stmts:
         plan = " ".join(r[3] for r in con.execute("EXPLAIN QUERY PLAN " + sql, params))
@@ -283,3 +296,129 @@ def test_the_command_runs_dry_then_applies(coll, capsys):
     assert json.loads(got.out)["reset"] == WITHOUT
     assert f"{WITHOUT} reset to embed_version 0" in got.err
     assert _superseded(coll) == HELD
+
+
+# ---- --done-without-vectors: marked embedded, holding no vector ---------------
+
+def _done_cursor(c):
+    con = db.connect(c)
+    try:
+        raw = db.get_control(con, repair_mod.DONE_CURSOR_KEY)
+    finally:
+        con.close()
+    return json.loads(raw) if raw else None
+
+
+def test_done_mode_finds_the_documents_marked_embedded_that_hold_nothing(coll):
+    """Share's withdraw, `forget --kinds vectors`, `vectors check --drop`
+    left such documents before 2026-11-07: never embedded again, missing
+    from dense search without a word. A dry run counts them and writes
+    nothing; --apply marks exactly them not embedded, version 0 — not the
+    ones holding rows, not the ones with no text (chunks 0) — under its own
+    cursor, and a second run finds none."""
+    before = _rows(coll)
+    dry = repair_mod.repair(coll, mode="done", span=7)
+    assert (dry["mode"], dry["candidates"], dry["holding_vectors"], dry["without_vectors"]) == \
+        ("done", GONE + DONE_HELD, DONE_HELD, GONE)
+    kinds = _kinds()
+    assert {kinds[u] for u in dry["sample"]["without_vectors"]} == {"gone"}
+    assert {kinds[u] for u in dry["sample"]["holding_vectors"]} == {"done"}
+    assert _rows(coll) == before and _done_cursor(coll) is None
+    assert "would be marked not embedded" in repair_mod.summary(dry)
+
+    out = repair_mod.repair(coll, mode="done", apply=True, span=7)
+    assert (out["reset"], out["changed_meanwhile"]) == (GONE, 0)
+    after = _rows(coll)
+    for uid, kind in kinds.items():
+        assert after[uid] == ((0, 0) if kind == "gone" else before[uid]), (uid, kind)
+    assert _done_cursor(coll)["done"] is True and _cursor(coll) is None, "its own cursor"
+    again = repair_mod.repair(coll, mode="done", apply=True, span=7)
+    assert (again["candidates"], again["reset"]) == (DONE_HELD, 0)
+
+
+def test_done_mode_leaves_a_document_re_embedded_meanwhile(coll, monkeypatch):
+    """The guard: a candidate whose version changed between the read and the
+    write (the worker's re-embed marked it at another version) is left."""
+    real = embeddings.books_with_vectors
+    victim = next(u for u, k in _kinds().items() if k == "gone")
+
+    def worker_meanwhile(books, collection=None, **kw):
+        other = sqlite3.connect(collection.manifest_path, timeout=30)
+        other.execute("UPDATE documents SET embed_version=? WHERE uid=?", (E + 1, victim))
+        other.commit()
+        other.close()
+        return real(books, collection, **kw)
+    monkeypatch.setattr(embeddings, "books_with_vectors", worker_meanwhile)
+    out = repair_mod.repair(coll, mode="done", apply=True, span=1000)
+    assert (out["reset"], out["changed_meanwhile"]) == (GONE - 1, 1)
+    assert _rows(coll)[victim] == (1, E + 1)
+
+
+def test_done_mode_on_a_store_holding_no_row_marks_every_one(coll, monkeypatch):
+    embeddings._dbs.pop(str(coll.lance_dir), None)
+    shutil.rmtree(coll.lance_dir)
+
+    def never(*_a, **_k):
+        raise AssertionError("an empty store is not asked")
+    monkeypatch.setattr(embeddings, "books_with_vectors", never)
+    out = repair_mod.repair(coll, mode="done", apply=True)
+    assert out["store_empty"] and out["reset"] == GONE + DONE_HELD
+
+
+def test_the_command_takes_done_without_vectors(coll, capsys):
+    from app import louise
+    root = str(collections_mod.louise_root() / "collections")
+    assert louise.main(["dev", "superseded-repair", NAME, "--root", root, "--done-without-vectors"]) == 0
+    dry = json.loads(capsys.readouterr().out)
+    assert (dry["mode"], dry["without_vectors"], dry["apply"]) == ("done", GONE, False)
+    assert louise.main(["dev", "superseded-repair", NAME, "--root", root, "--done-without-vectors",
+                        "--apply"]) == 0
+    got = capsys.readouterr()
+    assert json.loads(got.out)["reset"] == GONE
+    assert f"[done-without-vectors] {NAME}: " in got.err
+    assert f"{GONE} marked not embedded, embed_version 0" in got.err
+
+
+# ---- embed_marks: after a delete -------------------------------------------------
+
+def test_mark_dropped_asks_the_table_after_the_delete(coll):
+    """No row left: not embedded, version 0. Rows left: not done, version
+    kept. A declined document is left; a second call changes nothing."""
+    kinds = _kinds()
+    held = next(u for u, k in kinds.items() if k == "done")      # holds rows
+    gone = next(u for u, k in kinds.items() if k == "gone")      # holds none
+    declined = next(u for u, k in kinds.items() if k == "declined")
+    con = db.connect(coll)
+    got = embed_marks.mark_dropped(con, coll, [held, gone, declined], window=1)
+    assert got == {"reset": 2, "unheld": 1}
+    assert embed_marks.mark_dropped(con, coll, [held, gone, declined]) == {"reset": 0, "unheld": 0}
+    con.close()
+    after = _rows(coll)
+    assert (after[held], after[gone], after[declined]) == ((0, E), (0, 0), (-1, 2))
+
+
+def test_mark_dropped_on_an_unreadable_table_clears_the_marks_and_keeps_the_versions(coll, monkeypatch):
+    kinds = _kinds()
+    gone = next(u for u, k in kinds.items() if k == "gone")
+
+    def broken(*_a, **_k):
+        raise OSError("the store cannot be read")
+    monkeypatch.setattr(embeddings, "books_with_vectors", broken)
+    said: list[str] = []
+    con = db.connect(coll)
+    assert embed_marks.mark_dropped(con, coll, [gone], log=said.append) == {"reset": 1, "unheld": 0}
+    con.close()
+    assert _rows(coll)[gone] == (0, E), "not done is always true after a delete; no row, only when proven"
+    assert said and "versions kept" in said[0]
+
+
+def test_unmark_manifest_clears_every_mark_and_version_but_the_declined(coll):
+    con = db.connect(coll)
+    n = embed_marks.unmark_manifest(con, window=7)
+    assert embed_marks.unmark_manifest(con, window=7) == 0
+    con.close()
+    kinds = _kinds()
+    after = _rows(coll)
+    assert all(after[u] == (-1, 2) for u, k in kinds.items() if k == "declined")
+    assert all(v == (0, 0) for u, v in after.items() if kinds[u] != "declined")
+    assert n == sum(1 for k in kinds.values() if k not in ("declined", "waiting"))

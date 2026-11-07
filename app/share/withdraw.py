@@ -184,16 +184,30 @@ def _chunk_ids(bundle_dir: Path, uids: set[str]) -> list[str]:
 
 
 def drop_withdrawn(root: Path, name: str, codex, con, *, delete_chunks: Callable[[list[str]], Any] | None = None,
-                   log: Callable[[str], None] | None = None) -> dict[str, int]:
+                   collection=None, log: Callable[[str], None] | None = None) -> dict[str, int]:
     """The receiving side: every withdrawn bundle HELD here (accepted, or its
     directory present) whose producer signed the withdraw loses its coverage
     row and its directory; its chunks' vectors go (`delete_chunks`) only
     where no other accepted bundle of the part claims their records. A claim
     row for a bundle never fetched is left: `listed_bundles` and `take`
     decide whether it is asked for. Cheap when nothing is withdrawn: one
-    cached read of the attestations."""
+    cached read of the attestations.
+
+    THE DOCUMENTS WHOSE VECTORS GO ARE NOT EMBEDDED ANY MORE (2026-11-07):
+    after the delete, `embed_marks.mark_dropped` clears their `embed_done`
+    — version 0 where the table holds no row of theirs, kept where some
+    remain (`collection`, the local collection whose table is asked; None:
+    `records.local_collection`). Marked done they would never be embedded
+    again and dense search would miss them without a word. What follows is
+    the collection's embed setting: under `all` (or `p2p`, for the parts
+    rendezvous gives this node) the worker embeds them again; under
+    `on-demand` what a search needs; under `off` they wait, counted as
+    waiting, not as done — and another producer's bundle may bring them
+    back. The marks are written before the directory and the coverage row
+    go, so a stop between the delete and the marks repeats the whole drop at
+    the next beat: the delete finds nothing, the marks are written."""
     root = Path(root)
-    out = {"dropped": 0, "vectors": 0, "not_the_producer": 0}
+    out = {"dropped": 0, "vectors": 0, "not_the_producer": 0, "documents_reset": 0}
     ids = withdrawn(root, name, codex)
     if not ids:
         return out
@@ -240,10 +254,20 @@ def drop_withdrawn(root: Path, name: str, codex, con, *, delete_chunks: Callable
                 if chunk_ids:
                     delete_chunks(chunk_ids)
                     out["vectors"] += len(chunk_ids)
+                    # AFTER the delete, before the directory goes (above)
+                    from app import embed_marks
+                    if collection is None:
+                        from app.hold import records as rec
+                        collection = rec.local_collection(root, name, codex)
+                    got = embed_marks.mark_dropped(
+                        con, collection, {c.rsplit(":", 2)[0] for c in chunk_ids},
+                        log=(lambda m: log(f"[{name}] withdraw: {m}")) if log else None)
+                    out["documents_reset"] += got["reset"]
         shutil.rmtree(d, ignore_errors=True)
         con.execute("DELETE FROM coverage WHERE bundle_id=?", (bid,))
         out["dropped"] += 1
         if log:
             log(f"[{name}] withdraw: bundle {bid[:23]}… dropped as its producer asked (03 §3.6)"
-                + (f"; {out['vectors']} vector(s) of records no other bundle claims gone" if out["vectors"] else ""))
+                + (f"; {out['vectors']} vector(s) of records no other bundle claims gone, "
+                   f"{out['documents_reset']} document(s) no longer embedded" if out["vectors"] else ""))
     return out

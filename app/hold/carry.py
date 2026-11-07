@@ -1505,6 +1505,28 @@ def _drop_and_reset(con, coll, ids: list[str], *, window: int,
     return reset
 
 
+def drop_and_reset(coll, ids: list[str], *, window: int = WINDOW,
+                   log: Callable[[str], None] = print) -> int:
+    """`_drop_and_reset` on `coll`'s own manifest connection — for `hold
+    vectors check --drop` (louise.cmd_vectors_check), which empties a
+    failing row and, since 2026-11-07, marks its document not embedded as
+    drop-rows does: still `embed_done = 1` it would never be embedded again
+    and dense search would miss the row without a word. The caller holds
+    the collection's write lock (no worker writes it meanwhile), so the mark
+    goes FIRST, the safe direction this module argues: a stop after it
+    leaves a document embedded again, never one marked done without its
+    rows. What follows is the collection's embed setting: `all` embeds it
+    again (the rows left reused), `p2p` if rendezvous gives the part to this
+    node, `lazy` when a search needs it, `off` leaves it waiting — counted
+    as waiting, not done. Returns the documents reset."""
+    from app import db
+    con = db.connect(coll)
+    try:
+        return _drop_and_reset(con, coll, sorted(set(ids)), window=window, log=log)
+    finally:
+        con.close()
+
+
 def _unheld_after(con, coll, uids: list[str], log: Callable[[str], None]) -> int:
     """Of `uids`, whose rows a delete just took in part or whole, those of
     which the table now holds NO row: version 0 (embed_marks, "NOT HELD").
@@ -1537,8 +1559,8 @@ def drop_rows(root, ref: str, ids: list[str], *, window: int = WINDOW,
               log: Callable[[str], None] = print) -> dict[str, Any]:
     """02 §2.4's remedy for rows that are not this space's function — an
     archive's vector of an input other than the one its record cuts to — with
-    their documents embedded again, which `vectors check --drop` (an empty
-    row, no re-embed) does not do. `louise dev drop-rows`. The caller holds
+    their documents embedded again, as `vectors check --drop` also does since
+    2026-11-07 (`drop_and_reset`). `louise dev drop-rows`. The caller holds
     the collection's write lock. Rows not in the table are no work."""
     from . import collection as col, records as rec
     from app import db, embeddings

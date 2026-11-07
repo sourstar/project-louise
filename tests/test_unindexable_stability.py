@@ -126,8 +126,9 @@ def test_a_stage_that_meets_a_corpus_fact_withdraws_the_document_from_every_inde
 
 def test_a_withdrawn_document_not_embedded_holds_no_earlier_version(tmp_path, isolated_config):
     """Its vectors went with the withdraw, so its embed_version goes to 0 (the
-    SUPERSEDED contract, app/status.py, 2026-11-07); one whose mark the stage
-    never cleared keeps its version."""
+    SUPERSEDED contract, app/status.py, 2026-11-07); one still marked
+    embedded is not embedded any more — `embed_done = 1` with no vector is
+    what nothing would ever embed again — as `dev unindexable` writes."""
     c, con = _collection(tmp_path)
     _indexed_as_if_earlier(con, c)
     con.execute("UPDATE documents SET embed_done=0, embed_version=3 WHERE uid='gutenberg:99999'")
@@ -139,7 +140,12 @@ def test_a_withdrawn_document_not_embedded_holds_no_earlier_version(tmp_path, is
     row = con.execute("SELECT * FROM documents WHERE uid='gutenberg:99999'").fetchone()
     assert worker._execute_step(con, c, "fts", row) is True
     assert con.execute("SELECT embed_done, embed_version FROM documents WHERE uid='gutenberg:99999'"
-                       ).fetchone()[:] == (1, 3)
+                       ).fetchone()[:] == (0, 0)
+    con.execute("UPDATE documents SET error=NULL, embed_done=-1, embed_version=3 WHERE uid='gutenberg:99999'")
+    row = con.execute("SELECT * FROM documents WHERE uid='gutenberg:99999'").fetchone()
+    assert worker._execute_step(con, c, "fts", row) is True
+    assert con.execute("SELECT embed_done, embed_version FROM documents WHERE uid='gutenberg:99999'"
+                       ).fetchone()[:] == (-1, 3), "a declined document keeps what it was"
 
 
 def test_an_index_that_cannot_be_written_defers_and_records_nothing(

@@ -97,6 +97,53 @@ def test_kinds_vectors_takes_the_vector_side_only(node):  # noqa: F811
         ["lance", "vectors-0123456789abcdef-all"]
 
 
+def _marks(node, codex, name="alice"):  # noqa: F811
+    from app import db
+    from app.hold import records as rec
+    con = db.connect(rec.local_collection(node, name, codex))
+    try:
+        return {r[0]: (int(r[1]), int(r[2] or 0))
+                for r in con.execute("SELECT uid, embed_done, embed_version FROM documents")}
+    finally:
+        con.close()
+
+
+def test_kinds_vectors_leaves_no_document_marked_embedded(node):  # noqa: F811
+    """A document marked `embed_done = 1` whose vectors went with the table
+    is never embedded again and is missing from dense search without a word
+    (2026-11-07). After the table goes, every document embedded here is not
+    embedded, its version 0 (nothing earlier is held); the output says what
+    the worker does next under the collection's embed setting, which the
+    command does not change."""
+    from app import config, db
+    from app.hold import records as rec
+    codex = held_with_deposits(node)
+    con = db.connect(rec.local_collection(node, "alice", codex))
+    con.execute("UPDATE documents SET embed_done=1, embed_version=?", (config.EMBED_VERSION,))
+    con.close()                              # as the worker's embed stage leaves them
+    before = _marks(node, codex)
+    assert before and set(before.values()) == {(1, config.EMBED_VERSION)}, before
+    out = forget_mod.forget(node, "alice", kinds=("vectors",))
+    assert not (node / "alice" / "lance").exists()
+    assert set(_marks(node, codex).values()) == {(0, 0)}, "vectors gone: not embedded"
+    assert out["documents_reset"] == len(before)
+    assert out["embed"] == "lazy", "the deposit's default: on-demand"
+    assert out["next"].startswith("embed is lazy (on-demand)") and "--set embed=off" in out["next"]
+    assert forget_mod.next_after_vectors("alice", "all").startswith("embed is all (all local): "
+                                                                    "the worker embeds every one")
+    assert "waiting, not done" in forget_mod.next_after_vectors("alice", "off")
+    assert "--set embed=off" not in forget_mod.next_after_vectors("alice", "off")
+    # a stop between the table's removal and the marks: the next run finishes
+    con = db.connect(rec.local_collection(node, "alice", codex))
+    con.execute("UPDATE documents SET embed_done=1, embed_version=?", (config.EMBED_VERSION,))
+    con.close()
+    again = forget_mod.forget(node, "alice", kinds=("vectors",))
+    assert again["documents_reset"] == len(before)
+    assert forget_mod.forget(node, "alice", kinds=("vectors",))["documents_reset"] == 0
+    dry = forget_mod.forget(node, "alice", kinds=("vectors",), dry_run=True)
+    assert dry["dry_run"] and "would_reset" in dry
+
+
 def test_other_kinds_are_refused(node):  # noqa: F811
     held_with_deposits(node)
     with pytest.raises(cx.CodexError, match="--kinds records"):
