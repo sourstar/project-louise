@@ -410,6 +410,22 @@ def _file_embed(raw: dict[str, Any]) -> str | None:
     return collections_mod._EMBED_MODE_ALIASES.get(str(value), str(value))
 
 
+def stated_embed(name: str) -> str | None:
+    """The embed mode collection `name`'s file STATES, in the file's word
+    (`off`, `on-demand`, `all`, `p2p`) — what `--set embed=…` writes, read
+    back — or None where it states none (the default; an annotations
+    collection). `node checkpoint save` records it (app/working_state.py).
+    SetRefused when there is no file or it does not parse."""
+    path = collections_mod.config_toml_path(name)
+    if not path.is_file():
+        raise SetRefused(f"{name}: no such collection on this node (its file would be {path})")
+    try:
+        mode = _file_embed(_raw(path))
+    except (OSError, ValueError) as e:
+        raise SetRefused(f"{name}: its file does not load: {e}") from None
+    return None if mode is None else _MODE_ON_DISK.get(mode, mode)
+
+
 def _fields(c, raw: dict[str, Any]) -> dict[str, Any]:
     """The writer's arguments for a loaded collection: everything it holds,
     unchanged. One list, so no call site forgets a field.

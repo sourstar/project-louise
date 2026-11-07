@@ -119,6 +119,18 @@ def show(name: str | None = None) -> dict[str, Any]:
             "refused": [{"name": n, "reason": why} for n, why in refused]}
 
 
+def set_and_apply(name: str, values: dict[str, str]) -> dict[str, Any]:
+    """`hold config apply <name> --set KEY=VALUE …` (07 §7.8 "Pickup"): the
+    values written into the collection's file through its one writer
+    (`collection_file.set_values`), then the files applied (`apply`). The
+    one path a command changes desired state by — the CLI's and `node
+    checkpoint restore`'s (app/working_state.py). `SetRefused` with nothing
+    written when a value is refused."""
+    from app import collection_file
+    written = collection_file.set_values(name, values)
+    return {"written": written, **apply(name)}
+
+
 def apply(name: str | None = None) -> dict[str, Any]:
     """The files applied now — what the node does at start and on an edit
     (07 §7.8 "Pickup"): each collection's Tier-3 embed-mode override

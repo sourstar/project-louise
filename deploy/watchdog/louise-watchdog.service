@@ -1,0 +1,12 @@
+# The development watchdog's one check (deploy/watchdog/README.md): no agent
+# beat for 2 h -> the dev units stopped, the node's working state restored.
+[Unit]
+Description=Louise development watchdog (no agent beat for 2 h: dev units stopped, working state restored)
+After=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/root/louise-watchdog/louise-watchdog.sh
+Environment=AFTER=2h
+Environment=LOG=/root/measure/watchdog.log
+TimeoutStartSec=10min

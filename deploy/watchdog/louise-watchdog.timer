@@ -1,0 +1,12 @@
+# Every 10 minutes on the clock; Persistent: a run missed while the host was
+# down happens at boot.
+[Unit]
+Description=Run the Louise development watchdog every 10 minutes
+
+[Timer]
+OnCalendar=*:0/10
+Persistent=true
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target
