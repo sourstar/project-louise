@@ -69,7 +69,7 @@ These are the values, not the final TOML.
 - Encoder: weights `sha256:09596ced…ecbf2c`, labelled "Nemotron-3-Embed-1B
   f16".
 - Vectors: 2,048 dims, f16, mean pooling, normalised.
-- Window: ctx 8,192, cut by tokens.
+- Window: ctx 8,191, cut by tokens (the model's context_size 8,192 less one).
 - Instructions: `passage: ` on documents, `query: ` on queries.
 - `exactness = "exact"`: required from Codex version 10.
 - `[space.calibration]`: set `sha256:7d06a2f6…`, quorum n = 16, min_pass =

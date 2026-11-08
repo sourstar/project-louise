@@ -198,7 +198,7 @@ Variants: `akn_article` (today), `legal_article` header off, header on.
     c0c9fea93ea424587517f2c59e20db9f1d6bf615, 17,077,678 bytes (München,
     2026-11-08; `/root/measure/nemotron-tokenizer.json`). It goes into
     `TOKENIZERS_DIR` as `<hex>.json`.
-  - `max_tokens` = 8,192 − the instruction's tokens;
+  - `max_tokens` = 8,191 (the space's `ctx`: the model's context_size 8,192 less one, as llama.cpp embeds; München's dry run, 2026-11-08) − the instruction's tokens;
   - `header`.
 - **The label each plugin writes** is checked to name the act and the
   article (C2).

@@ -18,7 +18,9 @@ RECIPE = Path(__file__).resolve().parent.parent / "docs" / "notes" / "legi-recip
 SHARED_BLOCK = '''[space]
 dim = 2048
 dtype = "f16"
-ctx = 8192
+# 8191, not 8192: llama.cpp embeds at most context_size − 1 tokens, and the model runs
+# context_size 8192 (München's dry run, 2026-11-08); wikidata's space on the same model is 8191
+ctx = 8191
 cut = "tokens"
 pooling = "mean"
 normalise = true
@@ -81,7 +83,7 @@ def test_the_recipe_makes_a_version_11_codex_with_the_shared_space():
     d = json.loads(codex.canonical())
     sp = d["space"]
     assert (sp["dim"], sp["dtype"], sp["ctx"], sp["cut"], sp["pooling"], sp["normalise"]) == \
-        (2048, "f16", 8192, "tokens", "mean", True)
+        (2048, "f16", 8191, "tokens", "mean", True)
     assert (sp["exactness"], sp["epoch"], sp["evaluation"]) == ("exact", "0", "")
     assert sp["document"] == {"instruction": "passage: "}
     assert sp["query"] == {"encoder": None, "instruction": "query: "}

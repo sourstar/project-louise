@@ -52,7 +52,9 @@ summary = "Every act of the Official Journal (sector 3) and every consolidated v
 [space]
 dim = 2048
 dtype = "f16"
-ctx = 8192
+# 8191, not 8192: llama.cpp embeds at most context_size − 1 tokens, and the model runs
+# context_size 8192 (München's dry run, 2026-11-08); wikidata's space on the same model is 8191
+ctx = 8191
 cut = "tokens"
 pooling = "mean"
 normalise = true

@@ -502,7 +502,9 @@ def test_the_plugin_its_spec_and_its_reference_source_are_registered():
 SHARED_SPACE = '''[space]
 dim = 2048
 dtype = "f16"
-ctx = 8192
+# 8191, not 8192: llama.cpp embeds at most context_size − 1 tokens, and the model runs
+# context_size 8192 (München's dry run, 2026-11-08); wikidata's space on the same model is 8191
+ctx = 8191
 cut = "tokens"
 pooling = "mean"
 normalise = true
@@ -552,7 +554,7 @@ def test_the_recipe_loads_through_the_real_loader_as_a_version_11_codex():
     c = col.dry_codex("neuris", r, platform_image="sha256:" + "1f" * 32)
     assert c.version == cx.DOCUMENT_VERSION == 11
     assert (c.space.dim, c.space.dtype, c.space.ctx, c.space.cut, c.space.exactness) == \
-        (2048, "f16", 8192, "tokens", "exact")
+        (2048, "f16", 8191, "tokens", "exact")
     assert c.space.document_instruction == "passage: " and c.space.query.instruction == "query: "
     assert [layer.chunker.id for layer in c.layers] == ["akn_article"]
     assert c.slicing["keys"] == ["year"] and c.profile["validity"]["from"] == "extra.valid_from"
