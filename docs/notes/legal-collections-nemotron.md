@@ -191,3 +191,29 @@ needs a measured pass.
 |---|---|---|
 | **two protocols on the spec (built, awaiting review)** | one engine; a new origin is a declaration, not an engine edit; the guard keeps it so | two more fields on the spec; the review may want another shape |
 | the per-plugin hooks as they were | nothing to review | three special cases in the engine, growing with every origin |
+
+## Next: a Nemotron Normattiva (operator, 2026-11-08) — PLANNED
+
+The operator: "When you are done with them, I want you to make a nemo version
+of normattiva, then run a comparison test before doing the full embedding."
+
+- **What it is:** `normattiva-nemo`, the same plugin, corpus and records as
+  `normattiva`, in the shared legal space (Nemotron). Normattiva's layer is
+  `akn_article` at the plugin's defaults, the same as the three legal
+  plugins, so it can join that space by `--space-from legi`. The existing
+  `normattiva` (DAR-legal-it) is untouched.
+- **The comparison before the full embedding:** two parts.
+  - The bake-off München runs for the operator's 2026-11-07 request
+    (legal-embedders-fr-de-eu.md): `lemur-it` hybrid MRR@10, the deciding
+    row; JuriFindIT, in-domain for DAR-legal-it.
+  - Then, on the collection itself: `tools/legal_pilot.py coverage` and
+    `run`, against the old collection. Only the chunks the pilot's
+    questions reach are embedded on demand. The full embedding waits for
+    its numbers and the operator's go.
+- **The gap:** no built case makes it without re-parsing.
+  - Case E would re-parse all 341,959 members from `/corpora/normattiva`,
+    and RULE 1 wants the identical records carried.
+  - Carrying records into a new space is case J (a sister), phase 4, not
+    built.
+  - For the architecture session: build J for this use, or accept E with
+    the re-parse (a CPU pass, no download).
