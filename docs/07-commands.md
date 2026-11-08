@@ -1459,8 +1459,11 @@ and a run of more than six digits as an identifier, digit by digit; a language i
 written. `/v1/audio/speech` answers with
 `Server-Timing: synth;dur=…, audio;dur=…` (the model server's call and the
 clip's length, ms), and the page keeps the reading's times
-(`louiseVoice.timeline()`: the answer's first and last word, each sentence
-cut, sent, received, played and ended, ms from the Ask press).
+(`louiseVoice.timeline()`: the answer's first and last word, each start of
+the reading, each sentence cut, sent, received, played and ended, ms from the Ask press).
+A first sentence over 90 characters is read in two, cut at its last clause mark (, ; :) past
+the 30th, so the first sound waits for a shorter clip (*amended 2026-11-08*: OmniVoice takes
+1.5–2 times a clip's length to make it).
 - the LocalAGI routes below require the token read from
   `DEPOSIT_TOKEN_FILE`, reads included, and that token opens nothing
   else: an agent that can write its memory cannot pause the node.

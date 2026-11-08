@@ -28,6 +28,7 @@ from app.speech_numbers import verbalize
     ("en", "On March 12, 2024 and 2024-03-12.",
      "On March twelfth, twenty twenty-four and March twelfth twenty twenty-four."),
     ("en", "Caesar died in 44 BC at 9:05.", "Caesar died in forty-four BC at nine oh five."),
+    ("en", "The war ended on 11 November 1918.", "The war ended on the eleventh of November nineteen eighteen."),
     # French, German, Spanish, Portuguese
     ("fr", "Le 1er mars 2024, 1 234 soldats et 3,5 %. César mourut en 44 av. J.-C.",
      "Le premier mars deux mille vingt-quatre, mille deux cent trente-quatre soldats et trois virgule "

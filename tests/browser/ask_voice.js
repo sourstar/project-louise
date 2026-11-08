@@ -402,6 +402,37 @@ const sentenceOf = size => KNOWN[(size - 44 - 8000) / 20 - 1];
         '13. played: the translation, after what was read of the original', pl);
   speechDelay = 0; answerJob = 'a1';
 
+  // 18. a production-shaped answer (München's measurement, 2026-11-08: every
+  //     sentence cut at the stream's end): Italian, citations, paragraphs,
+  //     ~90 deltas of a few words; tapped at the first word
+  await reset(); answerJob = 'live';
+  await asked(() => page.evaluate(() => { document.getElementById('q').value = 'Chi scrisse la Commedia?'; ask(); }));
+  const LONG = 'La Divina Commedia fu scritta da Dante Alighieri tra il 1304 e il 1321 [1]. '
+    + 'È considerata il capolavoro della letteratura italiana [2][3].\n\n'
+    + 'Il poema si divide in tre cantiche: Inferno, Purgatorio e Paradiso [1]. '
+    + 'Ognuna conta trentatré canti, più il proemio [4]. Dante vi narra un viaggio nell\'aldilà [2].\n'
+    + 'G. Boccaccio la chiamò divina, e il nome rimase nelle edizioni successive [5].';
+  const words = LONG.match(/\S+\s*/g);
+  await emit('delta', { text: words[0] });
+  await until(() => !document.getElementById('speak').hidden, 2000);
+  await page.click('#speak');
+  for (let i = 1; i < words.length; i++) { await emit('delta', { text: words[i] }); await sleep(25); }
+  const lastWordAt = await page.evaluate(() => louiseVoice.timeline().last_word);
+  await emit('end', { state: 'done', reason: '' });
+  await until(() => __speech.length >= 4, 8000);
+  const t18 = await page.evaluate(() => louiseVoice.timeline());
+  // a long first sentence goes in two, cut at its last clause mark under 90
+  const LONGFIRST = 'Il poema, composto in terzine incatenate di endecasillabi, si divide in tre cantiche e cento canti complessivi [1].';
+  const pieces = await page.evaluate(t => { const r = []; return louiseVoice.firstPieces(t); }, LONGFIRST);
+  check(pieces.length === 2 && pieces[0] === 'Il poema, composto in terzine incatenate di endecasillabi,' && pieces[0].length <= 90
+        && pieces.join(' ') === LONGFIRST, '18. a long first sentence is read in two, at a clause mark', pieces);
+  check(Array.isArray(t18.started) && t18.started.length === 1, '18. the reading\'s start is kept', t18.started);
+  check(t18.sentences.length >= 4 && t18.sentences[0].cut < lastWordAt - 500,
+        '18. a production-shaped stream is cut while it is written, not at its end',
+        { lastWordAt, t18, text: await page.evaluate(() => document.getElementById('answer').textContent),
+          lives: await page.evaluate(() => __lives), on: await on() });
+  answerJob = 'a1';
+
   // 14. a node that offers no voice: no button, no script
   const scripts = [];
   page.on('request', r => { if (/voice\.js/.test(r.url())) scripts.push(r.url()); });
