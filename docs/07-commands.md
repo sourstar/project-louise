@@ -93,6 +93,17 @@ louise hold
                                                                        that differ (the engine alone expected), the space_id kept, the documents, vector rows and
                                                                        bytes to carry counted from the predecessor with the time the count took, the room (short: exit
                                                                        2, the carry's refusal), the sample and its seed. It writes nothing and takes no lock
+              new <plugin> --name N --space-from C [--recipe FILE] --cpu-model T [--encoder URL] [--api A] [--embed-model M] [--dry-run]
+                                                                       case E, a SECOND COLLECTION IN A HELD SPACE (added 2026-11-08, the legal collections): the space,
+                                                                       its layers, calibration set and CPU reference are the held collection C's; the recipe gives the
+                                                                       rest (origin, work), and a field of the space it states must equal C's
+              new <plugin> --name N --sister-of M --space-from C --cpu-model T [--encoder URL] [--api A] [--embed-model M] [--dry-run]
+                                                                       case J, a SISTER INTO A HELD SPACE (added 2026-11-08, normattiva-nemo): `derive` of the mother M
+                                                                       into C's space and layers; carry — her parts seeded from M's snapshot, M's manifest and text index
+                                                                       copied with nothing of M's vectors said held (A1i); where M cuts by other layers, RELAYERED: the
+                                                                       manifest without its index marks, no text index, her parts built from M's record lines (`records
+                                                                       build --records-from`, 02 §2.7 amended 2026-11-08) — then her CPU reference and gate; embedding off.
+                                                                       Both write locks: `node pause M` first (exit 3 while held)
               create <plugin> --recipe FILE --encoder URL [--query-encoder URL] [--api A] [--embed-model M] [--query-model M]
               [--space-from CODEX] [--calibration-set FILE]
                                                                        the model flags: required where a URL names no model (§7.8, amended 2026-10-09)
