@@ -151,7 +151,7 @@ rule = "default"
 
 [layers.chunker]
 id = "legal_article"
-version = 2
+version = 3
 
 [layers.chunker.params]
 tokenizer = "sha256:797410dfb649a5b9ba92bc4fef7dbf4022d00e73de6867c4ac199a8846439421"
