@@ -91,12 +91,12 @@ def test_the_recipe_makes_a_version_11_codex_with_the_shared_space():
     assert sp["calibration"]["quorum"] == {"n": 16, "min_pass": 12}
     assert sp["encoder"]["weights"] == "sha256:09596cedbdf2a0d164b37083794632be55dcb2aa2abcf02fb995dfdccbecbf2c"
     assert sp["encoder"]["engine"]["build"] == "3f8af15a"
-    assert d["layers"] == [{"chunker": {"id": "akn_article", "params": {}, "version": 1},
-                            "input": {"form": "text"}, "rule": "default"}], "the shared space's chunker"
+    from app import chunking_legal
+    assert d["layers"] == [chunking_legal.SHARED_LAYER], "the shared legal layer, byte for byte"
     assert d["profile"]["validity"] == {"from": "extra.version_from", "kind": "versions-per-work",
                                         "work": "extra.work_key"}
     assert d["license"] == {"class": "green", "terms_sha256": None}
-    assert d["parser"] == {"id": "legi", "version": 1} and d["plugin"] == "legi"
+    assert d["parser"] == {"id": "legi", "version": 2} and d["plugin"] == "legi"
     assert d["slicing"]["parts"]["rule"] == "content" and d["slicing"]["keys"] == ["kind", "year"]
     assert d["origin"]["jurisdiction"] == "FR" and d["origin"]["unit"] == "container-member"
 

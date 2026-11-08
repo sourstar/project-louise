@@ -125,16 +125,35 @@ def _day(n) -> str | None:
     return validity.day_text(n) if n else None
 
 
+#: amending statements pinned with an article (piece 3): the latest ones
+MAX_CHANGES = 12
+
+
+def _changes(con, work: str, tok: str) -> list[dict]:
+    """What changed the article and its act (app/validity.py `amendments_of`:
+    the amending actions each version states, piece 3, operator 2026-11-08)
+    — by any canonical id of the Work, the latest MAX_CHANGES, facts as the
+    origin states them: the amending act, the day it applies from, the kind."""
+    from app import validity
+    keys = [r[0] for r in con.execute("SELECT key FROM validity_works WHERE work=?", (work,))]
+    rows = validity.amendments_of(con, keys, tok)
+    return [{"atto": (r["stating_title"] or r["amending"]).split(" — ")[0] if r["amending_is_stating"]
+             else r["amending"], "dal": r["day"], "tipo": r["kind"],
+             "su": f"art. {r['article']}" if r["article"] else "l'atto"} for r in rows[-MAX_CHANGES:]]
+
+
 def _fact(collection, urn: str, act_label: str, tok: str, version: dict, chunk: dict,
-          note: str) -> dict:
+          note: str, changes: list[dict] | None = None) -> dict:
+    fields = {"testo": _capped(str(chunk.get("text") or "")),
+              "in vigore dal": _day(version["valid_from"]),
+              "fino al": _day(version["valid_to"]) or "oggi",
+              "versione": version["uid"], "chunk": chunk.get("chunk_id")}
+    if changes:
+        fields["modificato da"] = changes
     return {"entity_id": f"{urn}~art{tok.replace('-', '')}", "kind": "articolo",
             "source_id": collection.name,
             "label": f"{act_label} — art. {tok} ({note})",
-            "fields": {"testo": _capped(str(chunk.get("text") or "")),
-                       "in vigore dal": _day(version["valid_from"]),
-                       "fino al": _day(version["valid_to"]) or "oggi",
-                       "versione": version["uid"], "chunk": chunk.get("chunk_id")},
-            "via": None}
+            "fields": fields, "via": None}
 
 
 def _capped(text: str) -> str:
@@ -179,16 +198,17 @@ def pin(query: str, collections: Iterable, facts: Iterable = (), *,
                                             (v["uid"],)).fetchone()
                         act_label = (title[0] if title and title[0] else urn).split(" — ")[0]
                         ch = _article(collection, v["native_id"], tok)
+                        changes = _changes(con, work, tok)
                         if ch is not None:
                             note = "testo vigente" if as_of is None else f"testo al {_day(as_of)}"
-                            out.append(_fact(collection, urn, act_label, tok, v, ch, note))
+                            out.append(_fact(collection, urn, act_label, tok, v, ch, note, changes))
                         if ch is None or repealed(str(ch.get("text") or "")):
                             for older in reversed([x for x in versions
                                                    if x["valid_from"] < v["valid_from"]]):
                                 och = _article(collection, older["native_id"], tok)
                                 if och is not None and not repealed(str(och.get("text") or "")):
                                     out.append(_fact(collection, urn, act_label, tok, older, och,
-                                                     "ultimo testo in vigore"))
+                                                     "ultimo testo in vigore", changes))
                                     break
                         if len(out) >= MAX_ARTICLES:
                             return out[:MAX_ARTICLES]

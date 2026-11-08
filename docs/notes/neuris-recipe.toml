@@ -119,3 +119,30 @@ shards = "0.05"
 # the expression's point in time, 50 expressions a part) and the profile (the
 # ELI implementation and the validity axis, one record per expression) are
 # the plugin's defaults (app/plugins/neuris/source.py).
+
+# THE SHARED LEGAL LAYER, byte-identical in the three legal recipes (legi,
+# neuris, eurlex) — the chunker is inside space_id. `legal_article`
+# (app/chunking_legal.py; docs/notes/legal-chunking-retrieval.md, operator
+# 2026-11-08: no truncation, the four systems' own numbering; pieces 1 and 2
+# "by design"): one chunk per article, a longer one split at its paragraphs,
+# points, sentences, then token windows; the act's title and the article's
+# place as a header on every piece; one outline chunk per record. The window
+# is counted in Nemotron-3-Embed-1B's own tokens (its tokenizer.json at
+# c0c9fea9, 17,077,678 bytes, sha256 below; München 2026-11-08), placed in
+# TOKENIZERS_DIR as <hex>.json: 8,191 (ctx) less "passage: " and a margin of
+# 16 for the join and the special tokens.
+[[layers]]
+rule = "default"
+
+[layers.chunker]
+id = "legal_article"
+version = 1
+
+[layers.chunker.params]
+tokenizer = "sha256:797410dfb649a5b9ba92bc4fef7dbf4022d00e73de6867c4ac199a8846439421"
+max_tokens = 8175
+header = true
+outline = true
+
+[layers.input]
+form = "text"

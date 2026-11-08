@@ -61,6 +61,7 @@ has no end-of-validity key at all.
 """
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from datetime import date
 from typing import Any, Iterable
@@ -171,7 +172,114 @@ def of_doc(doc, v: Validity, plugin=None) -> dict[str, Any] | None:
                 out["closes"].append((str(key), day_int(str(day))))
             except ValueError:
                 continue       # a day the origin wrote unreadably closes nothing
+    if plugin is not None:
+        out["amends"] = amendments_of_doc(doc, plugin)
     return out
+
+
+# ---- what changed what (piece 3, operator 2026-11-08) -------------------------
+#
+# SAT-Graph RAG (de Martim 2025) makes the amending ACTION a first-class node:
+# "what changed art. X, when, by which act" is answered by traversal, never by
+# similarity. Here it is one derived table, `validity_amendments`, filled from
+# what each version states — ONE mechanism for every legal plugin:
+#   * by default from its `relations()` edges: `eli:amends` / `eli:repeals`
+#     (this version changes the edge's target) and `eli:amended_by` /
+#     `eli:repealed_by` (the target changed this version's own work);
+#   * where the plugin knows more, its optional `amendments(doc)` hook: the
+#     article inside the target and the day it applies (Normattiva's
+#     modifications name both).
+# THE STANDARD, NOT ADOPTED WHOLE: the ELI ontology's `eli:amends` /
+# `eli:amended_by` and Akoma Ntoso's `activeModifications` are what each
+# statement is read from; a triple store (SPARQL over ELI) would answer the
+# same questions and is a second database for one table.
+
+ACTIVE = {"eli:amends": "amends", "eli:repeals": "repeals"}
+PASSIVE = {"eli:amended_by": "amended_by", "eli:repealed_by": "repealed_by"}
+
+
+@dataclass(frozen=True)
+class Amendment:
+    """One amendment a version states. Active (`amending` empty): this
+    version changes `target`. Passive: `amending` changed `target`, this
+    version's own work."""
+    target: str
+    kind: str
+    article: str = ""
+    amending: str = ""
+    day: str | None = None
+
+
+_ARTICLE_WORD = re.compile(r"^(?:art(?:icolo|icle|ikel|\.)?|§+|para(?:graph)?)\s*", re.I)
+
+
+def article_token(text: str | None) -> str:
+    """One spelling of an article across the four systems, for matching a
+    citation with a statement: lower case, the word for "article" and the
+    spaces gone — "Art. 5-bis" → "5bis", "art5" → "5", "§ 823" → "823",
+    "L. 121-1" → "l121-1", "Article 5" → "5"."""
+    t = _ARTICLE_WORD.sub("", str(text or "").strip())
+    t = re.sub(r"[\s._]+", "", t).lower()
+    return re.sub(r"(?<=\d)-(?=[a-z])", "", t)
+
+
+def amendments_of_doc(doc, plugin) -> list[tuple]:
+    """`(target, article, amending, day int|None, kind)` for each amendment
+    the document states: the plugin's hook where it has one, else its
+    edges. Deterministic, sorted, each once."""
+    hook = getattr(plugin, "amendments", None)
+    found: list[Amendment] = []
+    if hook is not None:
+        found = list(hook(doc))
+    else:
+        rel = getattr(plugin, "relations", None)
+        own = next(iter(sorted(doc.keys or [])), "")
+        for e in (rel(doc) if rel is not None else ()):
+            t = str(getattr(e, "type", "") or "")
+            if t in ACTIVE:
+                found.append(Amendment(target=str(e.to), kind=ACTIVE[t]))
+            elif t in PASSIVE and own:
+                found.append(Amendment(target=own, kind=PASSIVE[t], amending=str(e.to)))
+    out = set()
+    for a in found:
+        day = None
+        if a.day:
+            try:
+                day = day_int(str(a.day))
+            except ValueError:
+                day = None
+        out.add((str(a.target), article_token(a.article), str(a.amending or ""), day, str(a.kind)))
+    return sorted(out, key=lambda r: (r[0], r[1], r[2], r[3] or 0, r[4]))
+
+
+def _record_amendments(con, by_uid: str, rows) -> None:
+    con.execute("DELETE FROM validity_amendments WHERE stated_by=?", (by_uid,))
+    con.executemany("INSERT OR IGNORE INTO validity_amendments(stated_by, target, article, amending, day, kind) "
+                    "VALUES(?,?,?,?,?,?)", [(by_uid, *r) for r in rows])
+
+
+def amendments_of(con, keys: Iterable[str], article: str | None = None, *, limit: int = 200) -> list[dict]:
+    """What changed the work keyed by any of `keys` (its canonical ids) —
+    the article named by `article` and the whole act, or every statement
+    about the work when `article` is None — each with the version that
+    states it, the amending act (its key, or the stating version itself),
+    the day and the kind; in day order. Indexed (idx_validity_amendments_target)."""
+    ks = sorted({str(k) for k in keys if k})
+    if not ks:
+        return []
+    marks = ",".join("?" for _ in ks)
+    sql = (f"SELECT a.stated_by, a.target, a.article, a.amending, a.day, a.kind, d.title "
+           f"FROM validity_amendments a LEFT JOIN documents d ON d.uid = a.stated_by "
+           f"WHERE a.target IN ({marks})")
+    params: list = list(ks)
+    if article is not None:
+        sql += " AND a.article IN (?, '')"
+        params.append(article_token(article))
+    sql += " ORDER BY COALESCE(a.day, 0), a.stated_by LIMIT ?"
+    params.append(int(limit))
+    return [{"stated_by": r[0], "target": r[1], "article": r[2], "amending": r[3] or r[0],
+             "amending_is_stating": not r[3], "day": day_text(r[4]), "kind": r[5], "stating_title": r[6]}
+            for r in con.execute(sql, params)]
 
 
 # ---- the manifest's version table -------------------------------------------
@@ -195,6 +303,8 @@ def record(con, uid: str, native_id: int, meta: dict[str, Any]) -> list[str]:
     con.executemany("INSERT OR IGNORE INTO validity_works(key, work) VALUES(?,?)",
                     [(str(k), work) for k in meta.get("keys") or []])
     touched = _record_closures(con, uid, meta.get("closes") or [])
+    if "amends" in meta:
+        _record_amendments(con, uid, meta.get("amends") or [])
     moved = recompute(con, work, except_uid=uid)
     for other in sorted(touched - {work}):
         moved += recompute(con, other)

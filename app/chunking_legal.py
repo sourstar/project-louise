@@ -23,11 +23,25 @@ The studies it follows (the note gives the numbers and the citations):
       4. last, for a single sentence still past the window, consecutive
          token windows of the pinned tokenizer — the text continues in the
          next chunk, it is never cut off;
-  * `header` (a parameter, inside `space_id`): the section's label — the
-    act and the article, as the plugin writes it — repeated at the head of
-    every piece, the deterministic form of contextual chunk headers
-    (Anthropic, "Contextual Retrieval", 2024: −35 % retrieval failures;
-    Summary-Augmented Chunking, NLLP 2025). Counted inside the window.
+  * `header` (a parameter, inside `space_id`; operator 2026-11-08, piece 1
+    "by design"): the record's TITLE (the act) and the section's LABEL (its
+    place in the hierarchy and the article), "<title> › <label>", repeated
+    at the head of every piece and counted inside the window — the headings
+    G-DSR's graph fuses into each article (Louis et al., EACL 2023: BSARD
+    mAP 35.3 → 47.1 from the hierarchy's headings and neighbours) written
+    into the text the encoder reads, the deterministic form of contextual
+    chunk headers (Anthropic, "Contextual Retrieval", 2024: −35 % failures);
+  * `outline` (piece 2): one more chunk per record of two or more sections —
+    the title and every section's label in order, the act's own index — so
+    a question about a whole law reaches the act (Lima 2024's levels;
+    G-DSR's section nodes); token-bounded like any piece, its chapter
+    `outline`, after the articles so their sequence numbers stay put.
+
+The TITLE is the record's (09 §9.5), passed by every caller that cuts
+(`layers.chunks_for_document(..., title=)`, guarded by
+tests/test_chunking_legal.py): invariant 3's "cleaned text" is
+`[title, sections]`. A layer that asks for the header or the outline and is
+given no title is refused, never cut otherwise.
 
 The window is `max_tokens` tokens of the tokenizer the layer pins by the
 sha256 of its tokenizer.json (as `wikidata-text`, app/plugins/wikidata/
@@ -71,6 +85,23 @@ _ABBREVIATIONS = re.compile(
     r"(?:\b(?:art|artt|Art|Abs|Nr|n|nn|lett|co|comma|cod|c|cfr|Buchst|Satz|S|vgl|ggf|bzw|z\.B|"
     r"al|Al|para|paras|No|no|p|pp|ch|chap|Dir|Reg|Rn|Rdnr|Ziff|lit|ss|seq|etc|ca|ex|op|cit|"
     r"L|R|D|A|LO|Bd|Hrsg|St|Cass|Cost|gg|v|vs)\.|\b[A-Z]\.)$")
+
+
+#: Nemotron-3-Embed-1B-BF16's tokenizer.json at revision c0c9fea9 (17,077,678
+#: bytes; München, 2026-11-08), the encoder of the shared legal space
+NEMOTRON_TOKENIZER = "sha256:797410dfb649a5b9ba92bc4fef7dbf4022d00e73de6867c4ac199a8846439421"
+#: the space's ctx 8,191 (the model's context_size less one) less "passage: "
+#: and a margin of 16 for the join and the special tokens
+SHARED_MAX_TOKENS = 8175
+#: THE SHARED LEGAL LAYER (docs/notes/legal-chunking-retrieval.md; operator
+#: 2026-11-08, pieces 1 and 2 by design): the one definition the three legal
+#: plugins declare as their `default_layers` and their recipes state byte for
+#: byte (tests/test_chunking_legal.py) — the chunker is inside `space_id`
+SHARED_LAYER = {"rule": "default",
+                "chunker": {"id": NAME, "version": CHUNK_VERSION,
+                            "params": {"tokenizer": NEMOTRON_TOKENIZER, "max_tokens": SHARED_MAX_TOKENS,
+                                       "header": True, "outline": True}},
+                "input": {"form": "text"}}
 
 
 class LegalChunkerError(ValueError):
@@ -170,22 +201,46 @@ def split(tok: Any, text: str, budget: int, level: int = 0) -> list[str]:
     return out
 
 
-def check(params: Any) -> tuple[int, bool]:
+OUTLINE = "outline"
+
+
+def check(params: Any) -> tuple[int, bool, bool]:
     if not isinstance(params, dict):
         raise LegalChunkerError("params is a table")
     mt = params.get("max_tokens")
     if not isinstance(mt, int) or isinstance(mt, bool) or mt < 16:
         raise LegalChunkerError(f"max_tokens is an integer of at least 16, got {mt!r}")
-    header = params.get("header", False)
-    if not isinstance(header, bool):
-        raise LegalChunkerError(f"header is true or false, got {header!r}")
-    return mt, header
+    flags = []
+    for k in ("header", "outline"):
+        v = params.get(k, False)
+        if not isinstance(v, bool):
+            raise LegalChunkerError(f"{k} is true or false, got {v!r}")
+        flags.append(v)
+    unknown = sorted(set(params) - {"tokenizer", "max_tokens", "header", "outline"})
+    if unknown:
+        raise LegalChunkerError(f"unknown params {unknown}: they would enter space_id and cut nothing")
+    return mt, flags[0], flags[1]
+
+
+def header_of(title: str, label: str) -> str:
+    """"<title> › <label>", either alone where the other is empty."""
+    return " › ".join(x for x in ((title or "").strip(), (label or "").strip()) if x)
+
+
+def _budget(tok: Any, head: str, max_tokens: int, uid: str) -> int:
+    budget = max_tokens - (_count(tok, head) if head else 0)
+    if budget < 32:
+        raise LegalChunkerError(f"{uid}: the header {head.strip()!r} leaves {budget} tokens of {max_tokens}")
+    return budget
 
 
 def chunk_legal_article(uid: str, native_id, sections: Sequence[tuple[str, str]],
-                        version=None, params=None) -> Iterator[dict]:
+                        version=None, params=None, *, title: str | None = None) -> Iterator[dict]:
     from app.chunking import _mk
-    max_tokens, header = check(params or {})
+    max_tokens, header, outline = check(params or {})
+    if (header or outline) and title is None:
+        raise LegalChunkerError(f"{uid}: this layer writes the record's title into its chunks "
+                                f"(header/outline) and the caller passed none")
     tok = _tokenizer(params or {})
     version = CHUNK_VERSION if version is None else version
     seq = 0
@@ -193,10 +248,14 @@ def chunk_legal_article(uid: str, native_id, sections: Sequence[tuple[str, str]]
         text = (body or "").strip()
         if not text:
             continue
-        head = f"{label}\n" if header and label else ""
-        budget = max_tokens - (_count(tok, head) if head else 0)
-        if budget < 32:
-            raise LegalChunkerError(f"{uid}: the header {label!r} leaves {budget} tokens of {max_tokens}")
-        for piece in split(tok, text, budget):
+        head = header_of(title or "", label) if header else ""
+        head = f"{head}\n" if head else ""
+        for piece in split(tok, text, _budget(tok, head, max_tokens, uid)):
             yield _mk(uid, native_id, seq, label or "", head + piece, version)
+            seq += 1
+    labels = list(dict.fromkeys(l.strip() for l, _b in sections if (l or "").strip()))
+    if outline and len(labels) >= 2:
+        head = f"{title.strip()}\n" if (title or "").strip() else ""
+        for piece in split(tok, "\n".join(labels), _budget(tok, head, max_tokens, uid)):
+            yield _mk(uid, native_id, seq, OUTLINE, head + piece, version)
             seq += 1

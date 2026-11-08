@@ -169,7 +169,8 @@ def _seq_indices(collection, record: dict[str, Any], sections) -> dict[int, list
     uid = str(record["uid"])
     row = {"uid": uid, "native_id": str(record.get("native_id") or uid.split(":", 1)[1]),
            "lang": record.get("lang")}
-    chunks = sorted(layers.chunks_for_document(collection, row, sections), key=lambda c: c["seq"])
+    chunks = sorted(layers.chunks_for_document(collection, row, sections, title=record.get("title")),
+                    key=lambda c: c["seq"])
     out: dict[int, list[int]] = {}
     for c, indices in zip(chunks, placed([c["text"] for c in chunks])):
         keep = []

@@ -188,9 +188,9 @@ def _local_cut(collection, row) -> dict[str, dict]:
     since no stored row keeps them and the record gives them back."""
     from .. import layers as layers_mod
     plugin = collection.plugin_instance()
-    chapters = plugin_io.sections(plugin, row)
+    title, chapters = plugin_io.title_and_sections(plugin, row, collection)
     return {c["id"]: c
-            for c in layers_mod.chunks_for_document(collection, row, chapters)}
+            for c in layers_mod.chunks_for_document(collection, row, chapters, title=title)}
 
 
 def _document_rows(con, uids) -> dict[str, dict]:

@@ -1081,8 +1081,8 @@ def _resign_proof(coll, con, *, seed: str, n: int) -> dict[str, Any]:
         if not have:
             without += 1
             continue
-        cut = {c["id"]: c["text"] for c in layers.chunks_for_document(
-            coll, row, plugin_io.sections(plugin, row))}
+        title, sections = plugin_io.title_and_sections(plugin, row, coll)
+        cut = {c["id"]: c["text"] for c in layers.chunks_for_document(coll, row, sections, title=title)}
         compared += 1
         chunks += len(cut)
         if cut != have:

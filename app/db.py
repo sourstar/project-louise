@@ -275,6 +275,24 @@ CREATE TABLE IF NOT EXISTS validity_closures (
   PRIMARY KEY (key, by_uid)
 );
 CREATE INDEX IF NOT EXISTS idx_validity_closures_by ON validity_closures(by_uid);
+-- what changed what (operator, 2026-11-08, piece 3; SAT-Graph RAG's amending
+-- actions, de Martim 2025): each amendment a version STATES — actively (this
+-- version amends `target`, `amending` = '') or passively (this version says
+-- `amending` changed it) — with the article inside `target` where the origin
+-- names one ('' for the whole), the day it applies from where stated, and the
+-- origin's own kind (substitution, repeal, insertion, MODIFICATION, …).
+-- Facts by key, never a ranking (invariant 4). Node-local and derived, like
+-- `validity`; rewritten per stating uid (delete-then-insert, invariant 2).
+CREATE TABLE IF NOT EXISTS validity_amendments (
+  stated_by TEXT NOT NULL,
+  target TEXT NOT NULL,
+  article TEXT NOT NULL DEFAULT '',
+  amending TEXT NOT NULL DEFAULT '',
+  day INTEGER,
+  kind TEXT NOT NULL,
+  PRIMARY KEY (stated_by, target, article, amending, kind)
+);
+CREATE INDEX IF NOT EXISTS idx_validity_amendments_target ON validity_amendments(target, article);
 -- a Work's canonical ids, so a closure finds the chain it ends
 CREATE TABLE IF NOT EXISTS validity_works (
   key TEXT NOT NULL,

@@ -285,10 +285,13 @@ def test_an_article_carries_its_partition(corpus):
 
 def test_one_chunk_per_section_with_the_shared_space_s_chunker(corpus):
     doc = _doc(corpus, ACT)
-    assert SOURCE.chunking_profile == "akn_article"
-    assert chunking.chunker_name(SOURCE.chunking_profile, Mutability.MUTABLE) == chunking.AKN_ARTICLE
-    chunks = list(chunking.chunk_akn_article(doc.uid, 1, doc.sections))
+    from app import chunking_legal
+    assert SOURCE.chunking_profile == "legal_article"
+    assert chunking.chunker_name(SOURCE.chunking_profile, Mutability.MUTABLE) == chunking.LEGAL_ARTICLE
+    chunks = list(chunking_legal.chunk_legal_article(doc.uid, 1, doc.sections, params=chunking_legal.SHARED_LAYER[
+        "chunker"]["params"], title=doc.title))
     assert len(chunks) >= len([b for _, b in doc.sections if b.strip()])
+    assert chunks[-1]["chapter"] == chunking_legal.OUTLINE
 
 
 # ---- slices ----------------------------------------------------------------------------------
@@ -398,7 +401,8 @@ def test_registered_with_its_declarations():
     assert s.default_profile["eli"]["jurisdiction"] == "EU"
     from app.hold import template
     assert template.default_slicing(s)["keys"] == ["lang", "type", "year"]
-    assert template.default_layers(s)[0].chunker.id == "akn_article"
+    from app import chunking_legal
+    assert template.default_layers(s)[0].to_dict() == chunking_legal.SHARED_LAYER
 
 
 def test_origin_coverage(corpus):
@@ -442,4 +446,5 @@ def test_worker_stages_run_end_to_end(tmp_path, corpus, isolated_config):
     row = con.execute("SELECT * FROM documents WHERE uid=?", (uid,)).fetchone()
     assert row["rdf_done"] == 1 and row["error"] is None
     chunks = worker._load_chunks(row, collection)
-    assert len(chunks) >= 59 and chunks[0]["text"].startswith("(1) Council Regulation (EC) No 1225/2009")
+    assert len(chunks) >= 59 and chunks[0]["text"].startswith(row["title"])
+    assert "(1) Council Regulation (EC) No 1225/2009" in chunks[0]["text"], "the header, then the recital"

@@ -81,7 +81,8 @@ def record_chunks(codex, rec: dict) -> int:
 def record_cut(codex, rec: dict) -> list[dict]:
     from app import layers as layers_mod
     row = {"uid": rec["uid"], "native_id": rec.get("native_id", 0)}
-    return layers_mod.chunks_for_document(codex, row, [tuple(x) for x in rec.get("sections") or []])
+    return layers_mod.chunks_for_document(codex, row, [tuple(x) for x in rec.get("sections") or []],
+                                          title=rec.get("title"))
 
 
 def drift(con, records: list[dict], count: Callable[[dict], int]) -> dict:

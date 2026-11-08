@@ -498,7 +498,7 @@ def pair_candidates(collection, records: Iterable[dict]) -> Iterator[Candidate]:
         uid = rec["uid"]
         row = {"uid": uid, "native_id": rec.get("native_id", 0)}
         sections = [tuple(s) for s in rec.get("sections") or []]
-        for c in layers_mod.chunks_for_document(collection, row, sections):
+        for c in layers_mod.chunks_for_document(collection, row, sections, title=rec.get("title")):
             fields = c.get("fields")
             if fields is not None:
                 yield uid, str(fields[0]), str(fields[1])

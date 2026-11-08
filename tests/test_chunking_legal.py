@@ -24,9 +24,10 @@ def word_tokenizer():
     wd._tokenizers.pop(SHA, None)
 
 
-def _chunks(sections, max_tokens=64, header=False):
-    return list(cl.chunk_legal_article("legi:1", 1, sections,
-                                       params={"tokenizer": SHA, "max_tokens": max_tokens, "header": header}))
+def _chunks(sections, max_tokens=64, header=False, outline=False, title=None):
+    params = {"tokenizer": SHA, "max_tokens": max_tokens, "header": header, "outline": outline}
+    return list(cl.chunk_legal_article("legi:1", 1, sections, params=params,
+                                       title=title if title is not None else ("T" if header or outline else None)))
 
 
 def _words(text):
@@ -92,14 +93,65 @@ def test_a_paragraph_past_the_window_is_split_at_its_points_then_sentences_then_
         "never split after the abbreviation of a reference (Abs., Nr.)"
 
 
-def test_the_header_is_repeated_on_every_piece_and_counted_in_the_window():
+def test_the_header_is_the_title_and_the_label_on_every_piece_and_counted_in_the_window():
+    """Piece 1 (operator, 2026-11-08): "<title> › <label>" at the head of each
+    piece — G-DSR's headings in the text the encoder reads."""
     body = "\n".join(_para(f"{i}.", 25) for i in range(1, 6))
-    s = [("Codice civile — Art. 2043", body)]
-    chunks = _chunks(s, max_tokens=40, header=True)
+    s = [("Libro IV › Titolo IX › Art. 2043 — (Risarcimento per fatto illecito)", body)]
+    title = "REGIO DECRETO 16 marzo 1942, n. 262 — Codice civile"
+    chunks = _chunks(s, max_tokens=60, header=True, title=title)
+    head = f"{title} › {s[0][0]}\n"
     assert len(chunks) > 1
-    assert all(c["text"].startswith("Codice civile — Art. 2043\n") for c in chunks)
-    assert all(len(_words(c["text"])) <= 40 for c in chunks), "the header inside the window"
-    _assert_lossless(s, chunks, header=True)
+    assert all(c["text"].startswith(head) for c in chunks)
+    assert all(len(_words(c["text"])) <= 60 for c in chunks), "the header inside the window"
+    got = [w for c in chunks for w in _words(c["text"][len(head):])]
+    assert got == _words(body), "every word of the article, once, in order"
+
+
+def test_the_outline_is_one_more_chunk_with_the_title_and_every_label():
+    """Piece 2: the act's own index, after its articles, token-bounded."""
+    s = [("Capo I › Art. 1", "uno"), ("Capo I › Art. 2", "due"), ("Capo II › Art. 3", "tre"),
+         ("Allegato A", "")]
+    chunks = _chunks(s, outline=True, title="Legge 7 agosto 1990, n. 241")
+    *articles, out = chunks
+    assert [c["chapter"] for c in articles] == ["Capo I › Art. 1", "Capo I › Art. 2", "Capo II › Art. 3"]
+    assert out["chapter"] == cl.OUTLINE and out["seq"] == 3, "after the articles: their seqs stay put"
+    assert out["text"].split("\n") == ["Legge 7 agosto 1990, n. 241", "Capo I › Art. 1", "Capo I › Art. 2",
+                                         "Capo II › Art. 3", "Allegato A"], "an empty annex is still in the index"
+    long = [(f"Art. {i}", "x") for i in range(200)]
+    outs = [c for c in _chunks(long, max_tokens=40, outline=True, title="Codice") if c["chapter"] == cl.OUTLINE]
+    assert len(outs) > 1 and all(c["text"].startswith("Codice\n") for c in outs)
+    assert all(len(_words(c["text"])) <= 40 for c in outs)
+    assert [c for c in _chunks([("Art. 1", "solo")], outline=True) if c["chapter"] == cl.OUTLINE] == [], \
+        "a record of one section (a LEGI article) has no outline of its own"
+
+
+def test_a_layer_writing_the_title_refuses_a_caller_that_passed_none():
+    with pytest.raises(cl.LegalChunkerError, match="passed none"):
+        list(cl.chunk_legal_article("legi:1", 1, [("Art. 1", "x")],
+                                    params={"tokenizer": SHA, "max_tokens": 64, "header": True}))
+    assert len(list(cl.chunk_legal_article("legi:1", 1, [("Art. 1", "x")],
+                                           params={"tokenizer": SHA, "max_tokens": 64}))) == 1, \
+        "a layer that writes no title needs none"
+
+
+def test_every_caller_that_cuts_passes_the_record_s_title():
+    """Invariant 3: the cleaned text is [title, sections]; a caller that did
+    not pass the title would cut a legal_article layer otherwise (or not at
+    all) — so every call of chunks_for_document names `title=`."""
+    import ast
+    from pathlib import Path
+    root = Path(__file__).resolve().parents[1]
+    missing = []
+    for p in [*root.joinpath("app").rglob("*.py"), *root.joinpath("tools").rglob("*.py")]:
+        tree = ast.parse(p.read_text(encoding="utf-8"))
+        for n in ast.walk(tree):
+            if isinstance(n, ast.Call):
+                f = n.func
+                name = f.attr if isinstance(f, ast.Attribute) else getattr(f, "id", None)
+                if name == "chunks_for_document" and not any(k.arg == "title" for k in n.keywords):
+                    missing.append(f"{p.relative_to(root)}:{n.lineno}")
+    assert not missing, f"cut without the record's title: {missing}"
 
 
 def test_sections_run_one_sequence_and_an_empty_section_gives_none():
@@ -118,7 +170,9 @@ def test_the_layer_names_its_tokenizer_and_a_usable_window():
     layers.check_params({"tokenizer": SHA, "max_tokens": 8100, "header": True},
                         chunker=chunking.LEGAL_ARTICLE, where="layer 0")
     for bad in ({"max_tokens": 8100}, {"tokenizer": "nope", "max_tokens": 8100},
-                {"tokenizer": SHA, "max_tokens": 8}, {"tokenizer": SHA, "max_tokens": 8100, "header": "yes"}):
+                {"tokenizer": SHA, "max_tokens": 8}, {"tokenizer": SHA, "max_tokens": 8100, "header": "yes"},
+                {"tokenizer": SHA, "max_tokens": 8100, "outline": 1},
+                {"tokenizer": SHA, "max_tokens": 8100, "overlap": 10}):
         with pytest.raises(layers.LayerError):
             layers.check_params(bad, chunker=chunking.LEGAL_ARTICLE, where="layer 0")
 

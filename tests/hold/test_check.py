@@ -152,8 +152,8 @@ def test_a_chunker_that_moves_boundaries_without_changing_the_count_is_CAUGHT(
     from app import layers as layers_mod
     real = layers_mod.chunks_for_document
 
-    def shifted(collection, row, sections):
-        out = real(collection, row, sections)
+    def shifted(collection, row, sections, title=None):     # the record's title: chunks_for_document's
+        out = real(collection, row, sections, title=title)
         # same ids, same count, one character of text moved
         return [dict(c, text=(c["text"][1:] + c["text"][:1])) for c in out]
 

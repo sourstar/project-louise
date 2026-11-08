@@ -396,15 +396,14 @@ def _one(kind: str, collection, row: dict):
         # write beside its vector (embeddings.SOURCE_COLUMN)
         from . import record_source
         pair = layers.has_pair_layer(collection)
-        sections, source = record_source.sections_and_source(
-            collection, row, lambda: record_source.parsed_with_source(plugin, row, pair=pair))
-        return layers.with_source(layers.chunks_for_document(collection, row, sections), source)
+        title, sections, source = record_source.title_sections_and_source(collection, row, plugin, pair=pair)
+        return layers.with_source(layers.chunks_for_document(collection, row, sections, title=title), source)
     if kind == "chunks+names":
         # one parse for both: the chunks the text index cuts, and the names a
         # record is found by (fts.index_names_of; wikidata)
         from . import fts
         doc = plugin_io.canonical_doc(plugin, row)
-        return {"chunks": layers.chunks_for_document(collection, row, doc.sections),
+        return {"chunks": layers.chunks_for_document(collection, row, doc.sections, title=doc.title),
                 "names": fts.index_names_of(collection, doc.extra)}
     if kind in ("fts", "fts+names"):
         # the text-index stage's whole per-document work: its chunks, its
@@ -415,12 +414,13 @@ def _one(kind: str, collection, row: dict):
         if kind == "fts+names":
             from . import fts
             doc = plugin_io.canonical_doc(plugin, row)
-            chunks = layers.chunks_for_document(collection, row, doc.sections)
+            chunks = layers.chunks_for_document(collection, row, doc.sections, title=doc.title)
             names = fts.index_names_of(collection, doc.extra)
         else:
             from . import record_source
-            chunks = layers.chunks_for_document(collection, row, record_source.sections(
-                collection, row, lambda: plugin_io.sections(plugin, row)))
+            title, sections, _source = record_source.title_sections_and_source(
+                collection, row, plugin, pair=False)
+            chunks = layers.chunks_for_document(collection, row, sections, title=title)
             names = None
         return {"chunks": chunks, "names": names,
                 "entities": entities.entity_ids_of(row.get("title"), [c["text"] for c in chunks],

@@ -2436,7 +2436,8 @@ def cmd_dev_mark_embedded(a) -> int:  # noqa: C901
             for r in records:
                 row = {"uid": r["uid"], "native_id": r.get("native_id", 0)}
                 sections = [tuple(x) for x in r.get("sections") or []]
-                wanted = [c["id"] for c in layers_mod.chunks_for_document(codex, row, sections)]
+                wanted = [c["id"] for c in layers_mod.chunks_for_document(codex, row, sections,
+                                                                          title=r.get("title"))]
                 if wanted and all(c in held[r["uid"]] for c in wanted):
                     complete.append(r["uid"])
             if not complete:
@@ -6005,7 +6006,7 @@ def cmd_records_show(a) -> int:
             "shard": shard_mod.shard_path(shard.slice, shard.n),
             "layer": {"index": i, **layer.as_manifest()},
             "record": record,
-            "chunks": layers_mod.chunks_for_document(codex, row, sections)})
+            "chunks": layers_mod.chunks_for_document(codex, row, sections, title=record.get("title"))})
     return 0
 
 

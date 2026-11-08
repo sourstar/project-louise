@@ -240,6 +240,14 @@ def layers_for(collection) -> tuple[Layer, ...]:
     if getattr(codex, "annotates", None) is not None:
         return ()       # an annotations collection cuts nothing (02 §2.10): no implicit layer
     name, version = chunking.chunker_version_for_collection(collection)
+    if name == chunking.LEGAL_ARTICLE:
+        # its window and tokenizer are params, so the implicit layer is the
+        # plugin's declared one, as `create` takes it (hold/template.py
+        # `default_layers`): the legal plugins' shared layer
+        # (app/chunking_legal.py). Only for this chunker: every other
+        # plugin's implicit layer is what it always was, byte for byte
+        from .hold import template
+        return tuple(_normalise(l) for l in template.default_layers(collection.plugin_instance()))
     return (Layer(chunker=name, version=version, rule="default"),)
 
 
@@ -437,12 +445,16 @@ def _chunker_of(layer: Layer):
     params = layer.params
     pair = layer.form == "pair"
 
-    def _chunk(uid, nid, sections):
+    takes_title = layer.chunker == chunking.LEGAL_ARTICLE
+
+    def _chunk(uid, nid, sections, title=None):
         # `fields` (the pair form's two segments) stay on a PAIR layer's
         # chunks only, so a chunk carries them exactly when its layer feeds
         # the encoder a pair (09 §9.3, input forms) — a text layer's chunks
         # are the dicts they always were
-        for c in fn(uid, nid, sections, version, params):
+        got = (fn(uid, nid, sections, version, params, title=title) if takes_title
+               else fn(uid, nid, sections, version, params))
+        for c in got:
             if not pair:
                 c.pop("fields", None)
             yield c
@@ -484,10 +496,26 @@ def chunk_input(chunk: dict) -> "dict | str":
     return chunk if chunk.get("fields") is not None else chunk["text"]
 
 
-def chunks_for_document(collection, row, sections) -> list[dict]:
+def wants_title(collection, row) -> bool:
+    """Does this document's layer write the record's title into its chunks
+    (a `legal_article` layer with a header or an outline)? Only then do the
+    callers that read sections fetch the title too — every other collection
+    cuts exactly as before, at exactly the cost it did."""
+    native_id = int(row["native_id"])
+    layer = layer_of(collection, native_id, row)
+    p = layer.params or {}
+    return layer.chunker == chunking.LEGAL_ARTICLE and bool(p.get("header") or p.get("outline"))
+
+
+def chunks_for_document(collection, row, sections, *, title: str | None = None) -> list[dict]:
+    """The document's chunks through its layer. `title` is the RECORD's
+    (09 §9.5): invariant 3's cleaned text is `[title, sections]`, and a
+    `legal_article` layer with a header or an outline writes it into its
+    chunks (app/chunking_legal.py). Every caller passes it
+    (tests/test_chunking_legal.py guards it); another chunker ignores it."""
     native_id = int(row["native_id"])
     return list(chunker_for_document(collection, native_id, row)(
-        row["uid"], native_id, sections))
+        row["uid"], native_id, sections, title=title))
 
 
 def with_source(chunks: list[dict], content_hash: str | None) -> list[dict]:

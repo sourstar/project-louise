@@ -164,7 +164,7 @@ def grouped(codex, records: Sequence[dict],
             raise ExportInterrupted("stopped between two documents; nothing written")
         sections = [tuple(s) for s in rec.get("sections") or []]
         row = {"uid": uid, "native_id": rec.get("native_id", 0)}
-        ids = [c["id"] for c in layers_mod.chunks_for_document(codex, row, sections)]
+        ids = [c["id"] for c in layers_mod.chunks_for_document(codex, row, sections, title=rec.get("title"))]
         per_uid[uid] = ids
         wanted.extend(ids)
 

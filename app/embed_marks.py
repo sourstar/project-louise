@@ -63,7 +63,7 @@ def complete_uids(codex, records: Sequence[dict],
         uid = rec["uid"]
         row = {"uid": uid, "native_id": rec.get("native_id", 0)}
         sections = [tuple(s) for s in rec.get("sections") or []]
-        per_uid[uid] = [c["id"] for c in layers_mod.chunks_for_document(codex, row, sections)]
+        per_uid[uid] = [c["id"] for c in layers_mod.chunks_for_document(codex, row, sections, title=rec.get("title"))]
     wanted = [i for ids in per_uid.values() for i in ids]
     held = vectors_for(wanted) if wanted else {}
     held = held or {}

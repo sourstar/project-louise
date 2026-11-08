@@ -436,9 +436,9 @@ WIKIDATA_TEXT = "wikidata-text"
 LEGAL_ARTICLE = "legal_article"
 
 
-def _chunk_legal_article(uid, native_id, sections, version=None, params=None):
+def _chunk_legal_article(uid, native_id, sections, version=None, params=None, *, title=None):
     from app import chunking_legal
-    return chunking_legal.chunk_legal_article(uid, native_id, sections, version, params)
+    return chunking_legal.chunk_legal_article(uid, native_id, sections, version, params, title=title)
 
 
 def _chunk_wikidata_text(uid, native_id, sections, version=None, params=None):

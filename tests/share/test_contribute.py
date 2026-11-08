@@ -558,9 +558,9 @@ def test_the_held_path_chunks_only_the_documents_it_holds_vectors_for_and_stops_
     chunked: list[str] = []
     real = layers_mod.chunks_for_document
 
-    def counted(codex_, row, sections):
+    def counted(codex_, row, sections, title=None):
         chunked.append(row["uid"])
-        return real(codex_, row, sections)
+        return real(codex_, row, sections, title=title)
     monkeypatch.setattr(layers_mod, "chunks_for_document", counted)
     heavy = rendezvous.Peer(PEER_KEY, 1e12)
     held_books = lambda ids: embeddings.books_with_vectors(ids, collection=local)   # noqa: E731
@@ -578,9 +578,9 @@ def test_the_held_path_chunks_only_the_documents_it_holds_vectors_for_and_stops_
     vb.build(codex, shards=[snapshot.shards[0]], records_for=lambda s: held_records,
              vectors_for=kw["vectors_for"], embed=kw["embed"], write=kw["write"], batch=2)
 
-    def stopping(codex_, row, sections):
+    def stopping(codex_, row, sections, title=None):
         stop.set()
-        return real(codex_, row, sections)
+        return real(codex_, row, sections, title=title)
     monkeypatch.setattr(layers_mod, "chunks_for_document", stopping)
     out = contribute.once(root, "gutenberg", codex, live=[rendezvous.Peer(OUR_KEY, 1000.0), heavy],
                           held_books=held_books, stop=stop, **kw)

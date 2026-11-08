@@ -82,7 +82,8 @@ def test_the_recipe_loads_through_the_real_loader_into_a_version_11_codex():
     assert sp.encoder.weights == "sha256:09596cedbdf2a0d164b37083794632be55dcb2aa2abcf02fb995dfdccbecbf2c"
     assert sp.calibration.set == "sha256:7d06a2f6a4a773da01a517cb30571cac421753df3e30b20fca4716e5441fbf0f"
     assert dry.plugin == "eurlex" and dry.license.cls == "green"
-    assert [layer.chunker.id for layer in dry.layers] == ["akn_article"]
+    from app import chunking_legal
+    assert [layer.to_dict() for layer in dry.layers] == [chunking_legal.SHARED_LAYER]
     assert dry.slicing["keys"] == ["lang", "type", "year"]
     assert dry.profile["validity"]["work"] == "extra.validity_work"
     assert dry.origin.jurisdiction == "EU" and dry.origin.unit == "file"

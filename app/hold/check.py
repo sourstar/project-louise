@@ -353,7 +353,7 @@ def _chunks_part(tree: str, codex, path: str, name: str, chunks: int,
         row = {"uid": r["uid"], "native_id": r.get("native_id", 0)}
         sections = [tuple(x) for x in r.get("sections") or []]
         pairs.extend((c["id"], c["text"]) for c in
-                     layers_mod.chunks_for_document(codex, row, sections))
+                     layers_mod.chunks_for_document(codex, row, sections, title=r.get("title")))
     if len(pairs) != chunks:
         failed.append(f"{name}:chunks={len(pairs)} not {chunks}")
     if rec.chunks_root(pairs) != chunks_root:

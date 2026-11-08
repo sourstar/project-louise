@@ -124,9 +124,17 @@ def test_each_kind_its_title_keys_and_sections(corpus):
     assert s.sections == [("TITRE_TA", "Paragraphe II : Frappe des médailles.")]
     assert [x["id"] for x in s.extra["structure_ta"]][:2] == ["LEGIARTI000006398192", "LEGIARTI000006398191"]
     struct = next(d for d in _all(corpus) if "struct" in d.extra)
-    assert struct.sections == [] and struct.keys == [f"legi:{CMMI}"], "a structure: no chunk"
-    assert chunking.chunker_name(SOURCE.chunking_profile, SOURCE.mutability) == "akn_article"
-    assert SOURCE.chunking_profile == "akn_article" and SOURCE.mutability is Mutability.MUTABLE
+    # parser 2: the structure as bodiless sections — no article chunk, the outline's labels
+    assert struct.sections == [("Chapitre I : Monnaies et médailles", ""), ("Chapitre II : Billets de banque (abrogé)", ""),
+                               ("Chapitre III : Imitation de billets de banque et de monnaies. (abrogé)", ""),
+                               ("Chapitre IV : Dispositions communes.", "")]
+    assert struct.keys == [f"legi:{CMMI}"]
+    from app import chunking_legal
+    [outline] = chunking_legal.chunk_legal_article(struct.uid, 1, struct.sections, params=chunking_legal.SHARED_LAYER[
+        "chunker"]["params"], title=struct.title)
+    assert outline["chapter"] == chunking_legal.OUTLINE and "Chapitre IV : Dispositions communes." in outline["text"]
+    assert chunking.chunker_name(SOURCE.chunking_profile, SOURCE.mutability) == "legal_article"
+    assert SOURCE.chunking_profile == "legal_article" and SOURCE.mutability is Mutability.MUTABLE
 
 
 def test_an_element_the_dtd_does_not_name_is_kept_as_other():
@@ -188,7 +196,9 @@ def test_modifie_mort_ne_is_held_and_never_a_version_nor_searchable():
     assert doc.extra["in_force"] is False
     assert "modifie-mort-ne" in {i.code for i in doc.issues}
     assert validity.of_doc(doc, validity.from_plugin(SOURCE), SOURCE) is None
-    assert list(chunking.chunk_akn_article(doc.uid, 1, doc.sections)) == []
+    from app import chunking_legal
+    assert list(chunking_legal.chunk_legal_article(doc.uid, 1, doc.sections, params=chunking_legal.SHARED_LAYER[
+        "chunker"]["params"], title=doc.title)) == [], "never searchable"
     assert list(SOURCE.closures(doc)) == []
 
 

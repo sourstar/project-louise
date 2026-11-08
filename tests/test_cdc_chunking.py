@@ -136,10 +136,14 @@ def test_only_wikipedia_is_mutable_today():
     # dated dump is immutable, the collection pins one) — and it declares its
     # own chunker, wikidata-text, so it does NOT get CDC either
     assert mutable == {"wikipedia", "normattiva", "wikidata", "legi", "neuris", "eurlex"}
-    for name in ("normattiva", "legi", "neuris", "eurlex"):
+    # normattiva akn_article; legi, neuris and eurlex the shared legal
+    # layer's legal_article (2026-11-08): neither gets CDC
+    assert chunking.chunker_name(collections_mod.PLUGIN_REGISTRY["normattiva"].chunking_profile,
+                                 Mutability.MUTABLE) == chunking.AKN_ARTICLE
+    for name in ("legi", "neuris", "eurlex"):
         assert chunking.chunker_name(
             collections_mod.PLUGIN_REGISTRY[name].chunking_profile,
-            Mutability.MUTABLE) == chunking.AKN_ARTICLE
+            Mutability.MUTABLE) == chunking.LEGAL_ARTICLE
 
 
 # ---------------- the scoping that makes it affordable ----------------
