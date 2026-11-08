@@ -135,10 +135,13 @@ def test_only_wikipedia_is_mutable_today():
     # wikidata (2026-10-19): an entity is revised in place between dumps (a
     # dated dump is immutable, the collection pins one) — and it declares its
     # own chunker, wikidata-text, so it does NOT get CDC either
-    assert mutable == {"wikipedia", "normattiva", "wikidata"}
-    assert chunking.chunker_name(
-        collections_mod.PLUGIN_REGISTRY["normattiva"].chunking_profile,
-        Mutability.MUTABLE) == chunking.AKN_ARTICLE
+    # neuris (2026-11-08): a manifestation is regenerated and an expression's
+    # metadata revised in place — akn_article, the shared legal space's
+    assert mutable == {"wikipedia", "normattiva", "wikidata", "neuris"}
+    for legal in ("normattiva", "neuris"):
+        assert chunking.chunker_name(
+            collections_mod.PLUGIN_REGISTRY[legal].chunking_profile,
+            Mutability.MUTABLE) == chunking.AKN_ARTICLE
 
 
 # ---------------- the scoping that makes it affordable ----------------

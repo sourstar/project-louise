@@ -7,7 +7,7 @@ No I/O here — pure data, mirroring app/plugins/base.py's own rule.
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import Callable, Literal
+from typing import Callable, Iterable, Literal
 
 from ..plugins.base import LicenseClass
 
@@ -54,6 +54,17 @@ class Endpoint:
     # specs name the files a profile needs explicitly; rsync/ftp transports
     # ignore this and list dynamically instead.
     static_files: tuple[RemoteFile, ...] = ()
+    # An origin that LISTS ITSELF through an API of its own (NeuRIS's
+    # paginated `/v1/legislation`, docs/notes/legal-fr-de-eu.md §7.1): a
+    # callable `listing(endpoint, spec) -> Iterable[RemoteFile]` the HTTPS
+    # transport's list_files() calls instead of returning `static_files`.
+    # It is held to the LISTING CONTRACT below (complete or raising, never
+    # truncated) and draws every page from the budget (invariant 5). It may
+    # carry `drain_reports() -> list[str]`: what the listing found worth
+    # saying and could not say itself (an expression the origin's changelog
+    # reports deleted), logged by the engine as events after the listing.
+    # None = the declared `static_files` (every other spec).
+    listing: Callable[..., Iterable[RemoteFile]] | None = None
 
 
 @dataclass(frozen=True)

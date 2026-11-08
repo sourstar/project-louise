@@ -364,6 +364,15 @@ def normattiva_slice(doc: CanonicalDoc, native_id: int) -> str:
             f"/vig={year if year.isdigit() else 'unknown'}")
 
 
+def neuris_slice(doc: CanonicalDoc, native_id: int) -> str:
+    """legal-fr-de-eu.md §7 step 4 (Germany by year): the year of the
+    expression's point in time — the id's high digits (02 §2.2), so
+    `slice_hint` answers from the manifest row alone and agrees with this by
+    construction (plugins/neuris: the id sorts by the point in time)."""
+    year = str((doc.extra or {}).get("point_in_time") or "")[:4]
+    return f"year={year if year.isdigit() else 'unknown'}"
+
+
 SCHEMES: dict[str, SliceScheme] = {
     "pubmed": SliceScheme(
         keys=("year",), records_per_shard=30_000,
@@ -396,6 +405,11 @@ SCHEMES: dict[str, SliceScheme] = {
                   "type": {"field": "extra.member_dir", "rule": "the act type the origin files the member under"},
                   "vig": {"field": "extra.vigenza_from", "bin": "year"}},
         slice_of=normattiva_slice),
+    # one record per expression, parts of about 50, as Normattiva's
+    "neuris": SliceScheme(
+        keys=("year",), records_per_shard=50,
+        describe={"keys": ["year"], "year": {"field": "extra.point_in_time", "bin": "year"}},
+        slice_of=neuris_slice),
 }
 
 DEFAULT_SCHEME = SliceScheme(keys=(), records_per_shard=10_000,
@@ -436,6 +450,9 @@ def slice_hint(plugin_name: str, row, context: FamilyContext | None = None) -> s
             _, member = split_locator(row["path"])
             year = eli.id_day(int(row["native_id"])) // 10000
             return f"type={_normattiva_type(member.split('/', 1)[0])}/vig={year:04d}"
+        if plugin_name == "neuris":
+            from ..plugins import eli
+            return f"year={eli.id_day(int(row['native_id'])) // 10000:04d}"
         if plugin_name == "pubmed":
             from ..plugins.pubmed import pack as pubmed_pack
             from ..plugins.pubmed.source import split_locator

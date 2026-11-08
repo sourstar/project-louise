@@ -120,6 +120,11 @@ class HttpsTransport:
     supports_segments = True
 
     def list_files(self, endpoint: Endpoint, spec: AcquisitionSpec) -> Iterator[RemoteFile]:
+        """The declared files, or — an origin that lists itself through an
+        API of its own (`Endpoint.listing`, NeuRIS) — what its lister reads,
+        complete or raising (the listing contract, spec.AcquisitionSpec)."""
+        if endpoint.listing is not None:
+            return iter(endpoint.listing(endpoint, spec))
         return iter(endpoint.static_files)
 
     def fetch_segments(self, endpoint: Endpoint, remote: RemoteFile, dest: Path,
@@ -131,7 +136,15 @@ class HttpsTransport:
         HEAD, so the engine can adopt a copy already in place instead of
         fetching it again (engine._origin_says_complete). None when the
         origin will not say. It moves no body, so it draws nothing from the
-        budget."""
+        budget.
+
+        Never for an origin listed by its own API (`Endpoint.listing`): its
+        files are answers built on request (NeuRIS builds a manifestation's
+        zip on the fly), so a HEAD would cost the origin the build, and an
+        equal length says nothing of a JSON whose content changed — the
+        listing and the path are what say a held copy is current there."""
+        if endpoint.listing is not None:
+            return None
         headers = {"User-Agent": _USER_AGENT}
         if endpoint.auth_token_path is not None:
             headers["Authorization"] = f"Bearer {endpoint.auth_token_path.read_text().strip()}"
@@ -223,7 +236,9 @@ class HttpsTransport:
                             os.fsync(f.fileno())
                             budget.acquire_bytes(len(chunk))
         except httpx.HTTPError as e:
-            raise TransportError(f"{url}: {e}") from e
+            # the class named: a ReadTimeout or a RemoteProtocolError is the
+            # origin's episode, and engine.transient reads it by its name
+            raise TransportError(f"{url}: {type(e).__name__}: {e}") from e
         size = part.stat().st_size
         os.replace(part, dest)
         return size

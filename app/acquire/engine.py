@@ -460,6 +460,10 @@ _TRANSIENT = ("connection reset by peer", "connection unexpectedly closed",
               "read operation timed out", "readtimeout", "connecttimeout",
               "server disconnected", "remoteprotocolerror", "readerror",
               " 500 to ", " 502 to ", " 503 to ", " 504 to ",
+              # a whole-file GET the origin answered 5xx (httpx's own
+              # wording, transport_https.fetch_one): NeuRIS answers 503 past
+              # its 600 requests a minute (its rate-limiting guide)
+              "server error '5",
               # the rsync transport's own verdict on an exit 0 whose fork
               # kept the pipes and had to be killed (_raise_unless_clean):
               # not the file, and not known to be the mirror — a retry,
@@ -1191,6 +1195,13 @@ def _run_acquisition_claimed(con, collection, spec: AcquisitionSpec, profile: st
                              extras_selected=getattr(collection, "extras", ()),
                              stop=stop, priority=priority, until=until)
     _stop_check(stop, "after listing")
+    # what a lister found worth saying (`Endpoint.listing`'s drain_reports:
+    # an expression the origin's changelog reports deleted, never removed
+    # here) — said as events, with the collection's name
+    for endpoint in endpoints:
+        drain = getattr(endpoint.listing, "drain_reports", None)
+        for note in (drain() if drain is not None else ()):
+            db.log_event(con, "warn", "acquire", str(note)[:400])
     plan = _plan_from_files(con, collection, spec, files)
     # the per-file planning passes scale with the listing and are not
     # measured; a stop that arrived during them is honoured here, before
