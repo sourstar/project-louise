@@ -141,3 +141,58 @@ def test_what_case_j_does_not_make_is_refused_before_anything(pair, card, why, t
     with pytest.raises(CodexError):
         col.resolve(root, "sis")
     assert card["order"] == []
+
+
+def test_a_sister_who_cuts_otherwise_carries_her_records_and_the_worker_indexes_them(pair, card):
+    """2026-11-08: normattiva-nemo cuts with the legal space's layer, its
+    mother with akn_article (A1i relayered). Her manifest is carried with
+    every index mark emptied and no text index; her parts are BUILT from her
+    mother's record lines, none parsed, so her records are her mother's byte
+    for byte and her parts' chunks her own layer's (02 §2.7 amended
+    2026-11-08). Her mother keeps everything."""
+    from functools import partial
+    from app.hold import seed, workflow as wf
+    root, old, _ = pair
+    _vectors(root, old)
+    (root / "old" / "index").mkdir(parents=True, exist_ok=True)
+    (root / "old" / "index" / "words").write_text("the text index")
+    con = sqlite3.connect(root / "old" / "state" / "manifest.sqlite")
+    con.execute("UPDATE documents SET fts_done=1, fts_version=3, chunks=5, tokens=900")
+    con.commit()
+    n_old = con.execute("SELECT COUNT(*) FROM documents").fetchone()[0]
+    con.close()
+    space = {**SPACE, "encoder": {**SPACE["encoder"], "weights": "sha256:" + "be" * 32},
+             "dim": 1024, "query": {"encoder": None, "instruction": "query: "}}
+    layers = [{"rule": "default", "chunker": {"id": "fixed", "version": 1, "params": {"tokens": 3, "overlap": 0}},
+               "input": {"form": "text"}}]
+    other = col.create_from_recipe(root, "gutenberg", recipe(space=space, layers=layers, work={"tokens": 7_000_000}),
+                                   platform_image=PLATFORM, embed=partial(fake_embed, dim=1024),
+                                   name="bge", key=KEY, now=NOW)
+    card["weights"] = other.space.encoder.weights
+    assert _new(root) == 0
+    _, sister = col.resolve(root, "sis")
+    assert sister.space_id == other.space_id and [l.chunker.id for l in sister.layers] == ["fixed"]
+    src, mine = seed.latest_snapshot(root, "old"), seed.latest_snapshot(root, "sis")
+    assert src.records == mine.records, "every record of her mother's, none parsed"
+    assert sorted(s.chunks_root for s in src.shards) != sorted(s.chunks_root for s in mine.shards), \
+        "her chunks: her own layer's"
+
+    assert sorted((s.slice, s.n, s.records_root) for s in src.shards) == \
+        sorted((s.slice, s.n, s.records_root) for s in mine.shards), \
+        "her records: her mother's, byte for byte (a line carries no layer, 09 §9.5)"
+    assert sum(s.chunks for s in src.shards) != sum(s.chunks for s in mine.shards), \
+        "her layer cut them otherwise"
+    assert not (root / "sis" / "index" / "words").exists(), "the text index is NOT carried: other chunks"
+    assert (root / "old" / "index" / "words").read_text() == "the text index", "her mother keeps hers"
+    con = sqlite3.connect(root / "sis" / "state" / "manifest.sqlite")
+    assert con.execute("SELECT COUNT(*) FROM documents").fetchone()[0] == n_old
+    assert con.execute("SELECT COUNT(*) FROM documents WHERE fts_done<>0 OR fts_version<>0 OR "
+                       "entity_version<>0 OR chunks<>0 OR tokens<>0 OR embed_done>0").fetchone()[0] == 0, \
+        "every document indexed again by the worker, with her layer"
+    con.close()
+    assert not spaces.known_lance_rows(_local(root, "sis").lance_dir)
+    prog = json.loads(wf.progress_path("sis").read_text())
+    assert prog["steps"]["carry"]["result"]["recut"] is True
+    assert card["order"] == [("cpu-reference", "sis"), ("gate", "sis")]
+    card["order"].clear()
+    assert _new(root) == 0, "run again: the carry kept"

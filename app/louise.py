@@ -954,17 +954,23 @@ def _sister_new(a, say) -> int:
     # before version 5 names no `input`, and its form is text
     def cut(c) -> list:
         return [(l.chunker.to_dict(), l.rule, l.form) for l in c.layers]
-    if cut(mother) != cut(source) or source.cleaning_version != mother.cleaning_version:
-        raise CodexError(f"--sister-of {mother_name}: it cuts its records as {cut(mother)} (cleaning "
-                         f"{mother.cleaning_version}), {source_name}'s space as {cut(source)} (cleaning "
-                         f"{source.cleaning_version}): her chunks would not be the sister's, and nothing "
-                         f"could be carried")
+    if source.cleaning_version != mother.cleaning_version:
+        raise CodexError(f"--sister-of {mother_name}: its cleaning is {mother.cleaning_version}, "
+                         f"{source_name}'s space's {source.cleaning_version}: a sister keeps her mother's "
+                         f"records, and another cleaning is other records")
+    # A SISTER WHO CUTS OTHERWISE (2026-11-08: normattiva-nemo in the legal
+    # space's `legal_article` layer, Normattiva's `akn_article`): her records
+    # are still her mother's — the parts carry — but her chunks are not, so
+    # the manifest and the text index, functions of the chunks, are NOT
+    # copied: the worker builds them from her records (record_source: a
+    # fresh record is read, never parsed; nothing fetched), cut by her layer
+    recut = cut(mother) != cut(source)
     _space_from_encoder(a, source_name)
     api = check_api(a.api)
     model = model_keys(a.encoder, embed_model=a.embed_model)[0]
     inputs = {"plugin": a.plugin, "name": a.name, "sister_of": mother.collection_id,
               "space_from": source_name, "space_id": source.space_id, "encoder": a.encoder, "api": api,
-              "embed_model": model, "cpu_model": a.cpu_model}
+              "embed_model": model, "cpu_model": a.cpu_model, "recut": recut}
     run = wf.Run(wf.case("J"), a.name, inputs, say=say, dry=bool(getattr(a, "dry_run", False)))
     sp = source.space
     stated = run_check.stated_run(collections_mod.EmbedRecipe(
@@ -977,7 +983,9 @@ def _sister_new(a, say) -> int:
         raise CodexError(f"--cpu-model {a.cpu_model} runs weights {stated.weights[:23]}…, the space's are "
                          f"{sp.encoder.weights[:23]}…: a twin is the same weights")
     run.at("resolve", f"a sister of {mother_name} ({mother.collection_id[:23]}…) in the space of "
-                      f"{source_name} ({source.space_id[:23]}…); {model} with its CPU twin {a.cpu_model}")
+                      f"{source_name} ({source.space_id[:23]}…); {model} with its CPU twin {a.cpu_model}"
+                      + ("; she cuts otherwise than her mother: her parts carry, her manifest and text "
+                         "index are cut again from them by the worker" if recut else ""))
 
     try:
         existing = col.resolve(root, a.name)
@@ -998,9 +1006,15 @@ def _sister_new(a, say) -> int:
         print(f"dry run: case J, a sister of {mother_name}: {a.name}; it stops before make, writes "
               f"nothing and takes no lock")
         print(f"  space_id    {source.space_id} ({source_name}'s)")
-        print(f"  to carry    {src['documents'] if src['documents'] is not None else '?'} documents' "
-              f"manifest and text index, no vector ({mother_name} keeps its "
-              f"{src['vectors'] if src['vectors'] is not None else '?'})")
+        if recut:
+            print(f"  to carry    the parts of {mother_name}'s latest snapshot (her records); her manifest and "
+                  f"text index are cut again from them by the worker with her own layer ({cut(source)}), "
+                  f"no parse, no fetch; no vector ({mother_name} keeps its "
+                  f"{src['vectors'] if src['vectors'] is not None else '?'})")
+        else:
+            print(f"  to carry    {src['documents'] if src['documents'] is not None else '?'} documents' "
+                  f"manifest and text index, no vector ({mother_name} keeps its "
+                  f"{src['vectors'] if src['vectors'] is not None else '?'})")
         print(f"  room        {recreate.human(need)} needed, {recreate.human(free)} free: "
               + ("enough" if free >= need else "SHORT, the carry refuses"))
         print(f"  locks       the carry takes {mother_name}'s and {a.name}'s write locks: "
@@ -1035,10 +1049,14 @@ def _sister_new(a, say) -> int:
 
     done = run.done("carry")
     if done is not None:
+        # a copied manifest is held to its count (a re-cut sister's too: her
+        # documents are her mother's, only their index marks were emptied)
         if recreate.counts(root, name)["documents"] != (done.get("counts") or {}).get("documents"):
             raise recreate.CopyMismatch(f"carry: {name} holds {recreate.counts(root, name)}, the carry "
                                         f"recorded {done.get('counts')}: something wrote to it since")
-        run.at("carry", f"kept from the earlier run: {done['counts']['documents']} documents")
+        run.at("carry", f"kept from the earlier run: {done['counts']['documents']} documents"
+                        + ("; her parts built from her mother's lines, the worker indexes them"
+                           if done.get("recut") else ""))
     else:
         locks = []
         try:
@@ -1053,31 +1071,89 @@ def _sister_new(a, say) -> int:
             run.at("carry", f"from {mother_name}: its parts, then its manifest and text index, none of "
                             f"its vectors")
             _whole_quota()
-            parts = recreate.seed_parts(root, mother_name, name, now=_utc_now(), log=say)
+            # her origin and licence ack first: a records build reads her
+            # corpus beside the lines and is gated on her ack (invariant 9)
             origin = recreate.share_origin(root, mother_name, name)
-            need, free = recreate.room(root, mother_name, name)
-            if free < need:
-                raise CodexError(recreate.no_room(mother_name, name, need, free))
-            out = carry_mod.carry(root, mother_name, name, copy=True, apply=True, sister=True, log=say)
-            counts = recreate.counts(root, name)
-            if counts["documents"] != recreate.counts(root, mother_name)["documents"]:
-                raise recreate.CopyMismatch(f"carry: {name} holds {counts['documents']} documents and "
-                                            f"{mother_name} {recreate.counts(root, mother_name)['documents']}")
-            a_idx = recreate.tree_digest(recreate._tree(root, mother_name, "index"))
-            b_idx = recreate.tree_digest(recreate._tree(root, name, "index"))
-            if a_idx != b_idx:
-                raise recreate.CopyMismatch(f"carry: {name}'s text index is not {mother_name}'s "
-                                            f"({b_idx['sha256']} against {a_idx['sha256']})")
-            ack = recreate.carry_ack(root, mother_name, name, sister)
-            run.record("carry", {"from": {"name": mother_name, "collection_id": mother.collection_id},
-                                 "parts": parts, "origin": origin, "carried": out.get("done"),
-                                 "reset": out.get("reset"), "counts": counts, "index": b_idx, "ack": ack})
-            run.at("carry", f"{counts['documents']} documents' manifest and the text index "
-                            f"({b_idx['files']} files, {str(b_idx['sha256'])[:23]}…) carried, no vector; "
-                            f"parts {parts['seeded']}, origin {origin}, licence ack {ack}")
+            if recut:
+                # her records are her mother's, her chunks are not (A1i
+                # relayered): her manifest is carried with its index marks
+                # emptied and no text index, then her parts are BUILT from her
+                # mother's record lines (none parsed, the same bytes; each cut
+                # again by her layers for her parts' chunks, 02 §2.7 amended
+                # 2026-11-08)
+                # and her own snapshot made. The worker indexes every document.
+                from app.hold import records as rec_mod, snapshot as sn_mod
+                need, free = recreate.room(root, mother_name, name)
+                if free < need:
+                    raise CodexError(recreate.no_room(mother_name, name, need, free))
+                out = carry_mod.carry(root, mother_name, name, copy=True, apply=True, sister=True,
+                                      relayered=True, log=say)
+                counts = recreate.counts(root, name)
+                if counts["documents"] != recreate.counts(root, mother_name)["documents"]:
+                    raise recreate.CopyMismatch(f"carry: {name} holds {counts['documents']} documents and "
+                                                f"{mother_name} {recreate.counts(root, mother_name)['documents']}")
+                ack = recreate.carry_ack(root, mother_name, name, sister)
+                built = rec_mod.build(root, name, corpus_dir=Path(root) / name / "origin",
+                                      records_from=mother_name, log=say)
+                rec_mod.write_validation(root, name)
+                snap = sn_mod.create(root, name, log=say)
+                from app.hold import seed as seed_mod
+
+                def by_slice(sn) -> dict[str, int]:
+                    out: dict[str, int] = {}
+                    for sh in sn.shards:
+                        out[sh.slice] = out.get(sh.slice, 0) + int(sh.records)
+                    return out
+                mine, theirs = by_slice(snap), by_slice(seed_mod.latest_snapshot(root, mother_name))
+                if mine != theirs:
+                    raise recreate.CopyMismatch(f"carry: {name}'s parts hold {mine} records by slice, "
+                                                f"{mother_name}'s {theirs}: her records are not her "
+                                                f"mother's; forget her and run this again")
+                parts = {"seeded": "built from her mother's record lines, none parsed",
+                         "parts": len(snap.shards), "snapshot_id": snap.snapshot_id, "snapshot": snap.hash,
+                         "records": sum(mine.values())}
+                run.record("carry", {"from": {"name": mother_name, "collection_id": mother.collection_id},
+                                     "parts": parts, "origin": origin, "recut": True, "counts": counts,
+                                     "carried": out.get("done"), "reset": out.get("reset"), "ack": ack})
+                run.at("carry", f"{counts['documents']} documents' manifest carried, no text index, no "
+                                f"vector; her parts {parts['seeded']} ({parts['parts']} parts, "
+                                f"{parts['records']} records), origin {origin}, licence ack {ack}; the "
+                                f"worker indexes every document with her own layer")
+            else:
+                parts = recreate.seed_parts(root, mother_name, name, now=_utc_now(), log=say)
+                need, free = recreate.room(root, mother_name, name)
+                if free < need:
+                    raise CodexError(recreate.no_room(mother_name, name, need, free))
+                out = carry_mod.carry(root, mother_name, name, copy=True, apply=True, sister=True, log=say)
+                counts = recreate.counts(root, name)
+                if counts["documents"] != recreate.counts(root, mother_name)["documents"]:
+                    raise recreate.CopyMismatch(f"carry: {name} holds {counts['documents']} documents and "
+                                                f"{mother_name} {recreate.counts(root, mother_name)['documents']}")
+                a_idx = recreate.tree_digest(recreate._tree(root, mother_name, "index"))
+                b_idx = recreate.tree_digest(recreate._tree(root, name, "index"))
+                if a_idx != b_idx:
+                    raise recreate.CopyMismatch(f"carry: {name}'s text index is not {mother_name}'s "
+                                                f"({b_idx['sha256']} against {a_idx['sha256']})")
+                ack = recreate.carry_ack(root, mother_name, name, sister)
+                run.record("carry", {"from": {"name": mother_name, "collection_id": mother.collection_id},
+                                     "parts": parts, "origin": origin, "carried": out.get("done"),
+                                     "reset": out.get("reset"), "counts": counts, "index": b_idx, "ack": ack})
+                run.at("carry", f"{counts['documents']} documents' manifest and the text index "
+                                f"({b_idx['files']} files, {str(b_idx['sha256'])[:23]}…) carried, no vector; "
+                                f"parts {parts['seeded']}, origin {origin}, licence ack {ack}")
         finally:
             for lk in locks:
                 lk.release()
+    return _sister_finish(a, run, root, name, source_name, by, say)
+
+
+def _sister_finish(a, run, root: Path, name: str, source_name: str, by: str, say) -> int:
+    """Case J after the carry: unpaused (the worker builds what was not
+    carried), the space's calibration record beside her, then her CPU
+    reference and gate as case A's; embedding stays off."""
+    import shutil
+
+    from app import node_state
     node_state.set_paused(name, False, by=by)
     state = root / name / "state"
     measured = root / source_name / "state" / "calibration.json"

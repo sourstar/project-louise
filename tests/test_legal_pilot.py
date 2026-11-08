@@ -183,3 +183,38 @@ def test_a_gold_act_under_a_ministry_authority_resolves_by_date_and_number(built
     assert built.work_for(("dm", "2001-11-07", 458)) == "work-dm-458"
     assert built.work_for(("l", "2001-11-07", 458)) == "work-l-458"
     assert built.work_for(("dlgs", "2001-11-07", 458)) is None, "two acts, neither of that type"
+
+
+def test_each_search_is_timed_and_the_summary_says_mean_p50_p95_and_total(built):
+    """Piece 5's time half (operator, 2026-11-08: "compare time and quality
+    by adding 5"): every question's search wall time, summarised."""
+    cov = lp.coverage(built, CORPUS, QUESTIONS)
+    gold = {int(k): lp.gold_from(v) for k, v in cov["gold"].items()}
+    got = lp.run(built, QUESTIONS, gold, k=10, search_fn=lambda q, **kw: {"lists": []}, traverse_fn=None)
+    t = got["summary"]["seconds"]
+    assert set(t) == {"mean", "p50", "p95", "total"} and t["total"] >= 0 and t["p95"] >= t["p50"] >= 0
+    assert lp.timing([1.0, 2.0, 3.0, 4.0, 100.0]) == {"mean": 22.0, "p50": 3.0, "p95": 100.0, "total": 110.0}
+    assert lp.timing([]) == {"mean": None, "p50": None, "p95": None, "total": 0.0}
+
+
+def test_the_reranker_is_the_node_s_none_or_one_lent_and_only_inside_the_run(monkeypatch):
+    """Piece 5's quality half: the same questions with the node's reranker,
+    with none, and with another collection's lent — in this process only."""
+    from types import SimpleNamespace
+    from app import collections as collections_mod
+    lent = collections_mod.RerankRecipe(url="http://localai:8080/v1/rerank", api="jina", model="louise-rerank-bge")
+    donor = SimpleNamespace(name="gutenberg", reranker=lent)
+    monkeypatch.setattr(collections_mod, "load_all", lambda: [donor])
+    real = collections_mod.reranker_for
+    target = SimpleNamespace(name="normattiva-nemo", reranker=None)
+    with lp.reranker_override("configured"):
+        assert collections_mod.reranker_for is real
+    with lp.reranker_override("off"):
+        assert collections_mod.reranker_for(target) is None and collections_mod.reranker_for(donor) is None
+    with lp.reranker_override("from:gutenberg") as got:
+        assert got is lent and collections_mod.reranker_for(target) is lent
+    assert collections_mod.reranker_for is real, "given back after the run"
+    for bad in ("from:nobody", "sometimes"):
+        with pytest.raises(SystemExit):
+            with lp.reranker_override(bad):
+                pass

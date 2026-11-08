@@ -162,7 +162,7 @@ louise hold
                                                                        the slices fetched recorded in the file (built 2026-10-25, below)
               build <collection> [--snapshot ID]                       parse, slice, cut into parts, hash
                                                                        [--corpus DIR]: another origin directory than the collection's own; [--records-from C]: the record lines
-                                                                       of a held collection's latest snapshot taken instead of parsing — a re-creation changing only the slicing (RULE 1);
+                                                                       of a held collection's latest snapshot taken instead of parsing — a re-creation changing only the slicing or the layers, each line cut again for its part's chunks (RULE 1, 02 §2.7);
                                                                        [--records-from-discarded S]: those of its own discarded snapshot S, a document S does not list parsed
               validation <collection>                                  validation.json written from the Codex's plan (03 §3.2)
               relocate <collection> --corpus DIR [--workers N] [--dry-run]

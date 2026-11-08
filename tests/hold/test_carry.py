@@ -1545,3 +1545,53 @@ def test_a_sister_refuses_a_move_one_space_other_records_and_other_modes(pair):
     with pytest.raises(CodexError, match="one space"):
         carry.carry(root, "old", "twin", sister=True, copy=True, apply=True, log=quiet)
     assert not (root / "bge" / "state" / "manifest.sqlite").exists()
+
+
+def test_a_relayered_sister_carries_the_manifest_without_its_index_marks(pair):
+    """A1i relayered (2026-11-08, normattiva-nemo): her layers differ, so
+    nothing they cut crosses — no text index, every document's index marks
+    and counts emptied for the worker — and everything a record decides does."""
+    root, old, _new = pair
+    _vectors(root, old)
+    con = sqlite3.connect(root / "old" / "state" / "manifest.sqlite")
+    con.execute("UPDATE documents SET fts_done=1, fts_version=3, entity_version=2, chunks=5, tokens=900, "
+                "rdf_done=1")
+    con.commit()
+    n = con.execute("SELECT COUNT(*) FROM documents").fetchone()[0]
+    con.close()
+    (root / "old" / "index").mkdir(parents=True, exist_ok=True)
+    (root / "old" / "index" / "words").write_text("the text index")
+    from tests.hold.test_template import SPACE, recipe
+    from functools import partial
+    space = {**SPACE, "encoder": {**SPACE["encoder"], "weights": "sha256:" + "be" * 32},
+             "dim": 1024, "query": {"encoder": None, "instruction": "query: "}}
+    layers = [{"rule": "default", "chunker": {"id": "fixed", "version": 1, "params": {"tokens": 3, "overlap": 0}},
+               "input": {"form": "text"}}]
+    col.create_from_recipe(root, "gutenberg", recipe(space=space, layers=layers, work={"tokens": 7_000_000}),
+                           platform_image=PLATFORM, embed=partial(fake_embed, dim=1024),
+                           name="cut", key=KEY, now=NOW)
+    with pytest.raises(CodexError, match="layers"):
+        carry.carry(root, "old", "cut", sister=True, copy=True, apply=True, log=quiet)
+    with pytest.raises(CodexError, match="with --sister only"):
+        carry.carry(root, "old", "cut", relayered=True, copy=True, apply=True, log=quiet)
+    out = carry.carry(root, "old", "cut", sister=True, relayered=True, copy=True, apply=True, log=quiet)
+    assert not (root / "cut" / "index" / "words").exists(), "her layers cut other chunks"
+    assert out["reset"]["unindexed"] == n
+    con = sqlite3.connect(root / "cut" / "state" / "manifest.sqlite")
+    try:
+        assert con.execute("SELECT COUNT(*), SUM(rdf_done) FROM documents").fetchone() == (n, n), \
+            "what a record decides is carried"
+        assert con.execute("SELECT COUNT(*) FROM documents WHERE fts_done<>0 OR fts_version<>0 OR "
+                           "entity_version<>0 OR chunks<>0 OR tokens<>0").fetchone()[0] == 0
+    finally:
+        con.close()
+    assert json.loads((root / "cut" / "state" / carry.MARKER).read_text())["relayered"] is True
+    again = carry.carry(root, "old", "cut", sister=True, relayered=True, copy=True, apply=True, log=quiet)
+    assert again["done"]["manifest"] == "present"
+
+
+def test_a_relayered_sister_that_cuts_alike_is_refused(pair):
+    root, old, _new = pair
+    _sister_ready(root, old)
+    with pytest.raises(CodexError, match="cut alike"):
+        carry.carry(root, "old", "bge", sister=True, relayered=True, copy=True, apply=True, log=quiet)

@@ -914,6 +914,17 @@ nothing embedded, nothing published) carries its manifest and text index,
 which are functions of the records alone, and no vector table: `dev carry
 --unembedded`, amendment A1h; its parts come from `--records-from` as above.
 
+A sister whose LAYERS differ from her mother's (*amended 2026-11-08*,
+normattiva-nemo: the mother cuts by `akn_article`, the shared legal space
+by `legal_article`) takes her mother's record lines too: a line carries
+no layer (09 §9.5), so her records are her mother's byte for byte, and
+`--records-from` cuts each again under her layers for her parts' `chunks`
+and `chunks_root` (invariant 3) — the parts a parse would give her. Her
+manifest is carried with every index mark emptied and no text index (`dev
+carry --sister --relayered`, A1i), and the worker indexes each document
+with her layer. `--records-from` refuses any other difference but the
+slicing.
+
 A daughter whose parser adds to every record a section the mother's did
 not have — a Wikidata entity's text in one more language
 (docs/notes/wikidata-build-plan.md, D3; *amended 2026-10-19*) — re-issues

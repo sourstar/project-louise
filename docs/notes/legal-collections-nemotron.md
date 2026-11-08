@@ -198,10 +198,10 @@ The operator: "When you are done with them, I want you to make a nemo version
 of normattiva, then run a comparison test before doing the full embedding."
 
 - **What it is:** `normattiva-nemo`, the same plugin, corpus and records as
-  `normattiva`, in the shared legal space (Nemotron). Normattiva's layer is
-  `akn_article` at the plugin's defaults, the same as the three legal
-  plugins, so it can join that space by `--space-from legi`. The existing
-  `normattiva` (DAR-legal-it) is untouched.
+  `normattiva`, in the shared legal space (Nemotron), cut by the space's
+  layer (`legal_article`, legal-chunking-retrieval.md §3); `normattiva`
+  cuts by `akn_article`. The existing `normattiva` (DAR-legal-it) is
+  untouched.
 - **The comparison before the full embedding:** two parts.
   - The bake-off München runs for the operator's 2026-11-07 request
     (legal-embedders-fr-de-eu.md): `lemur-it` hybrid MRR@10, the deciding
@@ -211,9 +211,16 @@ of normattiva, then run a comparison test before doing the full embedding."
     questions reach are embedded on demand. The full embedding waits for
     its numbers and the operator's go.
 - **How it is made: case J, built 2026-11-08** (operator: "Make J, it is
-  time to do it"). A sister of `normattiva` in `legi`'s space; nothing is
-  parsed or indexed again, and none of the DAR vectors is carried
-  (new-collection.md J; hold/carry.py A1i):
+  time to do it"). A RELAYERED sister of `normattiva` in `legi`'s space
+  (2026-11-08): her manifest copied with its index marks emptied, no text
+  index, her parts built from normattiva's record lines (the same record
+  bytes, none parsed) and cut by her layer; the worker then cuts and
+  indexes every document with `legal_article`. None of the DAR vectors is
+  carried (new-collection.md J; hold/carry.py A1i relayered; 02 §2.7
+  amended 2026-11-08). The parts are REWRITTEN with the same bytes: a
+  variant that hard-links them and recomputes only each part's chunk
+  entries is written down here, to build if the measured build time says
+  it pays:
 
   ```bash
   louise node pause normattiva

@@ -151,6 +151,13 @@ def test_every_caller_that_cuts_passes_the_record_s_title():
                 name = f.attr if isinstance(f, ast.Attribute) else getattr(f, "id", None)
                 if name == "chunks_for_document" and not any(k.arg == "title" for k in n.keywords):
                     missing.append(f"{p.relative_to(root)}:{n.lineno}")
+                # a bound chunker called directly: `chunker_at(i)(…)`, `chunker_for_document(…)(…)`
+                inner = f if isinstance(f, ast.Call) else None
+                iname = (inner.func.attr if inner is not None and isinstance(inner.func, ast.Attribute)
+                         else getattr(getattr(inner, "func", None), "id", None))
+                if iname in ("chunker_at", "chunker_for_document") and \
+                        not any(k.arg == "title" for k in n.keywords):
+                    missing.append(f"{p.relative_to(root)}:{n.lineno}")
     assert not missing, f"cut without the record's title: {missing}"
 
 

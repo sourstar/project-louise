@@ -272,7 +272,8 @@ def build(root, ref: str, *, corpus_dir=None, snapshot_id: str | None = None,
     `records_from`: a held collection whose latest snapshot's record lines
     are taken instead of parsing (RULE 1; a daughter or a re-creation that
     changes only the slicing, 02 §2.7 amended 2026-10-24) — refused unless
-    the two Codexes differ in nothing that decides a record but the slicing.
+    the two Codexes differ in nothing that decides a record but the slicing
+    and the layers (a line carries none; its part's chunks are cut again).
     `records_from_discarded`: this collection's own snapshot of that id,
     discarded (app/hold/discard.py) — its record lines taken, cut afresh; a
     document it does not list is parsed.
@@ -342,7 +343,11 @@ def build(root, ref: str, *, corpus_dir=None, snapshot_id: str | None = None,
     if records_from is not None:
         from .seed import record_differences
         from_name, mother = col.resolve(Path(root), records_from)
-        other = [d for d in record_differences(mother, codex) if d != "slicing"]
+        # the slicing places a line; the layers cut its part's chunks, which
+        # `_record_from_line` cuts again from the line's own sections — a
+        # line carries no layer (09 §9.5; invariant 3; 02 §2.7 amended
+        # 2026-11-08): nothing else may differ
+        other = [d for d in record_differences(mother, codex) if d not in ("slicing", "layers")]
         if other:
             raise RecordsError(f"{name}: --records-from {from_name}: the two differ in {', '.join(other)}, "
                                f"which decide record bytes (02 §2.7) — its records are not this "
