@@ -17,8 +17,12 @@
 //
 // OUT. The speaker on the answer reads it aloud sentence by sentence — the
 // sentences as the browser's own Intl.Segmenter finds them (Unicode's
-// UAX #29), a line at a time — each one /v1/audio/speech's, the next fetched
-// while one plays, played in order. Tap it again to stop. The node strips
+// UAX #29), a line at a time — each one /v1/audio/speech's, played in order.
+// WHILE THE ANSWER IS WRITTEN (operator, 2026-11-08): a sentence goes to the
+// node as soon as the stream has completed it, so the reading starts with the
+// first and keeps up; the last is read when the stream ends. A question the
+// microphone wrote has its answer read by itself; a typed one waits for the
+// speaker. Tap it to stop: nothing more is fetched or played. The node strips
 // the citations and chooses the voice (app/speech.py).
 (function () {
   'use strict';
@@ -28,6 +32,8 @@
   const FLOOR_MIN = 0.012, FLOOR_X = 4;
   // a piece this short is read with the next (an "art." the segmenter cut off)
   const MIN_SENTENCE = 24;
+  // sentences being synthesized at once (pump)
+  const IN_FLIGHT = 2;
   // a WAV of no samples: played in the tap, it lets the page play the rest (iOS)
   const SILENT = 'data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAgD4AAAB9AAACABAAZGF0YQAAAAA=';
   const WORKLET = "class LouiseCapture extends AudioWorkletProcessor{constructor(){super();this.b=new Float32Array(2048);this.n=0}"
@@ -93,7 +99,8 @@
   }
 
   async function start() {
-    stopReading();                       // the microphone would hear the answer
+    stopReading(); auto = false;         // the microphone would hear the answer
+    unlock();                            // inside the tap: the answer may be read later
     busy = true; micState('busy', 'opening the microphone…');
     let stream;
     try {
@@ -160,6 +167,7 @@
       if (!text) { say('no speech was heard — tap the microphone and speak again'); return; }
       const q = document.getElementById('q');
       q.value = q.value.trim() ? q.value.replace(/\s*$/, ' ') + text : text;
+      dictated = q.value.trim();         // asked as it is, a spoken question (asking)
       q.focus(); q.setSelectionRange(q.value.length, q.value.length);
     } catch (e) {
       say('what you said could not be written down: ' + (e.message || e));
@@ -178,24 +186,60 @@
 
   // ---- the answer, read aloud -------------------------------------------
   const speak = document.getElementById('speak');
-  let reading = null, answerLang = null;
+  // reading: the one in progress; answerLang: the language of the text shown
+  // (null: as the model wrote it); writing: the answer is streaming; auto:
+  // the next answer is read by itself; dictated: what the microphone left in
+  // the box; player: the page's one audio element
+  let reading = null, answerLang = null, writing = false, auto = false, dictated = null, player = null;
+  const answerText = () => { const b = document.getElementById('answer'); return b ? b.textContent : ''; };
+  const collapse = line => line.replace(/\s+/g, ' ').trim();
 
-  function sentences(text, lang) {
+  // one line's sentences (its whitespace collapsed), each with where it ends
+  // in `t`: the segmenter's pieces, a piece under MIN_SENTENCE read with the
+  // next, a short last piece with the one before
+  function lineSentences(t, lang) {
     const seg = window.Intl && Intl.Segmenter ? new Intl.Segmenter(lang || undefined, { granularity: 'sentence' }) : null;
-    const out = [];
-    for (const line of String(text || '').split(/\n+/)) {
-      const t = line.replace(/\s+/g, ' ').trim(); if (!t) continue;
-      const parts = seg ? [...seg.segment(t)].map(s => s.segment.trim())
-                        : (t.match(/[^.!?…。！？]+(?:[.!?…。！？]+["'»”)\]]*\s*|$)/g) || [t]).map(s => s.trim());
-      let carry = '';
-      for (const p of parts.filter(Boolean)) {
-        const s = carry ? carry + ' ' + p : p;
-        if (s.length < MIN_SENTENCE) { carry = s; continue; }
-        out.push(s); carry = '';
-      }
-      if (carry) { if (out.length && out[out.length - 1].length + carry.length < 400) out[out.length - 1] += ' ' + carry; else out.push(carry); }
+    let parts = seg ? [...seg.segment(t)].map(s => [s.segment.trim(), s.index + s.segment.length])
+                    : [...t.matchAll(/[^.!?…。！？]+(?:[.!?…。！？]+["'»”)\]]*\s*|$)/g)].map(m => [m[0].trim(), m.index + m[0].length]);
+    if (!parts.length) parts = [[t, t.length]];
+    const out = []; let carry = '';
+    for (const [p, end] of parts) {
+      if (!p) continue;
+      const s = carry ? carry + ' ' + p : p;
+      if (s.length < MIN_SENTENCE) { carry = s; continue; }
+      out.push({ text: s, end }); carry = '';
+    }
+    if (carry) {
+      const last = out[out.length - 1];
+      if (last && last.text.length + carry.length < 400) { last.text += ' ' + carry; last.end = t.length; }
+      else out.push({ text: carry, end: t.length });
     }
     return out;
+  }
+  function sentences(text, lang) {
+    const out = [];
+    for (const line of String(text || '').split(/\n+/)) for (const s of lineSentences(collapse(line), lang)) out.push(s.text);
+    return out;
+  }
+
+  // THE SENTENCES OF A TEXT STILL BEING WRITTEN (operator, 2026-11-08):
+  // those after the reading's place — `r.at`, where its line starts in the
+  // text, and `r.off`, in that line collapsed — that are final, and the place
+  // moved past them. A line followed by a newline is final; in the open line,
+  // every sentence but the last: one is complete only once a later one has
+  // begun and is long enough not to be read with it (MIN_SENTENCE) — never
+  // half of one. Once the answer has ended, all that is left. The rule of
+  // `sentences`, so an answer read as it streams is read in the same pieces.
+  function cut(r, text, ended) {
+    const out = [];
+    for (;;) {
+      const nl = text.indexOf('\n', r.at), open = nl < 0;
+      const ss = lineSentences(collapse(text.slice(r.at, open ? text.length : nl)).slice(r.off), r.lang);
+      const fin = open && !ended ? ss.slice(0, -1) : ss;
+      for (const s of fin) out.push(s.text);
+      if (open) { if (fin.length) r.off += fin[fin.length - 1].end; return out; }
+      r.at = nl + 1; r.off = 0;
+    }
   }
 
   function speakState(on) {
@@ -206,73 +250,149 @@
     const l = speak.querySelector('.speak-label'); if (l) l.textContent = on ? 'stop' : 'read aloud';
   }
 
+  // THE PAGE'S ONE PLAYER, played silent inside a tap — the microphone's,
+  // Ask's, the speaker's: the browser then lets it play the answer that
+  // comes later, without one (iOS asks it of the element itself)
+  function unlock() {
+    if (!speak) return;                        // the node reads nothing aloud
+    if (!player) player = new Audio();
+    if (reading) return;                       // it is playing already
+    player.src = SILENT; player.play().catch(() => {});
+  }
+
   function stopReading() {
     const r = reading; if (!r) return;
-    reading = null; r.ctl.abort();
-    r.audio.pause(); r.audio.removeAttribute('src');
+    reading = null; r.ctl.abort();             // the fetches in flight with it
+    if (player) { player.pause(); player.removeAttribute('src'); }
     if (r.wake) r.wake();
+    if (r.more) r.more();
+    for (const it of r.items) it.ok(null);     // nothing waits on them any more
     for (const u of r.urls) URL.revokeObjectURL(u);
     speakState(false);
   }
 
   function play(r, url) {
     return new Promise(resolve => {
-      const a = r.audio;
-      const done = () => { a.onended = a.onerror = null; r.wake = null; resolve(true); };
+      const a = player;
+      const done = () => { if (a.onended === done) a.onended = a.onerror = null; if (r.wake === done) r.wake = null; resolve(); };
       a.onended = a.onerror = done; r.wake = done;
       a.src = url;
-      a.play().catch(e => { if (e && e.name === 'NotAllowedError') { r.blocked = true; } done(); });
+      a.play().catch(e => { if (e && e.name === 'NotAllowedError') r.blocked = true; done(); });
     });
   }
 
-  async function readAloud() {
-    const box = document.getElementById('answer');
-    const lang = answerLang, parts = sentences(box ? box.textContent : '', lang);
-    if (!parts.length) return;
-    const r = { ctl: new AbortController(), audio: new Audio(), urls: [], wake: null, blocked: false };
+  async function synth(r, s) {
+    const body = { input: s }; if (r.lang) body.language = r.lang;
+    const resp = await fetch('/v1/audio/speech', { method: 'POST', signal: r.ctl.signal,
+      headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    if (resp.status === 400) return null;      // nothing to say once its citations are gone
+    if (!resp.ok) {
+      const d = await resp.json().catch(() => ({}));
+      throw new Error((d.error && d.error.message) || d.detail || resp.statusText);
+    }
+    const blob = await resp.blob();
+    if (reading !== r) return null;
+    const u = URL.createObjectURL(blob); r.urls.push(u); return u;
+  }
+
+  // EACH SENTENCE GOES TO THE NODE AS SOON AS IT IS COMPLETE, whatever the
+  // stream and the player are doing (operator, 2026-11-08: "Chat and TTS use
+  // different GPU resources"); only the playing is in order. IN_FLIGHT at a
+  // time: a browser opens six connections to a host over HTTP/1.1, and the
+  // answer's stream and the page's other requests keep theirs.
+  function pump(r) {
+    while (reading === r && r.next < r.items.length && r.inflight < IN_FLIGHT) {
+      const it = r.items[r.next++]; r.inflight++;
+      synth(r, it.text).then(it.ok, it.no).finally(() => { r.inflight--; pump(r); });
+    }
+  }
+
+  // the reading takes in what the answer box holds now
+  function feed(r) {
+    const t = answerText();
+    r.ended = !writing; r.text = t;
+    for (const s of cut(r, t, r.ended)) {
+      const it = { text: s };
+      it.p = new Promise((ok, no) => { it.ok = ok; it.no = no; }); it.p.catch(() => {});
+      r.items.push(it);
+    }
+    pump(r);
+    if (r.more) { const f = r.more; r.more = null; f(); }
+  }
+
+  // THE READING FOLLOWS THE TEXT SHOWN. While it only grows (the stream), its
+  // new sentences join the queue; the same text shown again (its [n] linked,
+  // the original restored over a failed translation) adds nothing and
+  // repeats nothing. Another text — the answer translated into the language
+  // the reader switched to — holds no sentence that is exactly one already
+  // read, so the reading moves to it and starts at its first sentence.
+  function follow() {
+    const r = reading;
+    if (r.lang === answerLang && answerText().startsWith(r.text)) { feed(r); return; }
+    stopReading(); startReading();
+  }
+
+  function startReading() {
+    if (!player) player = new Audio();
+    const r = { ctl: new AbortController(), lang: answerLang, text: '', at: 0, off: 0, ended: false,
+                items: [], next: 0, inflight: 0, urls: [], wake: null, more: null, blocked: false };
     reading = r; speakState(true);
-    r.audio.src = SILENT; r.audio.play().catch(() => {});   // inside the tap
-    const get = s => {
-      const p = (async () => {
-        const body = { input: s }; if (lang) body.language = lang;
-        const resp = await fetch('/v1/audio/speech', { method: 'POST', signal: r.ctl.signal,
-          headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-        if (resp.status === 400) return null;          // nothing to say once its citations are gone
-        if (!resp.ok) {
-          const d = await resp.json().catch(() => ({}));
-          throw new Error((d.error && d.error.message) || d.detail || resp.statusText);
-        }
-        const u = URL.createObjectURL(await resp.blob()); r.urls.push(u); return u;
-      })();
-      p.catch(() => {});                                // awaited below; never unhandled
-      return p;
-    };
+    feed(r);
+    run(r);
+  }
+
+  // the sentences played in order, each as soon as it is there
+  async function run(r) {
     try {
-      let next = get(parts[0]);
-      for (let i = 0; i < parts.length; i++) {
-        const url = await next;
+      for (let i = 0; ; i++) {
+        while (reading === r && i >= r.items.length && !r.ended) await new Promise(ok => { r.more = ok; });
+        if (reading !== r || i >= r.items.length) return;
+        const url = await r.items[i].p;
         if (reading !== r) return;
-        next = i + 1 < parts.length ? get(parts[i + 1]) : null;   // fetched while this one plays
         if (url) await play(r, url);
         if (reading !== r) return;
-        if (r.blocked) { say('the browser did not let the page play sound — tap the speaker again'); return; }
+        if (r.blocked) {
+          if (speak) speak.hidden = false;
+          say('the browser did not let the page play sound — tap the speaker to hear the answer');
+          return;
+        }
       }
     } catch (e) {
       if (reading === r && !(e && e.name === 'AbortError')) say('the answer could not be read aloud: ' + (e.message || e));
     } finally { if (reading === r) stopReading(); }
   }
 
-  if (speak) speak.addEventListener('click', () => { reading ? stopReading() : readAloud(); });
+  if (speak) speak.addEventListener('click', () => {
+    if (reading) { stopReading(); return; }
+    unlock(); startReading();
+  });
 
-  // the page's hooks (ask.html): an answer is there to read, in `lang`
-  // (null: as the model wrote it), or it is gone
+  // the page's hooks (ask.html); `lang` is the language of the text shown
+  // (null: as the model wrote it)
   window.louiseVoice = {
-    answerReady(lang) {
-      answerLang = lang || null;
-      const box = document.getElementById('answer');
-      if (speak) speak.hidden = !(box && box.textContent.trim());
+    // Ask was pressed, and this runs inside the press: a question the
+    // microphone wrote — the box holds what it left there — has its answer
+    // read aloud by itself
+    asking() {
+      const q = document.getElementById('q');
+      stopReading();
+      auto = !!speak && dictated !== null && !!q && q.value.trim() === dictated;
+      if (auto) unlock();
     },
-    answerCleared() { stopReading(); if (speak) speak.hidden = true; },
-    sentences, downsample, wavBytes,
+    // the answer being written grew
+    answerGrew(lang) {
+      writing = true; answerLang = lang || null;
+      if (!speak || !answerText().trim()) return;
+      speak.hidden = false;
+      if (reading) follow(); else if (auto) { auto = false; startReading(); }
+    },
+    // the answer is all there, or shown again
+    answerReady(lang) {
+      writing = false; answerLang = lang || null;
+      if (speak) speak.hidden = !answerText().trim();
+      if (reading) follow();
+    },
+    answerCleared() { writing = false; stopReading(); if (speak) speak.hidden = true; },
+    sentences, cut, downsample, wavBytes,
   };
 })();

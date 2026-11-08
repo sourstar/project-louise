@@ -18,6 +18,22 @@ build at 12 cores, the GPU uncapped. The card's noise (operator): 0.2 sone
 idle, 3.1 sone at full load, coil whine ~0.9 sone; its fan range is being
 measured (published figures disagree).
 
+### 2026-11-08: the answer read while it is written; a spoken question answered aloud (operator)
+
+- **Built** (app/static/voice.js, 07 §7.4 "Speech"): each sentence goes to
+  `/v1/audio/speech` as soon as the stream completes it (never half: one is
+  complete once a later one has begun past MIN_SENTENCE, or the stream
+  ended), two in flight, played in order; the reading starts with the first
+  sentence. A question the microphone wrote is read by itself (audio
+  unlocked in the Ask press); typed, the speaker waits for a tap. Stop or a
+  new question cancels the fetches in flight. A refused playback shows the
+  speaker and says so.
+- **Decided:** an answer translated while it is read (the reader switched
+  language) has no sentence exactly matching one already read, so the
+  reading moves to the translation from its first sentence.
+- **Tested** in Chromium (tests/browser/ask_voice.js 8–13, a stream written
+  a delta at a time); not heard on the node's card yet.
+
 ### 2026-11-07: voice on the Ask page — a microphone and a speaker, the node's models (operator)
 
 - **Built:** a microphone beside the question (WebAudio, downsampled in the
