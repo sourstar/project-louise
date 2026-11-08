@@ -12,7 +12,7 @@ import pytest
 
 from app import collections as collections_mod, db
 from app.acquire import budget, engine, specs, transport_https
-from app.acquire.spec import Endpoint, TransportError, Transport
+from app.acquire.spec import Endpoint, LicenseAckRequiredError, TransportError, Transport
 from app.plugins.base import LicenseClass
 
 SPEC = specs.LEGI_SPEC
@@ -130,6 +130,10 @@ def test_a_pass_fetches_only_the_files_not_yet_held(tmp_path, mock_server):
         fts_dir=tmp_path / "fts", lance_dir=tmp_path / "lancedb", acquire_enabled=True, license_ack=None)
     c.corpus_dir.mkdir()
     con = db.connect(c)
+    with pytest.raises(LicenseAckRequiredError):
+        engine.run_acquisition(con, c, spec, "full")     # yellow: no byte before the acknowledgement
+    assert not any(c.corpus_dir.iterdir())
+    c = replace(c, license_ack=engine.make_ack(SPEC.terms_text_path))
     first = engine.run_acquisition(con, c, spec, "full")
     assert first["fetched"] == 2
     assert (c.corpus_dir / NAMES[0]).read_bytes() == files[NAMES[0]]
@@ -146,9 +150,11 @@ def test_a_pass_fetches_only_the_files_not_yet_held(tmp_path, mock_server):
     assert (c.corpus_dir / new).read_bytes() == b"increment-2"
 
 
-def test_the_spec_is_registered_green_with_two_connections_and_its_terms():
+def test_the_spec_is_registered_yellow_with_two_connections_and_its_terms():
+    """YELLOW (operator, 2026-11-08, A): Licence Ouverte 2.0's attribution is a
+    condition (04 §4.4); its terms are the plugin's TERMS.txt."""
     assert specs.ACQUIRE_REGISTRY["legi"] is SPEC and SPEC.transport is Transport.HTTPS
-    assert SPEC.license_class == LicenseClass.GREEN and SPEC.terms_text_path.is_file()
+    assert SPEC.license_class == LicenseClass.YELLOW and SPEC.terms_text_path.is_file()
     assert SPEC.endpoints[0].max_conns == 2 and SPEC.etiquette.max_conns == 2
     assert isinstance(SPEC.inventory, transport_https.HtmlIndex) and SPEC.delta.mode == "full-resync"
     assert SPEC.unit_fetcher is None
