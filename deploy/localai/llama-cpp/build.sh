@@ -76,10 +76,19 @@ if [ -n "${SYCL_DEVICE_ARCH:-}" ]; then
   LOCK="sycl_device_arch $SYCL_DEVICE_ARCH"
 fi
 if [ -n "${INTEL_STACK:-}" ]; then
+  STACK_ON=image
   . "$INTEL_STACK"
   mkdir -p "$WORK/stack/debs"
-  LOCK="$LOCK
-oneapi_image $ONEAPI_IMAGE"
+  case $STACK_ON in
+    image)    LOCK="$LOCK
+oneapi_image $ONEAPI_IMAGE" ;;
+    # the debs on LocalAI's own prebuilt builder, the one the live engine came from: its oneAPI, its libsycl and its
+    # Level Zero loader stay (2026-11-08 on the node: loaders >= 1.32 refuse Level Zero, oneAPI 2026.2's libsycl 9
+    # segfaults at load; the prebuilt's loader 1.27 with CR 26.40 runs, bit-identical to the live engine)
+    prebuilt) LOCK="$LOCK
+stack_on prebuilt $BUILDER" ;;
+    *) echo "STACK_ON in $INTEL_STACK: image | prebuilt, not $STACK_ON" >&2; exit 2 ;;
+  esac
   echo "$DEBS" | while read -r want url; do
     [ -n "$url" ] || continue
     f="$WORK/stack/debs/$(basename "$url")"
@@ -96,12 +105,17 @@ stack_layer $(sha256sum "$HERE/Dockerfile.intel-stack" | cut -d' ' -f1)"
   # the stack is its debs AND the layer that installs them: a changed layer is another engine, another tag
   STACK=$(printf '%s\n' "$LOCK" | sha256sum | cut -c1-12)
   NAME=$NAME-stack-$STACK
-  # LocalAI's own grpc builder base, on the stack's oneAPI image, then the pinned debs on top
-  DOCKER_BUILDKIT=1 docker build --progress=plain -f "$WORK/backend/Dockerfile.base-grpc-builder" \
-    --build-arg BASE_IMAGE="$ONEAPI_IMAGE" --build-arg BUILD_TYPE="$BUILD_TYPE" --build-arg UBUNTU_VERSION=2404 \
-    -t "louise-base-grpc-intel:$STACK-base" "$WORK"
+  if [ "$STACK_ON" = image ]; then
+    # LocalAI's own grpc builder base, on the stack's oneAPI image, then the pinned debs on top
+    DOCKER_BUILDKIT=1 docker build --progress=plain -f "$WORK/backend/Dockerfile.base-grpc-builder" \
+      --build-arg BASE_IMAGE="$ONEAPI_IMAGE" --build-arg BUILD_TYPE="$BUILD_TYPE" --build-arg UBUNTU_VERSION=2404 \
+      -t "louise-base-grpc-intel:$STACK-base" "$WORK"
+    STACK_BASE=louise-base-grpc-intel:$STACK-base
+  else
+    STACK_BASE=$BUILDER
+  fi
   DOCKER_BUILDKIT=1 docker build --progress=plain -f "$HERE/Dockerfile.intel-stack" \
-    --build-arg BUILDER_BASE="louise-base-grpc-intel:$STACK-base" -t "louise-base-grpc-intel:$STACK" "$WORK/stack"
+    --build-arg BUILDER_BASE="$STACK_BASE" -t "louise-base-grpc-intel:$STACK" "$WORK/stack"
   BUILDER=louise-base-grpc-intel:$STACK
 fi
 TAG=louise-llama-cpp:$NAME
@@ -115,10 +129,13 @@ DOCKER_BUILDKIT=1 docker build --progress=plain -f "$WORK/backend/Dockerfile.lla
 mkdir -p "$OUT"
 docker save "$TAG" -o "$OUT/louise-llama-cpp-$NAME.tar"
 if [ -n "${INTEL_STACK:-}" ]; then
-  # what the tag cannot say: the image's content digest, and the libigc ocloc compiled the device code with
+  # what the tag cannot say: the base image's content digest, the libigc ocloc compiled the device code with, and
+  # the Level Zero loader the package ships (the builder's own, unless the stack pins libze1)
+  if [ "$STACK_ON" = image ]; then DIGESTED="oneapi_image_digest $ONEAPI_IMAGE"; else DIGESTED="builder_image_digest $STACK_BASE"; fi
   LOCK="$LOCK
-oneapi_image_digest $(docker buildx imagetools inspect "$ONEAPI_IMAGE" | awk '/^Digest:/ {print $2; exit}')
-ocloc_igc $(docker run --rm --entrypoint cat "$BUILDER" /intel-stack.ocloc)"
+${DIGESTED% *} $(docker buildx imagetools inspect "${DIGESTED#* }" | awk '/^Digest:/ {print $2; exit}')
+ocloc_igc $(docker run --rm --entrypoint cat "$BUILDER" /intel-stack.ocloc)
+ze_loader $(docker run --rm --entrypoint sh "$BUILDER" -c 'readlink -f $(ldconfig -p | awk "/libze_loader.so.1 / {print \$NF; exit}")')"
 fi
 if [ -n "${SYCL_DEVICE_ARCH:-}" ]; then
   # the AOT path itself, in the builder the device code was compiled in: the ocloc the SYCL driver execs and the

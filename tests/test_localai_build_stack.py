@@ -23,7 +23,11 @@ def test_every_stack_file_pins_its_image_and_debs():
     for f in files:
         text = f.read_text(encoding="utf-8")
         image = re.search(r"^ONEAPI_IMAGE=(\S+)$", text, re.M)
-        assert image and ":" in image.group(1) and "latest" not in image.group(1), f
+        prebuilt = re.search(r"^STACK_ON=prebuilt$", text, re.M)
+        # either its own oneAPI image, pinned, or LocalAI's prebuilt builder (whose digest the lock records)
+        assert bool(image) != bool(prebuilt), f
+        if image:
+            assert ":" in image.group(1) and "latest" not in image.group(1), f
         lines = _stack_lines(f)
         assert lines, f
         for want, url in lines:
@@ -98,6 +102,25 @@ def test_p7_is_upstreams_dmmv_cleanup_and_in_the_series():
     assert "5e18eb021b021a133cfa4d9ac84dab644bc24318" in p7
     inner = [l for l in p7.splitlines() if l.startswith("+diff --git ")]
     assert inner == ["+diff --git a/ggml/src/ggml-sycl/dmmv.cpp b/ggml/src/ggml-sycl/dmmv.cpp"]
+
+
+def test_a_prebuilt_stack_keeps_the_builders_loader_and_says_which_ships():
+    # 2026-11-08: Level Zero loaders >= 1.32 refuse on the node and oneAPI 2026.2's libsycl 9 segfaults, so a
+    # prebuilt stack layers only runtime debs on LocalAI's own builder and never pins the loader
+    build = BUILD.read_text(encoding="utf-8")
+    assert "STACK_ON=image" in build and "stack_on prebuilt $BUILDER" in build
+    assert 'STACK_BASE=$BUILDER' in build and '--build-arg BUILDER_BASE="$STACK_BASE"' in build
+    assert "builder_image_digest $STACK_BASE" in build and "oneapi_image_digest $ONEAPI_IMAGE" in build
+    assert "ze_loader $(docker run" in build
+    # an unknown mode stops the build
+    assert "STACK_ON in $INTEL_STACK: image | prebuilt" in build
+    for f in sorted(HERE.glob("intel-stack-*.conf")):
+        if re.search(r"^STACK_ON=prebuilt$", f.read_text(encoding="utf-8"), re.M):
+            names = [Path(u).name for _, u in _stack_lines(f)]
+            assert not any(n.startswith(("libze1_", "libze-dev_")) for n in names), f
+    # the versions file lists a package the builder does not have instead of failing the layer
+    stack = (HERE / "Dockerfile.intel-stack").read_text(encoding="utf-8")
+    assert 'echo "$p not-installed"' in stack
 
 
 def test_the_switches_are_refused_outside_sycl():
