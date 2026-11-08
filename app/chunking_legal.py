@@ -37,6 +37,18 @@ The studies it follows (the note gives the numbers and the citations):
     G-DSR's section nodes); token-bounded like any piece, its chapter
     `outline`, after the articles so their sequence numbers stay put.
 
+VERSION 2 (2026-11-08, from the first real Normattiva records cut by v1):
+  * the header is not said twice — a section whose body begins with its
+    label's last segment (Normattiva's "Art. 1. — (Delega …)", the body's
+    own first line) has that line dropped from the PIECE, the header
+    carrying it; the record keeps it (sections are not touched);
+  * the outline is a TABLE OF CONTENTS: each partition written once, the
+    articles under it indented, not every label's whole path on every
+    line (legge 306/2003's outline repeated "CAPO I — DISPOSIZIONI
+    GENERALI …" before each of its articles).
+Version 1 cuts as it always did (invariant 3): a layer pinned to it gives
+the same chunks.
+
 The TITLE is the record's (09 §9.5), passed by every caller that cuts
 (`layers.chunks_for_document(..., title=)`, guarded by
 tests/test_chunking_legal.py): invariant 3's "cleaned text" is
@@ -64,7 +76,8 @@ from __future__ import annotations
 import re
 from typing import Any, Iterator, Sequence
 
-CHUNK_VERSION = 1
+CHUNK_VERSION = 2
+VERSIONS = (1, 2)
 NAME = "legal_article"
 
 #: 1. a paragraph's number at the start of a line, in the four systems
@@ -227,6 +240,33 @@ def header_of(title: str, label: str) -> str:
     return " › ".join(x for x in ((title or "").strip(), (label or "").strip()) if x)
 
 
+def body_after_head(label: str, text: str) -> str:
+    """v2: the body without a first line that only repeats the label's last
+    segment, which the header already says. A body that IS that line alone
+    is kept whole: a chunk is never the header with nothing under it."""
+    last = (label or "").split(" › ")[-1].strip()
+    first, sep, rest = text.partition("\n")
+    if last and sep and first.strip() == last and rest.strip():
+        return rest.strip("\n")
+    return text
+
+
+def toc(labels: Sequence[str]) -> str:
+    """v2's outline: the labels as a table of contents — a partition
+    written once where it begins, each level below it indented two spaces."""
+    out: list[str] = []
+    prev: list[str] = []
+    for label in labels:
+        path = [x.strip() for x in label.split(" › ") if x.strip()]
+        same = 0
+        while same < min(len(prev), len(path) - 1) and prev[same] == path[same]:
+            same += 1
+        for depth in range(same, len(path)):
+            out.append("  " * depth + path[depth])
+        prev = path
+    return "\n".join(out)
+
+
 def _budget(tok: Any, head: str, max_tokens: int, uid: str) -> int:
     budget = max_tokens - (_count(tok, head) if head else 0)
     if budget < 32:
@@ -243,12 +283,16 @@ def chunk_legal_article(uid: str, native_id, sections: Sequence[tuple[str, str]]
                                 f"(header/outline) and the caller passed none")
     tok = _tokenizer(params or {})
     version = CHUNK_VERSION if version is None else version
+    if version not in VERSIONS:
+        raise LegalChunkerError(f"{uid}: legal_article has versions {list(VERSIONS)}, not {version!r}")
     seq = 0
     for label, body in sections:
         text = (body or "").strip()
         if not text:
             continue
         head = header_of(title or "", label) if header else ""
+        if head and int(version) >= 2:
+            text = body_after_head(label, text)
         head = f"{head}\n" if head else ""
         for piece in split(tok, text, _budget(tok, head, max_tokens, uid)):
             yield _mk(uid, native_id, seq, label or "", head + piece, version)
@@ -256,6 +300,7 @@ def chunk_legal_article(uid: str, native_id, sections: Sequence[tuple[str, str]]
     labels = list(dict.fromkeys(l.strip() for l, _b in sections if (l or "").strip()))
     if outline and len(labels) >= 2:
         head = f"{title.strip()}\n" if (title or "").strip() else ""
-        for piece in split(tok, "\n".join(labels), _budget(tok, head, max_tokens, uid)):
+        index = toc(labels) if int(version) >= 2 else "\n".join(labels)
+        for piece in split(tok, index, _budget(tok, head, max_tokens, uid)):
             yield _mk(uid, native_id, seq, OUTLINE, head + piece, version)
             seq += 1

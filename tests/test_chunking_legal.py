@@ -116,8 +116,9 @@ def test_the_outline_is_one_more_chunk_with_the_title_and_every_label():
     *articles, out = chunks
     assert [c["chapter"] for c in articles] == ["Capo I › Art. 1", "Capo I › Art. 2", "Capo II › Art. 3"]
     assert out["chapter"] == cl.OUTLINE and out["seq"] == 3, "after the articles: their seqs stay put"
-    assert out["text"].split("\n") == ["Legge 7 agosto 1990, n. 241", "Capo I › Art. 1", "Capo I › Art. 2",
-                                         "Capo II › Art. 3", "Allegato A"], "an empty annex is still in the index"
+    assert out["text"].split("\n") == ["Legge 7 agosto 1990, n. 241", "Capo I", "  Art. 1", "  Art. 2",
+                                         "Capo II", "  Art. 3", "Allegato A"], \
+        "a table of contents (v2); an empty annex is still in the index"
     long = [(f"Art. {i}", "x") for i in range(200)]
     outs = [c for c in _chunks(long, max_tokens=40, outline=True, title="Codice") if c["chapter"] == cl.OUTLINE]
     assert len(outs) > 1 and all(c["text"].startswith("Codice\n") for c in outs)
@@ -189,3 +190,55 @@ def test_it_is_registered_with_its_own_version():
     assert chunking.chunk_version_for(chunking.LEGAL_ARTICLE) == cl.CHUNK_VERSION
     assert chunking.chunk_version_for(chunking.AKN_ARTICLE) == chunking.AKN_CHUNK_VERSION, \
         "Normattiva's chunker is untouched"
+
+
+# ---- version 2 (2026-11-08): the header said once, the outline a table of contents
+
+_LAW = "LEGGE 31 ottobre 2003, n. 306 — Legge comunitaria 2003."
+_SECTIONS = [("CAPO I — DISPOSIZIONI GENERALI › Art. 1. — (Delega al Governo).",
+              "Art. 1. — (Delega al Governo).\n1. Il Governo e' delegato ad adottare decreti."),
+             ("CAPO I — DISPOSIZIONI GENERALI › Art. 2. — (Principi).",
+              "Art. 2. — (Principi).\n1. Salvi gli specifici principi."),
+             ("CAPO II — ALTRE DISPOSIZIONI › Art. 3. — (Abrogazioni).",
+              "Art. 3. — (Abrogazioni).")]
+
+
+def _cut(version):
+    from app import chunking_legal as cl
+    return list(cl.chunk_legal_article("normattiva:1", 1, _SECTIONS, version,
+                                       {**cl.SHARED_LAYER["chunker"]["params"]}, title=_LAW))
+
+
+def test_v2_says_the_article_line_once_and_keeps_a_body_that_is_only_that_line():
+    first, second, third = _cut(2)[:3]
+    assert first["text"] == (f"{_LAW} › CAPO I — DISPOSIZIONI GENERALI › Art. 1. — (Delega al Governo).\n"
+                             "1. Il Governo e' delegato ad adottare decreti.")
+    assert first["text"].count("Art. 1. —") == 1
+    assert second["text"].endswith("\n1. Salvi gli specifici principi.")
+    assert third["text"].endswith("\nArt. 3. — (Abrogazioni)."), "a body that is its line alone is kept"
+
+
+def test_v2_outline_is_a_table_of_contents():
+    outline = _cut(2)[-1]
+    assert outline["chapter"] == "outline"
+    assert outline["text"] == (f"{_LAW}\n"
+                               "CAPO I — DISPOSIZIONI GENERALI\n"
+                               "  Art. 1. — (Delega al Governo).\n"
+                               "  Art. 2. — (Principi).\n"
+                               "CAPO II — ALTRE DISPOSIZIONI\n"
+                               "  Art. 3. — (Abrogazioni).")
+
+
+def test_v1_cuts_as_it_always_did():
+    """Invariant 3: a layer pinned to version 1 gives the same chunks."""
+    first, outline = _cut(1)[0], _cut(1)[-1]
+    assert first["text"] == (f"{_LAW} › CAPO I — DISPOSIZIONI GENERALI › Art. 1. — (Delega al Governo).\n"
+                             "Art. 1. — (Delega al Governo).\n1. Il Governo e' delegato ad adottare decreti.")
+    assert outline["text"] == _LAW + "\n" + "\n".join(l for l, _b in _SECTIONS)
+    assert first["id"].endswith(":1") and _cut(2)[0]["id"].endswith(":2")
+
+
+def test_an_unknown_version_is_refused():
+    from app import chunking_legal as cl
+    with pytest.raises(cl.LegalChunkerError, match="versions"):
+        _cut(3)

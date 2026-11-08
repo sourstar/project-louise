@@ -237,7 +237,8 @@ def test_one_chunk_per_article_and_annex_then_the_outline(corpus):
                                                      title=doc.title))
     *articles, outline = chunks
     assert len(articles) == len([s for s in doc.sections if s[1].strip()])
-    assert articles[0]["text"].startswith(f"{doc.title} › {doc.sections[0][0]}\n§ 1 — Anwendungsbereich")
+    assert articles[0]["text"].startswith(f"{doc.title} › {doc.sections[0][0]}\n(1) "), \
+        "the article line is said once, by the header (legal_article v2)"
     assert outline["chapter"] == chunking_legal.OUTLINE and outline["text"].startswith(doc.title + "\n")
 
 

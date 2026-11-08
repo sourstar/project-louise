@@ -97,6 +97,36 @@ Anthology are not reachable from the agent's network.
 - The pieces together are the whole text, tested word for word. Normattiva's
   `akn_article` is untouched.
 
+**Version 2 (2026-11-08), from the first real records cut by v1.** Two
+defects seen in the output of legge 306/2003 (Normattiva) and the NeuRIS
+fixture:
+- the article line was said twice, in the header and again as the body's
+  first line ("… › Art. 1. — (Delega …)\nArt. 1. — (Delega …)\n1. Il
+  Governo …"). v2 drops that first line from the piece when it only
+  repeats the label's last segment; the record keeps it;
+- the outline wrote every label's whole path, so "CAPO I — DISPOSIZIONI
+  GENERALI …" stood before each of its articles. v2 writes a table of
+  contents: each partition once, its articles indented under it.
+
+Version 1 cuts as before (invariant 3). The three recipes state version 2.
+
+**Open: the Codice civile's hierarchy.** Its 3,280 articles arrive as
+annexes named "CODICE CIVILE-art. N", with no partition. So their header
+names the act (the record's title) and the article, without Libro or Titolo:
+
+    REGIO DECRETO 16 marzo 1942, n. 262 — Approvazione del testo del Codice civile. › CODICE CIVILE-art. 2043
+    Qualunque fatto doloso o colposo, che cagiona ad altri un danno ingiusto, …
+
+The partition must come from the ORIGIN, or it does not enter a chunk: a
+chunk is a pure function of the record (invariant 3), and the record
+reproduces from the origin (invariant 11). München was asked on 2026-11-08
+whether the member (annex names, annex headings, or partition elements) or
+another form the spec fetches holds it. If it does, the parser carries it
+forward as it carries `<chapter>`, and the header reads "… › LIBRO QUARTO —
+Delle obbligazioni › TITOLO IX — Dei fatti illeciti › Art. 2043". That is a
+parser version, so normattiva-nemo is then parsed, not carried. If it does
+not, the header stays as above.
+
 ## 4. Decisions
 
 ### C1 — How an article longer than the window is cut
