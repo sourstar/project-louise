@@ -622,7 +622,27 @@ def cmd_collection_new(a) -> int:
                 — this step prints the exact `forget` and its size and exits
                 2, deleting nothing; run again after it, and the new
                 collection takes the name and the predecessor's file (its
-                codex, and embed "off", excepted)."""
+                codex, and embed "off", excepted).
+
+    `--space-from <held collection>` is case E, A SECOND COLLECTION IN A HELD
+    SPACE (the legal collections, 2026-11-08: neuris and eurlex in legi's
+    Nemotron space). The space is the held collection's, copied with its
+    layers (`create --space-from`, 02 §2.7), and its reference vectors are
+    REUSED (`--calibration-from`, RULE 1), never re-embedded — so a copy that
+    drifted from its source cannot arise (new-collection.md's review: the
+    hand route re-embedded and only warned). Its endpoint, wire format and
+    model are the held collection's file's unless given (they must agree).
+      resolve   the held space; the plugin must cut as that space's layers do
+                (its own layers, from the recipe alone, equal them) or its
+                records would not be the space's; a recipe that states a
+                space must state THAT space (its `space_id`); the twin states
+                a CPU run of the space's weights.
+      check     as case A.
+      make      create, the space and layers copied, the reference reused,
+                the source's measured tolerance with them; the source's
+                calibration record copied beside it.
+      cpu-reference, gate  as case A (the CPU lane from the node's store, so
+                nothing the source's `new` computed is computed again)."""
     import argparse
     import copy
     import decimal
@@ -633,6 +653,14 @@ def cmd_collection_new(a) -> int:
     recipe = _recipe(a.recipe)
     given = copy.deepcopy(recipe)
     re_create = bool(getattr(a, "re_create", False))
+    space_from = getattr(a, "space_from", None)
+    source = None
+    if space_from and re_create:
+        raise CodexError("--space-from (case E) and --re-create (case F) are two cases: a "
+                         "re-creation keeps its predecessor's space, a copy takes another's")
+    if space_from:
+        source = _space_from_source(a, recipe)
+        recipe = _space_from_recipe(a.plugin, recipe, source[1])
 
     # resolve: the recipe's inputs, and nothing typed twice
     space = recipe.get("space") or {}
@@ -653,6 +681,8 @@ def cmd_collection_new(a) -> int:
                          "hidden): the tolerance and the CPU reference are measured against it")
     if re_create:
         _recreate_encoder(a)
+    elif source is not None:
+        _space_from_encoder(a, source[0])
     elif not a.encoder:
         raise CodexError("--encoder URL names the endpoint of the recipe's encoder")
     api = check_api(a.api)
@@ -661,7 +691,9 @@ def cmd_collection_new(a) -> int:
               "embed_model": model, "cpu_model": a.cpu_model, "platform_image": a.platform_image}
     if re_create:
         inputs.update(re_create=True, sample=int(a.sample))
-    run = wf.Run(wf.case("F" if re_create else "A"), a.name, inputs, say=say,
+    if source is not None:
+        inputs.update(space_from=source[0], space_id=source[1].space_id)
+    run = wf.Run(wf.case("F" if re_create else "E" if source is not None else "A"), a.name, inputs, say=say,
                  dry=bool(getattr(a, "dry_run", False)))
     pred = kept = None
     interim = recreate.interim_name(a.name)
@@ -679,7 +711,9 @@ def cmd_collection_new(a) -> int:
     run.at("resolve", f"ctx {ctx}, cut {cut}, document instruction {instruction!r}, set {set_id[:23]}…; "
                       f"{model} with its CPU twin {a.cpu_model}"
                       + (f"; re-creates {a.name} ({pred.collection_id[:23]}…)" if pred is not None else
-                         f"; re-creates {a.name}, forgotten since" if re_create else ""))
+                         f"; re-creates {a.name}, forgotten since" if re_create else "")
+                      + (f"; the space of {source[0]} ({source[1].space_id[:23]}…), its reference reused"
+                         if source is not None else ""))
     # BOTH ENGINES AS 09 §9.3 OBJECTS NOW, through the recipe reader (TOML has
     # no null: `variant` absent is null, template._engine_from_recipe), so the
     # dry run refuses exactly what the run refuses. München, 2026-11-07: the
@@ -718,6 +752,9 @@ def cmd_collection_new(a) -> int:
         # the pilot rule: München reads a dry run before every whole run
         return _new_dry_run(a, run, recipe, pred, dry_codex, changed, existing, interim, api=api,
                             model=model, ctx=ctx, cut=cut, instruction=instruction)
+
+    if source is not None:
+        return _space_from_make(a, run, recipe, source, existing, api=api, say=say)
 
     # calibrate, on the inputs the gate sends
     reference = calib.Endpoint(file=f"{a.recipe} (space.encoder)", url=a.encoder, api=api, model=model,
@@ -804,22 +841,9 @@ def cmd_collection_new(a) -> int:
     # in this process and its write lock is released when it returns
     # (`_sub_command`): normattiva's swap, 2026-11-07, found the collection
     # held by the gate of its own run
-    run.at("cpu-reference", "from the node's store")
-    with _sub_command():
-        rc = cmd_embedder_cpu_reference(argparse.Namespace(root=a.root, collection=name, model=a.cpu_model,
-                                                           query_model=None, again=False, refresh=True))
-    if rc != 0:
-        say(f"stopped at cpu-reference: it exited {rc}")
+    rc, stopped = _new_reference_and_gate(a, run, name, say)
+    if stopped:
         return rc
-    run.record("cpu-reference")
-
-    # gate
-    run.at("gate", "hold embedder check")
-    with _sub_command():
-        rc = cmd_embedder_check(argparse.Namespace(root=a.root, collection=name, accept=False,
-                                                   model=None, query_model=None))
-    run.record("gate", {"rc": rc})
-    say(f"{name}: {'the gate PASSED; embedding stays off until the operator turns it on' if rc == 0 else f'the gate exited {rc}: nothing may be embedded'}")
     if not re_create and vector_place.tier(vector_place.table_dir(a.root, name)) == vector_place.BUILD:
         say(f"{name}: its vector table is built in the build area "
             f"({vector_place.physical(vector_place.table_dir(a.root, name))}); when it takes over from the "
@@ -840,6 +864,157 @@ def cmd_collection_new(a) -> int:
         for line in blockers:
             say(f"  {line}")
     return rc
+
+
+def _new_reference_and_gate(a, run, name: str, say) -> tuple[int, bool]:
+    """`new`'s cpu-reference and gate steps, for every case that has them:
+    `(rc, stopped)` — stopped when the CPU reference did not exit 0. Each runs
+    in this process and its write lock is released when it returns
+    (`_sub_command`): normattiva's swap, 2026-11-07, found the collection held
+    by the gate of its own run."""
+    import argparse
+    run.at("cpu-reference", "from the node's store")
+    with _sub_command():
+        rc = cmd_embedder_cpu_reference(argparse.Namespace(root=a.root, collection=name, model=a.cpu_model,
+                                                           query_model=None, again=False, refresh=True))
+    if rc != 0:
+        say(f"stopped at cpu-reference: it exited {rc}")
+        return rc, True
+    run.record("cpu-reference")
+    run.at("gate", "hold embedder check")
+    with _sub_command():
+        rc = cmd_embedder_check(argparse.Namespace(root=a.root, collection=name, accept=False,
+                                                   model=None, query_model=None))
+    run.record("gate", {"rc": rc})
+    say(f"{name}: {'the gate PASSED; embedding stays off until the operator turns it on' if rc == 0 else f'the gate exited {rc}: nothing may be embedded'}")
+    return rc, False
+
+
+# ---- case E, a second collection in a held space (docs/notes/new-collection.md) ----
+
+def _space_from_source(a, recipe: dict):
+    """`(name, codex)` of the held collection whose space case E copies,
+    refused where the copy could not be the source's space: a pair space
+    (its set travels in its member, case C's), a space with a question
+    encoder (case B's, not run yet)."""
+    from app.hold import calibration as cal
+    try:
+        name, codex = col.resolve(a.root, a.space_from)
+    except CodexError as e:
+        raise CodexError(f"--space-from {a.space_from}: no collection of that name is held here ({e}); "
+                         f"case E copies the space of a collection this node holds") from None
+    if codex.space.query.encoder is not None:
+        raise CodexError(f"--space-from {name}: its space names a question encoder "
+                         f"(space.query.encoder), whose side case E does not copy yet (case B, phase 3)")
+    if cal.form(codex) == "pair":
+        raise CodexError(f"--space-from {name}: a pair space; its set travels in its member (case C)")
+    return name, codex
+
+
+def _space_from_recipe(plugin: str, recipe: dict, source) -> dict:
+    """The recipe case E makes: the source's space and layers in place of
+    the recipe's (02 §2.7). Refused when the plugin cuts otherwise than the
+    source's layers — the layers the recipe alone makes (its own, else the
+    plugin's) must equal them, or its records would not be the space's — and
+    when the recipe states a space that is not the source's (`space_id`)."""
+    import copy
+    placeholder = "sha256:" + "00" * 32         # space_id is not a function of the image
+    src = source.space.to_dict()
+    src.pop("envelope", None)
+    for k in ("vectors", "query_vectors"):
+        (src.get("calibration") or {}).pop(k, None)
+    own = copy.deepcopy(recipe)
+    stated = own.get("space")
+    own["space"] = copy.deepcopy(src)
+    mine = col.dry_codex(plugin, own, platform_image=placeholder)
+    want = [l.to_dict() for l in source.layers]
+    if [l.to_dict() for l in mine.layers] != want:
+        raise CodexError(f"--space-from {source.collection_id[:23]}…: the plugin {plugin} cuts its records "
+                         f"as {[l.to_dict() for l in mine.layers]}, and the space's layers are {want}: its "
+                         f"records would not be that space's. Case E copies a space to a plugin that "
+                         f"cuts the same way")
+    if stated is not None:
+        given = copy.deepcopy(recipe)
+        given["space"] = copy.deepcopy(stated)
+        given["space"].setdefault("tolerance", str(source.space.tolerance))
+        dry = col.dry_codex(plugin, given, platform_image=placeholder)
+        if dry.space_id != source.space_id:
+            differs = _differs_from(source, dry)
+            raise CodexError(f"--space-from: the recipe states a space that is not the held one "
+                             f"({'; '.join(differs) or dry.space_id}). Leave the space out, or state "
+                             f"the held collection's")
+    out = copy.deepcopy(recipe)
+    out["space"] = src
+    out["layers"] = want
+    return out
+
+
+def _space_from_make(a, run, recipe: dict, source, existing, *, api: str, say) -> int:
+    """Case E's make, then the CPU reference and the gate (as case A's). The
+    space and layers copied from the source, its reference vectors reused
+    (`calibration_from`: refused, naming the difference, if the document side
+    is not the source's — never re-embedded in silence), the source's
+    calibration record copied beside the new collection's state."""
+    import shutil
+
+    from app import node_state, vector_place
+    source_name, src = source
+    if existing is not None:
+        name, codex = existing
+        run.at("make", f"{name} exists, in the space of {source_name}: kept")
+    else:
+        placed = vector_place.place_new(a.root, a.name)
+        try:
+            codex, held = create_from(a.root, a.plugin, recipe, platform_image=a.platform_image,
+                                      encoder=a.encoder, name=a.name, api=api, embed_model=a.embed_model,
+                                      space_from=source_name, calibration_from=source_name)
+        except BaseException:
+            vector_place.unplace_new(a.root, a.name)
+            raise
+        name = col.name_of(a.root, codex.collection_id)
+        if codex.space_id != src.space_id:
+            raise CodexError(f"{name}: made in space {codex.space_id[:23]}…, not {source_name}'s "
+                             f"{src.space_id[:23]}…: forget it; the copy did not hold")
+        run.at("make", f"{name}  {codex.collection_id}  (held: {held}); space {codex.space_id[:23]}… of "
+                       f"{source_name}, its reference reused"
+                       + (f"; its vector table built in the build area, {placed}" if placed else ""))
+    state = a.root / name / "state"
+    state.mkdir(parents=True, exist_ok=True)
+    measured = a.root / source_name / "state" / "calibration.json"
+    if measured.is_file() and not (state / "calibration.json").is_file():
+        shutil.copyfile(measured, state / "calibration.json")
+    run.record("make", {"collection_id": codex.collection_id, "space_from": source_name})
+    rc, stopped = _new_reference_and_gate(a, run, name, say)
+    if stopped:
+        return rc
+    if vector_place.tier(vector_place.table_dir(a.root, name)) == vector_place.BUILD:
+        say(f"{name}: its vector table is built in the build area "
+            f"({vector_place.physical(vector_place.table_dir(a.root, name))}); when it takes over from the "
+            f"collection people search: louise hold vectors move {name} --to hot")
+    blockers = node_state.embedding_blockers(name, None) if rc == 0 else []
+    if blockers:
+        say(f"{name}: turned on, it still embeds nothing until "
+            f"{'this is' if len(blockers) == 1 else 'these are'} lifted:")
+        for line in blockers:
+            say(f"  {line}")
+    return rc
+
+
+def _space_from_encoder(a, source_name: str) -> None:
+    """Case E's encoder: the source's endpoint, wire format and model, from
+    its file's `[encoder]` (RULE 2: what the node knows is not asked); a flag
+    given must agree, since the reference reused is that endpoint's run."""
+    from app.hold import deposit
+    block = deposit._encoder_block(a.root, source_name) or {}
+    for attr, key, flag in (("encoder", "url", "--encoder"), ("api", "api", "--api"),
+                            ("embed_model", "embed_model", "--embed-model")):
+        have, given = block.get(key), getattr(a, attr, None)
+        if given and have and given != have:
+            raise CodexError(f"--space-from {source_name}: {flag} {given}, and its file's [encoder] {key} "
+                             f"is {have}: the space's reference is that endpoint's run; leave {flag} out")
+        setattr(a, attr, given or have)
+    if not a.encoder:
+        raise CodexError(f"--space-from {source_name}: its file names no [encoder] url; give --encoder URL")
 
 
 def _differs_from(held, dry) -> list[str]:
@@ -903,7 +1078,8 @@ def _new_dry_run(a, run, recipe: dict, pred, dry, changed: list[str], existing, 
         dry = col.dry_codex(a.plugin, dry_recipe, platform_image=a.platform_image)
     out(f"dry run: case {run.case.key}, {run.case.title.lower()}"
         + (f" of {a.name}, made as {existing[0] if existing else interim}" if re_create else f": {a.name}")
-        + "; it stops before calibrate, writes nothing and takes no lock")
+        + f"; it stops before {run.steps[2] if len(run.steps) > 2 else 'the next step'}, writes nothing "
+          f"and takes no lock")
     refusal = None
     if re_create:
         engine = "space.encoder.engine"
@@ -6057,6 +6233,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--re-create", dest="re_create", action="store_true",
                    help="case F: re-create the collection held under --name (RULE 1): its parts, "
                         "manifest, index and vectors carried, then its name")
+    p.add_argument("--space-from", dest="space_from", default=None, metavar="COLLECTION",
+                   help="case E: a second collection in the space of the held COLLECTION — its space "
+                        "and layers copied, its reference vectors reused, its endpoint and model")
     from app.hold.recreate import SAMPLE
     p.add_argument("--sample", type=int, default=SAMPLE, metavar="N",
                    help=f"with --re-create: chunks re-encoded by the new run and held to the stored "
