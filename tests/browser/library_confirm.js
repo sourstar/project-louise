@@ -10,7 +10,8 @@
 // recorded and answered {"ok": true}. Opens a card's Options, clicks
 // "reprocess lexical index…" — the warning; Enter, then Cancel: nothing
 // posted; then the labelled button: one POST. The same for "remove…", which
-// also wants the name typed. Prints one JSON line.
+// also wants the name typed, and for "unfreeze…" where the card is frozen.
+// Prints one JSON line.
 const fs = require('fs');
 const { launch } = require('./harness');
 const [DIR, STATIC] = process.argv.slice(2);
@@ -86,6 +87,31 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
   await page.click('#confirm-go');
   await waitPosts(before + 1);
   out.removeAfterConfirm = posts.slice(before);
+
+  // unfreeze, on a card that is frozen: the warning, Enter and Cancel post
+  // nothing; the labelled button posts once. null where the card offers none
+  const unfreeze = card + ' button[onclick^="confirmAction(\'unfreeze\'"]';
+  await sleep(500);
+  await load();
+  out.unfreeze = null;
+  if (await page.$(unfreeze)) {
+    const at = posts.length;
+    out.unfreezeClosed = await page.evaluate(sel => document.querySelector(sel).checkVisibility(), unfreeze);
+    await page.click(card + ' details[data-drawer="options"] > summary');
+    await page.click(unfreeze);
+    out.unfreeze = await modal();
+    await page.keyboard.press('Enter');
+    await sleep(300);
+    out.unfreezeAfterEnter = { shown: (await modal()).shown, posts: posts.length - at };
+    await page.click(unfreeze);
+    await page.click('#confirm-cancel');
+    await sleep(300);
+    out.unfreezeAfterCancel = { shown: (await modal()).shown, posts: posts.length - at };
+    await page.click(unfreeze);
+    await page.click('#confirm-go');
+    await waitPosts(at + 1);
+    out.unfreezeAfterConfirm = posts.slice(at);
+  }
 
   await h.close();
   console.log(JSON.stringify(out));

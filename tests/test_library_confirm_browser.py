@@ -8,7 +8,7 @@ recorded, never sent to a route. A button inside the closed Options line
 cannot be clicked until the line is opened; "reprocess lexical index…"
 shows its warning, and Enter (Cancel has the focus) or Cancel posts
 nothing; the labelled button posts once. "remove…" the same, with the name
-typed. Skipped, saying why, where no browser and no driver are installed.
+typed; "unfreeze…" the same on a frozen card. Skipped, saying why, where no browser and no driver are installed.
 """
 from __future__ import annotations
 
@@ -29,7 +29,9 @@ STATIC = Path(__file__).resolve().parent.parent / "app" / "static"
 pytestmark = pytest.mark.skipif(not browser_support.available(), reason=browser_support.REASON)
 
 
-def test_reprocess_and_remove_post_only_once_confirmed(tmp_path, isolated_config, monkeypatch):
+def _clicked_through(tmp_path, monkeypatch) -> dict:
+    """The Library page as the app renders it now, clicked through by
+    tests/browser/library_confirm.js; its one JSON line."""
     monkeypatch.setattr(spaces, "resolve_embed_model_hash", lambda *a: ("abc123", False))
     monkeypatch.setattr(web, "_ping", lambda url: True)
     monkeypatch.setattr(config, "ADMIN_TOKEN", "sekrit")
@@ -40,7 +42,11 @@ def test_reprocess_and_remove_post_only_once_confirmed(tmp_path, isolated_config
     run = subprocess.run([browser_support.NODE, str(SCRIPT), str(tmp_path), str(STATIC)],
                          capture_output=True, text=True, timeout=120, env=browser_support.env())
     assert run.returncode == 0, run.stdout[-2000:] + run.stderr[-2000:]
-    got = json.loads(run.stdout.strip().splitlines()[-1])
+    return json.loads(run.stdout.strip().splitlines()[-1])
+
+
+def test_reprocess_and_remove_post_only_once_confirmed(tmp_path, isolated_config, monkeypatch):
+    got = _clicked_through(tmp_path, monkeypatch)
 
     assert got["closed"] == {"open": False, "buttonVisible": False}, "the buttons wait behind Options"
 
@@ -65,3 +71,20 @@ def test_reprocess_and_remove_post_only_once_confirmed(tmp_path, isolated_config
     assert len(got["removeAfterConfirm"]) == 1
     post = got["removeAfterConfirm"][0]
     assert post["path"] == "/admin/library/gutenberg/remove" and json.loads(post["body"]) == {"mode": "retire"}
+    assert got["unfreeze"] is None, "a card that is not frozen offers no unfreeze"
+
+
+def test_unfreeze_posts_only_once_confirmed(tmp_path, isolated_config, monkeypatch):
+    """A frozen card's Options › unfreeze… (docs/notes/collection-freeze.md
+    §11): the card's warning, Cancel first; one POST from its labelled button."""
+    node_state.set_frozen("gutenberg", True, by="louise node freeze gutenberg")
+    got = _clicked_through(tmp_path, monkeypatch)
+    assert got["unfreezeClosed"] is False, "it waits behind Options"
+    warn = got["unfreeze"]
+    assert warn["shown"] and warn["focused"] == "confirm-cancel", "Cancel has the focus"
+    assert warn["buttons"] == ["Cancel", "Unfreeze gutenberg"]
+    assert "Unfreeze gutenberg?" in warn["text"] and "stops being kept" in warn["text"]
+    assert got["unfreezeAfterEnter"] == {"shown": False, "posts": 0}, "Enter is Cancel"
+    assert got["unfreezeAfterCancel"] == {"shown": False, "posts": 0}
+    (post,) = got["unfreezeAfterConfirm"]
+    assert post["path"] == "/admin/library/gutenberg/unfreeze" and json.loads(post["body"]) == {}

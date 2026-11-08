@@ -80,6 +80,13 @@
     {% if c.copy_state and not c.copy_state.vector_leg %}
     <span class="badge err" title="{{ c.copy_state.vector_leg_reason }}">vector leg withheld</span>
     {% endif %}
+    {% if c.frozen %}
+    {# FROZEN (07 §7.3 `node freeze`; docs/notes/collection-freeze.md §11):
+       it keeps the version it holds. The badge in sight; since when and by
+       whom under Details; Options › unfreeze… lifts it. The sentence is
+       app/status.py `frozen`'s, never composed here (invariant 10) #}
+    <span class="badge brass" data-frozen title="{{ c.frozen.says }}">frozen</span>
+    {% endif %}
   </div>
   {% if c.fetched %}
   {# denominator = the ORIGIN's file count for this profile, recorded at
@@ -251,6 +258,9 @@
      tests; the class stays exactly "more", the one look. #}
   <details class="more" data-drawer="details">
     <summary>Details</summary>
+    {% if c.frozen %}
+    <div class="note" data-frozen-since>{{ c.frozen.says }}</div>
+    {% endif %}
     {% if not c.fetched %}
     <div class="note">fetch stage: off — acquisition is not enabled for this collection</div>
     {% endif %}
@@ -322,6 +332,11 @@
       {% if c.paused %}
       <button class="primary" onclick="resumeCollection('{{ c.name }}')">resume</button>
       {% endif %}
+      {# freeze is the operator's command-line choice, as pause is; the card
+         offers the way back, as resume, behind the warning below #}
+      {% if c.frozen %}
+      <button class="primary" onclick="confirmAction('unfreeze', '{{ c.name }}')">unfreeze…</button>
+      {% endif %}
       {% if c.license.needs_ack %}
       <button class="primary" onclick="ackLicense('{{ c.name }}')">acknowledge license…</button>
       {% endif %}
@@ -352,6 +367,17 @@
       <div class="note"><b>Every file of its corpus folder is examined again, none skipped:</b> the record of what earlier scans saw is cleared ({{ c.total|num }} document{{ '' if c.total == 1 else 's' }} known now). A new file is added; a file whose content changed has its document parsed, indexed and embedded again. Unchanged documents keep their work.</div>
       <div class="note">On a large corpus this takes from minutes to hours, and the page waits until the scan is done.</div>
     </template>
+    {# `unfreeze` (node_state.set_frozen, as `louise node unfreeze`): the
+       version held stops being kept — the worker fetches and scans what
+       the freeze held back, and takes in what peers hold newer
+       (docs/notes/collection-freeze.md §6) #}
+    {% if c.frozen %}
+    <template data-confirm="unfreeze" data-for="{{ c.name }}" data-label="Unfreeze {{ c.name }}">
+      <h2>Unfreeze {{ c.name }}?</h2>
+      <div class="note"><b>The version it holds{% if c.frozen.when %}, kept since {{ c.frozen.when }},{% endif %} stops being kept:</b> its origin is fetched and scanned again, and what its peers hold newer — the snapshot, its members, their bundles — is taken in. A document whose origin changed is parsed, indexed and embedded again; its earlier version is searched until then, and replaced.</div>
+      <div class="note">{% if c.paused %}It is also paused: nothing runs for it until it is resumed, and then it catches up. {% endif %}Freezing it again keeps the version it holds then, not this one — <code>louise node freeze {{ c.name }}</code>, on the node's command line.</div>
+    </template>
+    {% endif %}
     <template data-confirm="remove" data-for="{{ c.name }}">
       <div class="note">It holds {{ c.total|num }} document{{ '' if c.total == 1 else 's' }}: {{ c.fts_done|num }} indexed, {{ c.embed_done|num }} embedded.</div>
     </template>
@@ -596,6 +622,7 @@ const CONFIRMED={
   reprocess:name=>libReset(name,'fts'),
   rescan:name=>libDiscover(name),
   'rescan-all':()=>rescanAll(),
+  unfreeze:name=>unfreezeCollection(name),
 };
 function confirmAction(what,name){
   const t=document.querySelector(`template[data-confirm="${what}"]`+(name?`[data-for="${CSS.escape(name)}"]`:''));
@@ -631,6 +658,12 @@ async function resumeCollection(name){
   try{await postJSON('/admin/library/'+name+'/resume',{})}
   catch(e){toast('resume failed: '+e);return}
   toast(name+': resumed — the worker takes it up within a round');
+  location.reload();
+}
+async function unfreezeCollection(name){
+  try{await postJSON('/admin/library/'+name+'/unfreeze',{})}
+  catch(e){toast('unfreeze failed: '+e);return}
+  toast(name+': unfrozen — the worker fetches and scans what the freeze held back within a round');
   location.reload();
 }
 async function setEmbedSelect(name,value){

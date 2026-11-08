@@ -975,7 +975,16 @@ reader needs at the command line:
   holds no file for. Who froze and when is recorded as for `pause`, and
   read by `node_state.frozen_since`. A command a person types — `records
   fetch`, `share fetch`, `records build` — is not stopped: freeze governs
-  what the node does on its own.
+  what the node does on its own. *In the Library (added 2026-11-08):* a
+  frozen collection's card carries a *frozen* badge, and its Details line
+  says since when and by whom where the history records it — one sentence,
+  app/status.py `frozen`, from the record the worker reads (invariant 10).
+  Its Options carry *unfreeze…*, beside *resume* and admin only like it,
+  behind the card's warning of what it gives up (the version held); it
+  posts `/admin/library/<name>/unfreeze`, which calls `node_state.set_frozen`
+  as `unfreeze` does, recorded as the Library's. Freeze is not offered
+  there, as pause is not: both are the operator's choice on the command
+  line (RULE 2); the card offers the way back.
 - **`node speech show`, `node speech set`.** *Added 2026-11-07* (operator:
   "voice support in Louise's web GUI, after the node's speech models run on
   the GPU"). The Ask page's microphone and speaker run on the node's model

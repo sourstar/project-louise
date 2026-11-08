@@ -18,7 +18,7 @@ from pathlib import Path
 
 import pytest
 
-from app import config, spaces, web
+from app import config, node_state, spaces, web
 from app.api import app
 
 SCRIPT = Path(__file__).parent / "browser" / "mobile_width.js"
@@ -51,6 +51,9 @@ def served(isolated_config, monkeypatch):
     monkeypatch.setattr(spaces, "resolve_embed_model_hash", lambda *a: ("abc123", False))
     monkeypatch.setattr(web, "_ping", lambda url: True)
     monkeypatch.setattr(config, "ADMIN_TOKEN", "sekrit")
+    # a frozen card: its badge, and under Details who froze it — a rename's
+    # record names the old collection whole, a word with nothing to break on
+    node_state.set_frozen("gutenberg", True, by=f"rename {LONG} -> gutenberg")
     # what a live node's Library shows and a test collection does not: the
     # peers' offers, every one named by its 71-character collection_id
     from app.share import offer
