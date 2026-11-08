@@ -53,7 +53,17 @@ $L beat --dev-unit louise-onednn-arms   # a unit started later
 $L beat --for 5h                 # before a known-long unattended step (at most 24 h)
 $L close                         # done, and the node is in a good state
 
-# A STEP INSIDE THE CONTAINER (a gate, `hold embedder check`, a fetch, a measurement):
+# A PASS WITH A PARSE POOL (`hold records build`, `hold collection new`, snapshot, check,
+# vectors build): its OWN container, cap and supervisor, in a louise-… unit — never
+# `docker exec` in the worker, whose 24 GiB cap it would share (2026-11-08: pubmed9's
+# records build, OOM-killed there with the worker, 3,914 s lost; deploy/supervise-pass.sh)
+systemd-run --unit louise-pubmed9-records -p KillMode=mixed -p TimeoutStopSec=330 \
+    /root/louise-rag/deploy/supervise-pass.sh pubmed9-records --memory 16g \
+    --volumes-from ix-louise-rag-worker-1 --network container:ix-louise-rag-worker-1 \
+    --env-file <the worker's env> -w /srv <image> python -m app.louise hold records build ...
+$L beat --dev-unit louise-pubmed9-records
+
+# A SHORT STEP INSIDE THE CONTAINER (a fetch, a measurement, `hold embedder check`):
 docker exec ix-louise-rag-worker-1 python -m app.louise node checkpoint run --note "pubmed gate" -- \
     python -m app.louise hold embedder check pubmed
 # one started some other way: record its pid as the worker container sees it
@@ -70,7 +80,11 @@ is never signalled), waits up to 300 s for it to end its unit, then SIGKILLs
 what is left, and says each — before it changes any state. `run` does not
 beat: the agent's beat is the liveness signal. Run steps in the WORKER
 container, where `watch` runs: a pid of another container is said and
-skipped.
+skipped. A supervised pass is stopped by its unit instead: the supervisor
+takes the unit's SIGTERM, holds itself and `docker stop`s the pass, which
+ends its unit and exits 130 (deploy/supervise-pass.sh). `--network
+container:` gives it the worker's names for the model servers (`new`'s
+calibration and gate).
 
 `save` records the state as it is NOW, so it comes first; a second `save`
 while one is open is refused unless `--replace` (the current state is the
