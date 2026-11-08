@@ -541,6 +541,15 @@ VECTOR_INDEX_REFRESH_ROWS = int(os.getenv("VECTOR_INDEX_REFRESH_ROWS", "50000"))
 # re-indexes, which cost 41 minutes on the 16.8M-row wikivec table (HDD)
 # for 115k new rows — it must not run every 50k rows there
 VECTOR_INDEX_REFRESH_FRACTION = float(os.getenv("VECTOR_INDEX_REFRESH_FRACTION", "0.02"))
+# ...but never more than this many: an unindexed row is flat-scanned by EVERY
+# query. The 2 % was set for the whole-table refresh (41 min, above); since
+# 2026-10-23 a refresh is a delta that costs with its new rows alone (93 s
+# for 591,591 on normattiva), so the fraction only delays it. Measured
+# 2026-11-08 (München, vec_latency.py, 36 runs): wikipedia at 147.7M rows had
+# 1,436,267 unindexed of a 2.95M threshold, search 1,095 ms unfiltered and
+# 1,488 ms lang=en against 57 / 202 ms indexed, ~0.72 ms per 1k unindexed
+# rows. At 500k: at most ~0.4 s, a ~80 s delta every few hours of embedding.
+VECTOR_INDEX_REFRESH_MAX_ROWS = int(os.getenv("VECTOR_INDEX_REFRESH_MAX_ROWS", "500000"))
 VECTOR_INDEX_REFRESH_S = int(os.getenv("VECTOR_INDEX_REFRESH_S", "1800"))
 # A refresh writes a DELTA index over the new rows (app/vector_index.py
 # `refresh`); past this many indices (the base and its deltas) the deltas are

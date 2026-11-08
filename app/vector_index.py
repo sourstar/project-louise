@@ -219,19 +219,45 @@ def _started(con, log, msg: str) -> None:
         log(msg)
 
 
-def refresh_due(st: dict | None) -> bool:
+def refresh_due(st: dict | None, *, quiet: bool = False) -> bool:
     """New rows since the build reach both the absolute and the
     fractional threshold: 50k rows AND 2 % of the table by default — a
     16.8M-row table refreshes every ~340k rows, a 300k-row table every
-    50k."""
+    50k — and never more than VECTOR_INDEX_REFRESH_MAX_ROWS (500k): every
+    query flat-scans the unindexed rows, so a 147.7M-row table waiting for
+    2 % searched in 1.1 s instead of 57 ms (2026-11-08, config.py).
+
+    `quiet`: no new rows came in for a whole pass (`_quiet`). The table is
+    finished or resting, and what it holds unindexed would be scanned by
+    every query for good. The absolute floor alone applies then."""
     if not st or not st.get("indexed"):
         return False
     unindexed = st.get("unindexed_rows")
     if unindexed is None:
         return False
+    if quiet:
+        return unindexed >= config.VECTOR_INDEX_REFRESH_ROWS
     need = max(config.VECTOR_INDEX_REFRESH_ROWS,
-               int(config.VECTOR_INDEX_REFRESH_FRACTION * int(st.get("rows") or 0)))
+               min(int(config.VECTOR_INDEX_REFRESH_FRACTION * int(st.get("rows") or 0)),
+                   config.VECTOR_INDEX_REFRESH_MAX_ROWS))
     return unindexed >= need
+
+
+_unindexed_seen: dict[str, tuple[int, float]] = {}   # lance dir -> (unindexed, seen since)
+
+
+def _quiet(collection, st: dict) -> bool:
+    """The table's unindexed count has not moved for a whole index pass
+    (VECTOR_INDEX_REFRESH_S). Keyed on the table's path, not its name."""
+    unindexed = st.get("unindexed_rows")
+    if unindexed is None:
+        return False
+    key, now = str(collection.lance_dir), time.monotonic()
+    seen = _unindexed_seen.get(key)
+    if seen is None or unindexed != seen[0]:
+        _unindexed_seen[key] = (unindexed, now)
+        return False
+    return now - seen[1] >= config.VECTOR_INDEX_REFRESH_S
 
 
 def _parts(collection):
@@ -1236,7 +1262,7 @@ def ensure(collection, con=None, *, log=None, may_continue=None) -> dict | None:
     # documents a minute. The index still goes first; the compaction follows
     # when it is due, between the two `may_continue` is asked again.
     did = None
-    if refresh_due(st):
+    if refresh_due(st, quiet=_quiet(collection, st)):
         with maintenance(collection):
             did = refresh(collection, con, log=log)
         if not go():
