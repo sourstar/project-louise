@@ -1194,6 +1194,8 @@ The migration that brought the code to them is complete (2026-10-08); its
 plan is deleted (`git show 7f84d44:docs/notes/migration-plan.md`), and what
 it left open is below.
 
+- **2026-11-08 — determinism for embedders only (operator).** "Determinism is mandatory for embedders only; as long as the quality is not degraded, determinism can be dropped for any other model." The VeGa wrapper's guard (`determinism_lacks`) now holds embedder runs only. Non-embedder node models keep the measured set or name an EXCEPTION with its quality check (tests/vega/test_engine_settings.py; approved-encoders.md "oneDNN switched on, measured"). First: chat qwen3.5-9b-q4 `GGML_SYCL_FA_ONEDNN=1` (same text, +3.5 % prompt). CLAUDE.md invariant 12's enforcement line ("states no card run…") now holds for embedder runs: the operator's to amend.
+
 ## Open after the migration
 
 - **BEFORE PRODUCTION — the operator's list** (to clear before switching to production):
