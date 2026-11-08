@@ -186,12 +186,12 @@ def holds(state: str | None = None) -> tuple[bool, str]:
             state = "unknown"
     if state not in HOLDING_MODES:
         return False, (f"the node is {state}: the GPU is the operator's (2026-10-23), so nothing is "
-                       f"held and the worker unloads as before")
+                       f"pinned or loaded for Ask")
     lim = cpu_limit.current()
     if lim.mode is not None and lim.mode not in HOLDING_MODES:
         return False, (f"profile {lim.profile} holds the node to {lim.mode}"
                        + (f" until {lim.until:%H:%M}" if lim.until else "")
-                       + ": nothing is held and the worker unloads as before")
+                       + ": nothing is pinned or loaded for Ask")
     return True, (f"the node is {state}" + (f", profile {lim.profile} ({lim.mode})" if lim.mode else "")
                   + ": the set is held")
 
