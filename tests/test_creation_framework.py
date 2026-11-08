@@ -29,7 +29,8 @@ DEFINITIONS = {"app/louise.py:create_from", "app/louise.py:create_deposit"}
 
 #: the framework's steps that make a Codex
 FRAMEWORK = {"app/louise.py:cmd_collection_new": "cases A and F, make",
-             "app/louise.py:_space_from_make": "case E, make (called by cmd_collection_new)"}
+             "app/louise.py:_space_from_make": "case E, make (called by cmd_collection_new)",
+             "app/louise.py:_sister_new": "case J's sister, make (called by cmd_collection_new)"}
 
 #: paths not yet moved into the framework, each with the phase that moves it
 NOT_YET_MOVED = {

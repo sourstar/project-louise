@@ -650,6 +650,11 @@ def cmd_collection_new(a) -> int:
     from app import collections as collections_mod, node_state, run_check, vector_place
     from app.hold import calibrate as calib, codex as cx, recreate, workflow as wf
     say = (lambda line: print(line, file=sys.stderr))
+    if getattr(a, "sister_of", None):
+        return _sister_new(a, say)
+    if not a.recipe:
+        raise CodexError("--recipe FILE: the space and what the plugin does not default (only a "
+                         "sister, `--sister-of`, is her mother's Codex and takes none)")
     recipe = _recipe(a.recipe)
     given = copy.deepcopy(recipe)
     re_create = bool(getattr(a, "re_create", False))
@@ -888,6 +893,207 @@ def _new_reference_and_gate(a, run, name: str, say) -> tuple[int, bool]:
     run.record("gate", {"rc": rc})
     say(f"{name}: {'the gate PASSED; embedding stays off until the operator turns it on' if rc == 0 else f'the gate exited {rc}: nothing may be embedded'}")
     return rc, False
+
+
+# ---- case J, a sister (docs/notes/new-collection.md; 02 §2.7) ----
+
+def _sister_new(a, say) -> int:
+    """`new <plugin> --name N --sister-of MOTHER --space-from SPACE [--dry-run]`:
+    case J's SISTER (02 §2.7; operator, 2026-11-08: "Make J, it is time to do
+    it" — normattiva-nemo, Normattiva's records in the legal Nemotron
+    space). Her mother's corpus and records, the space of a held collection;
+    nothing parsed or indexed again (RULE 1), nothing of the mother's
+    vectors carried (another space):
+      resolve   the mother; the space's collection (as case E: its space and
+                layers, reference, endpoint and model; refused for a question
+                encoder or a pair set); the mother must cut as that space's
+                layers do and use its cleaning, or her chunks would not be the
+                sister's; the twin states a CPU run of the space's weights.
+      check     a collection of that name already made is held to being this
+                sister (her mother, her space).
+      make      `derive` (the space and layers copied, the reference
+                inherited, never re-embedded); paused until the carry ends, so
+                the worker writes nothing into the manifest the carry copies.
+      carry     her parts seeded from the mother's latest snapshot (hard
+                links, each checked against its root), the mother's origin
+                shared, then her manifest and text index copied (hold/carry.py
+                A1i: every mark, queue, chunk-hash and bundle of the mother's
+                vectors emptied in the copy) and proven (documents counted,
+                the index byte for byte); the licence ack carried where the
+                terms are the same bytes. Both write locks: `node pause` the
+                mother first.
+      cpu-reference, gate  as case A (the CPU lane from the node's store).
+    A sister into a NEW space (her own recipe, calibrated here) is phase 4;
+    daughters and correctives too. Embedding stays off."""
+    import shutil
+
+    from app import node_state, run_check, vector_place
+    from app import collections as collections_mod
+    from app.hold import carry as carry_mod, lock as lock_mod, recreate, workflow as wf
+    root = Path(a.root)
+    if getattr(a, "re_create", False):
+        raise CodexError("--sister-of (case J) and --re-create (case F) are two cases")
+    if not getattr(a, "space_from", None):
+        raise CodexError("--sister-of needs --space-from COLLECTION: a sister into a held space is case "
+                         "J's built path; one into a new space, calibrated here, is phase 4")
+    if getattr(a, "recipe", None):
+        raise CodexError("--sister-of takes no --recipe: a sister is her mother's Codex, and her space is "
+                         "the --space-from collection's")
+    try:
+        mother_name, mother = col.resolve(root, a.sister_of)
+    except CodexError as e:
+        raise CodexError(f"--sister-of {a.sister_of}: no collection of that name is held here ({e})") from None
+    if mother.plugin != a.plugin:
+        raise CodexError(f"--sister-of {mother_name}: its plugin is {mother.plugin}, not {a.plugin}")
+    source_name, source = _space_from_source(a, {})
+    if source.space_id == mother.space_id:
+        raise CodexError(f"--space-from {source_name}: {mother_name} is in that space already; a sister in "
+                         f"her mother's space carries her vectors (`dev carry`)")
+    # what cuts the chunks, compared as the carry compares it (hold/carry.py
+    # A1h/A1i): the chunker whole, the rule, the input form — a layer written
+    # before version 5 names no `input`, and its form is text
+    def cut(c) -> list:
+        return [(l.chunker.to_dict(), l.rule, l.form) for l in c.layers]
+    if cut(mother) != cut(source) or source.cleaning_version != mother.cleaning_version:
+        raise CodexError(f"--sister-of {mother_name}: it cuts its records as {cut(mother)} (cleaning "
+                         f"{mother.cleaning_version}), {source_name}'s space as {cut(source)} (cleaning "
+                         f"{source.cleaning_version}): her chunks would not be the sister's, and nothing "
+                         f"could be carried")
+    _space_from_encoder(a, source_name)
+    api = check_api(a.api)
+    model = model_keys(a.encoder, embed_model=a.embed_model)[0]
+    inputs = {"plugin": a.plugin, "name": a.name, "sister_of": mother.collection_id,
+              "space_from": source_name, "space_id": source.space_id, "encoder": a.encoder, "api": api,
+              "embed_model": model, "cpu_model": a.cpu_model}
+    run = wf.Run(wf.case("J"), a.name, inputs, say=say, dry=bool(getattr(a, "dry_run", False)))
+    sp = source.space
+    stated = run_check.stated_run(collections_mod.EmbedRecipe(
+        url=a.encoder, api=api, model=a.cpu_model, dtype="f32", ctx=sp.ctx,
+        document_instruction=sp.document_instruction, cut=sp.cut or "characters"),
+        probe_item=run_check.PROBE)
+    if stated.driver != "cpu":
+        raise CodexError(f"--cpu-model {a.cpu_model} states a run on {stated.driver!r}, not the CPU")
+    if stated.weights != sp.encoder.weights:
+        raise CodexError(f"--cpu-model {a.cpu_model} runs weights {stated.weights[:23]}…, the space's are "
+                         f"{sp.encoder.weights[:23]}…: a twin is the same weights")
+    run.at("resolve", f"a sister of {mother_name} ({mother.collection_id[:23]}…) in the space of "
+                      f"{source_name} ({source.space_id[:23]}…); {model} with its CPU twin {a.cpu_model}")
+
+    try:
+        existing = col.resolve(root, a.name)
+    except CodexError:
+        existing = None
+    if existing is not None:
+        held = existing[1]
+        if getattr(held, "derived_from", None) != mother.collection_id or held.space_id != source.space_id:
+            raise CodexError(f"{existing[0]} exists and is not {mother_name}'s sister in {source_name}'s "
+                             f"space: forget it and run `new` again (RULE 1 for one nothing was "
+                             f"published from)")
+        run.at("check", f"{existing[0]} exists: {mother_name}'s sister in that space, kept")
+    else:
+        run.at("check", f"{a.name} is new")
+    if run.dry:
+        src = recreate.counts(root, mother_name, write_free=True)
+        need, free = recreate.room(root, mother_name, a.name, make=False)
+        print(f"dry run: case J, a sister of {mother_name}: {a.name}; it stops before make, writes "
+              f"nothing and takes no lock")
+        print(f"  space_id    {source.space_id} ({source_name}'s)")
+        print(f"  to carry    {src['documents'] if src['documents'] is not None else '?'} documents' "
+              f"manifest and text index, no vector ({mother_name} keeps its "
+              f"{src['vectors'] if src['vectors'] is not None else '?'})")
+        print(f"  room        {recreate.human(need)} needed, {recreate.human(free)} free: "
+              + ("enough" if free >= need else "SHORT, the carry refuses"))
+        print(f"  locks       the carry takes {mother_name}'s and {a.name}'s write locks: "
+              f"`louise node pause {mother_name}` first")
+        print("  steps")
+        by_key = {st.key: st for st in wf.STEPS}
+        for i, key in enumerate(run.steps, 1):
+            state = ("ran in this dry run" if key in ("resolve", "check") else
+                     "kept from an earlier run" if run.done(key) is not None else "would run")
+            print(f"    {i}/{len(run.steps)} {key:<13} {state}: {by_key[key].does}")
+        return 0
+
+    by = f"louise hold collection new {a.plugin} --sister-of {mother_name} (case J: paused until the carry)"
+    if existing is None:
+        node_state.set_paused(a.name, True, by=by)
+        placed = vector_place.place_new(root, a.name)
+        try:
+            sister = col.derive(root, mother.collection_id, space_from=source, now=_utc_now(), name=a.name)
+        except BaseException:
+            vector_place.unplace_new(root, a.name)
+            raise
+        name = col.name_of(root, sister.collection_id)
+        if sister.space_id != source.space_id:
+            raise CodexError(f"{name}: made in space {sister.space_id[:23]}…, not {source_name}'s: forget it")
+        held = _write_held_file(root, sister, **_inherited_encoder(root, sister, mother, source))
+        run.at("make", f"{name}  {sister.collection_id}  (held: {held}); paused until the carry"
+                       + (f"; its vector table built in the build area, {placed}" if placed else ""))
+    else:
+        name, sister = existing
+        run.at("make", f"{name} exists: kept")
+    run.record("make", {"collection_id": sister.collection_id})
+
+    done = run.done("carry")
+    if done is not None:
+        if recreate.counts(root, name)["documents"] != (done.get("counts") or {}).get("documents"):
+            raise recreate.CopyMismatch(f"carry: {name} holds {recreate.counts(root, name)}, the carry "
+                                        f"recorded {done.get('counts')}: something wrote to it since")
+        run.at("carry", f"kept from the earlier run: {done['counts']['documents']} documents")
+    else:
+        locks = []
+        try:
+            for n in sorted({mother_name, name}):
+                try:
+                    locks.append(lock_mod.take(lock_mod.state_dir(root, n), n,
+                                               f"louise hold collection new --sister-of {mother_name} (carry)"))
+                except lock_mod.Held as e:
+                    raise _defer(f"{e}. The carry needs both collections still: `louise node pause "
+                                 f"{mother_name}` ({name} is paused since it was made); then run this "
+                                 f"again: it resumes at the carry") from None
+            run.at("carry", f"from {mother_name}: its parts, then its manifest and text index, none of "
+                            f"its vectors")
+            _whole_quota()
+            parts = recreate.seed_parts(root, mother_name, name, now=_utc_now(), log=say)
+            origin = recreate.share_origin(root, mother_name, name)
+            need, free = recreate.room(root, mother_name, name)
+            if free < need:
+                raise CodexError(recreate.no_room(mother_name, name, need, free))
+            out = carry_mod.carry(root, mother_name, name, copy=True, apply=True, sister=True, log=say)
+            counts = recreate.counts(root, name)
+            if counts["documents"] != recreate.counts(root, mother_name)["documents"]:
+                raise recreate.CopyMismatch(f"carry: {name} holds {counts['documents']} documents and "
+                                            f"{mother_name} {recreate.counts(root, mother_name)['documents']}")
+            a_idx = recreate.tree_digest(recreate._tree(root, mother_name, "index"))
+            b_idx = recreate.tree_digest(recreate._tree(root, name, "index"))
+            if a_idx != b_idx:
+                raise recreate.CopyMismatch(f"carry: {name}'s text index is not {mother_name}'s "
+                                            f"({b_idx['sha256']} against {a_idx['sha256']})")
+            ack = recreate.carry_ack(root, mother_name, name, sister)
+            run.record("carry", {"from": {"name": mother_name, "collection_id": mother.collection_id},
+                                 "parts": parts, "origin": origin, "carried": out.get("done"),
+                                 "reset": out.get("reset"), "counts": counts, "index": b_idx, "ack": ack})
+            run.at("carry", f"{counts['documents']} documents' manifest and the text index "
+                            f"({b_idx['files']} files, {str(b_idx['sha256'])[:23]}…) carried, no vector; "
+                            f"parts {parts['seeded']}, origin {origin}, licence ack {ack}")
+        finally:
+            for lk in locks:
+                lk.release()
+    node_state.set_paused(name, False, by=by)
+    state = root / name / "state"
+    measured = root / source_name / "state" / "calibration.json"
+    if measured.is_file() and not (state / "calibration.json").is_file():
+        state.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(measured, state / "calibration.json")
+    rc, stopped = _new_reference_and_gate(a, run, name, say)
+    if stopped:
+        return rc
+    blockers = node_state.embedding_blockers(name, None) if rc == 0 else []
+    if blockers:
+        say(f"{name}: turned on, it still embeds nothing until "
+            f"{'this is' if len(blockers) == 1 else 'these are'} lifted:")
+        for line in blockers:
+            say(f"  {line}")
+    return rc
 
 
 # ---- case E, a second collection in a held space (docs/notes/new-collection.md) ----
@@ -6227,7 +6433,8 @@ def build_parser() -> argparse.ArgumentParser:
                                      "reference, gate, every input from the recipe (embedding stays off)")
     root_arg(p)
     p.add_argument("plugin")
-    p.add_argument("--recipe", required=True, metavar="FILE")
+    p.add_argument("--recipe", default=None, metavar="FILE",
+                   help="the recipe (every case but a sister, `--sister-of`)")
     p.add_argument("--name", required=True, help="the collection's local name: the one thing only the "
                                                   "operator knows (RULE 2)")
     p.add_argument("--encoder", default=None, metavar="URL",
@@ -6239,6 +6446,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--re-create", dest="re_create", action="store_true",
                    help="case F: re-create the collection held under --name (RULE 1): its parts, "
                         "manifest, index and vectors carried, then its name")
+    p.add_argument("--sister-of", dest="sister_of", default=None, metavar="MOTHER",
+                   help="case J: a sister of the held MOTHER — her records, parts, manifest and text "
+                        "index carried, none of her vectors — in the space of --space-from")
     p.add_argument("--space-from", dest="space_from", default=None, metavar="COLLECTION",
                    help="case E: a second collection in the space of the held COLLECTION — its space "
                         "and layers copied, its reference vectors reused, its endpoint and model")

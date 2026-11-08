@@ -974,6 +974,15 @@ not use (08 §8.5). Everything that decides a record byte it keeps —
 `modality` — and `hold collection derive` refuses anything else, and
 refuses a sister that differs in nothing.
 
+On a peer that holds the mother, a sister in ANOTHER encoder space is
+made by `hold collection new --sister-of` (*amended 2026-11-08*, case J
+of docs/notes/new-collection.md, the sister into a held space): her parts
+are seeded from her mother's latest snapshot, and her manifest and text
+index are copied, being functions of the records alone (RULE 1). None of
+the mother's vectors are carried, and nothing in the copy may say one is
+held (hold/carry.py, amendment A1i). Her documents are then embedded in her
+own space.
+
 The test is the records, not the declaration: a sister's `records_root`
 equals her mother's at every snapshot they share (§2.2), and her parts
 are byte-identical, because nothing a sister may change is written into

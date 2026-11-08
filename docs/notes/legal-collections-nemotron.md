@@ -210,10 +210,19 @@ of normattiva, then run a comparison test before doing the full embedding."
     `run`, against the old collection. Only the chunks the pilot's
     questions reach are embedded on demand. The full embedding waits for
     its numbers and the operator's go.
-- **The gap:** no built case makes it without re-parsing.
-  - Case E would re-parse all 341,959 members from `/corpora/normattiva`,
-    and RULE 1 wants the identical records carried.
-  - Carrying records into a new space is case J (a sister), phase 4, not
-    built.
-  - For the architecture session: build J for this use, or accept E with
-    the re-parse (a CPU pass, no download).
+- **How it is made: case J, built 2026-11-08** (operator: "Make J, it is
+  time to do it"). A sister of `normattiva` in `legi`'s space; nothing is
+  parsed or indexed again, and none of the DAR vectors is carried
+  (new-collection.md J; hold/carry.py A1i):
+
+  ```bash
+  louise node pause normattiva
+  louise hold collection new normattiva --name normattiva-nemo --sister-of normattiva \
+      --space-from legi --cpu-model vega-nemotron-3-embed-1b-cpu --dry-run
+  louise hold collection new normattiva --name normattiva-nemo --sister-of normattiva \
+      --space-from legi --cpu-model vega-nemotron-3-embed-1b-cpu
+  louise node resume normattiva
+  ```
+
+  It needs legi created first. Its embedding stays off until the comparison
+  above, and the operator's go.

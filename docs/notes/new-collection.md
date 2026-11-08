@@ -57,7 +57,7 @@ The operator gives the first column; the workflow finds everything else.
 | **G. A private collection** | LocalAGI or an OpenAI vector store; not shared | name only | as E (the served model's held space); the first on an encoder is A | `notes` |
 | **H. Annotations** | Claims about another collection; no encoder | claims file, name | 1, 2, 5 | gutenberg-book-editions |
 | **I. A peer's collection** | A copy fetched from a peer | collection id, name | 1, 5 (fetched), 7, 8, on this node's encoder | Perugia's gutenberg |
-| **J. Sister, daughter, corrective** | Lineage (02 §2.7) | the mother, plus what changes | as A, B or C into a new space; else 5, 7, 8 | none yet ("No official daughters") |
+| **J. Sister, daughter, corrective** | Lineage (02 §2.7) | plugin, the mother, the space's collection, name (a sister into a held space, built); the mother, plus what changes (the rest, phase 4) | sister into a held space: 1, 2, 5 (derived), 6 (parts, manifest, text index; no vector), 7, 8 | normattiva-nemo |
 
 ### Simple examples
 
@@ -71,6 +71,13 @@ louise hold collection new wikidata --recipe recipes/wikidata-nemo.json --name w
 # layers, reference, endpoint and model are legi's; only the plugin, recipe and name are given
 louise hold collection new neuris --recipe recipes/neuris.toml --name neuris --space-from legi \
     --cpu-model vega-nemotron-3-embed-1b-cpu
+
+# J — a sister into a held space (Normattiva's records in legi's Nemotron space):
+# the mother's records, parts, manifest and text index, no vector; no recipe
+louise node pause normattiva
+louise hold collection new normattiva --name normattiva-nemo --sister-of normattiva \
+    --space-from legi --cpu-model vega-nemotron-3-embed-1b-cpu
+louise node resume normattiva
 
 # F — a re-creation: the collection held under --name, on another engine;
 # its endpoint, model and platform image are the predecessor's
@@ -126,7 +133,8 @@ The wizard comes later, on the same declarations.
 | B | Refused at resolve, before anything is asked (phase 1); built in phase 3. |
 | F | Built: `new --re-create` (2026-11-07, pulled forward from phase 3 for normattiva; app/hold/recreate.py, tests/hold/test_collection_recreate.py). On A's steps: the predecessor's records and space, another engine. A recipe that moves the records (a parser) is refused at check: its carry is `dev carry --rebuilt`'s, by hand, until F on D. Not yet run on the node: the runbook below. |
 | E | Built: `new --space-from <held collection>` (2026-11-08, pulled forward from phase 2 for the legal collections: neuris and eurlex in legi's Nemotron space; tests/hold/test_collection_new_space_from.py). The space and layers copied, the reference vectors REUSED (`calibration_from`), never re-embedded, so the review's "re-embeds and only warns" cannot arise on this route; a plugin that cuts otherwise than the space's layers, or a recipe stating another space, is refused at resolve; the endpoint and model are the source's file's. Not yet run on the node. |
-| C, D, G–J | Planned, phases below. |
+| J | Built for a SISTER INTO A HELD SPACE (2026-11-08, operator: "Make J, it is time to do it"; pulled forward from phase 4 for normattiva-nemo): `new <plugin> --name N --sister-of <mother> --space-from <held collection>` (tests/hold/test_collection_new_sister.py). `derive`, the space and layers and reference of the held collection; her parts seeded from the mother's snapshot, her manifest and text index copied with every mark, queue, chunk-hash and bundle of the mother's vectors emptied (hold/carry.py A1i), none of the mother's vectors carried; the mother must cut as that space's layers do. A sister into a new space, a daughter and a corrective are refused at resolve (phase 4). Not yet run on the node. |
+| C, D, G–I | Planned, phases below. |
 
 **The plan.** Each phase ships with tests and is measured on the node before
 the next one starts.

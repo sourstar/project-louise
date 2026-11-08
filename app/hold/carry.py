@@ -370,6 +370,67 @@ def _clear_versions(manifest: Path, *, log: Callable[[str], None]) -> int:
         con.close()
 
 
+#: A1i: what a manifest copied into a sister holds about its source's VECTORS
+#: (app/db.py), emptied in the copy: the queues of work on them, the chunk-hash
+#: holder table the cross-version carry reads (06 §6.3: "the hash of every chunk
+#: text this peer holds a vector for"), the bundles and their evidence, the
+#: imported chunks' verification, the genesis imports
+SISTER_EMPTIED = ("embed_queue", "verify_queue", "chunk_hashes", "chunk_verification", "bundles",
+                  "bundle_evidence", "genesis_imports")
+#: and the control rows that speak of them: the gate's last verdict on the
+#: source's runs, what the share paths fetched and served, a publication
+SISTER_CONTROL = ("embed_gate", "share_fetch", "share_served", "torrent_published")
+SISTER_CONTROL_PREFIXES = ("publish:",)
+
+
+def _sister_reset(manifest: Path, *, window: int = 5_000,
+                  log: Callable[[str], None] = print) -> dict[str, int]:
+    """A1i: the copied manifest holds nothing of the source's vectors.
+    Every document not embedded (`embed_done` 1 → 0, a declined document's
+    -1 kept: the node's choice over the same records), `embed_version` 0 —
+    in rowid windows, BEGIN IMMEDIATE each; the validity columns' sync marks
+    0; the tables and control rows above emptied. Repeatable: a second run
+    changes nothing."""
+    from app import db
+    con = sqlite3.connect(manifest, timeout=60, isolation_level=None)
+    out: dict[str, int] = {}
+    try:
+        db.wal(con)                                     # invariant 6: a manifest is WAL
+        tables = {r[0] for r in con.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        top = con.execute("SELECT MAX(rowid) FROM documents").fetchone()[0] or 0
+        marks = 0
+        for start in range(0, top, max(1, window)):
+            con.execute("BEGIN IMMEDIATE")
+            try:
+                marks += con.execute(
+                    "UPDATE documents SET embed_done=CASE WHEN embed_done>0 THEN 0 ELSE embed_done END, "
+                    "embed_version=0 WHERE rowid>? AND rowid<=? AND (embed_done>0 OR "
+                    "COALESCE(embed_version,0)<>0)", (start, start + window)).rowcount
+                con.execute("COMMIT")
+            except BaseException:
+                con.execute("ROLLBACK")
+                raise
+        out["marks"] = marks
+        con.execute("BEGIN IMMEDIATE")
+        try:
+            if "validity" in tables:
+                out["validity"] = con.execute("UPDATE validity SET synced=0 WHERE synced<>0").rowcount
+            for t in SISTER_EMPTIED:
+                if t in tables:
+                    out[t] = con.execute(f"DELETE FROM {t}").rowcount
+            out["control"] = con.execute(
+                f"DELETE FROM control WHERE key IN ({','.join('?' for _ in SISTER_CONTROL)})"
+                + "".join(" OR key LIKE ?" for _ in SISTER_CONTROL_PREFIXES),
+                (*SISTER_CONTROL, *(p + "%" for p in SISTER_CONTROL_PREFIXES))).rowcount
+            con.execute("COMMIT")
+        except BaseException:
+            con.execute("ROLLBACK")
+            raise
+    finally:
+        con.close()
+    return {k: v for k, v in out.items() if v}
+
+
 def _checkpoint(manifest: Path) -> None:
     """Everything the WAL holds into the main file, the WAL truncated — the
     manifest is then one file, and the move cannot leave half of it behind."""
@@ -447,7 +508,7 @@ def unembedded_why_not(lance: Path, manifest: Path) -> str | None:
 
 def carry(root, from_ref: str, to_ref: str, *, copy: bool = False, apply: bool = False,
           keep: str | None = None, rebuilt: bool = False, recut: bool = False,
-          resliced: bool = False, unembedded: bool = False,
+          resliced: bool = False, unembedded: bool = False, sister: bool = False,
           log: Callable[[str], None] = print) -> dict[str, Any]:
     """Carry `from_ref`'s manifest, text index and vector table into `to_ref`
     (G1). `apply=False` checks everything and writes nothing.
@@ -465,6 +526,20 @@ def carry(root, from_ref: str, to_ref: str, *, copy: bool = False, apply: bool =
     <to> --records-from <from>`, so no snapshot is compared here. By the
     book, the target would discover, rdf and index 75.9 M documents again
     (~23 h on the node) to the same bytes.
+
+    `sister` (A1i, 2026-11-08; normattiva-nemo, operator: "Make J"): case J
+    of new-collection.md, a SISTER in another encoder space with the same
+    records. As A1h — the encoder's side of the space may differ, what cuts
+    the chunks may not, the records are the same records and its parts were
+    seeded from the source's latest snapshot — but the source HOLDS vectors
+    (its own space's) and keeps them: the copy is required, the vector table
+    stays, and everything in the copied manifest that refers to the source's
+    vectors is emptied (`_sister_reset`): every embed mark, the embed and
+    verify queues, the chunk-hash holder table the cross-version carry reads,
+    the bundles, their evidence and the chunk verification rows, the genesis
+    imports, the validity columns' sync marks, and the gate's and the share
+    paths' state. By the book the sister would discover, parse and index
+    every record again to the same bytes.
 
     `resliced` (A1g, 2026-10-24; operator: a daughter with a new family map
     reuses "all the vectors and corpus of the mother"): the target differs
@@ -487,6 +562,11 @@ def carry(root, from_ref: str, to_ref: str, *, copy: bool = False, apply: bool =
     root = Path(root)
     from_name, src = col.resolve(root, from_ref)
     to_name, to = col.resolve(root, to_ref)
+    if sister and (unembedded or resliced or rebuilt or keep or recut):
+        raise CodexError("carry --sister carries no vector: no --unembedded, --resliced, --rebuilt, "
+                         "--keep or --recut with it")
+    if sister and not copy:
+        raise CodexError("carry --sister copies: the source keeps its manifest, index and vectors")
     if unembedded and (resliced or rebuilt or keep or recut):
         raise CodexError("carry --unembedded carries no vector: no --resliced, --rebuilt, --keep "
                          "or --recut with it")
@@ -518,9 +598,13 @@ def carry(root, from_ref: str, to_ref: str, *, copy: bool = False, apply: bool =
                 f"the origin only by files added beside the ones read (A1d); anything else "
                 f"moves chunks, and nothing is carried")
     else:
-        refuse_unless_same_records(src, to, "carry --unembedded" if unembedded else "carry")
+        refuse_unless_same_records(src, to, "carry --sister" if sister else
+                                   "carry --unembedded" if unembedded else "carry")
     diff = space_differences(src, to)
-    if unembedded:
+    if sister and src.space_id == to.space_id:
+        raise CodexError("carry --sister: the two are in one space; a sister in her mother's space "
+                         "carries the vectors too (`dev carry`, A1)")
+    if unembedded or sister:
         # the text index is keyed on chunk ids and the manifest counts chunks:
         # what cuts them — the layers whole, their input forms, the cleaning —
         # must be the same; only the ENCODER's side may differ
@@ -530,12 +614,14 @@ def carry(root, from_ref: str, to_ref: str, *, copy: bool = False, apply: bool =
             layer_side.append("layers")
         if layer_side:
             raise CodexError(
-                f"carry --unembedded: {to.collection_id} and {src.collection_id} differ in "
-                f"{', '.join(layer_side)}, which cut the chunks the text index and the manifest "
-                f"hold (A1h admits the encoder's side only: {', '.join(sorted(ENCODER_SIDE))})")
+                f"carry --{'sister' if sister else 'unembedded'}: {to.collection_id} and "
+                f"{src.collection_id} differ in {', '.join(layer_side)}, which cut the chunks the text "
+                f"index and the manifest hold (A1h/A1i admit the encoder's side only: "
+                f"{', '.join(sorted(ENCODER_SIDE))})")
         if diff:
             log(f"[carry] {from_name} → {to_name}: the spaces differ in {', '.join(diff)}; "
-                f"{from_name} holds no vector, so nothing carried depends on them (A1h)")
+                + (f"{from_name}'s vectors stay with it and none is carried (A1i)" if sister else
+                   f"{from_name} holds no vector, so nothing carried depends on them (A1h)"))
         diff = []
     if keep:
         diff = [d for d in diff if d not in WEIGHTS_WITH_KEEP]
@@ -593,6 +679,8 @@ def carry(root, from_ref: str, to_ref: str, *, copy: bool = False, apply: bool =
         claim["resliced"] = True
     if unembedded:
         claim["unembedded"] = True
+    if sister:
+        claim["sister"] = True
     held = json.loads(marker.read_text(encoding="utf-8")) if marker.is_file() else None
     if held is not None and {k: held.get(k) for k in claim} != claim:
         raise CodexError(f"{marker} records another carry ({held}); this one is {claim}")
@@ -628,7 +716,9 @@ def carry(root, from_ref: str, to_ref: str, *, copy: bool = False, apply: bool =
         if not apply:
             log(f"[carry] {from_name} → {to_name}: would {claim['mode']} the manifest "
                 f"({plan['documents']} documents), index/"
-                + (" (no vector: the target makes its own table, A1h)" if unembedded else " and lance/")
+                + (" (no vector: the target makes its own table, A1h)" if unembedded else
+                   " (no vector: the source keeps its own, the target embeds in its space, A1i)"
+                   if sister else " and lance/")
                 + (", state/bundles and state/share — the bundles, coverage rows and torrents "
                    "too (A1f: the same document vectors)" if shares and not copy else "")
                 + f", and re-pin to {to.space_id[:23]}…; nothing written (--yes)")
@@ -644,7 +734,7 @@ def carry(root, from_ref: str, to_ref: str, *, copy: bool = False, apply: bool =
 
     done: dict[str, str] = {}
     # A1h: no vector crosses spaces; the target's table is its own, of its width
-    for k in (("index",) if unembedded else ("lance", "index")):
+    for k in (("index",) if unembedded or sister else ("lance", "index")):
         done[k] = _transfer(sp[k], tp[k], copy=copy)
     if not copy:
         # a source whose table was in the build area keeps a link to nothing
@@ -691,6 +781,12 @@ def carry(root, from_ref: str, to_ref: str, *, copy: bool = False, apply: bool =
             f"carry: {tp['manifest']} holds {_documents(tp['manifest'])} document(s) and "
             f"{from_name}'s manifest {src_docs}: the copy is not the source's. Nothing is "
             f"marked done; pause both collections and run the carry again")
+    if sister:
+        # A1i: the source's vectors stayed with it; nothing in the copy may
+        # still say this collection holds one
+        plan["reset"] = _sister_reset(tp["manifest"], log=lambda m: log(f"[carry] {to_name}: {m}"))
+        log(f"[carry] {to_name}: nothing of {from_name}'s vectors is said held here: "
+            + ", ".join(f"{k} {v}" for k, v in plan["reset"].items()) + " (A1i)")
     if unembedded:
         # A1h: the source holds NO vector (`unembedded_why_not` proved it), so
         # no document of the target holds an earlier version's vectors,
@@ -711,7 +807,7 @@ def carry(root, from_ref: str, to_ref: str, *, copy: bool = False, apply: bool =
     elif shares:
         log(f"[carry] {from_name} → {to_name}: --copy leaves state/bundles and state/share with "
             f"{from_name}; the coverage rows are carried")
-    elif same:
+    elif same and not sister:
         sb, tb = sp["state"] / "bundles", tp["state"] / "bundles"
         done["bundles"] = (_move_state(sb, tb) if not copy
                            else "linked " + json.dumps(_link_tree(sb, tb), sort_keys=True))
@@ -722,7 +818,7 @@ def carry(root, from_ref: str, to_ref: str, *, copy: bool = False, apply: bool =
         final.update(same_space=True, predecessors=_predecessors_of(sp["state"], src.collection_id))
     marker.write_text(json.dumps(final, sort_keys=True), encoding="utf-8")
     log(f"[carry] {from_name} → {to_name}: manifest {done['manifest']}, index/ "
-        f"{done['index']}, lance/ {done.get('lance', 'not carried (A1h)')}"
+        f"{done['index']}, lance/ {done.get('lance', 'not carried (A1i)' if sister else 'not carried (A1h)')}"
         + (f", state/bundles {done.get('bundles')}, state/share {done.get('share')}" if shares and not copy else "")
         + f"; space re-pinned to {to.space_id[:23]}…; {cleared} coverage row(s) of {from_name} "
         + ("re-keyed to it (A1f)" if shares else "kept unkeyed (provenance, never its coverage)"
@@ -734,6 +830,8 @@ def carry(root, from_ref: str, to_ref: str, *, copy: bool = False, apply: bool =
            f"{from_name}'s record lines), `hold snapshot create {to_name}` (A1g)" if resliced else
            f"use: `hold records build {to_name} --records-from {from_name}`, `hold snapshot "
            f"create {to_name}`; its documents are embedded in its own space (A1h)" if unembedded else
+           f"use: its CPU reference and gate (`hold collection new`, case J); its documents are "
+           f"embedded in its own space (A1i)" if sister else
            f"use: `hold check {to_name} --checks vectors-sample` (amendment A1)"))
     return plan
 
