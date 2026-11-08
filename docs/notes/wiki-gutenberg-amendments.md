@@ -186,6 +186,31 @@ A WIRE-FORMAT CHANGE: the operator decides; nothing exists until then.
   attaches it yet; a community's `state_of` is `unknown`, it pins no record)
   and steps 4–5 after the wikidata collection exists.
 
+## Which books: non-fiction and memoirs only (operator, 2026-11-08)
+
+"Gutenberg graph forecast: do not consider fiction books as planned", then
+"Poetry and drama as well, keep only non fiction books, and memories".
+
+- **In:** non-fiction, and memoirs, autobiographies, diaries, letters and
+  personal narratives. These are about real people and events, the kind of
+  entities and relations wikidata holds.
+- **Out:** fiction (novels, short stories), poetry and drama.
+- **The rule is the records' own subjects and class**: the book's LCSH
+  subjects and its LoCC (pg_catalog.csv, kept in the record). No model
+  decides.
+  - OUT: a subject ending in "Fiction" or naming fiction as the genre, LoCC
+    PZ, or a "Poetry" or "Drama" subject.
+  - IN, whatever else: "Biography", "Autobiography", "Memoirs", "Diaries",
+    "Correspondence", "Personal narratives", or LoCC CT.
+  - A book matching both an OUT and an IN subject is IN (a memoir in verse,
+    say).
+- **It is a selection, not a pruning:** every gutenberg record stays as it
+  is, and wiki-gutenberg simply makes no claims about the books left out.
+  The rule is written here and in the annotations Codex's `method` before it
+  applies (invariant 11: nothing is pruned unless written).
+- **The share:** counted on the node (München, pending). The forecast
+  scales with it.
+
 ## Which gutenberg it annotates (operator, 2026-11-03)
 
 "gutenberg-nemo is just gutenberg with nemo vectors, why should it differ for
