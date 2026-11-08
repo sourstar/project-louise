@@ -12,6 +12,11 @@ jinja2>=3.1
 # constraints.txt (tests/test_image_constraints.py checks the pairing and
 # that an app using form parsing declares it).
 python-multipart==0.0.32
+# NUMBERS READ ALOUD IN THE TEXT'S LANGUAGE (operator, 2026-11-08, choice A):
+# app/speech_numbers.py writes numbers, ordinals and years as words before the
+# one voice reads them (it read every digit in Italian). LGPL-2.1, pure Python;
+# its one dependency, docopt, is its command line's.
+num2words==0.5.14
 # PINNED (2026-10-23): the text index is part of what peers must agree on (05 §5.1:
 # the same list on every peer with the same members), and a new tantivy may tokenize
 # or stem differently — 0.27.0 changed the Greek stemmer (Perugia's image build,
