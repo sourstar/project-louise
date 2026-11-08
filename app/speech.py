@@ -298,8 +298,8 @@ def synthesize_timed(body: dict[str, Any], url: str | None = None) -> tuple[int,
     # embedders): the call holds the node's interactive claim, so corpus
     # work stands aside from the card and the governor pins its clock, as for
     # a rerank (app/rage/dispatch.py). The claim, not the gate: speech and
-    # chat share the endpoint and not the work (operator, 2026-11-08: "Chat
-    # and TTS use different GPU resources"), so speech never queues behind
+    # chat share the endpoint and not the work (the operator: "Chat and TTS
+    # use different GPU resources"), so speech never queues behind
     # an answer being written.
     from app.rage import dispatch
     with dispatch.interactive(dispatch.Level.CHAT):
