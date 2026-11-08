@@ -1196,6 +1196,8 @@ it left open is below.
 
 - **2026-11-08 — determinism for embedders only (operator).** "Determinism is mandatory for embedders only; as long as the quality is not degraded, determinism can be dropped for any other model." The VeGa wrapper's guard (`determinism_lacks`) now holds embedder runs only. Non-embedder node models keep the measured set or name an EXCEPTION with its quality check (tests/vega/test_engine_settings.py; approved-encoders.md "oneDNN switched on, measured"). First: chat qwen3.5-9b-q4 `GGML_SYCL_FA_ONEDNN=1` (same text, +3.5 % prompt). CLAUDE.md invariant 12's enforcement line ("states no card run…") now holds for embedder runs: the operator's to amend.
 
+- **2026-11-08 — Gutenberg to Nemotron, after wikidata and the legal collections (operator).** "When wikidata and the legal collections are done we re embed Gutenberg with nemo to get rid of one model in memory": gutenberg-nemo is re-created by RULE 1 (records and chunks carried, nemotron-embed.md "Production"), ~7.82 B tokens at ~6,750 tok/s ≈ 12–15 card-days. qwen3-embedding-4b (5.1 GB resident) then leaves the card. The same day, "Evaluate re embedding Normattiva (quality gain/loss) with nemo as well": the evaluation planned in legal-embedders-fr-de-eu.md "Nemotron-3-Embed-1B for Normattiva too" (lemur-it MRR@10 deciding, JuriFindIT validation beside it), run now on the live engine.
+
 ## Open after the migration
 
 - **BEFORE PRODUCTION — the operator's list** (to clear before switching to production):
