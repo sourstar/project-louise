@@ -1,0 +1,119 @@
+# LEGI — the consolidated French law (DILA's open data), every version of
+# every article, and every text, section and structure file, each its own
+# record (app/plugins/legi/source.py; docs/notes/legal-fr-de-eu.md §2;
+# docs/notes/legal-collections-nemotron.md). DRAFT, 2026-11-08: nothing is
+# created until `hold collection new` runs ON THE NODE — it mints a
+# PERMANENT collection_id and space_id from these bytes, and reads there
+# what only the node can say:
+#
+#   space.encoder.engine   the run the reference vectors are computed with,
+#                          read with `louise hold embedder run --encoder
+#                          http://192.168.178.10:30286 --api vega --model
+#                          vega-nemotron-3-embed-1b` (the comment under
+#                          [space.encoder]) and written there as the table
+#                          [space.encoder.engine]: `new` refuses a recipe
+#                          without it, and holds the endpoint to it. It is
+#                          outside space_id, so the three legal recipes stay
+#                          in one space whatever engine each names.
+#   space.tolerance        MEASURED by `new` (calibrate, then tolerance),
+#                          never typed
+#
+# Case A of docs/notes/new-collection.md: a new space, the first of the
+# three legal collections in it (legi, then neuris and eurlex by case E,
+# phase 2). THE [space] BLOCK IS BYTE-IDENTICAL IN THE THREE LEGAL RECIPES:
+# one space_id, one list across French, German and EU law. A dry run first
+# (resolve and check, then what the run would do; it writes nothing):
+#
+#   louise hold collection new legi --recipe /config/recipes/legi-recipe.toml --name legi \
+#       --encoder http://192.168.178.10:30286 --api vega --embed-model vega-nemotron-3-embed-1b \
+#       --cpu-model vega-nemotron-3-embed-1b-cpu --dry-run
+#
+# then the same without --dry-run:
+#
+#   louise hold collection new legi --recipe /config/recipes/legi-recipe.toml --name legi --encoder http://192.168.178.10:30286 --api vega --embed-model vega-nemotron-3-embed-1b --cpu-model vega-nemotron-3-embed-1b-cpu
+#
+# The licence is GREEN (Licence Ouverte 2.0, app/plugins/legi/TERMS.txt):
+# no acknowledgement is required (invariant 9). DILA's personal-data warning
+# (OPENDATA/AVERTISSEMENT-Donnees_a_caractere_personnel.pdf) is read on the
+# node BEFORE this runs, and the class tightened here if it asks for it.
+# The fetch (`hold fetch legi --profile full`) is the baseline (1.17 GB)
+# and every daily increment after it, two connections at most, listed from
+# the directory's own index page; a pass after it fetches the new
+# increments only. Embedding stays off until the gate has passed and the
+# operator turns it on (new-collection.md).
+
+[descriptive]
+title = "LEGI — the consolidated French law, every version"
+summary = "The codes, laws, ordinances, decrees and a selection of arrêtés of the French Republic from DILA's LEGI open data (Légifrance), every version of every article as its own record, searchable as of any date, with each text's visas, signatures and notes, its sections and its structure; repealed articles in their last text, labelled. JORF, the originals as published, is not in this collection."
+
+[space]
+dim = 2048
+dtype = "f16"
+ctx = 8192
+cut = "tokens"
+pooling = "mean"
+normalise = true
+exactness = "exact"
+epoch = "0"
+evaluation = ""
+# tolerance: measured by `new`, never typed
+
+[space.calibration]
+set = "sha256:7d06a2f6a4a773da01a517cb30571cac421753df3e30b20fca4716e5441fbf0f"
+
+[space.calibration.quorum]
+n = 16
+min_pass = 12
+
+[space.document]
+instruction = "passage: "
+
+[space.query]
+instruction = "query: "
+
+[space.encoder]
+weights = "sha256:09596cedbdf2a0d164b37083794632be55dcb2aa2abcf02fb995dfdccbecbf2c"
+label = "nvidia/Nemotron-3-Embed-1B-BF16 (c0c9fea9; f16 GGUF, llama.cpp 3f8af15a; vega-nemotron-3-embed-1b)"
+# [space.encoder.engine]: read on the node with `louise hold embedder run --encoder http://192.168.178.10:30286 --api vega --model vega-nemotron-3-embed-1b`; `new` holds the endpoint to it.
+
+# The ONGOING work per month, in tokens: TO MEASURE at the first month of
+# increments. Draft from the node's probe (2026-10-28): the newest increment
+# held 1,402 LEGIARTI files; ~21 increments a month and ~500 tokens an
+# article version put it near 15 M before the carry by chunk hash, which
+# embeds an unchanged article text once.
+[work]
+tokens = 15000000
+per = "P1M"
+
+[origin]
+form = "DILA's LEGI open-data tarballs (echanges.dila.gouv.fr/OPENDATA/LEGI/): the latest baseline (Freemium_legi_global_*), then every daily increment (LEGI_*) dated after it in timestamp order, each increment's files then its deletion lists; one record per XML file (ARTICLE, TEXTE_VERSION, SECTION_TA, TEXTELR), its bytes exactly as the tarball holds them; not the Légifrance (PISTE) API, which needs OAuth2 credentials and quotas, nor the HTML pages; JORF, the originals that carry an ELI, is scope not yet taken (legal-fr-de-eu.md §2.1)"
+unit = "container-member"
+clock = "Europe/Paris"
+cutoff_rule = "update-files"
+jurisdiction = "FR"
+
+# The spec is the plugin's (app/acquire/specs.py LEGI_SPEC): the
+# directory's index page is the listing, each file published once under a
+# dated name and fetched once (DeltaSpec full-resync against fetch_files).
+
+[validation]
+checks = ["roots", "records", "chunks", "records-vs-origin", "license", "signature", "calibration", "vectors-sample"]
+required = []
+
+[validation.sample.records]
+shards = "0.05"
+
+[validation.sample.chunks]
+shards = "0.05"
+
+[validation.sample."vectors-sample"]
+shards = "0.05"
+
+[validation.sample."records-vs-origin"]
+shards = "0.05"
+
+# Layers (`akn_article`, the shared legal space's chunker), slicing (`legi`:
+# kind and year, parts cut by content) and the profile (the validity axis,
+# one record per article version) are the plugin's defaults
+# (app/plugins/legi/source.py, app/pack/slicing.py). The licence class is the
+# plugin's, green.

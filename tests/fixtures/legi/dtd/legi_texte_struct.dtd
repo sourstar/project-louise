@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<!--
+ Décrit la structure d'un texte LEGI et la liste des différentes versions de ce texte.
+     @title LEGI : Structure du texte 
+     @root TEXTELR
+-->
+
+<!-- Racine du document de structure du texte -->
+<!ELEMENT TEXTELR (META,  VERSIONS,  STRUCT)>
+
+<!ENTITY % meta_commun SYSTEM "meta_commun.dtd"> %meta_commun;
+<!ENTITY % meta_texte_chronicle SYSTEM "meta_texte_chronicle.dtd"> %meta_texte_chronicle;
+<!ENTITY % lien_section_ta SYSTEM "lien_section_ta.dtd"> %lien_section_ta;
+<!ENTITY % lien_txt SYSTEM "lien_txt.dtd"> %lien_txt;
+<!ENTITY % lien_art SYSTEM "lien_art.dtd"> %lien_art;
+
+<!-- Métadonnées du texte -->
+<!ELEMENT META (META_COMMUN, META_SPEC) >
+
+<!-- Métadonnées spécifique à ce type de document -->
+<!ELEMENT META_SPEC (META_TEXTE_CHRONICLE) >
+
+<!-- Liste des versions du texte -->
+<!ELEMENT VERSIONS (VERSION*) >
+
+<!-- Version du texte. -->
+<!ELEMENT VERSION (LIEN_TXT)>
+
+<!-- Etat juridique de la version.  
+Les valeurs possibles sont : ABROGE, ABROGE_DIFF, ANNULE, MODIFIE, MODIFIE_MORT_NE, PERIME, TRANSFERE, VIGUEUR, VIGUEUR_DIFF  
+@example VIGUEUR
+-->
+<!ATTLIST VERSION etat CDATA #REQUIRED>
+
+<!-- Historique de la structure -->
+<!ELEMENT STRUCT (LIEN_SECTION_TA|LIEN_ART)*>
+
+

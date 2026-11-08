@@ -10,7 +10,7 @@ from pathlib import Path
 from urllib.parse import quote, urlencode
 
 from ..plugins.base import LicenseClass
-from .spec import (AcquisitionSpec, ChecksumSource, DeltaSpec, Endpoint, Filter,
+from .spec import (AcquisitionSpec, ChecksumSource, DeltaSpec, Endpoint, Filter, RateLimit,
                    RemoteFile, Transport)
 
 GUTENBERG_SPEC = AcquisitionSpec(
@@ -508,9 +508,54 @@ WIKIDATA_SPEC = AcquisitionSpec(
 )
 
 
+# ---- LEGI (docs/notes/legal-fr-de-eu.md §2.1, §7.1; app/plugins/legi) ----
+
+#: the baseline as the node's probe read it (2026-10-28 23:48): its HEAD's
+#: length; an estimate for the disk preflight, the listing's bytes are the truth
+_LEGI_BASELINE_BYTES = 1_171_027_316
+
+LEGI_SPEC = AcquisitionSpec(
+    source_id="legi",
+    transport=Transport.HTTPS,
+    endpoints=(
+        # no authentication; the directory's own index page is the listing
+        # (481 files on 2026-10-28: the baseline and one increment per working
+        # day since it), read by transport_https.list_index — its exact form
+        # is OWED from the node, the reader takes Apache's and nginx's
+        Endpoint(transport=Transport.HTTPS,
+                 url="https://echanges.dila.gouv.fr/OPENDATA/LEGI/",
+                 max_conns=2,                       # a public service: etiquette
+                 listing="html-index",
+                 listing_pattern=r"(?:Freemium_legi_global|LEGI)_\d{8}-\d{6}\.tar\.gz"),
+    ),
+    layout="container-files",
+    filters=("*.tar.gz",),
+    checksums=ChecksumSource(kind="none"),          # none published beside the tarballs
+    # each file is published once under a dated name and never rewritten: a
+    # pass fetches the names it has not got (the listing against fetch_files),
+    # resuming a `.part` by Range; one already fetched is never moved again
+    delta=DeltaSpec(mode="full-resync"),
+    etiquette=RateLimit(max_conns=2),
+    profiles={
+        # one increment (the first the listing names): a few MB, the pipeline end to end
+        "demo": Filter(include=("LEGI_*.tar.gz",), max_files=1),
+        "full": Filter(),
+    },
+    estimated_bytes={"full": _LEGI_BASELINE_BYTES + 481 * 5_000_000},
+    profile_labels={
+        "demo": "one daily increment of LEGI (a few MB)",
+        "full": "the LEGI baseline and every daily increment since it: every version of the "
+                "consolidated French law DILA publishes",
+    },
+    license_class=LicenseClass.GREEN,                # Licence Ouverte 2.0 (app/plugins/legi/TERMS.txt)
+    terms_text_path=Path(__file__).parent.parent / "plugins" / "legi" / "TERMS.txt",
+)
+
+
 ACQUIRE_REGISTRY: dict[str, AcquisitionSpec] = {
     "embedded": EMBEDDED_SPEC,
     "gutenberg": GUTENBERG_SPEC,
+    "legi": LEGI_SPEC,
     "normattiva": NORMATTIVA_SPEC,
     "pubmed": PUBMED_SPEC,
     "wikidata": WIKIDATA_SPEC,

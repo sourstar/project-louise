@@ -1,0 +1,247 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<!--
+Décrit toutes les informations relatives à un article LEGI
+@title LEGI : Article 
+@root ARTICLE
+-->
+
+<!-- Racine de l'article-->
+<!ELEMENT ARTICLE (META, CONTEXTE, VERSIONS, NOTA, BLOC_TEXTUEL, LIENS)>
+
+<!ENTITY % meta_commun SYSTEM "meta_commun.dtd" > %meta_commun;
+<!ENTITY % lien_art SYSTEM "lien_art.dtd" > %lien_art;
+<!ENTITY % lien SYSTEM "lien.dtd" > %lien;
+<!ENTITY % contenu SYSTEM "contenu.dtd" > %contenu;
+
+<!-- Métadonnées de l'article -->
+<!ELEMENT META (META_COMMUN, META_SPEC) >
+
+<!-- Métadonnées spécifique à ce type de document -->
+<!ELEMENT META_SPEC (META_ARTICLE) >
+
+<!-- Metadonnees specifique aux articles -->
+<!ELEMENT META_ARTICLE (NUM, ETAT, DATE_DEBUT,  DATE_FIN, TYPE)>
+
+<!-- 
+Numéro de l'article 
+@example 7
+-->
+<!ELEMENT NUM (#PCDATA)>
+
+<!-- 
+Etat juridique de l'article 
+Les valeurs possibles sont : ABROGE , ABROGE_DIFF, ANNULE, DISJOINT, MODIFIE, MODIFIE_MORT_NE, PERIME, TRANSFERE, VIGUEUR, VIGUEUR_DIFF  
+@example VIGUEUR
+-->
+<!ELEMENT ETAT (#PCDATA)>
+
+<!-- 
+Date d'entrée en vigueur de l'article 
+@example 1991-02-27
+-->
+<!ELEMENT DATE_DEBUT (#PCDATA) >
+
+<!-- 
+Date de fin de vigueur de l'article 
+@example 2999-01-01
+-->
+<!ELEMENT DATE_FIN (#PCDATA) >
+
+<!-- Définie le type de l'article
+@hidden liste de valeurs à préciser 
+-->
+<!ELEMENT TYPE (#PCDATA) >
+
+<!-- Rappel du contexte de l'article courant. Cite le texte parent et ses différentes versions. -->
+<!ELEMENT CONTEXTE (TEXTE)>
+
+<!-- Rappel du texte parent et de ses différentes versions-->
+<!ELEMENT TEXTE (TITRE_TXT*, TM*)>
+
+<!-- 
+Identifiant interne commun à toute les versions du texte 
+@example JORFTEXT000004888660
+-->
+<!ATTLIST TEXTE cid CDATA #REQUIRED >
+
+<!-- 
+Numéro du texte 
+@example 91-201
+-->
+<!ATTLIST TEXTE num CDATA #REQUIRED>
+
+<!-- 
+NOR du texte 
+@example MENF9003167D 
+-->
+<!ATTLIST TEXTE nor CDATA #REQUIRED>
+
+<!-- Nature du document. 
+    @hidden Liste de valeurs à preciser 
+    @example DECRET
+-->
+<!ATTLIST TEXTE nature CDATA #REQUIRED>
+
+
+<!-- Numéro de parution du JO
+    Ex : 0158
+-->
+<!ATTLIST TEXTE num_parution_jo CDATA #IMPLIED>
+
+<!-- 
+Date de publication du texte 
+@example 1991-02-27
+-->
+<!ATTLIST TEXTE date_publi CDATA #REQUIRED>
+
+<!-- 
+Date de signature du texte
+@example 1991-02-25
+-->
+<!ATTLIST TEXTE date_signature CDATA #REQUIRED>
+
+<!-- 
+Autorité émettrice. 
+Liste des autorités en date du 12/06/2008 :
+CONSEIL SUPERIEUR DE L'AUDIOVISUEL  , 
+COMMISSION POUR LA TRANSPARENCE FINANCIERE DE LA VIE POLITIQUE  , 
+BANQUE DE FRANCE - CONSEIL DE LA POLITIQUE MONETAIRE  , 
+COMMISSION GENERALE DE TERMINOLOGIE ET DE NEOLOGIE  , 
+AUTORITE DE REGULATION DES COMMUNICATIONS ELECTRONIQUES ET DES POSTES  , 
+COMMISSION NATIONALE DES COMPTES DE CAMPAGNE ET DE FINANCEMENTS POLITIQUES  , 
+COMMISSION DE CONTROLE DES ASSURANCES  , 
+AUTORITE DES MARCHES FINANCIERS  , 
+AGENCE FRANCAISE DE LUTTE CONTRE LE DOPAGE  , 
+CONSEIL DES VENTES VOLONTAIRES  , 
+CONSEIL ECONOMIQUE ET SOCIAL  , 
+COMITE DES ENTREPRISES D'ASSURANCE  , 
+AUTORITE DE REGULATION DES MESURES TECHNIQUES  , 
+MEDIATEUR NATIONAL DE L'ENERGIE  , 
+COUR DES COMPTES  , 
+COMMISSION NATIONALE DE DEONTOLOGIE DE LA SECURITE  , 
+HAUTE AUTORITE DE LUTTE CONTRE LES DISCRIMINATIONS ET POUR L'EGALITE  , 
+CONSEIL DE LA CONCURRENCE  , 
+COUR DE DISCIPLINE BUDGETAIRE ET FINANCIERE  , 
+MINISTERE DE L'ECONOMIE, DES FINANCES ET DE L'INDUSTRIE REGLEMENTS DU COMITE DE LA REGLEMENTATION COMPTABLE  , 
+CONSEIL SUPERIEUR DE L'AUDIOVISUEL (CSA)  , 
+CONSEIL D'ETAT  , 
+COUR DE JUSTICE DE LA REPUBLIQUE  , 
+COMMISSION DE REGULATION DE L'ELECTRICITE  , 
+COMMISSION DE CONTROLE DES ASSURANCES, DES MUTUELLES ET DES INSTITUTIONS DE PREVOYANCE  , 
+CONSEIL DES VENTES VOLONTAIRES DE MEUBLES AUX ENCHERES PUBLIQUES  , 
+CONSEIL DE PREVENTION ET DE LUTTE CONTRE LE DOPAGE  , 
+CONSEIL CONSTITUTIONNEL : DECISIONS  , 
+COMMISSION NATIONALE DE L'INFORMATIQUE ET DES LIBERTES  , 
+MEDIATEUR DE LA REPUBLIQUE  , 
+COMMISSION NATIONALE DES COMPTES DE CAMPAGNE ET DES FINANCEMENTS POLITIQUES  , 
+COMMISSION CONSULTATIVE DU SECRET DE LA DEFENSE NATIONALE  , 
+CONSEIL CONSTITUTIONNEL  , 
+COMMISSION DE REGULATION DE L'ENERGIE  , 
+COMMISSION NATIONALE DU DEBAT PUBLIC  , 
+HAUTE AUTORITE DE SANTE  , 
+COMMISSION D'ACCES AUX DOCUMENTS ADMINISTRATIFS  , 
+COMMISSION NATIONALE DE CONTROLE DES INTERCEPTIONS DE SECURITE  , 
+LOIS CONSEIL CONSTITUTIONNEL  , 
+COMMISSION NATIONALE DE L'INFORMATIQUE ET DES LIBERTES (CNIL)  , 
+AUTORITE DE REGULATION DES TELECOMMUNICATIONS  , 
+COMMISSION NATIONALE DES COMPTES DE CAMPAGNE ET DES FINANCEMENTS POLITIQUES  , 
+COMMISSION DES OPERATIONS DE BOURSE  , 
+AUTORITE DE REGULATION DES COMMUNICATIONS ELECTRONIQUES ET DES POSTES  , 
+AUTORITE DE CONTROLE DES ASSURANCES ET DES MUTUELLES  , 
+COMMISSION BANCAIRE  , 
+@example CONSEIL SUPERIEUR DE L'AUDIOVISUEL (CSA)
+-->
+<!ATTLIST TEXTE autorite CDATA #REQUIRED>
+
+<!-- 
+Ministère émetteur 
+@example MINISTERE DE L'EDUCATION NATIONALE
+-->
+<!ATTLIST TEXTE ministere CDATA #REQUIRED>
+
+<!-- 
+Titre du texte parent 
+@example Décret no 2000-723 du 28 juillet 2000  relatif au conseil académique des aides-éducateurs
+-->
+<!ELEMENT TITRE_TXT (#PCDATA) >
+
+<!-- 
+identifiant interne du texte dans cette version
+@example JORFTEXT000004397285
+-->
+<!ATTLIST TITRE_TXT id_txt CDATA #REQUIRED>
+
+<!-- 
+Titre court du texte
+@example Décret n°2000-723 du 28 juillet 2000
+-->
+<!ATTLIST TITRE_TXT c_titre_court CDATA #REQUIRED>
+
+<!-- 
+Date de validité pour cette version du texte 
+@example 2000-08-02
+-->
+<!ATTLIST TITRE_TXT debut CDATA #REQUIRED>
+
+<!-- 
+Date de fin de validité pour cette version du texte 
+@example 2999-01-01
+-->
+<!ATTLIST TITRE_TXT fin CDATA  #REQUIRED>
+
+<!-- Têtier parent -->
+<!ELEMENT TM (TITRE_TM*,TM?)>
+
+<!-- 
+Libellé du têtier.  
+@example Section 4 : Dispositions diverses.
+-->
+<!ELEMENT TITRE_TM (#PCDATA)>
+
+<!-- 
+Identifiant interne de la section 
+@example LEGISCTA000009486305
+-->
+<!ATTLIST TITRE_TM  id CDATA #REQUIRED>
+
+<!-- 
+Date de validité de la section 
+@example 2000-08-30
+-->
+<!ATTLIST TITRE_TM debut CDATA #REQUIRED>
+ 
+ <!-- 
+ Date de fin de validité de la section 
+ @example 2999-01-01
+ --> 
+<!ATTLIST TITRE_TM fin CDATA #REQUIRED>
+
+<!-- Versions de l'article courant -->
+<!ELEMENT VERSIONS (VERSION*)>
+
+<!-- Version de l'article -->
+<!ELEMENT VERSION (LIEN_ART)>
+
+<!-- 
+Etat juridique de l'article dans cette version 
+Les valeurs possibles sont : ABROGE , ABROGE_DIFF, ANNULE, DISJOINT, MODIFIE, MODIFIE_MORT_NE, PERIME, TRANSFERE, VIGUEUR, VIGUEUR_DIFF  
+@example VIGUEUR
+-->
+<!ATTLIST VERSION etat CDATA #REQUIRED>
+
+<!-- 
+Nota de l'article 
+Contenu formaté en HTML. 
+-->
+<!ELEMENT NOTA (CONTENU) >
+
+<!-- 
+Contenu textuel
+Contenu formaté en HTML. 
+-->
+<!ELEMENT BLOC_TEXTUEL (CONTENU) >
+
+<!-- Liens vers d'autres textes -->
+<!ELEMENT LIENS (LIEN*) >
+

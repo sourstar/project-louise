@@ -364,6 +364,26 @@ def normattiva_slice(doc: CanonicalDoc, native_id: int) -> str:
             f"/vig={year if year.isdigit() else 'unknown'}")
 
 
+def legi_kind_of_member(member: str) -> str:
+    """The kind of a LEGI file from its place in the origin's tree:
+    `…/article/…`, `…/section_ta/…`, `…/texte/version/…`, `…/texte/struct/…`."""
+    for folder, kind in (("/texte/version/", "texte_version"), ("/texte/struct/", "textelr"),
+                         ("/section_ta/", "section_ta"), ("/article/", "article")):
+        if folder in "/" + member:
+            return kind
+    return "unknown"
+
+
+def legi_slice(doc: CanonicalDoc, native_id: int) -> str:
+    """The file's kind (an article version, a text's version, a section, a
+    text's structure) and the year its id sorts under — the id's high bits
+    (02 §2.2's monotonic prefix), so `slice_hint` answers from the manifest
+    row alone and agrees with this by construction."""
+    from ..plugins import eli
+    from ..plugins.legi.source import kind_of
+    return f"kind={kind_of(doc.extra or {}) or 'unknown'}/year={eli.id_day(int(native_id)) // 10000:04d}"
+
+
 SCHEMES: dict[str, SliceScheme] = {
     "pubmed": SliceScheme(
         keys=("year",), records_per_shard=30_000,
@@ -397,6 +417,23 @@ SCHEMES: dict[str, SliceScheme] = {
                   "vig": {"field": "extra.vigenza_from", "bin": "year"}},
         slice_of=normattiva_slice),
 }
+
+# one record per origin FILE (app/plugins/legi): by kind, then by the year
+# its id sorts under; an article is about one chunk, so a part of 5,000
+# records is about 02 §2.3's 7,000-chunk target. PARTS CUT BY CONTENT: the
+# origin adds versions to past years (a back-filled 1889 version, a new
+# section of an old code at the fallback day), and a part cut by count
+# refuses a record that sorts between closed parts; cut by content, a
+# slice's parts are a pure function of its records and an insertion
+# re-issues its own part (02 §2.2, amended 2026-10-24)
+SCHEMES["legi"] = SliceScheme(
+    keys=("kind", "year"), records_per_shard=5_000,
+    describe={"keys": ["kind", "year"],
+              "kind": {"field": "extra", "rule": "the LEGI file's kind: article, texte_version, "
+                                                 "section_ta or textelr"},
+              "year": {"field": "native_id", "bin": "year of the day the id sorts under"},
+              "parts": content_parts(5_000)},
+    slice_of=legi_slice)
 
 DEFAULT_SCHEME = SliceScheme(keys=(), records_per_shard=10_000,
                              describe={"keys": []}, slice_of=single_slice)
@@ -436,6 +473,12 @@ def slice_hint(plugin_name: str, row, context: FamilyContext | None = None) -> s
             _, member = split_locator(row["path"])
             year = eli.id_day(int(row["native_id"])) // 10000
             return f"type={_normattiva_type(member.split('/', 1)[0])}/vig={year:04d}"
+        if plugin_name == "legi":
+            from ..plugins import eli
+            from ..plugins.legi.source import split_locator as legi_locator
+            _, member = legi_locator(row["path"])
+            return (f"kind={legi_kind_of_member(member)}"
+                    f"/year={eli.id_day(int(row['native_id'])) // 10000:04d}")
         if plugin_name == "pubmed":
             from ..plugins.pubmed import pack as pubmed_pack
             from ..plugins.pubmed.source import split_locator

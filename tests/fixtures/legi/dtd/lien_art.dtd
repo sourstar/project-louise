@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<!-- 
+Lien vers un article
+    @title Lien vers un article
+    @root LIEN_ART
+-->
+
+<!-- Racine du document -->
+<!ELEMENT LIEN_ART EMPTY>
+
+<!-- Numéro de l'article 
+@example 1
+-->
+<!ATTLIST LIEN_ART num CDATA #REQUIRED>
+
+<!-- 
+Origine de l'article
+@hidden Liste de valeurs à preciser 
+@example JORF
+-->
+<!ATTLIST LIEN_ART origine CDATA #REQUIRED>
+
+<!-- 
+Identifiant interne du document. L'identifiant est également le nom du fichier xml. 
+@example JORFARTI000005470221
+-->
+<!ATTLIST LIEN_ART id CDATA #REQUIRED>
+
+<!-- 
+Date d'entrée en vigueur de l'article 
+@example 1999-01-03
+-->
+<!ATTLIST LIEN_ART debut CDATA #REQUIRED>
+
+<!-- 
+Date de fin de vigueur de l'article 
+@example 2006-01-03
+-->
+<!ATTLIST LIEN_ART fin CDATA #REQUIRED>
+
+<!-- 
+Etat juridique de l'article 
+Les valeurs possibles sont : ABROGE , ABROGE_DIFF, ANNULE, DISJOINT, MODIFIE, MODIFIE_MORT_NE, PERIME, TRANSFERE, VIGUEUR, VIGUEUR_DIFF  
+@example VIGUEUR
+-->
+<!ATTLIST LIEN_ART etat CDATA #REQUIRED>

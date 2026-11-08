@@ -193,6 +193,7 @@ _DERIVED_WRITERS = {
     "app/plugins/pubmed/pack.py": "the per-container pack, rebuilt from the gz XML",
     "app/plugins/wikipedia/page_props.py": "the page-props pack, rebuilt from the dump's SQL",
     "app/plugins/wikidata/pack.py": "the pack and label table, rebuilt from the dump",
+    "app/plugins/legi/pack.py": "the per-tarball pack and the scan's facts, rebuilt from the tarballs",
     "app/ask/part_cache.py": "per-part search facts, rebuilt from the part on a miss",
 }
 

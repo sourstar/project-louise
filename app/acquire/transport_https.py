@@ -1,15 +1,18 @@
 """HTTPS transport — httpx streaming GET with Range resume.
 
-Plain HTTPS has no generic directory-listing protocol, so list_files() just
-returns endpoint.static_files (declared by the per-source spec) rather than
-crawling anything.
+Plain HTTPS has no generic directory-listing protocol, so list_files()
+returns endpoint.static_files (declared by the per-source spec) — or, for
+an endpoint that says `listing = "html-index"`, the files the directory's
+own index page lists (`list_index`), never a crawl.
 """
 import json
 import os
+import re
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from contextvars import copy_context
+from html.parser import HTMLParser
 from pathlib import Path
 from typing import Iterator
 
@@ -120,6 +123,8 @@ class HttpsTransport:
     supports_segments = True
 
     def list_files(self, endpoint: Endpoint, spec: AcquisitionSpec) -> Iterator[RemoteFile]:
+        if endpoint.listing == "html-index":
+            return iter(list_index(endpoint))
         return iter(endpoint.static_files)
 
     def fetch_segments(self, endpoint: Endpoint, remote: RemoteFile, dest: Path,
@@ -227,6 +232,149 @@ class HttpsTransport:
         size = part.stat().st_size
         os.replace(part, dest)
         return size
+
+
+# ---------------- a directory's own index page (Endpoint.listing) ----------------
+#
+# An origin that publishes a DIRECTORY of dated files and no manifest of
+# them (DILA's OPENDATA/LEGI/: a baseline and an increment per working day)
+# is listed by the page its web server writes for the directory. Apache's
+# mod_autoindex writes a table (FancyIndexing) or a <pre> of lines, nginx's
+# autoindex a <pre>; each is a link per file followed, on its row, by a date
+# and a size. The page is read with the standard library's `html.parser`
+# (HTMLParser, the WHATWG tokeniser's subset Python ships) — no new
+# dependency — and a row's date and size are taken where they are plain:
+# a size in bytes (nginx's default, `autoindex_exact_size on`) is the
+# listing's size; a rounded one (Apache's "4.9M") is not a size, and the
+# file is listed without one rather than with a wrong one. The exact page
+# DILA serves is OWED from the node (a curl of the directory pasted raw);
+# this reader is written tolerant of both servers' forms until it is read.
+#
+# THE STANDARD NOT ADOPTED: WebDAV's PROPFIND (RFC 4918) lists a directory
+# with exact sizes and dates, but an open-data server is not a WebDAV one.
+
+#: how many times the index page is asked again on a transient fault (a 5xx,
+#: a timeout, a dropped connection) before the listing is DEFERRED
+LIST_ATTEMPTS = 5
+#: the largest index page read: a directory of a few thousand files is ~1 MB
+LIST_MAX_BYTES = 16 << 20
+
+
+class ListingDeferred(TransportError, httpx.TransportError):
+    """The index page could not be read for the ORIGIN's reasons — a 5xx, a
+    timeout, a drop — after LIST_ATTEMPTS: a deferral, never a failure
+    (CLAUDE.md). An `httpx.TransportError` too, which the worker's fetch
+    pass logs as "deferred — the origin did not answer" and retries at the
+    next discovery; a TransportError of ours for the engine's mirror loop."""
+
+
+_INDEX_DATE = (
+    (re.compile(r"(\d{4}-\d{2}-\d{2})[ T](\d{2}):(\d{2})"), "%Y-%m-%d %H:%M"),
+    (re.compile(r"(\d{2}-[A-Za-z]{3}-\d{4}) (\d{2}):(\d{2})"), "%d-%b-%Y %H:%M"),
+)
+
+
+class _IndexParser(HTMLParser):
+    """Each link's target and the text that follows it on its row."""
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.rows: list[list[str]] = []        # [href, text after the link]
+        self._in_a = False
+
+    def handle_starttag(self, tag, attrs):
+        if tag == "a":
+            href = dict(attrs).get("href")
+            if href is not None:
+                self.rows.append([href, ""])
+                self._in_a = True
+        elif tag == "tr" and self.rows:
+            self.rows[-1][1] += "\n"               # a table's row ends the link's line
+        elif tag in ("td", "th") and self.rows and not self._in_a:
+            self.rows[-1][1] += " "                # cells are words apart
+
+    def handle_endtag(self, tag):
+        if tag == "a":
+            self._in_a = False
+
+    def handle_data(self, data):
+        if self.rows and not self._in_a:
+            row = self.rows[-1]
+            if "\n" not in row[1].lstrip(" \t"):
+                row[1] += data
+
+
+def parse_index(page: str, pattern: str | None = None) -> list[RemoteFile]:
+    """The files an autoindex page lists: every link to a plain name in the
+    directory itself (no sub-directory, no query — the sort links — no
+    parent, no other host), its size where the page gives it in bytes, its
+    mtime (UTC) where the page gives a date. Sorted by name, each once."""
+    import calendar
+    from urllib.parse import unquote, urlsplit
+    parser = _IndexParser()
+    parser.feed(page)
+    parser.close()
+    want = re.compile(pattern) if pattern else None
+    out: dict[str, RemoteFile] = {}
+    for href, after in parser.rows:
+        parts = urlsplit(href)
+        if parts.scheme or parts.netloc or parts.query or not parts.path:
+            continue
+        name = unquote(parts.path)
+        if name.startswith(("/", ".")) or "/" in name:
+            continue
+        if want is not None and not want.fullmatch(name):
+            continue
+        line = after.lstrip(" \t").split("\n", 1)[0]
+        mtime = None
+        for rx, fmt in _INDEX_DATE:
+            m = rx.search(line)
+            if m:
+                try:
+                    mtime = calendar.timegm(time.strptime(f"{m.group(1)} {m.group(2)}:{m.group(3)}", fmt))
+                except ValueError:
+                    mtime = None
+                line = line[m.end():]
+                break
+        tokens = line.split()
+        size = int(tokens[0]) if tokens and tokens[0].isdigit() else None
+        out[name] = RemoteFile(rel_path=name, size=size, mtime=mtime)
+    return [out[k] for k in sorted(out)]
+
+
+def list_index(endpoint: Endpoint, *, attempts: int = LIST_ATTEMPTS,
+               backoff: float = 1.0) -> list[RemoteFile]:
+    """The endpoint's directory, from its own index page: one GET, streamed
+    and charged to the budget chunk by chunk (invariant 5), asked again on a
+    transient fault and DEFERRED (`ListingDeferred`) when it lasts; a 4xx is
+    the endpoint's error (`TransportError`)."""
+    url = endpoint.url.rstrip("/") + "/"
+    headers = headers_for(endpoint)
+    last = ""
+    for attempt in range(attempts):
+        if attempt:
+            time.sleep(backoff * (1 << (attempt - 1)))
+        body = bytearray()
+        try:
+            with httpx.Client(timeout=60, follow_redirects=True) as client:
+                with client.stream("GET", url, headers=headers) as r:
+                    if r.status_code >= 500:
+                        last = f"{r.status_code} to GET {url}"
+                        continue
+                    if r.status_code != 200:
+                        raise TransportError(f"{url}: {r.status_code} to the directory's listing")
+                    for chunk in r.iter_bytes(_CHUNK_SIZE):
+                        budget.acquire_bytes(len(chunk))
+                        body += chunk
+                        if len(body) > LIST_MAX_BYTES:
+                            raise TransportError(f"{url}: the listing is over {LIST_MAX_BYTES} bytes")
+                    encoding = r.encoding or "utf-8"
+            return parse_index(bytes(body).decode(encoding, "replace"), endpoint.listing_pattern)
+        except httpx.TransportError as e:          # a timeout, a drop, a reset: transient
+            last = f"{type(e).__name__}: {e}"
+        except httpx.HTTPError as e:
+            raise TransportError(f"{url}: {e}") from e
+    raise ListingDeferred(f"{url}: {last} — listing deferred after {attempts} attempts")
 
 
 # ---------------- multi-connection single-file downloads ----------------

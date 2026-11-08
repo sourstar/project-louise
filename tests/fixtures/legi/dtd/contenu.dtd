@@ -1,0 +1,82 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<!ENTITY % html SYSTEM "xhtml1-transitional.dtd">
+
+%html;
+
+<!-- definition des balises DJO -->
+
+<!ELEMENT TABLEAU (p? | P? | (caption?, (col*|colgroup*), thead?, tfoot?, (tbody+|tr+) )*)>
+
+<!ELEMENT CLICHE (#PCDATA|p|P|br|BR)*>
+
+<!ENTITY % FlowContenu " (#PCDATA | %block; | form | %inline; | %misc; | TABLEAU | CLICHE |BR|P|ENT|NOTES|NOT|TABLE|TR|TD|CAPTION)*">
+
+<!ELEMENT CONTENU %FlowContenu;>
+
+<!ELEMENT ENT %FlowContenu;>
+
+<!ELEMENT NOTES %FlowContenu;>
+
+<!ELEMENT TABLE %FlowContenu;>
+
+<!ELEMENT TD %FlowContenu;>
+
+<!ELEMENT TR %FlowContenu;>
+
+<!ELEMENT CAPTION %FlowContenu;>
+
+<!ELEMENT NOT %FlowContenu;>
+
+<!ELEMENT P %FlowContenu;>
+<!ATTLIST P
+%attrs;
+%TextAlign;
+>
+
+<!ELEMENT BR %FlowContenu;>
+<!ATTLIST BR
+%attrs;
+%TextAlign;
+>
+
+<!-- Enrichissement de la balise a par l'injecteur BDJ -->
+<!ATTLIST a
+Id CDATA #IMPLIED
+Name CDATA #IMPLIED
+TypeBalise CDATA #REQUIRED
+Type CDATA #IMPLIED
+Date_Texte CDATA #IMPLIED
+Identifiant_Texte CDATA #IMPLIED
+Nature_Texte CDATA #IMPLIED
+Nature_Cible CDATA #IMPLIED
+Identifiant_Cible CDATA #IMPLIED
+Chemin_Cible CDATA #IMPLIED
+Position_Cible CDATA #IMPLIED
+Nature_Matiere CDATA #IMPLIED
+Identifiant_Matiere CDATA #IMPLIED
+Identifiant_Intervalle_Fin_Matiere CDATA #IMPLIED
+Identifiant_Intervalle_Debut_Matiere CDATA #IMPLIED
+Identifiant_Intervalle_Fin_Cible CDATA #IMPLIED
+Identifiant_Intervalle_Debut_Cible CDATA #IMPLIED
+Nature_Objet CDATA #IMPLIED
+Position CDATA #IMPLIED
+Emetteur CDATA #IMPLIED
+partie_num CDATA #IMPLIED
+reserve CDATA #IMPLIED
+Visa CDATA #IMPLIED
+Type_Date CDATA #IMPLIED
+Date CDATA #IMPLIED
+Identifiant CDATA #IMPLIED
+Nature_Edition CDATA #IMPLIED
+Debut_Date CDATA #IMPLIED
+intitule CDATA #IMPLIED
+anx_num CDATA #IMPLIED
+Numero_Page CDATA #IMPLIED
+point_num CDATA #IMPLIED
+personId CDATA #IMPLIED
+_status CDATA #IMPLIED				
+Nature_Cible_Reelle CDATA #IMPLIED			
+>
+
+

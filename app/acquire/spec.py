@@ -54,6 +54,15 @@ class Endpoint:
     # specs name the files a profile needs explicitly; rsync/ftp transports
     # ignore this and list dynamically instead.
     static_files: tuple[RemoteFile, ...] = ()
+    # How an HTTPS endpoint is LISTED: "static" — its `static_files`, as
+    # every spec before LEGI's; "html-index" — the directory page the
+    # server writes itself (Apache's or nginx's autoindex), read with the
+    # standard library's html.parser, its bytes charged to the budget
+    # (transport_https.list_index). Ignored by every other transport.
+    listing: Literal["static", "html-index"] = "static"
+    # With "html-index": the file names to keep, a regular expression the
+    # whole name matches (None keeps every file the page lists).
+    listing_pattern: str | None = None
 
 
 @dataclass(frozen=True)

@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<!-- 
+Métadonnées spécifiques aux textes
+    @title Métadonnées communes
+    @root META_COMMUN
+-->
+
+<!-- Racine du document -->
+<!ELEMENT META_TEXTE_CHRONICLE (CID, NUM, NUM_PARUTION?, NUM_SEQUENCE, NOR, DATE_PUBLI, DATE_TEXTE, DERNIERE_MODIFICATION?, VERSIONS_A_VENIR?, ORIGINE_PUBLI, PAGE_DEB_PUBLI, PAGE_FIN_PUBLI)>
+
+<!-- Identifiant interne commun à toute les versions du texte -->
+<!ELEMENT CID (#PCDATA) >
+
+<!-- Numéro du texte -->
+<!ELEMENT NUM (#PCDATA) >
+
+<!-- Numéro de parution du JO -->
+<!ELEMENT NUM_PARUTION (#PCDATA) >
+
+<!-- Position du texte dans le JO -->
+<!ELEMENT NUM_SEQUENCE (#PCDATA) >
+
+<!-- NOR du texte -->
+<!ELEMENT NOR (#PCDATA) >
+
+<!-- Date de publication du texte -->
+<!ELEMENT DATE_PUBLI (#PCDATA) >
+
+<!-- Date de signature du texte-->
+<!ELEMENT DATE_TEXTE (#PCDATA) >
+
+<!-- Date de derniere modification du texte -->
+<!ELEMENT DERNIERE_MODIFICATION (#PCDATA) >
+
+<!-- Liste des versions futures -->
+<!ELEMENT VERSIONS_A_VENIR (VERSION_A_VENIR*) >
+
+<!-- Date de version future du texte -->
+<!ELEMENT VERSION_A_VENIR (#PCDATA) >
+
+<!-- Titre du JO parent -->
+<!ELEMENT ORIGINE_PUBLI (#PCDATA) >
+
+<!-- Numéro de la premiere page de la publication dans le JO -->
+<!ELEMENT PAGE_DEB_PUBLI (#PCDATA) >
+
+<!-- Numéro de la derniere page de la publication dans le JO -->
+<!ELEMENT PAGE_FIN_PUBLI  (#PCDATA) >
