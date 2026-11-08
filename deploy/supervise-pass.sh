@@ -24,6 +24,13 @@
 #                              pubmed's CPU reference was refused (VeGa states
 #                              no run for an unmeasured tree) and came back
 #                              every minute, holding the night's chain
+#   a VERDICT                  not restarted: the pass ANSWERED. A gate's exit 1
+#                              (`hold embedder check`, `hold collection new`) is
+#                              "this run does not reproduce itself" (invariant
+#                              12), and asking again until it says yes would
+#                              admit the engine it failed (2026-11-08). VERDICTS
+#                              lists the codes; for a pass that runs a gate it
+#                              is "1" unless set, for any other it is none
 #   exit 137 or 141            again in 60 s with PARSE_PROCESSES halved
 #                              (12 -> 6 -> 3 -> 2): an OOM loop backs off.
 #                              141 is SIGPIPE: until 2026-10-30 a pool child the
@@ -38,6 +45,16 @@
 # kernel kills inside Docker's cgroup — a pass, which comes back — never on
 # the host at large. Kubernetes does the same with kubepods.slice and its
 # QoS classes' oom_score_adj.
+#
+# A STOP OF THE SUPERVISOR IS A STOP OF THE PASS: SIGTERM or SIGINT to this
+# script (`systemctl stop` of the `louise-<name>` unit it runs in, the
+# watchdog's included, deploy/watchdog/) touches the hold file and `docker
+# stop`s the pass with STOP_GRACE seconds (default 300) to end its unit and
+# exit 130. The docker CLI forwards nothing (`--sig-proxy=false`), so the
+# pass is told once. Start it as
+#   systemd-run --unit louise-<name> -p KillMode=mixed -p TimeoutStopSec=330 \
+#       deploy/supervise-pass.sh <name> ...
+# (mixed: the SIGTERM to this script alone, so the stop is this one).
 #
 # The standard alternative is Docker's own `--restart on-failure` (no
 # --rm), which also survives a node reboot but cannot back off the pool on
@@ -54,19 +71,40 @@ for a in "$@"; do
     case $a in -m|--memory|--memory=*|-m?*) capped=1 ;; esac
 done
 [ -n "$capped" ] || { echo "== $NAME: no --memory cap; every pass carries one (CLAUDE.md, \"Louise survives a crash\")"; exit 2; }
+# a pass whose exit 1 is a gate's verdict, unless VERDICTS says otherwise
+gate=
+for ((i = 1; i < $#; i++)); do
+    a=${!i}; j=$((i + 1)); b=${!j}
+    case "$a $b" in "embedder check"|"collection new") gate=1 ;; esac
+done
+VERDICTS=${VERDICTS-${gate:+1}}
 mkdir -p "$(dirname "$HOLD")"
 rm -f "$HOLD"
+on_stop() {
+    touch "$HOLD"
+    echo "== $(date -u +%FT%TZ) $NAME: stop asked; docker stop, ${STOP_GRACE:-300} s to end its unit"
+    docker stop -t "${STOP_GRACE:-300}" "$NAME" >/dev/null 2>&1
+}
+trap on_stop TERM INT
 n=0
 while :; do
     [ -x "$CEILING" ] && "$CEILING"
     env_args=()
     [ -n "$PROCS" ] && env_args=(-e "PARSE_PROCESSES=$PROCS")
     echo "== $(date -u +%FT%TZ) $NAME: run $((n + 1))${PROCS:+, PARSE_PROCESSES=$PROCS}"
-    docker run --rm --name "$NAME" --oom-score-adj "${OOM_SCORE_ADJ:-500}" "${env_args[@]}" "$@"
-    code=$?
+    # in the background, so a stop asked meanwhile is handled now (bash runs
+    # a trap only between commands, and `wait` is one it interrupts)
+    docker run --rm --sig-proxy=false --name "$NAME" --oom-score-adj "${OOM_SCORE_ADJ:-500}" \
+        "${env_args[@]}" "$@" &
+    pid=$!
+    wait "$pid"; code=$?
+    while kill -0 "$pid" 2>/dev/null; do wait "$pid"; code=$?; done
     echo "== $(date -u +%FT%TZ) $NAME: exit $code"
     [ "$code" -eq 0 ] && exit 0
     [ -e "$HOLD" ] && { echo "== $NAME: held ($HOLD), not restarted"; exit "$code"; }
+    for v in $VERDICTS; do
+        [ "$code" -eq "$v" ] && { echo "== $NAME: exit $code is the pass's verdict (VERDICTS=\"$VERDICTS\"), not restarted"; exit "$code"; }
+    done
     if [ "$code" -eq 2 ]; then
         echo "== $NAME: refused (exit 2), not restarted: a rule stood in the way; fix it and run it again"
         exit 2

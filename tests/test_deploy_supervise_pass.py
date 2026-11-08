@@ -139,3 +139,52 @@ def test_the_supervisor_applies_the_ceiling_before_every_run(tmp_path):
     p, calls = _run(tmp_path, env, "--memory", "12g", "img")
     assert p.returncode == 0 and len(calls) == 2
     assert (tmp_path / "ceilings").read_text().count("x") == 2
+
+
+@pytest.mark.parametrize("gate", [["hold", "collection", "new", "eurlex"], ["hold", "embedder", "check", "pubmed"]])
+def test_a_gates_verdict_is_not_asked_again_until_it_says_yes(tmp_path, gate):
+    """2026-11-08 (München's legal chain, `new` to run supervised): a gate's
+    exit 1 is "this run does not reproduce itself" (invariant 12); rerun every
+    minute, a flaky engine would pass once and be admitted. Any other pass's
+    exit 1 is still asked again, and VERDICTS="" says a gate's is too."""
+    env = _fake_docker(tmp_path, [1, 0])
+    p, calls = _run(tmp_path, env, "--memory=8g", "img", "python", "-m", "app.louise", *gate)
+    assert p.returncode == 1 and len(calls) == 1 and "verdict" in p.stdout, p.stdout
+    other = tmp_path / "other"
+    other.mkdir()
+    p, calls = _run(other, _fake_docker(other, [1, 0]), "--memory=8g", "img", "louise", "hold", "records", "build")
+    assert p.returncode == 0 and len(calls) == 2, "a records build's exit 1 is a failure, asked again"
+    opt = tmp_path / "opt"
+    opt.mkdir()
+    env = dict(_fake_docker(opt, [1, 0]), VERDICTS="")
+    p, calls = _run(opt, env, "--memory=8g", "img", *gate)
+    assert p.returncode == 0 and len(calls) == 2
+
+
+def test_a_stop_of_the_supervisor_stops_the_pass_once_and_it_stays_stopped(tmp_path):
+    """The watchdog (deploy/watchdog/) stops a `louise-<name>` unit; the pass
+    in it must end its unit and exit 130 — told once (`docker stop`, the CLI
+    forwarding nothing) — and must not come back."""
+    import signal
+    import time
+    env = _fake_docker(tmp_path, [])
+    (tmp_path / "bin" / "docker").write_text(f"""#!/bin/bash
+echo "$*" >> {tmp_path}/calls
+if [ "$1" = stop ]; then touch {tmp_path}/stopped; exit 0; fi
+for i in $(seq 200); do [ -e {tmp_path}/stopped ] && exit 130; sleep 0.05; done
+exit 0
+""")
+    p = subprocess.Popen(["bash", str(DEPLOY / "supervise-pass.sh"), "build", "--memory=8g", "img"],
+                         env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    calls = tmp_path / "calls"
+    for _ in range(100):
+        if calls.exists():
+            break
+        time.sleep(0.05)
+    p.send_signal(signal.SIGTERM)
+    out, _ = p.communicate(timeout=30)
+    lines = calls.read_text().splitlines()
+    assert p.returncode == 130, out
+    assert lines[0].startswith("run --rm --sig-proxy=false --name build ")
+    assert lines[1] == "stop -t 300 build" and len(lines) == 2, lines
+    assert (tmp_path / "hold").exists() and "held" in out
