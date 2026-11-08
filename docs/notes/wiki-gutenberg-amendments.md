@@ -204,12 +204,29 @@ A WIRE-FORMAT CHANGE: the operator decides; nothing exists until then.
     "Correspondence", "Personal narratives", or LoCC CT.
   - A book matching both an OUT and an IN subject is IN (a memoir in verse,
     say).
+  - Writing ABOUT literature is non-fiction. A subject whose last part is
+    "History and criticism", "Technique", "Study and teaching",
+    "Bibliography" or "Theory" never counts as OUT: "Poetry -- History and
+    criticism" stays IN. "X poetry -- Translations into Y" is poetry, and
+    stays OUT.
 - **It is a selection, not a pruning:** every gutenberg record stays as it
   is, and wiki-gutenberg simply makes no claims about the books left out.
   The rule is written here and in the annotations Codex's `method` before it
   applies (invariant 11: nothing is pruned unless written).
-- **The share:** counted on the node (München, pending). The forecast
-  scales with it.
+- **The share** (München, 2026-11-08: gutenberg's in-scope manifest ×
+  pg_catalog.csv, /root/measure/fictioncount.txt; before the exemption
+  above, which moves well under 1 % of chunks back IN):
+
+  | | books | chunks | tokens |
+  |---|---|---|---|
+  | IN by subject (biography, memoirs …, CT) | 3,752 | 632,175 (6.0 %) | 487 M |
+  | OUT (fiction, PZ, poetry, drama) | 35,233 | 3,720,005 (35.4 %) | 2,888 M |
+  | the rest (non-fiction, IN) | 40,727 | 6,137,758 (58.5 %) | 4,462 M |
+  | **kept** | **44,479** | **6,769,933 (64.5 %)** | **4.95 B** |
+
+  - Latin: 79 books kept of 108. Greek: 124 kept of 216.
+  - The 20 commonest OUT subjects are all fiction or poetry, from "Science
+    fiction" (3,330) to "Girls -- Juvenile fiction" (309).
 
 ## Which gutenberg it annotates (operator, 2026-11-03)
 
