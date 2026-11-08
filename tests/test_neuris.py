@@ -583,3 +583,62 @@ def test_worker_stages_run_end_to_end(tmp_path, corpus, isolated_config):
     assert row["rdf_done"] == 1 and row["title"].startswith("FrSaftErfrischV")
     chunks = worker._load_chunks(row, collection)
     assert len(chunks) == 4 and chunks[0]["text"].startswith("§ 1 — Anwendungsbereich")
+
+
+#: HAND-MADE (tests/fixtures/neuris/README.md): a `rechtsetzungsdokument` in
+#: the shape norm-rechtsetzungsdokument.xsd (ris-search@81b58f82) fixes, as
+#: every manifestation zip the node probed carries one (München, 2026-11-08:
+#: `rechtsetzungsdokument-1.xml`, 5,706 bytes, beside `regelungstext-1.xml`)
+RECHTSETZUNGSDOKUMENT = b"""<?xml version="1.0" encoding="UTF-8"?>
+<akn:akomaNtoso xmlns:akn="http://rechtsinformationen.bund.de/schema/norm/0.1">
+  <akn:documentCollection name="regelungsentwurf">
+    <akn:meta eId="meta-1" GUID="00000000-0000-0000-0000-000000000001">
+      <akn:identification eId="meta-1_ident-1" GUID="00000000-0000-0000-0000-000000000002" source="attributsemantik-noch-undefiniert">
+        <akn:FRBRWork eId="meta-1_ident-1_frbrwork-1" GUID="00000000-0000-0000-0000-000000000003">
+          <akn:FRBRthis eId="meta-1_ident-1_frbrwork-1_frbrthis-1" GUID="00000000-0000-0000-0000-000000000004" value="eli/bund/bgbl-1/2000/s1016/rechtsetzungsdokument-1"/>
+        </akn:FRBRWork>
+      </akn:identification>
+    </akn:meta>
+    <akn:collectionBody eId="rdokhauptteil-1" GUID="00000000-0000-0000-0000-000000000005">
+      <akn:component eId="rdokhauptteil-1_rdokbestandteil-1" GUID="00000000-0000-0000-0000-000000000006">
+        <akn:documentRef eId="rdokhauptteil-1_rdokbestandteil-1_verweis-1" GUID="00000000-0000-0000-0000-000000000007" href="regelungstext-1.xml" showAs="regelungstext"/>
+      </akn:component>
+      <akn:component eId="rdokhauptteil-1_rdokbestandteil-2" GUID="00000000-0000-0000-0000-000000000008">
+        <akn:documentRef eId="rdokhauptteil-1_rdokbestandteil-2_verweis-1" GUID="00000000-0000-0000-0000-000000000009" href="anlage-regelungstext-1.xml" showAs="anlage-regelungstext"/>
+      </akn:component>
+    </akn:collectionBody>
+  </akn:documentCollection>
+</akn:akomaNtoso>
+"""
+
+
+def test_the_rechtsetzungsdokument_every_real_zip_carries_is_kept_never_read_as_an_annex(tmp_path):
+    """Parser 1 read every XML member besides the main text as an annex, and
+    refused the expression on the rechtsetzungsdokument (`<documentCollection>`,
+    no `<doc>`) — so every real expression would have been unindexable."""
+    root = tmp_path / "c"
+    _gen, d = ns.directory(ns.S1016)
+    files = {p.name: p.read_bytes() for p in sorted(d.iterdir())}
+    files["rechtsetzungsdokument-1.xml"] = RECHTSETZUNGSDOKUMENT
+    ns.lay_out(root, ns.S1016, data=ns.zip_bytes(ns.S1016, files=files))
+    doc = _doc(_refs(root)[0])
+    x = doc.extra
+    (rd,) = x["rechtsetzungsdokument"]
+    assert rd["member"].endswith("rechtsetzungsdokument-1.xml") and rd["name"] == "regelungsentwurf"
+    refs = [c["children"][0]["attrs"]["href"] for c in rd["components"]]
+    assert refs == ["regelungstext-1.xml", "anlage-regelungstext-1.xml"]
+    assert len(x["annexes"]) == 1, "the annex alone is an annex"
+    assert not any("rechtsetzungsdokument" in s[0] for s in doc.sections), "it carries no text to embed"
+    assert SOURCE.PARSER_VERSION == 2
+
+
+def test_an_xml_member_of_a_root_not_named_here_is_kept_whole(tmp_path):
+    root = tmp_path / "c"
+    _gen, d = ns.directory(ns.S1016)
+    files = {p.name: p.read_bytes() for p in sorted(d.iterdir())}
+    files["zusatz-1.xml"] = b'<x:root xmlns:x="urn:x"><x:a k="v">text</x:a></x:root>'
+    ns.lay_out(root, ns.S1016, data=ns.zip_bytes(ns.S1016, files=files))
+    doc = _doc(_refs(root)[0])
+    (other,) = doc.extra["other_xml"]
+    assert other["member"].endswith("zusatz-1.xml")
+    assert other["root"]["children"][0] == {"tag": "a", "attrs": {"k": "v"}, "text": "text"}

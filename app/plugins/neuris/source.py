@@ -218,6 +218,9 @@ EXTRA_KEYS = (
     "notes", "analysis", "active_modifications", "passive_modifications", "references",
     "preface", "doc_title", "preface_notes", "preamble", "conclusions",
     "articles", "article_notes", "attachment_refs", "annexes", "other_texts", "members",
+    # parser 2: the manifestation's `rechtsetzungsdokument`, and any XML
+    # member of a root the grammar does not name here, kept whole
+    "rechtsetzungsdokument", "other_xml",
 )
 
 
@@ -366,8 +369,12 @@ class NeurisSource:
     mutability = Mutability.MUTABLE
     backend = (OriginForm("the manifestation zips and their expressions' JSON", Template.MEMBER),)
     protocol_version = PROTOCOL_VERSION
-    #: 1 (2026-11-08): the first; no collection made from it yet
-    PARSER_VERSION = 1
+    #: 1 (2026-11-08): the first; no collection made from it yet.
+    #: 2 (2026-11-08, the same day, nothing made from 1): an XML member is read
+    #: by what its root is — the `rechtsetzungsdokument` every real zip
+    #: carries (München's probe) was read as an annex, and refused every
+    #: expression; it is kept in `extra.rechtsetzungsdokument` now
+    PARSER_VERSION = 2
     #: 06 §6.2: an expression stays listed, a manifestation is regenerated in
     #: place; an older one is not known to stay fetchable (owed from the node)
     origin_versions = "replaces"
@@ -451,11 +458,20 @@ class NeurisSource:
         try:
             main = ldml.parse_main(members[mains[0]])
             others = [(n, ldml.parse_main(members[n])) for n in mains[1:]]
-            # every other XML member is an annex (`anlage-regelungstext-N.xml`,
-            # or any LegalDocML.de `doc` the zip carries): read, never skipped
-            annex_names = sorted((n for n in members if n not in mains and n.endswith(".xml")),
-                                 key=ldml.annex_order)
+            # every other XML member, by what its root IS (parser 2): an annex
+            # (`anlage-regelungstext-N.xml`, a LegalDocML.de `doc`), the
+            # `rechtsetzungsdokument` naming the parts (`documentCollection`),
+            # or a root the grammar does not name here — each read and kept,
+            # never skipped and never a reason to refuse the expression
+            # (parser 1 read every one as an annex and refused the
+            # rechtsetzungsdokument every real zip carries; München's probe)
+            kinds = {n: ldml.kind_of(members[n]) for n in members if n not in mains and n.endswith(".xml")}
+            annex_names = sorted((n for n, k in kinds.items() if k == "doc"), key=ldml.annex_order)
             annexes = [ldml.parse_annex(n, members[n]) for n in annex_names]
+            collections_ = [ldml.parse_collection(n, members[n])
+                            for n in sorted(n for n, k in kinds.items() if k == "collection")]
+            other_xml = [{"member": n, "root": ldml.node(ldml._parse_xml(members[n]))}
+                         for n in sorted(n for n, k in kinds.items() if k in ("act", "other"))]
         except ldml.LdmlError as e:
             raise UnindexableDocument(f"{zpath.name}: {e}") from e
         found: list[Issue] = []
@@ -552,6 +568,8 @@ class NeurisSource:
                 "meta": an.meta, "preface": an.preface, "notes": an.notes, "cites": an.cites,
                 "has_text": any(b.text.strip() for b in an.blocks)}.items()
                 if v not in (None, "", [], {})} for an in annexes],
+            "rechtsetzungsdokument": collections_,
+            "other_xml": other_xml,
             "other_texts": [{"member": n, "frbr": o.frbr, "meta": o.meta, "ris": o.ris,
                              "preface": o.preface, "articles": o.articles} for n, o in others],
             "members": [{"name": n, "size": len(b),

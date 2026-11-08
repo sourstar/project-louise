@@ -32,3 +32,11 @@ about the real corpus.
 - The manifestation zips are built by the tests from these files, members
   named by the expression's ELI path as the portal's `ZipManager` names its
   S3 keys.
+
+## Hand-made, in tests/test_neuris.py (2026-11-08)
+
+- `RECHTSETZUNGSDOKUMENT`: a `rechtsetzungsdokument-1.xml` in the shape
+  `norm-rechtsetzungsdokument.xsd` (ris-search@81b58f82) fixes, with invented
+  GUIDs. The node's probe found one in every manifestation zip it opened
+  (München, 2026-11-08, `/root/legal-probe-20261108.log`); none is in
+  ris-search's test data.

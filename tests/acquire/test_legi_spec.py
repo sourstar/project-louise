@@ -152,3 +152,22 @@ def test_the_spec_is_registered_green_with_two_connections_and_its_terms():
     from app.acquire.transport_https import html_index_listing
     assert SPEC.endpoints[0].listing is html_index_listing and SPEC.delta.mode == "full-resync"
     assert SPEC.endpoints[0].url == "https://echanges.dila.gouv.fr/OPENDATA/LEGI/"
+
+
+def test_dila_s_own_apache_index_is_read_names_and_dates_never_a_rounded_size():
+    """DILA's page as the node probed it (München, 2026-11-08,
+    /root/legal-probe-20261108.log): Apache's `<pre>` autoindex, sort links
+    `?C=N;O=D`, sizes rounded (`1.1G`, `1.7M`). A rounded size is no size:
+    the HEAD gives the length (size_of), never `1.7M` read as bytes."""
+    from app.acquire.transport_https import parse_index
+    page = """<html><head><title>Index of /OPENDATA/LEGI</title></head><body>
+<h1>Index of /OPENDATA/LEGI</h1><pre><img src="/icons/blank.gif" alt="Icon "> <a href="?C=N;O=D">Name</a>                    <a href="?C=M;O=A">Last modified</a>      <a href="?C=S;O=A">Size</a>  <hr><img src="/icons/back.gif" alt="[PARENTDIR]"> <a href="/OPENDATA/">Parent Directory</a>                             -
+<img src="/icons/layout.gif" alt="[   ]"> <a href="DILA_LEGI_Presentation_20170824.pdf">DILA_LEGI_Presentation_20170824.pdf</a>  2017-08-24 10:00  300K
+<img src="/icons/compressed.gif" alt="[   ]"> <a href="Freemium_legi_global_20250713-140000.tar.gz">Freemium_legi_global_20250713-140000.tar.gz</a> 2025-07-13 14:10  1.1G
+<img src="/icons/compressed.gif" alt="[   ]"> <a href="LEGI_20261107-210930.tar.gz">LEGI_20261107-210930.tar.gz</a>  2026-11-07 21:12  1.7M
+<hr></pre></body></html>"""
+    got = parse_index(page, SPEC.endpoints[0].listing_pattern)
+    assert [f.rel_path for f in got] == ["Freemium_legi_global_20250713-140000.tar.gz",
+                                         "LEGI_20261107-210930.tar.gz"], "the PDF and the sort links are not files"
+    assert all(f.size is None for f in got), "a rounded size is never taken for bytes"
+    assert all(f.mtime for f in got)

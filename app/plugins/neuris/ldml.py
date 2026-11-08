@@ -336,6 +336,40 @@ class Anlage:
 _ANNEX_NUM = re.compile(r"(\d+)\.xml$")
 
 
+def kind_of(xml: bytes) -> str:
+    """What a LegalDocML.de member IS, by its root's first child: `act` (a
+    `regelungstext`), `doc` (an annex, `anlage-regelungstext-N`),
+    `collection` (the `rechtsetzungsdokument`, `<documentCollection>`, which
+    names the manifestation's components) — or `other`, any root the
+    grammar does not name here, kept whole rather than refused."""
+    root = _parse_xml(xml)
+    for tag, kind in (("act", "act"), ("doc", "doc"), ("documentCollection", "collection")):
+        if root.find(LDML + tag) is not None:
+            return kind
+    return "other"
+
+
+def parse_collection(member: str, xml: bytes) -> dict:
+    """The `rechtsetzungsdokument` (norm-rechtsetzungsdokument.xsd: akomaNtoso
+    / documentCollection @name / meta + collectionBody / component+): its
+    name, its meta lossless with the FRBR values read, and its components,
+    each lossless (the `documentRef` naming each part of the manifestation).
+    Found in the zip of every expression the node probed (München,
+    2026-11-08: `rechtsetzungsdokument-1.xml` beside `regelungstext-1.xml`)."""
+    root = _parse_xml(xml)
+    dc = root.find(LDML + "documentCollection")
+    if dc is None:
+        raise LdmlError(f"{member}: no <documentCollection> under <{local(root.tag)}>")
+    meta = dc.find(LDML + "meta")
+    body = dc.find(LDML + "collectionBody")
+    return {k: v for k, v in {
+        "member": member, "name": dc.get("name") or "",
+        "meta": node(meta) if meta is not None else {},
+        "frbr": frbr_values(meta.find(LDML + "identification") if meta is not None else None),
+        "components": [node(c) for c in (body if body is not None else []) if isinstance(c.tag, str)],
+    }.items() if v not in (None, "", [], {})}
+
+
 def parse_annex(member: str, xml: bytes) -> Anlage:
     root = _parse_xml(xml)
     doc = root.find(LDML + "doc")
