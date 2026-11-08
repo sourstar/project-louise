@@ -150,6 +150,27 @@ header stays act + article.**
 An outside table of the code's structure stays out of the chunks
 (invariants 3 and 11).
 
+**Option A tried, and closed (operator, 2026-11-08: "Take the partition
+from Normattiva's own data, if it is there").** The open-data export was
+run through Louise's own client (`tools/measure/normattiva_export_probe.py`,
+AKN first, one job a format; München, /root/measure/nvexport2/), for the
+acts of 16 March 1942. All five formats answered; none carries the code's
+partitions:
+
+| format | the Codice civile's member | partitions |
+|---|---|---|
+| AKN | `…_ORIGINALE_V0.xml`, 8.07 MB | none; one `title`, the decree's |
+| XML (NIR 2.2) | `…_VIGENZA_2026-11-08_V0.xml`, 2.47 MB | one `capo`, the decree's own around its art. 1; the code is in `annessi`, flat |
+| JSON | `…_ORIGINALE_V0.json`, 3.59 MB | none; two mentions inside article text |
+| HTML | `…_ORIGINALE_V0.html`, 1.92 MB | none |
+| URI | an 86-byte list | — |
+
+The header of the Codice civile stays act + article.
+
+An origin quirk, for whoever records a form one day: asked for the version
+in force on 2026-11-08, AKN, JSON and HTML came back ORIGINALE_V0, and XML
+and URI came back VIGENZA.
+
 ## 4. Decisions
 
 ### C1 — How an article longer than the window is cut

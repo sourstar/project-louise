@@ -95,7 +95,9 @@ def test_the_recipe_makes_a_version_11_codex_with_the_shared_space():
     assert d["layers"] == [chunking_legal.SHARED_LAYER], "the shared legal layer, byte for byte"
     assert d["profile"]["validity"] == {"from": "extra.version_from", "kind": "versions-per-work",
                                         "work": "extra.work_key"}
-    assert d["license"] == {"class": "green", "terms_sha256": None}
+    assert d["license"] == {"class": "yellow", "terms_sha256":
+                            "sha256:a1deb9d7554ad10e041dbd7440b3dec0ac0d3679f9e1655ee9d850908b015995"}, \
+        "yellow, its terms the plugin's TERMS.txt by hash (operator 2026-11-08, A)"
     assert d["parser"] == {"id": "legi", "version": 2} and d["plugin"] == "legi"
     assert d["slicing"]["parts"]["rule"] == "content" and d["slicing"]["keys"] == ["kind", "year"]
     assert d["origin"]["jurisdiction"] == "FR" and d["origin"]["unit"] == "container-member"

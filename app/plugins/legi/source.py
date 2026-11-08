@@ -139,9 +139,12 @@ removes a period's increments at its next baseline (PubMed's
 TERMS.txt is the Licence Ouverte 2.0's French text as Etalab publishes it,
 byte for byte: `LO.md` of github.com/etalab/licence-ouverte at 48b983e6
 (the file last changed at 05cd5ed0, 2022-03-19), sha256 a1deb9d7…5995.
-Class green: no acknowledgement is needed (invariant 9); DILA's
-personal-data warning (`OPENDATA/AVERTISSEMENT-Donnees_a_caractere_personnel.pdf`)
-is owed, read from the node before the class is pinned.
+Class YELLOW (operator, 2026-11-08, choice A): the licence is open with a
+condition, attribution, which 04 §4.4 puts in yellow, so a peer records its
+acknowledgement of this text before the data is used (invariant 9). DILA's
+personal-data warning (`OPENDATA/AVERTISSEMENT-Donnees_a_caractere_personnel.pdf`,
+read on the node by München on 2026-11-08) sets no class: personal data are
+reused within loi 78-17, as the licence's own clause says.
 
 Locator: `<tarball>::<member>`.
 """
@@ -298,7 +301,11 @@ class LegiSource:
         "validity": {"kind": "versions-per-work", "from": "extra.version_from",
                      "work": "extra.work_key"},
     }
-    license_class = LicenseClass.GREEN          # Licence Ouverte 2.0 (TERMS.txt)
+    # YELLOW (operator, 2026-11-08, A): open with a condition — attribution,
+    # the source and the date of its last update — which 04 §4.4 puts in
+    # yellow (normattiva's CC BY 4.0 is yellow); DILA's personal-data warning
+    # sets no class (the licence's own clause: reuse within the data-protection law)
+    license_class = LicenseClass.YELLOW         # Licence Ouverte 2.0 (TERMS.txt)
     corpus_provider = "DILA — Direction de l'information légale et administrative (Légifrance)"
     corpus_license = "etalab-2.0"
     corpus_attribution = ("DILA, base LEGI (https://echanges.dila.gouv.fr/OPENDATA/LEGI/), "

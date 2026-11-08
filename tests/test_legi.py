@@ -503,7 +503,8 @@ def test_the_slice_from_the_record_and_from_the_row_agree(corpus):
 
 def test_the_plugin_is_registered_with_its_declarations():
     assert collections_mod.PLUGIN_REGISTRY["legi"] is SOURCE
-    assert SOURCE.license_class.value == "green" and SOURCE.native_id_order == "numeric"
+    assert SOURCE.license_class.value == "yellow" and SOURCE.native_id_order == "numeric", \
+        "Licence Ouverte 2.0 is open with a condition, attribution: yellow (04 §4.4; operator 2026-11-08)"
     assert set(SOURCE.ISSUES) >= {"sort-day-fallback", "modifie-mort-ne", "date-fin-disagrees",
                                   "id-in-two-folders", "work-key-moved"}
     terms = (Path(lsrc.__file__).parent / "TERMS.txt").read_bytes()

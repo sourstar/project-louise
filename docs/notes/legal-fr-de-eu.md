@@ -37,7 +37,7 @@ probe.
 | Record grain | **one version of one article** (§2.2) | one expression of one act, as Normattiva (§3.3) | one version of one act in one language, as Normattiva (§4.2) |
 | Identity | `LEGIARTI`/`LEGITEXT`/`JORFTEXT`; ELI on JORF originals only [M][S] | ELI `eli/bund/bgbl-1/{year}/{natId}/…` [V]; `jurabk`/`amtabk` | CELEX; ELI `eli/{type}/{year}/{num}/oj`, **article-level ELI exists** [S] |
 | Relations | `LIENS`, typed, article or text level [M] | NeuRIS `ris:verweise` in the schema, populated? [V/unknown] | CDM: amends, based_on, cites, corrigenda, in force, end of validity [S] |
-| Licence | Licence Ouverte 2.0 [S] → green | § 5 UrhG, official works [S]; NeuRIS states **no** data licence [V] → green, terms text to settle (§3.8) | CC BY 4.0 content, CC0 metadata; third-party material excluded [S] → green, with an exception (§4.7) |
+| Licence | Licence Ouverte 2.0 [S] → **yellow** (operator 2026-11-08, A: attribution is a condition, 04 §4.4) | § 5 UrhG, official works [S]; NeuRIS states **no** data licence [V] → green, terms text to settle (§3.8) | CC BY 4.0 content, CC0 metadata; third-party material excluded [S] → **yellow** (the same decision), with an exception (§4.7) |
 | Size | 73 codes in force + 29 repealed; ~1.83 M article versions; baseline 1.17 GB [S] | in force (May 2024): 1,797 laws / 52,401 provisions, 2,866 ordinances / 44,475 provisions [S] | ~46,315 acts in force (Oct 2026); 24 languages [S] |
 | Expert eval set | **none for French statute law** [V search] | **none expert**; GerLayQA is lay questions, research-only [V] | none multilingual; **JuriFindIT covers EU acts in Italian**, held on the node [V] |
 
@@ -180,8 +180,12 @@ ranked (invariant 4), at the date asked.
   reuse allowed [S]; attribution to DILA with the download URLs and the
   file name and date [S] — the Codex's `credits`. DILA's personal-data
   warning (`OPENDATA/AVERTISSEMENT-Donnees_a_caractere_personnel.pdf`) is
-  read before the class is fixed. Class **green** unless that warning
-  says otherwise; the terms text byte-exact (invariant 9).
+  read before the class is fixed. Class **yellow** (operator, 2026-11-08,
+  choice A): an open licence with a condition, attribution, is yellow in
+  04 §4.4's table, as normattiva's CC BY 4.0 is; the plan's "green" had
+  read attribution as no condition. The warning (read on the node the same
+  day) sets no class. The terms text byte-exact (invariant 9), pinned by
+  sha256 in the recipe.
 
 ### 2.7 Vectors that already exist
 
@@ -415,7 +419,7 @@ start-of-validity day for the id width. Scope proposed: sector 3
 (legislation) with sector 0 (its consolidations); treaties (sector 1)
 next; case law (sector 6) out of this design.
 
-### 4.7 Licence — green, with one exception to write down
+### 4.7 Licence — yellow (operator, 2026-11-08, A), with one exception to write down
 
 EUR-Lex's legal notice: free reuse, commercial included, under Decision
 2011/833/EU; C(2019) 1655 makes **CC BY 4.0** the default for content and
@@ -423,7 +427,10 @@ consolidated texts, **CC0** for metadata [S]. **Excluded**: material
 under industrial property rights, software, and **third-party content**
 such as the International Accounting Standards reproduced in their
 regulations [S]. Holding and sharing such an act is redistribution of
-third-party text. So the collection is green, and the acts that
+third-party text. So the collection is yellow (CC BY 4.0's attribution
+is a condition, 04 §4.4; its terms text, the legal notice byte-exact, is
+fetched on the node, since this container cannot reach eur-lex.europa.eu),
+and the acts that
 reproduce third-party material are either **held under their own terms**
 (a yellow slice, acknowledged) or **left out by a written pruning rule**
 (invariant 11: nothing is pruned unless written, in the guidelines and
