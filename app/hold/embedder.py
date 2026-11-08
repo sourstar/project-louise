@@ -95,6 +95,16 @@ MEASURED_CPU_WORST: dict[str, float] = {
     # pubmed's MedCPT-Query f16: 0.999951. Line 0.997
     "F16": 0.998362,
 }
+#: THE 4-BIT LINE (operator, 2026-11-08: "For 4bit quantization the threshold
+#: is 0.991; for quantization below (less quantized) the old threshold
+#: stays"). Every 4-bit level — Q4_0, Q4_1, Q4_K_S, Q4_K_M, IQ4_NL, IQ4_XS,
+#: MXFP4 — is held to it, measured or not; it replaces Q4_K_M's computed
+#: 0.983 (MEASURED_CPU_WORST stays as the record). Measured against it: gutenberg's
+#: Qwen3-Embedding-4B Q4_K_M, worst 0.991184 on engine ea2417d and 0.991228
+#: on 11c (München, 2026-11-08). Levels less quantized (5-, 6-, 8-bit, 16-
+#: and 32-bit) keep the rule above; more quantized ones (3-, 2-bit) too.
+FOUR_BIT_LINE = 0.991
+_FOUR_BIT = re.compile(r"^(?:I?Q4(?:_|$)|MXFP4$)")
 #: weights with no rounding of their own. Their line is the operator's 0.995
 #: (2026-10-18) as a FLOOR since 2026-11-02: as strict as the level's
 #: cross-vendor measurement allows, never looser than 0.995
@@ -144,17 +154,25 @@ def cpu_line_from(worst: float, *, full_precision: bool = False) -> float:
     return max(CPU_REVIEW_LINE, line) if full_precision else min(CPU_REVIEW_LINE, line)
 
 
+def is_four_bit(level: str | None) -> bool:
+    """A 4-bit level (`FOUR_BIT_LINE`): Q4_*, IQ4_*, MXFP4."""
+    return bool(level) and bool(_FOUR_BIT.match(level))
+
+
 def cpu_review_line(engine: Any) -> float | None:
     """The CPU review line a run is held to: CPU_REVIEW_LINE for full
-    precision (no tag, or F16/BF16/F32); for a quantised level, the line
-    computed from its measurement (`MEASURED_CPU_WORST`, `cpu_line_from`);
-    None for a quantised level not yet measured."""
+    precision (no tag, or F16/BF16/F32); FOUR_BIT_LINE for a 4-bit level
+    (operator, 2026-11-08); for another quantised level, the line computed
+    from its measurement (`MEASURED_CPU_WORST`, `cpu_line_from`); None for
+    one not yet measured."""
     level = quant_level(engine)
     if level is None:
         return CPU_REVIEW_LINE
     if level in FULL_PRECISION:
         worst = MEASURED_CPU_WORST.get(_FULL_LEVEL[level])
         return CPU_REVIEW_LINE if worst is None else cpu_line_from(worst, full_precision=True)
+    if is_four_bit(level):
+        return FOUR_BIT_LINE
     worst = MEASURED_CPU_WORST.get(level)
     return None if worst is None else cpu_line_from(worst)
 
@@ -298,7 +316,7 @@ class Run:
         elif self.cpu_worst is not None and self.cpu_worst < self.cpu_line:
             parts.append(f"against the stored CPU reference the worst of the 512 is "
                          f"{self.cpu_worst:.6f}, below the review line {self.cpu_line} "
-                         f"({'full precision: 0.995, the operator (2026-10-18)' if self.quant is None else (f'{self.quant}: its cross-vendor measurement, never looser than 0.995 (operator 2026-11-02)' if self.quant in FULL_PRECISION else f'{self.quant}, computed from its measurement')}): "
+                         f"({'full precision: 0.995, the operator (2026-10-18)' if self.quant is None else (f'{self.quant}: its cross-vendor measurement, never looser than 0.995 (operator 2026-11-02)' if self.quant in FULL_PRECISION else (f'{self.quant}: 4-bit, the operator (2026-11-08)' if is_four_bit(self.quant) else f'{self.quant}, computed from its measurement'))}): "
                          f"nothing is written from this run until a person has reviewed "
                          f"it (docs/notes/near-exact-runs.md)")
         return "; ".join(parts)

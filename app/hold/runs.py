@@ -162,8 +162,9 @@ def passing(body: dict[str, Any], codex: Codex) -> bool:
     "1"); a near-exact one measured several loads, varies by no more than
     NEAR_VARIATION, and reaches CPU_NEAR_LINE against a stored CPU reference;
     any run falls below its review line against one and fails
-    (`embedder.cpu_review_line`: 0.995 for full precision, each quantization
-    level its measured line, an unmeasured level none). Before version
+    (`embedder.cpu_review_line`: 0.995 for full precision, 0.991 for a 4-bit
+    level (operator, 2026-11-08), each other quantization level its measured
+    line, an unmeasured level none). Before version
     5 the gate's own-bytes verdict was never in the statement, so a run that
     did not give back its own bytes was admitted to write anyway (found
     2026-10-31 building this)."""
