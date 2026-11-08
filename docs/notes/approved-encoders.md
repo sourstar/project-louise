@@ -500,6 +500,54 @@ Sources: [cuBLAS](https://docs.nvidia.com/cuda/cublas/) ·
 [Defeating Nondeterminism in LLM Inference](https://thinkingmachines.ai/blog/defeating-nondeterminism-in-llm-inference/) ·
 [Bit-Exact AI Inference Verification](https://arxiv.org/abs/2606.00279)
 
+### oneDNN switched on, measured (operator, 2026-11-07)
+
+The operator: "Measure oneDNN on for chat, test one embedder to see if the
+NaN bug is still there, in any case if the output is not bit exact keep it
+off for embedders, if the output is bit exact and the performance improved
+test every model used." München measured it on the LIVE engine
+(ea2417d91dcc), with test model files aimed at the engine directly (the VeGa
+wrapper refuses DNN=1 by its DETERMINISM rule, as it should). Raw results:
+/root/measure/onednn-results.txt and onednn-timing.txt on the node.
+
+| setting | chat qwen3.5-9b-q4, temp 0, 3 fresh loads | qwen3-embedding-4b, 16 texts of 1–2,000 words, 3 fresh loads | chat speed, warm, node paused, 3 runs |
+|---|---|---|---|
+| A: `GGML_SYCL_ENABLE_DNN=0`, `GGML_SYCL_FA_ONEDNN=0` (live) | exact | exact, 0 NaN | decode 77.9 tok/s, prompt 3,075 tok/s |
+| B: `GGML_SYCL_ENABLE_DNN=1` | exact, the same text as A | **NOT exact**: 3 digests in 3 loads, min cos vs A 0.99997, 0 NaN | 77.9, 3,104 (+1 %) |
+| C: `GGML_SYCL_FA_ONEDNN=1` | exact, the same text as A | exact across loads but **not A's vectors**: min cos vs A 0.99952, 0 NaN | 77.8, 3,199 (+4 %) |
+
+Decided by the operator's rule:
+- **B is off everywhere.** It is not exact for embedders, and +1 % for chat is
+  noise.
+- **C is off for embedders.** It is exact across loads, but it is another run
+  whose vectors sit at 0.99952 from A, far outside every live space's
+  tolerance (normattiva's 0.999999). No existing collection could take its
+  vectors. The old NaN case (batches of 40–72) was not part of this test.
+- **C for everything that is not an embedder** (chat models, the rerankers,
+  MADLAD if its flash attention is on): exact, and +4 % on prompt. So every
+  such model in use is tested with the same method, the rerankers also in
+  batches of 40–72 for NaN. Nothing is switched until that table is read;
+  adopting it needs the wrapper's DETERMINISM rule and
+  `tests/vega/test_engine_settings.py` changed first.
+
+**C on every non-embedder model in use** (München, the same night, the node
+paused, warm only; /root/measure/onednnC-results.txt):
+
+| model | exact over 3 fresh loads (A and C) | NaN, batches of 40/56/72 | C against A | speed, A → C |
+|---|---|---|---|---|
+| louise-chat-qwen3.5-9b-q4-p0 (Ask's only chat model) | yes, both | — | the same text | decode 74.5 → 74.4 tok/s, prompt 3,079 → 3,187 (+3.5 %) |
+| louise-rerank-bge | yes, both | 0 / 0 | scores differ, max \|Δ\| 7.8e-3 | 72 documents 475 → 461 ms (−3 %) |
+| louise-rerank-lamar | yes, both | 0 / 0 | scores differ, max \|Δ\| 1.66e-2 | 474 → 460 ms (−3 %) |
+| louise-translate-madlad | — | — | not tested: flash attention is off in its model file | — |
+
+- **Rerankers: not adopted.** C is exact, but it is a different score function
+  (up to 0.017 apart). The cross-collection merge on calibrated relevance
+  (05 §5.6, the operator's B) would have to be re-measured, and the gain is
+  only 3 %.
+- **Chat: same text and +3.5 % on prompts.** It is not adopted yet. Adopting it
+  changes the wrapper's DETERMINISM guard, which is how invariant 12 is
+  enforced, so the choice is the operator's (put to him 2026-11-08).
+
 ## Known limits of the Arc Pro B70 (2026-10-28)
 
 What the card, its driver (`libze-intel-gpu1 26.05.37020.3` in the LocalAI
