@@ -308,9 +308,12 @@ louise node
                                                                        voice is no longer offered; nothing given is exit 2, and a file the result would not load is
                                                                        refused, unchanged (exit 2)
   resident show                                                        the models the worker preloads on the card for Ask (a trial): `[models] keep_ask_resident`
-                                                                       and `preload_speech` (§7.8), the node's mode and whether it preloads, each model with its
-                                                                       roles, collections, loaded state, last known size, and pin holders (an embed batch's, the
-                                                                       operator's; never the preload's); read-only (added 2026-11-08, operator)
+                                                                       and `preload_speech` (§7.8), the node's mode and whether it preloads, the budget (the line,
+                                                                       the working margin — measured over 6 h, or the 3.0 GiB default — the eviction penalty, and
+                                                                       what is left), each model in priority order with its rank, tier, roles, collections, loaded
+                                                                       state, at-rest and largest size, in the budget or not and why, last use, and pin holders
+                                                                       (an embed batch's, the operator's; never the preload's); read-only (added 2026-11-08,
+                                                                       operator; the budget the same day)
 
 louise dev                                                             operator instruments; read-only unless the line says otherwise
   schedule-report      what the worker spent its rounds on; --gpu [--minutes N]: the card's busy, gaps and who held it, per minute;
@@ -1023,10 +1026,45 @@ reader needs at the command line:
   watchdog is off, and a model goes when LocalAI's reclaimer needs its
   space (past 0.95). Two switches in `[models]` (§7.8), both true:
   `keep_ask_resident` (everything but speech) and `preload_speech`. `show`
-  reads them, the mode, the set, and asks the model server what is loaded
-  and pinned; it writes nothing. The standard alternative is LocalAI's own
-  `LOAD_TO_MEMORY`: a list kept by hand, loaded once at its start, and
-  skipped under `max_active_backends = 1` (app/resident.py).
+  reads them, the mode, the set, the budget's file, and asks the model
+  server what is loaded and pinned; it writes nothing. The standard
+  alternative is LocalAI's own `LOAD_TO_MEMORY`: a list kept by hand,
+  loaded once at its start, and skipped under `max_active_backends = 1`
+  (app/resident.py).
+  THE BUDGET (*amended 2026-11-08*, the node's measurement at 03:25: with
+  every collection on on-demand the set was 11 models, 28.3–28.5 GB on the
+  32.7 GB card; every load passed the room check, but the compute buffers
+  took the card past the 0.95 line and the reclaimer evicted the chat
+  model, silero, omnivoice and vega-medcpt-query while idle — one question
+  paid two chat cold starts of 11–15 s). What is PRELOADED is fitted first
+  to threshold × total − a WORKING MARGIN − an EVICTION PENALTY, the set
+  counted AT REST (each model's fewest bytes of `size_vram` seen, as its
+  load left it). The margin is the GROWTH: the peak, over the last 6 h, of
+  the card's count minus the at-rest sizes of every model LocalAI lists
+  loaded — compute buffers grown by requests, loads in flight — sampled
+  each beat (none while the keeper's own load runs); 3.0 GiB while nothing
+  is measured (the night: ~28.4 GB at rest, the reclaimer reading 95.9 %
+  of 32.7 GB = 31.36 GB). The penalty is the feedback a minute's sample
+  cannot give (AIMD, RFC 5681's shape): each reclaimer eviction of a
+  preloaded model within 10 min of its load adds that model's at-rest size
+  at once, and it halves after each 2 h without another. All of it —
+  peaks, at-rest and largest sizes, the card's total, the penalty — is
+  kept in `state/resident-budget.json`, so a restart keeps it. The set
+  fills the budget by priority, first-fit (one on the CPU at 0; one never
+  seen at the median of the set's known sizes): (1) chat, rerankers,
+  speech; (2) query encoders; (3) document encoders that differ from their
+  query encoder; (4) MADLAD — within a tier the most recently used first
+  (node.sqlite's `encoder_use`, which the translation model's requests now
+  write too), the never used after them, smaller first. The loads run in
+  that order, chat first. A model out of the budget is not preloaded: it
+  loads at its first request and follows the reclaimer's LRU. The budget
+  unloads nothing; the room check (on the largest size) and the back-off
+  guard each load as before (the back-off's line names the model's tier).
+  The event log says once per change which models fell out and why, and
+  each time the budget shrinks for an eviction. Its standard is a
+  knapsack-style admission by priority, the shape of Ollama's scheduler
+  (server/sched.go); LocalAI's own eviction would need a priority per
+  model and a size-aware admission upstream (app/resident.py).
 - **`node checkpoint`.** *Added 2026-11-07* (operator: "when the limit of
   usage approaches, and you are going to be frozen for more than 2 hours,
   put all the developments on hold and resume the last working state before
@@ -1768,8 +1806,8 @@ variable, a file, a log line or a message.
              keep_ask_resident = true                   # A TRIAL (operator, 2026-11-08: "keep every model Ask uses
              # resident on the card"; "The load all is a test"): the worker preloads, never pins, the chat,
              # translation and reranking models and the encoders of every served collection on on-demand, all or
-             # p2p, each when the card has room under the reclaimer's line (app/resident.py; §7.3 `node resident
-             # show`); false: not preloaded
+             # p2p, each when the card has room under the reclaimer's line and the set's budget holds it
+             # (app/resident.py; §7.3 `node resident show`); false: not preloaded
              preload_speech = true                      # the [speech] models preloaded the same way (operator,
              # 2026-11-08: "Chat, speech, rerankers, madlad are preloaded too"); false: loaded at their first use.
              # Paused or seed-only preloads neither. Either way nothing is unloaded for being idle — "only if
@@ -1993,7 +2031,7 @@ collection is another name.
 │       ├── index/           the text index of the parts held, and the facet values (05 §5.7)
 │       ├── lance/           the vector table search reads; while it is built, a link into the build area (`LOUISE_BUILD_DIR`, below)
 │       └── origin/          the origin files the records are parsed from — 06 §6.2's corpus directory, kept for records-vs-origin; the bytes may live on other storage, mounted here
-├── state/                   node.sqlite: the catalogue, coverage maps (09 §9.10), peers seen, runtime overrides; trust.json; web-sources-ack.json (09 §9.13); working-state.json (`node checkpoint`, §7.3)
+├── state/                   node.sqlite: the catalogue, coverage maps (09 §9.10), peers seen, runtime overrides; trust.json; web-sources-ack.json (09 §9.13); working-state.json (`node checkpoint`, §7.3); resident-budget.json (the resident budget's measured margin, at-rest and largest model sizes, card total and eviction penalty, written by the worker, read by `node resident show`; §7.3, 2026-11-08)
 └── keys/                    the peer key, at NODE_KEY_PATH
 ```
 

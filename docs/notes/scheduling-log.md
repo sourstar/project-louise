@@ -2628,3 +2628,30 @@ live by deploy/16f/set_mem_limits.py. The parse children inherit it.
 The cap costs nothing measurable on either rate. The children's ~1 GB each is
 NOT arenas: 3 sampled at 969/953/1010 MB at the start, 911/859/813 at the end
 (respawned). That stays open.
+
+## 2026-11-08 — the resident set preloaded within a measured budget (app/resident.py) — BEFORE (deploy pending)
+
+**Scenario (BEFORE, München, 03:25).** Every collection on on-demand, so every encoder in the resident set: 11
+models, 28.3–28.5 GB resident on the 32.7 GB B70. Each preload passed the room check ("needs 1,113 MiB, 8,572 MiB
+free under the 0.95 line"). The compute buffers then took the card past LocalAI's reclaimer line (0.95 ≈ 31.0 GB):
+"evicting LRU backend usage_percent=95.9/95.3/95.2", evicting vega-medcpt-query, silero, omnivoice and the chat
+model while not busy. One question paid two chat cold starts of 11–15 s; the keeper's back-off then held the chat
+off for 10 min. Usage: 3 questions in 24 h, all probes; MADLAD only in warm-up.
+
+**The change.** What is preloaded is fitted to threshold × total − the working margin − an eviction penalty, the set
+counted at rest (each model's fewest `size_vram` bytes seen). The margin is the growth: the peak over 6 h of the
+card's count minus the at-rest sizes of what LocalAI lists loaded; 3.0 GiB before any sample (31.36 GB read −
+28.4 GB at rest). The penalty: each reclaimer eviction of a preloaded model adds its at-rest size, halved after
+each 2 h without another (AIMD). All in `state/resident-budget.json`. Filled by priority: chat, rerankers, speech;
+query encoders; document encoders; MADLAD; recency within a tier; the loads in that order. The rest loads on
+demand. Nothing unloaded; the room check and back-off unchanged. Expected on that night's set: MADLAD out, the
+other 10 in.
+
+**AFTER (to fill on the node).** `louise node resident show`: the margin measured, the penalty, the budget, which
+models are out.
+Reclaimer "evicting LRU backend" lines per hour; the keeper's back-offs; first-question latency after ≥ 5 min idle.
+
+| | models preloaded | card peak | reclaimer evictions | chat cold starts on a question |
+|---|---|---|---|---|
+| BEFORE (live, 2026-11-08 03:25) | 11 of 11 | 95.9 % | 4 models, idle | 2 (11–15 s) |
+| AFTER | | | | |
