@@ -79,8 +79,22 @@ These are the values, not the final TOML.
 
 ## Open questions, from the plugin research
 
-1. **One `new` per collection, each run as case A.** The plugin id is the
-   first argument.
+1. **How they are made, by [`new-collection.md`](new-collection.md)'s
+   cases.**
+   - `legi` is **case A**, a new space. Wikidata's Nemotron space has
+     another chunker, so it is not this one. Built.
+   - `neuris` and `eurlex` are **case E**, "a second collection in an
+     existing space", given legi as the space's collection. Case E is
+     **not built** (phase 2).
+   - Running A three times on identical blocks would reach the same
+     `space_id`, but it is a chain the framework forbids. That gap goes to
+     the architecture session. The options are:
+
+   | option | pros | cons |
+   |---|---|---|
+   | **build case E first (phase 2), then neuris and eurlex** (recommended) | the framework's own route; the space is copied and its CPU reference reused, nothing measured twice | neuris and eurlex wait for phase 2 |
+   | three spaces, each case A | everything built today | no single list across the three; three calibrations and gates; the shared-space decision is dropped |
+   | declare "A into a held space_id" as a new case | quick | a second route for E's job, which the framework exists to prevent |
 2. **NeuRIS: annexes are separate files.** The proposed fetch is the
    manifestation zip plus the per-expression JSON, with `origin_hash` taken
    over the zip's members.
