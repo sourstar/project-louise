@@ -135,3 +135,39 @@ def test_the_route_answers_audio(node, server):  # noqa: F811
     r = TestClient(api.app).post("/v1/audio/speech", json={"model": "omnivoice-cpp", "input": "Dante [1].",
                                                             "voice": PHILIPPE})
     assert r.status_code == 200 and r.content == b"RIFF" and r.headers["content-type"] == "audio/wav"
+
+
+@pytest.mark.parametrize("text, said", [
+    ("La Gallia fu conquistata da G. Cesare nel 58 a.C. Poi tornò.",
+     "La Gallia fu conquistata da G Cesare nel 58 a.C. Poi tornò."),
+    ("J. R. R. Tolkien wrote it.", "J R R Tolkien wrote it."),
+    ("Il Prof. Rossi e il Dott. Bianchi.", "Il Prof Rossi e il Dott Bianchi."),
+    ("art. 5 della legge n. 3", "art. 5 della legge n. 3"),
+    ("Fine. Inizio [3].", "Fine. Inizio."),
+    ("e.g. Rome", "e.g. Rome"),
+])
+def test_an_initial_or_a_title_before_a_name_loses_its_stop(text, said):
+    """Operator, 2026-11-08: "G. Cesare" read with a long pause after "G.":
+    the model reads a full stop as a sentence's end."""
+    assert speech.speakable(text) == said
+
+
+def test_the_route_says_the_synthesis_time_and_the_clip_length(node, server, monkeypatch):  # noqa: F811
+    """`Server-Timing` (W3C) on /v1/audio/speech: the model server's call and
+    the clip's length, to measure the reading's start and its pauses."""
+    import io
+    import wave
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(24000)
+        w.writeframes(b"\x00\x00" * 12000)
+
+    class R:
+        status_code, content, headers = 200, buf.getvalue(), {"content-type": "audio/wav"}
+    monkeypatch.setattr(speech.httpc, "post", lambda url, json, **kw: R())
+    r = TestClient(api.app).post("/v1/audio/speech", json={"model": "omnivoice-cpp", "input": "Dante wrote it.",
+                                                            "voice": PHILIPPE})
+    timing = dict(part.strip().split(";dur=") for part in r.headers["server-timing"].split(","))
+    assert r.status_code == 200 and float(timing["synth"]) >= 0 and float(timing["audio"]) == 500.0

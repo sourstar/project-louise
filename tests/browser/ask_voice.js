@@ -415,6 +415,20 @@ const sentenceOf = size => KNOWN[(size - 44 - 8000) / 20 - 1];
   check(await page.evaluate(() => !document.getElementById('mic') && !!document.getElementById('speak')),
         '15. not a secure context: the microphone is not shown, the speaker is');
 
+  // 16. an initial or a title before a name ends no sentence (operator,
+  //     2026-11-08: "G. Cesare" read with a long pause after "G.")
+  const named = await page.evaluate(() => [
+    louiseVoice.sentences('La Gallia fu conquistata da G. Cesare nel 58 a.C. Poi tornò a Roma da vincitore.', 'it'),
+    louiseVoice.sentences('The Lord of the Rings was written by J. R. R. Tolkien in England. It was published much later, in three volumes.', 'en'),
+    louiseVoice.sentences('Ne parla il Prof. Rossi nel suo libro sulla storia romana. Lo conferma anche il Dott. Bianchi, a lungo.', 'it')]);
+  check(named[0][0].includes('G. Cesare'), '16. "G. Cesare" stays in one sentence', named[0]);
+  check(named[1][0].includes('J. R. R. Tolkien') && named[1].length === 2, '16. "J. R. R. Tolkien" too', named[1]);
+  check(named[2].length === 2 && named[2][0].includes('Prof. Rossi') && named[2][1].includes('Dott. Bianchi'),
+        '16. a title before a name too', named[2]);
+  // 17. the reading's times are kept, to measure its start and its pauses
+  const tl = await page.evaluate(() => louiseVoice.timeline());
+  check(tl && Array.isArray(tl.sentences) && 'first_word' in tl, '17. the reading\'s times are kept', tl);
+
   check(errors.length === 0, 'no page errors', errors);
   console.log(failures ? `${failures} FAILED` : 'ALL PASSED');
   await h.close();
