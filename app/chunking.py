@@ -429,6 +429,16 @@ AKN_ARTICLE = "akn_article"
 #: pinned tokenizer's tokens at the textifier's statement boundaries
 #: (app/plugins/wikidata/chunker.py); it enters only the spaces that declare it
 WIKIDATA_TEXT = "wikidata-text"
+#: 2026-11-08: the legal collections' chunker (app/chunking_legal.py): one
+#: chunk per article, a longer one split at its own paragraph and point
+#: numbering in the four systems, bounded by a pinned tokenizer's tokens —
+#: nothing truncated at the encoder's window (operator: "not admissible")
+LEGAL_ARTICLE = "legal_article"
+
+
+def _chunk_legal_article(uid, native_id, sections, version=None, params=None):
+    from app import chunking_legal
+    return chunking_legal.chunk_legal_article(uid, native_id, sections, version, params)
 
 
 def _chunk_wikidata_text(uid, native_id, sections, version=None, params=None):
@@ -438,7 +448,8 @@ def _chunk_wikidata_text(uid, native_id, sections, version=None, params=None):
 
 _CHUNKERS = {BOOK: chunk_book, FIXED: chunk_fixed, VERBATIM: chunk_verbatim,
              ABSTRACT: chunk_abstract, CDC: chunk_cdc,
-             AKN_ARTICLE: chunk_akn_article, WIKIDATA_TEXT: _chunk_wikidata_text}
+             AKN_ARTICLE: chunk_akn_article, WIKIDATA_TEXT: _chunk_wikidata_text,
+             LEGAL_ARTICLE: _chunk_legal_article}
 
 # CDC is versioned SEPARATELY from the fixed-width chunkers, and that
 # separation is the point: CHUNK_VERSION used to be one global number that
@@ -490,6 +501,8 @@ def chunker_name(profile: str | None, mutability=None) -> str:
         # one chunk per article (Normattiva): its source is MUTABLE, and
         # would otherwise get CDC, which cuts mid-comma
         return AKN_ARTICLE
+    if profile == LEGAL_ARTICLE:
+        return LEGAL_ARTICLE
     if mutability == Mutability.MUTABLE:
         return CDC
     return BOOK
@@ -505,6 +518,9 @@ def chunk_version_for(name: str) -> int:
         return ABSTRACT_CHUNK_VERSION
     if name == AKN_ARTICLE:
         return AKN_CHUNK_VERSION
+    if name == LEGAL_ARTICLE:
+        from app import chunking_legal
+        return chunking_legal.CHUNK_VERSION
     if name == FIXED:
         return FIXED_CHUNK_VERSION
     return config.CHUNK_VERSION

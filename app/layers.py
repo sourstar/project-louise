@@ -147,6 +147,17 @@ def check_params(params: Any, *, chunker: str, where: str) -> None:
     chunkers check their own at cut time, as before."""
     if not isinstance(params, dict):
         raise LayerError(f"{where}: params is a table")
+    if chunker == chunking.LEGAL_ARTICLE:
+        from app import chunking_legal
+        tok = params.get("tokenizer")
+        if not isinstance(tok, str) or not _SHA256.match(tok):
+            raise LayerError(f"{where}: a {chunker} layer names its tokenizer by the sha256 of its "
+                             f"tokenizer.json (`params.tokenizer = \"sha256:<64 hex>\"`): the window is "
+                             f"counted in the encoder's own tokens")
+        try:
+            chunking_legal.check(params)
+        except chunking_legal.LegalChunkerError as e:
+            raise LayerError(f"{where}: {e}") from None
     if chunker == chunking.WIKIDATA_TEXT:
         tok = params.get("tokenizer")
         if not isinstance(tok, str) or not _SHA256.match(tok):
