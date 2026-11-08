@@ -220,14 +220,18 @@ def test_a_sixteen_bit_level_is_as_strict_as_its_measurement_and_never_looser_th
 
 
 @pytest.mark.parametrize("model,line", [
-    ("Qwen3-Embedding-4B-Q4_K_M.gguf", 0.983),     # measured: worst 0.989292
+    ("Qwen3-Embedding-4B-Q4_K_M.gguf", 0.991),     # 4-bit: the operator's line (2026-11-08)
     ("bge-m3-FP16.gguf", 0.997),                   # F16: the cross-vendor worst 0.998362
     ("MedCPT-Query-Encoder-f16.gguf", 0.997),
     ("harrier-oss-v1-0.6b-f16.gguf", 0.997),
     ("x-BF16.gguf", 0.995),                        # BF16 not measured: the floor
     ("dar-legal-it", 0.995),                       # no tag: a full-precision backend
-    ("bge-m3-Q8_0.gguf", None),                    # quantised, not measured: no line
-    ("x-IQ4_XS.gguf", None),
+    ("bge-m3-Q8_0.gguf", None),                    # less quantized, not measured: the old rule, no line
+    ("x-Q5_K_M.gguf", None),
+    ("x-Q3_K_M.gguf", None),                       # more quantized: the old rule too
+    ("x-IQ4_XS.gguf", 0.991),                      # every 4-bit level, measured or not
+    ("x-Q4_0.gguf", 0.991),
+    ("x-MXFP4.gguf", 0.991),
 ])
 def test_each_level_has_its_own_line_or_none_until_measured(model, line):
     assert emb.cpu_review_line({"options": {"Model": model}}) == line
@@ -247,16 +251,22 @@ def _gated(codex, engine, cpu):
                         contribute=fake_embed, cpu_reference=("sha256:" + "44" * 32, cpu))
 
 
-def test_a_level_is_held_to_its_own_measured_line():
+def test_a_level_is_held_to_its_own_line():
     codex = codex_768()
     ref = reference()
+    # gutenberg's Q4_K_M as both engines stated it (München, 2026-11-08): at the 4-bit line
+    for worst in (0.991184, 0.991228):
+        assert _gated(codex, _engine("Qwen3-Embedding-4B-Q4_K_M.gguf"),
+                      perturbed(ref, indices=(235,), to=worst)).ok, worst
     gutenberg = perturbed(ref, indices=(235,), to=0.989292)
-    assert _gated(codex, _engine("Qwen3-Embedding-4B-Q4_K_M.gguf"), gutenberg).ok
-    full = _gated(codex, _engine("bge-m3-FP16.gguf"), gutenberg)
-    assert not full.ok and "below the review line 0.997" in full.why()
+    below = _gated(codex, _engine("Qwen3-Embedding-4B-Q4_K_M.gguf"), gutenberg)
+    assert not below.ok and "below the review line 0.991" in below.why() \
+        and "4-bit, the operator (2026-11-08)" in below.why(), "the old computed 0.983 is gone"
+    full = _gated(codex, _engine("bge-m3-FP16.gguf"), perturbed(ref, indices=(235,), to=0.9965))
+    assert not full.ok and "below the review line 0.997" in full.why(), "16-bit keeps its line"
     broken = _gated(codex, _engine("Qwen3-Embedding-4B-Q4_K_M.gguf"),
                     perturbed(ref, indices=(7,), to=0.126))
-    assert not broken.ok and "below the review line 0.983" in broken.why(), \
+    assert not broken.ok and "below the review line 0.991" in broken.why(), \
         "a broken engine still fails"
 
 
@@ -274,11 +284,13 @@ def test_an_unmeasured_level_is_never_judged_on_another_levels_line():
 
 
 def test_a_statement_is_admitted_at_its_levels_line():
-    gutenberg = {"run": "r", "worst": "0.989292", "median": "0.998358"}
+    # gutenberg's live run on ea2417d (document-b12481cba1aaceb2.json, München 2026-11-08)
+    gutenberg = {"run": "r", "worst": "0.991184", "median": "0.998318"}
     q4 = {"options": {"Model": "Qwen3-Embedding-4B-Q4_K_M.gguf"}}
-    assert _v5(engine=q4, cpu_reference=gutenberg)
+    assert _v5(engine=q4, cpu_reference=gutenberg), "at the 4-bit line 0.991"
     assert not _v5(cpu_reference=gutenberg), "full precision keeps 0.995"
-    assert not _v5(engine=q4, cpu_reference={"run": "r", "worst": "0.982", "median": "0.99"})
+    assert not _v5(engine=q4, cpu_reference={"run": "r", "worst": "0.989292", "median": "0.998358"}), \
+        "below 0.991: the computed 0.983 no longer admits it (operator, 2026-11-08)"
     q8 = {"options": {"Model": "bge-m3-Q8_0.gguf"}}
     assert not _v5(engine=q8, cpu_reference={"run": "r", "worst": "0.9999", "median": "1"}), \
         "an unmeasured level is not admitted against a CPU reference"

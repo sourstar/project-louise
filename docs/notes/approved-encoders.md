@@ -43,7 +43,8 @@ A swap (a new engine or wrapper in place of an old one) ends like this:
 1. The new engine passes its gate, per collection and role, through the live
    packages: `hold embedder check` (as localai-bugs.md P6's gates did) — GPU
    SELF bit-exactness (three fresh loads, both orders, the contribution's
-   batch) and the stored CPU reference at the weights' level line. BYTE
+   batch) and the stored CPU reference at the weights' level line (0.991 for
+   every 4-bit level, operator 2026-11-08; near-exact-runs.md §2). BYTE
    EQUALITY WITH THE PREVIOUS ENGINE IS NOT REQUIRED (operator, 2026-11-08:
    "bit exactness in a whole collection is not achievable by design"; it is
    a new run, admitted as invariant 12 admits any run); the cosine against
