@@ -137,10 +137,11 @@ def languages() -> frozenset[str]:
 
 
 def reset() -> None:
-    global _languages, _shape_cache
+    global _languages, _shape_cache, _touched
     with _lock:
         _languages = None
         _shape_cache = None
+        _touched = 0.0
 
 
 def translate(items: list[tuple[str, str]]) -> list[str | None]:
@@ -160,9 +161,39 @@ def translate(items: list[tuple[str, str]]) -> list[str | None]:
             out = answer.get("translations")
     except Exception:   # noqa: BLE001 — the caller falls back and says so
         return []
+    _touch()
     if not isinstance(out, list) or len(out) != len(items):
         return []
     return [o if isinstance(o, str) and o.strip() else None for o in out]
+
+
+#: the use row is rewritten at most this often in this process (a question's
+#: translations are one burst)
+_TOUCH_EVERY_S = 5.0
+_touched = 0.0
+
+
+def _touch() -> None:
+    """The translation model just answered: say so in the node's store, in
+    the row the encoders' requests keep (node_state `encoder_use`,
+    `embeddings._touch`), so the resident budget knows when it was last used
+    (app/resident.py; 2026-11-08). Local bookkeeping, nothing drawn from the
+    network; best effort, never raises, never creates the store."""
+    global _touched
+    if not config.TRANSLATE_MODEL:
+        return
+    from . import node_state
+    try:
+        now = time.time()
+        with _lock:
+            if now - _touched < _TOUCH_EVERY_S:
+                return
+            _touched = now
+        if not node_state.path().is_file():
+            return
+        node_state.touch_encoder(model_load.server_of(config.TRANSLATE_URL), config.TRANSLATE_MODEL, now=now)
+    except Exception:   # noqa: BLE001 — bookkeeping for the budget, not the translation
+        pass
 
 
 # ---- the two shapes of TRANSLATE_URL's server (2026-10-27) ----------------------------

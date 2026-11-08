@@ -320,12 +320,17 @@ def test_switched_off_while_preloaded_says_so_and_unloads_nothing(tmp_path, node
 
 
 def test_loads_run_one_at_a_time_and_stop_on_a_pause(tmp_path, node, monkeypatch):
+    """The loads run in the budget's order (2026-11-08: tier 1 first, chat
+    first, so after a boot the question path is warm first and MADLAD is
+    never first) — so the chat model loads first here, where the order a
+    question meets its models loaded MADLAD first; the pause in the chat's
+    load stops MADLAD's."""
     order: list[str] = []
 
     def slow(name):
         def warm(*a, **k):
             order.append(name)
-            if name == "louise-translate":
+            if name == "louise-chat":
                 node_state.set_worker_state("paused")          # the operator takes the GPU mid-way
             node.held.add(name)
         return warm
@@ -334,7 +339,7 @@ def test_loads_run_one_at_a_time_and_stop_on_a_pause(tmp_path, node, monkeypatch
     resident.beat([], embed_mode=_mode)
     assert resident._start_warm([], lambda: False) == [], "a second beat starts no second load"
     resident.wait_warm(5)
-    assert order == ["louise-translate"], "the next load is not started once paused"
+    assert order == ["louise-chat"], "the next load is not started once paused"
 
 
 def test_a_failed_load_is_said_and_the_keeper_goes_on(tmp_path, node, monkeypatch):
@@ -624,3 +629,423 @@ def test_node_resident_show(tmp_path, node, monkeypatch):
     assert rows["louise-chat"]["pinned"] is False and rows["louise-chat"]["holders"] == []
     assert rows["vega-4b"]["collections"] == ["gutenberg"] and rows["vega-4b"]["size_mib"] is None
     assert out["not_served"] == {"wikipedia": "paused (`node pause`)"}
+
+
+# ---- the budget (2026-11-08: the set itself was larger than the card holds) ----------
+#
+# Measured by the node, 03:25: every collection on on-demand, every encoder
+# preloaded — 11 models, 28.3–28.5 GB on the 32.7 GB B70 — and the compute
+# buffers took the card past the reclaimer's 0.95 line: chat, silero,
+# omnivoice and vega-medcpt-query evicted while idle. The room check passed
+# each load; the SET did not fit. So the set is fitted to threshold × total −
+# a MEASURED working margin, by priority, and the rest loads on demand.
+
+def _system(monkeypatch, node, sizes_mib: dict[str, int]):
+    """LocalAI's `/system` as it is: every model it holds, with its backend's
+    pid and `size_vram` (0 for one on the CPU) — read by the real reader."""
+    from app import httpc
+    inner = httpc.get
+    pids: dict[str, int] = {}
+    monkeypatch.setattr(model_load, "_fetch_system", REAL_FETCH)
+
+    def get(url, **kw):
+        if url.endswith("/system"):
+            rows = [{"id": m, "size_vram": sizes_mib.get(m, 0) * MIB,
+                     "process": {"pid": pids.setdefault(m, 100 + len(pids))}} for m in sorted(node.held)]
+            return SimpleNamespace(status_code=200, json=lambda: {"loaded_models": rows})
+        return inner(url, **kw)
+    monkeypatch.setattr(httpc, "get", get)
+
+
+def _known(**sizes_mib: int) -> None:
+    """Sizes this process remembers (`model_load.size_vram`), as after each
+    model was seen loaded once."""
+    with model_load._lock:
+        for m, v in sizes_mib.items():
+            model_load._sizes[(SERVER, m.replace("_", "-"))] = v * MIB
+
+
+def _r(model, *roles, collections=()):
+    return resident.Resident(SERVER, model, tuple(roles), tuple(collections))
+
+
+def test_the_margin_is_measured_persisted_and_the_default_before_any_measurement(tmp_path, node, monkeypatch):
+    """The card's count minus what LocalAI's models hold (`size_vram`), its
+    peak over the last 6 h, in state/resident-budget.json so a restart keeps
+    it; 3.0 GiB while nothing is measured in the window; no sample while the
+    keeper's own load runs."""
+    clock = {"t": 1_800_000_000.0}
+    monkeypatch.setattr(resident, "_wall", lambda: clock["t"])
+    assert resident.read_memory().margin(clock["t"]) == (resident.DEFAULT_MARGIN, False)
+    assert resident.DEFAULT_MARGIN == 3_072 * MIB, "the night: 31.36 GB read − 28.4 GB at rest"
+    node.held |= {"louise-chat", "louise-translate"}
+    _system(monkeypatch, node, {"louise-chat": 5_791, "louise-translate": 7_879})
+    card = _card(monkeypatch, 32_656, 5_791 + 7_879 + 300)          # 300 MiB no model holds
+    _beat([])
+    mem = resident.read_memory()
+    assert resident.memory_path() == config.louise_root() / "state" / "resident-budget.json"
+    assert mem.margin(clock["t"]) == (300 * MIB, True)
+    assert mem.total == 32_656 * MIB
+    assert mem.sizes == {(SERVER, "louise-chat"): 5_791 * MIB, (SERVER, "louise-translate"): 7_879 * MIB}
+    resident.reset()                                                 # a restart: the file, not the process
+    model_load.reset()
+    assert resident._plan_now([_r("louise-chat", "chat")]).margin == 300 * MIB
+    # the peak of the window: a lower sample later keeps it, a higher one raises it
+    clock["t"] += 1_200
+    card["used"] = 5_791 + 7_879 + 120
+    _beat([])
+    assert resident.read_memory().margin(clock["t"]) == (300 * MIB, True)
+    clock["t"] += 1_200
+    card["used"] = 5_791 + 7_879 + 1_900                             # a search's load, not yet listed
+    _beat([])
+    assert resident.read_memory().margin(clock["t"]) == (1_900 * MIB, True)
+    # the keeper's own load is in the budget already: no sample while it runs
+    clock["t"] += 1_200
+    card["used"] = 5_791 + 7_879 + 6_000
+    monkeypatch.setattr(resident, "_warm_thread", SimpleNamespace(is_alive=lambda: True))
+    resident.beat([], embed_mode=_mode)
+    monkeypatch.setattr(resident, "_warm_thread", None)
+    assert resident.read_memory().margin(clock["t"]) == (1_900 * MIB, True)
+    # past the window, nothing measured: the default again
+    clock["t"] += resident.MARGIN_WINDOW_S + 1
+    monkeypatch.setattr(gpu, "_get_json", lambda url: (_ for _ in ()).throw(ConnectionError("probe gone")))
+    _beat([])
+    mem = resident.read_memory()
+    assert mem.margin(clock["t"]) == (resident.DEFAULT_MARGIN, False) and mem.peaks == {}
+    assert mem.total == 32_656 * MIB, "the card's total is kept: an unread probe stops the samples only"
+
+
+def test_a_runner_that_gives_no_sizes_gives_no_sample(tmp_path, node, monkeypatch):
+    """The margin is what no loaded model holds; without LocalAI's sizes it
+    cannot be told, and the default stands."""
+    node.held.add("louise-chat")
+    _card(monkeypatch, 32_656, 20_000)                               # the fixture's runner: ids only
+    _beat([])
+    assert resident.read_memory().peaks == {}
+    assert resident._plan_now([_r("louise-chat", "chat")]).margin == resident.DEFAULT_MARGIN
+
+
+def test_the_order_is_tier_then_recency_then_size_and_tier_one_is_never_pushed_out():
+    """chat, rerankers, speech (TTS, then STT and VAD); query encoders; the
+    document encoders that differ from their query encoder; MADLAD last.
+    Within a tier the most recently used first, the never used after them,
+    smaller first. First-fit: a lower tier only takes what the ones above
+    left; one on the CPU costs nothing and always fits."""
+    now = 1_800_000_000.0
+    want = [_r("louise-translate", "translation"),
+            _r("vega-4b", "query encoder", "encoder", collections=("gutenberg",)),
+            _r("vega-medcpt-query", "query encoder", collections=("pubmed",)),
+            _r("vega-medcpt-article", "encoder", collections=("pubmed",)),
+            _r("vega-bge-m3", "query encoder", "encoder", collections=("wikipedia",)),
+            _r("vega-tiny", "query encoder", collections=("eurlex",)),
+            _r("rerank-bge", "reranker"), _r("rerank-medcpt", "reranker"),
+            _r("louise-chat", "chat"),
+            _r("whisper", "speech to text"), _r("silero", "voice activity"), _r("omnivoice", "text to speech")]
+    mib = {"louise-translate": 7_879, "vega-4b": 9_900, "vega-medcpt-query": 400, "vega-medcpt-article": 400,
+           "vega-bge-m3": 1_200, "vega-tiny": 300, "rerank-bge": 1_664, "rerank-medcpt": 800,
+           "louise-chat": 7_441, "whisper": 1_500, "silero": 0, "omnivoice": 2_000}
+    mem = resident.Memory(sizes={(SERVER, m): v * MIB for m, v in mib.items()}, total=32_656 * MIB)
+    used = {(SERVER, "vega-4b"): now - 3_600, (SERVER, "vega-bge-m3"): now - 600,
+            (SERVER, "louise-translate"): now - 60}                   # recent, and still last
+    tier1 = 7_441 + 800 + 1_664 + 2_000 + 1_500
+    # the budget: tier 1, vega-bge-m3, and 500 MiB more
+    margin = int(0.95 * 32_656 * MIB) - (tier1 + 1_200 + 500) * MIB
+    mem.peaks[int(now // resident.MARGIN_BUCKET_S * resident.MARGIN_BUCKET_S)] = margin
+    p = resident.plan(want, mem, threshold=0.95, used=used, now=now)
+    assert [x.resident.model for x in p.placed] == [
+        "louise-chat", "rerank-medcpt", "rerank-bge", "omnivoice", "whisper", "silero",
+        "vega-bge-m3", "vega-4b", "vega-tiny", "vega-medcpt-query", "vega-medcpt-article", "louise-translate"]
+    assert [x.tier for x in p.placed] == [1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 3, 4]
+    fits = {x.resident.model: x.fits for x in p.placed}
+    assert all(fits[m] for m in ("louise-chat", "rerank-medcpt", "rerank-bge", "omnivoice", "whisper",
+                                 "silero")), "tier 1 first: nothing below displaces it"
+    assert fits["vega-bge-m3"] and not fits["vega-4b"], "the recently used 4B does not fit"
+    assert fits["vega-tiny"] and fits["vega-medcpt-query"] is False, "first-fit: 300 of the 500 left"
+    assert not fits["vega-medcpt-article"] and not fits["louise-translate"]
+    four_b = next(x for x in p.placed if x.resident.model == "vega-4b")
+    assert four_b.detail.startswith("rank 8 of 12, tier 2 of 4: query encoders, last used 1 h ago, the least "
+                                    "recently used of its tier; the models placed above it take")
+    assert four_b.why == f"not preloaded — {p.says()}; {four_b.detail}"
+    # the 4B used most recently of all: still never above tier 1
+    used[(SERVER, "vega-4b")] = now
+    p = resident.plan(want, mem, threshold=0.95, used=used, now=now)
+    assert [x.resident.model for x in p.placed][:7] == [
+        "louise-chat", "rerank-medcpt", "rerank-bge", "omnivoice", "whisper", "silero", "vega-4b"]
+    assert all(x.fits for x in p.placed if x.tier == 1)
+    # the CPU's model costs nothing: in, however full the card
+    mem.peaks = {k: int(0.95 * 32_656 * MIB) for k in mem.peaks}       # a margin of the whole line
+    p = resident.plan(want, mem, threshold=0.95, used=used, now=now)
+    assert [x.resident.model for x in p.placed if x.fits] == ["silero"]
+    # never seen: counted at the median of the set's known sizes
+    del mem.sizes[(SERVER, "vega-medcpt-query")]
+    mem.peaks = {}
+    p = resident.plan(want, mem, threshold=0.95, used=used, now=now)
+    q = next(x for x in p.placed if x.resident.model == "vega-medcpt-query")
+    assert q.size is None and q.counted == p.median and p.median == (1_500 + 1_664) * MIB // 2
+
+
+def test_a_set_larger_than_the_budget_preloads_only_the_top_part_and_says_so_once(tmp_path, node, monkeypatch):
+    g = _with(_collection(tmp_path, "gutenberg"), "vega-4b", "lazy", reranker="rerank-bge")
+    pm = _with(_collection(tmp_path, "pubmed"), "vega-medcpt-article", "lazy", query_model="vega-medcpt-query")
+    _known(louise_chat=6_000, rerank_bge=1_600, vega_4b=18_000, vega_medcpt_query=1_100,
+           vega_medcpt_article=4_000, louise_translate=7_900)
+    node_state.touch_encoder(SERVER, "vega-medcpt-query", now=resident._wall() - 120)
+    node_state.touch_encoder(SERVER, "vega-4b", now=resident._wall() - 3_600)
+    _system(monkeypatch, node, {})
+    _card(monkeypatch, 32_656, 1_000)                                # nothing loaded; 1,000 MiB elsewhere
+    out = _beat([g, pm])
+    assert sorted(node.warmed) == ["louise-chat", "rerank-bge", "vega-4b", "vega-medcpt-query"]
+    assert out["out_of_budget"] == [(SERVER, "louise-translate"), (SERVER, "vega-medcpt-article")]
+    assert out["budget"] // MIB == 30_023, "0.95 × 32,656 − 1,000 measured"
+    fell = [t for _, t in node.said if "not preloaded —" in t]
+    assert len(fell) == 1
+    assert fell[0].startswith("resident: not preloaded — the budget is 30,023 MiB (the 0.95 line 31,023 MiB "
+                              "− margin 1,000 MiB, measured over 6 h): ")
+    assert ("vega-medcpt-article — encoder (pubmed) — rank 5 of 6, tier 3 of 4: document encoders, never "
+            "used here; the models placed above it take 26,700 MiB and it needs 4,000 MiB — loaded at its "
+            "first request, then left to the reclaimer's LRU") in fell[0]
+    assert "louise-translate — translation — rank 6 of 6, tier 4 of 4: translation" in fell[0]
+    node.warmed.clear()
+    _beat([g, pm])
+    assert node.warmed == [] and len([t for _, t in node.said if "not preloaded —" in t]) == 1, "said once"
+    # the plan is made again before each load: one out of the budget is not loaded behind a beat
+    resident._warm_all([resident._last[(SERVER, "louise-translate")]], lambda: False)
+    assert node.warmed == []
+    # room again (the 4B's collection set to off): back in, said, and loaded
+    g_off = replace(g, embed_mode_default="off")
+    _beat([g_off, pm])
+    assert "louise-translate" in node.warmed and "vega-medcpt-article" in node.warmed
+    assert any("back in the budget" in t and "louise-translate" in t for _, t in node.said)
+
+
+def test_the_budget_never_unloads_anything(tmp_path, node, monkeypatch):
+    """"nothing is evicted only because it's idle, only if space is claimed":
+    a set loaded beyond the budget stays loaded; the budget decides only what
+    is preloaded."""
+    g = _with(_collection(tmp_path, "gutenberg"), "vega-4b", "lazy", reranker="rerank-bge")
+    sizes = {"louise-chat": 6_000, "rerank-bge": 1_600, "vega-4b": 18_000, "louise-translate": 7_900}
+    node.held |= set(sizes)
+    _system(monkeypatch, node, sizes)
+    _card(monkeypatch, 32_656, sum(sizes.values()) + 500)
+    out = _beat([g])
+    assert (SERVER, "louise-translate") in out["out_of_budget"]
+    assert node.unloads == [] and set(sizes) <= node.held and node.warmed == []
+    assert node.pin_calls == [] and node.runner.puts() == []
+    src = inspect.getsource(resident)
+    assert "model_load.unload(" not in src and "backend/shutdown" not in src
+
+
+def test_a_model_out_of_the_budget_is_loaded_at_its_first_request(tmp_path, node, monkeypatch):
+    """Not preloaded is not refused: the request's own warm loads it, as an
+    `off` collection's encoder is, and the next beat leaves it there."""
+    _known(louise_chat=6_000, louise_translate=7_900)
+    _system(monkeypatch, node, {"louise-chat": 6_000, "louise-translate": 7_900})
+    card = _card(monkeypatch, 32_656, 24_000)                        # 24,000 MiB no model holds
+    out = _beat([])
+    assert out["out_of_budget"] == [(SERVER, "louise-translate")] and node.warmed == ["louise-chat"]
+    card["used"] = 6_000 + 7_900
+    model_load.ensure_loaded(SERVER, "louise-translate", lambda bound_s: node.held.add("louise-translate"),
+                             caller="translation", max_age_s=0.0)
+    assert "louise-translate" in node.held
+    node.warmed.clear()
+    _beat([])
+    assert "louise-translate" in node.held and node.unloads == [] and node.warmed == []
+
+
+def test_a_back_off_names_the_model_s_tier(tmp_path, node, monkeypatch):
+    clock = {"t": 0.0}
+    monkeypatch.setattr(resident, "_now", lambda: clock["t"])
+    node.held.add("louise-translate")
+    _beat([])
+    node.held.discard("louise-chat")                                 # the reclaimer evicted it
+    clock["t"] = 60.0
+    _beat([])
+    said = [t for _, t in node.said if "back-off" in t]
+    assert len(said) == 1 and said[0].startswith("resident: louise-chat — chat — off the card again")
+    assert said[0].endswith("(back-off 1, at most 2 h; tier 1 of 4: chat, rerankers and speech)")
+
+
+def test_the_translation_model_s_use_is_recorded_where_the_encoders_are(tmp_path, node, monkeypatch):
+    """MADLAD's recency, from the request: the encoders' row (node_state
+    `encoder_use`), local, nothing new drawn from the network."""
+    monkeypatch.setattr(translate, "shape", lambda timeout=10.0: translate.SHAPE_BATCH)
+    monkeypatch.setattr(translate, "_completion",
+                        lambda request, timeout, headers=None, max_tokens=None:
+                        {"translations": [f"{it['to']}:{it['text']}" for it in request["items"]]})
+    translate.reset()
+    assert (SERVER, "louise-translate") not in node_state.encoder_last_used()
+    assert translate.translate([("castle", "de")]) == ["de:castle"]
+    assert (SERVER, "louise-translate") in node_state.encoder_last_used()
+    p = resident._plan_now([_r("louise-translate", "translation")])
+    assert p.placed[0].last_used is not None
+
+
+def test_node_resident_show_the_budget(tmp_path, node, monkeypatch):
+    """Per model its rank, tier, size, what the budget counts, in the budget
+    or not and why; the line, the margin (measured or the default) and the
+    budget. Read from the worker's file; nothing written."""
+    g = _with(_collection(tmp_path, "gutenberg"), "vega-4b", "lazy", reranker="rerank-bge")
+    monkeypatch.setattr(resident, "served_now", lambda: ([g], {}))
+    _card(monkeypatch, 32_656, 1_000)
+    out = resident.show()
+    assert out["budget"]["margin"] == "the default 3,072 MiB: nothing measured in the last 6 h"
+    assert out["budget"]["line_mib"] == 31_023 and out["budget"]["budget_mib"] == 27_951
+    assert out["budget"]["penalty_mib"] == 0 and out["budget"]["penalty"].startswith("none")
+    assert not resident.memory_path().exists(), "show writes nothing"
+    _known(louise_chat=6_000, rerank_bge=1_600, vega_4b=18_000, louise_translate=7_900)
+    _system(monkeypatch, node, {})
+    _beat([g])
+    model_load.reset()                                               # the command's own process
+    out = resident.show()
+    b = out["budget"]
+    assert b["margin_mib"] == 1_000 and b["margin"].startswith("measured: the peak of 1 sample period(s)")
+    assert b["budget_mib"] == 30_023 and b["taken_mib"] == 6_000 + 1_600 + 18_000
+    assert b["says"] == ("the budget is 30,023 MiB (the 0.95 line 31,023 MiB − margin 1,000 MiB, "
+                         "measured over 6 h)")
+    rows = out["models"]
+    assert [(r["rank"], r["model"], r["tier"], r["size_mib"], r["in_budget"]) for r in rows] == [
+        (1, "louise-chat", 1, 6_000, True), (2, "rerank-bge", 1, 1_600, True),
+        (3, "vega-4b", 2, 18_000, True), (4, "louise-translate", 4, 7_900, False)]
+    assert rows[0]["why"] == "in the budget: 6,000 of 30,023 MiB taken with it"
+    assert rows[3]["why"].startswith("not preloaded — the budget is 30,023 MiB")
+    assert rows[3]["counted_mib"] == 7_900 and rows[3]["tier_says"] == "translation"
+
+
+def test_a_beat_s_reads_do_not_grow_with_the_set(tmp_path, node, monkeypatch):
+    """A COST test (docs/notes/scheduling.md §6, 7): with the set loaded, a
+    beat reads the probe once, LocalAI's settings once per server, `/system`
+    three times per server (the TTL'd check, and the margin's two around the
+    card) — for two collections as for twenty."""
+    from app import httpc
+    counts: dict[int, dict[str, int]] = {}
+    plain = httpc.get                                                # the fixture's runner
+    for n in (2, 20):
+        monkeypatch.setattr(httpc, "get", plain)
+        cs = [_with(_collection(tmp_path, f"c{n}-{i}"), f"vega-{n}-{i}", "lazy") for i in range(n)]
+        sizes = {f"vega-{n}-{i}": 100 for i in range(n)} | {"louise-chat": 6_000, "louise-translate": 7_900}
+        node.held |= set(sizes)
+        _system(monkeypatch, node, sizes)
+        _card(monkeypatch, 32_656, sum(sizes.values()) + 200)
+        _beat(cs)                                                    # the sizes seen, the file written
+        seen: dict[str, int] = {}
+
+        def count(what: str) -> None:
+            seen[what] = seen.get(what, 0) + 1
+        get, probe = httpc.get, gpu._get_json
+        monkeypatch.setattr(httpc, "get", lambda url, _g=get, **kw: (count(url.rsplit("/", 1)[1]),
+                                                                    _g(url, **kw))[1])
+        monkeypatch.setattr(gpu, "_get_json", lambda url, _p=probe: (count("gpu"), _p(url))[1])
+        out = _beat(cs)
+        assert out["warming"] == [] and out["out_of_budget"] == []
+        counts[n] = seen
+    assert counts[2] == counts[20] == {"system": 3, "gpu": 1, "settings": 1}
+
+
+def test_the_margin_is_the_growth_over_the_at_rest_sizes(tmp_path, node, monkeypatch):
+    """The budget counts each model AT REST — the fewest bytes seen, as its
+    load left it — and the margin is what the card holds beyond the at-rest
+    sizes of what is loaded: a request's compute buffers, a load in flight.
+    Counted against the LARGEST sizes, the growth hid inside them and the
+    margin read ~0 (the first build of this budget)."""
+    sizes = {"louise-chat": 6_000, "louise-translate": 7_900}
+    node.held |= set(sizes)
+    _system(monkeypatch, node, sizes)
+    card = _card(monkeypatch, 32_656, 13_900)                         # at rest: nothing beyond them
+    _beat([])
+    mem = resident.read_memory()
+    assert mem.rest == {(SERVER, "louise-chat"): 6_000 * MIB, (SERVER, "louise-translate"): 7_900 * MIB}
+    assert mem.margin(resident._wall()) == (0, True)
+    sizes["louise-chat"] = 8_500                                      # a question grew the chat's buffers
+    card["used"] = 8_500 + 7_900
+    _beat([])
+    mem = resident.read_memory()
+    assert mem.sizes[(SERVER, "louise-chat")] == 8_500 * MIB, "the largest, for the room check"
+    assert mem.rest[(SERVER, "louise-chat")] == 6_000 * MIB, "at rest, for the budget"
+    assert mem.margin(resident._wall()) == (2_500 * MIB, True), "the growth is the margin"
+    p = resident._plan_now([_r("louise-chat", "chat")])
+    assert p.placed[0].counted == 6_000 * MIB and p.placed[0].largest == 8_500 * MIB
+
+
+def test_the_night_s_set_drops_madlad_and_keeps_the_rest():
+    """2026-11-08, 03:25: 11 models, ~28.4 GB at rest on the B70 (32,656 MiB,
+    the 0.95 line 31,023 MiB). With the default margin, 3.0 GiB of growth,
+    the lowest tier goes and everything else stays."""
+    now = 1_800_000_000.0
+    mib = {"louise-chat": 7_441, "rerank-bge": 1_664, "rerank-medcpt": 700, "omnivoice": 1_900,
+           "whisper": 1_100, "silero": 0, "vega-4b": 5_616, "vega-bge-m3": 1_200, "vega-medcpt-query": 450,
+           "vega-medcpt-article": 450, "louise-translate": 7_879}
+    assert sum(mib.values()) == 28_400
+    want = [_r("louise-translate", "translation"), _r("vega-4b", "query encoder", "encoder"),
+            _r("vega-bge-m3", "query encoder", "encoder"), _r("vega-medcpt-query", "query encoder"),
+            _r("vega-medcpt-article", "encoder"), _r("rerank-bge", "reranker"), _r("rerank-medcpt", "reranker"),
+            _r("louise-chat", "chat"), _r("whisper", "speech to text"), _r("silero", "voice activity"),
+            _r("omnivoice", "text to speech")]
+    mem = resident.Memory(sizes={(SERVER, m): v * MIB for m, v in mib.items()},
+                          rest={(SERVER, m): v * MIB for m, v in mib.items() if v}, total=32_656 * MIB)
+    p = resident.plan(want, mem, threshold=0.95, used={}, now=now)
+    assert not p.measured and p.margin == 3_072 * MIB and p.budget // MIB == 27_951
+    assert [x.resident.model for x in p.placed if not x.fits] == ["louise-translate"]
+    assert p.placed[0].resident.model == "louise-chat"
+
+
+def test_an_eviction_shrinks_the_budget_and_the_penalty_halves_every_two_hours(tmp_path, node, monkeypatch):
+    """THE FEEDBACK (AIMD, RFC 5681's shape): a beat can miss a 500 ms spike
+    the reclaimer sees, so the reclaimer's eviction of a preloaded model —
+    off the card again within 10 min of its load — adds that model's at-rest
+    size to a penalty on the margin at once; the penalty halves after each
+    2 h without another. Kept in the file, said, and shown."""
+    clock = {"mono": 0.0}
+    wall = {"t": 1_800_000_000.0}
+    monkeypatch.setattr(resident, "_now", lambda: clock["mono"])
+    monkeypatch.setattr(resident, "_wall", lambda: wall["t"])
+    sizes = {"louise-chat": 6_000, "louise-translate": 7_900}
+    _system(monkeypatch, node, sizes)
+    card = _card(monkeypatch, 32_656, 1_000)
+    _beat([])                                                         # both loaded by the keeper
+    assert {"louise-chat", "louise-translate"} <= node.held
+    _beat([])                                                         # their at-rest sizes seen
+    assert resident.read_memory().penalty == 0
+    node.held.discard("louise-translate")                             # the reclaimer took it
+    clock["mono"] += 180
+    card["used"] = 6_000 + 1_000
+    out = _beat([])
+    mem = resident.read_memory()
+    assert mem.penalty == 7_900 * MIB and mem.penalty_at == wall["t"]
+    said = [t for _, t in node.said if "the budget shrank by" in t]
+    assert said == ["resident: the budget shrank by 7,900 MiB: louise-translate was evicted 3 min after its "
+                    "load (tier 4 of 4: translation) — the penalty on the margin is 7,900 MiB, halved after "
+                    "each 2 h without another such eviction"]
+    assert out["budget"] == int(0.95 * 32_656 * MIB) - 1_000 * MIB - 7_900 * MIB
+    assert resident._plan_now([_r("louise-chat", "chat")]).says().endswith("− 7,900 MiB for evictions)")
+    resident.reset()                                                  # a restart keeps it
+    assert resident._plan_now([_r("louise-chat", "chat")]).penalty == 7_900 * MIB
+    wall["t"] += 2 * 3600
+    assert resident._plan_now([_r("louise-chat", "chat")]).penalty == 3_950 * MIB
+    wall["t"] += 2 * 3600
+    assert resident._plan_now([_r("louise-chat", "chat")]).penalty == 1_975 * MIB
+    # another eviction adds to what is left of it, and starts the halving again
+    node.held.discard("louise-chat")
+    clock["mono"] += 60
+    _beat([])                                                         # the keeper loads it again
+    assert "louise-chat" in node.held
+    node.held.discard("louise-chat")                                  # and the reclaimer takes it again
+    clock["mono"] += 60
+    _beat([])
+    mem = resident.read_memory()
+    assert mem.penalty == (1_975 + 6_000) * MIB and mem.penalty_at == wall["t"]
+    monkeypatch.setattr(resident, "served_now", lambda: ([], {}))
+    shown = resident.show()["budget"]
+    assert shown["penalty_mib"] == 7_975 and "halved after each 2 h without another" in shown["penalty"]
+
+
+def test_the_loads_run_in_priority_order_chat_first(tmp_path, node, monkeypatch):
+    """After a boot the question path is warm first: tier 1 in its order,
+    then the query encoders, the document encoders, MADLAD last — whatever
+    the order a question meets them."""
+    node.platform.write_text('[speech]\nstt_model = "whisper"\nvad_model = "silero"\n'
+                             'tts_model = "omnivoice"\n')
+    pm = _with(_collection(tmp_path, "pubmed"), "vega-medcpt-article", "lazy", query_model="vega-medcpt-query",
+               reranker="rerank-medcpt")
+    _beat([pm])
+    assert node.warmed == ["louise-chat", "rerank-medcpt", "omnivoice", "whisper", "silero",
+                           "vega-medcpt-query", "vega-medcpt-article", "louise-translate"]
