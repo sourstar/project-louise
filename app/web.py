@@ -2229,6 +2229,11 @@ def _collection_shelf(collection: collections_mod.Collection,
         # and when, and what stops it embedding is said where the setting is
         # shown. "off" is the select's own word, so it adds nothing there.
         "paused": paused,
+        # FROZEN (07 §7.3 `node freeze`; docs/notes/collection-freeze.md
+        # §11): the badge, its sentence under Details — since when, by whom —
+        # and Options › unfreeze…; app/status.py `frozen`, read from the
+        # record the worker reads. None when it is not frozen
+        "frozen": status_mod.frozen(collection.name),
         # what stops it embedding, every hold in its sentence (status
         # `holds`); "off" is the select's own word, so it adds nothing there
         "embed_blocked": ([] if embed_mode == "off"
@@ -3007,6 +3012,25 @@ def collection_resume(name: str):
         con.execute("PRAGMA busy_timeout=2000")
         db.log_event(con, "info", "control", f"collection {name!r} resumed via admin UI")
     return {"ok": True, "paused": sorted(names)}
+
+
+@admin_router.post("/library/{name}/unfreeze")
+def collection_unfreeze(name: str):
+    """The Library's Unfreeze (docs/notes/collection-freeze.md §11), Resume's
+    twin: a frozen collection follows its origin and its peers again, as
+    `louise node unfreeze <name>` does — `node_state.set_frozen`, the
+    command's own function — the write recorded in the freeze history as
+    the Library's. The worker sees the name leave the set within a round and
+    asks the fetch and the scan the freeze held back. Freeze itself is not
+    offered here, as pause is not: an operator's command-line choice (RULE 2)."""
+    collection = _collection_or_404(name)
+    names = node_state.set_frozen(name, False, by="Library (admin)")
+    # the freeze history records it; the collection's event log is best-effort
+    with contextlib.suppress(sqlite3.OperationalError):
+        con = db.connect(collection)
+        con.execute("PRAGMA busy_timeout=2000")
+        db.log_event(con, "info", "control", f"collection {name!r} unfrozen via admin UI")
+    return {"ok": True, "frozen": sorted(names)}
 
 
 class EmbedSelectBody(BaseModel):

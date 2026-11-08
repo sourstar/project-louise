@@ -18,6 +18,63 @@ build at 12 cores, the GPU uncapped. The card's noise (operator): 0.2 sone
 idle, 3.1 sone at full load, coil whine ~0.9 sone; its fan range is being
 measured (published figures disagree).
 
+### 2026-11-08: the resident set preloaded within a measured budget — defect found and fixed
+
+- **The defect (the node, 03:25):** app/resident.py (#399) preloaded EVERY
+  model of the set. With every collection on on-demand that was 11 models,
+  28.3–28.5 GB resident on the 32.7 GB B70; the compute buffers then took
+  the card past the reclaimer's line (0.95 ≈ 31.0 GB): "Memory usage
+  exceeds threshold, evicting LRU backend usage_percent=95.9/95.3/95.2"
+  evicted vega-medcpt-query, silero, omnivoice and the chat model while not
+  busy; one question paid two chat cold starts of 11–15 s, and the back-off
+  backed off the chat itself. The room check passed every load ("needs
+  1,113 MiB, 8,572 MiB free under the 0.95 line"): the SET did not fit with
+  its working memory.
+- **The fix:** what is preloaded is fitted to threshold × total − a
+  working margin − an eviction penalty, decided by the system (RULE 2), the
+  set counted AT REST (each model's fewest bytes of `size_vram` seen, as
+  its load left it). `size_vram` is the driver's per-process count, so it
+  holds a model's grown compute buffers: counted against the largest sizes
+  the margin read ~0 and the night's overshoot would not have been
+  prevented (found in review of the first build). The margin is the GROWTH
+  over the at-rest sizes, MEASURED each beat (the card's count minus the
+  at-rest sizes of what LocalAI lists loaded), its peak over 6 h; 3.0 GiB
+  while nothing is measured (the night: ~28.4 GB at rest, the reclaimer
+  reading 95.9 % of 32.7 GB = 31.36 GB, ~2.96 GB grown) — with it that
+  night's set drops MADLAD and keeps the rest. The PENALTY is the feedback
+  a minute's sample cannot give (AIMD, RFC 5681's shape): each reclaimer
+  eviction of a preloaded model within 10 min of its load adds its at-rest
+  size at once, halved after each 2 h without another. All of it is kept
+  in `state/resident-budget.json` (a restart keeps it). The set fills the
+  budget by priority, first-fit: (1) chat, rerankers, speech; (2) query
+  encoders; (3) document encoders that differ from their query encoder;
+  (4) MADLAD. Within a tier the most recently used first (`encoder_use`,
+  which the translation model's requests now write too), never used after
+  them, smaller first; a model never seen counts at the median of the
+  set's known sizes. The loads run in that order, chat first. Out of the
+  budget: loaded at its first request, then the reclaimer's LRU. Nothing
+  is unloaded by the budget; the room check (on the largest size) and the
+  back-off are unchanged (the back-off line names the tier). `louise node
+  resident show` gives each model's rank, sizes, in budget or not and why,
+  and the budget, margin, penalty and line; the event log says once per
+  change what fell out and why, and each time an eviction shrinks it.
+- **To measure after deploying:** the margin and penalty `show` reports
+  after a few hours of questions; reclaimer evictions per hour (LocalAI's
+  "evicting LRU backend" lines), expected none from the set alone;
+  first-question latency after an idle pause.
+- **The standard:** a knapsack-style admission by priority, the shape of
+  Ollama's scheduler reserving per-model VRAM before a load
+  (server/sched.go). LocalAI's own eviction would need an upstream change:
+  a priority per model, eviction by priority before recency, a load
+  admitted by its expected size (app/resident.py).
+### 2026-11-08: the Library shows a frozen collection and unfreezes it (collection-freeze.md §11)
+
+- A *frozen* badge on the card, since when and by whom under Details
+  (`status.frozen`, from `node_state.frozen_since`), Options › *unfreeze…*
+  behind the card's warning, admin only — `set_frozen`, the command's own
+  write, recorded as "Library (admin)"; freeze stays on the command line,
+  as pause does (07 §7.3).
+
 ### 2026-11-08: every model Ask uses preloaded, not pinned; nothing unloaded for being idle — A TRIAL (operator: option A)
 
 - **The operator:** "keep every model Ask uses resident on the card"; "The
@@ -1136,6 +1193,8 @@ amendments are the history that produced them and are kept for that.
 The migration that brought the code to them is complete (2026-10-08); its
 plan is deleted (`git show 7f84d44:docs/notes/migration-plan.md`), and what
 it left open is below.
+
+- **2026-11-08 — determinism for embedders only (operator).** "Determinism is mandatory for embedders only; as long as the quality is not degraded, determinism can be dropped for any other model." The VeGa wrapper's guard (`determinism_lacks`) now holds embedder runs only. Non-embedder node models keep the measured set or name an EXCEPTION with its quality check (tests/vega/test_engine_settings.py; approved-encoders.md "oneDNN switched on, measured"). First: chat qwen3.5-9b-q4 `GGML_SYCL_FA_ONEDNN=1` (same text, +3.5 % prompt). CLAUDE.md invariant 12's enforcement line ("states no card run…") now holds for embedder runs: the operator's to amend.
 
 ## Open after the migration
 

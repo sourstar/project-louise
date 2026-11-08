@@ -69,6 +69,9 @@ ENCODER_LEASE_TTL_S = 600.0
 #: until 2026-11-08 (operator: "nothing is evicted only because it's idle,
 #: only if space is claimed"; worker._sweep_unheld_embedders). The rows are
 #: still written: when a model was last asked is what a later rule reads.
+#: That rule is the resident budget's recency (app/resident.py, 2026-11-08),
+#: and the translation model writes its row here too (app/translate.py
+#: `_touch`): the table is (server, model, when), whatever the request.
 _USE = ("CREATE TABLE IF NOT EXISTS encoder_use (server TEXT NOT NULL, model TEXT NOT NULL, "
         "last_used REAL NOT NULL, PRIMARY KEY (server, model))")
 

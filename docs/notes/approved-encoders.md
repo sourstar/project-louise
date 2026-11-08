@@ -560,9 +560,26 @@ paused, warm only; /root/measure/onednnC-results.txt):
   (up to 0.017 apart). The cross-collection merge on calibrated relevance
   (05 §5.6, the operator's B) would have to be re-measured, and the gain is
   only 3 %.
-- **Chat: same text and +3.5 % on prompts.** It is not adopted yet. Adopting it
-  changes the wrapper's DETERMINISM guard, which is how invariant 12 is
-  enforced, so the choice is the operator's (put to him 2026-11-08).
+- **Chat: same text and +3.5 % on prompts. ADOPTED (operator, 2026-11-08: "I
+  agree with all").** The same day the operator set the rule it follows:
+  **"determinism is mandatory for embedders only; as long as the quality is
+  not degraded, determinism can be dropped for any other model."** So the
+  wrapper's DETERMINISM guard (`vega_wrapper.determinism_lacks`) holds an
+  EMBEDDER's run only. A chat, reranker or translation run is stated as it ran
+  and never refused for its mode. The node's own non-embedder models keep the
+  measured set unless a named EXCEPTION in tests/vega/test_engine_settings.py
+  departs from it, and an exception to the exact mode names its QUALITY check:
+  - **chat:** the same text at temperature 0, or chat_eval's tagged arm with no
+    metric worse (found work, cites it, numbers supported, names, loops,
+    language);
+  - **reranker:** the judged query set's MRR@10 and recall unchanged, AND the
+    calibrated-relevance merge (05 §5.6) re-calibrated under the new setting.
+    A non-reproducible reranker would also rank the same question differently
+    twice (worth weighing against invariant 4 (5) before one is proposed);
+  - **translation:** the Ask page's translation markers and a fixed sample
+    against the current output. MADLAD's flash attention stays off: T5 cannot
+    use it (Known limits).
+  First exception: louise-chat-qwen3.5-9b-q4 `GGML_SYCL_FA_ONEDNN=1`.
 
 ## Known limits of the Arc Pro B70 (2026-10-28)
 

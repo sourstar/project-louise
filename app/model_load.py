@@ -146,6 +146,17 @@ _pids: dict[str, dict[str, int]] = {}                                    # serve
 #: a model that is not loaded (app/resident.py). The largest seen, because the
 #: first reading after a load comes before its compute buffers grow.
 _sizes: dict[tuple[str, str], int] = {}
+#: server -> {model: bytes} as the LAST `/system` answer gave them (0: none on
+#: the card): the resident budget's margin is the card's count minus their sum
+#: (`held_sizes`, app/resident.py)
+_held: dict[str, dict[str, int]] = {}
+#: (server, model) -> the FEWEST bytes `/system` gave as its `size_vram`: the
+#: model AT REST, as its load left it, before a request grows its buffers —
+#: what the resident budget counts (app/resident.py, 2026-11-08)
+_rest: dict[tuple[str, str], int] = {}
+#: (server, model) listed loaded at least once: a model that holds no VRAM
+#: (one on the CPU) has no `_sizes` entry, and costs the card nothing
+_seen: set[tuple[str, str]] = set()
 _probe_locks: dict[str, threading.Lock] = {}
 _flights: dict[tuple[str, str], _Flight] = {}
 _recent: deque[ColdStart] = deque(maxlen=100)
@@ -159,6 +170,9 @@ def reset() -> None:
         _systems.clear()
         _pids.clear()
         _sizes.clear()
+        _held.clear()
+        _rest.clear()
+        _seen.clear()
         _probe_locks.clear()
         _flights.clear()
         _recent.clear()
@@ -191,18 +205,23 @@ def _fetch_system(server: str) -> frozenset[str] | None:
     if not isinstance(rows, list):
         raise _NoRoute()
     held = [m for m in rows if isinstance(m, dict) and isinstance(m.get("id"), str)]
-    pids, sizes = {}, {}
+    pids, sizes, now = {}, {}, {}
     for m in held:
         pid = (m.get("process") or {}).get("pid") if isinstance(m.get("process"), dict) else None
         if isinstance(pid, int):
             pids[m["id"]] = pid
         size = m.get("size_vram")
-        if isinstance(size, int) and not isinstance(size, bool) and size > 0:
+        ok = isinstance(size, int) and not isinstance(size, bool) and size > 0
+        if ok:
             sizes[(server, m["id"])] = size
+        now[m["id"]] = size if ok else 0
     with _lock:
         _pids[server] = pids
+        _held[server] = now
+        _seen.update((server, m) for m in now)
         for k, v in sizes.items():
             _sizes[k] = max(v, _sizes.get(k, 0))
+            _rest[k] = min(v, _rest.get(k, v))
     return frozenset(m["id"] for m in held)
 
 
@@ -211,6 +230,38 @@ def size_vram(server: str, model: str) -> int | None:
     (`_sizes`), or None when this process never saw it loaded."""
     with _lock:
         return _sizes.get((server_of(server), model))
+
+
+def rest_vram(server: str, model: str) -> int | None:
+    """The fewest bytes `model` held on the card in any `/system` reading of
+    this process — at rest, as its load left it (`_rest`); None never seen
+    holding any."""
+    with _lock:
+        return _rest.get((server_of(server), model))
+
+
+def seen_loaded(server: str, model: str) -> bool:
+    """Whether `/system` listed `model` loaded at least once in this
+    process — with `size_vram` None, a model that holds no VRAM."""
+    with _lock:
+        return (server_of(server), model) in _seen
+
+
+def held_sizes(server: str, max_age_s: float | None = None) -> dict[str, tuple[int | None, int]] | None:
+    """`{model: (backend pid, bytes on the card)}` of what `server` holds,
+    from an answer at most `max_age_s` old (`loaded_models`); None when it
+    cannot say, or its answer carried no per-model sizes (a runner that is
+    not LocalAI's). The resident budget's margin reads it (app/resident.py)."""
+    server = server_of(server)
+    ids = loaded_models(server, max_age_s)
+    if ids is None:
+        return None
+    with _lock:
+        now = _held.get(server)
+        if now is None:
+            return None
+        pids = _pids.get(server, {})
+        return {m: (pids.get(m), now.get(m, 0)) for m in ids}
 
 
 class _NoRoute(Exception):

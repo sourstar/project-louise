@@ -454,6 +454,35 @@ def test_resume_lifts_a_collections_own_pause_and_records_the_library(client):
     assert client.post("/admin/library/gutenberg/resume").status_code == 401
 
 
+def test_unfreeze_lifts_a_freeze_through_the_commands_function_and_records_the_library(client, monkeypatch):
+    """The Library's Unfreeze is `louise node unfreeze`'s write —
+    `node_state.set_frozen`, the one function — recorded in the freeze
+    history as the Library's; admin only, as Resume is."""
+    import argparse
+
+    from app import louise, node_state
+    calls: list[tuple[str, bool]] = []
+    real = node_state.set_frozen
+    monkeypatch.setattr(node_state, "set_frozen",
+                        lambda name, frozen, *, by="": calls.append((name, frozen)) or real(name, frozen, by=by))
+    real("gutenberg", True, by="louise node freeze gutenberg")
+    real("other", True, by="louise node freeze other")
+    token = client.headers["X-Admin-Token"]
+    del client.headers["X-Admin-Token"]
+    assert client.post("/admin/library/gutenberg/unfreeze").status_code == 401
+    assert node_state.frozen_collections() == {"gutenberg", "other"} and calls == [], "refused: nothing written"
+    client.headers["X-Admin-Token"] = token
+    r = client.post("/admin/library/gutenberg/unfreeze")
+    assert r.status_code == 200, r.text
+    assert r.json() == {"ok": True, "frozen": ["other"]}
+    assert node_state.frozen_collections() == {"other"} and node_state.frozen_since("gutenberg") is None
+    last = node_state.freeze_history()[-1]
+    assert (last["collection"], last["frozen"], last["by"]) == ("gutenberg", False, "Library (admin)")
+    assert louise.cmd_node_unfreeze(argparse.Namespace(collection="other")) == 0
+    assert calls == [("gutenberg", False), ("other", False)], "the route and the command: one function"
+    assert client.post("/admin/library/nope/unfreeze").status_code == 404
+
+
 def test_an_annotations_card_names_a_records_twin_of_its_target(client, monkeypatch):
     """02 §2.4 A1f: claims about a target apply to the collection a carry
     made of it, byte for byte (368365e), so the card names that collection

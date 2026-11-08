@@ -2814,8 +2814,10 @@ def cmd_node_resident(a) -> int:
     the card for Ask — a trial (operator, 2026-11-08: "keep every model Ask
     uses resident on the card"; app/resident.py, the one resolution) —
     beside platform.toml's `[models] keep_ask_resident` and
-    `preload_speech`, the node's mode, and each model's loaded state, last
-    known size and pin holders. Read-only."""
+    `preload_speech`, the node's mode, the budget the set is preloaded
+    within (the line, the working margin measured over 6 h or its default),
+    and each model's rank, loaded state, at-rest and largest sizes, place in the
+    budget and why, and pin holders. Read-only."""
     from app import platform_config, resident
     try:
         _print(resident.show())
@@ -6203,8 +6205,9 @@ def build_parser() -> argparse.ArgumentParser:
     p = nverbs.add_parser("resident", help="the models preloaded on the card for Ask (a trial): platform.toml "
                                            "[models] keep_ask_resident, preload_speech")
     rverbs = p.add_subparsers(dest="resident_verb", required=True)
-    q = rverbs.add_parser("show", help="the switches, the node's mode, and each model of the set with its "
-                                       "roles, collections, loaded state, size and pin holders")
+    q = rverbs.add_parser("show", help="the switches, the node's mode, the budget (line, measured margin), and "
+                                       "each model of the set in priority order with its roles, collections, "
+                                       "loaded state, size, in the budget or not and why, and pin holders")
     q.set_defaults(fn=cmd_node_resident)
 
     hold = surfaces.add_parser("hold", help="your own copy: complete, current, checked")

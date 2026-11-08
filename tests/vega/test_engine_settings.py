@@ -64,6 +64,16 @@ EXCEPTIONS: dict[tuple[str, str], tuple[str, str]] = {
     ("louise-translate-madlad", "flash_attention"): (
         "off", ("approved-encoders.md \"Known limits\": T5 cannot use flash attention "
                 "(its relative attention bias); MADLAD-400 is a T5")),
+    # the operator, 2026-11-08: C for chat models ("I agree with all"), and "determinism is
+    # mandatory for embedders only; as long as the quality is not degraded, determinism can
+    # be dropped for any other model": the same text as A over 3 fresh loads, temp 0
+    ("louise-chat-qwen3.5-9b-q4", "GGML_SYCL_FA_ONEDNN"): (
+        "1", ("approved-encoders.md \"oneDNN switched on, measured\": C exact, the same text "
+              "as A over 3 fresh loads, prompt +3.5 to +4 % (QUALITY: identical answers)")),
+    # Ask's live chat model (staged 2026-11-08): the model the measurement's second table ran
+    ("louise-chat-qwen3.5-9b-q4-p0", "GGML_SYCL_FA_ONEDNN"): (
+        "1", ("approved-encoders.md \"oneDNN switched on, measured\": C on q4-p0, the same text "
+              "as A over 3 fresh loads, prompt 3,079 -> 3,187 tok/s (QUALITY: identical answers)")),
 }
 
 
@@ -143,16 +153,24 @@ def test_every_llama_cpp_model_runs_the_measured_settings_or_a_measured_exceptio
         + "\n  ".join(drift))
 
 
-def test_the_measured_set_holds_each_vendors_exact_mode_and_no_exception_relaxes_it():
-    """The set cannot lose the mode invariant 12 requires, and an exception
-    cannot drop it either: relaxing it is a near-exact run, declared to the
-    wrapper (LOUISE_NEAR_EXACT_MEASURED), never a line here."""
+def test_the_measured_set_holds_each_vendors_exact_mode_and_an_exception_to_it_names_its_quality():
+    """The SET keeps the vendor's exact mode: a node model starts exact. An
+    EXCEPTION may leave it (operator, 2026-11-08: "determinism is mandatory for
+    embedders only; as long as the quality is not degraded, determinism can be
+    dropped for any other model"; the wrapper refuses a mode-less run only for
+    an embedder, vega_wrapper.determinism_lacks). Every file this test holds is
+    not an encoder (`staged`), and an exception that touches the mode says the
+    QUALITY measurement that admitted it: a chat model's answers (chat_eval, or
+    the same text at temperature 0), a reranker's judged query set and its
+    re-calibration (05 §5.6), a translation's sample."""
     w = load_wrapper()
     for v, block in MEASURED.items():
         mode = w.determinism_env(f"louise-{v}-f16-llama-cpp-16acc89")
         assert mode.items() <= block["env"].items(), f"{v}: the set lacks {mode}"  # type: ignore[union-attr]
     every_mode = {k for env in w.DETERMINISM.values() for k in env}
-    assert not {key for _m, key in EXCEPTIONS} & every_mode
+    for (model, key), (_value, where) in EXCEPTIONS.items():
+        if key in every_mode:
+            assert "QUALITY" in where, f"{model} {key}: an exception to the exact mode names its quality check"
 
 
 def test_every_exception_names_a_staged_llama_cpp_model_and_where_it_was_measured():

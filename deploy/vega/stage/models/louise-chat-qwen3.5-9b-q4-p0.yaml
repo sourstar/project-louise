@@ -1,0 +1,56 @@
+# Ask's live chat model, staged from the node (München, 2026-11-08, e03f784: the YAML
+# as it ran there), written as JSON like every staged model (YAML reads it the same).
+# GGML_SYCL_FA_ONEDNN=1: the operator, 2026-11-08 (C for chat; determinism for
+# embedders only) — the same text over 3 fresh loads, prompt +3.5 %
+# (approved-encoders.md "oneDNN switched on, measured"; tests/vega/test_engine_settings.py).
+{
+  "backend": "vega-louise-llama-cpp",
+  "chat_template_kwargs": {
+    "enable_thinking": false
+  },
+  "context_size": 16384,
+  "draft_model": "",
+  "env": {
+    "GGML_SYCL_ENABLE_DNN": "0",
+    "GGML_SYCL_FA_ONEDNN": "1",
+    "NEO_CACHE_DIR": "/data/louise-cache/neo-cache"
+  },
+  "flash_attention": "on",
+  "function": {
+    "automatic_tool_parsing_fallback": true,
+    "grammar": {
+      "disable": true
+    }
+  },
+  "gpu_layers": 999,
+  "known_usecases": [
+    "chat"
+  ],
+  "mmap": true,
+  "mmproj": "",
+  "name": "louise-chat-qwen3.5-9b-q4-p0",
+  "options": [
+    "use_jinja:true",
+    "parallel:1",
+    "cache_ram:0",
+    "ubatch:512"
+  ],
+  "parameters": {
+    "batch": 2048,
+    "frequency_penalty": 0,
+    "min_p": 0,
+    "model": "llama-cpp/models/Qwen3.5-9B-GGUF/Qwen3.5-9B-Q4_K_M.gguf",
+    "presence_penalty": 0.0001,
+    "repeat_last_n": 64,
+    "repeat_penalty": 1,
+    "seed": 0,
+    "temperature": 0.1,
+    "top_k": 20,
+    "top_p": 0.8
+  },
+  "reasoning_effort": "none",
+  "template": {
+    "use_tokenizer_template": true
+  },
+  "threads": 6
+}

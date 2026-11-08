@@ -264,10 +264,11 @@ are the ones that have drifted; prefer to add a test when you touch them.
     some collections." A structurally independent part — a language of
     Wikipedia, a family of Wikidata, Wikidata's lexemes — is a SLICE a node
     may hold or not and embed or not; it is never a separate collection and
-    never left out. NO EXCEPTION FOR EU LAW (operator, 2026-11-08: "Eurlex
-    all languages together. France, Germany, different countries. EU same
-    entity, different languages" — replacing 2026-10-28's one collection
-    per language): EU law is ONE collection, each language a slice; one
+    never left out. EU law follows the same rule (operator, 2026-11-08:
+    "Eu laws are now one collection with multiple languages", replacing
+    2026-10-28's one collection per language; "France, Germany, different
+    countries. EU same entity, different languages"): ONE COLLECTION, each
+    language a slice a node may hold or not and embed or not; one
     collection per NATION (France, Germany).
     Concretely: every record carries `origin_hash` — the hash of the origin
     unit it was parsed from — and `origin` locates that unit, while the

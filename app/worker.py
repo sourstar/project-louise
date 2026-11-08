@@ -5715,9 +5715,11 @@ def _resident_keeper() -> None:
     """THE RESIDENT SET, preloaded (app/resident.py; a trial, operator
     2026-11-08: "keep every model Ask uses resident on the card"; preloaded,
     not pinned: the reclaimer evicts the least-recently-used model when
-    space is claimed). One beat at once — a booted worker loads what the
-    set lacks — and every SETTLE_BEAT_S after, on its own thread: a run
-    check on the settle thread can embed a whole set for minutes, and an
+    space is claimed; within the budget the set fits under the reclaimer's
+    line with a measured working margin, amended 2026-11-08). One beat at
+    once — a booted worker loads what the set lacks — and every
+    SETTLE_BEAT_S after, on its own thread: a run check on the settle
+    thread can embed a whole set for minutes, and an
     evicted model is loaded again within a beat of the card having room
     for it. The loads it starts run on a thread of their own, one at a time
     (`resident._warm_all`). Each collection's embed mode is read as

@@ -314,6 +314,10 @@ an encoder unfreezes to receive peers' vectors.
 
 ## 11. What the Library card and the status display should show
 
+*Built 2026-11-08: the badge, who and when under Details (app/status.py
+`frozen`) and Unfreeze (07 §7.3). Not yet on the card: the snapshot
+sentence and the shared line from `share.frozen.summary`.*
+
 Left to the worker building app/status.py (not touched here). From
 `node_state.frozen_since(name)` (who and when, read creating nothing) and
 `share.frozen.summary(root, collection, snapshot)` (`snapshot_id`,
