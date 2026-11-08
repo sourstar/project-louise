@@ -116,8 +116,9 @@
 <div id="answer-pane" style="display:none" class="panel">
   <div class="answer-head">
   <h2>Answer</h2>
-  {# the answer read aloud, sentence by sentence, in the node's voice
-     (app/speech.py), where the node sets a text-to-speech model #}
+  {# the answer read aloud, sentence by sentence as it is written, in the
+     node's voice (app/speech.py), where the node sets a text-to-speech
+     model; by itself when the microphone wrote the question (voice.js) #}
   {% if voice.output.available %}
   <button id="speak" class="voice-btn" type="button" hidden aria-pressed="false" title="read the answer aloud"><svg
           viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor"
@@ -396,12 +397,15 @@ async function search(){
   return end.state==='done';
 }
 let lastSearch=null;
-function startAnswer(){
+// `want`: the language the answer is written in (null: the model's own)
+function startAnswer(want){
   const pane=document.getElementById('answer-pane'), a=document.getElementById('answer');
   if(window.louiseVoice)louiseVoice.answerCleared();
   pane.style.display='block'; a.textContent='thinking…';
   let started=false;
-  return {pane,a,delta:t=>{if(!started){a.textContent='';started=true} a.textContent+=t}};
+  // the speaker reads it as it is written, where the node offers it
+  return {pane,a,delta:t=>{if(!started){a.textContent='';started=true} a.textContent+=t;
+                           if(window.louiseVoice)louiseVoice.answerGrew(want)}};
 }
 function finishAnswer(a,want){
   // the answer AS GENERATED, so a later switch has something to translate
@@ -418,6 +422,8 @@ function rememberHow(){try{localStorage.setItem('louise-how',howAsk())}catch(e){
   const r=v&&document.querySelector('input[name="how"][value="'+v+'"]'); if(r)r.checked=true})();
 function go(){return howAsk()==='search'?search():ask()}
 async function ask(){
+  // inside the press: a question the microphone wrote is answered aloud
+  if(window.louiseVoice)louiseVoice.asking();
   const want=selectedLang();
   // THE ANSWER BEFORE THE ENTRIES (operator, 2026-10-21: the answer box
   // first). The model is one queue, and the entries are minutes of it:
@@ -428,7 +434,7 @@ async function ask(){
   try{
   if(!await search())return;
   const q=document.getElementById('q').value.trim();
-  const {pane,a,delta}=startAnswer();
+  const {pane,a,delta}=startAnswer(want);
   // an answer was asked for: it starts where the reader can see its first word
   pane.scrollIntoView({block:'start'});
   let id;
@@ -466,9 +472,10 @@ async function relayRestore(){
     await relayListen('search',s.search.id,{result:d=>{showResults(d); got=true}});
     if(!got){document.getElementById('results').innerHTML=''; return}
     if(s.answer&&s.answer.id){
-      const {a,delta}=startAnswer();
+      const want=s.answer_lang===undefined?selectedLang():s.answer_lang;
+      const {a,delta}=startAnswer(want);
       await relayListen('answer',s.answer.id,{delta});
-      finishAnswer(a,s.answer_lang===undefined?selectedLang():s.answer_lang);
+      finishAnswer(a,want);
     }
   }finally{tq.hold=false}
   tqPump();
