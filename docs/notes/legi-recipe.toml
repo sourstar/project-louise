@@ -32,10 +32,12 @@
 #
 #   louise hold collection new legi --recipe /config/recipes/legi-recipe.toml --name legi --encoder http://192.168.178.10:30286 --api vega --embed-model vega-nemotron-3-embed-1b --cpu-model vega-nemotron-3-embed-1b-cpu
 #
-# The licence is GREEN (Licence Ouverte 2.0, app/plugins/legi/TERMS.txt):
-# no acknowledgement is required (invariant 9). DILA's personal-data warning
-# (OPENDATA/AVERTISSEMENT-Donnees_a_caractere_personnel.pdf) is read on the
-# node BEFORE this runs, and the class tightened here if it asks for it.
+# The licence is YELLOW (operator, 2026-11-08, choice A): Licence Ouverte 2.0
+# is open with a condition, attribution, which 04 §4.4 puts in yellow, as
+# normattiva's CC BY 4.0. Its terms are app/plugins/legi/TERMS.txt (Etalab's
+# LO.md byte for byte), pinned below by sha256; the node acknowledges them
+# (`louise hold collection ack legi`) before the data is used (invariant 9).
+# DILA's personal-data warning, read on the node on 2026-11-08, sets no class.
 # The fetch (`hold fetch legi --profile full`) is the baseline (1.17 GB)
 # and every daily increment after it, two connections at most, listed from
 # the directory's own index page; a pass after it fetches the new
@@ -97,6 +99,10 @@ jurisdiction = "FR"
 # The spec is the plugin's (app/acquire/specs.py LEGI_SPEC): the
 # directory's index page is the listing, each file published once under a
 # dated name and fetched once (DeltaSpec full-resync against fetch_files).
+
+[license]
+class = "yellow"
+terms_sha256 = "sha256:a1deb9d7554ad10e041dbd7440b3dec0ac0d3679f9e1655ee9d850908b015995"
 
 [validation]
 checks = ["roots", "records", "chunks", "records-vs-origin", "license", "signature", "calibration", "vectors-sample"]

@@ -551,7 +551,10 @@ LEGI_SPEC = AcquisitionSpec(
         "full": "the LEGI baseline and every daily increment since it: every version of the "
                 "consolidated French law DILA publishes",
     },
-    license_class=LicenseClass.GREEN,                # Licence Ouverte 2.0 (app/plugins/legi/TERMS.txt)
+    # YELLOW (operator, 2026-11-08, A): Licence Ouverte 2.0 is open WITH a
+    # condition, attribution (the source and the date of its last update),
+    # and 04 §4.4 puts such a licence in yellow, as normattiva's CC BY 4.0
+    license_class=LicenseClass.YELLOW,               # Licence Ouverte 2.0 (app/plugins/legi/TERMS.txt)
     terms_text_path=Path(__file__).parent.parent / "plugins" / "legi" / "TERMS.txt",
 )
 
