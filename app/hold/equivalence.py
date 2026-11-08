@@ -69,8 +69,11 @@ def equivalent_by_versions(codex: Codex) -> bool:
     running in the plan, so a parse that changed without its bump is caught
     there, as before."""
     from app import chunking, collections as collections_mod
-    plugin = collections_mod.PLUGIN_REGISTRY.get(codex.plugin)
-    if plugin is None or getattr(plugin, "PARSER_VERSION", None) != codex.parser.version:
+    # the Codex's parser as this image carries it (`plugin_at`: its own, or
+    # an earlier version it keeps for the collections that name it)
+    plugin = collections_mod.plugin_at(collections_mod.PLUGIN_REGISTRY.get(codex.plugin),
+                                       codex.parser.version)
+    if plugin is None:
         return False
     if getattr(plugin, "source_id", codex.parser.id) != codex.parser.id:
         return False

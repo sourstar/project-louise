@@ -933,6 +933,20 @@ did not: the recut is carried by chunk hash (06 §6.3), the space being
 the mother's, so only the new language's chunks are embedded. No rule is
 added for it; this sentence says the existing ones suffice.
 
+A re-creation whose PARSER moves a known few of its records (*amended
+2026-11-08*, RULE 1, pubmed parser 8 → 9: a citation whose only abstract is
+an OtherAbstract takes it into `sections`, ~64 k of 40 M) takes the source's
+record lines too, where the plugin NAMES the lines its parser would write
+differently (`line_moved_since`, read off the line itself): those are parsed
+again from the origin, every other is taken byte for byte, and the image
+differs with the parser and nothing else does (`records build
+--records-from`, `hold.records.parser_carried`). A parse would give the same
+parts. `records-vs-origin` under the new image shows it before use, as for
+any build. A plugin that names no such lines is parsed by the book. And a
+plugin keeps the parser version a live Codex names (`at_parser_version`,
+`collections.plugin_at`), so the deploy of a new parser never parses that
+collection differently from its own records before it is re-created.
+
 A **daughter** continues the collection. The transition is a snapshot
 boundary, and the two fields that fix it read as one sentence:
 `continues` names the mother's Codex, `continues_through` the last

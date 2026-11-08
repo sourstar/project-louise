@@ -76,3 +76,50 @@ read. Those 60,947 were dropped and their documents reset at 12:00 on
 "Not in our table" grows from chunk 19 on, to 16,244 in chunk 35. Those are
 PMIDs NCBI embedded that our records do not hold or that are out of scope;
 nothing is compared for them.
+
+## Decided: B (operator, 2026-11-08), and how it is built
+
+Put to the operator again on 2026-11-08, when 46 `other-abstract-only` lines
+came up in half an hour of pubmed's run: 44 plain-language summaries in
+English, one publisher abstract in German and one in French. The operator
+chose **B**: every type counts, the English one first, else the first in
+document order.
+
+**Parser 9** (`app/plugins/pubmed/source.py`, `section_abstract`): a
+citation with no `<Abstract>` takes that OtherAbstract into `sections` as its
+"Abstract". The pair layer then gives MedCPT (title, that abstract), which
+is what NCBI embedded for the POPLINE rows. Every OtherAbstract stays whole
+in `extra.other_abstracts`, and the issue stays flagged, since it is the
+origin's shape. Every other citation parses to the same sections, so its
+`content_hash` and chunk do not move.
+
+**Parser 8 is kept** (`PubmedSourceV8`, `at_parser_version`,
+`collections.plugin_at`). A collection whose Codex names 8 (the live pubmed)
+parses at 8 in the worker, in `hold check` and in the equivalence of images.
+So deploying parser 9 changes nothing for the live pubmed until it is
+re-created. It is removed once no Codex on a node names 8.
+
+**The re-creation (RULE 1, 02 §2.4 A1c, 02 §2.7 amended 2026-11-08).** The
+moved lines are named by the line itself (`line_moved_since`): no
+"Abstract" section, and an OtherAbstract with text. So the build takes the
+live snapshot's 40 M lines and parses only those again:
+
+1. Deploy the image carrying parser 9. Check that the live pubmed's
+   `hold check --checks records-vs-origin` still passes under it (it parses
+   at 8).
+2. Create the new collection from the live pubmed's Codex, with
+   `parser.version` 9 and this image, exactly as gutenberg's parser 9 was
+   (docs/notes/v5-migration.md, "Gutenberg to parser 9"). Nothing else
+   changes: the space, the layers, the slicing, the origin.
+3. Pause pubmed. `louise dev carry pubmed <new> --rebuilt` (with `--copy`
+   where reflinks are available).
+4. `louise hold records build <new> --corpus <pubmed's origin> --records-from pubmed`:
+   the log names how many lines are parsed again (~64 k plus what NCBI
+   added since the 10-19 count). Then `hold snapshot create`.
+5. `louise dev carry pubmed <new> --reconcile --yes`: every document whose
+   `content_hash` did not move keeps its vectors, and the moved ones are
+   reset to embed again.
+6. `hold check <new>`: records-vs-origin and vectors-sample, before use.
+7. Resume. The worker embeds the moved documents (MedCPT). The old
+   collection stays paused, and forgetting it is the operator's call, with
+   its size.

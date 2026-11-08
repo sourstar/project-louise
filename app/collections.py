@@ -503,6 +503,14 @@ class Collection:
 
     def plugin_instance(self) -> CorpusSource:
         inner = PLUGIN_REGISTRY[self.plugin]
+        # AT THE CODEX'S PARSER (2026-11-08, pubmed parser 9): a plugin that
+        # still carries the version this collection's Codex names parses at
+        # it, so a deploy of a new parser never parses a live collection
+        # differently from its own records (invariant 3); it is re-created
+        # onto the new one (02 §2.4 A1c). One that carries none: as before.
+        pinned = getattr(getattr(self.codex, "parser", None), "version", None)
+        if pinned is not None:
+            inner = plugin_at(inner, int(pinned)) or inner
         if self.source == "shard":
             from .plugins.shard import ShardSource
             from .hold import integrity
@@ -510,6 +518,18 @@ class Collection:
             skip = integrity.violations(shard_tree.parent.parent, shard_tree.parent.name, self.codex)
             return ShardSource(inner, self.corpus_dir, frozenset(skip))
         return inner
+
+
+def plugin_at(plugin, version: int):
+    """`plugin` parsing at parser `version`: itself at its own
+    PARSER_VERSION, the earlier version it still carries
+    (`at_parser_version`), or None where it carries none."""
+    if plugin is None:
+        return None
+    if int(getattr(plugin, "PARSER_VERSION", -1)) == int(version):
+        return plugin
+    older = getattr(plugin, "at_parser_version", None)
+    return older(int(version)) if callable(older) else None
 
 
 def _control_fallback() -> Collection:
