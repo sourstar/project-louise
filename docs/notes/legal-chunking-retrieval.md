@@ -191,8 +191,15 @@ Variants: `akn_article` (today), `legal_article` header off, header on.
 ## 6. What changes after the decisions
 
 - **The three legal plugins:** `chunking_profile = "legal_article"`, and
-  their recipes state the layer: the tokenizer's sha256, read on the node;
-  `max_tokens` = 8,192 − the instruction's tokens; `header`.
+  their recipes state the layer:
+  - the tokenizer:
+    `sha256:797410dfb649a5b9ba92bc4fef7dbf4022d00e73de6867c4ac199a8846439421`.
+    That is Nemotron-3-Embed-1B-BF16's `tokenizer.json` at revision
+    c0c9fea93ea424587517f2c59e20db9f1d6bf615, 17,077,678 bytes (München,
+    2026-11-08; `/root/measure/nemotron-tokenizer.json`). It goes into
+    `TOKENIZERS_DIR` as `<hex>.json`.
+  - `max_tokens` = 8,192 − the instruction's tokens;
+  - `header`.
 - **The label each plugin writes** is checked to name the act and the
   article (C2).
 - **normattiva-nemo:** with a new chunker, the sister no longer cuts as
