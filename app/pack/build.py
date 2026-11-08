@@ -292,13 +292,19 @@ class HeldRecords:
     for its part's `chunks_root` — the chunker, never the parser."""
     shard_dir: Path
     paths: tuple[str, ...]
+    #: the parser the held lines were written by, where it is not the
+    #: build's own: each line the build's parser says it would write
+    #: differently (`line_moved_since`) is parsed again, the rest taken
+    #: (pubmed 8 → 9, 2026-11-08); None where the parsers are the same
+    parser_from: int | None = None
 
 
-def held_records_of(root: Path, name: str) -> HeldRecords:
+def held_records_of(root: Path, name: str, *, parser_from: int | None = None) -> HeldRecords:
     """The records a held collection's latest snapshot lists."""
     from ..hold import carry as carry_mod, collection as col
     snap = carry_mod.latest_snapshot(Path(root), name)
-    return HeldRecords(col.shard_dir_of(Path(root), name), tuple(s.path for s in snap.shards))
+    return HeldRecords(col.shard_dir_of(Path(root), name), tuple(s.path for s in snap.shards),
+                       parser_from)
 
 
 #: THREADS reading the held parts' indexes: the read is a seek, a small zstd
@@ -346,6 +352,8 @@ def _held_index(con_build, held: HeldRecords, log) -> None:
 #: it up themselves: the build database's `held` table and the parts' root.
 #: The build's thread sends a uid, nothing it had to read (2026-10-30)
 HELD_DB, HELD_DIR = "_held_db", "_held_dir"
+#: the parser version the held lines were written by (`HeldRecords.parser_from`)
+HELD_FROM = "_held_parser"
 
 #: this process's read-only handles, by path (a child keeps them across tasks)
 _ro_cons: dict[str, sqlite3.Connection] = {}
@@ -418,7 +426,8 @@ def held_or_parsed(collection, plugin, row: dict) -> tuple[dict, int, bytes, dic
             "SELECT uid, native_id, path, lang, txt_hash FROM documents WHERE uid=?",
             (row["uid"],)).fetchone()
         if (src is None or not src["txt_hash"] or src["txt_hash"] == line.get("origin_hash")) \
-                and not _origin_moved(collection, plugin, src, line):
+                and not _origin_moved(collection, plugin, src, line) \
+                and not _parser_moved(plugin, row.get(HELD_FROM), line):
             return _record_from_line(collection, line)
     if src is None:
         src = row[HELD_SRC] if HELD_SRC in row else _ro(str(collection.manifest_path)).execute(
@@ -426,6 +435,18 @@ def held_or_parsed(collection, plugin, row: dict) -> tuple[dict, int, bytes, dic
     if src is None:
         raise LookupError(f"{row['uid']}: neither held nor in the manifest")
     return _record_of(collection, plugin, {k: src[k] for k in ("uid", "native_id", "path", "lang")})
+
+
+def _parser_moved(plugin, parser_from, line: dict) -> bool:
+    """The held line was written by another parser (`parser_from`) and the
+    build's own says it would write this one differently
+    (`line_moved_since`): it is parsed again, as a build by the book
+    would. A plugin that declares no rule has every line parsed — and
+    `records build` refuses such a source before it gets here."""
+    if parser_from is None or int(parser_from) == int(getattr(plugin, "PARSER_VERSION", -1)):
+        return False
+    moved = getattr(plugin, "line_moved_since", None)
+    return True if not callable(moved) else bool(moved(line, int(parser_from)))
 
 
 def _origin_moved(collection, plugin, src, line: dict) -> bool:
@@ -1173,7 +1194,9 @@ def _pack_slices(collection, con_src, con_build, pack_dir: Path, *, records_per_
             db_path, held_dir = str(pack_dir / BUILD_DIR / BUILD_DB), str(held.shard_dir)
             for page_start in range(0, len(rows), page_size):
                 page = rows[page_start:page_start + page_size]
-                srcs = [{"uid": prow["uid"], HELD_DB: db_path, HELD_DIR: held_dir} for prow in page]
+                srcs = [{"uid": prow["uid"], HELD_DB: db_path, HELD_DIR: held_dir,
+                         **({HELD_FROM: held.parser_from} if held.parser_from is not None else {})}
+                        for prow in page]
                 pending.append((page, srcs))
                 yield srcs
 

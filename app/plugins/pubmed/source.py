@@ -167,9 +167,26 @@ ISSUES = {
     "no-publication-date": "the citation states no publication date of any kind (PubDate year, "
                            "MedlineDate year, ArticleDate); `date` is null",
     "no-title": "neither ArticleTitle nor VernacularTitle has text; the record's title is empty",
-    "other-abstract-only": "the citation's only abstract is an OtherAbstract; `sections` hold "
-                           "the title alone (docs/notes/pubmed-other-abstracts.md)",
+    "other-abstract-only": "the citation's only abstract is an OtherAbstract; since parser 9 "
+                           "`sections` take it as the Abstract, the English one first "
+                           "(docs/notes/pubmed-other-abstracts.md)",
 }
+
+
+def section_abstract(meta: dict) -> str:
+    """The text `sections` hold as the record's "Abstract": the citation's
+    <Abstract>, else (parser 9, operator's choice B, 2026-11-08) one of its
+    OtherAbstracts — the English one first ("eng"), else the first in
+    document order. The OtherAbstracts stay whole in `extra.other_abstracts`
+    either way. "" where the citation has none."""
+    if meta.get("abstract"):
+        return meta["abstract"]
+    others = [o for o in (meta.get("extra") or {}).get("other_abstracts") or []
+              if (o.get("text") or "").strip()]
+    if not others:
+        return ""
+    english = [o for o in others if (o.get("language") or "").lower() == "eng"]
+    return (english or others)[0]["text"]
 
 
 def issues_of(meta: dict, date: str | None) -> list[Issue]:
@@ -242,7 +259,17 @@ class PubmedSource:
     #: reference lists; affiliation identifiers; the title and abstract as
     #: marked up. RECORDS ONLY: `sections` is untouched, so no chunk id and
     #: none of the archive's 35.4M vectors moves.
-    PARSER_VERSION = 8
+    #:
+    #: 9 (2026-11-08, operator's choice B; docs/notes/pubmed-other-abstracts.md):
+    #: a citation with no <Abstract> takes an OtherAbstract into `sections`
+    #: as its "Abstract", the English one first (`section_abstract`). 63,921
+    #: records were found by their title alone while the origin gives them an
+    #: abstract (pubmed-v8's snapshot, 2026-10-19), and NCBI embedded title
+    #: and abstract for them. `content_hash` and the chunk move FOR THOSE
+    #: RECORDS ALONE: every other record's sections are byte-identical, so a
+    #: rebuild carries every other vector (02 §2.4 A1c, `dev carry --rebuilt`
+    #: then `--reconcile`).
+    PARSER_VERSION = 9
     modality = Modality.TEXT
     erasure = Erasure.RETRACTABLE        # a retraction notice is a fact of the corpus
     native_id_order = "numeric"          # PMIDs, issued ascending
@@ -426,8 +453,9 @@ class PubmedSource:
         elem = ET.fromstring(raw.data.decode("utf-8"))
         meta = medline.parse_full(elem)
         sections = [("Title", meta["title"])]
-        if meta["abstract"]:
-            sections.append(("Abstract", meta["abstract"]))
+        abstract = self._abstract(meta)
+        if abstract:
+            sections.append(("Abstract", abstract))
         date = medline.publication_date(elem)
         return CanonicalDoc(
             uid=f"{self.source_id}:{meta['pmid']}",
@@ -476,3 +504,44 @@ class PubmedSource:
             raw_hash=raw.raw_hash,
             issues=issues_of(meta, date),
         )
+
+    def _abstract(self, meta: dict) -> str:
+        """What `sections` hold as the "Abstract" at this parser version."""
+        return section_abstract(meta)
+
+    def line_moved_since(self, line: dict, version: int) -> bool:
+        """Would THIS parser write a record line that parser `version` wrote
+        differently? A build taking the held lines of a collection on that
+        parser (`records build --records-from`, RULE 1) parses again only
+        the lines this says moved, and takes the rest byte for byte. From 8:
+        a citation with no "Abstract" section and an OtherAbstract with text,
+        read off the line itself (its `sections` and `extra`)."""
+        if int(version) >= self.PARSER_VERSION:
+            return False
+        if int(version) != 8:
+            return True                 # not a version this rule knows: parse it
+        if any(s[0] == "Abstract" for s in line.get("sections") or []):
+            return False
+        return any((o.get("text") or "").strip()
+                   for o in (line.get("extra") or {}).get("other_abstracts") or [])
+
+    def at_parser_version(self, version: int) -> "PubmedSource | None":
+        """This plugin parsing at `version`, for a collection whose Codex names
+        it (`collections.plugin_at`): 9 is this one, 8 the parser before the
+        other abstracts (`PubmedSourceV8`); None for any other."""
+        return {9: self, 8: _V8}.get(int(version))
+
+
+class PubmedSourceV8(PubmedSource):
+    """PARSER 8, KEPT for the collections whose Codex names it (invariant 3:
+    the same parser id and version give the same records). Until the live
+    pubmed is re-created on parser 9 (02 §2.4 A1c), the worker parses its
+    documents as its records were built: an OtherAbstract stays in
+    `extra.other_abstracts` alone. Removed once no Codex on a node names 8."""
+    PARSER_VERSION = 8
+
+    def _abstract(self, meta: dict) -> str:
+        return meta["abstract"] or ""
+
+
+_V8 = PubmedSourceV8()

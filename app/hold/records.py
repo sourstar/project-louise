@@ -348,13 +348,23 @@ def build(root, ref: str, *, corpus_dir=None, snapshot_id: str | None = None,
         # line carries no layer (09 §9.5; invariant 3; 02 §2.7 amended
         # 2026-11-08): nothing else may differ
         other = [d for d in record_differences(mother, codex) if d not in ("slicing", "layers")]
+        # A PARSER CHANGE whose moved lines the target's parser names
+        # (2026-11-08, pubmed 8 → 9, RULE 1): the lines it says it would
+        # write differently are parsed again, the rest taken byte for byte.
+        # The image differs with the parser; nothing else may.
+        parser_from = parser_carried(mother, codex, other)
+        if parser_from is not None:
+            other = [d for d in other if d not in ("parser", "toolchain.platform_image")]
         if other:
             raise RecordsError(f"{name}: --records-from {from_name}: the two differ in {', '.join(other)}, "
                                f"which decide record bytes (02 §2.7) — its records are not this "
                                f"collection's, and they are parsed, never taken")
-        reused = pack_build.held_records_of(Path(root), from_name)
+        reused = pack_build.held_records_of(Path(root), from_name, parser_from=parser_from)
         log(f"[records build] {name}: record lines taken from {from_name}'s latest snapshot "
-            f"({len(reused.paths)} parts), cut by this collection's slicing — none parsed (RULE 1)")
+            f"({len(reused.paths)} parts), cut by this collection's slicing — "
+            + (f"those {codex.parser.id} parser {codex.parser.version} writes differently from parser "
+               f"{parser_from}'s parsed again, the rest taken (RULE 1)" if parser_from is not None
+               else "none parsed (RULE 1)"))
     if records_from_discarded is not None:
         if reused is not None:
             raise RecordsError(f"{name}: --records-from and --records-from-discarded name two sources")
@@ -379,6 +389,23 @@ def build(root, ref: str, *, corpus_dir=None, snapshot_id: str | None = None,
     log(f"[records build] {name}: {result.records} records in {result.shards} "
         f"shard(s), {promoted} promoted into the SHARD")
     return result
+
+
+def parser_carried(mother, codex, differences: list[str]) -> int | None:
+    """The mother's parser version, where `--records-from` may take its
+    lines across a parser change: the same parser id and plugin, the
+    target's Codex on the parser this image runs, and the plugin naming
+    the lines its parser moves (`line_moved_since`). None otherwise —
+    then "parser" stays a difference and the build refuses."""
+    from app import collections as collections_mod
+    if "parser" not in differences or mother.plugin != codex.plugin \
+            or mother.parser.id != codex.parser.id:
+        return None
+    plugin = collections_mod.PLUGIN_REGISTRY.get(codex.plugin)
+    if plugin is None or int(getattr(plugin, "PARSER_VERSION", -1)) != int(codex.parser.version) \
+            or not callable(getattr(plugin, "line_moved_since", None)):
+        return None
+    return int(mother.parser.version)
 
 
 def _frozen_into(staging) -> str | None:
