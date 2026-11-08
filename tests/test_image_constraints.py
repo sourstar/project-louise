@@ -149,3 +149,17 @@ def test_the_compiler_is_pinned_and_agrees_with_the_image():
         if _name(ln) in pins:
             assert ln.split("==", 1)[1] == pins[_name(ln)], f"{_name(ln)}: the build and the image disagree"
 
+
+
+def test_an_app_that_parses_forms_declares_the_parser():
+    """2026-11-08: every POST /v1/audio/transcriptions from the Ask page
+    answered 500 on the node, "The `python-multipart` library must be installed
+    to use form parsing": the dev environment had the package, the image did
+    not, so every test passed. Starlette parses multipart only with it; an app
+    that reads a form declares it in requirements.txt (and so, by the test
+    above, pins it)."""
+    uses = [p.name for p in (ROOT / "app").rglob("*.py")
+            if re.search(r"\.form\(\)|\bUploadFile\b|\bForm\(", p.read_text(encoding="utf-8"))]
+    assert uses, "the check would pass for nothing: no module reads a form any more"
+    declared = {_name(ln) for ln in _lines(ROOT / "requirements.txt")}
+    assert "python-multipart" in declared, f"{uses} parse forms; python-multipart is not in requirements.txt"
