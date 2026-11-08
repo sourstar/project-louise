@@ -65,7 +65,8 @@ _child: dict = {}
 
 
 def _init(name: str, plugin_id: str, corpus: str, manifest: str, record_line: int) -> None:
-    from app import collections as collections_mod
+    from app import collections as collections_mod, parallel
+    parallel.watch_parent()                  # the parent decides, while it lives
     for sig in (signal.SIGINT, signal.SIGTERM):
         signal.signal(sig, signal.SIG_IGN)   # the parent decides (module docstring)
     plugin = collections_mod.PLUGIN_REGISTRY[plugin_id]

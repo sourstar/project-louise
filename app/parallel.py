@@ -138,12 +138,44 @@ def discard(ex: ProcessPoolExecutor, wait_s: float = DISCARD_WAIT_S) -> None:
     ex.shutdown(wait=False, cancel_futures=True)
 
 
+#: how often a child looks for its parent, in seconds (`watch_parent`)
+ORPHAN_POLL_S = 2.0
+
+
+def watch_parent() -> None:
+    """A CHILD WHOSE PARENT IS GONE STOPS (2026-11-08, München: a SIGTERM to
+    `hold collection new` left 18 parse children re-parented to the
+    container's init, computing at 31-36 % of a core each for nobody, until
+    killed by hand). A daemon thread polls the parent's pid and ends the
+    child once it changes — the parent died, and the child was re-parented.
+    Linux's PR_SET_PDEATHSIG would be the standard call, but it fires when
+    the THREAD that started the child exits, and the worker starts its pools
+    from pipeline threads; polling getppid is its usual fallback."""
+    parent = os.getppid()
+
+    def watch() -> None:
+        while True:
+            time.sleep(ORPHAN_POLL_S)
+            if os.getppid() != parent:
+                os._exit(1)
+    threading.Thread(target=watch, name="parent-watch", daemon=True).start()
+
+
+def child_start(init=None, *args) -> None:
+    """An initializer for any pool: the parent watched (`watch_parent`), then
+    the pool's own initializer, if any."""
+    watch_parent()
+    if init is not None:
+        init(*args)
+
+
 def _child_init(knobs: dict, base: int | None = None) -> None:
     """A child sits at the WORKER's base nice + 10, whichever thread started
     the pool. A child inherits its starter's nice, and since the pipeline
     threads lower themselves (docs/notes/scheduling.md §12) a relative
     `nice(10)` landed at 15 (live, 2026-09-20) — below the index
     maintainer, whose rule is that it yields to parsing, not the reverse."""
+    watch_parent()
     try:
         if base is None:
             os.nice(10)
@@ -201,7 +233,8 @@ def each_part(fn, tasks: list[tuple]):
     # agent. This applies to any worker").
     nxt = 0                                 # the next task to submit
     taken = 0                               # the next result to yield
-    ex = ProcessPoolExecutor(max_workers=n, mp_context=multiprocessing.get_context("spawn"))
+    ex = ProcessPoolExecutor(max_workers=n, mp_context=multiprocessing.get_context("spawn"),
+                             initializer=watch_parent)
     window: deque = deque()
     try:
         while taken < len(tasks):
@@ -222,7 +255,8 @@ def each_part(fn, tasks: list[tuple]):
                 print(f"[parse pool] a child was killed: {len(tasks) - taken} part(s) go again "
                       + (f"on {n} process(es)" if n > 1 else "in this process"),
                       file=sys.stderr, flush=True)
-                ex = (ProcessPoolExecutor(max_workers=n, mp_context=multiprocessing.get_context("spawn"))
+                ex = (ProcessPoolExecutor(max_workers=n, mp_context=multiprocessing.get_context("spawn"),
+                                          initializer=watch_parent)
                       if n > 1 else None)
                 continue
             window.popleft()

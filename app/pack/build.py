@@ -502,7 +502,8 @@ def part_writer_pool():
     from concurrent.futures import ProcessPoolExecutor
     if parallel.processes() <= 1:
         return ThreadPoolExecutor(max_workers=part_writers(), thread_name_prefix="part-writer")
-    return ProcessPoolExecutor(max_workers=part_writers(), mp_context=multiprocessing.get_context("spawn"))
+    return ProcessPoolExecutor(max_workers=part_writers(), mp_context=multiprocessing.get_context("spawn"),
+                               initializer=parallel.watch_parent)
 
 
 #: THE LINE TRAVELS COMPRESSED (München's profile of wikidata's held build,
