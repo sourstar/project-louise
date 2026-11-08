@@ -181,6 +181,77 @@ def test_refresh_is_due_by_rows_and_by_fraction(monkeypatch):
     assert not vector_index.refresh_due(None)
 
 
+def test_refresh_is_due_at_the_cap_however_big_the_table(monkeypatch):
+    """2026-11-08 (München, vec_latency.py): wikipedia's 147.7M-row table
+    held 1,436,267 unindexed rows against a 2.95M threshold (2 %), and every
+    query flat-scanned them: 1,095 ms unfiltered against 57 ms indexed. A
+    refresh is a delta since 2026-10-23, so the fraction is capped."""
+    monkeypatch.setattr(config, "VECTOR_INDEX_REFRESH_ROWS", 50_000)
+    monkeypatch.setattr(config, "VECTOR_INDEX_REFRESH_FRACTION", 0.02)
+    monkeypatch.setattr(config, "VECTOR_INDEX_REFRESH_MAX_ROWS", 500_000)
+    wiki = {"indexed": True, "rows": 147_662_989}
+    assert vector_index.refresh_due({**wiki, "unindexed_rows": 1_436_267})
+    assert vector_index.refresh_due({**wiki, "unindexed_rows": 500_000})
+    assert not vector_index.refresh_due({**wiki, "unindexed_rows": 499_999})
+    # under the cap the fraction still decides: unchanged for a 16.8M table
+    assert vector_index.refresh_due({"indexed": True, "rows": 16_800_000, "unindexed_rows": 340_000})
+    assert not vector_index.refresh_due({"indexed": True, "rows": 16_800_000, "unindexed_rows": 300_000})
+    # a quiet table folds in whatever reaches the floor
+    assert not vector_index.refresh_due({**wiki, "unindexed_rows": 60_000})
+    assert vector_index.refresh_due({**wiki, "unindexed_rows": 60_000}, quiet=True)
+    assert not vector_index.refresh_due({**wiki, "unindexed_rows": 49_999}, quiet=True)
+
+
+def test_a_table_is_quiet_after_a_whole_pass_without_new_rows(collection, monkeypatch):
+    """When a collection finishes embedding just under its threshold, what
+    is left unindexed would be scanned by every query for good (scheduling.md
+    §6, 6: the idle path). Quiet = the count has not moved for a pass."""
+    clock = [1000.0]
+    monkeypatch.setattr(vector_index.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(config, "VECTOR_INDEX_REFRESH_S", 1800)
+    vector_index._unindexed_seen.clear()
+    assert not vector_index._quiet(collection, {"unindexed_rows": 60_000}), "first sight"
+    clock[0] += 1799
+    assert not vector_index._quiet(collection, {"unindexed_rows": 60_000})
+    clock[0] += 1
+    assert vector_index._quiet(collection, {"unindexed_rows": 60_000})
+    assert not vector_index._quiet(collection, {"unindexed_rows": 61_000}), "a write restarts the clock"
+    clock[0] += 1800
+    assert vector_index._quiet(collection, {"unindexed_rows": 61_000})
+    assert not vector_index._quiet(collection, {"unindexed_rows": None})
+
+
+def test_a_quiet_table_has_its_remainder_folded_in(collection, monkeypatch):
+    """End to end through `ensure`: 100 rows under a fractional threshold
+    of 350 stay unindexed while rows arrive, and are folded in once the
+    table has been quiet for a pass. No refresh runs while it is not."""
+    _fill(collection, 600)
+    monkeypatch.setattr(config, "VECTOR_INDEX_MIN_ROWS", 200)
+    monkeypatch.setattr(config, "VECTOR_INDEX_TYPE", "ivf_flat")
+    monkeypatch.setattr(vector_index, "partitions_for", lambda rows: 4)
+    while vector_index.stats(collection).get("indexed") is not True:
+        assert vector_index.ensure(collection)
+    _fill(collection, 100, seed=1, start=600)
+    monkeypatch.setattr(config, "VECTOR_INDEX_REFRESH_ROWS", 50)
+    monkeypatch.setattr(config, "VECTOR_INDEX_REFRESH_FRACTION", 0.5)
+    monkeypatch.setattr(config, "VECTOR_INDEX_REFRESH_S", 1800)
+    clock = [1000.0]
+    monkeypatch.setattr(vector_index.time, "monotonic", lambda: clock[0])
+    vector_index._unindexed_seen.clear()
+    refreshes: list[int] = []
+    real = vector_index.refresh
+    monkeypatch.setattr(vector_index, "refresh", lambda c, con=None, log=None: (
+        refreshes.append(vector_index.stats(c)["unindexed_rows"]), real(c, con, log=log))[1])
+    vector_index.ensure(collection)
+    clock[0] += 900
+    vector_index.ensure(collection)
+    assert refreshes == [] and vector_index.stats(collection)["unindexed_rows"] == 100
+    clock[0] += 900
+    vector_index.ensure(collection)
+    assert refreshes == [100], "folded in once quiet for a pass"
+    assert vector_index.stats(collection)["unindexed_rows"] == 0
+
+
 def test_maintenance_marks_itself_busy_for_its_own_sake(collection, monkeypatch):
     """Index maintenance runs on its own thread (2026-08-27) and marks the
     collection busy — for ONE reason only: two maintenance passes must not

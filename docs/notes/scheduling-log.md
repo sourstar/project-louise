@@ -2655,3 +2655,35 @@ Reclaimer "evicting LRU backend" lines per hour; the keeper's back-offs; first-q
 |---|---|---|---|---|
 | BEFORE (live, 2026-11-08 03:25) | 11 of 11 | 95.9 % | 4 models, idle | 2 (11–15 s) |
 | AFTER | | | | |
+
+## 2026-11-08 — the vector index refresh capped at 500k unindexed rows, and a quiet table folded in (app/vector_index.py `refresh_due`, `_quiet`) — BEFORE (deploy pending)
+
+**Scenario (BEFORE, München, vec_latency.py, 36 runs, node paused, warm pass first, the 10-31 script).** Wikipedia is
+embedding. `index_stats`: 147,662,989 rows. vector_idx IVF_PQ has 146,226,722 indexed and 1,436,267 unindexed, in 2
+indices. lang_idx is the same; book_id_idx has 13,581 unindexed. The refresh fires at max(50k, 2 % × rows) = 2.95 M,
+so it was half-way there. The same latency on three images, so #415's caches are not the cause:
+
+| image | unfiltered median / p90 | lang=en median / p90 |
+|---|---|---|
+| 4f521da (before #415) | 1,153 / 1,257 ms | 1,580 / 1,677 ms |
+| cbab692 | 1,028 / 1,095 ms | 1,490 / 1,626 ms |
+| 1fd3914 | 1,095 / 1,183 ms | 1,488 / 1,676 ms |
+| 2026-10-31, indexed (#68) | 57 ms | 202 ms |
+
+Every query flat-scans the unindexed rows: (1,095 − 57) / 1,436,267 ≈ 0.72 ms per 1k rows.
+
+**The change.** The refresh is due at max(50k, min(2 % × rows, 500k)). The 2 % was set for the whole-table
+`optimize()` (41 min on wikivec, HDD). Since 2026-10-23 a refresh is a delta that costs with its new rows alone
+(normattiva: 93.1 s for 591,591 rows, against 404.9 s folded into the base). So the fraction only delays it on a big
+table. Expected on wikipedia: at most ~0.4 s just before a refresh, and a delta of ~80 s every few hours of embedding.
+Tables under 25 M rows are unchanged.
+And the idle path (scheduling.md §6, 6): a table whose unindexed count has not moved for a whole pass (30 min) folds
+in whatever reaches the 50k floor. Otherwise a collection that finishes under its threshold is scanned for good.
+
+**AFTER (to fill on the node).** The next wikipedia refresh line ("vector index refreshed: N … (Xs)"), then
+vec_latency.py again (the same 36 runs).
+
+| | unindexed rows | refresh time | unfiltered median / p90 | lang=en median / p90 |
+|---|---|---|---|---|
+| BEFORE (1fd3914) | 1,436,267 | (not due) | 1,095 / 1,183 ms | 1,488 / 1,676 ms |
+| AFTER | | | | |
