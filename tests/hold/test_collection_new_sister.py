@@ -196,3 +196,57 @@ def test_a_sister_who_cuts_otherwise_carries_her_records_and_the_worker_indexes_
     assert card["order"] == [("cpu-reference", "sis"), ("gate", "sis")]
     card["order"].clear()
     assert _new(root) == 0, "run again: the carry kept"
+
+
+def test_a_sister_written_at_version_9_or_later_states_her_older_mothers_jsonl_parts(pair, card):
+    """München, 2026-11-08: normattiva-nemo refused at make — the legal space
+    has a document instruction (Codex version 11), her mother is version 4,
+    and "a version 9 Codex declares its record parts' container". Absent
+    below version 9 means JSONL (09 §9.5): she states it, and her parts are
+    her mother's (seed.records_slicing)."""
+    from functools import partial
+    from app.hold import codex as cx, seed
+    root, old, _ = pair
+    _vectors(root, old)
+    (root / "old" / "index").mkdir(parents=True, exist_ok=True)
+    (root / "old" / "index" / "words").write_text("the text index")
+    space = {**SPACE, "encoder": {**SPACE["encoder"], "weights": "sha256:" + "be" * 32},
+             "dim": 1024, "query": {"encoder": None, "instruction": "query: "},
+             "document": {"instruction": "passage: "}, "exactness": "exact"}
+    other = col.create_from_recipe(root, "gutenberg", recipe(space=space, work={"tokens": 7_000_000}),
+                                   platform_image=PLATFORM, embed=partial(fake_embed, dim=1024),
+                                   name="bge", key=KEY, now=NOW)
+    assert other.version >= cx.GRAPH_VERSION and old.version < cx.GRAPH_VERSION
+    assert not (isinstance(old.slicing, dict) and "container" in old.slicing)
+    card["weights"] = other.space.encoder.weights
+    assert _new(root) == 0
+    _, sister = col.resolve(root, "sis")
+    assert sister.version == other.version and sister.space_id == other.space_id
+    assert sister.slicing["container"] == cx.JSONL
+    assert seed.records_slicing(sister) == seed.records_slicing(old), "the same parts"
+    assert seed.record_differences(old, sister) == [], "her records are her mother's"
+
+
+def test_a_sister_below_version_9_of_a_jsonl_mother_leaves_the_container_out():
+    from app.hold import codex as cx
+    from app.hold.collection import _slicing_at
+    assert _slicing_at({"records_per_shard": 2, "container": cx.JSONL}, 5) == {"records_per_shard": 2}
+    assert _slicing_at({"records_per_shard": 2}, 11) == {"records_per_shard": 2, "container": cx.JSONL}
+    assert _slicing_at(None, 11) == {"container": cx.JSONL}
+    assert _slicing_at({"container": cx.JSONL}, 5) is None
+    with pytest.raises(CodexError, match="cannot declare a container"):
+        _slicing_at({"container": "parquet"}, 5)
+
+
+def test_her_cpu_reference_and_gate_run_paused_and_she_is_resumed_after(pair, card, monkeypatch):
+    """München, 2026-11-08: unpaused before her gate, the worker would take
+    her writer (relayered: to index every document) and the gate lose it."""
+    from app import node_state
+    root, old, _ = pair
+    _ready(root, old, card)
+    seen = []
+    monkeypatch.setattr(louise, "cmd_embedder_check",
+                        lambda a: seen.append("sis" in node_state.paused_collections()) or 0)
+    assert _new(root) == 0
+    assert seen == [True]
+    assert "sis" not in node_state.paused_collections()

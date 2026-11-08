@@ -759,7 +759,12 @@ def cmd_collection_new(a) -> int:
                             model=model, ctx=ctx, cut=cut, instruction=instruction)
 
     if source is not None:
-        return _space_from_make(a, run, recipe, source, existing, api=api, say=say)
+        by = f"louise hold collection new {a.plugin} --name {a.name} (case E: paused until the gate)"
+        paused_here = _hold_off_worker(a.root, a.name, by)
+        try:
+            return _space_from_make(a, run, recipe, source, existing, api=api, say=say)
+        finally:
+            _let_worker_back(a.name, by, paused_here)
 
     # calibrate, on the inputs the gate sends
     reference = calib.Endpoint(file=f"{a.recipe} (space.encoder)", url=a.encoder, api=api, model=model,
@@ -799,7 +804,11 @@ def cmd_collection_new(a) -> int:
         run.at("tolerance", f"{tolerance} (the recipe's, measured)")
     run.record("tolerance", {"tolerance": tolerance})
 
-    # make: create, or hold the collection already made to the measured tolerance
+    # make: create, or hold the collection already made to the measured tolerance.
+    # Case A is PAUSED from before her file exists until her gate has run
+    # (`_hold_off_worker`); case F's interim is paused until the swap
+    by_a = f"louise hold collection new {a.plugin} --name {a.name} (case A: paused until the gate)"
+    paused_here = False if re_create else _hold_off_worker(a.root, a.name, by_a)
     if existing is not None:
         name, codex = existing
         if decimal.Decimal(str(codex.space.tolerance)) != decimal.Decimal(tolerance):
@@ -846,7 +855,10 @@ def cmd_collection_new(a) -> int:
     # in this process and its write lock is released when it returns
     # (`_sub_command`): normattiva's swap, 2026-11-07, found the collection
     # held by the gate of its own run
-    rc, stopped = _new_reference_and_gate(a, run, name, say)
+    try:
+        rc, stopped = _new_reference_and_gate(a, run, name, say)
+    finally:
+        _let_worker_back(name, by_a, paused_here)
     if stopped:
         return rc
     if not re_create and vector_place.tier(vector_place.table_dir(a.root, name)) == vector_place.BUILD:
@@ -869,6 +881,42 @@ def cmd_collection_new(a) -> int:
         for line in blockers:
             say(f"  {line}")
     return rc
+
+
+#: how long `new` waits, once it has paused a collection, for the worker to
+#: finish its unit and give back her writer (it does at its next round:
+#: worker._hold_locks); bounded, as every wait on another subsystem
+WORKER_LET_GO_S = 600.0
+
+
+def _hold_off_worker(root, name: str, by: str, *, wait_s: float | None = None) -> bool:
+    """The collection PAUSED while `new` makes her and runs her CPU reference
+    and gate, so the worker takes none of her writers meanwhile (München,
+    2026-11-08: legi's gate was refused, "held by the node (worker)", which
+    took her writer the moment her file appeared). Where the worker holds it
+    already (a rerun), its unit is waited for, at most `wait_s`; past that the
+    gate's own refusal says who holds it. True when THIS paused her: only
+    then does `_let_worker_back` resume her, so an operator's pause stands."""
+    import time as _time
+    from app import node_state
+    from app.hold import lock as lock_mod
+    here = name not in node_state.paused_collections()
+    if here:
+        node_state.set_paused(name, True, by=by)
+    deadline = _time.monotonic() + (WORKER_LET_GO_S if wait_s is None else wait_s)
+    state = lock_mod.state_dir(Path(root), name)
+    while _time.monotonic() < deadline:
+        who = lock_mod.holder(state)
+        if who is None or who.get("what") != "the node (worker)":
+            break
+        _time.sleep(2.0)
+    return here
+
+
+def _let_worker_back(name: str, by: str, paused_here: bool) -> None:
+    from app import node_state
+    if paused_here:
+        node_state.set_paused(name, False, by=by)
 
 
 def _new_reference_and_gate(a, run, name: str, say) -> tuple[int, bool]:
@@ -1148,19 +1196,25 @@ def _sister_new(a, say) -> int:
 
 
 def _sister_finish(a, run, root: Path, name: str, source_name: str, by: str, say) -> int:
-    """Case J after the carry: unpaused (the worker builds what was not
-    carried), the space's calibration record beside her, then her CPU
-    reference and gate as case A's; embedding stays off."""
+    """Case J after the carry: the space's calibration record beside her,
+    then her CPU reference and gate as case A's, STILL PAUSED (the worker
+    would take her writer and the gate would lose it: München, legi,
+    2026-11-08), then unpaused — the worker builds what was not carried;
+    embedding stays off."""
     import shutil
 
     from app import node_state
-    node_state.set_paused(name, False, by=by)
+    _hold_off_worker(root, name, by)          # a rerun's: she may have been resumed since
     state = root / name / "state"
     measured = root / source_name / "state" / "calibration.json"
     if measured.is_file() and not (state / "calibration.json").is_file():
         state.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(measured, state / "calibration.json")
-    rc, stopped = _new_reference_and_gate(a, run, name, say)
+    try:
+        rc, stopped = _new_reference_and_gate(a, run, name, say)
+    finally:
+        # paused by her own make: resumed whatever the gate said
+        node_state.set_paused(name, False, by=by)
     if stopped:
         return rc
     blockers = node_state.embedding_blockers(name, None) if rc == 0 else []
