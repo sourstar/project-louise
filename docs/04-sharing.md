@@ -65,7 +65,7 @@ id back to twelve cadences, and stops at the first key with announcers;
 a collection nobody has announced for twelve cadences is found by a peer
 address given by hand. Twelve CADENCES and not twelve months: the span
 is twelve announcement periods of that collection, generous by the same
-factor for a weekly sister as for her monthly mother, and twelve probes
+factor for a weekly sister as for her monthly sister, and twelve probes
 either way.
 
 What is found under a key is a peer address. The port announced there

@@ -423,7 +423,7 @@ document falls in is not stored: the Codex's rules decide it from the
 record's own fields (06 §6.3), so storing it would put a second answer
 beside the first with nothing to say which is right. Two consequences
 follow, and both are why the rule is worth keeping. A sister that
-changes only `layers` writes parts byte-identical to her mother's, so
+changes only `layers` writes parts byte-identical to her sister's, so
 the corpus she inherits needs no re-fetch — which is what §2.7 promises
 and would otherwise quietly fail over one integer per record. And the
 `chunks` check must derive the layer to know which chunker to run,
@@ -550,15 +550,16 @@ would differ from a 256-dimension truncation of its own 1024, although
 the vectors are identical. `derivation` is a ROUTE TO the vectors, never
 a property of them: `dim`, `dtype`, the encoder and the rest already
 distinguish one space from another. `space.epoch`
-is `"0"` for a root, the mother's for a daughter or a sister, and
+is `"0"` for a root, her mother's for a daughter, her sister's for a
+sister, and
 `H(canonical-json({"replaces": <replaced collection_id>}))` for a
 corrective sister (§2.7). A sister inherits it because the rule that
 mints a fresh epoch is the corrective sister's alone: forcing `"0"` on
 every sister would give the weekly sister of a corrected collection a
-different `space_id` from her mother although encoder, weights, layers
+different `space_id` from that collection although encoder, weights, layers
 and cleaning are identical, and §2.7's "a sister whose `space_id` equals
-its mother's shares the mother's vectors" would be false exactly where
-it is most needed. The `<space>` segment of a path or a
+that of the sister she is derived from shares that sister's vectors" would
+be false exactly where it is most needed. The `<space>` segment of a path or a
 member name is the first 16 hex characters of the digest. The query side
 is part of the function: a query is embedded by `space.query.encoder`
 when it is not null — bi-encoder pairs such as MedCPT's query and
@@ -878,16 +879,19 @@ makes a new Codex. Three kinds of change, three relations:
 
 | | **daughter** | **sister** | **corrective sister** |
 |---|---|---|---|
-| what changed | the outside world: origin format or address, licence of new items; the toolchain adapts | the space, the schedule, or both — never anything that decides a record | a defect in the mother's records or vectors |
+| what changed | the outside world: origin format or address, licence of new items; the toolchain adapts | the space, the schedule, or both — never anything that decides a record | a defect in her sister's records or vectors |
 | the corpus | inherited by hash up to the transition; the new toolchain's after it | inherited whole: the same records, always | recomputed from the origin |
 | the vectors | inherited: the space is unchanged | inherited when `space_id` matches, from zero when it does not | from zero |
 | Codex field | `continues`, `continues_through` | `derived_from` | `derived_from` + `replaces: {codex, defect}` |
 
 These three words, and no others, say how two collections are related.
-The collection a related Codex comes from is its **mother**; a
-collection created from a source has none, because a source is a corpus
-provider and not a relative — it stands at the root of its own lineage,
-which is where most collections stand.
+A daughter's predecessor is her **mother**: a daughter continues her
+mother. The collection a sister or a corrective sister is derived from is
+her **sister**: two collections in a sister relation are siblings
+(*amended 2026-11-08*, operator: sisters are siblings; "mother" is a
+daughter's word). A collection created from a source has neither,
+because a source is a corpus provider and not a relative — it stands at
+the root of its own lineage, which is where most collections stand.
 
 The vocabulary is Louise's own and stops at its edge. A merkle tree has
 parent nodes and children (09 §9.5), a process pool has children, a
@@ -914,10 +918,11 @@ nothing embedded, nothing published) carries its manifest and text index,
 which are functions of the records alone, and no vector table: `dev carry
 --unembedded`, amendment A1h; its parts come from `--records-from` as above.
 
-A sister whose LAYERS differ from her mother's (*amended 2026-11-08*,
-normattiva-nemo: the mother cuts by `akn_article`, the shared legal space
-by `legal_article`) takes her mother's record lines too: a line carries
-no layer (09 §9.5), so her records are her mother's byte for byte, and
+A sister whose LAYERS differ from those of the sister she is derived from
+(*amended 2026-11-08*, normattiva-nemo: `normattiva` cuts by
+`akn_article`, the shared legal space by `legal_article`) takes that
+sister's record lines too: a line carries no layer (09 §9.5), so her
+records are that sister's byte for byte, and
 `--records-from` cuts each again under her layers for her parts' `chunks`
 and `chunks_root` (invariant 3) — the parts a parse would give her. Her
 manifest is carried with every index mark emptied and no text index (`dev
@@ -983,9 +988,9 @@ and catalogues merge them. If they differ, §4.6 decides which one the
 network embeds — at the records stage, before anyone spends GPU.
 
 A **sister** shares the corpus, and that is what makes it one: a peer
-holding a sister holds its mother's records already and re-fetches
-nothing to take her. A domain-trained encoder over PubMed, or the same
-PubMed on a weekly cadence for a laboratory that needs currency — in
+holding one of two sisters holds the other's records already and
+re-fetches nothing to take her. A domain-trained encoder over PubMed, or
+the same PubMed on a weekly cadence for a laboratory that needs currency — in
 both the corpus is one corpus, and only what is built on top of it
 differs.
 
@@ -999,24 +1004,25 @@ not use (08 §8.5). Everything that decides a record byte it keeps —
 `modality` — and `hold collection derive` refuses anything else, and
 refuses a sister that differs in nothing.
 
-On a peer that holds the mother, a sister in ANOTHER encoder space is
-made by `hold collection new --sister-of` (*amended 2026-11-08*, case J
+On a peer that holds a collection, a sister of it in ANOTHER encoder space
+is made by `hold collection new --sister-of` (*amended 2026-11-08*, case J
 of docs/notes/new-collection.md, the sister into a held space): her parts
-are seeded from her mother's latest snapshot, and her manifest and text
+are seeded from her sister's latest snapshot, and her manifest and text
 index are copied, being functions of the records alone (RULE 1). None of
-the mother's vectors are carried, and nothing in the copy may say one is
+her sister's vectors are carried, and nothing in the copy may say one is
 held (hold/carry.py, amendment A1i). Her documents are then embedded in her
 own space.
 
 The test is the records, not the declaration: a sister's `records_root`
-equals her mother's at every snapshot they share (§2.2), and her parts
+equals her sister's at every snapshot they share (§2.2), and her parts
 are byte-identical, because nothing a sister may change is written into
 a record — the layer is derived, not stored (§2.3). That is checkable
 by anyone holding both Codexes, which a declaration is not.
 
 Whether the vectors are shared follows from one comparison and nothing
-else: **a sister whose `space_id` equals its mother's shares the
-mother's vectors; one whose `space_id` differs starts from zero.** A
+else: **a sister whose `space_id` equals that of the sister she is derived
+from shares that sister's vectors; one whose `space_id` differs starts
+from zero.** A
 sister that changes the encoder or the layers changes `space_id` (§2.4)
 and so starts empty — no vector crosses a space boundary, and that
 includes a sister that only removes a layer. The one crossing is §2.4's
@@ -1040,12 +1046,12 @@ sister that changes only `update` leaves `space_id` untouched, so every
 bundle either of them produces is admissible to the other (03 §3.5) and
 the two are searched as one list (05 §5.1).
 
-Because its origin, platform image and cleaning are the mother's, a
-sister that keeps the mother's `update` produces the mother's future
-snapshots — same bytes, same hash, no coordination — for as long as
-neither changes. A sister that changes only `update` produces its own
-chain,
-which meets the mother's at every cutoff the two share: at those
+Because its origin, platform image and cleaning are those of the sister
+it is derived from, a sister that keeps that sister's `update` produces
+that sister's future snapshots — same bytes, same hash, no coordination —
+for as long as neither changes. A sister that changes only `update`
+produces its own chain,
+which meets her sister's at every cutoff the two share: at those
 instants the origin's state is one state, so the records are the same
 records, the parts are byte-identical, their roots are equal and the
 members are interchangeable. A weekly sister of a monthly collection
@@ -1085,13 +1091,13 @@ re-embedding under another name and is not admissible here.
 
 Whether to derive, and whether the result is worth its loss, is the new
 sister's creator's to judge. Two things they should know. A quantised
-sister usually needs a LOOSER `tolerance` than her mother: two honest
-peers whose vectors agree within her mother's tolerance can quantise to
+sister usually needs a LOOSER `tolerance` than her sister: two honest
+peers whose vectors agree within her sister's tolerance can quantise to
 values a whole step apart, and at four bits the grid is coarse enough
 that the difference crosses a bin. Truncation has no such effect — it is
 linear and order-preserving — so a truncated sister may keep her
-mother's number. And a derived sister costs no GPU at all: her
-calibration member is her mother's, derived (03 §3.3), so she can be
+sister's number. And a derived sister costs no GPU at all: her
+calibration member is her sister's, derived (03 §3.3), so she can be
 created entirely offline.
 
 **A collection stands on three kinds of work, and `credits` names all
@@ -1204,13 +1210,13 @@ chunked and what its vectors are (06 §6.3). Anything that changes a byte
 belongs in the recipe, not in a build the recipe merely names.
 
 **The archive entries follow the space, and are not a choice.** A
-sister's archive credits are her mother's when `space_id` matches. There
+sister's archive credits are her sister's when `space_id` matches. There
 is nothing to
 decline in between, because the space decides it: in a matching space
 the archive's bundles are admissible to her whether she wanted them or
 not (03 §3.5), so any peer will merge them and the work is hers to
 acknowledge; in a different space they are inadmissible, and not one of
-her mother's credits carries. A creator who does not want an archive's
+her sister's credits carries. A creator who does not want an archive's
 vectors changes the space; declining the credit while keeping the space
 would be a claim no peer could honour.
 
@@ -1219,7 +1225,7 @@ her credits are the credits of the space she lands in. `derive
 --space-from CODEX` gives her that Codex's `space_id`, so that Codex's
 archives are admissible to her and its `credits` are hers, copied
 entire. A sister who names an encoder instead lands in a space no
-archive of her mother's covers, so hers are the archives she declares —
+archive of her sister's covers, so hers are the archives she declares —
 `derive --archives ID …`, expanded from the platform's registry exactly
 as `create` does (07 §7.3) — and none when she declares none, which is
 the ordinary case and leaves her embedding from zero. She must declare
@@ -1230,14 +1236,15 @@ beside the others — they are determined by the space, and `--archives`
 reaches them only where the space is new.
 
 **The other two kinds do not follow the space, and are not a choice
-either.** Her corpus entry is her mother's on every relation without
-exception: a sister shares the corpus by definition, a daughter
-continues it, and a corrective sister re-derives it from the same
-origin — none of them is standing on less of the provider's work than
-the mother was, and a new encoder does not unwrite whose text it read.
-Her community entry follows `embedding`, which she keeps from her mother
+either.** Her corpus entry is that of the collection she comes from on
+every relation without exception: a sister shares the corpus by
+definition, a daughter continues it, and a corrective sister re-derives it
+from the same origin — none of them is standing on less of the provider's
+work than her sister or her mother was, and a new encoder does not
+unwrite whose text it read.
+Her community entry follows `embedding`, which she keeps from her sister
 like everything else outside the four fields a sister may change — so in
-practice it is her mother's too, and the rule is stated in terms of
+practice it is her sister's too, and the rule is stated in terms of
 `embedding` rather than inheritance because that is what makes it
 derived: a collection credits the community exactly when it takes the
 community's vectors, and nothing else can put the entry there or take it
@@ -1248,7 +1255,7 @@ discards the vectors and keeps the debt for the text.
 **Creating a sister is still an acceptance**, of the space and of what
 follows from it. `hold collection derive` never writes a Codex without
 first showing what the new collection would inherit and what it would
-give up: whether `space_id` matches, so whether the mother's vectors
+give up: whether `space_id` matches, so whether her sister's vectors
 carry over; how many chunks are already covered and how many would have
 to be embedded from zero; and the `credits` that come with them, listed
 in full. The creator accepts, or goes back and changes the space.
@@ -1297,8 +1304,9 @@ It is whether a check fails.
 
 So the line between the two is not what changed — both re-derive
 everything and share only the origin — but **what is claimed about the
-mother, and whether the claim is checkable.** A sister claims nothing
-and both stand. A corrective sister claims the mother is defective,
+first collection, and whether the claim is checkable.** A sister claims
+nothing and both stand. A corrective sister claims the sister she is
+derived from is defective,
 names the check and the witnesses, and is the remedy once a peer has
 reproduced the failure. A collection nobody can fault by a check is a
 collection nobody may supersede, which is 08 §8.4's rule as well: the

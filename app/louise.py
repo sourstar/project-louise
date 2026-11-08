@@ -660,7 +660,7 @@ def cmd_collection_new(a) -> int:
         return _sister_new(a, say)
     if not a.recipe:
         raise CodexError("--recipe FILE: the space and what the plugin does not default (only a "
-                         "sister, `--sister-of`, is her mother's Codex and takes none)")
+                         "sister, `--sister-of`, is derived from her sister's Codex and takes none)")
     recipe = _recipe(a.recipe)
     given = copy.deepcopy(recipe)
     re_create = bool(getattr(a, "re_create", False))
@@ -991,8 +991,8 @@ def _sister_new(a, say) -> int:
         raise CodexError("--sister-of needs --space-from COLLECTION: a sister into a held space is case "
                          "J's built path; one into a new space, calibrated here, is phase 4")
     if getattr(a, "recipe", None):
-        raise CodexError("--sister-of takes no --recipe: a sister is her mother's Codex, and her space is "
-                         "the --space-from collection's")
+        raise CodexError("--sister-of takes no --recipe: a sister is derived from her sister's Codex, and her "
+                         "space is the --space-from collection's")
     try:
         mother_name, mother = col.resolve(root, a.sister_of)
     except CodexError as e:
@@ -1002,7 +1002,7 @@ def _sister_new(a, say) -> int:
     source_name, source = _space_from_source(a, {})
     if source.space_id == mother.space_id:
         raise CodexError(f"--space-from {source_name}: {mother_name} is in that space already; a sister in "
-                         f"her mother's space carries her vectors (`dev carry`)")
+                         f"{mother_name}'s space carries its vectors (`dev carry`)")
     # what cuts the chunks, compared as the carry compares it (hold/carry.py
     # A1h/A1i): the chunker whole, the rule, the input form — a layer written
     # before version 5 names no `input`, and its form is text
@@ -1010,7 +1010,7 @@ def _sister_new(a, say) -> int:
         return [(l.chunker.to_dict(), l.rule, l.form) for l in c.layers]
     if source.cleaning_version != mother.cleaning_version:
         raise CodexError(f"--sister-of {mother_name}: its cleaning is {mother.cleaning_version}, "
-                         f"{source_name}'s space's {source.cleaning_version}: a sister keeps her mother's "
+                         f"{source_name}'s space's {source.cleaning_version}: a sister keeps her sister's "
                          f"records, and another cleaning is other records")
     # A SISTER WHO CUTS OTHERWISE (2026-11-08: normattiva-nemo in the legal
     # space's `legal_article` layer, Normattiva's `akn_article`): her records
@@ -1038,7 +1038,7 @@ def _sister_new(a, say) -> int:
                          f"{sp.encoder.weights[:23]}…: a twin is the same weights")
     run.at("resolve", f"a sister of {mother_name} ({mother.collection_id[:23]}…) in the space of "
                       f"{source_name} ({source.space_id[:23]}…); {model} with its CPU twin {a.cpu_model}"
-                      + ("; she cuts otherwise than her mother: her parts carry, her manifest and text "
+                      + ("; she cuts otherwise than her sister: her parts carry, her manifest and text "
                          "index are cut again from them by the worker" if recut else ""))
 
     try:
@@ -1109,7 +1109,7 @@ def _sister_new(a, say) -> int:
             raise recreate.CopyMismatch(f"carry: {name} holds {recreate.counts(root, name)}, the carry "
                                         f"recorded {done.get('counts')}: something wrote to it since")
         run.at("carry", f"kept from the earlier run: {done['counts']['documents']} documents"
-                        + ("; her parts built from her mother's lines, the worker indexes them"
+                        + ("; her parts built from her sister's lines, the worker indexes them"
                            if done.get("recut") else ""))
     else:
         locks = []
@@ -1168,8 +1168,8 @@ def _sister_new(a, say) -> int:
                 if mine != theirs:
                     raise recreate.CopyMismatch(f"carry: {name}'s parts hold {mine} records by slice, "
                                                 f"{mother_name}'s {theirs}: her records are not her "
-                                                f"mother's; forget her and run this again")
-                parts = {"seeded": "built from her mother's record lines, none parsed",
+                                                f"sister's; forget her and run this again")
+                parts = {"seeded": "built from her sister's record lines, none parsed",
                          "parts": len(snap.shards), "snapshot_id": snap.snapshot_id, "snapshot": snap.hash,
                          "records": sum(mine.values())}
                 run.record("carry", {"from": {"name": mother_name, "collection_id": mother.collection_id},
@@ -2233,11 +2233,11 @@ def _acceptance(mother: cx.Codex, sister: cx.Codex) -> None:
     here; how many chunks are already covered arrives with the coverage map."""
     same = sister.space_id == mother.space_id
     verdict = "matches" if same else "DIFFERS FROM"
-    consequence = ("her mother's vectors carry over; there is nothing to re-embed"
+    consequence = ("her sister's vectors carry over; there is nothing to re-embed"
                    if same else
-                   "her mother's vectors do NOT carry over: this Codex breaks "
+                   "her sister's vectors do NOT carry over: this Codex breaks "
                    "with every vector that exists")
-    print(f"space_id {verdict} the mother's ({sister.space_id[:23]}…)",
+    print(f"space_id {verdict} her sister's ({sister.space_id[:23]}…)",
           file=sys.stderr)
     print(f"  {consequence}", file=sys.stderr)
     if sister.credits:
@@ -6637,9 +6637,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--re-create", dest="re_create", action="store_true",
                    help="case F: re-create the collection held under --name (RULE 1): its parts, "
                         "manifest, index and vectors carried, then its name")
-    p.add_argument("--sister-of", dest="sister_of", default=None, metavar="MOTHER",
-                   help="case J: a sister of the held MOTHER — her records, parts, manifest and text "
-                        "index carried, none of her vectors — in the space of --space-from")
+    p.add_argument("--sister-of", dest="sister_of", default=None, metavar="COLLECTION",
+                   help="case J: a sister of the held COLLECTION — its records, parts, manifest and "
+                        "text index carried, none of its vectors — in the space of --space-from")
     p.add_argument("--space-from", dest="space_from", default=None, metavar="COLLECTION",
                    help="case E: a second collection in the space of the held COLLECTION — its space "
                         "and layers copied, its reference vectors reused, its endpoint and model")
@@ -6716,7 +6716,7 @@ def build_parser() -> argparse.ArgumentParser:
                         "counts; write nothing")
     p.set_defaults(fn=cmd_create)
 
-    p = verbs.add_parser("derive", help="a sister: her mother's corpus, a new space")
+    p = verbs.add_parser("derive", help="a sister: her sister's corpus, a new space")
     root_arg(p); p.add_argument("codex_id")
     p.add_argument("--space-from", help="a Codex whose space and layers to copy byte for byte")
     p.add_argument("--space", help="JSON file with the space block")

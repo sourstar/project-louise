@@ -186,7 +186,7 @@ def test_a_sister_in_a_new_space_may_declare_her_own_archives(tmp_path, codex):
 
 def test_archives_are_refused_where_the_space_brings_its_own_credits(tmp_path, codex):
     mother = a_root(tmp_path, codex)
-    with pytest.raises(CodexError, match="carries her mother's archive credits"):
+    with pytest.raises(CodexError, match="carries that sister's archive credits"):
         col.derive(tmp_path, mother.collection_id, update=Update("weekly", 1, 0),
                    credits=(a_credit(),))
 
@@ -211,7 +211,7 @@ def test_space_from_refuses_a_different_cleaning_version(tmp_path: Path, codex):
         descriptive=Descriptive("PubMed cleaned again", "A different cleaner."),
         cleaning_version=2, space=other_space(codex)))
     mother = a_root(tmp_path, codex)
-    with pytest.raises(CodexError, match="cleaning_version is 2 and the mother's is 1"):
+    with pytest.raises(CodexError, match="cleaning_version is 2 and her sister's is 1"):
         col.derive(tmp_path, mother.collection_id, space_from=source)
 
 

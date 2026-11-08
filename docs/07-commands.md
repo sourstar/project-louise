@@ -97,13 +97,13 @@ louise hold
                                                                        case E, a SECOND COLLECTION IN A HELD SPACE (added 2026-11-08, the legal collections): the space,
                                                                        its layers, calibration set and CPU reference are the held collection C's; the recipe gives the
                                                                        rest (origin, work), and a field of the space it states must equal C's
-              new <plugin> --name N --sister-of M --space-from C --cpu-model T [--encoder URL] [--api A] [--embed-model M] [--dry-run]
-                                                                       case J, a SISTER INTO A HELD SPACE (added 2026-11-08, normattiva-nemo): `derive` of the mother M
-                                                                       into C's space and layers; carry — her parts seeded from M's snapshot, M's manifest and text index
-                                                                       copied with nothing of M's vectors said held (A1i); where M cuts by other layers, RELAYERED: the
-                                                                       manifest without its index marks, no text index, her parts built from M's record lines (`records
+              new <plugin> --name N --sister-of S --space-from C --cpu-model T [--encoder URL] [--api A] [--embed-model M] [--dry-run]
+                                                                       case J, a SISTER INTO A HELD SPACE (added 2026-11-08, normattiva-nemo): `derive` of her sister S
+                                                                       into C's space and layers; carry — her parts seeded from S's snapshot, S's manifest and text index
+                                                                       copied with nothing of S's vectors said held (A1i); where S cuts by other layers, RELAYERED: the
+                                                                       manifest without its index marks, no text index, her parts built from S's record lines (`records
                                                                        build --records-from`, 02 §2.7 amended 2026-11-08) — then her CPU reference and gate; embedding off.
-                                                                       Both write locks: `node pause M` first (exit 3 while held)
+                                                                       Both write locks: `node pause S` first (exit 3 while held)
                                                                        Every case keeps the new collection PAUSED from before her file exists until her gate has run
                                                                        (added 2026-11-08: legi's gate lost her writer to the worker), then resumes her, unless the operator
                                                                        had paused her; a worker already holding her writer is waited for, at most 600 s
@@ -438,12 +438,12 @@ reader needs at the command line:
   relation may change and nothing else (02 §2.7); `derive` refuses a
   change outside the sister's set. `--space-from` copies the named
   Codex's `space` block and `layers` byte for byte, and `cleaning_version`
-  is never among them: a sister keeps her mother's, since changing it
-  would re-derive the corpus she is defined to inherit. `derive` instead
-  REFUSES, naming both values, when the named Codex's `cleaning_version`
-  differs from the mother's — the resulting `space_id` could not then
-  equal the source's, and landing in the source's space is the whole of
-  what the flag promises. `create --space-from` refuses the same
+  is never among them: a sister keeps that of the sister she is derived
+  from, since changing it would re-derive the corpus she is defined to
+  inherit. `derive` instead REFUSES, naming both values, when the named
+  Codex's `cleaning_version` differs from her sister's — the resulting
+  `space_id` could not then equal the source's, and landing in the
+  source's space is the whole of what the flag promises. `create --space-from` refuses the same
   mismatch against the plugin's `cleaning_version` (06 §6.3), for the
   same reason and with the same message: the flag exists so that two
   collections land in one space by construction (02 §2.7), and it never
@@ -451,10 +451,11 @@ reader needs at the command line:
   the pre-embedded archives a sister in a NEW space draws on, expanded
   into the `kind: "archive"` entries of `credits` from the platform's
   registry as `create` does; it is
-  refused when `space_id` matches the mother's, and when `--space-from`
+  refused when `space_id` matches her sister's, and when `--space-from`
   supplied the space, both of which bring their own archive credits
-  (02 §2.7). It reaches no other kind: the corpus entry is the mother's
-  on every relation, and the community entry follows `embedding`.
+  (02 §2.7). It reaches no other kind: the corpus entry is inherited on
+  every relation — a sister's or a corrective sister's from her sister, a
+  daughter's from her mother — and the community entry follows `embedding`.
   The defect file is the `replaces.defect` object of 03 §3.6.
 - **`ack`.** Prints `LICENSE-TERMS` from the copy (04 §4.4; 09 §9.13)
   and, on a terminal, waits for consent; `--yes` records without asking.
@@ -1567,7 +1568,7 @@ unknown command. The table says where each went.
 | `pack adopt`, a pack with `manifest.json` and several spaces | none: every pre-Codex pack was migrated in step 8, and `dev adopt` and `dev migrate pack` were dropped unbuilt (*amended 2026-10-08*) |
 | `snapshot record` / `delta` / `list` | `hold snapshot create` / `delta` / `list` |
 | `snapshot vectors` | `hold vectors build --delta` |
-| `space repin` | `hold collection derive`, then `hold collection forget <mother> --kinds vectors` when the mother's vectors are no longer wanted here. Nothing is re-pinned in place: a shared space is never destroyed under the peers that hold it |
+| `space repin` | `hold collection derive`, then `hold collection forget <sister> --kinds vectors`, `<sister>` the collection derived from, when its vectors are no longer wanted here. Nothing is re-pinned in place: a shared space is never destroyed under the peers that hold it |
 | `backend check` / `rebaseline` | `hold embedder check`, `hold embedder rebaseline`. The probe baseline and its cosine threshold give way to validating each run once and checking the run identity on every answer (03 §3.3). The batch-integrity check becomes the gate's `batch_invariant`. A Codex below version 3 keeps the probe baseline (`app/verify/backend_gate.py`); its changed backend is accepted with `hold embedder rebaseline` (*2026-10-08*) |
 | `tools/calibrate_space`, `build_space_artifact` | `hold embedder calibrate` (`tools/calibrate_space.py` stays as the statistics module that command imports — app/hold/calibrate.py — and as `--live`'s cross-backend harness; not a command) |
 | `bundle keygen` / `trust` / `trust --quarantine` | `hold key create` / `trust` / `trust --deny` |

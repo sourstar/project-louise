@@ -130,7 +130,7 @@ CASES: tuple[Case, ...] = (
     # her vectors (hold/carry.py A1i). A sister into a new space, a daughter
     # and a corrective stay phase 4, refused at resolve
     Case("J", "Sister, daughter, corrective", "lineage (02 §2.7)",
-         ("plugin", "the mother", "the space's collection", "name"),
+         ("plugin", "her sister", "the space's collection", "name"),
          ("resolve", "check", "make", "carry", "cpu-reference", "gate"),
          "louise hold collection new normattiva --name normattiva-nemo --sister-of normattiva "
          "--space-from legi --cpu-model vega-nemotron-3-embed-1b-cpu", built=True, phase=4),

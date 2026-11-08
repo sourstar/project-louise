@@ -133,9 +133,9 @@ one pass: every leg of every collection in the space enters the same
 sum, and a collection's text index contributes to its space's list.
 Collections in different spaces are searched separately and presented
 separately — the sister of §2.7 is a different list, never merged with
-its mother's. A mixed list would have no single question behind it and
-no single tolerance behind its vectors, and the fact that rank fusion
-would tolerate one does not make it one. A search over N collections in
+that of the sister she is derived from. A mixed list would have no
+single question behind it and no single tolerance behind its vectors,
+and the fact that rank fusion would tolerate one does not make it one. A search over N collections in
 M spaces therefore returns M lists, each holding up to the requested
 number of results, ordered as the collections were named; when none
 were named, by the bytes of `space_id`.
