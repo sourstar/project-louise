@@ -725,7 +725,12 @@ by the resolution of §4.4 and nothing re-implemented beside it.
 Canonical ids are `<namespace>:<id>`, species- or
 jurisdiction-qualified from the start (`hgnc:11998`, `rs:80359351`,
 `eli:it:…`, `pmid:38112034`), and a namespace is owned by the reference
-source that registers it. A reference source may ship the **resolver**
+source that registers it. *Amended 2026-11-08* (legal-fr-de-eu.md §5.2):
+`eli` is owned by `eli-refs` (app/refs/eli.py), which holds nothing and
+routes a key by its jurisdiction to the one source declaring it
+(`eli_jurisdiction`); a source finds a key in a column that is not its
+table's primary key through `key_lookup(canonical) → (table, column,
+value)`, on a column the table declares in `indexes`. A reference source may ship the **resolver**
 §5.2 describes — `resolve(query) → entities`, `expand(entity) →
 entities` — as a pure function of the query text and the tables' current
 content; a resolver never returns a bare symbol.

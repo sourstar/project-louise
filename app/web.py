@@ -2121,6 +2121,9 @@ def _collection_shelf(collection: collections_mod.Collection,
             if not counts_pending:
                 on_disk = max(0, (counts["total"] or 0) - (counts["unindexable"] or 0))
                 docs_done = max(docs_done, on_disk)
+        elif spec.layout == "one-file-per-doc":
+            # one listed file IS one document (a UnitFetcher's completion mark)
+            docs_done = fc["done"] or 0
         # extras (spec.extras): "+ e/E" beside the Louise counter, shown
         # only when the collection opted in or extra rows exist. Format
         # explained in Help, never inline — the GUI stays clean.
@@ -2138,7 +2141,7 @@ def _collection_shelf(collection: collections_mod.Collection,
         fetched = {"done": fc["done"] or 0, "total": fc["total"] or 0,
                    "remote_total": louise_total,
                    "docs_done": docs_done, "docs_total": docs_total,
-                   "containers": spec.layout != "one-dir-per-doc",
+                   "containers": spec.layout not in ("one-dir-per-doc", "one-file-per-doc"),
                    "active": active, "complete": complete,
                    "has_extras": has_extras,
                    "extra_done": xc["done"] or 0,

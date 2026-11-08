@@ -7,7 +7,7 @@ No I/O here — pure data, mirroring app/plugins/base.py's own rule.
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import Callable, Literal
+from typing import Callable, Iterable, Literal, Protocol
 
 from ..plugins.base import LicenseClass
 
@@ -36,6 +36,56 @@ class RemoteFile:
     # `collection-preconfezionata?nome=Codici&…`) still needs a plain
     # destination path on disk. None = request `rel_path` (every other spec).
     remote: str | None = None
+
+
+class Inventory(Protocol):
+    """An origin that LISTS ITSELF — a directory page its server writes
+    (LEGI: Apache's autoindex), an API of its own (NeuRIS's paginated
+    `/v1/legislation`), a query (Cellar's SPARQL) — in place of the
+    transport's `list_files`, under the LISTING CONTRACT (AcquisitionSpec):
+    complete for the profile's filter or raising, never truncated, every
+    byte drawn from the budget (invariant 5).
+
+    Optional, read with getattr:
+      `built_on_request: bool` — the origin builds each file when asked
+        (NeuRIS's zips: no ETag, no-store), so no HEAD is asked of it to
+        adopt a copy (engine._origin_says_complete);
+      `reports() -> list[str]` — what the listing found worth saying and
+        could not say itself (an expression the changelog reports deleted),
+        logged by the engine as events after the listing, with the
+        collection's name.
+
+    THE STANDARD, NOT ADOPTED: OAI-PMH's ListIdentifiers is the standard
+    harvesting verb for repositories, and ResourceSync (ANSI/NISO Z39.99)
+    for web resources; none of the three origins speaks either."""
+
+    def list(self, endpoint: "Endpoint", spec: "AcquisitionSpec",
+             profile_filter: "Filter") -> Iterable[RemoteFile]: ...
+
+
+class UnitFetcher(Protocol):
+    """A UNIT the origin serves as several requests (Cellar: a branch notice
+    and its Formex items, by content negotiation), fetched whole or not at
+    all, in place of the transport's single-file fetch, for the files it
+    `handles`. The file the listing names (`remote.rel_path`) is the unit's
+    completion mark, landed last; the engine records its row and digest as
+    for any file. Every byte drawn from the budget (invariant 5).
+
+      `handles(remote) -> bool` — is this listed file a unit of this fetcher;
+      `fetch(endpoint, remote, dest) -> int` — the unit landed whole, `dest`
+        the completion mark's corpus path; the bytes moved; raises as a
+        transport raises (TransportError: the engine's deferral rules apply);
+      `refetch(spec, locator, base) -> (Path, int)` — records-vs-origin: the
+        unit a record's `origin` names, fetched again under `base` at its
+        corpus path; the path the plugin reads, and the bytes moved
+        (app/acquire/unit_origin.py).
+    """
+
+    def handles(self, remote: RemoteFile) -> bool: ...
+
+    def fetch(self, endpoint: "Endpoint", remote: RemoteFile, dest: Path) -> int: ...
+
+    def refetch(self, spec: "AcquisitionSpec", locator: str, base: Path) -> tuple[Path, int]: ...
 
 
 @dataclass(frozen=True)
@@ -112,7 +162,9 @@ class AcquisitionSpec:
     documents, wherever the layout makes them countable. `layout` drives
     it: "one-dir-per-doc" derives document totals from the listing (one
     distinct top directory = one document) and the Library reports
-    documents with the file count in parentheses; container layouts
+    documents with the file count in parentheses; "one-file-per-doc"
+    (a UnitFetcher's spec: each listed file is one unit's completion mark)
+    counts each listed file as one document; container layouts
     ("container-files", "single-file") CANNOT know document counts before
     unpacking, so the card labels the count "compressed containers" and
     the parsed/indexed rows carry the document truth as each archive is
@@ -122,7 +174,7 @@ class AcquisitionSpec:
     source_id: str                        # ties to CorpusSource.source_id / Collection.plugin
     transport: Transport
     endpoints: tuple[Endpoint, ...]
-    layout: Literal["one-dir-per-doc", "container-files", "single-file"]
+    layout: Literal["one-dir-per-doc", "one-file-per-doc", "container-files", "single-file"]
     filters: tuple[str, ...] = ()          # base filters, applied under every profile
     checksums: ChecksumSource = field(default_factory=ChecksumSource)
     delta: DeltaSpec = field(default_factory=lambda: DeltaSpec(mode="full-resync"))
@@ -189,6 +241,14 @@ class AcquisitionSpec:
     # operator picks from and what "is there something newer?" reads.
     snapshot_files: Callable[[str], tuple[RemoteFile, ...]] | None = None
     snapshot_index: Callable[[], tuple[str, ...]] | None = None
+    # THE TWO EXTENSION POINTS an origin the transports cannot list or fetch
+    # by themselves declares (2026-11-08, the legal collections; operator:
+    # "The rag engine must be common … No per exception spaghetti code"):
+    # `inventory` lists it (Inventory below), `unit_fetcher` fetches a unit
+    # made of several requests (UnitFetcher below). None = the transport's
+    # own listing and fetch, as for every spec before them.
+    inventory: "Inventory | None" = None
+    unit_fetcher: "UnitFetcher | None" = None
     license_class: LicenseClass = LicenseClass.GREEN
     terms_text_path: Path | None = None    # required when license_class != GREEN
 

@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<!-- Métadonnées communes à tous les documents Legifrance 
+    @title Métadonnées communes
+    @root META_COMMUN
+-->
+
+<!-- Racine du document -->
+<!ELEMENT META_COMMUN (ID, ANCIEN_ID, ORIGINE, URL, NATURE)>
+
+<!-- Identifiant interne. L'identifiant est également le nom du fichier xml. 
+    @example JORFCONT000000755641
+-->
+<!ELEMENT ID (#PCDATA) >
+
+<!-- Ancien identifiant issu de la version précédente de légifrance. Cette information est conservée afin d'assurer la résolution des URL à l'ancien format du site Legifrance -->
+<!ELEMENT ANCIEN_ID (#PCDATA) >
+
+<!-- Origine du document. 
+    @hidden Liste de valeurs à preciser 
+-->
+<!ELEMENT ORIGINE (#PCDATA) >
+
+<!-- Adresse physique relative du document dans la hierachie Legifrance -->
+<!ELEMENT URL (#PCDATA) >
+
+<!-- Nature du document. 
+    @hidden Liste de valeurs à preciser 
+-->
+<!ELEMENT NATURE (#PCDATA) >
+

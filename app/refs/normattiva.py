@@ -1,8 +1,11 @@
 """The Italian acts as a REFERENCE SOURCE (06 §6.5; docs/notes/normattiva-multivigenza-review.md
 §3.12; gazzetta-plugin.md §6): the lookup tables a citation resolves
-against, and the namespaces — `urn` (URN:NIR) and `eli` — that let a
+against, and the namespaces — `urn` (URN:NIR) and `akn` — that let a
 Normattiva record write its own ids into `keys` (05 §5.2: a plugin writes
-only ids a reference source registers).
+only ids a reference source registers). Its `eli:it:` keys are the shared
+`eli` owner's (app/refs/eli.py, since 2026-11-08), which routes them here by
+jurisdiction (`eli_jurisdiction`); `key_lookup` finds a row by any of the
+three ids, so `louise_lookup` answers each form a record's `keys` carry.
 
 Two tables, synced from the acts' own metadata in the multivigente zips
 (the plugin's corpus, mounted under `<ref_root>/normattiva`): `atto`, one
@@ -43,7 +46,10 @@ from ..plugins.base import (Entity, RefColumn, RefLink, RefLookup, RefRecordBatc
                             RefSyncState, RefTable)
 
 SOURCE_ID = "normattiva-refs"
-NAMESPACES = ("urn", "eli", "akn")
+#: `eli` moved to its one owner, app/refs/eli.py (legal-fr-de-eu.md §5.2,
+#: 2026-11-08); this source declares the jurisdiction it holds instead
+NAMESPACES = ("urn", "akn")
+ELI_JURISDICTION = "it"
 
 ATTO = RefTable(
     name="atto",
@@ -61,6 +67,7 @@ ATTO = RefTable(
         RefColumn("pubblicazione", "TEXT"), # the GU date
     ),
     primary_key="urn",
+    indexes=("eli", "akn"),                # key_lookup reads both by value
 )
 
 VERSIONE = RefTable(
@@ -166,6 +173,25 @@ class NormattivaRefSource:
     source_id = SOURCE_ID
     ref_version = 2            # 2: the `akn` column (2026-10-12)
     namespaces = NAMESPACES
+    eli_jurisdiction = ELI_JURISDICTION
+
+    def key_lookup(self, canonical: str) -> tuple[str, str, str] | None:
+        """`(table, column, value)` holding a canonical id the records'
+        `keys` carry: the URN:NIR verbatim, the Akoma Ntoso work path
+        verbatim (`akn:it/act/…`), the ELI by-id form (`eli:it:id/…`) as the
+        absolute work URI the table stores. None for any other id."""
+        ns = canonical.partition(":")[0].strip().lower()
+        if ns == "urn":
+            return ATTO.name, "urn", canonical
+        if ns == "akn":
+            return ATTO.name, "akn", canonical
+        if ns == "eli":
+            from . import eli as eli_refs
+            from ..plugins.normattiva.source import PROFILE
+            if eli_refs.jurisdiction_of(canonical) != ELI_JURISDICTION:
+                return None
+            return ATTO.name, "eli", PROFILE.absolute("eli/" + eli_refs.path_of(canonical))
+        return None
 
     def schema(self) -> RefSchema:
         return RefSchema(source_id=self.source_id, tables=(ATTO, VERSIONE), links=(LINK,))

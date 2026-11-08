@@ -1,0 +1,214 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- edited with XMLSpy v2019 rel. 3 sp1 (http://www.altova.com) by DG OP (OP Publications Office of the European Union) -->
+<NOTICE decoding="eng" type="branch" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+	<WORK>
+		<URI>
+			<VALUE>http://publications.europa.eu/resource/cellar/f59cb92a-64d2-11ea-b735-01aa75ed71a1</VALUE>
+			<IDENTIFIER>f59cb92a-64d2-11ea-b735-01aa75ed71a1</IDENTIFIER>
+			<TYPE>cellar</TYPE>
+		</URI>
+		<SAMEAS>
+			<URI>
+				<VALUE>http://publications.europa.eu/resource/celex/02009R1223-20191218</VALUE>
+				<IDENTIFIER>02009R1223-20191218</IDENTIFIER>
+				<TYPE>celex</TYPE>
+			</URI>
+		</SAMEAS>
+		<SAMEAS>
+			<URI>
+				<VALUE>http://publications.europa.eu/resource/consolidation/2009R1223%2F20191218</VALUE>
+				<IDENTIFIER>2009R1223/20191218</IDENTIFIER>
+				<TYPE>consolidation</TYPE>
+			</URI>
+		</SAMEAS>
+		<ELI type="data">
+			<VALUE>http://data.europa.eu/eli/reg/2009/1223/2019-12-18</VALUE>
+		</ELI>
+		<TYPE type="type">cdm:work</TYPE>
+		<TYPE type="type">cdm:act_consolidated</TYPE>
+		<TYPE type="type">cdm:resource_legal</TYPE>
+		<TYPE type="data">
+			<VALUE>R</VALUE>
+		</TYPE>
+		<ID_SECTOR type="data">
+			<VALUE>0</VALUE>
+		</ID_SECTOR>
+		<RESOURCE_LEGAL_YEAR type="data">
+			<VALUE>2009</VALUE>
+		</RESOURCE_LEGAL_YEAR>
+		<RESOURCE_LEGAL_TYPE type="data">
+			<VALUE>R</VALUE>
+		</RESOURCE_LEGAL_TYPE>
+		<RESOURCE_LEGAL_NUMBER_NATURAL_CELEX type="data">
+			<VALUE>1223</VALUE>
+		</RESOURCE_LEGAL_NUMBER_NATURAL_CELEX>
+		<RESOURCE_LEGAL_ID_CELEX type="data">
+			<VALUE>02009R1223-20191218</VALUE>
+		</RESOURCE_LEGAL_ID_CELEX>
+		<WORK_DATE_DOCUMENT type="date">
+			<VALUE>2019-12-18</VALUE>
+			<YEAR>2019</YEAR>
+			<MONTH>12</MONTH>
+			<DAY>18</DAY>
+		</WORK_DATE_DOCUMENT>
+		<RESOURCE_LEGAL_DATE_ENTRY-INTO-FORCE type="date">
+			<VALUE>2019-12-18</VALUE>
+			<YEAR>2019</YEAR>
+			<MONTH>12</MONTH>
+			<DAY>18</DAY>
+		</RESOURCE_LEGAL_DATE_ENTRY-INTO-FORCE>
+		<DATE_CREATION_LEGACY type="date">
+			<VALUE>2020-03-13</VALUE>
+			<YEAR>2020</YEAR>
+			<MONTH>03</MONTH>
+			<DAY>13</DAY>
+		</DATE_CREATION_LEGACY>
+		<LASTMODIFICATIONDATE type="date">
+			<VALUE>2020-06-16</VALUE>
+			<YEAR>2020</YEAR>
+			<MONTH>06</MONTH>
+			<DAY>16</DAY>
+		</LASTMODIFICATIONDATE>
+		<WORK_CREATED_BY_AGENT type="concept">
+			<URI>
+				<VALUE>http://publications.europa.eu/resource/authority/corporate-body/OP_DATPRO</VALUE>
+				<IDENTIFIER>OP_DATPRO</IDENTIFIER>
+				<TYPE>corporate-body</TYPE>
+			</URI>
+			<OP-CODE>OP_DATPRO</OP-CODE>
+			<IDENTIFIER>OP_DATPRO</IDENTIFIER>
+			<PREFLABEL>Provisional data</PREFLABEL>
+		</WORK_CREATED_BY_AGENT>
+		<WORK_HAS_RESOURCE-TYPE type="concept">
+			<URI>
+				<VALUE>http://publications.europa.eu/resource/authority/resource-type/CONS_TEXT</VALUE>
+				<IDENTIFIER>CONS_TEXT</IDENTIFIER>
+				<TYPE>resource-type</TYPE>
+			</URI>
+			<OP-CODE>CONS_TEXT</OP-CODE>
+			<IDENTIFIER>CONS_TEXT</IDENTIFIER>
+			<PREFLABEL>Consolidated text</PREFLABEL>
+		</WORK_HAS_RESOURCE-TYPE>
+		<EXPRESSION display="true">
+			<URI>
+				<VALUE>http://publications.europa.eu/resource/cellar/f59cb92a-64d2-11ea-b735-01aa75ed71a1.0001</VALUE>
+				<IDENTIFIER>f59cb92a-64d2-11ea-b735-01aa75ed71a1.0001</IDENTIFIER>
+				<TYPE>cellar</TYPE>
+			</URI>
+			<SAMEAS>
+				<URI>
+					<VALUE>http://publications.europa.eu/resource/celex/02009R1223-20191218.ENG</VALUE>
+					<IDENTIFIER>02009R1223-20191218.ENG</IDENTIFIER>
+					<TYPE>celex</TYPE>
+				</URI>
+			</SAMEAS>
+			<SAMEAS>
+				<URI>
+					<VALUE>http://publications.europa.eu/resource/consolidation/2009R1223%2F20191218.ENG</VALUE>
+					<IDENTIFIER>2009R1223/20191218.ENG</IDENTIFIER>
+					<TYPE>consolidation</TYPE>
+				</URI>
+			</SAMEAS>
+			<TYPE type="type">cdm:expression</TYPE>
+			<EXPRESSION_TITLE type="data">
+				<VALUE>
+         Regulation (EC) No 1223/2009 of the European Parliament and of the Council of 30 November 2009 on cosmetic products (recast) (Text with EEA relevance)Text with EEA relevance
+         en
+         </VALUE>
+			</EXPRESSION_TITLE>
+			<LANG>ENG</LANG>
+			<MANIFESTATION>
+				<TYPE type="data">
+					<VALUE>xhtml</VALUE>
+				</TYPE>
+				<TYPE type="type">cdm:manifestation</TYPE>
+				<URI>
+					<VALUE>http://publications.europa.eu/resource/cellar/f59cb92a-64d2-11ea-b735-01aa75ed71a1.0001.01</VALUE>
+					<IDENTIFIER>f59cb92a-64d2-11ea-b735-01aa75ed71a1.0001.01</IDENTIFIER>
+					<TYPE>cellar</TYPE>
+				</URI>
+				<SAMEAS>
+					<URI>
+						<VALUE>http://publications.europa.eu/resource/celex/02009R1223-20191218.ENG.xhtml</VALUE>
+						<IDENTIFIER>02009R1223-20191218.ENG.xhtml</IDENTIFIER>
+						<TYPE>celex</TYPE>
+					</URI>
+				</SAMEAS>
+				<SAMEAS>
+					<URI>
+						<VALUE>http://publications.europa.eu/resource/consolidation/2009R1223%2F20191218.ENG.xhtml</VALUE>
+						<IDENTIFIER>2009R1223/20191218.ENG.xhtml</IDENTIFIER>
+						<TYPE>consolidation</TYPE>
+					</URI>
+				</SAMEAS>
+			</MANIFESTATION>
+		</EXPRESSION>
+		<EXPRESSION display="false">
+			<URI>
+				<VALUE>http://publications.europa.eu/resource/cellar/f59cb92a-64d2-11ea-b735-01aa75ed71a1.0002</VALUE>
+				<IDENTIFIER>f59cb92a-64d2-11ea-b735-01aa75ed71a1.0001</IDENTIFIER>
+				<TYPE>cellar</TYPE>
+			</URI>
+			<SAMEAS>
+				<URI>
+					<VALUE>http://publications.europa.eu/resource/celex/02009R1223-20191218.GLE</VALUE>
+					<IDENTIFIER>02009R1223-20191218.GLE</IDENTIFIER>
+					<TYPE>celex</TYPE>
+				</URI>
+			</SAMEAS>
+			<SAMEAS>
+				<URI>
+					<VALUE>http://publications.europa.eu/resource/consolidation/2009R1223%2F20191218.GLE</VALUE>
+					<IDENTIFIER>2009R1223/20191218.GLE</IDENTIFIER>
+					<TYPE>consolidation</TYPE>
+				</URI>
+			</SAMEAS>
+			<TYPE type="type">cdm:expression</TYPE>
+			<EXPRESSION_TITLE type="data">
+				<VALUE>Rialachán (CE) Uimh. 1223/2009 ó Pharlaimint na hEorpa agus ón gComhairle an 30 Samhain 2009 maidir le táirgí cosmaideacha (athmhúnlú) (Téacs atá ábhartha maidir leis an LEE)Téacs atá ábhartha maidir leis an LEE</VALUE>
+			</EXPRESSION_TITLE>
+			<LANG>GLE</LANG>
+			<MANIFESTATION>
+				<TYPE type="data">
+					<VALUE>fmx4</VALUE>
+				</TYPE>
+				<TYPE type="type">cdm:manifestation</TYPE>
+				<SAMEAS>
+					<URI>
+						<VALUE>http://publications.europa.eu/resource/celex/02009R1223-20191218.GLE.fmx4</VALUE>
+						<IDENTIFIER>02009R1223-20191218.GLE.fmx4</IDENTIFIER>
+						<TYPE>celex</TYPE>
+					</URI>
+				</SAMEAS>
+			</MANIFESTATION>
+		</EXPRESSION>
+		<ACT_CONSOLIDATED_BASED_ON_RESOURCE_LEGAL type="link">
+			<URI>
+				<VALUE>http://publications.europa.eu/resource/cellar/4100396c-575c-4150-8d92-e7c23ab1ce97</VALUE>
+				<IDENTIFIER>4100396c-575c-4150-8d92-e7c23ab1ce97</IDENTIFIER>
+				<TYPE>cellar</TYPE>
+			</URI>
+			<SAMEAS>
+				<URI>
+					<VALUE>http://publications.europa.eu/resource/oj/JOL_2009_342_R_0059_01</VALUE>
+					<IDENTIFIER>JOL_2009_342_R_0059_01</IDENTIFIER>
+					<TYPE>oj</TYPE>
+				</URI>
+			</SAMEAS>
+			<SAMEAS>
+				<URI>
+					<VALUE>http://publications.europa.eu/resource/eli/reg/2009/1223/oj</VALUE>
+					<IDENTIFIER>reg:2009:1223:oj</IDENTIFIER>
+					<TYPE>eli</TYPE>
+				</URI>
+			</SAMEAS>
+			<SAMEAS>
+				<URI>
+					<VALUE>http://publications.europa.eu/resource/celex/32009R1223</VALUE>
+					<IDENTIFIER>32009R1223</IDENTIFIER>
+					<TYPE>celex</TYPE>
+				</URI>
+			</SAMEAS>
+		</ACT_CONSOLIDATED_BASED_ON_RESOURCE_LEGAL>
+	</WORK>
+</NOTICE>

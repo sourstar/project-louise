@@ -186,7 +186,7 @@ def _list_and_filter(spec: AcquisitionSpec, profile: str,
                 with _listing_bound(stop, priority):
                     # the base directory, then (09 §9.17 `updatefiles-dir`)
                     # the update directory beside it
-                    candidates = list(updatefiles.listing(transport, endpoint, spec))
+                    candidates = list(_list_endpoint(transport, endpoint, spec, profile_filter))
                 break
             except TransferAborted:
                 # the STOP, not the mirror. TransferAborted IS a
@@ -203,7 +203,7 @@ def _list_and_filter(spec: AcquisitionSpec, profile: str,
         for endpoint in spec.endpoints:
             _stop_check(stop, f"before listing {endpoint.url}")
             with _listing_bound(stop, priority):
-                candidates.extend(updatefiles.listing(transport, endpoint, spec))
+                candidates.extend(_list_endpoint(transport, endpoint, spec, profile_filter))
     for f in candidates:
         if f.rel_path not in seen:
             seen.add(f.rel_path)
@@ -216,6 +216,16 @@ def _list_and_filter(spec: AcquisitionSpec, profile: str,
         all_files = [f for f in all_files if f.mtime is not None and f.mtime < until]
     louise = _apply_filters(all_files, spec.filters, profile_filter)
     return louise + _select_extras(all_files, spec, extras_selected, louise)
+
+
+def _list_endpoint(transport, endpoint, spec: AcquisitionSpec, profile_filter):
+    """One endpoint's listing: the spec's Inventory where it declares one (an
+    origin that lists itself, asked for the profile's filter), else the
+    transport's — the base directory, then (09 §9.17 `updatefiles-dir`) the
+    update directory beside it."""
+    if spec.inventory is not None:
+        return spec.inventory.list(endpoint, spec, profile_filter)
+    return updatefiles.listing(transport, endpoint, spec)
 
 
 def is_adoptable(collection, f: RemoteFile) -> bool:
@@ -246,7 +256,8 @@ def is_adoptable(collection, f: RemoteFile) -> bool:
         return False
 
 
-def _origin_says_complete(transport, endpoint, f: RemoteFile, dest: Path) -> bool:
+def _origin_says_complete(transport, endpoint, f: RemoteFile, dest: Path,
+                          spec: AcquisitionSpec | None = None) -> bool:
     """For a file its spec lists WITHOUT a size: is the copy at `dest` as
     long as the origin says the file is?
 
@@ -261,6 +272,11 @@ def _origin_says_complete(transport, endpoint, f: RemoteFile, dest: Path) -> boo
     verification after it (`_adopt_one_file`). A transport that cannot say,
     or an origin that will not, leaves the file to the normal download."""
     if f.size:
+        return False
+    if getattr(getattr(spec, "inventory", None), "built_on_request", False):
+        # the origin builds the file when asked (spec.Inventory): a HEAD
+        # would cost it the build, and an equal length says nothing of
+        # content; the listing and the path say whether a copy is current
         return False
     size_of = getattr(transport, "size_of", None)
     if size_of is None:
@@ -460,6 +476,10 @@ _TRANSIENT = ("connection reset by peer", "connection unexpectedly closed",
               "read operation timed out", "readtimeout", "connecttimeout",
               "server disconnected", "remoteprotocolerror", "readerror",
               " 500 to ", " 502 to ", " 503 to ", " 504 to ",
+              # a whole-file GET the origin answered 5xx (httpx's own
+              # wording, transport_https.fetch_one): NeuRIS answers 503 past
+              # its 600 requests a minute (its rate-limiting guide)
+              "server error '5",
               # the rsync transport's own verdict on an exit 0 whose fork
               # kept the pipes and had to be killed (_raise_unless_clean):
               # not the file, and not known to be the mirror — a retry,
@@ -871,6 +891,22 @@ def _export_fetch(endpoint, f: RemoteFile, collection, spec: AcquisitionSpec,
                         size=size, digest=digest, moved=size, seconds=elapsed)
 
 
+def _unit_fetch(endpoint, f: RemoteFile, collection, spec: AcquisitionSpec,
+                manager, endpoint_key: str) -> _FileResult:
+    """A unit the spec's UnitFetcher serves (spec.UnitFetcher): landed whole,
+    the completion mark the listing names — `f.rel_path` — last. The engine
+    records the mark's row and digest; the listing's date is what the next
+    pass compares (`_is_pending`). Raises as the normal path raises."""
+    dest = collection.corpus_dir / f.rel_path
+    started = time.monotonic()
+    moved = int(spec.unit_fetcher.fetch(endpoint, f, dest) or 0)
+    elapsed = time.monotonic() - started
+    manager.record_throughput(endpoint_key, moved, elapsed)
+    digest = checksum.digest_and_verify(dest, spec.checksums)
+    return _FileResult(remote=f, endpoint_url=endpoint.url, status="fetched",
+                        size=dest.stat().st_size, digest=digest, moved=moved, seconds=elapsed)
+
+
 def _fetch_one_file(transport, endpoint, f: RemoteFile, collection,
                      spec: AcquisitionSpec, manager, endpoint_key: str) -> _FileResult:
     # a file listed in the update directory is requested from it (09 §9.17
@@ -889,6 +925,9 @@ def _fetch_one_file(transport, endpoint, f: RemoteFile, collection,
         # a file the origin builds on request: its own path, start to end
         if export_job.is_export(f):
             return _export_fetch(endpoint, f, collection, spec, manager, endpoint_key)
+        # a unit the spec's UnitFetcher serves (several requests, whole)
+        if spec.unit_fetcher is not None and spec.unit_fetcher.handles(f):
+            return _unit_fetch(endpoint, f, collection, spec, manager, endpoint_key)
         # a zip the origin rebuilds in place: its own directory says what
         # moved, before any size comparison — a rebuild of the same size is
         # caught too
@@ -900,7 +939,7 @@ def _fetch_one_file(transport, endpoint, f: RemoteFile, collection,
         # unless its own directory just said otherwise (a rebuild of the same
         # size)
         if delta is not _DELTA_DECLINED and (
-                is_adoptable(collection, f) or _origin_says_complete(transport, endpoint, f, dest)):
+                is_adoptable(collection, f) or _origin_says_complete(transport, endpoint, f, dest, spec)):
             adopted = _adopt_one_file(f, collection, spec)
             if adopted is not None:
                 return adopted
@@ -1191,6 +1230,12 @@ def _run_acquisition_claimed(con, collection, spec: AcquisitionSpec, profile: st
                              extras_selected=getattr(collection, "extras", ()),
                              stop=stop, priority=priority, until=until)
     _stop_check(stop, "after listing")
+    # what the inventory found worth saying (spec.Inventory `reports`: an
+    # expression the origin's changelog reports deleted, never removed here)
+    # — said as events, with the collection's name
+    reports = getattr(spec.inventory, "reports", None)
+    for note in (reports() if reports is not None else ()):
+        db.log_event(con, "warn", "acquire", str(note)[:400])
     plan = _plan_from_files(con, collection, spec, files)
     # the per-file planning passes scale with the listing and are not
     # measured; a stop that arrived during them is honoured here, before
@@ -1216,6 +1261,8 @@ def _run_acquisition_claimed(con, collection, spec: AcquisitionSpec, profile: st
     if spec.layout == "one-dir-per-doc":
         docs_total = len({f.rel_path.split("/", 1)[0]
                           for f in louise_files if "/" in f.rel_path})
+    elif spec.layout == "one-file-per-doc":
+        docs_total = len(louise_files)
     db.set_control(con, LISTING_KEY, json.dumps({
         "files_total": len(louise_files),
         "bytes_total": sum(f.size or 0 for f in louise_files),

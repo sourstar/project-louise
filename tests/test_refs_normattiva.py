@@ -131,8 +131,9 @@ def test_tagging_a_record_writes_the_acts_it_names(store, tmp_path):
                                 ["Art. 1. La legge costituzionale 26 febbraio 1948, n. 3 è modificata."],
                                 refs.RESOLVER, store)
     assert ids == sorted([URN_306, URN_SARD])
-    assert nref.NAMESPACES == ("urn", "eli", "akn")
-    assert "normattiva-refs" in refs.REFS_REGISTRY
+    # `eli` is its one owner's since 2026-11-08 (app/refs/eli.py), routed here by jurisdiction
+    assert nref.NAMESPACES == ("urn", "akn") and nref.NormattivaRefSource.eli_jurisdiction == "it"
+    assert "normattiva-refs" in refs.REFS_REGISTRY and "eli-refs" in refs.REFS_REGISTRY
 
 
 def test_the_record_writes_its_registered_ids_into_keys(tmp_path):
@@ -195,3 +196,35 @@ def test_the_month_pre_check_finds_exactly_what_both_patterns_find():
     assert any(_citations_unfiltered(t) for t in texts), "the texts cite something"
     for t in texts:
         assert nref.citations(t) == _citations_unfiltered(t), t[:80]
+
+
+@pytest.mark.parametrize("key", ["urn:nir:stato:legge:2003-10-31;306", "eli:it:id/2003/11/15/003G0333",
+                                 "akn:it/act/legge/stato/2003-10-31/306"])
+def test_every_key_a_record_carries_is_looked_up_to_its_act(store, key):
+    """`louise_lookup` answers each id a Normattiva record writes into `keys`
+    (test_the_record_writes_its_registered_ids_into_keys). Until 2026-11-08
+    none resolved: the lookup read each table's primary key with the
+    namespace stripped (`nir:stato:…`), and `eli:it:`/`akn:` are not the key."""
+    from app.ask import lookup
+    out = lookup.lookup(key, store=store)
+    assert out["unresolved"] == [], out
+    (fact,) = out["facts"]
+    assert (fact["kind"], fact["source_id"], fact["fields"]["urn"]) == ("atto", "normattiva-refs", URN_306)
+    assert fact["label"] == "LEGGE 31 ottobre 2003, n. 306"
+
+
+def test_an_eli_of_another_jurisdiction_is_not_looked_up_among_the_italian_acts(store):
+    """06 §6.5: `eli` has one owner, which routes by jurisdiction; no source
+    declares `zz`, so the key is unresolved — never an Italian act."""
+    from app.ask import lookup
+    assert lookup.lookup("eli:zz:id/2003/11/15/003G0333", store=store) == {
+        "facts": [], "unresolved": ["eli:zz:id/2003/11/15/003G0333"]}
+    assert lookup.lookup("eli:it:id/1999/01/01/NOPE", store=store)["facts"] == []
+
+
+def test_the_lookup_by_a_second_id_is_an_index_search(store):
+    """`atto.eli` and `atto.akn` are read by value: indexed (RefTable.indexes)."""
+    for col in ("eli", "akn"):
+        plan = " ".join(r[3] for r in store.con.execute(
+            f"EXPLAIN QUERY PLAN SELECT * FROM atto WHERE {col}=?", ("x",)))
+        assert f"USING INDEX idx_atto_{col}" in plan, plan

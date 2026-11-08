@@ -67,6 +67,11 @@ louise hold collection new wikidata --recipe recipes/wikidata-nemo.json --name w
     --encoder http://node:30286 --api vega --embed-model vega-nemotron-3-embed-1b \
     --cpu-model vega-nemotron-3-embed-1b-cpu
 
+# E — a second collection in a held space (neuris in legi's): the space, its
+# layers, reference, endpoint and model are legi's; only the plugin, recipe and name are given
+louise hold collection new neuris --recipe recipes/neuris.toml --name neuris --space-from legi \
+    --cpu-model vega-nemotron-3-embed-1b-cpu
+
 # F — a re-creation: the collection held under --name, on another engine;
 # its endpoint, model and platform image are the predecessor's
 louise hold collection new normattiva --recipe normattiva-recreate.toml --name normattiva \
@@ -120,7 +125,8 @@ The wizard comes later, on the same declarations.
 | A | Built: `new` (#331, #333, #334; on the framework in phase 1). Run on the node: wikidata, 2026-11-06, exit 0, the gate PASSED (tolerance 0.999995, exact, CPU worst 0.999996). |
 | B | Refused at resolve, before anything is asked (phase 1); built in phase 3. |
 | F | Built: `new --re-create` (2026-11-07, pulled forward from phase 3 for normattiva; app/hold/recreate.py, tests/hold/test_collection_recreate.py). On A's steps: the predecessor's records and space, another engine. A recipe that moves the records (a parser) is refused at check: its carry is `dev carry --rebuilt`'s, by hand, until F on D. Not yet run on the node: the runbook below. |
-| C–E, G–J | Planned, phases below. |
+| E | Built: `new --space-from <held collection>` (2026-11-08, pulled forward from phase 2 for the legal collections: neuris and eurlex in legi's Nemotron space; tests/hold/test_collection_new_space_from.py). The space and layers copied, the reference vectors REUSED (`calibration_from`), never re-embedded, so the review's "re-embeds and only warns" cannot arise on this route; a plugin that cuts otherwise than the space's layers, or a recipe stating another space, is refused at resolve; the endpoint and model are the source's file's. Not yet run on the node. |
+| C, D, G–J | Planned, phases below. |
 
 **The plan.** Each phase ships with tests and is measured on the node before
 the next one starts.

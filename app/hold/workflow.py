@@ -105,9 +105,13 @@ CASES: tuple[Case, ...] = (
     Case("D", "The same document side as a held collection",
          "a re-creation whose document side is unchanged",
          ("plugin", "recipe", "name", "held collection"), _COPY, "wikidata, parser 2", phase=2),
+    # built 2026-11-08, pulled forward from phase 2 for the legal collections
+    # (neuris and eurlex in legi's Nemotron space): the space and layers
+    # copied, the reference reused, never re-embedded
     Case("E", "A copy of a held space", "a second collection in an existing space",
          ("plugin", "recipe", "the space's collection", "name"), _COPY,
-         "a second collection in wikipedia's space", phase=2),
+         "louise hold collection new neuris --recipe recipes/neuris.toml --name neuris --space-from legi "
+         "--cpu-model vega-nemotron-3-embed-1b-cpu", built=True, phase=2),
     # built on A (2026-11-07, pulled forward from phase 3 for normattiva): the
     # predecessor's space and records, another engine; on D or E with them
     Case("F", "A re-creation", "a collection replaced, nothing official published from it (RULE 1)",

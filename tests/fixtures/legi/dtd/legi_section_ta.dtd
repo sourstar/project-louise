@@ -1,0 +1,206 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<!-- Decrit le sommaire d'un texte en terme de têtier et d'article
+     @title LEGI : Section Texte Article 
+     @root SECTION_TA
+-->
+
+<!-- Racine de la section -->
+<!ELEMENT SECTION_TA (ID?,TITRE_TA,COMMENTAIRE?,STRUCTURE_TA,CONTEXTE)>
+
+<!ENTITY % lien_art SYSTEM "lien_art.dtd"> %lien_art;
+<!ENTITY % lien_section_ta SYSTEM "lien_section_ta.dtd"> %lien_section_ta;
+
+<!-- Identifiant interne. L'identifiant est également le nom du fichier xml. 
+@example JORFSCTA000000755641
+-->
+<!ELEMENT ID (#PCDATA) >
+
+<!-- 
+Titre de la section
+@example TITRE II :   AVANCEMENT
+-->
+<!ELEMENT TITRE_TA (#PCDATA)>
+
+<!-- 
+Commentaire sur la section
+@example Le présent chapitre ne comporte pas de dispositions réglementaires
+-->
+<!ELEMENT COMMENTAIRE (#PCDATA)>
+
+<!-- 
+Structure de la section. 
+Présente la succession des sections filles et des articles de la section courante 
+-->
+<!ELEMENT STRUCTURE_TA (LIEN_SECTION_TA|LIEN_ART)*>
+	
+<!-- 
+Contexte de la section. 
+Rappelle la succession des sections parentes pour arriver à l'élément courant 
+-->
+<!ELEMENT CONTEXTE (TEXTE)>
+
+<!-- 
+Reprend les principaux attributs du texte pointé et la liste des titres du texte dans ses différentes versions
+-->
+<!ELEMENT TEXTE (TITRE_TXT*, TM*)>
+
+<!--
+Identifiant interne commun à toute les versions du texte 
+@example JORFTEXT000001422418
+-->
+<!ATTLIST TEXTE cid CDATA #REQUIRED >
+
+<!-- 
+Numéro du texte 
+@example 1992-05-21
+-->
+<!ATTLIST TEXTE num CDATA #REQUIRED>
+
+<!-- 
+NOR du texte
+@example MESH0124158D
+-->
+<!ATTLIST TEXTE nor CDATA #REQUIRED>
+
+<!-- Nature du document. 
+    @hidden Liste de valeurs à preciser 
+    @example DECRET
+-->
+<!ATTLIST TEXTE nature CDATA #REQUIRED>
+
+<!-- 
+Date de publication du texte 
+@example 2003-11-24
+-->
+<!ATTLIST TEXTE date_publi CDATA #REQUIRED>
+
+<!-- 
+Date de signature du texte
+@example 2003-11-23
+-->
+<!ATTLIST TEXTE date_signature CDATA #REQUIRED>
+
+<!-- Numéro de parution du JO
+    Ex : 0158
+-->
+<!ATTLIST TEXTE num_parution_jo CDATA #IMPLIED>
+
+<!-- 
+Autorité émettrice. 
+Liste des autorités en date du 12/06/2008 :
+CONSEIL SUPERIEUR DE L'AUDIOVISUEL  , 
+COMMISSION POUR LA TRANSPARENCE FINANCIERE DE LA VIE POLITIQUE  , 
+BANQUE DE FRANCE - CONSEIL DE LA POLITIQUE MONETAIRE  , 
+COMMISSION GENERALE DE TERMINOLOGIE ET DE NEOLOGIE  , 
+AUTORITE DE REGULATION DES COMMUNICATIONS ELECTRONIQUES ET DES POSTES  , 
+COMMISSION NATIONALE DES COMPTES DE CAMPAGNE ET DE FINANCEMENTS POLITIQUES  , 
+COMMISSION DE CONTROLE DES ASSURANCES  , 
+AUTORITE DES MARCHES FINANCIERS  , 
+AGENCE FRANCAISE DE LUTTE CONTRE LE DOPAGE  , 
+CONSEIL DES VENTES VOLONTAIRES  , 
+CONSEIL ECONOMIQUE ET SOCIAL  , 
+COMITE DES ENTREPRISES D'ASSURANCE  , 
+AUTORITE DE REGULATION DES MESURES TECHNIQUES  , 
+MEDIATEUR NATIONAL DE L'ENERGIE  , 
+COUR DES COMPTES  , 
+COMMISSION NATIONALE DE DEONTOLOGIE DE LA SECURITE  , 
+HAUTE AUTORITE DE LUTTE CONTRE LES DISCRIMINATIONS ET POUR L'EGALITE  , 
+CONSEIL DE LA CONCURRENCE  , 
+COUR DE DISCIPLINE BUDGETAIRE ET FINANCIERE  , 
+MINISTERE DE L'ECONOMIE, DES FINANCES ET DE L'INDUSTRIE REGLEMENTS DU COMITE DE LA REGLEMENTATION COMPTABLE  , 
+CONSEIL SUPERIEUR DE L'AUDIOVISUEL (CSA)  , 
+CONSEIL D'ETAT  , 
+COUR DE JUSTICE DE LA REPUBLIQUE  , 
+COMMISSION DE REGULATION DE L'ELECTRICITE  , 
+COMMISSION DE CONTROLE DES ASSURANCES, DES MUTUELLES ET DES INSTITUTIONS DE PREVOYANCE  , 
+CONSEIL DES VENTES VOLONTAIRES DE MEUBLES AUX ENCHERES PUBLIQUES  , 
+CONSEIL DE PREVENTION ET DE LUTTE CONTRE LE DOPAGE  , 
+CONSEIL CONSTITUTIONNEL : DECISIONS  , 
+COMMISSION NATIONALE DE L'INFORMATIQUE ET DES LIBERTES  , 
+MEDIATEUR DE LA REPUBLIQUE  , 
+COMMISSION NATIONALE DES COMPTES DE CAMPAGNE ET DES FINANCEMENTS POLITIQUES  , 
+COMMISSION CONSULTATIVE DU SECRET DE LA DEFENSE NATIONALE  , 
+CONSEIL CONSTITUTIONNEL  , 
+COMMISSION DE REGULATION DE L'ENERGIE  , 
+COMMISSION NATIONALE DU DEBAT PUBLIC  , 
+HAUTE AUTORITE DE SANTE  , 
+COMMISSION D'ACCES AUX DOCUMENTS ADMINISTRATIFS  , 
+COMMISSION NATIONALE DE CONTROLE DES INTERCEPTIONS DE SECURITE  , 
+LOIS CONSEIL CONSTITUTIONNEL  , 
+COMMISSION NATIONALE DE L'INFORMATIQUE ET DES LIBERTES (CNIL)  , 
+AUTORITE DE REGULATION DES TELECOMMUNICATIONS  , 
+COMMISSION NATIONALE DES COMPTES DE CAMPAGNE ET DES FINANCEMENTS POLITIQUES  , 
+COMMISSION DES OPERATIONS DE BOURSE  , 
+AUTORITE DE REGULATION DES COMMUNICATIONS ELECTRONIQUES ET DES POSTES  , 
+AUTORITE DE CONTROLE DES ASSURANCES ET DES MUTUELLES  , 
+COMMISSION BANCAIRE  , 
+@example CONSEIL SUPERIEUR DE L'AUDIOVISUEL (CSA)
+-->
+<!ATTLIST TEXTE autorite CDATA #REQUIRED>
+
+<!-- 
+Ministère émetteur
+@exemple MINISTERE DE L'EMPLOI ET DE LA SOLIDARITE
+-->
+<!ATTLIST TEXTE ministere CDATA #REQUIRED>
+
+<!-- 
+Titre long du texte. 
+@example Décret n°2001-1375 du 31 décembre 2001 portant statut particulier du corps des cadres de santé de la fonction publique hospitalière
+-->
+<!ELEMENT TITRE_TXT (#PCDATA) >
+
+<!-- 
+Identifiant interne du texte dans cette version 
+@example JORFTEXT000000755641
+-->
+<!ATTLIST TITRE_TXT id_txt CDATA #REQUIRED>
+
+<!-- 
+Titre court du texte
+@exemple Décret n°1992-05-21 du 21 mai 1992
+-->
+<!ATTLIST TITRE_TXT c_titre_court CDATA #REQUIRED>
+
+<!-- 
+Date de validité pour cette version du texte 
+@example 2006-03-22
+-->
+<!ATTLIST TITRE_TXT debut CDATA #REQUIRED>
+
+<!-- 
+Date de fin de validité pour cette version du texte 
+@example 2999-12-31
+-->
+<!ATTLIST TITRE_TXT fin CDATA  #REQUIRED>
+
+<!-- 
+Têtier parent 
+-->
+<!ELEMENT TM (TITRE_TM*,TM?)>
+
+<!-- 
+Libellé du têtier.  
+-->
+<!ELEMENT TITRE_TM (#PCDATA)>
+
+<!-- 
+Identifiant interne de la section
+@example JORFSCTA000001422418
+-->
+<!ATTLIST TITRE_TM  id CDATA #REQUIRED>
+
+<!-- 
+Date de validité de la section 
+@example 2006-03-22
+-->
+<!ATTLIST TITRE_TM debut CDATA #REQUIRED>
+ 
+ <!-- 
+ Date de fin de validité de la section 
+ @example 2999-12-31
+ -->
+<!ATTLIST TITRE_TM fin CDATA #IMPLIED>
+
+    

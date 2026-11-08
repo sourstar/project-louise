@@ -40,7 +40,7 @@ EXEMPT = {
 
 #: plugins whose module tests call `assert_covered` (tests/test_origin_coverage.py
 #: checks this plus EXEMPT is the whole registry)
-COVERED = {"gutenberg", "pubmed", "wikipedia", "normattiva", "embedded"}
+COVERED = {"gutenberg", "pubmed", "wikipedia", "normattiva", "embedded", "legi", "neuris", "eurlex"}
 
 
 @contextmanager

@@ -10,7 +10,8 @@ from pathlib import Path
 from urllib.parse import quote, urlencode
 
 from ..plugins.base import LicenseClass
-from .spec import (AcquisitionSpec, ChecksumSource, DeltaSpec, Endpoint, Filter,
+from . import cellar
+from .spec import (AcquisitionSpec, ChecksumSource, DeltaSpec, Endpoint, Filter, RateLimit,
                    RemoteFile, Transport)
 
 GUTENBERG_SPEC = AcquisitionSpec(
@@ -508,9 +509,146 @@ WIKIDATA_SPEC = AcquisitionSpec(
 )
 
 
+# ---- LEGI (docs/notes/legal-fr-de-eu.md §2.1, §7.1; app/plugins/legi) ----
+
+def _legi_inventory():
+    from .transport_https import HtmlIndex
+    return HtmlIndex(pattern=r"(?:Freemium_legi_global|LEGI)_\d{8}-\d{6}\.tar\.gz")
+
+#: the baseline as the node's probe read it (2026-10-28 23:48): its HEAD's
+#: length; an estimate for the disk preflight, the listing's bytes are the truth
+_LEGI_BASELINE_BYTES = 1_171_027_316
+
+LEGI_SPEC = AcquisitionSpec(
+    source_id="legi",
+    transport=Transport.HTTPS,
+    endpoints=(
+        # no authentication; the directory's own index page is the listing
+        # (481 files on 2026-10-28: the baseline and one increment per working
+        # day since it), read by transport_https.list_index — its exact form
+        # is OWED from the node, the reader takes Apache's and nginx's
+        Endpoint(transport=Transport.HTTPS,
+                 url="https://echanges.dila.gouv.fr/OPENDATA/LEGI/",
+                 max_conns=2),                      # a public service: etiquette
+    ),
+    inventory=_legi_inventory(),
+    layout="container-files",
+    filters=("*.tar.gz",),
+    checksums=ChecksumSource(kind="none"),          # none published beside the tarballs
+    # each file is published once under a dated name and never rewritten: a
+    # pass fetches the names it has not got (the listing against fetch_files),
+    # resuming a `.part` by Range; one already fetched is never moved again
+    delta=DeltaSpec(mode="full-resync"),
+    etiquette=RateLimit(max_conns=2),
+    profiles={
+        # one increment (the first the listing names): a few MB, the pipeline end to end
+        "demo": Filter(include=("LEGI_*.tar.gz",), max_files=1),
+        "full": Filter(),
+    },
+    estimated_bytes={"full": _LEGI_BASELINE_BYTES + 481 * 5_000_000},
+    profile_labels={
+        "demo": "one daily increment of LEGI (a few MB)",
+        "full": "the LEGI baseline and every daily increment since it: every version of the "
+                "consolidated French law DILA publishes",
+    },
+    license_class=LicenseClass.GREEN,                # Licence Ouverte 2.0 (app/plugins/legi/TERMS.txt)
+    terms_text_path=Path(__file__).parent.parent / "plugins" / "legi" / "TERMS.txt",
+)
+
+
+# ---- NeuRIS, German federal law (app/plugins/neuris; legal-fr-de-eu.md §3, §7.1) ----
+
+def _neuris_listing():
+    from .neuris_listing import NeurisListing
+    return NeurisListing()
+
+
+#: The API's host. ONLY the test phase answers (probed from the node,
+#: 2026-10-28: the production host has no DNS record); production is this
+#: one line. A path the listing gives is relative to it.
+NEURIS_URL = "https://testphase.rechtsinformationen.bund.de"
+
+NEURIS_SPEC = AcquisitionSpec(
+    source_id="neuris",
+    transport=Transport.HTTPS,
+    endpoints=(
+        # no key; 600 requests a minute per IP, 503 past it (the API's
+        # rate-limiting guide): two connections at most, as for Normattiva
+        Endpoint(transport=Transport.HTTPS, url=NEURIS_URL, max_conns=2),
+    ),
+    inventory=_neuris_listing(),
+    # a manifestation zip and the expression's JSON, side by side under the
+    # expression's ELI (app/acquire/neuris_listing.py)
+    layout="container-files",
+    filters=("eli/*.zip", "eli/*.json"),
+    checksums=ChecksumSource(kind="none"),       # none published
+    # the delta is the listing compared with what is held, by path; the
+    # changelog's `changed` stamps a held path for a fetch again
+    delta=DeltaSpec(mode="full-resync"),
+    etiquette=RateLimit(max_conns=2),
+    profiles={
+        # the acts of one recent year of the Gazette: a few hundred files
+        "demo": Filter(include=("eli/bund/bgbl-1/2024/*",)),
+        "full": Filter(),
+    },
+    profile_labels={
+        "demo": "the federal acts of the Bundesgesetzblatt I of 2024, every expression NeuRIS lists",
+        "full": "every expression of federal law NeuRIS lists, each with its annexes",
+    },
+    # § 5 UrhG: laws and ordinances are official works without copyright;
+    # NeuRIS states no data licence (legal-fr-de-eu.md §3.6). No terms text
+    # to acknowledge — the plugin's docstring says what is owed.
+    license_class=LicenseClass.GREEN,
+)
+
+
+# ---- EUR-Lex (docs/notes/legal-fr-de-eu.md §4, §7.1; app/plugins/eurlex) ----
+
+#: the 24 official languages, each a slice the origin delivers whole: its
+#: own profile, so a node fetches only the languages its file lists in
+#: `slices` (legal-collections-nemotron.md, "EU languages")
+_EURLEX_LANGUAGES = ("bg", "cs", "da", "de", "el", "en", "es", "et", "fi", "fr", "ga", "hr", "hu",
+                     "it", "lt", "lv", "mt", "nl", "pl", "pt", "ro", "sk", "sl", "sv")
+
+
+EURLEX_SPEC = AcquisitionSpec(
+    source_id="eurlex",
+    transport=Transport.HTTPS,
+    endpoints=(
+        # Cellar: no authentication, no published limit; fewer than five in
+        # flight and backing off on 429/503 is the practice reported (§4.1):
+        # two, paced by the transfer manager
+        Endpoint(transport=Transport.HTTPS, url="https://publications.europa.eu", max_conns=2),
+    ),
+    # one listed file — the unit's notice, its completion mark — is one
+    # document: a version of an act in one language
+    layout="one-file-per-doc",
+    filters=("lang=*",),
+    checksums=ChecksumSource(kind="none"),      # none published; blake2 always applies
+    # the SPARQL inventory compared with what is held, by each work's last
+    # modification (app/acquire/cellar.py)
+    delta=DeltaSpec(mode="full-resync"),
+    etiquette=RateLimit(max_conns=2),
+    profiles={
+        **{lang: Filter(include=(f"lang={lang}/*",)) for lang in _EURLEX_LANGUAGES},
+        "all": Filter(),
+    },
+    profile_mode="additive",
+    slice_profiles={f"lang={lang}": lang for lang in _EURLEX_LANGUAGES},
+    inventory=cellar.INVENTORY,
+    unit_fetcher=cellar.UNITS,
+    profile_labels={**{lang: f"every act and consolidated version in Formex, language {lang}"
+                       for lang in _EURLEX_LANGUAGES}, "all": "every language"},
+    license_class=LicenseClass.GREEN,     # CC BY 4.0 content, CC0 metadata (Decision 2011/833/EU)
+)
+
+
 ACQUIRE_REGISTRY: dict[str, AcquisitionSpec] = {
     "embedded": EMBEDDED_SPEC,
+    "eurlex": EURLEX_SPEC,
     "gutenberg": GUTENBERG_SPEC,
+    "legi": LEGI_SPEC,
+    "neuris": NEURIS_SPEC,
     "normattiva": NORMATTIVA_SPEC,
     "pubmed": PUBMED_SPEC,
     "wikidata": WIKIDATA_SPEC,

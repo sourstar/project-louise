@@ -3,9 +3,13 @@ import threading
 
 from .. import config
 from .clinvar_mini import ClinvarMiniSource
+from .eli import EliRefSource
+from .eurlex import CitationResolver as EurlexCitationResolver, EurlexRefSource
 from .gnomad import GnomadConstraintSource
 from .hgnc import HgncSource
 from .homologene import HomologeneSource
+from .legi import CitationResolver as LegiCitationResolver, LegiRefSource
+from .neuris import CitationResolver as NeurisCitationResolver, NeurisRefSource
 from .normattiva import CitationResolver, NormattivaRefSource
 from .resolver import CompositeResolver, DictResolver
 from .store import RefStore, connect, ensure_schema
@@ -16,9 +20,24 @@ REFS_REGISTRY = {
     "clinvar-mini": ClinvarMiniSource(),
     "gnomad-constraint": GnomadConstraintSource(),
     "homologene": HomologeneSource(),
-    # the Italian acts: `urn` and `eli` registered (05 §5.2), citations
-    # resolved by key (app/refs/normattiva.py; review §3.12)
+    # the `eli` namespace's one owner: routes `eli:<jurisdiction>:…` to the
+    # source declaring that jurisdiction (app/refs/eli.py; legal-fr-de-eu.md §5.2)
+    "eli-refs": EliRefSource(),
+    # the Italian acts: `urn` and `akn` registered (05 §5.2), `eli:it:` held
+    # for eli-refs; citations resolved by key (app/refs/normattiva.py; review §3.12)
     "normattiva-refs": NormattivaRefSource(),
+    # the French texts: `legi`, `jorf` and `nor` registered, `eli:fr:` held
+    # for eli-refs (none written: LEGI carries no ELI); citations resolved
+    # by key (app/refs/legi.py; legal-fr-de-eu.md §2.5)
+    "legi-refs": LegiRefSource(),
+    # German federal law: `jurabk` registered, `eli:de:` held for eli-refs;
+    # citations ("§ 823 Abs. 1 BGB") resolved by the synced abbreviations
+    # (app/refs/neuris.py; legal-fr-de-eu.md §3.4)
+    "neuris-refs": NeurisRefSource(),
+    # the EU's acts: `celex` registered, `eli:eu:` held for eli-refs; the
+    # citations of an EU act in any language held resolved by key
+    # (app/refs/eurlex.py; legal-fr-de-eu.md §4.5)
+    "eurlex-refs": EurlexRefSource(),
     # Wikidata's entity ids: the namespace `wikidata` (QIDs, PIDs) for the
     # wikidata collection's keys and wiki-gutenberg's mentions
     # (docs/notes/wikidata-build-plan.md §2)
@@ -27,7 +46,8 @@ REFS_REGISTRY = {
 
 #: every registered resolver in turn; `expand` follows the declared links
 #: whichever source owns the entity (app/refs/resolver.py)
-RESOLVER = CompositeResolver((DictResolver(), CitationResolver()))
+RESOLVER = CompositeResolver((DictResolver(), CitationResolver(), LegiCitationResolver(),
+                               NeurisCitationResolver(), EurlexCitationResolver()))
 
 
 #: thread -> (the refs.db path it was opened on, the store). SQLite
