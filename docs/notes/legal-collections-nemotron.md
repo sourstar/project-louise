@@ -206,10 +206,49 @@ of normattiva, then run a comparison test before doing the full embedding."
   - The bake-off München runs for the operator's 2026-11-07 request
     (legal-embedders-fr-de-eu.md): `lemur-it` hybrid MRR@10, the deciding
     row; JuriFindIT, in-domain for DAR-legal-it.
-  - Then, on the collection itself: `tools/legal_pilot.py coverage` and
-    `run`, against the old collection. Only the chunks the pilot's
-    questions reach are embedded on demand. The full embedding waits for
-    its numbers and the operator's go.
+  - Then, on the collection itself, against the old collection: JuriFindIT's
+    175 covered questions (review §10.1) on ONE candidate pool, before the
+    full embedding (designed 2026-11-08). Embedding only the gold acts would
+    let a dense leg find them by construction. The standard answer is POOLING
+    (TREC; MS MARCO's re-ranking task): both collections rank exactly the
+    same records.
+    - The pool is each covered question's top 100 records by normattiva's
+      TEXT leg (no encoder in it), plus every gold record.
+    - Every leg is restricted to it before ranking, through the facet
+      filters' own prefilter.
+    - normattiva-nemo embeds only the pool, through the lazy queue.
+
+    Absolute numbers are higher than on the whole corpus; the difference
+    between the two collections is fair.
+
+    ```bash
+    D=/root/measure/jurifindit
+    python tools/legal_pilot.py fetch --out $D
+    python tools/legal_pilot.py coverage --out $D --collection normattiva
+    python tools/legal_pilot.py coverage --out $D --collection normattiva-nemo   # the same covered set
+    python tools/legal_pilot.py pool --out $D --collection normattiva --name jf100 --depth 100
+    # normattiva-nemo's file: embed_mode = "lazy"; then
+    python tools/legal_pilot.py enqueue --out $D --collection normattiva-nemo --pool jf100
+    # each arm: a pilot read first (measuring.md §12), then the whole run
+    for C in normattiva normattiva-nemo; do for R in off from:<a collection with a reranker>; do
+      python tools/legal_pilot.py run --out $D --collection $C --pool jf100 --reranker $R --pilot 3
+      # read runs/$C/pilot-<tag>.md, then: pilot-ok --out $D --collection $C --tag <tag> --by … --note …
+      python tools/legal_pilot.py run --out $D --collection $C --pool jf100 --reranker $R
+    done; done
+    python tools/legal_pilot.py compare $D/runs/<nemo run>.json $D/runs/<dar run>.json
+    ```
+
+    What each step guarantees:
+    - A pooled `run` waits (exit 3) while a pool record is not embedded in
+      the collection it runs.
+    - Every run settles the vector leg first, and stops at a search that
+      withheld a leg or its reranker, writing nothing (§13).
+    - `compare` pairs the two runs by question: the mean difference, its 95 %
+      interval and Fisher's randomization p (encoder_bakeoff.paired).
+    - Each run carries the reach of its misses (piece 4) and the seconds a
+      question (piece 5: reranker off against on).
+
+    The full embedding waits for these numbers and the operator's go.
 - **How it is made: case J, built 2026-11-08** (operator: "Make J, it is
   time to do it"). A RELAYERED sister of `normattiva` in `legi`'s space
   (2026-11-08): her manifest copied with its index marks emptied, no text

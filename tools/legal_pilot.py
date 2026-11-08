@@ -38,6 +38,35 @@ run            every covered question through `app.ask.results.search` as the
                widening the candidate set along the edges could add — the
                question the review left open, answered before anything is
                built for it.
+pool           POOLING (TREC's; MS MARCO's re-ranking task), so that two
+               collections are compared on ONE candidate set before either is
+               fully embedded (operator 2026-11-08: "run a comparison test
+               before doing the full embedding"): every covered question's
+               top `--depth` records by the TEXT leg alone (no encoder in it),
+               plus the gold records, written to runs/pool-<name>.json. A
+               collection that embeds only some records would otherwise be
+               measured on a dense leg that finds its gold by construction.
+enqueue        the pool's records not embedded, queued for embedding in a
+               collection (the lazy queue the search itself fills,
+               `retrieval._enqueue_lazy_embed`); with `embed_mode = "lazy"`
+               its worker embeds those and nothing else.
+run --pool     every leg of every search restricted to the pool BEFORE it
+               ranks — the facet filters' own prefilter (`book_ids`, 05
+               §5.2), as tools/measure/entity_boost_trecpm.py restricts — so
+               each collection ranks exactly the same records; refused while
+               a pool record is not embedded in the collection run.
+run --pilot N  measuring.md §12: the first N covered questions (per
+               `category` where the dataset has one) on exactly the run's
+               settings, written for a reader to runs/<collection>/pilot-<tag>.md;
+               `pilot-ok` records the reading (tools/measure/chat_eval.py's),
+               and a whole `run` without one for its settings and code refuses.
+               Every run settles the vector leg first and stops at a search
+               that withheld a leg or its reranker, nothing written (§13).
+compare        two run files over the same questions, paired by question:
+               each metric's mean difference, its 95 % bootstrap interval and
+               Fisher's randomization p (encoder_bakeoff.paired, Smucker et
+               al. CIKM 2007), and the seconds a question of each. Refused
+               when the two did not run the same questions or pool.
 temporal-make  dated question STUBS mined from the version table: an article
                whose text differs between two consecutive versions of one act,
                a date inside the earlier version's validity, and a numeric
@@ -74,6 +103,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from tools import encoder_bakeoff as bakeoff  # noqa: E402 — fetch, metrics_for, LICENCE
+from tools.measure import chat_eval  # noqa: E402 — settle, withheld_legs, pilot_ok, ask_code (§12, §13)
 
 KS = (1, 3, 5, 10, 20)
 DEFAULT_K = 20
@@ -320,6 +350,200 @@ def default_search(question: str, *, collections: list[str], limit: int, as_of: 
     return results.search(question, collections=collections, limit=limit, as_of=as_of)
 
 
+def text_search(question: str, *, collections: list[str], limit: int, as_of: str | None):
+    """The search as the reader's, with its legs reduced to the TEXT one:
+    the pool's source, so no encoder decides what either collection is
+    measured on."""
+    from app import query_service
+    from app.ask import results
+
+    def fts(names, query, k, mode, translate, **kw):
+        return query_service.run_search(names, query, k, "fts", translate, **kw)
+    return results.search(question, collections=collections, limit=limit, as_of=as_of, run=fts)
+
+
+@contextlib.contextmanager
+def pool_prefilter(native_ids: set[int] | None):
+    """Every leg restricted to `native_ids` before it ranks: the facet
+    filters' own prefilter (`query_service.book_ids_for` → `book_ids`, 05
+    §5.2), so a pooled run takes the code path a filter takes. A reader's
+    filter, where one is given, still applies (the intersection). In this
+    process only; None restricts nothing."""
+    from app import query_service
+    if native_ids is None:
+        yield
+        return
+    real = query_service.book_ids_for
+    ids = set(native_ids)
+
+    def scoped(filters):
+        inner = real(filters)
+        if inner is None:
+            return lambda collection: set(ids)
+        return lambda collection: (inner(collection) or set()) & ids
+    query_service.book_ids_for = scoped
+    try:
+        yield
+    finally:
+        query_service.book_ids_for = real
+
+
+def _native_of(uid: str | None) -> int | None:
+    tail = str(uid or "").rpartition(":")[2]
+    return int(tail) if tail.isdigit() else None
+
+
+POOL_DEPTH = 100
+
+
+def pool(held: Held, questions: list[dict[str, Any]], gold: dict[int, Gold], *,
+         depth: int = POOL_DEPTH, as_of: str | None = None, search_fn: Callable | None = None) -> dict[str, Any]:
+    """The candidate set: each covered question's top `depth` records by the
+    text leg, and every gold record. What each question contributed, and
+    how many of its gold records the text leg already found, are kept."""
+    search_fn = search_fn or text_search
+    name = held.collection.name
+    ids: set[int] = set()
+    per: list[dict[str, Any]] = []
+    for i, q in enumerate(questions):
+        relevant = {int(x) for x in q["relevant_doc_ids"] if int(x) in gold and gold[int(x)].held}
+        if not relevant:
+            continue
+        found = {_native_of(h.get("uid")) for h in _hits(search_fn(q["question"], collections=[name],
+                                                                    limit=depth, as_of=as_of))} - {None}
+        golds = {_native_of(gold[x].uid) for x in relevant} - {None}
+        ids |= found | golds
+        per.append({"index": i, "text_records": len(found), "gold_records": len(golds),
+                    "gold_found_by_text": len(golds & found)})
+    return {"built_from": name, "depth": depth, "as_of": as_of, "records": len(ids),
+            "native_ids": sorted(ids), "questions": per}
+
+
+def pool_state(collection, native_ids: Iterable[int], *, window: int = 500) -> dict[str, int]:
+    """The pool's records in `collection`: embedded, waiting, declined (the
+    node's choice, -1), absent from its manifest."""
+    from app import db
+    ids = sorted(set(native_ids))
+    out = {"embedded": 0, "waiting": 0, "declined": 0, "absent": 0}
+    con = db.connect(collection)
+    try:
+        for start in range(0, len(ids), window):
+            part = [f"{collection.plugin}:{i}" for i in ids[start:start + window]]
+            got = dict(con.execute(f"SELECT uid, embed_done FROM documents WHERE uid IN "
+                                   f"({','.join('?' for _ in part)})", part).fetchall())
+            for uid in part:
+                v = got.get(uid)
+                key = ("absent" if v is None else "embedded" if v == 1 else "declined" if v == -1
+                       else "waiting")
+                out[key] += 1
+    finally:
+        con.close()
+    return out
+
+
+def enqueue(collection, native_ids: Iterable[int]) -> dict[str, int]:
+    """The pool's records not embedded, queued for embedding in `collection`
+    — the queue the search itself fills (`retrieval._enqueue_lazy_embed`:
+    only a document waiting, never a declined one), one BEGIN IMMEDIATE (a
+    writer that reads first). Its worker embeds them under any embedding
+    mode; under `lazy`, them and nothing else."""
+    from app import db, retrieval
+    before = pool_state(collection, native_ids)
+    con = db.connect(collection)
+    try:
+        con.execute("BEGIN IMMEDIATE")
+        try:
+            retrieval._enqueue_lazy_embed(con, sorted(set(native_ids)), collection)
+            con.execute("COMMIT")
+        except BaseException:
+            con.execute("ROLLBACK")
+            raise
+    finally:
+        con.close()
+    return {**before, "queued": before["waiting"]}
+
+
+def pilot_questions(questions: list[dict[str, Any]], gold: dict[int, Gold], n: int) -> list[int]:
+    """measuring.md §12: the indexes of the first `n` covered questions of
+    every category (the dataset's `category`, where it has one)."""
+    seen: dict[str, int] = {}
+    out: list[int] = []
+    for i, q in enumerate(questions):
+        if not any(int(x) in gold and gold[int(x)].held for x in q["relevant_doc_ids"]):
+            continue
+        cat = str(q.get("category") or "")
+        if seen.get(cat, 0) < n:
+            seen[cat] = seen.get(cat, 0) + 1
+            out.append(i)
+    return out
+
+
+def pilot_tag(*, reranker: str, k: int, pool_name: str | None, as_of: str | None) -> str:
+    """The settings a reading is valid for, the code included (§13: a whole
+    run runs its pilot's code)."""
+    raw = f"rerank-{reranker}-k{k}-pool-{pool_name or 'none'}-asof-{as_of or 'now'}-code-{chat_eval.ask_code()[7:19]}"
+    return re.sub(r"[^A-Za-z0-9._-]+", "-", raw)
+
+
+def pilot_report(held: Held, questions: list[dict[str, Any]], got: dict[str, Any], gold: dict[int, Gold],
+                 path: Path, *, settings: dict[str, Any]) -> Path:
+    """The pilot, one question at a time, for a reader: the question, its
+    gold (act and article), the ranked hits with their labels and whether
+    each is gold, the metrics and the time."""
+    lines = [f"# Pilot: {held.collection.name}", "", "Settings: " + json.dumps(settings, ensure_ascii=False), "",
+             "Read each one; then `legal_pilot pilot-ok --out ... --collection ... --tag ... --by ... --note ...`.",
+             ""]
+    for row in got["per_question"]:
+        if "index" not in row:
+            continue
+        q = questions[row["index"]]
+        lines += [f"## {row['index']}. {q['question']}", ""]
+        for nid in row["relevant"]:
+            g = gold[nid]
+            lines.append(f"- gold {nid}: {g.file_name} {g.path} → {g.uid} art. {g.token}")
+        for rank, (h, gid) in enumerate(zip(row.get("hits") or [], row["ranking"]), 1):
+            mark = "GOLD" if gid > 0 else "    "
+            lines.append(f"  {rank:>2}. {mark} {h['uid']} {h['label']}")
+        lines.append(f"- " + ", ".join(f"{m} {row[m]:.3f}" for m in row if "@" in m)
+                     + f"; {row.get('seconds')} s")
+        lines.append("")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("\n".join(lines), encoding="utf-8")
+    return path
+
+
+COMPARED = ("recall@10", "recall@20", "mrr@10", "ndcg@10")
+
+
+def compare(a: dict[str, Any], b: dict[str, Any], metrics: Iterable[str] = COMPARED) -> dict[str, Any]:
+    """Run `a` against run `b`, question by question (per_question rows
+    keyed by the question's index): for each metric, a − b with its interval
+    and p. Two runs over other questions, k or pool are not comparable."""
+    for key in ("k", "pool"):
+        if a.get(key) != b.get(key):
+            raise SystemExit(f"the two runs differ in {key}: {a.get(key)!r} and {b.get(key)!r}")
+    ra = {r["index"]: r for r in a["per_question"] if "index" in r}
+    rb = {r["index"]: r for r in b["per_question"] if "index" in r}
+    if ra.keys() != rb.keys():
+        raise SystemExit(f"the two runs answered other questions ({len(ra)} and {len(rb)}, "
+                         f"{len(ra.keys() ^ rb.keys())} not in both)")
+    order = sorted(ra)
+    out: dict[str, Any] = {"questions": len(order), "a": a.get("collection"), "b": b.get("collection")}
+    for m in metrics:
+        if not all(m in ra[i] and m in rb[i] for i in order):
+            continue
+        delta, low, high, p = bakeoff.paired([float(ra[i][m]) for i in order], [float(rb[i][m]) for i in order])
+        out[m] = {"a": a["summary"].get(m), "b": b["summary"].get(m), "a_minus_b": delta,
+                  "interval95": [low, high], "p": p}
+    out["seconds"] = {"a": a["summary"].get("seconds"), "b": b["summary"].get("seconds")}
+    return out
+
+
+class PoolNotEmbedded(RuntimeError):
+    """A pooled run on a collection whose dense leg cannot rank every pool
+    record: not the comparison it claims to be."""
+
+
 def default_traverse(uid: str, *, collection: str):
     from app.ask import traverse
     return traverse.traverse(uid, depth=1, collection=collection)
@@ -330,7 +554,7 @@ _DEFAULT = object()
 
 def run(held: Held, questions: list[dict[str, Any]], gold: dict[int, Gold], *, k: int = DEFAULT_K,
         search_fn: Callable | None = None, traverse_fn: Callable | None | object = _DEFAULT,
-        as_of: str | None = None) -> dict[str, Any]:
+        as_of: str | None = None, only: Iterable[int] | None = None) -> dict[str, Any]:
     """Every covered question: the ranking as (work, article) pairs, the gold
     node ids among them, the metrics, and the reach of the misses. The two
     callables default to the node's own search and traverse, looked up at
@@ -360,16 +584,24 @@ def run(held: Held, questions: list[dict[str, Any]], gold: dict[int, Gold], *, k
 
     n = 0
     seconds: list[float] = []
+    wanted = set(only) if only is not None else None
     for i, q in enumerate(questions):
         relevant = {int(x) for x in q["relevant_doc_ids"] if int(x) in gold and gold[int(x)].held}
-        if not relevant:
+        if not relevant or (wanted is not None and i not in wanted):
             continue
         n += 1
         t0 = time.perf_counter()
         answer = search_fn(q["question"], collections=[name], limit=k, as_of=as_of)
         seconds.append(time.perf_counter() - t0)
+        # measuring.md §13: a search that withheld a leg or its reranker is
+        # not the search a reader of a settled node gets — never recorded
+        legs = chat_eval.withheld_legs(answer)
+        if legs:
+            raise chat_eval.SearchWithheld(f"question {i}: the search withheld {'; '.join(legs)}: "
+                                           f"nothing is written; run again once the leg is back")
         ranking: list[int] = []
         seen_pairs: list[tuple[str, str]] = []
+        shown: list[dict[str, str]] = []
         for h in _hits(answer)[:k]:
             uid, seq = str(h.get("uid")), _seq_of(h.get("chunk_id"))
             work = held.work_of(uid)
@@ -379,6 +611,7 @@ def run(held: Held, questions: list[dict[str, Any]], gold: dict[int, Gold], *, k
             if pair in seen_pairs:
                 continue
             seen_pairs.append(pair)
+            shown.append({"uid": uid, "label": str(h.get("chapter") or h.get("label") or pair[1])})
             if pair in by_pair:
                 ranking.append(by_pair[pair])
             else:
@@ -404,7 +637,8 @@ def run(held: Held, questions: list[dict[str, Any]], gold: dict[int, Gold], *, k
         reach["reachable"] += len(reachable)
         per_question.append({"index": i, "question": q["question"], "relevant": sorted(relevant),
                              "ranking": ranking, "missed": missed, "reachable_by_edge": reachable,
-                             **{m: row[m] for m in (f"recall@{k if k in KS else KS[-1]}", "mrr@10", "ndcg@10")}})
+                             "hits": shown, "seconds": round(seconds[-1], 3),
+                             **row})                  # every metric, so two runs pair on any
     summary = {key: (value / n if n else 0.0) for key, value in totals.items()}
     summary["questions_run"] = n
     summary["reach_misses"] = reach["misses"]
@@ -562,6 +796,17 @@ def _load_dataset(out: Path) -> tuple[list[dict[str, Any]], list[dict[str, Any]]
     return corpus, questions
 
 
+#: the vector leg's settle (measuring.md §13), chat_eval's; a test stands in for it
+settle_fn = chat_eval.settle
+
+
+def _pool_ids(out: Path, name: str) -> list[int]:
+    path = out / "runs" / f"pool-{name}.json"
+    if not path.is_file():
+        raise SystemExit(f"no pool {name!r} at {path}: `legal_pilot pool --name {name}` first")
+    return [int(i) for i in json.loads(path.read_text(encoding="utf-8"))["native_ids"]]
+
+
 def _stamp(held: Held) -> dict[str, Any]:
     codex = getattr(held.collection, "codex", None)
     return {"collection": held.collection.name,
@@ -581,7 +826,7 @@ def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
     p = sub.add_parser("fetch"); p.add_argument("--out", type=Path, required=True)
-    for cmd in ("coverage", "run"):
+    for cmd in ("coverage", "run", "pool", "enqueue"):
         p = sub.add_parser(cmd)
         p.add_argument("--out", type=Path, required=True)
         p.add_argument("--collection", required=True)
@@ -591,6 +836,22 @@ def main(argv: list[str] | None = None) -> int:
             p.add_argument("--no-reach", action="store_true", dest="no_reach")
             p.add_argument("--reranker", default="configured",
                            help="configured (default), off, or from:<collection> (lent)")
+            p.add_argument("--pool", default=None, help="a pool's name (runs/pool-<name>.json): every leg "
+                                                         "restricted to it")
+            p.add_argument("--pilot", type=int, default=None,
+                           help="the first N covered questions of every category, for a reader (§12)")
+        if cmd == "pool":
+            p.add_argument("--name", required=True)
+            p.add_argument("--depth", type=int, default=POOL_DEPTH)
+            p.add_argument("--as-of", default=None, dest="as_of")
+        if cmd == "enqueue":
+            p.add_argument("--pool", required=True)
+    p = sub.add_parser("compare")
+    p.add_argument("run_a", type=Path); p.add_argument("run_b", type=Path)
+    p = sub.add_parser("pilot-ok")
+    p.add_argument("--out", type=Path, required=True); p.add_argument("--collection", required=True)
+    p.add_argument("--tag", required=True); p.add_argument("--by", required=True)
+    p.add_argument("--note", required=True)
     p = sub.add_parser("temporal-make")
     p.add_argument("--collection", required=True); p.add_argument("--out", type=Path, required=True)
     p.add_argument("--limit", type=int, default=200)
@@ -601,6 +862,19 @@ def main(argv: list[str] | None = None) -> int:
 
     if a.cmd == "fetch":
         return bakeoff.fetch(a.out)
+    if a.cmd == "compare":
+        got = compare(json.loads(a.run_a.read_text(encoding="utf-8")), json.loads(a.run_b.read_text(encoding="utf-8")))
+        print(f"{got['questions']} questions, a = {a.run_a.name}, b = {a.run_b.name}")
+        for m in COMPARED:
+            if m in got:
+                r = got[m]
+                print(f"  {m}: a {r['a']:.4f}  b {r['b']:.4f}  a-b {r['a_minus_b']:+.4f}  "
+                      f"95% [{r['interval95'][0]:+.4f}, {r['interval95'][1]:+.4f}]  p {r['p']:.4f}")
+        print(f"  seconds a question: a {got['seconds']['a']}  b {got['seconds']['b']}")
+        return 0
+    if a.cmd == "pilot-ok":
+        (a.out / "runs" / a.collection).mkdir(parents=True, exist_ok=True)
+        return chat_eval.pilot_ok(a.out, a.collection, a.tag, a.by, a.note)
     c, con = _open(a.collection, None)
     held = Held(c, con)
     if a.cmd in ("coverage", "run"):
@@ -613,12 +887,64 @@ def main(argv: list[str] | None = None) -> int:
                   f"articles {cov['articles']} held {cov['articles_held']}  {cov['articles_by_outcome']}")
             print(f"written {path}")
             return 0
-        with reranker_override(a.reranker) as lent:
-            got = run(held, questions, gold, k=a.k, as_of=a.as_of,
-                      traverse_fn=None if a.no_reach else _DEFAULT)
+        if a.cmd == "pool":
+            got = pool(held, questions, gold, depth=a.depth, as_of=a.as_of)
+            path = a.out / "runs" / f"pool-{a.name}.json"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps({**_stamp(held), "name": a.name, **got}, ensure_ascii=False) + "\n",
+                            encoding="utf-8")
+            found = sum(q["gold_found_by_text"] for q in got["questions"])
+            golds = sum(q["gold_records"] for q in got["questions"])
+            print(f"pool {a.name}: {got['records']} records from {len(got['questions'])} questions, depth "
+                  f"{a.depth} by the text leg of {c.name}; gold records {golds}, {found} of them found by text")
+            print(f"written {path}")
+            return 0
+        if a.cmd == "enqueue":
+            ids = _pool_ids(a.out, a.pool)
+            got = enqueue(c, ids)
+            print(f"{c.name}: pool {a.pool}, {len(ids)} records — embedded {got['embedded']}, queued "
+                  f"{got['queued']}, declined {got['declined']}, absent {got['absent']}. Its worker embeds "
+                  f"the queued ones; with embed_mode = \"lazy\" in its file, them and nothing else")
+            return 0
+        ids = _pool_ids(a.out, a.pool) if a.pool else None
+        if ids is not None:
+            state = pool_state(c, ids)
+            if state["embedded"] != len(ids):
+                print(f"{c.name}: pool {a.pool} has {len(ids)} records and {state['embedded']} embedded here "
+                      f"({state}): a pooled run ranks every pool record by every leg, so it waits "
+                      f"(`enqueue`, then the worker)", file=sys.stderr)
+                return 3
+        # measuring.md §13: the vector leg settled in this process first
+        settled = settle_fn([c.name])
+        if not settled.get(c.name):
+            print(f"{c.name}: the vector leg is not settled here ({settled}); nothing is run", file=sys.stderr)
+            return 3
+        tag = pilot_tag(reranker=a.reranker, k=a.k, pool_name=a.pool, as_of=a.as_of)
+        only = pilot_questions(questions, gold, a.pilot) if a.pilot else None
+        if only is None and not chat_eval._pilot_ok_path(a.out, c.name, tag).is_file():
+            print(f"{c.name}: no pilot read for these settings (tag {tag}): `run --pilot 3` with the same "
+                  f"flags, read it, then `pilot-ok --tag {tag}` (measuring.md §12)", file=sys.stderr)
+            return 2
+        try:
+            with reranker_override(a.reranker) as lent, pool_prefilter(set(ids) if ids is not None else None):
+                got = run(held, questions, gold, k=a.k, as_of=a.as_of, only=only,
+                          traverse_fn=None if a.no_reach else _DEFAULT)
+        except chat_eval.SearchWithheld as e:
+            print(f"{c.name}: {e}", file=sys.stderr)
+            return 3
         rr = {"choice": a.reranker, "url": getattr(lent, "url", None), "model": getattr(lent, "model", None)}
-        path = _write(a.out, "run" if a.reranker == "configured" else f"run-rerank-{a.reranker.replace(':', '-')}",
-                      {**_stamp(held), "k": a.k, "as_of": a.as_of, "reranker": rr,
+        settings = {"k": a.k, "as_of": a.as_of, "reranker": rr, "pool": a.pool, "tag": tag,
+                    "code": chat_eval.ask_code()}
+        if only is not None:
+            path = pilot_report(held, questions, got, gold, a.out / "runs" / c.name / f"pilot-{tag}.md",
+                                settings=settings)
+            print(f"pilot: {got['summary']['questions_run']} questions written to {path}; read them, then "
+                  f"`legal_pilot pilot-ok --out {a.out} --collection {c.name} --tag {tag} --by WHO --note WHAT`")
+            return 0
+        label = "run" + ("" if a.reranker == "configured" else f"-rerank-{a.reranker.replace(':', '-')}") \
+            + (f"-pool-{a.pool}" if a.pool else "")
+        path = _write(a.out, label,
+                      {**_stamp(held), **settings, "pool_records": len(ids) if ids is not None else None,
                        "coverage": {k: v for k, v in cov.items() if k != "gold"}, **got})
         s = got["summary"]
         print("  ".join(f"{m} {s.get(m, 0.0):.4f}" for m in ("recall@10", "mrr@10", "ndcg@10", "recall@20")))
