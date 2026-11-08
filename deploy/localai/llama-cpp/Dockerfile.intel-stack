@@ -35,8 +35,8 @@ RUN set -e \
  && cat /intel-stack.ocloc \
  && grep -q '/usr/local/lib/libigc.so' /intel-stack.ocloc \
  && rm -rf /tmp/intel-stack-debs /tmp/ocloc.debug /var/lib/apt/lists/* \
- && dpkg-query -W -f='${Package} ${Version}\n' intel-opencl-icd libze-intel-gpu1 intel-igc-core-2 intel-igc-opencl-2 \
-      intel-ocloc libze1 > /intel-stack.versions \
+ && for p in intel-opencl-icd libze-intel-gpu1 intel-igc-core-2 intel-igc-opencl-2 intel-ocloc libze1; do \
+      dpkg-query -W -f='${Package} ${Version}\n' "$p" 2>/dev/null || echo "$p not-installed"; done > /intel-stack.versions \
  && cat /intel-stack.versions
 ENV INTEL_DRIVER_LIB_DIRS="/usr/local/lib /usr/lib/x86_64-linux-gnu /usr/lib"
 # no object from another build: LocalAI's compile step shares one ccache across every sycl_f16 build, and ccache's key
