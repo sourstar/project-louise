@@ -171,3 +171,29 @@ def test_the_route_says_the_synthesis_time_and_the_clip_length(node, server, mon
                                                             "voice": PHILIPPE})
     timing = dict(part.strip().split(";dur=") for part in r.headers["server-timing"].split(","))
     assert r.status_code == 200 and float(timing["synth"]) >= 0 and float(timing["audio"]) == 500.0
+
+
+def test_a_synthesis_holds_the_interactive_claim_and_no_gate(server, monkeypatch):
+    """München, 2026-11-08: OmniVoice made a clip in 0.81 of its length
+    alone and in up to 1.49 beside the corpus embedders. A synthesis is a
+    person's query's last step: it holds the claim (corpus work stands
+    aside, the clock pinned), and takes no gate it would share with the
+    chat that writes the answer."""
+    from contextlib import contextmanager
+    from app.rage import dispatch
+    seen, gates = [], []
+
+    @contextmanager
+    def interactive(level):
+        seen.append(("enter", level))
+        yield
+        seen.append(("leave", level))
+    monkeypatch.setattr(dispatch, "interactive", interactive)
+    monkeypatch.setattr(dispatch, "gate", lambda *a, **k: gates.append(a))
+    calls, _ = server
+    monkeypatch.setattr(speech.httpc, "post", lambda url, json, **kw: (
+        seen.append(("post", None)), calls.append((url, json)))[0] or type("R", (), {
+            "status_code": 200, "content": b"RIFF", "headers": {"content-type": "audio/wav"}})())
+    speech.synthesize({"model": "omnivoice-cpp", "input": "Dante wrote it."}, url="http://ai")
+    assert seen == [("enter", dispatch.Level.CHAT), ("post", None), ("leave", dispatch.Level.CHAT)]
+    assert gates == [], "no gate: speech never waits behind the answer being written"
