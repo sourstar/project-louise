@@ -70,6 +70,10 @@ EXCEPTIONS: dict[tuple[str, str], tuple[str, str]] = {
     ("louise-chat-qwen3.5-9b-q4", "GGML_SYCL_FA_ONEDNN"): (
         "1", ("approved-encoders.md \"oneDNN switched on, measured\": C exact, the same text "
               "as A over 3 fresh loads, prompt +3.5 to +4 % (QUALITY: identical answers)")),
+    # Ask's live chat model (staged 2026-11-08): the model the measurement's second table ran
+    ("louise-chat-qwen3.5-9b-q4-p0", "GGML_SYCL_FA_ONEDNN"): (
+        "1", ("approved-encoders.md \"oneDNN switched on, measured\": C on q4-p0, the same text "
+              "as A over 3 fresh loads, prompt 3,079 -> 3,187 tok/s (QUALITY: identical answers)")),
 }
 
 
