@@ -299,8 +299,8 @@ number written as a decimal string is marked *decimal*.
 | `continues` | id or null | yes | daughter: the mother's `collection_id` |
 | `continues_through` | snapshot id or null | yes | daughter: the last snapshot that is the mother's — the boundary, named from the side that already exists (02 §2.7). Everything after it is the daughter's |
 | `origin_reachable_until` | snapshot id or null | yes | daughter: the last snapshot whose parts the origin still reproduces |
-| `derived_from` | id or null | yes | sister and corrective sister: the mother's `collection_id` |
-| `space_from` | id or null | yes | sister: the Codex whose `space` and `layers` were copied byte for byte. `cleaning_version` is not among them: a sister keeps her mother's in any case, since changing it would re-derive the corpus she inherits (02 §2.7) |
+| `derived_from` | id or null | yes | sister and corrective sister: the `collection_id` of the collection she is derived from, her sister (02 §2.7, amended 2026-11-08) |
+| `space_from` | id or null | yes | sister: the Codex whose `space` and `layers` were copied byte for byte. `cleaning_version` is not among them: a sister keeps her sister's in any case, since changing it would re-derive the corpus she inherits (02 §2.7) |
 | `derivation` | object or null | yes | how this space's vectors may be obtained WITHOUT an encoder, when it is a pure function of another space's: `{from: id, kind: "truncate" · "quantise", params: {…}}`, `from` being a `space_id` and never a `collection_id`. `null` where there is none. NOT part of `space_id` (02 §2.4) |
 | `replaces` | object or null | yes | corrective sister: `{codex: id, defect: {check, toolchain, witnesses, expected, observed, rationale}}` (03 §3.6); `witnesses` is a non-empty list of part names `"<slice>/<n>"` or uids |
 | `facets` | list of objects | yes | which record fields a search may filter on and a reader may list (05 §5.7), sorted by `field`, `[]` when none. Each is `{field: string, kind: "flat" · "tree" · "range", separator: string or null, authority: {name: string} or null}`; `separator` is non-null exactly when `kind` is `"tree"`. `field` is a top-level record field (§9.5) or `extra.<key>`. Declares structure only: the values live in the records |
@@ -322,8 +322,8 @@ corrective sister: the corpus is the same corpus, and the community will
 embed for whichever of them accepts community vectors, so neither credit
 is inherited work that a new space could leave behind. The `archive`
 entries are: a daughter's equal her mother's, since she inherits the
-vectors; a sister's equal her mother's when her `space_id` matches her
-mother's and are her own recipe's when it does not, there being no third
+vectors; a sister's equal her sister's when her `space_id` matches her
+sister's and are her own recipe's when it does not, there being no third
 case; a corrective sister has none, since it starts from zero (02 §2.7).
 So `credits` is never `[]` — the corpus entry is always there — and the
 part of it a relative may differ in is exactly the part that describes
@@ -385,7 +385,7 @@ a `<space>` segment and would read as one in a member name (§9.16; until
 | `tolerance` | decimal | yes | the cosine a vector must reach against the reference (03 §3.1) |
 | `calibration` | object | yes | `{set: "sha256:…", vectors: "sha256:…", query_vectors: "sha256:…" or null, quorum: {n: 16, min_pass: 12}}` — the calibration set's id, the reference vectors' hash and, in an asymmetric space, the query reference vectors' (§9.12), and the quorum |
 | `envelope` | id | yes | the hash of the envelope tensor in the calibration member (§9.12) |
-| `epoch` | string | yes | `"0"` for a root; a daughter AND a sister keep their mother's, so a sister of a corrective sister keeps the salted one and stays in her mother's space (02 §2.7); a corrective sister's is `H(canonical JSON of {"replaces": <replaced collection_id>})`, written `sha256:…`. Any other value is refused |
+| `epoch` | string | yes | `"0"` for a root; a daughter keeps her mother's AND a sister her sister's, so a sister of a corrective sister keeps the salted one and stays in that corrective sister's space (02 §2.7); a corrective sister's is `H(canonical JSON of {"replaces": <replaced collection_id>})`, written `sha256:…`. Any other value is refused |
 | `evaluation` | object or null | yes | `{suite: {name, version, sha256, public}, metric, value: decimal, conditions: {…}, coverage_check: {targets, resolved}, run_by: key, run_at: time, tier: "reproducible" · "asserted"}`; `null` when no score is claimed |
 
 **The engine.** How the reference vectors were computed, written out
@@ -547,7 +547,7 @@ not `work`: those are the contract around the function, not the
 function. Not the `engine` and not the `label`: the engine is how the
 reference was computed. Whether another engine computes the same
 function is measured (03 §3.3), never declared (02 §2.4). `space_from` copies `space` and `layers` byte for byte and
-never `cleaning_version`, which stays the mother's (07 §7.3); `derive`
+never `cleaning_version`, which stays the one of the sister she is derived from (07 §7.3); `derive`
 refuses when the named Codex's `cleaning_version` differs from hers, and
 refuses in any case when the resulting `space_id` differs from the
 source's. The `<space>` path segment is the first 16
