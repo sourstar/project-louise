@@ -43,9 +43,12 @@ import hashlib
 import json
 import os
 import tempfile
+import threading
 import time
 from pathlib import Path
 from typing import Any, Iterable, Sequence
+
+from app import single_flight
 
 INDEX = "possession-index.json"
 PARTS = "part-uids"
@@ -245,6 +248,14 @@ _part_hashes_cache = _cache("possession parts")
 _part_views = _cache("possession part views")
 #: a part's Possession held, a uid (measured: 529-680 B; on the side of caution)
 VIEW_BYTES_PER_UID = 700
+#: ONE builder per cache entry (app/single_flight.py). 2026-11-08, #419 on
+#: the node: with the snapshot shared, the embed pool's 65 threads piled up
+#: one step on — 42 of them decoding the SAME part's records in
+#: `part_records` on a `_part_hashes_cache` miss (py-spy at 8.3 GB; cgroup
+#: OOM at 23.2 GB, 45 s after start, pubmed paused). The cache bound cannot
+#: stop it: every thread builds before any of them puts. The bundle maps and
+#: the part views are filled the same way, so they take the same flight.
+_flights = single_flight.Group()
 
 
 def _bundle_map(root: Path, name: str, codex, sid: str, bundle_id: str) -> dict[str, str] | None:
@@ -254,14 +265,20 @@ def _bundle_map(root: Path, name: str, codex, sid: str, bundle_id: str) -> dict[
     got = _bundle_maps.get(key)
     if got is not None:
         return got
-    try:
-        raw = (d / "possession.json").read_bytes()
-        got = json.loads(raw)
-    except (OSError, ValueError):
-        return None                              # no files here: covers nothing
-    if not isinstance(got, dict):
-        return None
-    return _bundle_maps.put(key, got, MAP_BYTES_PER_BYTE * len(raw))
+
+    def load() -> dict[str, str] | None:
+        hit = _bundle_maps.get(key)
+        if hit is not None:
+            return hit
+        try:
+            raw = (d / "possession.json").read_bytes()
+            got = json.loads(raw)
+        except (OSError, ValueError):
+            return None                          # no files here: covers nothing
+        if not isinstance(got, dict):
+            return None
+        return _bundle_maps.put(key, got, MAP_BYTES_PER_BYTE * len(raw))
+    return _flights.do(("bundle", key), load)
 
 
 def _key_bounds(first_id, last_id):
@@ -299,6 +316,14 @@ def part_possession(root: Path, name: str, codex, con, slice_: str, bounds=None)
     hit = _part_views.get(view_key)
     if hit is not None:
         return hit
+    return _flights.do(("view", view_key), lambda: _part_view(root, name, codex, rows, own, view_key))
+
+
+def _part_view(root: Path, name: str, codex, rows: list, own: str, view_key) -> "Possession":
+    """`part_possession`'s build, for one caller at a time per view."""
+    hit = _part_views.get(view_key)
+    if hit is not None:
+        return hit
     held: dict[str, set[str]] = {}
     bundles: dict[str, dict[str, list[str]]] = {}
     producers: dict[str, str] = {}
@@ -327,8 +352,14 @@ def part_hashes(root: Path, name: str, snapshot, shard) -> dict[str, str]:
     got = _part_hashes_cache.get(key)
     if got is not None:
         return got
-    got = {u: h for u, h in part_records(root, name, snapshot, shard) if h}
-    return _part_hashes_cache.put(key, got, 200 * max(1, len(got)))
+
+    def load() -> dict[str, str]:
+        hit = _part_hashes_cache.get(key)
+        if hit is not None:
+            return hit
+        got = {u: h for u, h in part_records(root, name, snapshot, shard) if h}
+        return _part_hashes_cache.put(key, got, 200 * max(1, len(got)))
+    return _flights.do(("part", key), load)
 
 
 def holding(root: Path, name: str, codex, con, uid: str, native_id) -> "tuple[Possession, str] | None":
@@ -356,8 +387,12 @@ def part_records(root: Path, name: str, snapshot, shard) -> list[tuple[str, str]
         return [tuple(x) for x in json.loads(p.read_bytes())]
     except (OSError, ValueError):
         pass
+    # STREAMED (2026-11-08): two fields a record are kept, so the part's
+    # records are never all held at once — a wikipedia part decoded whole is
+    # thousands of full texts, for each part asked while its file is missing
     got = [(r["uid"], r.get("content_hash")) for r in
-           landing.records_for(Path(root), name, snapshot, f"{shard.slice}/{shard.n:05d}", None)]
+           landing.records_for(Path(root), name, snapshot, f"{shard.slice}/{shard.n:05d}", None,
+                               stream=True)]
     p.parent.mkdir(parents=True, exist_ok=True)
     # a temp file of its OWN (tempfile.mkstemp): the worker's round and a CLI
     # `hold vectors show` fill the same missing entry at once, and one shared
@@ -614,11 +649,22 @@ def record_hash_of(root: Path, name: str, held: "Possession", uid: str) -> str |
 #: part, so a part's bundle is read once for its documents, not once each)
 _vectors_cache: dict[str, dict[str, Any]] = {}
 _VECTORS_KEEP = 2
+_vectors_lock = threading.Lock()
 
 
 def _bundle_vectors(root: Path, name: str, codex, shard: str, bundle_id: str) -> dict[str, Any] | None:
     """chunk_id -> vector of one held bundle (challenge rows left out);
     None when its files do not read."""
+    hit = _vectors_cache.get(bundle_id)
+    if hit is not None:
+        return hit
+    # one reader a bundle (`_flights`): every embed thread asks the bundle of
+    # the part it is in, and each read is the bundle's vectors as lists
+    return _flights.do(("vectors", bundle_id),
+                       lambda: _read_bundle_vectors(root, name, codex, shard, bundle_id))
+
+
+def _read_bundle_vectors(root: Path, name: str, codex, shard: str, bundle_id: str) -> dict[str, Any] | None:
     hit = _vectors_cache.get(bundle_id)
     if hit is not None:
         return hit
@@ -634,9 +680,10 @@ def _bundle_vectors(root: Path, name: str, codex, shard: str, bundle_id: str) ->
     except Exception:   # noqa: BLE001 — not here, or not a bundle: nothing reused from it
         return None
     got = dict(zip(ids, vecs))
-    while len(_vectors_cache) >= _VECTORS_KEEP:
-        _vectors_cache.pop(next(iter(_vectors_cache)))
-    _vectors_cache[bundle_id] = got
+    with _vectors_lock:                  # two bundles' readers evict at once
+        while len(_vectors_cache) >= _VECTORS_KEEP:
+            _vectors_cache.pop(next(iter(_vectors_cache)))
+        _vectors_cache[bundle_id] = got
     return got
 
 

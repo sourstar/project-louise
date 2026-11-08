@@ -31,7 +31,7 @@ machinery and this stays testable without a Lance table.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Callable, Iterable, Sequence
+from typing import Any, Callable, Iterable, Iterator, Sequence
 
 from .. import layers as layers_mod
 from . import collection as col
@@ -83,7 +83,7 @@ def snapshot_named(root, name: str, snapshot_id: str) -> snap.Snapshot:
 
 
 def records_for(root, name: str, snapshot: snap.Snapshot, shard: str,
-                uids: Iterable[str] | None) -> list[dict]:
+                uids: Iterable[str] | None, *, stream: bool = False) -> "list[dict] | Iterator[dict]":
     """This peer's records for the uids a bundle carries, or all of them.
 
     Read from the shard the bundle names, because that is where the
@@ -95,13 +95,17 @@ def records_for(root, name: str, snapshot: snap.Snapshot, shard: str,
     `uids=None` is the whole shard, which is what a sampled check over
     this peer's own vectors wants (`hold vectors check`): there is no
     bundle there to name a subset.
+
+    `stream=True` yields them one at a time instead of holding the part
+    (`possession.part_records` keeps two fields a record, 2026-11-08).
     """
     want = None if uids is None else set(uids)
     shard_tree = col.shard_dir_of(Path(root), name)
     entry = exp._shard_of(snapshot, shard)
     from app.pack import records as pack_records
-    return [r for r in pack_records.iter_records(shard_tree / entry.path)
-            if want is None or r["uid"] in want]
+    got = (r for r in pack_records.iter_records(shard_tree / entry.path)
+           if want is None or r["uid"] in want)
+    return got if stream else list(got)
 
 
 def records_by_uid(root, name: str, snapshot: snap.Snapshot, uids: Iterable[str], *,
