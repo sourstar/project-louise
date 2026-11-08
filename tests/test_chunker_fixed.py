@@ -114,8 +114,9 @@ def test_fixed_is_registered_and_book_is_untouched():
     # wikidata-text (2026-10-19): the Wikidata plugin's own chunker, a token
     # window of a pinned tokenizer at the textifier's statement boundaries
     # (06 §6.3); it enters only the spaces that declare it
-    assert set(chunking._CHUNKERS) == {"book", "fixed", "verbatim",
-                                       "abstract", "cdc", "akn_article", "wikidata-text"}
+    # legal_article (2026-11-08): the shared legal space's, app/chunking_legal.py
+    assert set(chunking._CHUNKERS) == {"book", "fixed", "verbatim", "abstract", "cdc",
+                                       "akn_article", "wikidata-text", "legal_article"}
 
 
 def test_every_chunker_takes_the_same_shape():
