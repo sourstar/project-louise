@@ -7,7 +7,7 @@ No I/O here — pure data, mirroring app/plugins/base.py's own rule.
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import Callable, Literal
+from typing import Callable, Iterable, Literal
 
 from ..plugins.base import LicenseClass
 
@@ -112,7 +112,9 @@ class AcquisitionSpec:
     documents, wherever the layout makes them countable. `layout` drives
     it: "one-dir-per-doc" derives document totals from the listing (one
     distinct top directory = one document) and the Library reports
-    documents with the file count in parentheses; container layouts
+    documents with the file count in parentheses; "one-file-per-doc"
+    (eurlex: each listed file is one unit's completion mark) counts each
+    listed file as one document; container layouts
     ("container-files", "single-file") CANNOT know document counts before
     unpacking, so the card labels the count "compressed containers" and
     the parsed/indexed rows carry the document truth as each archive is
@@ -122,7 +124,7 @@ class AcquisitionSpec:
     source_id: str                        # ties to CorpusSource.source_id / Collection.plugin
     transport: Transport
     endpoints: tuple[Endpoint, ...]
-    layout: Literal["one-dir-per-doc", "container-files", "single-file"]
+    layout: Literal["one-dir-per-doc", "one-file-per-doc", "container-files", "single-file"]
     filters: tuple[str, ...] = ()          # base filters, applied under every profile
     checksums: ChecksumSource = field(default_factory=ChecksumSource)
     delta: DeltaSpec = field(default_factory=lambda: DeltaSpec(mode="full-resync"))
@@ -189,6 +191,13 @@ class AcquisitionSpec:
     # operator picks from and what "is there something newer?" reads.
     snapshot_files: Callable[[str], tuple[RemoteFile, ...]] | None = None
     snapshot_index: Callable[[], tuple[str, ...]] | None = None
+    # An origin whose INVENTORY is a query, not a directory (Cellar's SPARQL
+    # endpoint, app/acquire/cellar.py): `listing(endpoint, spec, filter)`
+    # yields the complete listing for the profile's filter, under the
+    # LISTING CONTRACT above, in place of the transport's `list_files`. A
+    # callable for the reason `snapshot_files` is one: only the source knows
+    # its query.
+    listing: Callable[..., "Iterable[RemoteFile]"] | None = None
     license_class: LicenseClass = LicenseClass.GREEN
     terms_text_path: Path | None = None    # required when license_class != GREEN
 

@@ -109,7 +109,12 @@ These are the values, not the final TOML.
    - `MODIFIE_MORT_NE` needs an index rule.
    - The tarballs are read through a container pack.
 4. **Cellar:** the acquisition is SPARQL listing plus content negotiation.
-   The body item is picked by name.
+   The body item is picked by name. **Built 2026-11-08** (not created):
+   the `eurlex` plugin (`app/plugins/eurlex/`), its reference source
+   (`app/refs/eurlex.py`, `celex` and `eli:eu:`), the SPARQL listing and
+   the unit fetch (`app/acquire/cellar.py`, `EURLEX_SPEC`), and the recipe
+   [`eurlex-recipe.toml`](eurlex-recipe.toml) for case E. What is owed from
+   the node is listed in the recipe's header.
 5. **Owed before `create`:**
    - each origin's terms text, byte-exact;
    - the counts from the node: the busiest start day, LEGI Work-key

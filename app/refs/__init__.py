@@ -4,6 +4,7 @@ import threading
 from .. import config
 from .clinvar_mini import ClinvarMiniSource
 from .eli import EliRefSource
+from .eurlex import CitationResolver as EurlexCitationResolver, EurlexRefSource
 from .gnomad import GnomadConstraintSource
 from .hgnc import HgncSource
 from .homologene import HomologeneSource
@@ -23,6 +24,10 @@ REFS_REGISTRY = {
     # the Italian acts: `urn` and `akn` registered (05 §5.2), `eli:it:` held
     # for eli-refs; citations resolved by key (app/refs/normattiva.py; review §3.12)
     "normattiva-refs": NormattivaRefSource(),
+    # the EU's acts: `celex` registered, `eli:eu:` held for eli-refs; the
+    # citations of an EU act in any language held resolved by key
+    # (app/refs/eurlex.py; legal-fr-de-eu.md §4.5)
+    "eurlex-refs": EurlexRefSource(),
     # Wikidata's entity ids: the namespace `wikidata` (QIDs, PIDs) for the
     # wikidata collection's keys and wiki-gutenberg's mentions
     # (docs/notes/wikidata-build-plan.md §2)
@@ -31,7 +36,7 @@ REFS_REGISTRY = {
 
 #: every registered resolver in turn; `expand` follows the declared links
 #: whichever source owns the entity (app/refs/resolver.py)
-RESOLVER = CompositeResolver((DictResolver(), CitationResolver()))
+RESOLVER = CompositeResolver((DictResolver(), CitationResolver(), EurlexCitationResolver()))
 
 
 #: thread -> (the refs.db path it was opened on, the store). SQLite

@@ -10,7 +10,8 @@ from pathlib import Path
 from urllib.parse import quote, urlencode
 
 from ..plugins.base import LicenseClass
-from .spec import (AcquisitionSpec, ChecksumSource, DeltaSpec, Endpoint, Filter,
+from . import cellar
+from .spec import (AcquisitionSpec, ChecksumSource, DeltaSpec, Endpoint, Filter, RateLimit,
                    RemoteFile, Transport)
 
 GUTENBERG_SPEC = AcquisitionSpec(
@@ -508,8 +509,49 @@ WIKIDATA_SPEC = AcquisitionSpec(
 )
 
 
+# ---- EUR-Lex (docs/notes/legal-fr-de-eu.md §4, §7.1; app/plugins/eurlex) ----
+
+#: the 24 official languages, each a slice the origin delivers whole: its
+#: own profile, so a node fetches only the languages its file lists in
+#: `slices` (legal-collections-nemotron.md, "EU languages")
+_EURLEX_LANGUAGES = ("bg", "cs", "da", "de", "el", "en", "es", "et", "fi", "fr", "ga", "hr", "hu",
+                     "it", "lt", "lv", "mt", "nl", "pl", "pt", "ro", "sk", "sl", "sv")
+
+
+EURLEX_SPEC = AcquisitionSpec(
+    source_id="eurlex",
+    transport=Transport.HTTPS,
+    endpoints=(
+        # Cellar: no authentication, no published limit; fewer than five in
+        # flight and backing off on 429/503 is the practice reported (§4.1):
+        # two, paced by the transfer manager
+        Endpoint(transport=Transport.HTTPS, url="https://publications.europa.eu", max_conns=2),
+    ),
+    # one listed file — the unit's notice, its completion mark — is one
+    # document: a version of an act in one language
+    layout="one-file-per-doc",
+    filters=("lang=*",),
+    checksums=ChecksumSource(kind="none"),      # none published; blake2 always applies
+    # the SPARQL inventory compared with what is held, by each work's last
+    # modification (app/acquire/cellar.py)
+    delta=DeltaSpec(mode="full-resync"),
+    etiquette=RateLimit(max_conns=2),
+    profiles={
+        **{lang: Filter(include=(f"lang={lang}/*",)) for lang in _EURLEX_LANGUAGES},
+        "all": Filter(),
+    },
+    profile_mode="additive",
+    slice_profiles={f"lang={lang}": lang for lang in _EURLEX_LANGUAGES},
+    listing=cellar.listing,
+    profile_labels={**{lang: f"every act and consolidated version in Formex, language {lang}"
+                       for lang in _EURLEX_LANGUAGES}, "all": "every language"},
+    license_class=LicenseClass.GREEN,     # CC BY 4.0 content, CC0 metadata (Decision 2011/833/EU)
+)
+
+
 ACQUIRE_REGISTRY: dict[str, AcquisitionSpec] = {
     "embedded": EMBEDDED_SPEC,
+    "eurlex": EURLEX_SPEC,
     "gutenberg": GUTENBERG_SPEC,
     "normattiva": NORMATTIVA_SPEC,
     "pubmed": PUBMED_SPEC,
