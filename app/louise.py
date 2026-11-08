@@ -2633,6 +2633,21 @@ def cmd_node_speech(a) -> int:
         return 2
 
 
+def cmd_node_resident(a) -> int:
+    """`node resident show` (07 §7.3): the models the worker keeps on the
+    card for Ask — a trial (operator, 2026-11-08: "keep every model Ask uses
+    resident on the card"; app/resident.py, the one resolution) — beside
+    platform.toml's `[models] keep_ask_resident` and `preload_speech`, the
+    node's mode, and each model's loaded and pinned state. Read-only."""
+    from app import platform_config, resident
+    try:
+        _print(resident.show())
+        return 0
+    except (platform_config.schedule_mod.ScheduleError, OSError) as e:
+        print(f"louise node resident show: {e}", file=sys.stderr)
+        return 2
+
+
 #: The web process `node start` runs beside the worker: the image's own
 #: command (Dockerfile), so one node started either way serves the same app.
 WEB_COMMAND = ("-m", "uvicorn", "app.api:app", "--host", "0.0.0.0")
@@ -6004,6 +6019,13 @@ def build_parser() -> argparse.ArgumentParser:
     q.add_argument("--voice", dest="tts_voice", default=None, metavar="VOICE",
                    help="the voice, for every language; unset, the model server's first voice profile")
     q.set_defaults(fn=cmd_node_speech)
+
+    p = nverbs.add_parser("resident", help="the models kept on the card for Ask (a trial): platform.toml "
+                                           "[models] keep_ask_resident, preload_speech")
+    rverbs = p.add_subparsers(dest="resident_verb", required=True)
+    q = rverbs.add_parser("show", help="the switches, the node's mode, and each model of the set with its "
+                                       "roles, collections, loaded and pinned state")
+    q.set_defaults(fn=cmd_node_resident)
 
     hold = surfaces.add_parser("hold", help="your own copy: complete, current, checked")
     nouns = hold.add_subparsers(dest="noun", required=True)

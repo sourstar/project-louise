@@ -39,6 +39,7 @@ from . import (backend, catalog, chunking, collections as collections_mod, confi
                discovery, embed_select, layers as layers_mod, parallel, embeddings,
                encoder_timeouts, entities,
                fts, issues as issues_mod, lookahead, model_load, model_pins, origin_missing,
+               resident,
                node_state,
                plugin_io, refs, sched, sizing, slice_scope, spaces, stats)
 from .rage import card_record, dispatch
@@ -4859,7 +4860,18 @@ def _release_embedder(collection, con=None, others=None, reason: str = "") -> bo
     mode is not "all", its embedder is unloaded, unless another collection
     whose mode IS "all" uses the same model on the same runner. It loads
     again on the next request (a search, an on-demand embed). True when
-    unloaded; never raises."""
+    unloaded; never raises.
+
+    AMENDED 2026-11-08 FOR A TRIAL (operator, option A: "keep every model
+    Ask uses resident on the card"; "The load all is a test"; "If embedding
+    is set on all or on demand preload the model"): a model of the resident
+    set (app/resident.py `kept`: the encoders of every served collection on
+    on-demand, all or p2p, while `[models] keep_ask_resident` is true and the
+    node runs or acquires) is never unloaded here. The 2026-10-14 rule held
+    because the card did not fit; measured 30,267 of 32,656 MiB (92.7 %) with
+    every model resident (München, 2026-11-07). It stands as written where
+    the switch is false, for `off`, and while the node is paused or
+    seed-only."""
     if _effective_embed_mode(collection, con) in collections_mod.BACKFILL_MODES:
         return False
     try:
@@ -4869,6 +4881,11 @@ def _release_embedder(collection, con=None, others=None, reason: str = "") -> bo
     if not recipe or not getattr(recipe, "model", None):
         return False
     server = model_load.server_of(recipe.url)
+    try:
+        if (server, recipe.model) in resident.kept():
+            return False
+    except Exception:   # noqa: BLE001 — unreadable: the rule of 2026-10-14, as before
+        pass
     if others is None:
         with _live_lock:
             others = list(_live_collections.values())
@@ -4904,7 +4921,21 @@ def _sweep_unheld_embedders(collections, con=None) -> list[str]:
     deposit-granite was removed and vega-granite stayed loaded). On every
     runner a held collection's encoder lives on, each loaded `vega-` model
     that no held collection names — as its document model or its query
-    model — is unloaded. Returns what went; never raises."""
+    model — is unloaded. Returns what went; never raises.
+
+    AMENDED 2026-11-08 FOR A TRIAL (operator, option A, as
+    `_release_embedder`): a model a held collection names that is in the
+    resident set (app/resident.py `kept`) is never unloaded as idle — the
+    on-demand collections' encoders stay on the card, pinned. The idle rule
+    (IDLE_BEATS, 2026-10-14 and 2026-10-19) held because the card did not
+    fit; measured 30,267 of 32,656 MiB (92.7 %) with every model resident.
+    It stands as written where `[models] keep_ask_resident` is false, for a
+    collection on `off`, and while the node is paused or seed-only (`kept`
+    is then empty). A model no held collection names goes as before."""
+    try:
+        resident_keys = resident.kept()
+    except Exception:   # noqa: BLE001 — unreadable: the rules as before
+        resident_keys = frozenset()
     servers: set[str] = set()
     named: set[str] = set()
     for c in collections:
@@ -4964,6 +4995,8 @@ def _sweep_unheld_embedders(collections, con=None) -> list[str]:
             # or an on-demand embed loaded it (a gutenberg or wikipedia query
             # encoder); it goes once nobody has asked it anything for IDLE_BEATS
             # beats — a model nobody recorded a request for is idle now
+            if (server, m) in resident_keys:
+                continue                   # resident for Ask (the trial of 2026-11-08)
             if now - last_used.get((server, m), 0.0) >= idle_after_s and model_load.unload(server, m):
                 idle.append(m)
     if con is not None and (gone or idle):
@@ -5716,6 +5749,76 @@ def _settle_runs_for_search() -> None:
                     con.close()
 
 
+#: how long a stopping worker waits for the resident keeper to give its pins
+#: back (each unpin is bounded by model_pins.CALL_TIMEOUT_S); one it did not
+#: finish is restored by the next boot's reconcile
+RESIDENT_STOP_WAIT_S = 30.0
+
+
+def _served_now(collections) -> list:
+    """The collections the worker serves, of `collections`: those its boot
+    check did not refuse (the live set `_publish_collections` keeps) and
+    `node pause <collection>` has not paused."""
+    with _live_lock:
+        live = set(_live_collections)
+    try:
+        paused = node_state.paused_collections()
+    except Exception:   # noqa: BLE001 — unreadable: none known paused
+        paused = set()
+    return [c for c in collections if (not live or c.name in live) and c.name not in paused]
+
+
+def _resident_keeper() -> None:
+    """THE RESIDENT SET, held (app/resident.py; a trial, operator 2026-11-08:
+    "keep every model Ask uses resident on the card"). One beat at once —
+    a booted worker holds the set again — and every SETTLE_BEAT_S after, on
+    its own thread: a run check on the settle thread can embed a whole set
+    for minutes, and the holder must be renewed well inside
+    model_pins.HOLDER_TTL_S whatever else runs. The loads it starts run on a
+    thread of their own, one at a time (`resident._warm_all`). Each
+    collection's embed mode is read as `_release_embedder` reads it — the
+    Library's override, else the file — over this thread's own manifest
+    connections, keyed by path (SQLite is thread-affine; caches key on
+    physical identity). A stopping worker gives the pins back: a stopped
+    node holds nothing on the card."""
+    cons: dict[str, object] = {}
+
+    def embed_mode(c) -> str:
+        key = str(c.manifest_path)
+        con = cons.get(key)
+        if con is None:
+            try:
+                con = cons[key] = db.connect(c)
+            except Exception:   # noqa: BLE001 — the file's word then
+                return _effective_embed_mode(c)
+        return _effective_embed_mode(c, con)
+    try:
+        while not _stop.is_set():
+            try:
+                collections = collections_mod.load_all()
+                paths = {str(c.manifest_path) for c in collections}
+                for stale in [k for k in cons if k not in paths]:
+                    try:
+                        cons.pop(stale).close()
+                    except Exception:   # noqa: BLE001
+                        cons.pop(stale, None)
+                resident.beat(_served_now(collections), embed_mode=embed_mode, stop=_stop.is_set)
+            except Exception:   # noqa: BLE001 — never the thread; the next beat
+                pass
+            if _stop.wait(SETTLE_BEAT_S):
+                break
+    finally:
+        try:
+            resident.release()
+        except Exception:   # noqa: BLE001 — restored by the next boot's reconcile
+            pass
+        for con in cons.values():
+            try:
+                con.close()
+            except Exception:   # noqa: BLE001
+                pass
+
+
 def _gossip_beat(collections, con) -> None:
     """04 §4.2: this node's digest once an hour to its neighbours and the
     peer list — and at once to one not yet sent to; events received
@@ -6065,6 +6168,13 @@ def run_forever():
     # the runs of collections that hold vectors and do not embed here,
     # settled for search (03 §3.3; `_settle_runs_for_search`)
     threading.Thread(target=_settle_runs_for_search, name="settle-runs", daemon=True).start()
+    # every model Ask uses, pinned and loaded (app/resident.py; a trial,
+    # operator 2026-11-08) — after the boot's reconcile, which drops the
+    # resident holder a killed worker left
+    resident_thread = None
+    if os.getenv("LOUISE_RESIDENT", "1") != "0":
+        resident_thread = threading.Thread(target=_resident_keeper, name="resident", daemon=True)
+        resident_thread.start()
     # 07 §7.8 "all p2p", the publishing half: the open parts whose vectors
     # this node holds, bundled and announced as the embed stage finishes
     # them (`_publisher`); its own thread, a pass is minutes of IO and hashing
@@ -6264,6 +6374,9 @@ def run_forever():
     # for a run the worker died under (app/scheduled_checks.py)
     check_thread.join(timeout=CHECK_STOP_WAIT_S)
     _release_locks()                     # the node holds a lock only while it runs
+    # the resident set's pins back to their state before (app/resident.py)
+    if resident_thread is not None:
+        resident_thread.join(timeout=RESIDENT_STOP_WAIT_S)
     parallel.shutdown()             # the parse pool's children go with the worker
     for c in all_collections:
         db.log_event(cons[c.name], "info", "worker", "worker stopped (signal)")

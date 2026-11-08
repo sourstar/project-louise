@@ -149,8 +149,20 @@ class ModelsConfig:
     docs/notes/model-profile.md); this is the bound of every other. 120 s:
     the slowest load measured is LocalAGI's 2B chat model at 44–46 s
     (docs/notes/vega.md §11), and a load can be slowed by the card's other
-    work."""
+    work.
+
+    `keep_ask_resident` and `preload_speech` (added 2026-11-08, a TRIAL:
+    operator, option A, "keep every model Ask uses resident on the card";
+    "The load all is a test"; "Preload the speech related models by
+    default"): the worker holds the models the question path uses pinned
+    and loaded (app/resident.py) — the chat, translation and reranking
+    models and the encoders of every collection whose embed is on-demand,
+    all or p2p under the first, the `[speech]` models under the second.
+    False is the node as it was before the trial; both default true for
+    the trial, and the switch is the way back."""
     load_timeout_s: int = 120
+    keep_ask_resident: bool = True
+    preload_speech: bool = True
 
 
 @dataclass(frozen=True)
@@ -502,8 +514,14 @@ def _load_one(path: Path) -> PlatformConfig:
     models_raw = raw.get("models", {}) or {}
     if not isinstance(models_raw, dict):
         raise schedule_mod.ScheduleError("models must be a table (07 §7.8)")
+    for key in ("keep_ask_resident", "preload_speech"):
+        if not isinstance(models_raw.get(key, True), bool):
+            raise schedule_mod.ScheduleError(
+                f"models.{key} is true or false, got {models_raw[key]!r} (07 §7.8)")
     models = ModelsConfig(load_timeout_s=_positive_int(
-        models_raw, "load_timeout_s", ModelsConfig().load_timeout_s))
+        models_raw, "load_timeout_s", ModelsConfig().load_timeout_s),
+        keep_ask_resident=models_raw.get("keep_ask_resident", True),
+        preload_speech=models_raw.get("preload_speech", True))
 
     speech = _speech(raw.get("speech", {}) or {})
 

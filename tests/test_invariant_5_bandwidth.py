@@ -50,6 +50,7 @@ EXEMPT: dict[str, str] = {
     "app/speech.py": f"{MODEL_CALLS} — the speech model and its voice profiles",
     "app/transcribe.py": f"{MODEL_CALLS} — the speech-to-text model and LocalAI's voice-activity /vad",
     "app/voice.py": f"{MODEL_CALLS} — the model server's /v1/models, for `node speech show`",
+    "app/resident.py": f"{MODEL_CALLS} — the speech models' one-request preload",
 }
 
 _NET_BINARIES = {"git", "rsync", "curl", "wget", "ssh", "scp", "sftp", "aria2c"}

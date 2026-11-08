@@ -19,7 +19,10 @@ joins the warm in flight.
 NOT a keep-alive (option C, not chosen): a model evicted later, under
 embedding load, is loaded again by the question that needs it, as before.
 NOT the query encoders: 4-8 s cold, and the one gutenberg embeds with is
-usually loaded anyway.
+usually loaded anyway. Since 2026-11-08 the keep-alive exists, as a trial,
+in the WORKER (app/resident.py, operator option A: "keep every model Ask uses
+resident on the card"): these models and the query encoders, pinned and
+loaded; this web-side warm is unchanged beside it.
 
 A restart is seen as the server going unreachable and coming back
 (`/system` answering None, then ids): LocalAI's `/system` carries no start

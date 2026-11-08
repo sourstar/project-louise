@@ -307,6 +307,9 @@ louise node
   speech set [--stt M] [--vad M] [--tts M] [--voice V]                 the models into `[speech]`, every other line of the file kept; an empty value removes one, and its
                                                                        voice is no longer offered; nothing given is exit 2, and a file the result would not load is
                                                                        refused, unchanged (exit 2)
+  resident show                                                        the models the worker keeps on the card for Ask (a trial): `[models] keep_ask_resident` and
+                                                                       `preload_speech` (§7.8), the node's mode and whether it holds, each model with its roles,
+                                                                       collections, loaded and pinned state and holders; read-only (added 2026-11-08, operator)
 
 louise dev                                                             operator instruments; read-only unless the line says otherwise
   schedule-report      what the worker spent its rounds on; --gpu [--minutes N]: the card's busy, gaps and who held it, per minute;
@@ -986,6 +989,29 @@ reader needs at the command line:
   (§7.8), not the database: the page offers what the file says at its next
   load, with no restart. The browser opens a microphone only for a page
   reached over https or at localhost; `show` says so.
+- **`node resident show`, and the resident set.** *Added 2026-11-08, a
+  TRIAL* (operator, option A: "keep every model Ask uses resident on the
+  card"; "The load all is a test"; "If embedding is set on all or on demand
+  preload the model. Preload the speech related models by default.";
+  app/resident.py). The worker holds, pinned in LocalAI and loaded, the
+  models a question meets: the chat model (CHAT_URL), the translation model
+  (TRANSLATE_URL), the reranker every served collection names, the encoders
+  — document and query model — of every served collection whose embed is
+  `on-demand`, `all` or `p2p`, and the `[speech]` models. The set is the
+  system's, from the resolutions the question path itself uses; nobody
+  types it (RULE 2). A collection refused, paused (`node pause
+  <collection>`) or on `off` is not in it: its query encoder loads at its
+  first search and is unloaded when idle, as before. One holder (`worker
+  resident`, app/model_pins.py), renewed every minute; a model that leaves
+  the set is given back alone, its pin state before restored; a model not
+  loaded is loaded, one at a time, each bounded by its load bound. Paused or
+  seed-only — the node's mode or a profile's — releases the holder and the
+  worker unloads as before ("the node suspended because the operator needs
+  the GPU", 2026-10-23); running and acquire-only hold it (a profile never
+  limits a query). Two switches in `[models]` (§7.8), both true for the
+  trial: `keep_ask_resident` (everything but speech) and `preload_speech`;
+  both false is the node as it was. `show` reads them, the mode, the set,
+  and asks the model server what is loaded and pinned; it writes nothing.
 - **`node checkpoint`.** *Added 2026-11-07* (operator: "when the limit of
   usage approaches, and you are going to be frozen for more than 2 hours,
   put all the developments on hold and resume the last working state before
@@ -1708,6 +1734,14 @@ variable, a file, a log line or a message.
              # (app/model_loads.json, docs/notes/model-profile.md), this is every other's. A load past it is a
              # deferral (embedding) or a fallback that says "model loading took longer than N s" (05 §5.6)
              # (added 2026-10-09)
+             keep_ask_resident = true                   # A TRIAL (operator, 2026-11-08: "keep every model Ask uses
+             # resident on the card"; "The load all is a test"): the worker holds pinned and loaded the chat,
+             # translation and reranking models and the encoders of every served collection on on-demand, all or
+             # p2p (app/resident.py; §7.3 `node resident show`); false: none held, and the worker unloads an idle
+             # encoder of a collection that does not embed everything, as before (2026-10-14)
+             preload_speech = true                      # the [speech] models held and loaded the same way
+             # (operator, 2026-11-08: "Preload the speech related models by default"); false: loaded at their
+             # first use and pinned while used, as before. Paused or seed-only releases both (added 2026-11-08)
 [speech]     stt_model = "whisper-large-v3"   vad_model = "silero-vad"   tts_model = "omnivoice-cpp"
              tts_voice = "localai://voice-profiles/1c834741"
              # the Ask page's voice, on CHAT_URL's model server (§7.4 "Speech"; added 2026-11-07): speech to text,
