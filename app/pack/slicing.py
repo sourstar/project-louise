@@ -389,6 +389,17 @@ def neuris_slice(doc: CanonicalDoc, native_id: int) -> str:
     construction (plugins/neuris: the id sorts by the point in time)."""
     year = str((doc.extra or {}).get("point_in_time") or "")[:4]
     return f"year={year if year.isdigit() else 'unknown'}"
+def eurlex_slice(doc: CanonicalDoc, native_id: int) -> str:
+    """legal-collections-nemotron.md, "EU languages": the language — each a
+    slice a node fetches and embeds on its own — then the CELEX type and
+    the year of the id's day (an original's OJ publication, a
+    consolidation's date). Read from the record's own `language` and
+    `celex` and from the id, so `slice_hint` (the unit's path and the id)
+    agrees by construction (app/plugins/eurlex/source.py `slice_name`)."""
+    from ..plugins.eurlex.source import slice_name
+    x = doc.extra or {}
+    return slice_name(str(x.get("language") or doc.language or "und"), str(x.get("celex") or ""),
+                      int(native_id))
 
 
 SCHEMES: dict[str, SliceScheme] = {
@@ -428,6 +439,15 @@ SCHEMES: dict[str, SliceScheme] = {
         keys=("year",), records_per_shard=50,
         describe={"keys": ["year"], "year": {"field": "extra.point_in_time", "bin": "year"}},
         slice_of=neuris_slice),
+    # one version of one act in one language; parts of about 50 versions,
+    # Normattiva's measure for the same grain (review §3.7)
+    "eurlex": SliceScheme(
+        keys=("lang", "type", "year"), records_per_shard=50,
+        describe={"keys": ["lang", "type", "year"],
+                  "lang": {"field": "extra.language", "rule": "the language the Formex text states (LG.DOC)"},
+                  "type": {"field": "extra.celex", "rule": "the CELEX type letters after sector and year"},
+                  "year": {"field": "native_id", "bin": "the year of the id's day"}},
+        slice_of=eurlex_slice),
 }
 
 # one record per origin FILE (app/plugins/legi): by kind, then by the year
@@ -494,6 +514,13 @@ def slice_hint(plugin_name: str, row, context: FamilyContext | None = None) -> s
         if plugin_name == "neuris":
             from ..plugins import eli
             return f"year={eli.id_day(int(row['native_id'])) // 10000:04d}"
+        if plugin_name == "eurlex":
+            from pathlib import PurePath
+
+            from ..plugins.eurlex.source import slice_name
+            unit = PurePath(str(row["path"]))
+            lang = unit.parent.parent.name.partition("=")[2]
+            return slice_name(lang, unit.name, int(row["native_id"])) if lang else None
         if plugin_name == "pubmed":
             from ..plugins.pubmed import pack as pubmed_pack
             from ..plugins.pubmed.source import split_locator

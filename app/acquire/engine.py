@@ -26,6 +26,7 @@ from ..plugins.base import LicenseClass
 from ..transfer import pool as transfer_pool
 from ..transfer.bucket import Priority
 from ..transfer.manager import Direction, get_manager
+from . import cellar
 from . import checksum
 from . import claim as claim_mod
 from . import export_job
@@ -203,7 +204,12 @@ def _list_and_filter(spec: AcquisitionSpec, profile: str,
         for endpoint in spec.endpoints:
             _stop_check(stop, f"before listing {endpoint.url}")
             with _listing_bound(stop, priority):
-                candidates.extend(updatefiles.listing(transport, endpoint, spec))
+                if spec.listing is not None:
+                    # an origin whose inventory is a query (Cellar's SPARQL,
+                    # app/acquire/cellar.py), asked for this profile only
+                    candidates.extend(spec.listing(endpoint, spec, profile_filter))
+                else:
+                    candidates.extend(updatefiles.listing(transport, endpoint, spec))
     for f in candidates:
         if f.rel_path not in seen:
             seen.add(f.rel_path)
@@ -875,6 +881,24 @@ def _export_fetch(endpoint, f: RemoteFile, collection, spec: AcquisitionSpec,
                         size=size, digest=digest, moved=size, seconds=elapsed)
 
 
+def _cellar_fetch(endpoint, f: RemoteFile, collection, spec: AcquisitionSpec,
+                  manager, endpoint_key: str) -> _FileResult:
+    """A Cellar unit (app/acquire/cellar.py): its notice and Formex items by
+    content negotiation, landed whole in the unit's directory, the notice
+    — the `rel_path` the listing names — last. The engine records the
+    notice's row; the listing's date of the work is what the next pass
+    compares (`_is_pending`). Raises as the normal path raises."""
+    unit = cellar.unit_of(f)
+    dest = collection.corpus_dir / f.rel_path
+    started = time.monotonic()
+    got = cellar.fetch_unit(endpoint.url, unit["celex"], unit["lang"], dest.parent)
+    elapsed = time.monotonic() - started
+    manager.record_throughput(endpoint_key, got.moved, elapsed)
+    digest = checksum.digest_and_verify(dest, spec.checksums)
+    return _FileResult(remote=f, endpoint_url=endpoint.url, status="fetched",
+                        size=dest.stat().st_size, digest=digest, moved=got.moved, seconds=elapsed)
+
+
 def _fetch_one_file(transport, endpoint, f: RemoteFile, collection,
                      spec: AcquisitionSpec, manager, endpoint_key: str) -> _FileResult:
     # a file listed in the update directory is requested from it (09 §9.17
@@ -893,6 +917,9 @@ def _fetch_one_file(transport, endpoint, f: RemoteFile, collection,
         # a file the origin builds on request: its own path, start to end
         if export_job.is_export(f):
             return _export_fetch(endpoint, f, collection, spec, manager, endpoint_key)
+        # a unit the origin serves by content negotiation: its own path too
+        if cellar.is_unit(f):
+            return _cellar_fetch(endpoint, f, collection, spec, manager, endpoint_key)
         # a zip the origin rebuilds in place: its own directory says what
         # moved, before any size comparison — a rebuild of the same size is
         # caught too
@@ -1227,6 +1254,8 @@ def _run_acquisition_claimed(con, collection, spec: AcquisitionSpec, profile: st
     if spec.layout == "one-dir-per-doc":
         docs_total = len({f.rel_path.split("/", 1)[0]
                           for f in louise_files if "/" in f.rel_path})
+    elif spec.layout == "one-file-per-doc":
+        docs_total = len(louise_files)
     db.set_control(con, LISTING_KEY, json.dumps({
         "files_total": len(louise_files),
         "bytes_total": sum(f.size or 0 for f in louise_files),

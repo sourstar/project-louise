@@ -4984,10 +4984,13 @@ def _member_origin(codex):
     (app/acquire/member_origin.py) or its documents' files
     (app/acquire/file_origin.py): `_reparse_from`, `_origin_unit_from` and
     `_weigh_from` share its listings and its temporary base."""
-    from app.acquire import file_origin, member_origin
+    from app.acquire import cellar, file_origin, member_origin
     key = getattr(codex, "collection_id", id(codex))
     if key not in _member_origins:
-        _member_origins[key] = member_origin.for_codex(codex) or file_origin.for_codex(codex)
+        # Cellar's units by content negotiation (app/acquire/cellar.py), after
+        # the zip members and the mirror trees
+        _member_origins[key] = (member_origin.for_codex(codex) or file_origin.for_codex(codex)
+                                or cellar.origin_for_codex(codex))
     return _member_origins[key]
 
 

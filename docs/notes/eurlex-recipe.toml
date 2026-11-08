@@ -1,0 +1,128 @@
+# EUR-Lex — the law of the European Union, every version of every act, every
+# official language as a slice (app/plugins/eurlex; docs/notes/legal-fr-de-eu.md
+# §4; docs/notes/legal-collections-nemotron.md). DRAFT, 2026-11-08: nothing is
+# created until the workflow runs ON THE NODE.
+#
+# HOW IT IS MADE: case E of docs/notes/new-collection.md, "a second
+# collection in an existing space" — legi's, the shared legal space on
+# Nemotron-3-Embed-1B (operator, 2026-11-08: legi, neuris and eurlex in ONE
+# space). The space block below is byte-identical in the three legal recipes;
+# `--space-from legi` holds this recipe to legi's space by `space_id`, and
+# the CPU reference is copied, never computed twice. Dry run first:
+#
+#   louise hold collection new eurlex --recipe /config/recipes/eurlex-recipe.toml \
+#       --name eurlex --space-from legi --cpu-model vega-nemotron-3-embed-1b-cpu --dry-run
+#   louise hold collection new eurlex --recipe /config/recipes/eurlex-recipe.toml \
+#       --name eurlex --space-from legi --cpu-model vega-nemotron-3-embed-1b-cpu
+#
+# (the exact flags are fixed by the case-E build; case E is not built yet.)
+#
+# THE COLLECTION FILE (07 §7.8) names the languages this node holds and
+# embeds. Each language is a slice the origin delivers whole (`lang=<code>`,
+# the acquisition spec's slice_profiles), so a node fetches only the
+# languages in `slices` and the encoder spends only on `embed_slices` (D2 →
+# A: the four of the national collections and the EU's working language).
+# Adding a language later is an edit of these two lists: nothing held is
+# fetched again, nothing is re-created.
+#
+#   # /config/collections/eurlex.toml
+#   codex = "<the collection_id `new` prints>"
+#   title = "EUR-Lex"
+#   slices = ["lang=en", "lang=fr", "lang=de", "lang=it"]
+#   embed_slices = ["lang=en", "lang=fr", "lang=de", "lang=it"]
+#
+# OWED FROM THE NODE before `new` (legal-fr-de-eu.md §7, step 1–2; the
+# plugin's docstring):
+#   * the SPARQL counts per year and language, and the busiest start-of-
+#     validity day (the id's 45 bits of hash are checked against it);
+#   * the acts with no Formex manifestation per language (not in the slice:
+#     stated on the card);
+#   * the acts that reproduce third-party material (§4.7): the operator's
+#     choice, a yellow slice or a written pruning rule, once the list exists;
+#   * a live branch notice of an act: the predicates for repeal and
+#     correction, and the end-of-validity / in-force pair the closures read;
+#   * the 300 Multiple Choices body as the probe logged it;
+#   * the EUR-Lex legal notice's bytes, if the class is ever tightened (a
+#     green collection records no terms text).
+
+[descriptive]
+title = "EUR-Lex — the law of the European Union, every version, every language"
+summary = "Every act of the Official Journal (sector 3) and every consolidated version (sector 0) that Cellar holds in Formex, each version of each act in each official language its own record, searchable as of any date; each language a slice a node holds and embeds on its own. Only the Official Journal is authentic; consolidated texts have no legal effect."
+
+[space]
+dim = 2048
+dtype = "f16"
+ctx = 8192
+cut = "tokens"
+pooling = "mean"
+normalise = true
+exactness = "exact"
+epoch = "0"
+evaluation = ""
+# tolerance: measured by `new`, never typed
+
+[space.calibration]
+set = "sha256:7d06a2f6a4a773da01a517cb30571cac421753df3e30b20fca4716e5441fbf0f"
+
+[space.calibration.quorum]
+n = 16
+min_pass = 12
+
+[space.document]
+instruction = "passage: "
+
+[space.query]
+instruction = "query: "
+
+[space.encoder]
+weights = "sha256:09596cedbdf2a0d164b37083794632be55dcb2aa2abcf02fb995dfdccbecbf2c"
+label = "nvidia/Nemotron-3-Embed-1B-BF16 (c0c9fea9; f16 GGUF, llama.cpp 3f8af15a; vega-nemotron-3-embed-1b)"
+# [space.encoder.engine]: read on the node with `louise hold embedder run --encoder http://192.168.178.10:30286 --api vega --model vega-nemotron-3-embed-1b`; `new` holds the endpoint to it.
+
+# The ONGOING work per month, in tokens: NOT MEASURED. A placeholder until
+# the SPARQL inventory's modification dates over a month are counted on the
+# node (OWED), for the four languages embedded, carried by chunk hash across
+# versions (template §6). Replace it with the measurement before `new`.
+[work]
+tokens = 60000000
+per = "P1M"
+
+[origin]
+form = "Cellar by content negotiation on /resource/celex/<CELEX>, per act version and language: the Formex 4 manifestation (every item, the body picked by the wrapper's DOC.MAIN.PUB name, never by order) and the CDM branch notice; the inventory by SPARQL in windows of one CELEX year, counted; not XHTML, which carries a layout where Formex carries the structure, not the Data Dump (in force only, no consolidations), not the SOAP service (registration, a quota) (legal-fr-de-eu.md §4.1, §7.1)"
+unit = "file"
+clock = "Europe/Luxembourg"
+cutoff_rule = "record-date"
+jurisdiction = "EU"
+
+# The spec is the plugin's (app/acquire/specs.py EURLEX_SPEC): the SPARQL
+# listing (app/acquire/cellar.py), each language its own profile, two
+# connections at most, the listing compared with what is held by each work's
+# last modification.
+
+# GREEN: CC BY 4.0 for content and consolidated texts, CC0 for metadata
+# (Decision 2011/833/EU; C(2019) 1655). No terms text is pinned for a green
+# collection; the third-party exception (§4.7) is OWED above.
+[license]
+class = "green"
+
+[validation]
+checks = ["roots", "records", "chunks", "records-vs-origin", "license", "signature", "calibration", "vectors-sample"]
+required = []
+
+[validation.sample.records]
+shards = "0.05"
+
+[validation.sample.chunks]
+shards = "0.05"
+
+[validation.sample."vectors-sample"]
+shards = "0.05"
+
+[validation.sample."records-vs-origin"]
+shards = "0.01"
+
+# Layers (`akn_article`, the shared legal space's chunker: one chunk per
+# recital, article and annex), slicing (`eurlex`: language, CELEX type and
+# year, 50 versions a part) and the profile (the ELI implementation and the
+# validity axis, one record per version per language) are the plugin's
+# defaults (app/plugins/eurlex/source.py).
