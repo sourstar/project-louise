@@ -931,23 +931,29 @@ def _possessed_vectors(con, collection, row, chunks) -> dict:
     try:
         from app.share import possession
         root = collections_mod.louise_root() / "collections"
-        # FIRST whether any accepted bundle holds the record: most records of
-        # most collections are held by none, and then nothing is looked up
-        held = possession.index(root, collection.name, codex, con)
+        # the POSSESSION OF THE RECORD'S PART alone (`possession.holding`):
+        # the whole collection's index was ~680 B a uid held, 25 GiB for
+        # pubmed, built on the first embed after a start and kept (the worker
+        # OOM-killed every 3–6 min, 2026-11-08). FIRST whether an accepted
+        # bundle holds the record: most records of most collections are held
+        # by none, and then nothing more is looked up
+        found = possession.holding(root, collection.name, codex, con, row["uid"], row["native_id"])
+        if found is None:
+            return {}
+        held, part_hash = found
         if row["uid"] not in held:
             return {}
         keys = row.keys() if hasattr(row, "keys") else ()
         # the record's hash in the current snapshot, as possession judges it:
         # the manifest's column is NULL on a peer that never filled it
-        # (Perugia: all 79,659 rows) — then read from the part the holding
-        # bundle names, never from the whole collection (pubmed: 40 M hashes
-        # per embed thread, the worker OOM-killed at 46 GB, 2026-10-30)
-        content_hash = (row["content_hash"] if "content_hash" in keys else None) \
-            or possession.record_hash_of(root, collection.name, held, row["uid"])
+        # (Perugia: all 79,659 rows) — then the part's, never the whole
+        # collection's (pubmed: 40 M hashes per embed thread, the worker
+        # OOM-killed at 46 GB, 2026-10-30)
+        content_hash = (row["content_hash"] if "content_hash" in keys else None) or part_hash
         if not content_hash:
             return {}
         return possession.held_vectors(root, collection.name, codex, con, row["uid"], content_hash,
-                                       [c["id"] for c in chunks])
+                                       [c["id"] for c in chunks], held=held)
     except Exception:   # noqa: BLE001 — any doubt embeds
         return {}
 
