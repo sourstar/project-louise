@@ -158,7 +158,19 @@ def test_the_command_runs_end_to_end_on_files(built, tmp_path, monkeypatch, caps
     art5 = built.articles(law)[0]["5"][0]
     monkeypatch.setattr(lp, "default_search",
                         lambda q, **kw: {"lists": [{"hits": [_hit(law, art5, rank=0)]}]})
-    assert lp.main(["run", "--out", str(out), "--collection", "normattiva", "--k", "5", "--no-reach"]) == 0
+    monkeypatch.setattr(lp, "settle_fn", lambda names: {n: True for n in names})
+    flags = ["run", "--out", str(out), "--collection", "normattiva", "--k", "5", "--no-reach"]
+    assert lp.main(flags) == 2, "no pilot read for these settings: refused (measuring.md §12)"
+    assert "no pilot read" in capsys.readouterr().err
+    assert lp.main(flags + ["--pilot", "3"]) == 0
+    said = capsys.readouterr().out
+    tag = said.split("--tag ")[1].split()[0]
+    pilot = (out / "runs" / "normattiva" / f"pilot-{tag}.md").read_text(encoding="utf-8")
+    assert QUESTIONS[0]["question"] in pilot and "GOLD" in pilot, "the reader sees the hits and which is gold"
+    assert not list((out / "runs").glob("*-run.json")), "a pilot is not a run"
+    assert lp.main(["pilot-ok", "--out", str(out), "--collection", "normattiva", "--tag", tag,
+                    "--by", "operator", "--note", "hits read, gold found"]) == 0
+    assert lp.main(flags) == 0
     runs = sorted((out / "runs").glob("*-run.json"))
     assert runs, "a run is written with the collection named"
     payload = json.loads(runs[-1].read_text(encoding="utf-8"))
@@ -218,3 +230,114 @@ def test_the_reranker_is_the_node_s_none_or_one_lent_and_only_inside_the_run(mon
         with pytest.raises(SystemExit):
             with lp.reranker_override(bad):
                 pass
+
+
+# ---- the pool (2026-11-08): one candidate set for the collections compared ---------------------
+
+def test_the_pool_is_the_text_legs_top_records_and_every_gold_record(built):
+    cov = lp.coverage(built, CORPUS, QUESTIONS)
+    gold = {int(k): lp.gold_from(v) for k, v in cov["gold"].items()}
+    law, sard = f"normattiva:{L306_ID}", gold[3].uid
+    seen = []
+
+    def text(q, *, collections, limit, as_of):
+        seen.append((q, limit, as_of))
+        return {"lists": [{"hits": [_hit(f"normattiva:{DEC_A_ID}", 0)]}]}
+    got = lp.pool(built, QUESTIONS, gold, depth=50, as_of="2025-01-01", search_fn=text)
+    assert {lp._native_of(law), lp._native_of(sard), DEC_A_ID} == set(got["native_ids"])
+    assert got["records"] == 3 and len(got["questions"]) == 2 and got["depth"] == 50
+    assert all(limit == 50 and as_of == "2025-01-01" for _q, limit, as_of in seen)
+    assert got["questions"][0] == {"index": 0, "text_records": 1, "gold_records": 1, "gold_found_by_text": 0}
+
+
+def test_the_text_search_takes_the_text_leg_alone(monkeypatch):
+    from app import query_service
+    from app.ask import results
+    modes = []
+    monkeypatch.setattr(query_service, "run_search",
+                        lambda names, q, k, mode, translate, **kw: modes.append(mode) or {"hits": []})
+    monkeypatch.setattr(results, "search", lambda q, *, run, **kw: run(["n"], q, 5, "hybrid", False))
+    lp.text_search("q", collections=["n"], limit=5, as_of=None)
+    assert modes == ["fts"], "no encoder decides the pool"
+
+
+def test_the_pool_prefilter_restricts_every_leg_through_the_filters_path_and_only_inside(monkeypatch):
+    from app import query_service
+    monkeypatch.setattr(query_service, "book_ids_for", lambda f: (lambda c: {2, 9}) if f else None)
+    stand_in = query_service.book_ids_for
+    with lp.pool_prefilter({1, 2, 3}):
+        assert query_service.book_ids_for(None)(object()) == {1, 2, 3}, "no filter: the pool"
+        assert query_service.book_ids_for({"type": "x"})(object()) == {2}, "a reader's filter still applies"
+    assert query_service.book_ids_for is stand_in, "restored after the run"
+    with lp.pool_prefilter(None):
+        assert query_service.book_ids_for is stand_in, "no pool restricts nothing"
+
+
+def test_enqueue_queues_only_what_waits_and_the_state_counts_the_pool(built):
+    from app import db
+    c = built.collection
+    con = db.connect(c)
+    ids = [int(r[0]) for r in con.execute("SELECT native_id FROM documents ORDER BY rowid")]
+    con.execute("UPDATE documents SET embed_done=1 WHERE native_id=?", (str(ids[0]),))
+    con.execute("UPDATE documents SET embed_done=-1 WHERE native_id=?", (str(ids[1]),))
+    con.commit()
+    con.close()
+    pool = ids[:3] + [999_999_999]
+    assert lp.pool_state(c, pool) == {"embedded": 1, "waiting": 1, "declined": 1, "absent": 1}
+    got = lp.enqueue(c, pool)
+    assert got["queued"] == 1
+    con = db.connect(c)
+    queued = [r[0] for r in con.execute("SELECT uid FROM embed_queue")]
+    con.close()
+    assert queued == [f"normattiva:{ids[2]}"], "a declined, an embedded and an absent record are not queued"
+
+
+def test_a_search_that_withheld_a_leg_stops_the_run_and_writes_nothing(built):
+    cov = lp.coverage(built, CORPUS, QUESTIONS)
+    gold = {int(k): lp.gold_from(v) for k, v in cov["gold"].items()}
+    withheld = {"lists": [], "legs_withheld": [{"collection": "normattiva", "leg": "vector",
+                                                "reason": "run not validated"}]}
+    with pytest.raises(lp.chat_eval.SearchWithheld, match="vector"):
+        lp.run(built, QUESTIONS, gold, k=5, search_fn=lambda q, **kw: withheld, traverse_fn=None)
+
+
+def test_a_pooled_run_waits_while_a_pool_record_is_not_embedded(built, tmp_path, monkeypatch, capsys):
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+    out = tmp_path / "pilot"
+    (out / "runs").mkdir(parents=True)
+    pq.write_table(pa.Table.from_pylist(CORPUS), out / "corpus.parquet")
+    pq.write_table(pa.Table.from_pylist(QUESTIONS), out / "questions-validation.parquet")
+    monkeypatch.setattr(lp, "_open", lambda name, root: (built.collection, built.con))
+    monkeypatch.setattr(lp, "settle_fn", lambda names: pytest.fail("settled before the pool was checked"))
+    (out / "runs" / "pool-p.json").write_text(json.dumps({"native_ids": [L306_ID]}), encoding="utf-8")
+    assert lp.main(["run", "--out", str(out), "--collection", "normattiva", "--pool", "p", "--no-reach"]) == 3
+    assert "0 embedded" in capsys.readouterr().err
+
+
+def test_the_pilot_takes_the_first_n_covered_of_every_category(built):
+    cov = lp.coverage(built, CORPUS, QUESTIONS)
+    gold = {int(k): lp.gold_from(v) for k, v in cov["gold"].items()}
+    assert lp.pilot_questions(QUESTIONS, gold, 1) == [0], "the first covered; question 1 is not covered"
+    cats = [{**q, "category": c} for q, c in zip(QUESTIONS, ("a", "a", "b", "b"))]
+    assert lp.pilot_questions(cats, gold, 1) == [0, 2]
+    assert lp.pilot_tag(reranker="from:gutenberg", k=20, pool_name="p", as_of=None).startswith(
+        "rerank-from-gutenberg-k20-pool-p-asof-now-code-")
+
+
+def test_two_runs_compare_question_by_question_and_other_questions_are_refused():
+    def run_of(name, scores, pool="p"):
+        rows = [{"index": i, "recall@10": r, "mrr@10": r, "ndcg@10": r} for i, r in enumerate(scores)]
+        n = len(scores)
+        return {"collection": name, "k": 20, "pool": pool, "per_question": rows,
+                "summary": {"recall@10": sum(scores) / n, "mrr@10": sum(scores) / n, "ndcg@10": sum(scores) / n,
+                            "seconds": {"mean": 0.1}}}
+    a, b = run_of("nemo", [1.0] * 30), run_of("dar", [0.0] * 30)
+    got = lp.compare(a, b)
+    assert got["questions"] == 30 and got["mrr@10"]["a_minus_b"] == 1.0 and got["mrr@10"]["p"] < 0.001
+    tie = lp.compare(a, run_of("same", [1.0] * 30))
+    assert tie["mrr@10"]["a_minus_b"] == 0.0 and tie["mrr@10"]["p"] == 1.0
+    with pytest.raises(SystemExit, match="pool"):
+        lp.compare(a, run_of("dar", [0.0] * 30, pool=None))
+    with pytest.raises(SystemExit, match="other questions"):
+        lp.compare(a, run_of("dar", [0.0] * 29))
