@@ -141,9 +141,27 @@ measured (published figures disagree).
     fileless row, claims and revised records; the plan; the flat heap);
     tests/test_possessed_vectors.py's mocks follow the new seam
     (`holding`).
-- **Not verified on the node yet:** what is held at the 16.8 GB. After the
-  deploy, the shares line gives Lance's caches beside RSS. Still open, by
-  estimate: the records reader keeps 64 part indexes
+- **Two regressions of the per-part change, then MEASURED HOLDING (München,
+  2026-11-08).**
+  - #416 OOM-looped the worker at start with pubmed paused. Its
+    `possession.current_snapshot` loaded the snapshot itself, so 65 embed
+    threads loaded pubmed's 709 MB file at once (93 GB). #419 made it ask
+    the shared single flight (`seeder.current_snapshot`).
+  - #419 still OOM-looped: anon-rss 23.2 GB 45 s after start, 2 restarts in
+    2 min. 42 of the 65 threads each decoded the SAME part's records on a
+    `_part_hashes_cache` miss, before the part's `share/part-uids` file
+    existed (wikipedia's and wikidata's first run).
+  - #421 put the per-part builds on one flight each (app/single_flight.py,
+    Go's singleflight): the part hashes, the part view, the bundle map and
+    the bundle vectors. It also streams the part decode.
+  - On 0975944: 5 min with pubmed paused, main RSS 1,349–1,658 MiB; 30 min
+    with pubmed running (15:21–15:50Z), 1,636 → max 3,638 MiB, flat from
+    minute 7. The cgroup ran 11.4–16.3 GB (the parse pool's children), with
+    0 restarts. Series: the node's /root/measure/rss5d.txt and rss30d.txt.
+  - The lesson, for the checklist: a cache whose miss is expensive is
+    filled by ONE caller. A bound on what it keeps does not stop N threads
+    from each building the same entry before any of them puts it.
+- **Still open, by estimate:** the records reader keeps 64 part indexes
   per process by COUNT (`pack.records._indexes`, ~190 B a uid: ~345 MiB of
   pubmed's parts, more for larger parts) — in the pool's children too; a
   `to_lance()` dataset (the index maintainer's) still makes a default
