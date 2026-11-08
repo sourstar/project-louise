@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<!-- 
+Lien vers un texte
+    @title Lien vers un texte
+    @root LIEN_TXT
+-->
+
+<!-- Racine du document -->
+<!ELEMENT LIEN_TXT (#PCDATA)>
+
+<!-- Numéro du texte -->
+<!ATTLIST LIEN_TXT num CDATA #REQUIRED>
+
+<!-- Identifiant interne du document. L'identifiant est également le nom du fichier xml. -->
+<!ATTLIST LIEN_TXT id CDATA #REQUIRED>
+
+<!-- Date d'entrée en vigueur du texte -->
+<!ATTLIST LIEN_TXT debut CDATA #REQUIRED>
+
+<!-- Date de fin de vigueur du texte-->
+<!ATTLIST LIEN_TXT fin CDATA #IMPLIED>
+

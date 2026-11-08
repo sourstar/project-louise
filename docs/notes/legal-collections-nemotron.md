@@ -116,6 +116,30 @@ These are the values, not the final TOML.
      stability, Cellar's counts per year and language, NeuRIS versions per
      act.
 
+## legi: built for case A (2026-11-08)
+
+Open question 3 is answered as the operator decided: one record per origin
+file, four kinds, validity on articles only. The plugin is
+`app/plugins/legi/`, the reference source `app/refs/legi.py`, the
+acquisition `LEGI_SPEC` with a directory-index listing, the recipe
+[`legi-recipe.toml`](legi-recipe.toml) (its `[space]` block is the shared
+one, loaded by `new`'s reader in `tests/test_legi_recipe.py`).
+
+- **Amendment, the id:** a LEGITEXT id names two files (`texte/version/`
+  and `texte/struct/`), so a text's key is the id qualified by that folder.
+  With the bare id the two collided on the real fixtures.
+- **Slicing:** by kind and year, with parts cut by content, so a version
+  the origin adds to a past year re-issues its own part.
+
+Owed from the node, never guessed:
+- DILA's index page, pasted raw (the reader takes Apache's and nginx's forms);
+- one member of the current baseline, against the 2017 fixtures;
+- the deletion lists' line format;
+- the personal-data warning, before the class is pinned;
+- Work-key stability, the busiest start day, what the ~241,000 empty ETATs are;
+- discovery's memory and time, and the baseline's pack build, over ~5.25 M members;
+- whether DILA drops a period's increments at its next baseline (`origin_versions`).
+
 ## Real fixtures found (GitHub)
 
 | origin | repository | commit | what | caveat |

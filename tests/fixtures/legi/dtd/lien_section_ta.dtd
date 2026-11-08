@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<!-- 
+Lien vers une section texte-article
+@title Lien vers une section texte-article
+@root LIEN_SECTION_TA
+-->
+
+<!-- Racine -->
+<!ELEMENT LIEN_SECTION_TA (#PCDATA)> 
+
+<!-- Date d'entrée en vigueur de la section -->
+<!ATTLIST LIEN_SECTION_TA debut CDATA #REQUIRED>
+
+<!-- Date de fin de vigueur de la section-->
+<!ATTLIST LIEN_SECTION_TA fin CDATA #REQUIRED>
+
+<!-- Niveau calculé de la section dans le sommaire du texte -->
+<!ATTLIST LIEN_SECTION_TA niv CDATA #REQUIRED>
+
+<!-- Identifiant interne commun à toutes les versions de la section -->
+<!ATTLIST LIEN_SECTION_TA cid CDATA #REQUIRED>
+
+<!-- dentifiant interne de la section -->
+<!ATTLIST LIEN_SECTION_TA id CDATA #REQUIRED>
+
+<!-- Adresse physique relative du document contenant la description de la section -->
+<!ATTLIST LIEN_SECTION_TA url CDATA #REQUIRED>
+
+<!-- Etat juridique de la section -->
+<!ATTLIST LIEN_SECTION_TA  etat CDATA #REQUIRED>

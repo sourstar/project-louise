@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<!--
+Definie un lien entrant ou sortant vers un texte ou un article Legifrance
+     @title Lien vers un texte ou un article
+     @root LIEN
+-->
+
+<!-- Racine du descripteur de lien -->
+<!ELEMENT LIEN (#PCDATA) >
+
+<!-- 
+     Numéro de l'article de loi si le lien porte sur un article (renvoi)
+   Format (exemple): L121-14-1 
+  121 -> 1er chapitre , 2nde section, 1ere sous-section
+  14  -> en lien avec les sous parties et modification
+  1   -> en lien avec les sous parties et modification
+-->
+<!ATTLIST LIEN num CDATA #REQUIRED>
+
+<!-- Identifiant interne de l'article ou du texte -->
+<!ATTLIST LIEN id CDATA #REQUIRED>
+
+<!-- Type du lien 
+Les valeurs possibles sont : ABROGATION, ABROGE, ADHESION, ADHERE, ANNULATION, ANNULE, APPLICATION, APPLIQUE, TRANSPOSITION, CITATION, CODIFICATION, CODIFIE, CONCORDE, CONCORDANCE, CREATION, CREE, DENONCIATION, DENONCE, DIRECTIVE_EUROPEENNE, DISJONCTION, DISJOINT, ELARGISSEMENT, ELARGIT, RENVOIT, RENVOI, EXTENSION, ETEND, MODIFICATION, DEPLACEMENT, MODIFIE, DEPLACE, PEREMPTION, PERIME, PILOTE_SUIVEUR, PUBLICATION, SARDE, TEXTE_SUITE, TRANSFERT, TRANSFERE, RATTACHEMENT, RATTACHE, RECTIFICATION, RECTIFIE, SUITE_PROCEDURALE, JURISPRUDENTIEL, CITATION_JURI_LEGI , PERIME_NVCC_IDCC, PEREMPTION_NVCC_IDCC, HISTO, TXT_SOURCE, SPEC_APPLI, TXT_ASSOCIE
+@example CITATION
+-->
+<!ATTLIST LIEN typelien CDATA #REQUIRED>
+
+<!-- Sens du lien  (source ou cible)
+    @hidden Liste de valeurs à preciser 
+-->
+<!ATTLIST LIEN sens CDATA #REQUIRED>
+
+<!-- Identifiant interne de la version d'origine du texte.  -->
+<!ATTLIST LIEN cidtexte CDATA #REQUIRED>
+
+<!-- Nature du texte.(CODE, LOI - non-exhaustif) 
+    @hidden Liste de valeurs à preciser 
+-->
+<!ATTLIST LIEN naturetexte CDATA #REQUIRED>
+
+<!-- Numéro du texte -->
+<!ATTLIST LIEN numtexte CDATA #REQUIRED>
+
+<!-- NOR du texte (identifiant de parution datant de 1986) -->
+<!ATTLIST LIEN nortexte CDATA #REQUIRED>
+
+<!-- Date de signature du texte -->
+<!ATTLIST LIEN datesignatexte CDATA #REQUIRED>

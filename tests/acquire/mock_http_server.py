@@ -132,6 +132,10 @@ class _Handler(BaseHTTPRequestHandler):
         if self._job_get(server, name):
             return
         path = server.root / name
+        if path.is_dir() and (path / "index.html").is_file():
+            # a directory's own index page, as a web server writes one
+            # (transport_https.list_index)
+            path = path / "index.html"
         with server.lock:
             server.request_counts[name] = server.request_counts.get(name, 0) + 1
             server.last_user_agent[name] = self.headers.get("User-Agent")
