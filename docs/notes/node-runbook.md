@@ -257,7 +257,7 @@ in `deploy/watchdog/README.md`).
   - `/v1/rerank`, `/v1/embeddings`.
   - VeGa requires a tag on every encoder input (`app/vega/client.tag_batch`); an
     untagged `/v1/embeddings` call is refused.
-- **WatchDog**: memory threshold 0.95 (operator 2026-11-08, the all-resident trial; 0.85 from 2026-10-23; `deploy/vega/stage/localai_settings.py`, idempotent).
+- **WatchDog**: memory threshold 0.95 (operator 2026-11-08, the all-resident trial; 0.85 from 2026-10-23; `deploy/vega/stage/localai_settings.py`, idempotent). Idle watchdog OFF (operator 2026-11-08: nothing evicted only for idleness, only when space is claimed); busy watchdog on.
   Above it LocalAI evicts the least recently used model.
 - **Pins**: nothing is pinned statically. Louise pins a model for the duration of its
   use and restores the prior state (`app/model_pins.py`); failed pin calls show in the

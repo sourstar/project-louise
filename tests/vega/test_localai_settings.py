@@ -11,14 +11,16 @@ _spec.loader.exec_module(settings)
 
 
 def test_the_reclaimer_threshold_is_the_operators():
-    assert settings.DESIRED == {"memory_reclaimer_enabled": True, "memory_reclaimer_threshold": 0.95}
+    assert settings.DESIRED == {"memory_reclaimer_enabled": True, "memory_reclaimer_threshold": 0.95,
+                                "watchdog_idle_enabled": False}
 
 
 def test_only_the_managed_keys_change():
-    current = {"memory_reclaimer_threshold": 0.68, "memory_reclaimer_enabled": True,
+    current = {"memory_reclaimer_threshold": 0.68, "memory_reclaimer_enabled": True, "watchdog_idle_enabled": True,
                "api_keys": ["k"], "p2p_token": "t", "watchdog_busy_timeout": "10m0s"}
     out = settings.merged(current)
     assert out["memory_reclaimer_threshold"] == 0.95
+    assert out["watchdog_idle_enabled"] is False and out["watchdog_busy_timeout"] == "10m0s"
     assert {k: v for k, v in out.items() if k not in settings.DESIRED} == \
         {k: v for k, v in current.items() if k not in settings.DESIRED}
     assert current["memory_reclaimer_threshold"] == 0.68, "the input is not modified"
