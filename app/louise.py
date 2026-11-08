@@ -125,8 +125,14 @@ def cmd_create(a) -> int:
         if a.encoder:                      # refused before anything is created
             model_keys(a.encoder, embed_model=keys["embed_model"],
                        query_model=keys["query_model"])
-        codex = col.create(a.root, cx.from_dict(spec))
-        print(f"held: {_write_held_file(a.root, codex, a.encoder, **keys)}",
+        # its NAME and its query side as given (2026-11-08: pubmed's parser-9
+        # re-creation — a whole Codex named "pubmed-<hex>", its MedCPT query
+        # endpoint dropped), and the MEMBERS it names copied from the held
+        # collection holding the same bytes (RULE 1; `complete_members`)
+        codex = col.create(a.root, cx.from_dict(spec), name=a.name)
+        for member, src in col.complete_members(a.root, codex):
+            print(f"member: {member} — from {src}", file=sys.stderr)
+        print(f"held: {_write_held_file(a.root, codex, a.encoder, a.query_encoder, **keys)}",
               file=sys.stderr)
         print(codex.collection_id)
         return 0
@@ -3050,6 +3056,15 @@ def cmd_dev_carry(a) -> int:
         out["keep"] = keep(a.root, to_name, producer, log=say)
     elif producer:
         say(f"[carry] then: keep only {producer}'s vectors in {to_name} (--yes)")
+    if a.yes:
+        # THE ACKNOWLEDGEMENT OUTLIVES THE SOURCE (2026-11-08): a yellow
+        # collection carried into another that pins the same terms text keeps
+        # this peer's record of it, as a re-creation does (`carry_ack`) — read
+        # peer-wide, the source's record lapsed with its forget
+        from app.hold import recreate
+        _, to_codex = col.resolve(a.root, to_name)
+        out["ack"] = recreate.carry_ack(a.root, from_name, to_name, to_codex)
+        say(f"[carry] licence acknowledgement: {out['ack']}")
     _print(out)
     return 0
 

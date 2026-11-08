@@ -107,19 +107,33 @@ live snapshot's 40 M lines and parses only those again:
 1. Deploy the image carrying parser 9. Check that the live pubmed's
    `hold check --checks records-vs-origin` still passes under it (it parses
    at 8).
-2. Create the new collection from the live pubmed's Codex, with
-   `parser.version` 9 and this image, exactly as gutenberg's parser 9 was
-   (docs/notes/v5-migration.md, "Gutenberg to parser 9"). Nothing else
-   changes: the space, the layers, the slicing, the origin.
-3. Pause pubmed. `louise dev carry pubmed <new> --rebuilt` (with `--copy`
-   where reflinks are available).
-4. `louise hold records build <new> --corpus <pubmed's origin> --records-from pubmed`:
+2. Create the new collection from the live pubmed's WHOLE Codex. Its
+   parser and its image change; nothing else does: the space, the layers,
+   the slicing, the origin, the licence. The members it names (the
+   calibration member, LICENSE-TERMS) are copied from the live pubmed and
+   checked against the new Codex (`collection.complete_members`, 2026-11-08):
+
+       python -c "import json,sys; c=json.load(open(sys.argv[1])); c['parser']['version']=9; \
+         c['toolchain']['platform_image']=sys.argv[2]; c.pop('collection_id',None); \
+         json.dump(c,open('/tmp/pubmed9.json','w'))" <root>/pubmed/shard/codex.json <deployed image digest>
+       louise hold collection create --recipe /tmp/pubmed9.json --name pubmed9 \
+         --encoder <url> --query-encoder <query_url> --api <api> --embed-model <m> --query-model <q>
+
+   The encoder flags are those of the live `collections/pubmed.toml`
+   `[encoder]`. The licence needs no new acknowledgement: one is of a terms
+   TEXT (04 §4.4), the new Codex pins the same `terms_sha256`, and this
+   peer's record of it acknowledges both.
+3. Pause pubmed. `louise dev carry pubmed pubmed9 --rebuilt --yes` (with
+   `--copy` where reflinks are available). It also copies pubmed's
+   `state/ack.json` into pubmed9, so the acknowledgement outlives the old
+   collection's forget.
+4. `louise hold records build pubmed9 --corpus <pubmed's origin> --records-from pubmed`:
    the log names how many lines are parsed again (~64 k plus what NCBI
    added since the 10-19 count). Then `hold snapshot create`.
-5. `louise dev carry pubmed <new> --reconcile --yes`: every document whose
+5. `louise dev carry pubmed pubmed9 --reconcile --yes`: every document whose
    `content_hash` did not move keeps its vectors, and the moved ones are
    reset to embed again.
-6. `hold check <new>`: records-vs-origin and vectors-sample, before use.
+6. `hold check pubmed9`: records-vs-origin and vectors-sample, before use.
 7. Resume. The worker embeds the moved documents (MedCPT). The old
    collection stays paused, and forgetting it is the operator's call, with
    its size.

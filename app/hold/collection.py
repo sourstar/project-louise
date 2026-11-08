@@ -1068,6 +1068,47 @@ def _write_own_calibration(codex: Codex, shard_dir_path: Path, embed,
                       query_vectors=query_vectors, pairs=pairs)
 
 
+def complete_members(root: Path, codex: Codex) -> list[tuple[str, str]]:
+    """The SHARD members a whole Codex names, for one written as it is
+    (`hold collection create --recipe codex.json`, 2026-11-08: pubmed's
+    parser-9 re-creation, the live Codex with its parser and image changed):
+    each copied from the held collection holding the same bytes (RULE 1) and
+    checked against THIS Codex, as a derived collection's are — the
+    calibration member (`carry_calibration`), LICENSE-TERMS (`write_terms`,
+    checked against the pin) and the slicing map (`write_slicing_map`).
+    A member already there is left. [(member, from)] for what was written;
+    CodexError where a member is named and no held collection holds it."""
+    import hashlib
+    from app.pack import slicing
+    from . import shard as shard_mod
+    d = shard_dir_of(root, name_of(root, codex.collection_id))
+    others = [(n, held) for n, held in _held(root) if held.collection_id != codex.collection_id]
+    done: list[tuple[str, str]] = []
+    cal_set = getattr(getattr(getattr(codex, "space", None), "calibration", None), "set", None)
+    if cal_set and not (d / shard_mod.calibration_paths(cal_set)[0]).is_file():
+        src = next((h for _n, h in others if _same_reference(codex, h)), None)
+        carry_calibration(root, codex, d, *([src] if src is not None else []))
+        done.append(("calibration", name_of(root, src.collection_id)))
+    want = codex.license.terms_sha256
+    if want and not (d / "LICENSE-TERMS").is_file():
+        for n, _h in others:
+            t = shard_dir_of(root, n) / "LICENSE-TERMS"
+            if t.is_file() and "sha256:" + hashlib.sha256(t.read_bytes()).hexdigest() == want:
+                write_terms(d, codex, codex.plugin, terms_path=t)
+                done.append(("LICENSE-TERMS", n))
+                break
+        else:
+            write_terms(d, codex, codex.plugin)
+            done.append(("LICENSE-TERMS", f"the {codex.plugin} plugin"))
+    fam = slicing.family_map_of(codex.slicing)
+    if fam and not (d / slicing.map_member(fam)).is_file():
+        src = next((n for n, _h in others if (shard_dir_of(root, n) / slicing.map_member(fam)).is_file()), None)
+        write_slicing_map(d, codex, (shard_dir_of(root, src) / slicing.map_member(fam)).read_bytes()
+                          if src else None)
+        done.append(("slicing map", src))
+    return done
+
+
 def _same_reference(a: Codex, b: Codex) -> bool:
     """Whether two Codices name the same calibration reference — the same
     encoder build over the same set, with the same resulting hashes. Then
