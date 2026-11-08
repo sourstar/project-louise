@@ -18,6 +18,106 @@ build at 12 cores, the GPU uncapped. The card's noise (operator): 0.2 sone
 idle, 3.1 sone at full load, coil whine ~0.9 sone; its fan range is being
 measured (published figures disagree).
 
+### 2026-11-08: the worker OOM-killed every 3–6 min — tantivy readers reloading on every commit, the possession index rebuilt for claims, the snapshot re-read, Lance's caches per connection
+
+- **The defect (the node, from 03:50):** the worker's main process grew to
+  ~16.8 GB anon RSS and the memcg (24 GiB) killed it every 3–6 min, ~150
+  kills, wikidata embedding almost nothing for 7 h; an earlier burst on
+  11-07 15:29 (13 kills, 12.6–15.8 GB) with pubmed paused — so not a
+  pubmed path alone.
+- **Measured on fixtures.** PubMed's update-file path (discovery with the
+  supersede rule and DeleteCitation, the pack built in the calling
+  process, rdf, fts) over a baseline and many update files, PMIDs revised
+  file after file: the Python heap is FLAT (tracemalloc) beyond the one
+  byte-budgeted read cache and ~1 KiB of per-container state a file; one
+  30,000-record pack build peaks at 11 MiB traced, 242 MB RSS. What grows
+  is NATIVE: every LanceDB connection the worker keeps — one per
+  collection, one per part of a split one — made its own Lance Session at
+  the library's defaults (6 GiB index cache + 1 GiB metadata cache), and
+  the metadata cache keeps a manifest per version committed. Through the
+  embed stage's own write path (held-row read, batched delete-then-insert,
+  the withdraw), three 100k-row tables: 380 → 1,665 MB RSS over 1,500
+  batches, accelerating; with one Session of 64 + 32 MiB, 387 → 389 MB.
+  Run side by side, 1,250 batches: 382 → 1,264 MB against 376 → 905 MB
+  under 1 GiB + 512 MiB, the caches at their budget. It is the metadata
+  cache (pure lancedb, 1,500 ops: 401 → 676 MB with it at 1 GiB, 404 →
+  461 MB at 32 MiB beside a 6 GiB index cache).
+- **The fix, Lance's own mechanism:** one `lancedb.Session` per process,
+  byte-bounded (`LANCE_INDEX_CACHE_BYTES`, `LANCE_METADATA_CACHE_BYTES`,
+  1 GiB each), passed to every connection `embeddings._conn` opens
+  (`embeddings.lance_session`; the library: "Sessions … can also be
+  re-used across multiple connections to share the same cache state").
+  The worker's shares line now says what they hold ("vector store caches
+  (this process) — X of 2048 MiB, N items"). Cost: none while the working
+  set fits; +10 % a batch at a 512 MiB metadata budget on a fixture of
+  thousands of uncompacted fragments.
+- **Tests:** tests/test_lance_session.py (every connection takes the one
+  Session; the same work keeps a bounded Session under its budget while a
+  default one grows past 10× it — both fail on the old code);
+  tests/test_pubmed_updatefiles_memory.py (8 update files, the path's
+  traced heap within 40 KiB of the second file's; an app-side leak of one
+  uid a ref fails it).
+- **The node's py-spy (pubmed alone, ~1 → 17–18 GB in ~2 min):** pubmed's
+  stages were not the active code; background threads were: the index
+  maintainer and the share fetch in `seeder.current_snapshot` →
+  `snapshot.load`, the stats publisher in the bundle listings (the
+  seeder's sync, the digest's entries) and in `Seeder.ensure` →
+  `torrent_publish.seed`.
+  `current_snapshot` had no cache at all: every call mapped the newest
+  file and hashed it whole. Measured on a pubmed-shaped snapshot (1,358
+  parts, a first delta of 40 M uids, 676 MiB): one load 1.2 s of CPU and
+  ~0 anon (the file is mapped, the delta left in it), three threads at once
+  2.2 s and +18 MB; the delta read ~2.8 GB anon (peak 3.1 GB) — and no
+  background caller reads it. **Now one load per file, shared:**
+  `seeder._shared` keys on the file's physical identity (path, inode, size,
+  mtime_ns), a single flight (a lock per key: the others wait for the one
+  load), one entry per SHARD tree; each caller gets a view of the one
+  header with a delta of its own (`LazyDelta.fresh`), so a delta read is
+  never held by the cache. Three threads: 0.00 s, +0 MB. The snapshot file
+  does not change while pubmed runs (only `hold snapshot create` writes it;
+  packs go to the derived cache, update files to the corpus).
+  tests/share/test_snapshot_shared.py: eight threads at once, one load and
+  one header (peak under 1.5 × one load's); re-stamped three times under
+  200 asks, at most four loads and one copy left; a delta read leaves with
+  its reader — all three fail on the old code.
+- **The node's memray (pubmed alone, 81 s, `--native`; allocated, not
+  held):** 73.45 GB under `tantivy.Index(...)` in `fts.get_index`, 6–7.5 GB
+  per rdf commit under the catalog's (`catalog._open`), 14.55 GB under
+  `possession._index_cold`, 8.6 GB under `snapshot.load` (the hash's
+  slices: ~12 loads).
+  - **tantivy:** the cache never misses (one Index per (collection, group),
+    tested over 40 batches); what runs under the constructor is its
+    reader, which tantivy-py opens on `OnCommitWithDelay` — a watcher
+    thread opening a new searcher over every segment after every commit
+    and merge, for a searcher the worker never reads (every read here calls
+    `reload()` first). Now `fts.manual_reader`: tantivy's own
+    `ReloadPolicy::Manual` (`config_reader`) on the text index's and the
+    catalog's handles. Not reproduced as growth on fixtures (100k
+    documents, 200 commits: 242 → 267 MB either way); tested as behaviour
+    (no reload behind the writer's back, an asked one sees the commit —
+    fails on the old code).
+  - **possession:** the fingerprint counted every coverage row, and a
+    neighbour's claim (a row with no acceptance, from each digest) changed
+    it, so the whole index was built again for a row it does not read. Now
+    over the accepted rows alone (count, max and sum of rowid, latest
+    acceptance); tests/share/test_possession_claims.py: thirty claims, no
+    rebuild, peak < 256 KiB; an acceptance or its withdrawal rebuilds (fails
+    on the old code). **NOT FIXED: its size.** The index is ~680 B a uid
+    held (measured: 200,000 uids, one bundle each; 971 B at the build's
+    peak) — 25 GiB for pubmed's 40 M, kept in the process memo for the
+    worker's life (the node's 11.54 GB "own" under `_index_cold`). The
+    first embed after a start builds it. A bounded form is a redesign:
+    per-part lookups (the record's part, the bundles filed under it through
+    `idx_coverage_shard`, a byte-budgeted cache of their `possession.json`),
+    or a compact array index (~35 B a triple, ~1.4 GB for 40 M).
+- **Not verified on the node yet:** what is held at the 16.8 GB. After the
+  deploy, the shares line gives Lance's caches beside RSS. Still open, by
+  estimate: the records reader keeps 64 part indexes
+  per process by COUNT (`pack.records._indexes`, ~190 B a uid: ~345 MiB of
+  pubmed's parts, more for larger parts) — in the pool's children too; a
+  `to_lance()` dataset (the index maintainer's) still makes a default
+  Session, for the length of its operation.
+
 ### 2026-11-08: the resident set preloaded within a measured budget — defect found and fixed
 
 - **The defect (the node, 03:25):** app/resident.py (#399) preloaded EVERY

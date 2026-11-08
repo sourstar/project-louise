@@ -90,13 +90,21 @@ def prefixes(root: Path, name: str, codex) -> list[str]:
 
 def _fingerprint(con, pre: Sequence[str], segments: Sequence[str] = ()) -> str:
     """ONE aggregate over the coverage table, whatever the number of
-    predecessors (a per-round cost must not grow with a list): the rows'
-    count, the highest rowid, the latest acceptance; and the prefixes and
-    segments the index reads by."""
+    predecessors (a per-round cost must not grow with a list), over the
+    ACCEPTED rows alone — the only ones the index reads: their count, the
+    highest and the sum of their rowids, the latest acceptance; and the
+    prefixes and segments the index reads by.
+
+    The aggregate covered every row until 2026-11-08, and a neighbour's
+    claim (`coverage.claim`, a row with no acceptance, recorded from each
+    digest) changed it: pubmed's whole index — every uid of every accepted
+    bundle — was built again for a claim it cannot hold (the node's memray:
+    14.55 GB allocated under `_index_cold` in 81 s, docs/notes/STATUS.md)."""
     h = hashlib.sha256(("|".join(segments) + "#" + "|".join(pre)).encode())
-    n, top, last, accepted = con.execute(
-        "SELECT COUNT(*), MAX(rowid), MAX(accepted_at), COUNT(accepted_at) FROM coverage").fetchone()
-    h.update(f"{n}|{top}|{last}|{accepted}".encode())
+    accepted, top, total, last = con.execute(
+        "SELECT COUNT(*), MAX(rowid), TOTAL(rowid), MAX(accepted_at) FROM coverage "
+        "WHERE accepted_at IS NOT NULL").fetchone()
+    h.update(f"{accepted}|{top}|{total}|{last}".encode())
     return h.hexdigest()
 
 

@@ -199,6 +199,9 @@ def test_the_search_path_loads_a_snapshot_once(tmp_path, monkeypatch):
     from app.share import seeder
     setup(tmp_path)
     tree = tmp_path / "pubmed" / "shard"
+    # a cold process: the setup's own reads went through the one shared
+    # load (`seeder._shared`, 2026-11-08), which would answer this one too
+    monkeypatch.setattr(seeder, "_SNAPS", type(seeder._SNAPS)())
     loads = []
     real = sn.load
     monkeypatch.setattr(sn, "load", lambda *a, **k: loads.append(1) or real(*a, **k))

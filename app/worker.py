@@ -5218,6 +5218,17 @@ def read_cache_line(stats: dict) -> str | None:
                         for n, r in sorted(readers.items())))
 
 
+def lance_cache_line(stats: dict | None) -> str | None:
+    """`embeddings.lance_cache_stats()` as one log line — Lance's index and
+    metadata caches of this process, under their one budget — or None
+    before any vector table was opened here."""
+    if stats is None:
+        return None
+    mib = 1 << 20
+    return (f"vector store caches (this process) — {stats['bytes'] / mib:.1f} of "
+            f"{stats['budget'] / mib:.0f} MiB, {stats['items']:,} items")
+
+
 def _log_shares(con, live_paths=None) -> None:
     """Publish what each collection actually GOT from each contended
     resource. Without this the fair share is an assertion; with it, a
@@ -5274,6 +5285,11 @@ def _log_shares(con, live_paths=None) -> None:
     cache_line = read_cache_line(backend.READ_CACHE.stats())
     if cache_line:
         db.log_event(con, "info", "sched", cache_line)
+    # ...and the VECTOR STORE's (app/embeddings.py `lance_session`): Lance's
+    # caches, native memory, one budget for every table this process opened
+    lance_line = lance_cache_line(embeddings.lance_cache_stats())
+    if lance_line:
+        db.log_event(con, "info", "sched", lance_line)
     # ...and what the units themselves now cost, which is what the sizes
     # above are derived from (app/sizing.py). A batch that drifts away from
     # BATCH_TARGET_S is visible here before it is visible as unfairness.

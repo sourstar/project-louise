@@ -200,6 +200,12 @@ class LazyDelta:
     def __repr__(self) -> str:
         return f"LazyDelta({self._path!s}, {self._end - self._start} bytes)"
 
+    def fresh(self) -> "LazyDelta":
+        """The same span, not read yet: what a caller holding a SHARED
+        snapshot gets, so a delta it reads is its own and leaves with it
+        (app/share/seeder.py `current_snapshot`)."""
+        return LazyDelta(self._path, self._start, self._end)
+
 
 @dataclass(frozen=True)
 class Snapshot:

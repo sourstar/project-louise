@@ -493,6 +493,24 @@ PARSE_IDLE_RELEASE_S = float(os.getenv("PARSE_IDLE_RELEASE_S", "600"))
 # unit just read is always kept, whatever the budget. Read at import, so a
 # spawned child takes it from the environment it inherits.
 READ_CACHE_BYTES = int(os.getenv("READ_CACHE_BYTES", str(256 << 20)))
+# THE VECTOR STORE'S CACHES, in bytes, PER PROCESS (app/embeddings.py
+# `lance_session`): Lance's own Session — its index cache (scalar and vector
+# index pages) and its metadata cache (manifests, file footers, deletion
+# files) — ONE for every connection the process opens. Each connection made
+# its own, at Lance's defaults of 6 GiB and 1 GiB: a collection, and each
+# part of a split one (wikipedia's languages, wikidata's families), up to
+# 7 GiB of the worker, and the metadata cache keeps a manifest PER VERSION
+# written, so it grew with every commit (measured 2026-11-08: through the
+# embed stage's own write path, 380 → 1,665 MB RSS over 1,500 batches on
+# three 100k-row tables; the worker OOM-killed at its 24 GiB cap every 3–6
+# min, docs/notes/STATUS.md). 1 GiB each: the metadata budget one table had
+# (Lance's default), now the whole process's; the index budget holds the
+# book_id indexes the stages read (pubmed's 40 M rows, estimated ~0.6 GB).
+# A budget below the working set re-reads manifests and footers: +10 % a
+# batch at 512 MiB on a fixture of thousands of uncompacted fragments,
+# measured beside the unbounded run. Read at import.
+LANCE_INDEX_CACHE_BYTES = int(os.getenv("LANCE_INDEX_CACHE_BYTES", str(1 << 30)))
+LANCE_METADATA_CACHE_BYTES = int(os.getenv("LANCE_METADATA_CACHE_BYTES", str(1 << 30)))
 
 # The local VECTOR INDEX (app/vector_index.py; pack-format.md §5, appendix
 # A). Without one every semantic query is a flat scan of the Lance table —
