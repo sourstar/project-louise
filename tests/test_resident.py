@@ -218,7 +218,6 @@ def test_paused_or_seed_only_releases_the_holder_and_running_holds_it_again(tmp_
     assert not out["holds"] and model_pins.held_by(resident.HOLDER) == set()
     assert not any(node.runner.pinned.values()), "every pin back to its state before"
     assert node.warmed == [], "nothing loaded while the operator has the GPU"
-    assert resident.kept() == frozenset()
     assert any(f"the node is {mode}" in t for _, t in node.said)
     node_state.set_worker_state("running")
     _beat([c])
@@ -248,7 +247,7 @@ def test_both_switches_off_hold_nothing_and_load_nothing(tmp_path, node):
     c = _with(_collection(tmp_path, "gutenberg"), "vega-4b", "lazy")
     out = _beat([c])
     assert out["held"] == [] and node.runner.calls == [] and node.warmed == []
-    assert resident.kept() == frozenset() and node.said == []
+    assert node.said == []
 
 
 def test_switched_off_while_held_gives_everything_back(tmp_path, node):
@@ -327,45 +326,66 @@ def test_warm_side_loads_the_side_a_search_asks(tmp_path, monkeypatch, isolated_
                     (SERVER, "vega-medcpt-article", "resident encoder (pubmed)")]
 
 
-# ---- the worker's unload paths ----------------------------------------------------
+# ---- the worker's unload paths (amended 2026-11-08: nothing unloaded for being idle) ----
 
-def test_neither_unload_path_unloads_a_resident_model(tmp_path, node):
-    """2026-10-14's rule unloaded an on-demand collection's encoder after the
-    start-up run check and once idle for IDLE_BEATS; a resident one stays."""
+def test_neither_unload_path_unloads_a_model_a_held_collection_names(tmp_path, node):
+    """"nothing is evicted only because it's idle, only if space is claimed"
+    (operator, 2026-11-08): resident or not, an idle encoder a held
+    collection names stays; a `vega-` model no held collection names goes."""
     lazy = _with(_collection(tmp_path, "gutenberg"), "vega-4b", "lazy")
-    node.held |= {"vega-4b", "vega-granite"}
-    _beat([lazy])
-    assert worker._release_embedder(lazy, others=[lazy]) is False
-    assert worker._sweep_unheld_embedders([lazy]) == ["vega-granite"], \
-        "a model no held collection names still goes"
-    assert "vega-4b" in node.held and node.unloads == ["vega-granite"]
+    off = _with(_collection(tmp_path, "wikipedia"), "vega-bge-m3", "off")
+    node.held |= {"vega-4b", "vega-bge-m3", "vega-granite"}
+    _beat([lazy, off])
+    assert worker._release_embedder(lazy) == [], "on-demand: resident, nothing given back"
+    assert worker._release_embedder(off) == [], "off: no pin of the set to give back"
+    assert worker._sweep_unheld_embedders([lazy, off]) == ["vega-granite"]
+    assert {"vega-4b", "vega-bge-m3"} <= node.held and node.unloads == ["vega-granite"]
+    assert node.runner.pinned.get("vega-bge-m3") is None, "the off collection's encoder: never pinned"
 
 
-def test_with_the_node_paused_the_sweep_behaves_exactly_as_before(tmp_path, node):
+def test_a_switch_to_off_gives_the_pin_back_at_once_and_unloads_nothing(tmp_path, node):
+    c = _with(_collection(tmp_path, "gutenberg"), "vega-4b", "lazy", reranker="rerank-bge")
+    shared = _with(_collection(tmp_path, "gutenberg-plates"), "vega-4b-plates", "lazy")
+    con = db.connect(c)
+    db.apply_desired_embed_mode(con, c)
+    _beat([c, shared])
+    assert node.runner.pinned["vega-4b"] is True and "vega-4b" in node.held
+    scope = db.get_scope(con)
+    scope["embed_mode"] = "off"                                    # the Library's switch
+    db.set_scope(con, scope)
+    assert worker._release_embedder(c, con, reason="the switch") == ["vega-4b"]
+    assert node.runner.pinned["vega-4b"] is False, "unpinned now, not at the next beat"
+    assert "vega-4b" in node.held and node.unloads == [], "and left loaded"
+    assert node.runner.pinned["rerank-bge"] is True, "its reranker is not its embed's"
+    assert node.runner.pinned["vega-4b-plates"] is True, "another collection's encoder stays"
+    msgs = [r[0] for r in con.execute("SELECT message FROM events WHERE stage='control'")]
+    assert any("vega-4b given back by the resident set on the switch" in m for m in msgs)
+    con.close()
+
+
+def test_with_the_node_paused_the_holder_goes_and_nothing_is_unloaded(tmp_path, node):
     """München, 2026-11-08: the worker sweeps embedders while paused. Paused,
-    the holder is released and the sweep unloads an idle on-demand encoder
-    as it always did."""
+    the holder is released, and the sweep unloads nothing a held collection
+    names — no active unload; an orphan still goes."""
     lazy = _with(_collection(tmp_path, "gutenberg"), "vega-4b", "lazy")
     full = _with(_collection(tmp_path, "wikidata"), "vega-nemotron", "all")
-    node.held |= {"vega-4b", "vega-nemotron"}
+    node.held |= {"vega-4b", "vega-nemotron", "vega-granite"}
     _beat([lazy, full])
-    assert worker._sweep_unheld_embedders([lazy, full]) == [], "running: resident"
     node_state.set_worker_state("paused")
-    assert resident.kept() == frozenset(), "paused: nothing protected, even before the next beat"
-    model_load.reset()
-    assert worker._sweep_unheld_embedders([lazy, full]) == ["vega-4b"]
-    assert "vega-nemotron" in node.held and "vega-4b" not in node.held, \
-        "the 'all' collection's encoder stays, as before"
     _beat([lazy, full])
-    assert model_pins.held_by(resident.HOLDER) == set()
+    assert model_pins.held_by(resident.HOLDER) == set() and not any(node.runner.pinned.values())
+    assert worker._sweep_unheld_embedders([lazy, full]) == ["vega-granite"]
+    assert {"vega-4b", "vega-nemotron"} <= node.held
 
 
-def test_switched_off_the_unload_paths_are_today_s(tmp_path, node):
+def test_switched_off_nothing_is_pinned_and_nothing_unloaded(tmp_path, node):
     node.platform.write_text('[models]\nkeep_ask_resident = false\n')
     lazy = _with(_collection(tmp_path, "gutenberg"), "vega-4b", "lazy")
     node.held.add("vega-4b")
     _beat([lazy])
-    assert worker._release_embedder(lazy, others=[lazy]) is True and node.unloads == ["vega-4b"]
+    assert node.runner.pinned == {} and node.warmed == []
+    assert worker._release_embedder(lazy) == [] and worker._sweep_unheld_embedders([lazy]) == []
+    assert node.unloads == [] and "vega-4b" in node.held
 
 
 def test_the_keeper_beats_at_once_reads_the_library_s_mode_and_gives_back_at_stop(tmp_path, node,

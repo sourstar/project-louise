@@ -1,74 +1,79 @@
 """Every model Ask uses kept on the card — A TRIAL (operator, 2026-11-08,
 option A: "keep every model Ask uses resident on the card"; "The load all is
-a test"; refined the same day: "If embedding is set on all or on demand
-preload the model. Preload the speech related models by default.").
+a test"), and its final rule the same day: "It applies to any collection, on
+demand or all embedding preloads the model. Chat, speech, rerankers, madlad
+are preloaded too, nothing is evicted only because it's idle, only if space
+is claimed."
 
 WHY. Two things took the question path's models off the card, and each cost
 the first question after a pause its load: LocalAI's idle watchdog (5 min)
 unloaded the chat model (~6 s), and the worker unloaded the embedders of the
 collections that do not embed everything (`worker._release_embedder`,
-2026-10-14; `worker._sweep_unheld_embedders`, IDLE_BEATS), so the first
+2026-10-14; `worker._sweep_unheld_embedders`' IDLE_BEATS), so the first
 search in gutenberg or wikipedia paid its query encoder's load. Those rules
 held because the card did not fit everything; measured by the node
 (München, 2026-11-07, live engine), with every model resident the B70 holds
-30,267 of 32,656 MiB (92.7 %), host RAM peak 41.6 of 63.4 GB — under the
-reclaimer's threshold of 0.95 (operator, 2026-11-08,
-deploy/vega/stage/localai_settings.py).
+30,267 of 32,656 MiB (92.7 %), host RAM peak 41.6 of 63.4 GB. Now NOTHING IS
+UNLOADED FOR BEING IDLE: LocalAI's idle watchdog is off (3a00b65), the
+worker's two unload paths unload no named model (amended 2026-11-08), and
+what goes, goes because space is claimed — LocalAI's reclaimer, past 0.95
+(9cd77b3; deploy/vega/stage/localai_settings.py).
 
-THE MECHANISM IS THE PIN (app/model_pins.py), not a second one. LocalAI's
-watchdog never evicts a pinned model, idle or under memory pressure
-(pkg/model/watchdog.go at 53cd6c5, the commit docs/notes/localai-bugs.md
-cites: `checkIdle` skips `pinnedModels` before it untracks, and
-`evictLRUModel`, the reclaimer's, skips them too). The worker holds the set
+THE MECHANISM IS THE PIN (app/model_pins.py), not a second one: the reclaimer
+never evicts a pinned model (pkg/model/watchdog.go `evictLRUModel` skips
+`pinnedModels`, at 53cd6c5 — the commit docs/notes/localai-bugs.md cites —
+v4.11.0 and v4.12.1; `checkIdle` skips them too). So a model of the set is
+never evicted, and a model outside it (an `off` collection's query encoder
+a search loaded) stays until its space is claimed. The worker holds the set
 as ONE holder, HOLDER, renewed every beat (SETTLE_BEAT_S, well inside
 model_pins.HOLDER_TTL_S) on a thread of its own, so a long run check never
 lets it go stale; a killed worker's holder is dropped by the next boot's
 `reconcile(boot=True)`, the booted worker holds the set again, and a worker
-that stops releases it (a stopped node holds nothing on the card). A model
-that leaves the set is released from the holder alone (`release_one`), its
-state before restored. A model of the set its runner does not list as loaded
-is LOADED (`_warm_all`) through its caller's own warm — `llm.warm`,
-`translate.warm`, `retrieval._warm_reranker`, `embeddings.warm_side` — or,
-for speech, one minimal request; every one through
-`model_load.ensure_loaded`, bounded by the model's load bound, one at a time,
-on one thread, never inside a transaction.
+that stops releases it (a stopped node pins nothing). A model that leaves
+the set is released from the holder alone (`release_one`), its state before
+restored — at the next beat, or at once for a collection switched to `off`
+(`forget`). A model of the set its runner does not list as loaded is LOADED
+(`_warm_all`) through its caller's own warm — `llm.warm`, `translate.warm`,
+`retrieval._warm_reranker`, `embeddings.warm_side` — or, for speech, one
+minimal request; every one through `model_load.ensure_loaded`, bounded by
+the model's load bound, one at a time, on one thread, never inside a
+transaction.
 
 THE SET IS THE SYSTEM'S (CLAUDE.md RULE 2), never a list typed — `wanted`,
 from the resolutions the question path itself uses:
 - the chat model: CHAT_URL / CHAT_MODEL, in LocalAI's dialect (llm.warm's
   condition);
-- the translation model: TRANSLATE_URL / TRANSLATE_MODEL;
+- the translation model (MADLAD): TRANSLATE_URL / TRANSLATE_MODEL;
 - each served collection's reranker that names its model
   (`collections.reranker_for`; RERANK_URL names none, and nothing can pin it);
 - each served collection's ENCODERS — the document model and the query
   model (`embeddings._side`) — where its embed mode, as the worker applies
   it (the Library's override, else the file), is on-demand, all or p2p
-  (`collections.EMBEDDING_MODES`); `off` is not preloaded: its query
-  encoder loads at its first search and is unloaded when idle, as before;
+  (`collections.EMBEDDING_MODES`); `off` is not preloaded nor pinned: its
+  query encoder loads at its first search and stays until space is claimed;
 - the speech models, `[speech]` stt_model, vad_model and tts_model, on the
   node's model server (app/voice.py `settings` and `server`).
 SERVED is the worker's: a collection its boot check did not refuse and
 `node pause <collection>` has not paused. `node freeze` keeps it served.
 
-THE SWITCHES, Tier 2 (invariant 10), platform.toml, both true by default for
-the trial — the switch is the way back:
+THE SWITCHES, Tier 2 (invariant 10), platform.toml, both true by default:
 
     [models]
     keep_ask_resident = true   # chat, translation, rerankers, encoders
     preload_speech = true      # the [speech] models
 
-Both false is the node as it was: nothing held, nothing loaded, and the
-worker's unload paths by their rules of 2026-10-14, which stand. Shown by
-`louise node resident show`; no dialog (RULE 2).
+False: that part is neither preloaded nor pinned. Nothing is unloaded for
+being idle whatever they say (the operator's rule is not the trial's).
+Shown by `louise node resident show`; no dialog (RULE 2).
 
 THE NODE'S MODE WINS. Paused or seed-only — the node's own, or a profile's
 `mode` (the stricter wins, node_state.runs) — is "the node suspended because
-the operator needs the GPU" (operator, 2026-10-23): the holder is released,
-nothing is loaded, and the unload paths run exactly as before. Running and
-acquire-only hold it: acquire-only embeds nothing for the corpus but serves
-every search, and a profile never limits a query — in the quiet windows
-"downloads, seeding and searches go on" and "the searches it serves run at
-full speed" (docs/notes/node-profiles-design.md decision 6).
+the operator needs the GPU" (operator, 2026-10-23): the holder is released
+and nothing is loaded; nothing is unloaded either. Running and acquire-only
+hold it: acquire-only embeds nothing for the corpus but serves every search,
+and a profile never limits a query — in the quiet windows "downloads,
+seeding and searches go on" and "the searches it serves run at full speed"
+(docs/notes/node-profiles-design.md decision 6).
 
 THE STANDARD ALTERNATIVE (CLAUDE.md, "Do not reinvent the wheel"): LocalAI's
 own preload (`LOAD_TO_MEMORY`) and a model config's `pinned: true`. Both are
@@ -91,6 +96,8 @@ HOLDER = f"{model_pins.WORKER}resident"
 #: the node modes (node_state.MODE_RUNS) under which the set is held
 HOLDING_MODES = frozenset({"running", "acquire-only"})
 ASK, SPEECH = "keep_ask_resident", "preload_speech"
+#: the roles a collection's embed mode decides (`forget`)
+ENCODER_ROLES = frozenset({"query encoder", "encoder"})
 #: one speech warm: a tenth of a second of silence, 16 kHz
 _SILENCE = 1600
 
@@ -127,8 +134,6 @@ class Resident:
 
 _lock = threading.Lock()
 _last_switches = Switches()
-#: the last beat's set, for the worker's unload paths (`kept`)
-_kept: frozenset[tuple[str, str]] = frozenset()
 #: the last beat's set by key, for the event log's changes
 _last: dict[tuple[str, str], Resident] = {}
 #: why the last beat held nothing, said once
@@ -145,9 +150,9 @@ def set_log(fn: Callable[[str, str], None]) -> None:
 
 def reset() -> None:
     """Forget the last beat (tests)."""
-    global _kept, _last, _last_why, _last_switches
+    global _last, _last_why, _last_switches
     with _lock:
-        _kept, _last, _last_why, _last_switches = frozenset(), {}, None, Switches()
+        _last, _last_why, _last_switches = {}, None, Switches()
 
 
 def switches() -> Switches:
@@ -272,15 +277,32 @@ def _speech_warm(server: str, model: str, kind: str, role: str) -> Callable[[], 
     return warm
 
 
-def kept() -> frozenset[tuple[str, str]]:
-    """(server, model) the worker's unload paths leave on the card: the last
-    beat's set while the node's mode still holds it — else nothing, and they
-    run by their rules of 2026-10-14 exactly."""
+def forget(collection: str) -> list[str]:
+    """`collection` was switched to `off` (`worker._release_embedder`): its
+    encoders leave the set now, not at the next beat — every model of the set
+    that only its encoder roles hold, given back (`release_one`), its state
+    before restored; nothing is unloaded. A model another collection or
+    another role still holds stays. Returns the models given back."""
+    gone: list[tuple[str, str]] = []
+    global _last
     with _lock:
-        got = _kept
-    if not got:
-        return got
-    return got if holds()[0] else frozenset()
+        last = dict(_last)
+        for key, r in list(last.items()):
+            if collection not in r.collections or not set(r.roles) <= ENCODER_ROLES:
+                continue
+            rest = tuple(n for n in r.collections if n != collection)
+            if rest:
+                last[key] = Resident(r.server, r.model, r.roles, rest, r.switch, r.warm)
+            else:
+                del last[key]
+                gone.append(key)
+        _last = last
+    for server, model in gone:
+        model_pins.release_one(server, model, HOLDER)
+    if gone:
+        _say("info", f"resident: released {', '.join(m for _, m in gone)} — {collection}'s embed is "
+                     f"off; unpinned, and loaded until LocalAI needs the space")
+    return [m for _, m in gone]
 
 
 def _loaded(r: Resident) -> bool | None:
@@ -295,7 +317,7 @@ def beat(served: Iterable[Any], *, embed_mode: Callable[[Any], str], state: str 
     """One beat of the worker's keeper: the set resolved, what left it
     released, every model in it held (renewed), the ones not loaded loaded
     behind (`_warm_all`). Returns what it did. Never raises past a model."""
-    global _kept, _last, _last_why
+    global _last, _last_why
     sw = switches()
     ok, why = holds(state)
     want = wanted(served, embed_mode=embed_mode, sw=sw) if ok else []
@@ -303,7 +325,6 @@ def beat(served: Iterable[Any], *, embed_mode: Callable[[Any], str], state: str 
     with _lock:
         before = dict(_last)
         said = _last_why
-        _kept = frozenset(by_key)
         _last = by_key
     # what left the set gives back its pin first: the card's memory before a load
     try:
@@ -388,9 +409,9 @@ def _warm_all(items: list[Resident], stop: Callable[[], bool]) -> None:
 
 def release() -> None:
     """The holder gives back every model (a worker that stops)."""
-    global _kept, _last
+    global _last
     with _lock:
-        _kept, _last = frozenset(), {}
+        _last = {}
     model_pins.release(HOLDER)
 
 

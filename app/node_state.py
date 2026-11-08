@@ -65,7 +65,10 @@ ENCODER_LEASE_TTL_S = 600.0
 #: Perugia an idle encoder whose HIP runtime busy-polls 2.8 cores was
 #: never unloaded, and a busy one read idle. The embeddings client writes
 #: one row per (server, model) after a request (rate-limited); the sweep
-#: unloads what nobody has asked for IDLE_BEATS beats and nobody leases.
+#: unloaded what nobody had asked for IDLE_BEATS beats and nobody leased —
+#: until 2026-11-08 (operator: "nothing is evicted only because it's idle,
+#: only if space is claimed"; worker._sweep_unheld_embedders). The rows are
+#: still written: when a model was last asked is what a later rule reads.
 _USE = ("CREATE TABLE IF NOT EXISTS encoder_use (server TEXT NOT NULL, model TEXT NOT NULL, "
         "last_used REAL NOT NULL, PRIMARY KEY (server, model))")
 
