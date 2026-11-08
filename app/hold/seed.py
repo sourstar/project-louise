@@ -57,11 +57,10 @@ def records_slicing(c: Codex) -> Any:
     what its absence below GRAPH_VERSION means (09 §9.5), so a version-9+
     Codex declaring it and an older one leaving it out hold the same parts
     (wikidata re-created in a version-11 space from its version-8 Codex,
-    2026-11-03); "parquet" is other parts."""
-    s = c.slicing
-    if not isinstance(s, dict) or s.get("container") != JSONL:
-        return s
-    return {k: v for k, v in s.items() if k != "container"} or None
+    2026-11-03); "parquet" is other parts. The rule is codex.parts_slicing's,
+    which the sister's own check reads too."""
+    from .codex import parts_slicing
+    return parts_slicing(c.slicing)
 
 
 def record_differences(a: Codex, b: Codex) -> list[str]:

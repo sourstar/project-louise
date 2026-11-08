@@ -923,6 +923,7 @@ def derive(root: Path, mother_id: str, *,
     sister = _replace(
         mother,
         version=version,
+        slicing=_slicing_at(mother.slicing, version),
         descriptive=descriptive if descriptive is not None else mother.descriptive,
         space=new_space,
         layers=new_layers,
@@ -985,6 +986,26 @@ def derive(root: Path, mother_id: str, *,
         _write_own_calibration(sister, shard_dir_path, embed, mother.modality,
                                key, now, embed_query, pairs=pairs)
     return sister
+
+
+def _slicing_at(slicing: Any, version: int) -> Any:
+    """Her mother's slicing, written at HER version (09 §9.3, §9.5):
+    `slicing.container` is declared exactly from GRAPH_VERSION, and its
+    absence below means JSONL — so a sister written at 9 or later of an older
+    mother states "jsonl" (her parts are her mother's: normattiva-nemo, a
+    version-11 sister of a version-4 mother, 2026-11-08), and one written
+    below 9 of a JSONL mother leaves it out. The same parts either way
+    (`seed.records_slicing`); a Parquet mother's sister below 9 is refused,
+    since that version cannot say it."""
+    has = isinstance(slicing, dict) and "container" in slicing
+    if version >= cx.GRAPH_VERSION and not has:
+        return {**(slicing if isinstance(slicing, dict) else {}), "container": cx.JSONL}
+    if version < cx.GRAPH_VERSION and has:
+        if slicing["container"] != cx.JSONL:
+            raise CodexError(f"derive: her mother's parts are {slicing['container']!r}, and a sister "
+                             f"written at version {version} cannot declare a container (09 §9.5)")
+        return {k: v for k, v in slicing.items() if k != "container"} or None
+    return slicing
 
 
 def _names_encoder(codex: Codex) -> str:

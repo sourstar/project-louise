@@ -339,3 +339,58 @@ def test_a_create_that_fails_takes_its_placement_back(tmp_path, steps, monkeypat
     monkeypatch.setattr(louise, "create_from", refused)
     assert _new_at(root, _recipe(tmp_path)) == 2
     assert not (root / "wd").exists() and not (build / "lance" / "wd").exists()
+
+
+# ---- held off the worker (München, 2026-11-08: legi's gate lost her writer to the worker) ----
+
+def test_the_new_collection_is_paused_from_before_her_file_until_her_gate(tmp_path, steps, monkeypatch):
+    from app import node_state
+    seen = []
+    made = louise.create_from
+
+    def create(root, plugin, recipe, **kw):
+        seen.append(("create", "wd" in node_state.paused_collections()))
+        return made(root, plugin, recipe, **kw)
+
+    def gate(a):
+        seen.append(("gate", "wd" in node_state.paused_collections()))
+        return 0
+    monkeypatch.setattr(louise, "create_from", create)
+    monkeypatch.setattr(louise, "cmd_embedder_check", gate)
+    assert _new(tmp_path, _recipe(tmp_path)) == 0
+    assert seen == [("create", True), ("gate", True)], "no round of the worker can take her writer"
+    assert "wd" not in node_state.paused_collections(), "resumed after her gate"
+
+
+def test_a_failed_gate_resumes_her_too_and_an_operators_pause_stands(tmp_path, steps):
+    from app import node_state
+    steps["gate_rc"] = 1
+    assert _new(tmp_path, _recipe(tmp_path)) == 1
+    assert "wd" not in node_state.paused_collections()
+    node_state.set_paused("wd", True, by="the operator")
+    steps["gate_rc"] = 0
+    assert _new(tmp_path, _recipe(tmp_path)) == 0
+    assert "wd" in node_state.paused_collections(), "a pause `new` did not set is not lifted"
+
+
+def test_the_worker_holding_her_writer_is_waited_for_a_bounded_time(tmp_path, monkeypatch):
+    import time
+    from app import node_state
+    from app.hold import lock as lock_mod
+    monkeypatch.setenv("LOUISE_ROOT", str(tmp_path / "louise"))
+    root = tmp_path / "collections"
+    held = lock_mod.take(lock_mod.state_dir(root, "wd"), "wd", "the node (worker)")
+    try:
+        t0 = time.monotonic()
+        assert louise._hold_off_worker(root, "wd", "test", wait_s=0.3) is True
+        assert 0.3 <= time.monotonic() - t0 < 5, "waited, and no longer than the bound"
+        assert "wd" in node_state.paused_collections()
+    finally:
+        held.release()
+    other = lock_mod.take(lock_mod.state_dir(root, "x"), "x", "louise hold records build")
+    try:
+        t0 = time.monotonic()
+        louise._hold_off_worker(root, "x", "test", wait_s=30)
+        assert time.monotonic() - t0 < 5, "only the worker is waited for: another writer is the gate's refusal"
+    finally:
+        other.release()

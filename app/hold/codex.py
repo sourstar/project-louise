@@ -1159,6 +1159,16 @@ def target_for(codex: Any, collection_id: str) -> Annotates | None:
     return next((t for t in targets_of(codex) if t.collection_id == collection_id), None)
 
 
+def parts_slicing(slicing: Any) -> Any:
+    """The slicing as it decides the record parts: `container` "jsonl" is
+    what its absence below GRAPH_VERSION means (09 §9.5), so a version-9+
+    Codex declaring it and an older one leaving it out hold the same parts;
+    "parquet" is other parts."""
+    if not isinstance(slicing, dict) or slicing.get("container") != JSONL:
+        return slicing
+    return {k: v for k, v in slicing.items() if k != "container"} or None
+
+
 def container_of(codex: Any) -> str:
     """09 §9.5: the record parts' container — `slicing.container` from
     GRAPH_VERSION, JSONL below it, where the key is unknown."""
@@ -1885,7 +1895,9 @@ def _validate_against_mother(codex: Codex, mother: Codex) -> None:
             raise CodexError("a sister shares her mother's platform image")
         if codex.parser != mother.parser:
             raise CodexError("a sister keeps her mother's parser")
-        if codex.slicing != mother.slicing:
+        if parts_slicing(codex.slicing) != parts_slicing(mother.slicing):
+            # the same parts: a version-9+ sister states the "jsonl" her older
+            # mother's absent container means (09 §9.5; normattiva-nemo)
             raise CodexError("a sister keeps her mother's slicing: the shards are "
                              "the same shards")
         changed = _sister_changes(codex, mother)

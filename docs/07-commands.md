@@ -104,6 +104,9 @@ louise hold
                                                                        manifest without its index marks, no text index, her parts built from M's record lines (`records
                                                                        build --records-from`, 02 §2.7 amended 2026-11-08) — then her CPU reference and gate; embedding off.
                                                                        Both write locks: `node pause M` first (exit 3 while held)
+                                                                       Every case keeps the new collection PAUSED from before her file exists until her gate has run
+                                                                       (added 2026-11-08: legi's gate lost her writer to the worker), then resumes her, unless the operator
+                                                                       had paused her; a worker already holding her writer is waited for, at most 600 s
               create <plugin> --recipe FILE --encoder URL [--query-encoder URL] [--api A] [--embed-model M] [--query-model M]
               [--space-from CODEX] [--calibration-set FILE]
                                                                        the model flags: required where a URL names no model (§7.8, amended 2026-10-09)
