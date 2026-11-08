@@ -95,10 +95,20 @@ def _newest(shard_dir: Path) -> tuple[Path, tuple[int, int, int]] | None:
 def _held(key: str, path: Path, stamp) -> sn.Snapshot | None:
     with _snaps_lock:
         hit = _SNAPS.get(key)
-        if hit is not None and hit[0] == str(path) and hit[1] == stamp:
+        if hit is not None and _covers(hit, path, stamp):
             _SNAPS.move_to_end(key)
             return hit[2]
     return None
+
+
+def _covers(entry, path: Path, stamp) -> bool:
+    """The entry answers for a caller that stat-ed `path` at `stamp`: the
+    same stamp, or the same file (path, inode) stat-ed LATER by the loader —
+    the caller's stat was taken before a re-stamp, and loading what it saw
+    would put an older entry over a newer one, and the next caller would
+    load the newer again (measured: 5–7 loads for 3 re-stamps)."""
+    held_path, (ino, size, mtime), _snap = entry
+    return held_path == str(path) and (entry[1] == stamp or (ino == stamp[0] and mtime > stamp[2]))
 
 
 def _shared(shard_dir: Path) -> sn.Snapshot | None:
@@ -126,7 +136,9 @@ def _shared(shard_dir: Path) -> sn.Snapshot | None:
             snap = sn.load(path)
             if isinstance(snap.delta, sn.LazyDelta):
                 with _snaps_lock:
-                    _SNAPS[key] = (str(path), stamp, snap)
+                    held = _SNAPS.get(key)
+                    if held is None or not _covers(held, path, stamp):   # never a newer one replaced
+                        _SNAPS[key] = (str(path), stamp, snap)
                     _SNAPS.move_to_end(key)
                     while len(_SNAPS) > _SNAPS_MAX:
                         _SNAPS.popitem(last=False)

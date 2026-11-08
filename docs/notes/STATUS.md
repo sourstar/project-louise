@@ -42,15 +42,22 @@ measured (published figures disagree).
   under 1 GiB + 512 MiB, the caches at their budget. It is the metadata
   cache (pure lancedb, 1,500 ops: 401 → 676 MB with it at 1 GiB, 404 →
   461 MB at 32 MiB beside a 6 GiB index cache).
-- **The fix, Lance's own mechanism:** one `lancedb.Session` per process,
-  byte-bounded (`LANCE_INDEX_CACHE_BYTES`, `LANCE_METADATA_CACHE_BYTES`,
-  1 GiB each), passed to every connection `embeddings._conn` opens
-  (`embeddings.lance_session`; the library: "Sessions … can also be
-  re-used across multiple connections to share the same cache state").
-  The worker's shares line now says what they hold ("vector store caches
-  (this process) — X of 2048 MiB, N items"). Cost: none while the working
-  set fits; +10 % a batch at a 512 MiB metadata budget on a fixture of
-  thousands of uncompacted fragments.
+- **The fix, Lance's own mechanism, BY ROLE** (`embeddings.lance_session`;
+  the library: "Sessions … can also be re-used across multiple connections
+  to share the same cache state"). THE WORKER (`use_worker_caches`, at the
+  start of `run_forever` — no role flag existed): one `lancedb.Session`
+  for every connection, 1 GiB index + 1 GiB metadata; its shares line says
+  what they hold ("vector store caches (this process) — X of 2048 MiB, N
+  items"); cost none while the working set fits, +10 % a batch at a 512
+  MiB metadata budget on a fixture of thousands of uncompacted fragments.
+  ANY OTHER PROCESS (the web's search): a Session per connection, as
+  before, at the library's 6 GiB index cache — wikipedia's search was
+  measured on it — and a metadata cache of 256 MiB, because a reader grows
+  too, by the versions it opens: a read-only connection searching after
+  each of another's commits held 544 MiB after 1,200 versions; bounded at
+  32 MiB it held 36 MiB and searched in the same time (191.4 against 190.5
+  ms an op, interleaved). `LANCE_INDEX_CACHE_BYTES` /
+  `LANCE_METADATA_CACHE_BYTES` replace the role's figures when set.
 - **Tests:** tests/test_lance_session.py (every connection takes the one
   Session; the same work keeps a bounded Session under its budget while a
   default one grows past 10× it — both fail on the old code);

@@ -6023,6 +6023,9 @@ def _register_stack_dump() -> bool:
 
 @_ends_stop_watch
 def run_forever():
+    # the worker's role for the vector store: one bounded Lance Session for
+    # every table it opens (app/embeddings.py `use_worker_caches`)
+    embeddings.use_worker_caches()
     signal.signal(signal.SIGTERM, _handle_sigterm)
     signal.signal(signal.SIGINT, _handle_sigterm)
     # a hangup too: rsync leads its own session (transport_rsync), so a

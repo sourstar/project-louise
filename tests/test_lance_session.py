@@ -68,17 +68,78 @@ def _work(colls, rng, ops: int, sample) -> None:
 
 @pytest.fixture
 def fresh_session(monkeypatch):
-    """A process Session made anew under the test's budgets; the previous
-    one comes back after (monkeypatch)."""
+    """The WORKER's process Session made anew under the test's budgets; the
+    previous state comes back after (monkeypatch)."""
     monkeypatch.setattr(embeddings, "_session", None)
     monkeypatch.setattr(embeddings, "_session_budget", embeddings._session_budget)
+    monkeypatch.setattr(embeddings, "_worker_caches", True)
 
     def make(index: int, metadata: int):
-        monkeypatch.setattr(config, "LANCE_INDEX_CACHE_BYTES", index)
-        monkeypatch.setattr(config, "LANCE_METADATA_CACHE_BYTES", metadata)
+        monkeypatch.setattr(config, "WORKER_LANCE_CACHE_BYTES", (index, metadata))
+        monkeypatch.setattr(config, "LANCE_INDEX_CACHE_BYTES", None)
+        monkeypatch.setattr(config, "LANCE_METADATA_CACHE_BYTES", None)
         monkeypatch.setattr(embeddings, "_session", None)
         return embeddings.lance_session()
     return make
+
+
+@pytest.fixture
+def made_sessions(monkeypatch):
+    """The keyword arguments of every lancedb.Session made, and each
+    connection's (uri, Session) — no table opened."""
+    made: list[dict] = []
+    seen: list = []
+    real_session = lancedb.Session
+
+    def session(**kw):
+        made.append(kw)
+        return real_session(**kw)
+    monkeypatch.setattr(embeddings.lancedb, "Session", session)
+    monkeypatch.setattr(embeddings.lancedb, "connect",
+                        lambda uri, **kw: seen.append((uri, kw.get("session"))) or object())
+    return made, seen
+
+
+def test_the_worker_role_defaults_to_one_bounded_session(tmp_path, monkeypatch, made_sessions):
+    made, seen = made_sessions
+    monkeypatch.setattr(embeddings, "_session", None)
+    monkeypatch.setattr(embeddings, "_session_budget", 0)
+    monkeypatch.setattr(embeddings, "_worker_caches", False)
+    monkeypatch.setattr(config, "LANCE_INDEX_CACHE_BYTES", None)
+    monkeypatch.setattr(config, "LANCE_METADATA_CACHE_BYTES", None)
+    embeddings.use_worker_caches()
+    for name in ("alpha", "beta"):
+        embeddings._conn(_coll(tmp_path, name))
+    assert made == [{"index_cache_size_bytes": 1 << 30, "metadata_cache_size_bytes": 1 << 30}]
+    assert seen[0][1] is seen[1][1], "one Session for the process"
+    assert embeddings.lance_cache_stats()["budget"] == 2 << 30
+
+
+def test_the_search_role_keeps_the_librarys_index_cache_per_connection(tmp_path, monkeypatch,
+                                                                       made_sessions):
+    """The web: a Session per connection, as before, at Lance's 6 GiB index
+    cache (the search measured on it), its metadata cache bounded — a reader
+    grows by the versions it opens."""
+    made, seen = made_sessions
+    monkeypatch.setattr(embeddings, "_worker_caches", False)
+    monkeypatch.setattr(config, "LANCE_INDEX_CACHE_BYTES", None)
+    monkeypatch.setattr(config, "LANCE_METADATA_CACHE_BYTES", None)
+    for name in ("alpha", "beta"):
+        embeddings._conn(_coll(tmp_path, name))
+    assert made == [{"index_cache_size_bytes": 6 << 30, "metadata_cache_size_bytes": 256 << 20}] * 2
+    assert seen[0][1] is not seen[1][1], "a Session per connection"
+
+
+@pytest.mark.parametrize("worker_role", [True, False])
+def test_the_environment_replaces_the_roles_figures(tmp_path, monkeypatch, made_sessions, worker_role):
+    made, _seen = made_sessions
+    monkeypatch.setattr(embeddings, "_session", None)
+    monkeypatch.setattr(embeddings, "_session_budget", 0)
+    monkeypatch.setattr(embeddings, "_worker_caches", worker_role)
+    monkeypatch.setattr(config, "LANCE_INDEX_CACHE_BYTES", 5 << 20)
+    monkeypatch.setattr(config, "LANCE_METADATA_CACHE_BYTES", 7 << 20)
+    embeddings._conn(_coll(tmp_path, "alpha"))
+    assert made == [{"index_cache_size_bytes": 5 << 20, "metadata_cache_size_bytes": 7 << 20}]
 
 
 def test_every_connection_shares_the_one_bounded_session(tmp_path, monkeypatch, fresh_session):
@@ -88,7 +149,7 @@ def test_every_connection_shares_the_one_bounded_session(tmp_path, monkeypatch, 
     real_session = lancedb.Session
     monkeypatch.setattr(embeddings.lancedb, "Session",
                         lambda **kw: made.append(kw) or real_session(**kw))
-    session = fresh_session(3 << 20, 1 << 20)
+    session = fresh_session(3 << 20, 1 << 20)       # the worker's role
     assert made == [{"index_cache_size_bytes": 3 << 20, "metadata_cache_size_bytes": 1 << 20}]
     seen: list = []
     monkeypatch.setattr(embeddings.lancedb, "connect",
