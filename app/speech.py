@@ -45,9 +45,11 @@ wrong language.
 """
 from __future__ import annotations
 
+import io
 import re
 import threading
 import time
+import wave
 from contextlib import contextmanager
 from typing import Any, Iterable, Iterator
 
@@ -83,6 +85,20 @@ _CITE_WORDS = frozenset("""
 """.split())
 _CITE_MARKS = frozenset(" \t,;:.-–—/&+°º")
 _SPACE_BEFORE_MARK = re.compile(r"\s+([.,;:!?»)])")
+# A FULL STOP THAT ENDS NO SENTENCE (operator, 2026-11-08: "G. Cesare" read
+# with a long pause after "G."): an initial — one letter — or a title before
+# a name ("Prof. Rossi", "Dott. Bianchi", "St. Paul") loses its stop, which
+# the model reads as a sentence's end. The cost: a sentence that really ends
+# in a single capital ("…la vitamina C. Poi") loses its pause.
+_STOP_BEFORE_NAME = re.compile(r"(?<![\w.])([^\W\d_]{1,5})\.(?=\s+[^\W\d_])")
+#: the titles written before a name, in the languages Louise answers in
+_TITLES = frozenset("""
+    dr mr mrs ms prof st jr sr
+    sig sigg dott ing avv arch geom rag on
+    mme mlle mgr pr
+    hr fr frl
+    sra srta dña
+""".split())
 
 _WORDS = {
     "it": "il lo la gli le di che è e un una per non con del della sono nel alla questo anche",
@@ -112,12 +128,24 @@ def _is_citation(inner: str) -> bool:
     return all(c in _CITE_MARKS for c in rest)
 
 
+def _no_stop(m: re.Match) -> str:
+    """`_STOP_BEFORE_NAME`'s replacement: the stop goes after an initial (one
+    capital letter) or a title (`_TITLES`) before a capitalised word."""
+    word, after = m.group(1), m.string[m.end():].lstrip()[:1]
+    initial = len(word) == 1 and word.isupper()
+    if (initial or word.casefold() in _TITLES) and after.isupper():
+        return word
+    return m.group(0)
+
+
 def speakable(text: str) -> str:
     """The text without anything in square brackets, spaced as prose: each
     bracket, and a run of them joined by a dash or a comma, goes with the
-    space before it."""
+    space before it; an initial's or a title's full stop before a name goes
+    too (`_STOP_BEFORE_NAME`)."""
     out = _RUN.sub("", _BRACKET.sub("\x00", text.replace("\x00", "")))
     out = _SPACE_BEFORE_MARK.sub(r"\1", out)
+    out = _STOP_BEFORE_NAME.sub(_no_stop, out)
     return re.sub(r"[ \t]{2,}", " ", out).strip()
 
 
@@ -220,10 +248,26 @@ def pinned(url: str, models: Iterable[str | None], holder: str = HOLDER) -> Iter
         _arm(holder)
 
 
+def audio_ms(data: bytes) -> float | None:
+    """A WAV clip's length in ms; None for any other audio."""
+    try:
+        with wave.open(io.BytesIO(data), "rb") as w:
+            return round(1000.0 * w.getnframes() / w.getframerate(), 1)
+    except Exception:   # noqa: BLE001 — not a WAV (or a broken one): no length
+        return None
+
+
 def synthesize(body: dict[str, Any], url: str | None = None) -> tuple[int, bytes, str]:
     """(status, audio or error body, content type) for an OpenAI speech
     request, relayed to the model server; the model and the voice the
     node's (`[speech]`, app/voice.py) where the request names none."""
+    return synthesize_timed(body, url)[:3]
+
+
+def synthesize_timed(body: dict[str, Any], url: str | None = None) -> tuple[int, bytes, str, list]:
+    """`synthesize` and its `Server-Timing` (W3C; 2026-11-08, to measure the
+    reading's start and its pauses): `synth` the model server's call in ms,
+    `audio` the clip's length in ms where it is a WAV."""
     from app import voice as node_voice
     url = (url or config.CHAT_URL).rstrip("/")
     text = speakable(str(body.get("input") or ""))
@@ -231,7 +275,7 @@ def synthesize(body: dict[str, Any], url: str | None = None) -> tuple[int, bytes
     model = str(body.get("model") or "") or (node.tts_model or "")
     if not text:
         return 400, b'{"error": {"message": "no text to speak once its citations are removed"}}', \
-            "application/json"
+            "application/json", []
     out = {**body, "input": text}
     if model:
         out["model"] = model
@@ -243,9 +287,14 @@ def synthesize(body: dict[str, Any], url: str | None = None) -> tuple[int, bytes
         out.pop("voice", None)
     if lang and "language" not in out:
         out["language"] = lang
+    t0 = time.perf_counter()
     if not model:
         r = httpc.post(f"{url}/v1/audio/speech", json=out, timeout=CALL_TIMEOUT_S)
     else:
         with pinned(url, [model]):
             r = httpc.post(f"{url}/v1/audio/speech", json=out, timeout=CALL_TIMEOUT_S)
-    return r.status_code, r.content, r.headers.get("content-type", "application/octet-stream")
+    timing = [("synth", round((time.perf_counter() - t0) * 1000.0, 1))]
+    clip = audio_ms(r.content) if r.status_code == 200 else None
+    if clip is not None:
+        timing.append(("audio", clip))
+    return r.status_code, r.content, r.headers.get("content-type", "application/octet-stream"), timing

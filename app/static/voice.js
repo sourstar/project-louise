@@ -32,6 +32,19 @@
   const FLOOR_MIN = 0.012, FLOOR_X = 4;
   // a piece this short is read with the next (an "art." the segmenter cut off)
   const MIN_SENTENCE = 24;
+  // A PIECE ENDING IN AN INITIAL OR A TITLE ends no sentence (operator,
+  // 2026-11-08: "G. Cesare" read with a long pause after "G."): Unicode's
+  // segmenter breaks after any full stop before a capital (UAX #29, SB11),
+  // and ICU's abbreviation list (`ss=standard`) is not offered by
+  // Intl.Segmenter. One letter, or a title before a name, is read with the
+  // next piece; the node drops its stop (app/speech.py `_STOP_BEFORE_NAME`).
+  const TITLES = new Set(('dr mr mrs ms prof st jr sr sig sigg dott ing avv arch geom rag on '
+                          + 'mme mlle mgr pr hr fr frl sra srta').split(' '));
+  const endsInName = p => {
+    const m = /(?:^|[\s(«"'“‘])([\p{L}]{1,5})\.$/u.exec(p);
+    return !!m && ((m[1].length === 1 && m[1] === m[1].toUpperCase() && m[1] !== m[1].toLowerCase())
+                   || TITLES.has(m[1].toLowerCase()));
+  };
   // sentences being synthesized at once (pump)
   const IN_FLIGHT = 2;
   // a WAV of no samples: played in the tap, it lets the page play the rest (iOS)
@@ -191,6 +204,13 @@
   // the next answer is read by itself; dictated: what the microphone left in
   // the box; player: the page's one audio element
   let reading = null, answerLang = null, writing = false, auto = false, dictated = null, player = null;
+  // THE READING'S TIMES (2026-11-08: "it takes a long time to start and it
+  // takes long pauses" — measured before anything is changed): ms since Ask
+  // was pressed — the answer's first and last word, and per sentence when it
+  // was cut, sent, received, played and ended, with the node's own synthesis
+  // time and the clip's length (`Server-Timing`). `louiseVoice.timeline()`.
+  const now = () => Math.round(performance.now());
+  let times = { asked: null, first: null, last: null, items: [] };
   const answerText = () => { const b = document.getElementById('answer'); return b ? b.textContent : ''; };
   const collapse = line => line.replace(/\s+/g, ' ').trim();
 
@@ -206,7 +226,7 @@
     for (const [p, end] of parts) {
       if (!p) continue;
       const s = carry ? carry + ' ' + p : p;
-      if (s.length < MIN_SENTENCE) { carry = s; continue; }
+      if (s.length < MIN_SENTENCE || endsInName(s)) { carry = s; continue; }
       out.push({ text: s, end }); carry = '';
     }
     if (carry) {
@@ -281,16 +301,29 @@
     });
   }
 
-  async function synth(r, s) {
+  // `Server-Timing: synth;dur=812.4, audio;dur=2960.0` → {synth: 812.4, audio: 2960}
+  function serverTiming(h) {
+    const out = {};
+    for (const part of String(h || '').split(',')) {
+      const m = /^\s*([\w-]+)\s*;\s*dur=([\d.]+)/.exec(part); if (m) out[m[1]] = +m[2];
+    }
+    return out;
+  }
+
+  async function synth(r, it) {
+    const s = it.text;
     const body = { input: s }; if (r.lang) body.language = r.lang;
+    it.t.sent = now();
     const resp = await fetch('/v1/audio/speech', { method: 'POST', signal: r.ctl.signal,
       headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    Object.assign(it.t, serverTiming(resp.headers.get('server-timing')));
     if (resp.status === 400) return null;      // nothing to say once its citations are gone
     if (!resp.ok) {
       const d = await resp.json().catch(() => ({}));
       throw new Error((d.error && d.error.message) || d.detail || resp.statusText);
     }
     const blob = await resp.blob();
+    it.t.got = now();
     if (reading !== r) return null;
     const u = URL.createObjectURL(blob); r.urls.push(u); return u;
   }
@@ -303,7 +336,7 @@
   function pump(r) {
     while (reading === r && r.next < r.items.length && r.inflight < IN_FLIGHT) {
       const it = r.items[r.next++]; r.inflight++;
-      synth(r, it.text).then(it.ok, it.no).finally(() => { r.inflight--; pump(r); });
+      synth(r, it).then(it.ok, it.no).finally(() => { r.inflight--; pump(r); });
     }
   }
 
@@ -312,7 +345,8 @@
     const t = answerText();
     r.ended = !writing; r.text = t;
     for (const s of cut(r, t, r.ended)) {
-      const it = { text: s };
+      const it = { text: s, t: { chars: s.length, cut: now() } };
+      times.items.push(it.t);
       it.p = new Promise((ok, no) => { it.ok = ok; it.no = no; }); it.p.catch(() => {});
       r.items.push(it);
     }
@@ -349,7 +383,7 @@
         if (reading !== r || i >= r.items.length) return;
         const url = await r.items[i].p;
         if (reading !== r) return;
-        if (url) await play(r, url);
+        if (url) { r.items[i].t.play = now(); await play(r, url); r.items[i].t.end = now(); }
         if (reading !== r) return;
         if (r.blocked) {
           if (speak) speak.hidden = false;
@@ -376,12 +410,14 @@
     asking() {
       const q = document.getElementById('q');
       stopReading();
+      times = { asked: now(), first: null, last: null, items: [] };
       auto = !!speak && dictated !== null && !!q && q.value.trim() === dictated;
       if (auto) unlock();
     },
     // the answer being written grew
     answerGrew(lang) {
       writing = true; answerLang = lang || null;
+      const t = now(); if (times.first === null) times.first = t; times.last = t;
       if (!speak || !answerText().trim()) return;
       speak.hidden = false;
       if (reading) follow(); else if (auto) { auto = false; startReading(); }
@@ -393,6 +429,14 @@
       if (reading) follow();
     },
     answerCleared() { writing = false; stopReading(); if (speak) speak.hidden = true; },
+    // the reading's times, in ms from Ask (null before an Ask on this page)
+    timeline() {
+      const at = times.asked, rel = v => (v == null || at == null ? null : v - at);
+      return { first_word: rel(times.first), last_word: rel(times.last),
+               sentences: times.items.map(t => ({ chars: t.chars, cut: rel(t.cut), sent: rel(t.sent),
+                 got: rel(t.got), synth: t.synth ?? null, audio: t.audio ?? null,
+                 play: rel(t.play), end: rel(t.end) })) };
+    },
     sentences, cut, downsample, wavBytes,
   };
 })();

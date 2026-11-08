@@ -1447,7 +1447,14 @@ one line saying so. An answer the page then shows in another language (the
 reader switched the drop-down and the page translated it) has no sentence
 that is exactly one already read: a reading under way moves to the
 translation, from its first sentence; the same text shown again repeats
-nothing.
+nothing. A FULL STOP THAT ENDS NO SENTENCE (*amended 2026-11-08*, operator:
+"G. Cesare" read with a long pause): a piece ending in an initial or a title
+before a name ("G.", "Prof.") is read with the next, and `/v1/audio/speech`
+drops that stop before the model reads it. `/v1/audio/speech` answers with
+`Server-Timing: synth;dur=…, audio;dur=…` (the model server's call and the
+clip's length, ms), and the page keeps the reading's times
+(`louiseVoice.timeline()`: the answer's first and last word, each sentence
+cut, sent, received, played and ended, ms from the Ask press).
 - the LocalAGI routes below require the token read from
   `DEPOSIT_TOKEN_FILE`, reads included, and that token opens nothing
   else: an agent that can write its memory cannot pause the node.
