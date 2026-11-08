@@ -1329,7 +1329,23 @@ are pinned while a reader speaks and released 120 s after the last clip.
 `GET /ask/voice` is what the Ask page offers: `{input: {available, why,
 trimmed}, output: {available, why}}`, `why` in the operator's words with the
 `node speech set` that supplies it; the page renders a button only for an
-available voice.
+available voice. Where output is offered, the page reads the answer WHILE IT
+IS WRITTEN (*amended 2026-11-08*, operator; `app/static/voice.js`): a
+sentence — the browser's `Intl.Segmenter`, a piece under 24 characters read
+with its neighbour — is complete once a later one has begun past that length
+or the stream has ended, never half of one; each goes to `/v1/audio/speech`
+as soon as it is complete, two at a time, whatever the stream and the player
+are doing (chat and speech run on different GPU resources), and they play in
+order. A question the microphone wrote — the box holds what it left there —
+has its answer read by itself, the Ask press unlocking the sound; a typed one
+waits for the speaker, which also starts at the first sentence. A tap stops
+it, as does a new question: the fetches in flight are cancelled, nothing
+more is read. A browser that refuses the sound anyway gets the speaker and
+one line saying so. An answer the page then shows in another language (the
+reader switched the drop-down and the page translated it) has no sentence
+that is exactly one already read: a reading under way moves to the
+translation, from its first sentence; the same text shown again repeats
+nothing.
 - the LocalAGI routes below require the token read from
   `DEPOSIT_TOKEN_FILE`, reads included, and that token opens nothing
   else: an agent that can write its memory cannot pause the node.
