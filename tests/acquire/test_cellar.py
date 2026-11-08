@@ -26,6 +26,9 @@ from app.plugins.eurlex import source as src
 from tests.acquire.test_engine import _collection
 
 FORMEX = Path(__file__).resolve().parent.parent / "fixtures" / "eurlex" / "formex"
+#: eurlex is YELLOW (operator, 2026-11-08, A): a pass moves no byte before the
+#: acknowledgement of its terms (invariant 9), as a peer records it
+_ACK = engine.make_ack(specs.EURLEX_SPEC.terms_text_path)
 ACT, CONS = "32016R1036", "02016R1036-20180608"
 
 
@@ -304,7 +307,7 @@ def test_an_item_of_another_size_than_the_notice_says_is_refused(mock, tmp_path,
 
 def test_a_node_holding_only_french_fetches_only_french(tmp_path, mock, monkeypatch):
     _years(monkeypatch)
-    collection = _collection(tmp_path, plugin="eurlex")
+    collection = _collection(tmp_path, plugin="eurlex", license_ack=_ACK)
     con = db.connect(collection)
     spec = _spec(mock)
     got = engine.run_acquisition(con, collection, spec, "fr")
@@ -330,7 +333,7 @@ def test_a_node_holding_only_french_fetches_only_french(tmp_path, mock, monkeypa
 
 def test_a_language_added_later_fetches_that_language_alone(tmp_path, mock, monkeypatch):
     _years(monkeypatch)
-    collection = _collection(tmp_path, plugin="eurlex")
+    collection = _collection(tmp_path, plugin="eurlex", license_ack=_ACK)
     con = db.connect(collection)
     spec = _spec(mock)
     engine.run_acquisition(con, collection, spec, "fr")
