@@ -38,6 +38,7 @@ import io
 import json
 import struct
 import sys
+import time
 import wave
 from array import array
 from dataclasses import dataclass
@@ -71,6 +72,28 @@ class Answer:
     content_type: str
     #: the `Louise-VAD` header: off, skipped, failed, silence or trimmed
     vad: str
+    #: each step's wall time in ms, in order — the `Server-Timing` header
+    #: (W3C Server Timing: a browser's devtools and any client read it)
+    timing: tuple[tuple[str, float], ...] = ()
+
+
+class _Clock:
+    """The steps of one request, timed (`Answer.timing`)."""
+
+    def __init__(self) -> None:
+        self.steps: list[tuple[str, float]] = []
+        self._t = time.perf_counter()
+
+    def lap(self, name: str) -> None:
+        now = time.perf_counter()
+        self.steps.append((name, round((now - self._t) * 1000.0, 1)))
+        self._t = now
+
+
+def server_timing(steps: tuple[tuple[str, float], ...] | list[tuple[str, float]]) -> str:
+    """`Server-Timing: settings;dur=0.4, vad-encode;dur=110.2, …` (W3C Server
+    Timing, the standard header for a server's own step times)."""
+    return ", ".join(f"{name};dur={dur}" for name, dur in steps)
 
 
 def pcm16_mono_16k(data: bytes) -> bytes | None:
@@ -137,11 +160,13 @@ def trimmed(frames: bytes, spans: list[tuple[int, int]], gap: int | None = None)
     return pause.join(frames[2 * lo: 2 * hi] for lo, hi in spans)
 
 
-def segments(url: str, model: str, frames: bytes) -> list[tuple[int, int]]:
+def segments(url: str, model: str, frames: bytes, clock: "_Clock | None" = None) -> list[tuple[int, int]]:
     """THE ONE CALL OF LocalAI's `POST /v1/vad`: the clip's speech as sample
     ranges (`ranges`), [] for none. Raises VadFailed when there is no
     answer to read."""
     body = json.dumps({"model": model, "audio": floats(frames)}, separators=(",", ":"))
+    if clock is not None:
+        clock.lap("vad-encode")
     try:
         r = httpc.post(f"{url}/v1/vad", content=body.encode(), headers={"Content-Type": JSON},
                        timeout=VAD_TIMEOUT_S)
@@ -180,11 +205,13 @@ def transcribe(audio: bytes, filename: str, content_type: str, fields: list[tupl
                url: str | None = None) -> Answer:
     """An OpenAI transcription request — the file and the form's other
     fields — relayed to the model server after the VAD's trim."""
+    clock = _Clock()
     url = (url or voice.server()).rstrip("/")
     try:
         node = voice.settings()
     except voice.LOAD_ERRORS as e:
         return _error(500, f"this node's platform file does not load ({e})", "off")
+    clock.lap("settings")
     form: dict[str, Any] = {}           # a field given twice (timestamp_granularities[]) as a list
     for k, v in fields:
         if k == "file":
@@ -204,26 +231,31 @@ def transcribe(audio: bytes, filename: str, content_type: str, fields: list[tupl
     vad = "off"
     send = audio
     with speech.pinned(url, [node.vad_model, model], HOLDER):
+        clock.lap("pin")
         if node.vad_model:
             frames = pcm16_mono_16k(audio)
+            clock.lap("decode")
             if frames is None:
                 vad = "skipped: not a 16-bit 16 kHz mono WAV"
             else:
                 n = len(frames) // 2
                 try:
-                    spans = segments(url, node.vad_model, frames) if n else []
+                    spans = segments(url, node.vad_model, frames, clock) if n else []
                 except VadFailed as e:
                     vad = f"failed: {e}"
                     model_pins.node_event("warn", f"voice activity: {node.vad_model} at {url} failed ({e}); "
                                                   f"a {n / RATE:.2f} s clip sent to {model} whole, untrimmed")
                 else:
+                    clock.lap("vad")
                     if not spans:
                         body, ctype = silence(fmt, form.get("language"), n / RATE)
-                        return Answer(200, body, ctype, f"silence: no speech in {n / RATE:.2f} s")
+                        return Answer(200, body, ctype, f"silence: no speech in {n / RATE:.2f} s",
+                                      tuple(clock.steps))
                     kept = sum(hi - lo for lo, hi in spans)
                     send = wav(trimmed(frames, spans))
                     filename, content_type = "speech.wav", "audio/wav"
                     vad = f"trimmed: {kept / RATE:.2f} s of speech kept of {n / RATE:.2f} s"
+                    clock.lap("trim")
         try:
             r = httpc.post(f"{url}/v1/audio/transcriptions",
                            files={"file": (filename or "audio", send, content_type or "application/octet-stream")},
@@ -231,4 +263,6 @@ def transcribe(audio: bytes, filename: str, content_type: str, fields: list[tupl
         except Exception as e:   # noqa: BLE001 — said to the reader, in plain words
             return _error(502, f"the speech-to-text model at {url} did not answer "
                                f"({type(e).__name__})", vad)
-    return Answer(r.status_code, r.content, r.headers.get("content-type", JSON), vad)
+        clock.lap("stt")
+    clock.lap("unpin")
+    return Answer(r.status_code, r.content, r.headers.get("content-type", JSON), vad, tuple(clock.steps))

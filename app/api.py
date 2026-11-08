@@ -1139,6 +1139,7 @@ async def audio_transcriptions(request: Request):
         declared = 0
     if declared > transcribe.MAX_BYTES + (1 << 20):
         return _openai_error(413, f"the upload is over {transcribe.MAX_BYTES >> 20} MB")
+    t0 = time.perf_counter()
     form = await request.form()
     try:
         up = form.get("file")
@@ -1148,14 +1149,20 @@ async def audio_transcriptions(request: Request):
         if len(audio) > transcribe.MAX_BYTES:
             return _openai_error(413, f"the upload is over {transcribe.MAX_BYTES >> 20} MB")
         fields = [(k, v) for k, v in form.multi_items() if isinstance(v, str)]
+        upload_ms = round((time.perf_counter() - t0) * 1000.0, 1)
+        t1 = time.perf_counter()
         got = await run_in_threadpool(transcribe.transcribe, audio, up.filename or "audio",
                                       up.content_type or "application/octet-stream", fields)
+        queued_ms = round((time.perf_counter() - t1) * 1000.0 - sum(d for _n, d in got.timing), 1)
     finally:
         await form.close()
     # a header is latin-1: a failure's text is said in ASCII
     note = got.vad.encode("ascii", "replace").decode("ascii")
+    # each step's time (W3C Server Timing): the upload's parse, the wait for a
+    # thread, then transcribe's own steps — where a dictation's seconds go
+    steps = [("upload", upload_ms), ("thread", max(queued_ms, 0.0)), *got.timing]
     return Response(content=got.body, status_code=got.status, media_type=got.content_type,
-                    headers={"Louise-VAD": note})
+                    headers={"Louise-VAD": note, "Server-Timing": transcribe.server_timing(steps)})
 
 
 def source_entries(hits: list[dict]) -> list[dict]:
