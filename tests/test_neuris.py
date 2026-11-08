@@ -642,3 +642,25 @@ def test_an_xml_member_of_a_root_not_named_here_is_kept_whole(tmp_path):
     (other,) = doc.extra["other_xml"]
     assert other["member"].endswith("zusatz-1.xml")
     assert other["root"]["children"][0] == {"tag": "a", "attrs": {"k": "v"}, "text": "text"}
+
+
+def test_an_annex_named_by_its_absolute_ris_url_is_the_zip_member_of_that_name(tmp_path):
+    """The real hrefs (München, 2026-11-08, the BtMG's three annexes) are
+    absolute on another host than the API's —
+    `https://www.ris.bund.de/eli/bund/…/2026-10-27/anlage-regelungstext-1.xml` —
+    and name the zip member by their last segment: found there, never fetched."""
+    import re
+    root = tmp_path / "c"
+    _gen, d = ns.directory(ns.S1016)
+    files = {p.name: p.read_bytes() for p in sorted(d.iterdir())}
+    url = b"https://www.ris.bund.de/eli/bund/bgbl-1/2000/s1016/2023-04-26/10/deu/2023-04-26/anlage-regelungstext-1.xml"
+    files["regelungstext-1.xml"], n = re.subn(rb'href="[^"]*anlage-regelungstext-1\.xml"',
+                                             b'href="' + url + b'"', files["regelungstext-1.xml"])
+    assert n >= 1, "the fixture names its annex"
+    ns.lay_out(root, ns.S1016, data=ns.zip_bytes(ns.S1016, files=files))
+    doc = _doc(_refs(root)[0])
+    assert [i.code for i in doc.issues if i.code == "annex-missing"] == []
+    assert doc.extra["attachment_refs"][0]["href"] == url.decode()
+    assert len(doc.extra["annexes"]) == 1
+    ns.lay_out(root, ns.S1016, data=ns.zip_bytes(ns.S1016, files=files, drop=("anlage-regelungstext-1.xml",)))
+    assert [i.code for i in _doc(_refs(root)[0]).issues] == ["annex-missing"]
