@@ -47,10 +47,12 @@ def test_a_malformed_id_is_refused(bad):
 
 def test_a_namespace_is_found_through_the_source_that_registers_it():
     """06 §6.5: a namespace is owned by the reference source that registers
-    it — `wikidata` by `wikidata-refs`, `urn`/`eli`/`akn` by `normattiva-refs`
-    — and a source with no list owns the namespace of its own name."""
+    it — `wikidata` by `wikidata-refs`, `urn`/`akn` by `normattiva-refs`,
+    `eli` by `eli-refs` (its one owner since 2026-11-08, legal-fr-de-eu.md
+    §5.2) — and a source with no list owns the namespace of its own name."""
     assert lookup.owner_of_namespace("wikidata") == "wikidata-refs"
     assert lookup.owner_of_namespace("urn") == "normattiva-refs"
-    assert lookup.owner_of_namespace("eli") == "normattiva-refs"
+    assert lookup.owner_of_namespace("eli") == "eli-refs"
+    assert lookup.owner_of_namespace("akn") == "normattiva-refs"
     assert lookup.owner_of_namespace("hgnc") == "hgnc"
     assert lookup.owner_of_namespace("nowhere") == "nowhere"

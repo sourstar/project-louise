@@ -423,6 +423,10 @@ class RefTable:
     name: str
     columns: tuple[RefColumn, ...]
     primary_key: str   # column name; sync() upserts are keyed on this
+    #: columns a lookup reads by value besides the primary key — a second
+    #: canonical id the table holds (`atto.akn`, `atto.eli`): indexed by
+    #: `ensure_schema`, so a lookup by it is a SEARCH, never a scan
+    indexes: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)

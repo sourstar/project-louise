@@ -3,6 +3,7 @@ import threading
 
 from .. import config
 from .clinvar_mini import ClinvarMiniSource
+from .eli import EliRefSource
 from .gnomad import GnomadConstraintSource
 from .hgnc import HgncSource
 from .homologene import HomologeneSource
@@ -16,8 +17,11 @@ REFS_REGISTRY = {
     "clinvar-mini": ClinvarMiniSource(),
     "gnomad-constraint": GnomadConstraintSource(),
     "homologene": HomologeneSource(),
-    # the Italian acts: `urn` and `eli` registered (05 §5.2), citations
-    # resolved by key (app/refs/normattiva.py; review §3.12)
+    # the `eli` namespace's one owner: routes `eli:<jurisdiction>:…` to the
+    # source declaring that jurisdiction (app/refs/eli.py; legal-fr-de-eu.md §5.2)
+    "eli-refs": EliRefSource(),
+    # the Italian acts: `urn` and `akn` registered (05 §5.2), `eli:it:` held
+    # for eli-refs; citations resolved by key (app/refs/normattiva.py; review §3.12)
     "normattiva-refs": NormattivaRefSource(),
     # Wikidata's entity ids: the namespace `wikidata` (QIDs, PIDs) for the
     # wikidata collection's keys and wiki-gutenberg's mentions

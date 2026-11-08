@@ -62,6 +62,10 @@ def ensure_schema(con: sqlite3.Connection, schema: RefSchema) -> None:
     for link in schema.links:
         con.execute(f"CREATE INDEX IF NOT EXISTS idx_{link.from_table}_{link.from_column} "
                     f"ON {link.from_table}({link.from_column})")
+    for table in schema.tables:
+        for column in table.indexes:
+            con.execute(f"CREATE INDEX IF NOT EXISTS idx_{table.name}_{column} "
+                        f"ON {table.name}({column})")
 
 
 def sync_source(con: sqlite3.Connection, source: ReferenceSource, state: RefSyncState) -> dict:
