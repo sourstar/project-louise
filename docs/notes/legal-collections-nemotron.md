@@ -15,7 +15,7 @@ Nothing here is built until the architecture session agrees.
 |---|---|---|---|---|
 | `legi` | French | DILA LEGI (+ JORF for the originals' ELI) | one per origin file (see open question 3) | fr |
 | `neuris` | German federal | NeuRIS API (the testphase host) | one expression of one act | de |
-| `eurlex` | EU | Cellar (Formex 4 + CDM notice) | one version of one act in one language | all 24 as slices; en, fr, de, it embedded first (D2 A) |
+| `eurlex` | EU | Cellar (Formex 4 + CDM notice) | one version of one act in one language | all 24, each a slice downloadable and embeddable on its own |
 
 Normattiva is skipped: it already exists.
 
@@ -36,6 +36,31 @@ Normattiva is skipped: it already exists.
 |---|---|---|
 | **Nemotron, one shared space (proposed)** | one engine to gate and keep resident; one list across the three, in any language | not chosen on legal questions per language; 2,048 dims; a pin is irreversible |
 | one encoder per language, by bake-off (D3 as it was) | the best model measured for each language | several engines on one card; no list across collections; the bake-off runs are still owed |
+
+## EU languages: each downloadable and embeddable on its own
+
+The operator, 2026-11-08: "EU laws, make every language downloadable and
+embeddable separately." This needs no new mechanism. It is Wikipedia's,
+from 07 §7.8:
+
+- **The slice:** `lang=<code>/…`, one per EU language.
+- **Downloaded:** the acquisition spec's `slice_profiles` give each slice
+  its own download (`lang=fr` → that language's manifestations), so a node
+  fetches only the languages its collection file lists in `slices`.
+- **Embedded:** `embed_slices` names the slices the encoder spends on, out
+  of those held. The others are searchable by words only, and are "not
+  embedded here", never pruned.
+- **Example collection file:** `slices = ["lang=en", "lang=fr",
+  "lang=de", "lang=it", "lang=es"]`, `embed_slices = ["lang=en", "lang=fr",
+  "lang=de", "lang=it"]`. Adding a language later is an edit of these
+  lists: nothing already held is re-fetched and nothing is re-created.
+- **The native id:** hashed over (CELEX, expression, language), so the
+  slices never collide.
+
+| | pros | cons |
+|---|---|---|
+| **a slice per language (chosen)** | one collection; each node takes and embeds only what it wants; a language is added without re-creation | every language's slice must be built the same way, so the plugin's slicing rule is fixed at create |
+| everything held, everything embedded | complete everywhere | ~6× the encoder time of four languages; 24 downloads per node |
 
 ## The shared space block
 
