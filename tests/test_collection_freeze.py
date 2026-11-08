@@ -96,6 +96,32 @@ def test_frozen_since_reads_creating_nothing(isolated_config):
     assert not store.exists(), "a check that created the store would change what it reports on"
 
 
+def test_the_status_says_a_freeze_in_one_sentence_from_its_record(isolated_config):
+    """app/status.py `frozen`: what the Library card shows — its badge and
+    its Details line — read from the record the worker reads (invariant
+    10), never composed by the page; who and when only where recorded."""
+    from app import status
+    store = node_state.path()
+    assert status.frozen("alpha") is None and not store.exists(), "read creating nothing"
+    store.parent.mkdir(parents=True, exist_ok=True)
+    store.write_bytes(b"not a database, " * 64)
+    assert status.frozen("alpha") is None, "an unreadable store invents no freeze, and never raises"
+    store.unlink()
+    node_state.set_frozen("alpha", True, by="louise node freeze alpha (from bash, user op)")
+    since = node_state.frozen_since("alpha")
+    got = status.frozen("alpha")
+    assert (got["by"], got["at"], got["when"]) == (since["by"], since["at"], since["when"])
+    assert got["says"] == (
+        f'alpha is frozen since {since["when"]}, by "louise node freeze alpha (from bash, user op)": it keeps '
+        "the version it holds — nothing is fetched from its origin, its origin is not scanned and nothing is "
+        "taken in from peers — and is parsed, indexed, embedded here and searched as it is. Unfreeze it in "
+        "the Library (Options › unfreeze…, on its card), or run `louise node unfreeze alpha`.")
+    assert status.frozen("beta") is None and status.frozen("alpha", None) is None
+    cut = status.frozen("beta", {"by": None, "at": None, "when": None})     # the history cut short
+    assert cut["when"] is None and cut["by"] is None
+    assert cut["says"].startswith("beta is frozen (nothing recorded who froze it, or when): it keeps")
+
+
 def test_the_commands_freeze_and_unfreeze_a_held_collection_and_refuse_a_name_not_held(isolated_config, capsys):
     assert louise.main(["node", "freeze", "alpha"]) == 2, "a typo would freeze nothing and say it had"
     assert "no collection 'alpha' is held here" in capsys.readouterr().err

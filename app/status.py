@@ -51,7 +51,9 @@ manifest, with its age, and says so (`from_scan`); it never guesses.
 WHAT HOLDS A STAGE is `holds()`: the node's mode, the collection's own
 pause, the node profile, the embed setting, the license gate, the copy's
 state, the vector store's floor — one list, one sentence each, in one
-order, and `reason()` picks the one a single-line surface prints.
+order, and `reason()` picks the one a single-line surface prints. A
+collection's FREEZE holds no document stage — only its updates — and is
+`frozen()`, a fact beside the stages in one sentence.
 """
 from __future__ import annotations
 
@@ -737,6 +739,49 @@ def held_reason(mode: str | None, stage: str) -> str:
     st, said = reason([h for h in holds("", stage, mode=mode, pause=None)
                        if h.what in ("mode", "profile")])
     return said if st == HELD else ""
+
+
+# ---- a collection's freeze (07 §7.3 `node freeze`) ----------------------------
+#
+# NOT A HOLD OF ANY DOCUMENT STAGE: a frozen collection is parsed, indexed,
+# embedded and searched on the version it holds; what stops is its updates —
+# the fetch, the scan of its origin, every intake from peers
+# (docs/notes/collection-freeze.md §1). So it is a fact beside the stages,
+# in one sentence, read from the record the worker's round reads
+# (`node_state.frozen_since`), never recomputed by a surface (invariant 10).
+
+def freeze_says(name: str, entry: dict) -> str:
+    """A frozen collection, in one sentence: since when and by whom where the
+    history records it, what stops, and what lifts it."""
+    by, when = entry.get("by"), entry.get("when")
+    if by or when:
+        head = (f"{name} is frozen" + (f" since {when}" if when else "")
+                + (f', by "{by}"' if by else ""))
+    else:
+        head = f"{name} is frozen (nothing recorded who froze it, or when)"
+    return (f"{head}: it keeps the version it holds — nothing is fetched from its origin, its origin is "
+            f"not scanned and nothing is taken in from peers — and is parsed, indexed, embedded here and "
+            f"searched as it is. Unfreeze it in the Library (Options › unfreeze…, on its card), or run "
+            f"`louise node unfreeze {name}`.")
+
+
+def frozen(name: str, entry: Any = _READ) -> dict[str, Any] | None:
+    """THE FREEZE of collection `name` as a surface shows it — `by`, `at`,
+    `when` (`node_state.frozen_since`, each None where the history does not
+    say) and `says`, its sentence — or None when it is not frozen. `entry`
+    not given: read from the node's store, creating nothing; given (a
+    `frozen_since` entry, or None), only said. A store that cannot be read
+    is None: a freeze is never invented. NEVER RAISES."""
+    try:
+        if entry is _READ:
+            from . import node_state
+            entry = node_state.frozen_since(name)
+        if not isinstance(entry, dict):
+            return None
+        return {"by": entry.get("by") or None, "at": entry.get("at"),
+                "when": entry.get("when") or None, "says": freeze_says(name, entry)}
+    except Exception:   # noqa: BLE001 — a status never raises
+        return None
 
 
 # ---- rates and ETAs, from the persisted samples ------------------------------

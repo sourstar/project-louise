@@ -291,6 +291,56 @@ def test_a_paused_collection_says_who_paused_it_and_resume_is_under_options(clie
     assert "nothing embeds" not in sight and sight.count("paused") == 1
 
 
+# ---- a frozen collection: the badge, since when and by whom, Unfreeze ---------
+
+def _details_text(html: str, name: str) -> str:
+    """The card's Details line, opened, tags dropped, as read."""
+    import html as html_mod
+    card = html[html.index(f'data-collection="{name}"'):]
+    card = card[card.index('data-drawer="details"'):card.index('data-drawer="options"')]
+    return " ".join(html_mod.unescape(re.sub(r"<[^>]+>", " ", card)).split())
+
+
+def test_a_frozen_collection_shows_its_badge_since_when_by_whom_and_unfreeze_under_options(client):
+    """docs/notes/collection-freeze.md §11: the badge in sight, who froze it
+    and when in the Details line — app/status.py's sentence, not the
+    template's — and Unfreeze behind the card's warning. Freeze itself is
+    the operator's command-line choice: the card never offers it."""
+    from app import status
+    html = client.get("/admin/library").text
+    card = _cards(html)["gutenberg"]
+    assert "data-frozen" not in html and "frozen" not in _in_sight_text(html, "gutenberg")
+    assert "unfreeze…" not in _buttons(card) and "unfreeze" not in card["templates"]
+    node_state.set_frozen("other", True, by="louise node freeze other")
+    assert "data-frozen" not in client.get("/admin/library").text, "another collection's freeze is not this card's"
+
+    node_state.set_frozen("gutenberg", True, by="louise node freeze gutenberg (from bash, user op)")
+    when = node_state.frozen_since("gutenberg")["when"]
+    html = client.get("/admin/library").text
+    card = _cards(html)["gutenberg"]
+    says = status.frozen("gutenberg")["says"]
+    assert re.search(r'<span class="badge brass" data-frozen title="[^"]+">frozen</span>', html)
+    assert "frozen" in _in_sight_text(html, "gutenberg").split() and says not in _in_sight_text(html, "gutenberg")
+    details = _details_text(html, "gutenberg")
+    assert says in details and f'since {when}, by "louise node freeze gutenberg (from bash, user op)"' in details
+    unfreeze = _buttons(card)["unfreeze…"]
+    assert unfreeze["drawer"] == "options" and unfreeze["attrs"]["onclick"] == "confirmAction('unfreeze', 'gutenberg')"
+    warn = card["templates"]["unfreeze"]
+    assert warn["attrs"]["data-label"] == "Unfreeze gutenberg"
+    assert f"The version it holds, kept since {when}, stops being kept:" in warn["text"]
+    assert "its origin is fetched and scanned again" in warn["text"] and "It is also paused" not in warn["text"]
+    assert "louise node freeze gutenberg, on the node's command line" in warn["text"]
+    table = html[html.index("const CONFIRMED={"):html.index("};", html.index("const CONFIRMED={"))]
+    assert "unfreeze:name=>unfreezeCollection(name)" in table
+    assert "postJSON('/admin/library/'+name+'/unfreeze'" in _function(html, "unfreezeCollection")
+    assert not [b for b in _buttons(card) if b.startswith("freeze")] and "/freeze'" not in html, \
+        "freeze is not offered in the Library"
+    # paused as well: the warning says it catches up only once resumed
+    node_state.set_paused("gutenberg", True, by="louise node pause gutenberg")
+    warn = _cards(client.get("/admin/library").text)["gutenberg"]["templates"]["unfreeze"]
+    assert "It is also paused: nothing runs for it until it is resumed, and then it catches up." in warn["text"]
+
+
 def test_a_mode_that_does_not_embed_is_said_beside_the_setting(client):
     node_state.set_worker_state("acquire-only")
     sight = _in_sight_text(client.get("/admin/library").text, "gutenberg")

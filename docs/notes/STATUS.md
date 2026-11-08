@@ -18,6 +18,14 @@ build at 12 cores, the GPU uncapped. The card's noise (operator): 0.2 sone
 idle, 3.1 sone at full load, coil whine ~0.9 sone; its fan range is being
 measured (published figures disagree).
 
+### 2026-11-08: the Library shows a frozen collection and unfreezes it (collection-freeze.md §11)
+
+- A *frozen* badge on the card, since when and by whom under Details
+  (`status.frozen`, from `node_state.frozen_since`), Options › *unfreeze…*
+  behind the card's warning, admin only — `set_frozen`, the command's own
+  write, recorded as "Library (admin)"; freeze stays on the command line,
+  as pause does (07 §7.3).
+
 ### 2026-11-08: every model Ask uses preloaded, not pinned; nothing unloaded for being idle — A TRIAL (operator: option A)
 
 - **The operator:** "keep every model Ask uses resident on the card"; "The
