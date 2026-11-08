@@ -52,6 +52,13 @@ def small_read_cache(monkeypatch):
     backend.READ_CACHE.clear()
 
 
+# HERMETIC: pytest's warning capture keeps every warning a test emits until
+# it ends, and tantivy deprecates `delete_documents` once per document (fts
+# and catalog: 4,608 warnings here) — ~220 KB a file of the test's own,
+# linear, which a run without `-W ignore` measured as the path's growth
+# (2026-11-08). A process without the capture keeps none: the default filter
+# shows a DeprecationWarning once per place, its registry keyed on the place.
+@pytest.mark.filterwarnings("ignore::DeprecationWarning")
 def test_the_heap_stays_flat_over_many_update_files(tmp_path, isolated_config, small_read_cache,
                                                      monkeypatch):
     from app import unindexable
