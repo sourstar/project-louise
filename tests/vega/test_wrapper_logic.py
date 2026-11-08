@@ -973,3 +973,43 @@ def test_a_cpu_run_has_no_mode_to_relax(tmp_path):
     env = {vw.NEAR_EXACT_ENV: f"{name} GGML_SYCL_ENABLE_DNN"}
     with pytest.raises(loadopts.Unstatable, match="CPU"):
         vw.state_run(canon=_load_with(env), environ=env, **(kw | {"device": "cpu"}))
+
+
+# ---- the determinism contract is the EMBEDDER's (operator, 2026-11-08: "determinism
+# is mandatory for embedders only; as long as the quality is not degraded, determinism
+# can be dropped for any other model") ------------------------------------------------
+
+def _load_role(env, options, **role):
+    return vw.canon_from_protojson(json.dumps(json.loads(LOAD) | {"EnvVars": env, "Options": list(options)}
+                                              | {"Embeddings": False} | role))
+
+
+@pytest.mark.parametrize("role", [{}, {"Embeddings": True, "Reranking": True}])
+def test_a_chat_or_reranker_run_is_stated_without_the_vendors_mode(tmp_path, role):
+    kw, _name = _sycl_kw(tmp_path)
+    env = {"GGML_SYCL_ENABLE_DNN": "1", "GGML_SYCL_FA_ONEDNN": "1"}
+    canon = _load_role(env, ("parallel:4",), **role)
+    assert not vw.is_embedder(canon)
+    _rid, run = vw.state_run(canon=canon, environ=env, **kw)
+    assert run["engine"]["env"] == env, "what ran is still stated"
+
+
+def test_an_embedder_still_needs_its_vendors_mode_and_one_sequence(tmp_path):
+    kw, _name = _sycl_kw(tmp_path)
+    env = {"GGML_SYCL_ENABLE_DNN": "0", "GGML_SYCL_FA_ONEDNN": "1"}
+    canon = _load_role(env, ("parallel:1",), Embeddings=True)
+    assert vw.is_embedder(canon)
+    with pytest.raises(loadopts.Unstatable, match="GGML_SYCL_FA_ONEDNN=0"):
+        vw.state_run(canon=canon, environ=env, **kw)
+    env = {"GGML_SYCL_ENABLE_DNN": "0", "GGML_SYCL_FA_ONEDNN": "0"}
+    with pytest.raises(loadopts.Unstatable, match="parallel:1"):
+        vw.state_run(canon=_load_role(env, ("parallel:4",), Embeddings=True), environ=env, **kw)
+
+
+def test_a_backend_with_no_contract_serves_a_chat_model_but_never_an_embedder(tmp_path):
+    backend = vw.real_backend(_backend_dir(tmp_path, name="vulkan-llama-cpp"))
+    kw = dict(backend=backend, device="the card", pci=None, weights="sha256:" + "11" * 32,
+              tree=vw.tree_digest(backend.directory), runtime=[], card_driver_line="dxg 1")
+    vw.state_run(canon=_load_role({}, ("parallel:1",)), environ={}, **kw)
+    with pytest.raises(loadopts.Unstatable, match="no deterministic mode"):
+        vw.state_run(canon=_load_role({}, ("parallel:1",), Embeddings=True), environ={}, **kw)

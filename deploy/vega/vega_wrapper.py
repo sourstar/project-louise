@@ -959,7 +959,9 @@ def determinism_env(backend_name: str) -> dict[str, str]:
 #: Invariant 12 FAIL-CLOSED (operator, 2026-10-20: "a backend that does not
 #: produce bit exact results upon reprocessing the same data cannot be used
 #: under any circumstances"; "VeGa wrapper MUST ensure determinism for ANY
-#: backend"). Every family this wrapper can launch has a CONTRACT — what makes
+#: backend"; AMENDED 2026-11-08 to embedders only: "determinism is mandatory
+#: for embedders only; as long as the quality is not degraded, determinism can
+#: be dropped for any other model", `determinism_lacks`). Every family this wrapper can launch has a CONTRACT — what makes
 #: its runs give back their own bytes — and a run that does not hold it is
 #: never stated, on any device; a family with no contract is refused.
 #: Measured on the node the same night (louise-rerank-bge, 20 documents, three
@@ -1033,13 +1035,32 @@ def _option_values(canon: loadopts.Canon, key: str) -> list[str]:
             if str(o).partition(":")[0].strip() == key]
 
 
+def is_embedder(canon: loadopts.Canon) -> bool:
+    """The load is an EMBEDDING model's: LocalAI's `Embeddings` on and
+    `Reranking` off (`loads_an_embedder`'s rule, read from the stated options)."""
+    return bool(canon.options.get("Embeddings")) and not canon.options.get("Reranking")
+
+
 def determinism_lacks(backend_name: str, canon: loadopts.Canon, device: str,
                       vendor: str | None = None) -> list[str]:
     """What a run on `backend_name` lacks of its family's determinism
     contract — `[]` when it holds it. A family with no contract, or a run its
     family cannot make reproducible, raises: it is never stated. `vendor`
     "cuda": the card was READ as an NVIDIA one (`device_on_nvidia`), whatever
-    the backend's name says."""
+    the backend's name says.
+
+    EMBEDDERS ONLY (operator, 2026-11-08: "determinism is mandatory for
+    embedders only; as long as the quality is not degraded, determinism can be
+    dropped for any other model"; it replaces 2026-10-20's "for ANY backend").
+    A vector is stored, shared and compared across peers, so its run must give
+    back its own bytes (invariant 12). A chat answer, a reranker's scores, a
+    translation or speech are computed per request and stored nowhere. For
+    those the node's settings are a policy, measured for QUALITY: every
+    setting a node model departs from the vendor's mode with is a named,
+    measured exception in tests/vega/test_engine_settings.py. Their run is
+    still stated (what ran is named), just never refused for its mode."""
+    if not is_embedder(canon):
+        return []
     tokens = set(re.split(r"[-_]", backend_name.lower()))
     cuda = vendor == "cuda" or any(t.startswith("cuda") for t in tokens)
     if "llama" in tokens:
