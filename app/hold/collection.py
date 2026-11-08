@@ -1086,7 +1086,10 @@ def complete_members(root: Path, codex: Codex) -> list[tuple[str, str]]:
     done: list[tuple[str, str]] = []
     cal_set = getattr(getattr(getattr(codex, "space", None), "calibration", None), "set", None)
     if cal_set and not (d / shard_mod.calibration_paths(cal_set)[0]).is_file():
-        src = next((h for _n, h in others if _same_reference(codex, h)), None)
+        # a held Codex with no space (an annotations collection) holds no
+        # calibration member (München, 2026-11-08: gutenberg-book-editions)
+        src = next((h for _n, h in others if getattr(h, "space", None) is not None
+                    and _same_reference(codex, h)), None)
         carry_calibration(root, codex, d, *([src] if src is not None else []))
         done.append(("calibration", name_of(root, src.collection_id)))
     want = codex.license.terms_sha256
@@ -1116,6 +1119,9 @@ def _same_reference(a: Codex, b: Codex) -> bool:
     engine, by its id, from version 3, and the image below it; a version-2
     Codex and a version-3 one never share a member, whose header names the
     run differently."""
+    if getattr(a, "space", None) is None or getattr(b, "space", None) is None:
+        return False                    # no space, no reference to share
+
     def reference(c: Codex):
         return (encoder_field(c), c.space.encoder.weights,
                 c.space.calibration.set, c.space.calibration.vectors,

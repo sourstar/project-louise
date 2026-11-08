@@ -53,3 +53,29 @@ def test_dev_carry_keeps_the_licence_acknowledgement(held, tmp_path, monkeypatch
     assert louise.main(["dev", "carry", "old", "old9", "--root", str(root), "--rebuilt", "--yes"]) == 0
     assert [c[:2] for c in calls] == [("old", "old9")]
     assert "licence acknowledgement: carried" in capsys.readouterr().err
+
+
+def test_a_held_collection_without_a_space_is_no_source_and_a_rerun_completes(held, tmp_path, monkeypatch,  # noqa: F811
+                                                                              capsys):
+    """München, 2026-11-08: an annotations collection held beside them (its
+    Codex has no space) crashed the search for the calibration member, and
+    left the new collection's directory with codex.json alone. A space-less
+    Codex is skipped; and the same command run again completes the members
+    of the collection already written — no forget needed."""
+    from types import SimpleNamespace
+    root, old, _ = held
+    real = col._held
+    # FIRST, as on the node: the search for the source stops at a match
+    monkeypatch.setattr(col, "_held", lambda r: [("notes", SimpleNamespace(
+        collection_id="sha256:" + "ab" * 32, space=None, license=old.license))] + real(r))
+    member, _sig = shard_mod.calibration_paths(old.space.calibration.set)
+    args = ["hold", "collection", "create", "--root", str(root), "--recipe", _whole(root, old, tmp_path),
+            "--name", "old9", "--encoder", URL, "--api", "vega", "--embed-model", "vega-m"]
+    assert louise.main(args) == 0
+    first = capsys.readouterr().out.strip().splitlines()[-1]
+    (root / "old9" / "shard" / member).unlink()          # as a run stopped before its members
+    assert louise.main(args) == 0, "the same command again: the collection written is taken as it is"
+    again = capsys.readouterr()
+    assert again.out.strip().splitlines()[-1] == first
+    assert (root / "old9" / "shard" / member).read_bytes() == (root / "old" / "shard" / member).read_bytes()
+    assert "member: calibration — from old" in again.err
