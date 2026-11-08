@@ -530,6 +530,24 @@ Decided by the operator's rule:
   adopting it needs the wrapper's DETERMINISM rule and
   `tests/vega/test_engine_settings.py` changed first.
 
+**C on every non-embedder model in use** (München, the same night, the node
+paused, warm only; /root/measure/onednnC-results.txt):
+
+| model | exact over 3 fresh loads (A and C) | NaN, batches of 40/56/72 | C against A | speed, A → C |
+|---|---|---|---|---|
+| louise-chat-qwen3.5-9b-q4-p0 (Ask's only chat model) | yes, both | — | the same text | decode 74.5 → 74.4 tok/s, prompt 3,079 → 3,187 (+3.5 %) |
+| louise-rerank-bge | yes, both | 0 / 0 | scores differ, max \|Δ\| 7.8e-3 | 72 documents 475 → 461 ms (−3 %) |
+| louise-rerank-lamar | yes, both | 0 / 0 | scores differ, max \|Δ\| 1.66e-2 | 474 → 460 ms (−3 %) |
+| louise-translate-madlad | — | — | not tested: flash attention is off in its model file | — |
+
+- **Rerankers: not adopted.** C is exact, but it is a different score function
+  (up to 0.017 apart). The cross-collection merge on calibrated relevance
+  (05 §5.6, the operator's B) would have to be re-measured, and the gain is
+  only 3 %.
+- **Chat: same text and +3.5 % on prompts.** It is not adopted yet. Adopting it
+  changes the wrapper's DETERMINISM guard, which is how invariant 12 is
+  enforced, so the choice is the operator's (put to him 2026-11-08).
+
 ## Known limits of the Arc Pro B70 (2026-10-28)
 
 What the card, its driver (`libze-intel-gpu1 26.05.37020.3` in the LocalAI
