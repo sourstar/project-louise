@@ -159,3 +159,29 @@ def test_a_delta_read_is_the_callers_and_leaves_with_it(tmp_path, loads):
     assert left < read / 10, f"{left} bytes still held after the reader let go of a {read}-byte delta"
     assert seeder._SNAPS[str(tree)][2].delta._delta is None, "the shared snapshot never holds a delta"
     assert len(loads) == 1
+
+
+def test_possession_asks_the_shared_load_from_every_thread(tmp_path, loads, monkeypatch):
+    """2026-11-08, #416 on the node: `holding` (every embed thread) reached
+    `possession.current_snapshot`, which loaded the snapshot itself with a
+    memo but no lock. 65 threads loaded pubmed's 709 MB file at once and the
+    worker went to 93 GB in 30 s. It is the shared single flight now."""
+    from app.hold import collection as col
+    from app.share import possession
+    tree = _tree(tmp_path)
+    monkeypatch.setattr(col, "shard_dir_of", lambda root, name: tree)
+    seeder._SNAPS.clear()
+    got: list = []
+    gate = threading.Barrier(16)
+
+    def ask() -> None:
+        gate.wait()
+        got.append(possession.current_snapshot(tmp_path, "pubmed"))
+
+    threads = [threading.Thread(target=ask) for _ in range(16)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert len(got) == 16 and all(g is not None and g.snapshot_id == "2026-08" for g in got)
+    assert len([p for p in loads if p.endswith("2026-08.json")]) <= 1, loads

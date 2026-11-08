@@ -558,9 +558,6 @@ def record_hashes(root: Path, name: str) -> dict[str, str]:
     _hash_memo[key] = out
     return out
 
-#: the latest snapshot, by its file and mtime: `record_hash_of` runs per
-#: document and a snapshot of wikipedia-v8 lists 26,551 parts
-_snap_memo: dict[str, tuple] = {}
 #: (uid, hash) lists of the last parts read, by part root (documents come in
 #: part order, so a part is read once for its documents)
 _part_memo: dict[str, dict[str, str]] = {}
@@ -568,24 +565,20 @@ _PART_KEEP = 4
 
 
 def current_snapshot(root: Path, name: str):
+    """The collection's newest snapshot: THE ONE SHARED LOAD
+    (`seeder.current_snapshot`, single-flight per file identity), never a
+    load of this module's own. 2026-11-08: `holding` asked for it from every
+    embed thread at once and this function loaded the file itself, with a
+    memo but no lock, so 65 threads each loaded pubmed's 709 MB snapshot on
+    a cold start (py-spy at 95 GB RSS: every ThreadPoolExecutor thread in
+    snapshot._load_lazy ← seed.latest_snapshot ← here). None where the
+    collection holds no SHARD or no snapshot."""
     from app.hold import collection as col
-    d = col.shard_dir_of(Path(root), name) / "snapshots"
+    from app.share import seeder
     try:
-        newest = max((p for p in d.glob("*.json") if not p.name.endswith(".sig.json")),
-                     key=lambda p: p.stem)
-        stamp = newest.stat().st_mtime_ns
-    except (OSError, ValueError):
-        return None
-    got = _snap_memo.get(str(d))
-    if got is not None and got[0] == (str(newest), stamp):
-        return got[1]
-    from app.hold import seed
-    try:
-        snap = seed.latest_snapshot(Path(root), name)
+        return seeder.current_snapshot(col.shard_dir_of(Path(root), name))
     except Exception:   # noqa: BLE001 — no SHARD here: nothing is known
         return None
-    _snap_memo[str(d)] = ((str(newest), stamp), snap)
-    return snap
 
 
 def record_hash_of(root: Path, name: str, held: "Possession", uid: str) -> str | None:
