@@ -867,7 +867,7 @@ def stage_fts(con, row, collection) -> None:
 #: how long a collection's embed stage stays idle before its encoder's pin
 #: is restored (app/model_pins.py): the idle boundary of the stage (two
 #: settle beats, as long as an idle on-demand embedder stayed loaded before
-#: 2026-11-08; a resident encoder stays pinned by the resident holder)
+#: 2026-11-08; a preloaded encoder stays loaded, unpinned, after it)
 PIN_IDLE_S = 120.0
 #: the worker's holds on its encoders: holder -> [documents in use, last used]
 _pins: dict[str, list] = {}
@@ -4851,8 +4851,8 @@ def _effective_embed_mode(collection, con=None) -> str:
 
 
 def _release_embedder(collection, con=None, reason: str = "") -> list[str]:
-    """A COLLECTION SET TO `off` GIVES BACK ITS ENCODERS' RESIDENT PINS, AND
-    NOTHING IS UNLOADED. Returns the models given back; never raises.
+    """A COLLECTION SET TO `off` DROPS ITS ENCODERS FROM THE PRELOAD SET, AND
+    NOTHING IS UNLOADED. Returns the models dropped; never raises.
 
     The rule of 2026-10-14, "an embedder is held only for a collection that
     embeds everything": the worker's start-up run check loads every
@@ -4870,23 +4870,24 @@ def _release_embedder(collection, con=None, reason: str = "") -> list[str]:
     2026-10-14 rule held because the card did not fit: measured 30,267 of
     32,656 MiB (92.7 %) with every model resident (München, 2026-11-07),
     under the reclaimer's 0.95 (9cd77b3), with LocalAI's idle watchdog off
-    (3a00b65). Now an on-demand, all or p2p collection's encoders are the
-    resident set's (app/resident.py), and a switch to `off` takes them out
-    of it at once (`resident.forget`), unpinned, without waiting for the
-    keeper's beat — and unloaded by nobody: an unpinned model stays until
-    LocalAI's reclaimer needs its space."""
+    (3a00b65). Now an on-demand, all or p2p collection's encoders are
+    preloaded (app/resident.py) — preloaded, not pinned: the reclaimer
+    evicts the least-recently-used model when space is claimed — and a
+    switch to `off` drops them from the set at once (`resident.forget`), so
+    no load behind the keeper's last beat makes them; unloaded by nobody:
+    the model stays until LocalAI's reclaimer needs its space."""
     if _effective_embed_mode(collection, con) in collections_mod.EMBEDDING_MODES:
         return []
     try:
         gone = resident.forget(collection.name)
-    except Exception:   # noqa: BLE001 — the keeper's next beat gives it back
+    except Exception:   # noqa: BLE001 — the keeper's next beat drops it
         return []
     if gone and con is not None:
         db.log_event(con, "info", "control",
-                     f"embedder(s) {', '.join(gone)} given back by the resident set"
+                     f"embedder(s) {', '.join(gone)} no longer preloaded"
                      f"{(' on ' + reason) if reason else ''}: embed is "
-                     f"{_effective_embed_mode(collection, con)!r}; unpinned, and loaded until "
-                     f"LocalAI needs the space (nothing is unloaded for being idle, 2026-11-08)")
+                     f"{_effective_embed_mode(collection, con)!r}; left loaded until LocalAI "
+                     f"needs the space (nothing is unloaded for being idle, 2026-11-08)")
     return gone
 
 
@@ -5033,8 +5034,8 @@ def _sync_collections(all_collections, cons, last_discover, pipeline: bool = Fal
             continue
         if prev.embed_mode_default != kept.embed_mode_default:
             _apply_tier2_embed_mode(cons[kept.name], kept, "TOML edit")
-            # switched to off: its encoders leave the resident set, unpinned
-            # (nothing is unloaded for being idle, 2026-11-08)
+            # switched to off: its encoders leave the preload set, still
+            # loaded (nothing is unloaded for being idle, 2026-11-08)
             _release_embedder(kept, cons[kept.name], "the switch")
         if (prev.acquire_enabled, prev.license_ack, prev.profile,
                 prev.extras, prev.peer_source) != \
@@ -5681,8 +5682,8 @@ def _settle_runs_for_search() -> None:
                 if run_check.embed_allowed(con, c, stop=_stop.is_set):
                     _settled_for_search.add(key)
                     # the settle loaded the embedder: a collection on `off`
-                    # holds no pin on it, and it stays until LocalAI needs the
-                    # space (2026-11-08: nothing unloaded for being idle)
+                    # does not preload it, and it stays until LocalAI needs
+                    # the space (2026-11-08: nothing unloaded for being idle)
                     _release_embedder(c, con, reason="the start-up run check")
             except Exception:   # noqa: BLE001 — one collection, not the thread
                 pass
@@ -5711,18 +5712,20 @@ def _served_now(collections) -> list:
 
 
 def _resident_keeper() -> None:
-    """THE RESIDENT SET, held (app/resident.py; a trial, operator 2026-11-08:
-    "keep every model Ask uses resident on the card"). One beat at once —
-    a booted worker holds the set again — and every SETTLE_BEAT_S after, on
-    its own thread: a run check on the settle thread can embed a whole set
-    for minutes, and the holder must be renewed well inside
-    model_pins.HOLDER_TTL_S whatever else runs. The loads it starts run on a
-    thread of their own, one at a time (`resident._warm_all`). Each
-    collection's embed mode is read as `_release_embedder` reads it — the
-    Library's override, else the file — over this thread's own manifest
-    connections, keyed by path (SQLite is thread-affine; caches key on
-    physical identity). A stopping worker gives the pins back: a stopped
-    node holds nothing on the card."""
+    """THE RESIDENT SET, preloaded (app/resident.py; a trial, operator
+    2026-11-08: "keep every model Ask uses resident on the card"; preloaded,
+    not pinned: the reclaimer evicts the least-recently-used model when
+    space is claimed). One beat at once — a booted worker loads what the
+    set lacks — and every SETTLE_BEAT_S after, on its own thread: a run
+    check on the settle thread can embed a whole set for minutes, and an
+    evicted model is loaded again within a beat of the card having room
+    for it. The loads it starts run on a thread of their own, one at a time
+    (`resident._warm_all`). Each collection's embed mode is read as
+    `_release_embedder` reads it — the Library's override, else the file —
+    over this thread's own manifest connections, keyed by path (SQLite is
+    thread-affine; caches key on physical identity). A stopping worker
+    forgets the set, so a load behind its last beat makes no other; it
+    pins nothing, so there is nothing to give back."""
     cons: dict[str, object] = {}
 
     def embed_mode(c) -> str:
@@ -5751,8 +5754,8 @@ def _resident_keeper() -> None:
                 break
     finally:
         try:
-            resident.release()
-        except Exception:   # noqa: BLE001 — restored by the next boot's reconcile
+            resident.clear()
+        except Exception:   # noqa: BLE001 — the process ends anyway
             pass
         for con in cons.values():
             try:
@@ -6110,9 +6113,8 @@ def run_forever():
     # the runs of collections that hold vectors and do not embed here,
     # settled for search (03 §3.3; `_settle_runs_for_search`)
     threading.Thread(target=_settle_runs_for_search, name="settle-runs", daemon=True).start()
-    # every model Ask uses, pinned and loaded (app/resident.py; a trial,
-    # operator 2026-11-08) — after the boot's reconcile, which drops the
-    # resident holder a killed worker left
+    # every model Ask uses, preloaded and not pinned (app/resident.py; a
+    # trial, operator 2026-11-08)
     resident_thread = None
     if os.getenv("LOUISE_RESIDENT", "1") != "0":
         resident_thread = threading.Thread(target=_resident_keeper, name="resident", daemon=True)
@@ -6316,7 +6318,7 @@ def run_forever():
     # for a run the worker died under (app/scheduled_checks.py)
     check_thread.join(timeout=CHECK_STOP_WAIT_S)
     _release_locks()                     # the node holds a lock only while it runs
-    # the resident set's pins back to their state before (app/resident.py)
+    # the resident keeper's last load ends (app/resident.py)
     if resident_thread is not None:
         resident_thread.join(timeout=RESIDENT_STOP_WAIT_S)
     parallel.shutdown()             # the parse pool's children go with the worker

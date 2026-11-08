@@ -38,15 +38,7 @@ optional subsystem). A failed restore leaves a model pinned that should not
 be: it stays in the record without holders, is retried at every
 `reconcile`, and is shown until it succeeds.
 
-Queries are not pinned: a slowdown is acceptable for them — the rule of
-2026-10-23, which stands where `[models] keep_ask_resident` is false.
-AMENDED 2026-11-08 FOR A TRIAL (operator, option A: "keep every model Ask
-uses resident on the card"; "The load all is a test"): with it true, the
-worker holds the question path's models pinned and loaded as ONE holder,
-`worker resident` (app/resident.py) — the 2026-10-23 rule held because the
-card did not fit them all; measured 30,267 of 32,656 MiB (92.7 %) with every
-one resident (München, 2026-11-07). `release_one` lets that holder give
-back one model that left its set.
+Queries are not pinned: a slowdown is acceptable for them.
 
 THE STANDARD ALTERNATIVE (CLAUDE.md, "Do not reinvent the wheel"): the
 holders' record is ours because LocalAI has no leases — its pin is one bit
@@ -347,32 +339,6 @@ def release(holder: str, path: Path | None = None) -> None:
     except OSError as e:
         _say("error", f"model pin: the record {target} could not be written ({e}); "
                       f"{holder}'s pins are restored when it goes stale")
-
-
-def release_one(url: str | None, model: str | None, holder: str) -> None:
-    """`holder` is done with `model` alone, and keeps the rest (the resident
-    holder, app/resident.py, when a collection leaves its set): the model's
-    state before is restored if this was its last holder."""
-    if not url or not model:
-        return
-    from app import model_load
-    k = _key(model_load.server_of(url), model)
-    try:
-        with _state() as st:
-            entry = st["pins"].get(k)
-            if entry is None or holder not in entry["holders"]:
-                return
-            del entry["holders"][holder]
-            if not entry["holders"] and _restore(st, entry, holder, time.time()):
-                del st["pins"][k]
-    except OSError as e:
-        _say("error", f"model pin: the record {_path()} could not be written ({e}); "
-                      f"{holder}'s pin of {model} is restored when it goes stale")
-
-
-def held_by(holder: str) -> set[tuple[str, str]]:
-    """(server, model) of every model `holder` holds now, from the record."""
-    return {(p["server"], p["model"]) for p in status()["pins"] if holder in p["holders"]}
 
 
 def reconcile(*, now: float | None = None, boot: bool = False,

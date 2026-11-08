@@ -155,13 +155,13 @@ class ModelsConfig:
     operator, option A, "keep every model Ask uses resident on the card";
     "The load all is a test"; "It applies to any collection, on demand or
     all embedding preloads the model. Chat, speech, rerankers, madlad are
-    preloaded too"): the worker holds the models the question path uses
-    pinned and loaded (app/resident.py) — the chat, translation and
-    reranking models and the encoders of every collection whose embed is
-    on-demand, all or p2p under the first, the `[speech]` models under the
-    second. Both default true; false, that part is neither preloaded nor
-    pinned. Nothing is unloaded for being idle either way ("only if space
-    is claimed": LocalAI's reclaimer)."""
+    preloaded too"): the worker preloads the models the question path uses
+    (app/resident.py) — the chat, translation and reranking models and the
+    encoders of every collection whose embed is on-demand, all or p2p under
+    the first, the `[speech]` models under the second — preloaded, not
+    pinned: the reclaimer evicts the least-recently-used model when space
+    is claimed (operator 2026-11-08). Both default true; false, that part
+    is not preloaded. Nothing is unloaded for being idle either way."""
     load_timeout_s: int = 120
     keep_ask_resident: bool = True
     preload_speech: bool = True

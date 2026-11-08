@@ -2634,11 +2634,12 @@ def cmd_node_speech(a) -> int:
 
 
 def cmd_node_resident(a) -> int:
-    """`node resident show` (07 §7.3): the models the worker keeps on the
-    card for Ask — a trial (operator, 2026-11-08: "keep every model Ask uses
-    resident on the card"; app/resident.py, the one resolution) — beside
-    platform.toml's `[models] keep_ask_resident` and `preload_speech`, the
-    node's mode, and each model's loaded and pinned state. Read-only."""
+    """`node resident show` (07 §7.3): the models the worker preloads on
+    the card for Ask — a trial (operator, 2026-11-08: "keep every model Ask
+    uses resident on the card"; app/resident.py, the one resolution) —
+    beside platform.toml's `[models] keep_ask_resident` and
+    `preload_speech`, the node's mode, and each model's loaded state, last
+    known size and pin holders. Read-only."""
     from app import platform_config, resident
     try:
         _print(resident.show())
@@ -6020,11 +6021,11 @@ def build_parser() -> argparse.ArgumentParser:
                    help="the voice, for every language; unset, the model server's first voice profile")
     q.set_defaults(fn=cmd_node_speech)
 
-    p = nverbs.add_parser("resident", help="the models kept on the card for Ask (a trial): platform.toml "
+    p = nverbs.add_parser("resident", help="the models preloaded on the card for Ask (a trial): platform.toml "
                                            "[models] keep_ask_resident, preload_speech")
     rverbs = p.add_subparsers(dest="resident_verb", required=True)
     q = rverbs.add_parser("show", help="the switches, the node's mode, and each model of the set with its "
-                                       "roles, collections, loaded and pinned state")
+                                       "roles, collections, loaded state, size and pin holders")
     q.set_defaults(fn=cmd_node_resident)
 
     hold = surfaces.add_parser("hold", help="your own copy: complete, current, checked")
