@@ -48,6 +48,10 @@ PREFIX = "export:"
 #: the AKN export; the origin's other formats (XML, JSON, URI, HTML) are not
 #: the corpus form the plugin reads
 FORMAT = "AKN"
+#: the formats a job may name (`tipologiche/estensioni`, München 2026-11-08,
+#: less PDF/EPUB/RTF, which carry no structure to read): the others only for
+#: a PROBE of what they hold (tools/measure/normattiva_export_probe.py)
+FORMATS = ("AKN", "XML", "JSON", "HTML", "URI")
 #: the poll interval: the origin took about 50 s for one act (2026-10-13)
 POLL_S = 10.0
 #: one job's bound, from its confirmation to its 303
@@ -82,18 +86,29 @@ def api_root(endpoint_url: str) -> str:
     return url[: -len(marker)] if url.endswith(marker) else url
 
 
-def body_for(partition: dict, *, vigenza_day: str | None) -> dict:
+def body_for(partition: dict, *, vigenza_day: str | None, formato: str = FORMAT) -> dict:
     """The job's request for a partition `{"year": 1990, "form": "O"|"V"[,
     "type": "LEGGE"]}` — the advanced search's own parameters (manual
-    §1.3.2) under `parametriRicerca`, as `nuova-ricerca` takes them."""
-    year = int(partition["year"])
-    params: dict = {"dataInizioEmanazione": f"{year:04d}-01-01",
-                    "dataFineEmanazione": f"{year:04d}-12-31",
+    §1.3.2) under `parametriRicerca`, as `nuova-ricerca` takes them. A
+    partition with a `day` (`"1942-03-16"`) in place of its year exports the
+    acts emanated that day: one act's job, for a probe."""
+    if formato not in FORMATS:
+        raise ValueError(f"an export's format is one of {', '.join(FORMATS)}, not {formato!r}")
+    if partition.get("day"):
+        day = str(partition["day"])
+        if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", day):
+            raise ValueError(f"an export's day is YYYY-MM-DD, not {day!r}")
+        first = last = day
+    else:
+        year = int(partition["year"])
+        first, last = f"{year:04d}-01-01", f"{year:04d}-12-31"
+    params: dict = {"dataInizioEmanazione": first,
+                    "dataFineEmanazione": last,
                     "titoloContainsType": "ALL_WORDS", "testoContainsType": "ALL_WORDS",
                     "limitaAnniVigenza": False}
     if partition.get("type"):
         params["denominazioneAtto"] = str(partition["type"])
-    body: dict = {"formato": FORMAT, "tipoRicerca": "A", "modalita": "C",
+    body: dict = {"formato": formato, "tipoRicerca": "A", "modalita": "C",
                   "parametriRicerca": params}
     if partition.get("form") == "V":
         if not vigenza_day:
