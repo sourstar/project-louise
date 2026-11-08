@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from . import config, vector_place
-from .plugins import deposit, embedded, gutenberg, legi, normattiva, pubmed, wikidata, wikipedia
+from .plugins import deposit, embedded, gutenberg, legi, neuris, normattiva, pubmed, wikidata, wikipedia
 from .plugins.base import CorpusSource
 
 # `genome` and `packed` were boxed on 2026-09-14 and removed on 2026-11-01
@@ -25,6 +25,7 @@ PLUGIN_REGISTRY: dict[str, CorpusSource] = {
     "embedded": embedded.SOURCE,
     "gutenberg": gutenberg.SOURCE,
     "legi": legi.SOURCE,
+    "neuris": neuris.SOURCE,
     "normattiva": normattiva.SOURCE,
     "pubmed": pubmed.SOURCE,
     "wikidata": wikidata.SOURCE,

@@ -510,6 +510,10 @@ WIKIDATA_SPEC = AcquisitionSpec(
 
 # ---- LEGI (docs/notes/legal-fr-de-eu.md §2.1, §7.1; app/plugins/legi) ----
 
+def _legi_listing():
+    from .transport_https import html_index_listing
+    return html_index_listing
+
 #: the baseline as the node's probe read it (2026-10-28 23:48): its HEAD's
 #: length; an estimate for the disk preflight, the listing's bytes are the truth
 _LEGI_BASELINE_BYTES = 1_171_027_316
@@ -525,7 +529,7 @@ LEGI_SPEC = AcquisitionSpec(
         Endpoint(transport=Transport.HTTPS,
                  url="https://echanges.dila.gouv.fr/OPENDATA/LEGI/",
                  max_conns=2,                       # a public service: etiquette
-                 listing="html-index",
+                 listing=_legi_listing(),
                  listing_pattern=r"(?:Freemium_legi_global|LEGI)_\d{8}-\d{6}\.tar\.gz"),
     ),
     layout="container-files",
@@ -552,10 +556,57 @@ LEGI_SPEC = AcquisitionSpec(
 )
 
 
+# ---- NeuRIS, German federal law (app/plugins/neuris; legal-fr-de-eu.md §3, §7.1) ----
+
+def _neuris_listing():
+    from .neuris_listing import NeurisListing
+    return NeurisListing()
+
+
+#: The API's host. ONLY the test phase answers (probed from the node,
+#: 2026-10-28: the production host has no DNS record); production is this
+#: one line. A path the listing gives is relative to it.
+NEURIS_URL = "https://testphase.rechtsinformationen.bund.de"
+
+NEURIS_SPEC = AcquisitionSpec(
+    source_id="neuris",
+    transport=Transport.HTTPS,
+    endpoints=(
+        # no key; 600 requests a minute per IP, 503 past it (the API's
+        # rate-limiting guide): two connections at most, as for Normattiva
+        Endpoint(transport=Transport.HTTPS, url=NEURIS_URL, max_conns=2,
+                 listing=_neuris_listing()),
+    ),
+    # a manifestation zip and the expression's JSON, side by side under the
+    # expression's ELI (app/acquire/neuris_listing.py)
+    layout="container-files",
+    filters=("eli/*.zip", "eli/*.json"),
+    checksums=ChecksumSource(kind="none"),       # none published
+    # the delta is the listing compared with what is held, by path; the
+    # changelog's `changed` stamps a held path for a fetch again
+    delta=DeltaSpec(mode="full-resync"),
+    etiquette=RateLimit(max_conns=2),
+    profiles={
+        # the acts of one recent year of the Gazette: a few hundred files
+        "demo": Filter(include=("eli/bund/bgbl-1/2024/*",)),
+        "full": Filter(),
+    },
+    profile_labels={
+        "demo": "the federal acts of the Bundesgesetzblatt I of 2024, every expression NeuRIS lists",
+        "full": "every expression of federal law NeuRIS lists, each with its annexes",
+    },
+    # § 5 UrhG: laws and ordinances are official works without copyright;
+    # NeuRIS states no data licence (legal-fr-de-eu.md §3.6). No terms text
+    # to acknowledge — the plugin's docstring says what is owed.
+    license_class=LicenseClass.GREEN,
+)
+
+
 ACQUIRE_REGISTRY: dict[str, AcquisitionSpec] = {
     "embedded": EMBEDDED_SPEC,
     "gutenberg": GUTENBERG_SPEC,
     "legi": LEGI_SPEC,
+    "neuris": NEURIS_SPEC,
     "normattiva": NORMATTIVA_SPEC,
     "pubmed": PUBMED_SPEC,
     "wikidata": WIKIDATA_SPEC,

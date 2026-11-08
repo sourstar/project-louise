@@ -1,0 +1,119 @@
+# NeuRIS — German federal law, every expression of every act NeuRIS lists
+# as its own record (app/plugins/neuris; docs/notes/legal-fr-de-eu.md §3, §8 D1;
+# docs/notes/legal-collections-nemotron.md). DRAFT, 2026-11-08: nothing is
+# created until it runs ON THE NODE.
+#
+# CASE E of docs/notes/new-collection.md: a SECOND collection in an existing
+# space — legi's. The operator, 2026-11-08: legi, neuris and eurlex on
+# Nemotron-3-Embed-1B in ONE shared space, so the [space] block below is
+# byte-identical in the three legal recipes, and every plugin chunks with
+# `akn_article`. `--space-from legi` holds this block to legi's Codex: a
+# difference is a refusal, never a second space. Dry run first:
+#
+#   louise hold collection new neuris --recipe /config/recipes/neuris-recipe.toml \
+#       --name neuris --space-from legi --cpu-model vega-nemotron-3-embed-1b-cpu --dry-run
+#
+# then the same line without `--dry-run`:
+#
+#   louise hold collection new neuris --recipe /config/recipes/neuris-recipe.toml \
+#       --name neuris --space-from legi --cpu-model vega-nemotron-3-embed-1b-cpu
+#
+# (the flags are the case-E build's; case E is built separately.)
+#
+# The licence is GREEN (§ 5 UrhG, official works; NeuRIS states no data
+# licence, §3.6): no acknowledgement to record, no terms text — the plugin's
+# docstring says what is owed. The origins folder is /corpora/neuris (one
+# mount per kind; `new` links it). The fetch is the API's listing, ~5,511
+# expressions on 2026-10-28, two files each (the manifestation zip and the
+# expression's JSON), at most two connections; every later pass lists again
+# and fetches the paths it does not hold (app/acquire/neuris_listing.py):
+#
+#   hold fetch neuris --profile full
+#
+# OWED FROM THE NODE before `create` (the template's §11 checklist):
+#   - the busiest point-in-time day (the id's width, eli.py) and the versions
+#     per act NeuRIS lists;
+#   - whether the zip carries the annexes, the images and the PDF;
+#   - whether the API sends ETag or Last-Modified headers (a cheaper delta);
+#   - whether `ris:verweise` and `akn:analysis` are filled on real acts;
+#   - the articles' token lengths under the encoder's tokenizer (ctx).
+
+[descriptive]
+title = "NeuRIS — German federal law, every expression"
+summary = "The federal laws and ordinances of Germany as the government's legal information portal (NeuRIS, test phase) publishes them in LegalDocML.de, every expression it lists as its own record with its annexes, searchable as of any date. History arrives as NeuRIS publishes it: today the current versions and the ones NeuRIS adds from our first snapshot on. Amtliche Werke, § 5 UrhG."
+
+# THE SHARED SPACE BLOCK — byte-identical in legi-, neuris- and eurlex-recipe.toml.
+[space]
+dim = 2048
+dtype = "f16"
+ctx = 8192
+cut = "tokens"
+pooling = "mean"
+normalise = true
+exactness = "exact"
+epoch = "0"
+evaluation = ""
+# tolerance: measured by `new`, never typed
+
+[space.calibration]
+set = "sha256:7d06a2f6a4a773da01a517cb30571cac421753df3e30b20fca4716e5441fbf0f"
+
+[space.calibration.quorum]
+n = 16
+min_pass = 12
+
+[space.document]
+instruction = "passage: "
+
+[space.query]
+instruction = "query: "
+
+[space.encoder]
+weights = "sha256:09596cedbdf2a0d164b37083794632be55dcb2aa2abcf02fb995dfdccbecbf2c"
+label = "nvidia/Nemotron-3-Embed-1B-BF16 (c0c9fea9; f16 GGUF, llama.cpp 3f8af15a; vega-nemotron-3-embed-1b)"
+# [space.encoder.engine]: read on the node with `louise hold embedder run --encoder http://192.168.178.10:30286 --api vega --model vega-nemotron-3-embed-1b`; `new` holds the endpoint to it.
+
+# The ONGOING work per month, in chunks x ctx: TO MEASURE a month after the
+# first fetch. Draft: NeuRIS lists ~5,511 expressions; federal law in force
+# held 52,401 provisions of laws and 44,475 of ordinances (May 2024, §3.5);
+# new expressions a month are unknown until two listings are compared. The
+# carry by chunk hash embeds an unchanged article once across versions.
+[work]
+tokens = 20000000
+per = "P1M"
+
+[origin]
+form = "LegalDocML.de (an Akoma Ntoso profile) from the NeuRIS API's test phase: per expression, the manifestation zip — the main text, each annex as its own file (anlage-regelungstext-N.xml), the images and the PDF — and the expression's JSON (/v1/legislation/eli/…/deu); not the HTML rendering, and not regelungstext-1.xml alone, which would drop the annexes; gesetze-im-internet not used (legal-fr-de-eu.md §3.2, §8 D1)"
+unit = "file"
+clock = "Europe/Berlin"
+cutoff_rule = "record-date"
+jurisdiction = "DE"
+
+# The spec is the plugin's (app/acquire/specs.py NEURIS_SPEC): the API's
+# paginated listing, no bulk zip (404), the delta the listing compared with
+# what is held by path, the changelog's `changed` fetched again and its
+# `deleted` reported, never removed.
+
+[license]
+class = "green"
+
+[validation]
+checks = ["roots", "records", "chunks", "records-vs-origin", "license", "signature", "calibration", "vectors-sample"]
+required = []
+
+[validation.sample.records]
+shards = "0.05"
+
+[validation.sample.chunks]
+shards = "0.05"
+
+[validation.sample."vectors-sample"]
+shards = "0.05"
+
+[validation.sample."records-vs-origin"]
+shards = "0.05"
+
+# Layers (`akn_article`, the shared space's), slicing (`neuris`: the year of
+# the expression's point in time, 50 expressions a part) and the profile (the
+# ELI implementation and the validity axis, one record per expression) are
+# the plugin's defaults (app/plugins/neuris/source.py).

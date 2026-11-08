@@ -114,7 +114,7 @@ def test_a_missing_directory_is_the_endpoint_s_error(mock_server):
 def test_a_static_endpoint_is_listed_as_before():
     ep = Endpoint(transport=Transport.HTTPS, url="https://h", static_files=())
     assert list(transport_https.HttpsTransport().list_files(ep, SPEC)) == []
-    assert ep.listing == "static"
+    assert ep.listing is None
 
 
 def test_a_pass_fetches_only_the_files_not_yet_held(tmp_path, mock_server):
@@ -149,5 +149,6 @@ def test_the_spec_is_registered_green_with_two_connections_and_its_terms():
     assert specs.ACQUIRE_REGISTRY["legi"] is SPEC and SPEC.transport is Transport.HTTPS
     assert SPEC.license_class == LicenseClass.GREEN and SPEC.terms_text_path.is_file()
     assert SPEC.endpoints[0].max_conns == 2 and SPEC.etiquette.max_conns == 2
-    assert SPEC.endpoints[0].listing == "html-index" and SPEC.delta.mode == "full-resync"
+    from app.acquire.transport_https import html_index_listing
+    assert SPEC.endpoints[0].listing is html_index_listing and SPEC.delta.mode == "full-resync"
     assert SPEC.endpoints[0].url == "https://echanges.dila.gouv.fr/OPENDATA/LEGI/"

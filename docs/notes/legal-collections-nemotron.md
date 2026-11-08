@@ -102,6 +102,16 @@ These are the values, not the final TOML.
    - Where a per-expression change stamp lives is open.
    - `jurabk` keys contain spaces (`SGB 5`); whether that is allowed is
      open.
+   - **Built 2026-11-08** (`app/plugins/neuris`, `app/acquire/neuris_listing.py`,
+     `app/refs/neuris.py`, `neuris-recipe.toml`): `allChanged: true` leaves
+     the listing compared with what is held, by path; `false` stamps the
+     `changed` files for a fetch again and reports `deleted` ones. The stamp
+     is the changelog's own answer, kept in `fetch_files.remote_mtime`, no
+     file beside the corpus. A `jurabk` key is verbatim, space included
+     (05 §5.2 says "verbatim" and nothing more); a round-trip test holds it.
+     `origin_hash` covers the zip's members AND the expression's JSON, since
+     the record is parsed from both. Owed from the node: the busiest day,
+     versions per act, the annexes in the zip, ETags, `ris:verweise`.
 3. **LEGI: article-only records would drop `TEXTE_VERSION`, `SECTION_TA`
    and `TEXTELR` content** (invariant 11). The proposal is one record per
    origin file, of four kinds; only articles carry validity.

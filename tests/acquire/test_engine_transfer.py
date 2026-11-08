@@ -270,9 +270,13 @@ def test_failed_sidecar_refuses_to_record_an_unverified_fetch(tmp_path, mock_ser
     result = engine.run_acquisition(con, collection, spec, "demo")
     assert result["fetched"] == 0
     row = con.execute(
-        "SELECT fetch_done, error FROM fetch_files WHERE rel_path='d.dat'").fetchone()
-    assert row["fetch_done"] == 0
-    assert "sidecar" in (row["error"] or "")
+        "SELECT fetch_done, error, retries FROM fetch_files WHERE rel_path='d.dat'").fetchone()
+    assert row["fetch_done"] == 0, "never recorded unverified"
+    # A stalled sidecar is a ReadTimeout, named since 2026-11-08 (neuris), and
+    # so the origin's episode: a DEFERRAL, retried quietly and counted, never
+    # an error on the file (CLAUDE.md: deferral is not failure; after
+    # DEFER_ATTEMPTS it is said, engine._upsert_failed)
+    assert row["error"] is None and row["retries"] >= 1
 
 
 def test_sidecar_and_data_are_both_fetched_and_verified(tmp_path, mock_server):
