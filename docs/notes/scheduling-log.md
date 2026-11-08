@@ -2656,7 +2656,7 @@ Reclaimer "evicting LRU backend" lines per hour; the keeper's back-offs; first-q
 | BEFORE (live, 2026-11-08 03:25) | 11 of 11 | 95.9 % | 4 models, idle | 2 (11–15 s) |
 | AFTER | | | | |
 
-## 2026-11-08 — the vector index refresh capped at 500k unindexed rows, and a quiet table folded in (app/vector_index.py `refresh_due`, `_quiet`) — BEFORE (deploy pending)
+## 2026-11-08 — the vector index refresh capped at 500k unindexed rows, and a quiet table folded in (app/vector_index.py `refresh_due`, `_quiet`) — deployed 9bb6714, measured
 
 **Scenario (BEFORE, München, vec_latency.py, 36 runs, node paused, warm pass first, the 10-31 script).** Wikipedia is
 embedding. `index_stats`: 147,662,989 rows. vector_idx IVF_PQ has 146,226,722 indexed and 1,436,267 unindexed, in 2
@@ -2680,10 +2680,22 @@ Tables under 25 M rows are unchanged.
 And the idle path (scheduling.md §6, 6): a table whose unindexed count has not moved for a whole pass (30 min) folds
 in whatever reaches the 50k floor. Otherwise a collection that finishes under its threshold is scanned for good.
 
-**AFTER (to fill on the node).** The next wikipedia refresh line ("vector index refreshed: N … (Xs)"), then
-vec_latency.py again (the same 36 runs).
+**AFTER (München, 9bb6714, deployed 16:07Z).** The worker's first index pass, verbatim:
+
+    17:08:07 [wikipedia info:index] vector index refresh started: 1436267 unindexed rows of 147662989, 296 fragment(s); this collection's maintenance waits until it ends
+    17:10:09 [wikipedia info:index] vector index refreshed: 1436267 unindexed rows folded in (122s); 0 remain; 3 index(es)
+
+`index_stats` right after: vector_idx IVF_PQ 147,662,989 indexed, 0 unindexed, 3 indices; lang_idx (3 indices) and
+book_id_idx (5) also 0 unindexed. Then vec_latency.py, the same 36 runs, node paused 16:10:13–16:10:34Z, warm pass
+first, the web's image:
 
 | | unindexed rows | refresh time | unfiltered median / p90 | lang=en median / p90 |
 |---|---|---|---|---|
 | BEFORE (1fd3914) | 1,436,267 | (not due) | 1,095 / 1,183 ms | 1,488 / 1,676 ms |
-| AFTER | | | | |
+| AFTER (9bb6714) | 0 | 122 s (expected ~80 s) | 155.4 / 169.9 ms (max 218.0) | 86.0 / 98.5 ms (max 108.2) |
+
+**Reading.** The delta cost 122 s for 1.44 M rows, about 85 µs a row (normattiva's 93.1 s for 591,591 was 157 µs).
+The filtered search is now faster than on 10-31 (86 against 202 ms). The unfiltered one is not back to 57 ms: it is
+155 ms with 3 vector indices, against 2 on 10-31. Whether the third index costs that, or the row mask's absence changes
+the plan, is not measured here; the next merge of the deltas (`VECTOR_INDEX_MAX_INDICES` = 4) would tell. Worker
+restarts over the pass: 0. Files: /root/measure/refresh-9bb6714.txt, lat-9bb6714.txt.
