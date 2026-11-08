@@ -127,6 +127,29 @@ Delle obbligazioni › TITOLO IX — Dei fatti illeciti › Art. 2043". That is 
 parser version, so normattiva-nemo is then parsed, not carried. If it does
 not, the header stays as above.
 
+**Settled the same day (München, /root/measure/ccprobe.txt and nvapi/).
+The origin holds no partition for the Codice civile, in any form, so the
+header stays act + article.**
+
+- The AKN member, `REGIO DECRETO_19420316_262/…_VIGENZA_2026-04-29_V347.xml`
+  in M/codici.zip (base64 XML, 14.1 MB), has 3,280 attachments: 31
+  "Disposizioni sulla legge in generale-art. N", then 3,249 "CODICE
+  CIVILE-art. N".
+- Each attachment is one flat article (paragraph, p, ins, ref). There is no
+  book, chapter, part, section or hcontainer, and no num or heading outside
+  the decree's two articles.
+- The 12 mentions of LIBRO/CAPO are notes on repealed articles ("… a
+  seguito della sostituzione del LIBRO V, TITOLO V, CAPO V …"): text about
+  a partition, not the partition.
+- No other file the node holds has the act.
+- The open-data API (manual rev. 10, 10/03/2026) has no tree, index or
+  sommario route. `dettaglio-atto-urn` (`…;262:2~art2043`) gives the article
+  alone, and for legge 241/1990 it does not carry even the "CAPO I" that the
+  AKN `<chapter>` gives. Its `idGruppo` is an opaque number with no label.
+
+An outside table of the code's structure stays out of the chunks
+(invariants 3 and 11).
+
 ## 4. Decisions
 
 ### C1 — How an article longer than the window is cut
