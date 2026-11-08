@@ -1,86 +1,87 @@
-# The legal collections on Nemotron — decision, space, runbook (2026-11-08)
+# The legal collections on Nemotron (2026-11-08) — PROPOSED, for the architecture session
 
-**The operator, 2026-11-08:** "Create the planned legal collections, use
-Nemotron embedder."
+**The operator, 2026-11-08:**
+- "Create the planned legal collections, use Nemotron embedder."
+- Then: "one collection per nation … Normattiva is already existing, skip it.
+  Talk to the architecture session before."
+- And: "Eurlex all languages together. France, Germany, different countries.
+  EU same entity, different languages."
 
-The planned collections are the ones in [`legal-fr-de-eu.md`](legal-fr-de-eu.md)
-§8: France (`legi`), Germany (`neuris`), and the EU, with one collection per
-language (`eurlex-en`, `eurlex-fr`, `eurlex-de`, `eurlex-it`).
+Nothing here is built until the architecture session agrees.
 
-## Amendments this names
+## The collections
 
-- **D3 amended.** The old rule was one encoder per language, chosen by the
-  bake-off. Now Nemotron-3-Embed-1B encodes all six collections, by the
-  operator's choice. The per-language bake-off rows
-  ([`legal-embedders-fr-de-eu.md`](legal-embedders-fr-de-eu.md)) stay as a
-  measurement, and no longer decide anything.
-- **One shared legal space.** D3's earlier option A comes back. All six
-  recipes carry the same `[space]` block, and every plugin cuts with
-  `akn_article` at the same version and parameters. `space_id` is a pure
-  function of those bytes (09 §9.3), so each collection made by case A
-  lands in the same space:
-  - one question searches all six as one list, in any language;
-  - one encoder stays resident (with wikidata, whose chunker differs, so it
-    is another space).
-- **EU-it leaves Normattiva's space.** It was planned as a sister of
-  Normattiva's DAR-legal-it space. It now joins the Nemotron legal space.
-  Whether Normattiva follows is the measurement of
-  legal-embedders-fr-de-eu.md §"Nemotron-3-Embed-1B for Normattiva too",
-  and that switch is the operator's.
-- **The `eli` namespace has one owner.** It is now `eli-refs`
-  (app/refs/eli.py), which routes each key to its jurisdiction
-  (legal-fr-de-eu.md §5.2; 06 §6.5 amended). Building it found a defect,
-  fixed at the same time: `louise_lookup` resolved none of Normattiva's
-  three key forms (`urn:`, `eli:it:`, `akn:`).
+| collection | law | origin | record | languages |
+|---|---|---|---|---|
+| `legi` | French | DILA LEGI (+ JORF for the originals' ELI) | one per origin file (see open question 3) | fr |
+| `neuris` | German federal | NeuRIS API (the testphase host) | one expression of one act | de |
+| `eurlex` | EU | Cellar (Formex 4 + CDM notice) | one version of one act in one language | all 24 as slices; en, fr, de, it embedded first (D2 A) |
+
+Normattiva is skipped: it already exists.
+
+## Amendments
+
+- **One EU collection** (CLAUDE.md invariant 11, 02 §2.3). This reverses
+  the 2026-10-28 rule of one EU collection per language. The languages are
+  slices, as Wikipedia's are. The platform passes no parameter to a plugin,
+  so this is also the form the code already supports.
+- **D3:** Nemotron-3-Embed-1B for all three, in one shared space. The
+  recipes get an identical `[space]` block, and every plugin chunks with
+  `akn_article`. EU-it no longer joins Normattiva's space.
+- **`eli` gets one owner**, `eli-refs` (legal-fr-de-eu.md §5.2; 06 §6.5),
+  in 09b9ebd. A defect was fixed with it: `louise_lookup` resolved none of
+  Normattiva's key forms.
 
 | | pros | cons |
 |---|---|---|
-| **Nemotron, one shared space (chosen)** | one engine to gate and keep resident; cross-language and cross-collection answers; the 8B family leads MLEB, and the 1B is distilled from it | not chosen on legal questions per language (the bake-off's rule); 2,048 dims, about 2.7× the vector bytes of a 768 model; a pin is irreversible, so a better French-only model later means a new collection |
-| one encoder per language, by bake-off (D3 as it was) | each language gets its best measured model | three or four engines on one card; no single list across collections; still waiting on the bake-off runs |
+| **Nemotron, one shared space (proposed)** | one engine to gate and keep resident; one list across the three, in any language | not chosen on legal questions per language; 2,048 dims; a pin is irreversible |
+| one encoder per language, by bake-off (D3 as it was) | the best model measured for each language | several engines on one card; no list across collections; the bake-off runs are still owed |
 
 ## The shared space block
 
-This block is identical in every legal recipe. Its bytes are what make the
-six collections one space.
+These are the values, not the final TOML.
 
-- encoder: `nvidia/Nemotron-3-Embed-1B-BF16` at c0c9fea9, as an f16 GGUF.
-  Weights `sha256:09596ced…ecbf2c`
-  ([`nemotron-embed.md`](nemotron-embed.md) "Done");
-- 2,048 dims, f16, mean pooling, normalised;
-- ctx 8,192, cut by tokens (the served `context_size`);
-- document instruction `passage: ` and query instruction `query: `
-  (Codex version 11);
-- tolerance: not typed, because `new` measures it;
-- `[space.encoder.engine]`: read on the node and pasted in (below).
+- Encoder: weights `sha256:09596ced…ecbf2c`, labelled "Nemotron-3-Embed-1B
+  f16".
+- Vectors: 2,048 dims, f16, mean pooling, normalised.
+- Window: ctx 8,192, cut by tokens.
+- Instructions: `passage: ` on documents, `query: ` on queries.
+- `exactness = "exact"`: required from Codex version 10.
+- `[space.calibration]`: set `sha256:7d06a2f6…`, quorum n = 16, min_pass =
+  12 (every recipe's).
+- Tolerance: measured by `new`.
+- `[space.encoder.engine]`: read on the node.
 
-## Runbook (München)
+## Open questions, from the plugin research
 
-**Before anything runs:**
+1. **One `new` per collection, each run as case A.** The plugin id is the
+   first argument.
+2. **NeuRIS: annexes are separate files.** The proposed fetch is the
+   manifestation zip plus the per-expression JSON, with `origin_hash` taken
+   over the zip's members.
+   - How `allChanged` is obeyed is open.
+   - Where a per-expression change stamp lives is open.
+   - `jurabk` keys contain spaces (`SGB 5`); whether that is allowed is
+     open.
+3. **LEGI: article-only records would drop `TEXTE_VERSION`, `SECTION_TA`
+   and `TEXTELR` content** (invariant 11). The proposal is one record per
+   origin file, of four kinds; only articles carry validity.
+   - Out-of-range dates (`2222-02-22`, `2999-01-01`) need an id rule.
+   - `MODIFIE_MORT_NE` needs an index rule.
+   - The tarballs are read through a container pack.
+4. **Cellar:** the acquisition is SPARQL listing plus content negotiation.
+   The body item is picked by name.
+5. **Owed before `create`:**
+   - each origin's terms text, byte-exact;
+   - the counts from the node: the busiest start day, LEGI Work-key
+     stability, Cellar's counts per year and language, NeuRIS versions per
+     act.
 
-1. Deploy the branch.
-2. Paste the engine block into all six recipes, the same block in each.
-   Print it with:
-   `louise hold embedder run --encoder http://192.168.178.10:30286 --api vega --model vega-nemotron-3-embed-1b`
-3. Record each licence acknowledgement, which the create dialog refuses
-   without (invariant 9). The terms texts each plugin still owes are listed
-   in its recipe header.
-4. Take the probes and counts each plugin's docstring names as owed. They
-   must come before `create`, because the id width and the Work key are
-   pinned there.
+## Real fixtures found (GitHub)
 
-**Then, one collection at a time:**
-
-1. Run the dry run first:
-   `louise hold collection new <name> --recipe /config/recipes/<name>-recipe.toml --name <name> --encoder http://192.168.178.10:30286 --api vega --embed-model vega-nemotron-3-embed-1b --cpu-model vega-nemotron-3-embed-1b-cpu --dry-run`
-2. Read the dry run's `space_id`. All six must print the same one. A
-   different one means the blocks differ, so stop.
-3. Run the same command without `--dry-run`.
-
-**The order:** France, the EU (en, fr, de, it), then Germany, as §7.1
-proposed. Embedding stays `off` until the gate passes and the operator
-turns it on (new-collection.md).
-
-## What is built and what is owed
-
-The status of each plugin is in its own source docstring and in
-[`STATUS.md`](STATUS.md) under 2026-11-08.
+| origin | repository | commit | what | caveat |
+|---|---|---|---|---|
+| LEGI | `Legilibre/legi-php` `files_exemples/` | a028bac0 | articles, a section, a text's struct and version files | older format |
+| Cellar | `op-cellar-git/eurlex-xml-format` | a4b89104 | the Office's CDM notice samples | hand-edited |
+| Cellar | `eur-lex-rs/eur-lex` `data/` | 6e3db12c | Formex 4, original and consolidated | — |
+| NeuRIS | `digitalservicebund/ris-search` | 81b58f82 | LegalDocML.de | test data |

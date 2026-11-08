@@ -1,6 +1,6 @@
 # France, Germany and the EU — three legal collections on Normattiva's template (2026-10-28)
 
-**Status: DECIDED (§8, operator 2026-10-28); D3 AMENDED 2026-11-08 — Nemotron-3-Embed-1B for all six, one shared space ([`legal-collections-nemotron.md`](legal-collections-nemotron.md)).** Asked by the operator, 2026-10-28:
+**Status: DECIDED (§8, operator 2026-10-28); PROPOSED 2026-11-08 — one EU collection, Nemotron-3-Embed-1B for all three, one shared space ([`legal-collections-nemotron.md`](legal-collections-nemotron.md)).** Asked by the operator, 2026-10-28:
 "I need the equivalent of normattiva collection for french, german and
 European laws, prepare a design note." The decisions that are the
 operator's are in §8, each in the one shape (CLAUDE.md, Style).
