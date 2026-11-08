@@ -48,27 +48,38 @@ _last_bundle_scan: dict[str, float] = {}
 
 def current_snapshot(shard_dir: Path) -> sn.Snapshot | None:
     """The newest snapshot in the SHARD's chain, by id — `YYYY-MM` and
-    `YYYY-Www` each sort as text within their cadence (02 §2.2)."""
-    d = Path(shard_dir) / "snapshots"
-    if not d.is_dir():
-        return None
-    ids = sorted(p.name[:-5] for p in d.glob("*.json") if not p.name.endswith(".sig.json"))
-    return sn.load(d / f"{ids[-1]}.json") if ids else None
+    `YYYY-Www` each sort as text within their cadence (02 §2.2).
+
+    ONE LOAD PER FILE, SHARED (2026-11-08). A snapshot is immutable once
+    written, and every background thread of the worker asked for it on
+    every beat — the seeder's sync, the digest's entries, the share fetch,
+    the index maintainer — each loading it anew: pubmed's 2026-08 is 709 MB,
+    hashed whole on every load (1.2 s; three threads at once on the node,
+    py-spy). Now the file is loaded once per physical identity (path, inode,
+    size, mtime_ns) by `_shared`, a single flight: callers arriving during
+    the load wait for it. Each caller gets its own VIEW of the shared
+    header (shards, relations, files, hash): a delta it reads is parsed
+    into its view and leaves with it, never held by the cache (a first
+    delta is ~2.8 GB as strings for 40 M uids, measured; LazyDelta)."""
+    snap = _shared(shard_dir)
+    if snap is None or not isinstance(snap.delta, sn.LazyDelta):
+        return snap
+    import copy
+    view = copy.copy(snap)                       # the header shared, the hash with it
+    object.__setattr__(view, "delta", snap.delta.fresh())
+    return view
 
 
-#: shard tree -> (newest snapshot file, its stat, the Snapshot)
+#: shard tree -> (newest snapshot file, its stamp, the Snapshot: its header,
+#: the delta never read in it)
 _SNAPS: "OrderedDict[str, tuple[str, tuple[int, int, int], sn.Snapshot]]" = OrderedDict()
 _SNAPS_MAX = 32
 _snaps_lock = threading.Lock()
+#: (shard tree, file, stamp) -> the lock its one loader holds (single flight)
+_loading: dict[tuple, threading.Lock] = {}
 
 
-def cached_snapshot(shard_dir: Path) -> sn.Snapshot | None:
-    """`current_snapshot`, loaded once while the newest file stays the same
-    file (path, inode, size, mtime): a snapshot is immutable once written
-    (02 §2.2), and a search loaded it three times (München, 2026-10-22:
-    25 ms a search). For the SEARCH path only — its readers use the shards,
-    never the delta, which a held Snapshot would keep in memory once read
-    (pubmed's first delta is 4.3 GB as strings, LazyDelta)."""
+def _newest(shard_dir: Path) -> tuple[Path, tuple[int, int, int]] | None:
     d = Path(shard_dir) / "snapshots"
     try:
         ids = sorted(p.name[:-5] for p in d.glob("*.json") if not p.name.endswith(".sig.json"))
@@ -78,20 +89,75 @@ def cached_snapshot(shard_dir: Path) -> sn.Snapshot | None:
         st = path.stat()
     except OSError:
         return None
-    stamp = (st.st_ino, st.st_size, st.st_mtime_ns)
-    key = str(Path(shard_dir))
+    return path, (st.st_ino, st.st_size, st.st_mtime_ns)
+
+
+def _held(key: str, path: Path, stamp) -> sn.Snapshot | None:
     with _snaps_lock:
         hit = _SNAPS.get(key)
-        if hit is not None and hit[0] == str(path) and hit[1] == stamp:
+        if hit is not None and _covers(hit, path, stamp):
             _SNAPS.move_to_end(key)
             return hit[2]
-    snap = sn.load(path)
+    return None
+
+
+def _covers(entry, path: Path, stamp) -> bool:
+    """The entry answers for a caller that stat-ed `path` at `stamp`: the
+    same stamp, or the same file (path, inode) stat-ed LATER by the loader —
+    the caller's stat was taken before a re-stamp, and loading what it saw
+    would put an older entry over a newer one, and the next caller would
+    load the newer again (measured: 5–7 loads for 3 re-stamps)."""
+    held_path, (ino, size, mtime), _snap = entry
+    return held_path == str(path) and (entry[1] == stamp or (ino == stamp[0] and mtime > stamp[2]))
+
+
+def _shared(shard_dir: Path) -> sn.Snapshot | None:
+    """The newest snapshot, loaded once while the newest file stays the same
+    file — one entry per SHARD tree, a newer file replacing it — and by ONE
+    caller at a time per file (the standard single-flight pattern: a lock per
+    key; Go's `singleflight`). A file not in canonical form is parsed whole,
+    delta included, and so is never kept."""
+    found = _newest(shard_dir)
+    if found is None:
+        return None
+    path, stamp = found
+    key = str(Path(shard_dir))
+    snap = _held(key, path, stamp)
+    if snap is not None:
+        return snap
+    flight = (key, str(path), stamp)
     with _snaps_lock:
-        _SNAPS[key] = (str(path), stamp, snap)
-        _SNAPS.move_to_end(key)
-        while len(_SNAPS) > _SNAPS_MAX:
-            _SNAPS.popitem(last=False)
-    return snap
+        lock = _loading.setdefault(flight, threading.Lock())
+    try:
+        with lock:
+            snap = _held(key, path, stamp)
+            if snap is not None:
+                return snap
+            snap = sn.load(path)
+            if isinstance(snap.delta, sn.LazyDelta):
+                with _snaps_lock:
+                    held = _SNAPS.get(key)
+                    if held is None or not _covers(held, path, stamp):   # never a newer one replaced
+                        _SNAPS[key] = (str(path), stamp, snap)
+                    _SNAPS.move_to_end(key)
+                    while len(_SNAPS) > _SNAPS_MAX:
+                        _SNAPS.popitem(last=False)
+            return snap
+    finally:
+        with _snaps_lock:
+            if _loading.get(flight) is lock:
+                del _loading[flight]
+
+
+def cached_snapshot(shard_dir: Path) -> sn.Snapshot | None:
+    """`current_snapshot` for the SEARCH path: the shared snapshot itself,
+    loaded once while the newest file stays the same file (path, inode,
+    size, mtime): a search loaded it three times (München, 2026-10-22:
+    25 ms a search). Its readers use the shards, never the delta, which the
+    shared Snapshot would keep in memory once read (pubmed's first delta is
+    4.3 GB as strings, LazyDelta) — a reader that needs the delta takes
+    `current_snapshot`."""
+    return _shared(shard_dir)
 
 
 def _lt():

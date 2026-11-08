@@ -57,6 +57,9 @@ def _possessing(monkeypatch, d, uid, content_hash):
     held = possession.Possession({uid: [content_hash]}, {uid: {content_hash: ["b1"]}},
                                  {"b1": "nodekey"}, {}, {"b1": "lang=en/00001"})
     monkeypatch.setattr(possession, "index", lambda root, name, codex, con: held)
+    # the worker's paths ask the record's PART (`possession.holding`, 2026-11-08)
+    monkeypatch.setattr(possession, "holding", lambda root, name, codex, con, u, nid:
+                        (held, held[u][0]) if u in held else None)
     monkeypatch.setattr(contribute, "bundle_dir", lambda root, name, codex, shard, b, **kw: d)
 
 
@@ -104,7 +107,7 @@ def test_a_chunk_the_bundle_lacks_is_still_embedded(collection, monkeypatch):
 def test_the_worker_asks_possession_with_the_row_s_content_hash(collection, monkeypatch):
     seen = {}
 
-    def held_vectors(root, name, codex, con, uid, content_hash, chunk_ids):
+    def held_vectors(root, name, codex, con, uid, content_hash, chunk_ids, held=None):
         seen.update(uid=uid, h=content_hash, n=len(chunk_ids))
         return {"x": [1.0]}
     monkeypatch.setattr(possession, "held_vectors", held_vectors)
@@ -113,20 +116,20 @@ def test_the_worker_asks_possession_with_the_row_s_content_hash(collection, monk
     row = con.execute("SELECT * FROM documents ORDER BY rowid LIMIT 1").fetchone()
     held = possession.Possession({row["uid"]: ["h-snap"]}, {row["uid"]: {"h-snap": ["b1"]}},
                                  {"b1": "k"}, {}, {"b1": "lang=en/00001"})
-    monkeypatch.setattr(possession, "index", lambda root, name, codex, con: held)
+    # the record's part's possession and its hash there (`possession.holding`)
+    part_hash = ["h-snap"]
+    monkeypatch.setattr(possession, "holding", lambda root, name, codex, con, uid, nid:
+                        (held, part_hash[0]) if uid in held else None)
     c = collection
     monkeypatch.setattr(type(c), "codex", property(lambda self: object()), raising=False)
     got = worker._possessed_vectors(con, c, row, [{"id": "a"}, {"id": "b"}])
     assert got == {"x": [1.0]} and seen == {"uid": row["uid"], "h": "h1", "n": 2}
     # Perugia, 2026-10-23: the manifest's column NULL on every row — the
-    # record's hash comes from the part its holding bundle names
+    # record's hash comes from the part that holds it
     con.execute("UPDATE documents SET content_hash=NULL")
     row = con.execute("SELECT * FROM documents ORDER BY rowid LIMIT 1").fetchone()
-    asked = []
-    monkeypatch.setattr(possession, "record_hash_of",
-                        lambda root, name, held_, uid: asked.append(uid) or "h-snap")
     assert worker._possessed_vectors(con, c, row, [{"id": "a"}]) == {"x": [1.0]} and seen["h"] == "h-snap"
-    monkeypatch.setattr(possession, "record_hash_of", lambda root, name, held_, uid: None)
+    part_hash[0] = None
     assert worker._possessed_vectors(con, c, row, [{"id": "a"}]) == {}, "no hash anywhere, no claim: embedded"
 
 

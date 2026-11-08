@@ -83,6 +83,24 @@ def _stem_analyzer() -> tantivy.TextAnalyzer:
     base = tantivy.TextAnalyzerBuilder(tantivy.Tokenizer.simple())
     return base.filter(tantivy.Filter.remove_long(64)).build()
 
+def manual_reader(idx: tantivy.Index) -> tantivy.Index:
+    """The Index's reader reloads only when asked (tantivy's
+    `ReloadPolicy::Manual`), never on its own after a commit.
+
+    tantivy-py opens every Index with a reader on `OnCommitWithDelay`: a
+    watcher thread that, on every commit — each fts batch, each merge —
+    opens a new searcher over every segment. The worker kept one Index per
+    (collection, group) for its life and commits all day, so it re-opened
+    pubmed's 40 M-document segments after every batch, for a searcher it
+    never reads: every read here calls `idx.reload()` first. The node's
+    memray (2026-11-08, pubmed alone, 81 s): 73.45 GB allocated under
+    `tantivy.Index(...)` in this module and 6–7.5 GB per rdf commit under
+    the catalog's (app/catalog.py `_open`), native, beside the worker's
+    OOM kills (docs/notes/STATUS.md)."""
+    idx.config_reader("Manual", 0)
+    return idx
+
+
 def get_index(group: str, collection=None) -> tantivy.Index:
     if collection is None:
         collection = collections_mod.default_collection()
@@ -106,6 +124,7 @@ def get_index(group: str, collection=None) -> tantivy.Index:
         idx.register_tokenizer("lang_tok", _analyzer_for(group))
         if pystem_algorithm(group):
             idx.register_tokenizer("stem_tok", _stem_analyzer())
+        manual_reader(idx)
         _indexes[key] = idx
         _writers.pop(key, None)     # a new Index object: a writer on the old one is stale
         return idx
