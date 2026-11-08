@@ -26,7 +26,6 @@ from ..plugins.base import LicenseClass
 from ..transfer import pool as transfer_pool
 from ..transfer.bucket import Priority
 from ..transfer.manager import Direction, get_manager
-from . import cellar
 from . import checksum
 from . import claim as claim_mod
 from . import export_job
@@ -187,7 +186,7 @@ def _list_and_filter(spec: AcquisitionSpec, profile: str,
                 with _listing_bound(stop, priority):
                     # the base directory, then (09 §9.17 `updatefiles-dir`)
                     # the update directory beside it
-                    candidates = list(updatefiles.listing(transport, endpoint, spec))
+                    candidates = list(_list_endpoint(transport, endpoint, spec, profile_filter))
                 break
             except TransferAborted:
                 # the STOP, not the mirror. TransferAborted IS a
@@ -204,12 +203,7 @@ def _list_and_filter(spec: AcquisitionSpec, profile: str,
         for endpoint in spec.endpoints:
             _stop_check(stop, f"before listing {endpoint.url}")
             with _listing_bound(stop, priority):
-                if spec.listing is not None:
-                    # an origin whose inventory is a query (Cellar's SPARQL,
-                    # app/acquire/cellar.py), asked for this profile only
-                    candidates.extend(spec.listing(endpoint, spec, profile_filter))
-                else:
-                    candidates.extend(updatefiles.listing(transport, endpoint, spec))
+                candidates.extend(_list_endpoint(transport, endpoint, spec, profile_filter))
     for f in candidates:
         if f.rel_path not in seen:
             seen.add(f.rel_path)
@@ -222,6 +216,16 @@ def _list_and_filter(spec: AcquisitionSpec, profile: str,
         all_files = [f for f in all_files if f.mtime is not None and f.mtime < until]
     louise = _apply_filters(all_files, spec.filters, profile_filter)
     return louise + _select_extras(all_files, spec, extras_selected, louise)
+
+
+def _list_endpoint(transport, endpoint, spec: AcquisitionSpec, profile_filter):
+    """One endpoint's listing: the spec's Inventory where it declares one (an
+    origin that lists itself, asked for the profile's filter), else the
+    transport's — the base directory, then (09 §9.17 `updatefiles-dir`) the
+    update directory beside it."""
+    if spec.inventory is not None:
+        return spec.inventory.list(endpoint, spec, profile_filter)
+    return updatefiles.listing(transport, endpoint, spec)
 
 
 def is_adoptable(collection, f: RemoteFile) -> bool:
@@ -252,7 +256,8 @@ def is_adoptable(collection, f: RemoteFile) -> bool:
         return False
 
 
-def _origin_says_complete(transport, endpoint, f: RemoteFile, dest: Path) -> bool:
+def _origin_says_complete(transport, endpoint, f: RemoteFile, dest: Path,
+                          spec: AcquisitionSpec | None = None) -> bool:
     """For a file its spec lists WITHOUT a size: is the copy at `dest` as
     long as the origin says the file is?
 
@@ -267,6 +272,11 @@ def _origin_says_complete(transport, endpoint, f: RemoteFile, dest: Path) -> boo
     verification after it (`_adopt_one_file`). A transport that cannot say,
     or an origin that will not, leaves the file to the normal download."""
     if f.size:
+        return False
+    if getattr(getattr(spec, "inventory", None), "built_on_request", False):
+        # the origin builds the file when asked (spec.Inventory): a HEAD
+        # would cost it the build, and an equal length says nothing of
+        # content; the listing and the path say whether a copy is current
         return False
     size_of = getattr(transport, "size_of", None)
     if size_of is None:
@@ -881,22 +891,20 @@ def _export_fetch(endpoint, f: RemoteFile, collection, spec: AcquisitionSpec,
                         size=size, digest=digest, moved=size, seconds=elapsed)
 
 
-def _cellar_fetch(endpoint, f: RemoteFile, collection, spec: AcquisitionSpec,
-                  manager, endpoint_key: str) -> _FileResult:
-    """A Cellar unit (app/acquire/cellar.py): its notice and Formex items by
-    content negotiation, landed whole in the unit's directory, the notice
-    — the `rel_path` the listing names — last. The engine records the
-    notice's row; the listing's date of the work is what the next pass
-    compares (`_is_pending`). Raises as the normal path raises."""
-    unit = cellar.unit_of(f)
+def _unit_fetch(endpoint, f: RemoteFile, collection, spec: AcquisitionSpec,
+                manager, endpoint_key: str) -> _FileResult:
+    """A unit the spec's UnitFetcher serves (spec.UnitFetcher): landed whole,
+    the completion mark the listing names — `f.rel_path` — last. The engine
+    records the mark's row and digest; the listing's date is what the next
+    pass compares (`_is_pending`). Raises as the normal path raises."""
     dest = collection.corpus_dir / f.rel_path
     started = time.monotonic()
-    got = cellar.fetch_unit(endpoint.url, unit["celex"], unit["lang"], dest.parent)
+    moved = int(spec.unit_fetcher.fetch(endpoint, f, dest) or 0)
     elapsed = time.monotonic() - started
-    manager.record_throughput(endpoint_key, got.moved, elapsed)
+    manager.record_throughput(endpoint_key, moved, elapsed)
     digest = checksum.digest_and_verify(dest, spec.checksums)
     return _FileResult(remote=f, endpoint_url=endpoint.url, status="fetched",
-                        size=dest.stat().st_size, digest=digest, moved=got.moved, seconds=elapsed)
+                        size=dest.stat().st_size, digest=digest, moved=moved, seconds=elapsed)
 
 
 def _fetch_one_file(transport, endpoint, f: RemoteFile, collection,
@@ -917,9 +925,9 @@ def _fetch_one_file(transport, endpoint, f: RemoteFile, collection,
         # a file the origin builds on request: its own path, start to end
         if export_job.is_export(f):
             return _export_fetch(endpoint, f, collection, spec, manager, endpoint_key)
-        # a unit the origin serves by content negotiation: its own path too
-        if cellar.is_unit(f):
-            return _cellar_fetch(endpoint, f, collection, spec, manager, endpoint_key)
+        # a unit the spec's UnitFetcher serves (several requests, whole)
+        if spec.unit_fetcher is not None and spec.unit_fetcher.handles(f):
+            return _unit_fetch(endpoint, f, collection, spec, manager, endpoint_key)
         # a zip the origin rebuilds in place: its own directory says what
         # moved, before any size comparison — a rebuild of the same size is
         # caught too
@@ -931,7 +939,7 @@ def _fetch_one_file(transport, endpoint, f: RemoteFile, collection,
         # unless its own directory just said otherwise (a rebuild of the same
         # size)
         if delta is not _DELTA_DECLINED and (
-                is_adoptable(collection, f) or _origin_says_complete(transport, endpoint, f, dest)):
+                is_adoptable(collection, f) or _origin_says_complete(transport, endpoint, f, dest, spec)):
             adopted = _adopt_one_file(f, collection, spec)
             if adopted is not None:
                 return adopted
@@ -1222,13 +1230,12 @@ def _run_acquisition_claimed(con, collection, spec: AcquisitionSpec, profile: st
                              extras_selected=getattr(collection, "extras", ()),
                              stop=stop, priority=priority, until=until)
     _stop_check(stop, "after listing")
-    # what a lister found worth saying (`Endpoint.listing`'s drain_reports:
-    # an expression the origin's changelog reports deleted, never removed
-    # here) — said as events, with the collection's name
-    for endpoint in endpoints:
-        drain = getattr(endpoint.listing, "drain_reports", None)
-        for note in (drain() if drain is not None else ()):
-            db.log_event(con, "warn", "acquire", str(note)[:400])
+    # what the inventory found worth saying (spec.Inventory `reports`: an
+    # expression the origin's changelog reports deleted, never removed here)
+    # — said as events, with the collection's name
+    reports = getattr(spec.inventory, "reports", None)
+    for note in (reports() if reports is not None else ()):
+        db.log_event(con, "warn", "acquire", str(note)[:400])
     plan = _plan_from_files(con, collection, spec, files)
     # the per-file planning passes scale with the listing and are not
     # measured; a stop that arrived during them is honoured here, before

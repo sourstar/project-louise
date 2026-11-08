@@ -163,3 +163,31 @@ Owed from the node, never guessed:
 | Cellar | `op-cellar-git/eurlex-xml-format` | a4b89104 | the Office's CDM notice samples | hand-edited |
 | Cellar | `eur-lex-rs/eur-lex` `data/` | 6e3db12c | Formex 4, original and consolidated | — |
 | NeuRIS | `digitalservicebund/ris-search` | 81b58f82 | LegalDocML.de | test data |
+
+## The common acquisition API (2026-11-08) — FOR THE ARCHITECTURE SESSION'S REVIEW
+
+The operator: "The rag engine must be common, if the api does not cover your
+case always talk to the architecture session for a solution for all approach.
+No per exception spaghetti code." The three plugins had each added a hook of
+their own; they are now two protocols on `AcquisitionSpec`
+(app/acquire/spec.py), which the engine asks without naming any plugin:
+
+| extension point | what it covers | declared by |
+|---|---|---|
+| `inventory: Inventory` — `list(endpoint, spec, profile_filter)`, optional `reports()` and `built_on_request` | an origin that lists itself: a directory index, its own API, a query | legi (`HtmlIndex`), neuris (`NeurisListing`), eurlex (`CellarInventory`) |
+| `unit_fetcher: UnitFetcher` — `handles(remote)`, `fetch(endpoint, remote, dest)`, `refetch(spec, locator, base)` | a unit served as several requests, landed whole; its records-vs-origin re-fetch (app/acquire/unit_origin.py) | eurlex (`CellarUnits`) |
+| `SliceScheme.hint_of(row, context)` | a slice read from the manifest row without a parse | every plugin with a hint (was an if-branch per plugin name in `slice_hint`) |
+
+**Guard:** tests/acquire/test_common_engine.py. The engine and the
+transports import no origin's module and name no source id. It fails on the
+code before this change, which imported `cellar`.
+
+**Not yet moved, on the guard's allow-list:** Normattiva's on-request export
+(`export_job`, 2026-10-13). It is live on the node. It can become a
+UnitFetcher once `fetch` can answer "adopted" and "deferred", and moving it
+needs a measured pass.
+
+| | pros | cons |
+|---|---|---|
+| **two protocols on the spec (built, awaiting review)** | one engine; a new origin is a declaration, not an engine edit; the guard keeps it so | two more fields on the spec; the review may want another shape |
+| the per-plugin hooks as they were | nothing to review | three special cases in the engine, growing with every origin |

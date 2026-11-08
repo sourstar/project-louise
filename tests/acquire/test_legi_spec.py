@@ -68,7 +68,7 @@ def test_nginx_s_pre_is_read_with_its_exact_sizes():
 
 
 def test_the_spec_s_pattern_keeps_the_tarballs_alone():
-    pattern = SPEC.endpoints[0].listing_pattern
+    pattern = SPEC.inventory.pattern
     assert [f.rel_path for f in transport_https.parse_index(APACHE, pattern)] == list(NAMES[:2])
     assert [f.rel_path for f in transport_https.parse_index(NGINX, pattern)] == \
         ["Freemium_legi_global_20250713-140000.tar.gz", "LEGI_20261028-212713.tar.gz"]
@@ -87,7 +87,7 @@ def test_the_listing_is_one_get_charged_to_the_budget(mock_server, monkeypatch):
     ep = _serve(mock_server, APACHE, {})
     charged = []
     monkeypatch.setattr(budget, "acquire_bytes", lambda n: charged.append(n))
-    got = transport_https.HttpsTransport().list_files(ep, SPEC)
+    got = SPEC.inventory.list(ep, SPEC, None)         # the spec's Inventory, as the engine asks it
     assert [f.rel_path for f in got] == list(NAMES[:2])
     assert sum(charged) == len(APACHE.encode()), "every byte of the page drawn from the budget"
     assert mock_server.request_counts["OPENDATA/LEGI/"] == 1
@@ -96,7 +96,8 @@ def test_the_listing_is_one_get_charged_to_the_budget(mock_server, monkeypatch):
 def test_a_transient_fault_is_retried_then_deferred_never_failed(mock_server):
     ep = _serve(mock_server, APACHE, {})
     mock_server.statuses["OPENDATA/LEGI/"] = [503, 502]
-    assert len(transport_https.list_index(ep, backoff=0)) == 2, "two 5xx, then the page"
+    assert len(transport_https.list_index(ep, pattern=SPEC.inventory.pattern, backoff=0)) == 2, \
+        "two 5xx, then the page"
     mock_server.statuses["OPENDATA/LEGI/"] = [500] * 5
     with pytest.raises(transport_https.ListingDeferred) as e:
         transport_https.list_index(ep, backoff=0)
@@ -113,8 +114,8 @@ def test_a_missing_directory_is_the_endpoint_s_error(mock_server):
 
 def test_a_static_endpoint_is_listed_as_before():
     ep = Endpoint(transport=Transport.HTTPS, url="https://h", static_files=())
-    assert list(transport_https.HttpsTransport().list_files(ep, SPEC)) == []
-    assert ep.listing is None
+    assert list(transport_https.HttpsTransport().list_files(ep, SPEC)) == [], \
+        "the transport lists the declared files; an Inventory is the spec's, asked by the engine"
 
 
 def test_a_pass_fetches_only_the_files_not_yet_held(tmp_path, mock_server):
@@ -149,8 +150,8 @@ def test_the_spec_is_registered_green_with_two_connections_and_its_terms():
     assert specs.ACQUIRE_REGISTRY["legi"] is SPEC and SPEC.transport is Transport.HTTPS
     assert SPEC.license_class == LicenseClass.GREEN and SPEC.terms_text_path.is_file()
     assert SPEC.endpoints[0].max_conns == 2 and SPEC.etiquette.max_conns == 2
-    from app.acquire.transport_https import html_index_listing
-    assert SPEC.endpoints[0].listing is html_index_listing and SPEC.delta.mode == "full-resync"
+    assert isinstance(SPEC.inventory, transport_https.HtmlIndex) and SPEC.delta.mode == "full-resync"
+    assert SPEC.unit_fetcher is None
     assert SPEC.endpoints[0].url == "https://echanges.dila.gouv.fr/OPENDATA/LEGI/"
 
 
@@ -166,7 +167,7 @@ def test_dila_s_own_apache_index_is_read_names_and_dates_never_a_rounded_size():
 <img src="/icons/compressed.gif" alt="[   ]"> <a href="Freemium_legi_global_20250713-140000.tar.gz">Freemium_legi_global_20250713-140000.tar.gz</a> 2025-07-13 14:10  1.1G
 <img src="/icons/compressed.gif" alt="[   ]"> <a href="LEGI_20261107-210930.tar.gz">LEGI_20261107-210930.tar.gz</a>  2026-11-07 21:12  1.7M
 <hr></pre></body></html>"""
-    got = parse_index(page, SPEC.endpoints[0].listing_pattern)
+    got = parse_index(page, SPEC.inventory.pattern)
     assert [f.rel_path for f in got] == ["Freemium_legi_global_20250713-140000.tar.gz",
                                          "LEGI_20261107-210930.tar.gz"], "the PDF and the sort links are not files"
     assert all(f.size is None for f in got), "a rounded size is never taken for bytes"

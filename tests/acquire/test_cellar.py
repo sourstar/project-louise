@@ -1,5 +1,5 @@
 """Cellar as an acquisition origin (app/acquire/cellar.py; engine
-`_cellar_fetch`; legal-fr-de-eu.md §4.1, §7.1), against a LOCAL mock of
+the engine's generic `_unit_fetch` through `cellar.UNITS`; legal-fr-de-eu.md §4.1, §7.1), against a LOCAL mock of
 its two faces: the SPARQL endpoint (SPARQL 1.1 Protocol, JSON results) and
 the content negotiation on `/resource/celex/<CELEX>` — 303 to the branch
 notice, the items by the names the notice gives, or a 300 Multiple Choices
@@ -342,15 +342,19 @@ def test_a_language_added_later_fetches_that_language_alone(tmp_path, mock, monk
 
 
 def test_records_vs_origin_refetches_one_unit_by_its_cellar_uri(mock):
-    origin = cellar.CellarOrigin(_spec(mock))
+    """Through the generic unit origin (app/acquire/unit_origin.py): the spec
+    declares a UnitFetcher with `refetch`, and nothing names the plugin."""
+    from app.acquire import unit_origin
+    origin = unit_origin.UnitOrigin(_spec(mock))
     try:
         out = origin.materialise(f"lang=de/2016/{ACT}")
         assert sorted(p.name for p in out.iterdir()) == sorted([*_formex(ACT, "de"), "notice.xml"])
         assert origin.unit(f"lang=de/2016/{ACT}") == (f"lang=de/2016/{ACT}", None)
+        assert origin.bytes_read > 0
         with pytest.raises(FileNotFoundError):
             origin.materialise("lang=de/2016/39999R9999")
     finally:
         origin.close()
     from types import SimpleNamespace
-    assert isinstance(cellar.origin_for_codex(SimpleNamespace(plugin="eurlex")), cellar.CellarOrigin)
-    assert cellar.origin_for_codex(SimpleNamespace(plugin="normattiva")) is None
+    assert isinstance(unit_origin.for_codex(SimpleNamespace(plugin="eurlex")), unit_origin.UnitOrigin)
+    assert unit_origin.for_codex(SimpleNamespace(plugin="normattiva")) is None

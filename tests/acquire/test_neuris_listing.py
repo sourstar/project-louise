@@ -117,8 +117,8 @@ def api_server():
 
 def _spec(base, **listing_kw):
     listing = nl.NeurisListing(now=lambda: NOW, sleep=lambda s: None, **listing_kw)
-    return replace(specs.NEURIS_SPEC, endpoints=(Endpoint(transport=Transport.HTTPS, url=base, max_conns=2,
-                                                          listing=listing),))
+    return replace(specs.NEURIS_SPEC, endpoints=(Endpoint(transport=Transport.HTTPS, url=base, max_conns=2),),
+                   inventory=listing)
 
 
 def _pass(tmp_path, base, **kw):

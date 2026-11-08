@@ -149,13 +149,13 @@ def _iso(ts: float) -> str:
 
 
 class NeurisListing:
-    """`Endpoint.listing` for NeuRIS: `listing(endpoint, spec)` yields every
-    expression's two files, complete or raising; `drain_reports()` gives what
+    """NeuRIS's `Inventory` (spec.py): `list(endpoint, spec, filter)` yields
+    every expression's two files, complete or raising; `reports()` gives what
     it found worth saying (an unplaceable item, a deletion the changelog
     reports) to the engine, which logs it with the collection's name."""
 
     #: the origin builds each zip on request: no HEAD is asked of it
-    #: (transport_https.size_of)
+    #: (engine._origin_says_complete)
     built_on_request = True
 
     def __init__(self, *, page_size: int = PAGE_SIZE, changelog_days: int = CHANGELOG_DAYS,
@@ -169,6 +169,12 @@ class NeurisListing:
         self._reports: list[str] = []
 
     # -- what the engine reads ------------------------------------------------
+
+    def list(self, endpoint: Endpoint, spec: AcquisitionSpec, profile_filter=None) -> Iterator[RemoteFile]:
+        return self(endpoint, spec)
+
+    def reports(self) -> list[str]:
+        return self.drain_reports()
 
     def drain_reports(self) -> list[str]:
         with self._lock:

@@ -9,6 +9,7 @@ families) — stable for the life of the record, and meaningful to a person.
 The scheme is declared per plugin here and recorded in the manifest, so the
 split is a fact of the collection rather than a convention.
 """
+import dataclasses
 import re
 from dataclasses import dataclass
 from typing import Callable
@@ -22,6 +23,9 @@ class SliceScheme:
     records_per_shard: int
     describe: dict                      # what goes in the manifest's `slicing`
     slice_of: Callable[[CanonicalDoc, int], str]
+    #: the slice of a manifest row without parsing it (`slice_hint`), where
+    #: the locator or the manifest says enough; None = parse
+    hint_of: Callable[..., "str | None"] | None = None
 
 
 _YEAR = re.compile(r"(\d{4})")
@@ -471,76 +475,118 @@ DEFAULT_SCHEME = SliceScheme(keys=(), records_per_shard=10_000,
                              describe={"keys": []}, slice_of=single_slice)
 
 
-def slice_hint(plugin_name: str, row, context: FamilyContext | None = None) -> str | None:
-    """The slice of a manifest row WITHOUT parsing the document, where the
-    plugin's locator or the manifest already says enough — the planning
-    pass over 36M PubMed rows or 6M Wikipedia pages must not cost a full
-    parse each. None = parse the document and use the scheme."""
-    try:
-        if isinstance(context, FamilyContext):
-            # wikidata by family: the byte the pack keeps for the entity
-            from ..plugins.wikidata import families, ids, pack
-            from ..plugins.wikidata.source import split_locator
-            dump, index = split_locator(row["path"])
-            code = pack.family_code_at(dump, context.fmap.sha256, index)
-            if code is None:
-                return None
-            return families.slice_name(code, ids.entity_id_of(int(row["native_id"])), context.fmap.families)
-        if plugin_name == "wikipedia":
-            from ..plugins.wikipedia.source import decode_native_id
-            lang, page, _ = decode_native_id(int(row["native_id"]))
-            return f"lang={lang}/{_pages_bin(page)}"
-        if plugin_name == "embedded":
-            from ..plugins.embedded.source import decode_native_id
-            lang, article = decode_native_id(int(row["native_id"]))
-            return f"lang={lang}/{_pages_bin(article)}"
-        if plugin_name == "gutenberg":
-            lang = row["lang"] if "lang" in row.keys() else None
-            return f"lang={lang}" if lang else None
-        if plugin_name == "wikidata":
-            return wikidata_slice(None, int(row["native_id"]))
-        if plugin_name == "normattiva":
-            from ..plugins import eli
-            from ..plugins.normattiva.source import split_locator
-            _, member = split_locator(row["path"])
-            year = eli.id_day(int(row["native_id"])) // 10000
-            return f"type={_normattiva_type(member.split('/', 1)[0])}/vig={year:04d}"
-        if plugin_name == "legi":
-            from ..plugins import eli
-            from ..plugins.legi.source import split_locator as legi_locator
-            _, member = legi_locator(row["path"])
-            return (f"kind={legi_kind_of_member(member)}"
-                    f"/year={eli.id_day(int(row['native_id'])) // 10000:04d}")
-        if plugin_name == "neuris":
-            from ..plugins import eli
-            return f"year={eli.id_day(int(row['native_id'])) // 10000:04d}"
-        if plugin_name == "eurlex":
-            from pathlib import PurePath
+# ---- slice hints: a scheme's own, never a branch per plugin here ----
+#
+# The slice of a manifest row WITHOUT parsing the document, where the
+# plugin's locator or the manifest already says enough — the planning pass
+# over 36M PubMed rows or 6M Wikipedia pages must not cost a full parse each.
+# Each is the SliceScheme's `hint_of` (2026-11-08, operator: "The rag engine
+# must be common … No per exception spaghetti code"): until then
+# `slice_hint` was one if-branch per plugin name. None = parse the document
+# and use the scheme.
 
-            from ..plugins.eurlex.source import slice_name
-            unit = PurePath(str(row["path"]))
-            lang = unit.parent.parent.name.partition("=")[2]
-            return slice_name(lang, unit.name, int(row["native_id"])) if lang else None
-        if plugin_name == "pubmed":
-            from ..plugins.pubmed import pack as pubmed_pack
-            from ..plugins.pubmed.source import split_locator
-            container, index = split_locator(row["path"])
-            if index is None:
-                return None
-            date = pubmed_pack.record_dates(container).get(index)
-            m = _YEAR.search(str(date or ""))
-            if not m:
-                return "year=unknown"
-            year = int(m.group(1))
-            if year < 1950:
-                return "year=pre1950"
-            if year < 2000:
-                lo = year - (year - 1950) % 5
-                return f"year={lo}-{lo + 4}"
-            return f"year={year}"
+def _wikipedia_hint(row, context=None) -> str | None:
+    from ..plugins.wikipedia.source import decode_native_id
+    lang, page, _ = decode_native_id(int(row["native_id"]))
+    return f"lang={lang}/{_pages_bin(page)}"
+
+
+def _embedded_hint(row, context=None) -> str | None:
+    from ..plugins.embedded.source import decode_native_id
+    lang, article = decode_native_id(int(row["native_id"]))
+    return f"lang={lang}/{_pages_bin(article)}"
+
+
+def _gutenberg_hint(row, context=None) -> str | None:
+    lang = row["lang"] if "lang" in row.keys() else None
+    return f"lang={lang}" if lang else None
+
+
+def _wikidata_hint(row, context=None) -> str | None:
+    if isinstance(context, FamilyContext):
+        # wikidata by family: the byte the pack keeps for the entity
+        from ..plugins.wikidata import families, ids, pack
+        from ..plugins.wikidata.source import split_locator
+        dump, index = split_locator(row["path"])
+        code = pack.family_code_at(dump, context.fmap.sha256, index)
+        if code is None:
+            return None
+        return families.slice_name(code, ids.entity_id_of(int(row["native_id"])), context.fmap.families)
+    return wikidata_slice(None, int(row["native_id"]))
+
+
+def _normattiva_hint(row, context=None) -> str | None:
+    from ..plugins import eli
+    from ..plugins.normattiva.source import split_locator
+    _, member = split_locator(row["path"])
+    year = eli.id_day(int(row["native_id"])) // 10000
+    return f"type={_normattiva_type(member.split('/', 1)[0])}/vig={year:04d}"
+
+
+def _legi_hint(row, context=None) -> str | None:
+    from ..plugins import eli
+    from ..plugins.legi.source import split_locator as legi_locator
+    _, member = legi_locator(row["path"])
+    return (f"kind={legi_kind_of_member(member)}"
+            f"/year={eli.id_day(int(row['native_id'])) // 10000:04d}")
+
+
+def _neuris_hint(row, context=None) -> str | None:
+    from ..plugins import eli
+    return f"year={eli.id_day(int(row['native_id'])) // 10000:04d}"
+
+
+def _eurlex_hint(row, context=None) -> str | None:
+    from pathlib import PurePath
+
+    from ..plugins.eurlex.source import slice_name
+    unit = PurePath(str(row["path"]))
+    lang = unit.parent.parent.name.partition("=")[2]
+    return slice_name(lang, unit.name, int(row["native_id"])) if lang else None
+
+
+def _pubmed_hint(row, context=None) -> str | None:
+    from ..plugins.pubmed import pack as pubmed_pack
+    from ..plugins.pubmed.source import split_locator
+    container, index = split_locator(row["path"])
+    if index is None:
+        return None
+    date = pubmed_pack.record_dates(container).get(index)
+    m = _YEAR.search(str(date or ""))
+    if not m:
+        return "year=unknown"
+    year = int(m.group(1))
+    if year < 1950:
+        return "year=pre1950"
+    if year < 2000:
+        lo = year - (year - 1950) % 5
+        return f"year={lo}-{lo + 4}"
+    return f"year={year}"
+
+
+_HINTS = {"wikipedia": _wikipedia_hint, "embedded": _embedded_hint, "gutenberg": _gutenberg_hint,
+          "wikidata": _wikidata_hint, "normattiva": _normattiva_hint, "legi": _legi_hint,
+          "neuris": _neuris_hint, "eurlex": _eurlex_hint, "pubmed": _pubmed_hint}
+for _name, _hint in _HINTS.items():
+    SCHEMES[_name] = dataclasses.replace(SCHEMES[_name], hint_of=_hint)
+del _name, _hint
+
+
+def slice_hint(plugin_name: str, row, context: FamilyContext | None = None) -> str | None:
+    """The scheme's own hint for the row (`SliceScheme.hint_of`); None where
+    it has none, or where reading the row raised (a hint is an optimisation,
+    never a verdict). A FamilyContext is wikidata's family map, which only
+    a wikidata row can carry."""
+    if isinstance(context, FamilyContext):
+        plugin_name = "wikidata"
+    hint = getattr(SCHEMES.get(plugin_name), "hint_of", None)
+    if hint is None:
+        return None
+    try:
+        return hint(row, context)
     except Exception:   # noqa: BLE001 — a hint is an optimisation, never a verdict
         return None
-    return None
+
 
 _SEGMENT = r"[A-Za-z0-9=_\-][A-Za-z0-9=_.\-]*"      # no leading dot: never "." / ".." / hidden
 _SAFE = re.compile(rf"^{_SEGMENT}(/{_SEGMENT})*$")

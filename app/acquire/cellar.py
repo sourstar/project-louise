@@ -435,66 +435,48 @@ def _land(dest: Path, files: dict[str, bytes]) -> None:
     shutil.rmtree(old, ignore_errors=True)
 
 
-# ---- the origin re-fetched, for records-vs-origin -------------------------------------------
+# ---- the two extension points the engine reads (spec.py: Inventory, UnitFetcher) ----
 
-class CellarOrigin:
-    """What `records-vs-origin` re-fetches for an eurlex collection: a
-    record's `origin` is its unit (`lang=<code>/<yyyy>/<CELEX>`), fetched by
-    `fetch_unit` from the spec's endpoint into a temporary base at the same
-    relative path, so the plugin reads it as it reads the corpus
-    (app/acquire/member_origin.py and file_origin.py do the same for zip
-    members and mirror trees)."""
+class CellarInventory:
+    """Cellar's `Inventory`: `listing` above, for the profile's languages."""
 
-    def __init__(self, spec: AcquisitionSpec) -> None:
-        import atexit
-        import tempfile
-        self.spec = spec
-        self.base = Path(tempfile.mkdtemp(prefix="louise-cellar-origin-"))
-        atexit.register(self.close)
-        self.bytes_read = 0
+    built_on_request = False
 
-    @staticmethod
-    def _rel(locator: str) -> str:
-        return str(locator).partition("#")[0].strip("/")
+    def list(self, endpoint: Endpoint, spec: AcquisitionSpec, profile_filter: Filter):
+        return listing(endpoint, spec, profile_filter)
 
-    def unit(self, locator: str) -> tuple[str, int | None]:
-        return self._rel(locator), None
 
-    def weigh(self, unit: str) -> int | None:
-        """A unit's size is known once it is fetched: weighing fetches it
-        (the check's bound takes units one by one, so nothing is fetched
-        that the bound does not reach)."""
-        try:
-            out = self.materialise(unit)
-        except FileNotFoundError:
-            return None
-        return sum(p.stat().st_size for p in out.iterdir() if p.is_file())
+class CellarUnits:
+    """Cellar's `UnitFetcher`: a unit is (CELEX, language), its completion
+    mark the notice the listing names; fetched by `fetch_unit`, whole."""
 
-    def materialise(self, locator: str) -> Path:
-        rel = self._rel(locator)
-        out = self.base / rel
+    def handles(self, remote: RemoteFile) -> bool:
+        return is_unit(remote)
+
+    def fetch(self, endpoint: Endpoint, remote: RemoteFile, dest: Path) -> int:
+        unit = unit_of(remote)
+        return fetch_unit(endpoint.url, unit["celex"], unit["lang"], dest.parent).moved
+
+    def refetch(self, spec: AcquisitionSpec, locator: str, base: Path) -> tuple[Path, int]:
+        """records-vs-origin: a record's `origin` is its unit
+        (`lang=<code>/<yyyy>/<CELEX>`), fetched again under `base` at the same
+        relative path, so the plugin reads it as it reads the corpus."""
+        rel = str(locator).partition("#")[0].strip("/")
+        out = base / rel
         if out.is_dir():
-            return out
+            return out, 0
         parts = rel.split("/")
         if len(parts) != 3 or not parts[0].startswith("lang="):
             raise FileNotFoundError(f"{rel}: not a Cellar unit (lang=<code>/<yyyy>/<CELEX>)")
         lang, celex = parts[0].partition("=")[2], parts[2]
-        for endpoint in self.spec.endpoints:
+        for endpoint in spec.endpoints:
             try:
                 got = fetch_unit(endpoint.url, celex, lang, out)
             except TransportError:
                 continue
-            self.bytes_read += got.moved
-            return out
-        raise FileNotFoundError(f"{rel}: no endpoint of {self.spec.source_id} served it")
-
-    def close(self) -> None:
-        shutil.rmtree(self.base, ignore_errors=True)
+            return out, got.moved
+        raise FileNotFoundError(f"{rel}: no endpoint of {spec.source_id} served it")
 
 
-def origin_for_codex(codex) -> CellarOrigin | None:
-    from .specs import ACQUIRE_REGISTRY
-    spec = ACQUIRE_REGISTRY.get(getattr(codex, "plugin", None))
-    if spec is None or spec.listing is not listing:
-        return None
-    return CellarOrigin(spec)
+INVENTORY = CellarInventory()
+UNITS = CellarUnits()

@@ -7,7 +7,7 @@ No I/O here — pure data, mirroring app/plugins/base.py's own rule.
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import Callable, Iterable, Literal
+from typing import Callable, Iterable, Literal, Protocol
 
 from ..plugins.base import LicenseClass
 
@@ -38,6 +38,56 @@ class RemoteFile:
     remote: str | None = None
 
 
+class Inventory(Protocol):
+    """An origin that LISTS ITSELF — a directory page its server writes
+    (LEGI: Apache's autoindex), an API of its own (NeuRIS's paginated
+    `/v1/legislation`), a query (Cellar's SPARQL) — in place of the
+    transport's `list_files`, under the LISTING CONTRACT (AcquisitionSpec):
+    complete for the profile's filter or raising, never truncated, every
+    byte drawn from the budget (invariant 5).
+
+    Optional, read with getattr:
+      `built_on_request: bool` — the origin builds each file when asked
+        (NeuRIS's zips: no ETag, no-store), so no HEAD is asked of it to
+        adopt a copy (engine._origin_says_complete);
+      `reports() -> list[str]` — what the listing found worth saying and
+        could not say itself (an expression the changelog reports deleted),
+        logged by the engine as events after the listing, with the
+        collection's name.
+
+    THE STANDARD, NOT ADOPTED: OAI-PMH's ListIdentifiers is the standard
+    harvesting verb for repositories, and ResourceSync (ANSI/NISO Z39.99)
+    for web resources; none of the three origins speaks either."""
+
+    def list(self, endpoint: "Endpoint", spec: "AcquisitionSpec",
+             profile_filter: "Filter") -> Iterable[RemoteFile]: ...
+
+
+class UnitFetcher(Protocol):
+    """A UNIT the origin serves as several requests (Cellar: a branch notice
+    and its Formex items, by content negotiation), fetched whole or not at
+    all, in place of the transport's single-file fetch, for the files it
+    `handles`. The file the listing names (`remote.rel_path`) is the unit's
+    completion mark, landed last; the engine records its row and digest as
+    for any file. Every byte drawn from the budget (invariant 5).
+
+      `handles(remote) -> bool` — is this listed file a unit of this fetcher;
+      `fetch(endpoint, remote, dest) -> int` — the unit landed whole, `dest`
+        the completion mark's corpus path; the bytes moved; raises as a
+        transport raises (TransportError: the engine's deferral rules apply);
+      `refetch(spec, locator, base) -> (Path, int)` — records-vs-origin: the
+        unit a record's `origin` names, fetched again under `base` at its
+        corpus path; the path the plugin reads, and the bytes moved
+        (app/acquire/unit_origin.py).
+    """
+
+    def handles(self, remote: RemoteFile) -> bool: ...
+
+    def fetch(self, endpoint: "Endpoint", remote: RemoteFile, dest: Path) -> int: ...
+
+    def refetch(self, spec: "AcquisitionSpec", locator: str, base: Path) -> tuple[Path, int]: ...
+
+
 @dataclass(frozen=True)
 class Endpoint:
     """One source of bytes. AcquisitionSpec.endpoints is ordered: mirrors
@@ -54,23 +104,6 @@ class Endpoint:
     # specs name the files a profile needs explicitly; rsync/ftp transports
     # ignore this and list dynamically instead.
     static_files: tuple[RemoteFile, ...] = ()
-    # An origin that LISTS ITSELF through an API of its own (NeuRIS's
-    # paginated `/v1/legislation`, docs/notes/legal-fr-de-eu.md §7.1): a
-    # callable `listing(endpoint, spec) -> Iterable[RemoteFile]` the HTTPS
-    # transport's list_files() calls instead of returning `static_files`.
-    # It is held to the LISTING CONTRACT below (complete or raising, never
-    # truncated) and draws every page from the budget (invariant 5). It may
-    # carry `drain_reports() -> list[str]`: what the listing found worth
-    # saying and could not say itself (an expression the origin's changelog
-    # reports deleted), logged by the engine as events after the listing.
-    # None = the declared `static_files` (every other spec).
-    listing: Callable[..., Iterable[RemoteFile]] | None = None
-    # With LEGI's lister (`transport_https.html_index_listing`, the directory
-    # page the server writes itself — Apache's or nginx's autoindex — read with
-    # the standard library's html.parser, its bytes charged to the budget):
-    # the file names to keep, a regular expression the whole name matches
-    # (None keeps every file the page lists).
-    listing_pattern: str | None = None
 
 
 @dataclass(frozen=True)
@@ -130,8 +163,8 @@ class AcquisitionSpec:
     it: "one-dir-per-doc" derives document totals from the listing (one
     distinct top directory = one document) and the Library reports
     documents with the file count in parentheses; "one-file-per-doc"
-    (eurlex: each listed file is one unit's completion mark) counts each
-    listed file as one document; container layouts
+    (a UnitFetcher's spec: each listed file is one unit's completion mark)
+    counts each listed file as one document; container layouts
     ("container-files", "single-file") CANNOT know document counts before
     unpacking, so the card labels the count "compressed containers" and
     the parsed/indexed rows carry the document truth as each archive is
@@ -208,13 +241,14 @@ class AcquisitionSpec:
     # operator picks from and what "is there something newer?" reads.
     snapshot_files: Callable[[str], tuple[RemoteFile, ...]] | None = None
     snapshot_index: Callable[[], tuple[str, ...]] | None = None
-    # An origin whose INVENTORY is a query, not a directory (Cellar's SPARQL
-    # endpoint, app/acquire/cellar.py): `listing(endpoint, spec, filter)`
-    # yields the complete listing for the profile's filter, under the
-    # LISTING CONTRACT above, in place of the transport's `list_files`. A
-    # callable for the reason `snapshot_files` is one: only the source knows
-    # its query.
-    listing: Callable[..., "Iterable[RemoteFile]"] | None = None
+    # THE TWO EXTENSION POINTS an origin the transports cannot list or fetch
+    # by themselves declares (2026-11-08, the legal collections; operator:
+    # "The rag engine must be common … No per exception spaghetti code"):
+    # `inventory` lists it (Inventory below), `unit_fetcher` fetches a unit
+    # made of several requests (UnitFetcher below). None = the transport's
+    # own listing and fetch, as for every spec before them.
+    inventory: "Inventory | None" = None
+    unit_fetcher: "UnitFetcher | None" = None
     license_class: LicenseClass = LicenseClass.GREEN
     terms_text_path: Path | None = None    # required when license_class != GREEN
 

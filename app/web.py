@@ -2122,7 +2122,7 @@ def _collection_shelf(collection: collections_mod.Collection,
                 on_disk = max(0, (counts["total"] or 0) - (counts["unindexable"] or 0))
                 docs_done = max(docs_done, on_disk)
         elif spec.layout == "one-file-per-doc":
-            # one listed file IS one document (a Cellar unit's notice)
+            # one listed file IS one document (a UnitFetcher's completion mark)
             docs_done = fc["done"] or 0
         # extras (spec.extras): "+ e/E" beside the Louise counter, shown
         # only when the collection opted in or extra rows exist. Format

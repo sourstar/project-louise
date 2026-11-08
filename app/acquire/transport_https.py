@@ -2,7 +2,7 @@
 
 Plain HTTPS has no generic directory-listing protocol, so list_files()
 returns endpoint.static_files (declared by the per-source spec) — or, for
-an endpoint whose `listing` is `html_index_listing` (LEGI), the files the directory's
+a spec whose `Inventory` is `HtmlIndex` (LEGI), the files the directory's
 own index page lists (`list_index`), never a crawl.
 """
 import json
@@ -123,11 +123,8 @@ class HttpsTransport:
     supports_segments = True
 
     def list_files(self, endpoint: Endpoint, spec: AcquisitionSpec) -> Iterator[RemoteFile]:
-        """The declared files, or — an origin that lists itself through an
-        API of its own (`Endpoint.listing`, NeuRIS) — what its lister reads,
-        complete or raising (the listing contract, spec.AcquisitionSpec)."""
-        if endpoint.listing is not None:
-            return iter(endpoint.listing(endpoint, spec))
+        """The declared files. An origin that lists itself declares an
+        `Inventory` on its spec, which the engine asks instead."""
         return iter(endpoint.static_files)
 
     def fetch_segments(self, endpoint: Endpoint, remote: RemoteFile, dest: Path,
@@ -141,14 +138,13 @@ class HttpsTransport:
         origin will not say. It moves no body, so it draws nothing from the
         budget.
 
-        Never for an origin listed by its own API (`Endpoint.listing`): its
+        Never for an origin whose Inventory builds files on request: its
         files are answers built on request (NeuRIS builds a manifestation's
         zip on the fly), so a HEAD would cost the origin the build, and an
         equal length says nothing of a JSON whose content changed — the
         listing and the path are what say a held copy is current there.
-        A lister of static files (LEGI's directory index) is asked as before."""
-        if getattr(endpoint.listing, "built_on_request", False):
-            return None
+        The ENGINE decides that, from the spec's `Inventory`
+        (`built_on_request`); this only answers the HEAD."""
         headers = {"User-Agent": _USER_AGENT}
         if endpoint.auth_token_path is not None:
             headers["Authorization"] = f"Bearer {endpoint.auth_token_path.read_text().strip()}"
@@ -248,7 +244,7 @@ class HttpsTransport:
         return size
 
 
-# ---------------- a directory's own index page (Endpoint.listing) ----------------
+# ---------------- a directory's own index page (an Inventory: HtmlIndex) ----------------
 #
 # An origin that publishes a DIRECTORY of dated files and no manifest of
 # them (DILA's OPENDATA/LEGI/: a baseline and an increment per working day)
@@ -356,16 +352,23 @@ def parse_index(page: str, pattern: str | None = None) -> list[RemoteFile]:
     return [out[k] for k in sorted(out)]
 
 
-def html_index_listing(endpoint: Endpoint, spec: AcquisitionSpec | None = None) -> list[RemoteFile]:
-    """LEGI's lister for `Endpoint.listing`: the directory's own index page
-    (`list_index`), filtered by `Endpoint.listing_pattern`."""
-    return list_index(endpoint)
+class HtmlIndex:
+    """An `Inventory` (spec.py): the directory's own index page, the one its
+    server writes (Apache's or nginx's autoindex; LEGI), read with the
+    standard library's html.parser (`list_index`), its bytes charged to the
+    budget. `pattern`: the file names to keep, a regular expression the
+    whole name matches (None keeps every file the page lists)."""
+
+    built_on_request = False
+
+    def __init__(self, pattern: str | None = None) -> None:
+        self.pattern = pattern
+
+    def list(self, endpoint: Endpoint, spec: AcquisitionSpec, profile_filter=None) -> list[RemoteFile]:
+        return list_index(endpoint, pattern=self.pattern)
 
 
-html_index_listing.built_on_request = False
-
-
-def list_index(endpoint: Endpoint, *, attempts: int = LIST_ATTEMPTS,
+def list_index(endpoint: Endpoint, *, pattern: str | None = None, attempts: int = LIST_ATTEMPTS,
                backoff: float = 1.0) -> list[RemoteFile]:
     """The endpoint's directory, from its own index page: one GET, streamed
     and charged to the budget chunk by chunk (invariant 5), asked again on a
@@ -392,7 +395,7 @@ def list_index(endpoint: Endpoint, *, attempts: int = LIST_ATTEMPTS,
                         if len(body) > LIST_MAX_BYTES:
                             raise TransportError(f"{url}: the listing is over {LIST_MAX_BYTES} bytes")
                     encoding = r.encoding or "utf-8"
-            return parse_index(bytes(body).decode(encoding, "replace"), endpoint.listing_pattern)
+            return parse_index(bytes(body).decode(encoding, "replace"), pattern)
         except httpx.TransportError as e:          # a timeout, a drop, a reset: transient
             last = f"{type(e).__name__}: {e}"
         except httpx.HTTPError as e:
