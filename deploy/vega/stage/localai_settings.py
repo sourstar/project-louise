@@ -21,6 +21,18 @@ that the query embedder and the chat model evicted each other on every Ask
 question (4.5–6.3 s cold starts each); at 0.85 both stay, and a question went
 from 20.9 + 11.1 s to 15.0 + 5.1 s. The embedder's load-time peak still
 reaches 85.9 %, so the translator is the one evicted on that load.
+
+memory_reclaimer_threshold, 0.85 → 0.95 (operator, 2026-11-08: "New eviction
+threshold at 95%"), for the trial of keeping every model Ask uses resident
+("The load all is a test"). Measured on the B70 the night before (live
+engine ea2417d, München): every model resident together takes 30,267 of
+32,656 MiB (92.7 %) — madlad 7,879, chat qwen3.5-9b-q4-p0 5,791,
+qwen3-embedding-4b 5,089, nemotron 3,917, omnivoice 2,287, dar-legal-it
+1,667, bge-m3 1,180, the two rerankers 881 each, medcpt-query 359,
+medcpt-article-ov 312 MiB. At 0.85 the reclaimer would evict a model at
+every tick with all of them loaded; at 0.95 they stay with 2.3 % (≈750 MiB)
+below the line, so a load-time peak above it still evicts the least
+recently used unpinned model.
 """
 from __future__ import annotations
 
@@ -31,7 +43,7 @@ from typing import Any
 
 DESIRED: dict[str, Any] = {
     "memory_reclaimer_enabled": True,
-    "memory_reclaimer_threshold": 0.85,
+    "memory_reclaimer_threshold": 0.95,
 }
 
 
