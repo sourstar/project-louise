@@ -163,6 +163,8 @@ def verbalize(text: str, lang: str | None) -> str:
 
     # a day before or after a month's name: "12 marzo", "March 12", "12. März", "1er mars"
     def day_month(m: re.Match) -> str:
+        if lang == "en":            # "11 November" is said "the eleventh of November"
+            return f"the {_ordinal(int(m.group(1)), lang)} of {m.group(2)}"
         return f"{_day(int(m.group(1)), lang)} {m.group(2)}"
     text = re.sub(rf"\b([12]?\d|3[01])(?:\.|°|º|er|st|nd|rd|th)?\s+({months})\b", day_month, text,
                   flags=re.IGNORECASE)
