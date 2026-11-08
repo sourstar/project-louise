@@ -198,6 +198,49 @@ def sections_and_source(collection, row, parse) -> tuple[list[tuple], str | None
     return got, rec.get("content_hash")
 
 
+def title_sections_and_source(collection, row, plugin, *, pair: bool
+                              ) -> tuple[str | None, list[tuple], str | None]:
+    """`sections_and_source` with the record's TITLE beside them: what a
+    chunker cuts is `[title, sections]` (invariant 3), and a `legal_article`
+    layer writes the title into its chunks (app/chunking_legal.py). The
+    fresh record's title where the record is used, the parse's otherwise;
+    None from a plugin that reads its chapters without a document
+    (gutenberg), whose chunkers take no title."""
+    from . import layers, plugin_io
+    if not layers.wants_title(collection, row):
+        # every collection whose layer writes no title: exactly as before
+        sections, source = sections_and_source(
+            collection, row, lambda: parsed_with_source(plugin, row, pair=pair))
+        return None, sections, source
+
+    def parse() -> tuple[str | None, list[tuple], str | None]:
+        if hasattr(plugin, "read_chapters"):
+            return None, plugin_io.sections(plugin, row), None
+        doc = plugin_io.canonical_doc(plugin, row)
+        source = None
+        if pair:
+            from .hold import records as hold_records
+            source = hold_records.content_hash(
+                doc.title or "", [[name or "", body or ""] for name, body in doc.sections])
+        return doc.title, doc.sections, source
+
+    rec = record_for(collection, row)
+    if rec is None:
+        _count("parsed")
+        return parse()
+    got = [tuple(s) for s in rec.get("sections") or []]
+    if _sampled(row["uid"]):
+        _count("sampled")
+        title, parsed, source = parse()
+        parsed = [tuple(s) for s in parsed]
+        if parsed != got:
+            _count("mismatch")
+            _stop(collection, row["uid"], got, parsed)
+            return title, parsed, source
+    _count("record")
+    return rec.get("title"), got, rec.get("content_hash")
+
+
 def parsed_with_source(plugin, row, *, pair: bool) -> tuple[list[tuple], str | None]:
     """The plugin's parse as `(sections, content_hash)`. For a collection
     whose layer feeds the encoder PAIRS — the one kind whose stored vector

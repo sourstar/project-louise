@@ -229,18 +229,25 @@ def test_an_empty_body_is_a_record_with_no_section(corpus):
     assert doc.sections == [] and doc.extra["valid_from"] == "2025-01-01"
 
 
-def test_one_chunk_per_article_and_annex(corpus):
+def test_one_chunk_per_article_and_annex_then_the_outline(corpus):
+    from app import chunking_legal
     doc = _doc(_by_expression(corpus)[ns.S1016])
-    chunks = list(chunking.chunk_akn_article(doc.uid, 1, doc.sections, 1))
-    assert len(chunks) == len([s for s in doc.sections if s[1].strip()])
-    assert chunks[0]["text"].startswith("§ 1 — Anwendungsbereich")
+    chunks = list(chunking_legal.chunk_legal_article(doc.uid, 1, doc.sections,
+                                                     params=chunking_legal.SHARED_LAYER["chunker"]["params"],
+                                                     title=doc.title))
+    *articles, outline = chunks
+    assert len(articles) == len([s for s in doc.sections if s[1].strip()])
+    assert articles[0]["text"].startswith(f"{doc.title} › {doc.sections[0][0]}\n(1) "), \
+        "the article line is said once, by the header (legal_article v2)"
+    assert outline["chapter"] == chunking_legal.OUTLINE and outline["text"].startswith(doc.title + "\n")
 
 
 def test_the_chunker_is_the_shared_spaces():
     from app.hold import template
     [layer] = template.default_layers(SOURCE)
-    assert (layer.chunker.id, layer.chunker.version) == ("akn_article", chunking.AKN_CHUNK_VERSION)
-    assert SOURCE.chunking_profile == "akn_article" and SOURCE.mutability is Mutability.MUTABLE
+    from app import chunking_legal
+    assert layer.to_dict() == chunking_legal.SHARED_LAYER, "the shared legal layer"
+    assert SOURCE.chunking_profile == "legal_article" and SOURCE.mutability is Mutability.MUTABLE
 
 
 # ---- validity: the stated start and end ----------------------------------------------------------
@@ -502,7 +509,9 @@ def test_the_plugin_its_spec_and_its_reference_source_are_registered():
 SHARED_SPACE = '''[space]
 dim = 2048
 dtype = "f16"
-ctx = 8192
+# 8191, not 8192: llama.cpp embeds at most context_size − 1 tokens, and the model runs
+# context_size 8192 (München's dry run, 2026-11-08); wikidata's space on the same model is 8191
+ctx = 8191
 cut = "tokens"
 pooling = "mean"
 normalise = true
@@ -552,9 +561,10 @@ def test_the_recipe_loads_through_the_real_loader_as_a_version_11_codex():
     c = col.dry_codex("neuris", r, platform_image="sha256:" + "1f" * 32)
     assert c.version == cx.DOCUMENT_VERSION == 11
     assert (c.space.dim, c.space.dtype, c.space.ctx, c.space.cut, c.space.exactness) == \
-        (2048, "f16", 8192, "tokens", "exact")
+        (2048, "f16", 8191, "tokens", "exact")
     assert c.space.document_instruction == "passage: " and c.space.query.instruction == "query: "
-    assert [layer.chunker.id for layer in c.layers] == ["akn_article"]
+    from app import chunking_legal
+    assert [layer.to_dict() for layer in c.layers] == [chunking_legal.SHARED_LAYER]
     assert c.slicing["keys"] == ["year"] and c.profile["validity"]["from"] == "extra.valid_from"
     assert c.license.cls == "green" and c.origin.jurisdiction == "DE"
 
@@ -582,7 +592,8 @@ def test_worker_stages_run_end_to_end(tmp_path, corpus, isolated_config):
     row = con.execute("SELECT * FROM documents WHERE uid=?", (f"neuris:{nsrc.native_id_of(ns.S1016)}",)).fetchone()
     assert row["rdf_done"] == 1 and row["title"].startswith("FrSaftErfrischV")
     chunks = worker._load_chunks(row, collection)
-    assert len(chunks) == 4 and chunks[0]["text"].startswith("§ 1 — Anwendungsbereich")
+    assert len(chunks) == 5 and chunks[-1]["chapter"] == "outline", "four articles, then the outline"
+    assert chunks[0]["text"].startswith(row["title"]) and "§ 1 — Anwendungsbereich" in chunks[0]["text"]
 
 
 #: HAND-MADE (tests/fixtures/neuris/README.md): a `rechtsetzungsdokument` in

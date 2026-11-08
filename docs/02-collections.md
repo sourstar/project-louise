@@ -914,6 +914,17 @@ nothing embedded, nothing published) carries its manifest and text index,
 which are functions of the records alone, and no vector table: `dev carry
 --unembedded`, amendment A1h; its parts come from `--records-from` as above.
 
+A sister whose LAYERS differ from her mother's (*amended 2026-11-08*,
+normattiva-nemo: the mother cuts by `akn_article`, the shared legal space
+by `legal_article`) takes her mother's record lines too: a line carries
+no layer (09 §9.5), so her records are her mother's byte for byte, and
+`--records-from` cuts each again under her layers for her parts' `chunks`
+and `chunks_root` (invariant 3) — the parts a parse would give her. Her
+manifest is carried with every index mark emptied and no text index (`dev
+carry --sister --relayered`, A1i), and the worker indexes each document
+with her layer. `--records-from` refuses any other difference but the
+slicing.
+
 A daughter whose parser adds to every record a section the mother's did
 not have — a Wikidata entity's text in one more language
 (docs/notes/wikidata-build-plan.md, D3; *amended 2026-10-19*) — re-issues
@@ -973,6 +984,15 @@ not use (08 §8.5). Everything that decides a record byte it keeps —
 `cleaning_version`, `slicing`, `license`, `privacy`, `erasure`,
 `modality` — and `hold collection derive` refuses anything else, and
 refuses a sister that differs in nothing.
+
+On a peer that holds the mother, a sister in ANOTHER encoder space is
+made by `hold collection new --sister-of` (*amended 2026-11-08*, case J
+of docs/notes/new-collection.md, the sister into a held space): her parts
+are seeded from her mother's latest snapshot, and her manifest and text
+index are copied, being functions of the records alone (RULE 1). None of
+the mother's vectors are carried, and nothing in the copy may say one is
+held (hold/carry.py, amendment A1i). Her documents are then embedded in her
+own space.
 
 The test is the records, not the declaration: a sister's `records_root`
 equals her mother's at every snapshot they share (§2.2), and her parts

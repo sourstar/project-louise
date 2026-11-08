@@ -275,6 +275,20 @@ def sections(plugin, row) -> list[tuple[str, str]]:
     return canonical_doc(plugin, row).sections
 
 
+def title_and_sections(plugin, row, collection=None) -> tuple[str | None, list[tuple[str, str]]]:
+    """`sections`, with the record's title where the document's layer writes
+    it into its chunks (a `legal_article` layer with a header or an outline,
+    `layers.wants_title`) — one parse for both. Every other collection gets
+    `sections(plugin, row)` exactly as before, and None for the title."""
+    if collection is None or hasattr(plugin, "read_chapters"):
+        return None, sections(plugin, row)
+    from . import layers
+    if not layers.wants_title(collection, row):
+        return None, sections(plugin, row)
+    doc = canonical_doc(plugin, row)
+    return doc.title, doc.sections
+
+
 def full_text(plugin, row) -> str:
     if hasattr(plugin, "read_text"):
         return plugin.read_text(Path(row["path"]), int(row["native_id"]))

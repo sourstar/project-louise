@@ -663,3 +663,70 @@ def test_every_vector_writer_in_app_passes_the_columns():
             if "columns=" not in m.group(0):
                 offenders.append(f"{p.relative_to(app.parent)}:{src[:m.start()].count(chr(10)) + 1}")
     assert offenders == [], f"vector writers without `columns=`: {offenders}"
+
+
+# ---- what changed what (piece 3, operator 2026-11-08: SAT-Graph's amending actions) ----
+
+def test_each_amendment_a_version_states_is_indexed_by_its_target_and_article(closing):
+    """The rdf stage records what the 2025 law's modifications change — the
+    act repealed whole from 2025-05-09, art. 5 of law 1/1999 repealed, an
+    insertion into law 2/1999 — each with the day it applies from (the
+    destination's `ita@`, else the stating version's own start) and the
+    origin's kind; facts by key, answered by article, never ranked."""
+    c, con = closing
+    _rdf(con, c, REPEALING_ID)
+    stated = f"normattiva:{REPEALING_ID}"
+    whole = validity.amendments_of(con, [AKN_RD])
+    assert [(r["kind"], r["article"], r["day"], r["stated_by"], r["amending_is_stating"]) for r in whole] == \
+        [("repeal", "", "2025-05-09", stated, True)]
+    art5 = validity.amendments_of(con, ["urn:nir:stato:legge:1999-01-01;1"], "Art. 5")
+    assert [(r["kind"], r["article"], r["day"]) for r in art5] == [("repeal", "5", "2025-01-25")]
+    assert validity.amendments_of(con, ["urn:nir:stato:legge:1999-01-01;1"], "art. 6") == [], \
+        "another article of the act: nothing changed it"
+    ins = validity.amendments_of(con, ["urn:nir:stato:legge:1999-01-01;2"])
+    assert [(r["kind"], r["article"]) for r in ins] == [("insertion", "")]
+    plan = " ".join(r[3] for r in con.execute(
+        "EXPLAIN QUERY PLAN SELECT * FROM validity_amendments WHERE target IN (?) AND article IN (?, '')",
+        ("x", "5")))
+    assert "USING INDEX idx_validity_amendments_target" in plan or "USING COVERING INDEX" in plan, plan
+
+
+def test_a_restated_version_replaces_its_amendments_and_states_them_once(closing):
+    """Delete-then-insert on the stating uid (invariant 2): a second pass
+    leaves one row a statement; a version that no longer states one has
+    none."""
+    c, con = closing
+    _rdf(con, c, REPEALING_ID)
+    n = con.execute("SELECT COUNT(*) FROM validity_amendments").fetchone()[0]
+    con.execute("UPDATE documents SET rdf_done=0 WHERE native_id=?", (str(REPEALING_ID),))
+    _rdf(con, c, REPEALING_ID)
+    assert con.execute("SELECT COUNT(*) FROM validity_amendments").fetchone()[0] == n == 4
+    stated = f"normattiva:{REPEALING_ID}"
+    row = con.execute("SELECT * FROM validity WHERE uid=?", (stated,)).fetchone()
+    validity.record(con, stated, REPEALING_ID, {"from": row["valid_from"], "work": row["work"], "has_text": 1,
+                                                "in_force": None, "keys": [], "closes": [], "amends": []})
+    assert con.execute("SELECT COUNT(*) FROM validity_amendments WHERE stated_by=?", (stated,)).fetchone()[0] == 0
+
+
+def test_the_article_spelling_is_one_across_the_four_systems():
+    assert {validity.article_token(t) for t in ("Art. 5-bis", "art5bis", "articolo 5 bis", "5-bis")} == {"5bis"}
+    assert validity.article_token("§ 823") == validity.article_token("823") == "823"
+    assert validity.article_token("L. 121-1") == validity.article_token("L121-1") == "l121-1"
+    assert validity.article_token("Article 5") == validity.article_token("Art. 5") == "5"
+
+
+def test_a_plugin_without_the_hook_states_its_amendments_by_its_edges():
+    """The common default: `eli:amends` / `eli:repeals` edges are what this
+    version changes; `eli:amended_by` / `eli:repealed_by` what changed it."""
+    from types import SimpleNamespace
+    from app.plugins.base import Edge
+
+    class P:
+        def relations(self, doc):
+            yield Edge(to="legi:LEGIARTI000000000002", type="eli:amends")
+            yield Edge(to="legi:LEGIARTI000000000003", type="eli:repealed_by")
+            yield Edge(to="legi:LEGITEXT000000000009", type="eli:cites")
+    doc = SimpleNamespace(keys=["legi:LEGIARTI000000000001"], extra={}, sections=[])
+    assert validity.amendments_of_doc(doc, P()) == [
+        ("legi:LEGIARTI000000000001", "", "legi:LEGIARTI000000000003", None, "repealed_by"),
+        ("legi:LEGIARTI000000000002", "", "", None, "amends")]

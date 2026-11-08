@@ -157,6 +157,7 @@ from pathlib import Path
 
 from app.backend import OriginForm, Template
 
+from app import chunking_legal
 from .. import eli
 from ..base import (CanonicalDoc, DiscoverState, DocRef, Edge, Erasure, Issue, LicenseClass,
                     Modality, Mutability, PROTOCOL_VERSION, PrivacyClass, RawDoc,
@@ -304,13 +305,17 @@ class LegiSource:
                           "Licence Ouverte 2.0; each record names its tarball and member, "
                           "the tarball its date")
     privacy_class = PrivacyClass.PUBLIC
-    chunking_profile = "akn_article"            # the shared legal space (decision 8)
+    chunking_profile = "legal_article"            # the shared legal space (decision 8)
+    #: the shared legal layer, its tokenizer and window (app/chunking_legal.py)
+    default_layers = [chunking_legal.SHARED_LAYER]
     mutability = Mutability.MUTABLE             # a version is rewritten when the origin closes it
     backend = (OriginForm("the LEGI tarballs", Template.CONTAINER_PACK,
                           derived=("legi-pack", "legi-facts")),)
     protocol_version = PROTOCOL_VERSION
-    #: 1 since 2026-11-08: no collection was ever created from it.
-    PARSER_VERSION = 1
+    #: 1 since 2026-11-08: no collection was ever created from it. 2 the
+    #: same day (free, none created): a TEXTELR's structure is its sections,
+    #: bodiless (`structure_sections`), the outline's labels.
+    PARSER_VERSION = 2
     origin_versions = "history"
     modality = Modality.TEXT
     erasure = Erasure.RETRACTABLE               # a deletion list withdraws a file
@@ -799,7 +804,26 @@ def _textelr(root, file_id: str, fields: dict, extra: dict, found: list) -> tupl
                      if x)
     keys = [f"legi:{file_id}", _id_key(chron.get("CID")),
             f"nor:{chron['NOR']}" if chron.get("NOR") else None]
-    return title, [], keys, extra.get("eli_date_document")
+    return title, structure_sections(extra.get("struct") or []), keys, extra.get("eli_date_document")
+
+
+def structure_sections(struct: list[dict]) -> list[tuple[str, str]]:
+    """A text's STRUCT as sections with NO body (parser 2, operator
+    2026-11-08, piece 2): each section by its title as the origin writes it
+    ("Chapitre I : Monnaies et médailles", "(abrogé)" after a repealed
+    one), each article as "Article <num>". Nothing is chunked from them;
+    the `legal_article` layer's outline is cut from their labels, so a
+    question about a whole code reaches it (each article is its own
+    record, app/chunking_legal.py)."""
+    out: list[tuple[str, str]] = []
+    for link in struct:
+        etat = str(link.get("etat") or "")
+        gone = " (abrogé)" if etat.startswith("ABROGE") else ""
+        if link.get("tag") == "LIEN_SECTION_TA" and str(link.get("text") or "").strip():
+            out.append((str(link["text"]).strip() + gone, ""))
+        elif link.get("tag") == "LIEN_ART" and str(link.get("num") or "").strip():
+            out.append((f"Article {str(link['num']).strip()}{gone}", ""))
+    return out
 
 
 # ---- LIENS → edges -------------------------------------------------------------------------

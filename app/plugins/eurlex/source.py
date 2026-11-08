@@ -138,6 +138,7 @@ import os
 import re
 from pathlib import Path
 
+from app import chunking_legal
 from .. import eli
 from app.backend import OriginForm, Template
 from ..base import (CanonicalDoc, DiscoverState, DocRef, Edge, Erasure, Issue, LicenseClass,
@@ -349,9 +350,11 @@ class EurlexSource:
                           "Only the Official Journal is authentic; consolidated texts have no legal effect")
     privacy_class = PrivacyClass.PUBLIC
     #: the shared legal space's chunker (legal-collections-nemotron.md: every
-    #: legal plugin chunks with `akn_article`): one chunk per section — each
+    #: legal plugin chunks with `legal_article`, legal-chunking-retrieval.md): one chunk per section — each
     #: recital, each article, each annex (formex.sections)
-    chunking_profile = "akn_article"
+    chunking_profile = "legal_article"
+    #: the shared legal layer, its tokenizer and window (app/chunking_legal.py)
+    default_layers = [chunking_legal.SHARED_LAYER]
     #: the notice of an act changes in place (its force status, its end of
     #: validity, new links), and Cellar re-publishes a manifestation it corrects
     mutability = Mutability.MUTABLE

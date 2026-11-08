@@ -115,7 +115,7 @@ size and hash, the images and the PDF included. The force status
 (`legislationLegalForce`) is the origin's word ON THE DAY OF THE FETCH —
 "currently in force" — kept as given, and `in_force` follows it (09 §9.5).
 
-SECTIONS (`chunking_profile = "akn_article"`, the shared space's chunker):
+SECTIONS (`chunking_profile = "legal_article"`, the shared space's chunker):
 one per § / Art. with its text — the number and heading, then each
 paragraph "(1) …" at the margin and its points indented — then one per
 Anlage, its title and its text (tables row by row). An annex the XML holds
@@ -153,6 +153,7 @@ from pathlib import Path
 from app.acquire.neuris_listing import EXPRESSION_ELI
 from app.backend import OriginForm, Template
 
+from app import chunking_legal
 from .. import eli
 from ..base import (
     PROTOCOL_VERSION,
@@ -364,7 +365,9 @@ class NeurisSource:
     corpus_attribution = ("Rechtsinformationen des Bundes (rechtsinformationen.bund.de), "
                           "Testphase — amtliche Werke, § 5 UrhG")
     privacy_class = PrivacyClass.PUBLIC
-    chunking_profile = "akn_article"
+    chunking_profile = "legal_article"
+    #: the shared legal layer, its tokenizer and window (app/chunking_legal.py)
+    default_layers = [chunking_legal.SHARED_LAYER]
     #: a manifestation is regenerated and an expression's metadata revised
     mutability = Mutability.MUTABLE
     backend = (OriginForm("the manifestation zips and their expressions' JSON", Template.MEMBER),)

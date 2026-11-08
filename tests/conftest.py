@@ -434,3 +434,20 @@ def _catalog_writers_closed():
     from app import catalog, fts
     catalog.close_all()
     fts.close_all()       # the same: one writer per index, kept for the worker's life
+
+
+@pytest.fixture(autouse=True)
+def _legal_tokenizer():
+    """The shared legal layer's pinned tokenizer (Nemotron-3-Embed-1B's, by
+    sha256; app/chunking_legal.py) stood in for by one token per word, so a
+    test that cuts a legi / neuris / eurlex record runs without the 17 MB
+    file — the window is then a count of words."""
+    from tokenizers import Tokenizer, models, pre_tokenizers
+    from app import chunking_legal
+    from app.plugins.wikidata import chunker as wd
+    had = wd._tokenizers.get(chunking_legal.NEMOTRON_TOKENIZER)
+    if had is None:
+        tok = Tokenizer(models.WordLevel({"[UNK]": 0}, unk_token="[UNK]"))
+        tok.pre_tokenizer = pre_tokenizers.WhitespaceSplit()
+        wd.register(chunking_legal.NEMOTRON_TOKENIZER, tok)
+    yield

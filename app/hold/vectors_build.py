@@ -122,7 +122,7 @@ def chunks_of(codex, records: Sequence[dict]) -> list[dict]:
         row = {"uid": rec["uid"], "native_id": rec.get("native_id", 0),
                "lang": rec.get("lang") or "und"}
         sections = [tuple(s) for s in rec.get("sections") or []]
-        for c in layers_mod.chunks_for_document(codex, row, sections):
+        for c in layers_mod.chunks_for_document(codex, row, sections, title=rec.get("title")):
             # the record the vector will be made for (embeddings.SOURCE_COLUMN)
             out.append(dict(c, lang=row["lang"], source=rec.get("content_hash")))
     return out

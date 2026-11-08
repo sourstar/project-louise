@@ -171,6 +171,34 @@ def modification_target(mod: dict) -> tuple[str, str | None, bool] | None:
     return (key, date, whole) if key else None
 
 
+def destination_part(mod: dict) -> str:
+    """The part of the destination act a modification names, as written —
+    the fragment of a URN:NIR href (`…;28#5` → `5`, `…#Allegato III`) or
+    of an Akoma Ntoso one (`…/!main~art_2__para_1` → `art_2__para_1`,
+    `#art5`); "" for the whole act."""
+    href = str(mod.get("destination") or "").strip()
+    if href.startswith("urn:"):
+        return href.partition("#")[2].strip()
+    _work, _sep, rest = href.partition("/!")
+    for mark in ("~", "#"):
+        if mark in rest:
+            return rest.split(mark, 1)[1].strip()
+    return ""
+
+
+#: the article inside a destination part: `5`, `5bis`, `art5`, `art_2__para_1`
+_PART_ARTICLE = re.compile(r"^(?:art(?:icolo)?[_ .]?)?(\d+(?:[-_ ]?[a-z]+)?)(?=$|__|[-_ ]?(?:com|para|let|num))", re.I)
+
+
+def destination_article(mod: dict) -> str:
+    """The article a modification's destination names (`5`, `5-bis`), the
+    part as written where it is not an article (`Allegato III`), "" for
+    the whole act."""
+    part = destination_part(mod)
+    m = _PART_ARTICLE.match(part)
+    return m.group(1) if m else part
+
+
 def _is_repeal(mod: dict) -> bool:
     return str(mod.get("type") or "").strip().lower() == "repeal"
 
@@ -528,6 +556,25 @@ class NormattivaSource:
                 continue
             seen.add(("eli:cites", target))
             yield Edge(to=target, type="eli:cites")
+
+    def amendments(self, doc: CanonicalDoc):
+        """app/validity.py's amending-actions hook (piece 3, operator
+        2026-11-08): what THIS version's active modifications change — the
+        destination act by the id its href uses, the article it names
+        (`destination_article`), the day the destination's `ita@` date names
+        or else this version's own start, and the kind as the origin types it
+        (`substitution`, `repeal`, `insertion`, …). The passive side is not
+        read: the origin writes it as notes inserted with no source act."""
+        from app import validity as validity_mod
+        x = doc.extra or {}
+        start = str(x.get("vigenza_from") or "") or None
+        for mod in x.get("active_modifications") or []:
+            target = modification_target(mod)
+            if target is None:
+                continue
+            key, date, whole = target
+            yield validity_mod.Amendment(target=key, kind=str(mod.get("type") or "modification").strip().lower(),
+                                         article="" if whole else destination_article(mod), day=date or start)
 
     def closures(self, doc: CanonicalDoc):
         """app/validity.py's hook (06 §6.1; review §3.2, case 2): the acts

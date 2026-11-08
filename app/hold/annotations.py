@@ -522,7 +522,7 @@ def chunks_of(codex: Codex, record: dict[str, Any]) -> dict[str, str]:
     from app import layers
     row = {"uid": record["uid"], "native_id": record["native_id"]}
     sections = [tuple(x) for x in record.get("sections") or []]
-    return {c["id"]: c["text"] for c in layers.chunks_for_document(codex, row, sections)}
+    return {c["id"]: c["text"] for c in layers.chunks_for_document(codex, row, sections, title=record.get("title"))}
 
 
 def _check_chunk(end: dict[str, Any], record: dict[str, Any], codices: dict[str, Codex] | None,

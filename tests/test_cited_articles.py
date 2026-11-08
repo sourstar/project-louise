@@ -90,3 +90,21 @@ def test_a_citation_in_another_form_finds_the_act_by_date_and_number_without_ref
     got = articles.pin("art. 8 del testo unico 26 febbraio 1948, n. 3", [c])
     assert len(got) == 1
     assert articles.pin("art. 8 della legge 27 febbraio 1948, n. 3", [c]) == [], "another date: no act"
+
+
+def test_the_pinned_article_says_what_changed_it(versioned):
+    """Piece 3 (operator, 2026-11-08): the amending acts stated about the
+    article — and about the act as a whole — pinned with its text, by any
+    canonical id of the Work; another article's are not."""
+    from app import validity
+    c, con, _ = versioned
+    _run(con, c, "rdf", "fts")
+    stated = f"normattiva:{V12_ID}"
+    validity._record_amendments(con, stated, [
+        ("urn:nir:stato:legge.costituzionale:1948-02-26;3", "8", "", 20010216, "substitution"),
+        ("urn:nir:stato:legge.costituzionale:1948-02-26;3", "9", "", 20010216, "substitution")])
+    con.commit()
+    f = articles.pin(Q, [c])[0]
+    title = con.execute("SELECT title FROM documents WHERE uid=?", (stated,)).fetchone()[0]
+    assert f["fields"]["modificato da"] == [{"atto": title.split(" — ")[0], "dal": "2001-02-16",
+                                             "tipo": "substitution", "su": "art. 8"}]

@@ -124,8 +124,16 @@ CASES: tuple[Case, ...] = (
          ("resolve", "check", "make"), "gutenberg-book-editions", phase=3),
     Case("I", "A peer's collection", "a copy fetched from a peer", ("collection id", "name"),
          ("resolve", "make", "cpu-reference", "gate"), "Perugia's gutenberg", phase=2),
-    Case("J", "Sister, daughter, corrective", "lineage (02 §2.7)", ("the mother", "what changes"), _A,
-         "none yet (\"No official daughters\")", phase=4),
+    # built 2026-11-08 (operator: "Make J, it is time to do it"), pulled
+    # forward from phase 4 for normattiva-nemo: the SISTER into a held space —
+    # her mother's records, parts, manifest and text index carried, none of
+    # her vectors (hold/carry.py A1i). A sister into a new space, a daughter
+    # and a corrective stay phase 4, refused at resolve
+    Case("J", "Sister, daughter, corrective", "lineage (02 §2.7)",
+         ("plugin", "the mother", "the space's collection", "name"),
+         ("resolve", "check", "make", "carry", "cpu-reference", "gate"),
+         "louise hold collection new normattiva --name normattiva-nemo --sister-of normattiva "
+         "--space-from legi --cpu-model vega-nemotron-3-embed-1b-cpu", built=True, phase=4),
 )
 
 

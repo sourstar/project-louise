@@ -1515,9 +1515,9 @@ def _local_chunk_texts(collection, row) -> list[tuple[str, str]]:
     computation for one document, and tools and tests read it as such."""
     from .. import layers as layers_mod
     plugin = collection.plugin_instance()
-    sections = plugin_io.sections(plugin, row)
+    title, sections = plugin_io.title_and_sections(plugin, row, collection)
     return [(c["id"], c["text"])
-            for c in layers_mod.chunks_for_document(collection, row, sections)]
+            for c in layers_mod.chunks_for_document(collection, row, sections, title=title)]
 
 
 def _sample_re_encode(collection, sampled: list[tuple[str, "embeddings.ChunkLike", np.ndarray]],

@@ -1456,3 +1456,142 @@ def test_drop_rows_keeps_the_versions_when_the_table_cannot_say(pair, monkeypatc
     assert out["verified"] and out["dropped"] == 3
     assert _versions(coll)[uids[0]] == E
     assert any("superseded-repair" in m for m in said), said
+
+
+# ---- A1i: a SISTER in another space — the source keeps its vectors ----------
+
+def _sister_ready(root, old):
+    """`old` holding vectors and every mark, queue and table that speaks of
+    them; `bge` (another function) made, its parts seeded from `old`'s."""
+    _vectors(root, old)
+    bge = _bge_space(root)
+    con = sqlite3.connect(root / "old" / "state" / "manifest.sqlite")
+    first = con.execute("SELECT uid FROM documents ORDER BY rowid LIMIT 1").fetchone()[0]
+    last = con.execute("SELECT uid FROM documents ORDER BY rowid DESC LIMIT 1").fetchone()[0]
+    con.execute("UPDATE documents SET embed_done=1, embed_version=7 WHERE uid<>?", (last,))
+    con.execute("UPDATE documents SET embed_done=-1, embed_version=7 WHERE uid=?", (last,))
+    con.execute("INSERT INTO embed_queue(uid, priority, ts) VALUES(?, 1, 0)", (first,))
+    con.execute("INSERT INTO chunk_hashes(text_hash, chunk_id, native_id) VALUES(x'00ff', ?, 1)",
+                (first + "#0",))
+    con.execute("INSERT INTO chunk_verification(chunk_id, uid, state) VALUES(?, ?, 'imported')",
+                (first + "#0", first))
+    con.execute("INSERT INTO control(key, value) VALUES('embed_gate', '{}'), ('publish:x', '1'), "
+                "('slice_scope', 'kept')")
+    con.commit()
+    con.close()
+    (root / "old" / "index").mkdir(parents=True, exist_ok=True)
+    (root / "old" / "index" / "words").write_text("the text index")
+    out = seed.seed_shards(root, "bge", "old", log=quiet)
+    rec.write_validation(root, "bge")
+    sn.create(root, "bge", snapshot_id=out["snapshot_id"], log=quiet)
+    return bge, last
+
+
+def test_a_sister_copies_the_manifest_and_index_and_says_none_of_its_vectors_held(pair):
+    root, old, _new = pair
+    bge, declined = _sister_ready(root, old)
+    rows = spaces.known_lance_rows(_local(root, "old").lance_dir)
+    assert rows, "the source holds vectors: what A1h refuses and A1i keeps with it"
+    with pytest.raises(CodexError, match="holds vectors"):
+        carry.carry(root, "old", "bge", unembedded=True, copy=True, apply=True, log=quiet)
+    plan = carry.carry(root, "old", "bge", sister=True, copy=True, log=quiet)
+    assert plan["apply"] is False and not (root / "bge" / "state" / "manifest.sqlite").exists()
+    out = carry.carry(root, "old", "bge", sister=True, copy=True, apply=True, log=quiet)
+    assert set(out["done"]) == {"index", "manifest"}, "no vector table crosses"
+    assert (root / "bge" / "index" / "words").read_text() == "the text index"
+    assert spaces.known_lance_rows(_local(root, "old").lance_dir) == rows, "the source keeps its vectors"
+    assert not spaces.known_lance_rows(_local(root, "bge").lance_dir)
+    con = sqlite3.connect(root / "bge" / "state" / "manifest.sqlite")
+    try:
+        marks = dict(con.execute("SELECT uid, embed_done FROM documents").fetchall())
+        assert marks[declined] == -1 and set(marks.values()) <= {0, -1}, "nothing marked embedded"
+        assert {v for (v,) in con.execute("SELECT DISTINCT COALESCE(embed_version,0) FROM documents")} == {0}
+        for t in ("embed_queue", "chunk_hashes", "chunk_verification", "coverage"):
+            assert con.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0] == 0, t
+        keys = {k for (k,) in con.execute("SELECT key FROM control")}
+        assert "embed_gate" not in keys and "publish:x" not in keys and "slice_scope" in keys
+        assert con.execute("SELECT space_id, dim FROM space").fetchone() == (bge.space_id, 1024)
+    finally:
+        con.close()
+    src = sqlite3.connect(root / "old" / "state" / "manifest.sqlite")
+    try:
+        assert src.execute("SELECT COUNT(*) FROM documents WHERE embed_done=1").fetchone()[0] > 0
+        assert src.execute("SELECT COUNT(*) FROM chunk_hashes").fetchone()[0] == 1, "the source is untouched"
+    finally:
+        src.close()
+    coll = _local(root, "bge")
+    con = db.connect(coll)
+    try:
+        spaces._validate_codex(con, coll)            # the boot check passes: not refused
+    finally:
+        con.close()
+    assert json.loads((root / "bge" / "state" / carry.MARKER).read_text())["sister"] is True
+    again = carry.carry(root, "old", "bge", sister=True, copy=True, apply=True, log=quiet)
+    assert again["done"] == {"index": "present", "manifest": "present"}
+
+
+def test_a_sister_refuses_a_move_one_space_other_records_and_other_modes(pair):
+    root, old, new = pair
+    _sister_ready(root, old)
+    with pytest.raises(CodexError, match="copies"):
+        carry.carry(root, "old", "bge", sister=True, apply=True, log=quiet)
+    for mode in ({"unembedded": True}, {"rebuilt": True}, {"resliced": True}, {"keep": ARCHIVE}):
+        with pytest.raises(CodexError, match="carries no vector"):
+            carry.carry(root, "old", "bge", sister=True, copy=True, apply=True, log=quiet, **mode)
+    col.create(root, replace(old, parser=Parser("gutenberg", 99)), name="other")
+    with pytest.raises(CodexError, match="parser"):
+        carry.carry(root, "old", "other", sister=True, copy=True, apply=True, log=quiet)
+    col.create(root, replace(old, work=replace(old.work, tokens=old.work.tokens + 1)), name="twin")
+    with pytest.raises(CodexError, match="one space"):
+        carry.carry(root, "old", "twin", sister=True, copy=True, apply=True, log=quiet)
+    assert not (root / "bge" / "state" / "manifest.sqlite").exists()
+
+
+def test_a_relayered_sister_carries_the_manifest_without_its_index_marks(pair):
+    """A1i relayered (2026-11-08, normattiva-nemo): her layers differ, so
+    nothing they cut crosses — no text index, every document's index marks
+    and counts emptied for the worker — and everything a record decides does."""
+    root, old, _new = pair
+    _vectors(root, old)
+    con = sqlite3.connect(root / "old" / "state" / "manifest.sqlite")
+    con.execute("UPDATE documents SET fts_done=1, fts_version=3, entity_version=2, chunks=5, tokens=900, "
+                "rdf_done=1")
+    con.commit()
+    n = con.execute("SELECT COUNT(*) FROM documents").fetchone()[0]
+    con.close()
+    (root / "old" / "index").mkdir(parents=True, exist_ok=True)
+    (root / "old" / "index" / "words").write_text("the text index")
+    from tests.hold.test_template import SPACE, recipe
+    from functools import partial
+    space = {**SPACE, "encoder": {**SPACE["encoder"], "weights": "sha256:" + "be" * 32},
+             "dim": 1024, "query": {"encoder": None, "instruction": "query: "}}
+    layers = [{"rule": "default", "chunker": {"id": "fixed", "version": 1, "params": {"tokens": 3, "overlap": 0}},
+               "input": {"form": "text"}}]
+    col.create_from_recipe(root, "gutenberg", recipe(space=space, layers=layers, work={"tokens": 7_000_000}),
+                           platform_image=PLATFORM, embed=partial(fake_embed, dim=1024),
+                           name="cut", key=KEY, now=NOW)
+    with pytest.raises(CodexError, match="layers"):
+        carry.carry(root, "old", "cut", sister=True, copy=True, apply=True, log=quiet)
+    with pytest.raises(CodexError, match="with --sister only"):
+        carry.carry(root, "old", "cut", relayered=True, copy=True, apply=True, log=quiet)
+    out = carry.carry(root, "old", "cut", sister=True, relayered=True, copy=True, apply=True, log=quiet)
+    assert not (root / "cut" / "index" / "words").exists(), "her layers cut other chunks"
+    assert out["reset"]["unindexed"] == n
+    con = sqlite3.connect(root / "cut" / "state" / "manifest.sqlite")
+    try:
+        assert con.execute("SELECT COUNT(*), SUM(rdf_done) FROM documents").fetchone() == (n, n), \
+            "what a record decides is carried"
+        assert con.execute("SELECT COUNT(*) FROM documents WHERE fts_done<>0 OR fts_version<>0 OR "
+                           "entity_version<>0 OR chunks<>0 OR tokens<>0").fetchone()[0] == 0
+    finally:
+        con.close()
+    assert json.loads((root / "cut" / "state" / carry.MARKER).read_text())["relayered"] is True
+    again = carry.carry(root, "old", "cut", sister=True, relayered=True, copy=True, apply=True, log=quiet)
+    assert again["done"]["manifest"] == "present"
+
+
+def test_a_relayered_sister_that_cuts_alike_is_refused(pair):
+    root, old, _new = pair
+    _sister_ready(root, old)
+    with pytest.raises(CodexError, match="cut alike"):
+        carry.carry(root, "old", "bge", sister=True, relayered=True, copy=True, apply=True, log=quiet)

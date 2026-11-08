@@ -151,8 +151,9 @@ def _inputs_for(con, collection, targets: list[str], stored: dict[str, tuple]) -
             if row is None:
                 continue
             row = dict(row)
+            title, sections = plugin_io.title_and_sections(plugin, row, collection)
             cut = {c["id"]: c for c in layers_mod.chunks_for_document(
-                collection, row, plugin_io.sections(plugin, row))}
+                collection, row, sections, title=title)}
         except Exception:                               # noqa: BLE001 — the record is not readable here
             continue
         for cid in cids:

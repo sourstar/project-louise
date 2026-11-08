@@ -69,7 +69,7 @@ These are the values, not the final TOML.
 - Encoder: weights `sha256:09596ced…ecbf2c`, labelled "Nemotron-3-Embed-1B
   f16".
 - Vectors: 2,048 dims, f16, mean pooling, normalised.
-- Window: ctx 8,192, cut by tokens.
+- Window: ctx 8,191, cut by tokens (the model's context_size 8,192 less one).
 - Instructions: `passage: ` on documents, `query: ` on queries.
 - `exactness = "exact"`: required from Codex version 10.
 - `[space.calibration]`: set `sha256:7d06a2f6…`, quorum n = 16, min_pass =
@@ -191,3 +191,45 @@ needs a measured pass.
 |---|---|---|
 | **two protocols on the spec (built, awaiting review)** | one engine; a new origin is a declaration, not an engine edit; the guard keeps it so | two more fields on the spec; the review may want another shape |
 | the per-plugin hooks as they were | nothing to review | three special cases in the engine, growing with every origin |
+
+## Next: a Nemotron Normattiva (operator, 2026-11-08) — PLANNED
+
+The operator: "When you are done with them, I want you to make a nemo version
+of normattiva, then run a comparison test before doing the full embedding."
+
+- **What it is:** `normattiva-nemo`, the same plugin, corpus and records as
+  `normattiva`, in the shared legal space (Nemotron), cut by the space's
+  layer (`legal_article`, legal-chunking-retrieval.md §3); `normattiva`
+  cuts by `akn_article`. The existing `normattiva` (DAR-legal-it) is
+  untouched.
+- **The comparison before the full embedding:** two parts.
+  - The bake-off München runs for the operator's 2026-11-07 request
+    (legal-embedders-fr-de-eu.md): `lemur-it` hybrid MRR@10, the deciding
+    row; JuriFindIT, in-domain for DAR-legal-it.
+  - Then, on the collection itself: `tools/legal_pilot.py coverage` and
+    `run`, against the old collection. Only the chunks the pilot's
+    questions reach are embedded on demand. The full embedding waits for
+    its numbers and the operator's go.
+- **How it is made: case J, built 2026-11-08** (operator: "Make J, it is
+  time to do it"). A RELAYERED sister of `normattiva` in `legi`'s space
+  (2026-11-08): her manifest copied with its index marks emptied, no text
+  index, her parts built from normattiva's record lines (the same record
+  bytes, none parsed) and cut by her layer; the worker then cuts and
+  indexes every document with `legal_article`. None of the DAR vectors is
+  carried (new-collection.md J; hold/carry.py A1i relayered; 02 §2.7
+  amended 2026-11-08). The parts are REWRITTEN with the same bytes: a
+  variant that hard-links them and recomputes only each part's chunk
+  entries is written down here, to build if the measured build time says
+  it pays:
+
+  ```bash
+  louise node pause normattiva
+  louise hold collection new normattiva --name normattiva-nemo --sister-of normattiva \
+      --space-from legi --cpu-model vega-nemotron-3-embed-1b-cpu --dry-run
+  louise hold collection new normattiva --name normattiva-nemo --sister-of normattiva \
+      --space-from legi --cpu-model vega-nemotron-3-embed-1b-cpu
+  louise node resume normattiva
+  ```
+
+  It needs legi created first. Its embedding stays off until the comparison
+  above, and the operator's go.

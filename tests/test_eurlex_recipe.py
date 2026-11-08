@@ -21,7 +21,9 @@ PLATFORM = "sha256:" + "1f" * 32
 SHARED_BLOCK = '''[space]
 dim = 2048
 dtype = "f16"
-ctx = 8192
+# 8191, not 8192: llama.cpp embeds at most context_size − 1 tokens, and the model runs
+# context_size 8192 (München's dry run, 2026-11-08); wikidata's space on the same model is 8191
+ctx = 8191
 cut = "tokens"
 pooling = "mean"
 normalise = true
@@ -75,12 +77,13 @@ def test_the_recipe_loads_through_the_real_loader_into_a_version_11_codex():
     assert dry.version == 11, "the document instruction is a version-11 field (09 §9.3)"
     sp = dry.space
     assert (sp.dim, sp.dtype, sp.ctx, sp.cut, sp.pooling, sp.normalise, sp.exactness, sp.epoch) == (
-        2048, "f16", 8192, "tokens", "mean", True, "exact", "0")
+        2048, "f16", 8191, "tokens", "mean", True, "exact", "0")
     assert sp.query.instruction == "query: " and sp.document_instruction == "passage: "
     assert sp.encoder.weights == "sha256:09596cedbdf2a0d164b37083794632be55dcb2aa2abcf02fb995dfdccbecbf2c"
     assert sp.calibration.set == "sha256:7d06a2f6a4a773da01a517cb30571cac421753df3e30b20fca4716e5441fbf0f"
     assert dry.plugin == "eurlex" and dry.license.cls == "green"
-    assert [layer.chunker.id for layer in dry.layers] == ["akn_article"]
+    from app import chunking_legal
+    assert [layer.to_dict() for layer in dry.layers] == [chunking_legal.SHARED_LAYER]
     assert dry.slicing["keys"] == ["lang", "type", "year"]
     assert dry.profile["validity"]["work"] == "extra.validity_work"
     assert dry.origin.jurisdiction == "EU" and dry.origin.unit == "file"

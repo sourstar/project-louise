@@ -152,7 +152,7 @@ def cut(codex, records: Sequence[dict]) -> dict[str, dict]:
         uid = rec["uid"]
         row = {"uid": uid, "native_id": rec.get("native_id", 0)}
         sections = [tuple(s) for s in rec.get("sections") or []]
-        for c in layers_mod.chunks_for_document(codex, row, sections):
+        for c in layers_mod.chunks_for_document(codex, row, sections, title=rec.get("title")):
             out[c["id"]] = {
                 "text": c["text"], "seq": int(c["seq"]),
                 "chapter": c["chapter"] or "",

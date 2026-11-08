@@ -25,7 +25,11 @@ coverage       which gold articles the collection holds, BY KEY. The dataset's
                whose gold articles is held is EXCLUDED from `run` and listed:
                EU regulations are, Normattiva does not hold them.
 run            every covered question through `app.ask.results.search` as the
-               node is configured (its reranker included), recall@k, mrr@k and
+               node is configured (its reranker included — or, `--reranker
+               off` / `--reranker from:<collection>`, none, or that collection's
+               lent, for the comparison of piece 5, operator 2026-11-08: "compare
+               time and quality by adding 5"), each question's search TIMED
+               (seconds: mean, p50, p95, total), recall@k, mrr@k and
                ndcg@k over the gold node ids (encoder_bakeoff.metrics_for, the
                hand-pinned definitions), and the REACH analysis: of the gold
                articles the top-k missed, how many sit in an act one declared
@@ -55,6 +59,7 @@ snapshot named, so two runs are comparable.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import re
 import sys
@@ -192,7 +197,7 @@ class Held:
             by_seq: dict[int, str] = {}
             row, doc = self._row_and_doc(uid)
             if doc is not None:
-                for ch in layers.chunks_for_document(self.collection, row, doc.sections):
+                for ch in layers.chunks_for_document(self.collection, row, doc.sections, title=doc.title):
                     seq, label = int(ch["seq"]), str(ch.get("chapter") or "")
                     by_seq[seq] = label
                     tok = article_token(label)
@@ -354,12 +359,15 @@ def run(held: Held, questions: list[dict[str, Any]], gold: dict[int, Gold], *, k
         return edges_cache[uid]
 
     n = 0
+    seconds: list[float] = []
     for i, q in enumerate(questions):
         relevant = {int(x) for x in q["relevant_doc_ids"] if int(x) in gold and gold[int(x)].held}
         if not relevant:
             continue
         n += 1
+        t0 = time.perf_counter()
         answer = search_fn(q["question"], collections=[name], limit=k, as_of=as_of)
+        seconds.append(time.perf_counter() - t0)
         ranking: list[int] = []
         seen_pairs: list[tuple[str, str]] = []
         for h in _hits(answer)[:k]:
@@ -402,7 +410,50 @@ def run(held: Held, questions: list[dict[str, Any]], gold: dict[int, Gold], *, k
     summary["reach_misses"] = reach["misses"]
     summary["reach_reachable_by_one_edge"] = reach["reachable"]
     summary["reach_share"] = (reach["reachable"] / reach["misses"]) if reach["misses"] else None
+    summary["seconds"] = timing(seconds)
     return {"summary": summary, "per_question": per_question}
+
+
+def timing(seconds: list[float]) -> dict[str, float | None]:
+    """The searches' wall time: mean, p50, p95 (nearest rank), total."""
+    if not seconds:
+        return {"mean": None, "p50": None, "p95": None, "total": 0.0}
+    xs = sorted(seconds)
+
+    def rank(q: float) -> float:
+        return xs[min(len(xs) - 1, max(0, int(round(q * len(xs) + 0.5)) - 1))]
+    return {"mean": sum(xs) / len(xs), "p50": rank(0.50), "p95": rank(0.95), "total": sum(xs)}
+
+
+@contextlib.contextmanager
+def reranker_override(choice: str | None):
+    """`configured` (or None): the node's own resolution, untouched. `off`:
+    no reranker for any collection — the fused order (05 §5.6). `from:<name>`:
+    every collection reranked by THAT collection's reranker, as the node
+    resolves it (its file's `[reranker]`, else RERANK_URL) — the comparison's
+    lent reranker. In this process only; nothing is written."""
+    from app import collections as collections_mod
+    if choice in (None, "", "configured"):
+        yield None
+        return
+    real = collections_mod.reranker_for
+    if choice == "off":
+        lent = None
+    elif choice.startswith("from:"):
+        name = choice[len("from:"):]
+        donor = next((c for c in collections_mod.load_all() if c.name == name), None)
+        if donor is None:
+            raise SystemExit(f"--reranker {choice}: no collection named {name!r} is held here")
+        lent = real(donor)
+        if lent is None:
+            raise SystemExit(f"--reranker {choice}: {name} has no reranker to lend")
+    else:
+        raise SystemExit(f"--reranker is configured, off or from:<collection>, not {choice!r}")
+    collections_mod.reranker_for = lambda collection: lent
+    try:
+        yield lent
+    finally:
+        collections_mod.reranker_for = real
 
 
 # ---- the temporal arm ----------------------------------------------------------------
@@ -538,6 +589,8 @@ def main(argv: list[str] | None = None) -> int:
             p.add_argument("--k", type=int, default=DEFAULT_K)
             p.add_argument("--as-of", default=None, dest="as_of")
             p.add_argument("--no-reach", action="store_true", dest="no_reach")
+            p.add_argument("--reranker", default="configured",
+                           help="configured (default), off, or from:<collection> (lent)")
     p = sub.add_parser("temporal-make")
     p.add_argument("--collection", required=True); p.add_argument("--out", type=Path, required=True)
     p.add_argument("--limit", type=int, default=200)
@@ -560,12 +613,18 @@ def main(argv: list[str] | None = None) -> int:
                   f"articles {cov['articles']} held {cov['articles_held']}  {cov['articles_by_outcome']}")
             print(f"written {path}")
             return 0
-        got = run(held, questions, gold, k=a.k, as_of=a.as_of,
-                  traverse_fn=None if a.no_reach else _DEFAULT)
-        path = _write(a.out, "run", {**_stamp(held), "k": a.k, "as_of": a.as_of,
-                                     "coverage": {k: v for k, v in cov.items() if k != "gold"}, **got})
+        with reranker_override(a.reranker) as lent:
+            got = run(held, questions, gold, k=a.k, as_of=a.as_of,
+                      traverse_fn=None if a.no_reach else _DEFAULT)
+        rr = {"choice": a.reranker, "url": getattr(lent, "url", None), "model": getattr(lent, "model", None)}
+        path = _write(a.out, "run" if a.reranker == "configured" else f"run-rerank-{a.reranker.replace(':', '-')}",
+                      {**_stamp(held), "k": a.k, "as_of": a.as_of, "reranker": rr,
+                       "coverage": {k: v for k, v in cov.items() if k != "gold"}, **got})
         s = got["summary"]
         print("  ".join(f"{m} {s.get(m, 0.0):.4f}" for m in ("recall@10", "mrr@10", "ndcg@10", "recall@20")))
+        t = s["seconds"]
+        print(f"reranker {a.reranker}  seconds a question: mean {t['mean']}  p50 {t['p50']}  p95 {t['p95']}  "
+              f"total {t['total']:.1f}")
         print(f"questions {s['questions_run']}  misses {s['reach_misses']}  reachable by one edge "
               f"{s['reach_reachable_by_one_edge']}  share {s['reach_share']}")
         print(f"written {path}")

@@ -454,7 +454,8 @@ def _record_from_line(collection, line: dict) -> tuple[dict, int, bytes, dict[st
     chunks = 0
     chunk_blob = bytearray()
     for c in resolved.chunker_at(layer)(
-            line["uid"], native_id, [tuple(s) for s in line.get("sections") or []]):
+            line["uid"], native_id, [tuple(s) for s in line.get("sections") or []],
+            title=line.get("title")):
         chunks += 1
         chunk_blob += hold_records.chunk_contribution(c["id"], c["text"])
     return {**line, "layer": layer, "chunks": chunks}, layer, bytes(chunk_blob), {}
@@ -782,7 +783,7 @@ def _record_of(collection, plugin, row) -> tuple[dict, int, bytes, dict[str, str
     # these blobs in record order and hashes once.
     chunks = 0
     chunk_blob = bytearray()
-    for c in resolved.chunker_at(layer)(doc.uid, native_id, doc.sections):
+    for c in resolved.chunker_at(layer)(doc.uid, native_id, doc.sections, title=doc.title):
         chunks += 1
         chunk_blob += hold_records.chunk_contribution(c["id"], c["text"])
     record = {
