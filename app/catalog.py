@@ -86,9 +86,13 @@ def _analyzer() -> tantivy.TextAnalyzer:
 
 
 def _open(path: Path) -> tantivy.Index:
+    """Its reader reloads only when asked (`fts.manual_reader`): the writer's
+    Index otherwise re-opened every segment after each rdf commit; every
+    read here calls `idx.reload()` first."""
+    from app import fts
     idx = tantivy.Index(_schema(), path=str(path))
     idx.register_tokenizer("catalog_tok", _analyzer())
-    return idx
+    return fts.manual_reader(idx)
 
 
 def _reader_index(collection, generation) -> tantivy.Index | None:

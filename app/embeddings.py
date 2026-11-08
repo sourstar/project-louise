@@ -49,6 +49,67 @@ NEW_TABLE_STORAGE = {"new_table_enable_stable_row_ids": "true"}
 _SAFE_LANG = re.compile(r"[A-Za-z0-9_-]{1,16}")
 _dbs: dict[str, "lancedb.DBConnection"] = {}
 
+#: THE VECTOR STORE'S CACHES, BY ROLE (config.WORKER_LANCE_CACHE_BYTES,
+#: SEARCH_LANCE_CACHE_BYTES; LANCE_INDEX_CACHE_BYTES / LANCE_METADATA_CACHE_BYTES
+#: replace the role's figures when set). Lance's own `Session` — index and
+#: metadata caches, byte-bounded — is the library's way to bound them
+#: ("Sessions … can also be re-used across multiple connections to share the
+#: same cache state"). A connection opened without one got a Session of its
+#: own at Lance's defaults, 6 GiB of index and 1 GiB of metadata, and the
+#: metadata cache holds a manifest per version opened, so it grew with every
+#: write (2026-11-08: the worker at ~16.8 GB anon RSS, OOM-killed every 3–6
+#: min; through this module's own write path, 380 → 1,665 MB over 1,500
+#: batches on three tables, flat with the bound — docs/notes/STATUS.md).
+#:   - the WORKER (`use_worker_caches`, called at its start): ONE Session for
+#:     every connection of the process;
+#:   - any other process (the web's search): a Session PER CONNECTION, as
+#:     before, at the library's index cache, its metadata cache bounded (a
+#:     reader grows by the versions it opens: 544 MiB after 1,200).
+_session: "lancedb.Session | None" = None
+_session_budget = 0                  # the bytes `_session` was made with, both caches
+_session_lock = threading.Lock()
+_worker_caches = False
+
+
+def use_worker_caches() -> None:
+    """This process is the worker: its connections share ONE bounded Session.
+    Called by `worker.run_forever` before any vector table is opened."""
+    global _worker_caches
+    _worker_caches = True
+
+
+def _budget(role: tuple[int, int]) -> tuple[int, int]:
+    index, metadata = role
+    return (int(config.LANCE_INDEX_CACHE_BYTES or index),
+            int(config.LANCE_METADATA_CACHE_BYTES or metadata))
+
+
+def lance_session() -> "lancedb.Session":
+    """The Session a new connection takes: the worker's one, made on first
+    use; elsewhere a new one each call (one per connection)."""
+    global _session, _session_budget
+    if not _worker_caches:
+        index, metadata = _budget(config.SEARCH_LANCE_CACHE_BYTES)
+        return lancedb.Session(index_cache_size_bytes=index, metadata_cache_size_bytes=metadata)
+    with _session_lock:
+        if _session is None:
+            index, metadata = _budget(config.WORKER_LANCE_CACHE_BYTES)
+            _session = lancedb.Session(index_cache_size_bytes=index, metadata_cache_size_bytes=metadata)
+            _session_budget = index + metadata
+        return _session
+
+
+def lance_cache_stats() -> dict | None:
+    """What the worker's Lance caches hold — `{"bytes", "items", "budget"}`
+    — or None before any connection made them, or in another role. For a
+    periodic reporter."""
+    with _session_lock:
+        s, budget = _session, _session_budget
+    if s is None:
+        return None
+    return {"bytes": int(s.size_bytes), "items": int(s.approx_num_items), "budget": budget}
+
+
 def _conn(collection=None):
     if collection is None:
         collection = collections_mod.default_collection()
@@ -56,7 +117,7 @@ def _conn(collection=None):
     # get_index() for why a name-keyed cache is unsafe.
     key = str(collection.lance_dir)
     if key not in _dbs:
-        _dbs[key] = lancedb.connect(str(collection.lance_dir))
+        _dbs[key] = lancedb.connect(str(collection.lance_dir), session=lance_session())
     return _dbs[key]
 
 def forget(collection) -> None:
