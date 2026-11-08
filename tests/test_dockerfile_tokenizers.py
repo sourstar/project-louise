@@ -13,7 +13,11 @@ from pathlib import Path
 from app import config
 
 ROOT = Path(__file__).resolve().parent.parent
-PINS = (ROOT / "docs" / "notes" / "wikidata-recipe.toml", ROOT / "deploy" / "jina-embeddings-v3" / "fetch.py")
+# every recipe the repository keeps, not one named file: the legal recipes'
+# `legal_article` v2 pinned Nemotron's tokenizer and no ADD fetched it, which
+# only the node found (München, 2026-11-08)
+PINS = (*sorted((ROOT / "docs" / "notes").glob("*-recipe.toml")),
+        ROOT / "deploy" / "jina-embeddings-v3" / "fetch.py")
 
 
 def _pinned_tokenizers() -> set[str]:
@@ -27,7 +31,8 @@ def _pinned_tokenizers() -> set[str]:
 
 def test_every_pinned_tokenizer_is_added_and_checked_in_the_image():
     pinned = _pinned_tokenizers()
-    assert pinned, "the wikidata recipe pins its tokenizer"
+    assert "f59925fcb90c92b894cb93e51bb9b4a6105c5c249fe54ce1c704420ac39b81af" in pinned, "the wikidata recipe pins its tokenizer"
+    assert "797410dfb649a5b9ba92bc4fef7dbf4022d00e73de6867c4ac199a8846439421" in pinned, "the legal recipes pin Nemotron's"
     docker = (ROOT / "Dockerfile").read_text(encoding="utf-8")
     base = docker.split("FROM node:", 1)[0]          # the runtime stage, not the test-only ones
     assert str(config.TOKENIZERS_DIR) == "/opt/louise/tokenizers"

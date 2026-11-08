@@ -39,6 +39,12 @@ RUN echo "865e934f10d84ab72951b410b0b21d53a7a4c6f4b051c722bdf62833ef5ffb4b  /usr
 ADD https://huggingface.co/jinaai/jina-embeddings-v3/resolve/ab036b023d30b4d1138c4c3bfa9f0c445ab455d6/tokenizer.json /opt/louise/tokenizers/f59925fcb90c92b894cb93e51bb9b4a6105c5c249fe54ce1c704420ac39b81af.json
 RUN echo "f59925fcb90c92b894cb93e51bb9b4a6105c5c249fe54ce1c704420ac39b81af  /opt/louise/tokenizers/f59925fcb90c92b894cb93e51bb9b4a6105c5c249fe54ce1c704420ac39b81af.json" \
         | sha256sum -c - && chmod 644 /opt/louise/tokenizers/*.json
+# Nemotron-3-Embed-1B's tokenizer.json at c0c9fea (17,077,678 bytes): the
+# legal recipes' `legal_article` v2 counts its windows in it (legi, neuris,
+# eurlex; München, 2026-11-08: the recipe pinned it, no step fetched it)
+ADD https://huggingface.co/nvidia/Nemotron-3-Embed-1B-BF16/resolve/c0c9fea93ea424587517f2c59e20db9f1d6bf615/tokenizer.json /opt/louise/tokenizers/797410dfb649a5b9ba92bc4fef7dbf4022d00e73de6867c4ac199a8846439421.json
+RUN echo "797410dfb649a5b9ba92bc4fef7dbf4022d00e73de6867c4ac199a8846439421  /opt/louise/tokenizers/797410dfb649a5b9ba92bc4fef7dbf4022d00e73de6867c4ac199a8846439421.json" \
+        | sha256sum -c - && chmod 644 /opt/louise/tokenizers/*.json
 WORKDIR /srv
 # every package at the version the gated image ran (constraints.txt): a rebuild
 # never moves one on its own
