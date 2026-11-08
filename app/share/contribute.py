@@ -587,7 +587,11 @@ def claimed_uids(root: Path, name: str, codex, con, sid: str, *, own_key: str | 
         # whoever takes the task to re-embed the new versions"): uncovered,
         # bundled by whoever embedded it. All of it from the cached index: a
         # part costs no query and no file read while the table is unchanged.
-        held = possession.index(root, name, codex, con)
+        # the possession of THIS part alone: the bundles filed under its slice
+        # whose uid range meets the records' (`possession.part_possession`)
+        span = sorted(hashes, key=_uid_key)
+        held = possession.part_possession(root, name, codex, con, sid.rsplit("/", 1)[0],
+                                          (_uid_key(span[0]), _uid_key(span[-1])))
         out.update(possession.covered_uids(held, hashes.items()))
         # another producer's predecessor row WITHOUT files says only that this
         # peer held vectors then, not whose (Perugia, en/01192): its unchanged

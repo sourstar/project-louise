@@ -109,14 +109,38 @@ measured (published figures disagree).
     over the accepted rows alone (count, max and sum of rowid, latest
     acceptance); tests/share/test_possession_claims.py: thirty claims, no
     rebuild, peak < 256 KiB; an acceptance or its withdrawal rebuilds (fails
-    on the old code). **NOT FIXED: its size.** The index is ~680 B a uid
-    held (measured: 200,000 uids, one bundle each; 971 B at the build's
-    peak) — 25 GiB for pubmed's 40 M, kept in the process memo for the
-    worker's life (the node's 11.54 GB "own" under `_index_cold`). The
-    first embed after a start builds it. A bounded form is a redesign:
-    per-part lookups (the record's part, the bundles filed under it through
-    `idx_coverage_shard`, a byte-budgeted cache of their `possession.json`),
-    or a compact array index (~35 B a triple, ~1.4 GB for 40 M).
+    on the old code). **Its size, fixed the same day (PR after #415):** the
+    index was ~680 B a uid held (measured: 200,000 uids, one bundle each;
+    971 B at the build's peak) — 25 GiB for pubmed's 40 M, kept for the
+    worker's life (the node's 11.54 GB "own" under `_index_cold`), built
+    by the first embed after a start. Every worker path now asks ONE PART
+    (`possession.part_possession`; `holding` for a record, found as a
+    reader finds it, `Snapshot.lookup_order`): the accepted rows filed
+    under the part's slice — a range of the coverage table's own B-tree,
+    `idx_coverage_shard`, per prefix — narrowed to those whose uid range
+    meets the part's, and their `possession.json`, each read once into the
+    process's byte-budgeted read cache ("possession bundles"; the part's
+    hashes as "possession parts"; the part's possession itself, keyed by
+    the accepted rows it was made of, as "possession part views" — the
+    embed stage asks once a document). The embed stage (`_possessed_vectors`),
+    the publisher's claim (`contribute`), the counting view (`covered`)
+    and the digest's offer (`offered_by_part`) all do; `index` stays for
+    tools and tests. **Measured:** 80 parts of 2,000 uids under a 2 MiB
+    cache — 1.47 MB held after 10 parts, 1.48 MB after 80, peak 2.85 MB;
+    the whole index of the same 160,000 uids held 84.7 MB. The query on a
+    40 M-row synthetic coverage table (in memory; 400,000 slices of 100
+    rows): `SEARCH coverage USING INDEX idx_coverage_shard (shard>? AND
+    shard<?)`, 0.35–0.38 ms a slice lookup, ~270,000 rows/s — against
+    0.26–0.29 ms on 1 M rows: the cost is the rows of the slice, not the
+    table. **What it does not see:** a bundle filed under ANOTHER slice
+    than the record's (a predecessor sliced otherwise) — the record is
+    then embedded or bundled again, the safe direction; the old index
+    counted it. Tests: tests/share/test_possession_parts.py (every part's
+    answers, `covered` and `offered_by_part` equal to the whole index's on a
+    fixture with a spanning bundle, a predecessor's other numbering, a
+    fileless row, claims and revised records; the plan; the flat heap);
+    tests/test_possessed_vectors.py's mocks follow the new seam
+    (`holding`).
 - **Not verified on the node yet:** what is held at the 16.8 GB. After the
   deploy, the shares line gives Lance's caches beside RSS. Still open, by
   estimate: the records reader keeps 64 part indexes

@@ -17,10 +17,25 @@ could not see the predecessor's 2,976 bundles at all; counting by
 possession sees 75,063 of the 79,658 records covered, and the 4,595 left are
 the changed (133), the new and the never-bundled — the only work there is.
 
-Cost: the index is rebuilt only when the set of accepted bundles changes
-(fingerprinted by one aggregate query), each part's uids and hashes are read
-once per part ROOT (a part never changes under its root), and the chunks per
-record come from the manifest. A round reads none of the bundle files again.
+PER PART, never the whole collection (2026-11-08). The index of every uid
+of every accepted bundle (`index`, kept for tools and tests) costs ~680 B a
+uid held — 25 GiB for pubmed's 40 M — and the worker built it on its first
+embed after a start and kept it (the node's memray: 11.54 GB under
+`_index_cold`, the worker OOM-killed every 3–6 min). Every path of the worker
+now asks for ONE part (`part_possession`): the accepted rows filed under the
+part's slice, found by the coverage table's own B-tree (`idx_coverage_shard`
+on `shard`, a range per prefix), narrowed to those whose uid range meets the
+part's, and those bundles' `possession.json`, each read once and kept in the
+process's one byte-budgeted read cache (app/backend.py `read_cache`). A
+round reads only the parts it works on; memory is the cache's budget,
+whatever the collection's size. What it does not see: a bundle filed under
+ANOTHER slice than the record's (a predecessor sliced otherwise) — the record
+is then embedded or bundled again, the safe direction.
+
+Cost: each part's uids and hashes are read once per part ROOT (a part never
+changes under its root), the chunks per record come from the manifest, and
+the passes over every part (`covered`, `offered_by_part`) are memoised per
+fingerprint (one aggregate query) and snapshot.
 """
 from __future__ import annotations
 
@@ -108,12 +123,19 @@ def _fingerprint(con, pre: Sequence[str], segments: Sequence[str] = ()) -> str:
     return h.hexdigest()
 
 
+def _fingerprint_of(root: Path, name: str, codex, con) -> str:
+    segs = tuple(getattr(codex, "admitted_segments", ()) or ()) or (codex.space_segment,)
+    return _fingerprint(con, prefixes(root, name, codex), segs)
+
+
 def index(root: Path, name: str, codex, con) -> "Possession":
     """What the accepted bundles held here hold (`Possession`), read through
     `contribute.bundle_dir` — every admitted space segment (the A1f twin
     filed 1,743 of the node's bundles under 5ac3c581, and a fixed path read
     them as missing). Cached on disk and in the process; rebuilt when the
-    coverage table changes."""
+    coverage table changes. THE WHOLE COLLECTION AT ONCE, ~680 B a uid: for
+    tools and tests — the worker asks `part_possession` (the module's
+    docstring)."""
     from app.share import contribute
     pre = prefixes(root, name, codex)
     own = pre[0]
@@ -195,6 +217,135 @@ def _index_cold(root: Path, name: str, codex, con, pre, own, fp: str, key: str) 
           f"(#{REBUILDS[key]} in this process): {len(producers)} bundles held, "
           f"{len(result)} uids, in {(time.perf_counter() - t0) * 1000:.0f} ms", flush=True)
     return result
+
+
+# ---- one part at a time (the worker's paths) ----------------------------------
+
+#: the accepted rows of ONE prefix's slice — a range of the coverage table's
+#: `idx_coverage_shard` (tests/share/test_possession_parts.py checks its plan)
+PART_ROWS_SQL = ("SELECT rowid, bundle_id, shard, producer, uid_first, uid_last FROM coverage "
+                 "WHERE shard >= ? AND shard < ? AND accepted_at IS NOT NULL")
+#: a parsed `possession.json` against its file's bytes: a dict of uid -> hash
+#: strings, measured ~4 bytes held for each byte read (200,000 uids)
+MAP_BYTES_PER_BYTE = 4
+
+
+def _cache(name: str):
+    from app.backend import read_cache
+    return read_cache(name)
+
+
+#: one held bundle's possession (uid -> content_hash), by its directory — a
+#: bundle directory is immutable and named by its id (09 §9.7)
+_bundle_maps = _cache("possession bundles")
+#: one part's (uid -> content_hash), by its root, from `part_records`
+_part_hashes_cache = _cache("possession parts")
+#: one part's possession, by the accepted rows it was made of (`part_possession`):
+#: the embed stage asks it once a document, documents come part by part
+_part_views = _cache("possession part views")
+#: a part's Possession held, a uid (measured: 529-680 B; on the side of caution)
+VIEW_BYTES_PER_UID = 700
+
+
+def _bundle_map(root: Path, name: str, codex, sid: str, bundle_id: str) -> dict[str, str] | None:
+    from app.share import contribute
+    d = contribute.bundle_dir(root, name, codex, sid, bundle_id)
+    key = str(d)
+    got = _bundle_maps.get(key)
+    if got is not None:
+        return got
+    try:
+        raw = (d / "possession.json").read_bytes()
+        got = json.loads(raw)
+    except (OSError, ValueError):
+        return None                              # no files here: covers nothing
+    if not isinstance(got, dict):
+        return None
+    return _bundle_maps.put(key, got, MAP_BYTES_PER_BYTE * len(raw))
+
+
+def _key_bounds(first_id, last_id):
+    """The uid-key range of a part's native ids (`contribute._uid_key`'s
+    order, the one the coverage rows' uid range is compared in)."""
+    from app.share import contribute
+    if first_id is None or last_id is None:
+        return None
+    return contribute._uid_key(f"_:{first_id}"), contribute._uid_key(f"_:{last_id}")
+
+
+def part_possession(root: Path, name: str, codex, con, slice_: str, bounds=None) -> "Possession":
+    """`index`, for ONE part: the accepted bundles filed under `slice_` by
+    this collection or a same-space predecessor, whose uid range meets
+    `bounds` (uid keys, `_key_bounds`; a row without a range always does),
+    and their possession — the same shape, the bundles listed in coverage
+    rowid order as `index` lists them. Its `fileless` holds the slice's
+    predecessor rows without files that meet `bounds`."""
+    from app.share import contribute
+    pre = prefixes(root, name, codex)
+    own = pre[0]
+    rows = []
+    for p in pre:
+        start = f"{p}{slice_}/"
+        for rowid, bundle_id, shard, producer, first, last in con.execute(
+                PART_ROWS_SQL, (start, start[:-1] + "0")):
+            if bounds is not None and first and last and (
+                    contribute._uid_key(last) < bounds[0] or contribute._uid_key(first) > bounds[1]):
+                continue                         # holds nothing of this part's range
+            rows.append((rowid, p, bundle_id, shard, producer, first, last))
+    rows.sort()
+    # the same accepted rows are the same possession: a bundle directory is
+    # immutable and named by its id (09 §9.7), a row accepted is read whole
+    view_key = (str(Path(root) / name), slice_, tuple((r[0], r[2]) for r in rows))
+    hit = _part_views.get(view_key)
+    if hit is not None:
+        return hit
+    held: dict[str, set[str]] = {}
+    bundles: dict[str, dict[str, list[str]]] = {}
+    producers: dict[str, str] = {}
+    fileless: dict[str, list[list[str]]] = {}
+    shards: dict[str, str] = {}
+    for _rowid, p, bundle_id, shard, producer, first, last in rows:
+        sid = shard[len(p):]
+        got = _bundle_map(root, name, codex, sid, bundle_id)
+        if got is None:
+            if p != own and first and last:
+                fileless.setdefault(sid.rsplit("/", 1)[0], []).append([first, last, producer or ""])
+            continue
+        producers[bundle_id] = producer or ""
+        shards[bundle_id] = sid
+        for uid, h in got.items():
+            held.setdefault(uid, set()).add(h)
+            bundles.setdefault(uid, {}).setdefault(h, []).append(bundle_id)
+    view = Possession({u: sorted(hs) for u, hs in held.items()}, bundles, producers, fileless, shards)
+    return _part_views.put(view_key, view, VIEW_BYTES_PER_UID * max(1, len(view)))
+
+
+def part_hashes(root: Path, name: str, snapshot, shard) -> dict[str, str]:
+    """uid -> content_hash of one part's records (`part_records`), kept in
+    the read cache by part root: documents come in part order."""
+    key = str(shard.root)
+    got = _part_hashes_cache.get(key)
+    if got is not None:
+        return got
+    got = {u: h for u, h in part_records(root, name, snapshot, shard) if h}
+    return _part_hashes_cache.put(key, got, 200 * max(1, len(got)))
+
+
+def holding(root: Path, name: str, codex, con, uid: str, native_id) -> "tuple[Possession, str] | None":
+    """The possession of the current part that holds `uid` (`part_possession`)
+    and the record's content hash there, or None — not in the current
+    snapshot, no snapshot. The part is found as a reader finds a record
+    (`Snapshot.lookup_order`, the narrowest range first)."""
+    snap = current_snapshot(root, name)
+    if snap is None:
+        return None
+    order = (getattr(codex, "slicing", None) or {}).get("order", "bytes")
+    for s in snap.lookup_order(str(native_id), order):
+        h = part_hashes(root, name, snap, s).get(uid)
+        if h is None:
+            continue
+        return part_possession(root, name, codex, con, s.slice, _key_bounds(s.first_id, s.last_id)), h
+    return None
 
 
 def part_records(root: Path, name: str, snapshot, shard) -> list[tuple[str, str]]:
@@ -284,14 +435,14 @@ def covered(root: Path, name: str, codex, con, snapshot=None) -> dict[str, int]:
     from app.hold import seed
     from app.share import coverage as cov
     snapshot = snapshot or seed.latest_snapshot(Path(root), name)
-    held = index(root, name, codex, con)
     # a round's view costs the fingerprint query alone while nothing changed
-    memo_key = (str(Path(root) / name), _memo[str(Path(root) / name)][0], snapshot.snapshot_id)
+    memo_key = (str(Path(root) / name), _fingerprint_of(root, name, codex, con), snapshot.snapshot_id)
     if memo_key in _covered_memo:
         return _covered_memo[memo_key]
     out: dict[str, int] = {}
     for s in snapshot.shards:
         recs = part_records(root, name, snapshot, s)
+        held = part_possession(root, name, codex, con, s.slice, _key_bounds(s.first_id, s.last_id))
         mine = covered_uids(held, recs)
         if not mine:
             out[cov.shard_id(codex, f"{s.slice}/{s.n:05d}")] = 0
@@ -353,8 +504,7 @@ def offered_by_part(root: Path, name: str, codex, con, snapshot=None) -> dict[st
     from app.hold import seed
     from app.share import coverage as cov
     snapshot = snapshot or seed.latest_snapshot(Path(root), name)
-    held = index(root, name, codex, con)
-    key = (str(Path(root) / name), _memo[str(Path(root) / name)][0], snapshot.snapshot_id)
+    key = (str(Path(root) / name), _fingerprint_of(root, name, codex, con), snapshot.snapshot_id)
     if key in _offered_memo:
         return _offered_memo[key]
     own = f"{codex.collection_id}/{codex.space_segment}/"
@@ -363,6 +513,7 @@ def offered_by_part(root: Path, name: str, codex, con, snapshot=None) -> dict[st
     out: dict[str, list[str]] = {}
     for s in snapshot.shards:
         ids: set[str] = set()
+        held = part_possession(root, name, codex, con, s.slice, _key_bounds(s.first_id, s.last_id))
         for u, h in part_records(root, name, snapshot, s):
             for b in (held.bundles.get(u) or {}).get(h, ()):
                 if b not in own_ids:
@@ -497,7 +648,7 @@ def _bundle_vectors(root: Path, name: str, codex, shard: str, bundle_id: str) ->
 
 
 def held_vectors(root: Path, name: str, codex, con, uid: str, content_hash: str | None,
-                 chunk_ids: Sequence[str]) -> dict[str, Any]:
+                 chunk_ids: Sequence[str], held: "Possession | None" = None) -> dict[str, Any]:
     """chunk_id -> vector, from an accepted bundle held here that holds
     `uid` with this `content_hash` — the record as it is now — for those of
     `chunk_ids` it carries; {} when none does (Perugia, 2026-10-23: 12,921
@@ -509,7 +660,11 @@ def held_vectors(root: Path, name: str, codex, con, uid: str, content_hash: str 
     the same chunk ids and texts."""
     if not content_hash:
         return {}
-    held = index(root, name, codex, con)
+    if held is None:
+        found = holding(root, name, codex, con, uid, str(uid).rsplit(":", 1)[-1])
+        if found is None:
+            return {}
+        held = found[0]
     if content_hash not in (held.get(uid) or ()):
         return {}
     wanted = set(chunk_ids)
