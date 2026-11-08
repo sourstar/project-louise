@@ -526,8 +526,9 @@ protocol does not try: judging whose work a correct vector was is
 judging merit. The refusal covers the honest path, which is the one a
 licence's attribution clause actually turns on.
 
-Those two bindings are exactly enough. A mother's vectors stay out of a
-corrective sister because a corrective sister's `space.epoch`, and so
+Those two bindings are exactly enough. The vectors of the collection a
+corrective sister replaces stay out of her because a corrective sister's
+`space.epoch`, and so
 its `space_id`, is fresh by construction (§2.4) — the collection id was
 never what kept them out. Revision-A vectors stay off revision-B text
 because the `content_hash` says so. And what the narrower binding used

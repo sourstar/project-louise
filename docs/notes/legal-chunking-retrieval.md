@@ -110,6 +110,31 @@ fixture:
 
 Version 1 cuts as before (invariant 3). The three recipes state version 2.
 
+**Version 3 (2026-11-08), from München's profile of normattiva-nemo's
+records build.** The build of 341,959 records was on course for ~4.5 h, and
+`py-spy` put 87–92 % of every pool child's time in `_count` under `_pack`.
+v2 re-encoded the whole growing piece for every unit it added, which is
+quadratic in a text's units.
+- v3 counts each unit once and packs on the sum of the counts. It then holds
+  each piece to the bound by one exact count, giving a unit back while that
+  count is over.
+- No piece is ever past the window, and the text is whole, as before.
+- A piece may be a little shorter than v2's, where the sum over-counts a join.
+
+Measured here with a byte-level BPE (a stand-in for Nemotron's tokenizer),
+budget 2,000:
+
+| text | v2 | v3 |
+|---|---|---|
+| an article of 399 commi | 2.33 M characters encoded, 0.81 s | 0.32 M, 0.13 s |
+| an annex of 3,000 sentences | 34.4 M characters, 10.6 s | 1.38 M, 0.55 s |
+
+The cut differs, so the layer's version and the space_id move:
+- legi is re-made (she was to be re-made for yellow anyway);
+- normattiva-nemo is made again from the new legi.
+
+The recipes state version 3.
+
 **Open: the Codice civile's hierarchy.** Its 3,280 articles arrive as
 annexes named "CODICE CIVILE-art. N", with no partition. So their header
 names the act (the record's title) and the article, without Libro or Titolo:

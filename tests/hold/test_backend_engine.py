@@ -303,7 +303,7 @@ def test_a_sister_cannot_bring_a_backend_engine_into_a_version_4_space(tmp_path)
     sp = mother.space
     vega = replace(sp, encoder=replace(sp.encoder, engine=BACKEND),
                    query=replace(sp.query, encoder=replace(sp.query.encoder, engine=BACKEND)))
-    with pytest.raises(CodexError, match="cannot stay in her mother's space"):
+    with pytest.raises(CodexError, match="cannot stay in her sister's space"):
         col.derive(tmp_path, mother.collection_id, space=vega,
                    embed=fake_embed, embed_query=fake_query_embed, key=KEY, now=NOW)
 

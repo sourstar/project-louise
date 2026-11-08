@@ -1884,21 +1884,21 @@ def _validate_against_mother(codex: Codex, mother: Codex) -> None:
                              "mother's platform_image")
     elif codex.relation == "sister":
         if codex.derived_from != mid:
-            raise CodexError("derived_from does not name the given mother")
+            raise CodexError("derived_from does not name the given sister")
         if codex.origin != mother.origin:
-            raise CodexError("a sister inherits her mother's corpus: same origin")
+            raise CodexError("a sister inherits her sister's corpus: same origin")
         if codex.cleaning_version != mother.cleaning_version:
-            raise CodexError("a sister keeps her mother's cleaning_version: "
+            raise CodexError("a sister keeps her sister's cleaning_version: "
                              "changing it would re-derive the corpus she is "
                              "defined to inherit (02 §2.7)")
         if codex.toolchain.platform_image != mother.toolchain.platform_image:
-            raise CodexError("a sister shares her mother's platform image")
+            raise CodexError("a sister shares her sister's platform image")
         if codex.parser != mother.parser:
-            raise CodexError("a sister keeps her mother's parser")
+            raise CodexError("a sister keeps her sister's parser")
         if parts_slicing(codex.slicing) != parts_slicing(mother.slicing):
             # the same parts: a version-9+ sister states the "jsonl" her older
             # mother's absent container means (09 §9.5; normattiva-nemo)
-            raise CodexError("a sister keeps her mother's slicing: the shards are "
+            raise CodexError("a sister keeps her sister's slicing: the shards are "
                              "the same shards")
         changed = _sister_changes(codex, mother)
         if not changed:
@@ -1911,20 +1911,20 @@ def _validate_against_mother(codex: Codex, mother: Codex) -> None:
         # contribution, or close an open one, and her credits say which.
         if (codex.space_id == mother.space_id
                 and archive_credits(codex) != archive_credits(mother)):
-            raise CodexError("a sister in her mother's space carries her mother's "
+            raise CodexError("a sister in her sister's space carries that sister's "
                              "archive credits (02 §2.7)")
         mine = [c for c in codex.credits if c.kind == CORPUS]
         hers = [c for c in mother.credits if c.kind == CORPUS]
         if mine != hers:
-            raise CodexError("a sister keeps her mother's corpus credit: she "
+            raise CodexError("a sister keeps her sister's corpus credit: she "
                              "shares the corpus, and a new encoder does not "
                              "unwrite whose text it read (02 §2.7)")
         if codex.space.epoch != mother.space.epoch and codex.space_from is None:
-            raise CodexError("a sister keeps her mother's space.epoch unless she "
+            raise CodexError("a sister keeps her sister's space.epoch unless she "
                              "copied a space from another Codex")
     elif codex.relation == "corrective-sister":
         if codex.replaces.codex != mid:
-            raise CodexError("replaces.codex does not name the given mother")
+            raise CodexError("replaces.codex does not name the given sister")
         if codex.origin != mother.origin:
             raise CodexError("a corrective sister re-derives the same origin")
 

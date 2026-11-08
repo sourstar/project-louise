@@ -241,4 +241,78 @@ def test_v1_cuts_as_it_always_did():
 def test_an_unknown_version_is_refused():
     from app import chunking_legal as cl
     with pytest.raises(cl.LegalChunkerError, match="versions"):
-        _cut(3)
+        _cut(4)
+
+
+# ---- version 3 (2026-11-08): units packed linearly, every piece held to the bound ---------------
+
+@pytest.fixture(scope="module")
+def bpe():
+    """A byte-level BPE trained on Normattiva fixture text: its counts do NOT
+    add across a join (a separator merges into the next word's token), which
+    is the case v3's exact check exists for."""
+    from pathlib import Path
+    from tokenizers import Tokenizer, models, pre_tokenizers, trainers
+    from app.plugins.normattiva import akn, rendition
+    texts = []
+    for f in sorted(Path(__file__).parent.joinpath("fixtures", "normattiva").glob("*.xml")):
+        xml, _ = akn.decode_member(f.read_bytes())
+        texts += [b for _l, b in rendition.sections(akn.parse(xml)) if b]
+    tok = Tokenizer(models.BPE(unk_token=None))
+    tok.pre_tokenizer = pre_tokenizers.ByteLevel(add_prefix_space=False)
+    tok.train_from_iterator(texts * 5, trainers.BpeTrainer(vocab_size=4000,
+                                                           initial_alphabet=pre_tokenizers.ByteLevel.alphabet()))
+    return tok, texts
+
+
+class _Counting:
+    def __init__(self, tok):
+        self.tok, self.chars = tok, 0
+
+    def encode(self, text, add_special_tokens=False):
+        self.chars += len(text)
+        return self.tok.encode(text, add_special_tokens=add_special_tokens)
+
+
+def _long(texts, n, sep):
+    import random
+    rnd = random.Random(7)
+    if sep == "\n":
+        return "\n".join(f"{i}. " + " ".join(rnd.choice(texts).split()[:40]) for i in range(1, n + 1))
+    return " ".join(" ".join(rnd.choice(texts).split()[:20]).rstrip(".") + "." for _ in range(n))
+
+
+@pytest.mark.parametrize("sep", ["\n", " "])
+def test_v3_holds_every_piece_to_the_bound_and_keeps_the_whole_text(bpe, sep):
+    tok, texts = bpe
+    text = _long(texts, 300, sep)
+    pieces = cl.split(tok, text, 400, version=3)
+    assert len(pieces) > 5
+    assert max(len(tok.encode(p, add_special_tokens=False).ids) for p in pieces) <= 400, "never past the window"
+    assert sep.join(pieces) == text, "joined, the pieces are the text"
+
+
+def test_v3_is_linear_where_v2_re_encodes_the_growing_piece(bpe):
+    tok, texts = bpe
+    text = _long(texts, 1500, " ")
+    seen = {}
+    for v in (2, 3):
+        counting = _Counting(tok)
+        cl.split(counting, text, 1000, version=v)
+        seen[v] = counting.chars / len(text)
+    assert seen[3] < 3, f"v3 encodes about twice the text, not {seen[3]:.1f} times"
+    assert seen[2] > 10 * seen[3], f"v2 re-encodes the growing piece ({seen[2]:.1f} times the text)"
+
+
+def test_v3_with_counts_that_add_cuts_as_v2_did(bpe):
+    """Where a join adds no token (the word tokenizer every legal test uses),
+    the sum IS the joined count, so v3's pieces are v2's."""
+    _tok, texts = bpe
+    from app.plugins.wikidata import chunker as wd
+    word = wd.tokenizer_for(SHA)
+    text = _long(texts, 200, "\n")
+    assert cl.split(word, text, 300, version=3) == cl.split(word, text, 300, version=2)
+
+
+def test_the_shared_layer_is_v3():
+    assert cl.CHUNK_VERSION == 3 and cl.SHARED_LAYER["chunker"]["version"] == 3

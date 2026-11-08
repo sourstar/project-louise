@@ -645,7 +645,7 @@ def carry(root, from_ref: str, to_ref: str, *, copy: bool = False, apply: bool =
                                    "carry --unembedded" if unembedded else "carry")
     diff = space_differences(src, to)
     if sister and src.space_id == to.space_id:
-        raise CodexError("carry --sister: the two are in one space; a sister in her mother's space "
+        raise CodexError("carry --sister: the two are in one space; a sister in her sister's space "
                          "carries the vectors too (`dev carry`, A1)")
     if unembedded or sister:
         # the text index is keyed on chunk ids and the manifest counts chunks:

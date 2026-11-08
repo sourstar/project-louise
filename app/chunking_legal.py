@@ -49,6 +49,18 @@ VERSION 2 (2026-11-08, from the first real Normattiva records cut by v1):
 Version 1 cuts as it always did (invariant 3): a layer pinned to it gives
 the same chunks.
 
+VERSION 3 (2026-11-08, München's profile of normattiva-nemo's records build:
+`_count` under `_pack` was 87-92 % of every pool child's time, ~4.5 h for
+341,959 records): units are PACKED LINEARLY. v2 re-encoded the whole growing
+piece for every unit it added — quadratic in a text's units (a 399-comma
+article: 402 encodes over 7.7 M characters). v3 counts each unit ONCE, packs
+on the sum of the counts and the separator's, and holds every piece to the
+bound by ONE exact count of the piece itself, giving a unit back while that
+count is over (the sum can differ from the joined text's count where the
+tokenizer merges across a join). So no piece is ever longer than the window,
+as before, and a piece may be a little shorter than v2's where the sum
+over-counts. Its cut differs from v2's, hence the version (invariant 3).
+
 The TITLE is the record's (09 §9.5), passed by every caller that cuts
 (`layers.chunks_for_document(..., title=)`, guarded by
 tests/test_chunking_legal.py): invariant 3's "cleaned text" is
@@ -76,8 +88,8 @@ from __future__ import annotations
 import re
 from typing import Any, Iterator, Sequence
 
-CHUNK_VERSION = 2
-VERSIONS = (1, 2)
+CHUNK_VERSION = 3
+VERSIONS = (1, 2, 3)
 NAME = "legal_article"
 
 #: 1. a paragraph's number at the start of a line, in the four systems
@@ -176,6 +188,30 @@ def _windows(tok: Any, text: str, budget: int) -> list[str]:
     return [w for w in out if w.strip()] or [text]
 
 
+def _pack_linear(tok: Any, units: Sequence[str], budget: int, sep: str) -> list[tuple[str, int]]:
+    """v3: `(piece, its exact token count)`, consecutive units joined while
+    the sum of their counts (and the separators') fits; each piece of several
+    units then held to the bound by its own exact count, a unit given back
+    while it is over. One count per unit and about one per piece: linear in
+    the text. A single unit past the budget is the caller's."""
+    counts = [_count(tok, u) for u in units]
+    sep_n = _count(tok, sep) if sep else 0
+    out: list[tuple[str, int]] = []
+    i, n = 0, len(units)
+    while i < n:
+        j, est = i + 1, counts[i]
+        while j < n and est + sep_n + counts[j] <= budget:
+            est += sep_n + counts[j]
+            j += 1
+        exact = counts[i] if j == i + 1 else _count(tok, sep.join(units[i:j]))
+        while j - i > 1 and exact > budget:
+            j -= 1
+            exact = counts[i] if j == i + 1 else _count(tok, sep.join(units[i:j]))
+        out.append((sep.join(units[i:j]), exact))
+        i = j
+    return out
+
+
 def _pack(tok: Any, units: Sequence[str], budget: int, sep: str) -> list[str]:
     """Consecutive units joined while they fit: no piece shorter than it
     need be, none longer than the budget (a unit past it is the caller's)."""
@@ -193,10 +229,14 @@ def _pack(tok: Any, units: Sequence[str], budget: int, sep: str) -> list[str]:
     return pieces
 
 
-def split(tok: Any, text: str, budget: int, level: int = 0) -> list[str]:
+def split(tok: Any, text: str, budget: int, level: int = 0, *, version: int = CHUNK_VERSION,
+          count: int | None = None) -> list[str]:
     """`text` as pieces of at most `budget` tokens, cut at the highest level
-    of its structure that makes them fit; joined, the pieces are the text."""
-    if _count(tok, text) <= budget:
+    of its structure that makes them fit; joined, the pieces are the text.
+    `version` 3 packs linearly (`_pack_linear`), 1 and 2 as they always did;
+    `count`: the text's token count where the caller has it already."""
+    count = count if count is not None else _count(tok, text)
+    if count <= budget:
         return [text]
     if level == 0:
         units, sep = _lines_split(text, PARAGRAPH), "\n"
@@ -207,10 +247,16 @@ def split(tok: Any, text: str, budget: int, level: int = 0) -> list[str]:
     else:
         return _windows(tok, text, budget)
     if len(units) <= 1:
-        return split(tok, text, budget, level + 1)
+        return split(tok, text, budget, level + 1, version=version, count=count)
     out: list[str] = []
+    if int(version) >= 3:
+        for piece, n in _pack_linear(tok, units, budget, sep):
+            out.extend(split(tok, piece, budget, level + 1, version=version, count=n) if n > budget
+                       else [piece])
+        return out
     for piece in _pack(tok, units, budget, sep):
-        out.extend(split(tok, piece, budget, level + 1) if _count(tok, piece) > budget else [piece])
+        out.extend(split(tok, piece, budget, level + 1, version=version) if _count(tok, piece) > budget
+                   else [piece])
     return out
 
 
@@ -294,13 +340,13 @@ def chunk_legal_article(uid: str, native_id, sections: Sequence[tuple[str, str]]
         if head and int(version) >= 2:
             text = body_after_head(label, text)
         head = f"{head}\n" if head else ""
-        for piece in split(tok, text, _budget(tok, head, max_tokens, uid)):
+        for piece in split(tok, text, _budget(tok, head, max_tokens, uid), version=int(version)):
             yield _mk(uid, native_id, seq, label or "", head + piece, version)
             seq += 1
     labels = list(dict.fromkeys(l.strip() for l, _b in sections if (l or "").strip()))
     if outline and len(labels) >= 2:
         head = f"{title.strip()}\n" if (title or "").strip() else ""
         index = toc(labels) if int(version) >= 2 else "\n".join(labels)
-        for piece in split(tok, index, _budget(tok, head, max_tokens, uid)):
+        for piece in split(tok, index, _budget(tok, head, max_tokens, uid), version=int(version)):
             yield _mk(uid, native_id, seq, OUTLINE, head + piece, version)
             seq += 1

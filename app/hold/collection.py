@@ -861,8 +861,8 @@ def derive(root: Path, mother_id: str, *,
         if space_from.cleaning_version != mother.cleaning_version:
             raise CodexError(
                 f"derive: --space-from names a Codex whose cleaning_version is "
-                f"{space_from.cleaning_version} and the mother's is "
-                f"{mother.cleaning_version}. A sister keeps her mother's, so "
+                f"{space_from.cleaning_version} and her sister's is "
+                f"{mother.cleaning_version}. A sister keeps her sister's, so "
                 f"the resulting space_id could not equal the source's — which "
                 f"is the whole of what the flag promises")
         space, layers = space_from.space, space_from.layers
@@ -904,9 +904,9 @@ def derive(root: Path, mother_id: str, *,
             # space_id, which is what staying in it promises.
             raise CodexError(
                 f"derive: a backend engine is admitted from Codex version "
-                f"{cx.BACKEND_VERSION}, whose layers carry `input`, and her mother is "
+                f"{cx.BACKEND_VERSION}, whose layers carry `input`, and her sister is "
                 f"version {mother.version}, whose layers do not — so a sister naming "
-                f"one cannot stay in her mother's space (09 §9.3). An engine joins a "
+                f"one cannot stay in her sister's space (09 §9.3). An engine joins a "
                 f"space by passing the gate, not by a new Codex (03 §3.3): validate "
                 f"the run, or derive her in a new space")
         # version 6 for a space carrying a backend engine, and for it alone
@@ -943,8 +943,8 @@ def derive(root: Path, mother_id: str, *,
     same_space = sister.space_id == mother.space_id
     if credits is not None:
         if same_space:
-            raise CodexError("derive: a sister in her mother's space carries "
-                             "her mother's archive credits; --archives is "
+            raise CodexError("derive: a sister in her sister's space carries "
+                             "that sister's archive credits; --archives is "
                              "refused here")
         if space_from is not None:
             raise CodexError("derive: --space-from brings that Codex's archive "
@@ -1002,7 +1002,7 @@ def _slicing_at(slicing: Any, version: int) -> Any:
         return {**(slicing if isinstance(slicing, dict) else {}), "container": cx.JSONL}
     if version < cx.GRAPH_VERSION and has:
         if slicing["container"] != cx.JSONL:
-            raise CodexError(f"derive: her mother's parts are {slicing['container']!r}, and a sister "
+            raise CodexError(f"derive: her sister's parts are {slicing['container']!r}, and a sister "
                              f"written at version {version} cannot declare a container (09 §9.5)")
         return {k: v for k, v in slicing.items() if k != "container"} or None
     return slicing

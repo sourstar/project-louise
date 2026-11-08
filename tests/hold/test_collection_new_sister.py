@@ -250,3 +250,44 @@ def test_her_cpu_reference_and_gate_run_paused_and_she_is_resumed_after(pair, ca
     assert _new(root) == 0
     assert seen == [True]
     assert "sis" not in node_state.paused_collections()
+
+
+def test_a_stop_during_her_records_build_exits_130_and_a_rerun_resumes(pair, card, monkeypatch):
+    """München, 2026-11-08: SIGTERM to case J's records build gave exit 143,
+    the default handler. Invariant 2: the build finishes its unit, `new`
+    exits 130 with the carry not recorded, and a rerun carries again
+    (repeatable) and resumes the build."""
+    import signal
+    from types import SimpleNamespace
+    from functools import partial
+    from app.hold import records as rec_mod, workflow as wf
+    root, old, _ = pair
+    _vectors(root, old)
+    space = {**SPACE, "encoder": {**SPACE["encoder"], "weights": "sha256:" + "be" * 32},
+             "dim": 1024, "query": {"encoder": None, "instruction": "query: "}}
+    layers = [{"rule": "default", "chunker": {"id": "fixed", "version": 1, "params": {"tokens": 3, "overlap": 0}},
+               "input": {"form": "text"}}]
+    other = col.create_from_recipe(root, "gutenberg", recipe(space=space, layers=layers, work={"tokens": 7_000_000}),
+                                   platform_image=PLATFORM, embed=partial(fake_embed, dim=1024),
+                                   name="bge", key=KEY, now=NOW)
+    card["weights"] = other.space.encoder.weights
+    real = rec_mod.build
+    seen = {}
+
+    def stopped(root_, name, **kw):
+        seen["handler"] = signal.getsignal(signal.SIGTERM)
+        os_kill_self = kw["stop"]
+        os_kill_self.set()                      # as SIGTERM's handler would
+        return SimpleNamespace(interrupted=True)
+    monkeypatch.setattr(rec_mod, "build", stopped)
+    before = signal.getsignal(signal.SIGTERM)
+    assert _new(root) == 130
+    assert seen["handler"] not in (signal.SIG_DFL, before), "SIGTERM routed to the stop while it builds"
+    assert signal.getsignal(signal.SIGTERM) == before, "the handler given back after"
+    prog = json.loads(wf.progress_path("sis").read_text())
+    assert "carry" not in (prog.get("steps") or {}) or not prog["steps"]["carry"].get("result"), \
+        "nothing recorded for a carry that did not finish"
+    monkeypatch.setattr(rec_mod, "build", real)
+    assert _new(root) == 0, "run again: the carry repeats and the build completes"
+    prog = json.loads(wf.progress_path("sis").read_text())
+    assert prog["steps"]["carry"]["result"]["recut"] is True
