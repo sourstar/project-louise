@@ -343,7 +343,9 @@ class EurlexSource:
         "validity": {"kind": "versions-per-work", "from": "extra.valid_from",
                      "work": "extra.validity_work"},
     }
-    license_class = LicenseClass.GREEN     # CC BY 4.0 content, CC0 metadata (Decision 2011/833/EU)
+    # YELLOW (operator, 2026-11-08, A): CC BY 4.0's attribution is a condition
+    # (04 §4.4), as normattiva's; TERMS.txt quotes the legal notice verbatim
+    license_class = LicenseClass.YELLOW    # CC BY 4.0 content, CC0 metadata (Decision 2011/833/EU)
     corpus_provider = "Publications Office of the European Union — EUR-Lex / Cellar"
     corpus_license = "CC-BY-4.0"
     corpus_attribution = ("© European Union, https://eur-lex.europa.eu, CC BY 4.0 (metadata CC0). "

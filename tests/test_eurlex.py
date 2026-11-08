@@ -395,7 +395,7 @@ def test_an_original_starts_at_its_entry_into_force_never_before_publication():
 
 def test_registered_with_its_declarations():
     s = collections_mod.PLUGIN_REGISTRY["eurlex"]
-    assert s is SOURCE and s.license_class.value == "green" and s.native_id_order == "numeric"
+    assert s is SOURCE and s.license_class.value == "yellow" and s.native_id_order == "numeric"
     assert s.default_profile["validity"] == {"kind": "versions-per-work", "from": "extra.valid_from",
                                              "work": "extra.validity_work"}
     assert s.default_profile["eli"]["jurisdiction"] == "EU"
@@ -448,3 +448,21 @@ def test_worker_stages_run_end_to_end(tmp_path, corpus, isolated_config):
     chunks = worker._load_chunks(row, collection)
     assert len(chunks) >= 59 and chunks[0]["text"].startswith(row["title"])
     assert "(1) Council Regulation (EC) No 1225/2009" in chunks[0]["text"], "the header, then the recital"
+
+
+def test_the_terms_are_the_legal_notice_verbatim_and_lf():
+    """Yellow (operator, 2026-11-08, A): the terms a peer acknowledges hold
+    the legal notice's Disclaimer and Copyright notice byte for byte — the
+    zero-width spaces of the page kept — as fetched on the node (sha256
+    7c58fabc…), and the whole file is what the recipe pins."""
+    import hashlib
+    from pathlib import Path
+    from app.acquire import specs
+    terms = (Path(__file__).resolve().parents[1] / "app" / "plugins" / "eurlex" / "TERMS.txt").read_bytes()
+    assert b"\r" not in terms and specs.ACQUIRE_REGISTRY["eurlex"].terms_text_path.read_bytes() == terms
+    assert hashlib.sha256(terms).hexdigest() == "080b40b605f79a9468dc9ddb532868ee067928ffea036990e410199c7cf613db"
+    start = terms.index(b"-----\n") + len(b"-----\n")
+    notice = terms[start:terms.index(b"-----\n", start)]
+    assert hashlib.sha256(notice).hexdigest() == \
+        "7c58fabcc73883e265e43551e404e4cddc336fcf71d7a97857cae92b7e6c7a27", "the notice, byte for byte"
+    assert notice.decode("utf-8").count("​") == 8

@@ -101,11 +101,17 @@ jurisdiction = "EU"
 # connections at most, the listing compared with what is held by each work's
 # last modification.
 
-# GREEN: CC BY 4.0 for content and consolidated texts, CC0 for metadata
-# (Decision 2011/833/EU; C(2019) 1655). No terms text is pinned for a green
-# collection; the third-party exception (§4.7) is OWED above.
+# YELLOW (operator, 2026-11-08, choice A): CC BY 4.0 for content and
+# consolidated texts, CC0 for metadata (Decision 2011/833/EU); attribution is
+# a condition, which 04 §4.4 puts in yellow, as normattiva's CC BY 4.0. The
+# terms are app/plugins/eurlex/TERMS.txt — the legal notice's Disclaimer and
+# Copyright notice verbatim (fetched on the node, 2026-11-08) — pinned by
+# sha256; the node acknowledges them (`louise hold collection ack eurlex`)
+# before the data is used (invariant 9). The third-party exception (§4.7) is
+# OWED above.
 [license]
-class = "green"
+class = "yellow"
+terms_sha256 = "sha256:080b40b605f79a9468dc9ddb532868ee067928ffea036990e410199c7cf613db"
 
 [validation]
 checks = ["roots", "records", "chunks", "records-vs-origin", "license", "signature", "calibration", "vectors-sample"]

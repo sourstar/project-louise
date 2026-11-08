@@ -642,7 +642,10 @@ EURLEX_SPEC = AcquisitionSpec(
     unit_fetcher=cellar.UNITS,
     profile_labels={**{lang: f"every act and consolidated version in Formex, language {lang}"
                        for lang in _EURLEX_LANGUAGES}, "all": "every language"},
-    license_class=LicenseClass.GREEN,     # CC BY 4.0 content, CC0 metadata (Decision 2011/833/EU)
+    # YELLOW (operator, 2026-11-08, A): CC BY 4.0's attribution is a condition
+    # (04 §4.4); the terms are the legal notice verbatim (app/plugins/eurlex/TERMS.txt)
+    license_class=LicenseClass.YELLOW,    # CC BY 4.0 content, CC0 metadata (Decision 2011/833/EU)
+    terms_text_path=Path(__file__).parent.parent / "plugins" / "eurlex" / "TERMS.txt",
 )
 
 
