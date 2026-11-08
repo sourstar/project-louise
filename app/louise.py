@@ -1147,8 +1147,14 @@ def _sister_new(a, say) -> int:
                     raise recreate.CopyMismatch(f"carry: {name} holds {counts['documents']} documents and "
                                                 f"{mother_name} {recreate.counts(root, mother_name)['documents']}")
                 ack = recreate.carry_ack(root, mother_name, name, sister)
-                built = rec_mod.build(root, name, corpus_dir=Path(root) / name / "origin",
-                                      records_from=mother_name, log=say)
+                # Invariant 2: a stop finishes the part in hand and exits 130;
+                # the next run resumes the build (2026-11-08: exit 143)
+                with _graceful_stop() as stop:
+                    built = rec_mod.build(root, name, corpus_dir=Path(root) / name / "origin",
+                                          records_from=mother_name, log=say, stop=stop)
+                if getattr(built, "interrupted", False):
+                    raise Stopped("the records build stopped after its part in hand; run the same "
+                                  "command again to resume it")
                 rec_mod.write_validation(root, name)
                 snap = sn_mod.create(root, name, log=say)
                 from app.hold import seed as seed_mod
@@ -2434,11 +2440,50 @@ def _sub_command():
             _cli_locks.pop().release()
 
 
+class Stopped(KeyboardInterrupt):
+    """SIGTERM to a command that installs no handler of its own: raised in
+    the main thread as SIGINT's KeyboardInterrupt is, so the command unwinds
+    (its transactions roll back, its pools shut down) and exits 130
+    (invariant 2, 07 §7.7). 2026-11-08: `hold collection new` installed none,
+    and a SIGTERM killed it at once — exit 143, its parse children orphaned."""
+
+
+def _stopped(signum, _frame) -> None:
+    raise Stopped(signal.Signals(signum).name)
+
+
+@contextlib.contextmanager
+def _graceful_stop():
+    """A stop event SIGTERM and SIGINT set while the block runs — for a step
+    that finishes its unit and returns (`rec.build(stop=…)`) — and the
+    handlers there before it restored after."""
+    stop = threading.Event()
+    before = {}
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        try:
+            before[sig] = signal.signal(sig, lambda *_a: stop.set())
+        except (ValueError, OSError):                # not the main thread
+            pass
+    try:
+        yield stop
+    finally:
+        for sig, h in before.items():
+            signal.signal(sig, h)
+
+
 def _run_releasing(a) -> int:
+    before = None
+    try:
+        if signal.getsignal(signal.SIGTERM) in (signal.SIG_DFL, None):
+            before = signal.signal(signal.SIGTERM, _stopped)
+    except (ValueError, OSError):                    # not the main thread
+        pass
     try:
         return a.fn(a)
     finally:
         _release_cli_locks()
+        if before is not None:
+            signal.signal(signal.SIGTERM, before)
 
 
 def cmd_node_pause(a) -> int:
@@ -7633,6 +7678,11 @@ def main(argv=None) -> int:
         return 2
     try:
         return _run_releasing(a)
+    except KeyboardInterrupt as e:
+        # SIGTERM (`Stopped`) or SIGINT: what was in hand finished or rolled
+        # back, nothing half-written; run the same command again (07 §7.7)
+        print(f"louise: stopped{': ' + str(e) if str(e) else ''} — exit 130", file=sys.stderr)
+        return 130
     except CodexError as e:
         from app.hold.embedder import GateDeferred
         if isinstance(e, GateDeferred):

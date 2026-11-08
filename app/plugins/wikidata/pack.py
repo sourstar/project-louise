@@ -891,8 +891,9 @@ def _lines_pass(dump: Path, d: Path, meta: dict[str, Any], con: sqlite3.Connecti
                 return False
         return True
     hung = False
+    from app import parallel
     ex = ProcessPoolExecutor(max_workers=n, mp_context=multiprocessing.get_context("spawn"),
-                             initializer=init or _child_nice, initargs=init_args)
+                             initializer=parallel.child_start, initargs=(init or _child_nice, *init_args))
     try:
         nxt = start
         pending: deque = deque()
@@ -1220,8 +1221,9 @@ def _build_parallel(dump: Path, d: Path, meta: dict[str, Any], con: sqlite3.Conn
     token = f"{os.getpid()}-{time.monotonic_ns()}"
     for stale in d.glob("*.parquet.*.tmp"):          # an earlier parallel pass's, never committed
         stale.unlink(missing_ok=True)
+    from app import parallel
     ex = ProcessPoolExecutor(max_workers=workers, mp_context=multiprocessing.get_context("spawn"),
-                             initializer=_child_nice)
+                             initializer=parallel.child_start, initargs=(_child_nice,))
     writer = ThreadPoolExecutor(max_workers=1, thread_name_prefix="wikidata-pack-writer")
     writing: list[tuple[int, Future, int, list, list, bool]] = []   # at most one chunk being written
     hung = False
