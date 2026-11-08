@@ -210,3 +210,65 @@ Variants: `akn_article` (today), `legal_article` header off, header on.
   - This needs a J variant, "a sister with other layers", which the
     architecture session is asked to agree.
 - **R1 and R2** are built, then the measurement of §5, then the creates.
+
+## 7. JuriFindIT, SAT-Graph RAG, multi-layer embeddings, and G-DSR (operator's question, 2026-11-08)
+
+**What was read first-hand:** G-DSR, Louis, van Dijck & Spanakis, "Finding the Law: Enhancing Statutory
+Article Retrieval via Graph Neural Networks", EACL 2023, arXiv 2301.12847. Its full text came through
+the Hugging Face papers index.
+
+**What was not:**
+- SAT-Graph RAG (arXiv 2505.00039) and Lima's multi-layered embeddings (arXiv 2411.07739): not in that
+  index, and arXiv is not reachable from this session;
+- JuriFindIT's paper (EACL 2026): known here from its card and §7.2–7.3 of gazzetta-plugin.md.
+
+**The finding that matters most:**
+- G-DSR's graph is the law's own HIERARCHY: section nodes (the headings of books, titles, chapters and
+  sections) and article nodes, not the citations.
+- A 3-layer GNN (GATv2) over it enriches each article's vector with its headings and its neighbours.
+- On BSARD's test set, over the best text-only retriever: R@100 82.7 → 84.3, R@500 92.8 → 93.1, mAP
+  35.3 → 47.1 (+11.8), mRP 27.5 → 40.2. BM25 scores R@100 49.3 and mAP 16.8.
+- The GNN's type barely matters (GCN, GAT, GraphSAGE all within ~0.5 R@100, their Table 4): "the act of
+  fusing information from neighboring nodes is more important than the way the aggregation is
+  performed".
+- Their expert study (their Appendix A.1): lawyers rely on the headings of the structure to find
+  articles.
+
+| | **JuriFindIT** (EACL 2026) | **SAT-Graph RAG** (de Martim 2025) | **Multi-layer embeddings** (Lima 2024) | **G-DSR** (EACL 2023) |
+|---|---|---|---|---|
+| what it is | an Italian statute-retrieval set: 895 expert and 169k generated questions over 23,617 articles; a fine-tuned encoder (DAR-legal-it); a heterogeneous legislative graph with cross-article references | a graph of the norm: its hierarchy, each component's dated versions, and the amending actions as nodes; questions answered by deterministic traversal | one vector per level of the hierarchy (document, title, chapter, article, paragraph) | a GNN over the hierarchy (headings + articles) on top of a dense retriever |
+| what it gives that the others do not | expert-judged measurement in Italian; a domain encoder; citation edges | time and causality: the version in force on a date, what changed an article, when and by which act, deterministic and auditable | retrieval at the granularity of the question: a whole chapter or one paragraph | a measured gain from structure on statutes |
+| evidence | its own tables; here DAR-legal-it 0.803 MRR@10 hybrid, reproduced (gazzetta-plugin.md §7.1b) | none: a design paper | reported better than flat chunking; numbers unverified | first-hand, above |
+| already in Louise | the set (held on the node, acknowledged); DAR-legal-it as Normattiva's encoder; `eli:cites` edges | every version a record; validity by key (`--as-of`); closures from repeals; `eli:amends` / `eli:repeals` edges; `louise_traverse` | nothing: one level | nothing |
+| what adding the rest costs | the citation graph in ranking: a trained model over a graph that grows | the amending actions as their own index (who amended which article when), derived on CPU from metadata we already keep; no GPU | 3–5× the vectors: Normattiva's ~8.2 M chunks → 25–40 M, card-days | a trained GNN served beside the encoder (torch, as a model server, invariant 7); vectors no longer a function of the chunk's text: an amendment moves its neighbours' vectors, no carry by chunk hash, no peer can check them by the calibration gate as designed |
+
+### Is there a better way
+
+No published method dominates statute retrieval. The measured gains are:
+- headings and neighbours (G-DSR);
+- context on each chunk (Anthropic −35 %, then −67 % with a reranker);
+- BM25 fused with a general encoder (Louis et al. 2025);
+- rerankers (COLIEE's winners).
+
+G-DSR's headings can be had without training: the hierarchy path written at the head of each chunk
+(decision C2) puts the same headings into the text the encoder reads. It stays a pure function of the
+record, the same on every peer, and needs no model of its own. This is inference, not a study: the
+nearest evidence is Anthropic's −35 % for context headers.
+
+### Using them all: each in a role that does not fight the others
+
+| piece | role | taken from | cost | benefit |
+|---|---|---|---|---|
+| 1. article chunks with the hierarchy path as header (C2) | what is ranked | G-DSR's headings, Lima's levels, Anthropic's headers | ~20 tokens a chunk: +~15 % encoder time at a median of 132 tokens; inside `space_id` | the structural context the studies measure, deterministic |
+| 2. one outline chunk per act version (title + headings) | a second, light level | Lima; G-DSR's section nodes | +~4 % vectors (Normattiva: ~342 k versions against ~8.2 M chunks) | questions about a whole law ("which act regulates …") reach the act |
+| 3. the amending actions as an index: article → the acts that changed it, with their dates | facts, never ranked (invariant 4) | SAT-Graph | CPU only, from modifications already kept (Normattiva's `active_modifications`, LEGI's `LIENS`, the CDM's amendments) | "what changed art. X, when, by which act", answered deterministically |
+| 4. the citation graph | restrict, traverse; candidate widening only if measured and approved (invariant 4's weights) | JuriFindIT | a measurement (`tools/legal_pilot.py run`) | the answers one edge away from a hit, counted before anything moves |
+| 5. a reranker | after fusion | COLIEE, Anthropic | the card's time per query | the largest single measured gain |
+| 6. the GNN (G-DSR) | not now | — | above | revisit only if 1–5 leave a gap that measurement shows |
+
+Pieces 1, 2 and 5 enter the measurement of §5. Pieces 3 and 4 are no-GPU work after the creates.
+
+**Also found:** *Bundesrecht: An Open Library and Corpus for German Statutory Reference Processing*
+(arXiv 2605.31338, 2026). German statutory references ("§§ 1 bis 3 BGB", "Abs. 1 Satz 2") are what
+neuris-refs' resolver parses. Its library is the standard to compare that resolver against before
+extending it (do not reinvent the wheel).
