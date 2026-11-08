@@ -293,11 +293,21 @@ def synthesize_timed(body: dict[str, Any], url: str | None = None) -> tuple[int,
     said = str(out.get("language") or "").split("-")[0].split("_")[0].lower() or None
     out["input"] = speech_numbers.verbalize(out["input"], said)
     t0 = time.perf_counter()
-    if not model:
-        r = httpc.post(f"{url}/v1/audio/speech", json=out, timeout=CALL_TIMEOUT_S)
-    else:
-        with pinned(url, [model]):
+    # A PERSON'S QUERY, ITS LAST STEP (2026-11-08, München: one synthesis took
+    # 0.81 of its clip's length alone and up to 1.49 beside the corpus
+    # embedders): the call holds the node's interactive claim, so corpus
+    # work stands aside from the card and the governor pins its clock, as for
+    # a rerank (app/rage/dispatch.py). The claim, not the gate: speech and
+    # chat share the endpoint and not the work (the operator: "Chat and TTS
+    # use different GPU resources"), so speech never queues behind
+    # an answer being written.
+    from app.rage import dispatch
+    with dispatch.interactive(dispatch.Level.CHAT):
+        if not model:
             r = httpc.post(f"{url}/v1/audio/speech", json=out, timeout=CALL_TIMEOUT_S)
+        else:
+            with pinned(url, [model]):
+                r = httpc.post(f"{url}/v1/audio/speech", json=out, timeout=CALL_TIMEOUT_S)
     timing = [("synth", round((time.perf_counter() - t0) * 1000.0, 1))]
     clip = audio_ms(r.content) if r.status_code == 200 else None
     if clip is not None:
