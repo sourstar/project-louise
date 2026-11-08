@@ -309,3 +309,25 @@ def test_the_route_refuses_what_is_not_an_upload(node, platform, server, monkeyp
     r = c.post("/v1/audio/transcriptions", files={"file": ("q.wav", b"\x00" * 200, "audio/wav")})
     assert r.status_code == 413
     assert server[1] == [], "nothing relayed"
+
+
+def test_each_step_is_timed_and_said_in_server_timing(node, platform, server):  # noqa: F811
+    """2026-11-08: the endpoint took ~1 s more than the VAD and the model
+    together (2.41 s against 0.30 + 1.04, a 13 s clip, quiet CPU). Each step's
+    wall time goes out in W3C Server Timing, so the node can see where."""
+    platform(stt_model="whisper-large-v3", vad_model="silero-vad")
+    state, _calls, _ = server
+    state["vad"] = R(data={"segments": [{"start": 0.0, "end": 1.0}]})
+    c = TestClient(api.app)
+    r = c.post("/v1/audio/transcriptions", files={"file": ("question.wav", clip(SAMPLES), "audio/wav")},
+               data={"language": "de"})
+    assert r.status_code == 200
+    timing = r.headers["Server-Timing"]
+    names = [part.split(";")[0].strip() for part in timing.split(",")]
+    assert names[:2] == ["upload", "thread"] and "settings" in names and "vad" in names and "stt" in names
+    assert names.index("vad-encode") < names.index("vad") < names.index("trim") < names.index("stt")
+    assert all(float(part.split("dur=")[1]) >= 0 for part in timing.split(","))
+
+
+def test_server_timing_is_the_w3c_form():
+    assert transcribe.server_timing([("a", 1.0), ("b-c", 12.5)]) == "a;dur=1.0, b-c;dur=12.5"
