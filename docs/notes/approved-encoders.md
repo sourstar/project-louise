@@ -40,9 +40,24 @@ five `louise-python*` engines with their `vega-louise-python*` wrappers
 (20.8 GB). The operator had them deleted the same day.
 
 A swap (a new engine or wrapper in place of an old one) ends like this:
-1. The new engine passes its gate: the fixed inputs byte for byte through the
-   live packages, then `hold embedder check` per collection (as localai-bugs.md
-   P6's gates did).
+1. The new engine passes its gate, per collection and role, through the live
+   packages: `hold embedder check` (as localai-bugs.md P6's gates did) — GPU
+   SELF bit-exactness (three fresh loads, both orders, the contribution's
+   batch) and the stored CPU reference at the weights' level line. BYTE
+   EQUALITY WITH THE PREVIOUS ENGINE IS NOT REQUIRED (operator, 2026-11-08:
+   "bit exactness in a whole collection is not achievable by design"; it is
+   a new run, admitted as invariant 12 admits any run); the cosine against
+   the previous engine on the same texts is MEASURED and written in the
+   swap's note (the operator asked for it), and the procurement bar above
+   (≥ 0.999) still applies. A gate stops the swap only on a run that does
+   not reproduce itself, a CPU reference below its line, or a chat model
+   whose own text differs across fresh loads. First measured on the 11c
+   engine (CR 26.40 + IGC 2.42.6 + gmmlib 22.10.2): wikidata nemotron
+   exact, CPU reference worst 0.999997, against ea2417d min 0.9999979;
+   gutenberg qwen3-4b Q4_K_M exact, CPU reference worst 0.991228 (ea2417d's
+   own run 0.991184: the quantization), against ea2417d min 0.99968;
+   bge-m3, medcpt-query, the rerankers and MADLAD bit-identical (München,
+   /root/measure/gate-c.log, xver.txt).
 2. Every model file and wrapper names the new one, and every model loaded on
    the old one is unloaded (`POST /backend/shutdown`, measuring.md §9).
 3. If a Codex names the retired engine, its archive is made first:
