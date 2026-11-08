@@ -514,3 +514,57 @@ with its measured cost, because it is a new space and so a new collection.
 
 The re-creation decided the same day (normattiva B: the archived engine,
 the vectors carried) is not affected: it keeps the current space.
+
+#### Results (2026-11-08, München)
+
+**How it ran.** `tools/encoder_bakeoff` on the node, engine 11c
+(`louise-sycl-f16-llama-cpp-5715daf3180b-stack-7c301a7ba437`, CR 26.40 +
+IGC 2.42.6), live 4f521da, the node paused, batch 1, concurrency 2,
+`--api vega`. Nemotron with `passage: ` on documents and `query: ` on
+queries; DAR-legal-it with `query: ` (its served form). Documents cut at
+the tool's `max_chars` 20,000, the same for every row. Hybrid = the row
+fused with Louise's own BM25 (Italian analyzer) by `retrieval._merge_rrf`.
+
+| row | lemur-it MRR@10 (recall@10), 225 q — **deciding** | JuriFindIT validation MRR@10 (recall@10), 179 q |
+|---|---|---|
+| BM25 (Louise) | 0.8618 (0.9556) | 0.4179 (0.4670) |
+| DAR-legal-it | 0.8787 (0.9644) | **0.7668** (0.8031) |
+| DAR-legal-it + BM25 | 0.8631 (0.9644) | 0.6035 (0.6810) |
+| Nemotron, 2,048 | **0.9489** (0.9867) | 0.7413 (0.7461) |
+| Nemotron, 2,048 + BM25 | 0.9031 (0.9822) | 0.5805 (0.6727) |
+| Nemotron, 1,024 cut | 0.9475 (0.9867) | 0.7426 (0.7448) |
+| Nemotron, 1,024 cut + BM25 | 0.9050 (0.9778) | 0.5855 (0.6918) |
+
+**Paired tests** (Fisher's randomization, 10,000 trials, MRR@10):
+- lemur-it: Nemotron − DAR-legal-it = **+0.0702** [+0.044, +0.099],
+  p = 0.0001. Fused, Nemotron + BM25 − DAR + BM25 = +0.040.
+- JuriFindIT: DAR-legal-it − Nemotron = +0.0256 [−0.025, +0.079],
+  p = 0.33: **a tie** (in-domain for DAR, which was trained on its
+  train split).
+- 2,048 against the 1,024 cut: +0.0013, p = 0.86 (lemur-it); 0.7413
+  against 0.7426 (JuriFindIT). **The cut costs nothing measurable.**
+
+**Read by the rule above:** Nemotron wins the deciding row and ties the
+in-domain one, so it qualifies as Normattiva's encoder. At the 1,024 cut
+the vectors are ~21 GB, not ~43 GB (768 dims today: ~16 GB). Fusing with
+BM25 lowers MRR@10 on both sets for both encoders. The switch stays the
+operator's: a new space, so a new collection.
+
+**How the 1,024 row was made.** `embed --dim 1024` only declares the
+dimension the space expects; it does not truncate (its first run held
+vectors identical to the 2,048 row's). The row is therefore DERIVED:
+Nemotron's stored vectors, the first 1,024 dimensions, L2-renormalised
+(the Matryoshka cut as served), then scored by the same code
+(/root/measure/cut1024.py on the node). A truncating `--dim`, or a
+`--matryoshka` flag, would make it one command.
+
+**Re-embed time (a proxy).** The JuriFindIT corpus, 23,617 Italian
+statute articles (median 132 tokens under Nemotron's tokenizer,
+docs/notes/legal-chunking-retrieval.md §1), embedded in 655 s through
+VeGa at concurrency 2: ~36 texts/s. At that rate Normattiva's 8,178,785
+chunks take ~63 card-hours (~2.6 days). Normattiva's own chunks were not
+timed.
+
+Files on the node: /root/measure/normeval.log,
+normeval-report-lemur-it.txt, normeval-report-jurifindit.txt; the runs
+under /data/bakeoff-norm-{lemur-it,jurifindit}/.
