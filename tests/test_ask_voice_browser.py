@@ -4,7 +4,12 @@ records; the page stops by itself once the speech is over, posts a WAV of
 16-bit samples at 16 kHz, mono, to /v1/audio/transcriptions and fills the
 question box without asking; the speaker requests /v1/audio/speech per
 sentence of the answer, in order, and stops when tapped; a voice the node
-does not offer has no button; a phone's width holds it all.
+does not offer has no button; a phone's width holds it all. While the answer
+streams (operator, 2026-11-08), each sentence is asked for once the stream
+completes it — the first before the stream ends — none twice, none half,
+played in order; a tap or a new question cancels what is in flight; a typed
+question waits for the speaker, a spoken one is read by itself; a refused
+playback is said; a translated answer is read from its first sentence.
 
 tests/browser/ask_voice.js drives the page the app renders against a
 scripted node."""

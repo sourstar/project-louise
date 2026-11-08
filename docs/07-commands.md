@@ -991,9 +991,10 @@ reader needs at the command line:
   reached over https or at localhost; `show` says so.
 - **`node resident show`, and the resident set.** *Added 2026-11-08, a
   TRIAL* (operator, option A: "keep every model Ask uses resident on the
-  card"; "The load all is a test"; "If embedding is set on all or on demand
-  preload the model. Preload the speech related models by default.";
-  app/resident.py). The worker holds, pinned in LocalAI and loaded, the
+  card"; "The load all is a test"; "It applies to any collection, on demand
+  or all embedding preloads the model. Chat, speech, rerankers, madlad are
+  preloaded too, nothing is evicted only because it's idle, only if space
+  is claimed."; app/resident.py). The worker holds, pinned in LocalAI and loaded, the
   models a question meets: the chat model (CHAT_URL), the translation model
   (TRANSLATE_URL), the reranker every served collection names, the encoders
   — document and query model — of every served collection whose embed is
@@ -1001,17 +1002,20 @@ reader needs at the command line:
   system's, from the resolutions the question path itself uses; nobody
   types it (RULE 2). A collection refused, paused (`node pause
   <collection>`) or on `off` is not in it: its query encoder loads at its
-  first search and is unloaded when idle, as before. One holder (`worker
-  resident`, app/model_pins.py), renewed every minute; a model that leaves
-  the set is given back alone, its pin state before restored; a model not
+  first search, unpinned. One holder (`worker resident`, app/model_pins.py),
+  renewed every minute; a model that leaves the set is given back alone,
+  its pin state before restored (a switch to `off` at once); a model not
   loaded is loaded, one at a time, each bounded by its load bound. Paused or
-  seed-only — the node's mode or a profile's — releases the holder and the
-  worker unloads as before ("the node suspended because the operator needs
-  the GPU", 2026-10-23); running and acquire-only hold it (a profile never
-  limits a query). Two switches in `[models]` (§7.8), both true for the
-  trial: `keep_ask_resident` (everything but speech) and `preload_speech`;
-  both false is the node as it was. `show` reads them, the mode, the set,
-  and asks the model server what is loaded and pinned; it writes nothing.
+  seed-only — the node's mode or a profile's — releases the holder and
+  loads nothing ("the node suspended because the operator needs the GPU",
+  2026-10-23); running and acquire-only hold it (a profile never limits a
+  query). NOTHING IS UNLOADED FOR BEING IDLE, in any mode: the worker
+  unloads only a `vega-` model no held collection names (a collection
+  removed), LocalAI's idle watchdog is off, and an unpinned model goes when
+  LocalAI's reclaimer needs its space (past 0.95). Two switches in
+  `[models]` (§7.8), both true: `keep_ask_resident` (everything but speech)
+  and `preload_speech`. `show` reads them, the mode, the set, and asks the
+  model server what is loaded and pinned; it writes nothing.
 - **`node checkpoint`.** *Added 2026-11-07* (operator: "when the limit of
   usage approaches, and you are going to be frozen for more than 2 hours,
   put all the developments on hold and resume the last working state before
@@ -1355,7 +1359,23 @@ are pinned while a reader speaks and released 120 s after the last clip.
 `GET /ask/voice` is what the Ask page offers: `{input: {available, why,
 trimmed}, output: {available, why}}`, `why` in the operator's words with the
 `node speech set` that supplies it; the page renders a button only for an
-available voice.
+available voice. Where output is offered, the page reads the answer WHILE IT
+IS WRITTEN (*amended 2026-11-08*, operator; `app/static/voice.js`): a
+sentence — the browser's `Intl.Segmenter`, a piece under 24 characters read
+with its neighbour — is complete once a later one has begun past that length
+or the stream has ended, never half of one; each goes to `/v1/audio/speech`
+as soon as it is complete, two at a time, whatever the stream and the player
+are doing (chat and speech run on different GPU resources), and they play in
+order. A question the microphone wrote — the box holds what it left there —
+has its answer read by itself, the Ask press unlocking the sound; a typed one
+waits for the speaker, which also starts at the first sentence. A tap stops
+it, as does a new question: the fetches in flight are cancelled, nothing
+more is read. A browser that refuses the sound anyway gets the speaker and
+one line saying so. An answer the page then shows in another language (the
+reader switched the drop-down and the page translated it) has no sentence
+that is exactly one already read: a reading under way moves to the
+translation, from its first sentence; the same text shown again repeats
+nothing.
 - the LocalAGI routes below require the token read from
   `DEPOSIT_TOKEN_FILE`, reads included, and that token opens nothing
   else: an agent that can write its memory cannot pause the node.
@@ -1737,11 +1757,11 @@ variable, a file, a log line or a message.
              keep_ask_resident = true                   # A TRIAL (operator, 2026-11-08: "keep every model Ask uses
              # resident on the card"; "The load all is a test"): the worker holds pinned and loaded the chat,
              # translation and reranking models and the encoders of every served collection on on-demand, all or
-             # p2p (app/resident.py; §7.3 `node resident show`); false: none held, and the worker unloads an idle
-             # encoder of a collection that does not embed everything, as before (2026-10-14)
+             # p2p (app/resident.py; §7.3 `node resident show`); false: none preloaded or pinned
              preload_speech = true                      # the [speech] models held and loaded the same way
-             # (operator, 2026-11-08: "Preload the speech related models by default"); false: loaded at their
-             # first use and pinned while used, as before. Paused or seed-only releases both (added 2026-11-08)
+             # (operator, 2026-11-08: "Chat, speech, rerankers, madlad are preloaded too"); false: loaded at
+             # their first use and pinned while used. Paused or seed-only releases both. Either way nothing is
+             # unloaded for being idle — "only if space is claimed", by LocalAI's reclaimer (added 2026-11-08)
 [speech]     stt_model = "whisper-large-v3"   vad_model = "silero-vad"   tts_model = "omnivoice-cpp"
              tts_voice = "localai://voice-profiles/1c834741"
              # the Ask page's voice, on CHAT_URL's model server (§7.4 "Speech"; added 2026-11-07): speech to text,

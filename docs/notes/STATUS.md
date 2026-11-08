@@ -18,39 +18,62 @@ build at 12 cores, the GPU uncapped. The card's noise (operator): 0.2 sone
 idle, 3.1 sone at full load, coil whine ~0.9 sone; its fan range is being
 measured (published figures disagree).
 
-### 2026-11-08: every model Ask uses kept resident on the card — A TRIAL (operator: option A)
+### 2026-11-08: every model Ask uses kept resident; nothing unloaded for being idle — A TRIAL (operator: option A)
 
 - **The operator:** "keep every model Ask uses resident on the card"; "The
-  load all is a test"; "If embedding is set on all or on demand preload the
-  model. Preload the speech related models by default." The reclaimer's
-  threshold went to 0.95 the same day ("New eviction threshold at 95%",
-  deploy/vega/stage/localai_settings.py): with everything resident the B70
+  load all is a test"; then the final rule: "It applies to any collection, on
+  demand or all embedding preloads the model. Chat, speech, rerankers, madlad
+  are preloaded too, nothing is evicted only because it's idle, only if space
+  is claimed." LocalAI's side the same day: the reclaimer at 0.95 ("New
+  eviction threshold at 95%", 9cd77b3) and its idle watchdog off (3a00b65),
+  deploy/vega/stage/localai_settings.py. With everything resident the B70
   holds 30,267 of 32,656 MiB (92.7 %; host RAM peak 41.6 of 63.4 GB;
-  München, 2026-11-07), so the reclaimer stays quiet.
+  München, 2026-11-07), under the line.
 - **Built:** app/resident.py. The worker's `resident` thread holds, as one
   model_pins holder (`worker resident`), pinned and loaded: the chat,
-  translation and reranking models, the document and query encoders of every
-  served collection on on-demand, all or p2p (not `off`, not refused, not
-  paused), and the `[speech]` models. Renewed each minute; a model that leaves
-  the set is given back alone; a model not loaded is loaded through its
-  caller's own bounded warm, one at a time. Paused or seed-only (node or
-  profile) releases the holder and nothing loads; acquire-only and the quiet
-  windows hold it (a profile never limits a query). `worker._release_embedder`
-  and `_sweep_unheld_embedders` never unload a model of the set; their rules
-  of 2026-10-14 stand as written when the switch is off, for `off`, and while
-  paused. Verified at LocalAI 53cd6c5, v4.11.0 and v4.12.1: `checkIdle` and the
-  reclaimer skip a pinned model, so `watchdog_idle_timeout` (5 m) needs no
-  change.
-- **The switch is the way back:** platform.toml `[models] keep_ask_resident`
-  and `preload_speech`, both true for the trial; both false is the node as it
-  was. `louise node resident show` prints them, the mode, and each model's
-  roles, collections, loaded and pinned state (07 §7.3, §7.8).
+  translation (MADLAD) and reranking models, the document and query encoders
+  of every served collection on on-demand, all or p2p (not `off`, not
+  refused, not paused), and the `[speech]` models. Renewed each minute; a
+  model that leaves the set is given back alone (a switch to `off` gives it
+  back at once, `worker._release_embedder`); a model not loaded is loaded
+  through its caller's own bounded warm, one at a time. Paused or seed-only
+  (node or profile) releases the holder and nothing loads; acquire-only and
+  the quiet windows hold it (a profile never limits a query).
+- **Nothing is unloaded for being idle** (amending 2026-10-14's "an embedder
+  is held only for a collection that embeds everything" and the IDLE_BEATS
+  sweep): `_release_embedder` unloads nothing, and `_sweep_unheld_embedders`
+  unloads only a `vega-` model no held collection names (a removed
+  collection: not idleness). An unpinned model — an `off` collection's
+  encoder a search loaded — stays until LocalAI's reclaimer needs the space.
+  In every mode, whatever the switches.
+- **The switches:** platform.toml `[models] keep_ask_resident` and
+  `preload_speech`, both true; false: not preloaded, not pinned.
+  `louise node resident show` prints them, the mode, and each model's roles,
+  collections, loaded and pinned state (07 §7.3, §7.8). Verified at LocalAI
+  53cd6c5, v4.11.0 and v4.12.1: the reclaimer skips a pinned model
+  (`evictLRUModel`), as `checkIdle` did.
 - **What decides the trial:** (1) first-question latency after an idle pause
   (≥ 5 min), against ~6 s for the chat model and a query encoder's load
   before; (2) reclaimer evictions per hour (LocalAI's "Memory reclaimer
   evicting" lines); (3) peak VRAM with every model resident, during an Ask
   question and during an embedding load; (4) the chat model's decode speed
   alone and with TTS reading an answer beside it. Not yet measured.
+
+### 2026-11-08: the answer read while it is written; a spoken question answered aloud (operator)
+
+- **Built** (app/static/voice.js, 07 §7.4 "Speech"): each sentence goes to
+  `/v1/audio/speech` as soon as the stream completes it (never half: one is
+  complete once a later one has begun past MIN_SENTENCE, or the stream
+  ended), two in flight, played in order; the reading starts with the first
+  sentence. A question the microphone wrote is read by itself (audio
+  unlocked in the Ask press); typed, the speaker waits for a tap. Stop or a
+  new question cancels the fetches in flight. A refused playback shows the
+  speaker and says so.
+- **Decided:** an answer translated while it is read (the reader switched
+  language) has no sentence exactly matching one already read, so the
+  reading moves to the translation from its first sentence.
+- **Tested** in Chromium (tests/browser/ask_voice.js 8–13, a stream written
+  a delta at a time); not heard on the node's card yet.
 
 ### 2026-11-07: voice on the Ask page — a microphone and a speaker, the node's models (operator)
 

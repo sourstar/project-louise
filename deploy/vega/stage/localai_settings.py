@@ -33,6 +33,13 @@ medcpt-article-ov 312 MiB. At 0.85 the reclaimer would evict a model at
 every tick with all of them loaded; at 0.95 they stay with 2.3 % (≈750 MiB)
 below the line, so a load-time peak above it still evicts the least
 recently used unpinned model.
+
+watchdog_idle_enabled → false (operator, 2026-11-08, relayed by the node:
+"nothing is evicted only because it's idle, only if space is claimed").
+LocalAI's idle watchdog unloaded the chat model after 5 minutes without a
+request (watchdog_idle_timeout 5m0s), so the first question after a pause
+paid its load. Space is claimed through the memory reclaimer above; the busy
+watchdog (a hung backend) stays on.
 """
 from __future__ import annotations
 
@@ -44,6 +51,7 @@ from typing import Any
 DESIRED: dict[str, Any] = {
     "memory_reclaimer_enabled": True,
     "memory_reclaimer_threshold": 0.95,
+    "watchdog_idle_enabled": False,
 }
 
 
