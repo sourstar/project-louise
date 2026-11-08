@@ -47,6 +47,11 @@
   };
   // sentences being synthesized at once (pump)
   const IN_FLIGHT = 2;
+  // THE FIRST SOUND (München, 2026-11-08: OmniVoice takes 1.5-2x a clip's
+  // length to make it, 12-33 s for a first sentence of 9-17 s): a first
+  // sentence longer than FIRST_MAX is read in two, cut at its last clause
+  // mark (, ; :) between FIRST_MIN and FIRST_MAX characters
+  const FIRST_MAX = 90, FIRST_MIN = 30;
   // a WAV of no samples: played in the tap, it lets the page play the rest (iOS)
   const SILENT = 'data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAgD4AAAB9AAACABAAZGF0YQAAAAA=';
   const WORKLET = "class LouiseCapture extends AudioWorkletProcessor{constructor(){super();this.b=new Float32Array(2048);this.n=0}"
@@ -210,7 +215,16 @@
   // was cut, sent, received, played and ended, with the node's own synthesis
   // time and the clip's length (`Server-Timing`). `louiseVoice.timeline()`.
   const now = () => Math.round(performance.now());
-  let times = { asked: null, first: null, last: null, items: [] };
+  let times = { asked: null, first: null, last: null, started: [], items: [] };
+
+  // the first sentence of a reading in two where it is long (FIRST_MAX)
+  function firstPieces(s) {
+    if (s.length <= FIRST_MAX) return [s];
+    const head = s.slice(0, FIRST_MAX);
+    let at = -1;
+    for (const m of head.matchAll(/[,;:](?=\s)/g)) if (m.index + 1 >= FIRST_MIN) at = m.index + 1;
+    return at < 0 ? [s] : [s.slice(0, at), s.slice(at).trim()];
+  }
   const answerText = () => { const b = document.getElementById('answer'); return b ? b.textContent : ''; };
   const collapse = line => line.replace(/\s+/g, ' ').trim();
 
@@ -344,11 +358,13 @@
   function feed(r) {
     const t = answerText();
     r.ended = !writing; r.text = t;
-    for (const s of cut(r, t, r.ended)) {
-      const it = { text: s, t: { chars: s.length, cut: now() } };
-      times.items.push(it.t);
-      it.p = new Promise((ok, no) => { it.ok = ok; it.no = no; }); it.p.catch(() => {});
-      r.items.push(it);
+    for (const whole of cut(r, t, r.ended)) {
+      for (const s of (r.items.length ? [whole] : firstPieces(whole))) {
+        const it = { text: s, t: { chars: s.length, cut: now() } };
+        times.items.push(it.t);
+        it.p = new Promise((ok, no) => { it.ok = ok; it.no = no; }); it.p.catch(() => {});
+        r.items.push(it);
+      }
     }
     pump(r);
     if (r.more) { const f = r.more; r.more = null; f(); }
@@ -371,6 +387,7 @@
     const r = { ctl: new AbortController(), lang: answerLang, text: '', at: 0, off: 0, ended: false,
                 items: [], next: 0, inflight: 0, urls: [], wake: null, more: null, blocked: false };
     reading = r; speakState(true);
+    times.started.push(now());
     feed(r);
     run(r);
   }
@@ -410,7 +427,7 @@
     asking() {
       const q = document.getElementById('q');
       stopReading();
-      times = { asked: now(), first: null, last: null, items: [] };
+      times = { asked: now(), first: null, last: null, started: [], items: [] };
       auto = !!speak && dictated !== null && !!q && q.value.trim() === dictated;
       if (auto) unlock();
     },
@@ -433,10 +450,13 @@
     timeline() {
       const at = times.asked, rel = v => (v == null || at == null ? null : v - at);
       return { first_word: rel(times.first), last_word: rel(times.last),
+               // each start of a reading: a tap, a question read by itself,
+               // or a reading moved to a changed text (follow)
+               started: times.started.map(rel),
                sentences: times.items.map(t => ({ chars: t.chars, cut: rel(t.cut), sent: rel(t.sent),
                  got: rel(t.got), synth: t.synth ?? null, audio: t.audio ?? null,
                  play: rel(t.play), end: rel(t.end) })) };
     },
-    sentences, cut, downsample, wavBytes,
+    sentences, cut, firstPieces, downsample, wavBytes,
   };
 })();
