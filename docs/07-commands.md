@@ -1450,7 +1450,12 @@ translation, from its first sentence; the same text shown again repeats
 nothing. A FULL STOP THAT ENDS NO SENTENCE (*amended 2026-11-08*, operator:
 "G. Cesare" read with a long pause): a piece ending in an initial or a title
 before a name ("G.", "Prof.") is read with the next, and `/v1/audio/speech`
-drops that stop before the model reads it. `/v1/audio/speech` answers with
+drops that stop before the model reads it. NUMBERS AND DATES ARE SAID IN THE TEXT'S LANGUAGE (*amended
+2026-11-08*, operator: A): before the model reads it, `/v1/audio/speech` writes them as words of the
+language sent or found (`app/speech_numbers.py`, `num2words`): cardinals with the language's separators,
+years, ordinals, percentages, eras, times, dates ("12/03/2024", ISO, "12 marzo 2024", "March 12"),
+and a run of more than six digits as an identifier, digit by digit; a language it does not know is left as
+written. `/v1/audio/speech` answers with
 `Server-Timing: synth;dur=…, audio;dur=…` (the model server's call and the
 clip's length, ms), and the page keeps the reading's times
 (`louiseVoice.timeline()`: the answer's first and last word, each sentence

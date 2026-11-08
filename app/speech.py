@@ -287,6 +287,11 @@ def synthesize_timed(body: dict[str, Any], url: str | None = None) -> tuple[int,
         out.pop("voice", None)
     if lang and "language" not in out:
         out["language"] = lang
+    # NUMBERS AND DATES IN THE TEXT'S OWN WORDS (operator, 2026-11-08, A): the
+    # one voice reads digits as it learned them, in Italian (app/speech_numbers.py)
+    from app import speech_numbers
+    said = str(out.get("language") or "").split("-")[0].split("_")[0].lower() or None
+    out["input"] = speech_numbers.verbalize(out["input"], said)
     t0 = time.perf_counter()
     if not model:
         r = httpc.post(f"{url}/v1/audio/speech", json=out, timeout=CALL_TIMEOUT_S)
