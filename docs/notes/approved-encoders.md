@@ -121,6 +121,21 @@ engine. A measurement names its engine by reading the deployed wrapper's
 vega.json (`retired_backends.py --engine [WRAPPER]`, measuring.md §6), never
 from a note or a message.
 
+**A Codex's engine `image` is the backend's tree AND the wrapper package**
+(`vega_wrapper.engine_manifest`, since the wrapper joined the engine on
+2026-10-31). So a swap that rebuilds the wrapper must archive the OLD package
+too, and the pair be proven before the old copies go: unpack both archives
+and recompute `manifest_digest(engine_manifest(tree, package, cuts))` against
+the Codex. Done 2026-11-08 for wikidata (ea2417d → 11c): tree 0e705989… +
+package 601c849e… (archived without `run/`, whose receipts socket has no tree
+digest) = image 32b0caf3…, EQUAL (/root/measure/provepair.py on the node).
+pubmed's (9eb8807c…) and wikipedia's (337ef98b…) images are pre-wrapper tree
+digests, proven by their `.verified` sidecars alone.
+
+gutenberg's Codex image f5c07d2 (minted 10-09 under an older tree_manifest
+rule) is not reproduced by today's code: the archive holds the installed
+bytes (e4d5a2be today); kept as bytes; moot once gutenberg moves to Nemotron.
+
 ## Intel GPU (SYCL) — Arc Pro B70 (Battlemage), llama.cpp `server-intel`
 
 | build | digest | verdict | evidence |
