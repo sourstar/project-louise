@@ -307,6 +307,10 @@ louise node
   speech set [--stt M] [--vad M] [--tts M] [--voice V]                 the models into `[speech]`, every other line of the file kept; an empty value removes one, and its
                                                                        voice is no longer offered; nothing given is exit 2, and a file the result would not load is
                                                                        refused, unchanged (exit 2)
+  resident show                                                        the models the worker preloads on the card for Ask (a trial): `[models] keep_ask_resident`
+                                                                       and `preload_speech` (§7.8), the node's mode and whether it preloads, each model with its
+                                                                       roles, collections, loaded state, last known size, and pin holders (an embed batch's, the
+                                                                       operator's; never the preload's); read-only (added 2026-11-08, operator)
 
 louise dev                                                             operator instruments; read-only unless the line says otherwise
   schedule-report      what the worker spent its rounds on; --gpu [--minutes N]: the card's busy, gaps and who held it, per minute;
@@ -986,6 +990,43 @@ reader needs at the command line:
   (§7.8), not the database: the page offers what the file says at its next
   load, with no restart. The browser opens a microphone only for a page
   reached over https or at localhost; `show` says so.
+- **`node resident show`, and the resident set.** *Added 2026-11-08, a
+  TRIAL* (operator, option A: "keep every model Ask uses resident on the
+  card"; "The load all is a test"; "It applies to any collection, on demand
+  or all embedding preloads the model. Chat, speech, rerankers, madlad are
+  preloaded too, nothing is evicted only because it's idle, only if space
+  is claimed."; app/resident.py). The worker preloads the models a
+  question meets: the chat model (CHAT_URL), the translation model
+  (TRANSLATE_URL), the reranker every served collection names, the encoders
+  — document and query model — of every served collection whose embed is
+  `on-demand`, `all` or `p2p`, and the `[speech]` models. The set is the
+  system's, from the resolutions the question path itself uses; nobody
+  types it (RULE 2). A collection refused, paused (`node pause
+  <collection>`) or on `off` is not in it: its query encoder loads at its
+  first search (a switch to `off` drops it from the set at once).
+  PRELOADED, NOT PINNED: the reclaimer evicts the least-recently-used model
+  when space is claimed (operator 2026-11-08) — the operator's own load, a
+  corpus encoder's load-time peak — so a load never fails for a model Ask
+  keeps. Every minute a model of the set that is not loaded is loaded, one
+  at a time, each bounded by its load bound, IF IT FITS: its last known
+  size (LocalAI's `size_vram`; never seen: loaded) under threshold × total
+  − used, the card as the GPU probe reads it, the threshold LocalAI's
+  `memory_reclaimer_threshold` (else 0.95). Otherwise it waits, said once
+  ("stays unloaded: the card has room for it only after space is given
+  back"). One the keeper loaded and finds evicted again within 10 min
+  waits 10, 20, 40 min … at most 2 h, said each time. Paused or seed-only
+  — the node's mode or a profile's — preloads nothing ("the node suspended
+  because the operator needs the GPU", 2026-10-23); running and
+  acquire-only preload (a profile never limits a query). NOTHING IS
+  UNLOADED FOR BEING IDLE, in any mode: the worker unloads only a `vega-`
+  model no held collection names (a collection removed), LocalAI's idle
+  watchdog is off, and a model goes when LocalAI's reclaimer needs its
+  space (past 0.95). Two switches in `[models]` (§7.8), both true:
+  `keep_ask_resident` (everything but speech) and `preload_speech`. `show`
+  reads them, the mode, the set, and asks the model server what is loaded
+  and pinned; it writes nothing. The standard alternative is LocalAI's own
+  `LOAD_TO_MEMORY`: a list kept by hand, loaded once at its start, and
+  skipped under `max_active_backends = 1` (app/resident.py).
 - **`node checkpoint`.** *Added 2026-11-07* (operator: "when the limit of
   usage approaches, and you are going to be frozen for more than 2 hours,
   put all the developments on hold and resume the last working state before
@@ -1724,6 +1765,15 @@ variable, a file, a log line or a message.
              # (app/model_loads.json, docs/notes/model-profile.md), this is every other's. A load past it is a
              # deferral (embedding) or a fallback that says "model loading took longer than N s" (05 §5.6)
              # (added 2026-10-09)
+             keep_ask_resident = true                   # A TRIAL (operator, 2026-11-08: "keep every model Ask uses
+             # resident on the card"; "The load all is a test"): the worker preloads, never pins, the chat,
+             # translation and reranking models and the encoders of every served collection on on-demand, all or
+             # p2p, each when the card has room under the reclaimer's line (app/resident.py; §7.3 `node resident
+             # show`); false: not preloaded
+             preload_speech = true                      # the [speech] models preloaded the same way (operator,
+             # 2026-11-08: "Chat, speech, rerankers, madlad are preloaded too"); false: loaded at their first use.
+             # Paused or seed-only preloads neither. Either way nothing is unloaded for being idle — "only if
+             # space is claimed", by LocalAI's reclaimer, which evicts the least recently used (added 2026-11-08)
 [speech]     stt_model = "whisper-large-v3"   vad_model = "silero-vad"   tts_model = "omnivoice-cpp"
              tts_voice = "localai://voice-profiles/1c834741"
              # the Ask page's voice, on CHAT_URL's model server (§7.4 "Speech"; added 2026-11-07): speech to text,

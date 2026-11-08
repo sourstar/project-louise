@@ -441,6 +441,32 @@ def warm_behind(collection, recipe: "collections_mod.EmbedRecipe | None" = None)
     return model_load.warm_behind(recipe.url, recipe.model, standing_aside, caller=_warm_caller())
 
 
+def warm_side(collection, *, query: bool,
+              recipe: "collections_mod.EmbedRecipe | None" = None) -> float | None:
+    """Load one side's model — the document encoder, or the query encoder
+    a search asks (`_side`) — when its runner says it is not loaded: the
+    resident keeper's preload (app/resident.py; operator, 2026-11-08: "If
+    embedding is set on all or on demand preload the model"). The same
+    warm a request sends first (`_warm_request`, one input of the side's
+    form; a query is one text in every space), standing aside while a
+    person's query runs, bounded by the model's load bound
+    (`model_load.ensure_loaded`, which raises its LoadTimeout past it).
+    Returns the seconds waited for the load, or None."""
+    recipe = recipe or collections_mod.recipe_for(collection)
+    side = _side(recipe, query)
+    if recipe.api not in PAIR_APIS or not side.model:
+        return None
+    pair = not query and {layer.form for layer in layers_mod.layers_for(collection)} == {"pair"}
+    warm = _warm_request(side, pair, dispatch.level_headers())
+
+    def standing_aside(bound_s: float):
+        dispatch.stand_aside(side.url, bound_s)
+        return warm(bound_s)
+    return model_load.ensure_loaded(side.url, side.model, standing_aside,
+                                    caller=f"resident {'query ' if query else ''}encoder "
+                                           f"({getattr(collection, 'name', '?')})")
+
+
 def _request_vouched(batch: list[Item], timeout: float,
                      recipe: "collections_mod.EmbedRecipe", runs: set | None,
                      g, level: dict) -> list[list[float]]:

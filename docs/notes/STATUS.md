@@ -18,6 +18,61 @@ build at 12 cores, the GPU uncapped. The card's noise (operator): 0.2 sone
 idle, 3.1 sone at full load, coil whine ~0.9 sone; its fan range is being
 measured (published figures disagree).
 
+### 2026-11-08: every model Ask uses preloaded, not pinned; nothing unloaded for being idle — A TRIAL (operator: option A)
+
+- **The operator:** "keep every model Ask uses resident on the card"; "The
+  load all is a test"; then the final rule: "It applies to any collection, on
+  demand or all embedding preloads the model. Chat, speech, rerankers, madlad
+  are preloaded too, nothing is evicted only because it's idle, only if space
+  is claimed." LocalAI's side the same day: the reclaimer at 0.95 ("New
+  eviction threshold at 95%", 9cd77b3) and its idle watchdog off (3a00b65),
+  deploy/vega/stage/localai_settings.py. With everything resident the B70
+  holds 30,267 of 32,656 MiB (92.7 %; host RAM peak 41.6 of 63.4 GB;
+  München, 2026-11-07), under the line.
+- **Built:** app/resident.py. The worker's `resident` thread preloads the
+  chat, translation (MADLAD) and reranking models, the document and query
+  encoders of every served collection on on-demand, all or p2p (not `off`,
+  not refused, not paused), and the `[speech]` models: each minute, a model
+  of the set not loaded is loaded through its caller's own bounded warm,
+  one at a time. A switch to `off` drops a collection's encoders from the
+  set at once (`worker._release_embedder`), unloading nothing. Paused or
+  seed-only (node or profile) preloads nothing; acquire-only and the quiet
+  windows preload (a profile never limits a query).
+- **Preloaded, not pinned: the reclaimer evicts the least-recently-used
+  model when space is claimed (operator 2026-11-08).** A pinned model is
+  never evicted (`evictLRUModel` skips it, LocalAI 53cd6c5, v4.11.0,
+  v4.12.1), so pinning the set — the first build of this entry, d487f80 —
+  left space claimed nothing to evict: the operator's 35B for an
+  evaluation, or a corpus encoder's load peak, would have failed. Corrected
+  before merge; app/model_pins.py is as it was (an embed batch pins its
+  encoder while it runs, 2026-10-23).
+- **No thrash against the reclaimer:** a model is loaded only if its last
+  known size (`/system` `size_vram`, remembered per model; never seen:
+  allowed) fits under threshold × total − used (the card as the GPU probe
+  reads it; LocalAI's `memory_reclaimer_threshold`, else 0.95); otherwise it
+  waits, said once. One the keeper loaded and finds evicted again within
+  10 min backs off 10, 20, 40 min … at most 2 h, said each time.
+- **Nothing is unloaded for being idle** (amending 2026-10-14's "an embedder
+  is held only for a collection that embeds everything" and the IDLE_BEATS
+  sweep): `_release_embedder` unloads nothing, and `_sweep_unheld_embedders`
+  unloads only a `vega-` model no held collection names (a removed
+  collection: not idleness). An `off` collection's encoder a search loaded
+  stays until LocalAI's reclaimer needs the space. In every mode, whatever
+  the switches.
+- **The switches:** platform.toml `[models] keep_ask_resident` and
+  `preload_speech`, both true; false: not preloaded. `louise node resident
+  show` prints them, the mode, and each model's roles, collections, loaded
+  state, last known size and pin holders (07 §7.3, §7.8). The standard
+  alternative, LocalAI's `LOAD_TO_MEMORY`, is written down in
+  app/resident.py.
+- **What decides the trial:** (1) first-question latency after an idle pause
+  (≥ 5 min), against ~6 s for the chat model and a query encoder's load
+  before; (2) reclaimer evictions per hour (LocalAI's "Memory reclaimer
+  evicting" lines) and the keeper's back-offs; (3) peak VRAM with every
+  model resident, during an Ask question and during an embedding load; (4)
+  the chat model's decode speed alone and with TTS reading an answer beside
+  it. Not yet measured.
+
 ### 2026-11-08: the answer read while it is written; a spoken question answered aloud (operator)
 
 - **Built** (app/static/voice.js, 07 §7.4 "Speech"): each sentence goes to

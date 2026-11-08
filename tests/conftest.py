@@ -14,6 +14,9 @@ import pytest
 # the web's background warm of the question path's models (app/warmup.py)
 # is off in tests: a test that starts the app talks to no model server
 os.environ["LOUISE_WARMUP"] = "0"
+# nor does the worker's resident keeper run in a test's worker
+# (app/resident.py): the tests of it call its beat themselves
+os.environ["LOUISE_RESIDENT"] = "0"
 
 FIXTURE_CORPUS = Path(__file__).parent / "fixtures" / "gutenberg-mini" / "corpus"
 

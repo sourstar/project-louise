@@ -140,6 +140,12 @@ class _Flight:
 _lock = threading.Lock()
 _systems: dict[str, tuple[float, frozenset[str] | None, float]] = {}   # server -> (at, ids, ttl)
 _pids: dict[str, dict[str, int]] = {}                                    # server -> {model: backend pid}
+#: (server, model) -> the most bytes `/system` gave as the model's `size_vram`
+#: (the driver's per-process count, as app/gpu_models.py reads it), KEPT after
+#: the model goes: what the resident keeper's room check needs is the size of
+#: a model that is not loaded (app/resident.py). The largest seen, because the
+#: first reading after a load comes before its compute buffers grow.
+_sizes: dict[tuple[str, str], int] = {}
 _probe_locks: dict[str, threading.Lock] = {}
 _flights: dict[tuple[str, str], _Flight] = {}
 _recent: deque[ColdStart] = deque(maxlen=100)
@@ -152,6 +158,7 @@ def reset() -> None:
     with _lock:
         _systems.clear()
         _pids.clear()
+        _sizes.clear()
         _probe_locks.clear()
         _flights.clear()
         _recent.clear()
@@ -184,14 +191,26 @@ def _fetch_system(server: str) -> frozenset[str] | None:
     if not isinstance(rows, list):
         raise _NoRoute()
     held = [m for m in rows if isinstance(m, dict) and isinstance(m.get("id"), str)]
-    pids = {}
+    pids, sizes = {}, {}
     for m in held:
         pid = (m.get("process") or {}).get("pid") if isinstance(m.get("process"), dict) else None
         if isinstance(pid, int):
             pids[m["id"]] = pid
+        size = m.get("size_vram")
+        if isinstance(size, int) and not isinstance(size, bool) and size > 0:
+            sizes[(server, m["id"])] = size
     with _lock:
         _pids[server] = pids
+        for k, v in sizes.items():
+            _sizes[k] = max(v, _sizes.get(k, 0))
     return frozenset(m["id"] for m in held)
+
+
+def size_vram(server: str, model: str) -> int | None:
+    """The bytes `model` held on the card the last times `/system` listed it
+    (`_sizes`), or None when this process never saw it loaded."""
+    with _lock:
+        return _sizes.get((server_of(server), model))
 
 
 class _NoRoute(Exception):

@@ -1,9 +1,13 @@
-"""An embedder is held only for a collection that embeds everything
-(operator, 2026-10-14; app/worker._release_embedder, model_load.unload): the
-start-up run check and a switch to off or on-demand unload it from LocalAI,
-unless another collection on "all" uses the same model on the same runner.
-Found when gutenberg's idle 4B embedder held 9.9 GB, the card crossed
-LocalAI's eviction threshold and every chat load was evicted (500s)."""
+"""What the worker unloads from LocalAI (app/worker._release_embedder,
+_sweep_unheld_embedders, model_load.unload).
+
+2026-10-14 (operator): an embedder was held only for a collection that
+embeds everything — found when gutenberg's idle 4B embedder held 9.9 GB, the
+card crossed LocalAI's eviction threshold and every chat load was evicted
+(500s). AMENDED 2026-11-08 (operator: "nothing is evicted only because it's
+idle, only if space is claimed"): nothing a held collection names is
+unloaded, for its mode or for being idle; a `vega-` model NO held collection
+names (a collection removed) still goes, unless a command leases it."""
 from contextlib import closing
 from dataclasses import replace
 
@@ -51,44 +55,40 @@ def test_unload_asks_localai_only_for_a_model_it_holds(runner):
     assert model_load.unload(URL, None) is False and len(calls) == 1
 
 
-def test_an_embedder_is_released_unless_its_mode_is_all(tmp_path, runner):
+def test_a_release_unloads_nothing_whatever_the_mode(tmp_path, runner):
+    """Amended 2026-11-08 (operator: "nothing is evicted only because it's
+    idle, only if space is claimed"): until then a collection not on "all"
+    had its embedder unloaded here; now nothing is, on any mode."""
     held, calls = runner
     lazy = _with(_collection(tmp_path, "gutenberg"), "vega-4b", "lazy")
     full = _with(_collection(tmp_path, "normattiva"), "vega-dar", "all")
-    assert worker._release_embedder(full, others=[lazy, full]) is False
-    assert worker._release_embedder(lazy, others=[lazy, full]) is True
-    assert held == {"vega-dar"} and calls == [(URL + "/backend/shutdown", {"model": "vega-4b"})]
+    off = _with(_collection(tmp_path, "wikipedia"), "vega-bge", "off")
+    for c in (lazy, full, off):
+        assert worker._release_embedder(c) == []
+    assert held == {"vega-4b", "vega-dar"} and calls == []
 
 
-def test_a_model_another_collection_embeds_everything_with_stays(tmp_path, runner):
-    held, calls = runner
-    off = _with(_collection(tmp_path, "a"), "vega-dar", "off")
-    full = _with(_collection(tmp_path, "b"), "vega-dar", "all")
-    assert worker._release_embedder(off, others=[off, full]) is False and calls == []
-
-
-def test_the_runtime_mode_wins_over_the_file(tmp_path, runner):
+def test_the_runtime_mode_is_the_one_read(tmp_path, runner):
     held, calls = runner
     c = _with(_collection(tmp_path, "gutenberg"), "vega-4b", "lazy")
     con = db.connect(c)
     scope = db.get_scope(con); scope["embed_mode"] = "all"; db.set_scope(con, scope)
-    assert worker._release_embedder(c, con, others=[c]) is False, "the Library set 'all'"
+    assert worker._release_embedder(c, con) == [], "the Library set 'all'"
     scope["embed_mode"] = "off"; db.set_scope(con, scope)
-    assert worker._release_embedder(c, con, others=[c], reason="the switch") is True
-    msgs = [r[0] for r in con.execute("SELECT message FROM events WHERE stage='control'")]
-    assert any("embedder vega-4b unloaded on the switch" in m for m in msgs)
+    assert worker._release_embedder(c, con, reason="the switch") == [], "no resident pin to give back"
+    assert held == {"vega-4b", "vega-dar"} and calls == [], "and nothing unloaded"
     con.close()
 
 
-def test_a_switch_away_from_all_releases_the_embedder(tmp_path, runner, monkeypatch):
+def test_a_switch_away_from_all_unloads_nothing(tmp_path, runner, monkeypatch):
     held, calls = runner
     before = _with(_collection(tmp_path, "gutenberg"), "vega-4b", "all")
     con = db.connect(before)
-    after = replace(before, embed_mode_default="lazy")
+    after = replace(before, embed_mode_default="off")
     monkeypatch.setattr(collections_mod, "load_all", lambda: [after])
     monkeypatch.setattr(worker, "_discover", lambda *a, **k: None)
     worker._sync_collections([before], {before.name: con}, {}, pipeline=False)
-    assert (URL + "/backend/shutdown", {"model": "vega-4b"}) in calls
+    assert calls == [] and "vega-4b" in held
     con.close()
 
 
@@ -117,38 +117,22 @@ def test_a_removed_collection_s_embedder_leaves_with_it(tmp_path, runner, monkey
     cons[stays.name].close()
 
 
-def test_an_on_demand_embedder_is_unloaded_once_nobody_asked_it_for_two_beats(tmp_path, runner, monkeypatch,
-                                                                              isolated_config):
-    """gutenberg and wikipedia (on-demand) still held their embedders: a
-    search loads the query encoder, which IS the embedder. A model named only
-    by collections not on "all" goes once no process has asked it anything
-    for IDLE_BEATS beats — the last request as the embeddings client records
-    it (node_state.encoder_use), never LocalAI's CPU figure, which is the
-    VeGa wrapper's and reads 0.07–2 % whatever the encoder does (Perugia,
-    2026-10-19: an idle encoder spinning 2.8 cores was never unloaded)."""
+def test_an_idle_embedder_a_held_collection_names_is_never_unloaded(tmp_path, runner, monkeypatch,
+                                                                  isolated_config):
+    """Until 2026-11-08 a model named only by collections not on "all" went
+    once no process had asked it anything for two settle beats (IDLE_BEATS,
+    2026-10-14; the last request as node_state.encoder_use records it,
+    Perugia 2026-10-19). Amended (operator: "nothing is evicted only because
+    it's idle, only if space is claimed"): it stays, on/off/lazy alike, until
+    LocalAI's reclaimer needs its space."""
     from app import node_state
     held, calls = runner
     lazy = _with(_collection(tmp_path, "gutenberg"), "vega-4b", "lazy")
-    full = _with(_collection(tmp_path, "normattiva"), "vega-dar", "all")
-    idle_after = worker.IDLE_BEATS * worker.SETTLE_BEAT_S
-    # asked a moment ago (a search): kept, whatever LocalAI's CPU figure says
-    monkeypatch.setattr(model_load, "activity", lambda server: {m: 0.0 for m in held})
-    node_state.touch_encoder(URL, "vega-4b")
-    assert worker._sweep_unheld_embedders([lazy, full]) == [], "in use: kept"
-    # last asked longer ago than two beats: unloaded, though its wrapper shows CPU
-    monkeypatch.setattr(model_load, "activity", lambda server: {m: 1.9 for m in held})
-    node_state.touch_encoder(URL, "vega-4b", now=time.time() - idle_after - 1)
-    assert worker._sweep_unheld_embedders([lazy, full]) == ["vega-4b"], "nobody asked: unloaded"
-    assert held == {"vega-dar"}, "the 'all' collection's embedder stays, idle or not"
-
-
-def test_a_model_nobody_ever_asked_is_idle_now(tmp_path, runner, isolated_config):
-    """No row: loaded by hand, or before the store knew — unloaded at the
-    first beat; the next request reloads it (one cold start)."""
-    held, calls = runner
-    lazy = _with(_collection(tmp_path, "gutenberg"), "vega-4b", "lazy")
-    full = _with(_collection(tmp_path, "normattiva"), "vega-dar", "all")
-    assert worker._sweep_unheld_embedders([lazy, full]) == ["vega-4b"]
+    off = _with(_collection(tmp_path, "wikipedia"), "vega-dar", "off")
+    node_state.touch_encoder(URL, "vega-4b", now=time.time() - 86400)
+    for _ in range(3):
+        assert worker._sweep_unheld_embedders([lazy, off]) == []
+    assert held == {"vega-4b", "vega-dar"} and calls == []
 
 
 def test_the_embeddings_client_records_each_answer_for_the_sweep(isolated_config, monkeypatch):
@@ -204,7 +188,9 @@ def test_a_leased_embedder_is_left_alone_until_the_lease_expires(tmp_path, isola
             return {}
     monkeypatch.setattr(model_load.httpc, "post",
                         lambda url, json=None, timeout=None: (calls.append(json), held.discard(json["model"]), R())[-1])
-    off = _with(_collection(tmp_path, "gutenberg"), "vega-4b", "off")
+    # a collection this node holds names another model: vega-4b is no held
+    # collection's (the contribute embeds for one held elsewhere)
+    off = _with(_collection(tmp_path, "gutenberg"), "vega-dar", "off")
     node_state.lease_encoder(URL, "vega-4b", "share contribute pid 1", now=1000.0, ttl_s=600.0)
     real = node_state.leased_encoders
     monkeypatch.setattr(node_state, "leased_encoders", lambda con=None, now=None: real(con, 1300.0))
