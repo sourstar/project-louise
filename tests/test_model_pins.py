@@ -415,3 +415,16 @@ def test_a_pin_no_holder_keeps_is_released_and_counted(runner):
     assert any("the unpin failed" in t for _lvl, t in runner.said)
     runner.fail_unpin = False
     assert model_pins.release_orphans([(server, "madlad")]) == ["madlad"]
+
+
+def test_node_pins_shows_the_record(runner, capsys):
+    """München, 2026-11-09: the pins were readable only from
+    state/model-pins.json. `louise node pins` prints the record's view."""
+    import json as _json
+    from app import louise
+    runner.pinned["nemotron"] = False
+    assert model_pins.hold("http://ai:8080", "nemotron", "worker embed wikidata")
+    assert louise.main(["node", "pins"]) == 0
+    out = _json.loads(capsys.readouterr().out)
+    assert [p["model"] for p in out["pins"]] == ["nemotron"]
+    assert list(out["pins"][0]["holders"]) == ["worker embed wikidata"] and out["stuck"] == []

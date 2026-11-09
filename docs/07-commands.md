@@ -321,6 +321,7 @@ louise node
   speech set [--stt M] [--vad M] [--tts M] [--voice V]                 the models into `[speech]`, every other line of the file kept; an empty value removes one, and its
                                                                        voice is no longer offered; nothing given is exit 2, and a file the result would not load is
                                                                        refused, unchanged (exit 2)
+  pins                                                                 the models Louise holds pinned in LocalAI now, with their holders, the restores left failing and the pin failures (state/model-pins.json); read-only (added 2026-11-09)
   resident show                                                        the models the worker preloads on the card for Ask (a trial): `[models] keep_ask_resident`
                                                                        and `preload_speech` (§7.8), the node's mode and whether it preloads, the budget (the line,
                                                                        the working margin — measured over 6 h, or the 3.0 GiB default — the eviction penalty, and
