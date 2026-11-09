@@ -359,11 +359,12 @@ def set_log(fn: Callable[[str, str], None]) -> None:
 def reset() -> None:
     """Forget the last beat, every model's history and the budget's memory
     as this process holds it — the file stays, as a restart finds it (tests)."""
-    global _last, _last_why, _last_switches, _memory, _out_said, _write_failed
+    global _last, _last_why, _last_switches, _memory, _out_said, _write_failed, _orphans_at
     with _lock:
         _last, _last_why, _last_switches = {}, None, Switches()
         _track.clear()
         _memory, _out_said, _write_failed = None, frozenset(), False
+        _orphans_at = None
 
 
 def switches() -> Switches:
@@ -998,6 +999,24 @@ def preloads(state: str | None = None) -> tuple[bool, str]:
                   + ": the set is preloaded")
 
 
+_orphans_at: float | None = None
+
+
+def _release_orphan_pins(want: list[Resident], now: float) -> None:
+    """Every ORPHAN_CHECK_S, the set's models pinned with no holder are
+    unpinned (model_pins.release_orphans): preloaded, never pinned."""
+    global _orphans_at
+    from app import model_pins
+    with _lock:
+        if not want or (_orphans_at is not None and now - _orphans_at < model_pins.ORPHAN_CHECK_S):
+            return
+        _orphans_at = now
+    try:
+        model_pins.release_orphans([r.key for r in want])
+    except Exception as e:   # noqa: BLE001 — a beat never raises past a model
+        _say("error", f"resident: the orphan pin check failed ({type(e).__name__}: {e})")
+
+
 def beat(served: Iterable[Any], *, embed_mode: Callable[[Any], str], state: str | None = None,
          stop: Callable[[], bool] = lambda: False) -> dict[str, Any]:
     """One beat of the worker's keeper: the set resolved, its changes said,
@@ -1022,6 +1041,7 @@ def beat(served: Iterable[Any], *, embed_mode: Callable[[Any], str], state: str 
         with _lock:
             _last_why = None
     now = _now()
+    _release_orphan_pins(want, now)
     missing = [r for r in want if r.warm is not None and _loaded(r) is False]
     on_time = {r.key for r in missing if _due(r, now)}   # an eviction shrinks the budget below
     p = None

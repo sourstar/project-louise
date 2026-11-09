@@ -1101,3 +1101,16 @@ def test_a_partial_reading_never_becomes_the_processes_at_rest_size(monkeypatch,
     _system(monkeypatch, node, {"m": 4_000})
     model_load.loaded_models(SERVER, max_age_s=0.0)
     assert model_load.rest_vram(SERVER, "m") == 4_000 * MIB
+
+
+def test_the_beat_releases_orphan_pins_of_the_set_every_ten_minutes(tmp_path, node, monkeypatch):
+    from app import model_pins
+    asked = []
+    monkeypatch.setattr(model_pins, "release_orphans", lambda keys, **kw: asked.append(sorted(keys)) or [])
+    clock = {"mono": 1_000.0}
+    monkeypatch.setattr(resident, "_now", lambda: clock["mono"])
+    _beat([])
+    _beat([])
+    clock["mono"] += model_pins.ORPHAN_CHECK_S
+    _beat([])
+    assert len(asked) == 2 and asked[0] and all(k[0] == SERVER for k in asked[0])

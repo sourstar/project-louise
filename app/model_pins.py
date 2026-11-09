@@ -60,7 +60,7 @@ import threading
 import time
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Callable, Iterator
+from typing import Callable, Iterable, Iterator
 
 #: one LocalAI call, read or write
 CALL_TIMEOUT_S = 5.0
@@ -397,6 +397,59 @@ def reconcile(*, now: float | None = None, boot: bool = False,
                          f"{HOLDER_TTL_S:.0f} s dropped "
                          f"({', '.join(sorted({f'{m} ({h})' for m, h in dead}))})")
     return dropped
+
+
+#: how often the keeper looks for pins no holder keeps (app/resident.py)
+ORPHAN_CHECK_S = 600.0
+
+
+def release_orphans(models: Iterable[tuple[str, str]], *, now: float | None = None) -> list[str]:
+    """A PIN NO HOLDER KEEPS IS RELEASED (München, 2026-11-09). LocalAI
+    writes a pin into the model's YAML, so it outlives the process that
+    asked for it: a LocalAI restart, or a script rewriting a model's YAML
+    from its config while it was pinned (the engine swap of 2026-11-08 kept
+    MADLAD's), leaves a model pinned that no record here names. MADLAD
+    (8 GB, idle) and rerank-bge stayed pinned so, and with the corpus
+    encoders pinned as they process, the reclaimer could evict only the
+    question's own models: chat and the query encoder, in turn.
+
+    For `models` (the resident set: the models Ask uses, whose rule is
+    "preloaded, never pinned; evicted only if space is claimed", operator
+    2026-11-08), a model pinned on its server with NO ENTRY in the record —
+    no holder, no restore pending — is unpinned and said: a pin here is
+    processing's (operator 2026-10-23), and one without a holder is a
+    defect signal, counted with the failures. The record is read again
+    under its lock before each unpin, so a hold taken meanwhile wins. A
+    model outside the set (one the operator loads by hand) is never
+    touched. Returns the models unpinned."""
+    now = time.time() if now is None else now
+    pinned = []
+    for server, model in sorted(set(models)):
+        if _applies(server, model) and _read(server, model)[0]:
+            pinned.append((server, model))
+    if not pinned:
+        return []
+    done: list[str] = []
+    try:
+        with _state() as st:
+            for server, model in pinned:
+                if _key(server, model) in st["pins"]:
+                    continue                     # held, or a restore retried at reconcile
+                why = _set(server, model, False)
+                _fail(st, "orphan", server, model, "orphan check",
+                      "pinned on its server with no holder in Louise's record",
+                      "unpinned" if not why else f"the unpin failed ({why}); asked again at the next check",
+                      report=bool(why), now=now)
+                if not why:
+                    done.append(model)
+    except OSError as e:
+        _say("error", f"model pin: the record {_path()} could not be read ({e}); no orphan released")
+        return []
+    if done:
+        _say("error", f"model pin: {', '.join(done)} pinned with no holder in Louise's record (a pin a "
+                      f"LocalAI restart kept, or a model YAML rewritten while it was pinned): unpinned, "
+                      f"so the reclaimer may take it when space is claimed")
+    return done
 
 
 def status() -> dict:
