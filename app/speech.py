@@ -319,7 +319,7 @@ class Turns:
 
 
 _TURNS = Turns()
-_READING = re.compile(r"\s*([A-Za-z0-9_-]{1,64})/(\d{1,5})\s*")
+_READING = re.compile(r"\s*([A-Za-z0-9_-]{1,64})/(\d{1,5})(/last)?\s*")
 
 
 def reading_turn(header: str | None) -> tuple[str | None, int | None]:
@@ -327,6 +327,14 @@ def reading_turn(header: str | None) -> tuple[str | None, int | None]:
     malformed one (the sentence then goes as it comes)."""
     m = _READING.fullmatch(header or "")
     return (m.group(1), int(m.group(2))) if m else (None, None)
+
+
+def reading_last(header: str | None) -> bool:
+    """`Louise-Reading: <id>/<n>/last`: the answer has ended and this is its
+    last sentence — the reading's claim ends with it, not READING_LINGER_S
+    later (operator, 2026-11-09)."""
+    m = _READING.fullmatch(header or "")
+    return bool(m and m.group(3))
 
 
 #: synthesized sentences kept on the fast drive (LOUISE_CACHE_DIR, through
@@ -394,7 +402,8 @@ def synthesize(body: dict[str, Any], url: str | None = None) -> tuple[int, bytes
 
 
 def synthesize_timed(body: dict[str, Any], url: str | None = None, *,
-                     reading: str | None = None, n: int | None = None) -> tuple[int, bytes, str, list]:
+                     reading: str | None = None, n: int | None = None,
+                     last: bool = False) -> tuple[int, bytes, str, list]:
     """`synthesize` and its `Server-Timing` (W3C; 2026-11-08, to measure the
     reading's start and its pauses): `turn` the wait for the reading's
     sentence before (`Turns`), `synth` the model server's call in ms, `audio`
@@ -432,13 +441,13 @@ def synthesize_timed(body: dict[str, Any], url: str | None = None, *,
         clip = audio_ms(kept[0])
         return 200, kept[0], kept[1], [("cache", 1.0)] + ([("audio", clip)] if clip is not None else [])
     with _TURNS.turn(reading, n) as waited:
-        status, content, ctype, timing = _synthesize_call(url, model, out)
+        status, content, ctype, timing = _synthesize_call(url, model, out, last=last)
     if status == 200 and str(ctype).startswith("audio/"):
         _clip_put(key, content, ctype)
     return status, content, ctype, ([("turn", waited)] if reading is not None else []) + timing
 
 
-def _synthesize_call(url: str, model: str | None, out: dict) -> tuple[int, bytes, str, list]:
+def _synthesize_call(url: str, model: str | None, out: dict, *, last: bool = False) -> tuple[int, bytes, str, list]:
     t0 = time.perf_counter()
     # A PERSON'S QUERY, ITS LAST STEP (2026-11-08, München: one synthesis took
     # 0.81 of its clip's length alone and up to 1.49 beside the corpus
@@ -454,7 +463,12 @@ def _synthesize_call(url: str, model: str | None, out: dict) -> tuple[int, bytes
     # run together"): the claim lingers READING_LINGER_S after each sentence,
     # longer than the page waits between two, so the corpus stays aside — its
     # pins released — for the whole reading, not only inside each synthesis
-    with dispatch.question(linger=READING_LINGER_S), dispatch.interactive(dispatch.Level.CHAT):
+    # (operator, the same day: "pause the embeddings only if speech has to be
+    # processed and resume when all the answer has been processed or after a
+    # reasonable timeout": the page marks the answer's last sentence, and the
+    # claim ends with it; READING_LINGER_S is the timeout otherwise)
+    with dispatch.question(linger=0.0 if last else READING_LINGER_S), \
+            dispatch.interactive(dispatch.Level.CHAT):
         if not model:
             r = httpc.post(f"{url}/v1/audio/speech", json=out, timeout=CALL_TIMEOUT_S)
         else:

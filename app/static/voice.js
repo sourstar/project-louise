@@ -339,7 +339,11 @@
     // the reading's order: the node sends sentence n once n - 1 is back
     // (app/speech.py Turns), so the backend never makes the second first
     const resp = await fetch('/v1/audio/speech', { method: 'POST', signal: r.ctl.signal,
-      headers: { 'Content-Type': 'application/json', 'Louise-Reading': r.id + '/' + it.n }, body: JSON.stringify(body) });
+      // `/last`: the answer has ended and this is its last sentence — the
+      // node lets the corpus resume as soon as it is made (app/speech.py)
+      headers: { 'Content-Type': 'application/json',
+                 'Louise-Reading': r.id + '/' + it.n + (r.ended && it.n === r.items.length - 1 ? '/last' : '') },
+      body: JSON.stringify(body) });
     Object.assign(it.t, serverTiming(resp.headers.get('server-timing')));
     if (resp.status === 400) return null;      // nothing to say once its citations are gone
     if (!resp.ok) {

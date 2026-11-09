@@ -239,6 +239,8 @@ def test_a_sentence_whose_predecessor_never_comes_goes_after_a_bound(monkeypatch
 
 def test_the_reading_header_is_read_and_a_malformed_one_ignored():
     assert speech.reading_turn("ab12_-/7") == ("ab12_-", 7)
+    assert speech.reading_turn("r1/3/last") == ("r1", 3) and speech.reading_last("r1/3/last")
+    assert not speech.reading_last("r1/3") and not speech.reading_last(None) and not speech.reading_last("r1/3/x")
     for bad in (None, "", "x", "a/b", "a b/1", "a/123456", "x" * 65 + "/1"):
         assert speech.reading_turn(bad) == (None, None), bad
 
@@ -262,3 +264,20 @@ def test_a_sentence_made_once_is_answered_from_the_fast_drive_after_a_stop(serve
     other = speech.synthesize_timed({**body, "input": "Another sentence entirely."}, url="http://ai:8080")
     assert len(calls) == 4 and ("cache", 1.0) not in other[3]
     assert len(list((tmp_path / "cache" / "speech-clips").rglob("*.wav"))) == 2
+
+
+def test_the_last_sentence_of_an_answer_ends_the_pause_at_once(server, monkeypatch):
+    """Operator, 2026-11-09: pause the embeddings only while speech is
+    processed, and resume when the whole answer is, or after a timeout."""
+    from contextlib import contextmanager
+    from app.rage import dispatch
+    lingers = []
+
+    @contextmanager
+    def question(linger=None):
+        lingers.append(linger)
+        yield
+    monkeypatch.setattr(dispatch, "question", question)
+    speech.synthesize_timed({"model": "omnivoice-cpp", "input": "Uno."}, url="http://ai", reading="r", n=0)
+    speech.synthesize_timed({"model": "omnivoice-cpp", "input": "Due."}, url="http://ai", reading="r", n=1, last=True)
+    assert lingers == [speech.READING_LINGER_S, 0.0]
