@@ -498,6 +498,7 @@ def _stand_aside(name: str, deadline: float | None, timeout: float | None,
         while interactive_active():
             if began is None:
                 began = time.monotonic()
+                _run_aside_hooks()
             if _stopping.is_set():
                 raise GateTimeout(f"{name}: the process is stopping")
             now = time.monotonic()
@@ -539,11 +540,11 @@ class _Board:
                                                   name="interactive-claim", daemon=True)
                 self.refresher.start()
 
-    def leave(self) -> None:
+    def leave(self, linger: float = 0.0) -> None:
         with self.lock:
             self.live -= 1
             if self.live == 0:
-                _write_claim(0.0)
+                _write_claim(time.time() + linger if linger > 0 else 0.0)
 
     def _refresh(self) -> None:
         while True:
@@ -556,6 +557,48 @@ class _Board:
 
 
 _board = _Board()
+
+#: how long a question's claim outlasts its job: the page asks for the answer
+#: the moment the search ends, and the corpus is not to run in that gap
+QUESTION_LINGER_S = 15.0
+
+
+@contextmanager
+def question():
+    """A PERSON'S QUESTION, WHOLE (operator, 2026-11-09, choice B): the
+    node's claim for the whole of a search or an answer, not only for each
+    model call in it, so corpus work stands aside — and its encoders'
+    pins are released (`model_pins.release_for_question`) — from the
+    question's first step to QUESTION_LINGER_S after its last. München, the
+    same day: between the steps of one question the claim fell and the
+    corpus came back, its pinned encoders kept the card, and the reclaimer
+    took the question's own models — chat and qwen3-4b, then MADLAD and chat
+    — 2–3 cold loads of 6.5–12.3 s each. Declares no level: each call
+    inside still declares its own (`interactive`, `call`)."""
+    _board.enter()
+    try:
+        yield
+    finally:
+        _board.leave(linger=QUESTION_LINGER_S)
+
+
+#: called once by the first corpus request that stands aside for a claim
+#: (the worker's: release its encoders' pins, model_pins.release_for_question)
+_aside_hooks: list = []
+
+
+def on_stand_aside(fn) -> None:
+    """`fn()` when corpus work begins to stand aside for a person's query."""
+    if fn not in _aside_hooks:
+        _aside_hooks.append(fn)
+
+
+def _run_aside_hooks() -> None:
+    for fn in list(_aside_hooks):
+        try:
+            fn()
+        except Exception:   # noqa: BLE001 — a hook never fails the wait
+            pass
 
 
 @contextmanager

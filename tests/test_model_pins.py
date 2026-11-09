@@ -428,3 +428,31 @@ def test_node_pins_shows_the_record(runner, capsys):
     out = _json.loads(capsys.readouterr().out)
     assert [p["model"] for p in out["pins"]] == ["nemotron"]
     assert list(out["pins"][0]["holders"]) == ["worker embed wikidata"] and out["stuck"] == []
+
+
+def test_a_question_releases_the_workers_corpus_pins_and_keeps_them_off(runner, monkeypatch):
+    """Operator, 2026-11-09, choice B: while a person's question holds the
+    card, the worker's corpus pins go (each model back to its state before)
+    and a corpus batch starting meanwhile does not pin; a holder of another
+    process keeps its pin; after the question the next batch pins again."""
+    server = "http://ai:8080"
+    monkeypatch.setattr(model_pins, "_process_prefix", model_pins.WORKER)
+    asking = {"on": False}
+    monkeypatch.setattr(model_pins, "_question_now", lambda: asking["on"])
+    monkeypatch.setattr(model_pins, "_question_released", [0.0])
+    runner.pinned.update({"nemotron": False, "dar": False, "gate-model": False})
+    assert model_pins.hold(server, "nemotron", "worker embed wikidata")
+    assert model_pins.hold(server, "nemotron", "worker embed pid 7")
+    assert model_pins.hold(server, "dar", "worker embed normattiva")
+    assert model_pins.hold(server, "gate-model", "gate legi query (pid 99)")
+    asking["on"] = True
+    dropped = model_pins.release_for_question()
+    assert {m for m, _h in dropped} == {"nemotron", "dar"}
+    assert runner.pinned == {"nemotron": False, "dar": False, "gate-model": True}
+    assert not model_pins.hold(server, "nemotron", "worker embed wikidata"), "not pinned during a question"
+    assert runner.pinned["nemotron"] is False
+    assert model_pins.release_for_question() == [], "the stand-aside threads write once"
+    asking["on"] = False
+    assert model_pins.hold(server, "nemotron", "worker embed wikidata"), "after it: pinned again"
+    assert runner.pinned["nemotron"] is True
+    assert any("corpus pins released until it ends: dar, nemotron" in t for _l, t in runner.said)
