@@ -303,7 +303,8 @@ const sentenceOf = size => KNOWN[(size - 44 - 8000) / 20 - 1];
         '8. every sentence asked for once, whole, in order', sp);
   check(JSON.stringify(await played()) === JSON.stringify(SENTENCES), '8. played in order, the first though its speech came last', await played());
   const order = posted.speech.map(b => b.__reading);
-  check(order.every((h, i) => h && h.endsWith('/' + i) && h.split('/')[0] === order[0].split('/')[0]),
+  check(order.every((h, i) => h && h.replace(/\/last$/, '').endsWith('/' + i) && h.split('/')[0] === order[0].split('/')[0])
+        && order[order.length - 1].endsWith('/last') && order.slice(0, -1).every(h => !h.endsWith('/last')),
         '8. each sentence names its reading and its place (the node keeps the order: speech.Turns)', order);
   slow = {};
 
