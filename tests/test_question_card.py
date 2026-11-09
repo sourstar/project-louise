@@ -125,14 +125,13 @@ def test_on_question_releases_the_pins_at_once_and_unloads_behind(monkeypatch):
     assert [[r.model for r in w] for w in got] == [["nemotron"]]
 
 
-def test_after_the_search_the_query_encoders_go_and_the_answer_s_models_load(monkeypatch, isolated_config):
+def _answer_setup(monkeypatch, card):
     from app import collections as collections_mod, config, llm, retrieval, translate
-    card = Card(loaded={"vega-4b", "gate-q"}, pinned={"gate-q"}).install(monkeypatch)
-    monkeypatch.setattr(question_card, "_query_encoders", lambda cols: [(S, "vega-4b"), (S, "gate-q")])
-    monkeypatch.setattr(question_card, "_tts", lambda: (S, "omnivoice"))
     warmed = []
-    monkeypatch.setattr(llm, "warm", lambda *a, **k: warmed.append("chat"))
-    monkeypatch.setattr(translate, "warm", lambda: warmed.append("madlad"))
+    monkeypatch.setattr(question_card, "_query_encoders", lambda cols: [(S, "vega-4b"), (S, "bge-m3"), (S, "gate-q")])
+    monkeypatch.setattr(question_card, "_tts", lambda: (S, "omnivoice"))
+    monkeypatch.setattr(llm, "warm", lambda *a, **k: warmed.append("chat") or card.loaded.add("chat"))
+    monkeypatch.setattr(translate, "warm", lambda: warmed.append("madlad") or card.loaded.add("madlad"))
     monkeypatch.setattr(resident, "_speech_warm", lambda s, m, kind, role: lambda: warmed.append(m))
     monkeypatch.setattr(collections_mod, "reranker_for", lambda c: type("R", (), {"url": S, "model": "rerank"})())
     monkeypatch.setattr(retrieval, "_warm_reranker", lambda r: warmed.append("rerank"))
@@ -140,23 +139,66 @@ def test_after_the_search_the_query_encoders_go_and_the_answer_s_models_load(mon
     monkeypatch.setattr(config, "CHAT_MODEL", "chat")
     monkeypatch.setattr(config, "TRANSLATE_URL", S)
     monkeypatch.setattr(config, "TRANSLATE_MODEL", "madlad")
-    question_card.after_search(["gutenberg", "pubmed"], background=False)
-    assert "vega-4b" not in card.loaded and "gate-q" in card.loaded, "a pinned query encoder stays"
-    assert warmed == ["chat", "madlad", "omnivoice", "rerank"], "in the order the answer meets them"
-    warmed.clear()
-    question_card.after_search(["gutenberg"], speed=True, background=False)
-    assert "madlad" not in warmed, "Speed: the chat model translates; MADLAD is not loaded for it"
-
-
-def test_before_the_search_tts_goes_only_if_the_query_encoders_do_not_fit(monkeypatch):
-    card = Card(loaded={"omnivoice"}).install(monkeypatch)
-    monkeypatch.setattr(question_card, "_query_encoders", lambda cols: [(S, "vega-4b")])
-    monkeypatch.setattr(question_card, "_tts", lambda: (S, "omnivoice"))
-    monkeypatch.setattr(model_load, "size_vram", lambda s, m: 6_000 * 2**20)
     monkeypatch.setattr(resident, "_threshold", lambda s: 0.95)
-    monkeypatch.setattr(resident, "_card", lambda: (32_656 * 2**20, 24_000 * 2**20))
-    assert question_card.before_search(["gutenberg"]) is None and "omnivoice" in card.loaded, "it fits"
-    monkeypatch.setattr(resident, "_card", lambda: (32_656 * 2**20, 27_000 * 2**20))
+    mib = {"vega-4b": 5_600, "bge-m3": 1_300, "gate-q": 900, "chat": 7_300, "madlad": 8_000,
+           "omnivoice": 2_200, "rerank": 1_500, "nemotron": 4_400}
+    monkeypatch.setattr(model_load, "size_vram", lambda s, m: mib[m] * 2**20)
+    return warmed
+
+
+def test_after_the_search_the_query_encoders_stay_when_the_answer_s_models_fit(monkeypatch, isolated_config):
+    """München, 2026-11-09, on a2aaf67: unloaded after every search, the
+    query encoders cost every Ask 4–5 cold loads (24–32 s of its search)."""
+    card = Card(loaded={"vega-4b", "bge-m3", "gate-q", "chat", "omnivoice", "rerank"},
+                pinned={"gate-q"}).install(monkeypatch)
+    warmed = _answer_setup(monkeypatch, card)
+    monkeypatch.setattr(resident, "_card", lambda: (32_656 * 2**20, 19_000 * 2**20))   # 12,023 MiB free
+    question_card.after_search(["gutenberg"], background=False)
+    assert {"vega-4b", "bge-m3"} <= card.loaded and card.asked == [], "MADLAD's 8,000 MiB fit: nothing goes"
+    assert warmed == ["madlad"], "only the missing model is loaded"
+
+
+def test_after_the_search_the_largest_query_encoder_goes_only_as_far_as_the_room_needs(
+        monkeypatch, isolated_config):
+    card = Card(loaded={"vega-4b", "bge-m3", "gate-q", "omnivoice", "rerank"},
+                pinned={"gate-q"}).install(monkeypatch)
+    warmed = _answer_setup(monkeypatch, card)
+    monkeypatch.setattr(resident, "_card", lambda: (32_656 * 2**20, 21_000 * 2**20))   # 10,023 MiB free
+    question_card.after_search(["gutenberg"], background=False)
+    assert "vega-4b" not in card.loaded, "chat 7,300 + MADLAD 8,000 need 5,277 MiB more: the 4B goes"
+    assert {"bge-m3", "gate-q"} <= card.loaded, "no more than the room needs; a pinned one never"
+    assert warmed == ["chat", "madlad"], "in the order the answer meets them"
+    # Speed: MADLAD neither loaded nor counted
+    card = Card(loaded={"vega-4b", "bge-m3", "omnivoice", "rerank"}).install(monkeypatch)
+    warmed = _answer_setup(monkeypatch, card)
+    question_card.after_search(["gutenberg"], speed=True, background=False)
+    assert warmed == ["chat"] and card.asked == [], "chat's 7,300 MiB fit in 10,023"
+
+
+def test_after_the_search_without_a_reading_of_the_card_the_query_encoders_go(monkeypatch, isolated_config):
+    card = Card(loaded={"vega-4b", "bge-m3", "omnivoice", "rerank"}).install(monkeypatch)
+    _answer_setup(monkeypatch, card)
+    monkeypatch.setattr(resident, "_card", lambda: None)
+    question_card.after_search(["gutenberg"], background=False)
+    assert not {"vega-4b", "bge-m3"} & card.loaded
+
+
+def test_before_the_search_tts_goes_only_if_the_query_encoders_cannot_fit_with_what_the_question_frees(
+        monkeypatch, isolated_config):
+    """München, 2026-11-09, on a2aaf67: counted on the card as it was —
+    the corpus encoders still on it — omnivoice went at every Ask's start,
+    and the first sentence waited 14 s for it."""
+    card = Card(loaded={"omnivoice", "chat", "nemotron"}).install(monkeypatch)
+    _answer_setup(monkeypatch, card)
+    monkeypatch.setattr(question_card, "_query_encoders", lambda cols: [(S, "vega-4b"), (S, "bge-m3")])
+    monkeypatch.setattr(model_load, "held_sizes",
+                        lambda s, max_age_s=None: {"omnivoice": (1, 2_200 * 2**20), "chat": (2, 7_300 * 2**20),
+                                                    "nemotron": (3, 4_400 * 2**20)})
+    # 3,023 MiB free + nemotron's 4,400 (a corpus encoder) >= 6,900 needed
+    monkeypatch.setattr(resident, "_card", lambda: (32_656 * 2**20, 28_000 * 2**20))
+    assert question_card.before_search(["gutenberg"]) is None and "omnivoice" in card.loaded
+    # 1,023 + 4,400 < 6,900: the voice goes
+    monkeypatch.setattr(resident, "_card", lambda: (32_656 * 2**20, 30_000 * 2**20))
     assert question_card.before_search(["gutenberg"]) == "omnivoice" and "omnivoice" not in card.loaded
 
 

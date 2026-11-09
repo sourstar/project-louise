@@ -819,7 +819,7 @@ def _relay_search(job: relay.Job, body: AskQueryBody) -> None:
     # models after — behind, so the results are not held
     from . import question_card
     cols = _question_collections(body.collections)
-    question_card.before_search(cols)
+    question_card.before_search(cols, speed=body.speed)
     with mt.speed(body.speed):
         result = _ask_result(body)
     question_card.after_search(cols, speed=body.speed)

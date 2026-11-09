@@ -43,14 +43,30 @@ were more recently used than MADLAD. Chat ↔ MADLAD cold loads of 5.5–15.2 s 
 | 2 corpus encoders unloaded, idle first, busy retried (4 × 2 s), gate/pass pins kept | app/question_card.py `free_card`, `on_question` (stand-aside hook) and `watch` (1 s, whether corpus work runs or not) | tests/test_question_card.py |
 | 2 the cut batch is a deferral | the existing classification (embeddings `_endpoint_fault`): LocalAI's gRPC 500, a dropped connection | tests/test_endpoint_classification.py, worker path, documents untouched |
 | 3 MADLAD before the search | confirmed: language_plan translates the query before it (Quality); the chat model does it under Speed | tests/test_relay.py |
-| 3 short of space → TTS unloaded | `question_card.before_search` (sizes known, probe read; else nothing) | tests/test_question_card.py |
-| 4 query encoders off; chat, MADLAD (not under Speed), TTS, rerankers loaded behind | `question_card.after_search`, from web `_relay_search` | tests/test_question_card.py, tests/test_relay.py |
+| 3 short of space → TTS unloaded | `question_card.before_search`: only if the query encoders cannot fit in the free space PLUS what the question does not use (amended after the measurement below) | tests/test_question_card.py |
+| 4 the answer's models loaded behind; query encoders unloaded only for their room | `question_card.after_search`: chat, MADLAD (not under Speed), TTS, rerankers that are missing; a query encoder goes, largest first, only if they do not fit (amended below); no probe reading → they go | tests/test_question_card.py, tests/test_relay.py |
 | 5 nothing evicted mid-question | the keeper loads nothing while the claim is held (`resident.beat`); corpus stands aside and its encoders are off | tests/test_question_card.py |
 | 6 resume after 5 min with no activity | dispatch `QUESTION_LINGER_S` 15 → 300 s for the search, the answer, the results' translation, every sentence read (the 30 s and the last sentence's 0 retired); `POST /ask/active` from voice.js on the microphone and on each clip played (one a minute at most) | tests/test_speech.py, tests/test_relay.py |
 | 8 Quality / Speed | ask.html group, `translate.speed`, `AskQueryBody.speed`, `TranslateBody.speed` | tests/test_relay.py, tests/test_ask_switch_browser.py |
 
 The Ask relay only: `/ask/query` and `/v1/chat/completions` keep their behaviour for other clients. Pins are not used
 for spec 5 (operator 2026-11-08: preloaded, never pinned); nothing else loads while the question holds the card.
+
+## Measured on a2aaf67 (München, 2026-11-09, one Italian Ask per mode, node running)
+
+| | Quality | Speed |
+|---|---|---|
+| chat cold mid-answer | none | none |
+| TTS | unloaded at the question's start; first sentence 14.1 s | unloaded at the start; reloaded (8.4 s) while the answer streamed; tap → first sound 2 ms |
+| query encoders | 5 cold: 5.5 / 9.1 / 7.9 / 13.9 / 8.1 s; search 32.4 s | 4 cold: 5.4 / 7.0 / 11.6 / 7.4 s; search 24.0 s |
+| answer | 2,308 chars in 9.9 s, first word 1.8 s | 8.1 s, first word 0.1 s |
+| wikidata resume | ~7 min after the answer (Nemotron cold 5.2 s) | ~7 min |
+| busy encoder after 4 tries | none | none |
+
+Two defects of the build, both fixed by measuring the room (the spec's own condition, "if space is short"): spec 4
+unloaded the query encoders after every search whether or not the answer's models needed the room, so every Ask paid
+them cold (and the keeper preloads them only after the 5 minutes); spec 3 counted the card as it was at the
+question's start, with the corpus encoders the worker was unloading still on it, so it unloaded TTS every time.
 
 ## Measurement after the build (München)
 
