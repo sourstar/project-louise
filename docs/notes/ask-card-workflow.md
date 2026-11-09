@@ -88,6 +88,21 @@ encoder that gives TTS its room goes. Each Ask search now writes one line of its
 languages, catalog, fts, dense, rerank`, the slowest collection of each leg), which was measured all along and never
 written: the 41–46 s with at most one cold load is to be read from it.
 
+## Measured on 4027f3c (München, 2026-11-09)
+
+TTS kept and tap → sound 2–3 ms in all three Asks. The search's own line, verbatim:
+`search 43,761 ms (quality): languages 2,866, catalog 725, fts 20,074 (wikipedia), dense 13,344, rerank 6,913`;
+29,465 ms and 37,894 ms for the next two, wikipedia's fts 19.0–24.9 s each time. München's probe of wikipedia's ten
+language groups (Q1's query): reload 0–1 ms warm (not the cost), the searches 13,204 ms one after the other per
+variant (en 3,280, fr 2,254, it 2,004 … other 215), two variants an Ask. **Fixed**: the text leg runs its groups and
+variants at once (app/retrieval.py `FTS_THREADS`; tantivy releases the GIL, measured 3.2× on 4 cores), the lists
+fused in the serial order (tests/test_fts_parallel.py): expected ~3.3 s, the slowest group. Fewer segments (en 30,
+fr 34) would cut the slowest group further: a merge, measured on its own.
+
+MADLAD's 8,005 MiB on the card is not its weights (the F16 GGUF is 887 MB): `parallel: 7` slots of 4,096 context with
+flash attention off. Fewer slots (or flash attention, if MADLAD's T5 path takes it) would free several GB — the room
+the set lacks (32.9 GB against 31.0) — at a cost to how many results translate at once: measured before any change.
+
 ## Measurement after the build (München)
 
 One Italian Ask: chat/MADLAD/TTS cold loads mid-answer (target 0), time to first word and first sound, wikidata's

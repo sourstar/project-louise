@@ -28,6 +28,7 @@ public API surface is unchanged.
 """
 import contextvars
 import json
+import os
 import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass
@@ -929,6 +930,11 @@ def _catalog_variant(collection, hits: list[dict], query: str, restrict: dict) -
     return out
 
 
+#: the text leg's searches at once, per collection: its language groups and
+#: their variants (wikipedia: 10 groups x 2 variants an Ask)
+FTS_THREADS = max(2, min(16, os.cpu_count() or 4))
+
+
 def _search_one_collection(con, collection, query: str, k: int, mode: str, translate: bool,
                             entity_ids: list[str], plan: LanguagePlan | None = None,
                             depth: int = 0, book_ids: set[int] | None = None,
@@ -992,24 +998,42 @@ def _search_one_collection(con, collection, query: str, k: int, mode: str, trans
         # 05 §5.2 (amended 2026-10-10): the main languages, the query's own,
         # the mixed groups — the other one-language indexes get no variant
         main = plan.main_for(collection) if hasattr(plan, "main_for") else None
+        tasks: list[tuple[str, str]] = []
         for group in fts.existing_groups(collection):
             if not plan.searches(group):
                 continue
-            cancel.checkpoint()            # one group per language: a query can fan out wide
             held = fts.group_languages(group, collection)
             # every variant's list goes to the fusion as it is: they are
             # variants of the ONE text leg, and `_merge_rrf` ranks a record
             # by its best rank across all of them (05 §5.2)
             for q in (plan.variants(group, held, main) if main is not None
                       else plan.variants(group, held)):
-                # deep enough to hold `limit` RECORDS, not chunks (05 §5.1,
-                # amended 2026-10-10: app/leg_depth.py)
-                hits = fts.search_records(group, q, limit, collection=collection,
-                                          langs=plan.lang_filter(group), **restrict)
-                if hits:
-                    if q == core:
-                        own.add(len(lists))      # the user's own words: first on a tie
-                    lists.append(hits)
+                tasks.append((group, q))
+        cancel.checkpoint()
+
+        def one(task: tuple[str, str]) -> list[dict]:
+            group, q = task
+            cancel.checkpoint()            # one group per language: a query can fan out wide
+            # deep enough to hold `limit` RECORDS, not chunks (05 §5.1,
+            # amended 2026-10-10: app/leg_depth.py)
+            return fts.search_records(group, q, limit, collection=collection,
+                                      langs=plan.lang_filter(group), **restrict)
+        # THE GROUPS AND THEIR VARIANTS AT ONCE (CLAUDE.md: multi-threading is
+        # a must; München, 2026-11-09: wikipedia's ten language indexes, one
+        # after the other, 13.2 s a variant and 19-25 s an Ask — en alone
+        # 3.3 s). tantivy releases the GIL while it searches (measured 3.2x
+        # on 4 cores); the lists come back in the tasks' order, so the fusion
+        # sees exactly what the serial loop gave it (invariant 3).
+        if len(tasks) > 1:
+            with ThreadPoolExecutor(max_workers=min(len(tasks), FTS_THREADS)) as ex:
+                results = list(ex.map(cancel.carry(one), tasks))
+        else:
+            results = [one(t) for t in tasks]
+        for (group, q), hits in zip(tasks, results):
+            if hits:
+                if q == core:
+                    own.add(len(lists))          # the user's own words: first on a tie
+                lists.append(hits)
         if fts.names_capable(collection):
             # BY NAME (operator, 2026-10-24; wikidata): the records one of
             # whose names in any language IS a word sequence of the reader's
