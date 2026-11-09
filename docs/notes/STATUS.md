@@ -34,8 +34,9 @@ measured (published figures disagree).
   chat ↔ MADLAD (5.5–15.2 s): the card cannot hold chat 7.3 + MADLAD 8.0 + query encoders ~8.8 + Nemotron 4.4 +
   voice and rerankers. The operator's corrected workflow is BUILT and LIVE (#458 → #459 → #460, node on 4027f3c):
   chat never cold mid-answer, tap → first sound 2–3 ms; measurements in [ask-card-workflow.md](ask-card-workflow.md).
-  #461 (wikipedia's fts groups searched at once, 19–25 s → ~3.3 s expected) merged, NOT deployed: the operator's
-  word. MADLAD `parallel: 7 → 4` by hand on the node (operator, 2026-11-09, without an A/B; backup
+  #461 (the fts groups searched at once) LIVE 16:36Z: fts 3.6–9.4 s against 19–25 s; a warm Quality Ask's first
+  word 14.3 s from Ask (was 30–50 s). Open for Friday: MADLAD's load in the language step evicts chat; Speed's ~15 s
+  no step accounts for; rerank 6.7 s. MADLAD `parallel: 7 → 4` by hand on the node (operator, 2026-11-09, without an A/B; backup
   `.bak-20261109-parallel7`). FRIDAY, in the operator's order: (1) a "Quick / Quality" text-search switch beside
   Quality / Speed — Quick searches only the query's language and English; (2) MADLAD's slots configurable, not a hand
   edit of its YAML; (3) why 7 slots were chosen.

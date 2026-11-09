@@ -103,6 +103,19 @@ MADLAD's 8,005 MiB on the card is not its weights (the F16 GGUF is 887 MB): `par
 flash attention off. Fewer slots (or flash attention, if MADLAD's T5 path takes it) would free several GB — the room
 the set lacks (32.9 GB against 31.0) — at a cost to how many results translate at once: measured before any change.
 
+## Measured on 1d5ba93 + MADLAD `parallel: 4` (München, 2026-11-09 16:41Z, node running)
+
+| | search | languages | fts (slowest) | dense | rerank | first word from Ask | in the answer |
+|---|---|---|---|---|---|---|---|
+| Quality 1 | 26.1 s | 12.3 s (MADLAD cold 8.5 s, evicted chat) | 5.6 s (wikipedia) | 1.9 s | 6.7 s | 42.4 s | 15.2 s (chat cold 13.4 s) |
+| Quality 2 (≤ 5 min) | 12.1 s | 1.1 s | 3.6 s (wikipedia) | 2.0 s | 6.8 s | **14.3 s** (best yet) | 0.1 s |
+| Speed | 37.6 s | 2.1 s | 9.4 s (wikidata) | 2.1 s | 6.7 s | 38.8 s | 0.1 s |
+
+fts fixed by #461 (3.6–9.4 s against 19.0–24.9 s); tap → sound 1–2 ms throughout. Open, for Friday: (a) Quality's
+language step loads MADLAD (~8.5 s) and that evicts chat; (b) Speed's ~15 s not covered by the step times (the legs
+add to ~22 s of 37.6; vega-medcpt-article-ov was loading meanwhile); (c) rerank 6.7 s, steady, now the largest fixed
+cost after fts.
+
 ## Measurement after the build (München)
 
 One Italian Ask: chat/MADLAD/TTS cold loads mid-answer (target 0), time to first word and first sound, wikidata's
