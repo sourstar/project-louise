@@ -29,6 +29,9 @@ server speaks is determined from the server (`shape`), never configured.
 """
 from __future__ import annotations
 
+import contextvars
+from contextlib import contextmanager
+
 import json
 import re
 import threading
@@ -50,8 +53,26 @@ _lock = threading.Lock()
 _languages: tuple[float, frozenset[str]] | None = None
 
 
+#: THE READER'S SPEED CHOICE (operator, 2026-11-09, choice B: the Ask page's
+#: "Quality / Speed" switch): with Speed on, nothing here is asked — every
+#: caller falls back to the chat model already on the card (`llm.translate_query`,
+#: `llm.translate_texts`), and MADLAD is not loaded for that question (8 GB)
+_speed: contextvars.ContextVar[bool] = contextvars.ContextVar("louise_translate_speed", default=False)
+
+
+@contextmanager
+def speed(on: bool):
+    """The block's translations by the chat model when `on` (the reader's
+    Speed), by the translation model otherwise (Quality, the default)."""
+    token = _speed.set(bool(on))
+    try:
+        yield
+    finally:
+        _speed.reset(token)
+
+
 def available() -> bool:
-    return bool(config.TRANSLATE_URL)
+    return bool(config.TRANSLATE_URL) and not _speed.get()
 
 
 def health_url() -> str:

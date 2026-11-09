@@ -201,7 +201,7 @@ def test_a_synthesis_holds_the_interactive_claim_and_no_gate(server, monkeypatch
         seen.append(("post", None)), calls.append((url, json)))[0] or type("R", (), {
             "status_code": 200, "content": b"RIFF", "headers": {"content-type": "audio/wav"}})())
     speech.synthesize({"model": "omnivoice-cpp", "input": "Dante wrote it."}, url="http://ai")
-    assert seen == [("question", speech.READING_LINGER_S), ("enter", dispatch.Level.CHAT), ("post", None),
+    assert seen == [("question", None), ("enter", dispatch.Level.CHAT), ("post", None),
                     ("leave", dispatch.Level.CHAT)], "the reading holds the card past each sentence"
     assert gates == [], "no gate: speech never waits behind the answer being written"
 
@@ -266,9 +266,11 @@ def test_a_sentence_made_once_is_answered_from_the_fast_drive_after_a_stop(serve
     assert len(list((tmp_path / "cache" / "speech-clips").rglob("*.wav"))) == 2
 
 
-def test_the_last_sentence_of_an_answer_ends_the_pause_at_once(server, monkeypatch):
-    """Operator, 2026-11-09: pause the embeddings only while speech is
-    processed, and resume when the whole answer is, or after a timeout."""
+def test_every_sentence_the_last_included_keeps_the_question_open_five_minutes(server, monkeypatch):
+    """Operator, 2026-11-09 (docs/notes/ask-card-workflow.md spec 6): corpus
+    work resumes when the reading has ended AND five minutes pass with no
+    activity — the question's linger after every sentence, the last one
+    included (it replaced the reading's 30 s and the last sentence's 0)."""
     from contextlib import contextmanager
     from app.rage import dispatch
     lingers = []
@@ -280,4 +282,4 @@ def test_the_last_sentence_of_an_answer_ends_the_pause_at_once(server, monkeypat
     monkeypatch.setattr(dispatch, "question", question)
     speech.synthesize_timed({"model": "omnivoice-cpp", "input": "Uno."}, url="http://ai", reading="r", n=0)
     speech.synthesize_timed({"model": "omnivoice-cpp", "input": "Due."}, url="http://ai", reading="r", n=1, last=True)
-    assert lingers == [speech.READING_LINGER_S, 0.0]
+    assert lingers == [None, None] and dispatch.QUESTION_LINGER_S == 300.0

@@ -27,6 +27,16 @@
 (function () {
   'use strict';
   const RATE = 16000, AUTO_STOP_MS = 1500, MAX_MS = 60000;
+  // THE PAGE'S ACTIVITY (operator, 2026-11-09; docs/notes/ask-card-workflow.md
+  // spec 6): the microphone and audio playing keep the question open, so the
+  // node resumes its corpus work only after five minutes with neither — one
+  // ping a minute at most
+  const ACTIVE_EVERY_MS = 60000;
+  let pinged = 0;
+  function active() {
+    const now = Date.now(); if (now - pinged < ACTIVE_EVERY_MS) return; pinged = now;
+    fetch('/ask/active', { method: 'POST' }).catch(() => {});
+  }
   // the energy check: loud is over FLOOR_MIN and over FLOOR_X times the
   // quietest window heard so far (the room's own level)
   const FLOOR_MIN = 0.012, FLOOR_X = 4;
@@ -119,7 +129,7 @@
   async function start() {
     stopReading(); auto = false;         // the microphone would hear the answer
     unlock();                            // inside the tap: the answer may be read later
-    busy = true; micState('busy', 'opening the microphone…');
+    busy = true; micState('busy', 'opening the microphone…'); active();
     let stream;
     try {
       stream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true } });
@@ -318,7 +328,7 @@
       const a = player;
       const done = () => { if (a.onended === done) a.onended = a.onerror = null; if (r.wake === done) r.wake = null; resolve(); };
       a.onended = a.onerror = done; r.wake = done;
-      a.src = url;
+      a.src = url; active();
       a.play().catch(e => { if (e && e.name === 'NotAllowedError') r.blocked = true; done(); });
     });
   }

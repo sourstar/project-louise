@@ -33,5 +33,8 @@ def test_both_choices_share_one_row_inside_the_screen_at_full_size(tmp_path, iso
     a, b = got["boxes"]
     assert abs(a["top"] - b["top"]) < 1, "both choices on one line"
     assert a["left"] >= 0 and b["right"] <= got["width"], "inside the screen"
+    assert got["speedTexts"] == ["Quality", "Speed"]
+    assert got["speedChecked"] == "quality", "Quality is the default"
+    assert all(x["left"] >= 0 and x["right"] <= got["width"] for x in got["speedBoxes"]), "inside the screen"
     if width == 360:
         assert b["height"] < 2 * (got["lineHeight"] or 15) + 14, "one line of text each at 360 px"

@@ -740,8 +740,9 @@ def test_a_runner_that_gives_no_sizes_gives_no_sample(tmp_path, node, monkeypatc
 
 
 def test_the_order_is_tier_then_recency_then_size_and_tier_one_is_never_pushed_out():
-    """chat, rerankers, speech (TTS, then STT and VAD); query encoders; the
-    document encoders that differ from their query encoder; MADLAD last.
+    """chat, MADLAD, TTS, the rerankers, then STT and VAD (operator,
+    2026-11-09: docs/notes/ask-card-workflow.md spec 1); query encoders; the
+    document encoders that differ from their query encoder.
     Within a tier the most recently used first, the never used after them,
     smaller first. First-fit: a lower tier only takes what the ones above
     left; one on the CPU costs nothing and always fits."""
@@ -761,30 +762,31 @@ def test_the_order_is_tier_then_recency_then_size_and_tier_one_is_never_pushed_o
     mem = resident.Memory(sizes={(SERVER, m): v * MIB for m, v in mib.items()}, total=32_656 * MIB)
     used = {(SERVER, "vega-4b"): now - 3_600, (SERVER, "vega-bge-m3"): now - 600,
             (SERVER, "louise-translate"): now - 60}                   # recent, and still last
-    tier1 = 7_441 + 800 + 1_664 + 2_000 + 1_500
+    tier1 = 7_441 + 7_879 + 800 + 1_664 + 2_000 + 1_500
     # the budget: tier 1, vega-bge-m3, and 500 MiB more
     margin = int(0.95 * 32_656 * MIB) - (tier1 + 1_200 + 500) * MIB
     mem.peaks[int(now // resident.MARGIN_BUCKET_S * resident.MARGIN_BUCKET_S)] = margin
     p = resident.plan(want, mem, threshold=0.95, used=used, now=now)
     assert [x.resident.model for x in p.placed] == [
-        "louise-chat", "rerank-medcpt", "rerank-bge", "omnivoice", "whisper", "silero",
-        "vega-bge-m3", "vega-4b", "vega-tiny", "vega-medcpt-query", "vega-medcpt-article", "louise-translate"]
-    assert [x.tier for x in p.placed] == [1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 3, 4]
+        "louise-chat", "louise-translate", "omnivoice", "rerank-medcpt", "rerank-bge", "whisper", "silero",
+        "vega-bge-m3", "vega-4b", "vega-tiny", "vega-medcpt-query", "vega-medcpt-article"]
+    assert [x.tier for x in p.placed] == [1, 1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 3]
     fits = {x.resident.model: x.fits for x in p.placed}
-    assert all(fits[m] for m in ("louise-chat", "rerank-medcpt", "rerank-bge", "omnivoice", "whisper",
-                                 "silero")), "tier 1 first: nothing below displaces it"
+    assert all(fits[m] for m in ("louise-chat", "louise-translate", "rerank-medcpt", "rerank-bge", "omnivoice",
+                                 "whisper", "silero")), "tier 1 first: nothing below displaces it"
     assert fits["vega-bge-m3"] and not fits["vega-4b"], "the recently used 4B does not fit"
     assert fits["vega-tiny"] and fits["vega-medcpt-query"] is False, "first-fit: 300 of the 500 left"
-    assert not fits["vega-medcpt-article"] and not fits["louise-translate"]
+    assert not fits["vega-medcpt-article"]
     four_b = next(x for x in p.placed if x.resident.model == "vega-4b")
-    assert four_b.detail.startswith("rank 8 of 12, tier 2 of 4: query encoders, last used 1 h ago, the least "
+    assert four_b.detail.startswith("rank 9 of 12, tier 2 of 3: query encoders, last used 1 h ago, the least "
                                     "recently used of its tier; the models placed above it take")
     assert four_b.why == f"not preloaded — {p.says()}; {four_b.detail}"
     # the 4B used most recently of all: still never above tier 1
     used[(SERVER, "vega-4b")] = now
     p = resident.plan(want, mem, threshold=0.95, used=used, now=now)
-    assert [x.resident.model for x in p.placed][:7] == [
-        "louise-chat", "rerank-medcpt", "rerank-bge", "omnivoice", "whisper", "silero", "vega-4b"]
+    assert [x.resident.model for x in p.placed][:8] == [
+        "louise-chat", "louise-translate", "omnivoice", "rerank-medcpt", "rerank-bge", "whisper", "silero",
+        "vega-4b"]
     assert all(x.fits for x in p.placed if x.tier == 1)
     # the CPU's model costs nothing: in, however full the card
     mem.peaks = {k: int(0.95 * 32_656 * MIB) for k in mem.peaks}       # a margin of the whole line
@@ -802,33 +804,33 @@ def test_a_set_larger_than_the_budget_preloads_only_the_top_part_and_says_so_onc
     g = _with(_collection(tmp_path, "gutenberg"), "vega-4b", "lazy", reranker="rerank-bge")
     pm = _with(_collection(tmp_path, "pubmed"), "vega-medcpt-article", "lazy", query_model="vega-medcpt-query")
     _known(louise_chat=6_000, rerank_bge=1_600, vega_4b=18_000, vega_medcpt_query=1_100,
-           vega_medcpt_article=4_000, louise_translate=7_900)
+           vega_medcpt_article=14_000, louise_translate=7_900)
     node_state.touch_encoder(SERVER, "vega-medcpt-query", now=resident._wall() - 120)
     node_state.touch_encoder(SERVER, "vega-4b", now=resident._wall() - 3_600)
     _system(monkeypatch, node, {})
     _card(monkeypatch, 32_656, 1_000)                                # nothing loaded; 1,000 MiB elsewhere
     out = _beat([g, pm])
-    assert sorted(node.warmed) == ["louise-chat", "rerank-bge", "vega-4b", "vega-medcpt-query"]
-    assert out["out_of_budget"] == [(SERVER, "louise-translate"), (SERVER, "vega-medcpt-article")]
+    assert sorted(node.warmed) == ["louise-chat", "louise-translate", "rerank-bge", "vega-medcpt-query"]
+    assert out["out_of_budget"] == [(SERVER, "vega-4b"), (SERVER, "vega-medcpt-article")]
     assert out["budget"] // MIB == 30_023, "0.95 × 32,656 − 1,000 measured"
     fell = [t for _, t in node.said if "not preloaded —" in t]
     assert len(fell) == 1
     assert fell[0].startswith("resident: not preloaded — the budget is 30,023 MiB (the 0.95 line 31,023 MiB "
                               "− margin 1,000 MiB, measured over 6 h): ")
-    assert ("vega-medcpt-article — encoder (pubmed) — rank 5 of 6, tier 3 of 4: document encoders, never "
-            "used here; the models placed above it take 26,700 MiB and it needs 4,000 MiB — loaded at its "
+    assert ("vega-medcpt-article — encoder (pubmed) — rank 6 of 6, tier 3 of 3: document encoders, never "
+            "used here; the models placed above it take 16,600 MiB and it needs 14,000 MiB — loaded at its "
             "first request, then left to the reclaimer's LRU") in fell[0]
-    assert "louise-translate — translation — rank 6 of 6, tier 4 of 4: translation" in fell[0]
+    assert "vega-4b — query encoder, encoder (gutenberg) — rank 5 of 6, tier 2 of 3: query encoders" in fell[0]
     node.warmed.clear()
     _beat([g, pm])
     assert node.warmed == [] and len([t for _, t in node.said if "not preloaded —" in t]) == 1, "said once"
     # the plan is made again before each load: one out of the budget is not loaded behind a beat
-    resident._warm_all([resident._last[(SERVER, "louise-translate")]], lambda: False)
+    resident._warm_all([resident._last[(SERVER, "vega-medcpt-article")]], lambda: False)
     assert node.warmed == []
-    # room again (the 4B's collection no longer served): back in, said, and loaded
+    # room again (gutenberg no longer served, its reranker with it): back in, said, and loaded
     _beat([pm])
-    assert "louise-translate" in node.warmed and "vega-medcpt-article" in node.warmed
-    assert any("back in the budget" in t and "louise-translate" in t for _, t in node.said)
+    assert "vega-medcpt-article" in node.warmed
+    assert any("back in the budget" in t and "vega-medcpt-article" in t for _, t in node.said)
 
 
 def test_the_budget_never_unloads_anything(tmp_path, node, monkeypatch):
@@ -841,7 +843,7 @@ def test_the_budget_never_unloads_anything(tmp_path, node, monkeypatch):
     _system(monkeypatch, node, sizes)
     _card(monkeypatch, 32_656, sum(sizes.values()) + 500)
     out = _beat([g])
-    assert (SERVER, "louise-translate") in out["out_of_budget"]
+    assert (SERVER, "vega-4b") in out["out_of_budget"]
     assert node.unloads == [] and set(sizes) <= node.held and node.warmed == []
     assert node.pin_calls == [] and node.runner.puts() == []
     src = inspect.getsource(resident)
@@ -875,7 +877,7 @@ def test_a_back_off_names_the_model_s_tier(tmp_path, node, monkeypatch):
     _beat([])
     said = [t for _, t in node.said if "back-off" in t]
     assert len(said) == 1 and said[0].startswith("resident: louise-chat — chat — off the card again")
-    assert said[0].endswith("(back-off 1, at most 2 h; tier 1 of 4: chat, rerankers and speech)")
+    assert said[0].endswith("(back-off 1, at most 2 h; tier 1 of 3: chat, translation, speech and rerankers)")
 
 
 def test_the_translation_model_s_use_is_recorded_where_the_encoders_are(tmp_path, node, monkeypatch):
@@ -912,16 +914,16 @@ def test_node_resident_show_the_budget(tmp_path, node, monkeypatch):
     out = resident.show()
     b = out["budget"]
     assert b["margin_mib"] == 1_000 and b["margin"].startswith("measured: the peak of 1 sample period(s)")
-    assert b["budget_mib"] == 30_023 and b["taken_mib"] == 6_000 + 1_600 + 18_000
+    assert b["budget_mib"] == 30_023 and b["taken_mib"] == 6_000 + 7_900 + 1_600
     assert b["says"] == ("the budget is 30,023 MiB (the 0.95 line 31,023 MiB − margin 1,000 MiB, "
                          "measured over 6 h)")
     rows = out["models"]
     assert [(r["rank"], r["model"], r["tier"], r["size_mib"], r["in_budget"]) for r in rows] == [
-        (1, "louise-chat", 1, 6_000, True), (2, "rerank-bge", 1, 1_600, True),
-        (3, "vega-4b", 2, 18_000, True), (4, "louise-translate", 4, 7_900, False)]
+        (1, "louise-chat", 1, 6_000, True), (2, "louise-translate", 1, 7_900, True),
+        (3, "rerank-bge", 1, 1_600, True), (4, "vega-4b", 2, 18_000, False)]
     assert rows[0]["why"] == "in the budget: 6,000 of 30,023 MiB taken with it"
     assert rows[3]["why"].startswith("not preloaded — the budget is 30,023 MiB")
-    assert rows[3]["counted_mib"] == 7_900 and rows[3]["tier_says"] == "translation"
+    assert rows[3]["counted_mib"] == 18_000 and rows[3]["tier_says"] == "query encoders"
 
 
 def test_a_beat_s_reads_do_not_grow_with_the_set(tmp_path, node, monkeypatch):
@@ -979,7 +981,7 @@ def test_the_margin_is_the_growth_over_the_at_rest_sizes(tmp_path, node, monkeyp
     assert p.placed[0].counted == 6_000 * MIB and p.placed[0].largest == 8_500 * MIB
 
 
-def test_the_night_s_set_drops_madlad_and_keeps_the_rest():
+def test_the_night_s_set_drops_its_lowest_tier_and_keeps_the_rest():
     """2026-11-08, 03:25: 11 models, ~28.4 GB at rest on the B70 (32,656 MiB,
     the 0.95 line 31,023 MiB). With the default margin, 3.0 GiB of growth,
     the lowest tier goes and everything else stays."""
@@ -997,7 +999,7 @@ def test_the_night_s_set_drops_madlad_and_keeps_the_rest():
                           rest={(SERVER, m): v * MIB for m, v in mib.items() if v}, total=32_656 * MIB)
     p = resident.plan(want, mem, threshold=0.95, used={}, now=now)
     assert not p.measured and p.margin == 3_072 * MIB and p.budget // MIB == 27_951
-    assert [x.resident.model for x in p.placed if not x.fits] == ["louise-translate"]
+    assert [x.resident.model for x in p.placed if not x.fits] == ["vega-medcpt-article"]
     assert p.placed[0].resident.model == "louise-chat"
 
 
@@ -1026,7 +1028,7 @@ def test_an_eviction_shrinks_the_budget_and_the_penalty_halves_every_two_hours(t
     assert mem.penalty == 7_900 * MIB and mem.penalty_at == wall["t"]
     said = [t for _, t in node.said if "the budget shrank by" in t]
     assert said == ["resident: the budget shrank by 7,900 MiB: louise-translate was evicted 3 min after its "
-                    "load (tier 4 of 4: translation) — the penalty on the margin is 7,900 MiB, halved after "
+                    "load (tier 1 of 3: chat, translation, speech and rerankers) — the penalty on the margin is 7,900 MiB, halved after "
                     "each 2 h without another such eviction"]
     assert out["budget"] == int(0.95 * 32_656 * MIB) - 1_000 * MIB - 7_900 * MIB
     assert resident._plan_now([_r("louise-chat", "chat")]).says().endswith("− 7,900 MiB for evictions)")
@@ -1052,16 +1054,17 @@ def test_an_eviction_shrinks_the_budget_and_the_penalty_halves_every_two_hours(t
 
 
 def test_the_loads_run_in_priority_order_chat_first(tmp_path, node, monkeypatch):
-    """After a boot the question path is warm first: tier 1 in its order,
-    then the query encoders, the document encoders, MADLAD last — whatever
-    the order a question meets them."""
+    """After a boot the question path is warm first: tier 1 in its order
+    (chat, MADLAD, TTS, the rerankers, then the CPU's speech), then the query
+    encoders, the document encoders — whatever the order a question meets
+    them."""
     node.platform.write_text('[speech]\nstt_model = "whisper"\nvad_model = "silero"\n'
                              'tts_model = "omnivoice"\n')
     pm = _with(_collection(tmp_path, "pubmed"), "vega-medcpt-article", "lazy", query_model="vega-medcpt-query",
                reranker="rerank-medcpt")
     _beat([pm])
-    assert node.warmed == ["louise-chat", "rerank-medcpt", "omnivoice", "whisper", "silero",
-                           "vega-medcpt-query", "vega-medcpt-article", "louise-translate"]
+    assert node.warmed == ["louise-chat", "louise-translate", "omnivoice", "rerank-medcpt", "whisper", "silero",
+                           "vega-medcpt-query", "vega-medcpt-article"]
 
 
 def test_a_model_partly_off_the_card_is_not_at_rest_and_the_old_margin_goes(tmp_path, node, monkeypatch):

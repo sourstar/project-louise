@@ -157,12 +157,14 @@ def stop_all() -> None:
 
 
 def reset() -> None:
-    """Tests: forget every gate, the claim memo, the stand-aside counts, the
-    stop and the default."""
+    """Tests: forget every gate, the claim memo, the question's pending
+    linger, the stand-aside counts, the stop and the default."""
     global _default_level
     _stopping.clear()
     _gates.clear()
     _claim_seen.clear()
+    with _board.lock:
+        _board.until = 0.0
     with _stood_lock:
         _stood.clear()
     _default_level = Level.QUERY
@@ -528,6 +530,10 @@ class _Board:
         self.lock = threading.Lock()
         self.live = 0
         self.refresher: threading.Thread | None = None
+        #: the latest linger a question asked for (epoch s): a call that ends
+        #: after it never shortens it (the warms behind a search ran past the
+        #: question and wrote 0, erasing its 5 minutes)
+        self.until = 0.0
 
     def enter(self) -> None:
         with self.lock:
@@ -543,8 +549,11 @@ class _Board:
     def leave(self, linger: float = 0.0) -> None:
         with self.lock:
             self.live -= 1
+            now = time.time()
+            if linger > 0:
+                self.until = max(self.until, now + linger)
             if self.live == 0:
-                _write_claim(time.time() + linger if linger > 0 else 0.0)
+                _write_claim(self.until if self.until > now else 0.0)
 
     def _refresh(self) -> None:
         while True:
@@ -558,9 +567,13 @@ class _Board:
 
 _board = _Board()
 
-#: how long a question's claim outlasts its job: the page asks for the answer
-#: the moment the search ends, and the corpus is not to run in that gap
-QUESTION_LINGER_S = 15.0
+#: how long a question's claim outlasts its last step — the search, the
+#: answer, the results' translation, a sentence read aloud, the page's
+#: activity ping (`/ask/active`: audio playing, the microphone): corpus work
+#: resumes only after FIVE MINUTES with none (operator, 2026-11-09,
+#: docs/notes/ask-card-workflow.md spec 6; was 15 s for the search and the
+#: answer, 30 s for the reading, 0 after its last sentence)
+QUESTION_LINGER_S = 300.0
 
 
 @contextmanager

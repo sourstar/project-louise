@@ -51,6 +51,13 @@
          either way; this adds the written answer above them #}
       <label><input type="radio" name="how" value="summary" onchange="rememberHow()" checked> <span>Search + AI summary</span></label>
     </span>
+    {# operator, 2026-11-09: who translates — the translation model (Quality)
+       or the chat model already on the card (Speed: quicker, lower quality);
+       the same form as the switch above, remembered in the browser #}
+    <span class="seg" role="radiogroup" aria-label="translation: quality or speed">
+      <label title="the dedicated translation model: the best translation"><input type="radio" name="speed" value="quality" onchange="rememberSpeed()" checked> <span>Quality</span></label>
+      <label title="the chat model translates: quicker, lower quality than the dedicated translator"><input type="radio" name="speed" value="speed" onchange="rememberSpeed()"> <span>Speed</span></label>
+    </span>
     {# "show results in": CONTENT only — the answer and every entry IN
        FULL, its title and headings included, are translated into this
        language (operator, 2026-09-18); authors, ids and the page itself
@@ -383,7 +390,7 @@ async function search(){
   for(const k of ['search','answer'])if(relays[k]){if(relays[k].es)relays[k].es.close(); relays[k]=null}
   let id;
   try{
-    id=await relayStart('search',{query:q,collections:scopeCollections(),annotations:scopeAnnotations(),
+    id=await relayStart('search',{query:q,speed:speedOn(),collections:scopeCollections(),annotations:scopeAnnotations(),
                                   mode:document.getElementById('mode').value,
                                   show_in:selectedLang(),...counts()},replaces);
   }catch(e){
@@ -420,6 +427,10 @@ function howAsk(){const r=document.querySelector('input[name="how"]:checked'); r
 function rememberHow(){try{localStorage.setItem('louise-how',howAsk())}catch(e){}}
 (function(){let v=null; try{v=localStorage.getItem('louise-how')}catch(e){}
   const r=v&&document.querySelector('input[name="how"][value="'+v+'"]'); if(r)r.checked=true})();
+function speedOn(){const r=document.querySelector('input[name="speed"]:checked'); return !!r&&r.value==='speed'}
+function rememberSpeed(){try{localStorage.setItem('louise-speed',speedOn()?'speed':'quality')}catch(e){}}
+(function(){let v=null; try{v=localStorage.getItem('louise-speed')}catch(e){}
+  const r=v&&document.querySelector('input[name="speed"][value="'+v+'"]'); if(r)r.checked=true})();
 function go(){return howAsk()==='search'?search():ask()}
 async function ask(){
   // inside the press: a question the microphone wrote is answered aloud
@@ -826,7 +837,7 @@ async function tqRun(job,lang){
   try{
     const r=await fetch('/ask/translate/stream',{method:'POST',signal:ctl.signal,
       headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({lang,items:job.groups.map(g=>({id:g.id,text:g.text,src:g.src}))})});
+      body:JSON.stringify({lang,speed:speedOn(),items:job.groups.map(g=>({id:g.id,text:g.text,src:g.src}))})});
     const rdr=r.body.getReader(), dec=new TextDecoder(); let buf='';
     for(;;){
       const {done,value}=await rdr.read(); if(done)break;

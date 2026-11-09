@@ -1,4 +1,4 @@
-# The card for a person's question — the corrected workflow (decided 2026-11-09, to build)
+# The card for a person's question — the corrected workflow (decided 2026-11-09, built, not deployed)
 
 The operator's rule, verbatim: "Embedding models can be evicted to serve the chat pipeline: the ultimate goal of
 project louise is to provide answers." Until the whole query/answer pipeline is complete (the results' translation
@@ -34,6 +34,23 @@ were more recently used than MADLAD. Chat ↔ MADLAD cold loads of 5.5–15.2 s 
      freed on the card). The label says it trades quality for speed.
    A reader's choice (RULE 2: operators' choices live in the command line); the node keeps MADLAD as its default and
    still preloads it at rest.
+
+## Built (2026-11-09; deploy waits for the operator)
+
+| Spec | Where | Test |
+|---|---|---|
+| 1 at rest: chat, MADLAD, TTS, rerankers; STT/VAD on the CPU | app/resident.py `TIER_OF` (MADLAD moves from the last tier to 1,1) | tests/test_resident.py order tests |
+| 2 corpus encoders unloaded, idle first, busy retried (4 × 2 s), gate/pass pins kept | app/question_card.py `free_card`, `on_question` (stand-aside hook) and `watch` (1 s, whether corpus work runs or not) | tests/test_question_card.py |
+| 2 the cut batch is a deferral | the existing classification (embeddings `_endpoint_fault`): LocalAI's gRPC 500, a dropped connection | tests/test_endpoint_classification.py, worker path, documents untouched |
+| 3 MADLAD before the search | confirmed: language_plan translates the query before it (Quality); the chat model does it under Speed | tests/test_relay.py |
+| 3 short of space → TTS unloaded | `question_card.before_search` (sizes known, probe read; else nothing) | tests/test_question_card.py |
+| 4 query encoders off; chat, MADLAD (not under Speed), TTS, rerankers loaded behind | `question_card.after_search`, from web `_relay_search` | tests/test_question_card.py, tests/test_relay.py |
+| 5 nothing evicted mid-question | the keeper loads nothing while the claim is held (`resident.beat`); corpus stands aside and its encoders are off | tests/test_question_card.py |
+| 6 resume after 5 min with no activity | dispatch `QUESTION_LINGER_S` 15 → 300 s for the search, the answer, the results' translation, every sentence read (the 30 s and the last sentence's 0 retired); `POST /ask/active` from voice.js on the microphone and on each clip played (one a minute at most) | tests/test_speech.py, tests/test_relay.py |
+| 8 Quality / Speed | ask.html group, `translate.speed`, `AskQueryBody.speed`, `TranslateBody.speed` | tests/test_relay.py, tests/test_ask_switch_browser.py |
+
+The Ask relay only: `/ask/query` and `/v1/chat/completions` keep their behaviour for other clients. Pins are not used
+for spec 5 (operator 2026-11-08: preloaded, never pinned); nothing else loads while the question holds the card.
 
 ## Measurement after the build (München)
 
