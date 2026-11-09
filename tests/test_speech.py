@@ -197,3 +197,40 @@ def test_a_synthesis_holds_the_interactive_claim_and_no_gate(server, monkeypatch
     speech.synthesize({"model": "omnivoice-cpp", "input": "Dante wrote it."}, url="http://ai")
     assert seen == [("enter", dispatch.Level.CHAT), ("post", None), ("leave", dispatch.Level.CHAT)]
     assert gates == [], "no gate: speech never waits behind the answer being written"
+
+
+def test_a_readings_sentences_reach_the_backend_in_its_order(monkeypatch):
+    """München, 2026-11-08: two sentences sent at once, and the speech
+    backend (one clip at a time) made the SECOND first — the first sound
+    waited 25.6 s, 15.0 s of it for sentence 1. Sentence n now waits for
+    n - 1, whichever reaches the node first."""
+    import threading
+    import time as _t
+    turns, order = speech.Turns(), []
+
+    def sentence(n, delay):
+        _t.sleep(delay)
+        with turns.turn("r1", n):
+            order.append(n)
+            _t.sleep(0.05)
+    a = threading.Thread(target=sentence, args=(0, 0.15))
+    b = threading.Thread(target=sentence, args=(1, 0.0))     # arrives first
+    a.start(); b.start(); a.join(5); b.join(5)
+    assert order == [0, 1]
+    with turns.turn("r2", 0) as waited:                      # another reading: no wait
+        assert waited < 50
+
+
+def test_a_sentence_whose_predecessor_never_comes_goes_after_a_bound(monkeypatch):
+    monkeypatch.setattr(speech, "TURN_ARRIVE_S", 0.2)
+    import time as _t
+    t0 = _t.monotonic()
+    with speech.Turns().turn("r", 3) as waited:
+        pass
+    assert 0.15 <= _t.monotonic() - t0 < 2 and waited >= 150
+
+
+def test_the_reading_header_is_read_and_a_malformed_one_ignored():
+    assert speech.reading_turn("ab12_-/7") == ("ab12_-", 7)
+    for bad in (None, "", "x", "a/b", "a b/1", "a/123456", "x" * 65 + "/1"):
+        assert speech.reading_turn(bad) == (None, None), bad

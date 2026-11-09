@@ -257,6 +257,75 @@ def audio_ms(data: bytes) -> float | None:
         return None
 
 
+#: a reading's sentence waits this long for the one before it to ARRIVE;
+#: past it that one is lost (its fetch failed) and this one goes
+TURN_ARRIVE_S = 5.0
+#: a reading not heard from for this long is forgotten
+TURN_FORGET_S = 600.0
+
+
+class Turns:
+    """A READING'S SENTENCES GO TO THE MODEL SERVER IN THE PAGE'S ORDER, one
+    at a time (München, 2026-11-08): the speech backend makes one clip at a
+    time, and of two sent at the same instant it made the SECOND first, so
+    the first sound waited for both (sentence 0, 25.6 s, of which 15.0 s was
+    sentence 1). The page numbers each sentence of a reading (the
+    `Louise-Reading: <id>/<n>` header); sentence n is sent once n - 1 is
+    back, so the backend never chooses. The page still keeps two in flight:
+    the next one waits HERE, not a round trip away.
+
+    Bounded (CLAUDE.md: no wait without a bound): sentence n - 1 not arrived
+    within TURN_ARRIVE_S is lost and n goes; arrived, it is waited for at
+    most CALL_TIMEOUT_S, its own bound. A sequencer with client-assigned
+    tickets, the order HTTP/1.1 pipelining keeps for responses (RFC 9112
+    §9.3.2); the standard alternative, a priority on the backend's own queue,
+    is the backend's to offer, and LocalAI offers none."""
+
+    def __init__(self) -> None:
+        self._cv = threading.Condition()
+        self._readings: dict[str, dict] = {}
+
+    @contextmanager
+    def turn(self, reading: str | None, n: int | None):
+        if reading is None or n is None:
+            yield 0.0
+            return
+        t0 = time.monotonic()
+        with self._cv:
+            self._forget(t0)
+            st = self._readings.setdefault(reading, {"arrived": set(), "done": set(), "seen": t0})
+            st["arrived"].add(n); st["seen"] = t0
+            while n > 0 and (n - 1) not in st["done"]:
+                waited = time.monotonic() - t0
+                if (n - 1) not in st["arrived"] and waited >= TURN_ARRIVE_S:
+                    break
+                if waited >= CALL_TIMEOUT_S:
+                    break
+                bound = TURN_ARRIVE_S if (n - 1) not in st["arrived"] else CALL_TIMEOUT_S
+                self._cv.wait(max(0.01, bound - waited))
+        try:
+            yield round((time.monotonic() - t0) * 1000.0, 1)
+        finally:
+            with self._cv:
+                st["done"].add(n); st["seen"] = time.monotonic()
+                self._cv.notify_all()
+
+    def _forget(self, at: float) -> None:
+        for k in [k for k, v in self._readings.items() if at - v["seen"] > TURN_FORGET_S]:
+            del self._readings[k]
+
+
+_TURNS = Turns()
+_READING = re.compile(r"\s*([A-Za-z0-9_-]{1,64})/(\d{1,5})\s*")
+
+
+def reading_turn(header: str | None) -> tuple[str | None, int | None]:
+    """`Louise-Reading: <id>/<n>` → (id, n); (None, None) for none or a
+    malformed one (the sentence then goes as it comes)."""
+    m = _READING.fullmatch(header or "")
+    return (m.group(1), int(m.group(2))) if m else (None, None)
+
+
 def synthesize(body: dict[str, Any], url: str | None = None) -> tuple[int, bytes, str]:
     """(status, audio or error body, content type) for an OpenAI speech
     request, relayed to the model server; the model and the voice the
@@ -264,10 +333,12 @@ def synthesize(body: dict[str, Any], url: str | None = None) -> tuple[int, bytes
     return synthesize_timed(body, url)[:3]
 
 
-def synthesize_timed(body: dict[str, Any], url: str | None = None) -> tuple[int, bytes, str, list]:
+def synthesize_timed(body: dict[str, Any], url: str | None = None, *,
+                     reading: str | None = None, n: int | None = None) -> tuple[int, bytes, str, list]:
     """`synthesize` and its `Server-Timing` (W3C; 2026-11-08, to measure the
-    reading's start and its pauses): `synth` the model server's call in ms,
-    `audio` the clip's length in ms where it is a WAV."""
+    reading's start and its pauses): `turn` the wait for the reading's
+    sentence before (`Turns`), `synth` the model server's call in ms, `audio`
+    the clip's length in ms where it is a WAV."""
     from app import voice as node_voice
     url = (url or config.CHAT_URL).rstrip("/")
     text = speakable(str(body.get("input") or ""))
@@ -292,6 +363,12 @@ def synthesize_timed(body: dict[str, Any], url: str | None = None) -> tuple[int,
     from app import speech_numbers
     said = str(out.get("language") or "").split("-")[0].split("_")[0].lower() or None
     out["input"] = speech_numbers.verbalize(out["input"], said)
+    with _TURNS.turn(reading, n) as waited:
+        status, content, ctype, timing = _synthesize_call(url, model, out)
+    return status, content, ctype, ([("turn", waited)] if reading is not None else []) + timing
+
+
+def _synthesize_call(url: str, model: str | None, out: dict) -> tuple[int, bytes, str, list]:
     t0 = time.perf_counter()
     # A PERSON'S QUERY, ITS LAST STEP (2026-11-08, München: one synthesis took
     # 0.81 of its clip's length alone and up to 1.49 beside the corpus
