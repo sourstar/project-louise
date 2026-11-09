@@ -241,3 +241,24 @@ def test_the_reading_header_is_read_and_a_malformed_one_ignored():
     assert speech.reading_turn("ab12_-/7") == ("ab12_-", 7)
     for bad in (None, "", "x", "a/b", "a b/1", "a/123456", "x" * 65 + "/1"):
         assert speech.reading_turn(bad) == (None, None), bad
+
+
+def test_a_sentence_made_once_is_answered_from_the_fast_drive_after_a_stop(server, monkeypatch, tmp_path):
+    """Operator, 2026-11-09: "keep the buffering available even when I
+    stop/start the speech". The same request — model, voice, language,
+    words — is answered from the fast drive (LOUISE_CACHE_DIR) without the
+    model; without a fast drive nothing is kept."""
+    calls, _ = server
+    body = {"model": "omnivoice-cpp", "input": "Dante wrote it in 1321.", "voice": PHILIPPE}
+    monkeypatch.setattr(speech.config, "CACHE_DIR", None)
+    speech.synthesize(dict(body), url="http://ai:8080")
+    speech.synthesize(dict(body), url="http://ai:8080")
+    assert len(calls) == 2, "no fast drive: every sentence asked of the model"
+    monkeypatch.setattr(speech.config, "CACHE_DIR", str(tmp_path / "cache"))
+    first = speech.synthesize_timed(dict(body), url="http://ai:8080")
+    again = speech.synthesize_timed(dict(body), url="http://ai:8080")
+    assert len(calls) == 3, "the second came from the fast drive"
+    assert again[:3] == first[:3] == (200, b"RIFF", "audio/wav") and ("cache", 1.0) in again[3]
+    other = speech.synthesize_timed({**body, "input": "Another sentence entirely."}, url="http://ai:8080")
+    assert len(calls) == 4 and ("cache", 1.0) not in other[3]
+    assert len(list((tmp_path / "cache" / "speech-clips").rglob("*.wav"))) == 2
