@@ -385,3 +385,33 @@ def test_the_exit_release_writes_the_record_the_hold_was_written_to(tmp_path, mo
     fn(*args)
     assert (first / "state" / ".model-pins.lock").exists()
     assert not (second / "state").exists()
+
+
+def test_a_pin_no_holder_keeps_is_released_and_counted(runner):
+    """München, 2026-11-09: MADLAD and rerank-bge pinned in their LocalAI
+    YAMLs (an engine swap rewrote MADLAD's while it was pinned; rerank-bge's
+    since 11-03) with no holder in the record — idle, never evictable, so
+    the reclaimer took the question's chat and query encoder instead. A pin
+    the record does not name is processing's no more: released, said, and
+    counted with the failures; a held one, a model not pinned and a model
+    outside the set are left as they are."""
+    server = "http://ai:8080"
+    runner.pinned.update({"madlad": True, "rerank-bge": True, "nemotron": True, "chat": False, "own-35b": True})
+    assert model_pins.hold(server, "nemotron", "worker embed wikidata")   # pinned already: joined, prior true
+    runner.calls.clear()
+    got = model_pins.release_orphans([(server, m) for m in ("madlad", "rerank-bge", "nemotron", "chat")])
+    assert got == ["madlad", "rerank-bge"]
+    assert runner.pinned == {"madlad": False, "rerank-bge": False, "nemotron": True, "chat": False,
+                             "own-35b": True}, "held: kept; outside the set: never touched"
+    assert sorted(runner.puts()) == ["unpin", "unpin"]
+    st = model_pins.status()
+    assert st["failures"]["count"] == 2 and {f["call"] for f in st["failures"]["recent"]} == {"orphan"}
+    errors = [t for lvl, t in runner.said if lvl == "error"]
+    assert len(errors) == 1 and errors[0].startswith("model pin: madlad, rerank-bge pinned with no holder")
+    # an unpin that fails is said, and asked again next time
+    runner.pinned["madlad"] = True
+    runner.fail_unpin = True
+    assert model_pins.release_orphans([(server, "madlad")]) == []
+    assert any("the unpin failed" in t for _lvl, t in runner.said)
+    runner.fail_unpin = False
+    assert model_pins.release_orphans([(server, "madlad")]) == ["madlad"]
