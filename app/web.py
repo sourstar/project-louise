@@ -830,6 +830,14 @@ def _relay_answer(job: relay.Job, chat) -> None:
 
 
 @ask_router.post("/ask/relay")
+def _as_question(fn, job, arg):
+    """A relay job as ONE question on the card (app/rage/dispatch.py
+    `question`): the claim held from its first step to its last."""
+    from .rage import dispatch
+    with dispatch.question():
+        return fn(job, arg)
+
+
 def relay_start(request: Request, body: RelayBody):
     """Start the page's search or answer as a job; `{"id"}` to listen to."""
     owner = _relay_owner(request)
@@ -837,7 +845,7 @@ def relay_start(request: Request, body: RelayBody):
         if body.search is None:
             raise HTTPException(422, "a search job needs `search`")
         q = body.search
-        job = relay.start("search", owner, lambda j: _relay_search(j, q), label=q.query,
+        job = relay.start("search", owner, lambda j: _as_question(_relay_search, j, q), label=q.query,
                           replaces=body.replaces)
     else:
         from .api import ChatBody
@@ -845,7 +853,7 @@ def relay_start(request: Request, body: RelayBody):
             chat = ChatBody(**{**(body.answer or {}), "stream": True})
         except Exception as e:   # noqa: BLE001 — pydantic's message, to the page
             raise HTTPException(422, f"an answer job needs /v1/chat/completions' body: {e}")
-        job = relay.start("answer", owner, lambda j: _relay_answer(j, chat),
+        job = relay.start("answer", owner, lambda j: _as_question(_relay_answer, j, chat),
                           label=str((chat.messages or [{}])[-1].get("content", ""))[:80],
                           replaces=body.replaces)
     return {"id": job.id}

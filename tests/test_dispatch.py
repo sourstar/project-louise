@@ -465,3 +465,33 @@ def test_unnamed_callers_keep_the_largest_they_declared():
     dispatch.gate("http://q", 4)
     dispatch.gate("http://q", 1)
     assert g.snapshot()["declared"][""] == 4
+
+
+def test_a_question_holds_the_claim_between_its_calls_and_lingers_after(tmp_path, isolated_config, monkeypatch):
+    """Operator, 2026-11-09, B (München's trace the same day: between the
+    steps of one question the claim fell, the corpus came back, and the
+    reclaimer took the question's own chat and query encoder). The claim
+    holds from the question's start to QUESTION_LINGER_S after its end,
+    with no call running in between; a corpus request that stands aside
+    runs the hooks once."""
+    from app import node_state
+    node_state.connect().close()
+    hooks = []
+    monkeypatch.setattr(dispatch, "_aside_hooks", [])
+    dispatch.on_stand_aside(lambda: hooks.append(1))
+    monkeypatch.setattr(dispatch, "QUESTION_LINGER_S", 0.3)
+    with dispatch.question():
+        with dispatch.interactive(Level.QUERY):
+            pass
+        dispatch._claim_seen.clear()
+        assert dispatch.interactive_active(), "between two steps: still the question's"
+    dispatch._claim_seen.clear()
+    assert dispatch.interactive_active(), "lingers for the answer the page asks next"
+    import threading as _t
+    ended = _t.Event()
+    _t.Thread(target=lambda: (dispatch._stand_aside("enc", None, None, "wikidata"), ended.set()),
+              daemon=True).start()
+    assert ended.wait(5), "the linger ends by itself"
+    assert hooks == [1], "the hooks ran once, as the wait began"
+    dispatch._claim_seen.clear()
+    assert not dispatch.interactive_active()

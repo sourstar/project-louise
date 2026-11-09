@@ -2735,3 +2735,30 @@ the bound, and a batch sized by chunks is the next change.
 
 **AFTER.** Owed: the next long-document fts pass (the FR/DE/EU collections, or a `dev reindex` sample of
 normattiva-nemo), with the split lines and pool occupancy.
+
+## 2026-11-09 — a person's question holds the card whole, and the corpus pins go meanwhile (operator, choice B; app/rage/dispatch.py `question`, app/model_pins.py `release_for_question`) — BEFORE (deploy pending)
+
+**SCENARIO (BEFORE, München, deploys 3c0ba7c #441 and 8b26a9c #442, node running).** wikidata embedding (Nemotron,
+pinned), normattiva-nemo and others idle or indexing; one Italian Ask on gutenberg per deploy, through the tunnel.
+The card at the Ask: MADLAD 8.0, chat 6.1, Nemotron 4.4 (pinned for wikidata), omnivoice 2.2, dar-legal-it 1.8,
+bge-m3 1.3, rerank-bge 1.0 GB and the smaller ones; qwen3-4b (gutenberg's query encoder, ~5.6 GB) does not fit beside
+them.
+
+| deploy | LocalAI during one Ask | cold loads | search / answer |
+|---|---|---|---|
+| 3c0ba7c | evict chat → load chat → evict qwen3-4b → load qwen3-4b → evict chat → load chat → evict qwen3-4b | qwen3-4b 8.0 + 7.2 s, chat 8.7 + 6.5 s | 38.9 s / 18.5 s, then 70.0 s / 19.9 s |
+| 8b26a9c | load MADLAD → evict chat → load chat → evict MADLAD | MADLAD 9.9 s, chat 12.3 s | 55.4 s / 22.5 s (first word 13.9 s) |
+
+**Reading.** The claim was held per model call: between a question's steps it fell, the corpus came back, and the
+corpus encoders — pinned while they process (operator, 2026-10-23), and the most recently used — were never the
+reclaimer's choice: the question's own models were, in turn.
+
+**The change.** (1) A relay job (search, answer) holds the node's claim from its first step to 15 s after its last
+(`QUESTION_LINGER_S`, the gap before the page asks for the answer). (2) The first corpus request that stands aside
+releases the worker's pins (`worker …` holders; a gate's or pass's are kept), and a corpus batch starting during the
+question does not pin. Its encoders, unused since the question began, are then the least recently used. The corpus
+pins again at its next batch after the question, and reloads an encoder the reclaimer took (the operator accepted
+~5–15 s of indexing per question).
+
+**AFTER.** Owed: the same Ask after 6b8c108's measurement, with LocalAI's load/evict lines, the pin lines and the
+corpus's reload after it.

@@ -38,7 +38,14 @@ optional subsystem). A failed restore leaves a model pinned that should not
 be: it stays in the record without holders, is retried at every
 `reconcile`, and is shown until it succeeds.
 
-Queries are not pinned: a slowdown is acceptable for them.
+Queries are not pinned: a slowdown is acceptable for them. And WHILE A
+PERSON'S QUESTION HOLDS THE CARD the worker's corpus pins are released and
+not taken (operator, 2026-11-09, choice B; `release_for_question`, `hold`):
+the corpus stands aside for the whole question (app/rage/dispatch.py
+`question`), so its encoders, unused since the question began, are the
+reclaimer's first choice past its line instead of the question's own chat
+and query encoder; the corpus's next batch after the question pins again,
+and pays the reload if its encoder went.
 
 THE STANDARD ALTERNATIVE (CLAUDE.md, "Do not reinvent the wheel"): the
 holders' record is ours because LocalAI has no leases — its pin is one bit
@@ -250,6 +257,12 @@ def hold(url: str | None, model: str | None, holder: str, *,
     server = model_load.server_of(url)
     if not _applies(server, model):
         return False
+    if holder.startswith(WORKER) and _question_now():
+        # A PERSON'S QUESTION HOLDS THE CARD (operator, 2026-11-09, B): the
+        # corpus stands aside, and its encoder stays evictable until the
+        # question ends; its next batch after that pins it again
+        release(holder)
+        return False
     now = time.time() if now is None else now
     k = _key(server, model)
     if now < _retry_after.get(k, 0.0):
@@ -323,6 +336,54 @@ def _drop(st: dict, gone: Callable[[str, float], bool], now: float) -> list[tupl
                 last = h
         if not entry["holders"] and _restore(st, entry, last or "reconcile", now):
             del st["pins"][k]
+    return dropped
+
+
+def _question_now() -> bool:
+    """Whether a person's question holds the node's claim
+    (app/rage/dispatch.py, memoised there per GATE_POLL_S)."""
+    try:
+        from app.rage import dispatch
+        return dispatch.interactive_active()
+    except Exception:   # noqa: BLE001 — an unreadable claim holds nothing back
+        return False
+
+
+#: the last release for a question, so the corpus threads that stand aside
+#: together write the record once
+_question_released = [0.0]
+QUESTION_RELEASE_EVERY_S = 2.0
+
+
+def release_for_question(now: float | None = None) -> list[tuple[str, str]]:
+    """THE WORKER'S CORPUS PINS GO WHILE A PERSON'S QUESTION RUNS (operator,
+    2026-11-09, choice B: "unpin indexing models while a question runs;
+    indexing already pauses then; pin them again when it resumes"). Every
+    holder of this worker (`worker …`: its embed stages and its process
+    holders) is dropped and each model left without one gets its state
+    before back — so the reclaimer, past its line, evicts an idle corpus
+    encoder (unused since the question began) before the question's own
+    models. A holder of another process (a gate, a pass) keeps its pin.
+    Called when corpus work begins to stand aside (dispatch.on_stand_aside);
+    the next batch after the question pins again (`hold`). Returns the
+    (model, holder) pairs dropped."""
+    if _process_prefix != WORKER:
+        return []
+    t = time.monotonic()
+    if t - _question_released[0] < QUESTION_RELEASE_EVERY_S:
+        return []
+    _question_released[0] = t
+    now = time.time() if now is None else now
+    try:
+        with _state() as st:
+            dropped = _drop(st, lambda h, _t: h.startswith(WORKER), now)
+    except OSError as e:
+        _say("error", f"model pin: the record {_path()} could not be written ({e}); the corpus "
+                      f"pins stay through this question")
+        return []
+    if dropped:
+        _say("info", "model pin: a person's question holds the card; corpus pins released until it "
+                     f"ends: {', '.join(sorted({m for m, _h in dropped}))}")
     return dropped
 
 

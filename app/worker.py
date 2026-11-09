@@ -6160,6 +6160,10 @@ def run_forever():
     # the pins a killed worker left are restored before anything embeds, and
     # what was found is said (app/model_pins.py; bounded by its timeouts)
     model_pins.set_worker()
+    # a person's question: the corpus pins go while it holds the card
+    # (operator, 2026-11-09, B)
+    from app.rage import dispatch as _dispatch
+    _dispatch.on_stand_aside(model_pins.release_for_question)
     try:
         model_pins.reconcile(boot=True)
     except Exception:   # noqa: BLE001 — a safeguard, never a boot blocker
