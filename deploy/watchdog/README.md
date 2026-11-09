@@ -54,7 +54,7 @@ $L beat --for 5h                 # before a known-long unattended step (at most 
 $L close                         # done, and the node is in a good state
 
 # A PASS WITH A PARSE POOL (`hold records build`, `hold collection new`, snapshot, check,
-# vectors build): its OWN container, cap and supervisor, in a louise-… unit — never
+# vectors build, `dev carry --reconcile`): its OWN container, cap and supervisor, in a louise-… unit — never
 # `docker exec` in the worker, whose 24 GiB cap it would share (2026-11-08: pubmed9's
 # records build, OOM-killed there with the worker, 3,914 s lost; deploy/supervise-pass.sh)
 systemd-run --unit louise-pubmed9-records -p KillMode=mixed -p TimeoutStopSec=330 \

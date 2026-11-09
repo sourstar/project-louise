@@ -188,3 +188,22 @@ exit 0
     assert lines[0].startswith("run --rm --sig-proxy=false --name build ")
     assert lines[1] == "stop -t 300 build" and len(lines) == 2, lines
     assert (tmp_path / "hold").exists() and "held" in out
+
+
+def test_a_pass_that_fails_at_once_three_times_in_a_row_is_not_run_twenty_times(tmp_path):
+    """2026-11-09: the legal pilot's `pool` died at startup (an AttributeError,
+    exit 1) and the supervisor ran it 20 times over 19 minutes. Three fast
+    failures in a row are a defect; a slow one between them resets the count,
+    and an OOM kill never counts."""
+    env = _fake_docker(tmp_path, [1, 1, 1, 0])
+    p, calls = _run(tmp_path, env, "--memory=8g", "img")
+    assert p.returncode == 1 and len(calls) == 3 and "a defect in the pass" in p.stdout, p.stdout
+    oom = tmp_path / "oom"
+    oom.mkdir()
+    p, calls = _run(oom, _fake_docker(oom, [137, 137, 137, 0]), "--memory=8g", "img")
+    assert p.returncode == 0 and len(calls) == 4, "OOM kills come back, however fast"
+    slow = tmp_path / "slow"
+    slow.mkdir()
+    env = dict(_fake_docker(slow, [1, 1, 1, 0]), FAST_FAIL_S="0")
+    p, calls = _run(slow, env, "--memory=8g", "img")
+    assert p.returncode == 0 and len(calls) == 4, "a failure after FAST_FAIL_S is asked again"
