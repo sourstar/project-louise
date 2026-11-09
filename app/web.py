@@ -548,7 +548,9 @@ def ask_translate(body: TranslateBody):
     # partial case — some passages translated, some did not — and the page
     # shows what it got and names the rest rather than discarding good
     # content for the sake of a uniform screen.
-    out, failed, missed = _translate_batch(lang, _translate_items(body), use_mt=not body.speed)
+    from .rage import dispatch
+    with dispatch.question():            # the results' translation is a step of the question
+        out, failed, missed = _translate_batch(lang, _translate_items(body), use_mt=not body.speed)
     return {"lang": lang, "items": out, "failed": failed, "missed": missed}
 
 
@@ -658,7 +660,14 @@ def ask_translate_stream(body: TranslateBody):
         _log_translation(lang, len(items), got, cached, len(missed), time.monotonic() - t0)
         yield line({"done": True, "failed": got == 0 and bool(missed), "missed": missed})
 
-    return StreamingResponse(gen(), media_type="application/x-ndjson",
+    def held():
+        # the results' translation is a step of the question: its claim is
+        # held while the stream writes, and lingers after it
+        # (docs/notes/ask-card-workflow.md spec 6)
+        from .rage import dispatch
+        with dispatch.question():
+            yield from gen()
+    return StreamingResponse(held(), media_type="application/x-ndjson",
                              headers={"Cache-Control": "no-cache",
                                       "X-Accel-Buffering": "no"})
 
@@ -795,9 +804,25 @@ def _relay_owner(request: Request) -> str:
     return f"{v.role}:{v.name}" if v is not None else "nobody"
 
 
+def _question_collections(names: list[str] | None) -> list:
+    """The collections a search will ask (the search itself refuses a name
+    it does not hold, and says so): [] when they cannot be told."""
+    try:
+        return query_service.resolve_collections(names)
+    except Exception:   # noqa: BLE001
+        return []
+
+
 def _relay_search(job: relay.Job, body: AskQueryBody) -> None:
+    # THE CARD FOR THE QUESTION (docs/notes/ask-card-workflow.md spec 3–4;
+    # app/question_card.py): room for the query encoders before, the answer's
+    # models after — behind, so the results are not held
+    from . import question_card
+    cols = _question_collections(body.collections)
+    question_card.before_search(cols)
     with mt.speed(body.speed):
         result = _ask_result(body)
+    question_card.after_search(cols, speed=body.speed)
     html = TEMPLATES.env.get_template("_ask_results.html").render(result=result)
     job.emit("result", html=html, search_id=keep_search(body.query, result),
              hits=len(result.get("hits") or []))
@@ -840,6 +865,18 @@ def _as_question(fn, job, arg):
     from .rage import dispatch
     with dispatch.question():
         return fn(job, arg)
+
+
+@ask_router.post("/ask/active")
+def ask_active():
+    """THE PAGE'S ACTIVITY (operator, 2026-11-09; docs/notes/ask-card-workflow.md
+    spec 6): audio playing, the microphone in use. The question stays open —
+    the node's claim renewed for dispatch.QUESTION_LINGER_S — so corpus work
+    resumes only after that long with no activity at all."""
+    from .rage import dispatch
+    with dispatch.question():
+        pass
+    return {"linger_s": dispatch.QUESTION_LINGER_S}
 
 
 @ask_router.post("/ask/relay")

@@ -245,3 +245,42 @@ def test_speed_translates_with_the_chat_model_and_never_asks_the_translation_mod
     assert asked == [] and got["items"]["t1"].startswith("chat:"), got
     c.post("/ask/translate", json={"lang": "en", "items": [{"id": "t2", "text": "Il vecchio e il mare", "src": "it"}]})
     assert asked, "Quality: the translation model, as before"
+
+
+def test_a_search_frees_the_card_around_itself_and_the_page_s_activity_keeps_the_question_open(
+        isolated_config, monkeypatch):
+    """docs/notes/ask-card-workflow.md: before the search, room for its query
+    encoders; after it, the query encoders off and the answer's models on
+    (Speed: no translation model); the results' translation and the page's
+    activity ping (audio, microphone) each hold the question's claim."""
+    from contextlib import contextmanager
+    from app import question_card
+    from app.api import app
+    from app.rage import dispatch
+    steps = []
+    monkeypatch.setattr(web, "_question_collections", lambda names: ["gutenberg"])
+    monkeypatch.setattr(question_card, "before_search", lambda cols: steps.append(("before", cols)))
+    monkeypatch.setattr(question_card, "after_search",
+                        lambda cols, speed=False: steps.append(("after", cols, speed)))
+    monkeypatch.setattr(web, "_ask_result", lambda body: steps.append(("search",)) or {"hits": [], "timings": {}})
+    held = []
+
+    @contextmanager
+    def question(linger=None):
+        held.append(linger)
+        yield
+    monkeypatch.setattr(dispatch, "question", question)
+    c = TestClient(app)
+    r = c.post("/ask/relay", json={"kind": "search", "search": {"query": "balene", "speed": True}})
+    job = relay.get(r.json()["id"], "guest:None")
+    _wait(lambda: job.state == relay.DONE)
+    assert steps == [("before", ["gutenberg"]), ("search",), ("after", ["gutenberg"], True)]
+    held.clear()
+    got = c.post("/ask/active")
+    assert got.status_code == 200 and got.json() == {"linger_s": 300.0} and held == [None]
+    held.clear()
+    c.post("/ask/translate", json={"lang": "en", "items": [{"id": "t", "text": "balena", "src": "it"}]})
+    assert held == [None], "the results' translation is a step of the question"
+    held.clear()
+    c.post("/ask/translate/stream", json={"lang": "en", "items": [{"id": "t", "text": "balena", "src": "it"}]})
+    assert held == [None]

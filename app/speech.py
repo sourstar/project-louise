@@ -257,9 +257,6 @@ def audio_ms(data: bytes) -> float | None:
         return None
 
 
-#: the claim a sentence's synthesis leaves behind it: the page asks for the
-#: next one well within it (two in flight, each sent as the one before returns)
-READING_LINGER_S = 30.0
 #: a reading's sentence waits this long for the one before it to ARRIVE;
 #: past it that one is lost (its fetch failed) and this one goes
 TURN_ARRIVE_S = 5.0
@@ -331,8 +328,8 @@ def reading_turn(header: str | None) -> tuple[str | None, int | None]:
 
 def reading_last(header: str | None) -> bool:
     """`Louise-Reading: <id>/<n>/last`: the answer has ended and this is its
-    last sentence — the reading's claim ends with it, not READING_LINGER_S
-    later (operator, 2026-11-09)."""
+    last sentence (the log says so; the question's claim still lingers
+    dispatch.QUESTION_LINGER_S after it, docs/notes/ask-card-workflow.md)."""
     m = _READING.fullmatch(header or "")
     return bool(m and m.group(3))
 
@@ -460,14 +457,13 @@ def _synthesize_call(url: str, model: str | None, out: dict, *, last: bool = Fal
     from app.rage import dispatch
     # THE READING IS ONE QUESTION ON THE CARD (operator, 2026-11-09: "pause
     # the embeddings … the chat model … is not competing with voice, thus they
-    # run together"): the claim lingers READING_LINGER_S after each sentence,
-    # longer than the page waits between two, so the corpus stays aside — its
-    # pins released — for the whole reading, not only inside each synthesis
-    # (operator, the same day: "pause the embeddings only if speech has to be
-    # processed and resume when all the answer has been processed or after a
-    # reasonable timeout": the page marks the answer's last sentence, and the
-    # claim ends with it; READING_LINGER_S is the timeout otherwise)
-    with dispatch.question(linger=0.0 if last else READING_LINGER_S), \
+    # run together"): the claim lingers after each sentence, longer than the
+    # page waits between two, so the corpus stays aside for the whole
+    # reading, not only inside each synthesis.
+    # The 5-minute rule supersedes both (docs/notes/ask-card-workflow.md spec
+    # 6): the claim lingers dispatch.QUESTION_LINGER_S after every sentence,
+    # the last one included; `last` is kept for the page and the log.
+    with dispatch.question(), \
             dispatch.interactive(dispatch.Level.CHAT):
         if not model:
             r = httpc.post(f"{url}/v1/audio/speech", json=out, timeout=CALL_TIMEOUT_S)

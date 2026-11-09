@@ -495,3 +495,36 @@ def test_a_question_holds_the_claim_between_its_calls_and_lingers_after(tmp_path
     assert hooks == [1], "the hooks ran once, as the wait began"
     dispatch._claim_seen.clear()
     assert not dispatch.interactive_active()
+
+
+def test_a_call_that_ends_after_a_question_never_shortens_its_linger(tmp_path, isolated_config, monkeypatch):
+    """docs/notes/ask-card-workflow.md spec 6: corpus work resumes five
+    minutes after the question's last step. The models warmed behind a
+    search (app/question_card.py `after_search`) are interactive calls that
+    end after the question: ending, each wrote the claim to 0 and the five
+    minutes were gone. A linger already asked for stands."""
+    from app import node_state
+    node_state.connect().close()
+    monkeypatch.setattr(dispatch, "_board", dispatch._Board())
+    monkeypatch.setattr(dispatch, "QUESTION_LINGER_S", 300.0)
+    import threading as _t
+    inside, release = _t.Event(), _t.Event()
+
+    def warm_behind():
+        with dispatch.interactive(Level.CHAT):
+            inside.set()
+            release.wait(5)
+    with dispatch.question():
+        t = _t.Thread(target=warm_behind, daemon=True)
+        t.start()
+        assert inside.wait(5)
+    release.set()
+    t.join(5)
+    dispatch._claim_seen.clear()
+    assert dispatch.interactive_active(), "the question's five minutes outlive the call behind it"
+    # a call with no question pending still lets the claim go at once
+    monkeypatch.setattr(dispatch, "_board", dispatch._Board())
+    with dispatch.interactive(Level.QUERY):
+        pass
+    dispatch._claim_seen.clear()
+    assert not dispatch.interactive_active()

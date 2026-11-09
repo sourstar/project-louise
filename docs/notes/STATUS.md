@@ -32,8 +32,8 @@ measured (published figures disagree).
 - **Eviction**: #441 (rest floor), #442 (orphan pins released, worked), #443 (off collections' query encoders: no
   query-encoder load on gutenberg), #450 (corpus pins released for a question: worked). Italian Asks still swap
   chat ↔ MADLAD (5.5–15.2 s): the card cannot hold chat 7.3 + MADLAD 8.0 + query encoders ~8.8 + Nemotron 4.4 +
-  voice and rerankers. The operator's corrected workflow is decided, to build Friday:
-  [ask-card-workflow.md](ask-card-workflow.md).
+  voice and rerankers. The operator's corrected workflow is decided and BUILT (branch `ask-card-workflow`, tested,
+  NOT deployed — the operator deploys): [ask-card-workflow.md](ask-card-workflow.md) "Built".
 - **pubmed parser 9 (other abstracts), done**: records build 41,116,303 records (24,463 lines re-parsed); reconcile
   (#446, on disk) exit 0 in 2,406 s under 8 GiB — kept 39,876,694, reset 1,249,617, rehashed 39,105,624; `hold check`
   PASS (records-vs-origin 9,811 re-parsed, 0 differing; vectors-sample 1,119 chunks at 0.999914). Old pubmed forgotten

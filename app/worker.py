@@ -6160,10 +6160,17 @@ def run_forever():
     # the pins a killed worker left are restored before anything embeds, and
     # what was found is said (app/model_pins.py; bounded by its timeouts)
     model_pins.set_worker()
-    # a person's question: the corpus pins go while it holds the card
-    # (operator, 2026-11-09, B)
+    # a person's question: the corpus pins go and the corpus encoders are
+    # unloaded while it holds the card (operator, 2026-11-09:
+    # docs/notes/ask-card-workflow.md; app/question_card.py) — at the first
+    # corpus request that stands aside, and from the watcher whether or not
+    # one runs (an idle preloaded encoder holds the card as much as a busy one)
     from app.rage import dispatch as _dispatch
-    _dispatch.on_stand_aside(model_pins.release_for_question)
+    from app import question_card
+    question_card.set_log(model_pins.node_event)
+    _dispatch.on_stand_aside(question_card.on_question)
+    threading.Thread(target=question_card.watch, args=(_stop.is_set,), name="question-watch",
+                     daemon=True).start()
     try:
         model_pins.reconcile(boot=True)
     except Exception:   # noqa: BLE001 — a safeguard, never a boot blocker

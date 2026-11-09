@@ -268,11 +268,15 @@ MARGIN_WINDOW_S = 6 * 3600.0
 MARGIN_BUCKET_S = 600.0
 #: the budget's priority by role: (tier, place within the tier); a model of
 #: several roles takes the first of them (`tier_of`)
+#: AT REST (docs/notes/ask-card-workflow.md spec 1, operator 2026-11-09): chat,
+#: the translation model, text to speech, the rerankers, in that order; speech
+#: to text and voice activity run on the CPU and cost the card nothing. The
+#: translation model was the last tier (2026-11-08) and the reclaimer's LRU
+#: then took it mid-question: 5.5–15.2 s cold loads per Italian Ask.
 TIER_OF: dict[str, tuple[int, int]] = {
-    "chat": (1, 0), "reranker": (1, 1), "text to speech": (1, 2), "speech to text": (1, 3),
-    "voice activity": (1, 4), "query encoder": (2, 0), "encoder": (3, 0), "translation": (4, 0)}
-TIERS = {1: "chat, rerankers and speech", 2: "query encoders", 3: "document encoders",
-         4: "translation"}
+    "chat": (1, 0), "translation": (1, 1), "text to speech": (1, 2), "reranker": (1, 3),
+    "speech to text": (1, 4), "voice activity": (1, 5), "query encoder": (2, 0), "encoder": (3, 0)}
+TIERS = {1: "chat, translation, speech and rerankers", 2: "query encoders", 3: "document encoders"}
 
 
 @dataclass(frozen=True)
@@ -386,6 +390,13 @@ def switches() -> Switches:
     with _lock:
         _last_switches = got
     return got
+
+
+def current() -> list[Resident]:
+    """The set as the last beat resolved it (app/question_card.py frees the
+    card of its document encoders when a question starts)."""
+    with _lock:
+        return list(_last.values())
 
 
 def wanted(served: Iterable[Any], *, embed_mode: Callable[[Any], str],
@@ -674,7 +685,7 @@ def _memory_now() -> Memory:
 
 def tier_of(r: Resident) -> tuple[int, int]:
     """(tier, place within it) of the model's first role in the order."""
-    return min((TIER_OF.get(role, (4, 9)) for role in r.roles), default=(4, 9))
+    return min((TIER_OF.get(role, (3, 9)) for role in r.roles), default=(3, 9))
 
 
 def _tier_says(tier: int) -> str:
@@ -1012,6 +1023,14 @@ def preloads(state: str | None = None) -> tuple[bool, str]:
 _orphans_at: float | None = None
 
 
+def _question_now() -> bool:
+    try:
+        from app.rage import dispatch
+        return dispatch.interactive_active()
+    except Exception:   # noqa: BLE001 — an unreadable claim holds nothing back
+        return False
+
+
 def _release_orphan_pins(want: list[Resident], now: float) -> None:
     """Every ORPHAN_CHECK_S, the set's models pinned with no holder are
     unpinned (model_pins.release_orphans): preloaded, never pinned."""
@@ -1065,8 +1084,14 @@ def beat(served: Iterable[Any], *, embed_mode: Callable[[Any], str], state: str 
     rank = {pl.resident.key: pl.rank for pl in p.placed} if p is not None else {}
     wanted_now = sorted((r for r in missing if r.key in fits), key=lambda r: rank.get(r.key, 0))
     due = [r for r in wanted_now if r.key in on_time]
-    warming = _start_warm(due, stop) if due else []
-    return {"set": sorted(by_key), "warming": [r.key for r in warming],
+    # A PERSON'S QUESTION HOLDS THE CARD (docs/notes/ask-card-workflow.md):
+    # nothing is loaded behind it — the question unloads the corpus encoders
+    # and, after its search, its query encoders, and loads the answer's own
+    # models itself (app/question_card.py); a beat that loaded them back
+    # would undo it. The keeper resumes when the claim ends.
+    question = _question_now()
+    warming = _start_warm(due, stop) if due and not question else []
+    return {"set": sorted(by_key), "warming": [r.key for r in warming], "question": question,
             "backing_off": sorted(r.key for r in wanted_now if r.key not in on_time),
             "out_of_budget": sorted(k for k in by_key if k not in fits),
             "budget": None if p is None else p.budget,

@@ -304,3 +304,27 @@ def test_a_busy_query_encoder_still_degrades_quietly(serial, server):
     result = retrieval.search(con, "abstract", mode="dense", translate=False,
                               collection=serial)
     assert "legs_withheld" not in result
+
+
+# ---- a question unloads the encoder mid-batch (docs/notes/ask-card-workflow.md) --
+
+@pytest.mark.parametrize("answer", [
+    (500, "rpc error: code = Unavailable desc = error reading from server: EOF"),
+    (500, "rpc error: code = Canceled desc = grpc: the client connection is closing"),
+    httpx.RemoteProtocolError("Server disconnected without sending a response."),
+])
+def test_a_batch_cut_short_by_a_question_s_unload_is_a_deferral(serial, monkeypatch, answer):
+    """A person's question unloads the corpus encoders (app/question_card.py,
+    LocalAI's backend shutdown); the batch on the card when it lands comes
+    back as LocalAI's gRPC 500 or a dropped connection. The endpoint's state,
+    never the documents': untouched, no pause, embedding allowed."""
+    def post(url, json=None, timeout=None, headers=None):
+        if isinstance(answer, Exception):
+            raise answer
+        return httpx.Response(answer[0], request=httpx.Request("POST", url), text=answer[1])
+    monkeypatch.setattr(embeddings.httpc, "post", post)
+    con = db.connect(serial)
+    assert worker._execute_step(con, serial, "embed", _row(con)) is False
+    assert _untouched(con), "the batch a question cut short is deferred, its documents untouched"
+    assert worker._endpoint_paused == {}
+    assert worker._embedding_allowed(con, serial) is True
