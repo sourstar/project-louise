@@ -1595,3 +1595,26 @@ def test_a_relayered_sister_that_cuts_alike_is_refused(pair):
     _sister_ready(root, old)
     with pytest.raises(CodexError, match="cut alike"):
         carry.carry(root, "old", "bge", sister=True, relayered=True, copy=True, apply=True, log=quiet)
+
+
+def test_reconcile_holds_a_window_not_the_snapshots_and_reads_each_part_once(pair, corpus_dir, monkeypatch):
+    """München, 2026-11-09: pubmed → pubmed9's reconcile held both
+    snapshots' 41 M records in dicts and was OOM-killed twice at a 20 GB cap.
+    The maps are a side table on disk, filled one part at a time by the pool,
+    resumable at a part, read a window at a time, removed once done."""
+    from app import parallel
+    root, old, re_, uids, ids = _rebuilt_pair(pair)
+    carry.carry(root, "old", "re", rebuilt=True, copy=True, apply=True, log=quiet)
+    _build_and_freeze(root, "re", corpus_dir)
+    monkeypatch.setattr(carry, "_content_of", lambda *a: pytest.fail("a whole snapshot in memory"))
+    asked: list[int] = []
+    real = parallel.each_part
+    monkeypatch.setattr(parallel, "each_part", lambda fn, tasks: (asked.append(len(tasks)), real(fn, tasks))[1])
+    side = carry._content_table(root, "old", "re", quiet)          # a run stopped after its fill
+    assert side.is_file() and sum(asked) > 0
+    asked.clear()
+    out = carry.reconcile(root, "old", "re", window=1, log=quiet)
+    assert sum(asked) == 0, "resumed: no part read twice"
+    assert out["kept"] == len(uids) and out["reset"] == 0, out
+    assert out["records_before"] == out["records_after"] == len(uids)
+    assert not side.exists(), "derived: gone once the reconcile is done"
