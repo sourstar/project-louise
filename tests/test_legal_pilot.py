@@ -341,3 +341,24 @@ def test_two_runs_compare_question_by_question_and_other_questions_are_refused()
         lp.compare(a, run_of("dar", [0.0] * 30, pool=None))
     with pytest.raises(SystemExit, match="other questions"):
         lp.compare(a, run_of("dar", [0.0] * 29))
+
+
+def test_pool_and_enqueue_run_from_the_command_line(built, tmp_path, monkeypatch, capsys):
+    """München, 2026-11-09: `pool` fell through main() to temporal-run's
+    branch (AttributeError on `a.questions`): the commands are run as the
+    node runs them, not only their functions."""
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+    out = tmp_path / "pilot"
+    out.mkdir()
+    pq.write_table(pa.Table.from_pylist(CORPUS), out / "corpus.parquet")
+    pq.write_table(pa.Table.from_pylist(QUESTIONS), out / "questions-validation.parquet")
+    monkeypatch.setattr(lp, "_open", lambda name, root: (built.collection, built.con))
+    law = f"normattiva:{L306_ID}"
+    monkeypatch.setattr(lp, "text_search", lambda q, **kw: {"lists": [{"hits": [_hit(law, 0, rank=0)]}]})
+    assert lp.main(["pool", "--out", str(out), "--collection", "normattiva", "--name", "p", "--depth", "10"]) == 0
+    pool = json.loads((out / "runs" / "pool-p.json").read_text(encoding="utf-8"))
+    assert pool["name"] == "p" and lp._native_of(law) in pool["native_ids"] and pool["depth"] == 10
+    assert "pool p:" in capsys.readouterr().out
+    assert lp.main(["enqueue", "--out", str(out), "--collection", "normattiva", "--pool", "p"]) == 0
+    assert "queued" in capsys.readouterr().out

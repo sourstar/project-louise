@@ -877,7 +877,7 @@ def main(argv: list[str] | None = None) -> int:
         return chat_eval.pilot_ok(a.out, a.collection, a.tag, a.by, a.note)
     c, con = _open(a.collection, None)
     held = Held(c, con)
-    if a.cmd in ("coverage", "run"):
+    if a.cmd in ("coverage", "run", "pool", "enqueue"):
         corpus, questions = _load_dataset(a.out)
         cov = coverage(held, corpus, questions)
         gold = {int(k): gold_from(v) for k, v in cov["gold"].items()}
