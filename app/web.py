@@ -829,7 +829,6 @@ def _relay_answer(job: relay.Job, chat) -> None:
                 job.emit("cut", why=value)
 
 
-@ask_router.post("/ask/relay")
 def _as_question(fn, job, arg):
     """A relay job as ONE question on the card (app/rage/dispatch.py
     `question`): the claim held from its first step to its last."""
@@ -838,6 +837,7 @@ def _as_question(fn, job, arg):
         return fn(job, arg)
 
 
+@ask_router.post("/ask/relay")
 def relay_start(request: Request, body: RelayBody):
     """Start the page's search or answer as a job; `{"id"}` to listen to."""
     owner = _relay_owner(request)
