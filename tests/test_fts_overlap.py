@@ -615,6 +615,35 @@ def test_the_batch_after_next_is_queued_behind_the_next_one_while_it_parses(
     assert set(parse.parsed().values()) == {1}
 
 
+def test_a_batch_of_one_long_document_still_keeps_the_pool_parsing(tmp_path, monkeypatch, parse, overlap):
+    """München, 2026-11-09 (normattiva-nemo's text index): with documents of
+    138–185 chunks the sizer took 1–2 a batch, the look-ahead held two
+    batches — 2–4 documents — and ~2 of 11 children parsed: 220–390 chunks/s
+    against ~1,070 on short documents. A COUNT: the rows in flight are the
+    pool's window (children × the task queued behind each), one link each,
+    however small the batch."""
+    monkeypatch.setattr(config, "PARSE_PROCESSES", 6)
+    monkeypatch.setattr(worker, "batch_docs", lambda c, stage, default: 1)
+    parse.hold = threading.Event()
+    c, con = _synthetic(tmp_path, 40)
+    window = 6 * parallel.IN_FLIGHT_PER_CHILD
+    try:
+        assert _round(con, c)                                   # document 1, on the thread
+        chain = _chain(c)
+        assert chain.held() == window and chain.computing() == window
+        deadline = time.monotonic() + 5
+        while len(_ahead_calls(parse)) < window and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert sorted(_ahead_calls(parse)) == [[i] for i in range(2, 2 + window)], \
+            "each long document parsing at once, not two behind the batch"
+    finally:
+        parse.hold.set()
+    _drain(con, c)
+    _assert_all_indexed_once(con, c, 40)
+    assert set(parse.parsed().values()) == {1}, "the deeper look-ahead parses nothing twice"
+    assert worker._fts_ahead_rows(200) == 400, "a large batch: two batches ahead, as before"
+
+
 def _synthetic_rdf(tmp_path, n: int, monkeypatch, *, fts_want: int, rdf_want: int):
     """`_synthetic`, every row still to extract (rdf_done=0): rdf and fts
     interleave (`_next_book`), rdf a batch of `rdf_want` at a time."""
@@ -779,3 +808,18 @@ def test_a_chain_takes_whole_links_until_a_batch_is_in_hand():
     chain.add(link([1], never), 1)
     assert chain.take(5, lambda pairs: False, timeout=0.2) is None and chain.held() == 0
     never.set()
+
+
+def test_the_batch_line_splits_its_time_and_the_summary_counts_the_parsing(tmp_path, monkeypatch, parse, overlap):
+    """München, 2026-11-09: from "indexed 2 documents / 444 chunks in one
+    commit (25.2s, parsed ahead)" a parse-bound batch and a commit-bound one
+    could not be told apart. The line splits the time; the summary adds the
+    parsing it held."""
+    monkeypatch.setattr(config, "FTS_BATCH_DOCS", 5)
+    lines = []
+    monkeypatch.setattr(worker.db, "log_event", lambda con, level, stage, msg, *a, **k: lines.append(msg))
+    monkeypatch.setattr(worker, "_batch_log_ts", {})
+    c, con = _synthetic(tmp_path, 20)
+    _drain(con, c)
+    fts_lines = [m for m in lines if m.startswith("indexed ")]
+    assert fts_lines and all(": parse " in m and ", index " in m and ", the rest " in m for m in fts_lines), lines

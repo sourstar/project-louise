@@ -2699,3 +2699,39 @@ The filtered search is now faster than on 10-31 (86 against 202 ms). The unfilte
 155 ms with 3 vector indices, against 2 on 10-31. Whether the third index costs that, or the row mask's absence changes
 the plan, is not measured here; the next merge of the deltas (`VECTOR_INDEX_MAX_INDICES` = 4) would tell. Worker
 restarts over the pass: 0. Files: /root/measure/refresh-9bb6714.txt, lat-9bb6714.txt.
+
+## 2026-11-09 — the text index's look-ahead holds the pool's window, and its batch line splits its time (app/worker.py `_fts_ahead_rows`) — BEFORE (deploy pending)
+
+**SCENARIO (BEFORE, München, from the worker log, 2026-11-08 23:51 → 11-09 03:45Z).** normattiva-nemo's text-index
+stage, the whole collection: 341,959 documents, 7,931,687 chunks, 0 errors, 13,310 s of fts stage time, ~26 docs/s and
+~593 chunks/s. Running beside it: wikidata's embedding and other collections' passes sharing the 11-child parse pool.
+The stage ran continuously (~1,100–1,200 s of stage time per 20-min bucket); every one of its 344 interval lines says
+"parsed ahead". Pool occupancy over 10-min windows: 4.2–9.4 of 11 slots in flight, shared.
+
+| 20-min bucket | docs | chunks | stage s | docs/s | chunks/s | chunks/doc |
+|---|---|---|---|---|---|---|
+| 00:40 | 102,418 | 520,982 | 488 | 209.7 | 1,067 | 5.1 |
+| 01:20 | 23,413 | 1,307,067 | 1,137 | 20.6 | 1,150 | 55.8 |
+| 02:20 | 2,355 | 325,757 | 1,094 | 2.2 | 298 | 138.3 |
+| 02:40 | 1,969 | 282,305 | 1,152 | 1.7 | 245 | 143.4 |
+| 03:20 | 1,809 | 248,981 | 1,137 | 1.6 | 219 | 137.6 |
+| 04:00 | 981 | 181,792 | 521 | 1.9 | 349 | 185.3 |
+
+In the slow hours the batches held 1–2 documents: "indexed 2 documents / 444 chunks in one commit (25.2s, parsed
+ahead); since the last line: 33 batches, 34 documents, 3476 chunks in 114.0s".
+
+**Reading.** The sizer sizes the batch by DOCUMENT (app/sizing.py), and a long document costs seconds, so it took 1–2.
+The look-ahead held two batches' rows (`_FTS_AHEAD_BATCHES * want`), so 2–4 documents were parsed ahead, ~2 of the
+pool's 11 children. The wait for those parses counted in the batch's time, which kept the next batch as small. Whether
+the commit (München's reading: 1.6–25 s per commit on the single writer) or the parse wait dominated cannot be read
+from the total: the line did not split it.
+
+**The change.** (1) The look-ahead holds at least the pool's window, `PARSE_PROCESSES × IN_FLIGHT_PER_CHILD` rows
+(22 on the node), one link each however small the batch. A batch of hundreds of documents (wikipedia) is unchanged.
+(2) The batch line splits its time: "(25.2s: parse 22.1, index 2.6, the rest 0.5, parsed ahead)". The summary adds
+"N s of it parsing". Expected on a long-document pass: the pool's share for it near its slots, the parse share of
+the batch time falling, and the sizer's batch growing by itself. If the index share stays the larger, the commit is
+the bound, and a batch sized by chunks is the next change.
+
+**AFTER.** Owed: the next long-document fts pass (the FR/DE/EU collections, or a `dev reindex` sample of
+normattiva-nemo), with the split lines and pool occupancy.
