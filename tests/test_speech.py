@@ -184,6 +184,12 @@ def test_a_synthesis_holds_the_interactive_claim_and_no_gate(server, monkeypatch
     seen, gates = [], []
 
     @contextmanager
+    def question(linger=None):
+        seen.append(("question", linger))
+        yield
+    monkeypatch.setattr(dispatch, "question", question)
+
+    @contextmanager
     def interactive(level):
         seen.append(("enter", level))
         yield
@@ -195,7 +201,8 @@ def test_a_synthesis_holds_the_interactive_claim_and_no_gate(server, monkeypatch
         seen.append(("post", None)), calls.append((url, json)))[0] or type("R", (), {
             "status_code": 200, "content": b"RIFF", "headers": {"content-type": "audio/wav"}})())
     speech.synthesize({"model": "omnivoice-cpp", "input": "Dante wrote it."}, url="http://ai")
-    assert seen == [("enter", dispatch.Level.CHAT), ("post", None), ("leave", dispatch.Level.CHAT)]
+    assert seen == [("question", speech.READING_LINGER_S), ("enter", dispatch.Level.CHAT), ("post", None),
+                    ("leave", dispatch.Level.CHAT)], "the reading holds the card past each sentence"
     assert gates == [], "no gate: speech never waits behind the answer being written"
 
 
