@@ -151,9 +151,10 @@ def _models(rs) -> dict[str, tuple[str, ...]]:
 # ---- the set ---------------------------------------------------------------------
 
 def test_the_set_is_the_question_path_s_models_by_embed_mode(tmp_path, node):
-    """off: not preloaded; on-demand, all and p2p: both encoders; every
-    served collection's reranker; the chat and translation models; and the
-    speech models, by default."""
+    """off: its query encoder (operator, 2026-11-09, B: it is still
+    searched); on-demand, all and p2p: both encoders; every served
+    collection's reranker; the chat and translation models; and the speech
+    models, by default."""
     node.platform.write_text('[speech]\nstt_model = "whisper"\nvad_model = "silero"\n'
                              'tts_model = "omnivoice"\n')
     lazy = _with(_collection(tmp_path, "gutenberg"), "vega-4b", "lazy", reranker="rerank-bge")
@@ -171,8 +172,12 @@ def test_the_set_is_the_question_path_s_models_by_embed_mode(tmp_path, node):
         "vega-medcpt-article": ("encoder",),
         "rerank-medcpt": ("reranker",),
         "louise-chat": ("chat",),
-        "whisper": ("speech to text",), "silero": ("voice activity",), "omnivoice": ("text to speech",)}
-    assert "vega-bge-m3" not in _models(got), "embed off: loaded at its first search, as before"
+        "whisper": ("speech to text",), "silero": ("voice activity",), "omnivoice": ("text to speech",),
+        "vega-bge-m3": ("query encoder",)}
+    off_med = _with(_collection(tmp_path, "pubmed2"), "vega-medcpt-article2", "off", query_model="vega-medcpt-query2")
+    roles = _models(resident.wanted([off_med], embed_mode=_mode))
+    assert roles.get("vega-medcpt-query2") == ("query encoder",) and "vega-medcpt-article2" not in roles, \
+        "embed off: the query side only"
     bge = next(r for r in got if r.model == "rerank-bge")
     assert bge.collections == ("gutenberg", "wikipedia"), "one entry, both collections named"
     assert {r.switch for r in got if r.roles[0].startswith(("speech", "voice", "text"))} == {resident.SPEECH}
@@ -247,24 +252,28 @@ def test_the_set_is_never_pinned(tmp_path, node, monkeypatch):
 
 
 def test_a_mode_change_takes_effect_at_the_next_beat(tmp_path, node):
-    """The Library sets gutenberg to off: no longer preloaded, and left
-    loaded; back to on-demand, all or p2p: loaded again once evicted."""
-    c = _with(_collection(tmp_path, "gutenberg"), "vega-4b", "lazy")
-    modes = {"gutenberg": "lazy"}
+    """The Library sets pubmed to off: its document encoder no longer
+    preloaded, and left loaded, its query encoder kept (operator,
+    2026-11-09, B: it is still searched); back to on-demand, all or p2p:
+    the document encoder loaded again once evicted."""
+    c = _with(_collection(tmp_path, "pubmed"), "vega-medcpt-article", "lazy", query_model="vega-medcpt-query")
+    modes = {"pubmed": "lazy"}
     _beat([c], embed_mode=lambda c: modes[c.name])
-    assert "vega-4b" in node.held
-    modes["gutenberg"] = "off"
+    assert {"vega-medcpt-article", "vega-medcpt-query"} <= node.held
+    modes["pubmed"] = "off"
     out = _beat([c], embed_mode=lambda c: modes[c.name])
-    assert (SERVER, "vega-4b") not in out["set"] and "vega-4b" in node.held, "left loaded"
+    assert (SERVER, "vega-medcpt-article") not in out["set"] and "vega-medcpt-article" in node.held, \
+        "left loaded"
+    assert (SERVER, "vega-medcpt-query") in out["set"], "searched still: its query encoder stays"
     assert node.unloads == []
-    assert any("no longer preloaded vega-4b" in t and "left loaded until LocalAI needs the space" in t
-               for _, t in node.said)
+    assert any("no longer preloaded vega-medcpt-article" in t and "left loaded until LocalAI needs the space"
+               in t for _, t in node.said)
     for mode in ("all", "p2p", "lazy"):
-        node.held.discard("vega-4b")                       # the reclaimer took it meanwhile
-        modes["gutenberg"] = mode
+        node.held.discard("vega-medcpt-article")           # the reclaimer took it meanwhile
+        modes["pubmed"] = mode
         resident.reset()                                   # no back-off history: a fresh worker
         _beat([c], embed_mode=lambda c: modes[c.name])
-        assert "vega-4b" in node.held, mode
+        assert "vega-medcpt-article" in node.held, mode
 
 
 @pytest.mark.parametrize("mode", ["paused", "seed-only"])
@@ -528,14 +537,15 @@ def test_neither_unload_path_unloads_a_model_a_held_collection_names(tmp_path, n
     node.held |= {"vega-4b", "vega-bge-m3", "vega-granite"}
     _beat([lazy, off])
     assert worker._release_embedder(lazy) == [], "on-demand: preloaded, nothing dropped"
-    assert worker._release_embedder(off) == [], "off: not in the set"
+    assert worker._release_embedder(off) == [], "off: its query encoder stays in the set"
     assert worker._sweep_unheld_embedders([lazy, off]) == ["vega-granite"]
     assert {"vega-4b", "vega-bge-m3"} <= node.held and node.unloads == ["vega-granite"]
     assert node.runner.puts() == []
 
 
 def test_a_switch_to_off_drops_it_from_the_set_at_once_and_unloads_nothing(tmp_path, node):
-    c = _with(_collection(tmp_path, "gutenberg"), "vega-4b", "lazy", reranker="rerank-bge")
+    c = _with(_collection(tmp_path, "pubmed"), "vega-4b", "lazy", reranker="rerank-bge",
+              query_model="vega-4b-query")
     shared = _with(_collection(tmp_path, "gutenberg-plates"), "vega-4b-plates", "lazy")
     con = db.connect(c)
     db.apply_desired_embed_mode(con, c)
@@ -547,6 +557,8 @@ def test_a_switch_to_off_drops_it_from_the_set_at_once_and_unloads_nothing(tmp_p
     db.set_scope(con, scope)
     assert worker._release_embedder(c, con, reason="the switch") == ["vega-4b"]
     assert (SERVER, "vega-4b") not in resident._last, "dropped now, not at the next beat"
+    assert (SERVER, "vega-4b-query") in resident._last, "its query encoder: searched still (2026-11-09)"
+    assert resident.forget("gutenberg-plates") == [], "a symmetric space's one encoder is its query encoder"
     assert "vega-4b" in node.held and node.unloads == [], "and left loaded"
     assert (SERVER, "rerank-bge") in resident._last, "its reranker is not its embed's"
     assert (SERVER, "vega-4b-plates") in resident._last, "another collection's encoder stays"
@@ -586,7 +598,7 @@ def test_switched_off_nothing_is_preloaded_and_nothing_unloaded(tmp_path, node):
 
 def test_the_keeper_beats_at_once_reads_the_library_s_mode_and_forgets_at_stop(tmp_path, node,
                                                                                monkeypatch):
-    c = _with(_collection(tmp_path, "gutenberg"), "vega-4b", "all")
+    c = _with(_collection(tmp_path, "gutenberg"), "vega-4b", "all", query_model="vega-4b-query")
     con = db.connect(c)
     scope = db.get_scope(con)
     scope["embed_mode"] = "off"                                    # the Library's override
@@ -609,6 +621,7 @@ def test_the_keeper_beats_at_once_reads_the_library_s_mode_and_forgets_at_stop(t
     worker._resident_keeper()
     resident.wait_warm(5)
     assert (SERVER, "vega-4b") not in set_at_beat[0], "the Library's off, not the file's all"
+    assert (SERVER, "vega-4b-query") in set_at_beat[0], "off: its query encoder, searched still"
     assert (SERVER, "louise-chat") in set_at_beat[0], "the first beat ran before the first wait"
     assert resident._last == {}, "forgotten at stop"
     assert node.runner.puts() == [], "nothing pinned, nothing to give back"
@@ -812,9 +825,8 @@ def test_a_set_larger_than_the_budget_preloads_only_the_top_part_and_says_so_onc
     # the plan is made again before each load: one out of the budget is not loaded behind a beat
     resident._warm_all([resident._last[(SERVER, "louise-translate")]], lambda: False)
     assert node.warmed == []
-    # room again (the 4B's collection set to off): back in, said, and loaded
-    g_off = replace(g, embed_mode_default="off")
-    _beat([g_off, pm])
+    # room again (the 4B's collection no longer served): back in, said, and loaded
+    _beat([pm])
     assert "louise-translate" in node.warmed and "vega-medcpt-article" in node.warmed
     assert any("back in the budget" in t and "louise-translate" in t for _, t in node.said)
 
