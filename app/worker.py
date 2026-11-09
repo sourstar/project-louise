@@ -172,7 +172,7 @@ _batch_since: dict[tuple[str, str], list] = {}
 
 
 def _batch_log(con, stage: str, collection, msg: str, *, docs: int = 0, chunks: int = 0,
-               secs: float = 0.0, emit: bool = True) -> None:
+               secs: float = 0.0, emit: bool = True, waited: float = 0.0) -> None:
     """`emit=False`: counted into the next line, never a line of its own — a
     one-document batch, which wrote nothing before the counts were carried
     (and a line it wrote went to the stdout of a command whose answer is JSON:
@@ -180,17 +180,19 @@ def _batch_log(con, stage: str, collection, msg: str, *, docs: int = 0, chunks: 
     key = (collection.name, stage)
     now = time.time()
     if docs:
-        acc = _batch_since.setdefault(key, [0, 0, 0, 0.0])
+        acc = _batch_since.setdefault(key, [0, 0, 0, 0.0, 0.0])
         acc[0] += 1
         acc[1] += docs
         acc[2] += chunks
         acc[3] += secs
+        acc[4] += waited
     if emit and now - _batch_log_ts.get(key, 0.0) >= 30:
         _batch_log_ts[key] = now
         acc = _batch_since.pop(key, None)
         if acc is not None and acc[0] > 1:
             msg += (f"; since the last line: {acc[0]} batches, {acc[1]} documents"
-                    + (f", {acc[2]} chunks" if acc[2] else "") + f" in {acc[3]:.1f}s of stage time")
+                    + (f", {acc[2]} chunks" if acc[2] else "") + f" in {acc[3]:.1f}s of stage time"
+                    + (f", {acc[4]:.1f}s of it parsing (waited for or done here)" if acc[4] else ""))
         db.log_event(con, "info", stage, msg)
 
 
@@ -585,6 +587,22 @@ def _fts_recheck(con, rids: list[int]) -> dict[int, dict]:
 _FTS_AHEAD_BATCHES = 2
 
 
+def _fts_ahead_rows(want: int) -> int:
+    """THE ROWS THE LOOK-AHEAD HOLDS: two batches', and never fewer than the
+    pool parses at once — its children, each with a task queued behind it
+    (`parallel.IN_FLIGHT_PER_CHILD`). München, 2026-11-09, normattiva-nemo's
+    text index: long documents (138–185 chunks each) made the sizer take 1–2
+    documents a batch (it sizes by document, and a long one costs seconds),
+    so two batches ahead were 2–4 documents and ~2 of the pool's 11 children
+    parsed them; the wait for those parses counted in the batch's time, which
+    made the next batch as small: 1.6–2.8 docs/s, 220–390 chunks/s, against
+    ~1,070 chunks/s on its short documents. With the pool's window held, the
+    long documents parse side by side, the wait goes, and the sizer's batch
+    grows back by itself. A collection whose batch is already the larger
+    (wikipedia: hundreds of documents) is unchanged."""
+    return max(_FTS_AHEAD_BATCHES * want, parallel.processes() * parallel.IN_FLIGHT_PER_CHILD)
+
+
 def _fts_link(collection, rows: list, known: list, names: bool) -> lookahead.Ahead:
     """One link of the look-ahead: `rows`' parse, the ones not `known`
     computed by `parallel.fts_for_rows` on a daemon thread from now on."""
@@ -604,7 +622,7 @@ def _fts_extend(con, collection, chain: lookahead.Chain, want: int, names: bool)
     the parts a batch always was (parallel.PARTS_PER_CHILD). A SQLite read
     on the pipeline thread, outside any transaction (`_FTS_NEXT`, the scope
     index from a rowid). Returns the rows added."""
-    room = _FTS_AHEAD_BATCHES * want - chain.held()
+    room = _fts_ahead_rows(want) - chain.held()
     added = 0
     while room > 0:
         n = min(room, want)
@@ -759,6 +777,7 @@ def stage_fts(con, row, collection) -> None:
     refs.get_store()
     # (row, (ok, value)) per document, in order, `row` first: parsed while the
     # batch before was written, or here
+    t_parse = time.monotonic()
     computed = _fts_take_ahead(con, row, collection)
     ahead = computed is not None
     if computed is None:
@@ -768,6 +787,11 @@ def stage_fts(con, row, collection) -> None:
         # one (ok, chunks) per row, in order; the selected row's failure IS the
         # round's, a peer's failure drops the peer
         computed = list(zip(rows, parallel.fts_for_rows(collection, rows, names=with_names)))
+    # THE BATCH'S TIME, SPLIT (München, 2026-11-09: normattiva-nemo's long
+    # documents, batches of 1-2 at 1.6-25 s each, could not be told apart as
+    # parse-bound or commit-bound from the total): the parse waited for or
+    # done here, then the index commit, then the marks
+    parse_s = time.monotonic() - t_parse
     names_of: dict[str, tuple | None] = {}
     entities_of: dict[str, list[str]] = {}
 
@@ -802,9 +826,11 @@ def stage_fts(con, row, collection) -> None:
     # before the lock like every other load; `{}` for every other collection
     from app import validity
     cols = validity.columns_for(con, collection, [int(r["native_id"]) for r, _ in batch])
+    t_index = time.monotonic()
     fts.index_books(((r["lang"], int(r["native_id"]), ch, cols.get(int(r["native_id"])),
                       names_of.get(r["uid"]))
                      for r, ch in batch), collection)
+    index_s = time.monotonic() - t_index
 
     # the tantivy commit landed; only the tags and marks remain — SQLite
     # writes, seconds for a batch. THIS is where the write lock begins
@@ -860,9 +886,10 @@ def stage_fts(con, row, collection) -> None:
     # written (the look-ahead) — the line says which, for the log read as a
     # time series (tools/sched_measure.sh reads only the counts before it)
     _batch_log(con, "fts", collection,
-               f"indexed {len(batch)} documents / {n_chunks} chunks in one commit ({took:.1f}s"
+               f"indexed {len(batch)} documents / {n_chunks} chunks in one commit ({took:.1f}s: "
+               f"parse {parse_s:.1f}, index {index_s:.1f}, the rest {max(0.0, took - parse_s - index_s):.1f}"
                + (", parsed ahead)" if ahead else ")"),
-               docs=len(batch), chunks=n_chunks, secs=took, emit=len(batch) > 1)
+               docs=len(batch), chunks=n_chunks, secs=took, emit=len(batch) > 1, waited=parse_s)
 
 #: how long a collection's embed stage stays idle before its encoder's pin
 #: is restored (app/model_pins.py): the idle boundary of the stage (two
