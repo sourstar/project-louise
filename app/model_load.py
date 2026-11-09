@@ -154,6 +154,9 @@ _held: dict[str, dict[str, int]] = {}
 #: model AT REST, as its load left it, before a request grows its buffers —
 #: what the resident budget counts (app/resident.py, 2026-11-08)
 _rest: dict[tuple[str, str], int] = {}
+#: = app/resident.py REST_FLOOR (that module's reasons; kept here, where the
+#: readings are taken, so neither module imports the other at load)
+REST_FLOOR = 0.5
 #: (server, model) listed loaded at least once: a model that holds no VRAM
 #: (one on the CPU) has no `_sizes` entry, and costs the card nothing
 _seen: set[tuple[str, str]] = set()
@@ -221,7 +224,13 @@ def _fetch_system(server: str) -> frozenset[str] | None:
         _seen.update((server, m) for m in now)
         for k, v in sizes.items():
             _sizes[k] = max(v, _sizes.get(k, 0))
-            _rest[k] = min(v, _rest.get(k, v))
+            # a reading under REST_FLOOR of the largest: the model partly off
+            # the card (app/resident.py REST_FLOOR, 2026-11-09), not at rest
+            floor = REST_FLOOR * _sizes[k]
+            if _rest.get(k, floor) < floor:
+                del _rest[k]
+            if v >= floor:
+                _rest[k] = min(v, _rest.get(k, v))
     return frozenset(m["id"] for m in held)
 
 
