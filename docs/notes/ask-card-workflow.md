@@ -43,8 +43,8 @@ were more recently used than MADLAD. Chat ↔ MADLAD cold loads of 5.5–15.2 s 
 | 2 corpus encoders unloaded, idle first, busy retried (4 × 2 s), gate/pass pins kept | app/question_card.py `free_card`, `on_question` (stand-aside hook) and `watch` (1 s, whether corpus work runs or not) | tests/test_question_card.py |
 | 2 the cut batch is a deferral | the existing classification (embeddings `_endpoint_fault`): LocalAI's gRPC 500, a dropped connection | tests/test_endpoint_classification.py, worker path, documents untouched |
 | 3 MADLAD before the search | confirmed: language_plan translates the query before it (Quality); the chat model does it under Speed | tests/test_relay.py |
-| 3 short of space → TTS unloaded | `question_card.before_search`: only if the query encoders cannot fit in the free space PLUS what the question does not use (amended after the measurement below) | tests/test_question_card.py |
-| 4 the answer's models loaded behind; query encoders unloaded only for their room | `question_card.after_search`: chat, MADLAD (not under Speed), TTS, rerankers that are missing; a query encoder goes, largest first, only if they do not fit (amended below); no probe reading → they go | tests/test_question_card.py, tests/test_relay.py |
+| 3 short of space → TTS unloaded | `question_card.before_search`: only if the SEARCH'S SET — its query encoders, chat (it reads the query's language restriction) and, under Quality, MADLAD (it translates the query before the embedding) — cannot fit in the free space PLUS what the question does not use (amended twice after the measurements below) | tests/test_question_card.py |
+| 4 the answer's models loaded behind; query encoders unloaded only for their room | `question_card.after_search`: chat, MADLAD (not under Speed), TTS, rerankers that are missing; a query encoder goes only if they do not fit — the smallest that gives the room alone, else the largest first (amended below); no probe reading → they go | tests/test_question_card.py, tests/test_relay.py |
 | 5 nothing evicted mid-question | the keeper loads nothing while the claim is held (`resident.beat`); corpus stands aside and its encoders are off | tests/test_question_card.py |
 | 6 resume after 5 min with no activity | dispatch `QUESTION_LINGER_S` 15 → 300 s for the search, the answer, the results' translation, every sentence read (the 30 s and the last sentence's 0 retired); `POST /ask/active` from voice.js on the microphone and on each clip played (one a minute at most) | tests/test_speech.py, tests/test_relay.py |
 | 8 Quality / Speed | ask.html group, `translate.speed`, `AskQueryBody.speed`, `TranslateBody.speed` | tests/test_relay.py, tests/test_ask_switch_browser.py |
@@ -67,6 +67,26 @@ Two defects of the build, both fixed by measuring the room (the spec's own condi
 unloaded the query encoders after every search whether or not the answer's models needed the room, so every Ask paid
 them cold (and the keeper preloads them only after the 5 minutes); spec 3 counted the card as it was at the
 question's start, with the corpus encoders the worker was unloading still on it, so it unloaded TTS every time.
+
+## Measured on c26cb21 (München, 2026-11-09, three Italian Asks, node running)
+
+| | Quality 1 | Quality 2 (within 5 min) | Speed |
+|---|---|---|---|
+| TTS at question start | kept | kept | kept |
+| query encoders cold | — | none (they stayed) | qwen3-4b 8.1 s (evicted in Q2) |
+| MADLAD | cold 8.6 s INSIDE the search; card 98.6 % → chat evicted, reloaded 6.3 s | cold 11.4 s inside the search → qwen3-4b evicted | — (evicted by qwen3-4b) |
+| search | 41.3 s | 44.4 s | 46.0 s |
+| first word (from Ask / in the answer) | 49.8 s / 8.2 s | 44.9 s / 0.1 s | 46.7 s / 0.1 s |
+| tap → first sound | 2 ms | 1 ms | 1 ms |
+
+The card holds chat 7.3 + MADLAD 8.0 + TTS 2.2 + rerankers 1.5 + five query encoders 13.9 = 32.9 GB against a 31.0 GB
+line: one of them is always out. Under Quality the search itself uses chat (the language reading) and MADLAD (the
+query's translation) before the query encoders; counted out of the search's room, MADLAD loaded inside it and the
+reclaimer evicted chat or a query encoder. Fixed: the search's set includes them, so TTS gives its room before the
+search (it reloads while the answer streams: tap → sound 1–2 ms above), and after the search the smallest query
+encoder that gives TTS its room goes. Each Ask search now writes one line of its steps (`[info:ask] search … ms:
+languages, catalog, fts, dense, rerank`, the slowest collection of each leg), which was measured all along and never
+written: the 41–46 s with at most one cold load is to be read from it.
 
 ## Measurement after the build (München)
 

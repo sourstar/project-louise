@@ -194,12 +194,52 @@ def test_before_the_search_tts_goes_only_if_the_query_encoders_cannot_fit_with_w
     monkeypatch.setattr(model_load, "held_sizes",
                         lambda s, max_age_s=None: {"omnivoice": (1, 2_200 * 2**20), "chat": (2, 7_300 * 2**20),
                                                     "nemotron": (3, 4_400 * 2**20)})
-    # 3,023 MiB free + nemotron's 4,400 (a corpus encoder) >= 6,900 needed
+    # Speed: 3,023 MiB free + nemotron's 4,400 (a corpus encoder) >= 6,900 needed
     monkeypatch.setattr(resident, "_card", lambda: (32_656 * 2**20, 28_000 * 2**20))
-    assert question_card.before_search(["gutenberg"]) is None and "omnivoice" in card.loaded
+    assert question_card.before_search(["gutenberg"], speed=True) is None and "omnivoice" in card.loaded
     # 1,023 + 4,400 < 6,900: the voice goes
     monkeypatch.setattr(resident, "_card", lambda: (32_656 * 2**20, 30_000 * 2**20))
+    assert question_card.before_search(["gutenberg"], speed=True) == "omnivoice"
+    assert "omnivoice" not in card.loaded
+
+
+def test_under_quality_the_translation_model_is_part_of_the_search_s_room(monkeypatch, isolated_config):
+    """München, 2026-11-09, on c26cb21: MADLAD translates the query before
+    the query encoders embed it; left out of the count, it loaded inside the
+    search onto a full card and the reclaimer took chat or a query encoder
+    (search 41-46 s). Counted, the voice gives its room first."""
+    card = Card(loaded={"omnivoice", "chat", "vega-4b", "bge-m3", "nemotron"}).install(monkeypatch)
+    _answer_setup(monkeypatch, card)
+    monkeypatch.setattr(question_card, "_query_encoders", lambda cols: [(S, "vega-4b"), (S, "bge-m3")])
+    monkeypatch.setattr(model_load, "held_sizes",
+                        lambda s, max_age_s=None: {"omnivoice": (1, 2_200 * 2**20), "chat": (2, 7_300 * 2**20),
+                                                    "vega-4b": (3, 5_600 * 2**20), "bge-m3": (4, 1_300 * 2**20),
+                                                    "nemotron": (5, 4_400 * 2**20)})
+    # 2,023 MiB free + nemotron's 4,400 < MADLAD's 8,000
+    monkeypatch.setattr(resident, "_card", lambda: (32_656 * 2**20, 29_000 * 2**20))
+    assert question_card.before_search(["gutenberg"], speed=True) is None, "Speed: nothing missing"
     assert question_card.before_search(["gutenberg"]) == "omnivoice" and "omnivoice" not in card.loaded
+
+
+def test_after_the_search_the_smallest_query_encoder_that_gives_the_room_alone_goes(monkeypatch, isolated_config):
+    card = Card(loaded={"vega-4b", "bge-m3", "chat", "madlad", "rerank"}).install(monkeypatch)
+    warmed = _answer_setup(monkeypatch, card)
+    monkeypatch.setattr(resident, "_card", lambda: (32_656 * 2**20, 30_000 * 2**20))    # 1,023 MiB free
+    question_card.after_search(["gutenberg"], background=False)
+    assert card.asked == ["bge-m3"] and "vega-4b" in card.loaded, "TTS's 2,200 needs 1,177 more: bge-m3 alone"
+    assert warmed == ["omnivoice"]
+
+
+def test_each_ask_search_says_its_steps(isolated_config, capsys):
+    from app import web
+    body = web.AskQueryBody(query="balene", speed=False)
+    line = web._say_search_timings(body, {"hits": [1, 2], "timings": {
+        "total": 41_300.0, "languages": 9_100.0, "catalog": 40.0, "fts": 300.0, "dense": 29_000.0,
+        "rerank": 2_500.0, "per_collection": {"wikidata": {"catalog": 40.0, "fts": 120.0, "dense": 29_000.0},
+                                              "pubmed": {"catalog": 10.0, "fts": 300.0, "dense": 7_000.0}}}})
+    assert line == ("[info:ask] search 41,300 ms (quality, 2 hits): languages 9,100, catalog 40 (wikidata 40), "
+                    "fts 300 (pubmed 300), dense 29,000 (wikidata 29,000), rerank 2,500")
+    assert line in capsys.readouterr().out
 
 
 def test_the_keeper_loads_nothing_while_a_question_holds_the_claim(monkeypatch):

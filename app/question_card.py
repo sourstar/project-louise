@@ -275,7 +275,16 @@ def before_search(collections: Iterable[Any], *, speed: bool = False) -> str | N
     Never raises."""
     try:
         cols = list(collections)
-        missing = [(s, m) for s, m in _query_encoders(cols) if _loaded(s, m) is False]
+        # THE SEARCH'S OWN SET (München, 2026-11-09, on c26cb21): the chat
+        # model reads the query's language restriction and, under Quality,
+        # MADLAD translates the query BEFORE the query encoders embed it
+        # (app/language_plan.py `plan`); left out of the count, MADLAD loaded
+        # inside the search onto a full card and the reclaimer took chat or
+        # a query encoder (search 41-46 s against 24-32 s)
+        search_set = list(_query_encoders(cols))
+        search_set += [key for role, key, _w in _answer_models(cols, speed=speed)
+                       if role == "chat" or role == "translation"]
+        missing = [(s, m) for s, m in search_set if _loaded(s, m) is False]
         if not missing:
             return None
         needs = 0
@@ -329,6 +338,12 @@ def after_search(collections: Iterable[Any], *, speed: bool = False,
             encoders = [(s, m) for s, m in _query_encoders(cols)
                         if _loaded(s, m) is True and not model_pins.read_pinned(s, m)]
             encoders.sort(key=lambda k: -(model_load.size_vram(*k) or 0))
+            if need is not None and need > 0:
+                # the smallest one that gives the room alone, so the most stay
+                # for the next question; else the largest first
+                one = [k for k in encoders if (model_load.size_vram(*k) or 0) >= need]
+                if one:
+                    encoders = [one[-1]]
             gone = []
             for s, m in encoders:
                 if need is not None and need <= 0:
