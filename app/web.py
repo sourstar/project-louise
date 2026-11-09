@@ -813,6 +813,31 @@ def _question_collections(names: list[str] | None) -> list:
         return []
 
 
+def _say_search_timings(body: AskQueryBody, result: dict) -> str:
+    """ONE LINE PER ASK SEARCH, its steps in ms (München, 2026-11-09: a
+    41-46 s search with at most one cold load, and nothing said where the
+    rest went): languages (the chat model's reading and the query's
+    translation), then catalog, fts, dense and rerank, and the slowest
+    collection of each leg. The timings were measured all along
+    (app/retrieval.py) and returned, never written."""
+    t = result.get("timings") or {}
+    per = t.get("per_collection") or {}
+
+    def slowest(leg: str) -> str:
+        got = [(v.get(leg, 0.0), name) for name, v in per.items() if isinstance(v, dict)]
+        if not got:
+            return ""
+        ms, name = max(got)
+        return f" ({name} {ms:,.0f})"
+    line = (f"[info:ask] search {t.get('total', 0):,.0f} ms"
+            f" ({'speed' if body.speed else 'quality'}, {len(result.get('hits') or [])} hits): "
+            f"languages {t.get('languages', 0):,.0f}"
+            + "".join(f", {leg} {t.get(leg, 0):,.0f}{slowest(leg)}" for leg in ("catalog", "fts", "dense"))
+            + f", rerank {t.get('rerank', 0):,.0f}")
+    print(line, flush=True)
+    return line
+
+
 def _relay_search(job: relay.Job, body: AskQueryBody) -> None:
     # THE CARD FOR THE QUESTION (docs/notes/ask-card-workflow.md spec 3–4;
     # app/question_card.py): room for the query encoders before, the answer's
@@ -823,6 +848,7 @@ def _relay_search(job: relay.Job, body: AskQueryBody) -> None:
     with mt.speed(body.speed):
         result = _ask_result(body)
     question_card.after_search(cols, speed=body.speed)
+    _say_search_timings(body, result)
     html = TEMPLATES.env.get_template("_ask_results.html").render(result=result)
     job.emit("result", html=html, search_id=keep_search(body.query, result),
              hits=len(result.get("hits") or []))
