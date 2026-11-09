@@ -157,12 +157,14 @@ def stop_all() -> None:
 
 
 def reset() -> None:
-    """Tests: forget every gate, the claim memo, the stand-aside counts, the
-    stop and the default."""
+    """Tests: forget every gate, the claim memo, the question's pending
+    linger, the stand-aside counts, the stop and the default."""
     global _default_level
     _stopping.clear()
     _gates.clear()
     _claim_seen.clear()
+    with _board.lock:
+        _board.until = 0.0
     with _stood_lock:
         _stood.clear()
     _default_level = Level.QUERY
