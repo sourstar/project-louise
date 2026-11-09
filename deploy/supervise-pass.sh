@@ -35,7 +35,12 @@
 #                              (12 -> 6 -> 3 -> 2): an OOM loop backs off.
 #                              141 is SIGPIPE: until 2026-10-30 a pool child the
 #                              kernel killed took its parent with it
-#   any other exit             again in 60 s, at most MAX_RESTARTS times
+#   any other exit             again in 60 s, at most MAX_RESTARTS times — but
+#                              FAST_FAILS (3) in a row each within FAST_FAIL_S
+#                              (120 s) of the run's start is a DEFECT of the pass,
+#                              not a crash (2026-11-09: the legal pilot's `pool`,
+#                              an AttributeError at startup, ran 20 times in 19
+#                              min): not restarted; fix it and run it again
 #
 # Every pass carries its own memory cap (`--memory`; refused without one)
 # and runs FIRST IN LINE for the kernel's OOM killer (`--oom-score-adj`,
@@ -63,6 +68,8 @@ set -u
 NAME=$1; shift
 HOLD=${HOLD:-/root/supervise/$NAME.hold}
 MAX_RESTARTS=${MAX_RESTARTS:-20}
+FAST_FAIL_S=${FAST_FAIL_S:-120}
+FAST_FAILS=${FAST_FAILS:-3}
 PAUSE=${PAUSE:-60}
 PROCS=${PARSE_PROCESSES:-}
 CEILING=${CEILING:-$(dirname "$0")/docker-memory-ceiling.sh}
@@ -87,6 +94,7 @@ on_stop() {
 }
 trap on_stop TERM INT
 n=0
+fast=0
 while :; do
     [ -x "$CEILING" ] && "$CEILING"
     env_args=()
@@ -94,6 +102,7 @@ while :; do
     echo "== $(date -u +%FT%TZ) $NAME: run $((n + 1))${PROCS:+, PARSE_PROCESSES=$PROCS}"
     # in the background, so a stop asked meanwhile is handled now (bash runs
     # a trap only between commands, and `wait` is one it interrupts)
+    started=$SECONDS
     docker run --rm --sig-proxy=false --name "$NAME" --oom-score-adj "${OOM_SCORE_ADJ:-500}" \
         "${env_args[@]}" "$@" &
     pid=$!
@@ -112,6 +121,15 @@ while :; do
     if [ "$code" -eq 130 ] || [ "$code" -eq 143 ]; then
         echo "== $NAME: stopped on purpose (SIGTERM, exit $code), not restarted; run it again to resume"
         exit "$code"
+    fi
+    if [ "$code" -ne 137 ] && [ "$code" -ne 141 ] && [ $((SECONDS - started)) -lt "$FAST_FAIL_S" ]; then
+        fast=$((fast + 1))
+        if [ "$fast" -ge "$FAST_FAILS" ]; then
+            echo "== $NAME: exit $code within ${FAST_FAIL_S} s of its start $fast times in a row: a defect in the pass, not a crash; not restarted — fix it and run it again"
+            exit "$code"
+        fi
+    else
+        fast=0
     fi
     n=$((n + 1))
     [ "$n" -ge "$MAX_RESTARTS" ] && { echo "== $NAME: $n restarts, giving up"; exit "$code"; }
