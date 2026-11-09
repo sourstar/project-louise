@@ -209,6 +209,14 @@
   // the next answer is read by itself; dictated: what the microphone left in
   // the box; player: the page's one audio element
   let reading = null, answerLang = null, writing = false, auto = false, dictated = null, player = null;
+  // THE ANSWER MADE INTO SPEECH AS IT ARRIVES (operator, 2026-11-09: "keep
+  // processing the answer as it arrives (TTS buffering)"): a reading that
+  // is not played yet — its sentences asked for as the stream completes
+  // them — taken over by the tap, which then plays what is already made.
+  // The node keeps every sentence made (app/speech.py, the fast drive), so a
+  // stop and a start again ask for nothing twice.
+  let ahead = null;
+  const live = r => reading === r || ahead === r;
   // THE READING'S TIMES (2026-11-08: "it takes a long time to start and it
   // takes long pauses" — measured before anything is changed): ms since Ask
   // was pressed — the answer's first and last word, and per sentence when it
@@ -340,7 +348,7 @@
     }
     const blob = await resp.blob();
     it.t.got = now();
-    if (reading !== r) return null;
+    if (!live(r)) return null;
     const u = URL.createObjectURL(blob); r.urls.push(u); return u;
   }
 
@@ -350,7 +358,7 @@
   // time: a browser opens six connections to a host over HTTP/1.1, and the
   // answer's stream and the page's other requests keep theirs.
   function pump(r) {
-    while (reading === r && r.next < r.items.length && r.inflight < IN_FLIGHT) {
+    while (live(r) && r.next < r.items.length && r.inflight < IN_FLIGHT) {
       const it = r.items[r.next++]; r.inflight++;
       synth(r, it).then(it.ok, it.no).finally(() => { r.inflight--; pump(r); });
     }
@@ -384,10 +392,30 @@
     stopReading(); startReading();
   }
 
+  function newReading() {
+    return { id: Math.random().toString(36).slice(2, 12) || 'r', ctl: new AbortController(), lang: answerLang, text: '', at: 0, off: 0, ended: false,
+             items: [], next: 0, inflight: 0, urls: [], wake: null, more: null, blocked: false };
+  }
+  function dropAhead() {
+    const r = ahead; if (!r) return;
+    ahead = null; r.ctl.abort();
+    for (const it of r.items) it.ok(null);
+    for (const u of r.urls) URL.revokeObjectURL(u);
+  }
+  // the answer shown, made into speech ahead of any tap
+  function prefetch() {
+    if (!speak) return;
+    if (ahead && ahead.lang === answerLang && answerText().startsWith(ahead.text)) { feed(ahead); return; }
+    dropAhead();
+    ahead = newReading();
+    feed(ahead);
+  }
+
   function startReading() {
     if (!player) player = new Audio();
-    const r = { id: Math.random().toString(36).slice(2, 12) || 'r', ctl: new AbortController(), lang: answerLang, text: '', at: 0, off: 0, ended: false,
-                items: [], next: 0, inflight: 0, urls: [], wake: null, more: null, blocked: false };
+    let r;
+    if (ahead && ahead.lang === answerLang && answerText().startsWith(ahead.text)) { r = ahead; ahead = null; }
+    else { dropAhead(); r = newReading(); }
     reading = r; speakState(true);
     times.started.push(now());
     feed(r);
@@ -429,7 +457,7 @@
     // read aloud by itself
     asking() {
       const q = document.getElementById('q');
-      stopReading();
+      stopReading(); dropAhead();
       times = { asked: now(), first: null, last: null, started: [], taps: [], items: [] };
       auto = !!speak && dictated !== null && !!q && q.value.trim() === dictated;
       if (auto) unlock();
@@ -440,15 +468,15 @@
       const t = now(); if (times.first === null) times.first = t; times.last = t;
       if (!speak || !answerText().trim()) return;
       speak.hidden = false;
-      if (reading) follow(); else if (auto) { auto = false; startReading(); }
+      if (reading) follow(); else if (auto) { auto = false; startReading(); } else prefetch();
     },
     // the answer is all there, or shown again
     answerReady(lang) {
       writing = false; answerLang = lang || null;
       if (speak) speak.hidden = !answerText().trim();
-      if (reading) follow();
+      if (reading) follow(); else if (ahead) prefetch();
     },
-    answerCleared() { writing = false; stopReading(); if (speak) speak.hidden = true; },
+    answerCleared() { writing = false; stopReading(); dropAhead(); if (speak) speak.hidden = true; },
     // the reading's times, in ms from Ask (null before an Ask on this page)
     timeline() {
       const at = times.asked, rel = v => (v == null || at == null ? null : v - at);

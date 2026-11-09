@@ -319,8 +319,11 @@ const sentenceOf = size => KNOWN[(size - 44 - 8000) / 20 - 1];
   await emit('delta', { text: 'lowed him.' });
   await emit('end', { state: 'done', reason: '' });
   await sleep(2000);
-  check(posted.speech.length === 2 && (await played()).length === 0 && !(await on()),
-        '9. and nothing more is asked for or played', { posted: posted.speech.length, played: await played() });
+  // operator, 2026-11-09: "keep the buffering available even when I stop/start
+  // the speech" — the answer still arriving is made into speech, never played
+  check(posted.speech.length > 2 && (await played()).length === 0 && !(await on()),
+        '9. nothing is played, and the rest of the answer is still made into speech (buffered)',
+        { posted: posted.speech.length, played: await played() });
 
   // 10. a new question stops the reading too
   await reset();
@@ -371,7 +374,9 @@ const sentenceOf = size => KNOWN[(size - 44 - 8000) / 20 - 1];
   await emit('delta', { text: ' language that became Italian [2]. ' + SENTENCES[2] });
   await emit('end', { state: 'done', reason: '' });
   await sleep(600);
-  check(posted.speech.length === n12, '12. nothing more is fetched meanwhile', posted.speech.map(b => b.input));
+  check(posted.speech.length > n12 && (await played()).length === 0,
+        '12. meanwhile the rest is made into speech (buffered), and nothing is played',
+        posted.speech.map(b => b.input));
   await page.evaluate(() => {
     HTMLMediaElement.prototype.play = function () {
       if (String(this.src).startsWith('blob:')) __played.push(__sizes[this.src]);

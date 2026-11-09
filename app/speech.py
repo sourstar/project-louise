@@ -329,6 +329,63 @@ def reading_turn(header: str | None) -> tuple[str | None, int | None]:
     return (m.group(1), int(m.group(2))) if m else (None, None)
 
 
+#: synthesized sentences kept on the fast drive (LOUISE_CACHE_DIR, through
+#: app/derived.py; none kept where no fast drive is named): at most this many,
+#: the least recently read dropped first
+CLIP_CACHE_FILES = 5000
+_clip_puts = [0]
+
+
+def _clip_dir():
+    from pathlib import Path
+    from app import derived
+    return derived.place("speech-clips", Path(config.louise_root()))
+
+
+def _clip_key(url: str, out: dict) -> str:
+    import hashlib
+    import json
+    return hashlib.sha256(json.dumps({"url": url, **out}, sort_keys=True, ensure_ascii=False,
+                                     default=str).encode("utf-8")).hexdigest()
+
+
+def _clip_get(key: str) -> tuple[bytes, str] | None:
+    d = _clip_dir()
+    if d is None:
+        return None
+    for f in d.glob(f"{key}.*"):
+        try:
+            data = f.read_bytes()
+            f.touch()                                   # the most recently read
+        except OSError:
+            return None
+        return data, "audio/" + f.suffix[1:]
+    return None
+
+
+def _clip_put(key: str, data: bytes, ctype: str) -> None:
+    """Kept whole or not at all (written aside, then renamed); a fast drive
+    that cannot be written keeps nothing and fails nothing."""
+    import os
+    d = _clip_dir()
+    if d is None:
+        return
+    sub = str(ctype).split(";")[0].split("/", 1)[-1].strip() or "wav"
+    try:
+        d.mkdir(parents=True, exist_ok=True)
+        tmp = d / f".{key}.{os.getpid()}.tmp"
+        tmp.write_bytes(data)
+        os.replace(tmp, d / f"{key}.{sub}")
+        _clip_puts[0] += 1
+        if _clip_puts[0] % 100 == 0:
+            files = sorted((f for f in d.iterdir() if not f.name.startswith(".")),
+                           key=lambda f: f.stat().st_mtime)
+            for f in files[:max(0, len(files) - CLIP_CACHE_FILES)]:
+                f.unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
 def synthesize(body: dict[str, Any], url: str | None = None) -> tuple[int, bytes, str]:
     """(status, audio or error body, content type) for an OpenAI speech
     request, relayed to the model server; the model and the voice the
@@ -366,8 +423,18 @@ def synthesize_timed(body: dict[str, Any], url: str | None = None, *,
     from app import speech_numbers
     said = str(out.get("language") or "").split("-")[0].split("_")[0].lower() or None
     out["input"] = speech_numbers.verbalize(out["input"], said)
+    # THE CLIP KEPT (operator, 2026-11-09: "keep the buffering available even
+    # when I stop/start the speech"): the same request — model, voice,
+    # language, words — answered from the fast drive, at once and in any order
+    key = _clip_key(url, out)
+    kept = _clip_get(key)
+    if kept is not None:
+        clip = audio_ms(kept[0])
+        return 200, kept[0], kept[1], [("cache", 1.0)] + ([("audio", clip)] if clip is not None else [])
     with _TURNS.turn(reading, n) as waited:
         status, content, ctype, timing = _synthesize_call(url, model, out)
+    if status == 200 and str(ctype).startswith("audio/"):
+        _clip_put(key, content, ctype)
     return status, content, ctype, ([("turn", waited)] if reading is not None else []) + timing
 
 
