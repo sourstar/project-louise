@@ -259,7 +259,8 @@ def test_a_search_frees_the_card_around_itself_and_the_page_s_activity_keeps_the
     from app.rage import dispatch
     steps = []
     monkeypatch.setattr(web, "_question_collections", lambda names: ["gutenberg"])
-    monkeypatch.setattr(question_card, "before_search", lambda cols: steps.append(("before", cols)))
+    monkeypatch.setattr(question_card, "before_search",
+                        lambda cols, speed=False: steps.append(("before", cols)))
     monkeypatch.setattr(question_card, "after_search",
                         lambda cols, speed=False: steps.append(("after", cols, speed)))
     monkeypatch.setattr(web, "_ask_result", lambda body: steps.append(("search",)) or {"hits": [], "timings": {}})

@@ -20,13 +20,14 @@ module is what the card does about it, on both sides:
   stage as a 5xx or a dropped connection: the endpoint's state, a deferral
   (embeddings._endpoint_fault), never a document's error.
 
-- THE WEB (`before_search`, `after_search`): before the search, if the
-  query encoders the search will load do not fit under the reclaimer's
-  line, the text-to-speech model goes first (not needed until the reading,
-  spec 3). After it, the query encoders of the question's collections are
-  unloaded and the answer's models loaded behind, in the order the answer
-  meets them: chat, the translation model (not for a reader who chose
-  Speed), text to speech, the rerankers (spec 4).
+- THE WEB (`before_search`, `after_search`): ON MEASURED ROOM ONLY
+  (München's measurement of a2aaf67, 2026-11-09). Before the search the
+  text-to-speech model goes only if the query encoders cannot fit even with
+  what the question does not use given back (spec 3). After it the answer's
+  missing models are loaded behind, in the order the answer meets them —
+  chat, the translation model (not for a reader who chose Speed), text to
+  speech, the rerankers — and a query encoder goes only if they need its
+  room, the largest first (spec 4).
 
 The keeper (app/resident.py `beat`) loads nothing while the claim is held,
 so nothing undoes this mid-question; the claim lingers
@@ -222,13 +223,59 @@ def _tts() -> tuple[str, str] | None:
     return (model_load.server_of(url), model) if url and model else None
 
 
-def before_search(collections: Iterable[Any]) -> str | None:
-    """If the query encoders this search loads do not fit under the
-    reclaimer's line, the text-to-speech model is unloaded (spec 3). Returns
-    the model unloaded, or None. Never raises."""
-    try:
+def _free(server: str) -> int | None:
+    """Bytes under the reclaimer's line on the card now (negative: past it);
+    None when the probe cannot say."""
+    from app import resident
+    card = resident._card()
+    if card is None:
+        return None
+    total, used = card
+    return int(resident._threshold(server) * total) - used
+
+
+def _answer_models(collections: Iterable[Any], *, speed: bool
+                   ) -> list[tuple[str, tuple[str, str], Callable[[], object]]]:
+    """(role, (server, model), warm) of what the answer meets, in that order:
+    chat, the translation model (not under Speed), text to speech, the
+    rerankers of the question's collections."""
+    from app import collections as collections_mod, config, llm, retrieval, translate
+    out: list[tuple[str, tuple[str, str], Callable[[], object]]] = []
+    if config.CHAT_URL and config.CHAT_MODEL:
+        out.append(("chat", (model_load.server_of(config.CHAT_URL), config.CHAT_MODEL), llm.warm))
+    if not speed and config.TRANSLATE_URL and config.TRANSLATE_MODEL:
+        out.append(("translation", (model_load.server_of(config.TRANSLATE_URL), config.TRANSLATE_MODEL),
+                    translate.warm))
+    tts = _tts()
+    if tts is not None:
         from app import resident
-        missing = [(s, m) for s, m in _query_encoders(collections) if _loaded(s, m) is False]
+        out.append(("text to speech", tts, resident._speech_warm(tts[0], tts[1], "tts", "text to speech")))
+    seen: set[tuple[str, str]] = {key for _r, key, _w in out}
+    for c in collections:
+        try:
+            r = collections_mod.reranker_for(c)
+        except Exception:   # noqa: BLE001 — none declared
+            continue
+        if r is not None and r.url and r.model:
+            key = (model_load.server_of(r.url), r.model)
+            if key not in seen:
+                seen.add(key)
+                out.append(("reranker", key, lambda r=r: retrieval._warm_reranker(r)))
+    return out
+
+
+def before_search(collections: Iterable[Any], *, speed: bool = False) -> str | None:
+    """THE TEXT-TO-SPEECH MODEL GOES ONLY WHEN THE QUERY ENCODERS CANNOT FIT
+    OTHERWISE (spec 3), counted on the card as it will be: the free space
+    under the reclaimer's line PLUS what the question does not use — the
+    corpus encoders the worker is unloading as the search starts, any other
+    idle model. München, 2026-11-09, on a2aaf67: counted on the card as it
+    was, it unloaded omnivoice at the start of every Ask, and the first
+    sentence then waited 14 s for it. Returns the model unloaded, or None.
+    Never raises."""
+    try:
+        cols = list(collections)
+        missing = [(s, m) for s, m in _query_encoders(cols) if _loaded(s, m) is False]
         if not missing:
             return None
         needs = 0
@@ -237,18 +284,21 @@ def before_search(collections: Iterable[Any]) -> str | None:
             if size is None:
                 return None                   # never seen loaded: nothing to tell from
             needs += size
-        card = resident._card()
-        if card is None:
-            return None
-        total, used = card
-        free = int(resident._threshold(missing[0][0]) * total) - used
+        server = missing[0][0]
+        free = _free(server)
         tts = _tts()
-        if needs <= free or tts is None or _loaded(*tts) is not True or model_pins.read_pinned(*tts):
+        if free is None or tts is None:
+            return None
+        used_by_question = set(_query_encoders(cols)) | {key for _r, key, _w in _answer_models(cols, speed=speed)}
+        held = model_load.held_sizes(server, max_age_s=0.0) or {}
+        freeable = sum(b for m, (_pid, b) in held.items() if (server, m) not in used_by_question)
+        if needs <= free + freeable or _loaded(*tts) is not True or model_pins.read_pinned(*tts):
             return None
         if model_load.unload(*tts):
-            _say("info", f"question: {tts[1]} unloaded before the search — the query encoders need "
-                         f"{needs // 2**20:,} MiB, {max(0, free) // 2**20:,} MiB free under the line; "
-                         f"loaded again for the reading")
+            _say("info", f"question: {tts[1]} unloaded before the search — its query encoders need "
+                         f"{needs // 2**20:,} MiB, {max(0, free) // 2**20:,} MiB free under the line and "
+                         f"{freeable // 2**20:,} MiB held by models the question does not use; loaded "
+                         f"again for the reading")
             return tts[1]
     except Exception:   # noqa: BLE001 — the search goes on as before
         return None
@@ -257,36 +307,43 @@ def before_search(collections: Iterable[Any]) -> str | None:
 
 def after_search(collections: Iterable[Any], *, speed: bool = False,
                  background: bool = True) -> threading.Thread | None:
-    """The search is over: its query encoders off the card, the answer's
-    models on it (spec 4), on a thread of its own so the results are not
-    held. Returns the thread (None when `background` is False)."""
+    """The search is over: the answer's models on the card (spec 4), on a
+    thread of its own so the results are not held. THE QUERY ENCODERS STAY
+    unless the answer's missing models do not fit beside them — then the
+    largest go first, only as many as the room needs (München, 2026-11-09,
+    on a2aaf67: unloaded after every search, each Ask paid 4–5 cold query
+    encoders, 5–14 s each, 24–32 s of its search; a second question within
+    the five minutes paid them again). Where the room cannot be told (no
+    probe, a size never seen) they go, as the spec first said. Returns the
+    thread (None when `background` is False)."""
     cols = list(collections)
 
     def run() -> None:
-        for s, m in _query_encoders(cols):
-            try:
-                if not model_pins.read_pinned(s, m):
-                    model_load.unload(s, m)
-            except Exception:   # noqa: BLE001 — left to the reclaimer
-                pass
-        warms: list[tuple[str, Callable[[], object]]] = []
-        from app import config, llm, translate
-        if config.CHAT_URL and config.CHAT_MODEL:
-            warms.append(("chat", llm.warm))
-        if not speed and config.TRANSLATE_URL and config.TRANSLATE_MODEL:
-            warms.append(("translation", translate.warm))
-        tts = _tts()
-        if tts is not None:
-            from app import resident
-            warms.append(("text to speech", resident._speech_warm(tts[0], tts[1], "tts", "text to speech")))
-        from app import collections as collections_mod, retrieval
-        seen = set()
-        for c in cols:
-            r = collections_mod.reranker_for(c)
-            if r is not None and r.model and (r.url, r.model) not in seen:
-                seen.add((r.url, r.model))
-                warms.append(("reranker", lambda r=r: retrieval._warm_reranker(r)))
-        for _role, warm in warms:
+        answer = _answer_models(cols, speed=speed)
+        missing = [(role, key, warm) for role, key, warm in answer if _loaded(*key) is False]
+        if missing:
+            server = missing[0][1][0]
+            sizes = [model_load.size_vram(*key) for _r, key, _w in missing]
+            free = _free(server)
+            need = None if free is None or any(z is None for z in sizes) else sum(sizes) - free
+            encoders = [(s, m) for s, m in _query_encoders(cols)
+                        if _loaded(s, m) is True and not model_pins.read_pinned(s, m)]
+            encoders.sort(key=lambda k: -(model_load.size_vram(*k) or 0))
+            gone = []
+            for s, m in encoders:
+                if need is not None and need <= 0:
+                    break
+                try:
+                    if model_load.unload(s, m):
+                        gone.append(m)
+                        if need is not None:
+                            need -= model_load.size_vram(s, m) or 0
+                except Exception:   # noqa: BLE001 — left to the reclaimer
+                    pass
+            if gone:
+                _say("info", f"question: query encoder(s) {', '.join(gone)} unloaded after the search — "
+                             f"the answer's {', '.join(k[1] for _r, k, _w in missing)} need the room")
+        for _role, _key, warm in missing:
             try:
                 warm()
             except Exception:   # noqa: BLE001 — loaded at its first request instead
