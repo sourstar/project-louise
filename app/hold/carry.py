@@ -913,6 +913,95 @@ def _content_of(root: Path, name: str) -> dict[str, tuple[str, str | None]]:
     return out
 
 
+#: THE RECONCILE'S CONTENT MAPS, ON DISK (München, 2026-11-09): held as two
+#: dicts, pubmed's two snapshots — 41 M records each — grew one process to
+#: 20 GB and the pass was OOM-killed twice at its 20 GB cap, an hour in
+#: each time. uid → the content_hash's 16-byte digest and the origin_hash,
+#: per side, in this side table under the target's state, filled one
+#: snapshot part at a time by the parse pool (`parallel.each_part`, the
+#: multi-core rule), resumable at a part, read a window at a time by uid,
+#: and deleted once the reconcile is done. Memory: one part and one window.
+CONTENT_DB = "reconcile-content.sqlite"
+#: the sides of the side table
+_BEFORE, _AFTER = 0, 1
+
+
+def _digest(v: str | None) -> bytes | None:
+    """A content_hash, compared by its 128-bit BLAKE2b digest (equality only;
+    a collision is ~2^-64 at 2^32 records): None stays None, so two records
+    without one compare equal, as the strings did."""
+    import hashlib
+    return None if v is None else hashlib.blake2b(v.encode("utf-8"), digest_size=16).digest()
+
+
+def _part_content(path: str, with_origin: bool) -> list[tuple[str, bytes | None, str | None]]:
+    """One part's (uid, content digest, origin_hash — the target's only: the
+    source's is never read), in the part's order — a pool task
+    (`parallel.each_part`), module-level so it pickles."""
+    from app.pack import records as pack_records
+    return [(r["uid"], _digest(r.get("content_hash")), r.get("origin_hash") if with_origin else None)
+            for r in pack_records.iter_records(Path(path))]
+
+
+def _content_table(root: Path, from_name: str, to_name: str, log: Callable[[str], None]) -> Path:
+    """The side table for this pair's latest snapshots, filled (resumably);
+    another pair's or snapshot's is started afresh."""
+    from app import parallel
+
+    from . import collection as col
+    path = _paths(root, to_name)["state"] / CONTENT_DB
+    sides = ((_BEFORE, from_name, latest_snapshot(root, from_name)),
+             (_AFTER, to_name, latest_snapshot(root, to_name)))
+    key = json.dumps([[n, s.snapshot_id] for _side, n, s in sides])
+    con = sqlite3.connect(path)
+    try:
+        con.execute("PRAGMA journal_mode=WAL")
+        con.execute("PRAGMA synchronous=NORMAL")      # derived: re-made from the snapshots
+        con.execute("CREATE TABLE IF NOT EXISTS meta(k TEXT PRIMARY KEY, v TEXT)")
+        held = con.execute("SELECT v FROM meta WHERE k='for'").fetchone()
+        if held is not None and held[0] != key:
+            con.execute("DROP TABLE IF EXISTS content")
+            con.execute("DROP TABLE IF EXISTS parts")
+        con.execute("INSERT OR REPLACE INTO meta VALUES('for', ?)", (key,))
+        con.execute("CREATE TABLE IF NOT EXISTS content(side INTEGER, uid TEXT, ch BLOB, oh TEXT, "
+                    "PRIMARY KEY(side, uid)) WITHOUT ROWID")
+        con.execute("CREATE TABLE IF NOT EXISTS parts(side INTEGER, path TEXT, "
+                    "PRIMARY KEY(side, path)) WITHOUT ROWID")
+        con.commit()
+        for side, name, snap in sides:
+            d = col.shard_dir_of(root, name)
+            done = {p for (p,) in con.execute("SELECT path FROM parts WHERE side=?", (side,))}
+            todo = [sh.path for sh in snap.shards if sh.path not in done]
+            if todo:
+                log(f"[carry] {to_name}: reading {len(todo)} of {len(snap.shards)} part(s) of "
+                    f"{name}'s snapshot {snap.snapshot_id} into {path.name}")
+            t0 = time.monotonic()
+            tasks = [(str(d / p), side == _AFTER) for p in todo]
+            for n, (part, rows) in enumerate(zip(todo, parallel.each_part(_part_content, tasks)), 1):
+                con.execute("BEGIN")
+                con.executemany("INSERT OR REPLACE INTO content VALUES(?,?,?,?)",
+                                [(side, u, ch, oh) for u, ch, oh in rows])
+                con.execute("INSERT INTO parts VALUES(?,?)", (side, part))
+                con.execute("COMMIT")
+                if n % 200 == 0:
+                    log(f"[carry] {to_name}: {n} of {len(todo)} part(s) of {name} read "
+                        f"({time.monotonic() - t0:.0f} s)")
+    finally:
+        con.close()
+    return path
+
+
+def _content_window(con, side: int, uids: list[str]) -> dict[str, tuple[bytes | None, str | None]]:
+    out: dict[str, tuple[bytes | None, str | None]] = {}
+    for i in range(0, len(uids), 500):
+        part = uids[i:i + 500]
+        for u, ch, oh in con.execute(
+                f"SELECT uid, ch, oh FROM content WHERE side=? AND uid IN ({','.join('?' * len(part))})",
+                [side, *part]):
+            out[u] = (ch, oh)
+    return out
+
+
 def _cursor(con, key: str, pair: list[str], fresh: dict[str, Any]) -> dict[str, Any]:
     """A resumable pass's cursor in the manifest's `control` table, valid only
     for the collections it was written for: a manifest is COPIED by a carry,
@@ -948,7 +1037,8 @@ def reconcile(root, from_ref: str, to_ref: str, *, window: int = WINDOW,
             and held.get("to") == to.collection_id):
         raise CodexError(f"reconcile: {to_name} records no finished `carry --rebuilt` from "
                          f"{from_name} ({marker})")
-    before, after = _content_of(root, from_name), _content_of(root, to_name)
+    side_path = _content_table(root, from_name, to_name, log)
+    side = sqlite3.connect(f"file:{side_path}?mode=ro", uri=True)
     coll = rec.local_collection(root, to_name, codex=to)
     con = db.connect(coll)
     try:
@@ -966,6 +1056,8 @@ def reconcile(root, from_ref: str, to_ref: str, *, window: int = WINDOW,
                 con.execute("COMMIT")
                 break
             last = int(rows[-1]["rowid"])
+            uids = [r["uid"] for r in rows]
+            before, after = _content_window(side, _BEFORE, uids), _content_window(side, _AFTER, uids)
             same = {r["uid"] for r in rows
                     if r["uid"] in after and r["uid"] in before
                     and after[r["uid"]][0] == before[r["uid"]][0]}
@@ -1006,11 +1098,16 @@ def reconcile(root, from_ref: str, to_ref: str, *, window: int = WINDOW,
             con.execute("BEGIN IMMEDIATE")
             db.set_control(con, RECONCILE_KEY, json.dumps(state, sort_keys=True))
             con.execute("COMMIT")
+        counts = dict(side.execute("SELECT side, COUNT(*) FROM content GROUP BY side").fetchall())
     finally:
         con.close()
+        side.close()
+    # derived, and re-made from the snapshots if ever needed again
+    for suffix in ("", "-wal", "-shm"):
+        Path(str(side_path) + suffix).unlink(missing_ok=True)
     out = {"collection": to_name, "kept": state["kept"], "reset": state["reset"],
-           "rehashed": state["rehashed"], "records_before": len(before),
-           "records_after": len(after)}
+           "rehashed": state["rehashed"], "records_before": counts.get(_BEFORE, 0),
+           "records_after": counts.get(_AFTER, 0)}
     log(f"[carry] {to_name}: {state['kept']} document(s) keep their vectors (same "
         f"content_hash as {from_name}), {state['reset']} to embed again, "
         f"{state['rehashed']} txt_hash(es) set to their record's origin_hash. Before use: "
