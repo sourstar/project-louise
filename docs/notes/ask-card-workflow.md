@@ -27,11 +27,13 @@ were more recently used than MADLAD. Chat ↔ MADLAD cold loads of 5.5–15.2 s 
    new Ask, the mic, audio playing): corpus embedding resumes and reloads its encoders; the query encoders are
    preloaded when the card is idle.
 7. **Never evicted**: a model pinned by a gate or a supervised pass.
-8. **Checkbox** (the operator's addition): translate with the CHAT model instead of MADLAD, labelled as trading
-   quality for speed — e.g. "Faster translation (uses the chat model — quicker, lower quality than the dedicated
-   translator)". On: MADLAD is neither preloaded nor loaded for the question (8 GB freed). Proposed home: the Ask
-   page's own settings, kept in the reader's browser like the language — a reader's choice (RULE 2: operators'
-   choices live in the command line); the node's default stays MADLAD.
+8. **The Quality / Speed switch** (operator, 2026-11-09, choice B, its form decided): on the Ask page, in the SAME
+   form as "Search only" / "Search + AI summary" — two choices, remembered in the reader's browser.
+   - **Quality** (the default): as now — MADLAD translates the query, the results and the entries.
+   - **Speed**: the CHAT model translates instead of MADLAD; MADLAD is not loaded for that reader's question (8 GB
+     freed on the card). The label says it trades quality for speed.
+   A reader's choice (RULE 2: operators' choices live in the command line); the node keeps MADLAD as its default and
+   still preloads it at rest.
 
 ## Measurement after the build (München)
 
