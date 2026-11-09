@@ -127,9 +127,14 @@ live snapshot's 40 M lines and parses only those again:
    `--copy` where reflinks are available). It also copies pubmed's
    `state/ack.json` into pubmed9, so the acknowledgement outlives the old
    collection's forget.
-4. `louise hold records build pubmed9 --corpus <pubmed's origin> --records-from pubmed`:
-   the log names how many lines are parsed again (~64 k plus what NCBI
-   added since the 10-19 count). Then `hold snapshot create`.
+4. `louise hold records build pubmed9 --corpus <pubmed's origin> --records-from pubmed`,
+   in its own container under `deploy/supervise-pass.sh` (2026-11-08: run
+   by `docker exec` it shared the worker's 24 GiB cap and was OOM-killed
+   with it at 3,914 s). The log names how many lines are parsed again:
+   measured 24,463 `other-abstract-only` (estimated ~64 k), in 20,073 s for
+   41,116,303 records and 1,396 parts. Then `hold records validation
+   pubmed9` (the snapshot refuses a SHARD without `validation.json`, 09
+   §9.4), then `hold snapshot create`.
 5. `louise dev carry pubmed pubmed9 --reconcile --yes`: every document whose
    `content_hash` did not move keeps its vectors, and the moved ones are
    reset to embed again.

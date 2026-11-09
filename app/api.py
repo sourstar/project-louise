@@ -1112,7 +1112,10 @@ async def audio_speech(request: Request):
         raise HTTPException(400, "the body is not JSON")
     if not isinstance(body, dict):
         raise HTTPException(400, "the body is not a JSON object")
-    status, content, ctype, timing = await run_in_threadpool(speech.synthesize_timed, body)
+    # the reading's order (`Louise-Reading: <id>/<n>`, speech.Turns)
+    reading, n = speech.reading_turn(request.headers.get("louise-reading"))
+    status, content, ctype, timing = await run_in_threadpool(
+        lambda: speech.synthesize_timed(body, reading=reading, n=n))
     from . import transcribe
     headers = {"Server-Timing": transcribe.server_timing(timing)} if timing else {}
     return Response(content=content, status_code=status, media_type=ctype, headers=headers)

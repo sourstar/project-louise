@@ -73,6 +73,7 @@ const sentenceOf = size => KNOWN[(size - 44 - 8000) / 20 - 1];
     }
     if (u.pathname === '/v1/audio/speech' && req.method === 'POST') {
       const b = JSON.parse(req.postData); posted.speech.push(b);
+      b.__reading = (req.headers || {})['louise-reading'] || null;
       const wait = b.input in slow ? slow[b.input] : speechDelay;
       if (wait) await sleep(wait);
       return req.respond({ status: 200, contentType: 'audio/wav',
@@ -301,6 +302,9 @@ const sentenceOf = size => KNOWN[(size - 44 - 8000) / 20 - 1];
   check(JSON.stringify(sp.map(s => s.input)) === JSON.stringify(SENTENCES) && sp.every(s => s.state === 'answered'),
         '8. every sentence asked for once, whole, in order', sp);
   check(JSON.stringify(await played()) === JSON.stringify(SENTENCES), '8. played in order, the first though its speech came last', await played());
+  const order = posted.speech.map(b => b.__reading);
+  check(order.every((h, i) => h && h.endsWith('/' + i) && h.split('/')[0] === order[0].split('/')[0]),
+        '8. each sentence names its reading and its place (the node keeps the order: speech.Turns)', order);
   slow = {};
 
   // 9. tapped while the answer is still written: the fetches in flight are
@@ -427,6 +431,8 @@ const sentenceOf = size => KNOWN[(size - 44 - 8000) / 20 - 1];
   check(pieces.length === 2 && pieces[0] === 'Il poema, composto in terzine incatenate di endecasillabi,' && pieces[0].length <= 90
         && pieces.join(' ') === LONGFIRST, '18. a long first sentence is read in two, at a clause mark', pieces);
   check(Array.isArray(t18.started) && t18.started.length === 1, '18. the reading\'s start is kept', t18.started);
+  check(Array.isArray(t18.taps) && t18.taps.length === 1 && t18.taps[0] < lastWordAt && t18.started[0] >= t18.taps[0],
+        '18. the tap is kept, beside the start it made', { taps: t18.taps, started: t18.started, lastWordAt });
   check(t18.sentences.length >= 4 && t18.sentences[0].cut < lastWordAt - 500,
         '18. a production-shaped stream is cut while it is written, not at its end',
         { lastWordAt, t18, text: await page.evaluate(() => document.getElementById('answer').textContent),

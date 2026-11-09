@@ -215,7 +215,7 @@
   // was cut, sent, received, played and ended, with the node's own synthesis
   // time and the clip's length (`Server-Timing`). `louiseVoice.timeline()`.
   const now = () => Math.round(performance.now());
-  let times = { asked: null, first: null, last: null, started: [], items: [] };
+  let times = { asked: null, first: null, last: null, started: [], taps: [], items: [] };
 
   // the first sentence of a reading in two where it is long (FIRST_MAX)
   function firstPieces(s) {
@@ -328,8 +328,10 @@
     const s = it.text;
     const body = { input: s }; if (r.lang) body.language = r.lang;
     it.t.sent = now();
+    // the reading's order: the node sends sentence n once n - 1 is back
+    // (app/speech.py Turns), so the backend never makes the second first
     const resp = await fetch('/v1/audio/speech', { method: 'POST', signal: r.ctl.signal,
-      headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+      headers: { 'Content-Type': 'application/json', 'Louise-Reading': r.id + '/' + it.n }, body: JSON.stringify(body) });
     Object.assign(it.t, serverTiming(resp.headers.get('server-timing')));
     if (resp.status === 400) return null;      // nothing to say once its citations are gone
     if (!resp.ok) {
@@ -360,7 +362,7 @@
     r.ended = !writing; r.text = t;
     for (const whole of cut(r, t, r.ended)) {
       for (const s of (r.items.length ? [whole] : firstPieces(whole))) {
-        const it = { text: s, t: { chars: s.length, cut: now() } };
+        const it = { text: s, n: r.items.length, t: { chars: s.length, cut: now() } };
         times.items.push(it.t);
         it.p = new Promise((ok, no) => { it.ok = ok; it.no = no; }); it.p.catch(() => {});
         r.items.push(it);
@@ -384,7 +386,7 @@
 
   function startReading() {
     if (!player) player = new Audio();
-    const r = { ctl: new AbortController(), lang: answerLang, text: '', at: 0, off: 0, ended: false,
+    const r = { id: Math.random().toString(36).slice(2, 12) || 'r', ctl: new AbortController(), lang: answerLang, text: '', at: 0, off: 0, ended: false,
                 items: [], next: 0, inflight: 0, urls: [], wake: null, more: null, blocked: false };
     reading = r; speakState(true);
     times.started.push(now());
@@ -414,6 +416,7 @@
   }
 
   if (speak) speak.addEventListener('click', () => {
+    times.taps.push(now());                    // when the tap came, beside when a reading started
     if (reading) { stopReading(); return; }
     unlock(); startReading();
   });
@@ -427,7 +430,7 @@
     asking() {
       const q = document.getElementById('q');
       stopReading();
-      times = { asked: now(), first: null, last: null, started: [], items: [] };
+      times = { asked: now(), first: null, last: null, started: [], taps: [], items: [] };
       auto = !!speak && dictated !== null && !!q && q.value.trim() === dictated;
       if (auto) unlock();
     },
@@ -452,7 +455,7 @@
       return { first_word: rel(times.first), last_word: rel(times.last),
                // each start of a reading: a tap, a question read by itself,
                // or a reading moved to a changed text (follow)
-               started: times.started.map(rel),
+               started: times.started.map(rel), taps: times.taps.map(rel),
                sentences: times.items.map(t => ({ chars: t.chars, cut: rel(t.cut), sent: rel(t.sent),
                  got: rel(t.got), synth: t.synth ?? null, audio: t.audio ?? null,
                  play: rel(t.play), end: rel(t.end) })) };
