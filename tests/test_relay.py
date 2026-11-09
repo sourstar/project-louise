@@ -220,3 +220,28 @@ def test_an_answer_job_relays_the_models_words(isolated_config, monkeypatch):
     got = _events(c.get(f"/ask/relay/{aid}/events").text)
     assert "".join(d["text"] for _i, k, d in got if k == "delta") == "The whale rose [1]."
     assert got[-1][1] == "end" and got[-1][2]["state"] == "done"
+
+
+def test_speed_translates_with_the_chat_model_and_never_asks_the_translation_model(isolated_config, monkeypatch):
+    """Operator, 2026-11-09, choice B: the Ask page's Quality / Speed. With
+    Speed the translation model is not asked (nor loaded) for the search or
+    the entries; Quality (the default) is as before."""
+    from app import config, llm, translate as mt
+    from app.api import app
+    monkeypatch.setattr(config, "TRANSLATE_URL", "http://mt")
+    asked = []
+    monkeypatch.setattr(mt, "translate", lambda items: asked.append(len(items)) or ["tradotto"] * len(items))
+    monkeypatch.setattr(llm, "translate_texts", lambda texts, lang: ["chat:" + t for t in texts])
+    seen = []
+    monkeypatch.setattr(web, "_ask_result", lambda body: seen.append(mt.available()) or {"hits": [], "timings": {}})
+    c = TestClient(app)
+    for speed in (False, True):
+        r = c.post("/ask/relay", json={"kind": "search", "search": {"query": "balene", "speed": speed}})
+        job = relay.get(r.json()["id"], "guest:None")
+        _wait(lambda: job.state == relay.DONE)
+    assert seen == [True, False], "Speed: no translation model for the search"
+    got = c.post("/ask/translate", json={"lang": "en", "speed": True,
+                                         "items": [{"id": "t1", "text": "Moby Dick, la balena", "src": "it"}]}).json()
+    assert asked == [] and got["items"]["t1"].startswith("chat:"), got
+    c.post("/ask/translate", json={"lang": "en", "items": [{"id": "t2", "text": "Il vecchio e il mare", "src": "it"}]})
+    assert asked, "Quality: the translation model, as before"

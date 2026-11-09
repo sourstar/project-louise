@@ -226,6 +226,9 @@ def _spec_or_400(collection: collections_mod.Collection):
 
 class AskQueryBody(BaseModel):
     query: str
+    # the reader's "Quality / Speed" (operator, 2026-11-09): Speed translates
+    # with the chat model instead of the translation model (app/translate.py)
+    speed: bool = False
     collections: list[str] | None = None
     mode: str = "hybrid"
     # "the maximum number of results a query returns before and after
@@ -326,6 +329,7 @@ def _ask_annotations() -> list[dict]:
 
 class TranslateBody(BaseModel):
     lang: str
+    speed: bool = False        # the reader's Speed: the chat model translates
     items: list[dict]          # [{"id": ..., "text": ..., "src": <its language>}]
 
 
@@ -544,7 +548,7 @@ def ask_translate(body: TranslateBody):
     # partial case — some passages translated, some did not — and the page
     # shows what it got and names the rest rather than discarding good
     # content for the sake of a uniform screen.
-    out, failed, missed = _translate_batch(lang, _translate_items(body))
+    out, failed, missed = _translate_batch(lang, _translate_items(body), use_mt=not body.speed)
     return {"lang": lang, "items": out, "failed": failed, "missed": missed}
 
 
@@ -590,7 +594,7 @@ def ask_translate_stream(body: TranslateBody):
                 yield line({"id": cid, "text": hit})
             else:
                 pending.append((cid, text, src))
-        if mt.available():
+        if mt.available() and not body.speed:
             # THE TRANSLATION MODEL, in the page's order and in rounds the
             # page can watch arrive: the short items in one call (titles,
             # headings — measured 1.1 s for six), the first long one alone
@@ -792,7 +796,8 @@ def _relay_owner(request: Request) -> str:
 
 
 def _relay_search(job: relay.Job, body: AskQueryBody) -> None:
-    result = _ask_result(body)
+    with mt.speed(body.speed):
+        result = _ask_result(body)
     html = TEMPLATES.env.get_template("_ask_results.html").render(result=result)
     job.emit("result", html=html, search_id=keep_search(body.query, result),
              hits=len(result.get("hits") or []))
