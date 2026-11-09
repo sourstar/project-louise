@@ -386,8 +386,14 @@ def build(root, ref: str, *, corpus_dir=None, snapshot_id: str | None = None,
         return result
 
     promoted = _promote_records(staging, shard_dir)
+    # THE SHARD'S validation.json, the Codex's own block (02 §2.6): a pure
+    # function of the Codex, so the build that completes the SHARD writes it
+    # — `hold snapshot create` refuses without it, and it was left to a step
+    # of its own that was missed twice (wikipedia-v8 2026-10-28, pubmed9
+    # 2026-11-09; RULE 2: what the system can determine, it determines)
+    written = write_validation(root, name)
     log(f"[records build] {name}: {result.records} records in {result.shards} "
-        f"shard(s), {promoted} promoted into the SHARD")
+        f"shard(s), {promoted} promoted into the SHARD; validation.json written ({written} bytes)")
     return result
 
 
