@@ -32,8 +32,13 @@ measured (published figures disagree).
 - **Eviction**: #441 (rest floor), #442 (orphan pins released, worked), #443 (off collections' query encoders: no
   query-encoder load on gutenberg), #450 (corpus pins released for a question: worked). Italian Asks still swap
   chat ↔ MADLAD (5.5–15.2 s): the card cannot hold chat 7.3 + MADLAD 8.0 + query encoders ~8.8 + Nemotron 4.4 +
-  voice and rerankers. The operator's corrected workflow is decided and BUILT (branch `ask-card-workflow`, tested,
-  NOT deployed — the operator deploys): [ask-card-workflow.md](ask-card-workflow.md) "Built".
+  voice and rerankers. The operator's corrected workflow is BUILT and LIVE (#458 → #459 → #460, node on 4027f3c):
+  chat never cold mid-answer, tap → first sound 2–3 ms; measurements in [ask-card-workflow.md](ask-card-workflow.md).
+  #461 (wikipedia's fts groups searched at once, 19–25 s → ~3.3 s expected) merged, NOT deployed: the operator's
+  word. MADLAD `parallel: 7 → 4` by hand on the node (operator, 2026-11-09, without an A/B; backup
+  `.bak-20261109-parallel7`). FRIDAY, in the operator's order: (1) a "Quick / Quality" text-search switch beside
+  Quality / Speed — Quick searches only the query's language and English; (2) MADLAD's slots configurable, not a hand
+  edit of its YAML; (3) why 7 slots were chosen.
 - **pubmed parser 9 (other abstracts), done**: records build 41,116,303 records (24,463 lines re-parsed); reconcile
   (#446, on disk) exit 0 in 2,406 s under 8 GiB — kept 39,876,694, reset 1,249,617, rehashed 39,105,624; `hold check`
   PASS (records-vs-origin 9,811 re-parsed, 0 differing; vectors-sample 1,119 chunks at 0.999914). Old pubmed forgotten
