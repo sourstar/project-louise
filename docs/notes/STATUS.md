@@ -18,6 +18,31 @@ build at 12 cores, the GPU uncapped. The card's noise (operator): 0.2 sone
 idle, 3.1 sone at full load, coil whine ~0.9 sone; its fan range is being
 measured (published figures disagree).
 
+### 2026-11-09: before the pause until Friday — what was done, measured and left (München's final report)
+
+- **Voice**: Philippe's reference cut to 7.90 s (19.80–27.70 s of the 27.75 s original, kept as
+  reference-orig-27.75s.wav), operator's choice; steps unchanged. The fixed sentence ×3: RTF **0.44** (0.74 before,
+  ≤ 1.49 before #438). Live: #438 claim, #440 order + taps, #451/#453 reading claim, #452 buffering (page prefetch +
+  `speech-clips` under LOUISE_CACHE_DIR, which is /data/cache on **ssd4**, not ssd3 — Friday's move).
+- **Fault 3 settled, not the page's**: Playwright held the click until the answer ended (click 71,700 ms, last word
+  71,426); the page starts reading 2 ms after the tap.
+- **Search down twice** (#450's helper took the `/ask/relay` route: every POST 422): 08:54–09:08Z, then 09:25–09:52Z
+  (a deploy script re-sent edae533). Fixed by #454 (338ba39, live since ~10:30Z); tests/test_relay.py caught it and
+  had not been run before #450's merge.
+- **Eviction**: #441 (rest floor), #442 (orphan pins released, worked), #443 (off collections' query encoders: no
+  query-encoder load on gutenberg), #450 (corpus pins released for a question: worked). Italian Asks still swap
+  chat ↔ MADLAD (5.5–15.2 s): the card cannot hold chat 7.3 + MADLAD 8.0 + query encoders ~8.8 + Nemotron 4.4 +
+  voice and rerankers. The operator's corrected workflow is decided, to build Friday:
+  [ask-card-workflow.md](ask-card-workflow.md).
+- **pubmed parser 9 (other abstracts), done**: records build 41,116,303 records (24,463 lines re-parsed); reconcile
+  (#446, on disk) exit 0 in 2,406 s under 8 GiB — kept 39,876,694, reset 1,249,617, rehashed 39,105,624; `hold check`
+  PASS (records-vs-origin 9,811 re-parsed, 0 differing; vectors-sample 1,119 chunks at 0.999914). Old pubmed forgotten
+  (204 GB freed on ssd4, origin dataset kept); pubmed9 renamed `pubmed` (cc040745…, parser 9), embed **off** until the
+  operator decides.
+- **Merged, not yet measured**: #444 (fts look-ahead floor + split line: AFTER on the next long-document pass),
+  #447 (records build writes validation.json), #448 (supervisor stops on 3 fast failures), #449 (`node pins`).
+- **Checkpoint** saved 10:39Z, beat for 24 h. Running: wikidata embedding, the legal pilot's jf100 pool.
+
 ### 2026-11-08: the worker OOM-killed every 3–6 min — tantivy readers reloading on every commit, the possession index rebuilt for claims, the snapshot re-read, Lance's caches per connection
 
 - **The defect (the node, from 03:50):** the worker's main process grew to

@@ -2760,5 +2760,10 @@ question does not pin. Its encoders, unused since the question began, are then t
 pins again at its next batch after the question, and reloads an encoder the reclaimer took (the operator accepted
 ~5–15 s of indexing per question).
 
-**AFTER.** Owed: the same Ask after 6b8c108's measurement, with LocalAI's load/evict lines, the pin lines and the
-corpus's reload after it.
+**AFTER (München, 338ba39, the operator's own Asks 10:38–10:56Z).** The release works, verbatim: "model pin: a
+person's question holds the card; corpus pins released until it ends: vega-nemotron-3-embed-1b". The reloads remain:
+search 15.3 / 33.5 / 39.7 / 17.9 s, chat cold 15.2 / 5.5 / 5.9 s, MADLAD cold 10.4 / 8.3 s. Mid-question ~25.6 GB
+resident without chat; chat's load evicted MADLAD, its true LRU (last used 5 min before): the query encoders and
+Nemotron were used later. Not this change's defect: the card cannot hold the question's set beside them. Superseded
+by the operator's corrected workflow ([ask-card-workflow.md](ask-card-workflow.md)): corpus encoders unloaded
+actively for a question.
