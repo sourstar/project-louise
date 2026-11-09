@@ -564,7 +564,7 @@ QUESTION_LINGER_S = 15.0
 
 
 @contextmanager
-def question():
+def question(linger: float | None = None):
     """A PERSON'S QUESTION, WHOLE (operator, 2026-11-09, choice B): the
     node's claim for the whole of a search or an answer, not only for each
     model call in it, so corpus work stands aside — and its encoders'
@@ -579,7 +579,7 @@ def question():
     try:
         yield
     finally:
-        _board.leave(linger=QUESTION_LINGER_S)
+        _board.leave(linger=QUESTION_LINGER_S if linger is None else linger)
 
 
 #: called once by the first corpus request that stands aside for a claim

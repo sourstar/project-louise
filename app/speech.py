@@ -257,6 +257,9 @@ def audio_ms(data: bytes) -> float | None:
         return None
 
 
+#: the claim a sentence's synthesis leaves behind it: the page asks for the
+#: next one well within it (two in flight, each sent as the one before returns)
+READING_LINGER_S = 30.0
 #: a reading's sentence waits this long for the one before it to ARRIVE;
 #: past it that one is lost (its fetch failed) and this one goes
 TURN_ARRIVE_S = 5.0
@@ -379,7 +382,12 @@ def _synthesize_call(url: str, model: str | None, out: dict) -> tuple[int, bytes
     # use different GPU resources"), so speech never queues behind
     # an answer being written.
     from app.rage import dispatch
-    with dispatch.interactive(dispatch.Level.CHAT):
+    # THE READING IS ONE QUESTION ON THE CARD (operator, 2026-11-09: "pause
+    # the embeddings … the chat model … is not competing with voice, thus they
+    # run together"): the claim lingers READING_LINGER_S after each sentence,
+    # longer than the page waits between two, so the corpus stays aside — its
+    # pins released — for the whole reading, not only inside each synthesis
+    with dispatch.question(linger=READING_LINGER_S), dispatch.interactive(dispatch.Level.CHAT):
         if not model:
             r = httpc.post(f"{url}/v1/audio/speech", json=out, timeout=CALL_TIMEOUT_S)
         else:
