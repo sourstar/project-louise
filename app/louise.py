@@ -3206,6 +3206,17 @@ def cmd_node_speech(a) -> int:
         return 2
 
 
+def cmd_node_pins(a) -> int:
+    """`node pins` (07 §7.3): the models Louise holds pinned in LocalAI now,
+    each with its holders and since when, those left pinned whose restore is
+    failing, and the pin failures (app/model_pins.py's record,
+    state/model-pins.json; München, 2026-11-09: it was readable only from
+    the file). Read-only."""
+    from app import model_pins
+    _print(model_pins.status())
+    return 0
+
+
 def cmd_node_resident(a) -> int:
     """`node resident show` (07 §7.3): the models the worker preloads on
     the card for Ask — a trial (operator, 2026-11-08: "keep every model Ask
@@ -6599,6 +6610,9 @@ def build_parser() -> argparse.ArgumentParser:
                    help="the voice, for every language; unset, the model server's first voice profile")
     q.set_defaults(fn=cmd_node_speech)
 
+    p = nverbs.add_parser("pins", help="the models Louise holds pinned in LocalAI: holders, stuck restores, "
+                                       "failures (state/model-pins.json); read-only")
+    p.set_defaults(fn=cmd_node_pins)
     p = nverbs.add_parser("resident", help="the models preloaded on the card for Ask (a trial): platform.toml "
                                            "[models] keep_ask_resident, preload_speech")
     rverbs = p.add_subparsers(dest="resident_verb", required=True)
