@@ -165,6 +165,13 @@ def test_a_missing_member_is_refused_before_a_record_is_read(
     checked first."""
     root = _collection(tmp_path)
     rec.build(root, "gutenberg", corpus_dir=corpus_dir, log=lambda *_: None, records_per_shard=2)
+    # the build writes it (pubmed9, 2026-11-09: the second time the step was
+    # missed); a SHARD built before that has none
+    shard_validation = root / "gutenberg" / "shard" / "validation.json"
+    from app.hold.codex import canonical_json
+    assert shard_validation.read_bytes() == canonical_json(
+        col.resolve(root, "gutenberg")[1].validation.to_dict()), "the Codex's own block"
+    shard_validation.unlink()
     from app.pack import records as pack_records
     monkeypatch.setattr(pack_records, "iter_records", lambda p: (_ for _ in ()).throw(
         AssertionError("a record was read before the members were checked")))
