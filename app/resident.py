@@ -3,7 +3,9 @@ option A: "keep every model Ask uses resident on the card"; "The load all is
 a test"), and its final rule the same day: "It applies to any collection, on
 demand or all embedding preloads the model. Chat, speech, rerankers, madlad
 are preloaded too, nothing is evicted only because it's idle, only if space
-is claimed."
+is claimed." Amended 2026-11-09 (operator, B): every searched collection's
+QUERY encoder is preloaded whatever its embed — an `off` collection is still
+searched — and its document encoder only where it embeds.
 
 WHY. Two things took the question path's models off the card, and each cost
 the first question after a pause its load: LocalAI's idle watchdog (5 min)
@@ -137,7 +139,7 @@ first, which the system decides (RULE 2: no list typed):
   so a node with nothing on its card learns the sizes one load at a time.
 - OUT OF THE BUDGET is not preloaded: the model loads at its first request,
   through that request's own warm as before, and then follows the
-  reclaimer's LRU, as an `off` collection's encoder does. Said once per
+  reclaimer's LRU, as an `off` collection's document encoder does. Said once per
   change ("not preloaded — the budget is N MiB (the 0.95 line M MiB −
   margin K MiB, measured over 6 h) …") and by `louise node resident show`.
 - THE BUDGET UNLOADS NOTHING (operator: "nothing is evicted only because
@@ -416,15 +418,19 @@ def wanted(served: Iterable[Any], *, embed_mode: Callable[[Any], str],
                 mode = embed_mode(c)
             except Exception:   # noqa: BLE001 — the file's word then
                 mode = c.embed_mode_default or collections_mod.DEFAULT_EMBED_MODE
-            if mode in collections_mod.EMBEDDING_MODES:
-                try:
-                    recipe = collections_mod.recipe_for(c)
-                except Exception:   # noqa: BLE001 — no encoder declared: none to hold
-                    recipe = None
-                if recipe is not None and getattr(recipe, "model", None):
-                    q = embeddings._side(recipe, True)
-                    add(q.url, q.model, "query encoder", c.name,
-                        lambda c=c, r=recipe: embeddings.warm_side(c, query=True, recipe=r))
+            try:
+                recipe = collections_mod.recipe_for(c)
+            except Exception:   # noqa: BLE001 — no encoder declared: none to hold
+                recipe = None
+            if recipe is not None and getattr(recipe, "model", None):
+                # EVERY SEARCHED COLLECTION'S QUERY ENCODER, whatever its embed
+                # (operator, 2026-11-09, B: an `off` collection is still
+                # searched, and each search of gutenberg paid qwen3-4b's 7.5 s
+                # load); the document encoder only where it embeds
+                q = embeddings._side(recipe, True)
+                add(q.url, q.model, "query encoder", c.name,
+                    lambda c=c, r=recipe: embeddings.warm_side(c, query=True, recipe=r))
+                if mode in collections_mod.EMBEDDING_MODES:
                     add(recipe.url, recipe.model, "encoder", c.name,
                         lambda c=c, r=recipe: embeddings.warm_side(c, query=False, recipe=r))
             r = collections_mod.reranker_for(c)
@@ -469,15 +475,19 @@ def _speech_warm(server: str, model: str, kind: str, role: str) -> Callable[[], 
 
 def forget(collection: str) -> list[str]:
     """`collection` was switched to `off` (`worker._release_embedder`): its
-    encoders leave the set now, not at the next beat, so a load behind the
-    last beat does not make them — every model of the set only its encoder
-    roles want. Nothing is unloaded: it stays until space is claimed. A
-    model another collection or another role still wants stays in the set.
-    Returns the models dropped."""
+    DOCUMENT encoder leaves the set now, not at the next beat, so a load
+    behind the last beat does not make it — every model of the set only
+    encoder roles want. Its query encoder stays: an `off` collection is
+    still searched (operator, 2026-11-09, B), so a model that is anyone's
+    query encoder (a symmetric space's one encoder included) is kept.
+    Nothing is unloaded: it stays until space is claimed. A model another
+    collection or another role still wants stays in the set. Returns the
+    models dropped."""
     gone: list[str] = []
     with _lock:
         for key, r in list(_last.items()):
-            if collection not in r.collections or not set(r.roles) <= ENCODER_ROLES:
+            if collection not in r.collections or not set(r.roles) <= ENCODER_ROLES \
+                    or "query encoder" in r.roles:
                 continue
             rest = tuple(n for n in r.collections if n != collection)
             if rest:
@@ -1253,7 +1263,8 @@ def show() -> dict[str, Any]:
                 "preloads the model. Chat, speech, rerankers, madlad are preloaded too, nothing is "
                 "evicted only because it's idle, only if space is claimed\" — preloaded, not pinned: "
                 "the reclaimer evicts the least-recently-used model when space is claimed; preloaded "
-                "only within the budget (2026-11-08), which unloads nothing",
+                "only within the budget (2026-11-08), which unloads nothing; every searched "
+                "collection's query encoder, an `off` one's included (2026-11-09)",
         "switches": {ASK: sw.ask, SPEECH: sw.speech}, "mode": state, "preloads": ok, "why": why,
         "budget": {"says": p.says(), "threshold": p.threshold,
                    "line_mib": None if p.line is None else p.line // MIB,
