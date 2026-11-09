@@ -16,6 +16,7 @@ for being idle."""
 from __future__ import annotations
 
 import inspect
+import json
 from dataclasses import replace
 from types import SimpleNamespace
 
@@ -1049,3 +1050,54 @@ def test_the_loads_run_in_priority_order_chat_first(tmp_path, node, monkeypatch)
     _beat([pm])
     assert node.warmed == ["louise-chat", "rerank-medcpt", "omnivoice", "whisper", "silero",
                            "vega-medcpt-query", "vega-medcpt-article", "louise-translate"]
+
+
+def test_a_model_partly_off_the_card_is_not_at_rest_and_the_old_margin_goes(tmp_path, node, monkeypatch):
+    """München, 2026-11-09: xe moved an overcommitted card's buffers to host
+    RAM and `size_vram` read what was left — Nemotron 31 of 4,404 MiB, MADLAD
+    2,671 of 8,005, omnivoice 1,003 of 2,676 — taken as their AT-REST sizes.
+    The budget (12,460 MiB) then held MADLAD beside chat, and the margin read
+    the missing bytes as 12.5–17.5 GB of growth. A reading under half the
+    largest is no rest; the file's are dropped, and its old margin with them."""
+    assert resident.REST_FLOOR == model_load.REST_FLOOR
+    real = {"louise-chat": (5_790, 7_288), "omnivoice": (1_003, 2_676), "vega-nemotron": (31, 4_404),
+            "louise-translate": (2_671, 8_005), "rerank-bge": (866, 1_027)}
+    now = resident._wall()
+    resident._write_memory(resident.Memory(
+        sizes={(SERVER, m): big * MIB for m, (_r_, big) in real.items()},
+        rest={(SERVER, m): rest * MIB for m, (rest, _b) in real.items()},
+        total=32_656 * MIB, peaks={int(now // 600 * 600): 16_657 * MIB}))
+    raw = json.loads(resident.memory_path().read_text())
+    raw.pop("margin_basis")                                          # the file the node holds today
+    resident.memory_path().write_text(json.dumps(raw))
+    mem = resident.read_memory()
+    assert mem.peaks == {}, "a margin measured against partial readings is that error, not growth"
+    want = [_r("louise-chat", "chat"), _r("omnivoice", "text to speech"), _r("rerank-bge", "reranker"),
+            _r("vega-nemotron", "query encoder", "encoder"), _r("louise-translate", "translation")]
+    p = resident.plan(want, mem, threshold=0.95, used={}, now=now)
+    counted = {x.resident.model: x.counted // MIB for x in p.placed}
+    assert counted == {"louise-chat": 5_790, "omnivoice": 2_676, "rerank-bge": 866, "vega-nemotron": 4_404,
+                       "louise-translate": 8_005}, "a whole reading as at rest, a partial one at the largest"
+    # the beat drops the file's partial rests and keeps the whole ones
+    node.held |= {"louise-chat"}
+    _system(monkeypatch, node, {"louise-chat": 7_000})
+    _card(monkeypatch, 32_656, 7_400)
+    _beat([])
+    rest = resident.read_memory().rest
+    assert rest[(SERVER, "louise-chat")] == 5_790 * MIB and rest[(SERVER, "rerank-bge")] == 866 * MIB
+    assert not {(SERVER, m) for m in ("omnivoice", "vega-nemotron", "louise-translate")} & set(rest)
+    assert json.loads(resident.memory_path().read_text())["margin_basis"] == resident.MARGIN_BASIS
+
+
+def test_a_partial_reading_never_becomes_the_processes_at_rest_size(monkeypatch, node):
+    _system(monkeypatch, node, {})
+    with model_load._lock:
+        model_load._sizes[(SERVER, "m")] = 4_404 * MIB
+        model_load._rest[(SERVER, "m")] = 31 * MIB                   # recorded before the floor
+    node.held.add("m")
+    _system(monkeypatch, node, {"m": 1_000})
+    model_load.loaded_models(SERVER, max_age_s=0.0)
+    assert model_load.rest_vram(SERVER, "m") is None, "partial, and the old partial one dropped"
+    _system(monkeypatch, node, {"m": 4_000})
+    model_load.loaded_models(SERVER, max_age_s=0.0)
+    assert model_load.rest_vram(SERVER, "m") == 4_000 * MIB

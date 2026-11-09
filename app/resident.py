@@ -71,7 +71,9 @@ first, which the system decides (RULE 2: no list typed):
   holding, before a request grows its buffers.
 
 - AT REST AND LARGEST (`_size`, `_rest_size`): per model, the fewest and
-  the most bytes LocalAI's `/system` gave as its `size_vram` (as
+  the most bytes LocalAI's `/system` gave as its `size_vram`, a reading
+  under REST_FLOOR of the largest being no rest — the model was partly off
+  the card (2026-11-09) — (as
   app/gpu_models.py reads it: the driver's per-process count, compute
   buffers included), from this process's readings and the file's
   (`state/resident-budget.json`, so a restart keeps them). The budget sums
@@ -244,6 +246,20 @@ MIB = 1 << 20
 DEFAULT_MARGIN = 3072 * MIB
 #: the eviction penalty halves after each this long without another eviction
 PENALTY_HALVING_S = 2 * 3600.0
+#: A READING BELOW THIS SHARE OF THE MODEL'S LARGEST IS NOT "AT REST" — the
+#: model was partly off the card (München, 2026-11-09: xe moves an
+#: overcommitted card's buffers to host RAM, and LocalAI's `size_vram` then
+#: reads what is left: Nemotron 31 of 4,404 MiB, MADLAD 2,671 of 8,005,
+#: omnivoice 1,003 of 2,676, dar-legal-it 1,667 of 8,237). Counted at those,
+#: the budget admitted 8 GB it did not have, and the "margin" read the
+#: missing 12.5–17.5 GB as growth. Every reading taken with the model whole
+#: was 0.75–1.0 of its largest (chat 0.79, qwen3-4b 0.91, bge-m3 0.90,
+#: medcpt-query 0.75, rerank-bge 0.84, rerank-medcpt and medcpt-article
+#: 1.0), every partial one 0.007–0.38: half separates them on both sides.
+REST_FLOOR = 0.5            # = app/model_load.py REST_FLOOR, where the readings are taken
+#: the margin's samples are kept under this basis; peaks of another (the
+#: at-rest sizes before REST_FLOOR) are dropped when the file is read
+MARGIN_BASIS = 2
 #: the margin is the peak of the samples this recent (restarts included)
 MARGIN_WINDOW_S = 6 * 3600.0
 #: one peak kept per this many seconds of the window
@@ -568,7 +584,8 @@ class Memory:
         return self.penalty >> halvings if halvings < 63 else 0
 
     def as_json(self) -> dict[str, Any]:
-        return {"margin_peaks": {str(t): v for t, v in sorted(self.peaks.items())},
+        return {"margin_basis": MARGIN_BASIS,
+                "margin_peaks": {str(t): v for t, v in sorted(self.peaks.items())},
                 "sizes": {f"{s}|{m}": v for (s, m), v in sorted(self.sizes.items())},
                 "rest": {f"{s}|{m}": v for (s, m), v in sorted(self.rest.items())},
                 "total": self.total, "penalty": self.penalty, "penalty_at": self.penalty_at}
@@ -596,7 +613,9 @@ def read_memory(path: Path | None = None) -> Memory:
 
     def count(v: Any) -> int | None:
         return v if isinstance(v, int) and not isinstance(v, bool) and v >= 0 else None
-    for k, v in (raw.get("margin_peaks") or {}).items():
+    # peaks sampled against another count of the models (before REST_FLOOR:
+    # partial readings taken as at rest) measured that error, not growth
+    for k, v in (raw.get("margin_peaks") or {}).items() if raw.get("margin_basis") == MARGIN_BASIS else ():
         if str(k).isdigit() and count(v) is not None:
             out.peaks[int(k)] = v
     for name, into in (("sizes", out.sizes), ("rest", out.rest)):
@@ -668,8 +687,15 @@ def _rest_size(r: Resident, mem: Memory) -> int | None:
     its largest (a file before at-rest sizes were kept) at that; 0 on the
     CPU; None never seen. What the budget counts."""
     from app import model_load
-    got = [v for v in (mem.rest.get(r.key), model_load.rest_vram(r.server, r.model)) if v]
-    return min(got) if got else _size(r, mem)
+    largest = _size(r, mem)
+    got = [v for v in (mem.rest.get(r.key), model_load.rest_vram(r.server, r.model)) if _whole(v, largest)]
+    return min(got) if got else largest
+
+
+def _whole(rest: int | None, largest: int | None) -> bool:
+    """A reading the model gave WHOLE on the card: at least REST_FLOOR of
+    the most it was seen holding (none known: taken as it is)."""
+    return bool(rest) and (not largest or rest >= REST_FLOOR * largest)
 
 
 def _last_used() -> dict[tuple[str, str], float]:
@@ -818,8 +844,10 @@ def _held_now(servers: Iterable[str], mem: Memory) -> dict[tuple, int] | None:
             return None
         for m, (pid, size) in got.items():
             k = (m, pid) if pid is not None else (s, m)
-            rest = min([size] + [v for v in (mem.rest.get((s, m)), model_load.rest_vram(s, m)) if v]) \
-                if size else 0
+            largest = max([size] + [v for v in (mem.sizes.get((s, m)), model_load.size_vram(s, m)) if v])
+            whole = [v for v in (size, mem.rest.get((s, m)), model_load.rest_vram(s, m)) if _whole(v, largest)]
+            # a model partly off the card counts whole: what it will hold again once used
+            rest = (min(whole) if whole else largest) if size else 0
             out[k] = max(rest, out.get(k, 0))
     return out
 
@@ -855,8 +883,12 @@ def _remember(want: list[Resident]) -> Memory:
             v = _size(r, mem)
             if v is not None and v > mem.sizes.get(r.key, -1):
                 mem.sizes[r.key] = v
+        for k in [k for k, v in mem.rest.items() if not _whole(v, mem.sizes.get(k))]:
+            del mem.rest[k]                            # read while partly off the card: not at rest
+        for r in want:
+            largest = mem.sizes.get(r.key)
             v = model_load.rest_vram(r.server, r.model)
-            if v and v < mem.rest.get(r.key, v + 1):
+            if _whole(v, largest) and v < mem.rest.get(r.key, v + 1):
                 mem.rest[r.key] = v
         if card is not None and card[0] != mem.total:
             mem.total = card[0]
