@@ -428,3 +428,32 @@ def test_the_pilot_takes_the_first_items_of_every_kind():
     items = _set(3).items
     assert [i.key for i in rb.first_per_kind(items, 2)] == ["title-0", "title-1", "descriptive-0", "descriptive-1"]
     assert rb.first_per_kind(items, None) == items
+
+
+def test_a_speed_capture_searches_with_the_chat_models_translation_and_never_mixes(tmp_path):
+    """Operator, 2026-11-10: "Rerun in speed mode" — the Ask tab's Speed: the
+    query translated by the chat model, MADLAD never asked (`translate.speed`,
+    as app/web.py sets it). Pinned: a Quality file and a Speed file never mix;
+    a file written before the key is a Quality one."""
+    from app import translate
+    seen = []
+
+    class Speedy(_Search):
+        def __call__(self, *a, **k):
+            seen.append(translate._speed.get())
+            return super().__call__(*a, **k)
+    out = tmp_path / "g-speed.jsonl"
+    _capture(out, Speedy(), limit=1, speed=True)
+    assert seen and all(seen), "every search under Speed"
+    assert translate._speed.get() is False, "the switch is back after the capture"
+    assert rb.header_of(out)["speed"] is True
+    with pytest.raises(rb.Refused, match="speed"):
+        _capture(out, Speedy(), limit=1)
+    quality = tmp_path / "g.jsonl"
+    _capture(quality, _Search(), limit=1)
+    rows = rb.read_jsonl(quality)
+    del rows[0]["header"]["speed"]                       # a file from before --speed
+    quality.write_text("".join(json.dumps(r) + "\n" for r in rows))
+    assert _capture(quality, _Search(), limit=1)["already"] == 2, "read as Quality, resumed"
+    with pytest.raises(rb.Refused, match="speed"):
+        _capture(quality, _Search(), limit=1, speed=True)
