@@ -2007,10 +2007,35 @@ def _write_held_file(root, codex, encoder: str | None = None,
                       # a bi-encoder's query side, where the collection has one
                       + (f'query_url = {q(query_encoder)}\n' if query_encoder else "")
                       + f'embed_model = {q(embed_model)}\nquery_model = {q(query_model)}\n'
-                      if encoder else ""),
+                      if encoder else "")
+                   + _inherited_reranker(codex),
                    encoding="utf-8")
     tmp.replace(path)
     return path
+
+
+def _inherited_reranker(codex) -> str:
+    """THE RERANKER A NEW COLLECTION TAKES (RULE 2: what the system can
+    determine, it determines): the `[reranker]` of a collection of the same
+    plugin already held here, the first by name; none for an annotations
+    collection, or where none is held. München, 2026-11-10: pubmed9 and
+    wikipedia-v8 were created with no `[reranker]`, renamed over pubmed and
+    wikipedia, and their searches kept the fused order unreranked and unsaid
+    (05 §5.6) — 5 of 6 collections, found by the search line's verdict."""
+    if cx.is_annotations(codex):
+        return ""
+    try:
+        from app import collection_file, collections as collections_mod
+        same = sorted((c for c in collections_mod.load_all()
+                       if getattr(c, "plugin", None) == codex.plugin
+                       and getattr(c, "reranker", None) is not None), key=lambda c: c.name)
+    except Exception:   # noqa: BLE001 — nothing held to read: no reranker, said at search
+        return ""
+    if not same:
+        return ""
+    lines = collection_file._reranker_lines(same[0].reranker)
+    return "\n".join([f"\n# [reranker] carried from {same[0].name} (the same plugin, held here)"]
+                     + [ln for ln in lines if ln]) + "\n"
 
 
 def _utc_now() -> str:
