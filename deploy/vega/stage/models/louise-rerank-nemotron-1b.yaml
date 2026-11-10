@@ -1,0 +1,37 @@
+# louise-rerank-nemotron-1b — nvidia/llama-nemotron-rerank-1b-v2 (OpenMDW-1.1 + Llama 3.2
+# Community License: "Built with Llama"), the reranker benchmark's arm A3 (operator,
+# 2026-11-10). Bidirectional Llama 3.2 1B, mean-pooled, a `score` head: a raw logit.
+# Runs ONLY on the separate backend built from deploy/localai/patches/staged/nemotron-rerank.series
+# (the llama-nemotron-rerank port, ggml-org/llama.cpp#24083 on ddf48f8), installed under
+# the candidate series' digest 10aa8b1851d7 (build.sh names the build by it; an AOT or a pinned
+# stack adds its suffix to the tar, the backend keeps this name). The settings are bge's (the strict, bit-exact
+# set): SYCL DNN off, FA oneDNN off, parallel 1. ctx 4,096 holds the 2,048-token document
+# window, the query and the template ("question:{query} \n \n passage:{document}") with
+# room; the attention is bidirectional, so a pair must fit one ubatch.
+# Converted with the patched converter at f16 from the HF weights (bf16).
+{
+  "backend": "louise-sycl-f16-llama-cpp-10aa8b1851d7",
+  "context_size": 4096,
+  "embeddings": true,
+  "env": {
+    "GGML_SYCL_ENABLE_DNN": "0",
+    "GGML_SYCL_FA_ONEDNN": "0",
+    "NEO_CACHE_DIR": "/data/louise-cache/neo-cache"
+  },
+  "flash_attention": "on",
+  "gpu_layers": 999,
+  "mmap": true,
+  "name": "louise-rerank-nemotron-1b",
+  "options": [
+    "parallel:1",
+    "cache_ram:0",
+    "ubatch:4096"
+  ],
+  "parameters": {
+    "batch": 4096,
+    "model": "weights/nemotron-rerank/llama-nemotron-rerank-1b-v2-f16.gguf",
+    "seed": 0
+  },
+  "reranking": true,
+  "threads": 6
+}
