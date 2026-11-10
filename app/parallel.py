@@ -206,9 +206,11 @@ def processes() -> int:
     return max(1, int(config.PARSE_PROCESSES))
 
 
-def each_part(fn, tasks: list[tuple]):
+def each_part(fn, tasks: list[tuple], *, limit: int | None = None):
     """`fn(*task)` for every task, in the tasks' order: in spawned processes
-    when the node allows more than one (`processes()`), here otherwise.
+    when the node allows more than one (`processes()`, at most `limit` —
+    the caller's bound where each task holds much memory), here otherwise.
+    `tasks` is a list, or a sequence that makes task i when asked for it.
 
     For a pass an operator runs over a collection's parts (`hold check`, a
     snapshot's delta), not for the worker's rounds: its pool is made for
@@ -217,7 +219,7 @@ def each_part(fn, tasks: list[tuple]):
     sixteen texts while the next parts are cut (docs/notes/multicore-audit.md).
     `fn` is a module-level function, and its tasks and results pickle.
     """
-    n = processes()
+    n = processes() if limit is None else max(1, min(int(limit), processes()))
     if n <= 1 or len(tasks) <= 1:
         for t in tasks:
             yield fn(*t)

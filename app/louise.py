@@ -245,11 +245,12 @@ def cmd_create_annotations(a) -> int:
                          "and named by the flags")
     # named: as named, one --from-snapshot per --annotates; a target alone: its
     # newest held snapshot; none: the collections the claims name (RULE 2)
-    targets = ann.resolve_targets(a.root, Path(a.claims).read_bytes(), a.annotates, a.from_snapshot)
+    # the claims file is streamed by path, never read whole (12.3 M claims: 4 GB)
+    targets = ann.resolve_targets(a.root, Path(a.claims), a.annotates, a.from_snapshot)
     container = getattr(a, "container", None) or "jsonl"
     if getattr(a, "dry_run", False):
         _print(ann.preview(a.root, targets=targets, container=container,
-                           claims=Path(a.claims).read_bytes(), annotator=a.annotator))
+                           claims=Path(a.claims), annotator=a.annotator))
         return 0
     key = None
     try:
@@ -260,7 +261,7 @@ def cmd_create_annotations(a) -> int:
               "inconclusive until a key signs it", file=sys.stderr)
     codex, snap = ann.create(
         a.root, a.name, targets=targets, container=container,
-        claims=Path(a.claims).read_bytes(), platform_image=preflight_create({}, a.platform_image),
+        claims=Path(a.claims), platform_image=preflight_create({}, a.platform_image),
         title=a.title, summary=a.summary, annotator=a.annotator, snapshot_id=a.snapshot,
         key=key, now=_utc_now(), log=lambda m: print(m, file=sys.stderr))
     print(codex.collection_id)

@@ -78,10 +78,11 @@ import secrets
 import shutil
 import time
 import unicodedata
+from contextlib import nullcontext
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Iterable, Sequence
+from typing import Any, Iterable, Iterator, Sequence
 
 from . import codex as cx
 from .codex import Codex, CodexError
@@ -257,7 +258,7 @@ def check_claim(c: Any, where: str = "claim", *, target_plugin: str | None = Non
         cx._reject_floats(c, where)
     except CodexError as e:
         raise AnnotationsError(f"{where}: {e} — write a ratio as a decimal string") from None
-    c = _nfc(c)
+    c = _nfc(c)       # the only change made to what is checked (`_claim_of_line` relies on it)
     if t in WORK_TYPES:
         for k in ("subject", "object"):
             _check_uid(c[k], f"{where}: {k}", plugins)
@@ -444,6 +445,14 @@ def read_claims(data: bytes, *, target_plugin: str | None = None,
     return out
 
 
+def _claim_of_line(raw: bytes) -> dict[str, Any]:
+    """A claims line `check_claim` has passed, in the form it returned: the
+    JSON with its strings NFC (`check_claim` checks and returns `_nfc` of
+    what it was given, unchanged). What the streaming create re-reads a line
+    as (app/hold/annotations_stream.py)."""
+    return _nfc(json.loads(raw))
+
+
 # --------------------------------------------------------------------------
 # the target, as the snapshot the claims are checked against holds it
 
@@ -573,53 +582,70 @@ def pin(submitted: Sequence[Submitted], held: dict[str, dict[str, Any]],
     we publish. A community pins no record: both hashes null."""
     out, missing = [], []
     for s in submitted:
-        c = dict(s.claim)
-        t = c["type"]
-        ends = ends_of(c)
-        snap = _snapshot_for(end_uid(*ends[0]), snapshot_id, snapshots)
-        hashes: list[str] = []
-        lost = False
-        for kind, value in ends:
-            uid = end_uid(kind, value)
-            got = held.get(uid)
-            if got is None:
-                missing.append(f"line {s.line}: {uid}" + (f" ({value})" if kind == ENTITY and value != uid else ""))
-                lost = True
-                continue
-            if kind == CHUNK:
-                text = _check_chunk(value, got, codices, s.line)
-                if t == MENTION:
-                    if c["end"] > len(text) or text[c["start"]:c["end"]] != c["surface"]:
-                        raise AnnotationsError(
-                            f"claims line {s.line}: surface {c['surface']!r} is not the chunk's text at "
-                            f"{c['start']}..{c['end']} ({text[c['start']:c['end']]!r})")
-            hashes.append(got["content_hash"])
-        if lost:
-            continue
-        if t == COMMUNITY:
-            for k in ("subject_hash", "object_hash"):
-                if c.get(k) is not None:
-                    raise AnnotationsError(f"claims line {s.line}: a community pins no {k} — it has no "
-                                           f"record at either end (09 §9.5)")
-                c[k] = None
-        else:
-            for k, h in zip(("subject", "object"), hashes):
-                stated = c.get(f"{k}_hash")
-                if stated is not None and stated != h:
-                    raise AnnotationsError(
-                        f"claims line {s.line}: {k}_hash {stated} is not {end_uid(*ends[0 if k == 'subject' else 1])}'s "
-                        f"content_hash in snapshot {snap} ({h}): the claim was checked against other text")
-                c[f"{k}_hash"] = h
-        if c.get("target_snapshot", snap) != snap:
-            raise AnnotationsError(f"claims line {s.line}: checked against {c['target_snapshot']}, "
-                                   f"and these are pinned to {snap}")
-        c["target_snapshot"] = snap
-        out.append(c)
+        c = _pin_one(s, held, snapshot_id, snapshots, codices, missing)
+        if c is not None:
+            out.append(c)
     if missing:
-        raise AnnotationsError(
-            f"{len(missing)} claim end(s) name a record the target snapshot does "
-            f"not hold: {'; '.join(missing[:8])}{' …' if len(missing) > 8 else ''}")
+        raise _not_held(len(missing), missing[:8])
     return out
+
+
+def _not_held(count: int, first: Sequence[str]) -> AnnotationsError:
+    """`pin`'s refusal of the ends the target snapshot does not hold: how
+    many, and the first eight in the file's order."""
+    return AnnotationsError(
+        f"{count} claim end(s) name a record the target snapshot does "
+        f"not hold: {'; '.join(first[:8])}{' …' if count > 8 else ''}")
+
+
+def _pin_one(s: Submitted, held, snapshot_id: str | None, snapshots: dict[str, str] | None,
+             codices: dict[str, Codex] | None, missing) -> dict[str, Any] | None:
+    """One claim pinned (`pin`): the pinned copy, or None when an end is not
+    held — named in `missing` (anything with `append`) — and any other
+    refusal raised at once. `held.get(uid)` is a record as `target_records`
+    gives it (app/hold/annotations_stream.py `Held` for a streaming create)."""
+    c = dict(s.claim)
+    t = c["type"]
+    ends = ends_of(c)
+    snap = _snapshot_for(end_uid(*ends[0]), snapshot_id, snapshots)
+    hashes: list[str] = []
+    lost = False
+    for kind, value in ends:
+        uid = end_uid(kind, value)
+        got = held.get(uid)
+        if got is None:
+            missing.append(f"line {s.line}: {uid}" + (f" ({value})" if kind == ENTITY and value != uid else ""))
+            lost = True
+            continue
+        if kind == CHUNK:
+            text = _check_chunk(value, got, codices, s.line)
+            if t == MENTION:
+                if c["end"] > len(text) or text[c["start"]:c["end"]] != c["surface"]:
+                    raise AnnotationsError(
+                        f"claims line {s.line}: surface {c['surface']!r} is not the chunk's text at "
+                        f"{c['start']}..{c['end']} ({text[c['start']:c['end']]!r})")
+        hashes.append(got["content_hash"])
+    if lost:
+        return None
+    if t == COMMUNITY:
+        for k in ("subject_hash", "object_hash"):
+            if c.get(k) is not None:
+                raise AnnotationsError(f"claims line {s.line}: a community pins no {k} — it has no "
+                                       f"record at either end (09 §9.5)")
+            c[k] = None
+    else:
+        for k, h in zip(("subject", "object"), hashes):
+            stated = c.get(f"{k}_hash")
+            if stated is not None and stated != h:
+                raise AnnotationsError(
+                    f"claims line {s.line}: {k}_hash {stated} is not {end_uid(*ends[0 if k == 'subject' else 1])}'s "
+                    f"content_hash in snapshot {snap} ({h}): the claim was checked against other text")
+            c[f"{k}_hash"] = h
+    if c.get("target_snapshot", snap) != snap:
+        raise AnnotationsError(f"claims line {s.line}: checked against {c['target_snapshot']}, "
+                               f"and these are pinned to {snap}")
+    c["target_snapshot"] = snap
+    return c
 
 
 # --------------------------------------------------------------------------
@@ -754,33 +780,43 @@ def build_codex(target: Codex | None, from_snapshot: str | None, *, title: str, 
 # --------------------------------------------------------------------------
 # the SHARD
 
-def write_parts(shard_tree: Path, records: Sequence[dict[str, Any]], snapshot_id: str, *,
+def write_parts(shard_tree: Path, records: Iterable[dict[str, Any]], snapshot_id: str, *,
                 shard_records: int = SHARD_RECORDS, container: str = cx.JSONL):
     """Record parts and their relations parts, `shard_records` (the Codex's
     `slicing.shard_records`) per part, in the Codex's `container` (09 §9.5
     "The file": JSONL frames or Parquet), and the snapshot entries for
-    both. The relations parts are always JSONL (09 §9.14)."""
+    both. The relations parts are always JSONL (09 §9.14). `records` may
+    be a stream: a part is cut as it fills, and only its records are held."""
+    import itertools
+    shards, relations = [], []
+    for n, part in enumerate(itertools.batched(records, shard_records), 1):
+        s, r = _write_part(Path(shard_tree), n, part, snapshot_id, container)
+        shards.append(s)
+        relations.append(r)
+    return tuple(shards), tuple(relations)
+
+
+def _write_part(shard_tree: Path, n: int, part: Sequence[dict[str, Any]], snapshot_id: str, container: str):
+    """Part `n` of `write_parts` — its records and its edges — and the
+    snapshot's entries for both; what a streamed create's pool child writes
+    (app/hold/annotations_stream.py `write_part`)."""
     from app.pack import records as pack_records
     from . import shard as shard_mod, records as rec, snapshot as sn
-    shards, relations = [], []
-    for n, start in enumerate(range(0, len(records), shard_records), 1):
-        part = records[start:start + shard_records]
-        p = Path(shard_tree) / shard_mod.shard_path(SLICE, n, container=container)
-        pack_records.write_shard(p, part, record_line=1)
-        raw = p.read_bytes()
-        shards.append(sn.Shard(
-            slice=SLICE, n=n, root=shard_mod.pieces_root(raw), container=container,
-            records_root=rec.records_root(r["content_hash"] for r in part),
-            first_id=part[0]["native_id"], last_id=part[-1]["native_id"],
-            records=len(part), chunks=0, chunks_root=rec.chunks_root([]), tokens=0,
-            bytes=len(raw), toolchain="own"))
-        lines = edge_lines(part, snapshot_id)
-        rp = Path(shard_tree) / shard_mod.relations_path(SLICE, n)
-        pack_records.write_lines(rp, lines, key_of=lambda line: json.loads(line)["from"])
-        rraw = rp.read_bytes()
-        relations.append(sn.RelationShard(slice=SLICE, n=n, root=shard_mod.pieces_root(rraw),
-                                          edges=len(lines), bytes=len(rraw)))
-    return tuple(shards), tuple(relations)
+    p = Path(shard_tree) / shard_mod.shard_path(SLICE, n, container=container)
+    pack_records.write_shard(p, part, record_line=1)
+    raw = p.read_bytes()
+    shard = sn.Shard(
+        slice=SLICE, n=n, root=shard_mod.pieces_root(raw), container=container,
+        records_root=rec.records_root(r["content_hash"] for r in part),
+        first_id=part[0]["native_id"], last_id=part[-1]["native_id"],
+        records=len(part), chunks=0, chunks_root=rec.chunks_root([]), tokens=0,
+        bytes=len(raw), toolchain="own")
+    lines = edge_lines(part, snapshot_id)
+    rp = Path(shard_tree) / shard_mod.relations_path(SLICE, n)
+    pack_records.write_lines(rp, lines, key_of=lambda line: json.loads(line)["from"])
+    rraw = rp.read_bytes()
+    return shard, sn.RelationShard(slice=SLICE, n=n, root=shard_mod.pieces_root(rraw),
+                                   edges=len(lines), bytes=len(rraw))
 
 
 def files_of(shard_tree: Path, snapshot_id: str) -> dict[str, Any]:
@@ -803,8 +839,12 @@ def files_of(shard_tree: Path, snapshot_id: str) -> dict[str, Any]:
 
 
 def write_snapshot(shard_tree: Path, staging: Path, codex: Codex,
-                   records: Sequence[dict[str, Any]], snapshot_id: str):
-    """The parts, `validation.json` and the FIRST snapshot.
+                   records: Iterable[dict[str, Any]], snapshot_id: str):
+    """The parts, `validation.json` and the FIRST snapshot. `records` may be
+    a stream (`write_parts`), or what writes its own parts (`write_parts`
+    method: a streamed create's, app/hold/annotations_stream.py); of each
+    record only its uid is kept, for the delta, which lists every one as
+    added.
 
     The parts are cut in `staging` and promoted into the SHARD only when the
     snapshot is new, so nothing a snapshot already lists is ever
@@ -825,17 +865,33 @@ def write_snapshot(shard_tree: Path, staging: Path, codex: Codex,
     (shard_tree / shard_mod.VALIDATION_PATH).write_bytes(cx.canonical_json(codex.validation.to_dict()))
     if staging.exists():
         shutil.rmtree(staging)
-    shards, relations = write_parts(staging, records, snapshot_id,
-                                    shard_records=int(codex.slicing.get("shard_records") or SHARD_RECORDS),
-                                    container=cx.container_of(codex))
+    per_part = int(codex.slicing.get("shard_records") or SHARD_RECORDS)
+    if hasattr(records, "write_parts"):         # a streamed create's (annotations_stream.ClaimParts)
+        shards, relations, uids = records.write_parts(staging, snapshot_id, shard_records=per_part,
+                                                      container=cx.container_of(codex))
+    else:
+        uids = []
+
+        def kept(rs: Iterable[dict[str, Any]]) -> Iterator[dict[str, Any]]:
+            for r in rs:
+                uids.append(r["uid"])
+                yield r
+        shards, relations = write_parts(staging, kept(records), snapshot_id, shard_records=per_part,
+                                        container=cx.container_of(codex))
     snap = sn.Snapshot(
         collection_id=codex.collection_id, snapshot_id=snapshot_id, previous=None,
         shards=shards,
-        delta=sn.compute_delta(None, {r["uid"]: r["content_hash"] for r in records}),
+        # `compute_delta(None, {uid: content_hash})`: every uid added, once, sorted
+        delta=sn.Delta(_sorted_once(uids), (), ()),
         relations=relations, figures=(), files=files_of(shard_tree, snapshot_id))
+    uids.clear()                                # the delta holds them now
+    # the canonical bytes once: a first snapshot lists every claim in its delta
+    # (12.3 M uids for wikipedia's), and `hash` re-serialises at each call
+    raw = snap.canonical()
+    object.__setattr__(snap, "_raw_hash", cx.digest(raw))
     if out.is_file():
         shutil.rmtree(staging)
-        if out.read_bytes() == snap.canonical():
+        if out.read_bytes() == raw:
             return snap
         raise AnnotationsError(f"snapshot {snapshot_id} exists with different bytes; a snapshot "
                                f"is written once (09 §9.4)")
@@ -849,8 +905,19 @@ def write_snapshot(shard_tree: Path, staging: Path, codex: Codex,
         shard_mod.promote(staging / entry.path, dst)
     shutil.rmtree(staging)
     out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_bytes(snap.canonical())
+    out.write_bytes(raw)
     return snap
+
+
+def _sorted_once(uids: list[str]) -> tuple[str, ...]:
+    """`uids` sorted, each once (`compute_delta`'s `added` of a first
+    snapshot), sorted in place: a claim's uid is its number, so a repeat
+    never comes, and a set of twelve million to drop one would cost."""
+    import itertools
+    uids.sort()
+    if any(a == b for a, b in zip(uids, itertools.islice(uids, 1, None))):
+        uids[:] = sorted(set(uids))
+    return tuple(uids)
 
 
 def write_held_file(root: Path, codex: Codex, name: str) -> Path:
@@ -948,26 +1015,23 @@ def newest_snapshot(root: Path, ref: str) -> tuple[str, str]:
     return tname, cur.snapshot_id
 
 
-def targets_of_claims(root: Path, claims: bytes) -> list[tuple[str, str]]:
+def targets_of_claims(root: Path, claims: bytes | Path) -> list[tuple[str, str]]:
     """The targets a claims file names, decided by the node (RULE 2,
     amended 2026-10-25): every end's uid names its target's PLUGIN by its
     prefix (09 §9.3), and the target is the collection of that plugin held
     here — the one whose newest snapshot holds every record the claims name
     where several are held — with that newest snapshot as `from_snapshot`.
     Where no held collection or more than one could be it, nothing is
-    guessed: the refusal says which, and how to name it on the command line."""
-    from . import collection as col
+    guessed: the refusal says which, and how to name it on the command line.
+    `claims` is the file's bytes or its path; it is streamed, never held."""
+    from . import annotations_stream as st, collection as col
     from app.share import seeder
     root = Path(root)
-    submitted = read_claims(claims)
-    wanted: dict[str, set[str]] = {}
-    for s_ in submitted:
-        for kind, value in ends_of(s_.claim):
-            uid = end_uid(kind, value)
-            wanted.setdefault(_prefix(uid), set()).add(uid)
+    with st.ClaimsSource(claims) as src:
+        sv = st.survey(src)
     held = [(n, c) for n, c in col._held(root) if not is_annotations(c)]
     out: list[tuple[str, str]] = []
-    for plugin, uids in wanted.items():
+    for plugin, ends in sv.ends.items():
         cands = []
         for n, c in held:
             if c.plugin != plugin:
@@ -976,7 +1040,7 @@ def targets_of_claims(root: Path, claims: bytes) -> list[tuple[str, str]]:
             cur = seeder.current_snapshot(tree)
             if cur is not None:
                 cands.append((n, c, cur.snapshot_id, tree))
-        example = sorted(uids)[0]
+        example = ends.first
         # a directory whose file is gone is retired, not held (07 §7.8: the
         # file existing IS the collection existing) — where any has its file
         from app import collections as collections_mod
@@ -988,7 +1052,7 @@ def targets_of_claims(root: Path, claims: bytes) -> list[tuple[str, str]]:
                 f"collection with a snapshot: take or create one, then create the annotations")
         if len(cands) > 1:
             cands = [t for t in cands
-                     if len(target_records(t[3], t[1], t[2], uids)) == len(uids)]
+                     if st.read_target(Target(t[0], t[1], t[2], t[3]), ends).held == len(ends.digests)]
         if len(cands) != 1:
             names = ", ".join(sorted(t[0] for t in cands)) or "none of them"
             raise AnnotationsError(
@@ -1000,7 +1064,7 @@ def targets_of_claims(root: Path, claims: bytes) -> list[tuple[str, str]]:
     return out
 
 
-def resolve_targets(root: Path, claims: bytes, annotates: Any = None,
+def resolve_targets(root: Path, claims: bytes | Path, annotates: Any = None,
                     from_snapshot: Any = None) -> list[tuple[str, str]]:
     """(collection, from_snapshot) pairs for a create: as named (the command
     line's `--annotates` / `--from-snapshot`, one per target), each target's
@@ -1067,44 +1131,123 @@ def _checked(root: Path, target_ref: str | None = None, from_snapshot: str | Non
     return Checked(ts, tuple(submitted), tuple(pinned), annotator)
 
 
+@dataclass
+class Streamed:
+    """What the streaming check (`_checked_stream`) found before writing
+    anything: the targets, the one annotator, the claims file's survey,
+    the target records the claims name (`tables`: `annotations_stream.Held`,
+    or the directory it was saved in for the pool's children), the numbering
+    version and the claims in numbering order (`sort`, None for a preview)."""
+    targets: tuple[Target, ...]
+    annotator: str
+    survey: Any
+    tables: Any
+    version: int
+    sort: Any
+    snapshots: dict[str, str]
+    codices: dict[str, Codex]
+
+    @property
+    def graph(self) -> bool:
+        return self.survey.graph
+
+    def records(self, src):
+        """The claim records in numbering order, read back from `src`, as
+        `write_snapshot` writes them (`annotations_stream.ClaimParts`)."""
+        from . import annotations_stream as st
+        parts = st.ClaimParts(src, self.survey, self.sort, self.tables, self.snapshots, self.codices)
+        self.survey = self.tables = self.sort = None     # the parts hold what they need
+        return parts
+
+
+def _version_for(targets: Sequence[Target], container: str, graph: bool) -> int:
+    """`build_codex`'s version rule: 7 for one target, JSONL parts and the
+    2026-10-09 claim types; GRAPH_VERSION otherwise."""
+    return (cx.GRAPH_VERSION if len(targets) > 1 or container != cx.JSONL or graph
+            else cx.ANNOTATIONS_VERSION)
+
+
+def _checked_stream(ts: tuple[Target, ...], src, *, annotator: str | None, container: str,
+                    work: Path | None, sort: bool = False) -> Streamed:
+    """`_checked`, streaming (app/hold/annotations_stream.py), for the
+    targets `ts` (`_targets`, the first check): the same checks in the same
+    order, so the same refusal — the claims file, every claim's ends in the
+    target snapshots, the one annotator — with nothing of the claims held but
+    their offsets and the digests of their ends; the targets' tables saved in
+    the workspace `work` for the pool's children (none: read here, for a file
+    given as bytes). With `sort`, the claims are also put in numbering order
+    there (`records_of`'s), for `Streamed.records`."""
+    from . import annotations_stream as st
+    by_plugin = {t.plugin: t for t in ts}
+    sv = st.survey(src, plugins=tuple(by_plugin),
+                   orders={p: (t.codex.slicing or {}).get("order", "bytes") for p, t in by_plugin.items()})
+    # survey saw to it that every prefix is a target's
+    work = work if src.data is None else None
+    held = st.Held({p: st.read_target(by_plugin[p], ends, work) for p, ends in sv.ends.items()})
+    for ends in sv.ends.values():
+        ends.summaries = None                       # read: the parts are found
+    tables = held if work is None else held.save(work)
+    del held
+    version = _version_for(ts, container, sv.graph)
+    snapshots = {p: t.from_snapshot for p, t in by_plugin.items()}
+    codices = {p: t.codex for p, t in by_plugin.items()}
+    order = st.ExternalSort(work) if sort and work is not None else None
+    st.check_pins(src, sv, tables, snapshots=snapshots, codices=codices, sort=order, version=version)
+    contributors = sorted(sv.contributors)
+    annotator = annotator or (contributors[0] if len(contributors) == 1 else None)
+    if not annotator:
+        raise AnnotationsError(f"the claims name {len(contributors)} contributors "
+                               f"({', '.join(contributors[:5])}), and an annotations collection "
+                               f"credits one annotator: give a claims file whose claims name one "
+                               f"contributor, or name the annotator the Codex credits on the "
+                               f"command line with --annotator")
+    return Streamed(ts, annotator, sv, tables, version, order, snapshots, codices)
+
+
 def _method_name(m: dict[str, Any]) -> str:
     return m["kind"] + (f":{m['id']}" if m["kind"] in ("matcher", "model") else "")
 
 
-def preview(root: Path, *, target_ref: str | None = None, from_snapshot: str | None = None, claims: bytes,
-            annotator: str | None = None, targets: Sequence[tuple[str, str]] | None = None,
-            container: str = cx.JSONL) -> dict[str, Any]:
+def preview(root: Path, *, target_ref: str | None = None, from_snapshot: str | None = None,
+            claims: bytes | Path, annotator: str | None = None,
+            targets: Sequence[tuple[str, str]] | None = None, container: str = cx.JSONL) -> dict[str, Any]:
     """`create annotations --dry-run`: the claims checked against the target
     snapshot(s) exactly as `create` checks them, counted, nothing written —
     for a file of thousands of claims about a live collection, the measure
     before the write (operator, 2026-10-19: the wiki-gutenberg collection).
     `target`, `target_id` and `from_snapshot` are the first target's;
-    `targets` lists them all."""
-    from collections import Counter
+    `targets` lists them all. `claims` is the file's bytes or its path,
+    streamed (`create`)."""
+    from . import annotations_stream as st
     cx.refuse_unbuilt_container(container)
-    ch = _checked(root, target_ref, from_snapshot, claims, annotator=annotator, targets=targets)
+    ts = _targets(Path(root), _refs(target_ref, from_snapshot, targets))
+    bytes_given = isinstance(claims, (bytes, bytearray, memoryview))
+    with (nullcontext() if bytes_given else st.workspace(root, f"preview.{secrets.token_hex(6)}")) as work, \
+            st.ClaimsSource(claims) as src:
+        try:
+            ch = _checked_stream(ts, src, annotator=annotator, container=container, work=work)
+        finally:
+            st.forget()
     first = ch.targets[0]
-    records = {u for c in ch.pinned for u in record_ends(c)}
-    version = (cx.GRAPH_VERSION if len(ch.targets) > 1 or container != cx.JSONL or ch.graph
-               else cx.ANNOTATIONS_VERSION)
+    sv = ch.survey
     per_part = SHARD_RECORDS_PARQUET if container == cx.PARQUET else SHARD_RECORDS
     return {"target": first.name, "target_id": first.codex.collection_id, "from_snapshot": first.from_snapshot,
             "targets": [{"target": t.name, "collection_id": t.codex.collection_id,
                          "from_snapshot": t.from_snapshot} for t in ch.targets],
-            "version": version, "container": container,
-            "claims": len(ch.pinned), "target_records_named": len(records), "annotator": ch.annotator,
-            "by_type": dict(sorted(Counter(c["type"] for c in ch.pinned).items())),
-            "by_method": dict(sorted(Counter(_method_name(c["method"]) for c in ch.pinned).items())),
-            "parts": -(-len(ch.pinned) // per_part),
+            "version": ch.version, "container": container,
+            "claims": sv.count, "target_records_named": sv.records_named, "annotator": ch.annotator,
+            "by_type": dict(sorted(sv.by_type.items())),
+            "by_method": dict(sorted(sv.by_method.items())),
+            "parts": -(-sv.count // per_part),
             "written": False}
 
 
 def create(root: Path, name: str, *, target_ref: str | None = None, from_snapshot: str | None = None,
-           claims: bytes, platform_image: str, title: str | None = None, summary: str | None = None,
+           claims: bytes | Path, platform_image: str, title: str | None = None, summary: str | None = None,
            annotator: str | None = None, snapshot_id: str | None = None,
            key=None, now: str | None = None, nonce: str | None = None,
            log=print, targets: Sequence[tuple[str, str]] | None = None,
-           container: str = cx.JSONL) -> tuple[Codex, Any]:
+           container: str = cx.JSONL, _in_memory: bool = False) -> tuple[Codex, Any]:
     """`hold collection create annotations` (07 §7.3): the Codex, the
     claims kept as this collection's origin, the record and relations
     parts, `validation.json`, the first snapshot (signed when this peer has
@@ -1116,27 +1259,77 @@ def create(root: Path, name: str, *, target_ref: str | None = None, from_snapsho
     written, so a refused file leaves nothing behind. A name already
     holding an annotations collection of the same targets, container and
     version is RESUMED (its Codex kept, every part rewritten byte for
-    byte); any other holder of the name is refused."""
-    from datetime import datetime
-    from zoneinfo import ZoneInfo
-    from . import collection as col, snapshot as sn
+    byte); any other holder of the name is refused.
 
+    STREAMED (operator, 2026-11-10; docs/notes/wikipedia-one-version.md
+    "Measured: the size"): `claims` — the file's bytes or its path — is
+    copied once into a workspace beside the collections and read from there
+    pass by pass, never held; the targets are read once; every pass runs on
+    the parse pool (app/hold/annotations_stream.py). Every byte written is
+    what the in-memory path, `_in_memory` — every claim held, as until
+    2026-11-10, kept for that proof alone — writes
+    (tests/hold/test_annotations_stream.py)."""
+    from . import annotations_stream as st, collection as col
     root = Path(root)
     col.check_name(name)
     cx.refuse_unbuilt_container(container)
-    ch = _checked(root, target_ref, from_snapshot, claims, annotator=annotator, targets=targets)
-    first = ch.targets[0]
+
+    def hold(codex: Codex) -> None:
+        col.create(root, codex, name=name)
+    if _in_memory:
+        ch = _checked(root, target_ref, from_snapshot, claims, annotator=annotator, targets=targets)
+        return _write_collection(
+            root, name, ch.targets, ch.annotator, ch.graph, hold, container=container, title=title,
+            summary=summary, platform_image=platform_image, nonce=nonce, snapshot_id=snapshot_id, key=key,
+            now=now, log=log, version=None, records=lambda version: records_of(ch.pinned, ch.submitted,
+                                                                               version=version),
+            count=len(ch.pinned), install=lambda dst: dst.write_bytes(claims))
+    ts = _targets(root, _refs(target_ref, from_snapshot, targets))
+    with st.workspace(root, f"create.{name}") as work, st.private_source(claims, work) as src:
+        try:
+            cs = _checked_stream(ts, src, annotator=annotator, container=container, work=work, sort=True)
+            return _write_collection(
+                root, name, cs.targets, cs.annotator, cs.graph, hold, container=container, title=title,
+                summary=summary, platform_image=platform_image, nonce=nonce, snapshot_id=snapshot_id, key=key,
+                now=now, log=log, version=cs.version, records=lambda version: cs.records(src),
+                count=cs.survey.count, install=src.install)
+        finally:
+            st.forget()
+
+
+def _create_in_memory(root: Path, name: str, **kw) -> tuple[Codex, Any]:
+    """`create` as it was until 2026-11-10, every claim held (`_checked`,
+    `records_of`): the reference the streamed `create` is proven against,
+    byte for byte (tests/hold/test_annotations_stream.py), and nothing else."""
+    return create(root, name, _in_memory=True, **kw)
+
+
+def _write_collection(root: Path, name: str, targets: Sequence[Target], annotator: str, graph: bool,
+                      hold, *,
+                      container: str, title: str | None, summary: str | None, platform_image: str,
+                      nonce: str | None, snapshot_id: str | None, key, now: str | None, log,
+                      version: int | None, records, count: int, install) -> tuple[Codex, Any]:
+    """What `create` writes once the claims are checked: the Codex (`hold`
+    makes it, or the one the name holds is resumed), the parts and the first snapshot from
+    `records(the Codex's version)`, the claims file as the origin
+    (`install`), the signature and the collection file. `version`, when
+    given, is the numbering version the records were ordered by, which must
+    be the Codex's."""
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    from . import collection as col, snapshot as sn
+    first = targets[0]
     tt = (first.codex.descriptive.title or first.name).strip()
-    names = ", ".join(t.name for t in ch.targets)
+    names = ", ".join(t.name for t in targets)
     wanted = build_codex(
-        None, None, targets=[(t.codex, t.from_snapshot) for t in ch.targets], container=container,
-        graph=ch.graph,
+        None, None, targets=[(t.codex, t.from_snapshot) for t in targets], container=container,
+        graph=graph,
         title=title or f"Annotations on {tt}",
         summary=summary or (f"Claims about the records of {names} "
                             f"({first.codex.collection_id[:19]}…) from snapshot "
-                            f"{first.from_snapshot} on, made by {ch.annotator}; "
+                            f"{first.from_snapshot} on, made by {annotator}; "
                             f"attached to its search results as facts, never ranked."),
-        annotator=ch.annotator, platform_image=platform_image, nonce=nonce)
+        annotator=annotator, platform_image=platform_image, nonce=nonce)
 
     p = col.shard_dir_of(root, name) / col.CODEX_FILE
     if p.is_file():
@@ -1149,26 +1342,28 @@ def create(root: Path, name: str, *, target_ref: str | None = None, from_snapsho
         log(f"[annotations] {name}: resuming {codex.collection_id[:23]}…")
     else:
         codex = wanted
-        col.create(root, codex, name=name)
+        hold(codex)
+    if version is not None and version != codex.version:
+        raise AnnotationsError(f"the claims were ordered for version {version} and the Codex is "
+                               f"{codex.version}: nothing is written")
     shard_tree = col.shard_dir_of(root, name)
     if snapshot_id is None:
         snapshot_id = sn.snapshot_id_for(datetime.now(ZoneInfo(codex.origin.clock)),
                                          codex.update.cadence)
-    records = records_of(ch.pinned, ch.submitted, version=codex.version)
-    snap = write_snapshot(shard_tree, root / name / "state" / "annotations-build", codex, records,
+    snap = write_snapshot(shard_tree, root / name / "state" / "annotations-build", codex, records(codex.version),
                           snapshot_id)
     # the claims as submitted: this collection's origin (02 §2.10), what each
     # record's `origin` locates and `origin_hash` covers. Beside the SHARD,
     # never in it — an origin is not a member (07 §7.8)
     origin = root / name / "origin"
     origin.mkdir(parents=True, exist_ok=True)
-    (origin / CLAIMS_FILE).write_bytes(claims)
+    install(origin / CLAIMS_FILE)
     if key is not None:
         sn.sign_snapshot(root, name, snap, key,
                          now=now or time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()))
     held_path = write_held_file(root, codex, name)
-    log(f"[annotations] {name}: {len(records)} claim(s) about {names} from "
-        f"{', '.join(t.from_snapshot for t in ch.targets)}, "
+    log(f"[annotations] {name}: {count} claim(s) about {names} from "
+        f"{', '.join(t.from_snapshot for t in targets)}, "
         f"snapshot {snapshot_id} {snap.hash[:23]}…; held: {held_path}")
     return codex, snap
 
