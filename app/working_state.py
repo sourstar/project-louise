@@ -248,11 +248,24 @@ def current() -> dict[str, Any]:
     d = collections_mod.collections_dir()
     for p in sorted(d.glob("*.toml")) if d.is_dir() else ():
         try:
-            held[p.stem] = {"embed": collection_file.stated_embed(p.stem)}
+            held[p.stem] = {"embed": collection_file.stated_embed(p.stem), "codex": _codex_of(p)}
         except collection_file.SetRefused as e:
-            held[p.stem] = {"unreadable": str(e)}
+            held[p.stem] = {"unreadable": str(e), "codex": _codex_of(p)}
     got["held"] = held
     return got
+
+
+def _codex_of(p: Path) -> str | None:
+    """The collection a file holds (07 §7.8 `codex`): what a name meant at
+    save, so a restore never applies one collection's state to another
+    that took its name."""
+    import tomllib
+    try:
+        with open(p, "rb") as f:
+            got = tomllib.load(f).get("codex")
+    except (OSError, ValueError):
+        return None
+    return str(got).removeprefix("sha256:") if got else None
 
 
 def plan(saved: dict[str, Any], now: dict[str, Any]) -> dict[str, list]:
@@ -281,6 +294,19 @@ def plan(saved: dict[str, Any], now: dict[str, Any]) -> dict[str, list]:
             if pause_differs:
                 skipped.append({"collection": name, "why": "no file holds it, at save or now: its pause "
                                                            "is left as it is"})
+            continue
+        # A NAME IS NOT A COLLECTION (München, 2026-11-10: a checkpoint saved
+        # before pubmed9 was renamed over pubmed, restored a day later, paused
+        # the new pubmed and set its embed off by name). Restored only where
+        # the name holds the collection it held at save.
+        if then.get("codex") is None or then.get("codex") != cur.get("codex"):
+            why = (f"at save this name held {str(then['codex'])[:12]}…, now {str(cur.get('codex'))[:12]}…: "
+                   f"another collection; nothing of it is restored by name"
+                   if then.get("codex") else
+                   "the checkpoint does not say which collection this name held at save (saved before "
+                   "checkpoints recorded it): nothing of it is restored by name")
+            if pause_differs or (then.get("embed") or DEFAULT_EMBED) != (cur.get("embed") or DEFAULT_EMBED):
+                skipped.append({"collection": name, "why": why})
             continue
         if pause_differs:
             changes.append({"what": "pause", "collection": name, "from": name in paused_now,
