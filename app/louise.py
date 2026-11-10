@@ -1995,6 +1995,8 @@ def _write_held_file(root, codex, encoder: str | None = None,
             f"{path} holds {held or 'no codex'} and this is "
             f"{codex.collection_id}: a name holds one collection for its "
             f"life, and another collection is another name (07 §7.8)")
+    if encoder and not query_encoder and not query_model:
+        query_encoder, query_model = _inherited_query_side(codex)
     if encoder:
         api = check_api(api)
         embed_model, query_model = model_keys(encoder, query_encoder,
@@ -2065,6 +2067,30 @@ def _inherited_driving(codex, url: str | None, embed_model: str | None) -> str:
                 return "\n".join([f"# batch, concurrency, device carried from {c.name} ({why}, held here)"]
                                  + lines) + "\n"
     return ""
+
+
+def _inherited_query_side(codex) -> tuple[str | None, str | None]:
+    """THE QUESTION SIDE A NEW COLLECTION TAKES where the command names none:
+    a collection held here in the SAME SPACE that has its own (`query_url`,
+    `query_model`) — the space fixes the query encoder's weights, so the
+    endpoint serving that collection's questions serves these. Never from
+    another space: its query side may be another model. München,
+    2026-11-10: pubmed's re-created file lost its [encoder] node keys; a
+    bi-encoder's lost query side would embed questions with the document
+    model."""
+    try:
+        from app import collections as collections_mod
+        held = sorted((c for c in collections_mod.load_all()
+                       if getattr(c, "embed", None) is not None and c.embed.query_url
+                       and getattr(getattr(c, "codex", None), "space_id", None) == codex.space_id),
+                      key=lambda c: c.name)
+    except Exception:   # noqa: BLE001 — nothing held to read: nothing carried
+        return None, None
+    if not held:
+        return None, None
+    print(f"note: the question side carried from {held[0].name} (the same space, held here): "
+          f"{held[0].embed.query_model}", file=sys.stderr)
+    return held[0].embed.query_url, held[0].embed.query_model
 
 
 def _driving_lines(embed) -> list[str]:

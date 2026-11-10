@@ -64,3 +64,27 @@ def test_what_is_carried_reads_back_as_the_recipe(tmp_path, monkeypatch):
     got = collections_mod.parse_recipe(raw, where="eurlex")
     assert (got.batch, got.concurrency, got.spends, got.stated) == (16, 4, "gpu",
                                                                     frozenset({"batch", "concurrency"}))
+
+
+def test_a_bi_encoders_question_side_is_carried_from_the_same_space(tmp_path, monkeypatch):
+    """München, 2026-11-10: pubmed's re-created file lost its [encoder] node
+    keys; a lost query side would embed questions with the document model."""
+    codex = _made(tmp_path, "pubmed2")
+    medcpt = collections_mod.EmbedRecipe(url=URL, api="openai", dtype="f16", ctx=512, model="qwen",
+                                         query_url="http://enc.invalid/upstream/medcpt-query",
+                                         query_model="medcpt-query", concurrency=4,
+                                         stated=frozenset({"concurrency"}), device="gpu")
+    monkeypatch.setattr(collections_mod, "load_all", lambda *a, **k: [
+        held("other", recipe(), "sha256:other"), held("pubmed", medcpt, codex.space_id)])
+    enc = encoder_of(louise._write_held_file(tmp_path / "collections", codex, URL))
+    assert (enc["query_url"], enc["query_model"]) == ("http://enc.invalid/upstream/medcpt-query", "medcpt-query")
+    assert (enc["concurrency"], enc["device"]) == (4, "gpu") and "batch" not in enc
+
+
+def test_another_spaces_question_side_is_never_carried(tmp_path, monkeypatch):
+    codex = _made(tmp_path, "pubmed3")
+    other = collections_mod.EmbedRecipe(url=URL, api="openai", dtype="f16", ctx=512, model="qwen",
+                                        query_url="http://enc.invalid/upstream/q2", query_model="q2")
+    monkeypatch.setattr(collections_mod, "load_all", lambda *a, **k: [held("x", other, "sha256:other")])
+    enc = encoder_of(louise._write_held_file(tmp_path / "collections", codex, URL))
+    assert "query_url" not in enc and enc["query_model"] == enc["embed_model"]
