@@ -1488,7 +1488,9 @@ class ClaimIndex:
 
 
 #: SHARD path -> (snapshot hash, its index). Keyed on the PATH (CLAUDE.md).
-_indexes: dict[str, tuple[str, ClaimIndex]] = {}
+_indexes: dict[str, tuple[str, Any]] = {}
+#: SHARD path -> the snapshot hash whose missing disk index was said
+_unbuilt_said: dict[str, str] = {}
 
 
 def index_of(shard_tree: Path) -> ClaimIndex:
@@ -1506,6 +1508,22 @@ def index_of(shard_tree: Path) -> ClaimIndex:
     hit = _indexes.get(str(shard_tree))
     if hit is not None and hit[0] == snap.hash:
         return hit[1]
+    from app.hold import claim_index
+    if claim_index.is_large(snap):
+        # A LARGE snapshot (wikipedia-articles: 12.3 M claims) is read from
+        # its index on disk, never loaded here (app/hold/claim_index.py);
+        # until it is built, its claims apply to nothing — said once
+        disk = claim_index.load(Path(shard_tree), snap)
+        if disk is None:
+            if _unbuilt_said.get(str(shard_tree)) != snap.hash:
+                _unbuilt_said[str(shard_tree)] = snap.hash
+                name = Path(shard_tree).parent.name
+                print(f"annotations: {name} holds {snap.records:,} claims; their index is not built yet, "
+                      f"so they group nothing until `louise hold annotations index {name}` (or the "
+                      f"worker) builds it", flush=True)
+            return ClaimIndex(snap.snapshot_id, ())
+        _indexes[str(shard_tree)] = (snap.hash, disk)
+        return disk
     gone = {t.uid for t in snap.delta.tombstoned}
     claims = []
     for s in snap.shards:

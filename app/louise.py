@@ -267,6 +267,16 @@ def cmd_create_annotations(a) -> int:
     return 0
 
 
+def cmd_annotations_index(a) -> int:
+    """`hold annotations index <collection>`: the claim index on disk of its
+    current snapshot (app/hold/claim_index.py). Idempotent: a built one is
+    left as it is."""
+    from app.hold import claim_index, collection as col
+    root = Path(a.root)
+    _print(claim_index.build(col.shard_dir_of(root, a.collection)))
+    return 0
+
+
 def cmd_annotations_update(a) -> int:
     """`hold annotations update <collection> [--claims FILE] [--against
     TARGET=SNAPSHOT]` (02 §2.10; operator, 2026-10-23: "annotations must be
@@ -6912,6 +6922,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--dry-run", action="store_true",
                    help="check and count what would change; write nothing")
     p.set_defaults(fn=cmd_annotations_update)
+    p = averbs.add_parser("index", help="build the claim index on disk of a LARGE annotations collection's "
+                                        "current snapshot (more than 250,000 claims): searched in place, "
+                                        "never loaded into the web's memory")
+    root_arg(p); p.add_argument("collection")
+    p.set_defaults(fn=cmd_annotations_index)
 
     recs = nouns.add_parser("records", help="the parsed text of documents")
     rverbs = recs.add_subparsers(dest="verb", required=True)
