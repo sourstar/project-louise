@@ -55,3 +55,24 @@ on the Ask page, and every version stays listed under the article (05 §5.3, inv
   The count decides whether that index needs a memory-mapped form first.
 - **Then:** the search shows the largest edition where the claims give the lengths (English on ties), and the shown
   version's best passage where it did not match (the operator's A).
+
+## Measured: the size (München, 2026-11-10, `tools.annotations_from_wikipedia wikipedia --count`)
+
+4,476,494 articles of two versions or more, 16,803,013 versions, **12,326,519 claims**; the count took 158.6 s and
+6.97 GiB at its peak. Two pieces of the annotations machinery were built for gutenberg's thousands of claims and do
+not hold at this size; both are local, neither changes what peers exchange (09 §9.4's claim records stay as they are):
+
+1. **Creating it** (`app/hold/annotations.py create`): `read_claims` keeps every claim and its raw line in memory
+   (~12 M objects), and `target_records` reads the content hash of every claimed record from the target's parts —
+   16.8 M of wikipedia's 52.9 M records, most of its frames. Needed: a STREAMING create — claims read, checked and
+   pinned part by part in bounded memory, the target's records read once in part order, the claim parts written as
+   they fill.
+2. **Searching with it** (`index_of`, `ClaimIndex`): every claim as a Python object in the web process, ~12 M of them.
+   Needed: for a large annotations snapshot, a WORK INDEX built once per snapshot as derived data under
+   `LOUISE_CACHE_DIR` (invariant 6) and memory-mapped by the web: the claimed uids sorted (with their strings, so a
+   lookup never trusts a hash alone), each uid's work (connected components of the work claims, a union-find in
+   numpy), each work's members, and the lengths the evidence states. `works.work_groups` reads it in place of the
+   in-memory walk; a small collection keeps the in-memory index.
+3. **Showing it**: `works.collapse` shows the largest edition where the claims state the lengths (English on a tie),
+   and the shown edition's best passage when it did not match (the operator's A) — a rule of the search's grouping
+   step that only an annotation stating lengths turns on; gutenberg's claims state none and are unchanged.
