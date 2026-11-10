@@ -103,3 +103,34 @@ https://huggingface.co/Querit/Querit-4B · https://huggingface.co/hindsight-ai/h
 https://arxiv.org/pdf/2609.04999 · https://huggingface.co/ggml-org/Qwen3-Reranker-0.6B-Q8_0-GGUF ·
 https://huggingface.co/OpenVINO/bge-reranker-v2-m3-fp16-ov · https://huggingface.co/OpenVINO/Qwen3-Reranker-0.6B-seq-cls-fp16-ov ·
 https://docs.openvino.ai/2026/model-server/ovms_demos_rerank.html
+
+
+## Arm A3: llama-nemotron-rerank-1b-v2 on a separate backend (operator, 2026-11-10)
+
+"Patch llama.cpp to support nemo reranker, tomorrow I want to see its benchmarks too." The model needs an
+architecture upstream llama.cpp has not merged (#24083, open); our port is P10 (localai-bugs.md). It runs on
+its OWN backend, so the live engine and every space gated on it are untouched.
+
+The arms are A1, A2, A2i and A3, and no more (operator, 2026-11-10: "No, only nemo reranker"):
+gte-multilingual-reranker-base and Qwen3-VL-Reranker-2B are not benchmarked.
+
+1. **Build** (the build area, ~15–25 min): `SERIES_FILE=deploy/localai/patches/staged/nemotron-rerank.series
+   sh deploy/localai/llama-cpp/build.sh sycl_f16 <out>` with the live engine's own SYCL_DEVICE_ARCH and
+   INTEL_STACK settings; install it under `louise-sycl-f16-llama-cpp-<series digest>` (the name in the model
+   YAML; the digest is build.sh's, recomputed if the series changes).
+2. **Convert** (any machine with python, transformers ≥ 4.44): llama.cpp at ddf48f85c933c1f438212a02eb21e7b001d2d37d,
+   `patch -p1 < deploy/localai/patches/staged/llama.cpp/0010-llama-nemotron-rerank.patch`, then
+   `python convert_hf_to_gguf.py /mnt/ssd5/apps/models/nemotron-rerank-1b-v2 --outtype f16 --outfile
+   <models>/weights/nemotron-rerank/llama-nemotron-rerank-1b-v2-f16.gguf`. `gguf-dump` must show
+   `llama-embed.attention.causal = False`, `pooling_type = 4` (rank), `classifier.pooling_type = 1` (mean),
+   `chat_template.rerank`, and `cls.output.weight` [2048, 1].
+3. **Load** with `deploy/vega/stage/models/louise-rerank-nemotron-1b.yaml` (bge's strict settings, ctx 4,096).
+4. **Parity, before any benchmark number**: `python -m tools.measure.nemotron_rerank_parity --hf
+   /mnt/ssd5/apps/models/nemotron-rerank-1b-v2 --url <localai>/v1/rerank --model louise-rerank-nemotron-1b
+   [--capture <a *-speed.jsonl> --queries 20]`: NVIDIA's own code on the CPU (float32) against the engine,
+   pair by pair; it must give every query's first document the same, a median Kendall tau ≥ 0.95, and the
+   engine's own scores back bit for bit (the same request twice, the documents reversed). Those lines are
+   proposed, not measured before.
+5. **Arm**: `rerank_bench rerank <set>-speed.jsonl --arm A3 --model louise-rerank-nemotron-1b`, node paused,
+   model warm, like A1/A2. Its scores are raw logits (no calibration yet): the benchmark ranks within a list,
+   so they need none.

@@ -525,8 +525,8 @@ class Space:
     tolerance: str           # decimal string
     calibration: Calibration
     envelope: str            # hash of the envelope tensor (§9.12)
-    epoch: str = "0"         # "0" for a root; the mother's for a daughter or
-                             # a sister; salted for a corrective sister
+    epoch: str = "0"         # "0" for a root; a daughter keeps her mother's,
+                             # a sister her sister's; salted for a corrective sister
     evaluation: dict[str, Any] | None = None
     #: TOKEN_CUT from CUT_VERSION; None — absent — below it: the platform's
     #: character cut every space before 2026-10-18 was calibrated through
@@ -815,7 +815,7 @@ class Codex:
     continues: str | None = None                 # daughter: the mother's id
     continues_through: str | None = None         # daughter: the mother's last snapshot
     origin_reachable_until: str | None = None
-    derived_from: str | None = None              # sister: the mother's id
+    derived_from: str | None = None              # sister: her sister's id
     space_from: str | None = None                # sister: whose space was copied
     #: §9.3: "how this space's vectors may be obtained WITHOUT an encoder,
     #: when it is a pure function of another space's:
@@ -1089,18 +1089,18 @@ def _layers_at(layers: Iterable[Layer], version: int) -> tuple[Layer, ...]:
 def written_version(space: Space, version: int) -> int:
     """The version a Codex holding `space` is WRITTEN at, given the version
     its other rules chose (`version`: CODEX_VERSION for a new one, the
-    source's or the mother's where a space is copied or kept).
+    source's or her sister's where a space is copied or kept).
 
     09 §9.3, amended 2026-10-08: BACKEND_VERSION "written for a Codex that
     carries one alone — every other is written at 5". So a space with a
     backend engine makes the Codex version 6, and a space without one never
-    leaves a Codex at 6 (a sister of a version-6 mother naming an argv
+    leaves a Codex at 6 (a sister of a version-6 sister naming an argv
     engine is written at 5). Below that nothing changes: a version-4 copy
     stays 4, a version-2 copy stays 2, and no byte already written moves.
 
     Raising a version below INPUT_VERSION to 6 would add `input` to the
     layers and so move `space_id`; the callers that promise to keep a
-    space (`derive` in her mother's space) refuse that case themselves."""
+    space (`derive` in her sister's space) refuse that case themselves."""
     if space.document_instruction is not None:
         return DOCUMENT_VERSION             # a document instruction makes a Codex 11
     if space.exactness is not None:
@@ -1178,7 +1178,7 @@ def container_of(codex: Any) -> str:
 
 def corrective_epoch(replaced_codex_id: str) -> str:
     """The epoch that makes a corrective sister's space fresh even when its
-    encoder, layers and cleaning equal her mother's (02 §2.7). Her own
+    encoder, layers and cleaning equal her sister's (02 §2.7). Her own
     sisters inherit this value; they do not mint a new one."""
     return digest(canonical_json({"replaces": replaced_codex_id}))
 
@@ -1192,8 +1192,8 @@ def default_per(cadence: str) -> str:
 # --------------------------------------------------------------------------
 # validation
 
-def validate(codex: Codex, mother: Codex | None = None) -> None:
-    """Refuse a Codex that breaks a rule. `mother` is the Codex named by
+def validate(codex: Codex, predecessor: Codex | None = None) -> None:
+    """Refuse a Codex that breaks a rule. `predecessor` is the Codex named by
     `continues` / `derived_from` / `replaces.codex`, when the caller has it;
     the rules that need it are skipped otherwise and re-checked on adoption.
     """
@@ -1253,8 +1253,8 @@ def validate(codex: Codex, mother: Codex | None = None) -> None:
     _validate_credits(codex)
     _validate_lineage(codex)
 
-    if mother is not None:
-        _validate_against_mother(codex, mother)
+    if predecessor is not None:
+        _validate_against_predecessor(codex, predecessor)
 
 
 #: The plan checks an annotations collection may name: what its parts and
@@ -1867,77 +1867,78 @@ def _validate_lineage(codex: Codex) -> None:
         raise CodexError('a root\'s space.epoch is "0"')
 
 
-def _validate_against_mother(codex: Codex, mother: Codex) -> None:
-    mid = mother.collection_id
+def _validate_against_predecessor(codex: Codex, predecessor: Codex) -> None:
+    mid = predecessor.collection_id
     if codex.relation == "daughter":
         if codex.continues != mid:
             raise CodexError("continues does not name the given mother")
-        if codex.space_id != mother.space_id:
+        if codex.space_id != predecessor.space_id:
             raise CodexError("a daughter keeps her mother's space — same encoder, "
                              "layers, cleaning and epoch; this is a sister in disguise")
-        if codex.plugin != mother.plugin:
+        if codex.plugin != predecessor.plugin:
             raise CodexError("a daughter continues the same plugin")
-        if codex.publication != mother.publication:
+        if codex.publication != predecessor.publication:
             raise CodexError("a daughter keeps her mother's publication mode")
-        if codex.toolchain.mother_platform_image != mother.toolchain.platform_image:
+        if codex.toolchain.mother_platform_image != predecessor.toolchain.platform_image:
             raise CodexError("a daughter's toolchain.mother_platform_image is her "
                              "mother's platform_image")
     elif codex.relation == "sister":
         if codex.derived_from != mid:
             raise CodexError("derived_from does not name the given sister")
-        if codex.origin != mother.origin:
+        if codex.origin != predecessor.origin:
             raise CodexError("a sister inherits her sister's corpus: same origin")
-        if codex.cleaning_version != mother.cleaning_version:
+        if codex.cleaning_version != predecessor.cleaning_version:
             raise CodexError("a sister keeps her sister's cleaning_version: "
                              "changing it would re-derive the corpus she is "
                              "defined to inherit (02 §2.7)")
-        if codex.toolchain.platform_image != mother.toolchain.platform_image:
+        if codex.toolchain.platform_image != predecessor.toolchain.platform_image:
             raise CodexError("a sister shares her sister's platform image")
-        if codex.parser != mother.parser:
+        if codex.parser != predecessor.parser:
             raise CodexError("a sister keeps her sister's parser")
-        if parts_slicing(codex.slicing) != parts_slicing(mother.slicing):
+        if parts_slicing(codex.slicing) != parts_slicing(predecessor.slicing):
             # the same parts: a version-9+ sister states the "jsonl" her older
-            # mother's absent container means (09 §9.5; normattiva-nemo)
+            # sister's absent container means (09 §9.5; normattiva-nemo)
             raise CodexError("a sister keeps her sister's slicing: the shards are "
                              "the same shards")
-        changed = _sister_changes(codex, mother)
+        changed = _sister_changes(codex, predecessor)
         if not changed:
             raise CodexError("a sister changes something: same everything is the "
                              "same collection")
-        # Only the ARCHIVE entries follow the space. Her corpus entry is her
-        # mother's on every relation — she shares the corpus by definition —
-        # and her community entry follows her own `embedding`, which is hers
-        # to change: a sister may open a certifier-only mother to
-        # contribution, or close an open one, and her credits say which.
-        if (codex.space_id == mother.space_id
-                and archive_credits(codex) != archive_credits(mother)):
+        # Only the ARCHIVE entries follow the space. Her corpus entry is that
+        # of the collection she comes from on every relation — she shares the
+        # corpus by definition — and her community entry follows her own
+        # `embedding`, which is hers to change: a sister may open a
+        # certifier-only sister to contribution, or close an open one, and
+        # her credits say which.
+        if (codex.space_id == predecessor.space_id
+                and archive_credits(codex) != archive_credits(predecessor)):
             raise CodexError("a sister in her sister's space carries that sister's "
                              "archive credits (02 §2.7)")
         mine = [c for c in codex.credits if c.kind == CORPUS]
-        hers = [c for c in mother.credits if c.kind == CORPUS]
+        hers = [c for c in predecessor.credits if c.kind == CORPUS]
         if mine != hers:
             raise CodexError("a sister keeps her sister's corpus credit: she "
                              "shares the corpus, and a new encoder does not "
                              "unwrite whose text it read (02 §2.7)")
-        if codex.space.epoch != mother.space.epoch and codex.space_from is None:
+        if codex.space.epoch != predecessor.space.epoch and codex.space_from is None:
             raise CodexError("a sister keeps her sister's space.epoch unless she "
                              "copied a space from another Codex")
     elif codex.relation == "corrective-sister":
         if codex.replaces.codex != mid:
             raise CodexError("replaces.codex does not name the given sister")
-        if codex.origin != mother.origin:
+        if codex.origin != predecessor.origin:
             raise CodexError("a corrective sister re-derives the same origin")
 
 
-def _sister_changes(codex: Codex, mother: Codex) -> list[str]:
+def _sister_changes(codex: Codex, her_sister: Codex) -> list[str]:
     """What a sister may change, and nothing else: `space`, `layers`,
     `update` and `work` (02 §2.7). `work` because the rate is denominated in
     the declared encoder's tokenizer, so a sister on another encoder must
     measure her own."""
-    allowed = {"space": (codex.space, mother.space),
-               "layers": (codex.layers, mother.layers),
-               "update": (codex.update, mother.update),
-               "work": (codex.work, mother.work)}
+    allowed = {"space": (codex.space, her_sister.space),
+               "layers": (codex.layers, her_sister.layers),
+               "update": (codex.update, her_sister.update),
+               "work": (codex.work, her_sister.work)}
     return [k for k, (a, b) in allowed.items() if a != b]
 
 

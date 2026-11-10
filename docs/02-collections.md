@@ -879,10 +879,16 @@ makes a new Codex. Three kinds of change, three relations:
 
 | | **daughter** | **sister** | **corrective sister** |
 |---|---|---|---|
-| what changed | the outside world: origin format or address, licence of new items; the toolchain adapts | the space, the schedule, or both — never anything that decides a record | a defect in her sister's records or vectors |
+| what changed | the outside world: origin format or address, licence of new items; the toolchain adapts | anything built on the corpus — the space (its encoder, its chunker), the schedule, or both — never anything that decides a record | a defect in her sister's records or vectors |
+| for instance (operator, 2026-11-10) | the original source is no longer available, or simply its URL changed, requiring a new manifest | two different encoders, to fit different hardware levels or precision and performance needs | — |
 | the corpus | inherited by hash up to the transition; the new toolchain's after it | inherited whole: the same records, always | recomputed from the origin |
 | the vectors | inherited: the space is unchanged | inherited when `space_id` matches, from zero when it does not | from zero |
 | Codex field | `continues`, `continues_through` | `derived_from` | `derived_from` + `replaces: {codex, defect}` |
+
+In the operator's words (2026-11-10): "A daughter has the same corpus and
+vectors of the mother, until a certain cutoff time, thus also embedder,
+vector space and chunker. Two sisters share exactly the same corpus, the
+rest can be totally different."
 
 These three words, and no others, say how two collections are related.
 A daughter's predecessor is her **mother**: a daughter continues her

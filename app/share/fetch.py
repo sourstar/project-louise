@@ -463,15 +463,15 @@ def held_snapshots(root: Path, collection_id: str) -> dict[str, str]:
 def hold(root: Path, chain: list[tuple[cx.Codex, bytes]], pulled: list[Pulled], *,
          name: str | None = None, encoder: str | None = None,
          encoder_keys: dict[str, Any] | None = None, embed: str = "off") -> dict[str, Any]:
-    """The Codex into the SHARD (validated against its mother from the
-    chain), the chain's other Codexes under state/chain/, every signed
+    """The Codex into the SHARD (validated against the Codex it comes from,
+    from the chain), the chain's other Codexes under state/chain/, every signed
     snapshot into the SHARD with its sidecar merged by union, an unsigned
     one into state/staging/, and the collection's file written (07 §7.8)."""
     root = Path(root)
     head, head_bytes = chain[0]
     by_id = {c.collection_id: c for c, _ in chain}
-    mother = next((by_id[r] for r in _parents(head) if r in by_id), None)
-    shard_dir = col.write(root, head, mother, name=name)
+    predecessor = next((by_id[r] for r in _parents(head) if r in by_id), None)
+    shard_dir = col.write(root, head, predecessor, name=name)
     cname = col.name_of(root, head.collection_id)
     state = root / cname / "state"
     for c, data in chain[1:]:

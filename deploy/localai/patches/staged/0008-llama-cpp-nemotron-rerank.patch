@@ -1,0 +1,226 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Tue, 10 Nov 2026 22:30:00 +0000
+Subject: [PATCH] feat(llama-cpp): rank with nvidia/llama-nemotron-rerank-1b-v2
+
+Carried as a llama.cpp patch beside the others
+(patches/0010-llama-nemotron-rerank.patch), ported from ggml-org/llama.cpp#24083
+(open) onto our pin ddf48f8: the converter registers
+LlamaBidirectionalForSequenceClassification (bidirectional Llama 3.2 1B, the
+last hidden states mean-pooled, a `score` head giving a raw logit) with causal
+attention off, pooling RANK, classifier pooling MEAN, the model's rerank
+template and score.weight as cls.output; llama-embed loads the optional head;
+the server gives a rerank template's prompt the BOS its tokenizer adds. This
+base already pools before the head when the GGUF says classifier pooling mean
+(the ModernBERT gte path), so no graph change.
+
+STAGED for a separate backend used only by the reranker benchmark's arm A3
+(the operator, 2026-11-10: "Patch llama.cpp to support nemo reranker,
+tomorrow I want to see its benchmarks too"); it enters the live series only
+if that arm earns it, so no live engine changes for it.
+
+Assisted-by: Claude Code
+---
+ .../patches/0010-llama-nemotron-rerank.patch  | 190 ++++++++++++++++++
+ 1 file changed, 190 insertions(+)
+ create mode 100644 backend/cpp/llama-cpp/patches/0010-llama-nemotron-rerank.patch
+
+diff --git a/backend/cpp/llama-cpp/patches/0010-llama-nemotron-rerank.patch b/backend/cpp/llama-cpp/patches/0010-llama-nemotron-rerank.patch
+new file mode 100644
+index 0000000..1925919
+--- /dev/null
++++ b/backend/cpp/llama-cpp/patches/0010-llama-nemotron-rerank.patch
+@@ -0,0 +1,190 @@
++llama: rank with nvidia/llama-nemotron-rerank-1b-v2 (LlamaBidirectionalForSequenceClassification)
++
++Ported from ggml-org/llama.cpp#24083 (open) onto ddf48f8. The model is Llama 3.2
++1B with bidirectional attention: the last hidden states mean-pooled, then
++`score` (hidden -> 1, no bias), a raw logit; its prompt is
++"question:{query} \n \n passage:{document}" and its tokenizer adds BOS.
++
++- conversion: LlamaBidirectionalForSequenceClassification on the llama-embed
++  class; causal attention off; pooling RANK with classifier pooling MEAN (this
++  base already pools before the head when the GGUF says so: the ModernBERT gte
++  path, so no graph change, where #24083 adds an arch check); the rerank
++  template; score.weight -> cls.output.weight; the tokenizer read with
++  trust_remote_code.
++- llama-embed: loads the optional cls.output head.
++- server: a rerank template's prompt gets BOS when the vocab adds it, as the
++  model's own tokenizer does.
++
++diff --git a/conversion/__init__.py b/conversion/__init__.py
++index 3976e03..dcfff1a 100644
++--- a/conversion/__init__.py
+++++ b/conversion/__init__.py
++@@ -180,6 +180,7 @@ TEXT_MODEL_MAP: dict[str, str] = {
++     "Llama4ForCausalLM": "llama",
++     "Llama4ForConditionalGeneration": "llama",
++     "LlamaBidirectionalModel": "llama",
+++    "LlamaBidirectionalForSequenceClassification": "llama",
++     "LlamaForCausalLM": "llama",
++     "LlamaModel": "llama",
++     "Eagle3DraftModel": "llama",
++diff --git a/conversion/llama.py b/conversion/llama.py
++index b04f54d..83f8438 100644
++--- a/conversion/llama.py
+++++ b/conversion/llama.py
++@@ -417,11 +417,90 @@ class Llama4Model(LlamaModel):
++         yield from super().modify_tensors(data_torch, name, bid)
++ 
++ 
++-@ModelBase.register("LlamaBidirectionalModel")
+++@ModelBase.register("LlamaBidirectionalModel", "LlamaBidirectionalForSequenceClassification")
++ @ModelBase.example("nvidia/llama-embed-nemotron-8b")
++ class LlamaEmbedNemotronModel(LlamaModel):
++     model_arch = gguf.MODEL_ARCH.LLAMA_EMBED
++ 
+++    # nvidia/llama-nemotron-rerank-1b-v2 (LlamaBidirectionalForSequenceClassification):
+++    # Llama 3.2 1B with bidirectional attention, the last hidden states mean-pooled
+++    # over the sequence (config "pooling": "avg"), then `score` (hidden -> 1, no
+++    # bias), a raw logit. Ported from ggml-org/llama.cpp#24083 (open) onto this
+++    # base, which already pools before the head when the GGUF says
+++    # classifier.pooling_type = mean (the ModernBERT gte path): no graph change.
+++
+++    def __init__(self, *args, **kwargs):
+++        super().__init__(*args, **kwargs)
+++        self.is_rerank = self.hf_arch == "LlamaBidirectionalForSequenceClassification"
+++
+++    def set_gguf_parameters(self):
+++        super().set_gguf_parameters()
+++        # both architectures attend bidirectionally (is_causal=False in the HF model)
+++        self.gguf_writer.add_causal_attention(False)
+++        if self.is_rerank:
+++            if float(self.hparams.get("temperature", 1.0)) != 1.0:
+++                raise ValueError("llama_bidirec reranker: a non-unit temperature is not supported")
+++            if self.hparams.get("pooling", "avg") != "avg":
+++                raise ValueError(f"llama_bidirec reranker: pooling {self.hparams.get('pooling')!r} "
+++                                 f"is not supported (only avg)")
+++            id2label = self.hparams.get("id2label") or {"0": "LABEL_0"}
+++            labels = [v for _k, v in sorted(id2label.items(), key=lambda x: int(x[0]))]
+++            self.gguf_writer.add_classifier_output_labels(labels)
+++            self.gguf_writer.add_pooling_type(gguf.PoolingType.RANK)
+++            self.gguf_writer.add_classifier_pooling_type(gguf.PoolingType.MEAN)
+++            # the model card's prompt_template: f"question:{q} \n \n passage:{p}"
+++            self.gguf_writer.add_chat_template([{
+++                "name": "rerank",
+++                "template": "question:{query} \n \n passage:{document}",
+++            }])
+++
+++    def get_vocab_base(self) -> tuple[list[str], list[int], str]:
+++        # the repo ships custom code (llama_bidirectional_model.py), so its
+++        # tokenizer config loads only with trust_remote_code
+++        tokens: list[str] = []
+++        toktypes: list[int] = []
+++
+++        from transformers import AutoTokenizer
+++        tokenizer = AutoTokenizer.from_pretrained(self.dir_model, trust_remote_code=True)
+++        vocab_size = self.hparams.get("vocab_size", len(tokenizer.vocab))
+++        assert max(tokenizer.vocab.values()) < vocab_size
+++
+++        tokpre = self.get_vocab_base_pre(tokenizer)
+++
+++        reverse_vocab = {id_: encoded_tok for encoded_tok, id_ in tokenizer.vocab.items()}
+++        added_vocab = tokenizer.get_added_vocab()
+++        added_tokens_decoder = tokenizer.added_tokens_decoder
+++
+++        for i in range(vocab_size):
+++            if i not in reverse_vocab:
+++                tokens.append(f"[PAD{i}]")
+++                toktypes.append(gguf.TokenType.UNUSED)
+++            else:
+++                token: str = reverse_vocab[i]
+++                if token in added_vocab:
+++                    if not added_tokens_decoder[i].normalized:
+++                        previous_token = token
+++                        token = tokenizer.decode(tokenizer.encode(token, add_special_tokens=False))
+++                        if previous_token != token:
+++                            logger.info(f"{repr(previous_token)} is encoded and decoded back to {repr(token)} using AutoTokenizer")
+++                    if added_tokens_decoder[i].special or self.does_token_look_special(token):
+++                        toktypes.append(gguf.TokenType.CONTROL)
+++                    else:
+++                        token = token.replace(b"\xe2\x96\x81".decode("utf-8"), " ")
+++                        toktypes.append(gguf.TokenType.USER_DEFINED)
+++                else:
+++                    toktypes.append(gguf.TokenType.NORMAL)
+++                tokens.append(token)
+++
+++        return tokens, toktypes, tokpre
+++
+++    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None):
+++        # the head is a direct attribute of the classifier: "score.weight"
+++        if self.is_rerank and name == "score.weight":
+++            yield (gguf.TENSOR_NAMES[gguf.MODEL_TENSOR.CLS_OUT] + ".weight", data_torch)
+++            return
+++        yield from super().modify_tensors(data_torch, name, bid)
+++
++ 
++ @ModelBase.register("SmolLM3ForCausalLM")
++ @ModelBase.example("HuggingFaceTB/SmolLM3-3B")
++diff --git a/gguf-py/gguf/constants.py b/gguf-py/gguf/constants.py
++index 1d67dc8..0272620 100644
++--- a/gguf-py/gguf/constants.py
+++++ b/gguf-py/gguf/constants.py
++@@ -6096,6 +6096,7 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
++         MODEL_TENSOR.FFN_GATE_EXP,
++         MODEL_TENSOR.FFN_DOWN_EXP,
++         MODEL_TENSOR.FFN_UP_EXP,
+++        MODEL_TENSOR.CLS_OUT,
++     ],
++     MODEL_ARCH.MAINCODER: [
++         MODEL_TENSOR.TOKEN_EMBD,
++diff --git a/src/models/llama-embed.cpp b/src/models/llama-embed.cpp
++index 0699e74..3a4d40d 100644
++--- a/src/models/llama-embed.cpp
+++++ b/src/models/llama-embed.cpp
++@@ -1,5 +1,16 @@
++ #include "models.h"
++ 
+++void llama_model_llama_embed::load_arch_tensors(llama_model_loader & ml) {
+++    llama_model_llama::load_arch_tensors(ml);
+++
+++    LLAMA_LOAD_LOCALS;
+++
+++    // the classification head of a reranker (nvidia/llama-nemotron-rerank-1b-v2):
+++    // absent from an embedding model, so not required
+++    cls_out   = create_tensor(tn(LLM_TENSOR_CLS_OUT, "weight"), {n_embd, hparams.n_cls_out}, TENSOR_NOT_REQUIRED);
+++    cls_out_b = create_tensor(tn(LLM_TENSOR_CLS_OUT, "bias"),   {hparams.n_cls_out},         TENSOR_NOT_REQUIRED);
+++}
+++
++ std::unique_ptr<llm_graph_context> llama_model_llama_embed::build_arch_graph(const llm_graph_params & params) const {
++     return std::make_unique<graph<true>>(*this, params);
++ }
++diff --git a/src/models/models.h b/src/models/models.h
++index 9a8602b..4a6a7d7 100644
++--- a/src/models/models.h
+++++ b/src/models/models.h
++@@ -199,7 +199,9 @@ struct llama_model_llama4 : public llama_model_base {
++ 
++ struct llama_model_llama_embed : public llama_model_llama {
++     llama_model_llama_embed(const struct llama_model_params & params) : llama_model_llama(params) {}
++-    // reuse load_arch_hparams and load_arch_tensors from llama_model_llama
+++    // load_arch_hparams from llama_model_llama; the tensors are llama's plus an
+++    // optional classification head (llama-nemotron-rerank)
+++    void load_arch_tensors(llama_model_loader & ml) override;
++ 
++     template <bool embed>
++     using graph = llama_model_llama::graph<embed>;
++diff --git a/tools/server/server-common.cpp b/tools/server/server-common.cpp
++index 311eb4f..9490021 100644
++--- a/tools/server/server-common.cpp
+++++ b/tools/server/server-common.cpp
++@@ -2002,6 +2002,12 @@ server_tokens format_prompt_rerank(
++         std::string prompt = format_rerank_template(rerank_prompt, q, d);
++ 
++         if (query_files.empty() && doc_files.empty()) {
+++            // a template's prompt is tokenized without special tokens: a model
+++            // whose tokenizer adds BOS (a Llama reranker) gets it here, as its
+++            // own tokenizer gives it (ggml-org/llama.cpp#24083)
+++            if (llama_vocab_get_add_bos(vocab)) {
+++                result.push_back(llama_vocab_bos(vocab));
+++            }
++             server_tokens tokens = tokenize_input_subprompt(vocab, mctx, prompt, false, true, init_opt);
++             result.push_back(tokens);
++         } else {
+-- 
+2.43.0
+

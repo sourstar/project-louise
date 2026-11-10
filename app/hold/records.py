@@ -342,17 +342,17 @@ def build(root, ref: str, *, corpus_dir=None, snapshot_id: str | None = None,
     reused = None
     if records_from is not None:
         from .seed import record_differences
-        from_name, mother = col.resolve(Path(root), records_from)
+        from_name, from_codex = col.resolve(Path(root), records_from)
         # the slicing places a line; the layers cut its part's chunks, which
         # `_record_from_line` cuts again from the line's own sections — a
         # line carries no layer (09 §9.5; invariant 3; 02 §2.7 amended
         # 2026-11-08): nothing else may differ
-        other = [d for d in record_differences(mother, codex) if d not in ("slicing", "layers")]
+        other = [d for d in record_differences(from_codex, codex) if d not in ("slicing", "layers")]
         # A PARSER CHANGE whose moved lines the target's parser names
         # (2026-11-08, pubmed 8 → 9, RULE 1): the lines it says it would
         # write differently are parsed again, the rest taken byte for byte.
         # The image differs with the parser; nothing else may.
-        parser_from = parser_carried(mother, codex, other)
+        parser_from = parser_carried(from_codex, codex, other)
         if parser_from is not None:
             other = [d for d in other if d not in ("parser", "toolchain.platform_image")]
         if other:
@@ -397,21 +397,21 @@ def build(root, ref: str, *, corpus_dir=None, snapshot_id: str | None = None,
     return result
 
 
-def parser_carried(mother, codex, differences: list[str]) -> int | None:
-    """The mother's parser version, where `--records-from` may take its
-    lines across a parser change: the same parser id and plugin, the
-    target's Codex on the parser this image runs, and the plugin naming
-    the lines its parser moves (`line_moved_since`). None otherwise —
-    then "parser" stays a difference and the build refuses."""
+def parser_carried(from_codex, codex, differences: list[str]) -> int | None:
+    """The parser version of the collection `--records-from` names, where
+    its lines may be taken across a parser change: the same parser id and
+    plugin, the target's Codex on the parser this image runs, and the
+    plugin naming the lines its parser moves (`line_moved_since`). None
+    otherwise — then "parser" stays a difference and the build refuses."""
     from app import collections as collections_mod
-    if "parser" not in differences or mother.plugin != codex.plugin \
-            or mother.parser.id != codex.parser.id:
+    if "parser" not in differences or from_codex.plugin != codex.plugin \
+            or from_codex.parser.id != codex.parser.id:
         return None
     plugin = collections_mod.PLUGIN_REGISTRY.get(codex.plugin)
     if plugin is None or int(getattr(plugin, "PARSER_VERSION", -1)) != int(codex.parser.version) \
             or not callable(getattr(plugin, "line_moved_since", None)):
         return None
-    return int(mother.parser.version)
+    return int(from_codex.parser.version)
 
 
 def _frozen_into(staging) -> str | None:

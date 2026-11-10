@@ -611,10 +611,10 @@ def test_a_codex_names_at_most_one_relation(codex):
 
 
 def test_a_corrective_sisters_epoch_is_salted(codex):
-    mother_id = codex.collection_id
+    replaced_id = codex.collection_id
     corrective = replace(
-        codex, replaces=Replaces(mother_id, A_DEFECT),
-        space=replace(codex.space, epoch=cx.corrective_epoch(mother_id)))
+        codex, replaces=Replaces(replaced_id, A_DEFECT),
+        space=replace(codex.space, epoch=cx.corrective_epoch(replaced_id)))
     cx.validate(corrective)
     assert corrective.relation == "corrective-sister"
     assert corrective.space_id != codex.space_id
@@ -623,21 +623,21 @@ def test_a_corrective_sisters_epoch_is_salted(codex):
 
 
 def test_a_corrective_sister_carries_witnesses(codex):
-    mother_id = codex.collection_id
+    replaced_id = codex.collection_id
     bare = replace(A_DEFECT, witnesses=())
     with pytest.raises(CodexError, match="names at least one shard"):
         cx.validate(replace(
-            codex, replaces=Replaces(mother_id, bare),
-            space=replace(codex.space, epoch=cx.corrective_epoch(mother_id))))
+            codex, replaces=Replaces(replaced_id, bare),
+            space=replace(codex.space, epoch=cx.corrective_epoch(replaced_id))))
 
 
 def test_the_sister_of_a_corrective_sister_keeps_the_salted_epoch(codex):
     """09 §9.3, corrected: forcing "0" on every sister would give the weekly
-    sister of a corrected collection a different space_id from her mother
+    sister of a corrected collection a different space_id from her sister
     although encoder, weights, layers and cleaning are identical."""
-    mother_id = codex.collection_id
-    salted = cx.corrective_epoch(mother_id)
-    corrective = replace(codex, replaces=Replaces(mother_id, A_DEFECT),
+    replaced_id = codex.collection_id
+    salted = cx.corrective_epoch(replaced_id)
+    corrective = replace(codex, replaces=Replaces(replaced_id, A_DEFECT),
                          space=replace(codex.space, epoch=salted))
     her_sister = replace(corrective, replaces=None,
                          derived_from=corrective.collection_id,
@@ -831,11 +831,11 @@ def test_a_derivation_names_the_other_spaces_space_id(codex):
     # collection_id already accounts for the derivation it holds and can
     # never equal the `from` inside it. `space_id` excludes `derivation`
     # (02 §2.4), which is what makes it stable enough to compare against.
-    naming_mothers_collection = replace(
+    naming_the_source_collection = replace(
         base, derivation=cx.Derivation(base.collection_id, cx.QUANTISE, {}))
-    cx.validate(naming_mothers_collection)
-    assert naming_mothers_collection.derivation.from_ != \
-        naming_mothers_collection.collection_id
+    cx.validate(naming_the_source_collection)
+    assert naming_the_source_collection.derivation.from_ != \
+        naming_the_source_collection.collection_id
 
     with pytest.raises(CodexError, match="derivation.kind"):
         cx.loads(cx.canonical_json(dict(WORKED_EXAMPLE, derivation={

@@ -272,58 +272,58 @@ def test_create_space_from_a_version_6_source(tmp_path, monkeypatch):
     assert codex.space_id == source.space_id
 
 
-def test_a_sister_naming_a_backend_engine_in_a_version_5_mothers_space_is_6(tmp_path):
-    mother = a_root(tmp_path, pubmed(version=5))
-    sp = mother.space
+def test_a_sister_naming_a_backend_engine_in_a_version_5_sisters_space_is_6(tmp_path):
+    her_sister = a_root(tmp_path, pubmed(version=5))
+    sp = her_sister.space
     vega = replace(sp, encoder=replace(sp.encoder, engine=BACKEND),
                    query=replace(sp.query, encoder=replace(sp.query.encoder, engine=BACKEND)))
-    sister = col.derive(tmp_path, mother.collection_id, space=vega,
+    sister = col.derive(tmp_path, her_sister.collection_id, space=vega,
                         embed=fake_embed, embed_query=fake_query_embed, key=KEY, now=NOW)
-    assert sister.version == 6 and sister.space_id == mother.space_id
-    weekly = col.derive(tmp_path, mother.collection_id, update=cx.Update("weekly", 1, 0))
+    assert sister.version == 6 and sister.space_id == her_sister.space_id
+    weekly = col.derive(tmp_path, her_sister.collection_id, update=cx.Update("weekly", 1, 0))
     assert weekly.version == 5
 
 
-def test_a_version_6_mothers_sisters_follow_their_own_engines(tmp_path):
-    mother = a_root(tmp_path, _with(BACKEND, version=6))
-    weekly = col.derive(tmp_path, mother.collection_id, update=cx.Update("weekly", 1, 0))
-    assert weekly.version == 6 and weekly.space_id == mother.space_id
-    sp = mother.space
+def test_the_sisters_of_a_version_6_collection_follow_their_own_engines(tmp_path):
+    her_sister = a_root(tmp_path, _with(BACKEND, version=6))
+    weekly = col.derive(tmp_path, her_sister.collection_id, update=cx.Update("weekly", 1, 0))
+    assert weekly.version == 6 and weekly.space_id == her_sister.space_id
+    sp = her_sister.space
     argv = replace(sp, encoder=replace(sp.encoder, engine=ENGINE),
                    query=replace(sp.query, encoder=replace(sp.query.encoder, engine=ENGINE)))
-    sister = col.derive(tmp_path, mother.collection_id, space=argv,
+    sister = col.derive(tmp_path, her_sister.collection_id, space=argv,
                         embed=fake_embed, embed_query=fake_query_embed, key=KEY, now=NOW)
-    assert sister.version == 5 and sister.space_id == mother.space_id
+    assert sister.version == 5 and sister.space_id == her_sister.space_id
 
 
 def test_a_sister_cannot_bring_a_backend_engine_into_a_version_4_space(tmp_path):
-    """Version 6's layers carry `input` and a version-4 mother's do not, so
+    """Version 6's layers carry `input` and a version-4 sister's do not, so
     she could not keep the space she claims to stay in."""
-    mother = a_root(tmp_path, pubmed())
-    sp = mother.space
+    her_sister = a_root(tmp_path, pubmed())
+    sp = her_sister.space
     vega = replace(sp, encoder=replace(sp.encoder, engine=BACKEND),
                    query=replace(sp.query, encoder=replace(sp.query.encoder, engine=BACKEND)))
     with pytest.raises(CodexError, match="cannot stay in her sister's space"):
-        col.derive(tmp_path, mother.collection_id, space=vega,
+        col.derive(tmp_path, her_sister.collection_id, space=vega,
                    embed=fake_embed, embed_query=fake_query_embed, key=KEY, now=NOW)
 
 
 def test_derive_space_from_a_version_6_source_is_6(tmp_path):
-    mother = a_root(tmp_path, pubmed(version=5, update=cx.Update("weekly", 1, 0)))
+    her_sister = a_root(tmp_path, pubmed(version=5, update=cx.Update("weekly", 1, 0)))
     source = a_root(tmp_path, _with(BACKEND, version=6))
-    sister = col.derive(tmp_path, mother.collection_id,
+    sister = col.derive(tmp_path, her_sister.collection_id,
                         space_from=col.read(tmp_path, source.collection_id))
     assert sister.version == 6 and sister.space_id == source.space_id
 
 
 def test_a_corrective_sister_and_a_daughter_keep_version_6_with_the_engine(tmp_path):
     from .test_collection import A_DEFECT
-    mother = a_root(tmp_path, _with(BACKEND, version=6))
-    fixed = col.replace(tmp_path, mother.collection_id, defect=A_DEFECT)
+    predecessor = a_root(tmp_path, _with(BACKEND, version=6))
+    fixed = col.replace(tmp_path, predecessor.collection_id, defect=A_DEFECT)
     assert fixed.version == 6 and fixed.space.encoder.engine == BACKEND
-    daughter = col.continue_(tmp_path, mother.collection_id, platform_image=PLATFORM,
+    daughter = col.continue_(tmp_path, predecessor.collection_id, platform_image=PLATFORM,
                              continues_through="2026-10")
-    assert daughter.version == 6 and daughter.space_id == mother.space_id
+    assert daughter.version == 6 and daughter.space_id == predecessor.space_id
     plain = col.replace(tmp_path, a_root(tmp_path, pubmed(version=5)).collection_id,
                         defect=A_DEFECT)
     assert plain.version == 5
