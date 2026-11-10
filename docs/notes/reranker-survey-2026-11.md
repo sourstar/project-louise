@@ -57,6 +57,35 @@ it/en gap; latency per list p50/p95 warm, cold load, VRAM; NaN checks and the sa
 orders. Rule: paired randomization p < 0.05, no loss on titles or descriptive, latency per list no worse than bge's;
 `[reranker] calibration` refit before any switch.
 
+**The harness: `tools/measure/rerank_bench.py`** (its docstring is the reference). The older tools search once per
+arm, so their arms saw different lists. Steps, in the node's image:
+- `capture FORMAT SOURCE... --out SET.jsonl [--collection C] [--limit 3]`, once per set. This is the Ask tab's
+  search (`run_search`, translation on), stopped at `retrieval._reranked`. Kept per query: the top 50 records in fused
+  order and their leg ranks; each record's 2 matched chunks under its title line, as `_rerank_held` builds them; and
+  the query each record is sent against (the plan's translation into its language, else the core query). Texts are
+  kept uncut. Formats: `gutenberg` (run 5's DATA, or the TSVs with `--works`), `known-item` (wikidata_encoder_ab's
+  queries.jsonl), `umbrela` (fusion_calibration's judged.jsonl), `jurifindit` (legal_pilot's fetched directory).
+- `rerank SET.jsonl --arm A2 --model <model> [--instruction collection]`, once per arm. Each request is the live one:
+  one per variant, each text cut by `fit_to_window` to the window in the arm's own tokens, and timed alone. The model
+  is warmed and pinned; a cold query is not timed. One request at a time unless `--concurrency`.
+- `score SET.jsonl... --arms A0,A1,A2,A2i --out res` gives the table and JSON. `show SET.jsonl --arms …` is the
+  pilot's reading.
+
+Every step resumes per query and refuses other settings in the same file. `--limit N` takes the first N queries of
+every kind.
+
+How scores are counted:
+- At record level, on each record's best chunk.
+- The order as shipped: CATALOG_FIRST applies, and `--raw` leaves it out.
+- Editions are not grouped by work, so the numbers are not run 5's.
+
+Not covered: the temporal questions, BSARD / LegalQuAD / GerDaLIR, TREC PM (no format yet), and the cold load, VRAM
+and fresh-load checks.
+
+Qwen3-Reranker's instruction goes in the query: `/v1/rerank` has no field for it, and the GGUF's `rerank` template
+already carries the default instruction. The form is the card's, `\n<Instruct>: X\n<Query>: Q`
+(`--instruction-form` to change it). The pilot must show the instructed arm's scores separating.
+
 ## Sources
 
 [1] https://huggingface.co/Qwen/Qwen3-Reranker-0.6B · [2] https://huggingface.co/jinaai/jina-reranker-v3 ,
