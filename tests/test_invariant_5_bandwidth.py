@@ -40,6 +40,7 @@ EXEMPT: dict[str, str] = {
     "app/translate.py": f"{MODEL_CALLS} — the translation model",
     "app/model_load.py": f"{MODEL_CALLS} — the runner's /system and backend shutdown",
     "app/model_pins.py": f"{MODEL_CALLS} — LocalAI's pin API",
+    "app/translate_slots.py": f"{MODEL_CALLS} — LocalAI's model-config API, MADLAD's slots",
     "app/run_check.py": f"{MODEL_CALLS} — the run an encoder states (Louise-Run)",
     "app/vega/client.py": f"{MODEL_CALLS} — VeGa, the encoders' wrapper",
     "app/vega/trees.py": f"{MODEL_CALLS} — VeGa's image tree of an encoder's engine",
@@ -60,7 +61,7 @@ _NET_BINARIES = {"git", "rsync", "curl", "wget", "ssh", "scp", "sftp", "aria2c"}
 _CLIENT_CALLS = {
     "httpx": {"Client", "AsyncClient", "get", "post", "put", "patch", "delete", "head",
               "options", "request", "stream"},
-    "app.httpc": {"client", "get", "post", "put"},
+    "app.httpc": {"client", "get", "post", "put", "patch"},
     "requests": {"Session", "get", "post", "put", "patch", "delete", "head", "options", "request"},
     "aiohttp": {"ClientSession", "request"},
     "urllib.request": {"urlopen", "urlretrieve", "build_opener"},
