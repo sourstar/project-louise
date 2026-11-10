@@ -1281,7 +1281,7 @@ def _rerank_lists(per_collection: list, rerank_one) -> list:
 
 
 def _one_hit_per_work(hits: list[dict], collection, plan: LanguagePlan,
-                      show_in: str | None, annotations=None) -> list[dict]:
+                      show_in: str | None, annotations=None, limit: int | None = None) -> list[dict]:
     """05 §5.3 (amended 2026-10-09): each work once, after the reranker and
     before the cut to `k`, shown in the reader's language where one of its
     editions in it was found (app/ask/works.py). Grouping that cannot run
@@ -1291,7 +1291,7 @@ def _one_hit_per_work(hits: list[dict], collection, plan: LanguagePlan,
     from .ask import works
     return works.one_hit_per_work(hits, collection,
                                   works.preference(show_in, plan.query_lang),
-                                  annotations=annotations)
+                                  annotations=annotations, plan=plan, limit=limit)
 
 
 def search(con, query: str, k: int = 12, mode: str = "hybrid",
@@ -1334,7 +1334,7 @@ def search(con, query: str, k: int = 12, mode: str = "hybrid",
                                              collections_mod.reranker_for(collection),
                                              _rerank_budget_s(rerank_depth), rerank_depth,
                                              plan.translations)
-    final = _one_hit_per_work(ranked, collection, plan, show_in, annotations)[:k]
+    final = _one_hit_per_work(ranked, collection, plan, show_in, annotations, limit=k)[:k]
     timings["rerank"] = round((time.time() - t0) * 1000, 1)
 
     # This one WRITES (the lazy-embed queue): a search nobody is waiting for
@@ -1547,7 +1547,7 @@ def federated_search(collections: list, query: str, k: int = 12, mode: str = "hy
                                     rerank_depth, plan.translations)
         # each work once, per collection (work claims are about one
         # collection's records), before the fuse cuts to k
-        return _one_hit_per_work(ranked, collection, plan, show_in, annotations), ok, why
+        return _one_hit_per_work(ranked, collection, plan, show_in, annotations, limit=k), ok, why
 
     ranked = _rerank_lists(per_collection, _rerank_one)
     reranked = {c.name: ok for (c, _), (_, ok, _) in zip(per_collection, ranked)}
