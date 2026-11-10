@@ -290,7 +290,8 @@ def cmd_annotations_update(a) -> int:
         if not sep or not ref or not sid:
             raise CodexError(f"--against {v!r}: TARGET=SNAPSHOT, e.g. gutenberg=2026-10")
         against.append((ref, sid))
-    claims = Path(a.claims).read_bytes() if a.claims else None
+    # the claims file is streamed by path, never read whole (12.3 M claims: 4 GB)
+    claims = Path(a.claims) if a.claims else None
     key = None
     if not a.dry_run:
         try:
@@ -7001,7 +7002,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.set_defaults(fn=cmd_annotations_update)
     p = averbs.add_parser("index", help="build the claim index on disk of a LARGE annotations collection's "
                                         "current snapshot (more than 250,000 claims): searched in place, "
-                                        "never loaded into the web's memory")
+                                        "never loaded into the web's memory. create, update and the worker "
+                                        "build it themselves; this builds a missing one now")
     root_arg(p); p.add_argument("collection")
     p.set_defaults(fn=cmd_annotations_index)
 

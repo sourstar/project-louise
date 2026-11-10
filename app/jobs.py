@@ -550,7 +550,7 @@ def _create_annotations(args: dict[str, Any]) -> dict[str, Any]:
         claims=claims_path, platform_image=louise.preflight_create({}, args.get("platform_image")),
         title=args.get("title") or None, summary=args.get("summary") or None,
         annotator=args.get("annotator") or None, snapshot_id=args.get("snapshot") or None,
-        key=key, now=louise._utc_now(), log=lambda m: None)
+        key=key, now=louise._utc_now(), log=_job_line)
     try:
         claims_path.unlink()
     except OSError:
@@ -562,6 +562,14 @@ def _create_annotations(args: dict[str, Any]) -> dict[str, Any]:
             "cli": args.get("cli", "")}
 
 
+def _job_line(m: str) -> None:
+    """An annotations create's or update's own lines, in the worker's log
+    (each names its collection): what it wrote, the claim index it built, a
+    stopped one's workspace it cleared (app/hold/annotations_stream.py)."""
+    import time
+    print(f"{time.strftime('%H:%M:%S')} [node info:jobs] {m}", flush=True)
+
+
 def _update_annotations(args: dict[str, Any]) -> dict[str, Any]:
     """`hold annotations update` (02 §2.10) as the Library queued it: with
     the claims file the page uploaded (removed here once read), or none —
@@ -569,13 +577,10 @@ def _update_annotations(args: dict[str, Any]) -> dict[str, Any]:
     next snapshot is signed with the node key when there is one (09 §9.4)."""
     from . import louise
     from .hold import annotations as ann
-    claims = None
     claims_path = Path(args["claims_path"]) if args.get("claims_path") else None
-    if claims_path is not None:
-        try:
-            claims = claims_path.read_bytes()
-        except FileNotFoundError:
-            raise ValueError(f"the uploaded claims file is gone ({claims_path.name}): upload it again") from None
+    if claims_path is not None and not claims_path.is_file():
+        raise ValueError(f"the uploaded claims file is gone ({claims_path.name}): upload it again")
+    claims = claims_path            # streamed by path (app/hold/annotations_stream.py), never read whole
     key = None
     try:
         from .bundles import keys as node_keys
@@ -583,7 +588,7 @@ def _update_annotations(args: dict[str, Any]) -> dict[str, Any]:
     except Exception:   # noqa: BLE001 — no key: the snapshot is written unsigned (09 §9.4)
         key = None
     got = ann.update(louise._default_root(), args["name"], claims=claims, key=key, now=louise._utc_now(),
-                     log=lambda m: None)
+                     log=_job_line)
     if claims_path is not None:
         try:
             claims_path.unlink()
