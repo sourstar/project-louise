@@ -245,7 +245,7 @@ def main_languages(collection, share: float | None = None) -> tuple[str, ...]:
     mtimes = []
     for g in groups:
         try:
-            mtimes.append((collection.fts_dir / g / "meta.json").stat().st_mtime_ns)
+            mtimes.append((fts.base_of(collection) / g / "meta.json").stat().st_mtime_ns)
         except OSError:
             mtimes.append(0)
     stamp = tuple(mtimes)

@@ -963,6 +963,26 @@ def _new_reference_and_gate(a, run, name: str, say) -> tuple[int, bool]:
 
 # ---- case J, a sister (docs/notes/new-collection.md; 02 §2.7) ----
 
+def _join_text_index(root: Path, her_sister_name: str, name: str) -> str | None:
+    """A sister carried beside a sister whose text index is already SHARED
+    (app/text_index.py) joins it now, when their index identities are equal:
+    her manifest is her sister's copy, so every mark is the writer's and
+    nothing is reset or copied; her linked copy goes. Otherwise None, and the
+    worker's next boot groups them. Never fails the carry."""
+    from app import collections as collections_mod, text_index
+    from app.hold import deposit
+    try:
+        a = collections_mod._load_one(deposit.held_file(root, her_sister_name))
+        b = collections_mod._load_one(deposit.held_file(root, name))
+        joined = text_index.join_at_carry(root, her_sister_name, name,
+                                          text_index.identity(a), text_index.identity(b))
+    except Exception:   # noqa: BLE001 — the boot's settle groups them instead
+        return None
+    if joined:
+        text_index._remove_groups(Path(root) / name / "index")
+    return joined
+
+
 def _sister_new(a, say) -> int:
     """`new <plugin> --name N --sister-of SISTER --space-from SPACE [--dry-run]`:
     case J's SISTER (02 §2.7; operator, 2026-11-08: "Make J, it is time to do
@@ -1194,7 +1214,7 @@ def _sister_new(a, say) -> int:
                                 f"worker indexes every document with her own layer")
             else:
                 parts = recreate.seed_parts(root, her_sister_name, name, now=_utc_now(), log=say)
-                need, free = recreate.room(root, her_sister_name, name)
+                need, free = recreate.room(root, her_sister_name, name, linked_index=True)
                 if free < need:
                     raise CodexError(recreate.no_room(her_sister_name, name, need, free))
                 out = carry_mod.carry(root, her_sister_name, name, copy=True, apply=True, sister=True, log=say)
@@ -1203,11 +1223,18 @@ def _sister_new(a, say) -> int:
                     raise recreate.CopyMismatch(f"carry: {name} holds {counts['documents']} documents and "
                                                 f"{her_sister_name} "
                                                 f"{recreate.counts(root, her_sister_name)['documents']}")
-                a_idx = recreate.tree_digest(recreate._tree(root, her_sister_name, "index"))
-                b_idx = recreate.tree_digest(recreate._tree(root, name, "index"))
+                # the index AS EACH ONE READS IT (app/text_index.py): hers is
+                # linked from wherever her sister's language groups are
+                from app import text_index
+                a_idx = text_index.index_digest(root, her_sister_name)
+                b_idx = text_index.index_digest(root, name)
                 if a_idx != b_idx:
                     raise recreate.CopyMismatch(f"carry: {name}'s text index is not {her_sister_name}'s "
                                                 f"({b_idx['sha256']} against {a_idx['sha256']})")
+                joined = _join_text_index(root, her_sister_name, name)
+                if joined:
+                    say(f"[carry] {name} reads the text index {her_sister_name}'s group shares "
+                        f"({joined}); her linked copy is let go of")
                 ack = recreate.carry_ack(root, her_sister_name, name, sister)
                 run.record("carry", {"from": {"name": her_sister_name, "collection_id": her_sister.collection_id},
                                      "parts": parts, "origin": origin, "carried": out.get("done"),

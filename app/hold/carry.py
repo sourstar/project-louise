@@ -325,6 +325,43 @@ def _copy_tree(src: Path, dst: Path) -> None:
         shutil.copy2(src, dst)
 
 
+def _sister_index(src: Path, dst: Path) -> str:
+    """Her sister's index directory for a sister (case J, same layers): its
+    language-group indexes HARD-LINKED from wherever they are (her sister's
+    own directory, or the shared one her sister reads, app/text_index.py) —
+    no byte copied; tantivy never rewrites a file, so the two diverge safely
+    — and the rest of it (the catalogue, keyed on the manifest copied with
+    it; the facets) copied. Whole or not at all, repeatable, like
+    `_transfer`; a copy where the filesystems differ."""
+    from app import text_index
+    if dst.exists() and not _empty_dir(dst):
+        return "present"
+    if not src.exists():
+        return "absent"
+    groups_at = text_index.base(src)
+    groups = {g.name: g for g in text_index.group_dirs(groups_at)}
+    tmp = dst.with_name(f".{dst.name}.carry")
+    if tmp.exists():
+        shutil.rmtree(tmp)
+    tmp.mkdir(parents=True)
+    linked = 0
+    for entry in sorted(src.iterdir()):
+        if entry.name in groups:
+            continue
+        _copy_tree(entry, tmp / entry.name)
+    for name, g in sorted(groups.items()):
+        try:
+            text_index.link_tree(g, tmp / name)
+            linked += 1
+        except OSError:
+            shutil.rmtree(tmp / name, ignore_errors=True)
+            _copy_tree(g, tmp / name)
+    if dst.exists():
+        dst.rmdir()                                   # empty: db.connect makes them
+    os.replace(tmp, dst)
+    return f"linked ({linked} language group(s), no byte copied)" if linked else "copied"
+
+
 def _transfer(src: Path, dst: Path, *, copy: bool) -> str:
     """`src` to `dst`, whole or not at all: a rename where it can, else a copy
     to a hidden name renamed into place (and, moving, the source removed
@@ -787,6 +824,12 @@ def carry(root, from_ref: str, to_ref: str, *, copy: bool = False, apply: bool =
     done: dict[str, str] = {}
     # A1h: no vector crosses spaces; the target's table is its own, of its width
     for k in (() if relayered else ("index",) if unembedded or sister else ("lance", "index")):
+        if k == "index" and sister:
+            # a sister's text index is her sister's byte for byte: LINKED,
+            # never copied (operator, 2026-11-10: sisters share one text
+            # index, app/text_index.py) — the worker's next boot groups them
+            done[k] = _sister_index(sp[k], tp[k])
+            continue
         done[k] = _transfer(sp[k], tp[k], copy=copy)
     if relayered:
         done["index"] = "not carried (her layers cut other chunks: the worker indexes, A1i)"

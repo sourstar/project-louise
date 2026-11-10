@@ -31,7 +31,7 @@ _idx: dict = {}
 
 
 def _view_index(group, collection=None):
-    real = collection.fts_dir / group
+    real = fts.base_of(collection) / group      # a shared index too (app/text_index.py)
     key = str(real)
     with _lock:
         if key in _idx:

@@ -10,11 +10,27 @@ import tantivy
 from . import collections as collections_mod
 from . import config
 from . import stemming
+from . import text_index
 
 _lock = threading.Lock()
 _indexes: dict[tuple[str, str], tantivy.Index] = {}
 #: the same key -> (the one writer for that index, its lock). See `_writer`.
 _writers: dict = {}
+
+
+def base_of(collection=None):
+    """Where this collection's language-group indexes are: its own
+    `fts_dir`, or the shared directory its placement names (sisters share
+    one text index, app/text_index.py)."""
+    if collection is None:
+        collection = collections_mod.default_collection()
+    return text_index.base(collection.fts_dir)
+
+
+class ReaderWrite(RuntimeError):
+    """A sister that READS a shared text index was asked to write it: its
+    writer indexes (app/text_index.py). Never reached by the worker, whose
+    reader copies marks instead; a guard against any other path."""
 
 def group_for(lang: str) -> str:
     lang = (lang or "und").split("-")[0]
@@ -109,11 +125,12 @@ def get_index(group: str, collection=None) -> tantivy.Index:
     # build ad-hoc Collections) while pointing at different fts_dirs — a
     # name-keyed cache would silently return the wrong index or crash with a
     # stale-lock error when that happens.
-    key = (str(collection.fts_dir), group)
+    root = base_of(collection)
+    key = (str(root), group)
     with _lock:
         if key in _indexes:
             return _indexes[key]
-        path = collection.fts_dir / group
+        path = root / group
         path.mkdir(parents=True, exist_ok=True)
         from app import validity as validity_mod
         with_validity = validity_mod.declared(collection) is not None
@@ -150,11 +167,10 @@ def _open_failure(path, e: Exception) -> str:
 
 
 def existing_groups(collection=None) -> list[str]:
-    if collection is None:
-        collection = collections_mod.default_collection()
-    if not collection.fts_dir.is_dir():
+    root = base_of(collection)
+    if not root.is_dir():
         return []
-    return sorted(p.name for p in collection.fts_dir.iterdir()
+    return sorted(p.name for p in root.iterdir()
                   if p.is_dir() and (p / "meta.json").exists()
                   and not p.name.startswith("_"))   # `_catalog` is app/catalog.py's, not a group
 
@@ -172,9 +188,7 @@ def group_languages(group: str, collection=None) -> list[str]:
     own meta.json, path and mtime: a commit changes it, a name never does."""
     if group not in ("cjk", "other"):
         return [group]
-    if collection is None:
-        collection = collections_mod.default_collection()
-    meta = collection.fts_dir / group / "meta.json"
+    meta = base_of(collection) / group / "meta.json"
     try:
         key = (str(meta), meta.stat().st_mtime_ns)
     except OSError:
@@ -227,8 +241,9 @@ def group_documents(collection=None) -> dict[str, int]:
     if collection is None:
         collection = collections_mod.default_collection()
     out: dict[str, int] = {}
+    root = base_of(collection)
     for group in existing_groups(collection):
-        meta = collection.fts_dir / group / "meta.json"
+        meta = root / group / "meta.json"
         try:
             key = (str(meta), meta.stat().st_mtime_ns)
         except OSError:
@@ -315,6 +330,19 @@ def forget(fts_dir) -> int:
     return len(set(keys))
 
 
+def forget_missing() -> int:
+    """Drop this process's handles on indexes whose directory is gone — a
+    shared text index removed with its last member (app/text_index.py),
+    whose path a group formed again with the same identity would reuse."""
+    from pathlib import Path
+    with _lock:
+        keys = [k for k in list(_indexes) + list(_writers) if not Path(k[0]).is_dir()]
+        for k in keys:
+            _indexes.pop(k, None)
+            _writers.pop(k, None)
+    return len(set(keys))
+
+
 def close_all() -> None:
     """Let go of every writer this process holds — for tests, whose
     collections come and go. The worker keeps its writers until it exits.
@@ -350,6 +378,9 @@ def index_books(entries, collection=None) -> None:
     this returns (see worker.stage_fts): a crash between the commit here and
     that mark simply re-indexes them, which is a no-op by construction.
     """
+    if collection is not None and not text_index.writes(collection):
+        raise ReaderWrite(f"{collection.name} reads the text index its sister "
+                          f"{text_index.role(collection).writer} writes: it never indexes")
     by_group: dict[str, list] = {}
     for entry in entries:
         lang, book_id, chunks = entry[0], entry[1], entry[2]
@@ -363,9 +394,7 @@ def index_books(entries, collection=None) -> None:
     for group, items in by_group.items():
         idx = get_index(group, collection)
         algorithm = pystem_algorithm(group)
-        writer, lock = _writer((str(collection.fts_dir if collection is not None
-                                     else collections_mod.default_collection().fts_dir),
-                                group), idx)
+        writer, lock = _writer((str(base_of(collection)), group), idx)
         with lock:
             for lang, book_id, chunks, extra, names in items:
                 _add_one(writer, algorithm, lang, book_id, chunks, extra, names)
@@ -556,9 +585,11 @@ def index_book(lang: str, book_id: int, chunks: list[dict], collection=None):
 def delete_book(lang: str, book_id: int, collection=None):
     """A `mul` record's sections may be in several groups
     (`by_section_language`): it is deleted from each group its sections can
-    be in, and from `other`."""
-    base = (collection.fts_dir if collection is not None
-            else collections_mod.default_collection().fts_dir)
+    be in, and from `other`. A sister that reads a shared index deletes
+    nothing: its writer, holding the same records, makes the same deletes."""
+    if collection is not None and not text_index.writes(collection):
+        return
+    base = base_of(collection)
     groups = [group_for(lang)]
     if (lang or "") == MULTILINGUAL:
         groups = list(dict.fromkeys([group_for(l) for l in section_languages(collection)] + groups))
@@ -577,7 +608,7 @@ def books_held(group: str, book_ids, collection=None) -> int:
     if collection is None:
         collection = collections_mod.default_collection()
     ids = sorted({int(b) for b in book_ids})
-    if not ids or not (collection.fts_dir / group / "meta.json").is_file():
+    if not ids or not (base_of(collection) / group / "meta.json").is_file():
         return 0
     idx = get_index(group, collection)
     idx.reload()
@@ -595,8 +626,10 @@ def delete_books(group: str, book_ids, collection=None) -> int:
     ids = sorted({int(b) for b in book_ids})
     if not ids:
         return 0
+    if not text_index.writes(collection):
+        return len(ids)             # its writer deletes them (`delete_book`)
     idx = get_index(group, collection)
-    writer, lock = _writer((str(collection.fts_dir), group), idx)
+    writer, lock = _writer((str(base_of(collection)), group), idx)
     with lock:
         for book_id in ids:
             writer.delete_documents("book_id", book_id)
@@ -625,10 +658,10 @@ def rewrite_without(group: str, collection=None) -> int:
         # (wikidata keeps its records); one that did rebuilds from its records
         raise RuntimeError(f"{group}: a text index with names (fts.search_names) is rebuilt from "
                            f"its records, never rewritten from its stored fields")
+    if collection is not None and not text_index.writes(collection):
+        raise ReaderWrite(f"{collection.name} reads a shared text index: its writer rewrites it")
     idx = get_index(group, collection)
-    base = (collection.fts_dir if collection is not None
-            else collections_mod.default_collection().fts_dir)
-    writer, lock = _writer((str(base), group), idx)
+    writer, lock = _writer((str(base_of(collection)), group), idx)
     algorithm = pystem_algorithm(group)
     with lock:
         idx.reload()
