@@ -237,8 +237,17 @@ _SHAPE_TTL_S = 600.0
 #: a segment's size in (estimated) tokens: MADLAD saw sentences, its window
 #: is 512; 96 is what the torch backend packs to (deploy/madlad-translate)
 MAX_SEG_TOKENS = 96
-#: concurrent requests of one call: the server's slots (parallel:7, one wave)
+#: concurrent requests of one call where the server's slots cannot be read
+#: (app/translate_slots.py reads its `parallel:N`; the model's file says 7)
 T5_CONCURRENCY = 7
+
+
+def t5_concurrency() -> int:
+    """The server's own slots: a question's segments go out as ONE wave of
+    exactly the slots that decode them (P4); 7 where it cannot say."""
+    from app import model_load, translate_slots
+    got = translate_slots.server_slots(model_load.server_of(config.TRANSLATE_URL), config.TRANSLATE_MODEL)
+    return got if got else T5_CONCURRENCY
 #: a llama.cpp runner is MADLAD when its vocabulary holds at least this many
 #: `<2xx>` target tokens (MADLAD has ~450; a chat model none)
 T5_MIN_CODES = 16
@@ -554,7 +563,7 @@ def _t5_translate(items: list[tuple[str, str]]) -> list[str | None]:
     if jobs:
         with dispatch.call(config.TRANSLATE_URL, dispatch.Level.TRANSLATE, timeout=TIMEOUT_S):
             headers = dispatch.level_headers()      # read here: a pool thread carries no level
-            with ThreadPoolExecutor(max_workers=min(T5_CONCURRENCY, len(jobs))) as pool:
+            with ThreadPoolExecutor(max_workers=min(t5_concurrency(), len(jobs))) as pool:
                 got = list(pool.map(lambda j: _t5_completion(j[3], j[4], TIMEOUT_S, headers), jobs))
     failed: set[int] = set()
     for (i, bi, si, _code, seg), text in zip(jobs, got):

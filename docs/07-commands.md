@@ -1828,6 +1828,10 @@ variable, a file, a log line or a message.
 [translate]  reading = { la = "index-translate-9b", grc = "index-translate-9b" }   # what is READ (the Ask
              # page's results, the reader) in a listed source language goes to that model, one item per call,
              # falling back to TRANSLATE_MODEL; searches never use it. Node-wide, in no Codex (added 2026-10-12)
+             slots = 4   # optional: how many segments TRANSLATE_MODEL's server decodes at once (MADLAD's
+             # `parallel:N`, 1–32). The worker writes it into the model's file through LocalAI's model-config
+             # API at start and every 10 minutes; the client sends a question's segments as one wave of the
+             # server's own slots. Absent, the model's file is left as it is (added 2026-11-10)
 [dht]        enabled = true
 [admission]  bytes_per_hour = "64MB"   objects_per_hour = 1000   queue = "256MB"
              # 08 §8.2: what this peer accepts per hour from keys whose work it has not seen
@@ -1940,7 +1944,12 @@ concurrency = 4                                # optional: requests in flight; a
                                                # settings (01, docs/notes/rage.md). ABSENT, each takes the setting
                                                # recommended for this node's card type in the SHARD
                                                # (09 §9.19), when one is; written here, the file's value wins — the
-                                               # recommendation is never binding (amended 2026-11-01)
+                                               # recommendation is never binding (amended 2026-11-01). WRITTEN AT CREATE
+                                               # from a collection held here the same encoder serves — the same space
+                                               # first, else the same model at the same endpoint: its `batch`,
+                                               # `concurrency` and `device`, the keys its file states (amended
+                                               # 2026-11-10, operator: what is built for normattiva-nemo is reusable
+                                               # for the other legal collections); the gate measures them as any other
 
 [reranker]                                     # optional (05 §5.6): this node's reranker for this collection
 url = "http://nas:30447/v1/rerank"             # the full endpoint, path included — unlike [encoder]'s url

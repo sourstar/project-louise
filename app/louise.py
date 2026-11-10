@@ -1995,6 +1995,8 @@ def _write_held_file(root, codex, encoder: str | None = None,
             f"{path} holds {held or 'no codex'} and this is "
             f"{codex.collection_id}: a name holds one collection for its "
             f"life, and another collection is another name (07 §7.8)")
+    if encoder and not query_encoder and not query_model:
+        query_encoder, query_model = _inherited_query_side(codex)
     if encoder:
         api = check_api(api)
         embed_model, query_model = model_keys(encoder, query_encoder,
@@ -2017,11 +2019,85 @@ def _write_held_file(root, codex, encoder: str | None = None,
                       # a bi-encoder's query side, where the collection has one
                       + (f'query_url = {q(query_encoder)}\n' if query_encoder else "")
                       + f'embed_model = {q(embed_model)}\nquery_model = {q(query_model)}\n'
+                      + _inherited_driving(codex, encoder, embed_model)
                       if encoder else "")
                    + _inherited_reranker(codex),
                    encoding="utf-8")
     tmp.replace(path)
     return path
+
+
+#: the [encoder] keys that say HOW the node drives an encoder, not what it
+#: computes: none is in the space (collections.EmbedRecipe)
+DRIVING = ("batch", "concurrency", "device")
+
+
+def _inherited_driving(codex, url: str | None, embed_model: str | None) -> str:
+    """HOW A NEW COLLECTION DRIVES ITS ENCODER (operator, 2026-11-10: "What you
+    are building for normattiva-nemo must be reusable for the other legal
+    collections in the pipeline"; RULE 2): the `batch`, `concurrency` and
+    `device` its [encoder] states, carried from a collection held here that
+    the same encoder already serves — one in the SAME SPACE first (neuris,
+    eurlex and normattiva-nemo in legi's), else one naming the same model at
+    the same endpoint (a new space on wikidata's Nemotron run) — the first by
+    name. Only the keys that file states (`EmbedRecipe.stated`, `device`);
+    none where nothing held is served by it.
+
+    Never in the space, and never trusted: the gate measures the run at the
+    file's batching before a batched answer is written (`hold.runs`,
+    `run_check.contributing`), so a carried batching the engine cannot keep
+    is refused there, not written. normattiva-nemo, 2026-11-10: batch 16 /
+    concurrency 4 set by hand gated exact (5,940 tokens/s against 3,948 at
+    batch 1); and her file had no `device`, so the Library said CPU."""
+    if cx.is_annotations(codex) or not url:
+        return ""
+    try:
+        from app import collections as collections_mod
+        held = sorted((c for c in collections_mod.load_all() if getattr(c, "embed", None) is not None),
+                      key=lambda c: c.name)
+    except Exception:   # noqa: BLE001 — nothing held to read: nothing carried
+        return ""
+    url = url.rstrip("/")
+    same_space = [c for c in held if getattr(getattr(c, "codex", None), "space_id", None) == codex.space_id]
+    same_model = [c for c in held if c.embed.url.rstrip("/") == url and c.embed.model == embed_model]
+    for source, why in ((same_space, "the same space"), (same_model, "the same model at the same endpoint")):
+        for c in source:
+            lines = _driving_lines(c.embed)
+            if lines:
+                return "\n".join([f"# batch, concurrency, device carried from {c.name} ({why}, held here)"]
+                                 + lines) + "\n"
+    return ""
+
+
+def _inherited_query_side(codex) -> tuple[str | None, str | None]:
+    """THE QUESTION SIDE A NEW COLLECTION TAKES where the command names none:
+    a collection held here in the SAME SPACE that has its own (`query_url`,
+    `query_model`) — the space fixes the query encoder's weights, so the
+    endpoint serving that collection's questions serves these. Never from
+    another space: its query side may be another model. München,
+    2026-11-10: pubmed's re-created file lost its [encoder] node keys; a
+    bi-encoder's lost query side would embed questions with the document
+    model."""
+    try:
+        from app import collections as collections_mod
+        held = sorted((c for c in collections_mod.load_all()
+                       if getattr(c, "embed", None) is not None and c.embed.query_url
+                       and getattr(getattr(c, "codex", None), "space_id", None) == codex.space_id),
+                      key=lambda c: c.name)
+    except Exception:   # noqa: BLE001 — nothing held to read: nothing carried
+        return None, None
+    if not held:
+        return None, None
+    print(f"note: the question side carried from {held[0].name} (the same space, held here): "
+          f"{held[0].embed.query_model}", file=sys.stderr)
+    return held[0].embed.query_url, held[0].embed.query_model
+
+
+def _driving_lines(embed) -> list[str]:
+    out = [f"{k} = {int(getattr(embed, k))}" for k in ("batch", "concurrency") if k in embed.stated]
+    if getattr(embed, "device", None) in ("gpu", "cpu"):
+        out.append(f'device = "{embed.device}"')
+    return out
 
 
 def _inherited_reranker(codex) -> str:

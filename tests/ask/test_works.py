@@ -211,3 +211,104 @@ def test_the_search_path_loads_a_snapshot_once(tmp_path, monkeypatch):
     newer.write_bytes((tree / "snapshots" / f"{one.snapshot_id}.json").read_bytes())
     seeder.cached_snapshot(tree)
     assert len(loads) == 2, "a newer snapshot is loaded"
+
+
+# ---- the largest edition, where the claims state the lengths ----------------
+# (operator, 2026-11-10, wikipedia: "English by default, but if another
+# language's version is BIGGER, that one is taken instead"; choice A: show
+# its passage that best matches the question; docs/notes/wikipedia-one-version.md)
+
+WK = [E("w:1", "Roma", "it", True, 900, True), E("w:2", "Rome", "en", True, 400),
+      E("w:3", "Rom", "de", True, 300)]
+WK_OF = {e.uid: "w:1" for e in WK}
+
+
+def test_the_largest_edition_is_shown_english_on_a_tie_or_where_its_length_is_unknown():
+    assert works.largest(WK).uid == "w:1"
+    tie = [E("w:1", "Roma", "it", True, 400, True), E("w:2", "Rome", "en", True, 400)]
+    assert works.largest(tie).uid == "w:2", "a tie: English"
+    unknown = [E("w:1", "Roma", "it", True, 900, True), E("w:2", "Rome", "en", True, 0),
+               E("w:3", "Rom", "de", True, 300)]
+    assert works.largest(unknown).uid == "w:2", "English's length not known yet: English (shown_order)"
+    two = [E("w:5", "A", "de", True, 700), E("w:6", "B", "fr", True, 700, True)]
+    assert works.largest(two).uid == "w:6", "a tie elsewhere: the claims' centre, as their producer chose"
+    assert works.largest(DQ) is None, "no lengths stated (gutenberg's claims): the rule does not apply"
+
+
+def test_the_largest_edition_matched_shows_its_passage_at_the_works_best_place():
+    hits = [hit("w:9", "en"), hit("w:2", "en"), hit("w:1", "it", seq=4)]
+    hits[1]["rerank_score"] = 0.9
+    out = works.collapse(hits, WK_OF, {"w:1": WK}, works.preference(None, "en"))
+    assert [retrieval.record_of(h) for h in out] == ["w:9", "w:1"], "at rank 2, the work's best place"
+    head = out[1]
+    assert head["chunk_id"] == "w:1:4:1" and head["lang"] == "it" and head["text"] == "w:1"
+    assert head["rerank_score"] == 0.9, "its place and scores stay the best-ranked edition's"
+    assert head["shown_as"] == {"edition": "w:1", "rule": "the largest edition, English on a tie"}
+    assert [(e["uid"], e["rank"]) for e in head["editions"]] == [("w:2", 2), ("w:3", None)]
+
+
+def test_the_largest_edition_not_matched_shows_its_best_passage_for_the_question():
+    hits = [hit("w:2", "en"), hit("w:3", "de")]
+    asked = []
+
+    def passages(es):
+        asked.append([e.uid for e in es])
+        return {"w:1": {"chunk_id": "w:1:7:1", "book_id": 1, "lang": "it", "text": "il passo"}}
+    out = works.collapse(hits, WK_OF, {"w:1": WK}, ("en",), passages=passages)
+    assert asked == [["w:1"]] and len(out) == 1, "one batch"
+    assert out[0]["chunk_id"] == "w:1:7:1" and out[0]["text"] == "il passo"
+    assert out[0]["shown_as"]["passage"] == "its best match for the question"
+    assert [(e["uid"], e["rank"]) for e in out[0]["editions"]] == [("w:2", 1), ("w:3", 2)]
+
+
+def test_no_passage_of_the_largest_edition_falls_back_to_the_editions_found():
+    hits = [hit("w:3", "de"), hit("w:2", "en")]
+    for passages in (None, lambda es: {}, lambda es: 1 / 0):
+        out = works.collapse(hits, WK_OF, {"w:1": WK}, ("en",), passages=passages)
+        assert retrieval.record_of(out[0]) == "w:2" and "shown_as" not in out[0]
+
+
+def test_passages_are_searched_only_for_the_works_on_the_page():
+    """The page is cut to `limit` after the grouping: a work below it costs
+    no search."""
+    other = [E("v:1", "Parigi", "it", True, 900, True), E("v:2", "Paris", "en", True, 400)]
+    work_of = {**WK_OF, **{e.uid: "v:1" for e in other}}
+    members = {"w:1": WK, "v:1": other}
+    hits = [hit("w:2", "en"), hit("x:5", "en"), hit("v:2", "en")]
+    asked = []
+    works.collapse(hits, work_of, members, ("en",), passages=lambda es: asked.extend(e.uid for e in es),
+                   limit=2)
+    assert asked == ["w:1"], "Paris is third: cut"
+    asked.clear()
+    works.collapse(hits, work_of, members, ("en",), passages=lambda es: asked.extend(e.uid for e in es))
+    assert asked == ["w:1", "v:1"]
+
+
+def test_the_lengths_and_the_centre_are_read_from_the_claims(tmp_path):
+    from tests.hold.test_annotations import a_claim, claims_file
+    target, tcoll, held, codex = setup(tmp_path, claims=claims_file(
+        a_claim("pubmed:2", "pubmed:1", evidence={"wikidata": "Q1", "subject_tokens": 40,
+                                                  "object_tokens": 90}),
+        a_claim("pubmed:3", "pubmed:1", evidence={"wikidata": "Q1", "subject_tokens": 10,
+                                                  "object_tokens": 90})))
+    _work_of, members = works.work_groups(tcoll, ["pubmed:3"], root=tmp_path, annotations=[held])
+    assert members["pubmed:1"] == [E("pubmed:1", "T1", "la", True, 90, True),
+                                   E("pubmed:2", "T2", "en", True, 40),
+                                   E("pubmed:3", "T3", "en", True, 10)]
+
+
+def test_the_best_passage_is_a_text_search_inside_that_record_else_its_first(monkeypatch):
+    from app import fts
+    calls = []
+    monkeypatch.setattr(fts, "search_records",
+                        lambda g, q, n, collection=None, book_ids=None: calls.append((g, q, book_ids))
+                        or ([{"chunk_id": "w:7:3:1"}] if q == "roma antica" else []))
+    monkeypatch.setattr(fts, "book_chunks", lambda g, b, c: [{"chunk_id": "w:7:2:1"}, {"chunk_id": "w:7:0:1"}])
+    plan = SimpleNamespace(core="ancient rome", variants=lambda g, held: ["roma antica"])
+    e = E("w:7", "Roma", "it", True, 9)
+    assert works.best_passage(None, plan, e) == {"chunk_id": "w:7:3:1"}
+    assert calls == [("it", "roma antica", [7])]
+    plan = SimpleNamespace(core="ancient rome", variants=lambda g, held: ["nothing"])
+    assert works.best_passage(None, plan, e) == {"chunk_id": "w:7:0:1"}, "no match: its first passage"
+    assert works.best_passage(None, plan, E("w:x", "?", "it", True)) is None
+    assert works.best_passages(None, plan, [e, E("w:x", "?", "it", True)]) == {"w:7": {"chunk_id": "w:7:0:1"}}

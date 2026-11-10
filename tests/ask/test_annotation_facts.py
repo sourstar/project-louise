@@ -14,9 +14,9 @@ from app.hold import collection as col
 from tests.hold.test_annotations import TARGET_SNAPSHOT, a_claim, a_target, claims_file, make
 
 
-def setup(tmp_path):
+def setup(tmp_path, claims=None):
     target, hashes = a_target(tmp_path)
-    codex, snap = make(tmp_path, claims=claims_file(
+    codex, snap = make(tmp_path, claims=claims if claims is not None else claims_file(
         a_claim(), a_claim("pubmed:3", "pubmed:1", confidence="0.73", type="translation-of")))
     tcoll = collections_mod.Collection(
         name="pubmed", plugin="pubmed", profile=None, embed_mode_default=None,

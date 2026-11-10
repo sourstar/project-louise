@@ -76,3 +76,9 @@ not hold at this size; both are local, neither changes what peers exchange (09 �
 3. **Showing it**: `works.collapse` shows the largest edition where the claims state the lengths (English on a tie),
    and the shown edition's best passage when it did not match (the operator's A) — a rule of the search's grouping
    step that only an annotation stating lengths turns on; gutenberg's claims state none and are unchanged.
+   **Built** (`works.largest`, `collapse`, `best_passages`): the lengths and the claims' centre are read from each
+   claim's evidence; a tie between two non-English versions goes to the centre (the producer's own choice). The shown
+   version keeps the work's best place and scores, brings its own passage, and says so (`shown_as`, invariant 4(2)).
+   A version that did not match costs one text search inside that one record (its language's query variant, else its
+   first passage), only for the works on the page (`limit = k`), side by side (8 threads). Its time is inside the
+   search line's `rerank`; München times it on the node after the annotation is created.

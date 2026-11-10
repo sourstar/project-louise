@@ -63,7 +63,8 @@ def test_save_records_the_working_state_and_status_reads_it(node, capsys):
     rec = json.loads(ws.path().read_text(encoding="utf-8"))
     st = rec["state"]
     assert st["mode"] == "running"
-    assert st["held"] == {"gutenberg": {"embed": None}, "wiki": {"embed": "all"}}
+    assert {n: h["embed"] for n, h in st["held"].items()} == {"gutenberg": None, "wiki": "all"}
+    assert all(h["codex"] for h in st["held"].values()), "which collection each name held"
     assert set(st["paused"]) == {"wiki"} and st["paused"]["wiki"]["by"] == "louise node pause wiki"
     assert set(st["frozen"]) == {"gutenberg"} and st["frozen"]["gutenberg"]["by"] == "louise node freeze gutenberg"
     assert rec["note"] == "engine A/B" and rec["saved_by"].startswith("louise node checkpoint save")
@@ -149,6 +150,38 @@ def test_restore_changes_exactly_what_differs_and_nothing_else(node, capsys):
     assert louise.main(["node", "checkpoint", "restore"]) == 0
     assert _out(capsys)["restored"] is None
     assert node_state.mode_history()[-1]["by"] == "the test"
+
+
+def test_a_name_that_now_holds_another_collection_is_not_restored(node):
+    """München, 2026-11-10: a checkpoint saved before pubmed9 was renamed over
+    pubmed, restored a day later, paused the new pubmed and set its embed off
+    — by name. A name is not a collection: restored only where the name holds
+    the collection it held at save."""
+    ws.save()
+    _set_embed("wiki", "off")
+    node_state.set_paused("wiki", True, by="dev")
+    text = _file("wiki").read_text(encoding="utf-8")
+    held_then = ws.read()["state"]["held"]["wiki"]["codex"]
+    _file("wiki").write_text(text.replace(held_then, "f" * 64), encoding="utf-8")   # another collection
+    node_state.set_worker_state("acquire-only", by="dev")
+    got = ws.restore(by="t")
+    assert [c["what"] for c in got["changed"]] == ["mode"], "the mode is the node's, not a name's"
+    (skip,) = got["skipped"]
+    assert skip["collection"] == "wiki" and "another collection" in skip["why"]
+    assert 'embed = "off"' in _file("wiki").read_text(encoding="utf-8")
+    assert "wiki" in node_state.paused_collections()
+
+
+def test_a_checkpoint_that_does_not_say_which_collection_restores_none_by_name(node):
+    ws.save()
+    rec = json.loads(ws.path().read_text(encoding="utf-8"))
+    for h in rec["state"]["held"].values():
+        del h["codex"]                     # a checkpoint saved before 2026-11-10
+    ws.path().write_text(json.dumps(rec), encoding="utf-8")
+    _set_embed("wiki", "off")
+    got = ws.restore(by="t")
+    assert got["changed"] == [] and "does not say which collection" in got["skipped"][0]["why"]
+    assert collection_file.stated_embed("wiki") == "off"
 
 
 def test_an_embed_the_file_did_not_state_is_restored_as_the_default(node):
