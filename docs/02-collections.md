@@ -1013,8 +1013,12 @@ refuses a sister that differs in nothing.
 On a peer that holds a collection, a sister of it in ANOTHER encoder space
 is made by `hold collection new --sister-of` (*amended 2026-11-08*, case J
 of docs/notes/new-collection.md, the sister into a held space): her parts
-are seeded from her sister's latest snapshot, and her manifest and text
-index are copied, being functions of the records alone (RULE 1). None of
+are seeded from her sister's latest snapshot, and her manifest is copied,
+being a function of the records alone (RULE 1). Her text index is not
+copied: a sister whose index would be her sister's byte for byte — the same
+layers, update and held slices — SHARES it, written by one of them and read
+by the others (*amended 2026-11-10*, operator: choice A;
+docs/notes/sister-shared-index.md). None of
 her sister's vectors are carried, and nothing in the copy may say one is
 held (hold/carry.py, amendment A1i). Her documents are then embedded in her
 own space.
