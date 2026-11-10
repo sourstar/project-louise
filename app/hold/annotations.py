@@ -76,6 +76,7 @@ import json
 import re
 import secrets
 import shutil
+import sys
 import time
 import unicodedata
 from contextlib import nullcontext
@@ -1221,6 +1222,7 @@ def preview(root: Path, *, target_ref: str | None = None, from_snapshot: str | N
     from . import annotations_stream as st
     cx.refuse_unbuilt_container(container)
     ts = _targets(Path(root), _refs(target_ref, from_snapshot, targets))
+    st.sweep(Path(root), lambda m: print(m, file=sys.stderr))     # stdout is the preview's own
     bytes_given = isinstance(claims, (bytes, bytearray, memoryview))
     with (nullcontext() if bytes_given else st.workspace(root, f"preview.{secrets.token_hex(6)}")) as work, \
             st.ClaimsSource(claims) as src:
@@ -1285,6 +1287,7 @@ def create(root: Path, name: str, *, target_ref: str | None = None, from_snapsho
                                                                                version=version),
             count=len(ch.pinned), install=lambda dst: dst.write_bytes(claims))
     ts = _targets(root, _refs(target_ref, from_snapshot, targets))
+    st.sweep(root, log)
     with st.workspace(root, f"create.{name}") as work, st.private_source(claims, work) as src:
         try:
             cs = _checked_stream(ts, src, annotator=annotator, container=container, work=work, sort=True)
@@ -1365,6 +1368,7 @@ def _write_collection(root: Path, name: str, targets: Sequence[Target], annotato
     log(f"[annotations] {name}: {count} claim(s) about {names} from "
         f"{', '.join(t.from_snapshot for t in targets)}, "
         f"snapshot {snapshot_id} {snap.hash[:23]}…; held: {held_path}")
+    _index_if_large(shard_tree, snap, name, log)
     return codex, snap
 
 
@@ -1450,10 +1454,10 @@ def _held_claims(shard_tree: Path, snap) -> dict[tuple, tuple[int, dict[str, Any
     return out
 
 
-def update(root: Path, name: str, *, claims: bytes | None = None,
+def update(root: Path, name: str, *, claims: bytes | Path | None = None,
            against: Sequence[tuple[str, str]] | None = None, snapshot_id: str | None = None,
            key=None, now: str | None = None, log=print, dry_run: bool = False,
-           clock: datetime | None = None) -> Update:
+           clock: datetime | None = None, _in_memory: bool = False) -> Update:
     """`hold annotations update <name>` (02 §2.10, built 2026-10-23): the
     next snapshot of an annotations collection — the SAME collection, its
     Codex and id untouched, so every peer that holds it takes the new
@@ -1472,9 +1476,71 @@ def update(root: Path, name: str, *, claims: bytes | None = None,
     The parts are rewritten whole and promoted; a part whose bytes moved is
     re-issued and its old version kept under its superseded name (09 §9.5),
     so the previous snapshot stays servable and checkable. The claims file
-    replaced is kept as `claims.<previous id>.jsonl` beside the new one."""
+    replaced is kept as `claims.<previous id>.jsonl` beside the new one.
+
+    STREAMED (2026-11-10, as `create`; app/hold/annotations_stream.py):
+    `claims` — the file's bytes or its path — is copied once into a
+    workspace (the claims held, re-checked, are hard-linked there instead)
+    and read pass by pass on the parse pool; the previous snapshot's claims
+    are kept as their identity digests, numbers and hashes (~40 bytes a
+    claim), never as records. Every byte written, and the `Update` returned,
+    are what the in-memory path, `_in_memory` — kept for that proof alone —
+    writes and returns (tests/hold/test_annotations_stream.py)."""
+    from . import annotations_stream as st
+    plan = _update_plan(Path(root), name, against, snapshot_id, clock)
+    if _in_memory:
+        return _update_in_memory(plan, claims, key=key, now=now, log=log, dry_run=dry_run)
+    recheck = claims is None
+    st.sweep(plan.root, log)
+    with st.workspace(plan.root, f"update.{plan.name}") as work:
+        if recheck:
+            try:
+                src = st.linked_source(plan.origin_dir / CLAIMS_FILE, work)
+            except FileNotFoundError:
+                raise AnnotationsError(f"{plan.name} keeps no {CLAIMS_FILE} beside its SHARD to re-check: "
+                                       f"give the claims file") from None
+        else:
+            src = st.private_source(claims, work)
+        with src:
+            try:
+                return _update_stream(plan, src, work, recheck=recheck, key=key, now=now, log=log,
+                                      dry_run=dry_run)
+            finally:
+                st.forget()
+
+
+@dataclass
+class _UpdatePlan:
+    """What `update` settles before it reads a claim: the collection, its
+    previous snapshot and the next one's id (with the period refusal, asked
+    only of an update that writes), and the targets as this peer holds them."""
+    root: Path
+    name: str
+    codex: Codex
+    shard_tree: Path
+    prev: Any
+    sid: str
+    period_refusal: AnnotationsError | None
+    targets: tuple[Target, ...]
+    against_of: dict[str, str]
+
+    @property
+    def by_plugin(self) -> dict[str, Target]:
+        return {t.plugin: t for t in self.targets}
+
+    @property
+    def origin_dir(self) -> Path:
+        return self.root / self.name / "origin"
+
+    @property
+    def staging(self) -> Path:
+        return self.root / self.name / "state" / "annotations-build"
+
+
+def _update_plan(root: Path, name: str, against: Sequence[tuple[str, str]] | None,
+                 snapshot_id: str | None, clock: datetime | None) -> _UpdatePlan:
     from datetime import timezone
-    from . import collection as col, shard as shard_mod, snapshot as sn
+    from . import collection as col, snapshot as sn
     from app.share import seeder
     root = Path(root)
     name, codex = col.resolve(root, name)
@@ -1519,14 +1585,32 @@ def update(root: Path, name: str, *, claims: bytes | None = None,
     if chosen:
         raise AnnotationsError(f"--against names {', '.join(sorted(chosen))}, which this collection does "
                                f"not annotate")
-    by_plugin = {t.plugin: t for t in ts}
+    return _UpdatePlan(root, name, codex, shard_tree, prev, sid, period_refusal, tuple(ts), against_of)
 
+
+def _refuse_graph(plan: _UpdatePlan, graph: bool) -> None:
+    if graph and plan.codex.version < cx.GRAPH_VERSION:
+        raise AnnotationsError("a mention, relation or community claim needs a Codex at the graph "
+                               "version (09 §9.3): not this collection's")
+
+
+_LEAVES_NONE = ("the update leaves no claim: an annotations collection holds at least one "
+                "(retract it instead)")
+
+
+def _update_in_memory(plan: _UpdatePlan, claims: bytes | None, *, key, now, log, dry_run: bool) -> Update:
+    """`update` as it was until 2026-11-10: every claim, and every record of
+    the previous snapshot, held. Kept for one purpose — the proof that the
+    streamed `update` writes the same bytes and says the same
+    (tests/hold/test_annotations_stream.py)."""
+    from . import snapshot as sn
+    name, codex, shard_tree, prev = plan.name, plan.codex, plan.shard_tree, plan.prev
+    by_plugin = plan.by_plugin
     # the claims: the file given, or the ones held, re-checked
-    origin_dir = root / name / "origin"
     recheck = claims is None
     if recheck:
         try:
-            claims = (origin_dir / CLAIMS_FILE).read_bytes()
+            claims = (plan.origin_dir / CLAIMS_FILE).read_bytes()
         except FileNotFoundError:
             raise AnnotationsError(f"{name} keeps no {CLAIMS_FILE} beside its SHARD to re-check: "
                                    f"give the claims file") from None
@@ -1536,10 +1620,7 @@ def update(root: Path, name: str, *, claims: bytes | None = None,
         # written, the hashes taken anew from the newer target text
         submitted = [Submitted(s.line, s.raw, {k: v for k, v in s.claim.items() if k not in PINNED_KEYS})
                      for s in submitted]
-    graph = any(s.claim["type"] in GRAPH_TYPES for s in submitted)
-    if graph and codex.version < cx.GRAPH_VERSION:
-        raise AnnotationsError("a mention, relation or community claim needs a Codex at the graph "
-                               "version (09 §9.3): not this collection's")
+    _refuse_graph(plan, any(s.claim["type"] in GRAPH_TYPES for s in submitted))
     wanted: dict[str, set[str]] = {}
     text_for: dict[str, set[str]] = {}
     for s_ in submitted:
@@ -1576,27 +1657,108 @@ def update(root: Path, name: str, *, claims: bytes | None = None,
     records = sorted((_record(number[identity_key(c)], c, s) for c, s in zip(pinned, submitted)),
                      key=lambda r: int(r["native_id"]))
     if not records:
-        raise AnnotationsError("the update leaves no claim: an annotations collection holds at least one "
-                               "(retract it instead)")
+        raise AnnotationsError(_LEAVES_NONE)
     before = {r["uid"]: r["content_hash"] for _, r in held.values()}
     delta = sn.compute_delta(before, {r["uid"]: r["content_hash"] for r in records})
-    against_text = ", ".join(f"{k} {v}" for k, v in against_of.items())
 
-    staging = root / name / "state" / "annotations-build"
+    staging = plan.staging
     if staging.exists():
         shutil.rmtree(staging)
-    shards, relations = write_parts(staging, records, sid,
+    shards, relations = write_parts(staging, records, plan.sid,
                                     shard_records=int(codex.slicing.get("shard_records") or SHARD_RECORDS),
                                     container=cx.container_of(codex))
+    return _update_finish(plan, shards=shards, relations=relations, delta=delta, dropped=dropped,
+                          install=None if recheck else (lambda dst: dst.write_bytes(claims)),
+                          key=key, now=now, log=log, dry_run=dry_run)
+
+
+def _update_stream(plan: _UpdatePlan, src, work: Path, *, recheck: bool, key, now, log,
+                   dry_run: bool) -> Update:
+    """`update`'s middle, streamed (app/hold/annotations_stream.py): the
+    same checks in the same order, so the same refusals and the same bytes."""
+    import numpy as np
+    from . import annotations_stream as st, snapshot as sn
+    codex, by_plugin = plan.codex, plan.by_plugin
+    sv = st.survey(src, plugins=tuple(by_plugin), keep_idents=True,
+                   orders={p: (t.codex.slicing or {}).get("order", "bytes") for p, t in by_plugin.items()})
+    _refuse_graph(plan, sv.graph)
+    held_recs = st.Held({p: st.read_target(by_plugin[p], ends, work) for p, ends in sv.ends.items()})
+    sv.ends = {}                                    # read: the parts are found
+    tables = held_recs.save(work)
+    del held_recs
+    snapshots = {p: t.from_snapshot for p, t in by_plugin.items()}
+    codices = {p: t.codex for p, t in by_plugin.items()}
+    # the claims the previous snapshot holds, matched by identity: a claim
+    # made before keeps its number, a new one is numbered after the last
+    held = st.held_claims(plan.shard_tree, plan.prev)
+    at, hit = st._search(held.idents, sv.idents)
+    sv.idents = None
+    sort = st.ExternalSort(work)
+    dropped = st.check_pins(src, sv, tables, snapshots=snapshots, codices=codices, sort=sort,
+                            version=codex.version, strip=recheck, drop=recheck, fresh=~hit)
+    if held.error is not None:
+        raise AnnotationsError(held.error)
+    kept = np.ones(sv.count, dtype=bool)
+    kept[np.fromiter((k for k, _ in dropped), dtype=np.int64, count=len(dropped))] = False
+    numbers = np.zeros(sv.count, dtype=np.int64)
+    numbers[hit] = held.numbers[at[hit]]
+    fresh = np.fromiter((k for _key, k in sort), dtype=np.int64)
+    numbers[fresh] = np.arange(held.top + 1, held.top + 1 + len(fresh), dtype=np.int64)
+    del sort
+    order = np.flatnonzero(kept)
+    if not len(order):
+        raise AnnotationsError(_LEAVES_NONE)
+    order = order[np.argsort(numbers[order], kind="stable")]
+    by_number = numbers[order]
+    was = hit[order]
+    old = at[order][was]
+    del numbers, kept, at, hit
+
+    staging = plan.staging
+    if staging.exists():
+        shutil.rmtree(staging)
+    parts = st.ClaimParts(src, sv, None, tables, snapshots, codices, order=order, numbers=by_number,
+                          strip=recheck)
+    del order
+    shards, relations, _ = parts.write_parts(
+        staging, plan.sid, shard_records=int(codex.slicing.get("shard_records") or SHARD_RECORDS),
+        container=cx.container_of(codex))
+    # `compute_delta(before, after)`: by uid, compared by content hash
+    differ = (held.hashes[old] != parts.hashes[was]).any(axis=1)
+    if held.odd:
+        differ |= np.isin(held.numbers[old], np.fromiter(held.odd, dtype=np.int64, count=len(held.odd)))
+    used = np.zeros(len(held.numbers), dtype=bool)
+    used[old] = True
+
+    def uids(ns) -> tuple[str, ...]:
+        return tuple(sorted(f"{PLUGIN}:{int(n)}" for n in ns))
+    delta = sn.Delta(uids(by_number[~was]), uids(by_number[was][differ]),
+                     tuple(sn.Tombstone(u, "withdrawn") for u in uids(held.numbers[~used])))
+    return _update_finish(plan, shards=shards, relations=relations, delta=delta,
+                          dropped=[d for _, d in dropped], install=None if recheck else src.install,
+                          key=key, now=now, log=log, dry_run=dry_run)
+
+
+def _update_finish(plan: _UpdatePlan, *, shards, relations, delta, dropped: Sequence[str], install,
+                   key, now, log, dry_run: bool) -> Update:
+    """What `update` does once its parts are in staging: the result, the
+    period and dry-run returns, the claims file kept (`install` writes the
+    new one; None when re-checking), the parts promoted, the superseded kept,
+    the snapshot written and signed."""
+    from . import shard as shard_mod, snapshot as sn
+    root, name, codex, shard_tree, prev, sid = (plan.root, plan.name, plan.codex, plan.shard_tree,
+                                                plan.prev, plan.sid)
+    staging, origin_dir = plan.staging, plan.origin_dir
+    against_text = ", ".join(f"{k} {v}" for k, v in plan.against_of.items())
     old = {(e.slice, e.n): e.root for e in prev.shards}
     old_rel = {(e.slice, e.n): e.root for e in prev.relations}
     reissued = tuple(e.path for e in shards if old.get((e.slice, e.n)) != e.root) + \
         tuple(e.path for e in relations if old_rel.get((e.slice, e.n)) != e.root)
-    result = Update(sid, prev.snapshot_id, against_of, len(delta.added), len(delta.changed),
+    result = Update(sid, prev.snapshot_id, plan.against_of, len(delta.added), len(delta.changed),
                     len(delta.tombstoned), tuple(dropped), reissued)
-    if period_refusal is not None and (delta.added or delta.changed or delta.tombstoned):
+    if plan.period_refusal is not None and (delta.added or delta.changed or delta.tombstoned):
         shutil.rmtree(staging)
-        raise period_refusal
+        raise plan.period_refusal
     if dry_run or not (delta.added or delta.changed or delta.tombstoned):
         shutil.rmtree(staging)
         if not (delta.added or delta.changed or delta.tombstoned):
@@ -1609,14 +1771,14 @@ def update(root: Path, name: str, *, claims: bytes | None = None,
         return result
 
     # the claims file replaced is kept, named for the last snapshot it was current in
-    if not recheck:
+    if install is not None:
         cur = origin_dir / CLAIMS_FILE
         kept = origin_dir / f"claims.{prev.snapshot_id}.jsonl"
         if cur.is_file() and not kept.exists():
             cur.replace(kept)
         origin_dir.mkdir(parents=True, exist_ok=True)
         tmp = origin_dir / (CLAIMS_FILE + ".tmp")
-        tmp.write_bytes(claims)
+        install(tmp)
         tmp.replace(cur)
     for entry in list(shards) + list(relations):
         dst = shard_tree / entry.path
@@ -1637,10 +1799,13 @@ def update(root: Path, name: str, *, claims: bytes | None = None,
         collection_id=codex.collection_id, snapshot_id=sid, previous=prev.hash,
         shards=shards, delta=delta, relations=relations, figures=(),
         files=files_of(shard_tree, sid))
+    # the canonical bytes once (`write_snapshot`): a delta may list millions
+    raw = snap.canonical()
+    object.__setattr__(snap, "_raw_hash", cx.digest(raw))
     out = shard_tree / shard_mod.snapshot_path(sid)
-    if out.is_file() and out.read_bytes() != snap.canonical():
+    if out.is_file() and out.read_bytes() != raw:
         raise AnnotationsError(f"snapshot {sid} exists with different bytes; a snapshot is written once (09 §9.4)")
-    out.write_bytes(snap.canonical())
+    out.write_bytes(raw)
     if key is not None:
         sn.sign_snapshot(root, name, snap, key,
                          now=now or time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()))
@@ -1648,7 +1813,27 @@ def update(root: Path, name: str, *, claims: bytes | None = None,
         f"{len(delta.added)} added, {len(delta.changed)} re-checked or changed, "
         f"{len(delta.tombstoned)} tombstoned; {len(reissued)} part(s) re-issued; {snap.hash[:23]}…"
         + (f"; {len(dropped)} claim(s) name a record the target no longer holds" if dropped else ""))
+    _index_if_large(shard_tree, snap, name, log)
     return dataclasses.replace(result, snapshot=snap)
+
+
+def _index_if_large(shard_tree: Path, snap, name: str, log) -> None:
+    """A LARGE snapshot's claim index (app/hold/claim_index.py), built as
+    soon as the snapshot is written: without it its claims group nothing at
+    search (`index_of`). Derived data: a build that fails leaves the
+    snapshot as written, says so, and the worker's keeper builds it
+    (`claim_index.maintain`)."""
+    from . import claim_index
+    if not claim_index.is_large(snap):
+        return
+    try:
+        got = claim_index.build(shard_tree, snap)
+    except Exception as e:   # noqa: BLE001 — derived: the collection stands without it
+        log(f"[annotations] {name}: the claim index of {snap.snapshot_id} was not built "
+            f"({type(e).__name__}: {e}); the worker builds it")
+        return
+    log(f"[annotations] {name}: claim index of {snap.snapshot_id} built ({got.get('claims', 0):,} claims, "
+        f"{got.get('ends', 0):,} ends): searched from disk")
 
 
 # --------------------------------------------------------------------------

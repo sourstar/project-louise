@@ -192,20 +192,122 @@ def _limit(src: ClaimsSource, cap: int | None = None, tables: "Held | Path | Non
     return 1 if src.data is not None or isinstance(tables, Held) else cap
 
 
+#: a workspace's name beside the collections, and its lock's
+PREFIX, LOCK_SUFFIX = ".annotations-", ".lock"
+
+
+def _lock_of(d: Path) -> Path:
+    """A workspace's lock: a file BESIDE it, taken before the directory is
+    made and dropped after it is gone, so that a directory with no live
+    holder is one a stopped create or update left."""
+    return d.with_name(d.name + LOCK_SUFFIX)
+
+
+def _take(lock: Path) -> int | None:
+    """An exclusive flock(2) on `lock`, or None where a live process holds
+    it. The kernel drops a lock with its holder, however it ends (SIGKILL,
+    the OOM killer). The file is unlinked by whoever drops the lock
+    (`_drop`), so a lock taken on a file that was unlinked meanwhile is let
+    go and taken again on the file the path names now — the usual guard
+    (fstat against stat) against two holders of one path."""
+    import fcntl
+    while True:
+        fd = os.open(lock, os.O_RDWR | os.O_CREAT, 0o644)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            os.close(fd)
+            return None
+        try:
+            same = os.stat(lock).st_ino == os.fstat(fd).st_ino
+        except FileNotFoundError:
+            same = False
+        if same:
+            return fd
+        os.close(fd)
+
+
+def _drop(lock: Path, fd: int) -> None:
+    try:
+        os.unlink(lock)
+    except FileNotFoundError:
+        pass
+    os.close(fd)
+
+
+def _size(d: Path) -> int:
+    total = 0
+    for dirpath, _dirs, files in os.walk(d):
+        for f in files:
+            try:
+                total += os.lstat(os.path.join(dirpath, f)).st_size
+            except OSError:
+                pass
+    return total
+
+
+def sweep(root: Path, log=print) -> list[str]:
+    """Every annotations workspace beside the collections under `root` whose
+    lock can be taken — its create or update is gone: killed, OOM, the node
+    stopped mid-pass — removed, each said once as it goes (wikipedia's is
+    ~5 GB). One a live process holds is left alone. Called at the start of
+    every create, update and preview and at worker boot (app/worker.py);
+    a lock left with no workspace is removed silently."""
+    root = Path(root)
+    if not root.is_dir():
+        return []
+    gone = []
+    for p in sorted(root.glob(PREFIX + "*")):
+        if p.name.endswith(LOCK_SUFFIX):
+            if p.with_name(p.name[:-len(LOCK_SUFFIX)]).exists():
+                continue                    # its workspace's: taken with it below
+            ws, lock = None, p
+        elif p.is_dir():
+            ws, lock = p, _lock_of(p)
+        else:
+            continue
+        fd = _take(lock)
+        if fd is None:
+            continue                        # a live create or update holds it
+        try:
+            if ws is not None and ws.is_dir():
+                size = _size(ws)
+                shutil.rmtree(ws, ignore_errors=True)
+                gone.append(str(ws))
+                log(f"[annotations] removed {ws.name} ({size / 2**20:,.0f} MB): the workspace of a create "
+                    f"or update that stopped before it ended")
+        finally:
+            _drop(lock, fd)
+    return gone
+
+
 @contextmanager
 def workspace(root: Path, tag: str) -> Iterator[Path]:
     """A scratch directory beside the collections — the private copy of the
     claims file, the targets' tables, the sort's runs — named by `tag` (a
-    create's is its collection's name, so that one a killed create left is
-    cleared by the next) and removed when the pass ends however it ends."""
-    d = Path(root) / f".annotations-{tag}"
-    if d.exists():
-        shutil.rmtree(d)
-    d.mkdir(parents=True)
+    create's and an update's by their collection's name) and HELD while the
+    pass runs: an exclusive flock on its lock (`_take`), so that `sweep`
+    clears it once its process is gone, never while it lives, and a second
+    create or update of the same name is refused rather than let clear the
+    first's. Removed when the pass ends however it ends."""
+    from .annotations import AnnotationsError
+    d = Path(root) / f"{PREFIX}{tag}"
+    d.parent.mkdir(parents=True, exist_ok=True)
+    lock = _lock_of(d)
+    fd = _take(lock)
+    if fd is None:
+        raise AnnotationsError(f"{d.name} is in use: another create or update of the same collection is "
+                               f"running on this node — let it finish, then run this again")
     try:
-        yield d
+        if d.exists():
+            shutil.rmtree(d)                # its holder is gone (the lock was free)
+        d.mkdir()
+        try:
+            yield d
+        finally:
+            shutil.rmtree(d, ignore_errors=True)
     finally:
-        shutil.rmtree(d, ignore_errors=True)
+        _drop(lock, fd)
 
 
 def private_source(claims: bytes | str | os.PathLike, work: Path) -> ClaimsSource:
@@ -219,6 +321,24 @@ def private_source(claims: bytes | str | os.PathLike, work: Path) -> ClaimsSourc
     else:
         shutil.copyfile(claims, copy)
     return ClaimsSource(copy, owned=True)
+
+
+def linked_source(path: Path, work: Path) -> ClaimsSource:
+    """The source an update RE-CHECKS: the collection's own claims file
+    (`origin/claims.jsonl`), as a hard link in the workspace. That file is
+    only ever replaced whole (`create` moves it into place, `update` writes
+    a new one beside it and renames), never written in place, so the link
+    holds the very bytes the first pass checks — and costs no copy of
+    wikipedia's 4 GB (RULE 1: provably identical bytes, reused). Copied
+    where no link can be made (another filesystem)."""
+    copy = Path(work) / COPY
+    try:
+        os.link(path, copy)
+    except FileNotFoundError:
+        raise
+    except OSError:
+        shutil.copyfile(path, copy)
+    return ClaimsSource(copy)
 
 
 # --------------------------------------------------------------------------
@@ -316,6 +436,9 @@ class Survey:
     graph: bool
     by_type: Counter
     by_method: Counter
+    #: claim k's identity digest (`identity_digest`), kept for an update
+    #: (`survey(keep_idents=True)`), which matches the claims held by it
+    idents: np.ndarray | None = None
 
     @property
     def records_named(self) -> int:
@@ -426,11 +549,12 @@ def _cuts(src: ClaimsSource) -> list[tuple[int, int]]:
 
 
 def survey(src: ClaimsSource, *, plugins: tuple[str, ...] = (),
-           orders: dict[str, str] | None = None) -> Survey:
+           orders: dict[str, str] | None = None, keep_idents: bool = False) -> Survey:
     """Pass 1: the claims file checked as `read_claims` checks it — the
     first refusal in the file's order is the one it gives — and kept as
     `Survey`. `orders` (plugin -> the target's `slicing.order`) places the
-    ends for `read_target`; without it every part is a candidate."""
+    ends for `read_target`; without it every part is a candidate. With
+    `keep_idents`, each claim's identity digest is kept (16 bytes a claim)."""
     from app import parallel
     from .annotations import AnnotationsError
     orders = dict(orders or {})
@@ -465,10 +589,11 @@ def survey(src: ClaimsSource, *, plugins: tuple[str, ...] = (),
     if not lines:
         raise AnnotationsError("the claims file holds no claim")
     _refuse_repeat(idents, lines)
+    kept = np.frombuffer(bytes(idents), dtype="S16") if keep_idents else None
     del idents
     return Survey(len(lines), np.frombuffer(lines, dtype=np.int64), np.frombuffer(offsets, dtype=np.int64),
                   np.frombuffer(lengths, dtype=np.int64), {p: b.done() for p, b in bufs.items()},
-                  contributors, graph, by_type, by_method)
+                  contributors, graph, by_type, by_method, kept)
 
 
 # --------------------------------------------------------------------------
@@ -755,53 +880,78 @@ def _read_in_order(src: ClaimsSource, offsets: np.ndarray, lengths: np.ndarray) 
     return raws
 
 
+def _submitted(line: int, raw: bytes, claim: dict[str, Any], strip: bool):
+    """Claim `line` as `pin` takes it: as the file gave it, or — an update
+    that re-checks the claims held (`strip`) — without what `create` pinned,
+    so its hashes are taken anew from the newer target text."""
+    from .annotations import PINNED_KEYS, Submitted
+    if strip:
+        claim = {k: v for k, v in claim.items() if k not in PINNED_KEYS}
+    return Submitted(line, raw, claim)
+
+
 def pin_part(ref, tables, k0: int, offsets: np.ndarray, lengths: np.ndarray, lines: np.ndarray,
-             snapshots: dict[str, str], codices: dict[str, Any], version: int, keys: bool) -> dict[str, Any]:
+             snapshots: dict[str, str], codices: dict[str, Any], version: int, keys: bool,
+             strip: bool = False, drop: bool = False, fresh: np.ndarray | None = None) -> dict[str, Any]:
     """A pinning task: claims k0, k0+1, … of the file pinned (`_pin_one`) up
     to the first `pin` would refuse at once (`error`, its ordinal); the ends
-    not held counted; each pinned claim's numbering key, with `keys`."""
-    from .annotations import Submitted, _number_order, _pin_one
+    not held counted; each pinned claim's numbering key, with `keys` — only
+    where `fresh` says the claim is new, when it is given. With `drop` (an
+    update re-checking the claims held), a claim naming a record the target
+    no longer holds is not pinned but named (`dropped`: its ordinal and
+    `update`'s words)."""
+    from .annotations import _number_order, _pin_one, record_ends
     held = held_of(tables)
     with _opened(ref) as src:
         raws = _read_in_order(src, offsets, lengths)
-    missing, out, error = _Missing(), [], None
+    missing, out, dropped, error = _Missing(), [], [], None
     for b0 in range(0, len(raws), BATCH):
         claims = _claims_of(raws[b0:b0 + BATCH])
         held.load(_uids_of(claims))
         for j, c in enumerate(claims, b0):
+            s = _submitted(int(lines[j]), raws[j], c, strip)
+            if drop:
+                gone = [u for u in record_ends(s.claim) if held.get(u) is None]
+                if gone:
+                    dropped.append((k0 + j, f"line {s.line}: {', '.join(gone)}"))
+                    continue
             try:
-                p = _pin_one(Submitted(int(lines[j]), raws[j], c), held, None, snapshots, codices, missing)
+                p = _pin_one(s, held, None, snapshots, codices, missing)
             except Exception:           # noqa: BLE001 — the parent raises it, as `pin` would
                 error = k0 + j
                 break
-            if p is not None and keys:
+            if p is not None and keys and (fresh is None or fresh[j]):
                 out.append((_number_order(p, version), k0 + j))
         if error is not None:
             break
-    return {"keys": out, "count": missing.count, "first": missing.first, "error": error}
+    return {"keys": out, "count": missing.count, "first": missing.first, "dropped": dropped, "error": error}
 
 
 def check_pins(src: ClaimsSource, sv: Survey, tables: "Held | Path", *, snapshots: dict[str, str],
-               codices: dict[str, Any], sort: ExternalSort | None, version: int) -> None:
+               codices: dict[str, Any], sort: ExternalSort | None, version: int, strip: bool = False,
+               drop: bool = False, fresh: np.ndarray | None = None) -> list[tuple[int, str]]:
     """Pass 2: every claim pinned as `pin` pins it — the ends not held
     counted and refused together at the end, any other refusal raised at the
     first claim in the file's order that has one — and its numbering key
-    (`_number_order`) with its ordinal added to `sort`. Nothing is kept;
-    pass 3 pins again what it writes."""
+    (`_number_order`) with its ordinal added to `sort` (only the claims
+    `fresh` marks, when given). Nothing is kept; pass 3 pins again what it
+    writes. Returns the claims `drop` set aside, in the file's order."""
     from app import parallel
-    from .annotations import AnnotationsError, Submitted, _not_held, _pin_one
+    from .annotations import AnnotationsError, _not_held, _pin_one
     tasks = [(src.ref, tables, a, sv.offsets[a:a + PIN_CLAIMS], sv.lengths[a:a + PIN_CLAIMS],
-              sv.lines[a:a + PIN_CLAIMS], snapshots, codices, version, sort is not None)
+              sv.lines[a:a + PIN_CLAIMS], snapshots, codices, version, sort is not None, strip, drop,
+              None if fresh is None else fresh[a:a + PIN_CLAIMS])
              for a in range(0, sv.count, PIN_CLAIMS)]
-    count, first = 0, []
+    count, first, dropped = 0, [], []
     for got in parallel.each_part(pin_part, tasks, limit=_limit(src, None, tables)):
+        dropped.extend(got["dropped"])
         if got["error"] is not None:
             k = got["error"]
             raw = src.read(int(sv.offsets[k]), int(sv.lengths[k]))
             (c,) = _claims_of([raw])
             held = held_of(tables)
             held.load(_uids_of([c]))
-            _pin_one(Submitted(int(sv.lines[k]), raw, c), held, None, snapshots, codices, _Missing())
+            _pin_one(_submitted(int(sv.lines[k]), raw, c, strip), held, None, snapshots, codices, _Missing())
             raise AnnotationsError(f"claims line {int(sv.lines[k])}: refused once and not again — the claims "
                                    f"file or the target changed while it was read")
         count += got["count"]
@@ -811,18 +961,21 @@ def check_pins(src: ClaimsSource, sv: Survey, tables: "Held | Path", *, snapshot
                 sort.add(item)
     if count:
         raise _not_held(count, first)
+    return dropped
 
 
 # --------------------------------------------------------------------------
 # pass 3: the parts
 
-def write_part(ref, tables, staging: str, n: int, first_number: int, offsets: np.ndarray,
+def write_part(ref, tables, staging: str, n: int, numbers: "int | np.ndarray", offsets: np.ndarray,
                lengths: np.ndarray, lines: np.ndarray, snapshots: dict[str, str], codices: dict[str, Any],
-               snapshot_id: str, container: str):
-    """A part task: part `n`, claims numbered from `first_number` — given in
-    numbering order by their offsets — read back, pinned again, made records
-    (`_record`) and written as `write_parts` writes a part (`_write_part`)."""
-    from .annotations import AnnotationsError, Submitted, _pin_one, _record, _write_part
+               snapshot_id: str, container: str, strip: bool = False):
+    """A part task: part `n` — its claims given in numbering order by their
+    offsets, numbered from `numbers` (an int) or as `numbers` lists them —
+    read back, pinned again, made records (`_record`) and written as
+    `write_parts` writes a part (`_write_part`). Returns the part's entries
+    and its records' content hashes, 16 bytes each, in its order."""
+    from .annotations import AnnotationsError, _pin_one, _record, _write_part
     held = held_of(tables)
     with _opened(ref) as src:
         raws = _read_in_order(src, offsets, lengths)
@@ -831,15 +984,17 @@ def write_part(ref, tables, staging: str, n: int, first_number: int, offsets: np
         claims = _claims_of(raws[b0:b0 + BATCH])
         held.load(_uids_of(claims))
         for j, c in enumerate(claims, b0):
-            s = Submitted(int(lines[j]), raws[j], c)
+            s = _submitted(int(lines[j]), raws[j], c, strip)
             lost: list[str] = []
             p = _pin_one(s, held, None, snapshots, codices, lost)
             if p is None or lost:
                 raise AnnotationsError(f"claims line {s.line}: pinned once and not again — the claims "
                                        f"file or the target changed while the collection was written")
-            part.append(_record(first_number + j, p, s))
+            part.append(_record(numbers + j if isinstance(numbers, int) else int(numbers[j]), p, s))
     del raws
-    return _write_part(Path(staging), n, part, snapshot_id, container)
+    hashes = b"".join(bytes.fromhex(r["content_hash"]) for r in part)
+    shard, rel = _write_part(Path(staging), n, part, snapshot_id, container)
+    return shard, rel, hashes
 
 
 class _PartTasks(_Sequence):
@@ -851,40 +1006,135 @@ class _PartTasks(_Sequence):
         self.per_part, self.container = per_part, container
 
     def __len__(self) -> int:
-        return -(-self.p.survey.count // self.per_part)
+        return -(-len(self.p.order) // self.per_part)
 
     def __getitem__(self, i: int):
         if not 0 <= i < len(self):
             raise IndexError(i)
-        ks = self.p.order[i * self.per_part:(i + 1) * self.per_part]
+        at = slice(i * self.per_part, (i + 1) * self.per_part)
+        ks = self.p.order[at]
         sv = self.p.survey
-        return (self.p.src.ref, self.p.tables, self.staging, i + 1, i * self.per_part + 1, sv.offsets[ks],
-                sv.lengths[ks], sv.lines[ks], self.p.snapshots, self.p.codices, self.snapshot_id, self.container)
+        numbers = i * self.per_part + 1 if self.p.numbers is None else self.p.numbers[at]
+        return (self.p.src.ref, self.p.tables, self.staging, i + 1, numbers, sv.offsets[ks],
+                sv.lengths[ks], sv.lines[ks], self.p.snapshots, self.p.codices, self.snapshot_id,
+                self.container, self.p.strip)
 
 
 class ClaimParts:
     """`write_snapshot`'s records for a streamed create: the claims in
-    numbering order (`order[n - 1]` is claim n's ordinal in the file), written
-    a part a task (`write_parts`)."""
+    numbering order (`order[i]` is the file ordinal of the claim written
+    i-th, numbered i + 1 — or `numbers[i]`, an update's), written a part a
+    task (`write_parts`)."""
 
-    def __init__(self, src: ClaimsSource, survey: Survey, sort: ExternalSort, tables: "Held | Path",
-                 snapshots: dict[str, str], codices: dict[str, Any]) -> None:
+    def __init__(self, src: ClaimsSource, survey: Survey, sort: "ExternalSort | None", tables: "Held | Path",
+                 snapshots: dict[str, str], codices: dict[str, Any], *, order: np.ndarray | None = None,
+                 numbers: np.ndarray | None = None, strip: bool = False) -> None:
         self.src, self.survey, self.tables = src, survey, tables
-        self.snapshots, self.codices = snapshots, codices
-        self.order = np.fromiter((k for _key, k in sort), dtype=np.int64, count=survey.count)
+        self.snapshots, self.codices, self.numbers, self.strip = snapshots, codices, numbers, strip
+        self.order = (order if order is not None
+                      else np.fromiter((k for _key, k in sort), dtype=np.int64, count=survey.count))
+        #: the records' content hashes, 16 bytes each in `order` (`write_parts`)
+        self.hashes: np.ndarray | None = None
 
     def write_parts(self, staging: Path, snapshot_id: str, *, shard_records: int,
                     container: str) -> tuple[tuple, tuple, list[str]]:
         """(shards, relations, uids): `write_parts`'s entries for these
-        records, and every record's uid."""
+        records, and every record's uid (a create's, numbered from 1)."""
         from app import parallel
         from .annotations import PLUGIN
         tasks = _PartTasks(self, staging, snapshot_id, shard_records, container)
         cap = max(1, PARTS_BUDGET // (shard_records * PART_BYTES_PER_CLAIM))
-        shards, relations = [], []
-        for s, r in parallel.each_part(write_part, tasks, limit=_limit(self.src, cap, self.tables)):
+        shards, relations, hashes = [], [], bytearray()
+        for s, r, h in parallel.each_part(write_part, tasks, limit=_limit(self.src, cap, self.tables)):
             shards.append(s)
             relations.append(r)
-        count = self.survey.count
+            if self.numbers is not None:
+                hashes += h
+        count = len(self.order)
+        self.hashes = np.frombuffer(bytes(hashes), dtype=np.uint8).reshape(-1, 16) if self.numbers is not None \
+            else None
         self.survey = self.order = self.tables = None           # what the snapshot's delta no longer needs
-        return tuple(shards), tuple(relations), [f"{PLUGIN}:{n}" for n in range(1, count + 1)]
+        uids = [f"{PLUGIN}:{n}" for n in range(1, count + 1)] if self.numbers is None else []
+        return tuple(shards), tuple(relations), uids
+
+
+# --------------------------------------------------------------------------
+# an update: the claims the previous snapshot holds
+
+def held_part(tree: str, shard, snapshot_id: str) -> dict[str, Any]:
+    """A task: the claims part `shard` of snapshot `snapshot_id` holds —
+    each record's identity digest, number and content hash (`odd`, by
+    number, where it is not 32 lowercase hex) — or the refusal
+    `_held_claims` gives where this peer holds no file with its root."""
+    from app.pack import records as pack_records
+    from .annotations import _part_file, claim_of
+    p = _part_file(Path(tree), shard, None, snapshot_id)
+    if p is None:
+        return {"error": f"{shard.path}: this peer holds no file with the root snapshot "
+                         f"{snapshot_id} lists ({shard.root[:23]}…)"}
+    idents, numbers, hashes, odd = bytearray(), array("q"), bytearray(), {}
+    for r in pack_records.iter_records(p):
+        idents += identity_digest(claim_of(r))
+        n = int(r["native_id"])
+        numbers.append(n)
+        h = r["content_hash"]
+        if isinstance(h, str) and _HEX32.fullmatch(h):
+            hashes += bytes.fromhex(h)
+        else:
+            hashes += bytes(16)
+            odd[n] = h
+    return {"idents": bytes(idents), "numbers": numbers.tobytes(), "hashes": bytes(hashes), "odd": odd,
+            "error": None}
+
+
+@dataclass
+class HeldClaims:
+    """`_held_claims` as arrays: the previous snapshot's claims sorted by
+    identity digest (`idents`), each with its number and its record's content
+    hash (`hashes`, 16 bytes a row; `odd` by number where not hex); `error`,
+    the refusal `_held_claims` would have given, for the caller to raise in
+    `update`'s order. ~40 bytes a claim."""
+    idents: np.ndarray
+    numbers: np.ndarray
+    hashes: np.ndarray
+    odd: dict[int, Any]
+    error: str | None
+
+    @property
+    def top(self) -> int:
+        return int(self.numbers.max()) if len(self.numbers) else 0
+
+    def content_hash(self, i: int) -> Any:
+        n = int(self.numbers[i])
+        return self.odd[n] if n in self.odd else self.hashes[i].tobytes().hex()
+
+
+def held_claims(shard_tree: Path, snap) -> HeldClaims:
+    """The claims `snap` lists, read a part a task on the pool (`held_part`):
+    identity digest -> (number, content hash), a later record of the same
+    identity over an earlier, as `_held_claims`'s dict keeps it."""
+    from app import parallel
+    tasks = [(str(shard_tree), s, snap.snapshot_id) for s in snap.shards]
+    idents, numbers, hashes, odd, error = bytearray(), array("q"), bytearray(), {}, None
+    for got in parallel.each_part(held_part, tasks):
+        if error is not None:
+            continue
+        if got["error"] is not None:
+            error = got["error"]
+            continue
+        idents += got["idents"]
+        numbers.frombytes(got["numbers"])
+        hashes += got["hashes"]
+        odd.update(got["odd"])
+    ids = np.frombuffer(bytes(idents), dtype="S16")
+    ns = np.frombuffer(numbers, dtype=np.int64)
+    hs = np.frombuffer(bytes(hashes), dtype=np.uint8).reshape(-1, 16)
+    del idents, hashes
+    # the last record of an identity wins, as in a dict; then by identity
+    _u, first_in_reversed = np.unique(ids[::-1], return_index=True)
+    keep = len(ids) - 1 - first_in_reversed
+    kept_numbers = ns[keep]
+    if odd:
+        odd_n = np.fromiter(odd, dtype=np.int64, count=len(odd))
+        odd = {int(n): odd[int(n)] for n in odd_n[np.isin(odd_n, kept_numbers)]}
+    return HeldClaims(ids[keep], kept_numbers, hs[keep], odd, error)

@@ -72,14 +72,31 @@ not hold at this size; both are local, neither changes what peers exchange (09 �
    written is the in-memory path's (`tests/hold/test_annotations_stream.py`, and against origin/main's code).
    Measured on a synthetic star (tracemalloc, 200,000 claims): in-memory 898 MB, streamed 135 MB in one process
    (one part of 50,000 records), 69 MB in the parent on the pool. RSS on the pool (3 processes): 1 M claims in
-   60 s, parent 421 MB; 2 M in 120 s, parent 556 MB, all processes 1.3 GB — so ~2 GB parent for 12.3 M. Not yet
-   streamed: `hold annotations update` (it still holds the claims and the previous snapshot's records).
+   60 s, parent 421 MB; 2 M in 120 s, parent 556 MB, all processes 1.3 GB — so ~2 GB parent for 12.3 M.
+   **`hold annotations update` streamed the same way** (2026-11-10): the previous snapshot's claims kept as
+   identity digest, number and hash (~40 bytes a claim), read a part a task; a re-check hard-links the held claims
+   file into the workspace instead of copying it (RULE 1). Same bytes, result and log as the in-memory path
+   (`tests/hold/test_annotations_update_stream.py`). Measured on the star, 200,000 claims held and a new file:
+   in-memory 1,404 MB traced, 1.7 GB RSS, 30 s; streamed on the pool (3) 55 MB traced, parent 168 MB RSS, all
+   processes 756 MB, 16.5 s (serial: 294 MB, 29 s). 2 M claims held, re-checked after the target moved (every claim
+   re-pinned, 39,605 dropped): 126 s, parent 689 MB, all processes 1.34 GB — ~300 bytes a claim in the parent, most
+   of it the delta's uid strings (every claim changed), so ~3.7 GB for a re-check of all 12.3 M.
+   **Workspaces clear themselves**: each create and update holds an exclusive flock beside its workspace
+   (`.annotations-<create|update>.<name>.lock`); every create, update and preview, and the worker at boot, removes
+   and says each workspace whose lock can be taken (its process is gone) — never a live one, and a second create of
+   the same name is refused rather than let clear the first's (`annotations_stream.sweep`).
 2. **Searching with it** (`index_of`, `ClaimIndex`): every claim as a Python object in the web process, ~12 M of them.
    Needed: for a large annotations snapshot, a WORK INDEX built once per snapshot as derived data under
    `LOUISE_CACHE_DIR` (invariant 6) and memory-mapped by the web: the claimed uids sorted (with their strings, so a
    lookup never trusts a hash alone), each uid's work (connected components of the work claims, a union-find in
    numpy), each work's members, and the lengths the evidence states. `works.work_groups` reads it in place of the
    in-memory walk; a small collection keeps the in-memory index.
+   **Built automatically** (2026-11-10): `create` and `update` build the claim index of a large snapshot as soon as
+   it is written, and the worker's `claim-index` thread builds any large current snapshot's that is missing
+   (adopted from a peer, made earlier) at boot and when the files change, low priority, idempotent, a failure said
+   once per snapshot (`claim_index.maintain`). The build reads the parts on the parse pool (`index_part`), the same
+   bytes as the one-process build, and no longer reads a first snapshot's delta (which lists every claim) into the
+   shared snapshot cache.
 3. **Showing it**: `works.collapse` shows the largest edition where the claims state the lengths (English on a tie),
    and the shown edition's best passage when it did not match (the operator's A) — a rule of the search's grouping
    step that only an annotation stating lengths turns on; gutenberg's claims state none and are unchanged.

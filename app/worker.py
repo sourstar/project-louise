@@ -2805,6 +2805,65 @@ def _maintenance_allowed() -> bool:
             and node_state.runs(node_state.worker_state(), node_state.INDEX))
 
 
+#: how often the claim index keeper looks for a LARGE annotations snapshot
+#: held with no claim index (one adopted from a peer meanwhile); poked at
+#: once when the files change (`_poke_claim_index`)
+CLAIM_INDEX_INTERVAL_S = 300.0
+_claim_index_poke = threading.Event()
+#: the collection files as last seen: (name, mtime_ns) of each
+_claim_index_files: tuple | None = None
+
+
+def _poke_claim_index() -> None:
+    """Asked at the end of every `_sync_collections`: when the collection
+    files changed — an annotations collection added, adopted, its file
+    edited — the claim index keeper looks at once rather than at its next
+    interval. A stat of each file, never a parse."""
+    global _claim_index_files
+    try:
+        seen = tuple(sorted((p.name, p.stat().st_mtime_ns) for p in collections_mod.collections_dir().glob("*.toml")))
+    except OSError:
+        return
+    if seen != _claim_index_files:
+        _claim_index_files = seen
+        _claim_index_poke.set()
+
+
+def _claim_index_keeper() -> None:
+    """THE DERIVED STATE OF THE ANNOTATIONS COLLECTIONS, kept by the worker
+    (2026-11-10): first, every workspace a create or update left when it was
+    stopped mid-pass is removed and said (`annotations_stream.sweep`; ~5 GB
+    for wikipedia's); then, at boot and whenever the files change, every
+    LARGE annotations snapshot held here with no claim index gets one
+    (`claim_index.maintain`) — without it its claims group nothing at search.
+    Its own thread, low priority, so a round never waits for it; idempotent
+    (a built index is skipped) and bounded (a failed build is said once per
+    snapshot); paused with the node's index work (`_maintenance_allowed`);
+    out at the worker's stop within a second, or between two parts of a
+    build."""
+    from .hold import annotations_stream, claim_index
+    _lower_own_priority(INDEX_MAINTAINER_NICE)
+
+    def log(m: str) -> None:
+        print(f"{time.strftime('%H:%M:%S')} [node info:annotations] {m}", flush=True)
+    root = collections_mod.louise_root() / "collections"
+    try:
+        annotations_stream.sweep(root, log)
+    except Exception as e:   # noqa: BLE001 — a safeguard, never a boot blocker
+        log(f"the workspaces of stopped creates were not cleared: {type(e).__name__}: {e}")
+    failed: dict[str, str] = {}
+    while not _stop.is_set():
+        _claim_index_poke.clear()
+        if _maintenance_allowed():
+            try:
+                claim_index.maintain(root, stop=_stop.is_set, log=log, failed=failed, isolated=True)
+            except Exception as e:   # noqa: BLE001 — the thread outlives a bad pass
+                log(f"claim index pass failed: {type(e).__name__}: {e}")
+        deadline = time.monotonic() + CLAIM_INDEX_INTERVAL_S
+        while not _stop.is_set() and not _claim_index_poke.is_set() and time.monotonic() < deadline:
+            _stop.wait(1.0)
+
+
 _ask_indexed: dict[str, tuple] = {}
 
 
@@ -5153,6 +5212,9 @@ def _sync_collections(all_collections, cons, last_discover, pipeline: bool = Fal
         _leave(gone, cons, current, previous_by_name, last_discover,
                "removed — ingestion stopped, data kept")
 
+    # the files applied: an annotations collection added or adopted is
+    # looked at by the claim index keeper now, not at its next interval
+    _poke_claim_index()
     return [c for c in current if c.name in cons]
 
 
@@ -6130,6 +6192,9 @@ def run_forever():
     # a compaction never idles a pipeline thread or the GPU loop
     threading.Thread(target=_index_maintainer, name="index-maintainer",
                      daemon=True).start()
+    # the annotations collections' derived state: the workspaces a stopped
+    # create left, and a large snapshot's claim index (`_claim_index_keeper`)
+    threading.Thread(target=_claim_index_keeper, name="claim-index", daemon=True).start()
     # the work the web queues because it holds no private key (app/jobs.py);
     # what a stopped worker left running is queued again first
     requeued = jobs.requeue_running(node_con)
