@@ -242,6 +242,22 @@ def test_each_ask_search_says_its_steps(isolated_config, capsys):
     assert line in capsys.readouterr().out
 
 
+def test_the_search_line_says_which_lists_kept_their_fused_order_and_why(isolated_config):
+    """München, 2026-11-10: rerank fell from 7-20 s to 1-12 ms and nothing
+    said whether the reranker had been called (05 §5.6: never silent)."""
+    from app import web
+    body = web.AskQueryBody(query="balene")
+    t = {"total": 9_000.0, "rerank": 1.0}
+    line = web._say_search_timings(body, {"hits": [], "timings": t, "reranked": {"pubmed": True,
+                                                                                 "wikipedia": True}})
+    assert line.endswith("rerank 1 — reranked: all 2")
+    line = web._say_search_timings(body, {
+        "hits": [], "timings": t, "reranked": {"pubmed": True, "wikipedia": False, "gutenberg": False},
+        "rerank_withheld": [{"collection": "wikipedia", "reason": "rerank-bge did not load within 30 s"}]})
+    assert line.endswith("rerank 1 — reranked 1 of 3; fused order kept for wikipedia: rerank-bge did not "
+                         "load within 30 s; gutenberg: no reranker or no hits")
+
+
 def test_the_keeper_loads_nothing_while_a_question_holds_the_claim(monkeypatch):
     started = []
     monkeypatch.setattr(resident, "_start_warm", lambda due, stop: started.append(due) or due)

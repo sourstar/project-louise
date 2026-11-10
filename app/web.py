@@ -838,9 +838,30 @@ def _say_search_timings(body: AskQueryBody, result: dict) -> str:
             f"{len(result.get('hits') or [])} hits): "
             f"languages {t.get('languages', 0):,.0f}"
             + "".join(f", {leg} {t.get(leg, 0):,.0f}{slowest(leg)}" for leg in ("catalog", "fts", "dense"))
-            + f", rerank {t.get('rerank', 0):,.0f}")
+            + f", rerank {t.get('rerank', 0):,.0f}" + _rerank_verdict(result))
     print(line, flush=True)
     return line
+
+
+def _rerank_verdict(result: dict) -> str:
+    """WHETHER EACH LIST WAS RERANKED, said on the search's line (München,
+    2026-11-10: rerank 7-20 s fell to 1-12 ms with no line saying whether
+    the reranker had been called; a list kept in its fused order is lower
+    quality and must never be silent, 05 §5.6). The reasons are the ones the
+    result already carries (`rerank_withheld`); a list with no reranker
+    configured, or no hits, is "none"."""
+    done = result.get("reranked")
+    if isinstance(done, bool):
+        done = {"": done}
+    if not isinstance(done, dict) or not done:
+        return ""
+    why = {w.get("collection"): w.get("reason") for w in (result.get("rerank_withheld") or [])
+           if isinstance(w, dict)}
+    kept = [n for n, ok in done.items() if not ok]
+    if not kept:
+        return f" — reranked: all {len(done)}"
+    return (f" — reranked {len(done) - len(kept)} of {len(done)}; fused order kept for "
+            + "; ".join(f"{n or 'the list'}: {why.get(n) or 'no reranker or no hits'}"[:200] for n in kept))
 
 
 def _relay_search(job: relay.Job, body: AskQueryBody) -> None:
