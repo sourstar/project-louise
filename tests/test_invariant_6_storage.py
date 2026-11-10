@@ -196,6 +196,7 @@ _DERIVED_WRITERS = {
     "app/plugins/legi/pack.py": "the per-tarball pack and the scan's facts, rebuilt from the tarballs",
     "app/ask/part_cache.py": "per-part search facts, rebuilt from the part on a miss",
     "app/speech.py": "synthesized sentences, made again by the speech model on a miss",
+    "app/hold/claim_index.py": "a large annotations snapshot's claim index, rebuilt from its held parts",
 }
 
 
