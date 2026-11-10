@@ -97,7 +97,7 @@ def index_part(path: str, gone: frozenset) -> dict[str, Any]:
             "claims": claims}
 
 
-def build(shard_tree: Path, snap=None, *, stop=None) -> dict[str, Any]:
+def build(shard_tree: Path, snap=None, *, stop=None, dest: Path | None = None) -> dict[str, Any]:
     """Write the index of `shard_tree`'s current snapshot (or `snap`) if it is
     not there yet. Returns what it did. Streams the parts, a part a task on
     the parse pool (`index_part`; CLAUDE.md, every pass over a collection
@@ -111,7 +111,7 @@ def build(shard_tree: Path, snap=None, *, stop=None) -> dict[str, Any]:
     snap = snap if snap is not None else seeder.cached_snapshot(shard_tree)
     if snap is None:
         return {"skipped": "no snapshot held"}
-    dest = place(shard_tree, snap.hash)
+    dest = Path(dest) if dest is not None else place(shard_tree, snap.hash)
     if (dest / "meta.json").is_file():
         return {"skipped": "built", "place": str(dest)}
     # a FIRST snapshot tombstones nothing (`compute_delta(None, …)`), and its
@@ -165,7 +165,49 @@ def build(shard_tree: Path, snap=None, *, stop=None) -> dict[str, Any]:
     return {**meta, "place": str(dest)}
 
 
-def maintain(root: Path, *, stop=None, log=print, failed: dict[str, str] | None = None) -> list[dict[str, Any]]:
+def _build_child(tree: str, dest: str) -> None:
+    """`build_isolated`'s process: the parent watched (a worker gone ends
+    it), the build into the place the PARENT resolved (a child resolves
+    nothing of its own: its configuration is the environment's, not the
+    parent's), and an exit code that says whether it wrote or found one."""
+    import sys
+    from app import parallel
+    parallel.watch_parent()
+    got = build(Path(tree), dest=Path(dest))
+    sys.exit(0 if ("ends" in got or got.get("skipped") == "built") else 3)
+
+
+def build_isolated(shard_tree: Path, snap, *, stop=None, poll_s: float = 1.0) -> dict[str, Any]:
+    """`build` in a PROCESS OF ITS OWN (2026-11-10, before the first deploy):
+    the merge of the parts' arrays and its sort peak at about three copies of
+    ~21 bytes an end — ~1.5 GB for wikipedia-articles' 12.3 M claims — and in
+    the worker's own process that would sit on top of its 1.6–3.8 GB under
+    the container's 12 GiB cap, at every boot that finds an index missing.
+    Here the peak lives and dies with a child; the worker keeps its size.
+    `stop()`, asked every `poll_s`, terminates the child: nothing is
+    published without its `meta.json`, which is written last, and the build
+    lock (`derived.building`, a flock) goes with its holder."""
+    import multiprocessing
+    shard_tree = Path(shard_tree)
+    dest = place(shard_tree, snap.hash)
+    p = multiprocessing.get_context("spawn").Process(target=_build_child, args=(str(shard_tree), str(dest)),
+                                                     name="claim-index-build", daemon=False)
+    p.start()
+    while True:
+        p.join(poll_s)
+        if p.exitcode is not None:
+            break
+        if stop is not None and stop():
+            p.terminate()
+            p.join(10)
+            return {"stopped": "the worker stopped during the build", "place": str(dest)}
+    if p.exitcode != 0 or not (dest / "meta.json").is_file():
+        raise RuntimeError(f"the build's process exited {p.exitcode} and wrote no index")
+    return {**json.loads((dest / "meta.json").read_text()), "place": str(dest)}
+
+
+def maintain(root: Path, *, stop=None, log=print, failed: dict[str, str] | None = None,
+             isolated: bool = False) -> list[dict[str, Any]]:
     """The index of every annotations collection held under `root` whose
     current snapshot is LARGE and has none yet — one adopted from a peer, or
     made before `create` and `update` built it (2026-11-10): without it its
@@ -173,7 +215,8 @@ def maintain(root: Path, *, stop=None, log=print, failed: dict[str, str] | None 
     built one is skipped, by `build` too); bounded — one pass, a collection
     at a time, `stop()` asked between parts, and a snapshot whose build
     failed is said once in `failed` and left until it changes. The worker's
-    keeper runs it at boot and when the files change (app/worker.py)."""
+    keeper runs it at boot and when the files change (app/worker.py), each
+    build `isolated` in a process of its own (`build_isolated`)."""
     from app import collections as collections_mod
     from app.hold import collection as col
     from app.share import seeder
@@ -193,7 +236,7 @@ def maintain(root: Path, *, stop=None, log=print, failed: dict[str, str] | None 
         if key in failed:
             continue
         try:
-            got = build(tree, snap, stop=stop)
+            got = build_isolated(tree, snap, stop=stop) if isolated else build(tree, snap, stop=stop)
         except Exception as e:   # noqa: BLE001 — said once; the snapshot's next version is tried
             failed[key] = f"{type(e).__name__}: {e}"
             log(f"[annotations] {c.name}: the claim index of {snap.snapshot_id} could not be built "

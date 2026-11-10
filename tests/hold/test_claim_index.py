@@ -174,3 +174,31 @@ def test_the_worker_keeps_them_in_a_thread_that_leaves_at_the_stop(tmp_path, mon
         t.join(timeout=10)
         worker._stop.clear()
     assert not t.is_alive(), "out at the stop"
+
+
+def test_the_workers_build_runs_in_a_process_of_its_own(tmp_path, monkeypatch):
+    """The merge and sort peak (~1.5 GB at 12.3 M claims) lives and dies with
+    a child, never on top of the worker's own memory; the child writes the
+    bytes the in-process build writes; a stop terminates it and publishes
+    nothing."""
+    import os
+    import shutil
+    from app.share import seeder
+    root = _held_root(tmp_path, monkeypatch)
+    _make(root, claims_file(a_claim(), a_claim("pubmed:3", "pubmed:1"), a_claim("pubmed:2", "pubmed:4")),
+          lambda m: None)
+    tree = col.shard_dir_of(root, "same")
+    snap = seeder.cached_snapshot(tree)
+    dest = claim_index.place(tree, snap.hash)
+    in_process = {p.name: p.read_bytes() for p in dest.iterdir() if p.suffix in (".npy", ".json")}
+    shutil.rmtree(dest)
+    pids = []
+    real = claim_index.build
+    monkeypatch.setattr(claim_index, "build", lambda *a, **k: pids.append(os.getpid()) or real(*a, **k))
+    got = claim_index.build_isolated(tree, snap)
+    assert pids == [], "built in another process: nothing ran here"
+    assert got["claims"] == 3
+    assert {p.name: p.read_bytes() for p in dest.iterdir() if p.suffix in (".npy", ".json")} == in_process
+    shutil.rmtree(dest)
+    got = claim_index.build_isolated(tree, snap, stop=lambda: True, poll_s=0.0)
+    assert "stopped" in got and not (dest / "meta.json").exists(), "a stop publishes nothing"

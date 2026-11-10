@@ -2856,7 +2856,7 @@ def _claim_index_keeper() -> None:
         _claim_index_poke.clear()
         if _maintenance_allowed():
             try:
-                claim_index.maintain(root, stop=_stop.is_set, log=log, failed=failed)
+                claim_index.maintain(root, stop=_stop.is_set, log=log, failed=failed, isolated=True)
             except Exception as e:   # noqa: BLE001 — the thread outlives a bad pass
                 log(f"claim index pass failed: {type(e).__name__}: {e}")
         deadline = time.monotonic() + CLAIM_INDEX_INTERVAL_S
