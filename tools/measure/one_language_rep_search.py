@@ -56,7 +56,7 @@ _view_idx: dict = {}
 
 
 def _view_index(group, collection=None):
-    real = collection.fts_dir / group
+    real = fts.base_of(collection) / group      # a shared index too (app/text_index.py)
     stamp = (real / "meta.json").stat().st_mtime_ns
     key = (str(real), group)
     with _view_lock:

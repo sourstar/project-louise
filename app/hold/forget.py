@@ -236,9 +236,15 @@ def forget(root: Path, name: str, *, kinds=None, dry_run: bool = False,
     if kinds:
         return _forget_vectors(root, name, codex, base, kinds=kinds, dry_run=dry_run)
     plan = [p for p in (held, base) if p.exists()]
+    from app import text_index
     if dry_run:
         out: dict[str, Any] = {"collection": name, "dry_run": True,
                                "would_remove": [str(p) for p in plan], "removed": []}
+        # a text index shared with sisters stays while one of them is held,
+        # and goes with its last member (app/text_index.py)
+        shared = text_index.leave_at_forget(root, name, dry_run=True)
+        if shared is not None:
+            out["text_index"] = shared
         if not kinds:
             # the folders under the shared roots too (step 4 below): a dry run
             # naming the directory alone under-said what goes, the SHARD,
@@ -274,8 +280,19 @@ def forget(root: Path, name: str, *, kinds=None, dry_run: bool = False,
         elif target.is_dir():
             shutil.rmtree(target)
         removed.append(str(target))
-    # 5. the directory, whole
+    # 5. a text index shared with sisters (app/text_index.py): kept while
+    #    another held member reads it — the next by name writes it if this
+    #    one did — and removed with its last member. Before the directory,
+    #    whose placement file says where the shared index is
+    shared = text_index.leave_at_forget(root, name)
+    if shared is not None and shared.get("removed"):
+        removed.append(shared["dir"])
+    # 6. the directory, whole
     if base.exists():
         shutil.rmtree(base)
         removed.append(str(base))
-    return {"collection": name, "erased_deposits": erased, "removed": removed}
+    text_index.invalidate()
+    out = {"collection": name, "erased_deposits": erased, "removed": removed}
+    if shared is not None:
+        out["text_index"] = shared
+    return out

@@ -391,15 +391,19 @@ def _tree(root: Path, name: str, rel: str) -> Path:
     return vector_place.table_dir(root, name) if rel == "lance" else Path(root) / name / rel
 
 
-def to_copy(root: Path, pred_name: str, name: str) -> dict[str, int]:
+def to_copy(root: Path, pred_name: str, name: str, *, linked_index: bool = False) -> dict[str, int]:
     """The bytes of each of `COPIED` the target does not hold yet (a resumed
     carry counts only what is left), counted from the predecessor's files by
-    their size."""
+    their size. `linked_index`: a sister's text index, whose language groups
+    are hard-linked (carry `_sister_index`): only the rest of it counts."""
+    from app import text_index
     out: dict[str, int] = {}
     for rel in COPIED:
         there, src = _tree(root, name, rel), _tree(root, pred_name, rel)
         if not there.exists() or (there.is_dir() and not any(there.iterdir())):
             out[rel] = _bytes_under(src) if src.exists() else 0
+            if rel == "index" and linked_index and src.is_dir():
+                out[rel] -= sum(_bytes_under(g) for g in text_index.group_dirs(src))
     return out
 
 
@@ -419,7 +423,8 @@ def _lands(root: Path, name: str, rel: str) -> Path:
     return vector_place.destination_for_new(root, name)
 
 
-def rooms(root: Path, pred_name: str, name: str, *, make: bool = True) -> list[dict[str, Any]]:
+def rooms(root: Path, pred_name: str, name: str, *, make: bool = True,
+          linked_index: bool = False) -> list[dict[str, Any]]:
     """`[{where, need, free}]`, one per filesystem the carry writes to: the
     predecessor's vector table, text index and manifest, each counted only
     where the target does not hold it yet (a resumed carry), on the
@@ -429,7 +434,7 @@ def rooms(root: Path, pred_name: str, name: str, *, make: bool = True) -> list[d
     makes nothing: the free space is read where the target would be made."""
     import shutil
     dst = Path(root) / name
-    sizes = to_copy(root, pred_name, name)
+    sizes = to_copy(root, pred_name, name, linked_index=linked_index)
     if make:
         dst.mkdir(parents=True, exist_ok=True)
     by_fs: dict[int, dict[str, Any]] = {}
@@ -443,11 +448,13 @@ def rooms(root: Path, pred_name: str, name: str, *, make: bool = True) -> list[d
     return list(by_fs.values())
 
 
-def room(root: Path, pred_name: str, name: str, *, make: bool = True) -> tuple[int, int]:
+def room(root: Path, pred_name: str, name: str, *, make: bool = True,
+         linked_index: bool = False) -> tuple[int, int]:
     """`(bytes the carry's copy needs, bytes free where it writes)` on the
     filesystem with the least to spare (`rooms`): one that cannot hold its
     share refuses the whole carry."""
-    worst = min(rooms(root, pred_name, name, make=make), key=lambda r: r["free"] - r["need"])
+    worst = min(rooms(root, pred_name, name, make=make, linked_index=linked_index),
+                key=lambda r: r["free"] - r["need"])
     return worst["need"], worst["free"]
 
 

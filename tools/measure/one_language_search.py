@@ -54,7 +54,7 @@ _view_idx: dict = {}
 
 
 def _view_index(group: str, collection=None) -> "tantivy.Index":
-    real = collection.fts_dir / group
+    real = fts.base_of(collection) / group      # a shared index too (app/text_index.py)
     meta = real / "meta.json"
     stamp = meta.stat().st_mtime_ns
     key = (str(real), group)

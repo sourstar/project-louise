@@ -1,6 +1,6 @@
 # Sisters share one text index (operator, 2026-11-10: choice A)
 
-**Status:** design, for the build that follows. It amends 02 §2.7. Until now that section read: a sister's "manifest and text index are copied, being functions of the records alone". The amendment is that a sister whose index would be byte for byte her sister's no longer gets a copy of it: she shares it.
+**Status:** BUILT 2026-11-10 (app/text_index.py, tests/test_text_index.py); "As built" at the end names where the build amends this design. It amends 02 §2.7. Until now that section read: a sister's "manifest and text index are copied, being functions of the records alone". The amendment is that a sister whose index would be byte for byte her sister's no longer gets a copy of it: she shares it.
 
 The operator's question was: "2 or more sisters share the same corpus but not the same vectors … in a node the indexing for a sister is valid for all of them, isn't it?" The answer was yes, for sisters that cut the same chunks, and the operator chose **A**: "One shared text index, written by one sister, read by the others". Vocabulary (operator, the same day; 01 and 02 §2.7): a sister's source is **her sister**, never her mother.
 
@@ -100,3 +100,30 @@ A single collection's migration is the rename alone. The comparison statement is
 - **Migration:** two existing copies end as one directory; the other member's marks are reset where they differed; the freed bytes are reported; it is idempotent.
 - **Forget:** the shared directory stays while held and goes with its last member.
 - **Invariants 2 and 6, and the plan check** of the mark-copy and comparison statements.
+
+## As built (2026-11-10): the amendments to the design above
+
+Each one is simpler than the design's, or removes a case it left open.
+
+| design | as built | why |
+|---|---|---|
+| `Collection.fts_dir` resolves to `.text-index/<identity>` | `fts_dir` stays `<name>/index`; the language groups are at `text_index.base(fts_dir)`, read from `<name>/state/text-index.json` (the PLACEMENT) per use, cached on its mtime | the catalogue (`_catalog`, keyed on rowids) and the facets live in `index/` and must stay per collection; the web follows a move without a restart |
+| every collection's index under `.text-index/<identity>` | only GROUPS of two or more; a collection with no sister keeps `<name>/index`, byte for byte | no move, no risk and no cost for today's node (no sister group, München 2026-11-10); a member left alone goes back to its own index, hard-linked |
+| a reader ATTACHes the writer's manifest | a read-only connection on the writer's manifest, per thread; the reader's write is guarded on its row being the one read | ATTACH and DETACH cannot run inside a transaction, and the stage's writes are |
+| same record = same `uid` at the same `content_hash` | the same `content_hash`, else the same `txt_hash`, else the same discovery signature (`path`, `mtime`, `size`) | both hashes are NULL on most rows of the node's manifests (wikipedia's 30.9 M rows, Perugia's 79,659) |
+| the reader's pass driven by an event the writer sets plus a slow timer | PUSHES: the writer's fts commit gives its uids to every reader's queue, the reader's own rdf commit gives its own; one WALK of the reader's pending rows when its thread starts (the pushes are in memory) | O(batch) per commit; a slow timer re-walked O(pending) rows the writer had not reached, every time |
+| migration only at boot; `split` by hard link | `settle` at the worker's boot: FORM (the member with the most indexed documents renames its group directories in), JOIN (marks reset where they differ from the writer's, then the own copy removed), LEAVE (a hard-linked copy back into `<name>/index`); another filesystem leaves the group unshared, said in the log | one function, idempotent, every step complete or redone |
+| an index directory no collection resolves to is removed by the sweep | removed by `hold collection forget` of its group's LAST member (part of the forget approved); one found otherwise is set aside (`.stale-…`) and named at boot, never deleted, never adopted | an index no manifest's marks describe must not be read as anyone's |
+| a joining sister hard-links her sister's index | the carry (case J) hard-links the language groups (lock files created empty, never one inode for two) and copies the catalogue; when her sister's index is already shared and their identities are equal, she JOINS at once and her linked copy goes; the proof compares the index AS READ (`text_index.index_digest`) | no byte copied, no reset at the next boot |
+
+**A reader never writes the index**: `fts.index_books` and `rewrite_without` raise
+`fts.ReaderWrite` for it, its deletes are skipped (its writer makes the same
+ones), and `_next_book` selects no fts work for it — so its documents waiting on
+the writer cost no round. `hold collection show` says whose index a collection
+reads (`text_index`).
+
+**Measured: nothing yet.** The node holds no sister group today; the first
+same-layers sister (case J) is the first measurement — the carry's linked
+bytes, the boot's `settle` (its `reset_differing` compares a manifest's rows
+on threads, ~O(rows)), and the reader's copy rounds (`fts` log lines "copied
+N documents' index marks from W").

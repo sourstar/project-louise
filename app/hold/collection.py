@@ -1349,7 +1349,17 @@ def show(root: Path, ref: str) -> dict[str, Any]:
         # the encoder pin calls that failed for this collection's processing:
         # each a defect signal (app/model_pins.py; operator, 2026-10-23)
         "model_pin_failures": _pin_failures(name),
+        # sisters share one text index (app/text_index.py): its own, or whose
+        "text_index": _text_index(root, name),
     }
+
+
+def _text_index(root: Path, name: str) -> dict:
+    from app import text_index
+    try:
+        return text_index.describe(root, name)
+    except Exception as e:   # noqa: BLE001 — show never fails on it
+        return {"shared": None, "says": f"unknown ({type(e).__name__}: {e})"}
 
 
 def _pin_failures(name: str) -> list[dict]:

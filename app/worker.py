@@ -41,7 +41,7 @@ from . import (backend, catalog, chunking, collections as collections_mod, confi
                fts, issues as issues_mod, lookahead, model_load, model_pins, origin_missing,
                resident,
                node_state,
-               plugin_io, refs, sched, sizing, slice_scope, spaces, stats)
+               plugin_io, refs, sched, sizing, slice_scope, spaces, stats, text_index)
 from .rage import card_record, dispatch
 from .rage.dispatch import Level
 from .acquire import engine as acquire_engine
@@ -328,6 +328,9 @@ def stage_rdf(con, row, collection) -> None:
     if found:
         issues_mod.record_many(con, found, codes=issues_mod.declared(plugin),
                                checked=plugin_io.metadata_checks(plugin), now=now)
+    # a sister reading a shared text index copies these documents' marks once
+    # this commits (`_execute_step`, text_index.parsed)
+    _committed.rdf = [row["uid"], *(p["uid"] for p in peers)]
     # The catalog index is committed HERE, before the caller commits the
     # marks (invariant 2). A failure is CatalogUnavailable: the transaction
     # rolls back and the batch is deferred, never recorded as an error.
@@ -728,6 +731,59 @@ def drop_fts_ahead(collection=None) -> None:
         _fts_ahead.drop(str(collection.manifest_path))
 
 
+#: the uids a stage's batch wrote, for what runs after its commit
+#: (`_execute_step`): the shared text index's pushes (app/text_index.py)
+_committed = threading.local()
+
+
+def _reads_shared(collection) -> bool:
+    """A sister that READS a shared text index (app/text_index.py): its index
+    stage copies its writer's marks instead of indexing; never selected for
+    fts here, so a document its writer has not reached costs it nothing."""
+    if collection is None:
+        return False
+    try:
+        return text_index.role(collection).reader
+    except Exception:   # noqa: BLE001 — a doubt reads as on its own: it indexes
+        return False
+
+
+def _fts_copy_round(con, collection) -> bool:
+    """A reader's index stage: the writer's marks and tags copied onto this
+    collection's documents where the writer holds the same record indexed
+    (text_index.copy_marks), in one short `BEGIN IMMEDIATE`; the genesis
+    demand as the index stage's own. True when something was copied — a
+    round that copied nothing is not progress, and the thread goes on to
+    rdf and embed in the same round."""
+    role = text_index.role(collection)
+    if not role.reader:
+        return False
+    rows, walked = text_index.pending_rows(con, collection, fts_version=config.FTS_VERSION,
+                                           entity_version=config.ENTITY_VERSION)
+    if not rows:
+        return False
+    t0 = time.monotonic()
+
+    def _after(copied):
+        bundle_genesis.announce(collection, [r["uid"] for r in copied])
+        reopened = bundle_genesis.reopen_finals_for_range(
+            con, collection, (r["native_id"] for r in copied))
+        if reopened:
+            db.log_event(con, "info", "genesis",
+                         f"fts crossed the range of final shard(s) {', '.join(reopened)}: "
+                         f"reopened for one more pass")
+    copied = text_index.copy_marks(con, collection, role, rows, after=_after)
+    if not copied:
+        return False
+    took = time.monotonic() - t0
+    _batch_log(con, "fts", collection,
+               f"copied {len(copied)} documents' index marks from {role.writer}, whose text index "
+               f"this collection reads ({took:.2f}s{', walking' if walked else ''})",
+               docs=len(copied), secs=took, emit=True)
+    sched.scheduler().demand(embed_resource(collection), collection.name)
+    return True
+
+
 def stage_fts(con, row, collection) -> None:
     """Index `row`, and as many other fts-pending documents as the batch caps
     allow, through ONE tantivy commit.
@@ -875,6 +931,9 @@ def stage_fts(con, row, collection) -> None:
     # this way on pubmed.
     reopened = bundle_genesis.reopen_finals_for_range(
         con, collection, (r["native_id"] for r, _ in batch))
+    # the sisters reading this index copy these marks once they commit
+    # (`_execute_step`, text_index.indexed)
+    _committed.fts = [m[1] for m in marks]
     if reopened:
         db.log_event(con, "info", "genesis",
                      f"fts crossed the range of final shard(s) "
@@ -1243,8 +1302,8 @@ def _archive_yields(con, collection) -> bool:
     the encoder's. Running fts is never wasted work for either of them,
     which is what makes this safe without modelling who needs what.
     """
-    if config.PHASE_EMBED_LOW <= 0:
-        return False
+    if config.PHASE_EMBED_LOW <= 0 or _reads_shared(collection):
+        return False                 # a reader's writer indexes: nothing here to yield to
     ready = con.execute(_FTS_BACKLOG, (config.MAX_RETRIES, 1)).fetchone()[0]
     if not ready:
         return False                 # nothing to feed it with; let the archive run
@@ -1674,13 +1733,17 @@ def reset_backfill_cursors() -> None:
         _lead_cursor.clear()
 
 
-def _ingest_pending(con) -> bool:
+def _ingest_pending(con, collection=None) -> bool:
     """Does this collection still have rdf or fts work? Two LIMIT-1 index
     probes. Genesis uses it to decide whether a shard read may wait for a
     batch (rdf/fts would otherwise starve behind it) or should happen now
-    (nothing else to do on this thread)."""
-    return con.execute(_RDF_PENDING, (config.MAX_RETRIES,)).fetchone() is not None \
-        or con.execute(_FTS_FRESH, (config.MAX_RETRIES,)).fetchone() is not None
+    (nothing else to do on this thread). A sister reading a shared text
+    index has no fts work of its own: its writer indexes."""
+    if con.execute(_RDF_PENDING, (config.MAX_RETRIES,)).fetchone() is not None:
+        return True
+    if _reads_shared(collection):
+        return False
+    return con.execute(_FTS_FRESH, (config.MAX_RETRIES,)).fetchone() is not None
 
 
 def _next_book(con, scope, embed_allowed=True, collection=None):
@@ -1720,7 +1783,12 @@ def _next_book(con, scope, embed_allowed=True, collection=None):
     # fts therefore lags rdf by at most one batch — against the whole corpus
     # under the old stage-global ordering. With FTS_BATCH_DOCS=1 this degrades
     # exactly to one-for-one alternation.
-    fts_row = con.execute(_FTS_FRESH, (config.MAX_RETRIES,)).fetchone()
+    # A SISTER READING A SHARED TEXT INDEX selects no fts work: its writer
+    # indexes, and `_fts_copy_round` copies the marks as it does
+    # (app/text_index.py). Its documents waiting on the writer are deferred,
+    # never re-selected round after round.
+    reader = _reads_shared(collection)
+    fts_row = None if reader else con.execute(_FTS_FRESH, (config.MAX_RETRIES,)).fetchone()
     if fts_row is not None:
         # the watermark is what fts will ACTUALLY take (app/sizing.py), not
         # the configured count: sized batches would otherwise wait for a
@@ -1744,7 +1812,7 @@ def _next_book(con, scope, embed_allowed=True, collection=None):
     # ingestion of new documents for the length of a full re-index. It is
     # also the one selection here that cannot use the fts_done column, so
     # keeping it last means it is only reached on a caught-up collection.
-    r = _next_reindex(con, collection)
+    r = None if reader else _next_reindex(con, collection)
     if r:
         return "fts", r
     # 4. dense backfill only under all / p2p — coverage-aware (amendment 38):
@@ -3182,7 +3250,7 @@ def _drain_remote_archive(con, collection, stop) -> bool:
     stop = _AnyStop(stop, _parse_held) if stop is not None else _AnyStop(_parse_held)
     try:
         result = bundle_genesis.drain_next_shard(
-            con, collection, stop=stop, eager=not _ingest_pending(con))
+            con, collection, stop=stop, eager=not _ingest_pending(con, collection))
     except Exception as e:   # noqa: BLE001 — an archive must never crash the worker
         db.log_event(con, "error", "genesis",
                      f"unexpected genesis failure: {type(e).__name__}: {e}"[:400])
@@ -4069,6 +4137,7 @@ def _execute_step(con, collection, stage, row) -> bool:
     (delete-then-insert, invariant 2).
     """
     t0 = time.time()
+    _committed.rdf = _committed.fts = ()
     if stage not in _NO_OUTER_TRANSACTION:
         con.execute("BEGIN IMMEDIATE")
     try:
@@ -4216,6 +4285,16 @@ def _execute_step(con, collection, stage, row) -> bool:
         # committed: its rows are text-index candidates, parsed from now on
         # while this thread goes on (the look-ahead's chain, stage_fts)
         _fts_after_rdf(con, collection)
+    # committed: the sisters sharing this text index learn of it
+    # (app/text_index.py) — a reader its own new rows, every reader of a
+    # writer the documents it just indexed
+    try:
+        if stage == "rdf" and _committed.rdf:
+            text_index.parsed(collection, _committed.rdf)
+        elif stage == "fts" and _committed.fts:
+            text_index.indexed(collection, _committed.fts)
+    except Exception:   # noqa: BLE001 — a push lost is a walk at the next start, never a failure
+        pass
     dt = round(time.time() - t0, 2)
     if stage not in ("rdf", "fts") or int(row["native_id"]) % 500 == 0:
         db.log_event(con, "info", stage, f"done in {dt}s", row["uid"])
@@ -4271,6 +4350,8 @@ def _run_one_step(con, collection, last_idle_log: dict,
         if stage == "embed" and not _embedding_allowed(con, collection):
             return False        # rdf/fts continue on the pipeline thread, or the profile's pause ends
     else:
+        if _fts_copy_round(con, collection):
+            return True             # a reader's index stage (app/text_index.py)
         stage, row = _next_book(con, scope, collection=collection)
         if stage == "embed" and not _embedding_allowed(con, collection):
             # The endpoint failed its behavioral baseline (or is down).
@@ -4657,6 +4738,9 @@ def _pipeline_worker(collection, gone: threading.Event) -> None:
     con = db.connect(collection)
     db.log_event(con, "info", "worker",
                  f"pipeline thread started for {collection.name!r}")
+    # a reader of a shared text index walks its pending rows once: the
+    # pushes of its writer's commits are in memory, and a stop loses them
+    text_index.walk_again(collection)
     last_idle = 0.0
     try:
         while not _stop.is_set() and not gone.is_set():
@@ -4737,6 +4821,10 @@ def _pipeline_worker(collection, gone: threading.Event) -> None:
                 # work, fts goes first (_archive_yields).
                 if not _archive_yields(con, collection) and \
                         _drain_remote_archive(con, collection, gone):
+                    continue
+                # a sister reading a shared text index: its writer's marks
+                # copied, as its index stage (app/text_index.py)
+                if _fts_copy_round(con, collection):
                     continue
                 scope = db.get_scope(con)
                 stage, row = _next_book(con, scope, embed_allowed=False, collection=collection)
@@ -5251,6 +5339,8 @@ def _leave(gone: str, cons, current, previous_by_name, last_discover, why: str) 
     if left is not None:
         from . import catalog as catalog_mod, embeddings as embeddings_mod, fts as fts_mod
         fts_mod.forget(left.fts_dir)
+        # a shared text index that went with its last member (app/text_index.py)
+        fts_mod.forget_missing()
         catalog_mod.forget(left)
         embeddings_mod.forget(left)
     cons[gone].close()
@@ -6147,6 +6237,19 @@ def run_forever():
         for c, reason in refused:
             print(f"NOT SERVED: {c.name}: {reason}", file=sys.stderr)
         all_collections = [c for c in all_collections if c.name not in names]
+
+    # SISTERS SHARE ONE TEXT INDEX (app/text_index.py): groups are formed,
+    # joined and left HERE, before any stage and before this process opens an
+    # index — the one moment no thread of this worker holds one open
+    try:
+        settled = text_index.settle(collections_mod.louise_root() / "collections", all_collections,
+                                    log=lambda m: print(f"[info:text-index] {m}", flush=True))
+        if settled["freed"]:
+            print(f"[info:text-index] {settled['freed'] / 2**30:.2f} GiB of duplicate text "
+                  f"indexes freed", flush=True)
+    except Exception as e:   # noqa: BLE001 — every collection keeps the index it had
+        print(f"[warn:text-index] not settled ({type(e).__name__}: {e}); every collection "
+              f"keeps the index it had", flush=True)
 
     _publish_collections(all_collections)
     cons = {c.name: db.connect(c) for c in all_collections}

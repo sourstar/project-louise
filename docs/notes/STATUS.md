@@ -44,6 +44,9 @@ measured (published figures disagree).
   one: the operator chose the general **louise-rerank-bge** for them ("Option A with a note that in the future we
   will evaluate dedicated re-rankers"). **FUTURE: evaluate dedicated rerankers** — a legal one for normattiva(-nemo)
   and the other legal collections, one for wikidata's entities — on each collection's judged set, against bge.
+- **Sisters share one text index (2026-11-10, operator: A)**: BUILT, not deployed — [sister-shared-index.md](sister-shared-index.md)
+  ("As built"). Groups of two or more same-identity sisters only; a collection without a sister is untouched, so the
+  node (no group today) sees no change at boot. Measured: nothing yet — the first same-layers sister is the first.
 - **Wikipedia, one version per article**: an ANNOTATIONS collection `wikipedia-articles` (operator: "I don't want to
   silently hijack the searches of the other peers"), not the collection's own logic (#468;
   [wikipedia-one-version.md](wikipedia-one-version.md)). The claim count decides the claim index's form first. MADLAD `parallel: 7 → 4` by hand on the node (operator, 2026-11-09, without an A/B; backup
