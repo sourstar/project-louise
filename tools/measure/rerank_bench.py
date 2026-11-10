@@ -9,7 +9,7 @@ each query is searched ONCE, its candidates are stored as the live path would
 send them to the reranker, and every arm reranks those very texts.
 
     python -m tools.measure.rerank_bench capture FORMAT SOURCE... --out SET.jsonl
-        [--name NAME] [--collection C] [--works works.json] [--limit N] [--no-translate]
+        [--name NAME] [--collection C] [--works works.json] [--limit N] [--no-translate] [--speed]
     python -m tools.measure.rerank_bench rerank SET.jsonl --arm NAME --model MODEL
         [--instruction TEXT | --instruction collection] [--instructions FILE.json]
         [--instruction-form FORM] [--queries live|typed] [--url URL] [--window N]
@@ -176,8 +176,11 @@ SEED = 0
 #: never one of the search's own withheld reasons
 CAPTURED = "rerank_bench: captured before the rerank"
 #: the capture's settings a resume must share
-CAPTURE_PINNED = ("tool", "set", "format", "translate", "depth", "k", "judged_chunks", "retrieval",
+CAPTURE_PINNED = ("tool", "set", "format", "translate", "speed", "depth", "k", "judged_chunks", "retrieval",
                   "code", "data_version")
+#: a pinned key's value in a file written before the key existed: a capture
+#: before `--speed` was a Quality capture
+PINNED_DEFAULTS = {"speed": False}
 #: the arm's settings a resume must share
 ARM_PINNED = ("arm", "model", "instruction", "instructions", "form", "queries", "url", "window",
               "capture")
@@ -412,7 +415,8 @@ def _rows_after(path: Path, header: dict[str, Any], pinned: Sequence[str]) -> li
         path.parent.mkdir(parents=True, exist_ok=True)
         append_jsonl(path, {"header": header})
         return []
-    changed = [k for k in pinned if _digest(head.get(k)) != _digest(header.get(k))]
+    changed = [k for k in pinned
+               if _digest(head.get(k, PINNED_DEFAULTS.get(k))) != _digest(header.get(k, PINNED_DEFAULTS.get(k)))]
     if changed:
         raise Refused(f"{path}: written before with other settings ({', '.join(changed)}); "
                       f"use another file for these")
@@ -538,19 +542,22 @@ def _data_version(names: list[str]) -> Any:
         return {"unreadable": f"{type(e).__name__}: {e}"[:200]}
 
 
-def capture(js: JudgedSet, out: Path, *, translate: bool = True, depth: int | None = None, k: int = K,
+def capture(js: JudgedSet, out: Path, *, translate: bool = True, speed: bool = False,
+            depth: int | None = None, k: int = K,
             limit: int | None = None, search: Callable[..., dict[str, Any]] | None = None,
             settle: Callable[[list[str]], dict[str, bool]] | None = None,
             data_version: Callable[[list[str]], Any] | None = None,
             stop: Callable[[], bool] = _never, say: Callable[[str], None] = print) -> dict[str, Any]:
     """Each item's candidates, once, appended to `out` as it is searched."""
     from app import retrieval
+    from app import translate as translate_mod
     depth = depth or retrieval.RERANK_TOP_N
     search = search or live_search
     items = first_per_kind(js.items, limit)
     names = sorted({i.collection for i in js.items})
     header = {"tool": "rerank_bench capture", "set": js.name, "format": js.format, "source": js.source,
-              "translate": translate, "depth": depth, "k": k, "judged_chunks": retrieval.JUDGED_CHUNKS,
+              "translate": translate, "speed": speed, "depth": depth, "k": k,
+              "judged_chunks": retrieval.JUDGED_CHUNKS,
               "relevant": js.relevant, "exhaustive": js.exhaustive,
               "retrieval": {"catalog_first": retrieval.CATALOG_FIRST, "rerank_fuse": retrieval.RERANK_FUSE,
                             "language_order": retrieval.RERANK_LANGUAGE_ORDER},
@@ -576,7 +583,11 @@ def capture(js: JudgedSet, out: Path, *, translate: bool = True, depth: int | No
                 break
             got.clear()
             t0 = time.perf_counter()
-            result = search(item.collection, item.query, k=k, translate=translate, depth=depth)
+            # THE ASK TAB'S SPEED (operator, 2026-11-10: "Rerun in speed mode"):
+            # the query translated by the chat model already on the card, MADLAD
+            # never asked — the web's own switch, `translate.speed` (app/web.py)
+            with translate_mod.speed(speed):
+                result = search(item.collection, item.query, k=k, translate=translate, depth=depth)
             seconds = round(time.perf_counter() - t0, 3)
             legs = _withheld(result)
             if legs:
@@ -1063,6 +1074,9 @@ def main(argv: list[str] | None = None) -> int:
     c.add_argument("--works", type=Path)
     c.add_argument("--limit", type=int, help="the first N queries of every kind (the pilot)")
     c.add_argument("--no-translate", action="store_true", help="the API's search: no translations")
+    c.add_argument("--speed", action="store_true",
+                   help="the Ask tab's Speed: the chat model translates the query, MADLAD is never asked "
+                        "(pinned in the file's header: a Quality file and a Speed file never mix)")
     c.add_argument("--depth", type=int, default=None, help="records captured (default RERANK_TOP_N, 50)")
     r = sub.add_parser("rerank")
     r.add_argument("capture", type=Path)
@@ -1101,7 +1115,8 @@ def main(argv: list[str] | None = None) -> int:
             js = load_set(a.format, a.sources, collection=a.collection, works=a.works)
             if a.name:
                 js.name = a.name
-            got = capture(js, a.out, translate=not a.no_translate, depth=a.depth, limit=a.limit,
+            got = capture(js, a.out, translate=not a.no_translate, speed=a.speed, depth=a.depth,
+                          limit=a.limit,
                           stop=_stopping.is_set)
             print(json.dumps(got))
             return 130 if got["stopped"] else 0
