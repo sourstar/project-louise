@@ -29,8 +29,12 @@ writes a derived map under `LOUISE_CACHE_DIR` (`app/derived.py`, invariant 6): d
 shown. The web memory-maps it, so the ~1 GB the pass holds never enters the web process. It is rebuilt when the
 pass's signature changes (the choice, the manifest's last row, the page_props run).
 
-## Open: the passage shown when the largest version did not match
+## The passage shown when the largest version did not match (operator, 2026-11-10: A)
 
 When only, say, the Italian version matched the question and the English one is bigger, the shown version's
-passage is found by a text search inside that one article (the `keys` filter, `book_ids`), a few ms per hit; the
-version that matched stays listed with its own passage. The operator's choice — see STATUS.
+passage is found by a text search inside that one article (the `keys` filter, `book_ids`) with the plan's variant
+for its language — else its first passage; the version that matched stays listed with its rank (`editions`). The
+article keeps its best rank's place and scores (the merge across collections reads them). The hit says which it
+is (`version_shown`). Built: `app/wiki_versions.py`, the worker's scan (`_build_wiki_versions`), the collapse in
+`retrieval._one_hit_per_work`; tests `tests/test_wiki_versions.py`. Rejected, the operator's own first idea (hide the
+other versions): an article matched only through a hidden version would disappear.
