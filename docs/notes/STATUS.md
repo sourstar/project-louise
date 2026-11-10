@@ -36,7 +36,17 @@ measured (published figures disagree).
   chat never cold mid-answer, tap → first sound 2–3 ms; measurements in [ask-card-workflow.md](ask-card-workflow.md).
   #461 (the fts groups searched at once) LIVE 16:36Z: fts 3.6–9.4 s against 19–25 s; a warm Quality Ask's first
   word 14.3 s from Ask (was 30–50 s). Open for Friday: MADLAD's load in the language step evicts chat; Speed's ~15 s
-  no step accounts for; rerank 6.7 s. MADLAD `parallel: 7 → 4` by hand on the node (operator, 2026-11-09, without an A/B; backup
+  no step accounts for; rerank 6.7 s.
+- **Rerankers (2026-11-10)**: the search line's verdict (#465) showed five of six collections searched UNRERANKED, no
+  reason given: `hold collection create` wrote no `[reranker]` (pubmed9 and wikipedia-v8 renamed over pubmed and
+  wikipedia lost theirs). München restored pubmed (louise-rerank-medcpt) and wikipedia (louise-rerank-bge) from their
+  backups; create now carries its plugin's `[reranker]` (#469). Wikidata, normattiva and normattiva-nemo never had
+  one: the operator chose the general **louise-rerank-bge** for them ("Option A with a note that in the future we
+  will evaluate dedicated re-rankers"). **FUTURE: evaluate dedicated rerankers** — a legal one for normattiva(-nemo)
+  and the other legal collections, one for wikidata's entities — on each collection's judged set, against bge.
+- **Wikipedia, one version per article**: an ANNOTATIONS collection `wikipedia-articles` (operator: "I don't want to
+  silently hijack the searches of the other peers"), not the collection's own logic (#468;
+  [wikipedia-one-version.md](wikipedia-one-version.md)). The claim count decides the claim index's form first. MADLAD `parallel: 7 → 4` by hand on the node (operator, 2026-11-09, without an A/B; backup
   `.bak-20261109-parallel7`). FRIDAY, in the operator's order: (1) a "Quick / Quality" text-search switch beside
   Quality / Speed — Quick searches only the query's language and English; (2) MADLAD's slots configurable, not a hand
   edit of its YAML; (3) why 7 slots were chosen.
