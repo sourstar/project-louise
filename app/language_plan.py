@@ -45,9 +45,11 @@ some of them.
 """
 from __future__ import annotations
 
+import contextvars
 import re
 import threading
 import time
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 
 from . import config, fts, llm, query_language
@@ -62,6 +64,25 @@ _CACHE_MAX = 256
 
 #: the mixed text index groups: many languages each, never a main language
 MIXED = ("cjk", "other")
+
+#: THE READER'S "QUICK" TEXT SEARCH (operator, 2026-11-09): the text leg
+#: searches only the query's own language and these, and the query is
+#: translated into these alone. A reader's choice on the Ask page (RULE 2),
+#: beside Quality / Speed; "Quality" (the default) is the main languages as
+#: before (05 §5.2). München's probe the same day: wikipedia's ten language
+#: indexes cost 13.2 s a variant searched one after the other.
+QUICK_LANGS = ("en",)
+_quick: contextvars.ContextVar[bool] = contextvars.ContextVar("louise_quick_text_search", default=False)
+
+
+@contextmanager
+def quick(on: bool):
+    """The plans made inside are Quick (`QUICK_LANGS`) when `on`."""
+    token = _quick.set(bool(on))
+    try:
+        yield
+    finally:
+        _quick.reset(token)
 #: (fts_dir, groups, share) -> (computed at, meta mtimes, main languages)
 _main_cache: dict[tuple, tuple[float, tuple, tuple[str, ...]]] = {}
 #: a GROWING index (the worker committing) is recounted at most this often;
@@ -100,6 +121,12 @@ class LanguagePlan:
     #: str(collection.fts_dir) -> that collection's main languages; a
     #: collection absent here has its every index searched, as before
     main_by: dict[str, tuple[str, ...]] = field(default_factory=dict)
+    #: the reader's Quick text search: only the query's language and
+    #: QUICK_LANGS (a restriction the query names still wins)
+    quick: bool = False
+
+    def quick_langs(self) -> tuple[str, ...]:
+        return tuple(dict.fromkeys(c for c in (self.query_lang, *QUICK_LANGS) if c))
 
     def main_for(self, collection) -> tuple[str, ...] | None:
         """The one-language groups the text leg searches in `collection`
@@ -108,12 +135,18 @@ class LanguagePlan:
 
     def searches(self, group: str) -> bool:
         """Whether the text index group `group` may hold a wanted record."""
+        if self.quick and not self.only:
+            return any(fts.group_for(c) == group for c in self.quick_langs())
         return not self.only or any(fts.group_for(c) == group for c in self.only)
 
     def lang_filter(self, group: str) -> list[str] | None:
         """The languages to keep inside a MIXED group; None where the group
         is one language, and so already the filter."""
-        if not self.only or group not in ("cjk", "other"):
+        if group not in ("cjk", "other"):
+            return None
+        if self.quick and not self.only:
+            return [c for c in self.quick_langs() if fts.group_for(c) == group]
+        if not self.only:
             return None
         return [c for c in self.only if fts.group_for(c) == group]
 
@@ -141,7 +174,8 @@ class LanguagePlan:
         if main is not None and group not in MIXED and group not in main:
             return []
         if group in ("cjk", "other"):
-            pool = self.only or held or (sorted(config.CJK_LANGS) if group == "cjk" else [])
+            pool = (self.only or (self.quick_langs() if self.quick else ()) or held
+                    or (sorted(config.CJK_LANGS) if group == "cjk" else []))
             langs = [c for c in pool if fts.group_for(c) == group]
         else:
             langs = [group]
@@ -309,7 +343,7 @@ def plan(query: str, collections, translate: bool, every: bool = False) -> Langu
     not only the main ones (`main_languages`)."""
     if not translate:
         lang, by = _query_lang(None, query, collections, set())
-        return LanguagePlan(core=query, query_lang=lang, query_lang_by=by)
+        return LanguagePlan(core=query, query_lang=lang, query_lang_by=by, quick=_quick.get())
     found = explicit(query)
     if found is not None and found[0] == ["all"]:
         every, query_core, found = True, found[1], None
@@ -328,7 +362,8 @@ def plan(query: str, collections, translate: bool, every: bool = False) -> Langu
         path = str(c.fts_dir)
         main_by[path] = tuple(dict.fromkeys(main_by.get(path, ()) + m))
         held |= set(m) | held_languages(g for g in groups if g == "cjk")
-    key = (query, every, tuple(sorted(held)), tuple(sorted(main_by.items())))
+    quick_on = _quick.get() and not every
+    key = (query, every, quick_on, tuple(sorted(held)), tuple(sorted(main_by.items())))
     with _cache_lock:
         hit = _cache.get(key)
     if hit is not None:
@@ -344,6 +379,12 @@ def plan(query: str, collections, translate: bool, every: bool = False) -> Langu
     if only:
         # a restriction names its languages, main or not, and alone narrows
         main_by = {}
+    if quick_on and not only:
+        # QUICK: the query's language (searched as typed) and QUICK_LANGS,
+        # in every collection, and translated into those alone
+        langs = tuple(dict.fromkeys(c for c in (query_lang, *QUICK_LANGS) if c))
+        held = set(langs)
+        main_by = {path: langs for path in main_by}
     main = tuple(dict.fromkeys(lang for m in main_by.values() for lang in m))
     targets = sorted(only) if only else sorted(held)
     # the query's own language is searched as typed, never translated into
@@ -355,7 +396,7 @@ def plan(query: str, collections, translate: bool, every: bool = False) -> Langu
     result = LanguagePlan(core=core or query_core, only=tuple(only),
                           translations=translations, status=status, by=by, every=every,
                           query_lang=query_lang, query_lang_by=query_lang_by,
-                          main=main, main_by=main_by)
+                          main=main, main_by=main_by, quick=bool(quick_on and not only))
     if status == "ok":
         with _cache_lock:
             if len(_cache) >= _CACHE_MAX:

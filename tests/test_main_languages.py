@@ -189,3 +189,24 @@ def test_an_unchanged_index_is_never_recounted(isolated_config, monkeypatch):
     fts.index_books([("fr", 40 + n, _chunks(40 + n)) for n in range(40)], c)
     assert language_plan.main_languages(c, 0.9) == ("fr", "en")
     assert counted == [1], "a changed index is recounted once its bound has passed"
+
+
+def test_quick_searches_only_the_query_s_language_and_english(isolated_config, monkeypatch):
+    """Operator, 2026-11-09: the Ask page's "Quick / Quality" text search.
+    Quick reads only the question's language (as typed) and English (its
+    translation), whatever the collection's main languages; a restriction
+    the query names still wins."""
+    c = collections_mod.default_collection()
+    _dominant(c)
+    with language_plan.quick(True):
+        ran, asked = _search(monkeypatch, c, "la chasse à la baleine", "fr")
+    assert asked == [["en"]], "translated into English alone"
+    assert ran == [("en", "[en] la chasse à la baleine"), ("fr", "la chasse à la baleine")], \
+        "German (main), the mixed groups and the rest are not read"
+    language_plan.reset()
+    ran, asked = _search(monkeypatch, c, "la chasse à la baleine", "fr")
+    assert asked == [["de", "en"]], "Quality, the default: the main languages as before"
+    language_plan.reset()
+    with language_plan.quick(True):
+        ran, asked = _search(monkeypatch, c, "whale hunt", "en")
+    assert asked == [] and ran == [("en", "whale hunt")], "an English question: English alone, no translation"
