@@ -53,6 +53,34 @@ class Edition:
     title: str | None
     lang: str | None
     held: bool
+    #: its length where the work's claims state it (`subject_tokens` /
+    #: `object_tokens` in their evidence: wikipedia-articles, 2026-11-10);
+    #: None where they do not (gutenberg's)
+    size: int | None = None
+    #: the edition the claims are drawn around (every sized claim's
+    #: `object`): their producer's choice, which settles a tie of lengths
+    #: between two non-English editions exactly as it did
+    centre: bool = False
+
+
+def largest(members: Sequence[Edition]) -> Edition | None:
+    """THE EDITION SHOWN WHERE THE CLAIMS STATE THE LENGTHS (operator,
+    2026-11-10, wikipedia: "English by default, but if another language's
+    version is BIGGER, that one is taken instead"): the largest; English on
+    a tie or where English's length is unknown (the claims' producer,
+    tools/annotations_from_wikipedia.py, orders them so); then the claims'
+    centre. None
+    where fewer than two of the work's editions have a stated length — the
+    rule is the annotation's, and gutenberg's claims state none."""
+    sized = [e for e in members if e.size is not None]
+    if len(sized) < 2:
+        return None
+    big = max(sized, key=lambda e: (e.size or 0))
+    eng = next((e for e in members if (e.lang or "").lower() == ENGLISH), None)
+    if eng is not None and (eng.size is None or eng.size <= 0 or eng.size >= (big.size or 0)):
+        return eng
+    ties = sorted((e for e in sized if e.size == big.size), key=lambda e: (not e.centre, e.uid))
+    return ties[0]
 
 
 def preference(show_in: str | None, query_lang: str | None,
@@ -144,9 +172,15 @@ def _uid(hit: dict[str, Any]) -> str:
     return record_of(hit)
 
 
+#: the fields a passage of the edition shown brings to the hit it heads; the
+#: rest — its place, its scores, the reranker's verdict — stays the hit's
+_PASSAGE = ("chunk_id", "book_id", "text", "chapter", "lang", "source")
+
+
 def collapse(hits: Sequence[dict[str, Any]], work_of: dict[str, str],
              members: dict[str, Sequence[Edition]], prefer: Sequence[str],
-             facts: dict[str, EditionFacts] | None = None) -> list[dict[str, Any]]:
+             facts: dict[str, EditionFacts] | None = None,
+             passages=None, limit: int | None = None) -> list[dict[str, Any]]:
     """`hits` in ranked order, one per record; `work_of` maps a record's uid
     to its work's key, `members` a work's key to every edition of it known.
     Each work keeps ONE hit, at the position of its best-ranked edition:
@@ -156,7 +190,14 @@ def collapse(hits: Sequence[dict[str, Any]], work_of: dict[str, str],
     language and the rank decide, as before). That hit carries `editions`, every
     other edition of the work — `{uid, title, lang, held, rank, chunk_id}`,
     `rank` and `chunk_id` where the edition was among the hits — those in
-    the preferred languages first. A hit of no work is untouched."""
+    the preferred languages first. A hit of no work is untouched.
+
+    WHERE THE CLAIMS STATE THE LENGTHS (`largest`), the work is shown as its
+    largest edition instead, at the same place with the same scores: that
+    edition's passage where it was among the hits, else the passage of it
+    `passages` finds for the question (one batch, for the works among the
+    first `limit` shown — the rest are cut). The hit says so (`shown_as`,
+    invariant 4(2)); with no passage found, the rule above."""
     by_work: dict[str, list[tuple[int, dict[str, Any]]]] = {}
     for i, h in enumerate(hits):
         w = work_of.get(_uid(h))
@@ -173,18 +214,44 @@ def collapse(hits: Sequence[dict[str, Any]], work_of: dict[str, str],
         code = (code or "").lower()
         return prefer.index(code) if code in prefer else len(prefer)
 
-    out: list[dict[str, Any]] = []
+    # pass 1: each work's place, and the largest editions with no passage yet
+    slots: list[tuple[dict[str, Any], str | None, Edition | None]] = []
+    wanted: list[Edition] = []
     for i, h in enumerate(hits):
         w = work_of.get(_uid(h))
         if w is None:
-            out.append(h)
+            slots.append((h, None, None))
             continue
         found = by_work[w]
         if found[0][0] != i:
             continue                       # a later edition of a work already shown
-        order = edition_order([(j, _uid(x), lang(x)) for j, x in found], facts or {}, pref_index)
-        head_i, head = found[order[0]]
-        head = dict(head)
+        shown = largest(members.get(w, ()))
+        if (shown is not None and shown.uid not in {_uid(x) for _j, x in found}
+                and (limit is None or len(slots) < limit)):
+            wanted.append(shown)
+        slots.append((h, w, shown))
+    got = _safe(passages, wanted) if wanted and passages is not None else {}
+
+    # pass 2: the heads
+    out: list[dict[str, Any]] = []
+    for h, w, shown in slots:
+        if w is None:
+            out.append(h)
+            continue
+        found = by_work[w]
+        matched = {_uid(x): x for _j, x in found}
+        p = None
+        if shown is not None:
+            p = matched.get(shown.uid) or got.get(shown.uid)
+        if p is not None:
+            head = dict(h)
+            head.update({k: p[k] for k in _PASSAGE if k in p})
+            head["shown_as"] = {"edition": shown.uid, "rule": SHOWN_RULE}
+            if shown.uid not in matched:
+                head["shown_as"]["passage"] = "its best match for the question"
+        else:
+            order = edition_order([(j, _uid(x), lang(x)) for j, x in found], facts or {}, pref_index)
+            head = dict(found[order[0]][1])
         rank_of = {_uid(x): (j + 1, x.get("chunk_id")) for j, x in found}
         editions = []
         for e in members.get(w, ()):
@@ -198,6 +265,16 @@ def collapse(hits: Sequence[dict[str, Any]], work_of: dict[str, str],
         head["editions"] = editions
         out.append(head)
     return out
+
+
+SHOWN_RULE = "the largest edition, English on a tie"
+
+
+def _safe(passages, editions: list[Edition]) -> dict[str, dict[str, Any]]:
+    try:
+        return passages(editions) or {}
+    except Exception:   # noqa: BLE001 — the editions that matched stay shown
+        return {}
 
 
 # --------------------------------------------------------------------------
@@ -260,6 +337,8 @@ def work_groups(collection, uids: Sequence[str], *, root: Path | None = None,
         return x
 
     seen: set[str] = set()
+    sizes: dict[str, int] = {}
+    centres: set[str] = set()
     todo = list(dict.fromkeys(uids))
     while todo:                     # the candidates' works, whole: a star of claims
         u = todo.pop()              # reaches every edition through its centre
@@ -271,6 +350,12 @@ def work_groups(collection, uids: Sequence[str], *, root: Path | None = None,
                 c = cl.claim
                 if c["type"] not in WORK_TYPES:
                     continue
+                ev = c.get("evidence") or {}
+                for end, key in ((c["subject"], "subject_tokens"), (c["object"], "object_tokens")):
+                    if isinstance(ev.get(key), int):
+                        sizes[end] = ev[key]
+                if isinstance(ev.get("object_tokens"), int):
+                    centres.add(c["object"])
                 a, b = find(c["subject"]), find(c["object"])
                 if a != b:
                     parent[max(a, b)] = min(a, b)
@@ -287,14 +372,56 @@ def work_groups(collection, uids: Sequence[str], *, root: Path | None = None,
     rows = _target_rows(collection, [u for v in groups.values() for u in v])
     work_of = {u: k for k, v in groups.items() for u in v}
     members = {k: [Edition(u, (rows.get(u) or {}).get("title"), (rows.get(u) or {}).get("lang"),
-                           u in rows) for u in sorted(v)]
+                           u in rows, sizes.get(u), u in centres) for u in sorted(v)]
                for k, v in groups.items()}
     return work_of, members
 
 
+def best_passage(collection, plan, edition: Edition) -> dict[str, Any] | None:
+    """`edition`'s passage that best matches the question: a text search
+    inside that one record (the `keys` filter) with the plan's variant for
+    its language, else its first passage; None where none is held."""
+    from app import fts
+    try:
+        book_id = int(edition.uid.split(":", 1)[1])
+    except (IndexError, ValueError):
+        return None
+    lang = (edition.lang or "").lower()
+    group = fts.group_for(lang) if lang else None
+    if group is None:
+        return None
+    try:
+        queries = plan.variants(group, [lang]) if plan is not None else []
+    except Exception:   # noqa: BLE001 — the query as typed then
+        queries = []
+    for q in queries or [getattr(plan, "core", "")]:
+        if q:
+            got = fts.search_records(group, q, 1, collection=collection, book_ids=[book_id])
+            if got:
+                return got[0]
+    chunks = fts.book_chunks(group, book_id, collection)
+    return min(chunks, key=lambda c: str(c.get("chunk_id"))) if chunks else None
+
+
+#: the passages of the largest editions not among the hits, searched side by
+#: side (tantivy releases the GIL; retrieval.FTS_THREADS' reasoning)
+PASSAGE_THREADS = 8
+
+
+def best_passages(collection, plan, editions: Sequence[Edition]) -> dict[str, dict[str, Any]]:
+    """`best_passage` of each of `editions`, in parallel; uid → passage."""
+    from concurrent.futures import ThreadPoolExecutor
+    from app import cancel
+    if not editions:
+        return {}
+    one = lambda e: (e.uid, best_passage(collection, plan, e))   # noqa: E731
+    with ThreadPoolExecutor(max_workers=min(len(editions), PASSAGE_THREADS)) as ex:
+        return {u: p for u, p in ex.map(cancel.carry(one), editions) if p is not None}
+
+
 def one_hit_per_work(hits: list[dict[str, Any]], collection, prefer: Sequence[str], *,
                      root: Path | None = None, annotations: Iterable | None = None,
-                     ) -> list[dict[str, Any]]:
+                     plan=None, limit: int | None = None) -> list[dict[str, Any]]:
     """`collapse` with the work groups held here. A grouping that cannot be
     read returns the list as it ranked: a guess about what a book IS never
     costs a reader a hit (and never the search)."""
@@ -311,7 +438,8 @@ def one_hit_per_work(hits: list[dict[str, Any]], collection, prefer: Sequence[st
         facts = _facts_of(collection, hits, work_of, root=root)
     except Exception:   # noqa: BLE001 — no facts: the language and the rank decide, as before
         facts = {}
-    return collapse(hits, work_of, members, prefer, facts)
+    return collapse(hits, work_of, members, prefer, facts,
+                    passages=lambda es: best_passages(collection, plan, es), limit=limit)
 
 
 def _facts_of(collection, hits: Sequence[dict[str, Any]], work_of: dict[str, str], *,

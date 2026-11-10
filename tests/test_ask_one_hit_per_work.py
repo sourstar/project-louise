@@ -183,7 +183,7 @@ def test_run_search_resolves_the_choice_once_and_hands_it_to_the_grouping(monkey
     # and the grouping is given exactly that list
     grouped = {}
     monkeypatch.setattr(works, "one_hit_per_work",
-                        lambda hits, collection, prefer, annotations=None: grouped.setdefault("a", annotations) or hits)
+                        lambda hits, collection, prefer, annotations=None, **kw: grouped.setdefault("a", annotations) or hits)
     from app.language_plan import LanguagePlan
     plan = LanguagePlan.__new__(LanguagePlan)
     plan.query_lang = "en"
