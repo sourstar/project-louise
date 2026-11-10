@@ -1175,3 +1175,18 @@ def test_an_unshipped_line_keeps_the_per_record_hand_over():
     from app.pack import build as pack_build
     assert pack_build._columns_of([{"uid": "u", "content_hash": "h"}], [b"raw line\n"]) is None
     assert pack_build._columns_of([], []) is None
+
+
+def _pid(i: int) -> int:
+    import os
+    return os.getpid()
+
+
+def test_a_pass_whose_tasks_hold_much_memory_bounds_its_processes(monkeypatch):
+    """`each_part(limit=)`: a pass whose every task holds a large part (a
+    Parquet part of a streamed annotations create, ~5 GB) caps the processes
+    the node allows; at one, it runs here (app/hold/annotations_stream.py)."""
+    import os
+    monkeypatch.setattr(config, "PARSE_PROCESSES", 4)
+    assert set(parallel.each_part(_pid, [(i,) for i in range(5)], limit=1)) == {os.getpid()}
+    assert os.getpid() not in set(parallel.each_part(_pid, [(i,) for i in range(5)], limit=2))

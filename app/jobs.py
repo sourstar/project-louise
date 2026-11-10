@@ -534,10 +534,8 @@ def _create_annotations(args: dict[str, Any]) -> dict[str, Any]:
     from . import louise
     from .hold import annotations as ann
     claims_path = Path(args["claims_path"])
-    try:
-        claims = claims_path.read_bytes()
-    except FileNotFoundError:
-        raise ValueError(f"the uploaded claims file is gone ({claims_path.name}): upload it again") from None
+    if not claims_path.is_file():
+        raise ValueError(f"the uploaded claims file is gone ({claims_path.name}): upload it again")
     key = None
     try:
         from .bundles import keys as node_keys
@@ -549,7 +547,7 @@ def _create_annotations(args: dict[str, Any]) -> dict[str, Any]:
     codex, snap = ann.create(
         root, args["name"], targets=louise.annotation_targets(args["annotates"], args["from_snapshot"]),
         container=args.get("container") or "jsonl",
-        claims=claims, platform_image=louise.preflight_create({}, args.get("platform_image")),
+        claims=claims_path, platform_image=louise.preflight_create({}, args.get("platform_image")),
         title=args.get("title") or None, summary=args.get("summary") or None,
         annotator=args.get("annotator") or None, snapshot_id=args.get("snapshot") or None,
         key=key, now=louise._utc_now(), log=lambda m: None)

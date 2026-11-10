@@ -66,7 +66,14 @@ not hold at this size; both are local, neither changes what peers exchange (09 �
    (~12 M objects), and `target_records` reads the content hash of every claimed record from the target's parts —
    16.8 M of wikipedia's 52.9 M records, most of its frames. Needed: a STREAMING create — claims read, checked and
    pinned part by part in bounded memory, the target's records read once in part order, the claim parts written as
-   they fill.
+   they fill. **Built 2026-11-10** (`app/hold/annotations_stream.py`): the file copied once into a workspace and
+   read in four passes on the parse pool — checked, the targets read once, pinned in the file's order with the
+   numbering keys in an external merge sort, the parts written by number — keeping ~135 bytes a claim. Every byte
+   written is the in-memory path's (`tests/hold/test_annotations_stream.py`, and against origin/main's code).
+   Measured on a synthetic star (tracemalloc, 200,000 claims): in-memory 898 MB, streamed 135 MB in one process
+   (one part of 50,000 records), 69 MB in the parent on the pool. RSS on the pool (3 processes): 1 M claims in
+   60 s, parent 421 MB; 2 M in 120 s, parent 556 MB, all processes 1.3 GB — so ~2 GB parent for 12.3 M. Not yet
+   streamed: `hold annotations update` (it still holds the claims and the previous snapshot's records).
 2. **Searching with it** (`index_of`, `ClaimIndex`): every claim as a Python object in the web process, ~12 M of them.
    Needed: for a large annotations snapshot, a WORK INDEX built once per snapshot as derived data under
    `LOUISE_CACHE_DIR` (invariant 6) and memory-mapped by the web: the claimed uids sorted (with their strings, so a
