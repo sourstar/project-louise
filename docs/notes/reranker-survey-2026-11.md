@@ -31,6 +31,11 @@ ColBERT-style late interaction (per-token vectors for ~10 M chunks; jina-colbert
 model; MIRACL flips with protocol; no Italian or Italian-legal reranker scores exist anywhere; no SYCL latencies are
 published but ours.
 
+## The ≤ 3B, llama.cpp-runnable comparison (operator, 2026-11-10)
+
+Every published benchmark, one column group per source, with each model's llama.cpp status read from upstream
+master: [reranker-comparison-2026-11.md](reranker-comparison-2026-11.md).
+
 ## Shortlist
 
 | | pros | cons |
