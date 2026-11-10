@@ -1,0 +1,14 @@
+# CANDIDATE series (build.sh SERIES_FILE=): the live series plus the
+# llama-nemotron-rerank port, for a SEPARATE backend used only by the reranker
+# benchmark's arm A3 (the operator, 2026-11-10: "Patch llama.cpp to support nemo
+# reranker, tomorrow I want to see its benchmarks too"). The live engine is
+# untouched; the patch joins `series` only if A3 earns it.
+base 16acc8926bb8a27b67dc4d419dbceaeb4110f7af
+0001-system-list-load-options.patch
+0002-llama-cpp-embed-token-ids.patch
+0003-llama-cpp-encoder-decoder.patch
+0004-llama-cpp-encoder-decoder-waves.patch
+0005-llama-cpp-sycl-batched-mul-mat-src1.patch
+0006-llama-cpp-chat-cohere-command3.patch
+0007-llama-cpp-sycl-dmmv-cleanup.patch
+staged/0008-llama-cpp-nemotron-rerank.patch
