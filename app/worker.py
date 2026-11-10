@@ -6171,6 +6171,11 @@ def run_forever():
     _dispatch.on_stand_aside(question_card.on_question)
     threading.Thread(target=question_card.watch, args=(_stop.is_set,), name="question-watch",
                      daemon=True).start()
+    # MADLAD's slots, the platform file's `[translate] slots` (app/translate_slots.py)
+    from app import translate_slots
+    threading.Thread(target=translate_slots.reconcile, args=(_stop.is_set,),
+                     kwargs={"log": model_pins.node_event, "sleep": _stop.wait},
+                     name="translate-slots", daemon=True).start()
     try:
         model_pins.reconcile(boot=True)
     except Exception:   # noqa: BLE001 — a safeguard, never a boot blocker

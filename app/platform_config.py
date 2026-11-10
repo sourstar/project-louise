@@ -75,6 +75,9 @@ class TranslateConfig:
     2026-10-12; docs/notes/translator-choice.md: Index-Translate-9B for
     Latin and Ancient Greek)."""
     reading: dict[str, str] = field(default_factory=dict)
+    #: MADLAD's slots (`parallel:N` of TRANSLATE_MODEL's file on the model
+    #: server), applied by app/translate_slots.py; None leaves the file alone
+    slots: int | None = None
 
 
 @dataclass(frozen=True)
@@ -418,6 +421,13 @@ def _load_one(path: Path) -> PlatformConfig:
             "[translate] reading is {source language code: model name}, "
             "e.g. { la = \"index-translate-9b\" } (07 §7.8)")
 
+    slots_raw = (raw.get("translate", {}) or {}).get("slots")
+    if slots_raw is not None and (not isinstance(slots_raw, int) or isinstance(slots_raw, bool)
+                                  or not 1 <= slots_raw <= 32):
+        raise schedule_mod.ScheduleError(
+            f"[translate] slots is how many segments the translation server decodes at once, "
+            f"1 to 32, got {slots_raw!r} (07 §7.8)")
+
     authors_raw = trust_raw.get("space_authors", [])
     if not isinstance(authors_raw, list):
         raise schedule_mod.ScheduleError("trust.space_authors must be a list of pubkeys")
@@ -593,7 +603,8 @@ def _load_one(path: Path) -> PlatformConfig:
                         pins=pins, peer_port=peer_port)
     return PlatformConfig(bandwidth=bandwidth, transfer=transfer,
                           share=ShareConfig(patch_cache_s=cache_s),
-                          translate=TranslateConfig(reading={k: v.strip() for k, v in reading_raw.items()}),
+                          translate=TranslateConfig(reading={k: v.strip() for k, v in reading_raw.items()},
+                                                    slots=slots_raw),
                           deposit=deposit,
                           peers=peers,
                           trust=TrustConfig(space_authors=tuple(authors)),
