@@ -1254,6 +1254,32 @@ def _attach_work_fields(con, collection, hits: list[dict], query: str) -> list[d
     return work_dedup.prefer_originals(hits, query=query)
 
 
+def _rerank_lists(per_collection: list, rerank_one) -> list:
+    """`rerank_one` over each (collection, list), in their order. LISTS THAT
+    SHARE A RERANKER GO ONE AFTER THE OTHER, each with its whole budget from
+    its own start; different rerankers at once (München, 2026-11-10: with
+    louise-rerank-bge serving five collections, all five lists started their
+    9.6 s budgets together, the reranker answers one sequence at a time
+    (`parallel:1`, bit-exact), and the fifth — wikipedia — spent its budget
+    queued: "the reranker did not answer within 9.6 s", its list unreranked).
+    The time is the same — one reranker does the work of all its lists in
+    turn either way — but no list loses its budget waiting for another's."""
+    groups: dict[tuple, list[int]] = {}
+    for i, (c, _hits) in enumerate(per_collection):
+        r = collections_mod.reranker_for(c)
+        key = (r.url, r.model) if r is not None else ("", getattr(c, "name", str(i)))
+        groups.setdefault(key, []).append(i)
+    out: list = [None] * len(per_collection)
+
+    def run(idx: list[int]) -> list:
+        return [(i, rerank_one(per_collection[i])) for i in idx]
+    with ThreadPoolExecutor(max_workers=max(1, len(groups))) as ex:
+        for part in ex.map(cancel.carry(run), list(groups.values())):
+            for i, got in part:
+                out[i] = got
+    return out
+
+
 def _one_hit_per_work(hits: list[dict], collection, plan: LanguagePlan,
                       show_in: str | None, annotations=None) -> list[dict]:
     """05 §5.3 (amended 2026-10-09): each work once, after the reranker and
@@ -1523,8 +1549,7 @@ def federated_search(collections: list, query: str, k: int = 12, mode: str = "hy
         # collection's records), before the fuse cuts to k
         return _one_hit_per_work(ranked, collection, plan, show_in, annotations), ok, why
 
-    with ThreadPoolExecutor(max_workers=max(1, len(per_collection))) as ex:
-        ranked = list(ex.map(cancel.carry(_rerank_one), per_collection))
+    ranked = _rerank_lists(per_collection, _rerank_one)
     reranked = {c.name: ok for (c, _), (_, ok, _) in zip(per_collection, ranked)}
     rerank_withheld = [_rerank_withheld(c, why)
                        for (c, _), (_, _, why) in zip(per_collection, ranked) if why]
