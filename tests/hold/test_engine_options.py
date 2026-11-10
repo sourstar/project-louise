@@ -140,19 +140,19 @@ def test_options_are_absent_when_there_are_none_never_null_or_empty(value, rule)
 
 # ---- the sister ----------------------------------------------------------------------
 
-def test_a_sister_naming_an_engine_with_options_is_version_4_in_her_mothers_space(tmp_path):
+def test_a_sister_naming_an_engine_with_options_is_version_4_in_her_sisters_space(tmp_path):
     """The engine is outside `space_id`, so a sister may name a new one in
-    her mother's space — and an engine with options needs version 4 there
-    too. One without keeps her mother's version, as before."""
-    mother = a_root(tmp_path, pubmed(version=3))
-    sp = mother.space
+    her sister's space — and an engine with options needs version 4 there
+    too. One without keeps her sister's version, as before."""
+    her_sister = a_root(tmp_path, pubmed(version=3))
+    sp = her_sister.space
     localai = replace(sp, encoder=replace(sp.encoder, engine=LOCALAI),
                       query=replace(sp.query, encoder=replace(sp.query.encoder, engine=LOCALAI)))
-    sister = col.derive(tmp_path, mother.collection_id, space=localai,
+    sister = col.derive(tmp_path, her_sister.collection_id, space=localai,
                         embed=fake_embed, embed_query=fake_query_embed, key=KEY, now=NOW)
-    assert sister.version == 4 and sister.space_id == mother.space_id
-    weekly = col.derive(tmp_path, mother.collection_id, update=cx.Update("weekly", 1, 0))
-    assert weekly.version == 3 and weekly.space_id == mother.space_id
+    assert sister.version == 4 and sister.space_id == her_sister.space_id
+    weekly = col.derive(tmp_path, her_sister.collection_id, update=cx.Update("weekly", 1, 0))
+    assert weekly.version == 3 and weekly.space_id == her_sister.space_id
 
 
 # ---- the statement -------------------------------------------------------------------

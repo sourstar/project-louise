@@ -208,20 +208,20 @@ def test_held_record_lines_are_taken_and_cut_by_the_pool(isolated_config, tmp_pa
     c, _rows = _gutenberg(tmp_path, corpus_dir)
     parallel.shutdown()
     config.PARSE_PROCESSES = 1
-    mother = tmp_path / "packs" / "mother"
-    pack_build.build(c, mother, records_per_shard=2, sign=False, log=lambda *_: None)
-    parts = tuple(s["path"] for s in manifest_mod.load(mother)["shards"])
+    source = tmp_path / "packs" / "source"
+    pack_build.build(c, source, records_per_shard=2, sign=False, log=lambda *_: None)
+    parts = tuple(s["path"] for s in manifest_mod.load(source)["shards"])
     config.PARSE_PROCESSES = 2
     kinds: list[str] = []
     real = parallel._submit
     monkeypatch.setattr(parallel, "_submit", lambda ex, kind, col, part: kinds.append(kind) or real(ex, kind, col, part))
     held_dir = tmp_path / "packs" / "held"
     r = pack_build.build(c, held_dir, records_per_shard=2, sign=False, log=lambda *_: None,
-                         held=pack_build.HeldRecords(mother, parts))
+                         held=pack_build.HeldRecords(source, parts))
     assert r.records == 3 and r.skipped == 0
     assert kinds and set(kinds) == {"held-record"}, "every held record went to a child"
     for rel in parts:
-        assert (held_dir / rel).read_bytes() == (mother / rel).read_bytes()
+        assert (held_dir / rel).read_bytes() == (source / rel).read_bytes()
 
 
 def test_the_children_encode_each_line_as_the_writer_would(isolated_config, tmp_path, corpus_dir,
@@ -257,9 +257,9 @@ def test_the_build_thread_names_uids_and_gets_back_lines(isolated_config, tmp_pa
     "Do A and B together, now")."""
     from app.pack import build as pack_build, manifest as manifest_mod, records
     c, _rows = _gutenberg(tmp_path, corpus_dir)
-    mother = tmp_path / "packs" / "mother"
-    pack_build.build(c, mother, records_per_shard=2, sign=False, log=lambda *_: None)
-    parts = tuple(s["path"] for s in manifest_mod.load(mother)["shards"])
+    source = tmp_path / "packs" / "source"
+    pack_build.build(c, source, records_per_shard=2, sign=False, log=lambda *_: None)
+    parts = tuple(s["path"] for s in manifest_mod.load(source)["shards"])
     sent: list[dict] = []
     real_compute = parallel._compute
     monkeypatch.setattr(parallel, "_compute",
@@ -271,13 +271,13 @@ def test_the_build_thread_names_uids_and_gets_back_lines(isolated_config, tmp_pa
                         real_write(path, recs, **kw))
     held_dir = tmp_path / "packs" / "held"
     r = pack_build.build(c, held_dir, records_per_shard=2, sign=False, log=lambda *_: None,
-                         held=pack_build.HeldRecords(mother, parts))
+                         held=pack_build.HeldRecords(source, parts))
     assert r.records == 3
     assert sent and all(set(row) == {"uid", pack_build.HELD_DB, pack_build.HELD_DIR} for row in sent)
     assert written and all(lines is not None for _recs, lines in written)
     assert all(set(rec) <= set(pack_build.PARENT_KEYS) | {"extra"} for recs, _ in written for rec in recs)
     for rel in parts:
-        assert (held_dir / rel).read_bytes() == (mother / rel).read_bytes()
+        assert (held_dir / rel).read_bytes() == (source / rel).read_bytes()
 
 
 def test_the_line_crosses_compressed_and_the_writer_expands_it():
@@ -1112,9 +1112,9 @@ def test_a_held_part_is_looked_up_in_two_queries_not_two_a_record(isolated_confi
     import sqlite3
     from app.pack import build as pack_build, manifest as manifest_mod
     c, _rows = _gutenberg(tmp_path, corpus_dir)
-    mother = tmp_path / "packs" / "mother"
-    pack_build.build(c, mother, records_per_shard=2, sign=False, log=lambda *_: None)
-    parts = tuple(s["path"] for s in manifest_mod.load(mother)["shards"])
+    source = tmp_path / "packs" / "source"
+    pack_build.build(c, source, records_per_shard=2, sign=False, log=lambda *_: None)
+    parts = tuple(s["path"] for s in manifest_mod.load(source)["shards"])
     point: list[str] = []
     real_ro = pack_build._ro
 
@@ -1129,11 +1129,11 @@ def test_a_held_part_is_looked_up_in_two_queries_not_two_a_record(isolated_confi
     monkeypatch.setattr(pack_build, "_ro", lambda path: Counting(real_ro(path)))
     held_dir = tmp_path / "packs" / "held"
     r = pack_build.build(c, held_dir, records_per_shard=2, sign=False, log=lambda *_: None,
-                         held=pack_build.HeldRecords(mother, parts))
+                         held=pack_build.HeldRecords(source, parts))
     assert r.records == 3
     assert point == [], "no point lookup a record"
     for rel in parts:
-        assert (held_dir / rel).read_bytes() == (mother / rel).read_bytes()
+        assert (held_dir / rel).read_bytes() == (source / rel).read_bytes()
     assert isinstance(real_ro(str(c.manifest_path)), sqlite3.Connection)
 
 

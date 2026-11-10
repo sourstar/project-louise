@@ -561,7 +561,7 @@ def carry(root, from_ref: str, to_ref: str, *, copy: bool = False, apply: bool =
     every record again to the same bytes.
 
     `relayered` (with `sister`, A1i amended 2026-11-08; normattiva-nemo cuts
-    with the legal space's `legal_article`, her mother with `akn_article`):
+    with the legal space's `legal_article`, her sister with `akn_article`):
     the sister's LAYERS differ too. The manifest's documents are functions of
     the records (discovery, the catalogue parse, `content_hash`, keys,
     validity) and are carried; what the layers cut is not — the text index
