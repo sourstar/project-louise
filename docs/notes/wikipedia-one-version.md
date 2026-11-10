@@ -1,4 +1,4 @@
-# Wikipedia: one version per article in search (design, 2026-11-10)
+# Wikipedia: one version per article in search — as an annotations collection (2026-11-10)
 
 *The operator, 2026-11-10, relayed by München after seeing one page ranked several times in several languages:
 wikipedia search follows the smart-embedding guidelines ([wikipedia-smart-embedding.md](wikipedia-smart-embedding.md)).
@@ -38,3 +38,20 @@ article keeps its best rank's place and scores (the merge across collections rea
 is (`version_shown`). Built: `app/wiki_versions.py`, the worker's scan (`_build_wiki_versions`), the collapse in
 `retrieval._one_hit_per_work`; tests `tests/test_wiki_versions.py`. Rejected, the operator's own first idea (hide the
 other versions): an article matched only through a hidden version would disappear.
+
+## Amended the same day (operator): an annotation, not the collection's own logic
+
+"I don't want to silently hijack the searches of the other peers. The collection itself shouldn't enforce a logic
+that might hide some results … the right approach would be to create an annotation." So #467's grouping inside
+wikipedia's search and the worker's map are removed. The rule is stated instead as `same-work` claims in an
+annotations collection, `wikipedia-articles` (02 §2.10): a peer applies it only if it holds it, a reader can untick it
+on the Ask page, and every version stays listed under the article (05 §5.3, invariant 4).
+
+- **The claims** (`app/wiki_versions.py claims`, written by `tools/annotations_from_wikipedia.py`): a star per
+  article, every other version against the version shown, evidence the Wikidata item and both lengths. `--count`
+  says how many claims the annotations collection would hold.
+- **Open before the build of the collection:** the claim index is held in memory at search time
+  (`app/hold/annotations.py index_of`), built for gutenberg's thousands of claims; wikipedia's articles are millions.
+  The count decides whether that index needs a memory-mapped form first.
+- **Then:** the search shows the largest edition where the claims give the lengths (English on ties), and the shown
+  version's best passage where it did not match (the operator's A).

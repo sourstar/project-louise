@@ -1263,11 +1263,6 @@ def _one_hit_per_work(hits: list[dict], collection, plan: LanguagePlan,
     whose work claims group (None = every one held; the Ask page's choice,
     2026-10-19)."""
     from .ask import works
-    if getattr(collection, "plugin", None) == "wikipedia":
-        # each article once, in its version shown (operator, 2026-11-10;
-        # app/wiki_versions.py)
-        from . import wiki_versions
-        hits = wiki_versions.one_version(hits, collection, plan)
     return works.one_hit_per_work(hits, collection,
                                   works.preference(show_in, plan.query_lang),
                                   annotations=annotations)

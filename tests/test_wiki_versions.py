@@ -35,69 +35,29 @@ def test_the_largest_version_is_shown_english_on_a_tie_or_an_unknown_length():
     assert list(m["doc_nid"]) == sorted(m["doc_nid"])
 
 
-def _hit(n: int, score: float) -> dict:
-    return {"chunk_id": f"wikipedia:{n}:1:1", "book_id": n, "text": f"text of {n}", "score": score,
-            "lang": ids.decode_native_id(n)[0], "reranked_score": score}
-
-
-def _with_map(monkeypatch, rows):
+def test_the_claims_are_a_star_around_the_version_shown():
+    rows = [(7, EN, 500, nid("en", 7)), (7, IT, 100, nid("it", 7)), (7, DE, 300, nid("de", 7)),
+            (8, EN, 100, nid("en", 8)), (8, DE, 900, nid("de", 8)),
+            (9, FR, 10, nid("fr", 9))]                                     # one version: no claim
     qid, lang, tok, n = (np.array(c, dtype=np.int64) for c in zip(*rows))
-    m = wiki_versions.arrays(qid, lang, tok, n)
-    monkeypatch.setattr(wiki_versions, "load", lambda collection: m)
+    out = list(wiki_versions.claims(wiki_versions.arrays(qid, lang, tok, n)))
+    pairs = [(c["subject"], c["object"]) for c in out]
+    assert pairs == [(f"wikipedia:{nid('de', 7)}", f"wikipedia:{nid('en', 7)}"),
+                     (f"wikipedia:{nid('it', 7)}", f"wikipedia:{nid('en', 7)}"),
+                     (f"wikipedia:{nid('en', 8)}", f"wikipedia:{nid('de', 8)}")], \
+        "n-1 claims per article, every one against the version shown (the largest)"
+    c = out[2]
+    assert c["type"] == "same-work" and c["subject_lang"] == "en" and c["object_lang"] == "de"
+    assert c["evidence"] == {"wikidata": "Q8", "subject_tokens": 100, "object_tokens": 900}
+    assert c["confidence"] == "1" and c["method"] == {"kind": "wikidata"}
 
 
-WP = SimpleNamespace(plugin="wikipedia")
-
-
-def test_each_article_once_at_its_best_rank_in_the_shown_version(monkeypatch):
-    _with_map(monkeypatch, [(7, EN, 500, nid("en", 7)), (7, IT, 100, nid("it", 7)),
-                            (8, EN, 100, nid("en", 8)), (8, DE, 900, nid("de", 8))])
-    asked = []
-
-    def passage(collection, plan, n):
-        asked.append(n)
-        return {"chunk_id": f"wikipedia:{n}:4:1", "book_id": n, "text": "the German passage", "lang": "de"}
-    other = {"chunk_id": "wikipedia:1:1:1", "book_id": 1, "text": "no item", "score": 0.5}
-    hits = [_hit(nid("it", 7), 0.9), other, _hit(nid("en", 7), 0.8), _hit(nid("en", 8), 0.7)]
-    out = wiki_versions.one_version(hits, WP, None, passage=passage)
-    assert [h["chunk_id"] for h in out] == [f"wikipedia:{nid('en', 7)}:1:1", "wikipedia:1:1:1",
-                                            f"wikipedia:{nid('de', 8)}:4:1"]
-    assert out[0]["score"] == 0.9, "the article keeps its best rank's place and scores"
-    assert out[0]["version_shown"] == "matched"
-    assert [(e["lang"], e["rank"]) for e in out[0]["editions"]] == [("it", 1)]
-    assert out[2]["text"] == "the German passage" and out[2]["book_id"] == nid("de", 8)
-    assert out[2]["version_shown"] == "shown version, its best passage"
-    assert [(e["lang"], e["rank"]) for e in out[2]["editions"]] == [("en", 4)], "the matched version listed"
-    assert asked == [nid("de", 8)], "a passage looked up only where the shown version did not match"
-
-
-def test_no_map_or_no_passage_leaves_the_matched_version(monkeypatch):
-    monkeypatch.setattr(wiki_versions, "load", lambda collection: None)
-    hits = [_hit(nid("it", 7), 0.9), _hit(nid("en", 7), 0.8)]
-    assert wiki_versions.one_version(hits, WP, None) == hits, "no map yet: as ranked"
-    _with_map(monkeypatch, [(8, EN, 100, nid("en", 8)), (8, DE, 900, nid("de", 8))])
-    out = wiki_versions.one_version([_hit(nid("en", 8), 0.7)], WP, None, passage=lambda c, p, n: None)
-    assert out[0]["book_id"] == nid("en", 8) and out[0]["version_shown"].startswith("matched")
-
-
-def test_the_map_is_built_once_per_signature_and_read_memory_mapped(tmp_path, monkeypatch):
-    monkeypatch.setattr(config, "CACHE_DIR", str(tmp_path / "cache"))
-    manifest = tmp_path / "manifest.db"
-    con = sqlite3.connect(manifest)
-    con.execute("CREATE TABLE documents(native_id TEXT, tokens INTEGER)")
-    for lang, page, tokens in (("en", 7, 500), ("it", 7, 100), ("de", 8, 900), ("en", 8, 100), ("fr", 9, 10)):
-        con.execute("INSERT INTO documents VALUES(?,?)", (str(nid(lang, page)), tokens))
-    con.commit()
-    coll = SimpleNamespace(plugin="wikipedia", manifest_path=manifest, name="wikipedia")
-    item = {7: 7007, 8: 8008}
-
-    def qids_for(collection, langs):
-        return {o: (np.array(sorted(item)), np.array([item[p] for p in sorted(item)])) for o in langs}
-    out = wiki_versions.build(coll, con, signature="s1", qids_for=qids_for)
-    assert out["items"] == 2 and out["with_item"] == 4 and out["documents"] == 5
-    assert str(wiki_versions.place(coll)).startswith(str(tmp_path / "cache"))
-    assert wiki_versions.build(coll, con, signature="s1", qids_for=qids_for) == {"skipped": "up to date"}
-    m = wiki_versions.load(coll)
-    assert isinstance(m["doc_nid"], np.memmap)
-    assert wiki_versions._members(m, 8008) == [nid("de", 8), nid("en", 8)]
-    assert wiki_versions._item_of(m, nid("fr", 9)) is None
+def test_nothing_in_search_or_the_worker_groups_wikipedia_by_itself():
+    """Operator, 2026-11-10: "I don't want to silently hijack the searches of
+    the other peers": the grouping is an annotations collection's, never the
+    wikipedia collection's own logic."""
+    from pathlib import Path
+    root = Path(__file__).resolve().parent.parent / "app"
+    users = sorted(p.relative_to(root).as_posix() for p in root.rglob("*.py")
+                   if "wiki_versions" in p.read_text(encoding="utf-8") and p.name != "wiki_versions.py")
+    assert users == [], users
