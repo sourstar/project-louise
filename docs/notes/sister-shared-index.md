@@ -55,13 +55,21 @@ A member whose identity changes splits off into its own index. The usual causes 
 
 It then becomes the writer of its own copy.
 
-Joining, the creation of a sister with the same layers (case J without `--relayered`), costs nothing. Her copied manifest already holds her sister's marks, and her identity is her sister's, so the carry copies **no index at all**.
+**Joining** is the creation of a sister with the same layers (case J without `--relayered`). The carry **hard-links** her sister's index files instead of copying them, so it costs no bytes and no time: tantivy writes `meta.json` and `.managed.json` by atomic rename and never rewrites a segment, so the two directories diverge safely. Her copied manifest already holds her sister's marks. The next worker boot merges the two directories into one (the migration below).
+
+The carry does not move an index while a worker may hold it open: renaming or merging happens only at the worker's boot, before any stage and before the worker opens any index.
 
 ## Forget
 
 - Forgetting a member removes only its own directory.
 - `.text-index/<identity>` stays while any held collection resolves to it. One that no held collection resolves to is removed by the worker's sweep: at boot, and when the files change.
 - If the writer is forgotten, the next member by name becomes the writer (above).
+
+## Where each process finds an index
+
+`Collection.fts_dir` is resolved every time the files are read, by one function, `text_index.place`. It is `.text-index/<identity>` when that directory exists, or when the collection has no index of its own at `<collection>/index` (a new collection starts there directly). Otherwise it is the collection's own `<collection>/index`, until the worker's boot migrates it.
+
+A rename of a directory is atomic, and the web resolves per request, so a search during a migration reads either the old directory or the new one, never half of one. The index cache is keyed on the path, so a moved index is a new cache entry, and the old handle goes unused.
 
 ## Migration (the existing copies; RULE 1)
 
