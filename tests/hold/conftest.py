@@ -256,7 +256,7 @@ def a_root(root, codex, **kw):
 
     The low-level `create` takes a finished Codex and so has no vectors to
     write, but every derivation INHERITS the member (09 §9.12, and it is in
-    every snapshot's `files`, §9.4) — so a mother without one is a
+    every snapshot's `files`, §9.4) — so a predecessor without one is a
     collection that could not exist, and a test built on one would prove
     nothing about `derive`.
     """

@@ -286,10 +286,11 @@ def plan(collection, con_src, con_build, *, log=print, stop=None) -> int:
 class HeldRecords:
     """RECORD LINES ALREADY BUILT, taken instead of parsing (RULE 1; 02 §2.7,
     amended 2026-10-24): a daughter that changes only the slicing — a family
-    map — or a re-creation that does, reuses its mother's record lines byte
-    for byte. `shard_dir` holds the parts, `paths` lists them (a snapshot's
-    shards, relative to `shard_dir`). Each record is cut into chunks again
-    for its part's `chunks_root` — the chunker, never the parser."""
+    map — or a re-creation that does, reuses the record lines of the
+    collection it comes from byte for byte. `shard_dir` holds the parts,
+    `paths` lists them (a snapshot's shards, relative to `shard_dir`). Each
+    record is cut into chunks again for its part's `chunks_root` — the
+    chunker, never the parser."""
     shard_dir: Path
     paths: tuple[str, ...]
     #: the parser the held lines were written by, where it is not the
@@ -1419,9 +1420,10 @@ def write_manifest(collection, con_build, pack_dir: Path, *, snapshot: str, name
 def build(collection, pack_dir: Path, *, snapshot: str | None = None, name: str | None = None,
           records_per_shard: int | None = None, until: str | None = None, sign: bool = True,
           log=print, stop=None, closed: dict | None = None, held: HeldRecords | None = None) -> BuildResult:
-    """`held`: take each record's line from records already built (a mother's
-    parts) instead of parsing it — RULE 1, for a daughter or re-creation
-    whose records are the same records (`HeldRecords`)."""
+    """`held`: take each record's line from records already built (the parts
+    of the collection it comes from) instead of parsing it — RULE 1, for a
+    daughter or re-creation whose records are the same records
+    (`HeldRecords`)."""
     from .. import licensing
     if licensing.state_for(collection) == licensing.MISSING:
         # a pack carries the data onward: it must not carry data whose

@@ -57,7 +57,7 @@ The operator gives the first column; the workflow finds everything else.
 | **G. A private collection** | LocalAGI or an OpenAI vector store; not shared | name only | as E (the served model's held space); the first on an encoder is A | `notes` |
 | **H. Annotations** | Claims about another collection; no encoder | claims file, name | 1, 2, 5 | gutenberg-book-editions |
 | **I. A peer's collection** | A copy fetched from a peer | collection id, name | 1, 5 (fetched), 7, 8, on this node's encoder | Perugia's gutenberg |
-| **J. Sister, daughter, corrective** | Lineage (02 §2.7) | plugin, her sister, the space's collection, name (a sister into a held space, built); her mother or her sister, plus what changes (the rest, phase 4) | sister into a held space: 1, 2, 5 (derived), 6 (parts, manifest, text index; no vector — relayered: parts built from the lines, no text index), 7, 8 | normattiva-nemo |
+| **J. Sister, daughter, corrective** | Lineage (02 §2.7) | plugin, her sister, the space's collection, name (a sister into a held space, built); her mother (a daughter) or her sister (a sister, a corrective sister), plus what changes (the rest, phase 4) | sister into a held space: 1, 2, 5 (derived), 6 (parts, manifest, text index; no vector — relayered: parts built from the lines, no text index), 7, 8 | normattiva-nemo |
 
 ### Simple examples
 

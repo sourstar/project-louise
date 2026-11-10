@@ -1,7 +1,8 @@
 """hold.collection — create a Codex and read it back. docs/07-commands.md §7.3.
 
     hold collection create   → a root Codex
-    hold collection derive   → a sister (the mother's corpus, a new space)
+    hold collection derive   → a sister (her sister's corpus; a new space, layers,
+                               schedule or work)
     hold collection continue → a daughter (a new toolchain, the same space)
     hold collection replace  → a corrective sister (with its defect)
     hold collection show     → what a Codex says, and the ids derived from it
@@ -65,9 +66,9 @@ def default_name(root: Path, codex: Codex) -> str:
     return f"{codex.plugin}-{codex.collection_id.split(':', 1)[1][:12]}"
 
 
-def write(root: Path, codex: Codex, mother: Codex | None = None, *,
+def write(root: Path, codex: Codex, predecessor: Codex | None = None, *,
           name: str | None = None) -> Path:
-    cx.validate(codex, mother)
+    cx.validate(codex, predecessor)
     root.mkdir(parents=True, exist_ok=True)
     # Idempotence is by IDENTITY, not by name: writing a Codex this root
     # already holds is nothing to do, whatever it is called here. Only a
@@ -796,7 +797,7 @@ def write_calibration(shard_dir_path: Path, codex: Codex, vectors, envelope,
                    ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
-def derive(root: Path, mother_id: str, *,
+def derive(root: Path, sister_id: str, *,
            space: Space | None = None,
            space_from: Codex | None = None,
            layers: Iterable[Layer] | None = None,
@@ -807,41 +808,41 @@ def derive(root: Path, mother_id: str, *,
            embed=None, embed_query=None, key=None,
            now: str | None = None, pairs: bytes | None = None,
            name: str | None = None) -> Codex:
-    """A sister: her mother's corpus, and at most `space`, `layers`, `update`
+    """A sister: her sister's corpus, and at most `space`, `layers`, `update`
     and `work` changed (02 §2.7).
 
     `pairs`: when she embeds a reference of her own in a PAIR space, the
     bytes of its calibration set (09 §9.12, amended 2026-10-08), as for
     `create_from_recipe`; a reference she inherits carries its set already.
 
-    HER CODEX VERSION FOLLOWS HER SPACE. In her mother's space she keeps her
-    mother's version: a version-2 mother's space_id has the engine's image in
+    HER CODEX VERSION FOLLOWS HER SPACE. In her sister's space she keeps her
+    sister's version: a version-2 sister's space_id has the engine's image in
     it (09 §9.3), so a version-3 sister would land in another space and
     could not share the vectors she is defined to inherit. In a NEW space
     she is written as new Codices are — CODEX_VERSION, naming the engine her
     reference vectors are computed with. An engine carrying load options
     needs version 4 (09 §9.3) wherever she is: the engine is outside
-    `space_id`, so a sister in her mother's space may name a new one. A
+    `space_id`, so a sister in her sister's space may name a new one. A
     BACKEND engine makes her version 6, and only it (09 §9.3, amended
     2026-10-08): a `--space-from` copy of a version-6 space is 6, of a
-    version-5 one 5 (02 §2.7), and a sister of a version-6 mother naming an
+    version-5 one 5 (02 §2.7), and a sister of a version-6 sister naming an
     argv engine is 5.
 
     `embed` IS REQUIRED WHEN THE SISTER'S ENCODER DIFFERS, and ignored when
-    it does not. A new build needs its own reference vectors — the mother's
+    it does not. A new build needs its own reference vectors — her sister's
     were produced by another build, so comparing against them would compare
     nothing — and 06 §6.6 puts that embedding at collection creation. A
     sister who changes only her cadence, her layers or her work inherits
-    the mother's member and needs no endpoint. `--space-from` inherits the
+    her sister's member and needs no endpoint. `--space-from` inherits the
     SOURCE's, since her space was copied from it byte for byte.
 
     `cleaning_version` is never copied and never changed — changing it would
     re-derive the corpus she is defined to inherit. `space_from` copies
     another Codex's `space` and `layers` byte for byte and is refused when
-    that Codex's `cleaning_version` differs from the mother's, because the
+    that Codex's `cleaning_version` differs from her sister's, because the
     resulting `space_id` could not then equal the source's.
 
-    The ARCHIVE credits follow the space (02 §2.7): her mother's when
+    The ARCHIVE credits follow the space (02 §2.7): her sister's when
     `space_id` matches, the `space_from` Codex's when that supplied the
     space, and otherwise whatever `credits` names — none when it names
     nothing. The caller expands archive ids into `Credit`s from the
@@ -852,43 +853,43 @@ def derive(root: Path, mother_id: str, *,
     on every path: a sister shares the corpus by definition, and a new
     encoder does not unwrite whose text it read.
     """
-    mother = read(root, mother_id)
+    her_sister = read(root, sister_id)
 
     if space_from is not None:
         if space is not None or layers is not None:
             raise CodexError("derive: --space-from supplies the space and the "
                              "layers; do not also give them")
-        if space_from.cleaning_version != mother.cleaning_version:
+        if space_from.cleaning_version != her_sister.cleaning_version:
             raise CodexError(
                 f"derive: --space-from names a Codex whose cleaning_version is "
                 f"{space_from.cleaning_version} and her sister's is "
-                f"{mother.cleaning_version}. A sister keeps her sister's, so "
+                f"{her_sister.cleaning_version}. A sister keeps her sister's, so "
                 f"the resulting space_id could not equal the source's — which "
                 f"is the whole of what the flag promises")
         space, layers = space_from.space, space_from.layers
 
-    new_layers = tuple(layers) if layers is not None else mother.layers
+    new_layers = tuple(layers) if layers is not None else her_sister.layers
     if space_from is not None:
         new_space = space          # the source's space, epoch included
     elif space is not None:
-        # A sister keeps her mother's epoch: only a corrective sister mints
+        # A sister keeps her sister's epoch: only a corrective sister mints
         # one, and forcing "0" here would put the sister of a corrected
-        # collection in a different space from her mother for no reason.
-        new_space = _replace(space, epoch=mother.space.epoch)
+        # collection in a different space from her sister for no reason.
+        new_space = _replace(space, epoch=her_sister.space.epoch)
     else:
-        new_space = mother.space
+        new_space = her_sister.space
 
     if new_space.has_engine:
-        # In her mother's space she keeps her mother's version; in a new one
+        # In her sister's space she keeps her sister's version; in a new one
         # she is written as new Codices are. An engine carrying `options`
-        # needs version 4 either way (09 §9.3): in her mother's space too,
+        # needs version 4 either way (09 §9.3): in her sister's space too,
         # since the engine is outside `space_id` and a sister may name a new
         # one there.
-        in_mothers_space = (mother.version >= cx.ENGINE_VERSION
-                            and _replace(mother, space=new_space,
-                                         layers=new_layers).space_id == mother.space_id)
-        version = mother.version if in_mothers_space else cx.CODEX_VERSION
-        if (not in_mothers_space and space_from is not None
+        in_her_sisters_space = (her_sister.version >= cx.ENGINE_VERSION
+                                and _replace(her_sister, space=new_space,
+                                             layers=new_layers).space_id == her_sister.space_id)
+        version = her_sister.version if in_her_sisters_space else cx.CODEX_VERSION
+        if (not in_her_sisters_space and space_from is not None
                 and space_from.version < cx.INPUT_VERSION):
             # the source's layers carry no `input`; at version 5 they would,
             # and her space_id could not equal the source's (09 §9.3,
@@ -896,51 +897,51 @@ def derive(root: Path, mother_id: str, *,
             version = cx.INPUT_VERSION - 1
         if new_space.has_options:
             version = max(version, cx.OPTIONS_VERSION)
-        if (new_space.has_backend and in_mothers_space
-                and mother.version < cx.INPUT_VERSION):
+        if (new_space.has_backend and in_her_sisters_space
+                and her_sister.version < cx.INPUT_VERSION):
             # A backend engine makes her version 6 (09 §9.3, amended
-            # 2026-10-08), whose layers carry `input` — which her mother's,
-            # below version 5, do not. So she could not keep her mother's
+            # 2026-10-08), whose layers carry `input` — which her sister's,
+            # below version 5, do not. So she could not keep her sister's
             # space_id, which is what staying in it promises.
             raise CodexError(
                 f"derive: a backend engine is admitted from Codex version "
                 f"{cx.BACKEND_VERSION}, whose layers carry `input`, and her sister is "
-                f"version {mother.version}, whose layers do not — so a sister naming "
+                f"version {her_sister.version}, whose layers do not — so a sister naming "
                 f"one cannot stay in her sister's space (09 §9.3). An engine joins a "
                 f"space by passing the gate, not by a new Codex (03 §3.3): validate "
                 f"the run, or derive her in a new space")
         # version 6 for a space carrying a backend engine, and for it alone
         # (09 §9.3, amended 2026-10-08; 02 §2.7 for `--space-from`)
         version = cx.written_version(new_space, version)
-    elif mother.version >= cx.ENGINE_VERSION:
+    elif her_sister.version >= cx.ENGINE_VERSION:
         raise CodexError(
             "derive: a space is written with the ENGINE its reference vectors are "
             "computed with — {weights, engine, label} — not with an image alone "
             "(09 §9.3, the engine amendment)")
     else:
-        version = mother.version
+        version = her_sister.version
 
     sister = _replace(
-        mother,
+        her_sister,
         version=version,
-        slicing=_slicing_at(mother.slicing, version),
-        descriptive=descriptive if descriptive is not None else mother.descriptive,
+        slicing=_slicing_at(her_sister.slicing, version),
+        descriptive=descriptive if descriptive is not None else her_sister.descriptive,
         space=new_space,
         layers=new_layers,
-        update=update if update is not None else mother.update,
-        work=work if work is not None else mother.work,
-        derived_from=mother.collection_id,
+        update=update if update is not None else her_sister.update,
+        work=work if work is not None else her_sister.work,
+        derived_from=her_sister.collection_id,
         space_from=None if space_from is None else space_from.collection_id,
         continues=None, continues_through=None, origin_reachable_until=None,
         replaces=None,
-        toolchain=_replace(mother.toolchain, mother_platform_image=None),
+        toolchain=_replace(her_sister.toolchain, mother_platform_image=None),
     )
 
     # Only the archive entries are in play. `kept` is what descends on every
     # path — the corpus entry (hers because the corpus is hers) and the
-    # community entry (hers because her `embedding` is her mother's).
-    kept = tuple(c for c in mother.credits if c.kind != cx.ARCHIVE)
-    same_space = sister.space_id == mother.space_id
+    # community entry (hers because her `embedding` is her sister's).
+    kept = tuple(c for c in her_sister.credits if c.kind != cx.ARCHIVE)
+    same_space = sister.space_id == her_sister.space_id
     if credits is not None:
         if same_space:
             raise CodexError("derive: a sister in her sister's space carries "
@@ -956,7 +957,7 @@ def derive(root: Path, mother_id: str, *,
     elif not same_space:
         sister = _replace(sister, credits=_merge_credits(kept, ()))
 
-    sources = (mother,) if space_from is None else (mother, space_from)
+    sources = (her_sister,) if space_from is None else (her_sister, space_from)
     own = None
     if embed is not None and not any(_same_reference(sister, s) for s in sources):
         # A new build: embed ONCE, as `create` does, and let the new hashes
@@ -966,7 +967,7 @@ def derive(root: Path, mother_id: str, *,
         # which an engine whose runs differ in the last bit could never give)
         from . import calibration as cal
         require_signer(key, now)          # before the embedding, before the Codex
-        items, pairs = _calibration_items(mother.modality, sister.space.calibration.set,
+        items, pairs = _calibration_items(her_sister.modality, sister.space.calibration.set,
                                           cal.form(sister), pairs)
         vectors, envelope, got_v, got_e = cal.build_member(
             items, embed, normalise=sister.space.normalise, dim=sister.space.dim)
@@ -976,26 +977,26 @@ def derive(root: Path, mother_id: str, *,
             calibration=_replace(sister.space.calibration, vectors=got_v,
                                  query_vectors=got_q)))
         own = (vectors, envelope, query_vectors)
-    shard_dir_path = write(root, sister, mother, name=name)
+    shard_dir_path = write(root, sister, her_sister, name=name)
     if any(_same_reference(sister, s) for s in sources):
         carry_calibration(root, sister, shard_dir_path, *sources)
     elif own is not None:
         write_calibration(shard_dir_path, sister, own[0], own[1], key=key, now=now,
                           query_vectors=own[2], pairs=pairs)
     else:
-        _write_own_calibration(sister, shard_dir_path, embed, mother.modality,
+        _write_own_calibration(sister, shard_dir_path, embed, her_sister.modality,
                                key, now, embed_query, pairs=pairs)
     return sister
 
 
 def _slicing_at(slicing: Any, version: int) -> Any:
-    """Her mother's slicing, written at HER version (09 §9.3, §9.5):
+    """Her sister's slicing, written at HER version (09 §9.3, §9.5):
     `slicing.container` is declared exactly from GRAPH_VERSION, and its
     absence below means JSONL — so a sister written at 9 or later of an older
-    mother states "jsonl" (her parts are her mother's: normattiva-nemo, a
-    version-11 sister of a version-4 mother, 2026-11-08), and one written
-    below 9 of a JSONL mother leaves it out. The same parts either way
-    (`seed.records_slicing`); a Parquet mother's sister below 9 is refused,
+    sister states "jsonl" (her parts are her sister's: normattiva-nemo, a
+    version-11 sister of a version-4 sister, 2026-11-08), and one written
+    below 9 of a JSONL sister leaves it out. The same parts either way
+    (`seed.records_slicing`); a sister below 9 of a Parquet one is refused,
     since that version cannot say it."""
     has = isinstance(slicing, dict) and "container" in slicing
     if version >= cx.GRAPH_VERSION and not has:
@@ -1142,7 +1143,8 @@ def carry_calibration(root: Path, child: Codex, shard_dir_path: Path,
     the encoder build and re-embedding the same set with the same build to
     get bit-identical vectors is not something float arithmetic promises.
 
-    `sources` is tried in order: the mother, and for `--space-from` the
+    `sources` is tried in order: the Codex she comes from (a daughter's
+    mother, a sister's sister), and for `--space-from` the
     Codex that supplied the space — whose member is the one the sister's
     hashes name, since her space was copied from it byte for byte.
     """
@@ -1193,7 +1195,7 @@ def recalibrate(space: Space, modality: str, embed, embed_query=None,
     """`space` with the reference vectors THIS encoder produces.
 
     A sister in a new space has a new encoder build, and a new build needs
-    its own reference: the mother's vectors were produced by another build
+    its own reference: her sister's vectors were produced by another build
     and comparing against them would compare nothing. So `derive` embeds
     exactly as `create` does (06 §6.6), and the two hashes it writes are
     outputs here too — whatever the caller's `space` carried in those two
@@ -1273,42 +1275,42 @@ def continue_(root: Path, mother_id: str, *, platform_image: str,
     return daughter
 
 
-def replace(root: Path, mother_id: str, *, defect: Defect,
+def replace(root: Path, sister_id: str, *, defect: Defect,
             platform_image: str | None = None, space: Space | None = None,
             descriptive: Descriptive | None = None) -> Codex:
-    """A corrective sister: the mother's origin, a corrected toolchain, and a
+    """A corrective sister: her sister's origin, a corrected toolchain, and a
     fresh space by construction — `space.epoch` is salted with the replaced
-    Codex's id, so no vector of the mother's is admissible to her.
+    Codex's id, so no vector of her sister's is admissible to her.
 
     The defect travels with her, and until a peer has reproduced it she has
     no right to mark anything superseded (02 §2.7, 03 §3.6).
     """
-    mother = read(root, mother_id)
-    tc = mother.toolchain
+    her_sister = read(root, sister_id)
+    tc = her_sister.toolchain
     if platform_image:
         tc = _replace(tc, platform_image=platform_image)
     tc = _replace(tc, mother_platform_image=None)
-    base = space if space is not None else mother.space
+    base = space if space is not None else her_sister.space
     corrective = _replace(
-        mother,
+        her_sister,
         # her space is fresh by construction (the salted epoch), so her
         # version is free to follow her engine: 6 with a backend engine and
         # only with one (09 §9.3, amended 2026-10-08)
-        version=cx.written_version(base, mother.version),
-        descriptive=descriptive if descriptive is not None else mother.descriptive,
+        version=cx.written_version(base, her_sister.version),
+        descriptive=descriptive if descriptive is not None else her_sister.descriptive,
         toolchain=tc,
-        space=_replace(base, epoch=cx.corrective_epoch(mother.collection_id)),
-        replaces=Replaces(mother.collection_id, defect),
+        space=_replace(base, epoch=cx.corrective_epoch(her_sister.collection_id)),
+        replaces=Replaces(her_sister.collection_id, defect),
         derived_from=None, space_from=None, continues=None,
         continues_through=None, origin_reachable_until=None,
         # No archive credit: a correction starts from zero and carries none
-        # of the mother's vectors. It keeps the corpus and community entries,
+        # of her sister's vectors. It keeps the corpus and community entries,
         # which were never about the vectors it discarded — the text is the
         # same text, re-derived from the same origin (02 §2.7).
         credits=_merge_credits(
-            (c for c in mother.credits if c.kind != cx.ARCHIVE), ()),
+            (c for c in her_sister.credits if c.kind != cx.ARCHIVE), ()),
     )
-    carry_calibration(root, corrective, write(root, corrective, mother), mother)
+    carry_calibration(root, corrective, write(root, corrective, her_sister), her_sister)
     return corrective
 
 

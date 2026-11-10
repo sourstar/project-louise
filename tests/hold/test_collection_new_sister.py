@@ -2,9 +2,9 @@
 a SISTER into a held space (operator, 2026-11-08: "Make J, it is time to do
 it" — normattiva-nemo, Normattiva's records in legi's Nemotron space).
 
-End to end on real collections: a mother holding vectors, a collection of
+End to end on real collections: her sister holding vectors, a collection of
 another space, `derive`, the parts seeded, the manifest and text index
-carried with nothing of the mother's vectors said held (hold/carry.py A1i).
+carried with nothing of her sister's vectors said held (hold/carry.py A1i).
 Only the card is stood in for: the twin's stated run, the CPU reference and
 the gate, which are tested where they live."""
 from __future__ import annotations
@@ -82,7 +82,7 @@ def test_a_sister_is_derived_into_the_held_space_and_carries_records_index_and_n
     assert sister.space_id == bge.space_id and sister.derived_from == old.collection_id
     def cut(c):
         return [(l.chunker.to_dict(), l.rule, l.form) for l in c.layers]
-    assert sister.layers == bge.layers and cut(sister) == cut(old), "the space's layers: her mother's cut"
+    assert sister.layers == bge.layers and cut(sister) == cut(old), "the space's layers: her sister's cut"
     assert sister.space.calibration.vectors == bge.space.calibration.vectors, \
         "the held space's reference, inherited: nothing embedded"
     assert card["order"] == [("cpu-reference", "sis"), ("gate", "sis")]
@@ -90,13 +90,13 @@ def test_a_sister_is_derived_into_the_held_space_and_carries_records_index_and_n
     try:
         assert con.execute("SELECT COUNT(*) FROM documents").fetchone()[0] == n
         assert con.execute("SELECT COUNT(*) FROM documents WHERE embed_done>0 OR embed_version<>0"
-                           ).fetchone()[0] == 0, "none of the mother's vectors said held"
+                           ).fetchone()[0] == 0, "none of her sister's vectors said held"
         assert con.execute("SELECT COUNT(*) FROM chunk_hashes").fetchone()[0] == 0
     finally:
         con.close()
     assert (root / "sis" / "index" / "words").read_text() == "the text index"
     assert not spaces.known_lance_rows(_local(root, "sis").lance_dir)
-    assert spaces.known_lance_rows(_local(root, "old").lance_dir), "the mother keeps hers"
+    assert spaces.known_lance_rows(_local(root, "old").lance_dir), "her sister keeps hers"
     from app.hold import workflow as wf
     prog = json.loads(wf.progress_path("sis").read_text())
     assert prog["case"] == "J" and set(prog["steps"]) == {"make", "carry", "cpu-reference", "gate"}
@@ -144,12 +144,12 @@ def test_what_case_j_does_not_make_is_refused_before_anything(pair, card, why, t
 
 
 def test_a_sister_who_cuts_otherwise_carries_her_records_and_the_worker_indexes_them(pair, card):
-    """2026-11-08: normattiva-nemo cuts with the legal space's layer, its
-    mother with akn_article (A1i relayered). Her manifest is carried with
+    """2026-11-08: normattiva-nemo cuts with the legal space's layer, her
+    sister with akn_article (A1i relayered). Her manifest is carried with
     every index mark emptied and no text index; her parts are BUILT from her
-    mother's record lines, none parsed, so her records are her mother's byte
+    sister's record lines, none parsed, so her records are her sister's byte
     for byte and her parts' chunks her own layer's (02 §2.7 amended
-    2026-11-08). Her mother keeps everything."""
+    2026-11-08). Her sister keeps everything."""
     from functools import partial
     from app.hold import seed, workflow as wf
     root, old, _ = pair
@@ -173,17 +173,17 @@ def test_a_sister_who_cuts_otherwise_carries_her_records_and_the_worker_indexes_
     _, sister = col.resolve(root, "sis")
     assert sister.space_id == other.space_id and [l.chunker.id for l in sister.layers] == ["fixed"]
     src, mine = seed.latest_snapshot(root, "old"), seed.latest_snapshot(root, "sis")
-    assert src.records == mine.records, "every record of her mother's, none parsed"
+    assert src.records == mine.records, "every record of her sister's, none parsed"
     assert sorted(s.chunks_root for s in src.shards) != sorted(s.chunks_root for s in mine.shards), \
         "her chunks: her own layer's"
 
     assert sorted((s.slice, s.n, s.records_root) for s in src.shards) == \
         sorted((s.slice, s.n, s.records_root) for s in mine.shards), \
-        "her records: her mother's, byte for byte (a line carries no layer, 09 §9.5)"
+        "her records: her sister's, byte for byte (a line carries no layer, 09 §9.5)"
     assert sum(s.chunks for s in src.shards) != sum(s.chunks for s in mine.shards), \
         "her layer cut them otherwise"
     assert not (root / "sis" / "index" / "words").exists(), "the text index is NOT carried: other chunks"
-    assert (root / "old" / "index" / "words").read_text() == "the text index", "her mother keeps hers"
+    assert (root / "old" / "index" / "words").read_text() == "the text index", "her sister keeps hers"
     con = sqlite3.connect(root / "sis" / "state" / "manifest.sqlite")
     assert con.execute("SELECT COUNT(*) FROM documents").fetchone()[0] == n_old
     assert con.execute("SELECT COUNT(*) FROM documents WHERE fts_done<>0 OR fts_version<>0 OR "
@@ -198,12 +198,12 @@ def test_a_sister_who_cuts_otherwise_carries_her_records_and_the_worker_indexes_
     assert _new(root) == 0, "run again: the carry kept"
 
 
-def test_a_sister_written_at_version_9_or_later_states_her_older_mothers_jsonl_parts(pair, card):
+def test_a_sister_written_at_version_9_or_later_states_her_older_sisters_jsonl_parts(pair, card):
     """München, 2026-11-08: normattiva-nemo refused at make — the legal space
-    has a document instruction (Codex version 11), her mother is version 4,
+    has a document instruction (Codex version 11), her sister is version 4,
     and "a version 9 Codex declares its record parts' container". Absent
     below version 9 means JSONL (09 §9.5): she states it, and her parts are
-    her mother's (seed.records_slicing)."""
+    her sister's (seed.records_slicing)."""
     from functools import partial
     from app.hold import codex as cx, seed
     root, old, _ = pair
@@ -224,10 +224,10 @@ def test_a_sister_written_at_version_9_or_later_states_her_older_mothers_jsonl_p
     assert sister.version == other.version and sister.space_id == other.space_id
     assert sister.slicing["container"] == cx.JSONL
     assert seed.records_slicing(sister) == seed.records_slicing(old), "the same parts"
-    assert seed.record_differences(old, sister) == [], "her records are her mother's"
+    assert seed.record_differences(old, sister) == [], "her records are her sister's"
 
 
-def test_a_sister_below_version_9_of_a_jsonl_mother_leaves_the_container_out():
+def test_a_sister_below_version_9_of_a_jsonl_sister_leaves_the_container_out():
     from app.hold import codex as cx
     from app.hold.collection import _slicing_at
     assert _slicing_at({"records_per_shard": 2, "container": cx.JSONL}, 5) == {"records_per_shard": 2}

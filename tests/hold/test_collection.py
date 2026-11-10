@@ -112,72 +112,72 @@ def test_create_refuses_lineage_fields(tmp_path: Path, codex):
 # ---- derive: a sister -----------------------------------------------------
 
 def test_derive_makes_a_sister_in_a_new_space(tmp_path: Path, codex):
-    mother = a_root(tmp_path, codex)
-    sister = col.derive(tmp_path, mother.collection_id, space=other_space(codex),
+    her_sister = a_root(tmp_path, codex)
+    sister = col.derive(tmp_path, her_sister.collection_id, space=other_space(codex),
                         embed=fake_embed, embed_query=fake_query_embed, key=KEY, now=NOW)
     assert sister.relation == "sister"
-    assert sister.derived_from == mother.collection_id
-    assert sister.space_id != mother.space_id
-    assert sister.origin == mother.origin
-    assert sister.cleaning_version == mother.cleaning_version
+    assert sister.derived_from == her_sister.collection_id
+    assert sister.space_id != her_sister.space_id
+    assert sister.origin == her_sister.origin
+    assert sister.cleaning_version == her_sister.cleaning_version
     shown = col.show(tmp_path, sister.collection_id)
     assert shown["relation"] == "sister"
     assert shown["lineage_id"] == sister.collection_id   # a sister starts a lineage
 
 
 def test_a_sister_may_change_only_space_layers_update_and_work(tmp_path, codex):
-    mother = a_root(tmp_path, codex)
-    weekly = col.derive(tmp_path, mother.collection_id,
+    her_sister = a_root(tmp_path, codex)
+    weekly = col.derive(tmp_path, her_sister.collection_id,
                         update=Update("weekly", 1, 0), work=Work(9_000_000, "P1W"))
-    assert weekly.space_id == mother.space_id, "same encoder, same space"
+    assert weekly.space_id == her_sister.space_id, "same encoder, same space"
     assert weekly.update.cadence == "weekly"
     with pytest.raises(CodexError, match="a sister changes something"):
-        col.derive(tmp_path, mother.collection_id)
+        col.derive(tmp_path, her_sister.collection_id)
 
 
 def test_a_sister_who_changes_nothing_but_the_cadence_shares_every_vector(tmp_path, codex):
     """02 §2.7's motivating case, and the one 09 §9.3's epoch rule broke."""
-    mother = a_root(tmp_path, codex)
-    weekly = col.derive(tmp_path, mother.collection_id, update=Update("weekly", 1, 0))
-    assert weekly.space_id == mother.space_id
-    assert weekly.credits == mother.credits
+    her_sister = a_root(tmp_path, codex)
+    weekly = col.derive(tmp_path, her_sister.collection_id, update=Update("weekly", 1, 0))
+    assert weekly.space_id == her_sister.space_id
+    assert weekly.credits == her_sister.credits
 
 
 def test_a_sisters_ARCHIVE_credits_follow_the_space(tmp_path: Path):
     credited = pubmed(credits=with_credits(a_credit()))
-    mother = a_root(tmp_path, credited)
+    her_sister = a_root(tmp_path, credited)
 
-    same_space = col.derive(tmp_path, mother.collection_id, update=Update("weekly", 1, 0))
-    assert same_space.credits == mother.credits, "in her mother's space she owes"
+    same_space = col.derive(tmp_path, her_sister.collection_id, update=Update("weekly", 1, 0))
+    assert same_space.credits == her_sister.credits, "in her sister's space she owes"
 
-    elsewhere = col.derive(tmp_path, mother.collection_id, space=other_space(credited),
+    elsewhere = col.derive(tmp_path, her_sister.collection_id, space=other_space(credited),
                              embed=fake_embed, embed_query=fake_query_embed, key=KEY, now=NOW)
     assert cx.archive_credits(elsewhere) == (), \
-        "in another space nothing of her mother's vectors is admissible"
+        "in another space nothing of her sister's vectors is admissible"
 
 
 def test_a_sister_in_another_space_still_owes_the_corpus_and_the_community(tmp_path):
     """The half of 02 §2.7 the kinds exist for. A new encoder discards every
-    vector her mother had — and it does not unwrite whose text she reads, nor
+    vector her sister had — and it does not unwrite whose text she reads, nor
     stop the community embedding for her. Before the kinds, this sister's
     `credits` was `()`, and a Wikipedia sister carried Wikipedia's whole text
     crediting nobody at all."""
     credited = pubmed(credits=with_credits(a_credit()))
-    mother = a_root(tmp_path, credited)
-    elsewhere = col.derive(tmp_path, mother.collection_id, space=other_space(credited),
+    her_sister = a_root(tmp_path, credited)
+    elsewhere = col.derive(tmp_path, her_sister.collection_id, space=other_space(credited),
                            embed=fake_embed, embed_query=fake_query_embed, key=KEY, now=NOW)
 
-    assert elsewhere.space_id != mother.space_id
+    assert elsewhere.space_id != her_sister.space_id
     kept = tuple(c for c in elsewhere.credits if c.kind != "archive")
-    assert kept == tuple(c for c in mother.credits if c.kind != "archive")
+    assert kept == tuple(c for c in her_sister.credits if c.kind != "archive")
     assert [c.kind for c in kept] == ["community", "corpus"]
     assert elsewhere.credits, "credits is never empty: the corpus entry is always there"
 
 
 def test_a_sister_in_a_new_space_may_declare_her_own_archives(tmp_path, codex):
-    mother = a_root(tmp_path, codex)
+    her_sister = a_root(tmp_path, codex)
     hers = (a_credit("zenodo-medcpt"),)
-    sister = col.derive(tmp_path, mother.collection_id, space=other_space(codex),
+    sister = col.derive(tmp_path, her_sister.collection_id, space=other_space(codex),
                         credits=hers, embed=fake_embed, embed_query=fake_query_embed,
                         key=KEY, now=NOW)
     assert cx.archive_credits(sister) == hers
@@ -185,9 +185,9 @@ def test_a_sister_in_a_new_space_may_declare_her_own_archives(tmp_path, codex):
 
 
 def test_archives_are_refused_where_the_space_brings_its_own_credits(tmp_path, codex):
-    mother = a_root(tmp_path, codex)
+    her_sister = a_root(tmp_path, codex)
     with pytest.raises(CodexError, match="carries that sister's archive credits"):
-        col.derive(tmp_path, mother.collection_id, update=Update("weekly", 1, 0),
+        col.derive(tmp_path, her_sister.collection_id, update=Update("weekly", 1, 0),
                    credits=(a_credit(),))
 
 
@@ -195,8 +195,8 @@ def test_space_from_copies_the_space_and_its_archive_credits(tmp_path: Path, cod
     source = a_root(tmp_path, pubmed(
         descriptive=Descriptive("PubMed on BGE", "Another space."),
         space=other_space(codex), credits=with_credits(a_credit())))
-    mother = a_root(tmp_path, codex)
-    sister = col.derive(tmp_path, mother.collection_id, space_from=source)
+    her_sister = a_root(tmp_path, codex)
+    sister = col.derive(tmp_path, her_sister.collection_id, space_from=source)
     assert sister.space_id == source.space_id
     assert sister.space_from == source.collection_id
     assert cx.archive_credits(sister) == cx.archive_credits(source)
@@ -210,19 +210,19 @@ def test_space_from_refuses_a_different_cleaning_version(tmp_path: Path, codex):
     source = a_root(tmp_path, pubmed(
         descriptive=Descriptive("PubMed cleaned again", "A different cleaner."),
         cleaning_version=2, space=other_space(codex)))
-    mother = a_root(tmp_path, codex)
+    her_sister = a_root(tmp_path, codex)
     with pytest.raises(CodexError, match="cleaning_version is 2 and her sister's is 1"):
-        col.derive(tmp_path, mother.collection_id, space_from=source)
+        col.derive(tmp_path, her_sister.collection_id, space_from=source)
 
 
-def test_a_sister_keeps_her_mothers_epoch(tmp_path: Path, codex):
-    mother = a_root(tmp_path, codex)
-    corrective = col.replace(tmp_path, mother.collection_id, defect=A_DEFECT,
+def test_a_sister_keeps_her_sisters_epoch(tmp_path: Path, codex):
+    first = a_root(tmp_path, codex)
+    corrective = col.replace(tmp_path, first.collection_id, defect=A_DEFECT,
                              platform_image=PLATFORM2)
-    her_sister = col.derive(tmp_path, corrective.collection_id,
-                            update=Update("weekly", 1, 0))
-    assert her_sister.space.epoch == corrective.space.epoch
-    assert her_sister.space_id == corrective.space_id
+    sister = col.derive(tmp_path, corrective.collection_id,
+                        update=Update("weekly", 1, 0))
+    assert sister.space.epoch == corrective.space.epoch
+    assert sister.space_id == corrective.space_id
 
 
 # ---- continue: a daughter -------------------------------------------------
@@ -254,16 +254,16 @@ def test_a_daughter_carries_her_mothers_platform_image(tmp_path: Path, codex):
 # ---- replace: a corrective sister -----------------------------------------
 
 def test_replace_makes_a_corrective_sister_with_a_fresh_space(tmp_path, codex):
-    mother = a_root(tmp_path, codex)
-    fixed = col.replace(tmp_path, mother.collection_id, defect=A_DEFECT,
+    her_sister = a_root(tmp_path, codex)
+    fixed = col.replace(tmp_path, her_sister.collection_id, defect=A_DEFECT,
                         platform_image=PLATFORM2)
     assert fixed.relation == "corrective-sister"
-    assert fixed.replaces.codex == mother.collection_id
+    assert fixed.replaces.codex == her_sister.collection_id
     assert fixed.replaces.defect == A_DEFECT
-    assert fixed.layers == mother.layers
-    assert fixed.cleaning_version == mother.cleaning_version
-    assert fixed.space.encoder == mother.space.encoder
-    assert fixed.space_id != mother.space_id, \
+    assert fixed.layers == her_sister.layers
+    assert fixed.cleaning_version == her_sister.cleaning_version
+    assert fixed.space.encoder == her_sister.space.encoder
+    assert fixed.space_id != her_sister.space_id, \
         "identical encoder and layers, still a new space by construction"
     assert col.read(tmp_path, fixed.collection_id).replaces.defect == A_DEFECT
 
@@ -273,10 +273,10 @@ def test_a_corrective_sister_owes_no_archive_but_still_owes_the_corpus(tmp_path)
     and she re-derives the SAME text from the SAME origin, so the corpus
     credit is untouched by the correction. Discarding the vectors is not a
     reason to stop naming whose words they were computed from (02 §2.7)."""
-    mother = a_root(tmp_path, pubmed(credits=with_credits(a_credit())))
-    fixed = col.replace(tmp_path, mother.collection_id, defect=A_DEFECT)
+    her_sister = a_root(tmp_path, pubmed(credits=with_credits(a_credit())))
+    fixed = col.replace(tmp_path, her_sister.collection_id, defect=A_DEFECT)
     assert cx.archive_credits(fixed) == ()
-    assert fixed.credits == tuple(c for c in mother.credits if c.kind != "archive")
+    assert fixed.credits == tuple(c for c in her_sister.credits if c.kind != "archive")
     assert [c.kind for c in fixed.credits] == ["community", "corpus"]
 
 
