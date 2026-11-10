@@ -3395,6 +3395,11 @@ def _scan_only(con, collection, reason: str, stop=None) -> None:
                                      log=lambda m, _con=con: db.log_event(_con, "info", "discover", m))
             if out.get("deferred"):
                 db.log_event(con, "info", "discover", f"embed selection waits: {out['deferred'][:400]}")
+        # ONE VERSION PER ARTICLE IN SEARCH (operator, 2026-11-10;
+        # app/wiki_versions.py): the map the web reads, made for what the scan
+        # just made the manifest — its cost follows the same events
+        if not held.is_set() and getattr(collection, "plugin", None) in embed_select.SMART_PLUGINS:
+            _build_wiki_versions(con, collection)
     if held.fired is frozen:
         db.log_event(con, "info", "discover",
                      "corpus scan stopped: the collection is frozen; it goes on from here when unfrozen")
@@ -3409,6 +3414,28 @@ def _scan_only(con, collection, reason: str, stop=None) -> None:
         db.log_event(con, "info", "discover",
                      f"picked up {stats.get('added', 0)} new, "
                      f"{stats.get('changed', 0)} changed books")
+
+
+def _build_wiki_versions(con, collection) -> None:
+    """The wikipedia version map (app/wiki_versions.py), when the manifest
+    or the page_props run changed. Never fails the scan: a map not made
+    leaves search as ranked, and the reason is said."""
+    from app import wiki_versions
+    try:
+        sig = embed_select.signature(collection, con, embed_select.props_signature(collection))
+        out = wiki_versions.build(collection, con, signature=sig)
+    except embed_select.Unavailable as e:
+        db.log_event(con, "info", "discover", f"wikipedia version map waits: {str(e)[:400]}")
+        return
+    except Exception as e:   # noqa: BLE001 — search stays as ranked
+        db.log_event(con, "warn", "discover",
+                     f"wikipedia version map not made ({type(e).__name__}: {str(e)[:300]}); search shows "
+                     f"every matching version until it is")
+        return
+    if not out.get("skipped"):
+        db.log_event(con, "info", "discover",
+                     f"wikipedia version map: {out.get('items', 0):,} articles over "
+                     f"{out.get('with_item', 0):,} versions — search shows each article once")
 
 
 _license_nagged: dict[str, float] = {}
