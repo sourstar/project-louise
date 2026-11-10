@@ -229,6 +229,10 @@ class AskQueryBody(BaseModel):
     # the reader's "Quality / Speed" (operator, 2026-11-09): Speed translates
     # with the chat model instead of the translation model (app/translate.py)
     speed: bool = False
+    # the reader's "Quick / Quality" text search (operator, 2026-11-09):
+    # Quick searches only the query's language and English
+    # (app/language_plan.py `quick`)
+    quick: bool = False
     collections: list[str] | None = None
     mode: str = "hybrid"
     # "the maximum number of results a query returns before and after
@@ -830,7 +834,8 @@ def _say_search_timings(body: AskQueryBody, result: dict) -> str:
         ms, name = max(got)
         return f" ({name} {ms:,.0f})"
     line = (f"[info:ask] search {t.get('total', 0):,.0f} ms"
-            f" ({'speed' if body.speed else 'quality'}, {len(result.get('hits') or [])} hits): "
+            f" ({'speed' if body.speed else 'quality'}{', quick text' if body.quick else ''}, "
+            f"{len(result.get('hits') or [])} hits): "
             f"languages {t.get('languages', 0):,.0f}"
             + "".join(f", {leg} {t.get(leg, 0):,.0f}{slowest(leg)}" for leg in ("catalog", "fts", "dense"))
             + f", rerank {t.get('rerank', 0):,.0f}")
@@ -1026,11 +1031,13 @@ def kept_search(sid: str | None, query: str) -> dict | None:
 
 def _ask_result(body: AskQueryBody) -> dict:
     chosen = {"annotations": body.annotations} if body.annotations is not None else {}
-    result = query_service.run_search(body.collections, body.query, body.limit, body.mode, True,
-                                      rerank_depth=body.rerank_depth,
-                                      all_languages=body.all_languages,
-                                      **({"show_in": body.show_in} if body.show_in else {}),
-                                      **chosen)
+    from . import language_plan
+    with language_plan.quick(body.quick):
+        result = query_service.run_search(body.collections, body.query, body.limit, body.mode, True,
+                                          rerank_depth=body.rerank_depth,
+                                          all_languages=body.all_languages,
+                                          **({"show_in": body.show_in} if body.show_in else {}),
+                                          **chosen)
     # every hit names its COLLECTION for the reader panel: federated hits
     # carry it; a single-collection hit is resolved from its source prefix
     # (the plugin id) to the first collection of that plugin

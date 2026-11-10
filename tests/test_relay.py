@@ -285,3 +285,15 @@ def test_a_search_frees_the_card_around_itself_and_the_page_s_activity_keeps_the
     held.clear()
     c.post("/ask/translate/stream", json={"lang": "en", "items": [{"id": "t", "text": "balena", "src": "it"}]})
     assert held == [None]
+
+
+def test_quick_text_search_reaches_the_language_plan(isolated_config, monkeypatch):
+    """The page's Quick / Quality (operator, 2026-11-09): `quick` in the
+    search body is the plan's Quick for that search only."""
+    from app import language_plan, query_service
+    seen = []
+    monkeypatch.setattr(query_service, "run_search",
+                        lambda *a, **k: seen.append(language_plan._quick.get()) or {"hits": [], "timings": {}})
+    web._ask_result(web.AskQueryBody(query="balene", quick=True))
+    web._ask_result(web.AskQueryBody(query="balene"))
+    assert seen == [True, False] and language_plan._quick.get() is False

@@ -22,10 +22,14 @@ const [DIR, STATIC, WIDTH] = process.argv.slice(2);
   const out = await h.page.evaluate(() => {
     const labels = [...document.querySelectorAll('.seg[aria-label="what Ask gives"] label')];
     const speed = [...document.querySelectorAll('.seg[aria-label^="translation"] label')];
+    const text = [...document.querySelectorAll('.seg[aria-label^="text search"] label')];
     return {
       speedTexts: speed.map(l => l.textContent.trim()),
       speedBoxes: speed.map(l => { const r = l.getBoundingClientRect(); return { left: r.left, right: r.right }; }),
       speedChecked: (document.querySelector('input[name="speed"]:checked') || {}).value || null,
+      textTexts: text.map(l => l.textContent.trim()),
+      textBoxes: text.map(l => { const r = l.getBoundingClientRect(); return { left: r.left, right: r.right }; }),
+      textChecked: (document.querySelector('input[name="textsearch"]:checked') || {}).value || null,
       texts: labels.map(l => l.textContent.trim()),
       boxes: labels.map(l => { const r = l.getBoundingClientRect(); return { top: r.top, left: r.left, right: r.right, height: r.height }; }),
       fonts: labels.map(l => getComputedStyle(l).fontSize),
