@@ -111,6 +111,9 @@ https://docs.openvino.ai/2026/model-server/ovms_demos_rerank.html
 architecture upstream llama.cpp has not merged (#24083, open); our port is P10 (localai-bugs.md). It runs on
 its OWN backend, so the live engine and every space gated on it are untouched.
 
+The arms are A1, A2, A2i and A3, and no more (operator, 2026-11-10: "No, only nemo reranker"):
+gte-multilingual-reranker-base and Qwen3-VL-Reranker-2B are not benchmarked.
+
 1. **Build** (the build area, ~15–25 min): `SERIES_FILE=deploy/localai/patches/staged/nemotron-rerank.series
    sh deploy/localai/llama-cpp/build.sh sycl_f16 <out>` with the live engine's own SYCL_DEVICE_ARCH and
    INTEL_STACK settings; install it under `louise-sycl-f16-llama-cpp-<series digest>` (the name in the model
