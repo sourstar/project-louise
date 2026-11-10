@@ -1940,7 +1940,12 @@ concurrency = 4                                # optional: requests in flight; a
                                                # settings (01, docs/notes/rage.md). ABSENT, each takes the setting
                                                # recommended for this node's card type in the SHARD
                                                # (09 §9.19), when one is; written here, the file's value wins — the
-                                               # recommendation is never binding (amended 2026-11-01)
+                                               # recommendation is never binding (amended 2026-11-01). WRITTEN AT CREATE
+                                               # from a collection held here the same encoder serves — the same space
+                                               # first, else the same model at the same endpoint: its `batch`,
+                                               # `concurrency` and `device`, the keys its file states (amended
+                                               # 2026-11-10, operator: what is built for normattiva-nemo is reusable
+                                               # for the other legal collections); the gate measures them as any other
 
 [reranker]                                     # optional (05 §5.6): this node's reranker for this collection
 url = "http://nas:30447/v1/rerank"             # the full endpoint, path included — unlike [encoder]'s url
