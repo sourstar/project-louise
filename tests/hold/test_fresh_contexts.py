@@ -208,12 +208,21 @@ def test_only_a_model_listed_with_the_option_gets_the_pass_and_its_keep_is_zero(
         fixed.append(keep._fixed.get())
         return fake_embed(texts)
     monkeypatch.setattr(run_check.embeddings, "embed_calibration", embed_calibration)
-    fresh = run_check.fresh_contexts(recipe)
+    waits: list[float] = []
+    fresh = run_check.fresh_contexts(recipe, sleep=waits.append)
     assert fresh is not None
     out = fresh(["alpha", "beta", "gamma"])
     assert len(out) == 3 and fixed == [0, 0, 0], "each text alone, its keep fixed at 0"
     assert keep._fixed.get() is None, "and nothing fixed once the pass is over"
-    assert fresh.creations is None, "no count of the engine's creations is reachable yet: the gate refuses"
+    # every other round waits before each request: a creation that follows a
+    # pause is production's, and not the one that follows a free (the node,
+    # 2026-11-11: ~56 ms against ~1 ms)
+    assert waits == []
+    assert len(fresh(["alpha", "beta", "gamma"])) == 3 and fixed == [0] * 6
+    assert waits == [run_check.FRESH_PAUSE_S] * 3
+    fresh(["alpha"])
+    assert len(waits) == 3, "and the round after it is asked back to back again"
+    assert fresh.creations is None, "not VeGa's encoder: nobody counts its creations, and the gate refuses"
 
 
 class _Stated:
@@ -262,3 +271,132 @@ def test_a_listing_without_load_options_is_no_no(monkeypatch):
     with pytest.raises(emb.GateDeferred, match="lists none"):
         run_check.creates_per_request(recipe, _Stated(None))
     assert run_check.creates_per_request(recipe, _Stated({"Options": ["context_on_demand"]})) is True
+
+
+# ---- the reading: (calls, creations), the VeGa wrapper's count of the backend's word -------
+
+def test_a_round_is_held_to_its_calls_and_its_creations():
+    """The creations alone can add up wrongly: another collection's request
+    has a context created during the round while one of the pass's own rides
+    a kept one. The calls give it away."""
+    texts = [f"text {i}" for i in range(5)]
+    first = fake_embed(texts)
+    state = {"calls": 0, "created": 0, "rounds": 0}
+
+    def fresh(batch, *, others=0, riders=0):
+        state["rounds"] += 1
+        state["calls"] += len(batch) + others
+        state["created"] += len(batch) - riders + others
+        return fake_embed(batch)
+    reading = lambda: (state["calls"], state["created"])    # noqa: E731
+    assert emb.fresh_contexts(texts, fresh, first, b"seed", creations=12, counted=reading) == (12, 1.0)
+    assert state == {"calls": 12, "created": 12, "rounds": 3}
+
+    # one rider, one creation of another's: five contexts made, six calls answered
+    with pytest.raises(emb.GateDeferred, match="made 5 context.s. while the run answered 6 call"):
+        emb.fresh_contexts(texts, lambda b: fresh(b, others=1, riders=1), first, b"seed",
+                           counted=reading)
+    # every one of its own rode a context something else holds
+    with pytest.raises(emb.GateDeferred, match="made 0 context"):
+        emb.fresh_contexts(texts, lambda b: fresh(b, riders=len(b)), first, b"seed", counted=reading)
+    # a reading that could not be made, and two readings of different kinds
+    with pytest.raises(emb.GateDeferred, match="unknown number"):
+        emb.fresh_contexts(texts, fresh, first, b"seed", counted=lambda: None)
+    assert emb._round_counts((3, 1), 7, 4) == (None, None)
+    assert emb._round_counts(3, 7, 4) == (4, 4), "an int is the creations: the calls are as asked"
+
+
+class _Keeps:
+    """`GET <VEGA_URL>/vega/keeps`, as app/vega/service.py answers it."""
+
+    def __init__(self, run_id: str) -> None:
+        self.run_id, self.status, self.down = run_id, 200, False
+        self.row: dict | None = {"run_id": run_id, "on_demand": True, "calls": 40, "told": 40,
+                                 "created": 7}
+        self.urls: list[str] = []
+
+    def get(self, url, timeout=None):
+        import httpx
+        self.urls.append(url)
+        if self.down:
+            raise httpx.ConnectError("refused", request=httpx.Request("GET", url))
+        other = {"run_id": "sha256:" + "ee" * 32, "calls": 900, "told": 900, "created": 900}
+        body = {"buckets": [], "runs": [other] + ([dict(self.row)] if self.row else [])}
+        return httpx.Response(self.status, json=body, request=httpx.Request("GET", url))
+
+
+def _vega_recipe(api: str = "vega"):
+    return collections_mod.EmbedRecipe(url="http://localai:8080", api=api,
+                                       model="vega-nemotron-3-embed-1b", dtype="f32", ctx=512)
+
+
+def test_the_count_is_read_from_vega_for_the_run_that_answers(monkeypatch):
+    from types import SimpleNamespace
+    run_id = "sha256:" + "ab" * 32
+    stated = SimpleNamespace(run_id=run_id)
+    monkeypatch.setattr(run_check.config, "VEGA_URL", "http://vega:8090")
+    vega = _Keeps(run_id)
+    waits: list[float] = []
+
+    def probe():                       # one request with a keep of 0: told before its answer
+        vega.row["calls"] += 1
+        vega.row["told"] += 1
+        vega.row["created"] += 1 if len(waits) >= 2 else 0     # a keep of the gate's own, ~1 s
+    counted = run_check.creations_of(_vega_recipe(), stated, probe, get=vega.get, sleep=waits.append)
+    assert counted() == (43, 8), "three probes: two rode the kept context, the third was created for"
+    assert waits == [run_check.SETTLE_WAIT_S] * 2, "waited for the keep to run out, and no longer"
+    assert set(vega.urls) == {"http://vega:8090/vega/keeps"}
+    vega.row.update(calls=47, told=47, created=11)
+    assert counted() == (47, 11) and len(waits) == 2, "settled once: later readings only read"
+
+    # a model something else keeps busy never settles: the reading is given all the same,
+    # and the round says what it finds
+    busy = _Keeps(run_id)
+
+    def ride():
+        busy.row["calls"] += 2
+        busy.row["told"] += 2
+    waits.clear()
+    counted = run_check.creations_of(_vega_recipe(), stated, ride, get=busy.get, sleep=waits.append)
+    assert counted() == (40 + 2 * run_check.SETTLE_TRIES, 7)
+    assert len(waits) == run_check.SETTLE_TRIES - 1, "bounded"
+
+
+def test_no_count_to_read_is_no_count_and_a_count_that_never_can_be_is_a_refusal(monkeypatch):
+    from types import SimpleNamespace
+    run_id = "sha256:" + "ab" * 32
+    stated = SimpleNamespace(run_id=run_id)
+    nothing = lambda: None             # noqa: E731
+    monkeypatch.setattr(run_check.config, "VEGA_URL", "http://vega:8090")
+    # not VeGa's encoder, no stated run: the gate refuses such a run (`counted` is None)
+    assert run_check.creations_of(_vega_recipe("openai"), stated, nothing) is None
+    assert run_check.creations_of(_vega_recipe(), None, nothing) is None
+    monkeypatch.setattr(run_check.config, "VEGA_URL", "")
+    assert run_check.creations_of(_vega_recipe(), stated, nothing) is None
+    monkeypatch.setattr(run_check.config, "VEGA_URL", "http://vega:8090")
+
+    def counted(vega):
+        return run_check.creations_of(_vega_recipe(), stated, nothing, get=vega.get,
+                                      sleep=lambda s: None)
+    # cannot be read NOW: a deferral (None), asked again
+    vega = _Keeps(run_id)
+    vega.down = True
+    assert counted(vega)() is None
+    vega = _Keeps(run_id)
+    vega.row = None                    # VeGa restarted: its counts are in memory
+    assert counted(vega)() is None
+    vega = _Keeps(run_id)
+    vega.status = 503
+    assert counted(vega)() is None
+    vega = _Keeps(run_id)
+    del vega.row["told"]
+    assert counted(vega)() is None
+    # can NEVER be read: refused, not retried
+    vega = _Keeps(run_id)
+    vega.status = 404                  # a VeGa before the count
+    with pytest.raises(emb.GateError, match="keeps no count"):
+        counted(vega)()
+    vega = _Keeps(run_id)
+    vega.row["told"] = 0               # a backend that does not say what it created
+    with pytest.raises(emb.GateError, match="0 of 40 call"):
+        counted(vega)()

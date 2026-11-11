@@ -71,6 +71,32 @@ Louise ──POST /v1/embeddings (model vega-xyz, tagged inputs)──► LocalA
   anyway, never alone (RULE 1: no re-gate for a log line); the service side
   (louise-vega) takes the message from its own deploy on, and reads nothing
   until then.
+- **A call that met an expired keep is counted** (operator, 2026-11-10: "we
+  can log expired stay warms for improvement"; idle-context-brief.md §1.3,
+  §10). A model loaded with `context_on_demand` (P11, staged) frees its
+  context when a request's keep has run out, and its backend says beside
+  each `Embedding` answer whether the context was created for that call
+  (gRPC trailing metadata `llama-context-created-us`). The wrapper (a) gives
+  its own probes at such a load a keep of 0 — a request that carries none
+  leaves the context loaded — and forwards a request's `keep_context_ms` as
+  it came; (b) counts per load `calls`, `keyed`, `told`, `created` and
+  `created_ms` (the backend's own word, never a clock's guess), `busy`,
+  `failed`, and `gaps`: how long the backend had been idle when a call was
+  sent, by powers of two of a millisecond; and tells VeGa the whole count
+  (`{"kind": "keeps", …}`) BEFORE THE VECTOR GOES OUT for a load's first
+  call, a call its context was created for and a call with a keep of 0, in
+  the background otherwise (a minute at most while it moves). VeGa logs
+  `[vega] run …: N of M call(s) since its load met an expired keep …` when
+  the created contexts grew and serves every run's count at `GET /vega/keeps`
+  (in memory, since each load). The calibration gate reads it: an on-demand
+  run is admitted only on creations COUNTED there, a round of N requests
+  being N calls and N creations (`run_check.creations_of`, invariant 12).
+  Not a docs/09 format: informational, hashed and signed nowhere.
+  **Deploying it:** as the passes count — the wrapper side with the engine
+  change that carries P11 (it re-gates every space once), the service side
+  with louise-vega's own deploy, which must come first: a wrapper that finds
+  an older service says so once and stops telling, and the gate then refuses
+  every on-demand run for want of a count.
 - **Louise** recomputes the vector digest from what LocalAI returned, reads
   the receipts of the batch from VeGa, and writes nothing unless every id
   has a receipt, the digests match, and the run is validated (03 §3.3). No

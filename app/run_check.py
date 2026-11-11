@@ -193,28 +193,132 @@ def creates_per_request(recipe, stated=None, *, query: bool = False, name: str =
     return listed
 
 
-def fresh_contexts(recipe, *, query: bool = False, stated=None, **kw) -> runs_mod.Answers | None:
+#: how long the fresh-context pass waits, at most, for a keep its own earlier
+#: passes left on the model to run out before its first round: RAGE's ceiling
+#: is 2 s (app/rage/keep.py `CEILING_MS`)
+SETTLE_TRIES, SETTLE_WAIT_S = 6, 0.5
+
+
+def creations_of(recipe, stated, probe: Callable[[], Any], *,
+                 get=httpx.get, sleep: Callable[[float], None] = time.sleep):
+    """THE ENGINE'S COUNT OF ITS CREATIONS, as the gate's fresh-context pass
+    reads it (`embedder.fresh_contexts` `counted`): a function giving
+    `(calls, creations)` of the run that answers, since its load — every
+    Embedding call it answered, and those its backend said it created the
+    context for. The backend's own word per call (P11's trailer), counted by
+    the VeGa wrapper and read at `<VEGA_URL>/vega/keeps` (app/vega/service.py).
+
+    None — and the gate then REFUSES the run — where there is no such count:
+    an encoder that is not `api = "vega"`, no VEGA_URL, no stated run.
+
+    A READING IS CURRENT only as of the last answer the wrapper told its
+    count before: a call with a keep of 0, or one its context was created
+    for — every request of the pass. So before the FIRST reading `probe` (one
+    request, its keep fixed at 0) is sent until a reading shows a context
+    created for it alone, at most `SETTLE_TRIES` times `SETTLE_WAIT_S` apart:
+    the count is then current, and the keep the gate's own earlier passes
+    left on the model has run out. A model something else keeps busy never
+    settles; its first round says so (deferred).
+
+    A reading that cannot be made now is None (the pass is deferred). One
+    that never can — a VeGa that keeps no such count, a backend that does not
+    say what it created — is a `GateError`: the run is refused, not retried."""
+    run_id = getattr(stated, "run_id", None)
+    if getattr(recipe, "api", None) != embeddings.VEGA or not config.VEGA_URL or not run_id:
+        return None
+    state = {"settled": False}
+
+    def read() -> tuple[int, int] | None:
+        try:
+            r = get(f"{config.VEGA_URL}/vega/keeps", timeout=10)
+        except httpx.HTTPError:
+            return None
+        if r.status_code == 404:
+            raise emb.GateError(
+                f"{config.VEGA_URL} keeps no count of an engine's context creations (a VeGa "
+                f"before `GET /vega/keeps`): a run that creates its context per request is "
+                f"not admitted on creations nobody counted")
+        try:
+            r.raise_for_status()
+            rows = r.json().get("runs")
+        except (httpx.HTTPError, ValueError, AttributeError):
+            return None
+        row = next((x for x in rows or () if isinstance(x, dict) and x.get("run_id") == run_id), None)
+        if row is None:
+            return None
+        try:
+            calls, told, created = int(row["calls"]), int(row["told"]), int(row["created"])
+        except (KeyError, TypeError, ValueError):
+            return None
+        if calls and told != calls:
+            raise emb.GateError(
+                f"run {run_id[:19]}…: its backend said what it did with its context for {told} "
+                f"of {calls} call(s) — an engine before P11's count (the trailer "
+                f"`llama-context-created-us`): its creations cannot be counted, and the run "
+                f"is not admitted on them (docs/notes/idle-context-brief.md §10)")
+        return calls, created
+
+    def counted() -> tuple[int, int] | None:
+        if not state["settled"]:
+            state["settled"] = True
+            before = None
+            for attempt in range(SETTLE_TRIES):
+                probe()
+                now = read()
+                if (before is not None and now is not None
+                        and (now[0] - before[0], now[1] - before[1]) == (1, 1)):
+                    break
+                before = now
+                if attempt < SETTLE_TRIES - 1:
+                    sleep(SETTLE_WAIT_S)
+        return read()
+    return counted
+
+
+#: A CREATION THAT FOLLOWS A PAUSE IS NOT THE ONE THAT FOLLOWS A FREE (the
+#: node, 2026-11-11, docs/notes/idle-context-brief.md §10.1 "two creations"):
+#: Nemotron's context came back in about a millisecond when the last free was
+#: under ~25 ms old and in ~56 ms when it was 50 ms old — the card's memory
+#: is cheap to get back for a moment after it was given up. Production's
+#: creations follow a keep that ran out, so every other round of the
+#: fresh-context pass waits this long before each request: the gate measures
+#: what is deployed (invariant 12). Well past where the cheap creation was
+#: seen to end; to be set from the node's own curve.
+FRESH_PAUSE_S = 0.25
+
+
+def fresh_contexts(recipe, *, query: bool = False, stated=None, probe_item=PROBE,
+                   sleep: Callable[[float], None] = time.sleep,
+                   **kw) -> runs_mod.Answers | None:
     """For a run that creates its context per request (`creates_per_request`):
     `answers(how="one")` with every request's keep fixed at 0, so each text is
     embedded on a context created for it (app/rage/keep.py `fixed`; the brief
-    §1.4) — the gate's fresh-context pass. Its `creations` is the engine's
-    count of them, which the pass holds every request to; None where no
-    count can be read yet, and the gate then refuses such a run. None for any
-    other run: the gate asks nothing."""
+    §1.4) — the gate's fresh-context pass. Its rounds alternate: one asked
+    back to back, the next with `FRESH_PAUSE_S` before each request. Its
+    `creations` is the engine's count, which the pass holds every round to
+    (`creations_of`); None where there is no count to read, and the gate then
+    refuses such a run. None for any other run: the gate asks nothing."""
     from .rage import keep as rage_keep
     if not creates_per_request(recipe, stated, query=query, name=kw.get("name", "")):
         return None
     one = answers(recipe, query=query, how="one", **kw)
+    rounds = {"asked": 0}
+
+    def ask(texts: list[str], seen: set, pause: float = 0.0) -> list[list[float]]:
+        with rage_keep.fixed(0):
+            if not pause:
+                return one._fn(texts, seen)
+            out: list[list[float]] = []
+            for text in texts:
+                sleep(pause)
+                out += one._fn([text], seen)
+            return out
 
     def fresh(texts: list[str], seen: set) -> list[list[float]]:
-        with rage_keep.fixed(0):
-            return one._fn(texts, seen)
+        rounds["asked"] += 1
+        return ask(texts, seen, 0.0 if rounds["asked"] % 2 else FRESH_PAUSE_S)
     out = runs_mod.Answers(fresh)
-    # THE ENGINE'S COUNT OF ITS CREATIONS: llama.cpp's `context_creations_total`
-    # (P11) lives in the backend, and nothing reachable through LocalAI reports
-    # it yet — the VeGa wrapper's count (the brief §10, part 3) is where it
-    # will come from. Until then None: counted, never assumed.
-    out.creations = None
+    out.creations = creations_of(recipe, stated, lambda: ask([probe_item], set()))
     return out
 
 
@@ -403,7 +507,8 @@ def _validate(root: Path, name: str, codex: Codex, recipe, *, role: str = "docum
             stated=stated, key=key, now=now or _now(), items=items, on_run=on_run,
             cpu_reference=None if cpu is None else (cpu.run_id, cpu.vectors),
             reload=_reloader(recipe, query=query, stop=stop, name=name),
-            fresh=fresh_contexts(recipe, stated=stated, **kw),
+            fresh=fresh_contexts(recipe, stated=stated,
+                                 probe_item=probe_for(codex, role), **kw),
             # the Codex's requirement wins over the node's setting: a node may
             # be stricter than its collection, never looser (09 §9.3)
             exactness=(emb.EXACT if runs_mod.requires_exact(codex)

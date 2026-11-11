@@ -136,6 +136,40 @@ GRACE_S = 30.0
 PASSES_EVERY_S = 600.0
 PASS_BOUNDS = (256, 512, 1024, 2048, 4096, 8192, 16384, 32768)
 PASS_BUCKETS = tuple(str(b) for b in PASS_BOUNDS) + ("more",)
+#: CONTEXT ON REQUEST (docs/notes/idle-context-brief.md §1.3; operator,
+#: 2026-11-10: "we can log expired stay warms for improvement"). A model
+#: loaded with `ON_DEMAND_OPTION` creates its context for a request and frees
+#: it once the request's keep has run out — `KEEP_FIELD`, milliseconds, in the
+#: request's Metadata, which this wrapper forwards as it came. Such a backend
+#: SAYS beside each Embedding answer whether the context was created for that
+#: call (`CREATED_TRAILER`, P11: the microseconds its creation took, -1 when
+#: the context was there) — its own word, never a clock's guess: a context
+#: may have been kept for another caller's request. The wrapper counts per
+#: load: the calls, those the backend spoke for (`told`) and those it
+#: created its context for (`created`, with the creations' time); how long
+#: the backend had been idle when a call was sent, by powers of two of a
+#: millisecond (`GAP_BUCKETS`, the scale of app/rage/keep.py) — LocalAI
+#: sends one text a call, so these are the gaps BETWEEN TWO TEXTS, which
+#: Louise's own count (one a request) cannot see; and the calls sent while
+#: it worked. Told to the receipts service like the input lengths (`kind:
+#: keeps`, app/vega/service.py), the whole count each time:
+#:   - BEFORE THE VECTOR GOES OUT for a load's first call, a call its context
+#:     was created for, and a call that asked for a keep of 0 — the calls the
+#:     calibration gate counts its fresh contexts on (invariant 12,
+#:     app/run_check.py `fresh_contexts`): the count it reads after its
+#:     answer is then the count as of that answer. One exchange on the same
+#:     socket as the receipt, beside a creation of tens of milliseconds;
+#:   - otherwise from a thread of its own, at most every KEEPS_EVERY_S while
+#:     the count moves.
+#: Never in a vector's way: a count that cannot be told is told later, and
+#: the gate that finds it behind asks again. Nothing here reads it to
+#: decide — the keep is RAGE's (the brief, §1.3).
+KEEP_FIELD = "keep_context_ms"
+ON_DEMAND_OPTION = "context_on_demand"
+CREATED_TRAILER = "llama-context-created-us"
+KEEPS_EVERY_S = 60.0
+GAP_BOUNDS = tuple(2 ** k for k in range(17))        # under 1 ms … under 65,536 ms
+GAP_BUCKETS = tuple(str(b) for b in GAP_BOUNDS) + ("more",)
 #: As LocalAI's own Python backends.
 MAX_MESSAGE = 50 * 1024 * 1024
 #: Calls in flight at once. A stream holds its thread while it lasts.
@@ -905,6 +939,58 @@ def declares_pairs(options: Any) -> bool:
         isinstance(o, str) and o.replace(" ", "") == PAIRS_OPTION for o in options)
 
 
+_OFF = ("false", "0", "no", "off", "disabled")
+_KEEP_MS = re.compile(r"\s*\+?\d+")
+
+
+def declares_on_demand(options: Any) -> bool:
+    """Whether a load's `Options` switch `ON_DEMAND_OPTION` on, read as the
+    backend reads them (grpc-server.cpp, P11) and as Louise does
+    (app/model_load.py `_options_on_demand`): the name alone, with a value
+    that is not one of the backend's words for off, or the raw flag
+    `--context-on-demand`; the last entry decides."""
+    on = False
+    for o in options if isinstance(options, list) else ():
+        if not isinstance(o, str):
+            continue
+        name, _, value = o.strip().partition(":")
+        if name.lstrip("-").replace("-", "_") == ON_DEMAND_OPTION:
+            on = value.strip().lower() not in _OFF
+    return on
+
+
+def parse_keep_ms(value: Any) -> int | None:
+    """A keep as the backend reads one (`parse_keep_context_ms`): a whole,
+    non-negative number of milliseconds that fits 32 bits, else None — "not
+    said": the context stays loaded after the request."""
+    if not isinstance(value, str) or not _KEEP_MS.fullmatch(value):
+        return None
+    ms = int(value)
+    return ms if ms <= 2 ** 31 - 1 else None
+
+
+def request_keep_ms(req: Any) -> int | None:
+    """The keep a request carries in its Metadata, None when it carries none
+    (or the proto has no such map)."""
+    try:
+        return parse_keep_ms(req.Metadata.get(KEEP_FIELD))
+    except AttributeError:
+        return None
+
+
+def created_us(trailing: Any) -> int | None:
+    """What the backend said beside an answer (`CREATED_TRAILER`): the
+    microseconds it took to create the context for that call, -1 when the
+    context was there; None when it said nothing — a backend without the
+    feature, or a load without the option."""
+    for key, value in trailing or ():
+        if key == CREATED_TRAILER:
+            if isinstance(value, bytes):
+                value = value.decode("ascii", "replace")
+            return int(value) if re.fullmatch(r"-1|\d+", str(value)) else None
+    return None
+
+
 # ---- the load options and the run ---------------------------------------------------
 
 def canon_from_protojson(text: str) -> loadopts.Canon:
@@ -1240,6 +1326,12 @@ class ReceiptClient:
         with self._lock:
             self._send(msg, run_id, run)
 
+    def publish_keeps(self, msg: Mapping[str, Any], run_id: str, run: Mapping[str, Any]) -> None:
+        """A load's count of calls against its keep (`KeepCount.message`), as
+        `publish_passes`."""
+        with self._lock:
+            self._send(msg, run_id, run)
+
     def publish_tree(self, image: str, manifest: Mapping[str, Any],
                      timeout_s: float = TREE_TIMEOUT_S) -> None:
         """The per-file list `image` is the digest of (`tree_manifest`), told
@@ -1362,6 +1454,75 @@ class PassCount:
                     "buckets": dict(self.buckets)}
 
 
+class KeepCount:
+    """One load's Embedding calls against its context's keep (`KEEPS_EVERY_S`).
+
+    A CALL is one Embedding request of LocalAI's, whatever the wrapper sent
+    the backend to answer it; it is counted when its answer is back — `busy`
+    when it was sent while another was being answered, else under its gap:
+    the milliseconds since the last answer (the load is the first). `created`
+    is the backend's word for the answer that went out, never inferred."""
+
+    def __init__(self, run_id: str, run: Mapping[str, Any], on_demand: bool,
+                 clock: Callable[[], float] = time.monotonic) -> None:
+        self.run_id, self.run, self.on_demand = run_id, run, on_demand
+        self._clock = clock
+        self.calls = self.keyed = self.busy = self.failed = 0
+        self.told = self.created = self.created_us = 0
+        self.gaps = dict.fromkeys(GAP_BUCKETS, 0)
+        self.in_flight = 0
+        self.answered_at = clock()
+        self.sent: dict[str, Any] | None = None
+        self._lock = threading.Lock()
+
+    def send(self) -> str | None:
+        """A call leaves for the backend: its gap's bucket, None when the
+        backend was working — to give back to `answered` or `failed_call`."""
+        now = self._clock()
+        with self._lock:
+            self.in_flight += 1
+            if self.in_flight > 1:
+                return None
+            gap_ms = int(max(0.0, now - self.answered_at) * 1000.0 + 0.5)
+            return next((str(b) for b in GAP_BOUNDS if gap_ms < b), "more")
+
+    def answered(self, bucket: str | None, keep_ms: int | None, created: int | None) -> bool:
+        """The call's answer is back, with the keep its request carried and
+        what the backend said of its context (`created_us`). True when the
+        count is to be told BEFORE the vector goes out: the load's first
+        call, a call its context was created for, a call that asked for a
+        keep of 0."""
+        with self._lock:
+            self.in_flight = max(0, self.in_flight - 1)
+            self.answered_at = self._clock()
+            self.calls += 1
+            self.keyed += 1 if keep_ms is not None else 0
+            if bucket is None:
+                self.busy += 1
+            else:
+                self.gaps[bucket] += 1
+            if created is not None:
+                self.told += 1
+                if created >= 0:
+                    self.created += 1
+                    self.created_us += created
+            return self.calls == 1 or keep_ms == 0 or (created is not None and created >= 0)
+
+    def failed_call(self) -> None:
+        """The call came back as an error, or its answer could not be read."""
+        with self._lock:
+            self.in_flight = max(0, self.in_flight - 1)
+            self.failed += 1
+            self.answered_at = self._clock()
+
+    def message(self) -> dict[str, Any]:
+        with self._lock:
+            return {"kind": "keeps", "run_id": self.run_id, "on_demand": self.on_demand,
+                    "calls": self.calls, "keyed": self.keyed, "busy": self.busy,
+                    "failed": self.failed, "told": self.told, "created": self.created,
+                    "created_ms": (self.created_us + 500) // 1000, "gaps": dict(self.gaps)}
+
+
 def load_ubatch(canon: loadopts.Canon, raw_nbatch: int) -> int:
     """The tokens llama.cpp computes in one pass: the load's `ubatch` option,
     else its batch (LocalAI's NBatch); 0 when neither is stated."""
@@ -1405,6 +1566,11 @@ class Gate:
         self._passes_wake = threading.Event()
         self._passes_thread: threading.Thread | None = None
         self._passes_off = False
+        # the calls against the context's keep (`KEEPS_EVERY_S`)
+        self.keeps: KeepCount | None = None
+        self._keeps_lock = threading.Lock()           # one count told at a time, in order
+        self._keeps_thread: threading.Thread | None = None
+        self._keeps_off = False
 
     def _refuse_load(self, why: BaseException) -> bytes:
         log(f"{self.backend.name}: no run can be stated: {why}")
@@ -1576,14 +1742,19 @@ class Gate:
             if self.cfg.cuts == TOKENIZER and not embedder:
                 log(f"{self.backend.name}: {Path(canon.weights_path).name} is loaded for "
                     f"generation or reranking: no tokenizer probe, no input cut here")
-            specials, token_ids = (self._probe(call) if self.cfg.cuts == TOKENIZER and embedder
-                                   else (None, False))
+            on_demand = declares_on_demand(canon.options.get("Options"))
+            specials, token_ids = (self._probe(call, on_demand=on_demand)
+                                   if self.cfg.cuts == TOKENIZER and embedder else (None, False))
             self.loaded = Loaded(run_id, run, declares_pairs(canon.options.get("Options")),
                                  self.child.pid, context_size, specials, token_ids)
             ubatch = load_ubatch(canon, nbatch) if embedder else 0
             self.passes = PassCount(run_id, run, ubatch) if ubatch else None
             if self.passes is not None:
                 self._passes_start()
+            # after the probes: the load is this count's first answer
+            self.keeps = KeepCount(run_id, run, on_demand) if embedder else None
+            if self.keeps is not None:
+                self._keeps_start()
             log(f"{self.backend.name}: {Path(canon.weights_path).name} loaded on {device}, "
                 f"run {run_id[:23]}…, files {hashed['tree'][:19]}… (installed from "
                 f"{self.backend.uri or 'nowhere recorded'}, the registry's digest "
@@ -1650,6 +1821,47 @@ class Gate:
             if not self._passes_flush():
                 self._passes_off = True
 
+    # ---- the calls against the context's keep (`KEEPS_EVERY_S`) -------------------
+
+    def _keeps_start(self) -> None:
+        if self._keeps_thread is None and not self._keeps_off:
+            self._keeps_thread = threading.Thread(target=self._keeps_loop, name="vega-keeps",
+                                                  daemon=True)
+            self._keeps_thread.start()
+
+    def _keeps_flush(self) -> bool:
+        """As `_passes_flush`: the count told where it moved; False once a
+        service that does not take it said so. One at a time: the whole count
+        is read and told under one lock, so a later count never arrives
+        before an earlier one."""
+        with self._keeps_lock:
+            count = self.keeps
+            if count is None:
+                return True
+            msg = count.message()
+            if msg == count.sent:
+                return True
+            try:
+                self.receipts.publish_keeps(msg, count.run_id, count.run)
+            except ReceiptRefused as e:
+                if "kind is run, receipt" in str(e):  # a service before this count
+                    log(f"{self.backend.name}: the receipts service does not take the count "
+                        f"of calls against the context's keep (an older one): not sent again "
+                        f"({e})")
+                    self._keeps_off = True
+                    return False
+                log(f"{self.backend.name}: the count of calls against the keep was refused: {e}")
+            except Unavailable:
+                pass                                 # the next tick tells it, whole
+            else:
+                count.sent = msg
+            return True
+
+    def _keeps_loop(self) -> None:
+        while not self._keeps_off:
+            time.sleep(KEEPS_EVERY_S)
+            self._keeps_flush()
+
     def _tell_tree(self, image: str, manifest: Mapping[str, Any]) -> None:
         try:
             self.receipts.publish_tree(image, manifest)
@@ -1659,7 +1871,22 @@ class Gate:
 
     # ---- the cut to a tag's window (docs/notes/char-cut-truncation.md) ------------
 
-    def _probe(self, call: Callable[[str, bytes], bytes] | None) -> tuple[int | None, bool]:
+    def _probe_request(self, on_demand: bool, **fields: Any) -> Any:
+        """A probe's request. To an on-demand load it SAYS its keep, 0: a
+        request that carries none leaves the context loaded (the backend's
+        rule), and a model loaded and not yet asked would then hold its
+        context from its load to its first request."""
+        q = self.pb.PredictOptions(**fields)
+        if on_demand:
+            try:
+                q.Metadata[KEEP_FIELD] = "0"
+            except AttributeError:                   # a proto before the map
+                log(f"{self.backend.name}: this LocalAI's requests carry no metadata; the "
+                    f"load's probes leave its context loaded")
+        return q
+
+    def _probe(self, call: Callable[[str, bytes], bytes] | None, *,
+               on_demand: bool = False) -> tuple[int | None, bool]:
         """`(the special tokens the backend adds to every input, whether it
         embeds token ids)`, from `PROBE_TEXT`. The specials are its tokens as
         embedded less its tokens as tokenized; None (said) when the backend
@@ -1676,8 +1903,8 @@ class Gate:
             probe = self.pb.PredictOptions(Prompt=PROBE_TEXT)
             bare = list(self.pb.TokenizationResponse.FromString(
                 call(TOKENIZE, probe.SerializeToString())).tokens)
-            embedded = self.pb.EmbeddingResult.FromString(call(EMBED, self.pb.PredictOptions(
-                Embeddings=PROBE_TEXT).SerializeToString()))
+            embedded = self.pb.EmbeddingResult.FromString(call(EMBED, self._probe_request(
+                on_demand, Embeddings=PROBE_TEXT).SerializeToString()))
         except Exception as e:                       # noqa: BLE001 — UNIMPLEMENTED, a dead child
             log(f"{self.backend.name}: its tokens cannot be counted ({type(e).__name__}: "
                 f"{e}); an input with a window is refused")
@@ -1688,8 +1915,8 @@ class Gate:
             return None, False
         specials = embedded.prompt_tokens - len(bare)
         try:
-            by_ids = self.pb.EmbeddingResult.FromString(call(EMBED, self.pb.PredictOptions(
-                EmbeddingTokens=bare).SerializeToString()))
+            by_ids = self.pb.EmbeddingResult.FromString(call(EMBED, self._probe_request(
+                on_demand, EmbeddingTokens=bare).SerializeToString()))
         except Exception as e:                       # noqa: BLE001 — the empty text refused
             log(f"{self.backend.name}: it does not embed token ids ({type(e).__name__}: {e}); "
                 f"an over-long input is cut as text")
@@ -1848,20 +2075,32 @@ class Gate:
         asked = req.SerializeToString()              # before the cut: the redo starts here
         if form != vtag.PAIR:
             self._shape(req, content, cut)
-        answer = forward(req.SerializeToString())
-        result = self.pb.EmbeddingResult.FromString(answer)
-        # sent whole uncounted (`token_bound`), yet over the window: the bound
-        # was beaten, so the input is cut by the book and asked again
-        if (window is not None and form != vtag.PAIR and expect is None and cut is not None
-                and result.prompt_tokens > window):
-            log(f"{self.backend.name}: an input of {len(content)} character(s) bound under "
-                f"its window of {window} was embedded as {result.prompt_tokens} tokens; "
-                f"cut by its tokens and asked again")
-            req = self.pb.PredictOptions.FromString(asked)
-            cut, expect = self._cut(state, call, req, form, content, window, bounded=False)
-            self._shape(req, content, cut)
+        # the call, counted against the load's keep (`KeepCount`)
+        count = self.keeps if self.keeps is not None and self.keeps.run_id == state.run_id else None
+        gap = count.send() if count is not None else None
+        try:
             answer = forward(req.SerializeToString())
             result = self.pb.EmbeddingResult.FromString(answer)
+            # sent whole uncounted (`token_bound`), yet over the window: the bound
+            # was beaten, so the input is cut by the book and asked again
+            if (window is not None and form != vtag.PAIR and expect is None and cut is not None
+                    and result.prompt_tokens > window):
+                log(f"{self.backend.name}: an input of {len(content)} character(s) bound under "
+                    f"its window of {window} was embedded as {result.prompt_tokens} tokens; "
+                    f"cut by its tokens and asked again")
+                req = self.pb.PredictOptions.FromString(asked)
+                cut, expect = self._cut(state, call, req, form, content, window, bounded=False)
+                self._shape(req, content, cut)
+                answer = forward(req.SerializeToString())
+                result = self.pb.EmbeddingResult.FromString(answer)
+        except BaseException:
+            if count is not None:
+                count.failed_call()
+            raise
+        # what the backend said beside the answer that goes out (`forward`
+        # keeps the last answer's trailing metadata)
+        tell_now = count is not None and count.answered(
+            gap, request_keep_ms(req), created_us(getattr(forward, "trailing", None)))
         if result.layout == self.pb.EMBEDDING_LAYOUT_PER_TOKEN:
             raise Refusal("FAILED_PRECONDITION",
                           "VeGa: the backend answered per-token vectors, which LocalAI would "
@@ -1889,6 +2128,8 @@ class Gate:
                                       f"{e}") from None
         if self.passes is not None and self.passes.run_id == state.run_id:
             self._passes_note(int(result.prompt_tokens))
+        if tell_now and not self._keeps_off:
+            self._keeps_flush()                      # a gate counts on it: before the vector
         return answer                                # only now: the receipt is held
 
 
@@ -1946,8 +2187,11 @@ class Proxy:
             def forward(request: bytes) -> bytes:
                 response, c = call.with_call(request, metadata=_forwardable(
                     context.invocation_metadata()), timeout=remaining(context))
-                context.set_trailing_metadata(tuple(_forwardable(c.trailing_metadata())))
+                # kept for the gate too: what the backend said beside its answer
+                forward.trailing = tuple(_forwardable(c.trailing_metadata()))
+                context.set_trailing_metadata(forward.trailing)
                 return response
+            forward.trailing = ()
 
             def other(name: str, request: bytes) -> bytes:
                 """Another of the backend's methods, inside this call: its

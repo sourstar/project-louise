@@ -169,6 +169,20 @@ measured (published figures disagree).
   amended). Every embedding and translation stream's gaps are counted from now, keyed or not, and published by the
   worker's beat (`[sched] keep (since start) — …`): the record a first keep is chosen from needs only a worker deploy. STEPS 3–4 MEASURED (München, 11-12; brief §10.1): bge-m3, Nemotron and Qwen3-4B byte-equal over 300 keep-0 creations each; 561 / 1,887 / ~1,870 MiB back per free; creation median 3.4 / 0.8 / 8.4 ms; keep 20 at one lane frees between back-to-back requests (dating gap), keep 500 does not. NOT DONE: the rest of §2; the VeGa wrapper's count and
   canary (an engine change). [idle-context-brief.md](idle-context-brief.md) §10.
+- **Context on request — the engine's own count, the wrapper, the gate** (11-11, after the
+  coordinator's integration review). The review's four C++ items are fixed in the staged patches (the rerank check
+  after the control vectors again, the idle callback without the queue's lock, the acquire gated on the option, the
+  pooling type read once a load). THE COUNT IS THE ENGINE'S WORD PER CALL: llama.cpp marks the task a context was
+  created for, LocalAI's `Embedding` says it beside the answer (trailing metadata `llama-context-created-us`, no proto
+  change), the VeGa wrapper counts it per load with the gaps at the engine and tells VeGa (`kind: keeps`,
+  `GET /vega/keeps`; its own probes at an on-demand load now carry a keep of 0), and the gate reads `(calls, created)`
+  of the answering run and holds every round of N keep-0 requests to N calls and N creations
+  (`run_check.creations_of`) — the count that admits an on-demand engine at all. CPU: llama.cpp 15 tests, the nine
+  existing suites as the untouched baseline, `grpc-server` over gRPC 25 checks, the regenerated patch applied with
+  `git am` to the tested tree. The node's measurements are above (steps 3–4): at a keep of 20 ms one lane still has its
+  context created one time in three, because the way to the client and back exceeds 20 ms and RAGE's clock cannot see
+  it. OPEN, before any deployment: RAGE trims on the engine's count (the brief §10, "RAGE's dating"); the canary per
+  context is the operator's decision (the brief §10, its table). Nothing deployed, no engine changed.
 - **Inputs computed in more than one pass, counted** (operator, 11-12: "for future trimming improvements we
   should gracefully log when a text is splitted"): the VeGa wrapper counts every answer's tokens against the
   load's ubatch and tells VeGa (`kind: passes`); VeGa logs when the inputs over it grow and serves every run's

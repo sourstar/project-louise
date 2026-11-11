@@ -278,3 +278,78 @@ def test_a_service_without_counts_refuses_them_as_a_kind_it_does_not_take(tmp_pa
     reply = service.handle(canonical_json(passes()), receipts, runs)
     assert reply["ok"] is False and "kind is run, receipt" in reply["error"], \
         "the wrapper reads this as a service that does not take counts, and stops"
+
+
+# ---- the calls against each run's keep (operator, 2026-11-10: "we can log
+#      expired stay warms for improvement"; docs/notes/idle-context-brief.md §1.3)
+
+def keeps(**kw) -> dict:
+    g = dict.fromkeys(service.GAP_BUCKETS, 0) | {"1": 30, "16": 6, "256": 4}
+    m = {"kind": "keeps", "run_id": RUN_ID, "on_demand": True, "calls": 50, "keyed": 50,
+         "busy": 10, "failed": 0, "told": 50, "created": 4, "created_ms": 160, "gaps": g}
+    return m | kw
+
+
+def test_calls_that_met_an_expired_keep_are_said_when_they_grew_and_read_back(tmp_path):
+    receipts, runs, counts = ReceiptStore(), Runs(RunStore(tmp_path / "r.sqlite")), service.Keeps()
+    notes: list[str] = []
+    line = canonical_json(keeps())
+    assert service.handle(line, receipts, runs, None, notes, counts)["code"] == service.UNKNOWN_RUN
+    service.handle(canonical_json({"kind": "run", "run_id": RUN_ID, "run": RUN}), receipts, runs)
+    assert service.handle(line, receipts, runs, None, notes, counts) == {"ok": True}
+    (note,) = notes
+    assert "4 of 50 call(s) since its load met an expired keep" in note and RUN_ID[7:19] in note
+    assert "40 ms a creation on average" in note and "10 call(s) sent while the backend worked" in note
+    service.handle(line, receipts, runs, None, notes, counts)
+    more = keeps(calls=60, keyed=60, told=60, gaps=keeps()["gaps"] | {"1": 40})
+    service.handle(canonical_json(more), receipts, runs, None, notes, counts)
+    assert len(notes) == 1, "the log says it only when the created contexts grew"
+    service.handle(canonical_json(more | {"calls": 61, "keyed": 61, "told": 61, "created": 5,
+                                          "gaps": more["gaps"] | {"256": 5}}),
+                   receipts, runs, None, notes, counts)
+    assert len(notes) == 2 and "(+1;" in notes[-1]
+    reload = keeps(calls=2, keyed=2, told=2, busy=0, created=1, created_ms=41,
+                   gaps=dict.fromkeys(service.GAP_BUCKETS, 0) | {"more": 1, "2": 1})
+    service.handle(canonical_json(reload), receipts, runs, None, notes, counts)
+    assert len(notes) == 3 and "1 of 2" in notes[-1], "a smaller count is a new load: counted afresh"
+    app = FastAPI()
+    app.include_router(service.router(receipts, runs, keeps=counts))
+    got = TestClient(app).get("/vega/keeps").json()
+    assert got["buckets"] == list(service.GAP_BUCKETS) and len(got["buckets"]) == 18
+    (row,) = got["runs"]
+    assert {k: row[k] for k in ("run_id", "on_demand", "calls", "told", "created")} == \
+        {"run_id": RUN_ID, "on_demand": True, "calls": 2, "told": 2, "created": 1}
+    assert row["gaps"]["more"] == 1
+
+
+def test_a_load_that_is_not_on_demand_is_counted_and_never_said(tmp_path):
+    receipts, runs, counts = ReceiptStore(), Runs(RunStore(tmp_path / "r.sqlite")), service.Keeps()
+    service.handle(canonical_json({"kind": "run", "run_id": RUN_ID, "run": RUN}), receipts, runs)
+    notes: list[str] = []
+    msg = keeps(on_demand=False, keyed=0, told=0, created=0, created_ms=0)
+    assert service.handle(canonical_json(msg), receipts, runs, None, notes, counts) == {"ok": True}
+    assert notes == [] and counts.get()[0]["gaps"]["16"] == 6, "its gaps are what a keep must outlast"
+
+
+@pytest.mark.parametrize("bad", [
+    {"x": 1}, {"calls": -1}, {"calls": 1.5}, {"busy": True}, {"on_demand": 1},
+    {"calls": 51}, {"keyed": 51}, {"told": 51}, {"created": 51}, {"told": 3},
+    {"created": 0}, {"gaps": {"1": 40}}, {"gaps": dict.fromkeys(service.GAP_BUCKETS, 0)},
+    {"run_id": "nope"},
+])
+def test_a_keep_count_that_does_not_add_up_is_refused(tmp_path, bad):
+    receipts, runs, counts = ReceiptStore(), Runs(RunStore(tmp_path / "r.sqlite")), service.Keeps()
+    service.handle(canonical_json({"kind": "run", "run_id": RUN_ID, "run": RUN}), receipts, runs)
+    msg = keeps() | bad
+    raw = json.dumps(msg).encode() if isinstance(bad.get("calls"), float) else canonical_json(msg)
+    reply = service.handle(raw, receipts, runs, None, None, counts)
+    assert reply["ok"] is False and reply["code"] in (service.INVALID, service.UNKNOWN_RUN)
+    assert counts.get() == []
+
+
+def test_a_service_without_keep_counts_refuses_them_as_a_kind_it_does_not_take(tmp_path):
+    receipts, runs = ReceiptStore(), Runs(RunStore(tmp_path / "r.sqlite"))
+    reply = service.handle(canonical_json(keeps()), receipts, runs, service.Passes())
+    assert reply["ok"] is False and "kind is run, receipt" in reply["error"], \
+        "the wrapper reads this as a service that does not take the count, and stops"
+    assert service.handle(canonical_json(passes()), receipts, runs)["error"] == reply["error"]

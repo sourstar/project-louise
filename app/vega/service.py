@@ -9,6 +9,9 @@ descriptions from the wrappers, and Louise reads them.
                → {"kind": "tree", "image": …, "tree": {<path>: <entry>, …}}
                → {"kind": "passes", "run_id": …, "ubatch": n, "inputs": n,
                   "over": n, "longest": n, "buckets": {"256": n, …, "more": n}}
+               → {"kind": "keeps", "run_id": …, "on_demand": bool, "calls": n,
+                  "keyed": n, "busy": n, "failed": n, "told": n, "created": n,
+                  "created_ms": n, "gaps": {"1": n, …, "more": n}}
                ← {"ok": true}  or  {"ok": false, "code": …, "error": …}
              A receipt is acknowledged only once it is stored: the wrapper
              returns its vector only after that answer.
@@ -20,6 +23,8 @@ descriptions from the wrappers, and Louise reads them.
                                               image is the digest of
                GET /vega/passes               each run's input lengths against
                                               its ubatch (below)
+               GET /vega/keeps                each run's calls against its
+                                              context's keep (below)
 
 A RUN IS ACCEPTED ONLY UNDER ITS OWN NAME: `run_id` must be `H` of the
 description's canonical JSON (app/vega/runs.py, the one definition), so a run
@@ -56,6 +61,27 @@ the whole count, so a lost one loses nothing. The log says a run's count
 only when the inputs over its ubatch grew; `GET /vega/passes` gives every
 run's lengths in powers of two, what the next trim is decided on. Kept in
 memory: counts since the wrapper's load, not a record.
+
+A CALL THAT MET AN EXPIRED KEEP IS SAID (operator, 2026-11-10: "we can log
+expired stay warms for improvement"; docs/notes/idle-context-brief.md §1.3).
+A model loaded with `context_on_demand` frees its context once a request's
+keep has run out and creates it for the next, and its backend says beside
+each Embedding answer whether the context was created for that call. The
+wrapper counts, per load: the calls it forwarded (`calls`), those that
+carried a keep (`keyed`), those the backend spoke for (`told`) and those it
+created the context for (`created`, the backend's own word, with the time
+the creations took, `created_ms`); how long the backend had been idle when a
+call was sent (`gaps`, by powers of two of a millisecond — LocalAI sends one
+text a call, so these are the gaps between two texts) and the calls sent
+while it worked (`busy`). It tells this service the totals since the load,
+each message the whole count: BEFORE THE VECTOR GOES OUT for a load's first
+call, a call its context was created for and a call that asked for a keep
+of 0 — the calls the calibration gate counts its fresh contexts on, so the
+count it reads after such an answer is the count as of that answer
+(app/run_check.py) — and in the background otherwise, at most every minute
+while the count moves. The log says a run's count only when its created
+contexts grew; `GET /vega/keeps` gives every run's count. Kept in memory.
+Nothing reads it to choose a keep: the keep is RAGE's (app/rage/keep.py).
 
 Nothing here is a secret (invariant 8): receipts are digests and random ids,
 runs are what a Codex publishes. The log names runs and refusals, not inputs.
@@ -113,6 +139,12 @@ PASS_BUCKETS = ("256", "512", "1024", "2048", "4096", "8192", "16384", "32768", 
 PASSES_KEYS = ("run_id", "ubatch", "inputs", "over", "longest", "buckets")
 #: the runs whose counts are kept, the least recently told dropped first
 MAX_PASS_RUNS = 256
+#: a run's calls by how long its backend had been idle when each was sent
+#: (`keeps`): each bucket counts the gaps UNDER its bound in milliseconds,
+#: "more" the rest — the scale of app/rage/keep.py's own count
+GAP_BUCKETS = tuple(str(2 ** k) for k in range(17)) + ("more",)
+KEEPS_COUNTS = ("calls", "keyed", "busy", "failed", "told", "created", "created_ms")
+KEEPS_KEYS = ("run_id", "on_demand", *KEEPS_COUNTS, "gaps")
 RUN_KEYS = ("driver", "engine", "weights")
 UNKNOWN_RUN, CONFLICT, INVALID = "unknown-run", "conflict", "invalid"
 
@@ -292,6 +324,62 @@ class Passes:
             return [dict(r) for r in reversed(self._runs.values())]
 
 
+# ---- the calls against each run's keep ----------------------------------------------
+
+class Keeps:
+    """Each run's Embedding calls against its context's keep since its wrapper
+    loaded it (the module's "A CALL THAT MET AN EXPIRED KEEP"), the latest
+    count per run."""
+
+    def __init__(self, max_runs: int = MAX_PASS_RUNS, clock: Callable[[], float] = time.time) -> None:
+        self.max_runs, self.clock = max_runs, clock
+        self._runs: "OrderedDict[str, dict[str, Any]]" = OrderedDict()
+        self._lock = threading.Lock()
+
+    def put(self, msg: Mapping[str, Any]) -> str | None:
+        """Takes a count; returns the line to log where the calls whose
+        context was created for them grew, else None."""
+        if set(msg) != {"kind", *KEEPS_KEYS}:
+            raise Refused(INVALID, f"a keeps message is exactly kind, {', '.join(KEEPS_KEYS)}")
+        if not isinstance(msg["run_id"], str) or not DIGEST.fullmatch(msg["run_id"]):
+            raise Refused(INVALID, "a keeps message's run_id is a digest, sha256:<64 hex>")
+        if not isinstance(msg["on_demand"], bool):
+            raise Refused(INVALID, "a keeps message's on_demand is true or false")
+        for k in KEEPS_COUNTS:
+            v = msg[k]
+            if not isinstance(v, int) or isinstance(v, bool) or v < 0:
+                raise Refused(INVALID, f"a keeps message's {k} is a whole number")
+        g = msg["gaps"]
+        if (not isinstance(g, dict) or set(g) != set(GAP_BUCKETS)
+                or any(not isinstance(v, int) or isinstance(v, bool) or v < 0 for v in g.values())):
+            raise Refused(INVALID, f"a keeps message's gaps are exactly {', '.join(GAP_BUCKETS)}, "
+                                   f"whole numbers")
+        if (msg["busy"] + sum(g.values()) != msg["calls"] or msg["keyed"] > msg["calls"]
+                or not msg["created"] <= msg["told"] <= msg["calls"]
+                or (msg["created_ms"] and not msg["created"])):
+            raise Refused(INVALID, "a keeps message's gaps and busy calls add up to its calls, "
+                                   "its keyed and told calls are at most its calls, and its "
+                                   "created ones at most its told ones")
+        row = {k: msg[k] for k in KEEPS_KEYS} | {"gaps": dict(g), "at": int(self.clock())}
+        with self._lock:
+            before = self._runs.pop(row["run_id"], None)
+            self._runs[row["run_id"]] = row
+            while len(self._runs) > self.max_runs:
+                self._runs.popitem(last=False)
+        # a count below the last is a new load of the same run: counted afresh
+        grew = row["created"] - (before["created"] if before and before["calls"] <= row["calls"] else 0)
+        if grew <= 0:
+            return None
+        return (f"[vega] run {row['run_id'][7:19]}…: {row['created']:,} of {row['calls']:,} call(s) "
+                f"since its load met an expired keep: the context was created for each "
+                f"(+{grew:,}; {row['created_ms'] / row['created']:,.0f} ms a creation on average; "
+                f"{row['busy']:,} call(s) sent while the backend worked) — GET /vega/keeps")
+
+    def get(self) -> list[dict[str, Any]]:
+        with self._lock:
+            return [dict(r) | {"gaps": dict(r["gaps"])} for r in reversed(self._runs.values())]
+
+
 # ---- the intake -----------------------------------------------------------------
 
 def _no_duplicates(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
@@ -319,7 +407,7 @@ def _receipt(msg: dict[str, Any]) -> dict[str, str]:
 
 
 def handle(line: bytes, receipts: ReceiptStore, runs: Runs, passes: Passes | None = None,
-           notes: list[str] | None = None) -> dict[str, Any]:
+           notes: list[str] | None = None, keeps: Keeps | None = None) -> dict[str, Any]:
     """One intake message, one answer. The answer to a receipt is `ok` only
     once it is stored. `notes` collects what a message has the log say."""
     try:
@@ -356,8 +444,17 @@ def handle(line: bytes, receipts: ReceiptStore, runs: Runs, passes: Passes | Non
             note = passes.put(msg)
             if note and notes is not None:
                 notes.append(note)
+        elif kind == "keeps" and keeps is not None:
+            if not runs.known(str(msg.get("run_id"))):
+                raise Refused(UNKNOWN_RUN, "the count names a run this service was never told: "
+                                           "send the run first")
+            note = keeps.put(msg)
+            if note and notes is not None:
+                notes.append(note)
         else:
-            raise Refused(INVALID, "a message's kind is run, receipt, tree or passes")
+            # the wrapper reads "kind is run, receipt" as a service that does
+            # not take a count, and stops sending it
+            raise Refused(INVALID, "a message's kind is run, receipt, tree, passes or keeps")
     except Refused as e:
         return {"ok": False, "code": e.code, "error": str(e)}
     return {"ok": True}
@@ -372,9 +469,10 @@ class Intake:
     previous run is replaced; any other file at the path is refused."""
 
     def __init__(self, path: Path, receipts: ReceiptStore, runs: Runs, *,
-                 log: Callable[[str], None] = print, passes: Passes | None = None) -> None:
+                 log: Callable[[str], None] = print, passes: Passes | None = None,
+                 keeps: Keeps | None = None) -> None:
         self.path, self.receipts, self.runs, self.log = Path(path), receipts, runs, log
-        self.passes = passes
+        self.passes, self.keeps = passes, keeps
         self._server: asyncio.AbstractServer | None = None
 
     async def start(self) -> None:
@@ -417,7 +515,7 @@ class Intake:
                 if not line:
                     return
                 notes: list[str] = []
-                reply = handle(line, self.receipts, self.runs, self.passes, notes)
+                reply = handle(line, self.receipts, self.runs, self.passes, notes, self.keeps)
                 for note in notes:
                     self.log(note)
                 if not reply["ok"]:
@@ -433,8 +531,13 @@ class Intake:
 
 # ---- the read-only HTTP API ------------------------------------------------------
 
-def router(receipts: ReceiptStore, runs: Runs, passes: Passes | None = None) -> APIRouter:
+def router(receipts: ReceiptStore, runs: Runs, passes: Passes | None = None,
+           keeps: Keeps | None = None) -> APIRouter:
     api = APIRouter()
+
+    @api.get("/vega/keeps")
+    def read_keeps() -> dict[str, Any]:
+        return {"buckets": list(GAP_BUCKETS), "runs": keeps.get() if keeps is not None else []}
 
     @api.get("/vega/passes")
     def read_passes() -> dict[str, Any]:
@@ -469,7 +572,7 @@ def router(receipts: ReceiptStore, runs: Runs, passes: Passes | None = None) -> 
 
 
 def create_app(receipts: ReceiptStore, runs: Runs, intake: Intake | None,
-               passes: Passes | None = None) -> FastAPI:
+               passes: Passes | None = None, keeps: Keeps | None = None) -> FastAPI:
     """The service on its own (`python -m app.vega`); louise-vega mounts
     `router` and starts an `Intake` in its own app instead."""
 
@@ -485,7 +588,9 @@ def create_app(receipts: ReceiptStore, runs: Runs, intake: Intake | None,
 
     app = FastAPI(title="VeGa", lifespan=lifespan, docs_url=None, redoc_url=None)
     app.include_router(router(receipts, runs, passes if passes is not None else
-                              (intake.passes if intake is not None else None)))
+                              (intake.passes if intake is not None else None),
+                              keeps if keeps is not None else
+                              (intake.keeps if intake is not None else None)))
 
     @app.get("/health")
     def health() -> dict[str, Any]:

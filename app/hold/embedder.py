@@ -468,7 +468,16 @@ def fresh_contexts(texts: Sequence, embed_fresh, first: Sequence[Sequence[float]
     round must have made exactly one context per text, or the pass is not
     measured (GateDeferred: ask again when nothing else holds the model). No
     count to read is a refusal (GateError): such a model is not admitted on
-    creations the gate could not see."""
+    creations the gate could not see.
+
+    A READING MAY BE THE PAIR `(calls, creations)` — every call the run
+    answered, and those it created a context for (the VeGa wrapper's count of
+    the backend's own word, app/run_check.py). Then the round is held to BOTH:
+    as many calls as texts, a context created for each. The creations alone
+    can add up wrongly: another collection's request has a context created in
+    the round while one of the pass's own rides a kept one — the same number
+    made, and one answer not from a context of its own. With the calls, any
+    other request the run answered meanwhile defers the pass."""
     if counted is None:
         raise GateError("this engine creates its context per request, and the gate can count "
                         "none of its creations: it is not admitted until they are counted "
@@ -491,11 +500,14 @@ def fresh_contexts(texts: Sequence, embed_fresh, first: Sequence[Sequence[float]
         after = counted()
         if len(got) != len(order):
             raise GateError(f"the encoder returned {len(got)} vectors for {len(order)} texts")
-        if before is None or after is None or after - before != len(order):
+        calls, contexts = _round_counts(before, after, len(order))
+        if contexts != len(order) or calls != len(order):
             raise GateDeferred(
                 f"the fresh-context pass: {len(order)} requests with a keep of 0 made "
-                f"{'an unknown number of' if before is None or after is None else after - before} "
-                f"context(s) — another request held the context, or the count was not read; "
+                f"{'an unknown number of' if contexts is None else contexts} "
+                f"context(s)" + ("" if calls in (None, len(order)) else
+                                 f" while the run answered {calls} call(s)") +
+                f" — another request held the context, or the count was not read; "
                 f"asked again when nothing else uses the model")
         for k, v in zip(order, got):
             arr = np.asarray(v, dtype="<f4")
@@ -505,6 +517,19 @@ def fresh_contexts(texts: Sequence, embed_fresh, first: Sequence[Sequence[float]
                 closest = min(closest, min(cosine(v, first[k]), 1.0 - 1e-12))
         made += len(order)
     return made, closest
+
+
+def _round_counts(before, after, asked: int) -> tuple[int | None, int | None]:
+    """`(calls, contexts)` a round made, between two readings of the engine's
+    count (`fresh_contexts`): an int is its creations — the calls are then
+    taken as asked — a pair is `(calls, creations)`. `(None, None)` where a
+    reading is missing or the two are not of one kind."""
+    pair = isinstance(before, tuple)
+    if before is None or after is None or pair != isinstance(after, tuple):
+        return None, None
+    if pair:
+        return after[0] - before[0], after[1] - before[1]
+    return asked, after - before
 
 
 def gate_texts(codex: Codex, role: str, items: Sequence | None = None) -> list:
