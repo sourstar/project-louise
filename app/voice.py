@@ -15,6 +15,12 @@ the Ask page, `louise node speech show` and the System page's GPU panel.
     tts_model = "omnivoice-cpp"      # text to speech: POST /v1/audio/speech
     tts_voice = "localai://voice-profiles/1c834741"
 
+THE VOICE IS THE READER'S CHOICE among the node's (operator, 2026-11-11:
+"Add a configuration tab, there the user can choose philippe or
+valentina"): `voices` lists the voice profiles the model server holds —
+each a recorded person, by name — and the node's `tts_voice` as the one
+used when the reader chose none. The model stays the node's.
+
 A model unset is a voice the page does not offer: no button, no form, and
 nothing asks. `offered` says why in the operator's words, with the command
 that supplies it — for `node speech show` and `GET /ask/voice`; the page
@@ -94,6 +100,26 @@ def offered() -> dict[str, Any]:
     return {"input": _offer(s.stt_model, "speech-to-text", FLAGS["stt_model"])
             | {"trimmed": bool(s.stt_model and s.vad_model)},
             "output": _offer(s.tts_model, "text-to-speech", FLAGS["tts_model"])}
+
+
+def voices() -> dict[str, Any]:
+    """The voices the Ask page offers the reader: `{"voices": [{name, voice,
+    language}], "default": voice}` — the model server's voice profiles in
+    the order they were recorded, and the one used when the reader chose
+    none (the node's `tts_voice`, else the first recorded; app/speech.py
+    `voice_for`). Nothing when the node reads no answer aloud. Never raises."""
+    from app import speech
+    offer = offered().get("output") or {}
+    if not offer.get("available"):
+        return {"voices": [], "default": None}
+    try:
+        node = settings()
+    except LOAD_ERRORS:
+        return {"voices": [], "default": None}
+    found = sorted(speech.profiles(server()), key=lambda p: str(p.get("created_at") or ""))
+    out = [{"name": str(p.get("name") or p.get("voice")), "voice": p["voice"],
+            "language": p.get("language")} for p in found if p.get("voice")]
+    return {"voices": out, "default": speech.voice_for(node.tts_voice or None, found)}
 
 
 def models_listed(url: str, names: list[str]) -> dict[str, bool] | None:

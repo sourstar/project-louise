@@ -1415,8 +1415,13 @@ voice, language}`: nothing in square brackets is read (a citation, in
 whatever shape the language writes it), one voice for every language, the
 text's language sent as `language`, the model pinned from the first
 sentence until 120 s after the end of the last; a request naming no model
-or voice gets `[speech] tts_model` and `tts_voice` (§7.8); 400 for a text
-that is only citations. `POST /v1/audio/transcriptions` (multipart `file`,
+or voice gets `[speech] tts_model` and `tts_voice` (§7.8), and one naming a
+voice profile the model server no longer holds gets `tts_voice` too (the
+reader's voice, *added 2026-11-11*); 400 for a text that is only citations.
+`GET /ask/voices` → `{voices: [{name, voice, language}], default}`: the
+model server's recorded voice profiles, oldest first, and the one the node
+speaks in; the Ask page's Settings offer them by name where there are two or
+more, the reader's choice kept in the browser and sent as `voice`. `POST /v1/audio/transcriptions` (multipart `file`,
 `model`, `language`, `response_format`, … — OpenAI's shape; at most 25 MB,
 413 above): the node's `stt_model` where none is named, 400 where there is
 neither. Where `[speech] vad_model` is set, a clip that is a WAV of 16-bit

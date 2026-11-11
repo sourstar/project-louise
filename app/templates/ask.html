@@ -113,6 +113,15 @@
        request, made each time. #}
     <label class="inline" title="translate the question into every language the collections hold, not only the main ones">
       <input id="all-langs" type="checkbox"> all languages</label>
+    {# THE VOICE THAT READS THE ANSWER (operator, 2026-11-11: "there the user
+       can choose philippe or valentina"): the node's recorded voices by name
+       (GET /ask/voices), the reader's choice remembered in the browser; none
+       chosen, the node's own. Filled by /static/voice.js; hidden with fewer
+       than two voices, since there is nothing to choose #}
+    {% if voice.output.available %}
+    <label class="inline" id="voice-choice" hidden title="the voice that reads the answer aloud">voice
+      <select id="voice-pick" style="width:auto"></select></label>
+    {% endif %}
   </div>
   </details>
 </div>

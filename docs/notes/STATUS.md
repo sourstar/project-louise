@@ -18,6 +18,27 @@ build at 12 cores, the GPU uncapped. The card's noise (operator): 0.2 sone
 idle, 3.1 sone at full load, coil whine ~0.9 sone; its fan range is being
 measured (published figures disagree).
 
+### 2026-11-11 (München)
+
+- **Philippe's voice profile metadata fixed** (`1c834741-…`, LocalAI config mount
+  `voice-profiles/1c834741-3826-4990-8046-388ab4e9607e/`). profile.json still described the 27.75 s original
+  (27,748 ms, its full transcript in references[0]) while the file served, `reference.wav`, is the 7.90 s cut of
+  2026-11-09. Now `audio` and `references[0]` describe `reference.wav` (7,900 ms, 379,244 bytes, the cut's
+  sentence); the original's transcript is kept beside it as `reference-orig-27.75s.txt`, next to
+  `reference-orig-27.75s.wav`; the old profile.json is at /root/measure/philippe-profile.json.bak-20261111. LocalAI
+  reads the file on each list (no reload). Live profile: unchanged, the 7.90 s cut.
+- **Four clips for Philippe (operator, 11-11, "1C"; replacing two, then three).** Three clips of 3–10 s cannot
+  cover the 27.75 s original: its pauses fall at 4.2, 12.4 and 19.6 s. Staged, not live, in
+  /root/measure/philippe-4clips/ with their transcripts (clips.json): 0–4.22, 4.22–12.43, 12.43–19.63 and
+  19.63–27.75 s. The live backend `intel-sycl-f16-omnivoice-cpp` (latest, 2026-10-07) reads one reference
+  (`GetVoice`); the `-development` build (master, 2026-11-10) reads `ref_audios`: it is pinned under its own name
+  after the night chain, tested beside the live one (the fixed sentence ×3, it and en; RTF, first sound, card
+  memory); the live switch waits for the operator's word.
+- **The reader chooses the voice** (operator, 11-11: "choose philippe or valentina"): Ask › Settings › voice,
+  the node's recorded voices by name, kept in the browser; none chosen, the node's own; a voice no longer held
+  falls back to the node's (app/voice.py `voices`, app/speech.py `held_profile`). Merged, not deployed (web).
+- **normattiva-nemo embedding at ~30 chunks/s** (7–8 before) with batch 16, concurrency 4, device gpu (2026-11-10).
+
 ### 2026-11-09: before the pause until Friday — what was done, measured and left (München's final report)
 
 - **Voice**: Philippe's reference cut to 7.90 s (19.80–27.70 s of the 27.75 s original, kept as
