@@ -24,7 +24,7 @@ import json
 import httpx
 import pytest
 
-from app import collections as collections_mod, config, db, embeddings, run_check, worker
+from app import model_load, collections as collections_mod, config, db, embeddings, run_check, worker
 from app.hold import collection as col, embedder as emb, runs as hold_runs
 from app.hold.codex import canonical_json, digest
 from app.verify import backend_gate
@@ -124,6 +124,12 @@ def endpoint(monkeypatch):
     r = Endpoint()
     monkeypatch.setattr(embeddings.httpc, "post", r.post)
     monkeypatch.setattr(run_check.httpx, "get", r.get)
+    # the stand-in is no LocalAI: its /system is a 404, so the gate reads "no
+    # options" from it rather than "cannot say" (run_check.creates_per_request)
+    def no_system(server):
+        raise model_load._NoRoute()
+    monkeypatch.setattr(model_load, "_fetch_system", no_system)
+    model_load.reset()
     return r
 
 

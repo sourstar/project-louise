@@ -749,10 +749,38 @@ changed.*
 | 4a. RAGE's keep and its trim | written | `app/rage/keep.py`, `app/embeddings.py` (both request paths) | `tests/test_rage_keep.py`, `tests/test_context_on_demand.py` |
 | 4b. the option read from `/system` | written | `app/model_load.py` (`context_on_demand`) | the same |
 | 4c. the keeper's rule (H5) | written | `app/resident.py` (`_rest_size`) | the same |
-| 4d. the gate's fresh-context pass | written | `app/hold/embedder.py` (`fresh_contexts`, 300 creations, short and long probes), `app/run_check.py` (`fresh_contexts`: only for a model LocalAI lists with the option, its keep fixed at 0); 03 §3.3 amended | `tests/hold/test_fresh_contexts.py` |
+| 4d. the gate's fresh-context pass | written; REVIEWED 2026-11-12 (the coordinator's integration): the creations are COUNTED (`counted`, the engine's count, one per request or the pass is deferred) and an engine with no count is refused; the option is read from the run's statement, else `/system` read now, a runner that cannot say defers | `app/hold/embedder.py` (`fresh_contexts`, 300 creations, short and long probes), `app/run_check.py` (`creates_per_request`, `fresh_contexts`, its keep fixed at 0); 03 §3.3 amended twice | `tests/hold/test_fresh_contexts.py` |
 | the count for §2 from the card record | written | `tools/measure/context_on_request.py` (read-only; for the node to run) | `tests/test_context_on_request_tool.py` |
-| 3. the VeGa wrapper's count, the canary | NOT written — a wrapper change is an engine change (§4) | `deploy/vega/vega_wrapper.py` | — |
+| 3. the VeGa wrapper's count, the canary | NOT written — a wrapper change is an engine change (§4). It is now ALSO what admits an on-demand engine at all: the gate counts its creations from it (`run_check.fresh_contexts` `creations`), and without it refuses the run | `deploy/vega/vega_wrapper.py` | — |
 | §2's measurements | NOT made | the node, on a test copy | — |
+
+**The integration review (2026-11-12, the coordinator; fixed before merge):**
+
+- the fresh pass COUNTED requests, not creations: the engine keeps a context
+  for the longest keep asked, so another collection on the same model, or
+  the stream's own last keep, would have answered all 300 probes on one
+  context, and the run been stated exact on creations nobody made. Now every
+  round is held to the engine's count (one context a request, else
+  deferred), and with no count readable the run is refused;
+- the pass was chosen from a cached `/system` read, a miss reading as "no
+  option" and the statement looking the same: now the run's own statement
+  decides, else `/system` read at that moment, and a runner that cannot say
+  defers the gate;
+- the keeper counted an on-demand model never seen working at its weights
+  (~2 GB short): it now counts as a model never seen (the set's median)
+  until a reading shows it working (`model_load.least_vram`);
+- one keep test passed vacuously (the refused request was the stream's
+  first): it now refuses after an answered request, past the keep, and holds
+  the excuse to be counted.
+- Left for the author, in the C++ (staged, not built into anything live):
+  P9's Embedding reads `get_meta()` per text where `impl->pooling_type`
+  would do; P11's `context_acquire` is not gated on
+  `params_base.context_on_demand` (unreachable today); the rerank check now
+  runs before the control vectors; `context_release()` frees under
+  `mutex_tasks`. And RAGE dates a keep from the answer's arrival where the
+  server dates it from the slot's release: a return trip longer than
+  `TRANSIT_MS` makes a creation RAGE judges clean (speed only; step 4's
+  creations-against-requests count shows it).
 
 **What the code settled, beyond the brief:**
 

@@ -65,7 +65,10 @@ def a_run(flag: str = "") -> tuple[str, dict]:
                       "variant": None, "image": "sha256:" + "8c" * 32,
                       "args": ["/backends/vega-llama-cpp/run.sh", "--addr",
                                "127.0.0.1:${PORT}"] + ([flag] if flag else []),
-                      "env": {}, "device": "Intel(R) Arc(TM) Pro B70 Graphics"},
+                      "env": {}, "device": "Intel(R) Arc(TM) Pro B70 Graphics",
+                      # the load options as LocalAI launched it (the wrapper states them;
+                      # the gate reads `context_on_demand` from here, run_check.creates_per_request)
+                      "options": {"Model": "bge-m3.gguf", "Options": ["parallel:1"]}},
            "weights": "sha256:" + "e2" * 32}
     return digest(canonical_json(obj)), obj
 

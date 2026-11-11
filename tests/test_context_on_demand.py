@@ -22,6 +22,7 @@ arrives; a request tells it how long to keep the context after the answer
 """
 from __future__ import annotations
 
+import time
 import httpx
 import pytest
 
@@ -218,17 +219,23 @@ def test_the_engine_s_refusal_is_a_deferral_and_never_an_input_s(node):
     response = httpx.Response(500, request=httpx.Request("POST", SERVER), json={"error": {"message": REFUSAL}})
     assert embeddings._over_budget(response) is False
     assert embeddings._numeric_failure(response) is False
-    node.refuse = 1
     with dispatch.working_as(dispatch.Level.CORPUS, "wikidata"):
+        # the stream has answered once: what expires next is judged (the review of
+        # 2026-11-12: the refusal was the stream's first request, so nothing was)
+        embeddings._embed_batch(["alpha", "beta"], 5.0, OPTED_IN)
+        node.refuse = 1
         with pytest.raises(embeddings.EndpointDeferred) as e:
             embeddings._embed_batch(["alpha", "beta"], 5.0, OPTED_IN)
         assert not isinstance(e.value, embeddings.InputRefused)
-        assert len(node.real()) == 1, "refused once, sent once: no split, no cut"
-        # and the retry, late as it is, does not move the stream's keep
+        assert len(node.real()) == 2, "refused once, sent once: no split, no cut"
+        # the retry comes after the keep expired: an expiry the refusal caused,
+        # which does not move the stream's keep
+        time.sleep((20 + keep.TRANSIT_MS + 30) / 1000)
         vectors = embeddings._embed_batch(["alpha", "beta"], 5.0, OPTED_IN)
     assert len(vectors) == 2
     stream, = keep.snapshot()
     assert stream["keep_ms"] == 20 and stream["premature"] == 0
+    assert stream["excused"] == {keep.EXCUSED_DEFERRED: 1}, "judged, and excused"
 
 
 # ---- the resident keeper ----------------------------------------------------------------
@@ -251,6 +258,26 @@ def test_the_keeper_counts_such_a_model_at_its_running_size(node):
     assert resident._size(on_demand, mem) == 4_263 * MIB
     assert resident._rest_size(on_demand, mem) == 4_263 * MIB, "its running size, by rule"
     assert resident._rest_size(plain, mem) == 700 * MIB, "any other model: at rest, as before"
+
+
+def test_such_a_model_never_seen_working_counts_as_a_model_never_seen(node):
+    """The review of 2026-11-12: preloaded, its context not yet created, its
+    largest reading is its weights alone — ~2 GB short of what its first
+    request creates. Counted at its weights, the budget would admit another
+    preload and the first creation would be refused; it counts as unknown
+    (the set's median) until a reading shows it working."""
+    qwen = "vega-qwen3-embedding-4b"
+    node.loaded.add(qwen)
+    node.options[qwen] = ["context_on_demand"]
+    mem = resident.Memory()
+    for _ in range(3):
+        node.vram[qwen] = 2_381 * MIB
+        model_load.loaded_models(SERVER, max_age_s=0.0)
+    on_demand = resident.Resident(SERVER, qwen, ("document",), ("gutenberg",))
+    assert resident._rest_size(on_demand, mem) is None, "never seen working: unknown, not its weights"
+    node.vram[qwen] = 4_263 * MIB
+    model_load.loaded_models(SERVER, max_age_s=0.0)
+    assert resident._rest_size(on_demand, mem) == 4_263 * MIB, "seen working: its running size"
 
 
 def test_an_idle_reading_under_half_is_not_taken_for_a_model_off_the_card(node):

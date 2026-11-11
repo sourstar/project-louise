@@ -703,6 +703,11 @@ def _size(r: Resident, mem: Memory) -> int | None:
     return 0 if model_load.seen_loaded(r.server, r.model) else None
 
 
+#: an on-demand model whose largest reading is within this share of its rest
+#: was never seen working (its context adds ~45 % to qwen3-4b's 2,381 MiB)
+ON_DEMAND_RUNNING_GROWTH = 0.05
+
+
 def _rest_size(r: Resident, mem: Memory) -> int | None:
     """The bytes the model holds AT REST — the fewest any reading gave, as
     its load left it, before a request grew its buffers; one seen only at
@@ -717,6 +722,13 @@ def _rest_size(r: Resident, mem: Memory) -> int | None:
         # It counts at its running size, so what it gives back while idle is
         # HEADROOM on the card and never budget for another preload — that
         # memory is spoken for the moment the model's next request arrives.
+        # NEVER SEEN WORKING (the review of 2026-11-12): its largest reading is
+        # then its weights alone, ~2 GB short of what its first request
+        # creates; it counts as a model never seen — at the set's median —
+        # until a reading shows it working.
+        least = model_load.least_vram(r.server, r.model)
+        if largest is not None and least and largest <= least * (1 + ON_DEMAND_RUNNING_GROWTH):
+            return None
         return largest
     got = [v for v in (mem.rest.get(r.key), model_load.rest_vram(r.server, r.model)) if _whole(v, largest)]
     return min(got) if got else largest

@@ -450,13 +450,29 @@ def fresh_loads(texts: Sequence, embed_one, reload: Callable[[], None],
 
 
 def fresh_contexts(texts: Sequence, embed_fresh, first: Sequence[Sequence[float]],
-                   seed: bytes, creations: int = FRESH_CONTEXTS) -> tuple[int, float]:
+                   seed: bytes, creations: int = FRESH_CONTEXTS, *,
+                   counted=None) -> tuple[int, float]:
     """(contexts, the closest an answer on a context of its own came to the
     same text's `first` answer — 1.0 when every one is the same byte string).
-    `embed_fresh` embeds each text alone on a NEW context (the request's keep
-    fixed at 0, app/rage/keep.py `fixed`); the texts go round, in a new order
-    each round, until `creations` contexts were made. A non-finite answer is
-    a wrong answer, not a variation: 0.0, as `fresh_loads` has it."""
+    `embed_fresh` embeds each text alone, its keep fixed at 0 (app/rage/keep.py
+    `fixed`); the texts go round, in a new order each round, until `creations`
+    contexts were made. A non-finite answer is a wrong answer, not a
+    variation: 0.0, as `fresh_loads` has it.
+
+    COUNTED, NEVER ASSUMED (invariant 12; the review of 2026-11-12): a keep of
+    0 frees the context only if no other request holds it longer — the engine
+    keeps it for the longest keep asked (P11) — so another collection embedding
+    on the same model, or the stream's own last keep, would answer every probe
+    on ONE context and the pass would certify 300 creations nobody made.
+    `counted()` is the engine's own count of its creations (an int); every
+    round must have made exactly one context per text, or the pass is not
+    measured (GateDeferred: ask again when nothing else holds the model). No
+    count to read is a refusal (GateError): such a model is not admitted on
+    creations the gate could not see."""
+    if counted is None:
+        raise GateError("this engine creates its context per request, and the gate can count "
+                        "none of its creations: it is not admitted until they are counted "
+                        "(docs/notes/idle-context-brief.md §10, the wrapper's count)")
     import random
     import numpy as np
     if not texts or len(first) != len(texts):
@@ -470,9 +486,17 @@ def fresh_contexts(texts: Sequence, embed_fresh, first: Sequence[Sequence[float]
         order = list(range(len(texts)))
         rng.shuffle(order)
         order = order[:creations - made]
+        before = counted()
         got = embed_fresh([texts[k] for k in order])
+        after = counted()
         if len(got) != len(order):
             raise GateError(f"the encoder returned {len(got)} vectors for {len(order)} texts")
+        if before is None or after is None or after - before != len(order):
+            raise GateDeferred(
+                f"the fresh-context pass: {len(order)} requests with a keep of 0 made "
+                f"{'an unknown number of' if before is None or after is None else after - before} "
+                f"context(s) — another request held the context, or the count was not read; "
+                f"asked again when nothing else uses the model")
         for k, v in zip(order, got):
             arr = np.asarray(v, dtype="<f4")
             if not np.all(np.isfinite(arr)):
@@ -658,7 +682,8 @@ def run_gate(codex: Codex, *, reference: Sequence[Sequence[float]],
             probes = sixteen + long
             first = single if len(single) == len(probes) else \
                 list(single[:len(sixteen)]) + (embed_one(long) if long else [])
-            contexts, across_contexts = fresh_contexts(probes, fresh, first, seed or b"")
+            contexts, across_contexts = fresh_contexts(probes, fresh, first, seed or b"",
+                                                       counted=getattr(fresh, "creations", None))
             variation = min(variation, across_contexts)
 
     return Run(
