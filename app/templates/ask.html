@@ -148,7 +148,7 @@
           d="M15.5 8.5a5 5 0 0 1 0 7M19 5a10 10 0 0 1 0 14"/></svg> <span class="speak-label">read aloud</span></button>
   {% endif %}
   </div>
-  <div id="answer" style="white-space:pre-wrap;line-height:1.6"></div>
+  <div id="answer" class="md" style="line-height:1.6"></div>
 </div>
 
 <div id="results">{% include "_ask_results.html" %}</div>
@@ -228,6 +228,17 @@
   #reader .plate figcaption{font-size:11px;color:var(--muted);margin-top:2px}
   /* being written by the model right now */
   .tr.translating,#answer.translating{border-left:2px solid var(--lapis,#3a6ea5);padding-left:4px}
+  /* the answer's Markdown, formatted (md()) */
+  .md>:first-child{margin-top:0}.md>:last-child{margin-bottom:0}
+  .md p{margin:0 0 10px}.md ul,.md ol{margin:0 0 10px;padding-left:22px}.md li{margin:2px 0}
+  .md h3,.md h4,.md h5,.md h6,.md h7,.md h8{margin:14px 0 6px;font-size:15px}
+  .md code{font-family:var(--mono);font-size:12px;background:var(--panel2);padding:0 3px;border-radius:2px}
+  .md pre{background:var(--panel2);padding:8px;border-radius:3px;overflow-x:auto;margin:0 0 10px}
+  .md pre code{padding:0;background:none}
+  .md blockquote{margin:0 0 10px;padding-left:10px;border-left:2px solid var(--line);color:var(--soft)}
+  .md table{border-collapse:collapse;margin:0 0 10px;display:block;overflow-x:auto}
+  .md th,.md td{border:1px solid var(--line);padding:3px 8px;text-align:left}
+  .md hr{border:0;border-top:1px solid var(--line);margin:12px 0}
   a.cite{cursor:pointer;text-decoration:underline dotted}
   @media (max-width:900px){ #reader{width:100vw} }
 </style>
@@ -400,7 +411,7 @@ async function search(){
   answerRaw=''; answerLang=null; answerShown=null; answerNote='';
   if(window.louiseVoice)louiseVoice.answerCleared();     // nothing left to read aloud
   document.getElementById('answer-pane').style.display='none';
-  document.getElementById('answer').textContent='';
+  setAnswer('');
   document.getElementById('report').replaceChildren();
   document.getElementById('results').innerHTML='<div class="note">searching…</div>';
   relayNote('');
@@ -427,17 +438,17 @@ let lastSearch=null;
 function startAnswer(want){
   const pane=document.getElementById('answer-pane'), a=document.getElementById('answer');
   if(window.louiseVoice)louiseVoice.answerCleared();
-  pane.style.display='block'; a.textContent='thinking…';
+  answerSrc=''; pane.style.display='block'; a.textContent='thinking…';
   let started=false;
   // the speaker reads it as it is written, where the node offers it
-  return {pane,a,delta:t=>{if(!started){a.textContent='';started=true} a.textContent+=t;
+  return {pane,a,delta:t=>{started=true; setAnswer(answerSrc+t);
                            if(window.louiseVoice)louiseVoice.answerGrew(want)}};
 }
 function finishAnswer(a,want){
   // the answer AS GENERATED, so a later switch has something to translate
   // and switching back to "original" restores it byte for byte
-  if(a.textContent==='thinking…')a.textContent='';
-  answerRaw=a.textContent; answerLang=want; answerShown=want;
+  setAnswer(answerSrc);
+  answerRaw=answerSrc; answerLang=want; answerShown=want;
   linkCitations();
   if(window.louiseVoice)louiseVoice.answerReady(want);    // the speaker, where the node offers it
 }
@@ -484,7 +495,7 @@ async function ask(){
     id=await relayStart('answer',{messages:[{role:'user',content:q}],collections:scopeCollections(),
                                   annotations:scopeAnnotations(),answer_lang:want,search_id:lastSearch,
                                   ...counts()},[]);
-  }catch(e){a.textContent=''; relayDropped('answer','it could not start ('+(e.message||e)+')'); return}
+  }catch(e){setAnswer(''); relayDropped('answer','it could not start ('+(e.message||e)+')'); return}
   relaySave({answer_lang:want});
   await relayListen('answer',id,{delta});
   finishAnswer(a,want);
@@ -645,7 +656,7 @@ function markTranslated(u,text,lang){
 
 function showAnswer(text,lang){
   const a=document.getElementById('answer');
-  a.classList.remove('translating'); a.textContent=text; answerShown=lang; linkCitations();
+  a.classList.remove('translating'); setAnswer(text); answerShown=lang; linkCitations();
   if(window.louiseVoice)louiseVoice.answerReady(lang);
 }
 
@@ -881,7 +892,7 @@ async function tqRun(job,lang){
         const g=byId.get(m.id); if(!g)continue;
         if(m.text!==undefined){tq.cache.set(ckey(lang,g.text),m.text); tq.flat.set(ckey(lang,flat(g.text)),m.text)}
         if(g.kind==='answer'){
-          if(m.delta!==undefined){acc[m.id]=(acc[m.id]||'')+m.delta; a.textContent=acc[m.id]; a.classList.add('translating')}
+          if(m.delta!==undefined){acc[m.id]=(acc[m.id]||'')+m.delta; setAnswer(acc[m.id]); a.classList.add('translating')}
           else if(m.text!==undefined && markers(m.text)===markers(answerRaw))showAnswer(m.text,lang);
           else{
             showAnswer(answerRaw,answerLang); tq.answerMissed=true;
@@ -1092,11 +1103,91 @@ function readerScrolled(){
 document.getElementById('reader-content').addEventListener('scroll',readerScrolled,{passive:true});
 document.addEventListener('keydown',e=>{if(e.key==='Escape')closeReader()});
 // [n] in the answer opens hit n in the reader
+// THE ANSWER, FORMATTED (operator, 2026-11-12: "the text box seems to
+// receive a md formatting that is printed as it is; show the formatted
+// text"). The chat model writes Markdown; the page shows paragraphs, line
+// breaks, headings, lists, emphasis, code, quotes, rules, tables and
+// http(s) links. ESCAPED FIRST: every character of the answer is text until
+// one of those rules makes it a tag, so nothing the model writes — nor a
+// passage it quotes — becomes HTML of its own. The source stays as written
+// (`answerSrc`, `answerRaw`): translation, the speaker (its
+// `answerText`) and a re-show read it, never the page's text.
+// THE STANDARD ALTERNATIVE (CLAUDE.md, "Do not reinvent the wheel"): a
+// CommonMark parser (marked, markdown-it) with an HTML sanitiser (DOMPurify):
+// all of CommonMark and GFM, two vendored libraries (~60 KB). Worth it when
+// answers need nested lists, footnotes or images; this is the subset the
+// chat model writes.
+let answerSrc='';
+window.answerSource=()=>answerSrc;
+function setAnswer(text){answerSrc=String(text||''); document.getElementById('answer').innerHTML=md(answerSrc)}
+function mdEsc(s){return s.replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
+function mdInline(raw){
+  const codes=[];
+  let s=raw.replace(/`([^`\n]+)`/g,(m,c)=>{codes.push(c); return '\u0000'+(codes.length-1)+'\u0000'});
+  s=mdEsc(s.replace(/\\([*_`#~\[\]|>\\-])/g,(m,c)=>'\u0001'+c.charCodeAt(0)+'\u0001'));
+  s=s.replace(/\[([^\[\]\n]{1,200})\]\(((?:https?:\/\/|mailto:)[^\s()<>]+)\)/g,
+              (m,t,u)=>'<a href="'+u+'" target="_blank" rel="noopener noreferrer">'+t+'</a>');
+  s=s.replace(/(\*\*|__)(?=\S)([^\n]+?)(?<=\S)\1/g,'<strong>$2</strong>');
+  s=s.replace(/~~(?=\S)([^\n]+?)(?<=\S)~~/g,'<del>$1</del>');
+  s=s.replace(/(^|[^\w*])\*(?=[^\s*])([^*\n]*?[^\s*])\*(?![\w*])/g,'$1<em>$2</em>');
+  s=s.replace(/(^|[^\w])_(?=[^\s_])([^_\n]*?[^\s_])_(?!\w)/g,'$1<em>$2</em>');
+  s=s.replace(/\u0001(\d+)\u0001/g,(m,c)=>mdEsc(String.fromCharCode(+c)));
+  return s.replace(/\u0000(\d+)\u0000/g,(m,i)=>'<code>'+mdEsc(codes[+i])+'</code>');
+}
+function md(src){
+  const lines=String(src||'').replace(/\r\n?/g,'\n').split('\n'), out=[];
+  let para=[], list=null, quote=[];
+  const cells=r=>r.trim().replace(/^\|/,'').replace(/\|$/,'').split('|').map(c=>mdInline(c.trim()));
+  const flush=()=>{
+    if(para.length){out.push('<p>'+para.map(mdInline).join('<br>')+'</p>'); para=[]}
+    if(list){out.push('<'+list.tag+(list.start>1?' start="'+list.start+'"':'')+'>'
+                      +list.items.map(i=>'<li>'+mdInline(i)+'</li>').join('')+'</'+list.tag+'>'); list=null}
+    if(quote.length){out.push('<blockquote>'+quote.map(mdInline).join('<br>')+'</blockquote>'); quote=[]}};
+  for(let i=0;i<lines.length;i++){
+    const l=lines[i]; let m;
+    if((m=l.match(/^\s*(```|~~~)/))){
+      flush(); const code=[];
+      for(i++;i<lines.length&&!lines[i].trim().startsWith(m[1]);i++)code.push(lines[i]);
+      out.push('<pre><code>'+mdEsc(code.join('\n'))+'</code></pre>'); continue;
+    }
+    if(!l.trim()){flush(); continue}
+    if((m=l.match(/^\s{0,3}(#{1,6})\s+(.*?)(?:\s+#+)?\s*$/))){
+      flush(); const n=Math.min(6,m[1].length+2); out.push('<h'+n+'>'+mdInline(m[2])+'</h'+n+'>'); continue}
+    if(/^\s*([-*_])(?:\s*\1){2,}\s*$/.test(l)){flush(); out.push('<hr>'); continue}
+    if(/^\s*\|.*\|\s*$/.test(l)&&i+1<lines.length&&/^\s*\|?\s*:?-{2,}:?\s*(?:\|\s*:?-{2,}:?\s*)*\|?\s*$/.test(lines[i+1])){
+      flush(); let h='<table><thead><tr>'+cells(l).map(c=>'<th>'+c+'</th>').join('')+'</tr></thead><tbody>';
+      for(i+=2;i<lines.length&&/^\s*\|.*\|\s*$/.test(lines[i]);i++)h+='<tr>'+cells(lines[i]).map(c=>'<td>'+c+'</td>').join('')+'</tr>';
+      i--; out.push(h+'</tbody></table>'); continue;
+    }
+    if((m=l.match(/^\s{0,3}>\s?(.*)$/))){if(para.length||list)flush(); quote.push(m[1]); continue}
+    if((m=l.match(/^\s*[-*+•]\s+(.*)$/))){
+      if(para.length||quote.length||(list&&list.tag!=='ul'))flush(); list=list||{tag:'ul',items:[]}; list.items.push(m[1]); continue}
+    if((m=l.match(/^\s*(\d{1,4})[.)]\s+(.*)$/))){
+      if(para.length||quote.length||(list&&list.tag!=='ol'))flush(); list=list||{tag:'ol',items:[],start:+m[1]}; list.items.push(m[2]); continue}
+    if(list&&/^\s{2,}\S/.test(l)){list.items[list.items.length-1]+=' '+l.trim(); continue}
+    if(list||quote.length)flush();
+    para.push(l.trim());
+  }
+  flush(); return out.join('');
+}
+// [n] in the answer's text, outside its links and code, opens passage n
 function linkCitations(){
   const a=document.getElementById('answer'); const hits=[...document.querySelectorAll('#hits .hit')];
   if(!hits.length)return;
-  a.innerHTML=a.textContent.replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]))
-    .replace(/\[(\d+)\]/g,(m,n)=>{const h=hits[parseInt(n,10)-1]; return h?'<a class="cite" data-n="'+n+'">'+m+'</a>':m});
+  const w=document.createTreeWalker(a,NodeFilter.SHOW_TEXT), nodes=[];
+  while(w.nextNode())if(!w.currentNode.parentElement.closest('a,code,pre'))nodes.push(w.currentNode);
+  for(const n of nodes){
+    const t=n.data; if(!/\[\d+\]/.test(t))continue;
+    const frag=document.createDocumentFragment(); let last=0;
+    for(const m of t.matchAll(/\[(\d+)\]/g)){
+      if(m.index>last)frag.append(t.slice(last,m.index));
+      if(hits[parseInt(m[1],10)-1]){const el=document.createElement('a'); el.className='cite'; el.dataset.n=m[1];
+        el.textContent=m[0]; frag.append(el)} else frag.append(m[0]);
+      last=m.index+m[0].length;
+    }
+    if(last<t.length)frag.append(t.slice(last));
+    n.replaceWith(frag);
+  }
   a.querySelectorAll('a.cite').forEach(el=>{el.onclick=()=>{const h=hits[parseInt(el.dataset.n,10)-1];
     if(h)openReader(h.dataset.collection,h.dataset.book,h.dataset.cid,h.dataset.title)}});
 }

@@ -91,7 +91,7 @@ const hitOf = t => { const m = t.trim().match(/^(?:<|R|Title |Chapter |Book |Par
     answerRaw = 'The answer cites [1] and [2]. ' + 'It is long enough to be streamed. '.repeat(20);
     answerLang = 'en'; answerShown = 'en';
     document.getElementById('answer-pane').style.display = 'block';
-    document.getElementById('answer').textContent = answerRaw; linkCitations();
+    setAnswer(answerRaw); linkCitations();     // the page shows it formatted (md); its source is answerRaw
   });
   check(reqs.length === 0, 'nothing is translated in "original"', reqs.length);
 
@@ -174,7 +174,7 @@ const hitOf = t => { const m = t.trim().match(/^(?:<|R|Title |Chapter |Book |Par
   await sleep(200);
   const back0 = await page.evaluate(() => [...document.querySelectorAll('#results .tr')].every(u =>
     u.textContent === u.dataset.orig && !u.dataset.parted && !u.querySelector('.tr-part'))
-    && document.getElementById('answer').textContent === answerRaw);
+    && answerSource() === answerRaw);
   check(back0, '"original" restores every unit and the answer byte for byte');
 
   // 5. an answer the model misses keeps its original AND the page says so
@@ -183,7 +183,7 @@ const hitOf = t => { const m = t.trim().match(/^(?:<|R|Title |Chapter |Book |Par
   await h.select('#lang', 'fr');
   await settle();
   const missed = await page.evaluate(() => ({
-    answer: document.getElementById('answer').textContent === answerRaw,
+    answer: answerSource() === answerRaw,
     entries: pageUnits().every(u => u.dataset.tl === 'fr'),
     note: (document.getElementById('lang-note') || { textContent: '' }).textContent }));
   check(missed.answer && missed.entries && /the answer could not be translated/.test(missed.note),

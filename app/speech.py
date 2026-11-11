@@ -140,11 +140,44 @@ def _no_stop(m: re.Match) -> str:
     return m.group(0)
 
 
+# MARKDOWN IS LAYOUT, NEVER WORDS (operator, 2026-11-12: "asterisks are
+# read"): the chat model writes Markdown — the page shows it formatted — and
+# its marks are not read. A link is read as its text, a table row as its
+# cells; headings, quotes, list bullets, rules, fences, backticks, emphasis
+# marks go, and any asterisk left with them.
+_MD_LINK = re.compile(r"!?\[([^\[\]\n]{1,200})\]\((?:[^()\s]|\([^()\s]*\))+\)")
+_MD_ESCAPE = re.compile(r"\\([*_#`~>|-])")
+_MD_FENCE = re.compile(r"^[ \t]*(?:```|~~~)[^\n]*$", re.M)
+_MD_RULE = re.compile(r"^[ \t]*([-*_])(?:[ \t]*\1){2,}[ \t]*$", re.M)
+_MD_TABLE_SEP = re.compile(r"^[ \t]*\|?[ \t]*:?-{2,}:?[ \t]*(?:\|[ \t]*:?-{2,}:?[ \t]*)*\|?[ \t]*$", re.M)
+_MD_TABLE_ROW = re.compile(r"^[ \t]*\|(.*)\|[ \t]*$", re.M)
+_MD_HEADING = re.compile(r"^[ \t]{0,3}#{1,6}[ \t]+", re.M)
+_MD_QUOTE = re.compile(r"^[ \t]{0,3}>[ \t]?", re.M)
+_MD_BULLET = re.compile(r"^[ \t]*[-*+•][ \t]+", re.M)
+_MD_STRONG = re.compile(r"(\*\*|__|~~)(?=\S)(.+?)(?<=\S)\1")
+_MD_EM_STAR = re.compile(r"\*(?=\S)(.+?)(?<=\S)\*")
+_MD_EM_UNDER = re.compile(r"(?<!\w)_(?=\S)(.+?)(?<=\S)_(?!\w)")
+
+
+def unmarked(text: str) -> str:
+    """`text` without its Markdown: what a reader hears of what the page
+    shows formatted."""
+    t = _MD_LINK.sub(r"\1", text)
+    t = _MD_FENCE.sub("", _MD_RULE.sub("", _MD_TABLE_SEP.sub("", t)))
+    t = _MD_TABLE_ROW.sub(lambda m: ", ".join(c.strip() for c in m.group(1).split("|") if c.strip()), t)
+    t = _MD_BULLET.sub("", _MD_QUOTE.sub("", _MD_HEADING.sub("", t)))
+    t = _MD_ESCAPE.sub(lambda m: "" if m.group(1) == "*" else m.group(1), t)
+    for _ in range(3):                          # nested: ***both***, **a *b* c**
+        t = _MD_EM_UNDER.sub(r"\1", _MD_EM_STAR.sub(r"\1", _MD_STRONG.sub(r"\2", t)))
+    return re.sub(r"\n{3,}", "\n\n", t.replace("`", "").replace("*", ""))
+
+
 def speakable(text: str) -> str:
-    """The text without anything in square brackets, spaced as prose: each
-    bracket, and a run of them joined by a dash or a comma, goes with the
-    space before it; an initial's or a title's full stop before a name goes
-    too (`_STOP_BEFORE_NAME`)."""
+    """The text without its Markdown (`unmarked`) and without anything in
+    square brackets, spaced as prose: each bracket, and a run of them joined
+    by a dash or a comma, goes with the space before it; an initial's or a
+    title's full stop before a name goes too (`_STOP_BEFORE_NAME`)."""
+    text = unmarked(text)
     out = _RUN.sub("", _BRACKET.sub("\x00", text.replace("\x00", "")))
     out = _SPACE_BEFORE_MARK.sub(r"\1", out)
     out = _STOP_BEFORE_NAME.sub(_no_stop, out)
