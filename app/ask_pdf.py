@@ -438,3 +438,104 @@ def render(html: str) -> bytes:
         return weasyprint.HTML(string=html, url_fetcher=_fetcher(weasyprint)).write_pdf()
     finally:
         _slots.release()
+
+
+# ---- the other interfaces (operator, 2026-11-11: "Since we produce it
+# internally, make it available through the other interfaces too") --------
+#
+# The page sends what its reader saw. The command line (`ask pdf`), the API
+# (`POST /api/ask/pdf`) and MCP (`louise_pdf`) have no page: the PDF is made
+# from Louise's own answer (`from_chat`: `chat.ask`'s answer and the sources
+# it numbered, with the passages it showed) or from a client's own answer and
+# the hits it used (`from_given`) — the same document, the same render.
+
+def _cut(text, n: int) -> str:
+    return str(text or "")[:n]
+
+
+def _reader_parts(chunk_id: str | None) -> tuple[str | None, str | None]:
+    """(collection, book) of a chunk id `<collection>:<book>:…`, as the Ask
+    page reads it for its reader link; a book that is not a row number has
+    no reader link."""
+    parts = str(chunk_id or "").split(":")
+    if len(parts) > 1 and parts[0] and parts[1].isdigit():
+        return parts[0], parts[1]
+    return None, None
+
+
+def _names() -> dict[str, str]:
+    """collection_id -> the local name this node holds it under."""
+    from app import collections as collections_mod
+    out: dict[str, str] = {}
+    for c in collections_mod.load_all():
+        cid = getattr(getattr(c, "codex", None), "collection_id", None)
+        if cid:
+            out[cid] = c.name
+    return out
+
+
+def _reference(n: int, hit: dict, names: dict[str, str]) -> PdfReference:
+    collection, book = _reader_parts(hit.get("chunk_id"))
+    name = names.get(hit.get("collection_id") or "") or hit.get("collection") or collection
+    return PdfReference(
+        n=n, title=_cut(hit.get("title") or hit.get("uid"), MAX_SHORT),
+        lang=_cut(hit.get("lang"), 32) or None, collection=_cut(name, 256) or None,
+        authors=_cut(hit.get("authors"), MAX_SHORT) or None, chapter=_cut(hit.get("chapter"), MAX_SHORT) or None,
+        passage=_cut(hit.get("passage") if hit.get("passage") is not None else hit.get("text"), MAX_PASSAGE),
+        origin_url=_cut(hit.get("origin_url"), 4096) or None,
+        book=book, chunk=_cut(hit.get("chunk_id"), 512) if book else None)
+
+
+def from_chat(question: str, out: dict, *, paper: str = "a4", tz: str | None = None,
+              collections: list[str] | None = None) -> AskPdf:
+    """Louise's own answer (`chat.ask(..., passages=True)`) as the PDF's
+    input: every source it numbered, in its numbering, with the passage it
+    was shown."""
+    names = _names()
+    passages = out.get("passages") or {}
+    refs = []
+    for e in (out.get("sources") or [])[:MAX_REFERENCES]:
+        p = passages.get(str(e.get("n"))) or {}
+        refs.append(_reference(int(e["n"]), {**e, "text": p.get("text"), "chapter": p.get("chapter")}, names))
+    return AskPdf(paper=paper, question=_cut(question, MAX_QUESTION), answer=_cut(out.get("answer"), MAX_ANSWER),
+                  answer_lang=out.get("answer_lang"), collections=[_cut(c, MAX_SHORT) for c in collections or []],
+                  tz=tz, references=refs)
+
+
+def from_given(question: str, answer: str, hits: list[dict], *, paper: str = "a4",
+               tz: str | None = None, answer_lang: str | None = None,
+               collections: list[str] | None = None) -> AskPdf:
+    """A client's own answer and the hits it used (as `louise_search` gave
+    them, or as the page shows them): [n] is a hit's own `n`, else its place
+    in the list."""
+    names = _names()
+    refs = []
+    for i, h in enumerate((hits or [])[:MAX_REFERENCES], start=1):
+        if not isinstance(h, dict):
+            continue
+        n = h.get("n") if isinstance(h.get("n"), int) and 1 <= h.get("n") <= MAX_REFERENCES else i
+        refs.append(_reference(n, h, names))
+    return AskPdf(paper=paper, question=_cut(question, MAX_QUESTION), answer=_cut(answer, MAX_ANSWER),
+                  answer_lang=answer_lang, collections=[_cut(c, MAX_SHORT) for c in collections or []],
+                  tz=tz, references=refs)
+
+
+def node_base() -> str:
+    """The node's own address for the "On <title>" links where no request
+    names one (the command line, MCP over stdio): platform.toml [node]
+    address; '' — no such link — where it is unset."""
+    from app import platform_config
+    try:
+        return (platform_config.load().peers.address or "").rstrip("/")
+    except Exception:   # noqa: BLE001 — a link left out, never a PDF refused
+        return ""
+
+
+def make(doc: AskPdf, *, base_url: str = "") -> tuple[str, bytes]:
+    """(file name, PDF) for `doc`, as every interface makes it."""
+    from urllib.parse import urlsplit
+    from app import site_title
+    when = reader_time(doc.tz)
+    node = urlsplit(base_url).netloc if base_url else site_title.title()
+    html = build_html(doc, base_url=base_url, node=node or base_url, when=when, site=site_title.title())
+    return filename(doc.question, when), render(html)

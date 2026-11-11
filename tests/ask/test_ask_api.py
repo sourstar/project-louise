@@ -44,7 +44,7 @@ def test_lookup_and_traverse_routes(client):
 def test_the_mcp_server_over_http(client):
     r = client.post("/api/ask/mcp", json={"jsonrpc": "2.0", "id": 1, "method": "tools/list"})
     assert r.status_code == 200 and [t["name"] for t in r.json()["result"]["tools"]] == [
-        "louise_search", "louise_lookup", "louise_traverse"]
+        "louise_search", "louise_lookup", "louise_traverse", "louise_pdf"]
     r = client.post("/api/ask/mcp", json={"jsonrpc": "2.0", "method": "notifications/initialized"})
     assert r.status_code == 202, "Streamable HTTP: a notification is accepted, no body"
     r = client.post("/api/ask/mcp", json={"jsonrpc": "2.0", "id": 2, "method": "tools/call",

@@ -906,7 +906,16 @@ reader needs at the command line:
 - **`ask`.** `search` returns the result of 05 §5.3; `lookup` and
   `traverse` are the MCP tools `louise_lookup` and `louise_traverse` of
   05 §5.4, one to one, and `search` is `louise_search`. `chat` needs
-  `CHAT_URL`; `serve` needs nothing but what is held.
+  `CHAT_URL`; `serve` needs nothing but what is held. `pdf` (*added
+  2026-11-11*; operator: the Ask page's saved PDF "available through the
+  other interfaces too") is `chat`'s answer saved as the Ask page saves it.
+  The PDF holds the question, the answer and every reference with the link
+  to its original source, on `--paper a4` (the default) or `letter`, written
+  to `--out` or the page's file name here. Over HTTP it is
+  `POST /api/ask/pdf`: a question Louise answers, or, with `answer` and
+  `references`, a client's own answer laid out the same way. Over MCP it is
+  `louise_pdf` (05 §5.4, amended). The links to this node's reader use
+  `[node] address`; with it unset they are left out (app/ask_pdf.py).
 - **`node start`.** Each round gives every held collection its turn at
   the stages of 06 §6.6, in that order — fetch, build, snapshot at the
   cutoff, embed (under rendezvous when the node shares), index, check by

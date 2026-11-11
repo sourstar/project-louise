@@ -523,6 +523,18 @@ louise_traverse(id, relation?, depth?, resolve_in?)   -- resolve_in: the collect
                 resolved, needs: {collection_id, shard} | null}]}
 ```
 
+*Amended 2026-11-11* (operator: the Ask page's saved PDF "available
+through the other interfaces too"). An MCP client is also offered one tool
+for a person's file:
+
+```
+louise_pdf(question, answer, references, answer_lang?, paper?)   -- references: the hits the answer used
+    → content: [{type: "text", …}, {type: "resource", resource: {uri, mimeType: "application/pdf", blob}}]
+```
+
+It is not a routing tool. Louise's own chat model is never offered it: it
+answers, it does not file. The three tools above remain its whole set.
+
 `collections` names collections by id, prefix or local name (07 §7.7)
 and defaults to every collection the peer holds and may use.
 `annotations` (*amended 2026-10-19*) names, by local name, the

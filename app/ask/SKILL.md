@@ -49,3 +49,10 @@ when the reader asks for it: `as_of` for "as it stood on 2020-01-01",
 - Say plainly when nothing answers, when a collection was withheld
   (`withheld`) and when a result is unverified (`trust_level`).
 - Write in the reader's language, whatever language the results are in.
+
+## A file to keep
+
+When the reader asks for the answer as a file, call `louise_pdf` with the
+question, your answer (its [n] numbering the hits you pass) and the hits
+you used, as `louise_search` returned them. It returns the PDF; hand it to
+the reader as it is.

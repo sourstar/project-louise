@@ -29,7 +29,8 @@ def test_the_skill_names_only_tools_and_parameters_that_exist():
     """A skill that names a parameter the server does not take teaches the
     model a refused call."""
     text = skill.text()
-    tools = {t["name"]: t["inputSchema"]["properties"] for t in mcp.TOOLS}
+    # the skill is MCP's (`initialize`): the three tools and the file tool (05 §5.4, amended 2026-11-11)
+    tools = {t["name"]: t["inputSchema"]["properties"] for t in mcp.TOOLS + mcp.FILE_TOOLS}
     named = set(re.findall(r"\blouise_\w+", text))
     assert named == set(tools), "every tool, and nothing else"
     for tool, args in re.findall(r"`(louise_\w+) (\{.*?\})`", text):
