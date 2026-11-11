@@ -3348,6 +3348,26 @@ def cmd_node_speech(a) -> int:
         return 2
 
 
+def cmd_node_title(a) -> int:
+    """`node title show|set|reset` (07 §7.3): the node's title — the label at
+    the top left of every page, the browser tab's name and a saved PDF's
+    header — in platform.toml `[node] title` (07 §7.8; app/site_title.py).
+    Desired state written into the file; every page shows it at its next
+    load. `reset` removes the key: "Project Louise" again."""
+    from app import platform_config, site_title
+    try:
+        if a.title_verb == "show":
+            _print({"title": site_title.title(), "default": site_title.DEFAULT,
+                    "file": str(platform_config.platform_path())})
+            return 0
+        value = a.text if a.title_verb == "set" else None
+        _print(site_title.write(platform_config.platform_path(), value))
+        return 0
+    except platform_config.schedule_mod.ScheduleError as e:
+        print(f"louise node title {a.title_verb}: {e}", file=sys.stderr)
+        return 2
+
+
 def cmd_node_pins(a) -> int:
     """`node pins` (07 §7.3): the models Louise holds pinned in LocalAI now,
     each with its holders and since when, those left pinned whose restore is
@@ -6754,6 +6774,17 @@ def build_parser() -> argparse.ArgumentParser:
     q.add_argument("--voice", dest="tts_voice", default=None, metavar="VOICE",
                    help="the voice, for every language; unset, the model server's first voice profile")
     q.set_defaults(fn=cmd_node_speech)
+
+    p = nverbs.add_parser("title", help="the node's title: the label at the top left of every page and a "
+                                        "saved PDF's header, in platform.toml [node] title")
+    tverbs = p.add_subparsers(dest="title_verb", required=True)
+    q = tverbs.add_parser("show", help="the title the pages show, and the file it comes from")
+    q.set_defaults(fn=cmd_node_title)
+    q = tverbs.add_parser("set", help="write the title into platform.toml [node] title; one line, at most 80 characters")
+    q.add_argument("text", help='the title, e.g. "Biblioteca di casa"')
+    q.set_defaults(fn=cmd_node_title)
+    q = tverbs.add_parser("reset", help='remove [node] title: "Project Louise" again')
+    q.set_defaults(fn=cmd_node_title)
 
     p = nverbs.add_parser("pins", help="the models Louise holds pinned in LocalAI: holders, stuck restores, "
                                        "failures (state/model-pins.json); read-only")
