@@ -619,6 +619,12 @@ _EN = {"en": "English", "fr": "French", "fi": "Finnish", "de": "German", "zh": "
        "la": "Latin", "grc": "Ancient Greek", "ca": "Catalan", "eo": "Esperanto"}
 
 
+def english_name(code: str | None) -> str | None:
+    """A language's English name ('it' → 'Italian'), None where the table
+    has none — for a page or a file that names a language to its reader
+    (app/ask_pdf.py)."""
+    return _EN.get((code or "").split("-")[0].lower())
+
 def reading_model(src: str) -> str | None:
     """The model `[translate] reading` names for text in `src`, or None."""
     if not available():

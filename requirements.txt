@@ -17,6 +17,12 @@ python-multipart==0.0.32
 # one voice reads them (it read every digit in Italian). LGPL-2.1, pure Python;
 # its one dependency, docopt, is its command line's.
 num2words==0.5.14
+# THE ASK PAGE'S "SAVE PDF" (operator, 2026-11-11, choice A: the server makes
+# the file; app/ask_pdf.py). WeasyPrint lays out HTML by CSS Paged Media (W3C)
+# and writes PDF links; BSD-3, pure Python over Pango and HarfBuzz (installed
+# with the Noto fonts by the Dockerfile). Its dependencies are pinned in
+# constraints.txt with it.
+weasyprint==70.0
 # PINNED (2026-10-23): the text index is part of what peers must agree on (05 §5.1:
 # the same list on every peer with the same members), and a new tantivy may tokenize
 # or stem differently — 0.27.0 changed the Greek stemmer (Perugia's image build,

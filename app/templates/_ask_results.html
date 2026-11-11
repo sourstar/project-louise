@@ -83,11 +83,11 @@
        hit, an abstract having no chapter. The operator read the blank one
        after fts:en as a fix still landing (2026-09-12). Nothing to
        say, nothing drawn. #}
-    {% if h.authors %}<span class="badge">{{ h.authors }}</span>{% endif %}
+    {% if h.authors %}<span class="badge" data-authors>{{ h.authors }}</span>{% endif %}
     <span class="badge brass">{{ h.lang or '?' }}</span>
     {% if h.source_collection %}<span class="badge lapis">{{ h.source_collection }}</span>{% endif %}
     {# CLAUDE.md invariant 4, rule 2: a result a weight moved says so #}
-    {% for m in h.moved_by or [] %}<span class="badge" title="moved by a weight: {{ m.weight }}, from place {{ m['from'] }} to {{ m.to }}">{{ 'catalogue match' if m.weight == 'catalog_first' else m.weight }}: moved up from #{{ m['from'] }}</span>{% endfor %}
+    {% for m in h.moved_by or [] %}<span class="badge" data-moved title="moved by a weight: {{ m.weight }}, from place {{ m['from'] }} to {{ m.to }}">{{ 'catalogue match' if m.weight == 'catalog_first' else m.weight }}: moved up from #{{ m['from'] }}</span>{% endfor %}
     {% for s in h.sources or [] %}<span class="badge {{ 'lapis' if s=='dense' else '' }}">{{ s }}</span>{% endfor %}
     {# the chapter or section heading is the document's own words, so it
        is translated with the entry (operator, 2026-09-18: "in full") #}
@@ -97,7 +97,7 @@
        is the point of the reader: the passage highlighted in context);
        this goes to the origin, which is what a reader clicking an article
        expected and did not get. #}
-    {% if h.origin_url %}<a class="badge" href="{{ h.origin_url }}" target="_blank"
+    {% if h.origin_url %}<a class="badge" data-origin href="{{ h.origin_url }}" target="_blank"
        rel="noopener" title="open at the source">source ↗</a>{% endif %}
   </div>
   {# ONE HIT PER WORK (05 §5.3, amended 2026-10-09): the work's other
