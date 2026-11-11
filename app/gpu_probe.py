@@ -176,6 +176,25 @@ def card_vram(card: Path, driver: str, notes: list[str]) -> tuple[int | None, in
     return None, None
 
 
+def card_integrated(card: Path, driver: str, total: int | None, notes: list[str]) -> bool | None:
+    """Is the card part of the processor? amdgpu: the driver's FUSION flag
+    (gpu_memory.amdgpu_integrated). xe: a card with no VRAM region of its own
+    is an integrated one. None where it cannot be told — the page then says
+    what it always said."""
+    if driver == "xe":
+        return None if total is None else total == 0
+    if driver == "amdgpu":
+        renders = sorted((card / "device" / "drm").glob("renderD*"))
+        if not renders:
+            return None
+        try:
+            return gpu_memory.amdgpu_integrated(DEV_DRI / renders[0].name, ioctl=_ioctl)
+        except OSError as e:
+            notes.append(f"{card.name}: whether the card is integrated could not be asked ({e})")
+            return None
+    return None
+
+
 # --------------------------------------------------------------------------
 # the processes
 
@@ -485,11 +504,12 @@ def snapshot() -> GpuSnapshot:
         device_id = (_read(dev / "device") or "").strip().lower().removeprefix("0x")
         vendor, name = pci_name(vendor_id, device_id)
         total, used = card_vram(card, driver, notes)
+        integrated = card_integrated(card, driver, total, notes)
         pdev = dev.resolve().name
         hwmon = hwmon_dir(dev)
         sensors = read_sensors(hwmon, power_w=card_power(pdev, hwmon), clock=gt_clock(dev))
         found.append((card.name, pdev, driver, vendor_id, device_id,
-                      vendor, name, total, used, sensors))
+                      vendor, name, total, used, sensors, integrated))
     denied: list[int] = []
     per_card = scan(denied)     # after every query has closed its descriptor
     if denied:
@@ -500,8 +520,9 @@ def snapshot() -> GpuSnapshot:
     return GpuSnapshot(
         devices=tuple(GpuDevice(card=c, pdev=pdev, driver=drv, vendor_id=vid, device_id=did,
                                 vendor=ven, name=nm, vram_total=tot, vram_used=use,
-                                processes=tuple(per_card.get(pdev, ())), sensors=sen)
-                      for c, pdev, drv, vid, did, ven, nm, tot, use, sen in found),
+                                processes=tuple(per_card.get(pdev, ())), sensors=sen,
+                                integrated=igp)
+                      for c, pdev, drv, vid, did, ven, nm, tot, use, sen, igp in found),
         notes=tuple(notes))
 
 

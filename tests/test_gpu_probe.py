@@ -507,3 +507,42 @@ def test_the_probe_is_deployed_able_to_read_the_processes(path):
     probe = yaml.safe_load((root / path).read_text())["services"]["gpu-probe"]
     assert {"PERFMON", "SYS_PTRACE"} <= set(probe["cap_add"])
     assert probe["pid"] == "host" and probe["read_only"] is True
+
+
+def test_amdgpu_says_whether_the_card_is_part_of_the_processor(tmp_path):
+    """AMDGPU_INFO_DEV_INFO's ids_flags, AMDGPU_IDS_FLAGS_FUSION (as nvtop
+    reads it): the Radeon 610M is integrated, a dedicated card is not."""
+    import ctypes
+    import struct
+    from app import gpu_memory
+    node = tmp_path / "renderD129"
+    node.write_bytes(b"")
+    asked = []
+
+    def ioctl_with(flags):
+        def ioctl(fd, request, head, mutate):
+            ptr, size, query = struct.unpack_from("<QII", head)
+            asked.append((request, size, query))
+            ctypes.memmove(ptr + gpu_memory._DEV_INFO_IDS_FLAGS, struct.pack("<Q", flags), 8)
+        return ioctl
+    assert gpu_memory.amdgpu_integrated(node, ioctl=ioctl_with(0x1 | 0x4)) is True
+    assert gpu_memory.amdgpu_integrated(node, ioctl=ioctl_with(0x4)) is False
+    assert asked[0] == (0x40206445, 144, 0x16), "DRM_IOCTL_AMDGPU_INFO, the struct to ids_flags, DEV_INFO"
+
+
+def test_the_probe_tells_an_integrated_card_and_says_when_it_cannot(tmp_path, monkeypatch):
+    from app import gpu_memory
+    card = tmp_path / "card1"
+    (card / "device" / "drm" / "renderD129").mkdir(parents=True)
+    notes: list[str] = []
+    monkeypatch.setattr(gpu_memory, "amdgpu_integrated", lambda render, ioctl=None: True)
+    assert gp.card_integrated(card, "amdgpu", 512 << 20, notes) is True
+    assert gp.card_integrated(card, "xe", 0, notes) is True, "no VRAM region of its own"
+    assert gp.card_integrated(card, "xe", 32 << 30, notes) is False
+    assert gp.card_integrated(card, "i915", None, notes) is None
+
+    def refused(render, ioctl=None):
+        raise PermissionError(13, "Permission denied")
+    monkeypatch.setattr(gpu_memory, "amdgpu_integrated", refused)
+    assert gp.card_integrated(card, "amdgpu", 512 << 20, notes) is None
+    assert notes and "could not be asked" in notes[0]
