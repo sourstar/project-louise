@@ -244,6 +244,27 @@ def test_settle_forms_a_group_from_the_fuller_index_and_frees_the_other(tmp_path
     assert again["freed"] == 0 and (root / rel / "en" / "seg.store").read_bytes() == b"alpha"
 
 
+def test_the_join_compares_in_the_pools_processes_with_the_same_result(tmp_path, monkeypatch):
+    """CLAUDE.md: multi-threading is a must — and threads gave nothing here
+    (the per-row work holds the GIL), so the windows go to processes
+    (`parallel.each_part`); the resets are the same as in one process."""
+    root, [(a, acon), (b, bcon)] = _discovered(tmp_path)
+    acon.execute("UPDATE documents SET fts_done=1, chunks=3")
+    acon.commit()
+    bcon.execute("UPDATE documents SET fts_done=1, chunks=3")
+    bcon.execute("UPDATE documents SET chunks=9 WHERE native_id='10002'")
+    bcon.commit()
+    acon.close(), bcon.close()
+    from app import config
+    monkeypatch.setattr(config, "PARSE_PROCESSES", 2)
+    got = text_index.reset_differing(b.manifest_path, a.manifest_path, window=1, log=lambda m: None)
+    assert got == 1
+    con = sqlite3.connect(b.manifest_path)
+    assert dict(con.execute("SELECT native_id, fts_done FROM documents").fetchall()) == \
+        {"10001": 1, "10002": 0, "10003": 1}
+    con.close()
+
+
 def test_a_member_left_alone_takes_a_linked_copy_and_its_own_index_back(tmp_path, monkeypatch):
     root, [(a, _), (b, _)] = _discovered(tmp_path)
     rel = _share(root, ["alpha", "beta"], "alpha")
