@@ -52,10 +52,17 @@ moment; gutenberg's 3.3 GB worked 31 seconds that day.
   unchecked; Ollama in progress. Nothing for Intel / SYCL / Level Zero.
 - **llama.cpp**: `--sleep-idle-seconds` frees the WHOLE model, weights and
   KV, when idle — what LocalAI's idle unload did and we switched off for its
-  cold starts (#398). No KV-only release. ggml-sycl has a virtual-memory
-  pool for compute buffers (`GGML_SYCL_SUPPORT_VMM`, sycl ext oneapi
-  virtual_mem), now OFF by default because it kept committed pages for the
-  pool's life (PR #29265). Discussion #25920 asks for dynamic model slots.
+  cold starts (#398). No KV-only release. ggml-sycl's pool for the
+  temporaries of its ops is a virtual-memory pool (`ggml_sycl_pool_vmm`,
+  sycl ext oneapi virtual_mem) where the build and the device support it
+  and `GGML_SYCL_ENABLE_VMM` is not 0 — ON by default at our pin `ddf48f8`
+  (`g_ggml_sycl_enable_vmm = ggml_sycl_get_env("GGML_SYCL_ENABLE_VMM", 1)`),
+  else the legacy pool, which caches up to 256 freed buffers; either gives
+  its memory back only when its owner is destroyed. PR #29265 (2026-09-22)
+  proposed the VMM pool OFF by default because it keeps committed pages for
+  its whole life; CLOSED UNMERGED 2026-09-24 (corrected 2026-11-12: an
+  earlier version of this note said it was off). Discussion #25920 asks for
+  dynamic model slots.
 - **vLLM sleep mode**: level 1 discards the KV cache and moves the weights
   to CPU RAM; level 2 discards both. A whole-engine pause, CUDA only.
 
@@ -73,13 +80,15 @@ wheel" (CLAUDE.md), the case is solved simply and the standard written down:
   creates it again. The card's free memory is the common pool; two models
   that overlap (nemotron + medcpt, 21.7 %) each still get theirs, so nobody
   queues. Query-path models keep theirs (a person's first query never waits
-  for one). A patch to our llama.cpp backend (P6 of the series), and each
+  for one). A patch to our llama.cpp backend (P11: P1–P7 are the series, P8–P10 staged), and each
   changed encoder re-gated once (invariant 12; context creation is part of
   a fresh load, which the gate already covers).
 - **To measure before building:** the time to create and free a context on
   the B70 for each encoder, and that freed memory is the driver's again (a
   SYCL pool that keeps it would make A a no-op). A test copy in a quiet
   window; nothing in production touched.
+- **The dedicated session's brief**: [idle-context-brief.md](idle-context-brief.md)
+  (the code paths, the series, the B70 pitfalls, the memory facts, the plan).
 - **When the standard would pay:** if the engines move to vLLM/SGLang on a
   CUDA or ROCm card, kvcached is the off-the-shelf answer for the KV share;
   or if kvcached lands for llama.cpp (its roadmap), at least on the card we
