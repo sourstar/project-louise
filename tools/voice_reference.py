@@ -9,10 +9,13 @@ WHAT IT KEEPS
 - Every pause in the result is one of the speaker's own, at its own length
   and with its own audio (room tone, breath). Nothing is trimmed, stretched
   or replaced by digital silence. Inside a part, the pauses are the
-  original's. Where two parts meet, the pause is the one the original had
-  before the second part, and two parts meet only where both sides are the
-  same kind of boundary: a sentence end meets a sentence start, a clause
-  end meets a clause start.
+  original's. Where two parts meet, the pause is the one the speaker made
+  after the first part, at its own length (corrected 2026-11-12: it was the
+  pause before the second part, 240 ms instead of his 780 ms after
+  "vittime?" in Philippe's candidate 1); its last HOLD_S are the second
+  part's own lead-in. Two parts meet only where both sides are the same kind
+  of boundary: a sentence end meets a sentence start, a clause end meets a
+  clause start.
 - Parts are whole sentences or clauses: each starts after a sentence or
   clause boundary, and the clip ends on a sentence end. The model hears
   the speaker's whole intonation contour, never a cut one.
@@ -47,12 +50,23 @@ THE STANDARDS USED
 - Splices: a XFADE_S linear crossfade inside a pause; the pause keeps its
   exact length.
 
+LONGER SENTENCE PAUSES (operator, 2026-11-12: Philippe's live clip "1d",
+then "add it"): `assemble --sentence-pause 1.0` makes every sentence pause
+of the clip at least 1.0 s. The speaker's own pause is kept whole, speech
+tails included; the missing length is the recording's quietest room tone
+(`--room-tone START-END`, else found: ROOM_TONE_S at TONE_MARGIN_S from any
+sound), inserted at the pause's middle with the same crossfades, repeated
+if one is not enough. `--parts 0,1,2,10,11` writes exactly those parts, to
+rebuild a clip chosen before.
+
 Stdlib only, so it runs on the host or in any container:
 
   python3 tools/voice_reference.py analyse ORIG.wav --transcript ORIG.txt \\
       --stt http://localai:8080 --stt-model <stt model> --out DIR
   python3 tools/voice_reference.py assemble ORIG.wav DIR/analysis.json --out DIR
   python3 tools/voice_reference.py check DIR --stt ... --stt-model ...
+  python3 tools/voice_reference.py assemble ORIG.wav DIR/analysis.json --parts 0,1,2,10,11 \\
+      --sentence-pause 1.0 --room-tone 3.90-4.10 --out DIR/1d
 
 `analyse` writes DIR/analysis.json: the parts, their pauses and their words.
 It is meant to be read and corrected by hand where a part's words are
@@ -83,10 +97,12 @@ FRAME_S = 0.010        # one level per 10 ms
 MIN_PAUSE_S = 0.12     # a quieter stretch this long is a pause, not a consonant's closure
 MIN_SPEECH_S = 0.08    # a louder stretch shorter than this (a click) is not speech
 XFADE_S = 0.010
-HOLD_S = 0.05          # kept after a part's last sound where it meets another part (its decay)
+HOLD_S = 0.05          # the lead-in a part keeps where it follows another part
 LEAD_S = 0.20
 TAIL_S = 0.30
 LEVEL_DB = 6.0
+ROOM_TONE_S = 0.20     # the room tone a lengthened pause is filled from
+TONE_MARGIN_S = 0.05   # ... taken at least this far from any sound
 STT_RATE = 16000
 SENTENCE_END = ".!?…"
 CLAUSE_END = ",;:—–"
@@ -406,8 +422,10 @@ def tail(an: Analysis, j: int) -> int:
     return min(round(TAIL_S * an.rate), an.pause(j))
 
 
-def hold(an: Analysis, j: int) -> int:
-    return min(round(HOLD_S * an.rate), an.pause(j) // 2)
+def preroll(an: Analysis, i: int) -> int:
+    """What part i keeps of its own lead-in where it follows another part:
+    its first sound may be quieter than the threshold."""
+    return min(round(HOLD_S * an.rate), an.before(i) // 2)
 
 
 def pauses_of(an: Analysis, plan: Plan) -> list[tuple[int, str, bool]]:
@@ -415,14 +433,15 @@ def pauses_of(an: Analysis, plan: Plan) -> list[tuple[int, str, bool]]:
     out = []
     for r, (i, j) in enumerate(plan.runs):
         if r:
-            out.append((an.pause(i - 1), an.kind(i - 1), True))
+            a = plan.runs[r - 1][1]
+            out.append((an.pause(a), an.kind(a), True))
         out += [(an.pause(k), an.kind(k), False) for k in range(i, j)]
     return out
 
 
 def duration(an: Analysis, plan: Plan) -> int:
     speech = sum(an.parts[j].end - an.parts[i].start for i, j in plan.runs)
-    joins = sum(an.pause(i - 1) for i, _ in plan.runs[1:])
+    joins = sum(an.pause(j) for _, j in plan.runs[:-1])
     return lead(an, plan.runs[0][0]) + speech + joins + tail(an, plan.runs[-1][1])
 
 
@@ -526,24 +545,105 @@ def choose(an: Analysis, target_s: float, lo_s: float, hi_s: float, max_runs: in
 
 # ---------------------------------------------------------------- the clip
 
-def render(a: Audio, an: Analysis, plan: Plan) -> array.array:
-    """The plan as audio: lead-in, runs, and between two runs the pause the
-    original had before the second, spliced inside that pause."""
+def plan_of(parts: list[int], an: Analysis) -> Plan:
+    """The plan of exactly these parts (`assemble --parts`), in order, each
+    run of consecutive parts one run."""
+    ks = sorted(set(parts))
+    if not ks or ks[0] < 0 or ks[-1] >= len(an.parts):
+        raise SystemExit(f"--parts must name parts 0..{len(an.parts) - 1}")
+    runs: list[tuple[int, int]] = []
+    for k in ks:
+        if runs and k == runs[-1][1] + 1:
+            runs[-1] = (runs[-1][0], k)
+        else:
+            runs.append((k, k))
+    return Plan(runs)
+
+
+def room_tone(a: Audio, an: Analysis, seconds: float = ROOM_TONE_S) -> tuple[int, int]:
+    """The recording's quietest `seconds` inside a pause, at least
+    TONE_MARGIN_S from any sound: the room the speaker was in, with nothing
+    said. Sample range [lo, hi)."""
+    n = max(1, round(FRAME_S * a.rate))
+    db = frame_db(a)
+    w = max(1, round(seconds / FRAME_S))
+    m = round(TONE_MARGIN_S / FRAME_S)
+    gaps = [(0, an.parts[0].start)] if an.parts else [(0, len(a.samples))]
+    gaps += [(an.parts[i].end, an.parts[i + 1].start) for i in range(len(an.parts) - 1)]
+    gaps += [(an.parts[-1].end, len(a.samples))] if an.parts else []
+    best: tuple[float, int] | None = None
+    for lo, hi in gaps:
+        f0, f1 = -(-lo // n) + m, hi // n - m
+        for f in range(f0, f1 - w + 1):
+            e = sum(10 ** (d / 10) for d in db[f:f + w])
+            if best is None or e < best[0]:
+                best = (e, f)
+    if best is None:
+        raise SystemExit(f"no pause holds {seconds} s of room tone at {TONE_MARGIN_S} s from any sound: "
+                         f"give --room-tone START-END")
+    return best[1] * n, best[1] * n + w * n
+
+
+def pieces(an: Analysis, plan: Plan, sentence_pause_s: float | None = None,
+           tone: tuple[int, int] | None = None) -> list[tuple[int, int]]:
+    """The plan as ranges of the recording, in order: lead-in, runs, and
+    between two runs the pause the speaker made after the first, at its own
+    length: its audio but the last `preroll`, which is the second part's own
+    lead-in. With
+    `sentence_pause_s` (operator, 2026-11-12, Philippe's 1d), a sentence pause
+    shorter than that is made that long: the speaker's own pause is kept
+    whole, speech tails included, and the room tone `tone` is inserted at
+    its middle, repeated if it must."""
+    want = round(sentence_pause_s * an.rate) if sentence_pause_s else 0
+    cuts: dict[int, list[tuple[int, int]]] = {r: [] for r in range(len(plan.runs))}
+    if want:
+        if tone is None:
+            raise ValueError("lengthening a pause needs the room tone")
+        for r, (i, j) in enumerate(plan.runs):
+            for k in range(i, j):                      # a pause inside the run
+                p = an.pause(k)
+                if an.kind(k) == "sentence" and p < want:
+                    cuts[r].append((an.parts[k].end + p // 2, want - p))
+            if r:                                      # the pause where two runs meet: the first's own
+                a = plan.runs[r - 1][1]
+                p = an.pause(a)
+                if an.kind(a) == "sentence" and p < want:  # its middle lies before the preroll
+                    cuts[r - 1].append((an.parts[a].end + p // 2, want - p))
+    out: list[tuple[int, int]] = []
+    for r, (i, j) in enumerate(plan.runs):
+        last = r == len(plan.runs) - 1
+        lo = an.parts[i].start - (lead(an, i) if r == 0 else preroll(an, i))
+        hi = an.parts[j].end + (tail(an, j) if last else an.pause(j) - preroll(an, plan.runs[r + 1][0]))
+        for c, extra in sorted(cuts[r]):
+            out.append((lo, c))
+            ta, tb = tone or (0, 0)
+            while extra > 0:
+                take = min(extra, tb - ta)
+                out.append((ta, ta + take))
+                extra -= take
+            lo = c
+        out.append((lo, hi))
+    return out
+
+
+def render(a: Audio, an: Analysis, plan: Plan, sentence_pause_s: float | None = None,
+           tone: tuple[int, int] | None = None) -> array.array:
+    """The plan as audio (`pieces`), each splice a XFADE_S crossfade inside a
+    pause that keeps the pause's length exact."""
     s = a.samples
     x = max(1, round(XFADE_S * a.rate))
     out = array.array("h")
-    for r, (i, j) in enumerate(plan.runs):
-        last = r == len(plan.runs) - 1
-        end = an.parts[j].end + (tail(an, j) if last else hold(an, j))
-        if r == 0:
-            out.extend(s[an.parts[i].start - lead(an, i):end])
-            continue
-        h = hold(an, plan.runs[r - 1][1])
-        seg = s[an.parts[i].start - (an.pause(i - 1) - h) - x:end]
-        for k in range(x):
-            t = (k + 0.5) / x
-            out[len(out) - x + k] = round(out[len(out) - x + k] * (1.0 - t) + seg[k] * t)
-        out.extend(seg[x:])
+    prev = None
+    for lo, hi in pieces(an, plan, sentence_pause_s, tone):
+        if prev is None or lo == prev:
+            out.extend(s[lo:hi])
+        else:
+            seg = s[lo - x:hi]
+            for k in range(x):
+                t = (k + 0.5) / x
+                out[len(out) - x + k] = round(out[len(out) - x + k] * (1.0 - t) + seg[k] * t)
+            out.extend(seg[x:])
+        prev = hi
     for k in range(min(x, len(out))):     # no click at either end
         t = (k + 0.5) / x
         out[k] = round(out[k] * t)
@@ -551,13 +651,19 @@ def render(a: Audio, an: Analysis, plan: Plan) -> array.array:
     return out
 
 
-def describe(an: Analysis, plan: Plan) -> dict[str, Any]:
+def describe(an: Analysis, plan: Plan, sentence_pause_s: float | None = None) -> dict[str, Any]:
     flagged = [k for k in plan.parts() if an.parts[k].matched is not None and an.parts[k].matched < 0.5]
+    want = round(sentence_pause_s * an.rate) if sentence_pause_s else 0
+
+    def made(p: int, k: str) -> int:
+        return max(p, want) if k == "sentence" else p
+    ps = pauses_of(an, plan)
     return {
         "runs_s": [[round((an.parts[i].start) / an.rate, 3), round(an.parts[j].end / an.rate, 3)] for i, j in plan.runs],
         "parts": plan.parts(),
-        "duration_s": round(duration(an, plan) / an.rate, 3),
-        "pauses_ms": [{"ms": round(1000 * p / an.rate), "kind": k, "join": jn} for p, k, jn in pauses_of(an, plan)],
+        "duration_s": round((duration(an, plan) + sum(made(p, k) - p for p, k, _ in ps)) / an.rate, 3),
+        "pauses_ms": [{"ms": round(1000 * made(p, k) / an.rate), "own_ms": round(1000 * p / an.rate), "kind": k,
+                       "join": jn} for p, k, jn in ps],
         "transcript": " ".join(an.parts[k].text for k in plan.parts()).strip(),
         "check_words_of_parts": flagged,
     }
@@ -628,6 +734,11 @@ def main(argv: list[str] | None = None) -> int:
     a2.add_argument("--max", type=float, default=11.0)
     a2.add_argument("--runs", type=int, default=3, help="at most this many parts joined (default 3)")
     a2.add_argument("--top", type=int, default=3)
+    a2.add_argument("--parts", help="write exactly these parts (e.g. 0,1,2,10,11) instead of ranking plans")
+    a2.add_argument("--sentence-pause", type=float, metavar="S",
+                    help="make every sentence pause at least S seconds, filled with the room tone")
+    a2.add_argument("--room-tone", metavar="START-END",
+                    help="the room tone, in seconds of the recording (default: its quietest 0.2 s in a pause)")
     a2.add_argument("--out", required=True)
     a3 = sub.add_parser("check", help="transcribe each candidate and compare it with its transcript")
     a3.add_argument("dir")
@@ -660,16 +771,33 @@ def main(argv: list[str] | None = None) -> int:
             raise SystemExit("the analysis is of another recording (rate or length differs)")
         out = Path(args.out)
         out.mkdir(parents=True, exist_ok=True)
-        best, said = choose(an, args.target, args.min, args.max, args.runs, args.top)
+        if args.parts:
+            plan = plan_of([int(k) for k in args.parts.split(",")], an)
+            best, said = [{"plan": plan, "score": None, "components": None}], "the parts given (--parts)"
+        else:
+            best, said = choose(an, args.target, args.min, args.max, args.runs, args.top)
+        tone = None
+        if args.sentence_pause:
+            if args.room_tone:
+                lo_s, hi_s = (float(v) for v in args.room_tone.split("-"))
+                tone = (round(lo_s * audio.rate), round(hi_s * audio.rate))
+                over = [k for k, q in enumerate(an.parts) if q.start < tone[1] and tone[0] < q.end]
+                if tone[1] - tone[0] < round(XFADE_S * audio.rate) or over:
+                    raise SystemExit(f"--room-tone {args.room_tone}: " + (
+                        f"it overlaps part(s) {over}, which are speech" if over else "too short"))
+            else:
+                tone = room_tone(audio, an)
         rows = []
         for n, c in enumerate(best, 1):
-            clip = render(audio, an, c["plan"])
+            clip = render(audio, an, c["plan"], args.sentence_pause, tone)
             (out / f"candidate-{n}.wav").write_bytes(wav_bytes(clip, audio.rate))
-            d = describe(an, c["plan"])
+            d = describe(an, c["plan"], args.sentence_pause)
             (out / f"candidate-{n}.txt").write_text(d["transcript"] + "\n", encoding="utf-8")
             rows.append({"candidate": n, "score": c["score"], "components": c["components"], **d,
                          "samples": len(clip)})
-        report = {"original": an.style(), "weights": WEIGHTS, "note": said, "candidates": rows}
+        report = {"original": an.style(), "weights": WEIGHTS, "note": said, "candidates": rows,
+                  "sentence_pause_s": args.sentence_pause,
+                  "room_tone_s": [round(v / audio.rate, 3) for v in tone] if tone else None}
         (out / "candidates.json").write_text(json.dumps(report, ensure_ascii=False, indent=1) + "\n",
                                              encoding="utf-8")
         print(json.dumps(report, ensure_ascii=False, indent=1))

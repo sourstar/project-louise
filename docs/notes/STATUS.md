@@ -44,6 +44,11 @@ measured (published figures disagree).
   noise; it cut the tail of "dell'arte?"). Same profile id 1c834741: reference.wav = 1d, beside
   reference-10s-1d.wav, reference-orig-27.75s.wav/.txt, reference-cut-7.90s.wav; previous profile.json at
   /root/measure/philippe-profile.json.bak-20261111-full; built by /root/measure/philippe-10s/philippe_1d.py.
+  IN THE REPO (operator, 11-12: "Add it"): that script, byte-identical (sha256 875b10…), with its input and
+  output hashes, in tools/voices/ (1d rebuilt byte for byte); and in the tool, for any voice,
+  `assemble --sentence-pause S [--room-tone A-B] [--parts …]`. The tool's join was also corrected: where two parts
+  meet, the pause is the speaker's own after the first part (candidate 1 had taken the 240 ms before the next
+  sentence instead of his 780 ms after "vittime?").
 - **Philippe on about 10 s, keeping the speaker's pauses** (operator, 11-12: "assemble the most meaningful parts
   of the whole clip in a clip of about 10s. Beyond the pure voice to be, the speaker has a distinct style way to
   make pauses between words and sentences"): `tools/voice_reference.py` (tests/test_voice_reference.py). It cuts the
