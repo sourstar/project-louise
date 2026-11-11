@@ -883,3 +883,46 @@ def test_a_write_reads_its_own_statements_and_not_every_collections(node, endpoi
     for _ in range(20):
         run_check.check_write(collection, recipe, {R1})
     assert wide["n"] == 0, "its own statement answered every write"
+
+
+# ---- a run's load options, from its own statement (München, 2026-11-12) -----------------
+
+ON_DEMAND = {"Model": "m.gguf", "Options": ["ubatch:512", "context_on_demand"]}
+
+
+def test_a_write_notes_the_load_options_its_run_states(node, endpoint, monkeypatch):
+    """The node's LocalAI lists no load options in `/system`: a model that
+    creates its context per request is known from the validated statement of
+    the run its answers named, and its next request carries a keep."""
+    root, collection, codex = node
+    recipe = collections_mod.recipe_for(collection)
+    body = {"run": R1, "engine": {**R1_OBJ["engine"], "options": ON_DEMAND}}
+    monkeypatch.setattr(run_check.runs_mod, "check", lambda *a, **k: None)
+    monkeypatch.setattr(run_check.runs_mod, "statements", lambda *a, **k: {R1: body})
+    monkeypatch.setattr(run_check, "rechecked", lambda *a: True)
+    assert model_load.context_on_demand(DOC_URL, "medcpt-article") is False
+    run_check.check_write(collection, recipe, {R1})
+    assert model_load.context_on_demand(DOC_URL, "medcpt-article") is True
+    assert model_load.context_on_demand(QUERY_URL, "medcpt-query") is False, "the document side only"
+
+
+def test_a_search_reads_a_run_s_options_once(node, endpoint, monkeypatch):
+    """Quarantine only reported (the node today): nothing is withheld, and the
+    query side's options are still read from its run's statement — once a run
+    in the process, not once a query."""
+    from app import copy_state
+    root, collection, codex = node
+    recipe = collections_mod.recipe_for(collection)
+    reads = {"n": 0}
+
+    def space_statements(*a, **k):
+        reads["n"] += 1
+        return {R1: {"run": R1, "engine": {**R1_OBJ["engine"], "options": ON_DEMAND}}}
+    monkeypatch.setattr(copy_state, "enforced", lambda: False)
+    monkeypatch.setattr(copy_state, "space_statements", space_statements)
+    for _ in range(5):
+        run_check.check_query(collection, recipe, {R1})
+    assert reads["n"] == 1
+    assert model_load.context_on_demand(QUERY_URL, "medcpt-query") is True
+    run_check.check_query(collection, recipe, {None})     # an answer that states no run: nothing to read
+    assert reads["n"] == 1

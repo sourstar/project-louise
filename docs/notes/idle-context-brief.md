@@ -747,7 +747,7 @@ changed.*
 | 1. llama.cpp's server | written, in upstream's form | `deploy/localai/patches/staged/llama.cpp/0011-server-context-on-demand.patch` | CPU: its own 13 server tests; nine existing suites unchanged with the option off (localai-bugs.md "P11 (staged)") |
 | 2. LocalAI's backend | written | `deploy/localai/patches/staged/0009-llama-cpp-context-on-demand.patch`, `staged/context-on-demand.series` | CPU: `grpc-server` built from the candidate series and driven over gRPC, 18 checks; the same vector byte for byte with and without the option |
 | 4a. RAGE's keep and its trim | written | `app/rage/keep.py`, `app/embeddings.py` (both request paths) | `tests/test_rage_keep.py`, `tests/test_context_on_demand.py` |
-| 4b. the option read from `/system` | written | `app/model_load.py` (`context_on_demand`) | the same |
+| 4b. the option read from `/system`, else from the answering run's statement | written; 2026-11-12: the node's LocalAI (v4.12.1, upstream) lists NO `load_options` — P1 is not in it — so a row without them says nothing, and a validated run's `engine.options` is noted where a write or a search is checked; the gate's fixed keep is sent whatever `/system` says | `app/model_load.py` (`context_on_demand`, `listed_on_demand`, `note_run_options`), `app/run_check.py` (`_note_options`), `app/rage/keep.py` (`for_request`) | `tests/test_context_on_demand.py`, `tests/test_run_check.py`, `tests/hold/test_fresh_contexts.py` |
 | 4c. the keeper's rule (H5) | written | `app/resident.py` (`_rest_size`) | the same |
 | 4d. the gate's fresh-context pass | written; REVIEWED 2026-11-12 (the coordinator's integration): the creations are COUNTED (`counted`, the engine's count, one per request or the pass is deferred) and an engine with no count is refused; the option is read from the run's statement, else `/system` read now, a runner that cannot say defers | `app/hold/embedder.py` (`fresh_contexts`, 300 creations, short and long probes), `app/run_check.py` (`creates_per_request`, `fresh_contexts`, its keep fixed at 0); 03 §3.3 amended twice | `tests/hold/test_fresh_contexts.py` |
 | the count for §2 from the card record | written | `tools/measure/context_on_request.py` (read-only; for the node to run) | `tests/test_context_on_request_tool.py` |
@@ -768,6 +768,13 @@ changed.*
   option" and the statement looking the same: now the run's own statement
   decides, else `/system` read at that moment, and a runner that cannot say
   defers the gate;
+- (München, steps 3–4) the node's LocalAI lists no `load_options` at all:
+  every model read "no option", so no request would ever carry a keep, and
+  the gate's keep of 0 — sent only to a model `/system` said yes for — would
+  never reach the engine. Now a row without options says nothing; the
+  option comes from the validated statement of the run the model's answers
+  named (VeGa states LoadModel's options), noted at the write's and the
+  search's check; the gate's fixed keep is sent whatever `/system` says;
 - the keeper counted an on-demand model never seen working at its weights
   (~2 GB short): it now counts as a model never seen (the set's median)
   until a reading shows it working (`model_load.least_vram`);

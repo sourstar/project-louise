@@ -20,8 +20,9 @@ and holds each answer to the same text's first:
     request held is not a fresh one (deferred), and an engine whose creations
     cannot be counted is not admitted (refused);
   - the option is read from the run's own statement where it lists its load
-    options, else from a `/system` read made now; a runner that cannot say
-    defers the gate, never skips the pass.
+    options, else from a `/system` read made now; a runner that cannot say —
+    a listing without `load_options` included — defers the gate, never skips
+    the pass.
 """
 from __future__ import annotations
 
@@ -195,7 +196,7 @@ def test_only_a_model_listed_with_the_option_gets_the_pass_and_its_keep_is_zero(
         asked.append(kw.get("max_age_s"))
         return frozenset({recipe.model})
     monkeypatch.setattr(model_load, "loaded_models", loaded_models)
-    monkeypatch.setattr(model_load, "context_on_demand", lambda url, model: listed["on"])
+    monkeypatch.setattr(model_load, "listed_on_demand", lambda url, model: listed["on"])
     assert run_check.fresh_contexts(recipe) is None
     assert asked == [0.0], "read now, never from a cache"
 
@@ -244,3 +245,20 @@ def test_a_runner_that_cannot_say_defers_the_gate_and_never_skips_the_pass(monke
     monkeypatch.setattr(model_load, "loaded_models", lambda server, **kw: frozenset({"another"}))
     with pytest.raises(emb.GateDeferred, match="does not list it"):
         run_check.creates_per_request(recipe, _Stated(None))
+
+
+def test_a_listing_without_load_options_is_no_no(monkeypatch):
+    """München, 2026-11-12: the node's LocalAI (v4.12.1, without our P1) lists
+    {id, backend, process, size_vram} and no options. Read as "no option",
+    the pass would be skipped for a model that creates its context per
+    request; it is "cannot say", and the gate defers. A run behind VeGa never
+    comes here: its statement lists the options."""
+    recipe = collections_mod.EmbedRecipe(url="http://localai:8080", api="openai",
+                                         model="vega-nemotron-3-embed-1b", dtype="f32", ctx=512)
+    monkeypatch.setattr(model_load, "loaded_models", lambda server, **kw: frozenset({recipe.model}))
+    monkeypatch.setattr(model_load, "listed_on_demand", lambda url, model: None)
+    # a run noted earlier is not the run being gated
+    monkeypatch.setattr(model_load, "context_on_demand", lambda url, model: pytest.fail("not read"))
+    with pytest.raises(emb.GateDeferred, match="lists none"):
+        run_check.creates_per_request(recipe, _Stated(None))
+    assert run_check.creates_per_request(recipe, _Stated({"Options": ["context_on_demand"]})) is True

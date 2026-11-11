@@ -163,12 +163,20 @@ REST_FLOOR = 0.5
 #: (one on the CPU) has no `_sizes` entry, and costs the card nothing
 _seen: set[tuple[str, str]] = set()
 #: (server, model) -> whether its load options carry llama.cpp's
-#: `context_on_demand` (LocalAI's `/system` lists the options a model was
-#: loaded with, P1): such a model holds its weights and creates its context
-#: per request (docs/notes/idle-context-brief.md), so it has TWO sizes on the
-#: card, idle and running, and takes a request's `keep_context_ms`
-#: (`context_on_demand`; app/rage/keep.py, app/resident.py)
+#: `context_on_demand`, as `/system` LISTS them (`load_options`, our P1): such
+#: a model holds its weights and creates its context per request
+#: (docs/notes/idle-context-brief.md), so it has TWO sizes on the card, idle
+#: and running, and takes a request's `keep_context_ms` (`context_on_demand`;
+#: app/rage/keep.py, app/resident.py). Only a row that lists its options says
+#: anything: the node's LocalAI (v4.12.1, upstream) lists none (München,
+#: 2026-11-12), and a row without them is no "no"
 _on_demand: dict[tuple[str, str], bool] = {}
+#: the same, from the STATEMENT of the run its answers named: a validated
+#: run's `engine.options` (VeGa's wrapper states the `ModelOptions` LocalAI
+#: loaded it with; immutable per run id), noted where a write or a query is
+#: checked (`note_run_options`, app/run_check.py). Where `/system` lists the
+#: options too, `/system` decides: it is read now, the note is the last answer
+_run_on_demand: dict[tuple[str, str], bool] = {}
 #: the option, as a model's YAML `options:` names it or as the raw
 #: llama-server flag LocalAI's backend passes through
 ON_DEMAND_OPTION = "context_on_demand"
@@ -190,6 +198,7 @@ def reset() -> None:
         _least.clear()
         _seen.clear()
         _on_demand.clear()
+        _run_on_demand.clear()
         _probe_locks.clear()
         _flights.clear()
         _recent.clear()
@@ -223,7 +232,9 @@ def _fetch_system(server: str) -> frozenset[str] | None:
         raise _NoRoute()
     held = [m for m in rows if isinstance(m, dict) and isinstance(m.get("id"), str)]
     pids, sizes, now = {}, {}, {}
-    on_demand = {m["id"]: _options_on_demand(m.get("load_options")) for m in held}
+    # only a row that LISTS its options says whether it was loaded on demand
+    listed = {m["id"]: _options_on_demand(m["load_options"]) for m in held
+              if isinstance(m.get("load_options"), dict)}
     for m in held:
         pid = (m.get("process") or {}).get("pid") if isinstance(m.get("process"), dict) else None
         if isinstance(pid, int):
@@ -237,7 +248,11 @@ def _fetch_system(server: str) -> frozenset[str] | None:
         _pids[server] = pids
         _held[server] = now
         _seen.update((server, m) for m in now)
-        _on_demand.update(((server, m), v) for m, v in on_demand.items())
+        for m in now:
+            if m in listed:
+                _on_demand[(server, m)] = listed[m]
+            else:
+                _on_demand.pop((server, m), None)     # this listing cannot say
         for k, v in sizes.items():
             _sizes[k] = max(v, _sizes.get(k, 0))
             _least[k] = min(v, _least.get(k, v))
@@ -284,13 +299,41 @@ def _options_on_demand(load_options) -> bool:
 
 
 def context_on_demand(url: str, model: str | None) -> bool:
-    """Whether `model` at `url` was LOADED with `context_on_demand`, by the
-    last `/system` answer that listed it; False when it never was listed —
-    a request then carries no keep, and its size is read as any model's."""
+    """Whether `model` at `url` was LOADED with `context_on_demand`: by the
+    last `/system` answer that listed it WITH its options, else by the
+    statement of the last validated run its answers named
+    (`note_run_options`); False when neither says — a request then carries
+    no keep (the engine keeps the context, as it always did), and its size is
+    read as any model's."""
     if not model:
         return False
+    key = (server_of(url), model)
     with _lock:
-        return _on_demand.get((server_of(url), model), False)
+        listed = _on_demand.get(key)
+        return listed if listed is not None else _run_on_demand.get(key, False)
+
+
+def listed_on_demand(url: str, model: str | None) -> bool | None:
+    """`/system`'s own word on `model`: True or False where its last listing
+    gave the model's load options, None where it gave none (a LocalAI without
+    P1, the node's) or never listed it. The gate reads this and not
+    `context_on_demand`: a run noted earlier is not the run being gated."""
+    if not model:
+        return None
+    with _lock:
+        return _on_demand.get((server_of(url), model))
+
+
+def note_run_options(url: str, model: str | None, options) -> None:
+    """A validated run answered for `model` at `url`, and its statement's
+    `engine.options` are `options` (VeGa's: LoadModel's `ModelOptions`, proto
+    names): what `context_on_demand` says where `/system` lists no options.
+    A statement that carries no options (an engine stated without them) says
+    nothing, and leaves what was noted."""
+    if not model or not isinstance(options, dict):
+        return
+    with _lock:
+        _run_on_demand[(server_of(url), model)] = _options_on_demand(options)
 
 
 def size_vram(server: str, model: str) -> int | None:
