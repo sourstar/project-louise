@@ -183,6 +183,20 @@ _PLURAL = {"it": "secoli", "fr": "siècles", "es": "siglos", "pt": "séculos", "
 _DE_OBLIQUE = frozenset("im am vom zum beim dem den des einem eines".split())
 #: feminine nouns that do not end in -a
 _FEMININE = frozenset("parte classe fase sezione appendice serie legge edizione".split())
+#: nouns a numbered part follows, in any case: "capo II", "sezione III", "chapter IV"
+#: (München, 2026-11-11: "articolo 3 del capo II" kept its numeral). Italian,
+#: Spanish and Portuguese say an ordinal, agreeing with the noun; English,
+#: French and German a cardinal ("chapter four", "chapitre deux", "Kapitel zwei")
+_PARTS = {
+    "it": "capo|titolo|libro|sezione|parte|allegato|volume|tomo|canto|atto|scena|capitolo|paragrafo|"
+          "fascicolo|tabella|appendice",
+    "es": "capítulo|título|libro|sección|parte|anexo|tomo|volumen|acto|escena|apartado",
+    "pt": "capítulo|título|livro|seção|secção|parte|anexo|tomo|volume|ato|acto|cena",
+    "en": "chapter|part|volume|book|act|scene|section|article|title|appendix|annex|schedule|canto|psalm",
+    "fr": "chapitre|titre|livre|section|partie|annexe|tome|volume|acte|scène|article",
+    "de": "kapitel|teil|band|buch|abschnitt|titel|anhang|akt|szene|artikel",
+}
+_PARTS_FEMININE = frozenset("sezione parte tabella appendice sección parte seção secção parte".split())
 _ARTICLES = {
     "it": ({"il", "lo", "del", "nel", "al", "dal", "sul", "dello", "nello", "allo", "dallo", "sullo"},
            {"la", "della", "nella", "alla", "dalla", "sulla"}),
@@ -282,7 +296,23 @@ def _roman(text: str, lang: str) -> str:
             if n is None:
                 return m.group(0)
             return f"{m.group(1)} {_counted(n, lang, feminine=m.group(1).lower() in fem)}"
-        text = re.sub(rf"(?i:\b({words}))\s+{tok}(?=\s+[^\W\d_])", article, text)
+        # a word after it, or the sentence ends there ("No, nel XVII.": a century said before)
+        text = re.sub(rf"(?i:\b({words}))\s+{tok}(?=\s+[^\W\d_]|\s*[.,;:!?)]|\s*$)", article, text)
+
+    # a numbered part after its noun: "del capo II", "chapter IV", "Kapitel III"
+    parts = _PARTS.get(lang)
+    if parts:
+        def part(m: re.Match) -> str:
+            noun, n = m.group(1), value(m.group(2))
+            if n is None:
+                return m.group(0)
+            if lang in ("en", "de"):
+                return f"{noun} {_words(n, lang)}"
+            if lang == "fr":
+                return f"{noun} {_counted(n, lang, regnal=True)}"
+            fem = noun.lower() in _PARTS_FEMININE or (lang == "it" and noun.lower().endswith("a"))
+            return f"{noun} {_counted(n, lang, feminine=fem)}"
+        text = re.sub(rf"(?<!\w)(?i:({parts}))\s+{tok}{end}", part, text)
 
     # a ruler, a pope, or (English) a numbered part, after a name in title case
     def ruler(m: re.Match) -> str:

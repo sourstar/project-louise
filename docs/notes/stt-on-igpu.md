@@ -11,7 +11,16 @@ labelled as such.*
 
 ## 1. What runs today
 
-- **STT: parakeet, on LocalAI's `parakeet-cpp` backend, on the CPU.**
+- **CORRECTION (München's inventory, 2026-11-11): the live STT runs on the
+  B70, not on the CPU.**
+  - Its backend is `intel-sycl-f16-parakeet-cpp`, named concretely in its
+    YAML, so the alias pitfall of §5 does not apply to it.
+  - This note was written on the premise below. Moving STT to the iGPU
+    therefore frees the B70's memory and time, and some CPU. It is not a CPU
+    offload.
+  - The baseline in §6 is the B70.
+- *As first written (the premise):* **STT: parakeet, on LocalAI's
+  `parakeet-cpp` backend, on the CPU.**
   - The backend is the CPU build (approved-encoders.md: "parakeet-cpp ships
     the same [runtime] but runs on the CPU (its libparakeet.so links no
     SYCL)").
@@ -369,9 +378,24 @@ changing the speech processing logic: do it at the end of the speech".*
 
 ## 6. Results
 
-*Not measured yet.*
+**Measured so far** (München, 2026-11-11; the node paused).
+- **Clips:** 21 stand-in clips from the TTS (it/en/fr/de, 2–9.5 s, plus one
+  of 25 s). They are not real recordings (measuring.md §6).
+- **The iGPU test model:** `vulkan-parakeet-cpp` is installed
+  (`sha256:d1ffab69…`). The test model
+  `parakeet-cpp-multilingual-diarization-speakers-igpu` loads RADV only
+  (`VK_DRIVER_FILES` / `VK_ICD_FILENAMES`).
+- **On the Radeon, not on lavapipe:** the model transcribes correctly, and
+  the iGPU's GTT grew by about 1.1 GB plus 0.5 GB of VRAM.
+- **Not yet timed:** its timing waits for #534's keeper to be deployed.
+  LocalAI lists the model at 0.5 GB `size_vram`, which the keeper before
+  #534 would count against the B70.
 
-| clip set | engine | warm s/clip (median) | RTF | first call | transcripts = CPU's | CPU use | iGPU busy | memory | Tctl |
-|---|---|---|---|---|---|---|---|---|---|
-| — | CPU (live) | | | | reference | | — | — | |
-| — | Vulkan, iGPU | | | | | | | | |
+| clip set | engine | warm RTF (median) | first call | transcripts = live's | CPU use | iGPU busy | memory | Tctl |
+|---|---|---|---|---|---|---|---|---|
+| 21 TTS clips | B70, `intel-sycl-f16-parakeet-cpp` (live) | 0.09 | 2.86 s | reference | 3.9 cores (warm pass) | — | — | |
+| 21 TTS clips | Vulkan, iGPU | | | | | | GTT +1.1 GB, VRAM +0.5 GB (loaded) | |
+
+§3.1's expectation was set against the CPU. Against the B70, expect the
+iGPU to be several times slower per clip; what it buys is the B70's memory
+and time.
