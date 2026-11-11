@@ -14,6 +14,10 @@ voice, though not to the same bytes.
 | input `orig.wav`: the profile's `reference-orig-27.75s.wav`, 24 kHz mono s16 | `5850273a85cb2bdba2f4d7cb72c682de30ef8d1274a67b946237aa49be3439a6` |
 | output `candidate-1d.wav` = the profile's `reference.wav` / `reference-10s-1d.wav` | `843d9c7225c8ae31919f6fa9494f6bfae6bfe25c20292d82d3d2911bff3b3406` |
 
+VERIFIED 2026-11-11 (München, from 223eb9d, in /root/measure/rebuild-1d): the
+rebuilt `candidate-1d.wav` is byte-identical to the live reference
+(`843d9c72…`).
+
 It is run in a directory that holds `orig.wav` and `candidate-1a.txt`. That
 text file holds the transcript, one line: "Siamo oggi ancora protagonisti,
 oppure siamo vittime? L'Italia è ancora il centro mondiale dell'arte?
