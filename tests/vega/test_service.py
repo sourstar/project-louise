@@ -380,3 +380,17 @@ def test_a_context_that_did_not_reproduce_its_canary_is_said_every_time(tmp_path
     assert "2 discarded since its load (+1)" in first and "5 of 51 call(s)" in second
     (row,) = counts.get()
     assert (row["canary_failed"], row["failed"], row["created"]) == (2, 3, 5)
+
+
+def test_a_log_line_is_written_when_it_is_said(monkeypatch, tmp_path):
+    """München, 2026-11-11: the service's stdout is a pipe, and `docker logs
+    -t` stamped buffered lines with the time the buffer filled — a gate's
+    last creations landed in the next gate's window."""
+    from app.vega import service
+    seen = []
+    monkeypatch.setattr(service, "print", lambda *a, **k: seen.append(k), raising=False)
+    service.say("[vega] a line")
+    assert seen == [{"flush": True}]
+    intake = service.Intake(tmp_path / "s.sock", service.ReceiptStore(),
+                            service.Runs(RunStore(tmp_path / "r.sqlite")))
+    assert intake.log is service.say
