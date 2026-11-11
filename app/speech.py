@@ -412,7 +412,7 @@ def synthesize(body: dict[str, Any], url: str | None = None) -> tuple[int, bytes
 
 def synthesize_timed(body: dict[str, Any], url: str | None = None, *,
                      reading: str | None = None, n: int | None = None,
-                     last: bool = False) -> tuple[int, bytes, str, list]:
+                     last: bool = False, account_voice: str | None = None) -> tuple[int, bytes, str, list]:
     """`synthesize` and its `Server-Timing` (W3C; 2026-11-08, to measure the
     reading's start and its pauses): `turn` the wait for the reading's
     sentence before (`Turns`), `synth` the model server's call in ms, `audio`
@@ -430,12 +430,12 @@ def synthesize_timed(body: dict[str, Any], url: str | None = None, *,
         out["model"] = model
     lang = language(text)
     held = profiles(url)
-    # the reader's voice (the Ask page's choice, a client's own), unless it
+    # the reader's voice — the request's (the Ask page's choice, a client's
+    # own), else the one the asker's account keeps (app/users.py) — unless it
     # names a profile the server no longer holds — a browser remembering a
     # voice since removed (app/voice.py `voices`): then the node's, never an error
-    asked = body.get("voice") or None
-    if asked and not held_profile(asked, held):
-        asked = None
+    asked = next((v for v in (body.get("voice") or None, account_voice or None)
+                  if v and held_profile(v, held)), None)
     voice = voice_for(asked or node.tts_voice or None, held)
     if voice:
         out["voice"] = voice

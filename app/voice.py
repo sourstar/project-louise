@@ -102,24 +102,42 @@ def offered() -> dict[str, Any]:
             "output": _offer(s.tts_model, "text-to-speech", FLAGS["tts_model"])}
 
 
-def voices() -> dict[str, Any]:
+def voices(account: str | None = None) -> dict[str, Any]:
     """The voices the Ask page offers the reader: `{"voices": [{name, voice,
-    language}], "default": voice}` — the model server's voice profiles in
-    the order they were recorded, and the one used when the reader chose
-    none (the node's `tts_voice`, else the first recorded; app/speech.py
-    `voice_for`). Nothing when the node reads no answer aloud. Never raises."""
-    from app import speech
+    language}], "default": voice, "account": {name, voice} | None}` — the
+    model server's voice profiles in the order they were recorded, the one
+    used when the reader chose none (the node's `tts_voice`, else the first
+    recorded; app/speech.py `voice_for`), and, for a reader with an account,
+    the voice it keeps (app/users.py; None: the node's). Nothing when the
+    node reads no answer aloud. Never raises."""
+    from app import speech, users
+    mine = {"name": account, "voice": users.voice_of(account)} if account else None
     offer = offered().get("output") or {}
     if not offer.get("available"):
-        return {"voices": [], "default": None}
+        return {"voices": [], "default": None, "account": mine}
     try:
         node = settings()
     except LOAD_ERRORS:
-        return {"voices": [], "default": None}
+        return {"voices": [], "default": None, "account": mine}
     found = sorted(speech.profiles(server()), key=lambda p: str(p.get("created_at") or ""))
     out = [{"name": str(p.get("name") or p.get("voice")), "voice": p["voice"],
             "language": p.get("language")} for p in found if p.get("voice")]
-    return {"voices": out, "default": speech.voice_for(node.tts_voice or None, found)}
+    if mine and mine["voice"] and not speech.held_profile(mine["voice"], found):
+        mine = {**mine, "voice": None}          # a voice since removed: the node's, as speech does
+    return {"voices": out, "default": speech.voice_for(node.tts_voice or None, found), "account": mine}
+
+
+def choose(account: str | None, voice: str | None) -> dict[str, Any]:
+    """An account's voice set from the Ask page (`POST /ask/voice`): one of
+    `voices`' or None for the node's. Raises ValueError for a reader with no
+    account (the browser keeps its choice) or a voice the node does not offer."""
+    from app import users
+    if not account:
+        raise ValueError("no account: this browser keeps the voice")
+    if voice and voice not in {v["voice"] for v in voices(account)["voices"]}:
+        raise ValueError(f"{voice!r} is not one of the node's voices")
+    users.set_voice(account, voice or None)
+    return voices(account)
 
 
 def models_listed(url: str, names: list[str]) -> dict[str, bool] | None:

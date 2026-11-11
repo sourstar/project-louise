@@ -88,6 +88,22 @@ def test_the_cli_verbs(isolated_config, capsys):
     assert louise_main(["user", "add", "ada"]) == 2, "a name taken is refused, never overwritten"
 
 
+def test_the_accounts_voice_is_kept_in_the_file_and_set_from_the_cli(isolated_config, capsys):
+    """Operator, 2026-11-11: "Shall a user account can choose it?" — the
+    account's voice, the user's own desired state, beside its role."""
+    users.add("ada")
+    assert users.voice_of("ada") is None and users.voice_of(None) is None and users.voice_of("bob") is None
+    assert louise_main(["user", "voice", "ada", "localai://voice-profiles/v2"]) == 0
+    assert users.voice_of("ada") == "localai://voice-profiles/v2"
+    assert users.listing()[0]["voice"] == "localai://voice-profiles/v2"
+    users._cache = None
+    assert users.load()[0].voice == "localai://voice-profiles/v2", "read back from the file"
+    assert louise_main(["user", "voice", "ada", "none"]) == 0 and users.voice_of("ada") is None
+    assert "voice" not in users.path().read_text().split("[[user]]")[1], "none: nothing written"
+    with pytest.raises(users.UserError):
+        users.set_voice("ada", "two\nlines")
+
+
 # ---- the gate ----------------------------------------------------------------
 
 def test_ask_is_open_until_the_first_user_then_needs_a_token(client):
@@ -132,6 +148,9 @@ def test_the_admin_api(client):
     assert r.status_code == 200 and r.json()["token"].startswith("lu_")
     first = r.json()["token"]
     assert client.post("/admin/api/users", headers=h, json={"name": "ada"}).status_code == 409
+    assert client.patch("/admin/api/users/ada", headers=h, json={"voice": "localai://voice-profiles/v2"}).json() \
+        ["voice"] == "localai://voice-profiles/v2"
+    assert client.patch("/admin/api/users/ada", headers=h, json={"voice": "none"}).json()["voice"] is None
     assert client.patch("/admin/api/users/ada", headers=h, json={"role": "admin", "expires": "never"}).json() \
         | {"last_seen": None} == {**client.get("/admin/api/users", headers=h).json()["users"][0], "last_seen": None}
     again = client.post("/admin/api/users/ada/reissue", headers=h).json()["token"]

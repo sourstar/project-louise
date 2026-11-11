@@ -1379,7 +1379,7 @@ and `user reissue`; only its SHA-256 is kept, in `users.toml` (§7.8).
 |---|---|
 | `louise user add <name> [--role user\|admin] [--expires never\|90d\|<date>]` | `POST /admin/api/users` `{name, role, expires}` → `{…, token}` |
 | `louise user list [--json]` | `GET /admin/api/users` |
-| `louise user role <name> <role>`, `louise user expire <name> <expiry>` | `PATCH /admin/api/users/{name}` `{role?, expires?}` |
+| `louise user role <name> <role>`, `louise user expire <name> <expiry>`, `louise user voice <name> <voice\|none>` (*added 2026-11-11*: the voice the user's answers are read in, a profile `GET /ask/voices` lists; none: the node's) | `PATCH /admin/api/users/{name}` `{role?, expires?, voice?}` |
 | `louise user reissue <name>` — the old token dies at once; a revoked user is active again | `POST /admin/api/users/{name}/reissue` → `{…, token}` |
 | `louise user revoke <name>` — the entry stays | `POST /admin/api/users/{name}/revoke` |
 | `louise user remove <name>` | `DELETE /admin/api/users/{name}` |
@@ -1388,6 +1388,12 @@ The person's own: `GET /login`, `POST /login` `{token}` (a cookie for 30
 days or until the token expires), `POST /logout`, `GET /api/me` →
 `{name, role, expires}`. A dialog never manages users (RULE 2: choices
 for operators live in the command line); System lists them, read-only.
+The one choice a user makes for their own account is the voice their
+answers are read in (operator, 2026-11-11: "Shall a user account can
+choose it?"): Ask › Settings › voice, `POST /ask/voice` `{voice}` (null:
+the node's), kept as `voice` in `users.toml` and heard by every browser
+and client of the account; 409 without an account, where the browser
+keeps it.
 
 **The OpenAI-compatible endpoint** names its models (*same amendment*):
 `GET /v1/models` lists `louise` — every collection — and
@@ -1418,10 +1424,13 @@ sentence until 120 s after the end of the last; a request naming no model
 or voice gets `[speech] tts_model` and `tts_voice` (§7.8), and one naming a
 voice profile the model server no longer holds gets `tts_voice` too (the
 reader's voice, *added 2026-11-11*); 400 for a text that is only citations.
-`GET /ask/voices` → `{voices: [{name, voice, language}], default}`: the
-model server's recorded voice profiles, oldest first, and the one the node
-speaks in; the Ask page's Settings offer them by name where there are two or
-more, the reader's choice kept in the browser and sent as `voice`. `POST /v1/audio/transcriptions` (multipart `file`,
+`GET /ask/voices` → `{voices: [{name, voice, language}], default, account}`:
+the model server's recorded voice profiles, oldest first, the one the node
+speaks in, and `{name, voice}` for a reader with an account (§7.4 users);
+the Ask page's Settings offer them by name where there are two or more,
+the choice kept with the account, else in the browser, and sent as
+`voice`. A request naming no voice is read in the asker's account voice,
+then the node's. `POST /v1/audio/transcriptions` (multipart `file`,
 `model`, `language`, `response_format`, … — OpenAI's shape; at most 25 MB,
 413 above): the node's `stt_model` where none is named, 400 where there is
 neither. Where `[speech] vad_model` is set, a clip that is a WAV of 16-bit
@@ -1445,9 +1454,14 @@ with its neighbour — is complete once a later one has begun past that length
 or the stream has ended, never half of one; each goes to `/v1/audio/speech`
 as soon as it is complete, two at a time, whatever the stream and the player
 are doing (chat and speech run on different GPU resources), and they play in
-order. A question the microphone wrote — the box holds what it left there —
-has its answer read by itself, the Ask press unlocking the sound; a typed one
-waits for the speaker, which also starts at the first sentence. A tap stops
+order. HANDS-FREE (*amended 2026-11-11*, operator: "click to activate and
+automatically ask at the end of the speech, then automatically tts of the
+answer"): a tap opens the microphone, the recording ends by itself after
+the speech, and the question is ASKED at once as Ask asks it (the page's
+switch: search, or search and answer) — the spoken text added to a
+question typed and not yet asked, else in place of the last one — and its
+answer is read by itself, the microphone's tap unlocking the sound; a typed
+question waits for the speaker, which also starts at the first sentence. A tap stops
 it, as does a new question: the fetches in flight are cancelled, nothing
 more is read. A browser that refuses the sound anyway gets the speaker and
 one line saying so. An answer the page then shows in another language (the

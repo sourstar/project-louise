@@ -16,6 +16,13 @@ are its writers, under one lock; the web reads it again when it changes.
 `last_seen` is not desired state: it is kept in `<LOUISE_ROOT>/state/
 users-seen.json`, written at most once a minute per user.
 
+THE ACCOUNT'S VOICE (operator, 2026-11-11: "Shall a user account can choose
+it?"): `voice`, the voice profile the answer is read in for this user, is
+the user's own desired state, so it lives in the same file — written by the
+user from the Ask page's Settings (`POST /ask/voice`, `set_voice`) or by the
+operator (`louise user voice`), under the same lock. It follows the account
+to every browser and client; none set, the node's own (app/speech.py).
+
 Until the first ACTIVE user exists, Ask stays open on the LAN as it always
 was; from then on it needs a token (`auth.viewer`).
 """
@@ -54,6 +61,7 @@ class User:
     created: str                     # ISO 8601 UTC, seconds
     expires: str | None = None       # ISO 8601 UTC; None = never
     revoked: str | None = None       # when it was revoked; None = not
+    voice: str | None = None         # the voice the answer is read in; None = the node's
 
     def state(self, now: dt.datetime | None = None) -> str:
         if self.revoked:
@@ -65,7 +73,7 @@ class User:
     def public(self, seen: dict[str, str] | None = None) -> dict:
         """What may be shown: everything but the token's hash."""
         return {"name": self.name, "role": self.role, "created": self.created, "expires": self.expires,
-                "revoked": self.revoked, "state": self.state(),
+                "revoked": self.revoked, "state": self.state(), "voice": self.voice,
                 "last_seen": (seen or {}).get(self.name)}
 
 
@@ -124,7 +132,7 @@ def _q(s: str) -> str:
 
 
 def _dump(users: list[User]) -> bytes:
-    out = ["# Louise users (07 §7.4). Written by `louise user …` and the admin API;",
+    out = ["# Louise users (07 §7.4). Written by `louise user …`, the admin API and a user's own voice;",
            "# a token is never stored, only its sha256. Edit with the CLI.", ""]
     for u in sorted(users, key=lambda u: u.name):
         out.append("[[user]]")
@@ -136,6 +144,8 @@ def _dump(users: list[User]) -> bytes:
             out.append(f"expires = {_q(u.expires)}")
         if u.revoked:
             out.append(f"revoked = {_q(u.revoked)}")
+        if u.voice:
+            out.append(f"voice = {_q(u.voice)}")
         out.append("")
     return "\n".join(out).encode("utf-8")
 
@@ -152,7 +162,7 @@ def _parse(raw: bytes) -> list[User]:
             raise UserError(f"{path()}: user {row.get('name')!r} has role {role!r}; roles: {', '.join(ROLES)}")
         out.append(User(name=str(row["name"]), role=role, token_sha256=str(row["token_sha256"]),
                         created=str(row.get("created") or ""), expires=row.get("expires") or None,
-                        revoked=row.get("revoked") or None))
+                        revoked=row.get("revoked") or None, voice=str(row.get("voice") or "") or None))
     return out
 
 
@@ -256,6 +266,28 @@ def revoke(name: str) -> User:
         if not users[i].revoked:
             users[i] = replace(users[i], revoked=_iso(_now()))
         return users[i]
+
+
+def set_voice(name: str, voice: str | None) -> User:
+    """The voice the answer is read in for this user; None: the node's."""
+    voice = (voice or "").strip() or None
+    if voice is not None and (len(voice) > 512 or any(c in voice for c in "\r\n\x00")):
+        raise UserError("a voice is a voice profile's id, on one line")
+    with _editing() as users:
+        i = _index(users, name)
+        users[i] = replace(users[i], voice=voice)
+        return users[i]
+
+
+def voice_of(name: str | None) -> str | None:
+    """The account's voice, None for no account or none chosen; a users
+    file that does not read gives None (the node's voice), never an error."""
+    if not name:
+        return None
+    try:
+        return next((u.voice for u in load() if u.name == name), None)
+    except UserError:
+        return None
 
 
 def remove(name: str) -> None:

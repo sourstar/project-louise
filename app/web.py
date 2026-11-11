@@ -361,12 +361,32 @@ def ask_voice():
 
 
 @ask_router.get("/ask/voices")
-def ask_voices():
+def ask_voices(request: Request):
     """The voices the reader may choose for the answer read aloud — the
-    model server's voice profiles, by name — and the one used when the
-    reader chose none (app/voice.py `voices`; operator, 2026-11-11)."""
-    from . import voice
-    return voice.voices()
+    model server's voice profiles, by name — the one used when the reader
+    chose none, and the voice the reader's account keeps (app/voice.py
+    `voices`; operator, 2026-11-11)."""
+    from . import auth, voice
+    return voice.voices(auth.account(getattr(request.state, "viewer", None)))
+
+
+class AskVoiceBody(BaseModel):
+    voice: str | None = None
+
+
+@ask_router.post("/ask/voice")
+def ask_voice_choose(request: Request, body: AskVoiceBody):
+    """The reader's account keeps the voice it chose (operator, 2026-11-11:
+    "Shall a user account can choose it?"): every browser and client of the
+    account hears it. 409 without an account — the browser keeps it."""
+    from . import auth, users, voice
+    name = auth.account(getattr(request.state, "viewer", None))
+    if not name:
+        raise HTTPException(409, "no account: this browser keeps the voice")
+    try:
+        return voice.choose(name, body.voice)
+    except (ValueError, users.UserError) as e:
+        raise HTTPException(400, str(e)) from None
 
 
 def _ask_annotations() -> list[dict]:
@@ -1404,6 +1424,7 @@ class UserBody(BaseModel):
 class UserPatch(BaseModel):
     role: str | None = None
     expires: str | None = None      # "never" clears it
+    voice: str | None = None        # a voice profile; "none" clears it (the node's)
 
 
 def _users_call(fn, *args, **kw):
@@ -1435,8 +1456,10 @@ def users_patch(name: str, body: UserPatch):
         u = _users_call(users.set_role, name, body.role)
     if body.expires is not None:
         u = _users_call(users.set_expiry, name, body.expires)
+    if body.voice is not None:
+        u = _users_call(users.set_voice, name, None if body.voice in ("none", "") else body.voice)
     if u is None:
-        raise HTTPException(400, "nothing to change: role, expires")
+        raise HTTPException(400, "nothing to change: role, expires, voice")
     return u.public(users.seen())
 
 
