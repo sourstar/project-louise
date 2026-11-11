@@ -178,6 +178,11 @@ louise hold
                                                                        [--corpus DIR]: another origin directory than the collection's own; [--records-from C]: the record lines
                                                                        of a held collection's latest snapshot taken instead of parsing — a re-creation changing only the slicing or the layers, each line cut again for its part's chunks (RULE 1, 02 §2.7); or the parser, where the plugin names the lines its parser moves: those parsed again from --corpus, the rest taken (amended 2026-11-08, pubmed 8 → 9);
                                                                        [--records-from-discarded S]: those of its own discarded snapshot S, a document S does not list parsed
+              relations <collection> [--snapshot ID]                   the relations parts (09 §9.14) of the record parts the build database names — the latest
+                                                                       snapshot's once its build is frozen — from the plugin's `relations()` over their lines, into
+                                                                       the SHARD; no record part touched, nothing parsed (RULE 1). --snapshot: the snapshot the edges
+                                                                       are written for (default: the one `snapshot create` takes); `snapshot create` refuses any other.
+                                                                       Resumable by part; the node's pool (added 2026-11-11, operator: A)
               validation <collection>                                  validation.json written from the Codex's plan (03 §3.2)
               relocate <collection> --corpus DIR [--workers N] [--dry-run]
                                                                        every record's `origin` written again from the manifest by the build's own function, the parts
@@ -553,7 +558,14 @@ reader needs at the command line:
   sorted and framed as 09 §9.14 fixes, and nothing at all when the
   plugin does not implement it. `hold snapshot create` lists what is
   there in the snapshot's `relations`, `[]` when there is none. A re-run
-  over the same origin files writes the same bytes.
+  over the same origin files writes the same bytes. The edges are computed
+  from the part's record lines, so a part taken with `--records-from` has
+  the relations a parsed one has; each edge names the snapshot the build
+  is for (`--snapshot` where it is a snapshot id, else the one `snapshot
+  create` takes by default), or the earlier one the previous snapshot's
+  part of the same slice and number lists it under (09 §9.14 "first
+  listed"), and `snapshot create` refuses to freeze them under another id
+  (added 2026-11-11).
 - **`records show`.** A record id is a uid, `pubmed:38112034`. `--shard`
   streams the part as stored (09 §9.5); `--raw` prints records without
   their chunks.
@@ -911,7 +923,8 @@ reader needs at the command line:
   other interfaces too") is `chat`'s answer saved as the Ask page saves it.
   The PDF holds the question, the answer and every reference with the link
   to its original source, on `--paper a4` (the default) or `letter`, written
-  to `--out` or the page's file name here. Over HTTP it is
+  to `--out` or the page's file name here, in `--answer-lang` (an ISO
+  code; default: the question's language). Over HTTP it is
   `POST /api/ask/pdf`: a question Louise answers, or, with `answer` and
   `references`, a client's own answer laid out the same way. Over MCP it is
   `louise_pdf` (05 §5.4, amended). The links to this node's reader use
@@ -1781,7 +1794,8 @@ signal does not shorten that. The unit per stage:
 | stage | unit |
 |---|---|
 | `records fetch`, `share fetch` | the current file, at byte granularity — a checkpoint mid-file, the byte offset committed |
-| `records build` | the document; a part cut short is re-cut on resume |
+| `records build` | the document; a part cut short is re-cut on resume; its relations pass, the part |
+| `records relations` | the part: its relations part promoted whole, then recorded done |
 | `snapshot create` | atomic: the file is written last and is there entire or not at all |
 | `snapshot discard` | the member: the parts move first and the snapshot file last, so an interrupted discard still names its snapshot and a re-run moves the rest |
 | `vectors build` | the batch: the chunks in flight to the encoder, each written only from an answer naming a validated run (03 §3.3) |
