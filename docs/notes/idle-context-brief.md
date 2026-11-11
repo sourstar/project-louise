@@ -13,13 +13,37 @@ each llama.cpp model's KV cache plus its compute buffers — while at most
 3.3 GB of context works at any one second (p95 2.2 GB; 24 h of the card
 record). The idea, the operator's (2026-11-12), checked against the
 literature (shared-context.md: Prism, OSDI '26, and kvcached do it with GPU
-virtual memory for vLLM/SGLang on NVIDIA/ROCm, KV only): a CORPUS ENCODER
-KEEPS ITS WEIGHTS AND FREES ITS `llama_context` AFTER N SECONDS IDLE; THE
-NEXT BATCH CREATES IT AGAIN. The card's free memory is the common pool;
-two encoders that overlap (nemotron + medcpt, 21.7 % of seconds) each still
-get theirs. **Nothing is built yet.** This session: (1) measure the two
-unknowns, (2) only if they pass, write the patch, (3) gate, (4) deploy on
-the operator's word.
+virtual memory for vLLM/SGLang on NVIDIA/ROCm, KV only): A MODEL KEEPS ITS
+WEIGHTS AND FREES ITS `llama_context` AFTER N SECONDS IDLE; THE NEXT
+REQUEST CREATES IT AGAIN. The card's free memory is the common pool; two
+models that overlap each still get theirs. **Nothing is built yet.** This
+session: (1) measure the two unknowns, (2) only if they pass, write the
+patch, (3) gate, (4) deploy on the operator's word.
+
+**A GENERAL DESIGN, NOT A LOUISE WORKAROUND** (operator, 2026-11-12:
+"Embedders in CPU are an option but we cannot bet on it, this is a general
+design improvement that can be beneficial for a number of different
+scenarios other than Project Louise"). So: no argument here rests on where
+one of OUR models happens to run (a CPU embedder, a model that idles today);
+the feature is built for any llama.cpp server holding models it does not
+use all the time — several models on one card, a desktop that shares the
+GPU with other work, a server that answers in bursts — on every backend
+(CUDA, ROCm, Vulkan, SYCL, Metal, CPU), every model kind (embedding,
+rerank, generation, encoder-decoder), opt-in per model. It is written to
+upstream's standards from the first line (llama.cpp's code style, its
+server tests, `--help` text, docs/), so that proposing it to llama.cpp and
+LocalAI is a filing, not a rewrite; whether and when it is filed is the
+operator's word (as for P5's and the Nemotron rerank's PRs). OUR node is the
+first deployment and its measurements are the first evidence, nothing more.
+
+**The vocabulary is the standard one** (CLAUDE.md, "do not reinvent the
+wheel"): vLLM's sleep mode has LEVELS — level 1 discards the KV cache and
+keeps the weights (moved to CPU there), level 2 discards both; llama.cpp's
+own `--sleep-idle-seconds` is today's level 2. The patch adds the level
+that keeps the weights resident and frees the context (KV cache AND compute
+buffers — more than kvcached frees): e.g. `--sleep-idle-seconds N
+--sleep-level context|model` (default `model`, today's behaviour), the names
+to be settled against upstream's conventions before filing.
 
 ## 1. What decides whether it pays — measure FIRST
 
@@ -33,7 +57,13 @@ Acceptance (proposed; the operator may set others): ≥ 90 % of the
 context's bytes back to the driver after a free; create ≤ 5 % of one
 batch's time for that encoder (or under 250 ms, whichever is larger);
 every vector byte-identical across 10 cycles. If the memory does not come
-back, the patch is not built — record it here and in shared-context.md.
+back on the B70, that is a finding about ggml-sycl's pools (who owns them,
+and whether a level-1 sleep must also destroy or trim the backend's pool),
+not the end of the design: record it here and in shared-context.md, and
+measure the same instrument on the CPU build (`build.sh cpu`, no card
+needed) and on any other backend at hand — the design is for every
+backend, and those numbers are part of the evidence an upstream proposal
+carries.
 
 **The instrument** (none exists): a diagnostic llama.cpp program, or a
 `deploy/localai/patches/diag/` patch (diag/README.md: never in `series`,
@@ -68,17 +98,21 @@ in production touched. Measure the DEPLOYED settings (measuring.md §3).
   cparams)` and the slot/batch init again. Whether LocalAI's grpc-server
   wires the idle timer at all is to be read (not visible in the first
   100 kB of the file).
-- **Who it is for**: corpus encoders only (vega-qwen3-embedding-4b, 3.3 GB
-  of context, worked 31 s in 24 h; vega-nemotron-3-embed-1b 2.2 GB).
-  pubmed's medcpt-article encoder is OpenVINO (`vega-louise-openvino`), not
-  this backend; whether it runs on the card or the CPU is the live YAML's
-  (`vega-medcpt-article-ov` vs `-ov-cpu`, deploy/vega/stage/models/) — to
-  read: if the CPU, its 21.7 % overlap with nemotron is no overlap on the
-  card at all. NOT the query path (rerankers, query encoders, chat, MADLAD):
-  a person's first query never waits for a context (app/resident.py's tiers).
-  An Options flag in the model YAML, off by default (e.g.
-  `context_idle_s:600`), so each model opts in and the flag is in the
-  load's stated options (the run, 09 §9.12).
+- **Who it is for** — the DESIGN: any model, opted in. llama.cpp: the server
+  flags above; LocalAI: a model YAML option passed through `params_parse`
+  (e.g. `sleep_idle_s:600`, `sleep_level:context`), off by default, so each
+  model opts in and the setting is in the load's stated options (for
+  Louise: the run, 09 §9.12). Generation models free their slots' KV with
+  the context: a conversation's cached prompt is recomputed after a sleep
+  (upstream's sleep already does this; issue #29322 notes `--cache-ram`'s
+  cache dropped on wake — the same holds here, and is documented, not
+  hidden).
+- **Who it is for** — OUR first deployment: the encoders whose context
+  idles longest (vega-qwen3-embedding-4b, 1.9 GB of context after its
+  trim, worked 31 s in 24 h; vega-nemotron-3-embed-1b 2.2 GB); the query
+  path (rerankers, query encoders, chat, MADLAD) only once the wake time is
+  measured small against a person's wait (app/resident.py's tiers keep them
+  loaded today).
 
 ## 3. Our LocalAI and llama.cpp customizations (the series)
 
@@ -236,7 +270,9 @@ probable or open.
    backends; does LocalAI's grpc-server wire upstream's sleeping state.
 3. **Measure** (§1) with München on a test copy, in a quiet window; write
    the numbers here. Stop if the memory does not come back.
-4. **Write the patch** (`staged/`), CPU tests first as P3/P4 did (a model
+4. **Write the patch** (`staged/`) in upstream's form — llama.cpp's server
+   tests (`tools/server/tests`, pytest) for the new sleep level, its `--help`
+   and README text — CPU tests first as P3/P4 did (a model
    embedded before/after a context cycle, byte-identical; the idle timer;
    a request that arrives while the context is being freed — upstream's
    own sleep has that race, see the DEV write-up linked in shared-context.md's
@@ -251,7 +287,12 @@ probable or open.
    re-gate of every space on the engine); BEFORE/AFTER rows: card memory at
    rest, reclaimer evictions per hour, the first batch's latency after an
    idle spell, chunks/s per collection.
-7. **Record**: localai-bugs.md (the new P entry), shared-context.md (the
+7. **Upstream** (on the operator's word): an issue, then a PR to
+   ggml-org/llama.cpp (the server's sleep level, its test, its docs), and to
+   mudler/LocalAI (the YAML option through `params_parse`), with the
+   measurements of step 3 and step 6 as the evidence; the patch leaves our
+   series when upstream merges it (localai-bugs.md "Patches we carry").
+8. **Record**: localai-bugs.md (the new P entry), shared-context.md (the
    measured numbers), STATUS.
 
 ## 7. Rules that bind this work
