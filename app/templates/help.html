@@ -350,13 +350,10 @@
   <span class="swatch unattributed"></span>what is outside LocalAI's models
   (other processes, the driver's own buffers); the rest is free. Without
   LocalAI's figures it says what the processes shown hold and what the driver
-  counts and no process shown holds. Each row then gives three
-  <i>host</i> figures, and only two of them are occupancy: <b>GPU buffers in
-  host RAM</b> and <b>process RAM</b> are real; <b>mapped file</b> is page
-  cache seen through the process (the model file, right after a load), which
-  the kernel takes back whenever it wants the room. A row marked
-  <b>pushed off the card</b> has most of its buffers in host RAM: the card was
-  overcommitted and the driver moved them out, silently.</p>
+  counts and no process shown holds. A card that shows
+  <b>pushed off the card</b>, with the models named, has had most of their
+  buffers moved to host RAM: the card was overcommitted and the driver moved
+  them out, silently.</p>
 
   <h2>Ingestion pipeline</h2>
   <p class="note lead"><b>In short:</b> every document climbs four steps — found, described, searchable, embedded — and any step can be safely interrupted and re-run.</p>
