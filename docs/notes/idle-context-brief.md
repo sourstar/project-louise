@@ -95,6 +95,10 @@ options `context_on_demand:true`, `keep_context_ms:N`.
   purpose approach." (This replaces the 500 ms of the line above.)
 - "The trimming time shall not be modified if the expiry occurred because
   of a job missed scheduling (for instance when a chat model takes over)".
+- "I choose option B, trimmed by RAGE. Then after a first observation
+  period we can possibly set a new default timeout." (B: 20 ms to start,
+  trimmed by RAGE per stream, the trim and the wrapper's reporting in the
+  first deployment.)
 - "If there is a query in the meantime, the chat model gets a context
   memory; if there is not enough memory there are still options (in this
   order): the contexts of the batch in queue can be pruned, or some other
@@ -161,7 +165,9 @@ them.
   keeps the design general; a keep per model is only the default for a
   request that carries none. No person types it and no dialog shows it
   (RULE 2).
-- **The trim is RAGE's, automatic, and in the FIRST deployment** (review):
+- **The trim is RAGE's, automatic, and in the FIRST deployment** (operator,
+  choice B; the rule's constants below are the review's, to be set by
+  measurement):
   20 ms is a start only because the trim is fast. It is inside the
   pipeline's own turnaround — LocalAI sends one text per call, and between
   two texts the wrapper publishes a receipt and makes a tokenise call;
@@ -177,6 +183,16 @@ them.
   cost less than creating again, the break-even of SKI RENTAL. Trimmed by
   hand from a log, 20 ms would be a known slowdown deployed (CLAUDE.md,
   performance) on every stream nobody had trimmed yet.
+- **After a first observation period the default may be set anew**
+  (operator). Two values are "the default" and one observation feeds both:
+  the START RAGE gives a new stream (20 ms), and the model's own default
+  for a request that carries no keep (its YAML). What the period must show,
+  per stream: the keep it settled at and how far it moved; premature and
+  excused expiries, each with its cause; creations a day and a creation's
+  time; chunks/s against the BEFORE row. Its length is the operator's to
+  set — long enough for every collection's streams and for questions to
+  have happened. A new default is the operator's word, from those rows; the
+  trim goes on working under it.
 - **An expiry the stream did not cause does not move its keep**
   (operator). Without this rule every question would double the keep of
   every corpus stream it made stand aside, and hold their contexts longer
@@ -648,6 +664,9 @@ probable or open.
    BEFORE/AFTER rows: card memory at rest and at its peak, reclaimer
    evictions per hour, creations and premature expiries per collection, the
    first request's latency after an idle spell, chunks/s per collection.
+   Then THE FIRST OBSERVATION PERIOD (§1.3): the same rows per stream with
+   the keep each settled at, and from them, on the operator's word, a new
+   default.
 7. **Upstream** (on the operator's word): an issue, then a PR to
    ggml-org/llama.cpp (the server's option, its tests, its docs), and to
    mudler/LocalAI (the model options, the keep from `metadata`, the seven
@@ -692,11 +711,14 @@ probable or open.
   is done; the keep in the request, in ms, 0 = none; RAGE sets it, per job
   type, 20 ms to start and trimmed, and not for an expiry a missed
   scheduling caused;
-  expired keeps logged; the order when a query finds no room.
+  expired keeps logged; the trim RAGE's own, per stream, in the first
+  deployment (choice B); a new default possibly set after a first
+  observation period; the order when a query finds no room.
 - **The review's — written into the design, NOT yet the operator's word:**
   the keep's three rules; the loop's thread owning the context; the
   refusal; no re-fit; the first version's scope; the premature expiry as
-  the signal, and the trim being RAGE's own, automatic, from the first
-  deployment; the keeper counting an opted-in model
+  the signal, and the trim's constants (doubling, the decay, the ceiling,
+  "premature" by a creation's measured time, "ready, not sent"); the keeper
+  counting an opted-in model
   at its running size; the gate with keep 0 and ≥ 300 creations; the
   canary; §2's acceptance.
