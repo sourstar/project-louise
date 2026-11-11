@@ -33,7 +33,10 @@ measured (published figures disagree).
     `q.focus()`; a wikipedia search answers.
 - **Philippe on about 10 s, the candidates** (München, 11-11): 12 parts, none flagged. Top three: (1) 10.18 s, score
   0.880, two questions and a closing statement; (2) 10.46 s, 0.748; (3) 9.91 s, 0.745. Words match 1.0 / 0.955 / 1.0.
-  Files in /root/measure/philippe-10s/. Sample sentences and RTF running; the operator listens and picks.
+  Files in /root/measure/philippe-10s/. Speed (omnivoice-cpp, the fixed sentence ×3 warm, node paused; staged
+  profiles removed after): RTF it / en, first call it / en — live full clip 0.752 / 0.763, 10.7 / 11.5 s; candidate 1
+  0.443 / 0.416, 5.7 / 5.6 s; candidate 2 0.463 / 0.408, 6.0 / 6.0 s; candidate 3 0.386 / 0.401, 5.8 / 6.3 s: about
+  1.8× faster than the full clip, as the old 7.90 s cut (0.425). Samples with the operator; live on their word.
 - **Philippe on about 10 s, keeping the speaker's pauses** (operator, 11-12: "assemble the most meaningful parts
   of the whole clip in a clip of about 10s. Beyond the pure voice to be, the speaker has a distinct style way to
   make pauses between words and sentences"): `tools/voice_reference.py` (tests/test_voice_reference.py). It cuts the
