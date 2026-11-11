@@ -60,12 +60,27 @@ loaded model. `GET /system` then lists, per loaded model:
 - **By hand:** load one model, then `curl -H 'Authorization: Bearer …'
   http://localhost:8080/system`, and compare its `load_options` with the
   "LoadModel" DEBUG line.
-- **Status:** not run yet. `git apply --check` passes on v4.12.1
-  (`ec92740`, München, 2026-11-11) and on master `4b3c4ec` (this session).
-  The tests run in the node's build area (München), because this cloud
-  container lacks the room for LocalAI's Go modules. The results go below:
-  - *v4.12.1 + P1 (the node's core):* not run yet;
-  - *master `4b3c4ec` + this diff:* not run yet.
+- **Status: run** (München, 2026-11-11, on the node).
+  - **Environment:** LocalAI's own builder stage (`Dockerfile --target
+    builder`, Go 1.26.0, `make protogen-go`), with no GPU and no
+    database or NATS service in the container.
+  - **v4.12.1 (`ec92740`) + P1, the node's core:**
+    - `go test ./pkg/model/`: ok.
+    - `./core/http/endpoints/localai/`: 454 specs, 47 failed. Unpatched
+      v4.12.1 fails the same 47; they are environment specs (node HTTP
+      handlers, NATS/DB, scheduling with aliases).
+    - P1's own specs, run focused: ok.
+    - The core binary builds (`--version` v4.12.1-1-g8474f18).
+  - **master `4b3c4ec` + this diff** (every hunk applies clean):
+    - `go test ./pkg/model/`: ok.
+    - `./core/http/endpoints/localai/`: 647 specs, 47 failed. Master
+      without the diff: 646 specs, the same 47 failed. So the diff adds one
+      spec, and it passes. P1's focused specs: ok.
+    - `go build ./cmd/local-ai ./core/... ./pkg/...`: exit 0.
+    - `go build ./...` fails only in the desktop launcher's glfw (no
+      X11 headers in the container), which the diff does not touch.
+  - **Not run:** `make build` (it also builds the React UI), and the 47
+    environment specs, which need services the container lacks.
 
 ## 4. LocalAI's rules for AI-assisted changes, and how this meets them
 
