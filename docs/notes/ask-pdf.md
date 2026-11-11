@@ -76,10 +76,21 @@ other interfaces too." One document and one renderer serve every interface
 - **MCP `louise_pdf`:** an agent's own answer and the hits it used,
   returned as an embedded resource (`application/pdf`). It is offered to MCP
   clients only. Louise's chat model never gets it (05 §5.4, amended).
-- **Not offered: `/v1/chat/completions` (Open WebUI).** That protocol has
-  no way to carry a file. A link inside the answer would need a stored copy
-  reachable without the reader's token.
+- **`/v1/chat/completions` (Open WebUI), a link beside the sources**
+  (corrected the same day — the operator: "The links to the origin are
+  available in the list of the sources"; the note had said this protocol
+  could not carry it). With `sources: true`, the answer and its sources are
+  kept (`ask_pdf.keep`: this process's memory, 500 answers, 24 hours, a
+  128-bit id) and the stream's chunk after the last word carries
+  `louise_pdf`, the path `/api/ask/pdf/<id>` (the non-stream answer, the
+  same key). `GET /api/ask/pdf/<id>?paper=a4|letter` lays it out. It is an
+  Ask path, behind the same gate as the reader's links (app/auth.py
+  `READER_PATHS`). An answer no longer kept (a day later, or after a
+  restart) gets 404 and says to ask again. The pipe lists it as one more
+  source, on the person's `PAPER` valve.
 
-Tests: tests/test_ask_pdf.py (the markdown, links, names, the document,
+Tests for the link: tests/test_openwebui_pipe.py (listed, opens, only with
+`sources: true`) and tests/ask/test_pdf_interfaces.py (kept a day, bounded,
+the 404). Tests: tests/test_ask_pdf.py (the markdown, links, names, the document,
 limits, the paper sizes and links of real PDFs, no fetch, the route) and
 tests/test_ask_save_pdf_browser.py (what the page posts, in Chromium).

@@ -22,11 +22,15 @@ the node shows the first two filled in for the person reading it.
      - `COLLECTIONS`: several, comma-separated;
      - `ANNOTATIONS`: `all`, `none` or names;
      - `ANSWER_IN`, `RESULTS` and `ALL_LANGUAGES`;
-     - their own `TOKEN`.
+     - their own `TOKEN`;
+     - `PAPER`: `a4` or `letter`, for the answer's PDF.
    - Each answer's sources are numbered as its `[n]`. They carry the
      passage, the work's other editions and the claims beside it, and
      each links to Louise's reader. The reader needs the person logged in
      to Louise in that browser.
+   - The last source is the answer's PDF: the question, the answer and
+     every source with its link, as the Ask tab's "save pdf" gives it.
+     Louise keeps it 24 hours; re-import the pipe (version 2) to get it.
 
 One search per question: the pipe asks `/v1/chat/completions` with
 `sources: true`, and Louise returns the hits with the answer.

@@ -34,8 +34,11 @@ written; the node's reader link is built here from its parts.
 from __future__ import annotations
 
 import re
+import secrets
 import threading
+import time
 import unicodedata
+from collections import OrderedDict
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Annotated, Literal
@@ -476,6 +479,8 @@ def _names() -> dict[str, str]:
 
 def _reference(n: int, hit: dict, names: dict[str, str]) -> PdfReference:
     collection, book = _reader_parts(hit.get("chunk_id"))
+    if str(hit.get("book_id") or "").isdigit():
+        book = str(hit["book_id"])
     name = names.get(hit.get("collection_id") or "") or hit.get("collection") or collection
     return PdfReference(
         n=n, title=_cut(hit.get("title") or hit.get("uid"), MAX_SHORT),
@@ -539,3 +544,45 @@ def make(doc: AskPdf, *, base_url: str = "") -> tuple[str, bytes]:
     node = urlsplit(base_url).netloc if base_url else site_title.title()
     html = build_html(doc, base_url=base_url, node=node or base_url, when=when, site=site_title.title())
     return filename(doc.question, when), render(html)
+
+
+# ---- answers kept for a PDF link (/v1's sources list) ---------------------
+#
+# The operator, 2026-11-11: "The links to the origin are available in the
+# list of the sources" — an OpenAI-protocol client (Open WebUI's pipe) gets
+# the PDF the same way: a link beside the sources, to `GET /api/ask/pdf/<id>`,
+# an Ask route as the reader's links are. The answer is the node's own, so it
+# is KEPT here when the stream ends: in this process's memory, at most
+# KEEP_MAX answers, each for KEEP_S; a link to one no longer kept (expired, or
+# the node restarted) says so. The id is 128 random bits.
+
+KEEP_S = 24 * 3600
+KEEP_MAX = 500
+_kept: "OrderedDict[str, tuple[float, dict]]" = OrderedDict()
+_kept_lock = threading.Lock()
+
+
+def keep(question: str, answer: str, hits: list[dict], *, answer_lang: str | None = None,
+         collections: list[str] | None = None, now: float | None = None) -> str:
+    """The id a PDF link names for this answer."""
+    pid = secrets.token_urlsafe(16)
+    with _kept_lock:
+        _kept[pid] = (time.time() if now is None else now,
+                      {"question": question, "answer": answer, "hits": list(hits or []),
+                       "answer_lang": answer_lang, "collections": list(collections or [])})
+        while len(_kept) > KEEP_MAX:
+            _kept.popitem(last=False)
+    return pid
+
+
+def kept(pid: str, now: float | None = None) -> dict | None:
+    """The answer kept under `pid`, or None (never kept, expired, or gone
+    with a restart)."""
+    with _kept_lock:
+        got = _kept.get(pid)
+        if got is None:
+            return None
+        if (time.time() if now is None else now) - got[0] > KEEP_S:
+            del _kept[pid]
+            return None
+        return got[1]

@@ -144,3 +144,26 @@ def test_the_command_writes_the_file(tmp_path, names, rendered, monkeypatch, cap
     said = json.loads(capsys.readouterr().out)
     assert said["file"] == str(out) and said["references"] == 2 and said["paper"] == "letter"
     assert "/read/" not in rendered[0], "no node address set: no reader link"
+
+
+def test_an_answer_is_kept_for_its_link_a_day_and_bounded(monkeypatch):
+    monkeypatch.setattr(ask_pdf, "_kept", type(ask_pdf._kept)())
+    monkeypatch.setattr(ask_pdf, "KEEP_MAX", 3)
+    ids = [ask_pdf.keep(f"q{i}", "a", [{"title": "t"}], now=1000.0 + i) for i in range(4)]
+    assert len(set(ids)) == 4 and all(len(i) >= 22 for i in ids), "128 random bits each"
+    assert ask_pdf.kept(ids[0], now=1001.0) is None, "the oldest goes past KEEP_MAX"
+    assert ask_pdf.kept(ids[3], now=1003.0 + ask_pdf.KEEP_S)["question"] == "q3"
+    assert ask_pdf.kept(ids[3], now=1004.0 + ask_pdf.KEEP_S) is None, "past 24 hours"
+    assert ask_pdf.kept("never") is None
+
+
+def test_the_link_says_why_when_the_answer_is_gone(isolated_config, names, rendered):
+    c = TestClient(api.app)
+    r = c.get("/api/ask/pdf/never-kept")
+    assert r.status_code == 404 and "no longer kept" in r.json()["error"] and "ask the question again" in r.json()["error"]
+    pid = ask_pdf.keep("q", "A [1].", [{"title": "T", "text": "p", "book_id": 2701, "chunk_id": "gutenberg:2701:3:1",
+                                        "collection": "gutenberg-books"}])
+    assert c.get(f"/api/ask/pdf/{pid}?paper=a3").status_code == 409
+    r = c.get(f"/api/ask/pdf/{pid}", headers={"X-Forwarded-Proto": "https", "X-Forwarded-Host": "ask.example.org"})
+    assert r.status_code == 200 and r.content.startswith(b"%PDF")
+    assert "https://ask.example.org/read/gutenberg-books/2701" in rendered[0] and "size: A4 portrait" in rendered[0]

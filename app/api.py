@@ -1227,6 +1227,7 @@ def _chat_answer(body: ChatBody, query: str, result: dict, t0: float):
         }
         if body.sources:
             out["louise_sources"] = source_entries(result["hits"])
+            out["louise_pdf"] = pdf_link(body, query, answer, result)
         return out
 
     def chunk(delta: str) -> str:
@@ -1257,6 +1258,12 @@ def _chat_answer(body: ChatBody, query: str, result: dict, t0: float):
                     yield chunk(value)
                 elif kind == "cut":
                     yield chunk(f"\n[answer cut: {value}]")
+                elif kind == "pdf":
+                    # after the last word, as the sources came before the first
+                    yield "data: " + json.dumps({
+                        "id": rid, "object": "chat.completion.chunk", "created": int(time.time()),
+                        "model": body.model, "choices": [{"index": 0, "delta": {}, "finish_reason": None}],
+                        "louise_pdf": value}) + "\n\n"
             done = {"id": rid, "object": "chat.completion.chunk",
                     "created": int(time.time()), "model": body.model,
                     "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]}
@@ -1266,6 +1273,15 @@ def _chat_answer(body: ChatBody, query: str, result: dict, t0: float):
             parts.close()           # the reader left: the model stops writing
 
     return StreamingResponse(sse(), media_type="text/event-stream")
+
+
+def pdf_link(body: ChatBody, query: str, answer: str, result: dict) -> str:
+    """The path of this answer's PDF (`GET /api/ask/pdf/<id>`, an Ask route
+    as the reader's are): the answer and its sources kept for it."""
+    from . import ask_pdf
+    pid = ask_pdf.keep(query, answer, source_entries(result["hits"]), answer_lang=body.answer_lang,
+                       collections=body.collections)
+    return f"/api/ask/pdf/{pid}"
 
 
 def answer_parts(body: ChatBody, query: str, result: dict, t0: float, *,
@@ -1309,6 +1325,7 @@ def answer_parts(body: ChatBody, query: str, result: dict, t0: float, *,
     chars = 0
     first: float | None = None
     why: str | None = None
+    written: list[str] = []          # the answer, for its PDF link (sources asked)
     if body.sources:
         yield ("sources", source_entries(result["hits"]))
     try:
@@ -1322,6 +1339,8 @@ def answer_parts(body: ChatBody, query: str, result: dict, t0: float, *,
                 if first is None:
                     first = time.time() - t0
                 chars += len(value)
+                if body.sources:
+                    written.append(value)
                 yield ("delta", value)
                 continue
             if kind == "error":
@@ -1346,6 +1365,12 @@ def answer_parts(body: ChatBody, query: str, result: dict, t0: float, *,
     timings["total"] = round((time.time() - t0) * 1000, 1)
     db.log_query(con, "chat", query, "hybrid", body.limit, timings,
                  len(result["hits"]), _source_qualified_ids(result["hits"]))
+    if body.sources and written:
+        # THE PDF BESIDE THE SOURCES (operator, 2026-11-11: "The links to the
+        # origin are available in the list of the sources"): the answer kept
+        # for a link a client lists with them (app/ask_pdf.py `keep`)
+        yield ("pdf", pdf_link(body, query, "".join(written) + (f"\n[answer cut: {why}]" if why else ""),
+                               result))
 
 
 # LAST: every command of the tree as one route (07 §7.4, app/api_commands.py).

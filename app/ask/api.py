@@ -130,6 +130,32 @@ async def pdf(body: PdfBody, request: Request):
         "Content-Disposition": f'attachment; filename="{name}"', "Cache-Control": "no-store"})
 
 
+@router.get("/pdf/{pid}")
+async def pdf_kept(pid: str, request: Request, paper: str = "a4", tz: str | None = None):
+    """The PDF of an answer `/v1/chat/completions` kept for its sources list
+    (`louise_pdf`; app/ask_pdf.py `keep`): 404 — saying why — for one no
+    longer kept."""
+    from starlette.concurrency import run_in_threadpool
+    from app import ask_pdf
+    if paper not in ask_pdf.PAPER:
+        return JSONResponse({"exit": 2, "error": f"paper is one of {', '.join(ask_pdf.PAPER)}"}, status_code=409)
+    got = ask_pdf.kept(pid)
+    if got is None:
+        return JSONResponse({"exit": 2, "error": "this answer is no longer kept (24 hours have passed, or the "
+                                                 "node restarted): ask the question again for its PDF"},
+                            status_code=404)
+    proto = (request.headers.get("x-forwarded-proto") or request.url.scheme).split(",")[0].strip()
+    host = (request.headers.get("x-forwarded-host") or request.headers.get("host") or request.url.netloc)
+    doc = ask_pdf.from_given(got["question"], got["answer"], got["hits"], paper=paper, tz=tz,
+                             answer_lang=got["answer_lang"], collections=got["collections"])
+    try:
+        name, data = await run_in_threadpool(ask_pdf.make, doc, base_url=f"{proto}://{host.split(',')[0].strip()}")
+    except (ask_pdf.Busy, ask_pdf.Unavailable) as e:
+        return JSONResponse({"exit": 3, "error": str(e)}, status_code=503)
+    return Response(data, media_type="application/pdf", headers={
+        "Content-Disposition": f'attachment; filename="{name}"', "Cache-Control": "no-store"})
+
+
 class LookupBody(BaseModel):
     id: str
 
