@@ -207,3 +207,92 @@ def test_a_wav_it_cannot_read_says_how_to_convert_it(tmp_path):
         w.writeframes(b"\0\0" * 200)
     with pytest.raises(SystemExit, match="ffmpeg -i"):
         vr.read_wav(p)
+
+
+# ---- longer sentence pauses (operator, 2026-11-12: Philippe's 1d, "add it")
+
+def test_two_parts_meet_on_the_first_ones_own_pause(rec, an):
+    """Corrected 2026-11-12: candidate 1 joined "vittime?" to the next
+    sentence on the pause before that sentence (240 ms), not on the
+    speaker's own 780 ms after it."""
+    audio, _ = rec
+    plan = vr.plan_of([0, 1, 5], an)
+    assert plan.runs == [(0, 1), (5, 5)]
+    assert [p for p, _, j in vr.pauses_of(an, plan) if j] == [an.pause(1)]
+    again = vr.find_parts(vr.Audio(RATE, vr.render(audio, an, plan)), an.threshold_db)
+    assert abs(again.pause(1) - an.pause(1)) <= 0.02 * RATE
+
+
+def test_the_room_tone_is_the_quietest_stretch_of_a_pause_away_from_any_sound(rec, an):
+    audio, _ = rec
+    lo, hi = vr.room_tone(audio, an)
+    assert hi - lo == round(vr.ROOM_TONE_S * RATE)
+    gaps = [(0, an.parts[0].start)] + [(an.parts[i].end, an.parts[i + 1].start) for i in range(len(an.parts) - 1)]
+    margin = vr.TONE_MARGIN_S * RATE
+    assert any(a + margin <= lo and hi <= b - margin for a, b in gaps)
+
+
+@pytest.mark.parametrize("target", [1.0, 1.5])
+def test_a_sentence_pause_is_lengthened_keeping_the_speakers_own_pause_whole(rec, an, target):
+    audio, _ = rec
+    plan = vr.plan_of([0, 1, 5, 6, 7], an)
+    tone = vr.room_tone(audio, an)
+    clip = vr.render(audio, an, plan, target, tone)
+    ps = vr.pauses_of(an, plan)
+    extra = sum(max(0, round(target * RATE) - p) for p, k, _ in ps if k == "sentence")
+    assert len(clip) == vr.duration(an, plan) + extra
+    again = vr.find_parts(vr.Audio(RATE, clip), an.threshold_db)
+    assert len(again.parts) == len(plan.parts()), "the room tone is not taken for speech"
+    got = [again.pause(i) for i in range(len(again.parts) - 1)]
+    for g, (p, k, _) in zip(got, ps):
+        want = max(p, round(target * RATE)) if k == "sentence" else p
+        assert abs(g - want) <= 0.02 * RATE, (k, p, g, want)
+    # the first half of his own pause after "Philippe." is there sample for sample
+    x = round(vr.XFADE_S * RATE)
+    s = audio.samples
+    at = vr.lead(an, 0) + (an.parts[1].end - an.parts[0].start)
+    half = an.pause(1) // 2
+    assert clip[at:at + half - x] == s[an.parts[1].end:an.parts[1].end + half - x]
+    d = vr.describe(an, plan, target)
+    assert abs(d["duration_s"] - len(clip) / RATE) < 0.002
+    assert [q["own_ms"] for q in d["pauses_ms"]] == [round(1000 * p / RATE) for p, _, _ in ps]
+
+
+def test_without_a_target_nothing_is_lengthened(rec, an):
+    audio, _ = rec
+    plan = vr.plan_of([0, 1, 5], an)
+    assert vr.render(audio, an, plan) == vr.render(audio, an, plan, None, vr.room_tone(audio, an))
+
+
+def test_parts_out_of_range_are_refused(an):
+    with pytest.raises(SystemExit, match="--parts"):
+        vr.plan_of([0, 99], an)
+
+
+def test_the_command_line_rebuilds_a_chosen_clip_with_longer_pauses(rec, tmp_path):
+    audio, _ = rec
+    src = tmp_path / "orig.wav"
+    src.write_bytes(vr.wav_bytes(audio.samples, RATE))
+    (tmp_path / "texts.json").write_text(json.dumps(TEXTS), encoding="utf-8")
+    out = tmp_path / "out"
+    assert vr.main(["analyse", str(src), "--texts", str(tmp_path / "texts.json"), "--out", str(out)]) == 0
+    assert vr.main(["assemble", str(src), str(out / "analysis.json"), "--parts", "0,1,5",
+                    "--sentence-pause", "1.0", "--room-tone", "8.50-8.70", "--out", str(out / "1d")]) == 0
+    rep = json.loads((out / "1d" / "candidates.json").read_text(encoding="utf-8"))
+    (row,) = rep["candidates"]
+    assert row["parts"] == [0, 1, 5] and rep["sentence_pause_s"] == 1.0 and rep["room_tone_s"] == [8.5, 8.7]
+    assert [q["ms"] for q in row["pauses_ms"] if q["kind"] == "sentence"] == [1000]
+    clip = vr.read_wav(out / "1d" / "candidate-1.wav")
+    assert abs(len(clip.samples) / RATE - row["duration_s"]) < 0.002
+    assert (out / "1d" / "candidate-1.txt").read_text(encoding="utf-8").strip() == " ".join(TEXTS[k] for k in (0, 1, 5))
+
+
+def test_a_room_tone_given_inside_speech_is_refused(rec, tmp_path):
+    audio, _ = rec
+    src = tmp_path / "orig.wav"
+    src.write_bytes(vr.wav_bytes(audio.samples, RATE))
+    (tmp_path / "texts.json").write_text(json.dumps(TEXTS), encoding="utf-8")
+    assert vr.main(["analyse", str(src), "--texts", str(tmp_path / "texts.json"), "--out", str(tmp_path)]) == 0
+    with pytest.raises(SystemExit, match=r"overlaps part\(s\) \[1\]"):
+        vr.main(["assemble", str(src), str(tmp_path / "analysis.json"), "--parts", "0,1,5",
+                 "--sentence-pause", "1.0", "--room-tone", "2.95-3.15", "--out", str(tmp_path / "x")])
