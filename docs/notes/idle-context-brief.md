@@ -645,12 +645,64 @@ spare at its worst second (§9).
 So: 1–2 s to start, set by RAGE above the 99.9th percentile of the measured
 gap, never by hand. The exact release stays available where RAGE knows the
 end — keep 0 on a stream's last request — and one verb is still owed to the
-arbiter for the rare query that finds no room (R4): release now, which
-under Ollama's rule (the last request's keep wins) is a request carrying
-keep 0.
+arbiter for the rare query that finds no room (R4): release now.
+(Withdrawn below: at 500 ms standing aside is the release, and a request
+may only extend the keep.)
 
 | | pros | cons |
 |---|---|---|
 | a few milliseconds | memory back at once; nothing held beyond the work | shorter than every measured gap but wikidata's: a creation per request, unseen |
 | 1–2 s, set by RAGE from the measured gap (recommended) | no thrash across lanes, producer stalls and a question's short gaps; the tail costs nothing measurable | memory returns up to 2 s late; one more number RAGE measures |
 | a long keep (minutes) with exact release only | never thrashes | a missed release holds the context: the timer design of §0 again |
+
+### 500 ms, logged, passed in milliseconds (2026-11-11)
+
+*The operator: "it looks that 500ms are a safe margin; we can log expired
+stay warms for improvement and also pass the timeout in the argument in ms
+(0 no stay warm)". The reviewer agrees with all three, and pins what each
+needs.*
+
+- **500 ms is a sound START, not yet a safe margin.** It is three times the
+  worst mean on record (wikipedia's ~170 ms) — but the record has means, not
+  tails. It is also about what a creation is expected to cost, which is the
+  named rule for this choice (CLAUDE.md, "the algorithm with a name"): SKI
+  RENTAL / the break-even time of power management — hold a resource idle
+  for as long as getting it back would cost, and the total is never worse
+  than twice the best possible. And it withdraws a verb: when a question
+  claims the card the corpus stands aside and its context is gone within
+  0.5 s by itself, so the arbiter needs no "release now".
+- **Log the PREMATURE expiries, not the expiries.** Every busy period ends
+  with one, by design; that is no signal. The signal is a creation that
+  follows a free closely: at each creation, the milliseconds since the
+  free, the keep in force and the creation's own time. Counted by the VeGa
+  wrapper, which owns the llama.cpp child and whose counts are kept (the
+  backends' own lines are not, at LocalAI's info level, §5) — per run, beside
+  `GET /vega/passes`, and attributed to a collection by RAGE. Then RAGE
+  raises the keep itself when premature expiries pass a share of its
+  requests and lowers it slowly, as it sets its lanes (AIMD,
+  gpu-saturation-plan.md lever 3): a number the system finds, never typed
+  (RULE 2).
+- **Milliseconds in the request, 0 = none — with three rules written down:**
+  1. ABSENT IS NOT 0. A request without the field takes the model's default
+     (its YAML), so a client that does not know the field — a warm, a probe,
+     a person's curl — cannot make the context cycle.
+  2. A REQUEST ONLY EXTENDS: the deadline is the latest of those asked, never
+     the last. Otherwise a query's 0 on an encoder the corpus shares (a
+     symmetric space's one encoder) cancels the stream's keep. A stream's
+     last request with 0 then frees up to 500 ms late: nothing.
+  3. The clock starts when the request's answer is complete, and only model
+     work counts (`task_resets_idle_timer`'s precedent: a metrics task does
+     not).
+  An integer of milliseconds departs from Ollama's `keep_alive` (seconds, or
+  a duration string) because the value is under a second; say so upstream.
+- **The gate gets simpler.** The keep is RAGE's setting and no part of a
+  run's identity, PROVIDED bytes are identical across creations — and that
+  is proved by running the existing gate with keep 0: every fingerprint
+  text then meets a new context, which is R7's cycle test, at the worst
+  case, with no instrument of its own.
+
+| | pros | cons |
+|---|---|---|
+| 500 ms, fixed, logged | simple; about the break-even; standing aside frees within 0.5 s | a collection whose gaps run longer cycles until someone reads the log |
+| 1–2 s, fixed (the reviewer's earlier answer) | above every mean on record with more room | still a guess about tails; memory back later for no measured reason |
+| 500 ms to start, raised and lowered by RAGE from the premature expiries (recommended) | each collection finds its own keep; no hand tuning; the log is the controller's input | one more small controller in RAGE, with its test |
