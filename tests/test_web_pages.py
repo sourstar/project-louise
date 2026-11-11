@@ -219,7 +219,9 @@ def test_one_ask_button_a_switch_and_the_settings_out_of_the_way(client):
     button, a switch "Search only" / "AI summary", and the settings a
     reader need not touch behind one closed line."""
     html = client.get("/ask").text
-    form = html[html.index('id="q"'):html.index('id="results"')]
+    # the question's form ends where the answer pane begins: the answer's own
+    # buttons (read aloud, save pdf) are the answer's, not the form's
+    form = html[html.index('id="q"'):html.index('id="answer-pane"')]
     assert form.count("<button") == 1 and 'onclick="go()">Ask</button>' in form
     assert "<span>Search only</span></label>" in form and "<span>Search + AI summary</span></label>" in form
     assert "Ask (RAG)" not in html and 'onclick="search()"' not in form

@@ -49,6 +49,7 @@ from . import (auth, cancel, collections as collections_mod, config, db, discove
                 node_state, platform_config, query_service, reader, relay, retrieval, spaces)
 from . import translate as mt
 from . import collection_file
+from .ask_pdf import AskPdf
 # the collection file's one writer, moved to app/collection_file.py (2026-10-25);
 # the names stay importable from here
 from .collection_file import _codex_id, _write_collection_toml  # noqa: F401
@@ -423,6 +424,28 @@ def ask_voice_choose(request: Request, body: AskVoiceBody):
     except (ValueError, users.UserError) as e:
         raise HTTPException(400, str(e)) from None
 
+
+
+@ask_router.post("/ask/pdf")
+def ask_save_pdf(request: Request, body: AskPdf):
+    """The Ask page's "save pdf" (operator, 2026-11-11; app/ask_pdf.py): the
+    question, the answer and every reference as the reader saw them, with
+    the link to each original source and to this node's reader, as a PDF on
+    the paper the reader's settings name (A4, or Letter). A download, laid
+    out on this process's threads; 503 while CONCURRENT others are, or
+    where the image has no PDF library."""
+    from urllib.parse import urlsplit
+    from . import ask_pdf
+    base = _public_base(request)
+    when = ask_pdf.reader_time(body.tz)
+    html = ask_pdf.build_html(body, base_url=base, node=urlsplit(base).netloc or base, when=when)
+    try:
+        pdf = ask_pdf.render(html)
+    except (ask_pdf.Busy, ask_pdf.Unavailable) as e:
+        raise HTTPException(503, str(e)) from None
+    return Response(pdf, media_type="application/pdf", headers={
+        "Content-Disposition": f'attachment; filename="{ask_pdf.filename(body.question, when)}"',
+        "Cache-Control": "no-store"})
 
 def _ask_annotations() -> list[dict]:
     """The annotations collections the Ask page offers as a choice (05 §5.3,

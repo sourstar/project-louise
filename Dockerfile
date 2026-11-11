@@ -22,7 +22,15 @@ FROM python:3.12-slim AS base
 # lbzip2: the Wikidata dump's one bz2 stream decompressed on every core
 # (app/plugins/wikidata/pack.py; operator's yes 2026-10-20): measured on the
 # node 195 MB/s against 68.5 with the standard library's bz2, the same bytes.
+# The Ask page's "save pdf" (app/ask_pdf.py, WeasyPrint): Pango and HarfBuzz
+# lay the text out, and the Noto fonts cover every script a collection holds
+# (core: Latin, Greek, Cyrillic, Arabic, Hebrew, Devanagari…; cjk: Chinese,
+# Japanese, Korean) — a PDF is drawn in the fonts installed, never fetched.
+# ~140 MB installed (Ubuntu 24.04's sizes: noto-core 42, noto-cjk 91, the
+# libraries < 2; trixie's to be read at the build).
 RUN apt-get update && apt-get install -y --no-install-recommends curl git rsync lbzip2 \
+        libpango-1.0-0 libpangoft2-1.0-0 libharfbuzz-subset0 \
+        fonts-noto-core fonts-noto-cjk fonts-dejavu-core \
     && rm -rf /var/lib/apt/lists/*
 # The GPU's name on the System page (app/gpu_probe.py): pci.ids, pinned by
 # commit and checksum. A distribution's copy lags the cards — the node's own

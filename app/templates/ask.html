@@ -117,6 +117,13 @@
        /ask/voice, users.toml; operator, 2026-11-11: "Shall a user account
        can choose it?"), else in the browser; none chosen, the node's own. Filled by /static/voice.js; hidden with fewer
        than two voices, since there is nothing to choose #}
+    {# THE PAPER THE PDF IS LAID OUT ON (operator, 2026-11-11: "portrait A4
+       but configurable in the settings to portrait letter"), remembered in
+       this browser like the counts #}
+    <label class="inline" title="the paper a saved PDF is laid out on">paper
+      <select id="paper" style="width:auto" onchange="rememberPaper()">
+        <option value="a4">A4</option><option value="letter">Letter</option>
+      </select></label>
     {% if voice.output.available %}
     <label class="inline" id="voice-choice" hidden title="the voice that reads the answer aloud">voice
       <select id="voice-pick" style="width:auto"></select></label>
@@ -141,12 +148,23 @@
   {# the answer read aloud, sentence by sentence as it is written, in the
      node's voice (app/speech.py), where the node sets a text-to-speech
      model; by itself when the microphone wrote the question (voice.js) #}
+  <span class="answer-actions">
   {% if voice.output.available %}
   <button id="speak" class="voice-btn" type="button" hidden aria-pressed="false" title="read the answer aloud"><svg
           viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor"
           stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5 6 9H2v6h4l5 4V5z"/><path
           d="M15.5 8.5a5 5 0 0 1 0 7M19 5a10 10 0 0 1 0 14"/></svg> <span class="speak-label">read aloud</span></button>
   {% endif %}
+  {# SAVE PDF (operator, 2026-11-11: "Next to 'read aloud' … a 'save pdf',
+     with the query, the answer and all the references with the link to
+     the original source"): shown once the answer is complete; the paper
+     is the Settings' choice (app/ask_pdf.py, POST /ask/pdf) #}
+  <button id="save-pdf" class="voice-btn" type="button" hidden onclick="savePdf()"
+          title="save the question, the answer and its references, with the links to their sources, as a PDF"><svg
+          viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor"
+          stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path
+          d="M14 3v6h6"/><path d="M12 12v6M9 15l3 3 3-3"/></svg> <span class="pdf-label">save pdf</span></button>
+  </span>
   </div>
   <div id="answer" class="md" style="line-height:1.6"></div>
 </div>
@@ -201,6 +219,7 @@
   #mic-status{margin:4px 0 0}
   .answer-head{display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap}
   .answer-head h2{margin-bottom:0}
+  .answer-actions{display:flex;gap:6px;flex-wrap:wrap}
   #answer-pane .answer-head{margin-bottom:10px}
   #speak{padding:4px 10px}
   #speak.on{border-color:var(--brass);color:var(--brass)}
@@ -411,6 +430,7 @@ async function search(){
   answerRaw=''; answerLang=null; answerShown=null; answerNote='';
   if(window.louiseVoice)louiseVoice.answerCleared();     // nothing left to read aloud
   document.getElementById('answer-pane').style.display='none';
+  document.getElementById('save-pdf').hidden=true;
   setAnswer('');
   document.getElementById('report').replaceChildren();
   document.getElementById('results').innerHTML='<div class="note">searching…</div>';
@@ -450,6 +470,7 @@ function finishAnswer(a,want){
   setAnswer(answerSrc);
   answerRaw=answerSrc; answerLang=want; answerShown=want;
   linkCitations();
+  document.getElementById('save-pdf').hidden=!answerSrc.trim();
   if(window.louiseVoice)louiseVoice.answerReady(want);    // the speaker, where the node offers it
 }
 // THE SWITCH: what Ask gives, remembered in the reader's browser
@@ -1169,6 +1190,52 @@ function md(src){
     para.push(l.trim());
   }
   flush(); return out.join('');
+}
+// ---- SAVE PDF (app/ask_pdf.py) -------------------------------------------
+// The page sends WHAT THE READER SEES: the question as asked, the answer as
+// shown, and per entry the title and passage as shown with the published
+// ones beside them where the page translated them. The node lays it out
+// on the paper the Settings name and the browser saves the file.
+function paperChoice(){const v=document.getElementById('paper').value; return v==='letter'?'letter':'a4'}
+function rememberPaper(){try{localStorage.setItem('louise-paper',paperChoice())}catch(e){}}
+(function(){let v=null; try{v=localStorage.getItem('louise-paper')}catch(e){}
+  if(v==='a4'||v==='letter')document.getElementById('paper').value=v})();
+function pdfReferences(){
+  const shown=el=>el?el.textContent.replace(/\s+\n/g,'\n').trim():'';
+  const tl=el=>el?(el.dataset.tl||((el.querySelector('[data-tl]')||{dataset:{}}).dataset.tl)||null):null;
+  return [...document.querySelectorAll('#hits .hit')].map((h,i)=>{
+    const t=h.querySelector('.doc-title'), s=h.querySelector('.snip'), ch=h.querySelector('.chap');
+    const src=h.querySelector('a[data-origin]'), lang=(s&&s.dataset.lang)||(t&&t.dataset.lang)||'?';
+    return {n:i+1, title:shown(t), title_original:tl(t)&&t.dataset.orig?t.dataset.orig:null,
+            lang:lang==='?'?null:lang, collection:h.dataset.collection||null,
+            authors:shown(h.querySelector('[data-authors]'))||null, chapter:shown(ch)||null, passage:shown(s),
+            translated_to:tl(s), origin_url:src?src.href:null, book:h.dataset.book||null,
+            chunk:h.dataset.cid||null, moved_by:[...h.querySelectorAll('[data-moved]')].map(shown)};
+  });
+}
+function pdfCollections(){
+  return [...document.querySelectorAll('#scope-chips .chip.on')].map(c=>c.dataset.name);
+}
+async function savePdf(){
+  const b=document.getElementById('save-pdf'), label=b.querySelector('.pdf-label');
+  if(!answerSrc.trim()||b.disabled)return;
+  b.disabled=true; label.textContent='making the pdf…';
+  try{
+    const c=counts();
+    let tz=null; try{tz=Intl.DateTimeFormat().resolvedOptions().timeZone||null}catch(e){}
+    const body={paper:paperChoice(), question:(relayState&&relayState.q)||document.getElementById('q').value.trim(),
+                answer:answerSrc, answer_lang:answerShown||null, mode:document.getElementById('mode').value,
+                results:c.limit, reranked_from:c.rerank_depth, collections:pdfCollections(), tz,
+                references:pdfReferences()};
+    const r=await fetch('/ask/pdf',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+    if(!r.ok){let m='HTTP '+r.status; try{const j=await r.json(); if(j&&j.detail)m=typeof j.detail==='string'?j.detail:JSON.stringify(j.detail)}catch(e){}
+              throw new Error(m)}
+    const name=((r.headers.get('Content-Disposition')||'').match(/filename="([^"]+)"/)||[])[1]||'louise-answer.pdf';
+    const url=URL.createObjectURL(await r.blob()), a=document.createElement('a');
+    a.href=url; a.download=name; document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(()=>URL.revokeObjectURL(url),60000);
+  }catch(e){relayNote('the PDF could not be made: '+(e.message||e))}
+  finally{b.disabled=false; label.textContent='save pdf'}
 }
 // [n] in the answer's text, outside its links and code, opens passage n
 function linkCitations(){
