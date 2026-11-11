@@ -47,13 +47,13 @@ def test_the_panel_shows_the_card_its_memory_and_each_model(client, monkeypatch)
     # the node's figures, 2026-09-18: the driver's own used, and free from it
     assert "VRAM 31.89 GiB · used 23.96 GiB" in html and "free 7.93 GiB" in html
     assert "sum of the models" not in html
-    rows = re.findall(r"<tr><td title=\"llama-server\">([^<]+)</td>", html)
-    assert rows == ["Qwen3-Embedding-4B-Q4_K_M", "MedCPT-Article-Encoder-f16"]
-    assert "9.14 GiB" in html and "28.7%" in html          # Qwen's VRAM, its share
-    assert "416 KiB" in html and "414 MiB" in html          # an encoder held in host RAM
-    # what the driver counts and no process shown holds
+    # what the models hold, and what the driver counts and no process shown holds
+    assert f"models {gpu.size((9586248 + 416) * 1024)}" in html
     unattributed = 25730179072 - (9586248 + 416) * 1024
-    assert "<td>held by no model shown</td>" in html and gpu.size(unattributed) in html
+    assert f"no model shown {gpu.size(unattributed)}" in html
+    # operator, 2026-11-11: "Remove the 'memory by model' section, it is totally useless"
+    assert "memory by model" not in html and 'id="gpu-processes-' not in html
+    assert not re.findall(r"<tr><td title=\"llama-server\">", html), "no per-process rows"
 
 
 def test_without_the_drivers_count_used_is_the_processes_sum(client, monkeypatch):
@@ -63,7 +63,7 @@ def test_without_the_drivers_count_used_is_the_processes_sum(client, monkeypatch
                                                "only to CAP_PERFMON",)))
     html = client.get("/admin/system/gpu").text
     assert "sum of the models" in html and "CAP_PERFMON" in html
-    assert "<td>held by no model shown</td>" not in html
+    assert '<span class="swatch unattributed"></span>no model shown' not in html
     assert f"used {gpu.size((9586248 + 416) * 1024)}" in html
 
 
@@ -121,28 +121,22 @@ def test_nothing_but_the_probe_imports_the_probe():
     assert importers == []
 
 
-def test_real_host_ram_is_shown_apart_from_mapped_files_and_a_pushed_out_model_is_flagged(
-        client, monkeypatch):
-    """Operator, 2026-09-20: "separate real RAM occupancy from memory mapped
-    RAM". And what the separation showed the same day: another container took
-    21 GiB of the card, the driver moved every resident model's buffers to
-    host RAM without an error to anyone, and two models died. The panel says
-    which host figure is real, and says when a model is no longer on the card."""
-    from dataclasses import replace
+def test_a_model_pushed_off_the_card_is_flagged_by_name_in_sight(client, monkeypatch):
+    """2026-09-20: another container took 21 GiB of the card, the driver moved
+    every resident model's buffers to host RAM without an error to anyone,
+    and two models died. The "memory by model" table that showed it is gone
+    (operator, 2026-11-11: "totally useless"); the alarm is not: the card
+    names the model pushed off, in sight, and says nothing when none is."""
     qwen, medcpt = ARC.processes
-    arc = replace(ARC, processes=(replace(qwen, ram=657 << 20, mapped=2400 << 20), medcpt))
-    _probe(monkeypatch, gpu.GpuSnapshot(devices=(arc,)))
+    _probe(monkeypatch, gpu.GpuSnapshot(devices=(ARC,)))
     html = client.get("/admin/system/gpu").text
-    for heading in ("GPU buffers in host RAM", "model RAM", "mapped file (reclaimable)"):
-        assert heading in html
-    assert "657 MiB" in html and "2.34 GiB" in html
-    assert "NOT occupancy" in html, "the column's own title says which figure is not real"
     # MedCPT: 416 KiB on the card, 414 MiB in host RAM — pushed out; Qwen is not
     assert medcpt.pushed_out and not qwen.pushed_out
-    assert html.count(">pushed off the card</span>") == 1
-    assert "a model pushed off the card</span></summary>" in html, "in sight with the drawer closed"
-    # a row whose split was not read says so, never 0
-    assert "<td>—</td>" in html
+    assert html.count("pushed off the card: MedCPT-Article-Encoder-f16</span>") == 1
+    assert "Qwen3-Embedding-4B-Q4_K_M" not in html.split("pushed off the card:")[1].split("</span>")[0]
+    from dataclasses import replace
+    _probe(monkeypatch, gpu.GpuSnapshot(devices=(replace(ARC, processes=(qwen,)),)))
+    assert "pushed off the card" not in client.get("/admin/system/gpu").text
 
 
 def test_a_few_mib_of_buffers_in_host_ram_is_not_a_model_pushed_out():
@@ -237,7 +231,6 @@ def test_an_integrated_card_s_models_in_shared_ram_are_never_pushed_off(client, 
     _probe(monkeypatch, gpu.GpuSnapshot(devices=(igpu,)))
     html = client.get("/admin/system/gpu").text
     assert "pushed off the card" not in html
-    assert "GPU buffers in shared RAM" in html and "part of the processor" in html
     # a dedicated card, or one that could not say, keeps the rule
     for integrated in (False, None):
         card = replace(igpu, integrated=integrated)
