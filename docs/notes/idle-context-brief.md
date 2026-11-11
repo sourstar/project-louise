@@ -99,6 +99,10 @@ options `context_on_demand:true`, `keep_context_ms:N`.
   period we can possibly set a new default timeout." (B: 20 ms to start,
   trimmed by RAGE per stream, the trim and the wrapper's reporting in the
   first deployment.)
+- "A request that carries no parameter is using the context in the
+  canonical way: no free after use". (This replaces the review's "absent is
+  not 0" below: a request without the field is no longer given the model's
+  default — it leaves the context loaded.)
 - "If there is a query in the meantime, the chat model gets a context
   memory; if there is not enough memory there are still options (in this
   order): the contexts of the batch in queue can be pruned, or some other
@@ -122,14 +126,22 @@ them.
   (§3, H3).
 - **The keep**, an integer of milliseconds in the request, 0 = none. Three
   rules (review):
-  1. ABSENT IS NOT 0. A request without the field takes the model's
-     default, so a client that does not know the field — a warm, a probe,
-     a person's curl — cannot make the context cycle.
-  2. A REQUEST ONLY EXTENDS. The deadline is the latest of those asked,
-     never the last one's: a query's 0 on an encoder the corpus shares (a
-     symmetric space's one encoder) must not cancel the stream's keep. A
-     stream's last request sent with 0 then frees up to one keep late:
-     nothing.
+  1. A REQUEST WITHOUT THE FIELD USES THE CONTEXT THE CANONICAL WAY
+     (operator): it is NOT freed after it, cached prompt included. A client
+     that does not know the field — a probe, a person's curl, another
+     program on the same LocalAI — is served exactly as by a model without
+     the option. The context then stays until a request that carries a keep
+     is answered: the last request to finish decides whether it may go. (A
+     server option, `--keep-context-ms N` / the model option
+     `keep_context_ms:N`, gives a keep to the requests that carry none, for
+     a model whose clients cannot be changed; unset, as it is by default,
+     the rule above holds.) The context the LOAD made is no request's: it
+     goes once the model is idle, and the first request creates one.
+  2. AMONG THE REQUESTS THAT CARRY ONE, A KEEP ONLY EXTENDS (review). The
+     deadline is the latest of those asked, never the last one's: a query's
+     0 on an encoder the corpus shares (a symmetric space's one encoder)
+     must not cancel the stream's keep. A stream's last request sent with 0
+     then frees up to one keep late: nothing.
   3. The clock starts when the request's answer is complete, and only model
      work counts: a metrics task neither creates a context nor extends one
      (`task_resets_idle_timer`'s precedent, §3).
@@ -732,8 +744,8 @@ changed.*
 
 | part (§3, P11) | state | where | checked |
 |---|---|---|---|
-| 1. llama.cpp's server | written, in upstream's form | `deploy/localai/patches/staged/llama.cpp/0011-server-context-on-demand.patch` | CPU: its own 12 server tests; nine existing suites unchanged with the option off (localai-bugs.md "P11 (staged)") |
-| 2. LocalAI's backend | written | `deploy/localai/patches/staged/0009-llama-cpp-context-on-demand.patch`, `staged/context-on-demand.series` | CPU: `grpc-server` built from the candidate series and driven over gRPC, 16 checks; the same vector byte for byte with and without the option |
+| 1. llama.cpp's server | written, in upstream's form | `deploy/localai/patches/staged/llama.cpp/0011-server-context-on-demand.patch` | CPU: its own 13 server tests; nine existing suites unchanged with the option off (localai-bugs.md "P11 (staged)") |
+| 2. LocalAI's backend | written | `deploy/localai/patches/staged/0009-llama-cpp-context-on-demand.patch`, `staged/context-on-demand.series` | CPU: `grpc-server` built from the candidate series and driven over gRPC, 18 checks; the same vector byte for byte with and without the option |
 | 4a. RAGE's keep and its trim | written | `app/rage/keep.py`, `app/embeddings.py` (both request paths) | `tests/test_rage_keep.py`, `tests/test_context_on_demand.py` |
 | 4b. the option read from `/system` | written | `app/model_load.py` (`context_on_demand`) | the same |
 | 4c. the keeper's rule (H5) | written | `app/resident.py` (`_rest_size`) | the same |
@@ -787,8 +799,21 @@ changed.*
   and the reason the per-text gaps are in §2.
 - **A model's keep is only sent where LocalAI lists the option.** A runner
   that does not know `metadata` is never sent it (`model_load.context_on_demand`).
-- **Rerank takes the model's default keep**: LocalAI's `RerankRequest` has no
-  metadata map. Embedding, completion and chat carry the request's.
+- **Rerank carries no keep**: LocalAI's `RerankRequest` has no metadata map,
+  so a rerank leaves its model's context loaded unless the model's YAML
+  gives one (`keep_context_ms:N`). Embedding, completion and chat carry the
+  request's.
+- **What "no parameter, no free" asks of Louise** (the operator's rule,
+  2026-11-11). Every request of hers to an on-demand model must SAY its
+  keep, or the context stays: RAGE's embedding requests do; her WARM now
+  carries 0 (`keep.warm_body`), so that a model preloaded and not yet asked
+  — qwen3-4b works 31 s a day — does not hold its context from its load to
+  its first request. Not yet keyed: translation (MADLAD, in the first
+  deployment), rerank and chat. Until they are, an on-demand model they use
+  takes its keep from its YAML's `keep_context_ms:N`; MADLAD's test copy
+  needs that line. The VeGa wrapper's own probes at a load carry none
+  either: after a load the context stays until the first request that
+  carries a keep — Louise's warm, when the load was hers.
 - **The reranker's own backend is not touched, and the two patches live
   together.** Since 2026-11-11 the Nemotron reranker of five collections
   runs on a separate backend built from `staged/nemotron-rerank.series`
@@ -799,17 +824,29 @@ changed.*
   llama.cpp patches on `ddf48f8` with no fuzz on P10's or P11's. NOT built
   together: whoever puts both in one series builds and gates that tree.
 
-**For München, when the operator says so** (§2, §7 steps 2–3; nothing here
-touches a live model):
-1. Build the test backend: `SERIES_FILE=deploy/localai/patches/staged/context-on-demand.series`
-   with `build.sh sycl_f16` and the live `INTEL_STACK`, on BUILD_HOST.
-2. Install it under its own name; a TEST copy of an encoder's YAML under its
-   own model name with `context_on_demand` added to `options:` and
-   `GGML_SYCL_MEMTRACE=1` to its `env`, LocalAI's log at debug for that run.
-3. With the node's harness, in a quiet window, at the encoder's live
-   settings: N requests with `"metadata": {"keep_context_ms": "0"}`. Read
-   from the log the creation and free times (first and steady), from
-   MEMTRACE and fdinfo the bytes before, during and after, and compare every
-   vector with the same text's first.
-4. The same with a keep of 20 and of 500, at production's batch and lanes:
-   the creations counted against the requests sent.
+**For München** (the operator, 2026-11-11: "Ask München to do the build for
+you. It has desktop docker as well"). The BUILD is asked; nothing after it
+touches a live model, and what runs on the node runs on the operator's word
+in München's session (§8).
+1. **The build** — asked. From this branch, with `build.sh` unchanged:
+   `SERIES_FILE=deploy/localai/patches/staged/context-on-demand.series sh
+   deploy/localai/llama-cpp/build.sh sycl_f16 <out>` with the live
+   `INTEL_STACK` (§4), on BUILD_HOST or the desktop's Docker; and
+   `… build.sh cpu <out>` where a CPU backend helps (the desktop: the same
+   checks as this session's, with real models). The tag is the candidate
+   series' digest, so it is no engine any Codex names.
+2. **A test copy** — install the tar under its own backend name; a TEST copy
+   of an encoder's YAML under its own model name with `context_on_demand`
+   added to `options:` and `GGML_SYCL_MEMTRACE=1` to its `env`, LocalAI's log
+   at debug for that run.
+3. **A creation's cost** — with the node's harness, in a quiet window, at the
+   encoder's live settings: N requests with
+   `"metadata": {"keep_context_ms": "0"}` (each creates a context and frees
+   it; WITHOUT the field a request leaves the context loaded and measures
+   nothing). From the log, "context created in … ms" and "context freed in
+   … ms" (first and steady); from MEMTRACE and fdinfo, the bytes before,
+   during and after; every vector compared with the same text's first.
+4. **A keep's effect** — the same with a keep of 20 and of 500, at
+   production's batch and lanes: the creations counted against the requests
+   sent (`context_creations_total` on the backend's `/metrics` where it is
+   reachable, else the log's lines).

@@ -10,6 +10,9 @@ arrives; a request tells it how long to keep the context after the answer
   - a request to such a model carries the keep in its `metadata`, and a
     request to any other model carries nothing more than before — a runner
     that does not know the field is never sent it;
+  - a WARM carries a keep of 0: a request that carries none leaves the
+    context loaded (the operator, 2026-11-11), and a model preloaded and not
+    yet asked would hold it from its load to its first request;
   - through VeGa the keep is OUTSIDE the tag: the inputs, their digests and
     the receipts are what they were (09 §9.12);
   - a creation the engine refuses for memory is a DEFERRAL, never an error on
@@ -281,4 +284,27 @@ def test_the_margin_s_sample_counts_it_at_the_same_size_as_the_budget(node):
         held = resident._held_now([SERVER], mem)
     by_model = {m: v for (m, _pid), v in held.items()}
     assert by_model == {qwen: 4_263 * MIB, other: 700 * MIB}
+
+
+def test_a_warm_gives_its_context_back_at_once(node):
+    """The operator, 2026-11-11: "A request that carries no parameter is using
+    the context in the canonical way: no free after use". A warm LOADS a
+    model, and before the load nobody knows its options: so the warm always
+    carries a keep of 0 — a model loaded with the option frees the warm's
+    context at once, any other ignores the key — and the real request after
+    it carries its stream's keep."""
+    node.loaded.discard(NEMOTRON)                    # cold: the request warms it first
+    with dispatch.working_as(dispatch.Level.CORPUS, "wikidata"):
+        embeddings._request_vectors(["alpha"], 5.0, OPTED_IN)
+    warm, = node.warms()
+    assert warm["json"] == {"input": ["warm"], "model": NEMOTRON,
+                            "metadata": {"keep_context_ms": "0"}}
+    assert keep.warm_body() == {"metadata": {"keep_context_ms": "0"}}
+    # the options were unknown when the real request went (the listing that
+    # found the model cold is still the cached one): it carries nothing, and
+    # the next one, after a fresh listing, carries its stream's keep
+    model_load.loaded_models(SERVER, max_age_s=0.0)
+    with dispatch.working_as(dispatch.Level.CORPUS, "wikidata"):
+        embeddings._request_vectors(["beta"], 5.0, OPTED_IN)
+    assert node.real()[-1]["json"]["metadata"] == {"keep_context_ms": "20"}
 

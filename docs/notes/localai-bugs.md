@@ -47,7 +47,7 @@ the source):*
 | **P8 (staged)** | **patch staged, not in the series yet** | llama.cpp backend: the encoder output is kept PER SEQUENCE (`llama_memory_enc_dec`, stage 1 of llama-cpp-encoder-decoder.md), so a slot is encoded while others decode; on P3 and P4 | a late request joins the next decode step instead of waiting for the wave; the upstream shape (no public API) | not filed; [`deploy/localai/patches/staged/0006-llama-cpp-encoder-decoder-memory.patch`](../../deploy/localai/patches/staged/0006-llama-cpp-encoder-decoder-memory.patch); moves into the series after its card gates |
 | **P9 (staged)** | **patch staged, not in the series yet** | llama.cpp backend: the encoder outputs live ON THE DEVICE (stage 2: a persistent store written by the encoder graph, read by the decoder's `ggml_get_rows`; no host copies), on P5 | the shape upstream asked for (a persistent buffer, no host copies); the per-step upload gone | not filed; [`deploy/localai/patches/staged/0007-llama-cpp-encoder-decoder-store.patch`](../../deploy/localai/patches/staged/0007-llama-cpp-encoder-decoder-store.patch); moves into the series with P5 after the card gates |
 | **P10 (staged; LIVE on its own backend)** | **patch staged, built into a separate backend, LIVE 2026-11-11** | llama.cpp: nvidia/llama-nemotron-rerank-1b-v2 ranks (`LlamaBidirectionalForSequenceClassification`: bidirectional Llama 3.2 1B, mean-pooled, a `score` head). Ported from ggml-org/llama.cpp#24083 (open) onto ddf48f8: converter class, the optional `cls.output` in llama-embed, BOS for a rerank template's prompt; this base pools before the head when the GGUF says classifier pooling mean, so no graph change | the reranker benchmark's arm A3 (operator, 2026-11-10: "Patch llama.cpp to support nemo reranker, tomorrow I want to see its benchmarks too") | upstream #24083 open; [`deploy/localai/patches/staged/0008-llama-cpp-nemotron-rerank.patch`](../../deploy/localai/patches/staged/0008-llama-cpp-nemotron-rerank.patch), built only from [`staged/nemotron-rerank.series`](../../deploy/localai/patches/staged/nemotron-rerank.series) into its own backend; joins the series only if A3 earns it. A3 earned it (operator, 11-11: B): the `[reranker]` of five collections on `louise-sycl-f16-llama-cpp-9d17b8a39845` (STATUS 11-11); joining the main series waits for the next engine change |
-| **P11 (staged)** | **patch staged, not in the series yet** | llama.cpp backend: CONTEXT ON DEMAND — a model loaded with the option `context_on_demand` keeps its weights and creates its context (KV cache and compute buffers) when a request arrives, freed when the work is done; a request's `metadata.keep_context_ms` holds it that long after its answer, the option `keep_context_ms` being the keep of a request that does not say. No RPC reads the `llama_context` any more (it is null while the model is idle) | the card holds ~34 GB of models on 32.6 GB, ~10 GB of it context that works seconds a day (operator, 2026-11-11: "when llama.cpp gets a request it allocates the context memory; when the processing is done it frees it"; "Implement it") — [idle-context-brief.md](idle-context-brief.md) | not filed (the operator's word, brief §7 step 7); [`deploy/localai/patches/staged/0009-llama-cpp-context-on-demand.patch`](../../deploy/localai/patches/staged/0009-llama-cpp-context-on-demand.patch), built only from [`staged/context-on-demand.series`](../../deploy/localai/patches/staged/context-on-demand.series); CPU checks passed 2026-11-11, card gates not run |
+| **P11 (staged)** | **patch staged, not in the series yet** | llama.cpp backend: CONTEXT ON DEMAND — a model loaded with the option `context_on_demand` keeps its weights, and a request that carries `metadata.keep_context_ms` has its context (KV cache and compute buffers) freed that long after its answer; the next request creates it again. A request that carries none leaves the context loaded, as ever (the option `keep_context_ms:N` gives such requests a keep). No RPC reads the `llama_context` any more (it is null while the model is idle) | the card holds ~34 GB of models on 32.6 GB, ~10 GB of it context that works seconds a day (operator, 2026-11-11: "when llama.cpp gets a request it allocates the context memory; when the processing is done it frees it"; "Implement it") — [idle-context-brief.md](idle-context-brief.md) | not filed (the operator's word, brief §7 step 7); [`deploy/localai/patches/staged/0009-llama-cpp-context-on-demand.patch`](../../deploy/localai/patches/staged/0009-llama-cpp-context-on-demand.patch), built only from [`staged/context-on-demand.series`](../../deploy/localai/patches/staged/context-on-demand.series); CPU checks passed 2026-11-11, card gates not run |
 | **P6** | **patch we carry** | llama.cpp (common/chat): Command R7B / Command A ("Command 3") tool calls are parsed by llama.cpp's own Cohere2 MoE parser; before, the autoparser preserved `<\|START_THINKING\|><\|END_THINKING\|><\|START_ACTION\|>` as ONE token string, the server dropped the three markers, and every R7B tool call was an HTTP 500 | Command R7B as a chat candidate (operator, 2026-11-03: "B, check vllm parser before reinventing") | **to file at ggml-org/llama.cpp as a PR** once proven on the node (#20786, closed unreproduced, was this); [`deploy/localai/patches/0006-llama-cpp-chat-cohere-command3.patch`](../../deploy/localai/patches/0006-llama-cpp-chat-cohere-command3.patch); in the series since 2026-11-06: engine ea2417d91dcc, every live model byte-identical, every gate passed |
 | **P7** | **upstream, carried ahead of the pin** | llama.cpp (ggml-sycl, dmmv.cpp): upstream's "sycl: dmmv code cleanup" (ggml-org/llama.cpp#31325, commit 5e18eb02, merged 2026-11-02, after our pin ddf48f8): the q8_0 reorder dmmv folded into the generic template, the non-K launchers templated, +41/−411, "a no-op for performance" | the operator, 2026-11-07: "Add the patch 1 as well", in the same engine as the B70 AOT build and the pinned Intel stack, so every space is gated once | **upstream**; drops out of the series when LocalAI's pin passes 5e18eb02; [`deploy/localai/patches/0007-llama-cpp-sycl-dmmv-cleanup.patch`](../../deploy/localai/patches/0007-llama-cpp-sycl-dmmv-cleanup.patch); gated with the a+b engine (quantized dmmv bytes can move: the chat models' decode) |
 | R1 | request | a response header naming the backend instance (pid and start time) that answered | optional: the model pool checks before and after instead | not filed |
@@ -1153,9 +1153,14 @@ only from `staged/context-on-demand.series`. Two halves, one design:
 **llama.cpp** (`backend/cpp/llama-cpp/patches/0011-server-context-on-demand.patch`;
 the same bytes in `staged/llama.cpp/`, written to be filed upstream as it is:
 `--help`, `tools/server/README.md`, `tools/server/tests/unit/test_context_on_demand.py`).
-- `--context-on-demand`, `--keep-context-ms N`, and `keep_context_ms` in a
-  request's body (completions, embeddings, rerank): the standard is Ollama's
-  `keep_alive`, applied to the context and in milliseconds.
+- `--context-on-demand`, and `keep_context_ms` in a request's body
+  (completions, embeddings, rerank): the standard is Ollama's `keep_alive`,
+  applied to the context and in milliseconds. A REQUEST THAT CARRIES NONE
+  USES THE CONTEXT THE CANONICAL WAY (operator, 2026-11-11: "no free after
+  use"): it is not freed after it, until a request that carries one is
+  answered; `--keep-context-ms N` gives such requests a keep, for a server
+  whose clients cannot be changed (default: none). The context of the load
+  itself goes once the server is idle.
 - `common`: `common_init_result::free_context()` / `init_context()` and
   `common_init_context_from_params()` — the context is created again from the
   context params the FIRST load resolved (no fitting again: the brief's H2),
@@ -1169,9 +1174,10 @@ the same bytes in `staged/llama.cpp/`, written to be filed upstream as it is:
   metrics and the slot listing). A task that needs a context creates it; a
   creation that fails is answered `503 unavailable_error` and the server
   stays up (H1: upstream's sleep aborts on a failed reload). A slot's release
-  extends the deadline by its task's keep — the latest asked wins, a request
-  never shortens another's — and the idle callback frees the context once it
-  has passed. `get_meta()`, `n_ctx_slot()` and `use_mixed_batch()` no longer
+  reads its task's keep: none, and the context is held; one, and the deadline
+  is extended to it — the latest asked wins, a request never shortens
+  another's — and the idle callback frees the context once it has passed and
+  nothing holds it. `get_meta()`, `n_ctx_slot()` and `use_mixed_batch()` no longer
   read the context: LocalAI calls `get_meta()` on its RPC threads.
 - `/metrics`: `context_loaded`, `context_creations_total`,
   `context_creation_seconds_total`; the log says each creation and free with
@@ -1198,10 +1204,12 @@ the same bytes in `staged/llama.cpp/`, written to be filed upstream as it is:
 random-weight `llama` and `qwen3` models written by `tests/test-llama-archs -o`
 — huggingface.co is not reachable from the session that wrote it, so the
 presets the tests name were pointed at them):
-- `test_context_on_demand.py`, 12 of 12: the context freed when idle and not
-  created by `/health`, `/props`, `/models`, `/slots`, `/tokenize`; one
-  creation per request without a keep; a keep from the request (a completion
-  and a chat completion) and from the server; a keep of 0 that does not shorten another's; the same completion
+- `test_context_on_demand.py`, 13 of 13: the load's context freed when idle
+  and none created by `/health`, `/props`, `/models`, `/slots`, `/tokenize`;
+  one creation per request with a keep of 0; a request WITHOUT a keep leaves
+  the context loaded, cached prompt included, until one that carries a keep
+  is answered; a keep from the request (a completion and a chat completion)
+  and from the server; a keep of 0 that does not shorten another's; the same completion
   and the same embedding, value for value, across creations; the cached
   prompt reused within a keep and gone after it; a creation refused with 503,
   then served; eight concurrent requests; together with `--sleep-idle-seconds`.
@@ -1209,8 +1217,9 @@ presets the tests name were pointed at them):
   after the patch (nine suites, 131 tests: the same 83 passes and the same 46
   failures — the failures are the stand-in models' content, on both).
 - LocalAI's `grpc-server` built from the tree the candidate series produces
-  and driven over gRPC as LocalAI drives it, 16 of 16: among them the same
-  vector, byte for byte, WITH AND WITHOUT the option; token ids (P2) embedded
+  and driven over gRPC as LocalAI drives it, 18 of 18: among them the same
+  vector, byte for byte, WITH AND WITHOUT the option; a request without a
+  keep, and one whose keep is no number, leaving the context loaded; token ids (P2) embedded
   on demand; `TokenizeString` and `Detokenize` answered while idle with no
   creation; a creation made to fail, then the next request served.
 - A creation on the CPU, tiny model: 1.4–1.8 ms; a free: 0.03–0.09 ms. These
@@ -1219,8 +1228,8 @@ presets the tests name were pointed at them):
 **NOT checked, and why:** nothing on a card (the node's, on the operator's
 word); `bert` (no random-weight writer for it — the embedding checks ran on
 `qwen3` with `--pooling last`, the shape of our Qwen3 encoder); rerank over
-gRPC (LocalAI's `RerankRequest` carries no metadata map: a rerank takes the
-model's default keep); encoder-decoder (P3/P4: to check on the card with
+gRPC (LocalAI's `RerankRequest` carries no metadata map: a rerank carries no
+keep, and leaves the context loaded unless the model's YAML gives one); encoder-decoder (P3/P4: to check on the card with
 MADLAD's test copy).
 
 **Card gates before it moves into the series** (staged/README.md; the brief

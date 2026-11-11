@@ -14,6 +14,15 @@ the jobs may be different"; "I choose option B, trimmed by RAGE"; "The
 trimming time shall not be modified if the expiry occurred because of a job
 missed scheduling (for instance when a chat model takes over)".
 
+A REQUEST THAT CARRIES NO KEEP IS NOT FREED AFTER (operator, 2026-11-11: "A
+request that carries no parameter is using the context in the canonical way:
+no free after use"): the model keeps its context after it, as a model without
+the option does, until a request that carries a keep is answered. So nothing
+here is ever sent "nothing" to mean "free": RAGE's requests always carry
+their stream's keep, and Louise's own WARM carries 0 (`warm_body`) — a warm
+loads a model, and a preloaded model nobody has asked yet would otherwise
+hold its context from its load to its first request.
+
 A JOB TYPE IS A STREAM: one plugin's one level of work on one model of one
 server (`Stream`). Each stream has its own keep. The server knows nothing of
 streams: it frees the context when the LATEST deadline any request asked has
@@ -371,6 +380,15 @@ def metadata(sent: Sent | None) -> dict[str, dict[str, str]]:
     """What a request's body gains: `{"metadata": {"keep_context_ms": "…"}}`,
     or nothing. The map's values are strings (LocalAI's schema)."""
     return {} if sent is None else {"metadata": {FIELD: str(sent.keep_ms)}}
+
+
+def warm_body() -> dict[str, dict[str, str]]:
+    """What a WARM's body gains: a keep of 0. A warm is sent only to a runner
+    that listed the model as not loaded (app/model_load.py) — LocalAI — and
+    before it is loaded nobody can know its options: a model loaded with
+    `context_on_demand` then frees the warm's context at once instead of
+    holding it until its first real request, and any other ignores the key."""
+    return {"metadata": {FIELD: "0"}}
 
 
 def answered(sent: Sent | None) -> None:

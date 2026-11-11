@@ -2,17 +2,19 @@ From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Claude <noreply@anthropic.com>
 Date: Wed, 11 Nov 2026 08:53:37 +0000
 Subject: [PATCH] feat(llama-cpp): context on demand - a model keeps its
- weights and creates its context per request
+ weights, a request gives its context back
 
 A loaded llama.cpp model holds its weights and its context (the KV cache and
 the compute buffers), the second whether or not a request is running. With
-the `context_on_demand` model option the backend keeps the weights and holds
-the context only while it works: created when a request needs it, freed when
-no request is left. A request says for how long the context is kept after its
-answer with `keep_context_ms` in its `metadata` (milliseconds; requests back
-to back carry one and do not pay a creation each); `keep_context_ms` as a
-model option is the keep of a request that does not say. Several models on
-one card then need room only for the contexts that work at the same time.
+the `context_on_demand` model option the backend keeps the weights and lets a
+request give the context back: a request that carries `keep_context_ms` in
+its `metadata` has the context freed that many milliseconds after its answer
+(0: at once), and the next request creates it again - requests back to back
+carry a keep that bridges the time between them. A request that carries none
+uses the context as it always did: it is not freed after it. `keep_context_ms`
+as a model option gives a keep to the requests that carry none. Several
+models on one card then need room only for the contexts that work at the same
+time.
 
 - patches/0011-server-context-on-demand.patch: the llama.cpp side
   (--context-on-demand, --keep-context-ms, the request's keep_context_ms),
@@ -31,23 +33,25 @@ one card then need room only for the contexts that work at the same time.
 Checked on the CPU (grpc-server built from this tree, random-weight qwen3 and
 llama models, driven over gRPC as LocalAI drives it): the load's context is
 freed when idle; TokenizeString and Detokenize answer while idle and create
-none; one creation per Embedding without a keep, the same vector across
+none; one creation per Embedding with a keep of 0, the same vector across
 creations; a keep in the metadata holds the context and a later keep of 0
-does not shorten it; token ids are embedded on demand too; a keep that is no
-number is "not said"; without the option nothing is ever freed and the
-vector is the same, byte for byte; the model option is the default keep; a
-creation made to fail is an error on that request, the backend stays up and
-serves the next; Predict gives the same completion across creations.
+does not shorten it; token ids are embedded on demand too; a request without
+a keep leaves the context loaded, and so does a keep that is no number, until
+a request that carries one is answered; without the option nothing is ever
+freed and the vector is the same, byte for byte; the model option gives a
+keep to a request without one; a creation made to fail is an error on that
+request, the backend stays up and serves the next; Predict gives the same
+completion across creations.
 
 Assisted-by: Claude Code
 ---
  backend/cpp/llama-cpp/CMakeLists.txt          |    5 +
- backend/cpp/llama-cpp/context_on_demand.h     |   86 ++
+ backend/cpp/llama-cpp/context_on_demand.h     |   89 ++
  .../cpp/llama-cpp/context_on_demand_test.cpp  |   62 +
- backend/cpp/llama-cpp/grpc-server.cpp         |   42 +-
- .../0011-server-context-on-demand.patch       | 1138 +++++++++++++++++
+ backend/cpp/llama-cpp/grpc-server.cpp         |   45 +-
+ .../0011-server-context-on-demand.patch       | 1210 +++++++++++++++++
  backend/cpp/llama-cpp/prepare.sh              |    4 +
- 6 files changed, 1327 insertions(+), 10 deletions(-)
+ 6 files changed, 1405 insertions(+), 10 deletions(-)
  create mode 100644 backend/cpp/llama-cpp/context_on_demand.h
  create mode 100644 backend/cpp/llama-cpp/context_on_demand_test.cpp
  create mode 100644 backend/cpp/llama-cpp/patches/0011-server-context-on-demand.patch
@@ -70,10 +74,10 @@ index 65327a5..cf90806 100644
      target_compile_features(parallel_params_test PRIVATE cxx_std_17)
 diff --git a/backend/cpp/llama-cpp/context_on_demand.h b/backend/cpp/llama-cpp/context_on_demand.h
 new file mode 100644
-index 0000000..de74994
+index 0000000..f26b948
 --- /dev/null
 +++ b/backend/cpp/llama-cpp/context_on_demand.h
-@@ -0,0 +1,86 @@
+@@ -0,0 +1,89 @@
 +// SPDX-License-Identifier: MIT
 +
 +#pragma once
@@ -87,17 +91,20 @@ index 0000000..de74994
 +
 +namespace llama_grpc {
 +
-+// llama.cpp's server can create its context when a request needs it and free
-+// it when it is idle, keeping the model loaded (--context-on-demand). A request
-+// then says for how long the context is kept after its answer, in milliseconds
-+// (keep_context_ms): requests back to back carry a keep and do not pay a
-+// creation each. LocalAI carries the request's keep in its metadata map, and
-+// the model's own default in the model options.
++// llama.cpp's server can let a request give the context back after its answer,
++// keeping the model loaded (--context-on-demand): a request that carries
++// keep_context_ms has the context freed that many milliseconds after it, and
++// the next request creates it again - requests back to back carry a keep and
++// do not pay a creation each. A request that carries none uses the context as
++// it always did: it is not freed after it. LocalAI carries the request's keep
++// in its metadata map; the model option of the same name gives one to the
++// requests that carry none.
 +
 +// parse_keep_context_ms converts the value of the keep_context_ms metadata key,
 +// or of the model option of the same name, to milliseconds. It returns -1
-+// ("not said": the server's default applies) for anything that is not a whole,
-+// non-negative number of milliseconds that fits in int32_t.
++// ("not said": the context stays loaded after the request, unless the model
++// option says otherwise) for anything that is not a whole, non-negative number
++// of milliseconds that fits in int32_t.
 +inline int32_t parse_keep_context_ms(const std::string & value) {
 +    try {
 +        size_t used = 0;
@@ -229,7 +236,7 @@ index 0000000..c24be4c
 +    return 0;
 +}
 diff --git a/backend/cpp/llama-cpp/grpc-server.cpp b/backend/cpp/llama-cpp/grpc-server.cpp
-index a90c179..d7dcbc6 100644
+index a90c179..20ee453 100644
 --- a/backend/cpp/llama-cpp/grpc-server.cpp
 +++ b/backend/cpp/llama-cpp/grpc-server.cpp
 @@ -75,6 +75,7 @@
@@ -267,19 +274,22 @@ index a90c179..d7dcbc6 100644
          }
          data["preserved_tokens"] = preserved_tokens;
      }
-@@ -742,6 +743,21 @@ static void params_parse(server_context& /*ctx_server*/, const backend::ModelOpt
+@@ -742,6 +743,24 @@ static void params_parse(server_context& /*ctx_server*/, const backend::ModelOpt
              if (optval != NULL) {
                  grpc_servers_option = optval_str;
              }
 +        } else if (!strcmp(optname, "context_on_demand")) {
-+            // llama.cpp's --context-on-demand: the context is created when a request
-+            // needs it and freed when the model is idle, the weights stay loaded
++            // llama.cpp's --context-on-demand: a request that carries keep_context_ms
++            // in its metadata has the context freed that long after its answer, and
++            // the next request creates it again; the weights stay loaded. A request
++            // that carries none leaves the context loaded, as ever
 +            const bool on = !(optval_str == "false" || optval_str == "0" || optval_str == "no" || optval_str == "off" || optval_str == "disabled");
 +            if (!llama_grpc::set_context_on_demand(params, on)) {
 +                fprintf(stderr, "[llama-cpp] context_on_demand: not supported by this llama.cpp, ignored\n");
 +            }
 +        } else if (!strcmp(optname, "keep_context_ms")) {
-+            // the keep of a request that does not carry one in its metadata
++            // gives a keep to the requests that carry none in their metadata
++            // (without it such a request leaves the context loaded)
 +            const int32_t ms = llama_grpc::parse_keep_context_ms(optval_str);
 +            if (ms < 0) {
 +                fprintf(stderr, "[llama-cpp] keep_context_ms: '%s' is not a number of milliseconds, ignored\n", optval_str.c_str());
@@ -289,7 +299,7 @@ index a90c179..d7dcbc6 100644
          } else if (!strcmp(optname, "fit_params") || !strcmp(optname, "fit")) {
              if (optval_str == "true" || optval_str == "1" || optval_str == "yes" || optval_str == "on" || optval_str == "enabled") {
                  params.fit_params = true;
-@@ -2591,7 +2607,7 @@ public:
+@@ -2591,7 +2610,7 @@ public:
          if (params_base.model.path.empty()) {
              return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION, "Model not loaded");
          }
@@ -298,16 +308,16 @@ index a90c179..d7dcbc6 100644
  
  
          //Raise error if embeddings is set to true
-@@ -2996,6 +3012,8 @@ public:
+@@ -2996,6 +3015,8 @@ public:
                  task.apply_chat_session(chat_session);
  #endif
                  task.id_slot = json_value(data, "id_slot", -1);
-+                // context on demand: for how long the context is kept after this request
++                // context on demand: the request's keep, -1 when it carries none
 +                llama_grpc::set_keep_context_ms(task.params, llama_grpc::keep_context_ms_from(request->metadata()));
  
                  // OAI-compat: enable autoparser (PEG-based chat parsing) so that
                  // reasoning, tool calls, and content are classified into ChatDeltas.
-@@ -3194,7 +3212,7 @@ public:
+@@ -3194,7 +3215,7 @@ public:
           if (params_base.model.path.empty()) {
               return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION, "Model not loaded");
           }
@@ -316,16 +326,16 @@ index a90c179..d7dcbc6 100644
  
          data["stream"] = false;
          //Raise error if embeddings is set to true
-@@ -3601,6 +3619,8 @@ public:
+@@ -3601,6 +3622,8 @@ public:
                  task.apply_chat_session(chat_session);
  #endif
                  task.id_slot = json_value(data, "id_slot", -1);
-+                // context on demand: for how long the context is kept after this request
++                // context on demand: the request's keep, -1 when it carries none
 +                llama_grpc::set_keep_context_ms(task.params, llama_grpc::keep_context_ms_from(request->metadata()));
  
                  // OAI-compat: enable autoparser (PEG-based chat parsing) so that
                  // reasoning, tool calls, and content are classified into ChatDeltas.
-@@ -3748,7 +3768,7 @@ public:
+@@ -3748,7 +3771,7 @@ public:
          if (params_base.model.path.empty()) {
              return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION, "Model not loaded");
          }
@@ -334,16 +344,16 @@ index a90c179..d7dcbc6 100644
  
          body["stream"] = false;
  
-@@ -3801,6 +3821,8 @@ public:
+@@ -3801,6 +3824,8 @@ public:
  
                  task.params.res_type = TASK_RESPONSE_TYPE_NONE;
                  task.params.embd_normalize = embd_normalize;
-+                // context on demand: for how long the context is kept after this request
++                // context on demand: the request's keep, -1 when it carries none
 +                llama_grpc::set_keep_context_ms(task.params, llama_grpc::keep_context_ms_from(request->metadata()));
                  tasks.push_back(std::move(task));
              }
  
-@@ -3845,7 +3867,7 @@ public:
+@@ -3845,7 +3870,7 @@ public:
          embeddingResult->set_dim(dim);
          embeddingResult->set_prompt_tokens(prompt_tokens);
          embeddingResult->set_layout(
@@ -352,7 +362,7 @@ index a90c179..d7dcbc6 100644
                  ? backend::EMBEDDING_LAYOUT_PER_TOKEN
                  : backend::EMBEDDING_LAYOUT_FINAL);
  
-@@ -4583,7 +4605,7 @@ public:
+@@ -4583,7 +4608,7 @@ public:
          if (params_base.model.path.empty()) {
              return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION, "Model not loaded");
          }
@@ -361,7 +371,7 @@ index a90c179..d7dcbc6 100644
          body["stream"] = false;
  
          json tokens_response = json::array();
-@@ -4594,7 +4616,7 @@ public:
+@@ -4594,7 +4619,7 @@ public:
  
  
              for (const auto& token : tokens) {
@@ -370,7 +380,7 @@ index a90c179..d7dcbc6 100644
                  response->add_tokens(token);
              }
          }
-@@ -4762,7 +4784,7 @@ public:
+@@ -4762,7 +4787,7 @@ public:
  
          std::string content;
          for (const auto token : request->tokens()) {
@@ -381,21 +391,24 @@ index a90c179..d7dcbc6 100644
          return grpc::Status::OK;
 diff --git a/backend/cpp/llama-cpp/patches/0011-server-context-on-demand.patch b/backend/cpp/llama-cpp/patches/0011-server-context-on-demand.patch
 new file mode 100644
-index 0000000..1875a39
+index 0000000..bf43a44
 --- /dev/null
 +++ b/backend/cpp/llama-cpp/patches/0011-server-context-on-demand.patch
-@@ -0,0 +1,1138 @@
-+server: context on demand - the model stays loaded, its context is created by the request
+@@ -0,0 +1,1210 @@
++server: context on demand - the model stays loaded, a request gives its context back
 +
 +A loaded model holds its weights and its context: the KV cache and the
 +compute buffers, sized for the window and the batch whether or not a request
-+runs. With --context-on-demand the server keeps the weights and holds the
-+context only while it works. It is created when a task needs it and freed
-+when no task is left, and a request says for how long it is kept after its
-+answer (`keep_context_ms`, in the request; --keep-context-ms for a request
-+that does not say), so that requests back to back do not pay a creation
-+each. It is the `keep_alive` of other runners applied to the context instead
-+of the whole model, in milliseconds. Several servers on one device then need
++runs. With --context-on-demand the server keeps the weights and lets its
++clients give the context back between their requests. A request that carries
++`keep_context_ms` has the context freed that many milliseconds after its
++answer (0: at once), and the next request that needs one creates it again;
++requests back to back carry a keep that bridges the time between them and
++pay one creation for the run. A request that does not carry it uses the
++context as it always did - it is not freed after it, cached prompt included -
++so a client that does not know the option is served as by a server without
++it. It is the `keep_alive` of other runners applied to the context instead of
++the whole model, in milliseconds. Several servers on one device then need
 +room only for the contexts that work at the same time.
 +
 +- common: common_init_result::free_context() / init_context() and
@@ -410,13 +423,18 @@ index 0000000..1875a39
 +  context. process_single_task() creates it for a task that needs one
 +  (context_acquire); a creation that fails is answered with 503
 +  `unavailable_error` and the server stays up, where a failed reload after
-+  --sleep-idle-seconds aborts. A slot's release extends the deadline by its
-+  task's keep (context_keep: the latest deadline asked wins, a request never
-+  shortens another's); the idle callback frees the context once it has
-+  passed (context_idle, context_release). The slots drop their cached
-+  prompt with the KV cache. get_meta(), n_ctx_slot() and use_mixed_batch()
-+  no longer need a context, so /props, /models, /metrics, /slots and the
-+  tokenizer routes neither wait for one nor create one.
++  --sleep-idle-seconds aborts. A slot's release reads its task's keep
++  (context_keep): none, and the context is held; one, and the deadline is
++  extended to it - the latest asked wins, a request never shortens
++  another's. The idle callback frees the context once the deadline has
++  passed and nothing holds it (context_idle, context_release). The context
++  of the load itself goes once the server is idle. The slots drop their
++  cached prompt with the KV cache. get_meta(), n_ctx_slot() and
++  use_mixed_batch() no longer need a context, so /props, /models, /metrics,
++  /slots and the tokenizer routes neither wait for one nor create one.
++- --keep-context-ms N gives a keep to the requests that carry none, for a
++  server whose clients cannot be changed (default: -1, they leave the
++  context loaded).
 +- /metrics: context_loaded, context_creations_total,
 +  context_creation_seconds_total.
 +- refused at load with speculative decoding or a multimodal projector, whose
@@ -424,38 +442,40 @@ index 0000000..1875a39
 +
 +Checked on the CPU (random-weight llama and qwen3 models written by
 +tests/test-llama-archs -o): tools/server/tests/unit/test_context_on_demand.py
-+- the context freed when idle and not created by the read-only routes; one
-+creation per request without a keep; a keep from the request (completion
-+and chat completion) and from the server; a keep of 0 that does not shorten another; the same completion and
-+the same embedding, value for value, across creations; the cached prompt
-+reused within a keep and gone after it; a creation refused with 503, then
-+served; eight concurrent requests; /slots listed without a context; together
-+with --sleep-idle-seconds. With the option off the existing suites give the
-+same results as before the patch (test_sleep, test_basic, test_metrics,
-+test_slot_save, test_embedding, test_completion, test_tokenize,
-+test_ctx_shift, test_kv_keep_only_active: the same 83 passes and the same 46
-+failures, the failures being the random-weight stand-ins' content).
++- the load's context freed when idle and none created by the read-only
++routes; a request with a keep of 0 creates the context and frees it; a
++request without a keep leaves it loaded, cached prompt included, until one
++that carries a keep is answered; a keep from the request (completion and chat
++completion) and from the server; a keep of 0 that does not shorten another;
++the same completion and the same embedding, value for value, across
++creations; the cached prompt reused within a keep and gone after it; a
++creation refused with 503, then served; eight concurrent requests; /slots
++listed without a context; together with --sleep-idle-seconds. With the option
++off the existing suites give the same results as before the patch
++(test_sleep, test_basic, test_metrics, test_slot_save, test_embedding,
++test_completion, test_tokenize, test_ctx_shift, test_kv_keep_only_active).
 +---
 +diff --git a/common/arg.cpp b/common/arg.cpp
-+index e3ab084..28bf01f 100644
++index e3ab084..bbfce60 100644
 +--- a/common/arg.cpp
 ++++ b/common/arg.cpp
-+@@ -3811,6 +3811,25 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
++@@ -3811,6 +3811,26 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
 +             params.sleep_idle_seconds = value;
 +         }
 +     ).set_examples({LLAMA_EXAMPLE_SERVER}));
 ++    add_opt(common_arg(
 ++        {"--context-on-demand"},
-++        "create the context when a request needs it and free it when the server is idle, keeping the model loaded; "
-++        "a request's cached prompt does not outlive the context (default: disabled)",
+++        "let a request free the context after its answer, keeping the model loaded: a request that carries "
+++        "`keep_context_ms` has the context freed that many milliseconds after it, and the next request creates "
+++        "it again; a request without it leaves the context loaded, as ever (default: disabled)",
 ++        [](common_params & params) {
 ++            params.context_on_demand = true;
 ++        }
 ++    ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_CONTEXT_ON_DEMAND"));
 ++    add_opt(common_arg(
 ++        {"--keep-context-ms"}, "N",
-++        string_format("with --context-on-demand: milliseconds the context is kept after a request that does not carry "
-++                      "its own `keep_context_ms` (default: %d)", params.keep_context_ms),
+++        string_format("with --context-on-demand: treat a request that does not carry `keep_context_ms` as carrying N "
+++                      "(default: %d, -1 = such a request leaves the context loaded)", params.keep_context_ms),
 ++        [](common_params & params, int value) {
 ++            if (value < 0) {
 ++                throw std::invalid_argument("invalid value: cannot be negative");
@@ -692,15 +712,15 @@ index 0000000..1875a39
 + // Vocab utils
 + //
 +diff --git a/common/common.h b/common/common.h
-+index e2bc8c5..ef64942 100644
++index e2bc8c5..5342d74 100644
 +--- a/common/common.h
 ++++ b/common/common.h
 +@@ -670,6 +670,8 @@ struct common_params {
 +     int enable_reasoning = -1; // -1 = auto, 0 = disable, 1 = enable
 +     bool prefill_assistant = true; // if true, any trailing assistant message will be prefilled into the response
 +     int sleep_idle_seconds = -1;   // if >0, server will sleep after this many seconds of idle time
-++    bool context_on_demand = false; // create the context when a task needs it, free it when idle (the model stays loaded)
-++    int32_t keep_context_ms = 0;    // with context_on_demand: time the context is kept after a task that does not say
+++    bool context_on_demand = false; // let a request free the context after its answer, a later one creates it again (the model stays loaded)
+++    int32_t keep_context_ms = -1;   // with context_on_demand: the keep of a request that carries none, -1 = it leaves the context loaded
 + 
 +     std::vector<std::string> api_keys;
 + 
@@ -740,15 +760,15 @@ index 0000000..1875a39
 +     ggml_threadpool * threadpool       = nullptr;
 +     ggml_threadpool * threadpool_batch = nullptr;
 +diff --git a/tools/server/README.md b/tools/server/README.md
-+index 66a34ff..6d33698 100644
++index 66a34ff..784b5a3 100644
 +--- a/tools/server/README.md
 ++++ b/tools/server/README.md
 +@@ -246,6 +246,8 @@ For the full list of features, please refer to [server's changelog](https://gith
 + | `-sps, --slot-prompt-similarity SIMILARITY` | how much the prompt of a request must match the prompt of a slot in order to use that slot (default: 0.10, 0.0 = disabled) |
 + | `--lora-init-without-apply` | load LoRA adapters without applying them (apply later via POST /lora-adapters) (default: disabled) |
 + | `--sleep-idle-seconds SECONDS` | number of seconds of idleness after which the server will sleep (default: -1; -1 = disabled) |
-++| `--context-on-demand` | create the context when a request needs it and free it when the server is idle, keeping the model loaded; a request's cached prompt does not outlive the context (default: disabled)<br/>(env: LLAMA_ARG_CONTEXT_ON_DEMAND) |
-++| `--keep-context-ms N` | with --context-on-demand: milliseconds the context is kept after a request that does not carry its own `keep_context_ms` (default: 0)<br/>(env: LLAMA_ARG_KEEP_CONTEXT_MS) |
+++| `--context-on-demand` | let a request free the context after its answer, keeping the model loaded: a request that carries `keep_context_ms` has the context freed that many milliseconds after it, and the next request creates it again; a request without it leaves the context loaded, as ever (default: disabled)<br/>(env: LLAMA_ARG_CONTEXT_ON_DEMAND) |
+++| `--keep-context-ms N` | with --context-on-demand: treat a request that does not carry `keep_context_ms` as carrying N (default: -1, -1 = such a request leaves the context loaded)<br/>(env: LLAMA_ARG_KEEP_CONTEXT_MS) |
 + | `--log-prompts-dir PATH` | Log prompts to directory (auto-created if not present; only used for debugging, default: disabled) |
 + | `--spec-draft-hf, -hfd, -hfrd, --hf-repo-draft <user>/<model>[:quant]` | Same as --hf-repo, but for the draft model (default: unused)<br/>(env: LLAMA_ARG_SPEC_DRAFT_HF_REPO) |
 + | `--spec-draft-threads, -td, --threads-draft N` | number of threads to use during generation (default: same as --threads) |
@@ -756,29 +776,32 @@ index 0000000..1875a39
 + 
 + `id_slot`: Assign the completion task to an specific slot. If is -1 the task will be assigned to a Idle slot.  Default: `-1`
 + 
-++`keep_context_ms`: With `--context-on-demand`, the number of milliseconds the context is kept after this request is answered, see [Context on demand](#context-on-demand). Also read by `/embeddings`, `/v1/embeddings` and `/rerank`. Default: the server's `--keep-context-ms`
+++`keep_context_ms`: With `--context-on-demand`, free the context this many milliseconds after this request is answered (`0`: as soon as it is), see [Context on demand](#context-on-demand). Also read by `/embeddings`, `/v1/embeddings` and `/rerank`. Default: not set - the context stays loaded after the request, unless the server's `--keep-context-ms` says otherwise
 ++
 + `cache_prompt`: Re-use KV cache from a previous request if possible. This way the common prefix does not have to be re-processed, only the suffix that differs between the requests. Because (depending on the backend) the logits are **not** guaranteed to be bit-for-bit identical for different batch sizes (prompt processing vs. token generation) enabling this option can cause nondeterministic results. Default: `true`
 + 
 + `return_tokens`: Return the raw generated token ids in the `tokens` field. Otherwise `tokens` remains empty. Default: `false`
-+@@ -2561,6 +2565,26 @@ Note that the following endpoints are exempt from being considered as incoming t
++@@ -2561,6 +2565,29 @@ Note that the following endpoints are exempt from being considered as incoming t
 + - `GET /models`
 + - `GET /metrics`
 + 
 ++## Context on demand
 ++
-++A loaded model holds two kinds of memory: its weights, and its context - the KV cache and the compute buffers, sized for the context window and the batch whether or not a request is running. With `--context-on-demand` the server keeps the weights loaded and holds the context only while it works:
+++A loaded model holds two kinds of memory: its weights, and its context - the KV cache and the compute buffers, sized for the context window and the batch whether or not a request is running. With `--context-on-demand` the server keeps the weights loaded and lets its clients give the context back between their requests:
 ++
-++- the context is created when a request needs it, and freed as soon as no request is left;
-++- creating it costs far less than loading the model, but it is not free, and requests that follow each other should not pay it each time: a request may carry `keep_context_ms`, the number of milliseconds the context is kept after its answer. A request without it takes the server's `--keep-context-ms` (default: 0);
-++- a request can only extend the time the context is kept, never shorten it: the context is freed when the latest of the times asked for has passed. `"keep_context_ms": 0` on one request does not take the context from another.
+++- a request that carries `keep_context_ms` has the context freed that many milliseconds after its answer (`0`: as soon as it is answered), and the next request that needs a context creates it again. Creating it costs far less than loading the model, but it is not free: requests that follow each other carry a keep long enough to bridge the time between them, and pay one creation for the whole run instead of one each;
+++- **a request that does not carry it uses the context as it always did: the context is not freed after it.** A client that does not know the option is served exactly as by a server without it, cached prompt included. The context then stays until a later request that carries a keep is answered;
+++- among the requests that carry a keep, a keep can only extend the time the context is kept, never shorten another's: the context is freed when the latest of the times asked for has passed. `"keep_context_ms": 0` on one request does not take the context from another that asked for longer;
+++- the context made by the load itself is not a request's: it is freed once the server is idle, and the first request creates one.
+++
+++`--keep-context-ms N` gives a keep to the requests that carry none, for a server whose clients cannot be changed.
 ++
 ++This is the `keep_alive` of other runners applied to the context instead of the whole model, in milliseconds because the useful values are short. It differs from [sleeping on idle](#sleeping-on-idle), which unloads the weights too and pays a full load on the next request; the two can be used together.
 ++
 ++Notes:
 ++
 ++- The memory of the context is given back to the device, so several servers sharing one device only need room for the contexts that work at the same time. If the context cannot be created because that memory is in use, the request is answered with error `503` (`unavailable_error`) and can be retried; the server stays up.
-++- The cached prompt of a slot lives in the KV cache and is freed with it: a conversation whose context was freed evaluates its prompt again. Give its requests a `keep_context_ms` as long as the pause expected before the next one.
+++- The cached prompt of a slot lives in the KV cache and is freed with it: a conversation whose context was freed evaluates its prompt again. Give its requests a `keep_context_ms` as long as the pause expected before the next one, or none at all.
 ++- `/health`, `/props`, `/models`, `/metrics`, `/slots`, tokenization and detokenization do not need the context and do not create it.
 ++- The context is created with the parameters of the first load: the same size, batch sizes and device placement, without fitting them again to the memory that is free at that moment.
 ++- Not supported yet together with speculative decoding or a multimodal projector: the server refuses to start.
@@ -805,7 +828,7 @@ index 0000000..1875a39
 +         t_start = ggml_time_us();
 +     }
 +diff --git a/tools/server/server-context.cpp b/tools/server/server-context.cpp
-+index f11c533..1e71bd1 100644
++index f11c533..d99edaf 100644
 +--- a/tools/server/server-context.cpp
 ++++ b/tools/server/server-context.cpp
 +@@ -1164,6 +1164,7 @@ private:
@@ -816,15 +839,19 @@ index 0000000..1875a39
 + 
 +     int n_empty_consecutive = 0;
 + 
-+@@ -1188,8 +1189,138 @@ private:
++@@ -1188,8 +1189,151 @@ private:
 + 
 +     bool sleeping = false;
 + 
-++    // context on demand (--context-on-demand): the context is created when a task needs it and
-++    // freed when no task is left and the last keep has run out, the model stays loaded.
+++    // context on demand (--context-on-demand): a task that carries a keep has the context freed
+++    // once no task is left and the latest keep asked has run out; the next task that needs a
+++    // context creates it again. the model stays loaded. a task that carries no keep uses the
+++    // context as a server without the option does: it is not freed after it (ctx_hold), until
+++    // a later task carries one.
 ++    // only the start_loop() thread creates and frees it, see context_acquire() / context_idle()
-++    int64_t t_ctx_keep_until = 0; // ms, the latest deadline asked by a finished task
-++    int64_t t_ctx_created    = 0; // ms
+++    int64_t t_ctx_keep_until = 0;     // ms, the latest deadline asked by a finished task
+++    int64_t t_ctx_created    = 0;     // ms
+++    bool    ctx_hold         = false; // the last task to finish carried no keep
 ++
 ++    // properties of the context that outlive it, read when there is none
 ++    int32_t n_ctx_seq = 0;
@@ -911,6 +938,7 @@ index 0000000..1875a39
 ++        const int64_t t_create = ggml_time_us() - t_start;
 ++
 ++        t_ctx_created = ggml_time_ms();
+++        ctx_hold      = false; // the task this context is created for decides, when it is done
 ++
 ++        metrics.ctx_loaded       = true;
 ++        metrics.n_ctx_create    += 1;
@@ -921,18 +949,26 @@ index 0000000..1875a39
 ++        return true;
 ++    }
 ++
-++    // a task is done: its keep can only extend the time the context is kept
+++    // a task is done
+++    // - it carried no keep (and --keep-context-ms gives it none): the context stays, as ever
+++    // - it carried one: the context may go once the latest keep asked has run out; among
+++    //   the tasks that carry one, a keep can only extend that time, never shorten another's
 ++    void context_keep(int32_t keep_ms) {
 ++        if (keep_ms < 0) {
 ++            keep_ms = params_base.keep_context_ms;
 ++        }
+++        if (keep_ms < 0) {
+++            ctx_hold = true;
+++            return;
+++        }
+++        ctx_hold = false;
 ++        t_ctx_keep_until = std::max(t_ctx_keep_until, ggml_time_ms() + keep_ms);
 ++    }
 ++
 ++    // called by the queue each time it finds no task to process, see server_queue::on_idle()
 ++    // frees the context once the last keep has run out, else returns the time left
 ++    int64_t context_idle() {
-++        if (!params_base.context_on_demand || ctx_tgt == nullptr || sleeping) {
+++        if (!params_base.context_on_demand || ctx_tgt == nullptr || sleeping || ctx_hold) {
 ++            return -1;
 ++        }
 ++
@@ -955,7 +991,7 @@ index 0000000..1875a39
 +     void destroy() {
 +         spec.reset();
 +         spec_init.reset();
-+@@ -1277,6 +1408,12 @@ private:
++@@ -1277,6 +1421,12 @@ private:
 +                                         COMMON_SPECULATIVE_TYPE_DRAFT_MTP) != params_base.speculative.types.end();
 +         const bool has_spec = has_draft || spec_mtp;
 + 
@@ -968,7 +1004,7 @@ index 0000000..1875a39
 +         if (callback_state) {
 +             std::vector<std::string> stages = {"text_model"};
 +             if (has_spec) {
-+@@ -1400,6 +1537,14 @@ private:
++@@ -1400,6 +1550,17 @@ private:
 + 
 +         n_ctx = llama_n_ctx(ctx_tgt);
 + 
@@ -976,14 +1012,17 @@ index 0000000..1875a39
 ++        mixed_batch  = !llama_get_memory(ctx_tgt) || !llama_get_causal_attn(ctx_tgt);
 ++        pooling_type = llama_pooling_type(ctx_tgt);
 ++
+++        // the load is not a request: with --context-on-demand its context goes once the server
+++        // is idle (after --keep-context-ms, if given), and the first task creates one
 ++        t_ctx_created      = ggml_time_ms();
-++        t_ctx_keep_until   = t_ctx_created + params_base.keep_context_ms;
+++        t_ctx_keep_until   = t_ctx_created + std::max(params_base.keep_context_ms, 0);
+++        ctx_hold           = false;
 ++        metrics.ctx_loaded = true;
 ++
 +         add_bos_token = llama_vocab_get_add_bos(vocab);
 + 
 +         if (has_spec) {
-+@@ -1629,6 +1774,9 @@ private:
++@@ -1629,6 +1790,9 @@ private:
 +                 if (slot.stats.n_gen > 0) {
 +                     metrics_on_prediction(slot);
 +                 }
@@ -993,7 +1032,7 @@ index 0000000..1875a39
 +             };
 + 
 +             slot.reset();
-+@@ -1661,6 +1809,15 @@ private:
++@@ -1661,6 +1825,15 @@ private:
 +             }
 +         }
 + 
@@ -1009,7 +1048,7 @@ index 0000000..1875a39
 +         // the update_slots() logic will always submit a maximum of n_batch or n_parallel tokens
 +         // note that n_batch can be > n_ctx (e.g. for non-causal attention models such as BERT where the KV cache is not used)
 +         {
-+@@ -1742,6 +1899,14 @@ private:
++@@ -1742,6 +1915,17 @@ private:
 +         queue_tasks.on_sleeping_state([this](bool sleeping) {
 +             handle_sleeping_state(sleeping);
 +         });
@@ -1018,13 +1057,16 @@ index 0000000..1875a39
 ++        });
 ++
 ++        if (params_base.context_on_demand) {
-++            SRV_INF("context on demand: the context is freed when the server is idle and created again by the "
-++                    "next task, a task keeps it for its `keep_context_ms` (default: %d ms)\n", params_base.keep_context_ms);
+++            SRV_INF("context on demand: a request that carries `keep_context_ms` has the context freed that long after "
+++                    "its answer, the next request creates it again; a request without it %s\n",
+++                    params_base.keep_context_ms < 0
+++                        ? "leaves the context loaded"
+++                        : string_format("is treated as carrying %d", params_base.keep_context_ms).c_str());
 ++        }
 + 
 +         metrics.init();
 + 
-+@@ -3455,6 +3620,14 @@ private:
++@@ -3455,6 +3639,14 @@ private:
 +             return false;
 +         }
 + 
@@ -1039,7 +1081,7 @@ index 0000000..1875a39
 +         switch (task.type) {
 +             case SERVER_TASK_TYPE_COMPLETION:
 +             case SERVER_TASK_TYPE_INFILL:
-+@@ -5139,6 +5312,9 @@ private:
++@@ -5139,6 +5331,9 @@ private:
 +     // see https://github.com/ggml-org/llama.cpp/pull/29969
 +     // TODO @ngxson : maybe remove this once we use "mixed" batch everywhere
 +     bool use_mixed_batch() const {
@@ -1049,7 +1091,7 @@ index 0000000..1875a39
 +         return !llama_get_memory(ctx_tgt) || !llama_get_causal_attn(ctx_tgt);
 +     }
 + 
-+@@ -5631,7 +5807,7 @@ private:
++@@ -5631,7 +5826,7 @@ private:
 + 
 +     // context size of a single slot, capped by --kv-unified-per-slot and by the training context of the model
 +     int n_ctx_slot() const {
@@ -1058,7 +1100,7 @@ index 0000000..1875a39
 + 
 +         if (params_base.kv_unified_per_slot > 0) {
 +             res = std::min(res, params_base.kv_unified_per_slot);
-+@@ -5728,7 +5904,9 @@ private:
++@@ -5728,7 +5923,9 @@ private:
 +             return;
 +         }
 + 
@@ -1069,7 +1111,7 @@ index 0000000..1875a39
 +         metrics_flush_prompt();
 +     }
 + 
-+@@ -5787,8 +5965,9 @@ server_response_reader server_context::get_response_reader() {
++@@ -5787,8 +5984,9 @@ server_response_reader server_context::get_response_reader() {
 + server_context_meta server_context::get_meta() const {
 +     auto bos_id = llama_vocab_bos(impl->vocab);
 +     auto eos_id = llama_vocab_eos(impl->vocab);
@@ -1081,7 +1123,7 @@ index 0000000..1875a39
 + 
 +     const char * ftype_name = llama_ftype_name(llama_model_ftype(impl->model_tgt));
 + 
-+@@ -5808,7 +5987,7 @@ server_context_meta server_context::get_meta() const {
++@@ -5808,7 +6006,7 @@ server_context_meta server_context::get_meta() const {
 +         /* has_audio_stream        */ impl->mtmd_cap.audio_stream,
 +         /* json_ui_settings        */ impl->json_ui_settings,
 +         /* slot_n_ctx              */ impl->n_ctx_slot(),
@@ -1090,7 +1132,7 @@ index 0000000..1875a39
 + 
 +         /* chat_params             */ impl->chat_params,
 +         /* chat_template_caps      */ common_chat_templates_get_caps(impl->chat_params.tmpls.get()),
-+@@ -5931,6 +6110,8 @@ std::unique_ptr<server_res_generator> server_routes::handle_completions_impl(
++@@ -5931,6 +6129,8 @@ std::unique_ptr<server_res_generator> server_routes::handle_completions_impl(
 + 
 +             task.apply_chat_session(chat_session);
 + 
@@ -1099,7 +1141,7 @@ index 0000000..1875a39
 +             task.id_slot = json_value(data, "id_slot", -1);
 +             sse_ping_interval = task.params.sse_ping_interval;
 + 
-+@@ -7508,6 +7689,8 @@ std::unique_ptr<server_res_generator> server_routes::handle_embeddings_impl(cons
++@@ -7508,6 +7708,8 @@ std::unique_ptr<server_res_generator> server_routes::handle_embeddings_impl(cons
 +             task.params.res_type = res_type;
 +             task.params.embd_normalize = embd_normalize;
 + 
@@ -1108,7 +1150,7 @@ index 0000000..1875a39
 +             tasks.push_back(std::move(task));
 +         }
 +         rd.post_tasks(std::move(tasks));
-+@@ -7651,6 +7834,7 @@ std::unique_ptr<server_res_generator> server_routes::handle_rerank_impl(const se
++@@ -7651,6 +7853,7 @@ std::unique_ptr<server_res_generator> server_routes::handle_rerank_impl(const se
 +             server_task task = server_task(SERVER_TASK_TYPE_RERANK);
 +             task.id     = rd.get_new_id();
 +             task.tokens = std::move(tmp);
@@ -1221,10 +1263,10 @@ index 0000000..1875a39
 +     int32_t n_predict = -1; // new tokens to predict
 +diff --git a/tools/server/tests/unit/test_context_on_demand.py b/tools/server/tests/unit/test_context_on_demand.py
 +new file mode 100644
-+index 0000000..ec74be3
++index 0000000..5c118cd
 +--- /dev/null
 ++++ b/tools/server/tests/unit/test_context_on_demand.py
-+@@ -0,0 +1,271 @@
++@@ -0,0 +1,311 @@
 ++import pytest
 ++import time
 ++from utils import *
@@ -1316,27 +1358,63 @@ index 0000000..1875a39
 ++    assert res.body["is_sleeping"]
 ++
 ++    # a request loads the model again, and its context goes when it is done
-++    res = completion(server)
+++    res = completion(server, keep_context_ms=0)
 ++    assert res.status_code == 200
 ++    wait_for_context(server, False)
-++    res = completion(server)
+++    res = completion(server, keep_context_ms=0)
 ++    assert res.status_code == 200
 ++
 ++
-++def test_request_creates_the_context_and_frees_it():
+++def test_a_request_with_a_keep_of_zero_creates_the_context_and_frees_it():
 ++    global server
 ++    server.start()
 ++    wait_for_context(server, False)
 ++
-++    res = completion(server)
+++    res = completion(server, keep_context_ms=0)
 ++    assert res.status_code == 200
 ++    wait_for_context(server, False)
 ++    assert get_metric(server, "context_creations_total") == 1
 ++
-++    res = completion(server)
+++    res = completion(server, keep_context_ms=0)
 ++    assert res.status_code == 200
 ++    wait_for_context(server, False)
 ++    assert get_metric(server, "context_creations_total") == 2
+++
+++
+++def test_a_request_without_a_keep_leaves_the_context_loaded():
+++    global server
+++    server.n_slots = 1
+++    server.start()
+++    wait_for_context(server, False)
+++
+++    prompt = "Once upon a time, there was a little girl who lived in a house near the big forest."
+++
+++    # a client that does not know the option is served as by a server without it:
+++    # the context is created for its request and not freed after it
+++    res = completion(server, prompt, cache_prompt=True)
+++    assert res.status_code == 200
+++    time.sleep(1.5)
+++    assert get_metric(server, "context_loaded") == 1
+++    assert get_metric(server, "context_creations_total") == 1
+++
+++    # cached prompt included
+++    res = completion(server, prompt, cache_prompt=True)
+++    assert res.status_code == 200
+++    assert res.body["timings"]["cache_n"] > 0
+++    assert get_metric(server, "context_creations_total") == 1
+++
+++    # a keep asked earlier does not free it either: the last request to finish said nothing
+++    res = completion(server, keep_context_ms=0)
+++    assert res.status_code == 200
+++    res = completion(server)
+++    assert res.status_code == 200
+++    time.sleep(1.0)
+++    assert get_metric(server, "context_loaded") == 1
+++
+++    # until a request that carries one is answered
+++    res = completion(server, keep_context_ms=0)
+++    assert res.status_code == 200
+++    wait_for_context(server, False)
 ++
 ++
 ++def test_keep_from_the_request():
@@ -1349,8 +1427,8 @@ index 0000000..1875a39
 ++    assert res.status_code == 200
 ++    assert get_metric(server, "context_loaded") == 1
 ++
-++    # a request without a keep finds the context
-++    res = completion(server)
+++    # another request finds the context
+++    res = completion(server, keep_context_ms=100)
 ++    assert res.status_code == 200
 ++    # a keep can only extend the time the context is kept: 0 does not free it
 ++    res = completion(server, keep_context_ms=0)
@@ -1404,7 +1482,7 @@ index 0000000..1875a39
 ++
 ++    contents = []
 ++    for _ in range(3):
-++        res = completion(server)
+++        res = completion(server, keep_context_ms=0)
 ++        assert res.status_code == 200
 ++        contents.append(res.body["content"])
 ++        wait_for_context(server, False)
@@ -1430,7 +1508,7 @@ index 0000000..1875a39
 ++
 ++    # freed: the cached prompt went with the KV cache
 ++    wait_for_context(server, False)
-++    res = completion(server, prompt, cache_prompt=True)
+++    res = completion(server, prompt, cache_prompt=True, keep_context_ms=0)
 ++    assert res.status_code == 200
 ++    assert res.body["timings"]["cache_n"] == 0
 ++
@@ -1442,13 +1520,13 @@ index 0000000..1875a39
 ++    wait_for_context(server, False)
 ++
 ++    # the context cannot be created: the request is refused, the server stays up
-++    res = completion(server)
+++    res = completion(server, keep_context_ms=0)
 ++    assert res.status_code == 503
 ++    assert res.body["error"]["type"] == "unavailable_error"
 ++    assert get_metric(server, "context_loaded") == 0
 ++
 ++    # and the next one is served
-++    res = completion(server)
+++    res = completion(server, keep_context_ms=0)
 ++    assert res.status_code == 200
 ++    assert get_metric(server, "context_creations_total") == 1
 ++
@@ -1458,7 +1536,10 @@ index 0000000..1875a39
 ++    server.start()
 ++    wait_for_context(server, False)
 ++
-++    tasks = [(completion, (server, f"Write a story about number {i}")) for i in range(8)]
+++    def keyed(i: int):
+++        return completion(server, f"Write a story about number {i}", keep_context_ms=0)
+++
+++    tasks = [(keyed, (i,)) for i in range(8)]
 ++    results = parallel_function_calls(tasks)
 ++    for res in results:
 ++        assert res.status_code == 200
@@ -1480,6 +1561,7 @@ index 0000000..1875a39
 ++    for _ in range(3):
 ++        res = server.make_request("POST", "/v1/embeddings", data={
 ++            "input": "I believe the meaning of life is",
+++            "keep_context_ms": 0,
 ++        })
 ++        assert res.status_code == 200
 ++        embeddings.append(res.body["data"][0]["embedding"])

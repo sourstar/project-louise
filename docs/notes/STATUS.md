@@ -133,12 +133,13 @@ measured (published figures disagree).
   [idle-context-brief.md](idle-context-brief.md), rewritten: §1 the design, §2 what to measure first, §3 the code
   and its ten hazards, §9 whose word each part is.
 - **Context on request — implemented on the CPU, STAGED, nothing deployed** (operator, the same day: "Implement it").
-  P11 (staged): llama.cpp's server (`--context-on-demand`, `--keep-context-ms`, a request's `keep_context_ms`; written
-  for upstream with its tests and README) and LocalAI's backend (the model options, the keep from the request's
+  P11 (staged): llama.cpp's server (`--context-on-demand`; a request's `keep_context_ms` frees the context that long
+  after its answer, and a request that carries none leaves it loaded — operator: "the canonical way: no free after
+  use"; written for upstream with its tests and README) and LocalAI's backend (the model options, the keep from the request's
   `metadata`, no RPC reading the context) — `deploy/localai/patches/staged/0009-…`, built only from
-  `staged/context-on-demand.series`; localai-bugs.md "P11 (staged)". CPU checks: its 12 server tests; nine existing
+  `staged/context-on-demand.series`; localai-bugs.md "P11 (staged)". CPU checks: its 13 server tests; nine existing
   suites unchanged with the option off (83 passes and 46 failures before and after — the failures are the random-weight
-  stand-in models); `grpc-server` built from the candidate series and driven over gRPC, 16 checks, the same vector
+  stand-in models); `grpc-server` built from the candidate series and driven over gRPC, 18 checks, the same vector
   byte for byte with and without the option. Louise: RAGE's keep per job type and its trim (`app/rage/keep.py`: 20 ms,
   doubled at a premature expiry, an expiry a missed scheduling caused excused, not kept across a restart), sent only to
   a model LocalAI lists with the option (`model_load.context_on_demand`); the keeper counts such a model at its running

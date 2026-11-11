@@ -473,8 +473,10 @@ def _warm_request(recipe: "collections_mod.EmbedRecipe", pair: bool, level: dict
                           "encoding_format": "base64", "model": recipe.model}
         else:
             body = _body(recipe, probe)
-        return httpc.post(f"{recipe.url}/v1/embeddings", json=body, timeout=bound_s,
-                          headers=level)
+        # the warm's own context is given back at once (app/rage/keep.py
+        # `warm_body`): a request that carries no keep leaves it loaded
+        return httpc.post(f"{recipe.url}/v1/embeddings", json={**body, **rage_keep.warm_body()},
+                          timeout=bound_s, headers=level)
     return warm
 
 
