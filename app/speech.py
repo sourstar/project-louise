@@ -62,6 +62,8 @@ IDLE_S = 120.0
 CALL_TIMEOUT_S = 180.0
 #: the profiles are read again after this long: one recorded meanwhile is used
 PROFILES_TTL_S = 60.0
+#: a voice that names one of the model server's profiles
+PROFILE_PREFIX = "localai://voice-profiles/"
 HOLDER = "speech"
 
 # every bracket, with the space before it: "[…]", "\\[…\\]" (escaped
@@ -192,6 +194,16 @@ def voice_for(asked: str | None, profiles: list[dict]) -> str | None:
         if p.get("voice"):
             return p.get("voice")
     return None
+
+
+def held_profile(voice: str, profiles: list[dict]) -> bool:
+    """False only for a voice that names one of the model server's profiles
+    when the server lists profiles and not that one; a model's own named
+    voice ("alloy") and a server without profiles are taken as asked."""
+    if not str(voice).startswith(PROFILE_PREFIX):
+        return True
+    held = {p.get("voice") for p in profiles if p.get("voice")}
+    return not held or voice in held
 
 
 _profiles: tuple[float, list[dict]] = (0.0, [])
@@ -417,7 +429,14 @@ def synthesize_timed(body: dict[str, Any], url: str | None = None, *,
     if model:
         out["model"] = model
     lang = language(text)
-    voice = voice_for(body.get("voice") or node.tts_voice or None, profiles(url))
+    held = profiles(url)
+    # the reader's voice (the Ask page's choice, a client's own), unless it
+    # names a profile the server no longer holds — a browser remembering a
+    # voice since removed (app/voice.py `voices`): then the node's, never an error
+    asked = body.get("voice") or None
+    if asked and not held_profile(asked, held):
+        asked = None
+    voice = voice_for(asked or node.tts_voice or None, held)
     if voice:
         out["voice"] = voice
     else:

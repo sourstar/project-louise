@@ -56,7 +56,10 @@ const sentenceOf = size => KNOWN[(size - 44 - 8000) / 20 - 1];
   const errors = [], posted = { relay: [], stt: 0, speech: [] };
   // speechDelay: every sentence's wait; slow: a sentence's own; answerJob:
   // 'live' is the answer the test writes into the page's stream itself
-  let speechDelay = 0, slow = {}, answerJob = 'a1';
+  let speechDelay = 0, slow = {}, answerJob = 'a1', offerVoices = false;
+  const VOICES = { voices: [{ name: 'Philippe', voice: 'localai://voice-profiles/p1', language: 'en' },
+                            { name: 'Valentina', voice: 'localai://voice-profiles/v2', language: 'it' }],
+                   default: 'localai://voice-profiles/p1' };
   page.on('pageerror', e => errors.push(e.message));
   h.route(async req => {
     const u = new URL(req.url);
@@ -67,6 +70,9 @@ const sentenceOf = size => KNOWN[(size - 44 - 8000) / 20 - 1];
       if (fs.existsSync(f)) return req.respond({ status: 200, contentType: f.endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(f, 'utf8') });
       return req.respond({ status: 404, contentType: 'text/plain', body: '' });
     }
+    if (u.pathname === '/ask/voices')
+      return req.respond({ status: 200, contentType: 'application/json',
+                           body: JSON.stringify(offerVoices ? VOICES : { voices: [], default: null }) });
     if (u.pathname === '/v1/audio/transcriptions' && req.method === 'POST') {
       posted.stt++;
       return req.respond({ status: 200, contentType: 'application/json', body: JSON.stringify({ text: ' ' + TEXT }) });
@@ -126,6 +132,7 @@ const sentenceOf = size => KNOWN[(size - 44 - 8000) / 20 - 1];
   // 1. the buttons of the voices the node offers
   check(await page.evaluate(() => !document.getElementById('mic').hidden), '1. the microphone is shown');
   check(await page.evaluate(() => document.getElementById('speak').hidden), '1. the speaker waits for an answer');
+  check(await page.evaluate(() => document.getElementById('voice-choice').hidden), '1. one voice or none: nothing to choose');
 
   // 2. tap, speak, quiet: it stops by itself, posts the WAV, fills the box
   await page.click('#mic');
@@ -471,6 +478,36 @@ const sentenceOf = size => KNOWN[(size - 44 - 8000) / 20 - 1];
   // 17. the reading's times are kept, to measure its start and its pauses
   const tl = await page.evaluate(() => louiseVoice.timeline());
   check(tl && Array.isArray(tl.sentences) && 'first_word' in tl, '17. the reading\'s times are kept', tl);
+
+  // 19. the reader chooses the voice (operator, 2026-11-11: "choose philippe
+  //     or valentina"): the node's voices by name, the choice sent and kept
+  offerVoices = true;
+  const sent = async n => { const t0 = Date.now(); while (posted.speech.length < n && Date.now() - t0 < 8000) await sleep(40); };
+  await page.goto('http://localhost/ask');
+  check(await until(() => !document.getElementById('voice-choice').hidden, 4000), '19. two voices: the choice is shown');
+  check(JSON.stringify(await page.evaluate(() => [...document.querySelectorAll('#voice-pick option')].map(o => [o.textContent, o.value])))
+        === JSON.stringify(VOICES.voices.map(v => [v.name, v.voice])), '19. by name, in the node\'s order');
+  check(await page.evaluate(() => document.getElementById('voice-pick').value) === VOICES.default, '19. none chosen: the node\'s own');
+  await page.evaluate(() => { document.querySelector('details.settings').open = true; });
+  posted.speech.length = 0;
+  await page.evaluate(async () => { document.getElementById('q').value = 'Who wrote the Divine Comedy?'; await ask(); });
+  await until(() => !document.getElementById('speak').hidden, 4000);
+  await sent(3);                          // made ahead of a tap (prefetch), the whole answer
+  check(posted.speech.length === 3 && posted.speech.every(b => !('voice' in b)),
+        '19. not chosen: the page names no voice, the node speaks its own', posted.speech);
+  posted.speech.length = 0;
+  await h.select('#voice-pick', VOICES.voices[1].voice);
+  await sent(3);
+  check(posted.speech.length === 3 && posted.speech.every(b => b.voice === VOICES.voices[1].voice),
+        '19. chosen after the answer: what was made ahead is made again in that voice', posted.speech);
+  await page.click('#speak');
+  await until(() => document.getElementById('speak').classList.contains('on'), 2000);
+  await until(() => !document.getElementById('speak').classList.contains('on'), 15000);
+  check(JSON.stringify(posted.speech.map(b => b.input)) === JSON.stringify(SENTENCES)
+        && posted.speech.every(b => b.voice === VOICES.voices[1].voice),
+        '19. read: every sentence in that voice, once (what was made ahead is played)', posted.speech);
+  await page.goto('http://localhost/ask');
+  check(await until(v => document.getElementById('voice-pick').value === v, 4000, VOICES.voices[1].voice), '19. kept in this browser');
 
   check(errors.length === 0, 'no page errors', errors);
   console.log(failures ? `${failures} FAILED` : 'ALL PASSED');

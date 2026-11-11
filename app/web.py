@@ -360,6 +360,15 @@ def ask_voice():
     return voice.offered()
 
 
+@ask_router.get("/ask/voices")
+def ask_voices():
+    """The voices the reader may choose for the answer read aloud — the
+    model server's voice profiles, by name — and the one used when the
+    reader chose none (app/voice.py `voices`; operator, 2026-11-11)."""
+    from . import voice
+    return voice.voices()
+
+
 def _ask_annotations() -> list[dict]:
     """The annotations collections the Ask page offers as a choice (05 §5.3,
     amended 2026-10-19): each with the local name of the collection it

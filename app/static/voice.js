@@ -342,9 +342,41 @@
     return out;
   }
 
+  // THE READER'S VOICE (operator, 2026-11-11: "choose philippe or
+  // valentina"): one of the node's recorded voices (GET /ask/voices), kept in
+  // this browser; none kept, the node's own. A voice the node no longer holds
+  // is not sent (and the node would speak its own anyway, app/speech.py).
+  const VOICE_KEY = 'louise-voice';
+  let voiceIds = new Set();
+  function chosenVoice() {
+    let v = null; try { v = localStorage.getItem(VOICE_KEY); } catch (e) {}
+    return v && voiceIds.has(v) ? v : null;
+  }
+  async function loadVoices() {
+    const box = document.getElementById('voice-choice'), pick = document.getElementById('voice-pick');
+    if (!box || !pick) return;
+    let got = null;
+    try { const r = await fetch('/ask/voices'); if (r.ok) got = await r.json(); } catch (e) {}
+    const list = (got && got.voices) || [];
+    voiceIds = new Set(list.map(v => v.voice));
+    if (list.length < 2) { box.hidden = true; return; }
+    pick.textContent = '';
+    for (const v of list) {
+      const o = document.createElement('option'); o.value = v.voice; o.textContent = v.name; pick.appendChild(o);
+    }
+    pick.value = chosenVoice() || got.default || list[0].voice;
+    // what was made ahead of a tap is in the voice it was made in: made again
+    pick.onchange = () => { try { localStorage.setItem(VOICE_KEY, pick.value); } catch (e) {}
+                            if (ahead) { dropAhead(); prefetch(); } };
+    box.hidden = false;
+  }
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', loadVoices);
+  else loadVoices();
+
   async function synth(r, it) {
     const s = it.text;
     const body = { input: s }; if (r.lang) body.language = r.lang;
+    if (r.voice) body.voice = r.voice;
     it.t.sent = now();
     // the reading's order: the node sends sentence n once n - 1 is back
     // (app/speech.py Turns), so the backend never makes the second first
@@ -408,7 +440,7 @@
 
   function newReading() {
     return { id: Math.random().toString(36).slice(2, 12) || 'r', ctl: new AbortController(), lang: answerLang, text: '', at: 0, off: 0, ended: false,
-             items: [], next: 0, inflight: 0, urls: [], wake: null, more: null, blocked: false };
+             items: [], next: 0, inflight: 0, urls: [], wake: null, more: null, blocked: false, voice: chosenVoice() };
   }
   function dropAhead() {
     const r = ahead; if (!r) return;
@@ -419,7 +451,7 @@
   // the answer shown, made into speech ahead of any tap
   function prefetch() {
     if (!speak) return;
-    if (ahead && ahead.lang === answerLang && answerText().startsWith(ahead.text)) { feed(ahead); return; }
+    if (ahead && ahead.lang === answerLang && ahead.voice === chosenVoice() && answerText().startsWith(ahead.text)) { feed(ahead); return; }
     dropAhead();
     ahead = newReading();
     feed(ahead);
@@ -428,7 +460,7 @@
   function startReading() {
     if (!player) player = new Audio();
     let r;
-    if (ahead && ahead.lang === answerLang && answerText().startsWith(ahead.text)) { r = ahead; ahead = null; }
+    if (ahead && ahead.lang === answerLang && ahead.voice === chosenVoice() && answerText().startsWith(ahead.text)) { r = ahead; ahead = null; }
     else { dropAhead(); r = newReading(); }
     reading = r; speakState(true);
     times.started.push(now());

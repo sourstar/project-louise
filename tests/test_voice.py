@@ -240,3 +240,61 @@ def test_the_page_has_no_button_for_a_voice_the_node_does_not_offer(isolated_con
 def test_the_gpu_panel_counts_the_speech_models_as_louises():
     uses = gpu_models.louise_uses([], speech={"speech to text": "whisper-large-v3", "speech": "omnivoice-cpp"})
     assert uses == {"whisper-large-v3": ["speech to text"], "omnivoice-cpp": ["speech"]}
+
+
+# ---- the reader's voice (operator, 2026-11-11: "choose philippe or valentina") --
+
+PHILIPPE = "localai://voice-profiles/1c834741"
+VALENTINA = "localai://voice-profiles/db55"
+
+
+@pytest.fixture
+def two_voices(cfgdir, monkeypatch):
+    (cfgdir / "platform.toml").write_text(
+        f'[speech]\ntts_model = "omnivoice-cpp"\ntts_voice = "{PHILIPPE}"\n', encoding="utf-8")
+    calls = []
+
+    class R:
+        status_code, content, headers = 200, b"RIFF", {"content-type": "audio/wav"}
+
+        def json(self):
+            return {"data": [{"name": "Valentina", "language": "it-IT", "voice": VALENTINA,
+                              "created_at": "2026-10-16T22:20:25Z"},
+                             {"name": "Philippe", "language": "it-IT", "voice": PHILIPPE,
+                              "created_at": "2026-10-06T17:11:09Z"}]}
+    monkeypatch.setattr(speech.httpc, "get", lambda url, **kw: R())
+    monkeypatch.setattr(speech.httpc, "post", lambda url, json, **kw: calls.append(json) or R())
+    monkeypatch.setattr(speech.model_pins, "hold", lambda url, model, holder: True)
+    monkeypatch.setattr(speech.model_pins, "release", lambda holder: None)
+    monkeypatch.setattr(speech, "_profiles", (0.0, []))
+    monkeypatch.setattr(speech, "_clip_get", lambda key: None)
+    monkeypatch.setattr(speech, "_clip_put", lambda key, data, ctype: None)
+    return calls
+
+
+def test_the_reader_chooses_among_the_nodes_recorded_voices(two_voices):
+    got = voice.voices()
+    assert [v["name"] for v in got["voices"]] == ["Philippe", "Valentina"], "in the order they were recorded"
+    assert got["default"] == PHILIPPE, "none chosen: the node's own"
+    assert TestClient(api.app).get("/ask/voices").json() == got
+
+
+def test_the_readers_voice_speaks_and_one_no_longer_held_falls_back_to_the_nodes(two_voices):
+    calls = two_voices
+    assert speech.synthesize({"input": "Dante.", "voice": VALENTINA}, url="http://ai")[0] == 200
+    assert calls[-1]["voice"] == VALENTINA, "the reader's choice"
+    speech.synthesize({"input": "Dante.", "voice": "localai://voice-profiles/gone"}, url="http://ai")
+    assert calls[-1]["voice"] == PHILIPPE, "a voice the server no longer holds: the node's, not an error"
+    speech.synthesize({"input": "Dante."}, url="http://ai")
+    assert calls[-1]["voice"] == PHILIPPE
+
+
+def test_no_answer_read_aloud_no_voice_to_choose(cfgdir):
+    assert voice.voices() == {"voices": [], "default": None}
+
+
+def test_the_voice_choice_is_on_the_page_only_where_the_answer_is_read(isolated_config, config_dir):
+    assert 'id="voice-pick"' not in page(config_dir, "")
+    html = page(config_dir, '[speech]\ntts_model = "omnivoice-cpp"\n')
+    settings = html[html.index('<details class="settings">'):]
+    assert 'id="voice-pick"' in settings[:settings.index("</details>")], "under the Ask page's Settings"
