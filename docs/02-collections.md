@@ -1567,8 +1567,10 @@ What it does **not** have:
     collections of one plugin whose newest snapshots have the same
     `records_root`s hold the same records and count as one target; the
     one with the newest snapshot is taken (ties: the lowest
-    `collection_id`) and the create says which. It refuses only where
-    their records differ, naming them.
+    `collection_id`) and the create says which. Where their records
+    differ, the one whose newest snapshot holds every record the claims
+    name is the target, as before; it refuses where several such differ,
+    naming them.
   - *Amended 2026-11-11* (architecture session with the operator): **the
     claims apply at READ time to every held collection holding their
     records, decided per claim by hash**, never by comparing whole

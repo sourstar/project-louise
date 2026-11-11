@@ -1035,9 +1035,11 @@ def targets_of_claims(root: Path, claims: bytes | Path, *, log=None) -> list[tup
     the same records and count as ONE target: the one with the newest
     snapshot (ties: the lowest collection_id) is taken, and `log` says which
     — the claims apply to the others all the same, by hash, at read time
-    (app/ask/annotations.py). Where none is held, or the held ones' records
-    differ, nothing is guessed: the refusal names them, and how to name one
-    on the command line. `claims` is the file's bytes or its path; it is
+    (app/ask/annotations.py). Where the held ones' records differ, the one
+    whose newest snapshot holds every record the claims name is the target
+    (the rule before the amendment, kept); where none is held, or several
+    differing ones hold them all, nothing is guessed: the refusal names
+    them, and how to name one on the command line. `claims` is the file's bytes or its path; it is
     streamed, never held."""
     from . import annotations_stream as st, collection as col
     from app.share import seeder
@@ -1065,6 +1067,14 @@ def targets_of_claims(root: Path, claims: bytes | Path, *, log=None) -> list[tup
             raise AnnotationsError(
                 f"the claims name {plugin} records ({example}…), and this node holds no {plugin} "
                 f"collection with a snapshot: take or create one, then create the annotations")
+        if len({t[4] for t in cands}) > 1:
+            # records that differ: the one whose newest snapshot holds EVERY
+            # record the claims name is determined, not guessed (RULE 2; the
+            # rule before 2026-11-11, kept) — several such, or none, is refused
+            holding = [t for t in cands
+                       if st.read_target(Target(t[0], t[1], t[2], t[3]), ends).held == len(ends.digests)]
+            if holding and len({t[4] for t in holding}) == 1:
+                cands = holding
         if len({t[4] for t in cands}) > 1:
             names = ", ".join(sorted(t[0] for t in cands))
             raise AnnotationsError(

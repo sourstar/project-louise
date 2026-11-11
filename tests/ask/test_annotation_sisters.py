@@ -155,6 +155,13 @@ def test_inference_counts_one_plugin_s_same_records_as_one_target_and_refuses_wh
              cleaning_version=2)
     with pytest.raises(ann.AnnotationsError, match=r"records differ \(pubmed, pubmed-too: .*nothing is guessed"):
         ann.targets_of_claims(differ, claims)
+    # records that differ, and only one holds every record the claims name:
+    # determined, not guessed (the rule before the amendment, kept)
+    one = tmp_path / "one"
+    a_target(one, texts=TEXTS)
+    a_target(one, name="pubmed-short", texts=TEXTS[:1], snapshot_id="2026-09", cleaning_version=2)
+    assert ann.targets_of_claims(one, claims) == [("pubmed", TARGET_SNAPSHOT)], \
+        "pubmed-short lacks pubmed:2: pubmed is the target, whatever the newer snapshot"
 
 
 def test_records_roots_name_what_a_snapshot_holds_whatever_its_slices_are_called(tmp_path):
