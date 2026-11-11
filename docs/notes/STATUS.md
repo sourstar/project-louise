@@ -134,6 +134,12 @@ measured (published figures disagree).
   op pool is ON by default at our pin (PR #29265, which would have turned it off, was closed unmerged).
   IN CHARGE (operator, 11-12): the session "Dynamic context evaluation" (session_01Nm96wZNsGxpHx6eHzYqHZR)
   implements the shared context pool; it was given the brief, and reaches the node through München.
+  INTEGRATION (operator, 11-12: "Then handle the new implementation"): the coordinator merges it after an
+  independent review; four defects fixed first — the gate's 300 fresh contexts are now counted by the engine (and
+  an engine with no count is refused), the option is read from the run's statement, the keeper counts an on-demand
+  model never seen working as unknown, a vacuous keep test (idle-context-brief.md §10 "The integration review").
+  Inert until a model loads with `context_on_demand`; and no such model can pass the gate until the wrapper counts
+  its creations.
 - **A model's context on request — the design settled in review** (operator, the same day; the commits' clock reads
   11-11 where this day's entries say 11-12): no idle timer and no sleep. llama.cpp allocates a model's context when a
   request arrives and frees it when the work is done; a request carries a keep in ms (0 = none) that holds it after

@@ -154,6 +154,8 @@ _held: dict[str, dict[str, int]] = {}
 #: model AT REST, as its load left it, before a request grows its buffers —
 #: what the resident budget counts (app/resident.py, 2026-11-08)
 _rest: dict[tuple[str, str], int] = {}
+#: (server, model) -> the fewest bytes of ANY reading, REST_FLOOR or not (`least_vram`)
+_least: dict[tuple[str, str], int] = {}
 #: = app/resident.py REST_FLOOR (that module's reasons; kept here, where the
 #: readings are taken, so neither module imports the other at load)
 REST_FLOOR = 0.5
@@ -185,6 +187,7 @@ def reset() -> None:
         _sizes.clear()
         _held.clear()
         _rest.clear()
+        _least.clear()
         _seen.clear()
         _on_demand.clear()
         _probe_locks.clear()
@@ -237,6 +240,7 @@ def _fetch_system(server: str) -> frozenset[str] | None:
         _on_demand.update(((server, m), v) for m, v in on_demand.items())
         for k, v in sizes.items():
             _sizes[k] = max(v, _sizes.get(k, 0))
+            _least[k] = min(v, _least.get(k, v))
             # a reading under REST_FLOOR of the largest: the model partly off
             # the card (app/resident.py REST_FLOOR, 2026-11-09), not at rest
             floor = REST_FLOOR * _sizes[k]
@@ -245,6 +249,20 @@ def _fetch_system(server: str) -> frozenset[str] | None:
             if v >= floor:
                 _rest[k] = min(v, _rest.get(k, v))
     return frozenset(m["id"] for m in held)
+
+
+def no_system_route(server: str) -> bool:
+    """The last `/system` answer of `server` said it has no such route (a
+    runner that is not LocalAI): it lists no models and no options."""
+    with _lock:
+        got = _systems.get(server_of(server))
+    return got is not None and got[2] == NO_ROUTE_TTL_S
+
+
+def options_on_demand(load_options) -> bool:
+    """`_options_on_demand` for a stated run's engine options (VeGa's
+    `options`, the same proto names as `/system`'s `load_options`)."""
+    return _options_on_demand(load_options)
 
 
 def _options_on_demand(load_options) -> bool:
@@ -280,6 +298,14 @@ def size_vram(server: str, model: str) -> int | None:
     (`_sizes`), or None when this process never saw it loaded."""
     with _lock:
         return _sizes.get((server_of(server), model))
+
+
+def least_vram(server: str, model: str) -> int | None:
+    """The fewest bytes ANY `/system` reading of this process gave `model`,
+    REST_FLOOR or not — for a model loaded with `context_on_demand`, its
+    weights alone (app/resident.py: has it been seen working?)."""
+    with _lock:
+        return _least.get((server_of(server), model))
 
 
 def rest_vram(server: str, model: str) -> int | None:
