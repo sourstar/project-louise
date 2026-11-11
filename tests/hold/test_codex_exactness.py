@@ -97,6 +97,8 @@ def test_the_gate_holds_a_node_to_the_codex_whatever_its_own_setting(monkeypatch
     monkeypatch.setattr(run_check, "calibration_items", lambda *a, **k: [])
     monkeypatch.setattr(run_check, "_mark", lambda *a, **k: None)
     monkeypatch.setattr(run_check, "contributing", lambda r: None)
+    # no context per request here: what is held is the exactness (run_check.creates_per_request)
+    monkeypatch.setattr(run_check, "fresh_contexts", lambda *a, **k: None)
     from app.hold import cpu_reference
     monkeypatch.setattr(cpu_reference, "find", lambda *a, **k: None)
     monkeypatch.setattr(run_check.runs_mod, "validate",
