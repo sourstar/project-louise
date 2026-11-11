@@ -112,6 +112,27 @@ def test_help_page_is_open_and_documents_the_platform(client):
         assert anchor in r.text, f"help page must document: {anchor}"
 
 
+def test_a_llama_model_in_use_is_said_built_with_llama_on_ask_and_help(client):
+    """The Llama 3.2 Community License asks a service built on a Llama model
+    to display "Built with Llama" prominently (2026-11-12: the reranker of most
+    collections, llama-nemotron-rerank-1b-v2, is fine-tuned from Llama 3.2 1B).
+    While its model file ships, both pages say it; when it leaves, this test
+    says to take the line out with it."""
+    from pathlib import Path
+    shipped = Path(__file__).parents[1] / "deploy/vega/stage/models/louise-rerank-nemotron-1b.yaml"
+    ask, help_page = client.get("/ask").text, client.get("/help").text
+    if not shipped.exists():
+        assert "Built with Llama" not in ask, "no Llama model ships: take the attribution out"
+        return
+    assert "Built with Llama" in ask and 'href="/help#models"' in ask
+    panel = help_page[help_page.index('<div class="panel" id="models">'):]
+    panel = panel[:panel.index("</div>")]
+    assert "Built with Llama" in panel and "llama-nemotron-rerank-1b-v2" in panel
+    assert "https://www.llama.com/llama3_2/license/" in panel and "https://openmdw.ai/license/1-1/" in panel
+    assert "Copyright © Meta Platforms, Inc. All Rights Reserved." in panel
+    assert '["Basics", ["overview", "models",' in help_page, "on the first tab, where Help opens"
+
+
 def test_ui_is_rebranded_no_legacy_name_or_link(client):
     r = client.get("/ask")
     # the header names the project, not the container (operator, 2026-10-30)

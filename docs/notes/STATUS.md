@@ -45,6 +45,19 @@ measured (published figures disagree).
   in one request would be one longer reference, which this model already reads: the 27.75 s original at RTF 0.74.
   LIVE NOW (operator in München's session: "use the full clip in the meantime"): Philippe on the full 27.75 s
   original as one clip with its full transcript; the 7.90 s cut kept as reference-cut-7.90s.wav.
+- **Reranker: llama-nemotron-rerank-1b-v2, LIVE for five collections** (operator, 11-11: B; München).
+  `louise-rerank-nemotron-1b` (f16, parallel 1, ctx = batch = ubatch 3,072) is the `[reranker]` of gutenberg,
+  wikipedia, wikidata, normattiva and normattiva-nemo; pubmed keeps MedCPT; bge unloaded. Basis: gutenberg MRR@10
+  0.435 → 0.627 (+0.19, p 0.0001, 490 queries), jurifindit 0.608 → 0.677 (+0.07, p 0.002, 175 queries), +0.3–0.7 s
+  per list; wikipedia and wikidata NOT measured (chosen without it). Checks: the same pair scores identically at
+  ctx 4,096 and 3,072 (9.805 / −16.469), size_vram 3,348 → 3,174 MiB; one search per collection, 10 reranked hits
+  each; `hold config apply` refused nothing. No collection has a reranker calibration, so the merge across
+  collections was and stays RRF (05 §5.6); a calibration fitted later must be fitted on nemotron-1b (retrieval
+  checks `cal.rerank_model`). Engine: our separate backend `louise-sycl-f16-llama-cpp-9d17b8a39845` (ddf48f8 + the
+  #24083 port, P10 in [localai-bugs.md](localai-bugs.md)). Backups `<name>.toml.bak-20261111-before-nemotron-rerank`,
+  `louise-rerank-nemotron-1b.yaml.bak-20261111-ctx4096`. LICENCE (Llama 3.2 Community + OpenMDW-1.1): "Built with
+  Llama" on the service — Ask's footer and Help › Basics › Models say it (tests/test_web_pages.py); needs a web
+  deploy.
 - **gutenberg's Qwen3-Embedding-4B trimmed: ubatch = batch 2048, ctx 8192, LIVE since 2026-11-12 06:52Z**
   (München; the operator's 10-23 "trim the context to the needed one" — gutenberg's chunker cuts at 1,000 tokens, its
   space promises 8,191). `size_vram` 5,643 → 4,263 MiB (−1,380). Gate run sha256:7e0a79eabf3fe229…: document 16/16,
