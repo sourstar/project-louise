@@ -49,7 +49,15 @@ No change to `backend.proto`, to the Go core or to any other backend.
   model's own `keep_context_ms`. (Master has no token-id input — that is
   our P2 — so that one check embedded a text instead.) The diff, applied to
   a clean checkout, gives the files that were built.
-- **NOT run:** LocalAI's Go tests and `make build`; the fork backends that
+- **LocalAI's Go tests** (München, 2026-11-11, on the node, in LocalAI's
+  builder stage with Go 1.26.0, master `4b3c4ec`):
+  - `git apply --check`: all six files are clean.
+  - The diff touches no Go code, so those tests cannot exercise it. They
+    are unchanged by it: `pkg/model` ok, and the endpoints suite is 646
+    specs with the same 47 environment failures (NATS and a database) with
+    or without the diff.
+  - The test that counts is the C++ backend run above.
+- **NOT run:** `make build`; the fork backends that
   compile the same `grpc-server.cpp` (turboquant, bonsai) — whether each
   fork has `server_context_meta::pooling_type`, which `Embedding` now
   reads, is their CI's to say; the build against a llama.cpp WITHOUT the
