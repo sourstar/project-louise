@@ -297,18 +297,18 @@ def test_the_dense_bar_shows_the_earlier_version_grey(node):
     target = shelf["stage_targets"]["embed"]
     done = shelf["embed_done"]
     assert (target, done) == (19, 6)
-    # the count says it in plain words; the share stays done / target
-    assert (f"{done} / {target} · 31,6 % · <span data-superseded=\"embed\"") in html
-    assert "4 earlier version (searched until re-embedded)</span>" in html
+    # the numbers alone in sight (operator, 2026-11-11: no text around
+    # them); the earlier versions are the grey segment, counted in its tooltip
+    assert f"{done} / {target} · 31,6 %</span>" in html
+    assert "earlier version (searched until" not in html
     # done in the stage's colour, then the earlier version grey, then empty
     bar = re.search(r'<span style="width:([\d.]+)%;background:var\(--lapis\)"></span>'
-                    r'<span data-superseded-bar="embed" style="width:([\d.]+)%;'
-                    r'background:var\(--superseded\)"></span></div>', html)
+                    r'<span data-superseded-bar="embed" data-superseded="4" title="4 earlier versions: '
+                    r'[^"]*" style="width:([\d.]+)%;background:var\(--superseded\)"></span></div>', html)
     assert bar, "the grey segment follows the done one"
     assert (float(bar.group(1)), float(bar.group(2))) == (round(100 * 6 / 19, 1), round(100 * 4 / 19, 1))
     # the lexical bar: the same, for text that changed
-    assert "4 earlier version (searched until re-indexed)</span>" in html
-    assert 'data-superseded-bar="fts"' in html
+    assert 'data-superseded-bar="fts" data-superseded="4" title="4 earlier versions:' in html
     from pathlib import Path
     css = (Path(web.__file__).parent / "static" / "admin.css").read_text(encoding="utf-8")
     assert css.count("--superseded:") == 4, "a token in every theme, the light one included"

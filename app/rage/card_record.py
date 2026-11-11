@@ -353,3 +353,35 @@ def summarize(rows: Iterable[dict], *, minute: bool = True,
             for plugin, s in g.get("served", {}).items():
                 w.served[plugin] = w.served.get(plugin, 0.0) + s
     return [out[k] for k in sorted(out)]
+
+
+def gpu_time(rows: Iterable[dict], *, card: str | None = None) -> dict[str, list]:
+    """Per collection: `[documents embedded, card-seconds spent on them]`
+    over the seconds the card's figure was recorded — each second's busy
+    share split among the collections a gate served in it, in proportion
+    to their request-seconds in that gate; a second a person's query held
+    the claim gives the corpus none (it stood aside). What the Library's
+    BEST ETA divides by: documents a card-second, so the work left over it
+    is the time at the whole card (operator, 2026-11-11). Busy time the
+    chat or the reranker spent beside an encoder is charged to the
+    encoder's collections, so the speed is, if anything, low."""
+    out: dict[str, list] = {}
+    for row in rows:
+        cards = row.get("cards")
+        if not cards:
+            continue
+        busy = cards.get(card) if card is not None else max(cards.values())
+        if busy is None:
+            continue
+        for name, (d, _c) in (row.get("done") or {}).items():
+            out.setdefault(name, [0, 0.0])[0] += int(d)
+        if row.get("q"):
+            continue
+        for g in (row.get("gates") or {}).values():
+            served = g.get("served") or {}
+            total = sum(served.values())
+            if total <= 0:
+                continue
+            for name, sec in served.items():
+                out.setdefault(name, [0, 0.0])[1] += busy * sec / total
+    return out

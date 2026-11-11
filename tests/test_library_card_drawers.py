@@ -164,7 +164,7 @@ def test_the_prose_is_under_details_and_the_status_in_sight(client):
     card_html = card_html[:card_html.index('data-drawer="options"')]
     details_at = card_html.index('data-drawer="details"')
     in_sight, details = card_html[:details_at], card_html[details_at:]
-    for status in ("parsed (rdf)", "indexed (lexical)", "embedded (dense)", "space: ", "Embed mode",
+    for status in ("parsed", "indexed", "embedded", "space: ", "Embed mode",
                    ">2 blocked</span>"):
         assert status in in_sight, status
     for prose in ("fetch stage: off", "delta freshness:", "on-demand queue:",
