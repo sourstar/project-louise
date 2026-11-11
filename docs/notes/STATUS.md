@@ -27,10 +27,19 @@ measured (published figures disagree).
   sentence); the original's transcript is kept beside it as `reference-orig-27.75s.txt`, next to
   `reference-orig-27.75s.wav`; the old profile.json is at /root/measure/philippe-profile.json.bak-20261111. LocalAI
   reads the file on each list (no reload). Live profile: unchanged, the 7.90 s cut.
-- **Two clips for Philippe (operator, 11-11): open, the operator's call.** The live backend
-  `intel-sycl-f16-omnivoice-cpp` (latest, 2026-10-07) reads one reference (`GetVoice`); the auto-installed
-  `-development` build (master, 2026-11-10) reads `ref_audios`. Nothing changed on the voice.
+- **Four clips for Philippe (operator, 11-11, "1C"; replacing two, then three).** Three clips of 3–10 s cannot
+  cover the 27.75 s original: its pauses fall at 4.2, 12.4 and 19.6 s. Staged, not live, in
+  /root/measure/philippe-4clips/ with their transcripts (clips.json): 0–4.22, 4.22–12.43, 12.43–19.63 and
+  19.63–27.75 s. The live backend `intel-sycl-f16-omnivoice-cpp` (latest, 2026-10-07) reads one reference
+  (`GetVoice`); the `-development` build (master, 2026-11-10) reads `ref_audios`: it is pinned under its own name
+  after the night chain, tested beside the live one (the fixed sentence ×3, it and en; RTF, first sound, card
+  memory); the live switch waits for the operator's word.
+- **The reader chooses the voice** (operator, 11-11: "choose philippe or valentina"): Ask › Settings › voice,
+  the node's recorded voices by name, kept in the browser; none chosen, the node's own; a voice no longer held
+  falls back to the node's (app/voice.py `voices`, app/speech.py `held_profile`). Merged, not deployed (web).
 - **normattiva-nemo embedding at ~30 chunks/s** (7–8 before) with batch 16, concurrency 4, device gpu (2026-11-10).
+
+### 2026-11-09: before the pause until Friday — what was done, measured and left (München's final report)
 
 - **Voice**: Philippe's reference cut to 7.90 s (19.80–27.70 s of the 27.75 s original, kept as
   reference-orig-27.75s.wav), operator's choice; steps unchanged. The fixed sentence ×3: RTF **0.44** (0.74 before,
