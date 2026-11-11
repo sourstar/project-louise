@@ -203,6 +203,28 @@ and cons:
   - (b) keeps the B70's LocalAI untouched. But Louise sends STT to
     CHAT_URL's server (app/voice.py), so it needs a speech server of its
     own: a code change.
+- **One instance is enough** (LocalAI master, read 2026-11-11). A backend
+  runs as its own process with its own `lib/` (`run.sh`).
+  - The Vulkan build bundles the Vulkan loader AND Mesa's drivers (RADV,
+    ANV, lavapipe), with their dependencies
+    (`scripts/build/package-gpu-libs.sh` `package_vulkan_libs`).
+  - So the node's Intel (SYCL) LocalAI can run `vulkan-parakeet-cpp` beside
+    its SYCL backends, without Mesa in its own image.
+  - What (a) takes:
+    1. **the iGPU's render node in the LocalAI app**
+       (`/dev/dri/by-path/pci-0000:13:00.0-render`), if it is not passed
+       already;
+    2. **the device pinned to the Radeon.** The bundle carries ANV, which
+       sees the B70, and lavapipe, which is the CPU. Load only RADV's
+       manifest (`VK_DRIVER_FILES`) in the model's `env`, or name the
+       device (`PARAKEET_DEVICE=Vulkan<N>`, `GGML_VK_VISIBLE_DEVICES`), and
+       read the chosen device in the log;
+    3. **the alias pitfall, first.** Every parakeet build carries the alias
+       `parakeet-cpp`. On this node the meta backend resolves to the
+       `intel` build, and installing a second build can move what the alias
+       names. Before installing `vulkan-parakeet-cpp`, point the live STT
+       model's YAML at its concrete backend (`cpu-parakeet-cpp`), so the
+       live model cannot move to the iGPU unasked.
 - **Checks before either:**
   - **The resident keeper:** app/resident.py budgets the B70 from
     `/system`'s `size_vram`. A model on the iGPU listed by the same LocalAI
