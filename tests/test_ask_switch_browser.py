@@ -1,4 +1,4 @@
-"""The Ask switch on a phone (operator, 2026-11-01: rename "AI summary" to
+"""The Ask switches on a phone (operator, 2026-11-01: rename "AI summary" to
 "Search + AI summary", "make it such it fits the row on the mobile
 interface; do not reduce the font size, use more than one line if you must.
 Both labels on one line would be preferable") — in a real browser, because
@@ -36,7 +36,8 @@ def test_both_choices_share_one_row_inside_the_screen_at_full_size(tmp_path, iso
     assert got["speedTexts"] == ["Quality", "Speed"]
     assert got["speedChecked"] == "quality", "Quality is the default"
     assert all(x["left"] >= 0 and x["right"] <= got["width"] for x in got["speedBoxes"]), "inside the screen"
-    assert got["textTexts"] == ["Quick", "Quality"] and got["textChecked"] == "quality", "Quality, the default"
-    assert all(x["left"] >= 0 and x["right"] <= got["width"] for x in got["textBoxes"]), "inside the screen"
+    # ONE quality-or-speed switch (operator, 2026-11-12: "Quality/Speed, Quick/Quality ... totally confusing")
+    assert got["groups"] == ["what Ask gives", "quality or speed"], got["groups"]
+    assert got["textInputs"] == 0, "no second Quick / Quality switch"
     if width == 360:
         assert b["height"] < 2 * (got["lineHeight"] or 15) + 14, "one line of text each at 360 px"

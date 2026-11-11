@@ -133,6 +133,14 @@ def test_a_llama_model_in_use_is_said_built_with_llama_on_ask_and_help(client):
     assert '["Basics", ["overview", "models",' in help_page, "on the first tab, where Help opens"
 
 
+def test_a_phone_keeps_no_hover_look_on_the_voice_buttons(client):
+    """A phone keeps :hover on the button last tapped: the microphone kept
+    its accent border after speaking, red in the warm themes (operator,
+    2026-11-12: "the button remains red")."""
+    page = client.get("/ask").text
+    assert "@media (hover:none){.voice-btn:not(.rec):not(.on):hover{border-color:var(--line)}}" in page
+
+
 def test_ui_is_rebranded_no_legacy_name_or_link(client):
     r = client.get("/ask")
     # the header names the project, not the container (operator, 2026-10-30)
@@ -218,7 +226,7 @@ def test_one_ask_button_a_switch_and_the_settings_out_of_the_way(client):
     for control in ('id="mode"', 'id="limit"', 'id="rerank-depth"', 'id="all-langs"'):
         assert control in settings, control
     assert 'id="lang"' in form and 'id="lang"' not in settings, "the results' language stays in sight"
-    assert "function go(){return howAsk()==='search'?search():ask()}" in html
+    assert "function go(){return running(()=>howAsk()==='search'?search():ask())}" in html
 
 
 def test_admin_login_takes_the_token_as_copied_with_its_spaces(client):
