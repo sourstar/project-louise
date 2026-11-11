@@ -434,11 +434,11 @@ def test_the_gate_report_says_the_count(tmp_path, monkeypatch, capsys):
     from app import encoder_use, louise
     model = OnDemand()
     codex, run = _gate(model)
-    body = emb.statement(run, codex, a_key(), now="2026-11-11T09:00:00Z")["body"]
+    now = {"run": run, "body": emb.statement(run, codex, a_key(), now="2026-11-11T09:00:00Z")["body"]}
 
     def validate(root, name, codex_, recipe, *, role, on_run):
-        on_run(run)
-        return body
+        on_run(now["run"])
+        return now["body"]
     monkeypatch.setattr(run_check, "reference", lambda *a, **k: None)
     monkeypatch.setattr(run_check, "validate", validate)
     monkeypatch.setattr(louise, "_recipe_for", lambda c, n: SimpleNamespace())
@@ -449,10 +449,10 @@ def test_the_gate_report_says_the_count(tmp_path, monkeypatch, capsys):
     out = capsys.readouterr().out
     assert "  contexts    300 fresh, each counted as created by the engine; closest 1.0000000" in out
 
-    run_plain = emb.run_gate(codex, reference=reference(), embed=lambda t: reference(), seed=b"\x09" * 32,
-                             stated=_vega_run(codex), embed_one=model.one, contribute=model.one,
-                             reload=model.reload)
-    run = run_plain
+    plain = emb.run_gate(codex, reference=reference(), embed=lambda t: reference(), seed=b"\x09" * 32,
+                         stated=_vega_run(codex), embed_one=model.one, contribute=model.one,
+                         reload=model.reload)
+    now.update(run=plain, body=emb.statement(plain, codex, a_key(), now="2026-11-11T09:00:00Z")["body"])
     louise._embedder_check_runs(a, "c", codex)
     assert "  contexts    none asked: the run does not create its context per request" in capsys.readouterr().out
 
@@ -516,3 +516,27 @@ def test_an_on_demand_run_gated_before_the_count_was_signed_is_gated_again(monke
     _, new = _on_demand_body(6, 300)
     monkeypatch.setattr(hold_runs, "statements", lambda *a, **k: {run_id: new})
     hold_runs.check(tmp_path, "c", codex, {run_id}, signer=None)
+
+
+
+def test_the_report_reads_a_stub_pass_without_the_count(tmp_path, monkeypatch, capsys):
+    """München's deploy, 2026-11-11: two CLI tests hand the report a
+    SimpleNamespace pass with no `contexts` — the report says none, never
+    an AttributeError."""
+    import contextlib
+    from types import SimpleNamespace
+    from app import encoder_use, louise
+    codex, run = _gate(OnDemand())
+    body = {k: v for k, v in emb.statement(run, codex, a_key(), now="2026-11-11T09:00:00Z")["body"].items()
+            if k not in emb.CONTEXTS_KEYS}
+
+    def validate(root, name, codex_, recipe, *, role, on_run):
+        on_run(SimpleNamespace(all_cosines=(1.0, 0.999)))
+        return body
+    monkeypatch.setattr(run_check, "reference", lambda *a, **k: None)
+    monkeypatch.setattr(run_check, "validate", validate)
+    monkeypatch.setattr(louise, "_recipe_for", lambda c, n: SimpleNamespace())
+    monkeypatch.setattr(louise, "_as_candidate", lambda r, a: r)
+    monkeypatch.setattr(encoder_use, "held", lambda *a, **k: contextlib.nullcontext())
+    louise._embedder_check_runs(SimpleNamespace(root=tmp_path, query_model=None, model=None), "c", codex)
+    assert "  contexts    none asked" in capsys.readouterr().out
