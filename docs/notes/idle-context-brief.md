@@ -311,3 +311,162 @@ probable or open.
 - Questions to the operator: one shape (what it is; choices with pros and
   cons, the status quo included; the recommendation and what happens if
   they say nothing).
+
+## 8. Review, 2026-11-11 — the code read at the pins, and what it changes
+
+*A session without the node: nothing measured, nothing run on a card. Read:
+llama.cpp `ddf48f8` and LocalAI `16acc89` (the pins), app/resident.py,
+app/model_load.py, and upstream's issues and PRs (searched this day). Each
+line names where it was read; "to measure" marks what reading cannot settle.*
+
+**Verdict: sound, and worth the dedicated session — with the plan reordered
+and four additions.** The mechanism is small (upstream's sleeping state with
+the model kept), the largest feared unknown is answered by the code (R1), and
+no upstream issue or PR proposes a weights-kept sleep (not a duplicate). The
+gain on OUR node is smaller than §0's headline reads (R6), and the real work
+is elsewhere than the brief puts it (R3, R4, R5).
+
+### Step 2's three questions, answered
+
+- **R1. Who owns the ggml-sycl pools? The backend instance — and a
+  `llama_context` creates and frees its own.** `llama_context`'s constructor
+  calls `ggml_backend_dev_init` per device (src/llama-context.cpp:432) and
+  holds the results in `std::vector<ggml_backend_ptr> backends`
+  (src/llama-context.h:396); the pools are members of that backend's
+  `ggml_backend_sycl_context` (`pools[]`, `host_pools[]`,
+  ggml-sycl/common.hpp:546–548, created on first use, :557);
+  `ggml_backend_sycl_free` deletes it (ggml-sycl.cpp:6521), and the pool
+  destructors give everything back: the VMM pool unmaps every commit and
+  frees its virtual range (:2102–2116), the legacy pool frees its cached
+  buffers (:1952–1977). The oneDNN engine and stream maps are members too.
+  So O2's fear — an owner that outlives the context — does not hold at our
+  pin: freeing the context destroys the op pool with it.
+- **R2. KV and compute buffers go straight to Level Zero.** Where the build
+  has `GGML_SYCL_SUPPORT_LEVEL_ZERO_API` and `GGML_SYCL_USE_LEVEL_ZERO_API`
+  is not 0 (default 1, ggml-sycl.cpp:460), `ggml_sycl_malloc_device` /
+  `ggml_sycl_free_device` are `zeMemAllocDevice` / `zeMemFree`
+  (ggml-sycl/common.cpp:97–148): no SYCL USM pool sits between. What stays
+  TO MEASURE is only the driver's side — whether compute-runtime and `xe`
+  hand the pages back at the free or keep them for reuse — and what stays in
+  the process whatever is freed (the queue, the JIT-compiled kernels, the
+  ~270 MiB floor: `dpct::dev_mgr` is a process singleton,
+  dpct/helper.hpp:995, so a wake should not compile again — to measure).
+- **R3. LocalAI's backend reaches the idle timer today, and cannot survive
+  it.** Any model option beginning with `-` is passed to llama-server's own
+  parser (grpc-server.cpp:1302, `common_params_parse(…, LLAMA_EXAMPLE_SERVER)`
+  :1505), and `ctx_server.start_loop()` (:266) starts the queue with
+  `params_base.sleep_idle_seconds` (server-context.cpp:5203–5206): so
+  `--sleep-idle-seconds` already arms the timer. But the wake is not wired:
+  `wait_until_no_sleep()` is called only by upstream's HTTP layer
+  (`server_res_generator`, server-context.cpp:5274–5280), and LocalAI's RPCs
+  post through `get_response_reader()` (grpc-server.cpp:1647, 2604, 3205 …)
+  without it — a task posted to a sleeping queue is never processed
+  (server-queue.cpp:335–338 waits on `req_stop_sleeping` alone) — and they
+  read `ctx_server.get_llama_context()`, null while asleep
+  (server-context.h:79), at grpc-server.cpp:2593, 3196, 3750, 3832, 4570,
+  4581, 4749. **The LocalAI half of P11 is therefore the wake call at the
+  head of every RPC and an audit of those seven reads, not a YAML option
+  alone**; `impl->vocab` and the chat templates stay valid with the model
+  kept, which is an advantage of this level over upstream's.
+
+### What the brief does not have
+
+- **R4. A wake that cannot get its memory back is the NORMAL case of a
+  shared pool, and upstream aborts on it**: `handle_sleeping_state(false)` →
+  `GGML_ABORT("failed to reload model after sleeping")`
+  (server-context.cpp:1161–1164). Prism and kvcached have a controller per
+  card; here every process frees and takes alone, so two wakes can claim the
+  same room. On the B70 the allocation does not fail — `xe` moves buffers to
+  host RAM (M16) and the reclaimer evicts at 0.95 — elsewhere (CUDA) it
+  fails. The design needs the rule written: a failed wake leaves the server
+  asleep and REFUSES the request (503, retried), never aborts; for Louise
+  that is a deferral, not an error (CLAUDE.md, "Deferral is not failure").
+- **R5. app/resident.py reads a sleeping model as "partly off the card".**
+  `REST_FLOOR = 0.5` (app/resident.py:261, app/model_load.py:159): a
+  `size_vram` under half the largest seen is no at-rest reading (`_whole`,
+  :718). qwen3-4b asleep holds ≈ 2.4 GB (4,263 − 1,882) against a largest of
+  5,643 on file under the same name (0.42; 0.56 if the file was reset at the
+  trim): discarded or accepted by an accident of ratio, per model. Accepted,
+  the budget admits more preloads and the contexts' return is "growth" the
+  margin learns only after it has peaked — M14 again; discarded, the saving
+  is free card memory the budget does not spend. The second is the right
+  FIRST deployment (the release is headroom, not budget), and it must be a
+  rule, not a ratio: the keeper reads the sleep option from `/system` (P1
+  lists load options) and counts an opted-in model at its AWAKE at-rest size.
+- **R6. §0's "≈ 10 GB held, 3.3 GB working" is the figure for N = 0.** With
+  an idle timer the held set is every context used in the last N seconds.
+  By shared-context.md §2 nemotron runs 55.5 % of seconds and medcpt 22.6 %:
+  at N = 600 both are probably awake most of the day, and the certain saving
+  is qwen3-4b's 1.9 GB (31 s of work in 24 h), nemotron's 2.2 GB in part.
+  **The card record already answers it, with no card time**
+  (app/rage/card_record.py, per second): for N = 30, 60, 300, 600 s, the
+  GB·hours each encoder would have given back over the same 24 h, and the
+  wakes per day. That row belongs in §1 BEFORE the B70 measurement: it picks
+  N and the models, and says whether the feature pays here at all.
+  Also on the B70 the driver already moves what does not fit to host RAM
+  (34 GB resident on 32.6), so the first ~1.4 GB released only ends that
+  spill: the gain is choosing WHAT leaves the card — an idle context,
+  re-created in (to measure) milliseconds — instead of the driver's choice,
+  which can be a query model's weights (upstream #25646, open: idle weights
+  evicted from an Intel dGPU, the perf drop reported).
+- **R7. Ten cycles cannot gate a per-wake fault.** After P11 every wake is a
+  "first pass after a load" — the class of M5 (1 of 20 scores, first pass
+  only) and of M2 before its remedy (4 of 8 runs) — hundreds a day instead
+  of once per process, and no check at write time sets a vector against a
+  second computation of it. A fault at
+  rate p per wake is caught by n clean cycles with probability 1 − (1 − p)ⁿ:
+  n = 10 catches p = 5 % four times in ten; 95 % confidence needs 59 cycles
+  for 5 %, 299 for 1 %. So: ≥ 300 cycles per encoder, the comparison on the
+  FIRST answer after each wake, short and long probes (`LONG_PROBE`) both.
+  A cycle is seconds; the gate stays minutes.
+- **R8. The acceptance's denominator.** "≥ 90 % of the context's bytes" must
+  count KV + compute buffers + op pool as the BACKEND counts them, not
+  `size_vram` − the weights file (which holds whatever the process keeps:
+  upstream #25271, open, measured 158 MB left on CUDA after a FULL sleep).
+  The instrument half-exists: `GGML_SYCL_MEMTRACE=1` (ggml-sycl.cpp:440,
+  memtrace.cpp) logs every allocation and free by kind — buffers, pool_leg,
+  pool_vmm — and the device's total / free / allocated / other. Set it in
+  the test copy's env and put its lines beside the driver's count; the
+  diagnostic program is then only the create/free loop.
+- **R9. The wake must not re-fit.** LocalAI sets `fit_params = true`
+  (grpc-server.cpp:592) and `common_init_result`'s constructor runs
+  `common_fit_apply` before every load (common/common.cpp:1307–1312).
+  Upstream #30528 (closed unmerged, 2026-10-14) records that fit and sleep
+  already disagree on wake. With the weights kept there is nothing to fit:
+  the woken context is created from the cparams the FIRST load resolved,
+  and the test says so (same n_ctx, n_batch, n_ubatch before and after).
+- **R10. Upstream is moving under the same lines.** #30012 (open): the
+  sleep race — a handler tokenises, the loop sleeps, the task is stranded or
+  the unload segfaults — unfixed at `ddf48f8`; P11 edits the same functions
+  and must carry that fix or its own guard, and its test. Direction on
+  record is toward freeing MORE (#27307 exit sleeping workers, closed;
+  #25271 device reset, open; #25570 open), so the proposal should lead with
+  the wake time against a full reload, per backend.
+- **R11. Scope of "every model kind".** `destroy()` also frees the draft /
+  MTP context, the multimodal context and the TTS contexts
+  (server-context.cpp:1135–1149; slots hold `mctx`, `tts.ctx`, :1523–1534).
+  The first PR should define the context level for text models and refuse
+  (or fully sleep) a server with a draft model or an mmproj, saying so in
+  `--help`; and it cannot depend on P3/P4 (encoder-decoder is ours).
+- **R12. The names.** vLLM's level 1 moves the weights to CPU RAM and frees
+  the card whole; this level keeps the weights ON the card. It is a third
+  thing, lighter than both of vLLM's: name it by what it frees
+  (`--sleep-level context|model`, as §0 proposes) and do not number it —
+  §1's "level-1 sleep" reads as vLLM's and is not.
+
+### The plan, amended
+
+| step | as written (§6) | amended |
+|---|---|---|
+| before 3 | — | **R6: the card record at N = 30…600 s** — GB·h released and wakes per day, per encoder. No card, no build. Stop here if only qwen3-4b ever sleeps and 1.9 GB is not worth an engine change. |
+| 2 | read the code, answer three questions | done (R1–R3); left to read: nothing |
+| 3 | measure memory back, create/free time | the same, with `GGML_SYCL_MEMTRACE=1` (R8), the driver's count split `vram0` / host, and whether the wake recompiles kernels (R2) |
+| 4 | the patch | + the failed-wake rule (R4), no re-fit (R9), #30012's guard (R10), the scope (R11); LocalAI: the wake call in every RPC and the seven null reads (R3) |
+| 5 | 10 cycles | ≥ 300 cycles, first answer after each wake (R7) |
+| before 6 | "check that the margin carries it" | app/resident.py counts an opted-in model awake (R5), with its test — a Louise change, shipped with the deploy |
+
+| | pros | cons |
+|---|---|---|
+| status quo | nothing to build or re-gate; the driver's spill works today | the driver chooses what leaves the card; ~1.4 GB lives in host RAM; every new model is fitted against contexts that work 31 s a day |
+| as briefed | the card's memory follows the work; a general feature upstream lacks | LocalAI's RPCs hang or crash on the first sleep (R3); a wake under contention is undefined (R4); the keeper misreads the sizes (R5); the gate is too short (R7) |
+| amended (recommended) | the same gain, known in GB·h before any build; the three ways it fails here are closed first | more work in LocalAI's server and one Louise change; a longer gate; still one re-gate of every space on the engine |
