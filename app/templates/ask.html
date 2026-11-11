@@ -228,7 +228,12 @@
   .tr.translating,#answer.translating{border-left:2px solid var(--lapis,#3a6ea5);padding-left:4px}
   a.cite{cursor:pointer;text-decoration:underline dotted}
   @media (max-width:900px){ #reader{width:100vw} }
+  .attribution{margin:18px 0 6px;font-size:12px;text-align:center}
 </style>
+{# A LICENCE'S ATTRIBUTION (2026-11-12): the reranker of most collections is
+   built on Llama 3.2, whose licence asks for "Built with Llama" on the
+   service's interface; the terms are on Help, "Models and their terms" #}
+<p class="note attribution">Built with Llama · <a href="/help#models">models and their terms</a></p>
 {% endblock %}
 {% block scripts %}
 <script>
