@@ -419,9 +419,10 @@ class Keeps:
         now = self._clock()
         out: list[str] = []
         with self._lock:
-            md = self._models.get((server, model))
-            if md is None:
-                return out
+            # a model this process sent nothing to has no keep to judge, and
+            # still a canary's record: a person's query goes from the web
+            # process, and what its context did is in the engine's count
+            md = self._models.setdefault((server, model), _Model())
             last, md.read = md.read, (calls, created, created_ms, md.keyed, md.expected,
                                       canary_failed)
             fresh = last is None or calls < last[0] or created < last[1] or canary_failed < last[5]
@@ -594,6 +595,17 @@ def warm_body() -> dict[str, dict[str, str]]:
     before it is loaded nobody can know its options: a model loaded with
     `context_on_demand` then frees the warm's context at once instead of
     holding it until its first real request, and any other ignores the key."""
+    return {"metadata": {FIELD: "0"}}
+
+
+def one_shot_body() -> dict[str, dict[str, str]]:
+    """What a ONE-SHOT request's body gains: a keep of 0 — its context is not
+    wanted after its answer. Chat (operator, 2026-11-11: "Wire chat to
+    release the context after use: we already know that it is a one shot
+    operation"): a question is answered by one request, and the next
+    question comes when a person has read the answer. A model loaded with
+    `context_on_demand` gives its context back at once; any other ignores
+    the key, as with `warm_body`. No stream, no trim: nothing to learn."""
     return {"metadata": {FIELD: "0"}}
 
 

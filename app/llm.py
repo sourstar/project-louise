@@ -13,6 +13,16 @@ TWO PROTOCOLS, ONE CLIENT (`config.CHAT_API`):
   `/upstream/<model>` the URL has already chosen it.
 
 Every request carries `Louise-Level` (docs/09-formats.md §9.12).
+
+A CHAT REQUEST GIVES ITS CONTEXT BACK (operator, 2026-11-11: "Wire chat to
+release the context after use: we already know that it is a one shot
+operation"; docs/notes/idle-context-brief.md §10). To LocalAI every request
+of this client — an answer, a round with tools, a warm — carries a keep of 0
+in its `metadata` (app/rage/keep.py `one_shot_body`): a chat model loaded
+with `context_on_demand` frees its context when the answer is complete and
+keeps its weights; one loaded without the option ignores the key. Only to
+LocalAI (`model_load.speaks_localai`): Ollama has its own `keep_alive`, and
+another OpenAI-style service is sent nothing it did not ask for.
 """
 import json
 import re
@@ -21,6 +31,7 @@ from dataclasses import dataclass
 import httpx
 from . import config, model_load
 from .rage import dispatch
+from .rage import keep as rage_keep
 from .rage.dispatch import Level
 
 _THINK = re.compile(r"<think>.*?</think>\s*", re.S)
@@ -54,6 +65,8 @@ def _request(messages: list[dict], *, stream: bool, temperature: float | None,
         if max_tokens is not None:
             body["max_tokens"] = max_tokens
         body.update(sampling or {})
+        if model_load.speaks_localai(model_load.server_of(config.CHAT_URL)):
+            body.update(rage_keep.one_shot_body())      # the module's docstring
         return f"{config.CHAT_URL}/v1/chat/completions", body
     options: dict = {"num_ctx": num_ctx}
     if temperature is not None:
@@ -75,10 +88,11 @@ def warm(level: Level = Level.CHAT) -> None:
     raises `model_load.LoadTimeout`, which says so."""
     if config.CHAT_API != "openai" or not config.CHAT_URL or not config.CHAT_MODEL:
         return
-    url, body = _request([{"role": "user", "content": "OK"}], stream=False,
-                         temperature=0.0, max_tokens=1, num_ctx=0)
-
     def send(bound_s: float):
+        # built here, once `ensure_loaded` has asked the runner what it is: a
+        # warm to LocalAI carries its keep of 0 like every request
+        url, body = _request([{"role": "user", "content": "OK"}], stream=False,
+                             temperature=0.0, max_tokens=1, num_ctx=0)
         with dispatch.interactive(level):
             return httpx.post(url, json=body, timeout=bound_s, headers=dispatch.level_headers())
 

@@ -111,6 +111,10 @@ options `context_on_demand:true`, `keep_context_ms:N`.
 - "Add the canary; it must be possible to disable it once we have the
   confidence that the architecture is sound" (2026-11-11, in the author's
   session, on §10's table of the two choices). §1.4, §10 "The canary".
+- "Wire the canary failure to the gate before deployment. Wire chat to
+  release the context after use: we already know that is is a one shot
+  operation. Reranker, propose a solution" (2026-11-11, the same session).
+  §10 "The canary" (what sends a run back), "Chat", "The reranker".
 - "If there is a query in the meantime, the chat model gets a context
   memory; if there is not enough memory there are still options (in this
   order): the contexts of the batch in queue can be pruned, or some other
@@ -770,6 +774,9 @@ and no engine changed.*
 | 3b. the VeGa wrapper: its probes say a keep of 0; its count of calls against the keep | written — a wrapper change is an engine change (§4): it ships only with one | `deploy/vega/vega_wrapper.py` (`_probe_request`, `KeepCount`, `created_us`), `app/vega/service.py` (`kind: keeps`, `GET /vega/keeps`, beside `passes`; not a docs/09 format) | `tests/vega/test_wrapper_logic.py`, `test_service.py`, `test_wrapper_grpc.py` (real gRPC, the fake backend speaking the trailer) |
 | 3c. the gate reads the count — what admits an on-demand engine at all | written | `app/run_check.py` (`creations_of`: `(calls, created)` of the run that answers, made current before the first round), `app/hold/embedder.py` (`_round_counts`: a round of N requests is N calls AND N creations, else deferred) | `tests/hold/test_fresh_contexts.py`; `tests/vega/test_wrapper_grpc.py` (`creations_of` through the real wrapper and receipts service) |
 | 3d. the canary per context (§1.4; operator 2026-11-11: "Add the canary; it must be possible to disable it…") | written (staged with P11; the wrapper's part an engine change) | llama.cpp half: `common_init_result::canary_record` / `canary_check`, `server_context` (`context_acquire`), `--no-context-canary`, `/metrics` `context_canary`, `context_canary_failures_total`; LocalAI half: the model option `context_canary`, the trailing metadata `llama-context-canary: failed` beside the error; `deploy/vega/vega_wrapper.py` (`canary_refused`, `KeepCount.canary_failed`), `app/vega/service.py` (`canary_failed` in `kind: keeps`), `app/rage/keep.py` (the record per model), `app/worker.py` (a failure logged as an error) | CPU: llama.cpp's 20 tests; `grpc-server` over gRPC, 30 checks; `tests/vega` (the fake backend failing its canary over real gRPC), `tests/test_rage_keep.py`, `tests/test_context_on_demand.py` (the refusal is a deferral). NOT measured: its cost on the card |
+| 3e. a canary failure sends the run back to the gate (operator 2026-11-11: "Wire the canary failure to the gate before deployment") | written | `app/embeddings.py` (`EndpointCanaryFailed`), `app/run_check.py` (`canary_failed`, `_suspect`, `_send_back`: no write under the kept statement, which is set aside, and the run gated from scratch), `app/hold/runs.py` (`record_canary`: the run's history, kept), `app/worker.py` (the beat, for a failure nobody here was refused) | `tests/test_run_check.py` (the request; a repeat across restarts; a gate that then fails; a gate that could not finish; the query side; the beat) |
+| chat's keep (operator 2026-11-11: "Wire chat to release the context after use") | written | `app/llm.py` (`_request`: every chat request to LocalAI carries a keep of 0, the warm too), `app/rage/keep.py` (`one_shot_body`) | `tests/test_louise_level.py`; `grpc-server` over gRPC: a generation model without the option answers the same with the key, nothing freed |
+| the reranker | PROPOSED, nothing built (below) | — | — |
 | 4e. RAGE reads the engine's count back (the keep's dating) | written | `app/rage/keep.py` (`Keeps.observe`: the measured creation time; a per-model floor under every stream's keep when the engine created contexts RAGE's clock did not expect), `app/run_check.py` (`engine_counts`: the count of the run each model's answers last named), `app/worker.py` (`_read_engine_counts`: the beat, every 30 s, one bounded read of VeGa) | `tests/test_rage_keep.py` (the node's 8-in-13 pattern raised 20 → 40 → 80 and held; the floor is the model's and does not decay; expected creations, another process's, a new load), `tests/test_run_check.py` |
 | §2's measurements, steps 3–4 | MADE 2026-11-12 (München, test copies, node paused) — §10.1 | the node | byte-equal over 300 keep-0 creations, each of three encoders |
 
@@ -903,10 +910,28 @@ and no engine changed.*
     canary (a kept context is not checked again). So it lowers the chance
     that a bad context writes and makes a bad engine loud; the gate's
     counted 300, on the sixteen fingerprints and the longest texts, remain
-    what admits a run. A canary failure does not yet send the run back to
-    the gate by itself — the worker's error line is the signal, and wiring
-    it to `run_check` (forget the run's statement, gate again) is the step
-    to take the first time one is seen.
+    what admits a run.
+  - *A FAILURE SENDS THE RUN BACK TO THE GATE* (operator, 2026-11-11: "Wire
+    the canary failure to the gate before deployment"). The discarded
+    context wrote nothing; but the failure is the engine's own word that it
+    does not reproduce itself on a new context, which is what a run fails
+    for (invariant 12). So from the moment it is seen — by the request that
+    was refused (`embeddings.EndpointCanaryFailed`), or for anybody else's
+    request by the worker's beat from the engine's count — the run is
+    SUSPECT: `check_write` defers every write under its kept statement, a
+    cached verdict is not used, and the stage's next look sets the statement
+    aside (`runs.set_aside`, as a failed re-check does; kept as evidence)
+    and runs the WHOLE gate against the run, its 300 counted fresh contexts
+    among the rest. It contributes again only if it passes; if it fails, the
+    failure is its statement and the collection's embedding pauses with the
+    reason. The query side of an asymmetric space is sent back by its own
+    failures. THE RUN'S HISTORY IS KEPT (`state/gate-canary.json`, local,
+    beside `gate-batching.json`; the coordinator's review): a pass does not
+    erase it — the verdict reads "… validated for this space — gated again
+    after N canary failure(s) of this run, the last <time>" — and a second
+    failure of the same run is logged as A REPEAT with the earlier times.
+    The web process gates nothing: it finds no statement once the worker has
+    set it aside, and withholds the vector leg until the new one is kept.
   - *After `POST /lora-adapters`* the next context records the canary again
     (the adapters changed what a context gives); not our case, upstream's.
 
@@ -1017,6 +1042,47 @@ the node paused for each run. **All three encoders gave the SAME BYTES over
   arrival, and the request also waits for the free in progress, ~16 ms
   (the loop's thread is the one that frees).
 
+**Chat — one shot** (operator, 2026-11-11: "Wire chat to release the context
+after use: we already know that is is a one shot operation"). Every request
+of the chat client (`app/llm.py` `_request`: an answer, a streamed answer, a
+round with tools, the warm) carries `metadata.keep_context_ms = "0"` to
+LocalAI, whose chat route hands a request's `metadata` to the backend
+(`core/http/middleware/request.go`, `core/backend/options.go`, at 16acc89).
+A chat model loaded with `context_on_demand` then frees its context when
+the answer is complete; one loaded without it ignores the key (checked on
+the rebuilt `grpc-server`: the same completion with and without the key,
+nothing freed, nothing created). Only to LocalAI (`model_load.
+speaks_localai`): Ollama has its own `keep_alive`, and another OpenAI-style
+service is sent nothing it did not ask for. No stream and no trim: there is
+nothing to learn from one request a question. What it costs where requests
+DO follow each other — the summariser's map and reduce, `ask chat`'s rounds
+with tools — is a creation per request and the prompt evaluated again from
+its first token (the cached prompt goes with the context): to measure on
+the chat model before it is loaded on demand, and the reason `one_shot_body`
+is a function of its own.
+
+**The reranker — PROPOSED, nothing built** (operator, 2026-11-11: "Reranker,
+propose a solution"). The facts: LocalAI's `RerankRequest` carries no
+metadata, in its HTTP form (`{model, query, documents, top_n}`) or its
+gRPC one, so a rerank cannot say its keep; a question reranks each
+collection's list on its own, in parallel (05 §5.6), so several requests
+reach one reranker within the same moment — a keep must bridge THEM, and 0
+would create a context between two of them; the Nemotron reranker runs on a
+backend of its own (`staged/nemotron-rerank.series`, P10), which does not
+carry P11; and it is on a person's path, where a creation (~23–55 ms
+measured for the encoders) is latency.
+
+| | pros | cons |
+|---|---|---|
+| **as it is: the reranker keeps its context** (what happens if nothing is decided) | nothing to build or gate; no creation ever on a search's path | its context's share of the card stays held around the clock |
+| **A. the model's own keep — proposed**: load the reranker with `context_on_demand`, `context_canary:true` and `keep_context_ms:500` in its YAML: every request that carries no keep gets the model's (P11 has the option) | no code, no LocalAI change; one line a model, in the run's stated options; 500 ms bridges one question's requests (it bridged every pattern measured on the node) and the context is back half a second after a search | the reranker's backend must be built from one series with P10 AND P11 (applied together, never built together) and the reranker seen to keep working on it; the first rerank after a quiet moment pays a creation on a person's path; one value per model, fixed — nobody trims it |
+| **B. `metadata` on the rerank request**, in LocalAI (HTTP schema, `backend.proto`, the backends) | the standard route: a rerank says its keep like every other request, and RAGE could set it; right to propose upstream with P11 | a change to LocalAI's CORE and proto — the node runs upstream's core today, so it means running our own until upstream takes it; every backend sees the proto change; far more than the case needs |
+
+Recommended: A, on a test copy first — the creation and the canary measured
+for the reranker on the card, and a search's rerank time with and without
+it — and B written into the upstream proposal of P11. Until decided, the
+reranker stays as it is.
+
 **What the code settled, beyond the brief:**
 
 - **H4 was larger than seven reads.** `server_context::get_meta()` itself
@@ -1081,10 +1147,11 @@ the node paused for each run. **All three encoders gave the SAME BYTES over
   carries 0 (`keep.warm_body`), so that a model preloaded and not yet asked
   — qwen3-4b works 31 s a day — does not hold its context from its load to
   its first request. Translation's segments (MADLAD on llama.cpp, in the
-  first deployment) carry their stream's keep too, and its warm 0. Not yet
-  keyed: rerank (it cannot be: no metadata map) and chat. An on-demand
-  model they use takes its keep from its YAML's `keep_context_ms:N`, or
-  keeps its context. The VeGa wrapper's own probes at a load carry a keep
+  first deployment) carry their stream's keep too, and its warm 0. CHAT
+  carries a keep of 0 on every request to LocalAI ("Chat", below). Not
+  keyed: rerank (it cannot be: no metadata map — "The reranker", below),
+  which takes its keep from its YAML's `keep_context_ms:N` or keeps its
+  context. The VeGa wrapper's own probes at a load carry a keep
   of 0 where the load declares the option (3b; they carried none before,
   and the load then held its context until Louise's first request).
 - **The reranker's own backend is not touched, and the two patches live

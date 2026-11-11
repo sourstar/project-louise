@@ -357,6 +357,23 @@ class EndpointMisconfigured(EndpointDeferred):
     says why."""
 
 
+#: how the engine words the refusal of a request whose newly created context
+#: did not reproduce its canary (the staged P11, docs/notes/idle-context-brief.md
+#: §10 "The canary"), as it arrives through LocalAI: `rpc error: code =
+#: Internal desc = context canary failed: …`
+CANARY_FAILED = "context canary failed"
+
+
+class EndpointCanaryFailed(EndpointBusy):
+    """The engine created a context for this request, the context did not
+    give the output the load's context gave for the same input, and it was
+    discarded. For the request, a busy endpoint: deferred, asked again, no
+    document at fault. For the RUN, the engine's own word that it does not
+    reproduce itself on a new context (invariant 12): it goes back to the
+    gate before anything more is written by it (run_check.canary_failed;
+    operator, 2026-11-11: "Wire the canary failure to the gate")."""
+
+
 class InputRefused(RuntimeError):
     """400, 413, 422 for ONE input, after the batch was split down to it and
     an over-long one cut to the floor: the input's own fault, recorded on its
@@ -379,6 +396,15 @@ def _endpoint_error(recipe: "collections_mod.EmbedRecipe", response) -> Endpoint
             f"{body[at:at + 400].strip()} — the model platform behind {recipe.url} refuses "
             f"to state a run for this model; nothing is written, and waiting does not change "
             f"it: the model's tree or YAML must (CLAUDE.md invariant 12)", status)
+    if status >= 500 and CANARY_FAILED in body:
+        from . import run_check                  # it imports this module
+        run_check.canary_failed(recipe.url, recipe.model)
+        at = body.index(CANARY_FAILED)
+        return EndpointCanaryFailed(
+            f"embed server HTTP {status}: {body[at:at + 200].strip()} — the engine behind "
+            f"{recipe.url} discarded a context that did not reproduce its canary; the batch "
+            f"is deferred, its documents untouched, and the run is gated again before "
+            f"anything more is written by it", status)
     if status in BUSY_STATUS or status >= 500:
         return EndpointBusy(
             f"embed server HTTP {status}: {detail} — the endpoint {recipe.url} is "

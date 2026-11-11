@@ -1260,9 +1260,11 @@ presets the tests name were pointed at them):
   after the patch (nine suites, 131 tests: the same 83 passes and the same 46
   failures — the failures are the stand-in models' content, on both).
 - LocalAI's `grpc-server` built from the tree the candidate series produces
-  and driven over gRPC as LocalAI drives it, 30 of 30 (18 at first; 5 on the
+  and driven over gRPC as LocalAI drives it, 32 of 32 (18 at first; 5 on the
   trailer, first recorded here as six and the total as 25 — miscounted; 7 on
-  the canary). The trailer: the microseconds of a creation, `-1` inside
+  the canary; 2 on a generation request's keep of 0 — a model WITHOUT the
+  option answers the same with the key and frees nothing, one with it gives
+  its context back at once: what chat sends, app/llm.py). The trailer: the microseconds of a creation, `-1` inside
   another's keep and after a request without one, twenty requests with a
   keep of 0 saying nineteen creations (the first rode the held context) as
   the backend's log counts them, nothing without the option. The canary:

@@ -218,8 +218,21 @@ measured (published figures disagree).
   ERROR. Staged P11 regenerated (llama.cpp + LocalAI); wrapper, VeGa's service, `app/rage/keep.py`, `app/worker.py`.
   CPU: llama.cpp 20 tests, the nine existing suites as the untouched baseline (83 pass, the same 46 fail), `grpc-server`
   over gRPC 30 checks, `git am` of the patch = the tested tree. NOT measured: the canary's cost on the card (one pass
-  of at most 64 tokens per creation, inside `created_ms`). A canary failure does not yet send the run back to the gate
-  by itself. Nothing deployed; the node's build from #533 is superseded by this one. Brief §10 "The canary".
+  of at most 64 tokens per creation, inside `created_ms`). (A canary failure did not yet send the run back to the gate
+  then; it does, below.) Nothing deployed; the node's build from #533 is superseded by this one. Brief §10 "The canary".
+- **Context on request — a canary failure goes to the gate; chat is one shot; the reranker proposed** (operator, 11-11:
+  "Wire the canary failure to the gate before deployment. Wire chat to release the context after use: we already know
+  that is is a one shot operation. Reranker, propose a solution"). (1) A context that did not reproduce its canary
+  makes its RUN suspect, from the refused request at once and from the beat for anybody else's (the engine's count):
+  no write under its kept statement (`check_write` defers), the statement set aside (`runs.set_aside`) and the whole
+  gate run against the run from scratch; it contributes again only if it passes. Its history is kept
+  (`state/gate-canary.json`): a pass does not erase it — the verdict says "gated again after N canary failure(s)" —
+  and a second failure of the same run is logged as A REPEAT. (2) Every chat request to LocalAI carries a keep of 0
+  (`llm._request`, `keep.one_shot_body`; the warm too; another runner's body is unchanged): a chat model loaded on
+  demand frees its context when the answer is complete, one loaded without the option answers the same (`grpc-server`
+  over gRPC, 32 checks now). (3) The reranker: LocalAI's rerank request carries no metadata; PROPOSED — the model's own
+  keep in its YAML (`keep_context_ms:500`), which needs its backend built with P10 and P11 together — nothing built.
+  Louise-side only: no engine, wrapper or service change. Brief §10.
 - **Inputs computed in more than one pass, counted** (operator, 11-12: "for future trimming improvements we
   should gracefully log when a text is splitted"): the VeGa wrapper counts every answer's tokens against the
   load's ubatch and tells VeGa (`kind: passes`); VeGa logs when the inputs over it grow and serves every run's
