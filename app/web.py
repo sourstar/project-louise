@@ -2322,6 +2322,7 @@ def _collection_shelf(collection: collections_mod.Collection,
     #: copy of the arithmetic — which is how the two came to disagree.
     stage_targets: dict[str, int] = {k: 0 for k in _RATE_FIELDS}
     remaining: dict[str, int] = {}
+    workable: dict[str, int] = {}
     embed_mode = db.get_scope(con)["embed_mode"]
     stages = status_mod.from_counts(None if counts_pending else counts, fetched=fetched,
                                     lance_dir=getattr(collection, "lance_dir", None))
@@ -2363,9 +2364,13 @@ def _collection_shelf(collection: collections_mod.Collection,
 
     recipe = _shelf_recipe(collection)
     # THE ETA ROW of the embedded stage (operator, 2026-11-11): current, at
-    # the rate measured now; best, at the whole card (a GPU encoder only)
+    # the rate measured now; best, at the whole card (a GPU encoder only).
+    # HIDDEN WHEN COMPLETE (the operator, the same day): only while the stage
+    # has work it can take on its own — `workable`, the rule every ETA slot
+    # follows: nothing left, embedding off, or only blocked documents left
+    # (they wait for "clear errors & retry", not for time) shows no row
     embed_eta = None
-    if not counts_pending and embed_mode != "off" and remaining.get("embed", 0) > 0:
+    if not counts_pending and embed_mode != "off" and workable.get("embed", 0) > 0:
         best = (_best_eta(collection.name, remaining["embed"], stage_rates.get("embed"))
                 if recipe is not None and recipe.spends == "gpu" else None)
         current = stage_etas.get("embed")
