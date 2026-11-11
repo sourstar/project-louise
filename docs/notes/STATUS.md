@@ -20,6 +20,7 @@ measured (published figures disagree).
 
 ### 2026-11-11 (München)
 
+- **Speech to text on the processor's integrated Radeon — LATER, in a separate session** (operator, 11-11: "keeping it unused is a waste of silicon"): parakeet runs on LocalAI's CPU backend today; LocalAI's gallery has `vulkan-parakeet-cpp` (Mesa RADV, the first choice for the RDNA 2 iGPU) and `rocm-parakeet-cpp` (gfx1036 not supported by ROCm). The brief — inventory, CPU baseline, a throwaway container given only the iGPU's render node, the checks before wiring it: [stt-on-igpu.md](stt-on-igpu.md). Nothing installed or measured.
 - **Image generation — FLUX.1 Krea [dev], measured LATER in a separate session** (operator, 11-11: "A but write it down for a future separated session"): LocalAI's `flux.1-krea-dev-ggml` (stable-diffusion.cpp) is 17.3 GB of files at Q4_K_M (T5-XXL fp16 9.8 of it), 7.3 GB with the text encoders on the CPU; the node lists it at 12.7 GB, never loaded; it fits beside the set only after context on request, on demand. The brief, the steps and the rules: [image-generation-krea.md](image-generation-krea.md). Nothing installed or measured.
 - **The answer, formatted and read right** (operator, 11-12: "the text box seems to receive a md formatting that is
   printed as it is"; "asterisks are read, and dates in roman format are mispronounced"):
