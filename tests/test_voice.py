@@ -355,8 +355,24 @@ def test_a_recordings_report_is_one_line_in_the_nodes_log(isolated_config, monke
     said = json.loads(text.split(" — ", 1)[1])
     assert said == {"label": "Car kit", "rate": 16000, "ctx_rate": 16000, "frames": 750, "peak": 0, "heard": False}, \
         "the known keys only: never the audio, never anything else a client sends"
-    c.post("/ask/voice/report", json={"outcome": "heard", "chars": 28})
+    c.post("/ask/voice/report", json={"outcome": "heard", "chars": 28, "mode": "recorder", "parts": 7,
+                                      "mime": "audio/webm;codecs=opus", "ctx_was": "running", "decode_fails": 0})
     assert lines[-1][0] == "info", "a question heard is no warning"
+    assert json.loads(lines[-1][1].split(" — ", 1)[1]) == {
+        "chars": 28, "mode": "recorder", "parts": 7, "mime": "audio/webm;codecs=opus", "ctx_was": "running",
+        "decode_fails": 0}, "which way recorded, and what"
     assert c.post("/ask/voice/report", content=b"x" * 5000).status_code == 413
     assert c.post("/ask/voice/report", json=[1]).status_code == 400
     assert len(lines) == 2
+
+
+def test_every_field_the_page_reports_is_one_the_node_keeps():
+    """The node keeps the known keys only; a field the page adds and the node
+    drops is a report that silently says less than it was built to."""
+    from pathlib import Path
+    from app import web
+    js = (Path(web.__file__).parent / "static" / "voice.js").read_text(encoding="utf-8")
+    block = js[js.index("function micInfo(r)"):js.index("function report(")]
+    sent = set(re.findall(r"(\w+):", block.split("return {", 1)[1]))
+    sent |= {"stop", "vad", "chars"}            # added where the clip is written down
+    assert sent <= set(web.VOICE_REPORT_KEYS), sorted(sent - set(web.VOICE_REPORT_KEYS))

@@ -578,6 +578,36 @@ const sentenceOf = size => KNOWN[(size - 44 - 8000) / 20 - 1];
         '21. reported: silent, with what came', r21);
   check(posted.stt === stt21, '21. silence is not sent to be written down', posted.stt - stt21);
 
+  // 22. the audio graph runs no callback (the car takes the output, the
+  //     context's clock stalls: "Mic: no sound at all"): recorded the second
+  //     way, the end of speech found, the same WAV posted, the question asked
+  posted.reports = [];
+  await page.goto('http://localhost/ask');
+  await spy();
+  await page.evaluate(() => {
+    window.__toasts = []; const ts = toast; toast = function (m) { __toasts.push(m); return ts(m); };
+    // a capture node that never hears a sample: an AudioNode with a port nobody writes to
+    window.AudioWorkletNode = function (ctx) { const g = ctx.createGain(); g.port = { onmessage: null }; return g; };
+    document.getElementById('q').value = '';
+  });
+  const stt22 = posted.stt, relay22 = posted.relay.length;
+  await page.click('#mic');
+  check(await until(() => __posts.length === 1, 25000), '22. no sample from the graph: recorded the second way, and posted',
+        { toasts: await page.evaluate(() => __toasts), reports: posted.reports });
+  const p22 = (await page.evaluate(() => __posts))[0], w22 = p22 ? wav(p22.bytes) : {};
+  check(w22.riff === 'RIFF' && w22.pcm === 1 && w22.channels === 1 && w22.rate === 16000 && w22.bits === 16,
+        '22. the same WAV: 16-bit PCM, 16 kHz, mono', w22);
+  check(w22.samples > 16000 * 1.0 && w22.samples < 16000 * 20 && w22.peak > 3000,
+        '22. the speech in it, ended by itself after the speech', { samples: w22.samples, peak: w22.peak });
+  check(posted.stt === stt22 + 1, '22. sent once to be written down');
+  await relayed(relay22 + 2);
+  check(posted.relay.length === relay22 + 2, '22. and asked', posted.relay.length - relay22);
+  const t22 = Date.now(); while (!(posted.reports || []).some(x => x.outcome === 'heard') && Date.now() - t22 < 4000) await sleep(40);
+  const r22 = (posted.reports || []).find(x => x.outcome === 'heard') || {};
+  check(r22.mode === 'recorder' && r22.parts > 0 && /webm|ogg|mp4/.test(r22.mime || '') && r22.stop === 'speech',
+        '22. reported: the second way, what it recorded, how it ended', r22);
+  await until(() => !document.getElementById('speak').classList.contains('on'), 15000);
+
   check(errors.length === 0, 'no page errors', errors);
   console.log(failures ? `${failures} FAILED` : 'ALL PASSED');
   await h.close();

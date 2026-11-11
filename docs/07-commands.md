@@ -1465,8 +1465,13 @@ question waits for the speaker, which also starts at the first sentence.
 A MICROPHONE THAT GIVES NOTHING IS SAID (*amended 2026-11-11*, operator:
 "when the phone is connected to the car the mic of louise does not work"):
 the page records at the microphone's own rate (a Bluetooth car or headset
-gives 16 or 8 kHz); no sound at all after 3 s (the audio woken once), or
-nothing but digital silence after 8 s, ends the recording with one plain
+gives 16 or 8 kHz); no sound at all after 3 s (the audio woken once) and
+the page RECORDS THE SECOND WAY (operator: "Mic: no sound at all") —
+WebAudio is clocked by the audio output, which a car's Bluetooth can stall;
+MediaRecorder records the microphone's track itself, an OfflineAudioContext
+decodes it at 16 kHz, the same energy check ends it after the speech and
+the same WAV is sent — and only where that cannot start either, or nothing
+but digital silence comes after 8 s, the recording ends with one plain
 line, and a quiet sound that is not silence goes to the node after 8 s for
 its VAD to judge. Each recording's outcome — the device the browser opened,
 its rate and state, how much sound came, how it ended, the VAD's note — is

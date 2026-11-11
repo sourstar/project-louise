@@ -50,6 +50,10 @@ measured (published figures disagree).
   LocalAI's last transcription 11-10 17:31Z. A try in the car since then sent no clip at all — the browser side:
   the microphone refused (a line said so), or no sound reached the page, where the old page's recording never
   ended by itself (its 60 s bound lived in the sample callback) and a tap ended it without a word — #497's case.
+  The operator, after: "Mic: no sound at all" (on the old page). So the second way to record: with no sample from
+  WebAudio after 4.5 s (clocked by the audio output, which the car's Bluetooth can stall), MediaRecorder records
+  the track itself, an OfflineAudioContext decodes it at 16 kHz, the same energy check ends it, the same WAV goes;
+  browser check 22 runs it with a graph that never calls back. Report field `mode` says which way recorded.
 - **Hands-free voice input** (operator, 11-11: "click to activate and automatically ask at the end of the speech,
   then automatically tts of the answer"): the microphone's question is asked as soon as the recording ends (the
   page's switch decides search or answer) and its answer read by itself; the spoken text replaces the question
