@@ -124,15 +124,34 @@ def test_each_model_goes_to_the_card_its_backend_runs_on_and_the_rest_to_the_cpu
     models = gm.panel(COLLECTIONS, get_json=lambda url: system)
     b70, igpu = _card("0000:03:00.0", 32 * GIB, (_proc(41),)), _card("0000:c5:00.0", GIB // 2, (_proc(77),))
     cards = gm.by_card(models, (igpu, b70))
-    assert [r.model for r in cards["0000:03:00.0"]["rows"]] == ["vega-qwen3", "louise-rerank-bge"]
+    assert [r.model for r in cards["0000:03:00.0"]["rows"]] == ["vega-qwen3"]
     assert [r.model for r in cards["0000:c5:00.0"]["rows"]] == ["stt-igpu"], "placed by its pid, VRAM 0 or not"
     assert [r.model for r in cards["cpu"]] == ["stt"]
-    assert cards["0000:03:00.0"]["louise"] == 10 * GIB and cards["0000:03:00.0"]["asked"] == models["asked"]
+    assert [r.model for r in cards["unplaced"]] == ["louise-rerank-bge"], \
+        "holding VRAM, its pid on no card: two cards, so no guess"
+    assert cards["0000:03:00.0"]["louise"] == 9 * GIB and cards["0000:03:00.0"]["asked"] == models["asked"]
 
 
-def test_without_a_probe_every_model_with_vram_is_the_largest_cards():
+def test_a_model_the_probe_cannot_place_is_never_put_on_a_card_by_guess():
+    """The node, 2026-11-11: the probe could read no process (no
+    CAP_SYS_PTRACE), and the iGPU's speech model was shown on the B70. With
+    several cards an unplaced model is listed apart; with one, it is that
+    card's."""
     models = gm.panel(COLLECTIONS, get_json=lambda url: SYSTEM)
     cards = gm.by_card(models, (_card("small", GIB), _card("big", 32 * GIB)))
-    assert len(cards["big"]["rows"]) == len(SYSTEM["loaded_models"]) and "small" not in cards
-    assert cards["cpu"] == []
+    assert "big" not in cards and "small" not in cards
+    assert len(cards["unplaced"]) == len(SYSTEM["loaded_models"]) and cards["cpu"] == []
+    one = gm.by_card(models, (_card("big", 32 * GIB),))
+    assert len(one["big"]["rows"]) == len(SYSTEM["loaded_models"]) and one["unplaced"] == []
     assert gm.by_card(models, ())["cpu"] == [], "no card at all: nothing invented"
+
+
+def test_a_backend_on_two_cards_is_the_card_where_it_holds_the_most():
+    from app import gpu
+    system = {"loaded_models": [{"id": "stt-igpu", "backend": "vulkan-parakeet-cpp", "size_vram": GIB,
+                                 "process": {"pid": 77}}]}
+    models = gm.panel(COLLECTIONS, get_json=lambda url: system)
+    tiny = gpu.GpuProcess(1, "m", "x", "c", 4 << 20, 0, ns_pid=77)
+    big = gpu.GpuProcess(1, "m", "x", "c", 500 << 20, 1300 << 20, ns_pid=77)
+    cards = gm.by_card(models, (_card("b70", 32 * GIB, (tiny,)), _card("igpu", GIB // 2, (big,))))
+    assert [r.model for r in cards["igpu"]["rows"]] == ["stt-igpu"] and "b70" not in cards

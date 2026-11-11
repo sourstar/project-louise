@@ -138,8 +138,13 @@ services:
     pid: host
     devices:
       - /dev/dri
+    # SYS_PTRACE (2026-11-11): another process's open files and their fdinfo
+    # are readable only with ptrace's READ access; without it every process
+    # list came back empty and every model was shown on the largest card.
+    # The probe only reads /proc (read_only, no volumes); it never attaches.
     cap_add:
       - PERFMON
+      - SYS_PTRACE
     read_only: true
 
 volumes:

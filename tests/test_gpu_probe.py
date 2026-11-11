@@ -185,6 +185,36 @@ def test_scan_skips_a_process_it_may_not_read(proc, monkeypatch):
     assert [p.pid for p in gp.scan()[PDEV]] == [9317, 1034812]
 
 
+def test_a_process_refused_is_counted_and_the_snapshot_says_why(sysfs, proc, monkeypatch):
+    """The node, 2026-11-11: the probe ran without CAP_SYS_PTRACE, every
+    process list came back empty, and nothing said so. A refusal — of the
+    open files or of one descriptor's fdinfo — is counted, and the snapshot
+    names the capability that lifts it."""
+    real_listdir, real_read = os.listdir, Path.read_text
+
+    def listdir(path):
+        if str(path).endswith(os.path.join("978631", "fd")):
+            raise PermissionError(13, "Permission denied")
+        return real_listdir(path)
+
+    def read_text(self, *a, **k):
+        if "fdinfo" in str(self) and "1034812" in str(self):
+            raise PermissionError(13, "Permission denied")
+        return real_read(self, *a, **k)
+    monkeypatch.setattr(gp.os, "listdir", listdir)
+    monkeypatch.setattr(Path, "read_text", read_text)
+    denied: list[int] = []
+    assert [p.pid for p in gp.scan(denied)[PDEV]] == [9317]
+    assert sorted(denied) == [978631, 1034812]
+    snap = gp.snapshot()
+    assert any("may not read the open files of 2 process(es)" in n and "CAP_SYS_PTRACE" in n
+               for n in snap.notes), snap.notes
+
+
+def test_a_probe_that_reads_everything_says_nothing_of_it(sysfs, proc):
+    assert not [n for n in gp.snapshot().notes if "may not read" in n]
+
+
 def test_a_process_outside_any_container_is_the_hosts(tmp_path):
     d = tmp_path / "1"
     d.mkdir()
@@ -466,3 +496,14 @@ def test_a_process_pid_in_its_own_namespace_is_read_for_the_resident_keeper(proc
                                                   processes=tuple(gp.scan()[PDEV])),))
     back = gpu.from_json(json.loads(json.dumps(gpu.to_json(snap))))
     assert [p.ns_pid for p in back.devices[0].processes] == [4211, 978631, None]
+
+
+@pytest.mark.parametrize("path", ["deploy/docker/compose.yaml", "deploy/truenas-app.yaml"])
+def test_the_probe_is_deployed_able_to_read_the_processes(path):
+    """The node, 2026-11-11: without CAP_SYS_PTRACE the probe read no
+    process's GPU files, and every model was shown on the largest card."""
+    import yaml
+    root = Path(__file__).resolve().parents[1]
+    probe = yaml.safe_load((root / path).read_text())["services"]["gpu-probe"]
+    assert {"PERFMON", "SYS_PTRACE"} <= set(probe["cap_add"])
+    assert probe["pid"] == "host" and probe["read_only"] is True
