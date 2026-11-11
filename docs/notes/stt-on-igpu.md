@@ -227,8 +227,14 @@ reproducibility, by vendor".
 Questions to put in the one shape (CLAUDE.md, Style), each with its pros
 and cons:
 
-- **Switch or not:** the iGPU against the CPU, on time per clip, CPU
-  cores freed, identical transcripts, and heat.
+- **Switch or not — DECIDED: the iGPU, LIVE 2026-11-11** (operator: "Keep
+  it in igpu, the reserved 512 MB are otherwise unused"). München:
+  `louise node speech set --stt parakeet-cpp-multilingual-diarization-speakers-igpu`
+  (platform.toml kept as `.bak-20261111-before-stt-igpu`), the CPU model
+  unloaded, a French clip answered through the web's
+  `/v1/audio/transcriptions` (VAD trimmed 5.84 s to 4.94 s; 3.24 s with the
+  model's first pin). Back to the CPU is one line:
+  `louise node speech set --stt parakeet-cpp-multilingual-diarization-speakers`.
 - **How to wire it — DECIDED: (a), the same instance** (operator,
   2026-11-11).
   - (a) the live LocalAI app gets the iGPU's render node, the Vulkan
@@ -401,5 +407,7 @@ changing the speech processing logic: do it at the end of the speech".*
 - **Against §3.1:** the iGPU runs at 0.56× the CPU's speed, inside the
   0.3–0.7× modelled there. What it buys is about 3.5 CPU cores per
   transcription.
-- **Not measured yet:** step 6's contention row (the node unpaused, the
-  worker running).
+- **Contention (step 6), the node running:** RTF 0.158 (0.161 paused),
+  0.39 backend cores, Tctl 56–64 °C. The worker had no embedding work in
+  that window, so what the iGPU costs a running embed pass (the shared
+  package power and DDR5) is still unmeasured.
