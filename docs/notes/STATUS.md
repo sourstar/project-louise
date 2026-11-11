@@ -18,7 +18,19 @@ build at 12 cores, the GPU uncapped. The card's noise (operator): 0.2 sone
 idle, 3.1 sone at full load, coil whine ~0.9 sone; its fan range is being
 measured (published figures disagree).
 
-### 2026-11-09: before the pause until Friday — what was done, measured and left (München's final report)
+### 2026-11-11 (München)
+
+- **Philippe's voice profile metadata fixed** (`1c834741-…`, LocalAI config mount
+  `voice-profiles/1c834741-3826-4990-8046-388ab4e9607e/`). profile.json still described the 27.75 s original
+  (27,748 ms, its full transcript in references[0]) while the file served, `reference.wav`, is the 7.90 s cut of
+  2026-11-09. Now `audio` and `references[0]` describe `reference.wav` (7,900 ms, 379,244 bytes, the cut's
+  sentence); the original's transcript is kept beside it as `reference-orig-27.75s.txt`, next to
+  `reference-orig-27.75s.wav`; the old profile.json is at /root/measure/philippe-profile.json.bak-20261111. LocalAI
+  reads the file on each list (no reload). Live profile: unchanged, the 7.90 s cut.
+- **Two clips for Philippe (operator, 11-11): open, the operator's call.** The live backend
+  `intel-sycl-f16-omnivoice-cpp` (latest, 2026-10-07) reads one reference (`GetVoice`); the auto-installed
+  `-development` build (master, 2026-11-10) reads `ref_audios`. Nothing changed on the voice.
+- **normattiva-nemo embedding at ~30 chunks/s** (7–8 before) with batch 16, concurrency 4, device gpu (2026-11-10).
 
 - **Voice**: Philippe's reference cut to 7.90 s (19.80–27.70 s of the 27.75 s original, kept as
   reference-orig-27.75s.wav), operator's choice; steps unchanged. The fixed sentence ×3: RTF **0.44** (0.74 before,
