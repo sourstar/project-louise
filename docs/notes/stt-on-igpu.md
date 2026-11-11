@@ -66,6 +66,49 @@ NeMo Parakeet) has these builds:
   STT returns text, not vectors, so invariant 12 does not bind it, but
   identical text against the CPU's is the quality check (§4).
 
+## 3.1 What to expect — from published figures (2026-11-11, not measured here)
+
+| | the iGPU (2 CU RDNA 2) | the CPU (Ryzen 5 7600, 6 × Zen 4) |
+|---|---|---|
+| peak FP32 | 0.49–0.56 TFLOPS (128 shaders × 2 × 1.9–2.2 GHz; notebookcheck, siliconcat) | ≈ 0.86–0.98 TFLOPS (modelled: 32 FLOP/cycle/core with AVX-512 double-pumped, at 4.5–5.1 GHz) |
+| peak FP16 | 0.97–1.13 TFLOPS (packed, 2:1) | no FP16 FMA (Zen 4: bf16 dot products only) |
+| matrix units | none: RDNA 2 has no cooperative matrix, so ggml-vulkan runs scalar shaders | AVX-512 / VNNI |
+| memory | the same DDR5 as the CPU | the same DDR5 |
+| power | shares the package's budget | the same budget |
+
+- **parakeet.cpp's own figures** (its benchmarks/BENCHMARK.md):
+  - tdt-0.6b-v3 runs at RTFx 29.7 (f32) and 34.4 (q8_0) on 8 threads of a
+    Ryzen 9 9950X3D CPU;
+  - on an Apple M4 GPU it is 2.7× the M4's own CPU;
+  - its authors list ROCm as "not tested by us", and GPU backends are not
+    in its CI.
+- **The closest iGPU figure for this kind of model:** whisper.cpp 1.8.3
+  with Vulkan on a Radeon 680M gave 3–4× its CPU (Phoronix). The 680M is
+  RDNA 2 with 12 compute units, six times this iGPU.
+- **What that predicts (modelled):**
+  - The iGPU will most likely be **slower than the six Zen 4 cores**,
+    somewhere around 0.3–0.7× their speed.
+  - A 10-second question at the CPU's likely RTFx of 15–30 takes 0.3–0.7 s;
+    on the iGPU, roughly 0.5–2 s.
+  - Its gain is the CPU it leaves free, and having no competition with a
+    12-core pass. That gain is small: the Ask page's microphone is used a
+    few times a day.
+- **The first call after a load** pays Vulkan's pipeline compilation, which
+  can take seconds. A persistent Mesa shader cache (`MESA_SHADER_CACHE_DIR`
+  on a volume) makes it a one-time cost. Measure the first call with and
+  without the cache.
+- **ROCm on gfx1036** runs only through `HSA_OVERRIDE_GFX_VERSION=10.3.0`,
+  which ROCm's maintainers call a debugging aid. Reports of MES/kernel
+  errors exist. On 2 CUs with no matrix units it has no reason to beat
+  Vulkan. Expect it to fail or to match Vulkan, and try it only if Vulkan
+  fails.
+
+Sources: notebookcheck.net (Radeon 610M; Radeon Graphics Ryzen 7000),
+siliconcat.net (610M), github.com/mudler/parakeet.cpp (README,
+benchmarks/BENCHMARK.md), phoronix.com/news/whisper-cpp-1.8.3-12x-perf,
+github.com/ggml-org/llama.cpp issue 22992 (RDNA 2: no coopmat) and
+discussion 10879 (Vulkan figures), localaimaster.com (the HSA override).
+
 ## 4. The measurement
 
 **Read first:** CLAUDE.md, docs/notes/measuring.md with its §6 checklist,
