@@ -87,6 +87,19 @@ class GpuDevice:
     vram_used: int | None    # the driver's own count; None where it gives none
     processes: tuple[GpuProcess, ...] = ()
     sensors: GpuSensors | None = None
+    #: part of the processor (an APU, an integrated Intel card): its memory is
+    #: the system's RAM, so its buffers there are where they belong (operator,
+    #: 2026-11-11: the Radeon 610M's only model was shown "pushed off the
+    #: card"). None = the driver was not asked or could not say.
+    integrated: bool | None = None
+
+    def pushed_off(self, p: GpuProcess) -> bool:
+        """`p.pushed_out`, on a card with memory of its own to be pushed off."""
+        return p.pushed_out and not self.integrated
+
+    @property
+    def pushed_off_processes(self) -> tuple[GpuProcess, ...]:
+        return tuple(p for p in self.processes if self.pushed_off(p))
 
     @property
     def attributed(self) -> int:
@@ -140,6 +153,7 @@ def to_json(snapshot: GpuSnapshot) -> dict:
 
 #: a probe one deploy ahead of the web may send a field this web does not know
 _PROCESS_FIELDS = frozenset(f.name for f in fields(GpuProcess))
+_DEVICE_FIELDS = frozenset(f.name for f in fields(GpuDevice))
 
 def from_json(data: dict) -> GpuSnapshot:
     def sensors(s):
@@ -151,7 +165,8 @@ def from_json(data: dict) -> GpuSnapshot:
                           clock_mhz=s.get("clock_mhz"), clock_max_mhz=s.get("clock_max_mhz"))
     return GpuSnapshot(
         devices=tuple(
-            GpuDevice(**{**d, "processes": tuple(GpuProcess(**{k: v for k, v in p.items() if k in _PROCESS_FIELDS})
+            GpuDevice(**{**{k: v for k, v in d.items() if k in _DEVICE_FIELDS},
+                         "processes": tuple(GpuProcess(**{k: v for k, v in p.items() if k in _PROCESS_FIELDS})
                                                  for p in d.get("processes", ())),
                          "sensors": sensors(d.get("sensors"))})
             for d in data.get("devices", ())),

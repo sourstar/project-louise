@@ -220,3 +220,33 @@ def test_a_model_is_shown_on_its_own_card_and_the_cpu_has_a_card(client, monkeyp
     assert 'id="gpu-models-0000:c5:00.0" data-keep-open' in html and 'id="cpu-models" data-keep-open' in html
     assert 'id="unplaced-models" data-keep-open' in html
     assert html.count("models · 1 loaded") == 3
+
+
+def test_an_integrated_card_s_models_in_shared_ram_are_never_pushed_off(client, monkeypatch):
+    """Operator, 2026-11-11: "Radeon 610M igpu, the only model loaded is
+    marked as pushed off the card, because it is in RAM". An integrated card's
+    memory IS the system's RAM: its buffers there are where they belong."""
+    from dataclasses import replace
+    stt = gpu.GpuProcess(41, "parakeet-cpp-multilingual-diarization-speakers-igpu", "parakeet",
+                         "ix-localai-localai-1", vram=12 << 20, host=1900 << 20)
+    assert stt.pushed_out, "by the dedicated card's rule it would be"
+    igpu = gpu.GpuDevice(card="card1", pdev="0000:0e:00.0", driver="amdgpu", vendor_id="1002",
+                         device_id="164e", vendor="AMD", name="Radeon 610M", vram_total=512 << 20,
+                         vram_used=40 << 20, processes=(stt,), integrated=True)
+    assert not igpu.pushed_off(stt) and igpu.pushed_off_processes == ()
+    _probe(monkeypatch, gpu.GpuSnapshot(devices=(igpu,)))
+    html = client.get("/admin/system/gpu").text
+    assert "pushed off the card" not in html
+    assert "GPU buffers in shared RAM" in html and "part of the processor" in html
+    # a dedicated card, or one that could not say, keeps the rule
+    for integrated in (False, None):
+        card = replace(igpu, integrated=integrated)
+        assert card.pushed_off(stt)
+    back = gpu.from_json(gpu.to_json(gpu.GpuSnapshot(devices=(igpu,))))
+    assert back.devices[0].integrated is True
+
+
+def test_a_web_one_deploy_behind_reads_a_device_field_it_does_not_know():
+    snap = gpu.to_json(gpu.GpuSnapshot(devices=(ARC,)))
+    snap["devices"][0]["a_device_field_from_the_future"] = 1
+    assert gpu.from_json(snap).devices[0].card == ARC.card

@@ -80,15 +80,16 @@
   </details>
   {% endif %}
   {% if d.processes %}
-  <details class="more" id="gpu-processes-{{ d.pdev }}" data-keep-open><summary>processes · {{ d.processes|length }}{% if d.processes|selectattr('pushed_out')|list %} · <span class="badge err">a model pushed off the card</span>{% endif %}</summary>
+  <details class="more" id="gpu-processes-{{ d.pdev }}" data-keep-open><summary>processes · {{ d.processes|length }}{% if d.pushed_off_processes %} · <span class="badge err">a model pushed off the card</span>{% endif %}</summary>
   <table><tr><th>model</th><th>container</th><th>pid</th><th>VRAM</th><th>of card</th>
-    <th title="REAL host RAM: GPU buffers the driver keeps in host memory for this process (GTT, system). A few MiB is normal. A whole model here means the card was overcommitted and the driver moved it out.">GPU buffers in host RAM</th>
+    {% if d.integrated %}<th title="REAL RAM: this card is part of the processor and its memory is the system's RAM, so its models live here by design (GTT). Nothing was pushed off.">GPU buffers in shared RAM</th>
+    {% else %}<th title="REAL host RAM: GPU buffers the driver keeps in host memory for this process (GTT, system). A few MiB is normal. A whole model here means the card was overcommitted and the driver moved it out.">GPU buffers in host RAM</th>{% endif %}
     <th title="REAL host RAM: memory that exists because of this process — its runtime, its tokenizer, its heap (the kernel's RssAnon + RssShmem).">process RAM</th>
     <th title="NOT occupancy: pages of files the process has mapped — the model file, libraries — that are in the page cache now (the kernel's RssFile). The kernel takes them back whenever it wants the room.">mapped file (reclaimable)</th></tr>
     {% for p in d.processes %}
     <tr><td title="{{ p.command }}">{{ p.label }}</td><td>{{ p.container }}</td><td>{{ p.pid }}</td>
       <td>{{ p.vram|size }}</td><td>{{ '%.1f'|format(d.share(p.vram)) }}%</td>
-      <td>{{ p.host|size }}{% if p.pushed_out %} <span class="badge err" title="More of this model is in host RAM than on the card: the card was overcommitted and the driver moved its buffers out. It still answers, slower. Reloading the model brings it back once the card has room.">pushed off the card</span>{% endif %}</td>
+      <td>{{ p.host|size }}{% if d.pushed_off(p) %} <span class="badge err" title="More of this model is in host RAM than on the card: the card was overcommitted and the driver moved its buffers out. It still answers, slower. Reloading the model brings it back once the card has room.">pushed off the card</span>{% endif %}</td>
       <td>{{ p.ram|size if p.ram is not none else '—' }}</td>
       <td class="note">{{ p.mapped|size if p.mapped is not none else '—' }}</td></tr>
     {% endfor %}

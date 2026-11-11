@@ -40,6 +40,17 @@ _XE_REGIONS = struct.Struct("<II")            # num_mem_regions, pad
 _XE_REGION = struct.Struct("<HHIQQQQ48x")     # class, instance, min_page_size, total_size,
                                               # used, cpu_visible_size, cpu_visible_used, reserved[6]
 CAP_SYS_ADMIN, CAP_PERFMON = 21, 38
+# include/uapi/drm/amdgpu_drm.h. DRM_IOW(DRM_COMMAND_BASE + DRM_AMDGPU_INFO,
+# struct drm_amdgpu_info): dir 1, size 32, type 'd', nr 0x45.
+DRM_IOCTL_AMDGPU_INFO = 0x40206445
+AMDGPU_INFO_DEV_INFO = 0x16
+AMDGPU_IDS_FLAGS_FUSION = 0x1
+_AMDGPU_INFO = struct.Struct("<QII16x")       # return_pointer, return_size, query, the union
+# struct drm_amdgpu_info_device: eight u32, two u64, cu_active_number,
+# cu_ao_mask, cu_bitmap[4][4], enabled_rb_pipes_mask, num_rb_pipes,
+# num_hw_gfx_contexts, pcie_gen — then ids_flags (u64) at 136
+_DEV_INFO_IDS_FLAGS = 136
+_DEV_INFO_SIZE = _DEV_INFO_IDS_FLAGS + 8
 
 Ioctl = Callable[..., object]
 
@@ -69,6 +80,24 @@ def xe_query(fd: int, query: int, *, ioctl: Ioctl = fcntl.ioctl) -> bytes:
     head = bytearray(_XE_QUERY.pack(0, query, size, ctypes.addressof(data), 0, 0))
     ioctl(fd, DRM_IOCTL_XE_DEVICE_QUERY, head, True)
     return data.raw
+
+
+def amdgpu_integrated(render: Path, *, ioctl: Ioctl = fcntl.ioctl) -> bool:
+    """Is this amdgpu card part of the processor (an APU)? The driver's own
+    word: AMDGPU_INFO_DEV_INFO's `ids_flags` carries AMDGPU_IDS_FLAGS_FUSION
+    — read the way nvtop reads it (extract_gpuinfo_amdgpu.c,
+    `integrated_graphics`). An integrated card's memory IS the system's RAM:
+    its buffers in GTT are where they belong, never "pushed off" (operator,
+    2026-11-11, on the Radeon 610M). Raises OSError where it cannot be asked."""
+    fd = os.open(render, os.O_RDWR | os.O_CLOEXEC)
+    try:
+        out = ctypes.create_string_buffer(_DEV_INFO_SIZE)
+        head = bytearray(_AMDGPU_INFO.pack(ctypes.addressof(out), _DEV_INFO_SIZE, AMDGPU_INFO_DEV_INFO))
+        ioctl(fd, DRM_IOCTL_AMDGPU_INFO, head, True)
+        flags = struct.unpack_from("<Q", out.raw, _DEV_INFO_IDS_FLAGS)[0]
+    finally:
+        os.close(fd)
+    return bool(flags & AMDGPU_IDS_FLAGS_FUSION)
 
 
 def xe_vram_regions(raw: bytes) -> tuple[int, int]:
