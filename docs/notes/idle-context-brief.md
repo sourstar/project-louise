@@ -548,3 +548,65 @@ What N → 0 makes decisive (§8 amended):
 | timer, N = 600 s (§0 as written) | few wakes a day; the race and a per-wake fault rarely met | ≈ 2 GB freed (qwen3-4b); the budget still measured after the fact |
 | the operator's model, per job | the finest grain | no counterpart in llama.cpp short of Prism's allocator; nothing to gain at `parallel:1` |
 | the operator's model, per model on the lease (recommended) | ≈ 6 GB freed, the card under its line with room to spare; contention decided by Louise's own priorities | a creation per busy period on the embedding path; the race fix, the canary and the arbiter are prerequisites, not refinements |
+
+## 10. Per request, with "stay warm" — the operator's form, 2026-11-11
+
+*The operator: "when llama.cpp gets a request it allocates the context
+memory; when the processing is done it frees it. A request may come with
+the flag 'stay warm' and this will make it keep the memory until a timeout,
+to prevent free/alloc back to back. Is it feasible, and efficient?" The
+reviewer's answer; nothing measured.*
+
+**Feasible — and simpler than the sleeping state §2 and §8 built on.**
+
+- **One thread owns the context.** The server's main loop creates it when
+  it takes a task and has none, and frees it when its queue is empty and no
+  keep is pending. Upstream's request handlers never touch the context —
+  none of `server_routes` reads `ctx_tgt` (server-context.cpp, from :5560);
+  they tokenise with the MODEL, which stays; only `get_meta()` reads it, for
+  two token strings the vocab gives (:5220–5224). So no handler waits for a
+  wake, and the stranded-task race (#30012) has no counterpart: **R3 shrinks
+  to LocalAI's seven reads of the context, R10 to a rebase.** The queue
+  already tells work from housekeeping (`task_resets_idle_timer`,
+  server-queue.cpp:24: a metrics task does not count).
+- **The flag travels today, with no wire change.** LocalAI copies a
+  request's `metadata` map into `PredictOptions.Metadata` (backend.proto
+  field 52; core/http/middleware/request.go:459–461 →
+  core/backend/options.go:673–689), embeddings build their options with the
+  same function (core/backend/embeddings.go:130), and the backend already
+  reads the map for `chat_template_kwargs` (grpc-server.cpp:2827). The VeGa
+  wrapper must forward the field. To confirm with one request on the test
+  copy.
+- **The standard is Ollama's `keep_alive`** (CLAUDE.md, "do not reinvent the
+  wheel"): a DURATION per request, with a server default; 0 = release when
+  done. One value instead of a flag plus a timeout, and a name upstream's
+  users know. For llama.cpp the default stays "keep" (today's behaviour) and
+  a server opts in; our opted-in models default to 0.
+
+**Efficient — only with the keep on every corpus request; one number
+decides, and it is §1's.**
+
+- Without it each request pays a creation and a free. A corpus request is
+  one input (`EMBED_BATCH` 1): a 1,000-token chunk on qwen3-4b at its gated
+  1,651 tok/s is ≈ 0.6 s, so every 60 ms of creation is 10 % of throughput.
+  A creation allocates AND ZEROES the KV cache (llama-kv-cache.cpp:434;
+  ≈ 1.1 GiB for qwen3-4b), reserves the compute buffers from the worst-case
+  graphs, and the first decode commits the op pool again. Expected in the
+  tens to hundreds of milliseconds — an expectation, not a measurement.
+- With it, creations fall to one per busy period and the cost to
+  creation ÷ the period's length. The keep's tail holds memory a few
+  seconds: nothing in GB·h. And the LAST request of a batch sent with keep 0
+  releases at once: §9's debounce and its explicit release are both this
+  one field.
+- A chat turn carries minutes, so a follow-up finds its cached prompt; the
+  query path's short steps (translate, embed, rerank) would each pay a
+  creation on a person's wait, so those models keep theirs until measured.
+- Still owed whatever the form: the canary per context and the ≥ 300 cycle
+  gate (§9, R7), and a SOAK — thousands of GB-sized allocations and frees a
+  day is a new load on the `xe` / Level Zero stack of M21, M22 and O6.
+
+| | pros | cons |
+|---|---|---|
+| per request, no keep | the least memory held; nothing to tune | a creation on every input: tens of % of embedding throughput at the expected cost |
+| per request with a keep duration (recommended) | one creation per busy period; exact release on a batch's last request; a known standard; no wire change | every caller must set it right — a corpus request without it is a silent slowdown, so the client sets it, never a person |
+| a server-side timer alone (§9's debounce) | no caller involved | no exact release; one timeout for corpus and chat alike |
