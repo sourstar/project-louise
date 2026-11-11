@@ -28,6 +28,12 @@ measured (published figures disagree).
   - "the button remains red": a phone kept the tap's hover border (the accent, red in the warm themes); there is no
     hover look without a hover now. The microphone is grey and inert from the end of the speech until the question
     is answered, then back to its base colour (tests/browser/ask_voice.js step 11, which fails on the old page).
+  - LIVE: 0c95c48 deployed 2026-11-11T08:23:30Z (operator's word; rc 0, relay gate 200). Checks: /ask has one
+    "quality or speed" switch and no `textsearch`, the hover:none rule; voice.js has `question(on)` and no
+    `q.focus()`; a wikipedia search answers.
+- **Philippe on about 10 s, the candidates** (München, 11-11): 12 parts, none flagged. Top three: (1) 10.18 s, score
+  0.880, two questions and a closing statement; (2) 10.46 s, 0.748; (3) 9.91 s, 0.745. Words match 1.0 / 0.955 / 1.0.
+  Files in /root/measure/philippe-10s/. Sample sentences and RTF running; the operator listens and picks.
 - **Philippe on about 10 s, keeping the speaker's pauses** (operator, 11-12: "assemble the most meaningful parts
   of the whole clip in a clip of about 10s. Beyond the pure voice to be, the speaker has a distinct style way to
   make pauses between words and sentences"): `tools/voice_reference.py` (tests/test_voice_reference.py). It cuts the
