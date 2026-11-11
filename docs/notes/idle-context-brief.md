@@ -218,7 +218,8 @@ probable or open.
 - **The context share per model**, 2026-11-12 (`size_vram` − the weights
   file; the backends' load lines are not kept at LocalAI's info level):
   qwen3-4b 3,262 MiB (≈ 1.1 GiB KV, ≈ 2.1 GB compute buffers at ubatch
-  8192), nemotron 2,221, the MADLAD test copy 2,007, dar-legal-it 632, chat
+  8192; 1,882 MiB since its ubatch went to 2048 at 2026-11-12 06:52Z,
+  `size_vram` 5,643 → 4,263), nemotron 2,221, the MADLAD test copy 2,007, dar-legal-it 632, chat
   633, omnivoice 489, medcpt-query 276, bge-m3 232, medcpt rerank 213, bge
   reranker ~0. The exact KV / compute split needs one reload per model with
   the backend's stderr captured (LocalAI's debug level).

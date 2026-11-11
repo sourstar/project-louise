@@ -45,6 +45,14 @@ measured (published figures disagree).
   in one request would be one longer reference, which this model already reads: the 27.75 s original at RTF 0.74.
   LIVE NOW (operator in München's session: "use the full clip in the meantime"): Philippe on the full 27.75 s
   original as one clip with its full transcript; the 7.90 s cut kept as reference-cut-7.90s.wav.
+- **gutenberg's Qwen3-Embedding-4B trimmed: ubatch = batch 2048, ctx 8192, LIVE since 2026-11-12 06:52Z**
+  (München; the operator's 10-23 "trim the context to the needed one" — gutenberg's chunker cuts at 1,000 tokens, its
+  space promises 8,191). `size_vram` 5,643 → 4,263 MiB (−1,380). Gate run sha256:7e0a79eabf3fe229…: document 16/16,
+  whole set worst 0.999226, 0 of 512 below 0.995, exact over 3 fresh loads, CPU reference worst 0.991228 (the 4-bit
+  line 0.991); query whole set worst 0.999473, exact; 1,651 tok/s. Inputs of 3,181 and 5,831 tokens embedded through
+  Louise's path (split across ubatches, not refused). Statements in gutenberg/state/calibration/; backup YAML
+  vega-qwen3-embedding-4b.yaml.bak-20261111-ubatch8192. Nemotron stays 8192 (normattiva-nemo's chunks reach 8,175
+  tokens, mean pooling needs the whole input in one ubatch).
 - **One context for the models on one card** (operator, 11-12; [shared-context.md](shared-context.md)): ~10 GB of
   the ~34 GB resident is context, while at most 3.3 GB (p95 2.2) works at once (card record, 24 h). Prior art:
   Prism (OSDI '26) and its kvcached — elastic KV through virtual memory, vLLM/SGLang on NVIDIA/ROCm only, KV only.
