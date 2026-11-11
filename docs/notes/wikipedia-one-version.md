@@ -106,3 +106,28 @@ not hold at this size; both are local, neither changes what peers exchange (09 �
    A version that did not match costs one text search inside that one record (its language's query variant, else its
    first passage), only for the works on the page (`limit = k`), side by side (8 threads). Its time is inside the
    search line's `rerank`; München times it on the node after the annotation is created.
+
+## Created on the node (München, 2026-11-11, operator "A")
+
+On 77f4b73's image; each pass in its own container (16 GB cap), wall time and peak RSS by getrusage:
+
+| step | wall | peak RSS | result |
+|---|---|---|---|
+| `tools.annotations_from_wikipedia` | 240.9 s | 6.81 GiB | claims file 4.21 GB |
+| `create --dry-run` | 460.4 s | 2.70 GiB | exit 0 |
+| `create` | 828.6 s (13.8 min, ~0.9 M claims/min) | 2.68 GiB | 12,326,519 claims, snapshot `sha256:2880ec5ab96b…`, collection `sha256:2b4b4c7ec952…` |
+
+- The parts: 1.4 GB on tank (`louise-shard/wikipedia-articles`); the collection's directory on ssd4 is 73 KB.
+- The claim index was built inside the create ("12,326,519 claims, 24,653,038 ends: searched from disk") and found by the
+  worker at 16:12:19Z: 345 MB under `cache/annotation-claim-index/`, 247 parts. The estimate above (~2 GB parent for
+  the create) held: 2.68 GiB peak.
+- One wikipedia query ("Leonardo da Vinci", 10 hits, hybrid, no translation; `query_service.run_search`), three runs,
+  ms:
+
+  | | rerank | total |
+  |---|---|---|
+  | before | 1,975 / 2,500 / 2,422 | 4,341 / 3,197 / 3,189 |
+  | after | 3,305 / 1,959 / 1,849 | 6,653 / 2,689 / 3,362 |
+
+  Warm, the shown version's passage lookup adds nothing measurable (the difference is under the node's normal load);
+  the first run after includes the index's first, cold open.
