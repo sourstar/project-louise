@@ -37,6 +37,13 @@ measured (published figures disagree).
 - **The reader chooses the voice** (operator, 11-11: "choose philippe or valentina"): Ask › Settings › voice,
   the node's recorded voices by name, kept in the browser; none chosen, the node's own; a voice no longer held
   falls back to the node's (app/voice.py `voices`, app/speech.py `held_profile`). Merged, not deployed (web).
+  KEPT WITH THE ACCOUNT (operator, 11-11: "Shall a user account can choose it?"): a signed-in user's choice is
+  `voice` in users.toml (`POST /ask/voice`; operator: `louise user voice`), heard by every browser and client of
+  the account — a request naming no voice is read in it; without an account the browser keeps it.
+- **Hands-free voice input** (operator, 11-11: "click to activate and automatically ask at the end of the speech,
+  then automatically tts of the answer"): the microphone's question is asked as soon as the recording ends (the
+  page's switch decides search or answer) and its answer read by itself; the spoken text replaces the question
+  already asked, or is added to one typed and not yet asked. Not deployed (web).
 - **normattiva-nemo embedding at ~30 chunks/s** (7–8 before) with batch 16, concurrency 4, device gpu (2026-11-10).
 
 ### 2026-11-09: before the pause until Friday — what was done, measured and left (München's final report)

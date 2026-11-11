@@ -6603,7 +6603,7 @@ def cmd_vectors_archive_retry(a) -> int:
 
 
 def cmd_user(a) -> int:
-    """`louise user add | list | role | expire | reissue | revoke | remove`
+    """`louise user add | list | role | expire | voice | reissue | revoke | remove`
     (07 §7.3, amended 2026-10-22): the users of app/users.py. A token is
     printed by `add` and `reissue` only, once; nothing else ever shows it."""
     from app import users
@@ -6632,6 +6632,9 @@ def cmd_user(a) -> int:
         elif a.verb == "expire":
             u = users.set_expiry(a.name, a.expires)
             print(f"{u.name}: expires {u.expires or 'never'}")
+        elif a.verb == "voice":
+            u = users.set_voice(a.name, None if a.voice in ("none", "") else a.voice)
+            print(f"{u.name}: the answer read in {u.voice or 'the node’s voice'}")
         elif a.verb == "revoke":
             u = users.revoke(a.name)
             print(f"{u.name}: revoked at {u.revoked}; `louise user reissue {u.name}` restores it")
@@ -7529,6 +7532,11 @@ def build_parser() -> argparse.ArgumentParser:
     p = uverbs.add_parser("expire", help="set or clear the expiry: a date, 90d, or never")
     p.add_argument("name")
     p.add_argument("expires")
+    p.set_defaults(fn=cmd_user)
+    p = uverbs.add_parser("voice", help="the voice the user's answers are read in: a voice profile "
+                                        "(GET /ask/voices), or none for the node's")
+    p.add_argument("name")
+    p.add_argument("voice")
     p.set_defaults(fn=cmd_user)
     for verb, what in (("reissue", "a new token, printed once; the old one stops working now"),
                        ("revoke", "the token stops working; the entry stays (reissue restores it)"),

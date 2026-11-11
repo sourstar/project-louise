@@ -290,7 +290,7 @@ def test_the_readers_voice_speaks_and_one_no_longer_held_falls_back_to_the_nodes
 
 
 def test_no_answer_read_aloud_no_voice_to_choose(cfgdir):
-    assert voice.voices() == {"voices": [], "default": None}
+    assert voice.voices() == {"voices": [], "default": None, "account": None}
 
 
 def test_the_voice_choice_is_on_the_page_only_where_the_answer_is_read(isolated_config, config_dir):
@@ -298,3 +298,43 @@ def test_the_voice_choice_is_on_the_page_only_where_the_answer_is_read(isolated_
     html = page(config_dir, '[speech]\ntts_model = "omnivoice-cpp"\n')
     settings = html[html.index('<details class="settings">'):]
     assert 'id="voice-pick"' in settings[:settings.index("</details>")], "under the Ask page's Settings"
+
+
+# ---- the account's voice (operator, 2026-11-11: "Shall a user account can choose it?")
+
+def test_an_account_keeps_its_voice_and_every_client_of_it_hears_it(two_voices, monkeypatch):
+    from app import config, users
+    calls = two_voices
+    monkeypatch.setattr(config, "ADMIN_TOKEN", "sekrit")
+    _, token = users.add("ada")
+    c, h = TestClient(api.app), {"Authorization": f"Bearer {token}"}
+    assert c.get("/ask/voices", headers=h).json()["account"] == {"name": "ada", "voice": None}
+    r = c.post("/ask/voice", headers=h, json={"voice": VALENTINA})
+    assert r.status_code == 200 and r.json()["account"] == {"name": "ada", "voice": VALENTINA}
+    assert f'voice = "{VALENTINA}"' in users.path().read_text(), "kept with the account, in users.toml"
+    assert c.post("/v1/audio/speech", headers=h, json={"input": "Dante."}).status_code == 200
+    assert calls[-1]["voice"] == VALENTINA, "a client naming no voice hears the account's"
+    c.post("/v1/audio/speech", headers=h, json={"input": "Dante.", "voice": PHILIPPE})
+    assert calls[-1]["voice"] == PHILIPPE, "a request naming one is read in it"
+    assert c.post("/ask/voice", headers=h, json={"voice": "localai://voice-profiles/nope"}).status_code == 400
+    assert users.voice_of("ada") == VALENTINA, "a voice the node does not offer is refused, nothing kept"
+    assert c.post("/ask/voice", headers=h, json={"voice": None}).json()["account"]["voice"] is None
+    c.post("/v1/audio/speech", headers=h, json={"input": "Dante."})
+    assert calls[-1]["voice"] == PHILIPPE, "none chosen: the node's"
+
+
+def test_no_account_no_voice_kept_by_the_node_and_one_since_removed_is_the_nodes(two_voices, monkeypatch):
+    from app import config, users
+    calls = two_voices
+    monkeypatch.setattr(config, "ADMIN_TOKEN", "sekrit")
+    c = TestClient(api.app)
+    assert c.get("/ask/voices").json()["account"] is None, "a guest: the browser keeps it"
+    assert c.post("/ask/voice", json={"voice": VALENTINA}).status_code == 409
+    assert c.post("/ask/voice", headers={"X-Admin-Token": "sekrit"}, json={"voice": VALENTINA}).status_code == 409, \
+        "the admin token is no account"
+    _, token = users.add("ada")
+    users.set_voice("ada", "localai://voice-profiles/gone")
+    h = {"Authorization": f"Bearer {token}"}
+    assert c.get("/ask/voices", headers=h).json()["account"] == {"name": "ada", "voice": None}
+    c.post("/v1/audio/speech", headers=h, json={"input": "Dante."})
+    assert calls[-1]["voice"] == PHILIPPE, "a voice the server no longer holds: the node's, never an error"

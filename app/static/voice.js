@@ -10,8 +10,11 @@
 // say (app/transcribe.py) — and after MAX_MS. WebAudio captures; the page
 // downsamples to what the node's VAD and speech-to-text take — a WAV of
 // 16-bit samples at 16 kHz, mono — and posts it to /v1/audio/transcriptions
-// with the page's answer language. The text goes into the question box,
-// which stays the reader's: nothing is asked until they ask. A browser that
+// with the page's answer language. The text goes into the question box —
+// added to a question typed and not yet asked, else in place of the last —
+// and is ASKED at once, as Ask asks it (operator, 2026-11-11: "click to
+// activate and automatically ask at the end of the speech, then
+// automatically tts of the answer"; it was the reader's to ask until then). A browser that
 // will not open a microphone for this page (plain http on the LAN: only an
 // https page or localhost may) shows no microphone.
 //
@@ -23,7 +26,8 @@
 // first and keeps up; the last is read when the stream ends. A question the
 // microphone wrote has its answer read by itself; a typed one waits for the
 // speaker. Tap it to stop: nothing more is fetched or played. The node strips
-// the citations and chooses the voice (app/speech.py).
+// the citations and chooses the voice (app/speech.py) — the reader's, where
+// Settings › voice chose one (with the account, else in this browser).
 (function () {
   'use strict';
   const RATE = 16000, AUTO_STOP_MS = 1500, MAX_MS = 60000;
@@ -179,6 +183,7 @@
 
   async function stop() {
     const r = rec; if (!r) return;
+    let toAsk = false;
     rec = null; release(r);
     const pcm = downsample(r.chunks, r.rate, RATE);
     if (!pcm.length) { micState('idle'); return; }
@@ -193,13 +198,21 @@
       if (!resp.ok) throw new Error((d.error && d.error.message) || d.detail || resp.statusText);
       const text = String(d.text || '').trim();
       if (!text) { say('no speech was heard — tap the microphone and speak again'); return; }
-      const q = document.getElementById('q');
-      q.value = q.value.trim() ? q.value.replace(/\s*$/, ' ') + text : text;
+      // a question typed and not yet asked is added to; the one already
+      // asked is replaced by the new one
+      const q = document.getElementById('q'), prior = q.value.trim();
+      q.value = prior && prior !== lastAsked ? q.value.replace(/\s*$/, ' ') + text : text;
       dictated = q.value.trim();         // asked as it is, a spoken question (asking)
       q.focus(); q.setSelectionRange(q.value.length, q.value.length);
+      toAsk = true;
     } catch (e) {
       say('what you said could not be written down: ' + (e.message || e));
     } finally { busy = false; micState('idle'); }
+    // HANDS-FREE (operator, 2026-11-11: "click to activate and automatically
+    // ask at the end of the speech, then automatically tts of the answer"):
+    // the spoken question is asked as Ask would ask it — the page's switch
+    // decides search or answer — and its answer is read by itself (asking)
+    if (toAsk && typeof window.go === 'function') window.go();
   }
 
   if (mic) {
@@ -219,6 +232,8 @@
   // the next answer is read by itself; dictated: what the microphone left in
   // the box; player: the page's one audio element
   let reading = null, answerLang = null, writing = false, auto = false, dictated = null, player = null;
+  // the question the page last searched or asked: a new spoken one replaces it
+  let lastAsked = null;
   // THE ANSWER MADE INTO SPEECH AS IT ARRIVES (operator, 2026-11-09: "keep
   // processing the answer as it arrives (TTS buffering)"): a reading that
   // is not played yet — its sentences asked for as the stream completes
@@ -346,11 +361,25 @@
   // valentina"): one of the node's recorded voices (GET /ask/voices), kept in
   // this browser; none kept, the node's own. A voice the node no longer holds
   // is not sent (and the node would speak its own anyway, app/speech.py).
+  // A READER WITH AN ACCOUNT (operator, 2026-11-11: "Shall a user account
+  // can choose it?") keeps it with the account (POST /ask/voice,
+  // app/users.py): every browser and client of the account hears it.
   const VOICE_KEY = 'louise-voice';
-  let voiceIds = new Set();
+  let voiceIds = new Set(), account = null, accountVoice = null;
   function chosenVoice() {
-    let v = null; try { v = localStorage.getItem(VOICE_KEY); } catch (e) {}
+    let v = null;
+    if (account) v = accountVoice;
+    else { try { v = localStorage.getItem(VOICE_KEY); } catch (e) {} }
     return v && voiceIds.has(v) ? v : null;
+  }
+  async function keepVoice(v) {
+    if (!account) { try { localStorage.setItem(VOICE_KEY, v); } catch (e) {} return; }
+    accountVoice = v;
+    try {
+      const r = await fetch('/ask/voice', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                                            body: JSON.stringify({ voice: v }) });
+      if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || r.statusText);
+    } catch (e) { say('the voice could not be kept with your account: ' + (e.message || e)); }
   }
   async function loadVoices() {
     const box = document.getElementById('voice-choice'), pick = document.getElementById('voice-pick');
@@ -359,6 +388,8 @@
     try { const r = await fetch('/ask/voices'); if (r.ok) got = await r.json(); } catch (e) {}
     const list = (got && got.voices) || [];
     voiceIds = new Set(list.map(v => v.voice));
+    account = got && got.account ? got.account.name : null;
+    accountVoice = got && got.account ? got.account.voice : null;
     if (list.length < 2) { box.hidden = true; return; }
     pick.textContent = '';
     for (const v of list) {
@@ -366,8 +397,7 @@
     }
     pick.value = chosenVoice() || got.default || list[0].voice;
     // what was made ahead of a tap is in the voice it was made in: made again
-    pick.onchange = () => { try { localStorage.setItem(VOICE_KEY, pick.value); } catch (e) {}
-                            if (ahead) { dropAhead(); prefetch(); } };
+    pick.onchange = () => { keepVoice(pick.value); if (ahead) { dropAhead(); prefetch(); } };
     box.hidden = false;
   }
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', loadVoices);
@@ -522,7 +552,10 @@
       if (speak) speak.hidden = !answerText().trim();
       if (reading) follow(); else if (ahead) prefetch();
     },
-    answerCleared() { writing = false; stopReading(); dropAhead(); if (speak) speak.hidden = true; },
+    answerCleared() {
+      writing = false; stopReading(); dropAhead(); if (speak) speak.hidden = true;
+      const q = document.getElementById('q'); if (q) lastAsked = q.value.trim();
+    },
     // the reading's times, in ms from Ask (null before an Ask on this page)
     timeline() {
       const at = times.asked, rel = v => (v == null || at == null ? null : v - at);

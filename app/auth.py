@@ -46,6 +46,15 @@ class Viewer:
 
 
 GUEST = Viewer(None, "guest")
+
+
+def account(v: "Viewer | None") -> str | None:
+    """The users.toml name a viewer is, None for the admin token, the
+    depositor, a guest or nobody: what an account's own choices (its voice)
+    are kept under (app/users.py)."""
+    if v is None or v.master or v.role not in ("user", "admin") or not v.name:
+        return None
+    return v.name
 USER_COOKIE = "louise_token"
 
 
