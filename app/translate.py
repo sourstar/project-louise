@@ -42,6 +42,7 @@ import httpx
 
 from . import config, model_load
 from .rage import dispatch
+from .rage import keep as rage_keep
 
 #: one request's bound. Twelve whole entries in one call measured 33.6 s
 #: on the node's GPU (batch 32), a query into 51 languages 1.5 s.
@@ -125,7 +126,8 @@ def warm() -> None:
         # the shape probe asks the model's tokenizer, which loads the model
         # when cold: bounded like the request that follows it
         if shape(bound_s) == SHAPE_T5:
-            _t5_completion("it", "OK", bound_s, {dispatch.LEVEL_HEADER: "translate"}, max_tokens=4)
+            _t5_completion("it", "OK", bound_s, {dispatch.LEVEL_HEADER: "translate"}, max_tokens=4,
+                           warm=True)
         else:
             _completion({"items": [{"text": "OK", "to": "it"}]}, bound_s,
                         {dispatch.LEVEL_HEADER: "translate"}, max_tokens=16)
@@ -489,18 +491,30 @@ def _lower(ch: str) -> bool:
 
 
 def _t5_completion(code: str, segment: str, timeout: float, headers: dict[str, str] | None = None,
-                   max_tokens: int | None = None) -> str:
+                   max_tokens: int | None = None, warm: bool = False) -> str:
     """One segment through the model: the raw prompt MADLAD was trained with,
     greedy, the output bounded as the torch backend bounds a batch
-    (min(512, 2 × input + margin)); the completion's text, cleaned up."""
+    (min(512, 2 × input + margin)); the completion's text, cleaned up.
+
+    A model loaded with `context_on_demand` is told how long to keep its
+    context after the answer (app/rage/keep.py): the translation stream's
+    keep, or 0 for the `warm` — a request that says nothing leaves the
+    context loaded. Any other model is sent nothing more than before."""
     prompt = f"<2{code}> {segment}"
     body = {"prompt": prompt, "temperature": 0, "top_k": 1, "seed": 0,
             "max_tokens": max_tokens if max_tokens is not None else min(512, 2 * estimate_tokens(prompt) + 32)}
     if config.TRANSLATE_MODEL:
         body["model"] = config.TRANSLATE_MODEL
-    r = httpx.post(f"{config.TRANSLATE_URL}/v1/completions", json=body, timeout=timeout,
-                   headers=headers or {})
-    r.raise_for_status()
+    url = f"{config.TRANSLATE_URL}/v1/completions"
+    if warm:
+        r = httpx.post(url, json={**body, **rage_keep.warm_body()}, timeout=timeout, headers=headers or {})
+        r.raise_for_status()
+    else:
+        # named here: a segment runs on a pool thread, which carries no level
+        with rage_keep.request(config.TRANSLATE_URL, config.TRANSLATE_MODEL or None, time.monotonic(),
+                               level="translate", plugin="") as kept:
+            r = httpx.post(url, json={**body, **kept.body}, timeout=timeout, headers=headers or {})
+            r.raise_for_status()
     return clean_up(r.json()["choices"][0]["text"])
 
 

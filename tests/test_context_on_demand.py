@@ -144,9 +144,8 @@ def test_a_request_to_such_a_model_carries_the_keep_and_no_other_does(node):
     assert opted["json"] == {"input": ["alpha", "beta"], "model": NEMOTRON,
                              "metadata": {"keep_context_ms": "20"}}
     assert plain["json"] == {"input": ["gamma"], "model": BGE}, "exactly the body it always was"
-    stream, = keep.snapshot()
-    assert (stream["plugin"], stream["level"], stream["model"], stream["requests"]) == \
-        ("wikidata", "corpus", NEMOTRON, 1)
+    keyed = {s["model"]: s["keep_ms"] for s in keep.snapshot()}
+    assert keyed == {NEMOTRON: 20, BGE: None}, "both streams counted, one of them keyed"
 
 
 def test_each_job_type_sends_its_own_keep(node, monkeypatch):
@@ -335,3 +334,36 @@ def test_a_warm_gives_its_context_back_at_once(node):
         embeddings._request_vectors(["beta"], 5.0, OPTED_IN)
     assert node.real()[-1]["json"]["metadata"] == {"keep_context_ms": "20"}
 
+
+
+def test_a_translation_s_segments_carry_the_keep_and_its_warm_zero(monkeypatch):
+    """MADLAD on llama.cpp is in the first deployment (the brief §1.3). Each
+    segment's completion says its keep — the translation stream's, named
+    explicitly because a segment runs on a pool thread that carries no level
+    — and the warm says 0. A model not loaded with the option is sent the
+    body it always was."""
+    from app import config, translate
+    bodies: list[dict] = []
+
+    def post(url, json=None, timeout=None, headers=None):             # noqa: A002
+        bodies.append(json)
+        return httpx.Response(200, request=httpx.Request("POST", url),
+                              json={"choices": [{"text": "ciao"}]})
+    keep.reset()
+    monkeypatch.setattr(config, "TRANSLATE_URL", SERVER)
+    monkeypatch.setattr(config, "TRANSLATE_MODEL", "louise-translate-madlad")
+    monkeypatch.setattr(translate.httpx, "post", post)
+    opted = {"in": False}
+    monkeypatch.setattr(model_load, "context_on_demand", lambda url, model: opted["in"])
+
+    assert translate._t5_completion("it", "hello", 5.0) == "ciao"
+    assert "metadata" not in bodies[-1], "not loaded with the option: nothing more than before"
+
+    opted["in"] = True
+    translate._t5_completion("it", "hello", 5.0)
+    assert bodies[-1]["metadata"] == {"keep_context_ms": "20"}
+    translate._t5_completion("it", "OK", 5.0, max_tokens=4, warm=True)
+    assert bodies[-1]["metadata"] == {"keep_context_ms": "0"}
+    streams = {(s["plugin"], s["level"], s["model"]) for s in keep.snapshot()}
+    assert streams == {("", "translate", "louise-translate-madlad")}
+    keep.reset()
