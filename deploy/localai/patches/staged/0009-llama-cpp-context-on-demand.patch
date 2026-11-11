@@ -71,9 +71,9 @@ Assisted-by: Claude Code
  backend/cpp/llama-cpp/context_on_demand.h     |  173 ++
  .../cpp/llama-cpp/context_on_demand_test.cpp  |   97 +
  backend/cpp/llama-cpp/grpc-server.cpp         |   73 +-
- .../0011-server-context-on-demand.patch       | 1690 +++++++++++++++++
+ .../0011-server-context-on-demand.patch       | 1723 +++++++++++++++++
  backend/cpp/llama-cpp/prepare.sh              |    4 +
- 6 files changed, 2031 insertions(+), 11 deletions(-)
+ 6 files changed, 2064 insertions(+), 11 deletions(-)
  create mode 100644 backend/cpp/llama-cpp/context_on_demand.h
  create mode 100644 backend/cpp/llama-cpp/context_on_demand_test.cpp
  create mode 100644 backend/cpp/llama-cpp/patches/0011-server-context-on-demand.patch
@@ -584,10 +584,10 @@ index a90c179..915f1e0 100644
          return grpc::Status::OK;
 diff --git a/backend/cpp/llama-cpp/patches/0011-server-context-on-demand.patch b/backend/cpp/llama-cpp/patches/0011-server-context-on-demand.patch
 new file mode 100644
-index 0000000..d1c940c
+index 0000000..ae432c3
 --- /dev/null
 +++ b/backend/cpp/llama-cpp/patches/0011-server-context-on-demand.patch
-@@ -0,0 +1,1690 @@
+@@ -0,0 +1,1723 @@
 +server: context on demand - the model stays loaded, a request gives its context back
 +
 +A loaded model holds its weights and its context: the KV cache and the
@@ -610,8 +610,10 @@ index 0000000..d1c940c
 +  common_init_from_params() runs after a creation, in the order they have
 +  there (control vectors, the check of a reranking model, lora adapters,
 +  warmup) - that part is now common_init_context_apply(), shared by both.
-+  The load returns a context one of these steps stopped on, as before; a
-+  later creation that stops on one is refused.
++  The load returns a context one of these steps stopped on, as before, and
++  records where (common_init_result::init_stop); a later creation is
++  accepted when its steps end in the same place - the state of the load's
++  context, or none - so a model the load serves is not refused afterwards.
 +- server_queue::on_idle(): a callback run by the start_loop() thread each
 +  time it finds no task, without the queue's lock (it may free the
 +  context, and tasks are posted meanwhile); it returns when it wants to be
@@ -670,7 +672,9 @@ index 0000000..d1c940c
 +option; each created context held to the canary (completion and embedding
 +models); a context made to fail its canary is discarded, its request refused
 +with 503 and no context left behind, and the next one serves; the canary
-+switched off; no canary without the option. With the option
++switched off; no canary without the option; the same rerank scores across
++contexts (for a model whose load stops at the reranking check, which failed
++before init_stop). With the option
 +off the existing suites give the same results as before the patch
 +(test_sleep, test_basic, test_metrics, test_slot_save, test_embedding,
 +test_completion, test_tokenize, test_ctx_shift, test_kv_keep_only_active).
@@ -717,7 +721,7 @@ index 0000000..d1c940c
 +         {"--simple-io"},
 +         "use basic IO for better compatibility in subprocesses and limited consoles",
 +diff --git a/common/common.cpp b/common/common.cpp
-+index 29d2d20..ca17e01 100644
++index 29d2d20..5f6714e 100644
 +--- a/common/common.cpp
 ++++ b/common/common.cpp
 +@@ -1178,6 +1178,13 @@ struct common_init_result::impl {
@@ -769,7 +773,7 @@ index 0000000..d1c940c
 + common_sampler * common_init_result::sampler(llama_seq_id seq_id) {
 +     if (seq_id < 0 || seq_id >= (int) pimpl->samplers.size()) {
 +         return nullptr;
-+@@ -1454,39 +1482,161 @@ static void common_batch_set_zero_state(common_batch & batch, const llama_model
++@@ -1454,31 +1482,153 @@ static void common_batch_set_zero_state(common_batch & batch, const llama_model
 +     }
 + }
 + 
@@ -899,8 +903,8 @@ index 0000000..d1c940c
 ++    if (!common_context_canary_same(first, second)) {
 ++        common_context_canary_diff(first, second);
 ++        return COMMON_CANARY_MISMATCH;
-+     }
-+ 
+++    }
+++
 ++    pimpl->canary = std::move(second);
 ++
 ++    COM_INF("context canary: recorded, %zu values\n", pimpl->canary.size());
@@ -919,7 +923,7 @@ index 0000000..d1c940c
 ++    if (!common_context_canary_run(*this, params, now)) {
 ++        COM_WRN("%s", "context canary: its output could not be computed on this context\n");
 ++        return COMMON_CANARY_MISMATCH;
-++    }
++     }
 ++    if (!common_context_canary_same(pimpl->canary, now)) {
 ++        common_context_canary_diff(pimpl->canary, now);
 ++        return COMMON_CANARY_MISMATCH;
@@ -930,21 +934,21 @@ index 0000000..d1c940c
 ++
 ++// the steps that follow the creation of a context: the control vectors, the check of a reranking
 ++// model, the lora adapters, the warmup
-++// returns false if it stopped before the end
-++static bool common_init_context_apply(common_init_result & res, common_params & params) {
+++// returns 0 if it ran them all, else the step it stopped at
+++static int common_init_context_apply(common_init_result & res, common_params & params) {
 ++    llama_model   * model = res.model();
 ++    llama_context * lctx  = res.context();
 ++
 ++    const llama_vocab * vocab = llama_model_get_vocab(model);
-++
++ 
 +     if (!params.control_vectors.empty()) {
 +         if (params.control_vector_layer_start <= 0) params.control_vector_layer_start = 1;
-+         if (params.control_vector_layer_end   <= 0) params.control_vector_layer_end   = llama_model_n_layer(model);
++@@ -1486,7 +1636,7 @@ common_init_result_ptr common_init_from_params(common_params & params, bool mode
 + 
 +         const auto cvec = common_control_vector_load(params.control_vectors, llama_model_n_layer(model));
 +         if (cvec.n_embd == -1) {
 +-            return res;
-++            return false;
+++            return 1;
 +         }
 + 
 +         int err = llama_set_adapter_cvec(
@@ -953,7 +957,7 @@ index 0000000..d1c940c
 +                 params.control_vector_layer_end);
 +         if (err) {
 +-            return res;
-++            return false;
+++            return 2;
 +         }
 +     }
 + 
@@ -962,11 +966,11 @@ index 0000000..d1c940c
 + 
 +         if (!ok) {
 +-            return res;
-++            return false;
+++            return 3;
 +         }
 +     }
 + 
-+@@ -1569,12 +1719,55 @@ common_init_result_ptr common_init_from_params(common_params & params, bool mode
++@@ -1569,12 +1719,56 @@ common_init_result_ptr common_init_from_params(common_params & params, bool mode
 +         llama_perf_context_reset(lctx);
 + 
 +         // reset samplers to reset RNG state after warmup to the seeded state
@@ -974,7 +978,7 @@ index 0000000..d1c940c
 ++        res.reset_samplers();
 ++    }
 ++
-++    return true;
+++    return 0;
 ++}
 ++
 ++common_init_result_ptr common_init_from_params(common_params & params, bool model_only) {
@@ -984,12 +988,12 @@ index 0000000..d1c940c
 ++    if (model == NULL) {
 ++        COM_ERR("failed to load model '%s'\n", params.model.path.c_str());
 ++        return res;
-++    }
-++
-++    if (model_only) {
-++        return res;
 +     }
 + 
+++    if (model_only) {
+++        return res;
+++    }
+++
 ++    llama_context * lctx = res->context();
 ++    if (lctx == NULL) {
 ++        COM_ERR("failed to create context with model '%s'\n", params.model.path.c_str());
@@ -1001,8 +1005,8 @@ index 0000000..d1c940c
 ++        params.ctx_shift = false;
 ++    }
 ++
-++    // as before, a context whose adapters could not be applied is returned as it is
-++    common_init_context_apply(*res, params);
+++    // as before, a context on which these steps stopped early is returned as it is
+++    res->init_stop = common_init_context_apply(*res, params);
 ++
 +     return res;
 + }
@@ -1012,7 +1016,8 @@ index 0000000..d1c940c
 ++        return false;
 ++    }
 ++
-++    if (!common_init_context_apply(res, params)) {
+++    // the same state as the context of the load, or none
+++    if (common_init_context_apply(res, params) != res.init_stop) {
 ++        res.free_context();
 ++        return false;
 ++    }
@@ -1023,7 +1028,7 @@ index 0000000..d1c940c
 + common_init_result::~common_init_result() = default;
 + 
 + std::string common_get_model_endpoint() {
-+@@ -1862,6 +2055,12 @@ void common_threadpools::init(llama_context * ctx, const common_params & params)
++@@ -1862,6 +2056,12 @@ void common_threadpools::init(llama_context * ctx, const common_params & params)
 +     llama_attach_threadpool(ctx, threadpool, threadpool_batch);
 + }
 + 
@@ -1037,7 +1042,7 @@ index 0000000..d1c940c
 + // Vocab utils
 + //
 +diff --git a/common/common.h b/common/common.h
-+index e2bc8c5..d83e58b 100644
++index e2bc8c5..3dec624 100644
 +--- a/common/common.h
 ++++ b/common/common.h
 +@@ -670,6 +670,9 @@ struct common_params {
@@ -1064,7 +1069,7 @@ index 0000000..d1c940c
 + // note: defines the model, context, samplers, ets. lifetimes
 + struct common_init_result {
 +     common_init_result(common_params & params, bool model_only = false);
-+@@ -1005,6 +1015,20 @@ struct common_init_result {
++@@ -1005,6 +1015,24 @@ struct common_init_result {
 +     llama_model * model();
 +     llama_context * context();
 + 
@@ -1082,24 +1087,28 @@ index 0000000..d1c940c
 ++    common_canary_status canary_record(const common_params & params);
 ++    common_canary_status canary_check (const common_params & params);
 ++
+++    // the step at which the load stopped after it created the context, 0 if it ran them all
+++    // (see common_init_context_from_params)
+++    int init_stop = 0;
+++
 +     common_sampler * sampler(llama_seq_id seq_id);
 +     void reset_samplers();
 + 
-+@@ -1019,6 +1043,13 @@ using common_init_result_ptr = std::unique_ptr<common_init_result>;
++@@ -1019,6 +1047,13 @@ using common_init_result_ptr = std::unique_ptr<common_init_result>;
 + 
 + common_init_result_ptr common_init_from_params(common_params & params, bool model_only = false);
 + 
 ++// create again the context of a result that gave it up with free_context(), as common_init_from_params()
 ++// made it: the same context params (no fitting), then the same steps in the same order (control vectors,
 ++// lora adapters, warmup)
-++// returns false, leaving the result without a context, if it cannot be created or if one of the steps
-++// did not complete
+++// returns false, leaving the result without a context, if it cannot be created or if the steps do not
+++// end where they ended at the load
 ++bool common_init_context_from_params(common_init_result & res, common_params & params);
 ++
 + struct llama_model_params   common_model_params_to_llama  (      common_params & params);
 + struct llama_context_params common_context_params_to_llama(const common_params & params);
 + 
-+@@ -1049,6 +1080,9 @@ struct common_threadpools {
++@@ -1049,6 +1084,9 @@ struct common_threadpools {
 + 
 +     void init(llama_context * ctx, const common_params & params);
 + 
@@ -1778,10 +1787,10 @@ index 0000000..d1c940c
 + 
 +diff --git a/tools/server/tests/unit/test_context_on_demand.py b/tools/server/tests/unit/test_context_on_demand.py
 +new file mode 100644
-+index 0000000..03e0d02
++index 0000000..ccc649d
 +--- /dev/null
 ++++ b/tools/server/tests/unit/test_context_on_demand.py
-+@@ -0,0 +1,463 @@
++@@ -0,0 +1,487 @@
 ++import pytest
 ++import time
 ++from utils import *
@@ -2245,6 +2254,30 @@ index 0000000..d1c940c
 ++    assert get_metric(server, "context_canary") == 0
 ++    res = completion(server)
 ++    assert res.status_code == 200
+++
+++
+++def test_rerank_identical_across_contexts():
+++    global server
+++    server = ServerPreset.jina_reranker_tiny()
+++    server.context_on_demand = True
+++    server.server_metrics = True
+++    server.start()
+++    wait_for_context(server, False)
+++
+++    scores = []
+++    for _ in range(3):
+++        res = server.make_request("POST", "/rerank", data={
+++            "query": "Machine learning is",
+++            "documents": ["A machine is a physical system.", "Learning is the process of acquiring knowledge.", "Paris is in France."],
+++            "keep_context_ms": 0,
+++        })
+++        assert res.status_code == 200
+++        scores.append([r["relevance_score"] for r in sorted(res.body["results"], key=lambda r: r["index"])])
+++        wait_for_context(server, False)
+++
+++    assert scores[0] == scores[1] == scores[2]
+++    assert get_metric(server, "context_creations_total") == 3
+++    assert get_metric(server, "context_canary_failures_total") == 0
 +diff --git a/tools/server/tests/utils.py b/tools/server/tests/utils.py
 +index 0ca4919..658642c 100644
 +--- a/tools/server/tests/utils.py

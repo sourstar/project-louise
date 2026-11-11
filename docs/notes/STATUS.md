@@ -233,6 +233,25 @@ measured (published figures disagree).
   over gRPC, 32 checks now). (3) The reranker: LocalAI's rerank request carries no metadata; PROPOSED — the model's own
   keep in its YAML (`keep_context_ms:500`), which needs its backend built with P10 and P11 together — nothing built.
   Louise-side only: no engine, wrapper or service change. Brief §10.
+- **Context on request — the reranker by its model's keep; a defect of P11 fixed; the material for upstream**
+  (operator, 11-11: "Reranker option A, prepare everything for upstream, I will upload it eventually"). (1) The
+  reranker takes its keep from its YAML (`context_on_demand`, `context_canary:true`, `keep_context_ms:500`): no code,
+  ONE backend with P10 and P11 (`staged/nemotron-rerank-context-on-demand.series`), built on the CPU — the 32 gRPC
+  checks and 8 on `Rerank`. The card test is asked of München (brief, "For München" step 6); the live reranker is
+  untouched until it passes. (2) THAT CHECK FOUND A DEFECT OF P11: a re-created context was refused whenever a step
+  after the creation stopped early (a control vector, the reranking check), while the load serves such a context — a
+  model whose load stops there answered 503 for ever after its first free. Fixed: the load records where it stopped
+  (`init_stop`), a re-creation must end in the same place; llama.cpp's 21st test fails before and passes after; the
+  staged patches are regenerated and reproduce the tested trees; München's build `618e5a2b7e24` carries the defect and
+  is not to be used. (3) A model with no receipts (chat, the bare-backend reranker, MADLAD) says it is on demand only
+  through `/system`'s `load_options`, which the node's core does not list: the coordinator decided P1 in the core, and
+  NONE OF THE THREE GOES ON DEMAND IN PRODUCTION BEFORE `/system` LISTS THEM (the keeper would undercount them at
+  rest; MADLAD would get no keep). (4) Upstream: prepared, not filed — llama.cpp forbids an agent to write the issue,
+  the description or the commit message. Three diffs on llama.cpp's master (the feature; a result says when its
+  context was created; the canary), each built and tested there, and LocalAI's half on its master with its docs page:
+  `deploy/localai/upstream/llama-cpp-context-on-demand/` and `localai-context-on-demand/`, beside P1's package —
+  each a diff and a READING-GUIDE.md: what each project asks of the operator, the order, how to read the code. No engine, wrapper or service change; no Louise
+  code.
 - **Inputs computed in more than one pass, counted** (operator, 11-12: "for future trimming improvements we
   should gracefully log when a text is splitted"): the VeGa wrapper counts every answer's tokens against the
   load's ubatch and tells VeGa (`kind: passes`); VeGa logs when the inputs over it grow and serves every run's

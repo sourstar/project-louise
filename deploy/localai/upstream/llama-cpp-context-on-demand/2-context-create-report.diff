@@ -1,0 +1,182 @@
+diff --git a/tools/server/README.md b/tools/server/README.md
+index b3a0af1..7e89cbb 100644
+--- a/tools/server/README.md
++++ b/tools/server/README.md
+@@ -2619,6 +2619,8 @@ Notes:
+ 
+ `GET /metrics` reports `llamacpp:context_loaded` (1 while the context exists), `llamacpp:context_creations_total` and `llamacpp:context_creation_seconds_total`.
+ 
++A result of `/embedding` (the non-OpenAI route, which returns its results as they are) carries `context_create_ms` when the context was created for it: the time its creation took.
++
+ ## More examples
+ 
+ ### Interactive mode
+diff --git a/tools/server/server-context.cpp b/tools/server/server-context.cpp
+index 6074a6d..ce12c64 100644
+--- a/tools/server/server-context.cpp
++++ b/tools/server/server-context.cpp
+@@ -1138,6 +1138,7 @@ private:
+     // a task that carries no keep leaves it loaded (ctx_hold). only the start_loop() thread creates and frees it, see context_acquire() / context_idle()
+     int64_t t_ctx_keep_until = 0;     // ms, the latest deadline asked by a finished task
+     int64_t t_ctx_created    = 0;     // ms
++    int64_t t_ctx_create_us  = 0;     // us, the time the last creation took
+     bool    ctx_hold         = false; // the last task to finish carried no keep
+ 
+     // properties of the context that outlive it, read when there is none
+@@ -1224,8 +1225,9 @@ private:
+ 
+         const int64_t t_create = ggml_time_us() - t_start;
+ 
+-        t_ctx_created = ggml_time_ms();
+-        ctx_hold      = false; // the task this context is created for decides, when it is done
++        t_ctx_created   = ggml_time_ms();
++        t_ctx_create_us = t_create;
++        ctx_hold        = false; // the task this context is created for decides, when it is done
+ 
+         metrics.ctx_loaded       = true;
+         metrics.n_ctx_create    += 1;
+@@ -2586,7 +2588,8 @@ private:
+         res->id      = slot.task->id;
+         res->id_slot = slot.id;
+ 
+-        res->index = slot.task->index;
++        res->index           = slot.task->index;
++        res->t_ctx_create_us = slot.task->t_ctx_create_us;
+ 
+         // keep copy of last generated text for debugging purposes
+         if (slots_debug) {
+@@ -2650,6 +2653,8 @@ private:
+         res->n_tokens  = slot.task->n_tokens();
+         res->res_type  = slot.task->params.res_type;
+ 
++        res->t_ctx_create_us = slot.task->t_ctx_create_us;
++
+         const int n_embd_out = llama_model_n_embd_out(model_tgt);
+ 
+         std::vector<float> embd_res(n_embd_out, 0.0f);
+@@ -2782,6 +2787,8 @@ private:
+         res->index    = slot.task->index;
+         res->n_tokens = slot.task->n_tokens();
+ 
++        res->t_ctx_create_us = slot.task->t_ctx_create_us;
++
+         for (int i = 0; i < batch.size(); ++i) {
+             if (!batch.tokens[i].output || batch.tokens[i].seq_id != slot.id) {
+                 continue;
+@@ -3199,6 +3206,8 @@ private:
+                 send_error(task, "the context cannot be created now, the memory it needs may be in use: try again later", ERROR_TYPE_UNAVAILABLE);
+                 return true;
+             }
++            // its results say so, see server_task_result::t_ctx_create_us
++            task.t_ctx_create_us = t_ctx_create_us;
+         }
+ 
+         switch (task.type) {
+diff --git a/tools/server/server-task.cpp b/tools/server/server-task.cpp
+index 79ac814..ffa10bc 100644
+--- a/tools/server/server-task.cpp
++++ b/tools/server/server-task.cpp
+@@ -1483,10 +1483,15 @@ json server_task_result_embd::to_json() {
+ }
+ 
+ json server_task_result_embd::to_json_non_oaicompat() {
+-    return json {
++    json res = json {
+         {"index",     index},
+         {"embedding", embedding},
+     };
++    if (t_ctx_create_us >= 0) {
++        // context on demand: the context was created for this task
++        res["context_create_ms"] = t_ctx_create_us / 1e3;
++    }
++    return res;
+ }
+ 
+ json server_task_result_embd::to_json_oaicompat() {
+diff --git a/tools/server/server-task.h b/tools/server/server-task.h
+index 3af61bb..3306e3d 100644
+--- a/tools/server/server-task.h
++++ b/tools/server/server-task.h
+@@ -169,6 +169,9 @@ struct task_result_state {
+ struct server_task {
+     int id = -1; // to be filled by server_queue
+ 
++    // context on demand: the time it took to create the context for this task, negative if it was there
++    int64_t t_ctx_create_us = -1;
++
+     // TODO @ngxson : remove this field and implement a mapping task_id -> idx in the response_reader
+     size_t index = 0; // used when there are multiple prompts (batch request)
+ 
+@@ -363,6 +366,9 @@ struct server_task_result {
+     int id           = -1;
+     int id_slot      = -1;
+ 
++    // context on demand: the time it took to create the context for the task, negative if it was there
++    int64_t t_ctx_create_us = -1;
++
+     // TODO @ngxson : remove this field and implement a mapping task_id -> idx in the response_reader
+     size_t index = 0; // to be used for batched tasks
+ 
+diff --git a/tools/server/tests/unit/test_context_on_demand.py b/tools/server/tests/unit/test_context_on_demand.py
+index fd33b96..4ff9c5e 100644
+--- a/tools/server/tests/unit/test_context_on_demand.py
++++ b/tools/server/tests/unit/test_context_on_demand.py
+@@ -332,3 +332,58 @@ def test_rerank_identical_across_contexts():
+ 
+     assert scores[0] == scores[1] == scores[2]
+     assert get_metric(server, "context_creations_total") == 3
++
++
++def test_a_result_says_when_the_context_was_created_for_it():
++    global server
++    server = ServerPreset.bert_bge_small()
++    server.context_on_demand = True
++    server.server_metrics = True
++    server.start()
++    wait_for_context(server, False)
++
++    # the non-OAI route returns its results as they are
++    res = server.make_request("POST", "/embedding", data={
++        "content": "I believe the meaning of life is",
++        "keep_context_ms": 60000,
++    })
++    assert res.status_code == 200
++    assert res.body[0]["context_create_ms"] >= 0
++
++    # the context is there for the next one
++    res = server.make_request("POST", "/embedding", data={
++        "content": "This is a test",
++        "keep_context_ms": 0,
++    })
++    assert res.status_code == 200
++    assert "context_create_ms" not in res.body[0]
++    assert get_metric(server, "context_creations_total") == 1
++
++
++def test_one_result_of_a_batch_says_the_context_was_created():
++    global server
++    server = ServerPreset.bert_bge_small()
++    server.context_on_demand = True
++    server.server_metrics = True
++    server.start()
++    wait_for_context(server, False)
++
++    res = server.make_request("POST", "/embedding", data={
++        "content": ["I believe the meaning of life is", "This is a test", "Hello world"],
++        "keep_context_ms": 0,
++    })
++    assert res.status_code == 200
++    assert len(res.body) == 3
++    assert sum("context_create_ms" in r for r in res.body) == 1
++    wait_for_context(server, False)
++
++    # without the option, no result says anything
++    server.stop()
++    server = ServerPreset.bert_bge_small()
++    server.start()
++    res = server.make_request("POST", "/embedding", data={
++        "content": "This is a test",
++        "keep_context_ms": 0,
++    })
++    assert res.status_code == 200
++    assert "context_create_ms" not in res.body[0]
