@@ -132,6 +132,52 @@ TEMPLATES.env.filters["share"] = _share
 TEMPLATES.env.filters["size"] = gpu.size
 
 
+#: THE BEST ETA's speed (operator, 2026-11-11: "best calculated on the work
+#: to do divided by the theoretical top speed with 100% GPU available"):
+#: documents a card-second, from the card record's last WINDOW
+#: (app/rage/card_record.py `gpu_time`), re-read at most every TTL
+_GPU_SPEED_WINDOW_S = 3 * 3600
+_GPU_SPEED_TTL_S = 300
+#: fewer card-seconds than this spent on a collection is no measurement
+_GPU_SPEED_MIN_S = 60.0
+_gpu_speed_memo: dict = {"at": 0.0, "speeds": {}}
+_gpu_speed_lock = threading.Lock()
+
+
+def _gpu_speeds() -> dict[str, float]:
+    """Documents embedded a card-second, per collection, over the last
+    window — {} where the card record holds nothing (no GPU probe)."""
+    now = time.time()
+    with _gpu_speed_lock:
+        if now - _gpu_speed_memo["at"] < _GPU_SPEED_TTL_S:
+            return _gpu_speed_memo["speeds"]
+    from .rage import card_record
+    speeds: dict[str, float] = {}
+    try:
+        got = card_record.gpu_time(card_record.read(now - _GPU_SPEED_WINDOW_S, now))
+        speeds = {name: docs / sec for name, (docs, sec) in got.items()
+                  if docs > 0 and sec >= _GPU_SPEED_MIN_S}
+    except Exception:   # noqa: BLE001 — telemetry never fails a page
+        speeds = {}
+    with _gpu_speed_lock:
+        _gpu_speed_memo.update(at=now, speeds=speeds)
+    return speeds
+
+
+def _best_eta(name: str, remaining: int, rate_per_h) -> str | None:
+    """The work left at the whole card: `remaining` documents over the
+    collection's documents a card-second, never later than at the current
+    rate (a measurement over another window cannot make the whole card
+    slower than a share of it). None without a measurement."""
+    speed = _gpu_speeds().get(name)
+    if not speed or remaining <= 0:
+        return None
+    best = remaining / speed
+    if rate_per_h:
+        best = min(best, remaining * 3600.0 / float(rate_per_h))
+    return _human_eta(best)
+
+
 def _ago(when) -> str:
     """A unix time as how long ago: '12 s ago', '5 min ago', '3 h ago'."""
     try:
@@ -2275,6 +2321,7 @@ def _collection_shelf(collection: collections_mod.Collection,
     #: so the template reads it unconditionally instead of keeping its own
     #: copy of the arithmetic — which is how the two came to disagree.
     stage_targets: dict[str, int] = {k: 0 for k in _RATE_FIELDS}
+    remaining: dict[str, int] = {}
     embed_mode = db.get_scope(con)["embed_mode"]
     stages = status_mod.from_counts(None if counts_pending else counts, fetched=fetched,
                                     lance_dir=getattr(collection, "lance_dir", None))
@@ -2315,6 +2362,16 @@ def _collection_shelf(collection: collections_mod.Collection,
                   "resumes when indexing catches up")
 
     recipe = _shelf_recipe(collection)
+    # THE ETA ROW of the embedded stage (operator, 2026-11-11): current, at
+    # the rate measured now; best, at the whole card (a GPU encoder only)
+    embed_eta = None
+    if not counts_pending and embed_mode != "off" and remaining.get("embed", 0) > 0:
+        best = (_best_eta(collection.name, remaining["embed"], stage_rates.get("embed"))
+                if recipe is not None and recipe.spends == "gpu" else None)
+        current = stage_etas.get("embed")
+        if best or current:
+            embed_eta = {"best": best, "current": current,
+                         "current_why": stage_eta_why.get("embed")}
     paused = node_state.pause_of(collection.name)
     # judged against the mode the page read once for every card, the pause
     # just read, the setting: THE holds `node show` names (status `holds`)
@@ -2376,6 +2433,8 @@ def _collection_shelf(collection: collections_mod.Collection,
         "grow": _grow_view(collection),
         "stage_rates": stage_rates,
         "stage_etas": stage_etas,
+        # the embedded stage's ETA row: best (the whole card) and current
+        "embed_eta": embed_eta,
         # the tooltip for the slot above, in words — built HERE because
         # only this function knows which of the reasons applies
         "stage_eta_why": stage_eta_why,

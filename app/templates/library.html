@@ -135,19 +135,19 @@
   {% set fts_old = (sup.fts or 0) if not c.counts_pending else 0 %}
   {% set fts_w = ((100*c.fts_done/indexable)|round(1)) if indexable else 0 %}
   {% set fts_old_w = ([100 - fts_w, (100*fts_old/indexable)|round(1)]|min) if indexable else 0 %}
-  <div class="stage"><div class="lbl"><span title="{{ stage_title }}"{% if c.counts_pending %}{% elif indexable and c.rdf_done >= indexable %} style="color:var(--ok)"{% elif worker_state == 'running' %} style="color:var(--brass)"{% else %} style="color:var(--muted)"{% endif %}>parsed (rdf)</span><span>{{ c.rdf_done|num }} / {{ indexable|num }}{{ c.rdf_done|share(indexable) }}{% if c.stage_etas.rdf %} <span style="color:var(--brass)" title="{{ c.stage_eta_why.rdf }}">({{ c.stage_etas.rdf }}{% if c.stage_eta_why.rdf and c.stage_eta_why.rdf.startswith('+') %}, {{ c.stage_eta_why.rdf }}{% endif %})</span>{% endif %}</span></div>
+  <div class="stage"><div class="lbl"><span title="{{ stage_title }}"{% if c.counts_pending %}{% elif indexable and c.rdf_done >= indexable %} style="color:var(--ok)"{% elif worker_state == 'running' %} style="color:var(--brass)"{% else %} style="color:var(--muted)"{% endif %}>parsed</span><span>{{ c.rdf_done|num }} / {{ indexable|num }}{{ c.rdf_done|share(indexable) }}{% if c.stage_etas.rdf %} <span style="color:var(--brass)" title="{{ c.stage_eta_why.rdf }}">({{ c.stage_etas.rdf }}{% if c.stage_eta_why.rdf and c.stage_eta_why.rdf.startswith('+') %}, {{ c.stage_eta_why.rdf }}{% endif %})</span>{% endif %}</span></div>
     <div class="spine"><span style="width:{{ (100*c.rdf_done/indexable)|round(1) if indexable else 0 }}%;background:var(--brass)"></span></div></div>
-  <div class="stage"><div class="lbl"><span title="{{ stage_title }}"{% if c.counts_pending %}{% elif indexable and c.fts_done >= indexable %} style="color:var(--ok)"{% elif worker_state == 'running' %} style="color:var(--brass)"{% else %} style="color:var(--muted)"{% endif %}>indexed (lexical)</span><span>{{ c.fts_done|num }} / {{ indexable|num }}{{ c.fts_done|share(indexable) }}{% if fts_old %} · <span data-superseded="fts" title="documents whose text changed: the earlier version stays in the lexical index, and is searched, until it is indexed again">{{ fts_old|num }} earlier version (searched until re-indexed)</span>{% endif %}{% if c.stage_etas.fts %} <span style="color:var(--brass)" title="{{ c.stage_eta_why.fts }}">({{ c.stage_etas.fts }}{% if c.stage_eta_why.fts and c.stage_eta_why.fts.startswith('+') %}, {{ c.stage_eta_why.fts }}{% endif %})</span>{% endif %}</span></div>
-    <div class="spine"><span style="width:{{ fts_w }}%;background:var(--brass)"></span>{% if fts_old %}<span data-superseded-bar="fts" style="width:{{ fts_old_w }}%;background:var(--superseded)"></span>{% endif %}</div></div>
+  <div class="stage"><div class="lbl"><span title="{{ stage_title }}"{% if c.counts_pending %}{% elif indexable and c.fts_done >= indexable %} style="color:var(--ok)"{% elif worker_state == 'running' %} style="color:var(--brass)"{% else %} style="color:var(--muted)"{% endif %}>indexed</span><span>{{ c.fts_done|num }} / {{ indexable|num }}{{ c.fts_done|share(indexable) }}{% if c.stage_etas.fts %} <span style="color:var(--brass)" title="{{ c.stage_eta_why.fts }}">({{ c.stage_etas.fts }}{% if c.stage_eta_why.fts and c.stage_eta_why.fts.startswith('+') %}, {{ c.stage_eta_why.fts }}{% endif %})</span>{% endif %}</span></div>
+    <div class="spine"><span style="width:{{ fts_w }}%;background:var(--brass)"></span>{% if fts_old %}<span data-superseded-bar="fts" data-superseded="{{ fts_old }}" title="{{ fts_old|num }} earlier version{{ '' if fts_old == 1 else 's' }}: the text changed; the earlier version stays in the lexical index, and is searched, until it is indexed again" style="width:{{ fts_old_w }}%;background:var(--superseded)"></span>{% endif %}</div></div>
   {# the dense row is part of the STANDARD ladder on EVERY card (operator:
      pubmed's main box read as truncated without it) — named for what it
      is: pre-embedded when the vectors arrive via an archive. The sub-box
      below keeps only what is specific to the archive itself. #}
   {# amendment 38: a collection with pre-embeddings shows TOTAL coverage
-     (archive + local encoder) as 'embedded (dense)' in its main box; only
+     (archive + local encoder) as 'embedded' in its main box; only
      a stand-alone pre-embedded collection (wikivec, whose card IS the
      archive) keeps the 'pre-embedded' name on its one dense row #}
-  {% set dense_label = 'pre-embedded (dense)' if c.genesis and c.genesis.standalone else 'embedded (dense)' %}
+  {% set dense_label = 'pre-embedded' if c.genesis and c.genesis.standalone else 'embedded' %}
   {# dense state: done -> green; an ARCHIVE collection's vectors are in
      the scheduling pool whenever the worker runs (import ignores the
      mode) -> turquoise; otherwise the mode speaks: off -> grey,
@@ -163,8 +163,18 @@
   {% elif c.embed_mode == 'off' %}{% set dense_color = 'var(--muted)' %}
   {% elif c.embed_mode == 'lazy' %}{% set dense_color = 'var(--amber)' %}
   {% else %}{% set dense_color = 'var(--brass)' if worker_state == 'running' else 'var(--muted)' %}{% endif %}
-  <div class="stage"><div class="lbl"><span title="{{ stage_title }}" style="color:{{ dense_color }}">{{ dense_label }}</span><span>{{ c.embed_done|num }} / {{ dense_target|num }}{{ c.embed_done|share(dense_target) }}{% if dense_old %} · <span data-superseded="embed" title="documents whose text changed: their vectors from the earlier version stay in the table, and are searched, until they are embedded again">{{ dense_old|num }} earlier version (searched until re-embedded)</span>{% endif %}{% if c.counts_age is defined and c.counts_age > 120 %} <span class="muted" title="the figures are a count of the manifest, recounted every {{ ((c.counts_every or 120) / 60)|round|int }} min while the page is viewed: the work moves between counts">(counted {{ (c.counts_age / 60)|round|int }} min ago, every {{ ((c.counts_every or 120) / 60)|round|int }} min)</span>{% endif %}{% if c.stage_etas.embed %} <span style="color:var(--brass)" title="{{ c.stage_eta_why.embed }}">({{ c.stage_etas.embed }}{% if c.stage_eta_why.embed and c.stage_eta_why.embed.startswith('+') %}, {{ c.stage_eta_why.embed }}{% endif %})</span>{% endif %}</span></div>
-    <div class="spine"><span style="width:{{ dense_w }}%;background:var(--lapis)"></span>{% if dense_old %}<span data-superseded-bar="embed" style="width:{{ dense_old_w }}%;background:var(--superseded)"></span>{% endif %}</div></div>
+  {# IN SIGHT, THE NUMBERS ALONE (operator, 2026-11-11: "just show
+     'embedded' (in one row) and '29.640.094 / 44.266.030 · 67,0 %', then in
+     another row the ETA with best/current"): how old the count is and the
+     earlier versions still searched are the label's and the bar's tooltips #}
+  <div class="stage"><div class="lbl"><span title="{{ stage_title }}{% if c.counts_age is defined and c.counts_age > 120 %} — counted {{ (c.counts_age / 60)|round|int }} min ago, recounted every {{ ((c.counts_every or 120) / 60)|round|int }} min{% endif %}" style="color:{{ dense_color }}">{{ dense_label }}</span><span>{{ c.embed_done|num }} / {{ dense_target|num }}{{ c.embed_done|share(dense_target) }}</span></div>
+    <div class="spine"><span style="width:{{ dense_w }}%;background:var(--lapis)"></span>{% if dense_old %}<span data-superseded-bar="embed" data-superseded="{{ dense_old }}" title="{{ dense_old|num }} earlier version{{ '' if dense_old == 1 else 's' }}: the text changed; the earlier vectors stay in the table, and are searched, until it is embedded again" style="width:{{ dense_old_w }}%;background:var(--superseded)"></span>{% endif %}</div>
+    {% if c.embed_eta %}
+    {# best: the work left at the whole card (documents a card-second, the
+       card record's last 3 h); current: at the rate measured now #}
+    <div class="lbl" data-eta="embed" style="margin:3px 0 0"><span>ETA</span><span style="color:var(--brass)">{% if c.embed_eta.best %}<span data-eta-best title="the work left at 100 % of the card: its documents a card-second, measured over the last 3 h">best {{ c.embed_eta.best }}</span>{% endif %}{% if c.embed_eta.best and c.embed_eta.current %} · {% endif %}{% if c.embed_eta.current %}<span data-eta-current title="{{ c.embed_eta.current_why or '' }}">current {{ c.embed_eta.current }}</span>{% endif %}</span></div>
+    {% endif %}
+  </div>
   {# WARNINGS THAT ASK FOR AN ACTION stay in sight, as their badge and,
      where it is the action, their reason; what each means is in Details #}
   {% if c.blocked %}
@@ -231,9 +241,6 @@
      2026-11-07: wikidata's grow dialog showed its 14 held families checked,
      read as the 9 embedded) — as the worker resolves it, in sight beside
      the mode it narrows; changed in the grow dialog's "embed" group #}
-  {% if c.embed_slices %}
-  <div class="note" data-embed-slices title="changed under Options › grow profile…">{{ c.embed_slices.line }}</div>
-  {% endif %}
   {# RULE 2 (2026-11-06: wikidata turned on here sat paused for hours, the
      card silent): what still stops it embedding, in words, where the
      setting is shown (node_state.embedding_blockers — a pause among them,
@@ -260,6 +267,12 @@
     <summary>Details</summary>
     {% if c.frozen %}
     <div class="note" data-frozen-since>{{ c.frozen.says }}</div>
+    {% endif %}
+    {# which held slices are embedded: behind Details since 2026-11-11
+       (operator: "no extra text around like wikidata 'Embedded: 9 of 14
+       families…'"); changed in the grow dialog's "embed" group #}
+    {% if c.embed_slices %}
+    <div class="note" data-embed-slices title="changed under Options › grow profile…">{{ c.embed_slices.line }}</div>
     {% endif %}
     {% if not c.fetched %}
     <div class="note">fetch stage: off — acquisition is not enabled for this collection</div>

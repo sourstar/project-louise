@@ -57,7 +57,7 @@ def _render(shelf):
 
 def _value(html):
     """The pre-embedded row's value, e.g. `3 / 5`."""
-    return html.split(">pre-embedded (dense)</span>", 1)[1].split("</div>", 1)[0]
+    return html.split(">pre-embedded</span>", 1)[1].split("</div>", 1)[0]
 
 
 def test_the_scan_counts_vectors_held_inside_the_declared_range(pubmed):

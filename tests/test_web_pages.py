@@ -242,8 +242,8 @@ def test_library_page_renders_shelf_card(client):
     # the default fixture collection has acquire_enabled=False, so the
     # "fetched" stage bar is honestly absent — its n/a explanation stands in
     assert "fetch stage: off" in r.text
-    assert "parsed (rdf)" in r.text
-    assert "indexed (lexical)" in r.text and "embedded (dense)" in r.text
+    assert ">parsed</span>" in r.text
+    assert ">indexed</span>" in r.text and ">embedded</span>" in r.text
     assert "grow profile" in r.text
 
 

@@ -380,8 +380,8 @@ def test_library_card_renders_pre_embedded_data_in_one_line(isolated_config):
     # operator, 2026-10-13: pre-embedded data is ONE line on every card —
     # "N pre-embedded vectors by XYZ"; the sub-box and its rows are gone
     assert "12 pre-embedded vectors by medcpt-pubmed" in html, "no credit: the archive's id names it"
-    assert html.count(">embedded (dense)</span>") == 1, "the main box's dense row is total coverage"
-    assert "fetched (vectors)" not in html and ">pre-embedded (dense)</span>" not in html
+    assert html.count(">embedded</span>") == 1, "the main box's dense row is total coverage"
+    assert "fetched (vectors)" not in html and ">pre-embedded</span>" not in html
     assert "pre-embedded data:" not in html and "genesis retry" not in html
     assert html.count("Embed mode —") == 1, "ONE knob"
 
@@ -395,13 +395,13 @@ def test_library_card_renders_pre_embedded_data_in_one_line(isolated_config):
                          genesis_archive="upstash-wikipedia-2024-06")
     html_local = _render_library(web._collection_shelf(standalone, {}))
     assert "pre-embedded vectors by" in html_local, "the same one line on every card"
-    assert ">pre-embedded (dense)</span>" in html_local,         "the corpus IS the vectors: its one dense row keeps the name"
+    assert ">pre-embedded</span>" in html_local,         "the corpus IS the vectors: its one dense row keeps the name"
     assert html_local.count("Embed mode —") == 1
 
     plain = web._collection_shelf(collections_mod.default_collection(), {})
     html2 = _render_library(plain)
-    assert ">embedded (dense)</span>" in html2
-    assert "pre-embedded (dense)" not in html2
+    assert ">embedded</span>" in html2
+    assert "pre-embedded" not in html2
 
 
 def test_library_card_shows_the_plugin_display_label(isolated_config):
@@ -675,14 +675,14 @@ def test_stage_label_colors_are_consistent(isolated_config):
 
     shelf = web._collection_shelf(c, {})
     html = _render_library(shelf)                      # worker running
-    assert color_of(html, "parsed (rdf)") == "var(--ok)"          # 4/4
-    assert color_of(html, "indexed (lexical)") == "var(--brass)"  # 2/4, running
-    assert color_of(html, "embedded (dense)") == "var(--amber)"   # mode lazy
+    assert color_of(html, "parsed") == "var(--ok)"          # 4/4
+    assert color_of(html, "indexed") == "var(--brass)"  # 2/4, running
+    assert color_of(html, "embedded") == "var(--amber)"   # mode lazy
 
     scope = db.get_scope(con); scope["embed_mode"] = "off"; db.set_scope(con, scope)
     web.invalidate_counts(); _wait_counts(c)
     html = _render_library(web._collection_shelf(c, {}))
-    assert color_of(html, "embedded (dense)") == "var(--muted)"   # mode off
+    assert color_of(html, "embedded") == "var(--muted)"   # mode off
 
     # paused node: nothing runs — grey everywhere that is not complete
     html_p = web.TEMPLATES.env.get_template("library.html").render(
@@ -690,8 +690,8 @@ def test_stage_label_colors_are_consistent(isolated_config):
         shelves=[web._collection_shelf(c, {})], counts_age=0, plugins=[],
         plugin_profiles={}, plugin_extras={}, corpus_mounts=[],
         corpus_mounts_dir="", worker_state="paused")
-    assert color_of(html_p, "indexed (lexical)") == "var(--muted)"
-    assert color_of(html_p, "parsed (rdf)") == "var(--ok)", \
+    assert color_of(html_p, "indexed") == "var(--muted)"
+    assert color_of(html_p, "parsed") == "var(--ok)", \
         "complete stays green even while paused"
 
     # counts pending: neutral, never colored from zeros
@@ -699,9 +699,9 @@ def test_stage_label_colors_are_consistent(isolated_config):
     pending.update(counts_pending=True, in_scope=0, rdf_done=0, fts_done=0,
                    embed_done=0)
     html_c = _render_library(pending)
-    assert color_of(html_c, "parsed (rdf)") == "neutral"
-    assert color_of(html_c, "indexed (lexical)") == "neutral"
-    assert color_of(html_c, "embedded (dense)") == "inherit"
+    assert color_of(html_c, "parsed") == "neutral"
+    assert color_of(html_c, "indexed") == "neutral"
+    assert color_of(html_c, "embedded") == "inherit"
 
 
 def test_seed_only_and_state_gates(isolated_config):
@@ -884,10 +884,12 @@ def test_a_card_says_how_old_its_counts_are_and_how_often_they_move(isolated_con
     assert shelf["counts_every"] >= web._COUNTS_TTL_S
     shelf.update(counts_age=24 * 60.0, counts_every=25 * 60.0)
     html = _render_library(shelf)
-    assert "counted 24 min ago, every 25 min" in html
-    assert "cached 2 min" not in html
+    # the count's age is the embedded label's tooltip since 2026-11-11 (the
+    # operator: no text around the numbers), never in sight
+    assert "counted 24 min ago, recounted every 25 min\"" in html
+    assert "(counted" not in html and "cached 2 min" not in html
     fresh = dict(shelf, counts_age=30.0)
-    assert "counted" not in _render_library(fresh).split("embedded (dense)")[1][:400]
+    assert "counted" not in _render_library(fresh).split(">embedded</span>")[0][-400:]
 
 
 def _rdf_rows(con, done: int, total: int) -> None:

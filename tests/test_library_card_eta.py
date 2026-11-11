@@ -355,13 +355,16 @@ def test_the_rate_and_the_share_are_read_without_a_hover(isolated_config):
     html = _render(shelf)
     _assert_slot_invariant(shelf, html)
 
-    slots = {text.split(",")[0]: text for _tip, text in _slots(html)}
     eta = shelf["stage_etas"]["embed"]
     assert eta.startswith("~")
     why = shelf["stage_eta_why"]["embed"]
     assert why.startswith("+") and why.endswith("/h"), why
-    assert slots[eta] == f"{eta}, {why}", slots
-    assert "9 / 1.000 · 0,9 %" in html
+    # the embedded stage's ETA on a row of its own (operator, 2026-11-11:
+    # "then in another row the ETA with best/current"), the rate its tooltip
+    assert f'<span data-eta-current title="{why}">current {eta}</span>' in html
+    assert shelf["embed_eta"] == {"best": None, "current": eta, "current_why": why}, \
+        "no card record here: no best"
+    assert "9 / 1.000 · 0,9 %</span>" in html
 
 
 def test_the_share_has_one_decimal_a_comma_and_a_floor():
