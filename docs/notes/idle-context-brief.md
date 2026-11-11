@@ -93,6 +93,8 @@ options `context_on_demand:true`, `keep_context_ms:N`.
   queue the jobs may be different, leading to tifferent stay warm timeouts;
   a timeout per model may fit our scenario but it might not be a general
   purpose approach." (This replaces the 500 ms of the line above.)
+- "The trimming time shall not be modified if the expiry occurred because
+  of a job missed scheduling (for instance when a chat model takes over)".
 - "If there is a query in the meantime, the chat model gets a context
   memory; if there is not enough memory there are still options (in this
   order): the contexts of the batch in queue can be pruned, or some other
@@ -172,9 +174,25 @@ them.
   across restarts. "Premature" is defined by the creation's MEASURED time
   (§2): an expiry is premature when the stream's next request arrives
   within about one creation's time of it — holding that long would have
-  cost less than creating again, the break-even of SKI RENTAL. Trimmed by hand from a log, 20 ms would be a
-  known slowdown deployed (CLAUDE.md, performance) on every stream nobody
-  had trimmed yet.
+  cost less than creating again, the break-even of SKI RENTAL. Trimmed by
+  hand from a log, 20 ms would be a known slowdown deployed (CLAUDE.md,
+  performance) on every stream nobody had trimmed yet.
+- **An expiry the stream did not cause does not move its keep**
+  (operator). Without this rule every question would double the keep of
+  every corpus stream it made stand aside, and hold their contexts longer
+  exactly when the question needs the card. Stated so that no list of
+  causes is needed (review): A STREAM IS JUDGED ON WHEN ITS NEXT REQUEST
+  WAS READY, NOT ON WHEN IT WAS SENT. Ready before the keep ran out and
+  held back from an idle endpoint — a question's claim (the chat taking
+  over: `dispatch._stand_aside`), a deferral, a creation refused for
+  memory, a model loading, a paused node or collection — the expiry is
+  EXCUSED: it neither doubles the keep nor counts as a clean interval
+  toward its decay, and it is logged with its cause, apart from the
+  premature ones. Ready only after the keep ran out, the stream was late
+  by its own queueing and is judged on that gap alone. RAGE's gate already
+  has both times and the cause per request (`dispatch.call`: the stand
+  aside, `admit`'s wait, `GateTimeout`; `stood_aside()` per plugin); the
+  wrapper says THAT a call met an expired keep, only RAGE knows WHY.
 - **Who does what with the keep** (review) — one owner, RAGE; everyone
   else passes it on or obeys it:
 
@@ -445,8 +463,10 @@ reload, per backend.
    and the premature expiries counted and told to VeGa; the canary (§1.4).
    The wrapper is part of every run's engine (§4).
 4. Louise: RAGE's keep on corpus requests — in every place app/embeddings.py
-   builds a request body — and its controller; the keeper's rule (H5); the
-   gate's keep-0 pass. Each with its test.
+   builds a request body — and its trim per stream (a premature expiry
+   doubles; an excused one, a stand-aside for a question among them, moves
+   nothing); the keeper's rule (H5); the gate's keep-0 pass. Each with its
+   test.
 
 ## 4. Our LocalAI and llama.cpp customizations (the series)
 
@@ -670,7 +690,8 @@ probable or open.
 - **The operator's** (§1.1, and §0's general design): the semi-cold start;
   idle or running, no sleep; allocated on the request, freed when the work
   is done; the keep in the request, in ms, 0 = none; RAGE sets it, per job
-  type, 20 ms to start and trimmed;
+  type, 20 ms to start and trimmed, and not for an expiry a missed
+  scheduling caused;
   expired keeps logged; the order when a query finds no room.
 - **The review's — written into the design, NOT yet the operator's word:**
   the keep's three rules; the loop's thread owning the context; the
