@@ -105,6 +105,8 @@ measured (published figures disagree).
   comes back on the B70. For a dedicated session: [idle-context-brief.md](idle-context-brief.md) (code paths, the
   series, 27 measured B70 pitfalls + 9 open, the memory facts, the plan). Corrected the same day: ggml-sycl's VMM
   op pool is ON by default at our pin (PR #29265, which would have turned it off, was closed unmerged).
+  IN CHARGE (operator, 11-12): the session "Dynamic context evaluation" (session_01Nm96wZNsGxpHx6eHzYqHZR)
+  implements the shared context pool; it was given the brief, and reaches the node through München.
 - **Inputs computed in more than one pass, counted** (operator, 11-12: "for future trimming improvements we
   should gracefully log when a text is splitted"): the VeGa wrapper counts every answer's tokens against the
   load's ubatch and tells VeGa (`kind: passes`); VeGa logs when the inputs over it grow and serves every run's
