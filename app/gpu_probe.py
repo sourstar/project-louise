@@ -46,7 +46,7 @@ import time
 
 from . import gpu_busy, gpu_memory
 from .gpu import (GpuDevice, GpuProcess, GpuSnapshot, energy_uj, gt_clock, hwmon_dir,
-                  read_sensors, to_json)
+                  read_sensors, size, to_json)
 
 PROC = Path("/proc")
 SYS_DRM = Path("/sys/class/drm")
@@ -346,6 +346,72 @@ def ns_pid(pid_dir: Path) -> int | None:
     return int(m.group(1).split()[-1]) if m else None
 
 
+_PPID = re.compile(r"^PPid:\s+(\d+)$", re.M)
+#: how far up a GPU client's parents are followed for the model that started it
+ANCESTOR_DEPTH = 6
+
+
+def ns_ancestors(pid_dir: Path, depth: int = ANCESTOR_DEPTH) -> tuple[int, ...]:
+    """The process's parent, grandparent… as ITS OWN namespace numbers them,
+    nearest first, up to the namespace's edge. A model behind VeGa is
+    started as a wrapper (run.sh, then python vega_wrapper.py) whose CHILD,
+    the real backend, holds the card, while LocalAI's `/system` gives the
+    wrapper's pid (München, 2026-11-11: every vega- model under "card not
+    known", nemotron 4729 in /system and 4732 on the B70). The web places a
+    model on the card where any of its descendants holds memory
+    (app/gpu_models.py `by_card`). `status` is readable without ptrace."""
+    status = _read(pid_dir / "status") or ""
+    own = _NSPID.search(status)
+    if not own:
+        return ()
+    width = len(own.group(1).split())
+    out: list[int] = []
+    for _ in range(depth):
+        parent = _PPID.search(status)
+        if not parent or int(parent.group(1)) <= 1:
+            break
+        status = _read(PROC / parent.group(1) / "status") or ""
+        ns = _NSPID.search(status)
+        if not ns or len(ns.group(1).split()) != width:
+            break                     # the container's edge: its parent is the host's
+        out.append(int(ns.group(1).split()[-1]))
+        if out[-1] <= 1:
+            break
+    return tuple(out)
+
+
+def ptrace_capable(status: str | None = None) -> bool:
+    """CAP_SYS_PTRACE (19) in this process's effective set: what reading
+    another process's open files needs."""
+    if status is None:
+        status = _read(Path("/proc/self/status")) or ""
+    for line in status.splitlines():
+        if line.startswith("CapEff:"):
+            return bool(int(line.split()[1], 16) & (1 << 19))
+    return False
+
+
+def unread_note(denied: int, devices, capable: bool) -> str | None:
+    """What the System page says about clients the probe could not read —
+    only when it matters: memory on a card that no model it read holds
+    (operator, 2026-11-11: "It's likely listing the processes on CPU, only
+    models on IGPU shall be considered, also the interface shall mention
+    only 'models' not 'processes'"). A process on the CPU holds nothing on
+    a card, so the processes the probe may not read are never counted."""
+    if not denied:
+        return None
+    missing = [(d, d.unattributed) for d in devices
+               if d.unattributed >= GpuProcess.PUSHED_OUT_FLOOR]
+    if not missing:
+        return None
+    where = "; ".join(f"{size(b)} on {d.name or d.card}" for d, b in missing)
+    why = ("the gpu-probe service needs CAP_SYS_PTRACE (cap_add: SYS_PTRACE, deploy/docker/compose.yaml)"
+           if not capable else
+           "it belongs to a model this probe may not read (another container's user namespace, "
+           "or the host's own)")
+    return f"memory held by no model shown: {where} — {why}"
+
+
 def scan(denied: list[int] | None = None) -> dict[str, list[GpuProcess]]:
     """Every process holding GPU memory, per card (pdev), largest first.
 
@@ -411,7 +477,7 @@ def scan(denied: list[int] | None = None) -> dict[str, list[GpuProcess]]:
             pid=pid, label=label(argv, pid_dir / "root"),
             command=PurePosixPath(argv[0]).name if argv else "?",
             container=container(pid_dir), vram=vram, host=host, ram=ram, mapped=mapped,
-            ns_pid=ns_pid(pid_dir)))
+            ns_pid=ns_pid(pid_dir), ns_ancestors=ns_ancestors(pid_dir)))
     for procs in out.values():
         procs.sort(key=lambda p: (-p.vram, -p.host, p.pid))
     return out
@@ -512,18 +578,15 @@ def snapshot() -> GpuSnapshot:
                       vendor, name, total, used, sensors, integrated))
     denied: list[int] = []
     per_card = scan(denied)     # after every query has closed its descriptor
-    if denied:
-        notes.append(f"the probe may not read the open files of {len(denied)} process(es) (Permission "
-                     "denied), so the memory they hold on a card is not attributed and no model can "
-                     "be placed on its card: the gpu-probe service needs CAP_SYS_PTRACE "
-                     "(cap_add: SYS_PTRACE, deploy/docker/compose.yaml)")
-    return GpuSnapshot(
-        devices=tuple(GpuDevice(card=c, pdev=pdev, driver=drv, vendor_id=vid, device_id=did,
-                                vendor=ven, name=nm, vram_total=tot, vram_used=use,
-                                processes=tuple(per_card.get(pdev, ())), sensors=sen,
-                                integrated=igp)
-                      for c, pdev, drv, vid, did, ven, nm, tot, use, sen, igp in found),
-        notes=tuple(notes))
+    devices = tuple(GpuDevice(card=c, pdev=pdev, driver=drv, vendor_id=vid, device_id=did,
+                              vendor=ven, name=nm, vram_total=tot, vram_used=use,
+                              processes=tuple(per_card.get(pdev, ())), sensors=sen,
+                              integrated=igp)
+                    for c, pdev, drv, vid, did, ven, nm, tot, use, sen, igp in found)
+    note = unread_note(len(denied), devices, ptrace_capable())
+    if note:
+        notes.append(note)
+    return GpuSnapshot(devices=devices, notes=tuple(notes))
 
 
 #: the running sampler; None until main() starts it (or in --once)

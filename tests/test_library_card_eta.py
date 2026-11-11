@@ -362,9 +362,13 @@ def test_the_rate_and_the_share_are_read_without_a_hover(isolated_config):
     assert why.startswith("+") and why.endswith("/h"), why
     # the embedded stage's ETA on a row of its own (operator, 2026-11-11:
     # "then in another row the ETA with best/current"), the rate its tooltip
-    assert f'<span data-eta-current title="{why}">current {eta}</span>' in html
-    assert shelf["embed_eta"] == {"best": None, "current": eta, "current_why": why}, \
-        "no card record here: no best"
+    # the rate in sight beside it (operator, 2026-11-11: "the current
+    # benchmark … disappeared"): chunks a second from the card record when it
+    # has them, else the documents an hour the estimate came from
+    assert (f'<span data-eta-current title="{why}">current {eta} '
+            f'<span data-eta-rate title="the rate measured now">({why})</span></span>') in html
+    assert shelf["embed_eta"] == {"best": None, "current": eta, "current_why": why, "rate": why}, \
+        "no card record here: no best, the rate the estimate came from"
     assert "9 / 1.000 · 0,9 %</span>" in html
 
 

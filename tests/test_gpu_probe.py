@@ -206,9 +206,19 @@ def test_a_process_refused_is_counted_and_the_snapshot_says_why(sysfs, proc, mon
     denied: list[int] = []
     assert [p.pid for p in gp.scan(denied)[PDEV]] == [9317]
     assert sorted(denied) == [978631, 1034812]
-    snap = gp.snapshot()
-    assert any("may not read the open files of 2 process(es)" in n and "CAP_SYS_PTRACE" in n
-               for n in snap.notes), snap.notes
+    # WHAT THE PAGE SAYS is about MODELS and card memory, never a count of
+    # processes (operator, 2026-11-11: "It's likely listing the processes on
+    # CPU, only models on IGPU shall be considered, also the interface shall
+    # mention only 'models' not 'processes'"): only memory a card holds for no
+    # model read is named, with the cause
+    from dataclasses import replace
+    card = gpu.GpuDevice("card0", PDEV, "xe", "8086", "e223", None, "Arc Pro B70", 32 << 30, 6 << 30)
+    note = gp.unread_note(2, (card,), capable=False)
+    assert "6.00 GiB on Arc Pro B70" in note and "CAP_SYS_PTRACE" in note and "process" not in note
+    assert "another container" in gp.unread_note(2, (card,), capable=True), "granted: the cause is not the cap"
+    assert gp.unread_note(2, (replace(card, vram_used=0),), capable=False) is None, \
+        "processes on the CPU hold nothing on a card: nothing to say"
+    assert gp.unread_note(0, (card,), capable=False) is None
 
 
 def test_a_probe_that_reads_everything_says_nothing_of_it(sysfs, proc):
@@ -546,3 +556,17 @@ def test_the_probe_tells_an_integrated_card_and_says_when_it_cannot(tmp_path, mo
     monkeypatch.setattr(gpu_memory, "amdgpu_integrated", refused)
     assert gp.card_integrated(card, "amdgpu", 512 << 20, notes) is None
     assert notes and "could not be asked" in notes[0]
+
+
+def test_a_gpu_clients_parents_are_read_in_its_own_namespace(proc):
+    """München, 2026-11-11: a vega- model's /system pid is its wrapper's; the
+    probe gives each GPU client's parents, as its container numbers them, up
+    to the container's edge."""
+    for pid, ns, ppid in ((9317, "9317\t4732", 9316), (9316, "9316\t4730", 9315),
+                          (9315, "9315\t4729", 9300), (9300, "9300\t7", 9000), (9000, "9000", 1)):
+        d = proc / str(pid)
+        d.mkdir(exist_ok=True)
+        (d / "status").write_text(f"Name:\tx\nPPid:\t{ppid}\nNSpid:\t{ns}\n")
+    assert gp.ns_ancestors(proc / "9317") == (4730, 4729, 7), "stops at the host's process"
+    assert gp.ns_ancestors(proc / "9000") == (), "outside a container, its parent is init"
+    assert gp.ns_ancestors(proc / "424242") == (), "gone: nothing"

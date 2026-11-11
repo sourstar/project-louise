@@ -46,14 +46,14 @@ def test_the_panel_shows_the_card_its_memory_and_each_model(client, monkeypatch)
     assert "Battlemage G31 [Arc Pro B70]" in html and "Intel Corporation" in html
     # the node's figures, 2026-09-18: the driver's own used, and free from it
     assert "VRAM 31.89 GiB · used 23.96 GiB" in html and "free 7.93 GiB" in html
-    assert "sum of the processes" not in html
+    assert "sum of the models" not in html
     rows = re.findall(r"<tr><td title=\"llama-server\">([^<]+)</td>", html)
     assert rows == ["Qwen3-Embedding-4B-Q4_K_M", "MedCPT-Article-Encoder-f16"]
     assert "9.14 GiB" in html and "28.7%" in html          # Qwen's VRAM, its share
     assert "416 KiB" in html and "414 MiB" in html          # an encoder held in host RAM
     # what the driver counts and no process shown holds
     unattributed = 25730179072 - (9586248 + 416) * 1024
-    assert "not held by any process shown" in html and gpu.size(unattributed) in html
+    assert "<td>held by no model shown</td>" in html and gpu.size(unattributed) in html
 
 
 def test_without_the_drivers_count_used_is_the_processes_sum(client, monkeypatch):
@@ -62,8 +62,8 @@ def test_without_the_drivers_count_used_is_the_processes_sum(client, monkeypatch
                                         notes=("card0: the driver reports used memory "
                                                "only to CAP_PERFMON",)))
     html = client.get("/admin/system/gpu").text
-    assert "sum of the processes" in html and "CAP_PERFMON" in html
-    assert "not held by any process shown" not in html
+    assert "sum of the models" in html and "CAP_PERFMON" in html
+    assert "<td>held by no model shown</td>" not in html
     assert f"used {gpu.size((9586248 + 416) * 1024)}" in html
 
 
@@ -133,7 +133,7 @@ def test_real_host_ram_is_shown_apart_from_mapped_files_and_a_pushed_out_model_i
     arc = replace(ARC, processes=(replace(qwen, ram=657 << 20, mapped=2400 << 20), medcpt))
     _probe(monkeypatch, gpu.GpuSnapshot(devices=(arc,)))
     html = client.get("/admin/system/gpu").text
-    for heading in ("GPU buffers in host RAM", "process RAM", "mapped file (reclaimable)"):
+    for heading in ("GPU buffers in host RAM", "model RAM", "mapped file (reclaimable)"):
         assert heading in html
     assert "657 MiB" in html and "2.34 GiB" in html
     assert "NOT occupancy" in html, "the column's own title says which figure is not real"
@@ -250,3 +250,13 @@ def test_a_web_one_deploy_behind_reads_a_device_field_it_does_not_know():
     snap = gpu.to_json(gpu.GpuSnapshot(devices=(ARC,)))
     snap["devices"][0]["a_device_field_from_the_future"] = 1
     assert gpu.from_json(snap).devices[0].card == ARC.card
+
+
+def test_the_memory_legend_is_one_entry_a_line(client, monkeypatch):
+    """Operator, 2026-11-11: "System tab: the memory occupation legend, one
+    entry per line"."""
+    _probe(monkeypatch, gpu.GpuSnapshot(devices=(ARC,)))
+    html = client.get("/admin/system/gpu").text
+    legend = re.search(r'<div class="legend note">(.*?)</div></div>', html, re.S).group(1)
+    entries = re.findall(r'<div><span class="swatch [a-z]+"></span>[^<]+</div>', legend + "</div>")
+    assert len(entries) >= 2 and entries[0].startswith("<div>")

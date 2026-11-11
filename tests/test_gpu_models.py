@@ -155,3 +155,23 @@ def test_a_backend_on_two_cards_is_the_card_where_it_holds_the_most():
     big = gpu.GpuProcess(1, "m", "x", "c", 500 << 20, 1300 << 20, ns_pid=77)
     cards = gm.by_card(models, (_card("b70", 32 * GIB, (tiny,)), _card("igpu", GIB // 2, (big,))))
     assert [r.model for r in cards["igpu"]["rows"]] == ["stt-igpu"] and "b70" not in cards
+
+
+def test_a_model_whose_pid_is_its_wrappers_is_placed_by_its_child():
+    """München, 2026-11-11: every vega- model under "card not known" — LocalAI's
+    /system gives the wrapper's pid (run.sh, python vega_wrapper.py) and the
+    card is held by its child, the backend (nemotron 4729 in /system, 4732 on
+    the B70)."""
+    from app import gpu
+    system = {"loaded_models": [{"id": "vega-nemotron-3-embed-1b", "backend": "vega-louise-llama-cpp",
+                                 "size_vram": 2 * GIB, "process": {"pid": 4729}},
+                                {"id": "stt-igpu", "backend": "vulkan-parakeet-cpp", "size_vram": GIB,
+                                 "process": {"pid": 5509}}]}
+    models = gm.panel(COLLECTIONS, get_json=lambda url: system)
+    backend = gpu.GpuProcess(1, "nemotron", "grpc-server", "c", 2 * GIB, 0, ns_pid=4732,
+                             ns_ancestors=(4730, 4729, 7))
+    stt = gpu.GpuProcess(2, "stt", "parakeet", "c", 400 << 20, GIB, ns_pid=5509, ns_ancestors=(7,))
+    cards = gm.by_card(models, (_card("b70", 32 * GIB, (backend,)), _card("igpu", GIB // 2, (stt,))))
+    assert [r.model for r in cards["b70"]["rows"]] == ["vega-nemotron-3-embed-1b"]
+    assert [r.model for r in cards["igpu"]["rows"]] == ["stt-igpu"], "its own pid first"
+    assert cards["unplaced"] == []
