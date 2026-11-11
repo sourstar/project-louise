@@ -115,16 +115,26 @@
   // ---- the microphone ---------------------------------------------------
   const mic = document.getElementById('mic'), status = document.getElementById('mic-status');
   const AC = window.AudioContext || window.webkitAudioContext;
-  let rec = null, busy = false;
+  // questionOn: a question of the page is being searched or answered
+  let rec = null, busy = false, questionOn = false;
 
+  // THE MICROPHONE'S THREE LOOKS (operator, 2026-11-12: "After speaking, the
+  // button remains red; it shall instead turn grey while the query is
+  // processed, then again of the base color when I can enter a new query"):
+  // red while it records; grey and inert while what was said is written
+  // down AND while the question runs (ask.html `go`), 'wait'; its base
+  // colour when a new question can be spoken.
   function micState(kind, text) {
     if (!mic) return;
     mic.classList.toggle('rec', kind === 'rec');
     mic.setAttribute('aria-pressed', kind === 'rec' ? 'true' : 'false');
-    mic.disabled = kind === 'busy';
-    mic.title = kind === 'rec' ? 'stop recording' : 'speak the question';
+    mic.disabled = kind === 'busy' || kind === 'wait';
+    mic.title = kind === 'rec' ? 'stop recording'
+      : kind === 'wait' ? 'the microphone comes back once the question is answered' : 'speak the question';
     if (status) { status.textContent = text || ''; status.hidden = !text; }
   }
+  // at rest: grey while a question runs, else ready
+  function rest() { micState(questionOn ? 'wait' : 'idle'); }
   function clock(ms) { const s = Math.floor(ms / 1000); return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0'); }
 
   function onSamples(r, buf) {
@@ -224,7 +234,7 @@
   function fail(r, outcome, text) {
     if (rec !== r) return;
     const info = micInfo(r);
-    rec = null; release(r); micState('idle'); say(text);
+    rec = null; release(r); rest(); say(text);
     report(outcome, info);
   }
 
@@ -236,7 +246,7 @@
     try {
       stream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true } });
     } catch (e) {
-      busy = false; micState('idle');
+      busy = false; rest();
       report('not opened: ' + ((e && (e.name || e.message)) || e), { ua: navigator.userAgent });
       say(e && e.name === 'NotAllowedError'
         ? 'the microphone is not allowed for this page — allow it in the browser to speak a question'
@@ -281,7 +291,7 @@
       if (ctx.state === 'suspended') { try { await ctx.resume(); } catch (e) { /* it runs or it does not */ } }
     } catch (e) {
       const info = micInfo(r);
-      release(r); busy = false; micState('idle');
+      release(r); busy = false; rest();
       say('the microphone could not be recorded (' + ((e && (e.message || e.name)) || e) + ')');
       report('failed: ' + ((e && (e.name || e.message)) || e), info);
       return;
@@ -326,7 +336,7 @@
     } else { release(r); pcm = downsample(r.chunks, r.rate, RATE); }
     const info = micInfo(r);
     if (!pcm.length) {
-      micState('idle'); say('no sound came from the microphone — ' + CAR_HINT);
+      rest(); say('no sound came from the microphone — ' + CAR_HINT);
       report('no sound', info);
       return;
     }
@@ -352,12 +362,15 @@
       const q = document.getElementById('q'), prior = q.value.trim();
       q.value = prior && prior !== lastAsked ? q.value.replace(/\s*$/, ' ') + text : text;
       dictated = q.value.trim();         // asked as it is, a spoken question (asking)
-      q.focus(); q.setSelectionRange(q.value.length, q.value.length);
+      // NOT FOCUSED (operator, 2026-11-12: "Hitting the button to speak makes
+      // the keyboard appear; wrong, it shall appear only by clicking in the
+      // text box"): a phone opens its keyboard on focus, and the spoken
+      // question is asked by itself — the box only shows it
       toAsk = true;
     } catch (e) {
       say('what you said could not be written down: ' + (e.message || e));
       report('not written down: ' + (e.message || e), info);
-    } finally { busy = false; micState('idle'); }
+    } finally { busy = false; rest(); }
     // HANDS-FREE (operator, 2026-11-11: "click to activate and automatically
     // ask at the end of the speech, then automatically tts of the answer"):
     // the spoken question is asked as Ask would ask it — the page's switch
@@ -368,7 +381,7 @@
   if (mic) {
     if (window.isSecureContext && navigator.mediaDevices && navigator.mediaDevices.getUserMedia && AC) {
       mic.hidden = false;
-      mic.addEventListener('click', () => { if (busy) return; rec ? stop() : start(); });
+      mic.addEventListener('click', () => { if (busy || (questionOn && !rec)) return; rec ? stop() : start(); });
     } else {
       mic.remove();
       console.info('Louise: no microphone on this page — a browser opens one only for an https page or localhost');
@@ -705,6 +718,12 @@
     answerCleared() {
       writing = false; stopReading(); dropAhead(); if (speak) speak.hidden = true;
       const q = document.getElementById('q'); if (q) lastAsked = q.value.trim();
+    },
+    // a question of the page started (true) or ended (false): the
+    // microphone is grey meanwhile (ask.html `go`)
+    question(on) {
+      questionOn = !!on;
+      if (!rec && !busy) rest();
     },
     // the reading's times, in ms from Ask (null before an Ask on this page)
     timeline() {

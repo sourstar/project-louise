@@ -112,6 +112,36 @@ def test_help_page_is_open_and_documents_the_platform(client):
         assert anchor in r.text, f"help page must document: {anchor}"
 
 
+def test_a_llama_model_in_use_is_said_built_with_llama_in_help(client):
+    """The Llama 3.2 Community License asks a service built on a Llama model
+    to display "Built with Llama" prominently, on its interface, about page or
+    documentation (2026-11-12: the reranker of most collections,
+    llama-nemotron-rerank-1b-v2, is fine-tuned from Llama 3.2 1B). Help says it,
+    and only Help (operator, 2026-11-12: "Move Built with Llama in the help
+    section"); when the model leaves, this test says to take the line out."""
+    from pathlib import Path
+    shipped = Path(__file__).parents[1] / "deploy/vega/stage/models/louise-rerank-nemotron-1b.yaml"
+    ask, help_page = client.get("/ask").text, client.get("/help").text
+    assert "Built with Llama" not in ask, "in the help section, not on Ask"
+    if not shipped.exists():
+        assert "Built with Llama" not in help_page, "no Llama model ships: take the attribution out"
+        return
+    panel = help_page[help_page.index('<div class="panel" id="models">'):]
+    panel = panel[:panel.index("</div>")]
+    assert "Built with Llama" in panel and "llama-nemotron-rerank-1b-v2" in panel
+    assert "https://www.llama.com/llama3_2/license/" in panel and "https://openmdw.ai/license/1-1/" in panel
+    assert "Copyright © Meta Platforms, Inc. All Rights Reserved." in panel
+    assert '["Basics", ["overview", "models",' in help_page, "on the first tab, where Help opens"
+
+
+def test_a_phone_keeps_no_hover_look_on_the_voice_buttons(client):
+    """A phone keeps :hover on the button last tapped: the microphone kept
+    its accent border after speaking, red in the warm themes (operator,
+    2026-11-12: "the button remains red")."""
+    page = client.get("/ask").text
+    assert "@media (hover:none){.voice-btn:not(.rec):not(.on):hover{border-color:var(--line)}}" in page
+
+
 def test_ui_is_rebranded_no_legacy_name_or_link(client):
     r = client.get("/ask")
     # the header names the project, not the container (operator, 2026-10-30)
@@ -197,7 +227,7 @@ def test_one_ask_button_a_switch_and_the_settings_out_of_the_way(client):
     for control in ('id="mode"', 'id="limit"', 'id="rerank-depth"', 'id="all-langs"'):
         assert control in settings, control
     assert 'id="lang"' in form and 'id="lang"' not in settings, "the results' language stays in sight"
-    assert "function go(){return howAsk()==='search'?search():ask()}" in html
+    assert "function go(){return running(()=>howAsk()==='search'?search():ask())}" in html
 
 
 def test_admin_login_takes_the_token_as_copied_with_its_spaces(client):

@@ -5,13 +5,18 @@
 # (the llama-nemotron-rerank port, ggml-org/llama.cpp#24083 on ddf48f8), installed under
 # the candidate series' digest 10aa8b1851d7 (build.sh names the build by it; an AOT or a pinned
 # stack adds its suffix to the tar, the backend keeps this name). The settings are bge's (the strict, bit-exact
-# set): SYCL DNN off, FA oneDNN off, parallel 1. ctx 4,096 holds the 2,048-token document
+# set): SYCL DNN off, FA oneDNN off, parallel 1. ctx 4,096 (as first set; 3,072 live) holds the 2,048-token document
 # window, the query and the template ("question:{query} \n \n passage:{document}") with
 # room; the attention is bidirectional, so a pair must fit one ubatch.
 # Converted with the patched converter at f16 from the HF weights (bf16).
+# LIVE since 2026-11-11 (operator: B) as the [reranker] of gutenberg, wikipedia, wikidata,
+# normattiva and normattiva-nemo (pubmed keeps MedCPT), on the backend as installed on the
+# node, louise-sycl-f16-llama-cpp-9d17b8a39845, at ctx = batch = ubatch 3,072: the same pair
+# scores identically at 4,096 and 3,072 (9.805 / -16.469), size_vram 3,348 -> 3,174 MiB.
+# Its licence asks for "Built with Llama" on the service: Help › Basics › Models says it.
 {
-  "backend": "louise-sycl-f16-llama-cpp-10aa8b1851d7",
-  "context_size": 4096,
+  "backend": "louise-sycl-f16-llama-cpp-9d17b8a39845",
+  "context_size": 3072,
   "embeddings": true,
   "env": {
     "GGML_SYCL_ENABLE_DNN": "0",
@@ -25,10 +30,10 @@
   "options": [
     "parallel:1",
     "cache_ram:0",
-    "ubatch:4096"
+    "ubatch:3072"
   ],
   "parameters": {
-    "batch": 4096,
+    "batch": 3072,
     "model": "weights/nemotron-rerank/llama-nemotron-rerank-1b-v2-f16.gguf",
     "seed": 0
   },

@@ -20,6 +20,44 @@ measured (published figures disagree).
 
 ### 2026-11-11 (München)
 
+- **Ask page, three findings fixed** (operator, 11-12):
+  - "Quality/Speed, Quick/Quality — totally confusing": now ONE Quality / Speed switch. Speed is the chat model
+    translating AND the text search reading only the question's language and English; the API keeps `speed` and
+    `quick` apart (ask-card-workflow.md §8).
+  - "the keyboard appears" on tapping the microphone: the dictated question no longer focuses the box.
+  - "the button remains red": a phone kept the tap's hover border (the accent, red in the warm themes); there is no
+    hover look without a hover now. The microphone is grey and inert from the end of the speech until the question
+    is answered, then back to its base colour (tests/browser/ask_voice.js step 11, which fails on the old page).
+  - LIVE: 0c95c48 deployed 2026-11-11T08:23:30Z (operator's word; rc 0, relay gate 200). Checks: /ask has one
+    "quality or speed" switch and no `textsearch`, the hover:none rule; voice.js has `question(on)` and no
+    `q.focus()`; a wikipedia search answers.
+- **Philippe on about 10 s, the candidates** (München, 11-11): 12 parts, none flagged. Top three: (1) 10.18 s, score
+  0.880, two questions and a closing statement; (2) 10.46 s, 0.748; (3) 9.91 s, 0.745. Words match 1.0 / 0.955 / 1.0.
+  Files in /root/measure/philippe-10s/. Speed (omnivoice-cpp, the fixed sentence ×3 warm, node paused; staged
+  profiles removed after): RTF it / en, first call it / en — live full clip 0.752 / 0.763, 10.7 / 11.5 s; candidate 1
+  0.443 / 0.416, 5.7 / 5.6 s; candidate 2 0.463 / 0.408, 6.0 / 6.0 s; candidate 3 0.386 / 0.401, 5.8 / 6.3 s: about
+  1.8× faster than the full clip, as the old 7.90 s cut (0.425). Samples with the operator; live on their word.
+  LIVE since ~09:10Z (operator: "Deal, I like it"): **candidate 1d**, i.e. candidate 1 with its two sentence pauses
+  lengthened to ~1.0 s. His own pauses (780 ms after "vittime?", 620 ms after "dell'arte?") are kept whole, speech
+  tails included; the extra length is his quietest room tone (3.90–4.10 s) inserted mid-pause with 10 ms crossfades.
+  11.04 s; RTF it 0.443 / en 0.428, first call 5.5 / 5.6 s. Dropped on the way: 1b (~830 ms) and 1c (comfort
+  noise; it cut the tail of "dell'arte?"). Same profile id 1c834741: reference.wav = 1d, beside
+  reference-10s-1d.wav, reference-orig-27.75s.wav/.txt, reference-cut-7.90s.wav; previous profile.json at
+  /root/measure/philippe-profile.json.bak-20261111-full; built by /root/measure/philippe-10s/philippe_1d.py.
+  IN THE REPO (operator, 11-12: "Add it"): that script, byte-identical (sha256 875b10…), with its input and
+  output hashes, in tools/voices/ (1d rebuilt byte for byte, verified by München from 223eb9d); and in the tool, for any voice,
+  `assemble --sentence-pause S [--room-tone A-B] [--parts …]`. The tool's join was also corrected: where two parts
+  meet, the pause is the speaker's own after the first part (candidate 1 had taken the 240 ms before the next
+  sentence instead of his 780 ms after "vittime?").
+- **Philippe on about 10 s, keeping the speaker's pauses** (operator, 11-12: "assemble the most meaningful parts
+  of the whole clip in a clip of about 10s. Beyond the pure voice to be, the speaker has a distinct style way to
+  make pauses between words and sentences"): `tools/voice_reference.py` (tests/test_voice_reference.py). It cuts the
+  27.75 s original into parts at its pauses (silencedetect's measure, threshold from the clip's own floor) and places
+  the known transcript's words in them (the node's STT, difflib). Then it assembles 9–11 s of whole sentences and
+  clauses, at most 3 parts. Every pause is one of the speaker's own, at its own length and with its own room tone;
+  parts join only across the same kind of boundary, and the clip ends on a sentence. Three different candidates,
+  ranked by pause style, sound coverage, level, joins and length. The operator's ear decides. München runs it, makes
+  each candidate's fixed sentences (it, en; RTF), the operator listens; live only on the operator's word.
 - **Philippe's voice profile metadata fixed** (`1c834741-…`, LocalAI config mount
   `voice-profiles/1c834741-3826-4990-8046-388ab4e9607e/`). profile.json still described the 27.75 s original
   (27,748 ms, its full transcript in references[0]) while the file served, `reference.wav`, is the 7.90 s cut of
@@ -45,6 +83,27 @@ measured (published figures disagree).
   in one request would be one longer reference, which this model already reads: the 27.75 s original at RTF 0.74.
   LIVE NOW (operator in München's session: "use the full clip in the meantime"): Philippe on the full 27.75 s
   original as one clip with its full transcript; the 7.90 s cut kept as reference-cut-7.90s.wav.
+- **Reranker: llama-nemotron-rerank-1b-v2, LIVE for five collections** (operator, 11-11: B; München).
+  `louise-rerank-nemotron-1b` (f16, parallel 1, ctx = batch = ubatch 3,072) is the `[reranker]` of gutenberg,
+  wikipedia, wikidata, normattiva and normattiva-nemo; pubmed keeps MedCPT; bge unloaded. Basis: gutenberg MRR@10
+  0.435 → 0.627 (+0.19, p 0.0001, 490 queries), jurifindit 0.608 → 0.677 (+0.07, p 0.002, 175 queries), +0.3–0.7 s
+  per list; wikipedia and wikidata NOT measured (chosen without it). Checks: the same pair scores identically at
+  ctx 4,096 and 3,072 (9.805 / −16.469), size_vram 3,348 → 3,174 MiB; one search per collection, 10 reranked hits
+  each; `hold config apply` refused nothing. No collection has a reranker calibration, so the merge across
+  collections was and stays RRF (05 §5.6); a calibration fitted later must be fitted on nemotron-1b (retrieval
+  checks `cal.rerank_model`). Engine: our separate backend `louise-sycl-f16-llama-cpp-9d17b8a39845` (ddf48f8 + the
+  #24083 port, P10 in [localai-bugs.md](localai-bugs.md)). Backups `<name>.toml.bak-20261111-before-nemotron-rerank`,
+  `louise-rerank-nemotron-1b.yaml.bak-20261111-ctx4096`. LICENCE (Llama 3.2 Community + OpenMDW-1.1): "Built with
+  Llama" on the service — Help › Basics › Models says it (tests/test_web_pages.py; Ask's footer line removed
+  11-12, operator: "Move Built with Llama in the help section"; the licence allows an about page or documentation;
+  LIVE 3754507 at 2026-11-11T09:04:55Z, rc 0, relay gate 200: /ask without it, /help's Models panel with it). LIVE: 850773d
+  deployed 2026-11-11T07:41:09Z (operator: "Deploy the web for the Llama attribution"; web + worker on one image,
+  rc 0, relay gate 200; /ask has the line and its link, /help the Models panel and Meta's notice; a gutenberg search
+  answers with Nemotron rerank scores). Wikidata and wikipedia measured after the choice (07:46–07:52Z, known-item
+  sets, node paused), so no collection loses: wikidata MRR@10 bge 0.526 → Nemotron 0.554 (+0.028 [+0.005, +0.051],
+  p 0.022, 195 queries); wikipedia 0.544 → 0.587 (+0.044 [−0.003, +0.098], p 0.11, 50); +60–90 ms per list. To
+  watch: Italian queries gain more than English ones, so the it − en gap widens (wikidata +0.139 → +0.197,
+  wikipedia +0.072 → +0.178). Scores: /data/rerank-bench/wiki-len.*.
 - **gutenberg's Qwen3-Embedding-4B trimmed: ubatch = batch 2048, ctx 8192, LIVE since 2026-11-12 06:52Z**
   (München; the operator's 10-23 "trim the context to the needed one" — gutenberg's chunker cuts at 1,000 tokens, its
   space promises 8,191). `size_vram` 5,643 → 4,263 MiB (−1,380). Gate run sha256:7e0a79eabf3fe229…: document 16/16,
@@ -60,6 +119,8 @@ measured (published figures disagree).
   comes back on the B70. For a dedicated session: [idle-context-brief.md](idle-context-brief.md) (code paths, the
   series, 27 measured B70 pitfalls + 9 open, the memory facts, the plan). Corrected the same day: ggml-sycl's VMM
   op pool is ON by default at our pin (PR #29265, which would have turned it off, was closed unmerged).
+  IN CHARGE (operator, 11-12): the session "Dynamic context evaluation" (session_01Nm96wZNsGxpHx6eHzYqHZR)
+  implements the shared context pool; it was given the brief, and reaches the node through München.
 - **A model's context on request — the design settled in review** (operator, the same day; the commits' clock reads
   11-11 where this day's entries say 11-12): no idle timer and no sleep. llama.cpp allocates a model's context when a
   request arrives and frees it when the work is done; a request carries a keep in ms (0 = none) that holds it after

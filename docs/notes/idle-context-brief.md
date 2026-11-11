@@ -789,6 +789,15 @@ changed.*
   that does not know `metadata` is never sent it (`model_load.context_on_demand`).
 - **Rerank takes the model's default keep**: LocalAI's `RerankRequest` has no
   metadata map. Embedding, completion and chat carry the request's.
+- **The reranker's own backend is not touched, and the two patches live
+  together.** Since 2026-11-11 the Nemotron reranker of five collections
+  runs on a separate backend built from `staged/nemotron-rerank.series`
+  (P10, `louise-sycl-f16-llama-cpp-9d17b8a39845`; the coordinator: "Any
+  engine change must keep it working"). `context-on-demand.series` does not
+  carry P10 and builds another backend. Checked: the live series + P10 + P11
+  apply together — `git am` of the nine LocalAI patches, then the eight
+  llama.cpp patches on `ddf48f8` with no fuzz on P10's or P11's. NOT built
+  together: whoever puts both in one series builds and gates that tree.
 
 **For München, when the operator says so** (§2, §7 steps 2–3; nothing here
 touches a live model):

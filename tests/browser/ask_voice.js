@@ -382,12 +382,25 @@ const sentenceOf = size => KNOWN[(size - 44 - 8000) / 20 - 1];
   await page.evaluate(() => { document.getElementById('q').value = ''; });
   check(await asked(() => page.click('#mic')), '11. tap and speak: it is asked by itself');
   check(await page.evaluate(t => document.getElementById('q').value === t, TEXT), '11. the microphone wrote the question');
+  // operator, 2026-11-12: no keyboard unless the box is tapped; the microphone
+  // grey while the question runs, its base colour once it is answered
+  check(await page.evaluate(() => document.activeElement !== document.getElementById('q')),
+        '11. the question box is not focused (a phone would open its keyboard)');
+  const micLook = () => page.evaluate(() => { const m = document.getElementById('mic');
+    return { disabled: m.disabled, rec: m.classList.contains('rec'), color: getComputedStyle(m).color }; });
+  const waiting = await micLook();
+  check(waiting.disabled && !waiting.rec, '11. while the question runs the microphone is grey and inert', waiting);
+  await page.evaluate(() => document.getElementById('mic').click());
+  await sleep(300);
+  check(!(await micLook()).rec, '11. a tap meanwhile does nothing');
   await emit('delta', { text: SENTENCES[0] + ' It is written in Tuscan, the' });
   check(await until(() => __speech.length === 1, 3000), '11. the first sentence is asked for by itself, before the stream ends',
         await page.evaluate(() => __speech));
   check(await on(), '11. and reading is shown');
   await emit('delta', { text: ' language that became Italian [2]. ' + SENTENCES[2] });
   await emit('end', { state: 'done', reason: '' });
+  check(await until(() => !document.getElementById('mic').disabled, 4000), '11. answered: the microphone is ready again',
+        await micLook());
   check(await until(() => !document.getElementById('speak').classList.contains('on'), 15000), '11. read to the end');
   check(JSON.stringify(await inputs()) === JSON.stringify(SENTENCES) && JSON.stringify(await played()) === JSON.stringify(SENTENCES),
         '11. every sentence, in order', { asked: await inputs(), played: await played() });
