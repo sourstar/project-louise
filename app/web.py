@@ -372,7 +372,8 @@ def ask_voices(request: Request):
 
 #: what a recording's report may say (app/static/voice.js `micInfo`), and its size
 VOICE_REPORT_KEYS = ("label", "ready", "muted", "mutes", "rate", "channels", "ec", "ns", "agc", "ctx_rate",
-                     "ctx_state", "frames", "ms", "peak", "heard", "inputs", "stop", "vad", "chars", "ua")
+                     "ctx_state", "frames", "ms", "peak", "heard", "inputs", "stop", "vad", "chars", "ua",
+                     "mode", "ctx_was", "parts", "decode_fails", "mime")
 VOICE_REPORT_MAX = 4096
 
 

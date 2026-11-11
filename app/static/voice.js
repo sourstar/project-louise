@@ -128,19 +128,75 @@
   function clock(ms) { const s = Math.floor(ms / 1000); return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0'); }
 
   function onSamples(r, buf) {
-    if (rec !== r) return;
-    r.chunks.push(buf); r.frames++;
+    if (rec !== r || r.mode === 'recorder') return;
+    r.chunks.push(buf);
+    hear(r, buf, r.rate);
+  }
+  // the energy check on a window of samples, for either way of recording;
+  // true once it ended the recording
+  function hear(r, buf, rate) {
+    r.frames++;
     let e = 0; for (let i = 0; i < buf.length; i++) { e += buf[i] * buf[i]; const a = Math.abs(buf[i]); if (a > r.peak) r.peak = a; }
-    const rms = Math.sqrt(e / (buf.length || 1)), ms = buf.length * 1000 / r.rate;
+    const rms = Math.sqrt(e / (buf.length || 1)), ms = buf.length * 1000 / rate;
     const loud = rms > Math.max(FLOOR_MIN, FLOOR_X * (r.floor === null ? 0 : r.floor));
     r.floor = r.floor === null ? rms : Math.min(r.floor, rms);
     r.ms += ms;
     if (loud) { r.heard = true; r.quiet = 0; } else if (r.heard) r.quiet += ms;
     if (!r.heard && r.ms >= SILENT_MS) {
-      if (r.peak < DIGITAL_SILENCE) return fail(r, 'silent', 'the microphone sends only silence — ' + CAR_HINT);
-      r.why = 'quiet'; return stop();    // not silence: the node's VAD hears what is speech
+      if (r.peak < DIGITAL_SILENCE) { fail(r, 'silent', 'the microphone sends only silence — ' + CAR_HINT); return true; }
+      r.why = 'quiet'; stop(); return true;    // not silence: the node's VAD hears what is speech
     }
-    if ((r.heard && r.quiet >= AUTO_STOP_MS) || r.ms >= MAX_MS) { r.why = r.heard ? 'speech' : 'longest'; stop(); }
+    if ((r.heard && r.quiet >= AUTO_STOP_MS) || r.ms >= MAX_MS) { r.why = r.heard ? 'speech' : 'longest'; stop(); return true; }
+    return false;
+  }
+
+  // THE SECOND WAY TO RECORD (operator, 2026-11-11, the car: "Mic: no sound
+  // at all"): WebAudio is clocked by the AUDIO OUTPUT — a car that takes the
+  // phone's audio for its Bluetooth, or a route that stalls, leaves the
+  // context running no callback, and not one sample comes. MediaRecorder
+  // records the microphone's track itself, whatever the output does; what it
+  // recorded is decoded by an OfflineAudioContext (no device either) at RATE,
+  // the end of speech found by the same energy check every RECORDER_SLICE_MS
+  // on what came since, and the same WAV goes to the node.
+  const OAC = window.OfflineAudioContext || window.webkitOfflineAudioContext;
+  const RECORDER_SLICE_MS = 500, WINDOW = 2048;
+  function viaRecorder(r) {
+    if (!window.MediaRecorder || !OAC || !r.stream.getAudioTracks().some(t => t.readyState === 'live')) return false;
+    let mr; try { mr = new MediaRecorder(r.stream); } catch (e) { return false; }
+    try { if (r.src) r.src.disconnect(); if (r.node) r.node.disconnect(); } catch (e) { /* already */ }
+    r.mode = 'recorder'; r.mr = mr; r.parts = []; r.done = 0; r.decodeFails = 0; r.ctxWas = r.ctx ? r.ctx.state : null;
+    mr.ondataavailable = e => { if (e.data && e.data.size) { r.parts.push(e.data); if (rec === r) listen(r); } };
+    try { mr.start(RECORDER_SLICE_MS); } catch (e) { r.mode = null; return false; }
+    clearTimeout(r.watch);
+    r.watch = setTimeout(() => {
+      if (rec === r && !r.parts.length) fail(r, 'no sound', 'the microphone gives the page no sound — ' + CAR_HINT);
+    }, NO_SOUND_MS);
+    return true;
+  }
+  async function decoded(r) {
+    const blob = new Blob(r.parts, { type: r.mr.mimeType || 'audio/webm' });
+    const ab = await new OAC(1, RATE, RATE).decodeAudioData(await blob.arrayBuffer());
+    return ab.getChannelData(0);           // resampled to RATE by the decoder (Web Audio's decodeAudioData)
+  }
+  async function listen(r) {
+    if (r.decoding) return;
+    r.decoding = true;
+    try {
+      const pcm = await decoded(r);
+      while (rec === r && r.done + WINDOW <= pcm.length) {
+        const w = pcm.subarray(r.done, r.done + WINDOW); r.done += WINDOW;
+        if (hear(r, w, RATE)) break;
+      }
+    } catch (e) { r.decodeFails++; }      // a piece not yet decodable: the next slice, or the tap
+    finally { r.decoding = false; }
+  }
+  // what the recorder holds once it has stopped
+  async function recorded(r) {
+    if (r.mr.state !== 'inactive') {
+      await new Promise(done => { r.mr.addEventListener('stop', done, { once: true });
+                                  try { r.mr.stop(); } catch (e) { done(); } });
+    }
+    try { return r.parts.length ? await decoded(r) : new Float32Array(0); } catch (e) { return new Float32Array(0); }
   }
   const CAR_HINT = 'on a car\'s or a headset\'s Bluetooth the phone may keep the microphone for it: '
                  + 'disconnect it, or type the question (this was sent to the node to look into)';
@@ -154,6 +210,8 @@
              ns: set.noiseSuppression ?? null, agc: set.autoGainControl ?? null,
              ctx_rate: r.ctx ? r.ctx.sampleRate : null, ctx_state: r.ctx ? r.ctx.state : null,
              frames: r.frames, ms: Math.round(r.ms), peak: Math.round(r.peak * 1e5) / 1e5, heard: r.heard,
+             mode: r.mode || 'webaudio', ctx_was: r.ctxWas ?? null, parts: r.parts ? r.parts.length : null,
+             decode_fails: r.decodeFails ?? null, mime: r.mr ? r.mr.mimeType : null,
              inputs: r.inputs, ua: navigator.userAgent };
   }
   function report(outcome, info) {
@@ -187,7 +245,8 @@
     }
     const r = { stream, ctx: null, src: null, node: null, chunks: [], rate: 0,
                 ms: 0, quiet: 0, heard: false, floor: null, tick: null,
-                frames: 0, peak: 0, mutes: 0, why: null, watch: null, inputs: null };
+                frames: 0, peak: 0, mutes: 0, why: null, watch: null, inputs: null, max: null,
+                mode: null, mr: null, parts: null };
     const track = stream.getAudioTracks()[0];
     if (track) {
       track.addEventListener('mute', () => { r.mutes++; });
@@ -228,21 +287,26 @@
       return;
     }
     rec = r; busy = false;
-    // no sound at all: the audio is woken once, then the reader is told
+    // no sound at all: the audio is woken once, then recorded the second way
+    // (viaRecorder), and only where that cannot start is the reader told
     r.watch = setTimeout(() => {
       if (rec !== r || r.frames) return;
       if (r.ctx && r.ctx.state !== 'running') r.ctx.resume().catch(() => {});
       r.watch = setTimeout(() => {
-        if (rec === r && !r.frames) fail(r, 'no sound', 'the microphone gives the page no sound — ' + CAR_HINT);
+        if (rec !== r || r.frames) return;
+        if (!viaRecorder(r)) fail(r, 'no sound', 'the microphone gives the page no sound — ' + CAR_HINT);
       }, NO_SOUND_MS / 2);
     }, NO_SOUND_MS);
+    // the longest recording, whatever comes or does not
+    r.max = setTimeout(() => { if (rec === r) { r.why = 'longest'; stop(); } }, MAX_MS + 2000);
     const t0 = performance.now();
     const show = () => micState('rec', 'recording ' + clock(performance.now() - t0) + ' — tap the microphone to stop');
     show(); r.tick = setInterval(show, 250);
   }
 
   function release(r) {
-    clearInterval(r.tick); clearTimeout(r.watch);
+    clearInterval(r.tick); clearTimeout(r.watch); clearTimeout(r.max);
+    if (r.mr && r.mr.state !== 'inactive') { try { r.mr.stop(); } catch (e) { /* already */ } }
     try { if (r.src) r.src.disconnect(); if (r.node) r.node.disconnect(); } catch (e) { /* already */ }
     for (const t of r.stream.getTracks()) t.stop();
     if (r.ctx) r.ctx.close().catch(() => {});
@@ -251,9 +315,16 @@
   async function stop() {
     const r = rec; if (!r) return;
     let toAsk = false;
-    const info = micInfo(r), why = r.why || 'tap';
-    rec = null; release(r);
-    const pcm = downsample(r.chunks, r.rate, RATE);
+    const why = r.why || 'tap';
+    rec = null;
+    let pcm;
+    if (r.mode === 'recorder') {
+      busy = true; micState('busy', 'writing down what you said…');
+      clearInterval(r.tick); clearTimeout(r.watch); clearTimeout(r.max);
+      pcm = await recorded(r);
+      release(r);
+    } else { release(r); pcm = downsample(r.chunks, r.rate, RATE); }
+    const info = micInfo(r);
     if (!pcm.length) {
       micState('idle'); say('no sound came from the microphone — ' + CAR_HINT);
       report('no sound', info);
