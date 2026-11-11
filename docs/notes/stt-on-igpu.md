@@ -116,10 +116,17 @@ node-runbook.md §1 and §12, and approved-encoders.md "Bitwise
 reproducibility, by vendor".
 
 **The rules:**
-- Nothing is installed, and the live LocalAI app, Louise and `[speech]` are
-  not changed, without the operator's word given in München's own session.
+- **Same instance** (operator, 2026-11-11: "Same instance … no problem
+  replacing the CPU instance for testing, this is not a production system
+  yet"):
+  - the test runs in the node's live LocalAI, with no throwaway container;
+  - the live STT may be moved to the iGPU while testing;
+  - moving back is one line: the model's `backend:` back to
+    `cpu-parakeet-cpp`, or `louise node speech set --stt` back to the CPU
+    model.
+- The session that runs it starts on the operator's word given in
+  München's own session, as every node change does.
 - **Never delete a TrueNAS app.**
-- The test runs in a throwaway container, never in the live LocalAI.
 - The node is paused for the clean numbers.
 - Free space is checked before and after.
 - Every number is labelled measured, modelled or published.
@@ -150,13 +157,28 @@ reproducibility, by vendor".
      - the first call after a load;
      - the backend process's CPU use (`docker top`, `pidstat`);
      - the transcript, saved as the reference.
-3. **The iGPU test container.**
-   - The same LocalAI version as the live one, with `vulkan-parakeet-cpp`
-     installed into it.
-   - **Only the iGPU's render node passed**
-     (`--device /dev/dri/by-path/pci-0000:13:00.0-render`), so the B70 is
-     neither seen nor touched.
-   - The same model file mounted read-only, its own port, no Louise wiring.
+3. **The iGPU in the live LocalAI** (the operator's choice; §5 has the
+   reasons). In this order:
+   1. **Pin the CPU model first.** Its YAML names `cpu-parakeet-cpp`, not
+      the alias `parakeet-cpp`. Every build carries that alias, and
+      installing a second build can move what it names (§5). Step 2's
+      baseline then stays reproducible.
+   2. **The iGPU's render node in the LocalAI app**
+      (`/dev/dri/by-path/pci-0000:13:00.0-render`), if the app does not
+      pass it already. This restarts LocalAI: the node is paused for it,
+      and every model reloads.
+   3. **Install `vulkan-parakeet-cpp`** from the backend gallery, and record
+      its image digest (the tag is `latest-…`).
+   4. **A second model, `<stt model>-igpu`:** the same weights file,
+      `backend: vulkan-parakeet-cpp`, and in its `env` the device pinned to
+      the Radeon (§5: only RADV's manifest via `VK_DRIVER_FILES`, or
+      `PARAKEET_DEVICE` / `GGML_VK_VISIBLE_DEVICES`).
+   5. **Louise beside it,** checked before any timing: with the model loaded
+      on the iGPU, read `/system` and `louise node resident show`. If the
+      resident keeper counts the iGPU model against the B70's budget, or
+      LocalAI's own usage figure (the reclaimer, the watchdog; localai-bugs
+      B4, B6) moves because of it, that is a defect, fixed before going on
+      (CLAUDE.md, "Fix it after is never an option").
    - **From the log, before any timing, confirm:**
      - the device ggml chose IS the Radeon. Mesa's `llvmpipe` is a CPU
        Vulkan device and can be picked silently;
@@ -184,10 +206,14 @@ reproducibility, by vendor".
    - Did the clip get slower?
    - Did the worker's rates (its log, its share lines) drop?
    - How hot did the package get?
-7. **Clean up:**
-   - stop and remove the test container;
-   - keep the pulled image's digest in the write-up;
-   - check free space after.
+7. **Afterwards:**
+   - Ask the operator: the Ask page's STT stays on the iGPU, or goes back
+     to the CPU (§5).
+     - To try it for real meanwhile: `louise node speech set --stt
+       <stt model>-igpu`.
+     - Back to the CPU: the CPU model's name.
+   - Record the backend image's digest.
+   - Check free space after.
 
 ## 5. After the numbers — for the operator, not this measurement
 
@@ -196,13 +222,14 @@ and cons:
 
 - **Switch or not:** the iGPU against the CPU, on time per clip, CPU
   cores freed, identical transcripts, and heat.
-- **How to wire it:**
+- **How to wire it — DECIDED: (a), the same instance** (operator,
+  2026-11-11).
   - (a) the live LocalAI app gets the iGPU's render node, the Vulkan
-    backend and the model on it;
-  - (b) a second, small LocalAI just for speech on the iGPU.
-  - (b) keeps the B70's LocalAI untouched. But Louise sends STT to
-    CHAT_URL's server (app/voice.py), so it needs a speech server of its
-    own: a code change.
+    backend and the model on it.
+  - (b), not chosen: a second, small LocalAI just for speech on the iGPU.
+    It would have kept the B70's LocalAI untouched, but Louise sends STT to
+    CHAT_URL's server (app/voice.py), so it would need a speech server of
+    its own: a code change.
 - **One instance is enough** (LocalAI master, read 2026-11-11). A backend
   runs as its own process with its own `lib/` (`run.sh`).
   - The Vulkan build bundles the Vulkan loader AND Mesa's drivers (RADV,
