@@ -540,3 +540,43 @@ def test_the_report_reads_a_stub_pass_without_the_count(tmp_path, monkeypatch, c
     monkeypatch.setattr(encoder_use, "held", lambda *a, **k: contextlib.nullcontext())
     louise._embedder_check_runs(SimpleNamespace(root=tmp_path, query_model=None, model=None), "c", codex)
     assert "  contexts    none asked" in capsys.readouterr().out
+
+
+def test_a_round_something_else_touched_is_asked_again_where_the_caller_says_so():
+    """München, 2026-11-11: two spaces on one Nemotron deferred each other's
+    pass every time. With `retry` a touched round is not counted and its texts
+    are asked again; without it the first such round defers, as before."""
+    texts = [f"text {i}" for i in range(5)]
+    first = fake_embed(texts)
+    state = {"calls": 0, "created": 0, "touched": 2}
+
+    def fresh(batch):
+        # the first two rounds share the model with another collection's request
+        others = 1 if state["touched"] > 0 else 0
+        state["touched"] -= 1
+        state["calls"] += len(batch) + others
+        state["created"] += len(batch)       # one of ours rode the other's context
+        return fake_embed(batch)
+    reading = lambda: (state["calls"], state["created"])    # noqa: E731
+    asked: list[int] = []
+    out = emb.fresh_contexts(texts, fresh, first, b"seed", creations=10, counted=reading,
+                             retry=lambda tries: asked.append(tries) or True)
+    assert out == (10, 1.0), "only the rounds made on contexts of their own are counted"
+    assert asked == [1, 2], "the touched round was asked again, and again"
+
+    # a caller that has waited enough: deferred, and the message says how often
+    state.update(calls=0, created=0, touched=99)
+    with pytest.raises(emb.GateDeferred, match=r"asked 3 time\(s\)"):
+        emb.fresh_contexts(texts, fresh, first, b"seed", creations=10, counted=reading,
+                           retry=lambda tries: tries < 3)
+
+
+def test_round_again_waits_a_bounded_number_of_times_and_honours_a_stop(monkeypatch):
+    slept: list[float] = []
+    retry = run_check.round_again(sleep=slept.append)
+    assert all(retry(t) for t in range(1, run_check.ROUND_RETRIES + 1))
+    assert retry(run_check.ROUND_RETRIES + 1) is False
+    assert slept == [run_check.ROUND_WAIT_S] * run_check.ROUND_RETRIES
+    stopping = run_check.round_again(lambda: True, "c", sleep=slept.append)
+    with pytest.raises(emb.GateDeferred, match="stopping"):
+        stopping(1)

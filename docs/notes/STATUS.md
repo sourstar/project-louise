@@ -20,6 +20,17 @@ measured (published figures disagree).
 
 ### 2026-11-11 (München)
 
+- **Two spaces on one model deferred each other's gate — FIXED, not deployed** (München, 11-11, after 6d947cd): wikidata
+  (88a8c0b0…) and normattiva-nemo (8ddb1bf5…) share vega-nemotron-3-embed-1b; both started the gate at 16:57:45Z and both
+  fresh-context passes ended DEFERRED two seconds apart (17:13:51Z "32 requests … made 18 context(s) while the run
+  answered 66 call(s)"; 17:13:53Z 15 / 61), each seeing the other's ~30 calls; both verdicts expired together (FAIL_TTL_S
+  300) — a livelock at ~16 min an attempt. Cause: `run_check._flight` was per (space, endpoint, model). Fixed:
+  (1) the flight is per MODEL, the query side's included (München's 9b44d1c and its test); (2) a gate registers its model
+  while it runs, and every other collection on it STANDS ASIDE — `embed_allowed` False, said once, and the embed
+  stream's `keep_going` ends it at its next refill — so a validated collection embedding on the model no longer defers
+  another space's pass for as long as it embeds; (3) a fresh-context round another request touched (what was in flight,
+  a search) is asked again, not counted, up to 10 × 3 s (`run_check.round_again`), before the pass defers. Tests:
+  tests/test_run_check.py, tests/hold/test_fresh_contexts.py, tests/test_embed_producers.py.
 - **Out of open files: a deferral now, and the limit raised — BUILT, not deployed** (München and the legal-collections
   session, 11-11). The worker held its soft limit of 1024 open files (hard 524288) twice, at 12:51:26Z (29 lines) and
   12:57:51Z (13), and normattiva:5853072486171192420 was written "embed: RuntimeError: lance error: … Too many open
@@ -7314,7 +7325,8 @@ before the model pool loads, which makes 13f a cut-over and not a gradual switch
   dictionary lookup) and never gates there: an answer from an untested
   run, or from an endpoint that states none, defers the document
   untouched — never an error on it. The gate runs at once from
-  `backend_gate.embed_allowed`, once per (space, endpoint): a pass
+  `backend_gate.embed_allowed`, once per MODEL (endpoint + model; was per
+  space until 2026-11-11, see below): a pass
   resumes the work, a failure or a run-less endpoint PAUSES the
   collection's embedding with its reason. An asymmetric space's query
   encoder is gated the same way, by itself. `hold vectors build` checks
