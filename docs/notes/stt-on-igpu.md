@@ -213,6 +213,68 @@ and cons:
   - **The System page's GPU panel** (app/gpu_probe.py) reads the xe driver,
     and says nothing of an amdgpu iGPU.
 
+## 7. Transcribing while the reader speaks
+
+*The operator, 2026-11-11: "If the question can be processed in chunks we
+don't have to wait the end to start processing and the result is in
+realtime".*
+
+**Today** (app/static/voice.js, app/transcribe.py):
+- the page records the whole question and stops after `AUTO_STOP_MS` =
+  1,500 ms of quiet;
+- then it uploads the WAV, and the VAD and the STT run on the whole clip.
+
+So the reader waits 1.5 s, then the VAD and the transcription of
+everything they said.
+
+**What already exists** (read 2026-11-11):
+- **LocalAI `/v1/audio/transcriptions` with `stream=true`** streams the
+  OUTPUT (SSE `transcript.text.delta`). The input is still one whole file,
+  so it does not help here.
+- **LocalAI's Realtime API** (OpenAI's WebSocket protocol, audio sent with
+  `input_audio_buffer.append`; `docs/content/features/openai-realtime.md`):
+  - With `streaming.transcription: true` and
+    `turn_detection: semantic_vad`, it feeds the microphone audio to a
+    cache-aware streaming parakeet model while the reader speaks. It sends
+    `conversation.item.input_audio_transcription.delta` live.
+  - `semantic_vad` needs an end-of-utterance model. Today that is only
+    `parakeet-cpp-realtime_eou_120m-v1`, which is **English only**.
+  - Under `server_vad`, transcription happens at the commit, as one batch.
+- **parakeet.cpp's streaming models** (its README):
+  - `realtime_eou_120m-v1`: English, RNNT, with end-of-utterance events;
+  - `nemotron-3.5-asr-streaming-0.6b`: 40+ locales, offline and cache-aware
+    streaming, OpenMDW-1.1;
+  - `nemotron-labs-unified-asr-0.6b`: 40+ locales, buffered streaming.
+  - Streaming costs more per second of audio: **RTFx 3.80** on a 20-core
+    Ryzen 9 9950X3D CPU, against about 30 offline (BENCHMARK.md). It runs
+    many small passes instead of one.
+
+**Three designs**
+
+| | how | pros | cons |
+|---|---|---|---|
+| status quo | the whole clip, after 1.5 s of quiet | nothing to build | the reader waits 1.5 s plus the whole clip's transcription |
+| **A. Start at the first pause** | At ~300 ms of quiet the page uploads what it has and keeps listening. Louise transcribes while the page waits out the rest of its 1.5 s. If speech resumes, that request is aborted, and the whole clip so far goes again at the next pause. | Same model (tdt-0.6b-v3, multilingual), same endpoint, CPU or iGPU. Most questions are transcribed within that 1.5 s wait (on the CPU, a 10–30 s question at the RTFx §3.1 expects), so the result is there when the recording stops. A change to voice.js only. | Work redone when the reader pauses mid-sentence (a short clip: cheap). A long question is still transcribed whole. On the iGPU the 1.2 s left after the pause is tight beyond ~10 s of speech (§3.1). |
+| **B. Segments at pauses** | The page streams the audio (a WebSocket, or ~1 s chunked uploads). Each segment closed by a pause is transcribed at once; at the end only the last segment is left. | Long questions too. It cuts only in silence, so no word is split. Same model and endpoint. | A session per question, segment order and joining, a request per segment. A sentence cut by a pause is transcribed in two halves (casing and punctuation may differ at the join). |
+| **C. True streaming** (the Realtime API) | The page streams to Louise, which relays LocalAI's Realtime WebSocket. A cache-aware streaming model decodes as the audio arrives. | Real time by construction; live words in the box while the reader speaks. | Another model (`nemotron-3.5-asr-streaming-0.6b`), to judge against tdt-0.6b-v3 on it, fr and de. The semantic end of turn is English only. Streaming RTFx is 3.8 even on a fast CPU: on the 7600, and above all on the iGPU (0.3–0.7× the CPU, §3.1), it may not keep up with speech. A WebSocket path through Louise's web. |
+
+**Recommendation: A first.**
+- It is the smallest change, and it gives the real-time result for
+  ordinary questions with the current model, on either engine.
+- **B** if long questions still show a wait.
+- **C** only if live words on the page are wanted, and only after a
+  streaming model passes on it, fr and de, measured on the engine that will
+  run it.
+- Nothing here is a reader's setting (RULE 2).
+
+**Measurements to add to §4** (the same session):
+1. The time from the reader's last word to the transcript in the box,
+   today and with A, on the §4 clips, on the CPU and on the iGPU.
+2. A streaming model's RTFx on the CPU and on the iGPU
+   (`nemotron-3.5-asr-streaming-0.6b`, `parakeet-cli transcribe --stream`
+   or the Realtime API). Does it stay faster than speech, with a margin?
+3. Its transcripts of the it, en, fr and de clips against tdt-0.6b-v3's.
+
 ## 6. Results
 
 *Not measured yet.*
