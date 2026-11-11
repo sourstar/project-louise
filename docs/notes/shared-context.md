@@ -87,6 +87,13 @@ wheel" (CLAUDE.md), the case is solved simply and the standard written down:
   the B70 for each encoder, and that freed memory is the driver's again (a
   SYCL pool that keeps it would make A a no-op). A test copy in a quiet
   window; nothing in production touched.
+- **A general design** (operator, 2026-11-12: "Embedders in CPU are an
+  option but we cannot bet on it, this is a general design improvement that
+  can be beneficial for a number of different scenarios other than Project
+  Louise"): a sleep level for llama.cpp's server that keeps the weights and
+  frees the context, for any model and backend, written to upstream's
+  standards and proposed upstream on the operator's word; our node is its
+  first deployment.
 - **The dedicated session's brief**: [idle-context-brief.md](idle-context-brief.md)
   (the code paths, the series, the B70 pitfalls, the memory facts, the plan).
 - **When the standard would pay:** if the engines move to vLLM/SGLang on a
