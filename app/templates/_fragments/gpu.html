@@ -46,13 +46,13 @@
   {% set mb = model_bar(cm, d.vram_total, d.used) if cm else none %}
   {% if d.vram_total and mb %}
   <div class="gpu-bar whose" title="{{ '%.0f'|format(d.used_pct) }}% used"><span class="louise" style="width:{{ '%.1f'|format(mb.louise) }}%" title="Louise's models: {{ cm.louise|size }}"></span><span class="others" style="width:{{ '%.1f'|format(mb.other) }}%" title="other models: {{ cm.other|size }}"></span><span class="unattributed" style="width:{{ '%.1f'|format(mb.outside) }}%" title="outside LocalAI's models: {{ mb.outside_bytes|size }}"></span></div>
-  <div class="legend note"><span class="swatch louise"></span>Louise {{ cm.louise|size }}<span class="swatch others"></span>other models {{ cm.other|size }}<span class="swatch unattributed"></span>outside LocalAI {{ mb.outside_bytes|size }}<span class="swatch free"></span>free {{ d.free|size }}</div>
+  <div class="legend note"><div><span class="swatch louise"></span>Louise {{ cm.louise|size }}</div><div><span class="swatch others"></span>other models {{ cm.other|size }}</div><div><span class="swatch unattributed"></span>outside LocalAI {{ mb.outside_bytes|size }}</div><div><span class="swatch free"></span>free {{ d.free|size }}</div></div>
   <div>VRAM {{ d.vram_total|size }} · used {{ d.used|size }} · free {{ d.free|size }}</div>
   {% elif d.vram_total %}
   {% set sh = d.shares() %}
-  <div class="gpu-bar whose" title="{{ '%.0f'|format(d.used_pct) }}% used"><span class="others" style="width:{{ '%.1f'|format(sh.processes) }}%" title="processes: {{ d.attributed|size }}"></span><span class="unattributed" style="width:{{ '%.1f'|format(sh.unattributed) }}%" title="held by no process shown: {{ d.unattributed|size }}"></span></div>
-  <div class="legend note"><span class="swatch others"></span>processes {{ d.attributed|size }}{% if d.unattributed %}<span class="swatch unattributed"></span>no process shown {{ d.unattributed|size }}{% endif %}<span class="swatch free"></span>free {{ d.free|size }}</div>
-  <div>VRAM {{ d.vram_total|size }} · used {{ d.used|size }}{% if d.vram_used is none %} <span class="note">(sum of the processes)</span>{% endif %} · free {{ d.free|size }}</div>
+  <div class="gpu-bar whose" title="{{ '%.0f'|format(d.used_pct) }}% used"><span class="others" style="width:{{ '%.1f'|format(sh.processes) }}%" title="models: {{ d.attributed|size }}"></span><span class="unattributed" style="width:{{ '%.1f'|format(sh.unattributed) }}%" title="held by no model shown: {{ d.unattributed|size }}"></span></div>
+  <div class="legend note"><div><span class="swatch others"></span>models {{ d.attributed|size }}</div>{% if d.unattributed %}<div><span class="swatch unattributed"></span>no model shown {{ d.unattributed|size }}</div>{% endif %}<div><span class="swatch free"></span>free {{ d.free|size }}</div></div>
+  <div>VRAM {{ d.vram_total|size }} · used {{ d.used|size }}{% if d.vram_used is none %} <span class="note">(sum of the models)</span>{% endif %} · free {{ d.free|size }}</div>
   {% else %}
   <div class="note">VRAM not read for the {{ d.driver }} driver</div>
   {% endif %}
@@ -80,12 +80,12 @@
   </details>
   {% endif %}
   {% if d.processes %}
-  <details class="more" id="gpu-processes-{{ d.pdev }}" data-keep-open><summary>processes · {{ d.processes|length }}{% if d.pushed_off_processes %} · <span class="badge err">a model pushed off the card</span>{% endif %}</summary>
+  <details class="more" id="gpu-processes-{{ d.pdev }}" data-keep-open><summary>memory by model · {{ d.processes|length }}{% if d.pushed_off_processes %} · <span class="badge err">a model pushed off the card</span>{% endif %}</summary>
   <table><tr><th>model</th><th>container</th><th>pid</th><th>VRAM</th><th>of card</th>
     {% if d.integrated %}<th title="REAL RAM: this card is part of the processor and its memory is the system's RAM, so its models live here by design (GTT). Nothing was pushed off.">GPU buffers in shared RAM</th>
-    {% else %}<th title="REAL host RAM: GPU buffers the driver keeps in host memory for this process (GTT, system). A few MiB is normal. A whole model here means the card was overcommitted and the driver moved it out.">GPU buffers in host RAM</th>{% endif %}
-    <th title="REAL host RAM: memory that exists because of this process — its runtime, its tokenizer, its heap (the kernel's RssAnon + RssShmem).">process RAM</th>
-    <th title="NOT occupancy: pages of files the process has mapped — the model file, libraries — that are in the page cache now (the kernel's RssFile). The kernel takes them back whenever it wants the room.">mapped file (reclaimable)</th></tr>
+    {% else %}<th title="REAL host RAM: GPU buffers the driver keeps in host memory for this model (GTT, system). A few MiB is normal. A whole model here means the card was overcommitted and the driver moved it out.">GPU buffers in host RAM</th>{% endif %}
+    <th title="REAL host RAM: memory that exists because of this model's server — its runtime, its tokenizer, its heap (the kernel's RssAnon + RssShmem).">model RAM</th>
+    <th title="NOT occupancy: pages of files the model's server has mapped — the model file, libraries — that are in the page cache now (the kernel's RssFile). The kernel takes them back whenever it wants the room.">mapped file (reclaimable)</th></tr>
     {% for p in d.processes %}
     <tr><td title="{{ p.command }}">{{ p.label }}</td><td>{{ p.container }}</td><td>{{ p.pid }}</td>
       <td>{{ p.vram|size }}</td><td>{{ '%.1f'|format(d.share(p.vram)) }}%</td>
@@ -94,13 +94,13 @@
       <td class="note">{{ p.mapped|size if p.mapped is not none else '—' }}</td></tr>
     {% endfor %}
     {% if d.unattributed %}
-    <tr class="note"><td>not held by any process shown</td><td></td><td></td>
+    <tr class="note"><td>held by no model shown</td><td></td><td></td>
       <td>{{ d.unattributed|size }}</td><td>{{ '%.1f'|format(d.share(d.unattributed)) }}%</td><td></td><td></td><td></td></tr>
     {% endif %}
   </table>
   </details>
   {% elif d.vram_total %}
-  <div class="note">no process holds memory on this card</div>
+  <div class="note">no model holds memory on this card</div>
   {% endif %}
 </div>
 {% else %}

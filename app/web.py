@@ -25,6 +25,7 @@ import asyncio
 import contextlib
 import json
 import re
+import os
 from collections import OrderedDict
 import sqlite3
 import secrets
@@ -150,24 +151,95 @@ _gpu_speed_memo: dict = {"at": 0.0, "speeds": {}}
 _gpu_speed_lock = threading.Lock()
 
 
+#: THE CURRENT BENCHMARK beside the current ETA (operator, 2026-11-11: "the
+#: current benchmark in token/s or chunk/s disappeared"): chunks embedded a
+#: second, per collection, over the card record's last RATE window
+_CHUNK_RATE_WINDOW_S = 600
+#: the last measured card speed per collection, kept for a collection that
+#: embeds nothing now (off, on-demand): its BEST still shows (operator, the
+#: same day: "When embedding is disabled or on-demand the best ETA shall
+#: still be shown"). Beside the node's state, written by this process alone
+_BEST_SPEEDS_FILE = "web-best-speeds.json"
+
+
+def _best_speeds_path() -> Path:
+    return config.louise_root() / "state" / _BEST_SPEEDS_FILE
+
+
+def _kept_speeds() -> dict[str, list]:
+    try:
+        got = json.loads(_best_speeds_path().read_text(encoding="utf-8"))
+        return {k: v for k, v in got.items() if isinstance(v, list) and len(v) == 2}
+    except (OSError, ValueError, AttributeError):
+        return {}
+
+
+def _keep_speeds(speeds: dict[str, float], now: float) -> None:
+    if not speeds:
+        return
+    kept = _kept_speeds()
+    kept.update({k: [float(v), float(now)] for k, v in speeds.items()})
+    p = _best_speeds_path()
+    try:
+        p.parent.mkdir(parents=True, exist_ok=True)
+        tmp = p.with_name(f".{p.name}.{os.getpid()}.tmp")
+        tmp.write_text(json.dumps(kept, sort_keys=True), encoding="utf-8")
+        os.replace(tmp, p)
+    except OSError:
+        pass                     # a page never fails for a figure it could not keep
+
+
 def _gpu_speeds() -> dict[str, float]:
     """Documents embedded a card-second, per collection, over the last
-    window — {} where the card record holds nothing (no GPU probe)."""
+    window — {} where the card record holds nothing (no GPU probe). A speed
+    measured now is kept (`_keep_speeds`); one not measured now is the last
+    kept, so an idle collection's best still shows."""
     now = time.time()
     with _gpu_speed_lock:
         if now - _gpu_speed_memo["at"] < _GPU_SPEED_TTL_S:
             return _gpu_speed_memo["speeds"]
     from .rage import card_record
     speeds: dict[str, float] = {}
+    chunks: dict[str, float] = {}
     try:
         got = card_record.gpu_time(card_record.read(now - _GPU_SPEED_WINDOW_S, now))
         speeds = {name: docs / sec for name, (docs, sec) in got.items()
                   if docs > 0 and sec >= _GPU_SPEED_MIN_S}
+        chunks = _chunks_a_second(card_record.read(now - _CHUNK_RATE_WINDOW_S, now), now)
     except Exception:   # noqa: BLE001 — telemetry never fails a page
         speeds = {}
+    _keep_speeds(speeds, now)
+    merged = {k: float(v[0]) for k, v in _kept_speeds().items()}
+    merged.update(speeds)
     with _gpu_speed_lock:
-        _gpu_speed_memo.update(at=now, speeds=speeds)
-    return speeds
+        _gpu_speed_memo.update(at=now, speeds=merged, chunks=chunks)
+    return merged
+
+
+def _chunks_a_second(rows, now: float) -> dict[str, float]:
+    """Chunks embedded a second, per collection, over the rows given (the
+    card record's `done`: [documents, chunks] each second)."""
+    total: dict[str, int] = {}
+    first = None
+    for row in rows:
+        first = row.get("t", now) if first is None else first
+        for name, dc in (row.get("done") or {}).items():
+            try:
+                total[name] = total.get(name, 0) + int(dc[1])
+            except (TypeError, ValueError, IndexError):
+                continue
+    span = max(1.0, now - float(first)) if first is not None else 0.0
+    return {k: v / span for k, v in total.items() if v > 0 and span}
+
+
+def _chunk_rate(name: str) -> str | None:
+    """The current benchmark of a collection: '34.2 chunks/s', or None."""
+    _gpu_speeds()
+    with _gpu_speed_lock:
+        r = (_gpu_speed_memo.get("chunks") or {}).get(name)
+    if not r:
+        return None
+    return f"{r:.1f} chunks/s" if r < 100 else f"{r:,.0f} chunks/s".replace(",", ".")
 
 
 def _best_eta(name: str, remaining: int, rate_per_h) -> str | None:
@@ -2471,20 +2543,30 @@ def _collection_shelf(collection: collections_mod.Collection,
     # would promise what no mode will do. Off, the row stays while work is
     # left (status `progress` counts none workable): best is what turning it
     # on would take
+    # ON-DEMAND AS OFF (operator, 2026-11-11: "When embedding is disabled or
+    # on-demand the best ETA shall still be shown, but the current must show
+    # '-'. Upon embedding all the current ETA shall show the ETA calculated
+    # on the current speed. When embedding is completed the ETA row is
+    # hidden"): the work left is what the documents left are, blocked ones
+    # aside, whatever the mode leaves to time; the current benchmark
+    # (chunks a second) stands beside the current ETA while it embeds
     embed_eta = None
-    left = (workable.get("embed", 0) if embed_mode != "off" else
+    left = (workable.get("embed", 0) if embed_mode not in ("off", "lazy") else
             max(0, remaining.get("embed", 0) - int(getattr(stages.get("embed"), "blocked", 0) or 0)))
     if not counts_pending and left > 0:
-        best = (_best_eta(collection.name, remaining["embed"], stage_rates.get("embed"))
+        best = (_best_eta(collection.name, left, stage_rates.get("embed")
+                          if embed_mode not in ("off", "lazy") else None)
                 if recipe is not None and recipe.spends == "gpu" else None)
+        rate = None
         if embed_mode in ("off", "lazy"):
             current = "-"
             why = ("embedding is off: nothing is embedded until it is turned on" if embed_mode == "off"
                    else "on-demand: only what searches ask for is embedded, so no rate leads to the end")
         else:
             current, why = stage_etas.get("embed"), stage_eta_why.get("embed")
+            rate = _chunk_rate(collection.name) or (why if why and why.startswith("+") else None)
         if best or current:
-            embed_eta = {"best": best, "current": current, "current_why": why}
+            embed_eta = {"best": best, "current": current, "current_why": why, "rate": rate}
     paused = node_state.pause_of(collection.name)
     # judged against the mode the page read once for every card, the pause
     # just read, the setting: THE holds `node show` names (status `holds`)

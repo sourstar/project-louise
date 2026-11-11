@@ -42,6 +42,9 @@ class GpuProcess:
     #: backend's pid, so a model can be told on which card it is
     #: (app/resident.py, docs/notes/stt-on-igpu.md). None = not read.
     ns_pid: int | None = None
+    #: its parents' pids in the same namespace, nearest first: a model whose
+    #: LocalAI pid is a wrapper's is placed by its child (gpu_probe.ns_ancestors)
+    ns_ancestors: tuple[int, ...] = ()
 
     #: below this nothing is said: every GPU process keeps a few MiB of buffers
     #: in host memory by design
@@ -166,7 +169,8 @@ def from_json(data: dict) -> GpuSnapshot:
     return GpuSnapshot(
         devices=tuple(
             GpuDevice(**{**{k: v for k, v in d.items() if k in _DEVICE_FIELDS},
-                         "processes": tuple(GpuProcess(**{k: v for k, v in p.items() if k in _PROCESS_FIELDS})
+                         "processes": tuple(GpuProcess(**{k: (tuple(v) if k == "ns_ancestors" else v)
+                                                          for k, v in p.items() if k in _PROCESS_FIELDS})
                                                  for p in d.get("processes", ())),
                          "sensors": sensors(d.get("sensors"))})
             for d in data.get("devices", ())),

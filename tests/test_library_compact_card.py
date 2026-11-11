@@ -100,7 +100,9 @@ def test_the_embedded_rows_say_the_numbers_then_best_and_current(card, monkeypat
     eta = re.search(r'<div class="lbl" data-eta="embed"[^>]*><span>ETA</span>(.*?)</div>', html, re.S)
     assert eta, "the ETA on a row of its own"
     text = re.sub(r"<[^>]+>", "", eta.group(1))
-    assert text == f"best ~16min · current {shelf['embed_eta']['current']}"
+    # the current benchmark beside the current ETA (operator, 2026-11-11:
+    # "the current benchmark in token/s or chunk/s disappeared")
+    assert text == f"best ~16min · current {shelf['embed_eta']['current']} ({shelf['embed_eta']['rate']})"
 
 
 @pytest.mark.parametrize("mode", ["off", "lazy"])
@@ -161,3 +163,38 @@ def test_the_slices_line_is_behind_details(card):
     line = html.index("Embedded: 9 of 14 families")
     assert line > details, "no extra text in sight"
     assert line < html.index('data-drawer="options"')
+
+
+def test_the_current_benchmark_is_chunks_a_second_from_the_card_record(card, monkeypatch):
+    """Operator, 2026-11-11: "ETA row: the current benchmark in token/s or
+    chunk/s disappeared". The card record's chunks of the last ten minutes."""
+    import itertools
+    from app.rage import card_record
+    now = time.time()
+    rows = [{"t": now - 600 + i, "done": {card.name: [1, 3]}} for i in range(600)]
+    monkeypatch.setattr(card_record, "read", lambda since, until=None, out_dir=None:
+                        (r for r in itertools.chain(rows) if since <= r["t"] <= (until or now)))
+    monkeypatch.setattr(card_record, "gpu_time", lambda rows: {})
+    monkeypatch.setattr(web, "_gpu_speed_memo", {"at": 0.0, "speeds": {}})   # restored after
+    shelf = web._collection_shelf(card, {}, "running")
+    assert shelf["embed_eta"]["rate"] == "3.0 chunks/s"
+    assert "(3.0 chunks/s)" in _render(shelf)
+
+
+def test_an_idle_collection_keeps_its_last_measured_best(card, monkeypatch):
+    """Operator, 2026-11-11: "When embedding is disabled or on-demand the best
+    ETA shall still be shown". Its card speed is the last one measured."""
+    from app.rage import card_record
+    monkeypatch.setattr(card_record, "read", lambda *a, **k: iter(()))
+    monkeypatch.setattr(card_record, "gpu_time", lambda rows: {card.name: [600, 600.0]})
+    monkeypatch.setattr(web, "_gpu_speed_memo", {"at": 0.0, "speeds": {}})   # restored after
+    assert web._gpu_speeds()[card.name] == 1.0                      # measured, and kept
+    monkeypatch.setattr(card_record, "gpu_time", lambda rows: {})   # embedding stopped since
+    monkeypatch.setattr(web, "_gpu_speed_memo", {"at": 0.0, "speeds": {}})   # restored after
+    assert web._gpu_speeds()[card.name] == 1.0, "the last measured speed"
+    con = db.connect(card)
+    db.set_scope(con, {**db.get_scope(con), "embed_mode": "off"})
+    web.invalidate_counts()
+    shelf = web._collection_shelf(card, {}, "running")
+    assert shelf["embed_eta"]["best"] == "~16min" and shelf["embed_eta"]["current"] == "-"
+    assert shelf["embed_eta"]["rate"] is None, "nothing embeds: no rate beside '-'"

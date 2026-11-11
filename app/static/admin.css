@@ -172,6 +172,8 @@ pre.cli{background:var(--ink);border:1px solid var(--line);border-radius:3px;pad
   vertical-align:baseline}
 .swatch.free{background:var(--panel2);border:1px solid var(--line)}
 .legend .swatch:first-child{margin-left:0}
+/* one entry a line (operator, 2026-11-11: "the memory occupation legend, one entry per line") */
+.legend>div .swatch{margin-left:0}
 
 /* PHONES (operator, 2026-10-21: "in mobile mode the text can exceed the
    width of the screen, it shall not happen"). Measured at 360 px by

@@ -128,12 +128,21 @@ def by_card(models: dict, devices) -> dict:
       card runs on the processor."""
     rows = list(models.get("rows") or [])
     held: dict[int, tuple[int, str]] = {}
+    # A MODEL'S PID MAY BE ITS WRAPPER'S (VeGa: run.sh, then python, then
+    # the backend that holds the card; München, 2026-11-11): a process
+    # holding memory counts for each of its ancestors too, its own pid first
+    by_parent: dict[int, tuple[int, str]] = {}
     for d in devices or ():
         for p in getattr(d, "processes", ()) or ():
+            size = int(getattr(p, "vram", 0) or 0) + int(getattr(p, "host", 0) or 0)
             if getattr(p, "ns_pid", None) is not None:
-                size = int(getattr(p, "vram", 0) or 0) + int(getattr(p, "host", 0) or 0)
                 if p.ns_pid not in held or size > held[p.ns_pid][0]:
                     held[p.ns_pid] = (size, d.pdev)
+            for a in getattr(p, "ns_ancestors", ()) or ():
+                if a not in by_parent or size > by_parent[a][0]:
+                    by_parent[a] = (size, d.pdev)
+    for a, v in by_parent.items():
+        held.setdefault(a, v)
     sized = [d for d in devices or () if getattr(d, "vram_total", None)]
     only = sized[0].pdev if len(sized) == 1 else None
     placed: dict[str, list[ModelRow]] = {}

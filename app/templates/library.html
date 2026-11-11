@@ -172,7 +172,7 @@
     {% if c.embed_eta %}
     {# best: the work left at the whole card (documents a card-second, the
        card record's last 3 h); current: at the rate measured now #}
-    <div class="lbl" data-eta="embed" style="margin:3px 0 0"><span>ETA</span><span style="color:var(--brass)">{% if c.embed_eta.best %}<span data-eta-best title="the work left at 100 % of the card: its documents a card-second, measured over the last 3 h">best {{ c.embed_eta.best }}</span>{% endif %}{% if c.embed_eta.best and c.embed_eta.current %} · {% endif %}{% if c.embed_eta.current %}<span data-eta-current title="{{ c.embed_eta.current_why or '' }}">current {{ c.embed_eta.current }}</span>{% endif %}</span></div>
+    <div class="lbl" data-eta="embed" style="margin:3px 0 0"><span>ETA</span><span style="color:var(--brass)">{% if c.embed_eta.best %}<span data-eta-best title="the work left at 100 % of the card: its documents a card-second, measured over the last 3 h">best {{ c.embed_eta.best }}</span>{% endif %}{% if c.embed_eta.best and c.embed_eta.current %} · {% endif %}{% if c.embed_eta.current %}<span data-eta-current title="{{ c.embed_eta.current_why or '' }}">current {{ c.embed_eta.current }}{% if c.embed_eta.rate %} <span data-eta-rate title="the rate measured now">({{ c.embed_eta.rate }})</span>{% endif %}</span>{% endif %}</span></div>
     {% endif %}
   </div>
   {# WARNINGS THAT ASK FOR AN ACTION stay in sight, as their badge and,
