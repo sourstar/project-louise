@@ -18,6 +18,7 @@ What is here, and why it is kept:
 | `p2p-review-open-issues.md` | the P2P gaps found on 2026-10-19 when the second GPU peer joined (held vectors invisible to the network — 91 % of gutenberg —, missed attestations, self-declared addresses, DHT flood, slice stalls, bundles announced from a peer that serves nothing), and the review that fixed five of them the same day: what was decided, built and amended, what stays open, the deploy order |
 | `vector-convergence.md` | proposal (2026-10-19): equivalent versions of the same vectors converge on one, by 04 §4.6's adoption rule and a total order — amends 02 §2.4–2.5, 04 §4.5 once reviewed |
 | `measuring.md` | how to measure without producing a number that gets quoted wrong: the existing harnesses, the deployed configuration, the disk, the labels — read before measuring anything |
+| `image-generation-krea.md` | what an image model (FLUX.1 Krea [dev], LocalAI's `flux.1-krea-dev-ggml`) would hold on the B70 beside the model set, modelled from its files, and the measurement the operator chose (A, 2026-11-11) written for a future session — not measured yet |
 | `collection-backend.md` | the backend templates every collection falls in (operator, 2026-10-30), their contracts, and the consolidation still to do |
 | `lessons-learned.md` | the cases that cost time, newest first: what happened, what it cost, the general lesson, and where the rule now lives |
 | `multicore-audit.md` | every pass that walks a corpus or a collection, ranked by what running it on one core costs, and what was fixed |

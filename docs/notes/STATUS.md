@@ -20,6 +20,7 @@ measured (published figures disagree).
 
 ### 2026-11-11 (München)
 
+- **Image generation — FLUX.1 Krea [dev], measured LATER in a separate session** (operator, 11-11: "A but write it down for a future separated session"): LocalAI's `flux.1-krea-dev-ggml` (stable-diffusion.cpp) is 17.3 GB of files at Q4_K_M (T5-XXL fp16 9.8 of it), 7.3 GB with the text encoders on the CPU; the node lists it at 12.7 GB, never loaded; it fits beside the set only after context on request, on demand. The brief, the steps and the rules: [image-generation-krea.md](image-generation-krea.md). Nothing installed or measured.
 - **The answer, formatted and read right** (operator, 11-12: "the text box seems to receive a md formatting that is
   printed as it is"; "asterisks are read, and dates in roman format are mispronounced"):
   - Ask shows the answer's Markdown formatted (ask.html `md`): paragraphs, line breaks, headings, lists, emphasis,
