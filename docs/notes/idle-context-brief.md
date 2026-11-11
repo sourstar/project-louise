@@ -815,9 +815,31 @@ the node paused for each run. **All three encoders gave the SAME BYTES over
 - The node's LocalAI (v4.12.1, upstream) lists no `load_options` in
   `/system`. Louise now reads the option from the answering run's
   statement (#524).
-- Running (the operator: "anything between 20 and 500 ms?"): Nemotron at
-  keeps of 50, 100, 150, 200 and 300 ms, at production batch with 4 lanes
-  and as singles 100 ms apart.
+- Between 20 and 500 ms (the operator's question; Nemotron test copy,
+  10:39–10:52Z, node paused, byte-equal throughout;
+  `/mnt/ssd3/louise-build/cod/measure/cod-test-nemotron-embed-keeps.json`):
+
+  | keep | 200 texts, batch 16, 4 lanes: creations in 13 requests | singles 100 ms apart: creations in 30 | singles' median latency |
+  |---|---|---|---|
+  | 20 ms | 1 | 31 | — |
+  | 50 ms | 1 | 30 | 92 ms |
+  | 100 ms | 1 | 30 | 108 ms |
+  | 150 ms | 1 | 1 | 37 ms |
+  | 200 ms | 1 | 1 | 37 ms |
+  | 300 ms | 1 | 1 | 36 ms |
+  | 500 ms | 1 | 0 | — |
+
+  At production batch with 4 lanes every keep from 20 ms holds the context
+  (the one creation is the first). For requests 100 ms apart, the threshold
+  is the gap plus the client's turnaround: 150 ms and up hold the context,
+  100 ms and below recreate it every time.
+- **OPEN — the cost of a creation after a timed expiry.** A short request
+  costs 92–108 ms after its keep expired, against 36–37 ms with the context
+  kept: about 55–70 ms per creation. The keep-0 method measured 0.8 ms
+  (median) for the same model and texts. Not explained yet. One guess,
+  unverified: the keep-0 path reuses device memory the allocator still
+  caches, while the timer's free returns it; or the request waits on a free
+  in progress. To settle before any keep is chosen.
 
 **What the code settled, beyond the brief:**
 
