@@ -540,6 +540,10 @@ def create(root, ref: str, *, snapshot_id: str | None = None, log=print) -> Snap
     if snapshot_id is None:
         clock = ZoneInfo(codex.origin.clock)
         snapshot_id = snapshot_id_for(datetime.now(clock), codex.update.cadence)
+    # the relations parts' edges name the snapshot that first lists them
+    # (09 §9.14): written for another id, or not finished, they are refused
+    from . import relations as relations_mod
+    relations_mod.require_for(db_path, snapshot_id, name)
 
     con = sqlite3.connect(db_path)
     con.row_factory = sqlite3.Row

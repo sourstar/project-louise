@@ -385,6 +385,18 @@ def build(root, ref: str, *, corpus_dir=None, snapshot_id: str | None = None,
             f"staged, not promoted — the next run resumes")
         return result
 
+    # 09 §9.14's RELATIONS, one part beside each record part, from the
+    # plugin's `relations()` over the part's lines (app/hold/relations.py);
+    # nothing at all for a plugin without it. Resumable per part, and
+    # promoted BEFORE the records, as the figures containers are
+    from . import relations as relations_mod
+    rel = relations_mod.write(codex, staging=staging, shard_dir=shard_dir,
+                              snapshot_id=relations_mod.snapshot_id_of(codex, snapshot_id),
+                              stop=stop, log=log, name=name)
+    if rel.interrupted:
+        log(f"[records build] {name}: stopped in the relations pass; staged, not promoted — the next run resumes")
+        return _dc_replace(result, interrupted=True)
+    relations_mod.promote_staged(staging, shard_dir)
     promoted = _promote_records(staging, shard_dir)
     # THE SHARD'S validation.json, the Codex's own block (02 §2.6): a pure
     # function of the Codex, so the build that completes the SHARD writes it
