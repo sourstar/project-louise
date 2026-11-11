@@ -282,3 +282,27 @@ def test_a_refill_whose_group_was_all_cut_to_nothing_takes_the_next(tmp_path, mo
     assert worker._embed_parallel(con, c, RECIPE, slots=2)
     done = {u for (u,) in con.execute("SELECT uid FROM documents WHERE embed_done=1")}
     assert done == {r["uid"] for r in rows}, "the one embedded and the two cut to nothing"
+
+
+def test_a_stream_ends_at_its_refill_when_another_collections_gate_starts_on_its_model(
+        tmp_path, monkeypatch):
+    """München, 2026-11-11: the stream's `keep_going` also asks whether another
+    collection's gate runs on its model (app/run_check.py `gating_elsewhere`),
+    so what it has in flight finishes and nothing more is sent meanwhile."""
+    from types import SimpleNamespace
+    from app import run_check
+    collection, con = _collection(tmp_path)
+    monkeypatch.setattr(db, "get_scope", lambda c: {"embed_mode": "all"})
+    for name in ("_license_allows", "_vector_writes_allowed", "_embedding_allowed"):
+        monkeypatch.setattr(worker, name, lambda *a, **k: True)
+    monkeypatch.setattr(collections_mod, "recipe_for", lambda c: SimpleNamespace(concurrency=1))
+    asked: list = []
+    monkeypatch.setattr(worker, "_embed_parallel",
+                        lambda con, col, recipe, *, slots, keep_going: asked.append(keep_going) or True)
+    gating = {"other": None}
+    monkeypatch.setattr(run_check, "gating_elsewhere", lambda c: gating["other"])
+    assert worker._producer_step(con, collection) is True
+    keep_going, = asked
+    assert keep_going() is True
+    gating["other"] = "normattiva-nemo"
+    assert keep_going() is False

@@ -4978,12 +4978,18 @@ def _producer_step(con, collection) -> bool:
         return False
     if not _embedding_allowed(con, collection):
         return False
+    from . import run_check
     recipe = collections_mod.recipe_for(collection)
     slots = max(config.EMBED_PLUGIN_SLOTS, recipe.concurrency)
     with dispatch.working_as(Level.CORPUS, collection.name):
+        # ...and another collection's gate starting on this model ends the
+        # stream at its next refill: what is in flight finishes and is
+        # committed, and the next `_embedding_allowed` stands aside until the
+        # gate ends (app/run_check.py `gating_elsewhere`; München, 2026-11-11)
         return _embed_parallel(
             con, collection, recipe, slots=slots,
-            keep_going=lambda: not (_paused.is_set() or _acquire_only.is_set()))
+            keep_going=lambda: not (_paused.is_set() or _acquire_only.is_set())
+            and run_check.gating_elsewhere(collection) is None)
 
 
 def _embed_producer(collection, gone: threading.Event) -> None:

@@ -366,6 +366,68 @@ def test_two_spaces_on_one_model_gate_one_at_a_time(node, endpoint, monkeypatch)
     assert run_check._flight(another_model) != run_check._flight(collection)
 
 
+def test_an_asymmetric_spaces_query_model_has_its_flight_too(node, endpoint):
+    """A look gates the query encoder as well (`_look_at_the_query_side`), so
+    a gate running on the QUERY model holds this collection's look too; and a
+    look that could not take every flight lets go of those it took."""
+    import threading
+    root, collection, codex = node
+    query_key = f"{QUERY_URL} medcpt-query"
+    assert run_check._flights(collection) == sorted([f"{DOC_URL} medcpt-article", query_key])
+    lock = run_check._looking.setdefault(query_key, threading.Lock())
+    assert lock.acquire(blocking=False)
+    try:
+        assert backend_gate.embed_allowed(db.connect(collection), collection) is False
+        assert endpoint.posts == 0, "it asked a model whose gate another look holds"
+        assert not run_check._looking[f"{DOC_URL} medcpt-article"].locked()
+    finally:
+        lock.release()
+    assert backend_gate.embed_allowed(db.connect(collection), collection) is True
+
+
+def test_a_validated_collection_stands_aside_while_another_spaces_gate_runs_on_its_model(
+        node, endpoint):
+    """THE WIDER POINT (München, 2026-11-11): a collection already validated on
+    the model and embedding on it answers from its cached verdict, so the
+    flight alone never stops it — and its requests deferred the other space's
+    fresh-context pass for as long as it embedded. While another collection's
+    gate runs on the model it stands aside, says so once, and asks nothing."""
+    root, collection, codex = node
+    con = db.connect(collection)
+    assert backend_gate.embed_allowed(con, collection) is True        # validated, cached
+    recipe = collections_mod.recipe_for(collection)
+    posts = endpoint.posts
+    assert run_check.gating_elsewhere(collection) is None
+    with run_check._gate_running(recipe, "document", root, "normattiva-nemo"):
+        assert run_check.gating_elsewhere(collection) == "normattiva-nemo"
+        assert backend_gate.embed_allowed(con, collection) is False
+        assert backend_gate.embed_allowed(con, collection) is False
+        assert endpoint.posts == posts, "it asked the model while another space's gate ran"
+    # its own gate is no reason to stand aside
+    with run_check._gate_running(recipe, "document", root, "gutenberg"):
+        assert run_check.gating_elsewhere(collection) is None
+    assert run_check._gating == {}
+    assert backend_gate.embed_allowed(con, collection) is True
+    said = [r["message"] for r in con.execute(
+        "SELECT message FROM events WHERE stage='run-check' AND message LIKE '%stands aside%'")]
+    assert len(said) == 1 and "normattiva-nemo" in said[0], said
+
+
+def test_a_gate_holds_its_model_for_its_length_and_lets_go_after(node, endpoint, monkeypatch):
+    root, collection, codex = node
+    seen: dict = {}
+
+    def gate(*a, **k):
+        seen.update(run_check._gating)
+        raise emb.GateDeferred("the encoder went away")
+    monkeypatch.setattr(run_check, "_validate", gate)
+    with pytest.raises(emb.GateDeferred):
+        run_check.validate(root, "gutenberg", codex, collections_mod.recipe_for(collection))
+    assert seen == {(DOC_URL, "medcpt-article"):
+                    (str(hold_runs.directory(root, "gutenberg")), "gutenberg")}
+    assert run_check._gating == {}, "a deferred gate let go of its model"
+
+
 # ---- a run that changes under the work ---------------------------------------------
 
 def test_a_run_that_changes_mid_document_stops_the_write(node, endpoint, monkeypatch):

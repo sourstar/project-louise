@@ -451,7 +451,7 @@ def fresh_loads(texts: Sequence, embed_one, reload: Callable[[], None],
 
 def fresh_contexts(texts: Sequence, embed_fresh, first: Sequence[Sequence[float]],
                    seed: bytes, creations: int = FRESH_CONTEXTS, *,
-                   counted=None) -> tuple[int, float]:
+                   counted=None, retry=None) -> tuple[int, float]:
     """(contexts, the closest an answer on a context of its own came to the
     same text's `first` answer — 1.0 when every one is the same byte string).
     `embed_fresh` embeds each text alone, its keep fixed at 0 (app/rage/keep.py
@@ -477,7 +477,18 @@ def fresh_contexts(texts: Sequence, embed_fresh, first: Sequence[Sequence[float]
     can add up wrongly: another collection's request has a context created in
     the round while one of the pass's own rides a kept one — the same number
     made, and one answer not from a context of its own. With the calls, any
-    other request the run answered meanwhile defers the pass."""
+    other request the run answered meanwhile defers the pass.
+
+    A ROUND THAT SOMETHING ELSE TOUCHED IS ASKED AGAIN, NOT COUNTED, where
+    the caller says so: `retry(tries)` is called after the `tries`-th such
+    round of the same texts and returns True once it has waited for the
+    model to be left to the pass (app/run_check.py: the other collections on
+    the model stand aside while its gate runs), False to defer the pass. Its
+    answers are not examined — they were not given on contexts of their own,
+    which is all this pass measures — and the same texts are asked again in
+    the same order. Without `retry` the first such round defers the pass
+    (München, 2026-11-11: two spaces on one model deferred each other's pass
+    every time, ~16 minutes an attempt)."""
     if counted is None:
         raise GateError("this engine creates its context per request, and the gate can count "
                         "none of its creations: it is not admitted until they are counted "
@@ -495,18 +506,25 @@ def fresh_contexts(texts: Sequence, embed_fresh, first: Sequence[Sequence[float]
         order = list(range(len(texts)))
         rng.shuffle(order)
         order = order[:creations - made]
-        before = counted()
-        got = embed_fresh([texts[k] for k in order])
-        after = counted()
-        if len(got) != len(order):
-            raise GateError(f"the encoder returned {len(got)} vectors for {len(order)} texts")
-        calls, contexts = _round_counts(before, after, len(order))
-        if contexts != len(order) or calls != len(order):
+        tries = 0
+        while True:
+            before = counted()
+            got = embed_fresh([texts[k] for k in order])
+            after = counted()
+            if len(got) != len(order):
+                raise GateError(f"the encoder returned {len(got)} vectors for {len(order)} texts")
+            calls, contexts = _round_counts(before, after, len(order))
+            if contexts == len(order) and calls == len(order):
+                break
+            tries += 1
+            if retry is not None and retry(tries):
+                continue
             raise GateDeferred(
                 f"the fresh-context pass: {len(order)} requests with a keep of 0 made "
                 f"{'an unknown number of' if contexts is None else contexts} "
                 f"context(s)" + ("" if calls in (None, len(order)) else
                                  f" while the run answered {calls} call(s)") +
+                ("" if retry is None else f" (the round was asked {tries} time(s))") +
                 f" — another request held the context, or the count was not read; "
                 f"asked again when nothing else uses the model")
         for k, v in zip(order, got):
@@ -708,7 +726,8 @@ def run_gate(codex: Codex, *, reference: Sequence[Sequence[float]],
             first = single if len(single) == len(probes) else \
                 list(single[:len(sixteen)]) + (embed_one(long) if long else [])
             contexts, across_contexts = fresh_contexts(probes, fresh, first, seed or b"",
-                                                       counted=getattr(fresh, "creations", None))
+                                                       counted=getattr(fresh, "creations", None),
+                                                       retry=getattr(fresh, "retry", None))
             variation = min(variation, across_contexts)
 
     return Run(

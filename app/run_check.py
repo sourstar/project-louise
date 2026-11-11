@@ -46,6 +46,7 @@ import os
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Callable
 
@@ -298,7 +299,29 @@ def fresh_contexts(recipe, *, query: bool = False, stated=None, probe_item=PROBE
             return one._fn(texts, seen)
     out = runs_mod.Answers(fresh)
     out.creations = creations_of(recipe, stated, lambda: fresh([probe_item], set()))
+    out.retry = round_again(kw.get("stop"), kw.get("name", ""))
     return out
+
+
+#: a round of the fresh-context pass that another request touched is asked
+#: again this many times, this far apart, before the pass is deferred: the
+#: other collections on the model stand aside while its gate runs
+#: (`gating_elsewhere`), and what they had in flight and the keep their last
+#: request asked (RAGE's ceiling, 2 s) run out within a few seconds
+ROUND_RETRIES, ROUND_WAIT_S = 10, 3.0
+
+
+def round_again(stop: Callable[[], bool] | None = None, name: str = "", *,
+                sleep: Callable[[float], None] = time.sleep) -> Callable[[int], bool]:
+    """`embedder.fresh_contexts`' `retry`: wait, then ask the round again —
+    up to ROUND_RETRIES times; a node that is stopping defers the gate."""
+    def retry(tries: int) -> bool:
+        if tries > ROUND_RETRIES:
+            return False
+        _stopping(stop, name)
+        sleep(ROUND_WAIT_S)
+        return True
+    return retry
 
 
 def batched(recipe) -> bool:
@@ -438,11 +461,50 @@ def _reloader(recipe, *, query: bool, stop=None, name: str = ""):
     return reload
 
 
+#: (endpoint, model) -> (the place, the name) of the collection whose GATE
+#: runs on it in this process now. A gate's passes are only measured on a
+#: model nothing else asks meanwhile — the fresh contexts are counted by the
+#: engine, a fresh load is the first text after a reload — so while one runs
+#: every other collection on the model stands aside (`gating_elsewhere`)
+_gating: dict[tuple[str, str], tuple[str, str]] = {}
+_gating_lock = threading.Lock()
+
+
+@contextmanager
+def _gate_running(recipe, role: str, root: Path, name: str):
+    who = _who(recipe, role == "query")
+    mine = (str(runs_mod.directory(root, name)), name)
+    with _gating_lock:
+        _gating[who] = mine
+    try:
+        yield
+    finally:
+        with _gating_lock:
+            if _gating.get(who) == mine:
+                del _gating[who]
+
+
+def gating_elsewhere(collection) -> str | None:
+    """The name of ANOTHER collection whose gate runs now on the model this
+    one embeds its documents with, or None. A dictionary lookup while no
+    gate runs: the embed stream asks it before each refill."""
+    if not _gating:
+        return None
+    try:
+        who = _who(collections_mod.recipe_for(collection), False)
+    except Exception:                                   # noqa: BLE001
+        return None
+    held = _gating.get(who)
+    if held is None or held[0] == _where(collection):
+        return None
+    return held[1]
+
+
 def validate(root: Path, name: str, codex: Codex, recipe, *, role: str = "document",
              key=None, now: str | None = None,
              stop: Callable[[], bool] | None = None,
              on_run: Callable[[Any], None] | None = None) -> dict[str, Any]:
-    with _pinned(recipe, role, "gate", name):
+    with _pinned(recipe, role, "gate", name), _gate_running(recipe, role, root, name):
         return _validate(root, name, codex, recipe, role=role, key=key, now=now,
                          stop=stop, on_run=on_run)
 
@@ -813,8 +875,10 @@ def _kept_stamp(collection) -> tuple:
                                 for e in it if e.name.endswith(".json")))
     except OSError:
         return ()
-#: (endpoint, model) -> the lock of whoever is looking at that model now (`_flight`)
+#: (endpoint, model) -> the lock of whoever is looking at that model now (`_flights`)
 _looking: dict[str, threading.Lock] = {}
+#: place -> the collection it last stood aside for (logged once per episode)
+_aside_said: dict[str, str] = {}
 _guard = threading.Lock()
 
 
@@ -888,23 +952,44 @@ def answering(collection) -> dict[str, str | None]:
             for role in runs_mod.ROLES}
 
 
+def _models(collection) -> list[tuple[str, str]]:
+    """Every (endpoint, model) a look at this collection may gate: its
+    document side, and its query side where the space has a query encoder."""
+    try:
+        recipe = collections_mod.recipe_for(collection)
+    except Exception:                                   # noqa: BLE001
+        return [(_where(collection), "")]
+    out = [_who(recipe, False)]
+    query = getattr(getattr(getattr(collection.codex, "space", None), "query", None),
+                    "encoder", None)
+    if query is not None and _who(recipe, True) not in out:
+        out.append(_who(recipe, True))
+    return out
+
+
 def _flight(collection) -> str:
     """What ONE gate at a time means: one per encoder MODEL (its endpoint and
     the model the request names), whatever space asks. Two collections of a
     space that reach one encoder meet the same run, and the second finds the
-    first's statement instead of gating it again.
+    first's statement instead of gating it again. This is the document side's
+    key; `_flights` adds the query side's.
 
     NOT ONE PER SPACE (the node, 2026-11-11): wikidata and normattiva-nemo,
     two spaces on one Nemotron, gated it at once after an engine switch; each
     fresh-context pass saw the other's requests (61 and 66 calls answered for
     32 asked), both deferred, and both verdicts expired together to gate side
     by side again. The gate's passes — fresh loads, fresh contexts — measure
-    the model alone, so a second space on it waits for the round."""
-    try:
-        url, model = _who(collections_mod.recipe_for(collection), False)
-    except Exception:                                   # noqa: BLE001
-        url, model = _where(collection), ""
+    the model alone, so a second space on it waits for the round, and a
+    collection already validated on it stands aside while the gate runs
+    (`gating_elsewhere`)."""
+    url, model = _models(collection)[0]
     return f"{url} {model}"
+
+
+def _flights(collection) -> list[str]:
+    """Every model a look at this collection may gate, in one order for all
+    callers (sorted), each taken without waiting (`embed_allowed`)."""
+    return sorted({f"{url} {model}" for url, model in _models(collection)})
 
 
 # ---- a context that did not reproduce its canary: the run goes back to the gate ----
@@ -1020,6 +1105,7 @@ def reset_cache() -> None:
     _publishing.clear()
     _entries.clear()
     _record_read.clear()
+    _aside_said.clear()
 
 
 def check_write(collection, recipe, answered: set) -> None:
@@ -1211,6 +1297,18 @@ def embed_allowed(con, collection, *, stop: Callable[[], bool] | None = None) ->
     from .verify import backend_gate
 
     where = _where(collection)
+    # ANOTHER COLLECTION'S GATE RUNS ON THIS MODEL: this one stands aside
+    # until it ends, validated or not — its requests would be counted in the
+    # gate's passes and defer them (München, 2026-11-11)
+    other = gating_elsewhere(collection)
+    if other is not None:
+        if _aside_said.get(where) != other:
+            _aside_said[where] = other
+            db.log_event(con, "info", "run-check",
+                         f"[{collection.name}] embedding stands aside while the gate of "
+                         f"{other} runs on the same model"[:500])
+        return False
+    _aside_said.pop(where, None)
     now = time.time()
     cached = _verdicts.get(where)
     # A VERDICT IS ABOUT A RUN. When any collection that reaches this encoder
@@ -1226,11 +1324,17 @@ def embed_allowed(con, collection, *, stop: Callable[[], bool] | None = None) ->
             and not _suspect(collection) and not _suspect(collection, "query"):
         return cached[0]
     with _guard:
-        lock = _looking.setdefault(_flight(collection), threading.Lock())
-    if not lock.acquire(blocking=False):
-        # someone is asking (or gating) already: ONE gate per model (`_flight`).
-        # Nothing to wait for — this round has no embedding, the next asks
-        return False
+        locks = [_looking.setdefault(k, threading.Lock()) for k in _flights(collection)]
+    held: list[threading.Lock] = []
+    for lock in locks:
+        if not lock.acquire(blocking=False):
+            # someone is asking (or gating) that model already: ONE gate per
+            # model. Nothing to wait for — this round has no embedding, the
+            # next asks
+            for h in reversed(held):
+                h.release()
+            return False
+        held.append(lock)
     try:
         def log(message: str) -> None:
             # a context that did not reproduce its canary is an error to read
@@ -1255,4 +1359,5 @@ def embed_allowed(con, collection, *, stop: Callable[[], bool] | None = None) ->
                 pass        # a status write must never break the gate
         return allowed
     finally:
-        lock.release()
+        for h in reversed(held):
+            h.release()
