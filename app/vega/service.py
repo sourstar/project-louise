@@ -486,12 +486,22 @@ def answer_line(reply: Mapping[str, Any]) -> bytes:
     return canonical_json(dict(reply)) + b"\n"
 
 
+def say(line: str) -> None:
+    """A log line, written NOW (München, 2026-11-11). The service's stdout
+    is a pipe, so a plain `print` is block-buffered: `docker logs -t`
+    stamped a gate's last ~35 "met an expired keep" lines with the time the
+    next gate filled the buffer, and legi's window seemed to stop at 265
+    creations of its 300. The log read as a time series is the first
+    benchmark (CLAUDE.md): every line carries the time it was said."""
+    print(line, flush=True)
+
+
 class Intake:
     """The unix socket the wrappers write to. A stale socket file from a
     previous run is replaced; any other file at the path is refused."""
 
     def __init__(self, path: Path, receipts: ReceiptStore, runs: Runs, *,
-                 log: Callable[[str], None] = print, passes: Passes | None = None,
+                 log: Callable[[str], None] = say, passes: Passes | None = None,
                  keeps: Keeps | None = None) -> None:
         self.path, self.receipts, self.runs, self.log = Path(path), receipts, runs, log
         self.passes, self.keeps = passes, keeps

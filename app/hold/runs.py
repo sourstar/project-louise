@@ -129,6 +129,44 @@ def batching_measured(root: Path, name: str, role: str, run_id: str) -> dict[str
     return got.get(f"{role}:{run_id}")
 
 
+def _contexts_file(root: Path, name: str) -> Path:
+    return directory(root, name).parent / "gate-contexts.json"
+
+
+def record_contexts(root: Path, name: str, role: str, run_id: str, *, contexts: int,
+                    closest: float, at: str) -> None:
+    """THE FRESH-CONTEXT PASS, COUNTED (München, 2026-11-11: "I can't confirm
+    that the 300-fresh-context pass ran"). How many contexts of their own the
+    gate's probes were asked on — every one the engine's own count of a
+    creation (`embedder.fresh_contexts`) — and the closest an answer came to
+    the same text's first (1.0: every one the same bytes), for a run that
+    creates its context per request. LOCAL, as the batching is (no wire
+    change): the statement says only how far apart the run's answers came,
+    loads and contexts together (`load_variation`). Read by `hold embedder
+    check`'s report and `contexts_measured`. `/vega/keeps` cannot answer it
+    afterwards: its counts start again at every load, and the gate reloads."""
+    p = _contexts_file(root, name)
+    try:
+        got = json.loads(p.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        got = {}
+    got[f"{role}:{run_id}"] = {"contexts": int(contexts), "closest": float(closest), "at": at}
+    p.parent.mkdir(parents=True, exist_ok=True)
+    tmp = p.with_name(f".{p.name}.{os.getpid()}.tmp")
+    tmp.write_text(json.dumps(got, sort_keys=True), encoding="utf-8")
+    os.replace(tmp, p)
+
+
+def contexts_measured(root: Path, name: str, role: str, run_id: str) -> dict[str, Any] | None:
+    """The fresh-context pass of `run_id`'s last gate on `role`, or None (the
+    run creates no context per request, or was gated before this record)."""
+    try:
+        got = json.loads(_contexts_file(root, name).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return got.get(f"{role}:{run_id}")
+
+
 def keep(root: Path, name: str, statement: dict[str, Any]) -> Path:
     """Write a statement, pass or fail, where its run and role put it."""
     body = statement["body"]
@@ -566,6 +604,9 @@ def validate(root: Path, name: str, codex: Codex, *, role: str, reference,
                 f"inconclusive, nothing is kept, and it is tried again")
     statement = emb.statement(run, codex, key, now=now)
     keep(root, name, statement)
+    if run.contexts:
+        record_contexts(root, name, role, stated.run_id, contexts=run.contexts,
+                        closest=run.context_variation, at=now)
     if on_run is not None:
         on_run(run)
     return statement["body"]
