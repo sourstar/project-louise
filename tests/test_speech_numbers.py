@@ -67,3 +67,34 @@ def test_the_speech_route_sends_the_words(monkeypatch):
     speech.synthesize({"input": "La guerra iniziò nel 1914 [3].", "language": "it-IT"}, url="http://ai")
     assert [s["input"] for s in sent] == ["The war began in nineteen fourteen.",
                                           "La guerra iniziò nel millenovecentoquattordici."]
+
+
+@pytest.mark.parametrize("lang, text, said", [
+    # operator, 2026-11-12: "dates in roman format are mispronounced"
+    ("it", "Dante visse nel XIV secolo, tra il XIII e il XIV secolo; sec. XV; XIV-XV secolo.",
+     "Dante visse nel quattordicesimo secolo, tra il tredicesimo e il quattordicesimo secolo; sec. "
+     "quindicesimo; quattordicesimo-quindicesimo secolo."),
+    ("it", "Luigi XIV e Pio IX; Elisabetta II regna. Carlo V fu imperatore.",
+     "Luigi quattordicesimo e Pio nono; Elisabetta seconda regna. Carlo quinto fu imperatore."),
+    ("it", "la II guerra mondiale e il I secolo a.C.", "la seconda guerra mondiale e il primo secolo avanti Cristo."),
+    ("it", "Nel V secolo a.C. Atene fiorì.", "Nel quinto secolo avanti Cristo. Atene fiorì."),
+    ("en", "Louis XIV built it; World War II ended; Henry VIII; the XIV century; MCMXC.",
+     "Louis the fourteenth built it; World War two ended; Henry the eighth; the fourteenth century; nineteen ninety."),
+    ("fr", "Louis XIV vécut au XVIIe siècle; François Ier; au Ve siècle.",
+     "Louis quatorze vécut au dix-septième siècle; François premier; au cinquième siècle."),
+    ("es", "Felipe II y Alfonso XIII; el siglo XIV; la II Guerra Mundial.",
+     "Felipe segundo y Alfonso trece; el siglo catorce; la segunda Guerra Mundial."),
+    ("de", "Ludwig XIV. regierte im XVII. Jahrhundert.", "Ludwig der vierzehnte regierte im siebzehnten Jahrhundert."),
+    ("pt", "o século XIV e D. Pedro II", "o século catorze e D. Pedro segundo"),
+])
+def test_roman_numerals_are_said_as_the_language_says_them(lang, text, said):
+    assert verbalize(text, lang) == said
+
+
+@pytest.mark.parametrize("lang, text", [
+    ("it", "LA STORIA DI ROMA, Washington DC, taglia XL, I Promessi Sposi, I secoli bui, CD e MD."),
+    ("en", "When I left, Elizabeth I and a CV."),
+    ("fr", "Le siècle des Lumières; Ce matin; De Gaulle."),
+])
+def test_what_only_looks_like_a_roman_numeral_is_left_as_written(lang, text):
+    assert verbalize(text, lang) == text
