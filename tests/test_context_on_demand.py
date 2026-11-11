@@ -33,6 +33,14 @@ from app import collections as collections_mod, embeddings, model_load, resident
 from app.rage import dispatch, keep
 from tests.test_model_load import REAL_FETCH, Runner, SERVER
 
+
+@pytest.fixture(autouse=True)
+def a_start_of_twenty(monkeypatch):
+    """These tests follow a keep through the request path and were written
+    for a start of 20 ms; the operator's own start (50 ms since 2026-11-11)
+    is held by tests/test_rage_keep.py. The path is the same at any start."""
+    monkeypatch.setattr(keep, "START_MS", 20)
+
 MIB = 1024 * 1024
 NEMOTRON = "vega-nemotron-3-embed-1b"
 BGE = "vega-bge-m3"

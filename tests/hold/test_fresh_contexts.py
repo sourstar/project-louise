@@ -208,20 +208,11 @@ def test_only_a_model_listed_with_the_option_gets_the_pass_and_its_keep_is_zero(
         fixed.append(keep._fixed.get())
         return fake_embed(texts)
     monkeypatch.setattr(run_check.embeddings, "embed_calibration", embed_calibration)
-    waits: list[float] = []
-    fresh = run_check.fresh_contexts(recipe, sleep=waits.append)
+    fresh = run_check.fresh_contexts(recipe)
     assert fresh is not None
     out = fresh(["alpha", "beta", "gamma"])
     assert len(out) == 3 and fixed == [0, 0, 0], "each text alone, its keep fixed at 0"
     assert keep._fixed.get() is None, "and nothing fixed once the pass is over"
-    # every other round waits before each request: a creation that follows a
-    # pause is production's, and not the one that follows a free (the node,
-    # 2026-11-11: ~56 ms against ~1 ms)
-    assert waits == []
-    assert len(fresh(["alpha", "beta", "gamma"])) == 3 and fixed == [0] * 6
-    assert waits == [run_check.FRESH_PAUSE_S] * 3
-    fresh(["alpha"])
-    assert len(waits) == 3, "and the round after it is asked back to back again"
     assert fresh.creations is None, "not VeGa's encoder: nobody counts its creations, and the gate refuses"
 
 

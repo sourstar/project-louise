@@ -39,6 +39,19 @@ WIKIDATA = keep.Stream(SERVER, MODEL, "wikidata", "corpus")
 NORMATTIVA = keep.Stream(SERVER, MODEL, "normattiva-nemo", "corpus")
 
 
+#: the operator's start, as the module has it — read before the pin below
+OPERATORS_START_MS = keep.START_MS
+
+
+@pytest.fixture(autouse=True)
+def a_start_of_twenty(monkeypatch):
+    """The scenarios below are written for a start of 20 ms (the operator's
+    first; their gaps and waits are counted against it). The start is a
+    parameter of the trim, not part of it: the operator's own is held by its
+    own test."""
+    monkeypatch.setattr(keep, "START_MS", 20)
+
+
 class Clock:
     def __init__(self) -> None:
         self.t = 1_000.0
@@ -76,9 +89,19 @@ def _state(keeps: keep.Keeps, stream: keep.Stream) -> dict:
     return next(s for s in keeps.snapshot() if (s["plugin"], s["level"]) == (stream.plugin, stream.level))
 
 
-def test_a_stream_starts_at_the_operator_s_twenty_milliseconds(keeps, clock):
-    assert keep.START_MS == 20 and keep.FLOOR_MS == 20
-    assert _once(keeps, clock, WIKIDATA) == 20
+def test_a_stream_starts_at_the_operator_s_fifty_milliseconds(keeps, clock, monkeypatch):
+    """Operator, 2026-11-11, the node measured: "Start at 50 ms". The floor
+    stays his first start, 20 ms: he moved the start, not the floor."""
+    assert OPERATORS_START_MS == 50 and keep.FLOOR_MS == 20
+    monkeypatch.setattr(keep, "START_MS", OPERATORS_START_MS)
+    assert _once(keeps, clock, WIKIDATA) == 50
+    s = _state(keeps, WIKIDATA)
+    assert (s["requests"], s["premature"], s["excused"], s["paused"]) == (1, 0, {}, 0)
+    assert (s["keep_ms"], s["highest_ms"]) == (50, 50)
+
+
+def test_a_stream_made_at_another_start_begins_there(keeps, clock):
+    assert _once(keeps, clock, WIKIDATA) == 20, "the start is read when the stream is made"
     s = _state(keeps, WIKIDATA)
     assert (s["requests"], s["premature"], s["excused"], s["paused"]) == (1, 0, {}, 0)
 

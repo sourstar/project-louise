@@ -10,7 +10,8 @@ nobody is using must not stay held. The operator: "Louise RAGE creates the
 work batches, thus the stay warm flag keeps the context also between jobs";
 "Let's start with a 20 ms expiration time, the timeout shall be trimmed per
 job type: several collections share the same model, but their way to queue
-the jobs may be different"; "I choose option B, trimmed by RAGE"; "The
+the jobs may be different" — and, the node measured, "Start at 50 ms"
+(`START_MS`); "I choose option B, trimmed by RAGE"; "The
 trimming time shall not be modified if the expiry occurred because of a job
 missed scheduling (for instance when a chat model takes over)".
 
@@ -108,8 +109,14 @@ from typing import Callable, Iterator, NamedTuple
 
 log = logging.getLogger(__name__)
 
-#: the operator's start (2026-11-11), and the least a stream is ever given
-START_MS = 20
+#: THE OPERATOR'S START: "Start at 50 ms" (2026-11-11, in München's session,
+#: once the node had been measured — at 20 ms, his first start, one lane of
+#: requests sent back to back still had its context created one time in
+#: three; docs/notes/idle-context-brief.md §10.1). Read when a stream is made
+START_MS = 50
+#: the least a stream is ever given: the operator's first start ("Let's start
+#: with a 20 ms expiration time"), which he moved the start from and not the
+#: floor — a keep that decays may come back down to it
 FLOOR_MS = 20
 #: the most: past it a stream that keeps expiring pays its creations, and the
 #: memory is free between two of its requests (the review's constant, to be
@@ -164,9 +171,9 @@ class Stream(NamedTuple):
 
 @dataclass
 class _State:
-    keep_ms: int = START_MS
+    keep_ms: int = field(default_factory=lambda: START_MS)
     answered: float | None = None       # when its last answer came (monotonic s)
-    asked_ms: int = START_MS            # the keep that answer carried
+    asked_ms: int = field(default_factory=lambda: START_MS)   # the keep that answer carried
     changed: float = 0.0                # when the keep last moved or was confirmed
     excuse: str | None = None           # the next expiry is not the stream's
     # counted since start
@@ -174,7 +181,7 @@ class _State:
     premature: int = 0
     excused: dict[str, int] = field(default_factory=dict)
     paused: int = 0
-    highest_ms: int = START_MS
+    highest_ms: int = field(default_factory=lambda: START_MS)
     keyed: bool = True                  # its model takes a keep
     # the gaps, for every stream (`Keeps._gap`)
     busy: int = 0                       # sent while the model worked: no gap

@@ -30,7 +30,8 @@ WORK IS DONE; A REQUEST MAY CARRY A KEEP, IN MILLISECONDS, THAT HOLDS THE
 CONTEXT THAT LONG AFTER ITS ANSWER, so that requests back to back do not
 free and allocate between them. A semi-cold start: a model is idle
 (weights only) or running. Louise's RAGE makes the work batches and sets
-the keep on every request, per job type, 20 ms to start. The card's free memory
+the keep on every request, per job type, 50 ms to start (the operator's, once
+the node was measured; 20 ms at first). The card's free memory
 is the common pool: with every model opted in, ≈ 24 GB at rest + at most
 3.3 GB working ≈ 27 GB; in the first deployment (§1.3) ≈ 26.5 GB at rest
 and under 30 GB at the peak — against ~34 GB held today and the reclaimer's
@@ -103,6 +104,10 @@ options `context_on_demand:true`, `keep_context_ms:N`.
   canonical way: no free after use". (This replaces the review's "absent is
   not 0" below: a request without the field is no longer given the model's
   default — it leaves the context loaded.)
+- "Start at 50 ms" (2026-11-11, in München's session, the node measured:
+  §10.1). It replaces the start of 20 ms above; the floor a keep may decay
+  to stays 20 ms — he moved the start, not the floor (`keep.START_MS`,
+  `FLOOR_MS`).
 - "If there is a query in the meantime, the chat model gets a context
   memory; if there is not enough memory there are still options (in this
   order): the contexts of the batch in queue can be pruned, or some other
@@ -169,7 +174,8 @@ them.
 ### 1.3 Louise
 
 - **RAGE sets the keep on every corpus request, PER JOB TYPE: 20 ms to
-  start, then trimmed** (operator). A job type is a STREAM: one
+  start, then trimmed** (operator; the start is 50 ms since the node was
+  measured — §1.1, "Start at 50 ms" — and 20 ms is the floor). A job type is a STREAM: one
   collection's one kind of work at one endpoint (its corpus embedding; a
   query's embedding, its rerank …) — collections that share a model queue
   their jobs differently and get different keeps. The server knows nothing
@@ -226,7 +232,7 @@ them.
 
   | | who | where |
   |---|---|---|
-  | decides the value | RAGE, per job type (a collection's one kind of work at one endpoint): 20 ms, then its own trim | a RUNTIME value, kept as the last good one like its requests in flight (invariant 10) — not an `[encoder]` key, not in a signed recommendation (09 §9.19), no dialog |
+  | decides the value | RAGE, per job type (a collection's one kind of work at one endpoint): 50 ms (20 at first), then its own trim | a RUNTIME value, kept as the last good one like its requests in flight (invariant 10) — not an `[encoder]` key, not in a signed recommendation (09 §9.19), no dialog |
   | writes it into the request | Louise's embedding client, every place a body is built — the gate's and the probe's too | app/embeddings.py (`_body`, the probes) |
   | carries it | LocalAI, then the VeGa wrapper; neither reads it to decide | the request's `metadata` (§3) |
   | obeys it | llama.cpp's server: the deadline and §1.2's three rules | P11, part 1 |
@@ -846,25 +852,13 @@ and no engine changed.*
   NODE and NOT fixed yet. At a keep of 20 ms one lane of requests sent back
   to back still had its context created 8 times in 13 (bge-m3) and 67 times
   in 200 (Qwen3-4B): the way from the engine's answer to the client and
-  back to the engine is longer than 20 ms about one time in three here, and
+  back to the engine outlasts 20 ms about one time in three here, and
   RAGE's own clock sees none of it — its gap is under its allowance
   (`TRANSIT_MS`, 10 ms), so it would judge those intervals clean and never
   raise the keep. No statistic of RAGE's own round trips bounds that way
-  (the fastest answer is by definition a fast trip). Two more facts decide
-  the fix: a creation that follows a keep which RAN OUT costs tens of
-  milliseconds (Nemotron ≈ 56 ms, §10.1 "two creations") — `CREATION_MS`'s
-  100 is the right order, and the 0.8–8.4 ms of the keep-0 method is another
-  case; and holding a context some hundreds of milliseconds after a
-  stream's last request costs nothing measurable. NEXT, BEFORE ANY
-  DEPLOYMENT (a known defect is not shipped): RAGE trims on the ENGINE's
-  count — at its beat it reads the wrapper's count of each model's run
-  (`GET /vega/keeps`), puts the measured creation time into
-  `Keeps.creation_ms` (its hook exists) and sets the engine's `created`
-  against the expiries it judged itself; contexts created that its clock did
-  not see raise the keep of the streams that were sending, and stop its
-  decay. It builds on the coordinator's run-per-model source (in hand
-  there), so it follows that commit. The START itself (20 ms) is the
-  operator's, who is measuring 50–300 ms on the node now.
+  (the fastest answer is by definition a fast trip). The operator's start
+  of 50 ms (§1.1) covers what was measured at 20; the blind spot itself is
+  closed by the next commit: RAGE reads the engine's count back.
 
 ### 10.1 Steps 3–4 on the node (München, 2026-11-12)
 
@@ -872,11 +866,11 @@ Test copies under their own model names, the live engine's build with P11,
 the node paused for each run. **All three encoders gave the SAME BYTES over
 300 keep-0 creations each**: a context created per request changes no vector.
 
-| encoder (test copy) | idle → with its context | back per free | creation from the client, median / p95 |
+| encoder (test copy) | idle → with its context | back per free | a creation: keep 0 less kept, medians at a pause of 100 ms (below) |
 |---|---|---|---|
-| bge-m3 | 883 → 1,444 MiB | 561 MiB | 3.4 / 35 ms |
-| Nemotron-3-embed-1B | 2,512 → 4,399 MiB | 1,887 MiB | 0.8 / 4.6 ms |
-| Qwen3-Embedding-4B (gutenberg's ctx 8192, batch = ubatch 2048) | 2,737 → 4,605 MiB | ~1,870 MiB | 8.4 / 21.6 ms (warm 51.6, cold 61.2) |
+| bge-m3 | 883 → 1,444 MiB | 561 MiB | 73 − 33 = ~40 ms |
+| Nemotron-3-embed-1B | 2,512 → 4,399 MiB | 1,887 MiB | 91 − 34 = ~55 ms |
+| Qwen3-Embedding-4B (gutenberg's ctx 8192, batch = ubatch 2048) | 2,737 → 4,605 MiB | ~1,870 MiB | 76 − 53 = ~23 ms |
 
 - Every keep-0 request rose and fell (Qwen3: 60/60, 240/240).
 - The build: `louise-llama-cpp:sycl_f16-7e61f8307476-stack-7c301a7ba437`, the
@@ -906,28 +900,37 @@ the node paused for each run. **All three encoders gave the SAME BYTES over
   | 100 ms | 30 | 108 ms |
   | 150, 200, 300 ms | 1 | 36–37 ms |
 
-- **TWO CREATIONS, NOT ONE** (München's finding, the same run; read by the
-  author's session from the code, NOT yet measured apart). A creation after
-  a keep that ran out costs ≈ 55–70 ms here (92–108 ms against 36), where
-  the keep-0 method gave 0.8 ms for the same model and texts (cold 35.8 ms,
-  warm 33.2). The staged code has ONE creation path — the timer decides only
-  WHEN the free runs — and one wait: the loop's thread is the one that
-  frees, so a request arriving during a free waits for it. Both numbers fit
-  a free of ≈ 16 ms and a creation of ≈ 56 ms: at a keep of 100 ms with
-  requests 100 ms apart the deadline falls ON the next arrival (16 + 56 + 36
-  = 108), at 50 ms the free is long over (56 + 36 = 92). What differs from
-  the keep-0 case is then only the AGE OF THE FREE when the next context is
-  created: under ~25 ms there, 50 ms here — the card's memory seems to come
-  back cheaply for a moment after it was given up (the runtime or the
-  driver keeping it; not established, and not ours to read from here).
-  Consequences: (1) the cost a keep is chosen against is the 56 ms one,
-  per encoder — the engine's own `created_ms` (3a, 3b) will say it without
-  a client's clock; (2) the gate's keep-0 pass asked back to back exercises
-  only the cheap creation, so every other round of it now waits before each
-  request (`run_check.FRESH_PAUSE_S`), production's creations being the
-  ones that follow a pause; (3) to measure, by München: keep-0 singles at
-  pauses of 0, 25, 50, 100 and 200 ms — the latency against the pause shows
-  where the cheap creation ends.
+- **A CREATION'S COST, MEASURED AS SUCH** (München, the same day; short
+  texts of 512 tokens, the node paused, every vector byte-checked, 2.5 s
+  between cells and the keep-2,000 baseline last). The median latency of a
+  request whose context is created for it (keep 0, a pause of 100 ms
+  between requests) less the median on a kept context (keep 2,000) is the
+  table's last column: Nemotron ~55 ms, bge-m3 ~40 ms, Qwen3-4B ~23 ms.
+  Nemotron's whole grid, 30 creations of 30 in every cell of the first two
+  rows:
+
+  | keep | pause between requests (ms) | median latency (ms) |
+  |---|---|---|
+  | 0 (the free right after the answer) | 0 / 25 / 50 / 100 / 200 / 300 / 500 | 63 / 86 / 80 / 91 / 95 / 86 / 81 |
+  | 50 (the free by the timer) | 100 / 300 / 500 | 88 / 78 / 72 |
+  | 2,000 (kept) | 100 | 34 |
+
+  ONE CREATION PATH: neither how the context was freed, nor the age of the
+  free, nor the pause changes what a creation costs. `CREATION_MS`'s 100
+  was the right order; the engine's own figure, with no client's clock, is
+  the wrapper's `created_ms` (3a, 3b).
+- **The figures first written in that column were void** (corrected by
+  München and the author's session): 0.8 / 3.4 / 8.4 ms came from pairs of
+  requests — one with a keep of 2,000 ms, one with a keep of 0 ("warm"),
+  0.3 s of sleep, one with a keep of 0 ("cold") — and BOTH halves were
+  warm: a keep only extends another's (§1.2, rule 2), so the first
+  request's 2,000 ms held the context through the "cold" one. What was
+  built on them the same day is withdrawn (a pause in the gate's
+  fresh-context pass, and its clause in 03 §3.3). The keep-50/100 rows
+  above had the cost all along: 92 ms a request at a keep of 50 ms against
+  36 ms kept, and 108 ms at 100 ms — there the deadline falls ON the next
+  arrival, and the request also waits for the free in progress, ~16 ms
+  (the loop's thread is the one that frees).
 
 **What the code settled, beyond the brief:**
 

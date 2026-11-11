@@ -275,50 +275,25 @@ def creations_of(recipe, stated, probe: Callable[[], Any], *,
     return counted
 
 
-#: A CREATION THAT FOLLOWS A PAUSE IS NOT THE ONE THAT FOLLOWS A FREE (the
-#: node, 2026-11-11, docs/notes/idle-context-brief.md §10.1 "two creations"):
-#: Nemotron's context came back in about a millisecond when the last free was
-#: under ~25 ms old and in ~56 ms when it was 50 ms old — the card's memory
-#: is cheap to get back for a moment after it was given up. Production's
-#: creations follow a keep that ran out, so every other round of the
-#: fresh-context pass waits this long before each request: the gate measures
-#: what is deployed (invariant 12). Well past where the cheap creation was
-#: seen to end; to be set from the node's own curve.
-FRESH_PAUSE_S = 0.25
-
-
 def fresh_contexts(recipe, *, query: bool = False, stated=None, probe_item=PROBE,
-                   sleep: Callable[[float], None] = time.sleep,
                    **kw) -> runs_mod.Answers | None:
     """For a run that creates its context per request (`creates_per_request`):
     `answers(how="one")` with every request's keep fixed at 0, so each text is
     embedded on a context created for it (app/rage/keep.py `fixed`; the brief
-    §1.4) — the gate's fresh-context pass. Its rounds alternate: one asked
-    back to back, the next with `FRESH_PAUSE_S` before each request. Its
-    `creations` is the engine's count, which the pass holds every round to
-    (`creations_of`); None where there is no count to read, and the gate then
-    refuses such a run. None for any other run: the gate asks nothing."""
+    §1.4) — the gate's fresh-context pass. Its `creations` is the engine's
+    count, which the pass holds every round to (`creations_of`); None where
+    there is no count to read, and the gate then refuses such a run. None for
+    any other run: the gate asks nothing."""
     from .rage import keep as rage_keep
     if not creates_per_request(recipe, stated, query=query, name=kw.get("name", "")):
         return None
     one = answers(recipe, query=query, how="one", **kw)
-    rounds = {"asked": 0}
-
-    def ask(texts: list[str], seen: set, pause: float = 0.0) -> list[list[float]]:
-        with rage_keep.fixed(0):
-            if not pause:
-                return one._fn(texts, seen)
-            out: list[list[float]] = []
-            for text in texts:
-                sleep(pause)
-                out += one._fn([text], seen)
-            return out
 
     def fresh(texts: list[str], seen: set) -> list[list[float]]:
-        rounds["asked"] += 1
-        return ask(texts, seen, 0.0 if rounds["asked"] % 2 else FRESH_PAUSE_S)
+        with rage_keep.fixed(0):
+            return one._fn(texts, seen)
     out = runs_mod.Answers(fresh)
-    out.creations = creations_of(recipe, stated, lambda: ask([probe_item], set()))
+    out.creations = creations_of(recipe, stated, lambda: fresh([probe_item], set()))
     return out
 
 
