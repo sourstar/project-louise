@@ -148,6 +148,18 @@ them.
 - **RAGE sets the keep on every corpus request: 500 ms to start**
   (operator). No person types it and no dialog shows it (RULE 2). An
   encoder the corpus and a query share keeps the corpus's by rule 2.
+- **Who does what with the keep** (review) — one owner, RAGE; everyone
+  else passes it on or obeys it:
+
+  | | who | where |
+  |---|---|---|
+  | decides the value | RAGE, per collection: 500 ms, then its own controller | a RUNTIME value, kept as the last good one like its requests in flight (invariant 10) — not an `[encoder]` key, not in a signed recommendation (09 §9.19), no dialog |
+  | writes it into the request | Louise's embedding client, every place a body is built — the gate's and the probe's too | app/embeddings.py (`_body`, the probes) |
+  | carries it | LocalAI, then the VeGa wrapper; neither reads it to decide | the request's `metadata` (§3) |
+  | obeys it | llama.cpp's server: the deadline and §1.2's three rules | P11, part 1 |
+  | answers for a request without it | the model's YAML default, written once at deploy | deploy/vega/stage/models/ |
+  | counts what it cost | the VeGa wrapper → VeGa; RAGE reads it back | beside `GET /vega/passes` |
+  | overrides by hand | nobody by default; an operator's override, if ever wanted, is a command (RULE 2) | not planned |
 - **How it travels — no wire change** (review; §3): in the request's
   `metadata` map, which LocalAI already carries to the backend for
   `chat_template_kwargs`; the VeGa wrapper copies the request it forwards.
@@ -206,8 +218,8 @@ them.
 
 ### 1.4 Invariant 12 — every creation is a first pass after a load
 
-- The keep is RAGE's setting, like `batch` and `concurrency`, and NO part
-  of a run's identity — provided the bytes are identical across creations.
+- The keep is RAGE's runtime value (§1.3) and NO part of a run's identity
+  — provided the bytes are identical across creations.
   The option itself is in the load's stated options, so opting a model in
   is a new run, gated once (09 §9.12).
 - **The gate with keep 0 is the cycle test** (review): every fingerprint
@@ -409,8 +421,9 @@ reload, per backend.
 3. The VeGa wrapper: the field forwarded (it is, by `CopyFrom`); the gaps
    and the premature expiries counted and told to VeGa; the canary (§1.4).
    The wrapper is part of every run's engine (§4).
-4. Louise: RAGE's keep on corpus requests and its controller; the keeper's
-   rule (H5); the gate's keep-0 pass. Each with its test.
+4. Louise: RAGE's keep on corpus requests — in every place app/embeddings.py
+   builds a request body — and its controller; the keeper's rule (H5); the
+   gate's keep-0 pass. Each with its test.
 
 ## 4. Our LocalAI and llama.cpp customizations (the series)
 
