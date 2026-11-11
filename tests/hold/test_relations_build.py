@@ -244,3 +244,22 @@ def test_a_snapshot_with_relations_passes_hold_check(isolated_config, tmp_path, 
                        checks=("roots", "records", "chunks"))
     assert {o.check: o.result for o in report.outcomes} == {
         "roots": check.PASS, "records": check.PASS, "chunks": check.PASS}
+
+
+def test_roots_holds_the_relations_parts_to_their_roots(isolated_config, tmp_path, origin):
+    """03 §3.2 `roots` covers the relations parts too (2026-11-11): a byte
+    changed in one fails the check, naming that part."""
+    from app.hold import check, shard as shard_mod
+    root = tmp_path / "collections"
+    _built(root, origin)
+    rec.write_validation(root, "normattiva")
+    snap = sn.create(root, "normattiva", snapshot_id="2026-08", **QUIET)
+    r = snap.relations[0]
+    path = col.shard_dir_of(root, "normattiva") / shard_mod.relations_path(r.slice, r.n)
+    raw = bytearray(path.read_bytes())
+    raw[-1] ^= 0xFF
+    path.write_bytes(bytes(raw))
+    _name, codex = col.resolve(root, "normattiva")
+    report = check.run(root, "normattiva", codex, snap, seed=b"\x00" * 32, checks=("roots",))
+    [o] = report.outcomes
+    assert o.result == check.FAIL and f"relations/{r.slice}/{r.n:05d}" in o.detail["failed"]

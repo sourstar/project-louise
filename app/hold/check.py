@@ -378,6 +378,15 @@ def check_roots(ctx: Ctx) -> Outcome:
         held.append(s)
         if not ok:
             failed.append(f"{s.slice}/{s.n:05d}")
+    # THE RELATIONS PARTS TOO (09 §9.14: each listed with its `root`, §9.4;
+    # 2026-11-11, when records builds began writing them): unchecked, a
+    # corrupted edge part would pass every check while the graph it serves
+    # is wrong
+    rels = tuple(getattr(ctx.snapshot, "relations", ()) or ())
+    for r, ok in zip(rels, _map_parts(_root_part, [(str(ctx.shard_tree / shard_mod.relations_path(r.slice, r.n)),
+                                                    r.root) for r in rels])):
+        if ok is not None and not ok:
+            failed.append(f"relations/{r.slice}/{r.n:05d}")
     if not held:
         return Outcome("roots", INCONCLUSIVE,
                        why="this peer holds none of the snapshot's shards")
