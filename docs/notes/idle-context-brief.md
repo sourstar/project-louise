@@ -30,7 +30,7 @@ WORK IS DONE; A REQUEST MAY CARRY A KEEP, IN MILLISECONDS, THAT HOLDS THE
 CONTEXT THAT LONG AFTER ITS ANSWER, so that requests back to back do not
 free and allocate between them. A semi-cold start: a model is idle
 (weights only) or running. Louise's RAGE makes the work batches and sets
-the keep on every corpus request, 500 ms to start. The card's free memory
+the keep on every request, per job type, 20 ms to start. The card's free memory
 is the common pool: with every model opted in, ≈ 24 GB at rest + at most
 3.3 GB working ≈ 27 GB; in the first deployment (§1.3) ≈ 26.5 GB at rest
 and under 30 GB at the peak — against ~34 GB held today and the reclaimer's
@@ -88,6 +88,11 @@ options `context_on_demand:true`, `keep_context_ms:N`.
 - "it looks that 500ms are a safe margin; we can log expired stay warms for
   improvement and also pass the timeout in the argument in ms (0 no stay
   warm)."
+- "Let's start with a 20 ms expiration time, the timeout shall be trimmed
+  per job type: several collections share the same model, but their way to
+  queue the jobs may be different, leading to tifferent stay warm timeouts;
+  a timeout per model may fit our scenario but it might not be a general
+  purpose approach." (This replaces the 500 ms of the line above.)
 - "If there is a query in the meantime, the chat model gets a context
   memory; if there is not enough memory there are still options (in this
   order): the contexts of the batch in queue can be pruned, or some other
@@ -145,15 +150,37 @@ them.
 
 ### 1.3 Louise
 
-- **RAGE sets the keep on every corpus request: 500 ms to start**
-  (operator). No person types it and no dialog shows it (RULE 2). An
-  encoder the corpus and a query share keeps the corpus's by rule 2.
+- **RAGE sets the keep on every corpus request, PER JOB TYPE: 20 ms to
+  start, then trimmed** (operator). A job type is a STREAM: one
+  collection's one kind of work at one endpoint (its corpus embedding; a
+  query's embedding, its rerank …) — collections that share a model queue
+  their jobs differently and get different keeps. The server knows nothing
+  of job types: it holds the latest deadline asked (rule 2), which is what
+  keeps the design general; a keep per model is only the default for a
+  request that carries none. No person types it and no dialog shows it
+  (RULE 2).
+- **The trim is RAGE's, automatic, and in the FIRST deployment** (review):
+  20 ms is a start only because the trim is fast. It is inside the
+  pipeline's own turnaround — LocalAI sends one text per call, and between
+  two texts the wrapper publishes a receipt and makes a tokenise call;
+  wikidata's mean gap is ≈ 13 ms, wikipedia's ≈ 170 ms (§2) — so a stream
+  with wider gaps, left at 20 ms, pays a creation on most requests. The rule: a stream's keep
+  DOUBLES on each premature expiry and decays slowly without one (AIMD, as
+  RAGE's requests in flight, gpu-saturation-plan.md lever 3), between a
+  floor of 20 ms and a ceiling; a stream then reaches its level within a
+  handful of creations whatever the start, and its last good value is kept
+  across restarts. "Premature" is defined by the creation's MEASURED time
+  (§2): an expiry is premature when the stream's next request arrives
+  within about one creation's time of it — holding that long would have
+  cost less than creating again, the break-even of SKI RENTAL. Trimmed by hand from a log, 20 ms would be a
+  known slowdown deployed (CLAUDE.md, performance) on every stream nobody
+  had trimmed yet.
 - **Who does what with the keep** (review) — one owner, RAGE; everyone
   else passes it on or obeys it:
 
   | | who | where |
   |---|---|---|
-  | decides the value | RAGE, per collection: 500 ms, then its own controller | a RUNTIME value, kept as the last good one like its requests in flight (invariant 10) — not an `[encoder]` key, not in a signed recommendation (09 §9.19), no dialog |
+  | decides the value | RAGE, per job type (a collection's one kind of work at one endpoint): 20 ms, then its own trim | a RUNTIME value, kept as the last good one like its requests in flight (invariant 10) — not an `[encoder]` key, not in a signed recommendation (09 §9.19), no dialog |
   | writes it into the request | Louise's embedding client, every place a body is built — the gate's and the probe's too | app/embeddings.py (`_body`, the probes) |
   | carries it | LocalAI, then the VeGa wrapper; neither reads it to decide | the request's `metadata` (§3) |
   | obeys it | llama.cpp's server: the deadline and §1.2's three rules | P11, part 1 |
@@ -172,16 +199,12 @@ them.
   it knows by its own clock when a call met an expired keep: the
   milliseconds since the last answer, the keep in force, the call's extra
   time — per run, beside `GET /vega/passes`; the backends' own lines are
-  not kept at LocalAI's info level (§6). RAGE names the collection (every
-  log line names its collection, CLAUDE.md).
-- **RAGE then sets the keep itself** (review): raised when premature
-  expiries pass a share of a collection's requests, lowered slowly — AIMD,
-  as its requests in flight are chosen (gpu-saturation-plan.md, lever 3) —
-  a number the system finds, never typed. 500 ms is three times the worst
-  MEAN on record and about a creation's expected cost — the break-even of
-  SKI RENTAL (hold a resource idle for as long as getting it back would
-  cost: never worse than twice the best) — but the record holds means, not
-  tails (§2): a start, not yet a safe margin.
+  not kept at LocalAI's info level (§6). At a keep of 20 ms ONLY the
+  wrapper can tell: RAGE's own clock differs from the engine's by the
+  pipeline's turnaround, which is of that size. So the wrapper says which
+  calls met an expired keep, by the tag's one-time id, and RAGE joins them
+  to its streams and names the collection (every log line names its
+  collection, CLAUDE.md).
 - **First deployment: the corpus encoders and MADLAD** — qwen3-4b
   (1,882 MiB of context, worked 31 s in 24 h), nemotron (2,221), the MADLAD
   test copy (2,007): 6,110 of the 8,585 MiB listed in §6. The other
@@ -197,7 +220,7 @@ them.
      holds no context — nothing is allocated before its request — and the
      RUNNING stream's returns by itself: a question's claim makes the
      corpus stand aside (app/rage/dispatch.py; a request already sent
-     finishes), and its context is gone within its keep, half a second. No
+     finishes), and its context is gone within its keep, milliseconds. No
      "release now" call is needed.
   2. "some other model can be evincted": LocalAI's reclaimer, the least
      recently used unpinned model, weights and all — its next use pays
@@ -256,7 +279,7 @@ them.
 | Does freed context memory go back to the DRIVER on the B70? | The code says the backend gives it all back (§3: the op pools die with the context; KV and compute buffers are `zeMemFree`d). What reading cannot settle is the driver's side — compute-runtime and `xe` handing the pages back at the free, or keeping them for reuse — and what a process keeps whatever is freed (its ~270 MiB floor, §6; upstream #25271 measured 158 MB left on CUDA after a FULL sleep). | per process, before, during and after a free: the backend's own count (`GGML_SYCL_MEMTRACE=1`: every allocation and free by kind — buffers, pool_leg, pool_vmm — and the device's total / free / allocated / other) beside the driver's (the xe fdinfo app/gpu_memory.py reads, `vram0` and host apart; LocalAI's `/system` `size_vram`); the startup lines `GGML_SYCL_SUPPORT_VMM` / `GGML_SYCL_ENABLE_VMM` / `GGML_SYCL_USE_LEVEL_ZERO_API` say which paths run |
 | Are the vectors byte-identical across creations? | invariant 12 (§1.4) | fixed texts embedded before, between and after creations in the instrument; then the gate with keep 0 on the patched backend, ≥ 300 creations per encoder |
 | How long are the gaps between two requests of one stream, AT THE ENGINE? | It is what the keep must outlast. On record are card-idle MEANS, an upper bound: wikidata (4 lanes) ≈ 13 ms a request (11.1 s/min over ~832 requests/min); wikipedia (2 lanes, producer-bound) ≈ 170 ms (25.6 s/min over ~153) — gpu-saturation-plan.md, lever 2's table. The corpus stands aside 9–37 ms between a question's rerank variants and for whole steps (scheduling.md §12); stream boundaries leave whole idle seconds, 0.1–0.3 s/min. No tail is on record. | RAGE times it at its gate — an answer's arrival to the next request's send, per endpoint, every lane — with no engine change. Inside one request LocalAI sends ONE TEXT PER CALL (§3): those gaps only the wrapper sees — counted on the test copy now, in production from the engine change on (a changed wrapper is a new engine, §4); a histogram by powers of two, as `GET /vega/passes` serves lengths |
-| What does a 500 ms keep release, and how often does it create? | sizes the gain before any build | the card record (app/rage/card_record.py, per second; no card time): per encoder over 24 h, the GB·h given back and the creations a day, a model counted running in every second it worked |
+| What does a keep under a second release, and how often does it create? | sizes the gain before any build | the card record (app/rage/card_record.py, per second; no card time): per encoder over 24 h, the GB·h given back and the creations a day, a model counted running in every second it worked |
 | Does the stack bear it? | thousands of GB-sized allocations and frees a day is a new load on the `xe` / Level Zero stack of M21, M22 and O6 | a soak in the instrument: 10,000 creations, the driver's count flat at the end, no `xe` reset in the kernel log |
 
 Acceptance (proposed; the operator may set others): ≥ 90 % of the context's
@@ -584,7 +607,7 @@ probable or open.
    B4, B10, B11; vega.md §2, §9, §10; scheduling.md §6 and §12 — RAGE and
    the keeper are touched; gpu-saturation-plan.md's levers; app/resident.py's
    docstring). §3's reading is done: re-read only what a rebase moved.
-2. **Count without the card** (§2): the card record at a 500 ms keep — the
+2. **Count without the card** (§2): the card record at a keep under a second — the
    GB·h given back and the creations a day, per encoder; and the gaps
    between requests as RAGE's gate times them. Write the numbers here.
 3. **Measure on the card** (§2) with München on a test copy, in a quiet
@@ -646,11 +669,13 @@ probable or open.
   with the exchange that led here): §3.
 - **The operator's** (§1.1, and §0's general design): the semi-cold start;
   idle or running, no sleep; allocated on the request, freed when the work
-  is done; the keep in the request, in ms, 0 = none; RAGE sets it; 500 ms;
+  is done; the keep in the request, in ms, 0 = none; RAGE sets it, per job
+  type, 20 ms to start and trimmed;
   expired keeps logged; the order when a query finds no room.
 - **The review's — written into the design, NOT yet the operator's word:**
   the keep's three rules; the loop's thread owning the context; the
   refusal; no re-fit; the first version's scope; the premature expiry as
-  the signal, and RAGE's controller; the keeper counting an opted-in model
+  the signal, and the trim being RAGE's own, automatic, from the first
+  deployment; the keeper counting an opted-in model
   at its running size; the gate with keep 0 and ≥ 300 creations; the
   canary; §2's acceptance.

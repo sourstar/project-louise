@@ -63,7 +63,7 @@ measured (published figures disagree).
 - **A model's context on request — the design settled in review** (operator, the same day; the commits' clock reads
   11-11 where this day's entries say 11-12): no idle timer and no sleep. llama.cpp allocates a model's context when a
   request arrives and frees it when the work is done; a request carries a keep in ms (0 = none) that holds it after
-  the answer; RAGE sets it on every corpus request, 500 ms to start; expired keeps are logged. ≈ 24 GB at rest + at
+  the answer; RAGE sets it on every corpus request, per job type, 20 ms to start and trimmed; expired keeps are logged. ≈ 24 GB at rest + at
   most 3.3 GB working with every model opted in; ≈ 26.5 GB at rest and under 30 GB at the peak in the first
   deployment (corpus encoders + MADLAD), against ~34 GB held and the reclaimer's 31.0 GB line. The code is read at the
   pins — the op pools die with the context; LocalAI's backend reads a context in seven places; the keep travels in
