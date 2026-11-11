@@ -20,6 +20,19 @@ measured (published figures disagree).
 
 ### 2026-11-11 (München)
 
+- **The answer, formatted and read right** (operator, 11-12: "the text box seems to receive a md formatting that is
+  printed as it is"; "asterisks are read, and dates in roman format are mispronounced"):
+  - Ask shows the answer's Markdown formatted (ask.html `md`): paragraphs, line breaks, headings, lists, emphasis,
+    code, quotes, rules, tables, http(s) links. Everything is escaped first, so nothing the model writes becomes HTML
+    of its own (tests/browser/ask_markdown.js: no script, image, handler or javascript: link). Citations are linked
+    in the text, never inside code. The source is kept as written for translation and the speaker. Standard
+    alternative written down: marked/markdown-it + DOMPurify.
+  - The voice drops Markdown before reading (speech.py `unmarked`: links as their text, tables as their cells, no
+    mark and no asterisk read), for every client of /v1/audio/speech.
+  - Roman numerals are read as the language reads them (speech_numbers.py `_roman`): centuries ("XIV secolo" →
+    "quattordicesimo secolo", "siglo XIV" → "siglo catorce", "XIXe siècle"), rulers and popes ("Luigi XIV", "Pio IX",
+    "Louis the fourteenth", "Louis quatorze"), "la II guerra mondiale", the era after a century ("V secolo a.C."),
+    Roman years. What only looks like one stays: "DC", "DI" in capitals, "I Promessi Sposi", English "I".
 - **Ask page, three findings fixed** (operator, 11-12):
   - "Quality/Speed, Quick/Quality — totally confusing": now ONE Quality / Speed switch. Speed is the chat model
     translating AND the text search reading only the question's language and English; the API keeps `speed` and

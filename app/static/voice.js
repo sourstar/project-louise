@@ -421,7 +421,12 @@
     for (const m of head.matchAll(/[,;:](?=\s)/g)) if (m.index + 1 >= FIRST_MIN) at = m.index + 1;
     return at < 0 ? [s] : [s.slice(0, at), s.slice(at).trim()];
   }
-  const answerText = () => { const b = document.getElementById('answer'); return b ? b.textContent : ''; };
+  // the answer AS WRITTEN (ask.html `answerSource`): the page shows its
+  // Markdown formatted, the node drops the marks before reading (app/speech.py)
+  const answerText = () => {
+    if (typeof window.answerSource === 'function') return window.answerSource();
+    const b = document.getElementById('answer'); return b ? b.textContent : '';
+  };
   const collapse = line => line.replace(/\s+/g, ' ').trim();
 
   // one line's sentences (its whitespace collapsed), each with where it ends
