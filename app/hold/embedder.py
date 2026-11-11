@@ -778,15 +778,34 @@ BACKEND_STATEMENT_VERSION = 4
 #: reference".
 NEAR_EXACT_VERSION = 5
 NEAR_EXACT_KEYS = ("exactness", "loads", "load_variation", "cpu_reference")
-STATEMENT_VERSIONS = (1, 2, 3, 4, 5)
+#: Version 6 (2026-11-11, operator's choice B: "the signed proof says how many
+#: fresh contexts the run was tested on"): a version-5 body with `contexts` —
+#: the contexts of their own the gate's probes were asked on, each counted by
+#: the engine as created — and `context_variation`, the closest an answer on
+#: one came to the same text's first ("1": the same bytes). Written for a run
+#: that creates its context per request (`context_on_demand`) ALONE, as
+#: version 4 was for a backend engine's run: no other statement moves.
+CONTEXTS_VERSION = 6
+CONTEXTS_KEYS = ("contexts", "context_variation")
+STATEMENT_VERSIONS = (1, 2, 3, 4, 5, 6)
 
 
-def statement_version(engine: Any) -> int:
-    """The version a statement is written at: 5 for every run since
-    2026-10-31 (NEAR_EXACT_VERSION: how exact it is and how it stands against
-    the stored CPU reference are part of every verdict). Before it, 4 for a
-    backend engine's run and 3 for every other; those stay read as written."""
-    return NEAR_EXACT_VERSION
+def on_demand(engine: Any) -> bool:
+    """Does the stated engine create its context per request — its load
+    options list `context_on_demand` (app/model_load.py, the one reading)?"""
+    from app import model_load
+    options = engine.get("options") if isinstance(engine, dict) else None
+    return isinstance(options, dict) and model_load.options_on_demand(options)
+
+
+def statement_version(engine: Any, contexts: int = 0) -> int:
+    """The version a statement is written at: 6 for a run that creates its
+    context per request (its engine says so, or the gate asked it on fresh
+    contexts), 5 for every other since 2026-10-31 (NEAR_EXACT_VERSION: how
+    exact it is and how it stands against the stored CPU reference are part
+    of every verdict). Before it, 4 for a backend engine's run and 3 for
+    every other; those stay read as written."""
+    return CONTEXTS_VERSION if contexts or on_demand(engine) else NEAR_EXACT_VERSION
 
 
 def _statement_run(run: Run, key, *, now: str) -> dict[str, Any]:
@@ -827,7 +846,7 @@ def _statement_run(run: Run, key, *, now: str) -> dict[str, Any]:
         raise GateError(f"the run's engine cannot be signed into a statement: {e}") from e
     body = {
         "kind": "louise-calibration-run",
-        "version": statement_version(run.stated.engine),
+        "version": statement_version(run.stated.engine, run.contexts),
         "space_id": run.space_id,
         "collection_id": run.collection_id,
         "set": run.set_id,
@@ -857,6 +876,10 @@ def _statement_run(run: Run, key, *, now: str) -> dict[str, Any]:
         body["cpu_reference"] = (None if run.cpu_run is None else
                                  {"run": run.cpu_run, "worst": f"{run.cpu_worst:.6f}",
                                   "median": f"{run.cpu_median:.6f}"})
+    if body["version"] >= CONTEXTS_VERSION:
+        # the fresh contexts, counted, in the signed proof (operator, 2026-11-11: B)
+        body["contexts"] = run.contexts
+        body["context_variation"] = _decimal(run.context_variation)
     return env.sign(env.CALIBRATION, body, key)
 
 
@@ -915,6 +938,14 @@ def read_statement(envelope_: dict[str, Any]) -> dict[str, Any]:
                             f"{', '.join(NEAR_EXACT_KEYS)}; this one lacks {', '.join(missing)}")
         if version >= 5 and body.get("exactness") not in (EXACT, NEAR):
             raise GateError(f"exactness is {EXACT!r} or {NEAR!r}, got {body.get('exactness')!r}")
+        if version >= CONTEXTS_VERSION:
+            missing = [k for k in CONTEXTS_KEYS if k not in body]
+            if missing:
+                raise GateError(f"a version-{CONTEXTS_VERSION} calibration statement carries "
+                                f"{', '.join(CONTEXTS_KEYS)}; this one lacks {', '.join(missing)}")
+            n = body["contexts"]
+            if isinstance(n, bool) or not isinstance(n, int) or n < 0:
+                raise GateError(f"contexts is a whole number, got {n!r}")
     return body
 
 
