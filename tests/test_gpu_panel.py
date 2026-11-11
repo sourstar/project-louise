@@ -136,10 +136,11 @@ def test_real_host_ram_is_shown_apart_from_mapped_files_and_a_pushed_out_model_i
     for heading in ("GPU buffers in host RAM", "process RAM", "mapped file (reclaimable)"):
         assert heading in html
     assert "657 MiB" in html and "2.34 GiB" in html
-    assert "never read as occupancy" in html
+    assert "NOT occupancy" in html, "the column's own title says which figure is not real"
     # MedCPT: 416 KiB on the card, 414 MiB in host RAM — pushed out; Qwen is not
     assert medcpt.pushed_out and not qwen.pushed_out
-    assert html.count("pushed off the card</span>") == 1
+    assert html.count(">pushed off the card</span>") == 1
+    assert "a model pushed off the card</span></summary>" in html, "in sight with the drawer closed"
     # a row whose split was not read says so, never 0
     assert "<td>—</td>" in html
 
@@ -189,5 +190,30 @@ def test_the_card_is_broken_down_by_model_louise_or_other(client, monkeypatch):
         {"id": "louise-chat-qwen3-8b", "backend": "intel-sycl-f16-llama-cpp", "size_vram": 7 << 30},
         {"id": "flux-dev", "backend": "stablediffusion-ggml", "size_vram": 6 << 30}]})
     html = client.get("/admin/system/gpu").text
-    assert "Louise · chat" in html and "flux-dev" in html and "other models 6.00 GiB" in html
+    assert '<span class="swatch louise"></span><div class="use">chat</div>' in html
+    assert "flux-dev" in html and "other models 6.00 GiB" in html
     assert "outside LocalAI" in html
+
+
+def test_a_model_is_shown_on_its_own_card_and_the_cpu_has_a_card(client, monkeypatch):
+    """Operator, 2026-11-11: each GPU card's models under "models", and a CPU
+    card with the models loaded there (app/gpu_models.py `by_card`)."""
+    from dataclasses import replace
+    from app import gpu_models
+    igpu = gpu.GpuDevice(card="card1", pdev="0000:c5:00.0", driver="amdgpu", vendor_id="1002",
+                         device_id="13c0", vendor="AMD", name="Radeon 610M",
+                         vram_total=516 << 20, vram_used=400 << 20,
+                         processes=(gpu.GpuProcess(5005, "parakeet", "parakeet", "localai",
+                                                   300 << 20, 0, ns_pid=77),))
+    _probe(monkeypatch, gpu.GpuSnapshot(devices=(replace(ARC, processes=()), igpu)))
+    monkeypatch.setattr(config, "CHAT_URL", "http://nas:30286/v1")
+    monkeypatch.setattr(config, "CHAT_MODEL", "louise-chat-qwen3-8b")
+    monkeypatch.setattr(gpu_models, "_get_json", lambda url: {"loaded_models": [
+        {"id": "louise-chat-qwen3-8b", "backend": "intel-sycl-f16-llama-cpp", "size_vram": 7 << 30},
+        {"id": "stt-igpu", "backend": "vulkan-parakeet-cpp", "size_vram": 300 << 20, "process": {"pid": 77}},
+        {"id": "stt-cpu", "backend": "intel-sycl-f16-parakeet-cpp", "size_vram": 0, "process": {"pid": 66}}]})
+    html = client.get("/admin/system/gpu").text
+    b70, radeon, cpu = html.index("Arc Pro B70"), html.index("Radeon 610M"), html.index("<b>CPU</b>")
+    assert b70 < html.index("louise-chat-qwen3-8b") < radeon < html.index("stt-igpu") < cpu < html.index("stt-cpu")
+    assert 'id="gpu-models-0000:c5:00.0" data-keep-open' in html and 'id="cpu-models" data-keep-open' in html
+    assert html.count("models · 1 loaded") == 3

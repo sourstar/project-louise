@@ -94,3 +94,45 @@ def test_the_card_its_readings_and_the_governor_come_before_its_models():
         state="ok", url="x", devices=(replace(dev, vram_total=None, vram_used=None),), notes=(),
         governor={"state": "absent"})
     assert alone.count("GPU governor not running") == 1, "a card that reads no VRAM still shows it"
+
+
+def _card(pdev, total, procs=()):
+    from app import gpu
+    return gpu.GpuDevice(card="c", pdev=pdev, driver="xe", vendor_id="8086", device_id="0",
+                         vendor=None, name=pdev, vram_total=total, vram_used=0, processes=procs)
+
+
+def _proc(ns_pid):
+    from app import gpu
+    return gpu.GpuProcess(9000 + ns_pid, "m", "llama-server", "c", GIB, 0, ns_pid=ns_pid)
+
+
+def test_each_model_goes_to_the_card_its_backend_runs_on_and_the_rest_to_the_cpu():
+    """Operator, 2026-11-11: "Add a CPU card with the models loaded". A model
+    is the card's whose process list holds its backend's pid (`ns_pid`);
+    unplaced with VRAM, the largest card's (a probe one deploy behind);
+    unplaced with none, the CPU's (the live STT: a SYCL backend, size_vram 0,
+    no /dev/dri fd — München, 2026-11-11)."""
+    system = {"loaded_models": [
+        {"id": "vega-qwen3", "backend": "vega-louise-llama-cpp", "size_vram": 9 * GIB,
+         "process": {"pid": 41}},
+        {"id": "stt-igpu", "backend": "vulkan-parakeet-cpp", "size_vram": 0, "process": {"pid": 77}},
+        {"id": "louise-rerank-bge", "backend": "intel-sycl-f16-llama-cpp", "size_vram": GIB,
+         "process": {"pid": 55}},
+        {"id": "stt", "backend": "intel-sycl-f16-parakeet-cpp", "size_vram": 0, "process": {"pid": 66}},
+    ]}
+    models = gm.panel(COLLECTIONS, get_json=lambda url: system)
+    b70, igpu = _card("0000:03:00.0", 32 * GIB, (_proc(41),)), _card("0000:c5:00.0", GIB // 2, (_proc(77),))
+    cards = gm.by_card(models, (igpu, b70))
+    assert [r.model for r in cards["0000:03:00.0"]["rows"]] == ["vega-qwen3", "louise-rerank-bge"]
+    assert [r.model for r in cards["0000:c5:00.0"]["rows"]] == ["stt-igpu"], "placed by its pid, VRAM 0 or not"
+    assert [r.model for r in cards["cpu"]] == ["stt"]
+    assert cards["0000:03:00.0"]["louise"] == 10 * GIB and cards["0000:03:00.0"]["asked"] == models["asked"]
+
+
+def test_without_a_probe_every_model_with_vram_is_the_largest_cards():
+    models = gm.panel(COLLECTIONS, get_json=lambda url: SYSTEM)
+    cards = gm.by_card(models, (_card("small", GIB), _card("big", 32 * GIB)))
+    assert len(cards["big"]["rows"]) == len(SYSTEM["loaded_models"]) and "small" not in cards
+    assert cards["cpu"] == []
+    assert gm.by_card(models, ())["cpu"] == [], "no card at all: nothing invented"

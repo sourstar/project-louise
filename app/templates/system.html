@@ -3,13 +3,31 @@
 {% block content %}
 <h1>System</h1>
 
+{# AN OVERVIEW FIRST (operator, 2026-11-11: "collapse all what it makes sense
+   to be collapsed, please, it is an endless list without overview"): each
+   panel says its state in its heading line, the rest one click away; a panel
+   that needs an action opens by itself #}
 <div class="panel">
-  <h2>GPU</h2>
+  <h2>GPU and CPU</h2>
   <div id="gpu" hx-get="/admin/system/gpu" hx-trigger="load, every 5s" hx-swap="innerHTML"></div>
 </div>
+<script>
+  // the cards' drawers stay as the reader left them across the 5 s refresh
+  (function () {
+    var open = {};
+    document.body.addEventListener('htmx:beforeSwap', function (e) {
+      if (!e.detail.target || e.detail.target.id !== 'gpu') return;
+      e.detail.target.querySelectorAll('details[data-keep-open]').forEach(function (d) { open[d.id] = d.open; });
+    });
+    document.body.addEventListener('htmx:afterSwap', function (e) {
+      if (!e.detail.target || e.detail.target.id !== 'gpu') return;
+      e.detail.target.querySelectorAll('details[data-keep-open]').forEach(function (d) { if (open[d.id]) d.open = true; });
+    });
+  })();
+</script>
 
-<div class="panel">
-  <h2>Effective configuration</h2>
+<div class="panel"><details class="sect" id="sys-config">
+  <summary><h2>Effective configuration</h2> <span class="note">{{ effective.tier2|length }} collection(s) · {{ effective.tier3|length }} runtime override(s)</span></summary>
   <div class="note">Tier 1 — env, what is global to the node (restart to change); what each collection runs is Tier 2:</div>
   <table><tr><th>key</th><th>value</th></tr>
     {% for k,v in effective.tier1.items() %}<tr><td>{{ k }}</td><td>{{ v }}</td></tr>{% endfor %}
@@ -30,17 +48,12 @@
   <table><tr><th>key</th><th>value</th></tr>
     {% for k,v in effective.tier3.items() %}<tr><td>{{ k }}</td><td>{{ v }}</td></tr>{% endfor %}
   </table>
-</div>
+</details></div>
 
-<div class="panel">
-  <h2>Model pins</h2>
-  {# the explanation behind one closed line (operator, 2026-11-02: "A crowded
-     interface is a bad interface"); the failures below stay in sight #}
-  <details class="more"><summary>About this</summary>
-    <div class="note">Encoders pinned in LocalAI while Louise processes with them, each restored to its state before (app/model_pins.py). A failed call should not happen: each is a defect to look into.</div>
-  </details>
+{% set pin_trouble = model_pins.failures.count or model_pins.stuck %}
+<div class="panel"><details class="sect" id="sys-pins"{% if pin_trouble %} open{% endif %}>
+  <summary><h2>Model pins</h2> <span class="note">{{ model_pins.pins|length }} held{% if model_pins.failures.count %} · <span class="badge err">{{ model_pins.failures.count }} failed call(s)</span>{% endif %}{% if model_pins.stuck %} · <span class="badge err">{{ model_pins.stuck|length }} left pinned</span>{% endif %}</span></summary>
   {% if model_pins.failures.count %}
-  <div class="note" style="color:var(--err)">{{ model_pins.failures.count }} failed pin call(s) — the last {{ model_pins.failures.recent|length }}:</div>
   <table><tr><th>when</th><th>call</th><th>model</th><th>holder</th><th>collection</th><th>what failed</th></tr>
     {% for f in model_pins.failures.recent|reverse %}
     <tr><td>{{ f.at|ago }}</td><td>{{ f.call }}</td><td>{{ f.model }} @ {{ f.server }}</td><td>{{ f.holder }}</td><td>{{ f.collection or '—' }}</td><td>{{ f.detail }}</td></tr>
@@ -48,17 +61,17 @@
   </table>
   {% endif %}
   {% if model_pins.stuck %}
-  <div class="note" style="color:var(--err)">Left pinned though they were not before — the restore is failing and is retried every minute:
+  <div class="note" style="color:var(--err)">Left pinned, the restore retried every minute:
     {% for p in model_pins.stuck %}{{ p.model }} @ {{ p.server }} ({{ p.restore_attempts }} attempt(s)){% if not loop.last %}, {% endif %}{% endfor %}</div>
   {% endif %}
   {% if model_pins.pins %}
   <table><tr><th>model</th><th>pinned before</th><th>held by</th></tr>
     {% for p in model_pins.pins %}
-    <tr><td>{{ p.model }} @ {{ p.server }}</td><td>{{ 'yes — left so' if p.prior else 'no — unpinned after' }}</td><td>{{ p.holders|join(', ') }}</td></tr>
+    <tr><td>{{ p.model }} @ {{ p.server }}</td><td>{{ 'yes — left so' if p.prior else 'no — unpinned after' }}</td><td>{% for h in p.holders %}<div class="use">{{ h }}</div>{% endfor %}</td></tr>
     {% endfor %}
   </table>
   {% else %}<div class="note">Nothing held now.</div>{% endif %}
-</div>
+</details></div>
 
 {% if refusals %}
 <div class="panel">
@@ -72,8 +85,9 @@
 </div>
 {% endif %}
 
-<div class="panel">
-  <h2>Boot-validation report</h2>
+{% set boot_failed = boot_report|rejectattr('ok')|list %}
+<div class="panel"><details class="sect" id="sys-boot"{% if boot_failed %} open{% endif %}>
+  <summary><h2>Boot-validation report</h2> <span class="note">{% if boot_failed %}<span class="badge err">{{ boot_failed|length }} FAIL</span> of {{ boot_report|length }}{% else %}{{ boot_report|length }} ok{% endif %}</span></summary>
   <table><tr><th>collection</th><th>status</th><th>message</th></tr>
     {% for r in boot_report %}
     <tr><td>{{ r.collection }}</td>
@@ -81,21 +95,21 @@
       <td>{{ r.message }}</td></tr>
     {% endfor %}
   </table>
-</div>
+</details></div>
 
-<div class="panel">
-  <h2>Endpoint health</h2>
+{% set down = health|rejectattr('ok')|list %}
+<div class="panel"><details class="sect" id="sys-health"{% if down %} open{% endif %}>
+  <summary><h2>Endpoint health</h2> <span class="note">{% if down %}<span class="badge err">{{ down|length }} unreachable</span> of {{ health|length }}{% else %}{{ health|length }} up{% endif %}</span></summary>
   <table><tr><th>endpoint(s)</th><th>url</th><th>status</th></tr>
     {% for h in health %}
-    <tr><td>{{ h.names|join(', ') }}</td><td>{{ h.url }}</td>
+    <tr><td>{% for n in h.names %}<div class="use">{{ n }}</div>{% endfor %}</td><td>{{ h.url }}</td>
       <td><span class="badge {{ 'ok' if h.ok else 'err' }}">{{ 'up' if h.ok else 'unreachable' }}</span></td></tr>
     {% endfor %}
   </table>
-  <div class="note">best-effort ping, 1.5s timeout per endpoint.</div>
-</div>
+</details></div>
 
-<div class="panel">
-  <h2>Users</h2>
+<div class="panel"><details class="sect" id="sys-users"{% if users is none %} open{% endif %}>
+  <summary><h2>Users</h2> <span class="note">{% if users is none %}<span class="badge err">users.toml does not read</span>{% elif not users %}none: Ask is open{% else %}{{ users|length }}{% endif %}</span></summary>
   {% if users is none %}
   <div class="note" style="color:var(--err)">users.toml does not read; nobody but the admin token gets in.</div>
   {% elif not users %}
@@ -115,10 +129,10 @@
     <div class="note">Users are changed from the command line: <code>louise user add | list | role | expire | reissue | revoke | remove</code>.</div>
   </details>
   {% endif %}
-</div>
+</details></div>
 
-<div class="panel">
-  <h2>Worker log</h2>
+<div class="panel"><details class="sect" id="sys-log">
+  <summary><h2>Worker log</h2></summary>
   <div id="log" hx-get="/admin/system/log" hx-trigger="load, every 4s" hx-swap="innerHTML"></div>
-</div>
+</details></div>
 {% endblock %}

@@ -12,6 +12,12 @@ labelled as such.*
 ## 1. What runs today
 
 - **STT: parakeet, on LocalAI's `parakeet-cpp` backend, on the CPU.**
+  - Checked on the node (München, 2026-11-11): the live model's backend
+    is named `intel-sycl-f16-parakeet-cpp`, yet its process holds no
+    `/dev/dri` fd, maps no Level Zero or SYCL library, has no xe fdinfo,
+    and LocalAI gives it `size_vram` 0. It runs on the CPU (3.9 cores in
+    the warm pass). A correction made here earlier the same day, "it runs
+    on the B70", was wrong and is withdrawn.
   - The backend is the CPU build (approved-encoders.md: "parakeet-cpp ships
     the same [runtime] but runs on the CPU (its libparakeet.so links no
     SYCL)").
@@ -364,14 +370,36 @@ changing the speech processing logic: do it at the end of the speech".*
     backend, the digest, and the numbers;
   - LocalAI's own reclaimer and watchdog figures (localai-bugs B4, B6):
     Louise cannot correct those, so they are measured there;
-  - the System page's by-model list (app/gpu_models.py) still shows the
-    iGPU model's `size_vram` beside the B70's models. This is display only.
+  - the System page lists each model under the card its backend runs on,
+    by the probe's `ns_pid`, and the CPU's models on a CPU card
+    (app/gpu_models.py `by_card`, #537).
 
 ## 6. Results
 
-*Not measured yet.*
+**Measured** (München, 2026-11-11; the node paused; results on the node in
+`/mnt/ssd3/louise-build/stt-igpu/`).
+- **Clips:** 21 stand-in clips from the TTS (it/en/fr/de, 2–9.5 s, plus one
+  of 25 s), each three times warm. They are not the operator's voice
+  (measuring.md §6).
+- **The iGPU test model:** `parakeet-cpp-multilingual-diarization-speakers-igpu`
+  on `vulkan-parakeet-cpp` (`sha256:d1ffab69…`), RADV only
+  (`VK_DRIVER_FILES` / `VK_ICD_FILENAMES`).
+- **The keeper (#534, live)** did not count the iGPU model against the
+  B70's budget. The reclaimer evicted nothing in the window.
 
-| clip set | engine | warm s/clip (median) | RTF | first call | transcripts = CPU's | CPU use | iGPU busy | memory | Tctl |
-|---|---|---|---|---|---|---|---|---|---|
-| — | CPU (live) | | | | reference | | — | — | |
-| — | Vulkan, iGPU | | | | | | | | |
+| | live (CPU, despite its SYCL-named backend) | iGPU (Vulkan, RADV) |
+|---|---|---|
+| warm RTF, median | 0.090 | 0.161 (1.8× slower) |
+| the 25 s clip | 2.34 s | 3.63 s |
+| first call after a load | 2.86 s | 4.14 s |
+| backend CPU, warm pass | 3.94 cores | **0.40 cores** |
+| iGPU busy, average / max | — | 68.5 % / 100 % |
+| iGPU memory | — | VRAM 516 MB (the whole carve-out) + GTT 1.32 GB |
+| package Tctl during the run | — | 61–77 °C |
+| transcripts | reference | **21 of 21 identical**; word recall against the spoken text 0.932 for both |
+
+- **Against §3.1:** the iGPU runs at 0.56× the CPU's speed, inside the
+  0.3–0.7× modelled there. What it buys is about 3.5 CPU cores per
+  transcription.
+- **Not measured yet:** step 6's contention row (the node unpaused, the
+  worker running).

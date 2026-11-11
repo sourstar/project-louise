@@ -86,6 +86,16 @@ def test_the_speech_route_sends_the_words(monkeypatch):
      "Felipe segundo y Alfonso trece; el siglo catorce; la segunda Guerra Mundial."),
     ("de", "Ludwig XIV. regierte im XVII. Jahrhundert.", "Ludwig der vierzehnte regierte im siebzehnten Jahrhundert."),
     ("pt", "o século XIV e D. Pedro II", "o século catorze e D. Pedro segundo"),
+    # München, 2026-11-11, on the live page: the numeral that ends a sentence after
+    # its article, and a numbered part after its noun
+    ("it", "Nel XIX secolo regnava Luigi XIV? No, nel XVII.",
+     "Nel diciannovesimo secolo regnava Luigi quattordicesimo? No, nel diciassettesimo."),
+    ("it", "articolo 3 del capo II, la sezione III e la parte II, il titolo IV",
+     "articolo tre del capo secondo, la sezione terza e la parte seconda, il titolo quarto"),
+    ("en", "see chapter IV and Part II", "see chapter four and Part two"),
+    ("fr", "le chapitre II du titre Ier", "le chapitre deux du titre premier"),
+    ("de", "Kapitel III und Ludwig XIV.", "Kapitel drei und Ludwig der vierzehnte"),
+    ("es", "el capítulo II y la sección III", "el capítulo segundo y la sección tercera"),
 ])
 def test_roman_numerals_are_said_as_the_language_says_them(lang, text, said):
     assert verbalize(text, lang) == said
