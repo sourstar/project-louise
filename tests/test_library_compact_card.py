@@ -120,6 +120,20 @@ def test_no_work_left_no_eta_row(isolated_config):
     assert shelf["embed_eta"] is None and 'data-eta="embed"' not in _render(shelf)
 
 
+def test_a_complete_stage_has_no_eta_row_even_with_blocked_documents_left(isolated_config, monkeypatch):
+    """The operator, 2026-11-11: "Hide ETA row when completed". Blocked
+    documents wait for "clear errors & retry", not for time — even with a
+    measured speed, which would otherwise put a best on the row."""
+    c = collections_mod.default_collection()
+    monkeypatch.setattr(web, "_gpu_speeds", lambda: {c.name: 1.0})
+    con = db.connect(c)
+    _seed(con, [(1, 1, 1, 1, None)] * 4 + [(1, 1, 1, 0, "embed: failed")] * 2)
+    web.invalidate_counts()
+    shelf = web._collection_shelf(c, {}, "running")
+    assert shelf["embed_done"] == 4 and shelf["stage_targets"]["embed"] > 4, "work left, all of it blocked"
+    assert shelf["embed_eta"] is None and 'data-eta="embed"' not in _render(shelf)
+
+
 def test_the_slices_line_is_behind_details(card):
     shelf = dict(web._collection_shelf(card, {}, "running"))
     shelf["embed_slices"] = {"line": "Embedded: 9 of 14 families: person, work", "all": False}
