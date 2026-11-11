@@ -1560,8 +1560,39 @@ What it does **not** have:
   - *Amended 2026-10-25* (RULE 2): the creator need not name them. The
     node reads the targets from the claims — each end's plugin prefix
     names one held collection of that plugin, never guessed between two
-    — and `from_snapshot` is each target's newest held snapshot, the one
-    `hold annotations update` re-checks against (07 §7.4).
+    whose records differ — and `from_snapshot` is each target's newest
+    held snapshot, the one `hold annotations update` re-checks against
+    (07 §7.4).
+    *Amended 2026-11-11* (architecture session with the operator): held
+    collections of one plugin whose newest snapshots have the same
+    `records_root`s hold the same records and count as one target; the
+    one with the newest snapshot is taken (ties: the lowest
+    `collection_id`) and the create says which. Where their records
+    differ, the one whose newest snapshot holds every record the claims
+    name is the target, as before; it refuses where several such differ,
+    naming them.
+  - *Amended 2026-11-11* (architecture session with the operator): **the
+    claims apply at READ time to every held collection holding their
+    records, decided per claim by hash**, never by comparing whole
+    collections. A record-level claim (`same-work`, `translation-of`,
+    `relation`, `member-of`) applies to a held collection's record when
+    that record's `content_hash` equals the claim's hash for that end
+    (`subject_hash` / `object_hash`); sisters hold byte-identical records
+    (§2.7), so they get every claim, and a sister whose record has since
+    moved gets it as `stale`, exactly as the target itself does after it
+    moves on (below). A chunk-level claim (`mention`) takes the same test
+    on `{chunk_id, text_hash}`: the same layers, `current`; other layers,
+    the chunk is not there, so the mention is `stale` per chunk while
+    `subject_hash` still covers the record (the mention rule below).
+    No sister declaration and no whole-collection comparison is read: a
+    peer holding only `normattiva-nemo` applies an annotation that names
+    `normattiva` without holding normattiva's Codex. `annotates` stays
+    the collection the claims were checked against; no Codex field and
+    no hashed byte moves (09 untouched). `from_snapshot` is compared
+    where the answer is read from that target (or its records twin,
+    §2.4 A1f, whose snapshots are its chain); another collection's
+    snapshot ids are another cadence (09 §9.4), and the hash alone
+    decides there.
 - `plugin` is `annotations`: the claims' uids are `annotations:<n>` and
   their relation types are `annotations:<type>`.
 - `origin.spec` is `{source_id: "annotations", nonce}`, the deposit rule

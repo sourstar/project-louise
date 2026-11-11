@@ -29,6 +29,15 @@ def test_the_disk_index_answers_as_the_memory_index_does(tmp_path, monkeypatch):
     for uid in set(mem.graph) | {"pubmed:2"}:
         assert _ids(disk.graph.get(uid)) == _ids(mem.graph.get(uid, ())), uid
     assert disk.snapshot_id == mem.snapshot_id
+    # the plugins the claims name (02 §2.10, amended 2026-11-11: which held
+    # collections they may apply to), the same from either index
+    assert disk.plugins == mem.plugins == frozenset({"pubmed", "wikidata"})
+    import json
+    meta = json.loads((claim_index.place(tree, seeder.cached_snapshot(tree).hash) / "meta.json").read_text())
+    meta.pop("plugins")
+    (claim_index.place(tree, seeder.cached_snapshot(tree).hash) / "meta.json").write_text(json.dumps(meta))
+    assert claim_index.load(tree, seeder.cached_snapshot(tree)).plugins is None, \
+        "an index built before the plugins were listed: unknown, its lookups decide"
 
 
 def test_a_large_snapshot_is_never_loaded_in_memory_and_groups_nothing_until_built(tmp_path, monkeypatch, capsys):

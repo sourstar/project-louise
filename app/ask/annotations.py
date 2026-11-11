@@ -10,22 +10,40 @@ FACT placed beside the result, of the kind a reference source's row or a
 figure is: never scored, never a leg, never fused (invariant 4). A client
 may group a work's versions by it; the lists are not reordered for it.
 
-Which claims apply: those of an annotations collection this peer holds and
-may use (a copy in quarantine attaches nothing and is named under
-`withheld`, as any copy is — 05 §5.3), whose `annotates.collection_id` is
-the result's collection, read from a target snapshot at or after
-`annotates.from_snapshot`.
+Which claims apply (02 §2.10 and 05 §5.3, amended 2026-11-11, architecture
+session with the operator): those of an annotations collection this peer
+holds and may use (a copy in quarantine attaches nothing and is named under
+`withheld`, as any copy is — 05 §5.3) about a record of the result's
+collection, decided PER CLAIM BY HASH, never by comparing collections: the
+claim's ends name their records by uid, whose prefix is the plugin
+(09 §9.3), so a claim about `normattiva:7` is looked up for a result
+`normattiva:7` of ANY held normattiva collection — the one `annotates`
+names, a sister holding the same records (02 §2.7), or that sister alone on
+a peer that never held the target's Codex — and its `state` is the result's
+collection's own content hashes against `subject_hash` / `object_hash`:
+`current` where the record is the one the claim was made about, `stale`
+where it has moved. That comparison is the one this module made before the
+amendment; no Codex field, no sister declaration and no whole-collection
+comparison is read. Where the result's collection IS a target `annotates`
+names (or its carry twin, whose snapshots are the target's chain), the
+answer must be read from a snapshot at or after that target's
+`from_snapshot`; elsewhere the ids are another collection's cadence
+(09 §9.4) and the hash alone decides.
 
 COST: the claims of a copy are indexed once per snapshot
 (`annotations.index_of`, keyed on the SHARD's path); per search, one manifest
-query per target collection over the uids the attached claims name. It
-scales with the results and their claims, never with either collection.
+query per result collection over the uids the attached claims name. It
+scales with the results and their claims, never with either collection. The
+amendment adds no query: a copy whose claims name none of the results'
+plugins (`ClaimIndex.plugins`) is not consulted, and one that does is
+consulted by the same uid lookups as before (tools/measure/annotation_read.py
+times it).
 """
 from __future__ import annotations
 
 from contextlib import closing
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Iterable, Sequence
 
 from app.hold import annotations as ann
 
@@ -106,6 +124,58 @@ def target_among(codex, ids: Iterable[str]):
     return next((t for i in ids if (t := target_for(codex, i)) is not None), None)
 
 
+def plugins_of(root: Path, a) -> frozenset[str] | None:
+    """The plugins whose records `a`'s claims name (`ClaimIndex.plugins`),
+    from its index of the current snapshot; None where the index cannot say
+    (a disk index built before 2026-11-11): its lookups then decide."""
+    from app.hold import collection as col
+    try:
+        idx = ann.index_of(col.shard_dir_of(Path(root), a.name))
+    except Exception:   # noqa: BLE001 — unreadable here: judged by `annotates` alone
+        return frozenset()
+    return getattr(idx, "plugins", None)
+
+
+def is_about(root: Path, a, ids: Iterable[str], plugins: Iterable[str]) -> bool:
+    """Can `a`'s claims name a record of a collection whose ids (its own,
+    its carry twin's) are `ids` and whose records are of `plugins`? Yes when
+    `annotates` names one of the ids, or when its claims name the plugin
+    (02 §2.10, amended 2026-11-11: any held collection of the plugin, each
+    claim then decided by hash)."""
+    from app.hold.codex import targets_of
+    ids = set(ids)
+    if any(t.collection_id in ids for t in targets_of(a.codex)):
+        return True
+    named = plugins_of(root, a)
+    return named is None or bool(named & set(plugins))
+
+
+def applicable(root: Path, usable: Iterable, ids: Sequence[str], plugins: Iterable[str],
+               read_snapshot: str | None) -> list:
+    """The usable annotations collections whose claims may apply to an answer
+    of the collection `ids` names, read from `read_snapshot`: a named
+    target's (or its twin's) from its `from_snapshot` on, any other held
+    collection of a plugin the claims name from any snapshot — each claim
+    then decided by hash (`annotations.state_of`). No snapshot named: none
+    (05 §5.3)."""
+    if read_snapshot is None:
+        return []
+    plugins = set(plugins)
+    out = []
+    for a in usable:
+        t = target_among(a.codex, ids)
+        if t is not None:
+            if ann.applies_from(t.from_snapshot, read_snapshot):
+                out.append(a)
+        elif is_about(root, a, (), plugins):
+            out.append(a)
+    return out
+
+
+def _plugin_of(uid: str) -> str:
+    return str(uid).split(":", 1)[0]
+
+
 def attach(lists: list[dict[str, Any]], source_of: dict[int, Any], contexts: dict[str, dict],
            *, root: Path, collections=None) -> list[dict[str, Any]]:
     """Every hit gets `annotations` — `[]` where no held claim names its
@@ -121,12 +191,13 @@ def attach(lists: list[dict[str, Any]], source_of: dict[int, Any], contexts: dic
     held = _held(collections)
     if not held or not by_coll:
         return []
+    root = Path(root)
     withheld, usable = [], []
     targets = {i for n in by_coll if n in contexts
                for i in answers_for(root, n, contexts[n]["collection_id"])}
-    from app.hold.codex import targets_of
+    returned = {_plugin_of(h["uid"]) for hits in by_coll.values() for h in hits}
     for a in held:
-        if not any(t.collection_id in targets for t in targets_of(a.codex)):
+        if not is_about(root, a, targets, returned):
             continue                    # about nothing this search returned: not consulted
         why = _withheld(a)
         if why:
@@ -134,14 +205,11 @@ def attach(lists: list[dict[str, Any]], source_of: dict[int, Any], contexts: dic
                              "shards": "all", "reason": f"annotations: {why}"})
         else:
             usable.append(a)
-    root = Path(root)
     from app.hold import collection as col
     for name, hits in by_coll.items():
         ctx = contexts.get(name) or {}
         ids = answers_for(root, name, ctx.get("collection_id"))
-        mine = [a for a in usable
-                if (t := target_among(a.codex, ids)) is not None
-                and ann.applies_from(t.from_snapshot, ctx.get("snapshot_id"))]
+        mine = applicable(root, usable, ids, {_plugin_of(h["uid"]) for h in hits}, ctx.get("snapshot_id"))
         if not mine:
             continue
         found = []
