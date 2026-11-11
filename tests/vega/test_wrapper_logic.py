@@ -1013,3 +1013,75 @@ def test_a_backend_with_no_contract_serves_a_chat_model_but_never_an_embedder(tm
     vw.state_run(canon=_load_role({}, ("parallel:1",)), environ={}, **kw)
     with pytest.raises(loadopts.Unstatable, match="no deterministic mode"):
         vw.state_run(canon=_load_role({}, ("parallel:1",), Embeddings=True), environ={}, **kw)
+
+
+# ---- the input lengths against the load's ubatch (operator, 2026-11-12: "for
+#      future trimming improvements we should gracefully log when a text is splitted")
+
+def _canon(options):
+    return loadopts.Canon(options={"Options": options}, weights_path="/w", env={})
+
+
+def test_the_ubatch_is_the_loads_option_else_its_batch():
+    w = load_wrapper()
+    assert w.load_ubatch(_canon(["device:gpu", "ubatch:2048"]), 8192) == 2048
+    assert w.load_ubatch(_canon(["device:gpu"]), 8192) == 8192, "LocalAI's NBatch"
+    assert w.load_ubatch(_canon(["ubatch:x"]), 0) == 0
+
+
+def test_a_count_says_its_first_input_over_the_ubatch_once_and_keeps_its_lengths():
+    w = load_wrapper()
+    c = w.PassCount("sha256:" + "11" * 32, {}, 2048)
+    assert [c.note(t) for t in (300, 1000, 2049, 5000, 100_000)] == [False, False, True, False, False]
+    m = c.message()
+    assert (m["inputs"], m["over"], m["longest"], m["ubatch"]) == (5, 3, 100_000, 2048)
+    assert m["buckets"]["512"] == 1 and m["buckets"]["1024"] == 1 and m["buckets"]["4096"] == 1
+    assert m["buckets"]["8192"] == 1 and m["buckets"]["more"] == 1
+    assert sum(m["buckets"].values()) == 5 and list(m["buckets"]) == list(w.PASS_BUCKETS)
+
+
+class _Told:
+    def __init__(self, refuse=None):
+        self.sent, self.refuse = [], refuse
+
+    def publish_passes(self, msg, run_id, run):
+        if self.refuse:
+            raise self.refuse
+        self.sent.append(msg)
+
+
+def _gate_like(w, receipts):
+    from types import SimpleNamespace
+    g = SimpleNamespace(passes=w.PassCount("sha256:" + "11" * 32, {}, 2048), receipts=receipts,
+                        backend=SimpleNamespace(name="fake"), _passes_wake=threading.Event())
+    return g
+
+
+def test_the_count_goes_to_vega_when_it_moved_and_the_first_split_wakes_it(capsys):
+    w = load_wrapper()
+    told = _Told()
+    g = _gate_like(w, told)
+    w.Gate._passes_note(g, 900)
+    assert not g._passes_wake.is_set(), "an input inside the ubatch wakes nothing"
+    w.Gate._passes_note(g, 3412)
+    assert g._passes_wake.is_set(), "the first input over it is told at once"
+    assert "3412 tokens is over the load's ubatch of 2048" in capsys.readouterr().err
+    w.Gate._passes_note(g, 0)
+    assert g.passes.inputs == 2, "an answer that says no tokens is not counted"
+    assert w.Gate._passes_flush(g) is True and len(told.sent) == 1
+    assert told.sent[0]["over"] == 1 and told.sent[0]["kind"] == "passes"
+    assert w.Gate._passes_flush(g) is True and len(told.sent) == 1, "an unmoved count is not sent"
+    w.Gate._passes_note(g, 400)
+    w.Gate._passes_flush(g)
+    assert len(told.sent) == 2 and told.sent[1]["inputs"] == 3, "the whole count, each time"
+
+
+def test_a_service_before_counts_is_told_once_and_a_busy_one_on_the_next_tick(capsys):
+    w = load_wrapper()
+    old = _gate_like(w, _Told(w.ReceiptRefused("a message's kind is run, receipt or tree")))
+    w.Gate._passes_note(old, 5000)
+    assert w.Gate._passes_flush(old) is False, "not asked again"
+    assert "does not take input counts" in capsys.readouterr().err
+    busy = _gate_like(w, _Told(w.Unavailable("no acknowledgement")))
+    w.Gate._passes_note(busy, 5000)
+    assert w.Gate._passes_flush(busy) is True and busy.passes.sent is None, "sent whole next time"

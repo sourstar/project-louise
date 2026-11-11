@@ -51,6 +51,26 @@ Louise ──POST /v1/embeddings (model vega-xyz, tagged inputs)──► LocalA
   which VeGa keeps under that digest (`GET /vega/trees/<image>`) and
   `hold embedder tree-diff` reads two of back, so a digest that moved names
   its byte (§12, 2026-10-12).
+- **An input computed in more than one pass is counted** (operator,
+  2026-11-12: "for future trimming improvements we should gracefully log
+  when a text is splitted"). llama.cpp computes an input in passes of the
+  load's `ubatch` (the `ubatch` option, else LocalAI's `NBatch`): a causal
+  model with last pooling runs a longer one in several, a non-causal one
+  refuses it. The wrapper counts every answer's `prompt_tokens` against it,
+  by powers of two, and tells VeGa the load's whole count
+  (`{"kind": "passes", run_id, ubatch, inputs, over, longest, buckets}`)
+  from a thread of its own: the first input over the ubatch at once, then
+  at most every 10 minutes while the count moves — never in a vector's way;
+  a service before counts refuses the kind and is not asked again. VeGa
+  logs `[vega] run …: N of M input(s) since its load over its ubatch …`
+  when the inputs over it grew, and serves every run's lengths at
+  `GET /vega/passes` (in memory, since each load) — what the next trim of
+  a ubatch or a context is decided on. **Deploying it:** the wrapper's code
+  is part of every run's engine (09 §9.3, operator 2026-10-31), so the
+  wrapper side ships with the next engine change that re-gates every space
+  anyway, never alone (RULE 1: no re-gate for a log line); the service side
+  (louise-vega) takes the message from its own deploy on, and reads nothing
+  until then.
 - **Louise** recomputes the vector digest from what LocalAI returned, reads
   the receipts of the batch from VeGa, and writes nothing unless every id
   has a receipt, the digests match, and the run is validated (03 §3.3). No

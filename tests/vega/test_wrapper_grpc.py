@@ -121,7 +121,7 @@ def make_node(tmp_path, stubs, vega):
                    "EnvVars": {"VEGA_TEST_ENV": "on"}, **(extra or {})}
         models = {"vega-fake": localai_fake.Model(f"127.0.0.1:{running.port}", options)}
         api = FastAPI()
-        api.include_router(service.router(vega.receipts, vega.runs))
+        api.include_router(service.router(vega.receipts, vega.runs, vega.passes))
         node = Node(running, TestClient(localai_fake.create(models, stubs)), TestClient(api),
                     models, options, log, weights, run_sh.resolve(), stubs)
         made.append(node)
@@ -667,3 +667,21 @@ def test_a_backend_that_ignores_token_ids_is_found_out_at_load(make_node):
     probes = [c for c in node.calls("Embedding") if c["tokens"]]
     assert len(probes) == 1 and probes[0]["text"] == "", "the ids alone, once, at load"
     assert node.calls("Embedding")[-1]["tokens"] == [] and         node.calls("Embedding")[-1]["text"].split() == [f"w{i}" for i in range(8)]
+
+
+def test_an_input_over_the_loads_ubatch_is_counted_for_vega_at_once(make_node, vega):
+    """Operator, 2026-11-12: "for future trimming improvements we should
+    gracefully log when a text is splitted": an input of more tokens than the
+    load's ubatch is computed in passes; the wrapper counts every answer's
+    tokens and tells VeGa at once of the first, never in the vector's way."""
+    node = make_node(tokenizer=True, extra={"Options": ["device:cpu", "parallel:1", "ubatch:4"]})
+    batch, r = node.embed(["one two", "one two three four five six seven"])
+    assert r.status_code == 200, r.text
+    node.verify(batch, r)
+    deadline = time.monotonic() + 10
+    while not vega.passes.get() and time.monotonic() < deadline:
+        time.sleep(0.05)
+    (row,) = vega.passes.get()
+    assert row["ubatch"] == 4 and row["inputs"] == 2 and row["over"] == 1
+    assert row["longest"] > 4 and sum(row["buckets"].values()) == 2
+    assert node.vega_http.get("/vega/passes").json()["runs"][0]["over"] == 1

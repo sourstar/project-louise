@@ -18,7 +18,7 @@ from types import SimpleNamespace
 import pytest
 
 from app.vega.store import RunStore
-from app.vega.service import Intake, ReceiptStore, Runs
+from app.vega.service import Intake, Passes, ReceiptStore, Runs
 
 ROOT = Path(__file__).resolve().parents[2]
 FIXTURES = ROOT / "tests" / "fixtures" / "vega"
@@ -38,8 +38,8 @@ def load_wrapper():
 class IntakeThread:
     """VeGa's intake on an event loop of its own, as louise-vega runs it."""
 
-    def __init__(self, path: Path, receipts: ReceiptStore, runs: Runs) -> None:
-        self.intake = Intake(path, receipts, runs, log=lambda _m: None)
+    def __init__(self, path: Path, receipts: ReceiptStore, runs: Runs, passes=None) -> None:
+        self.intake = Intake(path, receipts, runs, log=lambda _m: None, passes=passes)
         self.loop = asyncio.new_event_loop()
         self.thread = threading.Thread(target=self.loop.run_forever, daemon=True)
 
@@ -59,8 +59,9 @@ def vega(tmp_path):
     """A receipts service: its stores, its intake on `tmp_path/r.sock`."""
     receipts = ReceiptStore()
     runs = Runs(RunStore(tmp_path / "vega-runs.sqlite"))
-    intake = IntakeThread(tmp_path / "r.sock", receipts, runs).start()
-    yield SimpleNamespace(receipts=receipts, runs=runs, intake=intake,
+    passes = Passes()
+    intake = IntakeThread(tmp_path / "r.sock", receipts, runs, passes).start()
+    yield SimpleNamespace(receipts=receipts, runs=runs, intake=intake, passes=passes,
                           socket=tmp_path / "r.sock")
     intake.stop()
 

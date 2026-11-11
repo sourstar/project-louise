@@ -20,7 +20,7 @@ from pathlib import Path
 import uvicorn
 
 from .store import RunStore
-from .service import Intake, ReceiptStore, Runs, create_app
+from .service import Intake, Passes, ReceiptStore, Runs, create_app
 
 
 def main() -> int:
@@ -38,7 +38,8 @@ def main() -> int:
         return 2
     receipts = ReceiptStore()
     runs = Runs(RunStore(Path(env.get("VEGA_STATE_DIR", "/state")) / "vega-runs.sqlite"))
-    app = create_app(receipts, runs, Intake(Path(socket_path), receipts, runs))
+    passes = Passes()
+    app = create_app(receipts, runs, Intake(Path(socket_path), receipts, runs, passes=passes), passes)
     uvicorn.run(app, host="0.0.0.0", port=port, log_level="warning")
     return 0
 
