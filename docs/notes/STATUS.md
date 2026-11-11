@@ -167,7 +167,7 @@ measured (published figures disagree).
   size (`resident._rest_size`); `tools/measure/context_on_request.py` counts from the card record what a keep would give
   back; the gate asks an on-demand model its probes on 300 contexts of their own (`embedder.fresh_contexts`; 03 §3.3
   amended). Every embedding and translation stream's gaps are counted from now, keyed or not, and published by the
-  worker's beat (`[sched] keep (since start) — …`): the record a first keep is chosen from needs only a worker deploy. NOT DONE: every measurement of the brief's §2 (the node's, on a test copy); the VeGa wrapper's count and
+  worker's beat (`[sched] keep (since start) — …`): the record a first keep is chosen from needs only a worker deploy. STEPS 3–4 MEASURED (München, 11-12; brief §10.1): bge-m3, Nemotron and Qwen3-4B byte-equal over 300 keep-0 creations each; 561 / 1,887 / ~1,870 MiB back per free; creation median 3.4 / 0.8 / 8.4 ms; keep 20 at one lane frees between back-to-back requests (dating gap), keep 500 does not. NOT DONE: the rest of §2; the VeGa wrapper's count and
   canary (an engine change). [idle-context-brief.md](idle-context-brief.md) §10.
 - **Inputs computed in more than one pass, counted** (operator, 11-12: "for future trimming improvements we
   should gracefully log when a text is splitted"): the VeGa wrapper counts every answer's tokens against the

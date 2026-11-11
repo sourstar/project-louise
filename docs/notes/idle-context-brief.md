@@ -754,7 +754,7 @@ changed.*
 | §2's gaps, as RAGE sees them | written | `app/rage/keep.py` (`_gap`, `lines`): for EVERY embedding and translation stream, keyed or not — how idle its model was when its next request was ready, by powers of two; one line a stream in the worker's log (`[sched] keep (since start) — …`, with the scheduler's other lines) | `tests/test_rage_keep.py` |
 | translation's keep | written | `app/translate.py` (`_t5_completion`: the translation stream's keep; its warm 0) | `tests/test_context_on_demand.py` |
 | 3. the VeGa wrapper's count, the canary | NOT written — a wrapper change is an engine change (§4). It is now ALSO what admits an on-demand engine at all: the gate counts its creations from it (`run_check.fresh_contexts` `creations`), and without it refuses the run | `deploy/vega/vega_wrapper.py` | — |
-| §2's measurements | NOT made | the node, on a test copy | — |
+| §2's measurements, steps 3–4 | MADE 2026-11-12 (München, test copies, node paused) — §10.1 | the node | byte-equal over 300 keep-0 creations, each of three encoders |
 
 **The integration review (2026-11-12, the coordinator; fixed before merge):**
 
@@ -790,6 +790,34 @@ changed.*
   server dates it from the slot's release: a return trip longer than
   `TRANSIT_MS` makes a creation RAGE judges clean (speed only; step 4's
   creations-against-requests count shows it).
+
+### 10.1 Steps 3–4 on the node (München, 2026-11-12)
+
+Test copies under their own model names, the live engine's build with P11,
+the node paused for each run. **All three encoders gave the SAME BYTES over
+300 keep-0 creations each**: a context created per request changes no vector.
+
+| encoder (test copy) | idle → with its context | back per free | creation from the client, median / p95 |
+|---|---|---|---|
+| bge-m3 | — | 561 MiB | 3.4 / 35 ms |
+| Nemotron-3-embed-1B | — | 1,887 MiB | 0.8 / 4.6 ms |
+| Qwen3-Embedding-4B (gutenberg's ctx 8192, batch = ubatch 2048) | 2,737 → 4,605 MiB | ~1,870 MiB | 8.4 / 21.6 ms (warm 51.6, cold 61.2) |
+
+- Every keep-0 request rose and fell (Qwen3: 60/60, 240/240).
+- **Keep 20 ms at ONE lane frees the context between back-to-back requests**:
+  bge-m3 8 of 13, Qwen3 67 creations in 200 single-text requests. Singles
+  100 ms apart: 30/30 creations, as they should. Four lanes (Nemotron) hold
+  it. The cause is the dating gap the review named: RAGE dates the keep
+  from the answer's arrival, the server from the slot's release. The
+  context session addresses it with the wrapper's count.
+- Keep 500 ms: one creation in 200 back-to-back requests; singles 100 ms
+  apart, none.
+- The node's LocalAI (v4.12.1, upstream) lists no `load_options` in
+  `/system`. Louise now reads the option from the answering run's
+  statement (#524).
+- Running (the operator: "anything between 20 and 500 ms?"): Nemotron at
+  keeps of 50, 100, 150, 200 and 300 ms, at production batch with 4 lanes
+  and as singles 100 ms apart.
 
 **What the code settled, beyond the brief:**
 
