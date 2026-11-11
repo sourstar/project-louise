@@ -751,6 +751,8 @@ changed.*
 | 4c. the keeper's rule (H5) | written | `app/resident.py` (`_rest_size`) | the same |
 | 4d. the gate's fresh-context pass | written | `app/hold/embedder.py` (`fresh_contexts`, 300 creations, short and long probes), `app/run_check.py` (`fresh_contexts`: only for a model LocalAI lists with the option, its keep fixed at 0); 03 §3.3 amended | `tests/hold/test_fresh_contexts.py` |
 | the count for §2 from the card record | written | `tools/measure/context_on_request.py` (read-only; for the node to run) | `tests/test_context_on_request_tool.py` |
+| §2's gaps, as RAGE sees them | written | `app/rage/keep.py` (`_gap`, `lines`): for EVERY embedding and translation stream, keyed or not — how idle its model was when its next request was ready, by powers of two; one line a stream in the worker's log (`[sched] keep (since start) — …`, with the scheduler's other lines) | `tests/test_rage_keep.py` |
+| translation's keep | written | `app/translate.py` (`_t5_completion`: the translation stream's keep; its warm 0) | `tests/test_context_on_demand.py` |
 | 3. the VeGa wrapper's count, the canary | NOT written — a wrapper change is an engine change (§4) | `deploy/vega/vega_wrapper.py` | — |
 | §2's measurements | NOT made | the node, on a test copy | — |
 
@@ -790,6 +792,14 @@ changed.*
   app/sizing.py's windows already start again from their default; a stream
   finds its level again in a handful of creations. No state file, no change
   to 07 §7.8.
+- **The gaps are counted BEFORE any model takes a keep.** Every embedding
+  and translation stream's requests are counted as they go (`keep._gap`),
+  whatever their model: how long it had been idle when the request was
+  ready, in buckets of powers of two, the requests sent while it worked and
+  those held back over 50 ms apart. The worker's beat publishes one line a
+  stream. So the record §2 asks for — and the "first observation period"
+  the operator wants a new default from — starts with the next deploy of
+  the worker, with no engine change.
 - **RAGE judges by its own clock, with an allowance** (`TRANSIT_MS`, 10 ms):
   it takes the context for expired when its own gap comes within that of the
   keep, so a borderline case costs a longer keep and never a hidden
@@ -808,10 +818,11 @@ changed.*
   keep, or the context stays: RAGE's embedding requests do; her WARM now
   carries 0 (`keep.warm_body`), so that a model preloaded and not yet asked
   — qwen3-4b works 31 s a day — does not hold its context from its load to
-  its first request. Not yet keyed: translation (MADLAD, in the first
-  deployment), rerank and chat. Until they are, an on-demand model they use
-  takes its keep from its YAML's `keep_context_ms:N`; MADLAD's test copy
-  needs that line. The VeGa wrapper's own probes at a load carry none
+  its first request. Translation's segments (MADLAD on llama.cpp, in the
+  first deployment) carry their stream's keep too, and its warm 0. Not yet
+  keyed: rerank (it cannot be: no metadata map) and chat. An on-demand
+  model they use takes its keep from its YAML's `keep_context_ms:N`, or
+  keeps its context. The VeGa wrapper's own probes at a load carry none
   either: after a load the context stays until the first request that
   carries a keep — Louise's warm, when the load was hers.
 - **The reranker's own backend is not touched, and the two patches live

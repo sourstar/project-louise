@@ -21,7 +21,11 @@ Held here, on a clock the test moves:
     alive is not the other's expiry;
   - a request in flight on the model means no context expired;
   - a keep fixed by the caller (the gate's keep 0) is never trimmed;
-  - the judgement is O(1): no state grows with the requests sent.
+  - the judgement is O(1): no state grows with the requests sent;
+  - the GAPS are counted for every stream, keyed or not: how long the model
+    had been idle when the request was ready, by powers of two, with the
+    requests sent while it worked and those held back counted apart — and a
+    stream whose model takes no keep is sent none and never judged.
 """
 from __future__ import annotations
 
@@ -259,7 +263,8 @@ def test_the_judgement_keeps_no_history(keeps, clock):
         _once(keeps, clock, WIKIDATA)
     assert len(keeps._streams) == 1 and len(keeps._models) == 1
     state = keeps._streams[WIKIDATA]
-    assert all(not isinstance(v, (list, tuple, set)) for v in vars(state).values())
+    assert all(not isinstance(v, (tuple, set)) for v in vars(state).values())
+    assert len(state.gaps) == keep.GAP_BUCKETS, "the one list is the histogram, of fixed size"
     assert len(state.excused) <= 2
 
 
@@ -271,8 +276,11 @@ def test_the_request_s_body_and_the_reasons_a_model_gets_none(monkeypatch):
     asked: list[tuple[str, str]] = []
     monkeypatch.setattr(model_load, "context_on_demand",
                         lambda url, model: asked.append((url, model)) or model == MODEL)
-    assert keep.for_request(SERVER, None, 0.0) is None, "no model named: nothing to ask"
-    assert keep.for_request(SERVER, "vega-bge-m3", 0.0) is None, "not loaded with the option"
+    assert keep.for_request(SERVER, None, 0.0) is None, "no model named: nothing to count it under"
+    plain = keep.for_request(SERVER, "vega-bge-m3", 0.0)
+    assert plain is not None and plain.keep_ms is None, "not loaded with the option: counted, no keep"
+    assert keep.metadata(plain) == {}
+    keep.answered(plain)
     with dispatch.working_as(dispatch.Level.CORPUS, "wikidata"):
         sent = keep.for_request(f"{SERVER}/", MODEL, 0.0)
     assert sent == keep.Sent(keep.Stream(SERVER, MODEL, "wikidata", "corpus"), 20)
@@ -282,7 +290,8 @@ def test_the_request_s_body_and_the_reasons_a_model_gets_none(monkeypatch):
         gate = keep.for_request(SERVER, MODEL, 0.0)
     assert gate == keep.Sent(keep.Stream(SERVER, MODEL, "wikidata", keep.FIXED_LEVEL), 0)
     keep.answered(gate)
-    assert {s["level"]: s["keep_ms"] for s in keep.snapshot()} == {"corpus": 20, "fixed": 0}
+    assert {(s["model"], s["level"]): s["keep_ms"] for s in keep.snapshot()} == {
+        (MODEL, "corpus"): 20, (MODEL, "fixed"): 0, ("vega-bge-m3", "query"): None}
     keep.reset()
 
 
@@ -305,3 +314,98 @@ def test_a_request_that_raises_or_fails_is_not_an_answer():
     finally:
         model_load.context_on_demand = real                           # type: ignore[assignment]
         keep.reset()
+
+
+# ---- the gaps, for every stream ----------------------------------------------------------
+
+BGE = keep.Stream(SERVER, "vega-bge-m3", "wikipedia", "corpus")
+
+
+def test_the_gaps_are_counted_by_powers_of_two_for_a_stream_that_takes_no_keep(keeps, clock):
+    """Nothing on the node is loaded with the option yet: the record of how
+    idle each model is between a stream's requests is what the first keep is
+    chosen from (the brief §2)."""
+    first = keeps.send(BGE, clock(), keyed=False)
+    assert first.keep_ms is None
+    clock.ms(5)
+    keeps.answered(first)
+    for gap in (0.4, 1, 3, 13, 13, 170, 170, 170, 900, 70_000):
+        clock.ms(gap)
+        sent = keeps.send(BGE, clock(), keyed=False)
+        assert sent.keep_ms is None
+        clock.ms(5)
+        keeps.answered(sent)
+    s = _state(keeps, BGE)
+    assert s["keep_ms"] is None and (s["premature"], s["paused"], s["excused"]) == (0, 0, {})
+    gaps = s["gaps"]
+    assert len(gaps) == keep.GAP_BUCKETS and sum(gaps) == 10, "the first request has no gap before it"
+    # under 1 ms, 1, 2-3, 8-15 (twice), 128-255 (three times), 512-1023, and the last bucket
+    assert (gaps[0], gaps[1], gaps[2], gaps[4], gaps[8], gaps[10], gaps[-1]) == (1, 1, 1, 2, 3, 1, 1)
+    assert s["longest_gap_ms"] == pytest.approx(70_000, abs=1)
+    assert keep._over(gaps, 32) == 5 and keep._over(gaps, 512) == 2
+    assert keep._under(gaps, 0.5) == "under 16 ms" and keep._under(gaps, 0.9) == "under 1024 ms"
+
+
+def test_a_request_sent_while_the_model_works_has_no_gap_and_a_held_one_is_counted_apart(keeps, clock):
+    _once(keeps, clock, BGE)                                   # (keyed here; the gaps do not care)
+    lane = keeps.send(BGE, clock())                            # in flight
+    clock.ms(3)
+    other = keeps.send(BGE, clock())                           # sent while the first works
+    clock.ms(3)
+    keeps.answered(lane)
+    keeps.answered(other)
+    clock.ms(10)
+    _once(keeps, clock, BGE, held_ms=4_000)                    # ready 10 ms after, sent 4 s later
+    s = _state(keeps, BGE)
+    assert (s["requests"], s["busy"], s["held"]) == (4, 1, 1)
+    assert sum(s["gaps"]) == 2 and s["gaps"][4] == 1, "judged on when it was READY: 10 ms"
+
+
+def test_the_line_the_worker_publishes(monkeypatch):
+    from app import model_load
+    keep.reset()
+    clock = Clock()
+    monkeypatch.setattr(keep.KEEPS, "_clock", clock)
+    for stream, keyed in ((WIKIDATA, True), (BGE, False)):
+        sent = keep.KEEPS.send(stream, clock(), keyed=keyed)
+        clock.ms(5)
+        keep.KEEPS.answered(sent)
+        for gap in (5, 170, 40):
+            clock.ms(gap)
+            sent = keep.KEEPS.send(stream, clock(), keyed=keyed)
+            clock.ms(5)
+            keep.KEEPS.answered(sent)
+        clock.ms(60_000)
+    keyed_line, plain_line = sorted(keep.lines(), key=lambda line: "vega-bge-m3" in line)
+    assert plain_line.startswith("keep (since start) — wikipedia (corpus) on vega-bge-m3 at "
+                                 "http://localai:8080: 4 request(s), 0 while the model worked, "
+                                 "0 held back over 50 ms; before the other 3 the model had been idle ")
+    assert "32 ms or more: 2, 512 ms or more: 0" in plain_line and "its keep" not in plain_line
+    assert "wikidata (corpus)" in keyed_line and "; its keep 80 ms (highest 80), 2 premature" in keyed_line
+    assert "excused: none" in keyed_line
+    keep.reset()
+    assert keep.lines() == []
+
+
+
+def test_the_worker_s_beat_publishes_each_stream_s_line(isolated_config, monkeypatch):
+    """Published by the worker's beat (`_log_shares`), never by the thread
+    that sent the requests — one cumulative line a stream, naming its
+    collection."""
+    from app import db, worker
+    keep.reset()
+    clock = Clock()
+    monkeypatch.setattr(keep.KEEPS, "_clock", clock)
+    for gap in (0, 5, 170):
+        clock.ms(gap)
+        sent = keep.KEEPS.send(BGE, clock(), keyed=False)
+        clock.ms(5)
+        keep.KEEPS.answered(sent)
+    monkeypatch.setattr(worker, "_last_shares_log", 0.0)
+    con = db.connect()
+    worker._log_shares(con)
+    lines = [r[0] for r in con.execute(
+        "SELECT message FROM events WHERE stage='sched' AND message LIKE 'keep (since start)%'")]
+    assert len(lines) == 1, lines
+    assert "wikipedia (corpus) on vega-bge-m3" in lines[0] and "3 request(s)" in lines[0]
+    keep.reset()

@@ -80,8 +80,18 @@ itself, as Ollama's one `keep_alive` per model does: it needs no client, and
 it cannot tell one collection's rhythm from another's nor a pause from a
 request held back, which is what the operator asked for.
 
-Telemetry: `snapshot()` is read by whoever publishes (never the thread doing
-the work); a keep that moves is logged once, with its collection.
+THE GAPS ARE COUNTED FOR EVERY STREAM, keyed or not (`_gap`, `lines`): how
+long a model had been idle when a stream's next request was ready, by powers
+of two. It is what a keep must outlast (the brief §2: "How long are the gaps
+between two requests of one stream"), and it is counted before any model is
+loaded with the option, so the first keep is chosen from a record and not
+from a guess. On RAGE's clock: the engine's own gap is longer by the way
+there and back, and what happens between two texts of one request (LocalAI
+sends one text a call) is the wrapper's to count.
+
+Telemetry: `snapshot()` and `lines()` are read by whoever publishes (the
+worker's beat, never the thread doing the work); a keep that moves is logged
+once, with its collection.
 """
 from __future__ import annotations
 
@@ -129,6 +139,13 @@ FIELD = "keep_context_ms"
 #: stream the same caller has at its own level
 FIXED_LEVEL = "fixed"
 
+#: a request sent this long after it was ready was HELD BACK (stood aside,
+#: its gate, a load): counted apart in the gaps
+HELD_MS = 50
+#: the gaps' histogram: bucket k counts gaps under 2**k ms (0: under 1 ms),
+#: the last one everything from 2**(GAP_BUCKETS - 2) ms up — about a minute
+GAP_BUCKETS = 18
+
 #: why an expiry did not move a keep
 EXCUSED_HELD = "held back"          # ready in time, sent late: stood aside, the gate, a load
 EXCUSED_DEFERRED = "deferred"       # the request before it was deferred or refused
@@ -155,18 +172,26 @@ class _State:
     excused: dict[str, int] = field(default_factory=dict)
     paused: int = 0
     highest_ms: int = START_MS
+    keyed: bool = True                  # its model takes a keep
+    # the gaps, for every stream (`Keeps._gap`)
+    busy: int = 0                       # sent while the model worked: no gap
+    held: int = 0                       # sent more than HELD_MS after it was ready
+    gaps: list[int] = field(default_factory=lambda: [0] * GAP_BUCKETS)
+    longest_gap_ms: float = 0.0
 
 
 @dataclass
 class _Model:
     in_flight: int = 0
     deadline: float = float("-inf")     # the latest any of our requests asked (monotonic s)
+    answered: float | None = None       # its last answer to any of our streams
 
 
 class Sent(NamedTuple):
-    """One request's keep, from `send` to `answered` or `failed`."""
+    """One request, from `send` to `answered` or `failed`: its stream, and its
+    keep — None for a model that takes none."""
     stream: Stream
-    keep_ms: int
+    keep_ms: int | None
 
 
 class Keeps:
@@ -192,19 +217,22 @@ class Keeps:
         return PREMATURE_FACTOR * self._creation_ms.get((s.server, s.model), CREATION_MS)
 
     # -- a request ---------------------------------------------------------------------------
-    def send(self, stream: Stream, ready: float) -> Sent:
-        """The keep for the request of `stream` that became ready at `ready`
-        and goes now: the interval since the stream's last answer is judged
-        first (module docstring), then the request counts as in flight until
-        `answered` or `failed`."""
+    def send(self, stream: Stream, ready: float, keyed: bool = True) -> Sent:
+        """The request of `stream` that became ready at `ready` and goes now.
+        Its gap is counted; for a model that takes a keep (`keyed`) the
+        interval since the stream's last answer is judged first (module
+        docstring) and the keep is the stream's. The request counts as in
+        flight until `answered` or `failed`."""
         now = self._clock()
         with self._lock:
             st = self._streams.setdefault(stream, _State(changed=now))
             md = self._models.setdefault((stream.server, stream.model), _Model())
-            moved = self._judge(stream, st, md, ready, now)
+            st.keyed = keyed
+            self._gap(st, md, ready, now)
+            moved = self._judge(stream, st, md, ready, now) if keyed else None
             st.requests += 1
             md.in_flight += 1
-            keep = st.keep_ms
+            keep = st.keep_ms if keyed else None
         if moved is not None:
             log.info("[rage] keep of %s (%s) on %s at %s: %d -> %d ms — %s",
                      stream.plugin or "-", stream.level, stream.model or "-", stream.server,
@@ -222,6 +250,24 @@ class Keeps:
             md.in_flight += 1
         return Sent(stream, int(keep_ms))
 
+    @staticmethod
+    def _gap(st: _State, md: _Model, ready: float, now: float) -> None:
+        """Count how long the model had been idle when this request was ready:
+        nothing while another request of ours is in flight on it (it works),
+        nothing before its first answer."""
+        if (now - ready) * 1000.0 > HELD_MS:
+            st.held += 1
+        if md.in_flight > 0:
+            st.busy += 1
+            return
+        if md.answered is None:
+            return
+        gap_ms = max(0.0, (ready - md.answered) * 1000.0)
+        # to the nearest millisecond: a gap of 1 ms must not fall under it by
+        # the last bit of a float
+        st.gaps[min(GAP_BUCKETS - 1, int(gap_ms + 0.5).bit_length())] += 1
+        st.longest_gap_ms = max(st.longest_gap_ms, gap_ms)
+
     def answered(self, sent: Sent) -> None:
         """The request's answer is complete: the server keeps the context for
         its keep from now."""
@@ -232,9 +278,11 @@ class Keeps:
             if st is None or md is None:
                 return
             md.in_flight = max(0, md.in_flight - 1)
-            md.deadline = max(md.deadline, now + sent.keep_ms / 1000.0)
-            st.answered = now
-            st.asked_ms = sent.keep_ms
+            md.answered = now
+            if sent.keep_ms is not None:
+                md.deadline = max(md.deadline, now + sent.keep_ms / 1000.0)
+                st.answered = now
+                st.asked_ms = sent.keep_ms
 
     def failed(self, sent: Sent) -> None:
         """The request did not answer — deferred, refused, an error: whatever
@@ -294,8 +342,11 @@ class Keeps:
         """Per stream: its keep now and what was counted since start."""
         with self._lock:
             return [{"server": k.server, "model": k.model, "plugin": k.plugin, "level": k.level,
-                     "keep_ms": s.keep_ms, "highest_ms": s.highest_ms, "requests": s.requests,
-                     "premature": s.premature, "excused": dict(s.excused), "paused": s.paused}
+                     "keep_ms": s.keep_ms if s.keyed else None,
+                     "highest_ms": s.highest_ms if s.keyed else None, "requests": s.requests,
+                     "premature": s.premature, "excused": dict(s.excused), "paused": s.paused,
+                     "busy": s.busy, "held": s.held, "gaps": list(s.gaps),
+                     "longest_gap_ms": s.longest_gap_ms}
                     for k, s in sorted(self._streams.items())]
 
     def reset(self) -> None:
@@ -324,20 +375,27 @@ def fixed(keep_ms: int) -> Iterator[None]:
         _fixed.reset(token)
 
 
-def for_request(url: str, model: str | None, ready: float) -> Sent | None:
-    """The keep to send with a request to `model` at `url` that became ready
-    at `ready` (monotonic), or None when the model does not take one: not
-    loaded with `context_on_demand`, or not known to be."""
+def for_request(url: str, model: str | None, ready: float, *, level: str | None = None,
+                plugin: str | None = None) -> Sent | None:
+    """The request to `model` at `url` that became ready at `ready`
+    (monotonic), counted, with the keep to send — `keep_ms` None when the
+    model takes none: not loaded with `context_on_demand`, or not known to
+    be. None for a request that names no model: nothing to count it under.
+    `level` and `plugin` name the stream where the caller's thread does not
+    carry them (a pool thread: translation's segments)."""
     from .. import model_load
     from . import dispatch
-    if not model or not model_load.context_on_demand(url, model):
+    if not model:
         return None
-    level, plugin = dispatch.current()
+    keyed = model_load.context_on_demand(url, model)
+    now_level, now_plugin = dispatch.current()
+    level = now_level.name.lower() if level is None else level
+    plugin = now_plugin if plugin is None else plugin
     server = model_load.server_of(url)
     forced = _fixed.get()
-    if forced is not None:
+    if forced is not None and keyed:
         return KEEPS.send_fixed(Stream(server, model, plugin, FIXED_LEVEL), forced)
-    return KEEPS.send(Stream(server, model, plugin, level.name.lower()), ready)
+    return KEEPS.send(Stream(server, model, plugin, level), ready, keyed=keyed)
 
 
 class Request:
@@ -358,13 +416,14 @@ class Request:
 
 
 @contextmanager
-def request(url: str, model: str | None, ready: float) -> Iterator[Request]:
+def request(url: str, model: str | None, ready: float, *, level: str | None = None,
+            plugin: str | None = None) -> Iterator[Request]:
     """A request to `model` that became ready at `ready`, from the moment it
     goes to the moment its answer is complete: `with request(…) as k`, the
     body sent with `**k.body`. An exception, or `k.fail()`, counts it as not
     answered — whatever expires before the stream's next request is then
     excused."""
-    k = Request(for_request(url, model, ready))
+    k = Request(for_request(url, model, ready, level=level, plugin=plugin))
     try:
         yield k
     except BaseException:
@@ -379,7 +438,9 @@ def request(url: str, model: str | None, ready: float) -> Iterator[Request]:
 def metadata(sent: Sent | None) -> dict[str, dict[str, str]]:
     """What a request's body gains: `{"metadata": {"keep_context_ms": "…"}}`,
     or nothing. The map's values are strings (LocalAI's schema)."""
-    return {} if sent is None else {"metadata": {FIELD: str(sent.keep_ms)}}
+    if sent is None or sent.keep_ms is None:
+        return {}
+    return {"metadata": {FIELD: str(sent.keep_ms)}}
 
 
 def warm_body() -> dict[str, dict[str, str]]:
@@ -403,6 +464,48 @@ def failed(sent: Sent | None) -> None:
 
 def snapshot() -> list[dict]:
     return KEEPS.snapshot()
+
+
+def _under(gaps: list[int], share: float) -> str:
+    """The bucket `share` of the counted gaps fall under, as "under N ms"."""
+    total = sum(gaps)
+    seen = 0
+    for k, n in enumerate(gaps):
+        seen += n
+        if seen >= share * total:
+            return f"under {2 ** k} ms" if k < len(gaps) - 1 else f"{2 ** (k - 1)} ms or more"
+    return "-"
+
+
+def _over(gaps: list[int], ms: int) -> int:
+    """How many counted gaps were `ms` or longer (`ms` a power of two)."""
+    return sum(gaps[ms.bit_length():])
+
+
+def lines() -> list[str]:
+    """One line a stream that sent anything, cumulative since start: how idle
+    its model was when its requests were ready, and its keep where it has
+    one. For the worker's beat to publish (`worker._log_shares`)."""
+    out = []
+    for s in snapshot():
+        if not s["requests"] or s["level"] == FIXED_LEVEL:
+            continue
+        gaps, counted = s["gaps"], sum(s["gaps"])
+        line = (f"keep (since start) — {s['plugin'] or '-'} ({s['level']}) on {s['model']} at "
+                f"{s['server']}: {s['requests']} request(s), {s['busy']} while the model worked, "
+                f"{s['held']} held back over {HELD_MS} ms")
+        if counted:
+            line += (f"; before the other {counted} the model had been idle {_under(gaps, 0.5)} "
+                     f"for half, {_under(gaps, 0.9)} for 90 %, {_under(gaps, 0.99)} for 99 %, "
+                     f"longest {s['longest_gap_ms']:.0f} ms; 32 ms or more: {_over(gaps, 32)}, "
+                     f"512 ms or more: {_over(gaps, 512)}")
+        if s["keep_ms"] is not None:
+            excused = ", ".join(f"{n} {why}" for why, n in sorted(s["excused"].items())) or "none"
+            line += (f"; its keep {s['keep_ms']} ms (highest {s['highest_ms']}), "
+                     f"{s['premature']} premature expiry(ies), excused: {excused}, "
+                     f"{s['paused']} after a pause")
+        out.append(line)
+    return out
 
 
 def reset() -> None:

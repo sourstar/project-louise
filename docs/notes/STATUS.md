@@ -158,7 +158,8 @@ measured (published figures disagree).
   a model LocalAI lists with the option (`model_load.context_on_demand`); the keeper counts such a model at its running
   size (`resident._rest_size`); `tools/measure/context_on_request.py` counts from the card record what a keep would give
   back; the gate asks an on-demand model its probes on 300 contexts of their own (`embedder.fresh_contexts`; 03 §3.3
-  amended). NOT DONE: every measurement of the brief's §2 (the node's, on a test copy); the VeGa wrapper's count and
+  amended). Every embedding and translation stream's gaps are counted from now, keyed or not, and published by the
+  worker's beat (`[sched] keep (since start) — …`): the record a first keep is chosen from needs only a worker deploy. NOT DONE: every measurement of the brief's §2 (the node's, on a test copy); the VeGa wrapper's count and
   canary (an engine change). [idle-context-brief.md](idle-context-brief.md) §10.
 - **Inputs computed in more than one pass, counted** (operator, 11-12: "for future trimming improvements we
   should gracefully log when a text is splitted"): the VeGa wrapper counts every answer's tokens against the

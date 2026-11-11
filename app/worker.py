@@ -43,6 +43,7 @@ from . import (backend, catalog, chunking, collections as collections_mod, confi
                node_state,
                plugin_io, refs, sched, sizing, slice_scope, spaces, stats, text_index)
 from .rage import card_record, dispatch
+from .rage import keep as rage_keep
 from .rage.dispatch import Level
 from .acquire import engine as acquire_engine
 from .acquire.spec import DiskPreflightError, LicenseAckRequiredError
@@ -5475,6 +5476,13 @@ def _log_shares(con, live_paths=None) -> None:
     lance_line = lance_cache_line(embeddings.lance_cache_stats())
     if lance_line:
         db.log_event(con, "info", "sched", lance_line)
+    # EACH EMBEDDING STREAM'S GAPS, and its keep where its model takes one
+    # (app/rage/keep.py): how idle a model was when a collection's next
+    # request was ready — what a model that creates its context per request
+    # must be told to bridge (docs/notes/idle-context-brief.md §2). Counted
+    # by the requests themselves, published here
+    for line in rage_keep.lines():
+        db.log_event(con, "info", "sched", line)
     # ...and what the units themselves now cost, which is what the sizes
     # above are derived from (app/sizing.py). A batch that drifts away from
     # BATCH_TARGET_S is visible here before it is visible as unfairness.
