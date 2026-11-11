@@ -623,35 +623,35 @@ def _diff_window(reader: Path, wman: Path, lo: int, hi: int) -> list[tuple[int, 
         wcon.close()
 
 
-def reset_differing(reader: Path, wman: Path, *, threads: int | None = None,
+def reset_differing(reader: Path, wman: Path, *, limit: int | None = None,
                     window: int = 100_000, log: Callable[[str], None] = print) -> int:
     """A joining member's index marks reset (`fts_done = 0`) wherever they
     differ from the writer's: its copy then reads the writer's index, and
     what the writer has not indexed as this member holds it is indexed
-    again — by the writer, copied here. Windows compared on threads (the
-    cores the node allows, CLAUDE.md), each window's resets one short
-    `BEGIN IMMEDIATE`; idempotent, so a stop resumes by running it again."""
-    from concurrent.futures import ThreadPoolExecutor
+    again — by the writer, copied here. The windows are compared in the
+    parse pool's processes (`parallel.each_part`, the cores the node allows:
+    a thread pool gave nothing, the per-row work holding the GIL — 11 µs a
+    row on 1, 4 and 8 threads alike, measured); each window's resets are
+    one short `BEGIN IMMEDIATE` here, the one writer. Idempotent, so a stop
+    resumes by running it again."""
     from . import db, parallel
     rcon = sqlite3.connect(reader, timeout=60, isolation_level=None)
     db.wal(rcon)
     try:
         top = rcon.execute("SELECT MAX(rowid) FROM documents").fetchone()[0] or 0
-        bounds = [(lo, min(lo + window, top)) for lo in range(0, top, window)]
-        n = threads or max(2, parallel.processes())
+        tasks = [(Path(reader), Path(wman), lo, min(lo + window, top)) for lo in range(0, top, window)]
         reset = 0
-        with ThreadPoolExecutor(max_workers=n) as ex:
-            for got in ex.map(lambda b: _diff_window(reader, wman, *b), bounds):
-                if not got:
-                    continue
-                rcon.execute("BEGIN IMMEDIATE")
-                try:
-                    rcon.executemany("UPDATE documents SET fts_done=0 WHERE rowid=? AND +uid=?", got)
-                    rcon.execute("COMMIT")
-                except BaseException:
-                    rcon.execute("ROLLBACK")
-                    raise
-                reset += len(got)
+        for got in parallel.each_part(_diff_window, tasks, limit=limit):
+            if not got:
+                continue
+            rcon.execute("BEGIN IMMEDIATE")
+            try:
+                rcon.executemany("UPDATE documents SET fts_done=0 WHERE rowid=? AND +uid=?", got)
+                rcon.execute("COMMIT")
+            except BaseException:
+                rcon.execute("ROLLBACK")
+                raise
+            reset += len(got)
         return reset
     finally:
         rcon.close()
