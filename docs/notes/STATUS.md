@@ -134,6 +134,38 @@ measured (published figures disagree).
   op pool is ON by default at our pin (PR #29265, which would have turned it off, was closed unmerged).
   IN CHARGE (operator, 11-12): the session "Dynamic context evaluation" (session_01Nm96wZNsGxpHx6eHzYqHZR)
   implements the shared context pool; it was given the brief, and reaches the node through München.
+  INTEGRATION (operator, 11-12: "Then handle the new implementation"): the coordinator merges it after an
+  independent review; four defects fixed first — the gate's 300 fresh contexts are now counted by the engine (and
+  an engine with no count is refused), the option is read from the run's statement, the keeper counts an on-demand
+  model never seen working as unknown, a vacuous keep test (idle-context-brief.md §10 "The integration review").
+  Inert until a model loads with `context_on_demand`; and no such model can pass the gate until the wrapper counts
+  its creations.
+- **A model's context on request — the design settled in review** (operator, the same day; the commits' clock reads
+  11-11 where this day's entries say 11-12): no idle timer and no sleep. llama.cpp allocates a model's context when a
+  request arrives and frees it when the work is done; a request carries a keep in ms (0 = none) that holds it after
+  the answer; RAGE sets it on every corpus request, per job type: 20 ms to start, trimmed by RAGE itself (operator's B), a new
+  default possibly set after a first observation period; expired keeps are logged. ≈ 24 GB at rest + at
+  most 3.3 GB working with every model opted in; ≈ 26.5 GB at rest and under 30 GB at the peak in the first
+  deployment (corpus encoders + MADLAD), against ~34 GB held and the reclaimer's 31.0 GB line. The code is read at the
+  pins — the op pools die with the context; LocalAI's backend reads a context in seven places; the keep travels in
+  the request's `metadata`, no wire change — and NOTHING IS MEASURED OR BUILT.
+  [idle-context-brief.md](idle-context-brief.md), rewritten: §1 the design, §2 what to measure first, §3 the code
+  and its ten hazards, §9 whose word each part is.
+- **Context on request — implemented on the CPU, STAGED, nothing deployed** (operator, the same day: "Implement it").
+  P11 (staged): llama.cpp's server (`--context-on-demand`; a request's `keep_context_ms` frees the context that long
+  after its answer, and a request that carries none leaves it loaded — operator: "the canonical way: no free after
+  use"; written for upstream with its tests and README) and LocalAI's backend (the model options, the keep from the request's
+  `metadata`, no RPC reading the context) — `deploy/localai/patches/staged/0009-…`, built only from
+  `staged/context-on-demand.series`; localai-bugs.md "P11 (staged)". CPU checks: its 13 server tests; nine existing
+  suites unchanged with the option off (83 passes and 46 failures before and after — the failures are the random-weight
+  stand-in models); `grpc-server` built from the candidate series and driven over gRPC, 18 checks, the same vector
+  byte for byte with and without the option. Louise: RAGE's keep per job type and its trim (`app/rage/keep.py`: 20 ms,
+  doubled at a premature expiry, an expiry a missed scheduling caused excused, not kept across a restart), sent only to
+  a model LocalAI lists with the option (`model_load.context_on_demand`); the keeper counts such a model at its running
+  size (`resident._rest_size`); `tools/measure/context_on_request.py` counts from the card record what a keep would give
+  back; the gate asks an on-demand model its probes on 300 contexts of their own (`embedder.fresh_contexts`; 03 §3.3
+  amended). NOT DONE: every measurement of the brief's §2 (the node's, on a test copy); the VeGa wrapper's count and
+  canary (an engine change). [idle-context-brief.md](idle-context-brief.md) §10.
 - **Inputs computed in more than one pass, counted** (operator, 11-12: "for future trimming improvements we
   should gracefully log when a text is splitted"): the VeGa wrapper counts every answer's tokens against the
   load's ubatch and tells VeGa (`kind: passes`); VeGa logs when the inputs over it grow and serves every run's

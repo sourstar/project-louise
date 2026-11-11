@@ -12,6 +12,8 @@ Its parts, as `app.rage` names them:
 - `dispatch` — the gate per encoder URL, the levels, the interactive claim;
 - `settings` — the settings in effect for a collection on this node: its
   file's, then the recommendation for this card (app/hold/rage_settings.py);
+- `keep` — for how long a model that creates its context per request keeps it
+  after an answer, per job type, trimmed here (docs/notes/idle-context-brief.md);
 - `card_record` — the per-second record of the card, the gates and the work done;
 - `bench` — a collection's row for a window of that record.
 

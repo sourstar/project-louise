@@ -1,0 +1,15 @@
+# CANDIDATE series (build.sh SERIES_FILE=): the live series plus P11, the
+# context on demand (docs/notes/idle-context-brief.md; operator, 2026-11-11:
+# "Implement it"). For a TEST backend under its own model name: the timing of
+# a context's creation, the memory given back, the bytes across creations
+# (the brief §2). The live engine is untouched; the patch joins `series` only
+# after its card gates, on the operator's word (staged/README.md).
+base 16acc8926bb8a27b67dc4d419dbceaeb4110f7af
+0001-system-list-load-options.patch
+0002-llama-cpp-embed-token-ids.patch
+0003-llama-cpp-encoder-decoder.patch
+0004-llama-cpp-encoder-decoder-waves.patch
+0005-llama-cpp-sycl-batched-mul-mat-src1.patch
+0006-llama-cpp-chat-cohere-command3.patch
+0007-llama-cpp-sycl-dmmv-cleanup.patch
+staged/0009-llama-cpp-context-on-demand.patch

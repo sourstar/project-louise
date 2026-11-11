@@ -28,6 +28,7 @@ import pyarrow.compute as pc
 from . import collections as collections_mod
 from . import config, httpc, model_load, vector_parts
 from .rage import dispatch
+from .rage import keep as rage_keep
 from . import layers as layers_mod
 from .hold import runs as hold_runs
 from .vega import client as vclient
@@ -410,6 +411,10 @@ def _request_vectors(batch: list[Item], timeout: float,
     # server's concurrency at a time, the highest level first. The wait is
     # bounded by this request's own timeout.
     g = dispatch.gate(recipe.url, recipe.concurrency)
+    # when this request could have gone: what stands between here and the send
+    # — standing aside, a load, the gate — is not the stream's own rhythm, and
+    # an expiry it causes does not move the stream's keep (app/rage/keep.py)
+    ready = time.monotonic()
     # the caller's level, for the model container's clock (09 §9.12): CORPUS
     # from the worker, QUERY from a search — whatever this thread works as
     level = dispatch.level_headers()
@@ -421,12 +426,17 @@ def _request_vectors(batch: list[Item], timeout: float,
     # bound, when the runner says it is not loaded (app/model_load.py)
     _warm_first(batch, recipe, level)
     if recipe.api == VEGA:
-        return _request_vouched(batch, timeout, recipe, runs, g, level)
+        return _request_vouched(batch, timeout, recipe, runs, g, level, ready)
     with g.admit(timeout=timeout):
         if recipe.api == "openai":
-            r = _post(recipe, f"{recipe.url}/v1/embeddings", json=_body(recipe, batch),
-                      timeout=timeout, headers=level)
-            r.raise_for_status()
+            # a model loaded with `context_on_demand` is told how long to keep
+            # its context after this answer (app/rage/keep.py); any other is
+            # sent nothing more than before
+            with rage_keep.request(recipe.url, recipe.model, ready) as kept:
+                r = _post(recipe, f"{recipe.url}/v1/embeddings",
+                          json={**_body(recipe, batch), **kept.body},
+                          timeout=timeout, headers=level)
+                r.raise_for_status()
             data = _parsed(r, recipe, lambda x: sorted(x.json()["data"],
                                                        key=lambda d: d["index"]))
             _note_run(r, runs)
@@ -463,8 +473,10 @@ def _warm_request(recipe: "collections_mod.EmbedRecipe", pair: bool, level: dict
                           "encoding_format": "base64", "model": recipe.model}
         else:
             body = _body(recipe, probe)
-        return httpc.post(f"{recipe.url}/v1/embeddings", json=body, timeout=bound_s,
-                          headers=level)
+        # the warm's own context is given back at once (app/rage/keep.py
+        # `warm_body`): a request that carries no keep leaves it loaded
+        return httpc.post(f"{recipe.url}/v1/embeddings", json={**body, **rage_keep.warm_body()},
+                          timeout=bound_s, headers=level)
     return warm
 
 
@@ -530,7 +542,7 @@ def warm_side(collection, *, query: bool,
 
 def _request_vouched(batch: list[Item], timeout: float,
                      recipe: "collections_mod.EmbedRecipe", runs: set | None,
-                     g, level: dict) -> list[list[float]]:
+                     g, level: dict, ready: float | None = None) -> list[list[float]]:
     """`api = "vega"`: two requests, the embedding and its receipts, and the
     vectors only if both agree (docs/notes/vega.md §2).
 
@@ -560,8 +572,15 @@ def _request_vouched(batch: list[Item], timeout: float,
     if recipe.model:
         body["model"] = recipe.model
     with g.admit(timeout=timeout):
-        r = _post(recipe, f"{recipe.url}/v1/embeddings", json=body, timeout=timeout,
-                  headers=level)
+        # the keep rides the request's `metadata`, outside the tag: no part of
+        # the input's digest nor of the receipt (09 §9.12 fixes the tagged
+        # inputs and `encoding_format` in this body, nothing else)
+        with rage_keep.request(recipe.url, recipe.model,
+                               time.monotonic() if ready is None else ready) as kept:
+            r = _post(recipe, f"{recipe.url}/v1/embeddings", json={**body, **kept.body},
+                      timeout=timeout, headers=level)
+            if r.status_code >= 400:
+                kept.fail()
     if r.status_code >= 500 and vclient.is_deferral(r.status_code, r.text):
         raise ReceiptDeferred(
             f"{recipe.url}: VeGa's wrapper could not deliver a receipt (HTTP "

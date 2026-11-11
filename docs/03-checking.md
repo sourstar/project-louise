@@ -308,7 +308,19 @@ the short fingerprint texts could not show it) (*amended 2026-10-25*, operator's
 choice A; *amended again 2026-11-01*, operator's choice B; CLAUDE.md
 invariant 12). A run whose every answer to one text — in either order,
 across three fresh loads, batched or alone — is the same byte string is
-**exact**. One whose answers to a text differ is **near-exact** when
+**exact**. (*Amended 2026-11-11*, with the context on request,
+docs/notes/idle-context-brief.md: an engine that creates its context for
+each request and frees it after is also asked the sixteen and the longest
+texts on 300 contexts of their own, each answer held to the same text's
+first; what they differ by counts exactly as the loads' does, in the
+statement's one `load_variation`. *Amended 2026-11-12*, from the review:
+the 300 are COUNTED by the engine's own count of its creations, one per
+request, never assumed from the requests sent — a context another request
+held is no fresh one, and the pass is asked again; an engine whose
+creations cannot be counted is not admitted. Whether the run creates its
+context per request is read from its own statement's load options, else
+from the runner asked at that moment; a runner that cannot say defers the
+gate.) One whose answers to a text differ is **near-exact** when
 they all stay within cosine 0.99999 of each other and the run reaches
 the stored CPU reference at 0.999 (docs/notes/near-exact-runs.md);
 further apart, the run FAILS whatever its cosines. Both are admitted,

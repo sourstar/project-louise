@@ -156,6 +156,58 @@ def answers(recipe, *, query: bool = False, how: str = "normalised",
                              "contribute": contribute}[how])
 
 
+def creates_per_request(recipe, stated=None, *, query: bool = False, name: str = "") -> bool:
+    """Whether the run that answers creates its context per request
+    (`context_on_demand`). THE RUN'S OWN STATEMENT decides where it lists its
+    load options (VeGa's: the engine as LocalAI launched it); otherwise a
+    `/system` read made now — never a cached one, and never "no" for a runner
+    that could not say (the review of 2026-11-12: a slow `/system` skipped the
+    pass and the statement looked the same). A runner with no `/system` lists
+    no options and creates no context per request."""
+    from . import model_load
+    side = embeddings._side(recipe, query)
+    engine = getattr(stated, "engine", None)
+    options = engine.get("options") if isinstance(engine, dict) else None
+    if isinstance(options, dict):
+        return model_load.options_on_demand(options)
+    server = model_load.server_of(side.url)
+    ids = model_load.loaded_models(server, max_age_s=0.0)
+    if ids is None:
+        if model_load.no_system_route(server):
+            return False
+        raise emb.GateDeferred(f"{name}: whether {side.model} creates its context per request "
+                               f"cannot be told now: {server}/system did not answer")
+    if side.model not in ids:
+        raise emb.GateDeferred(f"{name}: {side.model} answered but {server}/system does not list it "
+                               f"loaded, so its load options cannot be read; asked again later")
+    return model_load.context_on_demand(side.url, side.model)
+
+
+def fresh_contexts(recipe, *, query: bool = False, stated=None, **kw) -> runs_mod.Answers | None:
+    """For a run that creates its context per request (`creates_per_request`):
+    `answers(how="one")` with every request's keep fixed at 0, so each text is
+    embedded on a context created for it (app/rage/keep.py `fixed`; the brief
+    §1.4) — the gate's fresh-context pass. Its `creations` is the engine's
+    count of them, which the pass holds every request to; None where no
+    count can be read yet, and the gate then refuses such a run. None for any
+    other run: the gate asks nothing."""
+    from .rage import keep as rage_keep
+    if not creates_per_request(recipe, stated, query=query, name=kw.get("name", "")):
+        return None
+    one = answers(recipe, query=query, how="one", **kw)
+
+    def fresh(texts: list[str], seen: set) -> list[list[float]]:
+        with rage_keep.fixed(0):
+            return one._fn(texts, seen)
+    out = runs_mod.Answers(fresh)
+    # THE ENGINE'S COUNT OF ITS CREATIONS: llama.cpp's `context_creations_total`
+    # (P11) lives in the backend, and nothing reachable through LocalAI reports
+    # it yet — the VeGa wrapper's count (the brief §10, part 3) is where it
+    # will come from. Until then None: counted, never assumed.
+    out.creations = None
+    return out
+
+
 def batched(recipe) -> bool:
     """Does this peer contribute otherwise than strictly one text at a time?"""
     return (embeddings.batch_size(recipe) > 1 or config.EMBED_CONCURRENCY > 1
@@ -341,6 +393,7 @@ def _validate(root: Path, name: str, codex: Codex, recipe, *, role: str = "docum
             stated=stated, key=key, now=now or _now(), items=items, on_run=on_run,
             cpu_reference=None if cpu is None else (cpu.run_id, cpu.vectors),
             reload=_reloader(recipe, query=query, stop=stop, name=name),
+            fresh=fresh_contexts(recipe, stated=stated, **kw),
             # the Codex's requirement wins over the node's setting: a node may
             # be stricter than its collection, never looser (09 §9.3)
             exactness=(emb.EXACT if runs_mod.requires_exact(codex)

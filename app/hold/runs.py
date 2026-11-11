@@ -496,7 +496,8 @@ def validate(root: Path, name: str, codex: Codex, *, role: str, reference,
              embed, embed_one, contribute, stated: emb.StatedRun, key,
              now: str, items=None,
              on_run: Callable[[emb.Run], None] | None = None,
-             cpu_reference=None, reload=None, exactness: str = emb.EXACT) -> dict[str, Any]:
+             cpu_reference=None, reload=None, exactness: str = emb.EXACT,
+             fresh=None) -> dict[str, Any]:
     """Run the gate against one stated run and KEEP the statement — pass or
     fail: "a failure is kept too, so the run is not retried against the same
     set" (07 §7.3). Returns the statement's body. Embedding is the caller's:
@@ -509,13 +510,13 @@ def validate(root: Path, name: str, codex: Codex, *, role: str, reference,
     run = emb.run_gate(codex, reference=reference, embed=embed, role=role,
                        stated=stated, embed_one=embed_one, contribute=contribute,
                        items=items, cpu_reference=cpu_reference, reload=reload,
-                       exactness=exactness)
+                       exactness=exactness, fresh=fresh)
     # THE PASS IS ABOUT ONE RUN. If the model was relaunched while the 512
     # texts were going through — another flag, another image — some answers
     # came from another run, and the numbers describe neither. 03 §3.3: "An
     # answer that names another makes the check inconclusive": no statement,
     # and it is tried again.
-    for fn in (embed, embed_one, contribute):
+    for fn in (embed, embed_one, contribute, fresh):
         seen = getattr(fn, "runs", None)
         if seen is not None and seen != {stated.run_id}:
             others = sorted(str(r)[:23] for r in seen if r != stated.run_id)
