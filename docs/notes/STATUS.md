@@ -95,7 +95,8 @@ measured (published figures disagree).
   #24083 port, P10 in [localai-bugs.md](localai-bugs.md)). Backups `<name>.toml.bak-20261111-before-nemotron-rerank`,
   `louise-rerank-nemotron-1b.yaml.bak-20261111-ctx4096`. LICENCE (Llama 3.2 Community + OpenMDW-1.1): "Built with
   Llama" on the service — Help › Basics › Models says it (tests/test_web_pages.py; Ask's footer line removed
-  11-12, operator: "Move Built with Llama in the help section"; the licence allows an about page or documentation). LIVE: 850773d
+  11-12, operator: "Move Built with Llama in the help section"; the licence allows an about page or documentation;
+  LIVE 3754507 at 2026-11-11T09:04:55Z, rc 0, relay gate 200: /ask without it, /help's Models panel with it). LIVE: 850773d
   deployed 2026-11-11T07:41:09Z (operator: "Deploy the web for the Llama attribution"; web + worker on one image,
   rc 0, relay gate 200; /ask has the line and its link, /help the Models panel and Meta's notice; a gutenberg search
   answers with Nemotron rerank scores). Wikidata and wikipedia measured after the choice (07:46–07:52Z, known-item
