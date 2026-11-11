@@ -283,3 +283,18 @@ def test_every_sentence_the_last_included_keeps_the_question_open_five_minutes(s
     speech.synthesize_timed({"model": "omnivoice-cpp", "input": "Uno."}, url="http://ai", reading="r", n=0)
     speech.synthesize_timed({"model": "omnivoice-cpp", "input": "Due."}, url="http://ai", reading="r", n=1, last=True)
     assert lingers == [None, None] and dispatch.QUESTION_LINGER_S == 300.0
+
+
+@pytest.mark.parametrize("text, said", [
+    # operator, 2026-11-12: "asterisks are read" — Markdown is layout, never words
+    ("**Dante** wrote *the* Commedia [1].", "Dante wrote the Commedia."),
+    ("## Le opere\n- **Inferno**: il primo [2]\n- _Purgatorio_", "Le opere\nInferno: il primo\nPurgatorio"),
+    ("1. Inferno\n2. Purgatorio", "1. Inferno\n2. Purgatorio"),
+    ("Vedi [Dante](https://it.wikipedia.org/wiki/Dante_(poeta)) e snake_case_name.", "Vedi Dante e snake_case_name."),
+    ("| Opera | Anno |\n|---|---|\n| Inferno | 1314 |", "Opera, Anno\n\nInferno, 1314"),
+    ("> Nel mezzo del cammin\n\n---\n`codice` e ***molto*** ~~no~~", "Nel mezzo del cammin\n\ncodice e molto no"),
+    ("5 \\* 3 = 15 e un asterisco * da solo", "5 3 = 15 e un asterisco da solo"),
+])
+def test_markdown_is_not_read(text, said):
+    assert speech.speakable(text) == said
+    assert "*" not in speech.speakable(text) and "#" not in speech.speakable(text)

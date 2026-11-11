@@ -25,8 +25,33 @@ the text itself writes:
   a phone number), read digit by digit.
 
 A text in no language `speech.language` knows is left as it is: guessing a
-language reads it wrong in a new way. Roman numerals and fractions are left
-as written.
+language reads it wrong in a new way. Fractions are left as written.
+
+ROMAN NUMERALS (operator, 2026-11-12: "dates in roman format are
+mispronounced") are read as the language reads them, where the text shows
+what they count (`_roman`):
+
+- a century: "XIV secolo", "sec. XIV", "siglo XIV", "XIXe siècle", "XIV
+  century": Italian, French, German and English say the ordinal
+  ("quattordicesimo secolo", "dix-neuvième siècle"); Spanish and Portuguese
+  say the ordinal up to the tenth and the cardinal after it ("siglo
+  catorce");
+- a ruler or a pope after a name ("Luigi XIV", "Pio IX", "Elisabetta II",
+  "Louis XIV", "Felipe II", "Henry VIII", "Ludwig XIV."): the ordinal, "the
+  fourteenth" in English, "der Vierzehnte" in German, the cardinal in French
+  ("Louis quatorze", "premier" for one), Spanish and Portuguese past the
+  tenth; feminine in Italian, Spanish and Portuguese after a name or noun
+  ending in -a ("Elisabetta seconda"). In English, a numbered part ("World
+  War II", "Chapter IV", "Vatican II") is the cardinal;
+- an article before it and a word after ("la II guerra mondiale"): the
+  ordinal, in the article's gender;
+- the French ordinal suffix ("Ier", "IIe", "XIXᵉ");
+- four letters or more worth 1000 or more ("MCMXC"): a year.
+
+Everything else stays as written. A single I, V or X counts only after a
+name, and never "I" in English (the pronoun). Neither does a word of
+capitals ("DI", "MIX" in a title written in capitals), nor an abbreviation
+that happens to be one ("DC", "CD", "MD", "CV", "XL").
 
 THE STANDARD ALTERNATIVE (CLAUDE.md, "Do not reinvent the wheel"): text
 normalisation as a weighted finite-state grammar — NVIDIA NeMo's
@@ -142,10 +167,149 @@ def _number(raw: str, lang: str) -> str:
     return out
 
 
+_ROMAN = r"(?=[MDCLXVI])M{0,3}(?:CM|CD|D?C{0,3})(?:XC|XL|L?X{0,3})(?:IX|IV|V?I{0,3})"
+_ROMAN_VALUES = {"M": 1000, "D": 500, "C": 100, "L": 50, "X": 10, "V": 5, "I": 1}
+#: abbreviations that are valid numerals
+_NOT_ROMAN = frozenset("DC CD MD CV MC CM CC DL MM MI DI LI CI XL MIX DIV CIV LIV MIL".split())
+_CENTURY = {"it": r"secol[oi]|sec\.", "fr": r"siècles?", "es": r"siglos?", "pt": r"séculos?",
+            "en": r"century|centuries", "de": r"Jahrhunderts?"}
+#: words before which a number counts a part, said as a cardinal in English
+_EN_PARTS = frozenset("War Part Chapter Volume Book Act Phase Type Class Grade Level Article Title Section "
+                      "Appendix Vatican Stage Series Step Annex Schedule Canto Psalm Round".split())
+#: the century's plural, after which one letter is an article ("I secoli")
+_PLURAL = {"it": "secoli", "fr": "siècles", "es": "siglos", "pt": "séculos", "en": "centuries",
+           "de": "jahrhunderte"}
+#: the German articles after which an ordinal takes -n
+_DE_OBLIQUE = frozenset("im am vom zum beim dem den des einem eines".split())
+#: feminine nouns that do not end in -a
+_FEMININE = frozenset("parte classe fase sezione appendice serie legge edizione".split())
+_ARTICLES = {
+    "it": ({"il", "lo", "del", "nel", "al", "dal", "sul", "dello", "nello", "allo", "dallo", "sullo"},
+           {"la", "della", "nella", "alla", "dalla", "sulla"}),
+    "es": ({"el", "del", "al"}, {"la"}),
+    "pt": ({"o", "do", "no", "ao"}, {"a", "da", "na"}),
+}
+
+
+def roman(s: str) -> int | None:
+    """A Roman numeral's value (I–MMMCMXCIX), None for anything else."""
+    if not s or not re.fullmatch(_ROMAN, s):
+        return None
+    vals = [_ROMAN_VALUES[c] for c in s]
+    return sum(-v if i + 1 < len(vals) and v < vals[i + 1] else v for i, v in enumerate(vals))
+
+
+def _counted(n: int, lang: str, feminine: bool = False, regnal: bool = False) -> str:
+    """A number that counts a century or a ruler, as `lang` says it."""
+    if lang in ("es", "pt") and n > 10:
+        return _words(n, lang)
+    if lang == "fr" and regnal:
+        return "premier" if n == 1 else _words(n, lang)
+    if lang == "en" and regnal:
+        return f"the {_ordinal(n, lang)}"
+    if lang == "de" and regnal:
+        return f"der {_ordinal(n, lang)}"
+    return _ordinal(n, lang, feminine)
+
+
+def _roman(text: str, lang: str) -> str:
+    """`text` with its Roman numerals in words where it shows what they
+    count (the module's docstring); every other one as written."""
+    if not re.search(r"[IVXLCDM]", text):
+        return text
+    tok = rf"(?<![\w.])({_ROMAN})"
+    end = r"(?![\w])"
+
+    def value(r: str) -> int | None:
+        """A numeral's value, None for an abbreviation or a lone L, C, D, M
+        (French "Le", "Ce", "De" with the ordinal's "e")."""
+        return None if r in _NOT_ROMAN or (len(r) == 1 and r not in "IVX") else roman(r)
+
+    # a century, before or after the century's word; a range "XIV-XV secolo"
+    cent = _CENTURY.get(lang)
+    if cent:
+        mark = r"(?:\.|º|°|e|ème|ᵉ)?"
+
+        def before(m: re.Match) -> str:
+            a = value(m.group(2))
+            b = value(m.group(3)) if m.group(3) else None
+            if a is None or (m.group(3) and b is None):
+                return m.group(0)
+            # one letter before the plural is an article: "I secoli bui"
+            if len(m.group(2)) == 1 and b is None and _PLURAL.get(lang, "") == m.group(4).lower():
+                return m.group(0)
+            # German declines it after a dative or genitive article: "im siebzehnten Jahrhundert"
+            n = "n" if lang == "de" and (m.group(1) or "").strip().lower() in _DE_OBLIQUE else ""
+            said = _counted(a, lang) + n + (f"-{_counted(b, lang)}{n}" if b is not None else "")
+            return f"{m.group(1) or ''}{said} {m.group(4)}"
+        text = re.sub(rf"((?<!\w)\w+\s+)?{tok}{mark}(?:\s*[-–]\s*({_ROMAN}){mark})?\s+({cent})(?!\w)",
+                      before, text)
+
+        def after(m: re.Match) -> str:
+            n = value(m.group(2))
+            return m.group(0) if n is None else f"{m.group(1)} {_counted(n, lang)}"
+        text = re.sub(rf"(?<!\w)({cent})\s+{tok}{end}", after, text)
+
+        # its era: "il I secolo a.C." → "il primo secolo avanti Cristo"; a stop that also ends the sentence stays
+        for abbr, said in _LANG[lang]["eras"].items():
+            def era(m: re.Match, said: str = said, abbr: str = abbr) -> str:
+                rest = m.string[m.end():].lstrip()
+                ends = abbr.endswith(".") and (not rest or rest[0].isupper())
+                return f"{m.group(1)} {said}" + ("." if ends else "")
+            text = re.sub(rf"(?<!\w)((?:{cent})(?:\s+[^\W\d_]+)?)\s+{re.escape(abbr)}(?!\w)", era, text)
+
+    # the French ordinal suffix: Ier, Ire, IIe, XIXe, XIXᵉ
+    if lang == "fr":
+        def suffix(m: re.Match) -> str:
+            n = value(m.group(1))
+            if n is None:
+                return m.group(0)
+            if n == 1:
+                return "première" if m.group(2) == "re" else "premier"
+            if len(m.group(1)) == 1 and m.group(2) == "e":
+                return m.group(0)       # "Ve", "Xe" alone: a century says it (above), else as written
+            return _ordinal(n, lang)
+        text = re.sub(rf"{tok}(er|re|ème|e|ᵉ)(?!\w)", suffix, text)
+
+    # an article before it and a word after: "la II guerra mondiale"
+    arts = _ARTICLES.get(lang)
+    if arts:
+        masc, fem = arts
+        words = "|".join(sorted(masc | fem, key=len, reverse=True))
+
+        def article(m: re.Match) -> str:
+            n = value(m.group(2))
+            if n is None:
+                return m.group(0)
+            return f"{m.group(1)} {_counted(n, lang, feminine=m.group(1).lower() in fem)}"
+        text = re.sub(rf"(?i:\b({words}))\s+{tok}(?=\s+[^\W\d_])", article, text)
+
+    # a ruler, a pope, or (English) a numbered part, after a name in title case
+    def ruler(m: re.Match) -> str:
+        name, r, stop = m.group(1), m.group(2), m.group(3) or ""
+        n = value(r)
+        if n is None or (lang == "en" and r == "I"):
+            return m.group(0)
+        if lang == "en" and name in _EN_PARTS:
+            return f"{name} {_words(n, lang)}{stop}"
+        fem = lang in ("it", "es", "pt") and (name.endswith("a") or name.lower() in _FEMININE)
+        # German writes the ruler's stop ("Ludwig XIV."): it is the ordinal's, not the sentence's
+        keep = stop if lang != "de" else ""
+        return f"{name} {_counted(n, lang, feminine=fem, regnal=True)}{keep}"
+    text = re.sub(rf"(?<![\w])([A-ZÀ-ÝĀ-Ž][a-zà-ÿā-ž'’-]+)\s+{tok}(\.)?{end}", ruler, text)
+
+    # a year in numerals: four letters or more, worth a thousand or more
+    return re.sub(rf"{tok}{end}", lambda m: _year(value(m.group(1)), lang)
+                  if len(m.group(1)) >= 4 and (value(m.group(1)) or 0) >= 1000 else m.group(0), text)
+
+
 def verbalize(text: str, lang: str | None) -> str:
-    """`text` with its numbers and dates in words of `lang`; as it is for a
-    language this module does not know (None included)."""
-    if not lang or lang not in _LANG or not any(c.isdigit() for c in text):
+    """`text` with its numbers, dates and Roman numerals in words of `lang`;
+    as it is for a language this module does not know (None included)."""
+    if not lang or lang not in _LANG:
+        return text
+    text = _roman(text, lang)
+    if not any(c.isdigit() for c in text):
         return text
     spec = _LANG[lang]
     months = "|".join(spec["month_list"])
