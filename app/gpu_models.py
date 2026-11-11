@@ -28,6 +28,9 @@ class ModelRow:
     backend: str
     vram: int                  # bytes on the card, LocalAI's `size_vram`
     uses: tuple[str, ...]      # "gutenberg: embedding", "chat", … — empty: not Louise's
+    #: its backend's pid as LocalAI gives it (its own namespace's): the GPU
+    #: probe's `ns_pid` places it on a card (`by_card`); None not given
+    pid: int | None = None
 
     @property
     def louise(self) -> bool:
@@ -100,10 +103,49 @@ def rows_from(system: dict, uses: dict[str, list[str]], seen: set | None = None)
         if key in seen:
             continue
         seen.add(key)
+        pid = proc.get("pid")
         rows.append(ModelRow(model=str(m.get("id") or "?"), backend=str(m.get("backend") or ""),
                              vram=int(m.get("size_vram") or 0),
-                             uses=tuple(uses.get(str(m.get("id")), ()))))
+                             uses=tuple(uses.get(str(m.get("id")), ())),
+                             pid=pid if isinstance(pid, int) and not isinstance(pid, bool) else None))
     return rows
+
+
+def by_card(models: dict, devices) -> dict:
+    """Each model ON ITS CARD (operator, 2026-11-11: "Add a CPU card with the
+    models loaded"; a model on the processor's Radeon is the Radeon's, not the
+    B70's): `{pdev: the card's own breakdown, as `panel` gives the whole one,
+    ..., "cpu": [rows]}`.
+    - A model whose backend pid the probe lists on a card (`ns_pid`, the pid
+      as LocalAI numbers it) is that card's.
+    - Not placed, holding VRAM: the largest card's, as before the probe gave
+      `ns_pid` (one deploy behind).
+    - Not placed, holding none: the CPU's — a backend with no memory on any
+      card runs on the processor."""
+    rows = list(models.get("rows") or [])
+    owner: dict[int, str] = {}
+    for d in devices or ():
+        for p in getattr(d, "processes", ()) or ():
+            if getattr(p, "ns_pid", None) is not None:
+                owner.setdefault(p.ns_pid, d.pdev)
+    sized = [d for d in devices or () if getattr(d, "vram_total", None)]
+    main = max(sized, key=lambda d: d.vram_total).pdev if sized else None
+    placed: dict[str, list[ModelRow]] = {}
+    cpu: list[ModelRow] = []
+    for r in rows:
+        card = owner.get(r.pid) if r.pid is not None else None
+        if card is None and r.vram == 0:
+            cpu.append(r)
+            continue
+        card = card or main
+        if card is not None:
+            placed.setdefault(card, []).append(r)
+    out: dict = {pdev: {"rows": rs, "asked": models.get("asked", []), "failed": models.get("failed", []),
+                        "louise": sum(r.vram for r in rs if r.louise),
+                        "other": sum(r.vram for r in rs if not r.louise)}
+                 for pdev, rs in placed.items()}
+    out["cpu"] = cpu
+    return out
 
 
 def _get_json(url: str):

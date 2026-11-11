@@ -80,6 +80,9 @@ def card(isolated_config):
     c = collections_mod.default_collection()
     con = db.connect(c)
     _seed(con, [(1, 1, 1, 1, None)] * 9 + [(1, 1, 1, 0, None)] * 991)
+    # embedding everything: only then has "current" a rate to say (off or
+    # on-demand, it is "-": the test below)
+    db.set_scope(con, {**db.get_scope(con), "embed_mode": "all"})
     now = int(time.time())
     web._stage_rate_memo[str(c.manifest_path)] = {
         **{k: 0 for k in _STAGES}, "embed_ph": 1_000, "embed_n": 2, "ts": now - 600}
@@ -98,6 +101,22 @@ def test_the_embedded_rows_say_the_numbers_then_best_and_current(card, monkeypat
     assert eta, "the ETA on a row of its own"
     text = re.sub(r"<[^>]+>", "", eta.group(1))
     assert text == f"best ~16min · current {shelf['embed_eta']['current']}"
+
+
+@pytest.mark.parametrize("mode", ["off", "lazy"])
+def test_off_or_on_demand_the_current_is_a_dash(card, monkeypatch, mode):
+    """The operator, 2026-11-11: "When a collection's embedding is either off
+    or on-demand 'current' shall be '-'". Nothing embeds the rest on its own;
+    best still says what the whole card would take."""
+    monkeypatch.setattr(web, "_gpu_speeds", lambda: {card.name: 1.0})
+    con = db.connect(card)
+    db.set_scope(con, {**db.get_scope(con), "embed_mode": mode})
+    web.invalidate_counts()
+    shelf = web._collection_shelf(card, {}, "running")
+    assert shelf["embed_eta"]["current"] == "-" and shelf["embed_eta"]["best"] == "~16min"
+    assert ("off" if mode == "off" else "on-demand") in shelf["embed_eta"]["current_why"]
+    eta = re.search(r'<div class="lbl" data-eta="embed"[^>]*><span>ETA</span>(.*?)</div>', _render(shelf), re.S)
+    assert eta and re.sub(r"<[^>]+>", "", eta.group(1)) == "best ~16min · current -"
 
 
 def test_a_cpu_encoder_has_no_best(card, monkeypatch):

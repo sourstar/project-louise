@@ -43,7 +43,8 @@ def _where(html: str, text: str) -> list[str]:
             out.append("visible")
             continue
         tag = html[opened:html.index(">", opened) + 1]
-        assert 'class="more"' in tag or 'class="settings"' in tag, f"{text!r} in another drawer: {tag}"
+        assert any(f'class="{c}"' in tag for c in ("more", "settings", "sect")), \
+            f"{text!r} in another drawer: {tag}"
         if re.search(r"\sopen[\s>=]", tag):
             out.append("open")
         elif html.rfind("<summary>", opened, i) > html.rfind("</summary>", opened, i):
@@ -120,37 +121,45 @@ def test_warnings_that_ask_for_an_action_stay_in_sight(client):
 # ---- System -----------------------------------------------------------------
 
 def test_system_explanations_are_behind_a_closed_line(client):
+    """The operator, 2026-11-11: "Reduce all the unnecessary verbosity";
+    "collapse all what it makes sense to be collapsed, please, it is an
+    endless list without overview". Each panel's heading line says its
+    state; its tables are behind it."""
     page = _main(client.get("/admin/system").text)
-    assert behind(page, "Encoders pinned in LocalAI while Louise processes with them")
-    assert in_sight(page, "Nothing held now."), "the state of the pins is data"
-    assert in_sight(page, "No users: Ask is open to anyone on this network.")
+    assert "Encoders pinned in LocalAI while Louise processes with them" not in page, "the prose is gone"
+    assert _where(page, "0 held") == ["summary"], "the pins' state is the panel's line"
+    assert behind(page, "Nothing held now.")
+    assert _where(page, "none: Ask is open") == ["summary"]
     assert behind(page, "creates the first one, and from then on Ask needs a token")
     users.add("ada")
     page = _main(client.get("/admin/system").text)
-    assert in_sight(page, "<td>ada</td>")
+    assert behind(page, "<td>ada</td>")
     assert behind(page, "louise user add | list | role | expire | reissue | revoke | remove")
 
 
-def test_the_gpu_panel_keeps_its_badges_and_readings_and_folds_the_prose():
+def test_the_gpu_panel_keeps_its_badges_and_readings_and_folds_the_lists():
     """The System tab's GPU panel: the badge and the readings in sight, the
-    why behind a line that SURVIVES the 5-second refresh (`hx-preserve`)."""
+    models and the processes behind a line that SURVIVES the 5-second
+    refresh (`data-keep-open`, reopened by system.html after a swap)."""
     from app import gpu, gpu_models as gm
     from tests.test_gpu_models import COLLECTIONS, GIB, SYSTEM
     gpu_html = web.TEMPLATES.get_template("_fragments/gpu.html")
     body = gpu_html.render(state="unset", url="", governor={"state": "absent"})
-    assert in_sight(body, "GPU governor not running") and in_sight(body, "there is no probe to ask")
-    assert behind(body, "87 s against 64 s") and behind(body, "deploy/truenas-app.yaml")
+    assert in_sight(body, "GPU governor not running") and in_sight(body, "no probe")
+    assert "87 s against 64 s" not in re.sub(r"<[^>]*>", "", body), "the why is the badge's tooltip, not text"
     dev = gpu.GpuDevice(card="card0", pdev="0000:03:00.0", driver="xe", vendor_id="8086",
                         device_id="e223", vendor="Intel", name="Arc Pro B70",
                         vram_total=32 * GIB, vram_used=18 * GIB)
     body = gpu_html.render(state="ok", url="x", devices=(dev,), notes=(),
                            models=gm.panel(COLLECTIONS, get_json=lambda url: SYSTEM), model_bar=gm.bar,
                            governor={"state": "absent"})
-    assert in_sight(body, "VRAM 32") and in_sight(body, "<th>model</th><th>used by</th>")
-    assert behind(body, "which reads the driver's per-process counters")
+    assert in_sight(body, "VRAM 32") and behind(body, "<th>model</th><th>used by</th>")
+    assert _where(body, "models · 5 loaded") == ["summary"]
     source = (Path(web.__file__).parent / "templates" / "_fragments" / "gpu.html").read_text(encoding="utf-8")
     drawers = re.findall(r"<details[^>]*>", source)
-    assert drawers and all(re.search(r'\sid="[^"]+"', d) and "hx-preserve" in d for d in drawers), drawers
+    assert drawers and all(re.search(r'\sid="[^"]+"', d) and "data-keep-open" in d for d in drawers), drawers
+    page = (Path(web.__file__).parent / "templates" / "system.html").read_text(encoding="utf-8")
+    assert "htmx:beforeSwap" in page and "htmx:afterSwap" in page, "the drawers are reopened after a swap"
 
 
 # ---- Connect ----------------------------------------------------------------
@@ -170,8 +179,12 @@ def test_connect_keeps_the_values_in_sight_and_the_lists_behind(client):
 @pytest.mark.parametrize("path", ["/admin/library", "/admin/system", "/admin/network", "/connect", "/ask"])
 def test_every_drawer_is_closed_and_has_a_line_to_open_it(client, path):
     page = _main(client.get(path).text)
-    for tag in re.findall(r"<details[^>]*>", page):
-        assert not re.search(r"\sopen[\s>=]", tag), f"{path}: drawn open: {tag}"
+    for m in re.finditer(r"<details[^>]*>", page):
+        tag = m.group(0)
+        if re.search(r"\sopen[\s>=]", tag):
+            # a System panel that needs an action opens itself, and says why in its line
+            line = page[m.end():page.index("</summary>", m.end())]
+            assert 'class="sect"' in tag and "badge err" in line, f"{path}: drawn open: {tag}"
     opened = [m.end() for m in re.finditer(r"<details[^>]*>", page)]
     for at in opened:
         assert page[at:].lstrip().startswith("<summary>"), f"{path}: a drawer without its line"

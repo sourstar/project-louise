@@ -350,6 +350,7 @@ def test_the_rate_and_the_share_are_read_without_a_hover(isolated_config):
     now = int(time.time())
     web._stage_rate_memo[str(c.manifest_path)] = {
         **{k: 0 for k in _STAGES}, "embed_ph": 120_000, "embed_n": 2, "ts": now - 600}
+    db.set_scope(con, {**db.get_scope(con), "embed_mode": "all"})   # on-demand's current is "-"
     web.invalidate_counts()
     shelf = web._collection_shelf(c, {}, "running")
     html = _render(shelf)

@@ -356,5 +356,7 @@ def test_the_system_tab_shows_the_level(isolated_config):
                                         "power_own_w": 230.0, "fan": "firmware-controlled",
                                         "pending": None, "error": None}})
     assert "held at 1400 MHz" in body, "the hold, not the card's maximum"
-    assert "GPU level <b>quiet</b>" in body and "power limit 115.0 W" in body
-    assert "fan firmware-controlled" in body and "never its bytes" in body
+    assert "level <b>quiet</b>" in body and "power limit 115.0 W" in body
+    assert "fan firmware-controlled" in body
+    assert 'title="A limit changes how fast a vector comes, never its bytes."' in body, \
+        "the why behind the line, not on it (operator, 2026-11-11: less verbosity)"
