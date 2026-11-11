@@ -425,16 +425,9 @@ Which claims apply:
 
 - **Collection.** The claim belongs to an annotations collection that this
   peer holds and may use, and whose `annotates.collection_id` is the
-  result's collection. *Amended 2026-11-11* (architecture session with the
-  operator; 02 §2.10): or the result's collection is any other held
-  collection of the plugin the claim's end names — a sister, or one whose
-  records moved — and the claim is decided per claim by the result's own
-  content hash: `current` where it equals the claim's hash for that end,
-  `stale` where it does not. Nothing compares the collections themselves.
+  result's collection.
 - **Snapshot.** The result was read from a target snapshot at or after
-  `annotates.from_snapshot` — where the result's collection is that target
-  (or its records twin); elsewhere the snapshot ids are another
-  collection's, and the hash alone decides (*amended 2026-11-11*).
+  `annotates.from_snapshot`.
 
 The state of a claim:
 
