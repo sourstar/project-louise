@@ -83,6 +83,11 @@ wheel" (CLAUDE.md), the case is solved simply and the standard written down:
   for one). A patch to our llama.cpp backend (P11: P1–P7 are the series, P8–P10 staged), and each
   changed encoder re-gated once (invariant 12; context creation is part of
   a fresh load, which the gate already covers).
+- **A's trigger, settled in review** (operator, the same day): not "after N
+  seconds" and no sleep — the context is allocated when a request arrives,
+  freed when the work is done, and held between requests by a keep in
+  milliseconds the request carries (RAGE sets it, 500 ms to start). And for
+  any opted-in model, not corpus encoders only. idle-context-brief.md §1.
 - **To measure before building:** the time to create and free a context on
   the B70 for each encoder, and that freed memory is the driver's again (a
   SYCL pool that keeps it would make A a no-op). A test copy in a quiet

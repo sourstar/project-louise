@@ -1,24 +1,42 @@
-# Brief for a dedicated session: an idle encoder gives its context back
+# Brief for a dedicated session: a model's context on request
 
 *Written 2026-11-12 for a session of its own (operator: "Write down
 everything for a dedicated session, collect all the information needed
 including all the material about B70 pitfalls and our localai and
-llama.cpp customizations"). Read it whole before touching anything; then
-CLAUDE.md, docs/notes/measuring.md and the notes it links.*
+llama.cpp customizations"). REWRITTEN the same day with the design the
+operator settled in review (§1): the context is not given back by an idle
+timer, it is allocated by the request and kept by the request's own keep.
+The first text, and the review that led here, are
+`git show d058f93:docs/notes/idle-context-brief.md` and
+`git show e9f35bd:docs/notes/idle-context-brief.md` (its §8–§10). Read it
+whole before touching anything; then CLAUDE.md, docs/notes/measuring.md and
+the notes it links.*
+
+*A date to settle: this day's notes (this brief, shared-context.md, STATUS)
+are dated 2026-11-12, and the commits that carry them are stamped
+2026-11-11 (68aaf1d, 06:54Z, records "LIVE since 2026-11-12 06:52Z"). What
+was said and read in review is dated here by the commits' clock.*
 
 ## 0. In one paragraph
 
 The B70 (32.6 GB) holds ~34 GB of resident models, ~10 GB of it CONTEXT —
 each llama.cpp model's KV cache plus its compute buffers — while at most
 3.3 GB of context works at any one second (p95 2.2 GB; 24 h of the card
-record). The idea, the operator's (2026-11-12), checked against the
-literature (shared-context.md: Prism, OSDI '26, and kvcached do it with GPU
-virtual memory for vLLM/SGLang on NVIDIA/ROCm, KV only): A MODEL KEEPS ITS
-WEIGHTS AND FREES ITS `llama_context` AFTER N SECONDS IDLE; THE NEXT
-REQUEST CREATES IT AGAIN. The card's free memory is the common pool; two
-models that overlap each still get theirs. **Nothing is built yet.** This
-session: (1) measure the two unknowns, (2) only if they pass, write the
-patch, (3) gate, (4) deploy on the operator's word.
+record). The design, the operator's, checked against the literature
+(shared-context.md: Prism, OSDI '26, and kvcached do it with GPU virtual
+memory for vLLM/SGLang on NVIDIA/ROCm, KV only): A MODEL KEEPS ITS WEIGHTS;
+ITS `llama_context` IS ALLOCATED WHEN A REQUEST ARRIVES AND FREED WHEN THE
+WORK IS DONE; A REQUEST MAY CARRY A KEEP, IN MILLISECONDS, THAT HOLDS THE
+CONTEXT THAT LONG AFTER ITS ANSWER, so that requests back to back do not
+free and allocate between them. A semi-cold start: a model is idle
+(weights only) or running. Louise's RAGE makes the work batches and sets
+the keep on every corpus request, 500 ms to start. The card's free memory
+is the common pool: with every model opted in, ≈ 24 GB at rest + at most
+3.3 GB working ≈ 27 GB; in the first deployment (§1.3) ≈ 26.5 GB at rest
+and under 30 GB at the peak — against ~34 GB held today and the reclaimer's
+31.0 GB line. **Nothing is built yet, and nothing below is measured.**
+This session: (1) measure the unknowns (§2), (2) only if they pass, write
+the patch (§3), (3) gate, (4) deploy on the operator's word.
 
 **A GENERAL DESIGN, NOT A LOUISE WORKAROUND** (operator, 2026-11-12:
 "Embedders in CPU are an option but we cannot bet on it, this is a general
@@ -28,93 +46,373 @@ one of OUR models happens to run (a CPU embedder, a model that idles today);
 the feature is built for any llama.cpp server holding models it does not
 use all the time — several models on one card, a desktop that shares the
 GPU with other work, a server that answers in bursts — on every backend
-(CUDA, ROCm, Vulkan, SYCL, Metal, CPU), every model kind (embedding,
-rerank, generation, encoder-decoder), opt-in per model. It is written to
-upstream's standards from the first line (llama.cpp's code style, its
-server tests, `--help` text, docs/), so that proposing it to llama.cpp and
-LocalAI is a filing, not a rewrite; whether and when it is filed is the
-operator's word (as for P5's and the Nemotron rerank's PRs). OUR node is the
-first deployment and its measurements are the first evidence, nothing more.
+(CUDA, ROCm, Vulkan, SYCL, Metal, CPU), every model kind in the end
+(embedding, rerank, generation, encoder-decoder; §1.2 says what the first
+version takes), opt-in per model, and useful with no orchestrator at all (a
+model's own default keep). It is written to upstream's standards from the
+first line (llama.cpp's code style, its server tests, `--help` text,
+docs/), so that proposing it to llama.cpp and LocalAI is a filing, not a
+rewrite; whether and when it is filed is the operator's word (as for P5's
+and the Nemotron rerank's PRs). OUR node is the first deployment and its
+measurements are the first evidence, nothing more.
 
 **The vocabulary is the standard one** (CLAUDE.md, "do not reinvent the
-wheel"): vLLM's sleep mode has LEVELS — level 1 discards the KV cache and
-keeps the weights (moved to CPU there), level 2 discards both; llama.cpp's
-own `--sleep-idle-seconds` is today's level 2. The patch adds the level
-that keeps the weights resident and frees the context (KV cache AND compute
-buffers — more than kvcached frees): e.g. `--sleep-idle-seconds N
---sleep-level context|model` (default `model`, today's behaviour), the names
-to be settled against upstream's conventions before filing.
+wheel"): Ollama's `keep_alive` — a duration a request carries, with a
+server default, 0 = release when the request is done — applied to the
+CONTEXT instead of the whole model, and in milliseconds because the value
+is under a second (to be said upstream). The sleeps are the neighbours, not
+the model: vLLM's sleep mode discards the KV cache and moves the weights to
+CPU RAM (level 1) or discards both (level 2); llama.cpp's
+`--sleep-idle-seconds` frees model and context after an idle time. Here
+nothing sleeps and no timer runs on its own: the request decides. Names
+used in this brief, to be settled against upstream's conventions before
+filing: the request's `keep_context_ms`; the server's `--context-on-demand`
+with `--keep-context-ms N` for requests that say nothing; LocalAI's model
+options `context_on_demand:true`, `keep_context_ms:N`.
 
-## 1. What decides whether it pays — measure FIRST
+## 1. The design, as settled in review
+
+### 1.1 The operator's words (2026-11-11)
+
+- "This is the equivalent of a semi-cold start: instead of loading the
+  whole model only the context memory is requested." "Is there is not
+  enough memory something is evincted." "In the very moment the model
+  doesn't need the memory anymore, it is freed." "There is not necessarily
+  a sleep, just idle or running models."
+- "when llama.cpp gets a request it allocates the context memory; when the
+  processing is done it frees it. A request may come with the flag 'stay
+  warm' and this will make it keep the memory until a timeout, to prevent
+  free/alloc back to back."
+- "Louise RAGE creates the work batches, thus the stay warm flag keeps the
+  context also between jobs."
+- "it looks that 500ms are a safe margin; we can log expired stay warms for
+  improvement and also pass the timeout in the argument in ms (0 no stay
+  warm)."
+- "If there is a query in the meantime, the chat model gets a context
+  memory; if there is not enough memory there are still options (in this
+  order): the contexts of the batch in queue can be pruned, or some other
+  model can be evincted, or the chat processing can be postponed."
+
+What follows is that design with what reading the code added. A line that
+is the review's and not the operator's own word says (review); §9 lists
+them.
+
+### 1.2 The engine — llama.cpp's server
+
+- **Two states.** IDLE: the weights are resident, there is no context.
+  RUNNING: the context exists — while a task is queued or in work, and
+  after it until the latest keep asked has run out.
+- **The loop's thread owns the context** (review). The server's main loop
+  creates it when it takes a task that needs one and has none, and frees it
+  when its queue is empty and the keep has run out. Request handlers never
+  touch it: they tokenise with the MODEL, which stays (§3). So nothing
+  waits for a wake, and this is NOT upstream's sleeping state, which frees
+  the model, blocks every handler until the reload and has an open race
+  (§3, H3).
+- **The keep**, an integer of milliseconds in the request, 0 = none. Three
+  rules (review):
+  1. ABSENT IS NOT 0. A request without the field takes the model's
+     default, so a client that does not know the field — a warm, a probe,
+     a person's curl — cannot make the context cycle.
+  2. A REQUEST ONLY EXTENDS. The deadline is the latest of those asked,
+     never the last one's: a query's 0 on an encoder the corpus shares (a
+     symmetric space's one encoder) must not cancel the stream's keep. A
+     stream's last request sent with 0 then frees up to one keep late:
+     nothing.
+  3. The clock starts when the request's answer is complete, and only model
+     work counts: a metrics task neither creates a context nor extends one
+     (`task_resets_idle_timer`'s precedent, §3).
+- **A creation that cannot have its memory is REFUSED** (review): the task
+  is answered with an error its caller retries, and the server stays idle.
+  Never an abort — in a shared pool this is the normal case of contention,
+  not a fault. For Louise it is a deferral, never an error on a document
+  (CLAUDE.md).
+- **The context is the one the first load resolved** (review): the same
+  n_ctx, n_batch, n_ubatch and cache types; no re-fit to whatever memory is
+  free at that moment (H2).
+- **Opt-in per model; off is today's behaviour exactly** — the context
+  created at load and held for the model's life.
+- **Scope of the first version** (review): text models — embedding, rerank,
+  generation; encoder-decoder in OUR series only (P3/P4 are ours, and the
+  upstream PR cannot depend on them). A server with a draft model or a
+  multimodal projector refuses the option at start and says so: their
+  contexts hang off the same lifecycle (§3, H8) and are a second step.
+- **What a freed context takes with it**: the slots' KV — a conversation's
+  cached prompt is computed again (upstream's sleep does the same; issue
+  #29322 notes `--cache-ram`'s cache dropped on wake). Documented in
+  `--help` and the README, not hidden; it is what a chat turn's keep of
+  minutes is for.
+
+### 1.3 Louise
+
+- **RAGE sets the keep on every corpus request: 500 ms to start**
+  (operator). No person types it and no dialog shows it (RULE 2). An
+  encoder the corpus and a query share keeps the corpus's by rule 2.
+- **How it travels — no wire change** (review; §3): in the request's
+  `metadata` map, which LocalAI already carries to the backend for
+  `chat_template_kwargs`; the VeGa wrapper copies the request it forwards.
+  Nothing docs/09 fixes is touched — to confirm against 03 §3.3 and
+  vega.md §2 that a field outside the tag is outside the receipt.
+- **Expired keeps are logged, for improvement** (operator). The signal is
+  the PREMATURE one (review): every busy period ends with an expiry, by
+  design; the cost is a creation that closely follows a free. Counted by
+  the VeGa wrapper — it sees every call arrive and every answer leave, so
+  it knows by its own clock when a call met an expired keep: the
+  milliseconds since the last answer, the keep in force, the call's extra
+  time — per run, beside `GET /vega/passes`; the backends' own lines are
+  not kept at LocalAI's info level (§6). RAGE names the collection (every
+  log line names its collection, CLAUDE.md).
+- **RAGE then sets the keep itself** (review): raised when premature
+  expiries pass a share of a collection's requests, lowered slowly — AIMD,
+  as its requests in flight are chosen (gpu-saturation-plan.md, lever 3) —
+  a number the system finds, never typed. 500 ms is three times the worst
+  MEAN on record and about a creation's expected cost — the break-even of
+  SKI RENTAL (hold a resource idle for as long as getting it back would
+  cost: never worse than twice the best) — but the record holds means, not
+  tails (§2): a start, not yet a safe margin.
+- **First deployment: the corpus encoders and MADLAD** — qwen3-4b
+  (1,882 MiB of context, worked 31 s in 24 h), nemotron (2,221), the MADLAD
+  test copy (2,007): 6,110 of the 8,585 MiB listed in §6. The other
+  2,475 MiB stay: ≈ 26.5 GB at rest, and under 30 GB with the corpus at its
+  recorded peak — one to two GB under the reclaimer's line, not four. The
+  query path (rerankers, query encoders, chat) joins once a creation is
+  measured small against a person's wait (app/resident.py's tiers keep them
+  loaded today); a chat turn then carries a keep of minutes, so a follow-up
+  finds its cached prompt.
+- **A query that finds no room** — the operator's order, as the code
+  already provides it (review):
+  1. "the contexts of the batch in queue can be pruned": a queued batch
+     holds no context — nothing is allocated before its request — and the
+     RUNNING stream's returns by itself: a question's claim makes the
+     corpus stand aside (app/rage/dispatch.py; a request already sent
+     finishes), and its context is gone within its keep, half a second. No
+     "release now" call is needed.
+  2. "some other model can be evincted": LocalAI's reclaimer, the least
+     recently used unpinned model, weights and all — its next use pays
+     11–19 s (M14, M26).
+  3. "the chat processing can be postponed": last, against the standing
+     order (query work highest, operator 2026-10-25), bounded by the
+     request's own timeout.
+  By §0's arithmetic 2 and 3 should rarely fire; the BEFORE/AFTER rows of
+  §7 step 6 count them.
+- **The keeper meets sizes it does not yet understand** (review; §6): an
+  opted-in model has TWO sizes, idle and running, and app/resident.py's
+  `REST_FLOOR` takes the idle one for a model partly off the card. First
+  deployment: the released memory is HEADROOM, not budget — the keeper
+  counts an opted-in model at its running size, by rule (it reads the
+  option from `/system`, P1), with its test. Making the dispatcher admit
+  contexts against the card is a change to WHAT RUNS WHEN:
+  docs/notes/scheduling.md §6 binds it.
+
+### 1.4 Invariant 12 — every creation is a first pass after a load
+
+- The keep is RAGE's setting, like `batch` and `concurrency`, and NO part
+  of a run's identity — provided the bytes are identical across creations.
+  The option itself is in the load's stated options, so opting a model in
+  is a new run, gated once (09 §9.12).
+- **The gate with keep 0 is the cycle test** (review): every fingerprint
+  text then meets a new context — the worst case, with no instrument of its
+  own (O4). Ten creations do not gate a per-creation fault: one at rate p
+  is caught by n clean creations with probability 1 − (1 − p)ⁿ — n = 10
+  catches p = 5 % four times in ten; 95 % needs 59 at 5 %, 299 at 1 %. So
+  ≥ 300 creations per encoder, short and long probes (`LONG_PROBE`) both.
+  The class is known here: M5 (1 of 20 scores, first pass only) and M2
+  before its remedy (4 of 8 runs).
+- **A canary per context** (review): the wrapper embeds one fingerprint
+  text right after each creation and sets its bytes against the run's own
+  before any input — the first pass is then the canary's, and a context
+  that does not reproduce is discarded before it writes. Today no check at
+  write time sets a vector against a second computation of it.
+- The gate measures what is deployed (measuring.md §3): the keep-0 pass AND
+  a pass at RAGE's keep.
+
+### 1.5 Why this form
+
+| | pros | cons |
+|---|---|---|
+| status quo — every context held for the model's life | nothing to build or re-gate; the driver's spill to host RAM works today | 34 GB held on a 32.6 GB card; the driver chooses what leaves it; every new model is fitted against contexts that work seconds a day |
+| an idle timer with the weights kept (the first brief: a level of llama.cpp's sleep, N seconds) | few creations a day; rides upstream's sleeping state | at N = 600 s ≈ 2 GB freed (only qwen3-4b idles that long); every handler must wake the server; upstream's sleep has an open race |
+| per request, no keep | the least memory held; nothing to tune | a creation on every input: one is ≈ 0.6 s (§2), so every 60 ms of creation is 10 % of throughput |
+| **per request with a keep in ms, set by RAGE (settled)** | one creation per busy period; ≈ 6 GB of context given back while idle on our node; a question frees the corpus's contexts by standing aside; a known standard (`keep_alive`); no wire change | a creation per busy period on the embedding path; a keep shorter than a stream's gaps cycles the context unseen — hence the log; the gate grows to ≥ 300 creations |
+| memory mapped per KV block (Prism, kvcached) | the finest grain, per conversation | a KV allocator on Level Zero virtual memory, for KV only, while the compute buffers are the larger share here; nothing exists for SYCL (shared-context.md §3) |
+
+## 2. What decides whether it pays — measure FIRST
 
 | unknown | why it decides | how |
 |---|---|---|
-| Does freed context memory go back to the DRIVER on the B70? | ggml-sycl's op-temporaries pool is a VMM pool, ON by default at our pin (`GGML_SYCL_ENABLE_VMM`, default 1, `ggml_sycl_pool_vmm`: it keeps committed pages for its lifetime), else the legacy pool, which caches up to 256 freed buffers; both release only when their owner is destroyed. If the owner outlives the `llama_context` (to read: `ggml-sycl/backend.hpp`, the pool's owner), freeing the context returns nothing. | per process: the driver's count (the xe fdinfo app/gpu_memory.py reads; LocalAI's `/system` `size_vram`) before, during and after a free; the backend's startup lines `GGML_SYCL_SUPPORT_VMM` / `GGML_SYCL_ENABLE_VMM` say which pool runs |
-| How long is a context's create + free, per encoder? | it is paid by the first batch after every idle spell | the same instrument, timed per encoder at its live settings (ctx, batch, ubatch, flash attention, cache types) |
-| Are the vectors byte-identical across create/free cycles? | invariant 12: a run reproduces itself | fixed texts embedded before, between and after cycles; `tools/vega_repro_check.py` on the patched backend later |
+| **How long is a creation + free, per encoder?** The go / no-go number. | Paid at every busy period, and on every request whose keep was too short. A corpus input is short work: a 1,000-token chunk on qwen3-4b at its gated 1,651 tok/s is ≈ 0.6 s. A creation allocates AND ZEROES the KV cache (≈ 1.1 GiB for qwen3-4b), reserves the compute buffers from the worst-case graphs, and the first decode commits the op pool again (§3). Expected in the tens to hundreds of ms — an expectation, not a measurement. | the instrument below, per encoder at its live settings (ctx, batch, ubatch, flash attention, cache types); the first decode after a creation timed apart — the queue and its compiled kernels are the process's (§3), so it should not compile again: to confirm |
+| Does freed context memory go back to the DRIVER on the B70? | The code says the backend gives it all back (§3: the op pools die with the context; KV and compute buffers are `zeMemFree`d). What reading cannot settle is the driver's side — compute-runtime and `xe` handing the pages back at the free, or keeping them for reuse — and what a process keeps whatever is freed (its ~270 MiB floor, §6; upstream #25271 measured 158 MB left on CUDA after a FULL sleep). | per process, before, during and after a free: the backend's own count (`GGML_SYCL_MEMTRACE=1`: every allocation and free by kind — buffers, pool_leg, pool_vmm — and the device's total / free / allocated / other) beside the driver's (the xe fdinfo app/gpu_memory.py reads, `vram0` and host apart; LocalAI's `/system` `size_vram`); the startup lines `GGML_SYCL_SUPPORT_VMM` / `GGML_SYCL_ENABLE_VMM` / `GGML_SYCL_USE_LEVEL_ZERO_API` say which paths run |
+| Are the vectors byte-identical across creations? | invariant 12 (§1.4) | fixed texts embedded before, between and after creations in the instrument; then the gate with keep 0 on the patched backend, ≥ 300 creations per encoder |
+| How long are the gaps between two requests of one stream, AT THE ENGINE? | It is what the keep must outlast. On record are card-idle MEANS, an upper bound: wikidata (4 lanes) ≈ 13 ms a request (11.1 s/min over ~832 requests/min); wikipedia (2 lanes, producer-bound) ≈ 170 ms (25.6 s/min over ~153) — gpu-saturation-plan.md, lever 2's table. The corpus stands aside 9–37 ms between a question's rerank variants and for whole steps (scheduling.md §12); stream boundaries leave whole idle seconds, 0.1–0.3 s/min. No tail is on record. | RAGE times it at its gate — an answer's arrival to the next request's send, per endpoint, every lane — with no engine change. Inside one request LocalAI sends ONE TEXT PER CALL (§3): those gaps only the wrapper sees — counted on the test copy now, in production from the engine change on (a changed wrapper is a new engine, §4); a histogram by powers of two, as `GET /vega/passes` serves lengths |
+| What does a 500 ms keep release, and how often does it create? | sizes the gain before any build | the card record (app/rage/card_record.py, per second; no card time): per encoder over 24 h, the GB·h given back and the creations a day, a model counted running in every second it worked |
+| Does the stack bear it? | thousands of GB-sized allocations and frees a day is a new load on the `xe` / Level Zero stack of M21, M22 and O6 | a soak in the instrument: 10,000 creations, the driver's count flat at the end, no `xe` reset in the kernel log |
 
-Acceptance (proposed; the operator may set others): ≥ 90 % of the
-context's bytes back to the driver after a free; create ≤ 5 % of one
-batch's time for that encoder (or under 250 ms, whichever is larger);
-every vector byte-identical across 10 cycles. If the memory does not come
-back on the B70, that is a finding about ggml-sycl's pools (who owns them,
-and whether a level-1 sleep must also destroy or trim the backend's pool),
-not the end of the design: record it here and in shared-context.md, and
-measure the same instrument on the CPU build (`build.sh cpu`, no card
-needed) and on any other backend at hand — the design is for every
-backend, and those numbers are part of the evidence an upstream proposal
-carries.
+Acceptance (proposed; the operator may set others): ≥ 90 % of the context's
+bytes — KV + compute buffers + op pool AS THE BACKEND COUNTS THEM, not
+`size_vram` less the weights file — back to the driver after a free; a
+creation + free under 250 ms per encoder; with the keep in force every
+collection's chunks/s within 5 % of its BEFORE row (`louise dev
+schedule-report --bench`); every vector byte-identical across ≥ 300
+creations; the soak clean. If the memory does not come back on the B70,
+that is a finding about the driver or ggml-sycl (who keeps it, and whether
+a free must also trim something), not the end of the design: record it
+here and in shared-context.md, and measure the same instrument on the CPU
+build (`build.sh cpu`, no card needed) and on any other backend at hand —
+the design is for every backend, and those numbers are part of the evidence
+an upstream proposal carries.
 
-**The instrument** (none exists): a diagnostic llama.cpp program, or a
-`deploy/localai/patches/diag/` patch (diag/README.md: never in `series`,
-never on a live backend), built on BUILD_HOST with `build.sh sycl_f16` from
-a local copy of `series`: load the model once, then loop create context →
-embed the fixed texts → free → read the driver's count. A TEST COPY of an
-encoder under its own model name, in a quiet window, run by München with
-the node's harness (`/root/llama-intel-arc-b70`, measuring.md §1); nothing
-in production touched. Measure the DEPLOYED settings (measuring.md §3).
+**The instrument** (half exists): `GGML_SYCL_MEMTRACE=1` in a test copy's
+env gives the backend's count on today's engine. The rest is a diagnostic
+llama.cpp program, or a `deploy/localai/patches/diag/` patch
+(diag/README.md: never in `series`, never on a live backend), built on
+BUILD_HOST with `build.sh sycl_f16` from a local copy of `series`: load the
+model once, then loop create context → embed the fixed texts → free → read
+the driver's count. A TEST COPY of an encoder under its own model name, in
+a quiet window, run by München with the node's harness
+(`/root/llama-intel-arc-b70`, measuring.md §1); nothing in production
+touched. Measure the DEPLOYED settings (measuring.md §3), and watch free
+space: measurement is a writer (measuring.md §6).
 
-## 2. Where the context lives — the code
+## 3. Where the context lives — the code, read at the pins
 
-- **LocalAI's llama.cpp backend** (`backend/cpp/llama-cpp/grpc-server.cpp`
-  at our base, LocalAI master `16acc89`): it compiles llama.cpp's own
-  `tools/server/server-task.cpp`, `server-queue.cpp`, `server-context.cpp`
-  into its translation unit; `params_parse` turns `ModelOptions` into
-  `common_params` (`n_ctx`, the `Options` strings `ubatch:`, `parallel:`,
-  `kv_unified` — `params.kv_unified = true` by default there —, cache types
-  from their own proto fields; `params.cache_idle_slots = true`); the
-  server loop is `ctx_server.start_loop()`.
-- **llama.cpp `ddf48f8`, `tools/server/server-context.cpp`**: `load_model`
-  builds `llama_init = common_init_from_params(params_base)` (model AND
-  context together), then `ctx_tgt = llama_init->context()`, the slots
-  (`slot.mem.init(ctx_tgt, …)`) and the batch (`batch.init(ctx_tgt, …)`).
-  UPSTREAM ALREADY HAS A SLEEPING STATE: `handle_sleeping_state` →
-  `destroy()` (`llama_init.reset()`: model AND context) and, on wake,
-  `load_model(params_base)` again; driven by `queue_tasks.on_sleeping_state`
-  (llama-server's `--sleep-idle-seconds`). That frees the WEIGHTS too —
-  what LocalAI's idle unload did, switched off for its cold starts (#398).
-  The patch to write is that state with the model kept: free the context,
-  the slots' memory and the batch; on wake, `llama_init_from_model(model,
-  cparams)` and the slot/batch init again. Whether LocalAI's grpc-server
-  wires the idle timer at all is to be read (not visible in the first
-  100 kB of the file).
-- **Who it is for** — the DESIGN: any model, opted in. llama.cpp: the server
-  flags above; LocalAI: a model YAML option passed through `params_parse`
-  (e.g. `sleep_idle_s:600`, `sleep_level:context`), off by default, so each
-  model opts in and the setting is in the load's stated options (for
-  Louise: the run, 09 §9.12). Generation models free their slots' KV with
-  the context: a conversation's cached prompt is recomputed after a sleep
-  (upstream's sleep already does this; issue #29322 notes `--cache-ram`'s
-  cache dropped on wake — the same holds here, and is documented, not
-  hidden).
-- **Who it is for** — OUR first deployment: the encoders whose context
-  idles longest (vega-qwen3-embedding-4b, 1.9 GB of context after its
-  trim, worked 31 s in 24 h; vega-nemotron-3-embed-1b 2.2 GB); the query
-  path (rerankers, query encoders, chat, MADLAD) only once the wake time is
-  measured small against a person's wait (app/resident.py's tiers keep them
-  loaded today).
+*llama.cpp `ddf48f8` and LocalAI `16acc89`, read 2026-11-11; nothing here
+was run. Paths are llama.cpp's unless LocalAI is named; `grpc-server.cpp`
+is LocalAI's `backend/cpp/llama-cpp/grpc-server.cpp`.*
 
-## 3. Our LocalAI and llama.cpp customizations (the series)
+**The request's path on our node** (vega.md §2): Louise → `POST
+/v1/embeddings` (model `vega-…`, tagged inputs) → LocalAI → gRPC
+`Embedding`, ONE TEXT PER CALL → the VeGa wrapper (cuts with the backend's
+`TokenizeString`, forwards, sends the receipt BEFORE the vector goes back)
+→ llama.cpp's backend. The engine sees one task per text, with the
+wrapper's and LocalAI's turnaround between two.
+
+**LocalAI's llama.cpp backend:**
+- It compiles llama.cpp's own `tools/server/server-task.cpp`,
+  `server-queue.cpp`, `server-context.cpp` into its translation unit;
+  `params_parse` turns `ModelOptions` into `common_params` (`n_ctx`, the
+  `Options` strings `ubatch:`, `parallel:`, `kv_unified` —
+  `params.kv_unified = true` by default there —, cache types from their own
+  proto fields; `params.cache_idle_slots = true`; `params.fit_params =
+  true`, grpc-server.cpp:592); the server loop is `ctx_server.start_loop()`
+  (:266).
+- Any option beginning with `-` goes to llama-server's own parser (:1302;
+  `common_params_parse(…, LLAMA_EXAMPLE_SERVER)`, :1505): the server's new
+  flags need no LocalAI code to be SET; §0's model options are for a
+  readable YAML.
+- Its RPCs post tasks through `get_response_reader()` (:1647, 2604, 3205 …)
+  and tokenise with `impl->vocab`: neither needs a context. SEVEN PLACES
+  READ ONE, `ctx_server.get_llama_context()`: `PredictStream` :2593,
+  `Predict` :3196, `Embedding` :3750 and :3832, `TokenizeString` :4570 and
+  :4581, `Detokenize` :4749 (`parse_options`, `llama_pooling_type`,
+  `common_token_to_piece`). Each has a model- or params-side equivalent and
+  must take it, or it reads null while the model is idle — and the wrapper
+  calls `TokenizeString` for every input. That is the LocalAI half of the
+  patch.
+- A request's `metadata` map reaches the backend today: the OpenAI
+  request's field (LocalAI core/schema/openai.go:265) → `RequestMetadata`
+  (core/http/middleware/request.go:459–461) → `PredictOptions.Metadata`
+  (backend/backend.proto, field 52; core/backend/options.go:673–689), read
+  in the backend for `chat_template_kwargs` (:2827, :3429). Embeddings
+  build their options with the same function
+  (core/backend/embeddings.go:130), and the VeGa wrapper copies the request
+  it forwards (`q.CopyFrom(req)`, deploy/vega/vega_wrapper.py). To confirm
+  with one request on a test copy.
+
+**llama.cpp, `tools/server/`:**
+- `load_model` (server-context.cpp:1203) builds `llama_init =
+  common_init_from_params(params_base)` (:1305) — model AND context
+  together: `common_init_result` owns both (common/common.cpp:1178–1179),
+  runs `common_fit_apply` first (:1312) and `llama_init_from_model(model,
+  cparams)` last (:1411) — then `ctx_tgt`, the slots (`slot.mem.init(ctx_tgt,
+  …)`, :1525) and the batch (`batch.init(ctx_tgt, …)`, :1584).
+- `destroy()` (:1135) frees the draft context, `llama_init` (model and
+  context) and the multimodal context; the slots also hold `mctx` and
+  `tts.ctx` (:1523–1534).
+- UPSTREAM'S SLEEPING STATE is `handle_sleeping_state` (:1151): `destroy()`,
+  and on wake `load_model(params_base)` again or `GGML_ABORT("failed to
+  reload model after sleeping")` (:1161–1164); driven by
+  `queue_tasks.on_sleeping_state` and `start_loop(sleep_idle_seconds ×
+  1000)` (:5203–5206; server-queue.cpp:278–362; llama-server's
+  `--sleep-idle-seconds`, PR #18228). Handlers wait for the wake in
+  `server_res_generator` (`wait_until_no_sleep()`, :5274–5280); a task
+  posted to a sleeping queue is not processed (server-queue.cpp:335–338).
+  It frees the WEIGHTS too — what LocalAI's idle unload did, switched off
+  for its cold starts (#398). It is NOT the vehicle for this design (§1.2).
+- What the design uses is the queue beneath it: the loop already tells an
+  empty queue and an elapsed time (`should_sleep`, server-queue.cpp:290–297)
+  and work from housekeeping (`task_resets_idle_timer`, :24: a metrics task
+  does not count).
+- No route handler reads the context: nothing in `server_routes`
+  (server-context.cpp from :5560) touches `ctx_tgt`; only `get_meta()` does,
+  for two token strings the vocab gives (:5220–5224).
+- A creation: `llama_context`'s constructor makes its own backends
+  (`ggml_backend_dev_init` per device, src/llama-context.cpp:432; held in
+  `backends`, src/llama-context.h:396); the KV cache is allocated and
+  ZEROED (`ggml_backend_buffer_clear`, src/llama-kv-cache.cpp:434); the
+  scheduler reserves the compute buffers.
+
+**ggml-sycl — what a free gives back:**
+- The op pools belong to the backend instance, and a context frees its
+  backends: `pools[]` and `host_pools[]` are members of
+  `ggml_backend_sycl_context` (ggml-sycl/common.hpp:546–548, made on first
+  use, :557); `ggml_backend_sycl_free` deletes it (ggml-sycl.cpp:6521); the
+  VMM pool unmaps every commit and frees its virtual range (:2102–2116), the
+  legacy pool frees its cached buffers (:1952–1977). The oneDNN engine and
+  stream maps are members too.
+- KV and compute buffers are `zeMemAllocDevice` / `zeMemFree` where the
+  build has `GGML_SYCL_SUPPORT_LEVEL_ZERO_API` and
+  `GGML_SYCL_USE_LEVEL_ZERO_API` is not 0 (default 1, ggml-sycl.cpp:460;
+  ggml-sycl/common.cpp:97–148): no SYCL USM pool sits between.
+- The queue and its compiled kernels are the process's (`dpct::dev_mgr`, a
+  singleton, dpct/helper.hpp:995).
+- `GGML_SYCL_MEMTRACE=1` (ggml-sycl.cpp:440, memtrace.cpp) logs every
+  allocation and free by kind.
+
+**Hazards read in the code** — each becomes a test of the patch:
+
+| | hazard | where | what the patch does |
+|---|---|---|---|
+| H1 | a reload that fails ABORTS the process | server-context.cpp:1161–1164 | a creation that fails is refused (§1.2) |
+| H2 | fit and reload disagree: LocalAI loads with `fit_params = true`, the first fit writes its result into the params, and a wake re-fits or fails (upstream #30528, closed unmerged 2026-10-14) | grpc-server.cpp:592; common/common.cpp:1312 | the context is created from the first load's resolved cparams, never through `common_fit_apply` |
+| H3 | upstream's sleep race: a handler tokenises, the loop sleeps, the task is stranded or the unload segfaults (#30012, open; unfixed at `ddf48f8`) | server-queue.cpp | nothing to guard — the loop's thread owns the context and the model stays — but P11 edits the same files: expect a rebase |
+| H4 | seven reads of a context that is null while idle, the wrapper's `TokenizeString` among them | grpc-server.cpp, above | model- or params-side equivalents |
+| H5 | the keeper takes an idle model for one partly off the card | app/resident.py `REST_FLOOR`, §6 | the keeper's rule (§1.3) |
+| H6 | every creation is a first pass after a load (M5, M2) | — | the keep-0 gate, the canary (§1.4) |
+| H7 | a keep shorter than a stream's gaps: a creation per request, unseen | — | the wrapper's count, RAGE's keep (§1.3) |
+| H8 | `load_model` does more than model + context: slots, batch, prompt cache, metrics, the chat templates (once), the draft and multimodal contexts | server-context.cpp:1203–1641 | split it — what a load does once, what each creation does; refuse draft / mmproj (§1.2) |
+| H9 | the loop checks its idle condition once a second (`max_wait_time`) | server-queue.cpp:289, :353–360 | the wait ends AT the keep's deadline: a keep in ms cannot ride a 1 s poll |
+| H10 | while the loop's thread is inside a decode, a WORKER thread takes new tasks (`yield_to_queue`, `worker_loop`) | server-queue.cpp:163–270 | creation and free belong to the loop's thread, between iterations, never to the worker |
+
+**Upstream, as searched 2026-11-11** — no issue or PR proposes a context on
+request or a weights-kept release: not a duplicate. Around it: #18228 (the
+sleep); #30012 (open: its race); #30528 (closed unmerged: re-fit on wake);
+#25271 (open: `ggml_backend_dev_reset()`, 158 MB left on CUDA after a
+sleep); #27307 (closed) and #25570 (open): exit sleeping router workers;
+#25646 (open: an Intel dGPU evicts an idle model's weights, the perf drop
+reported on Vulkan — our M16 seen by others); #26130 (open: per-device
+memory on `/metrics`). The direction on record is toward freeing MORE when
+idle; the proposal should lead with a creation's time against a full
+reload, per backend.
+
+**The patch to write (P11)** — four parts, one design:
+1. llama.cpp's server (a file under LocalAI's
+   `backend/cpp/llama-cpp/patches/`, §4): the option and its default keep;
+   `load_model` split (H8); the loop's create and free (H9, H10); the
+   keep's three rules; the refusal (H1); no re-fit (H2); `--help`, the
+   README, and server tests (`tools/server/tests/unit/`, beside
+   test_sleep.py): a model embedded before and after a creation,
+   byte-identical; a keep kept, and expired; a request without the field; a
+   0 that does not shorten; a creation refused, then retried; a request
+   arriving as the context is freed.
+2. LocalAI's backend: the seven reads (H4); the keep read from `metadata`;
+   the model options.
+3. The VeGa wrapper: the field forwarded (it is, by `CopyFrom`); the gaps
+   and the premature expiries counted and told to VeGa; the canary (§1.4).
+   The wrapper is part of every run's engine (§4).
+4. Louise: RAGE's keep on corpus requests and its controller; the keeper's
+   rule (H5); the gate's keep-0 pass. Each with its test.
+
+## 4. Our LocalAI and llama.cpp customizations (the series)
 
 Base: LocalAI master `16acc89` (llama.cpp `ddf48f8`) since 2026-11-02, the
 ONE llama.cpp engine of every model (operator's A). Each patch is described
@@ -172,7 +470,7 @@ re-gates every space — this one, if it reaches deployment.
 `LOUISE_NEAR_EXACT_MEASURED` is the one measured exception
 (near-exact-runs.md).
 
-## 4. B70 and stack pitfalls
+## 5. B70 and stack pitfalls
 
 "AE" = approved-encoders.md. Measured facts first, then what the notes call
 probable or open.
@@ -209,9 +507,9 @@ probable or open.
 
 **Probable or open:**
 - **O1** `GGML_SYCL_ENABLE_MKL_FA` (default 1; GQA ≥ 2, KV ≥ 1024, oneMKL GEMMs): "next in line", never measured (AE "Arithmetic order").
-- **O2** the ggml-sycl op pool: VMM, ON by default at `ddf48f8`, keeps committed pages for its life; legacy pool caches 256 buffers; both freed only with their owner. Whether a context's free returns memory on the B70 is UNMEASURED — §1's first question.
-- **O3** create/free time per encoder: unmeasured (§1).
-- **O4** THE GATE'S "FRESH LOADS" ARE PROCESS RELOADS (`/backend/shutdown`): they do not exercise a context re-created inside a live process. The new gate must cycle contexts in-process too (§6 step 5).
+- **O2** the ggml-sycl op pool: VMM, ON by default at `ddf48f8`, keeps committed pages for its life; legacy pool caches 256 buffers; both freed only with their owner — and the owner is the backend instance, which a `llama_context` creates and frees (§3): the BACKEND gives the memory back at a context's free. Whether the DRIVER does on the B70 is UNMEASURED — §2.
+- **O3** a creation + free's time per encoder: unmeasured (§2).
+- **O4** THE GATE'S "FRESH LOADS" ARE PROCESS RELOADS (`/backend/shutdown`): they do not exercise a context created inside a live process. The gate's keep-0 pass does (§1.4).
 - **O5** B4's second effect: no wait for the driver to report freed memory, so a second eviction can follow (Ollama waits up to 5 s) — code reading only.
 - **O6** hangs of unknown cause (`xe`, Level Zero with two runtimes on one card, or OpenVINO): STATUS ~1672–1700.
 - **O7** AE "Bugs" table: the occasional non-finite vector; the gutenberg batching incident (`EMBED_BATCH=1`).
@@ -220,7 +518,7 @@ probable or open.
 
 **The notes disagree** (settle before relying on either): AE "Known limits" says the reclaimer is "pinned off", while localai_settings.py and STATUS 2026-11-08 have it ON at 0.95 (the live value is the settings file's); the busy watchdog is recorded as 5 and as 10 min.
 
-## 5. GPU memory on this node — what the patch meets
+## 6. GPU memory on this node — what the patch meets
 
 - **The card**: 32,656 MiB (also written 32.6 GiB / 32.7 GB). Everything
   resident 2026-11-07: 30,267 MiB (92.7 %), host RAM peak 41.6 of 63.4 GB.
@@ -232,10 +530,17 @@ probable or open.
 - **`size_vram`** (LocalAI `/system`): the driver's per-process count —
   a model's grown compute buffers included. app/resident.py keeps per model
   the fewest bytes seen (AT REST) and the most (LARGEST): the budget sums the
-  at-rest sizes, the room check reads the largest. With idle release the
-  at-rest size of an opted-in encoder falls to its weights + heap: the
-  budget then admits more, and the growth margin (below) must carry the
-  contexts that come back — check that it does before the switch.
+  at-rest sizes, the room check reads the largest. With a context
+  on request an opted-in model has TWO sizes, idle (weights + heap) and
+  running, and `REST_FLOOR = 0.5` (app/resident.py:261, app/model_load.py:159;
+  `_whole`, app/resident.py:718) takes a reading under half the largest for
+  a model partly off the card: qwen3-4b idle holds ≈ 2,381 MiB (4,263 −
+  1,882) against a largest of 5,643 on file under the same name (0.42; 0.56
+  if the file was reset at the trim) — discarded or accepted by an accident
+  of ratio. Accepted, the budget admits more and the contexts' return is
+  growth the margin (below) learns only after it has peaked — M14 again;
+  discarded, the release is free memory the budget does not spend. The
+  second is the first deployment, by rule (§1.3, H5).
 - **The growth margin**: the card's count minus the at-rest sizes, each
   beat; its peak over 6 h; 3.0 GiB until measured (the night it was set:
   ≈ 28.4 GB at rest, 31.36 GB read, ≈ 2.96 GB grown). The AIMD penalty adds
@@ -258,44 +563,46 @@ probable or open.
   reranker ~0. The exact KV / compute split needs one reload per model with
   the backend's stderr captured (LocalAI's debug level).
 
-## 6. The plan, step by step
+## 7. The plan, step by step
 
 1. **Read** (this brief; CLAUDE.md invariants 1, 2, 7, 12 and the
    engineering rules; measuring.md §6; approved-encoders.md "Bitwise
    reproducibility, by vendor"; localai-bugs.md "Patches we carry" and B3,
-   B4, B10, B11; scheduling.md §6 if the round loop or the pools are
-   touched; app/resident.py's docstring).
-2. **Read the code paths** in §2 at the pinned commits and answer: who owns
-   the ggml-sycl pools; does destroying a `llama_context` destroy its
-   backends; does LocalAI's grpc-server wire upstream's sleeping state.
-3. **Measure** (§1) with München on a test copy, in a quiet window; write
-   the numbers here. Stop if the memory does not come back.
-4. **Write the patch** (`staged/`) in upstream's form — llama.cpp's server
-   tests (`tools/server/tests`, pytest) for the new sleep level, its `--help`
-   and README text — CPU tests first as P3/P4 did (a model
-   embedded before/after a context cycle, byte-identical; the idle timer;
-   a request that arrives while the context is being freed — upstream's
-   own sleep has that race, see the DEV write-up linked in shared-context.md's
-   sources), then `build.sh`.
-5. **Card gates** on a test name: `tools/vega_repro_check.py` (bit-identical
-   over fresh loads) AND a cycle check of its own — contexts freed and
-   re-created inside one live process, the fixed texts byte-identical across
-   them (the gate's fresh loads are process reloads, pitfall O4) — then `louise hold embedder
-   check <collection>` (the calibration gate, multi-load); throughput with
-   `louise dev schedule-report --bench`; card memory at rest and in use.
+   B4, B10, B11; vega.md §2, §9, §10; scheduling.md §6 and §12 — RAGE and
+   the keeper are touched; gpu-saturation-plan.md's levers; app/resident.py's
+   docstring). §3's reading is done: re-read only what a rebase moved.
+2. **Count without the card** (§2): the card record at a 500 ms keep — the
+   GB·h given back and the creations a day, per encoder; and the gaps
+   between requests as RAGE's gate times them. Write the numbers here.
+3. **Measure on the card** (§2) with München on a test copy, in a quiet
+   window: a creation + free's time and the first decode after it; the
+   memory back (`GGML_SYCL_MEMTRACE=1` beside the driver's count); the
+   bytes across creations; the per-text gaps; the soak. Write the numbers
+   here. Stop if a creation is not small against §2's acceptance, or the
+   memory does not come back.
+4. **Write the patch** (§3, P11's four parts): `staged/` first, CPU tests
+   first as P3/P4 did, in upstream's form; then `build.sh`.
+5. **Card gates** on a test name: `tools/vega_repro_check.py`; the gate with
+   keep 0, ≥ 300 creations per encoder, and a pass at RAGE's keep (`louise
+   hold embedder check <collection>`, the calibration gate, multi-load);
+   the canary seen to refuse a planted bad context; throughput with `louise
+   dev schedule-report --bench`; card memory idle and running.
 6. **Deploy on the operator's word**, bundled with #502's wrapper (one
-   re-gate of every space on the engine); BEFORE/AFTER rows: card memory at
-   rest, reclaimer evictions per hour, the first batch's latency after an
-   idle spell, chunks/s per collection.
+   re-gate of every space on the engine) and with the keeper's rule;
+   BEFORE/AFTER rows: card memory at rest and at its peak, reclaimer
+   evictions per hour, creations and premature expiries per collection, the
+   first request's latency after an idle spell, chunks/s per collection.
 7. **Upstream** (on the operator's word): an issue, then a PR to
-   ggml-org/llama.cpp (the server's sleep level, its test, its docs), and to
-   mudler/LocalAI (the YAML option through `params_parse`), with the
-   measurements of step 3 and step 6 as the evidence; the patch leaves our
-   series when upstream merges it (localai-bugs.md "Patches we carry").
+   ggml-org/llama.cpp (the server's option, its tests, its docs), and to
+   mudler/LocalAI (the model options, the keep from `metadata`, the seven
+   reads), with the measurements of steps 3 and 6 as the evidence; the
+   patch leaves our series when upstream merges it (localai-bugs.md
+   "Patches we carry").
 8. **Record**: localai-bugs.md (the new P entry), shared-context.md (the
-   measured numbers), STATUS.
+   measured numbers), vega.md (the wrapper's counts), scheduling.md (RAGE's
+   keep), STATUS.
 
-## 7. Rules that bind this work
+## 8. Rules that bind this work
 
 - Deploys and engine switches only on the operator's word; München (the
   node's session) runs everything on the node. A test copy under its own
@@ -311,398 +618,26 @@ probable or open.
 - Questions to the operator: one shape (what it is; choices with pros and
   cons, the status quo included; the recommendation and what happens if
   they say nothing).
+- RAGE, the keeper or the round loop touched: docs/notes/scheduling.md
+  FIRST and its checklist (§6); measure with `louise dev schedule-report`
+  before proposing.
+- Performance is second only to consistency (CLAUDE.md): a keep that makes
+  a context cycle is a defect, found by measuring and fixed like any other.
 
-## 8. Review, 2026-11-11 — the code read at the pins, and what it changes
+## 9. What changed from the first brief, and whose word each part is
 
-*A session without the node: nothing measured, nothing run on a card. Read:
-llama.cpp `ddf48f8` and LocalAI `16acc89` (the pins), app/resident.py,
-app/model_load.py, and upstream's issues and PRs (searched this day). Each
-line names where it was read; "to measure" marks what reading cannot settle.*
-
-**Verdict: sound, and worth the dedicated session — with the plan reordered
-and four additions.** The mechanism is small (upstream's sleeping state with
-the model kept), the largest feared unknown is answered by the code (R1), and
-no upstream issue or PR proposes a weights-kept sleep (not a duplicate). The
-gain on OUR node is smaller than §0's headline reads (R6), and the real work
-is elsewhere than the brief puts it (R3, R4, R5).
-
-### Step 2's three questions, answered
-
-- **R1. Who owns the ggml-sycl pools? The backend instance — and a
-  `llama_context` creates and frees its own.** `llama_context`'s constructor
-  calls `ggml_backend_dev_init` per device (src/llama-context.cpp:432) and
-  holds the results in `std::vector<ggml_backend_ptr> backends`
-  (src/llama-context.h:396); the pools are members of that backend's
-  `ggml_backend_sycl_context` (`pools[]`, `host_pools[]`,
-  ggml-sycl/common.hpp:546–548, created on first use, :557);
-  `ggml_backend_sycl_free` deletes it (ggml-sycl.cpp:6521), and the pool
-  destructors give everything back: the VMM pool unmaps every commit and
-  frees its virtual range (:2102–2116), the legacy pool frees its cached
-  buffers (:1952–1977). The oneDNN engine and stream maps are members too.
-  So O2's fear — an owner that outlives the context — does not hold at our
-  pin: freeing the context destroys the op pool with it.
-- **R2. KV and compute buffers go straight to Level Zero.** Where the build
-  has `GGML_SYCL_SUPPORT_LEVEL_ZERO_API` and `GGML_SYCL_USE_LEVEL_ZERO_API`
-  is not 0 (default 1, ggml-sycl.cpp:460), `ggml_sycl_malloc_device` /
-  `ggml_sycl_free_device` are `zeMemAllocDevice` / `zeMemFree`
-  (ggml-sycl/common.cpp:97–148): no SYCL USM pool sits between. What stays
-  TO MEASURE is only the driver's side — whether compute-runtime and `xe`
-  hand the pages back at the free or keep them for reuse — and what stays in
-  the process whatever is freed (the queue, the JIT-compiled kernels, the
-  ~270 MiB floor: `dpct::dev_mgr` is a process singleton,
-  dpct/helper.hpp:995, so a wake should not compile again — to measure).
-- **R3. LocalAI's backend reaches the idle timer today, and cannot survive
-  it.** Any model option beginning with `-` is passed to llama-server's own
-  parser (grpc-server.cpp:1302, `common_params_parse(…, LLAMA_EXAMPLE_SERVER)`
-  :1505), and `ctx_server.start_loop()` (:266) starts the queue with
-  `params_base.sleep_idle_seconds` (server-context.cpp:5203–5206): so
-  `--sleep-idle-seconds` already arms the timer. But the wake is not wired:
-  `wait_until_no_sleep()` is called only by upstream's HTTP layer
-  (`server_res_generator`, server-context.cpp:5274–5280), and LocalAI's RPCs
-  post through `get_response_reader()` (grpc-server.cpp:1647, 2604, 3205 …)
-  without it — a task posted to a sleeping queue is never processed
-  (server-queue.cpp:335–338 waits on `req_stop_sleeping` alone) — and they
-  read `ctx_server.get_llama_context()`, null while asleep
-  (server-context.h:79), at grpc-server.cpp:2593, 3196, 3750, 3832, 4570,
-  4581, 4749. **The LocalAI half of P11 is therefore the wake call at the
-  head of every RPC and an audit of those seven reads, not a YAML option
-  alone**; `impl->vocab` and the chat templates stay valid with the model
-  kept, which is an advantage of this level over upstream's.
-
-### What the brief does not have
-
-- **R4. A wake that cannot get its memory back is the NORMAL case of a
-  shared pool, and upstream aborts on it**: `handle_sleeping_state(false)` →
-  `GGML_ABORT("failed to reload model after sleeping")`
-  (server-context.cpp:1161–1164). Prism and kvcached have a controller per
-  card; here every process frees and takes alone, so two wakes can claim the
-  same room. On the B70 the allocation does not fail — `xe` moves buffers to
-  host RAM (M16) and the reclaimer evicts at 0.95 — elsewhere (CUDA) it
-  fails. The design needs the rule written: a failed wake leaves the server
-  asleep and REFUSES the request (503, retried), never aborts; for Louise
-  that is a deferral, not an error (CLAUDE.md, "Deferral is not failure").
-- **R5. app/resident.py reads a sleeping model as "partly off the card".**
-  `REST_FLOOR = 0.5` (app/resident.py:261, app/model_load.py:159): a
-  `size_vram` under half the largest seen is no at-rest reading (`_whole`,
-  :718). qwen3-4b asleep holds ≈ 2.4 GB (4,263 − 1,882) against a largest of
-  5,643 on file under the same name (0.42; 0.56 if the file was reset at the
-  trim): discarded or accepted by an accident of ratio, per model. Accepted,
-  the budget admits more preloads and the contexts' return is "growth" the
-  margin learns only after it has peaked — M14 again; discarded, the saving
-  is free card memory the budget does not spend. The second is the right
-  FIRST deployment (the release is headroom, not budget), and it must be a
-  rule, not a ratio: the keeper reads the sleep option from `/system` (P1
-  lists load options) and counts an opted-in model at its AWAKE at-rest size.
-- **R6. §0's "≈ 10 GB held, 3.3 GB working" is the figure for N = 0.** With
-  an idle timer the held set is every context used in the last N seconds.
-  By shared-context.md §2 nemotron runs 55.5 % of seconds and medcpt 22.6 %:
-  at N = 600 both are probably awake most of the day, and the certain saving
-  is qwen3-4b's 1.9 GB (31 s of work in 24 h), nemotron's 2.2 GB in part.
-  **The card record already answers it, with no card time**
-  (app/rage/card_record.py, per second): for N = 30, 60, 300, 600 s, the
-  GB·hours each encoder would have given back over the same 24 h, and the
-  wakes per day. That row belongs in §1 BEFORE the B70 measurement: it picks
-  N and the models, and says whether the feature pays here at all.
-  Also on the B70 the driver already moves what does not fit to host RAM
-  (34 GB resident on 32.6), so the first ~1.4 GB released only ends that
-  spill: the gain is choosing WHAT leaves the card — an idle context,
-  re-created in (to measure) milliseconds — instead of the driver's choice,
-  which can be a query model's weights (upstream #25646, open: idle weights
-  evicted from an Intel dGPU, the perf drop reported).
-- **R7. Ten cycles cannot gate a per-wake fault.** After P11 every wake is a
-  "first pass after a load" — the class of M5 (1 of 20 scores, first pass
-  only) and of M2 before its remedy (4 of 8 runs) — hundreds a day instead
-  of once per process, and no check at write time sets a vector against a
-  second computation of it. A fault at
-  rate p per wake is caught by n clean cycles with probability 1 − (1 − p)ⁿ:
-  n = 10 catches p = 5 % four times in ten; 95 % confidence needs 59 cycles
-  for 5 %, 299 for 1 %. So: ≥ 300 cycles per encoder, the comparison on the
-  FIRST answer after each wake, short and long probes (`LONG_PROBE`) both.
-  A cycle is seconds; the gate stays minutes.
-- **R8. The acceptance's denominator.** "≥ 90 % of the context's bytes" must
-  count KV + compute buffers + op pool as the BACKEND counts them, not
-  `size_vram` − the weights file (which holds whatever the process keeps:
-  upstream #25271, open, measured 158 MB left on CUDA after a FULL sleep).
-  The instrument half-exists: `GGML_SYCL_MEMTRACE=1` (ggml-sycl.cpp:440,
-  memtrace.cpp) logs every allocation and free by kind — buffers, pool_leg,
-  pool_vmm — and the device's total / free / allocated / other. Set it in
-  the test copy's env and put its lines beside the driver's count; the
-  diagnostic program is then only the create/free loop.
-- **R9. The wake must not re-fit.** LocalAI sets `fit_params = true`
-  (grpc-server.cpp:592) and `common_init_result`'s constructor runs
-  `common_fit_apply` before every load (common/common.cpp:1307–1312).
-  Upstream #30528 (closed unmerged, 2026-10-14) records that fit and sleep
-  already disagree on wake. With the weights kept there is nothing to fit:
-  the woken context is created from the cparams the FIRST load resolved,
-  and the test says so (same n_ctx, n_batch, n_ubatch before and after).
-- **R10. Upstream is moving under the same lines.** #30012 (open): the
-  sleep race — a handler tokenises, the loop sleeps, the task is stranded or
-  the unload segfaults — unfixed at `ddf48f8`; P11 edits the same functions
-  and must carry that fix or its own guard, and its test. Direction on
-  record is toward freeing MORE (#27307 exit sleeping workers, closed;
-  #25271 device reset, open; #25570 open), so the proposal should lead with
-  the wake time against a full reload, per backend.
-- **R11. Scope of "every model kind".** `destroy()` also frees the draft /
-  MTP context, the multimodal context and the TTS contexts
-  (server-context.cpp:1135–1149; slots hold `mctx`, `tts.ctx`, :1523–1534).
-  The first PR should define the context level for text models and refuse
-  (or fully sleep) a server with a draft model or an mmproj, saying so in
-  `--help`; and it cannot depend on P3/P4 (encoder-decoder is ours).
-- **R12. The names.** vLLM's level 1 moves the weights to CPU RAM and frees
-  the card whole; this level keeps the weights ON the card. It is a third
-  thing, lighter than both of vLLM's: name it by what it frees
-  (`--sleep-level context|model`, as §0 proposes) and do not number it —
-  §1's "level-1 sleep" reads as vLLM's and is not.
-
-### The plan, amended
-
-| step | as written (§6) | amended |
-|---|---|---|
-| before 3 | — | **R6, as §9 amends it: the card record at N = 1…10 s** — GB·h released and wakes per day, per encoder. No card, no build. It picks the debounce; it is no longer a reason to stop. |
-| 2 | read the code, answer three questions | done (R1–R3); left to read: nothing |
-| 3 | measure memory back, create/free time | the same, with `GGML_SYCL_MEMTRACE=1` (R8), the driver's count split `vram0` / host, and whether the wake recompiles kernels (R2) |
-| 4 | the patch | + the failed-wake rule (R4), no re-fit (R9), #30012's guard (R10), the scope (R11); LocalAI: the wake call in every RPC and the seven null reads (R3) |
-| 5 | 10 cycles | ≥ 300 cycles, first answer after each wake (R7) |
-| before 6 | "check that the margin carries it" | app/resident.py counts an opted-in model awake (R5), with its test — a Louise change, shipped with the deploy |
-
-| | pros | cons |
-|---|---|---|
-| status quo | nothing to build or re-gate; the driver's spill works today | the driver chooses what leaves the card; ~1.4 GB lives in host RAM; every new model is fitted against contexts that work 31 s a day |
-| as briefed | the card's memory follows the work; a general feature upstream lacks | LocalAI's RPCs hang or crash on the first sleep (R3); a wake under contention is undefined (R4); the keeper misreads the sizes (R5); the gate is too short (R7) |
-| amended (recommended) | the same gain, known in GB·h before any build; the three ways it fails here are closed first | more work in LocalAI's server and one Louise change; a longer gate; still one re-gate of every space on the engine |
-
-## 9. The operator's model, 2026-11-11 — idle or running, no sleep
-
-*The operator, after §8: "This is the equivalent of a semi-cold start:
-instead of loading the whole model only the context memory is requested …
-In the very moment the model doesn't need the memory anymore, it is freed …
-There is not necessarily a sleep, just idle or running models." And for a
-query meanwhile: "the contexts of the batch in queue can be pruned, or some
-other model can be evincted, or the chat processing can be postponed".
-What follows is the reviewer's opinion, not yet the operator's decision.*
-
-**It supersedes §0's "after N seconds idle" and §2's `sleep_idle_s:600`,
-and R6 with them**: R6 read the saving at N = 600; at N → 0 the headline
-holds. ≈ 24 GB at rest (34 − 10) + at most 3.3 GB of working context
-(p95 2.2) ≈ 27 GB, against 34 GB held today and the reclaimer's 31.0 GB
-line; 27–29 GB if the query path keeps its contexts. Eviction and
-postponement become corner cases, and memory moves from a margin measured
-after the fact (6 h peak, AIMD penalty) to admission before the allocation.
-
-What the engine and the code say about it:
-
-- **The unit is the model's context, not the job's.** A llama.cpp server
-  has ONE context — a KV cache for the window, compute buffers for the
-  ubatch — and our embedders run `parallel:1` (M6) with `EMBED_BATCH` 1
-  (app/config.py:111): a batch's jobs pass through the same context one
-  after another. There is nothing to return per job, and nothing lost: the
-  batch's peak is one context whatever its length. Memory returned per job
-  is Prism's elastic KV (shared-context.md §3); it pays only for a model
-  with many parallel conversations.
-- **The engine cannot see that a batch ended.** Between two jobs its queue
-  is empty; a release on an empty queue frees and re-creates the context
-  between inputs. "The very moment" is known to Louise: the last holder of
-  the model's lease leaving (app/model_pins.py `hold` / `release`). Two
-  ways to carry it: a debounce of a few seconds on the engine's idle timer
-  (`--sleep-idle-seconds` takes any N ≥ 0; no new surface; a busy period
-  costs at most one wake per N) — or an explicit release call from the
-  lease (exact; a new LocalAI call, a wire change: ask first). The first,
-  until the card record shows it wastes GB·h.
-- **A queued batch holds nothing.** Preparing the next batch's context while
-  the current one runs holds two contexts to save one creation; worth it
-  only if §1's creation time is a real share of a batch. Without it, "prune
-  the queued batch's contexts" has nothing to prune.
-- **The order when a query finds no room**: (1) queued corpus work holds
-  nothing; (2) the corpus stands aside — already the rule: a question
-  releases the corpus pins (`release_for_question`, app/rage/dispatch.py
-  `question`), and with the context on the lease that frees its contexts
-  too, after the one request already sent (a GPU request is not
-  pre-empted); (3) evict a model's weights — someone's next use pays 11–19 s;
-  (4) postpone the chat — last, and against the standing order (query work
-  highest, operator 2026-10-25). By the arithmetic above 3 and 4 should
-  almost never fire.
-- **The chat keeps its context at first.** 0.6 GB against the one path
-  where a person waits, and its cached prompt dies with the context. Corpus
-  encoders and MADLAD first (1,882 + 2,221 + 2,007 MiB of the 8,585 listed
-  in §5); the query path once its creation time is measured against a
-  person's wait.
-
-What N → 0 makes decisive (§8 amended):
-
-- §1's creation time is paid at every busy period, not after ten idle
-  minutes: it is THE go / no-go number, read as chunks/s per collection.
-- R10's race (#30012) is met all day, not once after a long idle: a
-  prerequisite, with its test.
-- R4: an acquire that fails is refused and retried by whoever arbitrates.
-- R7: thousands of first passes after a creation a day. Beside the ≥ 300
-  cycle gate, A CANARY PER CONTEXT: the wrapper embeds one fingerprint text
-  right after each creation and sets its bytes against the run's own before
-  any input — the first pass is then the canary's (M5's class), and a
-  context that does not reproduce is discarded before it writes.
-- R5 grows: the keeper and the dispatcher become the arbiter (sizes asleep
-  and awake per model, room checked before the acquire). That is a change to
-  WHAT RUNS WHEN: docs/notes/scheduling.md §6's checklist binds it.
-
-| | pros | cons |
-|---|---|---|
-| timer, N = 600 s (§0 as written) | few wakes a day; the race and a per-wake fault rarely met | ≈ 2 GB freed (qwen3-4b); the budget still measured after the fact |
-| the operator's model, per job | the finest grain | no counterpart in llama.cpp short of Prism's allocator; nothing to gain at `parallel:1` |
-| the operator's model, per model on the lease (recommended) | ≈ 6 GB freed, the card under its line with room to spare; contention decided by Louise's own priorities | a creation per busy period on the embedding path; the race fix, the canary and the arbiter are prerequisites, not refinements |
-
-## 10. Per request, with "stay warm" — the operator's form, 2026-11-11
-
-*The operator: "when llama.cpp gets a request it allocates the context
-memory; when the processing is done it frees it. A request may come with
-the flag 'stay warm' and this will make it keep the memory until a timeout,
-to prevent free/alloc back to back. Is it feasible, and efficient?" The
-reviewer's answer; nothing measured.*
-
-**Feasible — and simpler than the sleeping state §2 and §8 built on.**
-
-- **One thread owns the context.** The server's main loop creates it when
-  it takes a task and has none, and frees it when its queue is empty and no
-  keep is pending. Upstream's request handlers never touch the context —
-  none of `server_routes` reads `ctx_tgt` (server-context.cpp, from :5560);
-  they tokenise with the MODEL, which stays; only `get_meta()` reads it, for
-  two token strings the vocab gives (:5220–5224). So no handler waits for a
-  wake, and the stranded-task race (#30012) has no counterpart: **R3 shrinks
-  to LocalAI's seven reads of the context, R10 to a rebase.** The queue
-  already tells work from housekeeping (`task_resets_idle_timer`,
-  server-queue.cpp:24: a metrics task does not count).
-- **The flag travels today, with no wire change.** LocalAI copies a
-  request's `metadata` map into `PredictOptions.Metadata` (backend.proto
-  field 52; core/http/middleware/request.go:459–461 →
-  core/backend/options.go:673–689), embeddings build their options with the
-  same function (core/backend/embeddings.go:130), and the backend already
-  reads the map for `chat_template_kwargs` (grpc-server.cpp:2827). The VeGa
-  wrapper must forward the field. To confirm with one request on the test
-  copy.
-- **The standard is Ollama's `keep_alive`** (CLAUDE.md, "do not reinvent the
-  wheel"): a DURATION per request, with a server default; 0 = release when
-  done. One value instead of a flag plus a timeout, and a name upstream's
-  users know. For llama.cpp the default stays "keep" (today's behaviour) and
-  a server opts in; our opted-in models default to 0.
-
-**Efficient — only with the keep on every corpus request; one number
-decides, and it is §1's.**
-
-- Without it each request pays a creation and a free. A corpus request is
-  one input (`EMBED_BATCH` 1): a 1,000-token chunk on qwen3-4b at its gated
-  1,651 tok/s is ≈ 0.6 s, so every 60 ms of creation is 10 % of throughput.
-  A creation allocates AND ZEROES the KV cache (llama-kv-cache.cpp:434;
-  ≈ 1.1 GiB for qwen3-4b), reserves the compute buffers from the worst-case
-  graphs, and the first decode commits the op pool again. Expected in the
-  tens to hundreds of milliseconds — an expectation, not a measurement.
-- With it, creations fall to one per busy period and the cost to
-  creation ÷ the period's length. The keep's tail holds memory a few
-  seconds: nothing in GB·h. And the LAST request of a batch sent with keep 0
-  releases at once: §9's debounce and its explicit release are both this
-  one field.
-- A chat turn carries minutes, so a follow-up finds its cached prompt; the
-  query path's short steps (translate, embed, rerank) would each pay a
-  creation on a person's wait, so those models keep theirs until measured.
-- Still owed whatever the form: the canary per context and the ≥ 300 cycle
-  gate (§9, R7), and a SOAK — thousands of GB-sized allocations and frees a
-  day is a new load on the `xe` / Level Zero stack of M21, M22 and O6.
-
-| | pros | cons |
-|---|---|---|
-| per request, no keep | the least memory held; nothing to tune | a creation on every input: tens of % of embedding throughput at the expected cost |
-| per request with a keep duration (recommended) | one creation per busy period; exact release on a batch's last request; a known standard; no wire change | every caller must set it right — a corpus request without it is a silent slowdown, so the client sets it, never a person |
-| a server-side timer alone (§9's debounce) | no caller involved | no exact release; one timeout for corpus and chat alike |
-
-### The keep's length — seconds, not milliseconds (2026-11-11)
-
-*The operator: "Louise RAGE creates the work batches, thus the stay warm
-flag keeps the context also between jobs. The timeout for the warm state
-can then be just a few milliseconds." The reviewer: the premise holds, the
-length does not follow from it.*
-
-RAGE sets the keep on every corpus request, so no person can forget it —
-right. But the keep must outlast the longest gap between two requests of
-one stream AS THE ENGINE SEES IT, and what is on record is not milliseconds:
-
-| the gap | measured | where |
-|---|---|---|
-| wikidata, 4 lanes, requests filled | card idle 11.1 s/min over ~832 requests/min ≈ 13 ms a request | gpu-saturation-plan.md, lever 2's table |
-| wikipedia, 2 lanes, producer-bound | 25.6 s/min over ~153 requests/min ≈ 170 ms a request | the same |
-| the corpus filling a query's gaps | it stands aside 9–37 ms between rerank variants, and for whole steps of a question (3.4–4.1 s of gaps in 11.6–16.7 s) | scheduling.md §12 |
-| stream boundaries | whole idle seconds: 0.1–0.3 s/min | gpu-saturation-plan.md |
-
-(Card-idle figures: an upper bound on the engine's empty queue, since part
-of each is the engine's own turnaround with a request in hand. The gap at
-the engine is NOT measured; the VeGa wrapper sees every request arrive and
-every answer leave and can count it per run, beside `GET /vega/passes`.)
-
-The two errors do not cost the same. A keep shorter than the gap frees and
-re-creates the context on every request: silent, and tens of % of
-throughput at the expected creation time — worst while the corpus fills a
-question's gaps, when a person is waiting. A keep longer than needed holds
-one context for its length after a busy period ends: at 2 s and a thousand
-busy periods a day, 2.3 % of a day of ≤ 2.2 GB, on a card with ~4 GB to
-spare at its worst second (§9).
-
-So: 1–2 s to start, set by RAGE above the 99.9th percentile of the measured
-gap, never by hand. The exact release stays available where RAGE knows the
-end — keep 0 on a stream's last request — and one verb is still owed to the
-arbiter for the rare query that finds no room (R4): release now.
-(Withdrawn below: at 500 ms standing aside is the release, and a request
-may only extend the keep.)
-
-| | pros | cons |
-|---|---|---|
-| a few milliseconds | memory back at once; nothing held beyond the work | shorter than every measured gap but wikidata's: a creation per request, unseen |
-| 1–2 s, set by RAGE from the measured gap (recommended) | no thrash across lanes, producer stalls and a question's short gaps; the tail costs nothing measurable | memory returns up to 2 s late; one more number RAGE measures |
-| a long keep (minutes) with exact release only | never thrashes | a missed release holds the context: the timer design of §0 again |
-
-### 500 ms, logged, passed in milliseconds (2026-11-11)
-
-*The operator: "it looks that 500ms are a safe margin; we can log expired
-stay warms for improvement and also pass the timeout in the argument in ms
-(0 no stay warm)". The reviewer agrees with all three, and pins what each
-needs.*
-
-- **500 ms is a sound START, not yet a safe margin.** It is three times the
-  worst mean on record (wikipedia's ~170 ms) — but the record has means, not
-  tails. It is also about what a creation is expected to cost, which is the
-  named rule for this choice (CLAUDE.md, "the algorithm with a name"): SKI
-  RENTAL / the break-even time of power management — hold a resource idle
-  for as long as getting it back would cost, and the total is never worse
-  than twice the best possible. And it withdraws a verb: when a question
-  claims the card the corpus stands aside and its context is gone within
-  0.5 s by itself, so the arbiter needs no "release now".
-- **Log the PREMATURE expiries, not the expiries.** Every busy period ends
-  with one, by design; that is no signal. The signal is a creation that
-  follows a free closely: at each creation, the milliseconds since the
-  free, the keep in force and the creation's own time. Counted by the VeGa
-  wrapper, which owns the llama.cpp child and whose counts are kept (the
-  backends' own lines are not, at LocalAI's info level, §5) — per run, beside
-  `GET /vega/passes`, and attributed to a collection by RAGE. Then RAGE
-  raises the keep itself when premature expiries pass a share of its
-  requests and lowers it slowly, as it sets its lanes (AIMD,
-  gpu-saturation-plan.md lever 3): a number the system finds, never typed
-  (RULE 2).
-- **Milliseconds in the request, 0 = none — with three rules written down:**
-  1. ABSENT IS NOT 0. A request without the field takes the model's default
-     (its YAML), so a client that does not know the field — a warm, a probe,
-     a person's curl — cannot make the context cycle.
-  2. A REQUEST ONLY EXTENDS: the deadline is the latest of those asked, never
-     the last. Otherwise a query's 0 on an encoder the corpus shares (a
-     symmetric space's one encoder) cancels the stream's keep. A stream's
-     last request with 0 then frees up to 500 ms late: nothing.
-  3. The clock starts when the request's answer is complete, and only model
-     work counts (`task_resets_idle_timer`'s precedent: a metrics task does
-     not).
-  An integer of milliseconds departs from Ollama's `keep_alive` (seconds, or
-  a duration string) because the value is under a second; say so upstream.
-- **The gate gets simpler.** The keep is RAGE's setting and no part of a
-  run's identity, PROVIDED bytes are identical across creations — and that
-  is proved by running the existing gate with keep 0: every fingerprint
-  text then meets a new context, which is R7's cycle test, at the worst
-  case, with no instrument of its own.
-
-| | pros | cons |
-|---|---|---|
-| 500 ms, fixed, logged | simple; about the break-even; standing aside frees within 0.5 s | a collection whose gaps run longer cycles until someone reads the log |
-| 1–2 s, fixed (the reviewer's earlier answer) | above every mean on record with more room | still a guess about tails; memory back later for no measured reason |
-| 500 ms to start, raised and lowered by RAGE from the premature expiries (recommended) | each collection finds its own keep; no hand tuning; the log is the controller's input | one more small controller in RAGE, with its test |
+- **The first brief** (d058f93): the context freed after N idle seconds, as
+  a level of llama.cpp's sleep. Its §3–§5 and §7 are §4–§6 and §8 here,
+  unchanged but for O2–O4, the keeper's paragraph in §6 and two rules in §8.
+- **The review of the code** (ce7ad03 … e9f35bd; §8–§10 of e9f35bd's text,
+  with the exchange that led here): §3.
+- **The operator's** (§1.1, and §0's general design): the semi-cold start;
+  idle or running, no sleep; allocated on the request, freed when the work
+  is done; the keep in the request, in ms, 0 = none; RAGE sets it; 500 ms;
+  expired keeps logged; the order when a query finds no room.
+- **The review's — written into the design, NOT yet the operator's word:**
+  the keep's three rules; the loop's thread owning the context; the
+  refusal; no re-fit; the first version's scope; the premature expiry as
+  the signal, and RAGE's controller; the keeper counting an opted-in model
+  at its running size; the gate with keep 0 and ≥ 300 creations; the
+  canary; §2's acceptance.

@@ -60,6 +60,16 @@ measured (published figures disagree).
   comes back on the B70. For a dedicated session: [idle-context-brief.md](idle-context-brief.md) (code paths, the
   series, 27 measured B70 pitfalls + 9 open, the memory facts, the plan). Corrected the same day: ggml-sycl's VMM
   op pool is ON by default at our pin (PR #29265, which would have turned it off, was closed unmerged).
+- **A model's context on request — the design settled in review** (operator, the same day; the commits' clock reads
+  11-11 where this day's entries say 11-12): no idle timer and no sleep. llama.cpp allocates a model's context when a
+  request arrives and frees it when the work is done; a request carries a keep in ms (0 = none) that holds it after
+  the answer; RAGE sets it on every corpus request, 500 ms to start; expired keeps are logged. ≈ 24 GB at rest + at
+  most 3.3 GB working with every model opted in; ≈ 26.5 GB at rest and under 30 GB at the peak in the first
+  deployment (corpus encoders + MADLAD), against ~34 GB held and the reclaimer's 31.0 GB line. The code is read at the
+  pins — the op pools die with the context; LocalAI's backend reads a context in seven places; the keep travels in
+  the request's `metadata`, no wire change — and NOTHING IS MEASURED OR BUILT.
+  [idle-context-brief.md](idle-context-brief.md), rewritten: §1 the design, §2 what to measure first, §3 the code
+  and its ten hazards, §9 whose word each part is.
 - **Inputs computed in more than one pass, counted** (operator, 11-12: "for future trimming improvements we
   should gracefully log when a text is splitted"): the VeGa wrapper counts every answer's tokens against the
   load's ubatch and tells VeGa (`kind: passes`); VeGa logs when the inputs over it grow and serves every run's
