@@ -45,7 +45,11 @@ measured (published figures disagree).
   nothing when a Bluetooth 16/8 kHz input meets a 48 kHz context), says in plain words when no sound or only
   silence comes (a tap used to end such a recording without a word), and reports every recording to the node's
   log (`voice: microphone …`: device label, rates, frames, peak, how it ended, the VAD's note). OPEN: one try in
-  the car after the web deploy, then the log line says which of the three it is.
+  the car after the web deploy, then the log line says which of the three it is. READ SO FAR (München, logs only):
+  ZERO `POST /v1/audio/transcriptions` in the web access log since its restart (2026-11-10T23:21:49Z, 941 requests);
+  LocalAI's last transcription 11-10 17:31Z. A try in the car since then sent no clip at all — the browser side:
+  the microphone refused (a line said so), or no sound reached the page, where the old page's recording never
+  ended by itself (its 60 s bound lived in the sample callback) and a tap ended it without a word — #497's case.
 - **Hands-free voice input** (operator, 11-11: "click to activate and automatically ask at the end of the speech,
   then automatically tts of the answer"): the microphone's question is asked as soon as the recording ends (the
   page's switch decides search or answer) and its answer read by itself; the spoken text replaces the question
