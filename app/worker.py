@@ -19,6 +19,7 @@ this, only collections[0] was ever discovered/ingested at all — a second
 configured collection was silently, permanently never touched.
 """
 import errno
+import re
 import json
 import os
 import signal
@@ -2080,6 +2081,8 @@ def _embed_parallel(con, collection, recipe, *, slots: int | None = None,
             if transient_failure(e):
                 if endpoint_misconfigured(e):
                     wrong_endpoint.append(e)    # the pause is made on this thread's caller
+                if resources_exhausted(e):
+                    exhausted.append(e)         # said on this thread's caller, with the census
                 return (row, None, DEFERRED, False)
             return (row, None, f"{type(e).__name__}: {e}"[:400], False)
 
@@ -2129,6 +2132,7 @@ def _embed_parallel(con, collection, recipe, *, slots: int | None = None,
     done = deferred = 0
     wrong_endpoint: list[BaseException] = []   # 404/401/…: the collection's embedding pauses
     timed_out: list[BaseException] = []        # read timeouts: the endpoint held as busy
+    exhausted: list[BaseException] = []        # out of files or space: said with the census
     answered_here: list[bool] = []             # a document the encoder answered
     endpoint = encoder_timeouts.endpoint_of(recipe)
     place = str(collection.manifest_path)
@@ -2304,6 +2308,8 @@ def _embed_parallel(con, collection, recipe, *, slots: int | None = None,
             for c in lent:
                 c.close()
             lent.clear()
+    if exhausted:
+        say_exhausted(con, "embed", exhausted[-1])
     if wrong_endpoint:
         _pause_embedding(con, collection, wrong_endpoint[-1])
     elif done:
@@ -4076,6 +4082,49 @@ def _say_platform_missing(con, collection, stage: str, exc: BaseException) -> No
                  f"is marked: the deploy that brings it resumes them all")
 
 
+#: the process's or the host's own resources — never a document's (CLAUDE.md:
+#: "Deferral is not failure"): open files, the process's (EMFILE, 24) or the
+#: system's (ENFILE, 23), and space (ENOSPC, 28; EDQUOT, 122). Lance says them
+#: in its own words ("Too many open files (os error 24)"). Memory is NOT here:
+#: a document too large to embed fails the same way every time, and deferred
+#: it would hold its collection's round for ever.
+_EXHAUSTED_ERRNOS = frozenset({errno.EMFILE, errno.ENFILE, errno.ENOSPC, errno.EDQUOT})
+_EXHAUSTED_TEXT = re.compile(r"os error (?:24|23|28|122)\b|too many open files|"
+                             r"no space left on device|disk quota exceeded", re.IGNORECASE)
+_exhausted_said = [0.0]
+
+
+def resources_exhausted(exc: BaseException) -> bool:
+    """Did this fail because the process ran out of open files, or the disk
+    of space (München, 2026-11-11: normattiva:5853072486171192420 was written
+    "embed: RuntimeError: lance error: … Too many open files (os error 24)"
+    and left every selection)? The cause and context chain is read too."""
+    seen: set[int] = set()
+    e: BaseException | None = exc
+    while e is not None and id(e) not in seen:
+        seen.add(id(e))
+        if isinstance(e, OSError) and e.errno in _EXHAUSTED_ERRNOS:
+            return True
+        if _EXHAUSTED_TEXT.search(str(e)):
+            return True
+        e = e.__cause__ or e.__context__
+    return False
+
+
+def say_exhausted(con, stage: str, exc: BaseException) -> None:
+    """The deferral said with what holds the files, at most once a minute
+    (app/fdlimit.py `census`): the next exhaustion names its holder."""
+    now = time.time()
+    if now - _exhausted_said[0] < 60.0:
+        return
+    _exhausted_said[0] = now
+    from . import fdlimit
+    db.log_event(con, "warn", stage,
+                 f"{stage} deferred — the process ran out of a resource ({type(exc).__name__}: "
+                 f"{str(exc)[:200]}); {fdlimit.said(fdlimit.census())}. The documents are "
+                 f"untouched and retried")
+
+
 def transient_failure(exc: BaseException) -> bool:
     """The moment's fault, not the document's: the encoder away or busy,
     the manifest or the vector store held by another writer. ONE test for
@@ -4091,6 +4140,7 @@ def transient_failure(exc: BaseException) -> bool:
     at once or pauses the collection's embedding and says why."""
     return (endpoint_unavailable(exc) or manifest_contended(exc)
             or vector_store_contended(exc) or run_not_validated(exc) or platform_missing(exc)
+            or resources_exhausted(exc)
             # the vector table lacks the validity columns the collection
             # declares: the TABLE's state, repaired once by `hold vectors
             # validity-columns`; every document defers until then (2026-10-13)
@@ -4176,6 +4226,11 @@ def _execute_step(con, collection, stage, row) -> bool:
             db.log_event(con, "warn", stage,
                          f"{stage} deferred — {e}; the documents are untouched "
                          f"and will be retried")
+            return False
+        if resources_exhausted(e):
+            # the process out of open files, or the disk out of space: the
+            # node's state, never the document's (2026-11-11)
+            say_exhausted(con, stage, e)
             return False
         if vector_store_contended(e):
             # the vector store's optimistic concurrency: another writer or
@@ -6253,6 +6308,10 @@ def _register_stack_dump() -> bool:
 
 @_ends_stop_watch
 def run_forever():
+    # open files: the soft limit raised to the hard one (app/fdlimit.py;
+    # 2026-11-11, the worker met 1024 of its 524288)
+    from . import fdlimit
+    fdlimit.raise_soft()
     # the worker's role for the vector store: one bounded Lance Session for
     # every table it opens (app/embeddings.py `use_worker_caches`)
     embeddings.use_worker_caches()

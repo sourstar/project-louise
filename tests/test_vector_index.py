@@ -899,3 +899,26 @@ def test_a_table_indexed_on_book_id_before_gets_its_lang_bitmap_in_its_own_step(
     out = vector_index.ensure(collection)
     assert out["kind"] == "bitmap" and out["column"] == "lang"
     assert vector_index.stats(collection)["lang_indexed"] is True
+
+
+def test_a_process_out_of_open_files_defers_the_document_instead_of_erroring_it(collection, monkeypatch):
+    """München, 2026-11-11: normattiva:5853072486171192420 was written "embed:
+    RuntimeError: lance error: … Too many open files (os error 24)" and left
+    every selection. The fault was the worker's (soft limit 1024)."""
+    from app import db, embeddings, worker
+    _fill(collection, 10)
+    con = db.connect(collection)
+    con.execute("INSERT INTO documents(uid,source,native_id,path,in_scope,rdf_done,fts_done,"
+                "embed_done) VALUES('g:1','g','1','/x',1,1,1,0)")
+    row = con.execute("SELECT * FROM documents WHERE uid='g:1'").fetchone()
+    monkeypatch.setattr(worker, "_load_chunks",
+                        lambda r, c: [{"id": "g:1:0:1", "seq": 0, "chapter": "", "text": "t"}])
+    monkeypatch.setattr(embeddings, "upsert_book", lambda *a, **k: (_ for _ in ()).throw(RuntimeError(
+        "lance error: LanceError(IO): Unable to walk dir: Too many open files (os error 24)")))
+    monkeypatch.setattr(worker, "_exhausted_said", [0.0])
+    assert worker._execute_step(con, collection, "embed", row) is False, "deferred"
+    got = con.execute("SELECT embed_done, error, retries FROM documents WHERE uid='g:1'").fetchone()
+    assert got["embed_done"] == 0 and got["error"] is None and got["retries"] == 0, dict(got)
+    events = [r["message"] for r in con.execute("SELECT message FROM events WHERE level='warn'")]
+    assert any("ran out of a resource" in m and "open file(s)" in m for m in events)
+    con.close()

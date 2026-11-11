@@ -7895,6 +7895,8 @@ def main(argv=None) -> int:
             faulthandler.register(signal.SIGUSR1, all_threads=True, chain=False)
         except (ValueError, OSError, AttributeError, RuntimeError):
             pass
+    from app import fdlimit
+    fdlimit.raise_soft()                 # every command: the soft open-files limit to the hard one
     argv = list(sys.argv[1:] if argv is None else argv)
     if len(argv) >= 2 and argv[0] == "share" and argv[1] not in _SHARE_VERBS:
         argv.insert(1, "collection")              # `share <collection>` (07 §7.3)
