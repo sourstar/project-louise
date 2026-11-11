@@ -45,6 +45,8 @@ STATIC = Path(__file__).parent / "static"
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    from . import fdlimit
+    fdlimit.raise_soft()                 # the soft open-files limit to the hard one (app/fdlimit.py)
     try:
         # PER-COLLECTION (invariant 1): one collection whose space does not
         # match is not served, and the node keeps the rest. The web process

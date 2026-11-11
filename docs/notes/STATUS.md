@@ -20,6 +20,24 @@ measured (published figures disagree).
 
 ### 2026-11-11 (München)
 
+- **Out of open files: a deferral now, and the limit raised — BUILT, not deployed** (München and the legal-collections
+  session, 11-11). The worker held its soft limit of 1024 open files (hard 524288) twice, at 12:51:26Z (29 lines) and
+  12:57:51Z (13), and normattiva:5853072486171192420 was written "embed: RuntimeError: lance error: … Too many open
+  files (os error 24)", which took it out of every selection. Two defects, both fixed:
+  - **Exhaustion is the node's, never the document's** (CLAUDE.md "Deferral is not failure"): `worker.resources_exhausted`
+    (EMFILE, ENFILE, ENOSPC, EDQUOT, or Lance's "os error 24/23/28/122", down the cause chain) is a transient failure
+    in both embed paths and every stage. The deferral is logged at most once a minute WITH A CENSUS of what holds the
+    files, by kind (`app/fdlimit.py census`: lance, sqlite, -wal, -shm, text-index, socket, pipe), so the next time names
+    its holder. Memory is left out: a document too large to embed would defer for ever.
+  - **The soft limit raised to the hard one at every start** (worker, web, every command; `fdlimit.raise_soft`) — the
+    standard for a program that does not use `select()` (systemd's guidance; Go's runtime since 1.19). In-process, so
+    the TrueNAS app and supervised passes get it without a compose `ulimits` line.
+  - OPEN: what held ~1024 files then. After the deploy, München reads the census and `ls /proc/<worker>/fd` by kind
+    once now and once an hour later (a leak grows, a working set does not). The one document gets the card's "clear
+    errors & retry".
+  - Tests: tests/test_fdlimit.py, tests/test_vector_index.py (the serial path), tests/test_worker_parallel_embed.py
+    (the parallel path, "files").
+
 - **Ask: "save pdf" — BUILT, not deployed** (operator, 11-11, choice A: the server makes the file): beside "read aloud", the question, the answer and every reference as the reader saw them, with the original source's link and this node's reader link; A4, or Letter in the Settings. WeasyPrint 70.0 (CSS Paged Media), nothing fetched; Pango + Noto fonts in the image (~140 MB). [ask-pdf.md](ask-pdf.md). Web deploy (a new image) on the operator's word.
 - **Speech to text on the processor's integrated Radeon — LIVE 2026-11-11** (operator: "Keep it in igpu, the reserved 512 MB are otherwise unused"): `parakeet-cpp-multilingual-diarization-speakers-igpu` on `vulkan-parakeet-cpp` (RADV), RTF 0.158 running / 0.161 paused against the CPU's 0.090, 0.39 backend cores against 3.94, 21/21 transcripts identical (stt-on-igpu.md §6); back is `louise node speech set --stt parakeet-cpp-multilingual-diarization-speakers`; open: its cost to a running embed pass. Before: parakeet ran on LocalAI's CPU backend; LocalAI's gallery has `vulkan-parakeet-cpp` (Mesa RADV, the first choice for the RDNA 2 iGPU) and `rocm-parakeet-cpp` (gfx1036 not supported by ROCm). The brief — inventory, CPU baseline, the iGPU in the live LocalAI (render node, the Vulkan build, the device pinned), the checks: [stt-on-igpu.md](stt-on-igpu.md). §7 (operator, 11-11: "processed in chunks … the result is in realtime"): A, transcribe at the first pause inside the page's 1.5 s wait (recommended), B segments at pauses, C LocalAI's Realtime API with a streaming model. Wiring DECIDED (operator, 11-11): the SAME LocalAI instance, the live STT may move to the iGPU for testing ("not a production system yet"). Nothing installed or measured. CODE READY (11-11, operator: "without changing the speech processing logic: do it at the end of the speech"; §7 not built): `tools/stt_igpu.py` (`yaml`, `bench`, `diff`) and the resident keeper counting a model on another card at 0 (probe `ns_pid`) — stt-on-igpu.md §8.
 - **Image generation — FLUX.1 Krea [dev], measured LATER in a separate session** (operator, 11-11: "A but write it down for a future separated session"): LocalAI's `flux.1-krea-dev-ggml` (stable-diffusion.cpp) is 17.3 GB of files at Q4_K_M (T5-XXL fp16 9.8 of it), 7.3 GB with the text encoders on the CPU; the node lists it at 12.7 GB, never loaded; it fits beside the set only after context on request, on demand. The brief, the steps and the rules: [image-generation-krea.md](image-generation-krea.md). Nothing installed or measured.

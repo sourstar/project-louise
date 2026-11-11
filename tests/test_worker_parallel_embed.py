@@ -208,7 +208,7 @@ def test_writes_of_other_documents_cost_no_check(collection, monkeypatch):
     assert checks == [], "no check for this process's writes of other documents"
 
 
-@pytest.mark.parametrize("failure", ["loading", "lock"])
+@pytest.mark.parametrize("failure", ["loading", "lock", "files"])
 def test_transient_failures_leave_documents_untouched_in_the_parallel_path(
         collection, monkeypatch, failure):
     """This path asked only whether the encoder was unreachable, so on
@@ -221,6 +221,11 @@ def test_transient_failures_leave_documents_untouched_in_the_parallel_path(
     def fail(texts, timeout=300, recipe=None, query=False):
         if failure == "lock":
             raise VectorWriteBusy("could not acquire the vector write lock: database is locked")
+        if failure == "files":
+            # München, 2026-11-11: normattiva:5853072486171192420 was written this
+            raise RuntimeError("lance error: LanceError(IO): Generic LocalFileSystem error: Unable "
+                               "to walk dir: Too many open files (os error 24), "
+                               "lance-io-13.0.0/src/object_store.rs:1483:22")
         req = httpx.Request("POST", "http://gpu/v1/embeddings")
         try:
             raise httpx.HTTPStatusError("x", request=req,
@@ -233,6 +238,11 @@ def test_transient_failures_leave_documents_untouched_in_the_parallel_path(
     rows = con.execute("SELECT error, retries, embed_done FROM documents").fetchall()
     assert all(r["error"] is None and r["retries"] == 0 and r["embed_done"] == 0
                for r in rows), "a deferral writes nothing onto a document"
+    if failure == "files":
+        said = [r["message"] for r in con.execute(
+            "SELECT message FROM events WHERE stage='embed' AND level='warn'").fetchall()]
+        assert any("ran out of a resource" in m and "open file(s)" in m for m in said), \
+            "said once, with what holds the files"
 
 
 # ---- one read and one commit per batch (2026-09-15) ------------------------
