@@ -20,6 +20,15 @@ measured (published figures disagree).
 
 ### 2026-11-11 (München)
 
+- **Philippe on about 10 s, keeping the speaker's pauses** (operator, 11-12: "assemble the most meaningful parts
+  of the whole clip in a clip of about 10s. Beyond the pure voice to be, the speaker has a distinct style way to
+  make pauses between words and sentences"): `tools/voice_reference.py` (tests/test_voice_reference.py). It cuts the
+  27.75 s original into parts at its pauses (silencedetect's measure, threshold from the clip's own floor) and places
+  the known transcript's words in them (the node's STT, difflib). Then it assembles 9–11 s of whole sentences and
+  clauses, at most 3 parts. Every pause is one of the speaker's own, at its own length and with its own room tone;
+  parts join only across the same kind of boundary, and the clip ends on a sentence. Three different candidates,
+  ranked by pause style, sound coverage, level, joins and length. The operator's ear decides. München runs it, makes
+  each candidate's fixed sentences (it, en; RTF), the operator listens; live only on the operator's word.
 - **Philippe's voice profile metadata fixed** (`1c834741-…`, LocalAI config mount
   `voice-profiles/1c834741-3826-4990-8046-388ab4e9607e/`). profile.json still described the 27.75 s original
   (27,748 ms, its full transcript in references[0]) while the file served, `reference.wav`, is the 7.90 s cut of
