@@ -122,8 +122,14 @@ ones), and `_next_book` selects no fts work for it — so its documents waiting 
 the writer cost no round. `hold collection show` says whose index a collection
 reads (`text_index`).
 
-**Measured: nothing yet.** The node holds no sister group today; the first
-same-layers sister (case J) is the first measurement — the carry's linked
-bytes, the boot's `settle` (its `reset_differing` compares a manifest's rows
-on threads, ~O(rows)), and the reader's copy rounds (`fts` log lines "copied
-N documents' index marks from W").
+**Measured (2026-11-11, synthetic, this repository's container, 4 cores).**
+The join's compare (`reset_differing`) on two 1,000,000-row manifests
+(201 MB each), one row in a thousand differing, the WAL checkpointed before
+each pass: 11.9 and 11.6 µs a row in one process, 4.3 and 4.4 µs on 4
+processes (`parallel.each_part`) — 2.7×. A thread pool gave nothing (10.9 /
+11.3 / 11.3 µs on 1 / 4 / 8 threads at 50,000 rows: the per-row work holds
+the GIL), so the compare runs in processes. Extrapolated: pubmed's 40 M rows
+≈ 3 min on 4 processes, once, at the boot that joins. The first same-layers
+sister (case J) is the first measurement on the node — the carry's linked
+bytes, the boot's `settle`, and the reader's copy rounds (`fts` log lines
+"copied N documents' index marks from W").
