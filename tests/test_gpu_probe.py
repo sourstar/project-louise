@@ -445,3 +445,24 @@ def test_with_no_split_from_the_kernel_nothing_is_guessed(proc):
     assert gp.host_memory(proc / "978631") == (None, None), "no status file: the process is gone"
     madlad = gp.scan()[PDEV][1]
     assert (madlad.ram, madlad.mapped) == (None, None) and madlad.vram > 0, "still listed"
+
+
+# ---------------------------------------------------------------- the pid as its container numbers it
+
+def test_a_process_pid_in_its_own_namespace_is_read_for_the_resident_keeper(proc):
+    """docs/notes/stt-on-igpu.md: LocalAI's `/system` gives a backend's pid
+    as LocalAI's container numbers it; the probe sees the host's. `NSpid`'s
+    last field is the former — how app/resident.py tells on which card a
+    model is."""
+    (proc / "9317" / "status").write_text(STATUS + "NSpid:\t9317\t4211\n")
+    assert gp.ns_pid(proc / "9317") == 4211
+    (proc / "978631" / "status").write_text("Name:\tserver\nNSpid:\t978631\n")
+    assert gp.ns_pid(proc / "978631") == 978631, "outside a container: the host's pid"
+    assert gp.ns_pid(proc / "1034812") is None, "no status: not read"
+    got = {p.pid: p.ns_pid for p in gp.scan()[PDEV]}
+    assert got == {9317: 4211, 978631: 978631, 1034812: None}
+    # it travels to the web and the worker, and an older probe's answer still reads
+    snap = gpu.GpuSnapshot(devices=(gpu.GpuDevice("card1", PDEV, "xe", "0x8086", "0xe223", None, None, 1, 1,
+                                                  processes=tuple(gp.scan()[PDEV])),))
+    back = gpu.from_json(json.loads(json.dumps(gpu.to_json(snap))))
+    assert [p.ns_pid for p in back.devices[0].processes] == [4211, 978631, None]
