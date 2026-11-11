@@ -906,16 +906,24 @@ the node paused for each run. **All three encoders gave the SAME BYTES over
 - The node's LocalAI (v4.12.1, upstream) lists no `load_options` in
   `/system`. Louise now reads the option from the answering run's
   statement (#524).
-- **Nemotron at keeps of 50–300 ms** (the operator: "anything between 20 and
-  500 ms?"), byte-equal throughout. Production batch, 4 lanes: 1 creation in
-  13 requests at every keep. Singles 100 ms apart:
+- Between 20 and 500 ms (the operator's question; Nemotron test copy,
+  10:39–10:52Z, node paused, byte-equal throughout;
+  `/mnt/ssd3/louise-build/cod/measure/cod-test-nemotron-embed-keeps.json`):
 
-  | keep | creations in 30 | median latency |
-  |---|---|---|
-  | 50 ms | 30 | 92 ms |
-  | 100 ms | 30 | 108 ms |
-  | 150, 200, 300 ms | 1 | 36–37 ms |
+  | keep | 200 texts, batch 16, 4 lanes: creations in 13 requests | singles 100 ms apart: creations in 30 | singles' median latency |
+  |---|---|---|---|
+  | 20 ms | 1 | 31 | — |
+  | 50 ms | 1 | 30 | 92 ms |
+  | 100 ms | 1 | 30 | 108 ms |
+  | 150 ms | 1 | 1 | 37 ms |
+  | 200 ms | 1 | 1 | 37 ms |
+  | 300 ms | 1 | 1 | 36 ms |
+  | 500 ms | 1 | 0 | — |
 
+  At production batch with 4 lanes every keep from 20 ms holds the context
+  (the one creation is the first). For requests 100 ms apart, the threshold
+  is the gap plus the client's turnaround: 150 ms and up hold the context,
+  100 ms and below recreate it every time.
 - **A CREATION'S COST, MEASURED AS SUCH** (München, the same day; short
   texts of 512 tokens, the node paused, every vector byte-checked, 2.5 s
   between cells and the keep-2,000 baseline last). The median latency of a
