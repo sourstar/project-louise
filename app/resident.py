@@ -107,6 +107,18 @@ first, which the system decides (RULE 2: no list typed):
   the margin, at once; the penalty HALVES after each PENALTY_HALVING_S
   (2 h) without another such eviction. Kept in the file; said ("the budget
   shrank by N MiB: X was evicted M min after its load") and shown.
+- A MODEL ON ANOTHER CARD COSTS THIS ONE NOTHING (docs/notes/stt-on-igpu.md,
+  2026-11-11: speech to text on the processor's integrated Radeon, served by
+  the same LocalAI). LocalAI's `size_vram` is the driver's per-process
+  count on whatever card the backend holds, so an iGPU model's bytes would
+  be counted against the B70's budget, and subtracted from the B70's count
+  in the margin's sample. The GPU probe gives each process's pid as its own
+  namespace numbers it (`ns_pid`, = `/system`'s backend pid): a model whose
+  backend holds memory on another card and none on this one is remembered
+  ON ANOTHER CARD (`Memory.elsewhere`, in the file) — counted at 0, left out
+  of the margin's sum, never room-checked — until it is seen on this card.
+  A probe that gives no `ns_pid` (one deploy behind) tells nothing apart:
+  every model counts as before.
 - THE SET IS FILLED BY PRIORITY, highest first, each model at its at-rest
   size (one seen only at its largest: at that, on the side of caution); a
   model seen loaded holding no VRAM (on the CPU) costs 0 and always fits.
@@ -365,8 +377,9 @@ def set_log(fn: Callable[[str, str], None]) -> None:
 def reset() -> None:
     """Forget the last beat, every model's history and the budget's memory
     as this process holds it — the file stays, as a restart finds it (tests)."""
-    global _last, _last_why, _last_switches, _memory, _out_said, _write_failed, _orphans_at
+    global _last, _last_why, _last_switches, _memory, _out_said, _write_failed, _orphans_at, _pids_seen
     with _lock:
+        _pids_seen = (frozenset(), frozenset())
         _last, _last_why, _last_switches = {}, None, Switches()
         _track.clear()
         _memory, _out_said, _write_failed = None, frozenset(), False
@@ -536,7 +549,26 @@ def _card() -> tuple[int, int] | None:
     if not known:
         return None
     d = max(known, key=lambda d: d.attributed)
+    here = frozenset(p.ns_pid for p in d.processes if p.ns_pid is not None)
+    there = frozenset(p.ns_pid for o in devices if o is not d for p in o.processes
+                      if p.ns_pid is not None) - here
+    global _pids_seen
+    with _lock:
+        _pids_seen = (here, there)
     return int(d.vram_total), int(d.used)
+
+
+#: (backend pids on this card, backend pids on another card and not this
+#: one), as the last `_card` read them — namespace pids, as `/system` gives
+#: them; both empty where the probe gives none
+_pids_seen: tuple[frozenset[int], frozenset[int]] = (frozenset(), frozenset())
+
+
+def _elsewhere(r: "Resident") -> bool:
+    """Whether `r` was last seen with its backend on another card."""
+    mem = _memory_now()
+    with _lock:
+        return r.key in mem.elsewhere
 
 
 def _threshold(server: str) -> float:
@@ -562,8 +594,8 @@ def room(r: Resident) -> Room | None:
     then made, as before."""
     from app import model_load
     size = model_load.size_vram(r.server, r.model)
-    if size is None:
-        return None
+    if size is None or _elsewhere(r):
+        return None                     # on another card: nothing of this one to check
     card = _card()
     if card is None:
         return None
@@ -590,6 +622,9 @@ class Memory:
     #: the eviction penalty's bytes at `penalty_at` (epoch s, the last eviction)
     penalty: int = 0
     penalty_at: float | None = None
+    #: (server, model) last seen with its backend on ANOTHER card than this
+    #: one (the iGPU): it costs this card nothing (docs/notes/stt-on-igpu.md)
+    elsewhere: set[tuple[str, str]] = field(default_factory=set)
 
     def margin(self, now: float) -> tuple[int, bool]:
         """(the working margin, whether it was measured): the peak of the
@@ -610,11 +645,12 @@ class Memory:
                 "margin_peaks": {str(t): v for t, v in sorted(self.peaks.items())},
                 "sizes": {f"{s}|{m}": v for (s, m), v in sorted(self.sizes.items())},
                 "rest": {f"{s}|{m}": v for (s, m), v in sorted(self.rest.items())},
-                "total": self.total, "penalty": self.penalty, "penalty_at": self.penalty_at}
+                "total": self.total, "penalty": self.penalty, "penalty_at": self.penalty_at,
+                "elsewhere": sorted(f"{s}|{m}" for s, m in self.elsewhere)}
 
     def copy(self) -> "Memory":
         return Memory(dict(self.peaks), dict(self.sizes), self.total, dict(self.rest), self.penalty,
-                      self.penalty_at)
+                      self.penalty_at, set(self.elsewhere))
 
 
 def memory_path() -> Path:
@@ -645,6 +681,10 @@ def read_memory(path: Path | None = None) -> Memory:
             server, sep, model = str(k).partition("|")
             if sep and model and count(v) is not None:
                 into[(server, model)] = v
+    for k in raw.get("elsewhere") or () if isinstance(raw.get("elsewhere"), list) else ():
+        server, sep, model = str(k).partition("|")
+        if sep and model:
+            out.elsewhere.add((server, model))
     out.total = count(raw.get("total")) or None
     at = raw.get("penalty_at")
     if count(raw.get("penalty")) and isinstance(at, (int, float)) and not isinstance(at, bool):
@@ -697,6 +737,8 @@ def _size(r: Resident, mem: Memory) -> int | None:
     this process's `/system` readings and the file's; 0 for one seen loaded
     holding none; None never seen."""
     from app import model_load
+    if r.key in mem.elsewhere:
+        return 0                        # its bytes are on another card
     got = [v for v in (mem.sizes.get(r.key), model_load.size_vram(r.server, r.model)) if v is not None]
     if got:
         return max(got)
@@ -715,6 +757,8 @@ def _rest_size(r: Resident, mem: Memory) -> int | None:
     CPU; None never seen. What the budget counts."""
     from app import model_load
     largest = _size(r, mem)
+    if r.key in mem.elsewhere:
+        return 0
     if model_load.context_on_demand(r.server, r.model):
         # A model loaded with `context_on_demand` holds its weights and creates
         # its context per request (docs/notes/idle-context-brief.md §1.3): its
@@ -836,7 +880,8 @@ def plan(want: Iterable[Resident], mem: Memory, *, threshold: float,
     head = Plan((), line, threshold, margin, measured, median, penalty)
     for rank, r in enumerate(ranked, 1):
         tier, size, need, t = tier_of(r)[0], sizes[r.key], counted[r.key], used.get(r.key)
-        seen = ("never seen: counted at the set's median" if size is None and median else
+        seen = ("on another card: costs this one nothing" if r.key in mem.elsewhere else
+                "never seen: counted at the set's median" if size is None and median else
                 "never seen, nor any model of the set: counted at nothing until a load is seen"
                 if size is None else "holds no VRAM" if size == 0 else "")
         detail = ""
@@ -913,27 +958,42 @@ def _remember(want: list[Resident]) -> Memory:
     with _lock:
         loading = _warm_thread is not None and _warm_thread.is_alive()
     card = sample = None
+    moved: dict[tuple[str, str], bool] = {}
     if servers:
         with _lock:
             frozen = mem.copy()
         before = None if loading else _held_now(servers, frozen)
         card = _card()
+        with _lock:
+            here, there = _pids_seen
         after = None if before is None or card is None else _held_now(servers, frozen)
         if before is not None and after is not None and card is not None:
             held = dict(before)
             for k, v in after.items():
                 held[k] = max(v, held.get(k, 0))
-            sample = max(0, card[1] - sum(held.values()))
+            # a model on another card: its bytes are not in this card's count
+            sample = max(0, card[1] - sum(v for k, v in held.items() if k[1] not in there))
+        if card is not None:
+            moved = _where(servers, here, there)
     now = _wall()
     with _lock:
         before_json = json.dumps(mem.as_json(), sort_keys=True)
+        for key, other in moved.items():
+            if other:
+                mem.elsewhere.add(key)
+            else:
+                mem.elsewhere.discard(key)
         for r in want:
+            if r.key in mem.elsewhere:
+                continue                    # its readings are another card's
             v = _size(r, mem)
             if v is not None and v > mem.sizes.get(r.key, -1):
                 mem.sizes[r.key] = v
         for k in [k for k, v in mem.rest.items() if not _whole(v, mem.sizes.get(k))]:
             del mem.rest[k]                            # read while partly off the card: not at rest
         for r in want:
+            if r.key in mem.elsewhere:
+                continue
             largest = mem.sizes.get(r.key)
             v = model_load.rest_vram(r.server, r.model)
             if _whole(v, largest) and v < mem.rest.get(r.key, v + 1):
@@ -951,6 +1011,23 @@ def _remember(want: list[Resident]) -> Memory:
     if changed:
         _write_memory(snapshot)
     return mem
+
+
+def _where(servers: Iterable[str], here: frozenset[int], there: frozenset[int]) -> dict[tuple[str, str], bool]:
+    """{(server, model): on another card} for every loaded model whose
+    backend pid the probe placed — on another card and not this one (True),
+    or on this one (False); a model the probe did not place is left out, and
+    keeps what was last seen of it."""
+    from app import model_load
+    out: dict[tuple[str, str], bool] = {}
+    for s in sorted(set(servers)):
+        got = model_load.held_sizes(s) or {}
+        for m, (pid, _size) in got.items():
+            if pid in there:
+                out[(model_load.server_of(s), m)] = True
+            elif pid in here:
+                out[(model_load.server_of(s), m)] = False
+    return out
 
 
 def _say_budget(p: Plan) -> None:

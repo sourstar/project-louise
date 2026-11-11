@@ -1129,3 +1129,80 @@ def test_the_beat_releases_orphan_pins_of_the_set_every_ten_minutes(tmp_path, no
     clock["mono"] += model_pins.ORPHAN_CHECK_S
     _beat([])
     assert len(asked) == 2 and asked[0] and all(k[0] == SERVER for k in asked[0])
+
+
+# ---- a model on another card: speech to text on the integrated Radeon -------------
+
+def _two_cards(monkeypatch, *, b70_used_mib: int, b70_pids: dict[int, int], igpu_pids: dict[int, int],
+               ns: bool = True):
+    """The probe's answer with the B70 and the processor's iGPU: {namespace
+    pid: MiB} on each card (host pids differ, as the probe sees them)."""
+    monkeypatch.setattr(config, "GPU_PROBE_URL", "http://gpu-probe:8080")
+
+    def procs(pids):
+        return [{"pid": 900_000 + p, "label": "?", "command": "backend", "container": "localai",
+                 "vram": mib * MIB, "host": 0, **({"ns_pid": p} if ns else {})} for p, mib in pids.items()]
+
+    def answer(url):
+        return {"devices": [
+            {"card": "card1", "pdev": "0000:03:00.0", "driver": "xe", "vendor_id": "0x8086",
+             "device_id": "0xe223", "vendor": "Intel", "name": "Arc Pro B70", "vram_total": 32_656 * MIB,
+             "vram_used": b70_used_mib * MIB, "processes": procs(b70_pids)},
+            {"card": "card0", "pdev": "0000:13:00.0", "driver": "amdgpu", "vendor_id": "0x1002",
+             "device_id": "0x164e", "vendor": "AMD", "name": "Raphael", "vram_total": 2_048 * MIB,
+             "vram_used": sum(igpu_pids.values()) * MIB, "processes": procs(igpu_pids)}]}
+    monkeypatch.setattr(gpu, "_get_json", answer)
+
+
+def test_a_model_on_the_igpu_costs_the_b70_nothing(tmp_path, node, monkeypatch):
+    """docs/notes/stt-on-igpu.md §4 step 3.5: the STT model moved to the
+    processor's Radeon, in the same LocalAI. LocalAI's `size_vram` counts its
+    bytes on that card; the B70's budget must not, nor the margin's sample
+    subtract them from the B70's count. Seen on the B70 again, it counts."""
+    clock = {"t": 1_800_000_000.0}
+    monkeypatch.setattr(resident, "_wall", lambda: clock["t"])
+    node.platform.write_text('[speech]\nstt_model = "parakeet-igpu"\n')
+    node.held |= {"louise-chat", "parakeet-igpu"}
+    _system(monkeypatch, node, {"louise-chat": 5_791, "parakeet-igpu": 1_400})
+    model_load.loaded_models(SERVER)                       # the pids, as the runner numbers them
+    pids = dict(model_load._pids[SERVER])
+    _two_cards(monkeypatch, b70_used_mib=5_791 + 300, b70_pids={pids["louise-chat"]: 5_791},
+               igpu_pids={pids["parakeet-igpu"]: 1_400})
+    stt = _r("parakeet-igpu", "speech to text")
+    _beat([])
+    mem = resident.read_memory()
+    assert mem.elsewhere == {(SERVER, "parakeet-igpu")}
+    assert mem.margin(clock["t"]) == (300 * MIB, True), "the iGPU's 1,400 MiB are not the B70's"
+    assert (SERVER, "parakeet-igpu") not in mem.sizes and (SERVER, "parakeet-igpu") not in mem.rest
+    assert mem.sizes[(SERVER, "louise-chat")] == 5_791 * MIB, "the set's sizes are kept: the beat saw it"
+    assert mem.total == 32_656 * MIB, "the card is the B70: its processes hold the most"
+    resident.reset()                                       # a restart: the file keeps it
+    p = resident._plan_now([_r("louise-chat", "chat"), stt])
+    placed = {pl.resident.model: pl for pl in p.placed}
+    assert placed["parakeet-igpu"].counted == 0 and placed["parakeet-igpu"].fits
+    assert "on another card" in placed["parakeet-igpu"].why
+    assert resident.room(stt) is None, "nothing of the B70 to check"
+    # the same model loaded on the B70 (the YAML back to a card backend): it counts again
+    _two_cards(monkeypatch, b70_used_mib=5_791 + 1_400 + 300,
+               b70_pids={pids["louise-chat"]: 5_791, pids["parakeet-igpu"]: 1_400}, igpu_pids={})
+    with model_load._lock:
+        model_load._systems.clear()
+    _beat([])
+    mem = resident.read_memory()
+    assert mem.elsewhere == set()
+    assert resident._plan_now([stt]).placed[0].counted == 1_400 * MIB
+
+
+def test_a_probe_that_gives_no_namespace_pid_tells_nothing_apart(tmp_path, node, monkeypatch):
+    """A probe one deploy behind: every model counts as before."""
+    node.platform.write_text('[speech]\nstt_model = "parakeet-igpu"\n')
+    node.held |= {"louise-chat", "parakeet-igpu"}
+    _system(monkeypatch, node, {"louise-chat": 5_791, "parakeet-igpu": 1_400})
+    model_load.loaded_models(SERVER)
+    pids = dict(model_load._pids[SERVER])
+    _two_cards(monkeypatch, b70_used_mib=5_791 + 1_400 + 300, b70_pids={pids["louise-chat"]: 5_791},
+               igpu_pids={pids["parakeet-igpu"]: 1_400}, ns=False)
+    _beat([])
+    mem = resident.read_memory()
+    assert mem.elsewhere == set()
+    assert mem.sizes[(SERVER, "parakeet-igpu")] == 1_400 * MIB
