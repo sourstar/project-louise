@@ -813,7 +813,7 @@ def _kept_stamp(collection) -> tuple:
                                 for e in it if e.name.endswith(".json")))
     except OSError:
         return ()
-#: (space, endpoint) -> the lock of whoever is looking at that endpoint now
+#: (endpoint, model) -> the lock of whoever is looking at that model now (`_flight`)
 _looking: dict[str, threading.Lock] = {}
 _guard = threading.Lock()
 
@@ -889,14 +889,22 @@ def answering(collection) -> dict[str, str | None]:
 
 
 def _flight(collection) -> str:
-    """What ONE gate at a time means: one per (space, encoder endpoint). Two
-    collections of a space that reach one encoder meet the same run, and the
-    second finds the first's statement instead of gating it again."""
+    """What ONE gate at a time means: one per encoder MODEL (its endpoint and
+    the model the request names), whatever space asks. Two collections of a
+    space that reach one encoder meet the same run, and the second finds the
+    first's statement instead of gating it again.
+
+    NOT ONE PER SPACE (the node, 2026-11-11): wikidata and normattiva-nemo,
+    two spaces on one Nemotron, gated it at once after an engine switch; each
+    fresh-context pass saw the other's requests (61 and 66 calls answered for
+    32 asked), both deferred, and both verdicts expired together to gate side
+    by side again. The gate's passes — fresh loads, fresh contexts — measure
+    the model alone, so a second space on it waits for the round."""
     try:
         url, model = _who(collections_mod.recipe_for(collection), False)
     except Exception:                                   # noqa: BLE001
         url, model = _where(collection), ""
-    return f"{collection.codex.space_id} {url} {model}"
+    return f"{url} {model}"
 
 
 # ---- a context that did not reproduce its canary: the run goes back to the gate ----
@@ -1220,7 +1228,7 @@ def embed_allowed(con, collection, *, stop: Callable[[], bool] | None = None) ->
     with _guard:
         lock = _looking.setdefault(_flight(collection), threading.Lock())
     if not lock.acquire(blocking=False):
-        # someone is asking (or gating) already: ONE gate per (space, run).
+        # someone is asking (or gating) already: ONE gate per model (`_flight`).
         # Nothing to wait for — this round has no embedding, the next asks
         return False
     try:

@@ -330,6 +330,42 @@ def test_a_second_caller_does_not_start_a_second_gate(node, endpoint):
         lock.release()
 
 
+def test_two_spaces_on_one_model_gate_one_at_a_time(node, endpoint, monkeypatch):
+    """ONE GATE PER MODEL, not per space (the node, 2026-11-11): wikidata and
+    normattiva-nemo, two spaces on one Nemotron, gated it side by side and
+    each deferred the other's fresh-context pass. A collection of ANOTHER
+    space on the same encoder gating now: this one waits for the round,
+    asks the endpoint nothing. Another model on the same URL has a flight of
+    its own."""
+    import dataclasses
+    import threading
+    from types import SimpleNamespace
+    root, collection, codex = node
+    recipe = collections_mod.recipe_for(collection)
+    other_space = SimpleNamespace(name="other", codex=SimpleNamespace(
+        space_id="sha256:" + "ab" * 32))
+    assert other_space.codex.space_id != collection.codex.space_id
+    real = collections_mod.recipe_for
+    monkeypatch.setattr(collections_mod, "recipe_for",
+                        lambda c: recipe if c is other_space else real(c))
+    assert run_check._flight(other_space) == run_check._flight(collection)
+
+    lock = run_check._looking.setdefault(run_check._flight(other_space), threading.Lock())
+    assert lock.acquire(blocking=False)
+    try:
+        con = db.connect(collection)
+        assert backend_gate.embed_allowed(con, collection) is False
+        assert endpoint.posts == 0, "it gated beside another space's gate on its model"
+    finally:
+        lock.release()
+
+    another_model = SimpleNamespace(name="third", codex=collection.codex)
+    monkeypatch.setattr(collections_mod, "recipe_for",
+                        lambda c: dataclasses.replace(recipe, model="another-model")
+                        if c is another_model else real(c))
+    assert run_check._flight(another_model) != run_check._flight(collection)
+
+
 # ---- a run that changes under the work ---------------------------------------------
 
 def test_a_run_that_changes_mid_document_stops_the_write(node, endpoint, monkeypatch):
