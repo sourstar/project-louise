@@ -13,7 +13,7 @@
 # normattiva and normattiva-nemo (pubmed keeps MedCPT), on the backend as installed on the
 # node, louise-sycl-f16-llama-cpp-9d17b8a39845, at ctx = batch = ubatch 3,072: the same pair
 # scores identically at 4,096 and 3,072 (9.805 / -16.469), size_vram 3,348 -> 3,174 MiB.
-# Its licence asks for "Built with Llama" on the service: the Ask page and Help say it.
+# Its licence asks for "Built with Llama" on the service: Help › Basics › Models says it.
 {
   "backend": "louise-sycl-f16-llama-cpp-9d17b8a39845",
   "context_size": 3072,
