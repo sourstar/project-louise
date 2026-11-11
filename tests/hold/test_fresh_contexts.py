@@ -391,3 +391,65 @@ def test_no_count_to_read_is_no_count_and_a_count_that_never_can_be_is_a_refusal
     vega.row["told"] = 0               # a backend that does not say what it created
     with pytest.raises(emb.GateError, match="0 of 40 call"):
         counted(vega)()
+
+
+def test_the_pass_is_recorded_where_the_operator_can_read_it(tmp_path, monkeypatch, capsys):
+    """München, 2026-11-11: "I can't confirm that the 300-fresh-context pass
+    ran" — the statement carries no count (09 §9.12 unchanged) and
+    `/vega/keeps` starts again at every load. The gate keeps it locally, and
+    its report prints it, pass or fail."""
+    codex = codex_768(version=5)
+    ref = reference()
+    (tmp_path / "c").mkdir()
+    at = "2026-11-11T15:00:00Z"
+
+    def gate(model, fresh):
+        return hold_runs.validate(tmp_path, "c", codex, role="document", reference=ref, embed=lambda t: ref,
+                                  embed_one=model.one, contribute=model.one, stated=_vega_run(codex),
+                                  key=a_key(), now=at, reload=model.reload,
+                                  fresh=Probe(model) if fresh else None)
+    body = gate(OnDemand(), fresh=True)
+    assert hold_runs.contexts_measured(tmp_path, "c", "document", body["run"]) == \
+        {"contexts": 300, "closest": 1.0, "at": at}
+    assert "contexts" not in body, "the statement is what it was"
+    assert hold_runs.contexts_measured(tmp_path, "c", "query", body["run"]) is None, "per role"
+
+    bad = gate(OnDemand(bad=9, wrong=lambda v: _nudged(v, 0.9999995)), fresh=True)
+    got = hold_runs.contexts_measured(tmp_path, "c", "document", bad["run"])
+    assert got["contexts"] == 300 and got["closest"] < 1.0, "a failed pass is recorded too"
+
+    (tmp_path / "d").mkdir()
+    plain = hold_runs.validate(tmp_path, "d", codex, role="document", reference=ref, embed=lambda t: ref,
+                               embed_one=OnDemand().one, contribute=OnDemand().one, stated=_vega_run(codex),
+                               key=a_key(), now=at, reload=OnDemand().reload, fresh=None)
+    assert hold_runs.contexts_measured(tmp_path, "d", "document", plain["run"]) is None, \
+        "a run without the option is asked nothing and nothing is recorded"
+
+
+def test_the_gate_report_says_the_count(tmp_path, monkeypatch, capsys):
+    import contextlib
+    from types import SimpleNamespace
+    from app import encoder_use, louise
+    model = OnDemand()
+    codex, run = _gate(model)
+    body = emb.statement(run, codex, a_key(), now="2026-11-11T09:00:00Z")["body"]
+
+    def validate(root, name, codex_, recipe, *, role, on_run):
+        on_run(run)
+        return body
+    monkeypatch.setattr(run_check, "reference", lambda *a, **k: None)
+    monkeypatch.setattr(run_check, "validate", validate)
+    monkeypatch.setattr(louise, "_recipe_for", lambda c, n: SimpleNamespace())
+    monkeypatch.setattr(louise, "_as_candidate", lambda r, a: r)
+    monkeypatch.setattr(encoder_use, "held", lambda *a, **k: contextlib.nullcontext())
+    a = SimpleNamespace(root=tmp_path, query_model=None, model=None)
+    louise._embedder_check_runs(a, "c", codex)
+    out = capsys.readouterr().out
+    assert "  contexts    300 fresh, each counted as created by the engine; closest 1.0000000" in out
+
+    run_plain = emb.run_gate(codex, reference=reference(), embed=lambda t: reference(), seed=b"\x09" * 32,
+                             stated=_vega_run(codex), embed_one=model.one, contribute=model.one,
+                             reload=model.reload)
+    run = run_plain
+    louise._embedder_check_runs(a, "c", codex)
+    assert "  contexts    none asked: the run does not create its context per request" in capsys.readouterr().out

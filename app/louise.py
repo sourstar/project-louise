@@ -5860,6 +5860,10 @@ def _embedder_check_runs(a, name, codex) -> int:
         if "exactness" in body:
             print(f"  exactness   {body['exactness']}, {body['loads']} fresh load(s), "
                   f"closest answers {body['load_variation']}")
+        for run in passes:                  # counted by the engine, never assumed
+            print(f"  contexts    " + (f"{run.contexts} fresh, each counted as created by the engine; "
+                                       f"closest {run.context_variation:.7f}" if run.contexts else
+                                       "none asked: the run does not create its context per request"))
         cpu = body.get("cpu_reference")
         print(f"  cpu         " + (f"worst {cpu['worst']}, median {cpu['median']} against the "
                                    f"stored CPU reference (run {cpu['run'][:23]}…)" if cpu else
