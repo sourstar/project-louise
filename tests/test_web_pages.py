@@ -112,19 +112,20 @@ def test_help_page_is_open_and_documents_the_platform(client):
         assert anchor in r.text, f"help page must document: {anchor}"
 
 
-def test_a_llama_model_in_use_is_said_built_with_llama_on_ask_and_help(client):
+def test_a_llama_model_in_use_is_said_built_with_llama_in_help(client):
     """The Llama 3.2 Community License asks a service built on a Llama model
-    to display "Built with Llama" prominently (2026-11-12: the reranker of most
-    collections, llama-nemotron-rerank-1b-v2, is fine-tuned from Llama 3.2 1B).
-    While its model file ships, both pages say it; when it leaves, this test
-    says to take the line out with it."""
+    to display "Built with Llama" prominently, on its interface, about page or
+    documentation (2026-11-12: the reranker of most collections,
+    llama-nemotron-rerank-1b-v2, is fine-tuned from Llama 3.2 1B). Help says it,
+    and only Help (operator, 2026-11-12: "Move Built with Llama in the help
+    section"); when the model leaves, this test says to take the line out."""
     from pathlib import Path
     shipped = Path(__file__).parents[1] / "deploy/vega/stage/models/louise-rerank-nemotron-1b.yaml"
     ask, help_page = client.get("/ask").text, client.get("/help").text
+    assert "Built with Llama" not in ask, "in the help section, not on Ask"
     if not shipped.exists():
-        assert "Built with Llama" not in ask, "no Llama model ships: take the attribution out"
+        assert "Built with Llama" not in help_page, "no Llama model ships: take the attribution out"
         return
-    assert "Built with Llama" in ask and 'href="/help#models"' in ask
     panel = help_page[help_page.index('<div class="panel" id="models">'):]
     panel = panel[:panel.index("</div>")]
     assert "Built with Llama" in panel and "llama-nemotron-rerank-1b-v2" in panel

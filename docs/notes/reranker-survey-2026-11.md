@@ -110,7 +110,7 @@ https://docs.openvino.ai/2026/model-server/ovms_demos_rerank.html
 **DECISION (operator, 2026-11-11: B).** A3 is the `[reranker]` of gutenberg, wikipedia, wikidata, normattiva and
 normattiva-nemo; pubmed keeps MedCPT. Measured: gutenberg MRR@10 0.435 → 0.627 (p 0.0001, 490 queries), jurifindit
 0.608 → 0.677 (p 0.002, 175 queries), +0.3–0.7 s per list; wikipedia and wikidata not measured. Live at ctx 3,072
-(the same scores as 4,096). The licence's "Built with Llama" is on Ask and Help. STATUS 11-11 has the rest.
+(the same scores as 4,096). The licence's "Built with Llama" is in Help (Basics › Models). STATUS 11-11 has the rest.
 
 "Patch llama.cpp to support nemo reranker, tomorrow I want to see its benchmarks too." The model needs an
 architecture upstream llama.cpp has not merged (#24083, open); our port is P10 (localai-bugs.md). It runs on

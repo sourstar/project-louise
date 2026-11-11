@@ -82,7 +82,8 @@ measured (published figures disagree).
   checks `cal.rerank_model`). Engine: our separate backend `louise-sycl-f16-llama-cpp-9d17b8a39845` (ddf48f8 + the
   #24083 port, P10 in [localai-bugs.md](localai-bugs.md)). Backups `<name>.toml.bak-20261111-before-nemotron-rerank`,
   `louise-rerank-nemotron-1b.yaml.bak-20261111-ctx4096`. LICENCE (Llama 3.2 Community + OpenMDW-1.1): "Built with
-  Llama" on the service — Ask's footer and Help › Basics › Models say it (tests/test_web_pages.py). LIVE: 850773d
+  Llama" on the service — Help › Basics › Models says it (tests/test_web_pages.py; Ask's footer line removed
+  11-12, operator: "Move Built with Llama in the help section"; the licence allows an about page or documentation). LIVE: 850773d
   deployed 2026-11-11T07:41:09Z (operator: "Deploy the web for the Llama attribution"; web + worker on one image,
   rc 0, relay gate 200; /ask has the line and its link, /help the Models panel and Meta's notice; a gutenberg search
   answers with Nemotron rerank scores). Wikidata and wikipedia measured after the choice (07:46–07:52Z, known-item
