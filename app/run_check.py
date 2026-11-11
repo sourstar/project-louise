@@ -180,7 +180,17 @@ def creates_per_request(recipe, stated=None, *, query: bool = False, name: str =
     if side.model not in ids:
         raise emb.GateDeferred(f"{name}: {side.model} answered but {server}/system does not list it "
                                f"loaded, so its load options cannot be read; asked again later")
-    return model_load.context_on_demand(side.url, side.model)
+    listed = model_load.listed_on_demand(side.url, side.model)
+    if listed is None:
+        # the node's LocalAI (upstream, without our P1) lists no options: a row
+        # without them is no "no" (München, 2026-11-12). An `api = "vega"` run
+        # never comes here — its statement lists them
+        raise emb.GateDeferred(
+            f"{name}: whether {side.model} creates its context per request cannot be told: "
+            f"its run states no load options and {server}/system lists none (a LocalAI "
+            f"without load_options); an encoder behind VeGa states them "
+            f"(docs/notes/vega.md)")
+    return listed
 
 
 def fresh_contexts(recipe, *, query: bool = False, stated=None, **kw) -> runs_mod.Answers | None:
@@ -729,6 +739,9 @@ _guard = threading.Lock()
 #: meets the same run, so a run relaunched under one of them is seen by all at
 #: once (03 §3.6: "every collection of that space on the peer goes with it").
 _answering: dict[tuple[tuple[str, str], str], str] = {}
+#: (endpoint, role, run) whose statement a search has read for its load
+#: options (`check_query`, unenforced): once a run in this process
+_noted: set[tuple[tuple[str, str], str, str]] = set()
 
 
 def heard(recipe, answered: set, *, role: str = "document") -> None:
@@ -736,6 +749,21 @@ def heard(recipe, answered: set, *, role: str = "document") -> None:
     named = [r for r in answered if r]
     if named:
         _answering[(_who(recipe, role == "query"), role)] = sorted(named)[-1]
+
+
+def _note_options(recipe, answered: set, known: dict[str, dict[str, Any]], *,
+                  role: str = "document") -> None:
+    """The load options of the runs that answered, from their own validated
+    statements (`engine.options`), noted for the model that answered: where
+    `/system` lists none — the node's LocalAI — they are how a request learns
+    that its model creates its context per request and takes a keep
+    (model_load.note_run_options; app/rage/keep.py)."""
+    from . import model_load
+    url, model = _who(recipe, role == "query")
+    for run_id in sorted(r for r in answered if r):
+        engine = (known.get(run_id) or {}).get("engine")
+        if isinstance(engine, dict):
+            model_load.note_run_options(url, model, engine.get("options"))
 
 
 def answering(collection) -> dict[str, str | None]:
@@ -765,6 +793,7 @@ def _flight(collection) -> str:
 def reset_cache() -> None:
     _verdicts.clear()
     _answering.clear()
+    _noted.clear()
     _rechecked.clear()
     _told_foreign.clear()
     _me.clear()
@@ -804,6 +833,7 @@ def check_write(collection, recipe, answered: set) -> None:
                     f"{collection.name}: run {run_id[:23]}… has a kept statement not "
                     f"yet re-checked since this process started; nothing is written "
                     f"until it is", run_id)
+        _note_options(recipe, answered, kept)
     except (runs_mod.RunUnvalidated, runs_mod.RunRefused):
         _verdicts.pop(_where(collection), None)
         raise
@@ -836,6 +866,16 @@ def check_query(collection, recipe, answered: set) -> None:
     heard(recipe, answered, role=role)
     from . import copy_state
     if not copy_state.enforced():
+        # nothing withheld; a run's load options are still read from its
+        # statement, ONCE a run in this process (the search's own keep)
+        fresh = {r for r in answered if r and (_who(recipe, role == "query"), role, r) not in _noted}
+        if fresh:
+            try:
+                known = copy_state.space_statements(_root(), collection.name, codex, role)
+            except Exception:                           # noqa: BLE001 — telemetry-grade: a keep, not a verdict
+                return
+            _noted.update((_who(recipe, role == "query"), role, r) for r in fresh if r in known)
+            _note_options(recipe, fresh, known, role=role)
         return
     known = copy_state.space_statements(_root(), collection.name, codex, role)   # this node's key only
     for run_id in sorted(r for r in answered if r):
@@ -857,6 +897,7 @@ def check_query(collection, recipe, answered: set) -> None:
                 f"{collection.name}: the {role} encoder's run {run_id[:23]}… has a kept "
                 f"statement the worker has not re-checked since it started: the vector "
                 f"leg waits for that re-check, and the text leg goes on", run_id)
+    _note_options(recipe, answered, known, role=role)
 
 
 def _look(collection, stop: Callable[[], bool] | None,

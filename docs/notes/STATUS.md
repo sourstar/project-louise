@@ -161,7 +161,9 @@ measured (published figures disagree).
   stand-in models); `grpc-server` built from the candidate series and driven over gRPC, 18 checks, the same vector
   byte for byte with and without the option. Louise: RAGE's keep per job type and its trim (`app/rage/keep.py`: 20 ms,
   doubled at a premature expiry, an expiry a missed scheduling caused excused, not kept across a restart), sent only to
-  a model LocalAI lists with the option (`model_load.context_on_demand`); the keeper counts such a model at its running
+  a model known to have the option (`model_load.context_on_demand`: `/system` where it lists load options, else the
+  validated statement of the run the model's answers named — the node's LocalAI v4.12.1 lists NONE, P1 not in it,
+  München 11-12; the gate's keep of 0 is sent whatever `/system` says); the keeper counts such a model at its running
   size (`resident._rest_size`); `tools/measure/context_on_request.py` counts from the card record what a keep would give
   back; the gate asks an on-demand model its probes on 300 contexts of their own (`embedder.fresh_contexts`; 03 §3.3
   amended). Every embedding and translation stream's gaps are counted from now, keyed or not, and published by the

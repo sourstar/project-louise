@@ -62,9 +62,12 @@ those few creations once more — app/sizing.py's rule for its own windows
 invariant 10: a runtime value that is no file's and survives nothing.
 
 ONLY WHERE THE MODEL TAKES IT. `for_request` gives a keep only for a model
-whose load options LocalAI lists with `context_on_demand`
-(`model_load.context_on_demand`, from `/system`): a runner that does not know
-the field is never sent it. Nothing here is typed by a person (RULE 2).
+known to be loaded with `context_on_demand` (`model_load.context_on_demand`:
+`/system` where it lists load options, else the statement of the validated
+run the model's answers named — the node's LocalAI lists none): a runner
+that does not know the field is never sent it. The one exception is the
+gate's fixed keep, sent whatever this process knows: the gate read the
+option from the run it is gating. Nothing here is typed by a person (RULE 2).
 
 THE NAMED WHEELS (CLAUDE.md, "do not reinvent the wheel"). The request field
 is Ollama's `keep_alive`, applied to the context and in milliseconds. The
@@ -393,7 +396,11 @@ def for_request(url: str, model: str | None, ready: float, *, level: str | None 
     plugin = now_plugin if plugin is None else plugin
     server = model_load.server_of(url)
     forced = _fixed.get()
-    if forced is not None and keyed:
+    if forced is not None:
+        # FIXED BY THE GATE (run_check.fresh_contexts), which read the option
+        # from the run's own statement: sent whatever this process knows of the
+        # model. The node's LocalAI lists no load options (München, 2026-11-12),
+        # and a pass whose keep of 0 never reached the engine frees nothing
         return KEEPS.send_fixed(Stream(server, model, plugin, FIXED_LEVEL), forced)
     return KEEPS.send(Stream(server, model, plugin, level), ready, keyed=keyed)
 

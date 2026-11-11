@@ -5,8 +5,11 @@ app/resident.py).
 Such a model keeps its weights and creates its context when a request
 arrives; a request tells it how long to keep the context after the answer
 (`metadata.keep_context_ms`, RAGE's value: app/rage/keep.py). Held here:
-  - Louise knows the option from LocalAI's `/system`, which lists the
-    options each model was loaded with (P1) — nothing is typed (RULE 2);
+  - Louise knows the option from LocalAI's `/system` where it lists the
+    options each model was loaded with (P1), else from the statement of the
+    validated run the model's answers named — the node's LocalAI lists none,
+    and a row without them is no "no" — nothing is typed (RULE 2);
+  - the gate's keep of 0 reaches the engine whatever `/system` says;
   - a request to such a model carries the keep in its `metadata`, and a
     request to any other model carries nothing more than before — a runner
     that does not know the field is never sent it;
@@ -367,3 +370,76 @@ def test_a_translation_s_segments_carry_the_keep_and_its_warm_zero(monkeypatch):
     streams = {(s["plugin"], s["level"], s["model"]) for s in keep.snapshot()}
     assert streams == {("", "translate", "louise-translate-madlad")}
     keep.reset()
+
+
+# ---- a LocalAI that lists no load options (the node's: München, 2026-11-12) ------------
+
+class Upstream(Node):
+    """LocalAI v4.12.1 as the node runs it: its `/system` rows are {id, backend,
+    process, size_vram} — no `load_options` (our P1 is not in it)."""
+
+    def get(self, url, timeout=None, **kw):
+        r = super().get(url, timeout=timeout, **kw)
+        rows = [{k: v for k, v in row.items() if k != "load_options"} for row in r.json()["loaded_models"]]
+        return httpx.Response(200, request=r.request,
+                              json={"backends": ["llama-cpp"], "loaded_models": rows})
+
+
+@pytest.fixture
+def upstream(node, monkeypatch):
+    up = Upstream()
+    up.loaded |= set(node.loaded)
+    up.options = node.options
+    monkeypatch.setattr(model_load.httpc, "get", up.get)
+    monkeypatch.setattr(embeddings.httpc, "post", up.post)
+    return up
+
+
+def test_a_listing_without_options_says_nothing_and_the_run_s_statement_does(upstream):
+    """A row without `load_options` is no "no": the option is then read from
+    the statement of the validated run the model's answers named (its
+    `engine.options`, VeGa's), and a later listing that cannot say leaves it."""
+    assert model_load.loaded_models(SERVER, max_age_s=0.0) == {NEMOTRON, BGE}
+    assert model_load.listed_on_demand(SERVER, NEMOTRON) is None, "the listing cannot say"
+    assert model_load.context_on_demand(SERVER, NEMOTRON) is False, "nobody said: no keep"
+    with dispatch.working_as(dispatch.Level.CORPUS, "wikidata"):
+        embeddings._request_vectors(["alpha"], 5.0, OPTED_IN)
+    assert "metadata" not in upstream.real()[-1]["json"], "the engine keeps its context, as it always did"
+
+    model_load.note_run_options(SERVER, NEMOTRON, {"Model": "n.gguf",
+                                                   "Options": ["ubatch:8192", "context_on_demand"]})
+    model_load.note_run_options(SERVER, BGE, {"Model": "b.gguf", "Options": ["ubatch:1024"]})
+    model_load.loaded_models(SERVER, max_age_s=0.0)
+    assert model_load.context_on_demand(SERVER, NEMOTRON) is True, "the run said; the listing did not"
+    assert model_load.context_on_demand(SERVER, BGE) is False
+    with dispatch.working_as(dispatch.Level.CORPUS, "wikidata"):
+        embeddings._request_vectors(["beta"], 5.0, OPTED_IN)
+    assert upstream.real()[-1]["json"]["metadata"] == {"keep_context_ms": "20"}
+
+    # a statement without options says nothing either, and leaves the note
+    model_load.note_run_options(SERVER, NEMOTRON, None)
+    assert model_load.context_on_demand(SERVER, NEMOTRON) is True
+
+
+def test_a_listing_with_its_options_decides_over_a_run_noted_before(node):
+    """Where `/system` lists the options (P1), its reading is the model as it
+    is loaded NOW, and wins over the last run noted."""
+    model_load.note_run_options(SERVER, BGE, {"Options": ["context_on_demand"]})
+    assert model_load.context_on_demand(SERVER, BGE) is True
+    model_load.loaded_models(SERVER, max_age_s=0.0)
+    assert model_load.listed_on_demand(SERVER, BGE) is False
+    assert model_load.context_on_demand(SERVER, BGE) is False
+
+
+def test_the_gate_s_fixed_keep_reaches_the_engine_whatever_system_says(upstream):
+    """The gate fixes a keep of 0 having read the option from the run's own
+    statement (run_check.fresh_contexts). Sent only where `/system` said yes,
+    it never reached the node's engine: no context was freed, and the pass
+    measured one context 300 times."""
+    model_load.loaded_models(SERVER, max_age_s=0.0)
+    assert model_load.context_on_demand(SERVER, NEMOTRON) is False
+    with keep.fixed(0):
+        embeddings._request_vectors(["alpha"], 5.0, OPTED_IN)
+    assert upstream.real()[-1]["json"]["metadata"] == {"keep_context_ms": "0"}
+    embeddings._request_vectors(["beta"], 5.0, OPTED_IN)
+    assert "metadata" not in upstream.real()[-1]["json"], "and nothing once the pass is over"
