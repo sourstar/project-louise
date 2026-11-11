@@ -114,6 +114,17 @@ not decay. The same reading gives the creation's measured time
 created for another process's requests (a person's query, from the web
 process) is in its count and not in ours; the two thresholds are for that.
 
+THE CANARY'S RECORD (operator, 2026-11-11: "Add the canary; it must be
+possible to disable it once we have the confidence that the architecture is
+sound"). The engine holds every context it creates to the output its load's
+context gave for a fixed input and discards one that does not reproduce it;
+the request is deferred and asked again (app/embeddings.py reads the refusal
+as any busy endpoint's). The same reading carries how many it discarded:
+kept here per model since this process started, beside the contexts it
+created and used, published with the streams' lines, and said at once — as
+an error, with the model's name — each time it grows. That record is what
+the confidence is read from: creations in the thousands, discarded none.
+
 Telemetry: `snapshot()` and `lines()` are read by whoever publishes (the
 worker's beat, never the thread doing the work); a keep that moves is logged
 once, with its collection.
@@ -229,7 +240,9 @@ class _Model:
     keyed: int = 0                      # keyed requests sent, since start
     expected: int = 0                   # of ours, those this clock expected to create a context
     floor_ms: int = FLOOR_MS            # no keep of this model under it: the way there and back
-    read: tuple[int, int, int, int, int] | None = None   # the last reading, and ours at it
+    read: tuple[int, int, int, int, int, int] | None = None   # the last reading, and ours at it
+    created_total: int = 0              # contexts the engine created and used, since this process started
+    discarded_total: int = 0            # contexts it discarded: they did not reproduce its canary
 
 
 class Sent(NamedTuple):
@@ -392,27 +405,43 @@ class Keeps:
 
     # -- the engine's own count, read back ---------------------------------------------------
     def observe(self, server: str, model: str, calls: int, created: int,
-                created_ms: int) -> list[str]:
+                created_ms: int, canary_failed: int = 0) -> list[str]:
         """The engine's count for `model`'s run, since its load (the VeGa
         wrapper's, `GET /vega/keeps`): Embedding calls answered, those a
-        context was created for, the creations' milliseconds. Set against
-        what this clock expected since the last reading (module docstring);
-        returns a line for each keep it raised. The first reading, and one
-        after a new load (a count that went down), are a baseline only."""
+        context was created for, the creations' milliseconds, the contexts
+        discarded for failing their canary. Set against what this clock
+        expected since the last reading (module docstring); returns a line
+        for each keep it raised, and first of all one that begins `CANARY`
+        when contexts were discarded. For the keeps, the first reading and
+        one after a new load (a count that went down) are a baseline only;
+        the canary's record takes them whole — a discarded context is never
+        left uncounted."""
         now = self._clock()
         out: list[str] = []
         with self._lock:
             md = self._models.get((server, model))
             if md is None:
                 return out
-            last, md.read = md.read, (calls, created, created_ms, md.keyed, md.expected)
+            last, md.read = md.read, (calls, created, created_ms, md.keyed, md.expected,
+                                      canary_failed)
+            fresh = last is None or calls < last[0] or created < last[1] or canary_failed < last[5]
+            discarded = canary_failed - (0 if fresh else last[5])
+            md.created_total += created - (0 if fresh else last[1])
+            if discarded > 0:
+                md.discarded_total += discarded
+                out.append(
+                    f"CANARY — the engine of {model or '-'} at {server} discarded {discarded} "
+                    f"context(s) that did not reproduce its canary ({md.discarded_total} since "
+                    f"this worker started, {md.created_total} created and used): each request "
+                    f"was deferred and is asked again. An engine that does this does not "
+                    f"reproduce itself on a new context (invariant 12) — GET /vega/keeps")
             streams = [(k, st) for k, st in self._streams.items()
                        if (k.server, k.model) == (server, model) and st.keyed
                        and k.level != FIXED_LEVEL]
             sending = [(k, st) for k, st in streams if st.window >= 2]
             for _k, st in streams:
                 st.window = 0
-            if last is None or calls < last[0] or created < last[1]:
+            if fresh:
                 return out
             made, took = created - last[1], created_ms - last[2]
             keyed, expected = md.keyed - last[3], md.expected - last[4]
@@ -450,6 +479,16 @@ class Keeps:
                      "busy": s.busy, "held": s.held, "gaps": list(s.gaps),
                      "longest_gap_ms": s.longest_gap_ms}
                     for k, s in sorted(self._streams.items())]
+
+    def contexts(self) -> list[dict]:
+        """Per model the engine's count was read for: the contexts it created
+        and used and those it discarded for failing their canary, since this
+        process started, and a creation's measured time."""
+        with self._lock:
+            return [{"server": server, "model": model, "created": md.created_total,
+                     "discarded": md.discarded_total,
+                     "creation_ms": self._creation_ms.get((server, model))}
+                    for (server, model), md in sorted(self._models.items()) if md.read is not None]
 
     def reset(self) -> None:
         with self._lock:
@@ -566,11 +605,13 @@ def observe(url: str, model: str, count: dict) -> list[str]:
     try:
         calls, told = int(count["calls"]), int(count["told"])
         created, created_ms = int(count["created"]), int(count["created_ms"])
+        canary_failed = int(count.get("canary_failed", 0))
     except (KeyError, TypeError, ValueError):
         return []
     if not count.get("on_demand") or told != calls:
         return []
-    return KEEPS.observe(model_load.server_of(url), model, calls, created, created_ms)
+    return KEEPS.observe(model_load.server_of(url), model, calls, created, created_ms,
+                         canary_failed)
 
 
 def answered(sent: Sent | None) -> None:
@@ -628,6 +669,13 @@ def lines() -> list[str]:
             if s["unseen"]:
                 line += f", raised {s['unseen']} time(s) on the engine's own count"
         out.append(line)
+    for m in KEEPS.contexts():
+        if not m["created"] and not m["discarded"]:
+            continue
+        took = f", {m['creation_ms']} ms a creation" if m["creation_ms"] else ""
+        out.append(f"contexts (since start) — {m['model'] or '-'} at {m['server']}: {m['created']} "
+                   f"created by the engine and used{took}; {m['discarded']} discarded for not "
+                   f"reproducing its canary")
     return out
 
 

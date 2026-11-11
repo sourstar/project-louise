@@ -115,6 +115,46 @@ def test_a_dead_encoder_leaves_the_document_untouched(collection, monkeypatch):
     assert any("deferred" in m for m in events), events
 
 
+def test_a_context_that_failed_its_canary_leaves_the_document_untouched(collection, monkeypatch):
+    """The engine discarded a context that did not reproduce its canary and
+    refused the request (operator, 2026-11-11: "Add the canary"; docs/notes/
+    idle-context-brief.md §10): HTTP 500 through LocalAI, which the embedding
+    client makes a deferral (`embeddings._endpoint_error`) — and the document
+    it was embedding carries no error, burns no retry, and is embedded at the
+    next attempt, on a context that reproduced it."""
+    from app import embeddings
+    con = db.connect(collection)
+    row = _doc(con)
+    recipe = collections_mod.EmbedRecipe(url="http://localai:8080", api="openai",
+                                         model="vega-nemotron-3-embed-1b", dtype="f32", ctx=512)
+    refusal = httpx.Response(500, request=httpx.Request("POST", recipe.url), json={"error": {
+        "message": "rpc error: code = Internal desc = context canary failed: the context created "
+                   "for this request did not reproduce the output of the load's for the same "
+                   "input and was discarded: try again"}})
+    assert embeddings._over_budget(refusal) is False and embeddings._numeric_failure(refusal) is False
+    deferral = embeddings._endpoint_error(recipe, refusal)
+    assert isinstance(deferral, embeddings.EndpointBusy) and not isinstance(deferral, embeddings.InputRefused)
+    attempts = []
+
+    def embed(*a, **k):
+        attempts.append(1)
+        if len(attempts) == 1:
+            raise deferral
+        return None
+
+    monkeypatch.setitem(worker.STAGES, "embed", embed)
+    assert worker._execute_step(con, collection, "embed", row) is False, "a deferral is not work"
+    after = con.execute("SELECT * FROM documents WHERE uid='g:1'").fetchone()
+    assert after["error"] is None, "no error may be written"
+    assert after["retries"] == 0, "no retry may be burned"
+    assert after["embed_done"] == 0, "and it stays to be embedded"
+    events = [r["message"] for r in con.execute("SELECT message FROM events WHERE level='warn'")]
+    assert any("deferred" in m and "context canary failed" in m for m in events), events
+    # asked again: the same document, taken this time
+    assert worker._execute_step(con, collection, "embed", after) is True and len(attempts) == 2
+    assert con.execute("SELECT error, retries FROM documents WHERE uid='g:1'").fetchone()[:] == (None, 0)
+
+
 def test_a_real_document_failure_is_still_recorded(collection, monkeypatch):
     """The distinction has to cut both ways, or a genuinely broken document
     would retry forever and never be surfaced."""

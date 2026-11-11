@@ -63,11 +63,24 @@ class Servicer(backend_pb2_grpc.BackendServicer):
         # keep, and the context stays; and it says beside each answer whether
         # the context was created for that call
         self.context_until = 0.0
+        # $FAKE_CANARY_FAIL="3,4": the third and fourth contexts this backend
+        # would create do not reproduce the canary — discarded, the call
+        # refused, and said beside the error (the wrapper's two probes at a
+        # load are the first two)
+        self.canary_fail = {int(n) for n in os.environ.get("FAKE_CANARY_FAIL", "").split(",") if n}
+        self.contexts = 0
 
     def _context(self, request, context) -> None:
         if "context_on_demand" not in self.loaded.Options:
             return
         created = time.monotonic() >= self.context_until
+        self.contexts += 1 if created else 0
+        if created and self.contexts in self.canary_fail:
+            context.set_trailing_metadata((("llama-context-canary", "failed"),))
+            context.abort(grpc.StatusCode.INTERNAL,
+                          "context canary failed: the context created for this request did not "
+                          "reproduce the output of the load's for the same input and was "
+                          "discarded: try again")
         keep = dict(request.Metadata).get("keep_context_ms")
         self.context_until = float("inf") if keep is None else max(
             0.0 if created else self.context_until, time.monotonic() + int(keep) / 1000.0)

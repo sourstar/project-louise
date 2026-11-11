@@ -1194,6 +1194,19 @@ the same bytes in `staged/llama.cpp/`, written to be filed upstream as it is:
   server's own word per request, for whoever counts creations. A client's
   clock cannot tell one — the context may have been kept for another
   client's request (the integration review's finding 1).
+- THE CONTEXT CANARY (operator, 2026-11-11: "Add the canary; it must be
+  possible to disable it once we have the confidence that the architecture is
+  sound"). On by default with the option, `--no-context-canary` to switch it
+  off. The load records the output its context gives for a fixed short input
+  (the pooled embedding with `--embedding`, the last token's logits
+  otherwise; at most 64 tokens), computed twice — the load is refused if the
+  two differ. Every context created later computes it again, after its
+  warmup and before any task runs on it: not the same values bit for bit,
+  and the context is discarded, its request answered `503 unavailable_error`
+  ("context canary failed: …", retryable). `common_init_result::
+  canary_record` / `canary_check`; `/metrics`: `context_canary`,
+  `context_canary_failures_total`; the creation's time includes its pass.
+  After the lora adapters are set the next context records it again.
 - Refused at load with speculative decoding or a multimodal projector (H8).
   Upstream's sleeping state is untouched and can be used with it.
 
@@ -1214,6 +1227,11 @@ the same bytes in `staged/llama.cpp/`, written to be filed upstream as it is:
   without the option. No change to backend.proto. The VeGa wrapper counts
   on it (vega.md §2, `kind: keeps`) and the calibration gate admits an
   on-demand run only on creations counted that way.
+- the model option `context_canary` (on with `context_on_demand`;
+  `context_canary:false` switches the canary off — in the run's stated
+  options), and a canary failure SAID BESIDE THE ERROR: trailing metadata
+  `llama-context-canary: failed` on `Embedding`'s `INTERNAL`, so a caller
+  tells a discarded context from memory that could not be had.
 - a refused creation reaches LocalAI's client as gRPC `INTERNAL`, HTTP 500
   with the message "the context cannot be created now…": for Louise a
   deferral (07 §7.8: a busy encoder — 408, 429, a 5xx — defers the batch),
@@ -1223,9 +1241,13 @@ the same bytes in `staged/llama.cpp/`, written to be filed upstream as it is:
 random-weight `llama` and `qwen3` models written by `tests/test-llama-archs -o`
 — huggingface.co is not reachable from the session that wrote it, so the
 presets the tests name were pointed at them):
-- `test_context_on_demand.py`, 15 of 15 (the two added with the review's
+- `test_context_on_demand.py`, 20 of 20 (two added with the review's
   fixes: a result says when the context was created for it — one result of
-  a batch, none without the option): the load's context freed when idle
+  a batch, none without the option; five with the canary: each created
+  context held to it, for a completion and an embedding model; a context
+  made to fail it discarded, the request refused with 503 and no context
+  left, the next one served; the canary switched off; none without the
+  option): the load's context freed when idle
   and none created by `/health`, `/props`, `/models`, `/slots`, `/tokenize`;
   one creation per request with a keep of 0; a request WITHOUT a keep leaves
   the context loaded, cached prompt included, until one that carries a keep
@@ -1238,11 +1260,17 @@ presets the tests name were pointed at them):
   after the patch (nine suites, 131 tests: the same 83 passes and the same 46
   failures — the failures are the stand-in models' content, on both).
 - LocalAI's `grpc-server` built from the tree the candidate series produces
-  and driven over gRPC as LocalAI drives it, 25 of 25 — the last six on the
-  trailer: the microseconds of a creation, `-1` inside another's keep and
-  after a request without one, twenty requests with a keep of 0 saying
-  nineteen creations (the first rode the held context) as the backend's log
-  counts them, nothing without the option. Among the first: the same
+  and driven over gRPC as LocalAI drives it, 30 of 30 (18 at first; 5 on the
+  trailer, first recorded here as six and the total as 25 — miscounted; 7 on
+  the canary). The trailer: the microseconds of a creation, `-1` inside
+  another's keep and after a request without one, twenty requests with a
+  keep of 0 saying nineteen creations (the first rode the held context) as
+  the backend's log counts them, nothing without the option. The canary:
+  recorded at the load and reproduced by every context created; a context
+  made to fail it discarded, the call refused `INTERNAL` with the trailer,
+  the backend up, the next call served with the same vector; a creation
+  refused for memory carrying no such trailer; `context_canary:false`
+  recording and checking nothing. Among the first: the same
   vector, byte for byte, WITH AND WITHOUT the option; a request without a
   keep, and one whose keep is no number, leaving the context loaded; token ids (P2) embedded
   on demand; `TokenizeString` and `Detokenize` answered while idle with no

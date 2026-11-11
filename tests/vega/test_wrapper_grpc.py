@@ -88,7 +88,8 @@ def make_node(tmp_path, stubs, vega):
     made = []
 
     def make(*, pairs=False, receipt_timeout_s=2.0, socket=None, tokenizer=False,
-             cuts=None, token_ids=False, extra: dict[str, Any] | None = None) -> Node:
+             cuts=None, token_ids=False, extra: dict[str, Any] | None = None,
+             canary_fail: str = "") -> Node:
         backends = tmp_path / "backends"
         real = backends / "fake-llama-cpp"
         real.mkdir(parents=True)
@@ -110,6 +111,7 @@ def make_node(tmp_path, stubs, vega):
         env = dict(os.environ, FAKE_BACKEND_LOG=str(log), VEGA_TEST_ENV="on",
                    **({"FAKE_TOKENIZER": "1"} if tokenizer else {}),
                    **({"FAKE_TOKEN_IDS": "1"} if token_ids else {}),
+                   **({"FAKE_CANARY_FAIL": canary_fail} if canary_fail else {}),
                    PYTHONPATH=os.pathsep.join([str(stubs.dir), os.environ.get("PYTHONPATH", "")]))
         cfg = vw.load_config(pkg / "vega.json", backends)
         running = vw.serve(cfg, "127.0.0.1:0", pb=stubs.pb, environ=env,
@@ -696,7 +698,8 @@ def test_an_on_demand_loads_probes_say_a_keep_of_0_and_its_calls_are_counted_for
     the calls are counted for VeGa on the backend's own word (operator,
     2026-11-10: "we can log expired stay warms for improvement")."""
     node = make_node(tokenizer=True, token_ids=True,
-                     extra={"Options": ["device:cpu", "parallel:1", "context_on_demand"]})
+                     extra={"Options": ["device:cpu", "parallel:1", "context_on_demand",
+                                        "context_canary:true"]})
     batch, r = node.embed(["one two", "three four five"], metadata={"keep_context_ms": "60000"})
     assert r.status_code == 200, r.text
     node.verify(batch, r)
@@ -725,7 +728,8 @@ def test_each_request_with_a_keep_of_0_has_its_context_created_and_counted(make_
     `fresh_contexts`): N requests, N calls, N creations, by the time each
     answer is back."""
     node = make_node(tokenizer=True, token_ids=True,
-                     extra={"Options": ["device:cpu", "parallel:1", "context_on_demand"]})
+                     extra={"Options": ["device:cpu", "parallel:1", "context_on_demand",
+                                        "context_canary:true"]})
     seen = []
     for text in ("one two", "three four", "five six"):
         batch, r = node.embed([text], metadata={"keep_context_ms": "0"})
@@ -758,7 +762,8 @@ def test_the_gate_reads_the_runs_count_through_the_whole_chain(make_node, vega, 
     from app import collections as collections_mod, run_check
     from app.hold import embedder as emb
     node = make_node(tokenizer=True, token_ids=True,
-                     extra={"Options": ["device:cpu", "parallel:1", "context_on_demand"]})
+                     extra={"Options": ["device:cpu", "parallel:1", "context_on_demand",
+                                        "context_canary:true"]})
 
     def ask(text, keep):
         batch, r = node.embed([text], metadata={"keep_context_ms": str(keep)})
@@ -786,3 +791,68 @@ def test_the_gate_reads_the_runs_count_through_the_whole_chain(make_node, vega, 
         ask(text, 0)
     assert emb._round_counts(before, counted(), 3) == (3, 0), \
         "the pass's requests rode a kept context: counted, never assumed"
+
+
+def test_a_context_that_fails_its_canary_refuses_the_call_and_is_counted_at_once(make_node, vega):
+    """Operator, 2026-11-11: "Add the canary; it must be possible to disable
+    it once we have the confidence that the architecture is sound". The
+    backend discards a context that does not reproduce its canary and refuses
+    the call; the wrapper passes the refusal on — no vector, no receipt — and
+    VeGa has the count before the caller has its error. Asked again, the call
+    is served."""
+    node = make_node(tokenizer=True, token_ids=True, canary_fail="3,5",
+                     extra={"Options": ["device:cpu", "parallel:1", "context_on_demand",
+                                        "context_canary:true"]})
+    batch, r = node.embed(["one two"], metadata={"keep_context_ms": "0"})
+    assert r.status_code == 500 and "context canary failed" in r.text, r.text
+    assert len(vega.receipts) == 0, "nothing is vouched for: no vector went out"
+    (row,) = vega.keeps.get()
+    assert (row["calls"], row["failed"], row["canary_failed"], row["created"]) == (0, 1, 1, 0), \
+        "told at once, though no call was answered yet"
+    # the retry: a new context, its canary reproduced
+    batch, r = node.embed(["one two"], metadata={"keep_context_ms": "0"})
+    assert r.status_code == 200, r.text
+    node.verify(batch, r)
+    # and again later: each failure is counted, each retry served
+    batch, r = node.embed(["three four"], metadata={"keep_context_ms": "0"})
+    assert r.status_code == 500
+    batch, r = node.embed(["three four"], metadata={"keep_context_ms": "0"})
+    assert r.status_code == 200, r.text
+    (row,) = vega.keeps.get()
+    assert (row["calls"], row["failed"], row["canary_failed"], row["created"]) == (2, 2, 2, 2)
+    assert node.vega_http.get("/vega/keeps").json()["runs"][0]["canary_failed"] == 2
+
+
+def test_an_on_demand_load_that_does_not_say_its_canary_is_not_stated(make_node, vega):
+    """A run states whether its contexts were checked (operator, 2026-11-11:
+    "it must be possible to disable it once we have the confidence that the
+    architecture is sound"). The backend's default is on, and a default is in
+    nobody's statement: the model's YAML says it either way, or no run is
+    stated and nothing is embedded."""
+    node = make_node(tokenizer=True, token_ids=True,
+                     extra={"Options": ["device:cpu", "parallel:1", "context_on_demand"]})
+    batch, r = node.embed(["one two"])
+    assert r.status_code == 500, r.text
+    assert "does not say whether its contexts are held to the canary" in r.text
+    assert "context_canary:true" in r.text and "context_canary:false" in r.text
+    assert vega.keeps.get() == [] and len(vega.receipts) == 0
+
+
+def test_a_run_with_the_canary_and_one_without_are_two_runs(make_node, vega):
+    node = make_node(tokenizer=True, token_ids=True,
+                     extra={"Options": ["device:cpu", "parallel:1", "context_on_demand",
+                                        "context_canary:false"]})
+    batch, r = node.embed(["one two"], metadata={"keep_context_ms": "0"})
+    assert r.status_code == 200, r.text
+    _vectors, run_ids = node.verify(batch, r)
+    (off,) = run_ids
+    stated = node.vega_http.get(f"/vega/runs/{off}").json()
+    assert "context_canary:false" in stated["engine"]["options"]["Options"], \
+        "the run's own statement says its contexts were not checked"
+    on = dict(stated, engine=dict(stated["engine"], options=dict(
+        stated["engine"]["options"],
+        Options=[o.replace("context_canary:false", "context_canary:true")
+                 for o in stated["engine"]["options"]["Options"]])))
+    from app.vega import runs as runs_mod
+    assert runs_mod.run_id(stated) == off and runs_mod.run_id(on) != off, \
+        "switching it off is another run, gated on its own"

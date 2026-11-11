@@ -61,6 +61,7 @@ class Node(Runner):
         self.options: dict[str, list[str]] = {}
         self.vram: dict[str, int] = {}
         self.refuse = 0
+        self.refusal = REFUSAL
 
     def get(self, url, timeout=None, **_kw):
         assert url == f"{SERVER}/system", url
@@ -84,7 +85,7 @@ class Node(Runner):
             with self.lock:
                 self.calls.append({"url": url, "json": json, "timeout": timeout})
             return httpx.Response(500, request=httpx.Request("POST", url),
-                                  json={"error": {"message": REFUSAL}})
+                                  json={"error": {"message": self.refusal}})
         return super().post(url, json=json, timeout=timeout, headers=headers, **kw)
 
 
@@ -246,6 +247,32 @@ def test_the_engine_s_refusal_is_a_deferral_and_never_an_input_s(node):
     stream, = keep.snapshot()
     assert stream["keep_ms"] == 20 and stream["premature"] == 0
     assert stream["excused"] == {keep.EXCUSED_DEFERRED: 1}, "judged, and excused"
+
+
+CANARY_REFUSAL = ("rpc error: code = Internal desc = context canary failed: the context created "
+                  "for this request did not reproduce the output of the load's for the same input "
+                  "and was discarded: try again")
+
+
+def test_a_context_that_failed_its_canary_is_a_deferral_too(node):
+    """The engine discarded a context that did not reproduce its canary
+    (operator, 2026-11-11: "Add the canary") and refused the request: asked
+    again, never an input's fault — no split, no cut, no error on a document
+    — and the expiry it leaves is not the stream's."""
+    response = httpx.Response(500, request=httpx.Request("POST", SERVER),
+                              json={"error": {"message": CANARY_REFUSAL}})
+    assert embeddings._over_budget(response) is False
+    assert embeddings._numeric_failure(response) is False
+    node.refusal = CANARY_REFUSAL
+    with dispatch.working_as(dispatch.Level.CORPUS, "wikidata"):
+        embeddings._embed_batch(["alpha", "beta"], 5.0, OPTED_IN)
+        node.refuse = 1
+        with pytest.raises(embeddings.EndpointDeferred) as e:
+            embeddings._embed_batch(["alpha", "beta"], 5.0, OPTED_IN)
+        assert not isinstance(e.value, embeddings.InputRefused)
+        assert "context canary failed" in str(e.value), "the deferral says why"
+        assert len(node.real()) == 2, "refused once, sent once: no split, no cut"
+        assert len(embeddings._embed_batch(["alpha", "beta"], 5.0, OPTED_IN)) == 2
 
 
 # ---- the resident keeper ----------------------------------------------------------------
