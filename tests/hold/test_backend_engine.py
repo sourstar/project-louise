@@ -395,8 +395,9 @@ def test_a_version_4_statement_of_an_argv_run_is_refused():
 
 def test_an_unknown_statement_version_is_refused():
     body = _body(_vega_run)
-    with pytest.raises(emb.GateError, match="version 6"):
-        emb.read_statement(_resigned(dict(body, version=6)))
+    unknown = max(emb.STATEMENT_VERSIONS) + 1        # 6 until version 6 was written (2026-11-11)
+    with pytest.raises(emb.GateError, match=f"version {unknown}"):
+        emb.read_statement(_resigned(dict(body, version=unknown)))
 
 
 def test_a_run_whose_engine_misplaces_backend_is_not_signed():

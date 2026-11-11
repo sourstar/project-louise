@@ -2004,6 +2004,23 @@ Before version 5 the gate's own-bytes verdict was not in the statement, so
 it did not reach the write. Versions 3 and 4 stay read, meaning "exact,
 one load, no CPU reference".
 
+**Version 6** (*amended 2026-11-11*, operator's choice B: the signed proof
+says how many fresh contexts the run was tested on;
+docs/notes/idle-context-brief.md §1.4) is the version-5 body with two keys
+more, written for a run that creates its context per request
+(`context_on_demand` among its engine's load options, or asked on fresh
+contexts by the gate) and for no other, so no other statement moves:
+- `contexts`: the contexts of their own the gate's probes were asked on,
+  each counted by the engine as created (03 §3.3);
+- `context_variation`: the closest an answer on one came to the same
+  text's first answer, as a decimal; `"1"` when every one was the same
+  bytes. It is already counted in `load_variation`.
+
+The count is part of the verdict: a version-6 statement of a run that
+creates its context per request passes only with `contexts` at least 300.
+A version-5 statement of such a run stays read as written by others, and
+its holder gates the run again before writing from it — not a failure.
+
 A peer keeps one statement per run it has validated, and a vector is
 written only from an answer naming a run with a passing statement for
 the space (03 §3.3). Version 4 is this body whose `engine` is a backend

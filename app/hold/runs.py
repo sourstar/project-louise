@@ -215,6 +215,12 @@ def passing(body: dict[str, Any], codex: Codex) -> bool:
         line = emb.cpu_review_line(body.get("engine"))      # the weights' level's own line
         if cpu is not None and (line is None or Decimal(cpu["worst"]) < Decimal(str(line))):
             return False
+        if int(body.get("version", 1)) >= emb.CONTEXTS_VERSION and emb.on_demand(body.get("engine")):
+            # FROM VERSION 6 the fresh contexts are part of the verdict: a run
+            # that creates its context per request was asked on FRESH_CONTEXTS
+            # of them, each counted by the engine (operator, 2026-11-11: B)
+            if int(body["contexts"]) < emb.FRESH_CONTEXTS:
+                return False
         variation = Decimal(body["load_variation"])
         if body["exactness"] == emb.EXACT:
             return variation == 1
@@ -531,6 +537,15 @@ def check(root: Path, name: str, codex: Codex, answered: set, *,
                 f"({body.get('passed')} of the sample, median {body.get('median')}, "
                 f"tolerance {codex.space.tolerance}); its vectors are not this space's "
                 f"function", run_id, failed=True)
+        if int(body.get("version", 1)) < emb.CONTEXTS_VERSION and emb.on_demand(body.get("engine")):
+            # GATED BEFORE THE COUNT WAS SIGNED (operator, 2026-11-11: B). Not
+            # a failure: the gate runs again (`run_check._look`) and its
+            # statement, at version 6, says how many fresh contexts it counted
+            raise RunUnvalidated(
+                f"{name}: run {run_id[:23]}… creates its context per request and its statement "
+                f"(version {body.get('version')}) does not say how many fresh contexts the gate "
+                f"counted; nothing from it is written until the gate has run again (03 §3.3, "
+                f"09 §9.12 version {emb.CONTEXTS_VERSION})", run_id)
         if batched and body.get("batch_invariant") is False:
             raise RunUnvalidated(
                 f"{name}: run {run_id[:23]}… is validated for single-text work only — "

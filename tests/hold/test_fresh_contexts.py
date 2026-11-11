@@ -105,7 +105,9 @@ def test_three_hundred_contexts_of_their_own_and_an_exact_model_stays_exact():
     assert max(map(len, model.orders[0])) > 10 * min(map(len, model.orders[0])), "long and short"
     body = emb.statement(run, codex, a_key(), now="2026-11-11T09:00:00Z")["body"]
     assert body["exactness"] == "exact" and float(body["load_variation"]) == 1.0
-    assert "contexts" not in body, "09 §9.12's statement is what it was"
+    # the count in the signed proof (operator, 2026-11-11: B; 09 §9.12 version 6)
+    assert body["version"] == emb.CONTEXTS_VERSION == 6
+    assert (body["contexts"], body["context_variation"]) == (300, "1")
 
 
 def test_one_answer_in_three_hundred_off_by_its_last_bits_fails_an_exact_run():
@@ -411,7 +413,7 @@ def test_the_pass_is_recorded_where_the_operator_can_read_it(tmp_path, monkeypat
     body = gate(OnDemand(), fresh=True)
     assert hold_runs.contexts_measured(tmp_path, "c", "document", body["run"]) == \
         {"contexts": 300, "closest": 1.0, "at": at}
-    assert "contexts" not in body, "the statement is what it was"
+    assert body["contexts"] == 300, "and in the signed statement (version 6)"
     assert hold_runs.contexts_measured(tmp_path, "c", "query", body["run"]) is None, "per role"
 
     bad = gate(OnDemand(bad=9, wrong=lambda v: _nudged(v, 0.9999995)), fresh=True)
@@ -453,3 +455,64 @@ def test_the_gate_report_says_the_count(tmp_path, monkeypatch, capsys):
     run = run_plain
     louise._embedder_check_runs(a, "c", codex)
     assert "  contexts    none asked: the run does not create its context per request" in capsys.readouterr().out
+
+
+
+# ---- the count in the signed statement (operator, 2026-11-11: B; 09 §9.12 version 6) ----
+
+ON_DEMAND_OPTIONS = {"Model": "m.gguf", "Options": ["ubatch:512", "context_on_demand"]}
+
+
+def _on_demand_body(version: int, contexts: int | None) -> dict:
+    model = OnDemand()
+    codex, run = _gate(model)
+    body = dict(emb.statement(run, codex, a_key(), now="2026-11-11T09:00:00Z")["body"])
+    body["engine"] = {**body["engine"], "options": ON_DEMAND_OPTIONS}
+    body["version"] = version
+    if contexts is None:
+        body.pop("contexts"), body.pop("context_variation")
+    else:
+        body["contexts"] = contexts
+    return codex, body
+
+
+def test_a_run_without_fresh_contexts_keeps_its_version_five_statement():
+    codex = codex_768(version=5)
+    ref = reference()
+    run = emb.run_gate(codex, reference=ref, embed=lambda t: ref, seed=b"\x09" * 32,
+                       stated=_vega_run(codex), embed_one=OnDemand().one, contribute=OnDemand().one)
+    body = emb.statement(run, codex, a_key(), now="2026-11-11T09:00:00Z")["body"]
+    assert body["version"] == 5 and "contexts" not in body, "no other statement moves"
+
+
+def test_the_count_is_part_of_the_verdict():
+    codex, body = _on_demand_body(6, 300)
+    assert hold_runs.passing(body, codex)
+    _, short = _on_demand_body(6, 12)
+    assert not hold_runs.passing(short, codex), "an on-demand run counted on 12 contexts is not admitted"
+
+
+def test_a_version_six_statement_without_its_count_is_refused():
+    from app.hold import envelope as env
+    _codex, body = _on_demand_body(6, None)
+    with pytest.raises(emb.GateError, match="context_variation|contexts"):
+        emb.read_statement(env.sign(env.CALIBRATION, body, a_key()))
+    _codex, body = _on_demand_body(6, -1)
+    with pytest.raises(emb.GateError, match="whole number"):
+        emb.read_statement(env.sign(env.CALIBRATION, body, a_key()))
+    _codex, body = _on_demand_body(6, 300)
+    assert emb.read_statement(env.sign(env.CALIBRATION, body, a_key()))["contexts"] == 300
+
+
+def test_an_on_demand_run_gated_before_the_count_was_signed_is_gated_again(monkeypatch, tmp_path):
+    """Not a failure: the worker's gate runs again (run_check._look) and its
+    statement says the count."""
+    codex, old = _on_demand_body(5, None)
+    run_id = old["run"]
+    monkeypatch.setattr(hold_runs, "statements", lambda *a, **k: {run_id: old})
+    with pytest.raises(hold_runs.RunUnvalidated) as e:
+        hold_runs.check(tmp_path, "c", codex, {run_id}, signer=None)
+    assert e.value.failed is False and "fresh contexts" in str(e.value)
+    _, new = _on_demand_body(6, 300)
+    monkeypatch.setattr(hold_runs, "statements", lambda *a, **k: {run_id: new})
+    hold_runs.check(tmp_path, "c", codex, {run_id}, signer=None)
