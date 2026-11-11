@@ -43,6 +43,11 @@ measured (published figures disagree).
   release; multi-reference voice profiles are an open request (LocalAI #11617, audio.cpp/Fish only). The
   `ref_audios` in LocalAI is the video field of MiniMax-H3 on the stablediffusion backend, not TTS. Four clips
   in one request would be one longer reference, which this model already reads: the 27.75 s original at RTF 0.74.
+  LIVE NOW (operator in München's session: "use the full clip in the meantime"): Philippe on the full 27.75 s
+  original as one clip with its full transcript; the 7.90 s cut kept as reference-cut-7.90s.wav.
+- **Deployed: d794502 (web + worker) live since 2026-11-12 05:37Z**, relay gate 200 — the voice choice (#495), the
+  account's voice and hands-free (#496), the microphone report and the second way to record (#497, #499), the
+  sisters' shared text index (#490, #494). OPEN: the operator's first try in the car → the `voice: microphone` line.
 - **The reader chooses the voice** (operator, 11-11: "choose philippe or valentina"): Ask › Settings › voice,
   the node's recorded voices by name, kept in the browser; none chosen, the node's own; a voice no longer held
   falls back to the node's (app/voice.py `voices`, app/speech.py `held_profile`). Merged, not deployed (web).
