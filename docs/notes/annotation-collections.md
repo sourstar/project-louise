@@ -367,3 +367,26 @@ and *update with a claims file*; 02 §2.10 amended):
 
 Open: one update a month for a monthly Codex. A collection that must change
 more often would be created weekly (its cadence is inside its id).
+
+## Every held collection holding the records (2026-11-11)
+
+Architecture session with the operator: a claim applies to every held
+collection whose record matches it, decided PER CLAIM BY HASH at read time
+(02 §2.10, 05 §5.3 amended) — sisters get every claim, a moved record its
+claim as `stale`, a sister cut by other layers its mentions stale per chunk
+(`annotations.state_of(..., chunks=)`, `annotations.chunk_hashes`); no
+sister declaration, no `seed.record_differences`, no Codex field. Target
+inference counts one plugin's collections with the same `records_roots` as
+one target (newest snapshot, ties to the lowest collection_id, said) and
+refuses only where they differ. Built in app/ask/annotations.py
+(`is_about`, `applicable`), app/ask/works.py and `ClaimIndex.plugins` (the
+disk index lists them in its meta; one built before lists none, and its
+lookups decide). Tests: tests/ask/test_annotation_sisters.py. Cost:
+`tools/measure/annotation_read.py` — synthetic (20 000 records, 20 000
+claims, 200 warm calls): on the target, before/after median 1.42/1.64 ms at
+10 hits and 4.77/4.91 ms at 200 (in memory), 10.95/10.94 ms at 200 through
+the disk index; the sister, which got nothing before, now pays what the
+target does. Wikipedia-articles (12.3 M claims) is still to be measured on
+the node with `annotation_read.py live wikipedia-articles`.
+Open: mentions are not yet attached to hits (wiki-gutenberg step 3); the
+per-chunk state is ready for it.

@@ -1016,15 +1016,29 @@ def newest_snapshot(root: Path, ref: str) -> tuple[str, str]:
     return tname, cur.snapshot_id
 
 
-def targets_of_claims(root: Path, claims: bytes | Path) -> list[tuple[str, str]]:
+def records_roots(snap) -> tuple[str, ...]:
+    """What a snapshot's records ARE, for telling two collections of one
+    plugin apart: its parts' `records_root`s (09 §9.4), in (slice, n) order.
+    Two collections whose newest snapshots give the same tuple hold the
+    same records byte for byte — sisters (02 §2.7) — and count as one
+    target (02 §2.10, amended 2026-11-11)."""
+    return tuple(s.records_root for s in sorted(snap.shards, key=lambda s: (s.slice, s.n)))
+
+
+def targets_of_claims(root: Path, claims: bytes | Path, *, log=None) -> list[tuple[str, str]]:
     """The targets a claims file names, decided by the node (RULE 2,
-    amended 2026-10-25): every end's uid names its target's PLUGIN by its
-    prefix (09 §9.3), and the target is the collection of that plugin held
-    here — the one whose newest snapshot holds every record the claims name
-    where several are held — with that newest snapshot as `from_snapshot`.
-    Where no held collection or more than one could be it, nothing is
-    guessed: the refusal says which, and how to name it on the command line.
-    `claims` is the file's bytes or its path; it is streamed, never held."""
+    amended 2026-10-25; amended 2026-11-11, architecture session with the
+    operator): every end's uid names its target's PLUGIN by its prefix
+    (09 §9.3), and the target is the collection of that plugin held here,
+    with its newest snapshot as `from_snapshot`. Several held collections
+    of the plugin whose newest snapshots have the same `records_roots` hold
+    the same records and count as ONE target: the one with the newest
+    snapshot (ties: the lowest collection_id) is taken, and `log` says which
+    — the claims apply to the others all the same, by hash, at read time
+    (app/ask/annotations.py). Where none is held, or the held ones' records
+    differ, nothing is guessed: the refusal names them, and how to name one
+    on the command line. `claims` is the file's bytes or its path; it is
+    streamed, never held."""
     from . import annotations_stream as st, collection as col
     from app.share import seeder
     root = Path(root)
@@ -1040,7 +1054,7 @@ def targets_of_claims(root: Path, claims: bytes | Path) -> list[tuple[str, str]]
             tree = col.shard_dir_of(root, n)
             cur = seeder.current_snapshot(tree)
             if cur is not None:
-                cands.append((n, c, cur.snapshot_id, tree))
+                cands.append((n, c, cur.snapshot_id, tree, records_roots(cur)))
         example = ends.first
         # a directory whose file is gone is retired, not held (07 §7.8: the
         # file existing IS the collection existing) — where any has its file
@@ -1051,22 +1065,28 @@ def targets_of_claims(root: Path, claims: bytes | Path) -> list[tuple[str, str]]
             raise AnnotationsError(
                 f"the claims name {plugin} records ({example}…), and this node holds no {plugin} "
                 f"collection with a snapshot: take or create one, then create the annotations")
-        if len(cands) > 1:
-            cands = [t for t in cands
-                     if st.read_target(Target(t[0], t[1], t[2], t[3]), ends).held == len(ends.digests)]
-        if len(cands) != 1:
-            names = ", ".join(sorted(t[0] for t in cands)) or "none of them"
+        if len({t[4] for t in cands}) > 1:
+            names = ", ".join(sorted(t[0] for t in cands))
             raise AnnotationsError(
-                f"the claims name {plugin} records, and this node holds several {plugin} "
-                f"collections that could be their target ({names}): nothing is guessed — name it on "
-                f"the command line: `louise hold collection create annotations --annotates <collection> "
+                f"the claims name {plugin} records, and this node holds {plugin} collections whose "
+                f"records differ ({names}: their newest snapshots' records_roots are not the same): "
+                f"nothing is guessed — name the one the claims were made against on the command line: "
+                f"`louise hold collection create annotations --annotates <collection> "
                 f"--claims FILE --name <name>`")
-        out.append((cands[0][0], cands[0][2]))
+        # one set of records: the newest snapshot, ties to the lowest collection_id
+        best = sorted(cands, key=lambda t: t[1].collection_id)
+        best = max(best, key=lambda t: t[2])       # max keeps the first of equals
+        if len(cands) > 1 and log is not None:
+            others = ", ".join(sorted(t[0] for t in cands if t is not best))
+            log(f"the claims name {plugin} records; {best[0]} (snapshot {best[2]}) is the target, the "
+                f"newest of the {plugin} collections holding the same records ({others} too) — the "
+                f"claims apply to each of them, by hash (02 §2.10, amended 2026-11-11)")
+        out.append((best[0], best[2]))
     return out
 
 
 def resolve_targets(root: Path, claims: bytes | Path, annotates: Any = None,
-                    from_snapshot: Any = None) -> list[tuple[str, str]]:
+                    from_snapshot: Any = None, *, log=None) -> list[tuple[str, str]]:
     """(collection, from_snapshot) pairs for a create: as named (the command
     line's `--annotates` / `--from-snapshot`, one per target), each target's
     newest held snapshot where none is named, and decided from the claims
@@ -1078,7 +1098,7 @@ def resolve_targets(root: Path, claims: bytes | Path, annotates: Any = None,
     if not refs:
         if snaps:
             raise AnnotationsError("--from-snapshot names the snapshot of a target --annotates names")
-        return targets_of_claims(root, claims)
+        return targets_of_claims(root, claims, log=log)
     if not snaps:
         return [newest_snapshot(root, r) for r in refs]
     if len(refs) != len(snaps):
@@ -1865,6 +1885,10 @@ class ClaimIndex:
             into = self.by_target if c.claim["type"] in WORK_TYPES else self.graph
             for uid in record_ends(c.claim):
                 into.setdefault(uid, []).append(c)
+        #: the plugins whose records the claims name (each end's uid prefix,
+        #: 09 §9.3): which held collections they may apply to (02 §2.10,
+        #: amended 2026-11-11 — any held collection of that plugin, by hash)
+        self.plugins: frozenset[str] = frozenset(_prefix(u) for d in (self.by_target, self.graph) for u in d)
 
 
 #: SHARD path -> (snapshot hash, its index). Keyed on the PATH (CLAUDE.md).
@@ -1925,16 +1949,40 @@ def applies_from(from_snapshot: str, read_snapshot: str | None) -> bool:
     return read_snapshot is not None and read_snapshot >= from_snapshot
 
 
-def state_of(claim: dict[str, Any], now: dict[str, str | None]) -> str:
+def state_of(claim: dict[str, Any], now: dict[str, str | None],
+             chunks: dict[str, dict[str, str]] | None = None) -> str:
     """`current` when both pinned records' content hashes are still the ones
     the claim was checked against, `stale` when one is not, `unknown` when
     this peer's manifest carries no hash to compare — or when the claim pins
     no record (a community, 09 §9.5). `now` is keyed by record uid (a
-    mention's chunk record, an entity's record uid)."""
+    mention's chunk record, an entity's record uid).
+
+    THE PER-CLAIM TEST (02 §2.10, amended 2026-11-11): `now` is read from
+    the collection the answer came from, whichever held collection that is —
+    the target, a sister holding the same records, or one whose records
+    moved — so the one comparison decides both whether the claim's record is
+    the one it was made about and whether it still is. `chunks`, where given,
+    is record uid -> {chunk_id: text_hash} as THAT collection cuts the record
+    (`chunk_hashes`): a chunk end not there with its `text_hash` — another
+    cut, other layers — makes the claim `stale` per chunk, while
+    `subject_hash` keeps covering the record (02 §2.10's mention rule). A
+    record `chunks` does not cover is judged by its record hash alone."""
     if claim["type"] == COMMUNITY:
         return UNKNOWN
     ends = ends_of(claim)
     a, b = now.get(end_uid(*ends[0])), now.get(end_uid(*ends[1]))
     if a is None or b is None:
         return UNKNOWN
+    if chunks is not None:
+        for kind, value in ends[:2]:
+            held = chunks.get(value["uid"]) if kind == CHUNK else None
+            if held is not None and held.get(value["chunk_id"]) != value["text_hash"]:
+                return STALE
     return CURRENT if (a, b) == (claim["subject_hash"], claim["object_hash"]) else STALE
+
+
+def chunk_hashes(codex: Codex, record: dict[str, Any]) -> dict[str, str]:
+    """chunk_id -> text_hash (BLAKE2b-128 of the chunk's text, 06 §6.3) of
+    `record` as `codex`'s layers cut it (`chunks_of`): what `state_of`
+    compares a chunk end with, in the collection the answer was read from."""
+    return {cid: blake128(text.encode("utf-8")) for cid, text in chunks_of(codex, record).items()}

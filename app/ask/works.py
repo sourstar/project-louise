@@ -280,16 +280,28 @@ def _safe(passages, editions: list[Edition]) -> dict[str, dict[str, Any]]:
 # --------------------------------------------------------------------------
 # the work groups, from the claims held here
 
-def _usable(collection, annotations: Iterable | None) -> list:
-    """The annotations collections held here, usable, about `collection`."""
+def _usable(collection, annotations: Iterable | None, root: Path | None = None) -> list:
+    """The annotations collections held here, usable, about `collection`:
+    naming it (or its records twin) in `annotates`, or making claims about
+    records of its plugin (02 §2.10, amended 2026-11-11: a claim applies to
+    every held collection holding its record — decided per claim by hash)."""
     codex = getattr(collection, "codex", None)
     if codex is None:
         return []
     from app.ask import annotations as facts
     held = facts._held(annotations)
     ids = _ids_of(collection)
-    return [a for a in held if facts.target_among(a.codex, ids) is not None
+    if root is None:
+        from app.ask.results import _root
+        root = _root()
+    return [a for a in held if facts.is_about(root, a, ids, _plugins(collection))
             and facts._withheld(a) is None]
+
+
+def _plugins(collection) -> set[str]:
+    codex = getattr(collection, "codex", None)
+    return {p for p in (getattr(collection, "plugin", None), getattr(codex, "plugin", None))
+            if isinstance(p, str) and p}
 
 
 def _ids_of(collection) -> tuple[str, ...]:
@@ -309,23 +321,22 @@ def work_groups(collection, uids: Sequence[str], *, root: Path | None = None,
     it whose `from_snapshot` the answer's snapshot has reached. A work is a
     connected set of records under those claims, keyed by its smallest uid;
     records no claim names are in no work."""
-    usable = _usable(collection, annotations)
+    from app.ask.results import _root
+    root = Path(root) if root is not None else _root()
+    usable = _usable(collection, annotations, root)
     if not usable or not uids:
         return {}, {}
     from app.hold import annotations as ann
     from app.hold import collection as col
     from app.share import seeder
-    from app.ask.results import _root
-    root = Path(root) if root is not None else _root()
     try:
         snap = seeder.cached_snapshot(col.shard_dir_of(root, collection.name))
     except Exception:   # noqa: BLE001 — no snapshot named: no claim applies (05 §5.3)
         snap = None
     read = snap.snapshot_id if snap is not None else None
-    from app.ask.annotations import target_among
-    ids = _ids_of(collection)
-    indexes = [ann.index_of(col.shard_dir_of(root, a.name)) for a in usable
-               if ann.applies_from(target_among(a.codex, ids).from_snapshot, read)]
+    from app.ask.annotations import applicable
+    indexes = [ann.index_of(col.shard_dir_of(root, a.name))
+               for a in applicable(root, usable, _ids_of(collection), _plugins(collection), read)]
     if not indexes:
         return {}, {}
     parent: dict[str, str] = {}

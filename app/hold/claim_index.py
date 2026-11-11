@@ -80,6 +80,7 @@ def index_part(path: str, gone: frozenset) -> dict[str, Any]:
     index = pack_records.read_index(p)
     h, k, fr, ln = array("q"), array("b"), array("i"), array("i")
     claims = 0
+    plugins: set[str] = set()
     for f in range(len(index.frames)):
         for line_no, raw in enumerate(pack_records.read_frame(p, index, f)):
             r = json.loads(raw)
@@ -89,12 +90,13 @@ def index_part(path: str, gone: frozenset) -> dict[str, Any]:
             kind = WORK if c["type"] in ann.WORK_TYPES else GRAPH
             claims += 1
             for end in dict.fromkeys(ann.record_ends(c)):
+                plugins.add(end.split(":", 1)[0])
                 h.append(uid_hash(end))
                 k.append(kind)
                 fr.append(f)
                 ln.append(line_no)
     return {"hash": h.tobytes(), "kind": k.tobytes(), "frame": fr.tobytes(), "line": ln.tobytes(),
-            "claims": claims}
+            "claims": claims, "plugins": sorted(plugins)}
 
 
 def build(shard_tree: Path, snap=None, *, stop=None, dest: Path | None = None) -> dict[str, Any]:
@@ -129,6 +131,7 @@ def build(shard_tree: Path, snap=None, *, stop=None, dest: Path | None = None) -
     frames_n: list[np.ndarray] = []
     lines_n: list[np.ndarray] = []
     claims = 0
+    plugins: set[str] = set()
     results = parallel.each_part(index_part, tasks)
     for part_i, got in enumerate(results):
         if stop is not None and stop():
@@ -141,6 +144,7 @@ def build(shard_tree: Path, snap=None, *, stop=None, dest: Path | None = None) -
         frames_n.append(np.frombuffer(got["frame"], dtype=np.int32))
         lines_n.append(np.frombuffer(got["line"], dtype=np.int32))
         claims += got["claims"]
+        plugins.update(got.get("plugins", ()))
     parts = held
     cat = (lambda xs, t: np.concatenate(xs) if xs else np.zeros(0, dtype=t))
     end_hash = cat(hashes, np.int64)
@@ -158,7 +162,7 @@ def build(shard_tree: Path, snap=None, *, stop=None, dest: Path | None = None) -
             tmp.replace(dest / f"{name}.npy")
         (dest / "parts.json").write_text(json.dumps(parts))
         meta = {"snapshot_id": snap.snapshot_id, "snapshot_hash": snap.hash, "claims": claims,
-                "ends": int(len(end_hash)), "parts": len(parts)}
+                "ends": int(len(end_hash)), "parts": len(parts), "plugins": sorted(plugins)}
         tmp = dest / "meta.json.tmp"
         tmp.write_text(json.dumps(meta))
         tmp.replace(dest / "meta.json")
@@ -272,6 +276,14 @@ class DiskClaimIndex:
         self.shard_tree, self.dest, self.snapshot_id = Path(shard_tree), Path(dest), snapshot_id
         self.arrays = {name: np.load(dest / f"{name}.npy", mmap_mode="r") for name in ARRAYS}
         self.parts = json.loads((dest / "parts.json").read_text())
+        # the plugins the claims name (`ClaimIndex.plugins`); None for an index
+        # built before 2026-11-11, whose meta does not list them: every lookup
+        # then decides, a binary search each
+        try:
+            listed = json.loads((dest / "meta.json").read_text()).get("plugins")
+        except (OSError, ValueError):
+            listed = None
+        self.plugins = frozenset(listed) if listed is not None else None
         self.by_target = _Ends(self, WORK)
         self.graph = _Ends(self, GRAPH)
         self._lock = threading.Lock()

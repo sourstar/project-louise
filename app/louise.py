@@ -246,7 +246,8 @@ def cmd_create_annotations(a) -> int:
     # named: as named, one --from-snapshot per --annotates; a target alone: its
     # newest held snapshot; none: the collections the claims name (RULE 2)
     # the claims file is streamed by path, never read whole (12.3 M claims: 4 GB)
-    targets = ann.resolve_targets(a.root, Path(a.claims), a.annotates, a.from_snapshot)
+    targets = ann.resolve_targets(a.root, Path(a.claims), a.annotates, a.from_snapshot,
+                                  log=lambda m: print(m, file=sys.stderr))
     container = getattr(a, "container", None) or "jsonl"
     if getattr(a, "dry_run", False):
         _print(ann.preview(a.root, targets=targets, container=container,

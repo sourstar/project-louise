@@ -19,7 +19,8 @@ from tests.hold.conftest import KEY, NOW, PLATFORM, pubmed
 TARGET_SNAPSHOT = "2026-08"
 
 
-def a_target(root: Path, name: str = "pubmed", texts=("one", "two", "three", "four"), **over):
+def a_target(root: Path, name: str = "pubmed", texts=("one", "two", "three", "four"),
+             snapshot_id: str = TARGET_SNAPSHOT, **over):
     """A held target: a green Codex, one record part, a snapshot."""
     target = col.create(root, pubmed(license=License("green", None), **over), name=name)
     d = col.shard_dir_of(root, name)
@@ -39,10 +40,10 @@ def a_target(root: Path, name: str = "pubmed", texts=("one", "two", "three", "fo
                      first_id="1", last_id=str(len(records)), records=len(records),
                      chunks=len(records), chunks_root="sha256:" + "22" * 32, tokens=512 * len(records),
                      bytes=len(raw))
-    snap = sn.Snapshot(collection_id=target.collection_id, snapshot_id=TARGET_SNAPSHOT, previous=None,
+    snap = sn.Snapshot(collection_id=target.collection_id, snapshot_id=snapshot_id, previous=None,
                        shards=(shard,), delta=sn.Delta(tuple(r["uid"] for r in records), (), ()), files={})
     (d / "snapshots").mkdir(exist_ok=True)
-    (d / shard_mod.snapshot_path(TARGET_SNAPSHOT)).write_bytes(snap.canonical())
+    (d / shard_mod.snapshot_path(snapshot_id)).write_bytes(snap.canonical())
     return target, {r["uid"]: r["content_hash"] for r in records}
 
 

@@ -130,34 +130,40 @@ def test_traverse_follows_an_annotations_collection_s_edges_resolved_against_its
     assert all(e["resolved"] for e in mine.values()), "held in the target it annotates"
 
 
-def test_a_records_twin_of_the_target_takes_its_claims_and_a_rebuilt_one_does_not(tmp_path):
+def test_a_records_twin_keeps_the_target_s_snapshot_rule_and_any_other_is_decided_by_hash(tmp_path):
     """02 §2.4 A1f (gutenberg, 2026-10-20): a collection that holds the
     target's records byte for byte by a carry — its own state/carry.json says
-    so — takes the claims about them, for facts and work groups alike; a
-    collection without that proof, or after a REBUILT carry, takes none."""
+    so — IS the target for `from_snapshot` (its snapshots are the target's
+    chain), for facts and work groups alike. Amended 2026-11-11 (02 §2.10):
+    without that proof, or after a REBUILT carry, the claims apply all the
+    same — decided per claim by hash, here `current`, the records being the
+    same — and no snapshot of another collection's cadence is compared."""
     import json
     from app.ask import works
     target, tcoll, held, _ = setup(tmp_path)
     twin = "sha256:" + "7a" * 32
 
-    def attached(marker=None):
+    def attached(marker=None, read=TARGET_SNAPSHOT):
         path = tmp_path / "pubmed" / "state" / "carry.json"
         path.unlink(missing_ok=True)
         if marker is not None:
             path.write_text(json.dumps({"from": target.collection_id, "to": twin, **marker}))
-        lists, source_of, contexts = a_list(tcoll, target)
+        lists, source_of, contexts = a_list(tcoll, target, read_snapshot=read)
         contexts["pubmed"]["collection_id"] = twin
         facts.attach(lists, source_of, contexts, root=tmp_path, collections=[held])
-        return {f["record"]["uid"] for f in lists[0]["hits"][0]["annotations"]}
+        return {f["record"]["uid"]: f["state"] for f in lists[0]["hits"][0]["annotations"]}
 
-    assert attached() == set(), "another collection's claims: none"
-    assert attached({"done": True, "mode": "move"}) == {"pubmed:2", "pubmed:3"}
-    assert attached({"done": False, "mode": "move"}) == set(), "a carry not finished proves nothing"
-    assert attached({"done": True, "mode": "copy", "rebuilt": True}) == set(), \
-        "rebuilt records are not the source's"
+    both = {"pubmed:2": "current", "pubmed:3": "current"}
+    assert attached() == both, "another collection of the plugin, the same records: by hash"
+    assert attached({"done": True, "mode": "move"}) == both
+    assert attached({"done": False, "mode": "move"}) == both
+    assert attached({"done": True, "mode": "copy", "rebuilt": True}) == both
+    assert attached({"done": True, "mode": "move"}, read="2026-07") == {}, \
+        "the twin reads the target's chain: before from_snapshot, nothing"
+    assert attached(read="2026-07") == both, "another cadence: the hash alone decides"
     (tmp_path / "pubmed" / "state" / "carry.json").write_text(
         json.dumps({"done": True, "mode": "move", "from": target.collection_id, "to": twin}))
     twin_coll = SimpleNamespace(name="pubmed", manifest_path=tcoll.manifest_path,
                                 codex=SimpleNamespace(collection_id=twin))
     assert works._ids_of(twin_coll) == (twin, target.collection_id)
-    assert [a.name for a in works._usable(twin_coll, [held])] == ["pubmed-same-work"]
+    assert [a.name for a in works._usable(twin_coll, [held], tmp_path)] == ["pubmed-same-work"]
