@@ -33,7 +33,16 @@ measured (published figures disagree).
   19.63–27.75 s. The live backend `intel-sycl-f16-omnivoice-cpp` (latest, 2026-10-07) reads one reference
   (`GetVoice`); the `-development` build (master, 2026-11-10) reads `ref_audios`: it is pinned under its own name
   after the night chain, tested beside the live one (the fixed sentence ×3, it and en; RTF, first sound, card
-  memory); the live switch waits for the operator's word.
+  memory); the live switch waits for the operator's word. RESULT (München): FAILED, rolled back by itself, live
+  unchanged (the 7.90 s cut, RTF 0.424). The pinned copy is refused before it loads ("selected model does not
+  support reference-audio voice cloning": LocalAI keys the capability on the backend's name); `-development`
+  passes that check and crashes at load (a master backend under the v4.12.1 core). NO FIX TO WAIT FOR (checked
+  upstream 11-11, the operator: "check if there is already a fix"): one reference per request everywhere —
+  LocalAI master's omnivoice-cpp wrapper (`refAudioFor`: `req.Voice` or `audio_path`, one buffer to the C call),
+  omnivoice.cpp (`--ref-wav` + `--ref-text`), OmniVoice itself (`ref_audio` + `ref_text`); v4.12.1 is the latest
+  release; multi-reference voice profiles are an open request (LocalAI #11617, audio.cpp/Fish only). The
+  `ref_audios` in LocalAI is the video field of MiniMax-H3 on the stablediffusion backend, not TTS. Four clips
+  in one request would be one longer reference, which this model already reads: the 27.75 s original at RTF 0.74.
 - **The reader chooses the voice** (operator, 11-11: "choose philippe or valentina"): Ask › Settings › voice,
   the node's recorded voices by name, kept in the browser; none chosen, the node's own; a voice no longer held
   falls back to the node's (app/voice.py `voices`, app/speech.py `held_profile`). Merged, not deployed (web).
