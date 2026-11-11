@@ -71,6 +71,20 @@ measured (published figures disagree).
   the request's `metadata`, no wire change — and NOTHING IS MEASURED OR BUILT.
   [idle-context-brief.md](idle-context-brief.md), rewritten: §1 the design, §2 what to measure first, §3 the code
   and its ten hazards, §9 whose word each part is.
+- **Context on request — implemented on the CPU, STAGED, nothing deployed** (operator, the same day: "Implement it").
+  P11 (staged): llama.cpp's server (`--context-on-demand`, `--keep-context-ms`, a request's `keep_context_ms`; written
+  for upstream with its tests and README) and LocalAI's backend (the model options, the keep from the request's
+  `metadata`, no RPC reading the context) — `deploy/localai/patches/staged/0009-…`, built only from
+  `staged/context-on-demand.series`; localai-bugs.md "P11 (staged)". CPU checks: its 12 server tests; nine existing
+  suites unchanged with the option off (83 passes and 46 failures before and after — the failures are the random-weight
+  stand-in models); `grpc-server` built from the candidate series and driven over gRPC, 16 checks, the same vector
+  byte for byte with and without the option. Louise: RAGE's keep per job type and its trim (`app/rage/keep.py`: 20 ms,
+  doubled at a premature expiry, an expiry a missed scheduling caused excused, not kept across a restart), sent only to
+  a model LocalAI lists with the option (`model_load.context_on_demand`); the keeper counts such a model at its running
+  size (`resident._rest_size`); `tools/measure/context_on_request.py` counts from the card record what a keep would give
+  back; the gate asks an on-demand model its probes on 300 contexts of their own (`embedder.fresh_contexts`; 03 §3.3
+  amended). NOT DONE: every measurement of the brief's §2 (the node's, on a test copy); the VeGa wrapper's count and
+  canary (an engine change). [idle-context-brief.md](idle-context-brief.md) §10.
 - **Inputs computed in more than one pass, counted** (operator, 11-12: "for future trimming improvements we
   should gracefully log when a text is splitted"): the VeGa wrapper counts every answer's tokens against the
   load's ubatch and tells VeGa (`kind: passes`); VeGa logs when the inputs over it grow and serves every run's

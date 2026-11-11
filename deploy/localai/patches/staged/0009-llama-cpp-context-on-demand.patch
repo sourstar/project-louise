@@ -45,9 +45,9 @@ Assisted-by: Claude Code
  backend/cpp/llama-cpp/context_on_demand.h     |   86 ++
  .../cpp/llama-cpp/context_on_demand_test.cpp  |   62 +
  backend/cpp/llama-cpp/grpc-server.cpp         |   42 +-
- .../0011-server-context-on-demand.patch       | 1123 +++++++++++++++++
+ .../0011-server-context-on-demand.patch       | 1138 +++++++++++++++++
  backend/cpp/llama-cpp/prepare.sh              |    4 +
- 6 files changed, 1312 insertions(+), 10 deletions(-)
+ 6 files changed, 1327 insertions(+), 10 deletions(-)
  create mode 100644 backend/cpp/llama-cpp/context_on_demand.h
  create mode 100644 backend/cpp/llama-cpp/context_on_demand_test.cpp
  create mode 100644 backend/cpp/llama-cpp/patches/0011-server-context-on-demand.patch
@@ -381,10 +381,10 @@ index a90c179..d7dcbc6 100644
          return grpc::Status::OK;
 diff --git a/backend/cpp/llama-cpp/patches/0011-server-context-on-demand.patch b/backend/cpp/llama-cpp/patches/0011-server-context-on-demand.patch
 new file mode 100644
-index 0000000..a9bce39
+index 0000000..1875a39
 --- /dev/null
 +++ b/backend/cpp/llama-cpp/patches/0011-server-context-on-demand.patch
-@@ -0,0 +1,1123 @@
+@@ -0,0 +1,1138 @@
 +server: context on demand - the model stays loaded, its context is created by the request
 +
 +A loaded model holds its weights and its context: the KV cache and the
@@ -425,8 +425,8 @@ index 0000000..a9bce39
 +Checked on the CPU (random-weight llama and qwen3 models written by
 +tests/test-llama-archs -o): tools/server/tests/unit/test_context_on_demand.py
 +- the context freed when idle and not created by the read-only routes; one
-+creation per request without a keep; a keep from the request and from the
-+server; a keep of 0 that does not shorten another; the same completion and
++creation per request without a keep; a keep from the request (completion
++and chat completion) and from the server; a keep of 0 that does not shorten another; the same completion and
 +the same embedding, value for value, across creations; the cached prompt
 +reused within a keep and gone after it; a creation refused with 503, then
 +served; eight concurrent requests; /slots listed without a context; together
@@ -1221,10 +1221,10 @@ index 0000000..a9bce39
 +     int32_t n_predict = -1; // new tokens to predict
 +diff --git a/tools/server/tests/unit/test_context_on_demand.py b/tools/server/tests/unit/test_context_on_demand.py
 +new file mode 100644
-+index 0000000..1cf706d
++index 0000000..ec74be3
 +--- /dev/null
 ++++ b/tools/server/tests/unit/test_context_on_demand.py
-+@@ -0,0 +1,256 @@
++@@ -0,0 +1,271 @@
 ++import pytest
 ++import time
 ++from utils import *
@@ -1362,6 +1362,21 @@ index 0000000..a9bce39
 ++    # and it is freed when the keep has run out
 ++    wait_for_context(server, False)
 ++    assert time.time() - t_start >= 3.0
+++
+++
+++def test_keep_from_a_chat_completion():
+++    global server
+++    server.start()
+++    wait_for_context(server, False)
+++
+++    res = server.make_request("POST", "/v1/chat/completions", data={
+++        "messages": [{"role": "user", "content": "What is the meaning of life?"}],
+++        "max_tokens": 8,
+++        "keep_context_ms": 3000,
+++    })
+++    assert res.status_code == 200
+++    assert get_metric(server, "context_loaded") == 1
+++    assert get_metric(server, "context_creations_total") == 1
 ++
 ++
 ++def test_keep_default_of_the_server():

@@ -1198,10 +1198,10 @@ the same bytes in `staged/llama.cpp/`, written to be filed upstream as it is:
 random-weight `llama` and `qwen3` models written by `tests/test-llama-archs -o`
 — huggingface.co is not reachable from the session that wrote it, so the
 presets the tests name were pointed at them):
-- `test_context_on_demand.py`, 11 of 11: the context freed when idle and not
+- `test_context_on_demand.py`, 12 of 12: the context freed when idle and not
   created by `/health`, `/props`, `/models`, `/slots`, `/tokenize`; one
-  creation per request without a keep; a keep from the request and from the
-  server; a keep of 0 that does not shorten another's; the same completion
+  creation per request without a keep; a keep from the request (a completion
+  and a chat completion) and from the server; a keep of 0 that does not shorten another's; the same completion
   and the same embedding, value for value, across creations; the cached
   prompt reused within a keep and gone after it; a creation refused with 503,
   then served; eight concurrent requests; together with `--sleep-idle-seconds`.

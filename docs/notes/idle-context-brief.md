@@ -176,11 +176,11 @@ them.
   DOUBLES on each premature expiry and decays slowly without one (AIMD, as
   RAGE's requests in flight, gpu-saturation-plan.md lever 3), between a
   floor of 20 ms and a ceiling; a stream then reaches its level within a
-  handful of creations whatever the start, and its last good value is kept
-  across restarts. "Premature" is defined by the creation's MEASURED time
-  (§2): an expiry is premature when the stream's next request arrives
-  within about one creation's time of it — holding that long would have
-  cost less than creating again, the break-even of SKI RENTAL. Trimmed by
+  handful of creations whatever the start (and again after a restart: the
+  value is not kept, §10). "Premature" is defined by the creation's MEASURED
+  time (§2): an expiry is premature when the stream's next request is ready
+  within ten creations' time of it (§10 says why ten and not one) — the
+  break-even of SKI RENTAL, weighted for what each side costs here. Trimmed by
   hand from a log, 20 ms would be a known slowdown deployed (CLAUDE.md,
   performance) on every stream nobody had trimmed yet.
 - **After a first observation period the default may be set anew**
@@ -722,3 +722,85 @@ probable or open.
   counting an opted-in model
   at its running size; the gate with keep 0 and ≥ 300 creations; the
   canary; §2's acceptance.
+
+## 10. Implementation — where it stands (2026-11-11)
+
+*The operator, 2026-11-11: "Implement it". Written by the session that
+implemented it, with no node: everything below ran on a CPU, in a cloud
+container. §2's measurements are NOT made; nothing is deployed and no engine
+changed.*
+
+| part (§3, P11) | state | where | checked |
+|---|---|---|---|
+| 1. llama.cpp's server | written, in upstream's form | `deploy/localai/patches/staged/llama.cpp/0011-server-context-on-demand.patch` | CPU: its own 12 server tests; nine existing suites unchanged with the option off (localai-bugs.md "P11 (staged)") |
+| 2. LocalAI's backend | written | `deploy/localai/patches/staged/0009-llama-cpp-context-on-demand.patch`, `staged/context-on-demand.series` | CPU: `grpc-server` built from the candidate series and driven over gRPC, 16 checks; the same vector byte for byte with and without the option |
+| 4a. RAGE's keep and its trim | written | `app/rage/keep.py`, `app/embeddings.py` (both request paths) | `tests/test_rage_keep.py`, `tests/test_context_on_demand.py` |
+| 4b. the option read from `/system` | written | `app/model_load.py` (`context_on_demand`) | the same |
+| 4c. the keeper's rule (H5) | written | `app/resident.py` (`_rest_size`) | the same |
+| 4d. the gate's fresh-context pass | written | `app/hold/embedder.py` (`fresh_contexts`, 300 creations, short and long probes), `app/run_check.py` (`fresh_contexts`: only for a model LocalAI lists with the option, its keep fixed at 0); 03 §3.3 amended | `tests/hold/test_fresh_contexts.py` |
+| the count for §2 from the card record | written | `tools/measure/context_on_request.py` (read-only; for the node to run) | `tests/test_context_on_request_tool.py` |
+| 3. the VeGa wrapper's count, the canary | NOT written — a wrapper change is an engine change (§4) | `deploy/vega/vega_wrapper.py` | — |
+| §2's measurements | NOT made | the node, on a test copy | — |
+
+**What the code settled, beyond the brief:**
+
+- **H4 was larger than seven reads.** `server_context::get_meta()` itself
+  read the context (two token strings, the pooling type, the slot's size),
+  and LocalAI calls it on its RPC threads per request. It no longer does;
+  that is in the llama.cpp half, so upstream's own routes gain it too.
+- **The first decode of every new context is the WARMUP's.** A creation
+  goes through the same steps as a load (`common_init_context_apply`:
+  adapters, then the warmup run where the model's options have it), so the
+  class of M5 — a difference on the first pass after a load — falls on a
+  decode nobody reads. It does not CHECK bytes: the wrapper's canary and the
+  keep-0 gate still do (§1.4).
+- **§2's instrument is the staged backend itself.** A test copy loaded with
+  `context_on_demand` and asked with keep 0 pays one creation and one free
+  per request, and says each in its log with its milliseconds ("context
+  created in … ms", "context freed in … ms, it lived … s"); `/metrics` has
+  `context_creations_total` and `context_creation_seconds_total`. No
+  diagnostic program is needed beside it — `GGML_SYCL_MEMTRACE=1` and the
+  driver's count as §2 says.
+- **A refused creation arrives as HTTP 500 through LocalAI** (gRPC
+  `INTERNAL`, the message "the context cannot be created now…"), which
+  Louise already reads as a deferral (07 §7.8; `embeddings._endpoint_error`).
+  A test holds that the words are not one of the over-long-input spellings,
+  which would cut the batch and blame a document for a full card.
+- **"Premature" is ten creations' time, not one** (§1.3 said "about one"):
+  `PREMATURE_FACTOR = 10` × a creation (100 ms until measured). Holding an
+  idle context costs memory nobody was waiting for; a creation costs card
+  time on the embedding path, and at one creation's time a stream with
+  steady 300 ms gaps would have paid a creation on every request for ever.
+  The review's constant, like the ceiling (2 s) and the decay (a tenth a
+  minute): all three are for the first observation period to correct.
+- **The keep is NOT kept across a restart** (§1.3 said it would be).
+  Invariant 10's letter is that a runtime value survives nothing, and
+  app/sizing.py's windows already start again from their default; a stream
+  finds its level again in a handful of creations. No state file, no change
+  to 07 §7.8.
+- **RAGE judges by its own clock, with an allowance** (`TRANSIT_MS`, 10 ms):
+  it takes the context for expired when its own gap comes within that of the
+  keep, so a borderline case costs a longer keep and never a hidden
+  creation. The trim therefore needs nothing from the engine to work. What
+  it cannot see is an expiry BETWEEN TWO TEXTS OF ONE REQUEST (LocalAI
+  sends one text per call): that is the wrapper's count, still to write,
+  and the reason the per-text gaps are in §2.
+- **A model's keep is only sent where LocalAI lists the option.** A runner
+  that does not know `metadata` is never sent it (`model_load.context_on_demand`).
+- **Rerank takes the model's default keep**: LocalAI's `RerankRequest` has no
+  metadata map. Embedding, completion and chat carry the request's.
+
+**For München, when the operator says so** (§2, §7 steps 2–3; nothing here
+touches a live model):
+1. Build the test backend: `SERIES_FILE=deploy/localai/patches/staged/context-on-demand.series`
+   with `build.sh sycl_f16` and the live `INTEL_STACK`, on BUILD_HOST.
+2. Install it under its own name; a TEST copy of an encoder's YAML under its
+   own model name with `context_on_demand` added to `options:` and
+   `GGML_SYCL_MEMTRACE=1` to its `env`, LocalAI's log at debug for that run.
+3. With the node's harness, in a quiet window, at the encoder's live
+   settings: N requests with `"metadata": {"keep_context_ms": "0"}`. Read
+   from the log the creation and free times (first and steady), from
+   MEMTRACE and fdinfo the bytes before, during and after, and compare every
+   vector with the same text's first.
+4. The same with a keep of 20 and of 500, at production's batch and lanes:
+   the creations counted against the requests sent.

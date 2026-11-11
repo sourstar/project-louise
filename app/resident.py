@@ -710,6 +710,14 @@ def _rest_size(r: Resident, mem: Memory) -> int | None:
     CPU; None never seen. What the budget counts."""
     from app import model_load
     largest = _size(r, mem)
+    if model_load.context_on_demand(r.server, r.model):
+        # A model loaded with `context_on_demand` holds its weights and creates
+        # its context per request (docs/notes/idle-context-brief.md §1.3): its
+        # FEWEST bytes are the weights alone, which is no size it can work at.
+        # It counts at its running size, so what it gives back while idle is
+        # HEADROOM on the card and never budget for another preload — that
+        # memory is spoken for the moment the model's next request arrives.
+        return largest
     got = [v for v in (mem.rest.get(r.key), model_load.rest_vram(r.server, r.model)) if _whole(v, largest)]
     return min(got) if got else largest
 
@@ -870,6 +878,12 @@ def _held_now(servers: Iterable[str], mem: Memory) -> dict[tuple, int] | None:
             whole = [v for v in (size, mem.rest.get((s, m)), model_load.rest_vram(s, m)) if _whole(v, largest)]
             # a model partly off the card counts whole: what it will hold again once used
             rest = (min(whole) if whole else largest) if size else 0
+            if size and model_load.context_on_demand(s, m):
+                # as `_rest_size` counts it: at its running size. Counted at its
+                # idle size here, its context would be the margin's "growth"
+                # each time it works — and the budget would pay for it twice,
+                # once in the model's size and once in the margin
+                rest = largest
             out[k] = max(rest, out.get(k, 0))
     return out
 

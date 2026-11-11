@@ -160,6 +160,16 @@ REST_FLOOR = 0.5
 #: (server, model) listed loaded at least once: a model that holds no VRAM
 #: (one on the CPU) has no `_sizes` entry, and costs the card nothing
 _seen: set[tuple[str, str]] = set()
+#: (server, model) -> whether its load options carry llama.cpp's
+#: `context_on_demand` (LocalAI's `/system` lists the options a model was
+#: loaded with, P1): such a model holds its weights and creates its context
+#: per request (docs/notes/idle-context-brief.md), so it has TWO sizes on the
+#: card, idle and running, and takes a request's `keep_context_ms`
+#: (`context_on_demand`; app/rage/keep.py, app/resident.py)
+_on_demand: dict[tuple[str, str], bool] = {}
+#: the option, as a model's YAML `options:` names it or as the raw
+#: llama-server flag LocalAI's backend passes through
+ON_DEMAND_OPTION = "context_on_demand"
 _probe_locks: dict[str, threading.Lock] = {}
 _flights: dict[tuple[str, str], _Flight] = {}
 _recent: deque[ColdStart] = deque(maxlen=100)
@@ -176,6 +186,7 @@ def reset() -> None:
         _held.clear()
         _rest.clear()
         _seen.clear()
+        _on_demand.clear()
         _probe_locks.clear()
         _flights.clear()
         _recent.clear()
@@ -209,6 +220,7 @@ def _fetch_system(server: str) -> frozenset[str] | None:
         raise _NoRoute()
     held = [m for m in rows if isinstance(m, dict) and isinstance(m.get("id"), str)]
     pids, sizes, now = {}, {}, {}
+    on_demand = {m["id"]: _options_on_demand(m.get("load_options")) for m in held}
     for m in held:
         pid = (m.get("process") or {}).get("pid") if isinstance(m.get("process"), dict) else None
         if isinstance(pid, int):
@@ -222,6 +234,7 @@ def _fetch_system(server: str) -> frozenset[str] | None:
         _pids[server] = pids
         _held[server] = now
         _seen.update((server, m) for m in now)
+        _on_demand.update(((server, m), v) for m, v in on_demand.items())
         for k, v in sizes.items():
             _sizes[k] = max(v, _sizes.get(k, 0))
             # a reading under REST_FLOOR of the largest: the model partly off
@@ -232,6 +245,34 @@ def _fetch_system(server: str) -> frozenset[str] | None:
             if v >= floor:
                 _rest[k] = min(v, _rest.get(k, v))
     return frozenset(m["id"] for m in held)
+
+
+def _options_on_demand(load_options) -> bool:
+    """Whether a `/system` row's `load_options` (the `ModelOptions` LocalAI
+    sent with LoadModel, proto names) switch `context_on_demand` on: an entry
+    of `Options` — `context_on_demand`, `context_on_demand:true` — or the raw
+    flag `--context-on-demand`. A runner that lists no options says no."""
+    opts = load_options.get("Options") if isinstance(load_options, dict) else None
+    if not isinstance(opts, list):
+        return False
+    on = False
+    for o in opts:
+        if not isinstance(o, str):
+            continue
+        name, _, value = o.strip().partition(":")
+        if name.lstrip("-").replace("-", "_") == ON_DEMAND_OPTION:
+            on = value.strip().lower() not in ("false", "0", "no", "off", "disabled")
+    return on
+
+
+def context_on_demand(url: str, model: str | None) -> bool:
+    """Whether `model` at `url` was LOADED with `context_on_demand`, by the
+    last `/system` answer that listed it; False when it never was listed —
+    a request then carries no keep, and its size is read as any model's."""
+    if not model:
+        return False
+    with _lock:
+        return _on_demand.get((server_of(url), model), False)
 
 
 def size_vram(server: str, model: str) -> int | None:

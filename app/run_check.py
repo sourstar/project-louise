@@ -156,6 +156,28 @@ def answers(recipe, *, query: bool = False, how: str = "normalised",
                              "contribute": contribute}[how])
 
 
+def fresh_contexts(recipe, *, query: bool = False, **kw) -> runs_mod.Answers | None:
+    """For a model LocalAI lists as loaded with `context_on_demand`
+    (`model_load.context_on_demand`): `answers(how="one")` with every
+    request's keep fixed at 0, so each text is embedded on a context created
+    for it (app/rage/keep.py `fixed`; the brief §1.4) — the gate's
+    fresh-context pass. None for any other model: the gate asks nothing."""
+    from . import model_load
+    from .rage import keep as rage_keep
+    side = embeddings._side(recipe, query)
+    # the options are LocalAI's to list (`/system`); asked here, bounded and
+    # cached as every such read, so the answer does not depend on who asked last
+    model_load.loaded_models(model_load.server_of(side.url))
+    if not model_load.context_on_demand(side.url, side.model):
+        return None
+    one = answers(recipe, query=query, how="one", **kw)
+
+    def fresh(texts: list[str], seen: set) -> list[list[float]]:
+        with rage_keep.fixed(0):
+            return one._fn(texts, seen)
+    return runs_mod.Answers(fresh)
+
+
 def batched(recipe) -> bool:
     """Does this peer contribute otherwise than strictly one text at a time?"""
     return (embeddings.batch_size(recipe) > 1 or config.EMBED_CONCURRENCY > 1
@@ -341,6 +363,7 @@ def _validate(root: Path, name: str, codex: Codex, recipe, *, role: str = "docum
             stated=stated, key=key, now=now or _now(), items=items, on_run=on_run,
             cpu_reference=None if cpu is None else (cpu.run_id, cpu.vectors),
             reload=_reloader(recipe, query=query, stop=stop, name=name),
+            fresh=fresh_contexts(recipe, **kw),
             # the Codex's requirement wins over the node's setting: a node may
             # be stricter than its collection, never looser (09 §9.3)
             exactness=(emb.EXACT if runs_mod.requires_exact(codex)

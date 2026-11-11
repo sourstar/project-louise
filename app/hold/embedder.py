@@ -191,6 +191,14 @@ SWEEP = 32
 LONG_PROBE = 16
 #: how far apart a near-exact run's answers to one text may be
 NEAR_VARIATION = 0.99999
+#: A MODEL THAT CREATES ITS CONTEXT PER REQUEST (llama.cpp's
+#: `context_on_demand`, docs/notes/idle-context-brief.md §1.4): every creation
+#: is a first pass after a load, and production makes thousands a day where
+#: the fresh loads above are three. So the gate asks its probes on this many
+#: contexts of their own (`fresh_contexts`). A fault at rate p a creation is
+#: caught by n clean ones with probability 1 − (1 − p)ⁿ: ten catch p = 5 %
+#: four times in ten; 299 catch p = 1 % ninety-five times in a hundred.
+FRESH_CONTEXTS = 300
 
 
 @dataclass(frozen=True)
@@ -234,6 +242,15 @@ class Run:
     exactness: str = EXACT
     loads: int = 1
     load_variation: float = 1.0
+    # A MODEL THAT CREATES ITS CONTEXT PER REQUEST (`FRESH_CONTEXTS`): how
+    # many contexts of their own the probes were asked on, and the closest
+    # one of those answers came to the same text's first (1.0: every one the
+    # same bytes). 0 contexts for every other model. `load_variation` is
+    # never above it: the statement's one number covers both (09 §9.12 has no
+    # field of its own for this, and a run admitted by its statement must not
+    # be more exact there than the gate found it).
+    contexts: int = 0
+    context_variation: float = 1.0
     #: the CPU review line this run is held to (`cpu_review_line`); None for
     #: a quantization level not yet measured
     cpu_line: float | None = CPU_REVIEW_LINE
@@ -296,11 +313,19 @@ class Run:
                              f"{CPU_NEAR_LINE} ({'none is stored' if self.cpu_worst is None else f'worst {self.cpu_worst:.6f}'}; "
                              f"`louise hold embedder cpu-reference`)")
         elif self.load_variation < 1.0 and self.reproducible is not False:
-            parts.append(f"the run did not give back its own bytes across {self.loads} fresh "
-                         f"loads (closest {self.load_variation:.7f}), and its collection asks "
-                         f"`exactness = \"exact\"`: bytes or nothing. Without that key a run "
-                         f"is held to the near-exact bound (CLAUDE.md invariant 12, operator "
-                         f"2026-11-01; docs/notes/near-exact-runs.md)")
+            if self.contexts and self.context_variation <= self.load_variation:
+                parts.append(f"the run did not give back its own bytes on a context created "
+                             f"for the request: over {self.contexts} fresh contexts the closest "
+                             f"an answer came to the same text's first is "
+                             f"{self.context_variation:.7f} (the model is loaded with "
+                             f"`context_on_demand`, docs/notes/idle-context-brief.md §1.4), and "
+                             f"its collection asks `exactness = \"exact\"`: bytes or nothing")
+            else:
+                parts.append(f"the run did not give back its own bytes across {self.loads} fresh "
+                             f"loads (closest {self.load_variation:.7f}), and its collection asks "
+                             f"`exactness = \"exact\"`: bytes or nothing. Without that key a run "
+                             f"is held to the near-exact bound (CLAUDE.md invariant 12, operator "
+                             f"2026-11-01; docs/notes/near-exact-runs.md)")
         if self.reproducible is False and self.exactness == EXACT:
             parts.append("the run did not give back its own bytes: the sixteen fingerprint texts, "
                          "embedded one at a time again in reverse order, came back different, "
@@ -424,6 +449,40 @@ def fresh_loads(texts: Sequence, embed_one, reload: Callable[[], None],
     return loads, closest
 
 
+def fresh_contexts(texts: Sequence, embed_fresh, first: Sequence[Sequence[float]],
+                   seed: bytes, creations: int = FRESH_CONTEXTS) -> tuple[int, float]:
+    """(contexts, the closest an answer on a context of its own came to the
+    same text's `first` answer — 1.0 when every one is the same byte string).
+    `embed_fresh` embeds each text alone on a NEW context (the request's keep
+    fixed at 0, app/rage/keep.py `fixed`); the texts go round, in a new order
+    each round, until `creations` contexts were made. A non-finite answer is
+    a wrong answer, not a variation: 0.0, as `fresh_loads` has it."""
+    import random
+    import numpy as np
+    if not texts or len(first) != len(texts):
+        raise GateError(f"the fresh-context pass has {len(texts)} text(s) and "
+                        f"{len(first)} first answer(s) to hold them to")
+    want = [np.asarray(v, dtype="<f4").tobytes() for v in first]
+    rng = random.Random(seed + b"/contexts")
+    made = 0
+    closest = 1.0
+    while made < creations:
+        order = list(range(len(texts)))
+        rng.shuffle(order)
+        order = order[:creations - made]
+        got = embed_fresh([texts[k] for k in order])
+        if len(got) != len(order):
+            raise GateError(f"the encoder returned {len(got)} vectors for {len(order)} texts")
+        for k, v in zip(order, got):
+            arr = np.asarray(v, dtype="<f4")
+            if not np.all(np.isfinite(arr)):
+                return made + len(order), 0.0
+            if arr.tobytes() != want[k]:
+                closest = min(closest, min(cosine(v, first[k]), 1.0 - 1e-12))
+        made += len(order)
+    return made, closest
+
+
 def gate_texts(codex: Codex, role: str, items: Sequence | None = None) -> list:
     """The 512 items as the gate sends them for `role`: the space's set (a
     pair space's from its member, `items`); on the query side each as one
@@ -457,7 +516,8 @@ def run_gate(codex: Codex, *, reference: Sequence[Sequence[float]],
              items: Sequence[cal.Item] | None = None,
              cpu_reference: tuple[str, Sequence[Sequence[float]]] | None = None,
              reload: Callable[[], None] | None = None,
-             exactness: str = EXACT) -> Run:
+             exactness: str = EXACT,
+             fresh=None) -> Run:
     """One pass: embed all 512, draw the quorum, compare.
 
     `cpu_reference`: (the CPU twin's run, its 512 vectors) — the stored CPU
@@ -470,6 +530,13 @@ def run_gate(codex: Codex, *, reference: Sequence[Sequence[float]],
     order. Every text one byte string: exact. Otherwise the closest two
     answers of a text are `load_variation`, and the run is near-exact only
     where `exactness` is NEAR — never downgraded unasked.
+
+    `fresh`: for a model that creates its context per request
+    (`context_on_demand`), embeds each text alone on a context of its own. The
+    sixteen and the longest texts are then asked on FRESH_CONTEXTS of them
+    and held to their first answers (`fresh_contexts`); what they differ by
+    counts toward the run's variation exactly as its loads' does — exact
+    means bytes there too. None for every other model: nothing is asked.
 
     `embed(texts) -> list[list[float]]` is injected rather than imported so
     the gate stays a pure function of what the endpoint returned — the
@@ -540,6 +607,7 @@ def run_gate(codex: Codex, *, reference: Sequence[Sequence[float]],
     taken = invariant = reproducible = None
     variation = 1.0
     loads = 1
+    contexts, across_contexts = 0, 1.0
     if embed_one is not None:
         from . import fingerprint
         sixteen = [texts[i] for i in fingerprint.indices(texts)]
@@ -583,6 +651,15 @@ def run_gate(codex: Codex, *, reference: Sequence[Sequence[float]],
             loads, across = fresh_loads(sixteen + sweep(texts, SWEEP, codex.space.ctx),
                                         embed_one, reload, seed or b"")
             variation = min(variation, across)
+        if fresh is not None:
+            # short and long, each on a context of its own, held to what the
+            # same text answered at the head of this pass
+            long = longest(texts, LONG_PROBE)
+            probes = sixteen + long
+            first = single if len(single) == len(probes) else \
+                list(single[:len(sixteen)]) + (embed_one(long) if long else [])
+            contexts, across_contexts = fresh_contexts(probes, fresh, first, seed or b"")
+            variation = min(variation, across_contexts)
 
     return Run(
         space_id=codex.space_id,
@@ -598,6 +675,7 @@ def run_gate(codex: Codex, *, reference: Sequence[Sequence[float]],
         stated=stated, fingerprint=taken, batch_invariant=invariant, role=role,
         reproducible=reproducible, cpu_run=cpu_run, cpu_cosines=cpu_cos,
         load_variation=variation, loads=loads,
+        contexts=contexts, context_variation=across_contexts,
         exactness=NEAR if (exactness == NEAR and variation < 1.0) else EXACT,
         cpu_line=cpu_review_line(stated.engine if stated is not None else None),
         quant=quant_level(stated.engine if stated is not None else None),
