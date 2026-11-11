@@ -91,7 +91,7 @@ yet** (the operator files them).
 
 | inconsistency | count | Louise today | flag | upstream |
 |---|---|---|---|---|
-| A consolidated version whose `FRBRExpression` date is not its version date (Statuto Sardegna V11: `ita@1993-10-10` for `VIGENZA_2001-02-01`, the ELI alias and member name agreeing on 2001-02-01) | 1 seen (multivigenza review §1); not counted | the version is read from the member name and the ELI alias | `frbr-expression-stale` | no |
+| A consolidated version whose `FRBRExpression` date is not its version date (Statuto Sardegna V11: `ita@1993-10-10` for `VIGENZA_2001-02-01`, the ELI alias and member name agreeing on 2001-02-01) | **93** of 341,959 records (counted 2026-11-11 on normattiva-nemo, whose records are normattiva's line for line; `louise hold issues list normattiva-nemo`); first seen in the multivigenza review §1 | the version is read from the member name and the ELI alias | `frbr-expression-stale` | no |
 | An ORIGINALE whose Expression date precedes its publication (1989-02-16 for 1989-03-16) | 1 of 220 sampled originals (review §7, 2026-10-12) | validity starts at the entry-into-force note, else the publication date | `expression-before-publication` | no |
 | An "Entrata in vigore" note dated in the wrong century (1939 for 1989) | 1 of the 154 sampled notes | the Expression date is taken; the note is kept in `entry_into_force` | — | no |
 | One Expression in two zips (4,142 acts in two M collections; 90,118 repealed originals also in an M collection), the copies possibly differing in metadata | counted from the zips' directories (review §1, 2026-10-12) | one copy chosen deterministically (M, V, O, then path); `origin` names it | — | n/a |
