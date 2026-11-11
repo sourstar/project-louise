@@ -37,6 +37,13 @@ measured (published figures disagree).
   profiles removed after): RTF it / en, first call it / en — live full clip 0.752 / 0.763, 10.7 / 11.5 s; candidate 1
   0.443 / 0.416, 5.7 / 5.6 s; candidate 2 0.463 / 0.408, 6.0 / 6.0 s; candidate 3 0.386 / 0.401, 5.8 / 6.3 s: about
   1.8× faster than the full clip, as the old 7.90 s cut (0.425). Samples with the operator; live on their word.
+  LIVE since ~09:10Z (operator: "Deal, I like it"): **candidate 1d**, i.e. candidate 1 with its two sentence pauses
+  lengthened to ~1.0 s. His own pauses (780 ms after "vittime?", 620 ms after "dell'arte?") are kept whole, speech
+  tails included; the extra length is his quietest room tone (3.90–4.10 s) inserted mid-pause with 10 ms crossfades.
+  11.04 s; RTF it 0.443 / en 0.428, first call 5.5 / 5.6 s. Dropped on the way: 1b (~830 ms) and 1c (comfort
+  noise; it cut the tail of "dell'arte?"). Same profile id 1c834741: reference.wav = 1d, beside
+  reference-10s-1d.wav, reference-orig-27.75s.wav/.txt, reference-cut-7.90s.wav; previous profile.json at
+  /root/measure/philippe-profile.json.bak-20261111-full; built by /root/measure/philippe-10s/philippe_1d.py.
 - **Philippe on about 10 s, keeping the speaker's pauses** (operator, 11-12: "assemble the most meaningful parts
   of the whole clip in a clip of about 10s. Beyond the pure voice to be, the speaker has a distinct style way to
   make pauses between words and sentences"): `tools/voice_reference.py` (tests/test_voice_reference.py). It cuts the
