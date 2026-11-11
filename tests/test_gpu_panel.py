@@ -214,6 +214,9 @@ def test_a_model_is_shown_on_its_own_card_and_the_cpu_has_a_card(client, monkeyp
         {"id": "stt-cpu", "backend": "intel-sycl-f16-parakeet-cpp", "size_vram": 0, "process": {"pid": 66}}]})
     html = client.get("/admin/system/gpu").text
     b70, radeon, cpu = html.index("Arc Pro B70"), html.index("Radeon 610M"), html.index("<b>CPU</b>")
-    assert b70 < html.index("louise-chat-qwen3-8b") < radeon < html.index("stt-igpu") < cpu < html.index("stt-cpu")
+    unknown = html.index("<b>GPU, card not known</b>")
+    assert b70 < radeon < html.index("stt-igpu") < cpu < html.index("stt-cpu") < unknown \
+        < html.index("louise-chat-qwen3-8b"), "the chat's backend is on no card the probe read: no guess"
     assert 'id="gpu-models-0000:c5:00.0" data-keep-open' in html and 'id="cpu-models" data-keep-open' in html
+    assert 'id="unplaced-models" data-keep-open' in html
     assert html.count("models · 1 loaded") == 3

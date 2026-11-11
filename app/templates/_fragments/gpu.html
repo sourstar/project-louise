@@ -123,6 +123,22 @@
   {% else %}<div class="note">no model loaded on the CPU</div>{% endif %}
 </div>
 {% endif %}
+{# NOT PLACED (several cards, and the probe told no card for the model's
+   backend — see its note): listed apart, never put on a card by guess #}
+{% if cards is defined and cards and cards.unplaced %}
+<div class="gpu-card">
+  <div><b>GPU, card not known</b> <span class="note">the probe could not tell which card holds these</span></div>
+  <details class="more" id="unplaced-models" data-keep-open><summary>models · {{ cards.unplaced|length }} loaded</summary>
+  <table><tr><th>model</th><th>used by</th><th>backend</th><th>VRAM</th></tr>
+    {% for r in cards.unplaced %}
+    <tr><td>{{ r.model }}</td>
+      <td>{% if r.louise %}<span class="swatch louise"></span>{% for u in r.uses %}<div class="use">{{ u }}</div>{% endfor %}{% else %}<span class="swatch others"></span>other{% endif %}</td>
+      <td class="note">{{ r.backend }}</td><td>{{ r.vram|size }}</td></tr>
+    {% endfor %}
+  </table>
+  </details>
+</div>
+{% endif %}
 {% if models is defined and models and models.failed %}<div class="note">Not answering: {{ models.failed|join('; ') }}.</div>{% endif %}
 {% for n in notes %}<div class="note">{{ n }}</div>{% endfor %}
 {% endif %}

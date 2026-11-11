@@ -117,34 +117,44 @@ def by_card(models: dict, devices) -> dict:
     B70's): `{pdev: the card's own breakdown, as `panel` gives the whole one,
     ..., "cpu": [rows]}`.
     - A model whose backend pid the probe lists on a card (`ns_pid`, the pid
-      as LocalAI numbers it) is that card's.
-    - Not placed, holding VRAM: the largest card's, as before the probe gave
-      `ns_pid` (one deploy behind).
+      as LocalAI numbers it) is that card's; listed on several, the card
+      where it holds the most.
+    - Not placed, holding VRAM, with ONE card: that card's.
+    - Not placed, holding VRAM, with several: "unplaced", never the largest
+      card by guess (the node, 2026-11-11: the iGPU's speech model shown on
+      the B70 while the probe could read no process at all; the probe's
+      note says why).
     - Not placed, holding none: the CPU's — a backend with no memory on any
       card runs on the processor."""
     rows = list(models.get("rows") or [])
-    owner: dict[int, str] = {}
+    held: dict[int, tuple[int, str]] = {}
     for d in devices or ():
         for p in getattr(d, "processes", ()) or ():
             if getattr(p, "ns_pid", None) is not None:
-                owner.setdefault(p.ns_pid, d.pdev)
+                size = int(getattr(p, "vram", 0) or 0) + int(getattr(p, "host", 0) or 0)
+                if p.ns_pid not in held or size > held[p.ns_pid][0]:
+                    held[p.ns_pid] = (size, d.pdev)
     sized = [d for d in devices or () if getattr(d, "vram_total", None)]
-    main = max(sized, key=lambda d: d.vram_total).pdev if sized else None
+    only = sized[0].pdev if len(sized) == 1 else None
     placed: dict[str, list[ModelRow]] = {}
     cpu: list[ModelRow] = []
+    unplaced: list[ModelRow] = []
     for r in rows:
-        card = owner.get(r.pid) if r.pid is not None else None
+        card = held[r.pid][1] if r.pid is not None and r.pid in held else None
         if card is None and r.vram == 0:
             cpu.append(r)
             continue
-        card = card or main
+        card = card or only
         if card is not None:
             placed.setdefault(card, []).append(r)
+        else:
+            unplaced.append(r)
     out: dict = {pdev: {"rows": rs, "asked": models.get("asked", []), "failed": models.get("failed", []),
                         "louise": sum(r.vram for r in rs if r.louise),
                         "other": sum(r.vram for r in rs if not r.louise)}
                  for pdev, rs in placed.items()}
     out["cpu"] = cpu
+    out["unplaced"] = unplaced
     return out
 
 

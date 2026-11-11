@@ -327,13 +327,20 @@ def ns_pid(pid_dir: Path) -> int | None:
     return int(m.group(1).split()[-1]) if m else None
 
 
-def scan() -> dict[str, list[GpuProcess]]:
+def scan(denied: list[int] | None = None) -> dict[str, list[GpuProcess]]:
     """Every process holding GPU memory, per card (pdev), largest first.
 
     Reads only the fdinfo of descriptors that point into /dev/dri; a
     process the probe may not read is left out, and its memory shows as
     the driver's unattributed remainder. A client's figures are counted
-    once however many descriptors share it (dup, fork)."""
+    once however many descriptors share it (dup, fork).
+
+    NOT READ IS SAID (the node, 2026-11-11: every process list empty on both
+    cards, so every model was shown on the largest one). Another process's
+    open files and their fdinfo are readable only with ptrace's read access
+    (PTRACE_MODE_READ): a probe without CAP_SYS_PTRACE is refused for every
+    process that holds a capability it lacks — LocalAI's backends among
+    them. Each pid refused is appended to `denied` when given."""
     clients: dict[tuple[str, int], dict[str, dict[str, int]]] = {}
     try:
         entries = [e.name for e in os.scandir(PROC) if e.name.isdigit()]
@@ -343,19 +350,35 @@ def scan() -> dict[str, list[GpuProcess]]:
         pid_dir = PROC / name
         try:
             fds = os.listdir(pid_dir / "fd")
+        except PermissionError:
+            if denied is not None:
+                denied.append(int(name))
+            continue
         except OSError:
             continue
+        refused = False
         for fd in fds:
             try:
                 if not os.readlink(pid_dir / "fd" / fd).startswith("/dev/dri/"):
                     continue
+            except PermissionError:
+                refused = True
+                continue
             except OSError:
                 continue
-            text = _read(pid_dir / "fdinfo" / fd)
+            try:
+                text = (pid_dir / "fdinfo" / fd).read_text(encoding="utf-8", errors="replace")
+            except PermissionError:
+                refused = True
+                continue
+            except OSError:
+                text = None
             parsed = parse_fdinfo(text) if text else None
             if parsed is not None:
                 pdev, client, regions = parsed
                 clients.setdefault((pdev, int(name)), {})[client] = regions
+        if refused and denied is not None:
+            denied.append(int(name))
     out: dict[str, list[GpuProcess]] = {}
     for (pdev, pid), per_client in clients.items():
         vram = sum(v for r in per_client.values() for k, v in r.items() if k.startswith("vram"))
@@ -467,7 +490,13 @@ def snapshot() -> GpuSnapshot:
         sensors = read_sensors(hwmon, power_w=card_power(pdev, hwmon), clock=gt_clock(dev))
         found.append((card.name, pdev, driver, vendor_id, device_id,
                       vendor, name, total, used, sensors))
-    per_card = scan()     # after every query has closed its descriptor
+    denied: list[int] = []
+    per_card = scan(denied)     # after every query has closed its descriptor
+    if denied:
+        notes.append(f"the probe may not read the open files of {len(denied)} process(es) (Permission "
+                     "denied), so the memory they hold on a card is not attributed and no model can "
+                     "be placed on its card: the gpu-probe service needs CAP_SYS_PTRACE "
+                     "(cap_add: SYS_PTRACE, deploy/docker/compose.yaml)")
     return GpuSnapshot(
         devices=tuple(GpuDevice(card=c, pdev=pdev, driver=drv, vendor_id=vid, device_id=did,
                                 vendor=ven, name=nm, vram_total=tot, vram_used=use,
