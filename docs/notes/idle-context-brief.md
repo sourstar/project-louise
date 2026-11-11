@@ -610,3 +610,47 @@ decides, and it is §1's.**
 | per request, no keep | the least memory held; nothing to tune | a creation on every input: tens of % of embedding throughput at the expected cost |
 | per request with a keep duration (recommended) | one creation per busy period; exact release on a batch's last request; a known standard; no wire change | every caller must set it right — a corpus request without it is a silent slowdown, so the client sets it, never a person |
 | a server-side timer alone (§9's debounce) | no caller involved | no exact release; one timeout for corpus and chat alike |
+
+### The keep's length — seconds, not milliseconds (2026-11-11)
+
+*The operator: "Louise RAGE creates the work batches, thus the stay warm
+flag keeps the context also between jobs. The timeout for the warm state
+can then be just a few milliseconds." The reviewer: the premise holds, the
+length does not follow from it.*
+
+RAGE sets the keep on every corpus request, so no person can forget it —
+right. But the keep must outlast the longest gap between two requests of
+one stream AS THE ENGINE SEES IT, and what is on record is not milliseconds:
+
+| the gap | measured | where |
+|---|---|---|
+| wikidata, 4 lanes, requests filled | card idle 11.1 s/min over ~832 requests/min ≈ 13 ms a request | gpu-saturation-plan.md, lever 2's table |
+| wikipedia, 2 lanes, producer-bound | 25.6 s/min over ~153 requests/min ≈ 170 ms a request | the same |
+| the corpus filling a query's gaps | it stands aside 9–37 ms between rerank variants, and for whole steps of a question (3.4–4.1 s of gaps in 11.6–16.7 s) | scheduling.md §12 |
+| stream boundaries | whole idle seconds: 0.1–0.3 s/min | gpu-saturation-plan.md |
+
+(Card-idle figures: an upper bound on the engine's empty queue, since part
+of each is the engine's own turnaround with a request in hand. The gap at
+the engine is NOT measured; the VeGa wrapper sees every request arrive and
+every answer leave and can count it per run, beside `GET /vega/passes`.)
+
+The two errors do not cost the same. A keep shorter than the gap frees and
+re-creates the context on every request: silent, and tens of % of
+throughput at the expected creation time — worst while the corpus fills a
+question's gaps, when a person is waiting. A keep longer than needed holds
+one context for its length after a busy period ends: at 2 s and a thousand
+busy periods a day, 2.3 % of a day of ≤ 2.2 GB, on a card with ~4 GB to
+spare at its worst second (§9).
+
+So: 1–2 s to start, set by RAGE above the 99.9th percentile of the measured
+gap, never by hand. The exact release stays available where RAGE knows the
+end — keep 0 on a stream's last request — and one verb is still owed to the
+arbiter for the rare query that finds no room (R4): release now, which
+under Ollama's rule (the last request's keep wins) is a request carrying
+keep 0.
+
+| | pros | cons |
+|---|---|---|
+| a few milliseconds | memory back at once; nothing held beyond the work | shorter than every measured gap but wikidata's: a creation per request, unseen |
+| 1–2 s, set by RAGE from the measured gap (recommended) | no thrash across lanes, producer stalls and a question's short gaps; the tail costs nothing measurable | memory returns up to 2 s late; one more number RAGE measures |
+| a long keep (minutes) with exact release only | never thrashes | a missed release holds the context: the timer design of §0 again |
