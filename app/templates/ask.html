@@ -51,19 +51,17 @@
          either way; this adds the written answer above them #}
       <label><input type="radio" name="how" value="summary" onchange="rememberHow()" checked> <span>Search + AI summary</span></label>
     </span>
-    {# operator, 2026-11-09: who translates — the translation model (Quality)
-       or the chat model already on the card (Speed: quicker, lower quality);
-       the same form as the switch above, remembered in the browser #}
-    <span class="seg" role="radiogroup" aria-label="translation: quality or speed">
-      <label title="the dedicated translation model: the best translation"><input type="radio" name="speed" value="quality" onchange="rememberSpeed()" checked> <span>Quality</span></label>
-      <label title="the chat model translates: quicker, lower quality than the dedicated translator"><input type="radio" name="speed" value="speed" onchange="rememberSpeed()"> <span>Speed</span></label>
-    </span>
-    {# operator, 2026-11-09: the text search — Quick searches only the
-       question's language and English; Quality every main language of the
-       collections, as before. The same form, remembered in the browser #}
-    <span class="seg" role="radiogroup" aria-label="text search: quick or quality">
-      <label title="the text search reads only the question's language and English: quicker"><input type="radio" name="textsearch" value="quick" onchange="rememberTextSearch()"> <span>Quick</span></label>
-      <label title="the text search reads every main language of the collections"><input type="radio" name="textsearch" value="quality" onchange="rememberTextSearch()" checked> <span>Quality</span></label>
+    {# QUALITY OR SPEED, ONE CHOICE (operator, 2026-11-12: "Quality/Speed"
+       and "Quick/Quality" side by side were "totally confusing"). Speed is
+       both shortcuts of 2026-11-09 at once: the chat model already on the
+       card translates instead of the translation model, and the text
+       search reads only the question's language and English instead of
+       every main language of the collections. Quality is neither. The
+       request still carries the two apart (`speed`, `quick`) for the API
+       and the measurements. Remembered in the browser. #}
+    <span class="seg" role="radiogroup" aria-label="quality or speed">
+      <label title="the best results: the translation model translates, and the text search reads every main language of the collections"><input type="radio" name="speed" value="quality" onchange="rememberSpeed()" checked> <span>Quality</span></label>
+      <label title="quicker: the chat model translates, and the text search reads only the question's language and English"><input type="radio" name="speed" value="speed" onchange="rememberSpeed()"> <span>Speed</span></label>
     </span>
     {# "show results in": CONTENT only — the answer and every entry IN
        FULL, its title and headings included, are translated into this
@@ -195,6 +193,10 @@
   .voice-btn[hidden]{display:none}
   #mic{flex:0 0 auto;min-width:44px;padding:0 10px}
   #mic.rec{border-color:var(--err);color:var(--err);animation:mic-pulse 1.2s ease-in-out infinite}
+  /* a phone keeps :hover on the button last tapped: the accent border stayed
+     on the microphone after speaking — red in the warm themes (operator,
+     2026-11-12: "the button remains red"). Without a hover, no hover look. */
+  @media (hover:none){.voice-btn:not(.rec):not(.on):hover{border-color:var(--line)}}
   @keyframes mic-pulse{50%{box-shadow:0 0 0 3px rgba(224,80,80,.35)}}
   #mic-status{margin:4px 0 0}
   .answer-head{display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap}
@@ -315,7 +317,7 @@ function relayStuck(kind,d){
 }
 function relayDropped(kind,why){
   relayNote('the '+kind+' was dropped: '+(why||'no reason given')+'.',
-            [['Run again',()=>kind==='answer'?ask():search()]]);
+            [['Run again',()=>running(()=>kind==='answer'?ask():search())]]);
 }
 async function relayCancel(kind){
   const r=relays[kind]; if(!r||r.ended)return;
@@ -453,11 +455,19 @@ function speedOn(){const r=document.querySelector('input[name="speed"]:checked')
 function rememberSpeed(){try{localStorage.setItem('louise-speed',speedOn()?'speed':'quality')}catch(e){}}
 (function(){let v=null; try{v=localStorage.getItem('louise-speed')}catch(e){}
   const r=v&&document.querySelector('input[name="speed"][value="'+v+'"]'); if(r)r.checked=true})();
-function quickOn(){const r=document.querySelector('input[name="textsearch"]:checked'); return !!r&&r.value==='quick'}
-function rememberTextSearch(){try{localStorage.setItem('louise-textsearch',quickOn()?'quick':'quality')}catch(e){}}
-(function(){let v=null; try{v=localStorage.getItem('louise-textsearch')}catch(e){}
-  const r=v&&document.querySelector('input[name="textsearch"][value="'+v+'"]'); if(r)r.checked=true})();
-function go(){return howAsk()==='search'?search():ask()}
+// Speed is also the quick text search (operator, 2026-11-12: one switch)
+function quickOn(){return speedOn()}
+// THE QUESTION RUNS: the microphone is grey until it ends (operator,
+// 2026-11-12). A newer question replaces an older one, whose stream never
+// ends, so only the latest one's end gives the microphone back.
+let goSeq=0;
+async function running(fn){
+  const mine=++goSeq;
+  if(window.louiseVoice)louiseVoice.question(true);
+  try{return await fn()}
+  finally{if(mine===goSeq&&window.louiseVoice)louiseVoice.question(false)}
+}
+function go(){return running(()=>howAsk()==='search'?search():ask())}
 async function ask(){
   // inside the press: a question the microphone wrote is answered aloud
   if(window.louiseVoice)louiseVoice.asking();

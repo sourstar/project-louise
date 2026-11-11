@@ -34,6 +34,10 @@ were more recently used than MADLAD. Chat ↔ MADLAD cold loads of 5.5–15.2 s 
      freed on the card). The label says it trades quality for speed.
    A reader's choice (RULE 2: operators' choices live in the command line); the node keeps MADLAD as its default and
    still preloads it at rest.
+   **ONE SWITCH (operator, 2026-11-12):** the Quick / Quality text-search switch beside it (2026-11-09,
+   `language_plan.quick`) was "totally confusing" with this one. Speed now is both: the chat model translates AND
+   the text search reads only the question's language and English. The request keeps `speed` and `quick` apart for
+   the API and the measurements; the page sets both from this one switch (tests/test_ask_switch_browser.py).
 
 ## Built (2026-11-09; deploy waits for the operator)
 

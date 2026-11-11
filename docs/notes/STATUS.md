@@ -20,6 +20,14 @@ measured (published figures disagree).
 
 ### 2026-11-11 (München)
 
+- **Ask page, three findings fixed** (operator, 11-12):
+  - "Quality/Speed, Quick/Quality — totally confusing": now ONE Quality / Speed switch. Speed is the chat model
+    translating AND the text search reading only the question's language and English; the API keeps `speed` and
+    `quick` apart (ask-card-workflow.md §8).
+  - "the keyboard appears" on tapping the microphone: the dictated question no longer focuses the box.
+  - "the button remains red": a phone kept the tap's hover border (the accent, red in the warm themes); there is no
+    hover look without a hover now. The microphone is grey and inert from the end of the speech until the question
+    is answered, then back to its base colour (tests/browser/ask_voice.js step 11, which fails on the old page).
 - **Philippe on about 10 s, keeping the speaker's pauses** (operator, 11-12: "assemble the most meaningful parts
   of the whole clip in a clip of about 10s. Beyond the pure voice to be, the speaker has a distinct style way to
   make pauses between words and sentences"): `tools/voice_reference.py` (tests/test_voice_reference.py). It cuts the
