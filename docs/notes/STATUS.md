@@ -45,6 +45,11 @@ measured (published figures disagree).
   in one request would be one longer reference, which this model already reads: the 27.75 s original at RTF 0.74.
   LIVE NOW (operator in München's session: "use the full clip in the meantime"): Philippe on the full 27.75 s
   original as one clip with its full transcript; the 7.90 s cut kept as reference-cut-7.90s.wav.
+- **One context for the models on one card** (operator, 11-12; [shared-context.md](shared-context.md)): ~10 GB of
+  the ~34 GB resident is context, while at most 3.3 GB (p95 2.2) works at once (card record, 24 h). Prior art:
+  Prism (OSDI '26) and its kvcached — elastic KV through virtual memory, vLLM/SGLang on NVIDIA/ROCm only, KV only.
+  Fits us: release an idle encoder's context (weights kept), after measuring create/free time and that the memory
+  comes back on the B70.
 - **Inputs computed in more than one pass, counted** (operator, 11-12: "for future trimming improvements we
   should gracefully log when a text is splitted"): the VeGa wrapper counts every answer's tokens against the
   load's ubatch and tells VeGa (`kind: passes`); VeGa logs when the inputs over it grow and serves every run's
