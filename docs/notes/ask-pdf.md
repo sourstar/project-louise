@@ -61,6 +61,25 @@ accepted; how it is made, choice **A**: the server makes the file.*
   24.04's sizes; trixie's are to be read at the build. An image without
   them answers 503 and says what supplies it.
 
+## Through the other interfaces (2026-11-11)
+
+The operator: "Since we produce it internally, make it available through the
+other interfaces too." One document and one renderer serve every interface
+(`app/ask_pdf.py` `make`):
+- **`louise ask pdf QUESTION [--paper a4|letter] [--out FILE]`:** Louise
+  answers, as `ask chat` does, and the PDF is written to a file. Its
+  references are the sources the answer numbered, each with the passage the
+  model was shown (`chat.ask(passages=True)`).
+- **`POST /api/ask/pdf`:** the same over HTTP. With `answer` and
+  `references`, it lays out a client's own answer instead, without asking
+  the model.
+- **MCP `louise_pdf`:** an agent's own answer and the hits it used,
+  returned as an embedded resource (`application/pdf`). It is offered to MCP
+  clients only. Louise's chat model never gets it (05 §5.4, amended).
+- **Not offered: `/v1/chat/completions` (Open WebUI).** That protocol has
+  no way to carry a file. A link inside the answer would need a stored copy
+  reachable without the reader's token.
+
 Tests: tests/test_ask_pdf.py (the markdown, links, names, the document,
 limits, the paper sizes and links of real PDFs, no fetch, the route) and
 tests/test_ask_save_pdf_browser.py (what the page posts, in Chromium).

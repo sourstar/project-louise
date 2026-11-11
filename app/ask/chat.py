@@ -144,6 +144,9 @@ class Sources:
         self.entries: list[dict[str, Any]] = []
         self._n: dict[str, int] = {}
         self.ids: set[str] = set()
+        #: n -> the passage and section shown for source n (its hit's
+        #: `text`, `chapter`): what a saved PDF quotes (`ask(passages=True)`)
+        self.passages: dict[int, dict[str, Any]] = {}
 
     def number(self, hit: dict[str, Any]) -> tuple[int, bool]:
         """(n, new) for a hit."""
@@ -155,6 +158,7 @@ class Sources:
         self.entries.append({k: hit.get(k) for k in ("uid", "title", "authors", "lang", "collection_id",
                                                     "snapshot_id", "chunk_id", "origin_url")}
                             | {"n": n})
+        self.passages[n] = {"text": hit.get("text"), "chapter": hit.get("chapter")}
         return n, True
 
     def cited(self, answer: str) -> tuple[list[dict[str, Any]], list[str]]:
@@ -438,7 +442,8 @@ def _searched(call: Callable[[str, dict[str, Any]], Any], args: dict[str, Any], 
 
 def ask(question: str, *, collections: list[str] | None = None, history: list[dict[str, Any]] | None = None,
         call: Callable[[str, dict[str, Any]], Any] | None = None, model=None,
-        max_rounds: int = MAX_ROUNDS, answer_lang: str | None = None) -> dict[str, Any]:
+        max_rounds: int = MAX_ROUNDS, answer_lang: str | None = None,
+        passages: bool = False) -> dict[str, Any]:
     """One question through the loop: `{answer, sources, cited, cited_unknown,
     turns: [{tool, arguments, by, result, error, seconds}], rounds,
     exhausted, model_s}`. `model(messages, tools) -> (content,
@@ -517,6 +522,10 @@ def ask(question: str, *, collections: list[str] | None = None, history: list[di
                "model_s": model_s, "answer_lang": lang, "slimmed": slimmed}
         if tools_failed:
             out["tools_failed"] = tools_failed
+        if passages:
+            # what each source said, for a PDF of the answer (app/ask_pdf.py
+            # `from_chat`); asked for, so `ask chat`'s output is as it was
+            out["passages"] = {str(n): v for n, v in sources.passages.items()}
         return out
 
     def without_tools() -> str:

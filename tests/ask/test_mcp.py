@@ -17,7 +17,8 @@ def test_initialize_lists_three_tools_and_pings():
     assert init["result"]["protocolVersion"] == mcp.PROTOCOL and init["result"]["serverInfo"]["name"] == "louise"
     assert mcp.handle({"jsonrpc": "2.0", "method": "notifications/initialized"}) is None
     tools = mcp.handle(rpc("tools/list"))["result"]["tools"]
-    assert [t["name"] for t in tools] == ["louise_search", "louise_lookup", "louise_traverse"]
+    # the three of 05 §5.4, then the file tool (amended 2026-11-11): never offered to the chat model
+    assert [t["name"] for t in tools] == ["louise_search", "louise_lookup", "louise_traverse", "louise_pdf"]
     assert all({"name", "description", "inputSchema"} <= set(t) for t in tools)
     assert tools[0]["inputSchema"]["required"] == ["query"] and tools[1]["inputSchema"]["required"] == ["id"]
     assert mcp.handle(rpc("ping"))["result"] == {}
@@ -56,4 +57,4 @@ def test_stdio_frames_one_object_per_line_and_skips_notifications():
     assert mcp.serve_stdio(inp, out, call=lambda n, a: {}) == 0
     lines = [json.loads(l) for l in out.getvalue().splitlines()]
     assert [l.get("id") for l in lines] == [1, None, 2]
-    assert lines[1]["error"]["code"] == -32700 and len(lines[2]["result"]["tools"]) == 3
+    assert lines[1]["error"]["code"] == -32700 and len(lines[2]["result"]["tools"]) == 4

@@ -4019,6 +4019,30 @@ def cmd_ask_serve(a) -> int:
     return mcp.serve_stdio()
 
 
+def cmd_ask_pdf(a) -> int:
+    """`ask pdf <question>` (07 §7.3; operator, 2026-11-11: the PDF
+    "available through the other interfaces too"): Louise answers, as `ask
+    chat`, and the answer with every reference and its original source's
+    link is written as a PDF (app/ask_pdf.py) — `--out`, else the name the
+    Ask page gives it, in the current directory. Needs CHAT_URL."""
+    from pathlib import Path
+    from app import ask_pdf
+    from app.ask import chat
+    question = " ".join(a.question)
+    out = chat.ask(question, collections=a.collections or None, answer_lang=a.answer_lang, passages=True)
+    doc = ask_pdf.from_chat(question, out, paper=a.paper, collections=a.collections or None)
+    try:
+        name, data = ask_pdf.make(doc, base_url=ask_pdf.node_base())
+    except (ask_pdf.Busy, ask_pdf.Unavailable) as e:
+        print(f"louise ask pdf: {e}", file=sys.stderr)
+        return 3
+    path = Path(a.out) if a.out else Path(name)
+    path.write_bytes(data)
+    _print({"file": str(path), "bytes": len(data), "references": len(doc.references),
+            "cited": out.get("cited") or [], "paper": a.paper})
+    return 0
+
+
 def cmd_ask_chat(a) -> int:
     """`ask chat <question>`: the chat model with the three tools of 05
     §5.4; needs CHAT_URL (07 §7.8). The answer, then every tool call made
@@ -7820,6 +7844,15 @@ def build_parser() -> argparse.ArgumentParser:
                    help="restrict the legs to a facet value (05 §5.2); a range facet takes FROM..TO, "
                         "either end omitted for open; FACET=!VALUE excludes")
     p.set_defaults(fn=cmd_ask_search)
+    p = akverbs.add_parser("pdf", help="the chat model's answer, with every reference and its original "
+                                       "source's link, as a PDF (A4 or Letter); needs CHAT_URL")
+    p.add_argument("question", nargs="+")
+    p.add_argument("--collections", nargs="*", default=None)
+    p.add_argument("--answer-lang", dest="answer_lang", default=None, metavar="ISO",
+                   help="the answer's language; default: the question's")
+    p.add_argument("--paper", choices=("a4", "letter"), default="a4")
+    p.add_argument("--out", default=None, metavar="FILE", help="default: the name the Ask page gives it, here")
+    p.set_defaults(fn=cmd_ask_pdf)
     p = akverbs.add_parser("chat", help="the chat model with the three tools of 05 §5.4; needs CHAT_URL")
     p.add_argument("question", nargs="+")
     p.add_argument("--collections", nargs="*", help="search only these unless the question says otherwise")

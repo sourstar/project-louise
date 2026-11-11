@@ -73,6 +73,48 @@ TOOLS: list[dict[str, Any]] = [
 ]
 
 
+#: TOOLS FOR A PERSON'S FILE, NOT FOR ROUTING (05 §5.4, amended 2026-11-11;
+#: operator: the PDF "available through the other interfaces too"): offered
+#: to MCP clients beside the three, never to Louise's own chat model, whose
+#: tools are TOOLS (app/ask/chat.py `tool_specs`) — it answers, it does not file.
+FILE_TOOLS: list[dict[str, Any]] = [
+    {"name": "louise_pdf",
+     "description": "A PDF of an answer for a person to keep: the question, the answer with its [n] "
+                    "citations linked, and every reference with the link to its original source — "
+                    "the hits as louise_search returned them (n, title, authors, lang, collection, "
+                    "chapter, text, origin_url, chunk_id). Returned as an embedded resource "
+                    "(application/pdf). Laid out on A4, or Letter.",
+     "inputSchema": {"type": "object", "required": ["question", "answer", "references"], "properties": {
+         "question": {"type": "string"},
+         "answer": {"type": "string", "description": "markdown; [n] cites reference n"},
+         "references": {"type": "array", "items": {"type": "object"},
+                        "description": "the hits the answer used; [n] is a hit's `n`, else its place"},
+         "answer_lang": {"type": "string", "description": "ISO code of the answer's language"},
+         "paper": {"type": "string", "enum": ["a4", "letter"], "default": "a4"}}}},
+]
+
+
+def _file_tool(name: str, args: dict[str, Any]) -> dict[str, Any]:
+    """`louise_pdf`'s result: a line that says what it is, and the PDF as an
+    embedded resource (MCP's `resource` content with a base64 `blob`)."""
+    import base64
+    from app import ask_pdf
+    paper = str(args.get("paper") or "a4")
+    if paper not in ask_pdf.PAPER:
+        raise ValueError(f"paper is one of {', '.join(ask_pdf.PAPER)}")
+    refs = args.get("references") or []
+    if not isinstance(refs, list):
+        raise ValueError("references is a list of hits")
+    doc = ask_pdf.from_given(str(args.get("question") or ""), str(args.get("answer") or ""), refs,
+                             paper=paper, answer_lang=args.get("answer_lang"))
+    file, data = ask_pdf.make(doc, base_url=ask_pdf.node_base())
+    said = {"file": file, "bytes": len(data), "references": len(doc.references), "paper": paper}
+    return {"content": [{"type": "text", "text": json.dumps(said, ensure_ascii=False)},
+                        {"type": "resource", "resource": {"uri": f"louise://pdf/{file}",
+                                                          "mimeType": "application/pdf",
+                                                          "blob": base64.b64encode(data).decode("ascii")}}],
+            "isError": False}
+
 def _call_tool(name: str, args: dict[str, Any]) -> Any:
     from app.ask import lookup, results, traverse
     if name == "louise_search":
@@ -111,15 +153,22 @@ def handle(message: dict[str, Any], *, call: Callable[[str, dict[str, Any]], Any
     if method == "ping":
         return _result(rid, {})
     if method == "tools/list":
-        return _result(rid, {"tools": TOOLS})
+        return _result(rid, {"tools": TOOLS + FILE_TOOLS})
     if method == "tools/call":
         name, args = params.get("name"), params.get("arguments") or {}
         if not isinstance(args, dict):
             return _error(rid, -32602, "arguments is an object")
+        if name in {t["name"] for t in FILE_TOOLS}:
+            try:
+                return _result(rid, _file_tool(str(name), args))
+            except Exception as e:   # noqa: BLE001 — a failure is an answer, not a dropped connection
+                return _result(rid, {"content": [{"type": "text", "text": f"{type(e).__name__}: {e}"}],
+                                     "isError": True})
         try:
             out = call(str(name), args)
         except KeyError:
-            return _error(rid, -32602, f"unknown tool {name!r}; tools/list names three")
+            return _error(rid, -32602, f"unknown tool {name!r}; tools/list names "
+                                      f"{len(TOOLS) + len(FILE_TOOLS)}")
         except CodexError as e:
             return _result(rid, {"content": [{"type": "text", "text": str(e)}], "isError": True,
                                  "exit": getattr(e, "exit_code", 2)})

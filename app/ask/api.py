@@ -81,6 +81,55 @@ async def chat(body: ChatBody) -> JSONResponse:
     return JSONResponse(json.loads(json.dumps(out, default=str)))
 
 
+class PdfBody(BaseModel):
+    """`ask pdf` over HTTP: a question Louise answers, or — with `answer` —
+    a client's own answer and the hits it used (`references`, as
+    `louise_search` gives them)."""
+    question: str
+    collections: list[str] | None = None
+    answer_lang: str | None = None
+    paper: str = "a4"
+    tz: str | None = None
+    answer: str | None = None
+    references: list[dict[str, Any]] | None = None
+
+
+@router.post("/pdf")
+async def pdf(body: PdfBody, request: Request):
+    """`ask pdf` over HTTP (operator, 2026-11-11: the PDF "available through
+    the other interfaces too"; app/ask_pdf.py): the question, the answer and
+    every reference with the link to its original source, as the Ask page
+    saves it; A4 or Letter. 503 while the layouts are taken or where the
+    image has no PDF library."""
+    from starlette.concurrency import run_in_threadpool
+    from app import ask_pdf
+    from app.ask import chat as chat_mod
+    if body.paper not in ask_pdf.PAPER:
+        return JSONResponse({"exit": 2, "error": f"paper is one of {', '.join(ask_pdf.PAPER)}"}, status_code=409)
+    proto = (request.headers.get("x-forwarded-proto") or request.url.scheme).split(",")[0].strip()
+    host = (request.headers.get("x-forwarded-host") or request.headers.get("host") or request.url.netloc)
+    base = f"{proto}://{host.split(',')[0].strip()}"
+
+    def make():
+        if body.answer is not None:
+            doc = ask_pdf.from_given(body.question, body.answer, body.references or [], paper=body.paper,
+                                     tz=body.tz, answer_lang=body.answer_lang, collections=body.collections)
+        else:
+            out = chat_mod.ask(body.question, collections=body.collections, answer_lang=body.answer_lang,
+                               passages=True)
+            doc = ask_pdf.from_chat(body.question, out, paper=body.paper, tz=body.tz, collections=body.collections)
+        return ask_pdf.make(doc, base_url=base)
+    try:
+        name, data = await run_in_threadpool(make)
+    except CodexError as e:
+        code = int(getattr(e, "exit_code", 2))
+        return JSONResponse({"exit": code, "error": str(e)}, status_code=STATUS.get(code, 500))
+    except (ask_pdf.Busy, ask_pdf.Unavailable) as e:
+        return JSONResponse({"exit": 3, "error": str(e)}, status_code=503)
+    return Response(data, media_type="application/pdf", headers={
+        "Content-Disposition": f'attachment; filename="{name}"', "Cache-Control": "no-store"})
+
+
 class LookupBody(BaseModel):
     id: str
 
