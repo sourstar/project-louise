@@ -95,7 +95,8 @@ def test_one_question_is_one_search_and_its_hits_are_the_sources(louise):
     assert len(calls) == 1, "one search: the hits come back with the answer"
     cites = [e["data"] for e in events if e["type"] == "citation"]
     assert [c["source"]["name"] for c in cites] == ["[1] Don Quixote — gutenberg (en)",
-                                                     "[2] On windmills — pubmed (en)"]
+                                                     "[2] On windmills — pubmed (en)",
+                                                     "PDF — the question, this answer and its sources"]
     assert cites[0]["source"]["url"] == "https://louise.example/read/gutenberg/996?hl=gutenberg:996:3:1"
     assert cites[1]["source"]["url"] == "https://pubmed/7", "no reader page: the origin"
     assert "Also in: Don Quijote (es)" in cites[0]["document"][0]
@@ -140,3 +141,42 @@ def test_v1_returns_the_sources_only_when_asked(louise):
                                                  "stream": True, "sources": True})
     first = json.loads(asked.text.split("\n\n")[0][len("data: "):])
     assert [s["n"] for s in first["louise_sources"]] == [1, 2] and first["choices"][0]["delta"] == {}
+
+
+def test_the_answers_pdf_is_listed_with_the_sources_and_opens(louise, monkeypatch):
+    """Operator, 2026-11-11: "The links to the origin are available in the
+    list of the sources" — the PDF is one more entry there, a link to an Ask
+    route (the reader's gate), on the person's paper."""
+    from fastapi.testclient import TestClient
+    from app import ask_pdf
+    seen: list[str] = []
+    monkeypatch.setattr(ask_pdf, "render", lambda html: seen.append(html) or b"%PDF-1.7 stub")
+    p, _ = louise
+    _, events = run(p, {"model": "louise_pipe.all", "messages": [{"role": "user", "content": "windmills?"}]},
+                    p.UserValves(PAPER="letter"))
+    pdf = [e["data"] for e in events if e["type"] == "citation"][-1]
+    url = pdf["source"]["url"]
+    assert url.startswith("https://louise.example/api/ask/pdf/") and url.endswith("?paper=letter")
+    r = TestClient(api.app).get(url.removeprefix("https://louise.example"), headers={"X-Admin-Token": "sekrit"})
+    assert r.status_code == 200 and r.content == b"%PDF-1.7 stub"
+    assert r.headers["content-disposition"].startswith('attachment; filename="louise-')
+    html = seen[0]
+    assert "size: letter portrait" in html and "windmills?" in html and "Tilting at windmills" in html
+    assert "https://pubmed/7" in html and "/read/gutenberg/996?hl=gutenberg%3A996%3A3%3A1" in html
+
+
+def test_v1_links_the_pdf_only_when_the_sources_are_asked(louise, monkeypatch):
+    from fastapi.testclient import TestClient
+    monkeypatch.setattr(api.llm, "chat", lambda messages, **kw: "Tilting at windmills [1].")
+    c = TestClient(api.app, headers={"X-Admin-Token": "sekrit"})
+    msgs = [{"role": "user", "content": "q"}]
+    plain = c.post("/v1/chat/completions", json={"messages": msgs, "stream": True})
+    assert "louise_pdf" not in plain.text, "an OpenAI client gets what it always got"
+    asked = c.post("/v1/chat/completions", json={"messages": msgs, "stream": True, "sources": True})
+    chunks = [json.loads(x[len("data: "):]) for x in asked.text.split("\n\n") if x.startswith("data: {")]
+    at = next(i for i, ch in enumerate(chunks) if "louise_pdf" in ch)
+    assert chunks[at]["louise_pdf"].startswith("/api/ask/pdf/") and chunks[at]["choices"][0]["delta"] == {}
+    assert at == len(chunks) - 2, "after the last word, before the stop"
+    whole = c.post("/v1/chat/completions", json={"messages": msgs, "sources": True}).json()
+    assert whole["louise_pdf"].startswith("/api/ask/pdf/") and whole["louise_pdf"] != chunks[at]["louise_pdf"]
+    assert "louise_pdf" not in c.post("/v1/chat/completions", json={"messages": msgs}).json()

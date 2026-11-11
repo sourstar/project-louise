@@ -1,7 +1,7 @@
 """
 title: Louise
 description: Louise's search and answer in Open WebUI — choose the collections and annotations per chat; the sources link to Louise's reader.
-version: 1
+version: 2
 required_open_webui_version: 0.6.0
 license: same as Louise
 """
@@ -45,6 +45,7 @@ class Pipe:
         RESULTS: int = Field(10, ge=1, le=100, description="Sources per answer")
         ALL_LANGUAGES: bool = Field(False, description="Do not prefer sources in the question's language")
         TOKEN: str = Field("", description="Your own Louise key, if you have one; else the admin's")
+        PAPER: str = Field("a4", description="The answer's PDF, linked beside the sources: a4 or letter")
 
     def __init__(self) -> None:
         self.type = "manifold"
@@ -121,6 +122,17 @@ class Pipe:
                 "document": [text],
                 "metadata": [{"source": url or label, "name": label, **({"url": url} if url else {})}]}
 
+    def pdf_citation(self, path: str, paper: str = "a4") -> dict:
+        """The answer's PDF as one more source: the question, this answer and
+        every source with its link, on the person's paper."""
+        base = (self.valves.PUBLIC_URL or self.valves.LOUISE_URL).rstrip("/")
+        url = f"{base}{path}" + ("?paper=letter" if str(paper).strip().lower() == "letter" else "")
+        label = "PDF — the question, this answer and its sources"
+        return {"source": {"id": url, "name": label, "url": url},
+                "document": ["The question, this answer and every source with the link to its origin, as a PDF "
+                             "(A4 or Letter: Controls → Valves → PAPER). Kept by Louise for 24 hours."],
+                "metadata": [{"source": url, "name": label, "url": url}]}
+
     async def pipe(self, body: dict, __user__: dict | None = None,
                    __event_emitter__: Callable[[dict], Awaitable[None]] | None = None,
                    __task__: str | None = None) -> AsyncIterator[str] | str:
@@ -130,10 +142,10 @@ class Pipe:
             return _task_answer(__task__, body)
         uv = (__user__ or {}).get("valves") or self.UserValves()
         payload = self.request_body(body, uv)
-        return self._stream(payload, uv.TOKEN, __event_emitter__)
+        return self._stream(payload, uv.TOKEN, __event_emitter__, paper=uv.PAPER)
 
     async def _stream(self, payload: dict, token: str,
-                      emit: Callable[[dict], Awaitable[None]] | None) -> AsyncIterator[str]:
+                      emit: Callable[[dict], Awaitable[None]] | None, paper: str = "a4") -> AsyncIterator[str]:
         async def say(event: dict) -> None:
             if emit is not None:
                 await emit(event)
@@ -170,6 +182,9 @@ class Pipe:
                                 await say({"type": "citation", "data": self.citation(s)})
                             await say({"type": "status", "data": {
                                 "description": f"{len(sources)} sources", "done": True}})
+                        if chunk.get("louise_pdf"):
+                            # the answer's PDF, beside the sources (Louise 2026-11-11)
+                            await say({"type": "citation", "data": self.pdf_citation(chunk["louise_pdf"], paper)})
                         for choice in chunk.get("choices") or []:
                             text = (choice.get("delta") or {}).get("content")
                             if text:
