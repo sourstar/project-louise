@@ -1255,3 +1255,68 @@ def test_a_probe_says_its_keep_only_to_an_on_demand_load(capsys):
     g.pb = SimpleNamespace(PredictOptions=Old)
     assert w.Gate._probe_request(g, True, Embeddings="x").fields == {"Embeddings": "x"}
     assert "carry no metadata" in capsys.readouterr().err
+
+
+# ---- the canary: a context that did not reproduce it, counted (operator, 2026-11-11) ---------
+
+class _RpcError(Exception):
+    def __init__(self, trailing):
+        self._trailing = trailing
+
+    def trailing_metadata(self):
+        return self._trailing
+
+
+def test_a_call_refused_by_the_canary_is_told_from_any_other_failure():
+    w = load_wrapper()
+    key = w.CANARY_TRAILER
+    assert key == "llama-context-canary", "the key P11's backend writes (context_on_demand.h)"
+    assert w.canary_refused(_RpcError(((key, "failed"),))) is True
+    assert w.canary_refused(_RpcError((("x-other", "1"), (key, b"failed")))) is True
+    assert [w.canary_refused(e) for e in (
+        _RpcError(()), _RpcError(None), _RpcError(((key, "passed"),)),
+        _RpcError(((w.CREATED_TRAILER, "1500"),)), RuntimeError("the backend is gone"),
+        ValueError("not an answer"))] == [False] * 6
+
+
+def test_the_canarys_failures_are_counted_apart_from_the_other_failed_calls():
+    w = load_wrapper()
+    c = w.KeepCount("sha256:" + "11" * 32, {}, True)
+    c.send()
+    assert c.failed_call() == 0
+    c.send()
+    assert c.failed_call(canary=True) == 1
+    c.send()
+    assert c.failed_call(canary=True) == 2
+    assert c.answered(c.send(), 0, 41_000) is True
+    m = c.message()
+    assert (m["calls"], m["failed"], m["canary_failed"], m["created"]) == (1, 3, 2, 1)
+    assert c.in_flight == 0
+    from app.vega import service
+    assert set(m) == {"kind", *service.KEEPS_KEYS}, "the message VeGa takes, key for key"
+
+
+@pytest.mark.parametrize("options,said", [
+    (["context_on_demand", "context_canary:true"], True), (["context_canary"], True),
+    (["context_canary:false"], False), (["context_canary:off"], False),
+    (["--no-context-canary"], False), (["--context-canary"], True),
+    (["context_canary:false", "context_canary:true"], True),
+    (["context_on_demand"], None), (["context_canary_x:true"], None), (None, None),
+])
+def test_whether_a_load_says_its_canary(options, said):
+    w = load_wrapper()
+    assert w.declared_canary(options) is said
+
+
+def test_an_on_demand_load_must_say_its_canary_either_way():
+    """The backend's default is on, and a default is in nobody's statement:
+    with the option required, a run with the canary and one without differ
+    in their stated options, so they are two runs."""
+    w = load_wrapper()
+    why = w.canary_unstated(_canon(["device:gpu", "parallel:1", "context_on_demand"]))
+    assert "does not say whether its contexts are held to the canary" in why
+    assert w.canary_unstated(_canon(["context_on_demand", "context_canary:true"])) is None
+    assert w.canary_unstated(_canon(["context_on_demand", "context_canary:false"])) is None
+    assert w.canary_unstated(_canon(["device:gpu", "parallel:1"])) is None, \
+        "a load that keeps its context has no canary to state"
+    assert w.canary_unstated(_canon(["context_on_demand:false"])) is None

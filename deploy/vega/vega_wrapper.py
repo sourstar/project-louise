@@ -167,6 +167,17 @@ PASS_BUCKETS = tuple(str(b) for b in PASS_BOUNDS) + ("more",)
 KEEP_FIELD = "keep_context_ms"
 ON_DEMAND_OPTION = "context_on_demand"
 CREATED_TRAILER = "llama-context-created-us"
+#: THE CANARY (operator, 2026-11-11: "Add the canary; it must be possible to
+#: disable it once we have the confidence that the architecture is sound").
+#: Such a backend holds every context it creates to the output its load's
+#: context gave for a fixed input, before any request runs on it; one that
+#: does not reproduce it is discarded, the call refused (retryable), and the
+#: backend says so beside the error. Counted per load (`canary_failed`) and
+#: told to VeGa at once: it is the evidence the canary is there to give — a
+#: run whose count stays at zero over its creations is what "sound" means.
+#: Switched off by the model option `context_canary:false`, which is in the
+#: run's stated options: a run says whether its contexts were checked.
+CANARY_TRAILER = "llama-context-canary"
 KEEPS_EVERY_S = 60.0
 GAP_BOUNDS = tuple(2 ** k for k in range(17))        # under 1 ms … under 65,536 ms
 GAP_BUCKETS = tuple(str(b) for b in GAP_BOUNDS) + ("more",)
@@ -959,6 +970,45 @@ def declares_on_demand(options: Any) -> bool:
     return on
 
 
+CANARY_OPTION = "context_canary"
+
+
+def declared_canary(options: Any) -> bool | None:
+    """Whether a load's `Options` SAY its contexts are held to the canary:
+    True or False as `context_canary[:value]` reads (the backend's words for
+    off), or the raw flags `--context-canary` / `--no-context-canary`; None
+    when they do not say. The last entry decides."""
+    said = None
+    for o in options if isinstance(options, list) else ():
+        if not isinstance(o, str):
+            continue
+        name, _, value = o.strip().partition(":")
+        name = name.lstrip("-").replace("-", "_")
+        if name == CANARY_OPTION:
+            said = value.strip().lower() not in _OFF
+        elif name == "no_" + CANARY_OPTION:
+            said = False
+    return said
+
+
+def canary_unstated(canon: "loadopts.Canon") -> str | None:
+    """What a load that creates its context per request must still say, None
+    when it says it. A RUN STATES WHETHER ITS CONTEXTS WERE CHECKED (operator,
+    2026-11-11: "it must be possible to disable it once we have the
+    confidence that the architecture is sound"): the backend's default is ON,
+    and a default is in nobody's statement — so the option is required in the
+    model's YAML either way, `context_canary:true` or `context_canary:false`,
+    and it is then in the run's options (09 §9.3): a run with the canary and
+    one without are two runs, each gated."""
+    options = canon.options.get("Options")
+    if declares_on_demand(options) and declared_canary(options) is None:
+        return (f"the load declares {ON_DEMAND_OPTION} and does not say whether its contexts are "
+                f"held to the canary: the model's YAML must set option {CANARY_OPTION}:true (or "
+                f"{CANARY_OPTION}:false, to switch the check off) — a run states whether its "
+                f"contexts were checked (docs/notes/idle-context-brief.md §10)")
+    return None
+
+
 def parse_keep_ms(value: Any) -> int | None:
     """A keep as the backend reads one (`parse_keep_context_ms`): a whole,
     non-negative number of milliseconds that fits 32 bits, else None — "not
@@ -989,6 +1039,21 @@ def created_us(trailing: Any) -> int | None:
                 value = value.decode("ascii", "replace")
             return int(value) if re.fullmatch(r"-1|\d+", str(value)) else None
     return None
+
+
+def canary_refused(error: BaseException) -> bool:
+    """Whether a call failed because the context created for it did not
+    reproduce the backend's canary (`CANARY_TRAILER` beside the error)."""
+    try:
+        trailing = error.trailing_metadata()          # a grpc.RpcError
+    except Exception:                                 # noqa: BLE001 — anything else has none
+        return False
+    for key, value in trailing or ():
+        if key == CANARY_TRAILER:
+            if isinstance(value, bytes):
+                value = value.decode("ascii", "replace")
+            return str(value) == "failed"
+    return False
 
 
 # ---- the load options and the run ---------------------------------------------------
@@ -1221,6 +1286,9 @@ def state_run(*, backend: RealBackend, canon: loadopts.Canon, environ: Mapping[s
         raise loadopts.Unstatable(
             f"the run does not hold its backend's determinism contract (CLAUDE.md invariant "
             f"12): the model's YAML must set {', '.join(lacks)}")
+    unstated = canary_unstated(canon)
+    if unstated:
+        raise loadopts.Unstatable(unstated)
     missing = sorted(k for k, v in canon.env.items() if environ.get(k) != v)
     if missing:
         raise loadopts.Unstatable(f"the backend does not carry the environment it was loaded "
@@ -1467,7 +1535,7 @@ class KeepCount:
                  clock: Callable[[], float] = time.monotonic) -> None:
         self.run_id, self.run, self.on_demand = run_id, run, on_demand
         self._clock = clock
-        self.calls = self.keyed = self.busy = self.failed = 0
+        self.calls = self.keyed = self.busy = self.failed = self.canary_failed = 0
         self.told = self.created = self.created_us = 0
         self.gaps = dict.fromkeys(GAP_BUCKETS, 0)
         self.in_flight = 0
@@ -1508,18 +1576,23 @@ class KeepCount:
                     self.created_us += created
             return self.calls == 1 or keep_ms == 0 or (created is not None and created >= 0)
 
-    def failed_call(self) -> None:
-        """The call came back as an error, or its answer could not be read."""
+    def failed_call(self, canary: bool = False) -> int:
+        """The call came back as an error, or its answer could not be read;
+        `canary`: because its new context did not reproduce the canary and
+        was discarded (`canary_refused`). The canary failures since the load."""
         with self._lock:
             self.in_flight = max(0, self.in_flight - 1)
             self.failed += 1
+            self.canary_failed += 1 if canary else 0
             self.answered_at = self._clock()
+            return self.canary_failed
 
     def message(self) -> dict[str, Any]:
         with self._lock:
             return {"kind": "keeps", "run_id": self.run_id, "on_demand": self.on_demand,
                     "calls": self.calls, "keyed": self.keyed, "busy": self.busy,
-                    "failed": self.failed, "told": self.told, "created": self.created,
+                    "failed": self.failed, "canary_failed": self.canary_failed,
+                    "told": self.told, "created": self.created,
                     "created_ms": (self.created_us + 500) // 1000, "gaps": dict(self.gaps)}
 
 
@@ -2093,9 +2166,16 @@ class Gate:
                 self._shape(req, content, cut)
                 answer = forward(req.SerializeToString())
                 result = self.pb.EmbeddingResult.FromString(answer)
-        except BaseException:
+        except BaseException as e:
             if count is not None:
-                count.failed_call()
+                discarded = canary_refused(e)
+                n = count.failed_call(canary=discarded)
+                if discarded:
+                    log(f"{self.backend.name}: A CONTEXT DID NOT REPRODUCE ITS CANARY and was "
+                        f"discarded ({n} since the load); the call is refused and can be asked "
+                        f"again (counted for VeGa, GET /vega/keeps)")
+                    if not self._keeps_off:
+                        self._keeps_flush()          # at once: this is what the count is for
             raise
         # what the backend said beside the answer that goes out (`forward`
         # keeps the last answer's trailing metadata)

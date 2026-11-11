@@ -561,10 +561,12 @@ def test_only_a_count_whose_backend_spoke_for_every_call_is_read(monkeypatch):
     row = {"run_id": "sha256:" + "ab" * 32, "on_demand": True, "calls": 40, "told": 40,
            "created": 7, "created_ms": 392}
     assert keep.observe(SERVER + "/v1", MODEL, row) == ["raised"]
-    assert seen == [(SERVER, MODEL, 40, 7, 392)], "by the server, as a stream is named"
+    assert seen == [(SERVER, MODEL, 40, 7, 392, 0)], "by the server, as a stream is named"
+    keep.observe(SERVER, MODEL, row | {"failed": 3, "canary_failed": 2})
+    assert seen[-1] == (SERVER, MODEL, 40, 7, 392, 2), "and the contexts its canary discarded"
     assert keep.observe(SERVER, MODEL, row | {"told": 39}) == [], "a backend before the count"
     assert keep.observe(SERVER, MODEL, row | {"on_demand": False}) == []
-    assert keep.observe(SERVER, MODEL, {"calls": 40}) == [] and len(seen) == 1
+    assert keep.observe(SERVER, MODEL, {"calls": 40}) == [] and len(seen) == 2
 
 
 def test_the_published_line_says_a_keep_the_engines_count_raised(keeps, clock):
@@ -609,4 +611,71 @@ def test_the_worker_s_beat_hands_rage_the_engines_count(isolated_config, monkeyp
     published = [r[0] for r in con.execute(
         "SELECT message FROM events WHERE stage='sched' AND message LIKE 'keep (since start)%'")]
     assert "its keep 40 ms" in published[-1] and "raised 1 time(s) on the engine's own count" in published[-1]
+    keep.reset()
+
+
+# ---- the canary's record (operator, 2026-11-11: "Add the canary; it must be possible to
+#      disable it once we have the confidence that the architecture is sound") ---------------
+
+def test_the_canarys_record_is_kept_per_model_and_a_discarded_context_is_said_at_once(keeps, clock):
+    _once(keeps, clock, WIKIDATA)
+    assert keeps.observe(SERVER, MODEL, 1, 1, 56, 0) == []
+    _back_to_back(keeps, clock, WIKIDATA, 5)
+    assert keeps.observe(SERVER, MODEL, 6, 2, 112, 0) == []
+    assert keeps.contexts() == [{"server": SERVER, "model": MODEL, "created": 2, "discarded": 0,
+                                 "creation_ms": 56}]
+    (line,) = keeps.observe(SERVER, MODEL, 7, 3, 168, 1)
+    assert line.startswith("CANARY — the engine of vega-nemotron-3-embed-1b at http://localai:8080 "
+                           "discarded 1 context(s) that did not reproduce its canary")
+    assert "1 since this worker started, 3 created and used" in line and "invariant 12" in line
+    assert keeps.observe(SERVER, MODEL, 9, 4, 224, 1) == [], "said when it grows, not at every reading"
+    (line,) = keeps.observe(SERVER, MODEL, 9, 4, 224, 3)
+    assert "discarded 2 context(s)" in line and "3 since this worker started, 4 created" in line
+    assert keeps.contexts() == [{"server": SERVER, "model": MODEL, "created": 4, "discarded": 3,
+                                 "creation_ms": 56}]
+    assert _state(keeps, WIKIDATA)["keep_ms"] == 20, "the record moves no keep"
+
+
+def test_a_discarded_context_is_never_left_uncounted_by_a_baseline(keeps, clock):
+    """The first reading and the one after a new load are no window to judge
+    a keep on — but what the canary discarded in them happened."""
+    _once(keeps, clock, WIKIDATA)
+    (line,) = keeps.observe(SERVER, MODEL, 40, 12, 672, 2)      # the first reading of this process
+    assert "discarded 2 context(s)" in line and "2 since this worker started, 12 created" in line
+    _once(keeps, clock, WIKIDATA)
+    (line,) = keeps.observe(SERVER, MODEL, 3, 1, 56, 1)         # a new load: its counts began again
+    assert "discarded 1 context(s)" in line and "3 since this worker started, 13 created" in line
+    assert _state(keeps, WIKIDATA)["keep_ms"] == 20 and _state(keeps, WIKIDATA)["unseen"] == 0, \
+        "and no keep is judged on either"
+
+
+def test_the_canarys_record_is_published_with_the_streams_lines(isolated_config, monkeypatch):
+    from app import db, run_check, worker
+    keep.reset()
+    clock = Clock()
+    monkeypatch.setattr(keep.KEEPS, "_clock", clock)
+    count = {"run_id": "sha256:" + "ab" * 32, "on_demand": True, "calls": 1, "told": 1,
+             "created": 1, "created_ms": 56, "failed": 0, "canary_failed": 0}
+    monkeypatch.setattr(run_check, "engine_counts", lambda: {(SERVER, MODEL): dict(count)})
+    con = db.connect()
+
+    def beat() -> None:
+        monkeypatch.setattr(worker, "_last_shares_log", 0.0)
+        monkeypatch.setattr(worker, "_last_keeps_read", 0.0)
+        worker._read_engine_counts(con)
+        worker._log_shares(con)
+    _once(keep.KEEPS, clock, WIKIDATA)
+    beat()
+    _back_to_back(keep.KEEPS, clock, WIKIDATA, 3)
+    count.update(calls=4, told=4, created=3, created_ms=168, failed=1, canary_failed=1)
+    beat()
+    (error,) = [r[0] for r in con.execute(
+        "SELECT message FROM events WHERE stage='sched' AND level='error'")]
+    assert error.startswith("CANARY — the engine of vega-nemotron-3-embed-1b"), \
+        "an error to read, not a line among the scheduler's"
+    record = [r[0] for r in con.execute(
+        "SELECT message FROM events WHERE stage='sched' AND message LIKE 'contexts (since start)%'")]
+    assert record[-1] == ("contexts (since start) — vega-nemotron-3-embed-1b at http://localai:8080: "
+                          "3 created by the engine and used, 56 ms a creation; 1 discarded for not "
+                          "reproducing its canary")
     keep.reset()

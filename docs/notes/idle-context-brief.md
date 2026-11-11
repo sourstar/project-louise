@@ -108,6 +108,9 @@ options `context_on_demand:true`, `keep_context_ms:N`.
   §10.1). It replaces the start of 20 ms above; the floor a keep may decay
   to stays 20 ms — he moved the start, not the floor (`keep.START_MS`,
   `FLOOR_MS`).
+- "Add the canary; it must be possible to disable it once we have the
+  confidence that the architecture is sound" (2026-11-11, in the author's
+  session, on §10's table of the two choices). §1.4, §10 "The canary".
 - "If there is a query in the meantime, the chat model gets a context
   memory; if there is not enough memory there are still options (in this
   order): the contexts of the batch in queue can be pruned, or some other
@@ -305,11 +308,14 @@ them.
   ≥ 300 creations per encoder, short and long probes (`LONG_PROBE`) both.
   The class is known here: M5 (1 of 20 scores, first pass only) and M2
   before its remedy (4 of 8 runs).
-- **A canary per context** (review): the wrapper embeds one fingerprint
-  text right after each creation and sets its bytes against the run's own
-  before any input — the first pass is then the canary's, and a context
-  that does not reproduce is discarded before it writes. Today no check at
-  write time sets a vector against a second computation of it.
+- **A canary per context** (review; DECIDED by the operator 2026-11-11 and
+  built, §10 "The canary"): every context created computes one fixed input
+  and sets its output against the load's own before any request runs on it;
+  a context that does not reproduce it is discarded before it writes. It is
+  the ENGINE that does it, in its creation path — the review had the wrapper
+  embed a fingerprint text, but the wrapper learns that a context was
+  created only when the answer is back. Until it, no check at write time
+  set a vector against a second computation of anything.
 - The gate measures what is deployed (measuring.md §3): the keep-0 pass AND
   a pass at RAGE's keep.
 
@@ -760,10 +766,10 @@ and no engine changed.*
 | the count for §2 from the card record | written | `tools/measure/context_on_request.py` (read-only; for the node to run) | `tests/test_context_on_request_tool.py` |
 | §2's gaps, as RAGE sees them | written | `app/rage/keep.py` (`_gap`, `lines`): for EVERY embedding and translation stream, keyed or not — how idle its model was when its next request was ready, by powers of two; one line a stream in the worker's log (`[sched] keep (since start) — …`, with the scheduler's other lines) | `tests/test_rage_keep.py` |
 | translation's keep | written | `app/translate.py` (`_t5_completion`: the translation stream's keep; its warm 0) | `tests/test_context_on_demand.py` |
-| 3a. the engine SAYS, per call, whether its context was created for it | written (staged with P11) | llama.cpp half: `server_task_result::t_ctx_create_us`, `/embedding`'s `context_create_ms`; LocalAI half: `Embedding` answers with the trailing metadata `llama-context-created-us` — the creation's microseconds, -1 when the context was there, nothing without the option (`context_on_demand.h`); no change to backend.proto | CPU: llama.cpp's 15 tests; `grpc-server` over gRPC, 25 checks — twenty requests with a keep of 0 after one that held the context: the first says -1, nineteen say a creation, as many as the backend logged |
+| 3a. the engine SAYS, per call, whether its context was created for it | written (staged with P11) | llama.cpp half: `server_task_result::t_ctx_create_us`, `/embedding`'s `context_create_ms`; LocalAI half: `Embedding` answers with the trailing metadata `llama-context-created-us` — the creation's microseconds, -1 when the context was there, nothing without the option (`context_on_demand.h`); no change to backend.proto | CPU: llama.cpp's tests (15 then, 20 with the canary's); `grpc-server` over gRPC, 23 checks then (first written here as 25: miscounted), 30 with the canary's — twenty requests with a keep of 0 after one that held the context: the first says -1, nineteen say a creation, as many as the backend logged |
 | 3b. the VeGa wrapper: its probes say a keep of 0; its count of calls against the keep | written — a wrapper change is an engine change (§4): it ships only with one | `deploy/vega/vega_wrapper.py` (`_probe_request`, `KeepCount`, `created_us`), `app/vega/service.py` (`kind: keeps`, `GET /vega/keeps`, beside `passes`; not a docs/09 format) | `tests/vega/test_wrapper_logic.py`, `test_service.py`, `test_wrapper_grpc.py` (real gRPC, the fake backend speaking the trailer) |
 | 3c. the gate reads the count — what admits an on-demand engine at all | written | `app/run_check.py` (`creations_of`: `(calls, created)` of the run that answers, made current before the first round), `app/hold/embedder.py` (`_round_counts`: a round of N requests is N calls AND N creations, else deferred) | `tests/hold/test_fresh_contexts.py`; `tests/vega/test_wrapper_grpc.py` (`creations_of` through the real wrapper and receipts service) |
-| 3d. a canary per context (§1.4) | NOT written — an open decision, below | — | — |
+| 3d. the canary per context (§1.4; operator 2026-11-11: "Add the canary; it must be possible to disable it…") | written (staged with P11; the wrapper's part an engine change) | llama.cpp half: `common_init_result::canary_record` / `canary_check`, `server_context` (`context_acquire`), `--no-context-canary`, `/metrics` `context_canary`, `context_canary_failures_total`; LocalAI half: the model option `context_canary`, the trailing metadata `llama-context-canary: failed` beside the error; `deploy/vega/vega_wrapper.py` (`canary_refused`, `KeepCount.canary_failed`), `app/vega/service.py` (`canary_failed` in `kind: keeps`), `app/rage/keep.py` (the record per model), `app/worker.py` (a failure logged as an error) | CPU: llama.cpp's 20 tests; `grpc-server` over gRPC, 30 checks; `tests/vega` (the fake backend failing its canary over real gRPC), `tests/test_rage_keep.py`, `tests/test_context_on_demand.py` (the refusal is a deferral). NOT measured: its cost on the card |
 | 4e. RAGE reads the engine's count back (the keep's dating) | written | `app/rage/keep.py` (`Keeps.observe`: the measured creation time; a per-model floor under every stream's keep when the engine created contexts RAGE's clock did not expect), `app/run_check.py` (`engine_counts`: the count of the run each model's answers last named), `app/worker.py` (`_read_engine_counts`: the beat, every 30 s, one bounded read of VeGa) | `tests/test_rage_keep.py` (the node's 8-in-13 pattern raised 20 → 40 → 80 and held; the floor is the model's and does not decay; expected creations, another process's, a new load), `tests/test_run_check.py` |
 | §2's measurements, steps 3–4 | MADE 2026-11-12 (München, test copies, node paused) — §10.1 | the node | byte-equal over 300 keep-0 creations, each of three encoders |
 
@@ -842,12 +848,67 @@ and no engine changed.*
   apart): the count is then current and the keep its own earlier passes
   left has run out. A VeGa without the route, or a backend that says nothing
   (the test backend built from 6ea8de4 is one), is a refusal, not a retry.
-- **A canary per context (§1.4) — NOT built; the operator's to decide:**
-
-  | | pros | cons |
-  |---|---|---|
-  | **as built: the gate's counted 300** (default) | nothing on the embedding path; 900 creations byte-equal on the node so far (three encoders); a per-creation fault at rate p ≥ 1 % is caught at the gate with probability ≥ 95 % | a fault rarer than that, or one that appears after the gate, writes a wrong vector that no check at write time sees |
-  | **add the canary** (one fingerprint text embedded and compared on every new context, before its first input) | every context is checked before it writes: a fault is caught the day it happens, whatever its rate | one extra embedding per creation (milliseconds on the card, per busy period at a bridging keep, per request at keep 0); more wrapper code in every run's engine; the canary's own decode is then every context's first pass, so it checks the context and hides a first-pass fault of the input after it |
+- **The canary — decided and built** (operator, 2026-11-11, on the table
+  of the two choices that stood here: "Add the canary; it must be possible
+  to disable it once we have the confidence that the architecture is
+  sound").
+  - *What it does.* At the load the engine computes the output of one fixed
+    short input on its context — the pooled embedding of an embedding
+    model, the logits of the last token otherwise; at most 64 tokens —
+    TWICE, and refuses the load if the two differ (a model that does not
+    reproduce itself cannot have a canary). Every context created later
+    computes the same input after its warmup and BEFORE any request runs on
+    it: the same values bit for bit, or the context is discarded and the
+    request refused — `503`, "context canary failed: …", which LocalAI
+    passes on as HTTP 500 and Louise reads as any busy endpoint's: a
+    deferral, asked again, never an error on a document.
+  - *Where.* In llama.cpp's creation path (`context_acquire`). The wrapper
+    cannot do it: it learns that a context was created when the answer is
+    back, and with a keep of 0 that context is already gone.
+  - *How it is switched off.* The model option `context_canary:false` in the
+    encoder's YAML (`--no-context-canary` for llama.cpp's own server). It is
+    one of the load's options, so it is in the run's statement: a run says
+    whether its contexts were checked, switching it off is a new run, and
+    the gate validates that run once like any other. No dialog, no file of
+    Louise's (RULE 2). And it is said EITHER WAY: the backend's default is
+    on, and a default is in nobody's statement, so the VeGa wrapper states no
+    run for a load that declares `context_on_demand` without
+    `context_canary:true` or `context_canary:false` (`canary_unstated`; the
+    coordinator's review). A YAML with the option therefore reads
+    `context_on_demand`, `context_canary:true`.
+  - *What the confidence is read from.* The engine's `/metrics`; the
+    wrapper's count per run, `canary_failed` beside `created`
+    (`GET /vega/keeps`, told at once, logged by VeGa each time it grows);
+    and RAGE's record per model since the worker started, published with
+    the scheduler's lines — `contexts (since start) — <model> at <server>:
+    N created by the engine and used, 56 ms a creation; 0 discarded for not
+    reproducing its canary` — a discarded context being logged as an ERROR
+    with the model's name the moment it is read. "Sound" is that record:
+    creations in the thousands, discarded none.
+  - *What it costs.* One pass of at most 64 tokens per creation, inside the
+    creation's time (`created_ms`). NOT measured on the card: München's
+    figures (a creation ~55 / ~40 / ~23 ms) are without it; with the next
+    build the same cells give it, and `context_canary:false` on a test copy
+    gives the difference.
+  - *What it proves.* That THIS context, right after its creation and its
+    warmup, computes one fixed input to the same bits as the load's context
+    did: the memory it was given, its buffers and its first real pass behave
+    as the load's. It is the check invariant 12 had no place for — a vector
+    set against a second computation at the moment of writing, not at the
+    gate.
+  - *What it does not prove.* That any OTHER input is right on that context
+    (one input, at most 64 tokens: a fault that needs a long input, or a
+    particular one, passes it); that the load's context was itself right
+    (it was held only to itself, twice); anything about a context AFTER its
+    canary (a kept context is not checked again). So it lowers the chance
+    that a bad context writes and makes a bad engine loud; the gate's
+    counted 300, on the sixteen fingerprints and the longest texts, remain
+    what admits a run. A canary failure does not yet send the run back to
+    the gate by itself — the worker's error line is the signal, and wiring
+    it to `run_check` (forget the run's statement, gate again) is the step
+    to take the first time one is seen.
+  - *After `POST /lora-adapters`* the next context records the canary again
+    (the adapters changed what a context gives); not our case, upstream's.
 
 - **RAGE's dating of the keep** (the review's last item), CONFIRMED ON THE
   NODE AND FIXED. At a keep of 20 ms one lane of requests sent back to back
@@ -966,8 +1027,8 @@ the node paused for each run. **All three encoders gave the SAME BYTES over
   goes through the same steps as a load (`common_init_context_apply`:
   adapters, then the warmup run where the model's options have it), so the
   class of M5 — a difference on the first pass after a load — falls on a
-  decode nobody reads. It does not CHECK bytes: the wrapper's canary and the
-  keep-0 gate still do (§1.4).
+  decode nobody reads. It does not CHECK bytes: the canary — the engine's
+  own, right after that warmup — and the keep-0 gate do (§1.4).
 - **§2's instrument is the staged backend itself.** A test copy loaded with
   `context_on_demand` and asked with keep 0 pays one creation and one free
   per request, and says each in its log with its milliseconds ("context
@@ -1064,3 +1125,14 @@ in München's session (§8).
    reachable, else the log's lines). Behind the VeGa wrapper (a later
    build, 3a–3b): `GET /vega/keeps` — the run's `calls`, `created`,
    `created_ms` and its `gaps` at the engine.
+5. **The canary on the card** (3d; the build that carries it). An on-demand
+   model's YAML now needs `context_canary:true` beside `context_on_demand`,
+   or the wrapper states no run. (a) Its cost: the keep-0 cell of §10.1 with
+   `context_canary:true` against the same cell on a copy with
+   `context_canary:false` — the difference is the canary's pass. (b) Seen to
+   refuse: a test copy with `LLAMA_SERVER_CTX_CANARY_FAIL: "3"` in its `env`
+   — the next three contexts created fail their canary: three requests
+   answered HTTP 500 "context canary failed", `canary_failed` 3 at
+   `GET /vega/keeps`, VeGa's log line, then requests served and their
+   vectors byte-equal. (c) The load: its log says "context canary:
+   recorded".

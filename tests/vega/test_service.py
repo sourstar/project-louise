@@ -286,7 +286,8 @@ def test_a_service_without_counts_refuses_them_as_a_kind_it_does_not_take(tmp_pa
 def keeps(**kw) -> dict:
     g = dict.fromkeys(service.GAP_BUCKETS, 0) | {"1": 30, "16": 6, "256": 4}
     m = {"kind": "keeps", "run_id": RUN_ID, "on_demand": True, "calls": 50, "keyed": 50,
-         "busy": 10, "failed": 0, "told": 50, "created": 4, "created_ms": 160, "gaps": g}
+         "busy": 10, "failed": 0, "canary_failed": 0, "told": 50, "created": 4, "created_ms": 160,
+         "gaps": g}
     return m | kw
 
 
@@ -335,7 +336,7 @@ def test_a_load_that_is_not_on_demand_is_counted_and_never_said(tmp_path):
     {"x": 1}, {"calls": -1}, {"calls": 1.5}, {"busy": True}, {"on_demand": 1},
     {"calls": 51}, {"keyed": 51}, {"told": 51}, {"created": 51}, {"told": 3},
     {"created": 0}, {"gaps": {"1": 40}}, {"gaps": dict.fromkeys(service.GAP_BUCKETS, 0)},
-    {"run_id": "nope"},
+    {"run_id": "nope"}, {"canary_failed": 1}, {"canary_failed": -1},
 ])
 def test_a_keep_count_that_does_not_add_up_is_refused(tmp_path, bad):
     receipts, runs, counts = ReceiptStore(), Runs(RunStore(tmp_path / "r.sqlite")), service.Keeps()
@@ -353,3 +354,29 @@ def test_a_service_without_keep_counts_refuses_them_as_a_kind_it_does_not_take(t
     assert reply["ok"] is False and "kind is run, receipt" in reply["error"], \
         "the wrapper reads this as a service that does not take the count, and stops"
     assert service.handle(canonical_json(passes()), receipts, runs)["error"] == reply["error"]
+
+
+def test_a_context_that_did_not_reproduce_its_canary_is_said_every_time(tmp_path):
+    """Operator, 2026-11-11: "Add the canary; it must be possible to disable
+    it once we have the confidence that the architecture is sound". The
+    confidence is this count staying at zero over a run's creations; a
+    failure is said in the log the moment it is told, each time it grows."""
+    receipts, runs, counts = ReceiptStore(), Runs(RunStore(tmp_path / "r.sqlite")), service.Keeps()
+    service.handle(canonical_json({"kind": "run", "run_id": RUN_ID, "run": RUN}), receipts, runs)
+    notes: list[str] = []
+    assert service.handle(canonical_json(keeps()), receipts, runs, None, notes, counts) == {"ok": True}
+    assert len(notes) == 1 and "CANARY" not in notes[0], "created contexts, none discarded"
+    one = keeps(failed=1, canary_failed=1)
+    service.handle(canonical_json(one), receipts, runs, None, notes, counts)
+    assert len(notes) == 2 and "A CONTEXT DID NOT REPRODUCE ITS CANARY" in notes[-1]
+    assert "1 discarded since its load (+1), against 4 created and used" in notes[-1]
+    assert RUN_ID[7:19] in notes[-1] and "invariant 12" in notes[-1]
+    service.handle(canonical_json(one), receipts, runs, None, notes, counts)
+    assert len(notes) == 2, "said when it grows, not at every count"
+    both = keeps(calls=51, keyed=51, told=51, created=5, failed=3, canary_failed=2,
+                 gaps=keeps()["gaps"] | {"256": 5})
+    service.handle(canonical_json(both), receipts, runs, None, notes, counts)
+    first, second = notes[-1].split("\n")
+    assert "2 discarded since its load (+1)" in first and "5 of 51 call(s)" in second
+    (row,) = counts.get()
+    assert (row["canary_failed"], row["failed"], row["created"]) == (2, 3, 5)

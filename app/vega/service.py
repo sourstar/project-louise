@@ -10,8 +10,9 @@ descriptions from the wrappers, and Louise reads them.
                → {"kind": "passes", "run_id": …, "ubatch": n, "inputs": n,
                   "over": n, "longest": n, "buckets": {"256": n, …, "more": n}}
                → {"kind": "keeps", "run_id": …, "on_demand": bool, "calls": n,
-                  "keyed": n, "busy": n, "failed": n, "told": n, "created": n,
-                  "created_ms": n, "gaps": {"1": n, …, "more": n}}
+                  "keyed": n, "busy": n, "failed": n, "canary_failed": n,
+                  "told": n, "created": n, "created_ms": n,
+                  "gaps": {"1": n, …, "more": n}}
                ← {"ok": true}  or  {"ok": false, "code": …, "error": …}
              A receipt is acknowledged only once it is stored: the wrapper
              returns its vector only after that answer.
@@ -73,7 +74,13 @@ created the context for (`created`, the backend's own word, with the time
 the creations took, `created_ms`); how long the backend had been idle when a
 call was sent (`gaps`, by powers of two of a millisecond — LocalAI sends one
 text a call, so these are the gaps between two texts) and the calls sent
-while it worked (`busy`). It tells this service the totals since the load,
+while it worked (`busy`). And `canary_failed`: the calls refused because the
+context created for them did not reproduce the backend's canary — the output
+its load's context gave for a fixed input — and was discarded (operator,
+2026-11-11: "Add the canary; it must be possible to disable it once we have
+the confidence that the architecture is sound"): the count that confidence
+is read from, told at once and said in the log every time it grows. It tells
+this service the totals since the load,
 each message the whole count: BEFORE THE VECTOR GOES OUT for a load's first
 call, a call its context was created for and a call that asked for a keep
 of 0 — the calls the calibration gate counts its fresh contexts on, so the
@@ -143,7 +150,8 @@ MAX_PASS_RUNS = 256
 #: (`keeps`): each bucket counts the gaps UNDER its bound in milliseconds,
 #: "more" the rest — the scale of app/rage/keep.py's own count
 GAP_BUCKETS = tuple(str(2 ** k) for k in range(17)) + ("more",)
-KEEPS_COUNTS = ("calls", "keyed", "busy", "failed", "told", "created", "created_ms")
+KEEPS_COUNTS = ("calls", "keyed", "busy", "failed", "canary_failed", "told", "created",
+                "created_ms")
 KEEPS_KEYS = ("run_id", "on_demand", *KEEPS_COUNTS, "gaps")
 RUN_KEYS = ("driver", "engine", "weights")
 UNKNOWN_RUN, CONFLICT, INVALID = "unknown-run", "conflict", "invalid"
@@ -356,10 +364,12 @@ class Keeps:
                                    f"whole numbers")
         if (msg["busy"] + sum(g.values()) != msg["calls"] or msg["keyed"] > msg["calls"]
                 or not msg["created"] <= msg["told"] <= msg["calls"]
-                or (msg["created_ms"] and not msg["created"])):
+                or (msg["created_ms"] and not msg["created"])
+                or msg["canary_failed"] > msg["failed"]):
             raise Refused(INVALID, "a keeps message's gaps and busy calls add up to its calls, "
-                                   "its keyed and told calls are at most its calls, and its "
-                                   "created ones at most its told ones")
+                                   "its keyed and told calls are at most its calls, its "
+                                   "created ones at most its told ones, and its canary "
+                                   "failures at most its failed calls")
         row = {k: msg[k] for k in KEEPS_KEYS} | {"gaps": dict(g), "at": int(self.clock())}
         with self._lock:
             before = self._runs.pop(row["run_id"], None)
@@ -367,13 +377,25 @@ class Keeps:
             while len(self._runs) > self.max_runs:
                 self._runs.popitem(last=False)
         # a count below the last is a new load of the same run: counted afresh
-        grew = row["created"] - (before["created"] if before and before["calls"] <= row["calls"] else 0)
-        if grew <= 0:
-            return None
-        return (f"[vega] run {row['run_id'][7:19]}…: {row['created']:,} of {row['calls']:,} call(s) "
+        same_load = bool(before) and before["calls"] <= row["calls"] and \
+            before["failed"] <= row["failed"]
+        notes = []
+        discarded = row["canary_failed"] - (before["canary_failed"] if same_load else 0)
+        if discarded > 0:
+            notes.append(
+                f"[vega] run {row['run_id'][7:19]}…: A CONTEXT DID NOT REPRODUCE ITS CANARY — "
+                f"{row['canary_failed']:,} discarded since its load (+{discarded:,}), against "
+                f"{row['created']:,} created and used; each call was refused and can be asked "
+                f"again. An engine that does this does not reproduce itself on a new context "
+                f"(invariant 12) — GET /vega/keeps")
+        grew = row["created"] - (before["created"] if same_load else 0)
+        if grew > 0:
+            notes.append(
+                f"[vega] run {row['run_id'][7:19]}…: {row['created']:,} of {row['calls']:,} call(s) "
                 f"since its load met an expired keep: the context was created for each "
                 f"(+{grew:,}; {row['created_ms'] / row['created']:,.0f} ms a creation on average; "
                 f"{row['busy']:,} call(s) sent while the backend worked) — GET /vega/keeps")
+        return "\n".join(notes) or None
 
     def get(self) -> list[dict[str, Any]]:
         with self._lock:

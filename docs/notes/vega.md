@@ -94,6 +94,17 @@ Louise ──POST /v1/embeddings (model vega-xyz, tagged inputs)──► LocalA
   RAGE reads it too, at the worker's beat (`run_check.engine_counts`,
   app/rage/keep.py `observe`): the creation's measured time, and the
   contexts created that its own clock did not expect.
+  THE CANARY (operator, 2026-11-11: "Add the canary; it must be possible
+  to disable it once we have the confidence that the architecture is
+  sound"): such a backend holds every context it creates to the output its
+  load's context gave for a fixed input and discards one that does not
+  reproduce it; the call is refused and the backend says so beside the
+  error (`llama-context-canary: failed`). The wrapper passes the refusal on
+  — no vector, no receipt — counts it (`canary_failed`, within `failed`)
+  and tells VeGa at once; VeGa logs `[vega] run …: A CONTEXT DID NOT
+  REPRODUCE ITS CANARY — N discarded since its load …` each time it grows.
+  Switched off by the model option `context_canary:false`, which is in the
+  run's stated options.
   Not a docs/09 format: informational, hashed and signed nowhere.
   **Deploying it:** as the passes count — the wrapper side with the engine
   change that carries P11 (it re-gates every space once), the service side
