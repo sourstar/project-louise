@@ -1,0 +1,1528 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Wed, 11 Nov 2026 08:53:37 +0000
+Subject: [PATCH] feat(llama-cpp): context on demand - a model keeps its
+ weights and creates its context per request
+
+A loaded llama.cpp model holds its weights and its context (the KV cache and
+the compute buffers), the second whether or not a request is running. With
+the `context_on_demand` model option the backend keeps the weights and holds
+the context only while it works: created when a request needs it, freed when
+no request is left. A request says for how long the context is kept after its
+answer with `keep_context_ms` in its `metadata` (milliseconds; requests back
+to back carry one and do not pay a creation each); `keep_context_ms` as a
+model option is the keep of a request that does not say. Several models on
+one card then need room only for the contexts that work at the same time.
+
+- patches/0011-server-context-on-demand.patch: the llama.cpp side
+  (--context-on-demand, --keep-context-ms, the request's keep_context_ms),
+  written for upstream with its server tests and README.
+- context_on_demand.h (+ test): the keep parsed from the request's metadata
+  and from the model option; the fields are detected, so the source still
+  builds against pins and forks without the feature.
+- grpc-server.cpp: Predict, PredictStream and Embedding give their tasks the
+  request's keep; the model options `context_on_demand` and
+  `keep_context_ms`. No RPC reads the llama_context any more - parse_options,
+  TokenizeString and Detokenize take the vocab, Embedding's layout the
+  pooling type of the server's meta - because with the option the context
+  comes and goes on the server's loop thread and is null while the model is
+  idle.
+
+Checked on the CPU (grpc-server built from this tree, random-weight qwen3 and
+llama models, driven over gRPC as LocalAI drives it): the load's context is
+freed when idle; TokenizeString and Detokenize answer while idle and create
+none; one creation per Embedding without a keep, the same vector across
+creations; a keep in the metadata holds the context and a later keep of 0
+does not shorten it; token ids are embedded on demand too; a keep that is no
+number is "not said"; without the option nothing is ever freed and the
+vector is the same, byte for byte; the model option is the default keep; a
+creation made to fail is an error on that request, the backend stays up and
+serves the next; Predict gives the same completion across creations.
+
+Assisted-by: Claude Code
+---
+ backend/cpp/llama-cpp/CMakeLists.txt          |    5 +
+ backend/cpp/llama-cpp/context_on_demand.h     |   86 ++
+ .../cpp/llama-cpp/context_on_demand_test.cpp  |   62 +
+ backend/cpp/llama-cpp/grpc-server.cpp         |   42 +-
+ .../0011-server-context-on-demand.patch       | 1123 +++++++++++++++++
+ backend/cpp/llama-cpp/prepare.sh              |    4 +
+ 6 files changed, 1312 insertions(+), 10 deletions(-)
+ create mode 100644 backend/cpp/llama-cpp/context_on_demand.h
+ create mode 100644 backend/cpp/llama-cpp/context_on_demand_test.cpp
+ create mode 100644 backend/cpp/llama-cpp/patches/0011-server-context-on-demand.patch
+
+diff --git a/backend/cpp/llama-cpp/CMakeLists.txt b/backend/cpp/llama-cpp/CMakeLists.txt
+index 65327a5..cf90806 100644
+--- a/backend/cpp/llama-cpp/CMakeLists.txt
++++ b/backend/cpp/llama-cpp/CMakeLists.txt
+@@ -143,6 +143,11 @@ if(LLAMA_GRPC_BUILD_TESTS)
+     target_compile_features(moe_cache_option_test PRIVATE cxx_std_17)
+     add_test(NAME moe_cache_option_test COMMAND moe_cache_option_test)
+ 
++    add_executable(context_on_demand_test context_on_demand_test.cpp context_on_demand.h)
++    target_include_directories(context_on_demand_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
++    target_compile_features(context_on_demand_test PRIVATE cxx_std_17)
++    add_test(NAME context_on_demand_test COMMAND context_on_demand_test)
++
+     add_executable(parallel_params_test parallel_params_test.cpp parallel_params.h)
+     target_include_directories(parallel_params_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+     target_compile_features(parallel_params_test PRIVATE cxx_std_17)
+diff --git a/backend/cpp/llama-cpp/context_on_demand.h b/backend/cpp/llama-cpp/context_on_demand.h
+new file mode 100644
+index 0000000..de74994
+--- /dev/null
++++ b/backend/cpp/llama-cpp/context_on_demand.h
+@@ -0,0 +1,86 @@
++// SPDX-License-Identifier: MIT
++
++#pragma once
++
++#include <cstdint>
++#include <exception>
++#include <limits>
++#include <string>
++#include <type_traits>
++#include <utility>
++
++namespace llama_grpc {
++
++// llama.cpp's server can create its context when a request needs it and free
++// it when it is idle, keeping the model loaded (--context-on-demand). A request
++// then says for how long the context is kept after its answer, in milliseconds
++// (keep_context_ms): requests back to back carry a keep and do not pay a
++// creation each. LocalAI carries the request's keep in its metadata map, and
++// the model's own default in the model options.
++
++// parse_keep_context_ms converts the value of the keep_context_ms metadata key,
++// or of the model option of the same name, to milliseconds. It returns -1
++// ("not said": the server's default applies) for anything that is not a whole,
++// non-negative number of milliseconds that fits in int32_t.
++inline int32_t parse_keep_context_ms(const std::string & value) {
++    try {
++        size_t used = 0;
++        const long long ms = std::stoll(value, &used);
++        if (used != value.size() || ms < 0 || ms > std::numeric_limits<int32_t>::max()) {
++            return -1;
++        }
++        return static_cast<int32_t>(ms);
++    } catch (const std::exception &) {
++        return -1;
++    }
++}
++
++// keep_context_ms_from reads the key from a metadata map (any map from string
++// to string), -1 when the map does not carry it.
++template <typename Map>
++int32_t keep_context_ms_from(const Map & metadata) {
++    const auto it = metadata.find("keep_context_ms");
++    return it == metadata.end() ? -1 : parse_keep_context_ms(it->second);
++}
++
++// The fields below exist only in llama.cpp trees that have the feature. They
++// are detected, so that this source still builds against pins and forks
++// without it; the setters return whether the field was there to set.
++template <typename T, typename = void>
++struct has_keep_context_ms : std::false_type {};
++template <typename T>
++struct has_keep_context_ms<T, std::void_t<decltype(std::declval<T &>().keep_context_ms)>> : std::true_type {};
++
++template <typename T, typename = void>
++struct has_context_on_demand : std::false_type {};
++template <typename T>
++struct has_context_on_demand<T, std::void_t<decltype(std::declval<T &>().context_on_demand)>> : std::true_type {};
++
++// set_keep_context_ms sets the keep of a task's params, or the default keep of
++// the server's params.
++template <typename Params>
++bool set_keep_context_ms(Params & params, int32_t ms) {
++    if constexpr (has_keep_context_ms<Params>::value) {
++        params.keep_context_ms = ms;
++        return true;
++    } else {
++        (void) params;
++        (void) ms;
++        return false;
++    }
++}
++
++// set_context_on_demand switches the feature on the server's params.
++template <typename Params>
++bool set_context_on_demand(Params & params, bool on) {
++    if constexpr (has_context_on_demand<Params>::value) {
++        params.context_on_demand = on;
++        return true;
++    } else {
++        (void) params;
++        (void) on;
++        return false;
++    }
++}
++
++} // namespace llama_grpc
+diff --git a/backend/cpp/llama-cpp/context_on_demand_test.cpp b/backend/cpp/llama-cpp/context_on_demand_test.cpp
+new file mode 100644
+index 0000000..c24be4c
+--- /dev/null
++++ b/backend/cpp/llama-cpp/context_on_demand_test.cpp
+@@ -0,0 +1,62 @@
++// SPDX-License-Identifier: MIT
++
++#include "context_on_demand.h"
++
++#include <cstdio>
++#include <map>
++#include <string>
++
++#define CHECK(cond)                                                          \
++    do {                                                                     \
++        if (!(cond)) {                                                       \
++            fprintf(stderr, "%s:%d: check failed: %s\n", __FILE__, __LINE__, #cond); \
++            return 1;                                                        \
++        }                                                                    \
++    } while (0)
++
++namespace {
++
++struct params_with    { int32_t keep_context_ms = -1; bool context_on_demand = false; };
++struct params_without { int unrelated = 0; };
++
++} // namespace
++
++int main() {
++    using namespace llama_grpc;
++
++    // a whole, non-negative number of milliseconds
++    CHECK(parse_keep_context_ms("0") == 0);
++    CHECK(parse_keep_context_ms("20") == 20);
++    CHECK(parse_keep_context_ms("300000") == 300000);
++    CHECK(parse_keep_context_ms("2147483647") == 2147483647);
++
++    // anything else is "not said"
++    CHECK(parse_keep_context_ms("") == -1);
++    CHECK(parse_keep_context_ms("-1") == -1);
++    CHECK(parse_keep_context_ms("20ms") == -1);
++    CHECK(parse_keep_context_ms("1.5") == -1);
++    CHECK(parse_keep_context_ms("true") == -1);
++    CHECK(parse_keep_context_ms("2147483648") == -1);
++    CHECK(parse_keep_context_ms("99999999999999999999999") == -1);
++
++    // the request's metadata
++    const std::map<std::string, std::string> none  = {{"chat_template_kwargs", "{}"}};
++    const std::map<std::string, std::string> some  = {{"keep_context_ms", "20"}};
++    const std::map<std::string, std::string> wrong = {{"keep_context_ms", "soon"}};
++    CHECK(keep_context_ms_from(none) == -1);
++    CHECK(keep_context_ms_from(some) == 20);
++    CHECK(keep_context_ms_from(wrong) == -1);
++
++    // a llama.cpp with the fields, and one without
++    params_with with;
++    CHECK(set_keep_context_ms(with, 20));
++    CHECK(with.keep_context_ms == 20);
++    CHECK(set_context_on_demand(with, true));
++    CHECK(with.context_on_demand);
++
++    params_without without;
++    CHECK(!set_keep_context_ms(without, 20));
++    CHECK(!set_context_on_demand(without, true));
++
++    return 0;
++}
+diff --git a/backend/cpp/llama-cpp/grpc-server.cpp b/backend/cpp/llama-cpp/grpc-server.cpp
+index a90c179..d7dcbc6 100644
+--- a/backend/cpp/llama-cpp/grpc-server.cpp
++++ b/backend/cpp/llama-cpp/grpc-server.cpp
+@@ -75,6 +75,7 @@
+ #include "message_content.h"
+ #include "moe_cache_option.h"
+ #include "passthrough_options.h"
++#include "context_on_demand.h"
+ #include "stream_peer.h"
+ #include "realtime_session.h"
+ #include "tts_request_options.h"
+@@ -217,7 +218,7 @@ static inline void signal_handler(int signal) {
+ 
+ // Forward declarations
+ static void start_llama_server(server_context& ctx_server);
+-static json parse_options(bool streaming, const backend::PredictOptions* predict, const common_params& params_base, llama_context* ctx);
++static json parse_options(bool streaming, const backend::PredictOptions* predict, const common_params& params_base, const llama_vocab* vocab);
+ static ggml_type kv_cache_type_from_str(const std::string & s);
+ static std::string get_all_kv_cache_types();
+ static void add_rpc_devices(std::string servers);
+@@ -267,7 +268,7 @@ static void start_llama_server(server_context& ctx_server) {
+     ctx_server.start_loop();
+ }
+ 
+-json parse_options(bool streaming, const backend::PredictOptions* predict, const common_params& params_base, llama_context* ctx)
++json parse_options(bool streaming, const backend::PredictOptions* predict, const common_params& params_base, const llama_vocab* vocab)
+ {
+ 
+     // Create now a json data from the prediction options instead
+@@ -467,7 +468,7 @@ json parse_options(bool streaming, const backend::PredictOptions* predict, const
+     if (!params_base.sampling.preserved_tokens.empty()) {
+         json preserved_tokens = json::array();
+         for (const auto& token : params_base.sampling.preserved_tokens) {
+-            preserved_tokens.push_back(common_token_to_piece(ctx, token));
++            preserved_tokens.push_back(common_token_to_piece(vocab, token));
+         }
+         data["preserved_tokens"] = preserved_tokens;
+     }
+@@ -742,6 +743,21 @@ static void params_parse(server_context& /*ctx_server*/, const backend::ModelOpt
+             if (optval != NULL) {
+                 grpc_servers_option = optval_str;
+             }
++        } else if (!strcmp(optname, "context_on_demand")) {
++            // llama.cpp's --context-on-demand: the context is created when a request
++            // needs it and freed when the model is idle, the weights stay loaded
++            const bool on = !(optval_str == "false" || optval_str == "0" || optval_str == "no" || optval_str == "off" || optval_str == "disabled");
++            if (!llama_grpc::set_context_on_demand(params, on)) {
++                fprintf(stderr, "[llama-cpp] context_on_demand: not supported by this llama.cpp, ignored\n");
++            }
++        } else if (!strcmp(optname, "keep_context_ms")) {
++            // the keep of a request that does not carry one in its metadata
++            const int32_t ms = llama_grpc::parse_keep_context_ms(optval_str);
++            if (ms < 0) {
++                fprintf(stderr, "[llama-cpp] keep_context_ms: '%s' is not a number of milliseconds, ignored\n", optval_str.c_str());
++            } else if (!llama_grpc::set_keep_context_ms(params, ms)) {
++                fprintf(stderr, "[llama-cpp] keep_context_ms: not supported by this llama.cpp, ignored\n");
++            }
+         } else if (!strcmp(optname, "fit_params") || !strcmp(optname, "fit")) {
+             if (optval_str == "true" || optval_str == "1" || optval_str == "yes" || optval_str == "on" || optval_str == "enabled") {
+                 params.fit_params = true;
+@@ -2591,7 +2607,7 @@ public:
+         if (params_base.model.path.empty()) {
+             return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION, "Model not loaded");
+         }
+-        json data = parse_options(true, request, params_base, ctx_server.get_llama_context());
++        json data = parse_options(true, request, params_base, ctx_server.impl->vocab);
+ 
+ 
+         //Raise error if embeddings is set to true
+@@ -2996,6 +3012,8 @@ public:
+                 task.apply_chat_session(chat_session);
+ #endif
+                 task.id_slot = json_value(data, "id_slot", -1);
++                // context on demand: for how long the context is kept after this request
++                llama_grpc::set_keep_context_ms(task.params, llama_grpc::keep_context_ms_from(request->metadata()));
+ 
+                 // OAI-compat: enable autoparser (PEG-based chat parsing) so that
+                 // reasoning, tool calls, and content are classified into ChatDeltas.
+@@ -3194,7 +3212,7 @@ public:
+          if (params_base.model.path.empty()) {
+              return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION, "Model not loaded");
+          }
+-         json data = parse_options(true, request, params_base, ctx_server.get_llama_context());
++         json data = parse_options(true, request, params_base, ctx_server.impl->vocab);
+ 
+         data["stream"] = false;
+         //Raise error if embeddings is set to true
+@@ -3601,6 +3619,8 @@ public:
+                 task.apply_chat_session(chat_session);
+ #endif
+                 task.id_slot = json_value(data, "id_slot", -1);
++                // context on demand: for how long the context is kept after this request
++                llama_grpc::set_keep_context_ms(task.params, llama_grpc::keep_context_ms_from(request->metadata()));
+ 
+                 // OAI-compat: enable autoparser (PEG-based chat parsing) so that
+                 // reasoning, tool calls, and content are classified into ChatDeltas.
+@@ -3748,7 +3768,7 @@ public:
+         if (params_base.model.path.empty()) {
+             return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION, "Model not loaded");
+         }
+-        json body = parse_options(false, request, params_base, ctx_server.get_llama_context());
++        json body = parse_options(false, request, params_base, ctx_server.impl->vocab);
+ 
+         body["stream"] = false;
+ 
+@@ -3801,6 +3821,8 @@ public:
+ 
+                 task.params.res_type = TASK_RESPONSE_TYPE_NONE;
+                 task.params.embd_normalize = embd_normalize;
++                // context on demand: for how long the context is kept after this request
++                llama_grpc::set_keep_context_ms(task.params, llama_grpc::keep_context_ms_from(request->metadata()));
+                 tasks.push_back(std::move(task));
+             }
+ 
+@@ -3845,7 +3867,7 @@ public:
+         embeddingResult->set_dim(dim);
+         embeddingResult->set_prompt_tokens(prompt_tokens);
+         embeddingResult->set_layout(
+-            llama_pooling_type(ctx_server.get_llama_context()) == LLAMA_POOLING_TYPE_NONE
++            ctx_server.get_meta().pooling_type == LLAMA_POOLING_TYPE_NONE
+                 ? backend::EMBEDDING_LAYOUT_PER_TOKEN
+                 : backend::EMBEDDING_LAYOUT_FINAL);
+ 
+@@ -4583,7 +4605,7 @@ public:
+         if (params_base.model.path.empty()) {
+             return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION, "Model not loaded");
+         }
+-        json body = parse_options(false, request, params_base, ctx_server.get_llama_context());
++        json body = parse_options(false, request, params_base, ctx_server.impl->vocab);
+         body["stream"] = false;
+ 
+         json tokens_response = json::array();
+@@ -4594,7 +4616,7 @@ public:
+ 
+ 
+             for (const auto& token : tokens) {
+-                std::string piece = common_token_to_piece(ctx_server.get_llama_context(), token);
++                std::string piece = common_token_to_piece(ctx_server.impl->vocab, token);
+                 response->add_tokens(token);
+             }
+         }
+@@ -4762,7 +4784,7 @@ public:
+ 
+         std::string content;
+         for (const auto token : request->tokens()) {
+-            content.append(common_token_to_piece(ctx_server.get_llama_context(), token));
++            content.append(common_token_to_piece(ctx_server.impl->vocab, token));
+         }
+         response->set_content(content);
+         return grpc::Status::OK;
+diff --git a/backend/cpp/llama-cpp/patches/0011-server-context-on-demand.patch b/backend/cpp/llama-cpp/patches/0011-server-context-on-demand.patch
+new file mode 100644
+index 0000000..a9bce39
+--- /dev/null
++++ b/backend/cpp/llama-cpp/patches/0011-server-context-on-demand.patch
+@@ -0,0 +1,1123 @@
++server: context on demand - the model stays loaded, its context is created by the request
++
++A loaded model holds its weights and its context: the KV cache and the
++compute buffers, sized for the window and the batch whether or not a request
++runs. With --context-on-demand the server keeps the weights and holds the
++context only while it works. It is created when a task needs it and freed
++when no task is left, and a request says for how long it is kept after its
++answer (`keep_context_ms`, in the request; --keep-context-ms for a request
++that does not say), so that requests back to back do not pay a creation
++each. It is the `keep_alive` of other runners applied to the context instead
++of the whole model, in milliseconds. Several servers on one device then need
++room only for the contexts that work at the same time.
++
++- common: common_init_result::free_context() / init_context() and
++  common_init_context_from_params(): the context is created again from the
++  context params of the first creation (no fitting again), its adapters
++  applied and its warmup run as common_init_from_params() does - that part
++  is now common_init_context_apply(), shared by both.
++- server_queue::on_idle(): a callback run by the start_loop() thread each
++  time it finds no task; it returns when it wants to be called again, and
++  the wait ends then instead of at the next one-second check.
++- server_context: only the start_loop() thread creates and frees the
++  context. process_single_task() creates it for a task that needs one
++  (context_acquire); a creation that fails is answered with 503
++  `unavailable_error` and the server stays up, where a failed reload after
++  --sleep-idle-seconds aborts. A slot's release extends the deadline by its
++  task's keep (context_keep: the latest deadline asked wins, a request never
++  shortens another's); the idle callback frees the context once it has
++  passed (context_idle, context_release). The slots drop their cached
++  prompt with the KV cache. get_meta(), n_ctx_slot() and use_mixed_batch()
++  no longer need a context, so /props, /models, /metrics, /slots and the
++  tokenizer routes neither wait for one nor create one.
++- /metrics: context_loaded, context_creations_total,
++  context_creation_seconds_total.
++- refused at load with speculative decoding or a multimodal projector, whose
++  contexts are bound to the model's.
++
++Checked on the CPU (random-weight llama and qwen3 models written by
++tests/test-llama-archs -o): tools/server/tests/unit/test_context_on_demand.py
++- the context freed when idle and not created by the read-only routes; one
++creation per request without a keep; a keep from the request and from the
++server; a keep of 0 that does not shorten another; the same completion and
++the same embedding, value for value, across creations; the cached prompt
++reused within a keep and gone after it; a creation refused with 503, then
++served; eight concurrent requests; /slots listed without a context; together
++with --sleep-idle-seconds. With the option off the existing suites give the
++same results as before the patch (test_sleep, test_basic, test_metrics,
++test_slot_save, test_embedding, test_completion, test_tokenize,
++test_ctx_shift, test_kv_keep_only_active: the same 83 passes and the same 46
++failures, the failures being the random-weight stand-ins' content).
++---
++diff --git a/common/arg.cpp b/common/arg.cpp
++index e3ab084..28bf01f 100644
++--- a/common/arg.cpp
+++++ b/common/arg.cpp
++@@ -3811,6 +3811,25 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
++             params.sleep_idle_seconds = value;
++         }
++     ).set_examples({LLAMA_EXAMPLE_SERVER}));
+++    add_opt(common_arg(
+++        {"--context-on-demand"},
+++        "create the context when a request needs it and free it when the server is idle, keeping the model loaded; "
+++        "a request's cached prompt does not outlive the context (default: disabled)",
+++        [](common_params & params) {
+++            params.context_on_demand = true;
+++        }
+++    ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_CONTEXT_ON_DEMAND"));
+++    add_opt(common_arg(
+++        {"--keep-context-ms"}, "N",
+++        string_format("with --context-on-demand: milliseconds the context is kept after a request that does not carry "
+++                      "its own `keep_context_ms` (default: %d)", params.keep_context_ms),
+++        [](common_params & params, int value) {
+++            if (value < 0) {
+++                throw std::invalid_argument("invalid value: cannot be negative");
+++            }
+++            params.keep_context_ms = value;
+++        }
+++    ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_KEEP_CONTEXT_MS"));
++     add_opt(common_arg(
++         {"--simple-io"},
++         "use basic IO for better compatibility in subprocesses and limited consoles",
++diff --git a/common/common.cpp b/common/common.cpp
++index 29d2d20..aed3dc1 100644
++--- a/common/common.cpp
+++++ b/common/common.cpp
++@@ -1178,6 +1178,10 @@ struct common_init_result::impl {
++     llama_model_ptr   model;
++     llama_context_ptr context;
++ 
+++    // the context params of the first creation, see init_context()
+++    llama_context_params cparams = llama_context_default_params();
+++    bool has_cparams = false;
+++
++     std::vector<llama_adapter_lora_ptr> lora;
++ 
++     std::vector<common_sampler_ptr> samplers;
++@@ -1408,6 +1412,9 @@ common_init_result::common_init_result(common_params & params, bool model_only)
++         cparams.n_samplers = pimpl->samplers_seq_config.size();
++     }
++ 
+++    pimpl->cparams     = cparams;
+++    pimpl->has_cparams = true;
+++
++     llama_context * lctx = llama_init_from_model(model, cparams);
++     if (lctx == NULL) {
++         COM_ERR("failed to create context with model '%s'\n", params.model.path.c_str());
++@@ -1429,6 +1436,24 @@ llama_context * common_init_result::context() {
++     return pimpl->context.get();
++ }
++ 
+++void common_init_result::free_context() {
+++    pimpl->context.reset();
+++}
+++
+++bool common_init_result::init_context() {
+++    GGML_ASSERT(pimpl->model && !pimpl->context && pimpl->has_cparams);
+++
+++    llama_context * lctx = llama_init_from_model(pimpl->model.get(), pimpl->cparams);
+++    if (lctx == NULL) {
+++        return false;
+++    }
+++
+++    pimpl->context.reset(lctx);
+++    pimpl->threadpools.attach(lctx);
+++
+++    return true;
+++}
+++
++ common_sampler * common_init_result::sampler(llama_seq_id seq_id) {
++     if (seq_id < 0 || seq_id >= (int) pimpl->samplers.size()) {
++         return nullptr;
++@@ -1454,39 +1479,20 @@ static void common_batch_set_zero_state(common_batch & batch, const llama_model
++     }
++ }
++ 
++-common_init_result_ptr common_init_from_params(common_params & params, bool model_only) {
++-    common_init_result_ptr res(new common_init_result(params, model_only));
++-
++-    llama_model * model = res->model();
++-    if (model == NULL) {
++-        COM_ERR("failed to load model '%s'\n", params.model.path.c_str());
++-        return res;
++-    }
++-
++-    if (model_only) {
++-        return res;
++-    }
++-
++-    llama_context * lctx = res->context();
++-    if (lctx == NULL) {
++-        COM_ERR("failed to create context with model '%s'\n", params.model.path.c_str());
++-        return res;
++-    }
+++// apply the adapters and run the warmup on a newly created context
+++static bool common_init_context_apply(common_init_result & res, common_params & params) {
+++    llama_model   * model = res.model();
+++    llama_context * lctx  = res.context();
++ 
++     const llama_vocab * vocab = llama_model_get_vocab(model);
++ 
++-    if (params.ctx_shift && !llama_memory_can_shift(llama_get_memory(lctx))) {
++-        COM_WRN("%s", "KV cache shifting is not supported for this context, disabling KV cache shifting\n");
++-        params.ctx_shift = false;
++-    }
++-
++     if (!params.control_vectors.empty()) {
++         if (params.control_vector_layer_start <= 0) params.control_vector_layer_start = 1;
++         if (params.control_vector_layer_end   <= 0) params.control_vector_layer_end   = llama_model_n_layer(model);
++ 
++         const auto cvec = common_control_vector_load(params.control_vectors, llama_model_n_layer(model));
++         if (cvec.n_embd == -1) {
++-            return res;
+++            return false;
++         }
++ 
++         int err = llama_set_adapter_cvec(
++@@ -1497,31 +1503,7 @@ common_init_result_ptr common_init_from_params(common_params & params, bool mode
++                 params.control_vector_layer_start,
++                 params.control_vector_layer_end);
++         if (err) {
++-            return res;
++-        }
++-    }
++-
++-    if (llama_pooling_type(lctx) == LLAMA_POOLING_TYPE_RANK) {
++-        bool ok = true;
++-
++-        if (llama_vocab_bos(vocab) == LLAMA_TOKEN_NULL) {
++-            COM_WRN("%s", "vocab does not have a  BOS token, reranking will not work\n");
++-            ok = false;
++-        }
++-
++-        bool has_eos = llama_vocab_eos(vocab) != LLAMA_TOKEN_NULL;
++-        bool has_sep = llama_vocab_sep(vocab) != LLAMA_TOKEN_NULL;
++-        bool has_rerank_prompt = llama_model_chat_template(model, "rerank") != NULL;
++-
++-        if (!has_eos && !has_sep && !has_rerank_prompt) {
++-            COM_WRN("%s", "vocab does not have an EOS token, SEP token, or rerank prompt. Reranking will not work\n");
++-            ok = false;
++-        } else if (!has_eos) {
++-            COM_WRN("%s", "vocab does not have an EOS token, using SEP token as fallback\n");
++-        }
++-
++-        if (!ok) {
++-            return res;
+++            return false;
++         }
++     }
++ 
++@@ -1569,12 +1551,82 @@ common_init_result_ptr common_init_from_params(common_params & params, bool mode
++         llama_perf_context_reset(lctx);
++ 
++         // reset samplers to reset RNG state after warmup to the seeded state
++-        res->reset_samplers();
+++        res.reset_samplers();
+++    }
+++
+++    return true;
+++}
+++
+++common_init_result_ptr common_init_from_params(common_params & params, bool model_only) {
+++    common_init_result_ptr res(new common_init_result(params, model_only));
+++
+++    llama_model * model = res->model();
+++    if (model == NULL) {
+++        COM_ERR("failed to load model '%s'\n", params.model.path.c_str());
+++        return res;
+++    }
+++
+++    if (model_only) {
+++        return res;
+++    }
+++
+++    llama_context * lctx = res->context();
+++    if (lctx == NULL) {
+++        COM_ERR("failed to create context with model '%s'\n", params.model.path.c_str());
+++        return res;
+++    }
+++
+++    const llama_vocab * vocab = llama_model_get_vocab(model);
+++
+++    if (params.ctx_shift && !llama_memory_can_shift(llama_get_memory(lctx))) {
+++        COM_WRN("%s", "KV cache shifting is not supported for this context, disabling KV cache shifting\n");
+++        params.ctx_shift = false;
+++    }
+++
+++    if (llama_pooling_type(lctx) == LLAMA_POOLING_TYPE_RANK) {
+++        bool ok = true;
+++
+++        if (llama_vocab_bos(vocab) == LLAMA_TOKEN_NULL) {
+++            COM_WRN("%s", "vocab does not have a  BOS token, reranking will not work\n");
+++            ok = false;
+++        }
+++
+++        bool has_eos = llama_vocab_eos(vocab) != LLAMA_TOKEN_NULL;
+++        bool has_sep = llama_vocab_sep(vocab) != LLAMA_TOKEN_NULL;
+++        bool has_rerank_prompt = llama_model_chat_template(model, "rerank") != NULL;
+++
+++        if (!has_eos && !has_sep && !has_rerank_prompt) {
+++            COM_WRN("%s", "vocab does not have an EOS token, SEP token, or rerank prompt. Reranking will not work\n");
+++            ok = false;
+++        } else if (!has_eos) {
+++            COM_WRN("%s", "vocab does not have an EOS token, using SEP token as fallback\n");
+++        }
+++
+++        if (!ok) {
+++            return res;
+++        }
+++    }
+++
+++    if (!common_init_context_apply(*res, params)) {
+++        return res;
++     }
++ 
++     return res;
++ }
++ 
+++bool common_init_context_from_params(common_init_result & res, common_params & params) {
+++    if (!res.init_context()) {
+++        return false;
+++    }
+++
+++    if (!common_init_context_apply(res, params)) {
+++        res.free_context();
+++        return false;
+++    }
+++
+++    return true;
+++}
+++
++ common_init_result::~common_init_result() = default;
++ 
++ std::string common_get_model_endpoint() {
++@@ -1862,6 +1914,12 @@ void common_threadpools::init(llama_context * ctx, const common_params & params)
++     llama_attach_threadpool(ctx, threadpool, threadpool_batch);
++ }
++ 
+++void common_threadpools::attach(llama_context * ctx) {
+++    if (threadpool) {
+++        llama_attach_threadpool(ctx, threadpool, threadpool_batch);
+++    }
+++}
+++
++ //
++ // Vocab utils
++ //
++diff --git a/common/common.h b/common/common.h
++index e2bc8c5..ef64942 100644
++--- a/common/common.h
+++++ b/common/common.h
++@@ -670,6 +670,8 @@ struct common_params {
++     int enable_reasoning = -1; // -1 = auto, 0 = disable, 1 = enable
++     bool prefill_assistant = true; // if true, any trailing assistant message will be prefilled into the response
++     int sleep_idle_seconds = -1;   // if >0, server will sleep after this many seconds of idle time
+++    bool context_on_demand = false; // create the context when a task needs it, free it when idle (the model stays loaded)
+++    int32_t keep_context_ms = 0;    // with context_on_demand: time the context is kept after a task that does not say
++ 
++     std::vector<std::string> api_keys;
++ 
++@@ -1005,6 +1007,12 @@ struct common_init_result {
++     llama_model * model();
++     llama_context * context();
++ 
+++    // free the context and keep the model, its adapters and the samplers
+++    void free_context();
+++    // create the context again, from the context params of the first creation
+++    // returns false, leaving the result without a context, if it cannot be created
+++    bool init_context();
+++
++     common_sampler * sampler(llama_seq_id seq_id);
++     void reset_samplers();
++ 
++@@ -1019,6 +1027,11 @@ using common_init_result_ptr = std::unique_ptr<common_init_result>;
++ 
++ common_init_result_ptr common_init_from_params(common_params & params, bool model_only = false);
++ 
+++// create again the context of a result that gave it up with free_context(), as common_init_from_params()
+++// made it: the same context params (no fitting), the adapters applied, the warmup run
+++// returns false, leaving the result without a context, on failure
+++bool common_init_context_from_params(common_init_result & res, common_params & params);
+++
++ struct llama_model_params   common_model_params_to_llama  (      common_params & params);
++ struct llama_context_params common_context_params_to_llama(const common_params & params);
++ 
++@@ -1049,6 +1062,9 @@ struct common_threadpools {
++ 
++     void init(llama_context * ctx, const common_params & params);
++ 
+++    // attach the pools made by init() to another context
+++    void attach(llama_context * ctx);
+++
++ private:
++     ggml_threadpool * threadpool       = nullptr;
++     ggml_threadpool * threadpool_batch = nullptr;
++diff --git a/tools/server/README.md b/tools/server/README.md
++index 66a34ff..6d33698 100644
++--- a/tools/server/README.md
+++++ b/tools/server/README.md
++@@ -246,6 +246,8 @@ For the full list of features, please refer to [server's changelog](https://gith
++ | `-sps, --slot-prompt-similarity SIMILARITY` | how much the prompt of a request must match the prompt of a slot in order to use that slot (default: 0.10, 0.0 = disabled) |
++ | `--lora-init-without-apply` | load LoRA adapters without applying them (apply later via POST /lora-adapters) (default: disabled) |
++ | `--sleep-idle-seconds SECONDS` | number of seconds of idleness after which the server will sleep (default: -1; -1 = disabled) |
+++| `--context-on-demand` | create the context when a request needs it and free it when the server is idle, keeping the model loaded; a request's cached prompt does not outlive the context (default: disabled)<br/>(env: LLAMA_ARG_CONTEXT_ON_DEMAND) |
+++| `--keep-context-ms N` | with --context-on-demand: milliseconds the context is kept after a request that does not carry its own `keep_context_ms` (default: 0)<br/>(env: LLAMA_ARG_KEEP_CONTEXT_MS) |
++ | `--log-prompts-dir PATH` | Log prompts to directory (auto-created if not present; only used for debugging, default: disabled) |
++ | `--spec-draft-hf, -hfd, -hfrd, --hf-repo-draft <user>/<model>[:quant]` | Same as --hf-repo, but for the draft model (default: unused)<br/>(env: LLAMA_ARG_SPEC_DRAFT_HF_REPO) |
++ | `--spec-draft-threads, -td, --threads-draft N` | number of threads to use during generation (default: same as --threads) |
++@@ -594,6 +596,8 @@ These words will not be included in the completion, so make sure to add them to
++ 
++ `id_slot`: Assign the completion task to an specific slot. If is -1 the task will be assigned to a Idle slot.  Default: `-1`
++ 
+++`keep_context_ms`: With `--context-on-demand`, the number of milliseconds the context is kept after this request is answered, see [Context on demand](#context-on-demand). Also read by `/embeddings`, `/v1/embeddings` and `/rerank`. Default: the server's `--keep-context-ms`
+++
++ `cache_prompt`: Re-use KV cache from a previous request if possible. This way the common prefix does not have to be re-processed, only the suffix that differs between the requests. Because (depending on the backend) the logits are **not** guaranteed to be bit-for-bit identical for different batch sizes (prompt processing vs. token generation) enabling this option can cause nondeterministic results. Default: `true`
++ 
++ `return_tokens`: Return the raw generated token ids in the `tokens` field. Otherwise `tokens` remains empty. Default: `false`
++@@ -2561,6 +2565,26 @@ Note that the following endpoints are exempt from being considered as incoming t
++ - `GET /models`
++ - `GET /metrics`
++ 
+++## Context on demand
+++
+++A loaded model holds two kinds of memory: its weights, and its context - the KV cache and the compute buffers, sized for the context window and the batch whether or not a request is running. With `--context-on-demand` the server keeps the weights loaded and holds the context only while it works:
+++
+++- the context is created when a request needs it, and freed as soon as no request is left;
+++- creating it costs far less than loading the model, but it is not free, and requests that follow each other should not pay it each time: a request may carry `keep_context_ms`, the number of milliseconds the context is kept after its answer. A request without it takes the server's `--keep-context-ms` (default: 0);
+++- a request can only extend the time the context is kept, never shorten it: the context is freed when the latest of the times asked for has passed. `"keep_context_ms": 0` on one request does not take the context from another.
+++
+++This is the `keep_alive` of other runners applied to the context instead of the whole model, in milliseconds because the useful values are short. It differs from [sleeping on idle](#sleeping-on-idle), which unloads the weights too and pays a full load on the next request; the two can be used together.
+++
+++Notes:
+++
+++- The memory of the context is given back to the device, so several servers sharing one device only need room for the contexts that work at the same time. If the context cannot be created because that memory is in use, the request is answered with error `503` (`unavailable_error`) and can be retried; the server stays up.
+++- The cached prompt of a slot lives in the KV cache and is freed with it: a conversation whose context was freed evaluates its prompt again. Give its requests a `keep_context_ms` as long as the pause expected before the next one.
+++- `/health`, `/props`, `/models`, `/metrics`, `/slots`, tokenization and detokenization do not need the context and do not create it.
+++- The context is created with the parameters of the first load: the same size, batch sizes and device placement, without fitting them again to the memory that is free at that moment.
+++- Not supported yet together with speculative decoding or a multimodal projector: the server refuses to start.
+++
+++`GET /metrics` reports `llamacpp:context_loaded` (1 while the context exists), `llamacpp:context_creations_total` and `llamacpp:context_creation_seconds_total`.
+++
++ ## More examples
++ 
++ ### Interactive mode
++diff --git a/tools/server/server-common.h b/tools/server/server-common.h
++index 01bf12e..945a794 100644
++--- a/tools/server/server-common.h
+++++ b/tools/server/server-common.h
++@@ -533,6 +533,11 @@ struct server_metrics {
++     uint64_t n_draft_verif_steps = 0; // Total draft token verification steps by the target model
++     std::vector<uint64_t> n_accepted_per_pos; // Accepted tokens per draft position
++ 
+++    // context on demand: the creations of the context after the load, and the time they took
+++    uint64_t n_ctx_create    = 0;
+++    uint64_t t_ctx_create_us = 0;
+++    bool     ctx_loaded      = true;
+++
++     void init() {
++         t_start = ggml_time_us();
++     }
++diff --git a/tools/server/server-context.cpp b/tools/server/server-context.cpp
++index f11c533..1e71bd1 100644
++--- a/tools/server/server-context.cpp
+++++ b/tools/server/server-context.cpp
++@@ -1164,6 +1164,7 @@ private:
++     int trace = 0;        // env: LLAMA_TRACE
++     int slots_debug = 0;  // env: LLAMA_SERVER_SLOTS_DEBUG
++     int slots_n_diff = 0; // env: LLAMA_SERVER_SLOTS_N_DIFF
+++    int ctx_create_fail = 0; // env: LLAMA_SERVER_CTX_CREATE_FAIL, for the tests: the next N creations of the context fail
++ 
++     int n_empty_consecutive = 0;
++ 
++@@ -1188,8 +1189,138 @@ private:
++ 
++     bool sleeping = false;
++ 
+++    // context on demand (--context-on-demand): the context is created when a task needs it and
+++    // freed when no task is left and the last keep has run out, the model stays loaded.
+++    // only the start_loop() thread creates and frees it, see context_acquire() / context_idle()
+++    int64_t t_ctx_keep_until = 0; // ms, the latest deadline asked by a finished task
+++    int64_t t_ctx_created    = 0; // ms
+++
+++    // properties of the context that outlive it, read when there is none
+++    int32_t n_ctx_seq = 0;
+++    bool    mixed_batch = false;
+++    enum llama_pooling_type pooling_type = LLAMA_POOLING_TYPE_UNSPECIFIED;
+++
++     int64_t t_last_load_progress_ms = 0;
++ 
+++    static bool task_needs_context(server_task_type type) {
+++        switch (type) {
+++            case SERVER_TASK_TYPE_CANCEL:
+++            case SERVER_TASK_TYPE_CONTROL:
+++            case SERVER_TASK_TYPE_NEXT_RESPONSE:
+++            case SERVER_TASK_TYPE_METRICS:
+++            case SERVER_TASK_TYPE_SLOT_GET:
+++            case SERVER_TASK_TYPE_GET_LORA:
+++            case SERVER_TASK_TYPE_SET_LORA:
+++                return false;
+++            default:
+++                return true;
+++        }
+++    }
+++
+++    // free the context and what is bound to it, keep the model
+++    void context_release() {
+++        GGML_ASSERT(ctx_tgt != nullptr);
+++
+++        const int64_t t_start = ggml_time_us();
+++
+++        for (auto & slot : slots) {
+++            GGML_ASSERT(!slot.is_processing());
+++
+++            // the cached prompt goes with the KV cache
+++            slot.prompt.clear();
+++            slot.ctx_tgt = nullptr;
+++            slot.mem     = {};
+++        }
+++
+++        batch.view = common_batch();
+++        batch.tokens.clear();
+++
+++        llama_init->free_context();
+++        ctx_tgt = nullptr;
+++
+++        metrics.ctx_loaded = false;
+++
+++        SRV_INF("context freed in %.2f ms, it lived %.3f s\n",
+++                (ggml_time_us() - t_start) / 1000.0, (ggml_time_ms() - t_ctx_created) / 1000.0);
+++    }
+++
+++    // create the context again, as the load made it
+++    // returns false if it cannot be created, the server is then left without one
+++    bool context_acquire() {
+++        GGML_ASSERT(ctx_tgt == nullptr && llama_init != nullptr);
+++
+++        const int64_t t_start = ggml_time_us();
+++
+++        if (ctx_create_fail > 0) {
+++            ctx_create_fail--;
+++            SRV_WRN("%s", "LLAMA_SERVER_CTX_CREATE_FAIL: failing the creation of the context\n");
+++            return false;
+++        }
+++
+++        if (!common_init_context_from_params(*llama_init, params_base)) {
+++            SRV_WRN("%s", "failed to create the context, is the memory it needs available?\n");
+++            return false;
+++        }
+++
+++        ctx_tgt = llama_init->context();
+++
+++        GGML_ASSERT((int32_t) llama_n_ctx_seq(ctx_tgt) == n_ctx_seq && (int32_t) llama_n_ctx(ctx_tgt) == n_ctx);
+++
+++        for (auto & slot : slots) {
+++            slot.ctx_tgt = ctx_tgt;
+++            slot.mem.init(ctx_tgt, ctx_dft);
+++        }
+++
+++        {
+++            const int32_t n_batch = llama_n_batch(ctx_tgt);
+++            const int32_t n_embd  = llama_model_n_embd_inp(model_tgt);
+++            batch.init(ctx_tgt, std::max(n_batch, params_base.n_parallel), n_embd);
+++        }
+++
+++        const int64_t t_create = ggml_time_us() - t_start;
+++
+++        t_ctx_created = ggml_time_ms();
+++
+++        metrics.ctx_loaded       = true;
+++        metrics.n_ctx_create    += 1;
+++        metrics.t_ctx_create_us += t_create;
+++
+++        SRV_INF("context created in %.2f ms\n", t_create / 1000.0);
+++
+++        return true;
+++    }
+++
+++    // a task is done: its keep can only extend the time the context is kept
+++    void context_keep(int32_t keep_ms) {
+++        if (keep_ms < 0) {
+++            keep_ms = params_base.keep_context_ms;
+++        }
+++        t_ctx_keep_until = std::max(t_ctx_keep_until, ggml_time_ms() + keep_ms);
+++    }
+++
+++    // called by the queue each time it finds no task to process, see server_queue::on_idle()
+++    // frees the context once the last keep has run out, else returns the time left
+++    int64_t context_idle() {
+++        if (!params_base.context_on_demand || ctx_tgt == nullptr || sleeping) {
+++            return -1;
+++        }
+++
+++        for (auto & slot : slots) {
+++            if (slot.is_processing()) {
+++                return -1;
+++            }
+++        }
+++
+++        const int64_t t_now = ggml_time_ms();
+++        if (t_now < t_ctx_keep_until) {
+++            return t_ctx_keep_until - t_now;
+++        }
+++
+++        context_release();
+++
+++        return -1;
+++    }
+++
++     void destroy() {
++         spec.reset();
++         spec_init.reset();
++@@ -1277,6 +1408,12 @@ private:
++                                         COMMON_SPECULATIVE_TYPE_DRAFT_MTP) != params_base.speculative.types.end();
++         const bool has_spec = has_draft || spec_mtp;
++ 
+++        if (params_base.context_on_demand && (has_spec || has_mmproj)) {
+++            // their contexts are bound to the one of the model, see destroy()
+++            SRV_ERR("%s", "--context-on-demand does not support speculative decoding or a multimodal projector yet\n");
+++            return false;
+++        }
+++
++         if (callback_state) {
++             std::vector<std::string> stages = {"text_model"};
++             if (has_spec) {
++@@ -1400,6 +1537,14 @@ private:
++ 
++         n_ctx = llama_n_ctx(ctx_tgt);
++ 
+++        n_ctx_seq    = llama_n_ctx_seq(ctx_tgt);
+++        mixed_batch  = !llama_get_memory(ctx_tgt) || !llama_get_causal_attn(ctx_tgt);
+++        pooling_type = llama_pooling_type(ctx_tgt);
+++
+++        t_ctx_created      = ggml_time_ms();
+++        t_ctx_keep_until   = t_ctx_created + params_base.keep_context_ms;
+++        metrics.ctx_loaded = true;
+++
++         add_bos_token = llama_vocab_get_add_bos(vocab);
++ 
++         if (has_spec) {
++@@ -1629,6 +1774,9 @@ private:
++                 if (slot.stats.n_gen > 0) {
++                     metrics_on_prediction(slot);
++                 }
+++                if (slot.task) {
+++                    context_keep(slot.task->params.keep_context_ms);
+++                }
++             };
++ 
++             slot.reset();
++@@ -1661,6 +1809,15 @@ private:
++             }
++         }
++ 
+++        {
+++            const char * LLAMA_SERVER_CTX_CREATE_FAIL = getenv("LLAMA_SERVER_CTX_CREATE_FAIL");
+++            ctx_create_fail = LLAMA_SERVER_CTX_CREATE_FAIL ? atoi(LLAMA_SERVER_CTX_CREATE_FAIL) : 0;
+++
+++            if (ctx_create_fail) {
+++                SRV_WRN("LLAMA_SERVER_CTX_CREATE_FAIL = %d\n", ctx_create_fail);
+++            }
+++        }
+++
++         // the update_slots() logic will always submit a maximum of n_batch or n_parallel tokens
++         // note that n_batch can be > n_ctx (e.g. for non-causal attention models such as BERT where the KV cache is not used)
++         {
++@@ -1742,6 +1899,14 @@ private:
++         queue_tasks.on_sleeping_state([this](bool sleeping) {
++             handle_sleeping_state(sleeping);
++         });
+++        queue_tasks.on_idle([this]() {
+++            return context_idle();
+++        });
+++
+++        if (params_base.context_on_demand) {
+++            SRV_INF("context on demand: the context is freed when the server is idle and created again by the "
+++                    "next task, a task keeps it for its `keep_context_ms` (default: %d ms)\n", params_base.keep_context_ms);
+++        }
++ 
++         metrics.init();
++ 
++@@ -3455,6 +3620,14 @@ private:
++             return false;
++         }
++ 
+++        if (ctx_tgt == nullptr && task_needs_context(task.type)) {
+++            // context on demand: only the model is loaded, create its context for this task
+++            if (!context_acquire()) {
+++                send_error(task, "the context cannot be created now, the memory it needs may be in use: try again later", ERROR_TYPE_UNAVAILABLE);
+++                return true;
+++            }
+++        }
+++
++         switch (task.type) {
++             case SERVER_TASK_TYPE_COMPLETION:
++             case SERVER_TASK_TYPE_INFILL:
++@@ -5139,6 +5312,9 @@ private:
++     // see https://github.com/ggml-org/llama.cpp/pull/29969
++     // TODO @ngxson : maybe remove this once we use "mixed" batch everywhere
++     bool use_mixed_batch() const {
+++        if (ctx_tgt == nullptr) {
+++            return mixed_batch;
+++        }
++         return !llama_get_memory(ctx_tgt) || !llama_get_causal_attn(ctx_tgt);
++     }
++ 
++@@ -5631,7 +5807,7 @@ private:
++ 
++     // context size of a single slot, capped by --kv-unified-per-slot and by the training context of the model
++     int n_ctx_slot() const {
++-        int res = llama_n_ctx_seq(ctx_tgt);
+++        int res = n_ctx_seq; // llama_n_ctx_seq(ctx_tgt), also when there is no context
++ 
++         if (params_base.kv_unified_per_slot > 0) {
++             res = std::min(res, params_base.kv_unified_per_slot);
++@@ -5728,7 +5904,9 @@ private:
++             return;
++         }
++ 
++-        llama_synchronize(ctx_tgt);
+++        if (ctx_tgt != nullptr) {
+++            llama_synchronize(ctx_tgt);
+++        }
++         metrics_flush_prompt();
++     }
++ 
++@@ -5787,8 +5965,9 @@ server_response_reader server_context::get_response_reader() {
++ server_context_meta server_context::get_meta() const {
++     auto bos_id = llama_vocab_bos(impl->vocab);
++     auto eos_id = llama_vocab_eos(impl->vocab);
++-    auto bos_token_str = bos_id != LLAMA_TOKEN_NULL ? common_token_to_piece(impl->ctx_tgt, bos_id, true) : "";
++-    auto eos_token_str = eos_id != LLAMA_TOKEN_NULL ? common_token_to_piece(impl->ctx_tgt, eos_id, true) : "";
+++    // note: do NOT read the context here, with --context-on-demand it comes and goes on the start_loop() thread
+++    auto bos_token_str = bos_id != LLAMA_TOKEN_NULL ? common_token_to_piece(impl->vocab, bos_id, true) : "";
+++    auto eos_token_str = eos_id != LLAMA_TOKEN_NULL ? common_token_to_piece(impl->vocab, eos_id, true) : "";
++ 
++     const char * ftype_name = llama_ftype_name(llama_model_ftype(impl->model_tgt));
++ 
++@@ -5808,7 +5987,7 @@ server_context_meta server_context::get_meta() const {
++         /* has_audio_stream        */ impl->mtmd_cap.audio_stream,
++         /* json_ui_settings        */ impl->json_ui_settings,
++         /* slot_n_ctx              */ impl->n_ctx_slot(),
++-        /* pooling_type            */ llama_pooling_type(impl->ctx_tgt),
+++        /* pooling_type            */ impl->pooling_type,
++ 
++         /* chat_params             */ impl->chat_params,
++         /* chat_template_caps      */ common_chat_templates_get_caps(impl->chat_params.tmpls.get()),
++@@ -5931,6 +6110,8 @@ std::unique_ptr<server_res_generator> server_routes::handle_completions_impl(
++ 
++             task.apply_chat_session(chat_session);
++ 
+++            task.params.keep_context_ms = json_value(data, "keep_context_ms", -1);
+++
++             task.id_slot = json_value(data, "id_slot", -1);
++             sse_ping_interval = task.params.sse_ping_interval;
++ 
++@@ -7508,6 +7689,8 @@ std::unique_ptr<server_res_generator> server_routes::handle_embeddings_impl(cons
++             task.params.res_type = res_type;
++             task.params.embd_normalize = embd_normalize;
++ 
+++            task.params.keep_context_ms = json_value(body, "keep_context_ms", -1);
+++
++             tasks.push_back(std::move(task));
++         }
++         rd.post_tasks(std::move(tasks));
++@@ -7651,6 +7834,7 @@ std::unique_ptr<server_res_generator> server_routes::handle_rerank_impl(const se
++             server_task task = server_task(SERVER_TASK_TYPE_RERANK);
++             task.id     = rd.get_new_id();
++             task.tokens = std::move(tmp);
+++            task.params.keep_context_ms = json_value(body, "keep_context_ms", -1);
++             tasks.push_back(std::move(task));
++         }
++         rd.post_tasks(std::move(tasks));
++diff --git a/tools/server/server-context.h b/tools/server/server-context.h
++index d283c91..6b45e3e 100644
++--- a/tools/server/server-context.h
+++++ b/tools/server/server-context.h
++@@ -77,6 +77,7 @@ struct server_context {
++     void terminate();
++ 
++     // get the underlaying llama_context, can return nullptr if sleeping
+++    // or, with --context-on-demand, at any time: only the start_loop() thread may use it then
++     // not thread-safe, should only be used from the main thread
++     llama_context * get_llama_context() const;
++ 
++diff --git a/tools/server/server-queue.cpp b/tools/server/server-queue.cpp
++index c4ce907..cbf2a4d 100644
++--- a/tools/server/server-queue.cpp
+++++ b/tools/server/server-queue.cpp
++@@ -351,7 +351,15 @@ void server_queue::start_loop(int64_t idle_sleep_ms) {
++                 break; // process new tasks
++             } else {
++                 // wait for new tasks or timeout for checking sleeping condition
++-                bool res = condition_tasks.wait_for(lock, max_wait_time, [&]{
+++                auto wait_time = std::chrono::duration_cast<std::chrono::milliseconds>(max_wait_time);
+++                if (callback_idle) {
+++                    // the idle callback may ask to be called again sooner
+++                    const int64_t next_ms = callback_idle();
+++                    if (next_ms >= 0) {
+++                        wait_time = std::min(wait_time, std::chrono::milliseconds(std::max<int64_t>(next_ms, 1)));
+++                    }
+++                }
+++                bool res = condition_tasks.wait_for(lock, wait_time, [&]{
++                     return (!queue_tasks.empty() || !running);
++                 });
++                 if (res) {
++diff --git a/tools/server/server-queue.h b/tools/server/server-queue.h
++index 692255e..e384d4b 100644
++--- a/tools/server/server-queue.h
+++++ b/tools/server/server-queue.h
++@@ -45,6 +45,7 @@ private:
++     std::function<bool(server_task &&, bool)> callback_new_task;
++     std::function<void(void)>                 callback_update_slots;
++     std::vector<std::function<void(bool)>>    callback_sleeping_state;
+++    std::function<int64_t(void)>              callback_idle;
++ 
++ public:
++     ~server_queue() { worker_stop(); }
++@@ -136,6 +137,13 @@ public:
++         callback_sleeping_state.push_back(std::move(callback));
++     }
++ 
+++    // Register callback called by the start_loop() thread each time it finds no task to process
+++    // it returns the time in milliseconds after which it wants to be called again, negative if it does not
+++    // note: caller will hold mutex_tasks while calling the callback
+++    void on_idle(std::function<int64_t(void)> callback) {
+++        callback_idle = std::move(callback);
+++    }
+++
++ private:
++     void cleanup_pending_task(int id_target);
++ 
++diff --git a/tools/server/server-task.cpp b/tools/server/server-task.cpp
++index 1a0d434..8bc3db8 100644
++--- a/tools/server/server-task.cpp
+++++ b/tools/server/server-task.cpp
++@@ -1607,6 +1607,14 @@ std::string server_task_result_metrics::to_metrics() {
++             "spec_decode_num_drafts_total",
++             "Speculative: Total speculative decoding verification steps",
++             (double) metrics.n_draft_verif_steps
+++        }, {
+++            "context_creations_total",
+++            "Context on demand: number of times the context was created again after the load",
+++            (double) metrics.n_ctx_create
+++        }, {
+++            "context_creation_seconds_total",
+++            "Context on demand: total time spent creating the context again",
+++            metrics.t_ctx_create_us / 1.e6
++         },
++     };
++ 
++@@ -1631,6 +1639,10 @@ std::string server_task_result_metrics::to_metrics() {
++             "n_busy_slots_per_decode",
++             "Average number of busy slots per llama_decode() call",
++             (double) metrics.n_busy_slots / std::max((double) metrics.n_decode, 1.0)
+++        }, {
+++            "context_loaded",
+++            "Context on demand: 1 while the context exists, 0 while only the model is loaded",
+++            metrics.ctx_loaded ? 1.0 : 0.0
++         },
++     };
++ 
++diff --git a/tools/server/server-task.h b/tools/server/server-task.h
++index eb857c9..5d31d3d 100644
++--- a/tools/server/server-task.h
+++++ b/tools/server/server-task.h
++@@ -96,6 +96,9 @@ struct task_params {
++ 
++     int32_t sse_ping_interval = 30; // seconds between SSE comment pings while the stream stays silent, -1 disables
++ 
+++    // context on demand: milliseconds the context is kept after this task, -1 = the server's --keep-context-ms
+++    int32_t keep_context_ms = -1;
+++
++     int32_t n_keep    =  0; // number of tokens to keep from initial prompt
++     int32_t n_discard =  0; // number of tokens after n_keep that may be discarded when shifting context, 0 defaults to half
++     int32_t n_predict = -1; // new tokens to predict
++diff --git a/tools/server/tests/unit/test_context_on_demand.py b/tools/server/tests/unit/test_context_on_demand.py
++new file mode 100644
++index 0000000..1cf706d
++--- /dev/null
+++++ b/tools/server/tests/unit/test_context_on_demand.py
++@@ -0,0 +1,256 @@
+++import pytest
+++import time
+++from utils import *
+++
+++server = ServerPreset.tinyllama2()
+++
+++
+++@pytest.fixture(autouse=True)
+++def create_server():
+++    global server
+++    server = ServerPreset.tinyllama2()
+++    server.context_on_demand = True
+++    server.server_metrics = True
+++
+++
+++def get_metric(server: ServerProcess, name: str) -> float:
+++    res = server.make_request("GET", "/metrics")
+++    assert res.status_code == 200
+++    prefix = f"llamacpp:{name} "
+++    values = [ln for ln in res.body.splitlines() if ln.startswith(prefix)]
+++    assert len(values) == 1, f"{name} not found in metrics"
+++    return float(values[0][len(prefix):])
+++
+++
+++def wait_for_context(server: ServerProcess, loaded: bool, timeout: float = 10.0):
+++    start = time.time()
+++    while time.time() - start < timeout:
+++        if (get_metric(server, "context_loaded") == 1) == loaded:
+++            return
+++        time.sleep(0.05)
+++    raise TimeoutError(f"context_loaded did not become {int(loaded)}")
+++
+++
+++def completion(server: ServerProcess, prompt: str = "I believe the meaning of life is", **kwargs):
+++    return server.make_request("POST", "/completion", data={
+++        "prompt": prompt,
+++        "n_predict": 8,
+++        "seed": 42,
+++        "temperature": 0.0,
+++        **kwargs,
+++    })
+++
+++
+++def test_context_is_freed_when_idle():
+++    global server
+++    server.start()
+++
+++    wait_for_context(server, False)
+++
+++    # the model stays loaded, these do not need the context and must not create it
+++    for path in ["/health", "/props", "/models"]:
+++        res = server.make_request("GET", path)
+++        assert res.status_code == 200
+++    res = server.make_request("POST", "/tokenize", data={"content": "Hello world"})
+++    assert res.status_code == 200
+++    assert len(res.body["tokens"]) > 0
+++
+++    assert get_metric(server, "context_loaded") == 0
+++    assert get_metric(server, "context_creations_total") == 0
+++
+++
+++def test_slots_are_listed_without_the_context():
+++    global server
+++    server.server_slots = True
+++    server.start()
+++    wait_for_context(server, False)
+++
+++    res = server.make_request("GET", "/slots")
+++    assert res.status_code == 200
+++    assert len(res.body) == server.n_slots
+++    assert all(not slot["is_processing"] for slot in res.body)
+++    assert get_metric(server, "context_loaded") == 0
+++    assert get_metric(server, "context_creations_total") == 0
+++
+++
+++def test_with_sleep_idle_seconds():
+++    global server
+++    server.sleep_idle_seconds = 1
+++    server.start()
+++
+++    # asleep, the model is unloaded as well
+++    start = time.time()
+++    while time.time() - start < 10:
+++        res = server.make_request("GET", "/props")
+++        assert res.status_code == 200
+++        if res.body["is_sleeping"]:
+++            break
+++        time.sleep(0.1)
+++    assert res.body["is_sleeping"]
+++
+++    # a request loads the model again, and its context goes when it is done
+++    res = completion(server)
+++    assert res.status_code == 200
+++    wait_for_context(server, False)
+++    res = completion(server)
+++    assert res.status_code == 200
+++
+++
+++def test_request_creates_the_context_and_frees_it():
+++    global server
+++    server.start()
+++    wait_for_context(server, False)
+++
+++    res = completion(server)
+++    assert res.status_code == 200
+++    wait_for_context(server, False)
+++    assert get_metric(server, "context_creations_total") == 1
+++
+++    res = completion(server)
+++    assert res.status_code == 200
+++    wait_for_context(server, False)
+++    assert get_metric(server, "context_creations_total") == 2
+++
+++
+++def test_keep_from_the_request():
+++    global server
+++    server.start()
+++    wait_for_context(server, False)
+++
+++    t_start = time.time()
+++    res = completion(server, keep_context_ms=3000)
+++    assert res.status_code == 200
+++    assert get_metric(server, "context_loaded") == 1
+++
+++    # a request without a keep finds the context
+++    res = completion(server)
+++    assert res.status_code == 200
+++    # a keep can only extend the time the context is kept: 0 does not free it
+++    res = completion(server, keep_context_ms=0)
+++    assert res.status_code == 200
+++    assert time.time() - t_start < 2.5, "the requests took too long for this test to mean anything"
+++    assert get_metric(server, "context_loaded") == 1
+++    assert get_metric(server, "context_creations_total") == 1
+++
+++    # and it is freed when the keep has run out
+++    wait_for_context(server, False)
+++    assert time.time() - t_start >= 3.0
+++
+++
+++def test_keep_default_of_the_server():
+++    global server
+++    server.keep_context_ms = 3000
+++    server.start()
+++
+++    # the load itself keeps the context that long
+++    assert get_metric(server, "context_loaded") == 1
+++
+++    t_start = time.time()
+++    res = completion(server)
+++    assert res.status_code == 200
+++    assert get_metric(server, "context_loaded") == 1
+++    assert get_metric(server, "context_creations_total") == 0
+++
+++    wait_for_context(server, False)
+++    assert time.time() - t_start >= 3.0
+++
+++
+++def test_same_completion_across_contexts():
+++    global server
+++    server.start()
+++    wait_for_context(server, False)
+++
+++    contents = []
+++    for _ in range(3):
+++        res = completion(server)
+++        assert res.status_code == 200
+++        contents.append(res.body["content"])
+++        wait_for_context(server, False)
+++
+++    assert get_metric(server, "context_creations_total") == 3
+++    assert contents[0] == contents[1] == contents[2]
+++
+++
+++def test_cached_prompt_goes_with_the_context():
+++    global server
+++    server.n_slots = 1
+++    server.start()
+++    wait_for_context(server, False)
+++
+++    prompt = "Once upon a time, there was a little girl who lived in a house near the big forest."
+++
+++    # kept: the second request reuses the prompt of the first
+++    res = completion(server, prompt, keep_context_ms=2000, cache_prompt=True)
+++    assert res.status_code == 200
+++    res = completion(server, prompt, keep_context_ms=2000, cache_prompt=True)
+++    assert res.status_code == 200
+++    assert res.body["timings"]["cache_n"] > 0
+++
+++    # freed: the cached prompt went with the KV cache
+++    wait_for_context(server, False)
+++    res = completion(server, prompt, cache_prompt=True)
+++    assert res.status_code == 200
+++    assert res.body["timings"]["cache_n"] == 0
+++
+++
+++def test_creation_refused_then_retried():
+++    global server
+++    server.context_create_fail = 1
+++    server.start()
+++    wait_for_context(server, False)
+++
+++    # the context cannot be created: the request is refused, the server stays up
+++    res = completion(server)
+++    assert res.status_code == 503
+++    assert res.body["error"]["type"] == "unavailable_error"
+++    assert get_metric(server, "context_loaded") == 0
+++
+++    # and the next one is served
+++    res = completion(server)
+++    assert res.status_code == 200
+++    assert get_metric(server, "context_creations_total") == 1
+++
+++
+++def test_concurrent_requests():
+++    global server
+++    server.start()
+++    wait_for_context(server, False)
+++
+++    tasks = [(completion, (server, f"Write a story about number {i}")) for i in range(8)]
+++    results = parallel_function_calls(tasks)
+++    for res in results:
+++        assert res.status_code == 200
+++        assert len(res.body["content"]) > 0
+++
+++    wait_for_context(server, False)
+++    assert 1 <= get_metric(server, "context_creations_total") <= 8
+++
+++
+++def test_embeddings_identical_across_contexts():
+++    global server
+++    server = ServerPreset.bert_bge_small()
+++    server.context_on_demand = True
+++    server.server_metrics = True
+++    server.start()
+++    wait_for_context(server, False)
+++
+++    embeddings = []
+++    for _ in range(3):
+++        res = server.make_request("POST", "/v1/embeddings", data={
+++            "input": "I believe the meaning of life is",
+++        })
+++        assert res.status_code == 200
+++        embeddings.append(res.body["data"][0]["embedding"])
+++        wait_for_context(server, False)
+++
+++    assert get_metric(server, "context_creations_total") == 3
+++    assert embeddings[0] == embeddings[1] == embeddings[2]
+++
+++    # a batch of inputs is one busy period
+++    res = server.make_request("POST", "/v1/embeddings", data={
+++        "input": ["I believe the meaning of life is", "This is a test", "Hello world"],
+++        "keep_context_ms": 1000,
+++    })
+++    assert res.status_code == 200
+++    assert res.body["data"][0]["embedding"] == embeddings[0]
+++    assert get_metric(server, "context_creations_total") == 4
++diff --git a/tools/server/tests/utils.py b/tools/server/tests/utils.py
++index 0ca4919..d48c989 100644
++--- a/tools/server/tests/utils.py
+++++ b/tools/server/tests/utils.py
++@@ -116,6 +116,9 @@ class ServerProcess:
++     no_mmproj: bool | None = None
++     media_path: str | None = None
++     sleep_idle_seconds: int | None = None
+++    context_on_demand: bool = False
+++    keep_context_ms: int | None = None
+++    context_create_fail: int | None = None  # LLAMA_SERVER_CTX_CREATE_FAIL
++     cache_ram: int | None = None
++     override_kv: str | None = None
++     no_cache_idle_slots: bool = False
++@@ -291,6 +294,12 @@ class ServerProcess:
++             server_args.extend(["--media-path", self.media_path])
++         if self.sleep_idle_seconds is not None:
++             server_args.extend(["--sleep-idle-seconds", self.sleep_idle_seconds])
+++        if self.context_on_demand:
+++            server_args.append("--context-on-demand")
+++        if self.keep_context_ms is not None:
+++            server_args.extend(["--keep-context-ms", self.keep_context_ms])
+++        if self.context_create_fail is not None:
+++            env["LLAMA_SERVER_CTX_CREATE_FAIL"] = str(self.context_create_fail)
++         if self.cache_ram is not None:
++             server_args.extend(["--cache-ram", self.cache_ram])
++         if self.override_kv:
+diff --git a/backend/cpp/llama-cpp/prepare.sh b/backend/cpp/llama-cpp/prepare.sh
+index fb35bb4..8db7f84 100644
+--- a/backend/cpp/llama-cpp/prepare.sh
++++ b/backend/cpp/llama-cpp/prepare.sh
+@@ -76,6 +76,10 @@ cp -r parallel_params_test.cpp llama.cpp/tools/grpc-server/
+ # moe_cache_mib option parsing and its standalone regression test.
+ cp -r moe_cache_option.h llama.cpp/tools/grpc-server/
+ cp -r moe_cache_option_test.cpp llama.cpp/tools/grpc-server/
++# Context on demand: the request's keep and the model options (included by
++# grpc-server.cpp) and their standalone regression test.
++cp -r context_on_demand.h llama.cpp/tools/grpc-server/
++cp -r context_on_demand_test.cpp llama.cpp/tools/grpc-server/
+ # Parent-death watcher (included by grpc-server.cpp) and its standalone unit
+ # test (run via backend/cpp/run-unit-tests.sh; also buildable under ctest).
+ cp -r parent_watch.h llama.cpp/tools/grpc-server/
+-- 
+2.43.0
+
