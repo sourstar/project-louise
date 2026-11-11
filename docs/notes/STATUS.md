@@ -45,6 +45,12 @@ measured (published figures disagree).
   in one request would be one longer reference, which this model already reads: the 27.75 s original at RTF 0.74.
   LIVE NOW (operator in München's session: "use the full clip in the meantime"): Philippe on the full 27.75 s
   original as one clip with its full transcript; the 7.90 s cut kept as reference-cut-7.90s.wav.
+- **Inputs computed in more than one pass, counted** (operator, 11-12: "for future trimming improvements we
+  should gracefully log when a text is splitted"): the VeGa wrapper counts every answer's tokens against the
+  load's ubatch and tells VeGa (`kind: passes`); VeGa logs when the inputs over it grow and serves every run's
+  lengths by powers of two at `GET /vega/passes` (vega.md §2). The wrapper side is part of every run's engine,
+  so it ships with the next engine change that re-gates every space, never alone; louise-vega takes it on its
+  next deploy.
 - **Deployed: d794502 (web + worker) live since 2026-11-12 05:37Z**, relay gate 200 — the voice choice (#495), the
   account's voice and hands-free (#496), the microphone report and the second way to record (#497, #499), the
   sisters' shared text index (#490, #494). OPEN: the operator's first try in the car → the `voice: microphone` line.

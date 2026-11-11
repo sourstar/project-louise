@@ -7,6 +7,8 @@ descriptions from the wrappers, and Louise reads them.
                → {"kind": "run", "run_id": …, "run": {driver, engine, weights}}
                → {"kind": "receipt", "id", "run_id", "input_digest", "vector_digest"}
                → {"kind": "tree", "image": …, "tree": {<path>: <entry>, …}}
+               → {"kind": "passes", "run_id": …, "ubatch": n, "inputs": n,
+                  "over": n, "longest": n, "buckets": {"256": n, …, "more": n}}
                ← {"ok": true}  or  {"ok": false, "code": …, "error": …}
              A receipt is acknowledged only once it is stored: the wrapper
              returns its vector only after that answer.
@@ -16,6 +18,8 @@ descriptions from the wrappers, and Louise reads them.
                GET /vega/runs/<run_id>        09 §9.12's run object
                GET /vega/trees/<image>        the per-file list that engine
                                               image is the digest of
+               GET /vega/passes               each run's input lengths against
+                                              its ubatch (below)
 
 A RUN IS ACCEPTED ONLY UNDER ITS OWN NAME: `run_id` must be `H` of the
 description's canonical JSON (app/vega/runs.py, the one definition), so a run
@@ -39,6 +43,19 @@ One that is gone when Louise asks is a deferral on her side — she embeds
 again — never an error on a document. An id is ONE-TIME: the first receipt
 for it stands; the same receipt again is acknowledged (a wrapper resending
 after a lost answer), a different one for the same id is refused.
+
+AN INPUT COMPUTED IN MORE THAN ONE PASS IS SAID (operator, 2026-11-12: "for
+future trimming improvements we should gracefully log when a text is
+splitted"). llama.cpp computes an input in passes of its `ubatch`: a causal
+model with last-token pooling runs a longer one in several, a non-causal one
+refuses it. The wrapper counts every answer's tokens (the backend's own
+`prompt_tokens`) against the load's ubatch and tells this service the
+totals since the load, in the background — the first input over it at once,
+then at most every ten minutes — never in a vector's way. Each message is
+the whole count, so a lost one loses nothing. The log says a run's count
+only when the inputs over its ubatch grew; `GET /vega/passes` gives every
+run's lengths in powers of two, what the next trim is decided on. Kept in
+memory: counts since the wrapper's load, not a record.
 
 Nothing here is a secret (invariant 8): receipts are digests and random ids,
 runs are what a Codex publishes. The log names runs and refusals, not inputs.
@@ -90,6 +107,12 @@ SOCKET_MODE = 0o666
 
 _ID = re.compile(r"[0-9a-f]{32}")
 RECEIPT_KEYS = ("id", "run_id", "input_digest", "vector_digest")
+#: a run's input lengths, in tokens, by the powers of two a ubatch is set to
+#: (`passes`): each bucket counts the inputs up to its bound, "more" the rest
+PASS_BUCKETS = ("256", "512", "1024", "2048", "4096", "8192", "16384", "32768", "more")
+PASSES_KEYS = ("run_id", "ubatch", "inputs", "over", "longest", "buckets")
+#: the runs whose counts are kept, the least recently told dropped first
+MAX_PASS_RUNS = 256
 RUN_KEYS = ("driver", "engine", "weights")
 UNKNOWN_RUN, CONFLICT, INVALID = "unknown-run", "conflict", "invalid"
 
@@ -218,6 +241,57 @@ class Runs:
         return json.loads(raw) if raw is not None else None
 
 
+# ---- the input lengths, against each run's ubatch ---------------------------------
+
+class Passes:
+    """Each run's input lengths since its wrapper loaded it (the module's
+    "AN INPUT COMPUTED IN MORE THAN ONE PASS"), the latest count per run."""
+
+    def __init__(self, max_runs: int = MAX_PASS_RUNS, clock: Callable[[], float] = time.time) -> None:
+        self.max_runs, self.clock = max_runs, clock
+        self._runs: "OrderedDict[str, dict[str, Any]]" = OrderedDict()
+        self._lock = threading.Lock()
+
+    def put(self, msg: Mapping[str, Any]) -> str | None:
+        """Takes a count; returns the line to log where the inputs over the
+        ubatch grew, else None."""
+        if set(msg) != {"kind", *PASSES_KEYS}:
+            raise Refused(INVALID, f"a passes message is exactly kind, {', '.join(PASSES_KEYS)}")
+        if not isinstance(msg["run_id"], str) or not DIGEST.fullmatch(msg["run_id"]):
+            raise Refused(INVALID, "a passes message's run_id is a digest, sha256:<64 hex>")
+        for k in ("ubatch", "inputs", "over", "longest"):
+            v = msg[k]
+            if not isinstance(v, int) or isinstance(v, bool) or v < 0:
+                raise Refused(INVALID, f"a passes message's {k} is a whole number")
+        b = msg["buckets"]
+        if (not isinstance(b, dict) or set(b) != set(PASS_BUCKETS)
+                or any(not isinstance(v, int) or isinstance(v, bool) or v < 0 for v in b.values())):
+            raise Refused(INVALID, f"a passes message's buckets are exactly {', '.join(PASS_BUCKETS)}, "
+                                   f"whole numbers")
+        if msg["over"] > msg["inputs"] or sum(b.values()) != msg["inputs"]:
+            raise Refused(INVALID, "a passes message's buckets add up to its inputs, and over is "
+                                   "at most its inputs")
+        row = {k: msg[k] for k in PASSES_KEYS} | {"buckets": dict(b), "at": int(self.clock())}
+        with self._lock:
+            before = self._runs.pop(row["run_id"], None)
+            self._runs[row["run_id"]] = row
+            while len(self._runs) > self.max_runs:
+                self._runs.popitem(last=False)
+        # a count below the last is a new load of the same run: counted afresh
+        grew = row["over"] - (before["over"] if before and before["inputs"] <= row["inputs"] else 0)
+        if grew <= 0:
+            return None
+        u = row["ubatch"]
+        passes = -(-row["longest"] // u) if u else 0
+        return (f"[vega] run {row['run_id'][7:19]}…: {row['over']:,} of {row['inputs']:,} input(s) "
+                f"since its load over its ubatch of {u:,} tokens, computed in more than one pass "
+                f"(+{grew:,}; the longest {row['longest']:,} tokens, {passes} passes) — GET /vega/passes")
+
+    def get(self) -> list[dict[str, Any]]:
+        with self._lock:
+            return [dict(r) for r in reversed(self._runs.values())]
+
+
 # ---- the intake -----------------------------------------------------------------
 
 def _no_duplicates(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
@@ -244,9 +318,10 @@ def _receipt(msg: dict[str, Any]) -> dict[str, str]:
     return {k: msg[k] for k in RECEIPT_KEYS}
 
 
-def handle(line: bytes, receipts: ReceiptStore, runs: Runs) -> dict[str, Any]:
+def handle(line: bytes, receipts: ReceiptStore, runs: Runs, passes: Passes | None = None,
+           notes: list[str] | None = None) -> dict[str, Any]:
     """One intake message, one answer. The answer to a receipt is `ok` only
-    once it is stored."""
+    once it is stored. `notes` collects what a message has the log say."""
     try:
         try:
             msg = json.loads(line, object_pairs_hook=_no_duplicates, parse_float=_no_float,
@@ -274,8 +349,15 @@ def handle(line: bytes, receipts: ReceiptStore, runs: Runs) -> dict[str, Any]:
             if set(msg) != {"kind", "image", "tree"}:
                 raise Refused(INVALID, "a tree message is exactly kind, image, tree")
             runs.put_tree(msg["image"], msg["tree"])
+        elif kind == "passes" and passes is not None:
+            if not runs.known(str(msg.get("run_id"))):
+                raise Refused(UNKNOWN_RUN, "the count names a run this service was never told: "
+                                           "send the run first")
+            note = passes.put(msg)
+            if note and notes is not None:
+                notes.append(note)
         else:
-            raise Refused(INVALID, "a message's kind is run, receipt or tree")
+            raise Refused(INVALID, "a message's kind is run, receipt, tree or passes")
     except Refused as e:
         return {"ok": False, "code": e.code, "error": str(e)}
     return {"ok": True}
@@ -290,8 +372,9 @@ class Intake:
     previous run is replaced; any other file at the path is refused."""
 
     def __init__(self, path: Path, receipts: ReceiptStore, runs: Runs, *,
-                 log: Callable[[str], None] = print) -> None:
+                 log: Callable[[str], None] = print, passes: Passes | None = None) -> None:
         self.path, self.receipts, self.runs, self.log = Path(path), receipts, runs, log
+        self.passes = passes
         self._server: asyncio.AbstractServer | None = None
 
     async def start(self) -> None:
@@ -333,7 +416,10 @@ class Intake:
                     return
                 if not line:
                     return
-                reply = handle(line, self.receipts, self.runs)
+                notes: list[str] = []
+                reply = handle(line, self.receipts, self.runs, self.passes, notes)
+                for note in notes:
+                    self.log(note)
                 if not reply["ok"]:
                     self.log(f"[vega] intake refused a message ({reply['code']}): "
                              f"{reply['error']}")
@@ -347,8 +433,12 @@ class Intake:
 
 # ---- the read-only HTTP API ------------------------------------------------------
 
-def router(receipts: ReceiptStore, runs: Runs) -> APIRouter:
+def router(receipts: ReceiptStore, runs: Runs, passes: Passes | None = None) -> APIRouter:
     api = APIRouter()
+
+    @api.get("/vega/passes")
+    def read_passes() -> dict[str, Any]:
+        return {"buckets": list(PASS_BUCKETS), "runs": passes.get() if passes is not None else []}
 
     @api.get("/vega/receipts")
     def read_receipts(ids: str = Query("")) -> dict[str, Any]:
@@ -378,7 +468,8 @@ def router(receipts: ReceiptStore, runs: Runs) -> APIRouter:
     return api
 
 
-def create_app(receipts: ReceiptStore, runs: Runs, intake: Intake | None) -> FastAPI:
+def create_app(receipts: ReceiptStore, runs: Runs, intake: Intake | None,
+               passes: Passes | None = None) -> FastAPI:
     """The service on its own (`python -m app.vega`); louise-vega mounts
     `router` and starts an `Intake` in its own app instead."""
 
@@ -393,7 +484,8 @@ def create_app(receipts: ReceiptStore, runs: Runs, intake: Intake | None) -> Fas
                 await intake.close()
 
     app = FastAPI(title="VeGa", lifespan=lifespan, docs_url=None, redoc_url=None)
-    app.include_router(router(receipts, runs))
+    app.include_router(router(receipts, runs, passes if passes is not None else
+                              (intake.passes if intake is not None else None)))
 
     @app.get("/health")
     def health() -> dict[str, Any]:

@@ -217,3 +217,64 @@ def test_the_intake_takes_a_tree_message_and_the_http_api_serves_it(tmp_path):
     assert http.get("/vega/trees/sha256:" + "00" * 32).status_code == 404
     assert http.get("/vega/trees/nope").status_code == 404
     assert service.MAX_LINE >= 16 << 20, "a tree's list is megabytes: the line limit takes it"
+
+
+# ---- the input lengths against each run's ubatch (operator, 2026-11-12: "for
+#      future trimming improvements we should gracefully log when a text is splitted")
+
+def passes(**kw) -> dict:
+    b = dict.fromkeys(service.PASS_BUCKETS, 0) | {"1024": 9, "4096": 1}
+    m = {"kind": "passes", "run_id": RUN_ID, "ubatch": 2048, "inputs": 10, "over": 1,
+         "longest": 3412, "buckets": b}
+    return m | kw
+
+
+def test_a_count_over_the_ubatch_is_said_once_and_read_back(tmp_path):
+    receipts, runs, counts = ReceiptStore(), Runs(RunStore(tmp_path / "r.sqlite")), service.Passes()
+    notes: list[str] = []
+    line = canonical_json(passes())
+    assert service.handle(line, receipts, runs, counts, notes)["code"] == service.UNKNOWN_RUN
+    service.handle(canonical_json({"kind": "run", "run_id": RUN_ID, "run": RUN}), receipts, runs)
+    assert service.handle(line, receipts, runs, counts, notes) == {"ok": True}
+    (note,) = notes
+    assert "1 of 10 input(s) since its load over its ubatch of 2,048 tokens" in note
+    assert "the longest 3,412 tokens, 2 passes" in note and RUN_ID[7:19] in note
+    service.handle(line, receipts, runs, counts, notes)
+    more = passes(inputs=20, buckets=passes()["buckets"] | {"1024": 19})
+    service.handle(canonical_json(more), receipts, runs, counts, notes)
+    assert len(notes) == 1, "the log says it only when the inputs over the ubatch grew"
+    service.handle(canonical_json(passes(inputs=21, over=2, buckets=more["buckets"] | {"4096": 2})),
+                   receipts, runs, counts, notes)
+    assert len(notes) == 2 and "(+1;" in notes[-1]
+    reload = passes(inputs=3, over=1, buckets=dict.fromkeys(service.PASS_BUCKETS, 0) | {"4096": 1, "256": 2})
+    service.handle(canonical_json(reload), receipts, runs, counts, notes)
+    assert len(notes) == 3 and "1 of 3" in notes[-1], "a smaller count is a new load: counted afresh"
+    app = FastAPI()
+    app.include_router(service.router(receipts, runs, counts))
+    got = TestClient(app).get("/vega/passes").json()
+    assert got["buckets"] == list(service.PASS_BUCKETS)
+    (row,) = got["runs"]
+    assert {k: row[k] for k in ("run_id", "ubatch", "inputs", "over", "longest")} == \
+        {"run_id": RUN_ID, "ubatch": 2048, "inputs": 3, "over": 1, "longest": 3412}
+
+
+@pytest.mark.parametrize("bad", [
+    {"x": 1}, {"ubatch": -1}, {"inputs": 1.5}, {"over": True}, {"over": 11},
+    {"buckets": {"256": 10}}, {"buckets": dict.fromkeys(service.PASS_BUCKETS, 0)},
+    {"run_id": "nope"},
+])
+def test_a_count_that_does_not_add_up_is_refused(tmp_path, bad):
+    receipts, runs, counts = ReceiptStore(), Runs(RunStore(tmp_path / "r.sqlite")), service.Passes()
+    service.handle(canonical_json({"kind": "run", "run_id": RUN_ID, "run": RUN}), receipts, runs)
+    msg = passes() | bad
+    raw = json.dumps(msg).encode() if isinstance(bad.get("inputs"), float) else canonical_json(msg)
+    reply = service.handle(raw, receipts, runs, counts)
+    assert reply["ok"] is False and reply["code"] in (service.INVALID, service.UNKNOWN_RUN)
+    assert counts.get() == []
+
+
+def test_a_service_without_counts_refuses_them_as_a_kind_it_does_not_take(tmp_path):
+    receipts, runs = ReceiptStore(), Runs(RunStore(tmp_path / "r.sqlite"))
+    reply = service.handle(canonical_json(passes()), receipts, runs)
+    assert reply["ok"] is False and "kind is run, receipt" in reply["error"], \
+        "the wrapper reads this as a service that does not take counts, and stops"

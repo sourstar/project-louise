@@ -125,6 +125,17 @@ TREE_TIMEOUT_S = 30.0
 WEIGHTS_TIMEOUT_S = 1800.0
 #: A stop lets the call in progress finish within this, as LocalAI's backends do.
 GRACE_S = 30.0
+#: AN INPUT COMPUTED IN MORE THAN ONE PASS (operator, 2026-11-12: "for future
+#: trimming improvements we should gracefully log when a text is splitted"):
+#: llama.cpp computes an input in passes of the load's ubatch. Every answer's
+#: tokens are counted against it, by powers of two, and the count since the
+#: load goes to the receipts service (`kind: passes`, app/vega/service.py)
+#: from a thread of its own: the first input over the ubatch at once, then at
+#: most every PASSES_EVERY_S while the count moves. Informational: never in a
+#: vector's way, and an older service that does not take it is told once.
+PASSES_EVERY_S = 600.0
+PASS_BOUNDS = (256, 512, 1024, 2048, 4096, 8192, 16384, 32768)
+PASS_BUCKETS = tuple(str(b) for b in PASS_BOUNDS) + ("more",)
 #: As LocalAI's own Python backends.
 MAX_MESSAGE = 50 * 1024 * 1024
 #: Calls in flight at once. A stream holds its thread while it lasts.
@@ -1223,6 +1234,12 @@ class ReceiptClient:
         with self._lock:
             self._send({"kind": "receipt", **receipt}, run_id, run)
 
+    def publish_passes(self, msg: Mapping[str, Any], run_id: str, run: Mapping[str, Any]) -> None:
+        """A load's input count (`PassCount.message`): the run told first where
+        the service does not know it, as for a receipt."""
+        with self._lock:
+            self._send(msg, run_id, run)
+
     def publish_tree(self, image: str, manifest: Mapping[str, Any],
                      timeout_s: float = TREE_TIMEOUT_S) -> None:
         """The per-file list `image` is the digest of (`tree_manifest`), told
@@ -1316,6 +1333,46 @@ class Loaded:
     token_ids: bool = False
 
 
+class PassCount:
+    """One load's input lengths against its ubatch (`PASSES_EVERY_S`)."""
+
+    def __init__(self, run_id: str, run: Mapping[str, Any], ubatch: int) -> None:
+        self.run_id, self.run, self.ubatch = run_id, run, ubatch
+        self.inputs = self.over = self.longest = 0
+        self.buckets = dict.fromkeys(PASS_BUCKETS, 0)
+        self.sent: dict[str, Any] | None = None
+        self._lock = threading.Lock()
+
+    def note(self, tokens: int) -> bool:
+        """Counts one answer; True for the load's FIRST input over its ubatch."""
+        key = next((str(b) for b in PASS_BOUNDS if tokens <= b), "more")
+        with self._lock:
+            self.inputs += 1
+            self.buckets[key] += 1
+            self.longest = max(self.longest, tokens)
+            if tokens <= self.ubatch:
+                return False
+            self.over += 1
+            return self.over == 1
+
+    def message(self) -> dict[str, Any]:
+        with self._lock:
+            return {"kind": "passes", "run_id": self.run_id, "ubatch": self.ubatch,
+                    "inputs": self.inputs, "over": self.over, "longest": self.longest,
+                    "buckets": dict(self.buckets)}
+
+
+def load_ubatch(canon: loadopts.Canon, raw_nbatch: int) -> int:
+    """The tokens llama.cpp computes in one pass: the load's `ubatch` option,
+    else its batch (LocalAI's NBatch); 0 when neither is stated."""
+    for v in _option_values(canon, "ubatch") or _option_values(canon, "n_ubatch"):
+        try:
+            return max(0, int(v))
+        except ValueError:
+            continue
+    return max(0, int(raw_nbatch or 0))
+
+
 class Gate:
     """LoadModel and Embedding, on raw request bytes; `forward` sends bytes
     to the real backend and returns its answer's bytes."""
@@ -1343,6 +1400,11 @@ class Gate:
             nvidia.runner(cfg.nvidia_smi) if cfg.nvidia_smi else None)
         self.loaded: Loaded | None = None
         self._load_lock = threading.Lock()
+        # the input lengths against the ubatch (`PASSES_EVERY_S`)
+        self.passes: PassCount | None = None
+        self._passes_wake = threading.Event()
+        self._passes_thread: threading.Thread | None = None
+        self._passes_off = False
 
     def _refuse_load(self, why: BaseException) -> bytes:
         log(f"{self.backend.name}: no run can be stated: {why}")
@@ -1506,9 +1568,10 @@ class Gate:
                     nvidia.NvidiaUnreadable, OSError) as e:
                 return self._refuse_load(e)
             try:
-                context_size = int(self.pb.ModelOptions.FromString(raw).ContextSize)
+                opts = self.pb.ModelOptions.FromString(raw)
+                context_size, nbatch = int(opts.ContextSize), int(getattr(opts, "NBatch", 0) or 0)
             except Exception:                        # noqa: BLE001 — protobuf's DecodeError
-                context_size = 0
+                context_size, nbatch = 0, 0
             embedder = loads_an_embedder(self.pb, raw)
             if self.cfg.cuts == TOKENIZER and not embedder:
                 log(f"{self.backend.name}: {Path(canon.weights_path).name} is loaded for "
@@ -1517,6 +1580,10 @@ class Gate:
                                    else (None, False))
             self.loaded = Loaded(run_id, run, declares_pairs(canon.options.get("Options")),
                                  self.child.pid, context_size, specials, token_ids)
+            ubatch = load_ubatch(canon, nbatch) if embedder else 0
+            self.passes = PassCount(run_id, run, ubatch) if ubatch else None
+            if self.passes is not None:
+                self._passes_start()
             log(f"{self.backend.name}: {Path(canon.weights_path).name} loaded on {device}, "
                 f"run {run_id[:23]}…, files {hashed['tree'][:19]}… (installed from "
                 f"{self.backend.uri or 'nowhere recorded'}, the registry's digest "
@@ -1534,6 +1601,54 @@ class Gate:
                 threading.Thread(target=self._tell_tree, args=(hashed["tree"], hashed["manifest"]),
                                  name="vega-tree-publish", daemon=True).start()
             return answer
+
+    # ---- the input lengths, against the ubatch (`PASSES_EVERY_S`) ----------------
+
+    def _passes_start(self) -> None:
+        if self._passes_thread is None and not self._passes_off:
+            self._passes_thread = threading.Thread(target=self._passes_loop, name="vega-passes",
+                                                   daemon=True)
+            self._passes_thread.start()
+
+    def _passes_note(self, tokens: int) -> None:
+        count = self.passes
+        if count is None or tokens <= 0:
+            return
+        if count.note(tokens):
+            log(f"{self.backend.name}: an input of {tokens} tokens is over the load's ubatch of "
+                f"{count.ubatch}: llama.cpp computes it in {-(-tokens // count.ubatch)} passes "
+                f"(counted for VeGa, GET /vega/passes)")
+            self._passes_wake.set()
+
+    def _passes_flush(self) -> bool:
+        """Tells the service the count where it moved; False once a service
+        that does not take counts said so (told once, never asked again)."""
+        count = self.passes
+        if count is None:
+            return True
+        msg = count.message()
+        if msg == count.sent:
+            return True
+        try:
+            self.receipts.publish_passes(msg, count.run_id, count.run)
+        except ReceiptRefused as e:
+            if "kind is run, receipt" in str(e):  # "… or tree": a service before counts
+                log(f"{self.backend.name}: the receipts service does not take input counts "
+                    f"(an older one): not sent again ({e})")
+                return False
+            log(f"{self.backend.name}: the input count was refused: {e}")
+        except Unavailable:
+            pass                                     # the next tick tells it, whole
+        else:
+            count.sent = msg
+        return True
+
+    def _passes_loop(self) -> None:
+        while not self._passes_off:
+            self._passes_wake.wait(PASSES_EVERY_S)
+            self._passes_wake.clear()
+            if not self._passes_flush():
+                self._passes_off = True
 
     def _tell_tree(self, image: str, manifest: Mapping[str, Any]) -> None:
         try:
@@ -1772,6 +1887,8 @@ class Gate:
         except ReceiptRefused as e:
             raise Refusal("INTERNAL", f"VeGa: the receipts service refused the receipt: "
                                       f"{e}") from None
+        if self.passes is not None and self.passes.run_id == state.run_id:
+            self._passes_note(int(result.prompt_tokens))
         return answer                                # only now: the receipt is held
 
 
