@@ -456,3 +456,41 @@ def test_a_question_releases_the_workers_corpus_pins_and_keeps_them_off(runner, 
     assert model_pins.hold(server, "nemotron", "worker embed wikidata"), "after it: pinned again"
     assert runner.pinned["nemotron"] is True
     assert any("corpus pins released until it ends: dar, nemotron" in t for _l, t in runner.said)
+
+
+def test_old_failures_fold_away_and_a_clear_sets_them_aside_keeping_the_record(runner):
+    """Operator, 2026-11-11: "Model pins card is always expanded and it keeps
+    reporting old errors, a cleanup button maybe?"."""
+    import time as _time
+    runner.put_status = 404
+    assert model_pins.hold(URL, M, "h") is False
+    st = model_pins.status()
+    assert st["shown"]["count"] == 1 and st["shown"]["fresh"] == 1, "a failure now opens the card"
+    later = _time.time() + 2 * model_pins.FRESH_FAILURE_S
+    assert model_pins.shown(st["failures"], now=later)["fresh"] == 0, "two hours on, it waits closed"
+    assert model_pins.clear_failures() == 1
+    st = model_pins.status()
+    assert st["shown"] == {"count": 0, "recent": [], "cleared_at": st["failures"]["cleared_at"], "fresh": 0}
+    assert st["failures"]["count"] == 1 and len(st["failures"]["recent"]) == 1, "kept in the record"
+    assert model_pins.counters()["failures"] == 1, "the telemetry's count stays whole"
+    assert model_pins.clear_failures() == 0
+
+
+def test_the_system_page_folds_the_card_and_clears_from_it(monkeypatch, tmp_path, isolated_config):
+    from fastapi.testclient import TestClient
+    from app import api, config
+    monkeypatch.setattr(config, "ADMIN_TOKEN", "sekrit")
+    monkeypatch.setattr(model_pins, "_path", lambda: tmp_path / "state" / "model-pins.json")
+    with model_pins._state() as st:
+        model_pins._fail(st, "pin", URL, M, "h", "HTTP 404", "processing goes on", report=False,
+                         now=1.0)                       # long ago
+    c = TestClient(api.app, headers={"X-Admin-Token": "sekrit"})
+    html = c.get("/admin/system").text
+    card = html[html.index('id="sys-pins"') - 60:html.index('id="sys-pins"') + 40]
+    assert " open" not in card.split('id="sys-pins"')[1][:10], "old failures: the card stays closed"
+    assert "1 failed call(s), none in the last hour" in html and "clear these failures" in html
+    r = c.post("/admin/system/pins/clear-failures", follow_redirects=False)
+    assert r.status_code == 303 and r.headers["location"].startswith("/admin/system")
+    html = c.get("/admin/system").text
+    assert "failed call(s)" not in html and "clear these failures" not in html
+    assert model_pins.status()["failures"]["count"] == 1, "kept in the record"

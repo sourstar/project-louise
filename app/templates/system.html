@@ -50,15 +50,24 @@
   </table>
 </details></div>
 
-{% set pin_trouble = model_pins.failures.count or model_pins.stuck %}
+{# COLLAPSED unless something is wrong NOW (operator, 2026-11-11: "Model
+   pins card is always expanded and it keeps reporting old errors, a cleanup
+   button maybe?"): a failure of the last hour or a pin left behind opens it;
+   older failures wait inside, and "clear" sets them aside — kept in the
+   record (app/model_pins.py `clear_failures`) #}
+{% set shown = model_pins.shown or {'count': 0, 'recent': [], 'fresh': 0} %}
+{% set pin_trouble = shown.fresh or model_pins.stuck %}
 <div class="panel"><details class="sect" id="sys-pins"{% if pin_trouble %} open{% endif %}>
-  <summary><h2>Model pins</h2> <span class="note">{{ model_pins.pins|length }} held{% if model_pins.failures.count %} · <span class="badge err">{{ model_pins.failures.count }} failed call(s)</span>{% endif %}{% if model_pins.stuck %} · <span class="badge err">{{ model_pins.stuck|length }} left pinned</span>{% endif %}</span></summary>
-  {% if model_pins.failures.count %}
+  <summary><h2>Model pins</h2> <span class="note">{{ model_pins.pins|length }} held{% if shown.count %} · <span class="badge {{ 'err' if shown.fresh else 'brass' }}">{{ shown.count }} failed call(s){% if not shown.fresh %}, none in the last hour{% endif %}</span>{% endif %}{% if model_pins.stuck %} · <span class="badge err">{{ model_pins.stuck|length }} left pinned</span>{% endif %}</span></summary>
+  {% if shown.count %}
   <table><tr><th>when</th><th>call</th><th>model</th><th>holder</th><th>collection</th><th>what failed</th></tr>
-    {% for f in model_pins.failures.recent|reverse %}
+    {% for f in shown.recent|reverse %}
     <tr><td>{{ f.at|ago }}</td><td>{{ f.call }}</td><td>{{ f.model }} @ {{ f.server }}</td><td>{{ f.holder }}</td><td>{{ f.collection or '—' }}</td><td>{{ f.detail }}</td></tr>
     {% endfor %}
   </table>
+  <form method="post" action="/admin/system/pins/clear-failures" style="margin-top:8px">
+    <button type="submit" title="Sets these failures aside: the card stops showing them. They stay in the record (state/model-pins.json) and in the event log; a new failure shows again.">clear these failures</button>
+  </form>
   {% endif %}
   {% if model_pins.stuck %}
   <div class="note" style="color:var(--err)">Left pinned, the restore retried every minute:
