@@ -1164,14 +1164,20 @@ the same bytes in `staged/llama.cpp/`, written to be filed upstream as it is:
 - `common`: `common_init_result::free_context()` / `init_context()` and
   `common_init_context_from_params()` — the context is created again from the
   context params the FIRST load resolved (no fitting again: the brief's H2),
-  its adapters applied and its warmup run as a load does, so the first decode
-  of every new context is the warmup's, never a request's.
+  then the steps a load runs after its creation, in the load's own order
+  (control vectors, the check of a reranking model, lora adapters, warmup —
+  `common_init_context_apply`, shared by both), so the first decode of every
+  new context is the warmup's, never a request's. The load returns a context
+  one of these steps stopped on, exactly as before; a later creation that
+  stops on one is refused.
 - `server_queue::on_idle()`: a callback of the loop's thread each time it finds
-  no task, which says when it wants to be called again — the wait ends AT a
-  keep's deadline, not at the next one-second check (H9).
+  no task, run WITHOUT the queue's lock (it may free the context; tasks are
+  posted meanwhile), which says when it wants to be called again — the wait
+  ends AT a keep's deadline, not at the next one-second check (H9).
 - `server_context`: only the loop's thread creates and frees the context
   (H10: the worker that takes tasks during a decode declines everything but
-  metrics and the slot listing). A task that needs a context creates it; a
+  metrics and the slot listing). With the option on, a task that needs a
+  context creates it; a
   creation that fails is answered `503 unavailable_error` and the server
   stays up (H1: upstream's sleep aborts on a failed reload). A slot's release
   reads its task's keep: none, and the context is held; one, and the deadline
@@ -1182,6 +1188,12 @@ the same bytes in `staged/llama.cpp/`, written to be filed upstream as it is:
 - `/metrics`: `context_loaded`, `context_creations_total`,
   `context_creation_seconds_total`; the log says each creation and free with
   its milliseconds.
+- A TASK'S RESULTS SAY WHEN THE CONTEXT WAS CREATED FOR IT, and how long that
+  took (`server_task_result::t_ctx_create_us`, negative when the context was
+  there; `/embedding`'s results carry it as `context_create_ms`): the
+  server's own word per request, for whoever counts creations. A client's
+  clock cannot tell one — the context may have been kept for another
+  client's request (the integration review's finding 1).
 - Refused at load with speculative decoding or a multimodal projector (H8).
   Upstream's sleeping state is untouched and can be used with it.
 
@@ -1193,8 +1205,15 @@ the same bytes in `staged/llama.cpp/`, written to be filed upstream as it is:
   file still builds against pins and forks without the feature.
 - the SEVEN reads of `ctx_server.get_llama_context()` are gone (H4):
   `parse_options`, `TokenizeString` and `Detokenize` take the vocab,
-  `Embedding`'s layout the pooling type of the server's meta. The VeGa
-  wrapper calls `TokenizeString` for every input, while the model is idle.
+  `Embedding`'s layout the pooling type read ONCE at the load (one
+  `get_meta()` a load, none a text). The VeGa wrapper calls
+  `TokenizeString` for every input, while the model is idle.
+- `Embedding` SAYS BESIDE ITS ANSWER whether the context was created for that
+  call: trailing metadata `llama-context-created-us` — the creation's
+  microseconds, `-1` when the context was there, nothing for a model loaded
+  without the option. No change to backend.proto. The VeGa wrapper counts
+  on it (vega.md §2, `kind: keeps`) and the calibration gate admits an
+  on-demand run only on creations counted that way.
 - a refused creation reaches LocalAI's client as gRPC `INTERNAL`, HTTP 500
   with the message "the context cannot be created now…": for Louise a
   deferral (07 §7.8: a busy encoder — 408, 429, a 5xx — defers the batch),
@@ -1204,7 +1223,9 @@ the same bytes in `staged/llama.cpp/`, written to be filed upstream as it is:
 random-weight `llama` and `qwen3` models written by `tests/test-llama-archs -o`
 — huggingface.co is not reachable from the session that wrote it, so the
 presets the tests name were pointed at them):
-- `test_context_on_demand.py`, 13 of 13: the load's context freed when idle
+- `test_context_on_demand.py`, 15 of 15 (the two added with the review's
+  fixes: a result says when the context was created for it — one result of
+  a batch, none without the option): the load's context freed when idle
   and none created by `/health`, `/props`, `/models`, `/slots`, `/tokenize`;
   one creation per request with a keep of 0; a request WITHOUT a keep leaves
   the context loaded, cached prompt included, until one that carries a keep
@@ -1217,7 +1238,11 @@ presets the tests name were pointed at them):
   after the patch (nine suites, 131 tests: the same 83 passes and the same 46
   failures — the failures are the stand-in models' content, on both).
 - LocalAI's `grpc-server` built from the tree the candidate series produces
-  and driven over gRPC as LocalAI drives it, 18 of 18: among them the same
+  and driven over gRPC as LocalAI drives it, 25 of 25 — the last six on the
+  trailer: the microseconds of a creation, `-1` inside another's keep and
+  after a request without one, twenty requests with a keep of 0 saying
+  nineteen creations (the first rode the held context) as the backend's log
+  counts them, nothing without the option. Among the first: the same
   vector, byte for byte, WITH AND WITHOUT the option; a request without a
   keep, and one whose keep is no number, leaving the context loaded; token ids (P2) embedded
   on demand; `TokenizeString` and `Detokenize` answered while idle with no

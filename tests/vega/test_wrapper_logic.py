@@ -1085,3 +1085,173 @@ def test_a_service_before_counts_is_told_once_and_a_busy_one_on_the_next_tick(ca
     busy = _gate_like(w, _Told(w.Unavailable("no acknowledgement")))
     w.Gate._passes_note(busy, 5000)
     assert w.Gate._passes_flush(busy) is True and busy.passes.sent is None, "sent whole next time"
+
+
+# ---- context on request: the keep, read and counted (docs/notes/idle-context-brief.md) --
+
+class _Clock:
+    def __init__(self) -> None:
+        self.t = 1000.0
+
+    def __call__(self) -> float:
+        return self.t
+
+    def ms(self, n: float) -> None:
+        self.t += n / 1000.0
+
+
+@pytest.mark.parametrize("options,on", [
+    (["device:gpu", "context_on_demand"], True), (["context_on_demand:true"], True),
+    (["--context-on-demand"], True), (["context_on_demand:false"], False),
+    (["context_on_demand", "context_on_demand:off"], False), (["context_on_demand_x"], False),
+    (["parallel:1"], False), (None, False),
+])
+def test_the_option_is_read_as_the_backend_and_louise_read_it(options, on):
+    from app import model_load
+    w = load_wrapper()
+    assert w.declares_on_demand(options) is on
+    assert model_load._options_on_demand({"Options": options}) is on, "one reading, on both sides"
+    assert (w.KEEP_FIELD, w.ON_DEMAND_OPTION) == ("keep_context_ms", model_load.ON_DEMAND_OPTION)
+
+
+def test_a_keep_is_whole_milliseconds_or_not_said():
+    from app.rage import keep as rage_keep
+    w = load_wrapper()
+    assert [w.parse_keep_ms(v) for v in ("0", "20", " 500", "+7", str(2 ** 31 - 1))] == \
+        [0, 20, 500, 7, 2 ** 31 - 1]
+    assert [w.parse_keep_ms(v) for v in ("-1", "1.5", "", "20ms", str(2 ** 31), None, 20)] == [None] * 7
+    assert w.KEEP_FIELD == rage_keep.FIELD, "the key RAGE writes is the key counted here"
+    assert len(w.GAP_BUCKETS) == rage_keep.GAP_BUCKETS, "one scale for the gaps, on both sides"
+    sent = rage_keep.Sent(rage_keep.Stream("s", "m", "p", "corpus"), 20)
+    meta = rage_keep.metadata(sent)["metadata"]
+    assert w.parse_keep_ms(meta[w.KEEP_FIELD]) == 20, "what RAGE sends is read back whole"
+
+
+def test_the_backends_word_is_read_from_beside_its_answer():
+    w = load_wrapper()
+    key = w.CREATED_TRAILER
+    assert key == "llama-context-created-us", "the key P11's backend writes (context_on_demand.h)"
+    assert w.created_us(((key, "41250"),)) == 41250
+    assert w.created_us((("x-other", "1"), (key, b"-1"))) == -1, "the context was there"
+    assert w.created_us(((key, "0"),)) == 0, "created, in no time worth a microsecond"
+    assert [w.created_us(t) for t in ((), None, (("x-other", "1"),), ((key, "soon"),),
+                                      ((key, "-2"),), ((key, "1.5"),))] == [None] * 6, \
+        "said nothing: a backend without the feature, or a load without the option"
+
+
+def test_a_call_is_counted_when_its_answer_is_back_with_the_backends_word():
+    w = load_wrapper()
+    clock = _Clock()
+    c = w.KeepCount("sha256:" + "11" * 32, {}, True, clock=clock)
+    clock.ms(5)                                    # the load is the first answer
+    a = c.send()
+    clock.ms(40)
+    assert c.answered(a, 20, 38_400) is True, "the load's first call, and created: told at once"
+    clock.ms(12)
+    b = c.send()
+    late = c.send()                                # sent while the backend worked
+    clock.ms(10)
+    assert c.answered(b, 20, -1) is False, "its context was there: told in the background"
+    clock.ms(3)
+    assert c.answered(late, 20, -1) is False
+    clock.ms(20.2)
+    d = c.send()
+    clock.ms(38)
+    assert c.answered(d, None, 37_700) is True, "created for it: told before its vector"
+    clock.ms(90_000)
+    e = c.send()
+    clock.ms(9)
+    assert c.answered(e, 0, -1) is True, "a keep of 0: a gate counts on this one"
+    clock.ms(0.2)
+    assert c.send() == "1"
+    c.failed_call()
+    assert c.answered(c.send(), 20, None) is False, "a backend that says nothing is not told for"
+    m = c.message()
+    assert (m["calls"], m["keyed"], m["busy"], m["failed"]) == (6, 5, 1, 1)
+    assert (m["told"], m["created"], m["created_ms"]) == (5, 2, 76), "38.4 + 37.7 ms, the backend's own"
+    assert m["gaps"]["8"] == 1 and m["gaps"]["16"] == 1 and m["gaps"]["32"] == 1
+    assert m["gaps"]["more"] == 1 and m["gaps"]["1"] == 1
+    assert sum(m["gaps"].values()) + m["busy"] == m["calls"]
+    assert m["on_demand"] is True and list(m["gaps"]) == list(w.GAP_BUCKETS) and c.in_flight == 0
+    from app.vega import service
+    assert set(m) == {"kind", *service.KEEPS_KEYS} and tuple(m["gaps"]) == service.GAP_BUCKETS, \
+        "the message VeGa takes, key for key"
+
+
+def test_a_load_that_is_not_on_demand_counts_its_gaps_and_no_creation():
+    w = load_wrapper()
+    clock = _Clock()
+    c = w.KeepCount("sha256:" + "11" * 32, {}, False, clock=clock)
+    for gap in (0.4, 3, 700):
+        clock.ms(gap)
+        c.answered(c.send(), None, None)
+    m = c.message()
+    assert (m["told"], m["created"], m["keyed"]) == (0, 0, 0) and m["on_demand"] is False
+    assert (m["gaps"]["1"], m["gaps"]["4"], m["gaps"]["1024"]) == (1, 1, 1)
+
+
+class _ToldKeeps:
+    def __init__(self, refuse=None):
+        self.sent, self.refuse = [], refuse
+
+    def publish_keeps(self, msg, run_id, run):
+        if self.refuse:
+            raise self.refuse
+        self.sent.append(msg)
+
+
+def _keeps_gate(w, receipts, on_demand=True):
+    from types import SimpleNamespace
+    return SimpleNamespace(keeps=w.KeepCount("sha256:" + "11" * 32, {}, on_demand), receipts=receipts,
+                           backend=SimpleNamespace(name="fake"), _keeps_lock=threading.Lock(),
+                           _keeps_off=False)
+
+
+def test_the_count_goes_to_vega_whole_and_only_when_it_moved():
+    w = load_wrapper()
+    told = _ToldKeeps()
+    g = _keeps_gate(w, told)
+    assert w.Gate._keeps_flush(g) is True and len(told.sent) == 1, "the load's own count: nothing yet"
+    assert told.sent[0]["calls"] == 0
+    g.keeps.answered(g.keeps.send(), 20, 12_000)
+    assert w.Gate._keeps_flush(g) is True and told.sent[-1]["created"] == 1
+    assert w.Gate._keeps_flush(g) is True and len(told.sent) == 2, "an unmoved count is not sent"
+    g.keeps.answered(g.keeps.send(), 20, -1)
+    w.Gate._keeps_flush(g)
+    assert len(told.sent) == 3 and told.sent[-1]["calls"] == 2, "the whole count, each time"
+
+
+def test_a_service_before_keep_counts_is_told_once(capsys):
+    w = load_wrapper()
+    old = _keeps_gate(w, _ToldKeeps(w.ReceiptRefused("a message's kind is run, receipt, tree or passes")))
+    old.keeps.answered(old.keeps.send(), 20, -1)
+    assert w.Gate._keeps_flush(old) is False and old._keeps_off is True, "not asked again"
+    assert "does not take the count of calls against the context's keep" in capsys.readouterr().err
+    busy = _keeps_gate(w, _ToldKeeps(w.Unavailable("no acknowledgement")))
+    busy.keeps.answered(busy.keeps.send(), 20, -1)
+    assert w.Gate._keeps_flush(busy) is True and busy.keeps.sent is None, "sent whole next time"
+    none = _keeps_gate(w, _ToldKeeps())
+    none.keeps = None
+    assert w.Gate._keeps_flush(none) is True
+
+
+def test_a_probe_says_its_keep_only_to_an_on_demand_load(capsys):
+    from types import SimpleNamespace
+
+    class Options:
+        def __init__(self, **fields):
+            self.fields, self.Metadata = fields, {}
+
+    class Old:
+        def __init__(self, **fields):
+            self.fields = fields
+
+    w = load_wrapper()
+    g = SimpleNamespace(pb=SimpleNamespace(PredictOptions=Options), backend=SimpleNamespace(name="fake"))
+    q = w.Gate._probe_request(g, True, Embeddings="x")
+    assert q.Metadata == {"keep_context_ms": "0"} and q.fields == {"Embeddings": "x"}
+    assert w.Gate._probe_request(g, False, Embeddings="x").Metadata == {}, \
+        "a load without the option is sent what it always was"
+    g.pb = SimpleNamespace(PredictOptions=Old)
+    assert w.Gate._probe_request(g, True, Embeddings="x").fields == {"Embeddings": "x"}
+    assert "carry no metadata" in capsys.readouterr().err

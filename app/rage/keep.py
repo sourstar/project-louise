@@ -10,7 +10,8 @@ nobody is using must not stay held. The operator: "Louise RAGE creates the
 work batches, thus the stay warm flag keeps the context also between jobs";
 "Let's start with a 20 ms expiration time, the timeout shall be trimmed per
 job type: several collections share the same model, but their way to queue
-the jobs may be different"; "I choose option B, trimmed by RAGE"; "The
+the jobs may be different" — and, the node measured, "Start at 50 ms"
+(`START_MS`); "I choose option B, trimmed by RAGE"; "The
 trimming time shall not be modified if the expiry occurred because of a job
 missed scheduling (for instance when a chat model takes over)".
 
@@ -92,6 +93,27 @@ from a guess. On RAGE's clock: the engine's own gap is longer by the way
 there and back, and what happens between two texts of one request (LocalAI
 sends one text a call) is the wrapper's to count.
 
+THE ENGINE'S COUNT, READ BACK (`Keeps.observe`; the node, 2026-11-11). This
+clock cannot see the way from the engine's answer to here and from here back
+to the engine, and on the node that way outlasted a keep of 20 ms one time in
+three: one lane of requests sent back to back had its context created 8 times
+in 13 and 67 times in 200, every one an interval judged clean here. No
+allowance fixes that from this side — the way is not ours to measure. The
+engine's own word is: its backend says for each call whether the context was
+created for it, the VeGa wrapper counts it per run (`GET /vega/keeps`), and
+the worker's beat hands this module the count of each model's run. Between
+two readings the contexts the engine CREATED are set against the requests
+this clock expected to create one (a stream's first, an expiry it judged,
+the gate's own). More created than expected, by `UNSEEN_MIN` and by
+`UNSEEN_SHARE` of the requests sent: the way there and back outlasts the keep
+of the streams that were sending, and no keep of that MODEL goes under twice
+their smallest again (`_Model.floor_ms`) — the way is the model's path, not
+a job's rhythm, so it is one floor for every stream of the model and it does
+not decay. The same reading gives the creation's measured time
+(`creation_ms`), which the premature window is ten of. What the engine
+created for another process's requests (a person's query, from the web
+process) is in its count and not in ours; the two thresholds are for that.
+
 Telemetry: `snapshot()` and `lines()` are read by whoever publishes (the
 worker's beat, never the thread doing the work); a keep that moves is logged
 once, with its collection.
@@ -108,8 +130,14 @@ from typing import Callable, Iterator, NamedTuple
 
 log = logging.getLogger(__name__)
 
-#: the operator's start (2026-11-11), and the least a stream is ever given
-START_MS = 20
+#: THE OPERATOR'S START: "Start at 50 ms" (2026-11-11, in München's session,
+#: once the node had been measured — at 20 ms, his first start, one lane of
+#: requests sent back to back still had its context created one time in
+#: three; docs/notes/idle-context-brief.md §10.1). Read when a stream is made
+START_MS = 50
+#: the least a stream is ever given: the operator's first start ("Let's start
+#: with a 20 ms expiration time"), which he moved the start from and not the
+#: floor — a keep that decays may come back down to it
 FLOOR_MS = 20
 #: the most: past it a stream that keeps expiring pays its creations, and the
 #: memory is free between two of its requests (the review's constant, to be
@@ -132,6 +160,13 @@ TRANSIT_MS = 10
 #: the keep shrinks by this after so many seconds of clean intervals
 DECAY = 0.9
 DECAY_EVERY_S = 60.0
+
+#: THE ENGINE'S COUNT (`Keeps.observe`): between two readings, the contexts
+#: it created beyond those this clock expected count as UNSEEN from this many
+#: on, and from this share of the keyed requests sent meanwhile — under it
+#: they are another process's (a query from the web process), or noise
+UNSEEN_MIN = 2
+UNSEEN_SHARE = 0.1
 
 #: the request's field, in its `metadata` (LocalAI carries the map to the
 #: backend: backend.proto `PredictOptions.Metadata`)
@@ -164,9 +199,9 @@ class Stream(NamedTuple):
 
 @dataclass
 class _State:
-    keep_ms: int = START_MS
+    keep_ms: int = field(default_factory=lambda: START_MS)
     answered: float | None = None       # when its last answer came (monotonic s)
-    asked_ms: int = START_MS            # the keep that answer carried
+    asked_ms: int = field(default_factory=lambda: START_MS)   # the keep that answer carried
     changed: float = 0.0                # when the keep last moved or was confirmed
     excuse: str | None = None           # the next expiry is not the stream's
     # counted since start
@@ -174,8 +209,10 @@ class _State:
     premature: int = 0
     excused: dict[str, int] = field(default_factory=dict)
     paused: int = 0
-    highest_ms: int = START_MS
+    highest_ms: int = field(default_factory=lambda: START_MS)
     keyed: bool = True                  # its model takes a keep
+    window: int = 0                     # keyed requests since the engine's count was last read
+    unseen: int = 0                     # readings that raised it: creations this clock did not see
     # the gaps, for every stream (`Keeps._gap`)
     busy: int = 0                       # sent while the model worked: no gap
     held: int = 0                       # sent more than HELD_MS after it was ready
@@ -188,6 +225,11 @@ class _Model:
     in_flight: int = 0
     deadline: float = float("-inf")     # the latest any of our requests asked (monotonic s)
     answered: float | None = None       # its last answer to any of our streams
+    # against the engine's own count (`Keeps.observe`)
+    keyed: int = 0                      # keyed requests sent, since start
+    expected: int = 0                   # of ours, those this clock expected to create a context
+    floor_ms: int = FLOOR_MS            # no keep of this model under it: the way there and back
+    read: tuple[int, int, int, int, int] | None = None   # the last reading, and ours at it
 
 
 class Sent(NamedTuple):
@@ -232,6 +274,10 @@ class Keeps:
             md = self._models.setdefault((stream.server, stream.model), _Model())
             st.keyed = keyed
             self._gap(st, md, ready, now)
+            if keyed:
+                md.keyed += 1
+                st.window += 1
+                st.keep_ms = max(st.keep_ms, md.floor_ms)
             moved = self._judge(stream, st, md, ready, now) if keyed else None
             st.requests += 1
             md.in_flight += 1
@@ -251,6 +297,7 @@ class Keeps:
             st.keep_ms = st.highest_ms = int(keep_ms)
             st.requests += 1
             md.in_flight += 1
+            md.expected += 1                    # the gate's own: a context for each
         return Sent(stream, int(keep_ms))
 
     @staticmethod
@@ -303,11 +350,13 @@ class Keeps:
         """Move `st.keep_ms` by the rule; `(the keep before, why)` when it moved."""
         excuse, st.excuse = st.excuse, None
         if st.answered is None:
+            md.expected += 1                    # it may well create the context
             return None                         # the stream's first request: nothing to judge
         transit = TRANSIT_MS / 1000.0
         expired = md.in_flight == 0 and now + transit > md.deadline
         if not expired:
-            return self._clean(st, now)
+            return self._clean(st, now, md.floor_ms)
+        md.expected += 1                        # whatever the cause: a creation is expected
         if excuse is not None:
             st.excused[excuse] = st.excused.get(excuse, 0) + 1
             return None
@@ -330,15 +379,64 @@ class Keeps:
         return before, (f"its context expired {late_ms:.0f} ms before its next request was "
                         f"ready (premature expiry {st.premature} of {st.requests} request(s))")
 
-    def _clean(self, st: _State, now: float) -> tuple[int, str] | None:
-        if now - st.changed < DECAY_EVERY_S or st.keep_ms <= FLOOR_MS:
+    def _clean(self, st: _State, now: float, floor_ms: int = FLOOR_MS) -> tuple[int, str] | None:
+        floor_ms = max(FLOOR_MS, floor_ms)
+        if now - st.changed < DECAY_EVERY_S or st.keep_ms <= floor_ms:
             return None
         before = st.keep_ms
-        st.keep_ms = max(FLOOR_MS, int(st.keep_ms * DECAY))
+        st.keep_ms = max(floor_ms, int(st.keep_ms * DECAY))
         st.changed = now
         if st.keep_ms == before:
             return None
         return before, f"no premature expiry for {DECAY_EVERY_S:.0f} s"
+
+    # -- the engine's own count, read back ---------------------------------------------------
+    def observe(self, server: str, model: str, calls: int, created: int,
+                created_ms: int) -> list[str]:
+        """The engine's count for `model`'s run, since its load (the VeGa
+        wrapper's, `GET /vega/keeps`): Embedding calls answered, those a
+        context was created for, the creations' milliseconds. Set against
+        what this clock expected since the last reading (module docstring);
+        returns a line for each keep it raised. The first reading, and one
+        after a new load (a count that went down), are a baseline only."""
+        now = self._clock()
+        out: list[str] = []
+        with self._lock:
+            md = self._models.get((server, model))
+            if md is None:
+                return out
+            last, md.read = md.read, (calls, created, created_ms, md.keyed, md.expected)
+            streams = [(k, st) for k, st in self._streams.items()
+                       if (k.server, k.model) == (server, model) and st.keyed
+                       and k.level != FIXED_LEVEL]
+            sending = [(k, st) for k, st in streams if st.window >= 2]
+            for _k, st in streams:
+                st.window = 0
+            if last is None or calls < last[0] or created < last[1]:
+                return out
+            made, took = created - last[1], created_ms - last[2]
+            keyed, expected = md.keyed - last[3], md.expected - last[4]
+            if made > 0 and took >= 0:
+                self._creation_ms[(server, model)] = max(1, int(took / made + 0.5))
+            unseen = made - expected
+            if not sending or unseen < max(UNSEEN_MIN, UNSEEN_SHARE * keyed):
+                return out
+            md.floor_ms = max(md.floor_ms,
+                              min(CEILING_MS, 2 * min(st.keep_ms for _k, st in sending)))
+            for k, st in sending:
+                st.unseen += 1
+                if st.keep_ms >= md.floor_ms:
+                    continue
+                before, st.keep_ms = st.keep_ms, md.floor_ms
+                st.highest_ms = max(st.highest_ms, st.keep_ms)
+                st.changed = now
+                out.append(
+                    f"keep of {k.plugin or '-'} ({k.level}) on {model or '-'} at {server}: "
+                    f"{before} -> {st.keep_ms} ms — the engine created {made} context(s) while "
+                    f"{keyed} request(s) went, {unseen} more than this clock expected: the way "
+                    f"there and back outlasts the keep, and no keep of this model goes under "
+                    f"{md.floor_ms} ms again")
+        return out
 
     # -- reading it back ---------------------------------------------------------------------
     def snapshot(self) -> list[dict]:
@@ -348,6 +446,7 @@ class Keeps:
                      "keep_ms": s.keep_ms if s.keyed else None,
                      "highest_ms": s.highest_ms if s.keyed else None, "requests": s.requests,
                      "premature": s.premature, "excused": dict(s.excused), "paused": s.paused,
+                     "unseen": s.unseen,
                      "busy": s.busy, "held": s.held, "gaps": list(s.gaps),
                      "longest_gap_ms": s.longest_gap_ms}
                     for k, s in sorted(self._streams.items())]
@@ -459,6 +558,21 @@ def warm_body() -> dict[str, dict[str, str]]:
     return {"metadata": {FIELD: "0"}}
 
 
+def observe(url: str, model: str, count: dict) -> list[str]:
+    """The engine's count for the run that answers as `model` at `url` — a row
+    of VeGa's `GET /vega/keeps` — read back (`Keeps.observe`). Only a row
+    whose backend spoke for every call says anything."""
+    from .. import model_load
+    try:
+        calls, told = int(count["calls"]), int(count["told"])
+        created, created_ms = int(count["created"]), int(count["created_ms"])
+    except (KeyError, TypeError, ValueError):
+        return []
+    if not count.get("on_demand") or told != calls:
+        return []
+    return KEEPS.observe(model_load.server_of(url), model, calls, created, created_ms)
+
+
 def answered(sent: Sent | None) -> None:
     if sent is not None:
         KEEPS.answered(sent)
@@ -511,6 +625,8 @@ def lines() -> list[str]:
             line += (f"; its keep {s['keep_ms']} ms (highest {s['highest_ms']}), "
                      f"{s['premature']} premature expiry(ies), excused: {excused}, "
                      f"{s['paused']} after a pause")
+            if s["unseen"]:
+                line += f", raised {s['unseen']} time(s) on the engine's own count"
         out.append(line)
     return out
 

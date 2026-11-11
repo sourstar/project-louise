@@ -5415,6 +5415,34 @@ def lance_cache_line(stats: dict | None) -> str | None:
             f"{stats['budget'] / mib:.0f} MiB, {stats['items']:,} items")
 
 
+#: how often the beat reads the engine's own count of the contexts it created
+#: back for RAGE's keeps (`_read_engine_counts`): one read of VeGa, bounded
+#: (run_check.COUNTS_TIMEOUT_S), and none while no run was heard. A keep
+#: RAGE's clock judged long enough and the engine did not is raised at the
+#: next reading, so the interval is how long a stream pays creations it
+#: cannot see — at most a few of them at this one
+KEEPS_READ_INTERVAL_S = 30.0
+_last_keeps_read = 0.0
+
+
+def _read_engine_counts(con) -> None:
+    """Hand RAGE the engine's count for each model's run (app/rage/keep.py
+    `observe`; docs/notes/idle-context-brief.md §10): the creation's
+    measured time, and the contexts created that RAGE's clock did not expect
+    — the way to the client and back, which only the engine sees. A keep it
+    raises is logged with its collection. From the beat, never from a thread
+    that embeds."""
+    global _last_keeps_read
+    now = time.time()
+    if now - _last_keeps_read < KEEPS_READ_INTERVAL_S:
+        return
+    _last_keeps_read = now
+    from . import run_check
+    for (url, model), count in run_check.engine_counts().items():
+        for line in rage_keep.observe(url, model, count):
+            db.log_event(con, "info", "sched", line)
+
+
 def _log_shares(con, live_paths=None) -> None:
     """Publish what each collection actually GOT from each contended
     resource. Without this the fair share is an assertion; with it, a
@@ -6080,6 +6108,7 @@ def _stats_publisher() -> None:
             # `collections`, not `all_collections`: that name is not bound
             # here, so this raised NameError every beat, the except below
             # swallowed it, and the fair-share lines never reached the log
+            _read_engine_counts(con)
             _log_shares(con, [c.manifest_path for c in collections])
             # an idle parse pool gives its memory back (app/parallel.py
             # release_idle; München 2026-10-28: 10.8 GiB held through a pause)

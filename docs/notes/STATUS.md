@@ -169,8 +169,41 @@ measured (published figures disagree).
   size (`resident._rest_size`); `tools/measure/context_on_request.py` counts from the card record what a keep would give
   back; the gate asks an on-demand model its probes on 300 contexts of their own (`embedder.fresh_contexts`; 03 §3.3
   amended). Every embedding and translation stream's gaps are counted from now, keyed or not, and published by the
-  worker's beat (`[sched] keep (since start) — …`): the record a first keep is chosen from needs only a worker deploy. STEPS 3–4 MEASURED (München, 11-12; brief §10.1): bge-m3, Nemotron and Qwen3-4B byte-equal over 300 keep-0 creations each; 561 / 1,887 / ~1,870 MiB back per free; creation median 3.4 / 0.8 / 8.4 ms; keep 20 at one lane frees between back-to-back requests (dating gap), keep 500 does not. NOT DONE: the rest of §2; the VeGa wrapper's count and
+  worker's beat (`[sched] keep (since start) — …`): the record a first keep is chosen from needs only a worker deploy. STEPS 3–4 MEASURED (München, 11-12; brief §10.1): bge-m3, Nemotron and Qwen3-4B byte-equal over 300 keep-0 creations each; 561 / 1,887 / ~1,870 MiB back per free; (the "creation median 3.4 / 0.8 / 8.4 ms" first written here measured no creation — both requests of each pair were warm; measured since: ~40 / ~55 / ~23 ms, brief §10.1); keep 20 at one lane frees between back-to-back requests (dating gap), keep 500 does not. NOT DONE: the rest of §2; the VeGa wrapper's count and
   canary (an engine change). [idle-context-brief.md](idle-context-brief.md) §10.
+- **Context on request — the engine's own count, the wrapper, the gate** (11-11, after the
+  coordinator's integration review). The review's four C++ items are fixed in the staged patches (the rerank check
+  after the control vectors again, the idle callback without the queue's lock, the acquire gated on the option, the
+  pooling type read once a load). THE COUNT IS THE ENGINE'S WORD PER CALL: llama.cpp marks the task a context was
+  created for, LocalAI's `Embedding` says it beside the answer (trailing metadata `llama-context-created-us`, no proto
+  change), the VeGa wrapper counts it per load with the gaps at the engine and tells VeGa (`kind: keeps`,
+  `GET /vega/keeps`; its own probes at an on-demand load now carry a keep of 0), and the gate reads `(calls, created)`
+  of the answering run and holds every round of N keep-0 requests to N calls and N creations
+  (`run_check.creations_of`) — the count that admits an on-demand engine at all. CPU: llama.cpp 15 tests, the nine
+  existing suites as the untouched baseline, `grpc-server` over gRPC 25 checks, the regenerated patch applied with
+  `git am` to the tested tree. The node's measurements are above (steps 3–4): at a keep of 20 ms one lane still has its
+  context created one time in three, because the way to the client and back exceeds 20 ms and RAGE's clock cannot see
+  it. OPEN, before any deployment: RAGE trims on the engine's count (the brief §10, "RAGE's dating"); the canary per
+  context is the operator's decision (the brief §10, its table). Nothing deployed, no engine changed.
+- **Context on request — corrections, and the operator's start** (11-11). (1) The "creation median 3.4 / 0.8 / 8.4 ms"
+  of steps 3–4 measured NO creation: each pair was a request with a keep of 2,000 ms, then two with a keep of 0 — and a
+  keep only extends another's, so both were answered on the kept context. MEASURED AS SUCH (München, the same day;
+  keep 0 less a kept context, medians, 100 ms between requests, byte-checked): a creation costs ~55 ms for Nemotron,
+  ~40 ms for bge-m3, ~23 ms for Qwen3-4B. One creation path: Nemotron at keep 0 over pauses of 0–500 ms reads
+  63–95 ms and at keep 50 over 100–500 ms 72–88 ms, against 34 ms kept — neither how the context was freed nor the
+  age of the free matters. What was built on the void figure the same day is withdrawn: the gate's pause between
+  requests and its clause in 03 §3.3. (2) THE START IS 50 ms (operator, in München's session, the node measured: "Start at 50 ms"); the floor
+  stays 20 ms (`keep.START_MS`, `FLOOR_MS`). Brief §1.1, §10.1.
+- **Context on request — RAGE trims on the engine's count** (11-11; the review's last item, the keep's dating). RAGE
+  dates a keep on its own clock and cannot see the way from the engine's answer to the client and back; on the node
+  that way outlasted a keep of 20 ms one time in three (8 creations in 13 back-to-back requests, 67 in 200), every
+  interval judged clean. Now the worker's beat reads the VeGa wrapper's count of each model's run every 30 s
+  (`worker._read_engine_counts`, `run_check.engine_counts`, one bounded read) and `Keeps.observe` sets the contexts the
+  engine CREATED against those RAGE expected (a stream's first, an expiry it judged, the gate's own): more, by 2 and by
+  a tenth of the requests sent, and no keep of that model goes under twice the smallest keep that was sending — a floor
+  of the model's path, which does not decay. The same reading replaces the assumed creation time (100 ms) by the
+  measured one, which the premature window is ten of. Inert until a model is loaded with the option behind the new
+  wrapper. Brief §10.
 - **Inputs computed in more than one pass, counted** (operator, 11-12: "for future trimming improvements we
   should gracefully log when a text is splitted"): the VeGa wrapper counts every answer's tokens against the
   load's ubatch and tells VeGa (`kind: passes`); VeGa logs when the inputs over it grow and serves every run's

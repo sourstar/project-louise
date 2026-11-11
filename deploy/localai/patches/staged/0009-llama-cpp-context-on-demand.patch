@@ -20,15 +20,23 @@ time.
   (--context-on-demand, --keep-context-ms, the request's keep_context_ms),
   written for upstream with its server tests and README.
 - context_on_demand.h (+ test): the keep parsed from the request's metadata
-  and from the model option; the fields are detected, so the source still
-  builds against pins and forks without the feature.
+  and from the model option, and what a task's result says of its context;
+  the fields are detected, so the source still builds against pins and
+  forks without the feature.
 - grpc-server.cpp: Predict, PredictStream and Embedding give their tasks the
   request's keep; the model options `context_on_demand` and
   `keep_context_ms`. No RPC reads the llama_context any more - parse_options,
   TokenizeString and Detokenize take the vocab, Embedding's layout the
-  pooling type of the server's meta - because with the option the context
+  pooling type read once at the load - because with the option the context
   comes and goes on the server's loop thread and is null while the model is
   idle.
+- Embedding says beside its answer whether the context was created for that
+  call: the trailing metadata `llama-context-created-us` carries the
+  microseconds the creation took, or -1 when the context was already there
+  (only for a model loaded with the option). It is the server's own word
+  per call, for a caller that counts creations - one cannot be told from
+  the caller's clock, since the context may have been kept for another
+  caller's request. No change to backend.proto.
 
 Checked on the CPU (grpc-server built from this tree, random-weight qwen3 and
 llama models, driven over gRPC as LocalAI drives it): the load's context is
@@ -41,17 +49,19 @@ a request that carries one is answered; without the option nothing is ever
 freed and the vector is the same, byte for byte; the model option gives a
 keep to a request without one; a creation made to fail is an error on that
 request, the backend stays up and serves the next; Predict gives the same
-completion across creations.
+completion across creations; an Embedding answer says the microseconds of
+the creation made for it and -1 when the context was there, as many times as
+the server logged a creation, and says nothing without the option.
 
 Assisted-by: Claude Code
 ---
  backend/cpp/llama-cpp/CMakeLists.txt          |    5 +
- backend/cpp/llama-cpp/context_on_demand.h     |   89 ++
- .../cpp/llama-cpp/context_on_demand_test.cpp  |   62 +
- backend/cpp/llama-cpp/grpc-server.cpp         |   45 +-
- .../0011-server-context-on-demand.patch       | 1210 +++++++++++++++++
+ backend/cpp/llama-cpp/context_on_demand.h     |  141 ++
+ .../cpp/llama-cpp/context_on_demand_test.cpp  |   88 ++
+ backend/cpp/llama-cpp/grpc-server.cpp         |   57 +-
+ .../0011-server-context-on-demand.patch       | 1315 +++++++++++++++++
  backend/cpp/llama-cpp/prepare.sh              |    4 +
- 6 files changed, 1405 insertions(+), 10 deletions(-)
+ 6 files changed, 1600 insertions(+), 10 deletions(-)
  create mode 100644 backend/cpp/llama-cpp/context_on_demand.h
  create mode 100644 backend/cpp/llama-cpp/context_on_demand_test.cpp
  create mode 100644 backend/cpp/llama-cpp/patches/0011-server-context-on-demand.patch
@@ -74,10 +84,10 @@ index 65327a5..cf90806 100644
      target_compile_features(parallel_params_test PRIVATE cxx_std_17)
 diff --git a/backend/cpp/llama-cpp/context_on_demand.h b/backend/cpp/llama-cpp/context_on_demand.h
 new file mode 100644
-index 0000000..f26b948
+index 0000000..2fed6a2
 --- /dev/null
 +++ b/backend/cpp/llama-cpp/context_on_demand.h
-@@ -0,0 +1,89 @@
+@@ -0,0 +1,141 @@
 +// SPDX-License-Identifier: MIT
 +
 +#pragma once
@@ -166,20 +176,74 @@ index 0000000..f26b948
 +    }
 +}
 +
++// context_on_demand_of reads the switch from the server's params; false for a
++// llama.cpp without the feature.
++template <typename Params>
++bool context_on_demand_of(const Params & params) {
++    if constexpr (has_context_on_demand<Params>::value) {
++        return params.context_on_demand;
++    } else {
++        (void) params;
++        return false;
++    }
++}
++
++template <typename T, typename = void>
++struct has_t_ctx_create_us : std::false_type {};
++template <typename T>
++struct has_t_ctx_create_us<T, std::void_t<decltype(std::declval<T &>().t_ctx_create_us)>> : std::true_type {};
++
++// ctx_create_us_of reads from a task's result the microseconds it took to
++// create the context for that task; negative when the context was already
++// there, or when this llama.cpp does not say.
++template <typename Result>
++int64_t ctx_create_us_of(const Result & result) {
++    if constexpr (has_t_ctx_create_us<Result>::value) {
++        return result.t_ctx_create_us;
++    } else {
++        (void) result;
++        return -1;
++    }
++}
++
++// The trailing metadata key under which an answer of a model loaded with
++// context_on_demand says whether the context was created for that call: the
++// microseconds its creation took, or -1 when the context was already there.
++// It is the backend's own word, per call, for whoever counts creations (a
++// caller cannot tell one from its own clock: the context may have been kept
++// for another caller's request).
++inline constexpr const char * CONTEXT_CREATED_TRAILER = "llama-context-created-us";
++
++// context_created_us folds the results of one call: the sum of the creations
++// its tasks paid for, or -1 when none did.
++template <typename Results>
++int64_t context_created_us(const Results & results) {
++    int64_t total = -1;
++    for (const auto & result : results) {
++        const int64_t us = ctx_create_us_of(*result);
++        if (us >= 0) {
++            total = (total < 0 ? 0 : total) + us;
++        }
++    }
++    return total;
++}
++
 +} // namespace llama_grpc
 diff --git a/backend/cpp/llama-cpp/context_on_demand_test.cpp b/backend/cpp/llama-cpp/context_on_demand_test.cpp
 new file mode 100644
-index 0000000..c24be4c
+index 0000000..602d2e5
 --- /dev/null
 +++ b/backend/cpp/llama-cpp/context_on_demand_test.cpp
-@@ -0,0 +1,62 @@
+@@ -0,0 +1,88 @@
 +// SPDX-License-Identifier: MIT
 +
 +#include "context_on_demand.h"
 +
 +#include <cstdio>
 +#include <map>
++#include <memory>
 +#include <string>
++#include <vector>
 +
 +#define CHECK(cond)                                                          \
 +    do {                                                                     \
@@ -193,6 +257,8 @@ index 0000000..c24be4c
 +
 +struct params_with    { int32_t keep_context_ms = -1; bool context_on_demand = false; };
 +struct params_without { int unrelated = 0; };
++struct result_with    { int64_t t_ctx_create_us = -1; };
++struct result_without { int unrelated = 0; };
 +
 +} // namespace
 +
@@ -232,11 +298,33 @@ index 0000000..c24be4c
 +    params_without without;
 +    CHECK(!set_keep_context_ms(without, 20));
 +    CHECK(!set_context_on_demand(without, true));
++    CHECK(context_on_demand_of(with));
++    CHECK(!context_on_demand_of(without));
++
++    // a result says when the context was created for its task
++    result_with created;
++    created.t_ctx_create_us = 1500;
++    CHECK(ctx_create_us_of(created) == 1500);
++    CHECK(ctx_create_us_of(result_with()) == -1);
++    CHECK(ctx_create_us_of(result_without()) == -1);
++
++    // a call's results: the creations its tasks paid for, -1 when none did
++    std::vector<std::unique_ptr<result_with>> results;
++    results.push_back(std::make_unique<result_with>());
++    results.push_back(std::make_unique<result_with>());
++    CHECK(context_created_us(results) == -1);
++    results[1]->t_ctx_create_us = 0;
++    CHECK(context_created_us(results) == 0);
++    results[0]->t_ctx_create_us = 1500;
++    CHECK(context_created_us(results) == 1500);
++    std::vector<std::unique_ptr<result_without>> silent;
++    silent.push_back(std::make_unique<result_without>());
++    CHECK(context_created_us(silent) == -1);
 +
 +    return 0;
 +}
 diff --git a/backend/cpp/llama-cpp/grpc-server.cpp b/backend/cpp/llama-cpp/grpc-server.cpp
-index a90c179..20ee453 100644
+index a90c179..320d1c2 100644
 --- a/backend/cpp/llama-cpp/grpc-server.cpp
 +++ b/backend/cpp/llama-cpp/grpc-server.cpp
 @@ -75,6 +75,7 @@
@@ -299,7 +387,26 @@ index a90c179..20ee453 100644
          } else if (!strcmp(optname, "fit_params") || !strcmp(optname, "fit")) {
              if (optval_str == "true" || optval_str == "1" || optval_str == "yes" || optval_str == "on" || optval_str == "enabled") {
                  params.fit_params = true;
-@@ -2591,7 +2610,7 @@ public:
+@@ -2334,6 +2353,10 @@ private:
+     // distributed route is rejected instead of answered from the wrong model
+     // (#10952). Written under LoadModel, read by the inference RPCs.
+     std::string loaded_model_identity;
++    // The pooling type of the loaded model's context, read once at the load:
++    // it does not change, and the context it was read from may be gone
++    // between two requests (context_on_demand). Written under LoadModel.
++    enum llama_pooling_type loaded_pooling_type = LLAMA_POOLING_TYPE_UNSPECIFIED;
+ 
+ public:
+     BackendServiceImpl(server_context& ctx) : ctx_server(ctx) {}
+@@ -2505,6 +2528,7 @@ public:
+         result->set_success(true);
+         loaded_model = true;
+         loaded_model_identity = request->model();
++        loaded_pooling_type = ctx_server.get_meta().pooling_type;
+         // Store copy of params_base for use in parse_options and other methods
+         params_base = params;
+ 
+@@ -2591,7 +2615,7 @@ public:
          if (params_base.model.path.empty()) {
              return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION, "Model not loaded");
          }
@@ -308,7 +415,7 @@ index a90c179..20ee453 100644
  
  
          //Raise error if embeddings is set to true
-@@ -2996,6 +3015,8 @@ public:
+@@ -2996,6 +3020,8 @@ public:
                  task.apply_chat_session(chat_session);
  #endif
                  task.id_slot = json_value(data, "id_slot", -1);
@@ -317,7 +424,7 @@ index a90c179..20ee453 100644
  
                  // OAI-compat: enable autoparser (PEG-based chat parsing) so that
                  // reasoning, tool calls, and content are classified into ChatDeltas.
-@@ -3194,7 +3215,7 @@ public:
+@@ -3194,7 +3220,7 @@ public:
           if (params_base.model.path.empty()) {
               return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION, "Model not loaded");
           }
@@ -326,7 +433,7 @@ index a90c179..20ee453 100644
  
          data["stream"] = false;
          //Raise error if embeddings is set to true
-@@ -3601,6 +3622,8 @@ public:
+@@ -3601,6 +3627,8 @@ public:
                  task.apply_chat_session(chat_session);
  #endif
                  task.id_slot = json_value(data, "id_slot", -1);
@@ -335,7 +442,7 @@ index a90c179..20ee453 100644
  
                  // OAI-compat: enable autoparser (PEG-based chat parsing) so that
                  // reasoning, tool calls, and content are classified into ChatDeltas.
-@@ -3748,7 +3771,7 @@ public:
+@@ -3748,7 +3776,7 @@ public:
          if (params_base.model.path.empty()) {
              return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION, "Model not loaded");
          }
@@ -344,7 +451,7 @@ index a90c179..20ee453 100644
  
          body["stream"] = false;
  
-@@ -3801,6 +3824,8 @@ public:
+@@ -3801,6 +3829,8 @@ public:
  
                  task.params.res_type = TASK_RESPONSE_TYPE_NONE;
                  task.params.embd_normalize = embd_normalize;
@@ -353,16 +460,26 @@ index a90c179..20ee453 100644
                  tasks.push_back(std::move(task));
              }
  
-@@ -3845,7 +3870,7 @@ public:
+@@ -3845,10 +3875,17 @@ public:
          embeddingResult->set_dim(dim);
          embeddingResult->set_prompt_tokens(prompt_tokens);
          embeddingResult->set_layout(
 -            llama_pooling_type(ctx_server.get_llama_context()) == LLAMA_POOLING_TYPE_NONE
-+            ctx_server.get_meta().pooling_type == LLAMA_POOLING_TYPE_NONE
++            loaded_pooling_type == LLAMA_POOLING_TYPE_NONE
                  ? backend::EMBEDDING_LAYOUT_PER_TOKEN
                  : backend::EMBEDDING_LAYOUT_FINAL);
  
-@@ -4583,7 +4608,7 @@ public:
++        // context on demand: the answer says whether the context was created
++        // for this call (context_on_demand.h, CONTEXT_CREATED_TRAILER)
++        if (llama_grpc::context_on_demand_of(params_base)) {
++            context->AddTrailingMetadata(llama_grpc::CONTEXT_CREATED_TRAILER,
++                                         std::to_string(llama_grpc::context_created_us(all_results.results)));
++        }
++
+         std::cout << "[DEBUG] Embedding vectors: " << n_vectors << " x " << dim << std::endl;
+ 
+         return grpc::Status::OK;
+@@ -4583,7 +4620,7 @@ public:
          if (params_base.model.path.empty()) {
              return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION, "Model not loaded");
          }
@@ -371,7 +488,7 @@ index a90c179..20ee453 100644
          body["stream"] = false;
  
          json tokens_response = json::array();
-@@ -4594,7 +4619,7 @@ public:
+@@ -4594,7 +4631,7 @@ public:
  
  
              for (const auto& token : tokens) {
@@ -380,7 +497,7 @@ index a90c179..20ee453 100644
                  response->add_tokens(token);
              }
          }
-@@ -4762,7 +4787,7 @@ public:
+@@ -4762,7 +4799,7 @@ public:
  
          std::string content;
          for (const auto token : request->tokens()) {
@@ -391,10 +508,10 @@ index a90c179..20ee453 100644
          return grpc::Status::OK;
 diff --git a/backend/cpp/llama-cpp/patches/0011-server-context-on-demand.patch b/backend/cpp/llama-cpp/patches/0011-server-context-on-demand.patch
 new file mode 100644
-index 0000000..bf43a44
+index 0000000..b2d006d
 --- /dev/null
 +++ b/backend/cpp/llama-cpp/patches/0011-server-context-on-demand.patch
-@@ -0,0 +1,1210 @@
+@@ -0,0 +1,1315 @@
 +server: context on demand - the model stays loaded, a request gives its context back
 +
 +A loaded model holds its weights and its context: the KV cache and the
@@ -413,15 +530,20 @@ index 0000000..bf43a44
 +
 +- common: common_init_result::free_context() / init_context() and
 +  common_init_context_from_params(): the context is created again from the
-+  context params of the first creation (no fitting again), its adapters
-+  applied and its warmup run as common_init_from_params() does - that part
-+  is now common_init_context_apply(), shared by both.
++  context params of the first creation (no fitting again), then the steps
++  common_init_from_params() runs after a creation, in the order they have
++  there (control vectors, the check of a reranking model, lora adapters,
++  warmup) - that part is now common_init_context_apply(), shared by both.
++  The load returns a context one of these steps stopped on, as before; a
++  later creation that stops on one is refused.
 +- server_queue::on_idle(): a callback run by the start_loop() thread each
-+  time it finds no task; it returns when it wants to be called again, and
-+  the wait ends then instead of at the next one-second check.
++  time it finds no task, without the queue's lock (it may free the
++  context, and tasks are posted meanwhile); it returns when it wants to be
++  called again, and the wait ends then instead of at the next one-second
++  check.
 +- server_context: only the start_loop() thread creates and frees the
-+  context. process_single_task() creates it for a task that needs one
-+  (context_acquire); a creation that fails is answered with 503
++  context. With the option on, process_single_task() creates it for a task
++  that needs one (context_acquire); a creation that fails is answered with 503
 +  `unavailable_error` and the server stays up, where a failed reload after
 +  --sleep-idle-seconds aborts. A slot's release reads its task's keep
 +  (context_keep): none, and the context is held; one, and the deadline is
@@ -437,6 +559,12 @@ index 0000000..bf43a44
 +  context loaded).
 +- /metrics: context_loaded, context_creations_total,
 +  context_creation_seconds_total.
++- a task's results say when the context was created for it, and how long
++  that took (server_task_result::t_ctx_create_us, negative when the context
++  was there): the server's own word per request, for a client that counts
++  creations - it cannot tell one from its own clock, since the context may
++  have been kept for another client's request. /embedding's results carry
++  it as `context_create_ms`.
 +- refused at load with speculative decoding or a multimodal projector, whose
 +  contexts are bound to the model's.
 +
@@ -450,7 +578,9 @@ index 0000000..bf43a44
 +the same completion and the same embedding, value for value, across
 +creations; the cached prompt reused within a keep and gone after it; a
 +creation refused with 503, then served; eight concurrent requests; /slots
-+listed without a context; together with --sleep-idle-seconds. With the option
++listed without a context; together with --sleep-idle-seconds; a result says
++when the context was created for it, one result of a batch, none without the
++option. With the option
 +off the existing suites give the same results as before the patch
 +(test_sleep, test_basic, test_metrics, test_slot_save, test_embedding,
 +test_completion, test_tokenize, test_ctx_shift, test_kv_keep_only_active).
@@ -487,7 +617,7 @@ index 0000000..bf43a44
 +         {"--simple-io"},
 +         "use basic IO for better compatibility in subprocesses and limited consoles",
 +diff --git a/common/common.cpp b/common/common.cpp
-+index 29d2d20..aed3dc1 100644
++index 29d2d20..fedcb8e 100644
 +--- a/common/common.cpp
 ++++ b/common/common.cpp
 +@@ -1178,6 +1178,10 @@ struct common_init_result::impl {
@@ -536,7 +666,7 @@ index 0000000..bf43a44
 + common_sampler * common_init_result::sampler(llama_seq_id seq_id) {
 +     if (seq_id < 0 || seq_id >= (int) pimpl->samplers.size()) {
 +         return nullptr;
-+@@ -1454,39 +1479,20 @@ static void common_batch_set_zero_state(common_batch & batch, const llama_model
++@@ -1454,39 +1479,22 @@ static void common_batch_set_zero_state(common_batch & batch, const llama_model
 +     }
 + }
 + 
@@ -558,7 +688,9 @@ index 0000000..bf43a44
 +-        COM_ERR("failed to create context with model '%s'\n", params.model.path.c_str());
 +-        return res;
 +-    }
-++// apply the adapters and run the warmup on a newly created context
+++// the steps that follow the creation of a context: the control vectors, the check of a reranking
+++// model, the lora adapters, the warmup
+++// returns false if it stopped before the end
 ++static bool common_init_context_apply(common_init_result & res, common_params & params) {
 ++    llama_model   * model = res.model();
 ++    llama_context * lctx  = res.context();
@@ -581,47 +713,32 @@ index 0000000..bf43a44
 +         }
 + 
 +         int err = llama_set_adapter_cvec(
-+@@ -1497,31 +1503,7 @@ common_init_result_ptr common_init_from_params(common_params & params, bool mode
++@@ -1497,7 +1505,7 @@ common_init_result_ptr common_init_from_params(common_params & params, bool mode
 +                 params.control_vector_layer_start,
 +                 params.control_vector_layer_end);
 +         if (err) {
-+-            return res;
-+-        }
-+-    }
-+-
-+-    if (llama_pooling_type(lctx) == LLAMA_POOLING_TYPE_RANK) {
-+-        bool ok = true;
-+-
-+-        if (llama_vocab_bos(vocab) == LLAMA_TOKEN_NULL) {
-+-            COM_WRN("%s", "vocab does not have a  BOS token, reranking will not work\n");
-+-            ok = false;
-+-        }
-+-
-+-        bool has_eos = llama_vocab_eos(vocab) != LLAMA_TOKEN_NULL;
-+-        bool has_sep = llama_vocab_sep(vocab) != LLAMA_TOKEN_NULL;
-+-        bool has_rerank_prompt = llama_model_chat_template(model, "rerank") != NULL;
-+-
-+-        if (!has_eos && !has_sep && !has_rerank_prompt) {
-+-            COM_WRN("%s", "vocab does not have an EOS token, SEP token, or rerank prompt. Reranking will not work\n");
-+-            ok = false;
-+-        } else if (!has_eos) {
-+-            COM_WRN("%s", "vocab does not have an EOS token, using SEP token as fallback\n");
-+-        }
-+-
-+-        if (!ok) {
 +-            return res;
 ++            return false;
 +         }
 +     }
 + 
-+@@ -1569,12 +1551,82 @@ common_init_result_ptr common_init_from_params(common_params & params, bool mode
++@@ -1521,7 +1529,7 @@ common_init_result_ptr common_init_from_params(common_params & params, bool mode
++         }
++ 
++         if (!ok) {
++-            return res;
+++            return false;
++         }
++     }
++ 
++@@ -1569,12 +1577,55 @@ common_init_result_ptr common_init_from_params(common_params & params, bool mode
 +         llama_perf_context_reset(lctx);
 + 
 +         // reset samplers to reset RNG state after warmup to the seeded state
 +-        res->reset_samplers();
 ++        res.reset_samplers();
-++    }
-++
++     }
++ 
 ++    return true;
 ++}
 ++
@@ -644,41 +761,14 @@ index 0000000..bf43a44
 ++        return res;
 ++    }
 ++
-++    const llama_vocab * vocab = llama_model_get_vocab(model);
-++
 ++    if (params.ctx_shift && !llama_memory_can_shift(llama_get_memory(lctx))) {
 ++        COM_WRN("%s", "KV cache shifting is not supported for this context, disabling KV cache shifting\n");
 ++        params.ctx_shift = false;
 ++    }
 ++
-++    if (llama_pooling_type(lctx) == LLAMA_POOLING_TYPE_RANK) {
-++        bool ok = true;
+++    // as before, a context whose adapters could not be applied is returned as it is
+++    common_init_context_apply(*res, params);
 ++
-++        if (llama_vocab_bos(vocab) == LLAMA_TOKEN_NULL) {
-++            COM_WRN("%s", "vocab does not have a  BOS token, reranking will not work\n");
-++            ok = false;
-++        }
-++
-++        bool has_eos = llama_vocab_eos(vocab) != LLAMA_TOKEN_NULL;
-++        bool has_sep = llama_vocab_sep(vocab) != LLAMA_TOKEN_NULL;
-++        bool has_rerank_prompt = llama_model_chat_template(model, "rerank") != NULL;
-++
-++        if (!has_eos && !has_sep && !has_rerank_prompt) {
-++            COM_WRN("%s", "vocab does not have an EOS token, SEP token, or rerank prompt. Reranking will not work\n");
-++            ok = false;
-++        } else if (!has_eos) {
-++            COM_WRN("%s", "vocab does not have an EOS token, using SEP token as fallback\n");
-++        }
-++
-++        if (!ok) {
-++            return res;
-++        }
-++    }
-++
-++    if (!common_init_context_apply(*res, params)) {
-++        return res;
-+     }
-+ 
 +     return res;
 + }
 + 
@@ -698,7 +788,7 @@ index 0000000..bf43a44
 + common_init_result::~common_init_result() = default;
 + 
 + std::string common_get_model_endpoint() {
-+@@ -1862,6 +1914,12 @@ void common_threadpools::init(llama_context * ctx, const common_params & params)
++@@ -1862,6 +1913,12 @@ void common_threadpools::init(llama_context * ctx, const common_params & params)
 +     llama_attach_threadpool(ctx, threadpool, threadpool_batch);
 + }
 + 
@@ -712,7 +802,7 @@ index 0000000..bf43a44
 + // Vocab utils
 + //
 +diff --git a/common/common.h b/common/common.h
-+index e2bc8c5..5342d74 100644
++index e2bc8c5..0f5a337 100644
 +--- a/common/common.h
 ++++ b/common/common.h
 +@@ -670,6 +670,8 @@ struct common_params {
@@ -737,19 +827,21 @@ index 0000000..bf43a44
 +     common_sampler * sampler(llama_seq_id seq_id);
 +     void reset_samplers();
 + 
-+@@ -1019,6 +1027,11 @@ using common_init_result_ptr = std::unique_ptr<common_init_result>;
++@@ -1019,6 +1027,13 @@ using common_init_result_ptr = std::unique_ptr<common_init_result>;
 + 
 + common_init_result_ptr common_init_from_params(common_params & params, bool model_only = false);
 + 
 ++// create again the context of a result that gave it up with free_context(), as common_init_from_params()
-++// made it: the same context params (no fitting), the adapters applied, the warmup run
-++// returns false, leaving the result without a context, on failure
+++// made it: the same context params (no fitting), then the same steps in the same order (control vectors,
+++// lora adapters, warmup)
+++// returns false, leaving the result without a context, if it cannot be created or if one of the steps
+++// did not complete
 ++bool common_init_context_from_params(common_init_result & res, common_params & params);
 ++
 + struct llama_model_params   common_model_params_to_llama  (      common_params & params);
 + struct llama_context_params common_context_params_to_llama(const common_params & params);
 + 
-+@@ -1049,6 +1062,9 @@ struct common_threadpools {
++@@ -1049,6 +1064,9 @@ struct common_threadpools {
 + 
 +     void init(llama_context * ctx, const common_params & params);
 + 
@@ -760,7 +852,7 @@ index 0000000..bf43a44
 +     ggml_threadpool * threadpool       = nullptr;
 +     ggml_threadpool * threadpool_batch = nullptr;
 +diff --git a/tools/server/README.md b/tools/server/README.md
-+index 66a34ff..784b5a3 100644
++index 66a34ff..0b901e0 100644
 +--- a/tools/server/README.md
 ++++ b/tools/server/README.md
 +@@ -246,6 +246,8 @@ For the full list of features, please refer to [server's changelog](https://gith
@@ -781,7 +873,7 @@ index 0000000..bf43a44
 + `cache_prompt`: Re-use KV cache from a previous request if possible. This way the common prefix does not have to be re-processed, only the suffix that differs between the requests. Because (depending on the backend) the logits are **not** guaranteed to be bit-for-bit identical for different batch sizes (prompt processing vs. token generation) enabling this option can cause nondeterministic results. Default: `true`
 + 
 + `return_tokens`: Return the raw generated token ids in the `tokens` field. Otherwise `tokens` remains empty. Default: `false`
-+@@ -2561,6 +2565,29 @@ Note that the following endpoints are exempt from being considered as incoming t
++@@ -2561,6 +2565,31 @@ Note that the following endpoints are exempt from being considered as incoming t
 + - `GET /models`
 + - `GET /metrics`
 + 
@@ -808,6 +900,8 @@ index 0000000..bf43a44
 ++
 ++`GET /metrics` reports `llamacpp:context_loaded` (1 while the context exists), `llamacpp:context_creations_total` and `llamacpp:context_creation_seconds_total`.
 ++
+++A result of `/embedding` (the non-OpenAI route, which returns its results as they are) carries `context_create_ms` when the context was created for it: the time its creation took.
+++
 + ## More examples
 + 
 + ### Interactive mode
@@ -828,7 +922,7 @@ index 0000000..bf43a44
 +         t_start = ggml_time_us();
 +     }
 +diff --git a/tools/server/server-context.cpp b/tools/server/server-context.cpp
-+index f11c533..d99edaf 100644
++index f11c533..e4bbb9f 100644
 +--- a/tools/server/server-context.cpp
 ++++ b/tools/server/server-context.cpp
 +@@ -1164,6 +1164,7 @@ private:
@@ -839,7 +933,7 @@ index 0000000..bf43a44
 + 
 +     int n_empty_consecutive = 0;
 + 
-+@@ -1188,8 +1189,151 @@ private:
++@@ -1188,8 +1189,153 @@ private:
 + 
 +     bool sleeping = false;
 + 
@@ -851,6 +945,7 @@ index 0000000..bf43a44
 ++    // only the start_loop() thread creates and frees it, see context_acquire() / context_idle()
 ++    int64_t t_ctx_keep_until = 0;     // ms, the latest deadline asked by a finished task
 ++    int64_t t_ctx_created    = 0;     // ms
+++    int64_t t_ctx_create_us  = 0;     // us, the time the last creation took
 ++    bool    ctx_hold         = false; // the last task to finish carried no keep
 ++
 ++    // properties of the context that outlive it, read when there is none
@@ -937,8 +1032,9 @@ index 0000000..bf43a44
 ++
 ++        const int64_t t_create = ggml_time_us() - t_start;
 ++
-++        t_ctx_created = ggml_time_ms();
-++        ctx_hold      = false; // the task this context is created for decides, when it is done
+++        t_ctx_created   = ggml_time_ms();
+++        t_ctx_create_us = t_create;
+++        ctx_hold        = false; // the task this context is created for decides, when it is done
 ++
 ++        metrics.ctx_loaded       = true;
 ++        metrics.n_ctx_create    += 1;
@@ -991,7 +1087,7 @@ index 0000000..bf43a44
 +     void destroy() {
 +         spec.reset();
 +         spec_init.reset();
-+@@ -1277,6 +1421,12 @@ private:
++@@ -1277,6 +1423,12 @@ private:
 +                                         COMMON_SPECULATIVE_TYPE_DRAFT_MTP) != params_base.speculative.types.end();
 +         const bool has_spec = has_draft || spec_mtp;
 + 
@@ -1004,7 +1100,7 @@ index 0000000..bf43a44
 +         if (callback_state) {
 +             std::vector<std::string> stages = {"text_model"};
 +             if (has_spec) {
-+@@ -1400,6 +1550,17 @@ private:
++@@ -1400,6 +1552,17 @@ private:
 + 
 +         n_ctx = llama_n_ctx(ctx_tgt);
 + 
@@ -1022,7 +1118,7 @@ index 0000000..bf43a44
 +         add_bos_token = llama_vocab_get_add_bos(vocab);
 + 
 +         if (has_spec) {
-+@@ -1629,6 +1790,9 @@ private:
++@@ -1629,6 +1792,9 @@ private:
 +                 if (slot.stats.n_gen > 0) {
 +                     metrics_on_prediction(slot);
 +                 }
@@ -1032,7 +1128,7 @@ index 0000000..bf43a44
 +             };
 + 
 +             slot.reset();
-+@@ -1661,6 +1825,15 @@ private:
++@@ -1661,6 +1827,15 @@ private:
 +             }
 +         }
 + 
@@ -1048,7 +1144,7 @@ index 0000000..bf43a44
 +         // the update_slots() logic will always submit a maximum of n_batch or n_parallel tokens
 +         // note that n_batch can be > n_ctx (e.g. for non-causal attention models such as BERT where the KV cache is not used)
 +         {
-+@@ -1742,6 +1915,17 @@ private:
++@@ -1742,6 +1917,17 @@ private:
 +         queue_tasks.on_sleeping_state([this](bool sleeping) {
 +             handle_sleeping_state(sleeping);
 +         });
@@ -1066,22 +1162,52 @@ index 0000000..bf43a44
 + 
 +         metrics.init();
 + 
-+@@ -3455,6 +3639,14 @@ private:
++@@ -2635,7 +2821,8 @@ private:
++         res->id      = slot.task->id;
++         res->id_slot = slot.id;
++ 
++-        res->index = slot.task->index;
+++        res->index           = slot.task->index;
+++        res->t_ctx_create_us = slot.task->t_ctx_create_us;
++ 
++         // keep copy of last generated text for debugging purposes
++         if (slots_debug) {
++@@ -2699,6 +2886,8 @@ private:
++         res->n_tokens  = slot.task->n_tokens();
++         res->res_type  = slot.task->params.res_type;
++ 
+++        res->t_ctx_create_us = slot.task->t_ctx_create_us;
+++
++         const int n_embd_out = llama_model_n_embd_out(model_tgt);
++ 
++         std::vector<float> embd_res(n_embd_out, 0.0f);
++@@ -2831,6 +3020,8 @@ private:
++         res->index    = slot.task->index;
++         res->n_tokens = slot.task->n_tokens();
++ 
+++        res->t_ctx_create_us = slot.task->t_ctx_create_us;
+++
++         for (int i = 0; i < batch.size(); ++i) {
++             if (!batch.tokens[i].output || batch.tokens[i].seq_id != slot.id) {
++                 continue;
++@@ -3455,6 +3646,16 @@ private:
 +             return false;
 +         }
 + 
-++        if (ctx_tgt == nullptr && task_needs_context(task.type)) {
-++            // context on demand: only the model is loaded, create its context for this task
+++        if (params_base.context_on_demand && ctx_tgt == nullptr && task_needs_context(task.type)) {
+++            // only the model is loaded, create its context for this task
 ++            if (!context_acquire()) {
 ++                send_error(task, "the context cannot be created now, the memory it needs may be in use: try again later", ERROR_TYPE_UNAVAILABLE);
 ++                return true;
 ++            }
+++            // its results say so, see server_task_result::t_ctx_create_us
+++            task.t_ctx_create_us = t_ctx_create_us;
 ++        }
 ++
 +         switch (task.type) {
 +             case SERVER_TASK_TYPE_COMPLETION:
 +             case SERVER_TASK_TYPE_INFILL:
-+@@ -5139,6 +5331,9 @@ private:
++@@ -5139,6 +5340,9 @@ private:
 +     // see https://github.com/ggml-org/llama.cpp/pull/29969
 +     // TODO @ngxson : maybe remove this once we use "mixed" batch everywhere
 +     bool use_mixed_batch() const {
@@ -1091,7 +1217,7 @@ index 0000000..bf43a44
 +         return !llama_get_memory(ctx_tgt) || !llama_get_causal_attn(ctx_tgt);
 +     }
 + 
-+@@ -5631,7 +5826,7 @@ private:
++@@ -5631,7 +5835,7 @@ private:
 + 
 +     // context size of a single slot, capped by --kv-unified-per-slot and by the training context of the model
 +     int n_ctx_slot() const {
@@ -1100,7 +1226,7 @@ index 0000000..bf43a44
 + 
 +         if (params_base.kv_unified_per_slot > 0) {
 +             res = std::min(res, params_base.kv_unified_per_slot);
-+@@ -5728,7 +5923,9 @@ private:
++@@ -5728,7 +5932,9 @@ private:
 +             return;
 +         }
 + 
@@ -1111,7 +1237,7 @@ index 0000000..bf43a44
 +         metrics_flush_prompt();
 +     }
 + 
-+@@ -5787,8 +5984,9 @@ server_response_reader server_context::get_response_reader() {
++@@ -5787,8 +5993,9 @@ server_response_reader server_context::get_response_reader() {
 + server_context_meta server_context::get_meta() const {
 +     auto bos_id = llama_vocab_bos(impl->vocab);
 +     auto eos_id = llama_vocab_eos(impl->vocab);
@@ -1123,7 +1249,7 @@ index 0000000..bf43a44
 + 
 +     const char * ftype_name = llama_ftype_name(llama_model_ftype(impl->model_tgt));
 + 
-+@@ -5808,7 +6006,7 @@ server_context_meta server_context::get_meta() const {
++@@ -5808,7 +6015,7 @@ server_context_meta server_context::get_meta() const {
 +         /* has_audio_stream        */ impl->mtmd_cap.audio_stream,
 +         /* json_ui_settings        */ impl->json_ui_settings,
 +         /* slot_n_ctx              */ impl->n_ctx_slot(),
@@ -1132,7 +1258,7 @@ index 0000000..bf43a44
 + 
 +         /* chat_params             */ impl->chat_params,
 +         /* chat_template_caps      */ common_chat_templates_get_caps(impl->chat_params.tmpls.get()),
-+@@ -5931,6 +6129,8 @@ std::unique_ptr<server_res_generator> server_routes::handle_completions_impl(
++@@ -5931,6 +6138,8 @@ std::unique_ptr<server_res_generator> server_routes::handle_completions_impl(
 + 
 +             task.apply_chat_session(chat_session);
 + 
@@ -1141,7 +1267,7 @@ index 0000000..bf43a44
 +             task.id_slot = json_value(data, "id_slot", -1);
 +             sse_ping_interval = task.params.sse_ping_interval;
 + 
-+@@ -7508,6 +7708,8 @@ std::unique_ptr<server_res_generator> server_routes::handle_embeddings_impl(cons
++@@ -7508,6 +7717,8 @@ std::unique_ptr<server_res_generator> server_routes::handle_embeddings_impl(cons
 +             task.params.res_type = res_type;
 +             task.params.embd_normalize = embd_normalize;
 + 
@@ -1150,7 +1276,7 @@ index 0000000..bf43a44
 +             tasks.push_back(std::move(task));
 +         }
 +         rd.post_tasks(std::move(tasks));
-+@@ -7651,6 +7853,7 @@ std::unique_ptr<server_res_generator> server_routes::handle_rerank_impl(const se
++@@ -7651,6 +7862,7 @@ std::unique_ptr<server_res_generator> server_routes::handle_rerank_impl(const se
 +             server_task task = server_task(SERVER_TASK_TYPE_RERANK);
 +             task.id     = rd.get_new_id();
 +             task.tokens = std::move(tmp);
@@ -1171,18 +1297,22 @@ index 0000000..bf43a44
 +     llama_context * get_llama_context() const;
 + 
 +diff --git a/tools/server/server-queue.cpp b/tools/server/server-queue.cpp
-+index c4ce907..cbf2a4d 100644
++index c4ce907..3d2cf09 100644
 +--- a/tools/server/server-queue.cpp
 ++++ b/tools/server/server-queue.cpp
-+@@ -351,7 +351,15 @@ void server_queue::start_loop(int64_t idle_sleep_ms) {
++@@ -351,7 +351,19 @@ void server_queue::start_loop(int64_t idle_sleep_ms) {
 +                 break; // process new tasks
 +             } else {
 +                 // wait for new tasks or timeout for checking sleeping condition
 +-                bool res = condition_tasks.wait_for(lock, max_wait_time, [&]{
 ++                auto wait_time = std::chrono::duration_cast<std::chrono::milliseconds>(max_wait_time);
 ++                if (callback_idle) {
-++                    // the idle callback may ask to be called again sooner
+++                    // called without the lock: it may take a while (it may free the context), and
+++                    // tasks can be posted meanwhile. wait_for() checks the queue before it waits
+++                    lock.unlock();
 ++                    const int64_t next_ms = callback_idle();
+++                    lock.lock();
+++                    // the idle callback may ask to be called again sooner
 ++                    if (next_ms >= 0) {
 ++                        wait_time = std::min(wait_time, std::chrono::milliseconds(std::max<int64_t>(next_ms, 1)));
 ++                    }
@@ -1192,7 +1322,7 @@ index 0000000..bf43a44
 +                 });
 +                 if (res) {
 +diff --git a/tools/server/server-queue.h b/tools/server/server-queue.h
-+index 692255e..e384d4b 100644
++index 692255e..dc31d5a 100644
 +--- a/tools/server/server-queue.h
 ++++ b/tools/server/server-queue.h
 +@@ -45,6 +45,7 @@ private:
@@ -1209,7 +1339,7 @@ index 0000000..bf43a44
 + 
 ++    // Register callback called by the start_loop() thread each time it finds no task to process
 ++    // it returns the time in milliseconds after which it wants to be called again, negative if it does not
-++    // note: caller will hold mutex_tasks while calling the callback
+++    // note: unlike the other callbacks, it is called without mutex_tasks held
 ++    void on_idle(std::function<int64_t(void)> callback) {
 ++        callback_idle = std::move(callback);
 ++    }
@@ -1218,10 +1348,27 @@ index 0000000..bf43a44
 +     void cleanup_pending_task(int id_target);
 + 
 +diff --git a/tools/server/server-task.cpp b/tools/server/server-task.cpp
-+index 1a0d434..8bc3db8 100644
++index 1a0d434..2248dab 100644
 +--- a/tools/server/server-task.cpp
 ++++ b/tools/server/server-task.cpp
-+@@ -1607,6 +1607,14 @@ std::string server_task_result_metrics::to_metrics() {
++@@ -1483,10 +1483,15 @@ json server_task_result_embd::to_json() {
++ }
++ 
++ json server_task_result_embd::to_json_non_oaicompat() {
++-    return json {
+++    json res = json {
++         {"index",     index},
++         {"embedding", embedding},
++     };
+++    if (t_ctx_create_us >= 0) {
+++        // context on demand: the context was created for this task
+++        res["context_create_ms"] = t_ctx_create_us / 1e3;
+++    }
+++    return res;
++ }
++ 
++ json server_task_result_embd::to_json_oaicompat() {
++@@ -1607,6 +1612,14 @@ std::string server_task_result_metrics::to_metrics() {
 +             "spec_decode_num_drafts_total",
 +             "Speculative: Total speculative decoding verification steps",
 +             (double) metrics.n_draft_verif_steps
@@ -1236,7 +1383,7 @@ index 0000000..bf43a44
 +         },
 +     };
 + 
-+@@ -1631,6 +1639,10 @@ std::string server_task_result_metrics::to_metrics() {
++@@ -1631,6 +1644,10 @@ std::string server_task_result_metrics::to_metrics() {
 +             "n_busy_slots_per_decode",
 +             "Average number of busy slots per llama_decode() call",
 +             (double) metrics.n_busy_slots / std::max((double) metrics.n_decode, 1.0)
@@ -1248,7 +1395,7 @@ index 0000000..bf43a44
 +     };
 + 
 +diff --git a/tools/server/server-task.h b/tools/server/server-task.h
-+index eb857c9..5d31d3d 100644
++index eb857c9..c868311 100644
 +--- a/tools/server/server-task.h
 ++++ b/tools/server/server-task.h
 +@@ -96,6 +96,9 @@ struct task_params {
@@ -1261,12 +1408,32 @@ index 0000000..bf43a44
 +     int32_t n_keep    =  0; // number of tokens to keep from initial prompt
 +     int32_t n_discard =  0; // number of tokens after n_keep that may be discarded when shifting context, 0 defaults to half
 +     int32_t n_predict = -1; // new tokens to predict
++@@ -179,6 +182,9 @@ struct task_result_state {
++ struct server_task {
++     int id = -1; // to be filled by server_queue
++ 
+++    // context on demand: the time it took to create the context for this task, negative if it was there
+++    int64_t t_ctx_create_us = -1;
+++
++     // TODO @ngxson : remove this field and implement a mapping task_id -> idx in the response_reader
++     size_t index = 0; // used when there are multiple prompts (batch request)
++ 
++@@ -386,6 +392,9 @@ struct server_task_result {
++     int id           = -1;
++     int id_slot      = -1;
++ 
+++    // context on demand: the time it took to create the context for the task, negative if it was there
+++    int64_t t_ctx_create_us = -1;
+++
++     // TODO @ngxson : remove this field and implement a mapping task_id -> idx in the response_reader
++     size_t index = 0; // to be used for batched tasks
++ 
 +diff --git a/tools/server/tests/unit/test_context_on_demand.py b/tools/server/tests/unit/test_context_on_demand.py
 +new file mode 100644
-+index 0000000..5c118cd
++index 0000000..fe71ed6
 +--- /dev/null
 ++++ b/tools/server/tests/unit/test_context_on_demand.py
-+@@ -0,0 +1,311 @@
++@@ -0,0 +1,366 @@
 ++import pytest
 ++import time
 ++from utils import *
@@ -1578,6 +1745,61 @@ index 0000000..bf43a44
 ++    assert res.status_code == 200
 ++    assert res.body["data"][0]["embedding"] == embeddings[0]
 ++    assert get_metric(server, "context_creations_total") == 4
+++
+++
+++def test_a_result_says_when_the_context_was_created_for_it():
+++    global server
+++    server = ServerPreset.bert_bge_small()
+++    server.context_on_demand = True
+++    server.server_metrics = True
+++    server.start()
+++    wait_for_context(server, False)
+++
+++    # the non-OAI route returns its results as they are
+++    res = server.make_request("POST", "/embedding", data={
+++        "content": "I believe the meaning of life is",
+++        "keep_context_ms": 60000,
+++    })
+++    assert res.status_code == 200
+++    assert res.body[0]["context_create_ms"] >= 0
+++
+++    # the context is there for the next one
+++    res = server.make_request("POST", "/embedding", data={
+++        "content": "This is a test",
+++        "keep_context_ms": 0,
+++    })
+++    assert res.status_code == 200
+++    assert "context_create_ms" not in res.body[0]
+++    assert get_metric(server, "context_creations_total") == 1
+++
+++
+++def test_one_result_of_a_batch_says_the_context_was_created():
+++    global server
+++    server = ServerPreset.bert_bge_small()
+++    server.context_on_demand = True
+++    server.server_metrics = True
+++    server.start()
+++    wait_for_context(server, False)
+++
+++    res = server.make_request("POST", "/embedding", data={
+++        "content": ["I believe the meaning of life is", "This is a test", "Hello world"],
+++        "keep_context_ms": 0,
+++    })
+++    assert res.status_code == 200
+++    assert len(res.body) == 3
+++    assert sum("context_create_ms" in r for r in res.body) == 1
+++    wait_for_context(server, False)
+++
+++    # without the option, no result says anything
+++    server.stop()
+++    server = ServerPreset.bert_bge_small()
+++    server.start()
+++    res = server.make_request("POST", "/embedding", data={
+++        "content": "This is a test",
+++        "keep_context_ms": 0,
+++    })
+++    assert res.status_code == 200
+++    assert "context_create_ms" not in res.body[0]
 +diff --git a/tools/server/tests/utils.py b/tools/server/tests/utils.py
 +index 0ca4919..d48c989 100644
 +--- a/tools/server/tests/utils.py

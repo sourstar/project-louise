@@ -320,7 +320,11 @@ held is no fresh one, and the pass is asked again; an engine whose
 creations cannot be counted is not admitted. Whether the run creates its
 context per request is read from its own statement's load options, else
 from the runner asked at that moment; a runner that cannot say defers the
-gate.) One whose answers to a text differ is **near-exact** when
+gate. *Amended 2026-11-11*, with the count: it is the backend's own word
+for each call, and a round is held to the run's CALLS as well as its
+creations — as many of each as its requests, so that another collection's
+request during the round defers it.)
+One whose answers to a text differ is **near-exact** when
 they all stay within cosine 0.99999 of each other and the run reaches
 the stored CPU reference at 0.999 (docs/notes/near-exact-runs.md);
 further apart, the run FAILS whatever its cosines. Both are admitted,

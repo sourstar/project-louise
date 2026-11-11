@@ -86,8 +86,8 @@ wheel" (CLAUDE.md), the case is solved simply and the standard written down:
 - **A's trigger, settled in review** (operator, the same day): not "after N
   seconds" and no sleep — the context is allocated when a request arrives,
   freed when the work is done, and held between requests by a keep in
-  milliseconds the request carries (RAGE sets it per job type, 20 ms to
-  start). And for
+  milliseconds the request carries (RAGE sets it per job type, 50 ms to
+  start — the operator's, 2026-11-11; 20 ms at first). And for
   any opted-in model, not corpus encoders only. idle-context-brief.md §1.
 - **To measure before building:** the time to create and free a context on
   the B70 for each encoder, and that freed memory is the driver's again (a

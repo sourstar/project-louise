@@ -79,8 +79,12 @@ def create(models: dict[str, Model], stubs: Any) -> FastAPI:
             for text in inputs:
                 if m.alter_input is not None:
                     text = m.alter_input(text)
+                # the request's `metadata` goes to the backend, each value a
+                # string (core/backend/options.go, 16acc89)
                 res = s.Embedding(pb.PredictOptions(Embeddings=text,          # no deadline
-                                                    ModelIdentity=m.options.get("Model", "")))
+                                                    ModelIdentity=m.options.get("Model", ""),
+                                                    Metadata={str(k): str(v) for k, v in
+                                                              (body.get("metadata") or {}).items()}))
                 vector = list(res.embeddings)
                 if m.alter_vector is not None:
                     vector = m.alter_vector(vector)
