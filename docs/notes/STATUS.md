@@ -192,6 +192,16 @@ measured (published figures disagree).
   age of the free matters. What was built on the void figure the same day is withdrawn: the gate's pause between
   requests and its clause in 03 §3.3. (2) THE START IS 50 ms (operator, in München's session, the node measured: "Start at 50 ms"); the floor
   stays 20 ms (`keep.START_MS`, `FLOOR_MS`). Brief §1.1, §10.1.
+- **Context on request — RAGE trims on the engine's count** (11-11; the review's last item, the keep's dating). RAGE
+  dates a keep on its own clock and cannot see the way from the engine's answer to the client and back; on the node
+  that way outlasted a keep of 20 ms one time in three (8 creations in 13 back-to-back requests, 67 in 200), every
+  interval judged clean. Now the worker's beat reads the VeGa wrapper's count of each model's run every 30 s
+  (`worker._read_engine_counts`, `run_check.engine_counts`, one bounded read) and `Keeps.observe` sets the contexts the
+  engine CREATED against those RAGE expected (a stream's first, an expiry it judged, the gate's own): more, by 2 and by
+  a tenth of the requests sent, and no keep of that model goes under twice the smallest keep that was sending — a floor
+  of the model's path, which does not decay. The same reading replaces the assumed creation time (100 ms) by the
+  measured one, which the premature window is ten of. Inert until a model is loaded with the option behind the new
+  wrapper. Brief §10.
 - **Inputs computed in more than one pass, counted** (operator, 11-12: "for future trimming improvements we
   should gracefully log when a text is splitted"): the VeGa wrapper counts every answer's tokens against the
   load's ubatch and tells VeGa (`kind: passes`); VeGa logs when the inputs over it grow and serves every run's

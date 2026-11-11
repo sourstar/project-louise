@@ -764,6 +764,7 @@ and no engine changed.*
 | 3b. the VeGa wrapper: its probes say a keep of 0; its count of calls against the keep | written — a wrapper change is an engine change (§4): it ships only with one | `deploy/vega/vega_wrapper.py` (`_probe_request`, `KeepCount`, `created_us`), `app/vega/service.py` (`kind: keeps`, `GET /vega/keeps`, beside `passes`; not a docs/09 format) | `tests/vega/test_wrapper_logic.py`, `test_service.py`, `test_wrapper_grpc.py` (real gRPC, the fake backend speaking the trailer) |
 | 3c. the gate reads the count — what admits an on-demand engine at all | written | `app/run_check.py` (`creations_of`: `(calls, created)` of the run that answers, made current before the first round), `app/hold/embedder.py` (`_round_counts`: a round of N requests is N calls AND N creations, else deferred) | `tests/hold/test_fresh_contexts.py`; `tests/vega/test_wrapper_grpc.py` (`creations_of` through the real wrapper and receipts service) |
 | 3d. a canary per context (§1.4) | NOT written — an open decision, below | — | — |
+| 4e. RAGE reads the engine's count back (the keep's dating) | written | `app/rage/keep.py` (`Keeps.observe`: the measured creation time; a per-model floor under every stream's keep when the engine created contexts RAGE's clock did not expect), `app/run_check.py` (`engine_counts`: the count of the run each model's answers last named), `app/worker.py` (`_read_engine_counts`: the beat, every 30 s, one bounded read of VeGa) | `tests/test_rage_keep.py` (the node's 8-in-13 pattern raised 20 → 40 → 80 and held; the floor is the model's and does not decay; expected creations, another process's, a new load), `tests/test_run_check.py` |
 | §2's measurements, steps 3–4 | MADE 2026-11-12 (München, test copies, node paused) — §10.1 | the node | byte-equal over 300 keep-0 creations, each of three encoders |
 
 **The integration review (2026-11-12, the coordinator; fixed before merge):**
@@ -848,17 +849,32 @@ and no engine changed.*
   | **as built: the gate's counted 300** (default) | nothing on the embedding path; 900 creations byte-equal on the node so far (three encoders); a per-creation fault at rate p ≥ 1 % is caught at the gate with probability ≥ 95 % | a fault rarer than that, or one that appears after the gate, writes a wrong vector that no check at write time sees |
   | **add the canary** (one fingerprint text embedded and compared on every new context, before its first input) | every context is checked before it writes: a fault is caught the day it happens, whatever its rate | one extra embedding per creation (milliseconds on the card, per busy period at a bridging keep, per request at keep 0); more wrapper code in every run's engine; the canary's own decode is then every context's first pass, so it checks the context and hides a first-pass fault of the input after it |
 
-- **RAGE's dating of the keep** (the review's last item) is CONFIRMED ON THE
-  NODE and NOT fixed yet. At a keep of 20 ms one lane of requests sent back
-  to back still had its context created 8 times in 13 (bge-m3) and 67 times
-  in 200 (Qwen3-4B): the way from the engine's answer to the client and
-  back to the engine outlasts 20 ms about one time in three here, and
-  RAGE's own clock sees none of it — its gap is under its allowance
-  (`TRANSIT_MS`, 10 ms), so it would judge those intervals clean and never
-  raise the keep. No statistic of RAGE's own round trips bounds that way
-  (the fastest answer is by definition a fast trip). The operator's start
-  of 50 ms (§1.1) covers what was measured at 20; the blind spot itself is
-  closed by the next commit: RAGE reads the engine's count back.
+- **RAGE's dating of the keep** (the review's last item), CONFIRMED ON THE
+  NODE AND FIXED. At a keep of 20 ms one lane of requests sent back to back
+  still had its context created 8 times in 13 (bge-m3) and 67 times in 200
+  (Qwen3-4B): the way from the engine's answer to the client and back to
+  the engine outlasts 20 ms about one time in three here, and RAGE's own
+  clock sees none of it — its gap is under its allowance (`TRANSIT_MS`), so
+  it judged those intervals clean and would never have raised the keep. No
+  statistic of its own round trips bounds that way (the fastest answer is by
+  definition a fast trip). So RAGE now reads the ENGINE's count back
+  (`Keeps.observe`, at the worker's beat, for the run `run_check` last
+  heard as each model): the creation's measured time replaces
+  `CREATION_MS` for that model (the premature window is ten of it), and
+  between two readings the contexts the engine created are set against the
+  requests RAGE's clock expected to create one — a stream's first, an
+  expiry it judged, the gate's own. More created than expected (by 2, and
+  by a tenth of the requests sent): the way there and back outlasts the
+  keep of the streams that were sending, and no keep of that MODEL goes
+  under twice their smallest again. The floor is the model's — the way is
+  its path, not a job's rhythm — and it does not decay. What the engine
+  created for another process's requests (a person's query, from the web
+  process) is in its count and not in RAGE's; the thresholds are for that.
+  *The alternative, written down:* the engine's word per REQUEST, by the
+  tag's one-time id (§1.3 had it) — exact per stream, at the price of a
+  second read of VeGa per request or a new key in `GET /vega/receipts`'s
+  answer (a docs/09 format: to ask first). It would pay if two streams of
+  one model need different floors.
 
 ### 10.1 Steps 3–4 on the node (München, 2026-11-12)
 

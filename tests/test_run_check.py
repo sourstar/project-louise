@@ -926,3 +926,42 @@ def test_a_search_reads_a_run_s_options_once(node, endpoint, monkeypatch):
     assert model_load.context_on_demand(QUERY_URL, "medcpt-query") is True
     run_check.check_query(collection, recipe, {None})     # an answer that states no run: nothing to read
     assert reads["n"] == 1
+
+
+# ---- the engine's count, for RAGE to read back (run_check.engine_counts) -----------------------
+
+def test_the_engines_count_is_read_for_the_run_each_model_last_named(monkeypatch):
+    """The worker's beat hands RAGE the VeGa wrapper's count of each model's
+    run (app/rage/keep.py `observe`; docs/notes/idle-context-brief.md §10):
+    by the run the endpoint's answers last named, in one read, and nothing —
+    never an error — where there is nothing to read."""
+    import httpx
+    from types import SimpleNamespace
+    run_check.reset_cache()
+    monkeypatch.setattr(run_check.config, "VEGA_URL", "http://vega:8090")
+    nemo = SimpleNamespace(url="http://localai:8080", query_url=None, model="vega-nemotron-3-embed-1b",
+                           query_model=None)
+    bge = SimpleNamespace(url="http://localai:8080", query_url=None, model="vega-bge-m3", query_model=None)
+    r1, r2, r3 = ("sha256:" + c * 64 for c in "abc")
+    asked: list[tuple[str, float]] = []
+    rows = [{"run_id": r1, "calls": 40, "told": 40, "created": 7, "created_ms": 392, "on_demand": True},
+            {"run_id": r3, "calls": 9, "told": 9, "created": 9, "created_ms": 500, "on_demand": True}]
+
+    def get(url, timeout=None):
+        asked.append((url, timeout))
+        return httpx.Response(200, json={"buckets": [], "runs": rows}, request=httpx.Request("GET", url))
+    assert run_check.engine_counts(get=get) == {} and asked == [], "no run heard yet: nothing is asked"
+    run_check.heard(nemo, {r1})
+    run_check.heard(bge, {r2})                       # a run VeGa holds no count for
+    got = run_check.engine_counts(get=get)
+    assert got == {("http://localai:8080", "vega-nemotron-3-embed-1b"): rows[0]}
+    assert asked == [("http://vega:8090/vega/keeps", run_check.COUNTS_TIMEOUT_S)], "one read, bounded"
+
+    def down(url, timeout=None):
+        raise httpx.ConnectError("refused", request=httpx.Request("GET", url))
+    assert run_check.engine_counts(get=down) == {}
+    assert run_check.engine_counts(get=lambda url, timeout=None: httpx.Response(
+        404, request=httpx.Request("GET", url))) == {}, "a VeGa before the count"
+    monkeypatch.setattr(run_check.config, "VEGA_URL", "")
+    assert run_check.engine_counts(get=get) == {}
+    run_check.reset_cache()

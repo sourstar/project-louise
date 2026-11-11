@@ -54,6 +54,7 @@ def fresh_worker_state():
     # the beat reaches `_log_shares` now; its 600 s throttle must not carry
     # one test's log into the next
     worker._last_shares_log = 0.0
+    worker._last_keeps_read = 0.0
     yield
 
 

@@ -432,3 +432,181 @@ def test_the_worker_s_beat_publishes_each_stream_s_line(isolated_config, monkeyp
     assert len(lines) == 1, lines
     assert "wikipedia (corpus) on vega-bge-m3" in lines[0] and "3 request(s)" in lines[0]
     keep.reset()
+
+
+# ---- the engine's own count, read back (`Keeps.observe`; the node, 2026-11-11) -----------------
+
+def _back_to_back(keeps, clock, stream, n: int) -> list[int]:
+    out = []
+    for _ in range(n):
+        out.append(_once(keeps, clock, stream))
+        clock.ms(5)                                   # ready 5 ms after the answer: clean, here
+    return out
+
+
+def test_contexts_the_engine_created_and_this_clock_did_not_see_raise_the_keep(keeps, clock):
+    """The node: at a keep of 20 ms one lane of requests sent back to back
+    had its context created 8 times in 13 and 67 times in 200 — the way to
+    the client and back outlasts the keep, and this clock judged every one
+    of those intervals clean."""
+    assert _once(keeps, clock, WIKIDATA) == 20        # the stream's first: it creates the context
+    assert keeps.observe(SERVER, MODEL, calls=1, created=1, created_ms=56) == [], "a baseline"
+    assert set(_back_to_back(keeps, clock, WIKIDATA, 21)) == {20}
+    assert _state(keeps, WIKIDATA)["premature"] == 0, "nothing this clock could see"
+    (line,) = keeps.observe(SERVER, MODEL, calls=22, created=8, created_ms=448)
+    assert "keep of wikidata (corpus) on vega-nemotron-3-embed-1b" in line and "20 -> 40 ms" in line
+    assert "created 7 context(s) while 21 request(s) went, 7 more than this clock expected" in line
+    assert "no keep of this model goes under 40 ms again" in line
+    s = _state(keeps, WIKIDATA)
+    assert (s["keep_ms"], s["highest_ms"], s["unseen"]) == (40, 40, 1)
+    assert keeps.creation_ms(SERVER, MODEL) == 56, "the creation's measured time: 392 ms for 7"
+    # still not enough: the next reading doubles the floor again
+    _back_to_back(keeps, clock, WIKIDATA, 20)
+    (line,) = keeps.observe(SERVER, MODEL, calls=42, created=14, created_ms=784)
+    assert "40 -> 80 ms" in line and _state(keeps, WIKIDATA)["keep_ms"] == 80
+    # bridged: the engine creates no more than this clock expects, and nothing moves
+    _back_to_back(keeps, clock, WIKIDATA, 20)
+    assert keeps.observe(SERVER, MODEL, calls=62, created=14, created_ms=784) == []
+    assert _state(keeps, WIKIDATA)["keep_ms"] == 80
+
+
+def test_the_floor_is_the_models_and_does_not_decay(keeps, clock):
+    _once(keeps, clock, WIKIDATA)
+    keeps.observe(SERVER, MODEL, 1, 1, 56)
+    _back_to_back(keeps, clock, WIKIDATA, 20)
+    keeps.observe(SERVER, MODEL, 21, 8, 448)
+    assert _state(keeps, WIKIDATA)["keep_ms"] == 40
+    # the way there and back is the model's path, not a job's rhythm: another
+    # collection on the same model starts at the floor
+    assert _once(keeps, clock, NORMATTIVA) == 40
+    # and an hour of clean minutes decays nothing under it
+    for _ in range(60):
+        clock.ms(1000 * (keep.DECAY_EVERY_S + 1) - 5)
+        ready = clock()
+        other = keeps.send(NORMATTIVA, ready)          # in flight: no context expired
+        assert _once(keeps, clock, WIKIDATA) == 40
+        keeps.answered(other)
+    assert _state(keeps, WIKIDATA)["keep_ms"] == 40
+    # a model on another server has its own
+    elsewhere = keep.Stream("http://other:8080", MODEL, "wikidata", "corpus")
+    assert _once(keeps, clock, elsewhere) == 20
+
+
+def test_what_this_clock_expected_is_not_unseen(keeps, clock):
+    """A stream's first request, an expiry this clock judged (premature,
+    excused or after a pause) and the gate's own requests are each expected
+    to have a context created: the engine's count holds no news of them."""
+    _once(keeps, clock, WIKIDATA)
+    keeps.observe(SERVER, MODEL, 1, 1, 56)
+    _once(keeps, clock, NORMATTIVA)                    # a first: expected
+    for gap in (25, 45, 90):                           # each past the keep it meets (20, 40, 80):
+        clock.ms(gap)                                  # a premature expiry, judged
+        _once(keeps, clock, WIKIDATA)
+    assert _state(keeps, WIKIDATA)["premature"] == 3
+    gate = keep.Stream(SERVER, MODEL, "wikidata", keep.FIXED_LEVEL)
+    for _ in range(4):
+        keeps.answered(keeps.send_fixed(gate, 0))      # the gate's keep 0: a context each
+    assert keeps.observe(SERVER, MODEL, 12, 9, 504) == [], "8 created, 8 expected"
+    assert _state(keeps, WIKIDATA)["unseen"] == 0
+
+
+def test_a_creation_or_two_of_another_process_moves_nothing(keeps, clock):
+    """A person's query goes from the web process: its creation is in the
+    engine's count and not in this process's. Under two, or under a tenth of
+    the requests sent, it is that — or noise."""
+    _once(keeps, clock, WIKIDATA)
+    keeps.observe(SERVER, MODEL, 1, 1, 56)
+    _back_to_back(keeps, clock, WIKIDATA, 30)
+    assert keeps.observe(SERVER, MODEL, 32, 2, 112) == [], "one unseen: under UNSEEN_MIN"
+    _back_to_back(keeps, clock, WIKIDATA, 30)
+    assert keeps.observe(SERVER, MODEL, 64, 4, 224) == [], "two unseen in 30: under a tenth"
+    _back_to_back(keeps, clock, WIKIDATA, 30)
+    assert len(keeps.observe(SERVER, MODEL, 96, 7, 392)) == 1, "three in 30: the keep's own"
+    assert (keep.UNSEEN_MIN, keep.UNSEEN_SHARE) == (2, 0.1)
+
+
+def test_a_new_load_of_the_run_and_a_stream_that_hardly_sent_are_no_evidence(keeps, clock):
+    _once(keeps, clock, WIKIDATA)
+    keeps.observe(SERVER, MODEL, 500, 90, 5040)
+    _back_to_back(keeps, clock, WIKIDATA, 20)
+    assert keeps.observe(SERVER, MODEL, 21, 8, 448) == [], "the count went down: a new load, a baseline"
+    _back_to_back(keeps, clock, WIKIDATA, 20)
+    _once(keeps, clock, NORMATTIVA)                    # one request: not what was sending
+    (line,) = keeps.observe(SERVER, MODEL, 42, 16, 896)
+    assert "wikidata" in line
+    assert _state(keeps, NORMATTIVA)["keep_ms"] == 20 and _state(keeps, NORMATTIVA)["unseen"] == 0, \
+        "raised when it sends next, by the model's floor — not counted as its own"
+    assert _once(keeps, clock, NORMATTIVA) == 40
+    assert keeps.observe("http://nowhere:1", MODEL, 5, 5, 5) == [], "a model nothing was sent to"
+
+
+def test_the_measured_creation_sets_the_premature_window(keeps, clock):
+    """`PREMATURE_WINDOW_MS` is ten creations: 1,000 ms at the 100 ms assumed,
+    560 ms at a measured 56 (the node's: Nemotron ~55, bge-m3 ~40, Qwen3-4B
+    ~23 ms)."""
+    _once(keeps, clock, WIKIDATA)
+    keeps.observe(SERVER, MODEL, 1, 1, 56)
+    clock.ms(20 + 700)                                 # 700 ms after its deadline: inside 1,000
+    assert _once(keeps, clock, WIKIDATA) == 40, "premature by the assumed creation"
+    keeps.observe(SERVER, MODEL, 2, 2, 112)            # one more creation, 56 ms: now measured
+    assert keeps.creation_ms(SERVER, MODEL) == 56
+    clock.ms(40 + 700)                                 # the same lateness: outside 560
+    assert _once(keeps, clock, WIKIDATA) == 40, "a pause, by the measured one"
+    assert _state(keeps, WIKIDATA)["paused"] == 1
+
+
+def test_only_a_count_whose_backend_spoke_for_every_call_is_read(monkeypatch):
+    seen = []
+    monkeypatch.setattr(keep.KEEPS, "observe", lambda *a: seen.append(a) or ["raised"])
+    row = {"run_id": "sha256:" + "ab" * 32, "on_demand": True, "calls": 40, "told": 40,
+           "created": 7, "created_ms": 392}
+    assert keep.observe(SERVER + "/v1", MODEL, row) == ["raised"]
+    assert seen == [(SERVER, MODEL, 40, 7, 392)], "by the server, as a stream is named"
+    assert keep.observe(SERVER, MODEL, row | {"told": 39}) == [], "a backend before the count"
+    assert keep.observe(SERVER, MODEL, row | {"on_demand": False}) == []
+    assert keep.observe(SERVER, MODEL, {"calls": 40}) == [] and len(seen) == 1
+
+
+def test_the_published_line_says_a_keep_the_engines_count_raised(keeps, clock):
+    _once(keeps, clock, WIKIDATA)
+    keeps.observe(SERVER, MODEL, 1, 1, 56)
+    _back_to_back(keeps, clock, WIKIDATA, 20)
+    keeps.observe(SERVER, MODEL, 21, 8, 448)
+    assert _state(keeps, WIKIDATA)["unseen"] == 1
+
+
+def test_the_worker_s_beat_hands_rage_the_engines_count(isolated_config, monkeypatch):
+    """The beat reads the count of each model's run (run_check.engine_counts)
+    and gives it to the keeps: the first reading is a baseline, the second
+    raises the keep this clock judged long enough — and says so with the
+    collection's name, in the scheduler's lines."""
+    from app import db, run_check, worker
+    keep.reset()
+    clock = Clock()
+    monkeypatch.setattr(keep.KEEPS, "_clock", clock)
+    count = {"run_id": "sha256:" + "ab" * 32, "on_demand": True, "calls": 1, "told": 1,
+             "created": 1, "created_ms": 56}
+    monkeypatch.setattr(run_check, "engine_counts", lambda: {(SERVER, MODEL): dict(count)})
+    con = db.connect()
+
+    def beat() -> list[str]:
+        monkeypatch.setattr(worker, "_last_shares_log", 0.0)
+        monkeypatch.setattr(worker, "_last_keeps_read", 0.0)
+        worker._read_engine_counts(con)
+        worker._log_shares(con)
+        return [r[0] for r in con.execute(
+            "SELECT message FROM events WHERE stage='sched' AND message LIKE 'keep of %'")]
+    _once(keep.KEEPS, clock, WIKIDATA)
+    assert beat() == [], "a baseline"
+    count.update(calls=5, told=5)
+    worker._read_engine_counts(con)
+    assert keep.KEEPS._models[(SERVER, MODEL)].read[0] == 1, "and not read again inside its interval"
+    assert worker.KEEPS_READ_INTERVAL_S == 30.0
+    _back_to_back(keep.KEEPS, clock, WIKIDATA, 21)
+    count.update(calls=22, told=22, created=8, created_ms=448)
+    (line,) = beat()
+    assert "keep of wikidata (corpus)" in line and "20 -> 40 ms" in line
+    published = [r[0] for r in con.execute(
+        "SELECT message FROM events WHERE stage='sched' AND message LIKE 'keep (since start)%'")]
+    assert "its keep 40 ms" in published[-1] and "raised 1 time(s) on the engine's own count" in published[-1]
+    keep.reset()

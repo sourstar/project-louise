@@ -846,6 +846,31 @@ def _note_options(recipe, answered: set, known: dict[str, dict[str, Any]], *,
             model_load.note_run_options(url, model, engine.get("options"))
 
 
+#: how long the worker's beat waits for VeGa's counts, at most (`engine_counts`)
+COUNTS_TIMEOUT_S = 2.0
+
+
+def engine_counts(get=httpx.get) -> dict[tuple[str, str], dict[str, Any]]:
+    """(endpoint, model) -> the VeGa wrapper's count for the run that
+    endpoint's answers last named, since its load (`GET <VEGA_URL>/vega/keeps`,
+    docs/notes/vega.md §2): the engine's own word on the contexts it created,
+    for RAGE to set its keeps against (app/rage/keep.py `observe`). {} where
+    there is nothing to read — no VEGA_URL, no run heard yet, VeGa away or
+    older: a reading is skipped, never an error (CLAUDE.md: deferral is not
+    failure), and bounded (`COUNTS_TIMEOUT_S`)."""
+    heard_runs = {who: run_id for (who, _role), run_id in list(_answering.items()) if run_id}
+    if not config.VEGA_URL or not heard_runs:
+        return {}
+    try:
+        r = get(f"{config.VEGA_URL}/vega/keeps", timeout=COUNTS_TIMEOUT_S)
+        r.raise_for_status()
+        rows = r.json().get("runs")
+    except (httpx.HTTPError, ValueError, AttributeError):
+        return {}
+    by_run = {row.get("run_id"): row for row in rows or () if isinstance(row, dict)}
+    return {who: by_run[run_id] for who, run_id in heard_runs.items() if run_id in by_run}
+
+
 def answering(collection) -> dict[str, str | None]:
     """role -> the run this collection's encoder last stated, as far as THIS
     process has heard. Empty for a collection older than version 3."""

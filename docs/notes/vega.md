@@ -91,6 +91,9 @@ Louise ──POST /v1/embeddings (model vega-xyz, tagged inputs)──► LocalA
   (in memory, since each load). The calibration gate reads it: an on-demand
   run is admitted only on creations COUNTED there, a round of N requests
   being N calls and N creations (`run_check.creations_of`, invariant 12).
+  RAGE reads it too, at the worker's beat (`run_check.engine_counts`,
+  app/rage/keep.py `observe`): the creation's measured time, and the
+  contexts created that its own clock did not expect.
   Not a docs/09 format: informational, hashed and signed nowhere.
   **Deploying it:** as the passes count — the wrapper side with the engine
   change that carries P11 (it re-gates every space once), the service side
