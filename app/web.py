@@ -370,6 +370,40 @@ def ask_voices(request: Request):
     return voice.voices(auth.account(getattr(request.state, "viewer", None)))
 
 
+#: what a recording's report may say (app/static/voice.js `micInfo`), and its size
+VOICE_REPORT_KEYS = ("label", "ready", "muted", "mutes", "rate", "channels", "ec", "ns", "agc", "ctx_rate",
+                     "ctx_state", "frames", "ms", "peak", "heard", "inputs", "stop", "vad", "chars", "ua")
+VOICE_REPORT_MAX = 4096
+
+
+@ask_router.post("/ask/voice/report")
+async def ask_voice_report(request: Request):
+    """What one recording of the Ask page's microphone gave (operator,
+    2026-11-11: "when the phone is connected to the car the mic of louise
+    does not work"): the device the browser opened, its rate and state, how
+    much sound came and how it ended — one line in the node's log under
+    `models`, warn unless a question was heard. The known keys only, never
+    the audio; 204."""
+    from . import auth, model_pins
+    raw = await request.body()
+    if len(raw) > VOICE_REPORT_MAX:
+        raise HTTPException(413, f"a report is at most {VOICE_REPORT_MAX} bytes")
+    try:
+        body = json.loads(raw)
+    except ValueError:
+        raise HTTPException(400, "the body is not JSON") from None
+    if not isinstance(body, dict):
+        raise HTTPException(400, "the body is not a JSON object")
+    outcome = " ".join(str(body.get("outcome") or "?").split())[:120]
+    v = getattr(request.state, "viewer", None)
+    who = auth.account(v) or (v.role if v is not None else "nobody")
+    said = {k: body[k] for k in VOICE_REPORT_KEYS if k in body}
+    model_pins.node_event("info" if outcome == "heard" else "warn",
+                          f"voice: microphone {outcome} ({who}) — "
+                          + json.dumps(said, ensure_ascii=False, separators=(",", ":"))[:2000])
+    return Response(status_code=204)
+
+
 class AskVoiceBody(BaseModel):
     voice: str | None = None
 

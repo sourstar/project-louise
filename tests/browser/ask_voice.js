@@ -73,6 +73,10 @@ const sentenceOf = size => KNOWN[(size - 44 - 8000) / 20 - 1];
     if (u.pathname === '/ask/voices')
       return req.respond({ status: 200, contentType: 'application/json',
                            body: JSON.stringify(offerVoices ? { ...VOICES, account } : { voices: [], default: null, account: null }) });
+    if (u.pathname === '/ask/voice/report' && req.method === 'POST') {
+      posted.reports = (posted.reports || []).concat([JSON.parse(req.postData)]);
+      return req.respond({ status: 204, contentType: 'text/plain', body: '' });
+    }
     if (u.pathname === '/ask/voice' && req.method === 'POST') {
       const b = JSON.parse(req.postData); posted.kept = (posted.kept || []).concat([b]);
       account = { ...account, voice: b.voice };
@@ -549,6 +553,30 @@ const sentenceOf = size => KNOWN[(size - 44 - 8000) / 20 - 1];
   await page.goto('http://localhost/ask');
   check(await until(v => document.getElementById('voice-pick').value === v, 4000, VOICES.voices[1].voice),
         '20. and the account\'s on the next visit');
+
+  // 21. a microphone that sends only silence (operator, 2026-11-11: "when the
+  //     phone is connected to the car the mic of louise does not work"): the
+  //     recording ends by itself, the reader is told in plain words, the node is sent what came
+  const heardBefore = (posted.reports || []).filter(x => x.outcome === 'heard');
+  check(heardBefore.length >= 3 && heardBefore.every(x => x.frames > 0 && x.ctx_rate && x.rate !== undefined && x.stop),
+        '21. every recording heard is reported: what the browser opened and how it ended', heardBefore.slice(0, 1));
+  posted.reports = [];
+  await page.goto('http://localhost/ask');
+  await page.evaluate(() => {
+    window.__toasts = []; const ts = toast; toast = function (m) { __toasts.push(m); return ts(m); };
+    const c = new AudioContext();
+    navigator.mediaDevices.getUserMedia = async () => c.createMediaStreamDestination().stream;   // nothing but zeros
+  });
+  const stt21 = posted.stt;
+  await page.click('#mic');
+  check(await until(() => __toasts.some(t => /sends only silence/.test(t)), 14000), '21. silence: it is said',
+        await page.evaluate(() => __toasts));
+  check(await page.evaluate(() => !document.getElementById('mic').classList.contains('rec')), '21. and the recording ended');
+  const t21 = Date.now(); while (!(posted.reports || []).length && Date.now() - t21 < 4000) await sleep(40);
+  const r21 = (posted.reports || [])[0] || {};
+  check(r21.outcome === 'silent' && r21.frames > 0 && r21.peak === 0 && r21.heard === false && r21.ms >= 8000,
+        '21. reported: silent, with what came', r21);
+  check(posted.stt === stt21, '21. silence is not sent to be written down', posted.stt - stt21);
 
   check(errors.length === 0, 'no page errors', errors);
   console.log(failures ? `${failures} FAILED` : 'ALL PASSED');

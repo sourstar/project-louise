@@ -338,3 +338,25 @@ def test_no_account_no_voice_kept_by_the_node_and_one_since_removed_is_the_nodes
     assert c.get("/ask/voices", headers=h).json()["account"] == {"name": "ada", "voice": None}
     c.post("/v1/audio/speech", headers=h, json={"input": "Dante."})
     assert calls[-1]["voice"] == PHILIPPE, "a voice the server no longer holds: the node's, never an error"
+
+
+# ---- the microphone's report (operator, 2026-11-11: "when the phone is connected to the car the mic of louise does not work")
+
+def test_a_recordings_report_is_one_line_in_the_nodes_log(isolated_config, monkeypatch):
+    from app import model_pins
+    lines = []
+    monkeypatch.setattr(model_pins, "node_event", lambda level, text: lines.append((level, text)))
+    c = TestClient(api.app)
+    r = c.post("/ask/voice/report", json={"outcome": "silent", "label": "Car kit", "rate": 16000, "ctx_rate": 16000,
+                                          "frames": 750, "peak": 0, "heard": False, "audio": "AAAA", "token": "x"})
+    assert r.status_code == 204
+    (level, text), = lines
+    assert level == "warn" and text.startswith("voice: microphone silent (guest) — ")
+    said = json.loads(text.split(" — ", 1)[1])
+    assert said == {"label": "Car kit", "rate": 16000, "ctx_rate": 16000, "frames": 750, "peak": 0, "heard": False}, \
+        "the known keys only: never the audio, never anything else a client sends"
+    c.post("/ask/voice/report", json={"outcome": "heard", "chars": 28})
+    assert lines[-1][0] == "info", "a question heard is no warning"
+    assert c.post("/ask/voice/report", content=b"x" * 5000).status_code == 413
+    assert c.post("/ask/voice/report", json=[1]).status_code == 400
+    assert len(lines) == 2

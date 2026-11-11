@@ -44,6 +44,15 @@
   // the energy check: loud is over FLOOR_MIN and over FLOOR_X times the
   // quietest window heard so far (the room's own level)
   const FLOOR_MIN = 0.012, FLOOR_X = 4;
+  // A MICROPHONE THAT GIVES NOTHING IS SAID (operator, 2026-11-11: "when the
+  // phone is connected to the car the mic of louise does not work"): no
+  // sound at all after NO_SOUND_MS (the audio never started), or nothing but
+  // digital silence after SILENT_MS (a microphone that is not on), ends the
+  // recording with a plain line; a quiet one that is not silence goes to the
+  // node after SILENT_MS, whose VAD says what is speech. Each recording's
+  // outcome goes to the node's log (POST /ask/voice/report) — what the
+  // browser opened, at what rate, what came — the one way to see a car's.
+  const NO_SOUND_MS = 3000, SILENT_MS = 8000, DIGITAL_SILENCE = 1e-4;
   // a piece this short is read with the next (an "art." the segmenter cut off)
   const MIN_SENTENCE = 24;
   // A PIECE ENDING IN AN INITIAL OR A TITLE ends no sentence (operator,
@@ -120,14 +129,45 @@
 
   function onSamples(r, buf) {
     if (rec !== r) return;
-    r.chunks.push(buf);
-    let e = 0; for (let i = 0; i < buf.length; i++) e += buf[i] * buf[i];
+    r.chunks.push(buf); r.frames++;
+    let e = 0; for (let i = 0; i < buf.length; i++) { e += buf[i] * buf[i]; const a = Math.abs(buf[i]); if (a > r.peak) r.peak = a; }
     const rms = Math.sqrt(e / (buf.length || 1)), ms = buf.length * 1000 / r.rate;
     const loud = rms > Math.max(FLOOR_MIN, FLOOR_X * (r.floor === null ? 0 : r.floor));
     r.floor = r.floor === null ? rms : Math.min(r.floor, rms);
     r.ms += ms;
     if (loud) { r.heard = true; r.quiet = 0; } else if (r.heard) r.quiet += ms;
-    if ((r.heard && r.quiet >= AUTO_STOP_MS) || r.ms >= MAX_MS) stop();
+    if (!r.heard && r.ms >= SILENT_MS) {
+      if (r.peak < DIGITAL_SILENCE) return fail(r, 'silent', 'the microphone sends only silence — ' + CAR_HINT);
+      r.why = 'quiet'; return stop();    // not silence: the node's VAD hears what is speech
+    }
+    if ((r.heard && r.quiet >= AUTO_STOP_MS) || r.ms >= MAX_MS) { r.why = r.heard ? 'speech' : 'longest'; stop(); }
+  }
+  const CAR_HINT = 'on a car\'s or a headset\'s Bluetooth the phone may keep the microphone for it: '
+                 + 'disconnect it, or type the question (this was sent to the node to look into)';
+
+  // what the browser gave: the device, its settings, the audio's rate and state
+  function micInfo(r) {
+    const t = r.stream && r.stream.getAudioTracks()[0];
+    let set = {}; try { set = t && t.getSettings ? t.getSettings() : {}; } catch (e) { /* none */ }
+    return { label: t ? t.label : null, ready: t ? t.readyState : null, muted: t ? t.muted : null, mutes: r.mutes,
+             rate: set.sampleRate ?? null, channels: set.channelCount ?? null, ec: set.echoCancellation ?? null,
+             ns: set.noiseSuppression ?? null, agc: set.autoGainControl ?? null,
+             ctx_rate: r.ctx ? r.ctx.sampleRate : null, ctx_state: r.ctx ? r.ctx.state : null,
+             frames: r.frames, ms: Math.round(r.ms), peak: Math.round(r.peak * 1e5) / 1e5, heard: r.heard,
+             inputs: r.inputs, ua: navigator.userAgent };
+  }
+  function report(outcome, info) {
+    try {
+      fetch('/ask/voice/report', { method: 'POST', keepalive: true, headers: { 'Content-Type': 'application/json' },
+                                   body: JSON.stringify({ outcome, ...info }) }).catch(() => {});
+    } catch (e) { /* the report is never in the way */ }
+  }
+  // the recording ends without a question: said, released, reported
+  function fail(r, outcome, text) {
+    if (rec !== r) return;
+    const info = micInfo(r);
+    rec = null; release(r); micState('idle'); say(text);
+    report(outcome, info);
   }
 
   async function start() {
@@ -139,15 +179,32 @@
       stream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true } });
     } catch (e) {
       busy = false; micState('idle');
+      report('not opened: ' + ((e && (e.name || e.message)) || e), { ua: navigator.userAgent });
       say(e && e.name === 'NotAllowedError'
         ? 'the microphone is not allowed for this page — allow it in the browser to speak a question'
         : 'no microphone could be opened (' + ((e && (e.message || e.name)) || e) + ')');
       return;
     }
     const r = { stream, ctx: null, src: null, node: null, chunks: [], rate: 0,
-                ms: 0, quiet: 0, heard: false, floor: null, tick: null };
+                ms: 0, quiet: 0, heard: false, floor: null, tick: null,
+                frames: 0, peak: 0, mutes: 0, why: null, watch: null, inputs: null };
+    const track = stream.getAudioTracks()[0];
+    if (track) {
+      track.addEventListener('mute', () => { r.mutes++; });
+      track.addEventListener('ended', () => fail(r, 'ended', 'the microphone was taken away from the page — ' + CAR_HINT));
+    }
+    navigator.mediaDevices.enumerateDevices().then(ds => {
+      r.inputs = ds.filter(d => d.kind === 'audioinput').map(d => d.label || '?');
+    }).catch(() => {});
     try {
-      const ctx = r.ctx = new AC();
+      // THE AUDIO AT THE MICROPHONE'S OWN RATE: a Bluetooth car or headset
+      // gives 16 or 8 kHz, and a browser that cannot join two rates
+      // (Firefox: "different sample-rate is currently not supported") then
+      // records nothing; the page's downsample takes any rate to RATE
+      let ctx = null;
+      const want = track && track.getSettings ? track.getSettings().sampleRate : null;
+      if (want) { try { ctx = new AC({ sampleRate: want }); } catch (e) { ctx = null; } }
+      ctx = r.ctx = ctx || new AC();
       r.src = ctx.createMediaStreamSource(stream); r.rate = ctx.sampleRate;
       if (ctx.audioWorklet && window.AudioWorkletNode) {
         const url = URL.createObjectURL(new Blob([WORKLET], { type: 'application/javascript' }));
@@ -164,18 +221,28 @@
       r.src.connect(r.node); r.node.connect(ctx.destination);   // silent: nothing is written to the output
       if (ctx.state === 'suspended') { try { await ctx.resume(); } catch (e) { /* it runs or it does not */ } }
     } catch (e) {
+      const info = micInfo(r);
       release(r); busy = false; micState('idle');
       say('the microphone could not be recorded (' + ((e && (e.message || e.name)) || e) + ')');
+      report('failed: ' + ((e && (e.name || e.message)) || e), info);
       return;
     }
     rec = r; busy = false;
+    // no sound at all: the audio is woken once, then the reader is told
+    r.watch = setTimeout(() => {
+      if (rec !== r || r.frames) return;
+      if (r.ctx && r.ctx.state !== 'running') r.ctx.resume().catch(() => {});
+      r.watch = setTimeout(() => {
+        if (rec === r && !r.frames) fail(r, 'no sound', 'the microphone gives the page no sound — ' + CAR_HINT);
+      }, NO_SOUND_MS / 2);
+    }, NO_SOUND_MS);
     const t0 = performance.now();
     const show = () => micState('rec', 'recording ' + clock(performance.now() - t0) + ' — tap the microphone to stop');
     show(); r.tick = setInterval(show, 250);
   }
 
   function release(r) {
-    clearInterval(r.tick);
+    clearInterval(r.tick); clearTimeout(r.watch);
     try { if (r.src) r.src.disconnect(); if (r.node) r.node.disconnect(); } catch (e) { /* already */ }
     for (const t of r.stream.getTracks()) t.stop();
     if (r.ctx) r.ctx.close().catch(() => {});
@@ -184,9 +251,14 @@
   async function stop() {
     const r = rec; if (!r) return;
     let toAsk = false;
+    const info = micInfo(r), why = r.why || 'tap';
     rec = null; release(r);
     const pcm = downsample(r.chunks, r.rate, RATE);
-    if (!pcm.length) { micState('idle'); return; }
+    if (!pcm.length) {
+      micState('idle'); say('no sound came from the microphone — ' + CAR_HINT);
+      report('no sound', info);
+      return;
+    }
     busy = true; micState('busy', 'writing down what you said…');
     const fd = new FormData();
     fd.append('file', new Blob([wavBytes(pcm)], { type: 'audio/wav' }), 'question.wav');
@@ -195,9 +267,15 @@
     try {
       const resp = await fetch('/v1/audio/transcriptions', { method: 'POST', body: fd });
       const d = await resp.json().catch(() => ({}));
+      info.stop = why; info.vad = resp.headers.get('Louise-VAD');
       if (!resp.ok) throw new Error((d.error && d.error.message) || d.detail || resp.statusText);
       const text = String(d.text || '').trim();
-      if (!text) { say('no speech was heard — tap the microphone and speak again'); return; }
+      if (!text) {
+        say('no speech was heard — tap the microphone and speak again');
+        report('no speech', info);
+        return;
+      }
+      report('heard', { ...info, chars: text.length });
       // a question typed and not yet asked is added to; the one already
       // asked is replaced by the new one
       const q = document.getElementById('q'), prior = q.value.trim();
@@ -207,6 +285,7 @@
       toAsk = true;
     } catch (e) {
       say('what you said could not be written down: ' + (e.message || e));
+      report('not written down: ' + (e.message || e), info);
     } finally { busy = false; micState('idle'); }
     // HANDS-FREE (operator, 2026-11-11: "click to activate and automatically
     // ask at the end of the speech, then automatically tts of the answer"):

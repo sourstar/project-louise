@@ -40,6 +40,12 @@ measured (published figures disagree).
   KEPT WITH THE ACCOUNT (operator, 11-11: "Shall a user account can choose it?"): a signed-in user's choice is
   `voice` in users.toml (`POST /ask/voice`; operator: `louise user voice`), heard by every browser and client of
   the account — a request naming no voice is read in it; without an account the browser keeps it.
+- **The microphone in the car** (operator, 11-11: "when the phone is connected to the car the mic of louise does
+  not work"): not reproduced here — no car. Built: the page records at the microphone's own rate (Firefox records
+  nothing when a Bluetooth 16/8 kHz input meets a 48 kHz context), says in plain words when no sound or only
+  silence comes (a tap used to end such a recording without a word), and reports every recording to the node's
+  log (`voice: microphone …`: device label, rates, frames, peak, how it ended, the VAD's note). OPEN: one try in
+  the car after the web deploy, then the log line says which of the three it is.
 - **Hands-free voice input** (operator, 11-11: "click to activate and automatically ask at the end of the speech,
   then automatically tts of the answer"): the microphone's question is asked as soon as the recording ends (the
   page's switch decides search or answer) and its answer read by itself; the spoken text replaces the question
