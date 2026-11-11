@@ -37,6 +37,11 @@ class GpuProcess:
     # "separate real RAM occupancy from memory mapped RAM"). None = not read.
     ram: int | None = None
     mapped: int | None = None
+    #: the pid as the process's OWN namespace numbers it (`NSpid`'s last
+    #: field, /proc/<pid>/status): what LocalAI's `/system` gives as a
+    #: backend's pid, so a model can be told on which card it is
+    #: (app/resident.py, docs/notes/stt-on-igpu.md). None = not read.
+    ns_pid: int | None = None
 
     #: below this nothing is said: every GPU process keeps a few MiB of buffers
     #: in host memory by design

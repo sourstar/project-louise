@@ -317,6 +317,16 @@ def host_memory(pid_dir: Path) -> tuple[int | None, int | None]:
     return found["RssAnon"] + found.get("RssShmem", 0), found["RssFile"]
 
 
+_NSPID = re.compile(r"^NSpid:\s+([\d\s]+)$", re.M)
+
+
+def ns_pid(pid_dir: Path) -> int | None:
+    """The pid in the process's own (innermost) PID namespace — `NSpid`'s
+    last field: a backend's pid as its container's LocalAI gives it."""
+    m = _NSPID.search(_read(pid_dir / "status") or "")
+    return int(m.group(1).split()[-1]) if m else None
+
+
 def scan() -> dict[str, list[GpuProcess]]:
     """Every process holding GPU memory, per card (pdev), largest first.
 
@@ -358,7 +368,8 @@ def scan() -> dict[str, list[GpuProcess]]:
         out.setdefault(pdev, []).append(GpuProcess(
             pid=pid, label=label(argv, pid_dir / "root"),
             command=PurePosixPath(argv[0]).name if argv else "?",
-            container=container(pid_dir), vram=vram, host=host, ram=ram, mapped=mapped))
+            container=container(pid_dir), vram=vram, host=host, ram=ram, mapped=mapped,
+            ns_pid=ns_pid(pid_dir)))
     for procs in out.values():
         procs.sort(key=lambda p: (-p.vram, -p.host, p.pid))
     return out

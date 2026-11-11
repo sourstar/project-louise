@@ -4,7 +4,8 @@
 since keeping it unused is a waste of silicon, I want to run on it the STT
 model currently running in CPU, and see how fast it is. Write down the
 instructions for another session." This note is those instructions.
-Nothing has been installed, changed or measured. The facts below are read
+Nothing has been installed, changed or measured on the node. The code
+the brief needs is in §8. The facts below are read
 from the repository and from LocalAI's own files on 2026-11-11, and are
 labelled as such.*
 
@@ -323,6 +324,48 @@ everything they said.
    (`nemotron-3.5-asr-streaming-0.6b`, `parakeet-cli transcribe --stream`
    or the Realtime API). Does it stay faster than speech, with a margin?
 3. Its transcripts of the it, en, fr and de clips against tdt-0.6b-v3's.
+
+## 8. What the code provides (2026-11-11)
+
+*Operator, 2026-11-11: "Implement docs/notes/stt-on-igpu.md but without
+changing the speech processing logic: do it at the end of the speech".*
+
+- **The speech processing is unchanged.** The page still records the whole
+  question, and app/transcribe.py still runs the VAD and then the STT on
+  the whole clip after `AUTO_STOP_MS` of quiet. §7's A, B and C are not
+  built. Only the engine under the STT model moves.
+- **`python3 -m tools.stt_igpu yaml`** (§4 steps 3.1 and 3.4): from the
+  live model's YAML it writes `<stt>.yaml`, pinned to `cpu-parakeet-cpp`,
+  and `<stt>-igpu.yaml`, with the same weights on `vulkan-parakeet-cpp`
+  (`--backend rocm-parakeet-cpp` adds `HSA_OVERRIDE_GFX_VERSION=10.3.0`).
+  It refuses a twin whose `env` does not pin the device. It writes to
+  `--out` and never to the node.
+- **`python3 -m tools.stt_igpu bench`** (§4 steps 2 and 4) times the clips
+  through LocalAI's `/v1/audio/transcriptions`, one subdirectory per
+  language. It records the warm median, the RTF, the first call with
+  `--first`, the backend's CPU with `--pid`, the iGPU's peak busy share
+  and its VRAM/GTT use, the Tctl peak, and free space before and after.
+  **`diff`** compares two results word by word and gives their speeds.
+- **The resident keeper (§4 step 3.5, fixed before it was seen).**
+  LocalAI's `size_vram` is the driver's per-process count on any card, so
+  an iGPU model would have been counted against the B70's budget and
+  subtracted from its margin sample. The fix:
+  - the GPU probe now gives each process's namespace pid (`ns_pid`, which
+    is `/system`'s backend pid);
+  - app/resident.py remembers a model whose backend is on another card
+    (`elsewhere` in `state/resident-budget.json`), counts it at 0, leaves
+    it out of the margin, and skips its room check, until it is seen on
+    the B70 again;
+  - a probe without `ns_pid` changes nothing.
+  - Tests: tests/test_resident.py, tests/test_gpu_probe.py,
+    tests/test_stt_igpu.py.
+- **Still to do on the node** (München's session, on the operator's word):
+  - §4 in full: the render node in the LocalAI app, installing the
+    backend, the digest, and the numbers;
+  - LocalAI's own reclaimer and watchdog figures (localai-bugs B4, B6):
+    Louise cannot correct those, so they are measured there;
+  - the System page's by-model list (app/gpu_models.py) still shows the
+    iGPU model's `size_vram` beside the B70's models. This is display only.
 
 ## 6. Results
 
