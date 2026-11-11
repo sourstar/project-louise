@@ -55,7 +55,9 @@ nav a{color:var(--muted);text-decoration:none;padding:6px 12px;border-radius:3px
 nav a.active{color:var(--brass);background:var(--panel2)}
 nav a:hover{color:var(--ivory)}
 main{padding:20px 22px;max-width:1200px;margin:0 auto}
-.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:16px;margin-top:16px}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:16px;margin-top:16px;
+  margin-bottom:16px}  /* the cards' own bottom margin went (below): the grid keeps the gap after its last row
+                       (operator, 2026-11-11: no gap above "Offered by peers") */
 /* the grid's gap is the space between its cards: a card's own bottom margin
    doubled it (operator, 2026-11-11: the gap between cards as between a card
    and the border) */

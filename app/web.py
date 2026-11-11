@@ -40,7 +40,7 @@ from pathlib import Path
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, Field
 from starlette.background import BackgroundTask
@@ -4001,7 +4001,19 @@ def _model_pins() -> dict:
     try:
         return model_pins.status()
     except Exception:   # noqa: BLE001 — the page shows the rest
-        return {"pins": [], "stuck": [], "failures": {"count": 0, "recent": []}}
+        return {"pins": [], "stuck": [], "failures": {"count": 0, "recent": []},
+                "shown": model_pins.shown({})}
+
+
+@admin_router.post("/system/pins/clear-failures")
+def system_pins_clear_failures():
+    """The Model pins card's failures set aside (app/model_pins.py
+    `clear_failures`; kept in the record), and back to the page."""
+    from app import model_pins
+    n = model_pins.clear_failures()
+    model_pins.node_event("info", f"model pins: {n} failure(s) cleared from the System page "
+                                  f"(kept in state/model-pins.json)")
+    return RedirectResponse("/admin/system#sys-pins", status_code=303)
 
 
 def _users_listing() -> list[dict] | None:

@@ -520,11 +520,42 @@ def status() -> dict:
         with _state() as st:
             snap = json.loads(json.dumps(st))
     except OSError:
-        return {"pins": [], "stuck": [], "failures": {"count": 0, "recent": []}}
+        return {"pins": [], "stuck": [], "failures": {"count": 0, "recent": []},
+                "shown": shown({})}
     pins = list(snap["pins"].values())
     return {"pins": [p for p in pins if p["holders"]],
             "stuck": [p for p in pins if not p["holders"]],
-            "failures": snap["failures"]}
+            "failures": snap["failures"], "shown": shown(snap["failures"])}
+
+
+#: a failure newer than this opens the card by itself; older ones wait in it, closed
+FRESH_FAILURE_S = 3600.0
+
+
+def clear_failures(now: float | None = None) -> int:
+    """The failures shown so far set aside (operator, 2026-11-11: "it keeps
+    reporting old errors, a cleanup button maybe?"). NOTHING IS DELETED: the
+    count stays whole for the telemetry and the recent list stays in the
+    record; `cleared_at` and `cleared_count` say where the page starts
+    counting again. Returns how many were set aside."""
+    with _state() as st:
+        f = st["failures"]
+        count = int(f.get("count", 0))
+        set_aside = count - int(f.get("cleared_count", 0))
+        f["cleared_at"] = time.time() if now is None else now
+        f["cleared_count"] = count
+    return max(0, set_aside)
+
+
+def shown(failures: dict, now: float | None = None) -> dict:
+    """The failures the System page shows: those since the last clear, how
+    many, and how many of them are fresh (FRESH_FAILURE_S)."""
+    now = time.time() if now is None else now
+    since = float(failures.get("cleared_at") or 0.0)
+    recent = [f for f in failures.get("recent") or () if float(f.get("at") or 0.0) > since]
+    return {"count": max(0, int(failures.get("count", 0)) - int(failures.get("cleared_count", 0))),
+            "recent": recent, "cleared_at": failures.get("cleared_at"),
+            "fresh": sum(1 for f in recent if now - float(f.get("at") or 0.0) < FRESH_FAILURE_S)}
 
 
 def counters() -> dict:
