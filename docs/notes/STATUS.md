@@ -20,7 +20,7 @@ measured (published figures disagree).
 
 ### 2026-11-11 (München)
 
-- **Two spaces on one model deferred each other's gate — FIXED, not deployed** (München, 11-11, after 6d947cd): wikidata
+- **Two spaces on one model deferred each other's gate — FIXED, DEPLOYED (8d0844d, 19:11Z) and VERIFIED** (München, 11-11, after 6d947cd): wikidata
   (88a8c0b0…) and normattiva-nemo (8ddb1bf5…) share vega-nemotron-3-embed-1b; both started the gate at 16:57:45Z and both
   fresh-context passes ended DEFERRED two seconds apart (17:13:51Z "32 requests … made 18 context(s) while the run
   answered 66 call(s)"; 17:13:53Z 15 / 61), each seeing the other's ~30 calls; both verdicts expired together (FAIL_TTL_S
@@ -31,6 +31,11 @@ measured (published figures disagree).
   another space's pass for as long as it embeds; (3) a fresh-context round another request touched (what was in flight,
   a search) is asked again, not counted, up to 10 × 3 s (`run_check.round_again`), before the pass defers. Tests:
   tests/test_run_check.py, tests/hold/test_fresh_contexts.py, tests/test_embed_producers.py.
+  VERIFIED after the operator's resume (19:24:56Z): normattiva-nemo passed first (v6 statement 19:34:20Z, contexts 300,
+  context_variation "1", exact); then wikidata gated at 19:44:23Z while normattiva-nemo logged "embedding stands aside
+  while the gate of wikidata runs on the same model" (19:44:29Z). A person's query held the model past the gate's 300 s
+  bound once (GateTimeout 19:52:39Z: queries first, a deferral); the gate ran again at 19:52:50Z and PASSED at
+  20:01:41Z (v6, contexts 300, context_variation "1", exact, batch-invariant). No fresh-context deferral.
 - **Out of open files: a deferral now, and the limit raised — BUILT, not deployed** (München and the legal-collections
   session, 11-11). The worker held its soft limit of 1024 open files (hard 524288) twice, at 12:51:26Z (29 lines) and
   12:57:51Z (13), and normattiva:5853072486171192420 was written "embed: RuntimeError: lance error: … Too many open
