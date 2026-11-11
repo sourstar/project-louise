@@ -458,7 +458,7 @@ is elsewhere than the brief puts it (R3, R4, R5).
 
 | step | as written (§6) | amended |
 |---|---|---|
-| before 3 | — | **R6: the card record at N = 30…600 s** — GB·h released and wakes per day, per encoder. No card, no build. Stop here if only qwen3-4b ever sleeps and 1.9 GB is not worth an engine change. |
+| before 3 | — | **R6, as §9 amends it: the card record at N = 1…10 s** — GB·h released and wakes per day, per encoder. No card, no build. It picks the debounce; it is no longer a reason to stop. |
 | 2 | read the code, answer three questions | done (R1–R3); left to read: nothing |
 | 3 | measure memory back, create/free time | the same, with `GGML_SYCL_MEMTRACE=1` (R8), the driver's count split `vram0` / host, and whether the wake recompiles kernels (R2) |
 | 4 | the patch | + the failed-wake rule (R4), no re-fit (R9), #30012's guard (R10), the scope (R11); LocalAI: the wake call in every RPC and the seven null reads (R3) |
@@ -470,3 +470,81 @@ is elsewhere than the brief puts it (R3, R4, R5).
 | status quo | nothing to build or re-gate; the driver's spill works today | the driver chooses what leaves the card; ~1.4 GB lives in host RAM; every new model is fitted against contexts that work 31 s a day |
 | as briefed | the card's memory follows the work; a general feature upstream lacks | LocalAI's RPCs hang or crash on the first sleep (R3); a wake under contention is undefined (R4); the keeper misreads the sizes (R5); the gate is too short (R7) |
 | amended (recommended) | the same gain, known in GB·h before any build; the three ways it fails here are closed first | more work in LocalAI's server and one Louise change; a longer gate; still one re-gate of every space on the engine |
+
+## 9. The operator's model, 2026-11-11 — idle or running, no sleep
+
+*The operator, after §8: "This is the equivalent of a semi-cold start:
+instead of loading the whole model only the context memory is requested …
+In the very moment the model doesn't need the memory anymore, it is freed …
+There is not necessarily a sleep, just idle or running models." And for a
+query meanwhile: "the contexts of the batch in queue can be pruned, or some
+other model can be evincted, or the chat processing can be postponed".
+What follows is the reviewer's opinion, not yet the operator's decision.*
+
+**It supersedes §0's "after N seconds idle" and §2's `sleep_idle_s:600`,
+and R6 with them**: R6 read the saving at N = 600; at N → 0 the headline
+holds. ≈ 24 GB at rest (34 − 10) + at most 3.3 GB of working context
+(p95 2.2) ≈ 27 GB, against 34 GB held today and the reclaimer's 31.0 GB
+line; 27–29 GB if the query path keeps its contexts. Eviction and
+postponement become corner cases, and memory moves from a margin measured
+after the fact (6 h peak, AIMD penalty) to admission before the allocation.
+
+What the engine and the code say about it:
+
+- **The unit is the model's context, not the job's.** A llama.cpp server
+  has ONE context — a KV cache for the window, compute buffers for the
+  ubatch — and our embedders run `parallel:1` (M6) with `EMBED_BATCH` 1
+  (app/config.py:111): a batch's jobs pass through the same context one
+  after another. There is nothing to return per job, and nothing lost: the
+  batch's peak is one context whatever its length. Memory returned per job
+  is Prism's elastic KV (shared-context.md §3); it pays only for a model
+  with many parallel conversations.
+- **The engine cannot see that a batch ended.** Between two jobs its queue
+  is empty; a release on an empty queue frees and re-creates the context
+  between inputs. "The very moment" is known to Louise: the last holder of
+  the model's lease leaving (app/model_pins.py `hold` / `release`). Two
+  ways to carry it: a debounce of a few seconds on the engine's idle timer
+  (`--sleep-idle-seconds` takes any N ≥ 0; no new surface; a busy period
+  costs at most one wake per N) — or an explicit release call from the
+  lease (exact; a new LocalAI call, a wire change: ask first). The first,
+  until the card record shows it wastes GB·h.
+- **A queued batch holds nothing.** Preparing the next batch's context while
+  the current one runs holds two contexts to save one creation; worth it
+  only if §1's creation time is a real share of a batch. Without it, "prune
+  the queued batch's contexts" has nothing to prune.
+- **The order when a query finds no room**: (1) queued corpus work holds
+  nothing; (2) the corpus stands aside — already the rule: a question
+  releases the corpus pins (`release_for_question`, app/rage/dispatch.py
+  `question`), and with the context on the lease that frees its contexts
+  too, after the one request already sent (a GPU request is not
+  pre-empted); (3) evict a model's weights — someone's next use pays 11–19 s;
+  (4) postpone the chat — last, and against the standing order (query work
+  highest, operator 2026-10-25). By the arithmetic above 3 and 4 should
+  almost never fire.
+- **The chat keeps its context at first.** 0.6 GB against the one path
+  where a person waits, and its cached prompt dies with the context. Corpus
+  encoders and MADLAD first (1,882 + 2,221 + 2,007 MiB of the 8,585 listed
+  in §5); the query path once its creation time is measured against a
+  person's wait.
+
+What N → 0 makes decisive (§8 amended):
+
+- §1's creation time is paid at every busy period, not after ten idle
+  minutes: it is THE go / no-go number, read as chunks/s per collection.
+- R10's race (#30012) is met all day, not once after a long idle: a
+  prerequisite, with its test.
+- R4: an acquire that fails is refused and retried by whoever arbitrates.
+- R7: thousands of first passes after a creation a day. Beside the ≥ 300
+  cycle gate, A CANARY PER CONTEXT: the wrapper embeds one fingerprint text
+  right after each creation and sets its bytes against the run's own before
+  any input — the first pass is then the canary's (M5's class), and a
+  context that does not reproduce is discarded before it writes.
+- R5 grows: the keeper and the dispatcher become the arbiter (sizes asleep
+  and awake per model, room checked before the acquire). That is a change to
+  WHAT RUNS WHEN: docs/notes/scheduling.md §6's checklist binds it.
+
+| | pros | cons |
+|---|---|---|
+| timer, N = 600 s (§0 as written) | few wakes a day; the race and a per-wake fault rarely met | ≈ 2 GB freed (qwen3-4b); the budget still measured after the fact |
+| the operator's model, per job | the finest grain | no counterpart in llama.cpp short of Prism's allocator; nothing to gain at `parallel:1` |
+| the operator's model, per model on the lease (recommended) | ≈ 6 GB freed, the card under its line with room to spare; contention decided by Louise's own priorities | a creation per busy period on the embedding path; the race fix, the canary and the arbiter are prerequisites, not refinements |
