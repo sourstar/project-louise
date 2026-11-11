@@ -1004,6 +1004,15 @@ reader needs at the command line:
   as `unfreeze` does, recorded as the Library's. Freeze is not offered
   there, as pause is not: both are the operator's choice on the command
   line (RULE 2); the card offers the way back.
+- **`node title show`, `node title set TEXT`, `node title reset`.** *Added
+  2026-11-11* (operator: "The label on top left is 'Project Louise',
+  customizable is the settings"). The node's title: the label at the top
+  left of every page, the browser tab's name and the header of a PDF saved
+  from Ask. It lives in platform.toml `[node] title` (§7.8), "Project
+  Louise" when unset. `set` writes that one line and keeps every other line
+  of the file byte for byte, reading the file back as the node reads it
+  before replacing it. `reset` removes it. Every page shows it at its next
+  load, with no restart (`app/site_title.py`).
 - **`node speech show`, `node speech set`.** *Added 2026-11-07* (operator:
   "voice support in Louise's web GUI, after the node's speech models run on
   the GPU"). The Ask page's microphone and speaker run on the node's model
@@ -1852,6 +1861,8 @@ variable, a file, a log line or a message.
 [node]       http_port = 8742   peer_port = 6881   name = "nas"   address = "http://nas:8742"   # address: where THIS node answers pulls, as peers reach it (09 §9.9; added 2026-10-06)
              # peer_port: where this node's swarm listens, as peers reach it; named in its digest (09 §9.9) so a
              # fetcher with the DHT off still finds the swarm; absent, the session's own port is named when one runs
+             # title = "Project Louise": the label at the top left of every page, the browser tab's name and a
+             # saved PDF's header; one line, ≤ 80 characters; written by `louise node title set|reset` (added 2026-11-11)
 [budget]     down_max = "400Mbit"   up_max = "40Mbit"   schedule = "01:00-07:00 full; else 30%"
              # up_max is the swarm's upload ceiling too: the session uploads no faster (invariant 5; until
              # 2026-10-19 seeding was only counted); `[bandwidth]`, the older spelling, still loads

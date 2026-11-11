@@ -6,14 +6,14 @@
    question and "page n of N" on every page. Nothing here is fetched: no
    image, no external stylesheet, the fonts are the system's. #}
 <html lang="{{ answer_lang or 'en' }}"><head><meta charset="utf-8">
-<title>Louise — {{ question_short }}</title>
-<meta name="author" content="Louise">
-<meta name="generator" content="Louise ({{ node }})">
+<title>{{ site }} — {{ question_short }}</title>
+<meta name="author" content="{{ site }}">
+<meta name="generator" content="{{ site }} ({{ node }})">
 <style>
   @page {
     size: {{ paper }} portrait;
     margin: {{ margin }};
-    @bottom-left { content: "Louise · {{ footer }}"; font: 7pt "Noto Sans", "DejaVu Sans", sans-serif;
+    @bottom-left { content: "{{ footer }}"; font: 7pt "Noto Sans", "DejaVu Sans", sans-serif;
                    color: #6b6b66; vertical-align: top; padding-top: 4mm; width: 75%; }
     @bottom-right { content: "page " counter(page) " of " counter(pages); font: 7pt "Noto Sans", "DejaVu Sans", sans-serif;
                     color: #6b6b66; vertical-align: top; padding-top: 4mm; }
@@ -61,7 +61,7 @@
   .end { font-size: 7.5pt; color: #6b6b66; margin-top: 14pt; border-top: .75pt solid #c9c6bd; padding-top: 5pt; }
 </style></head><body>
 
-<div class="band"><span class="brand">LOUISE</span>
+<div class="band"><span class="brand">{{ site|upper }}</span>
   <span class="stamp">{{ when.strftime('%-d %B %Y, %H:%M') }} {{ when.tzname() or '' }} · {{ node }}</span></div>
 
 <p class="label">Question</p>
@@ -90,7 +90,7 @@
   {% if r.passage %}<blockquote class="passage" dir="{{ r.dir }}">{{ r.passage }}{% if r.translated_from %} <span class="tr-note">· translated from {{ r.translated_from }}</span>{% endif %}</blockquote>{% endif %}
   <div class="links">
     {%- if r.origin_url %}<span class="k">Original source</span><a href="{{ r.origin_url }}">{{ r.origin_url }}</a>{% else %}<span class="k">Original source</span><span class="tr-note">this collection gives no link to the origin</span>{% endif %}
-    {%- if r.reader_url %}<br><span class="k">On Louise</span><a href="{{ r.reader_url }}">{{ r.reader_url }}</a>{% endif %}</div>
+    {%- if r.reader_url %}<br><span class="k">On {{ site }}</span><a href="{{ r.reader_url }}">{{ r.reader_url }}</a>{% endif %}</div>
 </div></div>
 {% endfor %}
 {% endif %}

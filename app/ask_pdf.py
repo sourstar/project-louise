@@ -369,7 +369,8 @@ def filename(question: str, when: datetime) -> str:
 
 # ---- the document ----------------------------------------------------------
 
-def build_html(doc: AskPdf, *, base_url: str, node: str, when: datetime) -> str:
+def build_html(doc: AskPdf, *, base_url: str, node: str, when: datetime,
+               site: str = "Project Louise") -> str:
     """The PDF's HTML (templates/pdf/answer.html): what `render` lays out,
     and what a test reads."""
     numbers = frozenset(r.n for r in doc.references)
@@ -394,7 +395,7 @@ def build_html(doc: AskPdf, *, base_url: str, node: str, when: datetime) -> str:
         })
     return _ENV.get_template("pdf/answer.html").render(
         paper=PAPER[doc.paper], margin=MARGIN[doc.paper],
-        footer=css_string(_short(doc.question.strip(), 90)),
+        footer=css_string(f"{site} · {_short(doc.question.strip(), 90)}"), site=site,
         question=doc.question.strip(), question_short=_short(doc.question.strip(), 90),
         answer=markdown_html(doc.answer, numbers), answer_lang=doc.answer_lang,
         answer_lang_name=language_name(doc.answer_lang) if doc.answer_lang else None,

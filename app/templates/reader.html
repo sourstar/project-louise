@@ -1,5 +1,5 @@
 {% if not fragment %}{% extends "base.html" %}{% endif %}
-{% block title %}{{ doc.header.title }} — Project Louise{% endblock %}
+{% block title %}{{ doc.header.title }} — {{ site_title() }}{% endblock %}
 {% block content %}
 {# The document behind a hit (STATUS 5j). Rendered twice from one file:
    standalone (a tab of its own) and as the inner HTML of the Ask page's

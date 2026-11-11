@@ -33,6 +33,10 @@ from typing import Any
 from .transfer import schedule as schedule_mod
 
 DEFAULT_WORKERS = 8
+#: `[node] title` unset: the label every page and saved PDF shows (app/site_title.py)
+DEFAULT_TITLE = "Project Louise"
+#: a title is one line of at most this many characters
+TITLE_MAX = 80
 DEFAULT_PER_ENDPOINT = 4
 DEFAULT_RESERVE_INTERACTIVE = 0.20   # §5.2: "a reserved interactive headroom (~20%)"
 # Hard ceiling on connections opened for ONE file. Not a performance limit —
@@ -266,6 +270,9 @@ class PlatformConfig:
     certifier: CertifierConfig = CertifierConfig()
     deposit: DepositConfig = DepositConfig()
     peers: PeersConfig = PeersConfig()
+    # [node] title — the label at the top left of every page, the browser tab's
+    # name and a saved PDF's header (operator, 2026-11-11); app/site_title.py
+    title: str = DEFAULT_TITLE
     # [encoder_defaults.<plugin>] -> the raw [encoder]-shaped table. Kept
     # RAW here on purpose: app/collections.py owns EmbedRecipe and parses
     # it, and importing that module from this one would close an import
@@ -547,6 +554,12 @@ def _load_one(path: Path) -> PlatformConfig:
     certifier = CertifierConfig(valid_from=cert_raw.get("valid_from"), revoked_at=cert_raw.get("revoked_at"))
 
     node_raw = raw.get("node", {}) or {}
+    title_raw = node_raw.get("title", DEFAULT_TITLE)
+    if not (isinstance(title_raw, str) and title_raw.strip() and len(title_raw) <= TITLE_MAX
+            and not any(ord(c) < 0x20 or ord(c) == 0x7f for c in title_raw)):
+        raise schedule_mod.ScheduleError(
+            f"[node] title is one line of 1-{TITLE_MAX} characters, the label every page shows "
+            f"(`louise node title set`)")
     codex_only_raw = node_raw.get("codex_only", False)
     if not isinstance(codex_only_raw, bool):
         # Refused rather than coerced: `codex_only = "false"` read as truthy
@@ -612,6 +625,7 @@ def _load_one(path: Path) -> PlatformConfig:
                           ask=ask,
                           models=models,
                           speech=speech,
+                          title=title_raw.strip(),
                           certifier=certifier,
                           embed_defaults=embed_raw,
                           codex_only=codex_only_raw,

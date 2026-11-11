@@ -50,6 +50,7 @@ from . import (auth, cancel, collections as collections_mod, config, db, discove
 from . import translate as mt
 from . import collection_file
 from .ask_pdf import AskPdf
+from . import site_title as site_title_mod
 # the collection file's one writer, moved to app/collection_file.py (2026-10-25);
 # the names stay importable from here
 from .collection_file import _codex_id, _write_collection_toml  # noqa: F401
@@ -96,6 +97,10 @@ def _asset_version() -> str:
 
 
 TEMPLATES.env.globals["asset_v"] = _asset_version()
+# THE NODE'S TITLE (operator, 2026-11-11: "The label on top left is 'Project
+# Louise', customizable is the settings"): platform.toml [node] title, read at
+# each page (app/site_title.py)
+TEMPLATES.env.globals["site_title"] = site_title_mod.title
 # The node's four modes, their words and what each runs — the ONE table the
 # worker reads (app/node_state.py: MODE_RUNS), as template GLOBALS: a page
 # cannot be rendered without them, so a button cannot promise what the node
@@ -438,7 +443,8 @@ def ask_save_pdf(request: Request, body: AskPdf):
     from . import ask_pdf
     base = _public_base(request)
     when = ask_pdf.reader_time(body.tz)
-    html = ask_pdf.build_html(body, base_url=base, node=urlsplit(base).netloc or base, when=when)
+    html = ask_pdf.build_html(body, base_url=base, node=urlsplit(base).netloc or base, when=when,
+                              site=site_title_mod.title())
     try:
         pdf = ask_pdf.render(html)
     except (ask_pdf.Busy, ask_pdf.Unavailable) as e:
