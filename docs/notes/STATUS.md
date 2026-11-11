@@ -65,8 +65,10 @@ measured (published figures disagree).
   checks `cal.rerank_model`). Engine: our separate backend `louise-sycl-f16-llama-cpp-9d17b8a39845` (ddf48f8 + the
   #24083 port, P10 in [localai-bugs.md](localai-bugs.md)). Backups `<name>.toml.bak-20261111-before-nemotron-rerank`,
   `louise-rerank-nemotron-1b.yaml.bak-20261111-ctx4096`. LICENCE (Llama 3.2 Community + OpenMDW-1.1): "Built with
-  Llama" on the service — Ask's footer and Help › Basics › Models say it (tests/test_web_pages.py); needs a web
-  deploy.
+  Llama" on the service — Ask's footer and Help › Basics › Models say it (tests/test_web_pages.py). LIVE: 850773d
+  deployed 2026-11-11T07:41:09Z (operator: "Deploy the web for the Llama attribution"; web + worker on one image,
+  rc 0, relay gate 200; /ask has the line and its link, /help the Models panel and Meta's notice; a gutenberg search
+  answers with Nemotron rerank scores). bge against Nemotron on wikidata and wikipedia: München measuring.
 - **gutenberg's Qwen3-Embedding-4B trimmed: ubatch = batch 2048, ctx 8192, LIVE since 2026-11-12 06:52Z**
   (München; the operator's 10-23 "trim the context to the needed one" — gutenberg's chunker cuts at 1,000 tokens, its
   space promises 8,191). `size_vram` 5,643 → 4,263 MiB (−1,380). Gate run sha256:7e0a79eabf3fe229…: document 16/16,
