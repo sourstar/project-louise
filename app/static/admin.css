@@ -234,6 +234,14 @@ details.settings[open]>summary{margin-bottom:8px}
    it is done for 'Settings' at the bottom of the Ask tab. A crowded
    interface is a bad interface"): the same look as the Settings line, from
    the theme's tokens only, so it reads the same in Slate and in Colmar */
+/* a System panel collapsed to its heading line (operator, 2026-11-11) */
+details.sect>summary{cursor:pointer;list-style:none;display:flex;align-items:baseline;gap:10px;flex-wrap:wrap}
+details.sect>summary::-webkit-details-marker{display:none}
+details.sect>summary>h2{margin:0;display:inline}
+details.sect>summary::before{content:"▸";color:var(--muted);font-size:12px}
+details.sect[open]>summary::before{content:"▾"}
+details.sect[open]>summary{margin-bottom:10px}
+td>.use+.use{margin-top:2px}
 details.more{margin:8px 0}
 details.more>summary{cursor:pointer;color:var(--muted);font-size:12px}
 details.more[open]>summary{margin-bottom:4px}

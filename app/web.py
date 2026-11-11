@@ -2436,14 +2436,26 @@ def _collection_shelf(collection: collections_mod.Collection,
     # has work it can take on its own — `workable`, the rule every ETA slot
     # follows: nothing left, embedding off, or only blocked documents left
     # (they wait for "clear errors & retry", not for time) shows no row
+    # OFF OR ON-DEMAND, "current" IS "-" (operator, 2026-11-11: "When a
+    # collection's embedding is either off or on-demand 'current' shall be
+    # '-'"): nothing embeds the rest on its own, so a rate projected over it
+    # would promise what no mode will do. Off, the row stays while work is
+    # left (status `progress` counts none workable): best is what turning it
+    # on would take
     embed_eta = None
-    if not counts_pending and embed_mode != "off" and workable.get("embed", 0) > 0:
+    left = (workable.get("embed", 0) if embed_mode != "off" else
+            max(0, remaining.get("embed", 0) - int(getattr(stages.get("embed"), "blocked", 0) or 0)))
+    if not counts_pending and left > 0:
         best = (_best_eta(collection.name, remaining["embed"], stage_rates.get("embed"))
                 if recipe is not None and recipe.spends == "gpu" else None)
-        current = stage_etas.get("embed")
+        if embed_mode in ("off", "lazy"):
+            current = "-"
+            why = ("embedding is off: nothing is embedded until it is turned on" if embed_mode == "off"
+                   else "on-demand: only what searches ask for is embedded, so no rate leads to the end")
+        else:
+            current, why = stage_etas.get("embed"), stage_eta_why.get("embed")
         if best or current:
-            embed_eta = {"best": best, "current": current,
-                         "current_why": stage_eta_why.get("embed")}
+            embed_eta = {"best": best, "current": current, "current_why": why}
     paused = node_state.pause_of(collection.name)
     # judged against the mode the page read once for every card, the pause
     # just read, the setting: THE holds `node show` names (status `holds`)
@@ -4005,7 +4017,10 @@ def system_gpu_fragment(request: Request):
                               extra_urls=(config.CHAT_URL, config.TRANSLATE_URL, config.RERANK_URL),
                               chat_model=config.CHAT_MODEL, translate_model=config.TRANSLATE_MODEL,
                               reading=_reading_models(), speech=_speech_models())
+    probed = gpu.panel(config.GPU_PROBE_URL)
+    # each model on its card, and the CPU's own (operator, 2026-11-11)
+    cards = gpu_models.by_card(models, probed.get("devices") or ())
     return TEMPLATES.TemplateResponse(request, "_fragments/gpu.html",
-                                       gpu.panel(config.GPU_PROBE_URL)
-                                       | {"governor": gpu.governor(),
+                                       probed
+                                       | {"governor": gpu.governor(), "cards": cards,
                                           "models": models, "model_bar": gpu_models.bar})
