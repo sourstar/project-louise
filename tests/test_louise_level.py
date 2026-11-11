@@ -196,3 +196,89 @@ def test_a_streamed_answer_is_read_in_either_protocol(chat_server, monkeypatch):
 def test_the_levels_header_names_are_the_specs():
     assert dispatch.LEVEL_HEADER == "Louise-Level"
     assert [l.name.lower() for l in Level] == ["corpus", "translate", "query", "rerank", "chat"]
+
+
+# ---- a chat request gives its context back (operator, 2026-11-11: "Wire chat to release the
+#      context after use: we already know that it is a one shot operation") ---------------------
+
+KEEP_0 = {"keep_context_ms": "0"}
+
+
+def test_every_chat_request_to_localai_carries_a_keep_of_zero(chat_server, monkeypatch):
+    """An answer, a streamed answer, a round with tools and the warm: each
+    carries `metadata.keep_context_ms = "0"`, so a chat model loaded with
+    `context_on_demand` frees its context when the answer is complete."""
+    from app import model_load
+    monkeypatch.setattr(config, "CHAT_API", "openai")
+    monkeypatch.setattr(config, "CHAT_MODEL", "qwen3")
+    monkeypatch.setattr(config, "CHAT_URL", "http://localai:8080")
+    asked = []
+    monkeypatch.setattr(model_load, "speaks_localai", lambda server: asked.append(server) or True)
+    monkeypatch.setattr(llm, "warm", lambda level=Level.CHAT: None)
+    chat_server["answer"] = {"choices": [{"message": {"content": "Ahab."}}]}
+    assert llm.chat([{"role": "user", "content": "who?"}]) == "Ahab."
+    assert chat_server["body"]["metadata"] == KEEP_0
+    assert asked == ["http://localai:8080"], "the runner, as app/model_load.py names it"
+    llm.chat_tools([{"role": "user", "content": "who?"}], [{"type": "function", "function": {"name": "f"}}])
+    assert chat_server["body"]["metadata"] == KEEP_0 and chat_server["body"]["tools"]
+    chat_server["lines"] = ['data: {"choices": [{"delta": {"content": "Ahab."}}]}', "data: [DONE]"]
+    assert "".join(llm.chat_stream([{"role": "user", "content": "who?"}])) == "Ahab."
+    assert chat_server["body"]["metadata"] == KEEP_0 and chat_server["body"]["stream"] is True
+    # nothing else in the body moved
+    assert chat_server["body"]["chat_template_kwargs"] == {"enable_thinking": False}
+    assert chat_server["body"]["model"] == "qwen3"
+
+
+def test_the_warm_of_the_chat_model_carries_it_too(monkeypatch, isolated_config):
+    """The keeper preloads the chat model through this warm, and nothing
+    follows it: without a keep the model would hold its context from its load
+    to the first question."""
+    from app import model_load
+    monkeypatch.setattr(config, "CHAT_API", "openai")
+    monkeypatch.setattr(config, "CHAT_MODEL", "qwen3")
+    monkeypatch.setattr(config, "CHAT_URL", "http://localai:8080")
+    sent = []
+
+    def ensure_loaded(url, model, send, **kw):
+        # the runner is asked what it is BEFORE the body is built
+        monkeypatch.setattr(model_load, "speaks_localai", lambda server: True)
+        send(5.0)
+    monkeypatch.setattr(model_load, "speaks_localai", lambda server: None)
+    monkeypatch.setattr(model_load, "ensure_loaded", ensure_loaded)
+    monkeypatch.setattr(llm.httpx, "post", lambda url, json=None, timeout=None, headers=None:
+                        sent.append((url, json)))
+    llm.warm()
+    (url, body), = sent
+    assert url == "http://localai:8080/v1/chat/completions"
+    assert body["metadata"] == KEEP_0 and body["max_tokens"] == 1
+
+
+@pytest.mark.parametrize("localai", [False, None])
+def test_a_runner_that_is_not_localai_is_sent_what_it_always_was(chat_server, monkeypatch, localai):
+    """Another OpenAI-style service is sent nothing it did not ask for (a
+    strict one refuses a `metadata` it has no use for); one that cannot be
+    asked what it is, neither."""
+    from app import model_load
+    monkeypatch.setattr(config, "CHAT_API", "openai")
+    monkeypatch.setattr(config, "CHAT_MODEL", "qwen3")
+    monkeypatch.setattr(model_load, "speaks_localai", lambda server: localai)
+    monkeypatch.setattr(llm, "warm", lambda level=Level.CHAT: None)
+    chat_server["answer"] = {"choices": [{"message": {"content": "Ahab."}}]}
+    llm.chat([{"role": "user", "content": "who?"}], temperature=0.0, max_tokens=50)
+    assert chat_server["body"] == {
+        "model": "qwen3", "messages": [{"role": "user", "content": "who?"}], "stream": False,
+        "chat_template_kwargs": {"enable_thinking": False}, "temperature": 0.0, "max_tokens": 50}
+
+
+def test_ollama_has_its_own_keep_alive_and_no_metadata(chat_server, monkeypatch):
+    from app import model_load
+    monkeypatch.setattr(config, "CHAT_API", "ollama")
+    monkeypatch.setattr(model_load, "speaks_localai", lambda server: pytest.fail("not asked"))
+    chat_server["answer"] = {"message": {"content": "Ahab."}}
+    llm.chat([{"role": "user", "content": "who?"}])
+    assert "metadata" not in chat_server["body"] and "keep_alive" in chat_server["body"]
+
+
+def test_a_one_shot_body_is_the_key_rage_writes():
+    from app.rage import keep
+    assert keep.one_shot_body() == {"metadata": {keep.FIELD: "0"}} == keep.warm_body()

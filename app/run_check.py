@@ -7,6 +7,10 @@ machinery. THIS module is where the node's embedding client meets it, for
 the command line and the worker alike, so there is one way a run gets
 validated and one way a write is guarded.
 
+    canary_failed(...)  the engine discarded a context that did not reproduce
+                        its canary: its run is SUSPECT. No write relies on its
+                        kept statement, and the stage's next look sets that
+                        statement aside and gates the run from scratch.
     check_write(...)    the worker, before a write: a DICTIONARY LOOKUP. It
                         never runs the gate — several document threads reach
                         it at once, and the gate is triggered once per
@@ -895,9 +899,112 @@ def _flight(collection) -> str:
     return f"{collection.codex.space_id} {url} {model}"
 
 
+# ---- a context that did not reproduce its canary: the run goes back to the gate ----
+#
+# Operator, 2026-11-11: "Wire the canary failure to the gate before deployment"
+# (docs/notes/idle-context-brief.md §10 "The canary"). An engine loaded with
+# `context_on_demand` holds every context it creates to the output its load's
+# context gave for a fixed input, and discards one that does not reproduce it.
+# The request is deferred; but the failure is the engine's own word that it
+# does not reproduce itself on a new context, which is what a run FAILS for
+# (invariant 12). So the run stops being relied on at once, and its kept
+# statement is set aside as a failed re-check's is (`runs.set_aside`): the
+# gate runs against it from scratch — its 300 counted fresh contexts among
+# the rest — and the run contributes again only if it passes.
+
+#: (endpoint, model) -> the times its engine was seen, in this process, to
+#: discard a context that did not reproduce its canary: by the request that
+#: was refused (embeddings._endpoint_error) and, for every other caller's, by
+#: the worker's beat from the engine's own count (worker._read_engine_counts).
+#: One failure may be seen by both: a count, compared and never summed
+_canary: dict[tuple[str, str], int] = {}
+#: (the collection's place, role) -> `_canary`'s count when its run was last
+#: gated from scratch: failures seen since are what makes it suspect
+_canary_gated: dict[tuple[str, str], int] = {}
+#: (place, role) -> `_canary`'s count the run's history was last written for:
+#: a gate that is deferred and asked again is the same episode, written once
+_canary_recorded: dict[tuple[str, str], int] = {}
+_canary_lock = threading.Lock()
+
+
+def canary_failed(url: str, model: str | None) -> None:
+    """The engine that answers as `model` at `url` discarded a context that
+    did not reproduce its canary. A count and nothing else: whoever reads it
+    (`check_write`, `embed_allowed`) acts. Safe from any thread and process;
+    only the worker gates."""
+    with _canary_lock:
+        _canary[(url, model or "")] = _canary.get((url, model or ""), 0) + 1
+
+
+def _suspect(collection, role: str = "document") -> bool:
+    """Whether the run that answers this collection's `role` side had a canary
+    failure it has not been gated from scratch for."""
+    if not _canary:                                     # the common case: one lookup
+        return False
+    try:
+        who = _who(collections_mod.recipe_for(collection), role == "query")
+    except Exception:                                   # noqa: BLE001
+        return False
+    return _canary.get(who, 0) > _canary_gated.get((_where(collection), role), 0)
+
+
+def _send_back(collection, run_id: str, role: str,
+               log: Callable[[str], None] | None) -> None:
+    """Set aside what this peer keeps for the suspect run in this space, and
+    forget that it was ever re-checked: the caller gates it from scratch."""
+    codex = collection.codex
+    moved = runs_mod.set_aside(_root(), collection.name, codex, run_id, role)
+    for entry in [e for e in _rechecked if e[:3] == (codex.space_id, role, run_id)]:
+        _rechecked.discard(entry)
+    # THE RUN'S HISTORY, kept across restarts and across a gate that passes
+    # again (runs.record_canary): a second failure of the same run is a repeat
+    key = (_where(collection), role)
+    try:
+        seen = _canary.get(_who(collections_mod.recipe_for(collection), role == "query"), 0)
+    except Exception:                                   # noqa: BLE001
+        seen = 0
+    if seen > _canary_recorded.get(key, 0):
+        history = runs_mod.record_canary(_root(), collection.name, role, run_id, _now())
+        _canary_recorded[key] = seen
+    else:
+        history = runs_mod.canary_history(_root(), collection.name, role, run_id)
+    if log is not None:
+        repeat = "" if len(history) < 2 else (
+            f" — A REPEAT: time {len(history)} for this run (before: "
+            f"{', '.join(history[:-1][-3:])})")
+        log(f"CANARY — a context of {role} run {run_id[:23]}… did not reproduce its canary"
+            f"{repeat}: the engine does not reproduce itself on a new context (invariant "
+            f"12). Its kept statement is set aside ({[p.name for p in moved] or 'none was kept'}) "
+            f"and the run is gated from scratch before anything more is written by it")
+
+
+def _canary_note(collection, run_id: str, role: str = "document") -> str:
+    """What a verdict about a run says of its canary history, '' for a run
+    that has none: a pass does not erase it."""
+    history = runs_mod.canary_history(_root(), collection.name, role, run_id)
+    if not history:
+        return ""
+    return (f" — gated again after {len(history)} canary failure(s) of this run, the last "
+            f"{history[-1]}")
+
+
+def _gated_again(collection, role: str = "document") -> None:
+    """The gate has run against the suspect run and its statement — pass or
+    fail — is kept: what was seen until now is answered for."""
+    try:
+        who = _who(collections_mod.recipe_for(collection), role == "query")
+    except Exception:                                   # noqa: BLE001
+        return
+    with _canary_lock:
+        _canary_gated[(_where(collection), role)] = _canary.get(who, 0)
+
+
 def reset_cache() -> None:
     _verdicts.clear()
     _answering.clear()
+    _canary.clear()
+    _canary_gated.clear()
+    _canary_recorded.clear()
     _noted.clear()
     _rechecked.clear()
     _told_foreign.clear()
@@ -921,6 +1028,13 @@ def check_write(collection, recipe, answered: set) -> None:
     heard(recipe, answered)
     codex = collection.codex
     try:
+        if _suspect(collection):
+            # a context of this run did not reproduce its canary: its kept
+            # statement is not relied on until the stage has gated it again
+            run_id = sorted(r for r in answered if r)[-1] if any(answered) else ""
+            raise runs_mod.RunUnvalidated(
+                f"{collection.name}: a context of the run that answers did not reproduce its "
+                f"canary; nothing is written until the run has been gated again", run_id)
         runs_mod.check(_root(), collection.name, codex, answered, signer=signer(),
                        role="document", batched=batched(recipe), contributes=contributing(recipe))
         # A KEPT STATEMENT NOT YET RE-CHECKED IN THIS PROCESS is not relied
@@ -1016,6 +1130,9 @@ def _look(collection, stop: Callable[[], bool] | None,
         run_id = answering_run(recipe, probe_item=probe_for(codex))
         heard(recipe, {run_id})
         who = signer()
+        suspect = _suspect(collection)
+        if suspect:
+            _send_back(collection, run_id, "document", log)
         try:
             runs_mod.check(_root(), name, codex, {run_id}, signer=who,
                            batched=batched(recipe), contributes=contributing(recipe))
@@ -1026,13 +1143,20 @@ def _look(collection, stop: Callable[[], bool] | None,
                                batched=batched(recipe), contributes=contributing(recipe))
         except runs_mod.RunUnvalidated as e:
             if e.failed:
+                if suspect:
+                    _gated_again(collection)    # it was gated, and failed: kept so
                 raise
             _foreign(_root(), name, "document", log)
-            log(f"run {run_id[:23]}… is new to this peer; running the gate against it")
-            log(_told(validate(_root(), name, codex, recipe, stop=stop)))
+            log(f"run {run_id[:23]}… is {'gated again' if suspect else 'new to this peer'}; "
+                f"running the gate against it")
+            told = _told(validate(_root(), name, codex, recipe, stop=stop))
+            if suspect:
+                _gated_again(collection)        # pass or fail, its statement is kept
+            log(told)
             runs_mod.check(_root(), name, codex, {run_id}, signer=who,
                            batched=batched(recipe), contributes=contributing(recipe))
-        return True, f"run {run_id[:23]}… is validated for this space", run_id
+        return True, (f"run {run_id[:23]}… is validated for this space"
+                      + _canary_note(collection, run_id)), run_id
     except (runs_mod.RunRefused, runs_mod.RunUnvalidated, emb.GateError) as e:
         return False, str(e), run_id
     except Exception as e:                              # noqa: BLE001
@@ -1054,14 +1178,20 @@ def _look_at_the_query_side(collection, stop: Callable[[], bool] | None,
         recipe = collections_mod.recipe_for(collection)
         run_id = answering_run(recipe, query=True)
         heard(recipe, {run_id}, role="query")
+        suspect = _suspect(collection, "query")
+        if suspect:
+            _send_back(collection, run_id, "query", log)
         if run_id in runs_mod.statements_for_space(_root(), name, codex, "query",
                                                    signer=signer()):
             if recheck(_root(), name, codex, recipe, run_id, role="query", stop=stop,
                        log=log):
                 return
-        log(f"query run {run_id[:23]}… is new to this peer; running the gate against it")
-        log("query " + _told(validate(_root(), name, codex, recipe, role="query",
-                                      stop=stop)))
+        log(f"query run {run_id[:23]}… is {'gated again' if suspect else 'new to this peer'}; "
+            f"running the gate against it")
+        told = _told(validate(_root(), name, codex, recipe, role="query", stop=stop))
+        if suspect:
+            _gated_again(collection, "query")
+        log("query " + told)
     except Exception as e:                              # noqa: BLE001
         log(f"the query encoder's run could not be settled: {type(e).__name__}: {e}")
 
@@ -1081,8 +1211,11 @@ def embed_allowed(con, collection, *, stop: Callable[[], bool] | None = None) ->
     # of the encoder, not only the one that noticed.
     now_answering = answering(collection).get("document")
     stamp = _kept_stamp(collection)
+    # ...and a verdict given before a context of the run failed its canary is
+    # about a run that has to be gated again (`_suspect`)
     if cached is not None and cached[2] > now and cached[4] == stamp and (
-            now_answering is None or cached[3] is None or cached[3] == now_answering):
+            now_answering is None or cached[3] is None or cached[3] == now_answering) \
+            and not _suspect(collection) and not _suspect(collection, "query"):
         return cached[0]
     with _guard:
         lock = _looking.setdefault(_flight(collection), threading.Lock())
@@ -1092,7 +1225,9 @@ def embed_allowed(con, collection, *, stop: Callable[[], bool] | None = None) ->
         return False
     try:
         def log(message: str) -> None:
-            db.log_event(con, "info", "run-check", f"[{collection.name}] {message}"[:500])
+            # a context that did not reproduce its canary is an error to read
+            db.log_event(con, "error" if message.startswith("CANARY") else "info", "run-check",
+                         f"[{collection.name}] {message}"[:500])
 
         allowed, reason, run_id = _look(collection, stop, log)
         _look_at_the_query_side(collection, stop, log)

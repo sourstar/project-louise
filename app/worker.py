@@ -5442,7 +5442,13 @@ def _read_engine_counts(con) -> None:
         for line in rage_keep.observe(url, model, count):
             # a context that did not reproduce its canary is an error to read,
             # not a line among the scheduler's (app/rage/keep.py "THE CANARY'S RECORD")
-            db.log_event(con, "error" if line.startswith("CANARY") else "info", "sched", line)
+            # — and its run goes back to the gate, whoever's request it was
+            # (run_check.canary_failed: a person's query from the web process
+            # is in the engine's count and in nobody's exception here)
+            discarded = line.startswith("CANARY")
+            if discarded:
+                run_check.canary_failed(url, model)
+            db.log_event(con, "error" if discarded else "info", "sched", line)
 
 
 def _log_shares(con, live_paths=None) -> None:

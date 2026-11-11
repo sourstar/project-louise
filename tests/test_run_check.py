@@ -84,9 +84,18 @@ class Endpoint:
         self.texts = 0
         self.switch_after: int | None = None  # answers until the run changes
         self.levels: list[str | None] = []
+        self.canary_fail = 0                 # so many requests meet a context that fails its canary
 
     def post(self, url, *, json=None, timeout=None, headers=None):   # noqa: A002
         self.posts += 1
+        if self.canary_fail > 0:
+            # the engine discarded the context it created for this request
+            # (P11's canary), as it arrives through LocalAI
+            self.canary_fail -= 1
+            return httpx.Response(500, request=httpx.Request("POST", url), json={"error": {
+                "code": 500, "type": "", "message": "rpc error: code = Internal desc = context "
+                "canary failed: the context created for this request did not reproduce the "
+                "output of the load's for the same input and was discarded: try again"}})
         texts = json["input"]
         self.texts += len(texts)
         self.levels.append((headers or {}).get("Louise-Level"))
@@ -965,3 +974,163 @@ def test_the_engines_count_is_read_for_the_run_each_model_last_named(monkeypatch
     monkeypatch.setattr(run_check.config, "VEGA_URL", "")
     assert run_check.engine_counts(get=get) == {}
     run_check.reset_cache()
+
+
+# ---- a context that did not reproduce its canary: the run goes back to the gate ----
+#      (operator, 2026-11-11: "Wire the canary failure to the gate before deployment")
+
+def _events(con, level: str) -> list[str]:
+    return [r[0] for r in con.execute(
+        "SELECT message FROM events WHERE stage='run-check' AND level=?", (level,))]
+
+
+def test_a_context_that_fails_its_canary_sends_the_run_back_to_the_gate(node, endpoint):
+    """The engine discarded a context that did not reproduce its canary. The
+    request is deferred; the RUN is no longer relied on: nothing is written
+    under its kept statement, which is set aside, and the gate runs against
+    the run from scratch before work resumes."""
+    root, collection, codex = node
+    con = db.connect(collection)
+    assert backend_gate.embed_allowed(con, collection) is True
+    assert embeddings.upsert_book(7, "en", chunks(3), collection) == 3
+    first = statements_kept(root)[0]
+
+    endpoint.canary_fail = 1
+    with pytest.raises(embeddings.EndpointCanaryFailed) as e:
+        embeddings.upsert_book(8, "en", chunks(3, book=8), collection)
+    assert isinstance(e.value, embeddings.EndpointBusy) and worker.transient_failure(e.value), \
+        "for the request: a deferral, no document at fault"
+    assert "is gated again before anything more is written" in str(e.value)
+
+    # the endpoint answers again — and still nothing is written under the old statement
+    with pytest.raises(hold_runs.RunUnvalidated, match="did not reproduce its canary"):
+        embeddings.upsert_book(8, "en", chunks(3, book=8), collection)
+    assert stored(collection) == 3 and worker.transient_failure(hold_runs.RunUnvalidated("x", R1))
+
+    posts = endpoint.posts
+    assert backend_gate.embed_allowed(con, collection) is True, "gated from scratch, and it passed"
+    assert endpoint.posts - posts > 500, "the whole gate, not the sixteen texts of a re-check"
+    aside = sorted((hold_runs.directory(root, "gutenberg") / "set-aside").glob("document-*"))
+    assert len(aside) == 1, "the statement it had is kept, set aside"
+    again = statements_kept(root)
+    assert len(again) == 1 and hold_runs.passing(again[0], codex) and again[0] != first
+    (error,) = [m for m in _events(con, "error") if "CANARY" in m]
+    assert "a context of document run" in error and "did not reproduce its canary" in error
+    assert "set aside" in error and "A REPEAT" not in error
+    assert any("is gated again; running the gate against it" in m for m in _events(con, "info"))
+
+    assert embeddings.upsert_book(8, "en", chunks(3, book=8), collection) == 3
+    assert stored(collection) == 6
+    # a pass does not erase it: the verdict says the run's history
+    state = json.loads(db.get_control(con, backend_gate.GATE_STATE_KEY))
+    assert state["allowed"] is True and "gated again after 1 canary failure(s)" in state["reason"]
+    assert len(hold_runs.canary_history(root, "gutenberg", "document", R1)) == 1
+
+
+def test_a_second_failure_of_the_same_run_is_a_repeat_across_restarts(node, endpoint):
+    root, collection, codex = node
+    con = db.connect(collection)
+    assert backend_gate.embed_allowed(con, collection) is True
+    for _ in range(2):
+        endpoint.canary_fail = 1
+        with pytest.raises(embeddings.EndpointCanaryFailed):
+            embeddings.upsert_book(8, "en", chunks(3, book=8), collection)
+        assert backend_gate.embed_allowed(con, collection) is True
+        run_check.reset_cache()          # a new process: the history is on disk
+        backend_gate.reset_cache()
+        assert backend_gate.embed_allowed(con, collection) is True
+    errors = [m for m in _events(con, "error") if "CANARY" in m]
+    assert len(errors) == 2 and "A REPEAT" not in errors[0]
+    assert "A REPEAT: time 2 for this run" in errors[1]
+    assert len(hold_runs.canary_history(root, "gutenberg", "document", R1)) == 2
+    assert hold_runs.canary_history(root, "gutenberg", "document", R2) == []
+    state = json.loads(db.get_control(con, backend_gate.GATE_STATE_KEY))
+    assert "gated again after 2 canary failure(s)" in state["reason"]
+
+
+def test_a_run_that_fails_the_gate_it_was_sent_back_to_stays_refused(node, endpoint):
+    root, collection, codex = node
+    con = db.connect(collection)
+    assert backend_gate.embed_allowed(con, collection) is True
+    endpoint.canary_fail = 1
+    with pytest.raises(embeddings.EndpointCanaryFailed):
+        embeddings.upsert_book(8, "en", chunks(3, book=8), collection)
+    endpoint.tag = b"another model"      # and the engine no longer answers as it did
+    assert backend_gate.embed_allowed(con, collection) is False
+    kept = statements_kept(root)
+    assert len(kept) == 1 and hold_runs.passing(kept[0], codex) is False, "its failure is the statement now"
+    posts = endpoint.posts
+    run_check._verdicts.clear()
+    assert backend_gate.embed_allowed(con, collection) is False
+    assert endpoint.posts - posts < 100, "a failed run is not gated again and again"
+    with pytest.raises((hold_runs.RunUnvalidated, hold_runs.RunRefused)):
+        embeddings.upsert_book(8, "en", chunks(3, book=8), collection)
+
+
+def test_a_gate_that_could_not_finish_is_asked_again_and_written_once(node, endpoint, monkeypatch):
+    """The gate deferred (the encoder away mid-pass): the run stays suspect,
+    its history holds ONE entry for the episode, and the next look gates it."""
+    root, collection, codex = node
+    con = db.connect(collection)
+    assert backend_gate.embed_allowed(con, collection) is True
+    endpoint.canary_fail = 1
+    with pytest.raises(embeddings.EndpointCanaryFailed):
+        embeddings.upsert_book(8, "en", chunks(3, book=8), collection)
+
+    def away(*a, **k):
+        raise emb.GateDeferred("the encoder went away during the pass")
+    real = run_check.validate
+    monkeypatch.setattr(run_check, "validate", away)
+    assert backend_gate.embed_allowed(con, collection) is False
+    assert statements_kept(root) == [] and run_check._suspect(collection) is True
+    monkeypatch.setattr(run_check, "validate", real)
+    run_check._verdicts.clear()
+    assert backend_gate.embed_allowed(con, collection) is True
+    assert run_check._suspect(collection) is False
+    assert len(hold_runs.canary_history(root, "gutenberg", "document", R1)) == 1, "one episode, once"
+
+
+def test_the_query_side_s_run_is_sent_back_by_its_own_failures(node, endpoint):
+    root, collection, codex = node
+    con = db.connect(collection)
+    assert backend_gate.embed_allowed(con, collection) is True
+    recipe = collections_mod.recipe_for(collection)
+    run_check.canary_failed(*run_check._who(recipe, True))      # as a query's refusal marks it
+    assert run_check._suspect(collection) is False and run_check._suspect(collection, "query") is True
+    assert backend_gate.embed_allowed(con, collection) is True
+    aside = hold_runs.directory(root, "gutenberg") / "set-aside"
+    assert len(list(aside.glob("query-*"))) == 1 and list(aside.glob("document-*")) == []
+    assert run_check._suspect(collection, "query") is False
+    assert len(statements_kept(root, "query")) == 1
+
+
+def test_the_beat_sends_back_the_run_of_a_failure_nobody_here_was_refused(node, endpoint, monkeypatch):
+    """A person's query goes from the web process: its canary failure is in
+    the engine's count (VeGa) and in no exception of the worker's. The beat
+    reads the count, and the run goes back to the gate all the same."""
+    from app.rage import keep as rage_keep
+    root, collection, codex = node
+    con = db.connect(collection)
+    assert backend_gate.embed_allowed(con, collection) is True
+    rage_keep.reset()
+    who = run_check._who(collections_mod.recipe_for(collection), False)
+    count = {"run_id": R1, "on_demand": True, "calls": 40, "told": 40, "created": 9,
+             "created_ms": 500, "failed": 0, "canary_failed": 0}
+    monkeypatch.setattr(run_check, "engine_counts", lambda: {who: dict(count)})
+
+    def beat():
+        monkeypatch.setattr(worker, "_last_keeps_read", 0.0)
+        worker._read_engine_counts(con)
+    beat()
+    assert run_check._suspect(collection) is False
+    count.update(calls=41, told=41, failed=1, canary_failed=1)
+    beat()
+    assert run_check._suspect(collection) is True
+    assert [r[0] for r in con.execute(
+        "SELECT message FROM events WHERE stage='sched' AND level='error'")][0].startswith("CANARY")
+    with pytest.raises(hold_runs.RunUnvalidated, match="did not reproduce its canary"):
+        embeddings.upsert_book(8, "en", chunks(3, book=8), collection)
+    assert backend_gate.embed_allowed(con, collection) is True, "gated from scratch"
+    assert len(list((hold_runs.directory(root, "gutenberg") / "set-aside").glob("document-*"))) == 1
+    assert embeddings.upsert_book(8, "en", chunks(3, book=8), collection) == 3
+    rage_keep.reset()

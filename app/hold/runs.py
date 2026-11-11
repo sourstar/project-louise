@@ -285,6 +285,46 @@ def statements_for_space(root: Path, name: str, codex: Codex, role: str = "docum
     return out
 
 
+def _canary_file(root: Path, name: str) -> Path:
+    return directory(root, name).parent / "gate-canary.json"
+
+
+def canary_history(root: Path, name: str, role: str, run_id: str) -> list[str]:
+    """When `run_id` was sent back to the gate because a context of it did not
+    reproduce its canary (`record_canary`), oldest first; [] for a run that
+    never was."""
+    try:
+        got = json.loads(_canary_file(root, name).read_text(encoding="utf-8"))
+        times = got.get(f"{role}:{run_id}", [])
+    except (OSError, ValueError, AttributeError):
+        return []
+    return [str(t) for t in times] if isinstance(times, list) else []
+
+
+def record_canary(root: Path, name: str, role: str, run_id: str, at: str) -> list[str]:
+    """A context of `run_id` did not reproduce its engine's canary and the run
+    was sent back to the gate (app/run_check.py `canary_failed`; docs/notes/
+    idle-context-brief.md §10). Its history on this peer, this time last.
+    LOCAL, like `record_batching` — no statement carries it, no wire change —
+    and KEPT: a gate that passes again does not erase it, so a second failure
+    of the same run is known for a repeat (the review of 2026-11-11)."""
+    p = _canary_file(root, name)
+    try:
+        got = json.loads(p.read_text(encoding="utf-8"))
+        if not isinstance(got, dict):
+            got = {}
+    except (OSError, ValueError):
+        got = {}
+    key = f"{role}:{run_id}"
+    times = [str(t) for t in got.get(key, [])] if isinstance(got.get(key), list) else []
+    got[key] = times + [at]
+    p.parent.mkdir(parents=True, exist_ok=True)
+    tmp = p.with_name(f".{p.name}.{os.getpid()}.tmp")
+    tmp.write_text(json.dumps(got, sort_keys=True), encoding="utf-8")
+    os.replace(tmp, p)
+    return got[key]
+
+
 def _others(root: Path, name: str) -> list[str]:
     try:
         return sorted(p.name for p in Path(root).iterdir() if p.name != name

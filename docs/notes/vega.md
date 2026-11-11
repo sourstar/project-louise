@@ -104,7 +104,10 @@ Louise ──POST /v1/embeddings (model vega-xyz, tagged inputs)──► LocalA
   and tells VeGa at once; VeGa logs `[vega] run …: A CONTEXT DID NOT
   REPRODUCE ITS CANARY — N discarded since its load …` each time it grows.
   Switched off by the model option `context_canary:false`, which is in the
-  run's stated options.
+  run's stated options. Louise sends a run whose context failed its canary
+  BACK TO THE GATE: nothing is written under its kept statement, which is
+  set aside, until the whole gate has passed again (app/run_check.py
+  `canary_failed`; the brief §10).
   Not a docs/09 format: informational, hashed and signed nowhere.
   **Deploying it:** as the passes count — the wrapper side with the engine
   change that carries P11 (it re-gates every space once), the service side
