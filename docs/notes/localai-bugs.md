@@ -47,7 +47,7 @@ the source):*
 | **P8 (staged)** | **patch staged, not in the series yet** | llama.cpp backend: the encoder output is kept PER SEQUENCE (`llama_memory_enc_dec`, stage 1 of llama-cpp-encoder-decoder.md), so a slot is encoded while others decode; on P3 and P4 | a late request joins the next decode step instead of waiting for the wave; the upstream shape (no public API) | not filed; [`deploy/localai/patches/staged/0006-llama-cpp-encoder-decoder-memory.patch`](../../deploy/localai/patches/staged/0006-llama-cpp-encoder-decoder-memory.patch); moves into the series after its card gates |
 | **P9 (staged)** | **patch staged, not in the series yet** | llama.cpp backend: the encoder outputs live ON THE DEVICE (stage 2: a persistent store written by the encoder graph, read by the decoder's `ggml_get_rows`; no host copies), on P5 | the shape upstream asked for (a persistent buffer, no host copies); the per-step upload gone | not filed; [`deploy/localai/patches/staged/0007-llama-cpp-encoder-decoder-store.patch`](../../deploy/localai/patches/staged/0007-llama-cpp-encoder-decoder-store.patch); moves into the series with P5 after the card gates |
 | **P10 (staged; LIVE on its own backend)** | **patch staged, built into a separate backend, LIVE 2026-11-11** | llama.cpp: nvidia/llama-nemotron-rerank-1b-v2 ranks (`LlamaBidirectionalForSequenceClassification`: bidirectional Llama 3.2 1B, mean-pooled, a `score` head). Ported from ggml-org/llama.cpp#24083 (open) onto ddf48f8: converter class, the optional `cls.output` in llama-embed, BOS for a rerank template's prompt; this base pools before the head when the GGUF says classifier pooling mean, so no graph change | the reranker benchmark's arm A3 (operator, 2026-11-10: "Patch llama.cpp to support nemo reranker, tomorrow I want to see its benchmarks too") | upstream #24083 open; [`deploy/localai/patches/staged/0008-llama-cpp-nemotron-rerank.patch`](../../deploy/localai/patches/staged/0008-llama-cpp-nemotron-rerank.patch), built only from [`staged/nemotron-rerank.series`](../../deploy/localai/patches/staged/nemotron-rerank.series) into its own backend; joins the series only if A3 earns it. A3 earned it (operator, 11-11: B): the `[reranker]` of five collections on `louise-sycl-f16-llama-cpp-9d17b8a39845` (STATUS 11-11); joining the main series waits for the next engine change |
-| **P11 (staged)** | **patch staged, not in the series yet** | llama.cpp backend: CONTEXT ON DEMAND — a model loaded with the option `context_on_demand` keeps its weights, and a request that carries `metadata.keep_context_ms` has its context (KV cache and compute buffers) freed that long after its answer; the next request creates it again. A request that carries none leaves the context loaded, as ever (the option `keep_context_ms:N` gives such requests a keep). No RPC reads the `llama_context` any more (it is null while the model is idle) | the card holds ~34 GB of models on 32.6 GB, ~10 GB of it context that works seconds a day (operator, 2026-11-11: "when llama.cpp gets a request it allocates the context memory; when the processing is done it frees it"; "Implement it") — [idle-context-brief.md](idle-context-brief.md) | not filed (the operator's word, brief §7 step 7); [`deploy/localai/patches/staged/0009-llama-cpp-context-on-demand.patch`](../../deploy/localai/patches/staged/0009-llama-cpp-context-on-demand.patch), built only from [`staged/context-on-demand.series`](../../deploy/localai/patches/staged/context-on-demand.series); CPU checks passed 2026-11-11, card gates not run |
+| **P11 (staged)** | **patch staged, not in the series yet** | llama.cpp backend: CONTEXT ON DEMAND — a model loaded with the option `context_on_demand` keeps its weights, and a request that carries `metadata.keep_context_ms` has its context (KV cache and compute buffers) freed that long after its answer; the next request creates it again. A request that carries none leaves the context loaded, as ever (the option `keep_context_ms:N` gives such requests a keep). No RPC reads the `llama_context` any more (it is null while the model is idle) | the card holds ~34 GB of models on 32.6 GB, ~10 GB of it context that works seconds a day (operator, 2026-11-11: "when llama.cpp gets a request it allocates the context memory; when the processing is done it frees it"; "Implement it") — [idle-context-brief.md](idle-context-brief.md) | not filed — PREPARED for the operator to file himself (2026-11-11: "prepare everything for upstream, I will upload it eventually"; [`deploy/localai/upstream/llama-cpp-context-on-demand/`](../../deploy/localai/upstream/llama-cpp-context-on-demand/READING-GUIDE.md), [`localai-context-on-demand/`](../../deploy/localai/upstream/localai-context-on-demand/READING-GUIDE.md)); [`deploy/localai/patches/staged/0009-llama-cpp-context-on-demand.patch`](../../deploy/localai/patches/staged/0009-llama-cpp-context-on-demand.patch), built only from [`staged/context-on-demand.series`](../../deploy/localai/patches/staged/context-on-demand.series); CPU checks passed 2026-11-11, card gates not run |
 | **P6** | **patch we carry** | llama.cpp (common/chat): Command R7B / Command A ("Command 3") tool calls are parsed by llama.cpp's own Cohere2 MoE parser; before, the autoparser preserved `<\|START_THINKING\|><\|END_THINKING\|><\|START_ACTION\|>` as ONE token string, the server dropped the three markers, and every R7B tool call was an HTTP 500 | Command R7B as a chat candidate (operator, 2026-11-03: "B, check vllm parser before reinventing") | **to file at ggml-org/llama.cpp as a PR** once proven on the node (#20786, closed unreproduced, was this); [`deploy/localai/patches/0006-llama-cpp-chat-cohere-command3.patch`](../../deploy/localai/patches/0006-llama-cpp-chat-cohere-command3.patch); in the series since 2026-11-06: engine ea2417d91dcc, every live model byte-identical, every gate passed |
 | **P7** | **upstream, carried ahead of the pin** | llama.cpp (ggml-sycl, dmmv.cpp): upstream's "sycl: dmmv code cleanup" (ggml-org/llama.cpp#31325, commit 5e18eb02, merged 2026-11-02, after our pin ddf48f8): the q8_0 reorder dmmv folded into the generic template, the non-K launchers templated, +41/−411, "a no-op for performance" | the operator, 2026-11-07: "Add the patch 1 as well", in the same engine as the B70 AOT build and the pinned Intel stack, so every space is gated once | **upstream**; drops out of the series when LocalAI's pin passes 5e18eb02; [`deploy/localai/patches/0007-llama-cpp-sycl-dmmv-cleanup.patch`](../../deploy/localai/patches/0007-llama-cpp-sycl-dmmv-cleanup.patch); gated with the a+b engine (quantized dmmv bytes can move: the chat models' decode) |
 | R1 | request | a response header naming the backend instance (pid and start time) that answered | optional: the model pool checks before and after instead | not filed |
@@ -1151,8 +1151,10 @@ until its card gates pass and the operator says so (staged/README.md).*
 only from `staged/context-on-demand.series`. Two halves, one design:
 
 **llama.cpp** (`backend/cpp/llama-cpp/patches/0011-server-context-on-demand.patch`;
-the same bytes in `staged/llama.cpp/`, written to be filed upstream as it is:
-`--help`, `tools/server/README.md`, `tools/server/tests/unit/test_context_on_demand.py`).
+the same bytes in `staged/llama.cpp/`, written in upstream's form:
+`--help`, `tools/server/README.md`, `tools/server/tests/unit/test_context_on_demand.py`;
+the form to FILE — on upstream's master, in three parts — is
+[`deploy/localai/upstream/llama-cpp-context-on-demand/`](../../deploy/localai/upstream/llama-cpp-context-on-demand/READING-GUIDE.md).
 - `--context-on-demand`, and `keep_context_ms` in a request's body
   (completions, embeddings, rerank): the standard is Ollama's `keep_alive`,
   applied to the context and in milliseconds. A REQUEST THAT CARRIES NONE
@@ -1168,8 +1170,14 @@ the same bytes in `staged/llama.cpp/`, written to be filed upstream as it is:
   (control vectors, the check of a reranking model, lora adapters, warmup —
   `common_init_context_apply`, shared by both), so the first decode of every
   new context is the warmup's, never a request's. The load returns a context
-  one of these steps stopped on, exactly as before; a later creation that
-  stops on one is refused.
+  one of these steps stopped on, exactly as before, and records WHERE
+  (`common_init_result::init_stop`); a later creation is accepted when its
+  steps end in the same place — the state of the load's context, or none.
+  (2026-11-11, a defect of the first staging: every creation a step stopped
+  on was refused, so a model whose load stops there — a reranker whose
+  vocabulary fails the reranking check — answered 503 for ever after its
+  first free. Found by the reranker's CPU check, fixed before any engine was
+  built on it; the brief §10 "The reranker".)
 - `server_queue::on_idle()`: a callback of the loop's thread each time it finds
   no task, run WITHOUT the queue's lock (it may free the context; tasks are
   posted meanwhile), which says when it wants to be called again — the wait
@@ -1241,7 +1249,9 @@ the same bytes in `staged/llama.cpp/`, written to be filed upstream as it is:
 random-weight `llama` and `qwen3` models written by `tests/test-llama-archs -o`
 — huggingface.co is not reachable from the session that wrote it, so the
 presets the tests name were pointed at them):
-- `test_context_on_demand.py`, 20 of 20 (two added with the review's
+- `test_context_on_demand.py`, 21 of 21 (the 21st with the `init_stop` fix:
+  the same rerank scores across contexts for a model whose load stops at the
+  reranking check — it fails before the fix; two added with the review's
   fixes: a result says when the context was created for it — one result of
   a batch, none without the option; five with the canary: each created
   context held to it, for a completion and an embedding model; a context
@@ -1277,14 +1287,24 @@ presets the tests name were pointed at them):
   keep, and one whose keep is no number, leaving the context loaded; token ids (P2) embedded
   on demand; `TokenizeString` and `Detokenize` answered while idle with no
   creation; a creation made to fail, then the next request served.
+  Rebuilt with the `init_stop` fix: 32 of 32 again.
+- ONE backend with P10 and P11 (`staged/nemotron-rerank-context-on-demand.series`,
+  for the reranker on demand — operator, 2026-11-11: "Reranker option A"):
+  `git am` of the two staged patches on the series gives the tree built;
+  the same 32 of 32, and 8 of 8 on `Rerank` with the model's own keep
+  (`context_on_demand`, `context_canary:true`, `keep_context_ms:500`): the
+  canary of a rank-pooling model recorded; a rerank creates the context, the
+  next ones within the keep find it, the same scores as without the option;
+  the context back half a second after the last; a canary failure refused
+  and the next rerank served.
 - A creation on the CPU, tiny model: 1.4–1.8 ms; a free: 0.03–0.09 ms. These
   say nothing about the B70: the brief's §2 is still to be measured.
 
 **NOT checked, and why:** nothing on a card (the node's, on the operator's
 word); `bert` (no random-weight writer for it — the embedding checks ran on
-`qwen3` with `--pooling last`, the shape of our Qwen3 encoder); rerank over
-gRPC (LocalAI's `RerankRequest` carries no metadata map: a rerank carries no
-keep, and leaves the context loaded unless the model's YAML gives one); encoder-decoder (P3/P4: to check on the card with
+`qwen3` with `--pooling last`, the shape of our Qwen3 encoder); the REAL
+reranker (the `Rerank` checks ran on a stand-in whose scores mean nothing:
+the card's to say, brief "For München" step 6); encoder-decoder (P3/P4: to check on the card with
 MADLAD's test copy).
 
 **Card gates before it moves into the series** (staged/README.md; the brief

@@ -1,0 +1,578 @@
+diff --git a/common/arg.cpp b/common/arg.cpp
+index 48d397f..e213662 100644
+--- a/common/arg.cpp
++++ b/common/arg.cpp
+@@ -3873,6 +3873,16 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
+             params.keep_context_ms = value;
+         }
+     ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_KEEP_CONTEXT_MS"));
++    add_opt(common_arg(
++        {"--context-canary"},
++        {"--no-context-canary"},
++        string_format("with --context-on-demand: hold each context created after the load to the output the load's "
++                      "context gave for a fixed input, and refuse the request of one that does not reproduce it "
++                      "(default: %s)", params.context_canary ? "enabled" : "disabled"),
++        [](common_params & params, bool value) {
++            params.context_canary = value;
++        }
++    ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_CONTEXT_CANARY"));
+     add_opt(common_arg(
+         {"--simple-io"},
+         "use basic IO for better compatibility in subprocesses and limited consoles",
+diff --git a/common/common.cpp b/common/common.cpp
+index a126b32..9c6271f 100644
+--- a/common/common.cpp
++++ b/common/common.cpp
+@@ -1151,6 +1151,9 @@ struct common_init_result::impl {
+     llama_context_params cparams = llama_context_default_params();
+     bool has_cparams = false;
+ 
++    // the output of the canary input on the context of the load, see canary_record()
++    std::vector<float> canary;
++
+     std::vector<llama_adapter_lora_ptr> lora;
+ 
+     std::vector<common_sampler_ptr> samplers;
+@@ -1454,6 +1457,144 @@ static void common_batch_set_zero_state(common_batch & batch, const llama_model
+     }
+ }
+ 
++// the input of the context canary: a few positions through every layer, one small pass
++static const char * const COMMON_CANARY_TEXT       = "The quick brown fox jumps over the lazy dog. 0123456789";
++static const size_t       COMMON_CANARY_MAX_TOKENS = 64;
++
++// run the canary input on the context, the way the warmup run goes, and copy its output
++// returns false if it cannot be computed
++static bool common_context_canary_run(common_init_result & res, const common_params & params, std::vector<float> & out) {
++    llama_model   * model = res.model();
++    llama_context * lctx  = res.context();
++
++    const llama_vocab * vocab = llama_model_get_vocab(model);
++
++    std::vector<llama_token> tokens = common_tokenize(vocab, COMMON_CANARY_TEXT, true, false);
++    if (tokens.empty()) {
++        tokens.push_back(0);
++    }
++    tokens.resize(std::min({ tokens.size(), COMMON_CANARY_MAX_TOKENS, (size_t) std::max(params.n_batch, 1), (size_t) llama_n_ctx(lctx) }));
++
++    // an embedding is pooled over its outputs: every token is one, as in a request
++    const auto all_outputs = [&](common_batch & batch) {
++        if (params.embedding) {
++            for (int32_t i = 0; i < batch.size(); ++i) {
++                batch.set_output(i, true);
++            }
++        }
++    };
++
++    bool ok = true;
++
++    if (llama_model_has_encoder(model)) {
++        common_batch batch = common_batch_get_one(lctx, tokens);
++        all_outputs(batch);
++        ok = llama_process(lctx, LLAMA_PROCESS_TYPE_ENCODE, batch.get()) == 0;
++        if (llama_model_has_decoder(model)) {
++            llama_token decoder_start_token_id = llama_model_decoder_start_token(model);
++            if (decoder_start_token_id == LLAMA_TOKEN_NULL) {
++                decoder_start_token_id = llama_vocab_bos(vocab);
++            }
++            tokens.assign(1, decoder_start_token_id);
++        }
++    }
++    if (ok && llama_model_has_decoder(model)) {
++        common_batch batch = common_batch_get_one(lctx, tokens);
++        all_outputs(batch);
++        std::vector<float> zeros;
++        common_batch_set_zero_state(batch, model, zeros);
++        ok = llama_process(lctx, LLAMA_PROCESS_TYPE_DECODE, batch.get()) == 0;
++    }
++
++    if (ok) {
++        const float * data = nullptr;
++        size_t        n    = 0;
++        if (params.embedding) {
++            const enum llama_pooling_type pooling = llama_pooling_type(lctx);
++            if (pooling == LLAMA_POOLING_TYPE_NONE) {
++                data = llama_get_embeddings_ith(lctx, -1);
++                n    = llama_model_n_embd_out(model);
++            } else {
++                data = llama_get_embeddings_seq(lctx, 0);
++                n    = pooling == LLAMA_POOLING_TYPE_RANK ? llama_model_n_cls_out(model) : llama_model_n_embd_out(model);
++            }
++        } else {
++            data = llama_get_logits_ith(lctx, -1);
++            n    = llama_vocab_n_tokens(vocab);
++        }
++        ok = data != nullptr && n > 0;
++        if (ok) {
++            out.assign(data, data + n);
++        }
++    }
++
++    llama_memory_clear(llama_get_memory(lctx), true);
++    llama_synchronize(lctx);
++    llama_perf_context_reset(lctx);
++
++    return ok;
++}
++
++// same values, bit for bit (a NaN equals the same NaN)
++static bool common_context_canary_same(const std::vector<float> & a, const std::vector<float> & b) {
++    return a.size() == b.size() && std::memcmp(a.data(), b.data(), a.size() * sizeof(float)) == 0;
++}
++
++static void common_context_canary_diff(const std::vector<float> & a, const std::vector<float> & b) {
++    size_t n_diff   = 0;
++    float  max_diff = 0.0f;
++    for (size_t i = 0; i < std::min(a.size(), b.size()); ++i) {
++        if (std::memcmp(&a[i], &b[i], sizeof(float)) != 0) {
++            n_diff++;
++            max_diff = std::max(max_diff, std::fabs(a[i] - b[i]));
++        }
++    }
++    COM_WRN("context canary: %zu of %zu values differ (sizes %zu and %zu), the largest difference is %g\n",
++            n_diff, std::min(a.size(), b.size()), a.size(), b.size(), (double) max_diff);
++}
++
++common_canary_status common_init_result::canary_record(const common_params & params) {
++    GGML_ASSERT(pimpl->model && pimpl->context);
++
++    pimpl->canary.clear();
++
++    std::vector<float> first;
++    std::vector<float> second;
++    if (!common_context_canary_run(*this, params, first) || !common_context_canary_run(*this, params, second)) {
++        return COMMON_CANARY_NONE;
++    }
++    if (!common_context_canary_same(first, second)) {
++        common_context_canary_diff(first, second);
++        return COMMON_CANARY_MISMATCH;
++    }
++
++    pimpl->canary = std::move(second);
++
++    COM_INF("context canary: recorded, %zu values\n", pimpl->canary.size());
++
++    return COMMON_CANARY_OK;
++}
++
++common_canary_status common_init_result::canary_check(const common_params & params) {
++    GGML_ASSERT(pimpl->model && pimpl->context);
++
++    if (pimpl->canary.empty()) {
++        return COMMON_CANARY_OK;
++    }
++
++    std::vector<float> now;
++    if (!common_context_canary_run(*this, params, now)) {
++        COM_WRN("%s", "context canary: its output could not be computed on this context\n");
++        return COMMON_CANARY_MISMATCH;
++    }
++    if (!common_context_canary_same(pimpl->canary, now)) {
++        common_context_canary_diff(pimpl->canary, now);
++        return COMMON_CANARY_MISMATCH;
++    }
++
++    return COMMON_CANARY_OK;
++}
++
+ // the steps that follow the creation of a context: control vectors, rerank check, lora adapters, warmup
+ // returns 0 if it ran them all, else the step it stopped at
+ static int common_init_context_apply(common_init_result & res, common_params & params) {
+diff --git a/common/common.h b/common/common.h
+index 866cb69..3691929 100644
+--- a/common/common.h
++++ b/common/common.h
+@@ -682,6 +682,7 @@ struct common_params {
+     int sleep_idle_seconds = -1;   // if >0, server will sleep after this many seconds of idle time
+     bool context_on_demand = false; // let a request free the context after its answer, a later one creates it again (the model stays loaded)
+     int32_t keep_context_ms = -1;   // with context_on_demand: the keep of a request that carries none, -1 = it leaves the context loaded
++    bool context_canary    = true;  // with context_on_demand: hold each context created after the load to the load's output on a fixed input
+ 
+     std::vector<std::string> api_keys;
+ 
+@@ -1005,6 +1006,13 @@ struct common_gguf_info {
+ 
+ common_gguf_info common_get_gguf_info(const std::string & fname);
+ 
++// the outcome of the context canary, see common_init_result::canary_record()
++enum common_canary_status {
++    COMMON_CANARY_OK,       // recorded, or reproduced
++    COMMON_CANARY_NONE,     // the output cannot be computed for this model: nothing is recorded, nothing is checked
++    COMMON_CANARY_MISMATCH, // the same input did not give the same values
++};
++
+ // note: defines the model, context, samplers, ets. lifetimes
+ struct common_init_result {
+     common_init_result(common_params & params, bool model_only = false);
+@@ -1022,6 +1030,11 @@ struct common_init_result {
+     // the step at which the load stopped after it created the context, 0 if it ran them all, see common_init_context_from_params()
+     int init_stop = 0;
+ 
++    // context canary: the output of a fixed input (the pooled embedding, or the logits of the last token), both leave the memory of the context empty
++    // canary_record() computes it twice on the context of the load, MISMATCH if the two differ; canary_check() compares a later context with it, bit for bit
++    common_canary_status canary_record(const common_params & params);
++    common_canary_status canary_check (const common_params & params);
++
+     common_sampler * sampler(llama_seq_id seq_id);
+     void reset_samplers();
+ 
+diff --git a/tools/server/README.md b/tools/server/README.md
+index 7e89cbb..df80031 100644
+--- a/tools/server/README.md
++++ b/tools/server/README.md
+@@ -249,6 +249,7 @@ For the full list of features, please refer to [server's changelog](https://gith
+ | `--sleep-idle-seconds SECONDS` | number of seconds of idleness after which the server will sleep (default: -1; -1 = disabled) |
+ | `--context-on-demand` | let a request free the context after its answer, keeping the model loaded: a request that carries `keep_context_ms` has the context freed that many milliseconds after it, and the next request creates it again; a request without it leaves the context loaded, as ever (default: disabled)<br/>(env: LLAMA_ARG_CONTEXT_ON_DEMAND) |
+ | `--keep-context-ms N` | with --context-on-demand: treat a request that does not carry `keep_context_ms` as carrying N (default: -1, -1 = such a request leaves the context loaded)<br/>(env: LLAMA_ARG_KEEP_CONTEXT_MS) |
++| `--context-canary, --no-context-canary` | with --context-on-demand: hold each context created after the load to the output the load's context gave for a fixed input, and refuse the request of one that does not reproduce it (default: enabled)<br/>(env: LLAMA_ARG_CONTEXT_CANARY) |
+ | `--log-prompts-dir PATH` | Log prompts to directory (auto-created if not present; only used for debugging, default: disabled) |
+ | `--spec-draft-hf, -hfd, -hfrd, --hf-repo-draft <user>/<model>[:quant]` | Same as --hf-repo, but for the draft model (default: unused)<br/>(env: LLAMA_ARG_SPEC_DRAFT_HF_REPO) |
+ | `--spec-draft-threads, -td, --threads-draft N` | number of threads to use during generation (default: same as --threads) |
+@@ -2617,7 +2618,9 @@ Notes:
+ - The context is created with the parameters of the first load: the same size, batch sizes and device placement, without fitting them again to the memory that is free at that moment.
+ - Not supported yet together with speculative decoding or a multimodal projector: the server refuses to start.
+ 
+-`GET /metrics` reports `llamacpp:context_loaded` (1 while the context exists), `llamacpp:context_creations_total` and `llamacpp:context_creation_seconds_total`.
++**The context canary.** A context created on demand is new memory and a new first pass. Unless `--no-context-canary` is given, the server records at the load the output its context gives for a fixed short input - the pooled embedding with `--embedding`, the logits of the last token otherwise - computed twice, and it refuses to start if the two differ. Every context created afterwards computes the same input before any request runs on it: one that does not give the same values, bit for bit, is discarded, and the request it was created for is answered with error `503` (`unavailable_error`, its message starting with `context canary failed`) and can be retried. It costs one small pass per creation. After `POST /lora-adapters` the next context created records it again. Switch it off for a model whose backend does not reproduce its own output bit for bit.
++
++`GET /metrics` reports `llamacpp:context_loaded` (1 while the context exists), `llamacpp:context_creations_total`, `llamacpp:context_creation_seconds_total` (the canary's pass included), `llamacpp:context_canary` (1 while the contexts created are checked) and `llamacpp:context_canary_failures_total`.
+ 
+ A result of `/embedding` (the non-OpenAI route, which returns its results as they are) carries `context_create_ms` when the context was created for it: the time its creation took.
+ 
+diff --git a/tools/server/server-common.h b/tools/server/server-common.h
+index 59e4bed..37983f8 100644
+--- a/tools/server/server-common.h
++++ b/tools/server/server-common.h
+@@ -544,6 +544,9 @@ struct server_metrics {
+     uint64_t n_ctx_create    = 0;
+     uint64_t t_ctx_create_us = 0;
+     bool     ctx_loaded      = true;
++    // context canary: whether the contexts created are checked, and those that did not reproduce it
++    bool     ctx_canary        = false;
++    uint64_t n_ctx_canary_fail = 0;
+ 
+     void init() {
+         t_start = ggml_time_us();
+diff --git a/tools/server/server-context.cpp b/tools/server/server-context.cpp
+index ce12c64..9eaa775 100644
+--- a/tools/server/server-context.cpp
++++ b/tools/server/server-context.cpp
+@@ -1110,6 +1110,8 @@ private:
+     int slots_debug = 0;  // env: LLAMA_SERVER_SLOTS_DEBUG
+     int slots_n_diff = 0; // env: LLAMA_SERVER_SLOTS_N_DIFF
+     int ctx_create_fail = 0; // env: LLAMA_SERVER_CTX_CREATE_FAIL, for the tests: the next N creations of the context fail
++    int ctx_canary_fail = 0; // env: LLAMA_SERVER_CTX_CANARY_FAIL, for the tests: the next N contexts created fail their canary
++    bool ctx_canary_stale = false; // the adapters changed since the canary was recorded: the next context created records it again
+ 
+     int n_empty_consecutive = 0;
+ 
+@@ -1190,9 +1192,15 @@ private:
+                 (ggml_time_us() - t_start) / 1000.0, (ggml_time_ms() - t_ctx_created) / 1000.0);
+     }
+ 
+-    // create the context again, as the load made it
+-    // returns false if it cannot be created, the server is then left without one
+-    bool context_acquire() {
++    enum context_acquire_result {
++        CONTEXT_ACQUIRED,
++        CONTEXT_NOT_CREATED, // it could not be created
++        CONTEXT_NOT_SAME,    // it was created and did not reproduce the canary of the load: discarded
++    };
++
++    // create the context again, as the load made it, and hold it to the canary of the load
++    // unless it returns CONTEXT_ACQUIRED, the server is left without one
++    context_acquire_result context_acquire() {
+         GGML_ASSERT(ctx_tgt == nullptr && llama_init != nullptr);
+ 
+         const int64_t t_start = ggml_time_us();
+@@ -1200,12 +1208,36 @@ private:
+         if (ctx_create_fail > 0) {
+             ctx_create_fail--;
+             SRV_WRN("%s", "LLAMA_SERVER_CTX_CREATE_FAIL: failing the creation of the context\n");
+-            return false;
++            return CONTEXT_NOT_CREATED;
+         }
+ 
+         if (!common_init_context_from_params(*llama_init, params_base)) {
+             SRV_WRN("%s", "failed to create the context, is the memory it needs available?\n");
+-            return false;
++            return CONTEXT_NOT_CREATED;
++        }
++
++        if (metrics.ctx_canary) {
++            // before any task runs on it: a context that does not reproduce the canary of the load is not used
++            bool same;
++            if (ctx_canary_stale) {
++                // the lora adapters were set since the canary was recorded: this context records it again
++                same = llama_init->canary_record(params_base) == COMMON_CANARY_OK;
++                ctx_canary_stale = !same;
++            } else {
++                same = llama_init->canary_check(params_base) == COMMON_CANARY_OK;
++            }
++            if (ctx_canary_fail > 0) {
++                ctx_canary_fail--;
++                SRV_WRN("%s", "LLAMA_SERVER_CTX_CANARY_FAIL: failing the canary of the context\n");
++                same = false;
++            }
++            if (!same) {
++                llama_init->free_context();
++                metrics.n_ctx_canary_fail += 1;
++                SRV_ERR("the context created does not reproduce the canary of the load, it is discarded (%" PRIu64 " so far)\n",
++                        metrics.n_ctx_canary_fail);
++                return CONTEXT_NOT_SAME;
++            }
+         }
+ 
+         ctx_tgt = llama_init->context();
+@@ -1233,9 +1265,9 @@ private:
+         metrics.n_ctx_create    += 1;
+         metrics.t_ctx_create_us += t_create;
+ 
+-        SRV_INF("context created in %.2f ms\n", t_create / 1000.0);
++        SRV_INF("context created in %.2f ms%s\n", t_create / 1000.0, metrics.ctx_canary ? ", its canary reproduced" : "");
+ 
+-        return true;
++        return CONTEXT_ACQUIRED;
+     }
+ 
+     // a task is done: without a keep the context stays (ctx_hold), with one it may go once the latest keep asked has run out
+@@ -1487,6 +1519,22 @@ private:
+         ctx_hold           = false;
+         metrics.ctx_loaded = true;
+ 
++        if (params_base.context_on_demand && params_base.context_canary) {
++            // the output every context created later is held to, see context_acquire()
++            switch (llama_init->canary_record(params_base)) {
++                case COMMON_CANARY_OK:
++                    metrics.ctx_canary = true;
++                    break;
++                case COMMON_CANARY_NONE:
++                    SRV_WRN("%s", "the context canary cannot be computed for this model: the contexts created on demand are not checked\n");
++                    break;
++                case COMMON_CANARY_MISMATCH:
++                    SRV_ERR("%s", "the model does not give the same output twice for the same input: the context canary cannot "
++                                  "be recorded. start with --no-context-canary to serve it without the check\n");
++                    return false;
++            }
++        }
++
+         add_bos_token = llama_vocab_get_add_bos(vocab);
+ 
+         if (has_spec) {
+@@ -1747,6 +1795,15 @@ private:
+             }
+         }
+ 
++        {
++            const char * LLAMA_SERVER_CTX_CANARY_FAIL = getenv("LLAMA_SERVER_CTX_CANARY_FAIL");
++            ctx_canary_fail = LLAMA_SERVER_CTX_CANARY_FAIL ? atoi(LLAMA_SERVER_CTX_CANARY_FAIL) : 0;
++
++            if (ctx_canary_fail) {
++                SRV_WRN("LLAMA_SERVER_CTX_CANARY_FAIL = %d\n", ctx_canary_fail);
++            }
++        }
++
+         // the update_slots() logic will always submit a maximum of n_batch or n_parallel tokens
+         // note that n_batch can be > n_ctx (e.g. for non-causal attention models such as BERT where the KV cache is not used)
+         {
+@@ -1838,6 +1895,9 @@ private:
+                     params_base.keep_context_ms < 0
+                         ? "leaves the context loaded"
+                         : string_format("is treated as carrying %d", params_base.keep_context_ms).c_str());
++            SRV_INF("context canary: %s\n", metrics.ctx_canary
++                    ? "each context created is held to the output of the load's for a fixed input"
++                    : "off, the contexts created are not checked");
+         }
+ 
+         metrics.init();
+@@ -3202,9 +3262,16 @@ private:
+ 
+         if (params_base.context_on_demand && ctx_tgt == nullptr && task_needs_context(task.type)) {
+             // only the model is loaded, create its context for this task
+-            if (!context_acquire()) {
+-                send_error(task, "the context cannot be created now, the memory it needs may be in use: try again later", ERROR_TYPE_UNAVAILABLE);
+-                return true;
++            switch (context_acquire()) {
++                case CONTEXT_ACQUIRED:
++                    break;
++                case CONTEXT_NOT_CREATED:
++                    send_error(task, "the context cannot be created now, the memory it needs may be in use: try again later", ERROR_TYPE_UNAVAILABLE);
++                    return true;
++                case CONTEXT_NOT_SAME:
++                    send_error(task, "context canary failed: the context created for this request did not reproduce the output of the load's "
++                                     "for the same input and was discarded: try again", ERROR_TYPE_UNAVAILABLE);
++                    return true;
+             }
+             // its results say so, see server_task_result::t_ctx_create_us
+             task.t_ctx_create_us = t_ctx_create_us;
+@@ -3608,6 +3675,7 @@ private:
+                     }
+                     // TODO @ngxson : make lora_adapters a dedicated member of server_context
+                     params_base.lora_adapters = new_loras;
++                    ctx_canary_stale = true; // see context_acquire()
+                     auto res = std::make_unique<server_task_result_apply_lora>();
+                     res->id = task.id;
+                     queue_results.send(std::move(res));
+diff --git a/tools/server/server-task.cpp b/tools/server/server-task.cpp
+index ffa10bc..b68b60d 100644
+--- a/tools/server/server-task.cpp
++++ b/tools/server/server-task.cpp
+@@ -1620,6 +1620,10 @@ std::string server_task_result_metrics::to_metrics() {
+             "context_creation_seconds_total",
+             "Context on demand: total time spent creating the context again",
+             metrics.t_ctx_create_us / 1.e6
++        }, {
++            "context_canary_failures_total",
++            "Context on demand: contexts discarded because they did not reproduce the canary of the load",
++            (double) metrics.n_ctx_canary_fail
+         },
+     };
+ 
+@@ -1648,6 +1652,10 @@ std::string server_task_result_metrics::to_metrics() {
+             "context_loaded",
+             "Context on demand: 1 while the context exists, 0 while only the model is loaded",
+             metrics.ctx_loaded ? 1.0 : 0.0
++        }, {
++            "context_canary",
++            "Context on demand: 1 while each context created is held to the canary of the load",
++            metrics.ctx_canary ? 1.0 : 0.0
+         },
+     };
+ 
+diff --git a/tools/server/tests/unit/test_context_on_demand.py b/tools/server/tests/unit/test_context_on_demand.py
+index 4ff9c5e..8cb4db8 100644
+--- a/tools/server/tests/unit/test_context_on_demand.py
++++ b/tools/server/tests/unit/test_context_on_demand.py
+@@ -332,6 +332,7 @@ def test_rerank_identical_across_contexts():
+ 
+     assert scores[0] == scores[1] == scores[2]
+     assert get_metric(server, "context_creations_total") == 3
++    assert get_metric(server, "context_canary_failures_total") == 0
+ 
+ 
+ def test_a_result_says_when_the_context_was_created_for_it():
+@@ -387,3 +388,100 @@ def test_one_result_of_a_batch_says_the_context_was_created():
+     })
+     assert res.status_code == 200
+     assert "context_create_ms" not in res.body[0]
++
++
++def test_each_created_context_is_held_to_the_canary_of_the_load():
++    global server
++    server.start()
++    assert get_metric(server, "context_canary") == 1
++    wait_for_context(server, False)
++
++    texts = []
++    for _ in range(3):
++        res = completion(server, keep_context_ms=0)
++        assert res.status_code == 200
++        texts.append(res.body["content"])
++        wait_for_context(server, False)
++
++    assert texts[0] == texts[1] == texts[2]
++    assert get_metric(server, "context_creations_total") == 3
++    assert get_metric(server, "context_canary_failures_total") == 0
++
++
++def test_a_context_that_fails_its_canary_is_discarded_and_the_request_refused():
++    global server
++    server.context_canary_fail = 2
++    server.start()
++    wait_for_context(server, False)
++
++    for _ in range(2):
++        res = completion(server, keep_context_ms=0)
++        assert res.status_code == 503
++        assert res.body["error"]["type"] == "unavailable_error"
++        assert res.body["error"]["message"].startswith("context canary failed")
++        # no context is left behind, the server stays up
++        assert get_metric(server, "context_loaded") == 0
++    assert get_metric(server, "context_canary_failures_total") == 2
++    assert get_metric(server, "context_creations_total") == 0
++
++    # the next context reproduces it and serves
++    res = completion(server, keep_context_ms=0)
++    assert res.status_code == 200
++    assert get_metric(server, "context_creations_total") == 1
++    assert get_metric(server, "context_canary_failures_total") == 2
++
++
++def test_the_canary_can_be_switched_off():
++    global server
++    server.context_canary = False
++    server.context_canary_fail = 5  # nothing checks, so nothing can fail
++    server.start()
++    assert get_metric(server, "context_canary") == 0
++    wait_for_context(server, False)
++
++    res = completion(server, keep_context_ms=0)
++    assert res.status_code == 200
++    assert get_metric(server, "context_creations_total") == 1
++    assert get_metric(server, "context_canary_failures_total") == 0
++
++
++def test_the_canary_of_an_embedding_model():
++    global server
++    server = ServerPreset.bert_bge_small()
++    server.context_on_demand = True
++    server.server_metrics = True
++    server.context_canary_fail = 1
++    server.start()
++    assert get_metric(server, "context_canary") == 1
++    wait_for_context(server, False)
++
++    res = server.make_request("POST", "/v1/embeddings", data={
++        "input": "I believe the meaning of life is",
++        "keep_context_ms": 0,
++    })
++    assert res.status_code == 503
++    assert res.body["error"]["message"].startswith("context canary failed")
++
++    embeddings = []
++    for _ in range(3):
++        res = server.make_request("POST", "/v1/embeddings", data={
++            "input": "I believe the meaning of life is",
++            "keep_context_ms": 0,
++        })
++        assert res.status_code == 200
++        embeddings.append(res.body["data"][0]["embedding"])
++        wait_for_context(server, False)
++
++    assert embeddings[0] == embeddings[1] == embeddings[2]
++    assert get_metric(server, "context_creations_total") == 3
++    assert get_metric(server, "context_canary_failures_total") == 1
++
++
++def test_without_the_option_there_is_no_canary():
++    global server
++    server = ServerPreset.tinyllama2()
++    server.server_metrics = True
++    server.start()
++    assert get_metric(server, "context_canary") == 0
++    res = completion(server)
++    assert res.status_code == 200
+diff --git a/tools/server/tests/utils.py b/tools/server/tests/utils.py
+index 6190864..d43d00e 100644
+--- a/tools/server/tests/utils.py
++++ b/tools/server/tests/utils.py
+@@ -120,6 +120,8 @@ class ServerProcess:
+     context_on_demand: bool = False
+     keep_context_ms: int | None = None
+     context_create_fail: int | None = None  # LLAMA_SERVER_CTX_CREATE_FAIL
++    context_canary: bool | None = None  # None = the server's default
++    context_canary_fail: int | None = None  # LLAMA_SERVER_CTX_CANARY_FAIL
+     cache_ram: int | None = None
+     override_kv: str | None = None
+     no_cache_idle_slots: bool = False
+@@ -303,6 +305,10 @@ class ServerProcess:
+             server_args.extend(["--keep-context-ms", self.keep_context_ms])
+         if self.context_create_fail is not None:
+             env["LLAMA_SERVER_CTX_CREATE_FAIL"] = str(self.context_create_fail)
++        if self.context_canary is not None:
++            server_args.append("--context-canary" if self.context_canary else "--no-context-canary")
++        if self.context_canary_fail is not None:
++            env["LLAMA_SERVER_CTX_CANARY_FAIL"] = str(self.context_canary_fail)
+         if self.cache_ram is not None:
+             server_args.extend(["--cache-ram", self.cache_ram])
+         if self.override_kv:

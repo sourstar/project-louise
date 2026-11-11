@@ -115,6 +115,15 @@ options `context_on_demand:true`, `keep_context_ms:N`.
   release the context after use: we already know that is is a one shot
   operation. Reranker, propose a solution" (2026-11-11, the same session).
   §10 "The canary" (what sends a run back), "Chat", "The reranker".
+- "Fill the upstream" (2026-11-11, the same session), and on the question
+  of what his "A" answered: "Reranker option A, prepare everything for
+  upstream, I will upload it eventually". A — the reranker takes its keep
+  from its model's YAML (§10 "The reranker"). Upstream — the material is
+  PREPARED and he files it himself: llama.cpp forbids an agent to write a
+  post, a commit message or to open a pull request
+  (`deploy/localai/upstream/llama-cpp-context-on-demand/` and
+  `localai-context-on-demand/`, each a diff and its
+  [READING-GUIDE.md](../../deploy/localai/upstream/llama-cpp-context-on-demand/READING-GUIDE.md)).
 - "If there is a query in the meantime, the chat model gets a context
   memory; if there is not enough memory there are still options (in this
   order): the contexts of the batch in queue can be pruned, or some other
@@ -776,7 +785,7 @@ and no engine changed.*
 | 3d. the canary per context (§1.4; operator 2026-11-11: "Add the canary; it must be possible to disable it…") | written (staged with P11; the wrapper's part an engine change) | llama.cpp half: `common_init_result::canary_record` / `canary_check`, `server_context` (`context_acquire`), `--no-context-canary`, `/metrics` `context_canary`, `context_canary_failures_total`; LocalAI half: the model option `context_canary`, the trailing metadata `llama-context-canary: failed` beside the error; `deploy/vega/vega_wrapper.py` (`canary_refused`, `KeepCount.canary_failed`), `app/vega/service.py` (`canary_failed` in `kind: keeps`), `app/rage/keep.py` (the record per model), `app/worker.py` (a failure logged as an error) | CPU: llama.cpp's 20 tests; `grpc-server` over gRPC, 30 checks; `tests/vega` (the fake backend failing its canary over real gRPC), `tests/test_rage_keep.py`, `tests/test_context_on_demand.py` (the refusal is a deferral). NOT measured: its cost on the card |
 | 3e. a canary failure sends the run back to the gate (operator 2026-11-11: "Wire the canary failure to the gate before deployment") | written | `app/embeddings.py` (`EndpointCanaryFailed`), `app/run_check.py` (`canary_failed`, `_suspect`, `_send_back`: no write under the kept statement, which is set aside, and the run gated from scratch), `app/hold/runs.py` (`record_canary`: the run's history, kept), `app/worker.py` (the beat, for a failure nobody here was refused) | `tests/test_run_check.py` (the request; a repeat across restarts; a gate that then fails; a gate that could not finish; the query side; the beat) |
 | chat's keep (operator 2026-11-11: "Wire chat to release the context after use") | written | `app/llm.py` (`_request`: every chat request to LocalAI carries a keep of 0, the warm too), `app/rage/keep.py` (`one_shot_body`) | `tests/test_louise_level.py`; `grpc-server` over gRPC: a generation model without the option answers the same with the key, nothing freed |
-| the reranker | PROPOSED, nothing built (below) | — | — |
+| the reranker (operator 2026-11-11: "Reranker option A") | A: THE MODEL'S OWN KEEP. No code — a YAML line; ONE backend with P10 and P11, built and checked on the CPU; the card test asked of München (below, step 6), the live reranker untouched until it passes | `deploy/localai/patches/staged/nemotron-rerank-context-on-demand.series` | CPU: `grpc-server` from the combined series over gRPC — the 32 checks, and 8 on `Rerank` (below); the check found a defect of P11 in a re-created context, fixed (`init_stop`, below) |
 | 4e. RAGE reads the engine's count back (the keep's dating) | written | `app/rage/keep.py` (`Keeps.observe`: the measured creation time; a per-model floor under every stream's keep when the engine created contexts RAGE's clock did not expect), `app/run_check.py` (`engine_counts`: the count of the run each model's answers last named), `app/worker.py` (`_read_engine_counts`: the beat, every 30 s, one bounded read of VeGa) | `tests/test_rage_keep.py` (the node's 8-in-13 pattern raised 20 → 40 → 80 and held; the floor is the model's and does not decay; expected creations, another process's, a new load), `tests/test_run_check.py` |
 | §2's measurements, steps 3–4 | MADE 2026-11-12 (München, test copies, node paused) — §10.1 | the node | byte-equal over 300 keep-0 creations, each of three encoders |
 
@@ -1061,8 +1070,8 @@ its first token (the cached prompt goes with the context): to measure on
 the chat model before it is loaded on demand, and the reason `one_shot_body`
 is a function of its own.
 
-**The reranker — PROPOSED, nothing built** (operator, 2026-11-11: "Reranker,
-propose a solution"). The facts: LocalAI's `RerankRequest` carries no
+**The reranker — A, the model's own keep** (operator, 2026-11-11: "Reranker,
+propose a solution"; then, on the table below: "Reranker option A"). The facts: LocalAI's `RerankRequest` carries no
 metadata, in its HTTP form (`{model, query, documents, top_n}`) or its
 gRPC one, so a rerank cannot say its keep; a question reranks each
 collection's list on its own, in parallel (05 §5.6), so several requests
@@ -1075,13 +1084,69 @@ measured for the encoders) is latency.
 | | pros | cons |
 |---|---|---|
 | **as it is: the reranker keeps its context** (what happens if nothing is decided) | nothing to build or gate; no creation ever on a search's path | its context's share of the card stays held around the clock |
-| **A. the model's own keep — proposed**: load the reranker with `context_on_demand`, `context_canary:true` and `keep_context_ms:500` in its YAML: every request that carries no keep gets the model's (P11 has the option) | no code, no LocalAI change; one line a model, in the run's stated options; 500 ms bridges one question's requests (it bridged every pattern measured on the node) and the context is back half a second after a search | the reranker's backend must be built from one series with P10 AND P11 (applied together, never built together) and the reranker seen to keep working on it; the first rerank after a quiet moment pays a creation on a person's path; one value per model, fixed — nobody trims it |
+| **A. the model's own keep — CHOSEN**: load the reranker with `context_on_demand`, `context_canary:true` and `keep_context_ms:500` in its YAML: every request that carries no keep gets the model's (P11 has the option) | no code, no LocalAI change; one line a model, in the run's stated options; 500 ms bridges one question's requests (it bridged every pattern measured on the node) and the context is back half a second after a search | the reranker's backend must be built from one series with P10 AND P11 (applied together, never built together) and the reranker seen to keep working on it; the first rerank after a quiet moment pays a creation on a person's path; one value per model, fixed — nobody trims it |
 | **B. `metadata` on the rerank request**, in LocalAI (HTTP schema, `backend.proto`, the backends) | the standard route: a rerank says its keep like every other request, and RAGE could set it; right to propose upstream with P11 | a change to LocalAI's CORE and proto — the node runs upstream's core today, so it means running our own until upstream takes it; every backend sees the proto change; far more than the case needs |
 
-Recommended: A, on a test copy first — the creation and the canary measured
-for the reranker on the card, and a search's rerank time with and without
-it — and B written into the upstream proposal of P11. Until decided, the
-reranker stays as it is.
+What A needed, and what was done on the CPU (2026-11-11):
+
+- **One backend with both patches**: `staged/nemotron-rerank-context-on-demand.series`
+  — the live series, P10, P11. `git am` of the two staged patches on the
+  series gives the tree that was built; `grpc-server` from it passes the 32
+  gRPC checks of P11, and 8 on `Rerank` with the model loaded
+  `context_on_demand`, `context_canary:true`, `keep_context_ms:500`: the
+  canary of a rank-pooling model recorded at the load; the load's context
+  gone once idle; a rerank creates the context and the next ones within the
+  model's keep find it; the same scores as without the option; the context
+  given back half a second after the last rerank; the next rerank creates it
+  again, its canary reproduced; a context made to fail its canary refused
+  and the next rerank served. (A stand-in model: the scores mean nothing,
+  the path is what is checked — the real one is the card's to say.)
+- **A DEFECT OF P11 FOUND BY THAT CHECK, fixed before anything was built on
+  it.** The load returns a context on which one of its later steps stopped
+  early — the control vectors, the check of a reranking model's tokens — and
+  serves it, as upstream always has. P11's re-creation REFUSED such a
+  context: a model whose load stops there was served by its load's context,
+  then answered 503 to every request after its first free, for ever. The
+  stand-in reranker is one (its vocabulary fails the reranking check: a
+  warning at the load). Fixed: the load records where its steps stopped
+  (`common_init_result::init_stop`) and a re-creation is accepted when it
+  ends in the SAME place — the state of the load's context, or none. Its
+  test (`test_rerank_identical_across_contexts`, llama.cpp's 21st) fails
+  before and passes after; the nine existing suites are unchanged; the plain
+  `context-on-demand.series` backend was rebuilt with it and passes its 32
+  checks again. München's build `618e5a2b7e24` (from `5fd224d`) carries the
+  defect and is not to be used: the engine is built from the commit that
+  carries this.
+- **Still the card's to say** (step 6 of "For München"): that the real
+  reranker gives the same scores on the combined backend as on its own; what
+  a creation and its canary cost it; what a search's rerank takes with and
+  without. Until then the live reranker and its backend are untouched.
+
+B stays for upstream: a rerank request that says its own keep is LocalAI's
+to add (`metadata` on the rerank request), noted in LocalAI's package
+([READING-GUIDE.md](../../deploy/localai/upstream/localai-context-on-demand/READING-GUIDE.md) §5).
+
+**A model with no receipts cannot say it is on demand — DECIDED: P1 in the
+node's core** (the coordinator, 2026-11-11, on this session's finding).
+Louise learns a model is loaded on demand from `/system`'s `load_options`
+(P1) or from the statement of the run that answers. The node's core is
+upstream's and lists no `load_options`; chat, the bare-backend reranker
+(`louise-rerank-nemotron-1b`) and MADLAD (`louise-translate-madlad`) answer
+under no VeGa run. So, loaded on demand today, (a) the resident keeper
+would size such a model at REST by `/system`'s figure while its next
+request needs the context back — it could preload into that room; (b)
+RAGE's translation stream would send MADLAD no keep, and its context would
+stay. Both close once `/system` lists the options: `model_load` already
+reads them, no Louise code changes. THE RULE THAT FOLLOWS: **none of the
+three goes on demand in production before `/system` lists their
+`load_options`**. The reranker's TEST copy is not in the keeper's set, so
+step 6 goes ahead.
+
+| | pros | cons |
+|---|---|---|
+| **as it is** | nothing to build | the three models stay loaded WITHOUT the option: their contexts are held |
+| **the core with P1 — decided** | the model says it itself, a statement where one exists; the code that reads it is written and tested | P1 is not in the node's core yet: the node runs our core instead of upstream's until upstream takes it |
+| **an observed fallback** (a `/system` figure that drops under the same backend pid) — refused | no core change | an inference where a statement exists; blind until one read lands during a request and a later one after it, and a 500 ms keep is rarely sampled; one more heuristic to maintain |
 
 **What the code settled, beyond the brief:**
 
@@ -1161,8 +1226,10 @@ reranker stays as it is.
   engine change must keep it working"). `context-on-demand.series` does not
   carry P10 and builds another backend. Checked: the live series + P10 + P11
   apply together — `git am` of the nine LocalAI patches, then the eight
-  llama.cpp patches on `ddf48f8` with no fuzz on P10's or P11's. NOT built
-  together: whoever puts both in one series builds and gates that tree.
+  llama.cpp patches on `ddf48f8` with no fuzz on P10's or P11's. BUILT
+  together on the CPU since the operator chose A for the reranker
+  (`staged/nemotron-rerank-context-on-demand.series`, "The reranker" above);
+  on the card that tree is a new engine, gated like any other.
 
 **For München** (the operator, 2026-11-11: "Ask München to do the build for
 you. It has desktop docker as well"). The BUILD is asked; nothing after it
@@ -1203,3 +1270,21 @@ in München's session (§8).
    `GET /vega/keeps`, VeGa's log line, then requests served and their
    vectors byte-equal. (c) The load: its log says "context canary:
    recorded".
+6. **The reranker on demand** (operator, 2026-11-11: "Reranker option A").
+   (a) The build: `SERIES_FILE=deploy/localai/patches/staged/nemotron-rerank-context-on-demand.series
+   sh deploy/localai/llama-cpp/build.sh sycl_f16 <out>`, installed under its
+   own backend name. (b) A TEST copy of `louise-rerank-nemotron-1b`'s YAML
+   under its own model name on that backend, `options:` gaining
+   `context_on_demand`, `context_canary:true`, `keep_context_ms:500`; the
+   live reranker and its backend untouched. (c) The load's log: "context
+   canary: recorded", and NO warning that a step stopped (a control vector,
+   the reranking check) — if there is one, say which. (d) The same scores:
+   `tools/measure/nemotron_rerank_parity.py`'s pairs against the copy and
+   against the live model — equal, and equal again across at least 300
+   creations (a pause longer than 500 ms between reranks; the log counts
+   "context created in"). (e) The cost: "context created in … ms" with
+   `context_canary:true` and on a second copy with `context_canary:false`;
+   the memory back while idle (the §10.1 method). (f) A search's rerank:
+   one question's reranks (several collections at once) against the copy —
+   ONE creation for the question, none between its requests — and its time
+   beside the live model's. Then the operator decides the switch.

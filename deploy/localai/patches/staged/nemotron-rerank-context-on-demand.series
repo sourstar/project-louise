@@ -1,0 +1,19 @@
+# CANDIDATE series (build.sh SERIES_FILE=): the live series plus P10, the
+# llama-nemotron-rerank port, AND P11, the context on demand — for ONE backend
+# that serves the Nemotron reranker with its context on request (operator,
+# 2026-11-11: "Reranker option A"; docs/notes/idle-context-brief.md §10 "The
+# reranker"). A rerank request carries no keep (LocalAI's RerankRequest has no
+# metadata), so the model's YAML gives one: `context_on_demand`,
+# `context_canary:true`, `keep_context_ms:500`. For a TEST copy of the reranker
+# under its own model name first; the live reranker's backend
+# (nemotron-rerank.series) is untouched until the card says it keeps working.
+base 16acc8926bb8a27b67dc4d419dbceaeb4110f7af
+0001-system-list-load-options.patch
+0002-llama-cpp-embed-token-ids.patch
+0003-llama-cpp-encoder-decoder.patch
+0004-llama-cpp-encoder-decoder-waves.patch
+0005-llama-cpp-sycl-batched-mul-mat-src1.patch
+0006-llama-cpp-chat-cohere-command3.patch
+0007-llama-cpp-sycl-dmmv-cleanup.patch
+staged/0008-llama-cpp-nemotron-rerank.patch
+staged/0009-llama-cpp-context-on-demand.patch

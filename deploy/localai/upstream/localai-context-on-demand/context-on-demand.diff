@@ -1,0 +1,556 @@
+diff --git a/backend/cpp/llama-cpp/CMakeLists.txt b/backend/cpp/llama-cpp/CMakeLists.txt
+index 40fa503..65e5bfb 100644
+--- a/backend/cpp/llama-cpp/CMakeLists.txt
++++ b/backend/cpp/llama-cpp/CMakeLists.txt
+@@ -148,6 +148,11 @@ if(LLAMA_GRPC_BUILD_TESTS)
+     target_compile_features(option_parse_test PRIVATE cxx_std_17)
+     add_test(NAME option_parse_test COMMAND option_parse_test)
+ 
++    add_executable(context_on_demand_test context_on_demand_test.cpp context_on_demand.h)
++    target_include_directories(context_on_demand_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
++    target_compile_features(context_on_demand_test PRIVATE cxx_std_17)
++    add_test(NAME context_on_demand_test COMMAND context_on_demand_test)
++
+     add_executable(parallel_params_test parallel_params_test.cpp parallel_params.h)
+     target_include_directories(parallel_params_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+     target_compile_features(parallel_params_test PRIVATE cxx_std_17)
+diff --git a/backend/cpp/llama-cpp/context_on_demand.h b/backend/cpp/llama-cpp/context_on_demand.h
+new file mode 100644
+index 0000000..127ade0
+--- /dev/null
++++ b/backend/cpp/llama-cpp/context_on_demand.h
+@@ -0,0 +1,173 @@
++// SPDX-License-Identifier: MIT
++
++#pragma once
++
++#include <cstdint>
++#include <exception>
++#include <limits>
++#include <string>
++#include <type_traits>
++#include <utility>
++
++namespace llama_grpc {
++
++// llama.cpp's server can let a request give the context back after its answer,
++// keeping the model loaded (--context-on-demand): a request that carries
++// keep_context_ms has the context freed that many milliseconds after it, and
++// the next request creates it again - requests back to back carry a keep and
++// do not pay a creation each. A request that carries none uses the context as
++// it always did: it is not freed after it. LocalAI carries the request's keep
++// in its metadata map; the model option of the same name gives one to the
++// requests that carry none.
++
++// parse_keep_context_ms converts the value of the keep_context_ms metadata key,
++// or of the model option of the same name, to milliseconds. It returns -1
++// ("not said": the context stays loaded after the request, unless the model
++// option says otherwise) for anything that is not a whole, non-negative number
++// of milliseconds that fits in int32_t.
++inline int32_t parse_keep_context_ms(const std::string & value) {
++    try {
++        size_t used = 0;
++        const long long ms = std::stoll(value, &used);
++        if (used != value.size() || ms < 0 || ms > std::numeric_limits<int32_t>::max()) {
++            return -1;
++        }
++        return static_cast<int32_t>(ms);
++    } catch (const std::exception &) {
++        return -1;
++    }
++}
++
++// keep_context_ms_from reads the key from a metadata map (any map from string
++// to string), -1 when the map does not carry it.
++template <typename Map>
++int32_t keep_context_ms_from(const Map & metadata) {
++    const auto it = metadata.find("keep_context_ms");
++    return it == metadata.end() ? -1 : parse_keep_context_ms(it->second);
++}
++
++// The fields below exist only in llama.cpp trees that have the feature. They
++// are detected, so that this source still builds against pins and forks
++// without it; the setters return whether the field was there to set.
++template <typename T, typename = void>
++struct has_keep_context_ms : std::false_type {};
++template <typename T>
++struct has_keep_context_ms<T, std::void_t<decltype(std::declval<T &>().keep_context_ms)>> : std::true_type {};
++
++template <typename T, typename = void>
++struct has_context_on_demand : std::false_type {};
++template <typename T>
++struct has_context_on_demand<T, std::void_t<decltype(std::declval<T &>().context_on_demand)>> : std::true_type {};
++
++// set_keep_context_ms sets the keep of a task's params, or the default keep of
++// the server's params.
++template <typename Params>
++bool set_keep_context_ms(Params & params, int32_t ms) {
++    if constexpr (has_keep_context_ms<Params>::value) {
++        params.keep_context_ms = ms;
++        return true;
++    } else {
++        (void) params;
++        (void) ms;
++        return false;
++    }
++}
++
++// set_context_on_demand switches the feature on the server's params.
++template <typename Params>
++bool set_context_on_demand(Params & params, bool on) {
++    if constexpr (has_context_on_demand<Params>::value) {
++        params.context_on_demand = on;
++        return true;
++    } else {
++        (void) params;
++        (void) on;
++        return false;
++    }
++}
++
++template <typename T, typename = void>
++struct has_context_canary : std::false_type {};
++template <typename T>
++struct has_context_canary<T, std::void_t<decltype(std::declval<T &>().context_canary)>> : std::true_type {};
++
++// set_context_canary switches the context canary on the server's params: with
++// it (llama.cpp's default) each context created on demand must give the output
++// the load's context gave for a fixed input, or it is discarded and the
++// request refused.
++template <typename Params>
++bool set_context_canary(Params & params, bool on) {
++    if constexpr (has_context_canary<Params>::value) {
++        params.context_canary = on;
++        return true;
++    } else {
++        (void) params;
++        (void) on;
++        return false;
++    }
++}
++
++// How llama.cpp's server words the refusal of a request whose newly created
++// context did not reproduce the canary, and the trailing metadata under which
++// the backend says so beside the error: a caller can tell such a refusal
++// (retry; a context was discarded) from memory that could not be had.
++inline constexpr const char * CONTEXT_CANARY_FAILED  = "context canary failed";
++inline constexpr const char * CONTEXT_CANARY_TRAILER = "llama-context-canary";
++
++inline bool is_context_canary_failure(const std::string & message) {
++    return message.rfind(CONTEXT_CANARY_FAILED, 0) == 0;
++}
++
++// context_on_demand_of reads the switch from the server's params; false for a
++// llama.cpp without the feature.
++template <typename Params>
++bool context_on_demand_of(const Params & params) {
++    if constexpr (has_context_on_demand<Params>::value) {
++        return params.context_on_demand;
++    } else {
++        (void) params;
++        return false;
++    }
++}
++
++template <typename T, typename = void>
++struct has_t_ctx_create_us : std::false_type {};
++template <typename T>
++struct has_t_ctx_create_us<T, std::void_t<decltype(std::declval<T &>().t_ctx_create_us)>> : std::true_type {};
++
++// ctx_create_us_of reads from a task's result the microseconds it took to
++// create the context for that task; negative when the context was already
++// there, or when this llama.cpp does not say.
++template <typename Result>
++int64_t ctx_create_us_of(const Result & result) {
++    if constexpr (has_t_ctx_create_us<Result>::value) {
++        return result.t_ctx_create_us;
++    } else {
++        (void) result;
++        return -1;
++    }
++}
++
++// The trailing metadata key under which an answer of a model loaded with
++// context_on_demand says whether the context was created for that call: the
++// microseconds its creation took, or -1 when the context was already there.
++// It is the backend's own word, per call, for whoever counts creations (a
++// caller cannot tell one from its own clock: the context may have been kept
++// for another caller's request).
++inline constexpr const char * CONTEXT_CREATED_TRAILER = "llama-context-created-us";
++
++// context_created_us folds the results of one call: the sum of the creations
++// its tasks paid for, or -1 when none did.
++template <typename Results>
++int64_t context_created_us(const Results & results) {
++    int64_t total = -1;
++    for (const auto & result : results) {
++        const int64_t us = ctx_create_us_of(*result);
++        if (us >= 0) {
++            total = (total < 0 ? 0 : total) + us;
++        }
++    }
++    return total;
++}
++
++} // namespace llama_grpc
+diff --git a/backend/cpp/llama-cpp/context_on_demand_test.cpp b/backend/cpp/llama-cpp/context_on_demand_test.cpp
+new file mode 100644
+index 0000000..5c3a52a
+--- /dev/null
++++ b/backend/cpp/llama-cpp/context_on_demand_test.cpp
+@@ -0,0 +1,97 @@
++// SPDX-License-Identifier: MIT
++
++#include "context_on_demand.h"
++
++#include <cstdio>
++#include <map>
++#include <memory>
++#include <string>
++#include <vector>
++
++#define CHECK(cond)                                                          \
++    do {                                                                     \
++        if (!(cond)) {                                                       \
++            fprintf(stderr, "%s:%d: check failed: %s\n", __FILE__, __LINE__, #cond); \
++            return 1;                                                        \
++        }                                                                    \
++    } while (0)
++
++namespace {
++
++struct params_with    { int32_t keep_context_ms = -1; bool context_on_demand = false; bool context_canary = true; };
++struct params_without { int unrelated = 0; };
++struct result_with    { int64_t t_ctx_create_us = -1; };
++struct result_without { int unrelated = 0; };
++
++} // namespace
++
++int main() {
++    using namespace llama_grpc;
++
++    // a whole, non-negative number of milliseconds
++    CHECK(parse_keep_context_ms("0") == 0);
++    CHECK(parse_keep_context_ms("20") == 20);
++    CHECK(parse_keep_context_ms("300000") == 300000);
++    CHECK(parse_keep_context_ms("2147483647") == 2147483647);
++
++    // anything else is "not said"
++    CHECK(parse_keep_context_ms("") == -1);
++    CHECK(parse_keep_context_ms("-1") == -1);
++    CHECK(parse_keep_context_ms("20ms") == -1);
++    CHECK(parse_keep_context_ms("1.5") == -1);
++    CHECK(parse_keep_context_ms("true") == -1);
++    CHECK(parse_keep_context_ms("2147483648") == -1);
++    CHECK(parse_keep_context_ms("99999999999999999999999") == -1);
++
++    // the request's metadata
++    const std::map<std::string, std::string> none  = {{"chat_template_kwargs", "{}"}};
++    const std::map<std::string, std::string> some  = {{"keep_context_ms", "20"}};
++    const std::map<std::string, std::string> wrong = {{"keep_context_ms", "soon"}};
++    CHECK(keep_context_ms_from(none) == -1);
++    CHECK(keep_context_ms_from(some) == 20);
++    CHECK(keep_context_ms_from(wrong) == -1);
++
++    // a llama.cpp with the fields, and one without
++    params_with with;
++    CHECK(set_keep_context_ms(with, 20));
++    CHECK(with.keep_context_ms == 20);
++    CHECK(set_context_on_demand(with, true));
++    CHECK(with.context_on_demand);
++
++    params_without without;
++    CHECK(!set_keep_context_ms(without, 20));
++    CHECK(!set_context_on_demand(without, true));
++    CHECK(context_on_demand_of(with));
++    CHECK(!context_on_demand_of(without));
++
++    // the canary: on unless switched off, and a llama.cpp without it says so
++    CHECK(with.context_canary);
++    CHECK(set_context_canary(with, false));
++    CHECK(!with.context_canary);
++    CHECK(!set_context_canary(without, false));
++    CHECK(is_context_canary_failure("context canary failed: the context created for this request did not reproduce"));
++    CHECK(!is_context_canary_failure("the context cannot be created now, the memory it needs may be in use"));
++    CHECK(!is_context_canary_failure("a context canary failed"));
++
++    // a result says when the context was created for its task
++    result_with created;
++    created.t_ctx_create_us = 1500;
++    CHECK(ctx_create_us_of(created) == 1500);
++    CHECK(ctx_create_us_of(result_with()) == -1);
++    CHECK(ctx_create_us_of(result_without()) == -1);
++
++    // a call's results: the creations its tasks paid for, -1 when none did
++    std::vector<std::unique_ptr<result_with>> results;
++    results.push_back(std::make_unique<result_with>());
++    results.push_back(std::make_unique<result_with>());
++    CHECK(context_created_us(results) == -1);
++    results[1]->t_ctx_create_us = 0;
++    CHECK(context_created_us(results) == 0);
++    results[0]->t_ctx_create_us = 1500;
++    CHECK(context_created_us(results) == 1500);
++    std::vector<std::unique_ptr<result_without>> silent;
++    silent.push_back(std::make_unique<result_without>());
++    CHECK(context_created_us(silent) == -1);
++
++    return 0;
++}
+diff --git a/backend/cpp/llama-cpp/grpc-server.cpp b/backend/cpp/llama-cpp/grpc-server.cpp
+index 073f1c7..1a86882 100644
+--- a/backend/cpp/llama-cpp/grpc-server.cpp
++++ b/backend/cpp/llama-cpp/grpc-server.cpp
+@@ -76,6 +76,7 @@
+ #include "moe_cache_option.h"
+ #include "option_parse.h"
+ #include "passthrough_options.h"
++#include "context_on_demand.h"
+ #include "stream_peer.h"
+ #include "realtime_session.h"
+ #include "tts_request_options.h"
+@@ -217,7 +218,7 @@ static inline void signal_handler(int signal) {
+ 
+ // Forward declarations
+ static void start_llama_server(server_context& ctx_server);
+-static json parse_options(bool streaming, const backend::PredictOptions* predict, const common_params& params_base, llama_context* ctx);
++static json parse_options(bool streaming, const backend::PredictOptions* predict, const common_params& params_base, const llama_vocab* vocab);
+ static ggml_type kv_cache_type_from_str(const std::string & s);
+ static std::string get_all_kv_cache_types();
+ static void add_rpc_devices(std::string servers);
+@@ -267,7 +268,7 @@ static void start_llama_server(server_context& ctx_server) {
+     ctx_server.start_loop();
+ }
+ 
+-json parse_options(bool streaming, const backend::PredictOptions* predict, const common_params& params_base, llama_context* ctx)
++json parse_options(bool streaming, const backend::PredictOptions* predict, const common_params& params_base, const llama_vocab* vocab)
+ {
+ 
+     // Create now a json data from the prediction options instead
+@@ -467,7 +468,7 @@ json parse_options(bool streaming, const backend::PredictOptions* predict, const
+     if (!params_base.sampling.preserved_tokens.empty()) {
+         json preserved_tokens = json::array();
+         for (const auto& token : params_base.sampling.preserved_tokens) {
+-            preserved_tokens.push_back(common_token_to_piece(ctx, token));
++            preserved_tokens.push_back(common_token_to_piece(vocab, token));
+         }
+         data["preserved_tokens"] = preserved_tokens;
+     }
+@@ -744,6 +745,32 @@ static void params_parse(server_context& /*ctx_server*/, const backend::ModelOpt
+             if (optval != NULL) {
+                 grpc_servers_option = optval_str;
+             }
++        } else if (!strcmp(optname, "context_on_demand")) {
++            // llama.cpp's --context-on-demand: a request that carries keep_context_ms
++            // in its metadata has the context freed that long after its answer, and
++            // the next request creates it again; the weights stay loaded. A request
++            // that carries none leaves the context loaded, as ever
++            const bool on = !(optval_str == "false" || optval_str == "0" || optval_str == "no" || optval_str == "off" || optval_str == "disabled");
++            if (!llama_grpc::set_context_on_demand(params, on)) {
++                fprintf(stderr, "[llama-cpp] context_on_demand: not supported by this llama.cpp, ignored\n");
++            }
++        } else if (!strcmp(optname, "context_canary")) {
++            // with context_on_demand: each context created is held to the output of
++            // the load's for a fixed input (llama.cpp's default). `context_canary:false`
++            // switches the check off
++            const bool on = !(optval_str == "false" || optval_str == "0" || optval_str == "no" || optval_str == "off" || optval_str == "disabled");
++            if (!llama_grpc::set_context_canary(params, on)) {
++                fprintf(stderr, "[llama-cpp] context_canary: not supported by this llama.cpp, ignored\n");
++            }
++        } else if (!strcmp(optname, "keep_context_ms")) {
++            // gives a keep to the requests that carry none in their metadata
++            // (without it such a request leaves the context loaded)
++            const int32_t ms = llama_grpc::parse_keep_context_ms(optval_str);
++            if (ms < 0) {
++                fprintf(stderr, "[llama-cpp] keep_context_ms: '%s' is not a number of milliseconds, ignored\n", optval_str.c_str());
++            } else if (!llama_grpc::set_keep_context_ms(params, ms)) {
++                fprintf(stderr, "[llama-cpp] keep_context_ms: not supported by this llama.cpp, ignored\n");
++            }
+         } else if (!strcmp(optname, "fit_params") || !strcmp(optname, "fit")) {
+             if (optval_str == "true" || optval_str == "1" || optval_str == "yes" || optval_str == "on" || optval_str == "enabled") {
+                 params.fit_params = true;
+@@ -2511,6 +2538,10 @@ private:
+     // distributed route is rejected instead of answered from the wrong model
+     // (#10952). Written under LoadModel, read by the inference RPCs.
+     std::string loaded_model_identity;
++    // The pooling type of the loaded model's context, read once at the load:
++    // it does not change, and the context it was read from may be gone
++    // between two requests (context_on_demand). Written under LoadModel.
++    enum llama_pooling_type loaded_pooling_type = LLAMA_POOLING_TYPE_UNSPECIFIED;
+ 
+ public:
+     BackendServiceImpl(server_context& ctx) : ctx_server(ctx) {}
+@@ -2682,6 +2713,7 @@ public:
+         result->set_success(true);
+         loaded_model = true;
+         loaded_model_identity = request->model();
++        loaded_pooling_type = ctx_server.get_meta().pooling_type;
+         // Store copy of params_base for use in parse_options and other methods
+         params_base = params;
+ 
+@@ -2768,7 +2800,7 @@ public:
+         if (params_base.model.path.empty()) {
+             return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION, "Model not loaded");
+         }
+-        json data = parse_options(true, request, params_base, ctx_server.get_llama_context());
++        json data = parse_options(true, request, params_base, ctx_server.impl->vocab);
+ 
+ 
+         //Raise error if embeddings is set to true
+@@ -3173,6 +3205,8 @@ public:
+                 task.apply_chat_session(chat_session);
+ #endif
+                 task.id_slot = json_value(data, "id_slot", -1);
++                // context on demand: the request's keep, -1 when it carries none
++                llama_grpc::set_keep_context_ms(task.params, llama_grpc::keep_context_ms_from(request->metadata()));
+ 
+                 // OAI-compat: enable autoparser (PEG-based chat parsing) so that
+                 // reasoning, tool calls, and content are classified into ChatDeltas.
+@@ -3371,7 +3405,7 @@ public:
+          if (params_base.model.path.empty()) {
+              return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION, "Model not loaded");
+          }
+-         json data = parse_options(true, request, params_base, ctx_server.get_llama_context());
++         json data = parse_options(true, request, params_base, ctx_server.impl->vocab);
+ 
+         data["stream"] = false;
+         //Raise error if embeddings is set to true
+@@ -3778,6 +3812,8 @@ public:
+                 task.apply_chat_session(chat_session);
+ #endif
+                 task.id_slot = json_value(data, "id_slot", -1);
++                // context on demand: the request's keep, -1 when it carries none
++                llama_grpc::set_keep_context_ms(task.params, llama_grpc::keep_context_ms_from(request->metadata()));
+ 
+                 // OAI-compat: enable autoparser (PEG-based chat parsing) so that
+                 // reasoning, tool calls, and content are classified into ChatDeltas.
+@@ -3925,7 +3961,7 @@ public:
+         if (params_base.model.path.empty()) {
+             return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION, "Model not loaded");
+         }
+-        json body = parse_options(false, request, params_base, ctx_server.get_llama_context());
++        json body = parse_options(false, request, params_base, ctx_server.impl->vocab);
+ 
+         body["stream"] = false;
+ 
+@@ -3963,6 +3999,8 @@ public:
+ 
+                 task.params.res_type = TASK_RESPONSE_TYPE_NONE;
+                 task.params.embd_normalize = embd_normalize;
++                // context on demand: the request's keep, -1 when it carries none
++                llama_grpc::set_keep_context_ms(task.params, llama_grpc::keep_context_ms_from(request->metadata()));
+                 tasks.push_back(std::move(task));
+             }
+ 
+@@ -3975,7 +4013,13 @@ public:
+         if (all_results.is_terminated) {
+             return grpc::Status(grpc::StatusCode::CANCELLED, "Request cancelled by client");
+         } else if (all_results.error) {
+-            return grpc::Status(grpc::StatusCode::INTERNAL, all_results.error->to_json().value("message", "Error in receiving results"));
++            const std::string message = all_results.error->to_json().value("message", "Error in receiving results");
++            // context on demand: a context that did not reproduce the canary was
++            // discarded; said beside the error (context_on_demand.h)
++            if (llama_grpc::is_context_canary_failure(message)) {
++                context->AddTrailingMetadata(llama_grpc::CONTEXT_CANARY_TRAILER, "failed");
++            }
++            return grpc::Status(grpc::StatusCode::INTERNAL, message);
+         }
+ 
+         // Extract the embeddings typed, straight from the task results (no
+@@ -4007,10 +4051,17 @@ public:
+         embeddingResult->set_dim(dim);
+         embeddingResult->set_prompt_tokens(prompt_tokens);
+         embeddingResult->set_layout(
+-            llama_pooling_type(ctx_server.get_llama_context()) == LLAMA_POOLING_TYPE_NONE
++            loaded_pooling_type == LLAMA_POOLING_TYPE_NONE
+                 ? backend::EMBEDDING_LAYOUT_PER_TOKEN
+                 : backend::EMBEDDING_LAYOUT_FINAL);
+ 
++        // context on demand: the answer says whether the context was created
++        // for this call (context_on_demand.h, CONTEXT_CREATED_TRAILER)
++        if (llama_grpc::context_on_demand_of(params_base)) {
++            context->AddTrailingMetadata(llama_grpc::CONTEXT_CREATED_TRAILER,
++                                         std::to_string(llama_grpc::context_created_us(all_results.results)));
++        }
++
+         std::cout << "[DEBUG] Embedding vectors: " << n_vectors << " x " << dim << std::endl;
+ 
+         return grpc::Status::OK;
+@@ -4745,7 +4796,7 @@ public:
+         if (params_base.model.path.empty()) {
+             return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION, "Model not loaded");
+         }
+-        json body = parse_options(false, request, params_base, ctx_server.get_llama_context());
++        json body = parse_options(false, request, params_base, ctx_server.impl->vocab);
+         body["stream"] = false;
+ 
+         json tokens_response = json::array();
+@@ -4756,7 +4807,7 @@ public:
+ 
+ 
+             for (const auto& token : tokens) {
+-                std::string piece = common_token_to_piece(ctx_server.get_llama_context(), token);
++                std::string piece = common_token_to_piece(ctx_server.impl->vocab, token);
+                 response->add_tokens(token);
+             }
+         }
+@@ -4924,7 +4975,7 @@ public:
+ 
+         std::string content;
+         for (const auto token : request->tokens()) {
+-            content.append(common_token_to_piece(ctx_server.get_llama_context(), token));
++            content.append(common_token_to_piece(ctx_server.impl->vocab, token));
+         }
+         response->set_content(content);
+         return grpc::Status::OK;
+diff --git a/backend/cpp/llama-cpp/prepare.sh b/backend/cpp/llama-cpp/prepare.sh
+index b10610e..3d7be16 100644
+--- a/backend/cpp/llama-cpp/prepare.sh
++++ b/backend/cpp/llama-cpp/prepare.sh
+@@ -79,6 +79,10 @@ cp -r moe_cache_option.h llama.cpp/tools/grpc-server/
+ cp -r option_parse.h llama.cpp/tools/grpc-server/
+ cp -r option_parse_test.cpp llama.cpp/tools/grpc-server/
+ cp -r moe_cache_option_test.cpp llama.cpp/tools/grpc-server/
++# Context on demand: the request's keep and the model options (included by
++# grpc-server.cpp) and their standalone regression test.
++cp -r context_on_demand.h llama.cpp/tools/grpc-server/
++cp -r context_on_demand_test.cpp llama.cpp/tools/grpc-server/
+ # Parent-death watcher (included by grpc-server.cpp) and its standalone unit
+ # test (run via backend/cpp/run-unit-tests.sh; also buildable under ctest).
+ cp -r parent_watch.h llama.cpp/tools/grpc-server/
+diff --git a/docs/content/advanced/model-configuration.md b/docs/content/advanced/model-configuration.md
+index bf47845..c9d5ce9 100644
+--- a/docs/content/advanced/model-configuration.md
++++ b/docs/content/advanced/model-configuration.md
+@@ -831,6 +831,32 @@ These llama.cpp options are passed through the `options:` array.
+ | `kv_unified_per_slot` | int | 0 (unset) | Context limit per parallel slot (upstream `--kv-unified-per-slot`). Without `context_size`, the shared KV cache is sized to `parallel` times this value. |
+ | `yarn_orig_ctx` | int | 0 (model value) | Original context size of the model for YaRN scaling (upstream `--yarn-orig-ctx`). |
+ 
++#### Context on demand
++
++A llama.cpp model holds its context (the KV cache and the compute buffers) for as long as it is loaded. With `context_on_demand` the model stays loaded and a request can give the context back after its answer; the next request creates it again, which costs far less than loading the model. It suits models that are asked rarely and whose memory another model could use in between.
++
++| Option | Type | Default | Description |
++|--------|------|---------|-------------|
++| `context_on_demand` | bool | `false` | Let a request free the context after its answer, keeping the model loaded (upstream `--context-on-demand`). The load is refused with speculative decoding (a draft model, MTP) or a multimodal projector. |
++| `keep_context_ms` | int | unset | The keep, in milliseconds, given to a request that carries none (upstream `--keep-context-ms`). Unset: such a request leaves the context loaded. |
++| `context_canary` | bool | `true` | Hold each context created after the load to the output the load's context gave for a fixed input, and refuse the request of a context that does not reproduce it (upstream `--no-context-canary` switches it off). |
++
++A request says how long its context is kept after the answer with the `keep_context_ms` key of its `metadata`:
++
++```bash
++curl http://localhost:8080/v1/embeddings -H "Content-Type: application/json" -d '{
++  "model": "my-embedder",
++  "input": "hello",
++  "metadata": { "keep_context_ms": "0" }
++}'
++```
++
++- `0` frees the context as soon as the model is idle. `N` keeps it N milliseconds, so that requests following each other do not create one each. Among the requests that carry a keep the latest deadline wins: a keep never shortens another's.
++- A request without the key leaves the context loaded, as without the option, unless the model sets `keep_context_ms`.
++- Rerank requests carry no `metadata`: give the model a `keep_context_ms`.
++- A request whose context cannot be created (the memory it needs is in use) or whose context fails the canary gets an error and can be sent again.
++- Over gRPC, an `Embedding` answer carries the trailing metadata `llama-context-created-us`: the microseconds the creation took when the context was created for that call, `-1` when it was already there. One refused on the canary carries `llama-context-canary: failed` beside its error.
++
+ #### Generic option passthrough
+ 
+ Any `options:` entry whose name starts with `-` is forwarded **verbatim** to
