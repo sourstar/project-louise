@@ -76,7 +76,11 @@ measured (published figures disagree).
   Llama" on the service — Ask's footer and Help › Basics › Models say it (tests/test_web_pages.py). LIVE: 850773d
   deployed 2026-11-11T07:41:09Z (operator: "Deploy the web for the Llama attribution"; web + worker on one image,
   rc 0, relay gate 200; /ask has the line and its link, /help the Models panel and Meta's notice; a gutenberg search
-  answers with Nemotron rerank scores). bge against Nemotron on wikidata and wikipedia: München measuring.
+  answers with Nemotron rerank scores). Wikidata and wikipedia measured after the choice (07:46–07:52Z, known-item
+  sets, node paused), so no collection loses: wikidata MRR@10 bge 0.526 → Nemotron 0.554 (+0.028 [+0.005, +0.051],
+  p 0.022, 195 queries); wikipedia 0.544 → 0.587 (+0.044 [−0.003, +0.098], p 0.11, 50); +60–90 ms per list. To
+  watch: Italian queries gain more than English ones, so the it − en gap widens (wikidata +0.139 → +0.197,
+  wikipedia +0.072 → +0.178). Scores: /data/rerank-bench/wiki-len.*.
 - **gutenberg's Qwen3-Embedding-4B trimmed: ubatch = batch 2048, ctx 8192, LIVE since 2026-11-12 06:52Z**
   (München; the operator's 10-23 "trim the context to the needed one" — gutenberg's chunker cuts at 1,000 tokens, its
   space promises 8,191). `size_vram` 5,643 → 4,263 MiB (−1,380). Gate run sha256:7e0a79eabf3fe229…: document 16/16,
