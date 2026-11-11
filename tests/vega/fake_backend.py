@@ -15,6 +15,7 @@ import os
 import signal
 import struct
 import threading
+import time
 from concurrent import futures
 
 import grpc
@@ -57,6 +58,20 @@ def note(context, **kw) -> None:
 class Servicer(backend_pb2_grpc.BackendServicer):
     def __init__(self) -> None:
         self.loaded = None
+        # a load with `context_on_demand` frees its context when the keep its
+        # last answer carried has run out, as our patched backend (P11): no
+        # keep, and the context stays; and it says beside each answer whether
+        # the context was created for that call
+        self.context_until = 0.0
+
+    def _context(self, request, context) -> None:
+        if "context_on_demand" not in self.loaded.Options:
+            return
+        created = time.monotonic() >= self.context_until
+        keep = dict(request.Metadata).get("keep_context_ms")
+        self.context_until = float("inf") if keep is None else max(
+            0.0 if created else self.context_until, time.monotonic() + int(keep) / 1000.0)
+        context.set_trailing_metadata((("llama-context-created-us", "1500" if created else "-1"),))
 
     def Health(self, request, context):  # noqa: N802 — gRPC's names
         return backend_pb2.Reply(message=b"OK")
@@ -70,13 +85,15 @@ class Servicer(backend_pb2_grpc.BackendServicer):
 
     def Embedding(self, request, context):  # noqa: N802
         ids = list(request.EmbeddingTokens)
-        note(context, method="Embedding", text=request.Embeddings, tokens=ids)
+        note(context, method="Embedding", text=request.Embeddings, tokens=ids,
+             keep=dict(request.Metadata).get("keep_context_ms"))
         if self.loaded is None:
             context.abort(grpc.StatusCode.FAILED_PRECONDITION, "no model is loaded")
         text = (" ".join(_words[t] for t in ids) if ids and os.environ.get("FAKE_TOKEN_IDS")
                 else request.Embeddings)
         if ids and not text:
             context.abort(grpc.StatusCode.INVALID_ARGUMENT, "Input content cannot be empty")
+        self._context(request, context)
         h = hashlib.sha256(text.encode("utf-8")).digest()
         vector = [(b - 128) / 256 for b in h[:5]] + [-0.0, HALFWAY, 0.1]
         counted = len(_ids(text)) + SPECIALS if os.environ.get("FAKE_TOKENIZER") else 0

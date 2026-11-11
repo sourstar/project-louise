@@ -121,7 +121,7 @@ def make_node(tmp_path, stubs, vega):
                    "EnvVars": {"VEGA_TEST_ENV": "on"}, **(extra or {})}
         models = {"vega-fake": localai_fake.Model(f"127.0.0.1:{running.port}", options)}
         api = FastAPI()
-        api.include_router(service.router(vega.receipts, vega.runs, vega.passes))
+        api.include_router(service.router(vega.receipts, vega.runs, vega.passes, vega.keeps))
         node = Node(running, TestClient(localai_fake.create(models, stubs)), TestClient(api),
                     models, options, log, weights, run_sh.resolve(), stubs)
         made.append(node)
@@ -685,3 +685,104 @@ def test_an_input_over_the_loads_ubatch_is_counted_for_vega_at_once(make_node, v
     assert row["ubatch"] == 4 and row["inputs"] == 2 and row["over"] == 1
     assert row["longest"] > 4 and sum(row["buckets"].values()) == 2
     assert node.vega_http.get("/vega/passes").json()["runs"][0]["over"] == 1
+
+
+def test_an_on_demand_loads_probes_say_a_keep_of_0_and_its_calls_are_counted_for_vega(make_node, vega):
+    """Context on request (docs/notes/idle-context-brief.md §1.3; operator,
+    2026-11-11: "A request that carries no parameter is using the context in
+    the canonical way: no free after use"): the wrapper's own probes at a
+    load must SAY their keep, or the load holds its context until Louise's
+    first request; the request's keep goes to the backend as it came; and
+    the calls are counted for VeGa on the backend's own word (operator,
+    2026-11-10: "we can log expired stay warms for improvement")."""
+    node = make_node(tokenizer=True, token_ids=True,
+                     extra={"Options": ["device:cpu", "parallel:1", "context_on_demand"]})
+    batch, r = node.embed(["one two", "three four five"], metadata={"keep_context_ms": "60000"})
+    assert r.status_code == 200, r.text
+    node.verify(batch, r)
+    calls = node.calls("Embedding")
+    assert [c["keep"] for c in calls] == ["0", "0", "60000", "60000"], \
+        "the text probe and the token-id probe at the load, then the two texts as asked"
+    # told BEFORE the vector went out: the load's first call, and created for it
+    (row,) = vega.keeps.get()
+    assert (row["on_demand"], row["calls"], row["keyed"], row["told"], row["created"]) == \
+        (True, 1, 1, 1, 1), "the second text found the context kept: told in the background"
+    assert row["created_ms"] == 2, "the backend's own 1,500 microseconds, to the millisecond"
+    # a gate's request: a keep of 0. This one finds the context the 60 s keep
+    # holds — and the count says so as soon as its answer is back
+    batch, r = node.embed(["six seven"], metadata={"keep_context_ms": "0"})
+    assert r.status_code == 200, r.text
+    (row,) = vega.keeps.get()
+    assert (row["calls"], row["told"], row["created"]) == (3, 3, 1), \
+        "three calls, one context: no creation a gate could mistake for its own"
+    assert row["busy"] + sum(row["gaps"].values()) == row["calls"]
+    got = node.vega_http.get("/vega/keeps").json()
+    assert got["runs"][0]["run_id"] == row["run_id"] and len(got["buckets"]) == 18
+
+
+def test_each_request_with_a_keep_of_0_has_its_context_created_and_counted(make_node, vega):
+    """What the calibration gate's fresh-context pass reads (app/run_check.py
+    `fresh_contexts`): N requests, N calls, N creations, by the time each
+    answer is back."""
+    node = make_node(tokenizer=True, token_ids=True,
+                     extra={"Options": ["device:cpu", "parallel:1", "context_on_demand"]})
+    seen = []
+    for text in ("one two", "three four", "five six"):
+        batch, r = node.embed([text], metadata={"keep_context_ms": "0"})
+        assert r.status_code == 200, r.text
+        node.verify(batch, r)
+        (row,) = vega.keeps.get()
+        seen.append((row["calls"], row["created"]))
+    assert seen == [(1, 1), (2, 2), (3, 3)]
+
+
+def test_a_load_without_the_option_is_sent_what_it_always_was(make_node, vega):
+    node = make_node(tokenizer=True, token_ids=True)
+    batch, r = node.embed(["one two"])
+    assert r.status_code == 200, r.text
+    node.verify(batch, r)
+    assert [c["keep"] for c in node.calls("Embedding")] == [None, None, None]
+    (row,) = vega.keeps.get()
+    assert (row["on_demand"], row["calls"], row["told"], row["created"], row["keyed"]) == \
+        (False, 1, 0, 0, 0), "its gaps are counted all the same: what a keep would have to outlast"
+
+
+def test_the_gate_reads_the_runs_count_through_the_whole_chain(make_node, vega, monkeypatch):
+    """app/run_check.py `creations_of` against the real wrapper and the real
+    receipts service: the reading the fresh-context pass holds its rounds to
+    (invariant 12) — current before the first round though the gate's own
+    earlier pass left a keep on the model, N calls and N creations for a
+    round of N, and no creation at all once another collection's keep holds
+    the context."""
+    from types import SimpleNamespace
+    from app import collections as collections_mod, run_check
+    from app.hold import embedder as emb
+    node = make_node(tokenizer=True, token_ids=True,
+                     extra={"Options": ["device:cpu", "parallel:1", "context_on_demand"]})
+
+    def ask(text, keep):
+        batch, r = node.embed([text], metadata={"keep_context_ms": str(keep)})
+        assert r.status_code == 200, r.text
+
+    ask("the gate's own earlier pass", 300)           # leaves a keep of 300 ms on the model
+    (row,) = vega.keeps.get()
+    monkeypatch.setattr(run_check.config, "VEGA_URL", "http://vega:8090")
+    recipe = collections_mod.EmbedRecipe(url="http://localai:8080", api="vega", model="vega-fake",
+                                         dtype="f32", ctx=512)
+    counted = run_check.creations_of(
+        recipe, SimpleNamespace(run_id=row["run_id"]), lambda: ask("louise", 0),
+        get=lambda url, timeout=None: node.vega_http.get(url[len("http://vega:8090"):]),
+        sleep=lambda s: time.sleep(0.2))
+    before = counted()
+    assert before is not None and before[1] >= 2, "settled: a probe had its context created for it"
+    for text in ("one two", "three four", "five six"):
+        ask(text, 0)
+    after = counted()
+    assert emb._round_counts(before, after, 3) == (3, 3), "three requests, three calls, three contexts"
+
+    ask("another collection's request", 60000)        # its keep holds the context from now on
+    before = counted()
+    for text in ("one two", "three four", "five six"):
+        ask(text, 0)
+    assert emb._round_counts(before, counted(), 3) == (3, 0), \
+        "the pass's requests rode a kept context: counted, never assumed"
