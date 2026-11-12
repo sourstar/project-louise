@@ -212,14 +212,22 @@ def _day(n) -> str | None:
 MAX_CHANGES = 12
 
 
-def _changes(con, work: str, tok: str) -> list[dict]:
+def _changes(con, work: str, tok: str, annexes: tuple[str, ...] = ()) -> list[dict]:
     """What changed the article and its act (app/validity.py `amendments_of`:
     the amending actions each version states, piece 3, operator 2026-11-08)
     — by any canonical id of the Work, the latest MAX_CHANGES, facts as the
-    origin states them: the amending act, the day it applies from, the kind."""
+    origin states them: the amending act, the day it applies from, the kind.
+
+    Within the citation's `annexes` where it names some, as `_article`
+    reads the text (2026-11-12): "art. 12 c.c." is the code's art. 12, never
+    the preleggi's or the decree's. A statement on an article that names NO
+    annex, for a code that has annexes, is ambiguous (`#1` of the decree)
+    and is DROPPED — a fact never carries another article's changes; a
+    statement on the whole act stays (amendments_of). A structured code (no
+    annexes): unchanged."""
     from app import validity
     keys = [r[0] for r in con.execute("SELECT key FROM validity_works WHERE work=?", (work,))]
-    rows = validity.amendments_of(con, keys, tok)
+    rows = validity.amendments_of(con, keys, tok, annexes=annexes)
     return [{"atto": (r["stating_title"] or r["amending"]).split(" — ")[0] if r["amending_is_stating"]
              else r["amending"], "dal": r["day"], "tipo": r["kind"],
              "su": f"art. {r['article']}" if r["article"] else "l'atto"} for r in rows[-MAX_CHANGES:]]
@@ -254,7 +262,7 @@ def _work_facts(collection, con, key: str, want: Cited, group: list[tuple],
     for work, versions, v, title, _lang in group:
         act_label = (title or key).split(" — ")[0]
         ch = _article(collection, v["native_id"], want)
-        changes = _changes(con, work, c.article)
+        changes = _changes(con, work, c.article, tuple(c.annexes or ()))
         if ch is not None:
             note = notes.in_force if as_of is None else notes.as_of.format(day=_day(as_of))
             out.append(_fact(collection, key, act_label, c, v, ch, note, changes))

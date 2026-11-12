@@ -188,13 +188,38 @@ def destination_part(mod: dict) -> str:
 
 #: the article inside a destination part: `5`, `5bis`, `art5`, `art_2__para_1`
 _PART_ARTICLE = re.compile(r"^(?:art(?:icolo)?[_ .]?)?(\d+(?:[-_ ]?[a-z]+)?)(?=$|__|[-_ ]?(?:com|para|let|num))", re.I)
+#: the older exports' LABELLED fragment, "<annex>-art. N" — the annex label
+#: the code's articles are held under (`#CODICE CIVILE-art. 2441`,
+#: `#Allegato 1 Codice del processo amministrativo-art. 120`, `#Norme-art.
+#: 227`), whitespace around the hyphen as written (`abrogazioni -art. 1`).
+#: Measured on normattiva's records, 2026-11-12: c.c. 8,921 of 9,213
+#: destinations, c.p.a. 575 of 655, disp. att. c.p.p. 2,680 of 3,364. The
+#: same shape as a chunk label's annex (app/ask/articles.py `_ANNEX`).
+_LABELLED = re.compile(r"^(?P<annex>.*?\S)\s*-\s*art(?:icolo)?\.?\s*(?P<article>\d.*)$", re.I)
+
+
+def split_part(part: str) -> tuple[str, str]:
+    """`(annex, article part)` of a destination part: the labelled form gives
+    its annex, whitespace normalised (`"CODICE CIVILE-art. 2441"` →
+    `("CODICE CIVILE", "2441")`); every other form — the AKN `art_145__para_1`,
+    a bare URN `12` — no annex (`""`) and the part as written."""
+    m = _LABELLED.match(part or "")
+    if m is None:
+        return "", part
+    return " ".join(m["annex"].split()), m["article"].strip()
+
+
+def destination_annex(mod: dict) -> str:
+    """The annex a modification's destination names (`CODICE CIVILE`), ""
+    where its part carries none."""
+    return split_part(destination_part(mod))[0]
 
 
 def destination_article(mod: dict) -> str:
-    """The article a modification's destination names (`5`, `5-bis`), the
-    part as written where it is not an article (`Allegato III`), "" for
-    the whole act."""
-    part = destination_part(mod)
+    """The article a modification's destination names (`5`, `5-bis`, the
+    `2441` of `CODICE CIVILE-art. 2441`), the part as written where it is
+    not an article (`Allegato III`), "" for the whole act."""
+    part = split_part(destination_part(mod))[1]
     m = _PART_ARTICLE.match(part)
     return m.group(1) if m else part
 
@@ -575,7 +600,9 @@ class NormattivaSource:
         """app/validity.py's amending-actions hook (piece 3, operator
         2026-11-08): what THIS version's active modifications change — the
         destination act by the id its href uses, the article it names
-        (`destination_article`), the day the destination's `ita@` date names
+        (`destination_article`) and the annex it is held under where the
+        destination is labelled (`destination_annex`), the day the
+        destination's `ita@` date names
         or else this version's own start, and the kind as the origin types it
         (`substitution`, `repeal`, `insertion`, …). The passive side is not
         read: the origin writes it as notes inserted with no source act."""
@@ -588,7 +615,8 @@ class NormattivaSource:
                 continue
             key, date, whole = target
             yield validity_mod.Amendment(target=key, kind=str(mod.get("type") or "modification").strip().lower(),
-                                         article="" if whole else destination_article(mod), day=date or start)
+                                         article="" if whole else destination_article(mod), day=date or start,
+                                         annex="" if whole else destination_annex(mod))
 
     def closures(self, doc: CanonicalDoc):
         """app/validity.py's hook (06 §6.1; review §3.2, case 2): the acts

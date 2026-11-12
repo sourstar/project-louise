@@ -208,6 +208,9 @@ class Amendment:
     article: str = ""
     amending: str = ""
     day: str | None = None
+    #: the annex of `target` the article is held under, where the origin
+    #: names one (Normattiva's "CODICE CIVILE-art. 2441"); "" for none
+    annex: str = ""
 
 
 _ARTICLE_WORD = re.compile(r"^(?:art(?:icolo|icle|ikel|\.)?|§+|para(?:graph)?)\s*", re.I)
@@ -224,7 +227,7 @@ def article_token(text: str | None) -> str:
 
 
 def amendments_of_doc(doc, plugin) -> list[tuple]:
-    """`(target, article, amending, day int|None, kind)` for each amendment
+    """`(target, article, amending, day int|None, kind, annex|None)` for each amendment
     the document states: the plugin's hook where it has one, else its
     edges. Deterministic, sorted, each once."""
     hook = getattr(plugin, "amendments", None)
@@ -248,38 +251,150 @@ def amendments_of_doc(doc, plugin) -> list[tuple]:
                 day = day_int(str(a.day))
             except ValueError:
                 day = None
-        out.add((str(a.target), article_token(a.article), str(a.amending or ""), day, str(a.kind)))
-    return sorted(out, key=lambda r: (r[0], r[1], r[2], r[3] or 0, r[4]))
+        annex = " ".join(str(a.annex or "").split()) or None
+        out.add((str(a.target), article_token(a.article), str(a.amending or ""), day, str(a.kind), annex))
+    return sorted(out, key=lambda r: (r[0], r[5] or "", r[1], r[2], r[3] or 0, r[4]))
 
 
 def _record_amendments(con, by_uid: str, rows) -> None:
     con.execute("DELETE FROM validity_amendments WHERE stated_by=?", (by_uid,))
-    con.executemany("INSERT OR IGNORE INTO validity_amendments(stated_by, target, article, amending, day, kind) "
-                    "VALUES(?,?,?,?,?,?)", [(by_uid, *r) for r in rows])
+    con.executemany("INSERT OR IGNORE INTO validity_amendments(stated_by, target, article, amending, day, kind, "
+                    "annex) VALUES(?,?,?,?,?,?,?)",
+                    # a row of five (before the annex) names none
+                    [(by_uid, *r, *((None,) * (6 - len(r)))) for r in rows])
 
 
-def amendments_of(con, keys: Iterable[str], article: str | None = None, *, limit: int = 200) -> list[dict]:
+def amendments_of(con, keys: Iterable[str], article: str | None = None, *, limit: int = 200,
+                  annexes: Iterable[str] = ()) -> list[dict]:
     """What changed the work keyed by any of `keys` (its canonical ids) —
     the article named by `article` and the whole act, or every statement
     about the work when `article` is None — each with the version that
     states it, the amending act (its key, or the stating version itself),
-    the day and the kind; in day order. Indexed (idx_validity_amendments_target)."""
+    the day, the kind and the annex; in day order. Indexed
+    (idx_validity_amendments_target).
+
+    `annexes` (a code held after its decree's own articles, app/refs/
+    normattiva_codes.json): an ARTICLE's statements only where their annex
+    is one of them, whitespace normalised, case as held (the equality
+    app/ask/articles.py `in_annex` applies to a chunk label). A statement
+    on an article with NO annex is DROPPED there: "#1" of the c.c.'s decree
+    is the decree's art. 1 or the code's, and the origin does not say which
+    (the node, 2026-11-12: 12 such rows, 3 on c.c. `#1`, 9 on c.p.a.
+    `~art_1__para_1`); a fact never carries another article's changes. A
+    statement on the WHOLE act (article '') is about the code too and
+    stays. No `annexes` (a structured code, any other act): as before."""
     ks = sorted({str(k) for k in keys if k})
     if not ks:
         return []
     marks = ",".join("?" for _ in ks)
-    sql = (f"SELECT a.stated_by, a.target, a.article, a.amending, a.day, a.kind, d.title "
+    sql = (f"SELECT a.stated_by, a.target, a.article, a.amending, a.day, a.kind, d.title, a.annex "
            f"FROM validity_amendments a LEFT JOIN documents d ON d.uid = a.stated_by "
            f"WHERE a.target IN ({marks})")
     params: list = list(ks)
     if article is not None:
         sql += " AND a.article IN (?, '')"
         params.append(article_token(article))
+    names = sorted({" ".join(str(a).split()) for a in annexes if str(a).strip()})
+    if names:
+        sql += f" AND (a.article = '' OR a.annex IN ({','.join('?' for _ in names)}))"
+        params.extend(names)
     sql += " ORDER BY COALESCE(a.day, 0), a.stated_by LIMIT ?"
     params.append(int(limit))
     return [{"stated_by": r[0], "target": r[1], "article": r[2], "amending": r[3] or r[0],
-             "amending_is_stating": not r[3], "day": day_text(r[4]), "kind": r[5], "stating_title": r[6]}
+             "amending_is_stating": not r[3], "day": day_text(r[4]), "kind": r[5], "stating_title": r[6],
+             "annex": r[7]}
             for r in con.execute(sql, params)]
+
+
+# ---- re-deriving the table once (2026-11-12: the annex) -----------------------
+#
+# The table is derived local state. Its rows change MEANING when the hook
+# reads more of what a version states (AMENDMENTS_VERSION, below): the
+# version is held in the manifest's `control`, and a manifest below it
+# re-derives every version's rows ONCE (app/worker.py `_rederive_amendments`,
+# the index maintainer's turn). From the records this peer already holds: a
+# version's statements are in its record line (`extra.active_modifications`
+# for Normattiva), so the hook is called on the line's `extra` and NOTHING
+# IS RE-PARSED. A version no held part carries (no snapshot yet, a part not
+# held here) has its rdf stage reset, which re-parses it from the origin as
+# that stage always did.
+
+#: 1: the article only (2026-11-08); 2: the annex beside it (2026-11-12)
+AMENDMENTS_VERSION = 2
+AMENDMENTS_VERSION_KEY = "validity_amendments_version"
+
+
+def amendments_current(con) -> bool:
+    from app import db
+    try:
+        return int(db.get_control(con, AMENDMENTS_VERSION_KEY, 0) or 0) >= AMENDMENTS_VERSION
+    except (TypeError, ValueError):
+        return False
+
+
+def mark_amendments_current(con) -> None:
+    from app import db
+    db.set_control(con, AMENDMENTS_VERSION_KEY, str(AMENDMENTS_VERSION))
+
+
+class _Line:
+    """What `amendments_of_doc` reads of a record line: its `extra` and its
+    `keys` (Normattiva's hook reads `extra` only; a plugin without the hook
+    is not re-derived — its edges name no annex, its rows keep their
+    meaning)."""
+    __slots__ = ("extra", "keys")
+
+    def __init__(self, record: dict):
+        self.extra = record.get("extra") or {}
+        self.keys = record.get("keys") or []
+
+
+def amendments_of_records(plugin, records: Iterable[dict], versions: set[str]) -> list[tuple[str, list]]:
+    """`(uid, rows)` for each record whose uid is a version the table knows
+    (`versions`), from its line alone — no transaction, no parse."""
+    out: list[tuple[str, list]] = []
+    for rec in records:
+        uid = str(rec.get("uid") or "")
+        if uid in versions:
+            out.append((uid, amendments_of_doc(_Line(rec), plugin)))
+    return out
+
+
+def write_amendments(con, pairs: Iterable[tuple[str, list]]) -> int:
+    """Each version's rows replaced by `rows`, inside the caller's
+    transaction (delete-then-insert on the stating uid, invariant 2)."""
+    n = 0
+    for uid, rows in pairs:
+        _record_amendments(con, uid, rows)
+        n += 1
+    return n
+
+
+def _ddl(pattern: str) -> str:
+    from app import db
+    m = re.search(pattern, db.SCHEMA, re.S)
+    assert m is not None, pattern
+    return m.group(0)
+
+
+def rekey_amendments(con) -> bool:
+    """A manifest made before `annex` was in the table's key gets the key,
+    its rows kept (SQLite's own procedure for a change ALTER cannot make:
+    the table renamed aside, the new one created from db.SCHEMA, the rows
+    copied, the old one dropped), inside the caller's transaction. Whether
+    it rebuilt. Rows are few (one a statement), seconds at most."""
+    cols = {r[1]: r[5] for r in con.execute("PRAGMA table_info(validity_amendments)")}
+    if cols.get("annex"):
+        return False
+    con.execute("ALTER TABLE validity_amendments RENAME TO _validity_amendments_v1")
+    con.execute("DROP INDEX IF EXISTS idx_validity_amendments_target")
+    con.execute(_ddl(r"CREATE TABLE IF NOT EXISTS validity_amendments \(.*?\);"))
+    con.execute(_ddl(r"CREATE INDEX IF NOT EXISTS idx_validity_amendments_target [^;]*;"))
+    have = "annex" in cols
+    names = "stated_by, target, article, amending, day, kind" + (", annex" if have else "")
+    con.execute(f"INSERT OR IGNORE INTO validity_amendments({names}) SELECT {names} FROM _validity_amendments_v1")
+    con.execute("DROP TABLE _validity_amendments_v1")
+    return True
 
 
 # ---- the manifest's version table -------------------------------------------

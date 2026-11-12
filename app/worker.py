@@ -3040,6 +3040,83 @@ def _fill_content_hashes(con, collection) -> int:
     return filled
 
 
+def _rederive_amendments(con, collection) -> bool:
+    """ONCE per manifest whose `validity_amendments` predates
+    validity.AMENDMENTS_VERSION (2026-11-12: the annex an article is held
+    under): the table's key gains `annex`, then every version's rows are
+    rewritten from its record line in the current snapshot's parts — the
+    plugin's hook on the line's `extra`, NO parse — and a version no held
+    part carries has its rdf stage reset (re-parsed from the origin). The
+    version is marked last, after the last part's commit (invariant 2): a
+    stop between parts leaves it unmarked and the next turn starts again,
+    each part's rewrite idempotent. Parts are read by threads (pyarrow's
+    decompression and column reads run outside the GIL); each part's rows
+    are computed outside any transaction and written in one."""
+    from app import validity
+    if validity.declared(collection) is None:
+        return False
+    if validity.amendments_current(con):
+        return False
+    from concurrent.futures import ThreadPoolExecutor
+    from .hold import collection as col
+    from .pack import records as pack_records
+    from .share import seeder
+    t0 = time.monotonic()
+    plugin = collection.plugin_instance()
+    con.execute("BEGIN IMMEDIATE")
+    try:
+        validity.rekey_amendments(con)
+        if getattr(plugin, "amendments", None) is None:
+            # rows from the edges: no annex to read, their meaning unchanged
+            validity.mark_amendments_current(con)
+        con.execute("COMMIT")
+    except BaseException:
+        con.execute("ROLLBACK")
+        raise
+    if getattr(plugin, "amendments", None) is None:
+        return True
+    versions = {r[0] for r in con.execute("SELECT uid FROM validity")}
+    shard_tree = col.shard_dir_of(collections_mod.louise_root() / "collections", collection.name)
+    snap = seeder.current_snapshot(shard_tree)
+    paths = [shard_tree / s.path for s in (snap.shards if snap is not None else [])
+             if (shard_tree / s.path).is_file()]
+
+    def one(path):
+        return validity.amendments_of_records(
+            plugin, pack_records.iter_fields(path, ("uid", "extra", "keys")), versions)
+
+    done: set[str] = set()
+    with ThreadPoolExecutor(max_workers=max(1, min(len(paths), parallel.processes()))) as ex:
+        for pairs in ex.map(one, paths):
+            if _stop.is_set():
+                ex.shutdown(cancel_futures=True)
+                return True             # unmarked: the next turn starts again
+            con.execute("BEGIN IMMEDIATE")
+            try:
+                validity.write_amendments(con, pairs)
+                con.execute("COMMIT")
+            except BaseException:
+                con.execute("ROLLBACK")
+                raise
+            done.update(uid for uid, _ in pairs)
+    left = sorted(versions - done)
+    con.execute("BEGIN IMMEDIATE")
+    try:
+        for i in range(0, len(left), 500):
+            part = left[i:i + 500]
+            con.execute(f"UPDATE documents SET rdf_done=0 WHERE uid IN ({','.join('?' for _ in part)})", part)
+        validity.mark_amendments_current(con)
+        con.execute("COMMIT")
+    except BaseException:
+        con.execute("ROLLBACK")
+        raise
+    db.log_event(con, "info", "validity",
+                 f"amendments re-derived (version {validity.AMENDMENTS_VERSION}, the annex): {len(done)} "
+                 f"version(s) from {len(paths)} held part(s), no parse; {len(left)} not in a held part, "
+                 f"their rdf stage reset ({time.monotonic() - t0:.0f}s)")
+    return True
+
+
 def _maintain_ask_indexes(con, collection) -> bool:
     """05 §5.7's facet values and §5.5's edges, derived and local, rebuilt
     when the collection's current snapshot changes (app/ask/facets.py,
@@ -3272,6 +3349,10 @@ def _index_maintainer() -> None:
                 t0 = time.monotonic()
                 did = _maintain_vector_index(cons[key], c)
                 did = _maintain_catalog(cons[key], c) or did
+                try:
+                    did = _rederive_amendments(cons[key], c) or did
+                except Exception as e:   # noqa: BLE001 — one re-derivation, not the maintainer
+                    db.log_event(cons[key], "warn", "validity", f"amendments: {type(e).__name__}: {e}"[:300])
                 did = _maintain_ask_indexes(cons[key], c) or did
                 did = _verify_cited(cons[key], c) or did
                 did = _refresh_anchor(cons[key], c) or did

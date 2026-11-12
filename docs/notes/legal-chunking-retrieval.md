@@ -404,3 +404,19 @@ extending it (do not reinvent the wheel).
   (R1 (d)) and only Normattiva's detects ("ARTICOLO ABROGATO"). LEGI's ETAT
   `ABROGE`, NeuRIS's "(weggefallen)" and EUR-Lex's "deleted" are not read
   yet, so such an article pins as in force.
+- **An annex code's amendments (fixed 2026-11-12).** The older exports
+  write a code's destinations as `urn:…;262#CODICE CIVILE-art. 2441`,
+  `#Allegato 1 Codice del processo amministrativo-art. 120`, `#Norme-art.
+  227`; the index stored `codicecivile-art2441`, which no citation's token
+  meets (the node: c.c. 132 of 136 rows, disp. att. c.p.p. 35 of 35; in
+  records c.c. 8,921 of 9,213 destinations, c.p.a. 575 of 655, disp. att.
+  c.p.p. 2,680 of 3,364). `validity_amendments` now holds the ANNEX beside
+  the article (normattiva `split_part`), and a citation of an annex code
+  lists only its annex's statements. A statement on an article that names
+  NO annex, for a code that has annexes, is ambiguous (`#1` of the c.c.'s
+  decree is the decree's art. 1 or the code's; the node: 12 rows, 3 on
+  c.c. `#1`, 9 on c.p.a. `~art_1__para_1`) and is DROPPED from the answer —
+  a fact never carries another article's changes; it stays in the table. A
+  statement on the whole act stays. Every manifest re-derives the table
+  once from its held records (`validity.AMENDMENTS_VERSION` 2, worker
+  `_rederive_amendments`): no parse.

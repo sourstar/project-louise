@@ -728,5 +728,5 @@ def test_a_plugin_without_the_hook_states_its_amendments_by_its_edges():
             yield Edge(to="legi:LEGITEXT000000000009", type="eli:cites")
     doc = SimpleNamespace(keys=["legi:LEGIARTI000000000001"], extra={}, sections=[])
     assert validity.amendments_of_doc(doc, P()) == [
-        ("legi:LEGIARTI000000000001", "", "legi:LEGIARTI000000000003", None, "repealed_by"),
-        ("legi:LEGIARTI000000000002", "", "", None, "amends")]
+        ("legi:LEGIARTI000000000001", "", "legi:LEGIARTI000000000003", None, "repealed_by", None),
+        ("legi:LEGIARTI000000000002", "", "", None, "amends", None)]
