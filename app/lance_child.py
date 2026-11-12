@@ -51,10 +51,16 @@ class ChildLost(RuntimeError):
     SIGKILL): a deferral, never the caller's data."""
 
 
-def _run(op: str, uri: str, kw: dict[str, Any]) -> dict[str, Any]:
-    """In the child: the one call, on the dataset as it is now."""
+def _run(op: str, uri: str, kw: dict[str, Any], caches: tuple[int, int]) -> dict[str, Any]:
+    """In the child: the one call, on the dataset as it is now, its caches
+    bounded as the worker's are (`caches`: index, metadata). Without them a
+    dataset takes Lance's defaults (6 GiB of index, 1 GiB of metadata), the
+    unbounded state the worker's Session was made to end (2026-11-08: 16.8
+    GB anon RSS, OOM-killed), in the worker's cgroup, where an OOM kills the
+    largest process: the worker (München's review, 2026-11-12)."""
     import lance
-    ds = lance.dataset(uri)
+    index, metadata = caches
+    ds = lance.dataset(uri, index_cache_size_bytes=index, metadata_cache_size_bytes=metadata)
     if op == "optimize_indices":
         ds.optimize.optimize_indices(**kw)
         return {}
@@ -73,8 +79,9 @@ def _here(op: str, ds, kw: dict[str, Any]):
 def _call(op: str, ds, kw: dict[str, Any]):
     if not config.LANCE_CHILD:
         return _here(op, ds, kw)
-    from . import parallel
+    from . import embeddings, parallel
     uri = str(ds.uri)
+    caches = embeddings._budget(config.WORKER_LANCE_CACHE_BYTES)
     try:
         ex = ProcessPoolExecutor(max_workers=1, mp_context=multiprocessing.get_context("spawn"),
                                  initializer=parallel.watch_parent)
@@ -82,7 +89,7 @@ def _call(op: str, ds, kw: dict[str, Any]):
         return _here(op, ds, kw)                # no child to be had: here, leak and all
     try:
         try:
-            fut = ex.submit(_run, op, uri, kw)
+            fut = ex.submit(_run, op, uri, kw, caches)
         except (OSError, BrokenProcessPool):
             return _here(op, ds, kw)            # the child could not start
         try:

@@ -125,3 +125,20 @@ def test_no_child_to_be_had_runs_the_call_here_and_switched_off_never_starts_one
     monkeypatch.setattr(lance_child, "ProcessPoolExecutor", None)       # never touched
     lance_child.optimize_indices(ds, num_indices_to_merge=2)
     assert ds.asked[-1] == ("optimize_indices", {"num_indices_to_merge": 2})
+
+
+def test_the_child_opens_the_dataset_with_the_worker_s_cache_bounds(monkeypatch):
+    """München's review, 2026-11-12: without them the child takes Lance's
+    defaults (6 GiB of index, 1 GiB of metadata) in the worker's cgroup."""
+    import lance
+    opened = {}
+
+    class Ds:
+        class optimize:
+            @staticmethod
+            def optimize_indices(**kw):
+                opened["kw"] = kw
+    monkeypatch.setattr(lance, "dataset", lambda uri, **kw: opened.update(uri=uri, **kw) or Ds())
+    lance_child._run("optimize_indices", "/x/chunks.lance", {"num_indices_to_merge": 0}, (1 << 30, 1 << 29))
+    assert opened == {"uri": "/x/chunks.lance", "index_cache_size_bytes": 1 << 30,
+                      "metadata_cache_size_bytes": 1 << 29, "kw": {"num_indices_to_merge": 0}}
