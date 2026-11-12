@@ -432,3 +432,8 @@ extending it (do not reinvent the wheel).
   parse pool, no parse); a part that cannot be read is logged once, and
   only versions still holding an old labelled row (`article LIKE '%-art%'`)
   that no part rewrote are re-parsed by their rdf stage.
+
+- **Dead old-form rows.** The re-derivation rewrites every version a held
+  part carries. An errored or out-of-scope version keeps its old labelled
+  rows (`…-art…`); no citation's token matches them, so they show in no
+  fact, and they go when the version is next parsed.

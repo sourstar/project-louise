@@ -243,7 +243,7 @@ ANNEX_SEP = "|"
 def stored_article(annex: str | None, article: str | None) -> str:
     """The `article` column's ONE token (architecture session, 2026-11-12):
     `<annex_key>|<token>` where the destination names its annex
-    (`codice civile|2441`), the bare token otherwise (a structured code, a
+    (`CODICE CIVILE|2441`, the annex as held, case kept), the bare token otherwise (a structured code, a
     decree's own article, an AKN `~art_N`, a bare `#1`), '' for the whole
     act. The table's key is unchanged; nothing to migrate but the rows."""
     tok = article_token(article)

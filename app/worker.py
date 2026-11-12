@@ -3108,6 +3108,8 @@ def _rederive_amendments(con, collection) -> bool:
     from app import validity
     if validity.declared(collection) is None or validity.amendments_current(con):
         return False
+    if not _maintenance_allowed():
+        return False                        # the node's mode holds it (paused / acquire-only / seed-only)
     t0 = time.monotonic()
     plugin = collection.plugin_instance()
     if getattr(plugin, "amendments", None) is None:
@@ -3136,7 +3138,8 @@ def _rederive_amendments(con, collection) -> bool:
     from contextlib import closing as _closing
     with _closing(_parts_amendments(collection, todo)) as parts:
         for path, ok, value in parts:
-            if _stop.is_set() or collection.name in node_state.paused_collections():
+            if (_stop.is_set() or collection.name in node_state.paused_collections()
+                    or not _maintenance_allowed()):
                 return True                 # unmarked: the next turn resumes after the parts done
             if not ok:
                 bad.append(path)

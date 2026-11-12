@@ -284,7 +284,9 @@ def test_a_new_manifest_has_nothing_to_rederive(tmp_path, isolated_config):
 def held(tmp_path, isolated_config, monkeypatch):
     """An old manifest with three versions, and two held parts: p1 carries
     version 1, p2 version 2 (each a fake reader of `uid`/`extra`); version 3
-    is in no part and holds no stale row."""
+    is in no part and holds no stale row. The node runs (its mode allows
+    maintenance), as a live node does."""
+    monkeypatch.setattr(worker, "_maintenance_allowed", lambda: True)
     from app.hold import collection as col
     from app.pack import records as pack_records
     from app.share import seeder
@@ -393,6 +395,7 @@ def test_a_pass_stopped_between_parts_resumes_after_them(held, monkeypatch, why)
 def test_a_plugin_without_the_hook_is_marked_and_nothing_is_copied(tmp_path, isolated_config, monkeypatch):
     """Defect 3: legi, neuris, eurlex — rows from edges, no annex: marked
     current, no part read, the table untouched."""
+    monkeypatch.setattr(worker, "_maintenance_allowed", lambda: True)
     from app.pack import records as pack_records
     _old_manifest(tmp_path / "manifest.db")
     c = _collection(tmp_path, plugin="legi")
@@ -405,3 +408,16 @@ def test_a_plugin_without_the_hook_is_marked_and_nothing_is_copied(tmp_path, iso
     assert {r[0] for r in con.execute("SELECT name FROM sqlite_master WHERE type='table'")} >= {
         "validity_amendments"} and not any(
         r[0].startswith("_validity") for r in con.execute("SELECT name FROM sqlite_master"))
+
+
+def test_the_nodes_mode_holds_the_pass_and_it_resumes_when_running(held, monkeypatch):
+    """Architecture session, 2026-11-12: the pass is maintenance, so the node's
+    mode (paused / acquire-only / seed-only, invariant 10) holds it as the
+    collection's pause does: it reads nothing and stays unmarked."""
+    con, c = held.con, held.c
+    monkeypatch.setattr(worker, "_maintenance_allowed", lambda: False)
+    assert worker._rederive_amendments(con, c) is False
+    assert held.reads == [] and not validity.amendments_current(con)
+    monkeypatch.setattr(worker, "_maintenance_allowed", lambda: True)
+    assert worker._rederive_amendments(con, c) is True
+    assert validity.amendments_current(con)
