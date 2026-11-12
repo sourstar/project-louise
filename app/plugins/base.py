@@ -511,11 +511,28 @@ class ArticleCitation:
     taken (Normattiva: the acts the query's pinned `atto` facts resolved).
     `article`: the article as the source's `article_of_label` reads a
     chunk's label ("8", "5-bis", "l121-1", "823"); `label`: the article as
-    the fact names it ("art. 8", "article L121-1", "§ 823", "Article 5")."""
+    the fact names it ("art. 8", "article L121-1", "§ 823", "Article 5").
+    `annexes`: where the Work holds other articles of the same number before
+    the cited ones (Normattiva's annex codes: the approving decree's "Art.
+    1.", the preleggi, c.p.a.'s other Allegati), the names its chunk labels
+    carry before "-art. N" — only a chunk whose annex name starts with one
+    of them is the article; empty = any chunk whose label reads `article`."""
     keys: tuple[str, ...]
     article: str
     label: str
     also: tuple[str, ...] = ()
+    annexes: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class ArticleNotes:
+    """The words a pinned article's label ends with, in the source's own
+    language (docs/notes/legal-chunking-retrieval.md R1, follow-up d): the
+    text in force, the text at a date (`{day}` = YYYY-MM-DD), the last text
+    a repealed article had. The default is English, EUR-Lex's."""
+    in_force: str = "text in force"
+    as_of: str = "text as of {day}"
+    last: str = "last text in force"
 
 
 class LegalReferenceSource(Protocol):
@@ -523,7 +540,14 @@ class LegalReferenceSource(Protocol):
     axis (normattiva, legi, neuris, eurlex). Optional on a ReferenceSource:
     absent = no citations. `refs` is the refs store, or None when the
     caller has none (a grammar that needs it then cites nothing); `facts`
-    the query's pinned facts."""
+    the query's pinned facts.
+
+    Optional too (app/ask/articles.py reads them with a default):
+    `article_repealed(text) -> bool`, whether an article's chunk says it is
+    repealed in place (absent = never: Normattiva's "ARTICOLO ABROGATO");
+    `article_notes`, an `ArticleNotes` (absent = the English default);
+    `language_preference`, the languages a Work held in several is pinned
+    in when the query's is not held, first first (absent = name order)."""
 
     def article_citations(self, query: str, refs: "RefLookup | None",
                           facts: Any = ()) -> list[ArticleCitation]: ...

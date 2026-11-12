@@ -1,0 +1,142 @@
+{
+  "source": "Normattiva open data, pre-packaged collection \"Codici\" (akn/M/codici.zip, 40 acts; API GET https://api.normattiva.it/t/normattiva.api/bff-opendata/v1/api/v1/collections/collection-predefinite, fetched 2026-11-12T05:35:18Z, answer sha256 b8e2ad6fe921feb8f511769ff86dc8018071e5a314a9fdf984bd2ca024eb3ed0; member list /root/measure/codici/codici.jsonl on the node, sha256 ad98e0f621843fc1be36394484f06bcc419a1c45575a1bf383baff218bc01715). URNs and titles are Normattiva's; the abbreviations are the citation forms in Italian legal usage for those acts.",
+  "codes": [
+    {
+      "abbrev": [
+        "c.c.",
+        "cod. civ."
+      ],
+      "urn": "urn:nir:stato:regio.decreto:1942-03-16;262",
+      "title": "Approvazione del testo del Codice civile. (042U0262)",
+      "annexes": [
+        "CODICE CIVILE"
+      ]
+    },
+    {
+      "abbrev": [
+        "disp. att. c.c."
+      ],
+      "urn": "urn:nir:stato:regio.decreto:1942-03-30;318",
+      "title": "Disposizioni per l'attuazione del Codice civile e disposizioni transitorie. (042U0318)",
+      "annexes": [
+        "Disposizioni per l'attuazione del Codice Civile e disposizioni transitorie"
+      ]
+    },
+    {
+      "abbrev": [
+        "c.p.",
+        "cod. pen."
+      ],
+      "urn": "urn:nir:stato:regio.decreto:1930-10-19;1398",
+      "title": "Approvazione del testo definitivo del Codice Penale. (030U1398)",
+      "annexes": [
+        "Codice Penale"
+      ]
+    },
+    {
+      "abbrev": [
+        "c.p.c.",
+        "cod. proc. civ."
+      ],
+      "urn": "urn:nir:stato:regio.decreto:1940-10-28;1443",
+      "title": "Codice di procedura civile. (040U1443)",
+      "annexes": [
+        "CODICE DI PROCEDURA CIVILE"
+      ]
+    },
+    {
+      "abbrev": [
+        "disp. att. c.p.c."
+      ],
+      "urn": "urn:nir:stato:regio.decreto:1941-12-18;1368",
+      "title": "Disposizioni per l'attuazione del Codice di procedura civile e disposizioni transitorie. (041U1368)",
+      "annexes": [
+        "DISPOSIZIONI DI ATTUAZIONE DEL CODICE DI PROCEDURA CIVILE"
+      ]
+    },
+    {
+      "abbrev": [
+        "c.p.p.",
+        "cod. proc. pen."
+      ],
+      "urn": "urn:nir:stato:decreto.del.presidente.della.repubblica:1988-09-22;447",
+      "title": "Approvazione del codice di procedura penale.",
+      "annexes": []
+    },
+    {
+      "abbrev": [
+        "disp. att. c.p.p."
+      ],
+      "urn": "urn:nir:stato:decreto.legislativo:1989-07-28;271",
+      "title": "Norme di attuazione, di coordinamento e transitorie del codice di procedura penale.",
+      "annexes": [
+        "Norme di attuazione del Codice di Procedura Penale",
+        "Norme"
+      ]
+    },
+    {
+      "abbrev": [
+        "c.d.s.",
+        "cod. strada"
+      ],
+      "urn": "urn:nir:stato:decreto.legislativo:1992-04-30;285",
+      "title": "Nuovo codice della strada.",
+      "annexes": []
+    },
+    {
+      "abbrev": [
+        "cod. nav."
+      ],
+      "urn": "urn:nir:stato:regio.decreto:1942-03-30;327",
+      "title": "Approvazione del testo definitivo del Codice della navigazione. (042U0327)",
+      "annexes": [
+        "Codice della navigazione"
+      ]
+    },
+    {
+      "abbrev": [
+        "cod. cons."
+      ],
+      "urn": "urn:nir:stato:decreto.legislativo:2005-09-06;206",
+      "title": "Codice del consumo, a norma dell'articolo 7 della legge 29 luglio 2003, n. 229.",
+      "annexes": []
+    },
+    {
+      "abbrev": [
+        "c.a.d."
+      ],
+      "urn": "urn:nir:stato:decreto.legislativo:2005-03-07;82",
+      "title": "Codice dell'amministrazione digitale.",
+      "annexes": []
+    },
+    {
+      "abbrev": [
+        "c.p.a."
+      ],
+      "urn": "urn:nir:stato:decreto.legislativo:2010-07-02;104",
+      "title": "Attuazione dell'articolo 44 della legge 18 giugno 2009, n. 69, recante delega al governo per il riordino del processo amministrativo. (10G0127)",
+      "annexes": [
+        "Allegato 1 Codice del processo amministrativo"
+      ]
+    },
+    {
+      "abbrev": [
+        "cod. privacy"
+      ],
+      "urn": "urn:nir:stato:decreto.legislativo:2003-06-30;196",
+      "title": "Codice in materia di protezione dei dati personali",
+      "annexes": []
+    }
+  ],
+  "annexes": "The member layout of each code as Normattiva holds it (section labels of each code's latest held version, read on the node 2026-11-12; /root/measure/codici/codes-layout.json, sha256 4c59a1081cff603e269a1ab2657878c35abca858fd4085db59690d07740adcaa). `annexes` empty: a STRUCTURED code, the act is the code, its labels \"<partition> › Art. N.\". Otherwise an ANNEX code: the decree's own articles (\"Art. 1.\"), for c.c. the 31 preleggi (\"Disposizioni sulla legge in generale-art. N\"), and for c.p.a. Allegati 2-4 come in the same Work; the code's articles are labelled \"<annex>-art. N\" and a label is the code's when its annex name (whitespace normalised) starts with one of `annexes`, case as held. disp. att. c.p.p. needs both: one \"Norme di attuazione del Codice di Procedura Penale-art. 1\", then \"Norme-art. 2...260\" (the origin's shortened label). disp. att. c.c.'s annex name is the full held label (München, 2026-11-12, verbatim).",
+  "not_in_codici": [
+    {
+      "abbrev": [
+        "Cost."
+      ],
+      "urn": "urn:nir:stato:costituzione:1947-12-27",
+      "title": "Costituzione della Repubblica italiana",
+      "note": "The Constitution is in none of Normattiva's pre-packaged collections (an acquisition gap, docs/notes/legal-chunking-retrieval.md §8): \"art. 3 Cost.\" is cited under this URN and pins nothing while no collection holds it."
+    }
+  ]
+}
