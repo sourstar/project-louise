@@ -31,8 +31,13 @@ measured (published figures disagree).
     `GET /api/models/config-json` and `POST /models/import`. It states the same run, measured on the node by München.
     The gate measures on it and stops it after; for Nemotron f16 that gives back 2,390 MiB. Nobody stands aside, and the
     per-model look lock no longer turns anyone away.
+  - Room first (München: xe overcommits to host RAM silently, so the load must never make the room): before the twin
+    loads, free VRAM (the GPU probe, total − used) is checked against the main model's resident size + 512 MiB, and
+    idle document then query encoders are unloaded, largest first, until it fits; never chat, rerankers, speech, a
+    busy or pinned model; none at all where even all of them would not make it. The twin loads only once the driver's
+    count shows the room (15 s at most). Its size is held from the keepers' budget while the gate runs. When the room
+    cannot be made the gate DEFERS to the next round: it never falls back to the shared load for that.
   - Fallbacks, logged: no twin, or a twin stating another run, means the gate measures on the shared load as before.
-    When VRAM is short, it is said that LocalAI evicts its least recently used unpinned model for the check.
 
 - **No card run is gated without a stored CPU reference — FIXED, not deployed** (new-collection.md's review finding
   "the gate passes with no CPU comparison when no CPU reference is kept"; invariant 12). Before, an exact run with no

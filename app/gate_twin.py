@@ -107,3 +107,94 @@ def release(server: str, twin: str) -> None:
                    timeout=CALL_TIMEOUT_S)
     except Exception:                                   # noqa: BLE001
         pass
+
+
+# ---- room on the card, made BEFORE the twin loads ---------------------------------
+# München, 2026-11-12: on the B70 (xe) an overcommitted card refuses nothing —
+# xe moves buffers to host RAM and every model slows, with no error (seen
+# 2026-09-20). So the twin's start reads the card's free memory itself and
+# makes the room first; it never leaves the eviction to the load.
+
+MIB = 1 << 20
+#: free memory kept beyond the twin's size: its buffers grow with the first batches
+ROOM_MARGIN = 512 * MIB
+#: how long the driver's count may lag the unloads before the gate defers
+#: (a stopped backend's memory is given back when its process has exited)
+ROOM_WAIT_S = 15.0
+ROOM_POLL_S = 0.5
+
+
+class RoomShort(Exception):
+    """The card cannot hold the twin even with what may be given back."""
+
+
+def make_room(server: str, model: str, *, wait_s: float = ROOM_WAIT_S) -> tuple[int | None, list[str]]:
+    """(the twin's size in bytes, the models unloaded for it). The twin is as
+    large as the model's own load (`model_load.size_vram`, its largest
+    reading). Where the card's free memory (the GPU probe: total − used, the
+    driver's count) is short of it plus ROOM_MARGIN, the idle models of the
+    resident set are unloaded, lowest priority first — document encoders,
+    then query encoders, the largest first within a tier; never chat,
+    translation, speech or a reranker, never a pinned or a busy one, never
+    `model` itself — until their sizes make the room, and the driver's count
+    is then waited for, `wait_s` at most. Nothing is unloaded where even all
+    of them would not make it. RoomShort when it cannot be made; the size
+    None when it was never seen (nothing to check against: the load goes
+    ahead)."""
+    import time
+    from . import model_load, model_pins, question_card, resident
+    need = model_load.size_vram(server, model)
+    card = resident._card()
+    if not need or card is None:
+        return need, []
+    total, used = card
+    want, free = need + ROOM_MARGIN, total - used
+    if free >= want:
+        return need, []
+    root = model_load.server_of(server)
+    try:
+        busy = model_load.activity(root) or {}
+    except Exception:                                   # noqa: BLE001 — unread: every one counts as busy
+        busy = None
+    candidates = []
+    for r in resident.current():
+        if r.server != root or r.model == model or is_twin(r.model):
+            continue
+        tier = resident.tier_of(r)[0]
+        if tier < 2 or busy is None or busy.get(r.model, 0.0) > question_card.BUSY_CPU_PERCENT:
+            continue
+        try:
+            if model_pins.read_pinned(r.server, r.model):
+                continue
+        except Exception:                               # noqa: BLE001 — unreadable: left alone
+            continue
+        candidates.append((-tier, -(model_load.size_vram(r.server, r.model) or 0), r.model, r))
+
+    def short(after: list[str], have: int) -> RoomShort:
+        return RoomShort(f"the gate's own load of {model} needs ~{want // MIB:,} MiB free on the card "
+                         f"and {max(0, have) // MIB:,} MiB are"
+                         + (f" after unloading {', '.join(after)}" if after else "")
+                         + "; nothing else idle and below the question's models can be given back — "
+                         "the check waits for the room and is asked again at the next round")
+    if free - sum(c[1] for c in candidates) < want:
+        raise short([], free)                           # unloading would only cost their reloads
+    unloaded: list[str] = []
+    freed = 0
+    for _, minus_size, _, r in sorted(candidates):
+        if free + freed >= want:
+            break
+        if model_load.unload(r.server, r.model):
+            unloaded.append(r.model)
+            freed -= minus_size
+    if free + freed < want:
+        raise short(unloaded, free + freed)
+    # NEVER LOADED BEFORE THE DRIVER SHOWS IT: xe overcommits silently
+    deadline = time.monotonic() + wait_s
+    while True:
+        card = resident._card()
+        have = None if card is None else card[0] - card[1]
+        if have is not None and have >= want:
+            return need, unloaded
+        if time.monotonic() >= deadline:
+            raise short(unloaded, free if have is None else have)
+        time.sleep(ROOM_POLL_S)

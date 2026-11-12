@@ -160,3 +160,118 @@ def test_a_collection_on_the_shared_load_is_not_turned_away_by_a_twin_gate(node,
         run_check._twin_busy.difference_update(keys)
         for k in keys:
             run_check._looking[k].release()
+
+
+# ---- room made before the twin loads (München, 2026-11-12: xe overcommits silently) ----
+
+MIB = 1 << 20
+
+
+@pytest.fixture
+def card(monkeypatch):
+    """A 32,656 MiB card, its residents and their sizes, as the probe reads them."""
+    from app import model_load, model_pins, resident
+    state = {"used": 30_000 * MIB, "unloaded": [], "busy": {}, "pinned": set()}
+    sizes = {"vega-nemotron": 2_390 * MIB, "vega-bge-m3": 1_180 * MIB, "vega-qwen3": 5_089 * MIB,
+             "vega-medcpt-query": 359 * MIB, "louise-chat": 5_791 * MIB}
+    roles = {"vega-nemotron": ("encoder",), "vega-bge-m3": ("encoder",), "vega-qwen3": ("encoder",),
+             "vega-medcpt-query": ("query encoder",), "louise-chat": ("chat",)}
+    monkeypatch.setattr(resident, "_card", lambda: (32_656 * MIB, state["used"]))
+    monkeypatch.setattr(resident, "current", lambda: [resident.Resident(SERVER, m, roles[m]) for m in sizes])
+    monkeypatch.setattr(model_load, "size_vram", lambda server, model: sizes.get(model))
+    monkeypatch.setattr(model_load, "activity", lambda server: dict(state["busy"]))
+    monkeypatch.setattr(model_pins, "read_pinned", lambda server, model: model in state["pinned"])
+
+    def unload(server, model):
+        state["unloaded"].append(model)
+        state["used"] -= sizes[model]
+        return True
+    monkeypatch.setattr(model_load, "unload", unload)
+    return state
+
+
+def test_a_twin_that_fits_unloads_nothing(card):
+    card["used"] = 20_000 * MIB
+    assert gate_twin.make_room(SERVER, "vega-nemotron") == (2_390 * MIB, [])
+    assert card["unloaded"] == []
+
+
+def test_room_is_made_from_idle_document_encoders_before_the_twin_loads(card):
+    """Short by ~146 MiB: the largest idle document encoder goes first (one
+    unload, not several); never the chat model, nor the model gated."""
+    card["used"] = 29_900 * MIB
+    assert gate_twin.make_room(SERVER, "vega-nemotron") == (2_390 * MIB, ["vega-qwen3"])
+
+
+def test_a_busy_or_pinned_encoder_is_never_unloaded_for_the_twin(card):
+    """The document encoders embedding now or pinned by a pass stay; an idle
+    query encoder goes before anything the question uses."""
+    card["used"] = 29_900 * MIB
+    card["busy"] = {"vega-qwen3": 80.0}                 # embedding now: left alone
+    card["pinned"] = {"vega-bge-m3"}                    # a pass's: left alone
+    assert gate_twin.make_room(SERVER, "vega-nemotron") == (2_390 * MIB, ["vega-medcpt-query"])
+    assert "louise-chat" not in card["unloaded"]
+
+
+def test_a_card_that_cannot_hold_the_twin_defers_the_gate_never_the_shared_load(
+        card, server, monkeypatch, tmp_path, isolated_config):
+    card["used"] = 32_000 * MIB
+    card["busy"] = {"vega-bge-m3": 50.0, "vega-qwen3": 50.0, "vega-medcpt-query": 50.0}
+    with pytest.raises(gate_twin.RoomShort, match="needs ~2,902 MiB free"):
+        gate_twin.make_room(SERVER, "vega-nemotron")
+    monkeypatch.setattr(config, "GATE_TWIN", True)
+    monkeypatch.setattr(run_check, "probe_for", lambda codex, role="document": "probe")
+    monkeypatch.setattr(run_check, "_validate", lambda *a, **k: pytest.fail("measured anyway"))
+    from app.hold import embedder as emb
+    with pytest.raises(emb.GateDeferred, match="asked again at the next round"):
+        run_check.validate(tmp_path, "legi", SimpleNamespace(), _recipe())
+    assert run_check._gating == {}, "nobody stood aside"
+
+
+def test_the_twins_room_is_held_from_the_keepers_budget_while_the_gate_runs():
+    from app import resident
+    mem = resident.Memory()
+    mem.total = 32_656 * MIB
+    want = [resident.Resident(SERVER, "vega-bge-m3", ("encoder",))]
+    free = resident.plan(want, mem, threshold=0.95, used={}, now=0.0)
+    held = resident.plan(want, mem, threshold=0.95, used={}, now=0.0, reserved=2_390 * MIB)
+    assert free.budget - held.budget == 2_390 * MIB
+
+
+def test_nothing_is_unloaded_when_the_unloads_cannot_make_the_room(card):
+    """Every idle encoder together is short of the twin: none is unloaded for
+    a gate that defers anyway (their reloads would be the only result)."""
+    card["used"] = 32_400 * MIB
+    card["busy"] = {"vega-qwen3": 80.0}                 # what is left: 1,539 MiB of 2,902 - 256
+    with pytest.raises(gate_twin.RoomShort, match="256 MiB are;"):
+        gate_twin.make_room(SERVER, "vega-nemotron")
+    assert card["unloaded"] == []
+
+
+def test_the_twin_waits_for_the_driver_to_show_the_room_bounded(card, monkeypatch):
+    """The driver's count lags a stopped backend: the twin loads only once the
+    card SHOWS the room, and a reading that never does defers the gate."""
+    from app import model_load
+    card["used"] = 29_900 * MIB
+    lagging = {"reads": 0}
+
+    def unload(server, model):                          # given back two reads later
+        card["unloaded"].append(model)
+        lagging["reads"] = 2
+        return True
+    from app import resident
+    monkeypatch.setattr(model_load, "unload", unload)
+
+    def read():
+        if lagging["reads"]:
+            lagging["reads"] -= 1
+            if not lagging["reads"]:
+                card["used"] -= 5_089 * MIB
+        return 32_656 * MIB, card["used"]
+    monkeypatch.setattr(resident, "_card", read)
+    monkeypatch.setattr(gate_twin, "ROOM_POLL_S", 0.0)
+    assert gate_twin.make_room(SERVER, "vega-nemotron") == (2_390 * MIB, ["vega-qwen3"])
+    card["used"], card["unloaded"] = 29_900 * MIB, []
+    monkeypatch.setattr(model_load, "unload", lambda server, model: card["unloaded"].append(model) or True)
+    with pytest.raises(gate_twin.RoomShort, match="after unloading vega-qwen3"):
+        gate_twin.make_room(SERVER, "vega-nemotron", wait_s=0.0)
