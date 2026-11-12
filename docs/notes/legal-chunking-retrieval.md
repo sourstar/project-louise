@@ -389,3 +389,18 @@ Pieces 1, 2 and 5 enter the measurement of §5. Pieces 3 and 4 are no-GPU work a
 (arXiv 2605.31338, 2026). German statutory references ("§§ 1 bis 3 BGB", "Abs. 1 Satz 2") are what
 neuris-refs' resolver parses. Its library is the standard to compare that resolver against before
 extending it (do not reinvent the wheel).
+
+## 8. Open (2026-11-12, from the architecture session's review of R1's follow-ups)
+
+- **The Constitution is not held.** It is in none of Normattiva's 23
+  pre-packaged collections ("Leggi costituzionali" holds the
+  constitutional LAWS, not the Constitution; München: 0 records, no
+  member), though held records cite `/akn/it/act/costituzione/stato/1947-12-27`.
+  An acquisition gap: the API's export job (per act) is the route that
+  would reach it, with its form recorded (invariant 11). Until then "art. 3
+  Cost." maps to `urn:nir:stato:costituzione:1947-12-27` and pins nothing
+  while not held.
+- **Repealed articles outside Italy.** `article_repealed` exists per source
+  (R1 (d)) and only Normattiva's detects ("ARTICOLO ABROGATO"). LEGI's ETAT
+  `ABROGE`, NeuRIS's "(weggefallen)" and EUR-Lex's "deleted" are not read
+  yet, so such an article pins as in force.
