@@ -3060,7 +3060,9 @@ def _maintain_ask_indexes(con, collection) -> bool:
     if _ask_indexed.get(collection.name) == key:
         return False
     index_dir = root / collection.name / "index"
-    if ask_facets.read_marker(index_dir) == key:
+    mark_facets = ask_facets.marker_facets(index_dir)
+    if ask_facets.read_marker(index_dir) == key and mark_facets in (
+            None, ask_facets.facets_digest(getattr(collection, "codex", None))):
         # indexed whole by an earlier process for this very snapshot: a
         # restart does not recount (the marker is written below only after a
         # pass that raised nothing)
@@ -3106,7 +3108,8 @@ def _maintain_ask_indexes(con, collection) -> bool:
     _ask_indexed[collection.name] = key
     if not failed and not _stop.is_set():
         try:
-            ask_facets.write_marker(index_dir, snap.snapshot_id, snap.hash)
+            ask_facets.write_marker(index_dir, snap.snapshot_id, snap.hash,
+                                    facets=ask_facets.facets_digest(getattr(collection, "codex", None)))
         except OSError as e:
             db.log_event(con, "warn", "ask", f"snapshot marker not written: {e}"[:300])
     return did

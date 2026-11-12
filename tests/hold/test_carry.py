@@ -1647,3 +1647,24 @@ def test_reconcile_holds_a_window_not_the_snapshots_and_reads_each_part_once(pai
     assert out["kept"] == len(uids) and out["reset"] == 0, out
     assert out["records_before"] == out["records_after"] == len(uids)
     assert not side.exists(), "derived: gone once the reconcile is done"
+
+
+def test_facets_decide_no_record_and_a_carried_index_counts_its_own_facets(pair, tmp_path):
+    """Architecture session, 2026-11-11: `facets` left `seed.record_differences`
+    (they decide no record byte), and the facet marker is keyed on the
+    Codex's declared facets too, so an index directory carried from a
+    collection whose facets differ is counted again, never taken as its own."""
+    from dataclasses import replace as _replace
+    from app.ask import facets as ask_facets
+    from app.hold.codex import Facet
+    root, old, _new = pair
+    other = _replace(old, facets=(*old.facets, Facet(field="lang", kind="flat")))
+    assert seed.record_differences(old, other) == [], "facets decide no record byte"
+    index_dir = tmp_path / "idx"
+    ask_facets.write_marker(index_dir, "2026-08", "sha256:aa", facets=ask_facets.facets_digest(old))
+    assert ask_facets.marker_facets(index_dir) == ask_facets.facets_digest(old)
+    assert ask_facets.marker_facets(index_dir) != ask_facets.facets_digest(other), \
+        "the same snapshot under other facets is not this collection's count"
+    legacy = tmp_path / "legacy"
+    ask_facets.write_marker(legacy, "2026-08", "sha256:aa")
+    assert ask_facets.marker_facets(legacy) is None, "a marker from before names no facets and stays valid"

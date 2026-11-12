@@ -350,7 +350,7 @@ def build(root, ref: str, *, corpus_dir=None, snapshot_id: str | None = None,
         # write none — no §9.5 key holds them, the facet index is derived
         # beside the records (05 §5.7; 02 §2.7 amended 2026-11-12, RULE 1):
         # nothing else may differ
-        other = [d for d in record_differences(from_codex, codex) if d not in ("slicing", "layers", "facets")]
+        other = [d for d in record_differences(from_codex, codex) if d not in ("slicing", "layers")]
         # A PARSER CHANGE whose moved lines the target's parser names
         # (2026-11-08, pubmed 8 → 9, RULE 1): the lines it says it would
         # write differently are parsed again, the rest taken byte for byte.

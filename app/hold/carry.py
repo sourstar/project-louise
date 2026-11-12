@@ -674,7 +674,7 @@ def carry(root, from_ref: str, to_ref: str, *, copy: bool = False, apply: bool =
         # the facets too (02 §2.7 amended 2026-11-12): they write no record
         # byte and cut no chunk, and nothing derived from them is carried —
         # the facet index is the target's own, built from its snapshot
-        other = [d for d in record_differences(src, to) if d not in ("layers", "facets")]
+        other = [d for d in record_differences(src, to) if d != "layers"]
         if other:
             raise CodexError(
                 f"carry --sister --relayered: {to.collection_id} and {src.collection_id} differ in "
@@ -834,6 +834,13 @@ def carry(root, from_ref: str, to_ref: str, *, copy: bool = False, apply: bool =
             done[k] = _sister_index(sp[k], tp[k])
             continue
         done[k] = _transfer(sp[k], tp[k], copy=copy)
+    if "index" in done and [f.to_dict() for f in src.facets] != [f.to_dict() for f in to.facets]:
+        # THE FACETS ARE THE TARGET'S OWN (architecture session, 2026-11-11):
+        # the copied index carries the source's facet counts and its marker,
+        # which matches the same snapshot; without it the maintainer counts
+        # the target's own facets at its next pass
+        from app.ask import facets as ask_facets
+        ask_facets.marker_path(tp["index"]).unlink(missing_ok=True)
     if relayered:
         done["index"] = "not carried (her layers cut other chunks: the worker indexes, A1i)"
     if not copy:

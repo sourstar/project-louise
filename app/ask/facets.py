@@ -193,6 +193,27 @@ def marker_path(index_dir: Path) -> Path:
     return Path(index_dir) / CACHE / MARKER
 
 
+def facets_digest(codex) -> str:
+    """The digest of the facets a Codex declares: part of the marker's key,
+    so an index directory carried from a collection whose facets differ is
+    counted again, never taken as this one's (architecture session,
+    2026-11-11)."""
+    import hashlib
+    body = json.dumps([f.to_dict() for f in getattr(codex, "facets", ()) or ()],
+                      sort_keys=True, separators=(",", ":"))
+    return "sha256:" + hashlib.sha256(body.encode("utf-8")).hexdigest()
+
+
+def marker_facets(index_dir: Path) -> str | None:
+    """The facets digest the marker was written for; None for a marker from
+    before 2026-11-11, which named only the snapshot."""
+    p = marker_path(index_dir)
+    try:
+        return json.loads(p.read_text(encoding="utf-8")).get("facets")
+    except (OSError, ValueError, AttributeError):
+        return None
+
+
 def read_marker(index_dir: Path) -> tuple[str, str] | None:
     """`(snapshot_id, hash)` of the snapshot whose facets, edges and content
     hashes the maintainer last indexed without a failure, or None. Durable
@@ -209,13 +230,16 @@ def read_marker(index_dir: Path) -> tuple[str, str] | None:
         return None
 
 
-def write_marker(index_dir: Path, snapshot_id: str, snapshot_hash: str, *, now: float | None = None) -> None:
+def write_marker(index_dir: Path, snapshot_id: str, snapshot_hash: str, *, now: float | None = None,
+                 facets: str | None = None) -> None:
     p = marker_path(index_dir)
     p.parent.mkdir(parents=True, exist_ok=True)
     tmp = p.with_name(f".{p.name}.tmp")
-    tmp.write_text(json.dumps({"snapshot_id": snapshot_id, "hash": snapshot_hash,
-                               "indexed_at": time.time() if now is None else now}, sort_keys=True),
-                   encoding="utf-8")
+    body = {"snapshot_id": snapshot_id, "hash": snapshot_hash,
+            "indexed_at": time.time() if now is None else now}
+    if facets is not None:
+        body["facets"] = facets
+    tmp.write_text(json.dumps(body, sort_keys=True), encoding="utf-8")
     tmp.replace(p)
 
 

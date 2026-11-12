@@ -1012,7 +1012,9 @@ both the corpus is one corpus, and only what is built on top of it
 differs.
 
 So a sister may change only what no record depends on: `space`,
-`layers`, `update` and `work` — the last because the rate is
+`layers`, `update`, `facets` (*amended 2026-11-11*, architecture session:
+the filters a reader asks for are counted from the records, and decide no
+record byte) and `work` — the last because the rate is
 denominated in the declared encoder's tokenizer (§2.4), so a sister on
 another encoder must measure her own or state a rate in units she does
 not use (08 §8.5). Everything that decides a record byte it keeps —
@@ -1264,7 +1266,7 @@ from the same origin — none of them is standing on less of the provider's
 work than her sister or her mother was, and a new encoder does not
 unwrite whose text it read.
 Her community entry follows `embedding`, which she keeps from her sister
-like everything else outside the four fields a sister may change — so in
+like everything else outside the five fields a sister may change — so in
 practice it is her sister's too, and the rule is stated in terms of
 `embedding` rather than inheritance because that is what makes it
 derived: a collection credits the community exactly when it takes the
