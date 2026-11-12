@@ -257,6 +257,14 @@ def three(node, tmp_path, endpoint):
             encoding="utf-8")
     assert made["sister"].space_id == codex.space_id
     assert made["sister"].collection_id != codex.collection_id
+    # each keeps its CPU twin's reference, as the node's first one does: no card
+    # run is gated without one (invariant 12; tests/test_run_check.py's node)
+    import shutil
+    from app.hold import cpu_reference as cpu_ref
+    for name in ("sister", "elsewhere"):
+        for role in ("document", "query"):
+            shutil.copytree(cpu_ref.directory(root, "gutenberg", role),
+                            cpu_ref.directory(root, name, role))
     loaded = {c.name: c for c in collections_mod.load_all()}
     for name, c in loaded.items():
         fully_tested(root, c, made[name])

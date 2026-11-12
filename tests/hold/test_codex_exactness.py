@@ -93,14 +93,17 @@ def test_the_gate_holds_a_node_to_the_codex_whatever_its_own_setting(monkeypatch
     from types import SimpleNamespace
     seen = {}
     monkeypatch.setattr(run_check, "reference", lambda *a, **k: [[1.0]] * 512)
-    monkeypatch.setattr(run_check, "stated_run", lambda *a, **k: SimpleNamespace(weights="w"))
+    monkeypatch.setattr(run_check, "stated_run", lambda *a, **k: SimpleNamespace(
+        weights="w", run_id="sha256:" + "ab" * 32, driver="sycl"))
     monkeypatch.setattr(run_check, "calibration_items", lambda *a, **k: [])
     monkeypatch.setattr(run_check, "_mark", lambda *a, **k: None)
     monkeypatch.setattr(run_check, "contributing", lambda r: None)
     # no context per request here: what is held is the exactness (run_check.creates_per_request)
     monkeypatch.setattr(run_check, "fresh_contexts", lambda *a, **k: None)
     from app.hold import cpu_reference
-    monkeypatch.setattr(cpu_reference, "find", lambda *a, **k: None)
+    # a card run is gated only with its CPU twin's reference stored (invariant 12)
+    monkeypatch.setattr(cpu_reference, "find", lambda *a, **k: SimpleNamespace(
+        run_id="sha256:" + "c0" * 32, vectors=[[1.0]] * 512))
     monkeypatch.setattr(run_check.runs_mod, "validate",
                         lambda *a, **k: seen.setdefault("exactness", k["exactness"]) and {"run": "r"})
     recipe_ = SimpleNamespace(exactness="near", api="openai", url="http://e", model="m")

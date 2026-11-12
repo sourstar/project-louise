@@ -20,6 +20,25 @@ measured (published figures disagree).
 
 ### 2026-11-12
 
+- **A gate never holds the model from the others: it measures on the model's gate twin — BUILT, not deployed.**
+  The operator: "gating a collection cannot monopolize the GPU", "AND IT SHOULD BE CLEARLY SHOWN IN THE COLLECTION
+  CARD", and "Leggi encoder is the same normattiva nemo encoding". What happened: legi's gate ran 07:59–08:10Z on
+  vega-nemotron-3-embed-1b, and normattiva-nemo and wikidata stood aside the whole time. It was also redundant: legi
+  borrowed normattiva-nemo's statement but read the batching record from its own file only. Three fixes, each tested:
+  - #574, the batching record is borrowed with the statement.
+  - #575, the check is shown on the cards: running, waiting, or beside.
+  - Branch gate-twin, `app/gate_twin.py`: `<model>--gate` is the model's LocalAI config under another name, made through
+    `GET /api/models/config-json` and `POST /models/import`. It states the same run, measured on the node by München.
+    The gate measures on it and stops it after; for Nemotron f16 that gives back 2,390 MiB. Nobody stands aside, and the
+    per-model look lock no longer turns anyone away.
+  - Room first (München: xe overcommits to host RAM silently, so the load must never make the room): before the twin
+    loads, free VRAM (the GPU probe, total − used) is checked against the main model's resident size + 512 MiB, and
+    idle document then query encoders are unloaded, largest first, until it fits; never chat, rerankers, speech, a
+    busy or pinned model; none at all where even all of them would not make it. The twin loads only once the driver's
+    count shows the room (15 s at most). Its size is held from the keepers' budget while the gate runs. When the room
+    cannot be made the gate DEFERS to the next round: it never falls back to the shared load for that.
+  - Fallbacks, logged: no twin, or a twin stating another run, means the gate measures on the shared load as before.
+
 - **No card run is gated without a stored CPU reference — FIXED, not deployed** (new-collection.md's review finding
   "the gate passes with no CPU comparison when no CPU reference is kept"; invariant 12). Before, an exact run with no
   reference for its weights passed, while one WITH a reference on a level with no line failed, so holding the evidence
@@ -47,7 +66,7 @@ measured (published figures disagree).
   (the operator's condition) is measurement 1 of docs/notes/presearch-caches.md, together with other pre-search
   caches to check (rerank scores, query vectors).
 
-- **The worker pinned deleted vector-index files — FIXED, not deployed** (München's fd census, 11-12). Two readings on
+- **The worker pinned deleted vector-index files — FIXED, DEPLOYED and VERIFIED** (München's fd census, 11-12). Two readings on
   one worker (live d76fbdc): 382 open files at 20:48Z, 470 at 01:29Z. sqlite, wal and shm stayed flat (the working
   set); the growth was Lance index files, 6 -> 52, and 38 deleted ones, all
   `normattiva-nemo/chunks.lance/_indices/<uuid>/{index,auxiliary}.idx`: 4,499 MiB of deleted bytes pinned on ssd3
@@ -61,6 +80,11 @@ measured (published figures disagree).
   - a child that cannot start runs the call here, and a killed child is a deferral;
   - `LANCE_CHILD=0` restores the old path.
   No upstream issue found. A witness test fails the day Lance closes these files.
+  VERIFIED on the node (München, 11-12, after the 07:54Z restart): two normattiva-nemo refreshes (08:23:50Z, 156,373
+  rows, 23 s; 08:55:29Z, 170,864 rows, 39 s, 4 deltas merged), normattiva's refresh + merge and 8 light compactions;
+  census at 08:57:11Z: 361 fds, **lance 0, deleted `_indices` held 0** (before: 6 → 52 → 92 lance, 38 deleted,
+  4.4 GiB pinned). Children's peak RSS 221–1,360 MiB over 2–33 s (seven, 07:27–07:48Z, on b21f420), within the
+  1 GiB index + 1 GiB metadata bounds; no `ChildLost`, no in-process fallback line.
 
 ### 2026-11-11 (München)
 

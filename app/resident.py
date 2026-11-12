@@ -849,7 +849,7 @@ def _ago(seconds: float) -> str:
 
 
 def plan(want: Iterable[Resident], mem: Memory, *, threshold: float,
-         used: dict[tuple[str, str], float], now: float) -> Plan:
+         used: dict[tuple[str, str], float], now: float, reserved: int = 0) -> Plan:
     """THE BUDGET, filled: the set in priority order (`tier_of`; within a
     tier the most recently used first, then the never used, smaller first),
     each at its AT-REST size (never seen: the median of the set's known
@@ -869,7 +869,7 @@ def plan(want: Iterable[Resident], mem: Memory, *, threshold: float,
                 r.server)
     ranked = sorted(want, key=order)
     margin, measured = mem.margin(now)
-    penalty = mem.penalty_now(now)
+    penalty = mem.penalty_now(now) + int(reserved)
     line = None if not mem.total else int(threshold * mem.total)
     budget = None if line is None else line - margin - penalty
     uses: dict[int, list[float]] = {}
@@ -909,14 +909,34 @@ def plan(want: Iterable[Resident], mem: Memory, *, threshold: float,
 
 def _plan_now(want: Iterable[Resident], mem: Memory | None = None) -> Plan:
     """`plan` over what the node knows now: its memory, LocalAI's line (the
-    strictest of the set's servers), the use rows."""
+    strictest of the set's servers), the use rows — less what a running gate
+    holds for its twin (`reserve`)."""
     want = list(want)
     mem = mem or _memory_now()
     with _lock:
         mem = mem.copy()
+        # THE TWIN'S ROOM, held from the budget: what its gate unloaded is not
+        # loaded back under it while the gate runs (app/gate_twin.py `make_room`)
+        held = sum(_reserved.values())
     t = min((_threshold(s) for s in sorted({r.server for r in want})), default=DEFAULT_THRESHOLD) \
         if mem.total else DEFAULT_THRESHOLD
-    return plan(want, mem, threshold=t, used=_last_used(), now=_wall())
+    return plan(want, mem, threshold=t, used=_last_used(), now=_wall(), reserved=held)
+
+
+# ---- room held for a gate's twin (app/gate_twin.py) ---------------------------------
+
+#: (server, twin) -> bytes a running gate holds on the card for its twin
+_reserved: dict[tuple[str, str], int] = {}
+
+
+def reserve(key: tuple[str, str], size: int) -> None:
+    with _lock:
+        _reserved[key] = int(size)
+
+
+def unreserve(key: tuple[str, str]) -> None:
+    with _lock:
+        _reserved.pop(key, None)
 
 
 def _held_now(servers: Iterable[str], mem: Memory) -> dict[tuple, int] | None:

@@ -474,13 +474,18 @@ _gating_lock = threading.Lock()
 
 
 @contextmanager
-def _gate_running(recipe, role: str, root: Path, name: str):
+def _gate_running(recipe, role: str, root: Path, name: str, *, alone: bool = True):
+    """The gate of `name` runs on `recipe`'s model: published for the cards,
+    and — `alone`, on the shared load — every other collection on the model
+    stands aside until it ends (`gating_elsewhere`). On a twin (`alone`
+    false) nobody stands aside."""
     who = _who(recipe, role == "query")
     mine = (str(runs_mod.directory(root, name)), name)
-    with _gating_lock:
-        _gating[who] = mine
+    if alone:
+        with _gating_lock:
+            _gating[who] = mine
     started = time.time()
-    _announce(name, role, who, since=started)
+    _announce(name, role, who, since=started, alone=alone)
     reached = False
     try:
         yield
@@ -500,12 +505,12 @@ _announced: dict[tuple[str, str], dict[str, Any]] = {}
 
 
 def _announce(name: str, role: str, who: tuple[str, str], *, since: float,
-              run: str | None = None) -> None:
+              run: str | None = None, alone: bool = True) -> None:
     from . import node_state
     took = node_state.gate_duration(*who)
     entry = {"role": role, "server": who[0], "model": who[1], "run": run, "since": since,
              "expected_end": (since + took) if took else None, "took_last": took,
-             "alone": True}
+             "alone": alone}
     _announced[(name, role)] = entry
     try:
         node_state.publish_gate(name, entry)
@@ -569,9 +574,105 @@ def validate(root: Path, name: str, codex: Codex, recipe, *, role: str = "docume
              key=None, now: str | None = None,
              stop: Callable[[], bool] | None = None,
              on_run: Callable[[Any], None] | None = None) -> dict[str, Any]:
-    with _pinned(recipe, role, "gate", name), _gate_running(recipe, role, root, name):
-        return _validate(root, name, codex, recipe, role=role, key=key, now=now,
-                         stop=stop, on_run=on_run)
+    """The gate against the run that answers now (03 §3.3), measured on the
+    model's GATE TWIN where it can be had (app/gate_twin.py: the same run on
+    a load of its own, so the collections embedding on the model keep their
+    load), else on the shared load with them standing aside — said, never
+    silent."""
+    from . import gate_twin
+    server, model = _who(recipe, role == "query")
+    # ONE GATE AT A TIME ON A TWIN, taken before anything of it is touched:
+    # a second gate on the model defers, and never stops the first one's twin
+    with _guard:
+        twin_lock = _looking.setdefault(f"{server} {gate_twin.name_of(model)}", threading.Lock())
+    if not twin_lock.acquire(blocking=False):
+        raise emb.GateDeferred(f"{name}: another collection's gate measures on "
+                               f"{gate_twin.name_of(model)} now; this one is asked again at the "
+                               f"next round")
+    try:
+        twin = _twin_for(recipe, role, name, codex)
+    except BaseException:
+        twin_lock.release()
+        raise
+    if twin is None:
+        twin_lock.release()
+        with _pinned(recipe, role, "gate", name), _gate_running(recipe, role, root, name):
+            return _validate(root, name, codex, recipe, role=role, key=key, now=now,
+                             stop=stop, on_run=on_run)
+    gate_recipe, server, twin_model = twin
+    main_key = f"{server} {model}"
+    _twin_busy.add(main_key)
+    try:
+        with _pinned(gate_recipe, role, "gate", name), \
+                _gate_running(recipe, role, root, name, alone=False):
+            return _validate(root, name, codex, gate_recipe, role=role, key=key, now=now,
+                             stop=stop, on_run=on_run)
+    finally:
+        _twin_busy.discard(main_key)
+        twin_lock.release()
+        _let_go(server, twin_model)
+
+
+#: the models (their flight keys, `_flight`) whose gate runs on a twin now:
+#: a collection embedding on the shared load does not wait for it
+_twin_busy: set[str] = set()
+
+
+def _twin_for(recipe, role: str, name: str, codex: Codex):
+    """(the recipe asking the twin, its server, the twin's name), or None
+    where no twin can be had — with the reason logged — or the twin states
+    another run than the shared load (then measuring it would validate a
+    run nothing embeds with)."""
+    from . import gate_twin
+    if not config.GATE_TWIN or getattr(recipe, "api", None) != embeddings.VEGA:
+        return None
+    query = role == "query"
+    server, model = _who(recipe, query)
+    if not model or gate_twin.is_twin(model):
+        return None
+    try:
+        twin_model = gate_twin.ensure(server, model)
+    except gate_twin.TwinUnavailable as e:
+        log.warning("%s: no gate twin for %s (%s): the gate measures on the shared load, and "
+                    "the collections on it stand aside meanwhile", name, model, e)
+        return None
+    try:
+        size, unloaded = gate_twin.make_room(server, model)
+    except gate_twin.RoomShort as e:
+        # never the shared load instead: that is the monopoly (operator, 2026-11-12)
+        raise emb.GateDeferred(f"{name}: {e}") from e
+    if unloaded:
+        log.warning("%s: unloaded %s to make room for the gate's own load of %s",
+                    name, ", ".join(unloaded), model)
+    if size:
+        from . import resident
+        resident.reserve((server, twin_model), size)
+    import dataclasses
+    gate_recipe = dataclasses.replace(recipe, **({"query_model": twin_model} if query
+                                                 else {"model": twin_model}))
+    try:
+        probe = probe_for(codex, role)
+        main_run = answering_run(recipe, query=query, probe_item=probe)
+        twin_run = answering_run(gate_recipe, query=query, probe_item=probe)
+    except Exception as e:                              # noqa: BLE001 — either load not answering
+        _let_go(server, twin_model)
+        log.warning("%s: the gate twin %s could not be asked (%s): the gate measures on the "
+                    "shared load", name, twin_model, e)
+        return None
+    if main_run != twin_run:
+        _let_go(server, twin_model)
+        log.warning("%s: the gate twin %s states run %s and the shared load %s — not the same "
+                    "run, so it is not measured on; the gate measures on the shared load",
+                    name, twin_model, str(twin_run)[:23], str(main_run)[:23])
+        return None
+    return gate_recipe, server, twin_model
+
+
+def _let_go(server: str, twin_model: str) -> None:
+    """The twin stopped and its room no longer held from the keeper."""
+    from . import gate_twin, resident
+    gate_twin.release(server, twin_model)
+    resident.unreserve((server, twin_model))
 
 
 def _validate(root: Path, name: str, codex: Codex, recipe, *, role: str = "document",
@@ -1400,10 +1501,16 @@ def embed_allowed(con, collection, *, stop: Callable[[], bool] | None = None) ->
             and not _suspect(collection) and not _suspect(collection, "query"):
         return cached[0]
     with _guard:
-        locks = [_looking.setdefault(k, threading.Lock()) for k in _flights(collection)]
+        keys = _flights(collection)
+        locks = [_looking.setdefault(k, threading.Lock()) for k in keys]
     held: list[threading.Lock] = []
-    for lock in locks:
+    for key, lock in zip(keys, locks):
         if not lock.acquire(blocking=False):
+            if key in _twin_busy:
+                # the gate holding this model measures on its TWIN (app/gate_twin.py):
+                # nothing on the shared load waits for it. A second gate meets
+                # the twin's own lock and defers (`validate`)
+                continue
             # someone is asking (or gating) that model already: ONE gate per
             # model. Nothing to wait for — this round has no embedding, the
             # next asks

@@ -217,6 +217,9 @@ def serial_parse_pool(monkeypatch):
     # Lance's leaking calls in-process (app/lance_child.py): a monkeypatch or
     # a stand-in dataset cannot reach a spawned child; its own tests opt in
     monkeypatch.setattr(config, "LANCE_CHILD", False)
+    # the gate on its own load (app/gate_twin.py) asks the model server's
+    # config API, which no stand-in serves; its own tests opt in
+    monkeypatch.setattr(config, "GATE_TWIN", False)
 
 
 @pytest.fixture(autouse=True)
