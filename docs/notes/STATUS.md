@@ -20,6 +20,13 @@ measured (published figures disagree).
 
 ### 2026-11-12
 
+- **A statement older than its run's CPU reference no longer stands in for the check — FIXED, not deployed**
+  (München, after pubmed's references: they entered a statement only through `hold embedder check --remeasure`,
+  and without it the space's older statement was taken and printed "no stored CPU reference"). Now the worker and
+  the check gate such a run against the reference once, and a statement of the space that compared it replaces one
+  that did not (near-exact-runs.md §2). On the deploy, every card run whose statement predates a reference stored
+  for its weights is gated once, on its gate twin.
+
 - **Annotations update themselves where their claims are a method's output — BUILT, not deployed** (operator via
   München: "Can the annotations be updated without manually uploading something???", RULE 2). The collection file
   names the method (`method = "wikipedia-versions"`, 07 §7.8). Once the collection it annotates holds a newer

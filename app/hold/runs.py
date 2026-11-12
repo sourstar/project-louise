@@ -342,16 +342,25 @@ def statements_for_space(root: Path, name: str, codex: Codex, role: str = "docum
     collection is copied, byte for byte, into this collection's own
     directory. The validation is the space's, but the file was the other
     collection's, and deleting a retired collection of the same space took
-    gutenberg's statements with it and sent it back to quarantine."""
+    gutenberg's statements with it and sent it back to quarantine.
+
+    THE ONE THAT HELD THE RUN TO ITS CPU REFERENCE WINS (2026-11-12): a
+    passing statement of another collection that compared the run with a
+    stored CPU reference replaces this collection's own that did not
+    (`lacks_cpu_comparison`), copied over it — so a run the space has gated
+    against its reference once is not gated again for each collection."""
     out = dict(statements(root, name, codex, role, signer=signer))
     for other in _others(root, name):
         for run_id, body in statements(root, other, codex, role, signer=signer).items():
-            if run_id in out:
+            have = out.get(run_id)
+            replaces = (have is not None and lacks_cpu_comparison(have)
+                        and not lacks_cpu_comparison(body) and passing(body, codex))
+            if have is not None and not replaces:
                 continue
             out[run_id] = body
             src, dst = path_for(root, other, run_id, role), path_for(root, name, run_id, role)
             try:
-                if not dst.exists():
+                if replaces or not dst.exists():
                     dst.parent.mkdir(parents=True, exist_ok=True)
                     tmp = dst.with_suffix(".json.tmp")
                     tmp.write_bytes(src.read_bytes())
@@ -359,6 +368,15 @@ def statements_for_space(root: Path, name: str, codex: Codex, role: str = "docum
             except OSError:   # a copy is insurance; the statement still counts from where it is
                 pass
     return out
+
+
+def lacks_cpu_comparison(body: dict[str, Any]) -> bool:
+    """A card run's statement that holds no comparison with a stored CPU
+    reference: one made before version 5, or when none was stored. A CPU
+    run is the reference's own kind and lacks nothing."""
+    if body.get("driver") == "cpu":
+        return False
+    return int(body.get("version", 1)) < 5 or body.get("cpu_reference") is None
 
 
 def _canary_file(root: Path, name: str) -> Path:

@@ -936,6 +936,18 @@ def rechecked(codex: Codex, role: str, run_id: str, body: dict[str, Any]) -> boo
     return (codex.space_id, role, run_id, _statement_digest(body)) in _rechecked
 
 
+def cpu_reference_for(root: Path, name: str, codex: Codex, role: str, body: dict[str, Any],
+                      count: int):
+    """The CPU reference this collection stores for the statement's weights
+    and the space's set — what the gate holds the run to (`_validate`)."""
+    from .hold import cpu_reference as cpu_ref
+    weights = body.get("encoder_weights")
+    if not weights:
+        return None
+    return cpu_ref.find(root, name, role, weights=str(weights), set_id=codex.space.calibration.set,
+                        count=count)
+
+
 def recheck(root: Path, name: str, codex: Codex, recipe, run_id: str, *,
             role: str = "document", key=None,
             stop: Callable[[], bool] | None = None,
@@ -960,9 +972,23 @@ def _recheck(root: Path, name: str, codex: Codex, recipe, run_id: str, *,
                                          signer=signer(key)).get(run_id)
     if body is None or not runs_mod.passing(body, codex):
         return True            # nothing kept to re-check; `check` decides
+    reference_vectors = None
+    if runs_mod.lacks_cpu_comparison(body):
+        reference_vectors = reference(root, name, codex, role)
+        if cpu_reference_for(root, name, codex, role, body, len(reference_vectors)) is not None:
+            # A REFERENCE STORED AFTER THE STATEMENT (München, 2026-11-12:
+            # pubmed's two references were taken only by `--remeasure`, the
+            # space's statement predating them): the statement never held the
+            # run to it, so it is not relied on; the caller gates the run, and
+            # the new statement, compared with the reference, replaces it
+            if log is not None:
+                log(f"{role} run {run_id[:23]}…: its kept statement predates the CPU reference "
+                    f"stored for its weights; the run is gated against it")
+            return False
     if rechecked(codex, role, run_id, body):
         return True
-    reference_vectors = reference(root, name, codex, role)
+    if reference_vectors is None:
+        reference_vectors = reference(root, name, codex, role)
     embed = answers(recipe, query=role == "query", stop=stop, name=name)
     try:
         ok, passed, median = runs_mod.recheck(codex, body, reference=reference_vectors,
