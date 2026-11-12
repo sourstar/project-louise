@@ -284,7 +284,7 @@ becomes `normattiva`, with normattiva's collection file (its codex, and
 | An existing collection held to five fields, not its `space_id` (engine, dim, dtype, pooling, layers unchecked) | `new` | phase 1 |
 | A recipe with any `space.query.encoder` needs the query side; `new` fails at create, after measuring | `new` | phase 1 (refused first), phase 3 (built) |
 | Calibrate measures in f32, whatever the space's dtype | calibrate | not a defect: 03 §3.1 computes every cosine in f32, the gate's too; the dtype is how vectors are stored |
-| The gate passes with no CPU comparison when no CPU reference is kept | gate | phase 2 (every case makes one) |
+| The gate passes with no CPU comparison when no CPU reference is kept | gate | 2026-11-12: a card run is not gated without one (`run_check.no_cpu_reference`, a rule in the way naming `hold embedder cpu-reference`; a CPU run is exempt, being the reference's kind); every case's steps already make one |
 | The Library's create sets a hand tolerance, makes no CPU reference, runs no gate, and embeds on demand | Library | phase 4 |
 | A private collection's first space (`[deposit].space`) carries a hand tolerance | deposit | phase 2 |
 | A space copy re-embeds the reference and only warns when it differs | `create --space-from` | phase 2 (refused) |

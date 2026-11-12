@@ -20,6 +20,16 @@ measured (published figures disagree).
 
 ### 2026-11-12
 
+- **No card run is gated without a stored CPU reference — FIXED, not deployed** (new-collection.md's review finding
+  "the gate passes with no CPU comparison when no CPU reference is kept"; invariant 12). Before, an exact run with no
+  reference for its weights passed, while one WITH a reference on a level with no line failed, so holding the evidence
+  could only hurt. Now `run_check` refuses to gate a card run without one: it is a rule in the way, it names `hold
+  embedder cpu-reference`, and the card is not asked for the set. A CPU run is exempt. Validated runs keep their
+  statements, so the rule binds the next gate only, and nothing live stops on deploy. München's inventory (read-only,
+  b21f420) shows three roles with no reference, each with a CPU twin: gutenberg query (Q4_K_M, line 0.991), pubmed
+  document (OpenVINO BF16, 0.995) and pubmed query (F16, 0.995). They must be made before those roles' next engine
+  change. That is CPU work, hours per role, on the operator's word.
+
 - **Origin links become relations (operator: decision 1 A) and `wikipedia-articles` becomes `wikipedia-articles-cache`
   (decision 2) — BUILT, not deployed.** gutenberg's `relations()` states its catalogue's notes, read from
   `extra.description`. `bf:otherEdition` (BIBFRAME 2.0) covers "several editions of this eBook" and "a somewhat higher

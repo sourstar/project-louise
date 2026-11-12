@@ -500,6 +500,18 @@ def gating_elsewhere(collection) -> str | None:
     return held[1]
 
 
+def no_cpu_reference(name: str, role: str, stated) -> str:
+    """Why a card run is not gated: no stored CPU reference for its weights,
+    and the command that makes one (once per node, kept, 07 §7.3)."""
+    flag = "--query-model" if role == "query" else "--model"
+    return (f"{name}: no stored CPU reference for the {role} side's weights "
+            f"{str(stated.weights)[:23]}… on run {str(stated.run_id)[:23]}… "
+            f"({stated.driver}): every card run is held to its CPU twin (CLAUDE.md "
+            f"invariant 12), so the gate is not run without one. Make it once: "
+            f"`louise hold embedder cpu-reference {name} {flag} <its CPU twin>` "
+            f"(docs/notes/near-exact-runs.md §2), then the gate runs by itself")
+
+
 def validate(root: Path, name: str, codex: Codex, recipe, *, role: str = "document",
              key=None, now: str | None = None,
              stop: Callable[[], bool] | None = None,
@@ -539,6 +551,16 @@ def _validate(root: Path, name: str, codex: Codex, recipe, *, role: str = "docum
         from .hold import cpu_reference as cpu_ref
         cpu = cpu_ref.find(root, name, role, weights=stated.weights,
                            set_id=codex.space.calibration.set, count=len(reference_vectors))
+        # NO CARD RUN IS GATED WITHOUT IT (invariant 12: every run "reaches the
+        # stored CPU reference at 0.999; a run that does not FAILS"). Until
+        # 2026-11-12 a run with no stored reference passed without that half
+        # of the check, while one WITH a reference could fail it — holding
+        # the evidence could only hurt (new-collection.md, "What the review
+        # found"). A rule in the way, not a deferral, and asked before the
+        # card spends minutes on the set. A CPU run is the reference's own
+        # kind: nothing to hold it to.
+        if cpu is None and stated.driver != "cpu":
+            raise emb.GateError(no_cpu_reference(name, role, stated))
         body = runs_mod.validate(
             root, name, codex, role=role,
             reference=reference_vectors,
