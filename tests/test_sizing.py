@@ -293,3 +293,66 @@ def test_a_batch_that_overran_the_budget_shrinks_whatever_the_model_says(s):
     s.record("fts:w", 400, 40.0)                              # that batch overran
     assert s.size("fts:w", target_s=3.0, default=200, hi=4000, ceiling_s=12.0) <= 200, \
         "the overrun halves it at once"
+
+
+# ------------------------------------- the text index, sized in chunks
+
+def _fts_collection(tmp_path, name="normattiva-nemo"):
+    from app import collections as collections_mod
+    return collections_mod.Collection(
+        name=name, plugin="normattiva", profile=None, embed_mode_default=None,
+        corpus_dir=tmp_path, manifest_path=tmp_path / name / "manifest.db",
+        fts_dir=tmp_path / "f", lance_dir=tmp_path / "l", embed=None)
+
+
+@pytest.fixture
+def fresh_sizer(monkeypatch):
+    s = sizing.Sizer()
+    monkeypatch.setattr(sizing, "sizer", lambda: s)
+    monkeypatch.setattr(worker, "_fts_doc_chunks", {})
+    return s
+
+
+def test_the_text_index_is_sized_in_chunks_so_long_documents_share_a_commit(
+        tmp_path, isolated_config, fresh_sizer):
+    """A COST test, on München's measurement (2026-11-12, normattiva-nemo's
+    index pass, 4,306 batches): a commit costs ~2 s whatever it holds, plus
+    ~4 ms a chunk. Sized by DOCUMENT, a few very long documents made the
+    per-document rate huge and the batch fell to 1-5 documents, 24 % of the
+    stage on 4.4 % of the chunks. Sized by CHUNK, the batch is the budget the
+    fixed cost allows, (12 s - 2 s) / 4 ms = 2,500 chunks, however the chunks
+    fall into documents."""
+    c = _fts_collection(tmp_path)
+    cost = lambda chunks: 2.0 + 0.004 * chunks                  # noqa: E731
+    # documents of ~138 chunks, and now and then one of 5,000
+    batches = [[138], [138, 138], [5000], [138] * 3, [138], [5000, 138],
+               [138], [138] * 4, [5000], [138, 138]]
+    assert worker.fts_sizes(c) == (config.FTS_BATCH_DOCS, config.FTS_BATCH_CHUNKS), \
+        "nothing measured: the configured start, as before"
+    for docs in batches:
+        worker._fts_measured(c, docs, cost(sum(docs)))
+    docs, budget = worker.fts_sizes(c)
+    assert budget == pytest.approx(2500, rel=0.02)
+    assert docs == pytest.approx(2500 / 138, abs=1), "the median, not the long tail's mean"
+    # the per-document model on the same batches: what the stage did
+    per_doc = sizing.Sizer()
+    for d in batches:
+        per_doc.record("doc", len(d), cost(sum(d)))
+    old = per_doc.size("doc", target_s=config.BATCH_TARGET_S, default=config.FTS_BATCH_DOCS,
+                       lo=1, hi=config.FTS_BATCH_DOCS * 20, ceiling_s=config.BATCH_CEILING_S)
+    assert old <= 5 < docs, f"the per-document fit collapses ({old}): the defect this replaces"
+    # a run of 180 documents of 138 chunks: commits, then and now
+    assert -(-180 // old) >= 3 * -(-180 // docs)
+
+
+def test_short_documents_fill_a_batch_to_the_chunk_budget(tmp_path, isolated_config,
+                                                           fresh_sizer):
+    """pubmed's abstracts, ~1.5 chunks each: thousands of documents a commit,
+    never more than the document cap (FTS_BATCH_DOCS x 20)."""
+    c = _fts_collection(tmp_path, "pubmed")
+    for n in (200, 400, 800, 1600, 3200):
+        chunks = [1, 2] * (n // 2)
+        worker._fts_measured(c, chunks, 2.0 + 0.004 * sum(chunks))
+    docs, budget = worker.fts_sizes(c)
+    assert budget == pytest.approx(2500, rel=0.02)
+    assert 1000 <= docs <= config.FTS_BATCH_DOCS * 20

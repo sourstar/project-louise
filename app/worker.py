@@ -31,6 +31,7 @@ import sys
 import threading
 import time
 import traceback
+from collections import deque
 from pathlib import Path
 from typing import Callable
 
@@ -239,6 +240,56 @@ def batch_docs(collection, stage: str, default: int) -> int:
         _batch_key(collection, stage), target_s=config.BATCH_TARGET_S,
         default=default, lo=1, hi=max(default, 1) * 20,
         ceiling_s=config.BATCH_CEILING_S)
+
+
+#: the text index's recent documents' chunk counts, by batch key: the
+#: median the batch's document count is derived from (`fts_sizes`)
+_fts_doc_chunks: dict[str, "deque[int]"] = {}
+_fts_cpd_lock = threading.Lock()
+#: how many recent documents the median is taken over
+FTS_MEDIAN_DOCS = 256
+
+
+def fts_sizes(collection) -> tuple[int, int]:
+    """(documents, chunks) the text-index stage takes in one commit, sized in
+    CHUNKS (München, 2026-11-12: normattiva-nemo's index pass, 4,306 batches
+    in 13,325 s). A commit costs about 2 s whatever it holds, plus ~4 ms a
+    chunk. Sized by document, a few very long documents made the
+    per-document rate huge and the batch fell to 1-5 documents: 1,193
+    batches, 24 % of the stage, for 4.4 % of the chunks, at 48-187 chunks/s
+    against ~1,050 in full batches. The cost is the chunks', so the affine
+    fit (app/sizing.py) is over chunks, and the batch is cut at the chunk
+    budget (`stage_fts`, the look-ahead's take).
+
+    The document count bounds what the look-ahead parses ahead (its memory)
+    and the batch: the budget over the MEDIAN chunks per document of the
+    recent ones. A mean would be the few very long documents' and would cut
+    the batch again. A document longer than the budget is a batch of its own,
+    and a run of short ones stops at the document count, never above
+    FTS_BATCH_DOCS x 20. Before any batch is measured: FTS_BATCH_DOCS
+    documents, as before."""
+    key = _batch_key(collection, "fts")
+    chunks = sizing.sizer().size(
+        key, target_s=config.BATCH_TARGET_S, default=config.FTS_BATCH_CHUNKS, lo=1,
+        hi=config.FTS_BATCH_CHUNKS, ceiling_s=config.BATCH_CEILING_S)
+    with _fts_cpd_lock:
+        seen = sorted(_fts_doc_chunks.get(key, ()))
+    if not seen or not sizing.sizer().measured(key):
+        return config.FTS_BATCH_DOCS, chunks
+    median = max(1.0, float(seen[len(seen) // 2]))
+    docs = int(-(-chunks // median))
+    return max(1, min(config.FTS_BATCH_DOCS * 20, docs)), chunks
+
+
+def _fts_measured(collection, doc_chunks: list[int], seconds: float) -> None:
+    """What a text-index batch cost: its chunks to the sizer, each
+    document's chunk count to the median `fts_sizes` divides by."""
+    key = _batch_key(collection, "fts")
+    sizing.sizer().record(key, sum(doc_chunks), seconds)
+    if doc_chunks:
+        with _fts_cpd_lock:
+            _fts_doc_chunks.setdefault(key, deque(maxlen=FTS_MEDIAN_DOCS)).extend(
+                int(n) for n in doc_chunks)
 
 
 def _waiting_because_off(con, collection) -> str:
@@ -616,9 +667,11 @@ def _fts_link(collection, rows: list, known: list, names: bool) -> lookahead.Ahe
         name=f"fts-ahead-{collection.name}")
 
 
-def _fts_enough(pairs: list) -> bool:
-    """A batch's chunk cap reached by what is in hand (stage_fts cuts there)."""
-    return sum(len(v["chunks"]) for _r, (ok, v) in pairs if ok) >= config.FTS_BATCH_CHUNKS
+def _fts_enough(pairs: list, budget: int | None = None) -> bool:
+    """A batch's chunk budget (`fts_sizes`; FTS_BATCH_CHUNKS without one)
+    reached by what is in hand (stage_fts cuts there)."""
+    cap = config.FTS_BATCH_CHUNKS if budget is None else budget
+    return sum(len(v["chunks"]) for _r, (ok, v) in pairs if ok) >= cap
 
 
 def _fts_extend(con, collection, chain: lookahead.Chain, want: int, names: bool) -> int:
@@ -660,8 +713,9 @@ def _fts_take_ahead(con, row, collection) -> list | None:
     # parse is `parallel.compute`, whose own watchdog and in-process fall-back
     # run inside it; a batch not answered by then is abandoned and parsed
     # here, as a batch always was
-    want = batch_docs(collection, "fts", config.FTS_BATCH_DOCS)
-    taken = chain.take(want, _fts_enough, timeout=config.PARSE_TIMEOUT_S)
+    want, budget = fts_sizes(collection)
+    taken = chain.take(want, lambda pairs: _fts_enough(pairs, budget),
+                       timeout=config.PARSE_TIMEOUT_S)
     if taken is None:
         _fts_ahead.drop(key)
         return None
@@ -719,7 +773,7 @@ def _fts_after_rdf(con, collection) -> None:
         _fts_ahead.drop(key)
         return
     try:
-        _fts_extend(con, collection, chain, batch_docs(collection, "fts", config.FTS_BATCH_DOCS),
+        _fts_extend(con, collection, chain, fts_sizes(collection)[0],
                     fts.names_capable(collection))
     except Exception:   # noqa: BLE001 — the next fts round selects and parses afresh
         _fts_ahead.drop(key)
@@ -825,7 +879,7 @@ def stage_fts(con, row, collection) -> None:
     # marks are SQLite writes, so the transaction opens just before them
     # (see the BEGIN IMMEDIATE below; _execute_step commits it).
     t0 = time.monotonic()
-    want = batch_docs(collection, "fts", config.FTS_BATCH_DOCS)
+    want, budget = fts_sizes(collection)
     _prefetch_ahead(con, collection, "fts", row)
     # a collection whose records are also found by NAME (wikidata, operator
     # 2026-10-24): the same parse gives each record's names (fts.search_names)
@@ -866,7 +920,7 @@ def stage_fts(con, row, collection) -> None:
     for peer, (ok, peer_value) in computed[1:]:
         # the chunk cap, and the batch's own size: what the look-ahead hands
         # over is whole links, and may hold more rows than a batch takes
-        if n_chunks >= config.FTS_BATCH_CHUNKS or len(batch) >= want:
+        if n_chunks >= budget or len(batch) >= want:
             break
         if not ok:
             continue            # a peer never fails the round
@@ -942,7 +996,7 @@ def stage_fts(con, row, collection) -> None:
                      f"{', '.join(reopened)}: reopened for one more pass, so "
                      f"their published vectors are imported rather than recomputed")
     took = time.monotonic() - t0
-    sizing.sizer().record(_batch_key(collection, "fts"), len(batch), took)
+    _fts_measured(collection, [len(ch) for _r, ch in batch], took)
     # "parsed ahead": this batch was parsed while the one before it was
     # written (the look-ahead) — the line says which, for the log read as a
     # time series (tools/sched_measure.sh reads only the counts before it)
@@ -1795,7 +1849,7 @@ def _next_book(con, scope, embed_allowed=True, collection=None):
         # the watermark is what fts will ACTUALLY take (app/sizing.py), not
         # the configured count: sized batches would otherwise wait for a
         # watermark of 200 and then commit 4,000
-        want = (batch_docs(collection, "fts", config.FTS_BATCH_DOCS)
+        want = (fts_sizes(collection)[0]
                 if collection is not None else config.FTS_BATCH_DOCS)
         ready = con.execute(
             _FTS_BACKLOG, (config.MAX_RETRIES, want)).fetchone()[0]
