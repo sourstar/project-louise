@@ -499,6 +499,37 @@ class ReferenceSource(Protocol):
     def sync(self, state: RefSyncState) -> Iterator[RefRecordBatch]: ...
 
 
+@dataclass(frozen=True)
+class ArticleCitation:
+    """One ARTICLE a query cites, in a legal reference source's own grammar
+    (docs/notes/legal-chunking-retrieval.md R1; app/ask/articles.py pins it
+    as a fact, never a ranking — invariant 4).
+
+    `keys`: the Work's canonical ids, in order of preference; in a held
+    collection the FIRST its `validity_works` holds names the Work.
+    `also`: tried only when none of `keys` is held, and every one held is
+    taken (Normattiva: the acts the query's pinned `atto` facts resolved).
+    `article`: the article as the source's `article_of_label` reads a
+    chunk's label ("8", "5-bis", "l121-1", "823"); `label`: the article as
+    the fact names it ("art. 8", "article L121-1", "§ 823", "Article 5")."""
+    keys: tuple[str, ...]
+    article: str
+    label: str
+    also: tuple[str, ...] = ()
+
+
+class LegalReferenceSource(Protocol):
+    """A reference source whose collections hold articles under a validity
+    axis (normattiva, legi, neuris, eurlex). Optional on a ReferenceSource:
+    absent = no citations. `refs` is the refs store, or None when the
+    caller has none (a grammar that needs it then cites nothing); `facts`
+    the query's pinned facts."""
+
+    def article_citations(self, query: str, refs: "RefLookup | None",
+                          facts: Any = ()) -> list[ArticleCitation]: ...
+    def article_of_label(self, label: str | None) -> str | None: ...
+
+
 class EntityResolver(Protocol):
     """Query text → entity keys. architecture-v2.md §2/§4."""
 

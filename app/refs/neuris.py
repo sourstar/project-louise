@@ -47,7 +47,7 @@ import threading
 from collections.abc import Iterator
 from pathlib import Path
 
-from ..plugins.base import (
+from ..plugins.base import (ArticleCitation, 
     Entity,
     RefColumn,
     RefLink,
@@ -157,6 +157,13 @@ class NeurisRefSource:
 
     def schema(self) -> RefSchema:
         return RefSchema(source_id=self.source_id, tables=(GESETZ, FASSUNG, ABKUERZUNG), links=LINKS)
+
+    def article_citations(self, query: str, refs: RefLookup | None = None,
+                          facts=()) -> list[ArticleCitation]:
+        return article_citations(query, refs, facts)
+
+    def article_of_label(self, label: str | None) -> str | None:
+        return article_of_label(label)
 
     def input_mtime(self, state: RefSyncState) -> float:
         """The newest stored JSON: a pass that fetched one re-syncs
@@ -331,3 +338,42 @@ class CitationResolver:
                 out.append(Entity(entity_id=r["work"], kind=GESETZ.name, source_id=SOURCE_ID,
                                   label=f"{c['abk']} — {c['provision']}"))
         return out
+
+
+# ---- the articles a query cites (legal-chunking-retrieval.md R1) ---------------------------
+
+#: a provision's number, as `citations` spells it: "§ 823 Abs. 1" → 823, "Art. 1" → 1
+_PROVISION = re.compile(r"(?P<mark>§§?|Art\.|Artikel)\s*(?P<num>\d+[a-z]?)")
+
+
+def article_citations(query: str, refs: RefLookup | None, facts=()) -> list[ArticleCitation]:
+    """Every provision the query cites by a synced abbreviation ("§ 823
+    Abs. 1 BGB", "Art. 1 GG"): the Works the abbreviation names (their
+    canonical ELI, a `neuris` record's key), then `jurabk:<abk>` (the
+    record's other key). A range or a list ("§§ 1 bis 3") cites its first
+    provision. Needs the synced `abkuerzung` table: what is an abbreviation
+    only it knows."""
+    if refs is None or ("§" not in query and "Art" not in query):
+        return []
+    index = abbreviation_index(refs)
+    if not index:
+        return []
+    out: list[ArticleCitation] = []
+    for c in citations(query, index):
+        m = _PROVISION.match(c["provision"])
+        if m is None:
+            continue
+        mark = "Art." if m.group("mark") in ("Art.", "Artikel") else "§"
+        keys = tuple(dict.fromkeys([r["work"] for r in index.get(c["abk"], [])] + [f"jurabk:{c['abk']}"]))
+        out.append(ArticleCitation(keys=keys, article=m.group("num").lower(),
+                                   label=f"{mark} {m.group('num')}"))
+    return out
+
+
+#: a section's label: "[partition › ]§ 823 — heading", "Art 1 — heading"
+_LABEL = re.compile(r"^\s*(?:§+|Art\.?|Artikel)\s*(?P<num>\d+[a-z]?)\b")
+
+
+def article_of_label(label: str | None) -> str | None:
+    m = _LABEL.match(str(label or "").rsplit(" › ", 1)[-1])
+    return m.group("num").lower() if m else None

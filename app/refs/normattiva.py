@@ -42,7 +42,7 @@ import zipfile
 from pathlib import Path
 from typing import Iterator
 
-from ..plugins.base import (Entity, RefColumn, RefLink, RefLookup, RefRecordBatch, RefSchema,
+from ..plugins.base import (ArticleCitation, Entity, RefColumn, RefLink, RefLookup, RefRecordBatch, RefSchema,
                             RefSyncState, RefTable)
 
 SOURCE_ID = "normattiva-refs"
@@ -195,6 +195,13 @@ class NormattivaRefSource:
 
     def schema(self) -> RefSchema:
         return RefSchema(source_id=self.source_id, tables=(ATTO, VERSIONE), links=(LINK,))
+
+    def article_citations(self, query: str, refs: RefLookup | None = None,
+                          facts=()) -> list[ArticleCitation]:
+        return article_citations(query, refs, facts)
+
+    def article_of_label(self, label: str | None) -> str | None:
+        return label_token(label)
 
     def sync(self, state: RefSyncState) -> Iterator[RefRecordBatch]:
         """The zips under `<ref_root>/normattiva` — the plugin's corpus, as
@@ -496,3 +503,78 @@ class CitationResolver:
                     label = f"{label} — {c['art']}"
                 out.append(Entity(entity_id=eid, kind=ATTO.name, source_id=SOURCE_ID, label=label))
         return out
+
+
+# ---- the articles a query cites (legal-chunking-retrieval.md R1) ---------------------------
+#
+# Moved here unchanged from app/ask/articles.py, where it was the only
+# grammar: the article pin is now one engine asking every legal reference
+# source (`article_citations`), and this is Normattiva's.
+
+#: "art. 12", "articolo 5-bis", "art.2 comma 3" → `12`, `5-bis`, `2`
+_TOKEN = re.compile(r"art(?:icolo|\.)?\s*(\d+)\s*[-_ ]?\s*"
+                    r"(bis|ter|quater|quinquies|sexies|septies|octies|novies|decies)?\b", re.I)
+#: a label's article: "Legge sull'emigrazione-art. 12", "Art. 12.", "Articolo 12"
+_LABEL = re.compile(r"(?:^|[\s\-–])art(?:icolo|\.)?\s*(\d+)\s*[-_ ]?\s*"
+                    r"(bis|ter|quater|quinquies|sexies|septies|octies|novies|decies)?\b", re.I)
+
+
+def token(text: str | None) -> str | None:
+    m = _TOKEN.search(text or "")
+    if not m:
+        return None
+    return f"{int(m.group(1))}-{m.group(2).lower()}" if m.group(2) else str(int(m.group(1)))
+
+
+def label_token(label: str | None) -> str | None:
+    m = _LABEL.search(label or "")
+    if not m:
+        return None
+    return f"{int(m.group(1))}-{m.group(2).lower()}" if m.group(2) else str(int(m.group(1)))
+
+
+#: the URN:NIR forms a state act is filed under (the citation forms above,
+#: and those a citation names only by title): a citation whose form is not
+#: the origin's — "legge" for a regio decreto-legge, a "testo unico" — is
+#: found by its date and number under each of them, one primary-key lookup
+#: each, with no reference data needed (2026-10-14: the node had never
+#: synced normattiva-refs, and the operator's query resolved to nothing)
+FORMS = ("legge", "legge.costituzionale", "decreto.legislativo", "decreto.legge",
+         "decreto.del.presidente.della.repubblica",
+         "decreto.del.presidente.del.consiglio.dei.ministri", "regio.decreto.legge",
+         "regio.decreto", "regio.decreto.legislativo", "decreto.legislativo.luogotenenziale",
+         "decreto.luogotenenziale", "decreto", "decreto.ministeriale")
+
+
+def _get(f, name: str):
+    return getattr(f, name, None) if not isinstance(f, dict) else f.get(name)
+
+
+def article_citations(query: str, refs: RefLookup | None = None, facts=()) -> list[ArticleCitation]:
+    """Every article the query cites with its act: the act's URN under the
+    citation's own form first, then every other form (`keys`, the first a
+    collection holds); else the acts the query's pinned `atto` facts name
+    with that article (`also`) — a citation with no date, or in a form
+    filed under none of FORMS. Needs no reference data (`refs` unused)."""
+    facts = list(facts)
+    out: list[ArticleCitation] = []
+    for c in citations(query):
+        if not c.get("art"):
+            continue
+        tok = token(c["art"])
+        if not tok:
+            continue
+        keys: tuple[str, ...] = ()
+        if c.get("data"):
+            forms = [c["tipo"]] if c.get("tipo") not in (None, "*") else []
+            forms += [f for f in FORMS if f not in forms]
+            keys = tuple(f"urn:nir:stato:{form}:{c['data']};{c['numero']}" for form in forms)
+        suffix = f"— {c['art']}"
+        also: list[str] = []
+        for f in facts:
+            eid = _get(f, "entity_id")
+            if (_get(f, "kind") == "atto" and eid and str(_get(f, "label") or "").endswith(suffix)
+                    and eid not in also):
+                also.append(eid)
+        out.append(ArticleCitation(keys=keys, article=tok, label=f"art. {tok}", also=tuple(also)))
+    return out

@@ -57,7 +57,7 @@ import re
 from pathlib import Path
 from typing import Iterator
 
-from ..plugins.base import (Entity, RefColumn, RefLink, RefLookup, RefRecordBatch, RefSchema,
+from ..plugins.base import (ArticleCitation, Entity, RefColumn, RefLink, RefLookup, RefRecordBatch, RefSchema,
                             RefSyncState, RefTable)
 
 SOURCE_ID = "eurlex-refs"
@@ -188,6 +188,13 @@ class EurlexRefSource:
 
     def schema(self) -> RefSchema:
         return RefSchema(source_id=self.source_id, tables=(ACT, VERSION), links=(LINK,))
+
+    def article_citations(self, query: str, refs: RefLookup | None = None,
+                          facts=()) -> list[ArticleCitation]:
+        return article_citations(query, refs, facts)
+
+    def article_of_label(self, label: str | None) -> str | None:
+        return article_of_label(label)
 
     def sync(self, state: RefSyncState) -> Iterator[RefRecordBatch]:
         """Every unit under `<ref_root>/eurlex`: a version row each, an act
@@ -334,3 +341,37 @@ class CitationResolver:
             out.append(Entity(entity_id=f"celex:{row['celex']}", kind=ACT.name, source_id=SOURCE_ID,
                               label=label))
         return out
+
+
+# ---- the articles a query cites (legal-chunking-retrieval.md R1) ---------------------------
+#
+# No alias table: "art. 17 GDPR" names no act this grammar can read, and none
+# is invented here — an act is cited by its number or its CELEX.
+
+#: the word for "article" in the languages the grammar reads (`_ARTICLE`)
+_ART_WORD = r"(?:Article|Artikel|Articolo|Artículo|Articulo|Artigo|Art\.)"
+_ART_NUM = re.compile(rf"(?P<word>{_ART_WORD})\s*(?P<num>\d+[a-z]?)", re.IGNORECASE)
+
+
+def article_citations(query: str, refs: RefLookup | None = None, facts=()) -> list[ArticleCitation]:
+    """Every article the query cites of an act it names by number or CELEX
+    ("Article 5 of Regulation (EU) 2016/679", "art. 17 du règlement (UE)
+    2016/679"): the act's `celex:<CELEX>`, a `eurlex` record's own key.
+    Needs no reference data."""
+    out: list[ArticleCitation] = []
+    for c in citations(query):
+        m = _ART_NUM.match(c["art"] or "")
+        if m is None:
+            continue
+        out.append(ArticleCitation(keys=(f"celex:{c['celex']}",), article=m.group("num").lower(),
+                                   label=f"{m.group('word')} {m.group('num')}"))
+    return out
+
+
+#: a section's label (formex.sections): "[partition › ]Article 5 — title"
+_LABEL = re.compile(rf"^\s*{_ART_WORD}\s*(?P<num>\d+[a-z]?)\b", re.IGNORECASE)
+
+
+def article_of_label(label: str | None) -> str | None:
+    m = _LABEL.match(str(label or "").rsplit(" › ", 1)[-1])
+    return m.group("num").lower() if m else None
