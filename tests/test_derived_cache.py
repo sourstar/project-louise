@@ -175,11 +175,13 @@ def test_a_killed_writers_temporary_file_goes_with_the_next_lock(tmp_path):
         assert not orphan.exists() and not old_name.exists() and other.exists()
 
 
-def test_stale_names_are_what_the_glob_gave_and_compile_no_pattern(tmp_path):
+def test_stale_names_are_what_the_glob_gave_and_compile_no_pattern(tmp_path, monkeypatch):
     """`derived._named` is `glob(escape(prefix) + "*" + suffix)`, name for
-    name, without a compiled pattern per pack: glob's cache kept one for each
-    (~750 B a pack, in every process — the per-file growth the update-file
-    heap test measured, 2026-11-12)."""
+    name, without a compiled pattern per pack: the standard library's cache
+    kept one for each (~750 B a pack, in every process — the per-file growth
+    the update-file heap test measured, 2026-11-12). Where that cache lives
+    is the version's own (3.12: `pathlib._compile_pattern`, 3.13:
+    `glob._compile_pattern`), so what is held here is that no glob runs."""
     import glob
     names = ["p.pack", "p.pack.tmp", "p.pack.123.tmp", "p.packtmp", "p.pack.lock", "q.pack.1.tmp",
              ".p.pack.9.adopting", ".p.pack.adopting", ".p.packadopting", "p.pack.9.adopting",
@@ -191,8 +193,13 @@ def test_stale_names_are_what_the_glob_gave_and_compile_no_pattern(tmp_path):
         want = sorted(tmp_path.glob(glob.escape(prefix) + "*" + suffix))
         assert sorted(derived._named(tmp_path, prefix, suffix)) == want, (prefix, suffix)
     assert derived._named(tmp_path / "absent", "p.", "tmp") == []
-    before = glob._compile_pattern.cache_info().currsize
-    for k in range(50):
+
+    def no_glob(self, *a, **k):
+        raise AssertionError(f"a glob pattern compiled for {self}")
+    monkeypatch.setattr(Path, "glob", no_glob)
+    for k in range(5):
         with derived.building(tmp_path / f"pack-{k}.bin"):
             pass
-    assert glob._compile_pattern.cache_info().currsize == before, "a pattern compiled per pack"
+    src, dst = tmp_path / "origin.bin", tmp_path / "carried" / "origin.bin"
+    src.write_bytes(b"x")
+    assert derived.adopt(src, dst) is True and dst.read_bytes() == b"x"
