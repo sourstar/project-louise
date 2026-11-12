@@ -511,11 +511,17 @@ class ArticleCitation:
     taken (Normattiva: the acts the query's pinned `atto` facts resolved).
     `article`: the article as the source's `article_of_label` reads a
     chunk's label ("8", "5-bis", "l121-1", "823"); `label`: the article as
-    the fact names it ("art. 8", "article L121-1", "§ 823", "Article 5")."""
+    the fact names it ("art. 8", "article L121-1", "§ 823", "Article 5").
+    `annexes`: where the Work holds other articles of the same number before
+    the cited ones (Normattiva's annex codes: the approving decree's "Art.
+    1.", the preleggi, c.p.a.'s other Allegati), the names its chunk labels
+    carry before "-art. N" — only a chunk whose annex name starts with one
+    of them is the article; empty = any chunk whose label reads `article`."""
     keys: tuple[str, ...]
     article: str
     label: str
     also: tuple[str, ...] = ()
+    annexes: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)

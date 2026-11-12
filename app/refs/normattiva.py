@@ -38,7 +38,11 @@ Normattiva open data, the pre-packaged collection "Codici"
 (akn/M/codici.zip, 40 acts; the API's `collection-predefinite` answer of
 2026-11-12, sha256 b8e2ad6f…, the file's `source` in full), its URNs and
 titles as Normattiva lists them, with the citation forms of Italian legal
-usage for each act (`code_citations`). "Cost." is not in it and is not read.
+usage for each act (`code_citations`). An ANNEX code (the decree's own
+articles, and for c.c. the preleggi, held BEFORE the code in one Work) pins
+only the chunks of its annex (`annexes`, the labels' prefix before "-art.
+N"). "Cost." is mapped to the Constitution's URN, which no pre-packaged
+collection holds: it pins nothing until the Constitution is acquired.
 """
 from __future__ import annotations
 
@@ -50,7 +54,7 @@ import zipfile
 from pathlib import Path
 from typing import Iterator
 
-from ..plugins.base import (ArticleCitation, ArticleNotes,Entity, RefColumn, RefLink, RefLookup, RefRecordBatch, RefSchema,
+from ..plugins.base import (ArticleCitation, ArticleNotes, Entity, RefColumn, RefLink, RefLookup, RefRecordBatch, RefSchema,
                             RefSyncState, RefTable)
 
 SOURCE_ID = "normattiva-refs"
@@ -532,18 +536,22 @@ _LABEL = re.compile(r"(?:^|[\s\-–])art(?:icolo|\.)?\s*(\d+)\s*[-_ ]?\s*"
                     r"(bis|ter|quater|quinquies|sexies|septies|octies|novies|decies)?\b", re.I)
 
 
+def _num(digits: str, suffix: str | None) -> str:
+    """"12" → `12`, "012" → `12`; but "01" stays `01`: c.p.p. holds an "Art.
+    01." distinct from its "Art. 1." (the real member layout, 2026-11-12),
+    so a lone leading zero is part of the article's name."""
+    n = digits if (len(digits) == 2 and digits[0] == "0") else str(int(digits))
+    return f"{n}-{suffix.lower()}" if suffix else n
+
+
 def token(text: str | None) -> str | None:
     m = _TOKEN.search(text or "")
-    if not m:
-        return None
-    return f"{int(m.group(1))}-{m.group(2).lower()}" if m.group(2) else str(int(m.group(1)))
+    return _num(m.group(1), m.group(2)) if m else None
 
 
 def label_token(label: str | None) -> str | None:
     m = _LABEL.search(label or "")
-    if not m:
-        return None
-    return f"{int(m.group(1))}-{m.group(2).lower()}" if m.group(2) else str(int(m.group(1)))
+    return _num(m.group(1), m.group(2)) if m else None
 
 
 #: the URN:NIR forms a state act is filed under (the citation forms above,
@@ -603,9 +611,25 @@ def article_citations(query: str, refs: RefLookup | None = None, facts=()) -> li
 # their URNs and titles as the Normattiva open-data API lists them (the
 # file's `source` names the call, its time and the answer's sha256), with
 # the citation forms of Italian legal usage for each. Nothing else is read as
-# a code: "Cost." is not in "Codici" (the Constitution is in no predefined
-# collection, docs/notes/normattiva-multivigenza-review.md §6.3), so
-# "art. 3 Cost." pins nothing until its URN is in data.
+# a code. ANNEX codes (c.c., c.p., c.p.c., cod. nav., c.p.a., the three
+# disp. att.) hold the approving decree's own articles — and, for c.c., the
+# 31 preleggi — BEFORE the code, in the same Work, each labelled "Art. N."
+# or "<annex>-art. N"; the code's articles are "<its annex>-art. N" (the
+# real member layout, measured on the node 2026-11-12, codes-layout.json
+# sha256 4c59a108…). So each code carries `annexes`: [] for a STRUCTURED
+# code (the act is the code; a number match is unique), else the annex
+# names its articles are labelled with, and a citation pins only those.
+# The article's own URN (`…;262:2~art2043`) would be the standard key, but
+# a chunk carries only its label: an attachment's FRBRthis is kept in the
+# record's `attachments` (app/plugins/normattiva/source.py), not on the
+# chunk the reader returns, and the decree's own articles have none, and
+# whether every real attachment's FRBRthis names its article is unmeasured.
+# Adopting it would take the FRBRthis per section in the chunk and a
+# measurement on the 13 codes; until then the label prefix decides.
+# "Cost." maps to the Constitution's URN; the Constitution is in none of
+# Normattiva's pre-packaged collections (an acquisition gap,
+# docs/notes/legal-chunking-retrieval.md §8), so "art. 3 Cost." pins
+# nothing while it is not held.
 
 CODES_FILE = Path(__file__).with_name("normattiva_codes.json")
 
@@ -617,37 +641,43 @@ def _abbrev_re(abbrev: str) -> str:
     return r"\s+".join(re.sub(r"\\\.(?=.)", r"\\.\\s*", p) for p in parts)
 
 
-def _load_codes() -> tuple[dict[str, str], re.Pattern]:
+def _load_codes() -> tuple[dict[str, tuple[str, tuple[str, ...]]], re.Pattern]:
     import json
     data = json.loads(CODES_FILE.read_text(encoding="utf-8"))
-    urns: dict[str, str] = {}
-    for code in data["codes"]:
+    acts = data["codes"] + data["not_in_codici"]
+    codes: dict[str, tuple[str, tuple[str, ...]]] = {}
+    for code in acts:
         for a in code["abbrev"]:
-            urns[re.sub(r"\s+", "", a.lower())] = code["urn"]
+            codes[re.sub(r"\s+", "", a.lower())] = (code["urn"], tuple(code.get("annexes") or ()))
     # longest first: "disp. att. c.p.c." before "c.p.c." before "c.p."
-    forms = sorted({a for code in data["codes"] for a in code["abbrev"]}, key=len, reverse=True)
+    forms = sorted({a for code in acts for a in code["abbrev"]}, key=len, reverse=True)
     alts = "|".join(_abbrev_re(a) for a in forms)
     pattern = re.compile(
         r"\bart(?:icolo|\.)?\s*(?P<num>\d+)\s*[-_ ]?\s*"
         r"(?P<suf>bis|ter|quater|quinquies|sexies|septies|octies|novies|decies)?\s*,?\s*"
         rf"(?P<code>{alts})(?![\w.])", re.I)
-    return urns, pattern
+    return codes, pattern
 
 
-CODE_URNS, _CODE_CITE = _load_codes()
+#: abbreviation (spaces removed, lower case) → (the code's URN, its annexes)
+_CODES, _CODE_CITE = _load_codes()
+#: abbreviation → the code's URN
+CODE_URNS = {a: urn for a, (urn, _) in _CODES.items()}
 
 
 def code_citations(query: str) -> list[ArticleCitation]:
     """"art. 2043 c.c.", "art. 360 c.p.c.", "art. 5 disp. att. c.c.": the
     article of the code the abbreviation names, keyed on the code's URN
-    from the "Codici" table — the Work the collection holds under it."""
+    from the "Codici" table — the Work the collection holds under it — and,
+    for an annex code, the annexes its articles are labelled with."""
     out: list[ArticleCitation] = []
     for m in _CODE_CITE.finditer(query or ""):
-        urn = CODE_URNS.get(re.sub(r"\s+", "", m["code"].lower()))
-        if urn is None:
+        got = _CODES.get(re.sub(r"\s+", "", m["code"].lower()))
+        if got is None:
             continue
-        tok = f"{int(m['num'])}-{m['suf'].lower()}" if m["suf"] else str(int(m["num"]))
-        cited = ArticleCitation(keys=(urn,), article=tok, label=f"art. {tok}")
+        urn, annexes = got
+        tok = _num(m["num"], m["suf"])
+        cited = ArticleCitation(keys=(urn,), article=tok, label=f"art. {tok}", annexes=annexes)
         if cited not in out:
             out.append(cited)
     return out

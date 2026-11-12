@@ -63,7 +63,7 @@ import unicodedata
 from pathlib import Path
 from typing import Iterator
 
-from ..plugins.base import (ArticleCitation, ArticleNotes,Entity, RefColumn, RefLink, RefLookup, RefRecordBatch, RefSchema,
+from ..plugins.base import (ArticleCitation, ArticleNotes, Entity, RefColumn, RefLink, RefLookup, RefRecordBatch, RefSchema,
                             RefSyncState, RefTable)
 
 SOURCE_ID = "legi-refs"

@@ -57,7 +57,7 @@ import re
 from pathlib import Path
 from typing import Iterator
 
-from ..plugins.base import (ArticleCitation, ArticleNotes,Entity, RefColumn, RefLink, RefLookup, RefRecordBatch, RefSchema,
+from ..plugins.base import (ArticleCitation, ArticleNotes, Entity, RefColumn, RefLink, RefLookup, RefRecordBatch, RefSchema,
                             RefSyncState, RefTable)
 
 SOURCE_ID = "eurlex-refs"
@@ -379,9 +379,12 @@ def article_citations(query: str, refs: RefLookup | None = None, facts=()) -> li
 
 
 #: a section's label (formex.sections): "[partition › ]Article 5 — title"
-_LABEL = re.compile(rf"^\s*{_ART_WORD}\s*(?P<num>\d+[a-z]?)\b", re.IGNORECASE)
+#: — the French Official Journal heads the first article "Article premier"
+_LABEL = re.compile(rf"^\s*{_ART_WORD}\s*(?:(?P<num>\d+[a-z]?)|(?P<first>premier|1er))\b", re.IGNORECASE)
 
 
 def article_of_label(label: str | None) -> str | None:
     m = _LABEL.match(str(label or "").rsplit(" › ", 1)[-1])
-    return m.group("num").lower() if m else None
+    if m is None:
+        return None
+    return "1" if m.group("first") else m.group("num").lower()

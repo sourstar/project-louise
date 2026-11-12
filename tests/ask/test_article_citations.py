@@ -237,63 +237,203 @@ def test_an_eu_article_is_pinned_once_in_the_query_s_language(tmp_path, isolated
         assert got[0]["label"].endswith("— Article 5 (text in force)")
 
 
-#: a Codici member per code: R.D. 262/1942 (c.c.), 1398/1930 (c.p.), 1443/1940
-#: (c.p.c.) — tests/test_normattiva.py's BUILT act re-keyed to each, its
-#: first article renumbered to the one each test cites
-_CODES = (("REGIO DECRETO_19420316_262/1942-04-04_042U0262_VIGENZA_2025-06-01_V0.xml",
-           "urn:nir:stato:regio.decreto:1942-03-16;262", "042U0262", "2043", "Codice civile"),
-          ("REGIO DECRETO_19301019_1398/1930-10-26_030U1398_VIGENZA_2025-06-01_V0.xml",
-           "urn:nir:stato:regio.decreto:1930-10-19;1398", "030U1398", "575", "Codice penale"),
-          ("REGIO DECRETO_19401028_1443/1940-10-28_040U1443_VIGENZA_2025-06-01_V0.xml",
-           "urn:nir:stato:regio.decreto:1940-10-28;1443", "040U1443", "360", "Codice di procedura civile"))
+def _french_article_premier(root):
+    """The French Official Journal heads the first article "Article premier"."""
+    from app.plugins.eurlex import source as esrc
+    done = 0
+    for p in (root / esrc.unit_rel("fr", ACT)).glob("*.xml"):
+        b = p.read_bytes()
+        done += b.count(b"<TI.ART>Article 1</TI.ART>")
+        p.write_bytes(b.replace(b"<TI.ART>Article 1</TI.ART>", b"<TI.ART>Article premier</TI.ART>"))
+    assert done == 1
+    return root
+
+
+def test_the_next_language_is_tried_when_the_query_s_does_not_yield_the_article(
+        tmp_path, isolated_config, monkeypatch):
+    """Review of a452309: the language was chosen before checking its Work
+    held the article — "article 1 du règlement (UE) 2016/1036" in French
+    pinned nothing, the French heading being "Article premier"."""
+    root = _french_article_premier(_eu_three_languages(tmp_path / "eurlex"))
+    c, con = _collection(tmp_path, "eurlex", root)
+    lang_of = {r["uid"]: r["lang"] for r in con.execute("SELECT uid, lang FROM documents")}
+    q = "article 1 du règlement (UE) 2016/1036"
+    # the French label is read now: the French text is pinned
+    [f] = articles.pin(q, [c], query_lang="fr")
+    assert lang_of[f["fields"]["versione"]] == "fr" and f["label"].endswith("— article 1 (text in force)")
+    assert eref.article_of_label("Article premier — Objet") == "1" == eref.article_of_label("Article 1er")
+    # a Work in the query's language that does not yield the article: the
+    # preference's next (en), once — never nothing, never every language
+    real = eref.article_of_label
+    monkeypatch.setattr(eref, "article_of_label",
+                        lambda label: None if "premier" in str(label or "") else real(label))
+    [f] = articles.pin(q, [c], query_lang="fr")
+    assert lang_of[f["fields"]["versione"]] == "en"
+    [f] = articles.pin(q, [c], query_lang="de")
+    assert lang_of[f["fields"]["versione"]] == "de", "the query's language first, where it yields"
+
+
+@pytest.mark.parametrize("federated", [False, True])
+def test_the_search_passes_the_plan_s_query_language_to_the_pin(tmp_path, isolated_config,
+                                                                 monkeypatch, federated):
+    from app import retrieval
+    c, con = _collection(tmp_path, "eurlex", _eu_three_languages(tmp_path / "eurlex"))
+    seen = []
+    real = articles.pin
+
+    def spy(*a, **kw):
+        seen.append(kw.get("query_lang"))
+        return real(*a, **kw)
+
+    monkeypatch.setattr(articles, "pin", spy)
+    q = "Article 5 du règlement (UE) 2016/1036 relatif à la défense contre les importations"
+    got = (retrieval.federated_search([c], q, k=5, mode="fts", translate=False) if federated
+           else retrieval.search(con, q, k=5, mode="fts", translate=False, collection=c))
+    assert seen and seen[-1] == got["query_lang"] and got["query_lang"], (seen, got["query_lang"])
+
+
+#: the REAL member layout of the codes (section labels of each code's latest
+#: held version, read on the node 2026-11-12, codes-layout.json sha256
+#: 4c59a108…): an ANNEX code holds its decree's own articles, and c.c. the
+#: 31 preleggi, BEFORE the code's "<annex>-art. N" attachments; c.p.a. four
+#: Allegati each restarting at art. 1; disp. att. c.p.p. one long prefix then
+#: "Norme-art. N"; a STRUCTURED code (c.p.p.) "Art. 01." beside "Art. 1."
+_AKN = """<akomaNtoso xmlns="http://docs.oasis-open.org/legaldocml/ns/akn/3.0">
+<act name="multivigente"><meta><identification source=""><FRBRWork>
+<FRBRthis value="/akn/it/act/{codice}/!main"/>
+<FRBRalias name="urn:nir" value="{urn}"/>
+</FRBRWork></identification><publication date="{gu}" number="1"/></meta>
+<preface><p><docType>{doc_type}</docType> <docDate date="{date}">{date}</docDate>,
+n. <docNumber>{number}</docNumber> <docTitle>{title}</docTitle></p></preface>
+<body>{body}</body>
+<attachments>{annexes}</attachments>
+</act></akomaNtoso>"""
+
+
+def _art(num: str, eid: str) -> str:
+    return (f'<article eId="art_{eid}"><num>Art. {num}.</num><paragraph><num>1.</num><content>'
+            f"<p>TESTO decreto art {num}.</p></content></paragraph></article>")
+
+
+def _annex(name: str) -> str:
+    return (f'<attachment><doc name="{name}"><mainBody><paragraph><content><p>TESTO {name}.</p>'
+            f"</content></paragraph></mainBody></doc></attachment>")
+
+
+def _member(doc_type, date, number, gu, codice, urn, title, body, annexes):
+    member = f"{doc_type}_{date.replace('-', '')}_{number}/{gu}_{codice}_VIGENZA_2025-06-01_V0.xml"
+    xml = _AKN.format(codice=codice, urn=urn, gu=gu, doc_type=doc_type, date=date, number=number,
+                      title=title, body=body, annexes="".join(_annex(a) for a in annexes))
+    return member, xml.encode()
 
 
 def _codici(root):
     from app.plugins.normattiva import source as nsrc
-    from tests.test_normattiva import BUILT, _zip
+    from tests.test_normattiva import _zip
     nsrc._zip_cache.clear()
-    members = {}
-    for member, urn, codice, art, title in _CODES:
-        members[member] = (BUILT.replace(b"urn:nir:stato:decreto:2020-01-02;3", urn.encode())
-                           .replace(b"/akn/it/act/decreto/stato/2020-01-02/3/", f"/akn/it/act/{codice}/".encode())
-                           .replace(b"20G00003", codice.encode())
-                           .replace(b"<docType>DECRETO</docType>", b"<docType>REGIO DECRETO</docType>")
-                           .replace(b"<docNumber>3</docNumber>", f"<docNumber>{urn.rsplit(';', 1)[1]}</docNumber>".encode())
-                           .replace(b"Norme di prova.", title.encode())
-                           .replace(b"Art. 5-bis.", f"Art. {art}.".encode())
-                           .replace(b"art_5-bis", f"art_{art}".encode()))
+    cc = (["Disposizioni sulla legge in generale-art. %d" % n for n in range(1, 32)]
+          + ["CODICE CIVILE-art. %d" % n for n in (1, 2, 12, 2043, 2969)])
+    cpa = [f"Allegato 1 Codice del processo amministrativo-art. {n}" for n in (1, 2, 137)]
+    cpa += [f"Allegato 2 Norme di attuazione-art. {n}" for n in (1, 2)]
+    cpa += [f"Allegato 3 Norme transitorie-art. {n}" for n in (1, 2)]
+    cpa += [f"Allegato 4 Norme di coordinamento e abrogazioni -art. {n}" for n in (1, 2)]
+    dapp = (["Norme di attuazione del Codice di Procedura Penale-art. 1"]
+            + [f"Norme-art. {n}" for n in (2, 3, 260)]
+            + ["Norme di attuazione del Codice di Procedura Penale-Tabella A"])
+    members = dict((
+        _member("REGIO DECRETO", "1942-03-16", "262", "1942-04-04", "042U0262",
+                "urn:nir:stato:regio.decreto:1942-03-16;262", "Approvazione del testo del Codice civile.",
+                _art("1", "1") + _art("2", "2"), cc),
+        _member("DECRETO LEGISLATIVO", "2010-07-02", "104", "2010-07-07", "010G0127",
+                "urn:nir:stato:decreto.legislativo:2010-07-02;104", "Riordino del processo amministrativo.",
+                _art("1", "1") + _art("2", "2"), ["Indice generale"] + cpa),
+        _member("DECRETO LEGISLATIVO", "1989-07-28", "271", "1989-08-05", "089G0347",
+                "urn:nir:stato:decreto.legislativo:1989-07-28;271",
+                "Norme di attuazione del codice di procedura penale.", _art("1", "1"), dapp),
+        _member("DECRETO DEL PRESIDENTE DELLA REPUBBLICA", "1988-09-22", "447", "1988-10-24", "088G0492",
+                "urn:nir:stato:decreto.del.presidente.della.repubblica:1988-09-22;447",
+                "Approvazione del codice di procedura penale.",
+                '<chapter eId="chp_I"><num>-</num><heading>LIBRO I SOGGETTI</heading>'
+                + _art("01", "01") + _art("1", "1") + _art("2", "2") + "</chapter>", []),
+    ))
     _zip(root / "akn/M/codici.zip", members)
     return root
 
 
-def test_a_code_cited_by_its_abbreviation_pins_its_article(tmp_path, isolated_config):
-    c, _ = _collection(tmp_path, "normattiva", _codici(tmp_path / "normattiva"))
-    for q, (_, urn, _, art, _title) in zip(("art. 2043 c.c.", "art. 575 c.p.", "art. 360 c.p.c."), _CODES):
-        [f] = articles.pin(q, [c])
-        assert f["entity_id"] == f"{urn}~art{art}", q
-        assert f["fields"]["testo"].startswith(f"Art. {art}."), q
-        assert f["label"].startswith("REGIO DECRETO") and f", n. {urn.rsplit(';', 1)[1]}" in f["label"], q
+def test_a_code_cited_by_its_abbreviation_pins_the_code_s_own_article(tmp_path, isolated_config):
+    """Review of a452309 (blocking): the first chunk naming the article was
+    the decree's (art. 1) or the preleggi's (art. 12), labelled as the code's."""
+    c, con = _collection(tmp_path, "normattiva", _codici(tmp_path / "normattiva"))
+    assert con.execute("SELECT count(*) FROM documents WHERE error IS NULL").fetchone()[0] == 4
+    for q, urn, art, text in (
+            ("art. 1 c.c.", "regio.decreto:1942-03-16;262", "1", "TESTO CODICE CIVILE-art. 1."),
+            ("art. 12 c.c.", "regio.decreto:1942-03-16;262", "12", "TESTO CODICE CIVILE-art. 12."),
+            ("art. 2043 c.c.", "regio.decreto:1942-03-16;262", "2043", "TESTO CODICE CIVILE-art. 2043."),
+            ("art. 1 c.p.a.", "decreto.legislativo:2010-07-02;104", "1",
+             "TESTO Allegato 1 Codice del processo amministrativo-art. 1."),
+            ("art. 1 disp. att. c.p.p.", "decreto.legislativo:1989-07-28;271", "1",
+             "TESTO Norme di attuazione del Codice di Procedura Penale-art. 1."),
+            ("art. 2 disp. att. c.p.p.", "decreto.legislativo:1989-07-28;271", "2", "TESTO Norme-art. 2."),
+            ("art. 1 c.p.p.", "decreto.del.presidente.della.repubblica:1988-09-22;447", "1",
+             "TESTO decreto art 1."),
+            ("art. 01 c.p.p.", "decreto.del.presidente.della.repubblica:1988-09-22;447", "01",
+             "TESTO decreto art 01.")):
+        got = articles.pin(q, [c])
+        assert len(got) == 1, (q, [g["fields"]["testo"][:60] for g in got])
+        [f] = got
+        assert f["entity_id"] == f"urn:nir:stato:{urn}~art{art}", q
+        assert text in f["fields"]["testo"], (q, f["fields"]["testo"][:80])
         assert f["label"].endswith(f"— art. {art} (testo vigente)"), q
+    # the code's article absent from the annex: nothing, never the decree's or another Allegato's
+    for q in ("art. 3 c.p.a.", "art. 31 c.c.", "art. 4 disp. att. c.p.p."):
+        assert articles.pin(q, [c]) == [], q
     # the table's forms: the long one, optional inner spaces, a suffix
     assert articles.pin("ai sensi dell'articolo 2043 cod. civ.", [c])[0]["entity_id"].endswith("~art2043")
-    assert articles.pin("art. 360 c. p. c.", [c])[0]["entity_id"].endswith("~art360")
+    assert articles.pin("art. 2043 c. c.", [c])[0]["entity_id"].endswith("~art2043")
     [cit] = itref.article_citations("art. 5-bis disp. att. c.c.")
     assert cit.keys == ("urn:nir:stato:regio.decreto:1942-03-30;318",) and cit.article == "5-bis"
     # near-misses: another code's article, forms not in the table, no article
-    for q in ("art. 2043 c.p.", "art. 2043 cc", "art. 360 c.p.c", "art. 2043 c.c.x", "c.c. 2043",
-              "art. 3 Cost.", "art. 3 della Costituzione"):
+    for q in ("art. 2043 c.p.", "art. 2043 cc", "art. 2043 c.c.x", "c.c. 2043", "art. 3 della Costituzione"):
         assert articles.pin(q, [c]) == [], q
-    assert itref.article_citations("art. 3 Cost.") == [], "Cost. is in no table: not pinned"
+
+
+def test_the_annex_rule_reads_the_labels_as_held():
+    from app.ask.articles import in_annex
+    cc, cpa = ("CODICE CIVILE",), ("Allegato 1 Codice del processo amministrativo",)
+    assert in_annex("CODICE CIVILE-art. 2043", cc)
+    assert not in_annex("Disposizioni sulla legge in generale-art. 12", cc)
+    assert not in_annex("Art. 1. — Approvazione", cc), "a decree's own article has no annex"
+    assert not in_annex("codice civile-art. 1", cc), "case as held"
+    assert in_annex("Allegato 1  Codice del processo amministrativo -art. 3", cpa), "whitespace normalised"
+    assert not in_annex("Allegato 4 Norme di coordinamento e abrogazioni -art. 1", cpa)
+    assert in_annex("Anything › Art. 1.", ()), "no annexes: any label"
+    assert itref.label_token("Art. 01.") == "01" and itref.label_token("Art. 1.") == "1"
+    assert itref.label_token("Art. 012.") == "12" and itref.token("art. 01") == "01"
+
+
+def test_the_constitution_is_cited_and_pins_nothing_while_not_held(tmp_path, isolated_config):
+    [cit] = itref.article_citations("art. 3 Cost.")
+    assert cit.keys == ("urn:nir:stato:costituzione:1947-12-27",) and cit.article == "3"
+    c, _ = _collection(tmp_path, "normattiva", _codici(tmp_path / "normattiva"))
+    assert articles.pin("art. 3 Cost.", [c]) == []
 
 
 def test_the_codes_table_is_data_with_its_source():
     import json
     data = json.loads(itref.CODES_FILE.read_text(encoding="utf-8"))
     assert "Normattiva open data" in data["source"] and "b8e2ad6f" in data["source"]
+    assert "4c59a108" in data["annexes"], "the layout the annexes were read from"
     assert len(data["codes"]) == 13
     assert not any("cost" in a.lower() for x in data["codes"] for a in x["abbrev"])
+    [cost] = data["not_in_codici"]
+    assert cost["abbrev"] == ["Cost."] and "acquisition gap" in cost["note"] and "agent" not in cost["note"]
+    assert itref.CODE_URNS["cost."] == "urn:nir:stato:costituzione:1947-12-27"
     assert itref.CODE_URNS["c.p.c."] == "urn:nir:stato:regio.decreto:1940-10-28;1443"
     assert itref.CODE_URNS["disp.att.c.p.p."] == "urn:nir:stato:decreto.legislativo:1989-07-28;271"
+    annexes = {x["abbrev"][0]: x["annexes"] for x in data["codes"]}
+    assert annexes["c.c."] == ["CODICE CIVILE"] and annexes["c.p.p."] == []
+    assert len(annexes["disp. att. c.p.p."]) == 2
+    assert sum(bool(a) for a in annexes.values()) == 8, "the annex layout's eight codes"
 
 
 def test_gdpr_stays_unpinned_no_short_title_is_carried(tmp_path, isolated_config):

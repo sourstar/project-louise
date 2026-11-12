@@ -19,8 +19,10 @@ collection that declares validity:
    primary-key lookup each — else every one of its `also` held;
 2. the version: the one in force on the query's date (`as_of`), else the
    one shown (the last text);
-3. the article: that version's chunk whose label names it, read from the
-   index stores as the reader reads it (app/reader.py);
+3. the article: that version's chunk whose label names it — within the
+   citation's `annexes` where it names some (a code held after its
+   decree's own articles) — read from the index stores as the reader reads
+   it (app/reader.py);
 4. a REPEALED article — one its source's `article_repealed` says is
    (Normattiva's "ARTICOLO ABROGATO …"; absent = never) — also the last
    version in which it still had its text, with that version's dates: what
@@ -28,9 +30,10 @@ collection that declares validity:
 
 ONE LANGUAGE (R1 follow-up b, 2026-11-12). A Work held in several languages
 (EUR-Lex: one Work per act per language, all under the act's `celex:` key)
-is pinned ONCE: in the query's language (the language plan's `query_lang`)
-where held, else the first of the source's `language_preference` held, else
-the first in name order — never once per language held. A key whose Works
+is pinned ONCE: the languages are tried in the query's language (the
+language plan's `query_lang`), then the source's `language_preference`,
+then name order, and the first whose Work yields the article is pinned —
+never once per language held. A key whose Works
 are all in one language (Normattiva, LEGI, NeuRIS) is pinned as before.
 
 The note a fact's label ends with is the source's words (`article_notes`,
@@ -46,6 +49,7 @@ Bounded: MAX_ARTICLES articles a query. A collection that cannot be read is
 skipped, never fatal: the search answers without the pin."""
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from typing import Any, Callable, Iterable
 
@@ -140,29 +144,62 @@ def _chosen(versions: list[dict], as_of: int | None) -> dict | None:
     return live[-1] if live else None
 
 
+#: an annex article's label: "<annex>-art. N" (the last segment; whitespace
+#: around the hyphen as held: "Allegato 4 … abrogazioni -art. 1")
+_ANNEX = re.compile(r"^(?P<annex>.*?\S)\s*-\s*art(?:icolo|\.)", re.I)
+
+
+def _norm(text: str) -> str:
+    return " ".join(text.split())
+
+
+def in_annex(label: str | None, annexes: tuple[str, ...]) -> bool:
+    """Whether a chunk label is in one of the annexes (no annexes: any is):
+    its last segment's name before "-art. N", whitespace normalised, starts
+    with one of them, case as held. A decree's own "Art. 1." has no annex."""
+    if not annexes:
+        return True
+    m = _ANNEX.match(str(label or "").rsplit(" › ", 1)[-1])
+    if m is None:
+        return False
+    name = _norm(m["annex"])
+    return any(name.startswith(_norm(a)) for a in annexes)
+
+
 def _article(collection, native_id: int, want: Cited | str) -> dict | None:
-    """The version's first chunk whose label names the article. `want` a
-    bare token reads labels by Normattiva's grammar."""
+    """The version's first chunk whose label names the article — within the
+    citation's annexes where it names some. `want` a bare token reads
+    labels by Normattiva's grammar."""
     from app import reader
-    read, tok = (label_token, want) if isinstance(want, str) else (want.read, want.article)
+    if isinstance(want, str):
+        read, tok, annexes = label_token, want, ()
+    else:
+        read, tok, annexes = want.read, want.article, want.citation.annexes
     doc = reader.document(collection, int(native_id))
     for ch in (doc or {}).get("chunks") or []:
-        if read(ch.get("chapter")) == tok:
+        label = ch.get("chapter")
+        if read(label) == tok and in_annex(label, annexes):
             return ch
     return None
 
 
-def _one_language(found: list[tuple], query_lang: str | None, prefer: tuple[str, ...]) -> list[tuple]:
-    """Of one key's Works (`found`: (work, versions, version, title, lang)),
-    those of ONE language when they are in several: the query's, else the
-    first of `prefer` held, else the first in name order. A Work with no
-    language is kept."""
+def _by_language(found: list[tuple], query_lang: str | None,
+                 prefer: tuple[str, ...]) -> list[list[tuple]]:
+    """One key's Works (`found`: (work, versions, version, title, lang)) in
+    the order their languages are tried: the query's, then `prefer`, then
+    name order — a group per language; the pin stops at the first group that
+    yields a fact (R1 follow-up b, review 2026-11-12: the query's language
+    may hold the Work and not read its article, French "Article premier").
+    The Works with no language come first, as one group that never stops
+    the search (no language was chosen). Returns [(group, stops)]."""
     langs = sorted({(f[4] or "").lower() for f in found} - {""})
     if len(langs) <= 1:
-        return found
+        return [(found, False)]
     q = (query_lang or "").lower()
-    pick = q if q in langs else next((x for x in prefer if x in langs), langs[0])
-    return [f for f in found if (f[4] or "").lower() in (pick, "")]
+    order = list(dict.fromkeys(([q] if q in langs else []) + [x for x in prefer if x in langs] + langs))
+    bare = [f for f in found if not f[4]]
+    return ([(bare, False)] if bare else []) + [
+        ([f for f in found if (f[4] or "").lower() == x], True) for x in order]
 
 
 def _day(n) -> str | None:
@@ -208,6 +245,27 @@ def _capped(text: str) -> str:
             f"caratteri: il testo intero è nel documento]")
 
 
+def _work_facts(collection, con, key: str, want: Cited, group: list[tuple],
+                as_of: int | None) -> list[dict]:
+    """The article's facts from each of `group`'s Works: the chosen
+    version's, and for a repealed (or absent) article the last text it had."""
+    c, notes, out = want.citation, want.notes, []
+    for work, versions, v, title, _lang in group:
+        act_label = (title or key).split(" — ")[0]
+        ch = _article(collection, v["native_id"], want)
+        changes = _changes(con, work, c.article)
+        if ch is not None:
+            note = notes.in_force if as_of is None else notes.as_of.format(day=_day(as_of))
+            out.append(_fact(collection, key, act_label, c, v, ch, note, changes))
+        if ch is None or want.repealed(str(ch.get("text") or "")):
+            for older in reversed([x for x in versions if x["valid_from"] < v["valid_from"]]):
+                och = _article(collection, older["native_id"], want)
+                if och is not None and not want.repealed(str(och.get("text") or "")):
+                    out.append(_fact(collection, key, act_label, c, older, och, notes.last, changes))
+                    break
+    return out
+
+
 def pin(query: str, collections: Iterable, facts: Iterable = (), *,
         as_of: int | None = None, store=None, query_lang: str | None = None) -> list[dict]:
     """The cited articles' texts as pinned facts (PinnedFact's fields, as
@@ -243,25 +301,13 @@ def pin(query: str, collections: Iterable, facts: Iterable = (), *,
                                           (v["uid"],)).fetchone()
                         found.append((work, versions, v, row[0] if row else None,
                                       row[1] if row else None))
-                    notes = want.notes
-                    for work, versions, v, title, _lang in _one_language(found, query_lang,
-                                                                         want.languages):
-                        act_label = (title or key).split(" — ")[0]
-                        ch = _article(collection, v["native_id"], want)
-                        changes = _changes(con, work, c.article)
-                        if ch is not None:
-                            note = notes.in_force if as_of is None else notes.as_of.format(day=_day(as_of))
-                            out.append(_fact(collection, key, act_label, c, v, ch, note, changes))
-                        if ch is None or want.repealed(str(ch.get("text") or "")):
-                            for older in reversed([x for x in versions
-                                                   if x["valid_from"] < v["valid_from"]]):
-                                och = _article(collection, older["native_id"], want)
-                                if och is not None and not want.repealed(str(och.get("text") or "")):
-                                    out.append(_fact(collection, key, act_label, c, older, och,
-                                                     notes.last, changes))
-                                    break
+                    for group, stops in _by_language(found, query_lang, want.languages):
+                        before = len(out)
+                        out += _work_facts(collection, con, key, want, group, as_of)
                         if len(out) >= MAX_ARTICLES:
                             return out[:MAX_ARTICLES]
+                        if stops and len(out) > before:
+                            break
         except Exception:                    # noqa: BLE001 — never fatal to the search
             continue
         finally:
