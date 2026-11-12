@@ -46,12 +46,35 @@ def read_claim(con) -> dict | None:
         return None
 
 
+def _me() -> str:
+    """This process on this host: the pid AND its PID namespace
+    (`model_pins.process_tag`). A pid alone names a process only inside its
+    container, and the worker and a supervised `hold records fetch` pass
+    can each be pid 1 in their own: each read the other's claim as its own
+    and both fetched the same pending list (the cross-container collision
+    #582 fixed for leases and pins, 2026-11-12)."""
+    from .. import model_pins
+    return model_pins.process_tag()
+
+
+def _mine(claim: dict | None) -> bool:
+    """Is `claim` this process's? A claim from before the tag (pid only) is
+    read as `pid N`, which the tag of a process outside a namespace equals."""
+    if not claim:
+        return False
+    return claim.get("holder", f"pid {claim.get('pid')}") == _me()
+
+
+def _record(source_id: str, now: float) -> str:
+    return json.dumps({"pid": os.getpid(), "holder": _me(), "ts": now, "source_id": source_id})
+
+
 def _is_live(claim: dict | None, now: float) -> bool:
     if not claim:
         return False
     if now - float(claim.get("ts", 0)) > STALE_AFTER_SECONDS:
         return False          # stale: the holder died or hung; take it over
-    return claim.get("pid") != os.getpid()
+    return not _mine(claim)
 
 
 @contextmanager
@@ -66,16 +89,15 @@ def acquisition_claim(con, source_id: str, force: bool = False):
     if not force and _is_live(existing, now):
         held_for = int(now - float(existing.get("ts", now)))
         raise AcquisitionBusy(
-            f"{source_id}: acquisition already running in pid {existing.get('pid')} "
+            f"{source_id}: acquisition already running in "
+            f"{existing.get('holder') or 'pid ' + str(existing.get('pid'))} "
             f"(claimed {held_for}s ago). Wait for it to finish, or re-run once the "
             f"claim goes stale after {STALE_AFTER_SECONDS}s.")
-    db.set_control(con, CLAIM_KEY,
-                    json.dumps({"pid": os.getpid(), "ts": now, "source_id": source_id}))
+    db.set_control(con, CLAIM_KEY, _record(source_id, now))
     try:
         yield
     finally:
-        current = read_claim(con)
-        if current and current.get("pid") == os.getpid():
+        if _mine(read_claim(con)):
             db.set_control(con, CLAIM_KEY, "")
 
 
@@ -85,8 +107,6 @@ def refresh_claim(con, source_id: str, last_refresh: float) -> float:
     now = time.time()
     if now - last_refresh < _REFRESH_EVERY:
         return last_refresh
-    current = read_claim(con)
-    if current and current.get("pid") == os.getpid():
-        db.set_control(con, CLAIM_KEY,
-                        json.dumps({"pid": os.getpid(), "ts": now, "source_id": source_id}))
+    if _mine(read_claim(con)):
+        db.set_control(con, CLAIM_KEY, _record(source_id, now))
     return now
