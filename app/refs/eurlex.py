@@ -57,7 +57,7 @@ import re
 from pathlib import Path
 from typing import Iterator
 
-from ..plugins.base import (ArticleCitation, Entity, RefColumn, RefLink, RefLookup, RefRecordBatch, RefSchema,
+from ..plugins.base import (ArticleCitation, ArticleNotes,Entity, RefColumn, RefLink, RefLookup, RefRecordBatch, RefSchema,
                             RefSyncState, RefTable)
 
 SOURCE_ID = "eurlex-refs"
@@ -165,6 +165,12 @@ class EurlexRefSource:
     ref_version = 1
     namespaces = NAMESPACES
     eli_jurisdiction = ELI_JURISDICTION
+    #: a pinned article's note: the English default (app/ask/articles.py)
+    article_notes = ArticleNotes()
+    #: an act held in several languages is pinned ONCE (app/ask/articles.py):
+    #: in the query's language, else the first of these held, else the first
+    #: in name order — the order the act's title is taken in (`sync`)
+    language_preference = _TITLE_LANGUAGES
 
     def key_lookup(self, canonical: str) -> tuple[str, str, str] | None:
         """`(table, column, value)` holding a canonical id the records' `keys`
@@ -346,7 +352,11 @@ class CitationResolver:
 # ---- the articles a query cites (legal-chunking-retrieval.md R1) ---------------------------
 #
 # No alias table: "art. 17 GDPR" names no act this grammar can read, and none
-# is invented here — an act is cited by its number or its CELEX.
+# is invented here — an act is cited by its number or its CELEX. An acronym
+# could be read only from DATA with a named source: a short or popular title
+# the CDM notice carries. The notice as app/plugins/eurlex/notice.py reads it
+# carries none (no short, popular or alternative title field, in the parser
+# or the fixtures, 2026-11-12), so "GDPR" stays unpinned until one is read.
 
 #: the word for "article" in the languages the grammar reads (`_ARTICLE`)
 _ART_WORD = r"(?:Article|Artikel|Articolo|Artículo|Articulo|Artigo|Art\.)"

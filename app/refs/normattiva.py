@@ -31,6 +31,14 @@ reference data's version, as the gene resolver does. It is a pure
 function of the query text and the tables' content (invariant 3). An
 article number in the citation is kept on the entity's label; the entity
 is the act, as the record is.
+
+A CODE CITED BY ITS ABBREVIATION — "art. 2043 c.c.", "art. 575 c.p.",
+"art. 360 c.p.c." — is read from app/refs/normattiva_codes.json: SOURCE,
+Normattiva open data, the pre-packaged collection "Codici"
+(akn/M/codici.zip, 40 acts; the API's `collection-predefinite` answer of
+2026-11-12, sha256 b8e2ad6f…, the file's `source` in full), its URNs and
+titles as Normattiva lists them, with the citation forms of Italian legal
+usage for each act (`code_citations`). "Cost." is not in it and is not read.
 """
 from __future__ import annotations
 
@@ -42,7 +50,7 @@ import zipfile
 from pathlib import Path
 from typing import Iterator
 
-from ..plugins.base import (ArticleCitation, Entity, RefColumn, RefLink, RefLookup, RefRecordBatch, RefSchema,
+from ..plugins.base import (ArticleCitation, ArticleNotes,Entity, RefColumn, RefLink, RefLookup, RefRecordBatch, RefSchema,
                             RefSyncState, RefTable)
 
 SOURCE_ID = "normattiva-refs"
@@ -174,6 +182,11 @@ class NormattivaRefSource:
     ref_version = 2            # 2: the `akn` column (2026-10-12)
     namespaces = NAMESPACES
     eli_jurisdiction = ELI_JURISDICTION
+    #: a pinned article's note, in Italian (app/ask/articles.py)
+    article_notes = ArticleNotes("testo vigente", "testo al {day}", "ultimo testo in vigore")
+
+    def article_repealed(self, text: str) -> bool:
+        return article_repealed(text)
 
     def key_lookup(self, canonical: str) -> tuple[str, str, str] | None:
         """`(table, column, value)` holding a canonical id the records'
@@ -577,4 +590,75 @@ def article_citations(query: str, refs: RefLookup | None = None, facts=()) -> li
                     and eid not in also):
                 also.append(eid)
         out.append(ArticleCitation(keys=keys, article=tok, label=f"art. {tok}", also=tuple(also)))
+    for cited in code_citations(query):
+        if cited not in out:
+            out.append(cited)
     return out
+
+
+# ---- a code by its abbreviation: "art. 2043 c.c." (R1 follow-up c) -------------------------
+#
+# FROM DATA WITH A NAMED SOURCE: app/refs/normattiva_codes.json — the acts of
+# Normattiva's pre-packaged open-data collection "Codici" (akn/M/codici.zip),
+# their URNs and titles as the Normattiva open-data API lists them (the
+# file's `source` names the call, its time and the answer's sha256), with
+# the citation forms of Italian legal usage for each. Nothing else is read as
+# a code: "Cost." is not in "Codici" (the Constitution is in no predefined
+# collection, docs/notes/normattiva-multivigenza-review.md §6.3), so
+# "art. 3 Cost." pins nothing until its URN is in data.
+
+CODES_FILE = Path(__file__).with_name("normattiva_codes.json")
+
+
+def _abbrev_re(abbrev: str) -> str:
+    """"c.p.c." → `c\\.\\s*p\\.\\s*c\\.`: a space after an inner dot is
+    optional, a space in the form is any run of spaces; case folded."""
+    parts = [re.escape(w) for w in abbrev.split()]
+    return r"\s+".join(re.sub(r"\\\.(?=.)", r"\\.\\s*", p) for p in parts)
+
+
+def _load_codes() -> tuple[dict[str, str], re.Pattern]:
+    import json
+    data = json.loads(CODES_FILE.read_text(encoding="utf-8"))
+    urns: dict[str, str] = {}
+    for code in data["codes"]:
+        for a in code["abbrev"]:
+            urns[re.sub(r"\s+", "", a.lower())] = code["urn"]
+    # longest first: "disp. att. c.p.c." before "c.p.c." before "c.p."
+    forms = sorted({a for code in data["codes"] for a in code["abbrev"]}, key=len, reverse=True)
+    alts = "|".join(_abbrev_re(a) for a in forms)
+    pattern = re.compile(
+        r"\bart(?:icolo|\.)?\s*(?P<num>\d+)\s*[-_ ]?\s*"
+        r"(?P<suf>bis|ter|quater|quinquies|sexies|septies|octies|novies|decies)?\s*,?\s*"
+        rf"(?P<code>{alts})(?![\w.])", re.I)
+    return urns, pattern
+
+
+CODE_URNS, _CODE_CITE = _load_codes()
+
+
+def code_citations(query: str) -> list[ArticleCitation]:
+    """"art. 2043 c.c.", "art. 360 c.p.c.", "art. 5 disp. att. c.c.": the
+    article of the code the abbreviation names, keyed on the code's URN
+    from the "Codici" table — the Work the collection holds under it."""
+    out: list[ArticleCitation] = []
+    for m in _CODE_CITE.finditer(query or ""):
+        urn = CODE_URNS.get(re.sub(r"\s+", "", m["code"].lower()))
+        if urn is None:
+            continue
+        tok = f"{int(m['num'])}-{m['suf'].lower()}" if m["suf"] else str(int(m["num"]))
+        cited = ArticleCitation(keys=(urn,), article=tok, label=f"art. {tok}")
+        if cited not in out:
+            out.append(cited)
+    return out
+
+
+#: an article repealed in place: its chunk says so in its first lines
+_REPEALED = re.compile(r"\bARTICOLO\s+ABROGATO\b|^\s*\(?\s*abrogato\s*\)?\s*\.?\s*$", re.I | re.M)
+
+
+def article_repealed(text: str) -> bool:
+    """Normattiva's "((ARTICOLO ABROGATO DAL …))" or a bare "(abrogato)"
+    after the article's heading line (moved from app/ask/articles.py)."""
+    body = text.split("\n", 1)[1] if "\n" in text else text
+    return bool(_REPEALED.search(body[:300]))

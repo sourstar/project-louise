@@ -1,0 +1,19 @@
+{
+  "source": "Normattiva open data, pre-packaged collection \"Codici\" (akn/M/codici.zip, 40 acts; API GET https://api.normattiva.it/t/normattiva.api/bff-opendata/v1/api/v1/collections/collection-predefinite, fetched 2026-11-12T05:35:18Z, answer sha256 b8e2ad6fe921feb8f511769ff86dc8018071e5a314a9fdf984bd2ca024eb3ed0; member list /root/measure/codici/codici.jsonl on the node, sha256 ad98e0f621843fc1be36394484f06bcc419a1c45575a1bf383baff218bc01715). URNs and titles are Normattiva's; the abbreviations are the citation forms in Italian legal usage for those acts.",
+  "codes": [
+    {"abbrev": ["c.c.", "cod. civ."], "urn": "urn:nir:stato:regio.decreto:1942-03-16;262", "title": "Approvazione del testo del Codice civile. (042U0262)"},
+    {"abbrev": ["disp. att. c.c."], "urn": "urn:nir:stato:regio.decreto:1942-03-30;318", "title": "Disposizioni per l'attuazione del Codice civile e disposizioni transitorie. (042U0318)"},
+    {"abbrev": ["c.p.", "cod. pen."], "urn": "urn:nir:stato:regio.decreto:1930-10-19;1398", "title": "Approvazione del testo definitivo del Codice Penale. (030U1398)"},
+    {"abbrev": ["c.p.c.", "cod. proc. civ."], "urn": "urn:nir:stato:regio.decreto:1940-10-28;1443", "title": "Codice di procedura civile. (040U1443)"},
+    {"abbrev": ["disp. att. c.p.c."], "urn": "urn:nir:stato:regio.decreto:1941-12-18;1368", "title": "Disposizioni per l'attuazione del Codice di procedura civile e disposizioni transitorie. (041U1368)"},
+    {"abbrev": ["c.p.p.", "cod. proc. pen."], "urn": "urn:nir:stato:decreto.del.presidente.della.repubblica:1988-09-22;447", "title": "Approvazione del codice di procedura penale."},
+    {"abbrev": ["disp. att. c.p.p."], "urn": "urn:nir:stato:decreto.legislativo:1989-07-28;271", "title": "Norme di attuazione, di coordinamento e transitorie del codice di procedura penale."},
+    {"abbrev": ["c.d.s.", "cod. strada"], "urn": "urn:nir:stato:decreto.legislativo:1992-04-30;285", "title": "Nuovo codice della strada."},
+    {"abbrev": ["cod. nav."], "urn": "urn:nir:stato:regio.decreto:1942-03-30;327", "title": "Approvazione del testo definitivo del Codice della navigazione. (042U0327)"},
+    {"abbrev": ["cod. cons."], "urn": "urn:nir:stato:decreto.legislativo:2005-09-06;206", "title": "Codice del consumo, a norma dell'articolo 7 della legge 29 luglio 2003, n. 229."},
+    {"abbrev": ["c.a.d."], "urn": "urn:nir:stato:decreto.legislativo:2005-03-07;82", "title": "Codice dell'amministrazione digitale."},
+    {"abbrev": ["c.p.a."], "urn": "urn:nir:stato:decreto.legislativo:2010-07-02;104", "title": "Attuazione dell'articolo 44 della legge 18 giugno 2009, n. 69, recante delega al governo per il riordino del processo amministrativo. (10G0127)"},
+    {"abbrev": ["cod. privacy"], "urn": "urn:nir:stato:decreto.legislativo:2003-06-30;196", "title": "Codice in materia di protezione dei dati personali"}
+  ],
+  "not_in_codici": "The Constitution (\"Cost.\") is NOT in the Codici collection; it is in \"Leggi costituzionali\" (50 acts). Leave \"Cost.\" out unless the agent finds its URN in that collection's records."
+}

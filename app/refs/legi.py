@@ -63,7 +63,7 @@ import unicodedata
 from pathlib import Path
 from typing import Iterator
 
-from ..plugins.base import (ArticleCitation, Entity, RefColumn, RefLink, RefLookup, RefRecordBatch, RefSchema,
+from ..plugins.base import (ArticleCitation, ArticleNotes,Entity, RefColumn, RefLink, RefLookup, RefRecordBatch, RefSchema,
                             RefSyncState, RefTable)
 
 SOURCE_ID = "legi-refs"
@@ -229,6 +229,8 @@ class LegiRefSource:
     ref_version = 1
     namespaces = NAMESPACES
     eli_jurisdiction = ELI_JURISDICTION
+    #: a pinned article's note, in French (app/ask/articles.py)
+    article_notes = ArticleNotes("texte en vigueur", "texte au {day}", "dernier texte en vigueur")
 
     def key_lookup(self, canonical: str) -> tuple[str, str, str] | None:
         """`(table, column, value)` for a key a `legi` record writes: its

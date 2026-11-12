@@ -47,7 +47,7 @@ import threading
 from collections.abc import Iterator
 from pathlib import Path
 
-from ..plugins.base import (ArticleCitation, 
+from ..plugins.base import (ArticleCitation, ArticleNotes,
     Entity,
     RefColumn,
     RefLink,
@@ -136,6 +136,8 @@ class NeurisRefSource:
     protocol_version = 1
     namespaces = NAMESPACES
     eli_jurisdiction = ELI_JURISDICTION
+    #: a pinned provision's note, in German (app/ask/articles.py)
+    article_notes = ArticleNotes("geltende Fassung", "Fassung vom {day}", "letzte geltende Fassung")
 
     def key_lookup(self, canonical: str) -> tuple[str, str, str] | None:
         """`(table, column, value)` holding a canonical id a record's `keys`

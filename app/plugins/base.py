@@ -518,12 +518,30 @@ class ArticleCitation:
     also: tuple[str, ...] = ()
 
 
+@dataclass(frozen=True)
+class ArticleNotes:
+    """The words a pinned article's label ends with, in the source's own
+    language (docs/notes/legal-chunking-retrieval.md R1, follow-up d): the
+    text in force, the text at a date (`{day}` = YYYY-MM-DD), the last text
+    a repealed article had. The default is English, EUR-Lex's."""
+    in_force: str = "text in force"
+    as_of: str = "text as of {day}"
+    last: str = "last text in force"
+
+
 class LegalReferenceSource(Protocol):
     """A reference source whose collections hold articles under a validity
     axis (normattiva, legi, neuris, eurlex). Optional on a ReferenceSource:
     absent = no citations. `refs` is the refs store, or None when the
     caller has none (a grammar that needs it then cites nothing); `facts`
-    the query's pinned facts."""
+    the query's pinned facts.
+
+    Optional too (app/ask/articles.py reads them with a default):
+    `article_repealed(text) -> bool`, whether an article's chunk says it is
+    repealed in place (absent = never: Normattiva's "ARTICOLO ABROGATO");
+    `article_notes`, an `ArticleNotes` (absent = the English default);
+    `language_preference`, the languages a Work held in several is pinned
+    in when the query's is not held, first first (absent = name order)."""
 
     def article_citations(self, query: str, refs: "RefLookup | None",
                           facts: Any = ()) -> list[ArticleCitation]: ...

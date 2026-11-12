@@ -72,8 +72,11 @@ def test_the_italian_grammar_is_normattiva_s_unchanged():
     assert c.keys == () and c.also == ("urn:nir:stato:legge:1990-08-07;241",), "no date: the act the facts resolved"
     assert itref.article_citations("articolo 5-bis del d.lgs. n. 82 del 2005")[0].article == "5-bis"
     # near-misses: no article, no act, not the word "art."
-    for q in ("legge 241/1990", "arte 5 della legge 241/1990", "art. 5", "art. 2043 c.c."):
+    for q in ("legge 241/1990", "arte 5 della legge 241/1990", "art. 5", "art. 2043 c.x."):
         assert itref.article_citations(q) == [], q
+    # a code by its abbreviation (follow-up c): an addition, from the Codici table
+    [c] = itref.article_citations("art. 2043 c.c.")
+    assert (c.keys, c.article, c.label) == (("urn:nir:stato:regio.decreto:1942-03-16;262",), "2043", "art. 2043")
     assert itref.label_token("TITOLO I — X › Art. 1.") == "1" and articles.token is itref.token
 
 
@@ -126,7 +129,7 @@ def test_a_french_article_is_pinned_in_the_version_in_force(held):  # noqa: F811
     store = _store(c.corpus_dir.parent, c.corpus_dir.parent, "legi-refs")
     q = "article 9 du code des instruments monétaires et des médailles"
     [now] = articles.pin(q, [c], store=store)
-    assert "désormais" in now["fields"]["testo"] and now["label"].endswith("— article 9 (testo vigente)")
+    assert "désormais" in now["fields"]["testo"] and now["label"].endswith("— article 9 (texte en vigueur)")
     [then] = articles.pin(q, [c], as_of=19990101, store=store)
     assert "anciennement" in then["fields"]["testo"] and then["fields"]["fino al"] == "2006-12-27"
     assert articles.pin(q, [c]) == [], "no refs store: the code cannot be named"
@@ -203,3 +206,130 @@ def test_normattiva_s_pins_are_identical_before_and_after(versioned, as_of):  # 
             assert articles.pin(q, [c], facts, as_of=as_of) == old, (q, facts, as_of)
             nonempty += bool(old)
     assert nonempty >= (6 if as_of != 19400101 else 0), "the set exercises the pin, not only its refusals"
+
+
+# ---- R1 follow-ups (b), (c), (d), 2026-11-12 ----------------------------------------------
+
+def _eu_three_languages(root):
+    """ACT in en, fr and de: the real Formex and notice re-languaged, as the
+    acquisition lays out three `lang=` slices of one act."""
+    from tests.test_eurlex import _notice_for, _unit
+    for lang, l3 in (("en", b"ENG"), ("fr", b"FRA"), ("de", b"DEU")):
+        unit = _unit(root, lang, ACT, ACT, _notice_for(ACT).replace(b">ENG<", b">" + l3 + b"<"))
+        up = lang.upper().encode()
+        for p in unit.glob("*.xml"):
+            if p.name != "notice.xml":
+                p.write_bytes(p.read_bytes().replace(b"<LG.DOC>EN", b"<LG.DOC>" + up)
+                              .replace(b"<LG.OJ>EN", b"<LG.OJ>" + up))
+    return root
+
+
+def test_an_eu_article_is_pinned_once_in_the_query_s_language(tmp_path, isolated_config):
+    c, con = _collection(tmp_path, "eurlex", _eu_three_languages(tmp_path / "eurlex"))
+    lang_of = {r["uid"]: r["lang"] for r in con.execute("SELECT uid, lang FROM documents")}
+    assert sorted(lang_of.values()) == ["de", "en", "fr"], "three languages held"
+    q = "Article 5 of Regulation (EU) 2016/1036"
+    for query_lang, want in (("fr", "fr"), ("de", "de"), ("en", "en"), (None, "en"), ("it", "en")):
+        got = articles.pin(q, [c], query_lang=query_lang)
+        assert len(got) == 1, (query_lang, [g["fields"]["versione"] for g in got])
+        assert lang_of[got[0]["fields"]["versione"]] == want, \
+            "the query's language; else the first of the source's preference held"
+        assert got[0]["label"].endswith("— Article 5 (text in force)")
+
+
+#: a Codici member per code: R.D. 262/1942 (c.c.), 1398/1930 (c.p.), 1443/1940
+#: (c.p.c.) — tests/test_normattiva.py's BUILT act re-keyed to each, its
+#: first article renumbered to the one each test cites
+_CODES = (("REGIO DECRETO_19420316_262/1942-04-04_042U0262_VIGENZA_2025-06-01_V0.xml",
+           "urn:nir:stato:regio.decreto:1942-03-16;262", "042U0262", "2043", "Codice civile"),
+          ("REGIO DECRETO_19301019_1398/1930-10-26_030U1398_VIGENZA_2025-06-01_V0.xml",
+           "urn:nir:stato:regio.decreto:1930-10-19;1398", "030U1398", "575", "Codice penale"),
+          ("REGIO DECRETO_19401028_1443/1940-10-28_040U1443_VIGENZA_2025-06-01_V0.xml",
+           "urn:nir:stato:regio.decreto:1940-10-28;1443", "040U1443", "360", "Codice di procedura civile"))
+
+
+def _codici(root):
+    from app.plugins.normattiva import source as nsrc
+    from tests.test_normattiva import BUILT, _zip
+    nsrc._zip_cache.clear()
+    members = {}
+    for member, urn, codice, art, title in _CODES:
+        members[member] = (BUILT.replace(b"urn:nir:stato:decreto:2020-01-02;3", urn.encode())
+                           .replace(b"/akn/it/act/decreto/stato/2020-01-02/3/", f"/akn/it/act/{codice}/".encode())
+                           .replace(b"20G00003", codice.encode())
+                           .replace(b"<docType>DECRETO</docType>", b"<docType>REGIO DECRETO</docType>")
+                           .replace(b"<docNumber>3</docNumber>", f"<docNumber>{urn.rsplit(';', 1)[1]}</docNumber>".encode())
+                           .replace(b"Norme di prova.", title.encode())
+                           .replace(b"Art. 5-bis.", f"Art. {art}.".encode())
+                           .replace(b"art_5-bis", f"art_{art}".encode()))
+    _zip(root / "akn/M/codici.zip", members)
+    return root
+
+
+def test_a_code_cited_by_its_abbreviation_pins_its_article(tmp_path, isolated_config):
+    c, _ = _collection(tmp_path, "normattiva", _codici(tmp_path / "normattiva"))
+    for q, (_, urn, _, art, _title) in zip(("art. 2043 c.c.", "art. 575 c.p.", "art. 360 c.p.c."), _CODES):
+        [f] = articles.pin(q, [c])
+        assert f["entity_id"] == f"{urn}~art{art}", q
+        assert f["fields"]["testo"].startswith(f"Art. {art}."), q
+        assert f["label"].startswith("REGIO DECRETO") and f", n. {urn.rsplit(';', 1)[1]}" in f["label"], q
+        assert f["label"].endswith(f"— art. {art} (testo vigente)"), q
+    # the table's forms: the long one, optional inner spaces, a suffix
+    assert articles.pin("ai sensi dell'articolo 2043 cod. civ.", [c])[0]["entity_id"].endswith("~art2043")
+    assert articles.pin("art. 360 c. p. c.", [c])[0]["entity_id"].endswith("~art360")
+    [cit] = itref.article_citations("art. 5-bis disp. att. c.c.")
+    assert cit.keys == ("urn:nir:stato:regio.decreto:1942-03-30;318",) and cit.article == "5-bis"
+    # near-misses: another code's article, forms not in the table, no article
+    for q in ("art. 2043 c.p.", "art. 2043 cc", "art. 360 c.p.c", "art. 2043 c.c.x", "c.c. 2043",
+              "art. 3 Cost.", "art. 3 della Costituzione"):
+        assert articles.pin(q, [c]) == [], q
+    assert itref.article_citations("art. 3 Cost.") == [], "Cost. is in no table: not pinned"
+
+
+def test_the_codes_table_is_data_with_its_source():
+    import json
+    data = json.loads(itref.CODES_FILE.read_text(encoding="utf-8"))
+    assert "Normattiva open data" in data["source"] and "b8e2ad6f" in data["source"]
+    assert len(data["codes"]) == 13
+    assert not any("cost" in a.lower() for x in data["codes"] for a in x["abbrev"])
+    assert itref.CODE_URNS["c.p.c."] == "urn:nir:stato:regio.decreto:1940-10-28;1443"
+    assert itref.CODE_URNS["disp.att.c.p.p."] == "urn:nir:stato:decreto.legislativo:1989-07-28;271"
+
+
+def test_gdpr_stays_unpinned_no_short_title_is_carried(tmp_path, isolated_config):
+    """The CDM notice as the plugin reads it carries no short or popular
+    title, so no acronym is read from data and none is invented."""
+    from app.plugins.eurlex import notice
+    assert not [k for k in notice.Notice.__dataclass_fields__
+                if any(w in k for w in ("short", "popular", "alternative", "acronym"))]
+    c, _ = _collection(tmp_path, "eurlex", build_corpus(tmp_path / "eurlex"))
+    assert eref.article_citations("art. 17 GDPR") == []
+    assert articles.pin("art. 17 GDPR", [c]) == []
+
+
+def test_each_source_says_what_is_repealed_and_the_note_s_words():
+    it, fr, de, eu = (refs.REFS_REGISTRY[s] for s in ("normattiva-refs", "legi-refs", "neuris-refs",
+                                                       "eurlex-refs"))
+    gone = "Art. 6.\n((ARTICOLO ABROGATO DAL D.LGS. 1 GENNAIO 2021, N. 1))"
+    assert it.article_repealed(gone) and it.article_repealed("Art. 6.\n(abrogato)")
+    assert not it.article_repealed("Art. 6.\nIl comma 2 dell'art. 9 è abrogato dalla legge n. 1.")
+    assert articles.repealed(it, gone) and not any(articles.repealed(s, gone) for s in (fr, de, eu)), \
+        "absent = never: Normattiva's marker is Normattiva's"
+    assert [s.article_notes.in_force for s in (it, fr, de, eu)] == \
+        ["testo vigente", "texte en vigueur", "geltende Fassung", "text in force"]
+    assert [s.article_notes.last for s in (it, fr, de, eu)] == \
+        ["ultimo testo in vigore", "dernier texte en vigueur", "letzte geltende Fassung", "last text in force"]
+    assert it.article_notes.as_of.format(day="1999-01-01") == "testo al 1999-01-01"
+    assert eu.language_preference[0] == "en"
+
+
+def test_the_fact_s_keys_are_the_api_s_whatever_the_source(held):  # noqa: F811
+    c, _ = held
+    store = _store(c.corpus_dir.parent, c.corpus_dir.parent, "legi-refs")
+    q = "article 9 du code des instruments monétaires et des médailles"
+    [now] = articles.pin(q, [c], store=store)
+    assert now["label"].endswith("— article 9 (texte en vigueur)")
+    assert {"testo", "in vigore dal", "fino al", "versione", "chunk"} <= set(now["fields"]) <= \
+        {"testo", "in vigore dal", "fino al", "versione", "chunk", "modificato da"}
+    [then] = articles.pin(q, [c], as_of=19990101, store=store)
+    assert then["label"].endswith("(texte au 1999-01-01)")
