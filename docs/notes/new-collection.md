@@ -33,7 +33,7 @@ checked against the one before it, and each says what it found.
 | 6 | carry | Re-creation only: takes from the predecessor what is provably identical (RULE 1). Its parts are seeded, each checked against its root. A sample of chunks is re-encoded by the new run and held to the stored vectors. Then the manifest, text index and vectors are copied and proven by digest. | The sample falls below the space's tolerance (exit 1). The copy is not its source's. There is no room for it. |
 | 7 | cpu-reference | Writes the collection's copy of the CPU reference from the store. Nothing is computed twice. | The twin is not reproducible. |
 | 8 | gate | `hold embedder check`, for each role. | The gate fails (exit 1). |
-| 9 | swap | Re-creation only: prints the predecessor's `forget` and its size, for the operator. After it, takes the predecessor's name and its collection file. It deletes nothing. | The predecessor is still held (exit 2, until the operator forgets it). |
+| 9 | swap | Re-creation only: prints the predecessor's `forget` and its size, for the operator. After it, takes the predecessor's name and its collection file. It deletes nothing. | The predecessor is still held (exit 4, its own code — every refusal is 2 — until the operator forgets it). |
 
 The workflow is resumable. Its progress is kept in
 `<LOUISE_ROOT>/state/new/<name>.json`, from before the collection exists. Run it
@@ -250,7 +250,7 @@ to expect:
   byte by digest, which reads both tables once. All of it is recorded in
   `<LOUISE_ROOT>/state/new/normattiva.json`.
 - **cpu-reference**, then **gate**.
-- **swap**: stops with exit 2.
+- **swap**: stops with exit 4, its own code; a refusal is exit 2 and never means "forget now" (legi, 2026-11-12: a script read a refusal as the swap and forgot the predecessor).
 
 **4. The forget, with the operator's yes.** The swap prints
 `louise hold collection forget normattiva --yes` and its size:

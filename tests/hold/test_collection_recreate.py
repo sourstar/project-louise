@@ -36,6 +36,10 @@ NEW_ENGINE = {**ENGINE_TABLE, "build": "b20000", "image": "sha256:" + "d1" * 32}
 CARD_RUN = "sha256:run-card"
 
 
+
+#: case F waiting at its swap: its own exit code, never a refusal's 2
+SWAP_WAITS = 4
+
 def _new_recipe(tmp_path, **space_over) -> str:
     """The re-creation's recipe: the predecessor's, its engine the new one,
     no tolerance stated (it is measured)."""
@@ -156,7 +160,7 @@ def test_a_re_creation_carries_the_vectors_and_stops_before_the_swap_deleting_no
         held, steps, tmp_path, capsys):
     root, old, chunks = held
     assert chunks > 4, "the fixture holds more chunks than the sample re-encodes"
-    assert _new(root, _new_recipe(tmp_path)) == 2, "the swap waits for the operator's forget"
+    assert _new(root, _new_recipe(tmp_path)) == SWAP_WAITS, "the swap waits for the operator's forget"
     assert steps["order"] == ["calibrate", "create", "sample", "carry", "cpu-reference", "gate"]
     assert steps["encoder"].texts == 4, "the sample alone reached the encoder: N, never the corpus"
     new = col.read(root, "old.next")
@@ -181,7 +185,7 @@ def test_after_the_operators_forget_the_swap_takes_the_name_and_the_file(held, s
     from app import node_state
     root, old, chunks = held
     recipe_path = _new_recipe(tmp_path)
-    assert _new(root, recipe_path) == 2
+    assert _new(root, recipe_path) == SWAP_WAITS
     made = col.read(root, "old.next")
     forget_mod.forget(root, "old")                     # the operator's, in the session that deletes
     steps["order"].clear()
@@ -219,7 +223,7 @@ def test_a_stop_after_the_carry_resumes_without_carrying_again(held, steps, tmp_
     assert steps["order"] == ["calibrate", "create", "sample", "carry", "cpu-reference"]
     steps["order"].clear()
     steps["cpu_rc"] = 0
-    assert _new(root, _new_recipe(tmp_path)) == 2
+    assert _new(root, _new_recipe(tmp_path)) == SWAP_WAITS
     assert steps["order"] == ["cpu-reference", "gate"], "calibrate, make and carry checked, not redone"
     assert steps["encoder"].calls == 1, "the sample was not re-encoded"
 
@@ -265,7 +269,7 @@ def test_the_carry_asks_for_the_predecessors_pause_while_the_worker_holds_it(hel
     assert "louise node pause old" in capsys.readouterr().err
     assert "carry" not in steps["order"] and steps["encoder"].calls == 0
     steps["order"].clear()
-    assert _new(root, _new_recipe(tmp_path)) == 2, "resumed at the carry once it is let go"
+    assert _new(root, _new_recipe(tmp_path)) == SWAP_WAITS, "resumed at the carry once it is let go"
     assert steps["order"] == ["sample", "carry", "cpu-reference", "gate"]
 
 
@@ -324,7 +328,7 @@ def test_a_dry_run_writes_nothing_and_says_what_the_run_would_do(held, steps, tm
     assert "1/9 resolve       ran in this dry run" in said and "3/9 calibrate     would run" in said
     seed = said.split("seed ", 1)[1].split()[0]
     # the whole run, after it, draws with the seed the dry run printed
-    assert _new(root, recipe_path) == 2
+    assert _new(root, recipe_path) == SWAP_WAITS
     assert json.loads(wf.progress_path("old").read_text())["steps"]["carry"]["result"]["sample"]["seed"] == seed
 
 
@@ -386,7 +390,7 @@ def test_a_toml_recipe_with_no_variant_runs_as_its_dry_run_said(held, steps, tmp
     recipe_path = _new_recipe(tmp_path, space=space)
     assert _new(root, recipe_path, "--dry-run") == 0
     capsys.readouterr()
-    assert _new(root, recipe_path) == 2, "the run stops at the swap, as a re-creation does"
+    assert _new(root, recipe_path) == SWAP_WAITS, "the run stops at the swap, as a re-creation does"
     assert "missing field" not in capsys.readouterr().err
     assert "carry" in steps["order"] and "gate" in steps["order"]
 
@@ -489,7 +493,7 @@ def test_with_a_build_area_the_copy_is_built_there_and_the_swap_moves_it_to_the_
     assert f"vectors     built in the build area, {build / 'lance' / 'old.next'}; moved to the data pool " \
            f"at the swap" in said
     assert "free where old.next is made: enough" in said, "one filesystem here: one line"
-    assert _new(root, recipe_path) == 2
+    assert _new(root, recipe_path) == SWAP_WAITS
     link = root / "old.next" / "lance"
     assert link.is_symlink() and vector_place.physical(link) == build / "lance" / "old.next"
     digest = recreate.tree_digest(root / "old" / "lance")
@@ -516,7 +520,7 @@ def test_a_swap_whose_move_is_refused_is_not_done_and_resumes(held, steps, tmp_p
     build.mkdir()
     monkeypatch.setattr(config, "BUILD_DIR", build)
     recipe_path = _new_recipe(tmp_path)
-    assert _new(root, recipe_path) == 2
+    assert _new(root, recipe_path) == SWAP_WAITS
     forget_mod.forget(root, "old")
     real = vector_place._free
     monkeypatch.setattr(vector_place, "_free", lambda path: (1024, 0))
@@ -529,3 +533,18 @@ def test_a_swap_whose_move_is_refused_is_not_done_and_resumes(held, steps, tmp_p
     monkeypatch.setattr(vector_place, "_free", real)
     assert _new(root, recipe_path) == 0
     assert not link.is_symlink() and recreate.counts(root, "old")["vectors"] == chunks
+
+
+def test_only_the_swap_waits_with_its_own_exit_and_a_refused_run_is_never_mistaken_for_it(
+        held, steps, tmp_path, monkeypatch, capsys):
+    """legi, 2026-11-12 19:30Z: a re-creation REFUSED (exit 2: its recipe's
+    engine was not the live run's) was read by a script as "the swap waits",
+    and the predecessor was forgotten with nothing to take its place. The swap
+    has its own exit code; a refusal never returns it."""
+    from app import louise
+    root, _old, _chunks = held
+    assert louise.EXIT_SWAP_WAITS == SWAP_WAITS != 2
+    assert _new(root, _new_recipe(tmp_path), "--encoder", "http://elsewhere:9") == 2, \
+        "a refusal is 2"
+    assert _new(root, _new_recipe(tmp_path)) == SWAP_WAITS, "the swap alone is 4"
+    assert (root / "old").is_dir(), "nothing deleted by either"
