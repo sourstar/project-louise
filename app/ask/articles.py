@@ -155,15 +155,16 @@ def _norm(text: str) -> str:
 
 def in_annex(label: str | None, annexes: tuple[str, ...]) -> bool:
     """Whether a chunk label is in one of the annexes (no annexes: any is):
-    its last segment's name before "-art. N", whitespace normalised, starts
-    with one of them, case as held. A decree's own "Art. 1." has no annex."""
+    its last segment's name before "-art. N", whitespace normalised, EQUALS
+    one of them, case as held (every prefix is a full held annex name,
+    2026-11-12: stricter than a start). A decree's own "Art. 1." has no annex."""
     if not annexes:
         return True
     m = _ANNEX.match(str(label or "").rsplit(" › ", 1)[-1])
     if m is None:
         return False
     name = _norm(m["annex"])
-    return any(name.startswith(_norm(a)) for a in annexes)
+    return any(name == _norm(a) for a in annexes)
 
 
 def _article(collection, native_id: int, want: Cited | str) -> dict | None:
