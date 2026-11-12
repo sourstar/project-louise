@@ -84,7 +84,7 @@ louise hold
                                                                        stored vectors at the space's tolerance (exit 1 below it, nothing copied), the manifest, text index,
                                                                        vector table and bundles copied (the source left whole) and proven by digest; both write locks, so
                                                                        `node pause <name>` first (exit 3 while held) — and, after the gate, swap: while the predecessor is
-                                                                       held it prints its exact `forget` and the size it removes and frees and exits 2, deleting nothing;
+                                                                       held it prints its exact `forget` and the size it removes and frees and exits 4, deleting nothing;
                                                                        run again after the operator's forget: <name>.next takes the name and the predecessor's file
                                                                        (its codex, and embed "off", excepted)
                                                                        --dry-run (either form; added 2026-11-07, the pilot rule: a dry run before every whole run):

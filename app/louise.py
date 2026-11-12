@@ -1785,11 +1785,20 @@ def _carry_sample_embed(root, name: str, codex):
         yield run_check.answers(recipe, collection=codex)
 
 
+#: case F stopped at its swap, waiting for the operator's `forget` of the
+#: predecessor: its OWN exit code, never a refusal's 2. legi was forgotten
+#: 2026-11-12 19:30Z by a script that read every exit 2 as "the swap waits":
+#: the run had been REFUSED (its recipe's engine was not the live run's), and
+#: the predecessor was deleted with nothing to take its place
+EXIT_SWAP_WAITS = 4
+
+
 def _recreate_swap(a, run, name: str, codex, say) -> int:
     """Case F's step 9. While the predecessor is held it is FORGOTTEN BY THE
     OPERATOR, never here: the exact `forget` and what it removes and frees
-    are printed and the step stops (exit 2: a rule stands in the way — the
-    operator's yes in the session that deletes, with the size). Run again
+    are printed and the step stops (exit EXIT_SWAP_WAITS, 4, and ONLY then:
+    every refusal is 2, so a script tells "forget now" from "something stands
+    in the way"). Run again
     after it: the re-created collection takes the name (`hold collection
     rename`: its directory, its shared folders, its pause) and the
     predecessor's collection file, its codex and embed mode excepted
@@ -1832,7 +1841,7 @@ def _recreate_swap(a, run, name: str, codex, say) -> int:
                 f"{a.name} would not be {'searched' if copy_state.enforced() else 'in use'} until that "
                 f"clears (`louise hold collection show {name}`)")
         say(f"  then run this command again: {name} becomes {a.name}")
-        return 2
+        return EXIT_SWAP_WAITS
     if held is not None and held_name == a.name and held.collection_id != codex.collection_id:
         raise CodexError(f"swap: {a.name} holds {held.collection_id[:23]}…, neither the predecessor nor "
                          f"the re-created collection: nothing is renamed over it")
