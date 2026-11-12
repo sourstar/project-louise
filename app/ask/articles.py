@@ -57,6 +57,7 @@ from app.plugins.base import ArticleCitation, ArticleNotes
 # Normattiva's grammar, moved to its reference source unchanged; the names
 # stay importable here
 from app.refs.normattiva import FORMS, label_token, token  # noqa: F401
+from app.validity import annex_key
 
 #: articles pinned per query, whatever the query cites
 MAX_ARTICLES = 4
@@ -160,28 +161,44 @@ def in_annex(label: str | None, annexes: tuple[str, ...]) -> bool:
     2026-11-12: stricter than a start). A decree's own "Art. 1." has no annex."""
     if not annexes:
         return True
+    name = _annex_of(label)
+    return name is not None and name in {annex_key(a) for a in annexes}
+
+
+def _annex_of(label: str | None) -> str | None:
+    """A chunk label's annex (`validity.annex_key`: whitespace normalised,
+    case as held — the same spelling the amendments index stores), None
+    for an article of the act's own."""
     m = _ANNEX.match(str(label or "").rsplit(" › ", 1)[-1])
-    if m is None:
-        return False
-    name = _norm(m["annex"])
-    return any(name == _norm(a) for a in annexes)
+    return annex_key(m["annex"]) if m else None
 
 
-def _article(collection, native_id: int, want: Cited | str) -> dict | None:
-    """The version's first chunk whose label names the article — within the
-    citation's annexes where it names some. `want` a bare token reads
-    labels by Normattiva's grammar."""
+def _holders(chunks: Iterable[dict], read: Callable[[str | None], str | None], tok: str) -> set:
+    """The candidates in a held version whose labels carry article `tok`:
+    each annex's name, None for an article of the act's own — read from the
+    version itself, never a constant (architecture session, 2026-11-12)."""
+    return {_annex_of(ch.get("chapter")) for ch in chunks if read(ch.get("chapter")) == tok}
+
+
+def _read_article(collection, native_id: int, want: Cited | str) -> tuple[dict | None, set]:
+    """ONE pass over the version's chunks: its first chunk whose label
+    names the article — within the citation's annexes where it names some —
+    and the candidates that hold that number (`_holders`). `want` a bare
+    token reads labels by Normattiva's grammar."""
     from app import reader
     if isinstance(want, str):
         read, tok, annexes = label_token, want, ()
     else:
         read, tok, annexes = want.read, want.article, want.citation.annexes
     doc = reader.document(collection, int(native_id))
-    for ch in (doc or {}).get("chunks") or []:
-        label = ch.get("chapter")
-        if read(label) == tok and in_annex(label, annexes):
-            return ch
-    return None
+    chunks = (doc or {}).get("chunks") or []
+    found = next((ch for ch in chunks if read(ch.get("chapter")) == tok and in_annex(ch.get("chapter"), annexes)),
+                 None)
+    return found, _holders(chunks, read, tok)
+
+
+def _article(collection, native_id: int, want: Cited | str) -> dict | None:
+    return _read_article(collection, native_id, want)[0]
 
 
 def _by_language(found: list[tuple], query_lang: str | None,
@@ -226,43 +243,36 @@ def _changes(con, work: str, tok: str, annexes: tuple[str, ...] = (), holders: s
     for the decree's own): one candidate, the cited annex -> listed; several,
     the cited among them -> listed and marked "the source does not say which
     article N" (it is shown on every candidate's fact; invariant 11: lost
-    nowhere, claimed nowhere); the cited not among them -> not listed. A
-    structured code (no annexes): unchanged."""
+    nowhere, claimed nowhere); the cited not among them -> not listed.
+
+    Cited WITHOUT annexes (a structured code, the decree itself): the bare
+    token's statements, as before — an annex's labelled statement never
+    reaches the decree's fact — and where several candidates hold the
+    number (the c.c.'s decree has its own art. 1 and the code's), the same
+    mark: the decree's fact claims a bare `#1` no more than the code's
+    does. A structured code holds one candidate: unmarked, unchanged.
+    `holders` None (not read): no row is held to it."""
     from app import validity
     keys = [r[0] for r in con.execute("SELECT key FROM validity_works WHERE work=?", (work,))]
     rows = validity.amendments_of(con, keys, tok, annexes=annexes)
-    cited = {" ".join(a.split()) for a in annexes}
+    cited = {annex_key(a) for a in annexes}
     kept, ambiguous = [], set()
     for r in rows:
-        if r.get("unlabelled"):
-            held = holders or set()
-            if not (held & cited):
+        if r.get("unlabelled") and holders is not None:
+            if cited and not (holders & cited):
                 continue
-            if len(held) > 1:
+            if len(holders) > 1:
                 ambiguous.add(id(r))
         kept.append(r)
     rows = kept
     return [{"atto": (r["stating_title"] or r["amending"]).split(" — ")[0] if r["amending_is_stating"]
              else r["amending"], "dal": r["day"], "tipo": r["kind"],
-             "su": (f"art. {r['article']}" + (" (la fonte non indica di quale testo)" if id(r) in ambiguous else ""))
+             "su": (f"art. {r['article']}" + (f" ({AMBIGUOUS})" if id(r) in ambiguous else ""))
              if r["article"] else "l'atto"} for r in rows[-MAX_CHANGES:]]
 
 
-def _holders(collection, native_id: int, want: "Cited") -> set:
-    """The candidates in the held version whose labels carry the cited
-    article number: each annex's name (whitespace normalised), None for an
-    article of the act's own (no annex) — read from the version itself,
-    never a constant (architecture session, 2026-11-12)."""
-    from app import reader
-    doc = reader.document(collection, int(native_id))
-    out: set = set()
-    for ch in (doc or {}).get("chunks") or []:
-        label = ch.get("chapter")
-        if want.read(label) != want.article:
-            continue
-        m = _ANNEX.match(str(label or "").rsplit(" › ", 1)[-1])
-        out.add(_norm(m["annex"]) if m else None)
-    return out
+#: a statement on an article number several candidates of the version hold
+AMBIGUOUS = "la fonte non indica di quale testo"
 
 
 def _fact(collection, key: str, act_label: str, c: ArticleCitation, version: dict, chunk: dict,
@@ -293,10 +303,8 @@ def _work_facts(collection, con, key: str, want: Cited, group: list[tuple],
     c, notes, out = want.citation, want.notes, []
     for work, versions, v, title, _lang in group:
         act_label = (title or key).split(" — ")[0]
-        ch = _article(collection, v["native_id"], want)
-        annexes = tuple(c.annexes or ())
-        changes = _changes(con, work, c.article, annexes,
-                           _holders(collection, v["native_id"], want) if annexes else None)
+        ch, holders = _read_article(collection, v["native_id"], want)
+        changes = _changes(con, work, c.article, tuple(c.annexes or ()), holders)
         if ch is not None:
             note = notes.in_force if as_of is None else notes.as_of.format(day=_day(as_of))
             out.append(_fact(collection, key, act_label, c, v, ch, note, changes))

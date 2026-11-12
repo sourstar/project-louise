@@ -3040,80 +3040,137 @@ def _fill_content_hashes(con, collection) -> int:
     return filled
 
 
+#: the part paths whose rows the current re-derivation has rewritten: a pass
+#: stopped (or paused) between parts resumes after them (cleared when marked)
+AMENDMENTS_PARTS_KEY = "validity_amendments_parts_done"
+
+
+def _parts_amendments(collection, paths: list[str]):
+    """`(path, ok, value)` for each part, in order, from
+    validity.amendments_of_part: in the PARSE POOL's children where it runs
+    (the JSON of each record's `extra` holds the GIL; app/parallel.py), at
+    most 2 parts a child in flight; here otherwise. BOUNDED: a part not
+    answered within PARSE_TIMEOUT_S, or a broken pool, and it and the parts
+    after it are computed in-process (the engineering rule: no unbounded
+    wait on an optional subsystem)."""
+    from app import validity
+    from concurrent.futures import TimeoutError as FutureTimeout
+    from concurrent.futures.process import BrokenProcessPool
+    ex = parallel.pool() if len(paths) > 1 else None
+    if ex is None:
+        for p in paths:
+            yield (p, *validity.amendments_of_part(collection, p))
+        return
+    window = 2 * parallel.processes()
+    futures: dict[int, object] = {}
+    nxt = 0
+    pool_ok = True
+    try:
+        for i, p in enumerate(paths):
+            while pool_ok and nxt < len(paths) and nxt < i + window:
+                try:
+                    futures[nxt] = ex.submit(validity.amendments_of_part, collection, paths[nxt])
+                except (RuntimeError, BrokenProcessPool):
+                    pool_ok = False
+                    break
+                nxt += 1
+            fut = futures.pop(i, None)
+            got = None
+            if fut is not None and pool_ok:
+                try:
+                    got = fut.result(timeout=config.PARSE_TIMEOUT_S)
+                except (FutureTimeout, BrokenProcessPool, Exception):   # noqa: BLE001 — computed here instead
+                    pool_ok = False
+            if got is None:
+                got = validity.amendments_of_part(collection, p)
+            yield (p, *got)
+    finally:
+        # a stop or a pause closes the generator: the parts not taken are
+        # never computed
+        for fut in futures.values():
+            fut.cancel()
+
+
 def _rederive_amendments(con, collection) -> bool:
     """ONCE per manifest whose `validity_amendments` predates
-    validity.AMENDMENTS_VERSION (2026-11-12: the annex an article is held
-    under): the table's key gains `annex`, then every version's rows are
-    rewritten from its record line in the current snapshot's parts — the
-    plugin's hook on the line's `extra`, NO parse — and a version no held
-    part carries has its rdf stage reset (re-parsed from the origin). The
-    version is marked last, after the last part's commit (invariant 2): a
-    stop between parts leaves it unmarked and the next turn starts again,
-    each part's rewrite idempotent. Parts are read by threads (pyarrow's
-    decompression and column reads run outside the GIL); each part's rows
-    are computed outside any transaction and written in one."""
+    validity.AMENDMENTS_VERSION (2026-11-12: `<annex>|<token>`). A plugin
+    without the `amendments` hook (legi, neuris, eurlex: rows from edges,
+    no annex) is marked current and nothing is read or copied. Otherwise
+    every version's rows are rewritten from its record line in the current
+    snapshot's parts — the hook on the line's `extra`, NO parse — one
+    transaction a part, its path recorded in the same transaction, so a
+    stop or a pause between parts resumes after the parts done. A part that
+    cannot be read is logged once and its versions are left to the end: a
+    version that still holds a row of the old labelled form
+    (validity.STALE_LABELLED) and was not rewritten has its rdf stage reset
+    (re-parsed from the origin), and no other. The version is marked last
+    (invariant 2), so the pass runs once, an unreadable part included."""
     from app import validity
-    if validity.declared(collection) is None:
+    if validity.declared(collection) is None or validity.amendments_current(con):
         return False
-    if validity.amendments_current(con):
-        return False
-    from concurrent.futures import ThreadPoolExecutor
-    from .hold import collection as col
-    from .pack import records as pack_records
-    from .share import seeder
     t0 = time.monotonic()
     plugin = collection.plugin_instance()
-    con.execute("BEGIN IMMEDIATE")
-    try:
-        validity.rekey_amendments(con)
-        if getattr(plugin, "amendments", None) is None:
-            # rows from the edges: no annex to read, their meaning unchanged
-            validity.mark_amendments_current(con)
-        con.execute("COMMIT")
-    except BaseException:
-        con.execute("ROLLBACK")
-        raise
     if getattr(plugin, "amendments", None) is None:
+        con.execute("BEGIN IMMEDIATE")
+        try:
+            validity.mark_amendments_current(con)
+            con.execute("COMMIT")
+        except BaseException:
+            con.execute("ROLLBACK")
+            raise
         return True
-    versions = {r[0] for r in con.execute("SELECT uid FROM validity")}
+    from .hold import collection as col
+    from .share import seeder
     shard_tree = col.shard_dir_of(collections_mod.louise_root() / "collections", collection.name)
     snap = seeder.current_snapshot(shard_tree)
-    paths = [shard_tree / s.path for s in (snap.shards if snap is not None else [])
-             if (shard_tree / s.path).is_file()]
-
-    def one(path):
-        return validity.amendments_of_records(
-            plugin, pack_records.iter_fields(path, ("uid", "extra", "keys")), versions)
-
+    try:
+        before = set(json.loads(db.get_control(con, AMENDMENTS_PARTS_KEY, "[]") or "[]"))
+    except (TypeError, ValueError):
+        before = set()
+    held = [str(shard_tree / s.path) for s in (snap.shards if snap is not None else [])
+            if (shard_tree / s.path).is_file()]
+    todo = [p for p in held if p not in before]
+    versions = {r[0] for r in con.execute("SELECT uid FROM validity")}
     done: set[str] = set()
-    with ThreadPoolExecutor(max_workers=max(1, min(len(paths), parallel.processes()))) as ex:
-        for pairs in ex.map(one, paths):
-            if _stop.is_set():
-                ex.shutdown(cancel_futures=True)
-                return True             # unmarked: the next turn starts again
+    bad: list[str] = []
+    from contextlib import closing as _closing
+    with _closing(_parts_amendments(collection, todo)) as parts:
+        for path, ok, value in parts:
+            if _stop.is_set() or collection.name in node_state.paused_collections():
+                return True                 # unmarked: the next turn resumes after the parts done
+            if not ok:
+                bad.append(path)
+                db.log_event(con, "warn", "validity", f"amendments: part {Path(path).name} unreadable, its "
+                                                      f"versions left to the end: {value}"[:400])
+                continue
+            pairs = [(u, rows) for u, rows in value if u in versions]
             con.execute("BEGIN IMMEDIATE")
             try:
                 validity.write_amendments(con, pairs)
+                before.add(path)
+                db.set_control(con, AMENDMENTS_PARTS_KEY, json.dumps(sorted(before)))
                 con.execute("COMMIT")
             except BaseException:
                 con.execute("ROLLBACK")
                 raise
-            done.update(uid for uid, _ in pairs)
-    left = sorted(versions - done)
+            done.update(u for u, _ in pairs)
     con.execute("BEGIN IMMEDIATE")
     try:
+        left = sorted(validity.stale_versions(con) - done)
         for i in range(0, len(left), 500):
             part = left[i:i + 500]
             con.execute(f"UPDATE documents SET rdf_done=0 WHERE uid IN ({','.join('?' for _ in part)})", part)
         validity.mark_amendments_current(con)
+        con.execute("DELETE FROM control WHERE key=?", (AMENDMENTS_PARTS_KEY,))
         con.execute("COMMIT")
     except BaseException:
         con.execute("ROLLBACK")
         raise
     db.log_event(con, "info", "validity",
-                 f"amendments re-derived (version {validity.AMENDMENTS_VERSION}, the annex): {len(done)} "
-                 f"version(s) from {len(paths)} held part(s), no parse; {len(left)} not in a held part, "
-                 f"their rdf stage reset ({time.monotonic() - t0:.0f}s)")
+                 f"amendments re-derived (version {validity.AMENDMENTS_VERSION}, <annex>|<token>): {len(done)} "
+                 f"version(s) from {len(todo) - len(bad)} held part(s), no parse; {len(bad)} part(s) unreadable; "
+                 f"{len(left)} version(s) still in the old labelled form, their rdf stage reset "
+                 f"({time.monotonic() - t0:.0f}s)")
     return True
 
 

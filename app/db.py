@@ -283,12 +283,11 @@ CREATE INDEX IF NOT EXISTS idx_validity_closures_by ON validity_closures(by_uid)
 -- origin's own kind (substitution, repeal, insertion, MODIFICATION, …).
 -- Facts by key, never a ranking (invariant 4). Node-local and derived, like
 -- `validity`; rewritten per stating uid (delete-then-insert, invariant 2).
--- `annex` (2026-11-12): the annex of `target` the article is held under
--- where the origin names one ("CODICE CIVILE" of "#CODICE CIVILE-art.
--- 2441"), NULL where it names none; in the key, since one act may change
--- art. 12 of the c.c.'s decree and art. 12 of the code. A manifest made
--- before it gains the column by ALTER (connect) and the key when its rows
--- are re-derived (app/validity.py AMENDMENTS_VERSION, `rekey_amendments`).
+-- `article` (2026-11-12): ONE token, `<annex>|<token>` where the origin
+-- names the annex the article is held under (`CODICE CIVILE|2441` of
+-- "#CODICE CIVILE-art. 2441"), the bare token otherwise
+-- (app/validity.py `stored_article`); rows written before are re-derived
+-- once (AMENDMENTS_VERSION).
 CREATE TABLE IF NOT EXISTS validity_amendments (
   stated_by TEXT NOT NULL,
   target TEXT NOT NULL,
@@ -296,8 +295,7 @@ CREATE TABLE IF NOT EXISTS validity_amendments (
   amending TEXT NOT NULL DEFAULT '',
   day INTEGER,
   kind TEXT NOT NULL,
-  annex TEXT,
-  PRIMARY KEY (stated_by, target, article, amending, kind, annex)
+  PRIMARY KEY (stated_by, target, article, amending, kind)
 );
 CREATE INDEX IF NOT EXISTS idx_validity_amendments_target ON validity_amendments(target, article);
 -- a Work's canonical ids, so a closure finds the chain it ends
@@ -428,10 +426,7 @@ def connect(collection=None, *, shared: bool = False) -> sqlite3.Connection:
             # Local manifest state (invariant 6): it never travels, it is
             # not in any record, and it moves no hash. Adding it is an
             # ALTER plus an rdf re-derive, not a rebuild.
-            "ALTER TABLE documents ADD COLUMN work TEXT",
-            # the annex an amendment's article is held under (app/validity.py;
-            # 2026-11-12): NULL on every pre-existing row until re-derived
-            "ALTER TABLE validity_amendments ADD COLUMN annex TEXT"):
+            "ALTER TABLE documents ADD COLUMN work TEXT"):
         try:
             con.execute(statement)
         except sqlite3.OperationalError:
@@ -439,7 +434,7 @@ def connect(collection=None, *, shared: bool = False) -> sqlite3.Connection:
 
     con.executescript(SCHEMA)
     if amendments_fresh:
-        # created just now, with the annex in its key: nothing to re-derive
+        # created just now, written only in today's form: nothing to re-derive
         # (app/validity.py AMENDMENTS_VERSION; an older table is re-derived
         # once by the index maintainer, app/worker.py `_rederive_amendments`)
         from . import validity

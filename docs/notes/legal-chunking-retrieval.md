@@ -410,13 +410,25 @@ extending it (do not reinvent the wheel).
   227`; the index stored `codicecivile-art2441`, which no citation's token
   meets (the node: c.c. 132 of 136 rows, disp. att. c.p.p. 35 of 35; in
   records c.c. 8,921 of 9,213 destinations, c.p.a. 575 of 655, disp. att.
-  c.p.p. 2,680 of 3,364). `validity_amendments` now holds the ANNEX beside
-  the article (normattiva `split_part`), and a citation of an annex code
-  lists only its annex's statements. A statement on an article that names
-  NO annex, for a code that has annexes, is ambiguous (`#1` of the c.c.'s
-  decree is the decree's art. 1 or the code's; the node: 12 rows, 3 on
-  c.c. `#1`, 9 on c.p.a. `~art_1__para_1`) and is DROPPED from the answer —
-  a fact never carries another article's changes; it stays in the table. A
-  statement on the whole act stays. Every manifest re-derives the table
-  once from its held records (`validity.AMENDMENTS_VERSION` 2, worker
-  `_rederive_amendments`): no parse.
+  c.p.p. 2,680 of 3,364). The `article` column now holds ONE token,
+  `<annex>|<token>` (`CODICE CIVILE|2441`; the annex whitespace normalised,
+  case as held — München found no case-only variant), the bare token where
+  the destination names no annex (normattiva `split_part`, validity
+  `stored_article`); the table's key and schema are unchanged. A citation of
+  an annex code lists its annex's statements, never another annex's
+  article of the same number (the preleggi's art. 12 is not "art. 12 c.c.").
+  THE FINAL RULE for a statement on an article that names NO annex (a bare
+  `#1`, an AKN `~art_N`; the node: 12 rows, 3 on c.c. `#1`, 9 on c.p.a.
+  `~art_1__para_1`): it is held to the candidates the held version's own
+  labels show for that number (`articles._holders`) — one candidate: listed
+  there, unmarked; several: listed on EVERY candidate's fact, the decree's
+  own included, marked "la fonte non indica di quale testo"; the cited text
+  not among them: not listed. Lost nowhere, claimed nowhere (invariant 11).
+  On c.p.a. `art. 1` the decree and Allegati 1-4 each hold one, so all five
+  are candidates by number alone: meant, since the origin does not say
+  which. A statement on the whole act is an act, not an article, and stays.
+  Every manifest re-derives the table once from its held records
+  (`validity.AMENDMENTS_VERSION` 2, worker `_rederive_amendments`, the
+  parse pool, no parse); a part that cannot be read is logged once, and
+  only versions still holding an old labelled row (`article LIKE '%-art%'`)
+  that no part rewrote are re-parsed by their rdf stage.

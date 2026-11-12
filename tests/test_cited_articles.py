@@ -36,14 +36,16 @@ def test_a_date_picks_the_version_in_force_then(versioned):
 def test_a_repealed_article_brings_its_last_text_in_force(versioned, monkeypatch):
     c, con, _ = versioned
     _run(con, c, "rdf", "fts")
-    real = articles._article
+    # the version's chunk and its article's holders are one read
+    # (`_read_article`, 2026-11-12); `_article` is its chunk
+    real = articles._read_article
 
     def shown_repealed(collection, native_id, tok):
-        ch = real(collection, native_id, tok)
+        ch, held = real(collection, native_id, tok)
         if int(native_id) == V12_ID and ch is not None:
-            return {**ch, "text": "Art. 8.\nARTICOLO ABROGATO DALLA L. 24 LUGLIO 2001, N. 9"}
-        return ch
-    monkeypatch.setattr(articles, "_article", shown_repealed)
+            return {**ch, "text": "Art. 8.\nARTICOLO ABROGATO DALLA L. 24 LUGLIO 2001, N. 9"}, held
+        return ch, held
+    monkeypatch.setattr(articles, "_read_article", shown_repealed)
     got = articles.pin(Q, [c])
     assert [g["label"].rsplit("(", 1)[1] for g in got] == ["testo vigente)", "ultimo testo in vigore)"]
     assert "ABROGATO" in got[0]["fields"]["testo"]
