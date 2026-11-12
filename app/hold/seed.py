@@ -14,7 +14,7 @@ the same build database rows.
 THE AGREEMENT IS THE RECORDS' (02 §2.7): every field that decides a record
 byte — `plugin`, `origin`, `toolchain.platform_image`, `parser`,
 `cleaning_version`, `slicing`, `license`, `privacy`, `erasure`, `modality` —
-and `record_line`, `facets` and the layers' chunkers, parameters and rules
+and `record_line` and the layers' chunkers, parameters and rules (`facets` decide no record byte, 2026-11-11)
 (the chunk counts and `chunks_root` the build database carries are theirs).
 Anything else may differ: that is what a new space is.
 
@@ -65,7 +65,7 @@ def records_slicing(c: Codex) -> Any:
 
 def record_differences(a: Codex, b: Codex) -> list[str]:
     """What decides a record byte and differs between two Codexes: 02 §2.7's
-    list, `record_line`, `facets`, and each layer's chunker (id, version,
+    list, `record_line`, and each layer's chunker (id, version,
     params) and rule. `[]` means their records are the same records."""
     def fields(c: Codex) -> dict[str, Any]:
         return {
@@ -80,7 +80,6 @@ def record_differences(a: Codex, b: Codex) -> list[str]:
             "erasure": c.erasure,
             "modality": c.modality,
             "record_line": int(c.record_line or 1),
-            "facets": [f.to_dict() for f in c.facets],
             "layers": [(l.chunker.to_dict(), l.rule) for l in c.layers],
         }
     fa, fb = fields(a), fields(b)

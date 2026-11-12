@@ -1932,13 +1932,16 @@ def _validate_against_predecessor(codex: Codex, predecessor: Codex) -> None:
 
 def _sister_changes(codex: Codex, her_sister: Codex) -> list[str]:
     """What a sister may change, and nothing else: `space`, `layers`,
-    `update` and `work` (02 §2.7). `work` because the rate is denominated in
+    `update`, `work` and `facets` (02 §2.7). `work` because the rate is denominated in
     the declared encoder's tokenizer, so a sister on another encoder must
     measure her own."""
     allowed = {"space": (codex.space, her_sister.space),
                "layers": (codex.layers, her_sister.layers),
                "update": (codex.update, her_sister.update),
-               "work": (codex.work, her_sister.work)}
+               "work": (codex.work, her_sister.work),
+               # 2026-11-11 (architecture session): facets decide no record
+               # byte; a sister may declare her own filters
+               "facets": (codex.facets, her_sister.facets)}
     return [k for k, (a, b) in allowed.items() if a != b]
 
 

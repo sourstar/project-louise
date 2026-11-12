@@ -141,7 +141,7 @@ def test_records_from_admits_a_facets_difference_none_parsed(isolated_config, tm
         "date", "extra.collection", "extra.doc_type", "extra.in_force"]
     assert old.collection_id != new.collection_id
     from app.hold.seed import record_differences
-    assert record_differences(old, new) == ["facets"]
+    assert record_differences(old, new) == [], "facets decide no record byte (2026-11-11)"
     monkeypatch.setattr(type(SOURCE), "parse", lambda *a, **k: pytest.fail("a held line was parsed again"))
     said = []
     rec.build(root, "normattiva-f", corpus_dir=origin, snapshot_id="2026-08", records_from="normattiva",
