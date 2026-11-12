@@ -299,3 +299,16 @@ def test_roots_holds_the_relations_parts_to_their_roots(isolated_config, tmp_pat
     report = check.run(root, "normattiva", codex, snap, seed=b"\x00" * 32, checks=("roots",))
     [o] = report.outcomes
     assert o.result == check.FAIL and f"relations/{r.slice}/{r.n:05d}" in o.detail["failed"]
+
+
+def test_parts_with_no_edge_freeze_under_any_snapshot_id(isolated_config, tmp_path, corpus_dir):
+    """A plugin with relations over records that state none (gutenberg's
+    fixture books carry no catalogue note): the parts name no snapshot, so
+    `create` is not refused for an id the build did not guess."""
+    from tests.hold.test_build_and_snapshot import _build, _collection
+    root = _collection(tmp_path)
+    _build(root, corpus_dir, records_per_shard=2)
+    con = sqlite3.connect(root / "gutenberg" / "state" / "build" / ".build" / "build.db")
+    assert con.execute("SELECT SUM(edges) FROM relations_parts").fetchone()[0] == 0
+    snap = sn.create(root, "gutenberg", snapshot_id="2026-08", **QUIET)
+    assert snap.snapshot_id == "2026-08"

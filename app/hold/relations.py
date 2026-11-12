@@ -287,15 +287,22 @@ def promote_staged(staging: Path, shard_dir: Path) -> int:
 
 def require_for(db_path: Path, snapshot_id: str, name: str = "") -> None:
     """`snapshot create`'s guard: the relations parts beside the build's
-    record parts were written for THIS snapshot id, and completely."""
+    record parts were written for THIS snapshot id, and completely. Parts
+    that hold NO edge name no snapshot — their bytes are the same under any
+    id — so a finished pass that found none freezes under whichever id
+    `create` is given (a plugin with relations over records that state
+    none: gutenberg's books without catalogue notes, 2026-11-12)."""
     con = sqlite3.connect(db_path)
+    edges = None
     try:
         row = con.execute("SELECT value FROM meta WHERE key=?", (META_KEY,)).fetchone()
+        if row is not None and row[0] not in ("", snapshot_id):
+            edges = con.execute("SELECT COALESCE(SUM(edges), 0) FROM relations_parts").fetchone()[0]
     except sqlite3.Error:
         row = None
     finally:
         con.close()
-    if row is None or row[0] == snapshot_id:
+    if row is None or row[0] == snapshot_id or (row[0] != "" and edges == 0):
         return
     if row[0] == "":
         raise CodexError(f"{name}: the relations pass did not finish; `hold records relations {name}"
