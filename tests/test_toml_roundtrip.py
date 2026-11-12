@@ -248,6 +248,8 @@ _UNPOPULATED: dict[str, str] = {
                        "`all` and this says so (07 §7.8, 2026-10-19); never a file key",
     "vector_part": "set only on a PART of a split vector store (app/vector_parts.py `view`); "
                    "never a file key",
+    "method": "an annotations collection's key alone (07 §7.8, 2026-11-12), refused in a records "
+              "collection's file; its round trip is tests/hold/test_annotation_methods.py's",
 }
 
 

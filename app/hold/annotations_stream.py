@@ -310,14 +310,22 @@ def workspace(root: Path, tag: str) -> Iterator[Path]:
         _drop(lock, fd)
 
 
-def private_source(claims: bytes | str | os.PathLike, work: Path) -> ClaimsSource:
+def private_source(claims: bytes | str | os.PathLike, work: Path, *, link: bool = False) -> ClaimsSource:
     """The source a create reads: a COPY of the claims, in the workspace —
     of a file, so that every pass reads the very bytes the first checked and
     the origin installed is those bytes whatever happens to the file given
-    meanwhile; of bytes, so that the pool's children can read them too."""
+    meanwhile; of bytes, so that the pool's children can read them too.
+    `link`: the file is the caller's own and nobody writes it again (a
+    node's method, app/hold/annotation_methods.py) — a hard link holds the
+    very bytes, at no copy (RULE 1); copied where no link can be made."""
     copy = Path(work) / COPY
     if isinstance(claims, (bytes, bytearray, memoryview)):
         copy.write_bytes(claims)
+    elif link:
+        try:
+            os.link(claims, copy)
+        except OSError:
+            shutil.copyfile(claims, copy)
     else:
         shutil.copyfile(claims, copy)
     return ClaimsSource(copy, owned=True)

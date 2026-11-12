@@ -1623,7 +1623,15 @@ about other text.
 
 A deterministic method re-checks by running again and publishing the
 annotations collection's next snapshot with new hashes. A reading peer
-compares hashes and never re-runs a method.
+compares hashes and never re-runs a method. *(Amended 2026-11-12, RULE 2:
+"Can the annotations be updated without manually uploading something???")*
+The publishing node re-runs it BY ITSELF: the collection's file names its
+method (07 §7.8 `method`), and once the collection it annotates holds a
+newer snapshot than the claims are pinned to, the worker runs the method
+and updates with its whole output; a claim whose end that snapshot does not
+hold yet is set aside and named, and comes in with the next
+(docs/notes/annotation-methods.md). A claims file written by hand, an API
+or a language model has no method and keeps `hold annotations update`.
 
 **Updated, never replaced** (*amended 2026-10-23*, operator: "annotations
 must be updated, not replaced"). A change to the claims is the NEXT

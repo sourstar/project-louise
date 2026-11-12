@@ -18,6 +18,7 @@ the search shows the largest.
 """
 from __future__ import annotations
 
+import json
 from typing import Any, Iterator
 
 import numpy as np
@@ -81,6 +82,61 @@ def claims(m: dict, plugin: str = "wikipedia") -> Iterator[dict[str, Any]]:
                    "method": METHOD, "evidence": {"wikidata": f"Q{int(q)}", "subject_tokens": t,
                                                   "object_tokens": centre_t},
                    "confidence": CONFIDENCE, "contributor": CONTRIBUTOR}
+
+
+#: claims rendered per batch by `claim_lines`
+LINES_BATCH = 200_000
+
+
+def claim_lines(m: dict, plugin: str = "wikipedia") -> Iterator[bytes]:
+    """`claims(m, plugin)` as the claims file holds them — each line
+    `json.dumps(claim, ensure_ascii=False, sort_keys=True)` and a newline —
+    in batches of lines, BYTE FOR BYTE (tests/hold/test_annotation_methods.py).
+    Rendered from one template whose constant pieces ARE `json.dumps`'s and
+    whose variable ones are integers and the language codes, also rendered by
+    `json.dumps` once each: 12.3 M claims cost ~5.7 µs each through dicts and
+    `json.dumps` (70 s, one core), about a fifth of that here (2026-11-12, the
+    method the worker re-runs, app/hold/annotation_methods.py)."""
+    from .plugins.wikipedia import ids
+    dumps = (lambda v: json.dumps(v, ensure_ascii=False, sort_keys=True))
+    lang_of = {o: dumps(code) for code, o in ids.LANG_ORDINAL.items()}
+    head = (f'{{"confidence": {dumps(CONFIDENCE)}, "contributor": {dumps(CONTRIBUTOR)}, '
+            f'"evidence": {{"object_tokens": ')
+    tail = f', "type": {dumps("same-work")}}}\n'
+    ref = dumps(f"{plugin}:")[:-1]                  # the opening quote and "<plugin>:"
+    method = dumps(METHOD)
+    starts = m["item_start"]
+    sizes = starts[1:] - starts[:-1]
+    multi = np.nonzero(sizes >= 2)[0]
+    if not len(multi):
+        return
+    # every non-shown member with its item's centre, in `claims`' order
+    lo = starts[multi]
+    n = sizes[multi] - 1
+    owner = np.repeat(np.arange(len(multi)), n)
+    first = np.cumsum(n) - n
+    member = np.repeat(lo + 1, n) + (np.arange(len(owner)) - first[owner])
+    centre = lo[owner]
+    nid, cen = m["mem_nid"][member], m["mem_nid"][centre]
+    lang_s, lang_c = _ordinals(nid), _ordinals(cen)
+    toks, toks_c = m["mem_tokens"][member], m["mem_tokens"][centre]
+    qids = m["item_qid"][multi][owner]
+    for a in range(0, len(member), LINES_BATCH):
+        b = slice(a, a + LINES_BATCH)
+        yield "".join(
+            f'{head}{tc}, "subject_tokens": {t}, "wikidata": "Q{q}"}}, "method": {method}, '
+            f'"object": {ref}{c}", "object_lang": {lang_of[lc]}, "subject": {ref}{s_}", '
+            f'"subject_lang": {lang_of[ls]}{tail}'
+            for s_, c, ls, lc, t, tc, q in zip(nid[b].tolist(), cen[b].tolist(), lang_s[b].tolist(),
+                                               lang_c[b].tolist(), toks[b].tolist(), toks_c[b].tolist(),
+                                               qids[b].tolist())).encode("utf-8")
+
+
+def _ordinals(nid: np.ndarray) -> np.ndarray:
+    """`ids.decode_native_id`'s language, as its ordinal, vectorised."""
+    from .plugins.wikipedia import ids
+    rest = np.where(nid >= ids.DUMP_BASE, nid - ids.DUMP_BASE, nid)
+    return rest // ids.LANG_BASE
 
 
 def from_manifest(collection, con, *, qids_for=None) -> dict:

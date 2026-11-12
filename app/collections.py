@@ -492,6 +492,10 @@ class Collection:
     # the English one is missing or shorter; app/embed_select.py). None = the
     # plugin's default (`embed_select.policy`)
     embed_select: str | None = None
+    # 07 §7.8 `method` (2026-11-12): an ANNOTATIONS collection's method, which
+    # the worker re-runs when the collection it annotates holds a newer
+    # snapshot (app/hold/annotation_methods.py); None = claims given by hand
+    method: str | None = None
     #: why `embed_mode_default` is not what the file says: `embed = "p2p"`
     #: with `share = false` runs as `all` — p2p publishes what it embeds, and
     #: a node that does not share can publish nothing (07 §7.8, 2026-10-19)
@@ -622,6 +626,9 @@ def _codex_collection(path: Path, raw: dict[str, Any], name: str) -> Collection:
     # starts fetching, importing or moving on upgrade.
     where = str(path)
     _warn_deprecated(path, raw)
+    if raw.get("method") is not None:
+        raise ValueError(f"{where}: method is an annotations collection's key (07 §7.8): this "
+                         f"collection's records come from its origin, not from a method")
     new_shape = any(k in raw for k in _SPEC_FILE_ONLY_KEYS)
     kinds = _parse_kinds(raw.get("kinds"), where)
     title = raw.get("title")
@@ -779,6 +786,7 @@ def _annotations_collection(path: Path, raw: dict[str, Any], name: str, codex,
     share_kinds = _parse_share_list(raw.get("share_kinds"), "share_kinds", where)
     kinds = _parse_kinds(raw.get("kinds", ["records", "relations"]), where)
     slices = _parse_slices(raw["slices"], where) if "slices" in raw else "all"
+    method = _parse_method(raw.get("method"), where)
     return Collection(
         name=name, plugin=codex.plugin, profile=None, embed_mode_default="off",
         corpus_dir=d / "shard", manifest_path=d / "state" / "manifest.sqlite",
@@ -786,7 +794,19 @@ def _annotations_collection(path: Path, raw: dict[str, Any], name: str, codex,
         license_ack=_codex_ack(codex, d / "state"), embed=None, codex=codex,
         title=title, slices=slices, kinds=kinds, share=share,
         share_slices=share_slices, share_kinds=share_kinds,
-        source="shard")
+        source="shard", method=method)
+
+
+def _parse_method(value, where: str) -> str | None:
+    """07 §7.8 `method` (2026-11-12): one of the methods this node runs
+    (app/hold/annotation_methods.py), or absent."""
+    if value is None:
+        return None
+    from .hold import annotation_methods
+    if not isinstance(value, str) or value not in annotation_methods.METHODS:
+        raise ValueError(f"{where}: method is one of {', '.join(sorted(annotation_methods.METHODS))} "
+                         f"(07 §7.8), got {value!r}")
+    return value
 
 
 def is_annotations(collection) -> bool:
