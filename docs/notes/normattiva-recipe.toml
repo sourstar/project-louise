@@ -150,6 +150,9 @@ shards = "0.05"
 [validation.sample."records-vs-origin"]
 shards = "0.05"
 
-# Layers, slicing (`normattiva`: type and year, 50 acts a part) and the
+# Layers, slicing (`normattiva`: type and year, 50 acts a part), the
 # profile (the ELI implementation and the validity axis, one record per
-# Expression) are the plugin's defaults (app/plugins/normattiva/source.py).
+# Expression) and the facets (legal-chunking-retrieval.md §4 R2:
+# `extra.in_force`, `extra.doc_type`, `extra.collection`, `date` as a
+# range; filters, never weights) are the plugin's defaults
+# (app/plugins/normattiva/source.py).

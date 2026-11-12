@@ -117,8 +117,11 @@ shards = "0.05"
 
 # Layers (`akn_article`, the shared space's), slicing (`neuris`: the year of
 # the expression's point in time, 50 expressions a part) and the profile (the
-# ELI implementation and the validity axis, one record per expression) are
-# the plugin's defaults (app/plugins/neuris/source.py).
+# ELI implementation and the validity axis, one record per expression) and
+# the facets (legal-chunking-retrieval.md §4 R2: `extra.legal_force` and
+# `extra.in_force`, `extra.eli_type_document`, `extra.abbreviation`, `date`
+# as a range — filters, never weights) are the plugin's defaults
+# (app/plugins/neuris/source.py).
 
 # THE SHARED LEGAL LAYER, byte-identical in the three legal recipes (legi,
 # neuris, eurlex) — the chunker is inside space_id. `legal_article`

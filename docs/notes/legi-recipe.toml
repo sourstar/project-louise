@@ -121,8 +121,11 @@ shards = "0.05"
 shards = "0.05"
 
 # Layers (`akn_article`, the shared legal space's chunker), slicing (`legi`:
-# kind and year, parts cut by content) and the profile (the validity axis,
-# one record per article version) are the plugin's defaults
+# kind and year, parts cut by content), the profile (the validity axis,
+# one record per article version) and the facets (legal-chunking-
+# retrieval.md §4 R2: `extra.in_force`, `extra.eli_type_document`,
+# `extra.eli_title`, `date` and `extra.version_from` as ranges; filters,
+# never weights) are the plugin's defaults
 # (app/plugins/legi/source.py, app/pack/slicing.py). The licence class is the
 # plugin's, green.
 

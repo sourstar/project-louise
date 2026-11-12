@@ -1590,6 +1590,35 @@ def test_a_relayered_sister_carries_the_manifest_without_its_index_marks(pair):
     assert again["done"]["manifest"] == "present"
 
 
+def test_a_relayered_sister_may_differ_by_her_facets_too(pair):
+    """02 §2.7 amended 2026-11-12: the facets write no record byte and cut
+    no chunk, and nothing derived from them crosses — a sister declaring
+    other facets is carried as one declaring the same; a facets difference
+    beside another record-deciding one is still refused by that one."""
+    root, old, _new = pair
+    _vectors(root, old)
+    from tests.hold.test_template import SPACE, recipe
+    from functools import partial
+    space = {**SPACE, "encoder": {**SPACE["encoder"], "weights": "sha256:" + "be" * 32},
+             "dim": 1024, "query": {"encoder": None, "instruction": "query: "}}
+    layers = [{"rule": "default", "chunker": {"id": "fixed", "version": 1, "params": {"tokens": 3, "overlap": 0}},
+               "input": {"form": "text"}}]
+    assert [f.field for f in old.facets] == ["lang", "subjects"]
+    col.create_from_recipe(root, "gutenberg", recipe(space=space, layers=layers, work={"tokens": 7_000_000},
+                                                     facets=[{"field": "lang", "kind": "flat"}]),
+                           platform_image=PLATFORM, embed=partial(fake_embed, dim=1024),
+                           name="cutf", key=KEY, now=NOW)
+    out = carry.carry(root, "old", "cutf", sister=True, relayered=True, copy=True, apply=True, log=quiet)
+    assert out["done"]["manifest"] != "present" and not (root / "cutf" / "index" / "words").exists()
+    col.create_from_recipe(root, "gutenberg", recipe(space=space, layers=layers, work={"tokens": 7_000_001},
+                                                     facets=[{"field": "lang", "kind": "flat"}],
+                                                     erasure="append-only"),
+                           platform_image=PLATFORM, embed=partial(fake_embed, dim=1024),
+                           name="cutg", key=KEY, now=NOW)
+    with pytest.raises(CodexError, match=r"differ in erasure, which decide.*only the layers and the facets"):
+        carry.carry(root, "old", "cutg", sister=True, relayered=True, copy=True, apply=True, log=quiet)
+
+
 def test_a_relayered_sister_that_cuts_alike_is_refused(pair):
     root, old, _new = pair
     _sister_ready(root, old)

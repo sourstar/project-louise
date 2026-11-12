@@ -101,6 +101,9 @@ def test_the_recipe_makes_a_version_11_codex_with_the_shared_space():
     assert d["parser"] == {"id": "legi", "version": 2} and d["plugin"] == "legi"
     assert d["slicing"]["parts"]["rule"] == "content" and d["slicing"]["keys"] == ["kind", "year"]
     assert d["origin"]["jurisdiction"] == "FR" and d["origin"]["unit"] == "container-member"
+    assert [(f["field"], f["kind"]) for f in d["facets"]] == [
+        ("date", "range"), ("extra.eli_title", "flat"), ("extra.eli_type_document", "flat"),
+        ("extra.in_force", "flat"), ("extra.version_from", "range")], "the plugin's facets (legal R2)"
 
 
 def test_the_space_id_is_the_block_s_and_not_the_collection_s():

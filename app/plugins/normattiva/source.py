@@ -325,7 +325,21 @@ class NormattivaSource:
     modality = Modality.TEXT
     erasure = Erasure.RETRACTABLE          # an act withdrawn from the database
     native_id_order = "numeric"            # eli.expression_native_id: start of validity first
-    default_facets: list = []
+    #: 05 §5.7 (legal-chunking-retrieval.md §4 R2, operator's default A,
+    #: 2026-11-12): FILTERS a reader asks for, never a weight (invariant 4),
+    #: on the record's own fields. Status: `in_force` — `false` on the
+    #: origin's word (a repeal state, the repealed-acts zip), absent where it
+    #: says nothing; "not yet in force" is a date, answered by `--as-of`
+    #: (app/validity.py). Act type: `doc_type`, the preface's (DECRETO,
+    #: LEGGE, REGIO DECRETO …), on every record where `eli_type_document`
+    #: is not. Collection: the origin's zip (codici, regi-decreti …). Year:
+    #: `date`, the act's own.
+    default_facets = [
+        {"field": "date", "kind": "range", "separator": None, "authority": None},
+        {"field": "extra.collection", "kind": "flat", "separator": None, "authority": None},
+        {"field": "extra.doc_type", "kind": "flat", "separator": None, "authority": None},
+        {"field": "extra.in_force", "kind": "flat", "separator": None, "authority": None},
+    ]
 
     def discover(self, state: DiscoverState):
         """Every zip is enumerated in full each scan — a central directory

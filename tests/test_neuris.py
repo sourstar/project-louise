@@ -567,6 +567,9 @@ def test_the_recipe_loads_through_the_real_loader_as_a_version_11_codex():
     assert [layer.to_dict() for layer in c.layers] == [chunking_legal.SHARED_LAYER]
     assert c.slicing["keys"] == ["year"] and c.profile["validity"]["from"] == "extra.valid_from"
     assert c.license.cls == "green" and c.origin.jurisdiction == "DE"
+    assert [(f.field, f.kind) for f in c.facets] == [
+        ("date", "range"), ("extra.abbreviation", "flat"), ("extra.eli_type_document", "flat"),
+        ("extra.in_force", "flat"), ("extra.legal_force", "flat")], "the plugin's facets (legal R2)"
 
 
 def test_worker_stages_run_end_to_end(tmp_path, corpus, isolated_config):

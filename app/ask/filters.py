@@ -22,8 +22,12 @@ import sqlite3
 from pathlib import Path
 from typing import Any
 
-from app.ask import ranges
+from app.ask import fieldvalues, ranges
+from app.ask.facets import COLUMNS
 from app.hold.codex import CodexError
+
+#: the fields whose postings the manifest's columns give (app/ask/facets.py)
+_MANIFEST_FIELDS = frozenset(COLUMNS)
 
 POSTINGS = "postings.sqlite"
 MAX_IDS = 20_000
@@ -64,6 +68,7 @@ def connect(index_dir: Path) -> sqlite3.Connection:
     for stmt in _SCHEMA:
         con.execute(stmt)
     ranges.ensure_schema(con)
+    fieldvalues.ensure_schema(con)
     return con
 
 
@@ -112,12 +117,17 @@ def built_for(pcon, field: str) -> str | None:
 
 
 def _ids(pcon, field: str, value: str, *, tree_sep: str | None) -> set[int]:
-    out = {r[0] for r in pcon.execute("SELECT native_id FROM postings WHERE field=? AND value=?", (field, value))}
+    """The records holding `value` (or a path under it): from the manifest
+    columns' postings, or — for a field read out of the record parts
+    (app/ask/fieldvalues.py, amended 2026-11-12) — from theirs. A field is
+    in one table only, so the two reads never meet."""
+    table = "postings" if field in _MANIFEST_FIELDS else "value_postings"
+    out = {r[0] for r in pcon.execute(f"SELECT native_id FROM {table} WHERE field=? AND value=?", (field, value))}
     if tree_sep:
         prefix = value + tree_sep
         like = prefix.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
         out |= {r[0] for r in pcon.execute(
-            "SELECT native_id FROM postings WHERE field=? AND value LIKE ? ESCAPE '\\'", (field, like))}
+            f"SELECT native_id FROM {table} WHERE field=? AND value LIKE ? ESCAPE '\\'", (field, like))}
     return out
 
 

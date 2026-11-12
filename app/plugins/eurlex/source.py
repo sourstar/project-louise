@@ -371,7 +371,25 @@ class EurlexSource:
     modality = Modality.TEXT
     erasure = Erasure.RETRACTABLE          # a document Cellar withdraws
     native_id_order = "numeric"            # eli.expression_native_id: the start day first
-    default_facets: list = []
+    #: 05 §5.7 (legal-chunking-retrieval.md §4 R2, operator's default A,
+    #: 2026-11-12): FILTERS a reader asks for, never a weight (invariant 4),
+    #: on the record's own fields. Status: `in_force`, the notice's
+    #: RESOURCE_LEGAL_IN-FORCE (`true`, `false`; absent where it says
+    #: nothing); "not yet in force" is a date, answered by `--as-of`. Act
+    #: type: `resource_type`, the notice's RESOURCE_LEGAL_TYPE (R, L, D, PC
+    #: …), on every record where an ELI type is not. Collection: `sector`,
+    #: the CELEX sector (3 legislation, 5 preparatory acts, 0 consolidated
+    #: texts …). Year: `date`. Subject matter: `subjects`, the notice's
+    #: IS_ABOUT labels — EuroVoc's concepts, domains, microthesauri and top
+    #: terms with the directory codes and the subject matters, together, so
+    #: no one authority is named.
+    default_facets = [
+        {"field": "date", "kind": "range", "separator": None, "authority": None},
+        {"field": "extra.in_force", "kind": "flat", "separator": None, "authority": None},
+        {"field": "extra.resource_type", "kind": "flat", "separator": None, "authority": None},
+        {"field": "extra.sector", "kind": "flat", "separator": None, "authority": None},
+        {"field": "subjects", "kind": "flat", "separator": None, "authority": None},
+    ]
 
     # ---- discovery ---------------------------------------------------------------------------
 

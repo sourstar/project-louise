@@ -803,6 +803,16 @@ an index ordered by the start of each span, and stops as soon as more
 records than the legs take (§5.2's 20 000) are admitted, so a range too
 broad is refused for what it admits, at a cost bounded by that number.
 
+**A flat or tree facet the manifest does not carry is read the same way**
+(*amended 2026-11-12*, legal-chunking-retrieval.md §4 R2: a legal act's
+`extra.in_force`, its type, its code). Its values are read out of the
+record parts held, part by part on their roots, each part once for every
+such facet (app/ask/fieldvalues.py); a value is a scalar as JSON writes it
+(`true`, `false`, `42`, a string), and an object is counted as unparsed
+and is under no value. Counts, bounds and postings are as above; it is a
+filter the reader asks for, and nothing it reads enters a ranking
+(invariant 4).
+
 Building the listing is one pass over the metadata of the records held:
 
 ```
