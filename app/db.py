@@ -283,6 +283,11 @@ CREATE INDEX IF NOT EXISTS idx_validity_closures_by ON validity_closures(by_uid)
 -- origin's own kind (substitution, repeal, insertion, MODIFICATION, …).
 -- Facts by key, never a ranking (invariant 4). Node-local and derived, like
 -- `validity`; rewritten per stating uid (delete-then-insert, invariant 2).
+-- `article` (2026-11-12): ONE token, `<annex>|<token>` where the origin
+-- names the annex the article is held under (`CODICE CIVILE|2441` of
+-- "#CODICE CIVILE-art. 2441"), the bare token otherwise
+-- (app/validity.py `stored_article`); rows written before are re-derived
+-- once (AMENDMENTS_VERSION).
 CREATE TABLE IF NOT EXISTS validity_amendments (
   stated_by TEXT NOT NULL,
   target TEXT NOT NULL,
@@ -403,6 +408,8 @@ def connect(collection=None, *, shared: bool = False) -> sqlite3.Connection:
     #
     # On a fresh database each ALTER raises "no such table" and is caught
     # here, exactly as it is caught for "duplicate column" on an old one.
+    amendments_fresh = con.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='validity_amendments'").fetchone() is None
     for statement in (
             "ALTER TABLE documents ADD COLUMN entity_version INTEGER DEFAULT 0",
             # NULL on every pre-existing row until its shard is rebuilt
@@ -426,6 +433,13 @@ def connect(collection=None, *, shared: bool = False) -> sqlite3.Connection:
             pass  # already there, or no table yet — see above
 
     con.executescript(SCHEMA)
+    if amendments_fresh:
+        # created just now, written only in today's form: nothing to re-derive
+        # (app/validity.py AMENDMENTS_VERSION; an older table is re-derived
+        # once by the index maintainer, app/worker.py `_rederive_amendments`)
+        from . import validity
+        con.execute("INSERT OR IGNORE INTO control(key, value) VALUES(?, ?)",
+                    (validity.AMENDMENTS_VERSION_KEY, str(validity.AMENDMENTS_VERSION)))
     try:
         con.execute("ALTER TABLE bundles ADD COLUMN tier_reached INTEGER")
     except sqlite3.OperationalError:

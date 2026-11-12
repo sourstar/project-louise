@@ -389,3 +389,51 @@ Pieces 1, 2 and 5 enter the measurement of §5. Pieces 3 and 4 are no-GPU work a
 (arXiv 2605.31338, 2026). German statutory references ("§§ 1 bis 3 BGB", "Abs. 1 Satz 2") are what
 neuris-refs' resolver parses. Its library is the standard to compare that resolver against before
 extending it (do not reinvent the wheel).
+
+## 8. Open (2026-11-12, from the architecture session's review of R1's follow-ups)
+
+- **The Constitution is not held.** It is in none of Normattiva's 23
+  pre-packaged collections ("Leggi costituzionali" holds the
+  constitutional LAWS, not the Constitution; München: 0 records, no
+  member), though held records cite `/akn/it/act/costituzione/stato/1947-12-27`.
+  An acquisition gap: the API's export job (per act) is the route that
+  would reach it, with its form recorded (invariant 11). Until then "art. 3
+  Cost." maps to `urn:nir:stato:costituzione:1947-12-27` and pins nothing
+  while not held.
+- **Repealed articles outside Italy.** `article_repealed` exists per source
+  (R1 (d)) and only Normattiva's detects ("ARTICOLO ABROGATO"). LEGI's ETAT
+  `ABROGE`, NeuRIS's "(weggefallen)" and EUR-Lex's "deleted" are not read
+  yet, so such an article pins as in force.
+- **An annex code's amendments (fixed 2026-11-12).** The older exports
+  write a code's destinations as `urn:…;262#CODICE CIVILE-art. 2441`,
+  `#Allegato 1 Codice del processo amministrativo-art. 120`, `#Norme-art.
+  227`; the index stored `codicecivile-art2441`, which no citation's token
+  meets (the node: c.c. 132 of 136 rows, disp. att. c.p.p. 35 of 35; in
+  records c.c. 8,921 of 9,213 destinations, c.p.a. 575 of 655, disp. att.
+  c.p.p. 2,680 of 3,364). The `article` column now holds ONE token,
+  `<annex>|<token>` (`CODICE CIVILE|2441`; the annex whitespace normalised,
+  case as held — München found no case-only variant), the bare token where
+  the destination names no annex (normattiva `split_part`, validity
+  `stored_article`); the table's key and schema are unchanged. A citation of
+  an annex code lists its annex's statements, never another annex's
+  article of the same number (the preleggi's art. 12 is not "art. 12 c.c.").
+  THE FINAL RULE for a statement on an article that names NO annex (a bare
+  `#1`, an AKN `~art_N`; the node: 12 rows, 3 on c.c. `#1`, 9 on c.p.a.
+  `~art_1__para_1`): it is held to the candidates the held version's own
+  labels show for that number (`articles._holders`) — one candidate: listed
+  there, unmarked; several: listed on EVERY candidate's fact, the decree's
+  own included, marked "la fonte non indica di quale testo"; the cited text
+  not among them: not listed. Lost nowhere, claimed nowhere (invariant 11).
+  On c.p.a. `art. 1` the decree and Allegati 1-4 each hold one, so all five
+  are candidates by number alone: meant, since the origin does not say
+  which. A statement on the whole act is an act, not an article, and stays.
+  Every manifest re-derives the table once from its held records
+  (`validity.AMENDMENTS_VERSION` 2, worker `_rederive_amendments`, the
+  parse pool, no parse); a part that cannot be read is logged once, and
+  only versions still holding an old labelled row (`article LIKE '%-art%'`)
+  that no part rewrote are re-parsed by their rdf stage.
+
+- **Dead old-form rows.** The re-derivation rewrites every version a held
+  part carries. An errored or out-of-scope version keeps its old labelled
+  rows (`…-art…`); no citation's token matches them, so they show in no
+  fact, and they go when the version is next parsed.

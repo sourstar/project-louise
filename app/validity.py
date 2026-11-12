@@ -208,6 +208,9 @@ class Amendment:
     article: str = ""
     amending: str = ""
     day: str | None = None
+    #: the annex of `target` the article is held under, where the origin
+    #: names one (Normattiva's "CODICE CIVILE-art. 2441"); "" for none
+    annex: str = ""
 
 
 _ARTICLE_WORD = re.compile(r"^(?:art(?:icolo|icle|ikel|\.)?|§+|para(?:graph)?)\s*", re.I)
@@ -223,10 +226,36 @@ def article_token(text: str | None) -> str:
     return re.sub(r"(?<=\d)-(?=[a-z])", "", t)
 
 
+def annex_key(name: str | None) -> str:
+    """One spelling of an annex's name, for matching a statement, a chunk
+    label and the codes table: whitespace normalised, case AS HELD — an
+    exact, case-sensitive match on every side (architecture session,
+    2026-11-12: München counted every labelled fragment aimed at the 8 annex
+    codes on the node, each the held section label exactly, case included,
+    no case-only variant)."""
+    return " ".join(str(name or "").split())
+
+
+#: between an annex and its article in `validity_amendments.article`
+ANNEX_SEP = "|"
+
+
+def stored_article(annex: str | None, article: str | None) -> str:
+    """The `article` column's ONE token (architecture session, 2026-11-12):
+    `<annex_key>|<token>` where the destination names its annex
+    (`CODICE CIVILE|2441`, the annex as held, case kept), the bare token otherwise (a structured code, a
+    decree's own article, an AKN `~art_N`, a bare `#1`), '' for the whole
+    act. The table's key is unchanged; nothing to migrate but the rows."""
+    tok = article_token(article)
+    key = annex_key(annex)
+    return f"{key}{ANNEX_SEP}{tok}" if key and tok else tok
+
+
 def amendments_of_doc(doc, plugin) -> list[tuple]:
     """`(target, article, amending, day int|None, kind)` for each amendment
-    the document states: the plugin's hook where it has one, else its
-    edges. Deterministic, sorted, each once."""
+    the document states — `article` as `stored_article` writes it: the
+    plugin's hook where it has one, else its edges. Deterministic, sorted,
+    each once."""
     hook = getattr(plugin, "amendments", None)
     found: list[Amendment] = []
     if hook is not None:
@@ -248,7 +277,7 @@ def amendments_of_doc(doc, plugin) -> list[tuple]:
                 day = day_int(str(a.day))
             except ValueError:
                 day = None
-        out.add((str(a.target), article_token(a.article), str(a.amending or ""), day, str(a.kind)))
+        out.add((str(a.target), stored_article(a.annex, a.article), str(a.amending or ""), day, str(a.kind)))
     return sorted(out, key=lambda r: (r[0], r[1], r[2], r[3] or 0, r[4]))
 
 
@@ -258,12 +287,22 @@ def _record_amendments(con, by_uid: str, rows) -> None:
                     "VALUES(?,?,?,?,?,?)", [(by_uid, *r) for r in rows])
 
 
-def amendments_of(con, keys: Iterable[str], article: str | None = None, *, limit: int = 200) -> list[dict]:
+def amendments_of(con, keys: Iterable[str], article: str | None = None, *, limit: int = 200,
+                  annexes: Iterable[str] = ()) -> list[dict]:
     """What changed the work keyed by any of `keys` (its canonical ids) —
     the article named by `article` and the whole act, or every statement
     about the work when `article` is None — each with the version that
     states it, the amending act (its key, or the stating version itself),
-    the day and the kind; in day order. Indexed (idx_validity_amendments_target)."""
+    the day, the kind and the annex (`annex_key`, None for none); in day
+    order. Indexed (idx_validity_amendments_target: `article IN (…)`).
+
+    `annexes` (a code held after its decree's own articles, app/refs/
+    normattiva_codes.json): `<annex>|<token>` for each, and the bare token,
+    which names NO annex (`#1`, AKN `~art_N`) and is returned `unlabelled`
+    for the caller to hold to the version's own labels (app/ask/articles.py
+    `_changes`). No `annexes` (a structured code, the decree itself): the
+    bare token, exactly as before — an annex's labelled statement never
+    reaches it. A statement on the WHOLE act ('') stays either way."""
     ks = sorted({str(k) for k in keys if k})
     if not ks:
         return []
@@ -273,13 +312,104 @@ def amendments_of(con, keys: Iterable[str], article: str | None = None, *, limit
            f"WHERE a.target IN ({marks})")
     params: list = list(ks)
     if article is not None:
-        sql += " AND a.article IN (?, '')"
-        params.append(article_token(article))
+        tok = article_token(article)
+        wanted = [tok, ""] + sorted({f"{annex_key(a)}{ANNEX_SEP}{tok}" for a in annexes if annex_key(a)})
+        sql += f" AND a.article IN ({','.join('?' for _ in wanted)})"
+        params.extend(wanted)
     sql += " ORDER BY COALESCE(a.day, 0), a.stated_by LIMIT ?"
     params.append(int(limit))
-    return [{"stated_by": r[0], "target": r[1], "article": r[2], "amending": r[3] or r[0],
-             "amending_is_stating": not r[3], "day": day_text(r[4]), "kind": r[5], "stating_title": r[6]}
-            for r in con.execute(sql, params)]
+    out = []
+    for r in con.execute(sql, params):
+        annex, sep, tok = str(r[2]).rpartition(ANNEX_SEP)
+        out.append({"stated_by": r[0], "target": r[1], "article": tok, "amending": r[3] or r[0],
+                    "amending_is_stating": not r[3], "day": day_text(r[4]), "kind": r[5],
+                    "stating_title": r[6], "annex": annex if sep else None,
+                    "unlabelled": bool(tok) and not sep})
+    return out
+
+
+# ---- re-deriving the table once (2026-11-12: the annex) -----------------------
+#
+# The table is derived local state. Its rows change MEANING when the hook
+# reads more of what a version states (AMENDMENTS_VERSION, below): the
+# version is held in the manifest's `control`, and a manifest below it
+# re-derives its rows ONCE (app/worker.py `_rederive_amendments`, the index
+# maintainer's turn). From the records this peer already holds: a version's
+# statements are in its record line (`extra.active_modifications` for
+# Normattiva), so the hook is called on the line's `extra` and NOTHING IS
+# RE-PARSED. A version no readable held part carries is re-parsed by its
+# rdf stage only where it still holds a row of the old labelled form
+# (`STALE_LABELLED`); every other row it holds means today what it meant.
+
+#: 1: the article only (2026-11-08); 2: `<annex>|<token>` (2026-11-12)
+AMENDMENTS_VERSION = 2
+AMENDMENTS_VERSION_KEY = "validity_amendments_version"
+#: a row version 1 wrote from a labelled fragment: "CODICE CIVILE-art. 2441"
+#: became `codicecivile-art2441` (article_token keeps the hyphen before
+#: "art"); version 2 never writes one ("|" splits the annex off)
+STALE_LABELLED = "article LIKE '%-art%'"
+
+
+def stale_versions(con) -> set[str]:
+    """The versions that still hold a row of the old labelled form."""
+    return {r[0] for r in con.execute(
+        f"SELECT DISTINCT stated_by FROM validity_amendments WHERE {STALE_LABELLED}")}
+
+
+def amendments_current(con) -> bool:
+    from app import db
+    try:
+        return int(db.get_control(con, AMENDMENTS_VERSION_KEY, 0) or 0) >= AMENDMENTS_VERSION
+    except (TypeError, ValueError):
+        return False
+
+
+def mark_amendments_current(con) -> None:
+    from app import db
+    db.set_control(con, AMENDMENTS_VERSION_KEY, str(AMENDMENTS_VERSION))
+
+
+class _Line:
+    """What `amendments_of_doc` reads of a record line: its `extra` and its
+    `keys` (Normattiva's hook reads `extra` only; a plugin without the hook
+    is not re-derived — its edges name no annex, its rows keep their
+    meaning)."""
+    __slots__ = ("extra", "keys")
+
+    def __init__(self, record: dict):
+        self.extra = record.get("extra") or {}
+        self.keys = record.get("keys") or []
+
+
+def amendments_of_records(plugin, records: Iterable[dict]) -> list[tuple[str, list]]:
+    """`(uid, rows)` for each record, from its line alone — no transaction,
+    no parse."""
+    return [(str(rec.get("uid") or ""), amendments_of_doc(_Line(rec), plugin)) for rec in records]
+
+
+def amendments_of_part(collection, path: str) -> tuple[bool, Any]:
+    """One held part's `(uid, rows)`, or `(False, why)` where the part
+    cannot be read: what a parse-pool child computes (app/parallel.py — the
+    JSON of each record's `extra` holds the GIL) and the in-process
+    fallback. Never raises: an unreadable part costs itself, never the pass."""
+    from pathlib import Path
+    from app.pack import records as pack_records
+    try:
+        plugin = collection.plugin_instance()
+        return True, amendments_of_records(
+            plugin, pack_records.iter_fields(Path(path), ("uid", "extra", "keys")))
+    except Exception as e:   # noqa: BLE001 — the caller logs it once and moves on
+        return False, f"{type(e).__name__}: {e}"[:300]
+
+
+def write_amendments(con, pairs: Iterable[tuple[str, list]]) -> int:
+    """Each version's rows replaced by `rows`, inside the caller's
+    transaction (delete-then-insert on the stating uid, invariant 2)."""
+    n = 0
+    for uid, rows in pairs:
+        _record_amendments(con, uid, rows)
+        n += 1
+    return n
 
 
 # ---- the manifest's version table -------------------------------------------
