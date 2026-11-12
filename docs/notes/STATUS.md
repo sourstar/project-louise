@@ -20,7 +20,10 @@ measured (published figures disagree).
 
 ### 2026-11-12
 
-- **A gate never holds the model from the others: it measures on the model's gate twin — BUILT, not deployed.**
+- **A gate never holds the model from the others: it measures on the model's gate twin — DEPLOYED (f17701c, 16:45 CET
+  11-12), the borrow VERIFIED; the twin's first real gate not yet seen.** On the node: `hold collection new neuris
+  --space-from legi` took legi's statement (document-e9f2495eb04b45a3.json) and exited 0 in 16 s, no gate (#580). Open:
+  the first gate measured on a twin (lease held, holders `pid N@<ns>`, #582/#583) — München reads it when one runs.
   The operator: "gating a collection cannot monopolize the GPU", "AND IT SHOULD BE CLEARLY SHOWN IN THE COLLECTION
   CARD", and "Leggi encoder is the same normattiva nemo encoding". What happened: legi's gate ran 07:59–08:10Z on
   vega-nemotron-3-embed-1b, and normattiva-nemo and wikidata stood aside the whole time. It was also redundant: legi
