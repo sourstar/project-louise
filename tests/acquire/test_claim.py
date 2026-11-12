@@ -64,7 +64,8 @@ def test_a_stale_claim_is_taken_over(con):
 def test_reentrant_claim_by_the_same_pid_is_allowed(con):
     """The same process re-entering (e.g. worker retrying) is not a conflict."""
     db.set_control(con, claim_mod.CLAIM_KEY,
-                    json.dumps({"pid": os.getpid(), "ts": time.time(), "source_id": "test"}))
+                    json.dumps({"pid": os.getpid(), "holder": claim_mod._me(),
+                                "ts": time.time(), "source_id": "test"}))
     with claim_mod.acquisition_claim(con, "test"):
         assert claim_mod.read_claim(con)["pid"] == os.getpid()
 
@@ -99,3 +100,33 @@ def test_refresh_does_not_steal_another_processes_claim(con):
     db.set_control(con, claim_mod.CLAIM_KEY, json.dumps(other))
     claim_mod.refresh_claim(con, "test", time.time() - 3600)
     assert claim_mod.read_claim(con) == other
+
+
+def test_the_same_pid_in_another_container_is_another_process(con, monkeypatch):
+    """The worker and a supervised `hold records fetch` pass can each be pid 1
+    in their own container: the claim names the PID namespace too
+    (`model_pins.process_tag`), so the second refuses instead of reading the
+    first's claim as its own and fetching the same files beside it."""
+    from app import model_pins
+    db.set_control(con, claim_mod.CLAIM_KEY,
+                   json.dumps({"pid": os.getpid(), "holder": f"pid {os.getpid()}@4026530001",
+                               "ts": time.time(), "source_id": "test"}))
+    monkeypatch.setattr(model_pins, "process_tag", lambda: f"pid {os.getpid()}@4026539999")
+    with pytest.raises(claim_mod.AcquisitionBusy, match="4026530001"):
+        with claim_mod.acquisition_claim(con, "test"):
+            pass
+    monkeypatch.setattr(model_pins, "process_tag", lambda: f"pid {os.getpid()}@4026530001")
+    with claim_mod.acquisition_claim(con, "test"):        # its own: re-entrant, as before
+        assert claim_mod.read_claim(con)["holder"] == f"pid {os.getpid()}@4026530001"
+    assert claim_mod.read_claim(con) is None
+
+
+def test_a_claim_from_before_the_tag_is_read_by_its_pid(con, monkeypatch):
+    """A claim written before the holder field (pid only) still counts as
+    this process's where the tag is the pid alone (no namespace readable)."""
+    from app import model_pins
+    monkeypatch.setattr(model_pins, "process_tag", lambda: f"pid {os.getpid()}")
+    db.set_control(con, claim_mod.CLAIM_KEY,
+                   json.dumps({"pid": os.getpid(), "ts": time.time(), "source_id": "test"}))
+    with claim_mod.acquisition_claim(con, "test"):
+        pass
