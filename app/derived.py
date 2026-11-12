@@ -16,7 +16,6 @@ on the ORIGIN'S PHYSICAL IDENTITY — its resolved path — never a name
 from __future__ import annotations
 
 import fcntl
-import glob
 import hashlib
 import json
 import os
@@ -105,7 +104,7 @@ def adopt(src: Path, dst: Path) -> bool:
     with building(dst):
         if dst.exists():
             return False
-        for stale in dst.parent.glob(glob.escape(f".{dst.name}.") + "*adopting"):
+        for stale in _named(dst.parent, f".{dst.name}.", "adopting"):
             if stale.is_dir():
                 shutil.rmtree(stale, ignore_errors=True)
             else:
@@ -117,6 +116,22 @@ def adopt(src: Path, dst: Path) -> bool:
             shutil.copy2(src, tmp)
         os.replace(tmp, dst)
     return True
+
+
+def _named(parent: Path, prefix: str, suffix: str) -> list[Path]:
+    """The entries of `parent` named `prefix` + anything + `suffix`: what
+    `parent.glob(glob.escape(prefix) + "*" + suffix)` gives, without
+    compiling a pattern per name. glob keeps each compiled pattern
+    (`functools.lru_cache(maxsize=512)` on `glob._compile_pattern`), one per
+    pack name here: ~750 B a pack in every process, the per-file growth
+    tests/test_pubmed_updatefiles_memory.py measured (2026-11-12)."""
+    try:
+        with os.scandir(parent) as entries:
+            return [Path(e.path) for e in entries
+                    if len(e.name) >= len(prefix) + len(suffix)
+                    and e.name.startswith(prefix) and e.name.endswith(suffix)]
+    except FileNotFoundError:
+        return []
 
 
 @contextmanager
@@ -136,7 +151,7 @@ def building(dest: Path) -> Iterator[None]:
     with open(dest.with_name(dest.name + ".lock"), "a+b") as f:
         fcntl.flock(f, fcntl.LOCK_EX)
         try:
-            for stale in dest.parent.glob(glob.escape(dest.name) + ".*tmp"):
+            for stale in _named(dest.parent, dest.name + ".", "tmp"):
                 stale.unlink(missing_ok=True)
             yield
         finally:

@@ -22,8 +22,16 @@ import pytest
 from app import backend, db, discovery, worker
 from tests.test_pubmed_updatefiles import _article, _collection, _container, _delete
 
-PER_FILE = 240
-FILES = 8
+PER_FILE = 480
+FILES = 12
+#: the first measured files take what the process builds once (a resolver's
+#: index for a new stamp, the free lists' fill); the slope is read after them
+WARM = 3
+#: a leak of 16 bytes a record is 7.5 KiB a file at PER_FILE; what the path
+#: holds per FILE (the scan cursor's entry, the pack's memo and lock) does not
+#: grow with the records in it: 3.1 KiB a file at 240 records, 1.6 at 480
+#: (2026-11-12, before the per-pack glob went)
+SLOPE_MAX = 6 << 10
 
 
 def _held_by_the_path(snapshot) -> int:
@@ -109,11 +117,14 @@ def test_the_heap_stays_flat_over_many_update_files(tmp_path, isolated_config, s
         assert pending == 0, "every revision and new citation indexed"
     finally:
         con.close()
-    # FLAT: what the path holds after the last file is what it held after the
-    # second, but for its per-CONTAINER state (the scan cursor's entry, the
-    # pack's memo and lock: ~1 KiB a file, bounded by the origin's files) —
-    # against the 6 × 240 records processed since: 32 bytes kept a record
-    # would be 45 KiB, a record's XML kept ~0.6 MiB
-    grown = after[-1] - after[1]
-    assert grown < 40 << 10, f"the path's heap grew {grown} bytes over {FILES - 2} files: {after}"
+    # FLAT: the heap's TREND over the files after the warm-up, by least
+    # squares (statistics.linear_regression), held under what a per-RECORD
+    # leak would add — 16 bytes kept a record is 7.5 KiB a file, a record's
+    # XML kept ~1.2 MiB. A spot difference (last − second, the test until
+    # 2026-11-12) read Python's free lists and one-time builds as growth:
+    # ±15 KiB file to file, more than the bound, with nothing kept per record.
+    from statistics import linear_regression
+    slope = linear_regression(list(range(WARM, FILES)), after[WARM:]).slope
+    assert slope < SLOPE_MAX, \
+        f"the path's heap grows {slope:,.0f} bytes a file ({PER_FILE} records each): {after}"
     assert max(peaks[2:]) < 1.25 * max(peaks[:2]), f"the per-file peak grows: {peaks}"
