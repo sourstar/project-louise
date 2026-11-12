@@ -41,10 +41,10 @@ def test_a_repealed_article_brings_its_last_text_in_force(versioned, monkeypatch
     real = articles._read_article
 
     def shown_repealed(collection, native_id, tok):
-        ch, held = real(collection, native_id, tok)
+        ch, held, annexes = real(collection, native_id, tok)
         if int(native_id) == V12_ID and ch is not None:
-            return {**ch, "text": "Art. 8.\nARTICOLO ABROGATO DALLA L. 24 LUGLIO 2001, N. 9"}, held
-        return ch, held
+            return {**ch, "text": "Art. 8.\nARTICOLO ABROGATO DALLA L. 24 LUGLIO 2001, N. 9"}, held, annexes
+        return ch, held, annexes
     monkeypatch.setattr(articles, "_read_article", shown_repealed)
     got = articles.pin(Q, [c])
     assert [g["label"].rsplit("(", 1)[1] for g in got] == ["testo vigente)", "ultimo testo in vigore)"]

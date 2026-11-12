@@ -180,21 +180,40 @@ def _holders(chunks: Iterable[dict], read: Callable[[str | None], str | None], t
     return {_annex_of(ch.get("chapter")) for ch in chunks if read(ch.get("chapter")) == tok}
 
 
-def _read_article(collection, native_id: int, want: Cited | str) -> tuple[dict | None, set]:
+def _words(text: str) -> list[str]:
+    return re.findall(r"\w+", text.casefold())
+
+
+def names_annex(held: str | None, cited: str) -> bool:
+    """Whether a held annex name is the one a query names: its words begin
+    with the cited words, case folded — "allegato B" is "Allegato B",
+    "ALLEGATO B" and "Allegato B - Regolamento", never "Allegato BB"; the
+    query's spelling is the reader's, the held name the origin's."""
+    want = _words(cited)
+    return bool(held) and bool(want) and _words(held)[:len(want)] == want
+
+
+def _read_article(collection, native_id: int, want: Cited | str) -> tuple[dict | None, set, tuple[str, ...]]:
     """ONE pass over the version's chunks: its first chunk whose label
     names the article — within the citation's annexes where it names some —
-    and the candidates that hold that number (`_holders`). `want` a bare
+    the candidates that hold that number (`_holders`), and the annexes the
+    article was looked for in: the citation's, or the held annexes the
+    query's `annex` names (`names_annex`; none held: the cited words
+    themselves, which no label and no statement carries). `want` a bare
     token reads labels by Normattiva's grammar."""
     from app import reader
     if isinstance(want, str):
-        read, tok, annexes = label_token, want, ()
+        read, tok, annexes, cited = label_token, want, (), ""
     else:
-        read, tok, annexes = want.read, want.article, want.citation.annexes
+        read, tok, annexes, cited = want.read, want.article, want.citation.annexes, want.citation.annex
     doc = reader.document(collection, int(native_id))
     chunks = (doc or {}).get("chunks") or []
+    if cited and not annexes:
+        held = sorted({a for a in (_annex_of(ch.get("chapter")) for ch in chunks) if names_annex(a, cited)})
+        annexes = tuple(held) or (cited,)
     found = next((ch for ch in chunks if read(ch.get("chapter")) == tok and in_annex(ch.get("chapter"), annexes)),
                  None)
-    return found, _holders(chunks, read, tok)
+    return found, _holders(chunks, read, tok), tuple(annexes)
 
 
 def _article(collection, native_id: int, want: Cited | str) -> dict | None:
@@ -283,7 +302,10 @@ def _fact(collection, key: str, act_label: str, c: ArticleCitation, version: dic
                               "versione": version["uid"], "chunk": chunk.get("chunk_id")}
     if changes:
         fields["modificato da"] = changes
-    return {"entity_id": f"{key}~art{c.article.replace('-', '')}", "kind": "articolo",
+    # an annex the query named is part of the article's id: the decree's own
+    # art. 3 and its allegato B's art. 3 are two facts
+    where = "".join(_words(c.annex)) + "~" if c.annex else ""
+    return {"entity_id": f"{key}~{where}art{c.article.replace('-', '')}", "kind": "articolo",
             "source_id": collection.name,
             "label": f"{act_label} — {c.label} ({note})",
             "fields": fields, "via": None}
@@ -303,8 +325,8 @@ def _work_facts(collection, con, key: str, want: Cited, group: list[tuple],
     c, notes, out = want.citation, want.notes, []
     for work, versions, v, title, _lang in group:
         act_label = (title or key).split(" — ")[0]
-        ch, holders = _read_article(collection, v["native_id"], want)
-        changes = _changes(con, work, c.article, tuple(c.annexes or ()), holders)
+        ch, holders, annexes = _read_article(collection, v["native_id"], want)
+        changes = _changes(con, work, c.article, annexes, holders)
         if ch is not None:
             note = notes.in_force if as_of is None else notes.as_of.format(day=_day(as_of))
             out.append(_fact(collection, key, act_label, c, v, ch, note, changes))

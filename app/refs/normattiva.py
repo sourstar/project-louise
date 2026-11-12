@@ -416,6 +416,11 @@ def citations(query: str) -> list[dict]:
     """The acts a text names: `{tipo, numero, anno, data?, art?}` each, in
     order of appearance, once — the dated form first where both name the
     same act, since it carries the date."""
+    return [c for _, c in _found(query)]
+
+
+def _found(query: str) -> list[tuple[int, dict]]:
+    """`citations`, each with where its match starts."""
     found: list[tuple[int, dict]] = []
     seen: set[tuple] = set()
     anchors = [a.start() for a in _AT.finditer(query)]
@@ -437,7 +442,7 @@ def citations(query: str) -> list[dict]:
             found.append((m.start(), {
                 "tipo": tipo, "numero": num, "anno": int(m.group("year")), "data": data,
                 "art": _text(m.group("art")).rstrip(" ,") if m.group("art") else None}))
-    return [c for _, c in sorted(found, key=lambda t: t[0])]
+    return sorted(found, key=lambda t: t[0])
 
 
 _index_lock = threading.Lock()
@@ -528,12 +533,34 @@ class CitationResolver:
 # grammar: the article pin is now one engine asking every legal reference
 # source (`article_citations`), and this is Normattiva's.
 
-#: "art. 12", "articolo 5-bis", "art.2 comma 3" → `12`, `5-bis`, `2`
-_TOKEN = re.compile(r"art(?:icolo|\.)?\s*(\d+)\s*[-_ ]?\s*"
-                    r"(bis|ter|quater|quinquies|sexies|septies|octies|novies|decies)?\b", re.I)
-#: a label's article: "Legge sull'emigrazione-art. 12", "Art. 12.", "Articolo 12"
-_LABEL = re.compile(r"(?:^|[\s\-–])art(?:icolo|\.)?\s*(\d+)\s*[-_ ]?\s*"
-                    r"(bis|ter|quater|quinquies|sexies|septies|octies|novies|decies)?\b", re.I)
+#: AN ARTICLE THAT IS A WORD (2026-11-12, München's acceptance: 433
+#: amendments into annexes whose articles are not numbers): a Roman numeral,
+#: upper case as Normattiva writes it ("Allegato B-art. XI"), or one of the
+#: names an article carries ("Articolo unico", "articolo transitorio",
+#: "art. finale", "art. addizionale"). Taken only after "art.", "articolo"
+#: as a word, or "art" and a space — never glued to a word ("arti").
+_WORD_NAMES = r"(?-i:[IVXLC]+)|unico|transitorio|finale|addizionale"
+_WORD_ART = r"(?:art\.|articolo\b|art(?=\s))\s*"
+_WORD = rf"{_WORD_ART}({_WORD_NAMES})\b"
+_NUMBER = (r"art(?:icolo|\.)?\s*(\d+)\s*[-_ ]?\s*"
+           r"(bis|ter|quater|quinquies|sexies|septies|octies|novies|decies)?\b")
+#: "art. 12", "articolo 5-bis", "art.2 comma 3", "art. XI" → `12`, `5-bis`, `2`, `xi`
+_TOKEN = re.compile(rf"{_NUMBER}|{_WORD}", re.I)
+#: a label's article: "Legge sull'emigrazione-art. 12", "Art. 12.", "Articolo
+#: 12", "Allegato B-art. XI", "Articolo unico" — the FIRST in the label
+_LABEL = re.compile(rf"(?:^|[\s\-–])(?:{_NUMBER}|{_WORD})", re.I)
+#: what stands before an act the scan found WITHOUT its article (`_ART` takes
+#: only "art. N" right before the act's form): "art. 3 dell'allegato B del",
+#: "art. XI dell'allegato B al", "articolo unico della", "art. 5, comma 2,
+#: allegato 1, del" — read back from the act, never in the scan itself (the
+#: text index's hot path, docs/notes/python-hot-spots.md B, is unchanged)
+_ART_BEFORE = re.compile(
+    rf"(?P<art>(?:art(?:icolo|\.)?\s*\d+(?:-\w+)?|{_WORD_ART}(?:{_WORD_NAMES})\b)"
+    r"(?:\s*,?\s*comma\s*\d+)?)"
+    r"(?:\s*,?\s*(?:dell['’]\s*|dell\s+|l['’]\s*)?allegato\s+(?P<annex>\d+|(?-i:[IVXLC]{2,})\b|[a-z]\b))?"
+    r"\s*,?\s*(?:(?:del(?:la|lo)?|al(?:la|lo)?)\s+)?$", re.I)
+#: how far back from an act `_ART_BEFORE` reads
+_BEFORE = 120
 
 
 def _num(digits: str, suffix: str | None) -> str:
@@ -544,14 +571,29 @@ def _num(digits: str, suffix: str | None) -> str:
     return f"{n}-{suffix.lower()}" if suffix else n
 
 
+def _tok(m: re.Match | None) -> str | None:
+    if m is None:
+        return None
+    return _num(m.group(1), m.group(2)) if m.group(1) else m.group(3).lower()
+
+
 def token(text: str | None) -> str | None:
-    m = _TOKEN.search(text or "")
-    return _num(m.group(1), m.group(2)) if m else None
+    return _tok(_TOKEN.search(text or ""))
 
 
 def label_token(label: str | None) -> str | None:
-    m = _LABEL.search(label or "")
-    return _num(m.group(1), m.group(2)) if m else None
+    return _tok(_LABEL.search(label or ""))
+
+
+def article_before(query: str, pos: int) -> tuple[str, str] | None:
+    """`(article as written, annex as cited)` standing right before the act
+    found at `pos` ("art. XI dell'allegato B del …" → ("art. XI", "allegato
+    B")); the annex "" where none is named; None where no article stands
+    there."""
+    m = _ART_BEFORE.search(query[max(0, pos - _BEFORE):pos])
+    if m is None:
+        return None
+    return _text(m["art"]).rstrip(" ,"), (f"allegato {m['annex']}" if m["annex"] else "")
 
 
 #: the URN:NIR forms a state act is filed under (the citation forms above,
@@ -579,10 +621,14 @@ def article_citations(query: str, refs: RefLookup | None = None, facts=()) -> li
     filed under none of FORMS. Needs no reference data (`refs` unused)."""
     facts = list(facts)
     out: list[ArticleCitation] = []
-    for c in citations(query):
-        if not c.get("art"):
-            continue
-        tok = token(c["art"])
+    for pos, c in _found(query):
+        art, annex = c.get("art"), ""
+        if not art:
+            before = article_before(query, pos)
+            if before is None:
+                continue
+            art, annex = before
+        tok = token(art)
         if not tok:
             continue
         keys: tuple[str, ...] = ()
@@ -594,10 +640,18 @@ def article_citations(query: str, refs: RefLookup | None = None, facts=()) -> li
         also: list[str] = []
         for f in facts:
             eid = _get(f, "entity_id")
-            if (_get(f, "kind") == "atto" and eid and str(_get(f, "label") or "").endswith(suffix)
-                    and eid not in also):
+            if _get(f, "kind") != "atto" or not eid or eid in also:
+                continue
+            # the resolver labels an act cited with its article "<title> — art. N";
+            # one whose article stands before it (`article_before`) the scan did
+            # not see, so its fact is the act's by year and number in its URN
+            if (str(_get(f, "label") or "").endswith(suffix) if c.get("art")
+                    else (f":{c['anno']}-" in eid and eid.endswith(f";{c['numero']}"))):
                 also.append(eid)
-        out.append(ArticleCitation(keys=keys, article=tok, label=f"art. {tok}", also=tuple(also)))
+        shown = tok if tok[:1].isdigit() else _TOKEN.search(art).group(3)
+        out.append(ArticleCitation(keys=keys, article=tok,
+                                   label=f"art. {shown}" + (f" dell'{annex}" if annex else ""),
+                                   also=tuple(also), annex=annex))
     for cited in code_citations(query):
         if cited not in out:
             out.append(cited)
