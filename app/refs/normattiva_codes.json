@@ -19,7 +19,7 @@
       "urn": "urn:nir:stato:regio.decreto:1942-03-30;318",
       "title": "Disposizioni per l'attuazione del Codice civile e disposizioni transitorie. (042U0318)",
       "annexes": [
-        "Disposizioni per l'attuazione del Codice Civile e disposizi"
+        "Disposizioni per l'attuazione del Codice Civile e disposizioni transitorie"
       ]
     },
     {
@@ -128,7 +128,7 @@
       "annexes": []
     }
   ],
-  "annexes": "The member layout of each code as Normattiva holds it (section labels of each code's latest held version, read on the node 2026-11-12; /root/measure/codici/codes-layout.json, sha256 4c59a1081cff603e269a1ab2657878c35abca858fd4085db59690d07740adcaa). `annexes` empty: a STRUCTURED code, the act is the code, its labels \"<partition> › Art. N.\". Otherwise an ANNEX code: the decree's own articles (\"Art. 1.\"), for c.c. the 31 preleggi (\"Disposizioni sulla legge in generale-art. N\"), and for c.p.a. Allegati 2-4 come in the same Work; the code's articles are labelled \"<annex>-art. N\" and a label is the code's when its annex name (whitespace normalised) starts with one of `annexes`, case as held. disp. att. c.p.p. needs both: one \"Norme di attuazione del Codice di Procedura Penale-art. 1\", then \"Norme-art. 2...260\" (the origin's shortened label). disp. att. c.c.'s annex name was read truncated (\"...e disposizi\"); its start is recorded.",
+  "annexes": "The member layout of each code as Normattiva holds it (section labels of each code's latest held version, read on the node 2026-11-12; /root/measure/codici/codes-layout.json, sha256 4c59a1081cff603e269a1ab2657878c35abca858fd4085db59690d07740adcaa). `annexes` empty: a STRUCTURED code, the act is the code, its labels \"<partition> › Art. N.\". Otherwise an ANNEX code: the decree's own articles (\"Art. 1.\"), for c.c. the 31 preleggi (\"Disposizioni sulla legge in generale-art. N\"), and for c.p.a. Allegati 2-4 come in the same Work; the code's articles are labelled \"<annex>-art. N\" and a label is the code's when its annex name (whitespace normalised) starts with one of `annexes`, case as held. disp. att. c.p.p. needs both: one \"Norme di attuazione del Codice di Procedura Penale-art. 1\", then \"Norme-art. 2...260\" (the origin's shortened label). disp. att. c.c.'s annex name is the full held label (München, 2026-11-12, verbatim).",
   "not_in_codici": [
     {
       "abbrev": [
