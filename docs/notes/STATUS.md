@@ -20,6 +20,15 @@ measured (published figures disagree).
 
 ### 2026-11-12
 
+- **No ZFS snapshots on three datasets — OPEN, the operator's (node configuration, disk space)** (München, after
+  legi's forget at 19:30Z, 11-12, a script reading exit 2 as the swap; #585 makes the swap exit 4).
+  tank/louise-corpora (the ARCHIVE: the authoritative origin bytes, invariant 6 and 06 §6.4), tank/apps/louise-shard
+  (signed SHARDs) and tank/apps/louise-bundles hold no snapshot, so legi's origin was re-fetched from DILA (5 files
+  blake2-identical this time; an origin that changes or withdraws would not have been) and her SHARD rebuilt
+  (records ~4 h on 12 cores), while /data came back from ssd4@20:00. Architecture's position: the archive must be
+  snapshotted like /data, since nothing guarantees a re-fetch gives the same bytes; SHARDs and bundles are rebuildable
+  but cost hours. Retention and cost: the operator's choice, put by München with each dataset's size.
+
 - **An engine's name covers its series' base — FIXED (deploy/localai/llama-cpp/build.sh)** (the context-on-request
   session's finding). A relative `SERIES_FILE` was lost by the digest's `cd "$PATCHES"` (cat's error hidden by the
   pipe), so the name covered the patches alone, not the `base` line: the live c4e6133a6e85 (context-on-demand) and
