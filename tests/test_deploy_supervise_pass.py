@@ -190,6 +190,35 @@ exit 0
     assert (tmp_path / "hold").exists() and "held" in out
 
 
+def test_a_pass_that_ends_during_the_stop_reports_its_own_status(tmp_path):
+    """München, 2026-11-12 (5c92a1d's staging, load 30 on 12 threads): the
+    test above failed `143 == 130`. The trap interrupts `wait`, whose status
+    is then 128 + SIGTERM; the second wait was asked only while `kill -0`
+    still saw the child, so a pass that ended during the trap's `docker stop`
+    was reported 143. Made certain here: `docker stop` returns only after
+    the pass has ended."""
+    import signal
+    import time
+    env = _fake_docker(tmp_path, [])
+    (tmp_path / "bin" / "docker").write_text(f"""#!/bin/bash
+echo "$*" >> {tmp_path}/calls
+if [ "$1" = stop ]; then touch {tmp_path}/stopped; sleep 0.5; exit 0; fi
+for i in $(seq 200); do [ -e {tmp_path}/stopped ] && exit 130; sleep 0.05; done
+exit 0
+""")
+    p = subprocess.Popen(["bash", str(DEPLOY / "supervise-pass.sh"), "build", "--memory=8g", "img"],
+                         env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    calls = tmp_path / "calls"
+    for _ in range(100):
+        if calls.exists():
+            break
+        time.sleep(0.05)
+    p.send_signal(signal.SIGTERM)
+    out, _ = p.communicate(timeout=30)
+    assert p.returncode == 130 and "exit 130" in out, out
+    assert calls.read_text().splitlines()[1] == "stop -t 300 build"
+
+
 def test_a_pass_that_fails_at_once_three_times_in_a_row_is_not_run_twenty_times(tmp_path):
     """2026-11-09: the legal pilot's `pool` died at startup (an AttributeError,
     exit 1) and the supervisor ran it 20 times over 19 minutes. Three fast
