@@ -745,3 +745,97 @@ def embedding_blockers(name: str, embed: str | None,
     the node profile's hold where one is in force."""
     from . import status
     return [h.says for h in status.holds(name, "embed", embed_mode=embed, node_con=con)]
+
+
+# ---- the encoder checks running now, for the Library's cards -----------------------
+# (operator, 2026-11-12: "AND IT SHOULD BE CLEARLY SHOWN IN THE COLLECTION CARD /
+# GATING"). The worker's `run_check._gating` lives in its memory; the web is
+# another process. Published here when a gate starts, removed when it ends, and
+# cleared by the worker at boot (a gate does not survive a restart). The
+# durations of the last gate per model give the card its expected end.
+
+GATES_KEY = "gates_running"
+GATE_DURATIONS_KEY = "gate_durations"
+#: an entry older than this is shown as stale, never as running: a worker
+#: killed mid-gate (OOM) leaves it until its next boot clears the key
+GATE_STALE_S = 6 * 3600.0
+
+
+def _json_control(c, key: str, default):
+    import json
+    raw = db.get_control(c, key, None)
+    if not raw:
+        return default
+    try:
+        got = json.loads(raw)
+    except (TypeError, ValueError):
+        return default
+    return got if isinstance(got, type(default)) else default
+
+
+def publish_gate(collection: str, entry: dict) -> None:
+    """The gate of `collection` (one role) runs now: `entry` is its
+    {role, server, model, run, since, expected_end, alone} (`alone`: the
+    others on the model stand aside — no gate twin)."""
+    import json
+    with closing(connect()) as c:
+        c.execute("BEGIN IMMEDIATE")
+        try:
+            gates = _json_control(c, GATES_KEY, {})
+            gates[f"{collection} {entry.get('role', 'document')}"] = {"collection": collection,
+                                                                      **entry}
+            db.set_control(c, GATES_KEY, json.dumps(gates, sort_keys=True))
+            c.execute("COMMIT")
+        except BaseException:
+            c.execute("ROLLBACK")
+            raise
+
+
+def clear_gate(collection: str, role: str, *, server: str | None = None,
+               model: str | None = None, seconds: float | None = None) -> None:
+    """The gate of `collection` (`role`) ended; `seconds` it took, kept per
+    (server, model) as the next one's expected duration when it reached a
+    verdict."""
+    import json
+    with closing(connect()) as c:
+        c.execute("BEGIN IMMEDIATE")
+        try:
+            gates = _json_control(c, GATES_KEY, {})
+            gates.pop(f"{collection} {role}", None)
+            db.set_control(c, GATES_KEY, json.dumps(gates, sort_keys=True))
+            if seconds is not None and server and model:
+                took = _json_control(c, GATE_DURATIONS_KEY, {})
+                took[f"{server} {model}"] = round(float(seconds), 1)
+                db.set_control(c, GATE_DURATIONS_KEY, json.dumps(took, sort_keys=True))
+            c.execute("COMMIT")
+        except BaseException:
+            c.execute("ROLLBACK")
+            raise
+
+
+def clear_all_gates() -> None:
+    """At the worker's boot: no gate runs before the worker does."""
+    with closing(connect()) as c:
+        db.set_control(c, GATES_KEY, "{}")
+
+
+def gate_duration(server: str, model: str) -> float | None:
+    """How long the last gate that reached a verdict on (server, model) took."""
+    took = peek(lambda c: _json_control(c, GATE_DURATIONS_KEY, {}), {}, error={})
+    v = took.get(f"{server} {model}")
+    return float(v) if isinstance(v, (int, float)) else None
+
+
+def gates_running() -> list[dict]:
+    """The encoder checks running now, as the worker published them; each
+    with `stale` set when older than GATE_STALE_S (read-only, creates
+    nothing: the web asks it for every page)."""
+    import time
+    gates = peek(lambda c: _json_control(c, GATES_KEY, {}), {}, error={})
+    now = time.time()
+    out = []
+    for g in gates.values():
+        if not isinstance(g, dict):
+            continue
+        out.append({**g, "stale": now - float(g.get("since") or 0) > GATE_STALE_S})
+    return sorted(out, key=lambda g: (str(g.get("collection")), str(g.get("role"))))

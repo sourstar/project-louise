@@ -1028,6 +1028,27 @@ def test_no_card_run_is_gated_without_a_stored_cpu_reference(node, endpoint):
     assert backend_gate.embed_allowed(con, collection) is True, "made: the gate runs by itself"
 
 
+def test_the_gate_is_published_while_it_runs_and_its_duration_kept_after(node, endpoint, monkeypatch):
+    """The worker's gate is in its memory; the Library's card reads the node's
+    store: published at the start (its run once stated), cleared at the end,
+    and the time it took kept for the next one's expected end."""
+    from app import node_state
+    root, collection, codex = node
+    seen = []
+
+    def watching(url, **kw):
+        seen.append(node_state.gates_running())
+        return endpoint.post(url, **kw)
+    monkeypatch.setattr(embeddings.httpc, "post", watching)
+    run_check.validate(root, "gutenberg", codex, collections_mod.recipe_for(collection))
+    during = [g for snap in seen for g in snap if g["collection"] == "gutenberg"]
+    assert during and {g["role"] for g in during} == {"document"} and during[-1]["run"] == R1
+    assert during[-1]["alone"] is True and during[-1]["since"] > 0
+    assert node_state.gates_running() == [], "cleared at the end"
+    server, model = run_check._who(collections_mod.recipe_for(collection), False)
+    assert node_state.gate_duration(server, model) is not None, "kept for the next estimate"
+
+
 def test_a_cpu_run_is_gated_without_a_reference_it_would_be_its_own(node, endpoint):
     """A run ON the CPU is the reference's own kind: nothing to hold it to."""
     import shutil

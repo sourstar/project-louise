@@ -2355,6 +2355,54 @@ def _embedder_tag(collection, recipe) -> dict | None:
             "served": served}
 
 
+def _gate_times(g: dict) -> dict:
+    """A running gate's times in words: since when, for how long, and its
+    expected end from the last gate on the same model."""
+    import datetime as _dt
+    now = time.time()
+    since = float(g.get("since") or now)
+    utc = lambda t: _dt.datetime.fromtimestamp(t, _dt.timezone.utc).strftime("%H:%M UTC")  # noqa: E731
+    out = {**g, "since_text": f"{utc(since)} ({max(0, int(now - since)) // 60} min ago)",
+           "run_short": (str(g.get("run"))[:23] + "…") if g.get("run") else "being asked",
+           "end_text": None}
+    end, took = g.get("expected_end"), g.get("took_last")
+    if end:
+        left = int(float(end) - now)
+        out["end_text"] = (f"~{utc(float(end))} (the last check on this model took "
+                           f"{int(float(took)) // 60} min {int(float(took)) % 60} s)"
+                           + ("" if left >= 0 else f"; {(-left) // 60} min past it"))
+    return out
+
+
+def _gates_on_card(collection, recipe) -> dict:
+    """{own, waiting, beside}: this collection's encoder checks running now;
+    another collection's check on the model this one embeds with, which it
+    waits for (`alone`: the check holds the model) or runs beside (a gate
+    twin: the check has a load of its own). Empty when none runs."""
+    try:
+        gates = node_state.gates_running()
+    except Exception:   # noqa: BLE001 — the card renders without it
+        return {}
+    if not gates:
+        return {}
+    from . import run_check
+    mine = set()
+    if recipe is not None:
+        try:
+            mine = {run_check._who(recipe, False), run_check._who(recipe, True)}
+        except Exception:   # noqa: BLE001
+            mine = set()
+    own, waiting, beside = [], [], []
+    for g in gates:
+        if g.get("stale"):
+            continue
+        if g.get("collection") == collection.name:
+            own.append(_gate_times(g))
+        elif (g.get("server"), g.get("model")) in mine:
+            (waiting if g.get("alone", True) else beside).append(_gate_times(g))
+    return {"own": own, "waiting": waiting, "beside": beside} if (own or waiting or beside) else {}
+
+
 def _collection_shelf(collection: collections_mod.Collection,
                        measured: dict | None = None,
                        worker_state: str = "running") -> dict:
@@ -2668,6 +2716,10 @@ def _collection_shelf(collection: collections_mod.Collection,
         "embed_in_flight": min(in_flight, embed_ready),
         "embed_waiting": max(0, embed_ready - in_flight),
         "gate": backend_gate.gate_state(con),
+        # the encoder checks running now (operator, 2026-11-12: "IT SHOULD BE
+        # CLEARLY SHOWN IN THE COLLECTION CARD"): this one's, and another's on
+        # the model this one embeds with
+        "gating": _gates_on_card(collection, recipe),
         # which processor this collection's encoder spends — the GPU is the
         # scarce one, so "turn embedding on" means something different here
         "embed_device": recipe.spends if recipe is not None else None,

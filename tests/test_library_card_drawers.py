@@ -369,3 +369,51 @@ def test_an_annotations_card_has_the_same_two_lines(client, monkeypatch):
     assert others and all(c["drawer"] == "options" for c in others), others
     assert _buttons(card)["remove…"]["attrs"]["onclick"] == "removeCollection('pubmed-same-work', 'shard')"
     assert card["templates"]["remove"]["text"] == "It holds 2 claims in snapshot 2026-09."
+
+
+# ---- the encoder check, while it runs (operator, 2026-11-12) -----------------
+
+def test_a_running_encoder_check_is_shown_on_its_card_and_on_the_cards_that_wait(client, monkeypatch):
+    """'IT SHOULD BE CLEARLY SHOWN IN THE COLLECTION CARD': the gated
+    collection says the check runs, its run, since when and its expected end
+    (from the last check on the model); another collection on the same model
+    says it waits for it — or, with a gate twin, that it keeps embedding."""
+    from app import run_check
+    html = client.get("/admin/library").text
+    assert "data-gate-running" not in html and "data-gate-waiting" not in html
+    recipe = collections_mod.recipe_for(next(c for c in collections_mod.load_all()
+                                              if c.name == "gutenberg"))
+    server, model = run_check._who(recipe, False)
+    node_state.clear_gate("x", "document", server=server, model=model, seconds=645.0)
+    since = time.time() - 120
+    node_state.publish_gate("gutenberg", {"role": "document", "server": server, "model": model,
+                                          "run": "sha256:" + "e9" * 32, "since": since,
+                                          "expected_end": since + 645.0, "took_last": 645.0,
+                                          "alone": True})
+    sight = _in_sight_text(client.get("/admin/library").text, "gutenberg")
+    assert "encoder check running document side, run sha256:e9e9e9e9e9e9e9e9" in sight, sight
+    assert "(2 min ago)" in sight and "the last check on this model took 10 min 45 s" in sight
+    # the same check seen from another collection on the model
+    node_state.clear_gate("gutenberg", "document")
+    node_state.publish_gate("legi", {"role": "document", "server": server, "model": model,
+                                     "run": None, "since": since, "expected_end": None,
+                                     "took_last": None, "alone": True})
+    sight = _in_sight_text(client.get("/admin/library").text, "gutenberg")
+    assert f"waiting for legi's encoder check on {model}" in sight, sight
+    node_state.publish_gate("legi", {"role": "document", "server": server, "model": model,
+                                     "run": None, "since": since, "expected_end": None,
+                                     "took_last": None, "alone": False})
+    sight = _in_sight_text(client.get("/admin/library").text, "gutenberg")
+    assert "waiting" not in sight and "this collection keeps embedding" in sight, sight
+    node_state.clear_gate("legi", "document")
+    assert "data-gate" not in client.get("/admin/library").text
+
+
+def test_a_check_older_than_the_stale_bound_is_not_shown_as_running(client, monkeypatch):
+    node_state.publish_gate("gutenberg", {"role": "document", "server": "s", "model": "m",
+                                          "run": None, "since": time.time() - node_state.GATE_STALE_S - 5,
+                                          "expected_end": None, "took_last": None, "alone": True})
+    assert [g["stale"] for g in node_state.gates_running()] == [True]
+    assert "data-gate-running" not in client.get("/admin/library").text
+    node_state.clear_all_gates()
+    assert node_state.gates_running() == []

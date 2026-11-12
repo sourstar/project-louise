@@ -42,6 +42,7 @@ cannot finish cannot honour SIGTERM).
 from __future__ import annotations
 
 import json
+import logging
 import os
 import threading
 import time
@@ -56,6 +57,8 @@ from . import collections as collections_mod
 from . import config, embeddings
 from .hold import calibration as cal, shard as shard_mod, embedder as emb, runs as runs_mod
 from .hold.codex import Codex
+
+log = logging.getLogger(__name__)
 
 #: a text short enough to cost nothing, sent to learn which run answers
 PROBE = "louise"
@@ -476,12 +479,62 @@ def _gate_running(recipe, role: str, root: Path, name: str):
     mine = (str(runs_mod.directory(root, name)), name)
     with _gating_lock:
         _gating[who] = mine
+    started = time.time()
+    _announce(name, role, who, since=started)
+    reached = False
     try:
         yield
+        reached = True                       # a statement was kept, pass or fail
     finally:
         with _gating_lock:
             if _gating.get(who) == mine:
                 del _gating[who]
+        _withdraw(name, role, who, seconds=(time.time() - started) if reached else None)
+
+
+# ---- the gate on the Library's card (operator, 2026-11-12: "IT SHOULD BE CLEARLY
+# SHOWN IN THE COLLECTION CARD") — published to the node's store, which the web
+# reads; a failure to publish never touches the gate itself
+
+_announced: dict[tuple[str, str], dict[str, Any]] = {}
+
+
+def _announce(name: str, role: str, who: tuple[str, str], *, since: float,
+              run: str | None = None) -> None:
+    from . import node_state
+    took = node_state.gate_duration(*who)
+    entry = {"role": role, "server": who[0], "model": who[1], "run": run, "since": since,
+             "expected_end": (since + took) if took else None, "took_last": took,
+             "alone": True}
+    _announced[(name, role)] = entry
+    try:
+        node_state.publish_gate(name, entry)
+    except Exception as e:                              # noqa: BLE001
+        log.warning("%s: the running gate could not be published to the node store: %s",
+                    name, e)
+
+
+def _note_run(name: str, role: str, run: str) -> None:
+    """The run the gate measures, once it is stated."""
+    entry = _announced.get((name, role))
+    if entry is None or entry.get("run") == run:
+        return
+    from . import node_state
+    entry["run"] = run
+    try:
+        node_state.publish_gate(name, entry)
+    except Exception as e:                              # noqa: BLE001
+        log.warning("%s: the running gate could not be published to the node store: %s",
+                    name, e)
+
+
+def _withdraw(name: str, role: str, who: tuple[str, str], *, seconds: float | None) -> None:
+    from . import node_state
+    _announced.pop((name, role), None)
+    try:
+        node_state.clear_gate(name, role, server=who[0], model=who[1], seconds=seconds)
+    except Exception as e:                              # noqa: BLE001
+        log.warning("%s: the ended gate could not be cleared from the node store: %s", name, e)
 
 
 def gating_elsewhere(collection) -> str | None:
@@ -537,6 +590,7 @@ def _validate(root: Path, name: str, codex: Codex, recipe, *, role: str = "docum
     reference_vectors = reference(root, name, codex, role)
     try:
         stated = stated_run(recipe, query=query, probe_item=probe_for(codex, role))
+        _note_run(name, role, stated.run_id)
         _stopping(stop, name)
         if key is None:
             from .bundles import keys as node_keys

@@ -180,6 +180,25 @@
   {% if c.blocked %}
   <div class="note"><span class="badge err" title="failed a stage or exhausted retries: Options › clear errors &amp; retry…">{{ c.blocked }} blocked</span></div>
   {% endif %}
+  {# THE ENCODER CHECK, WHILE IT RUNS (operator, 2026-11-12: "IT SHOULD BE
+     CLEARLY SHOWN IN THE COLLECTION CARD"): this collection's, and another's
+     on the same model — waited for, or running beside on a load of its own #}
+  {% for g in (c.gating.own if c.gating else []) %}
+  <div class="note" data-gate-running>
+    <span class="badge brass" title="the calibration gate (03 §3.3) measures the encoder's run before any of its vectors is written">encoder check running</span>
+    {{ g.role }} side, run {{ g.run_short }}, since {{ g.since_text }}{% if g.end_text %}; expected end {{ g.end_text }}{% else %}; no earlier check on this model to estimate its end from{% endif %}{% if not g.alone %} — on a load of its own: the other collections on {{ g.model }} keep embedding{% endif %}
+  </div>
+  {% endfor %}
+  {% for g in (c.gating.waiting if c.gating else []) %}
+  <div class="note" data-gate-waiting>
+    <span class="badge err">waiting</span> for {{ g.collection }}'s encoder check on {{ g.model }}, since {{ g.since_text }}{% if g.end_text %}; expected end {{ g.end_text }}{% endif %}
+  </div>
+  {% endfor %}
+  {% for g in (c.gating.beside if c.gating else []) %}
+  <div class="note" data-gate-beside>
+    {{ g.collection }}'s encoder check runs on a separate load of {{ g.model }} since {{ g.since_text }}; this collection keeps embedding
+  </div>
+  {% endfor %}
   {% if c.gate and not c.gate.allowed %}
   <div class="note">
     <span class="badge err">embedding paused</span> {{ c.gate.reason }}
