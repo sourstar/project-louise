@@ -17,7 +17,8 @@
 # tagged louise-llama-cpp:<variant>-<series digest>.
 #
 # SERIES_FILE=<path> builds from another series file: a CANDIDATE engine on a
-# newer base, beside the live one. Its lines are read as the series' are;
+# newer base, beside the live one, relative or absolute (it is resolved: the
+# name covers the file, its base line included). Its lines are read as the series' are;
 # patch names resolve in deploy/localai/patches; the series and its tag are
 # unchanged when it is unset. (2026-11-02: the candidate on LocalAI master
 # 16acc89, llama.cpp ddf48f8, passed its checks and became the series, the
@@ -40,8 +41,26 @@ OUT=${2:?out dir}
 HERE=$(cd "$(dirname "$0")" && pwd)
 PATCHES=$HERE/../patches
 SERIES_FILE=${SERIES_FILE:-$PATCHES/series}
+# THE SERIES FILE BY ITS ABSOLUTE PATH (2026-11-12, the context-on-request
+# session's finding): the name below is the digest of the series file and its
+# patches, taken inside $PATCHES. A relative SERIES_FILE was lost by that cd,
+# cat's error was hidden by the pipe, and the name covered the patches alone,
+# not the series' `base` line (LocalAI's commit): two bases with the same
+# patches would have shared a name. Unreadable, it stops here.
+[ -r "$SERIES_FILE" ] || { echo "series file not readable: $SERIES_FILE" >&2; exit 2; }
+SERIES_FILE=$(cd "$(dirname "$SERIES_FILE")" && pwd)/$(basename "$SERIES_FILE")
 BASE=$(sed -n 's/^base //p' "$SERIES_FILE")
 SERIES=$(grep -v '^#' "$SERIES_FILE" | grep -v '^base ' | grep .)
+for p in $SERIES; do
+  [ -r "$PATCHES/$p" ] || { echo "patch not readable: $PATCHES/$p" >&2; exit 2; }
+done
+# the series' own digest names the build: the same series file (its base
+# included) and the same patches, the same tag
+HEAD=$(cd "$PATCHES" && cat "$SERIES_FILE" $SERIES | sha256sum | cut -c1-12)
+# NAME_ONLY=1: print that digest and stop (nothing fetched, nothing built)
+if [ -n "${NAME_ONLY:-}" ]; then
+  echo "$HEAD"; exit 0
+fi
 
 case $VARIANT in
   cpu)      BUILD_TYPE=; BASE_IMAGE=ubuntu:24.04
@@ -65,8 +84,6 @@ for p in $SERIES; do
   git -C "$WORK" -c user.name=build -c user.email=build@localhost -c core.autocrlf=false \
     am -q "$PATCHES/$p"
 done
-# the series' own digest names the build: the same patches, the same tag
-HEAD=$(cd "$PATCHES" && cat "$SERIES_FILE" $SERIES | sha256sum | cut -c1-12)
 NAME=$VARIANT-$HEAD
 CMAKE_ARGS=
 LOCK=
