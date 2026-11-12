@@ -763,14 +763,14 @@ def _entity_facts(query: str, store) -> tuple[list, list["PinnedFact"], list[dic
     return resolved, facts, withheld
 
 
-def _article_facts(query: str, collections, facts, as_of) -> list[dict]:
+def _article_facts(query: str, collections, facts, as_of, store=None) -> list[dict]:
     """The cited articles' texts, pinned by key beside the act (app/ask/
     articles.py; operator 2026-10-13: "art. 12 della legge … n. 2205" ranked
     other acts' articles above its own and never read it). Facts, never
     hits (invariant 4); never fatal to the search."""
     from .ask import articles
     try:
-        return articles.pin(query, collections, facts, as_of=as_of)
+        return articles.pin(query, collections, facts, as_of=as_of, store=store)
     except Exception:                       # noqa: BLE001 — the search answers without it
         return []
 
@@ -1348,7 +1348,7 @@ def search(con, query: str, k: int = 12, mode: str = "hybrid",
               "query_lang_by": getattr(plan, "query_lang_by", ""),
               "main_languages": list(getattr(plan, "main", ())),
               "catalog": partial["catalog"], "hits": final,
-              "facts": [asdict(f) for f in facts] + _article_facts(query, [collection], facts, as_of),
+              "facts": [asdict(f) for f in facts] + _article_facts(query, [collection], facts, as_of, store),
               "facts_withheld": facts_withheld,
               "timings": timings, "reranked": reranked}
     withheld = _legs_withheld(collection, partial)
@@ -1594,7 +1594,7 @@ def federated_search(collections: list, query: str, k: int = 12, mode: str = "hy
               "query_lang_by": getattr(plan, "query_lang_by", ""),
               "main_languages": list(getattr(plan, "main", ())),
               "catalog": catalog, "hits": final,
-              "facts": [asdict(f) for f in facts] + _article_facts(query, collections, facts, as_of),
+              "facts": [asdict(f) for f in facts] + _article_facts(query, collections, facts, as_of, store),
               "facts_withheld": facts_withheld,
               "timings": timings, "reranked": reranked, "merged_by": merged_by}
     if legs_withheld:

@@ -3,13 +3,20 @@ pinned block, never a ranked hit). Operator, 2026-10-13: "art. 12 della
 legge sull'emigrazione testo unico 13 novembre 1919, n. 2205" found the act
 and ranked other acts' articles above its own; the article was never read.
 
-For every citation in the query that names an article (`app/refs/normattiva
-.citations`), in every held collection that declares validity:
-1. the act, by its URN in the collection's own key table (`validity_works`):
-   the URN the citation spells, `urn:nir:stato:<form>:<date>;<number>`, a
-   primary-key lookup; where the citation's form is not the origin's (a
-   "legge" that is a regio decreto-legge, a "testo unico"), the URN the
-   reference source resolved it to (the query's pinned `atto` facts);
+ONE ENGINE, A GRAMMAR PER LEGAL REFERENCE SOURCE (docs/notes/legal-chunking-
+retrieval.md R1, operator's default A, 2026-11-08). Every registered
+reference source that answers `article_citations(query, refs, facts)`
+(app/plugins/base.py `LegalReferenceSource`; absent = no citations) says,
+in its own grammar, which articles the query cites — `ArticleCitation`:
+the Work's canonical ids and the article — and how its collections' chunk
+labels name an article (`article_of_label`): Normattiva ("art. 2043 c.c.",
+"art. 5 della legge 241/1990"), LEGI ("article L121-1 du code de la
+consommation"), NeuRIS ("§ 823 Abs. 1 BGB"), EUR-Lex ("Article 5 of
+Regulation (EU) 2016/679"). Then, for every citation, in every held
+collection that declares validity:
+1. the Work, by its key in the collection's own key table
+   (`validity_works`): the first of the citation's `keys` held — a
+   primary-key lookup each — else every one of its `also` held;
 2. the version: the one in force on the query's date (`as_of`), else the
    one shown (the last text);
 3. the article: that version's chunk whose label names it, read from the
@@ -18,12 +25,21 @@ For every citation in the query that names an article (`app/refs/normattiva
    which it still had its text, with that version's dates — what the reader
    who cites a repealed article is almost always asking for.
 
+A citation's key that a collection does not hold pins nothing there: the
+four key spaces (`urn:`, `legi:`, `eli:de:`/`jurabk:`, `celex:`) never meet.
+
 Bounded: MAX_ARTICLES articles a query. A collection that cannot be read is
 skipped, never fatal: the search answers without the pin."""
 from __future__ import annotations
 
 import re
-from typing import Any, Iterable
+from dataclasses import dataclass
+from typing import Any, Callable, Iterable
+
+from app.plugins.base import ArticleCitation
+# Normattiva's grammar, moved to its reference source unchanged; the names
+# stay importable here
+from app.refs.normattiva import FORMS, label_token, token  # noqa: F401
 
 #: articles pinned per query, whatever the query cites
 MAX_ARTICLES = 4
@@ -32,27 +48,7 @@ MAX_ARTICLES = 4
 #: (retrieval.ANSWER_SOURCE_CHARS); a code's article runs past 10,000 (p99 of
 #: the codes' articles, 2,943 tokens, review §3.5). Cut, and the cut said.
 MAX_CHARS = 4_000
-#: "art. 12", "articolo 5-bis", "art.2 comma 3" → `12`, `5-bis`, `2`
-_TOKEN = re.compile(r"art(?:icolo|\.)?\s*(\d+)\s*[-_ ]?\s*"
-                    r"(bis|ter|quater|quinquies|sexies|septies|octies|novies|decies)?\b", re.I)
-#: a label's article: "Legge sull'emigrazione-art. 12", "Art. 12.", "Articolo 12"
-_LABEL = re.compile(r"(?:^|[\s\-–])art(?:icolo|\.)?\s*(\d+)\s*[-_ ]?\s*"
-                    r"(bis|ter|quater|quinquies|sexies|septies|octies|novies|decies)?\b", re.I)
 _REPEALED = re.compile(r"\bARTICOLO\s+ABROGATO\b|^\s*\(?\s*abrogato\s*\)?\s*\.?\s*$", re.I | re.M)
-
-
-def token(text: str | None) -> str | None:
-    m = _TOKEN.search(text or "")
-    if not m:
-        return None
-    return f"{int(m.group(1))}-{m.group(2).lower()}" if m.group(2) else str(int(m.group(1)))
-
-
-def label_token(label: str | None) -> str | None:
-    m = _LABEL.search(label or "")
-    if not m:
-        return None
-    return f"{int(m.group(1))}-{m.group(2).lower()}" if m.group(2) else str(int(m.group(1)))
 
 
 def repealed(text: str) -> bool:
@@ -60,41 +56,47 @@ def repealed(text: str) -> bool:
     return bool(_REPEALED.search(body[:300]))
 
 
-#: the URN:NIR forms a state act is filed under (app/refs/normattiva.py's
-#: citation forms, and those a citation names only by title): a citation
-#: whose form is not the origin's — "legge" for a regio decreto-legge, a
-#: "testo unico" — is found by its date and number under each of them, one
-#: primary-key lookup each, with no reference source needed (2026-10-14: the
-#: node had never synced normattiva-refs, and the operator's query resolved
-#: to nothing)
-FORMS = ("legge", "legge.costituzionale", "decreto.legislativo", "decreto.legge",
-         "decreto.del.presidente.della.repubblica",
-         "decreto.del.presidente.del.consiglio.dei.ministri", "regio.decreto.legge",
-         "regio.decreto", "regio.decreto.legislativo", "decreto.legislativo.luogotenenziale",
-         "decreto.luogotenenziale", "decreto", "decreto.ministeriale")
+@dataclass(frozen=True)
+class Cited:
+    """A citation and the label reader of the source that cited it."""
+    citation: ArticleCitation
+    read: Callable[[str | None], str | None]
+
+    @property
+    def article(self) -> str:
+        return self.citation.article
 
 
-def _urns(con, c: dict, facts: Iterable) -> list[str]:
-    """The act's URN keys this collection holds for one citation."""
-    out: list[str] = []
-    if c.get("data"):
-        forms = [c["tipo"]] if c.get("tipo") not in (None, "*") else []
-        forms += [f for f in FORMS if f not in forms]
-        for form in forms:
-            key = f"urn:nir:stato:{form}:{c['data']};{c['numero']}"
-            if con.execute("SELECT 1 FROM validity_works WHERE key=? LIMIT 1", (key,)).fetchone():
-                out.append(key)
-                break                        # the citation's own form first, then the first that holds it
-    if not out:
-        suffix = f"— {c['art']}"
-        for f in facts:
-            eid = getattr(f, "entity_id", None) if not isinstance(f, dict) else f.get("entity_id")
-            label = getattr(f, "label", None) if not isinstance(f, dict) else f.get("label")
-            kind = getattr(f, "kind", None) if not isinstance(f, dict) else f.get("kind")
-            if kind == "atto" and eid and str(label or "").endswith(suffix) and eid not in out:
-                if con.execute("SELECT 1 FROM validity_works WHERE key=? LIMIT 1", (eid,)).fetchone():
-                    out.append(eid)
+def citations(query: str, facts: Iterable = (), refs=None) -> list[Cited]:
+    """What every legal reference source says the query cites, in registry
+    order. A source whose grammar fails cites nothing; the others still do."""
+    from app import refs as refs_mod
+    facts = list(facts)
+    out: list[Cited] = []
+    for source in refs_mod.REFS_REGISTRY.values():
+        ask = getattr(source, "article_citations", None)
+        read = getattr(source, "article_of_label", None)
+        if ask is None or read is None:
+            continue
+        try:
+            got = ask(query, refs, facts)
+        except Exception:                    # noqa: BLE001 — never fatal to the search
+            continue
+        out += [Cited(c, read) for c in got if c.article]
     return out
+
+
+def _held(con, key: str) -> bool:
+    return con.execute("SELECT 1 FROM validity_works WHERE key=? LIMIT 1", (key,)).fetchone() is not None
+
+
+def _keys(con, c: ArticleCitation) -> list[str]:
+    """The Work's keys this collection holds for one citation: the first of
+    `keys` held, else every one of `also` held."""
+    first = next((k for k in c.keys if _held(con, k)), None)
+    if first is not None:
+        return [first]
+    return [k for k in c.also if _held(con, k)]
 
 
 def _versions(con, work: str) -> list[dict]:
@@ -111,11 +113,14 @@ def _chosen(versions: list[dict], as_of: int | None) -> dict | None:
     return live[-1] if live else None
 
 
-def _article(collection, native_id: int, tok: str) -> dict | None:
+def _article(collection, native_id: int, want: Cited | str) -> dict | None:
+    """The version's first chunk whose label names the article. `want` a
+    bare token reads labels by Normattiva's grammar."""
     from app import reader
+    read, tok = (label_token, want) if isinstance(want, str) else (want.read, want.article)
     doc = reader.document(collection, int(native_id))
     for ch in (doc or {}).get("chunks") or []:
-        if label_token(ch.get("chapter")) == tok:
+        if read(ch.get("chapter")) == tok:
             return ch
     return None
 
@@ -142,17 +147,17 @@ def _changes(con, work: str, tok: str) -> list[dict]:
              "su": f"art. {r['article']}" if r["article"] else "l'atto"} for r in rows[-MAX_CHANGES:]]
 
 
-def _fact(collection, urn: str, act_label: str, tok: str, version: dict, chunk: dict,
+def _fact(collection, key: str, act_label: str, c: ArticleCitation, version: dict, chunk: dict,
           note: str, changes: list[dict] | None = None) -> dict:
-    fields = {"testo": _capped(str(chunk.get("text") or "")),
-              "in vigore dal": _day(version["valid_from"]),
-              "fino al": _day(version["valid_to"]) or "oggi",
-              "versione": version["uid"], "chunk": chunk.get("chunk_id")}
+    fields: dict[str, Any] = {"testo": _capped(str(chunk.get("text") or "")),
+                              "in vigore dal": _day(version["valid_from"]),
+                              "fino al": _day(version["valid_to"]) or "oggi",
+                              "versione": version["uid"], "chunk": chunk.get("chunk_id")}
     if changes:
         fields["modificato da"] = changes
-    return {"entity_id": f"{urn}~art{tok.replace('-', '')}", "kind": "articolo",
+    return {"entity_id": f"{key}~art{c.article.replace('-', '')}", "kind": "articolo",
             "source_id": collection.name,
-            "label": f"{act_label} — art. {tok} ({note})",
+            "label": f"{act_label} — {c.label} ({note})",
             "fields": fields, "via": None}
 
 
@@ -164,15 +169,15 @@ def _capped(text: str) -> str:
 
 
 def pin(query: str, collections: Iterable, facts: Iterable = (), *,
-        as_of: int | None = None) -> list[dict]:
+        as_of: int | None = None, store=None) -> list[dict]:
     """The cited articles' texts as pinned facts (PinnedFact's fields, as
-    dicts: the answer's `facts` list holds them so)."""
+    dicts: the answer's `facts` list holds them so). `store`: the refs store
+    the grammars that need reference data read (a code's title, a German
+    abbreviation); None = only those that need none cite."""
     from app import db, validity
-    from app.refs import normattiva as nref
-    cited = [c for c in nref.citations(query) if c.get("art")]
+    cited = citations(query, facts, store)
     if not cited:
         return []
-    facts = list(facts)
     out: list[dict] = []
     for collection in collections:
         if validity.declared(collection) is None:
@@ -182,13 +187,11 @@ def pin(query: str, collections: Iterable, facts: Iterable = (), *,
         except Exception:                    # noqa: BLE001 — the search answers without it
             continue
         try:
-            for c in cited:
-                tok = token(c["art"])
-                if not tok:
-                    continue
-                for urn in _urns(con, c, facts):
+            for want in cited:
+                c = want.citation
+                for key in _keys(con, c):
                     works = [r[0] for r in con.execute(
-                        "SELECT work FROM validity_works WHERE key=?", (urn,))]
+                        "SELECT work FROM validity_works WHERE key=?", (key,))]
                     for work in works:
                         versions = _versions(con, work)
                         v = _chosen(versions, as_of)
@@ -196,18 +199,18 @@ def pin(query: str, collections: Iterable, facts: Iterable = (), *,
                             continue
                         title = con.execute("SELECT title FROM documents WHERE uid=?",
                                             (v["uid"],)).fetchone()
-                        act_label = (title[0] if title and title[0] else urn).split(" — ")[0]
-                        ch = _article(collection, v["native_id"], tok)
-                        changes = _changes(con, work, tok)
+                        act_label = (title[0] if title and title[0] else key).split(" — ")[0]
+                        ch = _article(collection, v["native_id"], want)
+                        changes = _changes(con, work, c.article)
                         if ch is not None:
                             note = "testo vigente" if as_of is None else f"testo al {_day(as_of)}"
-                            out.append(_fact(collection, urn, act_label, tok, v, ch, note, changes))
+                            out.append(_fact(collection, key, act_label, c, v, ch, note, changes))
                         if ch is None or repealed(str(ch.get("text") or "")):
                             for older in reversed([x for x in versions
                                                    if x["valid_from"] < v["valid_from"]]):
-                                och = _article(collection, older["native_id"], tok)
+                                och = _article(collection, older["native_id"], want)
                                 if och is not None and not repealed(str(och.get("text") or "")):
-                                    out.append(_fact(collection, urn, act_label, tok, older, och,
+                                    out.append(_fact(collection, key, act_label, c, older, och,
                                                      "ultimo testo in vigore", changes))
                                     break
                         if len(out) >= MAX_ARTICLES:

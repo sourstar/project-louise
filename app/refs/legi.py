@@ -63,7 +63,7 @@ import unicodedata
 from pathlib import Path
 from typing import Iterator
 
-from ..plugins.base import (Entity, RefColumn, RefLink, RefLookup, RefRecordBatch, RefSchema,
+from ..plugins.base import (ArticleCitation, Entity, RefColumn, RefLink, RefLookup, RefRecordBatch, RefSchema,
                             RefSyncState, RefTable)
 
 SOURCE_ID = "legi-refs"
@@ -253,6 +253,13 @@ class LegiRefSource:
 
     def schema(self) -> RefSchema:
         return RefSchema(source_id=self.source_id, tables=(TEXTE, ARTICLE, SECTION), links=(LINK,))
+
+    def article_citations(self, query: str, refs: RefLookup | None = None,
+                          facts=()) -> list[ArticleCitation]:
+        return article_citations(query, refs, facts)
+
+    def article_of_label(self, label: str | None) -> str | None:
+        return article_of_label(label)
 
     @staticmethod
     def input_mtime(state: RefSyncState) -> float:
@@ -512,16 +519,86 @@ def _acts(index: dict, act: dict) -> list[dict]:
     return rows if len({r["cid"] for r in rows}) == 1 else []
 
 
+def _cited(query: str, refs: RefLookup, index: dict) -> Iterator[tuple[dict, dict, list[dict]]]:
+    """What a query cites, resolved: `(texte row, citation, [])` for an act
+    cited, `(texte row, citation, [article rows])` for an article of a code
+    or act — the one walk the resolver and the article pin share."""
+    skip_to = 0
+    for c in citations(query):
+        if c["start"] < skip_to:
+            continue
+        if c["kind"] == "act":
+            for r in _acts(index, c):
+                yield r, c, []
+            continue
+        after = query[c["end"]:c["end"] + 160]
+        texts: list[dict] = []
+        m = _ACT_AFTER.match(after)
+        if m is not None and (act := _act_of(m)) is not None:
+            texts = _acts(index, act)       # the act itself is its own citation, pinned too
+        if not texts:
+            texts, n = code_at(index, after)
+            if texts:
+                skip_to = c["end"] + n
+        if not texts:
+            texts = code_before(index, query[max(0, c["start"] - 60):c["start"]])
+        for t in texts:
+            for num in _nums(c["a"], c["b"]):
+                rows = refs.rows(ARTICLE.name, {"cid": t["cid"], "num_norm": num})
+                if not rows and re.search(r"[a-z]$", num) and re.search(r"\d[a-z]$", num):
+                    # a capital read as the CGI's letter that was the next word
+                    rows = refs.rows(ARTICLE.name, {"cid": t["cid"], "num_norm": num[:-1]})
+                yield t, c, rows
+
+
+def _held(refs: RefLookup | None) -> dict | None:
+    if refs is None:
+        return None
+    index = _index(refs)
+    if not index["codes"] and not index["by_num"] and not index["by_date"]:
+        return None                         # no LEGI here: nothing to resolve against
+    return index
+
+
+def article_citations(query: str, refs: RefLookup | None, facts=()) -> list[ArticleCitation]:
+    """Every article the query cites, one citation per Work (the article's
+    chain, `article.work`): its versions' `legi:LEGIARTI…` ids as the keys —
+    a `legi` record's own key (app/plugins/legi/source.py). Needs the synced
+    `texte`/`article` tables: a code is named by its title, initials or
+    abbreviation, which only they hold."""
+    index = _held(refs)
+    if index is None:
+        return []
+    out: list[ArticleCitation] = []
+    for _t, _c, rows in _cited(query, refs, index):
+        works: dict[str, list[dict]] = {}
+        for r in rows:
+            works.setdefault(str(r.get("work") or r["id"]), []).append(r)
+        for group in works.values():
+            num = group[0]["num"]
+            out.append(ArticleCitation(keys=tuple(f"legi:{r['id']}" for r in group),
+                                       article=norm_num(num), label=f"article {num}"))
+    return out
+
+
+#: a `legi` article record's one section: "Article L121-1"
+_ARTICLE_LABEL = re.compile(r"^\s*Article\s+(?P<num>\S.*?)\s*$")
+
+
+def article_of_label(label: str | None) -> str | None:
+    m = _ARTICLE_LABEL.match(str(label or "").rsplit(" › ", 1)[-1])
+    return norm_num(m.group("num")) if m else None
+
+
 class CitationResolver:
     """Citation text → the texts and article versions named (`texte`,
     `article` rows), entities `legi:<id>`; `expand` follows the declared
     link like any resolver's (app/refs/resolver.py's composite)."""
 
     def resolve(self, query: str, refs: RefLookup) -> list[Entity]:
-        index = _index(refs)
-        if not index["codes"] and not index["by_num"] and not index["by_date"]:
-            return []                       # no LEGI here: nothing to resolve against
-        found = citations(query)
+        index = _held(refs)
+        if index is None:
+            return []
         out: list[Entity] = []
         seen: set[str] = set()
 
@@ -529,33 +606,12 @@ class CitationResolver:
             if eid not in seen:
                 seen.add(eid)
                 out.append(Entity(entity_id=eid, kind=kind, source_id=SOURCE_ID, label=label))
-        skip_to = 0
-        for c in found:
-            if c["start"] < skip_to:
-                continue
+        for t, c, rows in _cited(query, refs, index):
             if c["kind"] == "act":
-                for r in _acts(index, c):
-                    add(f"legi:{r['id']}", TEXTE.name, r["titre"] or r["id"])
+                add(f"legi:{t['id']}", TEXTE.name, t["titre"] or t["id"])
                 continue
-            after = query[c["end"]:c["end"] + 160]
-            texts: list[dict] = []
-            m = _ACT_AFTER.match(after)
-            if m is not None and (act := _act_of(m)) is not None:
-                texts = _acts(index, act)       # the act itself is its own citation, pinned too
-            if not texts:
-                texts, n = code_at(index, after)
-                if texts:
-                    skip_to = c["end"] + n
-            if not texts:
-                texts = code_before(index, query[max(0, c["start"] - 60):c["start"]])
-            for t in texts:
-                for num in _nums(c["a"], c["b"]):
-                    rows = refs.rows(ARTICLE.name, {"cid": t["cid"], "num_norm": num})
-                    if not rows and re.search(r"[a-z]$", num) and re.search(r"\d[a-z]$", num):
-                        # a capital read as the CGI's letter that was the next word
-                        rows = refs.rows(ARTICLE.name, {"cid": t["cid"], "num_norm": num[:-1]})
-                    for r in rows:
-                        add(f"legi:{r['id']}", ARTICLE.name,
-                            f"{t['titre']} — art. {r['num']} ({r['date_debut']} → {r['date_fin']}, "
-                            f"{r['etat']})" + (f" {c['sub']}" if c["sub"] else ""))
+            for r in rows:
+                add(f"legi:{r['id']}", ARTICLE.name,
+                    f"{t['titre']} — art. {r['num']} ({r['date_debut']} → {r['date_fin']}, "
+                    f"{r['etat']})" + (f" {c['sub']}" if c["sub"] else ""))
         return out
