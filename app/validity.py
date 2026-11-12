@@ -341,8 +341,14 @@ def amendments_of(con, keys: Iterable[str], article: str | None = None, *, limit
 # rdf stage only where it still holds a row of the old labelled form
 # (`STALE_LABELLED`); every other row it holds means today what it meant.
 
-#: 1: the article only (2026-11-08); 2: `<annex>|<token>` (2026-11-12)
-AMENDMENTS_VERSION = 2
+#: 1: the article only (2026-11-08); 2: `<annex>|<token>` (2026-11-12);
+#: 3: the same, an annex's article a word too (`Allegato B|xi`,
+#: `Regolamento|transitorio`; 2026-11-12). From 2, only the versions that
+#: still hold a row of the old labelled form are rewritten: every other row
+#: version 2 wrote is version 3's byte for byte (RULE 1)
+AMENDMENTS_VERSION = 3
+#: the version from which only `stale_versions` differ
+AMENDMENTS_STALE_ONLY_FROM = 2
 AMENDMENTS_VERSION_KEY = "validity_amendments_version"
 #: a row version 1 wrote from a labelled fragment: "CODICE CIVILE-art. 2441"
 #: became `codicecivile-art2441` (article_token keeps the hyphen before
@@ -362,6 +368,15 @@ def amendments_current(con) -> bool:
         return int(db.get_control(con, AMENDMENTS_VERSION_KEY, 0) or 0) >= AMENDMENTS_VERSION
     except (TypeError, ValueError):
         return False
+
+
+def amendments_version(con) -> int:
+    """The version the manifest's `validity_amendments` was derived at."""
+    from app import db
+    try:
+        return int(db.get_control(con, AMENDMENTS_VERSION_KEY, 0) or 0)
+    except (TypeError, ValueError):
+        return 0
 
 
 def mark_amendments_current(con) -> None:

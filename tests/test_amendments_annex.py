@@ -33,6 +33,16 @@ LAW = "urn:nir:stato:legge:1990-08-07;241"
     ("12", "", "12"),
     ("5-bis", "", "5bis"),
     ("art5-com2", "", "5"),
+    # an annex's article that is a WORD (München, 2026-11-12: 433 rows of 62
+    # versions left in the old form on both manifests)
+    ("Allegato B-art. XI", "Allegato B", "xi"),
+    ("Regolamento-articolo transitorio", "Regolamento", "transitorio"),
+    ("Regolamento-art. addizionale", "Regolamento", "addizionale"),
+    ("Statuto-Articolo unico", "Statuto", "unico"),
+    ("Regolamento 2°-art. finale", "Regolamento 2°", "finale"),
+    ("Allegato B-art.I", "Allegato B", "i"),
+    # not an article: an annex whose name has "-art" inside a word
+    ("Norme-artigianato", "", "norme-artigianato"),
 ])
 def test_a_urn_fragment_gives_its_annex_and_article(part, annex, token):
     mod = {"destination": f"{CC}#{part}"}
@@ -421,3 +431,22 @@ def test_the_nodes_mode_holds_the_pass_and_it_resumes_when_running(held, monkeyp
     monkeypatch.setattr(worker, "_maintenance_allowed", lambda: True)
     assert worker._rederive_amendments(con, c) is True
     assert validity.amendments_current(con)
+
+
+def test_from_version_2_only_the_versions_in_the_old_form_are_rewritten(held, monkeypatch):
+    """Version 2 wrote every row right but an annex's WORD article; from 2,
+    the parts are read and only the versions holding a row of the old form
+    rewritten (RULE 1): version 3's other rows are not touched."""
+    con, c = held.con, held.c
+    db.set_control(con, validity.AMENDMENTS_VERSION_KEY, "2")
+    con.execute("UPDATE validity_amendments SET article='CODICE CIVILE|2043' WHERE stated_by='normattiva:1'")
+    con.commit()
+    written: list[str] = []
+    real = validity.write_amendments
+    monkeypatch.setattr(validity, "write_amendments",
+                        lambda cn, pairs: (written.extend(u for u, _ in pairs), real(cn, pairs))[1])
+    assert worker._rederive_amendments(con, c) is True
+    assert written == ["normattiva:2"], "only the version still in the old form"
+    assert ("normattiva:2", "Norme|227") in _rows(con) and ("normattiva:1", "CODICE CIVILE|2043") in _rows(con)
+    assert validity.amendments_version(con) == validity.AMENDMENTS_VERSION == 3
+    assert not validity.stale_versions(con)
