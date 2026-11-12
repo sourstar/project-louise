@@ -158,8 +158,9 @@ def stop_all() -> None:
 
 def reset() -> None:
     """Tests: forget every gate, the claim memo, the question's pending
-    linger, the stand-aside counts, the stop and the default."""
-    global _default_level
+    linger, the stand-aside counts, the stop, the default and the harness mark."""
+    global _default_level, _harness
+    _harness = False
     _stopping.clear()
     _gates.clear()
     _claim_seen.clear()
@@ -576,6 +577,27 @@ _board = _Board()
 QUESTION_LINGER_S = 300.0
 
 
+#: THIS PROCESS IS A HARNESS, NOT A PERSON (München, 2026-11-12): a pilot's
+#: or a measurement's searches, back to back for hours, each took the node's
+#: claim, and the corpus stood aside call after call for the whole run —
+#: normattiva-nemo's and legi's embedding behind a jf100 pool. In a harness
+#: process `question` and `interactive` hold NO claim: each call still
+#: declares its level (the servers' gates order it), and corpus work goes on
+#: beside it, as it would beside any batch job. A harness that measures what
+#: a PERSON waits leaves it off (`--as-person` in the tools).
+_harness = False
+
+
+def as_harness(on: bool = True) -> None:
+    """Mark this process as a harness (tools/: pilots, evaluations)."""
+    global _harness
+    _harness = bool(on)
+
+
+def is_harness() -> bool:
+    return _harness
+
+
 @contextmanager
 def question(linger: float | None = None):
     """A PERSON'S QUESTION, WHOLE (operator, 2026-11-09, choice B): the
@@ -587,7 +609,11 @@ def question(linger: float | None = None):
     corpus came back, its pinned encoders kept the card, and the reclaimer
     took the question's own models — chat and qwen3-4b, then MADLAD and chat
     — 2–3 cold loads of 6.5–12.3 s each. Declares no level: each call
-    inside still declares its own (`interactive`, `call`)."""
+    inside still declares its own (`interactive`, `call`). A harness
+    (`as_harness`) holds none."""
+    if _harness:
+        yield
+        return
     _board.enter()
     try:
         yield
@@ -619,7 +645,11 @@ def interactive(level: Level):
     """An interactive model call at `level`: declares the level for the
     requests inside, and holds the node's claim for as long as the call
     runs — the GPU governor keeps the card's clock at its maximum while it
-    is held."""
+    is held. A harness (`as_harness`) declares the level and holds no claim."""
+    if _harness:
+        with working_as(level):
+            yield
+        return
     _board.enter()
     try:
         with working_as(level):

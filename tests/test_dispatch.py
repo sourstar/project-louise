@@ -528,3 +528,70 @@ def test_a_call_that_ends_after_a_question_never_shortens_its_linger(tmp_path, i
         pass
     dispatch._claim_seen.clear()
     assert not dispatch.interactive_active()
+
+
+def test_a_harness_holds_no_claim_and_keeps_its_level(tmp_path, isolated_config):
+    """A pilot is not a person (München, 2026-11-12): tools/legal_pilot.py's
+    searches, back to back over a jf100 pool, each took the node's claim and
+    kept normattiva-nemo's and legi's embedding aside for the whole run. In a
+    harness process neither a question nor an interactive call writes the
+    claim; each call still declares its level for the servers' gates."""
+    from app import node_state
+    node_state.connect().close()
+    dispatch.as_harness()
+    with dispatch.question():
+        with dispatch.interactive(Level.RERANK):
+            assert dispatch.current()[0] == Level.RERANK, "the level, for the gates' order"
+            dispatch._claim_seen.clear()
+            assert not dispatch.interactive_active(), "no claim: the corpus goes on"
+    dispatch._claim_seen.clear()
+    assert not dispatch.interactive_active(), "and no linger after the question"
+    dispatch.as_harness(False)                      # `--as-person`: as a person's question
+    with dispatch.interactive(Level.QUERY):
+        dispatch._claim_seen.clear()
+        assert dispatch.interactive_active()
+
+
+def test_the_harnesses_hold_no_claim_unless_asked_to(monkeypatch):
+    """tools/legal_pilot.py, chat_eval, rerank_bench and encoder_bakeoff mark
+    themselves harnesses; `--as-person` keeps a person's claim for timings."""
+    import importlib
+    import sys
+    from pathlib import Path
+    root = Path(__file__).resolve().parents[1]
+    for rel, argv in (("tools/legal_pilot.py", ["fetch", "--out", "/nonexistent/x"]),
+                      ("tools/measure/rerank_bench.py", ["capture", "gutenberg", "/nonexistent",
+                                                         "--out", "/nonexistent/x"])):
+        path = root / rel
+        spec = importlib.util.spec_from_file_location(f"_harness_{path.stem}", path)
+        mod = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = mod
+        spec.loader.exec_module(mod)
+        for as_person in (False, True):
+            dispatch.reset()
+            seen = {}
+            # stop right after the mark: the command itself is not under test
+            def stop(*a, **k):
+                seen["harness"] = dispatch.is_harness()
+                raise SystemExit(0)
+            for name in dir(mod):
+                if name.startswith("cmd_") or name in ("fetch", "capture"):
+                    monkeypatch.setattr(mod, name, stop, raising=False)
+            try:
+                mod.main((["--as-person"] if as_person else []) + argv)
+            except (SystemExit, Exception):
+                pass
+            assert dispatch.is_harness() is (not as_person), (rel, as_person)
+    dispatch.reset()
+
+
+def test_every_search_harness_marks_itself():
+    """chat_eval and encoder_bakeoff need a node to run; their mark is held
+    by its line, right after the arguments are read."""
+    from pathlib import Path
+    root = Path(__file__).resolve().parents[1]
+    for rel in ("tools/legal_pilot.py", "tools/measure/chat_eval.py",
+                "tools/measure/rerank_bench.py", "tools/encoder_bakeoff.py"):
+        src = (root / rel).read_text(encoding="utf-8")
+        assert '_dispatch.as_harness(not getattr(a, "as_person", False))' in src, rel
+        assert '"--as-person"' in src, rel

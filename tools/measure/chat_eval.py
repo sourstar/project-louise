@@ -1353,6 +1353,10 @@ def rescore(out: Path, name: str, cache: Path) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--as-person", action="store_true", dest="as_person",
+                    help="hold the node's claim as a person's question does (corpus work "
+                         "stands aside): for timings of what a person waits; by default a "
+                         "harness holds none (app/rage/dispatch.py `as_harness`)")
     sub = ap.add_subparsers(dest="cmd", required=True)
     p = sub.add_parser("run")
     p.add_argument("--out", type=Path, required=True)
@@ -1425,6 +1429,8 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--runs", required=True)
     p.add_argument("--n", type=int, default=30)
     a = ap.parse_args(argv)
+    from app.rage import dispatch as _dispatch
+    _dispatch.as_harness(not getattr(a, "as_person", False))   # a harness, not a person
     if a.cmd == "run":
         if a.sampling and a.direct:
             raise SystemExit("--sampling with --direct: no model answers a direct run")

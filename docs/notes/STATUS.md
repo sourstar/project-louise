@@ -26,6 +26,9 @@ measured (published figures disagree).
   vega-nemotron-3-embed-1b, and normattiva-nemo and wikidata stood aside the whole time. It was also redundant: legi
   borrowed normattiva-nemo's statement but read the batching record from its own file only. Three fixes, each tested:
   - #574, the batching record is borrowed with the statement.
+  - A harness holds no person's claim (`dispatch.as_harness`): tools/legal_pilot.py, chat_eval, rerank_bench and
+    encoder_bakeoff search beside the corpus instead of keeping it aside call after call; `--as-person` keeps the
+    claim for timings of what a person waits.
   - `hold embedder check` (and `new`'s step 5) takes the space's statement the same way, re-checking its sixteen
     texts on this load; `--remeasure` gates again. NeuRIS's `new` (09:26–09:54Z) had measured for 27 minutes on
     the shared Nemotron load, reloading it three times, a run normattiva-nemo's statement covered.

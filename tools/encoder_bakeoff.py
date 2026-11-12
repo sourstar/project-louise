@@ -1298,6 +1298,10 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser(
         description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--as-person", action="store_true", dest="as_person",
+                    help="hold the node's claim as a person's question does (corpus work "
+                         "stands aside): for timings of what a person waits; by default a "
+                         "harness holds none (app/rage/dispatch.py `as_harness`)")
     sub = ap.add_subparsers(dest="cmd", required=True)
     for cmd in ("fetch", "pool", "embed", "lexical", "score", "rerank", "report"):
         p = sub.add_parser(cmd)
@@ -1366,6 +1370,8 @@ def main(argv=None) -> int:
                                 "unscoreable — a partial corpus inflates "
                                 "every metric")
     a = ap.parse_args(argv)
+    from app.rage import dispatch as _dispatch
+    _dispatch.as_harness(not getattr(a, "as_person", False))   # a harness, not a person
     if a.cmd == "fetch":
         return fetch(a.out, a.suite)
     if a.cmd == "pool":
