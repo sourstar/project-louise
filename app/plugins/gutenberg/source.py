@@ -37,7 +37,7 @@ from pathlib import Path
 
 from .. import cursor
 from app.backend import OriginForm, Template
-from ..base import (CanonicalDoc, CorpusSource, DiscoverState, DocRef, Erasure,
+from ..base import (CanonicalDoc, CorpusSource, DiscoverState, DocRef, Edge, Erasure,
                     Figure, Issue,
                     LicenseClass, Modality, Mutability, PROTOCOL_VERSION,
                     PrivacyClass, RawDoc, UnindexableDocument)
@@ -51,6 +51,26 @@ from . import pg_text, rdf
 #: under invariant 11 — the choice is recorded, and `extra.form` names it
 #: per record.
 FORMS = ("epub", "txt", "rdf")
+
+
+#: the catalogue notes `relations` reads (the RDF's `dcterms:description`,
+#: kept whole in `extra.description`): PG's own wording, as
+#: tools/measure/one_language_records.py measured it (2026-10-09)
+EDITIONS_NOTE = re.compile(r"Project Gutenberg has several editions of this eBook")
+EBOOK_NUMBER = re.compile(r"#(\d+)")
+WIKIPEDIA_LINE = re.compile(r"Wikipedia page about this book:\s*(https?://\S+)")
+#: "A somewhat higher quality eBook is available as #49652": the wording
+#: app/ask/works.py `_BETTER` reads to prefer that edition within a work
+HIGHER_QUALITY = re.compile(r"higher\s+quality\s+e-?book\s+is\s+available\s+as\s+#\s*(\d+)",
+                            re.IGNORECASE)
+
+
+def _closed(url: str) -> str:
+    """`url` less a trailing ")" that closes nothing in it (the prose
+    around the line, not the page's title)."""
+    while url.endswith(")") and url.count(")") > url.count("("):
+        url = url[:-1]
+    return url
 
 
 def origin_files(book_dir: Path, book_id: int, path: Path) -> list[Path]:
@@ -645,6 +665,68 @@ class GutenbergSource:
             raw_hash=raw.raw_hash,
             issues=found,
         )
+
+    #: the relation types that make two of this collection's records ONE
+    #: WORK (app/ask/works.py: one hit per work, 05 §5.3): the catalogue's
+    #: own "several editions" note. Read by the search from the edges the
+    #: index maintainer keeps (app/ask/traverse.py `index_edges`)
+    WORK_RELATIONS = ("bf:otherEdition",)
+
+    def relations(self, doc: CanonicalDoc):
+        """06 §6.1's typed edges: the links PROJECT GUTENBERG'S CATALOGUE
+        states, read from the notes the record keeps (`extra.description`,
+        the RDF's `dcterms:description`, one paragraph per note) — so they
+        are this collection's relations, not claims (02 §2.10, 05 §5.5;
+        operator 2026-11-12, decision 1 A). Nothing is re-parsed: the record
+        already holds the notes (invariant 11), and `louise hold records
+        relations` writes the edges for a collection already built.
+
+        - `bf:otherEdition` to `gutenberg:<N>` for each ebook the note
+          "Project Gutenberg has several editions of this eBook" lists,
+          this book's own number excepted, and for the ebook a note "A
+          somewhat higher quality eBook is available as #N" names.
+          BIBFRAME 2.0's property ("has other available editions"; the
+          Library of Congress's successor of MARC 21 field 775, Other
+          Edition Entry), the edge in the note's own direction.
+        - `foaf:isPrimaryTopicOf` to the URL of each "Wikipedia page about
+          this book: <url>" line, as written, less the sentence's trailing
+          punctuation and a ")" that closes nothing in it. FOAF's property
+          for "a document whose primary topic is this thing", the one
+          DBpedia uses for a thing's Wikipedia page; `to` is that page's
+          URL left unresolved (09 §9.14) — the wikipedia collection's uids
+          are its own page numbers, which the line does not give.
+
+        The editions note reached the search until now as claims of the
+        gutenberg-book-editions annotations collection
+        (tools/annotations_from_works.py, which no longer makes them); the
+        search now reads `WORK_RELATIONS` beside the claims, and the
+        Wikidata-joined claims stay there, being Wikidata's statement, not
+        PG's. The higher-quality note decided only which edition a work
+        shows (app/ask/works.py `edition_facts`); as an edge it also makes
+        the two books one work."""
+        desc = str((doc.extra or {}).get("description") or "")
+        if not desc:
+            return
+        own = doc.uid.split(":", 1)[-1]
+        seen: set[tuple[str, str]] = set()
+        for para in desc.split("\n\n"):
+            if not EDITIONS_NOTE.search(para):
+                continue
+            for n in sorted({int(x) for x in EBOOK_NUMBER.findall(para)}):
+                to = f"{self.source_id}:{n}"
+                if str(n) != own and ("bf:otherEdition", to) not in seen:
+                    seen.add(("bf:otherEdition", to))
+                    yield Edge(to=to, type="bf:otherEdition")
+        for n in sorted({int(x) for x in HIGHER_QUALITY.findall(desc)}):
+            to = f"{self.source_id}:{n}"
+            if str(n) != own and ("bf:otherEdition", to) not in seen:
+                seen.add(("bf:otherEdition", to))
+                yield Edge(to=to, type="bf:otherEdition")
+        for url in WIKIPEDIA_LINE.findall(desc):
+            url = _closed(url.rstrip(".,;"))
+            if ("foaf:isPrimaryTopicOf", url) not in seen:
+                seen.add(("foaf:isPrimaryTopicOf", url))
+                yield Edge(to=url, type="foaf:isPrimaryTopicOf")
 
     # --- non-protocol helpers used by worker.py/summarize.py for lazy,
     # granular I/O matching pre-refactor per-stage cost exactly ---

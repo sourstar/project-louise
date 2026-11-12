@@ -18,9 +18,14 @@ peer holds and may use about the result's collection (02 §2.10, 05 §5.5 —
 a link the origin does not state is an annotation), read from the claim
 index `app/hold/annotations.py` keeps per snapshot. For gutenberg those are
 the books' own "Wikipedia page about this book" lines joined by Wikidata
-sitelinks, and Project Gutenberg's "several editions of this eBook" notes
-(`tools/annotations_from_works.py`). No claim, no grouping: an edition no
-claim names is shown as it ranked.
+sitelinks (`tools/annotations_from_works.py`) — and from the relations the
+collection's OWN origin states that its plugin names as work relations
+(`WORK_RELATIONS`: gutenberg's `bf:otherEdition`, Project Gutenberg's
+"several editions of this eBook" notes; 2026-11-12, operator decision 1 A,
+which moved those notes from claims to relations), read from the edges the
+index maintainer keeps in the manifest (app/ask/traverse.py
+`index_edges`), between records held here. No claim and no such edge, no
+grouping: an edition neither names is shown as it ranked.
 
 The ranked list is unchanged up to the grouping — its scores, its order,
 the reranker's work. This is presentation, after the reranker and before
@@ -29,8 +34,11 @@ the cut to `limit`, so a page of ten shows ten works.
 COST per search: the annotations collections held are listed once; for one
 that applies, one walk of its in-memory claim index from the candidates'
 uids (bounded by their works' sizes) and one indexed manifest query for the
-titles and languages of the editions found. A collection no annotations
-collection is about pays the listing alone.
+titles and languages of the editions found. A plugin with work relations
+adds one indexed query per step of the walk (`idx_relations_from`,
+`idx_relations_to`), over the step's new uids. A collection no annotations
+collection is about and whose plugin names no work relation pays the
+listing alone.
 """
 from __future__ import annotations
 
@@ -54,7 +62,7 @@ class Edition:
     lang: str | None
     held: bool
     #: its length where the work's claims state it (`subject_tokens` /
-    #: `object_tokens` in their evidence: wikipedia-articles, 2026-11-10);
+    #: `object_tokens` in their evidence: wikipedia-articles-cache, 2026-11-10);
     #: None where they do not (gutenberg's)
     size: int | None = None
     #: the edition the claims are drawn around (every sized claim's
@@ -301,17 +309,96 @@ def _ids_of(collection) -> tuple[str, ...]:
     return tuple(dict.fromkeys(i for i in (collection.codex.collection_id, twin) if i))
 
 
+def work_relations(collection) -> tuple[str, ...]:
+    """The relation types `collection`'s plugin says make two of its records
+    one work (`WORK_RELATIONS`, the plugin's own: 09 §9.14 has the plugin
+    register its types); () for a plugin that names none."""
+    from app.collections import PLUGIN_REGISTRY
+    plugin = PLUGIN_REGISTRY.get(getattr(collection, "plugin", None) or "")
+    return tuple(getattr(plugin, "WORK_RELATIONS", ()) or ())
+
+
+class _Edges:
+    """The collection's own edges of `types` between records it holds, read
+    from the manifest's `relations` table (app/ask/traverse.py), both
+    directions, one indexed query per direction per batch of uids. A
+    manifest with no `relations` table yet (no snapshot indexed) has none."""
+
+    BATCH = 500
+
+    def __init__(self, collection, types: Sequence[str]):
+        from app import db
+        self.types = tuple(types)
+        self.con = None
+        if not self.types:
+            return
+        con = db.read_only_connect(collection)   # no DDL on a search's path
+        if con is None:
+            return
+        if con.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='relations'"
+                       ).fetchone() is None:
+            con.close()
+            return
+        self.con = con
+
+    def __call__(self, uids: Sequence[str]) -> list[tuple[str, str]]:
+        if self.con is None or not uids:
+            return []
+        ts = ",".join("?" * len(self.types))
+        out: list[tuple[str, str]] = []
+        uids = list(dict.fromkeys(uids))
+        for i in range(0, len(uids), self.BATCH):
+            batch = uids[i:i + self.BATCH]
+            us = ",".join("?" * len(batch))
+            for sql in (EDGES_OUT.format(us=us, ts=ts), EDGES_IN.format(us=us, ts=ts)):
+                out += [(r[0], r[1]) for r in self.con.execute(sql, [*batch, *self.types])]
+        return out
+
+    def close(self) -> None:
+        if self.con is not None:
+            self.con.close()
+            self.con = None
+
+
+#: a step of the walk: the edges out of the step's uids and into them, each
+#: joined to the documents at both ends — an edition this peer does not hold
+#: joins nothing (as the claims never named one)
+EDGES_OUT = ("SELECT r.from_uid, r.to_id FROM relations r"
+             " JOIN documents t ON t.uid = r.to_id"
+             " WHERE r.from_uid IN ({us}) AND r.type IN ({ts})")
+EDGES_IN = ("SELECT r.from_uid, r.to_id FROM relations r"
+            " JOIN documents f ON f.uid = r.from_uid"
+            " WHERE r.to_id IN ({us}) AND r.type IN ({ts})")
+
+
 def work_groups(collection, uids: Sequence[str], *, root: Path | None = None,
                 annotations: Iterable | None = None,
                 ) -> tuple[dict[str, str], dict[str, list[Edition]]]:
     """(work_of, members) for the records `uids` of `collection`, from the
     work claims (`WORK_TYPES`) of the usable annotations collections about
-    it whose `from_snapshot` the answer's snapshot has reached. A work is a
-    connected set of records under those claims, keyed by its smallest uid;
-    records no claim names are in no work."""
-    usable = _usable(collection, annotations)
-    if not usable or not uids:
+    it whose `from_snapshot` the answer's snapshot has reached, and from its
+    own work relations (`work_relations`) between records held here. A work
+    is a connected set of records under those claims and edges, keyed by its
+    smallest uid; records neither names are in no work."""
+    if not uids:
         return {}, {}
+    own = work_relations(collection)
+    usable = _usable(collection, annotations)
+    if not usable and not own:
+        return {}, {}
+    indexes = _claim_indexes(collection, usable, root) if usable else []
+    if not indexes and not own:
+        return {}, {}
+    edges = _Edges(collection, own)
+    try:
+        return _walk(collection, uids, indexes, edges)
+    finally:
+        edges.close()
+
+
+def _claim_indexes(collection, usable, root: Path | None) -> list:
+    """The claim indexes of the `usable` annotations collections whose
+    `from_snapshot` the answer's snapshot has reached."""
     from app.hold import annotations as ann
     from app.hold import collection as col
     from app.share import seeder
@@ -324,10 +411,14 @@ def work_groups(collection, uids: Sequence[str], *, root: Path | None = None,
     read = snap.snapshot_id if snap is not None else None
     from app.ask.annotations import target_among
     ids = _ids_of(collection)
-    indexes = [ann.index_of(col.shard_dir_of(root, a.name)) for a in usable
-               if ann.applies_from(target_among(a.codex, ids).from_snapshot, read)]
-    if not indexes:
-        return {}, {}
+    return [ann.index_of(col.shard_dir_of(root, a.name)) for a in usable
+            if ann.applies_from(target_among(a.codex, ids).from_snapshot, read)]
+
+
+def _walk(collection, uids: Sequence[str], indexes: list, edges: "_Edges",
+          ) -> tuple[dict[str, str], dict[str, list[Edition]]]:
+    """The candidates' works, whole, step by step: each step's new uids
+    through every claim index and through the collection's own edges."""
     parent: dict[str, str] = {}
 
     def find(x: str) -> str:
@@ -336,32 +427,37 @@ def work_groups(collection, uids: Sequence[str], *, root: Path | None = None,
             x = parent[x]
         return x
 
+    def join(x: str, y: str) -> None:
+        a, b = find(x), find(y)
+        if a != b:
+            parent[max(a, b)] = min(a, b)
+
     seen: set[str] = set()
     sizes: dict[str, int] = {}
     centres: set[str] = set()
-    todo = list(dict.fromkeys(uids))
-    while todo:                     # the candidates' works, whole: a star of claims
-        u = todo.pop()              # reaches every edition through its centre
-        if u in seen:
-            continue
-        seen.add(u)
-        for idx in indexes:
-            for cl in idx.by_target.get(u, ()):
-                c = cl.claim
-                if c["type"] not in WORK_TYPES:
-                    continue
-                ev = c.get("evidence") or {}
-                for end, key in ((c["subject"], "subject_tokens"), (c["object"], "object_tokens")):
-                    if isinstance(ev.get(key), int):
-                        sizes[end] = ev[key]
-                if isinstance(ev.get("object_tokens"), int):
-                    centres.add(c["object"])
-                a, b = find(c["subject"]), find(c["object"])
-                if a != b:
-                    parent[max(a, b)] = min(a, b)
-                for other in (c["subject"], c["object"]):
-                    if other not in seen:
-                        todo.append(other)
+    step = list(dict.fromkeys(uids))
+    while step:                     # the candidates' works, whole: a star of claims
+        step = [u for u in dict.fromkeys(step) if u not in seen]   # reaches every
+        seen.update(step)                                          # edition through its centre
+        nxt: list[str] = []
+        for u in step:
+            for idx in indexes:
+                for cl in idx.by_target.get(u, ()):
+                    c = cl.claim
+                    if c["type"] not in WORK_TYPES:
+                        continue
+                    ev = c.get("evidence") or {}
+                    for end, key in ((c["subject"], "subject_tokens"), (c["object"], "object_tokens")):
+                        if isinstance(ev.get(key), int):
+                            sizes[end] = ev[key]
+                    if isinstance(ev.get("object_tokens"), int):
+                        centres.add(c["object"])
+                    join(c["subject"], c["object"])
+                    nxt += [o for o in (c["subject"], c["object"]) if o not in seen]
+        for a, b in edges(step):
+            join(a, b)
+            nxt += [o for o in (a, b) if o not in seen]
+        step = nxt
     groups: dict[str, list[str]] = {}
     for u in parent:
         groups.setdefault(find(u), []).append(u)

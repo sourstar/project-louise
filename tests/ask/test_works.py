@@ -312,3 +312,78 @@ def test_the_best_passage_is_a_text_search_inside_that_record_else_its_first(mon
     assert works.best_passage(None, plan, e) == {"chunk_id": "w:7:0:1"}, "no match: its first passage"
     assert works.best_passage(None, plan, E("w:x", "?", "it", True)) is None
     assert works.best_passages(None, plan, [e, E("w:x", "?", "it", True)]) == {"w:7": {"chunk_id": "w:7:0:1"}}
+
+
+# ---- a work from the collection's OWN relations (2026-11-12, decision 1 A) ---
+
+def _own_edges(tmp_path, monkeypatch, edges, types=("bf:otherEdition",)):
+    """The target with `types` as its plugin's work relations and `edges`
+    (from, to, type) indexed in its manifest as app/ask/traverse.py does."""
+    from app import db
+    from app.ask import traverse
+    target, tcoll, held, codex = setup(tmp_path)
+    monkeypatch.setattr(works, "work_relations", lambda c: tuple(types))
+    with db.connect(tcoll) as con:
+        traverse.ensure_schema(con)
+        con.executemany("INSERT INTO relations VALUES(?,?,?,?,?)",
+                        [(a, b, t, "2026-11", "relations/main/00001.jsonl.zst") for a, b, t in edges])
+    return target, tcoll, held, codex
+
+
+def test_a_work_is_read_from_the_collections_own_edition_relations(tmp_path, monkeypatch):
+    """No annotations collection at all: the origin's own "several editions"
+    edges make one work, in both directions; another relation type and an
+    edge to a record not held join nothing."""
+    target, tcoll, held, codex = _own_edges(tmp_path, monkeypatch, [
+        ("pubmed:2", "pubmed:1", "bf:otherEdition"),
+        ("pubmed:3", "pubmed:2", "bf:otherEdition"),
+        ("pubmed:4", "pubmed:1", "pubmed:cites"),
+        ("pubmed:4", "pubmed:99", "bf:otherEdition")])
+    monkeypatch.setattr(collections_mod, "load_annotations", lambda: [])
+    work_of, members = works.work_groups(tcoll, ["pubmed:1"], root=tmp_path)
+    assert work_of == {"pubmed:1": "pubmed:1", "pubmed:2": "pubmed:1", "pubmed:3": "pubmed:1"}
+    assert [e.uid for e in members["pubmed:1"]] == ["pubmed:1", "pubmed:2", "pubmed:3"]
+    assert works.work_groups(tcoll, ["pubmed:4"], root=tmp_path) == ({}, {}), \
+        "a citation is no edition; an edition not held joins nothing"
+
+
+def test_claims_and_own_relations_make_one_work_together(tmp_path, monkeypatch):
+    """The claims join 1–2 and 1–3 (setup); the collection's own edge joins
+    3–4: one work of four, whichever end the walk starts from."""
+    target, tcoll, held, codex = _own_edges(tmp_path, monkeypatch,
+                                            [("pubmed:4", "pubmed:3", "bf:otherEdition")])
+    for start in ("pubmed:2", "pubmed:4"):
+        work_of, members = works.work_groups(tcoll, [start], root=tmp_path, annotations=[held])
+        assert set(work_of) == {"pubmed:1", "pubmed:2", "pubmed:3", "pubmed:4"}, start
+        assert set(work_of.values()) == {"pubmed:1"}
+
+
+def test_a_manifest_with_no_relations_indexed_groups_as_the_claims_do(tmp_path, monkeypatch):
+    target, tcoll, held, codex = setup(tmp_path)
+    monkeypatch.setattr(works, "work_relations", lambda c: ("bf:otherEdition",))
+    work_of, _ = works.work_groups(tcoll, ["pubmed:2"], root=tmp_path, annotations=[held])
+    assert work_of == {"pubmed:1": "pubmed:1", "pubmed:2": "pubmed:1", "pubmed:3": "pubmed:1"}
+
+
+def test_the_edge_queries_search_their_indexes(tmp_path, monkeypatch):
+    """CLAUDE.md: a hot-path query is plan-checked — each direction SEARCHes
+    its relations index and the documents' primary key, no temp b-tree."""
+    from app import db
+    target, tcoll, held, codex = _own_edges(tmp_path, monkeypatch, [])
+    con = db.read_only_connect(tcoll)
+    try:
+        for sql, index in ((works.EDGES_OUT, "idx_relations_from"), (works.EDGES_IN, "idx_relations_to")):
+            q = sql.format(us="?,?,?", ts="?")
+            plan = " | ".join(r[3] for r in con.execute("EXPLAIN QUERY PLAN " + q,
+                                                         ["pubmed:1", "pubmed:2", "pubmed:3", "bf:otherEdition"]))
+            assert index in plan, plan
+            assert "TEMP B-TREE" not in plan and "LIST SUBQUERY" not in plan and "SCAN" not in plan, plan
+    finally:
+        con.close()
+
+
+def test_gutenberg_names_its_edition_relation_as_a_work_relation():
+    from app.plugins.gutenberg import SOURCE
+    tcoll = SimpleNamespace(plugin="gutenberg")
+    assert works.work_relations(tcoll) == ("bf:otherEdition",) == SOURCE.WORK_RELATIONS
+    assert works.work_relations(SimpleNamespace(plugin="pubmed")) == ()

@@ -151,8 +151,12 @@ def test_records_from_admits_a_facets_difference_none_parsed(isolated_config, tm
     assert any("none parsed" in m for m in said)
 
 
-def test_a_plugin_without_relations_writes_none(isolated_config, tmp_path, corpus_dir):
+def test_a_plugin_without_relations_writes_none(isolated_config, tmp_path, corpus_dir, monkeypatch):
     from tests.hold.test_build_and_snapshot import _build, _collection
+    from app.plugins.gutenberg.source import GutenbergSource
+    # gutenberg states relations since 2026-11-12 (its catalogue's editions
+    # notes); this build is the plugin with none
+    monkeypatch.delattr(GutenbergSource, "relations")
     root = _collection(tmp_path)
     _build(root, corpus_dir, records_per_shard=2)
     snap = sn.create(root, "gutenberg", snapshot_id="2026-08", **QUIET)

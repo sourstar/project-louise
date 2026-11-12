@@ -2104,7 +2104,7 @@ record).
 |---|---|---|---|
 | `from` | uid | yes | a record of this collection, in this part |
 | `to` | string | yes | a uid of this collection, or a canonical id `<namespace>:<id>` left unresolved |
-| `type` | string | yes | `<plugin>:<name>`, registered by the plugin: `eli:cites`, `eli:amends`, `eli:repeals`, `pubmed:cites` |
+| `type` | string | yes | `<prefix>:<name>`, registered by the plugin: a standard vocabulary's prefix and property where one fits — `eli:cites`, `eli:amends`, `eli:repeals` (ELI), `bf:otherEdition` (BIBFRAME 2.0), `foaf:isPrimaryTopicOf` (FOAF) — else the plugin's own, `pubmed:cites`, `pubmed:ErratumIn` (*amended 2026-11-12*: the practice since the legal plugins, written down) |
 | `snapshot` | `YYYY-MM` or `YYYY-Www` | yes | the snapshot in which the edge was first listed |
 
 **An annotations collection's edges** (*amended 2026-10-09*; 02 §2.10,

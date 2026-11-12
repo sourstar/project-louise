@@ -44,7 +44,9 @@ other versions): an article matched only through a hidden version would disappea
 "I don't want to silently hijack the searches of the other peers. The collection itself shouldn't enforce a logic
 that might hide some results … the right approach would be to create an annotation." So #467's grouping inside
 wikipedia's search and the worker's map are removed. The rule is stated instead as `same-work` claims in an
-annotations collection, `wikipedia-articles` (02 §2.10): a peer applies it only if it holds it, a reader can untick it
+annotations collection, `wikipedia-articles-cache` (02 §2.10; named `wikipedia-articles` until 2026-11-12, when the
+operator kept it because it speeds the search and asked for "cache" in the name: "in the end it is a sort of
+pre-search"): a peer applies it only if it holds it, a reader can untick it
 on the Ask page, and every version stays listed under the article (05 §5.3, invariant 4).
 
 - **The claims** (`app/wiki_versions.py claims`, written by `tools/annotations_from_wikipedia.py`): a star per
