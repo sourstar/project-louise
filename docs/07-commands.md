@@ -585,7 +585,14 @@ reader needs at the command line:
   validates that run and keeps its signed statement in
   `state/calibration/` (09 §9.12: "kept in `state/` and published in this
   peer's digest"), one per run. A failure is kept too, so the run is not
-  retried against the same set. It stores no vectors: the statement
+  retried against the same set. A run the SPACE already holds a passing
+  statement for (another collection of the space, on this peer) is not
+  measured again: the statement is taken as the worker takes it (03
+  §3.3: a pass validates the run for the space; the batching record
+  comes with it), after its sixteen texts are re-checked on the load
+  that answers now (*2026-11-12*: NeuRIS's `new` measured for 27
+  minutes a run normattiva-nemo's statement covered). `--remeasure`
+  gates it again. It stores no vectors: the statement
   already carries the seed, so anyone can reproduce the sample and
   recheck the verdict, and a 512-row baseline beside it would be a second
   answer to a question the statement answers. Of the endpoint's output it

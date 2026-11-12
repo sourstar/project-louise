@@ -26,6 +26,9 @@ measured (published figures disagree).
   vega-nemotron-3-embed-1b, and normattiva-nemo and wikidata stood aside the whole time. It was also redundant: legi
   borrowed normattiva-nemo's statement but read the batching record from its own file only. Three fixes, each tested:
   - #574, the batching record is borrowed with the statement.
+  - `hold embedder check` (and `new`'s step 5) takes the space's statement the same way, re-checking its sixteen
+    texts on this load; `--remeasure` gates again. NeuRIS's `new` (09:26–09:54Z) had measured for 27 minutes on
+    the shared Nemotron load, reloading it three times, a run normattiva-nemo's statement covered.
   - #575, the check is shown on the cards: running, waiting, or beside.
   - Branch gate-twin, `app/gate_twin.py`: `<model>--gate` is the model's LocalAI config under another name, made through
     `GET /api/models/config-json` and `POST /models/import`. It states the same run, measured on the node by München.
