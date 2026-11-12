@@ -162,6 +162,74 @@ def test_a_collection_on_the_shared_load_is_not_turned_away_by_a_twin_gate(node,
             run_check._looking[k].release()
 
 
+def _held_elsewhere(path):
+    """The lock as another process holds it: its own open file, flocked
+    (flock is per open file, so this process's claim meets it too)."""
+    import fcntl
+    import os
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(path, os.O_RDWR | os.O_CREAT)
+    fcntl.flock(fd, fcntl.LOCK_EX)
+    return fd
+
+
+def test_a_gate_in_another_process_holds_the_twin_and_this_one_defers(
+        server, monkeypatch, isolated_config, tmp_path):
+    """`hold embedder check` gates in a process of its own beside the worker
+    (NeuRIS, 2026-11-12): the twin's claim is the node's, an flock, so two
+    gates on one model never share a twin nor stop each other's."""
+    import fcntl
+    import os
+    from app.hold import embedder as emb
+    monkeypatch.setattr(config, "GATE_TWIN", True)
+    monkeypatch.setattr(run_check, "_twin_for", lambda *a, **k: pytest.fail("the twin was touched"))
+    path = run_check.twin_lock_path(SERVER, "vega-nemotron--gate")
+    fd = _held_elsewhere(path)
+    try:
+        with pytest.raises(emb.GateDeferred, match="another process"):
+            run_check.validate(tmp_path, "neuris", SimpleNamespace(), _recipe())
+    finally:
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        os.close(fd)
+    assert server.imports == [] and server.shutdowns == []
+    lock = run_check._looking[f"{SERVER} vega-nemotron--gate"]
+    assert lock.acquire(blocking=False), "this process's lock given back with the deferral"
+    lock.release()
+
+
+def test_the_twin_is_stopped_before_the_claim_goes(server, monkeypatch, isolated_config, tmp_path):
+    """The claim is released only after the twin is stopped: released first,
+    the next gate could load its twin and this one's stop would end it."""
+    import fcntl
+    import os
+    monkeypatch.setattr(config, "GATE_TWIN", True)
+    monkeypatch.setattr(run_check, "answering_run", lambda recipe, **kw: "sha256:" + "e9" * 32)
+    monkeypatch.setattr(run_check, "probe_for", lambda codex, role="document": "probe")
+    monkeypatch.setattr(run_check, "_validate", lambda *a, **k: {"run": "sha256:" + "e9" * 32})
+    monkeypatch.setattr(run_check, "_pinned", lambda *a, **k: __import__("contextlib").nullcontext())
+    path = run_check.twin_lock_path(SERVER, "vega-nemotron--gate")
+    held_at_stop = []
+    real = gate_twin.release
+
+    def release(srv, twin):
+        fd = os.open(path, os.O_RDWR)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            held_at_stop.append(False)
+            fcntl.flock(fd, fcntl.LOCK_UN)
+        except OSError:
+            held_at_stop.append(True)
+        finally:
+            os.close(fd)
+        real(srv, twin)
+    monkeypatch.setattr(gate_twin, "release", release)
+    run_check.validate(tmp_path, "legi", SimpleNamespace(), _recipe())
+    assert held_at_stop == [True], "stopped while still claimed"
+    assert server.shutdowns == ["vega-nemotron--gate"]
+    fd = _held_elsewhere(path)                         # free again for the next gate
+    os.close(fd)
+
+
 # ---- room made before the twin loads (München, 2026-11-12: xe overcommits silently) ----
 
 MIB = 1 << 20

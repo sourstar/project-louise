@@ -37,6 +37,9 @@ measured (published figures disagree).
     busy or pinned model; none at all where even all of them would not make it. The twin loads only once the driver's
     count shows the room (15 s at most). Its size is held from the keepers' budget while the gate runs. When the room
     cannot be made the gate DEFERS to the next round: it never falls back to the shared load for that.
+  - One gate per twin across the NODE: the claim is an flock on `<LOUISE_ROOT>/state/gate-twin/<key>.lock` beside the
+    process's lock, so `hold embedder check` (its own process; NeuRIS's `new`, 09:26Z) defers rather than sharing
+    the twin, and a twin is stopped before its claim goes.
   - Fallbacks, logged: no twin, or a twin stating another run, means the gate measures on the shared load as before.
 
 - **No card run is gated without a stored CPU reference — FIXED, not deployed** (new-collection.md's review finding

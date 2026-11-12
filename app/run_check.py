@@ -583,19 +583,14 @@ def validate(root: Path, name: str, codex: Codex, recipe, *, role: str = "docume
     server, model = _who(recipe, role == "query")
     # ONE GATE AT A TIME ON A TWIN, taken before anything of it is touched:
     # a second gate on the model defers, and never stops the first one's twin
-    with _guard:
-        twin_lock = _looking.setdefault(f"{server} {gate_twin.name_of(model)}", threading.Lock())
-    if not twin_lock.acquire(blocking=False):
-        raise emb.GateDeferred(f"{name}: another collection's gate measures on "
-                               f"{gate_twin.name_of(model)} now; this one is asked again at the "
-                               f"next round")
+    claim = _claim_twin(server, gate_twin.name_of(model), name)
     try:
         twin = _twin_for(recipe, role, name, codex)
     except BaseException:
-        twin_lock.release()
+        claim.release()
         raise
     if twin is None:
-        twin_lock.release()
+        claim.release()
         with _pinned(recipe, role, "gate", name), _gate_running(recipe, role, root, name):
             return _validate(root, name, codex, recipe, role=role, key=key, now=now,
                              stop=stop, on_run=on_run)
@@ -609,8 +604,69 @@ def validate(root: Path, name: str, codex: Codex, recipe, *, role: str = "docume
                              stop=stop, on_run=on_run)
     finally:
         _twin_busy.discard(main_key)
-        twin_lock.release()
+        # stopped BEFORE the claim goes: the next gate's twin is never this one's
         _let_go(server, twin_model)
+        claim.release()
+
+
+class _TwinClaim:
+    """A gate's hold on a twin: this process's lock (`_looking`) and the
+    node's, an `flock` on `<LOUISE_ROOT>/state/gate-twin/<key>.lock`, so a
+    gate in another process — `hold embedder check` beside the worker, seen
+    on the node 2026-11-12 — defers too, and neither stops the other's twin.
+    The kernel drops the flock with its holder (the standard
+    app/derived.py `building` keeps)."""
+
+    def __init__(self, lock: threading.Lock, fd: int | None) -> None:
+        self._lock, self._fd = lock, fd
+
+    def release(self) -> None:
+        if self._fd is not None:
+            import fcntl
+            try:
+                fcntl.flock(self._fd, fcntl.LOCK_UN)
+            finally:
+                os.close(self._fd)
+                self._fd = None
+        if self._lock is not None:
+            self._lock.release()
+            self._lock = None
+
+
+def twin_lock_path(server: str, twin: str) -> Path:
+    """The node's lock file for one twin: keyed on the server and the twin's
+    name (a digest: a URL is no file name), under `<LOUISE_ROOT>/state/`."""
+    import hashlib
+    key = hashlib.sha256(f"{server} {twin}".encode()).hexdigest()[:16]
+    return config.louise_root() / "state" / "gate-twin" / f"{key}.lock"
+
+
+def _claim_twin(server: str, twin: str, name: str) -> _TwinClaim:
+    """The twin's claim, or GateDeferred when another gate holds it, in
+    this process or another on the node. A lock file that cannot be opened
+    leaves the process's lock alone, said."""
+    import fcntl
+    busy = (f"{name}: another collection's gate measures on {twin} now; this one is asked "
+            f"again at the next round")
+    with _guard:
+        lock = _looking.setdefault(f"{server} {twin}", threading.Lock())
+    if not lock.acquire(blocking=False):
+        raise emb.GateDeferred(busy)
+    try:
+        path = twin_lock_path(server, twin)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o644)
+    except OSError as e:
+        log.warning("%s: the node-wide lock on %s could not be opened (%s): only this "
+                    "process's gates on it wait for each other", name, twin, e)
+        return _TwinClaim(lock, None)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        os.close(fd)
+        lock.release()
+        raise emb.GateDeferred(busy + " (a gate in another process)") from None
+    return _TwinClaim(lock, fd)
 
 
 #: the models (their flight keys, `_flight`) whose gate runs on a twin now:
