@@ -77,7 +77,9 @@ def test_the_re_issued_parts_are_decoded_in_processes(isolated_config, tmp_path,
     snap = sn.create(root, "gutenberg", snapshot_id="2026-08", log=lambda *_: None)
     shard_dir = col.shard_dir_of(root, "gutenberg")
     uids = sorted(_revise(root, corpus_dir, shard_dir, part) for part in snap.shards[:2])
-    _build(root, corpus_dir, records_per_shard=1)
+    # built FOR 2026-09, as an operator runs it: the relations parts then name
+    # the id the snapshot is created under, and create writes none again
+    _build(root, corpus_dir, records_per_shard=1, snapshot_id="2026-09")
     pools = []
 
     class Spy(parallel.ProcessPoolExecutor):

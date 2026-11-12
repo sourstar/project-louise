@@ -213,3 +213,17 @@ def test_the_real_copy_lands_in_the_space_with_the_reference_reused(tmp_path, mo
     assert (codex.space.calibration.vectors, codex.space.envelope) == \
         (src.space.calibration.vectors, src.space.envelope)
     assert codex.space.tolerance == src.space.tolerance and codex.layers == src.layers
+
+
+
+def test_a_recipe_stating_the_space_without_its_engine_takes_the_source_s(tmp_path, steps):
+    """München, 2026-11-12: neuris's recipe states the shared legal space with
+    no [space.encoder.engine] (the engine is read on the node), and case E
+    refused it. The engine lies outside space_id: case E completes it from
+    the source and creates in the source's space."""
+    same = {k: v for k, v in copy.deepcopy(SOURCE_SPACE).items() if k not in ("envelope", "tolerance")}
+    same["calibration"].pop("vectors")
+    same["encoder"] = {k: v for k, v in same["encoder"].items() if k != "engine"}
+    assert "engine" not in same["encoder"]
+    assert _new(tmp_path, _recipe(tmp_path, same)) == 0
+    assert steps["order"] == ["create", "cpu-reference", "gate"]

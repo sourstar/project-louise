@@ -167,12 +167,24 @@ def test_a_plugin_without_relations_writes_none(isolated_config, tmp_path, corpu
     assert not con.execute("SELECT 1 FROM sqlite_master WHERE name='relations_parts'").fetchone()
 
 
-def test_snapshot_create_refuses_edges_written_for_another_snapshot(isolated_config, tmp_path, origin):
+def test_snapshot_create_writes_the_edges_again_for_the_id_it_is_given(isolated_config, tmp_path, origin):
+    """A build cannot know the id `snapshot create` will be given (no
+    --snapshot, or another one): create writes the relations parts again for
+    that id instead of refusing (2026-11-12: every carry test failed on main
+    once gutenberg's builds wrote relations), so every edge names the
+    snapshot that first lists it (09 §9.14)."""
+    import json
+    from app.pack import records as pack_records
+    from app.hold import shard as shard_mod
     root = tmp_path / "collections"
-    _built(root, origin)
+    _built(root, origin)                        # written for 2026-08
     rec.write_validation(root, "normattiva")
-    with pytest.raises(CodexError, match="written for snapshot 2026-08"):
-        sn.create(root, "normattiva", snapshot_id="2026-09", **QUIET)
+    snap = sn.create(root, "normattiva", snapshot_id="2026-09", **QUIET)
+    assert snap.relations, "listed, not refused"
+    shard_dir = col.shard_dir_of(root, "normattiva")
+    for r in snap.relations:
+        for line in pack_records.iter_records(shard_dir / shard_mod.relations_path(r.slice, r.n)):
+            assert line["snapshot"] == "2026-09"
 
 
 def test_the_light_command_writes_what_a_build_would_and_touches_no_record(
@@ -247,8 +259,10 @@ def test_an_edge_keeps_the_snapshot_that_first_listed_it(isolated_config, tmp_pa
 
 
 def test_a_stopped_pass_resumes_after_the_last_part(isolated_config, tmp_path, origin, monkeypatch):
-    """Invariant 2: a stop finishes the part in hand, the pass says it was
-    interrupted, `snapshot create` refuses the half, and a re-run finishes."""
+    """Invariant 2: a stop finishes the part in hand and the pass says it was
+    interrupted. `snapshot create` then RESUMES it (2026-11-12: it writes the
+    parts not yet written for its id rather than refusing), computing only
+    the part left."""
     import threading
     root = tmp_path / "collections"
     with monkeypatch.context() as m:
@@ -259,11 +273,10 @@ def test_a_stopped_pass_resumes_after_the_last_part(isolated_config, tmp_path, o
     got = rel.backfill(root, "normattiva", snapshot_id="2026-08", stop=stop, **QUIET)
     assert got.interrupted and got.parts == 1
     rec.write_validation(root, "normattiva")
-    with pytest.raises(CodexError, match="did not finish"):
-        sn.create(root, "normattiva", snapshot_id="2026-08", **QUIET)
-    again = rel.backfill(root, "normattiva", snapshot_id="2026-08", **QUIET)
-    assert not again.interrupted and again.parts == 2, "the part done is not computed again"
-    assert sn.create(root, "normattiva", snapshot_id="2026-08", **QUIET).relations
+    said: list[str] = []
+    snap = sn.create(root, "normattiva", snapshot_id="2026-08", log=said.append)
+    assert snap.relations, "the pass resumed and listed"
+    assert any("2 of 3 part(s) to write" in line for line in said), f"only the parts left: {said}"
 
 
 def test_a_snapshot_with_relations_passes_hold_check(isolated_config, tmp_path, origin):

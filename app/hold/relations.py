@@ -285,6 +285,19 @@ def promote_staged(staging: Path, shard_dir: Path) -> int:
     return len(rows)
 
 
+def written_for(db_path: Path) -> str | None:
+    """The snapshot id the build's relations parts were written for, "" while
+    a pass is unfinished, None where no pass ran (no relations)."""
+    con = sqlite3.connect(db_path)
+    try:
+        row = con.execute("SELECT value FROM meta WHERE key=?", (META_KEY,)).fetchone()
+    except sqlite3.Error:
+        row = None
+    finally:
+        con.close()
+    return None if row is None else str(row[0])
+
+
 def require_for(db_path: Path, snapshot_id: str, name: str = "") -> None:
     """`snapshot create`'s guard: the relations parts beside the build's
     record parts were written for THIS snapshot id, and completely."""
