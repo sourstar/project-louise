@@ -955,7 +955,8 @@ def _new_reference_and_gate(a, run, name: str, say) -> tuple[int, bool]:
     run.at("gate", "hold embedder check")
     with _sub_command():
         rc = cmd_embedder_check(argparse.Namespace(root=a.root, collection=name, accept=False,
-                                                   model=None, query_model=None))
+                                                   model=None, query_model=None,
+                                                   remeasure=False))
     run.record("gate", {"rc": rc})
     say(f"{name}: {'the gate PASSED; embedding stays off until the operator turns it on' if rc == 0 else f'the gate exited {rc}: nothing may be embedded'}")
     return rc, False
@@ -5820,6 +5821,41 @@ def cmd_embedder_check(a) -> int:
     return 0
 
 
+def _space_statement(root, name: str, codex, recipe, role: str) -> dict | None:
+    """The space's passing statement for the run answering now, taken as
+    the worker takes it (`run_check._look`): this collection's or another's
+    of the same space (`runs.statements_for_space`, one borrowed is one
+    kept), at the batching this peer contributes (`runs.check`, #574), then
+    its sixteen texts re-checked on this load (`run_check.recheck`). None
+    where there is none to take, or anything stands in the way: the gate
+    measures, as it always did.
+
+    NeuRIS's `new`, 2026-11-12: step 5 measured for 27 minutes, reloading
+    the shared Nemotron three times, a run the space had validated hours
+    before for normattiva-nemo — the redundant gate the operator named that
+    morning, by the command line's door."""
+    from app import run_check
+    from app.hold import runs as hold_runs
+    try:
+        query = role == "query"
+        run_id = run_check.answering_run(recipe, query=query,
+                                         probe_item=run_check.probe_for(codex, role))
+        who = run_check.signer()
+        if query:
+            kept = hold_runs.statements_for_space(root, name, codex, role, signer=who)
+            if run_id not in kept or not hold_runs.passing(kept[run_id], codex):
+                return None
+        else:
+            hold_runs.check(root, name, codex, {run_id}, signer=who, role=role,
+                            batched=run_check.batched(recipe),
+                            contributes=run_check.contributing(recipe))
+        if not run_check.recheck(root, name, codex, recipe, run_id, role=role):
+            return None                     # set aside: the gate measures from scratch
+        return hold_runs.statements_for_space(root, name, codex, role, signer=who).get(run_id)
+    except Exception:                       # noqa: BLE001 — nothing taken: the gate decides
+        return None
+
+
 def _embedder_check_runs(a, name, codex) -> int:
     """`hold embedder check` for a version-3 collection: the gate against
     THE RUN THAT ANSWERS NOW, for the document encoder and — in an
@@ -5856,17 +5892,24 @@ def _embedder_check_runs(a, name, codex) -> int:
     from app import encoder_use
     for role in roles:
         passes: list = []
+        taken = None
         try:
             # leased for the whole gate: the worker's idle sweep leaves it loaded
             with encoder_use.held(recipe, query=role == "query", collection=name,
                                   holder=_lease_holder("hold embedder check")):
-                body = run_check.validate(a.root, name, codex, recipe, role=role,
-                                          on_run=passes.append)
+                if not getattr(a, "remeasure", False):
+                    taken = _space_statement(a.root, name, codex, recipe, role)
+                body = taken or run_check.validate(a.root, name, codex, recipe, role=role,
+                                                   on_run=passes.append)
         except emb.GateDeferred as e:
             print(f"louise: deferred: {role}: {e}", file=sys.stderr)
             return 3
         ok = hold_runs.passing(body, codex)
         print(f"{'PASS' if ok else 'FAIL'}  {role}")
+        if taken is not None:
+            print("  taken       the space's statement for this run, as the worker takes it "
+                  "(03 §3.3: a pass validates the run for the space); its sixteen texts "
+                  "re-checked on this load. `--remeasure` gates it again")
         print(f"  space       {body['space_id'][:23]}…")
         print(f"  run         {body['run']}")
         print(f"  engine      {body['engine'].get('image', '')[:60]}")
@@ -7346,6 +7389,10 @@ def build_parser() -> argparse.ArgumentParser:
                         "candidate YAML, before the live one moves to it")
     p.add_argument("--query-model", metavar="NAME",
                    help="the same for the query side (`query_model`)")
+    p.add_argument("--remeasure", action="store_true",
+                   help="gate the run again even where the space already holds a passing "
+                        "statement for it (by default that statement is taken, as the "
+                        "worker takes it, after its sixteen texts are re-checked)")
     p.set_defaults(fn=cmd_embedder_check)
 
     p = everbs.add_parser("cpu-reference",
