@@ -167,12 +167,24 @@ def test_a_plugin_without_relations_writes_none(isolated_config, tmp_path, corpu
     assert not con.execute("SELECT 1 FROM sqlite_master WHERE name='relations_parts'").fetchone()
 
 
-def test_snapshot_create_refuses_edges_written_for_another_snapshot(isolated_config, tmp_path, origin):
+def test_snapshot_create_writes_the_edges_again_for_the_id_it_is_given(isolated_config, tmp_path, origin):
+    """A build cannot know the id `snapshot create` will be given (no
+    --snapshot, or another one): create writes the relations parts again for
+    that id instead of refusing (2026-11-12: every carry test failed on main
+    once gutenberg's builds wrote relations), so every edge names the
+    snapshot that first lists it (09 §9.14)."""
+    import json
+    from app.pack import records as pack_records
+    from app.hold import shard as shard_mod
     root = tmp_path / "collections"
-    _built(root, origin)
+    _built(root, origin)                        # written for 2026-08
     rec.write_validation(root, "normattiva")
-    with pytest.raises(CodexError, match="written for snapshot 2026-08"):
-        sn.create(root, "normattiva", snapshot_id="2026-09", **QUIET)
+    snap = sn.create(root, "normattiva", snapshot_id="2026-09", **QUIET)
+    assert snap.relations, "listed, not refused"
+    shard_dir = col.shard_dir_of(root, "normattiva")
+    for r in snap.relations:
+        for line in pack_records.iter_records(shard_dir / shard_mod.relations_path(r.slice, r.n)):
+            assert line["snapshot"] == "2026-09"
 
 
 def test_the_light_command_writes_what_a_build_would_and_touches_no_record(
