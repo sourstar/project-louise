@@ -169,6 +169,11 @@ def node(tmp_path, monkeypatch, endpoint):
     backend_gate.reset_cache()
     hold_runs._read.clear()
     collection = next(c for c in collections_mod.load_all() if c.name == "gutenberg")
+    # a node keeps its CPU twin's reference for the weights it gates (invariant
+    # 12): without one no card run is gated (`test_no_card_run_is_gated_without_
+    # a_stored_cpu_reference`)
+    for role in ("document", "query"):
+        _cpu_reference(root / "collections", codex, role=role)
     return root / "collections", collection, codex
 
 
@@ -932,11 +937,12 @@ def test_a_verdict_measured_one_text_a_request_does_not_admit_a_batch(node, endp
 
 # ---- the stored CPU reference (operator, 2026-10-31; near-exact-runs.md §2) ------
 
-def _cpu_reference(root, codex, *, worst_row_to=None):
+def _cpu_reference(root, codex, *, worst_row_to=None, role="document"):
     from app.hold import cpu_reference as cpu_ref
     from tests.hold.test_embedder import perturbed
     items = run_check.calibration_items(root, "gutenberg", codex)
-    vectors = opening(emb.gate_texts(codex, "document", items))
+    texts = emb.gate_texts(codex, role, items)
+    vectors = opening_query(texts) if role == "query" else opening(texts)
     import numpy as np
     vectors = [list(np.asarray(v, dtype="float32") / np.linalg.norm(v)) for v in vectors]
     if worst_row_to is not None:
@@ -947,9 +953,46 @@ def _cpu_reference(root, codex, *, worst_row_to=None):
             vectors = perturbed(vectors, indices=(17,), to=worst_row_to)
         finally:
             te.DIM = old
-    cpu_ref.write(root, "gutenberg", "document", run_id="sha256:" + "c0" * 32,
+    cpu_ref.write(root, "gutenberg", role, run_id="sha256:" + "c0" * 32,
                   run={"driver": "cpu", "engine": {}, "weights": R1_OBJ["weights"]},
                   set_id=codex.space.calibration.set, vectors=vectors)
+
+
+def test_no_card_run_is_gated_without_a_stored_cpu_reference(node, endpoint):
+    """Invariant 12: every card run "reaches the stored CPU reference at
+    0.999; a run that does not FAILS". With none stored the gate is not run
+    at all (a rule in the way, named with the command that makes one), and
+    the card is not asked the set; until 2026-11-12 such a run passed without
+    that half of the check (new-collection.md, "What the review found")."""
+    import shutil
+    from app.hold import cpu_reference as cpu_ref
+    root, collection, codex = node
+    for role in ("document", "query"):      # the space's query side is gated by the same look
+        shutil.rmtree(cpu_ref.directory(root, "gutenberg", role))
+    con = db.connect(collection)
+    before = endpoint.texts
+    assert backend_gate.embed_allowed(con, collection) is False
+    assert endpoint.texts - before < 16, "the set was never sent to the card (probes only)"
+    assert statements_kept(root) == [], "no statement: nothing was measured"
+    with pytest.raises(emb.GateError, match="no stored CPU reference.*hold embedder cpu-reference gutenberg --model"):
+        run_check.validate(root, "gutenberg", codex, collections_mod.recipe_for(collection))
+    _cpu_reference(root, codex)
+    run_check.reset_cache()
+    assert backend_gate.embed_allowed(con, collection) is True, "made: the gate runs by itself"
+
+
+def test_a_cpu_run_is_gated_without_a_reference_it_would_be_its_own(node, endpoint):
+    """A run ON the CPU is the reference's own kind: nothing to hold it to."""
+    import shutil
+    from app.hold import cpu_reference as cpu_ref
+    root, collection, codex = node
+    shutil.rmtree(cpu_ref.directory(root, "gutenberg", "document"))
+    cpu_obj = {**R1_OBJ, "driver": "cpu"}
+    cpu_run = digest(canonical_json(cpu_obj))
+    endpoint.known[cpu_run] = cpu_obj
+    endpoint.run = cpu_run
+    body = run_check.validate(root, "gutenberg", codex, collections_mod.recipe_for(collection))
+    assert body["run"] == cpu_run and hold_runs.passing(body, codex)
 
 
 def test_the_gate_holds_the_run_to_the_stored_cpu_reference(node, endpoint):
