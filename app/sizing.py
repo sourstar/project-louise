@@ -157,6 +157,12 @@ class Sizer:
             if len(seen) > SAMPLES_KEPT:
                 del seen[0]
 
+    def measured(self, key: str) -> bool:
+        """Whether `size` answers from measurements for `key` rather than
+        with its default (MIN_SAMPLES batches recorded)."""
+        with self._lock:
+            return self._samples.get(key, 0) >= MIN_SAMPLES
+
     def size(self, key: str, *, target_s: float, default: int,
              lo: int = 1, hi: int | None = None,
              ceiling_s: float | None = None) -> int:

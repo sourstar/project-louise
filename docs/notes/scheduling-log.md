@@ -2767,3 +2767,38 @@ resident without chat; chat's load evicted MADLAD, its true LRU (last used 5 min
 Nemotron were used later. Not this change's defect: the card cannot hold the question's set beside them. Superseded
 by the operator's corrected workflow ([ask-card-workflow.md](ask-card-workflow.md)): corpus encoders unloaded
 actively for a question.
+
+## 2026-11-12 — the text index's batch sized in CHUNKS, not documents (app/worker.py `fts_sizes`) — BEFORE (deploy pending)
+
+**The change.** The sizer's affine fit for the index stage is now `fixed + per chunk`; it was `fixed + per
+document`. The batch is cut at the chunk budget it gives. The document count, which bounds the look-ahead, is
+that budget over the MEDIAN chunks per document of the last 256 documents. Unmeasured collections start at
+FTS_BATCH_DOCS, as before.
+
+**BEFORE** (München, from normattiva-nemo's manifest `events`, 359 fts lines, 2026-11-08T23:51Z → 11-11T19:26Z;
+the file is /mnt/ssd3/louise-build/measure-nemo-fts-lines.txt):
+- **Totals:** 4,306 batches, 341,575 documents, 7,916,718 chunks (23.2 chunks/doc), 13,325 s of stage time;
+  594 chunks/s, 3.09 s a batch.
+- **Per commit:** single commits under 200 chunks take a median 2.0 s; those of 2,000 chunks or more take
+  9.8 s. That is about 2 s a commit plus about 4 ms a chunk.
+- **By batch size:**
+
+  | docs/batch | batches | chunks | stage s | share | chunks/s |
+  |---|---|---|---|---|---|
+  | ≤ 1.5 | 572 | 81,506 | 1,705 | 12.8 % | 48 |
+  | 1.5–5 | 621 | 269,392 | 1,443 | 10.8 % | 187 |
+  | 5–50 | 1,950 | 3,189,375 | 6,001 | 45.0 % | 531 |
+  | > 50 | 1,163 | 4,376,445 | 4,175 | 31.3 % | 1,048 |
+
+- **Cause:** a few very long documents made the per-document rate huge, so the batch fell to 1–5 documents.
+  Those batches spent 24 % of the stage on 4.4 % of the chunks.
+- **Expected:** those chunks at ~1,000 chunks/s take about 350 s instead of 3,148 s, a saving of about 2,800 s
+  (21 %). The cost test, tests/test_sizing.py, gives a budget of 2,500 chunks (18 documents of 138 chunks,
+  against 1–5 per document).
+
+**Scenario for the AFTER.** Normattiva-nemo's rebuild in the legal queue, after this deploy: the same corpus and
+the same chunker. Read the batch lines' parse / index / the rest split, because the old lines carry it only 4
+times. Compare chunks/s and seconds per batch at equal chunks/doc. pubmed and wikipedia should show the same or
+more chunks per commit.
+
+**AFTER:** pending.

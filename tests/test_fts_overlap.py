@@ -623,7 +623,7 @@ def test_a_batch_of_one_long_document_still_keeps_the_pool_parsing(tmp_path, mon
     pool's window (children × the task queued behind each), one link each,
     however small the batch."""
     monkeypatch.setattr(config, "PARSE_PROCESSES", 6)
-    monkeypatch.setattr(worker, "batch_docs", lambda c, stage, default: 1)
+    monkeypatch.setattr(worker, "fts_sizes", lambda c: (1, config.FTS_BATCH_CHUNKS))
     parse.hold = threading.Event()
     c, con = _synthetic(tmp_path, 40)
     window = 6 * parallel.IN_FLIGHT_PER_CHILD
@@ -651,6 +651,8 @@ def _synthetic_rdf(tmp_path, n: int, monkeypatch, *, fts_want: int, rdf_want: in
     con.execute("UPDATE documents SET rdf_done=0, title=NULL")
     monkeypatch.setattr(worker, "batch_docs", lambda collection, stage, default:
                         fts_want if stage == "fts" else rdf_want if stage == "rdf" else default)
+    # the text index is sized by `fts_sizes` (in chunks, 2026-11-12): the same want
+    monkeypatch.setattr(worker, "fts_sizes", lambda collection: (fts_want, config.FTS_BATCH_CHUNKS))
     monkeypatch.setattr(config, "FTS_BATCH_DOCS", fts_want)
     monkeypatch.setattr(parallel, "metadata_for_rows", lambda collection, rows: [
         (True, {"title": f"title {r['native_id']}", "authors": "", "lang": "en",
@@ -761,7 +763,7 @@ def test_one_bound_covers_every_link_a_batch_waits_for(tmp_path, monkeypatch, pa
         deadline = time.monotonic() + 5
         while _chain(c).computing() > 1 and time.monotonic() < deadline:
             time.sleep(0.01)
-        monkeypatch.setattr(worker, "batch_docs", lambda collection, stage, default: 8)
+        monkeypatch.setattr(worker, "fts_sizes", lambda collection: (8, config.FTS_BATCH_CHUNKS))
         t0 = time.monotonic()
         assert _round(con, c)                                   # wants 8: 6-10 in time, 11-13 not
         assert time.monotonic() - t0 < 3
