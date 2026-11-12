@@ -32,7 +32,7 @@ language-model intermediates. They are not methods, so they keep `hold annotatio
 The method goes in the collection file, not the Codex. The file is node-local desired state (invariant 10), so only
 the node that publishes the collection re-derives it. A peer that adopted the collection takes the publisher's
 snapshots as it takes any. Putting the method in the Codex would be a wire-format change. It would also move
-`collection_id`, which would make wikipedia-articles-cache a new collection. If the method should travel (a peer
+`collection_id`, which would make wikipedia-articles a new collection. If the method should travel (a peer
 reproducing the claims to check them), the place is a Codex field at the next annotations version. That is the
 operator's call when such a peer exists.
 
@@ -59,8 +59,11 @@ against 1.87 s. That is about 15 s instead of ~115 s of one core for wikipedia's
 
 ## For München (on the operator's word, after the deploy)
 
-1. `louise hold config apply wikipedia-articles-cache --set method=wikipedia-versions`
-2. `louise hold annotations derive wikipedia-articles-cache --dry-run`. Expected: not due, "pinned to wikipedia
+The collection is `wikipedia-articles` on the node (the rename to `-cache` planned in #570 has not been made; after
+it, the new name).
+
+1. `louise hold config apply wikipedia-articles --set method=wikipedia-versions`
+2. `louise hold annotations derive wikipedia-articles --dry-run`. Expected: not due, "pinned to wikipedia
    <its snapshot>".
 3. Nothing else. The worker derives once wikipedia's next snapshot is written. Its log line names the counts. Time
    the first one (method and update wall times, peak RSS of each child).
