@@ -765,8 +765,17 @@ probable or open.
 *The operator, 2026-11-11: "Implement it". Written by the session that
 implemented it, with no node: everything below ran on a CPU, in a cloud
 container. §2's measurements were then made on the node by München's
-session, on test copies (§10.1); nothing is deployed
-and no engine changed.*
+session, on test copies (§10.1).*
+
+**LIVE since 2026-11-11 (the operator's word in München's session; München's
+report of 11-12):** the three VeGa encoders — `vega-nemotron-3-embed-1b`,
+`vega-bge-m3`, `vega-qwen3-embedding-4b` — run with `context_on_demand` and
+`context_canary:true` on engine `c4e6133a6e85` (stack `7c301a7ba437`), built
+from `staged/context-on-demand.series` at `6f1748a`: WITH the `init_stop`
+fix (localai-bugs.md, "The series digest", says how that was shown). The
+other rerankers and MADLAD share that engine WITHOUT the option — no context
+of theirs is ever freed; the Nemotron reranker stays on its own backend
+(`9d17b8a39845`). Not run: the reranker's card test ("For München" step 6).
 
 | part (§3, P11) | state | where | checked |
 |---|---|---|---|

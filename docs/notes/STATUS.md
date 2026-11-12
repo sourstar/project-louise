@@ -29,6 +29,15 @@ measured (published figures disagree).
   snapshotted like /data, since nothing guarantees a re-fetch gives the same bytes; SHARDs and bundles are rebuildable
   but cost hours. Retention and cost: the operator's choice, put by München with each dataset's size.
 
+- **The live on-demand engine carries P11's `init_stop` fix — checked, no rebuild** (11-12). The switch of 11-11
+  completed (München's report): `vega-nemotron-3-embed-1b`, `vega-bge-m3` and `vega-qwen3-embedding-4b` run with
+  `context_on_demand` and `context_canary:true` on `c4e6133a6e85`; the other rerankers and MADLAD share that engine
+  WITHOUT the option (the defect could only fire with it); the Nemotron reranker stays on `9d17b8a39845`. The engine
+  was read as predating the fix. It does not: it was built from `6f1748a`, the merge after `8f404c9`; its staged
+  patches are the fix's byte for byte; the patches-only digest is `618e5a2b7e24` at `5fd224d` (the defective build,
+  never used) and `c4e6133a6e85` at `6f1748a`. localai-bugs.md "The series digest"; the brief §10 now says what is
+  live. Still on the operator's word: the reranker card test (brief, "For München" step 6).
+
 - **An engine's name covers its series' base — FIXED (deploy/localai/llama-cpp/build.sh)** (the context-on-request
   session's finding). A relative `SERIES_FILE` was lost by the digest's `cd "$PATCHES"` (cat's error hidden by the
   pipe), so the name covered the patches alone, not the `base` line: the live c4e6133a6e85 (context-on-demand) and

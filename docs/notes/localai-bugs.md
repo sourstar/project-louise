@@ -458,6 +458,30 @@ their code unchanged, and pass the P3/P4 CPU checks again at `ddf48f8` (each
 entry below). The series as committed applies with no fuzz and no rejected
 hunk at every level. P6 and P9 (staged) are NOT rebased yet.
 
+**The series digest — what an engine is named by** (`build.sh`: the series
+file's bytes, then each patch's, in order; first twelve hex of the sha256).
+`NAME_ONLY=1 sh deploy/localai/llama-cpp/build.sh <variant> <out>` prints it
+for a tree and builds nothing (`SERIES_FILE=` for a staged series) — the way
+to answer "which patches was the engine on the node built from".
+- *A hole, closed 2026-11-12* (#586, `tests/test_localai_build_name.py`).
+  With `SERIES_FILE` given as a RELATIVE path (as the staged series' build
+  steps write it) the file was not found after the script's `cd` into the
+  patches, the pipe hid `cat`'s error, and the name covered the patches
+  ALONE: the `base` line — LocalAI's commit — was not in it. The live series
+  was never affected (its default path is absolute).
+- *Two engines were named over their patches alone, and KEEP their names
+  until they are rebuilt*: `c4e6133a6e85` — `staged/context-on-demand.series`
+  at `6f1748a` (the live on-demand engine of the three VeGa encoders, stack
+  `7c301a7ba437`); a build of the same series is now named `281e1ee481b6`.
+  `9d17b8a39845` — `staged/nemotron-rerank.series` (the Nemotron reranker's
+  backend); now `10aa8b1851d7`. To check such a name: `cat` the series'
+  patches, in order, into `sha256sum`.
+- *What the digest settled the same day.* The live engine `c4e6133a6e85` was
+  read as predating P11's `init_stop` fix. It does not: `6f1748a` is the
+  merge after `8f404c9`, its staged patches are byte-identical to the fix's,
+  and the patches-only digest is `618e5a2b7e24` at `5fd224d` (the defective
+  build, never used) and `c4e6133a6e85` at `6f1748a`. No rebuild was needed.
+
 ### P1. `GET /system` lists the options each loaded model was given
 
 *Base: master `16acc89` since 2026-11-02 (unchanged bytes, offsets only); `v4.12.1` [`ec92740`](https://github.com/mudler/LocalAI/tree/ec9274027eadd552d56f2c6c1fe86cd9216a991a) from 2026-10-27; written on master
