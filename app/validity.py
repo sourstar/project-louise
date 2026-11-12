@@ -277,12 +277,11 @@ def amendments_of(con, keys: Iterable[str], article: str | None = None, *, limit
     normattiva_codes.json): an ARTICLE's statements only where their annex
     is one of them, whitespace normalised, case as held (the equality
     app/ask/articles.py `in_annex` applies to a chunk label). A statement
-    on an article with NO annex is DROPPED there: "#1" of the c.c.'s decree
-    is the decree's art. 1 or the code's, and the origin does not say which
-    (the node, 2026-11-12: 12 such rows, 3 on c.c. `#1`, 9 on c.p.a.
-    `~art_1__para_1`); a fact never carries another article's changes. A
-    statement on the WHOLE act (article '') is about the code too and
-    stays. No `annexes` (a structured code, any other act): as before."""
+    on an article with NO annex (`#1`, AKN `~art_N`) is returned
+    `unlabelled`: the caller holds it to the version's own labels (the
+    architecture session's rule, 2026-11-12). A statement on the WHOLE act
+    (article '') is about the code too and stays. No `annexes`: the act's
+    own (unannexed) article statements only."""
     ks = sorted({str(k) for k in keys if k})
     if not ks:
         return []
@@ -296,13 +295,21 @@ def amendments_of(con, keys: Iterable[str], article: str | None = None, *, limit
         params.append(article_token(article))
     names = sorted({" ".join(str(a).split()) for a in annexes if str(a).strip()})
     if names:
-        sql += f" AND (a.article = '' OR a.annex IN ({','.join('?' for _ in names)}))"
+        # the annex's own statements, the whole act's, and the article
+        # statements that name NO annex: the caller resolves those against
+        # the held version (`unlabelled`; app/ask/articles.py `_changes`)
+        sql += (f" AND (a.article = '' OR a.annex IN ({','.join('?' for _ in names)})"
+                f" OR a.annex IS NULL)")
         params.extend(names)
+    elif article is not None:
+        # an act cited without annexes (a structured code, the decree
+        # itself): its own articles, never an annex's statement
+        sql += " AND (a.article = '' OR a.annex IS NULL)"
     sql += " ORDER BY COALESCE(a.day, 0), a.stated_by LIMIT ?"
     params.append(int(limit))
     return [{"stated_by": r[0], "target": r[1], "article": r[2], "amending": r[3] or r[0],
              "amending_is_stating": not r[3], "day": day_text(r[4]), "kind": r[5], "stating_title": r[6],
-             "annex": r[7]}
+             "annex": r[7], "unlabelled": bool(names) and bool(r[2]) and r[7] is None}
             for r in con.execute(sql, params)]
 
 

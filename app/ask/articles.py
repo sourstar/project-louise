@@ -212,25 +212,57 @@ def _day(n) -> str | None:
 MAX_CHANGES = 12
 
 
-def _changes(con, work: str, tok: str, annexes: tuple[str, ...] = ()) -> list[dict]:
+def _changes(con, work: str, tok: str, annexes: tuple[str, ...] = (), holders: set | None = None) -> list[dict]:
     """What changed the article and its act (app/validity.py `amendments_of`:
     the amending actions each version states, piece 3, operator 2026-11-08)
     — by any canonical id of the Work, the latest MAX_CHANGES, facts as the
     origin states them: the amending act, the day it applies from, the kind.
 
-    Within the citation's `annexes` where it names some, as `_article`
-    reads the text (2026-11-12): "art. 12 c.c." is the code's art. 12, never
-    the preleggi's or the decree's. A statement on an article that names NO
-    annex, for a code that has annexes, is ambiguous (`#1` of the decree)
-    and is DROPPED — a fact never carries another article's changes; a
-    statement on the whole act stays (amendments_of). A structured code (no
-    annexes): unchanged."""
+    Within the citation's `annexes` where it names some (2026-11-12): "art.
+    12 c.c." is the code's art. 12, never the preleggi's or the decree's.
+    A statement on an article that names NO annex (a bare `#1`, an AKN
+    `~art_N`) is held to `holders`, the candidates in the held version whose
+    labels carry that article number (`_holders`: an annex name, or None
+    for the decree's own): one candidate, the cited annex -> listed; several,
+    the cited among them -> listed and marked "the source does not say which
+    article N" (it is shown on every candidate's fact; invariant 11: lost
+    nowhere, claimed nowhere); the cited not among them -> not listed. A
+    structured code (no annexes): unchanged."""
     from app import validity
     keys = [r[0] for r in con.execute("SELECT key FROM validity_works WHERE work=?", (work,))]
     rows = validity.amendments_of(con, keys, tok, annexes=annexes)
+    cited = {" ".join(a.split()) for a in annexes}
+    kept, ambiguous = [], set()
+    for r in rows:
+        if r.get("unlabelled"):
+            held = holders or set()
+            if not (held & cited):
+                continue
+            if len(held) > 1:
+                ambiguous.add(id(r))
+        kept.append(r)
+    rows = kept
     return [{"atto": (r["stating_title"] or r["amending"]).split(" — ")[0] if r["amending_is_stating"]
              else r["amending"], "dal": r["day"], "tipo": r["kind"],
-             "su": f"art. {r['article']}" if r["article"] else "l'atto"} for r in rows[-MAX_CHANGES:]]
+             "su": (f"art. {r['article']}" + (" (la fonte non indica di quale testo)" if id(r) in ambiguous else ""))
+             if r["article"] else "l'atto"} for r in rows[-MAX_CHANGES:]]
+
+
+def _holders(collection, native_id: int, want: "Cited") -> set:
+    """The candidates in the held version whose labels carry the cited
+    article number: each annex's name (whitespace normalised), None for an
+    article of the act's own (no annex) — read from the version itself,
+    never a constant (architecture session, 2026-11-12)."""
+    from app import reader
+    doc = reader.document(collection, int(native_id))
+    out: set = set()
+    for ch in (doc or {}).get("chunks") or []:
+        label = ch.get("chapter")
+        if want.read(label) != want.article:
+            continue
+        m = _ANNEX.match(str(label or "").rsplit(" › ", 1)[-1])
+        out.add(_norm(m["annex"]) if m else None)
+    return out
 
 
 def _fact(collection, key: str, act_label: str, c: ArticleCitation, version: dict, chunk: dict,
@@ -262,7 +294,9 @@ def _work_facts(collection, con, key: str, want: Cited, group: list[tuple],
     for work, versions, v, title, _lang in group:
         act_label = (title or key).split(" — ")[0]
         ch = _article(collection, v["native_id"], want)
-        changes = _changes(con, work, c.article, tuple(c.annexes or ()))
+        annexes = tuple(c.annexes or ())
+        changes = _changes(con, work, c.article, annexes,
+                           _holders(collection, v["native_id"], want) if annexes else None)
         if ch is not None:
             note = notes.in_force if as_of is None else notes.as_of.format(day=_day(as_of))
             out.append(_fact(collection, key, act_label, c, v, ch, note, changes))

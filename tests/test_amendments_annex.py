@@ -85,11 +85,44 @@ def test_another_annexs_article_of_the_same_number_is_not_listed(cc):
                                                ("Disposizioni sulla legge in generale",))] == ["art. 12"]
 
 
-def test_a_bare_article_never_appears_under_an_annex_code(cc):
-    got = articles._changes(cc, "cc-work", "1", ("CODICE CIVILE",))
-    assert [(r["su"], r["tipo"]) for r in got] == [("art. 1", "repeal")], "the code's art. 1 only, not `#1`"
+def test_a_bare_article_several_candidates_hold_is_shown_on_each_marked(cc):
+    """The architecture session's rule (2026-11-12): a bare `#1` on an annex
+    code, when the decree, the preleggi and the code all hold an art. 1, is
+    stored with no annex and shown on EVERY candidate's fact, marked — lost
+    nowhere, claimed nowhere."""
+    held = {None, "Disposizioni sulla legge in generale", "CODICE CIVILE"}
+    got = articles._changes(cc, "cc-work", "1", ("CODICE CIVILE",), held)
+    assert sorted((r["su"], r["tipo"]) for r in got) == [
+        ("art. 1", "repeal"), ("art. 1 (la fonte non indica di quale testo)", "substitution")]
+    pre = articles._changes(cc, "cc-work", "1", ("Disposizioni sulla legge in generale",), held)
+    assert [r["su"] for r in pre] == ["art. 1 (la fonte non indica di quale testo)"], "on the preleggi's fact too"
     assert cc.execute("SELECT COUNT(*) FROM validity_amendments WHERE article='1' AND annex IS NULL"
-                      ).fetchone()[0] == 1, "held, and dropped only when answering an annex code"
+                      ).fetchone()[0] == 1, "stored once, with no annex"
+
+
+def test_a_bare_article_only_one_candidate_holds_goes_to_it_unmarked():
+    """AKN `~art_115` on c.p.a.: the decree holds arts 1-2 only, so Allegato
+    1 is the one candidate holding art. 115 — read from the held version."""
+    con = _con()
+    cpa = "urn:nir:stato:decreto.legislativo:2010-07-02;104"
+    _state(con, "normattiva:2", "cpa-work", cpa, [
+        _mod("/akn/it/act/decreto_legislativo/stato/2010-07-02/104/ita@2022-10-18/!main/~art_115")])
+    # a real collection holds every canonical id of the Work, the AKN key too
+    con.execute("INSERT OR IGNORE INTO validity_works(key, work) VALUES(?,?)",
+                ("akn:it/act/decreto_legislativo/stato/2010-07-02/104", "cpa-work"))
+    assert con.execute("SELECT target, annex FROM validity_amendments").fetchone()[1] is None
+    a1 = "Allegato 1 Codice del processo amministrativo"
+    got = articles._changes(con, "cpa-work", "115", (a1,), {a1})
+    assert [r["su"] for r in got] == ["art. 115"]
+    assert articles._changes(con, "cpa-work", "115", ("Allegato 2 Norme di attuazione",), {a1}) == [], \
+        "an annex not holding the number never claims it"
+
+
+def test_the_decree_cited_without_annexes_sees_only_its_own_articles(cc):
+    """"art. 1 del regio decreto 262/1942" (no annexes): the unannexed rows,
+    never the code's `CODICE CIVILE-art. 1`."""
+    got = articles._changes(cc, "cc-work", "1")
+    assert [(r["su"], r["tipo"]) for r in got] == [("art. 1", "substitution")]
 
 
 def test_a_structured_code_is_unchanged():
