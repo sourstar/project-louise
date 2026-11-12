@@ -5,7 +5,6 @@ identifier (native_id), resolved to a uid internally via the default
 collection. Multi-collection summary lookups are P0.5's job.
 """
 import json
-import os
 import time
 from pathlib import Path
 from . import collections as collections_mod, config, db, llm, plugin_io
