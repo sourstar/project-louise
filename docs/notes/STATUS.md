@@ -20,6 +20,14 @@ measured (published figures disagree).
 
 ### 2026-11-12
 
+- **An engine's name covers its series' base — FIXED (deploy/localai/llama-cpp/build.sh)** (the context-on-request
+  session's finding). A relative `SERIES_FILE` was lost by the digest's `cd "$PATCHES"` (cat's error hidden by the
+  pipe), so the name covered the patches alone, not the `base` line: the live c4e6133a6e85 (context-on-demand) and
+  9d17b8a39845 (nemotron-rerank) are such names. Now resolved to an absolute path, an unreadable series or patch stops
+  the build (exit 2), and `NAME_ONLY=1` prints the digest. The default series (absolute) keeps its name. The NEXT
+  rebuild of those two series is named 281e1ee481b6 and 10aa8b1851d7: the same bytes, a new engine, gated once (on its
+  twin). Nothing live changes until a rebuild.
+
 - **A gate never holds the model from the others: it measures on the model's gate twin — DEPLOYED (f17701c, 16:45 CET
   11-12), the borrow VERIFIED; the twin's first real gate not yet seen.** On the node: `hold collection new neuris
   --space-from legi` took legi's statement (document-e9f2495eb04b45a3.json) and exited 0 in 16 s, no gate (#580). Open:
