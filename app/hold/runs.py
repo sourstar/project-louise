@@ -129,6 +129,38 @@ def batching_measured(root: Path, name: str, role: str, run_id: str) -> dict[str
     return got.get(f"{role}:{run_id}")
 
 
+def _covers(measured: dict[str, int] | None, contributes: dict[str, int]) -> bool:
+    return measured is not None and all(int(measured.get(k, 0)) >= int(v)
+                                        for k, v in contributes.items())
+
+
+def batching_for_space(root: Path, name: str, codex: Codex, role: str, run_id: str,
+                       contributes: dict[str, int], *, signer: str | None) -> dict[str, int] | None:
+    """The batching `run_id` was gated at, for THIS SPACE: this collection's
+    own record, else the record of another collection of the space on this
+    peer that holds a statement for the run and was gated at a batching that
+    covers `contributes` — copied into this collection's own record, as its
+    statement is (`statements_for_space`: one borrowed is one kept).
+
+    THE GATE RUNS ONCE PER (space, run) — the batching record too (2026-11-12,
+    the operator: "Leggi encoder is the same normattiva nemo encoding"):
+    legi's statement was borrowed from normattiva-nemo's, but its batching
+    was read from legi's own file alone, found missing, and the full gate ran
+    again for 11 minutes on a run that space had validated the day before."""
+    own = batching_measured(root, name, role, run_id)
+    if _covers(own, contributes):
+        return own
+    for other in _others(root, name):
+        theirs = batching_measured(root, other, role, run_id)
+        if not _covers(theirs, contributes):
+            continue
+        if run_id not in statements(root, other, codex, role, signer=signer):
+            continue                    # a record without the space's statement for the run
+        record_batching(root, name, role, run_id, theirs)
+        return theirs
+    return own
+
+
 def _contexts_file(root: Path, name: str) -> Path:
     return directory(root, name).parent / "gate-contexts.json"
 
@@ -559,8 +591,9 @@ def check(root: Path, name: str, codex: Codex, answered: set, *,
             # 2026-10-30) is no evidence for a batch. Not a failure: the gate
             # runs again at this setting (`run_check._look`), and only then
             # is a batched answer written
-            measured = batching_measured(root, name, role, run_id)
-            if measured is None or any(int(measured.get(k, 0)) < int(v) for k, v in contributes.items()):
+            measured = batching_for_space(root, name, codex, role, run_id, contributes,
+                                          signer=signer)
+            if not _covers(measured, contributes):
                 raise RunUnvalidated(
                     f"{name}: run {run_id[:23]}… was gated at "
                     f"{measured or 'an unrecorded batching (one text a request)'}; this peer now "

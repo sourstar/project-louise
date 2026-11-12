@@ -906,6 +906,53 @@ def test_a_statement_borrowed_from_a_sister_collection_is_kept_as_its_own(node, 
     assert [s["run"] for s in statements_kept(root)] == [body["run"]], "kept as its own"
 
 
+def test_a_second_collection_of_the_space_borrows_the_batching_with_the_statement(
+        node, endpoint, monkeypatch):
+    """legi, 2026-11-12 (the operator: "Leggi encoder is the same normattiva
+    nemo encoding"): the statement was borrowed from normattiva-nemo, the
+    batching record was read from legi's own file alone, found missing, and
+    the full gate ran again for 11 minutes on a validated run. The record is
+    borrowed with the statement now — copied in, one borrowed is one kept —
+    and the second collection is admitted with no gate."""
+    import shutil
+    root, collection, codex = node
+    monkeypatch.setattr(config, "EMBED_BATCH", 4)
+    con = db.connect(collection)
+    assert backend_gate.embed_allowed(con, collection) is True
+    recorded = hold_runs.batching_measured(root, "gutenberg", "document", R1)
+    assert recorded and recorded["embed_batch"] == 4
+    # the same space under another collection name: its statement and its
+    # batching record live under ITS directory; this one holds neither
+    sister = root / "gutenberg-sister" / "state"
+    sister.mkdir(parents=True)
+    for p_ in (hold_runs.directory(root, "gutenberg"), hold_runs._batching_file(root, "gutenberg")):
+        shutil.move(str(p_), str(sister / p_.name))
+    hold_runs._read.clear()
+    run_check.reset_cache()
+    assert hold_runs.batching_measured(root, "gutenberg", "document", R1) is None
+    before = endpoint.texts
+    hold_runs.check(root, "gutenberg", codex, {R1}, signer=run_check.signer(), batched=True,
+                    contributes=run_check.contributing(collections_mod.recipe_for(collection)))
+    assert endpoint.texts == before, "no gate: no text sent"
+    assert hold_runs.batching_measured(root, "gutenberg", "document", R1) == recorded, \
+        "the record is copied in with the statement"
+
+
+def test_a_batching_record_without_the_spaces_statement_is_not_borrowed(node, endpoint, monkeypatch):
+    """A record alone is no evidence: the run must hold a statement there too."""
+    import shutil
+    root, collection, codex = node
+    monkeypatch.setattr(config, "EMBED_BATCH", 4)
+    assert backend_gate.embed_allowed(db.connect(collection), collection) is True
+    other = root / "elsewhere" / "state"
+    (other / "calibration").mkdir(parents=True)
+    shutil.copy(hold_runs._batching_file(root, "gutenberg"), other / "gate-batching.json")
+    hold_runs._batching_file(root, "gutenberg").unlink()
+    with pytest.raises(hold_runs.RunUnvalidated, match="unrecorded batching"):
+        hold_runs.check(root, "gutenberg", codex, {R1}, signer=run_check.signer(), batched=True,
+                        contributes=run_check.contributing(collections_mod.recipe_for(collection)))
+
+
 def test_a_verdict_measured_one_text_a_request_does_not_admit_a_batch(node, endpoint, monkeypatch):
     """2026-10-30 (München): every statement on the node read batch_invariant
     True — measured with EMBED_BATCH=1, the gate's `contribute` pass sending
