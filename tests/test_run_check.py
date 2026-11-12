@@ -967,11 +967,12 @@ def test_no_card_run_is_gated_without_a_stored_cpu_reference(node, endpoint):
     import shutil
     from app.hold import cpu_reference as cpu_ref
     root, collection, codex = node
-    shutil.rmtree(cpu_ref.directory(root, "gutenberg", "document"))
+    for role in ("document", "query"):      # the space's query side is gated by the same look
+        shutil.rmtree(cpu_ref.directory(root, "gutenberg", role))
     con = db.connect(collection)
     before = endpoint.texts
     assert backend_gate.embed_allowed(con, collection) is False
-    assert endpoint.texts - before < 16, "the set was never sent to the card"
+    assert endpoint.texts - before < 16, "the set was never sent to the card (probes only)"
     assert statements_kept(root) == [], "no statement: nothing was measured"
     with pytest.raises(emb.GateError, match="no stored CPU reference.*hold embedder cpu-reference gutenberg --model"):
         run_check.validate(root, "gutenberg", codex, collections_mod.recipe_for(collection))
