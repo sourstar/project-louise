@@ -88,6 +88,7 @@ VERDICTS=${VERDICTS-${gate:+1}}
 mkdir -p "$(dirname "$HOLD")"
 rm -f "$HOLD"
 on_stop() {
+    interrupted=1
     touch "$HOLD"
     echo "== $(date -u +%FT%TZ) $NAME: stop asked; docker stop, ${STOP_GRACE:-300} s to end its unit"
     docker stop -t "${STOP_GRACE:-300}" "$NAME" >/dev/null 2>&1
@@ -106,8 +107,16 @@ while :; do
     docker run --rm --sig-proxy=false --name "$NAME" --oom-score-adj "${OOM_SCORE_ADJ:-500}" \
         "${env_args[@]}" "$@" &
     pid=$!
+    # THE PASS'S OWN STATUS, never the interrupted wait's. A trap that
+    # interrupts `wait` leaves 128 + the signal (143); the trap says so
+    # (`interrupted`), and waiting again returns the child's own status,
+    # whether it still runs or bash already reaped it (bash keeps an ended
+    # background child's status). Until 2026-11-12 the second wait was asked
+    # only while `kill -0` still saw the child: a pass that ended during the
+    # trap's `docker stop` (load 30 on the node) was reported 143, not 130
+    interrupted=
     wait "$pid"; code=$?
-    while kill -0 "$pid" 2>/dev/null; do wait "$pid"; code=$?; done
+    while [ -n "$interrupted" ]; do interrupted=; wait "$pid"; code=$?; done
     echo "== $(date -u +%FT%TZ) $NAME: exit $code"
     [ "$code" -eq 0 ] && exit 0
     [ -e "$HOLD" ] && { echo "== $NAME: held ($HOLD), not restarted"; exit "$code"; }
