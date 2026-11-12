@@ -1,8 +1,10 @@
-"""tools/annotations_from_works.py — gutenberg's work claims from what the
-origin states (Wikipedia lines, editions notes) joined by Wikidata: stars,
-not cliques; no claim through an anthology; one claim per pair; a claims
-file `read_claims` accepts. On the measurement's data it gives the same
-1,694 works of 6,060 books as docs/notes/one-language-per-work.md §1."""
+"""tools/annotations_from_works.py — gutenberg's work claims from the
+Wikipedia lines the origin states, joined by Wikidata: stars, not cliques;
+no claim through an anthology; one claim per pair; a claims file
+`read_claims` accepts. On the measurement's data it gave the same 1,694
+works of 6,060 books as docs/notes/one-language-per-work.md §1. The
+editions note makes no claim since 2026-11-12 (operator, decision 1 A): it
+is gutenberg's own relation (tests/test_origin_relations.py)."""
 import json
 
 from app.hold import annotations as ann
@@ -36,10 +38,9 @@ def test_a_work_is_a_star_of_claims_and_an_anthology_claims_nothing():
     claims = tool.claims_of(RECORDS, WIKI)
     pairs = {(c["subject"], c["object"], c["method"].get("id", c["method"]["kind"])) for c in claims}
     assert pairs == {("gutenberg:2000", "gutenberg:996", "wikidata"),
-                     ("gutenberg:5903", "gutenberg:996", "wikidata"),
-                     ("gutenberg:46", "gutenberg:19337", "gutenberg-editions-note")}, \
+                     ("gutenberg:5903", "gutenberg:996", "wikidata")}, \
         "Don Quixote: two claims on its lowest ebook; King Lear alone (the anthology joins nothing); " \
-        "the editions note's held edition only"
+        "the editions note none (gutenberg's relation since 2026-11-12)"
     dq = next(c for c in claims if c["subject"] == "gutenberg:2000")
     assert dq["evidence"] == {"wikidata": "Q480", "subject_wikipedia": "https://es.wikipedia.org/wiki/Don_Quijote",
                               "object_wikipedia": "https://en.wikipedia.org/wiki/Don_Quixote"}
@@ -52,11 +53,13 @@ def test_the_file_is_one_claims_file_the_annotations_collection_accepts(tmp_path
     assert tool.main([str(tmp_path / "r.jsonl"), str(tmp_path / "w.json"),
                       "--out", str(tmp_path / "c.jsonl")]) == 0
     got = ann.read_claims((tmp_path / "c.jsonl").read_bytes(), target_plugin="gutenberg")
-    assert len(got) == 3
+    assert len(got) == 2
 
 
-def test_an_editions_note_inside_one_wikidata_work_adds_no_claim():
+def test_an_editions_note_adds_no_claim():
     recs = [rec(996, "en", ["https://en.wikipedia.org/wiki/Don_Quixote"], editions=[2000]),
-            rec(2000, "es", ["https://es.wikipedia.org/wiki/Don_Quijote"], editions=[996])]
+            rec(2000, "es", ["https://es.wikipedia.org/wiki/Don_Quijote"], editions=[996]),
+            rec(46, "en", editions=[46, 19337]), rec(19337, "en")]
     claims = tool.claims_of(recs, WIKI)
     assert [(c["subject"], c["object"]) for c in claims] == [("gutenberg:2000", "gutenberg:996")]
+    assert all(c["method"] == tool.WIKIDATA for c in claims)

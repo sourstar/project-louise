@@ -6,7 +6,7 @@ to a nation, and the version in that nation's language is often bigger and
 more accurate"). NOT enforced by the wikipedia collection (operator, the
 same day: "I don't want to silently hijack the searches of the other
 peers"): stated as `same-work` claims in the annotations collection
-`wikipedia-articles`, which a peer holds or not and a reader applies or not
+`wikipedia-articles-cache`, which a peer holds or not and a reader applies or not
 (05 §5.3, invariant 4).
 
 THE CLAIMS (`claims`, written by tools/annotations_from_wikipedia.py): a
@@ -50,6 +50,10 @@ def arrays(qid: np.ndarray, lang: np.ndarray, tokens: np.ndarray, nid: np.ndarra
             "mem_nid": nid[order].astype(np.int64), "mem_tokens": tokens[order].astype(np.int64)}
 
 
+#: the run's attribution, as the claims hold it: the collection was named
+#: `wikipedia-articles` then (renamed `wikipedia-articles-cache`, operator
+#: 2026-11-12), and the string stays so that an update re-states the same
+#: claims byte for byte rather than re-issuing 12.3 M of them
 CONTRIBUTOR = "Louise reference node (wikipedia-articles, 2026-11-10)"
 METHOD = {"kind": "wikidata"}
 #: Wikipedia's own statement: a page's `wikibase_item` (page_props)

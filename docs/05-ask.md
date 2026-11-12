@@ -586,12 +586,25 @@ each record part of the same slice and number, holding the edges whose
 own root like any member (02 §2.2) and re-issued with its part. Each
 line is one edge, `{from, to, type, snapshot}`: `from` is a uid of this
 collection; `to` is a uid or a canonical id; `type` is a relation type
-the plugin registers, prefixed by the plugin (`eli:cites`, `eli:amends`,
-`eli:repeals`); `snapshot` is the snapshot in which the edge was first
-listed. The direction is from → to, as the source states it; the peer
+the plugin registers, prefixed by the standard vocabulary it comes from or
+else by the plugin (`eli:cites`, `eli:amends`, `eli:repeals`;
+gutenberg's `bf:otherEdition`, `foaf:isPrimaryTopicOf`; `pubmed:cites`,
+`pubmed:RetractionIn`; 09 §9.14); `snapshot` is the snapshot in which the
+edge was first listed. The direction is from → to, as the source states it; the peer
 indexes edges in both directions locally, so "the laws that modify
 decree 81/2008" is the inbound `eli:amends` edges of that decree. The
 bytes are 09 §9.14.
+
+**A link the source states is a relation, wherever it is written**
+(*amended 2026-11-12*, operator: decision 1 A). A catalogue's note is
+the source's statement as much as a structured field: Project Gutenberg's
+"several editions of this eBook" and "Wikipedia page about this book",
+PubMed's CommentsCorrections (errata, retractions, comments) and its
+reference lists are the relations of gutenberg and pubmed, read from what
+their records already keep. A plugin names the types that make two of its
+records one work (`WORK_RELATIONS`, gutenberg's `bf:otherEdition`), and
+the one-hit-per-work grouping of §5.3 reads those edges beside the
+annotations' claims.
 
 **Links the source does not state are annotations** (*amended
 2026-10-09*). A link that someone other than the origin finds — a matcher,

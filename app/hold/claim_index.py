@@ -1,5 +1,5 @@
 """A LARGE annotations snapshot's claim index, on disk (docs/notes/
-wikipedia-one-version.md, "Measured: the size": wikipedia-articles holds
+wikipedia-one-version.md, "Measured: the size": wikipedia-articles-cache holds
 12.3 M claims; the in-memory `annotations.ClaimIndex` holds every claim as a
 Python object in the web process — fine for gutenberg's thousands, not for
 millions).
@@ -180,7 +180,7 @@ def _build_child(tree: str, dest: str) -> None:
 def build_isolated(shard_tree: Path, snap, *, stop=None, poll_s: float = 1.0) -> dict[str, Any]:
     """`build` in a PROCESS OF ITS OWN (2026-11-10, before the first deploy):
     the merge of the parts' arrays and its sort peak at about three copies of
-    ~21 bytes an end — ~1.5 GB for wikipedia-articles' 12.3 M claims — and in
+    ~21 bytes an end — ~1.5 GB for wikipedia-articles-cache's 12.3 M claims — and in
     the worker's own process that would sit on top of its 1.6–3.8 GB under
     the container's 12 GiB cap, at every boot that finds an index missing.
     Here the peak lives and dies with a child; the worker keeps its size.
