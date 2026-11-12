@@ -447,12 +447,18 @@ extending it (do not reinvent the wheel).
   found an act without its article, the pin reads back from the act
   (`normattiva.article_before`, at most 120 characters): "art. N" or a
   word article (a Roman numeral upper case, unico, transitorio, finale,
-  addizionale), an optional "comma N", an optional "[dell']allegato X",
-  then del/della/al/alla. The scan itself is unchanged (the text index's
+  addizionale), an optional "comma N", an optional annex — "[dell']allegato
+  X", or a "regolamento", "statuto" or "tabella" with or without its number
+  or letter (München's sample: `regolamento-artaddizionale`) — then
+  del/della/al/alla or "approvato con", "annesso al", "allegata al". The scan itself is unchanged (the text index's
   hot path and its byte-for-byte reference). The cited annex ("allegato B")
   is resolved against the held version's own labels: every annex whose
   words begin with the cited ones, case folded (`articles.names_annex`);
-  none held, nothing is pinned — never the decree's own art. N in its place.
+  the one named EXACTLY wins where held ("regolamento" is "Regolamento", not
+  also "Regolamento 2°"); none held, nothing is pinned — never the decree's
+  own art. N in its place. Still not read: lower-case Roman numerals ("art.
+  xi": kept out so a word is never an article) and an annex cited with no
+  act ("art. XI dell'allegato B" alone).
   The resolved names key the amendments (`<annex>|<token>`), and the fact's
   id carries the annex (`…~allegatob~art3`). A short citation without a
   date takes the resolved `atto` fact by year and number. Chunk labels read

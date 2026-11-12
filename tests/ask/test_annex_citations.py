@@ -36,6 +36,16 @@ def _one(query: str):
      "art. 3 dell'allegato 1"),
     ("articolo unico del regio decreto 9 novembre 1861, n. 327", "unico", "", "art. unico"),
     ("articolo transitorio del regio decreto 9 novembre 1861, n. 327", "transitorio", "", "art. transitorio"),
+    # the annexes the amendments name that are not "allegato" (München's
+    # sample: `regolamento-artaddizionale`), and "approvato con" before the act
+    ("art. addizionale del regolamento approvato con regio decreto 9 novembre 1861, n. 327",
+     "addizionale", "regolamento", "art. addizionale del regolamento"),
+    ("art. 5 del regolamento 2° del regio decreto 9 novembre 1861, n. 327", "5", "regolamento 2°",
+     "art. 5 del regolamento 2°"),
+    ("art. 2 dello statuto annesso al regio decreto 9 novembre 1861, n. 327", "2", "statuto",
+     "art. 2 dello statuto"),
+    ("art. 4 della tabella A allegata al regio decreto 9 novembre 1861, n. 327", "4", "tabella A",
+     "art. 4 della tabella A"),
     # unchanged: the article right before the act
     ("art. 5 del regio decreto 9 novembre 1861, n. 327", "5", "", "art. 5"),
 ])
@@ -136,3 +146,18 @@ def test_the_annex_articles_changes_are_its_own():
     three = articles._changes(con, "rd-work", "3", ("Allegato B - Regolamento",), held)
     assert sorted(r["tipo"] for r in three) == ["insertion", "repeal"], \
         "its own repeal, and the bare #3 the source does not place (marked)"
+
+
+REG = [{"chapter": "Regolamento-art. 5", "text": "reg 5"},
+       {"chapter": "Regolamento 2°-art. 5", "text": "reg2 5"}]
+
+
+@pytest.mark.parametrize("annex, text, annexes", [
+    ("regolamento", "reg 5", ("Regolamento",)),
+    ("regolamento 2°", "reg2 5", ("Regolamento 2°",)),
+])
+def test_the_annex_named_exactly_wins_over_those_it_begins(monkeypatch, annex, text, annexes):
+    from app import reader
+    monkeypatch.setattr(reader, "document", lambda c, n: {"chunks": REG})
+    ch, _held, got = articles._read_article(None, 1, _want("5", annex))
+    assert ch["text"] == text and got == annexes

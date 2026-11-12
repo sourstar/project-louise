@@ -210,7 +210,10 @@ def _read_article(collection, native_id: int, want: Cited | str) -> tuple[dict |
     chunks = (doc or {}).get("chunks") or []
     if cited and not annexes:
         held = sorted({a for a in (_annex_of(ch.get("chapter")) for ch in chunks) if names_annex(a, cited)})
-        annexes = tuple(held) or (cited,)
+        # the annex named EXACTLY where the version holds it ("regolamento":
+        # "Regolamento", not also "Regolamento 2°"); else every one it begins
+        exact = [a for a in held if _words(a) == _words(cited)]
+        annexes = tuple(exact or held) or (cited,)
     found = next((ch for ch in chunks if read(ch.get("chapter")) == tok and in_annex(ch.get("chapter"), annexes)),
                  None)
     return found, _holders(chunks, read, tok), tuple(annexes)

@@ -557,8 +557,13 @@ _LABEL = re.compile(rf"(?:^|[\s\-–])(?:{_NUMBER}|{_WORD})", re.I)
 _ART_BEFORE = re.compile(
     rf"(?P<art>(?:art(?:icolo|\.)?\s*\d+(?:-\w+)?|{_WORD_ART}(?:{_WORD_NAMES})\b)"
     r"(?:\s*,?\s*comma\s*\d+)?)"
-    r"(?:\s*,?\s*(?:dell['’]\s*|dell\s+|l['’]\s*)?allegato\s+(?P<annex>\d+|(?-i:[IVXLC]{2,})\b|[a-z]\b))?"
-    r"\s*,?\s*(?:(?:del(?:la|lo)?|al(?:la|lo)?)\s+)?$", re.I)
+    r"(?:\s*,?\s*(?:dell['’]\s*|dell\s+|l['’]\s*|del(?:lo|la)?\s+|il\s+|la\s+)?(?P<annex>"
+    r"allegato\s+(?:\d+|(?-i:[IVXLC]{2,})\b|[a-z]\b)"
+    r"|(?:regolamento|statuto|tabella)(?:\s+(?:\d+°?|(?-i:[IVXLC]+)\b|[a-z]\b))?))?"
+    r"\s*,?\s*(?:(?:del(?:la|lo)?|al(?:la|lo)?"
+    r"|(?:approvat[oa]|anness[oa]|allegat[oa])\s+(?:con|al(?:la|lo)?|dal(?:la|lo)?|nel(?:la|lo)?))\s+)?$", re.I)
+#: the preposition a cited annex takes in the fact's label
+_OF = {"allegato": "dell'", "regolamento": "del ", "statuto": "dello ", "tabella": "della "}
 #: how far back from an act `_ART_BEFORE` reads
 _BEFORE = 120
 
@@ -588,12 +593,20 @@ def label_token(label: str | None) -> str | None:
 def article_before(query: str, pos: int) -> tuple[str, str] | None:
     """`(article as written, annex as cited)` standing right before the act
     found at `pos` ("art. XI dell'allegato B del …" → ("art. XI", "allegato
-    B")); the annex "" where none is named; None where no article stands
-    there."""
+    B"); "art. addizionale del regolamento approvato con …" → ("art.
+    addizionale", "regolamento")); the annex "" where none is named; None
+    where no article stands there. An annex is an "allegato" with its
+    number or letter, or a "regolamento", "statuto" or "tabella" with or
+    without one.""" 
     m = _ART_BEFORE.search(query[max(0, pos - _BEFORE):pos])
     if m is None:
         return None
-    return _text(m["art"]).rstrip(" ,"), (f"allegato {m['annex']}" if m["annex"] else "")
+    return _text(m["art"]).rstrip(" ,"), (_text(m["annex"]) if m["annex"] else "")
+
+
+def annex_label(annex: str) -> str:
+    """"allegato B" → "dell'allegato B", "regolamento" → "del regolamento"."""
+    return _OF.get(annex.split(" ", 1)[0].lower(), "di ") + annex
 
 
 #: the URN:NIR forms a state act is filed under (the citation forms above,
@@ -650,7 +663,7 @@ def article_citations(query: str, refs: RefLookup | None = None, facts=()) -> li
                 also.append(eid)
         shown = tok if tok[:1].isdigit() else _TOKEN.search(art).group(3)
         out.append(ArticleCitation(keys=keys, article=tok,
-                                   label=f"art. {shown}" + (f" dell'{annex}" if annex else ""),
+                                   label=f"art. {shown}" + (f" {annex_label(annex)}" if annex else ""),
                                    also=tuple(also), annex=annex))
     for cited in code_citations(query):
         if cited not in out:
