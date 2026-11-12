@@ -1890,7 +1890,7 @@ def index_of(shard_tree: Path) -> ClaimIndex:
         return hit[1]
     from app.hold import claim_index
     if claim_index.is_large(snap):
-        # A LARGE snapshot (wikipedia-articles: 12.3 M claims) is read from
+        # A LARGE snapshot (wikipedia-articles-cache: 12.3 M claims) is read from
         # its index on disk, never loaded here (app/hold/claim_index.py);
         # until it is built, its claims apply to nothing — said once
         disk = claim_index.load(Path(shard_tree), snap)

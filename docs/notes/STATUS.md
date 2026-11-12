@@ -20,6 +20,23 @@ measured (published figures disagree).
 
 ### 2026-11-12
 
+- **Origin links become relations (operator: decision 1 A) and `wikipedia-articles` becomes `wikipedia-articles-cache`
+  (decision 2) — BUILT, not deployed.** gutenberg's `relations()` states its catalogue's notes, read from
+  `extra.description`. `bf:otherEdition` (BIBFRAME 2.0) covers "several editions of this eBook" and "a somewhat higher
+  quality eBook is available as #N". `foaf:isPrimaryTopicOf` points at the "Wikipedia page about this book" URL.
+  pubmed's states `pubmed:<RefType>` (NLM's CommentsCorrections, verbatim) and `pubmed:cites` (the bibliography: PMID,
+  else DOI, else PMC id). The one-hit-per-work grouping (app/ask/works.py) reads gutenberg's `bf:otherEdition` edges
+  from the manifest's relations index beside the claims: two indexed queries per step, between held records, plan-checked.
+  tools/annotations_from_works.py makes no editions-note claims any more. No record moves and no parser version moves.
+  On the node, in order: deploy; `hold records relations gutenberg|pubmed --snapshot <next period>` (an existing
+  snapshot that listed no relations is refused), then `snapshot create`, and the maintainer indexes the edges. Only
+  then are the `gutenberg-editions-note` claims withdrawn by `hold annotations update`; before that, the claims still
+  group. The pubmed bibliography's edge count is to be measured with the pass; there are hundreds of millions of
+  references, so check free space first. The rename is `hold collection rename wikipedia-articles
+  wikipedia-articles-cache`. Its claims keep their contributor string, byte for byte. Whether it speeds up the search
+  (the operator's condition) is measurement 1 of docs/notes/presearch-caches.md, together with other pre-search
+  caches to check (rerank scores, query vectors).
+
 - **The worker pinned deleted vector-index files — FIXED, not deployed** (München's fd census, 11-12). Two readings on
   one worker (live d76fbdc): 382 open files at 20:48Z, 470 at 01:29Z. sqlite, wal and shm stayed flat (the working
   set); the growth was Lance index files, 6 -> 52, and 38 deleted ones, all

@@ -1,5 +1,5 @@
 """A LARGE annotations snapshot's claims are searched from an index on disk
-(app/hold/claim_index.py; wikipedia-articles: 12.3 M claims), which answers
+(app/hold/claim_index.py; wikipedia-articles-cache: 12.3 M claims), which answers
 exactly as the in-memory index does, and is never loaded into the web."""
 from app import config
 from app.hold import annotations as ann, claim_index, collection as col

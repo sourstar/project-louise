@@ -56,7 +56,7 @@ from ...acquire.checksum import verify_sidecar
 from ...acquire.spec import ChecksumSource
 from .. import cursor
 from app.backend import OriginForm, Template
-from ..base import (CanonicalDoc, DiscoverState, DocRef, Erasure, Issue, LicenseClass,
+from ..base import (CanonicalDoc, DiscoverState, DocRef, Edge, Erasure, Issue, LicenseClass,
                     Modality, Mutability, PROTOCOL_VERSION, PrivacyClass, RawDoc)
 from . import medline, pack
 
@@ -508,6 +508,62 @@ class PubmedSource:
     def _abstract(self, meta: dict) -> str:
         """What `sections` hold as the "Abstract" at this parser version."""
         return section_abstract(meta)
+
+    def relations(self, doc: CanonicalDoc):
+        """06 §6.1's typed edges: the links the CITATION ITSELF states, read
+        from what the record keeps (`extra`), so they are this collection's
+        relations, not claims (02 §2.10, 05 §5.5; operator 2026-11-12,
+        decision 1 A). Nothing is re-parsed: `louise hold records relations`
+        writes them for a collection already built.
+
+        - `pubmed:<RefType>` to `pubmed:<PMID>` for each
+          CommentsCorrections entry that names a PMID
+          (`extra.comments_corrections`): NLM's own RefType, verbatim —
+          `ErratumIn`, `RetractionIn`, `RetractionOf`, `CommentOn`,
+          `UpdateIn`, `ExpressionOfConcernIn`, … (the PubMed DTD's list), in
+          NLM's direction. An entry with no PMID names its notice by text
+          alone; it stays in the record and is no edge.
+        - `pubmed:cites` for each work of the bibliography
+          (`extra.references`, and a CommentsCorrections `Cites`, the same
+          statement): to `pubmed:<PMID>` where the reference gives one,
+          else `doi:<DOI>`, else `pmc:<PMCID>` — a canonical id left
+          unresolved (09 §9.14); a reference with none of the three is a
+          citation text, kept in the record, and no edge.
+
+        One edge per (type, to); none to the record itself."""
+        x = doc.extra or {}
+        seen: set[tuple[str, str]] = set()
+
+        def edge(kind: str, to: str):
+            if (kind, to) in seen or to == doc.uid:
+                return None
+            seen.add((kind, to))
+            return Edge(to=to, type=kind)
+
+        for cc in x.get("comments_corrections") or []:
+            if not isinstance(cc, dict):
+                continue
+            ref_type = str(cc.get("ref_type") or "").strip()
+            pmid = str(cc.get("pmid") or "").strip()
+            if not ref_type or not pmid.isdigit():
+                continue
+            kind = "pubmed:cites" if ref_type == "Cites" else f"pubmed:{ref_type}"
+            got = edge(kind, f"pubmed:{pmid}")
+            if got is not None:
+                yield got
+        for ref in x.get("references") or []:
+            if not isinstance(ref, dict):
+                continue                    # an older parser's bare PMID string: see below
+            ids = ref.get("ids") if isinstance(ref.get("ids"), dict) else {}
+            pmid = str(ref.get("pmid") or ids.get("pubmed") or "").strip()
+            to = (f"pubmed:{pmid}" if pmid.isdigit()
+                  else f"doi:{ids['doi'].strip()}" if str(ids.get("doi") or "").strip()
+                  else f"pmc:{ids['pmc'].strip()}" if str(ids.get("pmc") or "").strip()
+                  else None)
+            if to is not None:
+                got = edge("pubmed:cites", to)
+                if got is not None:
+                    yield got
 
     def line_moved_since(self, line: dict, version: int) -> bool:
         """Would THIS parser write a record line that parser `version` wrote
