@@ -195,7 +195,13 @@ _PART_ARTICLE = re.compile(r"^(?:art(?:icolo)?[_ .]?)?(\d+(?:[-_ ]?[a-z]+)?)(?=$
 #: Measured on normattiva's records, 2026-11-12: c.c. 8,921 of 9,213
 #: destinations, c.p.a. 575 of 655, disp. att. c.p.p. 2,680 of 3,364. The
 #: same shape as a chunk label's annex (app/ask/articles.py `_ANNEX`).
-_LABELLED = re.compile(r"^(?P<annex>.*?\S)\s*-\s*art(?:icolo)?\.?\s*(?P<article>\d.*)$", re.I)
+#: The article is a number OR a word (München, 2026-11-12, 433 rows of 62
+#: versions left in the old form on both manifests): `-art. XI` (a Roman
+#: numeral), `-articolo transitorio`, `-Articolo unico`, `-art. finale`,
+#: `-art. addizionale`. A word is taken only after `art.` or `articolo` as a
+#: word (or `art` and a space), so an annex named `…-artigianato` is not split.
+_LABELLED = re.compile(r"^(?P<annex>.*?\S)\s*-\s*(?:art(?:icolo)?\.?\s*(?=\d)|art\.|articolo\b|art\s)"
+                       r"\s*(?P<article>\S.*)$", re.I)
 
 
 def split_part(part: str) -> tuple[str, str]:

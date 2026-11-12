@@ -3133,6 +3133,12 @@ def _rederive_amendments(con, collection) -> bool:
             if (shard_tree / s.path).is_file()]
     todo = [p for p in held if p not in before]
     versions = {r[0] for r in con.execute("SELECT uid FROM validity")}
+    if validity.amendments_version(con) >= validity.AMENDMENTS_STALE_ONLY_FROM:
+        # only the versions still in the old labelled form differ (RULE 1):
+        # the parts are read, only theirs are rewritten
+        versions &= validity.stale_versions(con)
+        if not versions:
+            todo = []
     done: set[str] = set()
     bad: list[str] = []
     from contextlib import closing as _closing

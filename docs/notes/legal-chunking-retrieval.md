@@ -428,10 +428,18 @@ extending it (do not reinvent the wheel).
   are candidates by number alone: meant, since the origin does not say
   which. A statement on the whole act is an act, not an article, and stays.
   Every manifest re-derives the table once from its held records
-  (`validity.AMENDMENTS_VERSION` 2, worker `_rederive_amendments`, the
+  (`validity.AMENDMENTS_VERSION` 2, now 3, worker `_rederive_amendments`, the
   parse pool, no parse); a part that cannot be read is logged once, and
   only versions still holding an old labelled row (`article LIKE '%-art%'`)
   that no part rewrote are re-parsed by their rdf stage.
+  Version 3 (2026-11-12, München's acceptance: 433 rows of 62 held, in-scope
+  versions still in the old form on both manifests): an annex's article may
+  be a WORD — `Allegato B-art. XI` → `Allegato B|xi`, `Regolamento-articolo
+  transitorio` → `Regolamento|transitorio`, `unico`, `finale`,
+  `addizionale` — taken only after `art.`, `articolo` as a word, or `art`
+  and a space (an annex named `…-artigianato` is not split). From version
+  2 the parts are read and ONLY the versions still holding an old-form row
+  are rewritten (RULE 1: every other row is version 3's byte for byte).
 
 - **Dead old-form rows.** The re-derivation rewrites every version a held
   part carries. An errored or out-of-scope version keeps its old labelled
