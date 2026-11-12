@@ -19,7 +19,6 @@ Two things every such user needs, in one place:
 """
 from __future__ import annotations
 
-import os
 import sys
 import threading
 from contextlib import contextmanager
@@ -29,8 +28,10 @@ from typing import Callable
 def holder(command: str) -> str:
     """Who holds a lease: the command and its process, so a second run of
     the same command is another holder and the end of one releases only
-    its own."""
-    return f"{command} pid {os.getpid()}"
+    its own — across containers too, where every pass is pid 1
+    (`model_pins.process_tag`: the pid and its PID namespace)."""
+    from app import model_pins
+    return f"{command} {model_pins.process_tag()}"
 
 
 def leasing(embed, recipe, *, holder: str, collection: str | None = None):
@@ -76,7 +77,16 @@ def held(recipe, *, holder: str, query: bool = False, collection: str | None = N
     command whose one call outlives a lease (the CPU's 512 items: hours)
     needs the renewal beside the call, so a thread renews every quarter of
     the lease's life. Released when the block ends, however it ends; a
-    lease a killed process left expires on its own."""
+    lease a killed process left expires on its own.
+
+    THE PIN IS RENEWED WITH THE LEASE (München, 2026-11-12): pinned once
+    and never stamped again, the block's holder went silent past
+    `model_pins.HOLDER_TTL_S` (900 s) under one CPU call of hours, the
+    worker's reconcile dropped it as dead, and the model ran unpinned —
+    "pinned for embed … (it was unpinned)" every 15–30 minutes in
+    gutenberg's CPU reference. `model_pins.hold` stamps a holder it already
+    has (at most once per RENEW_S), so the renewal beside the call keeps it
+    alive as `holding`'s heartbeat does."""
     from app import model_load, model_pins, node_state
     if query:                                    # the side asked: the query encoder's
         from app import embeddings
@@ -105,6 +115,10 @@ def held(recipe, *, holder: str, query: bool = False, collection: str | None = N
     def keep() -> None:
         while not done.wait(every):
             renew()
+            try:
+                model_pins.hold(url, model, holder, collection=collection)
+            except Exception:   # noqa: BLE001 — a pin unrenewed is a pin dropped, not a failed call
+                pass
     t = threading.Thread(target=keep, name=f"lease {model}", daemon=True)
     t.start()
     try:

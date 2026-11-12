@@ -108,6 +108,38 @@ def test_the_gate_measures_on_the_twin_and_nobody_stands_aside(server, monkeypat
     assert node_state.gates_running() == []
 
 
+def test_the_twin_is_leased_while_its_gate_runs_so_the_sweep_leaves_it(
+        server, monkeypatch, isolated_config, tmp_path):
+    """NeuRIS, 2026-11-12: no held collection names `<model>--gate`, and the
+    worker's sweep of unheld embedders unloaded the twin every minute under
+    the gate — ten runs deferred in three hours. The twin is leased for the
+    gate: the sweep, run meanwhile, leaves it; the lease goes with the gate."""
+    from app import model_load, worker
+    monkeypatch.setattr(config, "GATE_TWIN", True)
+    monkeypatch.setattr(run_check, "answering_run", lambda recipe, **kw: "sha256:" + "e9" * 32)
+    monkeypatch.setattr(run_check, "probe_for", lambda codex, role="document": "probe")
+    monkeypatch.setattr(run_check, "_pinned", lambda *a, **k: __import__("contextlib").nullcontext())
+    loaded = {"vega-nemotron", "vega-nemotron--gate"}
+    monkeypatch.setattr(model_load, "activity", lambda srv: {m: 0.0 for m in loaded})
+    unloaded = []
+    monkeypatch.setattr(model_load, "unload", lambda srv, m: unloaded.append(m) or True)
+    monkeypatch.setattr(worker.collections_mod, "recipe_for", lambda c: _recipe())
+    held = SimpleNamespace(name="neuris")               # names vega-nemotron, never the twin
+    seen = {}
+
+    def gate(root, name, codex, recipe, **kw):
+        seen["leased"] = node_state.leased_encoders()
+        seen["swept"] = worker._sweep_unheld_embedders([held])
+        return {"run": "sha256:" + "e9" * 32}
+    monkeypatch.setattr(run_check, "_validate", gate)
+    run_check.validate(tmp_path, "neuris", SimpleNamespace(), _recipe())
+    assert (model_load.server_of(SERVER), "vega-nemotron--gate") in seen["leased"]
+    assert seen["swept"] == [] and unloaded == [], "the sweep leaves a gate's twin alone"
+    assert node_state.leased_encoders() == set(), "the lease goes with the gate"
+    assert worker._sweep_unheld_embedders([held]) == ["vega-nemotron--gate"], \
+        "a twin nobody leases is an orphan, unloaded as before"
+
+
 @pytest.mark.parametrize("why", ["another run", "no config"])
 def test_without_a_same_run_twin_the_gate_holds_the_shared_load_and_says_so(
         server, monkeypatch, isolated_config, tmp_path, caplog, why):

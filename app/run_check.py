@@ -429,7 +429,7 @@ def _pinned(recipe, role: str, kind: str, name: str):
     before restored after (app/model_pins.py; operator, 2026-10-23)."""
     from . import model_pins
     url, model = _who(recipe, role == "query")
-    return model_pins.holding(url, model, f"{kind} {name} {role} (pid {os.getpid()})",
+    return model_pins.holding(url, model, f"{kind} {name} {role} ({model_pins.process_tag()})",
                               collection=name)
 
 
@@ -597,8 +597,17 @@ def validate(root: Path, name: str, codex: Codex, recipe, *, role: str = "docume
     gate_recipe, server, twin_model = twin
     main_key = f"{server} {model}"
     _twin_busy.add(main_key)
+    from . import encoder_use
     try:
-        with _pinned(gate_recipe, role, "gate", name), \
+        # THE TWIN IS LEASED FOR THE GATE (München, 2026-11-12): no held
+        # collection names `<model>--gate`, so the worker's sweep of unheld
+        # embedders (worker `_sweep_unheld_embedders`) unloaded it every
+        # minute under NeuRIS's gate — the fresh-context pass cut short, a
+        # stop answered 404, ten runs deferred in three hours. The lease is
+        # what the sweep leaves alone (app/encoder_use.py)
+        with encoder_use.held(gate_recipe, query=role == "query", collection=name,
+                              holder=encoder_use.holder(f"gate twin {name} {role}")), \
+                _pinned(gate_recipe, role, "gate", name), \
                 _gate_running(recipe, role, root, name, alone=False):
             return _validate(root, name, codex, gate_recipe, role=role, key=key, now=now,
                              stop=stop, on_run=on_run)
