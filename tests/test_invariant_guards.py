@@ -11,8 +11,8 @@ the moment it drifts.
 - Invariant 9 (license gates): the acknowledgement is sha256 over the
   terms text, so TERMS.txt is byte-exact — a CRLF checkout would silently
   invalidate every recorded ack. .gitattributes guards it; this asserts it.
-- Lance: only embeddings, vector_index and spaces open it — one layer,
-  one maintenance regime, for every collection.
+- Lance: only embeddings, vector_index (with its child, lance_child) and
+  spaces open it — one layer, one maintenance regime, for every collection.
 - Logging: every stdout line names its collection (db.ManifestConnection),
   because seven collections share one worker stdout.
 
@@ -45,10 +45,15 @@ def test_app_never_imports_a_gpu_stack():
 # itself would be a second maintenance regime nobody schedules.
 _LANCE_LAYER = {"app/embeddings.py", "app/spaces.py", "app/vector_index.py",
                 # the table rewritten with stable row ids (2026-10-31): the same layer
-                "app/vector_rewrite.py"}
+                "app/vector_rewrite.py",
+                # vector_index's optimize / compaction calls, each run in a child
+                # process that ends with it (2026-11-12, #564): the same layer
+                "app/lance_child.py"}
 _LANCE_TOUCH = re.compile(
     r"^\s*(?:import|from)\s+(?:lancedb|lance)\b|lancedb\.connect\(|\.to_lance\(",
     re.MULTILINE)
+_LANCE_CHILD_IMPORT = re.compile(r"^\s*from\s+\.\s+import\s+lance_child\b|\bapp\.lance_child\b|"
+                                 r"^\s*from\s+app\s+import\s+lance_child\b", re.MULTILINE)
 
 
 def test_lance_is_managed_in_one_place_for_every_collection():
@@ -56,6 +61,16 @@ def test_lance_is_managed_in_one_place_for_every_collection():
                 for p in APP.rglob("*.py") if _LANCE_TOUCH.search(p.read_text(encoding="utf-8"))}
     assert touching - _LANCE_LAYER == set(), \
         f"Lance opened outside the common layer: {sorted(touching - _LANCE_LAYER)}"
+
+
+def test_the_lance_child_is_called_by_vector_index_alone():
+    """lance_child is part of the layer only as vector_index's arm: a stage
+    calling it directly would be the second maintenance regime the guard
+    above exists to prevent."""
+    callers = {p.relative_to(APP.parent).as_posix()
+               for p in APP.rglob("*.py") if p.name != "lance_child.py"
+               and _LANCE_CHILD_IMPORT.search(p.read_text(encoding="utf-8"))}
+    assert callers == {"app/vector_index.py"}, callers
 
 
 def test_admin_token_file_wins_over_the_env_value(tmp_path):
