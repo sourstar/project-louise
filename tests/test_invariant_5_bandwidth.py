@@ -41,6 +41,7 @@ EXEMPT: dict[str, str] = {
     "app/model_load.py": f"{MODEL_CALLS} — the runner's /system and backend shutdown",
     "app/model_pins.py": f"{MODEL_CALLS} — LocalAI's pin API",
     "app/translate_slots.py": f"{MODEL_CALLS} — LocalAI's model-config API, MADLAD's slots",
+    "app/gate_twin.py": f"{MODEL_CALLS} — LocalAI's model-config API, the gate's twin load",
     "app/run_check.py": f"{MODEL_CALLS} — the run an encoder states (Louise-Run)",
     "app/vega/client.py": f"{MODEL_CALLS} — VeGa, the encoders' wrapper",
     "app/vega/trees.py": f"{MODEL_CALLS} — VeGa's image tree of an encoder's engine",

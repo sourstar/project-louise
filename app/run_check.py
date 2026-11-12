@@ -585,14 +585,28 @@ def validate(root: Path, name: str, codex: Codex, recipe, *, role: str = "docume
             return _validate(root, name, codex, recipe, role=role, key=key, now=now,
                              stop=stop, on_run=on_run)
     gate_recipe, server, twin_model = twin
+    from . import gate_twin
+    main_key = "{} {}".format(*_who(recipe, role == "query"))
+    with _guard:
+        twin_lock = _looking.setdefault(f"{server} {twin_model}", threading.Lock())
+    if not twin_lock.acquire(blocking=False):
+        raise emb.GateDeferred(f"{name}: another collection's gate measures on {twin_model} now; "
+                               f"this one is asked again at the next round")
+    _twin_busy.add(main_key)
     try:
         with _pinned(gate_recipe, role, "gate", name), \
                 _gate_running(recipe, role, root, name, alone=False):
             return _validate(root, name, codex, gate_recipe, role=role, key=key, now=now,
                              stop=stop, on_run=on_run)
     finally:
-        from . import gate_twin
+        _twin_busy.discard(main_key)
+        twin_lock.release()
         gate_twin.release(server, twin_model)
+
+
+#: the models (their flight keys, `_flight`) whose gate runs on a twin now:
+#: a collection embedding on the shared load does not wait for it
+_twin_busy: set[str] = set()
 
 
 def _twin_for(recipe, role: str, name: str, codex: Codex):
@@ -1481,10 +1495,16 @@ def embed_allowed(con, collection, *, stop: Callable[[], bool] | None = None) ->
             and not _suspect(collection) and not _suspect(collection, "query"):
         return cached[0]
     with _guard:
-        locks = [_looking.setdefault(k, threading.Lock()) for k in _flights(collection)]
+        keys = _flights(collection)
+        locks = [_looking.setdefault(k, threading.Lock()) for k in keys]
     held: list[threading.Lock] = []
-    for lock in locks:
+    for key, lock in zip(keys, locks):
         if not lock.acquire(blocking=False):
+            if key in _twin_busy:
+                # the gate holding this model measures on its TWIN (app/gate_twin.py):
+                # nothing on the shared load waits for it. A second gate meets
+                # the twin's own lock and defers (`validate`)
+                continue
             # someone is asking (or gating) that model already: ONE gate per
             # model. Nothing to wait for — this round has no embedding, the
             # next asks

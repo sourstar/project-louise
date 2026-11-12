@@ -132,3 +132,31 @@ def test_without_a_same_run_twin_the_gate_holds_the_shared_load_and_says_so(
     assert "the gate measures on the shared load" in caplog.text
     if why == "another run":
         assert "not the same run" in caplog.text and server.shutdowns == ["vega-nemotron--gate"]
+
+
+from tests.test_run_check import endpoint, node  # noqa: E402,F401  (the fixtures)
+
+
+def test_a_collection_on_the_shared_load_is_not_turned_away_by_a_twin_gate(node, endpoint):
+    """The look lock is one per model (`_flights`): a gate holds it for its
+    whole length, and a collection whose verdict expired meanwhile met it
+    and had no embedding that round — the monopoly again by another door.
+    While the gate measures on its twin, the lock turns nobody away."""
+    from app import db
+    from app.verify import backend_gate
+    root, collection, codex = node
+    con = db.connect(collection)
+    assert backend_gate.embed_allowed(con, collection) is True
+    keys = run_check._flights(collection)
+    for k in keys:
+        run_check._looking.setdefault(k, __import__("threading").Lock()).acquire()
+    try:
+        run_check.reset_cache()
+        assert backend_gate.embed_allowed(con, collection) is False, "a gate on the shared load"
+        run_check._twin_busy.update(keys)
+        run_check.reset_cache()
+        assert backend_gate.embed_allowed(con, collection) is True, "a gate on its twin"
+    finally:
+        run_check._twin_busy.difference_update(keys)
+        for k in keys:
+            run_check._looking[k].release()
