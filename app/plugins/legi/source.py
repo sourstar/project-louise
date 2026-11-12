@@ -327,7 +327,23 @@ class LegiSource:
     modality = Modality.TEXT
     erasure = Erasure.RETRACTABLE               # a deletion list withdraws a file
     native_id_order = "numeric"
-    default_facets: list = []
+    #: 05 §5.7 (legal-chunking-retrieval.md §4 R2, operator's default A,
+    #: 2026-11-12): FILTERS a reader asks for, never a weight (invariant 4),
+    #: on the record's own fields. Status: `in_force`, from ETAT — `true`
+    #: VIGUEUR, `false` ABROGE, ANNULE, PERIME …, absent for MODIFIE and the
+    #: deferred states; "not yet in force" is a date, answered by `--as-of`
+    #: (app/validity.py). Act type: `eli_type_document`, the text's NATURE
+    #: (CODE, LOI, DECRET …). Code: `eli_title`, the text's title ("Code
+    #: civil"), a name a reader knows where the LEGITEXT id is not. Year:
+    #: `date` (DATE_TEXTE, absent on a code: DILA's placeholder) and
+    #: `version_from`, the article version's own start.
+    default_facets = [
+        {"field": "date", "kind": "range", "separator": None, "authority": None},
+        {"field": "extra.eli_title", "kind": "flat", "separator": None, "authority": None},
+        {"field": "extra.eli_type_document", "kind": "flat", "separator": None, "authority": None},
+        {"field": "extra.in_force", "kind": "flat", "separator": None, "authority": None},
+        {"field": "extra.version_from", "kind": "range", "separator": None, "authority": None},
+    ]
 
     # ---- discovery ------------------------------------------------------------------------
 

@@ -132,8 +132,11 @@ shards = "0.01"
 # Layers (`akn_article`, the shared legal space's chunker: one chunk per
 # recital, article and annex), slicing (`eurlex`: language, CELEX type and
 # year, 50 versions a part) and the profile (the ELI implementation and the
-# validity axis, one record per version per language) are the plugin's
-# defaults (app/plugins/eurlex/source.py).
+# validity axis, one record per version per language) and the facets
+# (legal-chunking-retrieval.md §4 R2: `extra.in_force`,
+# `extra.resource_type`, `extra.sector`, `subjects` — the notice's EuroVoc
+# and subject-matter labels — and `date` as a range; filters, never
+# weights) are the plugin's defaults (app/plugins/eurlex/source.py).
 
 # THE SHARED LEGAL LAYER, byte-identical in the three legal recipes (legi,
 # neuris, eurlex) — the chunker is inside space_id. `legal_article`

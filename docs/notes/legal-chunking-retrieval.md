@@ -265,6 +265,24 @@ theirs); the legal plugins declare none.
 
 Recommendation: **A**. If the operator says nothing: A.
 
+**Built (2026-11-12).** Each plugin's `default_facets`; a flat facet on
+`extra.<key>` is read out of the record parts (app/ask/fieldvalues.py,
+05 §5.7 amended), and `--records-from` admits a facets-only difference
+(02 §2.7 amended): a collection re-created with them takes its records,
+none parsed.
+
+| plugin | status | act type | code / collection | year | subject |
+|---|---|---|---|---|---|
+| normattiva | `extra.in_force` (`false` only: a repeal state, the repealed-acts zip) | `extra.doc_type` | `extra.collection` (the zip) | `date` | — |
+| legi | `extra.in_force` (ETAT: VIGUEUR `true`; ABROGE, ANNULE … `false`) | `extra.eli_type_document` (NATURE) | `extra.eli_title` | `date` (none on a code), `extra.version_from` | — |
+| eurlex | `extra.in_force` (RESOURCE_LEGAL_IN-FORCE) | `extra.resource_type` | `extra.sector` (CELEX) | `date` | `subjects` (EuroVoc, directory codes, subject matters) |
+| neuris | `extra.legal_force` (InForce, NotInForce, PartiallyInForce), `extra.in_force` | `extra.eli_type_document` (regtxt:typ) | `extra.abbreviation` (Jurabk) | `date` | — |
+
+"Not yet in force" is no record field in any of the four: it is a date,
+answered by `--as-of` over the validity index (app/validity.py). LEGI's
+ETAT (VIGUEUR_DIFF, MODIFIE) is nested in `meta_article`, which 09 §9.3's
+`extra.<key>` does not reach.
+
 ### R3 — The word leg beside the dense one
 
 The platform already fuses BM25 and dense by RRF (invariant 4). Louis et

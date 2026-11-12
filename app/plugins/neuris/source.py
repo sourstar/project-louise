@@ -384,7 +384,22 @@ class NeurisSource:
     modality = Modality.TEXT
     erasure = Erasure.RETRACTABLE          # an expression the origin withdraws
     native_id_order = "numeric"            # eli.expression_native_id: the point in time first
-    default_facets: list = []
+    #: 05 §5.7 (legal-chunking-retrieval.md §4 R2, operator's default A,
+    #: 2026-11-12): FILTERS a reader asks for, never a weight (invariant 4),
+    #: on the record's own fields. Status: `legal_force`, the API's
+    #: legislationLegalForce as written (InForce, NotInForce,
+    #: PartiallyInForce), and `in_force`, 09 §9.5's key every legal source
+    #: writes (PartiallyInForce has none); "not yet in force" is a date,
+    #: answered by `--as-of`. Act type: `eli_type_document`, regtxt:typ
+    #: (gesetz, verordnung …), where the act states it. Code: `abbreviation`,
+    #: the act's Jurabk (BGB, StGB …). Year: `date`.
+    default_facets = [
+        {"field": "date", "kind": "range", "separator": None, "authority": None},
+        {"field": "extra.abbreviation", "kind": "flat", "separator": None, "authority": None},
+        {"field": "extra.eli_type_document", "kind": "flat", "separator": None, "authority": None},
+        {"field": "extra.in_force", "kind": "flat", "separator": None, "authority": None},
+        {"field": "extra.legal_force", "kind": "flat", "separator": None, "authority": None},
+    ]
 
     def discover(self, state: DiscoverState):
         """Every stored manifestation zip under the corpus root whose JSON

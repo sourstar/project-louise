@@ -934,7 +934,18 @@ and `chunks_root` (invariant 3) — the parts a parse would give her. Her
 manifest is carried with every index mark emptied and no text index (`dev
 carry --sister --relayered`, A1i), and the worker indexes each document
 with her layer. `--records-from` refuses any other difference but the
-slicing.
+slicing and the facets.
+
+A re-creation whose FACETS differ (*amended 2026-11-12*, RULE 1, the
+legal collections gaining theirs, legal-chunking-retrieval.md §4 R2)
+takes its predecessor's record lines too: `facets` name record fields a
+reader filters on (05 §5.7) and write none — no 09 §9.5 key holds them,
+and no chunk depends on them — so its records are the predecessor's byte
+for byte. `--records-from` admits the facets beside the slicing and the
+layers, and so does `dev carry --sister --relayered` (A1i); the facet
+index is the new collection's own, read from its snapshot by the index
+maintainer. Everywhere else `facets` stays in the same-records test
+(`seed.record_differences`), since it is inside `collection_id`.
 
 A daughter whose parser adds to every record a section the mother's did
 not have — a Wikidata entity's text in one more language

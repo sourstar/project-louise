@@ -88,6 +88,9 @@ def test_the_recipe_loads_through_the_real_loader_into_a_version_11_codex():
     assert dry.slicing["keys"] == ["lang", "type", "year"]
     assert dry.profile["validity"]["work"] == "extra.validity_work"
     assert dry.origin.jurisdiction == "EU" and dry.origin.unit == "file"
+    assert [(f.field, f.kind) for f in dry.facets] == [
+        ("date", "range"), ("extra.in_force", "flat"), ("extra.resource_type", "flat"),
+        ("extra.sector", "flat"), ("subjects", "flat")], "the plugin's facets (legal R2), the recipe naming none"
 
 
 def test_the_space_id_does_not_depend_on_the_engine():

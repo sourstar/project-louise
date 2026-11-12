@@ -260,6 +260,7 @@ def build(con, codex, index_dir: Path, *, snapshot_id: str | None, fields=None, 
     kinds = {f["field"]: f for f in declared(codex)}
     wanted = list(kinds) if fields is None else list(fields)
     written = []
+    from_parts: list[dict[str, Any]] = []     # flat and tree facets the manifest does not carry
     for field in wanted:
         f = kinds.get(field)
         if f is not None and f["kind"] == "range":
@@ -276,6 +277,8 @@ def build(con, codex, index_dir: Path, *, snapshot_id: str | None, fields=None, 
                     f"and are in no range")
             continue
         if field not in COLUMNS:
+            if f is not None:
+                from_parts.append(f)
             continue
         got = count(con, codex, field, stop=stop)
         if got["kind"] == "tree" and got.get("values") is None:
@@ -324,7 +327,37 @@ def build(con, codex, index_dir: Path, *, snapshot_id: str | None, fields=None, 
             elif got["postings"] and not got["postings"]["built"]:
                 log(f"facets: {field}: {len(got['values'])} values counted; postings not built — "
                     f"{got['postings']['why']}")
-    return written
+    if from_parts and shard_dir is not None and snapshot is not None:
+        written += _build_from_parts(from_parts, index_dir, shard_dir=shard_dir, snapshot=snapshot,
+                                     snapshot_id=snapshot_id, now=now, stop=stop, log=log)
+    return [f for f in wanted if f in written]
+
+
+def _build_from_parts(facets_: list[dict[str, Any]], index_dir: Path, *, shard_dir: Path, snapshot,
+                      snapshot_id: str | None, now: float | None, stop: Callable[[], bool] | None,
+                      log: Callable[[str], None] | None) -> list[str]:
+    """Flat and tree facets on a field the manifest does not carry,
+    `extra.<key>` above all (amended 2026-11-12): their values read out of
+    the record parts held, each part once for all of them
+    (app/ask/fieldvalues.py); the cache holds their counts."""
+    from app.ask import fieldvalues, filters as filters_mod, ranges
+    pcon = filters_mod.connect(Path(index_dir))
+    try:
+        got = fieldvalues.index(pcon, facets_, shard_dir=shard_dir, snapshot=snapshot, snapshot_id=snapshot_id,
+                                rows_bound=POSTINGS_ROWS_BOUND, max_distinct=MAX_DISTINCT, stop=stop)
+    except ranges.Stopped as e:
+        raise NotBuilt(str(e)) from None
+    finally:
+        pcon.close()
+    for field, entry in got.items():
+        entry.update({"snapshot_id": snapshot_id, "built_at": time.time() if now is None else now})
+        _write_cache(index_dir, field, entry)
+        if log and entry.get("values") is None:
+            log(f"facets: {field}: {entry.get('why')}")
+        elif log and entry["postings"].get("unparsed"):
+            log(f"facets: {field}: {entry['postings']['unparsed']} values are not a scalar and are counted "
+                f"under no value")
+    return list(got)
 
 
 def cached(index_dir: Path, field: str, *, snapshot_id: str | None) -> dict[str, Any] | None:
@@ -390,13 +423,28 @@ def values(con, codex, index_dir: Path, field: str, *, snapshot_id: str | None, 
             got.setdefault("note", "counts are this peer's: what it holds and can search")
             return got
         if field not in COLUMNS:
-            raise FacetError(f"{field!r}: the manifest carries no column for it yet (05 §5.7)")
-        n = documents if documents is not None else con.execute("SELECT COUNT(*) FROM documents").fetchone()[0]
-        if n > BUILD_BOUND:
-            raise NotBuilt(f"{field!r} over {n} documents is counted by the node's index maintainer, "
-                           f"not on request; ask again when it has run")
-        build(con, codex, index_dir, snapshot_id=snapshot_id, fields=[field])
-        got = cached(index_dir, field, snapshot_id=snapshot_id) or count(con, codex, field)
+            # amended 2026-11-12: read from the record parts held, as a range is
+            held = [s for s in (snapshot.shards if snapshot is not None else ())
+                    if shard_dir is not None and (Path(shard_dir) / s.path).is_file()]
+            if not held:
+                raise FacetError(f"{field!r}: the manifest carries no column for it; its values are read "
+                                 f"from the record parts, and none is held here (05 §5.7)")
+            n = sum(int(s.records) for s in held)
+            if n > BUILD_BOUND:
+                raise NotBuilt(f"{field!r} over {n} records is read by the node's index maintainer, "
+                               f"not on request; ask again when it has run")
+            build(con, codex, index_dir, snapshot_id=snapshot_id, fields=[field], shard_dir=shard_dir,
+                  snapshot=snapshot)
+            got = cached(index_dir, field, snapshot_id=snapshot_id)
+            if got is None:
+                raise NotBuilt(f"{field!r}: its values could not be read from the record parts held")
+        else:
+            n = documents if documents is not None else con.execute("SELECT COUNT(*) FROM documents").fetchone()[0]
+            if n > BUILD_BOUND:
+                raise NotBuilt(f"{field!r} over {n} documents is counted by the node's index maintainer, "
+                               f"not on request; ask again when it has run")
+            build(con, codex, index_dir, snapshot_id=snapshot_id, fields=[field])
+            got = cached(index_dir, field, snapshot_id=snapshot_id) or count(con, codex, field)
         del f
     if got.get("kind") != "range" and got.get("values") is None:
         got.setdefault("note", "counts are this peer's: what it holds and can search")

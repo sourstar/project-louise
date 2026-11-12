@@ -671,12 +671,15 @@ def carry(root, from_ref: str, to_ref: str, *, copy: bool = False, apply: bool =
     elif relayered:
         if src.collection_id == to.collection_id:
             raise CodexError("carry: the source and the target are one collection")
-        other = [d for d in record_differences(src, to) if d != "layers"]
+        # the facets too (02 §2.7 amended 2026-11-12): they write no record
+        # byte and cut no chunk, and nothing derived from them is carried —
+        # the facet index is the target's own, built from its snapshot
+        other = [d for d in record_differences(src, to) if d not in ("layers", "facets")]
         if other:
             raise CodexError(
                 f"carry --sister --relayered: {to.collection_id} and {src.collection_id} differ in "
-                f"{', '.join(other)}, which decide record bytes (02 §2.7) — only the layers may "
-                f"differ besides the encoder's side, and nothing is carried")
+                f"{', '.join(other)}, which decide record bytes (02 §2.7) — only the layers and the "
+                f"facets may differ besides the encoder's side, and nothing is carried")
     else:
         refuse_unless_same_records(src, to, "carry --sister" if sister else
                                    "carry --unembedded" if unembedded else "carry")

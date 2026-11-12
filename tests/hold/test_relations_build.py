@@ -119,6 +119,38 @@ def test_records_from_held_lines_give_byte_identical_relations(isolated_config, 
     assert _relations(other) == _relations(shard) and _relations(shard)
 
 
+def test_records_from_admits_a_facets_difference_none_parsed(isolated_config, tmp_path, origin, monkeypatch):
+    """02 §2.7 amended 2026-11-12 (RULE 1): a re-creation that gains the
+    legal facets (legal-chunking-retrieval.md R2) takes its predecessor's
+    lines — the facets write no record byte — and parses none; the two
+    collections are two (`facets` is inside `collection_id`)."""
+    root = tmp_path / "collections"
+    body = (Path(nsrc.__file__).parent / "TERMS.txt").read_bytes()
+    lic = {"class": "yellow", "terms_sha256": "sha256:" + hashlib.sha256(body).hexdigest()}
+    old = col.create_from_recipe(root, "normattiva", recipe(license=lic, facets=[]), platform_image=PLATFORM,
+                                 embed=fake_embed, embed_query=fake_query_embed, name="normattiva",
+                                 key=KEY, now=NOW)
+    assert louise.main(["hold", "collection", "ack", "normattiva", "--root", str(root), "--yes"]) == 0
+    rec.build(root, "normattiva", corpus_dir=origin, snapshot_id="2026-08", **QUIET)
+    rec.write_validation(root, "normattiva")
+    sn.create(root, "normattiva", snapshot_id="2026-08", **QUIET)
+    shard = root / "normattiva" / "shard"
+    _create(root, "normattiva-f")
+    _name, new = col.resolve(root, "normattiva-f")
+    assert old.facets == () and [f.field for f in new.facets] == [
+        "date", "extra.collection", "extra.doc_type", "extra.in_force"]
+    assert old.collection_id != new.collection_id
+    from app.hold.seed import record_differences
+    assert record_differences(old, new) == ["facets"]
+    monkeypatch.setattr(type(SOURCE), "parse", lambda *a, **k: pytest.fail("a held line was parsed again"))
+    said = []
+    rec.build(root, "normattiva-f", corpus_dir=origin, snapshot_id="2026-08", records_from="normattiva",
+              log=said.append)
+    assert _records(root / "normattiva-f" / "shard") == _records(shard) and _records(shard), \
+        "byte-identical records"
+    assert any("none parsed" in m for m in said)
+
+
 def test_a_plugin_without_relations_writes_none(isolated_config, tmp_path, corpus_dir):
     from tests.hold.test_build_and_snapshot import _build, _collection
     root = _collection(tmp_path)
