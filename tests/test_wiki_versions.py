@@ -55,9 +55,12 @@ def test_the_claims_are_a_star_around_the_version_shown():
 def test_nothing_in_search_or_the_worker_groups_wikipedia_by_itself():
     """Operator, 2026-11-10: "I don't want to silently hijack the searches of
     the other peers": the grouping is an annotations collection's, never the
-    wikipedia collection's own logic."""
+    wikipedia collection's own logic. The one user allowed is the method that
+    WRITES that annotations collection's claims (app/hold/annotation_methods.py,
+    2026-11-12: re-run by the node once wikipedia's snapshot moves) — claims a
+    peer holds or not and a reader applies or not, as before."""
     from pathlib import Path
     root = Path(__file__).resolve().parent.parent / "app"
     users = sorted(p.relative_to(root).as_posix() for p in root.rglob("*.py")
                    if "wiki_versions" in p.read_text(encoding="utf-8") and p.name != "wiki_versions.py")
-    assert users == [], users
+    assert users == ["hold/annotation_methods.py"], users

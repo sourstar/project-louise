@@ -73,6 +73,7 @@ from __future__ import annotations
 import dataclasses
 import hashlib
 import json
+import os
 import re
 import secrets
 import shutil
@@ -1457,7 +1458,8 @@ def _held_claims(shard_tree: Path, snap) -> dict[tuple, tuple[int, dict[str, Any
 def update(root: Path, name: str, *, claims: bytes | Path | None = None,
            against: Sequence[tuple[str, str]] | None = None, snapshot_id: str | None = None,
            key=None, now: str | None = None, log=print, dry_run: bool = False,
-           clock: datetime | None = None, _in_memory: bool = False) -> Update:
+           clock: datetime | None = None, unheld: str = "refuse", private: bool = False,
+           guard=None, _in_memory: bool = False) -> Update:
     """`hold annotations update <name>` (02 §2.10, built 2026-10-23): the
     next snapshot of an annotations collection — the SAME collection, its
     Codex and id untouched, so every peer that holds it takes the new
@@ -1485,11 +1487,25 @@ def update(root: Path, name: str, *, claims: bytes | Path | None = None,
     are kept as their identity digests, numbers and hashes (~40 bytes a
     claim), never as records. Every byte written, and the `Update` returned,
     are what the in-memory path, `_in_memory` — kept for that proof alone —
-    writes and returns (tests/hold/test_annotations_stream.py)."""
+    writes and returns (tests/hold/test_annotations_stream.py).
+
+    A NODE'S OWN METHOD (2026-11-12, app/hold/annotation_methods.py) gives
+    `unheld="drop"`: the claims file is the method's whole output, read from
+    the target's live state, so a claim whose end the target's snapshot does
+    not hold YET is set aside and named, as a re-check sets one aside, rather
+    than refusing the file — the next snapshot of the target brings it in.
+    `private=True` says the file is the caller's own, which nobody writes
+    again: it is linked into the workspace, not copied (RULE 1; wikipedia's is
+    4.2 GB). `guard`, a context manager, is held around the snapshot's write
+    and its signature, so that a stop never leaves one written and unsigned
+    (the method's child defers a stop until it ends)."""
     from . import annotations_stream as st
+    if unheld not in ("refuse", "drop"):
+        raise ValueError(f"unheld is 'refuse' or 'drop', got {unheld!r}")
     plan = _update_plan(Path(root), name, against, snapshot_id, clock)
     if _in_memory:
-        return _update_in_memory(plan, claims, key=key, now=now, log=log, dry_run=dry_run)
+        return _update_in_memory(plan, claims, key=key, now=now, log=log, dry_run=dry_run,
+                                 drop=unheld == "drop", guard=guard)
     recheck = claims is None
     st.sweep(plan.root, log)
     with st.workspace(plan.root, f"update.{plan.name}") as work:
@@ -1500,11 +1516,11 @@ def update(root: Path, name: str, *, claims: bytes | Path | None = None,
                 raise AnnotationsError(f"{plan.name} keeps no {CLAIMS_FILE} beside its SHARD to re-check: "
                                        f"give the claims file") from None
         else:
-            src = st.private_source(claims, work)
+            src = st.private_source(claims, work, link=private)
         with src:
             try:
                 return _update_stream(plan, src, work, recheck=recheck, key=key, now=now, log=log,
-                                      dry_run=dry_run)
+                                      dry_run=dry_run, drop=recheck or unheld == "drop", guard=guard)
             finally:
                 st.forget()
 
@@ -1598,7 +1614,8 @@ _LEAVES_NONE = ("the update leaves no claim: an annotations collection holds at 
                 "(retract it instead)")
 
 
-def _update_in_memory(plan: _UpdatePlan, claims: bytes | None, *, key, now, log, dry_run: bool) -> Update:
+def _update_in_memory(plan: _UpdatePlan, claims: bytes | None, *, key, now, log, dry_run: bool,
+                      drop: bool = False, guard=None) -> Update:
     """`update` as it was until 2026-11-10: every claim, and every record of
     the previous snapshot, held. Kept for one purpose — the proof that the
     streamed `update` writes the same bytes and says the same
@@ -1635,7 +1652,7 @@ def _update_in_memory(plan: _UpdatePlan, claims: bytes | None, *, key, now, log,
         held_recs.update(target_records(t.shard_tree, t.codex, t.from_snapshot, uids,
                                         text_for=text_for.get(plugin, ())))
     dropped: list[str] = []
-    if recheck:
+    if recheck or drop:
         keep = []
         for s_ in submitted:
             gone = [u for u in record_ends(s_.claim) if u not in held_recs]
@@ -1669,11 +1686,11 @@ def _update_in_memory(plan: _UpdatePlan, claims: bytes | None, *, key, now, log,
                                     container=cx.container_of(codex))
     return _update_finish(plan, shards=shards, relations=relations, delta=delta, dropped=dropped,
                           install=None if recheck else (lambda dst: dst.write_bytes(claims)),
-                          key=key, now=now, log=log, dry_run=dry_run)
+                          key=key, now=now, log=log, dry_run=dry_run, guard=guard)
 
 
 def _update_stream(plan: _UpdatePlan, src, work: Path, *, recheck: bool, key, now, log,
-                   dry_run: bool) -> Update:
+                   dry_run: bool, drop: bool | None = None, guard=None) -> Update:
     """`update`'s middle, streamed (app/hold/annotations_stream.py): the
     same checks in the same order, so the same refusals and the same bytes."""
     import numpy as np
@@ -1695,7 +1712,8 @@ def _update_stream(plan: _UpdatePlan, src, work: Path, *, recheck: bool, key, no
     sv.idents = None
     sort = st.ExternalSort(work)
     dropped = st.check_pins(src, sv, tables, snapshots=snapshots, codices=codices, sort=sort,
-                            version=codex.version, strip=recheck, drop=recheck, fresh=~hit)
+                            version=codex.version, strip=recheck,
+                            drop=recheck if drop is None else drop, fresh=~hit)
     if held.error is not None:
         raise AnnotationsError(held.error)
     kept = np.ones(sv.count, dtype=bool)
@@ -1736,11 +1754,11 @@ def _update_stream(plan: _UpdatePlan, src, work: Path, *, recheck: bool, key, no
                      tuple(sn.Tombstone(u, "withdrawn") for u in uids(held.numbers[~used])))
     return _update_finish(plan, shards=shards, relations=relations, delta=delta,
                           dropped=[d for _, d in dropped], install=None if recheck else src.install,
-                          key=key, now=now, log=log, dry_run=dry_run)
+                          key=key, now=now, log=log, dry_run=dry_run, guard=guard)
 
 
 def _update_finish(plan: _UpdatePlan, *, shards, relations, delta, dropped: Sequence[str], install,
-                   key, now, log, dry_run: bool) -> Update:
+                   key, now, log, dry_run: bool, guard=None) -> Update:
     """What `update` does once its parts are in staging: the result, the
     period and dry-run returns, the claims file kept (`install` writes the
     new one; None when re-checking), the parts promoted, the superseded kept,
@@ -1805,14 +1823,20 @@ def _update_finish(plan: _UpdatePlan, *, shards, relations, delta, dropped: Sequ
     out = shard_tree / shard_mod.snapshot_path(sid)
     if out.is_file() and out.read_bytes() != raw:
         raise AnnotationsError(f"snapshot {sid} exists with different bytes; a snapshot is written once (09 §9.4)")
-    out.write_bytes(raw)
-    if key is not None:
-        sn.sign_snapshot(root, name, snap, key,
-                         now=now or time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()))
+    with (guard() if guard is not None else nullcontext()):
+        # whole or not at all (2026-11-12): a write cut short left a file the
+        # next update refused as "different bytes", for ever
+        tmp = out.with_name(f".{out.name}.tmp")
+        tmp.write_bytes(raw)
+        os.replace(tmp, out)
+        if key is not None:
+            sn.sign_snapshot(root, name, snap, key,
+                             now=now or time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()))
     log(f"[annotations] {name}: snapshot {sid} after {prev.snapshot_id}, checked against {against_text}: "
         f"{len(delta.added)} added, {len(delta.changed)} re-checked or changed, "
         f"{len(delta.tombstoned)} tombstoned; {len(reissued)} part(s) re-issued; {snap.hash[:23]}…"
-        + (f"; {len(dropped)} claim(s) name a record the target no longer holds" if dropped else ""))
+        + (f"; {len(dropped)} claim(s) set aside: they name a record the target's snapshot does "
+           f"not hold" if dropped else ""))
     _index_if_large(shard_tree, snap, name, log)
     return dataclasses.replace(result, snapshot=snap)
 

@@ -20,6 +20,16 @@ measured (published figures disagree).
 
 ### 2026-11-12
 
+- **Annotations update themselves where their claims are a method's output — BUILT, not deployed** (operator via
+  München: "Can the annotations be updated without manually uploading something???", RULE 2). The collection file
+  names the method (`method = "wikipedia-versions"`, 07 §7.8). Once the collection it annotates holds a newer
+  snapshot, the worker's claim index keeper runs the method, then `update` with its whole output, each in a child
+  process; ends the snapshot does not hold yet are set aside and named. `hold annotations derive [--dry-run]` runs
+  it by hand. The snapshot is now written whole (temporary + rename), and its write and signature finish before a
+  stop. wikipedia's claims render ~8× faster, byte for byte the same. Only wikipedia-versions qualifies: the other
+  annotation tools depend on API or language-model inputs and keep `--claims`.
+  [annotation-methods.md](annotation-methods.md), with München's three steps.
+
 - **No ZFS snapshots on three datasets — OPEN, the operator's (node configuration, disk space)** (München, after
   legi's forget at 19:30Z, 11-12, a script reading exit 2 as the swap; #585 makes the swap exit 4).
   tank/louise-corpora (the ARCHIVE: the authoritative origin bytes, invariant 6 and 06 §6.4), tank/apps/louise-shard

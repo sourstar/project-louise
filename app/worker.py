@@ -33,7 +33,7 @@ import time
 import traceback
 from collections import deque
 from pathlib import Path
-from typing import Callable
+from typing import Any, Callable
 
 import httpx
 
@@ -2965,12 +2965,16 @@ def _claim_index_keeper() -> None:
     for wikipedia's); then, at boot and whenever the files change, every
     LARGE annotations snapshot held here with no claim index gets one
     (`claim_index.maintain`) — without it its claims group nothing at search.
+    Before that, every annotations collection whose file records a METHOD
+    is re-derived once the collection it annotates holds a newer snapshot
+    (`annotation_methods.maintain`, 2026-11-12, RULE 2: no file uploaded by
+    hand), in processes of their own.
     Its own thread, low priority, so a round never waits for it; idempotent
     (a built index is skipped) and bounded (a failed build is said once per
     snapshot); paused with the node's index work (`_maintenance_allowed`);
     out at the worker's stop within a second, or between two parts of a
     build."""
-    from .hold import annotations_stream, claim_index
+    from .hold import annotation_methods, annotations_stream, claim_index
     _lower_own_priority(INDEX_MAINTAINER_NICE)
 
     def log(m: str) -> None:
@@ -2981,9 +2985,14 @@ def _claim_index_keeper() -> None:
     except Exception as e:   # noqa: BLE001 — a safeguard, never a boot blocker
         log(f"the workspaces of stopped creates were not cleared: {type(e).__name__}: {e}")
     failed: dict[str, str] = {}
+    derived: dict[str, Any] = {}
     while not _stop.is_set():
         _claim_index_poke.clear()
         if _maintenance_allowed():
+            try:
+                annotation_methods.maintain(root, stop=_stop.is_set, log=log, failed=derived)
+            except Exception as e:   # noqa: BLE001 — the thread outlives a bad pass
+                log(f"annotation method pass failed: {type(e).__name__}: {e}")
             try:
                 claim_index.maintain(root, stop=_stop.is_set, log=log, failed=failed, isolated=True)
             except Exception as e:   # noqa: BLE001 — the thread outlives a bad pass

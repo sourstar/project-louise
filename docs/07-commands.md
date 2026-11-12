@@ -159,6 +159,10 @@ louise hold
                                                                        --against), a new FILE the whole set from now on (kept claims keep their uids, left out ones
                                                                        tombstoned), no FILE a re-check of the claims held; signed with the node's key; prints
                                                                        what changed. The Library's annotations card: *re-check claims*, *update with a claims file*
+  annotations derive <collection> [--dry-run]                          (2026-11-12, RULE 2) the method the collection's file records (`method`, §7.8) run now and
+                                                                       `update` with its whole output — a claim whose end the target's snapshot does not hold yet
+                                                                       set aside and named; the worker does this by itself once the collection annotated holds a
+                                                                       newer snapshot than the claims are pinned to. --dry-run says whether it is due and why
   deposit     add <collection> FILE [--key K] [--here]                 store a file as a deposit; an existing key is replaced whole
               erase <collection> <key> [--yes] [--here]                remove a deposit, leaving no trace (02 §2.9)
               list <collection>                                        the collection's deposit keys
@@ -742,7 +746,9 @@ reader needs at the command line:
   `encoder.url`, `encoder.query_url`, `encoder.api`,
   `encoder.embed_model`, `encoder.query_model`, `reranker.url` (empty:
   no `[reranker]`), `reranker.api`, `reranker.rerank_model`,
-  `reranker.window`. Never `codex` or `source` (§7.8). The values are set
+  `reranker.window`, and for an annotations collection `method`
+  (2026-11-12: the method the node re-runs, `wikipedia-versions`; empty:
+  none). Never `codex` or `source` (§7.8). The values are set
   together, the file rendered whole and loaded back by the node's own
   loader before it replaces the old one: an unknown key, a malformed
   value, a model its URL does not name, `share = true` on a never-share
@@ -1981,6 +1987,10 @@ embed_select = "smart"                         # optional (2026-11-02): which do
                                                # longest article in another language when the English one is missing or shorter;
                                                # the rest marked "not embedded here" as above (app/embed_select.py,
                                                # docs/notes/wikipedia-smart-embedding.md); `louise dev embed-select` previews it
+method = "wikipedia-versions"                  # an ANNOTATIONS collection only (2026-11-12): the method its claims are made by,
+                                               # re-run by the worker once the collection annotated holds a newer snapshot,
+                                               # then `annotations update` with its output (app/hold/annotation_methods.py,
+                                               # docs/notes/annotation-methods.md); absent = the claims are given by hand
 kinds  = ["records", "vectors"]
 embed  = "on-demand"                           # off | on-demand | all | p2p: what the node's encoder spends, never what search uses;
                                                # all = every part itself ("all local"), p2p = the parts rendezvous gives this node,

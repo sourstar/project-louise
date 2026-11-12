@@ -268,6 +268,36 @@ def cmd_create_annotations(a) -> int:
     return 0
 
 
+def cmd_annotations_derive(a) -> int:
+    """`hold annotations derive <collection> [--dry-run]` (2026-11-12,
+    app/hold/annotation_methods.py): the method its collection file records
+    run now, and the update with its whole output — what the worker does by
+    itself once the collection annotated holds a newer snapshot. `--dry-run`
+    says whether a derivation is due and why, and runs nothing."""
+    from app import collections as collections_mod
+    from app.hold import annotation_methods as am, collection as col
+    name, _ = col.resolve(a.root, a.collection)
+    c = next((x for x in collections_mod.load_annotations() if x.name == name), None)
+    method = getattr(c, "method", None)
+    if not method:
+        raise CodexError(f"{name} records no method: its claims are given by hand (`hold annotations "
+                         f"update --claims`). A method is recorded with `hold config apply {name} "
+                         f"--set method=<{'|'.join(sorted(am.METHODS))}>`")
+    if a.dry_run:
+        _print(am.due(a.root, name, method).to_dict())
+        return 0
+    key = None
+    try:
+        from app.bundles import keys as node_keys
+        key = node_keys.load_signing_key()
+    except Exception:   # noqa: BLE001 — no key: the snapshot is held unsigned (09 §9.4)
+        print("no node key: the snapshot is written unsigned, and `signature` stays "
+              "inconclusive until a key signs it", file=sys.stderr)
+    _print(am.derive(a.root, name, method, key=key, now=_utc_now(),
+                     log=lambda m: print(m, file=sys.stderr)))
+    return 0
+
+
 def cmd_annotations_index(a) -> int:
     """`hold annotations index <collection>`: the claim index on disk of its
     current snapshot (app/hold/claim_index.py). Idempotent: a built one is
@@ -7170,6 +7200,13 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--dry-run", action="store_true",
                    help="check and count what would change; write nothing")
     p.set_defaults(fn=cmd_annotations_update)
+    p = averbs.add_parser("derive", help="run the method the collection's file records (method = ...) and "
+                                         "update with its whole output — what the worker does by itself "
+                                         "once the collection annotated holds a newer snapshot")
+    root_arg(p); p.add_argument("collection")
+    p.add_argument("--dry-run", action="store_true",
+                   help="say whether a derivation is due and why; run nothing")
+    p.set_defaults(fn=cmd_annotations_derive)
     p = averbs.add_parser("index", help="build the claim index on disk of a LARGE annotations collection's "
                                         "current snapshot (more than 250,000 claims): searched in place, "
                                         "never loaded into the web's memory. create, update and the worker "

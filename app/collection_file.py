@@ -85,7 +85,7 @@ def _codex_toml_text(path: Path, *, codex: str, profile: str | None,
                      slices=None, kinds=None, share: bool = False,
                      reranker=None, source: str = "origin",
                      share_slices=None, share_kinds=None, embed_slices=None,
-                     embed_select=None) -> str:
+                     embed_select=None, method=None) -> str:
     """07 §7.8's file: `codex`, `title`, `slices`, `kinds`, `embed`,
     `share`, `[encoder]` naming where this node reaches the encoder, and
     `[reranker]` where it reaches the collection's reranker (05 §5.6).
@@ -162,6 +162,10 @@ def _codex_toml_text(path: Path, *, codex: str, profile: str | None,
         lines.append("share_slices = [%s]" % ", ".join(_toml_scalar(s) for s in share_slices))
     if share_kinds is not None:
         lines.append("share_kinds = [%s]" % ", ".join(_toml_scalar(k) for k in share_kinds))
+    # 07 §7.8 `method` (2026-11-12): an annotations collection's, carried
+    # through every rewrite; the worker re-runs it (app/hold/annotation_methods.py)
+    if method is not None:
+        lines.append(f"method = {_toml_scalar(method)}")
     kept = []
     if bool(acquire_enabled) != derived["acquire_enabled"]:
         kept.append(f"acquire_enabled = {'true' if acquire_enabled else 'false'}")
@@ -276,7 +280,7 @@ def _write_collection_toml(path: Path, *, codex: str | None,
                             slices=None, kinds=None, share: bool = False,
                             reranker=None, source: str = "origin",
                             share_slices=None, share_kinds=None, embed_slices=None,
-                            embed_select=None) -> None:
+                            embed_select=None, method=None) -> None:
     """Rewrite a collection's Tier-2 file. `codex` has NO DEFAULT on
     purpose: a call site that forgets it must fail loudly here, because
     the failure it would otherwise cause is silent and unrepairable.
@@ -302,7 +306,7 @@ def _write_collection_toml(path: Path, *, codex: str | None,
             title=title, slices=slices, kinds=kinds, share=share,
             reranker=reranker, source=source,
             share_slices=share_slices, share_kinds=share_kinds, embed_slices=embed_slices,
-            embed_select=embed_select)
+            embed_select=embed_select, method=method)
         return
     lines = [f'plugin = "{plugin}"']
     if peer_source:
@@ -445,7 +449,8 @@ def _fields(c, raw: dict[str, Any]) -> dict[str, Any]:
         kinds=c.kinds, share=c.share, reranker=c.reranker, source=c.source,
         share_slices=c.share_slices, share_kinds=c.share_kinds,
         embed_slices=getattr(c, "embed_slices", None),
-        embed_select=getattr(c, "embed_select", None))
+        embed_select=getattr(c, "embed_select", None),
+        method=getattr(c, "method", None))
 
 
 def rewrite(collection, **changes) -> Path:
@@ -486,6 +491,8 @@ SETTABLE: dict[str, str] = {
     "embed_select": 'all | smart (wikipedia: English, plus the longest other language where '
                     'English is missing or shorter); "default" for the plugin\'s own',
     "share_kinds": 'member kinds, comma-separated; "all" serves every kind held',
+    "method": "annotations: the method the node re-runs when the collection annotated holds a newer "
+              "snapshot (wikipedia-versions); empty: none, the claims are given by hand",
     "encoder.url": "the encoder's server (07 §7.8)",
     "encoder.query_url": "the query side's server; empty when symmetric",
     "encoder.api": "openai | ollama | vega",
@@ -550,6 +557,8 @@ def _parse(key: str, text: str, where: str) -> Any:
             return "all" if text == "all" else collections_mod._parse_slices(_names(text), where)
         if key == "kinds":
             return collections_mod._parse_kinds(_names(text), where)
+        if key == "method":
+            return collections_mod._parse_method(text or None, where)
         if key == "embed_select":
             if text in ("", "default"):
                 return None
@@ -638,11 +647,14 @@ def _apply(c, raw: dict[str, Any], path: Path, parsed: dict[str, Any], *,
         if annotations and (key == "embed" or key.startswith(("encoder.", "reranker."))):
             raise SetRefused(f"{c.name} is an annotations collection: it has no space and nothing "
                              f"is embedded or ranked for it, so it has no {key} (02 §2.10)")
+        if key == "method" and not annotations:
+            raise SetRefused(f"{c.name}'s records come from its origin: method is an annotations "
+                             f"collection's key (07 §7.8)")
         if key == "share" and value and c.codex.privacy == "never-share":
             raise SetRefused(f"{c.name} is never-share: it is shared with nobody (04 §4.4)")
     plain = {"title": "title", "slices": "slices", "kinds": "kinds",
              "share_slices": "share_slices", "share_kinds": "share_kinds",
-             "embed_slices": "embed_slices", "embed_select": "embed_select"}
+             "embed_slices": "embed_slices", "embed_select": "embed_select", "method": "method"}
     for key, field in plain.items():
         if key in parsed:
             kw[field] = parsed[key]
@@ -702,7 +714,7 @@ def _read_back(back, kw: dict[str, Any], parsed: dict[str, Any]) -> None:
     got = {"title": back.title, "slices": back.slices, "kinds": back.kinds,
            "share_slices": back.share_slices, "share_kinds": back.share_kinds,
            "embed_slices": back.embed_slices, "embed_select": back.embed_select,
-           "share": back.share}
+           "share": back.share, "method": back.method}
     enc, rr = back.embed, back.reranker
     if enc is not None:
         got.update({"encoder.url": enc.url, "encoder.query_url": enc.query_url or "",

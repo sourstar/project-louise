@@ -12,6 +12,10 @@ more, against the version shown (the largest; English on a tie or an
 unknown length). `--count` writes nothing and says how many claims, versions
 and articles there would be — what the annotations collection's claim index
 would hold.
+
+The node re-runs the same claims by itself once the collection's file
+records `method = "wikipedia-versions"` (app/hold/annotation_methods.py,
+2026-11-12): this tool is for a first `create`, or to look.
 """
 from __future__ import annotations
 
@@ -44,10 +48,12 @@ def main(argv: list[str] | None = None) -> int:
     a.out.parent.mkdir(parents=True, exist_ok=True)
     tmp = a.out.with_suffix(a.out.suffix + ".tmp")
     n = 0
-    with open(tmp, "w", encoding="utf-8") as f:
-        for cl in wiki_versions.claims(m, plugin=c.plugin):
-            f.write(json.dumps(cl, ensure_ascii=False, sort_keys=True) + "\n")
-            n += 1
+    with open(tmp, "wb") as f:
+        # `json.dumps(claim, ensure_ascii=False, sort_keys=True)` per line, byte
+        # for byte, from one template (wiki_versions.claim_lines, 2026-11-12)
+        for chunk in wiki_versions.claim_lines(m, plugin=c.plugin):
+            f.write(chunk)
+            n += chunk.count(b"\n")
     tmp.replace(a.out)
     print(json.dumps({**counts, "written": n, "out": str(a.out)}))
     return 0
