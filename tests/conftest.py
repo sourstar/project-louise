@@ -214,6 +214,9 @@ def serial_parse_pool(monkeypatch):
     from app import config
     monkeypatch.setattr(config, "PARSE_PROCESSES", 1)
     monkeypatch.setattr(config, "BUILD_WHOLE_QUOTA", False)
+    # Lance's leaking calls in-process (app/lance_child.py): a monkeypatch or
+    # a stand-in dataset cannot reach a spawned child; its own tests opt in
+    monkeypatch.setattr(config, "LANCE_CHILD", False)
 
 
 @pytest.fixture(autouse=True)
