@@ -6538,6 +6538,12 @@ def run_forever():
     # state/node.sqlite, from the UNFILTERED list the web wrote to.
     node_con = node_state.connect()
     _move_node_control(node_con, all_collections)
+    # no encoder check runs before this worker does: one a killed worker
+    # left published is not shown as running (app/run_check.py `_announce`)
+    try:
+        node_state.clear_all_gates()
+    except Exception as e:   # noqa: BLE001 — the cards may show a stale check; nothing else depends on it
+        print(f"[warn:gate] the running checks could not be cleared: {e}", flush=True)
     # Invariant 1: a space mismatch refuses THAT collection, not the node.
     refused = spaces.refuse_boot(all_collections)
     if refused:
