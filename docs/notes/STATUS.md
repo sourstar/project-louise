@@ -18,6 +18,23 @@ build at 12 cores, the GPU uncapped. The card's noise (operator): 0.2 sone
 idle, 3.1 sone at full load, coil whine ~0.9 sone; its fan range is being
 measured (published figures disagree).
 
+### 2026-11-12
+
+- **The worker pinned deleted vector-index files — FIXED, not deployed** (München's fd census, 11-12). Two readings on
+  one worker (live d76fbdc): 382 open files at 20:48Z, 470 at 01:29Z. sqlite, wal and shm stayed flat (the working
+  set); the growth was Lance index files, 6 -> 52, and 38 deleted ones, all
+  `normattiva-nemo/chunks.lance/_indices/<uuid>/{index,auxiliary}.idx`: 4,499 MiB of deleted bytes pinned on ssd3
+  until a restart, more at every refresh. Cause, reproduced with lance 9.0.1 (tests/test_lance_child.py):
+  `optimize_indices` (a delta, a merge of deltas) and `compact_files` keep the vector-index files they read open for
+  the life of the process. That happens through the shared Session or a fresh one, with the dataset dropped and
+  collected. The prune then deletes the files merged away. The scalar refresh does not leak. Fixed:
+  - these calls run in a single-use SPAWNED child that ends with them (app/lance_child.py; the standard is
+    process-per-task isolation, `maxtasksperchild`'s reason for being);
+  - refresh, compaction, materialize_deletions and purge_deleted go through it;
+  - a child that cannot start runs the call here, and a killed child is a deferral;
+  - `LANCE_CHILD=0` restores the old path.
+  No upstream issue found. A witness test fails the day Lance closes these files.
+
 ### 2026-11-11 (München)
 
 - **Two spaces on one model deferred each other's gate — FIXED, DEPLOYED (8d0844d, 19:11Z) and VERIFIED** (München, 11-11, after 6d947cd): wikidata

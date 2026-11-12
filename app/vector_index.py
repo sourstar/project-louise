@@ -326,11 +326,14 @@ def purge_deleted(collection, lock_con=None) -> dict:
     if ds is None:
         raise RuntimeError("the Lance dataset API (pylance) is required to make "
                            "an erase physical (02 §2.9)")
+    from . import lance_child
     with embeddings._write_lock(lock_con):
-        metrics = ds.optimize.compact_files(materialize_deletions=True,
+        # in a child: Lance keeps the index files it read open (lance_child)
+        metrics = lance_child.compact_files(ds, materialize_deletions=True,
                                             materialize_deletions_threshold=0.0)
-        stats = ds.cleanup_old_versions(older_than=datetime.timedelta(0),
-                                        delete_unverified=True)
+        forget(collection)              # the child committed: the table as it is now
+        stats = _dataset(_table(collection)).cleanup_old_versions(
+            older_than=datetime.timedelta(0), delete_unverified=True)
     retrained = False
     if _vector_indices(embeddings._conn(collection).open_table(embeddings.TABLE)):
         build(collection)
@@ -547,8 +550,10 @@ def materialize_deletions(collection, lock_con=None, *, log=None, force: bool = 
         f"fragment(s), {rw['rows']:,} rows, {rw['data_bytes'] / 2**30:.1f} GiB, "
         f"{plan['deleted_rows']:,} deleted rows dropped; this collection's vector writes wait")
     t0 = time.monotonic()
+    from . import lance_child
     with rewrite(collection), embeddings._write_lock(lock_con):
-        metrics = _dataset(_table(collection)).optimize.compact_files(**materialize_options())
+        # in a child: Lance keeps the index files it read open (lance_child)
+        metrics = lance_child.compact_files(_dataset(_table(collection)), **materialize_options())
     forget(collection)
     dt = time.monotonic() - t0
     after = deletions_plan(collection, force=True)
@@ -1086,15 +1091,18 @@ def compact(collection, con=None, *, log=None, light: bool = False) -> dict:
     ds = _dataset(tbl)
     t0 = time.monotonic()
     try:
+        from . import lance_child
         with rewrite(collection):
+            # in a child: Lance keeps the index files it read open (lance_child)
             if ds is not None and light:
-                ds.optimize.compact_files(
-                    target_rows_per_fragment=config.VECTOR_INDEX_FRAGMENT_ROWS,
+                lance_child.compact_files(
+                    ds, target_rows_per_fragment=config.VECTOR_INDEX_FRAGMENT_ROWS,
                     materialize_deletions=False)
+                forget(collection)      # the child committed: the table as it is now
                 _refresh_scalar(_dataset(_table(collection)))
             elif ds is not None:
-                ds.optimize.compact_files(
-                    target_rows_per_fragment=config.VECTOR_INDEX_FRAGMENT_ROWS)
+                lance_child.compact_files(
+                    ds, target_rows_per_fragment=config.VECTOR_INDEX_FRAGMENT_ROWS)
             elif light:
                 return {"compacted": False, "reason": "no lance dataset"}
             else:
@@ -1340,7 +1348,12 @@ def refresh(collection, con=None, *, log=None) -> dict:
         # against 93.1 s for a delta over the new rows alone (München; the
         # night's 20,838 s was that call starved at nice 10 under load 11.6
         # on 12 cores). A delta costs with the NEW rows, never with the table.
-        ds.optimize.optimize_indices(num_indices_to_merge=0)
+        #
+        # IN A CHILD (2026-11-12): Lance keeps open every index file the call
+        # reads, for the life of the process, and the prune deletes the ones
+        # merged away: the worker pinned 4.5 GiB of them (app/lance_child.py).
+        from . import lance_child
+        lance_child.optimize_indices(ds, num_indices_to_merge=0)
         # and the deltas are merged into one once there are more than
         # VECTOR_INDEX_MAX_INDICES (the base never: rebuilding it is `build`).
         # Measured here (IVF_PQ, nprobes 30, refine 30): 24 ms a query up to 5
@@ -1352,7 +1365,7 @@ def refresh(collection, con=None, *, log=None) -> dict:
         if n is not None and n > config.VECTOR_INDEX_MAX_INDICES:
             again = _dataset(_table(collection))
             if again is not None:
-                again.optimize.optimize_indices(num_indices_to_merge=n - 1)
+                lance_child.optimize_indices(again, num_indices_to_merge=n - 1)
                 merged = n - 1
     else:
         tbl.optimize(cleanup_older_than=timedelta(

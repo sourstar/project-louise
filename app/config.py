@@ -556,6 +556,12 @@ VECTOR_INDEX_REFRESH_S = int(os.getenv("VECTOR_INDEX_REFRESH_S", "1800"))
 # merged into one. Measured 2026-10-23: a query costs the same up to 5, +50 %
 # at 9, +70 % at 13; merging the deltas costs with their rows, not the base's.
 VECTOR_INDEX_MAX_INDICES = int(os.getenv("VECTOR_INDEX_MAX_INDICES", "4"))
+# The Lance calls that keep the index files they read open for the life of
+# the process (`optimize_indices`, `compact_files`) run in a single-use child
+# process, so the worker holds no merged-away, pruned index (app/lance_child.py;
+# 2026-11-12: 4.5 GiB of deleted files pinned after six hours). 0 runs them
+# in-process: the same commits, and the leak.
+LANCE_CHILD = os.getenv("LANCE_CHILD", "1") not in ("0", "false", "no", "off")
 # How long Lance keeps SUPERSEDED versions of a vector table. This is not a
 # tuning knob, it is a disk-usage decision, and the default was costing more
 # than everything else on the pool: `optimize()` with no argument prunes
