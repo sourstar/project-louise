@@ -1064,6 +1064,10 @@ def _node_pin(url: str, model: str) -> AbstractContextManager[Any]:
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--as-person", action="store_true", dest="as_person",
+                    help="hold the node's claim as a person's question does (corpus work "
+                         "stands aside): for timings of what a person waits; by default a "
+                         "harness holds none (app/rage/dispatch.py `as_harness`)")
     sub = ap.add_subparsers(dest="cmd", required=True)
     c = sub.add_parser("capture")
     c.add_argument("format", choices=("gutenberg", "known-item", "umbrela", "jurifindit"))
@@ -1107,6 +1111,8 @@ def main(argv: list[str] | None = None) -> int:
     w.add_argument("--limit", type=int, default=3)
     w.add_argument("--top", type=int, default=5)
     a = ap.parse_args(argv)
+    from app.rage import dispatch as _dispatch
+    _dispatch.as_harness(not getattr(a, "as_person", False))   # a harness, not a person
     try:
         if a.cmd in ("capture", "rerank"):
             for sig in (signal.SIGTERM, signal.SIGINT):

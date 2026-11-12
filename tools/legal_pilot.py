@@ -824,6 +824,10 @@ def _write(out: Path, name: str, payload: dict[str, Any]) -> Path:
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--as-person", action="store_true", dest="as_person",
+                    help="hold the node's claim as a person's question does (corpus work "
+                         "stands aside): for timings of what a person waits; by default a "
+                         "harness holds none (app/rage/dispatch.py `as_harness`)")
     sub = ap.add_subparsers(dest="cmd", required=True)
     p = sub.add_parser("fetch"); p.add_argument("--out", type=Path, required=True)
     for cmd in ("coverage", "run", "pool", "enqueue"):
@@ -859,6 +863,8 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--collection", required=True); p.add_argument("--questions", type=Path, required=True)
     p.add_argument("--out", type=Path, required=True); p.add_argument("--k", type=int, default=DEFAULT_K)
     a = ap.parse_args(argv)
+    from app.rage import dispatch as _dispatch
+    _dispatch.as_harness(not getattr(a, "as_person", False))   # a harness, not a person
 
     if a.cmd == "fetch":
         return bakeoff.fetch(a.out)
