@@ -540,17 +540,6 @@ def create(root, ref: str, *, snapshot_id: str | None = None, log=print) -> Snap
     if snapshot_id is None:
         clock = ZoneInfo(codex.origin.clock)
         snapshot_id = snapshot_id_for(datetime.now(clock), codex.update.cadence)
-    # the relations parts' edges name the snapshot that first lists them
-    # (09 §9.14). A build cannot know the id this create is given (no
-    # --snapshot, or another one), so parts written for another id, or left
-    # unfinished, are WRITTEN AGAIN for this id here — what the old refusal
-    # told the operator to run (RULE 2), and only the parts not already
-    # written for it; an edge an earlier snapshot listed keeps that id
-    from . import relations as relations_mod
-    if relations_mod.written_for(db_path) not in (None, snapshot_id):
-        relations_mod.write(codex, staging=staging, shard_dir=shard_dir, snapshot_id=snapshot_id,
-                            promote=True, log=log, name=name)
-    relations_mod.require_for(db_path, snapshot_id, name)
 
     con = sqlite3.connect(db_path)
     con.row_factory = sqlite3.Row
@@ -611,6 +600,18 @@ def create(root, ref: str, *, snapshot_id: str | None = None, log=print) -> Snap
              _first_delta(shard_dir, shards) if previous is None else
              _later_delta(shard_dir, previous, shards, name=name, snapshot_id=snapshot_id,
                           reasons=build_tombstone_reasons(db_path)))
+    # AFTER THE MEMBERS AND THE DELTA (each can refuse before a part is
+    # read; the relations come last): the relations parts' edges name the snapshot that first lists them
+    # (09 §9.14). A build cannot know the id this create is given (no
+    # --snapshot, or another one), so parts written for another id, or left
+    # unfinished, are WRITTEN AGAIN for this id here — what the old refusal
+    # told the operator to run (RULE 2), and only the parts not already
+    # written for it; an edge an earlier snapshot listed keeps that id
+    from . import relations as relations_mod
+    if relations_mod.written_for(db_path) not in (None, snapshot_id):
+        relations_mod.write(codex, staging=staging, shard_dir=shard_dir, snapshot_id=snapshot_id,
+                            promote=True, log=log, name=name)
+    relations_mod.require_for(db_path, snapshot_id, name)
     snap = Snapshot(
         collection_id=codex.collection_id, snapshot_id=snapshot_id,
         previous=previous.hash if previous else None,

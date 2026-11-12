@@ -259,8 +259,10 @@ def test_an_edge_keeps_the_snapshot_that_first_listed_it(isolated_config, tmp_pa
 
 
 def test_a_stopped_pass_resumes_after_the_last_part(isolated_config, tmp_path, origin, monkeypatch):
-    """Invariant 2: a stop finishes the part in hand, the pass says it was
-    interrupted, `snapshot create` refuses the half, and a re-run finishes."""
+    """Invariant 2: a stop finishes the part in hand and the pass says it was
+    interrupted. `snapshot create` then RESUMES it (2026-11-12: it writes the
+    parts not yet written for its id rather than refusing), computing only
+    the part left."""
     import threading
     root = tmp_path / "collections"
     with monkeypatch.context() as m:
@@ -271,11 +273,10 @@ def test_a_stopped_pass_resumes_after_the_last_part(isolated_config, tmp_path, o
     got = rel.backfill(root, "normattiva", snapshot_id="2026-08", stop=stop, **QUIET)
     assert got.interrupted and got.parts == 1
     rec.write_validation(root, "normattiva")
-    with pytest.raises(CodexError, match="did not finish"):
-        sn.create(root, "normattiva", snapshot_id="2026-08", **QUIET)
-    again = rel.backfill(root, "normattiva", snapshot_id="2026-08", **QUIET)
-    assert not again.interrupted and again.parts == 2, "the part done is not computed again"
-    assert sn.create(root, "normattiva", snapshot_id="2026-08", **QUIET).relations
+    said: list[str] = []
+    snap = sn.create(root, "normattiva", snapshot_id="2026-08", log=said.append)
+    assert snap.relations, "the pass resumed and listed"
+    assert any("2 of 3 part(s) to write" in line for line in said), f"only the parts left: {said}"
 
 
 def test_a_snapshot_with_relations_passes_hold_check(isolated_config, tmp_path, origin):
