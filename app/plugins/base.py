@@ -516,12 +516,19 @@ class ArticleCitation:
     the cited ones (Normattiva's annex codes: the approving decree's "Art.
     1.", the preleggi, c.p.a.'s other Allegati), the names its chunk labels
     carry before "-art. N" — only a chunk whose annex name starts with one
-    of them is the article; empty = any chunk whose label reads `article`."""
+    of them is the article; empty = any chunk whose label reads `article`.
+    `annex`: an annex the QUERY names, as it names it ("allegato B": "art. XI
+    dell'allegato B del r.d. …"), resolved against the held version's own
+    labels when the article is read — every annex there whose name begins
+    with those words, case folded ("Allegato B", "ALLEGATO B - Regolamento");
+    none there, the article is not pinned (never the decree's own art. N in
+    its place). Empty = no annex named."""
     keys: tuple[str, ...]
     article: str
     label: str
     also: tuple[str, ...] = ()
     annexes: tuple[str, ...] = ()
+    annex: str = ""
 
 
 @dataclass(frozen=True)

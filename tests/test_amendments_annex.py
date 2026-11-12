@@ -188,8 +188,8 @@ def test_holders_come_from_the_same_read_as_the_article(monkeypatch):
     doc = {"chunks": [{"chapter": "Art. 1.", "text": "decreto"},
                       {"chapter": "CODICE CIVILE-art. 1", "text": "codice"}]}
     monkeypatch.setattr(reader, "document", lambda c, n: calls.append(n) or doc)
-    want = SimpleNamespace(read=label_token, article="1", citation=SimpleNamespace(annexes=("CODICE CIVILE",)))
-    ch, held = articles._read_article(None, 7, want)
+    want = SimpleNamespace(read=label_token, article="1", citation=SimpleNamespace(annexes=("CODICE CIVILE",), annex=""))
+    ch, held, _annexes = articles._read_article(None, 7, want)
     assert ch["text"] == "codice" and held == {None, "CODICE CIVILE"} and calls == [7]
 
 

@@ -440,6 +440,29 @@ extending it (do not reinvent the wheel).
   and a space (an annex named `…-artigianato` is not split). From version
   2 the parts are read and ONLY the versions still holding an old-form row
   are rewritten (RULE 1: every other row is version 3's byte for byte).
+- **An article cited in an annex, or named by a word (fixed 2026-11-12).**
+  "art. XI dell'allegato B del r.d. 9 novembre 1861, n. 327" found the act
+  and dropped both: the scan's `_ART` takes only "art. N" right before the
+  act, and an article that is a word was no token. Now, where the scan
+  found an act without its article, the pin reads back from the act
+  (`normattiva.article_before`, at most 120 characters): "art. N" or a
+  word article (a Roman numeral upper case, unico, transitorio, finale,
+  addizionale), an optional "comma N", an optional annex — "[dell']allegato
+  X", or a "regolamento", "statuto" or "tabella" with or without its number
+  or letter (München's sample: `regolamento-artaddizionale`) — then
+  del/della/al/alla or "approvato con", "annesso al", "allegata al". The scan itself is unchanged (the text index's
+  hot path and its byte-for-byte reference). The cited annex ("allegato B")
+  is resolved against the held version's own labels: every annex whose
+  words begin with the cited ones, case folded (`articles.names_annex`);
+  the one named EXACTLY wins where held ("regolamento" is "Regolamento", not
+  also "Regolamento 2°"); none held, nothing is pinned — never the decree's
+  own art. N in its place. Still not read: lower-case Roman numerals ("art.
+  xi": kept out so a word is never an article) and an annex cited with no
+  act ("art. XI dell'allegato B" alone).
+  The resolved names key the amendments (`<annex>|<token>`), and the fact's
+  id carries the annex (`…~allegatob~art3`). A short citation without a
+  date takes the resolved `atto` fact by year and number. Chunk labels read
+  word articles too (`label_token`: "Articolo unico" → `unico`).
 
 - **Dead old-form rows.** The re-derivation rewrites every version a held
   part carries. An errored or out-of-scope version keeps its old labelled
