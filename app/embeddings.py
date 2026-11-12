@@ -326,7 +326,10 @@ def reload_model(recipe: "collections_mod.EmbedRecipe", *, query: bool = False,
     model = (recipe.query_model or recipe.model) if query else recipe.model
     r = httpc.post(f"{base.rstrip('/')}/backend/shutdown", json={"model": model},
                    timeout=timeout)
-    if r.status_code >= 400:
+    # 404: the runner holds no load of it (measured on the node 2026-11-12,
+    # the gate twin unloaded meanwhile) — stopped already, and its next
+    # request loads it afresh, which is all this call is for
+    if r.status_code >= 400 and r.status_code != 404:
         raise RuntimeError(f"{base}: the model runner refused to stop {model}: "
                            f"HTTP {r.status_code}")
 

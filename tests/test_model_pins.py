@@ -188,12 +188,43 @@ def test_boot_with_nothing_left_says_so(runner):
 def test_this_process_holders_go_once_idle(runner):
     model_pins.hold_for_process(URL, M, "embed")
     holder = model_pins.process_holder("embed")
-    assert holder.endswith(f" pid {os.getpid()}")
+    assert holder.endswith(f" {model_pins.process_tag()}")
+    assert f" pid {os.getpid()}" in holder
     import time
     model_pins.reconcile(now=time.time() + 10, own_idle_s=120)
     assert runner.pinned[M] is True
     model_pins.reconcile(now=time.time() + 121, own_idle_s=120)
     assert runner.pinned[M] is False
+
+
+def test_the_same_pid_in_another_container_is_another_process(runner, monkeypatch):
+    """München, 2026-11-12: every supervised pass is pid 1 in its own
+    container, so "embed pid 1" named every pass at once and one's release,
+    or its reconcile of "its own" idle holders, took the others'. A holder
+    carries the pid's PID namespace: the same pid in another namespace is
+    not this process, and this process's idle sweep leaves it to its TTL."""
+    import time
+    monkeypatch.setattr(model_pins, "_tag", None)
+    monkeypatch.setattr(model_pins.os, "readlink", lambda p: "pid:[4026534171]")
+    elsewhere = model_pins.process_holder("embed")      # the other pass: same pid
+    model_pins.hold(URL, M, elsewhere)
+    monkeypatch.setattr(model_pins, "_tag", None)
+    monkeypatch.setattr(model_pins.os, "readlink", lambda p: "pid:[4026533864]")
+    assert model_pins.process_holder("embed") != elsewhere
+    assert model_pins.process_tag() == f"pid {os.getpid()}@4026533864"
+    model_pins.reconcile(now=time.time() + 121, own_idle_s=120)
+    assert runner.pinned[M] is True, "another container's holder is not this process's to drop"
+    model_pins.reconcile(now=time.time() + model_pins.HOLDER_TTL_S + 1, own_idle_s=120)
+    assert runner.pinned[M] is False, "it goes at its own TTL, as any holder"
+
+
+def test_without_a_pid_namespace_the_pid_alone_as_before(monkeypatch):
+    monkeypatch.setattr(model_pins, "_tag", None)
+
+    def no_proc(p):
+        raise OSError("no /proc")
+    monkeypatch.setattr(model_pins.os, "readlink", no_proc)
+    assert model_pins.process_tag() == f"pid {os.getpid()}"
 
 
 def test_any_localai_model_is_pinned_a_reranker_or_the_chat_model_too(runner):

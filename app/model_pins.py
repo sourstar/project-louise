@@ -413,7 +413,7 @@ def reconcile(*, now: float | None = None, boot: bool = False,
     process's own `hold_for_process` holders go once idle for `own_idle_s`.
     Returns the (model, holder) pairs dropped; at boot, reports what it found."""
     now = time.time() if now is None else now
-    mine = f" pid {os.getpid()}"
+    mine = f" {process_tag()}"
     live = set(live) | in_use()
     # WHY each went, said as it is (München, 2026-10-23: the worker's own
     # idle releases were logged as "silent for over 900 s", 1–2 minutes
@@ -581,8 +581,34 @@ def set_worker() -> None:
     _process_prefix = WORKER
 
 
+_tag: tuple[int, str] | None = None
+
+
+def process_tag() -> str:
+    """THIS PROCESS ON THIS HOST: `pid N@<its PID namespace>` (München,
+    2026-11-12). A pid alone names a process only inside its container, and
+    every supervised pass is pid 1 in its own: two `hold embedder
+    cpu-reference` passes held one lease and one pin under one name, and
+    NeuRIS's release of its own took gutenberg's — the worker's sweep then
+    unloaded gutenberg's CPU twin under a call of hours. The kernel's
+    identity for a process is the pair (PID namespace, pid): the namespace
+    is `/proc/self/ns/pid`'s inode, unique on the host while the container
+    lives. Where it cannot be read (not Linux), the pid alone, as before.
+    Recomputed in a forked child, whose pid is its own."""
+    global _tag
+    pid = os.getpid()
+    if _tag is None or _tag[0] != pid:
+        try:
+            ns = os.readlink("/proc/self/ns/pid")          # "pid:[4026533864]"
+            inode = ns[ns.index("[") + 1:ns.index("]")]
+            _tag = (pid, f"pid {pid}@{inode}")
+        except (OSError, ValueError):
+            _tag = (pid, f"pid {pid}")
+    return _tag[1]
+
+
 def process_holder(kind: str) -> str:
-    return f"{_process_prefix}{kind} pid {os.getpid()}"
+    return f"{_process_prefix}{kind} {process_tag()}"
 
 
 def hold_for_process(url: str | None, model: str | None, kind: str, *,

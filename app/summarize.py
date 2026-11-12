@@ -5,7 +5,6 @@ identifier (native_id), resolved to a uid internally via the default
 collection. Multi-collection summary lookups are P0.5's job.
 """
 import json
-import os
 import time
 from pathlib import Path
 from . import collections as collections_mod, config, db, llm, plugin_io
@@ -51,7 +50,7 @@ def summarize_book(con, book_id: int, force: bool = False) -> dict:
         # (app/model_pins.py; operator, 2026-10-23)
         from . import model_pins
         with model_pins.holding(config.CHAT_URL, config.CHAT_MODEL,
-                                f"summary {uid} (pid {os.getpid()})"):
+                                f"summary {uid} ({model_pins.process_tag()})"):
             chapters = plugin.split_text(text)
             chapter_summaries = []
             for ch_title, body in chapters[:120]:

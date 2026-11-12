@@ -260,6 +260,61 @@ def test_a_command_holds_its_encoder_for_the_whole_block(isolated_config, monkey
     assert node_state.leased_encoders() == set(), "released however the block ends"
 
 
+def test_the_block_renews_its_pin_beside_the_call(isolated_config, monkeypatch):
+    """München, 2026-11-12: the block pinned once and never stamped its
+    holder again; past model_pins.HOLDER_TTL_S under one CPU call the
+    worker's reconcile dropped it as dead and the model ran unpinned. The
+    renewal beside the call stamps the pin with the lease."""
+    from app import encoder_use, model_pins
+    recipe = collections_mod.EmbedRecipe(url=URL + "/v1/embeddings", api="vega",
+                                         model="vega-4b-cpu", dtype="f16", ctx=512)
+    stamps = []
+    monkeypatch.setattr(model_pins, "hold",
+                        lambda url, model, holder, **k: stamps.append((model, holder)) or True)
+    with encoder_use.held(recipe, holder="hold embedder cpu-reference pid 9", every_s=0.05):
+        time.sleep(0.3)                          # one long call
+    assert len(stamps) >= 3, "the pin stamped while the call runs, not once"
+    assert set(stamps) == {("vega-4b-cpu", "hold embedder cpu-reference pid 9")}
+
+
+def test_two_passes_with_one_pid_hold_two_leases(isolated_config, monkeypatch):
+    """München, 2026-11-12: gutenberg's and NeuRIS's `hold embedder
+    cpu-reference`, each pid 1 in its own container, held their leases under
+    one name; NeuRIS's release took gutenberg's, and the sweep unloaded
+    gutenberg's CPU twin under a call of hours. The holder carries the PID
+    namespace: one pass's release is its own."""
+    from app import encoder_use, model_pins, node_state
+    holders = []
+    for ns in ("pid:[4026534171]", "pid:[4026534999]"):
+        monkeypatch.setattr(model_pins, "_tag", None)
+        monkeypatch.setattr(model_pins.os, "readlink", lambda p, ns=ns: ns)
+        holders.append(encoder_use.holder("hold embedder cpu-reference"))
+    gutenberg, neuris = holders
+    assert gutenberg != neuris
+    node_state.lease_encoder(URL, "vega-4b-cpu", gutenberg)
+    node_state.lease_encoder(URL, "vega-nemotron-cpu", neuris)
+    encoder_use.release(neuris)
+    assert node_state.leased_encoders() == {(URL, "vega-4b-cpu")}
+
+
+def test_a_stop_of_a_model_not_loaded_is_already_stopped(monkeypatch):
+    """The gate's fresh loads stop the model and wait for its next answer.
+    LocalAI answers 404 to a stop of a model it holds no load of (the node,
+    2026-11-12): stopped already, the next request loads it afresh — no
+    failure. Any other refusal still is one."""
+    import httpx
+    recipe = collections_mod.EmbedRecipe(url=URL + "/v1/embeddings", api="vega",
+                                         model="vega-4b--gate", dtype="f16", ctx=512)
+    status = {"code": 404}
+    monkeypatch.setattr(embeddings.httpc, "post",
+                        lambda url, json=None, timeout=None:
+                        httpx.Response(status["code"], request=httpx.Request("POST", url)))
+    embeddings.reload_model(recipe)
+    status["code"] = 500
+    with pytest.raises(RuntimeError, match="refused to stop vega-4b--gate: HTTP 500"):
+        embeddings.reload_model(recipe)
+
+
 def test_the_embedder_commands_take_the_lease():
     import inspect
     from app import louise
