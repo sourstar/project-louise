@@ -1326,6 +1326,13 @@ def _space_from_recipe(plugin: str, recipe: dict, source) -> dict:
         given = copy.deepcopy(recipe)
         given["space"] = copy.deepcopy(stated)
         given["space"].setdefault("tolerance", str(source.space.tolerance))
+        # THE ENGINE is the source's (inside collection_id, outside space_id,
+        # 09 §9.3): a recipe stating the space without it — the legal recipes
+        # do, the engine being read on the node — is completed from the
+        # source, never refused for it (München, neuris, 2026-11-12)
+        enc = given["space"].get("encoder")
+        if isinstance(enc, dict) and "engine" not in enc and "engine" in (src.get("encoder") or {}):
+            given["space"]["encoder"] = {**enc, "engine": copy.deepcopy(src["encoder"]["engine"])}
         dry = col.dry_codex(plugin, given, platform_image=placeholder)
         if dry.space_id != source.space_id:
             differs = _differs_from(source, dry)
