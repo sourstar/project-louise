@@ -66,7 +66,7 @@ measured (published figures disagree).
   (the operator's condition) is measurement 1 of docs/notes/presearch-caches.md, together with other pre-search
   caches to check (rerank scores, query vectors).
 
-- **The worker pinned deleted vector-index files — FIXED, not deployed** (München's fd census, 11-12). Two readings on
+- **The worker pinned deleted vector-index files — FIXED, DEPLOYED and VERIFIED** (München's fd census, 11-12). Two readings on
   one worker (live d76fbdc): 382 open files at 20:48Z, 470 at 01:29Z. sqlite, wal and shm stayed flat (the working
   set); the growth was Lance index files, 6 -> 52, and 38 deleted ones, all
   `normattiva-nemo/chunks.lance/_indices/<uuid>/{index,auxiliary}.idx`: 4,499 MiB of deleted bytes pinned on ssd3
@@ -80,6 +80,11 @@ measured (published figures disagree).
   - a child that cannot start runs the call here, and a killed child is a deferral;
   - `LANCE_CHILD=0` restores the old path.
   No upstream issue found. A witness test fails the day Lance closes these files.
+  VERIFIED on the node (München, 11-12, after the 07:54Z restart): two normattiva-nemo refreshes (08:23:50Z, 156,373
+  rows, 23 s; 08:55:29Z, 170,864 rows, 39 s, 4 deltas merged), normattiva's refresh + merge and 8 light compactions;
+  census at 08:57:11Z: 361 fds, **lance 0, deleted `_indices` held 0** (before: 6 → 52 → 92 lance, 38 deleted,
+  4.4 GiB pinned). Children's peak RSS 221–1,360 MiB over 2–33 s (seven, 07:27–07:48Z, on b21f420), within the
+  1 GiB index + 1 GiB metadata bounds; no `ChildLost`, no in-process fallback line.
 
 ### 2026-11-11 (München)
 

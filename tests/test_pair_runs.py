@@ -21,7 +21,7 @@ from app.hold import calibration as cal, collection as col, shard as shard_mod, 
 from app.verify import backend_gate
 from tests.hold.conftest import KEY, NOW, PLATFORM
 from tests.hold.test_pair_calibration import PAIR_BYTES, PAIRS, _key, pair_recipe
-from tests.test_run_check import DOC_URL, QUERY_URL, R1, Endpoint, opening, opening_query
+from tests.test_run_check import DOC_URL, QUERY_URL, R1, R1_OBJ, Endpoint, opening, opening_query
 
 
 def pair_opening(items, tag: bytes = b""):
@@ -90,6 +90,14 @@ def node(tmp_path, monkeypatch, endpoint):
     backend_gate.reset_cache()
     hold_runs._read.clear()
     collection = next(c for c in collections_mod.load_all() if c.name == "pairs")
+    # the node keeps its CPU twin's reference for the weights it gates: no card
+    # run is gated without one (invariant 12; tests/test_run_check.py's node)
+    from app.hold import cpu_reference as cpu_ref
+    for role in ("document", "query"):
+        cpu_ref.write(root / "collections", "pairs", role, run_id="sha256:" + "c0" * 32,
+                      run={"driver": "cpu", "engine": {}, "weights": R1_OBJ["weights"]},
+                      set_id=codex.space.calibration.set,
+                      vectors=run_check.reference(root / "collections", "pairs", codex, role))
     return root / "collections", collection, codex
 
 
