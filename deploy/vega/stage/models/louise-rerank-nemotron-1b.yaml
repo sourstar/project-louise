@@ -10,12 +10,15 @@
 # room; the attention is bidirectional, so a pair must fit one ubatch.
 # Converted with the patched converter at f16 from the HF weights (bf16).
 # LIVE since 2026-11-11 (operator: B) as the [reranker] of gutenberg, wikipedia, wikidata,
-# normattiva and normattiva-nemo (pubmed keeps MedCPT), on the backend as installed on the
-# node, louise-sycl-f16-llama-cpp-9d17b8a39845, at ctx = batch = ubatch 3,072: the same pair
+# normattiva and normattiva-nemo (pubmed keeps MedCPT), at ctx = batch = ubatch 3,072: the same pair
 # scores identically at 4,096 and 3,072 (9.805 / -16.469), size_vram 3,348 -> 3,174 MiB.
+# THE BACKEND'S NAME (operator, 2026-11-12: "Then let's fix it"): first installed on the node as
+# louise-sycl-f16-llama-cpp-9d17b8a39845, a name made over the patches alone (build.sh until #586);
+# the SAME files are installed again under the name by the book, below, with no rebuild
+# (docs/notes/localai-bugs.md, "The series digest": the rename and its proof).
 # Its licence asks for "Built with Llama" on the service: Help › Basics › Models says it.
 {
-  "backend": "louise-sycl-f16-llama-cpp-9d17b8a39845",
+  "backend": "louise-sycl-f16-llama-cpp-10aa8b1851d7",
   "context_size": 3072,
   "embeddings": true,
   "env": {
