@@ -562,6 +562,10 @@ VECTOR_INDEX_MAX_INDICES = int(os.getenv("VECTOR_INDEX_MAX_INDICES", "4"))
 # 2026-11-12: 4.5 GiB of deleted files pinned after six hours). 0 runs them
 # in-process: the same commits, and the leak.
 LANCE_CHILD = os.getenv("LANCE_CHILD", "1") not in ("0", "false", "no", "off")
+#: a gate measures on its own load of the model, `<model>--gate`, and never
+#: holds the shared one (operator, 2026-11-12: "gating a collection cannot
+#: monopolize the GPU"; app/gate_twin.py). Off only to measure without it.
+GATE_TWIN = os.getenv("GATE_TWIN", "1") not in ("0", "false", "no", "off")
 # How long Lance keeps SUPERSEDED versions of a vector table. This is not a
 # tuning knob, it is a disk-usage decision, and the default was costing more
 # than everything else on the pool: `optimize()` with no argument prunes

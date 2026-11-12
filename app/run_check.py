@@ -474,13 +474,18 @@ _gating_lock = threading.Lock()
 
 
 @contextmanager
-def _gate_running(recipe, role: str, root: Path, name: str):
+def _gate_running(recipe, role: str, root: Path, name: str, *, alone: bool = True):
+    """The gate of `name` runs on `recipe`'s model: published for the cards,
+    and — `alone`, on the shared load — every other collection on the model
+    stands aside until it ends (`gating_elsewhere`). On a twin (`alone`
+    false) nobody stands aside."""
     who = _who(recipe, role == "query")
     mine = (str(runs_mod.directory(root, name)), name)
-    with _gating_lock:
-        _gating[who] = mine
+    if alone:
+        with _gating_lock:
+            _gating[who] = mine
     started = time.time()
-    _announce(name, role, who, since=started)
+    _announce(name, role, who, since=started, alone=alone)
     reached = False
     try:
         yield
@@ -500,12 +505,12 @@ _announced: dict[tuple[str, str], dict[str, Any]] = {}
 
 
 def _announce(name: str, role: str, who: tuple[str, str], *, since: float,
-              run: str | None = None) -> None:
+              run: str | None = None, alone: bool = True) -> None:
     from . import node_state
     took = node_state.gate_duration(*who)
     entry = {"role": role, "server": who[0], "model": who[1], "run": run, "since": since,
              "expected_end": (since + took) if took else None, "took_last": took,
-             "alone": True}
+             "alone": alone}
     _announced[(name, role)] = entry
     try:
         node_state.publish_gate(name, entry)
@@ -569,9 +574,85 @@ def validate(root: Path, name: str, codex: Codex, recipe, *, role: str = "docume
              key=None, now: str | None = None,
              stop: Callable[[], bool] | None = None,
              on_run: Callable[[Any], None] | None = None) -> dict[str, Any]:
-    with _pinned(recipe, role, "gate", name), _gate_running(recipe, role, root, name):
-        return _validate(root, name, codex, recipe, role=role, key=key, now=now,
-                         stop=stop, on_run=on_run)
+    """The gate against the run that answers now (03 §3.3), measured on the
+    model's GATE TWIN where it can be had (app/gate_twin.py: the same run on
+    a load of its own, so the collections embedding on the model keep their
+    load), else on the shared load with them standing aside — said, never
+    silent."""
+    twin = _twin_for(recipe, role, name, codex)
+    if twin is None:
+        with _pinned(recipe, role, "gate", name), _gate_running(recipe, role, root, name):
+            return _validate(root, name, codex, recipe, role=role, key=key, now=now,
+                             stop=stop, on_run=on_run)
+    gate_recipe, server, twin_model = twin
+    try:
+        with _pinned(gate_recipe, role, "gate", name), \
+                _gate_running(recipe, role, root, name, alone=False):
+            return _validate(root, name, codex, gate_recipe, role=role, key=key, now=now,
+                             stop=stop, on_run=on_run)
+    finally:
+        from . import gate_twin
+        gate_twin.release(server, twin_model)
+
+
+def _twin_for(recipe, role: str, name: str, codex: Codex):
+    """(the recipe asking the twin, its server, the twin's name), or None
+    where no twin can be had — with the reason logged — or the twin states
+    another run than the shared load (then measuring it would validate a
+    run nothing embeds with)."""
+    from . import gate_twin
+    if not config.GATE_TWIN or getattr(recipe, "api", None) != embeddings.VEGA:
+        return None
+    query = role == "query"
+    server, model = _who(recipe, query)
+    if not model or gate_twin.is_twin(model):
+        return None
+    try:
+        twin_model = gate_twin.ensure(server, model)
+    except gate_twin.TwinUnavailable as e:
+        log.warning("%s: no gate twin for %s (%s): the gate measures on the shared load, and "
+                    "the collections on it stand aside meanwhile", name, model, e)
+        return None
+    _say_room(name, server, model)
+    import dataclasses
+    gate_recipe = dataclasses.replace(recipe, **({"query_model": twin_model} if query
+                                                 else {"model": twin_model}))
+    try:
+        probe = probe_for(codex, role)
+        main_run = answering_run(recipe, query=query, probe_item=probe)
+        twin_run = answering_run(gate_recipe, query=query, probe_item=probe)
+    except Exception as e:                              # noqa: BLE001 — either load not answering
+        gate_twin.release(server, twin_model)
+        log.warning("%s: the gate twin %s could not be asked (%s): the gate measures on the "
+                    "shared load", name, twin_model, e)
+        return None
+    if main_run != twin_run:
+        gate_twin.release(server, twin_model)
+        log.warning("%s: the gate twin %s states run %s and the shared load %s — not the same "
+                    "run, so it is not measured on; the gate measures on the shared load",
+                    name, twin_model, str(twin_run)[:23], str(main_run)[:23])
+        return None
+    return gate_recipe, server, twin_model
+
+
+def _say_room(name: str, server: str, model: str) -> None:
+    """Whether the twin's load fits under the reclaimer's line, said: where it
+    does not, LocalAI evicts its least recently used unpinned model for the
+    check's length (the resident set reloads it after), which is still not
+    the shared load held from every collection on it."""
+    try:
+        from . import model_load, resident
+        size, card = model_load.size_vram(server, model), resident._card()
+        if not size or card is None:
+            return
+        total, used = card
+        free = int(resident._threshold(server) * total) - used
+        if size > free:
+            log.warning("%s: the gate twin of %s needs ~%d MiB and the card has %d MiB under "
+                        "the reclaimer's line: LocalAI evicts its least recently used unpinned "
+                        "model for the check", name, model, size >> 20, max(free, 0) >> 20)
+    except Exception:                                   # noqa: BLE001 — a reading, never a rule
+        pass
 
 
 def _validate(root: Path, name: str, codex: Codex, recipe, *, role: str = "document",
