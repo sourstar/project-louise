@@ -20,6 +20,20 @@ measured (published figures disagree).
 
 ### 2026-11-12
 
+- **A gate never holds the model from the others: it measures on the model's gate twin — BUILT, not deployed.**
+  The operator: "gating a collection cannot monopolize the GPU", "AND IT SHOULD BE CLEARLY SHOWN IN THE COLLECTION
+  CARD", and "Leggi encoder is the same normattiva nemo encoding". What happened: legi's gate ran 07:59–08:10Z on
+  vega-nemotron-3-embed-1b, and normattiva-nemo and wikidata stood aside the whole time. It was also redundant: legi
+  borrowed normattiva-nemo's statement but read the batching record from its own file only. Three fixes, each tested:
+  - #574, the batching record is borrowed with the statement.
+  - #575, the check is shown on the cards: running, waiting, or beside.
+  - Branch gate-twin, `app/gate_twin.py`: `<model>--gate` is the model's LocalAI config under another name, made through
+    `GET /api/models/config-json` and `POST /models/import`. It states the same run, measured on the node by München.
+    The gate measures on it and stops it after; for Nemotron f16 that gives back 2,390 MiB. Nobody stands aside, and the
+    per-model look lock no longer turns anyone away.
+  - Fallbacks, logged: no twin, or a twin stating another run, means the gate measures on the shared load as before.
+    When VRAM is short, it is said that LocalAI evicts its least recently used unpinned model for the check.
+
 - **No card run is gated without a stored CPU reference — FIXED, not deployed** (new-collection.md's review finding
   "the gate passes with no CPU comparison when no CPU reference is kept"; invariant 12). Before, an exact run with no
   reference for its weights passed, while one WITH a reference on a level with no line failed, so holding the evidence
