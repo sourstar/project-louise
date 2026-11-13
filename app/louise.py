@@ -1551,8 +1551,13 @@ def _new_dry_run(a, run, recipe: dict, pred, dry, changed: list[str], existing, 
                 cut=cut), probe_item=run_check.PROBE)
             kept_runs = ((run.done("calibrate") or {}).get("reference") or {}).get("runs") or ()
             runs = list(kept_runs) if card.run_id in kept_runs else [card.run_id]
-            out(f"  sample      {int(a.sample)} chunk(s), seed {recreate.sample_seed(run.digest, runs).hex()} "
-                f"(for the run the card states now, {', '.join(runs)}; another run draws another seed)")
+            if recreate.unembedded(a.root, a.name, write_free=True) is None:
+                out(f"  sample      none to draw: {a.name} holds no vector and marks no document embedded, "
+                    f"so nothing is carried that a sample would vouch for (its parts, manifest and text "
+                    f"index are; the new run embeds after its gate)")
+            else:
+                out(f"  sample      {int(a.sample)} chunk(s), seed {recreate.sample_seed(run.digest, runs).hex()} "
+                    f"(for the run the card states now, {', '.join(runs)}; another run draws another seed)")
             out(f"  locks       the carry takes {a.name}'s and {target}'s write locks: "
                 f"`louise node pause {a.name}` first (exit 3 while the worker holds one)")
     else:
@@ -1764,25 +1769,43 @@ def _recreate_carry(a, run, name: str, codex, pred, measured: dict, say) -> None
         # the same request on the same run draws the same chunks (the dry run
         # prints this seed for the run the card states)
         sample_seed = recreate.sample_seed(run.digest, calibrated)
-        with _carry_sample_embed(root, name, codex) as embed:
-            checked = recreate.sample(
-                codex, seed.latest_snapshot(root, name), col.shard_dir_of(root, name), n=int(a.sample),
-                seed=sample_seed, embed=embed,
-                vectors_for=lambda ids: embeddings.vectors_by_chunk_id(ids, collection=local))
-        if checked["verdict"] != "pass":
-            raise recreate.SampleFailed(
-                f"carry: {checked['why']}: the new engine's run does not reproduce {a.name}'s vectors, "
-                f"and nothing was carried (seed {checked['seed']}"
-                + (f"; below: {', '.join(checked.get('below_ids') or ())}" if checked.get("below_ids") else "")
-                + ")")
-        stray = sorted(r for r in checked.get("runs") or () if r and calibrated and r not in calibrated)
-        if stray:
-            raise recreate.SampleFailed(
-                f"carry: the sample was answered by {', '.join(stray)}, not the run calibrate measured "
-                f"({', '.join(sorted(calibrated))}): nothing was carried; run again on one run")
-        say(f"[carry] sample: {checked['exact']} of {checked['checked']} byte-identical, {checked['near']} "
-            f"more within cos {recreate.NEAR}, worst {checked['worst']:.10f} (tolerance "
-            f"{codex.space.tolerance}), over {len(checked['parts'])} part(s)")
+        # A PREDECESSOR THAT HOLDS NO VECTOR (München, 2026-11-13: legi after
+        # her table was lost, her 53,726 embed marks reset to match): nothing
+        # is carried that a sample would vouch for, so there is nothing to
+        # reproduce and the sample is VACUOUS — proven so by A1h's own test
+        # (`carry.unembedded_why_not`: no row in its table, no document marked
+        # embedded, `recreate.unembedded`), never inferred from a sample that drew none. Its parts,
+        # manifest and text index are carried; the new run embeds from scratch
+        # after its gate. A predecessor that holds even one vector is sampled.
+        unembedded = recreate.unembedded(root, a.name)
+        if unembedded is None:
+            checked = {"verdict": "vacuous", "asked": int(a.sample), "checked": 0, "exact": 0, "near": 0,
+                       "worst": None, "parts": [], "seed": sample_seed.hex(),
+                       "why": f"{a.name} holds no vector and marks no document embedded: nothing is "
+                              f"carried that a sample would vouch for"}
+            say(f"[carry] sample: none to draw — {checked['why']}; its parts, manifest and text index "
+                f"are carried, and {name} embeds after its gate")
+        else:
+            with _carry_sample_embed(root, name, codex) as embed:
+                checked = recreate.sample(
+                    codex, seed.latest_snapshot(root, name), col.shard_dir_of(root, name), n=int(a.sample),
+                    seed=sample_seed, embed=embed,
+                    vectors_for=lambda ids: embeddings.vectors_by_chunk_id(ids, collection=local))
+            if checked["verdict"] != "pass":
+                raise recreate.SampleFailed(
+                    f"carry: {checked['why']}: the new engine's run does not reproduce {a.name}'s vectors, "
+                    f"and nothing was carried (seed {checked['seed']}"
+                    + (f"; below: {', '.join(checked.get('below_ids') or ())}" if checked.get("below_ids") else "")
+                    + (f"; {a.name} is not unembedded: {unembedded}" if checked.get("checked") == 0 else "")
+                    + ")")
+            stray = sorted(r for r in checked.get("runs") or () if r and calibrated and r not in calibrated)
+            if stray:
+                raise recreate.SampleFailed(
+                    f"carry: the sample was answered by {', '.join(stray)}, not the run calibrate measured "
+                    f"({', '.join(sorted(calibrated))}): nothing was carried; run again on one run")
+            say(f"[carry] sample: {checked['exact']} of {checked['checked']} byte-identical, {checked['near']} "
+                f"more within cos {recreate.NEAR}, worst {checked['worst']:.10f} (tolerance "
+                f"{codex.space.tolerance}), over {len(checked['parts'])} part(s)")
         need, free = recreate.room(root, a.name, name)
         if free < need:
             raise CodexError(recreate.no_room(a.name, name, need, free))

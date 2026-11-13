@@ -20,6 +20,13 @@ measured (published figures disagree).
 
 ### 2026-11-13
 
+- **Case F carries a predecessor that holds no vector — BUILT, not deployed** (München: legi F's carry exited 1,
+  "not one drawn chunk is held with a vector", legi holding none since her table was lost and her 53,726 embed marks
+  reset to match). When the predecessor holds no vector table row and marks no document embedded (A1h's own test,
+  `recreate.unembedded`), the sample is VACUOUS: nothing is carried that it would vouch for. Its parts, manifest
+  and text index are carried, and the new run embeds after its gate. One mark or one row left means it is sampled,
+  as before, and a sample that draws none still refuses and says why. The dry run says the same.
+
 - **A part whose slice holds "/" is named whole — FIXED, not deployed** (München: `hold check --shards
   kind=article/year=1962/00001` matched nothing and said "this peer holds none of the sampled shards"). Every
   place that took the LAST TWO segments of a part's name now keeps the slice whole: `hold check --shards`

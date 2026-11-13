@@ -466,7 +466,36 @@ def no_room(pred_name: str, name: str, need: int, free: int) -> str:
             f"run this again")
 
 
+def unembedded(root: Path, name: str, *, write_free: bool = False) -> str | None:
+    """Why `name` is not proven to hold no vector — A1h's test,
+    `carry.unembedded_why_not`: no row in its vector table, no document
+    marked embedded — or None when it holds none: then a case F carry has
+    nothing a sample would vouch for (2026-11-13, legi after her table was
+    lost). `write_free` (the dry run): its manifest read so that not a file
+    changes."""
+    from app import spaces
+    from .carry import unembedded_why_not
+    lance, manifest = _tree(root, name, "lance"), Path(root) / name / "state" / "manifest.sqlite"
+    if not manifest.is_file():
+        return "it holds no manifest"
+    if not write_free:
+        return unembedded_why_not(lance, manifest)
+    rows = spaces.known_lance_rows(lance)
+    if rows is None:
+        return "its vector table cannot be read: not proven empty"
+    if rows:
+        return f"its vector table holds {rows} row(s)"
+    marked = _read_write_free(manifest, "SELECT COUNT(*) FROM (SELECT 1 FROM documents WHERE embed_done > 0 LIMIT 1)")
+    if marked is None:
+        return "its manifest cannot be read now: not proven unembedded"
+    return "a document is marked embedded" if marked else None
+
+
 def _documents_write_free(manifest: Path) -> int | None:
+    return _read_write_free(manifest, "SELECT COUNT(*) FROM documents")
+
+
+def _read_write_free(manifest: Path, sql: str) -> int | None:
     """`carry._documents`, writing nothing: a read-only SQLite open of a WAL
     database at rest CREATES its -wal and -shm files (and cannot remove
     them), so where neither exists — no connection is open, every commit is
@@ -479,7 +508,7 @@ def _documents_write_free(manifest: Path) -> int | None:
     at_rest = not any(Path(f"{manifest}{s}").exists() for s in ("-wal", "-shm"))
     con = sqlite3.connect(f"file:{manifest.as_posix()}?mode=ro{'&immutable=1' if at_rest else ''}", uri=True)
     try:
-        return int(con.execute("SELECT COUNT(*) FROM documents").fetchone()[0])
+        return int(con.execute(sql).fetchone()[0])
     except sqlite3.OperationalError:
         return 0                                    # no documents table: nothing held
     except sqlite3.DatabaseError:

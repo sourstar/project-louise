@@ -548,3 +548,47 @@ def test_only_the_swap_waits_with_its_own_exit_and_a_refused_run_is_never_mistak
         "a refusal is 2"
     assert _new(root, _new_recipe(tmp_path)) == SWAP_WAITS, "the swap alone is 4"
     assert (root / "old").is_dir(), "nothing deleted by either"
+
+
+# ---- a predecessor that holds no vector (München, 2026-11-13: legi) -------------
+
+def _unembed(root, name="old", *, marks_too=True):
+    """`name` as legi after her table was lost: no vector table, and (as
+    München reset them to match) no document marked embedded."""
+    import shutil
+    import sqlite3
+    from app import vector_place
+    shutil.rmtree(vector_place.table_dir(root, name))
+    con = sqlite3.connect(root / name / "state" / "manifest.sqlite")
+    try:
+        con.execute("UPDATE documents SET embed_done = 0" if marks_too else
+                    "UPDATE documents SET embed_done = 1 WHERE rowid = (SELECT MIN(rowid) FROM documents)")
+        con.commit()
+    finally:
+        con.close()
+
+
+def test_a_predecessor_holding_no_vector_is_carried_with_no_sample_to_draw(held, steps, tmp_path, capsys):
+    root, _old, _chunks = held
+    _unembed(root)
+    recipe_path = _new_recipe(tmp_path)
+    assert _new(root, recipe_path, "--dry-run") == 0
+    assert "sample      none to draw: old holds no vector and marks no document embedded" in capsys.readouterr().out
+    assert _new(root, recipe_path) == SWAP_WAITS, "carried, gated, and waiting for the operator's forget"
+    assert steps["order"] == ["calibrate", "create", "carry", "cpu-reference", "gate"], "no sample asked"
+    assert steps["encoder"].texts == 0
+    assert recreate.counts(root, "old.next") == recreate.counts(root, "old") == \
+        {"documents": recreate.counts(root, "old")["documents"], "vectors": 0}
+    kept = json.loads(wf.progress_path("old").read_text())["steps"]["carry"]["result"]
+    assert kept["sample"]["verdict"] == "vacuous" and kept["sample"]["checked"] == 0
+    assert "nothing is carried that a sample would vouch for" in capsys.readouterr().err
+
+
+def test_marks_with_no_vector_are_not_vacuous_and_carry_nothing(held, steps, tmp_path, capsys):
+    root, _old, _chunks = held
+    _unembed(root, marks_too=False)                     # a document still says it is embedded
+    assert _new(root, _new_recipe(tmp_path)) == 1
+    assert "carry" not in steps["order"]
+    err = capsys.readouterr().err
+    assert "nothing to reproduce" in err and "a document is marked embedded" in err
+    assert "carry" not in json.loads(wf.progress_path("old").read_text())["steps"]
