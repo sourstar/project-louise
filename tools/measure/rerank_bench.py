@@ -631,9 +631,31 @@ class Arm:
     queries: str = "live"
 
     def query_for(self, collection: str, query: str) -> str:
-        instruction = (self.instructions or {}).get(collection) if self.instructions is not None \
+        instruction = _instruction_of(self.instructions, collection) if self.instructions is not None \
             else self.instruction
         return self.form.format(instruction=instruction, query=query) if instruction else query
+
+
+def _plugin_of(collection: str) -> str | None:
+    from app import collections as collections_mod
+    try:
+        c = collections_mod.by_name(collection)
+    except Exception:                       # noqa: BLE001 — no node config: the name alone
+        return None
+    return getattr(c, "plugin", None) if c is not None else None
+
+
+def _instruction_of(table: dict[str, str] | None, collection: str, *,
+                    plugin_of: Callable[[str], str | None] = _plugin_of) -> str | None:
+    """The instruction for a collection: by its NAME where the table has it,
+    else by its PLUGIN (2026-11-13: the operator renamed normattiva-nemo to
+    "Normattiva" and normattiva to "normattiva_old"; a name is the node's
+    local choice, the plugin is what the collection holds)."""
+    table = table or {}
+    if collection in table:
+        return table[collection]
+    plugin = plugin_of(collection)
+    return table.get(plugin) if plugin else None
 
 
 def post_rerank(recipe: Any, query: str, documents: list[str], timeout: float) -> list[float]:

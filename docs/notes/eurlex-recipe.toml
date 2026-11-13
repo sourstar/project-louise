@@ -7,15 +7,21 @@
 # collection in an existing space" — legi's, the shared legal space on
 # Nemotron-3-Embed-1B (operator, 2026-11-08: legi, neuris and eurlex in ONE
 # space). The space block below is byte-identical in the three legal recipes;
-# `--space-from legi` holds this recipe to legi's space by `space_id`, and
-# the CPU reference is copied, never computed twice. Dry run first:
+# `--space-from legi_F` holds this recipe to legi's space by `space_id`, and
+# the CPU reference is copied, never computed twice. (The node's names since
+# 2026-11-13, the operator's: legi is "legi_F" after her re-creation,
+# normattiva-nemo "Normattiva", normattiva "normattiva_old", neuris
+# "NeuRIS"; a name is local, the space is the same.) Dry run first:
 #
 #   louise hold collection new eurlex --recipe /config/recipes/eurlex-recipe.toml \
-#       --name eurlex --space-from legi --cpu-model vega-nemotron-3-embed-1b-cpu --dry-run
+#       --name eurlex --space-from legi_F --cpu-model vega-nemotron-3-embed-1b-cpu --dry-run
 #   louise hold collection new eurlex --recipe /config/recipes/eurlex-recipe.toml \
-#       --name eurlex --space-from legi --cpu-model vega-nemotron-3-embed-1b-cpu
+#       --name eurlex --space-from legi_F --cpu-model vega-nemotron-3-embed-1b-cpu
 #
-# (the exact flags are fixed by the case-E build; case E is not built yet.)
+# Then (operator, 2026-11-13: "download all languages, embeds only the
+# selected languages"):
+#   louise hold config apply eurlex --set slices=all \
+#       --set embed_slices=lang=it,lang=fr,lang=de,lang=en
 #
 # THE COLLECTION FILE (07 §7.8) names the languages this node holds and
 # embeds. Each language is a slice the origin delivers whole (`lang=<code>`,
