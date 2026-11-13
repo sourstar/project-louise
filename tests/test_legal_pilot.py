@@ -221,6 +221,9 @@ def test_the_reranker_is_the_node_s_none_or_one_lent_and_only_inside_the_run(mon
     target = SimpleNamespace(name="normattiva-nemo", reranker=None)
     with lp.reranker_override("configured"):
         assert collections_mod.reranker_for is real
+    with lp.reranker_override("configured", donor) as named:
+        assert named is lent and collections_mod.reranker_for is real, \
+            "configured is untouched, and NAMED for the run's record (2026-11-13)"
     with lp.reranker_override("off"):
         assert collections_mod.reranker_for(target) is None and collections_mod.reranker_for(donor) is None
     with lp.reranker_override("from:gutenberg") as got:
