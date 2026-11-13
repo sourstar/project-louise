@@ -354,6 +354,16 @@ a bias toward the challengers (each arm's share of top-k records from the builde
 for pools built from now on); no arm has the query language, the plan, translations or the catalogue
 leg.
 
+**Tonight's arms and the rule as applied (2026-11-13).** A fourth arm, `small` (operator: yes): the
+shipped layer with `max_tokens` 2000 instead of 8175 and nothing else changed (header, outline,
+tokenizer, version as shipped), so against `shipped` it measures the chunk size alone — about
+`akn_article`'s 8,000 characters of Italian, Normattiva-DAR's granularity. Passed as a custom arm
+(`--arm 'small={"chunker":"legal_article","version":3,"params":{…,"max_tokens":2000,…}}'`), no new
+preset, so the code and its tag stay as merged. Holm over the three arms against `shipped`. The legal
+session's reading, the same for every arm: the shipped cut stays unless an arm is BETTER by δ (`drop`:
+that arm replaces it); `keep` otherwise; undecided goes to the 895 questions. A smaller unit costs
+several times the vectors, so it must win, not tie.
+
 ### 5.2 The chunker per language (2026-11-13, operator: "Build the per-language test on LEMUR")
 
 The operator's hypothesis: the best portioning follows structure and content, not language, so the
@@ -383,6 +393,15 @@ language, and the text leg's analyzers.
 
 LEMUR's caution stays: a title-shaped task (finding an act from its description). EUR-Lex-Sum asks the
 same with content-shaped queries once its licence is acknowledged.
+
+**The sets on the node (München, 2026-11-13, `/data/bakeoff-lemur-<code>`, test split, one row per
+act, Apache-2.0):** it 225 acts, fr 224, de 226, en 227, fi 215, hu 192, el 100 (1.7 MB against ~10 MB
+for the others). LEMUR splits per language, and older acts lack some languages (its card), so the
+parallel set is the intersection the tool counts — Greek caps any set it is in at 100. The deciding
+languages are it, fr, de and en, the slices the shared legal space embeds (the legal session); hu, fi
+and el are a second set, for the window and the heading rules. If the four share well under ~150 acts,
+the tool moves to LEMUR's `full` split before anything is embedded: no model here is trained on LEMUR,
+so its test split protects nothing in this measurement.
 
 ## 6. What changes after the decisions
 
