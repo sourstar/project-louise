@@ -501,15 +501,22 @@ def counts(root: Path, name: str, *, write_free: bool = False) -> dict[str, int 
             "vectors": spaces.known_lance_rows(vector_place.table_dir(root, name))}
 
 
-def prove_copy(root: Path, pred_name: str, name: str) -> dict[str, Any]:
+def prove_copy(root: Path, pred_name: str, name: str, *, vectors: bool = True) -> dict[str, Any]:
     """After the carry: the vector table and the text index are the
     predecessor's byte for byte (`tree_digest`, both sides), and the two
     manifests hold as many documents. The manifest itself is re-pinned by
     the carry and is held by its count, as hold/carry.py holds it. Raises
-    `CopyMismatch` naming what differs."""
+    `CopyMismatch` naming what differs. `vectors=False` (a predecessor
+    holding none, `unembedded_why_not`): no vector table is carried, and
+    both sides are held to 0 rows instead of to one tree (an absent table
+    and an empty one hold the same nothing)."""
     out: dict[str, Any] = {"from": counts(root, pred_name), "to": counts(root, name)}
     bad = [k for k in ("documents", "vectors") if out["from"][k] != out["to"][k]]
-    for tree in ("lance", "index"):
+    if not vectors:
+        bad += [f"{side} holds {out[side]['vectors']} vector(s)" for side in ("from", "to")
+                if out[side]["vectors"] != 0]
+        out["lance"] = {"files": 0, "bytes": 0, "sha256": None, "carried": False}
+    for tree in (("lance", "index") if vectors else ("index",)):
         a = tree_digest(_tree(root, pred_name, tree))
         b = tree_digest(_tree(root, name, tree))
         out[tree] = b

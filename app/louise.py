@@ -1764,30 +1764,48 @@ def _recreate_carry(a, run, name: str, codex, pred, measured: dict, say) -> None
         # the same request on the same run draws the same chunks (the dry run
         # prints this seed for the run the card states)
         sample_seed = recreate.sample_seed(run.digest, calibrated)
-        with _carry_sample_embed(root, name, codex) as embed:
-            checked = recreate.sample(
-                codex, seed.latest_snapshot(root, name), col.shard_dir_of(root, name), n=int(a.sample),
-                seed=sample_seed, embed=embed,
-                vectors_for=lambda ids: embeddings.vectors_by_chunk_id(ids, collection=local))
-        if checked["verdict"] != "pass":
+        # A PREDECESSOR HOLDING NO VECTOR (legi, 2026-11-13: her table lost
+        # with the forget of 11-12 19:30Z, every embed mark reset): no vector
+        # is carried, so there is none to reproduce — the sample vouches for
+        # the vectors a carry TAKES, and it takes none. Proven as A1h proves
+        # it (`carry.unembedded_why_not`: no row in the table AND no document
+        # marked embedded); a table that cannot be read is not proven empty.
+        # One with vectors whose draw finds none held still fails, as before.
+        sp = carry_mod._paths(root, a.name)
+        vectorless = carry_mod.unembedded_why_not(sp["lance"], sp["manifest"]) is None
+        if vectorless:
+            checked = {"verdict": "vacuous", "asked": int(a.sample), "checked": 0, "exact": 0, "near": 0,
+                       "worst": None, "parts": [], "seed": sample_seed.hex(), "runs": [],
+                       "why": f"{a.name} holds no vector (no row, no document marked embedded): none is "
+                              f"carried, so none is reproduced; {name} embeds from zero"}
+        else:
+            with _carry_sample_embed(root, name, codex) as embed:
+                checked = recreate.sample(
+                    codex, seed.latest_snapshot(root, name), col.shard_dir_of(root, name), n=int(a.sample),
+                    seed=sample_seed, embed=embed,
+                    vectors_for=lambda ids: embeddings.vectors_by_chunk_id(ids, collection=local))
+        if vectorless:
+            say(f"[carry] sample: none — {checked['why']}")
+        elif checked["verdict"] != "pass":
             raise recreate.SampleFailed(
                 f"carry: {checked['why']}: the new engine's run does not reproduce {a.name}'s vectors, "
                 f"and nothing was carried (seed {checked['seed']}"
                 + (f"; below: {', '.join(checked.get('below_ids') or ())}" if checked.get("below_ids") else "")
                 + ")")
         stray = sorted(r for r in checked.get("runs") or () if r and calibrated and r not in calibrated)
-        if stray:
+        if stray and not vectorless:
             raise recreate.SampleFailed(
                 f"carry: the sample was answered by {', '.join(stray)}, not the run calibrate measured "
                 f"({', '.join(sorted(calibrated))}): nothing was carried; run again on one run")
-        say(f"[carry] sample: {checked['exact']} of {checked['checked']} byte-identical, {checked['near']} "
-            f"more within cos {recreate.NEAR}, worst {checked['worst']:.10f} (tolerance "
-            f"{codex.space.tolerance}), over {len(checked['parts'])} part(s)")
+        if not vectorless:
+            say(f"[carry] sample: {checked['exact']} of {checked['checked']} byte-identical, {checked['near']} "
+                f"more within cos {recreate.NEAR}, worst {checked['worst']:.10f} (tolerance "
+                f"{codex.space.tolerance}), over {len(checked['parts'])} part(s)")
         need, free = recreate.room(root, a.name, name)
         if free < need:
             raise CodexError(recreate.no_room(a.name, name, need, free))
-        out = carry_mod.carry(root, a.name, name, copy=True, apply=True, log=say)
-        proof = recreate.prove_copy(root, a.name, name)
+        out = carry_mod.carry(root, a.name, name, copy=True, apply=True, unembedded=vectorless, log=say)
+        proof = recreate.prove_copy(root, a.name, name, vectors=not vectorless)
         ack = recreate.carry_ack(root, a.name, name, codex)
         run.record("carry", {
             "from": {"name": a.name, "collection_id": pred.collection_id}, "parts": parts,
