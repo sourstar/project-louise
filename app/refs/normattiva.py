@@ -225,13 +225,13 @@ class NormattivaRefSource:
         acquisition lays it out — read member by member, heads only."""
         from ..plugins import eli as eli_mod
         from ..plugins.normattiva.source import _MEMBER, version_key
-        root = Path(state.ref_root) / "normattiva"
-        if not root.is_dir():
+        roots = state.corpus_roots("normattiva")      # by the collections held (base.RefSyncState)
+        if not roots:
             return
         acts: dict[str, dict] = {}
         versions: list[dict] = []
         from app.plugins import walk
-        for zpath in walk.files(root, "*.zip"):        # through links (walk.py)
+        for root, zpath in ((r, z) for r in roots for z in walk.files(r, "*.zip")):   # through links
             try:
                 zf = zipfile.ZipFile(zpath)
             except (zipfile.BadZipFile, OSError):

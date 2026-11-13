@@ -345,7 +345,10 @@ louise dev                                                             operator 
                        lost and gaps per minute, alone or not — and the `hold rage-settings record` command when it ran alone ≥ 10 min
   embedder-profile     the concurrency an endpoint sustains
   migrate schema [<collection>] [--no-backup]                          apply pending schema changes to a state database; a .bak copy first unless --no-backup; writes; never runs on its own
-  refs-sync            reference tables from their origins; writes
+  refs-sync            reference tables from their origins; writes. A source that reads a plugin's corpus (normattiva, legi, neuris,
+                       eurlex, wikidata) reads it from the origins of the collections of that plugin held here, each once by its
+                       physical directory, and from `<src>/<plugin>` only for a plugin none of them carries (amended 2026-11-13: a
+                       rename moves a collection's origin with its name)
   wikidata-classes <dump> [--candidate roots.json]                     why the family map gives a class its family (its shortest P279 path to each family's root), and what candidate roots would move, estimated from the codes pass (added 2026-10-24)
   wikidata-regroup <collection> [--row-group N] [--workers N]         the collection's wikidata pack rewritten file by file with small row groups (default 64), the lines byte for byte; resumable, safe beside a records build; writes the pack only
   genesis recheck <collection>                                         reopen final archive shards that still have documents the archive could serve; writes

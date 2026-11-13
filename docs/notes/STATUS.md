@@ -18,6 +18,15 @@ build at 12 cores, the GPU uncapped. The card's noise (operator): 0.2 sone
 idle, 3.1 sone at full load, coil whine ~0.9 sone; its fan range is being
 measured (published figures disagree).
 
+### 2026-11-13
+
+- **Reference sources find their plugin's corpus by the collections held — FIXED, not deployed** (München, after
+  the operator's renames: legi → legi_F, neuris → NeuRIS, normattiva-nemo → Normattiva). The sources read
+  `<src>/normattiva`, `/legi`, `/neuris`, `/eurlex`, `/wikidata` by name, and a rename moves a collection's origin
+  with its name. Now `dev refs-sync` reads each plugin's corpus from the origins of its held collections, each
+  once by its physical directory (normattiva_old and Normattiva share one), and `<src>/<plugin>` only for a plugin
+  none of them carries.
+
 ### 2026-11-12
 
 - **A statement older than its run's CPU reference no longer stands in for the check — FIXED, not deployed**

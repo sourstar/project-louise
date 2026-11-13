@@ -206,12 +206,13 @@ class EurlexRefSource:
         """Every unit under `<ref_root>/eurlex`: a version row each, an act
         row per original — its title in the first of `_TITLE_LANGUAGES`
         held, else the first language in name order."""
-        root = Path(state.ref_root) / "eurlex"
-        if not root.is_dir():
+        roots = state.corpus_roots("eurlex")          # by the collections held (base.RefSyncState)
+        if not roots:
             return
         acts: dict[str, tuple[int, dict]] = {}
         versions: list[dict] = []
-        for lang_dir in sorted(p for p in root.iterdir() if p.is_dir() and p.name.startswith("lang=")):
+        for lang_dir in (p for root in roots
+                         for p in sorted(root.iterdir()) if p.is_dir() and p.name.startswith("lang=")):
             lang = lang_dir.name.partition("=")[2]
             rank = _TITLE_LANGUAGES.index(lang) if lang in _TITLE_LANGUAGES else len(_TITLE_LANGUAGES)
             for year in sorted(p for p in lang_dir.iterdir() if p.is_dir()):

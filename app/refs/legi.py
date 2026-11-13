@@ -267,9 +267,9 @@ class LegiRefSource:
     def input_mtime(state: RefSyncState) -> float:
         """The newest tarball's mtime under `<ref_root>/legi`: a new
         increment re-syncs (app/refs/store.py)."""
-        root = Path(state.ref_root) / "legi"
         from ..plugins import walk
-        return max((p.stat().st_mtime for p in walk.files(root, "*.tar.gz")), default=0.0)
+        return max((p.stat().st_mtime for root in state.corpus_roots("legi")
+                    for p in walk.files(root, "*.tar.gz")), default=0.0)
 
     def sync(self, state: RefSyncState) -> Iterator[RefRecordBatch]:
         """The plugin's effective state under `<ref_root>/legi` (the plugin's
@@ -278,11 +278,11 @@ class LegiRefSource:
         from ..plugins.legi import SOURCE
         from ..plugins.legi import source as lsrc
         from ..plugins.legi import xml as lx
-        root = Path(state.ref_root) / "legi"
-        if not root.is_dir():
+        roots = state.corpus_roots("legi")            # by the collections held (base.RefSyncState)
+        if not roots:
             return
         batches: dict[str, list[dict]] = {TEXTE.name: [], ARTICLE.name: [], SECTION.name: []}
-        for ref in SOURCE.discover(DiscoverState(corpus_root=root)):
+        for root, ref in ((r, x) for r in roots for x in SOURCE.discover(DiscoverState(corpus_root=r))):
             if ref.error or ref.scope != "document":
                 continue
             try:

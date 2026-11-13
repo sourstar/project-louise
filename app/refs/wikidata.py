@@ -69,21 +69,28 @@ def kind_of(entity_id: str) -> str:
     return "item" if entity_id[0] == "Q" else "property"
 
 
-def current_pack(ref_root: Path) -> tuple[Path, dict] | None:
-    """(dump, its pack meta) of the newest dump under `<ref_root>/wikidata`
-    whose pack is complete for the dump as it is now; None when there is
-    none — a dump still downloading, or a pack still building, is not
-    synced from, and nothing is an error."""
+def current_pack(ref_root: "Path | RefSyncState") -> tuple[Path, dict] | None:
+    """(dump, its pack meta) of the newest dump whose pack is complete for
+    the dump as it is now, among the wikidata collections held here
+    (`RefSyncState.corpus_roots`, 2026-11-13: by the collection, never by a
+    folder name), else under `<ref_root>/wikidata`; None when there is none
+    — a dump still downloading, or a pack still building, is not synced
+    from, and nothing is an error."""
     from ..plugins.wikidata import pack
-    from ..plugins.wikidata.source import find_dumps
-    root = Path(ref_root) / CORPUS_DIR
-    if not root.is_dir():
+    from ..plugins.wikidata.source import _DUMP_RE, find_dumps
+    state = ref_root if isinstance(ref_root, RefSyncState) else RefSyncState(ref_root=Path(ref_root))
+    found = []
+    for root in state.corpus_roots(CORPUS_DIR):
+        for dump in find_dumps(root):
+            meta = pack.read_meta(dump)
+            if meta and pack.is_complete(dump, tuple(meta.get("languages") or ())):
+                m = _DUMP_RE.match(dump.name)
+                found.append(((m.group(1) if m else ""), dump, meta))
+                break                   # the newest complete one of this corpus
+    if not found:
         return None
-    for dump in find_dumps(root):
-        meta = pack.read_meta(dump)
-        if meta and pack.is_complete(dump, tuple(meta.get("languages") or ())):
-            return dump, meta
-    return None
+    _, dump, meta = max(found, key=lambda x: x[0])   # the newest dump date; the first corpus on a tie
+    return dump, meta
 
 
 def label_table(dump: Path) -> Path:
@@ -117,7 +124,7 @@ class WikidataRefSource:
         table or its meta, whichever is newer; 0 when there is none. The
         store re-syncs when this is newer than the last sync (a new dump's
         pack completed), and skips otherwise."""
-        found = current_pack(state.ref_root)
+        found = current_pack(state)
         if found is None:
             return 0.0
         from ..plugins.wikidata import pack
@@ -129,7 +136,7 @@ class WikidataRefSource:
         """The label table of the current pack, read in id order so an
         entity's languages arrive together; one row per entity, in batches
         of `BATCH`. An id that is not Q<n> or P<n> is skipped, never stored."""
-        found = current_pack(state.ref_root)
+        found = current_pack(state)
         if found is None:
             return
         dump, meta = found

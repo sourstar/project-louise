@@ -460,8 +460,27 @@ class RefRecordBatch:
 class RefSyncState:
     """Parallels DiscoverState for CorpusSource. Real HTTPS-dump acquisition
     is P0.4's AcquisitionSpec job; for now a ReferenceSource just reads
-    fixture/operator-supplied files under ref_root."""
+    fixture/operator-supplied files under ref_root.
+
+    A SOURCE THAT READS A PLUGIN'S CORPUS FINDS IT BY THE COLLECTIONS HELD
+    (2026-11-13, München: the operator renamed legi → legi_F and neuris →
+    NeuRIS, and a rename moves a collection's origin with its name, so the
+    sources' `<ref_root>/legi` and `<ref_root>/neuris` no longer found them —
+    a lookup by name; CLAUDE.md keys bookkeeping on physical identity):
+    `corpora`, plugin → the origin directories of the collections of that
+    plugin held here, each once by its physical identity
+    (refs/store.py `held_corpora`). A plugin no held collection carries
+    falls back to the folder `<ref_root>/<plugin>`, the layout before."""
     ref_root: Path
+    corpora: dict[str, tuple[Path, ...]] | None = None
+
+    def corpus_roots(self, plugin: str) -> tuple[Path, ...]:
+        """Where `plugin`'s corpus is read from, in a fixed order."""
+        held = (self.corpora or {}).get(plugin)
+        if held:
+            return tuple(held)
+        legacy = Path(self.ref_root) / plugin
+        return (legacy,) if legacy.is_dir() else ()
 
 
 @dataclass(frozen=True)
