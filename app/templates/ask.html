@@ -7,7 +7,7 @@
   <label>Collection scope</label>
   <div id="scope-chips">
     {% for c in collections %}
-    <span class="chip on" data-name="{{ c.name }}" onclick="toggleChip(this)">{{ c.name }}</span>
+    <span class="chip on" data-name="{{ c.name }}" onclick="toggleChip(this)">{{ label(c.name) }}</span>
     {% endfor %}
   </div>
   {% if annotations %}
@@ -19,7 +19,7 @@
   <div id="annotation-chips">
     {% for a in annotations %}
     <span class="chip ann on" data-name="{{ a.name }}" onclick="toggleChip(this)"
-          title="{{ a.title }} — annotates {{ a.target or 'a collection not held here' }} from snapshot {{ a.from_snapshot }}">{{ a.name }}{% if a.target %} <small>→ {{ a.target }}</small>{% endif %}</span>
+          title="{{ a.title }} — annotates {{ label(a.target) if a.target else 'a collection not held here' }} from snapshot {{ a.from_snapshot }}">{{ label(a.name) }}{% if a.target %} <small>→ {{ label(a.target) }}</small>{% endif %}</span>
     {% endfor %}
   </div>
   {% endif %}

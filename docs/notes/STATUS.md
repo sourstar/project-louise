@@ -20,6 +20,19 @@ measured (published figures disagree).
 
 ### 2026-11-13
 
+- **A collection's shown name is apart from its folders — BUILT, not deployed** (operator: "the name tag shall be
+  independent from the folders naming … I shall be able to rename the 'gui' tag without affecting the whole
+  structure"; sisters "univoque (post fix?)"; "chunking may differ"). Every page shows one name
+  (`app/display_names.py`), in this order:
+  - the collection file's `title`;
+  - else the Codex's title up to " — ";
+  - else the key.
+
+  A name two collections share gets " · " plus the collection_id's first 6 hex (Git's abbreviated names), unique
+  whatever differs between sisters. The card's "rename…" writes `title` only; no folder, path, manifest or cache moves.
+  `hold` commands also take the shown name. The local name stays the folders', files', CLI's and API's. Tonight's folder
+  renames stay; the four big collections are not renamed on disk, and their title is set instead.
+
 - **Annotations: "update by itself" checkbox; `config apply` finds an annotations collection — BUILT, not deployed**
   (operator: "I want a checkbox in the gui"; München: `config apply wikipedia-articles --set method=…` wrote the file,
   then said "no such collection", exit 2). The card shows the checkbox where a method can make the claims. It is ticked

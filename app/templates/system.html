@@ -35,7 +35,7 @@
   <div class="note" style="margin-top:12px">Tier 2 — collections/*.toml (file value):</div>
   <table><tr><th>collection</th><th>plugin</th><th>profile</th><th>embed_mode</th><th>acquire_enabled</th><th>license_ack</th><th>encoder — and who named it</th><th>reranker</th></tr>
     {% for c in effective.tier2 %}
-    <tr><td>{{ c.collection }}</td><td>{{ c.plugin }}</td><td>{{ c.profile or '(default)' }}</td>
+    <tr><td title="local name {{ c.collection }}">{{ label(c.collection) }}</td><td>{{ c.plugin }}</td><td>{{ c.profile or '(default)' }}</td>
       <td>{{ c.embed_mode or '(default)' }}</td><td>{{ c.acquire_enabled }}</td><td>{{ c.license_ack }}</td>
       <td>{{ c.embed_recipe }}</td><td>{{ c.reranker }}</td></tr>
     {% endfor %}
@@ -99,7 +99,7 @@
   <summary><h2>Boot-validation report</h2> <span class="note">{% if boot_failed %}<span class="badge err">{{ boot_failed|length }} FAIL</span> of {{ boot_report|length }}{% else %}{{ boot_report|length }} ok{% endif %}</span></summary>
   <table><tr><th>collection</th><th>status</th><th>message</th></tr>
     {% for r in boot_report %}
-    <tr><td>{{ r.collection }}</td>
+    <tr><td title="local name {{ r.collection }}">{{ label(r.collection) }}</td>
       <td><span class="badge {{ 'ok' if r.ok else 'err' }}">{{ 'ok' if r.ok else 'FAIL' }}</span></td>
       <td>{{ r.message }}</td></tr>
     {% endfor %}

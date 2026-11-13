@@ -50,6 +50,7 @@ from . import (auth, cancel, collections as collections_mod, config, db, discove
                 node_state, platform_config, query_service, reader, relay, retrieval, spaces)
 from . import translate as mt
 from . import collection_file
+from . import display_names
 from .ask_pdf import AskPdf
 from . import site_title as site_title_mod
 # the collection file's one writer, moved to app/collection_file.py (2026-10-25);
@@ -102,6 +103,11 @@ TEMPLATES.env.globals["asset_v"] = _asset_version()
 # Louise', customizable is the settings"): platform.toml [node] title, read at
 # each page (app/site_title.py)
 TEMPLATES.env.globals["site_title"] = site_title_mod.title
+# A COLLECTION'S DISPLAY NAME (operator, 2026-11-13: "the name tag shall be
+# independent from the folders naming"): the file's title, else the Codex's
+# short title, unique on the node (app/display_names.py) — every page shows
+# it where it showed the local name, which stays the folders' and the CLI's
+TEMPLATES.env.globals["label"] = display_names.label
 # The node's four modes, their words and what each runs — the ONE table the
 # worker reads (app/node_state.py: MODE_RUNS), as template GLOBALS: a page
 # cannot be rendered without them, so a button cannot promise what the node
@@ -3535,6 +3541,29 @@ def collection_embed_slices(name: str, body: EmbedSlicesBody):
     return {"ok": True, "persisted": True,
             "embed_slices": list(after.embed_slices) if after is not None and after.embed_slices else None,
             "line": view["line"] if view else None}
+
+
+class TitleBody(BaseModel):
+    title: str | None = None
+
+
+@admin_router.post("/library/{name}/title")
+def collection_title(name: str, body: TitleBody):
+    """The card's "rename…" (operator, 2026-11-13: "I shall be able to rename
+    the 'gui' tag without affecting the whole structure"): the name every
+    page shows, written as the collection file's `title` through its one
+    writer — no folder, path, manifest or cache is touched, and the key stays
+    the local name. Empty: the Codex's name again (app/display_names.py)."""
+    _held_or_404(name)
+    title = (body.title or "").strip()
+    if "\n" in title or "\r" in title:
+        raise HTTPException(400, "a name is one line")
+    try:
+        collection_file.set_values(name, {"title": title})
+    except collection_file.SetRefused as e:
+        raise HTTPException(400, str(e)) from None
+    display_names.invalidate()
+    return {"ok": True, "persisted": True, "title": title or None, "label": display_names.label(name)}
 
 
 class MethodBody(BaseModel):

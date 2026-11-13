@@ -557,3 +557,35 @@ def test_an_annotations_card_offers_update_by_itself_where_a_method_fits(client,
     assert r.status_code == 200 and r.json()["method"] is None
     assert "method" not in toml_path.read_text(encoding="utf-8")
     assert client.post("/admin/library/gutenberg/method", json={"method": "fake-matcher"}).status_code in (400, 404)
+
+
+def test_rename_writes_only_the_title_and_every_page_shows_it(client, monkeypatch):
+    """Operator, 2026-11-13: "I shall be able to rename the 'gui' tag without
+    affecting the whole structure". The card's rename… writes the collection
+    file's `title` and nothing else: the folder, the file's name and the key
+    stay; the Library's heading and the Ask chip show the new name, with the
+    local name in the heading's tooltip; empty gives the Codex's name back."""
+    from app import display_names
+    _an_annotations_collection(monkeypatch)
+    display_names.invalidate()
+    root = collections_mod.louise_root() / "collections"
+    before = sorted(p.name for p in root.iterdir())
+    r = client.post("/admin/library/pubmed-same-work/title", json={"title": "Same works"})
+    assert r.status_code == 200 and r.json()["label"] == "Same works", r.text
+    toml_path = collections_mod.config_toml_path("pubmed-same-work")
+    assert 'title = "Same works"' in toml_path.read_text(encoding="utf-8")
+    assert sorted(p.name for p in root.iterdir()) == before, "no folder moved"
+    html = client.get("/admin/library").text
+    card = html[html.index('data-collection="pubmed-same-work"'):]
+    assert ('<h2><span data-label title="local name pubmed-same-work: its folders and the command line '
+            'use it; Options › rename… changes only this name">Same works</span>') in card
+    assert "renameCollection('pubmed-same-work', &#34;Same works&#34;)" in card
+    ask = client.get("/ask").text
+    chip = ask[ask.index('data-name="pubmed-same-work"'):]
+    assert chip[chip.index(">") + 1:].lstrip().startswith("Same works"), "the Ask page's annotations chip"
+    assert client.post("/admin/library/pubmed-same-work/title", json={"title": "a\nb"}).status_code == 400
+    r = client.post("/admin/library/pubmed-same-work/title", json={"title": ""})
+    assert r.status_code == 200 and r.json()["title"] is None
+    assert "title" not in toml_path.read_text(encoding="utf-8")
+    (held,) = collections_mod.load_annotations()
+    assert r.json()["label"] == display_names.short_title(held.codex.descriptive.title)
