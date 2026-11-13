@@ -291,6 +291,9 @@ class Act:
     modifications: list[dict]           # a consolidation's CLG.MDFO/MDFC marks, in order
     instructions: list[dict]            # any other processing instruction but PAGE
     wrapper: Any                        # the wrapper, whole
+    #: every element's ATTRIBUTES in the body and each annex item, in
+    #: document order: `{file: [[tag, {name: value}], …]}` (`attributes_of`)
+    markup: dict = field(default_factory=dict)
 
 
 def iso(d: str | None) -> str | None:
@@ -444,6 +447,22 @@ _CONS_DOC_KNOWN = {"BIB.INSTANCE", "FAM.COMP", "TITLE", "PREAMBLE", "ENACTING.TE
                    "CONS.ANNEX"}
 
 
+def attributes_of(root: ET.Element) -> list[list]:
+    """`[[tag, {name: value}], …]`: every element of `root` (itself first)
+    that carries attributes, in document order. INVARIANT 11 PAST THE WORDS
+    (München, 2026-11-14, comparing EUR-Lex's forms; the test that read every
+    attribute of every item): the text renderer keeps each element's words
+    but dropped its attributes, and those are assertions about the act — a
+    date's ISO form (DATE ISO), a reference's Official Journal coordinates
+    (REF.DOC.OJ COLL, NO.OJ, DATE.PUB, PAGE.FIRST), a paragraph's identifier
+    (PARAG IDENTIFIER), a list's numbering (LIST TYPE), a table's columns
+    (TBL COLS, CELL COL), the act's own flags (ACT NNC). Typography (HT TYPE,
+    QUOT.START CODE) is kept too: the line between markup and assertion is
+    not drawn by guess. The n-th entry of a tag is the n-th element of that
+    tag in the item, so a reader aligns them with the text."""
+    return [[e.tag, dict(e.attrib)] for e in root.iter() if isinstance(e.tag, str) and e.attrib]
+
+
 def parse(files: dict[str, bytes]) -> Act:
     """The manifestation's items by name → the act. Raises FormexError when
     the wrapper, the body or an annex it names is missing or unreadable."""
@@ -452,6 +471,7 @@ def parse(files: dict[str, bytes]) -> Act:
     if bname not in files:
         raise FormexError(f"the wrapper names the body {bname}, which is not among the items")
     root = _parse(files[bname], bname)
+    markup: dict[str, list] = {bname: attributes_of(root)}
     col = Collect()
     pub = wrapper.find("./PUBLICATION.REF/DATE")
     meta: dict[str, Any] = {}
@@ -509,6 +529,7 @@ def parse(files: dict[str, bytes]) -> Act:
         if name not in files:
             raise FormexError(f"the wrapper names the annex {name}, which is not among the items")
         a = _parse(files[name], name)
+        markup[name] = attributes_of(a)
         if a.tag != "ANNEX":
             meta.setdefault("sub_documents", []).append({"file": name, a.tag: tree(a)})
             continue
@@ -529,7 +550,7 @@ def parse(files: dict[str, bytes]) -> Act:
                base_celex=base_celex, recitals=recitals, articles=articles, annexes=annexes,
                meta=meta, notes=col.notes, references=col.references,
                modifications=col.modifications, instructions=col.instructions,
-               wrapper=tree(wrapper))
+               wrapper=tree(wrapper), markup={k: v for k, v in markup.items() if v})
 
 
 def sections(act: Act) -> list[tuple[str, str]]:

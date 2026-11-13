@@ -197,6 +197,8 @@ EXTRA_KEYS = tuple(k for k in eli.EXTRA_KEYS if k != "eli_uri_schema") + (
     # the Formex manifestation
     "items", "body_file", "wrapper_file", "formex_wrapper", "formex", "consleg",
     "articles", "annexes", "notes", "references", "modifications", "instructions",
+    # every attribute of the body and the annexes, in document order (formex.attributes_of)
+    "markup",
     # the CDM notice
     "notice_kind", "notice_decoding", "cdm_relations", "cdm_notice",
 )
@@ -363,8 +365,11 @@ class EurlexSource:
     #: app/backend.py: a record is a unit directory, read where it lies
     backend = (OriginForm("the Cellar units (Formex items and the branch notice)", Template.MEMBER),)
     protocol_version = PROTOCOL_VERSION
-    #: 1 on 2026-11-08: no collection exists, so every bump before `create` is free
-    PARSER_VERSION = 1
+    #: 1 on 2026-11-08. 2 on 2026-11-14: every attribute of the body and the
+    #: annexes kept (`markup`; invariant 11 past the words, formex.attributes_of).
+    #: eurlex was created on 1 and nothing of it is built or published, so it
+    #: is re-made on 2 (RULE 1), its fetched corpus kept
+    PARSER_VERSION = 2
     #: 06 §6.2: Cellar keeps every OJ act and every consolidated version at
     #: its own CELEX: a superseded version stays checkable, and is kept
     origin_versions = "history"
@@ -583,6 +588,7 @@ class EurlexSource:
             "references": act.references,
             "modifications": act.modifications,
             "instructions": act.instructions,
+            "markup": act.markup,
             # the CDM notice, whole
             "notice_kind": note.kind,
             "notice_decoding": note.decoding,
