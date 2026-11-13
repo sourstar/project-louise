@@ -187,13 +187,34 @@ def window_counter(collection, recipe) -> Callable[[str], int] | None:
     window holds them too; `chunking_legal._count` leaves them out, and its
     budget keeps a margin for them) — in the tokenizer the collection's
     layer pins; None where it pins none (the count cannot be made exactly)."""
-    tok_sha = (shipped_layer(collection).params or {}).get("tokenizer")
+    return counter((shipped_layer(collection).params or {}).get("tokenizer"), recipe)
+
+
+def counter(tok_sha: str | None, recipe) -> Callable[[str], int] | None:
+    """`window_counter`'s count for a tokenizer named by its sha256."""
     if not tok_sha:
         return None
     from app.plugins.wikidata import chunker as wd
     tok = wd.tokenizer_for(tok_sha)
     prefix = getattr(recipe, "document_instruction", None) or ""
     return lambda text: len(tok.encode(prefix + text, add_special_tokens=True).ids)
+
+
+def window_cost(name: str, chunks: list[dict], count: Callable[[str], int] | None,
+                ctx: int | None) -> dict[str, Any]:
+    """Every chunk counted as the encoder reads it: the tokens, the longest,
+    the window and how many exceed it — an arm with any is refused
+    (`OverWindow`), since the encoder would truncate it and its vectors would
+    not be the text's. `{"window": None}` where nothing can count."""
+    if count is None or not ctx:
+        return {"window": None}             # said: the window was not counted
+    sizes = [count(c["text"]) for c in chunks]
+    over = sum(1 for n in sizes if n > ctx)
+    if over:
+        raise OverWindow(f"arm {name}: {over} of {len(chunks)} chunks exceed the encoder's window "
+                         f"of {ctx} tokens (longest {max(sizes)}): the encoder would truncate them, "
+                         f"so the arm is not comparable (operator, 2026-11-08: not admissible)")
+    return {"tokens": sum(sizes), "longest_tokens": max(sizes, default=0), "window": ctx, "over_window": 0}
 
 
 def stage_doc(collection, row, doc) -> tuple[str | None, list, bool]:
@@ -239,17 +260,7 @@ def cut(arm: Arm, held, native_ids: Iterable[int], *, count: Callable[[str], int
                             "records_from_records": from_records,
                             "chunks": len(chunks), "characters": sum(len(c["text"]) for c in chunks),
                             "tokens_estimated": sum(int(c.get("tokens") or 0) for c in chunks)}
-    if count is None or not ctx:
-        cost["window"] = None             # said: the window was not counted
-    else:
-        sizes = [count(c["text"]) for c in chunks]
-        over = sum(1 for n in sizes if n > ctx)
-        cost.update({"tokens": sum(sizes), "longest_tokens": max(sizes, default=0), "window": ctx,
-                     "over_window": over})
-        if over:
-            raise OverWindow(f"arm {arm.name}: {over} of {len(chunks)} chunks exceed the encoder's window "
-                             f"of {ctx} tokens (longest {max(sizes)}): the encoder would truncate them, "
-                             f"so the arm is not comparable (operator, 2026-11-08: not admissible)")
+    cost.update(window_cost(arm.name, chunks, count, ctx))
     return chunks, cost
 
 
@@ -569,10 +580,12 @@ class RerankWithheld(RuntimeError):
     """The reranker kept the fused order: not the reading it claims to be."""
 
 
-def default_rerank(held, collection) -> Callable | None:
+def default_rerank(held, collection, *, heads: bool = True) -> Callable | None:
     """The collection's reranker over a fused list, as `retrieval` runs it:
     each record's head attached, its top `RERANK_TOP_N` judged. None where
-    the collection has no reranker (the reading is then not made)."""
+    the collection has no reranker (the reading is then not made).
+    `heads=False`: the chunks judged bare — for records a manifest does not
+    hold (tools/chunker_languages.py, whose record head would be the query)."""
     from app import collections as collections_mod
     from app import retrieval
     recipe = collections_mod.reranker_for(collection)
@@ -581,7 +594,8 @@ def default_rerank(held, collection) -> Callable | None:
     depth = retrieval.RERANK_TOP_N
 
     def rerank(question: str, hits: list[dict]) -> list[dict]:
-        retrieval._attach_heads(held.con, collection, hits[:depth])
+        if heads:
+            retrieval._attach_heads(held.con, collection, hits[:depth])
         ranked, ok, why = retrieval._reranked(question, hits, recipe, retrieval._rerank_budget_s(depth), depth)
         if not ok:
             raise RerankWithheld(f"the reranker kept the fused order: {why or 'no reason given'}")
@@ -866,11 +880,16 @@ def _vectors(e: dict | None) -> str:
     return said
 
 
-def report_markdown(rep: dict, metrics: Iterable[str] = ("mrr@10", "recall@10", "ndcg@10")) -> str:
+def report_markdown(rep: dict, metrics: Iterable[str] = ("mrr@10", "recall@10", "ndcg@10"), *,
+                    head: bool = True, notes: bool = True) -> str:
+    """`head` and `notes`: the title, the measurement's line and the
+    "Read with" notes, which are the legal pilot's (its pool, its header):
+    a caller measuring something else (tools/chunker_languages.py) leaves
+    them out and says its own."""
     metrics = tuple(metrics)
     about = rep.get("about") or {}
     runs = about.get("runs") or {}
-    lines = ["# Chunker mode: every arm against the first", "",
+    lines = [] if not head else ["# Chunker mode: every arm against the first", "",
              (f"{about.get('collection')}, pool {about.get('pool')} (built from "
               f"{about.get('pool_built_from') or '?'}'s text leg, depth {about.get('pool_depth') or '?'}), the "
               f"{about.get('split')} questions, k {about.get('k')}; document run "
@@ -911,22 +930,23 @@ def report_markdown(rep: dict, metrics: Iterable[str] = ("mrr@10", "recall@10", 
             lines.append(f"| {row['arm']} | {cost.get('chunks', '—')} | {cost.get('characters', '—')} | "
                          f"{_vectors(row.get('embedding'))} | {vals} | {share} | {delta} |")
         lines.append("")
-    builder = about.get("pool_built_from") or "the builder"
-    lines += [
-        "## Read with", "",
-        ("- Only the decision above decides. Every other figure is descriptive: its p is Holm-adjusted "
-         "across the arms, not across the metrics and readings."),
-        ("- The reranker reads the act's title TWICE in an arm with the header: in the head it attaches "
-         "above every chunk (`retrieval._attach_heads`) and in the chunk's own header — as production does "
-         "today, so it is measured as it is."),
-        (f"- The pool is {builder}'s text-leg top {about.get('pool_depth') or '?'} for each question, and "
-         "the gold: every arm meets the distractors the SHIPPED cut's text leg finds and none of its own, "
-         "which spares the other arms their hardest ones — a bias toward the challengers. 'from the pool's "
-         "builder' is the share of an arm's top-k records that its question's builder list holds."),
-        ("- No arm has what a reader's search adds — the query's language, the plan's steps and "
-         "translations, the catalogue leg (CATALOG_FIRST never moves a hit), and query vectors are cached "
-         "as float16: equal for every arm, so the differences hold; the absolute values are not "
-         "production's."), ""]
+    if notes:
+        builder = about.get("pool_built_from") or "the builder"
+        lines += [
+            "## Read with", "",
+            ("- Only the decision above decides. Every other figure is descriptive: its p is Holm-adjusted "
+             "across the arms, not across the metrics and readings."),
+            ("- The reranker reads the act's title TWICE in an arm with the header: in the head it attaches "
+             "above every chunk (`retrieval._attach_heads`) and in the chunk's own header — as production does "
+             "today, so it is measured as it is."),
+            (f"- The pool is {builder}'s text-leg top {about.get('pool_depth') or '?'} for each question, and "
+             "the gold: every arm meets the distractors the SHIPPED cut's text leg finds and none of its own, "
+             "which spares the other arms their hardest ones — a bias toward the challengers. 'from the pool's "
+             "builder' is the share of an arm's top-k records that its question's builder list holds."),
+            ("- No arm has what a reader's search adds — the query's language, the plan's steps and "
+             "translations, the catalogue leg (CATALOG_FIRST never moves a hit), and query vectors are cached "
+             "as float16: equal for every arm, so the differences hold; the absolute values are not "
+             "production's."), ""]
     return "\n".join(lines)
 
 

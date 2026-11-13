@@ -20,6 +20,13 @@ measured (published figures disagree).
 
 ### 2026-11-14
 
+- **The chunker per language — BUILT, nothing run** (operator: "Build the per-language test on LEMUR").
+  `tools/chunker_languages.py`: LEMUR's parallel acts in every language asked, read into sections by the
+  eurlex reader, arms `structure` / `structure-512` / `window-512` through the chunker mode's own path
+  (one validated run, every arm fresh, app fts, RRF, the reranker), one collection's encoder for every
+  language; the report says per reading whether an arm's effect differs by language (randomization test,
+  the act as the block, Holm) and the best arm per language; the verdict on reranked MRR@10.
+  docs/notes/legal-chunking-retrieval.md §5.2.
 - **The chunker mode — BUILT, nothing run** (operator: "Build the chunker mode and send A").
   `legal_pilot chunker-run` measures chunker settings on the records a collection holds, with no new
   space: arms cut in-process through the stages' path, embedded through the collection's recipe (cached
