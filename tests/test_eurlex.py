@@ -23,7 +23,7 @@ from app import chunking, collections as collections_mod, plugin_io
 from app.pack import slicing
 from app.plugins import eli
 from app.plugins.base import DiscoverState, Mutability, UnindexableDocument
-from app.plugins.eurlex import SOURCE, formex, notice
+from app.plugins.eurlex import SOURCE, formex, notice, rdf
 from app.plugins.eurlex import source as src
 
 FIX = Path(__file__).parent / "fixtures" / "eurlex"
@@ -33,6 +33,9 @@ BRANCH_NOTICE = (FIX / "notices" / "52018PC0340_branch.xml").read_bytes()
 OBJECT_NOTICE = (FIX / "notices" / "celex_32018R0196_object_work.xml").read_bytes()
 
 ACT, CONS, DIR = "32016R1036", "02016R1036-20180608", "32019L0790"
+
+
+RDF_DIR = Path(__file__).resolve().parent / "fixtures" / "eurlex" / "rdf"
 
 
 def _notice_for(celex: str, base: bytes = BRANCH_NOTICE) -> bytes:
@@ -60,6 +63,10 @@ def _unit(root: Path, lang: str, celex: str, formex_dir: str, notice_bytes: byte
     for p in sorted((FORMEX / formex_dir).iterdir()):
         (unit / p.name).write_bytes(p.read_bytes())
     (unit / src.NOTICE).write_bytes(notice_bytes)
+    # the completion mark (parser 3): the work's non-inferred tree, scoped
+    rdf_file = RDF_DIR / f"{celex}.rdf"
+    tree = rdf.read(rdf_file.read_bytes()) if rdf_file.is_file() else {"nodes": {}, "axioms": []}
+    (unit / rdf.TREE_FILE).write_bytes(rdf.dumps(rdf.scope(tree, src.lang3(lang))))
     return unit
 
 
@@ -221,7 +228,7 @@ def test_no_word_of_any_item_or_of_the_notice_is_lost(corpus, celex):
     held = _words("\n".join(b for _, b in doc.sections) + json.dumps(doc.extra, ensure_ascii=False)
                   + " ".join(label for label, _ in doc.sections) + doc.title)
     unit = corpus / src.unit_rel("en", celex)
-    for p in sorted(unit.iterdir()):
+    for p in sorted(x for x in unit.iterdir() if x.name != rdf.TREE_FILE):
         root = ET.fromstring(p.read_bytes())
         missing = _words(" ".join(root.itertext())) - held
         assert not missing, f"{p.name}: {sorted(missing)[:20]}"
@@ -478,7 +485,7 @@ def test_no_attribute_of_any_item_is_lost(corpus, celex):
     held = json.dumps(doc.extra, ensure_ascii=False)
     unit = corpus / src.unit_rel("en", celex)
     missing = []
-    for p in sorted(unit.iterdir()):
+    for p in sorted(x for x in unit.iterdir() if x.name != rdf.TREE_FILE):
         for el in ET.fromstring(p.read_bytes()).iter():
             for k, v in el.attrib.items():
                 if json.dumps(k, ensure_ascii=False) not in held or json.dumps(v, ensure_ascii=False) not in held:
@@ -501,4 +508,16 @@ def test_the_markup_is_every_attribute_of_the_body_and_annexes_in_document_order
     for name, held in markup.items():
         root = ET.fromstring((unit / name).read_bytes())
         assert held == [[e.tag, dict(e.attrib)] for e in root.iter() if isinstance(e.tag, str) and e.attrib]
-    assert "markup" in src.EXTRA_KEYS and src.EurlexSource.PARSER_VERSION == 2
+    assert "markup" in src.EXTRA_KEYS and src.EurlexSource.PARSER_VERSION == 3
+
+
+
+@pytest.mark.parametrize("celex", [ACT, CONS, DIR])
+def test_the_record_holds_the_unit_s_scoped_tree_whole(corpus, celex):
+    """Parser 3: Cellar's non-inferred tree, scoped to the language (rdf.py),
+    is in the record as the unit holds it — the assertions the branch notice
+    lacks (München, 2026-11-14: 26,607 over 1,698 acts)."""
+    doc = _doc(corpus, celex)
+    unit = corpus / src.unit_rel("en", celex)
+    assert doc.extra["cdm_rdf"] == rdf.loads((unit / rdf.TREE_FILE).read_bytes())
+    assert doc.extra["form"] == "fmx4" and doc.extra["cdm_rdf"]["language"] == "ENG"

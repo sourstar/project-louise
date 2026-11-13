@@ -80,6 +80,9 @@ class Notice:
     relations: list[tuple[str, str]] = field(default_factory=list)   # (TAG, celex), in order
     items: dict[str, list["Item"]] = field(default_factory=dict)      # manifestation type → its items
     whole: Any = None               # the notice, whole (formex.tree)
+    #: the work's own DATE_PUBLICATION (an act without a Formex wrapper is
+    #: dated by it: its OJ day, as a wrapper's PUBLICATION.REF dates one)
+    date_publication: str | None = None
 
 
 @dataclass(frozen=True)
@@ -193,6 +196,7 @@ def parse(data: bytes) -> Notice:
         end_of_validity=sorted(set(_values(work, "RESOURCE_LEGAL_DATE_END-OF-VALIDITY"))),
         in_force=in_force, base_celex=base, display_language=display, expression_title=title,
         last_modified=_first(work, "LASTMODIFICATIONDATE"),
+        date_publication=_first(work, "DATE_PUBLICATION"),
         subjects=_labels(work, "IS_ABOUT"), creators=_labels(work, "CREATED_BY_AGENT"),
         relations=relations, items=_items(root, work), whole=tree(root))
 
@@ -240,3 +244,34 @@ def _items(root: ET.Element, work: ET.Element) -> dict[str, list[Item]]:
 
 def is_celex(text: str) -> bool:
     return bool(_CELEX.match(text or ""))
+
+
+def work_day(data: bytes) -> str | None:
+    """The work's own day, read only as far as it takes: its DATE_PUBLICATION,
+    else its WORK_DATE_DOCUMENT, each a direct child of NOTICE/WORK. Discovery
+    dates a unit without a Formex wrapper by it, and a 1 MB notice is never
+    parsed whole for one date (every discovery pass reads every unit)."""
+    import io
+    path: list[str] = []
+    found: dict[str, str] = {}
+    try:
+        for event, el in ET.iterparse(io.BytesIO(data), events=("start", "end")):
+            if event == "start":
+                path.append(el.tag)
+                continue
+            if len(path) == 3 and path[:2] == ["NOTICE", "WORK"] and el.tag in ("DATE_PUBLICATION",
+                                                                               "WORK_DATE_DOCUMENT"):
+                v = norm(el.findtext("VALUE") or "")
+                if v:
+                    found.setdefault(el.tag, v)
+                if "DATE_PUBLICATION" in found:
+                    break
+            if len(path) == 2 and el.tag == "WORK":
+                break
+            path.pop()
+            if len(path) > 2:
+                continue
+            el.clear()
+    except ET.ParseError:
+        return None
+    return found.get("DATE_PUBLICATION") or found.get("WORK_DATE_DOCUMENT")

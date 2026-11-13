@@ -126,10 +126,16 @@ def unit_of(f: RemoteFile) -> dict:
     return json.loads(str(f.remote)[len(PREFIX):])
 
 
+#: the unit's completion mark, written last (`_land`): the scoped tree
+#: (parser 3, 2026-11-14; before it the notice, so a unit fetched then lacks
+#: its tree and is completed by the next fetch, its other bytes kept)
+TREE_MARK = "tree.json"
+
+
 def rel_path(lang: str, celex: str) -> str:
-    """The unit's notice, relative to the corpus root: its completion mark."""
+    """The unit's completion mark, relative to the corpus root."""
     from ..plugins.eurlex.source import unit_rel
-    return f"{unit_rel(lang, celex)}/{NOTICE}"
+    return f"{unit_rel(lang, celex)}/{TREE_MARK}"
 
 
 def languages_of(flt: Filter) -> tuple[str, ...]:
@@ -201,8 +207,10 @@ _LANGUAGE_URI = "http://publications.europa.eu/resource/authority/language/"
 
 def _window(year: int, languages: tuple[str, ...]) -> str:
     """The WHERE of one window: the works whose CELEX opens `3<year>` (an
-    act of sector 3) or `0<year>` (its consolidated versions), each with an
-    fmx4 manifestation of an expression in one of `languages`."""
+    act of sector 3) or `0<year>` (its consolidated versions), each with a
+    manifestation in one of FORMS of an expression in one of `languages`
+    (parser 3: before it fmx4 alone, which left out every act Cellar holds
+    in XHTML, HTML or PDF only)."""
     from ..plugins.eurlex.source import LANGUAGES
     values = " ".join(f"<{_LANGUAGE_URI}{LANGUAGES[lang]}>" for lang in languages)
     return (f"  ?work cdm:resource_legal_id_celex ?celex .\n"
@@ -210,7 +218,7 @@ def _window(year: int, languages: tuple[str, ...]) -> str:
             f"  ?expr cdm:expression_belongs_to_work ?work ; cdm:expression_uses_language ?language .\n"
             f"  VALUES ?language {{ {values} }}\n"
             f"  ?manif cdm:manifestation_manifests_expression ?expr ; cdm:manifestation_type ?type .\n"
-            f"  FILTER(STR(?type) = \"fmx4\")\n")
+            f"  FILTER(STR(?type) IN ({', '.join(chr(34) + f + chr(34) for f in FORMS)}))\n")
 
 
 def count_query(year: int, languages: tuple[str, ...]) -> str:
@@ -420,12 +428,61 @@ def items_from_choices(body: bytes) -> list[tuple[str, str | None]]:
     return out
 
 
+#: the manifestations a unit's text is taken from, best first (invariant 11;
+#: München, 2026-11-14, every Italian work in force: Formex for 30,249 of
+#: 43,623; 12,360 more in XHTML and HTML, 786 in HTML alone, 228 in PDF alone).
+#: Where Formex exists it holds the most (formulas as text, figures as items,
+#: the amendments' markup); where it does not, the next form is the origin's
+#: whole text of the act and is taken, never the act left out
+FORMS = ("fmx4", "xhtml", "html", "pdfa2a", "pdfa1a", "pdfa1b", "pdfx", "pdf")
+#: the non-inferred tree (rdf.py): the assertions the branch notice lacks
+RDF_ACCEPT = "application/rdf+xml;notice=non-inferred-tree"
+
+
+def form_of(note) -> str | None:
+    """The best manifestation the notice lists items for (FORMS)."""
+    return next((f for f in FORMS if note.items.get(f)), None)
+
+
+def _current_unit(dest: Path, note_now_mtime: int | None, form: str | None):
+    """A unit already on disk that is still the origin's: its notice's own
+    last modification is at or after the listing's, and every item the notice
+    lists for the chosen form is there with the notice's size (the same check
+    a fetch makes). Returns `(notice bytes, {name: bytes})` or None."""
+    from ..plugins.eurlex import notice as notice_mod
+    path = dest / NOTICE
+    if note_now_mtime is None or not path.is_file():
+        return None
+    try:
+        data = path.read_bytes()
+        note = notice_mod.parse(data)
+    except (OSError, notice_mod.NoticeError):
+        return None
+    held = _epoch(note.last_modified)
+    form = form or form_of(note)
+    if held is None or held < note_now_mtime or form is None:
+        return None
+    files: dict[str, bytes] = {}
+    for it in note.items.get(form, []):
+        f = dest / (it.name or "")
+        if not it.name or not f.is_file() or (it.size is not None and f.stat().st_size != it.size):
+            return None
+        files[it.name] = f.read_bytes()
+    return (data, files) if files else None
+
+
 def fetch_unit(base: str, celex: str, lang: str, dest: Path, *,
-               client: httpx.Client | None = None,
+               client: httpx.Client | None = None, listed_mtime: int | None = None,
                charge: Callable[[int], None] = budget.acquire_bytes) -> Fetched:
     """The unit of (CELEX, language) into `dest` (the unit's directory),
-    whole or not at all."""
-    from ..plugins.eurlex import formex, notice as notice_mod
+    whole or not at all: the branch notice, the items of the best form the
+    notice lists (FORMS), and the non-inferred tree scoped to the language
+    (`tree.json`, rdf.py), which is written LAST and is the unit's completion
+    mark. A unit already on disk whose notice is as recent as the listing
+    says (`listed_mtime`) and whose items match the notice keeps its bytes:
+    only what it lacks moves (a unit fetched before the tree was kept gains
+    its tree alone)."""
+    from ..plugins.eurlex import formex, notice as notice_mod, rdf
     from ..plugins.eurlex.source import LANGUAGES
     code = LANGUAGES[lang]
     own = client is None
@@ -439,48 +496,64 @@ def fetch_unit(base: str, celex: str, lang: str, dest: Path, *,
     try:
         url = resource_url(base, celex)
         accept_lang = {"Accept-Language": code.lower()}
-        r = _get(client, url, _headers({"Accept": "application/xml;notice=branch", **accept_lang}),
-                 f"the notice of {celex} ({code})", charge=count)
-        notice_bytes = r.content
-        try:
+        kept = _current_unit(dest, listed_mtime, None)
+        if kept is not None:
+            notice_bytes, files = kept
             note = notice_mod.parse(notice_bytes)
-        except notice_mod.NoticeError as e:
-            raise TransportError(f"cellar: the notice of {celex} ({code}) is not one: {e}") from None
+        else:
+            r = _get(client, url, _headers({"Accept": "application/xml;notice=branch", **accept_lang}),
+                     f"the notice of {celex} ({code})", charge=count)
+            notice_bytes = r.content
+            try:
+                note = notice_mod.parse(notice_bytes)
+            except notice_mod.NoticeError as e:
+                raise TransportError(f"cellar: the notice of {celex} ({code}) is not one: {e}") from None
+            files = {}
         if note.celex != celex:
             raise TransportError(f"cellar: asked for {celex}, the notice is {note.celex}'s")
         if note.display_language and note.display_language != code:
             raise TransportError(f"cellar: asked for {celex} in {code}, the notice is in {note.display_language}")
-        listed = [(it.uri, it.name, it.size) for it in note.items.get("fmx4", [])]
-        if not listed:
-            _stop_check()
-            r = _get(client, url, _headers({"Accept": "application/xml;type=fmx4", **accept_lang}),
-                     f"the fmx4 manifestation of {celex} ({code})", charge=count, ok=(300, 200))
-            listed = [(uri, name, None) for uri, name in items_from_choices(r.content)]
-        if not listed:
-            raise TransportError(f"cellar: {celex} ({code}) lists no fmx4 item")
-        files: dict[str, bytes] = {}
-        for uri, name, size in listed:
-            _stop_check()
-            r = _get(client, uri, _headers(accept_lang), f"{name or uri} of {celex} ({code})", charge=count)
-            if not name:
-                m = _DISPOSITION.search(r.headers.get("content-disposition", ""))
-                name = m["name"].strip() if m else None
-            if not name or not _NAME.match(name) or name == NOTICE:
-                raise TransportError(f"cellar: {uri} of {celex} ({code}) names no plain file ({name!r})")
-            if name in files:
-                raise TransportError(f"cellar: two items of {celex} ({code}) named {name}")
-            if size is not None and size != len(r.content):
-                raise TransportError(f"cellar: {name} of {celex} ({code}) is {len(r.content)} bytes, "
-                                     f"the notice says {size}")
-            files[name] = r.content
-        wrappers = [n for n in files if formex.is_wrapper(n)]
-        if len(wrappers) != 1:
-            raise TransportError(f"cellar: {celex} ({code}) holds {len(wrappers)} Formex wrappers, not one")
-        stated = re.search(rb"<LG\.DOC>\s*([A-Z]{2})\s*</LG\.DOC>", files[wrappers[0]])
-        if stated and stated.group(1).decode().lower() != lang:
-            raise TransportError(f"cellar: asked for {celex} in {lang}, its Formex is in "
-                                 f"{stated.group(1).decode().lower()}")
+        form = form_of(note)
+        if not files:
+            listed = [(it.uri, it.name, it.size) for it in note.items.get(form, [])] if form else []
+            if not listed:
+                _stop_check()
+                r = _get(client, url, _headers({"Accept": "application/xml;type=fmx4", **accept_lang}),
+                         f"the fmx4 manifestation of {celex} ({code})", charge=count, ok=(300, 200))
+                listed = [(uri, name, None) for uri, name in items_from_choices(r.content)]
+                form = "fmx4" if listed else form
+            if not listed:
+                raise TransportError(f"cellar: {celex} ({code}) lists no item in any of {', '.join(FORMS)}")
+            for uri, name, size in listed:
+                _stop_check()
+                r = _get(client, uri, _headers(accept_lang), f"{name or uri} of {celex} ({code})", charge=count)
+                if not name:
+                    m = _DISPOSITION.search(r.headers.get("content-disposition", ""))
+                    name = m["name"].strip() if m else None
+                if not name or not _NAME.match(name) or name in (NOTICE, rdf.TREE_FILE):
+                    raise TransportError(f"cellar: {uri} of {celex} ({code}) names no plain file ({name!r})")
+                if name in files:
+                    raise TransportError(f"cellar: two items of {celex} ({code}) named {name}")
+                if size is not None and size != len(r.content):
+                    raise TransportError(f"cellar: {name} of {celex} ({code}) is {len(r.content)} bytes, "
+                                         f"the notice says {size}")
+                files[name] = r.content
+        if form == "fmx4":
+            wrappers = [n for n in files if formex.is_wrapper(n)]
+            if len(wrappers) != 1:
+                raise TransportError(f"cellar: {celex} ({code}) holds {len(wrappers)} Formex wrappers, not one")
+            stated = re.search(rb"<LG\.DOC>\s*([A-Z]{2})\s*</LG\.DOC>", files[wrappers[0]])
+            if stated and stated.group(1).decode().lower() != lang:
+                raise TransportError(f"cellar: asked for {celex} in {lang}, its Formex is in "
+                                     f"{stated.group(1).decode().lower()}")
+        _stop_check()
+        r = _get(client, url, _headers({"Accept": RDF_ACCEPT}), f"the non-inferred tree of {celex}", charge=count)
+        try:
+            tree = rdf.scope(rdf.read(r.content), code)
+        except rdf.RdfError as e:
+            raise TransportError(f"cellar: the non-inferred tree of {celex} is not Cellar's form: {e}") from None
         files[NOTICE] = notice_bytes
+        files[rdf.TREE_FILE] = rdf.dumps(tree)
         _land(dest, files)
         return Fetched(files={n: len(b) for n, b in files.items()}, moved=moved)
     except httpx.HTTPError as e:
@@ -501,7 +574,8 @@ def _land(dest: Path, files: dict[str, bytes]) -> None:
     shutil.rmtree(staging, ignore_errors=True)
     shutil.rmtree(old, ignore_errors=True)
     staging.mkdir()
-    for name in sorted(files, key=lambda n: (n == NOTICE, n)):
+    # the tree last: it is the completion mark (fetch_unit); the notice before it
+    for name in sorted(files, key=lambda n: (n == TREE_MARK, n == NOTICE, n)):
         with open(staging / name, "wb") as f:
             f.write(files[name])
             f.flush()
@@ -532,7 +606,8 @@ class CellarUnits:
 
     def fetch(self, endpoint: Endpoint, remote: RemoteFile, dest: Path) -> int:
         unit = unit_of(remote)
-        return fetch_unit(endpoint.url, unit["celex"], unit["lang"], dest.parent).moved
+        return fetch_unit(endpoint.url, unit["celex"], unit["lang"], dest.parent,
+                          listed_mtime=remote.mtime).moved
 
     def refetch(self, spec: AcquisitionSpec, locator: str, base: Path) -> tuple[Path, int]:
         """records-vs-origin: a record's `origin` is its unit
