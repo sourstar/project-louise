@@ -222,7 +222,7 @@ def leaders(codex, snapshot: sn.Snapshot, con, *, live: Sequence[rendezvous.Peer
 
 
 def _shard_of(snapshot: sn.Snapshot, sid: str) -> sn.Shard:
-    slice_, n = sid.rsplit("/", 2)[1:]
+    slice_, _, n = cov.slice_and_n(sid).rpartition("/")
     return next(s for s in snapshot.shards if s.slice == slice_ and s.n == int(n))
 
 
@@ -353,7 +353,7 @@ def sweep_refused(root: Path, name: str, codex, con, *, own_key: str | None,
     the refused rows, few."""
     moved = 0
     for r in _own_refused_rows(con, codex, own_key=own_key):
-        sid = "/".join(str(r["shard"]).rsplit("/", 2)[1:])
+        sid = cov.slice_and_n(str(r["shard"]))
         src = bundle_dir(root, name, codex, sid, r["bundle_id"])
         if not src.is_dir():
             continue

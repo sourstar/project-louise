@@ -434,7 +434,8 @@ def explain_part(root: Path, name: str, codex, con, part: str, snapshot=None) ->
             "SELECT bundle_id, shard, producer, accepted_at FROM coverage WHERE accepted_at IS NOT NULL"):
         if sh.split("/", 1)[0] not in cids:
             continue
-        sid = "/".join(sh.rsplit("/", 2)[1:])
+        from app.share.coverage import slice_and_n
+        sid = slice_and_n(sh)
         try:
             got = json.loads((contribute.bundle_dir(root, name, codex, sid, bundle_id)
                               / "possession.json").read_bytes())

@@ -699,8 +699,10 @@ def reproduce_claims(root: Path, collections, node_con, *, own_key: str | None =
             if node_con.execute("SELECT 1 FROM claims_acted WHERE attestation_id=?", (aid,)).fetchone():
                 continue
             check = claim["check"]
-            # an attestation names `<collection_id>/slice/NNNNN`; the SHARD knows `slice/NNNNN`
-            shard = "/".join(str(claim["shard"]).split("/")[-2:]) if claim["shard"] else None
+            # an attestation names `<collection_id>/slice/NNNNN`; the SHARD knows
+            # `slice/NNNNN`, its slice whole ("/" and all: legi's kind=…/year=…)
+            from app.hold.check import shard_name
+            shard = shard_name(claim["shard"]) if claim["shard"] else None
             origin = None
             if check == "records-vs-origin":
                 d = getattr(c, "corpus_dir", None)
@@ -768,7 +770,8 @@ def files_here(root: Path, name: str, codex, row: Mapping[str, Any]) -> bool:
     re-embedded 6,713 chunks the node holds. A row without its files is a
     hole the fetch fills, never a cover and never a claim."""
     from app.share import contribute
-    d = contribute.bundle_dir(root, name, codex, "/".join(str(row["shard"]).rsplit("/", 2)[1:]),
+    from app.share import coverage as cov
+    d = contribute.bundle_dir(root, name, codex, cov.slice_and_n(str(row["shard"])),
                               str(row["bundle_id"]))
     return (d / "vectors.parquet").is_file() and (d / "possession.json").is_file()
 

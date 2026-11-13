@@ -20,6 +20,13 @@ measured (published figures disagree).
 
 ### 2026-11-13
 
+- **A part whose slice holds "/" is named whole — FIXED, not deployed** (München: `hold check --shards
+  kind=article/year=1962/00001` matched nothing and said "this peer holds none of the sampled shards"). Every
+  place that took the LAST TWO segments of a part's name now keeps the slice whole: `hold check --shards`
+  (`check.shard_name`), the landed-part checks after a share fetch (`part_name`: legi's landed parts were never
+  checked), the attestation claims re-run by `accept`, and the shard ids of the sharing code (`coverage.slice_and_n`:
+  counting, deprecate, withdraw, possession, contribute). A name the snapshot does not list is now said as such.
+
 - **Reference sources find their plugin's corpus by the collections held — FIXED, not deployed** (München, after
   the operator's renames: legi → legi_F, neuris → NeuRIS, normattiva-nemo → Normattiva). The sources read
   `<src>/normattiva`, `/legi`, `/neuris`, `/eurlex`, `/wikidata` by name, and a rename moves a collection's origin

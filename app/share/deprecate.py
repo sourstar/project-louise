@@ -59,7 +59,8 @@ def _id_of(member_name: str, space: str) -> str | None:
 
 
 def _sid(shard_id: str) -> str:
-    return "/".join(shard_id.rsplit("/", 2)[1:])
+    from .coverage import slice_and_n
+    return slice_and_n(shard_id)
 
 
 def attestation_body(codex, snapshot, pairs: Mapping[str, str], shards: Iterable[str], *, own_key: str,
