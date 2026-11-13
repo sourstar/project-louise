@@ -552,8 +552,13 @@ def pilot_report(held: Held, questions: list[dict[str, Any]], got: dict[str, Any
         for nid in row["relevant"]:
             g = gold[nid]
             lines.append(f"- gold {nid}: {g.file_name} {g.path} → {g.uid} art. {g.token}")
+        mine = {int(x) for x in row["relevant"]}
         for rank, (h, gid) in enumerate(zip(row.get("hits") or [], row["ranking"]), 1):
-            mark = "GOLD" if gid > 0 else "    "
+            # GOLD only for THIS question's gold, as the metrics count it; an
+            # article that is another question's gold is said so, never GOLD
+            # (München, 2026-11-13: DAR's q2 showed c.p. 544-ter and c.c. 2052
+            # as GOLD with every metric 0 — they are other questions' gold)
+            mark = "GOLD" if gid in mine else "gold(other q)" if gid > 0 else "    "
             lines.append(f"  {rank:>2}. {mark} {h['uid']} {h['label']}")
         lines.append(f"- " + ", ".join(f"{m} {row[m]:.3f}" for m in row if "@" in m)
                      + f"; {row.get('seconds')} s")
