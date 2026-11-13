@@ -328,8 +328,40 @@ def resolve(root: Path, ref: str) -> tuple[str, Codex]:
         best = max(lineage, key=lambda nc: depth(nc[1]))
         return best
 
+    shown = _by_display_name(held, ref)
+    if len(shown) == 1:
+        return shown[0]
+    if len(shown) > 1:
+        raise CodexError(f"{ref!r} is the name of {len(shown)} collections here: "
+                         f"{', '.join(n for n, _ in shown)}; give one of these local names")
+
     raise CodexError(f"no collection {ref!r} under {root}; it is not an id, a "
-                     f"12-character prefix, a name held here, or a lineage")
+                     f"12-character prefix, a name held here, a lineage, or the name "
+                     f"a page shows")
+
+
+def _by_display_name(held, ref: str) -> list:
+    """The collections whose DISPLAY NAME is `ref` (app/display_names.py: the
+    collection file's title, else the Codex's; operator, 2026-11-13: the
+    pages' name is apart from the folders'), so `hold check Gutenberg` finds
+    the collection the Library shows as Gutenberg. Never raises: a file that
+    cannot be read gives no title."""
+    import tomllib
+    from app import collections as collections_mod, display_names
+    entries = []
+    for n, c in held:
+        path = collections_mod.config_toml_path(n)
+        if not path.is_file():
+            continue            # a retired copy: no page lists it, so no page names it
+        title = None
+        try:
+            raw = tomllib.loads(path.read_text(encoding="utf-8"))
+            title = raw.get("title") if isinstance(raw.get("title"), str) else None
+        except Exception:  # noqa: BLE001 — an unreadable file gives no title
+            pass
+        entries.append(display_names.Entry(n, c.collection_id, title, c.descriptive.title))
+    keys = set(display_names.resolve(ref, entries))
+    return [(n, c) for n, c in held if n in keys]
 
 
 def read(root: Path, ref: str) -> Codex:

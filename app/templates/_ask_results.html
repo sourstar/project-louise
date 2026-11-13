@@ -17,7 +17,7 @@
 <div class="panel">
   <b>Some collections were left out of this search.</b>
   {% for w in result.withheld %}
-  <div class="note"><span class="badge err">{{ w.collection }}</span> {{ w.reason }}</div>
+  <div class="note"><span class="badge err">{{ label(w.collection) }}</span> {{ w.reason }}</div>
   {% endfor %}
   {% if not result.hits %}<div class="note">Nothing was searched, so nothing
     matched — this is not an empty result.</div>{% endif %}
@@ -85,7 +85,7 @@
        say, nothing drawn. #}
     {% if h.authors %}<span class="badge" data-authors>{{ h.authors }}</span>{% endif %}
     <span class="badge brass">{{ h.lang or '?' }}</span>
-    {% if h.source_collection %}<span class="badge lapis">{{ h.source_collection }}</span>{% endif %}
+    {% if h.source_collection %}<span class="badge lapis">{{ label(h.source_collection) }}</span>{% endif %}
     {# CLAUDE.md invariant 4, rule 2: a result a weight moved says so #}
     {% for m in h.moved_by or [] %}<span class="badge" data-moved title="moved by a weight: {{ m.weight }}, from place {{ m['from'] }} to {{ m.to }}">{{ 'catalogue match' if m.weight == 'catalog_first' else m.weight }}: moved up from #{{ m['from'] }}</span>{% endfor %}
     {% for s in h.sources or [] %}<span class="badge {{ 'lapis' if s=='dense' else '' }}">{{ s }}</span>{% endfor %}
@@ -169,7 +169,7 @@
     <summary>provenance</summary>
     <div>uid: {{ h.chunk_id.split(':')[0] }}:{{ h.book_id }}</div>
     <div>chunk_id: {{ h.chunk_id }}</div>
-    <div>collection: {{ h.source_collection or (h.chunk_id.split(':')[0]) }}</div>
+    <div>collection: {{ label(h.source_collection or (h.chunk_id.split(':')[0])) }}</div>
     <div>producer:
       {% if h.producer and h.producer != 'local' %}{{ h.producer[:16] }}…{% else %}local{% endif %}
     </div>

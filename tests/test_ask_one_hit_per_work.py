@@ -122,7 +122,9 @@ def test_the_page_offers_each_annotations_collection_as_a_chip_and_remembers_the
     page = client.get("/ask").text
     assert 'id="annotation-chips"' in page and "Annotations consulted" in page
     assert 'class="chip ann on" data-name="gutenberg-book-editions"' in page
-    assert "→ gutenberg" in page, "the chip says what the collection is about"
+    # by the name pages show (app/display_names.py, operator 2026-11-13), not its folder's
+    from app import display_names
+    assert f"→ {display_names.label('gutenberg')}" in page, "the chip says what the collection is about"
     assert "annotations:scopeAnnotations()" in page, "both the search and the answer send the choice"
     assert "localStorage.setItem('ask.scope'" in page and "annotations_off" in page
 

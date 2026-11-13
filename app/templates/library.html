@@ -50,7 +50,7 @@
 <div class="grid">
 {% for c in shelves %}
 <div class="panel" data-collection="{{ c.name }}">
-  <h2>{{ c.name }} <span class="badge">{{ c.plugin_label }}</span></h2>
+  <h2><span data-label title="local name {{ c.name }}: its folders and the command line use it; Options › rename… changes only this name">{{ label(c.name) }}</span> <span class="badge">{{ c.plugin_label }}</span></h2>
   <div>
     <span class="badge brass">profile: {{ c.profile }}</span>
     {# THE EMBEDDER (operator, 2026-11-02): the model `recipe_for` resolves —
@@ -359,6 +359,8 @@
       <button onclick="confirmAction('errors', '{{ c.name }}')">clear errors &amp; retry…</button>
       <button onclick="confirmAction('reprocess', '{{ c.name }}')">reprocess lexical index…</button>
       <button onclick="confirmAction('rescan', '{{ c.name }}')"{% if not mode_scans %} disabled title="a scan is parsing, and this mode parses nothing"{% endif %}>rescan…</button>
+      <button title="the name pages show; its folders, files and the command line keep {{ c.name }}"
+              onclick="renameCollection('{{ c.name }}', {{ label(c.name)|tojson|forceescape }})">rename…</button>
     </div>
     <div class="actions">
       {% if c.paused %}
@@ -423,12 +425,12 @@
    ("also:"); they are not a search leg and are not selectable there. #}
 {% for a in annotations %}
 <div class="panel" data-collection="{{ a.name }}" data-kind="annotations">
-  <h2>{{ a.name }} <span class="badge">annotations</span></h2>
+  <h2><span data-label title="local name {{ a.name }}: its folders and the command line use it; Options › rename… changes only this name">{{ label(a.name) }}</span> <span class="badge">annotations</span></h2>
   <div>
     {# one badge per target: several at Codex version 9 (02 §2.10, amended 2026-10-20) #}
     {% for t in a.targets|default([a], true) %}
     {% if t.target %}
-    <span class="badge lapis" title="target collection_id {{ t.target_id }}">annotates: {{ t.target }}</span>
+    <span class="badge lapis" title="target collection_id {{ t.target_id }}">annotates: {{ label(t.target) }}</span>
     {% else %}
     <span class="badge brass" title="{{ t.target_id }}">annotates a collection this node does not hold</span>
     {% endif %}
@@ -488,6 +490,8 @@
               onclick="document.getElementById('upd_{{ a.name }}').click()">update with a claims file…</button>
       <input type="file" id="upd_{{ a.name }}" accept=".jsonl,.ndjson,.json" style="display:none"
              onchange="if(this.files[0])updateAnnotations('{{ a.name }}', this.files[0]); this.value=''">
+      <button title="the name pages show; its folders, files and the command line keep {{ a.name }}"
+              onclick="renameCollection('{{ a.name }}', {{ label(a.name)|tojson|forceescape }})">rename…</button>
       <button onclick="removeCollection('{{ a.name }}', '{{ a.source }}')">remove…</button>
     </div>
     <template data-confirm="remove" data-for="{{ a.name }}">
@@ -715,6 +719,15 @@ async function setEmbedSelect(name,value){
     toast(name+': embed '+(value==='smart'?'smart (English + the longest other language)':'every article')+
           ' — saved to collections/'+name+'.toml; applied after the next scan')}
   catch(e){toast('embed selection failed: '+e);location.reload()}
+}
+// the name pages show (operator, 2026-11-13: "I shall be able to rename the
+// gui tag without affecting the whole structure"): only the file's `title`
+async function renameCollection(name,current){
+  const t=prompt('Name shown for this collection (empty: its Codex\'s name):',current);
+  if(t===null)return;
+  try{const d=await postJSON('/admin/library/'+name+'/title',{title:t});
+    toast('shown as '+d.label+' — saved to collections/'+name+'.toml; no folder moved');location.reload()}
+  catch(e){toast('rename failed: '+e)}
 }
 async function setMethod(name,method,on){
   try{await postJSON('/admin/library/'+name+'/method',{method:on?method:null});
