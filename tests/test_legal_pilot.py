@@ -362,3 +362,27 @@ def test_pool_and_enqueue_run_from_the_command_line(built, tmp_path, monkeypatch
     assert "pool p:" in capsys.readouterr().out
     assert lp.main(["enqueue", "--out", str(out), "--collection", "normattiva", "--pool", "p"]) == 0
     assert "queued" in capsys.readouterr().out
+
+
+def test_a_pool_record_becomes_its_work_s_version_in_the_run_s_window():
+    """München, 2026-11-13: jf100 held the c.c.'s version shown on 11-09; a
+    new one came, the search keeps shown=1, and the pool prefilter dropped
+    the live version (rank 1 without the pool, absent with it)."""
+    import sqlite3
+
+    from tools import legal_pilot as lp
+    con = sqlite3.connect(":memory:")
+    con.execute("CREATE TABLE validity (uid TEXT, native_id INTEGER, work TEXT, valid_from INTEGER, "
+                "valid_to INTEGER, shown INTEGER)")
+    con.executemany("INSERT INTO validity VALUES (?,?,?,?,?,?)", [
+        ("n:1", 1, "cc", 20260812, 20261024, 0),      # in the pool, superseded since
+        ("n:2", 2, "cc", 20261024, 20261031, 0),
+        ("n:3", 3, "cc", 20261031, None, 1),          # the live one
+        ("n:10", 10, "repealed", 19900101, 20000101, 1),
+    ])
+    ids, report = lp.current_versions(con, [1, 3, 10, 99])
+    assert ids == {3, 10, 99} and report == {"kept": 3, "moved": 1, "gone": 0}, \
+        "the c.c. by its live version, once; a repealed act's last text; a record of no Work kept"
+    ids, report = lp.current_versions(con, [1, 10], "2026-10-25")
+    assert ids == {2} and report == {"kept": 0, "moved": 1, "gone": 1}, \
+        "on a day: the version in force then; an act not in force that day leaves the pool"
