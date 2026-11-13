@@ -139,6 +139,9 @@ class NeurisRefSource:
     #: a pinned provision's note, in German (app/ask/articles.py)
     article_notes = ArticleNotes("geltende Fassung", "Fassung vom {day}", "letzte geltende Fassung")
 
+    def article_repealed(self, text: str) -> bool:
+        return article_repealed(text)
+
     def key_lookup(self, canonical: str) -> tuple[str, str, str] | None:
         """`(table, column, value)` holding a canonical id a record's `keys`
         carry, or a reader names: `jurabk:<abbr>` verbatim; `eli:de:<work>`
@@ -375,6 +378,52 @@ def article_citations(query: str, refs: RefLookup | None, facts=()) -> list[Arti
         out.append(ArticleCitation(keys=keys, article=m.group("num").lower(),
                                    label=f"{mark} {m.group('num')}"))
     return out
+
+
+# ---- a provision removed in place (legal-chunking-retrieval.md §8) --------------------------
+#
+# MEASURED, not guessed (München, 2026-11-14, NeuRIS's 68,288 article sections
+# over 5,511 records; /root/measure/neuris-repealed-measure2.txt). A removed
+# provision keeps its place and says so in one of two ways:
+#  - its HEADING carries the mark, the body empty or a dash: "§§ 1 bis 4 —
+#    (weggefallen)" (1,059), "§ 8 — Nährstoffvergleich(aufgehoben)" (glued,
+#    3), "§ 3 — (weggefallen)" + "—" (5);
+#  - its BODY is the mark alone, the heading bare: "-" (1,014, the older
+#    consolidations), "(weggefallen)" (397, one "(Weggefallen)"),
+#    "(aufgehoben)" (8), "(Entfällt)" (7), "—" (5), "(gegenstandslos)" (4,
+#    one "(gegenstandlos)" as the origin spells it), "(gestrichen)" (2),
+#    "- - -" (2), "(Durch Zeitablauf überholt)" (1), "(ohne Inhalt)" (1).
+# NOT removed, and never read as such: "(Inkrafttreten)" (56: an enacting
+# clause left out), "(Änderungsvorschrift[en])", "(Überleitungsvorschrift)",
+# "(Übergangsvorschrift)" — a provision whose text the consolidation does not
+# reproduce, not one that ended; "..." (2) and a heading with no body (226,
+# "§§ 1 bis 5"), which say nothing either way; and a short real text ("Die
+# Ausbildung dauert 3 Jahre."), so no length rule.
+
+#: the words a removed provision's mark says, inside parentheses
+_GONE = r"weggefallen|aufgehoben|gegenstands?los|entf[äa]llt|gestrichen|durch\s+zeitablauf\s+überholt|ohne\s+inhalt"
+#: a heading ending with the mark (glued to the heading's words or not)
+_GONE_HEADING = re.compile(rf"\(\s*(?:{_GONE})\s*\)\s*$", re.I)
+#: a body that is the mark alone, or a dash alone ("-", "—", "- - -")
+_GONE_BODY = re.compile(rf"\(\s*(?:{_GONE})\s*\)|(?:weggefallen|aufgehoben)|[-–—](?:\s*[-–—])*", re.I)
+
+
+def article_repealed(text: str) -> bool:
+    """A NeuRIS provision's chunk says it was removed: its heading line ends
+    with the mark, or its body is the mark or a dash alone (the measured
+    forms above). The chunk's first line is its heading — the layer's
+    header "<title> › <label>", or the section's own "§ 2" without one; the
+    body is the rest, which may repeat the heading where it is all there is."""
+    first, _, rest = str(text or "").strip().partition("\n")
+    if _GONE_HEADING.search(first.rsplit(" › ", 1)[-1]):
+        return True
+    body = rest.strip()
+    if not body:
+        return False
+    if _GONE_BODY.fullmatch(body):
+        return True
+    one, _, more = body.partition("\n")
+    return not more.strip() and bool(_GONE_HEADING.search(one)) and _LABEL.match(one) is not None
 
 
 #: a section's label: "[partition › ]§ 823 — heading", "Art 1 — heading"

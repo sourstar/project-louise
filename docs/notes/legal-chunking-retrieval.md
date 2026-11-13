@@ -407,12 +407,17 @@ extending it (do not reinvent the wheel).
   as the last text in force ("dernier texte en vigueur"), never "in force"
   (`articles._ended`). That covers a LEGI article whose last version is
   ABROGE (its ETAT closes it: validity's end is its DATE_FIN), and an act
-  Normattiva closes. STILL OPEN: an article removed INSIDE a version still
-  in force — NeuRIS's "(weggefallen)" and EUR-Lex's consolidated
-  "deleted" are the usual forms, but neither is in our records yet (NeuRIS
-  empty, EUR-Lex not created), so no detector is written by guess: it is
-  measured on the held records after their builds (how many, which
-  spellings, in which languages) and written from that.
+  Normattiva closes. NeuRIS FIXED 2026-11-14, from München's count over
+  its 68,288 article sections (`refs/neuris.article_repealed`): the mark in
+  the heading ("§§ 1 bis 4 — (weggefallen)", 1,059; glued
+  "…(aufgehoben)") or as the whole body ("-" 1,014, "(weggefallen)" 397,
+  "(aufgehoben)", "(Entfällt)", "—", "(gegenstandslos)", "(gestrichen)",
+  "- - -", "(Durch Zeitablauf überholt)", "(ohne Inhalt)"); never
+  "(Inkrafttreten)" (56), "(Änderungs-/Überleitungs-/Übergangsvorschrift)",
+  "...", or a bare range heading (226), which are not removals. NeuRIS
+  holds one expression per work, so a removed provision pins its current
+  text (the mark) and no older one. STILL OPEN: EUR-Lex, measured the same
+  way after its build.
 - **An annex code's amendments (fixed 2026-11-12).** The older exports
   write a code's destinations as `urn:…;262#CODICE CIVILE-art. 2441`,
   `#Allegato 1 Codice del processo amministrativo-art. 120`, `#Norme-art.
