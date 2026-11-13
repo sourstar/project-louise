@@ -1551,8 +1551,13 @@ def _new_dry_run(a, run, recipe: dict, pred, dry, changed: list[str], existing, 
                 cut=cut), probe_item=run_check.PROBE)
             kept_runs = ((run.done("calibrate") or {}).get("reference") or {}).get("runs") or ()
             runs = list(kept_runs) if card.run_id in kept_runs else [card.run_id]
-            out(f"  sample      {int(a.sample)} chunk(s), seed {recreate.sample_seed(run.digest, runs).hex()} "
-                f"(for the run the card states now, {', '.join(runs)}; another run draws another seed)")
+            if recreate.vectorless_write_free(a.root, a.name):
+                # as the carry says it (#600): nothing is carried that a sample would vouch for
+                out(f"  sample      none: {a.name} holds no vector (no row, no document marked embedded); "
+                    f"none is carried, so none is reproduced, and {target} embeds from zero")
+            else:
+                out(f"  sample      {int(a.sample)} chunk(s), seed {recreate.sample_seed(run.digest, runs).hex()} "
+                    f"(for the run the card states now, {', '.join(runs)}; another run draws another seed)")
             out(f"  locks       the carry takes {a.name}'s and {target}'s write locks: "
                 f"`louise node pause {a.name}` first (exit 3 while the worker holds one)")
     else:

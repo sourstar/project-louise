@@ -596,3 +596,20 @@ def test_a_predecessor_with_a_document_marked_embedded_but_no_table_still_fails_
     assert _new(root, _new_recipe(tmp_path)) == 1
     assert "carry" not in (json.loads(wf.progress_path("old").read_text())["steps"] or {}) or \
         not json.loads(wf.progress_path("old").read_text())["steps"]["carry"].get("result")
+
+
+def test_the_dry_run_says_a_vector_free_predecessor_has_no_sample_and_writes_nothing(
+        held, steps, tmp_path, capsys):
+    """The dry run says what the run does (#600's carry): none drawn, not a
+    sample of N with a seed; one mark left, the sample is said as before."""
+    root, _old, _chunks = held
+    _drop_vectors(root, "old")
+    recipe_path = _new_recipe(tmp_path)
+    before = recreate.tree_digest(tmp_path)
+    assert _new(root, recipe_path, "--dry-run") == 0
+    assert recreate.tree_digest(tmp_path) == before, "not a byte written"
+    said = capsys.readouterr().out
+    assert "sample      none: old holds no vector (no row, no document marked embedded)" in said
+    _drop_vectors(root, "old", marked=True)
+    assert _new(root, recipe_path, "--dry-run") == 0
+    assert "sample      4 chunk(s), seed " in capsys.readouterr().out
