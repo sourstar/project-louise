@@ -74,6 +74,15 @@ temporal-make  dated question STUBS mined from the version table: an article
                They are stubs: a person reads them, keeps the ones that ask a
                real question, and edits the wording (R2 screened its 209 by
                experts; the screening is the measurement's honesty).
+chunker-run    THE CHUNKER MODE (tools/chunker_mode.py; legal-chunking-retrieval.md §5.1): arms
+               of chunker settings cut the pool's records in-process, embedded through the
+               collection's recipe (cached by text; the shipped arm takes the collection's own
+               vectors), read four ways (fts, dense, hybrid, reranked) through the app's own code,
+               scored as `run` scores; `--dry-run` cuts and counts only; `--pilot N` first (§12).
+chunker-report every chunker-run file against its first arm, per reading: Holm-adjusted p and
+               the smallest detectable difference, each arm's cost beside.
+--split        the expert questions: validation (179), train (716) or all (895); a pool keeps
+               the split it was built from, and a run on another is refused.
 temporal-run   each dated question through search(as_of=date): did the version
                in force at the date come back for that article (BY UID — the
                version is a key lookup, invariant 4), does its text carry the
@@ -649,7 +658,8 @@ def compare(a: dict[str, Any], b: dict[str, Any], metrics: Iterable[str] = COMPA
     """Run `a` against run `b`, question by question (per_question rows
     keyed by the question's index): for each metric, a − b with its interval
     and p. Two runs over other questions, k or pool are not comparable."""
-    for key, default in (("k", None), ("pool", None), ("legs", "hybrid"), ("exact", False)):
+    for key, default in (("k", None), ("pool", None), ("legs", "hybrid"), ("exact", False),
+                         ("split", "validation")):
         if a.get(key, default) != b.get(key, default):
             raise SystemExit(f"the two runs differ in {key}: {a.get(key, default)!r} and {b.get(key, default)!r}")
     ra = {r["index"]: r for r in a["per_question"] if "index" in r}
@@ -923,10 +933,24 @@ def _open(name: str, root: Path | None):
     raise SystemExit(f"no collection named {name!r} is held here")
 
 
-def _load_dataset(out: Path) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+#: the expert questions a run reads: `validation` (179, every run so far),
+#: `train` (716) or `all` (validation then train, so a validation question
+#: keeps its index). JuriFindIT has no test split (München, 2026-11-14)
+SPLITS = ("validation", "train", "all")
+
+
+def _load_dataset(out: Path, split: str = "validation") -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     import pyarrow.parquet as pq
+    if split not in SPLITS:
+        raise SystemExit(f"--split is one of {', '.join(SPLITS)}, not {split!r}")
     corpus = pq.read_table(out / "corpus.parquet", columns=["id", "file_name", "path"]).to_pylist()
-    questions = pq.read_table(out / "questions-validation.parquet").to_pylist()
+    names = {"validation": ["validation"], "train": ["train"], "all": ["validation", "train"]}[split]
+    questions: list[dict[str, Any]] = []
+    for name in names:
+        path = out / f"questions-{name}.parquet"
+        if not path.is_file():
+            raise SystemExit(f"{path} is not here: `legal_pilot fetch --out {out}` fetches it")
+        questions += pq.read_table(path).to_pylist()
     return corpus, questions
 
 
@@ -939,6 +963,106 @@ def _pool_ids(out: Path, name: str) -> list[int]:
     if not path.is_file():
         raise SystemExit(f"no pool {name!r} at {path}: `legal_pilot pool --name {name}` first")
     return [int(i) for i in json.loads(path.read_text(encoding="utf-8"))["native_ids"]]
+
+
+def _pool_split(out: Path, name: str) -> str:
+    """The questions a pool was built from (a pool from before `--split`
+    was built from validation)."""
+    path = out / "runs" / f"pool-{name}.json"
+    return str(json.loads(path.read_text(encoding="utf-8")).get("split") or "validation")
+
+
+def _chunker_run(a, held: Held) -> int:
+    """`chunker-run`: the chunker mode (tools/chunker_mode.py) over a pool —
+    a pilot of N questions first, read and recorded (`pilot-ok`, measuring.md
+    §12), then the whole run: one file per arm and reading."""
+    import contextlib as _cl
+
+    from app import collections as collections_mod, encoder_use
+    from tools import chunker_mode as cm
+    c = held.collection
+    corpus, questions = _load_dataset(a.out, a.split)
+    pool_ids = _pool_ids(a.out, a.pool)
+    if _pool_split(a.out, a.pool) != a.split:
+        raise SystemExit(f"pool {a.pool} was built from the {_pool_split(a.out, a.pool)} questions, the run "
+                         f"asks {a.split}: a pool holds its own questions' candidates (`pool --split`)")
+    cov = coverage(held, corpus, questions)
+    gold = {int(k): gold_from(v) for k, v in cov["gold"].items()}
+    ids, moved = current_versions(held.con, pool_ids, None)
+    print(f"{c.name}: pool {a.pool}: {len(pool_ids)} records → {len(ids)} as the search sees them ({moved})")
+    arms = cm.arms_of(c, a.arm or list(cm.DEFAULT_ARMS))
+    if a.dry_run:
+        recipe = collections_mod.recipe_for(c)
+        count = cm.window_counter(c, recipe)
+        if count is None:
+            print(f"{c.name}: its layer pins no tokenizer: the window is not counted", file=sys.stderr)
+        for arm in arms:
+            try:
+                _, cost = cm.cut(arm, held, ids, count=count, ctx=getattr(recipe, "ctx", None))
+            except cm.OverWindow as e:
+                print(f"{arm.name}: REFUSED — {e}")
+                continue
+            print(f"{arm.name}: {json.dumps(arm.manifest(), sort_keys=True)}\n  {json.dumps(cost)}")
+        return 0
+    tag = cm.tag(arms, k=a.k, pool_name=a.pool, split=a.split)
+    only = pilot_questions(questions, gold, a.pilot) if a.pilot else None
+    if only is None and not chat_eval._pilot_ok_path(a.out, c.name, tag).is_file():
+        print(f"{c.name}: no pilot read for these settings (tag {tag}): `chunker-run --pilot 3` with the same "
+              f"flags, read it, then `pilot-ok --tag {tag}` (measuring.md §12)", file=sys.stderr)
+        return 2
+    recipe = collections_mod.recipe_for(c)
+    rerank = cm.default_rerank(held, c)
+    if rerank is None:
+        print(f"{c.name}: no reranker configured: the reranked reading is not made", file=sys.stderr)
+    cache = cm.VectorCache(a.out / "chunker" / "vectors", recipe)
+    work = cm.workdir_for(a.out)
+    holder = encoder_use.holder("legal_pilot chunker-run")
+    try:
+        with _cl.ExitStack() as stack:
+            stack.enter_context(encoder_use.held(recipe, holder=holder))
+            stack.enter_context(encoder_use.held(recipe, holder=holder, query=True))
+            got = cm.run(held, questions, gold, arms, ids, k=a.k, workdir=work, recipe=recipe, cache=cache,
+                         stored_fn=None if a.no_stored else cm.default_stored, rerank_fn=rerank, only=only)
+    except cm.RerankWithheld as e:
+        print(f"{c.name}: {e}: nothing is written; run again once the reranker answers", file=sys.stderr)
+        return 3
+    finally:
+        import shutil as _sh
+        _sh.rmtree(work, ignore_errors=True)
+    base = {**_stamp(held), "k": a.k, "pool": a.pool, "pool_records": len(ids), "split": a.split,
+            "exact": True, "tag": tag, "code": chat_eval.ask_code(), "arms": [x.name for x in arms],
+            "coverage": {k: v for k, v in cov.items() if k != "gold"}}
+    if only is not None:
+        parts = [f"# Chunker pilot [{tag}]", "",
+                 "Each arm and reading below. Read them; then `legal_pilot pilot-ok --out ... --collection "
+                 f"{c.name} --tag {tag} --by WHO --note WHAT`.", ""]
+        scratch = a.out / "runs" / c.name / f".pilot-{tag}.part.md"
+        for name, arm in got["arms"].items():
+            for reading in cm.READINGS:
+                if reading not in arm:
+                    continue
+                pilot_report(held, questions, arm[reading], gold, scratch,
+                             settings={**base, "arm": name, "legs": reading, "layer": arm["layer"]})
+                parts += [f"# {name} — {reading}", "", scratch.read_text(encoding="utf-8"), ""]
+        scratch.unlink(missing_ok=True)
+        path = a.out / "runs" / c.name / f"pilot-{tag}.md"
+        path.write_text("\n".join(parts), encoding="utf-8")
+        print(f"pilot: {got['questions']} questions × {len(got['arms'])} arms written to {path}; read it, then "
+              f"`legal_pilot pilot-ok --out {a.out} --collection {c.name} --tag {tag} --by WHO --note WHAT`")
+        return 0
+    for name, arm in got["arms"].items():
+        for reading in cm.READINGS:
+            if reading not in arm:
+                continue
+            path = _write(a.out, f"chunker-{name}-{reading}-pool-{a.pool}",
+                          {**base, "arm": name, "legs": reading, "layer": arm["layer"], "cost": arm["cost"],
+                           "embedding": arm["embedding"], "seconds_arm": arm["seconds"], **arm[reading]})
+            s = arm[reading]["summary"]
+            print(f"{name:>12} {reading:>8}  mrr@10 {s.get('mrr@10', 0):.4f}  recall@10 {s.get('recall@10', 0):.4f}"
+                  f"  ndcg@10 {s.get('ndcg@10', 0):.4f}  chunks {arm['cost']['chunks']}  → {path.name}")
+    print(f"`legal_pilot chunker-report {a.out}/runs/*chunker-*-pool-{a.pool}.json` compares every arm with "
+          f"the first, per reading")
+    return 0
 
 
 def _stamp(held: Held) -> dict[str, Any]:
@@ -989,6 +1113,28 @@ def main(argv: list[str] | None = None) -> int:
             p.add_argument("--as-of", default=None, dest="as_of")
         if cmd == "enqueue":
             p.add_argument("--pool", required=True)
+    for p in [sub.choices[c] for c in ("coverage", "run", "pool", "enqueue")]:
+        p.add_argument("--split", default="validation", choices=SPLITS,
+                       help="the expert questions: validation (179), train (716) or all (895)")
+    p = sub.add_parser("chunker-run", help="the chunker mode (tools/chunker_mode.py): arms cut in-process")
+    p.add_argument("--out", type=Path, required=True)
+    p.add_argument("--collection", required=True)
+    p.add_argument("--pool", required=True, help="a pool's name (runs/pool-<name>.json)")
+    p.add_argument("--arm", action="append", default=None,
+                   help="shipped, header-off, outline-off, akn, or NAME=<layer JSON>; repeated; the first "
+                        "is the baseline (default: shipped, header-off, akn)")
+    p.add_argument("--k", type=int, default=DEFAULT_K)
+    p.add_argument("--split", default="validation", choices=SPLITS)
+    p.add_argument("--pilot", type=int, default=None,
+                   help="the first N covered questions of every category, for a reader (§12)")
+    p.add_argument("--no-stored", action="store_true", dest="no_stored",
+                   help="embed the shipped arm too, rather than take the collection's own vectors")
+    p.add_argument("--dry-run", action="store_true", dest="dry_run",
+                   help="cut and count every arm (chunks, characters, the longest in the encoder's tokens, "
+                        "how many past its window), embed and search nothing")
+    p = sub.add_parser("chunker-report", help="every chunker-run file against its first arm, per reading")
+    p.add_argument("runs", type=Path, nargs="+")
+    p.add_argument("--write", type=Path, default=None, help="the report's markdown, written here too")
     p = sub.add_parser("compare")
     p.add_argument("run_a", type=Path); p.add_argument("run_b", type=Path)
     p = sub.add_parser("pilot-ok")
@@ -1021,10 +1167,22 @@ def main(argv: list[str] | None = None) -> int:
     if a.cmd == "pilot-ok":
         (a.out / "runs" / a.collection).mkdir(parents=True, exist_ok=True)
         return chat_eval.pilot_ok(a.out, a.collection, a.tag, a.by, a.note)
+    if a.cmd == "chunker-report":
+        from tools import chunker_mode
+        runs = [json.loads(path.read_text(encoding="utf-8")) for path in a.runs]
+        md = chunker_mode.report_markdown(chunker_mode.report(runs))
+        print(md)
+        if a.write:
+            a.write.parent.mkdir(parents=True, exist_ok=True)
+            a.write.write_text(md + "\n", encoding="utf-8")
+            print(f"written {a.write}")
+        return 0
     c, con = _open(a.collection, None)
     held = Held(c, con)
+    if a.cmd == "chunker-run":
+        return _chunker_run(a, held)
     if a.cmd in ("coverage", "run", "pool", "enqueue"):
-        corpus, questions = _load_dataset(a.out)
+        corpus, questions = _load_dataset(a.out, a.split)
         cov = coverage(held, corpus, questions)
         gold = {int(k): gold_from(v) for k, v in cov["gold"].items()}
         if a.cmd == "coverage":
@@ -1037,8 +1195,8 @@ def main(argv: list[str] | None = None) -> int:
             got = pool(held, questions, gold, depth=a.depth, as_of=a.as_of)
             path = a.out / "runs" / f"pool-{a.name}.json"
             path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(json.dumps({**_stamp(held), "name": a.name, **got}, ensure_ascii=False) + "\n",
-                            encoding="utf-8")
+            path.write_text(json.dumps({**_stamp(held), "name": a.name, "split": a.split, **got},
+                                       ensure_ascii=False) + "\n", encoding="utf-8")
             found = sum(q["gold_found_by_text"] for q in got["questions"])
             golds = sum(q["gold_records"] for q in got["questions"])
             print(f"pool {a.name}: {got['records']} records from {len(got['questions'])} questions, depth "
@@ -1087,7 +1245,7 @@ def main(argv: list[str] | None = None) -> int:
         rr = {"choice": a.reranker, "url": getattr(lent, "url", None),
               "model": getattr(lent, "model", None) or getattr(lent, "rerank_model", None)}
         settings = {"k": a.k, "as_of": a.as_of, "reranker": rr, "pool": a.pool, "tag": tag,
-                    "legs": a.legs, "exact": a.exact, "code": chat_eval.ask_code(),
+                    "legs": a.legs, "exact": a.exact, "code": chat_eval.ask_code(), "split": a.split,
                     **({"pool_chunks": pool_chunks(held.con, ids, c.plugin)} if ids is not None else {})}
         if only is not None:
             path = pilot_report(held, questions, got, gold, a.out / "runs" / c.name / f"pilot-{tag}.md",

@@ -18,6 +18,17 @@ build at 12 cores, the GPU uncapped. The card's noise (operator): 0.2 sone
 idle, 3.1 sone at full load, coil whine ~0.9 sone; its fan range is being
 measured (published figures disagree).
 
+### 2026-11-14
+
+- **The chunker mode — BUILT, nothing run** (operator: "Build the chunker mode and send A").
+  `legal_pilot chunker-run` measures chunker settings on the records a collection holds, with no new
+  space: arms cut in-process through the stages' path, embedded through the collection's recipe (cached
+  by text, the shipped arm from the collection's own vectors), read as fts, dense, hybrid and reranked
+  through the app's own code, scored by key; `chunker-report` gives Holm-corrected comparisons with the
+  first arm. Any arm past the encoder's window is refused. JuriFindIT's train split (716 expert
+  questions) is fetched; `--split all` gives 895. A for München: `shipped`, `header-off`, `akn` on jf100
+  first. docs/notes/legal-chunking-retrieval.md §5.1.
+
 ### 2026-11-13
 
 - **A collection's shown name is apart from its folders — BUILT, not deployed** (operator: "the name tag shall be
