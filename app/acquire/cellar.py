@@ -73,7 +73,7 @@ import shutil
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Iterator
+from typing import Any, Callable, Iterator
 from urllib.parse import quote
 
 import httpx
@@ -92,6 +92,14 @@ FIRST_YEAR = 1952
 PAGE = 5_000
 #: one HTTP exchange's bound; a response streams past it chunk by chunk
 TIMEOUT_S = 120.0
+#: ONE SPARQL QUERY'S bound, apart (München, 2026-11-14, from the node, the
+#: count query of one CELEX year in Italian: 2021 answered in 45.9 s, 1990 in
+#: 235.5 s; at TIMEOUT_S every heavy year timed out five times and the whole
+#: fetch failed). Virtuoso evaluates the whole window before its first byte,
+#: so the bound is on the wait for the answer: ~4x the slowest measured.
+#: The wait honours a stop every second (`_answer_of`), so a long query never
+#: delays a SIGTERM or a `node pause` (invariant 2: bounded in time)
+SPARQL_TIMEOUT_S = 900.0
 ATTEMPTS = 5
 _CHUNK = 1 << 16
 _NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.()\-]*$")
@@ -213,38 +221,73 @@ def page_query(year: int, languages: tuple[str, ...], offset: int) -> str:
             + f"}}\nGROUP BY ?celex ?language\nORDER BY ?celex ?language\nLIMIT {PAGE} OFFSET {offset}")
 
 
-def sparql(client: httpx.Client, base: str, query: str, *,
+def _answer_of(fn: Callable[[], Any], *, poll_s: float = 1.0) -> Any:
+    """`fn()` in a daemon thread, its answer awaited while a stop is checked
+    every `poll_s`: a stop raises TransferAborted at once, and the thread is
+    left to its own bound (SPARQL_TIMEOUT_S), its answer dropped."""
+    import threading
+    box: dict[str, Any] = {}
+
+    def run() -> None:
+        try:
+            box["value"] = fn()
+        except BaseException as e:            # noqa: BLE001 — raised again in the caller
+            box["error"] = e
+    t = threading.Thread(target=run, name="cellar-sparql", daemon=True)
+    t.start()
+    while t.is_alive():
+        t.join(poll_s)
+        _stop_check()
+    if "error" in box:
+        raise box["error"]
+    return box.get("value")
+
+
+def sparql(client: httpx.Client, base: str, query: str, *, what: str = "the SPARQL query",
            charge: Callable[[int], None] = budget.acquire_bytes) -> list[dict]:
     """The SPARQL 1.1 Protocol: the query POSTed as a form field, the JSON
-    results format back (`results.bindings`), every byte charged."""
+    results format back (`results.bindings`), every byte charged. `what`
+    names the query in an error ("the count of 1990"), so the slow window is
+    said, not guessed."""
     url = base.rstrip("/") + SPARQL_PATH
+    timeout = httpx.Timeout(SPARQL_TIMEOUT_S, connect=min(TIMEOUT_S, SPARQL_TIMEOUT_S))
     last = ""
+
+    def once() -> tuple[int, bytes]:
+        with client.stream("POST", url, data={"query": query, "format": "application/sparql-results+json"},
+                           headers=_headers({"Accept": "application/sparql-results+json"}),
+                           timeout=timeout) as r:
+            if r.status_code >= 500:
+                return r.status_code, b""
+            body = bytearray()
+            for chunk in r.iter_bytes(_CHUNK):
+                body += chunk
+                charge(len(chunk))
+            return r.status_code, bytes(body)
     for attempt in range(ATTEMPTS):
         if attempt:
             time.sleep(float(1 << (attempt - 1)))
             _stop_check()
+        t0 = time.monotonic()
         try:
-            with client.stream("POST", url, data={"query": query, "format": "application/sparql-results+json"},
-                               headers=_headers({"Accept": "application/sparql-results+json"})) as r:
-                if r.status_code >= 500:
-                    last = f" {r.status_code} to the SPARQL query"
-                    continue
-                body = bytearray()
-                for chunk in r.iter_bytes(_CHUNK):
-                    body += chunk
-                    charge(len(chunk))
-                if r.status_code != 200:
-                    raise TransportError(f"cellar: {r.status_code} to the SPARQL query: {bytes(body[:200])!r}")
-            try:
-                return list(json.loads(bytes(body))["results"]["bindings"])
-            except (ValueError, KeyError, TypeError) as e:
-                # a page cut mid-answer reads as broken JSON: the origin's episode
-                last = f" connection timed out: the SPARQL answer did not parse ({e})"
-                continue
+            status, body = _answer_of(once)
         except httpx.TimeoutException as e:
-            last = f" connection timed out on the SPARQL query: {type(e).__name__}"
+            last = (f" connection timed out on {what}: {type(e).__name__} after "
+                    f"{time.monotonic() - t0:.0f} s (bound {SPARQL_TIMEOUT_S:.0f} s)")
+            continue
         except httpx.TransportError as e:
-            last = f" {type(e).__name__} on the SPARQL query: {e}"
+            last = f" {type(e).__name__} on {what}: {e}"
+            continue
+        if status >= 500:
+            last = f" {status} to {what}"
+            continue
+        if status != 200:
+            raise TransportError(f"cellar: {status} to {what}: {body[:200]!r}")
+        try:
+            return list(json.loads(body)["results"]["bindings"])
+        except (ValueError, KeyError, TypeError) as e:
+            # a page cut mid-answer reads as broken JSON: the origin's episode
+            last = f" connection timed out: {what}'s answer did not parse ({e})"
     raise TransportError(f"cellar:{last} after {ATTEMPTS} attempts")
 
 
@@ -282,14 +325,16 @@ def listing(endpoint: Endpoint, spec: AcquisitionSpec, flt: Filter, *,
     try:
         for year in years:
             _stop_check()
-            counted = sparql(client, endpoint.url, count_query(year, languages), charge=charge)
+            counted = sparql(client, endpoint.url, count_query(year, languages),
+                             what=f"the count of {year}", charge=charge)
             try:
                 want = int(counted[0]["n"]["value"]) if counted else 0
             except (KeyError, ValueError, IndexError):
                 raise TransportError(f"cellar: the count of {year} answered {counted!r:.200}") from None
             got = 0
             while got < want:
-                rows = sparql(client, endpoint.url, page_query(year, languages, got), charge=charge)
+                rows = sparql(client, endpoint.url, page_query(year, languages, got),
+                              what=f"the {year} page at offset {got}", charge=charge)
                 if not rows:
                     break
                 for row in rows:
