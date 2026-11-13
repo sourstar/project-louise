@@ -466,3 +466,39 @@ def test_the_terms_are_the_legal_notice_verbatim_and_lf():
     assert hashlib.sha256(notice).hexdigest() == \
         "7c58fabcc73883e265e43551e404e4cddc336fcf71d7a97857cae92b7e6c7a27", "the notice, byte for byte"
     assert notice.decode("utf-8").count("​") == 8
+
+
+@pytest.mark.parametrize("celex", [ACT, CONS, DIR])
+def test_no_attribute_of_any_item_is_lost(corpus, celex):
+    """Invariant 11, past the words: every attribute of every element of
+    every XML item is in the record (München, 2026-11-14, comparing the
+    forms: a consolidation's amending acts are `MOD.ACT TYPE= LEG.VAL=`
+    and its corrigenda `CORRIG RELEVANT=`, markup rather than text)."""
+    doc = _doc(corpus, celex)
+    held = json.dumps(doc.extra, ensure_ascii=False)
+    unit = corpus / src.unit_rel("en", celex)
+    missing = []
+    for p in sorted(unit.iterdir()):
+        for el in ET.fromstring(p.read_bytes()).iter():
+            for k, v in el.attrib.items():
+                if json.dumps(k, ensure_ascii=False) not in held or json.dumps(v, ensure_ascii=False) not in held:
+                    missing.append(f"{p.name}: {el.tag} {k}={v!r}")
+    assert not missing, missing[:20]
+
+
+def test_a_consolidation_keeps_its_amending_acts_with_their_attributes(corpus):
+    doc = _doc(corpus, CONS)
+    fam = json.dumps(doc.extra["formex"].get("fam_comp") or doc.extra, ensure_ascii=False)
+    assert fam.count('"MOD.ACT"') >= 1 and '"LEG.VAL": "REG"' in fam and '"TYPE": "MOD"' in fam
+
+
+@pytest.mark.parametrize("celex", [ACT, CONS, DIR])
+def test_the_markup_is_every_attribute_of_the_body_and_annexes_in_document_order(corpus, celex):
+    doc = _doc(corpus, celex)
+    unit = corpus / src.unit_rel("en", celex)
+    markup = doc.extra["markup"]
+    assert doc.extra["body_file"] in markup
+    for name, held in markup.items():
+        root = ET.fromstring((unit / name).read_bytes())
+        assert held == [[e.tag, dict(e.attrib)] for e in root.iter() if isinstance(e.tag, str) and e.attrib]
+    assert "markup" in src.EXTRA_KEYS and src.EurlexSource.PARSER_VERSION == 2
