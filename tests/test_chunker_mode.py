@@ -51,12 +51,14 @@ class Encoder:
     for texts that share words — enough for the dense leg to rank by
     content. Counts what it was asked."""
 
-    def __init__(self):
-        self.calls, self.texts = 0, 0
+    def __init__(self, run: str = "run-a"):
+        self.calls, self.texts, self.run = 0, 0, run
 
-    def __call__(self, recipe, texts, *, query):
+    def __call__(self, recipe, texts, *, query, runs=None):
         self.calls += 1
         self.texts += len(texts)
+        if runs is not None:
+            runs.add(self.run)
         out = []
         for t in texts:
             v = np.zeros(DIM)
@@ -147,23 +149,121 @@ def test_the_cache_resumes_and_a_text_two_arms_share_is_embedded_once(tmp_path):
     assert cm.VectorCache(tmp_path, other).dir != cache.dir
 
 
-def test_the_shipped_arm_takes_the_collections_vectors_once_a_sample_reproduces_them(built, tmp_path):
+def _space(exactness: str = "exact", tolerance: str = "0.9999"):
+    """A collection as `seed_stored` reads it: the stored rows come from
+    `stored_fn`, the rule from its Codex's space."""
+    return SimpleNamespace(name="normattiva",
+                           codex=SimpleNamespace(space=SimpleNamespace(exactness=exactness, tolerance=tolerance)))
+
+
+def test_the_shipped_arm_takes_only_identical_texts_held_to_the_spaces_rule(built, tmp_path):
+    """München's review of #621: a stored vector is taken only where the
+    stored row holds the arm's TEXT byte for byte (a chunk id does not name
+    the title a header writes), and only once a re-embedded sample gives
+    the stored bytes back in an exact space, or the space's tolerance in a
+    near one; the seeds are never cached, so a run without `--stored` cannot
+    read them."""
     enc = Encoder()
     arm = cm.arm_of(built.collection, "shipped")
     chunks, _ = cm.cut(arm, built, pool_ids(built))
-    held = {c["id"]: enc(RECIPE, [c["text"]], query=False)[0] for c in chunks}
-    cache = cm.VectorCache(tmp_path / "a", RECIPE)
-    got = cm.seed_stored(chunks, built.collection, cache=cache, recipe=RECIPE,
-                         stored_fn=lambda ids, c: {i: held[i] for i in ids}, embed_fn=enc)
-    assert got["stored"] == len({c["text"] for c in chunks}) and got["check"]["worst"] > 0.999
+    held = {c["id"]: (c["text"], np.asarray(enc(RECIPE, [c["text"]], query=False)[0])) for c in chunks}
+    texts = [c["text"] for c in chunks]
+    lone = next(c for c in chunks if texts.count(c["text"]) == 1)        # a text no other chunk has
+    held[lone["id"]] = ("another title\n" + lone["text"], held[lone["id"]][1])   # same id, another text
+    stored = lambda ids, c: {i: held[i] for i in ids if i in held}
+    seeds, got = cm.seed_stored(chunks, _space(), recipe=RECIPE, stored_fn=stored, embed_fn=enc,
+                                log=lambda m: None)
+    assert got["stored_text_differs"] == 1 and cm.text_key(lone["text"], query=False) not in seeds
+    assert got["stored"] == len(seeds) == len(set(texts)) - 1
+    assert got["check"]["bytes_equal"] == got["check"]["n"] and "bytes" in got["check"]["rule"]
+    cache = cm.VectorCache(tmp_path / "v", RECIPE)
     before = enc.texts
     _, stats = cm.embed([c["text"] for c in chunks], cache=cache, recipe=RECIPE, query=False, embed_fn=enc,
-                        log=lambda m: None)
-    assert stats["embedded"] == 0 and enc.texts == before, "nothing re-embedded"
+                        seeds=seeds, log=lambda m: None)
+    assert stats["from_stored"] == len(chunks) - 1 and stats["embedded"] == 1 and enc.texts == before + 1
+    assert len(cache) == 1, "only what the encoder made is cached, never a seed"
+    _, again = cm.embed([c["text"] for c in chunks], cache=cm.VectorCache(tmp_path / "v", RECIPE), recipe=RECIPE,
+                        query=False, embed_fn=enc, log=lambda m: None)
+    assert again["embedded"] == len({c["text"] for c in chunks}) - 1, "a run without seeds embeds them"
+    # an exact space: one bit off is another run's vector — nothing seeded
+    nudged = {i: (t, (v + 1e-9).astype(np.float64)) for i, (t, v) in held.items()}
+    seeds, got = cm.seed_stored(chunks, _space(), recipe=RECIPE, embed_fn=enc, log=lambda m: None,
+                                stored_fn=lambda ids, c: {i: nudged[i] for i in ids})
+    assert seeds == {} and "stored_refused" in got and got["check"]["bytes_equal"] < got["check"]["n"]
+    # a near space admits it at its tolerance, and refuses below it
+    seeds, got = cm.seed_stored(chunks, _space("near"), recipe=RECIPE, embed_fn=enc, log=lambda m: None,
+                                stored_fn=lambda ids, c: {i: nudged[i] for i in ids})
+    assert seeds and "tolerance" in got["check"]["rule"]
     rng = np.random.default_rng(1)
-    with pytest.raises(SystemExit, match="not this encoder's"):
-        cm.seed_stored(chunks, built.collection, cache=cm.VectorCache(tmp_path / "b", RECIPE), recipe=RECIPE,
-                       stored_fn=lambda ids, c: {i: rng.normal(size=DIM).tolist() for i in ids}, embed_fn=enc)
+    seeds, got = cm.seed_stored(chunks, _space("near"), recipe=RECIPE, embed_fn=enc, log=lambda m: None,
+                                stored_fn=lambda ids, c: {i: (held[i][0], rng.normal(size=DIM)) for i in ids})
+    assert seeds == {} and "stored_refused" in got
+    # no Codex, no rule: nothing seeded
+    seeds, got = cm.seed_stored(chunks, SimpleNamespace(name="x"), recipe=RECIPE, embed_fn=enc,
+                                stored_fn=stored, log=lambda m: None)
+    assert seeds == {} and "no Codex" in got["stored_refused"]
+
+
+def test_the_runs_are_pinned_and_another_run_stops_the_measurement(tmp_path, monkeypatch):
+    runs = cm.Runs("run-a", "run-q")
+    asked = []
+
+    def answer(recipe, texts, *, query, runs=None):
+        asked.append(query)
+        runs.add("run-q" if query else "run-a")
+        return [[1.0] * DIM for _ in texts]
+    monkeypatch.setattr(cm, "default_embed", answer)
+    fn = cm.pinned_embed(runs)
+    assert len(fn(RECIPE, ["a"], query=False)) == 1 and len(fn(RECIPE, ["q"], query=True)) == 1
+    monkeypatch.setattr(cm, "default_embed", Encoder(run="run-b"))
+    with pytest.raises(cm.RunChanged, match="not the pinned run"):
+        fn(RECIPE, ["a"], query=False)
+    # the cache's directory names the space and both runs
+    a = cm.VectorCache(tmp_path, RECIPE, space_id="s1", runs=runs).dir
+    assert a != cm.VectorCache(tmp_path, RECIPE, space_id="s1", runs=cm.Runs("run-b", "run-q")).dir
+    assert a != cm.VectorCache(tmp_path, RECIPE, space_id="s2", runs=runs).dir
+    other = SimpleNamespace(**{**vars(RECIPE), "query_model": "another"})
+    assert a != cm.VectorCache(tmp_path, other, space_id="s1", runs=runs).dir
+
+
+def test_the_runs_are_validated_before_anything_is_embedded(monkeypatch):
+    from app import run_check
+    from app.hold import runs as runs_mod
+    with pytest.raises(SystemExit, match="validates no runs"):
+        cm.pin_runs(SimpleNamespace(name="old", codex=None), RECIPE, log=lambda m: None)
+    codex = SimpleNamespace(space=SimpleNamespace(query=SimpleNamespace(encoder=None)))
+    c = SimpleNamespace(name="normattiva", codex=codex)
+    monkeypatch.setattr(run_check, "applies", lambda c: True)
+    monkeypatch.setattr(run_check, "answering_run", lambda recipe, query=False: "run-q" if query else "run-d")
+    guarded = []
+    monkeypatch.setattr(run_check, "guard", lambda root, name, codex, recipe, answered, **kw:
+                        guarded.append((sorted(answered), kw["role"])))
+    assert cm.pin_runs(c, RECIPE, log=lambda m: None) == cm.Runs("run-d", "run-q")
+    assert guarded == [(["run-d"], "document"), (["run-q"], "document")], "a symmetric space: one role"
+
+    def failed(*a, **k):
+        raise runs_mod.RunUnvalidated("FAILED the gate", "run-d", failed=True)
+    monkeypatch.setattr(run_check, "guard", failed)
+    with pytest.raises(SystemExit, match="not measured — FAILED the gate"):
+        cm.pin_runs(c, RECIPE, log=lambda m: None)
+
+
+def test_the_arms_cut_the_record_the_embed_stage_reads(built, monkeypatch):
+    """The stage cuts `[title, sections]` from the collection's fresh record
+    (app/parallel.py `_one`): so do the arms, the parse only where there is
+    no record (München, 2026-11-13)."""
+    from app import record_source
+    arm = cm.arm_of(built.collection, f"on={legal(True)}")
+    ids = pool_ids(built)
+    parsed, cost = cm.cut(arm, built, ids)
+    assert cost["records_from_records"] == 0
+    monkeypatch.setattr(record_source, "record_for",
+                        lambda c, row: {"title": "TITOLO DEL RECORD",
+                                        "sections": built._row_and_doc(row["uid"])[1].sections})
+    recorded, cost = cm.cut(arm, built, ids)
+    assert cost["records_from_records"] == len(ids)
+    assert any("TITOLO DEL RECORD" in c["text"] for c in recorded)
+    assert not any("TITOLO DEL RECORD" in c["text"] for c in parsed)
 
 
 # ---- the readings and the run ------------------------------------------------------------
@@ -278,14 +378,55 @@ def test_the_report_compares_every_arm_with_the_runs_first_whatever_the_files_or
             _run_file("shipped", "hybrid", [1.0, 0.5, 1.0, 0.5], arms),
             _run_file("header-off", "hybrid", [1.0, 0.5, 0.5, 0.5], arms)]
     rep = cm.report(runs)
-    rows = rep["hybrid"]["rows"]
+    rows = rep["readings"]["hybrid"]["rows"]
     assert [r["arm"] for r in rows] == arms and rows[0]["baseline"]
     akn = rows[2]["vs_baseline"]["mrr@10"]
     assert akn["a_minus_b"] == pytest.approx(-0.5) and akn["p_holm"] >= akn["p"]
     md = cm.report_markdown(rep)
     assert "## hybrid (4 questions)" in md and "| shipped |" in md and "baseline" in md
+    assert "title TWICE" in md and "bias toward the challengers" in md, "read with: said on the page"
     with pytest.raises(SystemExit, match="two files of one arm"):
         cm.report(runs + [_run_file("akn", "hybrid", [0.0, 0.5, 0.0, 0.5], arms)])
+    # files of another measurement are refused, whatever else matches
+    for key, value in (("tag", "other"), ("code", "sha256:x"), ("runs", {"document": "b"}), ("stored", True)):
+        stray = {**_run_file("header-off", "hybrid", [1.0, 0.5, 0.5, 0.5], arms), key: value}
+        with pytest.raises(SystemExit, match=f"differ in {key}"):
+            cm.report(runs[:2] + [stray])
+
+
+def test_the_decision_is_the_rule_stated_before_the_run():
+    """One measure, one margin, one-sided, Holm across the decided arms:
+    keep when the baseline is not worse by the margin, drop when the arm is
+    better by it, undecided otherwise — and on validation, undecided goes
+    on to every question."""
+    arms = ["shipped", "header-off", "akn"]
+    n = 200
+    base = [0.5 + 0.3 * ((i * 7) % 5 - 2) / 2 for i in range(n)]
+    jitter = [0.04 * (((i * 13) % 7) - 3) / 3 for i in range(n)]
+    same = [b + j for b, j in zip(base, jitter)]                       # mean difference 0, small spread
+    better = [b + 0.15 + j for b, j in zip(base, jitter)]              # better by far more than 0.02
+    runs = [_run_file("shipped", "reranked", base, arms), _run_file("header-off", "reranked", same, arms),
+            _run_file("akn", "reranked", better, arms)]
+    rule = cm.decision(runs, margin=0.02)
+    got = {r["arm"]: r for r in rule["rows"]}
+    assert got["header-off"]["verdict"] == "keep" and got["header-off"]["upper95"] < 0.02
+    assert got["akn"]["verdict"] == "drop" and got["akn"]["lower95"] > 0.02
+    assert got["akn"]["p_drop_holm"] >= got["akn"]["p_drop"], "Holm across the decided arms"
+    # a wide spread on few questions: undecided, and on validation the next step is every question
+    noisy = [_run_file("shipped", "reranked", [0.0, 1.0, 0.0, 1.0], arms),
+             _run_file("header-off", "reranked", [1.0, 0.0, 0.0, 1.0], arms)]
+    one = cm.decision(noisy, margin=0.02)["rows"][0]
+    assert one["verdict"] == "undecided" and "--split all" in one["next"]
+    noisy = [{**r, "split": "all"} for r in noisy]
+    assert "stated before the run" in cm.decision(noisy, margin=0.02)["rows"][0]["next"]
+    # only the arms asked about; the page says the rule
+    only = cm.decision(runs, margin=0.02, decide=["header-off"])
+    assert [r["arm"] for r in only["rows"]] == ["header-off"]
+    with pytest.raises(SystemExit, match="not an arm"):
+        cm.decision(runs, decide=["outline-off"])
+    md = cm.report_markdown(cm.report(runs, margin=0.02))
+    assert "## Decision: reranked mrr@10, margin 0.02" in md and "**keep**" in md and "**drop**" in md
+    assert cm.report(runs, margin=None)["decision"] is None
 
 
 # ---- the questions and the command ---------------------------------------------------------
@@ -328,6 +469,7 @@ def test_the_command_pilots_then_runs_then_reports(built, tmp_path, monkeypatch,
     monkeypatch.setattr(lp, "_open", lambda name, root: (built.collection, built.con))
     monkeypatch.setattr(collections_mod, "recipe_for", lambda c: RECIPE)
     monkeypatch.setattr(cm, "default_embed", Encoder())
+    monkeypatch.setattr(cm, "pin_runs", lambda c, recipe, log=print: cm.Runs("run-a", "run-a"))
     monkeypatch.setattr(cm, "default_stored", lambda ids, c: {})
     monkeypatch.setattr(cm, "default_rerank", lambda held, c: (lambda q, hits: hits))
     monkeypatch.setattr(cm, "window_counter", lambda c, r: None)
@@ -349,6 +491,12 @@ def test_the_command_pilots_then_runs_then_reports(built, tmp_path, monkeypatch,
     assert len(files) == 2 * len(cm.READINGS)
     one = json.loads(files[0].read_text(encoding="utf-8"))
     assert one["arms"] == ["shipped", "header"] and one["exact"] is True and one["split"] == "validation"
+    assert one["runs"] == {"document": "run-a", "query": "run-a"} and one["stored"] is False
+    assert "-vec-fresh-" in one["tag"] and one["summary"]["builder_share"] is None, "a pool without lists"
+    assert all(json.loads(f.read_text(encoding="utf-8"))["embedding"]["from_stored"] == 0 for f in files), \
+        "by default every arm fresh, on the one run"
+    # `--stored` is another measurement: its own pilot first
+    assert lp.main(flags + ["--stored"]) == 2 and "-vec-stored-" in capsys.readouterr().err
     assert one["cost"]["chunks"] > 0 and one["layer"]["chunker"]["id"] in ("akn_article", "legal_article")
     capsys.readouterr()
     report = tmp_path / "report.md"
@@ -365,8 +513,20 @@ def test_the_command_pilots_then_runs_then_reports(built, tmp_path, monkeypatch,
     monkeypatch.setattr(collections_mod, "recipe_for", lambda c: SimpleNamespace(**{**vars(RECIPE), "ctx": 3}))
     assert lp.main(flags + ["--dry-run"]) == 0
     assert "REFUSED" in capsys.readouterr().out
-    # a pool built from other questions than the run asks is refused
+    # pinned to one run, answered by another (an engine swapped behind the
+    # url): it stops, and nothing is written; a new run has its own cache
+    monkeypatch.setattr(collections_mod, "recipe_for", lambda c: RECIPE)
+    monkeypatch.setattr(cm, "window_counter", lambda c, r: None)
+    monkeypatch.setattr(cm, "default_embed", Encoder(run="run-b"))
+    monkeypatch.setattr(cm, "pin_runs", lambda c, recipe, log=print: cm.Runs("run-c", "run-c"))
+    before = len(list((out / "runs").glob("*chunker-*.json")))
+    with pytest.raises(cm.RunChanged):
+        lp.main(flags)
+    assert len(list((out / "runs").glob("*chunker-*.json"))) == before
+    # a pool built from other questions than the run asks is refused — here and by `run`
     (out / "runs" / "pool-p.json").write_text(json.dumps({"name": "p", "split": "all",
                                                           "native_ids": pool_ids(built)}), encoding="utf-8")
     with pytest.raises(SystemExit, match="built from the all questions"):
         lp.main(flags)
+    with pytest.raises(SystemExit, match="built from the all questions"):
+        lp.main(["run", "--out", str(out), "--collection", "normattiva", "--pool", "p"])
