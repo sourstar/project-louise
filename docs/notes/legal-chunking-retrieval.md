@@ -482,3 +482,41 @@ extending it (do not reinvent the wheel).
   part carries. An errored or out-of-scope version keeps its old labelled
   rows (`…-art…`); no citation's token matches them, so they show in no
   fact, and they go when the version is next parsed.
+
+## 9. Context in chunks, beyond legal_article (operator and architecture session, 2026-11-14)
+
+The operator: "check if the chunker we use has this kind of functionality,
+if it can be added, and if there are other similar functionalities that may
+improve specific use cases". Of the eight chunkers, only `legal_article`
+writes context into its chunks (`header`, `outline`). The architecture
+session's answer:
+
+- **How: one shared module** (`app/chunking_context.py`: `header_of`, `toc`,
+  a budgeted cut), called by each chunker that opts in, in its own unit and
+  with its own split. The header is counted inside the window. The params are
+  `header` and `outline` in the layer, inside `space_id`; an absent param gives
+  today's bytes (invariant 3), with a test that every pinned space id is
+  unchanged. legal_article v1–v3 keep their own code (golden-tested). `book`
+  cannot take it (its window comes from the environment, grandfathered; its
+  parameterised twin is `fixed`).
+- **In the chunker contract, opt-in:** `header`, `outline`, and a table-aware
+  split where the parser keeps tables (Formex, JATS). Neighbour headings come
+  only after `header` is measured.
+- **Elsewhere:** parent–child is a sister with a smaller `max_tokens` plus a
+  results feature (05: fetch the article by the hit's label). Definitions are
+  recorded by the PARSER (§9.5 `extra`), and the chunker may cite them later.
+- **Refused in the chunker:** identifiers in the embedded text (noise in a
+  vector; ids go to the key pin and the text index); late chunking (a
+  space-level design: token embeddings, a VeGa receipt per pooled span);
+  doc2query and RAPTOR (LLM output goes in an annotation of one collection;
+  invariant 4 if it ranks).
+
+**Measured before the legal full embedding** (the chunker is inside space_id).
+One factor at a time, in order: header, then smaller units, then
+definitions. The first: Normattiva (header on) against a sister with
+`header = false` (outline as it is), the sister embedding only the jf100
+pool. Both are searched restricted to the pool and with every vector query
+a flat scan (`legal_pilot run --exact`), so they share their records, their
+distractors and their search path. Each leg is reported apart (`--legs
+dense|fts|hybrid`), then reranked; with the pool's chunk count in each arm,
+and the smallest difference the test could detect (`compare`: 2.80·sd/√n).

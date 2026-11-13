@@ -405,3 +405,68 @@ def test_the_pilot_report_marks_gold_only_for_its_own_question(tmp_path):
     text = lp.pilot_report(held, [{"question": "q"}], got, gold, tmp_path / "r.md", settings={}).read_text()
     lines = [l for l in text.splitlines() if l.strip()[:2] in ("1.", "2.", "3.")]
     assert "gold(other q)" in lines[0] and " GOLD " in lines[1] and "GOLD" not in lines[2] and "gold" not in lines[2]
+
+
+# ---- the chunker measurement (the architecture session, 2026-11-14) -----------------------------
+
+def test_a_run_restricted_to_one_leg_asks_the_reader_s_search_for_that_leg(monkeypatch):
+    from app import query_service
+    from app.ask import results
+    asked = []
+    monkeypatch.setattr(query_service, "run_search", lambda names, q, k, mode, tr, **kw: asked.append(mode) or {})
+    monkeypatch.setattr(results, "search", lambda question, *, collections, limit, as_of, run=None:
+                        run(collections, question, limit, "hybrid", False) if run else asked.append("own"))
+    for mode in ("dense", "fts"):
+        lp.leg_search(mode)("q", collections=["c"], limit=5, as_of=None)
+    assert asked == ["dense", "fts"]
+    assert lp.leg_search("hybrid") is lp.default_search, "hybrid is the reader's own search, untouched"
+    with pytest.raises(SystemExit):
+        lp.leg_search("catalog")
+
+
+def test_exact_bypasses_the_vector_index_inside_the_run_only():
+    from app import vector_index
+    real = vector_index.query
+
+    class Q:
+        def bypass_vector_index(self):
+            return "flat"
+    with lp.exact_vectors(True):
+        assert vector_index.query(Q(), None) == "flat"
+    assert vector_index.query is real
+    with lp.exact_vectors(False):
+        assert vector_index.query is real
+
+
+def test_the_default_tag_is_unchanged_and_a_leg_or_exact_run_has_its_own():
+    base = lp.pilot_tag(reranker="off", k=20, pool_name="jf100", as_of=None)
+    assert "-legs-" not in base and "-exact" not in base
+    assert "-legs-dense-exact-" in lp.pilot_tag(reranker="off", k=20, pool_name="jf100", as_of=None,
+                                                legs="dense", exact=True)
+
+
+def test_the_detectable_difference_is_2_8_sd_over_root_n():
+    xa, xb = [1.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 0.0]
+    import statistics
+    assert lp.detectable(xa, xb) == pytest.approx(2.8015 * statistics.stdev([1, 0, 1, 0]) / 2)
+
+
+def test_two_runs_on_other_legs_or_search_modes_are_not_compared():
+    row = {"index": 0, "recall@10": 1.0}
+    a = {"k": 20, "pool": "p", "legs": "dense", "per_question": [row], "summary": {"recall@10": 1.0}}
+    b = {**a, "legs": "hybrid"}
+    with pytest.raises(SystemExit):
+        lp.compare(a, b)
+    with pytest.raises(SystemExit):
+        lp.compare({**a, "exact": True}, a)
+    old = {k: v for k, v in a.items() if k != "legs"}
+    assert lp.compare({**old}, {**old, "legs": "hybrid"})["questions"] == 1, "a run before the flag is hybrid"
+
+
+def test_the_pool_s_chunks_are_counted_from_the_manifest():
+    import sqlite3
+    con = sqlite3.connect(":memory:")
+    con.execute("CREATE TABLE documents (uid TEXT, chunks INTEGER)")
+    con.executemany("INSERT INTO documents VALUES (?,?)", [("normattiva:1", 10), ("normattiva:2", 5),
+                                                           ("normattiva:3", 7)])
+    assert lp.pool_chunks(con, [1, 2, 9], "normattiva") == 15

@@ -362,6 +362,63 @@ def text_search(question: str, *, collections: list[str], limit: int, as_of: str
     return results.search(question, collections=collections, limit=limit, as_of=as_of, run=fts)
 
 
+#: the legs a run may be restricted to (retrieval.search's modes): the
+#: architecture session, 2026-11-14 — a chunker's effect is reported per leg,
+#: since a header feeds BM25 as well as the vectors
+LEGS = ("hybrid", "dense", "fts")
+
+
+def leg_search(mode: str) -> Callable:
+    """The reader's search with its legs reduced to `mode` (`hybrid` = the
+    reader's own, untouched)."""
+    if mode not in LEGS:
+        raise SystemExit(f"--legs is one of {', '.join(LEGS)}, not {mode!r}")
+    if mode == "hybrid":
+        return default_search
+
+    def search(question: str, *, collections: list[str], limit: int, as_of: str | None):
+        from app import query_service
+        from app.ask import results
+
+        def one_leg(names, query, k, _mode, translate, **kw):
+            return query_service.run_search(names, query, k, mode, translate, **kw)
+        return results.search(question, collections=collections, limit=limit, as_of=as_of, run=one_leg)
+    return search
+
+
+@contextlib.contextmanager
+def exact_vectors(on: bool):
+    """`--exact`: every vector query a FLAT scan, the index bypassed
+    (LanceDB's `bypass_vector_index`). Two collections of different sizes are
+    then searched the same way: a full table through its ANN index against a
+    pool-only sister searched flat is not like-for-like (the architecture
+    session, 2026-11-14). In this process only."""
+    if not on:
+        yield
+        return
+    from app import vector_index
+    real = vector_index.query
+    vector_index.query = lambda q, collection: q.bypass_vector_index()
+    try:
+        yield
+    finally:
+        vector_index.query = real
+
+
+def pool_chunks(con, native_ids: Iterable[int], plugin: str, *, window: int = 500) -> int:
+    """The chunks the pool's records hold in this collection (the manifest's
+    count): reported with every pooled run, since a chunker that writes a
+    header cuts more, shorter pieces and that is part of its effect."""
+    ids = sorted({int(i) for i in native_ids})
+    total = 0
+    for start in range(0, len(ids), window):
+        part = [f"{plugin}:{i}" for i in ids[start:start + window]]
+        r = con.execute(f"SELECT COALESCE(SUM(chunks), 0) FROM documents WHERE uid IN "
+                        f"({','.join('?' for _ in part)})", part).fetchone()
+        total += int(r[0])
+    return total
+
+
 @contextlib.contextmanager
 def pool_prefilter(native_ids: set[int] | None):
     """Every leg restricted to `native_ids` before it ranks: the facet
@@ -529,10 +586,15 @@ def pilot_questions(questions: list[dict[str, Any]], gold: dict[int, Gold], n: i
     return out
 
 
-def pilot_tag(*, reranker: str, k: int, pool_name: str | None, as_of: str | None) -> str:
+def pilot_tag(*, reranker: str, k: int, pool_name: str | None, as_of: str | None,
+              legs: str = "hybrid", exact: bool = False) -> str:
     """The settings a reading is valid for, the code included (§13: a whole
     run runs its pilot's code)."""
-    raw = f"rerank-{reranker}-k{k}-pool-{pool_name or 'none'}-asof-{as_of or 'now'}-code-{chat_eval.ask_code()[7:19]}"
+    # the legs and the flat scan only when asked: the default runs keep the
+    # tags their readings were recorded under
+    extra = ("" if legs == "hybrid" else f"-legs-{legs}") + ("-exact" if exact else "")
+    raw = (f"rerank-{reranker}-k{k}-pool-{pool_name or 'none'}-asof-{as_of or 'now'}{extra}"
+           f"-code-{chat_eval.ask_code()[7:19]}")
     return re.sub(r"[^A-Za-z0-9._-]+", "-", raw)
 
 
@@ -571,13 +633,25 @@ def pilot_report(held: Held, questions: list[dict[str, Any]], got: dict[str, Any
 COMPARED = ("recall@10", "recall@20", "mrr@10", "ndcg@10")
 
 
+def detectable(xa: list[float], xb: list[float]) -> float:
+    """The smallest true mean difference this paired comparison would detect
+    with 80 % power at a two-sided 5 % level: (z_.975 + z_.80) · sd(d) / √n
+    = 2.80 · sd(d) / √n (the architecture session, 2026-11-14: a null result
+    is read against it, never as "no effect")."""
+    import statistics
+    d = [x - y for x, y in zip(xa, xb)]
+    if len(d) < 2:
+        return float("inf")
+    return 2.8015 * statistics.stdev(d) / len(d) ** 0.5
+
+
 def compare(a: dict[str, Any], b: dict[str, Any], metrics: Iterable[str] = COMPARED) -> dict[str, Any]:
     """Run `a` against run `b`, question by question (per_question rows
     keyed by the question's index): for each metric, a − b with its interval
     and p. Two runs over other questions, k or pool are not comparable."""
-    for key in ("k", "pool"):
-        if a.get(key) != b.get(key):
-            raise SystemExit(f"the two runs differ in {key}: {a.get(key)!r} and {b.get(key)!r}")
+    for key, default in (("k", None), ("pool", None), ("legs", "hybrid"), ("exact", False)):
+        if a.get(key, default) != b.get(key, default):
+            raise SystemExit(f"the two runs differ in {key}: {a.get(key, default)!r} and {b.get(key, default)!r}")
     ra = {r["index"]: r for r in a["per_question"] if "index" in r}
     rb = {r["index"]: r for r in b["per_question"] if "index" in r}
     if ra.keys() != rb.keys():
@@ -588,9 +662,10 @@ def compare(a: dict[str, Any], b: dict[str, Any], metrics: Iterable[str] = COMPA
     for m in metrics:
         if not all(m in ra[i] and m in rb[i] for i in order):
             continue
-        delta, low, high, p = bakeoff.paired([float(ra[i][m]) for i in order], [float(rb[i][m]) for i in order])
+        xa, xb = [float(ra[i][m]) for i in order], [float(rb[i][m]) for i in order]
+        delta, low, high, p = bakeoff.paired(xa, xb)
         out[m] = {"a": a["summary"].get(m), "b": b["summary"].get(m), "a_minus_b": delta,
-                  "interval95": [low, high], "p": p}
+                  "interval95": [low, high], "p": p, "detectable80": detectable(xa, xb)}
     out["seconds"] = {"a": a["summary"].get("seconds"), "b": b["summary"].get("seconds")}
     return out
 
@@ -897,6 +972,11 @@ def main(argv: list[str] | None = None) -> int:
             p.add_argument("--k", type=int, default=DEFAULT_K)
             p.add_argument("--as-of", default=None, dest="as_of")
             p.add_argument("--no-reach", action="store_true", dest="no_reach")
+            p.add_argument("--legs", default="hybrid", choices=LEGS,
+                           help="the search's legs: the reader's hybrid, or one leg alone")
+            p.add_argument("--exact", action="store_true",
+                           help="every vector query a flat scan (no ANN index): two collections of "
+                                "different sizes searched the same way")
             p.add_argument("--reranker", default="configured",
                            help="configured (default), off, or from:<collection> (lent)")
             p.add_argument("--pool", default=None, help="a pool's name (runs/pool-<name>.json): every leg "
@@ -934,7 +1014,8 @@ def main(argv: list[str] | None = None) -> int:
             if m in got:
                 r = got[m]
                 print(f"  {m}: a {r['a']:.4f}  b {r['b']:.4f}  a-b {r['a_minus_b']:+.4f}  "
-                      f"95% [{r['interval95'][0]:+.4f}, {r['interval95'][1]:+.4f}]  p {r['p']:.4f}")
+                      f"95% [{r['interval95'][0]:+.4f}, {r['interval95'][1]:+.4f}]  p {r['p']:.4f}  "
+                      f"detectable (80% power) ±{r['detectable80']:.4f}")
         print(f"  seconds a question: a {got['seconds']['a']}  b {got['seconds']['b']}")
         return 0
     if a.cmd == "pilot-ok":
@@ -988,23 +1069,26 @@ def main(argv: list[str] | None = None) -> int:
         if not settled.get(c.name):
             print(f"{c.name}: the vector leg is not settled here ({settled}); nothing is run", file=sys.stderr)
             return 3
-        tag = pilot_tag(reranker=a.reranker, k=a.k, pool_name=a.pool, as_of=a.as_of)
+        tag = pilot_tag(reranker=a.reranker, k=a.k, pool_name=a.pool, as_of=a.as_of,
+                        legs=a.legs, exact=a.exact)
         only = pilot_questions(questions, gold, a.pilot) if a.pilot else None
         if only is None and not chat_eval._pilot_ok_path(a.out, c.name, tag).is_file():
             print(f"{c.name}: no pilot read for these settings (tag {tag}): `run --pilot 3` with the same "
                   f"flags, read it, then `pilot-ok --tag {tag}` (measuring.md §12)", file=sys.stderr)
             return 2
         try:
-            with reranker_override(a.reranker, c) as lent, pool_prefilter(set(ids) if ids is not None else None):
+            with reranker_override(a.reranker, c) as lent, pool_prefilter(set(ids) if ids is not None else None), \
+                    exact_vectors(a.exact):
                 got = run(held, questions, gold, k=a.k, as_of=a.as_of, only=only,
-                          traverse_fn=None if a.no_reach else _DEFAULT)
+                          search_fn=leg_search(a.legs), traverse_fn=None if a.no_reach else _DEFAULT)
         except chat_eval.SearchWithheld as e:
             print(f"{c.name}: {e}", file=sys.stderr)
             return 3
         rr = {"choice": a.reranker, "url": getattr(lent, "url", None),
               "model": getattr(lent, "model", None) or getattr(lent, "rerank_model", None)}
         settings = {"k": a.k, "as_of": a.as_of, "reranker": rr, "pool": a.pool, "tag": tag,
-                    "code": chat_eval.ask_code()}
+                    "legs": a.legs, "exact": a.exact, "code": chat_eval.ask_code(),
+                    **({"pool_chunks": pool_chunks(held.con, ids, c.plugin)} if ids is not None else {})}
         if only is not None:
             path = pilot_report(held, questions, got, gold, a.out / "runs" / c.name / f"pilot-{tag}.md",
                                 settings=settings)
