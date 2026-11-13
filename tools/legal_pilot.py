@@ -716,7 +716,7 @@ def timing(seconds: list[float]) -> dict[str, float | None]:
 
 
 @contextlib.contextmanager
-def reranker_override(choice: str | None):
+def reranker_override(choice: str | None, collection=None):
     """`configured` (or None): the node's own resolution, untouched. `off`:
     no reranker for any collection — the fused order (05 §5.6). `from:<name>`:
     every collection reranked by THAT collection's reranker, as the node
@@ -724,7 +724,10 @@ def reranker_override(choice: str | None):
     lent reranker. In this process only; nothing is written."""
     from app import collections as collections_mod
     if choice in (None, "", "configured"):
-        yield None
+        # untouched, but NAMED: the run records which reranker served it
+        # (München, 2026-11-13: a "configured" run recorded url None, model
+        # None, and did not prove what it measured)
+        yield collections_mod.reranker_for(collection) if collection is not None else None
         return
     real = collections_mod.reranker_for
     if choice == "off":
@@ -992,13 +995,14 @@ def main(argv: list[str] | None = None) -> int:
                   f"flags, read it, then `pilot-ok --tag {tag}` (measuring.md §12)", file=sys.stderr)
             return 2
         try:
-            with reranker_override(a.reranker) as lent, pool_prefilter(set(ids) if ids is not None else None):
+            with reranker_override(a.reranker, c) as lent, pool_prefilter(set(ids) if ids is not None else None):
                 got = run(held, questions, gold, k=a.k, as_of=a.as_of, only=only,
                           traverse_fn=None if a.no_reach else _DEFAULT)
         except chat_eval.SearchWithheld as e:
             print(f"{c.name}: {e}", file=sys.stderr)
             return 3
-        rr = {"choice": a.reranker, "url": getattr(lent, "url", None), "model": getattr(lent, "model", None)}
+        rr = {"choice": a.reranker, "url": getattr(lent, "url", None),
+              "model": getattr(lent, "model", None) or getattr(lent, "rerank_model", None)}
         settings = {"k": a.k, "as_of": a.as_of, "reranker": rr, "pool": a.pool, "tag": tag,
                     "code": chat_eval.ask_code()}
         if only is not None:
