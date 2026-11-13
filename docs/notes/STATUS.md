@@ -28,6 +28,13 @@ measured (published figures disagree).
   first arm. Any arm past the encoder's window is refused. JuriFindIT's train split (716 expert
   questions) is fetched; `--split all` gives 895. A for München: `shipped`, `header-off`, `akn` on jf100
   first. docs/notes/legal-chunking-retrieval.md §5.1.
+- **The chunker mode, after München's review of #621** (the pilot held until fixed): one validated run
+  per side, pinned, its id in the cache's key, another run stops the measurement; every arm fresh by
+  default (`--stored` opt-in: identical text only, the space's rule, never cached); the arms cut the
+  record the embed stage reads; queries embedded after every arm is cut; the window counted with the
+  special tokens; `run` refuses another split's pool and its pilot tag names the split;
+  `chunker-report` refuses mixed files and prints the pre-stated decision (reranked MRR@10, δ 0.02,
+  one-sided, Holm; keep / drop / undecided).
 
 ### 2026-11-13
 

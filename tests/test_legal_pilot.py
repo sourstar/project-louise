@@ -250,7 +250,16 @@ def test_the_pool_is_the_text_legs_top_records_and_every_gold_record(built):
     assert {lp._native_of(law), lp._native_of(sard), DEC_A_ID} == set(got["native_ids"])
     assert got["records"] == 3 and len(got["questions"]) == 2 and got["depth"] == 50
     assert all(limit == 50 and as_of == "2025-01-01" for _q, limit, as_of in seen)
-    assert got["questions"][0] == {"index": 0, "text_records": 1, "gold_records": 1, "gold_found_by_text": 0}
+    assert got["questions"][0] == {"index": 0, "text_records": 1, "gold_records": 1, "gold_found_by_text": 0,
+                                   "found": [DEC_A_ID]}, "the builder's list kept, for the chunker report"
+    rows = [{"index": 0, "hits": [{"uid": f"normattiva:{DEC_A_ID}"}, {"uid": law}]}, {"index": 9, "hits": []}]
+    assert lp.builder_share(rows, {0: {DEC_A_ID}}) == 0.5 and lp.builder_share(rows, {}) is None
+
+
+def test_a_pilot_tag_names_another_split_and_validation_keeps_its_tags():
+    kw = {"reranker": "configured", "k": 20, "pool_name": "jf100", "as_of": None}
+    assert lp.pilot_tag(**kw) == lp.pilot_tag(**kw, split="validation")
+    assert "-q-train" in lp.pilot_tag(**kw, split="train"), "a validation pilot-ok is not a train run's"
 
 
 def test_the_text_search_takes_the_text_leg_alone(monkeypatch):

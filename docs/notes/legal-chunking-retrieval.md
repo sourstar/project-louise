@@ -315,8 +315,17 @@ inside `space_id`, so measuring arms as collections would mean a new space and i
 - **Arms** are layers: `shipped` (the collection's own), `header-off`, `outline-off`, `akn`, or any layer
   as JSON. Each cuts the pool's records through `layers._chunker_of`, the stages' own path.
 - **Vectors** come through the collection's served recipe, document and query instructions included,
-  cached by text: a text two arms share is embedded once. The `shipped` arm takes the collection's own
-  stored vectors, checked against a re-embedded sample.
+  under ONE run per side: pinned before anything is embedded, validated for the space as a write's
+  would be (`run_check.guard`), and an answer from another run stops the measurement. The cache is keyed
+  by text, in a directory named by the recipe, the space and the two runs: a text two arms share is
+  embedded once, and two engines never share a directory. Every arm is embedded FRESH by default, so
+  the arms differ in the cut and nothing else (München's review of #621 and the legal session,
+  2026-11-13: the stored vectors came from the run that embedded the collection, and their drift would
+  read as the cut's effect). `--stored` lets the `shipped` arm take the collection's own vectors only
+  where the stored text is byte-identical and a re-embedded sample gives them back by the space's rule
+  (bytes in an exact space, the tolerance in a near one); seeds are never cached.
+- **The cut reads what the embed stage reads**: `[title, sections]` from the collection's fresh record,
+  the parse only where there is none (a stale record could otherwise give one chunk id two texts).
 - **Readings**: `fts` (a throwaway index written by app/fts.py), `dense` (an exact scan, as deep in
   records as the text leg), `hybrid` (`retrieval._merge_rrf`) and `reranked` (`retrieval._reranked`,
   the collection's reranker). A rerank that falls back stops the run, and nothing is written.
@@ -330,9 +339,20 @@ inside `space_id`, so measuring arms as collections would mean a new space and i
 - **Questions**: `--split validation` (179, the existing pool jf100), `train` (716) or `all` (895, a
   new pool built with `pool --split all`).
 
-Arms for A: `shipped`, `header-off`, `akn`. The decision rule is to keep the header only if it is not
-worse, per reading. If the readings disagree, the decision names the one it rests on; `reranked` is what
-production serves.
+Arms for A: `shipped`, `header-off`, `akn`. THE DECISION RULE, STATED BEFORE THE RUN (München and the
+legal session, 2026-11-13; the operator's choice, A unless said otherwise): one primary measure,
+`reranked` MRR@10 (what production serves), and a margin δ = 0.02. For each arm against `shipped`,
+d = arm − shipped per question, one-sided, Holm across the decided arms, from the percentile bootstrap:
+**keep** the shipped cut when it is not worse than the arm by δ; **drop** it when the arm is better by δ;
+otherwise **undecided** — on the 179 validation questions that means the same arms on all 895, and
+undecided on all 895 drops the header (A). `chunker-report` prints the verdict (`--margin`, `--primary`,
+`--decide`); every other metric and reading is descriptive. It refuses files of another measurement
+(tag, code, runs, collection, seeding), and says on the page: the reranker reads the title twice in an
+arm with the header (the head it attaches, and the header — as production does); the pool is the
+shipped cut's text-leg top 100, so every arm meets the shipped cut's distractors and none of its own,
+a bias toward the challengers (each arm's share of top-k records from the builder's list is shown,
+for pools built from now on); no arm has the query language, the plan, translations or the catalogue
+leg.
 
 ## 6. What changes after the decisions
 

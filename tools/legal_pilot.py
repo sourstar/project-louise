@@ -76,11 +76,17 @@ temporal-make  dated question STUBS mined from the version table: an article
                experts; the screening is the measurement's honesty).
 chunker-run    THE CHUNKER MODE (tools/chunker_mode.py; legal-chunking-retrieval.md §5.1): arms
                of chunker settings cut the pool's records in-process, embedded through the
-               collection's recipe (cached by text; the shipped arm takes the collection's own
-               vectors), read four ways (fts, dense, hybrid, reranked) through the app's own code,
-               scored as `run` scores; `--dry-run` cuts and counts only; `--pilot N` first (§12).
+               collection's recipe under one validated run per side, every arm fresh (cached by
+               text, space and run; `--stored` lets the shipped arm take the collection's own
+               vectors where the stored text is identical and a sample gives them back by the
+               space's rule), read four ways (fts, dense, hybrid, reranked) through the app's
+               own code, scored as `run` scores; `--dry-run` cuts and counts only; `--pilot N`
+               first (§12).
 chunker-report every chunker-run file against its first arm, per reading: Holm-adjusted p and
-               the smallest detectable difference, each arm's cost beside.
+               the smallest detectable difference, each arm's cost and vectors beside; files of
+               another measurement refused; and THE DECISION stated before the run: `--primary`
+               (reranked:mrr@10) with `--margin` (0.02), keep / drop / undecided per arm,
+               one-sided, Holm across the decided arms (`--decide ARM`).
 --split        the expert questions: validation (179), train (716) or all (895); a pool keeps
                the split it was built from, and a run on another is refused.
 temporal-run   each dated question through search(as_of=date): did the version
@@ -531,7 +537,7 @@ def pool(held: Held, questions: list[dict[str, Any]], gold: dict[int, Gold], *,
         golds = {_native_of(gold[x].uid) for x in relevant} - {None}
         ids |= found | golds
         per.append({"index": i, "text_records": len(found), "gold_records": len(golds),
-                    "gold_found_by_text": len(golds & found)})
+                    "gold_found_by_text": len(golds & found), "found": sorted(found)})
     return {"built_from": name, "depth": depth, "as_of": as_of, "records": len(ids),
             "native_ids": sorted(ids), "questions": per}
 
@@ -596,12 +602,14 @@ def pilot_questions(questions: list[dict[str, Any]], gold: dict[int, Gold], n: i
 
 
 def pilot_tag(*, reranker: str, k: int, pool_name: str | None, as_of: str | None,
-              legs: str = "hybrid", exact: bool = False) -> str:
-    """The settings a reading is valid for, the code included (§13: a whole
-    run runs its pilot's code)."""
-    # the legs and the flat scan only when asked: the default runs keep the
-    # tags their readings were recorded under
-    extra = ("" if legs == "hybrid" else f"-legs-{legs}") + ("-exact" if exact else "")
+              legs: str = "hybrid", exact: bool = False, split: str = "validation") -> str:
+    """The settings a reading is valid for, the code and the questions
+    included (§13: a whole run runs its pilot's code; München, 2026-11-13: a
+    validation pilot-ok authorised a train run)."""
+    # the legs, the flat scan and another split only when asked: the default
+    # runs keep the tags their readings were recorded under
+    extra = (("" if legs == "hybrid" else f"-legs-{legs}") + ("-exact" if exact else "")
+             + ("" if split == "validation" else f"-q-{split}"))
     raw = (f"rerank-{reranker}-k{k}-pool-{pool_name or 'none'}-asof-{as_of or 'now'}{extra}"
            f"-code-{chat_eval.ask_code()[7:19]}")
     return re.sub(r"[^A-Za-z0-9._-]+", "-", raw)
@@ -965,11 +973,40 @@ def _pool_ids(out: Path, name: str) -> list[int]:
     return [int(i) for i in json.loads(path.read_text(encoding="utf-8"))["native_ids"]]
 
 
+def _pool(out: Path, name: str) -> dict[str, Any]:
+    path = out / "runs" / f"pool-{name}.json"
+    if not path.is_file():
+        raise SystemExit(f"no pool {name!r} at {path}: `legal_pilot pool --name {name}` first")
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
 def _pool_split(out: Path, name: str) -> str:
     """The questions a pool was built from (a pool from before `--split`
     was built from validation)."""
-    path = out / "runs" / f"pool-{name}.json"
-    return str(json.loads(path.read_text(encoding="utf-8")).get("split") or "validation")
+    return str(_pool(out, name).get("split") or "validation")
+
+
+def _same_split(out: Path, name: str, split: str) -> None:
+    built = _pool_split(out, name)
+    if built != split:
+        raise SystemExit(f"pool {name} was built from the {built} questions, the run asks {split}: a pool "
+                         f"holds its own questions' candidates (`pool --split`)")
+
+
+def builder_share(rows: list[dict[str, Any]], found: dict[int, set[int]]) -> float | None:
+    """The share of a reading's top-k records that the pool's builder list
+    held for the same question — how much of what an arm ranks came from
+    the cut the pool was built with (München, 2026-11-13). None for a pool
+    built before its lists were kept."""
+    shares = []
+    for row in rows:
+        if "index" not in row or row["index"] not in found:
+            continue
+        hits = [_native_of(h.get("uid")) for h in row.get("hits") or []]
+        hits = [h for h in hits if h is not None]
+        if hits:
+            shares.append(sum(h in found[row["index"]] for h in hits) / len(hits))
+    return sum(shares) / len(shares) if shares else None
 
 
 def _chunker_run(a, held: Held) -> int:
@@ -983,9 +1020,9 @@ def _chunker_run(a, held: Held) -> int:
     c = held.collection
     corpus, questions = _load_dataset(a.out, a.split)
     pool_ids = _pool_ids(a.out, a.pool)
-    if _pool_split(a.out, a.pool) != a.split:
-        raise SystemExit(f"pool {a.pool} was built from the {_pool_split(a.out, a.pool)} questions, the run "
-                         f"asks {a.split}: a pool holds its own questions' candidates (`pool --split`)")
+    _same_split(a.out, a.pool, a.split)
+    pool_file = _pool(a.out, a.pool)
+    found = {int(q["index"]): set(q["found"]) for q in pool_file.get("questions") or [] if "found" in q}
     cov = coverage(held, corpus, questions)
     gold = {int(k): gold_from(v) for k, v in cov["gold"].items()}
     ids, moved = current_versions(held.con, pool_ids, None)
@@ -1004,7 +1041,8 @@ def _chunker_run(a, held: Held) -> int:
                 continue
             print(f"{arm.name}: {json.dumps(arm.manifest(), sort_keys=True)}\n  {json.dumps(cost)}")
         return 0
-    tag = cm.tag(arms, k=a.k, pool_name=a.pool, split=a.split)
+    stored = bool(a.stored)
+    tag = cm.tag(arms, k=a.k, pool_name=a.pool, split=a.split, stored=stored)
     only = pilot_questions(questions, gold, a.pilot) if a.pilot else None
     if only is None and not chat_eval._pilot_ok_path(a.out, c.name, tag).is_file():
         print(f"{c.name}: no pilot read for these settings (tag {tag}): `chunker-run --pilot 3` with the same "
@@ -1014,23 +1052,33 @@ def _chunker_run(a, held: Held) -> int:
     rerank = cm.default_rerank(held, c)
     if rerank is None:
         print(f"{c.name}: no reranker configured: the reranked reading is not made", file=sys.stderr)
-    cache = cm.VectorCache(a.out / "chunker" / "vectors", recipe)
     work = cm.workdir_for(a.out)
     holder = encoder_use.holder("legal_pilot chunker-run")
     try:
         with _cl.ExitStack() as stack:
             stack.enter_context(encoder_use.held(recipe, holder=holder))
             stack.enter_context(encoder_use.held(recipe, holder=holder, query=True))
+            # one run per side for the whole measurement, validated as a write's
+            runs = cm.pin_runs(c, recipe)
+            cache = cm.VectorCache(a.out / "chunker" / "vectors", recipe,
+                                   space_id=getattr(getattr(c, "codex", None), "space_id", None), runs=runs)
             got = cm.run(held, questions, gold, arms, ids, k=a.k, workdir=work, recipe=recipe, cache=cache,
-                         stored_fn=None if a.no_stored else cm.default_stored, rerank_fn=rerank, only=only)
+                         embed_fn=cm.pinned_embed(runs), stored_fn=cm.default_stored if stored else None,
+                         rerank_fn=rerank, only=only)
     except cm.RerankWithheld as e:
         print(f"{c.name}: {e}: nothing is written; run again once the reranker answers", file=sys.stderr)
         return 3
     finally:
         import shutil as _sh
         _sh.rmtree(work, ignore_errors=True)
+    for arm in got["arms"].values():
+        for reading in cm.READINGS:
+            if reading in arm:
+                arm[reading]["summary"]["builder_share"] = builder_share(arm[reading]["per_question"], found)
     base = {**_stamp(held), "k": a.k, "pool": a.pool, "pool_records": len(ids), "split": a.split,
+            "pool_built_from": pool_file.get("built_from"), "pool_depth": pool_file.get("depth"),
             "exact": True, "tag": tag, "code": chat_eval.ask_code(), "arms": [x.name for x in arms],
+            "runs": runs.as_dict(), "stored": stored,
             "coverage": {k: v for k, v in cov.items() if k != "gold"}}
     if only is not None:
         parts = [f"# Chunker pilot [{tag}]", "",
@@ -1127,14 +1175,25 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--split", default="validation", choices=SPLITS)
     p.add_argument("--pilot", type=int, default=None,
                    help="the first N covered questions of every category, for a reader (§12)")
-    p.add_argument("--no-stored", action="store_true", dest="no_stored",
-                   help="embed the shipped arm too, rather than take the collection's own vectors")
+    p.add_argument("--stored", action="store_true",
+                   help="let the shipped arm take the collection's own vectors where the stored text is "
+                        "identical and a sample gives them back by the space's rule; by default every arm "
+                        "is embedded fresh under the one pinned run (München and the legal session, "
+                        "2026-11-13: arms that differ only in the cut)")
     p.add_argument("--dry-run", action="store_true", dest="dry_run",
                    help="cut and count every arm (chunks, characters, the longest in the encoder's tokens, "
                         "how many past its window), embed and search nothing")
     p = sub.add_parser("chunker-report", help="every chunker-run file against its first arm, per reading")
     p.add_argument("runs", type=Path, nargs="+")
     p.add_argument("--write", type=Path, default=None, help="the report's markdown, written here too")
+    p.add_argument("--primary", default="reranked:mrr@10",
+                   help="READING:METRIC the decision is made on, stated before the run (default reranked:mrr@10)")
+    p.add_argument("--margin", type=float, default=None,
+                   help="the largest loss the baseline may show and stay (default 0.02, choice A)")
+    p.add_argument("--no-decision", action="store_true", dest="no_decision",
+                   help="descriptive only: no rule stated, nothing decided")
+    p.add_argument("--decide", action="append", default=None,
+                   help="the arm(s) the decision is about (default every arm besides the baseline)")
     p = sub.add_parser("compare")
     p.add_argument("run_a", type=Path); p.add_argument("run_b", type=Path)
     p = sub.add_parser("pilot-ok")
@@ -1170,7 +1229,10 @@ def main(argv: list[str] | None = None) -> int:
     if a.cmd == "chunker-report":
         from tools import chunker_mode
         runs = [json.loads(path.read_text(encoding="utf-8")) for path in a.runs]
-        md = chunker_mode.report_markdown(chunker_mode.report(runs))
+        reading, _, metric = a.primary.partition(":")
+        margin = None if a.no_decision else (chunker_mode.MARGIN if a.margin is None else a.margin)
+        md = chunker_mode.report_markdown(chunker_mode.report(runs, primary=(reading, metric), margin=margin,
+                                                              decide=a.decide))
         print(md)
         if a.write:
             a.write.parent.mkdir(parents=True, exist_ok=True)
@@ -1212,6 +1274,7 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         ids = _pool_ids(a.out, a.pool) if a.pool else None
         if ids is not None:
+            _same_split(a.out, a.pool, a.split)
             current, moved = current_versions(held.con, ids, a.as_of)
             print(f"{c.name}: pool {a.pool}: {len(ids)} records → {len(current)} as the search sees them "
                   f"({moved}: a Work's version is the run's window's, never the pool's day)")
@@ -1228,7 +1291,7 @@ def main(argv: list[str] | None = None) -> int:
             print(f"{c.name}: the vector leg is not settled here ({settled}); nothing is run", file=sys.stderr)
             return 3
         tag = pilot_tag(reranker=a.reranker, k=a.k, pool_name=a.pool, as_of=a.as_of,
-                        legs=a.legs, exact=a.exact)
+                        legs=a.legs, exact=a.exact, split=a.split)
         only = pilot_questions(questions, gold, a.pilot) if a.pilot else None
         if only is None and not chat_eval._pilot_ok_path(a.out, c.name, tag).is_file():
             print(f"{c.name}: no pilot read for these settings (tag {tag}): `run --pilot 3` with the same "
