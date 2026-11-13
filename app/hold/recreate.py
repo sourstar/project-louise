@@ -466,7 +466,24 @@ def no_room(pred_name: str, name: str, need: int, free: int) -> str:
             f"run this again")
 
 
+def vectorless_write_free(root: Path, name: str) -> bool:
+    """The dry run's reading of `carry.unembedded_why_not` (what case F's
+    carry asks before its sample): no row in `name`'s vector table and no
+    document marked embedded, its manifest read so that not a file changes.
+    False wherever either cannot be read: not proven vector-free."""
+    from app import spaces
+    manifest = Path(root) / name / "state" / "manifest.sqlite"
+    if not manifest.is_file() or spaces.known_lance_rows(_tree(root, name, "lance")) != 0:
+        return False
+    return _read_write_free(manifest, "SELECT COUNT(*) FROM (SELECT 1 FROM documents WHERE embed_done > 0 "
+                                      "LIMIT 1)") == 0
+
+
 def _documents_write_free(manifest: Path) -> int | None:
+    return _read_write_free(manifest, "SELECT COUNT(*) FROM documents")
+
+
+def _read_write_free(manifest: Path, sql: str) -> int | None:
     """`carry._documents`, writing nothing: a read-only SQLite open of a WAL
     database at rest CREATES its -wal and -shm files (and cannot remove
     them), so where neither exists — no connection is open, every commit is
@@ -479,7 +496,7 @@ def _documents_write_free(manifest: Path) -> int | None:
     at_rest = not any(Path(f"{manifest}{s}").exists() for s in ("-wal", "-shm"))
     con = sqlite3.connect(f"file:{manifest.as_posix()}?mode=ro{'&immutable=1' if at_rest else ''}", uri=True)
     try:
-        return int(con.execute("SELECT COUNT(*) FROM documents").fetchone()[0])
+        return int(con.execute(sql).fetchone()[0])
     except sqlite3.OperationalError:
         return 0                                    # no documents table: nothing held
     except sqlite3.DatabaseError:
