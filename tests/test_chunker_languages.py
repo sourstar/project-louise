@@ -214,12 +214,15 @@ def test_the_report_says_whether_the_hypothesis_holds():
     assert got["verdict"]["holds"] and got["readings"]["reranked"]["same_best"] == 3
     md = cl.report_markdown(runs)
     assert "the hypothesis holds" in md and "### de" in md and "| fr |" in md
+    assert "Per-language layers worth considering: **no**" in md and not got["verdict"]["per_language_layers"]
     assert "title TWICE" not in md, "the legal pilot's notes are not LEMUR's"
     # one language where the window wins: the effect differs by language
     flipped = [dict(r) if r["lang"] != "de" or r["arm"] != "window-512"
                else _file("de", "window-512", r["legs"], np.clip(base + 0.2, 0, 1).tolist()) for r in runs]
     got = cl.across(flipped, trials=2000)
     assert got["verdict"]["differs_by_language"] == ["window-512"] and not got["verdict"]["holds"]
+    assert got["verdict"]["per_language_layers"]
+    assert "Per-language layers worth considering: **yes**" in cl.report_markdown(flipped)
     assert got["readings"]["reranked"]["best"]["de"] == "window-512"
     with pytest.raises(SystemExit, match="parallel acts"):
         cl.across([r if r["lang"] != "fr" else {**r, "per_question": r["per_question"][:-1]} for r in runs])

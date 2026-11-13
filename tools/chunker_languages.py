@@ -453,6 +453,10 @@ def across(runs: list[dict[str, Any]], *, primary: tuple[str, str] = PRIMARY,
             "differs_by_language": differs,
             "same_best_arm": rr["same_best"] == len(langs),
             "holds": not differs and rr["same_best"] == len(langs),
+            # the legal session, 2026-11-13: a Codex holds several layers, each
+            # document in one by a declared rule — a LANGUAGE rule per layer is
+            # the option, inside one collection, when an arm's effect differs
+            "per_language_layers": bool(differs),
             "said": ("the hypothesis holds on these acts: no arm's effect differs by language, and every "
                      "language has the same best arm" if not differs and rr["same_best"] == len(langs)
                      else ("the effect of " + ", ".join(differs) + " differs by language" if differs
@@ -472,7 +476,11 @@ def report_markdown(runs: list[dict[str, Any]], *, primary: tuple[str, str] = PR
     verdict = ac.get("verdict")
     if verdict:
         lines += [f"## Verdict ({verdict['reading']} {verdict['metric']}, stated before the run)", "",
-                  f"**{verdict['said']}.**", ""]
+                  f"**{verdict['said']}.**", "",
+                  (f"Per-language layers worth considering: **{'yes' if verdict['per_language_layers'] else 'no'}**"
+                   + (f" ({', '.join(verdict['differs_by_language'])} differs by language: a layer per language, "
+                      "each document in one by a language rule, inside the one collection)"
+                      if verdict["per_language_layers"] else " (no arm's effect differs by language)") + "."), ""]
     found = about.get("structure_found") or {}
     if found:
         lines += ["## The structure the reader found, per language", "",
