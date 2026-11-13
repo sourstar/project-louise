@@ -27,6 +27,30 @@ Only **`wikipedia-versions`** is a method today. It reads the wikipedia collecti
 makes it a pure function of what the node holds. gutenberg's works, titles, matches and merge files depend on API or
 language-model intermediates. They are not methods, so they keep `hold annotations update --claims`.
 
+## The Library's checkbox, and what it guards (2026-11-13)
+
+The operator: "wikipedia-articles which command? I want a checkbox in the gui". An annotations card shows **update by
+itself when wikipedia holds a newer snapshot** for each method that can make its claims. The box is ticked from the
+file's `method`. Ticking it writes the key through the file's one writer (`POST /admin/library/<name>/method`), as
+`hold config apply <name> --set method=…` does. The card also shows the last derivation from `state/method.json`.
+
+The method's output becomes the **whole** claim set, so ticking it on a collection of other claims would withdraw them.
+`annotation_methods.not_fitting` therefore decides where the box appears, and the file's writer and the worker's due
+check refuse the same cases. The method fits when either:
+
+- it made the current snapshot (`state/method.json`); or
+- the first claim of up to 64 parts spread over the current snapshot has the method's `types` and claim `method`
+  (`wikipedia-versions`: `same-work` by `{"kind": "wikidata"}`).
+
+That is a sample, cached per snapshot. A collection that mixes such claims with others in every sampled part would pass.
+No collection is built that way: each annotations collection is made by one tool. Not defaulted on (RULE 2 weighed): the
+key's absence is what says "claims given by hand", and a hand-made collection that happens to fit must not start
+re-deriving by itself.
+
+`hold config apply <annotations collection> --set method=…` wrote the file and then said "no such collection" (exit 2).
+`config apply` and `config show` now list annotations collections. They have nothing to apply in a state database; the
+worker reads the file at its next annotations pass.
+
 ## Where the method is recorded, and why
 
 The method goes in the collection file, not the Codex. The file is node-local desired state (invariant 10), so only
@@ -62,7 +86,8 @@ against 1.87 s. That is about 15 s instead of ~115 s of one core for wikipedia's
 The collection is `wikipedia-articles` on the node (the rename to `-cache` planned in #570 has not been made; after
 it, the new name).
 
-1. `louise hold config apply wikipedia-articles --set method=wikipedia-versions`
+1. `louise hold config apply wikipedia-articles --set method=wikipedia-versions` (done 2026-11-13; or the card's
+   checkbox after the next web deploy)
 2. `louise hold annotations derive wikipedia-articles --dry-run`. Expected: not due, "pinned to wikipedia
    <its snapshot>".
 3. Nothing else. The worker derives once wikipedia's next snapshot is written. Its log line names the counts. Time

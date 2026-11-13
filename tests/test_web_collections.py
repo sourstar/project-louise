@@ -523,3 +523,37 @@ def test_the_share_box_is_on_every_servable_collection_and_reads_share():
     assert web._shareable(SimpleNamespace(codex=SimpleNamespace(privacy="public")))
     assert not web._shareable(SimpleNamespace(codex=SimpleNamespace(privacy="private")))
     assert not web._shareable(SimpleNamespace(codex=None))
+
+
+def test_an_annotations_card_offers_update_by_itself_where_a_method_fits(client, monkeypatch):
+    """Operator, 2026-11-13: "wikipedia-articles which command? I want a
+    checkbox in the gui". The card shows a checkbox for each method this node
+    runs that can make the claims (and none for one that cannot), ticked from
+    the file's `method`; the route writes it through the file's one writer
+    and refuses a method whose output would withdraw claims it did not make."""
+    from app.hold import annotation_methods as am
+    from tests.hold.test_annotation_methods import MINE, OTHER
+    monkeypatch.setitem(am.METHODS, MINE.name, MINE)
+    monkeypatch.setitem(am.METHODS, OTHER.name, OTHER)
+    _an_annotations_collection(monkeypatch)
+
+    def card():
+        html = client.get("/admin/library").text
+        c = html[html.index('data-collection="pubmed-same-work"'):]
+        return c[:c.index('<details class="more"')]
+    c = card()
+    assert "setMethod('pubmed-same-work', 'fake-matcher', this.checked)" in c and "update by itself" in c
+    assert "fake-other" not in c, "a method that cannot make these claims is not offered"
+    assert "checked\n               onchange=\"setMethod" not in c
+    r = client.post("/admin/library/pubmed-same-work/method", json={"method": "fake-matcher"})
+    assert r.status_code == 200 and r.json()["method"] == "fake-matcher", r.text
+    toml_path = collections_mod.config_toml_path("pubmed-same-work")
+    assert 'method = "fake-matcher"' in toml_path.read_text(encoding="utf-8")
+    assert "checked\n               onchange=\"setMethod('pubmed-same-work', 'fake-matcher'" in card()
+    r = client.post("/admin/library/pubmed-same-work/method", json={"method": "fake-other"})
+    assert r.status_code == 400 and "are not fake-other's" in r.text
+    assert 'method = "fake-matcher"' in toml_path.read_text(encoding="utf-8"), "refused, nothing written"
+    r = client.post("/admin/library/pubmed-same-work/method", json={"method": None})
+    assert r.status_code == 200 and r.json()["method"] is None
+    assert "method" not in toml_path.read_text(encoding="utf-8")
+    assert client.post("/admin/library/gutenberg/method", json={"method": "fake-matcher"}).status_code in (400, 404)

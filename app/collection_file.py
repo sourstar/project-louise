@@ -650,6 +650,14 @@ def _apply(c, raw: dict[str, Any], path: Path, parsed: dict[str, Any], *,
         if key == "method" and not annotations:
             raise SetRefused(f"{c.name}'s records come from its origin: method is an annotations "
                              f"collection's key (07 §7.8)")
+        if key == "method" and value:
+            # its output becomes the whole claim set: never on claims it did
+            # not make (annotation_methods.not_fitting; München, 2026-11-13)
+            from .hold import annotation_methods
+            why = annotation_methods.not_fitting(collections_mod.louise_root() / "collections", c.name,
+                                                 annotation_methods.get(value))
+            if why is not None:
+                raise SetRefused(why)
         if key == "share" and value and c.codex.privacy == "never-share":
             raise SetRefused(f"{c.name} is never-share: it is shared with nobody (04 §4.4)")
     plain = {"title": "title", "slices": "slices", "kinds": "kinds",

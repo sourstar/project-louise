@@ -359,3 +359,58 @@ def test_the_command_says_whether_it_is_due_and_derives(node, monkeypatch, capsy
     assert louise.main(base) == 0
     got = json.loads(capsys.readouterr().out)
     assert (got["snapshot_id"], got["against"], got["produced"]) == ("2026-10", {"pubmed": "2026-09"}, {"claims": 2})
+
+
+def test_config_apply_sets_a_method_and_finds_the_annotations_collection(node, capsys):
+    """München, 2026-11-13: `hold config apply wikipedia-articles --set
+    method=wikipedia-versions` wrote the file, then said "no such collection
+    on this node" and exited 2 — the apply looked only among the collections
+    with a space. It finds the annotations collection, says nothing is
+    applied in a state database and when the worker reads the file, and
+    `config show` lists its method."""
+    from app import louise
+    assert louise.main(["hold", "config", "apply", NAME, "--set", f"method={FAKE.name}"]) == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out["written"]["set"] == {"method": FAKE.name}
+    (row,) = out["applied"]
+    assert (row["name"], row["annotations"], row["method"]) == (NAME, True, FAKE.name)
+    assert "annotations pass" in row["picked_up"] and out["refused"] == []
+    assert louise.main(["hold", "config", "show", NAME]) == 0
+    (shown,) = json.loads(capsys.readouterr().out)["collections"]
+    assert shown["values"]["method"]["value"] == FAKE.name and shown["values"]["method"]["tier"] == "files"
+    assert louise.main(["hold", "config", "apply", "nothing-here"]) == 2
+
+
+MATCHER = {"kind": "matcher", "id": "louise-classical-matcher", "version": 1}     # a_claim's method
+MINE = am.Method("fake-matcher", "pubmed", _fake_produce, "remakes the matcher's claims",
+                 types=("same-work",), claim_method=MATCHER, label="update by itself")
+OTHER = am.Method("fake-other", "pubmed", _fake_produce, "makes wikidata's claims",
+                  types=("same-work",), claim_method={"kind": "wikidata"})
+
+
+def test_a_method_is_never_handed_claims_it_did_not_make(node, monkeypatch):
+    """München, 2026-11-13 (the Library's checkbox): a method's output is the
+    WHOLE claim set from then on, so ticking it on a collection of other
+    claims would withdraw them. `not_fitting` — asked by the file's writer,
+    the worker's due check and the Library — refuses unless the method made
+    the current snapshot or the claims are of its kind."""
+    monkeypatch.setitem(am.METHODS, MINE.name, MINE)
+    monkeypatch.setitem(am.METHODS, OTHER.name, OTHER)
+    root, _ = node
+    wiki = am.METHODS["wikipedia-versions"]
+    assert wiki.claim_method == wiki_versions.METHOD and wiki.types == ("same-work",) and wiki.label
+    why = am.not_fitting(root, NAME, OTHER)
+    assert why is not None and "are not fake-other's" in why and "'same-work' claim by" in why, why
+    with pytest.raises(collection_file.SetRefused, match="are not fake-other's"):
+        collection_file.set_values(NAME, {"method": OTHER.name})
+    (c,) = collections_mod.load_annotations()
+    assert c.method is None, "refused, nothing written"
+    with pytest.raises(ann.AnnotationsError, match="are not fake-other's"):
+        am.due(root, NAME, OTHER.name)          # a file edited by hand: the worker refuses too
+    assert am.not_fitting(root, NAME, MINE) is None
+    collection_file.set_values(NAME, {"method": MINE.name})
+    assert collections_mod.load_annotations()[0].method == MINE.name
+    # what the method made itself fits whatever its claims say
+    tree = col.shard_dir_of(root, NAME)
+    am._write_marker(root, NAME, {"method": OTHER.name, "snapshot": am.newest_snapshot_id(tree)})
+    assert am.not_fitting(root, NAME, OTHER) is None
