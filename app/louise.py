@@ -1810,7 +1810,8 @@ def _recreate_carry(a, run, name: str, codex, pred, measured: dict, say) -> None
         if free < need:
             raise CodexError(recreate.no_room(a.name, name, need, free))
         out = carry_mod.carry(root, a.name, name, copy=True, apply=True, unembedded=vectorless, log=say)
-        proof = recreate.prove_copy(root, a.name, name, vectors=not vectorless)
+        proof = recreate.prove_copy(root, a.name, name, vectors=not vectorless,
+                                    dropped=(out.get("done") or {}).get("dropped") or ())
         ack = recreate.carry_ack(root, a.name, name, codex)
         run.record("carry", {
             "from": {"name": a.name, "collection_id": pred.collection_id}, "parts": parts,

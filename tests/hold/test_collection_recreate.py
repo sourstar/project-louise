@@ -613,3 +613,46 @@ def test_the_dry_run_says_a_vector_free_predecessor_has_no_sample_and_writes_not
     _drop_vectors(root, "old", marked=True)
     assert _new(root, recipe_path, "--dry-run") == 0
     assert "sample      4 chunk(s), seed " in capsys.readouterr().out
+
+
+def test_a_re_creation_that_changes_facets_carries_index_and_proves_it(held, steps, tmp_path):
+    """legi F, 2026-11-13: the carry drops the copied facet marker when the
+    facets differ (596fd18: the target counts its own), and its proof of
+    index/ then counted that very file — 242 files against 241, exit 1. The
+    proof leaves out exactly what the carry took out, and nothing else."""
+    from app.ask import facets as ask_facets
+    root, old, _chunks = held
+    index_dir = root / "old" / "index"
+    (index_dir / "segments").mkdir(parents=True, exist_ok=True)
+    (index_dir / "segments" / "a.bin").write_bytes(b"x" * 64)
+    ask_facets.write_marker(index_dir, "2026-08", "sha256:aa", facets=ask_facets.facets_digest(old))
+    recipe_path = _new_recipe(tmp_path, facets=[{"field": "lang", "kind": "flat", "separator": None,
+                                                 "authority": None}])
+    assert _new(root, recipe_path) == SWAP_WAITS, "carried and proven: the swap waits for the forget"
+    new = col.read(root, "old.next")
+    assert [f.to_dict() for f in new.facets] != [f.to_dict() for f in old.facets]
+    assert not ask_facets.marker_path(root / "old.next" / "index").exists(), "the target counts its own"
+    assert ask_facets.marker_path(index_dir).exists(), "the predecessor's is left as it was"
+    assert (root / "old.next" / "index" / "segments" / "a.bin").read_bytes() == b"x" * 64
+    kept = json.loads(wf.progress_path("old").read_text())["steps"]["carry"]["result"]
+    assert kept["carried"]["dropped"] == ["index/facets/snapshot.json"]
+    assert kept["index"]["files"] == recreate.tree_digest(index_dir)["files"] - 1
+
+
+def test_the_proof_still_sees_any_other_difference_in_index(held, tmp_path):
+    """Only the file the carry names is left out: one byte elsewhere is a
+    refused copy, as before."""
+    import shutil
+    from app.ask import facets as ask_facets
+    root, old, _chunks = held
+    src, dst = root / "old" / "index", root / "copy" / "index"
+    (src / "segments").mkdir(parents=True, exist_ok=True)
+    (src / "segments" / "a.bin").write_bytes(b"x" * 64)
+    ask_facets.write_marker(src, "2026-08", "sha256:aa", facets=ask_facets.facets_digest(old))
+    shutil.copytree(src, dst)
+    ask_facets.marker_path(dst).unlink()
+    dropped = ["index/facets/snapshot.json"]
+    assert recreate.tree_digest(src, exclude=["facets/snapshot.json"]) == recreate.tree_digest(dst)
+    (dst / "segments" / "a.bin").write_bytes(b"y" * 64)
+    assert recreate.tree_digest(src, exclude=[d.split("/", 1)[1] for d in dropped]) != \
+        recreate.tree_digest(dst, exclude=[d.split("/", 1)[1] for d in dropped])

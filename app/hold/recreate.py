@@ -313,7 +313,7 @@ def _file_sha256(path: Path) -> str:
     return h.hexdigest()
 
 
-def tree_digest(path: Path, *, threads: int | None = None) -> dict[str, Any]:
+def tree_digest(path: Path, *, threads: int | None = None, exclude: Sequence[str] = ()) -> dict[str, Any]:
     """`{files, bytes, sha256}` of every file under `path`: the sha256 of
     the sorted lines `<relative path> <size> <sha256 of its bytes>` (a link
     as `<relative path> -> <target>`). Two trees with one digest hold the
@@ -326,9 +326,13 @@ def tree_digest(path: Path, *, threads: int | None = None) -> dict[str, Any]:
     THE STANDARD, NOT ADOPTED: a Merkle tree over the files (BitTorrent v2's
     piece layers, 09 §9.16's members) would prove a part of the tree without
     reading the rest; here both whole trees are read once anyway, and one
-    flat digest is the whole proof."""
+    flat digest is the whole proof.
+
+    `exclude`: relative paths left out on purpose — a file the carry itself
+    takes out of its copy (`prove_copy`), named, never a pattern."""
     from app import parallel
     path = Path(path)
+    skip = {str(x) for x in exclude}
     if not path.exists():
         return {"files": 0, "bytes": 0, "sha256": None}
     files: list[tuple[str, Path]] = []
@@ -342,6 +346,8 @@ def tree_digest(path: Path, *, threads: int | None = None) -> dict[str, Any]:
         for nm in sorted(names):
             p = Path(base) / nm
             rel = p.relative_to(path).as_posix()
+            if rel in skip:
+                continue
             if p.is_symlink():
                 links.append(f"{rel} -> {os.readlink(p)}")
             elif p.is_file():
@@ -518,7 +524,8 @@ def counts(root: Path, name: str, *, write_free: bool = False) -> dict[str, int 
             "vectors": spaces.known_lance_rows(vector_place.table_dir(root, name))}
 
 
-def prove_copy(root: Path, pred_name: str, name: str, *, vectors: bool = True) -> dict[str, Any]:
+def prove_copy(root: Path, pred_name: str, name: str, *, vectors: bool = True,
+               dropped: Sequence[str] = ()) -> dict[str, Any]:
     """After the carry: the vector table and the text index are the
     predecessor's byte for byte (`tree_digest`, both sides), and the two
     manifests hold as many documents. The manifest itself is re-pinned by
@@ -526,7 +533,14 @@ def prove_copy(root: Path, pred_name: str, name: str, *, vectors: bool = True) -
     `CopyMismatch` naming what differs. `vectors=False` (a predecessor
     holding none, `unembedded_why_not`): no vector table is carried, and
     both sides are held to 0 rows instead of to one tree (an absent table
-    and an empty one hold the same nothing)."""
+    and an empty one hold the same nothing).
+
+    `dropped`: the files the carry itself took out of its copy, as
+    `<tree>/<relative path>` (`carry`'s `done["dropped"]`): left out on both
+    sides, and only they. A re-creation whose facets differ drops the copied
+    facet marker so the target counts its own (596fd18); until 2026-11-13 the
+    proof then counted that very file and refused legi F's copy (242 files
+    against 241)."""
     out: dict[str, Any] = {"from": counts(root, pred_name), "to": counts(root, name)}
     bad = [k for k in ("documents", "vectors") if out["from"][k] != out["to"][k]]
     if not vectors:
@@ -534,8 +548,9 @@ def prove_copy(root: Path, pred_name: str, name: str, *, vectors: bool = True) -
                 if out[side]["vectors"] != 0]
         out["lance"] = {"files": 0, "bytes": 0, "sha256": None, "carried": False}
     for tree in (("lance", "index") if vectors else ("index",)):
-        a = tree_digest(_tree(root, pred_name, tree))
-        b = tree_digest(_tree(root, name, tree))
+        skip = [d.split("/", 1)[1] for d in dropped if d.startswith(f"{tree}/")]
+        a = tree_digest(_tree(root, pred_name, tree), exclude=skip)
+        b = tree_digest(_tree(root, name, tree), exclude=skip)
         out[tree] = b
         if a != b:
             bad.append(f"{tree}/ ({a['files']} files {a['sha256']} against {b['files']} files {b['sha256']})")

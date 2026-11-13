@@ -28,9 +28,14 @@
 #                              (`hold embedder check`, `hold collection new`) is
 #                              "this run does not reproduce itself" (invariant
 #                              12), and asking again until it says yes would
-#                              admit the engine it failed (2026-11-08). VERDICTS
-#                              lists the codes; for a pass that runs a gate it
-#                              is "1" unless set, for any other it is none
+#                              admit the engine it failed (2026-11-08). Case F's
+#                              exit 4 (`collection new --re-create`: the swap
+#                              waits for the operator's `forget`) is one too: it
+#                              answers the same until the operator acts
+#                              (München, 2026-11-13: legi F was run three times
+#                              and called "a defect in the pass"). VERDICTS lists
+#                              the codes; unless set it is "1 4" for `collection
+#                              new`, "1" for `embedder check`, none otherwise
 #   exit 137 or 141            again in 60 s with PARSE_PROCESSES halved
 #                              (12 -> 6 -> 3 -> 2): an OOM loop backs off.
 #                              141 is SIGPIPE: until 2026-10-30 a pool child the
@@ -78,13 +83,14 @@ for a in "$@"; do
     case $a in -m|--memory|--memory=*|-m?*) capped=1 ;; esac
 done
 [ -n "$capped" ] || { echo "== $NAME: no --memory cap; every pass carries one (CLAUDE.md, \"Louise survives a crash\")"; exit 2; }
-# a pass whose exit 1 is a gate's verdict, unless VERDICTS says otherwise
+# the codes that are a pass's answer, unless VERDICTS says otherwise: a
+# gate's exit 1, and case F's EXIT_SWAP_WAITS (app/louise.py, 4)
 gate=
 for ((i = 1; i < $#; i++)); do
     a=${!i}; j=$((i + 1)); b=${!j}
-    case "$a $b" in "embedder check"|"collection new") gate=1 ;; esac
+    case "$a $b" in "embedder check") gate=${gate:-1} ;; "collection new") gate="1 4" ;; esac
 done
-VERDICTS=${VERDICTS-${gate:+1}}
+VERDICTS=${VERDICTS-$gate}
 mkdir -p "$(dirname "$HOLD")"
 rm -f "$HOLD"
 on_stop() {

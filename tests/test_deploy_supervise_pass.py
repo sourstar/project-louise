@@ -161,6 +161,24 @@ def test_a_gates_verdict_is_not_asked_again_until_it_says_yes(tmp_path, gate):
     assert p.returncode == 0 and len(calls) == 2
 
 
+def test_a_re_creation_waiting_for_its_forget_is_not_asked_again(tmp_path):
+    """2026-11-13 (München, legi F): `collection new --re-create` exits 4 when
+    its swap waits for the operator's `forget` (EXIT_SWAP_WAITS), and says the
+    same however often it is asked; the supervisor ran it three times and
+    called it a defect. 4 is `new`'s verdict, and no other pass's."""
+    from app.louise import EXIT_SWAP_WAITS
+    assert EXIT_SWAP_WAITS == 4
+    env = _fake_docker(tmp_path, [4, 0])
+    p, calls = _run(tmp_path, env, "--memory=8g", "img", "louise", "hold", "collection", "new", "legi",
+                    "--re-create", "legi")
+    assert p.returncode == 4 and len(calls) == 1 and "verdict" in p.stdout, p.stdout
+    for kind in (["hold", "embedder", "check", "pubmed"], ["hold", "records", "build"]):
+        other = tmp_path / kind[1]
+        other.mkdir()
+        p, calls = _run(other, _fake_docker(other, [4, 0]), "--memory=8g", "img", "louise", *kind)
+        assert p.returncode == 0 and len(calls) == 2, f"{kind}: exit 4 is a failure there, asked again"
+
+
 def test_a_stop_of_the_supervisor_stops_the_pass_once_and_it_stays_stopped(tmp_path):
     """The watchdog (deploy/watchdog/) stops a `louise-<name>` unit; the pass
     in it must end its unit and exit 130 — told once (`docker stop`, the CLI
