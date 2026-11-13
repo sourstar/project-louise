@@ -354,6 +354,36 @@ a bias toward the challengers (each arm's share of top-k records from the builde
 for pools built from now on); no arm has the query language, the plan, translations or the catalogue
 leg.
 
+### 5.2 The chunker per language (2026-11-13, operator: "Build the per-language test on LEMUR")
+
+The operator's hypothesis: the best portioning follows structure and content, not language, so the
+chunker that scores best with one embedder scores best in every language. Three things could still make
+it depend on the language: a window counted in tokens (the same article costs more tokens in one
+language than another, so a cap splits it in one and not the other), the embedder's strength per
+language, and the text leg's analyzers.
+
+`tools/chunker_languages.py` asks it where only the language changes:
+- **Questions**: LEMUR's PARALLEL acts — those every language asked holds — so the acts, their
+  structure and the queries' content are the same in every language.
+- **Sections**: each body read by the eurlex plugin's own reader of a rendition without Formex
+  (`rendition._sections`: an article heading in any of the 24 languages, number-first ones included).
+  Per language, the articles found against the most any language found for the same act: a reader that
+  misses headings in one language is said, not mistaken for the chunker.
+- **Arms**: `structure` (legal_article, header and outline off, the collection's tokenizer and window),
+  `structure-512` (the same at 512 tokens: the token cap's language effect), `window-512` (`fixed` over
+  the body whole: no structure). No arm writes the act's title and the reranker judges chunks bare:
+  LEMUR's query IS the act's header.
+- **Everything else is the chunker mode's**: one validated encoder run per side, every arm fresh, app
+  fts per language, exact dense scan, RRF, the collection's reranker; one collection's encoder for every
+  language (`--collection`).
+- **The verdict** (reranked MRR@10, stated before the run): for each arm against `structure`, each
+  language's Δ with its interval; whether the Δ differs by language — a randomization test with the act
+  as the block, Holm across the arms; and the best arm per language. The hypothesis stands where no
+  arm's effect differs by language and every language has the same best arm.
+
+LEMUR's caution stays: a title-shaped task (finding an act from its description). EUR-Lex-Sum asks the
+same with content-shaped queries once its licence is acknowledged.
+
 ## 6. What changes after the decisions
 
 - **The three legal plugins:** `chunking_profile = "legal_article"`, and
