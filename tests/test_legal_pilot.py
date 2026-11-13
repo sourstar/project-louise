@@ -386,3 +386,19 @@ def test_a_pool_record_becomes_its_work_s_version_in_the_run_s_window():
     ids, report = lp.current_versions(con, [1, 10], "2026-10-25")
     assert ids == {2} and report == {"kept": 0, "moved": 1, "gone": 1}, \
         "on a day: the version in force then; an act not in force that day leaves the pool"
+
+
+def test_the_pilot_report_marks_gold_only_for_its_own_question(tmp_path):
+    """A hit that is ANOTHER question's gold is not this one's: the report
+    said GOLD while every metric counted 0 (DAR's q2, 2026-11-13)."""
+    from types import SimpleNamespace
+
+    from tools import legal_pilot as lp
+    held = SimpleNamespace(collection=SimpleNamespace(name="c"))
+    gold = {7: lp.Gold(node_id=7, file_name="f", path="p", act=None, token="638")}
+    got = {"per_question": [{"index": 0, "relevant": [7], "ranking": [9, 7, -1],
+                             "hits": [{"uid": "a", "label": "x"}, {"uid": "b", "label": "y"},
+                                      {"uid": "c", "label": "z"}], "seconds": 1.0}]}
+    text = lp.pilot_report(held, [{"question": "q"}], got, gold, tmp_path / "r.md", settings={}).read_text()
+    lines = [l for l in text.splitlines() if l.strip()[:2] in ("1.", "2.", "3.")]
+    assert "gold(other q)" in lines[0] and " GOLD " in lines[1] and "GOLD" not in lines[2] and "gold" not in lines[2]
