@@ -294,6 +294,8 @@ class Act:
     #: every element's ATTRIBUTES in the body and each annex item, in
     #: document order: `{file: [[tag, {name: value}], …]}` (`attributes_of`)
     markup: dict = field(default_factory=dict)
+    #: an act read from another form (rendition.py): its sections as read
+    rendered_sections: list | None = None
 
 
 def iso(d: str | None) -> str | None:
@@ -557,6 +559,8 @@ def sections(act: Act) -> list[tuple[str, str]]:
     """`[(label, text)]` in reading order: each recital, each article (its
     partition before its heading), each annex. One section a unit, because
     each is what a citation names ("recital 26", "Article 5", "Annex II")."""
+    if act.rendered_sections is not None:
+        return list(act.rendered_sections)
     out = list(act.recitals)
     for a in act.articles:
         head = " — ".join(x for x in (a.num, a.title) if x)

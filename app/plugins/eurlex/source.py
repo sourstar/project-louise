@@ -82,10 +82,25 @@ plugin, because a verifier needs it to reproduce our records:
   * THE BODY BY NAME: the item the Formex wrapper (`….doc.xml`) names as
     DOC.MAIN.PUB, never the first or the second the origin lists (§7.1: the
     order differs between an act and its consolidation).
-  * An act without a Formex manifestation in a language (the older OJ, the
-    languages of later accessions before their backlog was filled) is not
-    in that slice; the count per year and language is OWED from the node,
-    and is stated on the card before anyone calls the slice "the law".
+  * THE NON-INFERRED TREE beside the notice (parser 3, 2026-11-14:
+    `Accept: application/rdf+xml;notice=non-inferred-tree`, rdf.py). München
+    compared it triple by triple with the notice over 1,698 Italian acts:
+    26,607 assertions are in the tree only (the OJ information number, the
+    legal basis as printed, the corrigendum flag, the embargo, an alternative
+    ELI, EEA relevance…). Kept scoped to the unit's language (another
+    language's expression is in its own slice), canonical (Cellar's order is
+    not stable), as `tree.json`, the unit's completion mark.
+  * AN ACT WITHOUT FORMEX in a language is read from the next form Cellar
+    holds (cellar.FORMS: xhtml, html, then the PDFs; rendition.py), never
+    left out. München counted the Italian works in force (Data Dump of
+    2026-11-08): Formex 30,249 of 43,623; 12,360 more with XHTML/HTML, 786
+    HTML only, 228 PDF only (5 scans, held as PDFs, said `no-text-layer`).
+    Before parser 3 the listing asked for fmx4 alone and these were missing.
+    The form read is in the record (`extra.form`).
+  * NOT the Data Dump as a transport, though its Formex is Cellar's byte for
+    byte (30 acts, 82 files): no checksum is published, so a dump file could
+    only be adopted on its size; it holds acts in force only; it needs a
+    browser's EU Login weekly per language (eurlex-forms, 2026-11-14).
 
 THE UNIT AND ITS ORIGIN. Per act version and language, a directory
 `lang=<code>/<yyyy>/<CELEX>/` under the corpus root — `<yyyy>` the CELEX's
@@ -144,7 +159,7 @@ from app.backend import OriginForm, Template
 from ..base import (CanonicalDoc, DiscoverState, DocRef, Edge, Erasure, Issue, LicenseClass,
                     Modality, Mutability, PROTOCOL_VERSION, PrivacyClass, RawDoc,
                     UnindexableDocument)
-from . import formex, notice as notice_mod
+from . import formex, notice as notice_mod, rdf as rdf_mod, rendition
 
 NOTICE = "notice.xml"
 LANGUAGES = notice_mod.LANGUAGES
@@ -199,6 +214,8 @@ EXTRA_KEYS = tuple(k for k in eli.EXTRA_KEYS if k != "eli_uri_schema") + (
     "articles", "annexes", "notes", "references", "modifications", "instructions",
     # every attribute of the body and the annexes, in document order (formex.attributes_of)
     "markup",
+    # the form read, and the non-inferred tree scoped to the language (parser 3)
+    "form", "cdm_rdf",
     # the CDM notice
     "notice_kind", "notice_decoding", "cdm_relations", "cdm_notice",
 )
@@ -319,6 +336,16 @@ def eli_work_of(path: str | None) -> str | None:
     return None
 
 
+def _form_held(note, files: dict[str, bytes]) -> str | None:
+    """The best form (cellar.FORMS) whose every listed item is in the unit."""
+    from ...acquire.cellar import FORMS
+    for f in FORMS:
+        items = note.items.get(f) or []
+        if items and all(it.name in files for it in items):
+            return f
+    return None
+
+
 def _unit_day(unit: Path, celex: str, entries: list[os.DirEntry]) -> str | None:
     """The day the unit's id sorts under: a consolidation's CELEX date, an
     original's OJ publication date from its wrapper's head."""
@@ -330,6 +357,12 @@ def _unit_day(unit: Path, celex: str, entries: list[os.DirEntry]) -> str | None:
             with open(e.path, "rb") as f:
                 got = _PUB_DATE.search(f.read(_HEAD))
             return formex.iso(got.group(1).decode()) if got else None
+    # an act without Formex (rendition.py): the notice's work, read only as
+    # far as its date (notice.work_day)
+    for e in entries:
+        if e.name == NOTICE:
+            with open(e.path, "rb") as f:
+                return notice_mod.work_day(f.read())
     return None
 
 
@@ -369,7 +402,12 @@ class EurlexSource:
     #: annexes kept (`markup`; invariant 11 past the words, formex.attributes_of).
     #: eurlex was created on 1 and nothing of it is built or published, so it
     #: is re-made on 2 (RULE 1), its fetched corpus kept
-    PARSER_VERSION = 2
+    #: 3 on 2026-11-14 (München's measures): Cellar's non-inferred tree kept
+    #: (`cdm_rdf`, rdf.py: 26,607 assertions over 1,698 acts the notice lacks),
+    #: and an act without Formex read from its XHTML, HTML or PDF
+    #: (rendition.py; 13,374 of 43,623 Italian works in force had been left
+    #: out). eurlex is re-made on 3, its fetched units completed, not refetched
+    PARSER_VERSION = 3
     #: 06 §6.2: Cellar keeps every OJ act and every consolidated version at
     #: its own CELEX: a superseded version stays checkable, and is kept
     origin_versions = "history"
@@ -428,8 +466,11 @@ class EurlexSource:
                         yield DocRef(source_id=self.source_id, native_id=celex, locator=str(unit),
                                      scope="container", error=f"unreadable unit: {e}"[:200])
                         continue
-                    if not any(x.name == NOTICE for x in entries):
-                        continue                     # not landed yet (app/acquire/cellar.py)
+                    names = {x.name for x in entries}
+                    if NOTICE not in names or rdf_mod.TREE_FILE not in names:
+                        # not landed yet, or landed before parser 3 kept its
+                        # tree: the next fetch completes it (app/acquire/cellar.py)
+                        continue
                     try:
                         day = _unit_day(unit, celex, entries)
                     except OSError as e:
@@ -469,8 +510,9 @@ class EurlexSource:
             files = {e.name: Path(e.path).read_bytes() for e in unit_files(unit)}
         except OSError as e:
             raise UnindexableDocument(f"{unit}: {type(e).__name__}: {e}") from e
-        if NOTICE not in files:
-            raise UnindexableDocument(f"{unit}: no {NOTICE}: the unit did not land whole")
+        for need in (NOTICE, rdf_mod.TREE_FILE):
+            if need not in files:
+                raise UnindexableDocument(f"{unit}: no {need}: the unit did not land whole")
         data = frame(files)
         return RawDoc(ref=ref, raw_hash=hashlib.blake2b(data, digest_size=16).hexdigest(), data=data)
 
@@ -485,7 +527,31 @@ class EurlexSource:
         except (KeyError, notice_mod.NoticeError) as e:
             raise UnindexableDocument(f"{unit}: {e}") from None
         try:
-            act = formex.parse(files)
+            tree = rdf_mod.loads(files.pop(rdf_mod.TREE_FILE))
+        except (KeyError, ValueError) as e:
+            raise UnindexableDocument(f"{unit}: the scoped tree did not read: {e}") from None
+        found: list[Issue] = []
+        form = "fmx4" if any(formex.is_wrapper(n) for n in files) else _form_held(note, files)
+        root_tag = "CONS.ACT" if _CONSOLIDATED.match(celex) else "ACT"
+        stated_lang = notice_mod.CODE_OF.get(note.display_language or "", lang)
+        try:
+            if form == "fmx4":
+                act = formex.parse(files)
+            elif form in ("xhtml", "html"):
+                # in their names' order: an OJ item's name carries its page
+                # (`…01001401` page 14, `…01001501` page 15), the notice's order
+                # does not (32010D0699 lists the annexed draft first)
+                names = sorted(it.name for it in note.items.get(form, []) if it.name in files)
+                act = rendition.parse_html(files, names, lang=stated_lang, root=root_tag, note=note)
+            elif form is not None:
+                names = sorted(it.name for it in note.items.get(form, []) if it.name in files)
+                act, blank = rendition.parse_pdf(files, names, lang=stated_lang, root=root_tag, note=note)
+                if blank:
+                    found.append(Issue("no-text-layer", f"{blank} page(s) of {', '.join(names)} hold no text "
+                                                        f"(a scan): the PDF is held whole in the unit"))
+            else:
+                raise UnindexableDocument(f"{unit}: no Formex and no item of any form the notice lists "
+                                          f"({', '.join(sorted(note.items))})")
         except formex.FormexError as e:
             raise UnindexableDocument(f"{unit}: {e}") from None
         # RULE 2: the record is what the origin returned. A unit whose
@@ -498,7 +564,6 @@ class EurlexSource:
         if note.display_language and note.display_language != lang3(lang):
             raise UnindexableDocument(f"{unit}: the notice's expression is {note.display_language}, "
                                       f"the slice lang={lang}")
-        found: list[Issue] = []
         expr = version_key(celex)
         consolidated = expr != "ORIGINAL"
         if consolidated != (act.root == "CONS.ACT"):
@@ -589,6 +654,10 @@ class EurlexSource:
             "modifications": act.modifications,
             "instructions": act.instructions,
             "markup": act.markup,
+            # the form the text was read from (app/acquire/cellar.py FORMS)
+            "form": form,
+            # Cellar's non-inferred tree, scoped to this language (rdf.py)
+            "cdm_rdf": tree,
             # the CDM notice, whole
             "notice_kind": note.kind,
             "notice_decoding": note.decoding,

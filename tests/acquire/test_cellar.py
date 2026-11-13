@@ -59,6 +59,10 @@ def _notice(base: str, celex: str, lang: str, files: dict[str, bytes] | None) ->
             f'<MANIFESTATION manifestation-type="fmx4">{items}</MANIFESTATION></NOTICE>').encode()
 
 
+RDF_FIXTURES = Path(__file__).resolve().parent.parent / "fixtures" / "eurlex" / "rdf"
+_EMPTY_RDF = b'<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"/>'
+
+
 class Cellar:
     """The mock: `units[(celex, lang)] = {"files": …, "modified": iso, "listed": bool}`."""
 
@@ -67,6 +71,7 @@ class Cellar:
         self.requests: list[tuple[str, str, dict]] = []
         self.fail: dict[str, int] = {}          # path prefix → 503s still to answer
         self.short_pages = False                # the pages answer fewer rows than the count
+        self.rdf_asked: list[str] = []          # the CELEX whose tree was asked
         self.lock = threading.Lock()
         owner = self
 
@@ -129,6 +134,14 @@ class Cellar:
                 base = f"http://127.0.0.1:{owner.port}"
                 if path.startswith("/resource/celex/"):
                     celex = unquote(path.rsplit("/", 1)[1])
+                    accept = self.headers.get("Accept", "")
+                    if "notice=non-inferred-tree" in accept:
+                        # the work's tree (parser 3): a fixture where one is held
+                        rdf_file = RDF_FIXTURES / f"{celex}.rdf"
+                        body = rdf_file.read_bytes() if rdf_file.is_file() else _EMPTY_RDF
+                        owner.rdf_asked.append(celex)
+                        return self._send(200, body, {"Content-Type": "application/rdf+xml"})
+
                     lang = src.notice_mod.CODE_OF.get(self.headers.get("Accept-Language", "").upper())
                     unit = owner.units.get((celex, lang))
                     if unit is None:
@@ -203,7 +216,7 @@ def _years(monkeypatch):
 def test_the_listing_asks_only_the_profile_s_languages_counted_then_paged(mock):
     spec = _spec(mock)
     got = list(cellar.listing(spec.endpoints[0], spec, Filter(include=("lang=fr/*",)), years=range(2016, 2017)))
-    assert sorted(f.rel_path for f in got) == [f"lang=fr/2016/{CONS}/notice.xml", f"lang=fr/2016/{ACT}/notice.xml"]
+    assert sorted(f.rel_path for f in got) == [f"lang=fr/2016/{CONS}/tree.json", f"lang=fr/2016/{ACT}/tree.json"]
     assert all(cellar.is_unit(f) and cellar.unit_of(f)["lang"] == "fr" for f in got)
     assert all(f.mtime == 1528452000 for f in got), "the work's last modification, as the listing's date"
     q = mock.queries()
@@ -249,9 +262,11 @@ def test_a_unit_lands_whole_its_items_by_the_notice_s_names(mock, tmp_path):
     dest = tmp_path / src.unit_rel("en", ACT)
     got = cellar.fetch_unit(mock.base, ACT, "en", dest, charge=charged.append)
     want = _formex(ACT, "en")
-    assert sorted(p.name for p in dest.iterdir()) == sorted([*want, "notice.xml"])
+    assert sorted(p.name for p in dest.iterdir()) == sorted([*want, "notice.xml", "tree.json"])
     assert all((dest / n).read_bytes() == b for n, b in want.items())
-    assert sum(charged) == got.moved == sum(len(b) for b in want.values()) + (dest / "notice.xml").stat().st_size
+    assert sum(charged) == got.moved == sum(len(b) for b in want.values()) + (dest / "notice.xml").stat().st_size \
+        + (RDF_FIXTURES / f"{ACT}.rdf").stat().st_size, "the tree's bytes as Cellar sent them"
+    assert mock.rdf_asked == [ACT]
     assert not list(dest.parent.glob(".*")), "no staging left behind"
     first = mock.gets("/resource/celex/")[0][2]
     assert first["Accept"] == "application/xml;notice=branch" and first["Accept-Language"] == "eng"
@@ -261,7 +276,7 @@ def test_without_items_in_the_notice_the_300_lists_them_by_name(mock, tmp_path):
     mock.units[(CONS, "en")]["no_items"] = True
     dest = tmp_path / src.unit_rel("en", CONS)
     cellar.fetch_unit(mock.base, CONS, "en", dest)
-    assert sorted(p.name for p in dest.iterdir()) == sorted([*_formex(CONS, "en"), "notice.xml"])
+    assert sorted(p.name for p in dest.iterdir()) == sorted([*_formex(CONS, "en"), "notice.xml", "tree.json"])
     assert any("type=fmx4" in h.get("Accept", "") for _, _, h in mock.gets("/resource/celex/"))
 
 
@@ -317,7 +332,8 @@ def test_a_node_holding_only_french_fetches_only_french(tmp_path, mock, monkeypa
     assert sorted(p.relative_to(collection.corpus_dir).as_posix()
                   for p in collection.corpus_dir.glob("lang=*/*/*")) == [
         f"lang=fr/2016/{CONS}", f"lang=fr/2016/{ACT}"]
-    assert {h.get("Accept-Language") for _, _, h in mock.gets("/resource/celex/")} == {"fra"}
+    assert {h.get("Accept-Language") for _, _, h in mock.gets("/resource/celex/")
+            if "rdf" not in h.get("Accept", "")} == {"fra"}, "the tree is the work's, asked with no language"
     # the listing compared with what is held: nothing moved, nothing fetched
     before = len(mock.gets("/"))
     again = engine.run_acquisition(con, collection, spec, "fr")
@@ -343,7 +359,8 @@ def test_a_language_added_later_fetches_that_language_alone(tmp_path, mock, monk
     got = engine.run_acquisition(con, collection, spec, "fr,de")
     assert got["fetched"] == 2
     new = mock.gets("/resource/celex/")[n:]
-    assert {h.get("Accept-Language") for _, _, h in new} == {"deu"}, "nothing French fetched again"
+    assert {h.get("Accept-Language") for _, _, h in new if "rdf" not in h.get("Accept", "")} == {"deu"}, \
+        "nothing French fetched again"
 
 
 def test_records_vs_origin_refetches_one_unit_by_its_cellar_uri(mock):
@@ -353,7 +370,7 @@ def test_records_vs_origin_refetches_one_unit_by_its_cellar_uri(mock):
     origin = unit_origin.UnitOrigin(_spec(mock))
     try:
         out = origin.materialise(f"lang=de/2016/{ACT}")
-        assert sorted(p.name for p in out.iterdir()) == sorted([*_formex(ACT, "de"), "notice.xml"])
+        assert sorted(p.name for p in out.iterdir()) == sorted([*_formex(ACT, "de"), "notice.xml", "tree.json"])
         assert origin.unit(f"lang=de/2016/{ACT}") == (f"lang=de/2016/{ACT}", None)
         assert origin.bytes_read > 0
         with pytest.raises(FileNotFoundError):
