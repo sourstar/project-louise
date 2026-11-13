@@ -457,3 +457,16 @@ def test_a_speed_capture_searches_with_the_chat_models_translation_and_never_mix
     assert _capture(quality, _Search(), limit=1)["already"] == 2, "read as Quality, resumed"
     with pytest.raises(rb.Refused, match="speed"):
         _capture(quality, _Search(), limit=1, speed=True)
+
+
+def test_an_instruction_follows_the_collections_plugin_when_its_name_is_not_in_the_table():
+    """2026-11-13: normattiva-nemo renamed "Normattiva", normattiva
+    "normattiva_old" — a name is local, the plugin is what it holds."""
+    from tools.measure import rerank_bench as rb
+    table = {"normattiva": "legal", "gutenberg": "books"}
+    plugins = {"Normattiva": "normattiva", "normattiva_old": "normattiva", "mine": None}
+    of = plugins.get
+    assert rb._instruction_of(table, "Normattiva", plugin_of=of) == "legal"
+    assert rb._instruction_of(table, "normattiva_old", plugin_of=of) == "legal"
+    assert rb._instruction_of(table, "gutenberg", plugin_of=of) == "books", "the name first"
+    assert rb._instruction_of(table, "mine", plugin_of=of) is None
