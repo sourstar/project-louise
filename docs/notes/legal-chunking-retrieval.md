@@ -401,9 +401,18 @@ extending it (do not reinvent the wheel).
   Cost." maps to `urn:nir:stato:costituzione:1947-12-27` and pins nothing
   while not held.
 - **Repealed articles outside Italy.** `article_repealed` exists per source
-  (R1 (d)) and only Normattiva's detects ("ARTICOLO ABROGATO"). LEGI's ETAT
-  `ABROGE`, NeuRIS's "(weggefallen)" and EUR-Lex's "deleted" are not read
-  yet, so such an article pins as in force.
+  (R1 (d)) and only Normattiva's detects ("ARTICOLO ABROGATO").
+  PART FIXED 2026-11-13, for every source: a version shown with no date
+  asked whose validity has ENDED (`valid_to` on or before today) is pinned
+  as the last text in force ("dernier texte en vigueur"), never "in force"
+  (`articles._ended`). That covers a LEGI article whose last version is
+  ABROGE (its ETAT closes it: validity's end is its DATE_FIN), and an act
+  Normattiva closes. STILL OPEN: an article removed INSIDE a version still
+  in force — NeuRIS's "(weggefallen)" and EUR-Lex's consolidated
+  "deleted" are the usual forms, but neither is in our records yet (NeuRIS
+  empty, EUR-Lex not created), so no detector is written by guess: it is
+  measured on the held records after their builds (how many, which
+  spellings, in which languages) and written from that.
 - **An annex code's amendments (fixed 2026-11-12).** The older exports
   write a code's destinations as `urn:…;262#CODICE CIVILE-art. 2441`,
   `#Allegato 1 Codice del processo amministrativo-art. 120`, `#Norme-art.
