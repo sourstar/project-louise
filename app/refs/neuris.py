@@ -171,18 +171,23 @@ class NeurisRefSource:
         """The newest stored JSON: a pass that fetched one re-syncs
         (refs/store.py `sync_source`)."""
         from ..plugins import walk
-        root = Path(state.ref_root) / "neuris"
-        return max((os.stat(p).st_mtime for p in walk.files(root / "eli", "*.json")), default=0.0)
+        return max((os.stat(p).st_mtime for root in state.corpus_roots("neuris")
+                    for p in walk.files(root / "eli", "*.json")), default=0.0)
 
     def sync(self, state: RefSyncState) -> Iterator[RefRecordBatch]:
         from ..plugins.neuris.source import coverage, eli_key, native_id_of, work_of
-        root = Path(state.ref_root) / "neuris"
-        if not root.is_dir():
+        roots = state.corpus_roots("neuris")          # by the collections held (base.RefSyncState)
+        if not roots:
             return
         works: dict[str, dict] = {}
         abks: dict[str, dict] = {}
         versions: list[dict] = []
-        for expression, jpath in sorted(_expressions(root).items()):
+        # each expression once, from the first collection (by name) that holds it
+        found: dict[str, tuple[Path, Path]] = {}
+        for r in roots:
+            for e, p in _expressions(r).items():
+                found.setdefault(e, (r, p))
+        for expression, (root, jpath) in sorted(found.items()):
             try:
                 api = json.loads(jpath.read_bytes())
                 nid = native_id_of(expression)

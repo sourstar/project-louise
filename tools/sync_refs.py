@@ -22,7 +22,9 @@ from app.refs import store as refs_store
 def main() -> None:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--src", required=True, type=Path,
-                    help="directory containing (or receiving) hgnc.tsv, clinvar_mini.tsv, ...")
+                    help="directory containing (or receiving) hgnc.tsv, clinvar_mini.tsv, ...; "
+                         "a plugin's corpus is read from the collections held here, and from "
+                         "<src>/<plugin> only for a plugin none of them carries")
     p.add_argument("--db", type=Path, default=None,
                     help="refs.db path (default: config.refs_db_path())")
     p.add_argument("--fetch", action="store_true",
@@ -37,7 +39,12 @@ def main() -> None:
             print(f"fetch {source_id}: {result}")
 
     con = connect(args.db)
-    results = refs_store.sync_all(con, args.src)
+    # the corpora of the sources that read a plugin's corpus, by the
+    # collections held here, never by a folder name (2026-11-13)
+    corpora = refs_store.held_corpora()
+    for plugin, roots in sorted(corpora.items()):
+        print(f"corpus {plugin}: {', '.join(str(r) for r in roots)}")
+    results = refs_store.sync_all(con, args.src, corpora=corpora)
     for source_id, result in results.items():
         print(f"{source_id}: {result}")
 

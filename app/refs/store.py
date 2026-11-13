@@ -137,10 +137,37 @@ def sync_source(con: sqlite3.Connection, source: ReferenceSource, state: RefSync
     return {"skipped": False, "rows": n}
 
 
-def sync_all(con: sqlite3.Connection, ref_root: Path) -> dict[str, dict]:
+def sync_all(con: sqlite3.Connection, ref_root: Path,
+             corpora: dict[str, tuple[Path, ...]] | None = None) -> dict[str, dict]:
     from . import REFS_REGISTRY
-    state = RefSyncState(ref_root=ref_root)
+    state = RefSyncState(ref_root=ref_root, corpora=corpora)
     return {sid: sync_source(con, src, state) for sid, src in REFS_REGISTRY.items()}
+
+
+def held_corpora(collections=None) -> dict[str, tuple[Path, ...]]:
+    """plugin → the ORIGIN directories of the collections of that plugin
+    held here (`corpus_dir`, followed through its links), each once by its
+    physical identity (device, inode), in the collections' name order: two
+    collections that share one origin (normattiva_old and Normattiva, on
+    /corpora/normattiva) give it once. A collection fed from a peer's SHARD
+    holds no origin and gives none (`RefSyncState.corpus_roots`)."""
+    from app import collections as collections_mod
+    held = collections_mod.load_all() if collections is None else collections
+    out: dict[str, list[Path]] = {}
+    seen: set[tuple[int, int]] = set()
+    for c in sorted(held, key=lambda c: c.name):
+        if getattr(c, "source", "origin") != "origin":
+            continue
+        d = Path(c.corpus_dir)
+        try:
+            st = d.stat()
+        except OSError:
+            continue
+        if not d.is_dir() or (st.st_dev, st.st_ino) in seen:
+            continue
+        seen.add((st.st_dev, st.st_ino))
+        out.setdefault(c.plugin, []).append(d.resolve())
+    return {k: tuple(v) for k, v in out.items()}
 
 
 class RefStore:
