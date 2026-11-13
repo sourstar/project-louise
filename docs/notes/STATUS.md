@@ -71,6 +71,17 @@ measured (published figures disagree).
   never used) and `c4e6133a6e85` at `6f1748a`. localai-bugs.md "The series digest"; the brief §10 now says what is
   live. Still on the operator's word: the reranker card test (brief, "For München" step 6).
 
+- **The two engines named the old way are renamed with no rebuild — DECIDED: after legi F's swap (the operator, in
+  München's session); steps 1–3 prepared ahead** (operator, 11-12, on "they keep their names until a rebuild": "Then
+  let's fix it"). The same image is tagged and saved under the by-the-book name (`281e1ee481b6`, `10aa8b1851d7`),
+  installed beside the old one, and nothing points at it before its tree digest is shown to be the old one's; then the
+  wrapper, MADLAD's YAML and the reranker's name it and LocalAI restarts once. The old directories STAY until the new
+  names answer and their gates pass; deleting them is the operator's own yes. The engine's `name` is inside its
+  `engine_id`, so every VeGa run on the on-demand engine is new and gated once, on its twin, by the code as it is —
+  one gate per space, its collections borrow the statement; no statement is carried. The reranker's staged YAML naming
+  the new backend is held as draft PR #589 and merged with the node step. localai-bugs.md "The series digest", "The
+  rename".
+
 - **An engine's name covers its series' base — FIXED (deploy/localai/llama-cpp/build.sh)** (the context-on-request
   session's finding). A relative `SERIES_FILE` was lost by the digest's `cd "$PATCHES"` (cat's error hidden by the
   pipe), so the name covered the patches alone, not the `base` line: the live c4e6133a6e85 (context-on-demand) and

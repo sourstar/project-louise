@@ -476,6 +476,48 @@ to answer "which patches was the engine on the node built from".
   `9d17b8a39845` — `staged/nemotron-rerank.series` (the Nemotron reranker's
   backend); now `10aa8b1851d7`. To check such a name: `cat` the series'
   patches, in order, into `sha256sum`.
+- *The rename, with no rebuild* (operator, 2026-11-12, on leaving the two
+  names until a rebuild: "Then let's fix it"). The bytes are the ones
+  already built, so nothing is compiled again (RULE 1); what is by the book
+  is the NAME. On the node, by München, on the operator's word there:
+  1. per engine, the image it was built as gets the by-the-book tag
+     (`docker tag louise-llama-cpp:sycl_f16-<old>… louise-llama-cpp:sycl_f16-<new>…`),
+     is saved under the by-the-book tar name (`docker save`), and its
+     `.stack.lock` is copied beside it; `<new>` is `NAME_ONLY=1`'s word for
+     the series — `281e1ee481b6`, `10aa8b1851d7` — and each name keeps the
+     suffix it has today;
+  2. it is installed as LocalAI installs any (`install-external`,
+     `ocifile://`), under the new backend name, beside the old one;
+  3. THE PROOF, before anything points at it: the engine's tree digest of
+     the new directory (09 §9.3; the install record is outside it) is the old
+     directory's — for the on-demand engine `sha256:b801b4b0…`. Only the
+     engine's `name` moves. A different digest stops the rename;
+  4. `vega-louise-llama-cpp`'s `vega.json`, MADLAD's YAML and the reranker's
+     (`deploy/vega/stage/models/louise-rerank-nemotron-1b.yaml`) name the new
+     backends; LocalAI is restarted once. THE OLD DIRECTORIES STAY until the
+     new names answer and their gates have passed — they are the way back
+     (the coordinator, 2026-11-12); then `deploy/vega/retired_backends.py
+     --delete` on the operator's own yes, with its size, in München's
+     session (his practice of 2026-11-07);
+  5. `name` is inside the engine object, so `engine_id` and every VeGa run on
+     the on-demand engine are NEW: each is gated once, on its twin, by the
+     code as it is. No statement is carried — a carried one would not be the
+     one a gate writes, and the gate no longer holds the model from the
+     others. Writes of those spaces defer until their gate passes. One gate
+     per space covers its collections, which borrow its statement (legi is
+     in normattiva-nemo's space and needs none of her own); gates on one
+     model wait for each other; the worker gates each new run by itself,
+     the busiest space first where an order is wanted. The reranker and
+     MADLAD answer under no VeGa run: nothing to gate.
+  Cost: one LocalAI restart and one gate per (space, role) of three encoders.
+  WHEN (München, 2026-11-12): after legi's case F has swapped — her F recipe
+  is pinned to the live engine's id, which the rename changes, and a rename
+  before it ends would have F refused again (safely: the chain stops and
+  forgets nothing) and lose the night. The operator, in München's session:
+  after legi F's swap. Steps 1–3 are prepared ahead, nothing repointed.
+  The reranker's staged YAML is held as a draft (PR #589) and merged with
+  the node step: merged before, the next unrelated deploy would point the
+  reranker at a backend that does not exist yet.
 - *What the digest settled the same day.* The live engine `c4e6133a6e85` was
   read as predating P11's `init_stop` fix. It does not: `6f1748a` is the
   merge after `8f404c9`, its staged patches are byte-identical to the fix's,
