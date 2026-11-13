@@ -48,7 +48,7 @@ def _imports(rel: str) -> set[str]:
 
 def test_the_common_engine_imports_no_origin_s_own_module():
     per_origin = {p.stem for p in (ROOT / "app" / "acquire").glob("*.py")} - {
-        "__init__", "budget", "checksum", "claim", "engine", "mirrors", "seeding", "spec", "specs",
+        "__init__", "backoff", "budget", "checksum", "claim", "engine", "mirrors", "seeding", "spec", "specs",
         "transports", "transport_https", "transport_ftp", "transport_rsync", "transport_hf_hub",
         "transport_torrent", "torrent_collection", "torrent_landed", "torrent_publish",
         "updatefiles", "zipdelta", "file_origin", "member_origin", "unit_origin"}

@@ -102,6 +102,14 @@ class TransferManager:
         self._rates_cache: tuple[float, dict] | None = None
         self._last_sample: tuple[float, list[float], list[float]] | None = None
         self._stop: threading.Event | None = None
+        # COOL-DOWNS (app/acquire/backoff.py; the architecture session,
+        # 2026-11-14): endpoint key → (monotonic time it ends, why), and the
+        # last request start per key for `min_interval_s`. A RUNTIME
+        # observation, in memory, per process: never desired state (invariant
+        # 10). An operator pass in its own container has its own manager, so
+        # its cool-downs are its own.
+        self._cool: dict[str, tuple[float, str]] = {}
+        self._last_start: dict[str, float] = {}
         self._apply_rates_locked()
 
     # ---------------- configuration ----------------
@@ -209,6 +217,54 @@ class TransferManager:
                 self._slot_counts[key] = slots
             return sem
 
+    # ---------------- cool-downs (backoff.py) ----------------
+
+    def cool_down(self, key: str, seconds: float, reason: str = "") -> None:
+        """The endpoint answered an episode (a 429, a 5xx, a timeout): no slot
+        on it is given before `seconds` from now. A later end wins; an
+        earlier one never shortens a cool-down already running."""
+        if not key or seconds <= 0:
+            return
+        end = self._clock.monotonic() + float(seconds)
+        with self._lock:
+            held = self._cool.get(key)
+            if held is None or held[0] < end:
+                self._cool[key] = (end, reason)
+
+    def cooled_for(self, key: str) -> float:
+        """Seconds left in the endpoint's cool-down; 0 when none runs."""
+        with self._lock:
+            held = self._cool.get(key)
+        if held is None:
+            return 0.0
+        left = held[0] - self._clock.monotonic()
+        if left <= 0:
+            with self._lock:
+                if self._cool.get(key) == held:
+                    del self._cool[key]
+            return 0.0
+        return left
+
+    def cooled_why(self, key: str) -> str | None:
+        with self._lock:
+            held = self._cool.get(key)
+        return held[1] if held is not None and self.cooled_for(key) > 0 else None
+
+    def pace(self, key: str, min_interval_s: float | None) -> float:
+        """Seconds to wait before a request may start on `key`: what is left
+        of its cool-down, and of `min_interval_s` since the last start. Zero
+        means start now, and that start is recorded."""
+        now = self._clock.monotonic()
+        wait = self.cooled_for(key)
+        with self._lock:
+            last = self._last_start.get(key)
+            if min_interval_s and last is not None:
+                wait = max(wait, last + float(min_interval_s) - now)
+            if wait <= 0:
+                self._last_start[key] = now
+                return 0.0
+        return wait
+
     # ---------------- EWMA throughput (mirror steering) ----------------
 
     def record_throughput(self, key: str, byte_count: int, seconds: float) -> None:
@@ -226,15 +282,20 @@ class TransferManager:
 
     def rank_endpoints(self, keyed_endpoints: list[tuple[str, object]]) -> list[tuple[str, object]]:
         """Fastest-measured first; unmeasured endpoints keep their declared
-        order (spec order is mirrors-first, so a cold start is still polite)."""
+        order (spec order is mirrors-first, so a cold start is still polite);
+        an endpoint cooling down after an episode last."""
         with self._lock:
             ewma = dict(self._ewma)
+
+        cooled = {key for key, _ in keyed_endpoints if self.cooled_for(key) > 0}
 
         def sort_key(item):
             key, _ = item
             measured = ewma.get(key)
-            # measured endpoints sort ahead of unmeasured ones, fastest first
-            return (0, -measured) if measured is not None else (1, 0.0)
+            # a cooled endpoint goes last (backoff.py: the work moves to
+            # another mirror instead of waiting); then measured ahead of
+            # unmeasured, fastest first
+            return (key in cooled,) + ((0, -measured) if measured is not None else (1, 0.0))
 
         return sorted(keyed_endpoints, key=sort_key)
 

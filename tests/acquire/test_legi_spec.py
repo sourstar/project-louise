@@ -96,11 +96,11 @@ def test_the_listing_is_one_get_charged_to_the_budget(mock_server, monkeypatch):
 def test_a_transient_fault_is_retried_then_deferred_never_failed(mock_server):
     ep = _serve(mock_server, APACHE, {})
     mock_server.statuses["OPENDATA/LEGI/"] = [503, 502]
-    assert len(transport_https.list_index(ep, pattern=SPEC.inventory.pattern, backoff=0)) == 2, \
+    assert len(transport_https.list_index(ep, pattern=SPEC.inventory.pattern, sleep=lambda s: None)) == 2, \
         "two 5xx, then the page"
     mock_server.statuses["OPENDATA/LEGI/"] = [500] * 5
     with pytest.raises(transport_https.ListingDeferred) as e:
-        transport_https.list_index(ep, backoff=0)
+        transport_https.list_index(ep, sleep=lambda s: None)
     assert isinstance(e.value, httpx.TransportError), "the worker's deferral, not an error"
     assert engine.transient(str(e.value)), "and a transient one to the engine"
 
@@ -108,7 +108,7 @@ def test_a_transient_fault_is_retried_then_deferred_never_failed(mock_server):
 def test_a_missing_directory_is_the_endpoint_s_error(mock_server):
     ep = replace(SPEC.endpoints[0], url=f"{mock_server.base_url}/OPENDATA/NOWHERE")
     with pytest.raises(TransportError) as e:
-        transport_https.list_index(ep, backoff=0)
+        transport_https.list_index(ep, sleep=lambda s: None)
     assert not isinstance(e.value, transport_https.ListingDeferred)
 
 

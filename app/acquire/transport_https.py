@@ -18,6 +18,7 @@ from typing import Iterator
 
 import httpx
 
+from . import backoff as _backoff_defaults
 from . import budget
 from .spec import (AcquisitionSpec, Endpoint, RemoteFile, TransferAborted,
                     TransportError)
@@ -61,15 +62,16 @@ def _url(endpoint: Endpoint, remote: RemoteFile) -> str:
 #: stall) — at 64 MiB every step hung for a minute before continuing from
 #: the 50 MiB it had (2026-10-13; zipdelta.DIRECTORY_PIECE for the same).
 RANGE_STEP = 32 << 20
-#: How many times one step is asked again on a transient fault — a timeout, a
-#: drop, the origin's own 5xx — before it is the transport's error: a second
-#: apart, doubling, 15 s in all, which outlasts the eight-second episode of
-#: 500s the origin had on 2026-10-13.
-RANGE_ATTEMPTS = 5
+#: How many times one step is asked in a round on the origin's episode — a
+#: timeout, a drop, a 5xx, 408, 429 — before it is deferred to the next
+#: round: app/acquire/backoff.py's policy (2026-11-14; before it, a second
+#: apart and doubling, which outlasted the eight-second episode of 500s the
+#: origin had on 2026-10-13 and honoured no Retry-After).
+RANGE_ATTEMPTS = _backoff_defaults.DEFAULT_ATTEMPTS
 
 
 def _stream_range(url: str, headers: dict, f, start: int, end: int,
-                  attempts: int = RANGE_ATTEMPTS, *, whole: bool = False) -> int:
+                  attempts: int | None = RANGE_ATTEMPTS, *, whole: bool = False) -> int:
     """`bytes=start-end` streamed into `f` (open for appending), fsynced and
     charged chunk by chunk; returns the bytes written, which may be fewer
     than asked when the origin closed early — the caller asks for the rest.
@@ -77,17 +79,18 @@ def _stream_range(url: str, headers: dict, f, start: int, end: int,
     error; a 200 is RangeUnsupported, as everywhere — except to a range that
     IS the whole file (`whole`), which an origin may answer 200 with exactly
     those bytes."""
-    last: str | None = None
-    cause: BaseException | None = None
-    for attempt in range(attempts):
-        if attempt:
-            time.sleep(float(1 << (attempt - 1)))
+    from . import backoff
+    r_ = backoff.Retry(f"Range {start}-{end} of {url}", backoff.Policy(attempts=attempts))
+    for _ in r_:
+        # nothing of this range was written before a retry (progress returns
+        # at once, below): the retry asks again from `start`, the checkpoint
         written = 0
         try:
             with httpx.Client(timeout=60, follow_redirects=True) as client:
                 with client.stream("GET", url, headers={**headers, "Range": f"bytes={start}-{end}"}) as r:
-                    if r.status_code >= 500:          # the origin's episode, not the file
-                        last, cause = f"{r.status_code} to Range {start}-{end}", None
+                    if backoff.retryable_status(r.status_code):   # the origin's episode, not the file
+                        r_.episode(f"{r.status_code} to Range {start}-{end}",
+                                   retry_after=r.headers.get("retry-after"))
                         continue
                     if r.status_code == 200 and not whole:
                         raise RangeUnsupported(f"{url}: the origin ignored Range and answered 200")
@@ -107,12 +110,13 @@ def _stream_range(url: str, headers: dict, f, start: int, end: int,
                         written += len(chunk)
             return written
         except httpx.TransportError as e:         # a timeout, a drop, a reset: transient
-            last, cause = f"{type(e).__name__}: {e}", e
             if written:
                 return written                    # progress stands; the caller asks for the rest
+            r_.episode(f"{type(e).__name__}: {e}", cause=e)
         except httpx.HTTPError as e:
             raise TransportError(f"{url}: {e}") from e
-    raise TransportError(f"{url}: {last} on Range {start}-{end} after {attempts} attempts") from cause
+    r_.give_up(f"{url}: ")
+    return 0                                      # unreachable: give_up raises
 
 
 class HttpsTransport:
@@ -263,9 +267,9 @@ class HttpsTransport:
 # THE STANDARD NOT ADOPTED: WebDAV's PROPFIND (RFC 4918) lists a directory
 # with exact sizes and dates, but an open-data server is not a WebDAV one.
 
-#: how many times the index page is asked again on a transient fault (a 5xx,
-#: a timeout, a dropped connection) before the listing is DEFERRED
-LIST_ATTEMPTS = 5
+#: how many times the index page is asked in a round on the origin's episode
+#: before the listing is DEFERRED: app/acquire/backoff.py's policy
+LIST_ATTEMPTS = _backoff_defaults.DEFAULT_ATTEMPTS
 #: the largest index page read: a directory of a few thousand files is ~1 MB
 LIST_MAX_BYTES = 16 << 20
 
@@ -368,24 +372,31 @@ class HtmlIndex:
         return list_index(endpoint, pattern=self.pattern)
 
 
-def list_index(endpoint: Endpoint, *, pattern: str | None = None, attempts: int = LIST_ATTEMPTS,
-               backoff: float = 1.0) -> list[RemoteFile]:
+def list_index(endpoint: Endpoint, *, pattern: str | None = None, attempts: int | None = LIST_ATTEMPTS,
+               sleep=None) -> list[RemoteFile]:
     """The endpoint's directory, from its own index page: one GET, streamed
     and charged to the budget chunk by chunk (invariant 5), asked again on a
     transient fault and DEFERRED (`ListingDeferred`) when it lasts; a 4xx is
     the endpoint's error (`TransportError`)."""
+    from . import backoff
     url = endpoint.url.rstrip("/") + "/"
     headers = headers_for(endpoint)
-    last = ""
-    for attempt in range(attempts):
-        if attempt:
-            time.sleep(backoff * (1 << (attempt - 1)))
+    r_ = backoff.Retry(f"GET {url}", backoff.Policy(attempts=attempts), sleep=sleep)
+    try:
+        return _list_index_once(r_, url, headers, pattern)
+    except backoff.Deferred as e:
+        raise ListingDeferred(f"{url}: {e} — listing deferred") from e
+
+
+def _list_index_once(r_, url: str, headers: dict, pattern: str | None) -> list[RemoteFile]:
+    from . import backoff
+    for _ in r_:
         body = bytearray()
         try:
             with httpx.Client(timeout=60, follow_redirects=True) as client:
                 with client.stream("GET", url, headers=headers) as r:
-                    if r.status_code >= 500:
-                        last = f"{r.status_code} to GET {url}"
+                    if backoff.retryable_status(r.status_code):
+                        r_.episode(f"{r.status_code} to GET {url}", retry_after=r.headers.get("retry-after"))
                         continue
                     if r.status_code != 200:
                         raise TransportError(f"{url}: {r.status_code} to the directory's listing")
@@ -397,10 +408,11 @@ def list_index(endpoint: Endpoint, *, pattern: str | None = None, attempts: int 
                     encoding = r.encoding or "utf-8"
             return parse_index(bytes(body).decode(encoding, "replace"), pattern)
         except httpx.TransportError as e:          # a timeout, a drop, a reset: transient
-            last = f"{type(e).__name__}: {e}"
+            r_.episode(f"{type(e).__name__}: {e}", cause=e)
         except httpx.HTTPError as e:
             raise TransportError(f"{url}: {e}") from e
-    raise ListingDeferred(f"{url}: {last} — listing deferred after {attempts} attempts")
+    raise ListingDeferred(f"{url}: {r_.last} — listing deferred after {r_.policy.attempts} attempts "
+                          f"(connection timed out: the next round asks again)") from r_.cause
 
 
 # ---------------- multi-connection single-file downloads ----------------
