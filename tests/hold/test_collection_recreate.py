@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import os
+import sqlite3
 from contextlib import contextmanager
 from types import SimpleNamespace
 
@@ -548,3 +549,50 @@ def test_only_the_swap_waits_with_its_own_exit_and_a_refused_run_is_never_mistak
         "a refusal is 2"
     assert _new(root, _new_recipe(tmp_path)) == SWAP_WAITS, "the swap alone is 4"
     assert (root / "old").is_dir(), "nothing deleted by either"
+
+
+def _drop_vectors(root, name: str, *, marked: bool = False) -> None:
+    """The predecessor's vector table gone (legi, 2026-11-12: lost with the
+    forget), every embed mark reset — or, `marked`, one left set."""
+    import shutil
+
+    from app import vector_place
+    shutil.rmtree(vector_place.physical(vector_place.table_dir(root, name)), ignore_errors=True)
+    con = sqlite3.connect(root / name / "state" / "manifest.sqlite")
+    try:
+        con.execute("UPDATE documents SET embed_done=0")
+        if marked:
+            con.execute("UPDATE documents SET embed_done=1 WHERE rowid=(SELECT MIN(rowid) FROM documents)")
+        con.commit()
+    finally:
+        con.close()
+
+
+def test_a_predecessor_holding_no_vector_is_carried_without_a_sample_and_embeds_from_zero(
+        held, steps, tmp_path, capsys):
+    """legi, 2026-11-13: her table lost, her marks reset, case F stopped at
+    the carry ("not one drawn chunk is held with a vector"). A carry vouches
+    for the vectors it TAKES; taking none, it has none to reproduce. Proven
+    as A1h proves it: no row, no document marked embedded."""
+    root, _old, _chunks = held
+    _drop_vectors(root, "old")
+    assert _new(root, _new_recipe(tmp_path)) == SWAP_WAITS
+    assert "sample" not in steps["order"] and steps["encoder"].calls == 0, "nothing re-encoded"
+    kept = json.loads(wf.progress_path("old").read_text())["steps"]["carry"]["result"]
+    assert kept["sample"]["verdict"] == "vacuous" and kept["counts"]["to"]["vectors"] == 0
+    assert kept["counts"]["to"]["documents"] == kept["counts"]["from"]["documents"] > 0
+    assert "holds no vector" in capsys.readouterr().err
+    forget_mod.forget(root, "old")
+    assert _new(root, _new_recipe(tmp_path)) == 0, "the swap takes the name, with no table to move"
+    assert recreate.counts(root, "old") == {"documents": kept["counts"]["to"]["documents"], "vectors": 0}
+
+
+def test_a_predecessor_with_a_document_marked_embedded_but_no_table_still_fails_its_sample(
+        held, steps, tmp_path):
+    """Not proven empty: a mark says a vector was written. The sample runs
+    and finds none held, which is not a pass, as before."""
+    root, _old, _chunks = held
+    _drop_vectors(root, "old", marked=True)
+    assert _new(root, _new_recipe(tmp_path)) == 1
+    assert "carry" not in (json.loads(wf.progress_path("old").read_text())["steps"] or {}) or \
+        not json.loads(wf.progress_path("old").read_text())["steps"]["carry"].get("result")
