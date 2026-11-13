@@ -44,7 +44,8 @@ _said: set[tuple[str, frozenset[str]]] = set()
 
 def _sid(shard_id: str) -> str:
     """`"<slice>/<n>"` from 04 §4.5's four-segment shard id."""
-    return "/".join(shard_id.rsplit("/", 2)[1:])
+    from .coverage import slice_and_n
+    return slice_and_n(shard_id)
 
 
 def _header(root: Path, name: str, codex, shard_id: str, bundle_id: str) -> dict[str, Any] | None:

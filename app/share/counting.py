@@ -50,7 +50,8 @@ def _write_cache(p: Path, cache: dict[str, Any]) -> None:
 
 
 def _sid(shard_id: str) -> str:
-    return "/".join(shard_id.rsplit("/", 2)[1:])
+    from .coverage import slice_and_n
+    return slice_and_n(shard_id)
 
 
 def chunk_ids_of(bundle_dir: Path) -> list[str] | None:

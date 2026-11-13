@@ -68,6 +68,19 @@ def shard_id(codex, shard: str) -> str:
     return f"{codex.collection_id}/{codex.space_segment}/{shard}"
 
 
+def slice_and_n(shard_id: str) -> str:
+    """`"<slice>/<n>"` from 04 §4.5's `"<collection_id>/<space>/<slice>/<n>"`:
+    everything after the first two segments, so a slice that holds "/"
+    (legi's `kind=…/year=…`) stays whole — the last two segments alone
+    named another slice's part (München, 2026-11-13). A `"<slice>/<n>"`
+    given is returned as it is."""
+    s = str(shard_id)
+    if s.startswith("sha256:"):
+        parts = s.split("/", 2)
+        return parts[2] if len(parts) == 3 else s
+    return s
+
+
 def period_seconds(iso: str) -> float:
     """An ISO 8601 duration as seconds; a month counts thirty days and a
     year 365 (04 §4.5)."""

@@ -28,6 +28,7 @@ would publish nothing whenever one check was inconclusive.
 from __future__ import annotations
 
 import math
+import re
 
 import hashlib
 import json
@@ -170,13 +171,53 @@ def sampled_shards(codex, snapshot: snap.Snapshot, check: str, *, seed: bytes,
     return [names[k] for k in cx.sample(seed, n, iter(sorted(names)))]
 
 
+_DIGEST = re.compile(r"sha256:[0-9a-f]{64}")
+
+
+def shard_name(text) -> str | None:
+    """`<slice>/<NNNNN>` from what names a part: that itself, an
+    attestation's `<collection_id>/<slice>/<NNNNN>`, or the member path
+    `records/<slice>/<NNNNN>.<container suffix>`. THE SLICE AS THE SNAPSHOT
+    NAMES IT, "/" and all (München, 2026-11-13: legi's slices are
+    `kind=…/year=…`, and the last two segments alone named none of its
+    parts — "this peer holds none of the sampled shards"). None when it
+    names no part."""
+    s = str(text)
+    if s.startswith("records/"):
+        s = s[len("records/"):]
+        for suffix in shard_mod.PART_SUFFIX.values():
+            if s.endswith(suffix):
+                s = s[:-len(suffix)]
+                break
+    head, sep, rest = s.partition("/")
+    if sep and _DIGEST.fullmatch(head):
+        s = rest
+    slice_, sep, n = s.rpartition("/")
+    if not sep or not slice_ or len(n) != 5 or not n.isdigit():
+        return None
+    return s
+
+
+def _none_held(ctx) -> str:
+    """Why a check ran on no part: none of the sample is held here, or the
+    parts it was asked for are not parts of this snapshot."""
+    if ctx.only_shards is None:
+        return "this peer holds none of the sampled shards"
+    listed = {f"{s.slice}/{s.n:05d}" for s in ctx.snapshot.shards}
+    unknown = sorted(str(x) for x in ctx.only_shards if (shard_name(x) or str(x)) not in listed)
+    if unknown:
+        return (f"snapshot {ctx.snapshot.snapshot_id} lists no part named {', '.join(unknown[:5])}"
+                + (f" (+{len(unknown) - 5})" if len(unknown) > 5 else "")
+                + ": a part is `<slice>/<NNNNN>`, its slice as the snapshot names it")
+    return "this peer holds none of the parts asked for"
+
+
 def _shards(ctx, check: str, *, every: bool = False) -> list[snap.Shard]:
     """The shards a check runs on: the named ones when a claim is being
     reproduced (`only_shards`), else every shard (`roots`) or the seeded
     sample of the plan."""
     if ctx.only_shards is not None:
-        # `slice/NNNNN`, or an attestation's full `<collection_id>/slice/NNNNN`
-        want = {"/".join(str(x).split("/")[-2:]) for x in ctx.only_shards}
+        want = {shard_name(x) or str(x) for x in ctx.only_shards}
         return [s for s in ctx.snapshot.shards if f"{s.slice}/{s.n:05d}" in want]
     if every:
         return list(ctx.snapshot.shards)
@@ -457,7 +498,7 @@ def check_records(ctx: Ctx) -> Outcome:
         failed.extend(part_failed)
     if not ran:
         return Outcome("records", INCONCLUSIVE,
-                       why="this peer holds none of the sampled shards")
+                       why=_none_held(ctx))
     return Outcome("records", FAIL if failed else PASS,
                    {"records": seen, "failed": sorted(failed)},
                    ctx.seed, _shard_ids(ctx.codex, ran),
@@ -487,7 +528,7 @@ def check_chunks(ctx: Ctx) -> Outcome:
         failed.extend(part_failed)
     if not ran:
         return Outcome("chunks", INCONCLUSIVE,
-                       why="this peer holds none of the sampled shards")
+                       why=_none_held(ctx))
     return Outcome("chunks", FAIL if failed else PASS,
                    {"records": seen, "failed": sorted(failed)},
                    ctx.seed, _shard_ids(ctx.codex, ran),
@@ -820,7 +861,7 @@ def check_records_vs_origin(ctx: Ctx) -> Outcome:
                 per_unit[unit] = per_unit.get(unit, 0) + 1
     if not ran:
         return Outcome("records-vs-origin", INCONCLUSIVE,
-                       why="this peer holds none of the sampled shards")
+                       why=_none_held(ctx))
     if missing:
         return Outcome(
             "records-vs-origin", INCONCLUSIVE,
@@ -1218,7 +1259,7 @@ def check_figures(ctx: Ctx) -> Outcome:
         failed += [f"{h}:unnamed" for h in sorted(stored - want)]
     if not ran:
         return Outcome("figures", INCONCLUSIVE,
-                       why="this peer holds none of the sampled shards")
+                       why=_none_held(ctx))
     return Outcome("figures", FAIL if failed else PASS,
                    {"shards": len(ran), "named": named, "held": held,
                     "failed": sorted(failed)[:64]},
@@ -1342,16 +1383,13 @@ def landed_checks(codex) -> tuple[str, ...]:
 
 def part_name(path: str) -> str | None:
     """`records/<slice>/<NNNNN>.<container suffix>` → `<slice>/<NNNNN>`, the
-    name `only_shards` takes; None for any other member file."""
+    name `only_shards` takes; None for any other member file. A slice may
+    hold "/" (legi's `kind=…/year=…`): until 2026-11-13 such a part landed
+    from a peer was never checked here (`attest_landed` found no part)."""
     text = str(path)
     if not text.startswith("records/"):
         return None
-    rel = text[len("records/"):]
-    for suffix in shard_mod.PART_SUFFIX.values():
-        if rel.endswith(suffix):
-            rel = rel[:-len(suffix)]
-            break
-    return rel if rel.count("/") == 1 else None
+    return shard_name(text)
 
 
 def attest_landed(root, name: str, codex, snapshot: snap.Snapshot, parts: Sequence[str], *,
@@ -1367,9 +1405,7 @@ def attest_landed(root, name: str, codex, snapshot: snap.Snapshot, parts: Sequen
     records one decode, chunks one re-cut. Returns the results per check,
     the attestation ids written, and why nothing was written if so."""
     import os
-    import re
-    wanted = [p for p in (part_name(x) if str(x).startswith("records/") else
-                          (str(x) if re.fullmatch(r"[^/]+/\d{5}", str(x)) else None) for x in parts) if p]
+    wanted = [p for p in (shard_name(x) for x in parts) if p]
     out: dict[str, Any] = {"parts": wanted, "results": {}, "attestations": {}, "why": ""}
     if not wanted:
         out["why"] = "no record part landed"
