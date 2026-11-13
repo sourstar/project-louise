@@ -147,7 +147,11 @@ import pyarrow.parquet as pq
 BASE = ("https://huggingface.co/datasets/jurifindit/JuriFindIT/"
         "resolve/refs%2Fconvert%2Fparquet")
 FILES = {"corpus.parquet": "corpus/corpus/0000.parquet",
-         "questions-validation.parquet": "questions/validation/0000.parquet"}
+         "questions-validation.parquet": "questions/validation/0000.parquet",
+         # the other 716 expert questions (2026-11-14, the chunker mode: 895
+         # in all, ~2.2x the power of 179); `load` reads validation alone, as
+         # every row measured so far was read
+         "questions-train.parquet": "questions/train/0000.parquet"}
 LICENCE = "CC-BY-NC-SA-4.0 — https://creativecommons.org/licenses/by-nc-sa/4.0/"
 
 _MTEB = {"corpus": "corpus/test-00000-of-00001.parquet",

@@ -305,6 +305,35 @@ level, with the paired test.
 
 Variants: `akn_article` (today), `legal_article` header off, header on.
 
+### 5.1 The chunker mode (2026-11-14, operator: "Build the chunker mode and send A")
+
+The header was taken "by design" on 11-08 and never measured: the one comparison (DAR + `akn_article`
+against Nemotron + `legal_article`) changed the encoder and the chunker together. A chunker setting is
+inside `space_id`, so measuring arms as collections would mean a new space and its gate per arm.
+`legal_pilot chunker-run` (tools/chunker_mode.py) measures the CUT instead:
+
+- **Arms** are layers: `shipped` (the collection's own), `header-off`, `outline-off`, `akn`, or any layer
+  as JSON. Each cuts the pool's records through `layers._chunker_of`, the stages' own path.
+- **Vectors** come through the collection's served recipe, document and query instructions included,
+  cached by text: a text two arms share is embedded once. The `shipped` arm takes the collection's own
+  stored vectors, checked against a re-embedded sample.
+- **Readings**: `fts` (a throwaway index written by app/fts.py), `dense` (an exact scan, as deep in
+  records as the text leg), `hybrid` (`retrieval._merge_rrf`) and `reranked` (`retrieval._reranked`,
+  the collection's reranker). A rerank that falls back stops the run, and nothing is written.
+- **Scoring** is `run`'s: (act, article) by the chunk's label, the gold by key. There is one file per arm
+  and reading, and `chunker-report` compares every arm with the first, with Holm's correction and the
+  smallest detectable difference.
+- **Fairness**: every arm searches the same records (the pool, through `current_versions`) the same way
+  (exact scan, one encoder run, one reranker). An arm with any chunk past the encoder's window is
+  refused before anything is embedded (the operator's rule: no truncation). `--dry-run` cuts and counts
+  every arm and embeds nothing.
+- **Questions**: `--split validation` (179, the existing pool jf100), `train` (716) or `all` (895, a
+  new pool built with `pool --split all`).
+
+Arms for A: `shipped`, `header-off`, `akn`. The decision rule is to keep the header only if it is not
+worse, per reading. If the readings disagree, the decision names the one it rests on; `reranked` is what
+production serves.
+
 ## 6. What changes after the decisions
 
 - **The three legal plugins:** `chunking_profile = "legal_article"`, and
