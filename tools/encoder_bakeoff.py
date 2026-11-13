@@ -132,11 +132,21 @@ import argparse
 import hashlib
 import json
 import math
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
 import pyarrow.parquet as pq
+
+# the repository root on the path, as every other tool here does: under
+# `python3 -I` (isolated mode, the node's way of running a tool next to
+# downloaded data) neither the script's directory nor PYTHONPATH is read, and
+# the lazy `from app import …` below failed (München, 2026-11-13: "No module
+# named 'app'" at `fetch`)
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
 # `app` is imported lazily, inside the functions that embed. Everything else
 # here — load, the metrics, score, report — depends only on pyarrow and
