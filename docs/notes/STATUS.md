@@ -20,6 +20,14 @@ measured (published figures disagree).
 
 ### 2026-11-14
 
+- **Tonight's legal measurements, as armed (2026-11-13).** The node resumed ~22:25 CET on the operator's
+  "NAS can restart all the operations". JuriFindIT chunker run with four arms — `shipped`, `header-off`,
+  `akn`, and `small` (max_tokens 2000; operator: yes) — decided on reranked MRR@10 with δ 0.02, the
+  shipped cut staying unless an arm is better by δ. LEMUR fetched for it, fr, de, en, fi, hu, el (Greek
+  100 acts, the others 192–227); the per-language dry runs queued behind JuriFindIT. `python3 -I` fixed
+  for encoder_bakeoff (#625). Data Dump: Formex + HTML in every language, PDF beyond Italian not fetched
+  (the legal session's recommendation, 506 GB; the operator's call). Nemotron-1B's published legal scores:
+  legal-embedders-fr-de-eu.md.
 - **The chunker per language — BUILT, nothing run** (operator: "Build the per-language test on LEMUR").
   `tools/chunker_languages.py`: LEMUR's parallel acts in every language asked, read into sections by the
   eurlex reader, arms `structure` / `structure-512` / `window-512` through the chunker mode's own path

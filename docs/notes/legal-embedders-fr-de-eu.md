@@ -485,6 +485,31 @@ yet, so there is nothing to repeat there. Results: below, when München's
 runs land.
 
 
+**Its published legal scores (2026-11-13; operator: "Look for benchmarking of nemo with legal
+contents").** NVIDIA's card gives none per domain (RTEB 72.38, MMTEB retrieval 71.04, at 4,096
+tokens), and the 1B has no MLEB entry. NVIDIA's own submission to the MTEB results repository
+(embeddings-benchmark/results, `nvidia__Nemotron-3-Embed-1B-BF16`, revision f880174…) holds 13 legal
+tasks. NDCG@10 × 100, with the same file's rows for three references [V]:
+
+| task (language) | Nemotron-1B | Nemotron-8B | Qwen3-Emb-8B | bge-m3 | BM25 |
+|---|---|---|---|---|---|
+| AILA statutes (en, Indian) | 56.7 | 58.3 | **85.1** | 29.0 | |
+| AILA case documents (en) | 43.3 | **49.4** | 46.3 | | |
+| LegalSummarization (en) | 72.8 | **76.7** | 70.7 | 63.2 | |
+| FrenchLegal1 (fr) | 94.6 | **96.4** | | | |
+| GermanLegal1 (de) | 74.9 | **77.7** | | | |
+| GerDaLIR small (de case law) | 49.9 | 53.7 | | | **59.4** |
+| LegalQuAD (de) | 73.1 | **77.2** | | 50.4 | 76.8 |
+| LegalBench consumer contracts / corporate lobbying (en) | 85.7 / 94.5 | | | | |
+| LeCaRDv2 (zh) / LegalQA (nl) | 72.7 / 74.2 | | | | |
+
+- The 1B sits 2–6 points under the 8B it is distilled from, and well above bge-m3.
+- BM25 still wins German case law, as §2 found.
+- Its synthetic training seeds include India's Central Acts (the card): the AILA statute rows may
+  overlap its training.
+- Our own sets stay the deciding evidence: lemur-it 0.949 MRR@10 against DAR-legal-it 0.879; a tie on
+  JuriFindIT (below).
+
 ### Nemotron-3-Embed-1B for Normattiva too (operator, 2026-11-07)
 
 The operator: "When the other collections with legal content are created I
