@@ -404,3 +404,35 @@ def test_the_listing_names_each_query_it_asks(mock):
     mock.fail["/webapi"] = 99
     with pytest.raises(TransportError, match="to the count of 2016"):
         list(cellar.listing(spec.endpoints[0], spec, Filter(include=("lang=de/*",)), years=range(2016, 2017)))
+
+
+def test_a_window_whose_count_times_out_is_split_by_language_not_asked_again(mock, monkeypatch):
+    """The architecture session, 2026-11-14: split a timed-out query rather
+    than repeat it. Measured: 1990's count for all 24 languages ran past
+    900 s, one language answered."""
+    real = cellar.sparql
+    asked: list[int] = []
+
+    def slow_for_many(client, base, query, **kw):
+        n = len(re.findall(r"language/[A-Z]{3}>", query))
+        if "COUNT(" in query:
+            asked.append(n)
+            if n > 1:
+                raise TransportError("cellar: connection timed out on the count: ReadTimeout after 900 s")
+        return real(client, base, query, **kw)
+    monkeypatch.setattr(cellar, "sparql", slow_for_many)
+    spec = _spec(mock)
+    got = list(cellar.listing(spec.endpoints[0], spec, Filter(include=("lang=en/*", "lang=fr/*", "lang=de/*")),
+                              years=range(2016, 2017)))
+    assert len(got) == 6, "every language's files, each listed on its own"
+    assert asked == [3, 1, 2, 1, 1], "all three once, then halves down to one language: never the same query again"
+
+
+def test_one_language_whose_count_times_out_is_deferred(mock, monkeypatch):
+    def always_slow(client, base, query, **kw):
+        raise TransportError("cellar: connection timed out on the count: ReadTimeout")
+    monkeypatch.setattr(cellar, "sparql", always_slow)
+    spec = _spec(mock)
+    with pytest.raises(TransportError) as e:
+        list(cellar.listing(spec.endpoints[0], spec, Filter(include=("lang=it/*",)), years=range(2016, 2017)))
+    assert engine.transient(str(e.value))

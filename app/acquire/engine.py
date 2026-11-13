@@ -19,6 +19,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
+from . import backoff as _backoff_defaults
 from .. import config
 from .. import db
 from .. import stats
@@ -844,10 +845,12 @@ def _zip_delta(endpoint, f: RemoteFile, dest: Path, spec: AcquisitionSpec, manag
                         moved=got.bytes_read, seconds=elapsed)
 
 
-#: how many times one file's stream is resumed within a pass after a transient
-#: transport fault (a second apart, doubling: 15 s in all) before the pass
-#: records it failed — an origin's episode of 5xx lasted eight seconds (2026-10-13)
-STREAM_ATTEMPTS = 5
+#: how many times one file's stream is resumed within a round after the
+#: origin's episode (a timeout, a drop, a 5xx, 408, 429) before it is
+#: deferred to the next: backoff.py's default (2026-11-14; before it, a second
+#: apart and doubling, which outlasted an eight-second episode of 5xx on
+#: 2026-10-13 but honoured no Retry-After and cooled nothing down)
+STREAM_ATTEMPTS = _backoff_defaults.DEFAULT_ATTEMPTS
 #: why the last zip deltas fell back to the whole fetch, for the log line
 _zip_delta_fallbacks: list[str] = []
 #: a delta that was tried and declined: the origin's directory said the
@@ -981,16 +984,26 @@ def _fetch_one_file(transport, endpoint, f: RemoteFile, collection,
             # — resumes from the bytes on disk a moment later, STREAM_ATTEMPTS
             # times, before it is this pass's failure (the next pass resumes too;
             # a fault that passes in seconds should not cost the pass).
-            for attempt in range(STREAM_ATTEMPTS):
+            # The waits are backoff.py's (2026-11-14, "be gentle"): the
+            # endpoint cooled down for every worker sharing it, a wait past a
+            # round's hold deferring the file; each retry RESUMES from the
+            # checkpointed byte on disk.
+            from . import backoff
+            r_ = backoff.Retry(f.rel_path, backoff.Policy.of(spec, attempts=STREAM_ATTEMPTS))
+            for attempt in r_:
                 if attempt:
-                    time.sleep(float(1 << (attempt - 1)))
                     resume_from = part.stat().st_size if part.is_file() else 0
                 try:
                     size = transport.fetch_one(endpoint, f, land, resume_from)
                     break
                 except TransportError as e:
-                    if isinstance(e, (TransferAborted, RangeUnsupported)) or attempt + 1 == STREAM_ATTEMPTS:
+                    if isinstance(e, (TransferAborted, RangeUnsupported, backoff.Deferred)):
                         raise
+                    if not transient(str(e)):
+                        raise
+                    r_.episode(str(e), cause=e)
+            else:
+                r_.give_up()
         # One streaming pass for both digests (md5 sidecar + blake2), instead
         # of reading the whole file into memory twice.
         digest = _verified(land, dest, spec)

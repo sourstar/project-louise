@@ -22,6 +22,7 @@ SQLite connection (which is thread-affine) while still committing each row as
 early as possible rather than batching to the end.
 """
 import threading
+import time
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from typing import Callable, Iterable, Iterator, TypeVar
 
@@ -86,29 +87,75 @@ def run_pool(items: Iterable[T],
     return processed
 
 
-def acquire_endpoint_slot(manager, ranked, spec, stop: threading.Event | None = None):
-    """Take a per-endpoint concurrency slot, preferring the fastest mirror that
-    has one free right now.
+#: how long a worker waits for an endpoint's cool-down or pacing before the
+#: unit is DEFERRED to the next round (backoff.py; the architecture session,
+#: 2026-11-14: "never a thread blocked for 15 minutes")
+SLOT_WAIT_BOUND_S = 120.0
 
-    Returns (key, endpoint, semaphore) or None if the stop event fired. The
+
+def _min_interval(spec) -> float | None:
+    et = getattr(spec, "etiquette", None) if spec is not None else None
+    return getattr(et, "min_interval_s", None)
+
+
+def _paced(manager, key: str, spec, stop, sem, bound_s: float, sleep=time.sleep) -> bool:
+    """With the slot held: wait out the endpoint's cool-down and
+    `min_interval_s` since its last start, a stop checked every step. False
+    (the slot released) when the wait passes `bound_s` or a stop comes."""
+    import time as _time
+    waited_until = _time.monotonic() + bound_s
+    while True:
+        if stop is not None and stop.is_set():
+            sem.release()
+            return False
+        wait_s = manager.pace(key, _min_interval(spec))
+        if wait_s <= 0:
+            return True
+        if _time.monotonic() + wait_s > waited_until:
+            sem.release()
+            return False
+        sleep(min(0.5, wait_s))
+
+
+def acquire_endpoint_slot(manager, ranked, spec, stop: threading.Event | None = None, *,
+                          bound_s: float | None = None):
+    """Take a per-endpoint concurrency slot, preferring the fastest mirror that
+    has one free right now and is not cooling down.
+
+    Returns (key, endpoint, semaphore), or None if the stop event fired or
+    every endpoint is cooling down past SLOT_WAIT_BOUND_S (the unit is then
+    deferred to the next round: nothing is written, it stays pending). The
     caller MUST release the semaphore in a finally.
 
     Politeness is never overridden by parallelism: slots come from
-    min(global per_endpoint, Endpoint.max_conns, RateLimit.max_conns).
+    min(global per_endpoint, Endpoint.max_conns, RateLimit.max_conns), and
+    a request starts only after the endpoint's cool-down and its
+    `min_interval_s` (app/acquire/backoff.py, the manager's `pace`).
     """
     if not ranked:
         return None
-    # First pass: a free slot on the fastest-measured mirror, without blocking.
+    bound = SLOT_WAIT_BOUND_S if bound_s is None else bound_s
+    # First pass: a free slot on the fastest-measured mirror not cooling down,
+    # without blocking.
     for key, endpoint in ranked:
+        if manager.cooled_for(key) > 0:
+            continue
         sem = manager.endpoint_semaphore(key, manager.endpoint_slots(endpoint, spec))
         if sem.acquire(blocking=False):
-            return key, endpoint, sem
-    # Everything is busy: queue on the preferred mirror, waking periodically so
-    # a stop event is noticed rather than blocking indefinitely.
-    key, endpoint = ranked[0]
+            if _paced(manager, key, spec, stop, sem, bound):
+                return key, endpoint, sem
+            return None
+    # Everything is busy or cooling: queue on the endpoint whose cool-down
+    # ends first, waking periodically so a stop event is noticed; past the
+    # bound, deferred.
+    key, endpoint = min(ranked, key=lambda ke: manager.cooled_for(ke[0]))
+    if manager.cooled_for(key) > bound:
+        return None
     sem = manager.endpoint_semaphore(key, manager.endpoint_slots(endpoint, spec))
     while True:
         if stop is not None and stop.is_set():
             return None
         if sem.acquire(timeout=0.1):
-            return key, endpoint, sem
+            if _paced(manager, key, spec, stop, sem, bound):
+                return key, endpoint, sem
+            return None

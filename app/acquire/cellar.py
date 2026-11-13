@@ -100,7 +100,6 @@ TIMEOUT_S = 120.0
 #: The wait honours a stop every second (`_answer_of`), so a long query never
 #: delays a SIGTERM or a `node pause` (invariant 2: bounded in time)
 SPARQL_TIMEOUT_S = 900.0
-ATTEMPTS = 5
 _CHUNK = 1 << 16
 _NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.()\-]*$")
 _LINK = re.compile(r"""<a\b[^>]*\bhref\s*=\s*["'](?P<href>[^"']+?/DOC_\d+)["'][^>]*>(?P<text>.*?)</a>""",
@@ -158,20 +157,25 @@ def _headers(extra: dict | None = None) -> dict:
     return {"User-Agent": _USER_AGENT, **(extra or {})}
 
 
+def _policy():
+    """Cellar's retry policy: backoff.py's, the spec's etiquette over it."""
+    from . import backoff, specs
+    return backoff.Policy.of(specs.EURLEX_SPEC)
+
+
 def _get(client: httpx.Client, url: str, headers: dict, what: str, *,
          charge: Callable[[int], None], ok=(200,), follow: bool = True) -> httpx.Response:
     """One GET, its body read in chunks charged to the budget, retried on
-    the origin's episode (5xx, a timeout, a drop) — then raised in words
-    the engine's `transient` reads as a deferral."""
-    last = ""
-    for attempt in range(ATTEMPTS):
-        if attempt:
-            time.sleep(float(1 << (attempt - 1)))
-            _stop_check()
+    the origin's episode (backoff.py: a 5xx, 408, 429, a timeout, a drop,
+    Retry-After honoured) — then raised in words the engine's `transient`
+    reads as a deferral."""
+    from . import backoff
+    r_ = backoff.Retry(what, _policy())
+    for _ in r_:
         try:
             with client.stream("GET", url, headers=headers, follow_redirects=follow) as r:
-                if r.status_code >= 500:
-                    last = f" {r.status_code} to {what}"
+                if backoff.retryable_status(r.status_code):
+                    r_.episode(f"{r.status_code} to {what}", retry_after=r.headers.get("retry-after"))
                     continue
                 body = bytearray()
                 for chunk in r.iter_bytes(_CHUNK):
@@ -182,10 +186,10 @@ def _get(client: httpx.Client, url: str, headers: dict, what: str, *,
                 return httpx.Response(r.status_code, headers=r.headers, content=bytes(body),
                                       request=r.request)
         except httpx.TimeoutException as e:
-            last = f" connection timed out on {what}: {type(e).__name__}"
+            r_.episode(f"connection timed out on {what}: {type(e).__name__}", cause=e)
         except httpx.TransportError as e:
-            last = f" {type(e).__name__} on {what}: {e}"
-    raise TransportError(f"cellar:{last} after {ATTEMPTS} attempts ({url})")
+            r_.episode(f"{type(e).__name__} on {what}: {e}", cause=e)
+    r_.give_up("cellar: ")
 
 
 # ---- the inventory --------------------------------------------------------------------------
@@ -249,37 +253,38 @@ def sparql(client: httpx.Client, base: str, query: str, *, what: str = "the SPAR
     results format back (`results.bindings`), every byte charged. `what`
     names the query in an error ("the count of 1990"), so the slow window is
     said, not guessed."""
+    from . import backoff
     url = base.rstrip("/") + SPARQL_PATH
     timeout = httpx.Timeout(SPARQL_TIMEOUT_S, connect=min(TIMEOUT_S, SPARQL_TIMEOUT_S))
-    last = ""
 
     def once() -> tuple[int, bytes]:
         with client.stream("POST", url, data={"query": query, "format": "application/sparql-results+json"},
                            headers=_headers({"Accept": "application/sparql-results+json"}),
                            timeout=timeout) as r:
-            if r.status_code >= 500:
-                return r.status_code, b""
+            if backoff.retryable_status(r.status_code):
+                return r.status_code, r.headers.get("retry-after"), b""
             body = bytearray()
             for chunk in r.iter_bytes(_CHUNK):
                 body += chunk
                 charge(len(chunk))
-            return r.status_code, bytes(body)
-    for attempt in range(ATTEMPTS):
-        if attempt:
-            time.sleep(float(1 << (attempt - 1)))
-            _stop_check()
+            return r.status_code, None, bytes(body)
+    # a query that ran to its bound is not repeated at once: the duration
+    # floor (backoff.py) makes its next wait at least as long, which defers
+    # it to the next round — `listing` splits such a window instead
+    r_ = backoff.Retry(what, _policy())
+    for _ in r_:
         t0 = time.monotonic()
         try:
-            status, body = _answer_of(once)
+            status, asked, body = _answer_of(once)
         except httpx.TimeoutException as e:
-            last = (f" connection timed out on {what}: {type(e).__name__} after "
-                    f"{time.monotonic() - t0:.0f} s (bound {SPARQL_TIMEOUT_S:.0f} s)")
+            r_.episode(f"connection timed out on {what}: {type(e).__name__} after "
+                       f"{time.monotonic() - t0:.0f} s (bound {SPARQL_TIMEOUT_S:.0f} s)", cause=e)
             continue
         except httpx.TransportError as e:
-            last = f" {type(e).__name__} on {what}: {e}"
+            r_.episode(f"{type(e).__name__} on {what}: {e}", cause=e)
             continue
-        if status >= 500:
-            last = f" {status} to {what}"
+        if backoff.retryable_status(status):
+            r_.episode(f"{status} to {what}", retry_after=asked)
             continue
         if status != 200:
             raise TransportError(f"cellar: {status} to {what}: {body[:200]!r}")
@@ -287,8 +292,8 @@ def sparql(client: httpx.Client, base: str, query: str, *, what: str = "the SPAR
             return list(json.loads(body)["results"]["bindings"])
         except (ValueError, KeyError, TypeError) as e:
             # a page cut mid-answer reads as broken JSON: the origin's episode
-            last = f" connection timed out: {what}'s answer did not parse ({e})"
-    raise TransportError(f"cellar:{last} after {ATTEMPTS} attempts")
+            r_.episode(f"connection timed out: {what}'s answer did not parse ({e})", cause=e)
+    r_.give_up("cellar: ")
 
 
 def _epoch(stamp: str | None) -> int | None:
@@ -325,35 +330,62 @@ def listing(endpoint: Endpoint, spec: AcquisitionSpec, flt: Filter, *,
     try:
         for year in years:
             _stop_check()
-            counted = sparql(client, endpoint.url, count_query(year, languages),
-                             what=f"the count of {year}", charge=charge)
-            try:
-                want = int(counted[0]["n"]["value"]) if counted else 0
-            except (KeyError, ValueError, IndexError):
-                raise TransportError(f"cellar: the count of {year} answered {counted!r:.200}") from None
-            got = 0
-            while got < want:
-                rows = sparql(client, endpoint.url, page_query(year, languages, got),
-                              what=f"the {year} page at offset {got}", charge=charge)
-                if not rows:
-                    break
-                for row in rows:
-                    celex = row.get("celex", {}).get("value", "")
-                    lang = code_of.get(row.get("language", {}).get("value", "").rsplit("/", 1)[-1])
-                    if not celex or lang is None:
-                        continue
-                    yield RemoteFile(rel_path=rel_path(lang, celex),
-                                     mtime=_epoch(row.get("last", {}).get("value")),
-                                     remote=encode(celex, lang))
-                got += len(rows)
-            if got != want:
-                # a Virtuoso answer cut short says nothing: the window is
-                # re-listed next pass (worded for engine.transient)
-                raise TransportError(f"cellar: the {year} window answered {got} of the {want} rows its "
-                                     f"count names (connection timed out, the answer cut)")
+            yield from _window_files(client, endpoint.url, year, languages, code_of, charge)
     finally:
         if own:
             client.close()
+
+
+def _timed_out(e: TransportError) -> bool:
+    from . import backoff
+    return isinstance(e, backoff.Deferred) or "timed out" in str(e).lower()
+
+
+def _window_files(client, base: str, year: int, languages: tuple[str, ...], code_of: dict,
+                  charge) -> Iterator[RemoteFile]:
+    """One CELEX year's files in `languages`. A COUNT THAT TIMES OUT is not
+    asked again: the window is split, its languages in two halves, each
+    counted and paged on its own, down to one language (the architecture
+    session, 2026-11-14: "a Cellar query that timed out at 900 s twice will
+    time out a third time; split it rather than repeat it"). Measured the
+    same day: 1990's count for all 24 languages ran past 900 s, Italian
+    alone answered in 26.5-235.5 s. One language that still times out is
+    deferred to the next round."""
+    lang_text = ",".join(languages) if len(languages) <= 4 else f"{len(languages)} languages"
+    try:
+        counted = sparql(client, base, count_query(year, languages),
+                         what=f"the count of {year} ({lang_text})", charge=charge)
+    except TransportError as e:
+        if len(languages) > 1 and _timed_out(e):
+            half = len(languages) // 2
+            yield from _window_files(client, base, year, languages[:half], code_of, charge)
+            yield from _window_files(client, base, year, languages[half:], code_of, charge)
+            return
+        raise
+    try:
+        want = int(counted[0]["n"]["value"]) if counted else 0
+    except (KeyError, ValueError, IndexError):
+        raise TransportError(f"cellar: the count of {year} answered {counted!r:.200}") from None
+    got = 0
+    while got < want:
+        rows = sparql(client, base, page_query(year, languages, got),
+                      what=f"the {year} page at offset {got} ({lang_text})", charge=charge)
+        if not rows:
+            break
+        for row in rows:
+            celex = row.get("celex", {}).get("value", "")
+            lang = code_of.get(row.get("language", {}).get("value", "").rsplit("/", 1)[-1])
+            if not celex or lang is None:
+                continue
+            yield RemoteFile(rel_path=rel_path(lang, celex),
+                             mtime=_epoch(row.get("last", {}).get("value")),
+                             remote=encode(celex, lang))
+        got += len(rows)
+    if got != want:
+        # a Virtuoso answer cut short says nothing: the window is
+        # re-listed next pass (worded for engine.transient)
+        raise TransportError(f"cellar: the {year} window answered {got} of the {want} rows its "
+                             f"count names (connection timed out, the answer cut)")
 
 
 # ---- one unit ---------------------------------------------------------------------------------

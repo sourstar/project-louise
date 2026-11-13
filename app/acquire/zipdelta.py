@@ -36,6 +36,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Protocol
 
+from . import backoff as _backoff_defaults
 from .spec import TransportError
 
 #: how much of the file's tail the first directory read takes; doubled while
@@ -95,14 +96,13 @@ class HttpRangeReader:
     HEAD names no length), 206 answers for the ranges, every byte drawn from
     the budget AFTER it arrived (invariant 5)."""
 
-    #: A transient fault — a read timeout, a dropped connection — is asked
-    #: again this many times, a second apart and doubling, before it is the
-    #: transport's error. 2026-10-12: one ReadTimeout on one Range request
-    #: ended Normattiva's whole 7.8 GB fetch and waited four hours for the
-    #: next discovery (STATUS); a fault that passes in seconds costs seconds.
-    #: Five attempts: 1 + 2 + 4 + 8 = 15 s of waiting, which outlasts the
-    #: eight-second episode of 500s the origin had on 2026-10-13.
-    ATTEMPTS = 5
+    #: The origin's episode — a read timeout, a dropped connection, a 5xx,
+    #: 408, 429 — is asked again within the round by app/acquire/backoff.py's
+    #: policy (2026-11-14, "be gentle"), then deferred to the next round.
+    #: 2026-10-12: one ReadTimeout on one Range request ended Normattiva's
+    #: whole 7.8 GB fetch and waited four hours for the next discovery
+    #: (STATUS); a retry within the round still covers that.
+    ATTEMPTS = _backoff_defaults.DEFAULT_ATTEMPTS
 
     def __init__(self, url: str, headers: dict, *, charge: Callable[[int], None] | None = None,
                  timeout: float = 60.0, sleep: Callable[[float], None] | None = None) -> None:
@@ -120,24 +120,24 @@ class HttpRangeReader:
         a transient fault — a timeout, a drop, the origin's own 5xx — retried
         `ATTEMPTS` times."""
         import httpx
-        last: str | None = None
-        cause: BaseException | None = None
-        for attempt in range(self.ATTEMPTS):
-            if attempt:
-                self.sleep(float(1 << (attempt - 1)))
+
+        from . import backoff
+        r_ = backoff.Retry(f"Range {range_header} of {self.url}", backoff.Policy(attempts=self.ATTEMPTS),
+                           sleep=self.sleep)
+        for _ in r_:
             try:
                 with httpx.Client(timeout=self.timeout, follow_redirects=True) as client:
                     r = client.get(self.url, headers={**self.headers, "Range": range_header})
             except httpx.TransportError as e:          # timeouts, drops, resets
-                last, cause = f"{type(e).__name__}: {e}", e
+                r_.episode(f"{type(e).__name__}: {e}", cause=e)
                 continue
             except httpx.HTTPError as e:
                 raise TransportError(f"{self.url}: {e}") from e
-            if r.status_code >= 500:                   # the origin's episode, not the file
-                last, cause = f"{r.status_code} to Range {range_header}", None
+            if backoff.retryable_status(r.status_code):  # the origin's episode, not the file
+                r_.episode(f"{r.status_code} to Range {range_header}", retry_after=r.headers.get("retry-after"))
                 continue
             return r
-        raise TransportError(f"{self.url}: {last} after {self.ATTEMPTS} attempts") from cause
+        r_.give_up(f"{self.url}: ")
 
     def total(self) -> int:
         if self._total is None:

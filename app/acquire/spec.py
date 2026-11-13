@@ -130,6 +130,13 @@ class RateLimit:
     max_conns: int = 4
     bandwidth_cap_bps: int | None = None
     windows: str | None = None            # cron-like string, same shape as §5.2's schedule
+    #: the least time between two requests' STARTS to one endpoint, seconds
+    #: (app/acquire/backoff.py; enforced by the transfer manager when a slot
+    #: is taken, as max_conns is)
+    min_interval_s: float | None = None
+    #: backoff.py's defaults overridden, only where the origin publishes guidance
+    backoff_base_s: float | None = None
+    backoff_cap_s: float | None = None
 
 
 @dataclass(frozen=True)
