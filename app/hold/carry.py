@@ -824,7 +824,7 @@ def carry(root, from_ref: str, to_ref: str, *, copy: bool = False, apply: bool =
         log(f"[carry] {from_name} → {to_name}: begun earlier; --yes finishes it")
         return {**plan, "begun": True}
 
-    done: dict[str, str] = {}
+    done: dict[str, Any] = {}
     # A1h: no vector crosses spaces; the target's table is its own, of its width
     for k in (() if relayered else ("index",) if unembedded or sister else ("lance", "index")):
         if k == "index" and sister:
@@ -841,6 +841,9 @@ def carry(root, from_ref: str, to_ref: str, *, copy: bool = False, apply: bool =
         # the target's own facets at its next pass
         from app.ask import facets as ask_facets
         ask_facets.marker_path(tp["index"]).unlink(missing_ok=True)
+        # said, so a proof of the copy leaves out the one file the carry
+        # took out (recreate.prove_copy; legi F, 2026-11-13)
+        done["dropped"] = [f"index/{ask_facets.CACHE}/{ask_facets.MARKER}"]
     if relayered:
         done["index"] = "not carried (her layers cut other chunks: the worker indexes, A1i)"
     if not copy:

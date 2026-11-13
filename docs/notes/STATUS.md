@@ -20,6 +20,14 @@ measured (published figures disagree).
 
 ### 2026-11-13
 
+- **Case F's copy proof leaves out the facet marker the carry dropped, and its exit 4 is a verdict — FIXED, not
+  deployed** (München, legi F). When the re-created collection's facets differ, the carry removes
+  `index/facets/snapshot.json` from the copied text index (596fd18), and the proof of index/ then counted one file
+  fewer and refused. The carry now names what it dropped (`done.dropped`), and `recreate.prove_copy` leaves out
+  exactly those paths; any other difference in index/ still fails the proof (test). `deploy/supervise-pass.sh` reran
+  `new --re-create` three times on its exit 4 (the swap waits for the operator's `forget`) and called it "a defect
+  in the pass". 4 is now a verdict of `collection new`, and of no other pass.
+
 - **A part whose slice holds "/" is named whole — FIXED, not deployed** (München: `hold check --shards
   kind=article/year=1962/00001` matched nothing and said "this peer holds none of the sampled shards"). Every
   place that took the LAST TWO segments of a part's name now keeps the slice whole: `hold check --shards`
