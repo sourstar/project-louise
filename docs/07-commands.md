@@ -751,7 +751,9 @@ reader needs at the command line:
   no `[reranker]`), `reranker.api`, `reranker.rerank_model`,
   `reranker.window`, and for an annotations collection `method`
   (2026-11-12: the method the node re-runs, `wikipedia-versions`; empty:
-  none). Never `codex` or `source` (§7.8). The values are set
+  none; refused where the method did not make the claims and they are
+  not of its kind, since its output becomes the whole claim set —
+  2026-11-13; the Library's card sets it with a checkbox). Never `codex` or `source` (§7.8). The values are set
   together, the file rendered whole and loaded back by the node's own
   loader before it replaces the old one: an unknown key, a malformed
   value, a model its URL does not name, `share = true` on a never-share
@@ -1993,7 +1995,8 @@ embed_select = "smart"                         # optional (2026-11-02): which do
 method = "wikipedia-versions"                  # an ANNOTATIONS collection only (2026-11-12): the method its claims are made by,
                                                # re-run by the worker once the collection annotated holds a newer snapshot,
                                                # then `annotations update` with its output (app/hold/annotation_methods.py,
-                                               # docs/notes/annotation-methods.md); absent = the claims are given by hand
+                                               # docs/notes/annotation-methods.md); absent = the claims are given by hand;
+                                               # the Library's card ticks it ("update by itself", 2026-11-13)
 kinds  = ["records", "vectors"]
 embed  = "on-demand"                           # off | on-demand | all | p2p: what the node's encoder spends, never what search uses;
                                                # all = every part itself ("all local"), p2p = the parts rendezvous gives this node,

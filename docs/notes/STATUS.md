@@ -20,6 +20,13 @@ measured (published figures disagree).
 
 ### 2026-11-13
 
+- **Annotations: "update by itself" checkbox; `config apply` finds an annotations collection — BUILT, not deployed**
+  (operator: "I want a checkbox in the gui"; München: `config apply wikipedia-articles --set method=…` wrote the file,
+  then said "no such collection", exit 2). The card shows the checkbox where a method can make the claims. It is ticked
+  from the file, written through its one writer, and refused where the method's output would withdraw claims it did not
+  make. `config apply`/`show` now list annotations collections. The worker always read `method` from the file; the apply
+  was never needed. docs/notes/annotation-methods.md.
+
 - **Case F's copy proof leaves out the facet marker the carry dropped, and its exit 4 is a verdict — FIXED, not
   deployed** (München, legi F). When the re-created collection's facets differ, the carry removes
   `index/facets/snapshot.json` from the copied text index (596fd18), and the proof of index/ then counted one file

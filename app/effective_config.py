@@ -90,32 +90,60 @@ def of(collection) -> dict[str, Any]:
             "values": values}
 
 
+#: what applying an annotations collection's file does: nothing in a state
+#: database (it has no embed mode); the worker's annotations keeper reads the
+#: file at each pass (app/worker.py `_claim_index_keeper`, every
+#: CLAIM_INDEX_INTERVAL_S and when a file changes)
+ANNOTATIONS_PICKUP = ("an annotations collection: nothing to apply in a state database; the worker "
+                      "reads its file at its next annotations pass (within 300 s, at once when a "
+                      "file changes)")
+
+
+def of_annotations(collection) -> dict[str, Any]:
+    """An annotations collection's effective configuration (02 §2.10): its
+    file's `method` and `share` — it has no space, encoder or embed mode."""
+    from app import collections as collections_mod
+    codex = getattr(collection, "codex", None)
+    return {"name": collection.name, "annotations": True,
+            "collection_id": codex.collection_id if codex is not None else None,
+            "file": str(collections_mod.config_toml_path(collection.name)),
+            "values": {"method": _v(getattr(collection, "method", None), FILES),
+                       "share": _v(getattr(collection, "share", None), FILES)}}
+
+
 def _loaded(name: str | None):
-    """(collections, refused) as the node loads them; one named, or all."""
+    """(collections, refused, annotations) as the node loads them; one named,
+    or all. The annotations collections are listed apart, as the node lists
+    them (`collections.load_annotations`): `load_all` leaves them out, and
+    `hold config apply wikipedia-articles --set method=…` wrote the file and
+    then said "no such collection" (München, 2026-11-13)."""
     from app import collections as collections_mod
     with contextlib.redirect_stdout(sys.stderr):      # the loader logs; stdout is the result
         served, unreadable = collections_mod.load_all(skip_unreadable=True)
+        annotations = collections_mod.load_annotations()
     refused = [(n, str(why)) for n, why in unreadable]
     refused += [(r.name, r.reason) for r in collections_mod.refusals()
                 if r.name not in {n for n, _ in refused}]
     if name is None:
-        return served, refused
+        return served, refused, annotations
     got = [c for c in served if c.name == name]
     bad = [(n, why) for n, why in refused if n == name]
-    if not got and not bad:
+    ann = [c for c in annotations if c.name == name]
+    if not got and not bad and not ann:
         from app.hold.codex import CodexError
         raise CodexError(f"{name}: no such collection on this node "
                          f"(its file is collections/{name}.toml)")
-    return got, bad
+    return got, bad, ann
 
 
 def show(name: str | None = None) -> dict[str, Any]:
     from app import node_show, node_state
-    served, refused = _loaded(name)
+    served, refused, annotations = _loaded(name)
     ov = node_show.overrides()
     return {"node": {"mode": _v(ov["mode"], STATE),
                      "paused_collections": _v(ov["paused_collections"], STATE)},
-            "collections": [of(c) for c in sorted(served, key=lambda c: c.name)],
+            "collections": [of(c) for c in sorted(served, key=lambda c: c.name)]
+                           + [of_annotations(c) for c in sorted(annotations, key=lambda c: c.name)],
             "refused": [{"name": n, "reason": why} for n, why in refused]}
 
 
@@ -138,7 +166,7 @@ def apply(name: str | None = None) -> dict[str, Any]:
     whose file the node refuses (no encoder, a bad key) is named with its
     reason: there is nothing of it to apply, and its file is what to fix."""
     from app import collections as collections_mod, db
-    served, refused = _loaded(name)
+    served, refused, annotations = _loaded(name)
     applied = []
     for c in sorted(served, key=lambda c: c.name):
         desired = c.embed_mode_default or collections_mod.DEFAULT_EMBED_MODE
@@ -157,5 +185,8 @@ def apply(name: str | None = None) -> dict[str, Any]:
                 raise
         applied.append({"name": c.name, "embed_mode": desired,
                         "replaced": replaced, "encoder": "named in its file"})
+    for c in sorted(annotations, key=lambda c: c.name):
+        applied.append({"name": c.name, "annotations": True,
+                        "method": getattr(c, "method", None), "picked_up": ANNOTATIONS_PICKUP})
     return {"applied": applied,
             "refused": [{"name": n, "reason": why} for n, why in refused]}

@@ -2794,7 +2794,34 @@ def _annotations_shelf(collection, served: list) -> dict:
         "source": getattr(collection, "source", "origin"),
         "license": _license_state(collection),
         "copy_state": _copy_state(collection),
+        "methods": _annotation_methods(root, collection),
     }
+
+
+def _annotation_methods(root, collection) -> list[dict]:
+    """The Library's "update by itself" checkbox (operator, 2026-11-13:
+    "I want a checkbox in the gui"): every method this node runs that can
+    make this collection's claims (`annotation_methods.not_fitting`), and the
+    one its file records even when it no longer can, so it can be unticked.
+    The ticked state is the file's `method` (invariant 10); the last
+    derivation is read from `state/method.json`. Never raises."""
+    from .hold import annotation_methods as am
+    current = getattr(collection, "method", None)
+    out = []
+    for m in am.METHODS.values():
+        try:
+            why = am.not_fitting(root, collection.name, m)
+        except Exception as e:  # noqa: BLE001 — a card never fails
+            why = f"{type(e).__name__}: {e}"
+        if why is not None and m.name != current:
+            continue
+        mk = am.read_marker(root, collection.name) if m.name == current else None
+        last = (mk if mk is not None and mk.get("method") == m.name else None)
+        out.append({"name": m.name, "label": m.label or f"update by itself ({m.name})",
+                    "summary": m.summary, "on": m.name == current, "why": why,
+                    "last": {"snapshot": last.get("snapshot"), "against": last.get("against"),
+                             "at": last.get("at")} if last else None})
+    return out
 
 
 def _genesis_state(con, collection, counts=None, fetched=None) -> dict | None:
@@ -3508,6 +3535,30 @@ def collection_embed_slices(name: str, body: EmbedSlicesBody):
     return {"ok": True, "persisted": True,
             "embed_slices": list(after.embed_slices) if after is not None and after.embed_slices else None,
             "line": view["line"] if view else None}
+
+
+class MethodBody(BaseModel):
+    method: str | None = None
+
+
+@admin_router.post("/library/{name}/method")
+def annotations_method(name: str, body: MethodBody):
+    """The annotations card's "update by itself" checkbox: the method written
+    to the collection's file through its one writer, as `hold config apply
+    <name> --set method=…` writes it — or taken out (`None`, unticked: the
+    claims are given by hand again). The worker reads the file at its next
+    annotations pass (07 §7.8; app/hold/annotation_methods.py). A method that
+    cannot make this collection's claims is refused, nothing written."""
+    collection = _held_or_404(name)
+    if not collections_mod.is_annotations(collection):
+        raise HTTPException(400, f"{name}'s records come from its origin: only an annotations "
+                                 f"collection updates by a method")
+    try:
+        collection_file.set_values(name, {"method": body.method or ""})
+    except collection_file.SetRefused as e:
+        raise HTTPException(400, str(e)) from None
+    after = next((a for a in collections_mod.load_annotations() if a.name == name), None)
+    return {"ok": True, "persisted": True, "method": getattr(after, "method", None)}
 
 
 class ShareBody(BaseModel):

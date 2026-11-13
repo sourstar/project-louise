@@ -455,6 +455,18 @@
         <input type="checkbox" {{ 'checked' if a.share }}
                onchange="setShare('{{ a.name }}', this.checked, '')">share</label>
     </div>
+    {# operator, 2026-11-13: "I want a checkbox in the gui" — shown where a
+       method this node runs can make the claims (annotation_methods.not_fitting);
+       ticked from the file's `method` #}
+    {% for m in a.methods %}
+    <div>
+      <label class="check" title="{{ m.summary }}. Ticked: the node remakes the claims by itself, as the next snapshot of this collection, whenever {{ a.target or 'its target' }} holds a newer snapshot. Unticked: the claims are given by hand (update with a claims file)">
+        <input type="checkbox" {{ 'checked' if m.on }}
+               onchange="setMethod('{{ a.name }}', '{{ m.name }}', this.checked)">{{ m.label }}</label>
+      {% if m.why %}<span class="badge err" title="{{ m.why }}">cannot run here</span>{% endif %}
+      {% if m.last %}<span class="note">last: snapshot {{ m.last.snapshot }}{% for t, sid in (m.last.against or {}).items() %} against {{ t }} {{ sid }}{% endfor %}{% if m.last.at %} ({{ m.last.at }}){% endif %}</span>{% endif %}
+    </div>
+    {% endfor %}
   </div>
   {# the same two closed lines as a held collection's card (operator,
      2026-11-02): the description behind Details, every button behind Options #}
@@ -703,6 +715,11 @@ async function setEmbedSelect(name,value){
     toast(name+': embed '+(value==='smart'?'smart (English + the longest other language)':'every article')+
           ' — saved to collections/'+name+'.toml; applied after the next scan')}
   catch(e){toast('embed selection failed: '+e);location.reload()}
+}
+async function setMethod(name,method,on){
+  try{await postJSON('/admin/library/'+name+'/method',{method:on?method:null});
+    toast(name+(on?': updates by itself ('+method+') — the node checks within 5 minutes':': claims given by hand again')+' — saved to collections/'+name+'.toml')}
+  catch(e){toast('update by itself failed: '+e);location.reload()}
 }
 async function setShare(name,on,mode){
   if(!on&&mode==='p2p'&&!confirm(name+' embeds in all p2p mode, which publishes what it embeds; disabling sharing switches it to all local. Proceed?')){location.reload();return}

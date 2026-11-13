@@ -51,7 +51,7 @@ import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Mapping
 
 from .annotations import AnnotationsError
 
@@ -74,6 +74,14 @@ class Method:
     plugin: str                                  # the plugin of the ONE collection it annotates
     produce: Callable[..., dict[str, Any]]       # (target Collection, out Path, log) -> counts
     summary: str
+    #: the claims it makes — their `type`s and their `method` (02 §2.10) — so
+    #: that a collection whose claims are not its own is never handed to it:
+    #: its output is the WHOLE claim set from then on, and a claim it does not
+    #: make is withdrawn (`not_fitting`). Empty: any claim (a test's method)
+    types: tuple[str, ...] = ()
+    claim_method: Mapping[str, Any] | None = None
+    #: the Library's checkbox (RULE 2: what it does, in plain words)
+    label: str = ""
 
 
 def _wikipedia_versions(collection, out: Path, log=print) -> dict[str, Any]:
@@ -108,7 +116,9 @@ METHODS: dict[str, Method] = {
     "wikipedia-versions": Method(
         "wikipedia-versions", "wikipedia", _wikipedia_versions,
         "wikipedia's articles as works: every other language version same-work as the one shown "
-        "(the largest; English on a tie), from the manifest and page_props"),
+        "(the largest; English on a tie), from the manifest and page_props",
+        types=("same-work",), claim_method={"kind": "wikidata"},        # wiki_versions.METHOD
+        label="update by itself when wikipedia holds a newer snapshot"),
 }
 
 
@@ -139,6 +149,70 @@ def resolve(root: Path, name: str, method: Method) -> tuple[str, str]:
         raise AnnotationsError(f"method {method.name} annotates a {method.plugin} collection, and "
                                f"{name} annotates {tname}, a {tcodex.plugin} collection")
     return name, tname
+
+
+#: the parts whose first claim `not_fitting` reads: spread over the snapshot,
+#: so the cost is bounded whatever its size (wikipedia's: 246 parts)
+SAMPLED_PARTS = 64
+
+
+def not_fitting(root: Path, name: str, method: Method) -> str | None:
+    """Why `method` cannot make `name`'s claims, in plain words — or None
+    when it can: it annotates one collection of the method's plugin, and
+    either the method made its current snapshot (`state/method.json`) or its
+    claims are of the method's kind — the first claim of up to
+    `SAMPLED_PARTS` parts spread over the current snapshot has one of the
+    method's `types` and its `method`. The method's output becomes the whole
+    claim set, so a collection of other claims (relations, editions by a
+    matcher) would lose them: the CLI, the Library and the worker all ask
+    this first (München, 2026-11-13: the Library's checkbox)."""
+    from app.share import seeder
+    from . import collection as col
+    root = Path(root)
+    try:
+        name, _ = resolve(root, name, method)
+    except AnnotationsError as e:
+        return str(e)
+    tree = col.shard_dir_of(root, name)
+    snap = seeder.cached_snapshot(tree)
+    if snap is None or not snap.shards:
+        return None                         # nothing held to replace
+    mk = read_marker(root, name)
+    if mk is not None and mk.get("method") == method.name and mk.get("snapshot") == snap.snapshot_id:
+        return None                         # it made them
+    if not method.types and method.claim_method is None:
+        return None
+    key = (str(tree), snap.hash, method.name)
+    if key not in _FITS:
+        _FITS[key] = _sampled(tree, snap, method, name)
+    return _FITS[key]
+
+
+#: `not_fitting`'s sample, per (shard tree, snapshot hash, method): a snapshot
+#: never changes, and the keeper asks every pass until the first derivation
+_FITS: dict[tuple[str, str, str], str | None] = {}
+
+
+def _sampled(tree: Path, snap, method: Method, name: str) -> str | None:
+    from app.pack import records as pack_records
+    from .annotations import _part_file, claim_of
+    step = max(1, -(-len(snap.shards) // SAMPLED_PARTS))
+    for shard in snap.shards[::step]:
+        p = _part_file(tree, shard, None, snap.snapshot_id)
+        if p is None:
+            continue
+        for r in pack_records.iter_records(p):
+            c = claim_of(r)
+            kind_ok = not method.types or c.get("type") in method.types
+            by_ok = method.claim_method is None or c.get("method") == dict(method.claim_method)
+            if not (kind_ok and by_ok):
+                return (f"{name}'s claims are not {method.name}'s: part {shard.n}'s first is a "
+                        f"{c.get('type')!r} claim by {json.dumps(c.get('method'), sort_keys=True)}, and "
+                        f"{method.name} makes {', '.join(method.types) or 'any'} claims by "
+                        f"{json.dumps(dict(method.claim_method or {}), sort_keys=True)}; its output "
+                        f"would withdraw them")
+            break
+    return None
 
 
 # --------------------------------------------------------------------------
@@ -219,6 +293,9 @@ def due(root: Path, name: str, method_name: str, *, clock: datetime | None = Non
     root = Path(root)
     method = get(method_name)
     name, tname = resolve(root, name, method)
+    why = not_fitting(root, name, method)
+    if why is not None:
+        raise AnnotationsError(why)
     tsnap = newest_snapshot_id(col.shard_dir_of(root, tname))
     tree = col.shard_dir_of(root, name)
     current = newest_snapshot_id(tree)
