@@ -388,6 +388,57 @@ def pool_prefilter(native_ids: set[int] | None):
         query_service.book_ids_for = real
 
 
+def current_versions(con, native_ids: Iterable[int], as_of: str | None = None, *,
+                     window: int = 500) -> tuple[set[int], dict[str, int]]:
+    """The pool's records as the run's search sees them: each record of a
+    versioned Work becomes its Work's version in the run's window — the
+    shown one without `--as-of` (validity.where: `shown = 1`), the one in
+    force on the day with it — and a record of no Work stays itself.
+
+    WHY (München, 2026-11-13, the pilot's 0 of 3): jf100 was built on 11-09
+    and held the versions shown then; both codes got new versions since (the
+    c.c. 6767400735849696380 → 6770222576450470548), the search keeps
+    `shown = 1` only, and the pool prefilter dropped the live version: the
+    c.c. ranked #1 without the pool and was absent with it. A pool is a set
+    of ACTS; the version is the run's to choose, as the search chooses it.
+    Returns `(ids, {"kept", "moved", "gone"})`: `gone` a Work with no version
+    in the window (not in force on the day)."""
+    ids = sorted({int(i) for i in native_ids})
+    work_of: dict[int, str] = {}
+    for start in range(0, len(ids), window):
+        part = ids[start:start + window]
+        marks = ",".join("?" for _ in part)
+        for r in con.execute(f"SELECT native_id, work FROM validity WHERE native_id IN ({marks})", part):
+            work_of[int(r[0])] = r[1]
+    works = sorted(set(work_of.values()))
+    now: dict[str, int] = {}
+    day = int(str(as_of).replace("-", "")) if as_of else None
+    for start in range(0, len(works), window):
+        part = works[start:start + window]
+        marks = ",".join("?" for _ in part)
+        if day is None:
+            q, params = f"SELECT work, native_id FROM validity WHERE work IN ({marks}) AND shown=1", part
+        else:
+            q = (f"SELECT work, native_id FROM validity WHERE work IN ({marks}) AND valid_from<=? "
+                 f"AND (valid_to IS NULL OR valid_to>?)")
+            params = [*part, day, day]
+        for r in con.execute(q, params):
+            now[r[0]] = int(r[1])
+    out: set[int] = set()
+    report = {"kept": 0, "moved": 0, "gone": 0}
+    for i in ids:
+        w = work_of.get(i)
+        if w is None:
+            out.add(i)
+            report["kept"] += 1
+        elif w in now:
+            out.add(now[w])
+            report["kept" if now[w] == i else "moved"] += 1
+        else:
+            report["gone"] += 1
+    return out, report
+
+
 def _native_of(uid: str | None) -> int | None:
     tail = str(uid or "").rpartition(":")[2]
     return int(tail) if tail.isdigit() else None
@@ -906,7 +957,7 @@ def main(argv: list[str] | None = None) -> int:
             print(f"written {path}")
             return 0
         if a.cmd == "enqueue":
-            ids = _pool_ids(a.out, a.pool)
+            ids = sorted(current_versions(held.con, _pool_ids(a.out, a.pool), getattr(a, "as_of", None))[0])
             got = enqueue(c, ids)
             print(f"{c.name}: pool {a.pool}, {len(ids)} records — embedded {got['embedded']}, queued "
                   f"{got['queued']}, declined {got['declined']}, absent {got['absent']}. Its worker embeds "
@@ -914,6 +965,10 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         ids = _pool_ids(a.out, a.pool) if a.pool else None
         if ids is not None:
+            current, moved = current_versions(held.con, ids, a.as_of)
+            print(f"{c.name}: pool {a.pool}: {len(ids)} records → {len(current)} as the search sees them "
+                  f"({moved}: a Work's version is the run's window's, never the pool's day)")
+            ids = sorted(current)
             state = pool_state(c, ids)
             if state["embedded"] != len(ids):
                 print(f"{c.name}: pool {a.pool} has {len(ids)} records and {state['embedded']} embedded here "
