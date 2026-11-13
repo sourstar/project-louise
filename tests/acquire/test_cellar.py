@@ -16,7 +16,9 @@ import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
+from types import SimpleNamespace
 
+import httpx
 import pytest
 
 from app import db
@@ -361,3 +363,44 @@ def test_records_vs_origin_refetches_one_unit_by_its_cellar_uri(mock):
     from types import SimpleNamespace
     assert isinstance(unit_origin.for_codex(SimpleNamespace(plugin="eurlex")), unit_origin.UnitOrigin)
     assert unit_origin.for_codex(SimpleNamespace(plugin="normattiva")) is None
+
+
+# ---- a slow window (München, 2026-11-14: 1990's count in 235.5 s, 2021's in 45.9 s) ---------
+
+def test_a_sparql_query_waits_past_a_download_s_bound_and_its_error_names_the_window(monkeypatch):
+    """The query's own bound, not TIMEOUT_S; a timeout says which window."""
+    seen = {}
+
+    class Client:
+        def stream(self, method, url, **kw):
+            seen["timeout"] = kw.get("timeout")
+            raise httpx.ReadTimeout("slow")
+    with pytest.raises(TransportError) as e:
+        cellar.sparql(Client(), "http://x", "SELECT 1", what="the count of 1990", charge=lambda n: None)
+    assert seen["timeout"].read == cellar.SPARQL_TIMEOUT_S > 235.5 * 3 > cellar.TIMEOUT_S
+    assert "the count of 1990" in str(e.value) and engine.transient(str(e.value))
+
+
+def test_a_stop_ends_a_long_query_s_wait_at_once(monkeypatch):
+    """A Virtuoso query evaluates before its first byte: the wait is in a
+    thread, and a stop (SIGTERM, node pause) is honoured within a poll."""
+    import threading
+    import time as _t
+
+    from app.acquire.spec import TransferAborted
+    stop = threading.Event()
+    monkeypatch.setattr(cellar, "current_handle", lambda: SimpleNamespace(stop=stop))
+    release = threading.Event()
+    threading.Timer(0.2, stop.set).start()
+    t0 = _t.monotonic()
+    with pytest.raises(TransferAborted):
+        cellar._answer_of(lambda: release.wait(30), poll_s=0.05)
+    assert _t.monotonic() - t0 < 5
+    release.set()
+
+
+def test_the_listing_names_each_query_it_asks(mock):
+    spec = _spec(mock)
+    mock.fail["/webapi"] = 99
+    with pytest.raises(TransportError, match="to the count of 2016"):
+        list(cellar.listing(spec.endpoints[0], spec, Filter(include=("lang=de/*",)), years=range(2016, 2017)))
