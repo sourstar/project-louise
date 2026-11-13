@@ -98,6 +98,9 @@ louise hold
                                                                        its layers, calibration set and CPU reference are the held collection C's; the recipe gives the
                                                                        rest (origin, work), and a field of the space it states must equal C's
               new <plugin> --name N --sister-of S --space-from C --cpu-model T [--encoder URL] [--api A] [--embed-model M] [--dry-run]
+              new <plugin> --name N --sister-of S --layer-param KEY=VALUE [--layer-param …] --cpu-model T [--dry-run]
+                (a sister in S's space with a layer param changed: a new space, S's encoder, run and reference;
+                 only a param S's chunker states, to another value; the chunker measurements, 2026-11-14)
                                                                        case J, a SISTER INTO A HELD SPACE (added 2026-11-08, normattiva-nemo): `derive` of her sister S
                                                                        into C's space and layers; carry — her parts seeded from S's snapshot, S's manifest and text index
                                                                        copied with nothing of S's vectors said held (A1i); where S cuts by other layers, RELAYERED: the
