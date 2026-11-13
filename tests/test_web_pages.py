@@ -138,10 +138,15 @@ def test_a_llama_model_in_use_is_said_built_with_llama_in_help(client):
     and only Help (operator, 2026-11-12: "Move Built with Llama in the help
     section"); when the model leaves, this test says to take the line out."""
     from pathlib import Path
-    shipped = Path(__file__).parents[1] / "deploy/vega/stage/models/louise-rerank-nemotron-1b.yaml"
+    models = Path(__file__).parents[1] / "deploy/vega/stage/models"
+    shipped = models / "louise-rerank-nemotron-1b.yaml"
     ask, help_page = client.get("/ask").text, client.get("/help").text
     assert "Built with Llama" not in ask, "in the help section, not on Ask"
-    if not shipped.exists():
+    # whether a Llama model ships is the REPO's question, asked where its
+    # deploy tree is: the app image copies app/, tools/ and calibration/ only,
+    # and read a missing tree as "no Llama model" (München, 2026-11-13: red in
+    # the staged image, green in the checkout). The panel is checked everywhere
+    if models.is_dir() and not shipped.exists():
         assert "Built with Llama" not in help_page, "no Llama model ships: take the attribution out"
         return
     panel = help_page[help_page.index('<div class="panel" id="models">'):]
