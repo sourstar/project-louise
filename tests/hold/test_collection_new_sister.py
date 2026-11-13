@@ -291,3 +291,74 @@ def test_a_stop_during_her_records_build_exits_130_and_a_rerun_resumes(pair, car
     assert _new(root) == 0, "run again: the carry repeats and the build completes"
     prog = json.loads(wf.progress_path("sis").read_text())
     assert prog["steps"]["carry"]["result"]["recut"] is True
+
+
+# ---- a sister in her sister's space with a layer param changed (2026-11-14) ---------------------
+
+@pytest.fixture
+def fixed_old(isolated_config, tmp_path, corpus_dir):
+    """`old` cutting with `fixed{tokens 3, overlap 0}`, built and frozen."""
+    from app.hold import records as rec, snapshot as sn
+    from tests.hold.conftest import fake_query_embed
+    root = tmp_path / "collections"
+    layers = [{"rule": "default", "chunker": {"id": "fixed", "version": 1, "params": {"tokens": 3, "overlap": 0}},
+               "input": {"form": "text"}}]
+    old = col.create_from_recipe(root, "gutenberg", recipe(layers=layers), platform_image=PLATFORM,
+                                 embed=fake_embed, embed_query=fake_query_embed, name="old", key=KEY, now=NOW)
+    rec.build(root, "old", corpus_dir=corpus_dir, records_per_shard=2, log=quiet)
+    rec.write_validation(root, "old")
+    sn.create(root, "old", snapshot_id="2026-08", log=quiet)
+    return root, old
+
+
+def _new_param(root, *params, extra=()):
+    args = ["hold", "collection", "new", "gutenberg", "--root", str(root), "--name", "sis", "--sister-of", "old",
+            "--encoder", "http://localai:8080", "--api", "vega", "--embed-model", "vega-nemo",
+            "--cpu-model", "vega-nemo-cpu", *extra]
+    for p in params:
+        args += ["--layer-param", p]
+    return louise.main(args)
+
+
+def test_a_sister_with_one_layer_param_changed_is_a_new_space_with_her_sister_s_reference(fixed_old, card):
+    """The architecture session's chunker measurement (2026-11-14): Normattiva
+    with `header = false`, one factor. Her sister's layers with the param
+    changed, a new space, the same encoder and reference; her records her
+    sister's, her chunks cut again by her own layer."""
+    from app.hold import seed
+    root, old = fixed_old
+    card["weights"] = old.space.encoder.weights
+    assert _new_param(root, "tokens=4") == 0
+    _, sister = col.resolve(root, "sis")
+    assert sister.space_id != old.space_id and sister.derived_from == old.collection_id
+    assert [l.chunker.params for l in sister.layers] == [{"tokens": 4, "overlap": 0}]
+    assert [l.chunker.id for l in sister.layers] == ["fixed"] and sister.space.encoder == old.space.encoder
+    assert sister.space.calibration.vectors == old.space.calibration.vectors, "her sister's reference"
+    src, mine = seed.latest_snapshot(root, "old"), seed.latest_snapshot(root, "sis")
+    assert src.records == mine.records and \
+        sorted(s.records_root for s in src.shards) == sorted(s.records_root for s in mine.shards)
+    assert card["order"] == [("cpu-reference", "sis"), ("gate", "sis")]
+
+
+def test_the_dry_run_names_the_layer_change_and_makes_nothing(fixed_old, card, capsys):
+    root, old = fixed_old
+    card["weights"] = old.space.encoder.weights
+    assert _new_param(root, "tokens=4", extra=("--dry-run",)) == 0
+    out = capsys.readouterr().out
+    assert "tokens = 4" in out and "'tokens': 3" in out and "'tokens': 4" in out
+    with pytest.raises(CodexError):
+        col.resolve(root, "sis")
+
+
+@pytest.mark.parametrize("params, extra", [
+    (("tokens=3",), ()),                        # the same value: the same space
+    (("header=false",), ()),                    # a param no layer states
+    (("tokens",), ()),                          # not KEY=VALUE
+    (("tokens=4",), ("--space-from", "old")),   # both ways at once
+])
+def test_a_layer_param_that_changes_nothing_or_is_unknown_is_refused(fixed_old, card, params, extra):
+    root, old = fixed_old
+    card["weights"] = old.space.encoder.weights
+    assert _new_param(root, *params, extra=extra) == 2
+    with pytest.raises(CodexError):
+        col.resolve(root, "sis")

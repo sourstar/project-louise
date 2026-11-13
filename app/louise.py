@@ -1014,6 +1014,64 @@ def _join_text_index(root: Path, her_sister_name: str, name: str) -> str | None:
     return joined
 
 
+def _layer_params(given: list[str] | None) -> dict[str, Any]:
+    """`["header=false", "max_tokens=512"]` → `{"header": False, "max_tokens": 512}`:
+    each value read as JSON, a bare word as a string."""
+    out: dict[str, Any] = {}
+    for item in given or ():
+        key, sep, value = str(item).partition("=")
+        key = key.strip()
+        if not sep or not key:
+            raise CodexError(f"--layer-param {item!r}: KEY=VALUE")
+        try:
+            out[key] = json.loads(value)
+        except ValueError:
+            out[key] = value
+    return out
+
+
+def _said(params: dict[str, Any]) -> str:
+    return ", ".join(f"{k} = {json.dumps(v)}" for k, v in params.items())
+
+
+def _layers_with(codex, params: dict[str, Any]) -> tuple:
+    """Her sister's layers with `params` changed in every layer whose chunker
+    has them. Only a param the chunker already states, and only to another
+    value: adding one is a chunker's own change (chunking_context, the
+    architecture session's B), and the same value is the same space."""
+    import dataclasses
+    changed: set[str] = set()
+    out = []
+    for layer in codex.layers:
+        cur = dict(layer.chunker.params or {})
+        mine = {k: v for k, v in params.items() if k in cur}
+        for k, v in mine.items():
+            if cur[k] == v:
+                raise CodexError(f"--layer-param {k}={json.dumps(v)}: {layer.chunker.id} has it already; "
+                                 f"the same value is the same space")
+        changed |= set(mine)
+        cur.update(mine)
+        out.append(dataclasses.replace(layer, chunker=dataclasses.replace(layer.chunker, params=cur)))
+    unknown = sorted(set(params) - changed)
+    if unknown:
+        have = sorted({k for l in codex.layers for k in (l.chunker.params or {})})
+        raise CodexError(f"--layer-param {', '.join(unknown)}: no layer's chunker states it (they state "
+                         f"{', '.join(have) or 'none'}); a new param is the chunker's own change")
+    return tuple(out)
+
+
+def _encoder_of(root, name: str, fallback: dict) -> dict:
+    """The [encoder] of a held collection's file, as `_write_held_file` takes
+    it (her sister's endpoint serves her: the same encoder and run); the
+    resolved flags where the file names none."""
+    path = _held_file(root, name)
+    enc = (tomllib.loads(path.read_text(encoding="utf-8")).get("encoder") or {}) if path.is_file() else {}
+    if not enc.get("url"):
+        return {k: v for k, v in fallback.items() if v}
+    return {"encoder": enc["url"], "query_encoder": enc.get("query_url"), "api": enc.get("api") or "openai",
+            "embed_model": enc.get("embed_model"), "query_model": enc.get("query_model")}
+
+
 def _sister_new(a, say) -> int:
     """`new <plugin> --name N --sister-of SISTER --space-from SPACE [--dry-run]`:
     case J's SISTER (02 §2.7; operator, 2026-11-08: "Make J, it is time to do
@@ -1050,9 +1108,14 @@ def _sister_new(a, say) -> int:
     root = Path(a.root)
     if getattr(a, "re_create", False):
         raise CodexError("--sister-of (case J) and --re-create (case F) are two cases")
-    if not getattr(a, "space_from", None):
-        raise CodexError("--sister-of needs --space-from COLLECTION: a sister into a held space is case "
-                         "J's built path; one into a new space, calibrated here, is phase 4")
+    layer_params = _layer_params(getattr(a, "layer_param", None))
+    if layer_params and getattr(a, "space_from", None):
+        raise CodexError("--sister-of: --space-from (another held space) or --layer-param (her sister's "
+                         "space, a layer param changed), not both")
+    if not getattr(a, "space_from", None) and not layer_params:
+        raise CodexError("--sister-of needs --space-from COLLECTION (a held space) or --layer-param "
+                         "KEY=VALUE (her sister's space, a layer param changed); one into a new space, "
+                         "calibrated here, is phase 4")
     if getattr(a, "recipe", None):
         raise CodexError("--sister-of takes no --recipe: a sister is derived from her sister's Codex, and her "
                          "space is the --space-from collection's")
@@ -1062,7 +1125,19 @@ def _sister_new(a, say) -> int:
         raise CodexError(f"--sister-of {a.sister_of}: no collection of that name is held here ({e})") from None
     if her_sister.plugin != a.plugin:
         raise CodexError(f"--sister-of {her_sister_name}: its plugin is {her_sister.plugin}, not {a.plugin}")
-    source_name, source = _space_from_source(a, {})
+    if layer_params:
+        # A SISTER IN A SPACE DERIVED BY LAYER PARAMS (2026-11-14, the
+        # architecture session's chunker measurement: Normattiva with
+        # `header = false`): her sister's layers with the params changed —
+        # a new space, the same encoder, run and reference (02 §2.7: a
+        # sister who changes only her layers inherits her sister's member)
+        new_layers = _layers_with(her_sister, layer_params)
+        source_name = her_sister_name
+        source = col.derive(root, her_sister.collection_id, layers=new_layers, now=_utc_now(),
+                            name=a.name, plan_only=True)
+    else:
+        new_layers = None
+        source_name, source = _space_from_source(a, {})
     if source.space_id == her_sister.space_id:
         raise CodexError(f"--space-from {source_name}: {her_sister_name} is in that space already; a sister in "
                          f"{her_sister_name}'s space carries its vectors (`dev carry`)")
@@ -1087,7 +1162,8 @@ def _sister_new(a, say) -> int:
     model = model_keys(a.encoder, embed_model=a.embed_model)[0]
     inputs = {"plugin": a.plugin, "name": a.name, "sister_of": her_sister.collection_id,
               "space_from": source_name, "space_id": source.space_id, "encoder": a.encoder, "api": api,
-              "embed_model": model, "cpu_model": a.cpu_model, "recut": recut}
+              "embed_model": model, "cpu_model": a.cpu_model, "recut": recut,
+              **({"layer_params": layer_params} if layer_params else {})}
     run = wf.Run(wf.case("J"), a.name, inputs, say=say, dry=bool(getattr(a, "dry_run", False)))
     sp = source.space
     stated = run_check.stated_run(collections_mod.EmbedRecipe(
@@ -1099,8 +1175,10 @@ def _sister_new(a, say) -> int:
     if stated.weights != sp.encoder.weights:
         raise CodexError(f"--cpu-model {a.cpu_model} runs weights {stated.weights[:23]}…, the space's are "
                          f"{sp.encoder.weights[:23]}…: a twin is the same weights")
-    run.at("resolve", f"a sister of {her_sister_name} ({her_sister.collection_id[:23]}…) in the space of "
-                      f"{source_name} ({source.space_id[:23]}…); {model} with its CPU twin {a.cpu_model}"
+    run.at("resolve", f"a sister of {her_sister_name} ({her_sister.collection_id[:23]}…) in "
+                      + (f"her sister's space with {_said(layer_params)} ({source.space_id[:23]}…)"
+                         if layer_params else f"the space of {source_name} ({source.space_id[:23]}…)")
+                      + f"; {model} with its CPU twin {a.cpu_model}"
                       + ("; she cuts otherwise than her sister: her parts carry, her manifest and text "
                          "index are cut again from them by the worker" if recut else ""))
 
@@ -1122,7 +1200,13 @@ def _sister_new(a, say) -> int:
         need, free = recreate.room(root, her_sister_name, a.name, make=False)
         print(f"dry run: case J, a sister of {her_sister_name}: {a.name}; it stops before make, writes "
               f"nothing and takes no lock")
-        print(f"  space_id    {source.space_id} ({source_name}'s)")
+        if layer_params:
+            print(f"  space_id    {source.space_id} (new: {her_sister_name}'s space with "
+                  f"{_said(layer_params)})")
+            print(f"  layers      {her_sister_name}: {cut(her_sister)}")
+            print(f"              {a.name}: {cut(source)}")
+        else:
+            print(f"  space_id    {source.space_id} ({source_name}'s)")
         if recut:
             print(f"  to carry    the parts of {her_sister_name}'s latest snapshot (her records); her manifest and "
                   f"text index are cut again from them by the worker with her own layer ({cut(source)}), "
@@ -1149,14 +1233,22 @@ def _sister_new(a, say) -> int:
         node_state.set_paused(a.name, True, by=by)
         placed = vector_place.place_new(root, a.name)
         try:
-            sister = col.derive(root, her_sister.collection_id, space_from=source, now=_utc_now(), name=a.name)
+            if layer_params:
+                sister = col.derive(root, her_sister.collection_id, layers=new_layers, now=_utc_now(),
+                                    name=a.name)
+            else:
+                sister = col.derive(root, her_sister.collection_id, space_from=source, now=_utc_now(),
+                                    name=a.name)
         except BaseException:
             vector_place.unplace_new(root, a.name)
             raise
         name = col.name_of(root, sister.collection_id)
         if sister.space_id != source.space_id:
             raise CodexError(f"{name}: made in space {sister.space_id[:23]}…, not {source_name}'s: forget it")
-        held = _write_held_file(root, sister, **_inherited_encoder(root, sister, her_sister, source))
+        held = _write_held_file(root, sister, **(_encoder_of(root, her_sister_name, {
+                                    "encoder": a.encoder, "api": api, "embed_model": model})
+                                                 if layer_params else
+                                                 _inherited_encoder(root, sister, her_sister, source)))
         run.at("make", f"{name}  {sister.collection_id}  (held: {held}); paused until the carry"
                        + (f"; its vector table built in the build area, {placed}" if placed else ""))
     else:
@@ -6993,6 +7085,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--space-from", dest="space_from", default=None, metavar="COLLECTION",
                    help="case E: a second collection in the space of the held COLLECTION — its space "
                         "and layers copied, its reference vectors reused, its endpoint and model")
+    p.add_argument("--layer-param", dest="layer_param", action="append", default=None, metavar="KEY=VALUE",
+                   help="with --sister-of, in place of --space-from: a sister in her sister's space with "
+                        "this layer param changed (a new space: the same encoder, run and reference; "
+                        "the value read as JSON, e.g. header=false). Repeatable")
     from app.hold.recreate import SAMPLE
     p.add_argument("--sample", type=int, default=SAMPLE, metavar="N",
                    help=f"with --re-create: chunks re-encoded by the new run and held to the stored "

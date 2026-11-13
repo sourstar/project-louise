@@ -839,9 +839,13 @@ def derive(root: Path, sister_id: str, *,
            descriptive: Descriptive | None = None,
            embed=None, embed_query=None, key=None,
            now: str | None = None, pairs: bytes | None = None,
-           name: str | None = None) -> Codex:
+           name: str | None = None, plan_only: bool = False) -> Codex:
     """A sister: her sister's corpus, and at most `space`, `layers`, `update`
     and `work` changed (02 §2.7).
+
+    `plan_only`: the Codex she would be, computed and returned with nothing
+    embedded and nothing written (a dry run's `space_id`; refused with
+    `embed`, which would embed).
 
     `pairs`: when she embeds a reference of her own in a PAIR space, the
     bytes of its calibration set (09 §9.12, amended 2026-10-08), as for
@@ -990,6 +994,10 @@ def derive(root: Path, sister_id: str, *,
         sister = _replace(sister, credits=_merge_credits(kept, ()))
 
     sources = (her_sister,) if space_from is None else (her_sister, space_from)
+    if plan_only:
+        if embed is not None:
+            raise CodexError("derive: plan_only computes the Codex and embeds nothing; no `embed`")
+        return sister
     own = None
     if embed is not None and not any(_same_reference(sister, s) for s in sources):
         # A new build: embed ONCE, as `create` does, and let the new hashes
