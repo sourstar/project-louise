@@ -2,9 +2,29 @@
 
 Real files, byte for byte as their repositories hold them (sha256 below).
 EU law: © European Union, CC BY 4.0 (texts), CC0 (metadata) — Decision
-2011/833/EU, EUR-Lex legal notice. None was fetched from europa.eu (not
-reachable from the session that took them, 2026-11-08); each comes from a
-repository that holds the Publications Office's files.
+2011/833/EU, EUR-Lex legal notice. `formex/` and `notices/` were not
+fetched from europa.eu (not reachable from the session that took them,
+2026-11-08); each comes from a repository that holds the Publications
+Office's files. `rdf/`, `xhtml/`, `html/` and `pdf/` were fetched from
+Cellar on 2026-11-13 from the node, as the next section says.
+
+## Fetched from Cellar, 2026-11-13 (`rdf/`, `xhtml/`, `html/`, `pdf/`)
+
+`https://publications.europa.eu/resource/celex/<CELEX>`, by content
+negotiation; items from the URI each `MANIFESTATION_HAS_ITEM` names, saved
+under its `TECHMD/STREAM_NAME` (every size equal to its `STREAM_SIZE`).
+
+| path | Accept | what |
+|---|---|---|
+| `rdf/<CELEX>.rdf` | `application/rdf+xml;notice=non-inferred-tree` | the work's NON-INFERRED TREE in RDF/XML, all languages: the graph the EUR-Lex Data Dump's metadata archive (`LEG_MTD_<date>.zip`, `<cellar uuid>/tree_non_inferred.rdf`) holds. For 31990R0048 the dump's file (dump of 2026-11-08) and this one are the same graph — 2,115 triples, isomorphic, identical sorted lines — in another order, so the sha256 differs: Cellar's serialisation order is not stable. `31990R0048`, `32016R1036`, `02016R1036-20180608` (a consolidation), `32019L0790` |
+| `xhtml/32010D0699/` | `application/xml;notice=branch`, Accept-Language `ita` | an Italian act in force WITHOUT a `fmx4` manifestation: its branch notice (manifestations `print`, `pdfa1a`, `xhtml`) and the two items of its `xhtml` manifestation. `Accept: application/xhtml+xml` on the CELEX answers 300 with the two `DOC_n` items |
+| `html/31988D0540/` | same | an act whose only text is the LEGACY `html` manifestation: branch notice and `31988D0540it.html`. `Accept: text/html` answers 200 with the item |
+| `pdf/32004D0411/` | same | an act held only as `pdf` (with a text layer): branch notice and `l_15120040430it00500053.pdf`. `Accept: application/pdf` answers 200 |
+| `pdf/31962R0031/` | same | an act held only as a SCANNED `pdf` (no text layer, 2 pages): branch notice and `p_04519620614it13851386.pdf` |
+
+In the 2026-11-08 dump, 13,374 of the 43,623 Italian works in force have no
+Formex (12,360 html/xhtml + pdf, 786 html only, 228 pdf only — 5 of them
+scans); these four acts stand for them.
 
 ## Formex (`formex/<CELEX>/`)
 
@@ -59,4 +79,17 @@ d5fb5cf89aa31b8aabb99d1f1352199eeae17179436d894c2b5e7605137924f0  formex/32024R0
 4186fd60516cec188642db27955dfa00cc536c0f166cc2a7e664ec7393d4320c  notices/52018PC0340_branch.xml
 93759a7e276c6e423a605cd7f463b2738f787ae4db85d46a2f0179bcd507f9e4  notices/EN-CELEX-02009R1223-20191218.xml
 c4807f23b9becda7ae45a2fc01203861b23228a431f868b48b588103e130fdc2  notices/celex_32018R0196_object_work.xml
+283a39314546faf63a1ea698531e311256d8b3897826f61e615cbfe88d973928  html/31988D0540/31988D0540it.html
+ab8d3846bfb3780579fec1d3c1f13d506374b3e8d24db010c69f2cb552ee1276  html/31988D0540/notice.xml
+0962c885ca57e5d9e8413b48f1b31586d077879f5d6c874b504f4cc31f663c60  pdf/31962R0031/notice.xml
+ce3908d50e62fcf68c7836b50aaa256da143bc4c5332fa356a5da367ad57c5ad  pdf/31962R0031/p_04519620614it13851386.pdf
+50b32c2216ed25675a06bb3b1e4cf754bd1b30dff74190653cf11e8c3a36590c  pdf/32004D0411/l_15120040430it00500053.pdf
+9d207f441331c8337c3701c0bafdfd2d969529a7f124a6b752f4363ec1857494  pdf/32004D0411/notice.xml
+f2855f459c0b62618afbeb81547269cbac5c222f5a402a8c87235a77c1b60039  rdf/02016R1036-20180608.rdf
+4daaaa841d80204038a9073fe4c671aaa05811a2407739152a992f8345d2a1ed  rdf/31990R0048.rdf
+8e2506879cc7aa958d346f4fa03ee031808d96a7cd4e1c8949cc8a2c3f682816  rdf/32016R1036.rdf
+1af12068534ea4bcd12f35c3254a05613ea769756bb45e434a3e92f2dfaf1d1a  rdf/32019L0790.rdf
+8e7a008f18b5454bbbac0a872c6168ba1b7cb3f7ac80ae20efa7e8c531a3223d  xhtml/32010D0699/L_2010306IT.01001401.doc.html
+e24d253b2e692fdeb6cd426b357d012c20fa97bb30378f1e2d6a5259a888de6c  xhtml/32010D0699/L_2010306IT.01001501.doc.html
+f0c413c49c5c3d3bb9cc248367a2b634ac3d06253b4b9dea9541837aceaab20a  xhtml/32010D0699/notice.xml
 ```
