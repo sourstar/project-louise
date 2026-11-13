@@ -234,6 +234,8 @@ ISSUES = {
                                 "validity: it stays open-ended, labelled (under-closed)",
     "form-disagrees-with-celex": "the Formex body is a consolidation (CONS.ACT) and the CELEX an "
                                  "original, or the reverse; the CELEX decides the version",
+    "no-text-layer": "page(s) of the act's PDF hold no text (a scan): the PDF is held whole in the "
+                     "unit, its text is what the other pages give",
 }
 
 
