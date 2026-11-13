@@ -161,3 +161,17 @@ def test_the_annex_named_exactly_wins_over_those_it_begins(monkeypatch, annex, t
     monkeypatch.setattr(reader, "document", lambda c, n: {"chunks": REG})
     ch, _held, got = articles._read_article(None, 1, _want("5", annex))
     assert ch["text"] == text and got == annexes
+
+
+# ---- a version whose validity has ended is not "in force" (2026-11-13) ---------------------
+
+@pytest.mark.parametrize("valid_to, as_of, ended", [
+    (None, None, False),                 # open: in force
+    (20261114, None, False),             # ends tomorrow: in force today
+    (20261113, None, True),              # ends today (exclusive): not in force
+    (20100101, None, True),              # a LEGI article ABROGE in 2010
+    (20100101, 20050101, False),         # a date asked: the dated note, never this one
+])
+def test_a_shown_version_that_has_ended_is_the_last_text_in_force(valid_to, as_of, ended):
+    v = {"valid_to": valid_to}
+    assert articles._ended(v, as_of, today=lambda: 20261113) is ended

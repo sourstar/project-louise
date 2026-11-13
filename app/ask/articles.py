@@ -321,6 +321,25 @@ def _capped(text: str) -> str:
             f"caratteri: il testo intero è nel documento]")
 
 
+def _today() -> int:
+    import datetime as _dt
+
+    from app import validity
+    return validity.day_int(_dt.datetime.now(_dt.timezone.utc).date())
+
+
+def _ended(version: dict, as_of: int | None, *, today: Callable[[], int] = _today) -> bool:
+    """Whether the version shown (no date asked) is no longer in force: its
+    validity ends on or before today (`valid_to` is exclusive). Its text is
+    then the LAST text in force, never "the text in force" (2026-11-13: a
+    LEGI article whose last version is ABROGE, an act Normattiva closes,
+    were labelled in force with a past "fino al"). Source-independent: the
+    dates are validity's, from each plugin's own statement (LEGI's ETAT and
+    DATE_FIN, Normattiva's vigenza, NeuRIS's and EUR-Lex's expressions)."""
+    end = version.get("valid_to")
+    return as_of is None and end is not None and int(end) <= today()
+
+
 def _work_facts(collection, con, key: str, want: Cited, group: list[tuple],
                 as_of: int | None) -> list[dict]:
     """The article's facts from each of `group`'s Works: the chosen
@@ -331,7 +350,8 @@ def _work_facts(collection, con, key: str, want: Cited, group: list[tuple],
         ch, holders, annexes = _read_article(collection, v["native_id"], want)
         changes = _changes(con, work, c.article, annexes, holders)
         if ch is not None:
-            note = notes.in_force if as_of is None else notes.as_of.format(day=_day(as_of))
+            note = (notes.last if _ended(v, as_of) else notes.in_force) if as_of is None \
+                else notes.as_of.format(day=_day(as_of))
             out.append(_fact(collection, key, act_label, c, v, ch, note, changes))
         if ch is None or want.repealed(str(ch.get("text") or "")):
             for older in reversed([x for x in versions if x["valid_from"] < v["valid_from"]]):
