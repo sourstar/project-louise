@@ -68,6 +68,19 @@ def test_static_assets_the_new_pages_reference_are_actually_served(client):
     assert r.status_code == 200 and len(r.content) > 1000
 
 
+def test_the_logo_is_top_left_on_every_page_and_served_small(client):
+    # operator, 2026-11-13: "Top left, properly scaled and reduced in size". base.html carries it, so
+    # every page has it; the file served is the reduced one (2x of the 56 px shown), not the README's 1 MB
+    page = client.get("/ask").text
+    assert '<a href="/ask" class="logo"' in page and 'src="/static/logo.png' in page
+    assert 'rel="icon"' in page
+    r = client.get("/static/logo.png")
+    assert r.status_code == 200 and r.headers["content-type"] == "image/png"
+    assert r.content[:8] == b"\x89PNG\r\n\x1a\n" and len(r.content) < 64 * 1024
+    css = client.get("/static/admin.css").text
+    assert "nav a.logo{position:absolute;left:16px" in css
+
+
 def test_ask_query_shows_hit_with_local_verification_badge(client):
     _seed_one_book()
     r = client.post("/ask/query", json={"query": "lighthouse keeper", "mode": "fts"})

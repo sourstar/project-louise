@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{% block title %}{{ site_title() }}{% endblock %}</title>
 <link rel="stylesheet" href="/static/admin.css?v={{ asset_v }}">
+<link rel="icon" type="image/png" href="/static/logo.png?v={{ asset_v }}">
 <script>/* the reader's theme, before the page draws (admin.css, THE THEMES) */
 try{var t=localStorage.getItem('louise-theme');if(t)document.documentElement.dataset.theme=t}catch(e){}</script>
 <script src="/static/vendor/htmx.min.js?v={{ asset_v }}"></script>
@@ -12,6 +13,9 @@ try{var t=localStorage.getItem('louise-theme');if(t)document.documentElement.dat
 <body>
 {% set viewer = request.state.viewer if request and request.state and request.state.viewer is defined else none %}
 <nav>
+  {# the project's logo, top left (operator, 2026-11-13: "Top left, properly scaled and reduced in size");
+     app/static/logo.png is the README's logo cropped square on its own black, 112 px = 2x of what is shown #}
+  <a href="/ask" class="logo" title="Ask"><img src="/static/logo.png?v={{ asset_v }}" alt="Louise" width="56" height="56"></a>
   <div class="brand">{{ site_title() }}</div>
   <div class="menu">
   <a href="/ask" class="{{ 'active' if active=='ask' else '' }}">Ask</a>
