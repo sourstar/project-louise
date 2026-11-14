@@ -922,3 +922,119 @@ def test_a_process_out_of_open_files_defers_the_document_instead_of_erroring_it(
     events = [r["message"] for r in con.execute("SELECT message FROM events WHERE level='warn'")]
     assert any("ran out of a resource" in m and "open file(s)" in m for m in events)
     con.close()
+
+
+def _fragments(collection) -> int:
+    return vector_index.stats(collection)["fragments"]
+
+
+def _clock(monkeypatch):
+    clock = [1000.0]
+    monkeypatch.setattr(vector_index.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(config, "VECTOR_INDEX_REFRESH_S", 1800)
+    vector_index._shape_seen.clear()
+    vector_index._idle_compacted.clear()
+    return clock
+
+
+def test_an_idle_table_is_compacted_once_and_again_after_a_write(collection, monkeypatch):
+    """Operator, 2026-11-14: "Always compact tables regularly during idle
+    times". Normattiva's 7.96 M rows sat in 201 fragments, under both
+    thresholds (256 small ones for the light pass, 4,000 for the full one),
+    so a finished table stayed in pieces for good. Idle = no write for a
+    whole pass; then it is merged to the fewest fragments, once."""
+    clock = _clock(monkeypatch)
+    for i in range(5):
+        _fill(collection, 100, seed=i, start=100 * i)               # five commits, five fragments
+    assert _fragments(collection) == 5
+    calls = []
+    real = vector_index.compact
+    monkeypatch.setattr(vector_index, "compact", lambda c, con=None, **k: (calls.append(k), real(c, con, **k))[1])
+    assert vector_index.ensure(collection) is None, "first sight: not yet idle"
+    clock[0] += 1799
+    assert vector_index.ensure(collection) is None, "under a whole pass"
+    clock[0] += 1
+    out = vector_index.ensure(collection)
+    assert out["compacted"] is True and calls == [{"log": None}], out
+    assert _fragments(collection) == 1
+    assert embeddings._conn(collection).open_table(embeddings.TABLE).count_rows() == 500
+    for _ in range(3):                                              # idle, nothing left to merge
+        clock[0] += 1800
+        assert vector_index.ensure(collection) is None
+    assert len(calls) == 1
+    _fill(collection, 100, seed=9, start=500)                       # a write: a new fragment
+    assert vector_index.ensure(collection) is None, "the write restarts the clock"
+    clock[0] += 1800
+    assert vector_index.ensure(collection)["compacted"] is True
+    assert len(calls) == 2 and _fragments(collection) == 1
+
+
+def test_a_table_being_written_is_never_idle(collection, monkeypatch):
+    """A write in every pass keeps the shape moving: no idle compaction,
+    however many passes go by (the light and full thresholds still apply)."""
+    clock = _clock(monkeypatch)
+    calls = []
+    monkeypatch.setattr(vector_index, "compact", lambda c, con=None, **k: calls.append(k) or {"compacted": True})
+    for i in range(6):
+        _fill(collection, 50, seed=i, start=50 * i)
+        vector_index.ensure(collection)
+        clock[0] += 1800
+    assert calls == []
+
+
+def test_an_idle_compaction_that_did_not_compact_is_retried_a_pass_later(collection, monkeypatch):
+    """Low disk or a lost commit leaves the table as it was: tried again
+    after a pass, not on every maintainer turn; a compaction that left the
+    table as it is now is not repeated while nothing writes."""
+    clock = _clock(monkeypatch)
+    st = {"rows": 3_000_000, "fragments": 40}
+    monkeypatch.setattr(config, "VECTOR_INDEX_FRAGMENT_ROWS", 1_048_576)
+    assert vector_index.fewest_fragments(3_000_000) == 3
+    assert not vector_index.idle_compact_due(collection, st), "first sight"
+    clock[0] += 1800
+    assert vector_index.idle_compact_due(collection, st)
+    key = str(collection.lance_dir)
+    vector_index._idle_compacted[key] = (40, False, clock[0])       # deferred: low disk
+    clock[0] += 60
+    assert not vector_index.idle_compact_due(collection, st), "not on the next turn"
+    clock[0] += 1800
+    assert vector_index.idle_compact_due(collection, st), "a pass later"
+    vector_index._idle_compacted[key] = (4, True, clock[0])         # left 4: Lance merges no further
+    st4 = {"rows": 3_000_000, "fragments": 4}
+    assert not vector_index.idle_compact_due(collection, st4)
+    clock[0] += 1800
+    assert not vector_index.idle_compact_due(collection, st4), "never again for the same shape"
+    assert not vector_index.idle_compact_due(collection, {"rows": 3_000_000, "fragments": 3}), \
+        "already the fewest"
+    assert not vector_index.idle_compact_due(collection, {"rows": None, "fragments": 9})
+    assert not vector_index.idle_compact_due(collection, None)
+
+
+def test_an_idle_indexed_table_is_compacted_and_its_index_still_answers(collection, monkeypatch):
+    """The indexed path: after the index work finds nothing due, an idle
+    table is compacted, and Lance remaps the index (no row becomes
+    unindexed, the probe finds what the flat scan finds)."""
+    vecs = _fill(collection, 600)
+    monkeypatch.setattr(config, "VECTOR_INDEX_MIN_ROWS", 200)
+    monkeypatch.setattr(config, "VECTOR_INDEX_TYPE", "ivf_flat")
+    monkeypatch.setattr(vector_index, "partitions_for", lambda rows: 4)
+    while vector_index.stats(collection).get("indexed") is not True:
+        assert vector_index.ensure(collection)
+    for i in range(4):
+        _fill(collection, 5, seed=i + 1, start=600 + 5 * i)
+    monkeypatch.setattr(config, "VECTOR_INDEX_REFRESH_ROWS", 10_000)    # no refresh due
+    clock = _clock(monkeypatch)
+    before = vector_index.stats(collection)
+    assert before["fragments"] == 5 and before["unindexed_rows"] == 20, before
+    assert vector_index.ensure(collection) is None
+    clock[0] += 1800
+    out = vector_index.ensure(collection)
+    assert out["compacted"] is True, out
+    after = vector_index.stats(collection)
+    assert after["rows"] == 620 and after["indexed"] and after["fragments"] < before["fragments"], after
+    assert after["unindexed_rows"] <= before["unindexed_rows"], "nothing indexed is lost by the merge"
+    monkeypatch.setattr(config, "VECTOR_INDEX_NPROBES", 4)
+    monkeypatch.setattr(config, "VECTOR_INDEX_REFINE", 120)
+    tbl = embeddings._conn(collection).open_table(embeddings.TABLE)
+    probed = [r["id"] for r in vector_index.query(tbl.search(vecs[3]), collection).limit(5).to_list()]
+    assert probed[0] == "c3" and set(probed) == set(_flat_top(collection, vecs[3]))

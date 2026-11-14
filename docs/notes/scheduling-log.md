@@ -2802,3 +2802,29 @@ times. Compare chunks/s and seconds per batch at equal chunks/doc. pubmed and wi
 more chunks per commit.
 
 **AFTER:** pending.
+
+## 2026-11-14 — idle tables compacted (operator: "Always compact tables regularly during idle times"; app/vector_index.py `idle_compact_due`) — BEFORE (deploy pending)
+
+**Scenario (BEFORE).** The index maintainer compacts a table only past a count of SMALL fragments (under
+100,000 rows each, lancedb's measure): 256 for the light pass, 4,000 for the full one. A finished table under both
+stays in pieces for good. On the node (2026-11-14, `vector_index.stats`):
+
+| table | rows | dim | fragments | unindexed | dense leg |
+|---|---|---|---|---|---|
+| normattiva | 7.96 M | 2,048 (half) | 201 | 35,459 | 9.77 s |
+| normattiva-DAR | 8.21 M | 768 | 13 | 395 | 0.24 s |
+| wikidata | 10,997,518 | 2,048 (half) | 218 | 220,606 (4 deltas) | not measured |
+
+The two legs differ in dimension too, so the 201 fragments are a suspect, not a cause: the operator's compaction of
+the live Normattiva table, timed with the same grid before and after (München, 2026-11-14), is the measurement.
+
+**The change.** A table whose rows and fragments have not moved for a whole index pass (VECTOR_INDEX_REFRESH_S,
+30 min) and that holds more fragments than `ceil(rows / VECTOR_INDEX_FRAGMENT_ROWS)` is given the full compaction
+(`compact`, Lance's `compact_files`, the index remapped by Lance), after the index work and only when the light and
+full thresholds did not fire. Once per shape: the count it leaves is remembered per table path, so it runs again only
+after a write; one that did not compact is retried a pass later. Tables under the index's 100k rows too. Cost: the
+full pass rewrites the fragments it merges (wikipedia's 155 GiB: 40–51 min of ~10 cores, 2026-09-17), on the
+maintainer thread at nice 10, when no writer waits.
+
+**AFTER.** To fill after the deploy: the first idle compaction's log line per table (fragments before and after,
+seconds), the dense-leg latency on normattiva and wikidata with the same grid, and worker restarts over the pass.

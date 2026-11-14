@@ -629,6 +629,8 @@ VECTOR_INDEX_PRUNE_S = int(os.getenv("VECTOR_INDEX_PRUNE_S", "3600"))
 #: that 155 GiB table cost 40–51 minutes of ~10 cores, so it must not run
 #: for a handful. Separate from the version cleanup since the same day:
 #: `Table.optimize()` welds the two together, `pylance` reaches them apart.
+#: An IDLE table is compacted below this too (operator, 2026-11-14;
+#: vector_index.idle_compact_due): no writer waits for it then.
 VECTOR_INDEX_COMPACT_FRAGMENTS = int(os.getenv("VECTOR_INDEX_COMPACT_FRAGMENTS", "4000"))
 #: Small fragments that make a LIGHT compaction due: the small fragments
 #: alone merged (no deletions materialized, so no large fragment is
