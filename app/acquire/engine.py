@@ -894,6 +894,23 @@ def _export_fetch(endpoint, f: RemoteFile, collection, spec: AcquisitionSpec,
                         size=size, digest=digest, moved=size, seconds=elapsed)
 
 
+#: how often a unit fetcher's `reports` are said during a pass (and once at
+#: its end): what it counted, as events, from the recording thread
+UNIT_REPORT_S = 300.0
+
+
+def _unit_reports(con, spec: AcquisitionSpec, last: list[float], *, final: bool = False) -> None:
+    """The spec's unit fetcher's `reports()` as events, at most every
+    UNIT_REPORT_S (spec.UnitFetcher; 2026-11-14: the Italian EUR-Lex pass
+    computed where each unit's tree came from and dropped it)."""
+    reports = getattr(spec.unit_fetcher, "reports", None) if spec.unit_fetcher is not None else None
+    if reports is None or (not final and time.monotonic() - last[0] < UNIT_REPORT_S):
+        return
+    last[0] = time.monotonic()
+    for note in reports():
+        db.log_event(con, "info", "acquire", str(note)[:400])
+
+
 def _unit_fetch(endpoint, f: RemoteFile, collection, spec: AcquisitionSpec,
                 manager, endpoint_key: str) -> _FileResult:
     """A unit the spec's UnitFetcher serves (spec.UnitFetcher): landed whole,
@@ -1374,7 +1391,9 @@ def _run_acquisition_claimed(con, collection, spec: AcquisitionSpec, profile: st
         # module-level note nobody printed (2026-10-13)
         while _zip_delta_fallbacks:
             db.log_event(con, "warn", "acquire", "zip delta: " + _zip_delta_fallbacks.pop(0))
+        _unit_reports(con, spec, last_report)
 
+    last_report = [time.monotonic()]
     workers = min(manager.platform.transfer.workers, max(1, len(items)))
     # the claim is already held by run_acquisition, covering the whole pass
     transfer_pool.run_pool(
@@ -1382,6 +1401,7 @@ def _run_acquisition_claimed(con, collection, spec: AcquisitionSpec, profile: st
         _make_worker(transport, collection, spec, manager, ranked, stop, priority),
         _apply, max_workers=workers, stop=stop)
 
+    _unit_reports(con, spec, last_report, final=True)
     # a deferred file (its directory unread this pass) is skipped: nothing
     # moved, nothing recorded, the copy stands — not a failure of the file
     return {"fetched": counters["fetched"], "skipped": skipped + counters["deferred"],

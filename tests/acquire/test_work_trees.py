@@ -134,3 +134,32 @@ def test_the_unit_fetcher_keeps_trees_beside_the_corpus_and_records_vs_origin_as
     assert list((corpus / ".pack" / work_trees.KIND).rglob("*.json.gz")), "derived, beside the corpus"
     cellar.UNITS.refetch(_spec(mock), src.unit_rel("fr", ACT), tmp_path / "again")
     assert mock.rdf_asked == [ACT, ACT], "the origin is asked, never the store"
+
+
+def test_the_unit_fetcher_reports_where_its_units_trees_came_from(mock, tmp_path, monkeypatch):
+    """The engine says it as an event (engine._unit_reports); 2026-11-14 the
+    Italian pass computed it and dropped it."""
+    from app.acquire.spec import RemoteFile
+    monkeypatch.setattr(work_trees, "_STORES", {})
+    monkeypatch.setattr(datadump, "_DUMPS", datadump.Dumps(None))
+    units = cellar.CellarUnits()
+    for lang in ("en", "fr"):
+        remote = RemoteFile(rel_path=cellar.rel_path(lang, ACT), remote=cellar.encode(ACT, lang))
+        units.fetch(_spec(mock).endpoints[0], remote, tmp_path / "corpus" / remote.rel_path)
+    [line] = units.reports()
+    assert "2 units" in line and "1 from Cellar, 1 kept, 0 from the dump" in line
+    assert units.reports() == [], "counted since the last report"
+
+
+def test_the_engine_says_the_reports_every_interval_and_at_the_end(monkeypatch):
+    from types import SimpleNamespace
+    from app.acquire import engine
+    said: list[str] = []
+    monkeypatch.setattr(engine.db, "log_event", lambda con, level, stage, msg, **k: said.append(msg))
+    spec = SimpleNamespace(unit_fetcher=SimpleNamespace(reports=lambda: ["one line"]))
+    last = [engine.time.monotonic()]
+    engine._unit_reports(None, spec, last)
+    assert said == [], "not before the interval"
+    engine._unit_reports(None, spec, last, final=True)
+    assert said == ["one line"]
+    engine._unit_reports(None, SimpleNamespace(unit_fetcher=None), last, final=True)
