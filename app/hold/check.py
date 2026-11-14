@@ -272,6 +272,13 @@ class Ctx:
     #: 38/s on one core, ~27 h; München, 2026-11-01). None: `reparse`, one
     #: record at a time — and the outcome is the same either way.
     reparse_many: Callable[[Any], Any] | None = None
+    #: the origin base IS the copy this node keeps (its corpus directory):
+    #: re-parsing it proves the parser and the copy agree, never that the
+    #: origin still serves those bytes (louise._reparse_from's docstring).
+    #: The nightly check ran so on every collection and called it a pass of
+    #: records-vs-origin (München, 2026-11-14: NeuRIS "passed", 339 of 339,
+    #: while its origin re-renders every law nightly)
+    origin_is_copy: bool = False
 
     @property
     def shard_tree(self) -> Path:
@@ -978,6 +985,23 @@ def check_records_vs_origin(ctx: Ctx) -> Outcome:
             said += (f"; {u['unit']} ({u['weight'] >> 20} MiB) heavier than the bound, compared "
                      f"in part: {u['compared']} of its {u['sampled']} sampled records, drawn by "
                      f"the seed (03 §3.2, amended 2026-11-01)")
+    if ctx.origin_is_copy and not failed:
+        # THE KEPT COPY IS NOT THE ORIGIN. What reproduced is the copy and the
+        # parser agreeing; whether the origin still serves these bytes was not
+        # asked, so this is no pass of records-vs-origin (03 §3.2: "re-fetched
+        # from the origin"), and no attestation counts it as one. A failure on
+        # the copy stays a failure: the copy does not give its own records
+        return Outcome(
+            "records-vs-origin", INCONCLUSIVE,
+            {"records": seen, "compared": compared, "failed": [],
+             "moved": sorted(moved)[:64], "changed": sorted(changed)[:64],
+             "errored": len(errored), "origin": "kept copy",
+             "copy_reproduced": compared - unreachable - len(errored), **bound},
+            ctx.seed, _shard_ids(ctx.codex, ran),
+            why=f"re-parsed from the copy this node keeps, not re-fetched from the origin: "
+                f"{compared - unreachable - len(errored)} record(s) reproduced from it (the "
+                f"parser and the copy agree); whether the origin still serves these bytes was "
+                f"not asked (03 §3.2)")
     return Outcome("records-vs-origin", FAIL if failed else PASS,
                    {"records": seen, "compared": compared,
                     "failed": sorted(failed)[:64], "moved": sorted(moved)[:64],
@@ -1317,7 +1341,7 @@ def run(root, name: str, codex, snapshot: snap.Snapshot, *, seed: bytes,
         against: dict | None = None,
         only_shards: Sequence[str] | None = None,
         live: Path | None = None,
-        log=None, reparse_many=None) -> Report:
+        log=None, reparse_many=None, origin_is_copy: bool = False) -> Report:
     """Run the plan and report. Writes nothing — `attest` does that.
 
     `origin_bytes` RAISES what `records-vs-origin` may read of the origin for
@@ -1343,7 +1367,8 @@ def run(root, name: str, codex, snapshot: snap.Snapshot, *, seed: bytes,
     ctx = Ctx(Path(root), name, codex, snapshot, seed, sample, embed,
               vectors_for, reference, reparse, origin_unit,
               max(ORIGIN_BYTES, int(origin_bytes or 0)), against, tuple(only_shards) if only_shards else None,
-              Path(live) if live else None, weigh_unit, reparse_many=reparse_many)
+              Path(live) if live else None, weigh_unit, reparse_many=reparse_many,
+              origin_is_copy=bool(origin_is_copy))
     outcomes = []
     for c in want:
         try:

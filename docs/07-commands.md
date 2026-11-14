@@ -195,7 +195,7 @@ louise hold
                                                                        every record's `origin` written again from the manifest by the build's own function, the parts
                                                                        that change rewritten by the build's own writer — byte for byte a rebuild (RULE 1); refused while
                                                                        a snapshot lists the parts (amended 2026-10-28: wikipedia-v8's archive records carried bare names)
-              check <collection> [--origin] [--seal [--live DIR]] [--sample F]
+              check <collection> [--origin DIR | --origin-else DIR] [--seal [--live DIR]] [--sample F]
                                                                        records against their own hashes and roots, against the origin, against the seal
               seal <collection> <snapshot> --files DIR --trusted-list FILE --lotl FILE --lotl-signers FILE
                    [--format cades|pades|xades] [--revocation FILE …] [--fetch-revocation] [--url URL]

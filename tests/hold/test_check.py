@@ -555,6 +555,65 @@ def test_records_vs_origin_reparses_the_origin_byte_for_byte(checkable,
     assert o.detail["records"] > 0
 
 
+def test_a_reparse_of_the_kept_copy_is_said_as_such_and_never_a_pass(checkable, corpus_dir):
+    """03 §3.2 wants the origin "re-fetched". Re-parsing the copy this node
+    keeps proves the parser and the copy agree, not that the origin still
+    serves those bytes: the outcome says so and is inconclusive, so no
+    attestation counts it as a pass of records-vs-origin (München,
+    2026-11-14: the nightly check called NeuRIS's "passed")."""
+    from app import louise
+    root, snapshot, codex = checkable
+    o = _run(root, codex, snapshot, ["records-vs-origin"], sample="1",
+             reparse=louise._reparse_from(codex, "gutenberg", corpus_dir),
+             origin_is_copy=True).outcome("records-vs-origin")
+    assert o.result == chk.INCONCLUSIVE, o.why
+    assert o.detail["origin"] == "kept copy" and o.detail["copy_reproduced"] > 0
+    assert "not re-fetched from the origin" in o.why
+
+
+def test_a_kept_copy_that_does_not_give_its_records_still_FAILS(checkable, corpus_dir):
+    from app import louise
+    root, snapshot, codex = checkable
+    first = next(iter(pack_records_uids(root, snapshot)))
+    real = louise._reparse_from(codex, "gutenberg", corpus_dir)
+    o = _run(root, codex, snapshot, ["records-vs-origin"], sample="1",
+             reparse=_drifted(real, first), origin_is_copy=True).outcome("records-vs-origin")
+    assert o.result == chk.FAIL and first in o.detail["failed"], o.why
+
+
+def pack_records_uids(root, snapshot):
+    from app.pack import records as pack_records
+    for s in snapshot.shards:
+        for r in pack_records.iter_records(root / "gutenberg" / "shard" / s.path):
+            yield r["uid"]
+
+
+def test_the_check_asks_the_network_origin_before_the_kept_copy(monkeypatch):
+    from types import SimpleNamespace
+
+    from app import louise
+    a = SimpleNamespace(origin_dir=None, origin_else="/corpus")
+    monkeypatch.setattr(louise, "_member_origin", lambda codex: object())
+    assert louise._check_origin(a, None) is None, "the Codex's network origin is asked"
+    monkeypatch.setattr(louise, "_member_origin", lambda codex: None)
+    assert louise._check_origin(a, None) == "/corpus", "no network origin: the kept copy, said so"
+    assert louise._check_origin(SimpleNamespace(origin_dir="/fresh", origin_else="/corpus"), None) == "/fresh"
+    assert louise._check_origin(SimpleNamespace(), None) is None
+
+
+def test_the_kept_copy_is_known_by_its_path(tmp_path):
+    from types import SimpleNamespace
+
+    from app import louise
+    corpus = tmp_path / "c" / "origin"
+    corpus.mkdir(parents=True)
+    local = SimpleNamespace(corpus_dir=corpus)
+    assert louise._is_kept_copy(local, corpus)
+    assert louise._is_kept_copy(local, tmp_path / "c" / ".." / "c" / "origin"), "the same directory"
+    assert not louise._is_kept_copy(local, tmp_path / "fresh")
+    assert not louise._is_kept_copy(local, None)
+
+
 def _drifted(real, victim_uid):
     """A re-parse that differs from the record while the origin bytes are
     the ones it was parsed from (`origin_hash` unchanged): what a parser

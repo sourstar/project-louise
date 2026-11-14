@@ -53,13 +53,20 @@ def test_due_by_snapshot_and_by_cadence(tmp_path):
     assert sc.last(tmp_path, "c")["outcome"] == "pass"
 
 
-def test_the_origin_goes_with_the_check_when_there_is_one(tmp_path):
+def test_the_nightly_check_asks_the_origin_and_falls_back_to_the_copy_by_name(tmp_path):
+    """München, 2026-11-14: the nightly check was given every collection's
+    corpus as its origin, so no night ever asked one — NeuRIS read "passed"
+    while its origin re-renders every law. Now the Codex's own network origin
+    decides in the check's process (`--origin-else`), and the kept copy is only
+    the fallback, said as such there."""
     corpus = tmp_path / "origin"
     corpus.mkdir()
     argv = sc.argv_for(SimpleNamespace(name="gutenberg", corpus_dir=corpus, source="origin"))
-    assert argv[1:6] == ["-m", "app.louise", "hold", "check", "gutenberg"] and argv[-2:] == ["--origin", str(corpus)]
+    assert argv[1:6] == ["-m", "app.louise", "hold", "check", "gutenberg"]
+    assert argv[-2:] == ["--origin-else", str(corpus)] and "--origin" not in argv
     fetched = sc.argv_for(SimpleNamespace(name="g", corpus_dir=corpus, source="shard"))
-    assert "--origin" not in fetched, "a fetched copy has no origin here: its check says so"
+    assert "--origin" not in fetched and "--origin-else" not in fetched, \
+        "a fetched copy has no origin here: its check says so"
 
 
 def _py(code: str) -> list[str]:

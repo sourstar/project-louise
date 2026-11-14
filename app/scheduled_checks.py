@@ -375,13 +375,19 @@ def session_rss(sid: int, proc: str = PROC_DIR) -> int | None:
 # ---- the run -------------------------------------------------------------------
 
 def argv_for(collection) -> list[str]:
-    """`hold check` with the collection's origin when it has one here: a
-    fetched copy (`source = "shard"`) has none, and its `records-vs-origin`
-    says so (inconclusive, never a pass)."""
+    """`hold check` against the ORIGIN: the Codex's own network origin where
+    it names one (the check decides, in its own process: `--origin-else`),
+    else the copy this node keeps — whose re-parse proves the parser and the
+    copy agree and is said as such, inconclusive for the origin, never a pass
+    (`check.Ctx.origin_is_copy`). Until 2026-11-14 every collection was
+    given its corpus as the origin, so no nightly check ever asked one, and
+    NeuRIS read "passed" while its origin re-renders every law each night
+    (München). A fetched copy (`source = "shard"`) has no corpus: its
+    `records-vs-origin` says so."""
     argv = [sys.executable, "-m", "app.louise", "hold", "check", collection.name, "--json"]
     corpus = Path(collection.corpus_dir)
     if getattr(collection, "source", "origin") != "shard" and corpus.is_dir():
-        argv += ["--origin", str(corpus)]
+        argv += ["--origin-else", str(corpus)]
     return argv
 
 
