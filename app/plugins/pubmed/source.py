@@ -400,7 +400,8 @@ class PubmedSource:
     def prepare(self, row) -> None:
         """Build this document's CONTAINER pack if it is missing — the one
         expensive derived artefact of this plugin (a streaming parse of a
-        ~280 MB gz container, ~17 s). Called by the parse pool ahead of the
+        ~35 MB gz container, ~280 MB of XML — pubmed26n0600: 35.5 MB → 283 MB, 30,000
+        records, STATUS — ~17 s). Called by the parse pool ahead of the
         stage that will read it (app/parallel.py: prefetch), so the batch
         that first touches a container no longer waits for it. Idempotent
         and cheap when the pack is fresh."""
