@@ -35,11 +35,12 @@ first use. What would still show a change Cellar did not date:
 `records-vs-origin`, whose sample re-fetches from Cellar.
 
 CONFIGURATION (node-local, like the cache dirs, invariant 10's tier 1):
-`EURLEX_DATADUMP_DIR` names a directory holding one folder per language, each
-with its zips and a `datadump.json` stating `{"language": "it", "created":
-"2026-11-08T01:00:00+01:00"}` — the creation the dump's page states. A folder
-without it, or with a language it does not hold, is not used, and the log
-says why. Unset: no dump, every item from Cellar.
+`EURLEX_DATADUMP_DIR` names a directory holding one folder per language, of
+any name, each with its zips (at any depth) and a `datadump.json` stating
+`{"language": "it", "created": "2026-11-08T01:00:00+01:00"}` — the creation the
+dump's page states. A folder holding zips without it is not used, and the log
+says why; a folder without zips (another measurement's) is passed over
+silently. Unset: no dump, every item from Cellar.
 
 THE STANDARD, NOT ADOPTED: none exists for "a bulk as a transport of a
 per-unit origin" beyond the mirror (06 §6.2), whose layout must be the
@@ -178,6 +179,8 @@ class Dumps:
         if self.base is None or not self.base.is_dir():
             return out
         for folder in sorted(p for p in self.base.iterdir() if p.is_dir()):
+            if not (folder / STATEMENT).is_file() and next(folder.rglob("*.zip"), None) is None:
+                continue                    # not a dump: another folder of the same place
             got = statement(folder)
             if isinstance(got, str):
                 self.log(f"[datadump] {got}")
@@ -201,7 +204,7 @@ class Dumps:
                 return None
             folder, created = entry
             dump = Dump(language=lang, folder=folder, trusted_until=created - MARGIN)
-            for p in sorted(folder.glob("*.zip")):
+            for p in sorted(folder.rglob("*.zip")):
                 try:
                     dump.zips.append(zipfile.ZipFile(p))
                 except (zipfile.BadZipFile, OSError) as e:
