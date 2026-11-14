@@ -168,9 +168,12 @@ def test_everything_the_origin_asserts_is_kept(corpus):
     def count(nodes):
         return sum(1 + count(n.get("children", [])) for n in nodes)
     assert count([x["meta"]]) == sum(1 for _ in meta.iter()), "every element of <meta>, once"
+    # parser 3 (operator, 2026-11-14, A): the per-build GUIDs are the
+    # provider's bookkeeping, never in the record; parser 2 kept them
     guids = {e.get("GUID") for e in meta.iter() if e.get("GUID")}
-    flat = json.dumps(x["meta"])
-    assert all(g in flat for g in guids), "the origin's ids kept"
+    assert guids and not any(g in json.dumps(x) for g in guids), "no per-build GUID in the record"
+    old = SOURCE.at_parser_version(2).parse(SOURCE.at_parser_version(2).fetch(ref)).extra
+    assert all(g in json.dumps(old["meta"]) for g in guids), "parser 2, kept for its Codex, kept them"
     ris = x["ris"]
     assert ris["abkuerzung"] == {"value": "RisFrSaftErfrischV", "refersTo": "interne-abkuerzung"}
     assert [s["type"] for s in ris["standangabe"]] == ["stand", "neuf", "hinweis"]
@@ -179,7 +182,7 @@ def test_everything_the_origin_asserts_is_kept(corpus):
     assert x["preface"]["short_title"] == "Fruchtsaft- und Erfrischungsgetränkeverordnung"
     assert {"refersTo": "ausfertigung-datum", "date": "2000-05-27"} in x["preface"]["dates"]
     assert len(x["lifecycle"]) == 24 and x["notes"] and x["preamble"] and x["conclusions"]
-    assert all(a.get("GUID") and a.get("period") for a in x["articles"])
+    assert all(a.get("eId") and a.get("period") and "GUID" not in a for a in x["articles"])
     assert [m["name"].rsplit("/", 1)[-1] for m in x["members"]] == \
         ["anlage-regelungstext-1.xml", "regelungstext-1.xml"]
     assert x["annexes"][0]["title"].startswith("Anlage T1") and x["annexes"][0]["notes"]
@@ -643,7 +646,7 @@ def test_the_rechtsetzungsdokument_every_real_zip_carries_is_kept_never_read_as_
     assert refs == ["regelungstext-1.xml", "anlage-regelungstext-1.xml"]
     assert len(x["annexes"]) == 1, "the annex alone is an annex"
     assert not any("rechtsetzungsdokument" in s[0] for s in doc.sections), "it carries no text to embed"
-    assert SOURCE.PARSER_VERSION == 2
+    assert SOURCE.PARSER_VERSION == 3
 
 
 def test_an_xml_member_of_a_root_not_named_here_is_kept_whole(tmp_path):
