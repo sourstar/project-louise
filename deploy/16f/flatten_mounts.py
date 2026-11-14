@@ -60,12 +60,13 @@ BUILD_TARGET = "/build"
 #: `<kind>/<tag>` bytes. The pubmed pack keeps its own path, never inside a
 #: cache dir, where its files would share `pubmed-pack/`, a kind name of
 #: derived.py's own tree, and `derived.held` (a rename's walk) would list each.
-#: Each area is mounted only once its dataset holds READY, written after its
-#: copy is compared (count, bytes, a sha256 sample), and never a subfolder that
-#: is not there (Docker would create it EMPTY over the copy on ssd4, and the
-#: caches would be rebuilt: the wikidata pack is 122 G, the pubmed pack 84 G).
-#: The FAST area needs the FILES area: without it the FILES kinds would be
-#: looked for on ssd5, where they were not copied, and rebuilt.
+#: Each area is mounted only once its dataset holds READY, and never a
+#: subfolder that is not there. The FAST area's READY comes after its copy is
+#: compared (count, bytes, a sha256 sample) and it needs the FILES area beside
+#: it: without it the packs would be built on ssd5. The FILES area needs no
+#: copy: its packs are kept only upon need and built again by their readers
+#: (operator 2026-11-14: "don't permanently use the solid state caching for
+#: them, only upon need"; app/derived.py `evict_idle`).
 #: The datasets' NAMES ARE MÜNCHEN'S TO REPORT (LOUISE_FAST_HOST and
 #: LOUISE_FILES_HOST at the deploy override them). Reported 2026-11-14; neither
 #: is mounted before its dataset holds READY.
@@ -135,10 +136,10 @@ def cache_areas(fast_host: str | None = None, files_host: str | None = None, *, 
                 is_dataset=None, exists=None, listdir=None, isdir=None) -> tuple[tuple, dict, list[str]]:
     """`(shared, env, said)` for `apply`: the two cache areas' mounts and the
     files cache's variable, each area only when its host (else FAST_HOST,
-    FILES_HOST) is a mounted dataset holding READY and every cache the node
-    holds today under `<data>/cache` of its kinds (and, for the files area,
-    every file of `<data>/pubmed-pack`), the fast one only beside the files
-    one; `said`, a line per area for the deploy's output. `is_dataset`,
+    FILES_HOST) is a mounted dataset holding READY — the fast one only
+    beside the files one, and only when its copy holds every cache of its
+    kinds the node holds today under `<data>/cache` (the files area may
+    start empty: its packs are built upon need); `said`, a line per area for the deploy's output. `is_dataset`,
     `exists`, `listdir`, `isdir` (tests): the `os` calls."""
     import os
     check, there = is_dataset or os.path.ismount, exists or os.path.exists
@@ -147,16 +148,9 @@ def cache_areas(fast_host: str | None = None, files_host: str | None = None, *, 
     fast = _area(fast_host or FAST_HOST, FAST_MOUNTS, check, there)
     said = []
     old = f"{data}/cache" if data else None
-    if files:
-        host = files_host or FILES_HOST
-        lacking = missing(f"{host}/cache", old, files=True, there=there, listdir=ls, isdir=isd)
-        if data and there(f"{data}/pubmed-pack"):
-            lacking += [f"pubmed-pack/{n}" for n in sorted(ls(f"{data}/pubmed-pack"))
-                        if not n.startswith(".") and not there(f"{host}/pubmed-pack/{n}")]
-        if lacking:
-            said.append(f"files cache: NOT mounted: its copy lacks {len(lacking)} of today's caches "
-                        f"({', '.join(lacking[:5])}{' …' if len(lacking) > 5 else ''}), which would be rebuilt")
-            files = ()
+    # the FILES area needs no copy: its packs are kept only upon need and
+    # built again by their readers (operator 2026-11-14; app/derived.py
+    # `evict_idle`) — it may start empty
     if fast:
         host = fast_host or FAST_HOST
         lacking = missing(f"{host}/cache", old, files=False, there=there, listdir=ls, isdir=isd)

@@ -112,7 +112,12 @@ class ContainerPack:
         sig = signature(origin)
         with self._guard:
             hit = self.fresh.get(key)
-        if hit is not None and hit[0] == sig and hit[1] == version:
+        # the pack still THERE: the cache evicts an idle pack (app/derived.py
+        # `evict_idle`, operator 2026-11-14: "only upon need"), and a memo
+        # kept across that would open a file that is gone — a stat, not the
+        # footer read the memo saves
+        if hit is not None and hit[0] == sig and hit[1] == version and Path(hit[2]).is_file():
+            derived.used(Path(hit[2]))
             return Path(hit[2])
         places = list(places())
         for pack in places:
@@ -147,4 +152,6 @@ class ContainerPack:
             self.fresh[key] = (sig, version, str(pack))
         if not known and ready is not None:
             ready(pack)
+        from app import derived
+        derived.used(pack)
         return pack

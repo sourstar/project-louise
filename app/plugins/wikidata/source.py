@@ -199,7 +199,12 @@ class WikidataSource:
             dumps = dumps[:1]                     # one dump at a time: two dumps mint the same ids
         progress = cursor.Progress(state, self.source_id)
         for dump in dumps:
-            if progress.unchanged(dump):
+            # a dump seen whole needs no pass — unless a reader asked for its
+            # pack, evicted while idle (pack.want; operator 2026-11-14: the
+            # caches "only upon need"): then the pack is built, nothing new
+            # discovered
+            unchanged = progress.unchanged(dump)
+            if unchanged and not pack.wanted(dump):
                 continue
             try:
                 if not pack.is_complete(dump, self.languages):
@@ -220,6 +225,8 @@ class WikidataSource:
                 yield DocRef(source_id=self.source_id, native_id=dump.name, locator=str(dump), scope="container",
                              error=f"wikidata dump not usable: {type(e).__name__}: {e}"[:300])
                 continue
+            if unchanged:
+                continue                    # built again for a reader; nothing new in the dump
             last_index = -1
             for path in pack.chunk_files(dump):
                 t = pack.index_columns(path)
@@ -262,9 +269,7 @@ class WikidataSource:
             # the pack's FILE is not where it is read from — a cache being
             # carried, a drive not mounted: the node's condition, never the
             # entity's (2026-10-20). Deferred, not marked (CLAUDE.md)
-            from app.chunking import PlatformMissing
-            raise PlatformMissing(f"the pack of {dump.name} cannot be read at "
-                                  f"{pack.pack_dir(dump)}: {e}") from e
+            raise pack._missing(dump, f"the pack of {dump.name} cannot be read at {pack.pack_dir(dump)}: {e}") from e
         return RawDoc(ref=ref, raw_hash=hashlib.blake2b(data, digest_size=16).hexdigest(), data=data)
 
     def parse(self, raw: RawDoc) -> CanonicalDoc:

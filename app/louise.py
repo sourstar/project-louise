@@ -2869,6 +2869,21 @@ def cmd_dev_embed_select(a) -> int:
     return 0
 
 
+def cmd_dev_cache_evict(a) -> int:
+    """`louise dev cache-evict [--idle-hours H] [--dry-run]`: what the
+    worker's maintainer does once an hour (app/derived.py `evict_idle`), now
+    and at the age asked: every pack built from a source download, idle
+    that long, removed and built again upon need (operator, 2026-11-14: "only
+    upon need"). Never one being built, nor one a reader asked for."""
+    from app import derived
+    idle_s = derived.IDLE_S if a.idle_hours is None else a.idle_hours * 3600
+    rows = derived.evict_idle(idle_s, dry_run=a.dry_run, log=None if a.dry_run else print)
+    out = {"idle_hours": idle_s / 3600, "dry_run": bool(a.dry_run), "units": len(rows),
+           "bytes": sum(r["bytes"] for r in rows), "removed" if not a.dry_run else "would_remove": rows}
+    _print(out)
+    return 0
+
+
 def cmd_dev_mark_embedded(a) -> int:  # noqa: C901
     """`louise dev mark-embedded <collection>`: the one-off reconcile for the
     documents `share contribute`'s build embedded and never marked (372 on
@@ -7874,6 +7889,13 @@ def build_parser() -> argparse.ArgumentParser:
     root_arg(p); p.add_argument("collection")
     p.add_argument("--dry-run", action="store_true", help="count them and mark nothing")
     p.set_defaults(fn=cmd_dev_mark_embedded)
+    p = dverbs.add_parser("cache-evict", help="the packs built from the source downloads that have been idle "
+                                               "--idle-hours (default 24), removed; built again upon need "
+                                               "(operator 2026-11-14); writes")
+    root_arg(p)
+    p.add_argument("--idle-hours", type=float, default=None, dest="idle_hours")
+    p.add_argument("--dry-run", action="store_true", help="list them and remove nothing")
+    p.set_defaults(fn=cmd_dev_cache_evict)
     p = dverbs.add_parser("deprecate-duplicates", help="this peer's bundles that duplicate another of its own for a "
                                                        "part, deprecated (03 §3.6; 09 §9.8): served one more day, "
                                                        "never offered for a new fetch; writes, asks first")

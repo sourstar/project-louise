@@ -20,6 +20,13 @@ measured (published figures disagree).
 
 ### 2026-11-14
 
+- **The packs only upon need — BUILT, not deployed** (operator: "don't permanently use the solid
+  state caching for them, only upon need"). Every pack built from a source download is stamped when
+  used and removed once idle 24 h (the worker, hourly; `louise dev cache-evict`), never while built
+  or asked for; its reader builds it again (pack memo checks presence; a wikidata reader defers and
+  writes `.wanted`, the scan rebuilds). The ssd3 files area starts empty: nothing to copy. The ~206 G
+  of packs on ssd4 are then unread: their removal is the operator's yes, with the size.
+  storage-tiering.md §10.
 - **The source downloads stay (operator: C).** Asked whether to delete the parsed origins on tank
   (everything but Gutenberg, ~900 GB), the operator chose to keep them all: tank is 63 % full, the
   deletion cannot be undone, and invariant 11 forbids losing the ability to reproduce what we hold
