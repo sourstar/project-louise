@@ -20,6 +20,11 @@ measured (published figures disagree).
 
 ### 2026-11-14
 
+- **A searched table left in the build area — FIXED, not deployed.** Normattiva was read from ssd3 (QVO SATA)
+  for a day after a hand rename carried its build-area link: 2,031 ms against 180 on ssd4 at k=100, 5,012
+  against 330 at k=400; its 201 → 31 fragments changed nothing. München moved it and NeuRIS by hand. Now the
+  index maintainer moves a build-area table to the data pool once nothing has written it for a pass (the
+  collection not paused), and `rename` says when a table stays there. scheduling-log.md, 2026-11-14.
 - **Idle tables compacted — BUILT, not deployed** (operator: "Always compact tables regularly
   during idle times"). A table no write touched for a whole index pass (30 min: rows and fragments
   unchanged) is compacted to one fragment per 1,048,576 rows, once per shape, again after a write;

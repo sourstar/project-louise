@@ -255,4 +255,14 @@ def rename(root: Path, old: str, new: str, *, dry_run: bool = False) -> dict[str
     held_old, held_new = Path(moves["held_file"][0]), Path(moves["held_file"][1])
     done["held_file"] = _move(held_old, held_new) if (held_old.exists() or held_new.exists()) else "none"
     (dest / "state" / MARKER).unlink(missing_ok=True)
-    return {**moves, "done": done}
+    out = {**moves, "done": done}
+    # a table that stays in the build area under its new name: said, with what
+    # moves it (Normattiva, 2026-11-13: renamed onto the searched name, read
+    # from ssd3 for a day, nothing saying so)
+    from app import vector_place
+    if "lance" in moves:
+        out["vector_table"] = (
+            f"still in the build area ({vector_place.physical(vector_place.table_dir(root, new))}): the "
+            f"worker moves it to the data pool once nothing has written it for a pass, unless {new} is "
+            f"paused; now: louise node pause {new}; louise hold vectors move {new} --to hot --apply")
+    return out

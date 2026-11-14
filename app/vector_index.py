@@ -326,6 +326,106 @@ def _idle_compact(collection, con, st: dict, log=None) -> dict | None:
     return out
 
 
+#: lance dir -> when the take-over to the data pool was last tried
+_take_over_tried: dict[str, float] = {}
+
+
+class _Stop:
+    """`vector_place.move`'s stop, asked between two files: set once the
+    maintainer may not go on (the worker's `_maintenance_allowed`)."""
+
+    def __init__(self, go):
+        self.go = go
+
+    def is_set(self) -> bool:
+        return not self.go()
+
+
+def take_over_due(collection, st: dict | None) -> bool:
+    """A table in the build area that has stopped being built.
+
+    THE SEARCHED TABLES STAY ON THE DATA POOL (operator 2026-11-07,
+    storage-tiering.md §8; vector_place's docstring). A collection made in
+    the build area (`hold collection new`, cases A and F) was moved off it
+    only by case F's swap or by hand. The other paths left it there,
+    searched from ssd3: Normattiva for a day after a hand `rename` carried
+    its link (2,031 ms against 180 on ssd4 at k=100, 5,012 against 330 at
+    k=400, München 2026-11-14), NeuRIS since it was made. Due: the table is
+    behind a link into the build area, the node runs the collection (the
+    maintainer skips a paused one, so case F's successor waits for its
+    swap), and no write touched it for a whole pass (`_idle`). Tried again
+    a pass after a refusal (no room, a writer), not on every turn."""
+    from . import vector_place
+    if vector_place.tier(collection.lance_dir) != vector_place.BUILD or not st:
+        return False
+    last = _take_over_tried.get(str(collection.lance_dir))
+    if last is not None and time.monotonic() - last < config.VECTOR_INDEX_REFRESH_S:
+        return False
+    return _idle(collection, st)
+
+
+def take_over(collection, con=None, *, log=None, may_continue=None) -> dict:
+    """The table moved from the build area to the data pool by the app's own
+    `vector_place.move` (copy, verify, atomic switch, source removed; a stop
+    resumes at the next file). The collection is not paused: the worker
+    holds its write lock, and `rewrite` stands its own vector writers down
+    for the move (a deferral, never an error), every part of a split table
+    with it; the web never writes vectors."""
+    from contextlib import ExitStack
+
+    from . import embeddings, vector_parts, vector_place
+    link = Path(collection.lance_dir)
+    root, name, key = link.parent.parent, link.parent.name, str(link)
+    _take_over_tried[key] = time.monotonic()
+
+    def say(level: str, msg: str) -> None:
+        if con is not None:
+            db.log_event(con, level, "index", msg)
+        elif log:
+            log(msg)
+    try:
+        plan = vector_place.plan(root, name, vector_place.HOT)
+    except vector_place.PlaceError as e:
+        say("warn", f"its vector table stays in the build area: {e}")
+        return {"moved": False, "reason": str(e)}
+    if plan.get("refusal"):
+        say("warn", f"its vector table is searched from the build area and stays there: {plan['refusal']}")
+        return {"moved": False, "reason": plan["refusal"]}
+    if plan.get("nothing"):
+        return {"moved": False, "reason": plan["nothing"]}
+    say("info", f"its vector table is searched from the build area: moving it to the data pool; "
+                f"this collection's vector writes wait until it ends. {plan.get('say', '')}")
+    views = [collection] + (list(vector_parts.views(collection)) if vector_parts.is_split(collection) else [])
+    try:
+        with ExitStack() as stack:
+            for v in views:
+                stack.enter_context(rewrite(v))
+            out = vector_place.move(root, name, vector_place.HOT, stop=_Stop(may_continue or (lambda: True)),
+                                    log=lambda m: say("info", m))
+    except (RewriteInProgress, vector_place.PlaceError, vector_place.MoveMismatch, OSError) as e:
+        say("warn", f"moving its vector table to the data pool deferred: {type(e).__name__}: {e}"[:500])
+        return {"moved": False, "reason": str(e)}
+    for v in views:
+        embeddings.forget(v)
+        forget(v)
+    if out.get("interrupted"):
+        say("info", "moving its vector table to the data pool stopped between two files; it resumes there")
+    return out
+
+
+def _take_over_if_due(collection, con=None, *, log=None, may_continue=None) -> dict | None:
+    from . import vector_place
+    if vector_place.tier(collection.lance_dir) != vector_place.BUILD:
+        return None                                 # the common case: no stat read
+    if may_continue is not None and not may_continue():
+        return None
+    if vector_place.unreachable(collection.lance_dir):
+        return None                                 # said where the collection is refused
+    if not take_over_due(collection, stats(collection)):
+        return None
+    return take_over(collection, con, log=log, may_continue=may_continue)
+
+
 def _parts(collection):
     """A split collection's parts (app/vector_parts.py), each a collection
     of its own; None for a single table, or for a part itself."""
@@ -1242,6 +1342,11 @@ def ensure(collection, con=None, *, log=None, may_continue=None) -> dict | None:
     index work. Each is a Lance call of minutes that cannot be interrupted
     once started, so a pause is honoured BETWEEN them; the worker passes
     its `_maintenance_allowed`. Absent, every step runs (the CLI)."""
+    # a SEARCHED table read from the build area first: the whole table at
+    # once (a split one's parts with it), before anything rewrites it there
+    moved = _take_over_if_due(collection, con, log=log, may_continue=may_continue)
+    if moved is not None:
+        return moved
     parts = _parts(collection)
     if parts is not None:
         # each part on its own, the pause asked between them as between steps

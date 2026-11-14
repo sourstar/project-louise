@@ -503,3 +503,97 @@ def test_the_command_is_a_dry_run_by_default_and_asks_for_the_pause(node, capsys
     assert '"moved": true' in capsys.readouterr().out
     assert louise.main(["hold", "vectors", "move", "p", "--to", "hot", "--root", str(node.root), "--apply"]) == 0
     assert not Path(coll.lance_dir).is_symlink() and recreate.tree_digest(coll.lance_dir) == digest
+
+
+# ---- a searched table left in the build area goes to the data pool by itself ----
+
+def _maintainer_clock(monkeypatch):
+    from app import vector_index
+    clock = [1000.0]
+    monkeypatch.setattr(vector_index.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(config, "VECTOR_INDEX_REFRESH_S", 1800)
+    vector_index._shape_seen.clear()
+    vector_index._idle_compacted.clear()
+    vector_index._take_over_tried.clear()
+    return clock
+
+
+def test_an_idle_table_in_the_build_area_moves_to_the_data_pool(node, monkeypatch):
+    """München, 2026-11-14: Normattiva was renamed onto the searched name with
+    its table in the build area and read from ssd3 for a day (2,031 ms
+    against 180 on ssd4 at k=100); NeuRIS likewise since it was made. Nothing
+    moved them. Now the index maintainer does, once no write has touched the
+    table for a whole pass, with the app's own verified move, its own writers
+    stood down for it."""
+    from app import vector_index
+    _to_build(node)
+    assert vector_place.tier(node.link) == vector_place.BUILD
+    clock = _maintainer_clock(monkeypatch)
+    seen = []
+    real = vector_place.move
+    monkeypatch.setattr(vector_place, "move", lambda *a, **k: (
+        seen.append(vector_index.rewriting(node.coll)), real(*a, **k))[1])
+    vector_index.ensure(node.coll)
+    assert vector_place.tier(node.link) == vector_place.BUILD and seen == [], "first sight: not yet idle"
+    clock[0] += 1800
+    out = vector_index.ensure(node.coll)
+    assert out["moved"] is True and out["tier"] == vector_place.HOT, out
+    assert seen == [True], "the collection's own writers stood down for the move"
+    assert not vector_index.rewriting(node.coll) and not vector_index.busy(node.coll)
+    _one_valid_table(node)
+    _no_leftovers(node, vector_place.HOT)
+    clock[0] += 1800
+    vector_index.ensure(node.coll)
+    assert seen == [True], "on the data pool: nothing more to move"
+
+
+def test_a_table_being_built_stays_in_the_build_area(node, monkeypatch):
+    """A write in every pass: the table is still being built, it stays."""
+    import lancedb
+
+    from app import vector_index
+    _to_build(node)
+    clock = _maintainer_clock(monkeypatch)
+    tbl = lancedb.connect(str(node.link)).open_table("chunks")
+    for i in range(4):
+        vector_index.ensure(node.coll)
+        tbl.add([{"id": f"n{i}", "book_id": 900 + i, "text": "new", "vector": _vec(900 + i)}])
+        clock[0] += 1800
+    assert vector_place.tier(node.link) == vector_place.BUILD
+
+
+def test_a_take_over_refused_for_room_is_said_and_tried_a_pass_later(node, monkeypatch):
+    from app import vector_index
+    _to_build(node)
+    clock = _maintainer_clock(monkeypatch)
+    monkeypatch.setattr(vector_place, "_free", lambda p: (0, 1 << 30))
+    said = []
+    vector_index.ensure(node.coll, log=said.append)
+    clock[0] += 1800
+    out = vector_index.take_over(node.coll, log=said.append) if vector_index.take_over_due(
+        node.coll, vector_index.stats(node.coll)) else None
+    assert out is not None and out["moved"] is False and "nothing was copied" in out["reason"], out
+    assert any("stays there" in m for m in said), said
+    assert not vector_index.take_over_due(node.coll, vector_index.stats(node.coll)), "not on the next turn"
+    clock[0] += 1800
+    assert vector_index.take_over_due(node.coll, vector_index.stats(node.coll)), "a pass later"
+    assert vector_place.tier(node.link) == vector_place.BUILD
+    _one_valid_table(node)
+
+
+def test_a_take_over_stops_when_the_maintainer_may_not_go_on(node, monkeypatch):
+    from app import vector_index
+    _to_build(node)
+    clock = _maintainer_clock(monkeypatch)
+    vector_index.ensure(node.coll)
+    clock[0] += 1800
+    assert vector_index.ensure(node.coll, may_continue=lambda: False) is None
+    assert vector_place.tier(node.link) == vector_place.BUILD
+
+
+def test_rename_says_the_table_stays_in_the_build_area_and_what_moves_it(node):
+    from app.hold import rename as rename_mod
+    _to_build(node)
+    out = rename_mod.rename(node.root, "c", "d")
+    assert "still in the build area" in out["vector_table"]
+    assert "louise hold vectors move d --to hot --apply" in out["vector_table"]

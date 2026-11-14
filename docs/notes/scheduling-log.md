@@ -2828,3 +2828,29 @@ maintainer thread at nice 10, when no writer waits.
 
 **AFTER.** To fill after the deploy: the first idle compaction's log line per table (fragments before and after,
 seconds), the dense-leg latency on normattiva and wikidata with the same grid, and worker restarts over the pass.
+
+## 2026-11-14 — a searched table left in the build area moves to the data pool by itself (app/vector_index.py `take_over_due`, `take_over`) — BEFORE (deploy pending)
+
+**Scenario (BEFORE, München, 2026-11-14, the same 20 vectors, refine 30, mean ms).** Normattiva was made as
+`normattiva-nemo` in the build area (ssd3, Samsung 870 QVO SATA) and renamed onto the searched name by hand on 11-13
+(`hold collection rename`). The rename carried the link, and nothing moved the table off ssd3. NeuRIS had stayed there
+since it was made. Only case F's swap and a hand `hold vectors move` ever moved a table.
+
+| live Normattiva | k=100 | k=400 |
+|---|---|---|
+| ssd3, 201 fragments | 2,031 | 5,012 |
+| ssd3, 31 fragments (compacted) | 1,989 | 5,121 |
+| ssd4 NVMe, 31 fragments (`hold vectors move --to hot`) | 180 | 330 |
+
+The fragments did almost nothing; the drive made it 11–15× faster. G3 ran right after the copy, so its cache may be
+warm.
+
+**The change.** The index maintainer moves a table that is behind a link into the build area, once no write has
+touched it for a whole pass (30 min), with `vector_place.move` (copy, verify, atomic switch, source removed,
+resumable). The collection is not paused: the worker holds its lock, and `rewrite` stands its own vector writers down
+for the move. A paused collection is skipped (case F's successor waits for its swap). A refusal (room, a writer) is
+logged and tried again a pass later. `hold collection rename` now says when the table stays in the build area and
+what moves it.
+
+**AFTER.** To fill after the deploy: EUR-Lex's move line once its embedding drains (bytes, seconds), and a dense
+search on it before and after.

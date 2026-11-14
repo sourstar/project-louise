@@ -312,6 +312,14 @@ Nemotron re-embeds of gutenberg and wikipedia (wikipedia's old table was
   `renameat2(RENAME_EXCHANGE)` under the vector write lock), the source
   removed. Dry run by default, with the estimate at the rates above.
   `forget` and `rename` follow the link.
+- **Amended 2026-11-14 (a defect, not a new decision):** those were the only
+  ways off ssd3, so a collection that became the searched one by another
+  path stayed there. Normattiva, renamed onto its name by hand on 11-13, was
+  searched from ssd3 for a day: 2,031 ms against 180 on ssd4 (k=100), 5,012
+  against 330 (k=400). The index maintainer now moves a build-area table to
+  ssd4 itself once no write has touched it for a pass and the collection is
+  not paused (`vector_index.take_over_due`); `rename` says when a table
+  stays in the build area.
 
 **Done 2026-11-07:** München created `ssd3/louise-build` with the
 properties below (7.14 TiB free); `BUILD_HOST = "/mnt/ssd3/louise-build"`.
