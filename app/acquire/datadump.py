@@ -27,9 +27,12 @@ modification time, München 2026-11-14), all of:
     now is before the dump's stated creation less MARGIN (an item node has
     no date of its own; the dump takes hours to make). No date, no take;
   - the zip's CRC-32 holds (zipfile checks it on read).
-Anything else is fetched from Cellar as before. Measured before first use
-(the operator's rule, legal session 2026-11-14): München's 1,000-item study,
-FALSE ADOPTIONS under this rule = 0, before `EURLEX_DATADUMP_DIR` is set.
+Anything else is fetched from Cellar as before. WHY THE DATE IS ENOUGH
+(operator, 2026-11-14: "Assume that cellar always updates the date when a file
+is changed"): an item Cellar changed after the dump carries a later date and is
+fetched, so a correction made at Cellar always wins; no byte comparison gates
+first use. What would still show a change Cellar did not date:
+`records-vs-origin`, whose sample re-fetches from Cellar.
 
 CONFIGURATION (node-local, like the cache dirs, invariant 10's tier 1):
 `EURLEX_DATADUMP_DIR` names a directory holding one folder per language, each
