@@ -71,6 +71,8 @@ from __future__ import annotations
 import dataclasses
 import hashlib
 import json
+import pickle
+import re
 import sys
 import tempfile
 import time
@@ -232,6 +234,23 @@ def stage_doc(collection, row, doc) -> tuple[str | None, list, bool]:
     return rec.get("title"), [tuple(x) for x in rec.get("sections") or []], True
 
 
+def record_input(held, uid: str) -> tuple[Any, str | None, list, bool] | None:
+    """(row, title, sections, from the record) as `stage_doc` gives them, for
+    one record, KEEPING NOTHING: the record is read where the collection holds
+    it and parsed only where it does not. `held._row_and_doc` parsed every
+    pool record and cached it for the life of the run — 6,413 Normattiva acts,
+    about 0.5–1 GB, on top of the arms (the pilot's OOM kills, 2026-11-14)."""
+    from app import plugin_io, record_source
+    row = held.con.execute("SELECT * FROM documents WHERE uid=?", (uid,)).fetchone()
+    if row is None:
+        return None
+    rec = record_source.record_for(held.collection, row)
+    if rec is not None:
+        return row, rec.get("title"), [tuple(x) for x in rec.get("sections") or []], True
+    doc = plugin_io.canonical_doc(held.plugin, row)
+    return row, doc.title, doc.sections, False
+
+
 def cut(arm: Arm, held, native_ids: Iterable[int], *, count: Callable[[str], int] | None = None,
         ctx: int | None = None) -> tuple[list[dict], dict[str, Any]]:
     """The arm's chunks of every pool record, in record order, each with the
@@ -246,12 +265,12 @@ def cut(arm: Arm, held, native_ids: Iterable[int], *, count: Callable[[str], int
     chunks: list[dict] = []
     missing = from_records = 0
     for nid in sorted({int(i) for i in native_ids}):
-        row, doc = held._row_and_doc(f"{plugin}:{nid}")
-        if doc is None:
+        got = record_input(held, f"{plugin}:{nid}")
+        if got is None:
             missing += 1
             continue
+        row, title, sections, recorded = got
         lang = (row["lang"] if "lang" in row.keys() else None) or "und"
-        title, sections, recorded = stage_doc(held.collection, row, doc)
         from_records += recorded
         for c in fn(row["uid"], nid, sections, title=title):
             c["lang"] = lang
@@ -344,7 +363,7 @@ class VectorCache:
             vec = keys.with_name(keys.name.replace(".keys.json", ".npy"))
             if not vec.is_file():
                 continue
-            arr = np.load(vec)
+            arr = np.load(vec, mmap_mode="r")      # read from the page cache, never all held
             names = json.loads(keys.read_text(encoding="utf-8"))
             if len(names) != len(arr):
                 continue
@@ -372,7 +391,7 @@ class VectorCache:
         tmp.replace(vec)
         (self.dir / f"{n:06d}.keys.json").write_text(json.dumps(keys), encoding="utf-8")
         p = len(self._parts)
-        self._parts.append(arr)
+        self._parts.append(np.load(vec, mmap_mode="r"))     # what was written, not a second copy
         for r, k in enumerate(keys):
             self._rows.setdefault(k, (p, r))
 
@@ -381,9 +400,16 @@ class VectorCache:
         return self._parts[p][r]
 
     def matrix(self, keys: list[str], seeds: dict[str, np.ndarray] | None = None) -> np.ndarray:
+        """The vectors of `keys` as ONE float32 array, filled row by row: no
+        list of rows, no second array (an arm of 228k chunks is 1.9 GB once)."""
         seeds = seeds or {}
-        out = [seeds[k] if k in seeds else self.vector(k) for k in keys]
-        return np.asarray(out, dtype=np.float32) if out else np.zeros((0, 0), dtype=np.float32)
+        if not keys:
+            return np.zeros((0, 0), dtype=np.float32)
+        first = seeds[keys[0]] if keys[0] in seeds else self.vector(keys[0])
+        out = np.empty((len(keys), len(first)), dtype=np.float32)
+        for i, k in enumerate(keys):
+            out[i] = seeds[k] if k in seeds else self.vector(k)
+        return out
 
 
 def default_embed(recipe, texts: list[str], *, query: bool, runs: set | None = None) -> list[list[float]]:
@@ -526,8 +552,15 @@ class ArmSearch:
             by_record.setdefault(int(c["book_id"]), (c["lang"], []))[1].append(c)
         fts.index_books([(lang, nid, chs) for nid, (lang, chs) in by_record.items()], collection=self.stub)
         self.groups = fts.existing_groups(self.stub)
-        norms = np.linalg.norm(vectors, axis=1, keepdims=True) if len(vectors) else vectors
-        self.matrix = (vectors / np.where(norms == 0, 1, norms)).astype(np.float32) if len(vectors) else vectors
+        # NORMALISED IN PLACE: the arm's matrix is the one array held (it is
+        # 1.9 GB for 228k chunks of 2,048 dimensions); a division into a new
+        # array and an `astype` copy made two more, the peak the pilot was
+        # killed at (2026-11-14). The caller hands its array over.
+        self.matrix = np.asarray(vectors, dtype=np.float32)
+        if len(self.matrix):
+            norms = np.sqrt(np.einsum("ij,ij->i", self.matrix, self.matrix))   # no full-size temporary
+            norms[norms == 0] = 1.0
+            self.matrix /= norms[:, None]
 
     def text_lists(self, question: str, depth: int) -> list[list[dict]]:
         from app import fts
@@ -663,15 +696,22 @@ def run(held, questions: list[dict[str, Any]], gold: dict, arms: list[Arm], nati
     if count is None or not ctx:
         log(f"{held.collection.name}: the window is NOT counted (its layer pins no tokenizer): an arm the "
             f"encoder truncates is not refused here")
-    cuts = {}
+    # each arm's chunks go to a file in the run's workdir and only its cost
+    # stays: ONE arm's chunks are ever in memory (the four, held together, were
+    # 3-4 GB of the pilot's OOM kills, 2026-11-14)
+    Path(workdir).mkdir(parents=True, exist_ok=True)
+    cuts: dict[str, tuple[Path, dict[str, Any]]] = {}
     for arm in arms:
-        cuts[arm.name] = cut(arm, held, ids, count=count, ctx=ctx)
-        log(f"arm {arm.name}: {json.dumps(arm.manifest(), sort_keys=True)} — {cuts[arm.name][1]}")
+        chunks, cost = cut(arm, held, ids, count=count, ctx=ctx)
+        cuts[arm.name] = (_put_cut(Path(workdir), arm.name, chunks), cost)
+        del chunks
+        log(f"arm {arm.name}: {json.dumps(arm.manifest(), sort_keys=True)} — {cost}")
     qvecs, qstats = embed([q["question"] for _, q, _ in covered], cache=cache, recipe=recipe, query=True,
                           embed_fn=embed_fn, log=log)
     out: dict[str, Any] = {"questions": len(covered), "query_embedding": qstats, "arms": {}}
     for arm in arms:
-        chunks, cost = cuts.pop(arm.name)
+        path, cost = cuts.pop(arm.name)
+        chunks = _take_cut(path)
         seeds: dict[str, np.ndarray] = {}
         seeded: dict[str, Any] = {"stored": 0}
         if stored_fn is not None and json.dumps(arm.manifest(), sort_keys=True) == shipped:
@@ -709,8 +749,24 @@ def run(held, questions: list[dict[str, Any]], gold: dict, arms: list[Arm], nati
             summary["questions_run"] = n
             arm_out[reading] = {"summary": summary, "per_question": per[reading]}
         out["arms"][arm.name] = arm_out
-        del vectors, search
+        del vectors, search, chunks          # the next arm loads into a free heap
     return out
+
+
+def _put_cut(workdir: Path, name: str, chunks: list[dict]) -> Path:
+    """An arm's chunks, written to the run's workdir (removed with it)."""
+    path = workdir / f"cut-{re.sub(r'[^A-Za-z0-9._-]+', '-', name)}.pickle"
+    with path.open("wb") as fh:
+        pickle.dump(chunks, fh, protocol=pickle.HIGHEST_PROTOCOL)
+    return path
+
+
+def _take_cut(path: Path) -> list[dict]:
+    """An arm's chunks back, and their file gone."""
+    with path.open("rb") as fh:
+        chunks = pickle.load(fh)
+    path.unlink()
+    return chunks
 
 
 def _timing(seconds: list[float]) -> dict[str, float | None]:
