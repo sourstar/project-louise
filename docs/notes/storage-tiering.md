@@ -420,10 +420,10 @@ more once its 2-hour snapshots release), ssd5 107 G, ssd3 6.8 T.
 "For very fast caching (like embedding) use ssd5, for bulk caching use ssd3",
 then "You need 2 caches, one for fast mmap operations (like vectors caching)
 and one for things like files caching (a decompressed corpus archive to be
-parsed)", and "When tank will be full I have another raidz hdd rank1 ready
-with 24 TB". The node's drives: ssd5 NVMe Gen5 1 TB (Lexar NM990, 944 G, ~517 G
+parsed)", and "When tank will be full I have another raidz hdd tank1 ready
+with 24 TB" (its name is tank1: "rank1 is a typo, it is tank1"). The node's drives: ssd5 NVMe Gen5 1 TB (Lexar NM990, 944 G, ~517 G
 free on 2026-11-14), ssd4 NVMe Gen4 2 TB (the data pool), ssd3 SATA SSD 8 TB
-(Samsung 870 QVO), tank raidz HDD 16 TB, rank1 raidz HDD 24 TB (tank's
+(Samsung 870 QVO), tank raidz HDD 16 TB, tank1 raidz HDD 24 TB (tank's
 successor).
 
 | what | read how | cache / setting | drive |
@@ -433,7 +433,7 @@ successor).
 | the packs: pubmed's (`PUBMED_PACK_DIR`, 84 G), wikidata's chunk files (122 G), legi's, wikipedia's page-props | a decompressed archive a parse streams through, a row group a record | the FILES cache, `LOUISE_FILES_CACHE_DIR` (pubmed's keeps its own setting) | **ssd3** |
 | bulk: the build area (`LOUISE_BUILD_DIR`, §8), a measurement's scratch, downloads before they are archived | sequential, written once | | **ssd3** |
 | the manifests, text indexes and SEARCHED vector tables | random, queries | | ssd4 |
-| origins, SHARDs, bundles, exports | sequential, archive | | tank, then rank1 |
+| origins, SHARDs, bundles, exports | sequential, archive | | tank, then tank1 |
 
 **Which kind goes where** is app/derived.py's `FILES`, by how a kind is READ:
 the four packs are decompressed archives; everything else is read at random or
@@ -487,15 +487,15 @@ size.
    wikidata carries its label table from the files cache to ssd5 (a log line,
    "label table carried"); until then its documents defer.
 
-**rank1** (24 TB raidz HDD) takes over from tank as the archive pool when tank
+**tank1** (24 TB raidz HDD) takes over from tank as the archive pool when tank
 is full: new collections' origins, SHARDs and bundles go there by pointing
-`ORIGINS_ROOT`, `SHARDS_ROOT` and `BUNDLES_ROOT` at rank1's datasets; existing
+`ORIGINS_ROOT`, `SHARDS_ROOT` and `BUNDLES_ROOT` at tank1's datasets; existing
 collections keep their links into tank, and one that outgrows tank moves whole,
 its link swapped. **To build BEFORE that switch:** `forget` and `rename` act on
 a link's folder only when it sits under the CURRENT root (app/hold/forget.py
 `shared_folders`, app/hold/rename.py `plan`), so a collection left on tank would
 be forgotten with its folder left behind, or renamed with its folder keeping the
-old name. They must know every archive root, tank's and rank1's.
+old name. They must know every archive root, tank's and tank1's.
 
 **Tank, 2026-11-14 08:31Z (München, read-only):** 21.8 T raw, 14.0 T allocated
 (63 %), 5.11 TB usable free. The largest datasets: backup 4.19 T (of the SSD
