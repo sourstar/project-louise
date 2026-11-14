@@ -30,7 +30,8 @@ measured (published figures disagree).
   names one (index-page members, per-document files, Cellar units). A collection whose Codex names
   none (NeuRIS among them) now reads "inconclusive" for the origin, which is the truth; the origin
   test waits for nothing (03 §3.6). Which collections those are is owed from the node. NeuRIS's own
-  re-render defect is the operator's decision (A/B/C put 2026-11-14).
+  re-render defect: the operator chose A, built as parser 3 (#657): the per-build GUIDs and the
+  render's `erzeugt` are normalised out of what is hashed and kept; a real change still moves both.
 - **Bulk first — a design principle, in the spec** (operator: "every time there is a bulk download
   that saves a relevant amount of single requests to the source, we start from the bulk download
   first"; 06 §6.2, a21a8af). EUR-Lex is the worked case: the Data Dump gives the items and each work's
