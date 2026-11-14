@@ -20,6 +20,13 @@ measured (published figures disagree).
 
 ### 2026-11-14
 
+- **Bulk first — a design principle, in the spec** (operator: "every time there is a bulk download
+  that saves a relevant amount of single requests to the source, we start from the bulk download
+  first"; 06 §6.2, a21a8af). EUR-Lex is the worked case: the Data Dump gives the items and each work's
+  tree, Cellar the rest (datadump.py, work_trees.py, cellar_listing.py; b608f9a and 5e31279 live,
+  6ccf290 merged). OPEN, for the architecture session: check every other plugin's acquisition against
+  it (believed bulk-first already: the Normattiva zips, the PubMed baseline and updatefiles, the
+  Wikimedia dumps, legi's DILA archives; unknown: NeuRIS, Gutenberg).
 - **A searched table left in the build area — FIXED, not deployed.** Normattiva was read from ssd3 (QVO SATA)
   for a day after a hand rename carried its build-area link: 2,031 ms against 180 on ssd4 at k=100, 5,012
   against 330 at k=400; its 201 → 31 fragments changed nothing. München moved it and NeuRIS by hand. Now the
