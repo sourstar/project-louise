@@ -29,9 +29,13 @@ measured (published figures disagree).
   baseline and updatefiles (the E-utilities never asked), Wikipedia's and Wikidata's dated dumps,
   legi's DILA baseline and daily increments, the pre-embedded archive's parquet shards, and
   Gutenberg, one rsync session over the mirror's `gutenberg-epub` tree (books and `pg<id>.rdf`
-  together; `rdf-files.tar.bz2` would save no request). NeuRIS has no bulk form (`/v1/bulk-zip-links`
-  404, probed 2026-10-28), so per expression is the only form and nothing is configured (§6.2: "a
-  bulk that answers none is not configured"). Deposits have no origin to bulk. Nothing to change.
+  together; `rdf-files.tar.bz2` would save no request). Deposits have no origin to bulk.
+  **NeuRIS: NOT bulk first — to build.** `/v1/bulk-zip-links` answered 404 on 2026-10-28 and answers
+  today (München, 2026-11-14, from the node): one ZIP of all legislation, rebuilt daily, 631 MB
+  (2.15 GB unpacked), on STACKIT object storage with range requests; 5,525 expressions, the API
+  listing's count; 20 random laws equal to the per-law ZIPs file for file, byte for byte (so
+  `origin_hash`, over the members, is the same either way). It replaces the 5,525 ZIP downloads; the
+  per-expression JSON (abbreviation, dates, Gazette, force) is not in it and stays per request.
 - **A searched table left in the build area — FIXED, not deployed.** Normattiva was read from ssd3 (QVO SATA)
   for a day after a hand rename carried its build-area link: 2,031 ms against 180 on ssd4 at k=100, 5,012
   against 330 at k=400; its 201 → 31 fragments changed nothing. München moved it and NeuRIS by hand. Now the
