@@ -319,10 +319,13 @@ D1's choice.
   force and end of validity [S]. A Virtuoso answer can be silently
   truncated at a timeout [S], so the inventory is read in windows with
   counts checked, never in one query.
-- **Not the Data Dump** (`datadump.publications.europa.eu`, June 2025):
-  EU Login, sector 3 in force only, no history, no consolidated
-  versions [S] — it cannot hold "every version". **Not the SOAP web
-  service**: registration and a daily call limit [S].
+- **Not the Data Dump as the origin** (`datadump.publications.europa.eu`,
+  June 2025): EU Login, sector 3 in force only, no history, no
+  consolidated versions [S] — it cannot hold "every version". It IS the
+  first transport for what it holds (06 §6.2 "Bulk first", amended
+  2026-11-14): items and trees of acts in force, adopted by Cellar's own
+  names, sizes and dates. **Not the SOAP web service**: registration and
+  a daily call limit [S].
 - **Text: Formex 4** (the OJ's production XML, article structure, thin
   metadata) or **XHTML**; metadata from the **CDM notice** [S]. For
   consolidated versions only HTML/XHTML and PDF are confirmed; Formex for
