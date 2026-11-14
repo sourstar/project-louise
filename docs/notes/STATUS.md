@@ -24,7 +24,7 @@ measured (published figures disagree).
   state caching for them, only upon need"). Every pack built from a source download is stamped when
   used and removed once idle 24 h (the worker, hourly; `louise dev cache-evict`), never while built
   or asked for; its reader builds it again (pack memo checks presence; a wikidata reader defers and
-  writes `.wanted`, the scan rebuilds). The ssd3 files area starts empty: nothing to copy. The ~206 G
+  writes `.wanted`, the scan rebuilds). The ssd3 files area starts empty: nothing to copy. The 223.3 GB
   of packs on ssd4 are then unread: their removal is the operator's yes, with the size.
   storage-tiering.md §10.
 - **The source downloads stay (operator: C).** Asked whether to delete the parsed origins on tank

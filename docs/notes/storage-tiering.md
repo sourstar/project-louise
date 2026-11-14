@@ -499,7 +499,7 @@ the parse pool; a wikidata pack is a pass over the dump (hours).
 3. Deploy (`FILES_HOST` /mnt/ssd3/louise-files-cache and `FAST_HOST`
    /mnt/ssd5/louise-fast-cache, named by München 2026-11-14). The packs on ssd4
    (`/data/cache/{wikidata-pack,legi-pack,wikipedia-page-props}`,
-   `/data/pubmed-pack`, ~206 G) are then read by nothing: removing them is the
+   `/data/pubmed-pack`; measured 2026-11-14: wikidata 130.7 GB, pubmed 90.1, page-props 1.7, legi 0.8 = 223.3 GB) are then read by nothing: removing them is the
    operator's yes, with the size.
 
 **tank1** (24 TB raidz HDD) takes over from tank as the archive pool when tank
