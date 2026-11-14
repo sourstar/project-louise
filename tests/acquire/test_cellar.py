@@ -42,38 +42,74 @@ def _formex(celex_dir: str, lang: str) -> dict[str, bytes]:
     return files
 
 
-def _notice(base: str, celex: str, lang: str, files: dict[str, bytes] | None, uuid: str | None = None) -> bytes:
+#: each language's expression number under a mocked Cellar work
+EXPR = {"en": "0006", "fr": "0007", "de": "0008"}
+
+
+def _cellar(base: str, uuid: str, lang: str | None = None, manif: bool = False) -> str:
+    uri = f"{base}/resource/cellar/{uuid}"
+    if lang is not None:
+        uri += f".{EXPR[lang]}"
+    return uri + (".02" if manif else "")
+
+
+def _dates(uri: str | None, when: str | None) -> str:
+    """A notice element's cellar URI and LASTMODIFICATIONDATE, as Cellar writes them."""
+    if uri is None:
+        return ""
+    out = f"<URI><VALUE>{uri}</VALUE><TYPE>cellar</TYPE></URI>"
+    return out + (f'<LASTMODIFICATIONDATE type="date"><VALUE>{when}</VALUE></LASTMODIFICATIONDATE>'
+                  if when else "")
+
+
+def _notice(base: str, celex: str, lang: str, files: dict[str, bytes] | None, uuid: str | None = None,
+            work_modified: str | None = None, manif_modified: str | None = None) -> bytes:
     """A branch notice in Cellar's shape (NOTICE/WORK, NOTICE/EXPRESSION,
     NOTICE/MANIFESTATION with its items' TECHMD), naming the items when
     `files` is given; under a Cellar work `uuid`, the items' URIs in
-    Cellar's own shape (`…/resource/cellar/<uuid>.<expr>.<manif>/DOC_<n>`)."""
+    Cellar's own shape (`…/resource/cellar/<uuid>.<expr>.<manif>/DOC_<n>`)
+    and the work, expression and manifestation dated as the tree dates them."""
     code = src.LANGUAGES[lang]
-    where = f"{base}/resource/cellar/{uuid}.0006.02" if uuid else f"{base}/items/{celex}/{lang}"
+    where = _cellar(base, uuid, lang, True) if uuid else f"{base}/items/{celex}/{lang}"
+    w = _dates(_cellar(base, uuid) if uuid else None, work_modified or manif_modified)
+    e = _dates(_cellar(base, uuid, lang) if uuid else None, manif_modified)
+    m = _dates(where if uuid else None, manif_modified)
     items = "".join(
         f"<MANIFESTATION_HAS_ITEM><URI><VALUE>{where}/DOC_{i}</VALUE><TYPE>cellar</TYPE></URI>"
         f"<TECHMD><STREAM_NAME type=\"data\"><VALUE>{name}</VALUE></STREAM_NAME>"
         f"<STREAM_SIZE type=\"data\"><VALUE>{len(data)}</VALUE></STREAM_SIZE>"
         f"<STREAM_ORDER type=\"data\"><VALUE>{i}</VALUE></STREAM_ORDER></TECHMD></MANIFESTATION_HAS_ITEM>"
         for i, (name, data) in enumerate(reversed(list((files or {}).items())), 1))
-    return (f'<NOTICE decoding="{code.lower()}" type="branch"><WORK><RESOURCE_LEGAL_ID_CELEX type="data">'
-            f'<VALUE>{celex}</VALUE></RESOURCE_LEGAL_ID_CELEX></WORK><EXPRESSION><EXPRESSION_USES_LANGUAGE '
+    return (f'<NOTICE decoding="{code.lower()}" type="branch"><WORK>{w}<RESOURCE_LEGAL_ID_CELEX type="data">'
+            f'<VALUE>{celex}</VALUE></RESOURCE_LEGAL_ID_CELEX></WORK><EXPRESSION>{e}<EXPRESSION_USES_LANGUAGE '
             f'type="concept"><IDENTIFIER>{code}</IDENTIFIER></EXPRESSION_USES_LANGUAGE></EXPRESSION>'
-            f'<MANIFESTATION manifestation-type="fmx4">{items}</MANIFESTATION></NOTICE>').encode()
+            f'<MANIFESTATION manifestation-type="fmx4">{m}{items}</MANIFESTATION></NOTICE>').encode()
 
 
 RDF_FIXTURES = Path(__file__).resolve().parent.parent / "fixtures" / "eurlex" / "rdf"
 _EMPTY_RDF = b'<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"/>'
 
 
-def _dated_tree(base: str, uuid: str, modified: str | None) -> bytes:
-    """A work's tree whose one manifestation states its last modification,
-    as Cellar's does (its items state none)."""
-    stamp = (f'<cmr:lastModificationDate rdf:datatype="http://www.w3.org/2001/XMLSchema#dateTime">'
-             f'{modified}</cmr:lastModificationDate>') if modified else ""
+def _dated_tree(base: str, uuid: str, langs: dict[str, str | None], work_modified: str | None = None) -> bytes:
+    """A work's tree as Cellar's is shaped: the work, each language's
+    expression (its language linked) and its manifestation, each stating its
+    last modification (`langs`: language → that date); its items state none."""
+    def stamp(when):
+        return (f'<cmr:lastModificationDate rdf:datatype="http://www.w3.org/2001/XMLSchema#dateTime">'
+                f'{when}</cmr:lastModificationDate>') if when else ""
+    first = next(iter(langs.values()), None)
+    out = [f'<rdf:Description rdf:about="{_cellar(base, uuid)}">{stamp(work_modified or first)}</rdf:Description>']
+    for lang, when in langs.items():
+        code = src.LANGUAGES[lang]
+        out.append(f'<rdf:Description rdf:about="{_cellar(base, uuid, lang)}">{stamp(when)}'
+                   f'<cdm:expression_uses_language rdf:resource="http://publications.europa.eu/resource/'
+                   f'authority/language/{code}"/></rdf:Description>')
+        out.append(f'<rdf:Description rdf:about="{_cellar(base, uuid, lang, True)}">{stamp(when)}'
+                   f'<cdm:manifestation_manifests_expression rdf:resource="{_cellar(base, uuid, lang)}"/>'
+                   f'</rdf:Description>')
     return (f'<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" '
-            f'xmlns:cmr="http://publications.europa.eu/ontology/cdm/cmr#">'
-            f'<rdf:Description rdf:about="{base}/resource/cellar/{uuid}.0006.02">{stamp}</rdf:Description>'
-            f'</rdf:RDF>').encode()
+            f'xmlns:cmr="http://publications.europa.eu/ontology/cdm/cmr#" '
+            f'xmlns:cdm="http://publications.europa.eu/ontology/cdm#">{"".join(out)}</rdf:RDF>').encode()
 
 
 class Cellar:
@@ -152,9 +188,11 @@ class Cellar:
                         # the work's tree (parser 3): a fixture where one is held
                         rdf_file = RDF_FIXTURES / f"{celex}.rdf"
                         body = rdf_file.read_bytes() if rdf_file.is_file() else _EMPTY_RDF
-                        dated = next((u for (c, _l), u in owner.units.items() if c == celex and u.get("uuid")), None)
-                        if dated is not None:
-                            body = _dated_tree(base, dated["uuid"], dated.get("manif_modified"))
+                        dated = {lg: u for (c, lg), u in owner.units.items() if c == celex and u.get("uuid")}
+                        if dated:
+                            one = next(iter(dated.values()))
+                            body = _dated_tree(base, one["uuid"], {lg: u.get("manif_modified") for lg, u in dated.items()},
+                                               one.get("work_modified"))
                         owner.rdf_asked.append(celex)
                         return self._send(200, body, {"Content-Type": "application/rdf+xml"})
 
@@ -175,11 +213,14 @@ class Cellar:
                     _, _, celex, lang = path.split("/")
                     unit = owner.units[(celex, lang)]
                     return self._send(200, _notice(base, celex, lang, None if unit.get("no_items") else unit["files"],
-                                                   unit.get("uuid")),
+                                                   unit.get("uuid"), unit.get("work_modified"),
+                                                   unit.get("manif_modified")),
                                       {"Content-Type": "application/xml"})
                 if path.startswith("/resource/cellar/"):
-                    uuid, doc = path.split("/")[3].split(".", 1)[0], path.rsplit("/", 1)[1]
-                    (celex, lang), unit = next(((k, u) for k, u in owner.units.items() if u.get("uuid") == uuid))
+                    node, doc = path.split("/")[3], path.rsplit("/", 1)[1]
+                    uuid, expr = node.split(".")[0], node.split(".")[1]
+                    (celex, lang), unit = next(((k, u) for k, u in owner.units.items()
+                                                if u.get("uuid") == uuid and EXPR[k[1]] == expr))
                     names = list(reversed(list(unit["files"])))
                     return self._send(200, unit["files"][names[int(doc.split("_")[1]) - 1]],
                                       {"Content-Type": "application/xml"})

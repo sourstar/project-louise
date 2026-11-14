@@ -202,6 +202,7 @@ _DERIVED_WRITERS = {
     "app/ask/part_cache.py": "per-part search facts, rebuilt from the part on a miss",
     "app/speech.py": "synthesized sentences, made again by the speech model on a miss",
     "app/hold/claim_index.py": "a large annotations snapshot's claim index, rebuilt from its held parts",
+    "app/acquire/work_trees.py": "eurlex's whole tree per work, fetched again from Cellar on a miss",
 }
 
 

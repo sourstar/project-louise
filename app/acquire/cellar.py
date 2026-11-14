@@ -404,6 +404,9 @@ class Fetched:
     moved: int
     #: bytes of items read from the Data Dump instead of asked for (datadump.py)
     from_dump: int = 0
+    #: where the work's tree came from: `cellar`, `kept` (a unit of another
+    #: language fetched it), `dump` (the Data Dump's MTD) — work_trees.py
+    tree_from: str = "cellar"
 
 
 def resource_url(base: str, celex: str) -> str:
@@ -475,7 +478,8 @@ def _current_unit(dest: Path, note_now_mtime: int | None, form: str | None):
 
 def fetch_unit(base: str, celex: str, lang: str, dest: Path, *,
                client: httpx.Client | None = None, listed_mtime: int | None = None,
-               charge: Callable[[int], None] = budget.acquire_bytes, dump=None) -> Fetched:
+               charge: Callable[[int], None] = budget.acquire_bytes, dump=None,
+               trees=None) -> Fetched:
     """The unit of (CELEX, language) into `dest` (the unit's directory),
     whole or not at all: the branch notice, the items of the best form the
     notice lists (FORMS), and the non-inferred tree scoped to the language
@@ -486,7 +490,10 @@ def fetch_unit(base: str, celex: str, lang: str, dest: Path, *,
     its tree alone). `dump` (a `datadump.Dump` of this language): an item it
     may give (datadump.py's rule, on the tree Cellar serves now, asked FIRST
     for that) is read from it instead of asked for; never passed by
-    `records-vs-origin`, which re-fetches from Cellar."""
+    `records-vs-origin`, which re-fetches from Cellar. `trees` (a
+    `work_trees.WorkTrees`): the WORK's tree, asked once for every language
+    and taken from it, or from the dump's MTD, where the unit's notice dates
+    it current; never passed by `records-vs-origin` either."""
     from ..plugins.eurlex import formex, notice as notice_mod, rdf
     from ..plugins.eurlex.source import LANGUAGES
     code = LANGUAGES[lang]
@@ -494,7 +501,6 @@ def fetch_unit(base: str, celex: str, lang: str, dest: Path, *,
     client = client or httpx.Client(timeout=TIMEOUT_S)
     moved = 0
     from_dump = 0
-    tree_raw: bytes | None = None
 
     def count(n: int) -> None:
         nonlocal moved
@@ -521,6 +527,15 @@ def fetch_unit(base: str, celex: str, lang: str, dest: Path, *,
         if note.display_language and note.display_language != code:
             raise TransportError(f"cellar: asked for {celex} in {code}, the notice is in {note.display_language}")
         form = form_of(note)
+
+        def ask_tree() -> dict:
+            _stop_check()
+            return _read_tree(_tree(client, url, celex, count), celex)
+        # the work's tree FIRST: the dump's items are judged on its dates
+        if trees is not None:
+            full, tree_from = trees.tree_for(_work_of(note), note.dated, ask_tree)
+        else:
+            full, tree_from = ask_tree(), "cellar"
         if not files:
             listed = [(it.uri, it.name, it.size) for it in note.items.get(form, [])] if form else []
             if not listed:
@@ -531,14 +546,9 @@ def fetch_unit(base: str, celex: str, lang: str, dest: Path, *,
                 form = "fmx4" if listed else form
             if not listed:
                 raise TransportError(f"cellar: {celex} ({code}) lists no item in any of {', '.join(FORMS)}")
-            full = None
-            if dump is not None:
-                _stop_check()
-                tree_raw = _tree(client, url, celex, count)
-                full = _read_tree(tree_raw, celex)
             for uri, name, size in listed:
                 _stop_check()
-                taken = dump.take(uri, form, name, size, full) if full is not None else None
+                taken = dump.take(uri, form, name, size, full) if dump is not None else None
                 if taken is not None and name and _NAME.match(name) and name not in (NOTICE, rdf.TREE_FILE) \
                         and name not in files and len(taken) == size:
                     files[name] = taken
@@ -564,19 +574,23 @@ def fetch_unit(base: str, celex: str, lang: str, dest: Path, *,
             if stated and stated.group(1).decode().lower() != lang:
                 raise TransportError(f"cellar: asked for {celex} in {lang}, its Formex is in "
                                      f"{stated.group(1).decode().lower()}")
-        if tree_raw is None:
-            _stop_check()
-            tree_raw = _tree(client, url, celex, count)
-        tree = rdf.scope(_read_tree(tree_raw, celex), code)
+        tree = rdf.scope(full, code)
         files[NOTICE] = notice_bytes
         files[rdf.TREE_FILE] = rdf.dumps(tree)
         _land(dest, files)
-        return Fetched(files={n: len(b) for n, b in files.items()}, moved=moved, from_dump=from_dump)
+        return Fetched(files={n: len(b) for n, b in files.items()}, moved=moved, from_dump=from_dump,
+                       tree_from=tree_from)
     except httpx.HTTPError as e:
         raise TransportError(f"cellar: {type(e).__name__}: {e}") from e
     finally:
         if own:
             client.close()
+
+
+def _work_of(note) -> str | None:
+    """The work's cellar uuid, from the notice's dated WORK URI."""
+    from . import datadump, work_trees
+    return next((datadump.work_uuid(u) for u in note.dated if work_trees._depth(u) == 0), None)
 
 
 def _tree(client: httpx.Client, url: str, celex: str, count) -> bytes:
@@ -634,10 +648,12 @@ class CellarUnits:
         return is_unit(remote)
 
     def fetch(self, endpoint: Endpoint, remote: RemoteFile, dest: Path) -> int:
-        from . import datadump
+        from . import datadump, work_trees
         unit = unit_of(remote)
+        # dest is the unit's completion mark: <root>/lang=<l>/<yyyy>/<CELEX>/tree.json
         return fetch_unit(endpoint.url, unit["celex"], unit["lang"], dest.parent,
-                          listed_mtime=remote.mtime, dump=datadump.dumps().for_language(unit["lang"])).moved
+                          listed_mtime=remote.mtime, dump=datadump.dumps().for_language(unit["lang"]),
+                          trees=work_trees.store_for(dest.parents[3])).moved
 
     def refetch(self, spec: AcquisitionSpec, locator: str, base: Path) -> tuple[Path, int]:
         """records-vs-origin: a record's `origin` is its unit

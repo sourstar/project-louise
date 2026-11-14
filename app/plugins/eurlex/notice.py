@@ -80,6 +80,11 @@ class Notice:
     relations: list[tuple[str, str]] = field(default_factory=list)   # (TAG, celex), in order
     items: dict[str, list["Item"]] = field(default_factory=dict)      # manifestation type → its items
     whole: Any = None               # the notice, whole (formex.tree)
+    #: the WORK's, the EXPRESSION's and each MANIFESTATION's cellar URI and its
+    #: LASTMODIFICATIONDATE, as the branch notice states them: what a tree held
+    #: from earlier (another language's unit, the Data Dump's MTD) must carry
+    #: to be the tree Cellar serves now (app/acquire/work_trees.py)
+    dated: dict[str, str] = field(default_factory=dict)
     #: the work's own DATE_PUBLICATION (an act without a Formex wrapper is
     #: dated by it: its OJ day, as a wrapper's PUBLICATION.REF dates one)
     date_publication: str | None = None
@@ -198,7 +203,22 @@ def parse(data: bytes) -> Notice:
         last_modified=_first(work, "LASTMODIFICATIONDATE"),
         date_publication=_first(work, "DATE_PUBLICATION"),
         subjects=_labels(work, "IS_ABOUT"), creators=_labels(work, "CREATED_BY_AGENT"),
-        relations=relations, items=_items(root, work), whole=tree(root))
+        relations=relations, items=_items(root, work), whole=tree(root), dated=_dated(root))
+
+
+def _dated(root: ET.Element) -> dict[str, str]:
+    """`{cellar URI: LASTMODIFICATIONDATE}` of the notice's own WORK,
+    EXPRESSION and MANIFESTATION elements (the branch notice's top level)."""
+    out: dict[str, str] = {}
+    for e in root:
+        if e.tag not in ("WORK", "EXPRESSION", "MANIFESTATION"):
+            continue
+        u = e.find("URI")
+        uri = norm(u.findtext("VALUE") or "") if u is not None else ""
+        when = _first(e, "LASTMODIFICATIONDATE")
+        if uri and when:
+            out[uri] = when
+    return out
 
 
 def _language(ex: ET.Element) -> str | None:
