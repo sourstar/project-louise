@@ -79,6 +79,10 @@ class UnitFetcher(Protocol):
         unit a record's `origin` names, fetched again under `base` at its
         corpus path; the path the plugin reads, and the bytes moved
         (app/acquire/unit_origin.py).
+    Optional: `reports() -> list[str]` — what the fetcher counted since it was
+    last asked (Cellar: units, where their trees came from, what the Data Dump
+    gave), said as events by the engine's recording thread every
+    `engine.UNIT_REPORT_S` and at the pass's end, never by the fetching threads.
     """
 
     def handles(self, remote: RemoteFile) -> bool: ...

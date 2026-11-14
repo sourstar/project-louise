@@ -665,7 +665,37 @@ class CellarInventory:
 
 class CellarUnits:
     """Cellar's `UnitFetcher`: a unit is (CELEX, language), its completion
-    mark the notice the listing names; fetched by `fetch_unit`, whole."""
+    mark the notice the listing names; fetched by `fetch_unit`, whole. It
+    counts what each unit took from where (`reports`)."""
+
+    def __init__(self) -> None:
+        import threading
+        from collections import Counter
+        self._lock = threading.Lock()
+        self._counts: Counter = Counter()
+        self._since = time.monotonic()
+
+    def _count(self, got: "Fetched") -> None:
+        with self._lock:
+            self._counts["units"] += 1
+            self._counts[f"tree:{got.tree_from}"] += 1
+            self._counts["bytes_moved"] += got.moved
+            self._counts["bytes_from_dump"] += got.from_dump
+
+    def reports(self) -> list[str]:
+        """What the units since the last report took from where: their
+        number and rate, their trees (Cellar, kept from another language's
+        unit, the Data Dump's MTD), the bytes moved and the bytes the dump
+        gave. Nothing when no unit came."""
+        with self._lock:
+            c, self._counts = self._counts, type(self._counts)()
+            elapsed, self._since = time.monotonic() - self._since, time.monotonic()
+        if not c["units"]:
+            return []
+        rate = c["units"] / elapsed * 3600 if elapsed > 0 else 0.0
+        return [f"cellar: {c['units']} units in {elapsed / 60:.0f} min ({rate:.0f}/h); trees "
+                f"{c['tree:cellar']} from Cellar, {c['tree:kept']} kept, {c['tree:dump']} from the dump; "
+                f"{c['bytes_moved'] >> 20} MiB moved, {c['bytes_from_dump'] >> 20} MiB from the dump"]
 
     def handles(self, remote: RemoteFile) -> bool:
         return is_unit(remote)
@@ -674,9 +704,11 @@ class CellarUnits:
         from . import datadump, work_trees
         unit = unit_of(remote)
         # dest is the unit's completion mark: <root>/lang=<l>/<yyyy>/<CELEX>/tree.json
-        return fetch_unit(endpoint.url, unit["celex"], unit["lang"], dest.parent,
-                          listed_mtime=remote.mtime, dump=datadump.dumps().for_language(unit["lang"]),
-                          trees=work_trees.store_for(dest.parents[3])).moved
+        got = fetch_unit(endpoint.url, unit["celex"], unit["lang"], dest.parent,
+                         listed_mtime=remote.mtime, dump=datadump.dumps().for_language(unit["lang"]),
+                         trees=work_trees.store_for(dest.parents[3]))
+        self._count(got)
+        return got.moved
 
     def refetch(self, spec: AcquisitionSpec, locator: str, base: Path) -> tuple[Path, int]:
         """records-vs-origin: a record's `origin` is its unit
