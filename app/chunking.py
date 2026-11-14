@@ -131,8 +131,15 @@ def _fixed_windows(uid: str, native_id, chapters, version,
                 text = "\n\n".join(buf)
                 yield _mk(uid, native_id, seq, chapter_title, text, version)
                 seq += 1
-                tail = text[-overlap_chars:]
-                buf, size = [tail, p], len(tail) + len(p)
+                # NO OVERLAP, NO TAIL: `text[-0:]` is the WHOLE text, so with
+                # overlap 0 each window carried every window before it — a
+                # 300 KB act cut into 30 MB (the LEMUR dry runs, 2026-11-14:
+                # windows of 40,189 tokens, and the kernel's OOM kill). Every
+                # configuration with an overlap cuts byte for byte as before
+                # (tests/test_chunker_fixed.py); none held used overlap 0
+                # (the node's CHUNK_OVERLAP is 120, a deposit's tokens // 8)
+                tail = text[-overlap_chars:] if overlap_chars else ""
+                buf, size = ([tail, p], len(tail) + len(p)) if tail else ([p], len(p))
             else:
                 buf.append(p)
                 size += len(p)

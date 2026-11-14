@@ -20,6 +20,13 @@ measured (published figures disagree).
 
 ### 2026-11-14
 
+- **The `fixed` chunker with overlap 0 repeated every earlier window — FIXED.** `text[-0:]` is the
+  whole text, so a 300 KB act came out as 30 MB of chunks. It caused the LEMUR dry runs' window arm
+  refusal (40,189-token chunks) and the four-language run's 20 OOM kills (the cap unchanged, the
+  operator's rule). Configurations with an overlap cut byte for byte as before; none held uses
+  overlap 0. The same dry runs found French "Article premier" unmatched by the eurlex rendition
+  reader (French at 0.593 of the articles: the legal session's parser) and only 81 parallel acts in
+  the test split: `lemur-<code>-full` suites take every split. legal-chunking-retrieval.md §5.2.
 - **The packs only upon need — BUILT, not deployed** (operator: "don't permanently use the solid
   state caching for them, only upon need"). Every pack built from a source download is stamped when
   used and removed once idle 24 h (the worker, hourly; `louise dev cache-evict`), never while built

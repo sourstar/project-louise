@@ -208,8 +208,10 @@ def _reference_windows(uid, native_id, chapters, version, max_chars, overlap_cha
                 text = "\n\n".join(buf)
                 yield chunking._mk(uid, native_id, seq, chapter_title, text, version)
                 seq += 1
-                tail = text[-overlap_chars:]
-                buf, size = [tail, p], len(tail) + len(p)
+                # the reference keeps the windows' RULE, the tail included: no
+                # overlap, no tail (`text[-0:]` was the whole text, 2026-11-14)
+                tail = text[-overlap_chars:] if overlap_chars else ""
+                buf, size = ([tail, p], len(tail) + len(p)) if tail else ([p], len(p))
             else:
                 buf.append(p)
                 size += len(p)
@@ -272,3 +274,25 @@ def test_a_one_paragraph_book_costs_its_own_size_in_memory_not_a_copy_per_window
     # paragraph and a window
     assert old > 1.8 * len(text), f"the oracle's peak {old:,} should show the remainder copy"
     assert new < 1.1 * len(text), f"peak {new:,} bytes over a {len(text):,}-byte paragraph"
+
+
+def test_no_overlap_cuts_the_text_once_never_the_windows_before():
+    """`text[-0:]` is the whole text: with overlap 0 each window used to carry
+    every window before it — a 300 KB act became 30 MB of chunks, windows of
+    40,189 tokens and the kernel's OOM kill (the LEMUR dry runs,
+    2026-11-14). Now the windows partition the text."""
+    body = "\n\n".join(f"Article {i}. " + "word " * 300 for i in range(200))
+    cs = list(chunking.chunk_fixed("u:1", 1, [("", body)], 1, {"tokens": 512, "overlap": 0}))
+    assert max(len(c["text"]) for c in cs) <= 512 * 4
+    assert sum(len(c["text"]) for c in cs) <= len(body)
+    assert "\n\n".join(c["text"] for c in cs) == "\n\n".join(p.strip() for p in body.split("\n\n")), \
+        "every paragraph once, in order"
+
+
+def test_an_overlap_still_carries_its_tail_byte_for_byte():
+    """The fix changes nothing where there IS an overlap: each window still
+    starts with the last `overlap * 4` characters of the one before."""
+    cs = list(chunking.chunk_fixed("g:1", 1, BOOK, 1, {"tokens": 300, "overlap": 30}))
+    firsts = [c for c in cs if c["chapter"] == "Chapter 1"]
+    for a, b in zip(firsts, firsts[1:]):
+        assert b["text"].startswith(a["text"][-120:])

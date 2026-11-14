@@ -540,6 +540,21 @@ def test_every_eu_language_has_its_suites() -> None:
     from tools.encoder_bakeoff import SUITES
     for code in ("en", "fr", "de", "it", "pl", "mt"):
         assert f"eurlex-sum-{code}" in SUITES and f"lemur-{code}" in SUITES
+        assert SUITES[f"lemur-{code}-full"]["lang"] == SUITES[f"lemur-{code}"]["lang"] == code
+
+
+def test_lemur_full_reads_every_split(tmp_path, monkeypatch) -> None:
+    """The whole set (`full.jsonl`) for a test that trains nothing: 7
+    languages share 81 acts of the test split alone (2026-11-14)."""
+    from tools import encoder_bakeoff as b
+    _serve(monkeypatch, {"languages/fr/full.jsonl": [
+        {"law_id": "32007D0364", "metadata": "DÉCISION DE LA COMMISSION du 23 mai 2007", "text": "La Commission..."},
+        {"law_id": "31991L0271", "metadata": "DIRECTIVE DU CONSEIL du 21 mai 1991", "text": "eaux urbaines"},
+        {"law_id": "31992L0043", "metadata": "DIRECTIVE DU CONSEIL du 21 mai 1992", "text": "habitats"}]})
+    out = tmp_path / "lemur-fr-full"
+    b.fetch(out, "lemur-fr-full")
+    corpus, queries = b.load(out, 1000)
+    assert corpus.texts == ["La Commission...", "eaux urbaines", "habitats"] and len(queries.texts) == 3
 
 
 # ---- VeGa endpoints, and runs that may not mix settings (2026-10-29) ------

@@ -457,6 +457,25 @@ the Hugging Face papers index.
 | already in Louise | the set (held on the node, acknowledged); DAR-legal-it as Normattiva's encoder; `eli:cites` edges | every version a record; validity by key (`--as-of`); closures from repeals; `eli:amends` / `eli:repeals` edges; `louise_traverse` | nothing: one level | nothing |
 | what adding the rest costs | the citation graph in ranking: a trained model over a graph that grows | the amending actions as their own index (who amended which article when), derived on CPU from metadata we already keep; no GPU | 3–5× the vectors: Normattiva's ~8.2 M chunks → 25–40 M, card-days | a trained GNN served beside the encoder (torch, as a model server, invariant 7); vectors no longer a function of the chunk's text: an amendment moves its neighbours' vectors, no carry by chunk hash, no peer can check them by the calibration gate as designed |
 
+
+**The dry runs (München, 2026-11-14, {it,fr,de,en,hu,fi,el}, test split).** 81 parallel acts (Greek's
+100 cap the intersection). Structure found, share of the most-found articles: fi 0.993, hu 0.979,
+en 0.933, it 0.891, de 0.888, el 0.888, **fr 0.593** (72 acts short). `structure`: 322–421 chunks, 0
+over the window; `structure-512`: 861–1,039 chunks. `window-512` was refused in every language with
+chunks of up to 40,189 tokens, and the four-language run was OOM-killed twenty times. Three findings:
+- **The `fixed` chunker with overlap 0 repeated every earlier window.** Python's `text[-0:]` is the
+  whole text, so each window carried all the text before it: a 300 KB act came out as 30 MB of chunks.
+  That is the OOM's cause, so the cap stays where it is (operator's rule). Fixed in `_fixed_windows`:
+  no overlap, no tail. Every configuration with an overlap cuts byte for byte as before, and no held
+  collection uses overlap 0 (the node's `CHUNK_OVERLAP` is 120, a deposit's `tokens // 8`).
+- **French "Article premier".** French acts head article 1 "Article premier", which `rendition._ARTICLE`
+  does not match. The first article is folded into the preamble, which explains most of French's
+  shortfall. This is a parser defect in the eurlex plugin (the legal session's): fix it, with a parser
+  version, before French records are built.
+- **81 acts are too few** for a randomization test per language. `encoder_bakeoff fetch --suite
+  lemur-<code>-full` takes every split (train + validation + test, about 6× the acts). Nothing is
+  trained here, so every split is held-out data.
+
 ### Is there a better way
 
 No published method dominates statute retrieval. The measured gains are:

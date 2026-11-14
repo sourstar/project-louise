@@ -228,10 +228,19 @@ _LEMUR = ("bg", "cs", "de", "el", "en", "es", "et", "fi", "fr", "ga", "hr", "hu"
           "lt", "lv", "mt", "nl", "pl", "pt", "ro", "sk", "sl", "sv")
 for _code in _LEMUR:
     SUITES[f"lemur-{_code}"] = {
-        "repo": "G4KMU/LEMUR", "layout": "beir", "adapter": "lemur",
+        "repo": "G4KMU/LEMUR", "layout": "beir", "adapter": "lemur", "lang": _code,
         "remote": {"test.jsonl": f"languages/{_code}/test.jsonl"}, "files": _LOCAL,
         "licence": "Apache-2.0", "green": True,
         "about": f"{_code}; EU environmental acts; the act's metadata as the query (test split)"}
+    # THE WHOLE SET (train + validation + test, `full.jsonl`): ~6x the acts. For
+    # a test that trains nothing — the chunker per language, an off-the-shelf
+    # encoder — every split is held-out data; 7 languages share 81 acts of the
+    # test split alone (2026-11-14), too few for a randomization test per language
+    SUITES[f"lemur-{_code}-full"] = {
+        "repo": "G4KMU/LEMUR", "layout": "beir", "adapter": "lemur", "lang": _code,
+        "remote": {"full.jsonl": f"languages/{_code}/full.jsonl"}, "files": _LOCAL,
+        "licence": "Apache-2.0", "green": True,
+        "about": f"{_code}; EU environmental acts; the act's metadata as the query (every split)"}
 
 
 def _write_beir(out: Path, docs: dict[str, str], queries: dict[str, str]) -> None:
@@ -262,7 +271,9 @@ def _adapt_lemur(raw: Path, out: Path) -> str:
     docs: dict[str, str] = {}
     queries: dict[str, str] = {}
     rows_of: dict[str, int] = {}
-    for row in _rows(raw / "test.jsonl"):
+    # the one split the suite fetched: `test.jsonl`, or `full.jsonl` for the whole set
+    src = raw / "full.jsonl" if (raw / "full.jsonl").exists() else raw / "test.jsonl"
+    for row in _rows(src):
         law = row["law_id"]
         rows_of[law] = rows_of.get(law, 0) + 1
         if law in docs:
