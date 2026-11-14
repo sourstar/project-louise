@@ -135,13 +135,13 @@ def read_set(path: Path) -> tuple[str, dict[str, tuple[str, str]]]:
     suite = str(source.get("suite") or "")
     if not suite.startswith(f"{SET}-"):
         raise SystemExit(f"{path} holds {suite!r}, not a LEMUR language (`encoder_bakeoff fetch --suite "
-                         f"lemur-<code>`)")
+                         f"lemur-<code>` or `lemur-<code>-full`)")
     if not bakeoff.SUITES.get(suite, {}).get("green"):
         raise SystemExit(f"{suite}: not a green set; its licence needs an acknowledgement (invariant 9)")
     docs = {r["_id"]: r.get("text") or "" for r in bakeoff._rows(Path(path) / "corpus.jsonl")}
     queries = {r["_id"].removeprefix("q:"): r.get("text") or "" for r in bakeoff._rows(Path(path) / "queries.jsonl")}
-    return suite.split("-", 1)[1], {law: (q, docs[law]) for law, q in queries.items()
-                                    if q.strip() and docs.get(law, "").strip()}
+    lang = bakeoff.SUITES.get(suite, {}).get("lang") or suite.split("-", 1)[1]
+    return lang, {law: (q, docs[law]) for law, q in queries.items() if q.strip() and docs.get(law, "").strip()}
 
 
 def sections_of(body: str) -> tuple[list[tuple[str, str]], int]:

@@ -280,3 +280,11 @@ def test_an_app_older_than_the_tool_is_named_at_once_not_found_in_a_traceback(tm
     with pytest.raises(SystemExit, match="lacks app.plugins.eurlex.no_such_module .from abc1234"):
         cl.main(["run", "--sets", str(tmp_path / "nowhere"), "--collection", "x", "--out", str(tmp_path / "o")])
     assert not (tmp_path / "o").exists(), "nothing read, nothing written"
+
+
+def test_a_full_set_reads_as_its_language(tmp_path):
+    """`lemur-<code>-full` (every split) is read as `<code>`, not `<code>-full`."""
+    d = lemur_dir(tmp_path, "it")
+    (d / "SOURCE.json").write_text(json.dumps({"suite": "lemur-it-full"}), encoding="utf-8")
+    lang, acts = cl.read_set(d)
+    assert lang == "it" and acts
