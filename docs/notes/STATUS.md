@@ -1929,8 +1929,9 @@ it left open is below.
 - **rank1, tank's successor (operator, 2026-11-14: "When tank will be full I have another raidz
   hdd rank1 ready with 24 TB").** Before the archive roots point at rank1, `forget` and `rename`
   must know every archive root: today they act on a link's folder only under the CURRENT
-  `SHARDS_ROOT` / `ORIGINS_ROOT` / `BUNDLES_ROOT` (storage-tiering.md §10). Open: tank's free space
-  and growth rate, to say when.
+  `SHARDS_ROOT` / `ORIGINS_ROOT` / `BUNDLES_ROOT` (storage-tiering.md §10). Not near: tank 63 %
+  allocated, 5.11 TB free, +8.4 GB a day (the EUR-Lex fetch; München, 2026-11-14); a daily log
+  gives the rate.
 
 - **BEFORE PRODUCTION — the operator's list** (to clear before switching to production):
   1. jina-style encoders on llama.cpp, implemented and tested at f16 (operator, 2026-10-31; below).
