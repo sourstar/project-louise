@@ -84,6 +84,24 @@ def test_the_logo_is_top_left_on_every_page_and_served_small(client):
         assert int.from_bytes(b[16:20], "big") == side and int.from_bytes(b[20:24], "big") == side, name
     css = client.get("/static/admin.css").text
     assert "nav a.logo{position:absolute;left:16px" in css
+    # a phone keeps it top left as well (operator, 2026-11-14: "on the upper left"), not in the centred column
+    assert "nav a.logo{left:10px;top:10px;transform:none}" in css
+
+
+def test_the_logo_background_is_transparent(client):
+    # operator, 2026-11-14: "Logo's background shall be transparent": the page's colour shows through, on
+    # every theme; the corners are fully transparent, the mark itself opaque
+    import io
+    Image = pytest.importorskip("PIL.Image")      # in the app's image (12.3), not a direct requirement
+    b = client.get("/static/logo.png").content
+    assert b[25] == 6, "colour type 6 = RGBA"
+    img = Image.open(io.BytesIO(b))
+    assert img.mode == "RGBA"
+    alpha = img.getchannel("A")
+    w, h = img.size
+    for xy in ((0, 0), (w - 1, 0), (0, h - 1), (w - 1, h - 1)):
+        assert alpha.getpixel(xy) == 0, xy
+    assert alpha.getextrema() == (0, 255)
 
 
 def test_ask_query_shows_hit_with_local_verification_badge(client):
