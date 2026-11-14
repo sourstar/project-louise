@@ -391,6 +391,24 @@ are the ones that have drifted; prefer to add a test when you touch them.
   the pool halved after an OOM); a pool child the kernel kills never ends
   its pass (`parallel.each_part`, `parallel.compute`). A process that
   needs an agent to come back is a defect, fixed like any other.
+- **AN OUT-OF-MEMORY KILL IS A MEASUREMENT, NEVER A SETTING TO RAISE**
+  (operator, 2026-11-14, after the chunker pilot died three times at 8 g
+  and the first reflex was 12 g: "when an operation fails because of oom
+  never ever raise the memory limit before knowing why the oom error
+  occurred"). Exit 137, a kernel OOM kill, a cgroup kill: the cap, the
+  pool and the batch size stay as they are until the cause is KNOWN and
+  written down — what allocated, how much, and why it grows. Find it by
+  measuring: sample the container's memory over time, `py-spy` / `memray`
+  the process as it climbs, read the code's own accumulators (a cache
+  that keeps every part, a list of every chunk, a result gathered before
+  it is written). Then fix the CAUSE (stream, bound, release, write as
+  you go). A cap is raised only when the measured working set honestly
+  needs it, to a number taken from that measurement with the headroom
+  stated beside it — never to "see if it passes". Resuming under the SAME
+  cap is fine and is how the measurement goes on (every stage is
+  resumable); `supervise-pass.sh` halving a pool after a kill is the
+  automatic recovery, not a diagnosis. Say in the commit or the note what
+  the cause was. *Enforced: review.*
 - A per-round cost scales with the work available, never with the size of
   a list or the corpus. If a per-item cost depends on how much has been
   processed so far, it is a bug however fast it looks at fixture scale.
