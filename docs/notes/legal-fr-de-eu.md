@@ -736,3 +736,13 @@ Decision 2011/833/EU; C(2019) 1655; the EUR-Lex consolidation help page
 (`consleg.html`); `jurifindit/JuriFindIT`, `AndreaSimeri/GDPR`,
 MultiEURLEX, LEMUR on Hugging Face; michalovadek.github.io/euverse
 (counts).
+Every member state, for future national collections (operator, 2026-11-14:
+"Save this for the future"): N-Lex, `https://n-lex.europa.eu/n-lex/`, the
+Publications Office's common gateway to the national legislation
+databases of the EU countries, one portal per state. It is not read
+from this container: `n-lex.europa.eu` is outside the cloud session's
+network allowlist, so the per-country list is to be taken from the node
+or a browser when a national collection is designed. Each portal is
+then checked like Normattiva, legi and NeuRIS were: its origin form,
+whether it offers a bulk download (06 §6.2, bulk first), its licence
+(04 §4.4).
