@@ -446,15 +446,18 @@ from truenas_api_client import Client
 shared, build_env = fm.build_area(os.environ.get("LOUISE_BUILD_HOST") or None)
 print(f"build area: {shared[0][0]} -> {shared[0][1]}" if shared else
       "build area: no ssd3 dataset named or mounted, LOUISE_BUILD_DIR left unset")
-# THE FAST CACHE AREA (operator 2026-11-14, storage-tiering.md §10): ssd5 behind the
-# same container paths, once the copy is compared and READY
-fast = fm.fast_area(os.environ.get("LOUISE_FAST_HOST") or None)
-print("fast area: " + ", ".join(f"{h} -> {t}" for h, t, _ in fast) if fast else
-      "fast area: no ssd5 dataset named, mounted and READY: the caches stay where they are")
-shared = tuple(shared) + fast
+# THE TWO CACHE AREAS (operator 2026-11-14, storage-tiering.md §10): ssd5 for what is
+# read at random or memory-mapped, ssd3 for the decompressed archives a parse streams
+# through; each once its copy is compared and READY, the fast one only beside the files one
+# (and only when its copy holds every cache the node holds today: a missed one is rebuilt)
 with Client() as c:
     cfg = c.call("app.config", fm.APP)
-    said = fm.apply(cfg, shared=shared, env={"LOUISE_CACHE_DIR": "/data/cache", **build_env})
+    caches, files_env, lines = fm.cache_areas(os.environ.get("LOUISE_FAST_HOST") or None,
+                                              os.environ.get("LOUISE_FILES_HOST") or None,
+                                              data=fm.data_host(cfg))
+    print("\n".join(lines))
+    shared = tuple(shared) + caches
+    said = fm.apply(cfg, shared=shared, env={"LOUISE_CACHE_DIR": "/data/cache", **build_env, **files_env})
     print("\n".join(said) or "LOUISE_CACHE_DIR already set")
     if said:
         c.call("app.update", fm.APP, {"custom_compose_config": cfg}, job=True)

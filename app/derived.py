@@ -12,6 +12,18 @@ ARC, 1,763 from RAM. `LOUISE_CACHE_DIR` (config.CACHE_DIR, identity tier,
 as before, so a node that did not ask sees nothing move. A cache is keyed
 on the ORIGIN'S PHYSICAL IDENTITY — its resolved path — never a name
 (CLAUDE.md: two objects can share a name and point at different files).
+
+TWO CACHES (operator, 2026-11-14: "You need 2 caches, one for fast mmap
+operations (like vectors caching) and one for things like files caching (a
+decompressed corpus archive to be parsed)"; storage-tiering.md §10). A kind
+is placed by how it is READ: `FILES` — a decompressed archive a parse
+streams through, a row group a record in the order it was written — under
+`LOUISE_FILES_CACHE_DIR` (config.FILES_CACHE_DIR: ssd3 on the node) when
+the node names one; every other kind — memory-mapped, or read at random by a
+key: label and facts tables, the claim index, the part caches, the speech
+clips — under `LOUISE_CACHE_DIR` (ssd5). The tag does not depend on the
+root, so a cache moves between the two as bytes: the same `<kind>/<tag>`
+under the other root.
 """
 from __future__ import annotations
 
@@ -52,13 +64,36 @@ def key(resolved_path: Path) -> str:
     return hashlib.blake2b(str(resolved_path).encode("utf-8"), digest_size=8).hexdigest()
 
 
+#: the kinds that are a DECOMPRESSED ARCHIVE A PARSE STREAMS THROUGH: the files
+#: cache's (module docstring). Measured on ssd3 against ssd4 (storage-tiering.md
+#: §8, 2b): 180 against 296 random row groups/s at the parse pool's width, above
+#: what a records build reads (~4.1 k records/s, ~64 row groups/s on wikidata).
+#: Wikidata's LABEL TABLE is read at random, ~15 lookups a document, and is its
+#: own kind, `wikidata-labels`, on the fast cache (app/plugins/wikidata/pack.py
+#: `labels_path`).
+FILES = frozenset({"pubmed-pack", "legi-pack", "wikipedia-page-props", "wikidata-pack"})
+
+
+def root(kind: str) -> Path | None:
+    """The cache `kind` lives under: the files cache for a `FILES` kind when
+    the node names one, else the fast one; None when neither applies."""
+    if kind in FILES and config.FILES_CACHE_DIR is not None:
+        return Path(config.FILES_CACHE_DIR)
+    return Path(config.CACHE_DIR) if config.CACHE_DIR is not None else None
+
+
+def apart(a: str, b: str) -> bool:
+    """Kinds `a` and `b` live under two different named caches."""
+    ra, rb = root(a), root(b)
+    return ra is not None and rb is not None and ra != rb
+
+
 def place(kind: str, origin: Path) -> Path | None:
-    """`<CACHE_DIR>/<kind>/<tag of origin>/` — the directory for the caches
-    derived from `origin` (a file or a folder) — or None when no fast drive
-    is named. The directory is not created here."""
-    if config.CACHE_DIR is None:
-        return None
-    return Path(config.CACHE_DIR) / kind / tag(origin)
+    """`<root of kind>/<kind>/<tag of origin>/` — the directory for the
+    caches derived from `origin` (a file or a folder) — or None when no
+    cache is named for the kind. The directory is not created here."""
+    base = root(kind)
+    return None if base is None else base / kind / tag(origin)
 
 
 #: (kind, origin as named, the fast drive) -> `place`'s answer
@@ -68,8 +103,8 @@ _places: dict[tuple[str, str, str], Path | None] = {}
 def places_key() -> str:
     """What `place_kept`'s answers are keyed on besides the origin — the
     fast drive — for a caller that keeps its own answers per process
-    (wikidata's `pack_dir`)."""
-    return str(config.CACHE_DIR)
+    (wikidata's `pack_dir`): both caches."""
+    return f"{config.CACHE_DIR}|{config.FILES_CACHE_DIR}"
 
 
 def place_kept(kind: str, origin: Path) -> Path | None:
@@ -77,8 +112,8 @@ def place_kept(kind: str, origin: Path) -> Path | None:
     every link (a realpath), and a caller that asks once per document —
     wikidata's pack, ~75.9 M times in a records build, ~7 % of a child
     (München's py-spy, 2026-10-30) — pays it each time. An origin's place
-    does not move under a running process; keyed on the fast drive too."""
-    key = (kind, str(origin), str(config.CACHE_DIR))
+    does not move under a running process; keyed on both caches too."""
+    key = (kind, str(origin), places_key())
     if key not in _places:
         _places[key] = place(kind, origin)
     return _places[key]
@@ -211,10 +246,16 @@ def writing(lock_file: Path, what: str) -> Iterator[None]:
 
 
 def held() -> list[Path]:
-    """Every cache the fast drive holds, `<CACHE_DIR>/<kind>/<tag>`, sorted;
-    none when no fast drive is named (a rename carries them,
-    app/hold/rename.py). A dot-name is a copy in progress (`adopt`)."""
-    if config.CACHE_DIR is None or not Path(config.CACHE_DIR).is_dir():
-        return []
-    return sorted(t for k in Path(config.CACHE_DIR).iterdir() if k.is_dir()
-                  for t in k.iterdir() if not t.name.startswith("."))
+    """Every cache the two caches hold, `<root>/<kind>/<tag>`, sorted; none
+    when no cache is named (a rename carries them, app/hold/rename.py). A
+    kind is listed under its own root only: a FILES kind left under the fast
+    cache after the files cache was named is a copy nothing reads, the
+    operator's to delete, never carried. A dot-name is a copy in progress
+    (`adopt`)."""
+    found: set[Path] = set()
+    for base in {Path(b) for b in (config.CACHE_DIR, config.FILES_CACHE_DIR) if b is not None}:
+        if not base.is_dir():
+            continue
+        found.update(t for k in base.iterdir() if k.is_dir() and root(k.name) == base
+                     for t in k.iterdir() if not t.name.startswith("."))
+    return sorted(found)

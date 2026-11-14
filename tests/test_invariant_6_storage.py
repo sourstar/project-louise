@@ -28,6 +28,8 @@ import sqlite3
 import tokenize
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parent.parent
 APP = ROOT / "app"
 
@@ -176,13 +178,16 @@ def _names(path: Path) -> set[str]:
             if tok.type == tokenize.NAME}
 
 
-def test_only_derived_resolves_the_cache_dir():
-    readers = {p.relative_to(ROOT).as_posix() for p in APP.rglob("*.py") if "CACHE_DIR" in _names(p)}
+@pytest.mark.parametrize("name", ["CACHE_DIR", "FILES_CACHE_DIR"])
+def test_only_derived_resolves_the_cache_dir(name):
+    """Both caches (operator, 2026-11-14: "You need 2 caches"): the fast one,
+    LOUISE_CACHE_DIR, and the files one, LOUISE_FILES_CACHE_DIR."""
+    readers = {p.relative_to(ROOT).as_posix() for p in APP.rglob("*.py") if name in _names(p)}
     env_readers = {p.relative_to(ROOT).as_posix() for p in APP.rglob("*.py")
-                   if re.search(r"""getenv\(\s*["']LOUISE_CACHE_DIR""", p.read_text(encoding="utf-8"))}
-    assert env_readers == {"app/config.py"}, f"LOUISE_CACHE_DIR read from the env by {env_readers}"
+                   if re.search(rf"""getenv\(\s*["']LOUISE_{name}""", p.read_text(encoding="utf-8"))}
+    assert env_readers == {"app/config.py"}, f"LOUISE_{name} read from the env by {env_readers}"
     assert readers - set(_CACHE_READERS) == set(), (
-        "invariant 6: only app/derived.py resolves LOUISE_CACHE_DIR (config.CACHE_DIR); "
+        f"invariant 6: only app/derived.py resolves LOUISE_{name} (config.{name}); "
         f"these read it too: {sorted(readers - set(_CACHE_READERS))}")
     assert "app/derived.py" in readers, "the guard is wrong: derived.py was not seen"
 
@@ -218,19 +223,23 @@ def test_the_cache_dir_holds_named_derived_data_only():
 def test_with_a_cache_dir_set_the_archive_and_state_land_outside_it(isolated_config, tmp_path,
                                                                     monkeypatch):
     from app import collections as collections_mod, config, db, derived, node_state
-    cache = tmp_path / "fast-drive"
-    cache.mkdir()
+    cache, files = tmp_path / "fast-drive", tmp_path / "files-drive"
+    cache.mkdir(), files.mkdir()
     monkeypatch.setattr(config, "CACHE_DIR", cache)
+    monkeypatch.setattr(config, "FILES_CACHE_DIR", files)
     collections = collections_mod.load_all()
     assert collections, "no collection loaded — the fixture is wrong"
     for c in collections:
         for p in (c.manifest_path, c.fts_dir, c.lance_dir, c.corpus_dir):
-            assert cache not in Path(p).resolve().parents, f"{c.name}: {p} is under LOUISE_CACHE_DIR"
+            for d, what in ((cache, "LOUISE_CACHE_DIR"), (files, "LOUISE_FILES_CACHE_DIR")):
+                assert d not in Path(p).resolve().parents, f"{c.name}: {p} is under {what}"
         db.connect(c).close()
     node_state.connect().close()
     assert sorted(cache.rglob("*")) == [], "something authoritative was written to the cache dir"
+    assert sorted(files.rglob("*")) == [], "something authoritative was written to the files cache dir"
     # and the one thing that does go there, goes there
     assert derived.place("pack", tmp_path / "origin") .parent.parent == cache
+    assert derived.place("pubmed-pack", tmp_path / "origin").parent.parent == files
 
 
 # ---------------- LOUISE_BUILD_DIR: vector tables only, one resolver ----------------

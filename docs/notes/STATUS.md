@@ -20,6 +20,16 @@ measured (published figures disagree).
 
 ### 2026-11-14
 
+- **Two caches — BUILT, not deployed** (operator: "For very fast caching (like embedding) use ssd5, for
+  bulk caching use ssd3", then "You need 2 caches, one for fast mmap operations (like vectors caching)
+  and one for things like files caching (a decompressed corpus archive to be parsed)").
+  `LOUISE_FILES_CACHE_DIR` holds the kinds app/derived.py names `FILES` (pubmed's, wikidata's, legi's and
+  page-props' packs); everything read at random or memory-mapped stays under `LOUISE_CACHE_DIR`.
+  Wikidata's label table is its own fast kind, carried there once by the pack's writer (SQLite backup,
+  old copy removed; readers defer meanwhile). Deploy: `cache_areas`, an ssd3 dataset (`cache/` at
+  `/data/files-cache`, `pubmed-pack/` over `/data/pubmed-pack`) and an ssd5 one (`cache/` over
+  `/data/cache`), each mounted on READY, the fast one only beside the files one. No cache rebuilt: the
+  tag does not depend on the root. storage-tiering.md §10, with München's copy steps.
 - **Tonight's legal measurements, as armed (2026-11-13).** The node resumed ~22:25 CET on the operator's
   "NAS can restart all the operations". JuriFindIT chunker run with four arms — `shipped`, `header-off`,
   `akn`, and `small` (max_tokens 2000; operator: yes) — decided on reranked MRR@10 with δ 0.02, the
@@ -1913,8 +1923,14 @@ it left open is below.
   pack (2,124 parquet files, `/data/pubmed-pack`) lives outside `LOUISE_CACHE_DIR`, against invariant
   6's "only app/derived.py resolves the cache". The cleanup, for whoever owns pubmed: adopt a
   `PUBMED_PACK_DIR` pack into derived's tree (`derived.adopt` carries only a pack built beside the
-  containers today) and retire the variable. It does not block the ssd5 move: the pack keeps its
-  container path, on its own ssd5 subfolder (storage-tiering.md §10).
+  containers today) and retire the variable. It does not block the cache move: the pack keeps its
+  container path, on its own subfolder of the ssd3 files-cache dataset (storage-tiering.md §10).
+
+- **rank1, tank's successor (operator, 2026-11-14: "When tank will be full I have another raidz
+  hdd rank1 ready with 24 TB").** Before the archive roots point at rank1, `forget` and `rename`
+  must know every archive root: today they act on a link's folder only under the CURRENT
+  `SHARDS_ROOT` / `ORIGINS_ROOT` / `BUNDLES_ROOT` (storage-tiering.md §10). Open: tank's free space
+  and growth rate, to say when.
 
 - **BEFORE PRODUCTION — the operator's list** (to clear before switching to production):
   1. jina-style encoders on llama.cpp, implemented and tested at f16 (operator, 2026-10-31; below).

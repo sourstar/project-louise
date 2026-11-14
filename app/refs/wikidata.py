@@ -94,8 +94,10 @@ def current_pack(ref_root: "Path | RefSyncState") -> tuple[Path, dict] | None:
 
 
 def label_table(dump: Path) -> Path:
+    """The pack's label table where this node keeps it (`pack.labels_path`:
+    in the pack, or on the fast cache when the two caches are apart)."""
     from ..plugins.wikidata import pack
-    return pack.pack_dir(dump) / "labels.sqlite"
+    return pack.labels_path(dump)
 
 
 def pick_label(labels: dict[str, str], languages: tuple[str, ...]) -> tuple[str, str] | None:

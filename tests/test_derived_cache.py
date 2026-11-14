@@ -203,3 +203,48 @@ def test_stale_names_are_what_the_glob_gave_and_compile_no_pattern(tmp_path, mon
     src, dst = tmp_path / "origin.bin", tmp_path / "carried" / "origin.bin"
     src.write_bytes(b"x")
     assert derived.adopt(src, dst) is True and dst.read_bytes() == b"x"
+
+
+def test_two_caches_place_each_kind_by_how_it_is_read(tmp_path, monkeypatch):
+    """Operator, 2026-11-14: "You need 2 caches, one for fast mmap operations
+    (like vectors caching) and one for things like files caching (a
+    decompressed corpus archive to be parsed)". A FILES kind goes to the files
+    cache, every other kind to the fast one; the tag is the origin's, whatever
+    the root, so a cache moves between the two as the same bytes."""
+    fast, files = tmp_path / "ssd5", tmp_path / "ssd3"
+    origin = tmp_path / "corpus"
+    origin.mkdir()
+    monkeypatch.setattr(config, "CACHE_DIR", fast)
+    monkeypatch.setattr(config, "FILES_CACHE_DIR", None)
+    before = {k: derived.place(k, origin) for k in (*derived.FILES, "legi-facts", "wikidata-labels")}
+    assert all(p.parent.parent == fast for p in before.values()), "no files cache: every kind where it was"
+    assert not derived.apart("wikidata-pack", "wikidata-labels")
+    monkeypatch.setattr(config, "FILES_CACHE_DIR", files)
+    for kind in derived.FILES:
+        assert derived.place(kind, origin) == files / kind / before[kind].name, kind
+    for kind in ("legi-facts", "wikidata-labels", "annotation-claim-index", "speech-clips"):
+        assert derived.place(kind, origin).parent.parent == fast, kind
+    assert derived.apart("wikidata-pack", "wikidata-labels")
+    assert derived.places_key() != str(fast), "an answer kept per process is keyed on both caches"
+    monkeypatch.setattr(config, "CACHE_DIR", None)
+    assert derived.place("pubmed-pack", origin).parent.parent == files
+    assert derived.place("legi-facts", origin) is None, "no fast cache: beside the origin, as before"
+
+
+def test_held_lists_each_kind_under_its_own_cache_only(tmp_path, monkeypatch):
+    """A rename carries what the caches hold; a FILES kind left on the fast
+    cache after the files cache was named is a copy nothing reads, the
+    operator's to delete, never carried."""
+    fast, files = tmp_path / "ssd5", tmp_path / "ssd3"
+    for p in (fast / "legi-facts" / "a", fast / "wikidata-pack" / "old", files / "wikidata-pack" / "b",
+              files / "legi-facts" / "stray", files / "wikidata-pack" / ".b.1.adopting"):
+        p.mkdir(parents=True)
+    monkeypatch.setattr(config, "CACHE_DIR", fast)
+    monkeypatch.setattr(config, "FILES_CACHE_DIR", files)
+    assert derived.held() == sorted([fast / "legi-facts" / "a", files / "wikidata-pack" / "b"])
+    monkeypatch.setattr(config, "FILES_CACHE_DIR", None)
+    assert derived.held() == sorted([fast / "legi-facts" / "a", fast / "wikidata-pack" / "old"])
+
+
+def test_the_pool_s_children_see_both_caches():
+    assert {"CACHE_DIR", "FILES_CACHE_DIR"} <= set(parallel.KNOBS)

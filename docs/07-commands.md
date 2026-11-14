@@ -2219,6 +2219,22 @@ and left where it was for the operator to delete; a plugin's own setting
 is ~95 % label lookups, 133–179 entities/s a core from the HDD pool while
 the scan writes, 1,763 from RAM.
 
+Two caches (*amended 2026-11-14*, operator: "You need 2 caches, one for fast
+mmap operations (like vectors caching) and one for things like files
+caching (a decompressed corpus archive to be parsed)";
+docs/notes/storage-tiering.md §10): with `LOUISE_FILES_CACHE_DIR` set
+(environment: this node's path), the kinds app/derived.py names `FILES` —
+the packs, decompressed archives a parse streams through (pubmed's,
+wikidata's chunk files, legi's, wikipedia's page-props) — live under
+`<LOUISE_FILES_CACHE_DIR>/<kind>/<tag>/`; every other kind, read at random
+or memory-mapped, stays under `LOUISE_CACHE_DIR`. The tag does not depend
+on the root, so a kind moves between the two as the same bytes. Wikidata's
+label table, read at random inside its pack, is its own kind
+(`wikidata-labels`) on the fast cache whenever the two are apart: one
+place a configuration, a reader of a table not there yet defers, and the
+pack's writer carries it there once (SQLite's online backup), removing the
+old copy. Unset, every kind stays where `LOUISE_CACHE_DIR` puts it.
+
 A build area for vector tables (*amended 2026-11-07*, operator: "B, ssd3
 as the build area", docs/notes/storage-tiering.md §8): with
 `LOUISE_BUILD_DIR` set (environment: this node's path; app/vector_place.py
