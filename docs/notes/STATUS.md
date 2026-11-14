@@ -20,6 +20,17 @@ measured (published figures disagree).
 
 ### 2026-11-14
 
+- **The nightly origin check never asked an origin — FIXED, not deployed** (München, 2026-11-14).
+  The scheduled `hold check` was given each collection's own corpus as `--origin`, so its
+  `records-vs-origin` re-parsed the kept copy and was recorded and attested as a PASS (NeuRIS:
+  "passed", 339 of 339, while a fresh base from the origin's own snapshot gave 358 of 359 "changed
+  at the origin"). Now a re-parse of the kept copy is INCONCLUSIVE, `origin: "kept copy"`, the
+  copy's agreement in the detail (a copy that does not give its records still FAILS), and the
+  nightly check passes `--origin-else <corpus>`: the Codex's own network origin is asked where it
+  names one (index-page members, per-document files, Cellar units). A collection whose Codex names
+  none (NeuRIS among them) now reads "inconclusive" for the origin, which is the truth; the origin
+  test waits for nothing (03 §3.6). Which collections those are is owed from the node. NeuRIS's own
+  re-render defect is the operator's decision (A/B/C put 2026-11-14).
 - **Bulk first — a design principle, in the spec** (operator: "every time there is a bulk download
   that saves a relevant amount of single requests to the source, we start from the bulk download
   first"; 06 §6.2, a21a8af). EUR-Lex is the worked case: the Data Dump gives the items and each work's

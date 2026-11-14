@@ -5559,20 +5559,22 @@ def run_check(a):
         except emb.GateDeferred:
             pass
 
+    origin_dir = _check_origin(a, codex)
     report = chk.run(
         a.root, name, codex, snapshot, seed=seed,
         checks=a.checks.split(",") if a.checks else None, sample=a.sample,
         embed=embed, reference=reference,
-        reparse=_reparse_from(codex, name, getattr(a, "origin_dir", None)),
-        reparse_many=_reparse_many_from(codex, name, getattr(a, "origin_dir", None)),
-        origin_unit=_origin_unit_from(codex, name, getattr(a, "origin_dir", None)),
-        weigh_unit=_weigh_from(codex, getattr(a, "origin_dir", None)),
+        reparse=_reparse_from(codex, name, origin_dir),
+        reparse_many=_reparse_many_from(codex, name, origin_dir),
+        origin_unit=_origin_unit_from(codex, name, origin_dir),
+        weigh_unit=_weigh_from(codex, origin_dir),
         origin_bytes=(int(a.origin_mib) << 20) if getattr(a, "origin_mib", None) else None,
         against=_json(a.against) if getattr(a, "against", None) else None,
         only_shards=([s for s in a.shards.split(",") if s] if getattr(a, "shards", None) else None),
         live=getattr(a, "live", None),
         vectors_for=lambda ids: embeddings.vectors_by_chunk_id(
             ids, collection=local),
+        origin_is_copy=_is_kept_copy(local, origin_dir),
         log=lambda m: print(m, file=sys.stderr))
 
     written: dict[str, str] = {}
@@ -5649,6 +5651,34 @@ def cmd_check(a) -> int:
             print(f"  {o.result.upper():<13} {o.check:<18} {o.why}"
                   f"{f'  [{aid[:20]}…]' if aid else ''}")
     return 0 if report.ok else 1
+
+
+def _check_origin(a, codex):
+    """The origin `hold check` re-parses from: the one given (`--origin`);
+    else the Codex's own network origin, which `_reparse_from` reaches with
+    none given; else, for the nightly check (`--origin-else`), the copy this
+    node keeps — a re-parse that proves the parser and the copy agree and is
+    said so (`check.Ctx.origin_is_copy`), never a pass of records-vs-origin."""
+    given = getattr(a, "origin_dir", None)
+    if given:
+        return given
+    fallback = getattr(a, "origin_else", None)
+    if fallback and _member_origin(codex) is None:
+        return fallback
+    return None
+
+
+def _is_kept_copy(local, origin_dir) -> bool:
+    """`origin_dir` is the collection's own corpus directory — the copy this
+    node keeps, by physical identity (CLAUDE.md: a path, never a name) — so a
+    re-parse from it says nothing of the origin (`check.Ctx.origin_is_copy`)."""
+    from pathlib import Path
+    if not origin_dir:
+        return False
+    try:
+        return Path(origin_dir).resolve() == Path(local.corpus_dir).resolve()
+    except (OSError, TypeError, AttributeError):
+        return False
 
 
 def _reparse_from(codex, name: str, origin_dir):
@@ -7816,8 +7846,14 @@ def build_parser() -> argparse.ArgumentParser:
                    help="which snapshot to check (default: the latest held)")
     p.add_argument("--origin", dest="origin_dir", metavar="DIR",
                    help="an origin base to re-fetch and re-parse from, for "
-                        "`records-vs-origin` (03 §3.2). Without it that "
-                        "check is inconclusive, never a pass")
+                        "`records-vs-origin` (03 §3.2). Without it the Codex's "
+                        "own network origin is asked where it names one; else "
+                        "that check is inconclusive, never a pass")
+    p.add_argument("--origin-else", dest="origin_else", metavar="DIR",
+                   help="where the Codex names no network origin, re-parse from DIR "
+                        "(the nightly check gives the kept copy): the parser and the "
+                        "copy agreeing is said as such, inconclusive for the origin; a "
+                        "copy that does not give its records still fails")
     p.add_argument("--origin-mib", type=int, metavar="N",
                    help="raise what `records-vs-origin` may read of the origin "
                         "for this run: 256 MiB by default, and never less "
