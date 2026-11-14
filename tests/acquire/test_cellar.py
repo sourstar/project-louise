@@ -158,7 +158,10 @@ class Cellar:
                 rows = sorted((c, lg) for (c, lg), u in owner.units.items()
                               if u.get("listed", True) and c[1:5] == year and lg in langs)
                 if "COUNT(" in query:
-                    body = {"results": {"bindings": [{"n": {"value": str(len(rows))}}]}}
+                    row = {"n": {"value": str(len(rows))}}
+                    if "AS ?max" in query and rows:
+                        row["max"] = {"type": "literal", "value": max(owner.units[r]["modified"] for r in rows)}
+                    body = {"results": {"bindings": [row]}}
                 else:
                     off = int(re.search(r"OFFSET (\d+)", query).group(1))
                     lim = int(re.search(r"LIMIT (\d+)", query).group(1))
@@ -260,6 +263,13 @@ def mock():
 @pytest.fixture(autouse=True)
 def no_wait(monkeypatch):
     monkeypatch.setattr(cellar.time, "sleep", lambda s: None)
+
+
+@pytest.fixture(autouse=True)
+def listing_cache(monkeypatch, tmp_path):
+    """Each test's own place for the windows kept between passes."""
+    from app.acquire import cellar_listing
+    monkeypatch.setattr(cellar_listing, "_base", lambda: tmp_path / "listing-cache")
 
 
 def _spec(mock):
@@ -517,3 +527,43 @@ def test_one_language_whose_count_times_out_is_deferred(mock, monkeypatch):
     with pytest.raises(TransportError) as e:
         list(cellar.listing(spec.endpoints[0], spec, Filter(include=("lang=it/*",)), years=range(2016, 2017)))
     assert engine.transient(str(e.value))
+
+
+# ---- the windows kept between passes (app/acquire/cellar_listing.py) ----------------------------
+
+def _listed(mock, langs=("lang=en/*",)):
+    spec = _spec(mock)
+    return sorted((f.rel_path, f.mtime) for f in cellar.listing(spec.endpoints[0], spec, Filter(include=langs),
+                                                               years=range(2016, 2017)))
+
+
+def _pages(mock) -> int:
+    return sum(1 for q in mock.queries() if "OFFSET" in q)
+
+
+def test_an_unchanged_window_is_asked_its_fingerprint_alone_and_lists_the_same(mock):
+    first = _listed(mock)
+    assert _pages(mock) == 1
+    again = _listed(mock)
+    assert again == first and _pages(mock) == 1, "no page asked again: count and latest date the same"
+    assert sum(1 for q in mock.queries() if "COUNT(" in q) == 2, "every pass still asks every window"
+
+
+def test_a_work_cellar_changed_pages_its_window_again(mock):
+    _listed(mock)
+    mock.units[(ACT, "en")]["modified"] = "2026-11-14T12:00:00Z"
+    got = dict(_listed(mock))
+    assert _pages(mock) == 2 and got[cellar.rel_path("en", ACT)] == cellar._epoch("2026-11-14T12:00:00Z")
+
+
+def test_a_row_removed_pages_its_window_again(mock):
+    _listed(mock)
+    mock.units[(CONS, "en")]["listed"] = False
+    got = _listed(mock)
+    assert _pages(mock) == 2 and [p for p, _ in got] == [cellar.rel_path("en", ACT)]
+
+
+def test_another_language_set_is_another_window(mock):
+    _listed(mock)
+    _listed(mock, ("lang=en/*", "lang=fr/*"))
+    assert _pages(mock) == 2

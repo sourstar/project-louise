@@ -226,6 +226,18 @@ def count_query(year: int, languages: tuple[str, ...]) -> str:
             + _window(year, languages) + " }\n}")
 
 
+def fingerprint_query(year: int, languages: tuple[str, ...]) -> str:
+    """The window's COUNT of (CELEX, language) rows, as `count_query` counts
+    them, and the latest last modification among them: one query of the
+    count's shape, which says whether the window held from the pass before
+    still stands (cellar_listing.py)."""
+    return (_PREFIXES + "SELECT (COUNT(*) AS ?n) (MAX(?last) AS ?max) WHERE {\n"
+            " SELECT ?celex ?language (MAX(?modified) AS ?last) WHERE {\n"
+            + _window(year, languages)
+            + "  OPTIONAL { ?work cmr:lastModificationDate ?modified }\n"
+            + " }\n GROUP BY ?celex ?language\n}")
+
+
 def page_query(year: int, languages: tuple[str, ...], offset: int) -> str:
     return (_PREFIXES + "SELECT ?celex ?language (MAX(?modified) AS ?last) WHERE {\n"
             + _window(year, languages)
@@ -359,9 +371,10 @@ def _window_files(client, base: str, year: int, languages: tuple[str, ...], code
     same day: 1990's count for all 24 languages ran past 900 s, Italian
     alone answered in 26.5-235.5 s. One language that still times out is
     deferred to the next round."""
+    from . import cellar_listing
     lang_text = ",".join(languages) if len(languages) <= 4 else f"{len(languages)} languages"
     try:
-        counted = sparql(client, base, count_query(year, languages),
+        counted = sparql(client, base, fingerprint_query(year, languages),
                          what=f"the count of {year} ({lang_text})", charge=charge)
     except TransportError as e:
         if len(languages) > 1 and _timed_out(e):
@@ -374,6 +387,15 @@ def _window_files(client, base: str, year: int, languages: tuple[str, ...], code
         want = int(counted[0]["n"]["value"]) if counted else 0
     except (KeyError, ValueError, IndexError):
         raise TransportError(f"cellar: the count of {year} answered {counted!r:.200}") from None
+    latest = (counted[0].get("max") or {}).get("value") if counted else None
+    kept = cellar_listing.held(base, year, languages, want, latest)
+    if kept is not None:
+        # the window as the last pass listed it: its count and its latest
+        # modification are the same, so no row moved (cellar_listing.py)
+        for celex, lang, mtime in kept:
+            yield RemoteFile(rel_path=rel_path(lang, celex), mtime=mtime, remote=encode(celex, lang))
+        return
+    listed: list = []
     got = 0
     while got < want:
         rows = sparql(client, base, page_query(year, languages, got),
@@ -385,15 +407,16 @@ def _window_files(client, base: str, year: int, languages: tuple[str, ...], code
             lang = code_of.get(row.get("language", {}).get("value", "").rsplit("/", 1)[-1])
             if not celex or lang is None:
                 continue
-            yield RemoteFile(rel_path=rel_path(lang, celex),
-                             mtime=_epoch(row.get("last", {}).get("value")),
-                             remote=encode(celex, lang))
+            mtime = _epoch(row.get("last", {}).get("value"))
+            listed.append([celex, lang, mtime])
+            yield RemoteFile(rel_path=rel_path(lang, celex), mtime=mtime, remote=encode(celex, lang))
         got += len(rows)
     if got != want:
         # a Virtuoso answer cut short says nothing: the window is
         # re-listed next pass (worded for engine.transient)
         raise TransportError(f"cellar: the {year} window answered {got} of the {want} rows its "
                              f"count names (connection timed out, the answer cut)")
+    cellar_listing.keep(base, year, languages, want, latest, listed)
 
 
 # ---- one unit ---------------------------------------------------------------------------------
