@@ -173,6 +173,8 @@ class Dumps:
         self._folders: dict[str, tuple[Path, datetime]] | None = None
         self._open: OrderedDict[str, Dump] = OrderedDict()
         self._lock = threading.Lock()
+        self._mtd: list[zipfile.ZipFile] | None = None
+        self._mtd_lock = threading.Lock()
 
     def _scan(self) -> dict[str, tuple[Path, datetime]]:
         out: dict[str, tuple[Path, datetime]] = {}
@@ -215,6 +217,48 @@ class Dumps:
                 with old.lock:
                     old.close()
             return dump
+
+
+    def mtd_tree(self, uuid: str) -> dict | None:
+        """The work's tree from the dump's MTD (`<work uuid>/tree_non_inferred.rdf`,
+        one per work whatever the language: München 2026-11-14), read into
+        rdf.read's form; None where no MTD holds it or it is not Cellar's form.
+        Whether it is current is the caller's test (work_trees.matches)."""
+        from ..plugins.eurlex import rdf
+        with self._mtd_lock:
+            if self._mtd is None:
+                self._mtd = []
+                with self._lock:
+                    if self._folders is None:
+                        self._folders = self._scan()
+                    folders = [f for f, _ in self._folders.values()]
+                for folder in folders:
+                    for p in sorted(folder.rglob("*.zip")):
+                        if "MTD" not in p.name.upper():
+                            continue
+                        try:
+                            self._mtd.append(zipfile.ZipFile(p))
+                        except (zipfile.BadZipFile, OSError) as e:
+                            self.log(f"[datadump] {p}: not read ({e}); its trees come from Cellar")
+            data = None
+            for zf in self._mtd:
+                try:
+                    data = zf.read(f"{uuid}/{MTD_MEMBER}")
+                    break
+                except KeyError:
+                    continue
+                except (zipfile.BadZipFile, OSError):
+                    return None
+        if data is None:
+            return None
+        try:
+            return rdf.read(data)           # outside the lock: the parse is the cost
+        except rdf.RdfError:
+            return None
+
+
+#: the tree's file under its work's folder in the dump's MTD zip
+MTD_MEMBER = "tree_non_inferred.rdf"
 
 
 _DUMPS: Dumps | None = None
