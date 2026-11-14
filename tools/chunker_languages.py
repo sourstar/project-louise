@@ -566,7 +566,37 @@ def _write(out: Path, name: str, payload: dict[str, Any]) -> Path:
     return path
 
 
+#: the app code `run` needs that is newer than the tool's first version, by
+#: module, name and the commit that brought it: an app older than that fails at
+#: once with this, never with a bare ImportError in the cut (München, 2026-11-14:
+#: the dry runs died three times each on the node's 519c009, which has no
+#: rendition.py, and the cause had to be read from a traceback)
+NEEDS = (("app.plugins.eurlex.rendition", "_sections", "da7d6f1, eurlex parser 3"),)
+
+
+def missing_app(needs=None) -> list[str]:
+    """What of `needs` (default `NEEDS`) the app this process imports lacks,
+    in plain words."""
+    import importlib
+    out = []
+    for module, name, since in (NEEDS if needs is None else needs):
+        try:
+            got = importlib.import_module(module)
+        except ImportError:
+            out.append(f"{module} (from {since})")
+            continue
+        if not hasattr(got, name):
+            out.append(f"{module}.{name} (from {since})")
+    return out
+
+
 def _run(a) -> int:
+    gone = missing_app()
+    if gone:
+        import app
+        raise SystemExit(f"chunker_languages run: the app at {Path(app.__file__).resolve().parent} lacks "
+                         f"{', '.join(gone)}: run the tool with an app at or after that commit (a checkout "
+                         f"of it on sys.path, or after the deploy that carries it); nothing was read")
     from app import collections as collections_mod
     from app import encoder_use
     from tools import legal_pilot as lp
