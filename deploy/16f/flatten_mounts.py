@@ -45,6 +45,25 @@ SERVICES = ("web", "worker")
 BUILD_HOST: str | None = "/mnt/ssd3/louise-build"
 BUILD_TARGET = "/build"
 
+#: THE FAST CACHE AREA (operator, 2026-11-14: "For very fast caching (like
+#: embedding) use ssd5, for bulk caching use ssd3"; storage-tiering.md §10):
+#: a dataset on ssd5 (NVMe Gen5) whose subfolders back the container paths the
+#: caches ALREADY use — `/data/cache` (LOUISE_CACHE_DIR, app/derived.py) and
+#: `/data/pubmed-pack` (PUBMED_PACK_DIR) — so no path inside the containers
+#: changes: derived.py keys a cache on its origin's resolved path and the cache
+#: dir's value, both the same, and nothing is rebuilt. The pubmed pack keeps
+#: its own path, never inside `/data/cache`: there its 2,124 files would share
+#: `pubmed-pack/`, the kind name derived.py's own tree uses, and `derived.held`
+#: (a rename's walk) would list each as a cache. The dataset's NAME IS
+#: MÜNCHEN'S TO REPORT (LOUISE_FAST_HOST at the deploy until it is written here).
+FAST_HOST: str | None = None
+#: (subfolder of the dataset, container path, read-only in `web`)
+FAST_MOUNTS = (("cache", "/data/cache", False),          # web writes the speech cache
+               ("pubmed-pack", "/data/pubmed-pack", True))
+#: written by the operator's session in the dataset AFTER the copy is compared
+#: (count, bytes, a sha256 sample): a half copy is never mounted over the whole
+FAST_READY = "READY"
+
 
 def build_area(host: str | None = None, *, is_dataset=None) -> tuple[tuple, dict]:
     """`(shared, env)` for `apply`: the build area's mount and its variable
@@ -58,6 +77,21 @@ def build_area(host: str | None = None, *, is_dataset=None) -> tuple[tuple, dict
     if not host or not check(host):
         return (), {}
     return ((host, BUILD_TARGET, False),), {"LOUISE_BUILD_DIR": BUILD_TARGET}
+
+
+def fast_area(host: str | None = None, *, is_dataset=None, exists=None) -> tuple:
+    """`shared` for `apply`: the fast area's mounts when `host` (else
+    FAST_HOST) is a mounted dataset holding the READY marker, else none.
+    A subfolder that does not exist is not mounted: Docker would create it
+    EMPTY over the copy on ssd4, and the caches would be rebuilt (the
+    wikidata pack is 122 G, the pubmed pack 84 G). `is_dataset` and `exists`
+    (tests): `os.path.ismount` and `os.path.exists` by default."""
+    import os
+    host = host or FAST_HOST
+    check, there = is_dataset or os.path.ismount, exists or os.path.exists
+    if not host or not check(host) or not there(f"{host}/{FAST_READY}"):
+        return ()
+    return tuple((f"{host}/{sub}", target, ro) for sub, target, ro in FAST_MOUNTS if there(f"{host}/{sub}"))
 
 
 def _parts(v) -> tuple[str | None, str | None]:

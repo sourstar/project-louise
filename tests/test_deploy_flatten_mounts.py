@@ -68,3 +68,30 @@ def test_a_build_dataset_is_mounted_in_web_and_worker_and_named():
         assert svc["environment"]["LOUISE_BUILD_DIR"] == "/build"
     assert "gpu-probe" not in " ".join(said)
     assert fm.apply(c, shared=shared, env={"LOUISE_CACHE_DIR": "/data/cache", **env}) == [], "idempotent"
+
+
+def test_the_fast_area_backs_the_same_container_paths_once_its_copy_is_ready():
+    """Operator, 2026-11-14: "For very fast caching (like embedding) use ssd5".
+    The caches keep their container paths (/data/cache, /data/pubmed-pack), so
+    derived.py's keys are unchanged and nothing is rebuilt; the area is mounted
+    only once the copy is compared (READY), and never a subfolder that is not
+    there (Docker would create it empty and the packs would be rebuilt)."""
+    host = "/mnt/ssd5/louise-cache"
+    have = {host, f"{host}/READY", f"{host}/cache", f"{host}/pubmed-pack"}
+    there = have.__contains__
+    assert fm.FAST_HOST is None, "the dataset is München's to name"
+    assert fm.fast_area(is_dataset=lambda p: True, exists=there) == (), "no host named: nothing"
+    assert fm.fast_area(host, is_dataset=lambda p: False, exists=there) == (), "not a dataset: nothing"
+    assert fm.fast_area(host, is_dataset=lambda p: True, exists=(have - {f"{host}/READY"}).__contains__) == (), \
+        "no READY marker: the copy is not compared, nothing mounted"
+    only = fm.fast_area(host, is_dataset=lambda p: True, exists=(have - {f"{host}/pubmed-pack"}).__contains__)
+    assert [t for _, t, _ in only] == ["/data/cache"], "a missing subfolder is never mounted"
+    shared = fm.fast_area(host, is_dataset=lambda p: True, exists=there)
+    c = cfg()
+    fm.apply(c, shared=shared, env={"LOUISE_CACHE_DIR": "/data/cache"})
+    web, worker = c["services"]["web"], c["services"]["worker"]
+    assert f"{host}/cache:/data/cache" in web["volumes"] and f"{host}/cache:/data/cache" in worker["volumes"]
+    assert f"{host}/pubmed-pack:/data/pubmed-pack:ro" in web["volumes"]
+    assert f"{host}/pubmed-pack:/data/pubmed-pack" in worker["volumes"]
+    assert web["environment"]["LOUISE_CACHE_DIR"] == "/data/cache", "the same path: nothing rebuilt"
+    assert fm.apply(c, shared=shared, env={"LOUISE_CACHE_DIR": "/data/cache"}) == [], "idempotent"

@@ -1908,6 +1908,14 @@ it left open is below.
 
 ## Open after the migration
 
+- **`PUBMED_PACK_DIR` is an env override beside app/derived.py** (the legal session, 2026-11-14).
+  `app/plugins/pubmed/pack.py` `pack_path` takes it first (app/config.py:16), so the node's 84 G pubmed
+  pack (2,124 parquet files, `/data/pubmed-pack`) lives outside `LOUISE_CACHE_DIR`, against invariant
+  6's "only app/derived.py resolves the cache". The cleanup, for whoever owns pubmed: adopt a
+  `PUBMED_PACK_DIR` pack into derived's tree (`derived.adopt` carries only a pack built beside the
+  containers today) and retire the variable. It does not block the ssd5 move: the pack keeps its
+  container path, on its own ssd5 subfolder (storage-tiering.md §10).
+
 - **BEFORE PRODUCTION — the operator's list** (to clear before switching to production):
   1. jina-style encoders on llama.cpp, implemented and tested at f16 (operator, 2026-10-31; below).
   2. **ON HOLD (operator, 2026-11-01): RAGE settings exchanged between peers** — the `rage-settings` member in the digest and its fetch (09 §9.16, §9.9, §9.19). Until then a node reads only the files in its own SHARD.
