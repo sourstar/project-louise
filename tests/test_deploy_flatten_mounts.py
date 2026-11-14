@@ -122,22 +122,22 @@ def test_the_two_cache_areas_are_mounted_once_their_copies_are_ready():
     assert fm.apply(c, shared=shared, env={"LOUISE_CACHE_DIR": "/data/cache", **env}) == [], "idempotent"
 
 
-def test_an_area_whose_copy_lacks_one_of_today_s_caches_is_not_mounted():
-    """A cache the copy missed would be REBUILT once the area is mounted —
-    wikidata's pack from the dump, days. Every `<kind>/<tag>` under today's
-    `/data/cache` of the area's kinds, and every file of today's pubmed pack
-    for the files area, must be in the copy."""
+def test_the_fast_area_needs_a_whole_copy_and_the_files_area_none():
+    """A fast cache the copy missed would be REBUILT once the area is
+    mounted: every `<kind>/<tag>` of today's `/data/cache` that is not a
+    FILES kind must be in the fast copy. The files area may start empty: its
+    packs are kept only upon need and built again by their readers
+    (operator 2026-11-14; app/derived.py `evict_idle`)."""
     data = "/mnt/ssd4/apps/louise-rag/data"
     fast, files = "/mnt/ssd5/louise-cache", "/mnt/ssd3/louise-files"
     tree = {data: ["cache", "pubmed-pack"], f"{data}/cache": ["wikidata-pack", "legi-facts", "x.lock"],
             f"{data}/cache/wikidata-pack": ["aa", ".bb.1.adopting"], f"{data}/cache/legi-facts": ["cc"],
-            f"{data}/pubmed-pack": ["pubmed26n0001.xml.gz.parquet"]}
+            f"{data}/pubmed-pack": ["pubmed26n0001.xml.gz.pack.parquet"]}
     dirs = {data, f"{data}/cache", f"{data}/cache/wikidata-pack", f"{data}/cache/legi-facts",
             f"{data}/cache/wikidata-pack/aa", f"{data}/cache/wikidata-pack/.bb.1.adopting",
             f"{data}/cache/legi-facts/cc", f"{data}/pubmed-pack"}
     copied = {fast, f"{fast}/READY", f"{fast}/cache", f"{fast}/cache/legi-facts/cc",
-              files, f"{files}/READY", f"{files}/cache", f"{files}/pubmed-pack",
-              f"{files}/cache/wikidata-pack/aa", f"{files}/pubmed-pack/pubmed26n0001.xml.gz.parquet"}
+              files, f"{files}/READY", f"{files}/cache", f"{files}/pubmed-pack"}      # no pack copied
 
     def areas(have):
         return fm.cache_areas(fast, files, data=data, is_dataset=lambda p: True,
@@ -145,11 +145,7 @@ def test_an_area_whose_copy_lacks_one_of_today_s_caches_is_not_mounted():
                               isdir=dirs.__contains__)
     shared, env, said = areas(copied)
     assert [t for _, t, _ in shared] == ["/data/files-cache", "/data/pubmed-pack", "/data/cache"], said
-    shared, env, said = areas(copied - {f"{files}/cache/wikidata-pack/aa"})
-    assert (shared, env) == ((), {}), "the files copy lacks wikidata's pack: neither area"
-    assert any("NOT mounted" in line and "wikidata-pack/aa" in line for line in said)
-    shared, env, said = areas(copied - {f"{files}/pubmed-pack/pubmed26n0001.xml.gz.parquet"})
-    assert shared == () and any("pubmed-pack/pubmed26n0001" in line for line in said)
+    assert env == {"LOUISE_FILES_CACHE_DIR": "/data/files-cache"}
     shared, env, said = areas(copied - {f"{fast}/cache/legi-facts/cc"})
     assert [t for _, t, _ in shared] == ["/data/files-cache", "/data/pubmed-pack"], "the files one alone"
     assert any(line.startswith("fast cache: NOT mounted") and "legi-facts/cc" in line for line in said)

@@ -465,11 +465,10 @@ Docker would create empty.
 | ssd3 | `pubmed-pack/` | `/data/pubmed-pack` (unchanged) | `PUBMED_PACK_DIR` |
 
 The fast area needs the files one beside it: without it the packs would be
-looked for on ssd5, where they were not copied, and rebuilt. The files area
-alone is safe. And an area whose copy lacks one `<kind>/<tag>` of today's
-`/data/cache` (of its kinds), or one file of today's pubmed pack, is not
-mounted: the deploy names what is missing, which would otherwise be rebuilt
-(wikidata's pack, from the dump: days). A cache's tag is its origin's resolved path whatever the root,
+built on ssd5. The files area alone is safe, and may start empty. A fast area
+whose copy lacks one `<kind>/<tag>` of today's `/data/cache` (of its kinds) is
+not mounted: the deploy names what is missing, which would otherwise be
+rebuilt. A cache's tag is its origin's resolved path whatever the root,
 so a kind moves as the same `<kind>/<tag>` bytes and nothing is rebuilt. The
 pubmed pack never goes inside a cache dir: its files would share
 `pubmed-pack/`, a kind name of derived.py's own tree, and `derived.held` would
@@ -477,15 +476,31 @@ list each. The ssd4 copies stay (hidden under the fast mount, or beside the
 files one) as the way back; removing them is the operator's yes, with the
 size.
 
+**The packs only upon need** (operator, 2026-11-14: "don't permanently use the
+solid state caching for them, only upon need"). A pack — a container pack file
+(pubmed's, legi's, page-props'), a wikidata pack directory with its label table
+— is stamped when used (`derived.used`, at most once an hour a process) and goes
+once idle 24 h (`derived.evict_idle`: the worker's maintainer, once an hour;
+`louise dev cache-evict [--idle-hours H] [--dry-run]` by hand). Never one being
+built (its builder's lock is tried, not waited for) nor one a reader asked for.
+Its reader builds it again upon need: the pack memo checks the file is still
+there; a wikidata reader that finds its pack gone defers and writes `.wanted`,
+and the next scan builds it although the dump is unchanged. The standard is a
+time-to-live cache on last use (systemd-tmpfiles `Age=`, tmpreaper), done in the
+app because a wikidata pack is ~1,300 files and a table that go together and the
+datasets keep atime off. Measured cost of a rebuild: ~17 s a pubmed container in
+the parse pool; a wikidata pack is a pass over the dump (hours).
+
 **The copy, for München** (with the worker stopped, RULE 1):
-1. ssd3: `cache/` ← `/data/cache/{wikidata-pack,legi-pack,wikipedia-page-props}`
-   (each `<kind>/<tag>` whole); `pubmed-pack/` ← `/data/pubmed-pack`. Compare,
+1. ssd3: the dataset with `cache/` and `pubmed-pack/` EMPTY, then `READY`. The
+   packs are not copied: they are built upon need.
+2. ssd5: `cache/` ← every kind of `/data/cache` that is not a pack. Compare,
    then `READY`.
-2. ssd5: `cache/` ← every other kind of `/data/cache`. Compare, then `READY`.
 3. Deploy (`FILES_HOST` /mnt/ssd3/louise-files-cache and `FAST_HOST`
-   /mnt/ssd5/louise-fast-cache, named by München 2026-11-14). The first scan of
-   wikidata carries its label table from the files cache to ssd5 (a log line,
-   "label table carried"); until then its documents defer.
+   /mnt/ssd5/louise-fast-cache, named by München 2026-11-14). The packs on ssd4
+   (`/data/cache/{wikidata-pack,legi-pack,wikipedia-page-props}`,
+   `/data/pubmed-pack`, ~206 G) are then read by nothing: removing them is the
+   operator's yes, with the size.
 
 **tank1** (24 TB raidz HDD) takes over from tank as the archive pool when tank
 is full: new collections' origins, SHARDs and bundles go there by pointing

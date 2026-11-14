@@ -3385,6 +3385,16 @@ def _index_maintainer() -> None:
     cons: dict[str, object] = {}
     while not _stop.wait(INDEX_MAINTAINER_INTERVAL_S):
         try:
+            # the packs built from the source downloads, kept only upon need
+            # (operator 2026-11-14; app/derived.py `evict_idle`): an idle one
+            # goes, at most once an hour, paused node or not
+            from app import derived
+            derived.evict_due(log=lambda m: print(f"{time.strftime('%H:%M:%S')} [node info:cache] {m}",
+                                                  flush=True))
+        except Exception as e:   # noqa: BLE001 — eviction must never kill the maintainer
+            print(f"{time.strftime('%H:%M:%S')} [node warn:cache] eviction failed: {type(e).__name__}: {e}"[:300],
+                  flush=True)
+        try:
             # A PAUSED COLLECTION IS ONE THE NODE IS NOT RUNNING (07 §7.7):
             # its derived indexes wait with it. 2026-10-18: pubmed-v8, paused
             # for its carry, got facets written into its index/ and the carry

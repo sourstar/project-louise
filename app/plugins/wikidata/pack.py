@@ -70,6 +70,7 @@ same bytes), else the standard library's bz2.
 """
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import multiprocessing
@@ -186,6 +187,37 @@ def _drop_labels(dump: Path) -> None:
             p.unlink(missing_ok=True)
 
 
+def want(dump: Path) -> None:
+    """A reader needs this dump's pack and found it gone — evicted while
+    idle (app/derived.py `evict_idle`, operator 2026-11-14: "only upon
+    need"): `WANTED` written where the pack belongs, so the next scan builds
+    it even for a dump it has seen (source.py `discover`) and the evictor
+    leaves it be. Never fails; a pack beside its dump is never evicted."""
+    t = _target(dump)
+    if not derived.cached(t):
+        return
+    with contextlib.suppress(OSError):
+        t.mkdir(parents=True, exist_ok=True)
+        (t / derived.WANTED).touch()
+
+
+def wanted(dump: Path) -> bool:
+    return (_target(dump) / derived.WANTED).exists()
+
+
+def _unwant(dump: Path) -> None:
+    (_target(dump) / derived.WANTED).unlink(missing_ok=True)
+
+
+def _missing(dump: Path, what: str):
+    """The deferral of a reader that found the pack (or its table) gone:
+    the pack asked for, the document parsed once it is back."""
+    from app.chunking import PlatformMissing
+    want(dump)
+    return PlatformMissing(f"{what}: the pack is built again upon need (the next scan); this document is "
+                           f"parsed then")
+
+
 def carry_labels(dump: Path, *, log: Callable[[str], None] | None = None) -> bool:
     """UNDER THE PACK'S WRITER LOCK (`WRITER`): the label table carried to
     `labels_path` from where an earlier configuration left it. SQLite's own
@@ -232,9 +264,7 @@ def labels_uri(dump: Path) -> str:
     fallback)."""
     path = labels_path(dump)
     if not path.is_file():
-        from app.chunking import PlatformMissing
-        raise PlatformMissing(f"the label table of {Path(dump).name} is not at {path} yet (the pack's writer "
-                              f"carries it there at the next scan): this document is parsed then")
+        raise _missing(dump, f"the label table of {Path(dump).name} is not at {path}")
     return path.resolve().as_uri()
 
 
@@ -290,6 +320,7 @@ def pack_dir(dump: Path) -> Path:
     old = _beside(dump)
     got = old if (target != old and not _meta_path(target).is_file() and _meta_path(old).is_file()) else target
     _dirs[key] = (now, derived.places_key(), got)
+    derived.used(got)                       # at most once an hour, only in a cache (`derived.used`)
     return got
 
 
@@ -560,7 +591,10 @@ def build(dump: Path, *, languages: tuple[str, ...] = ("en",), log: Callable[[st
     d.mkdir(parents=True, exist_ok=True)
     with derived.writing(d / WRITER, f"the pack build of {dump.name}"):
         carry_labels(dump, log=say)
-        return _build(dump, d, languages=languages, say=say, stop=stop, chunk=chunk, workers=workers)
+        meta = _build(dump, d, languages=languages, say=say, stop=stop, chunk=chunk, workers=workers)
+        if meta.get("complete") and meta.get("families_done"):
+            _unwant(dump)                   # a reader asked for it (`want`): it is back
+        return meta
 
 
 #: the pack's writer lock (`derived.writing`): the build, the codes pass and
@@ -1157,6 +1191,8 @@ def language_codes(dump: Path) -> dict[str, str]:
         return got
     if not ready(dump):
         from app.chunking import PlatformMissing
+        if read_meta(dump) is None:
+            raise _missing(dump, f"the wikidata pack of {Path(dump).name} is not there")
         raise PlatformMissing(f"the wikidata pack of {Path(dump).name} is not ready for parser 2 "
                               f"(version {(read_meta(dump) or {}).get('pack_version')}, names not done): the "
                               f"next scan finishes it, and this document is parsed then")
@@ -1674,9 +1710,7 @@ class LabelTable:
         con = getattr(self._local, "con", None)
         if con is None:
             if not self.path.is_file():
-                from app.chunking import PlatformMissing
-                raise PlatformMissing(f"the label table of {self.dump.name} is not at {self.path} yet (the pack's "
-                                      f"writer carries it there at the next scan): this document is parsed then")
+                raise _missing(self.dump, f"the label table of {self.dump.name} is not at {self.path}")
             uri = self.path.resolve().as_uri() + "?mode=ro"
             con = sqlite3.connect(uri, uri=True, check_same_thread=False)
             self._local.con = con

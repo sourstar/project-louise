@@ -248,3 +248,94 @@ def test_held_lists_each_kind_under_its_own_cache_only(tmp_path, monkeypatch):
 
 def test_the_pool_s_children_see_both_caches():
     assert {"CACHE_DIR", "FILES_CACHE_DIR"} <= set(parallel.KNOBS)
+
+
+def _old(p: Path, now: float, days: float) -> None:
+    os.utime(p, (now - days * 86400, now - days * 86400))
+
+
+def test_an_idle_pack_goes_and_a_used_one_stays(tmp_path, monkeypatch):
+    """Operator, 2026-11-14: the caches built from the source downloads,
+    "only upon need". A pack idle IDLE_S goes; one used since stays; a FAST
+    kind never goes this way; PUBMED_PACK_DIR's packs are packs too."""
+    import time
+    fast, files, pp = tmp_path / "ssd5", tmp_path / "ssd3", tmp_path / "pubmed-pack"
+    monkeypatch.setattr(config, "CACHE_DIR", fast)
+    monkeypatch.setattr(config, "FILES_CACHE_DIR", files)
+    monkeypatch.setattr(config, "PUBMED_PACK_DIR", pp)
+    idle, used = files / "legi-pack" / "t1" / "a.tar.gz.pack.parquet", files / "legi-pack" / "t1" / "b.tar.gz.pack.parquet"
+    pubmed, facts = pp / "pubmed26n0001.xml.gz.pack.parquet", fast / "legi-facts" / "t1" / "legi-facts.sqlite"
+    now = time.time()
+    for p in (idle, used, pubmed, facts):
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_bytes(b"x" * 10)
+        _old(p, now, 2)
+    derived._touched.clear()
+    derived.used(used, now=now)
+    assert derived.stamp_of(used).is_file()
+    would = derived.evict_idle(now=now, dry_run=True)
+    assert {Path(r["path"]) for r in would} == {idle, pubmed} and all(r["bytes"] == 10 for r in would)
+    assert idle.exists(), "a dry run removes nothing"
+    gone = derived.evict_idle(now=now)
+    assert {Path(r["path"]) for r in gone} == {idle, pubmed}
+    assert not idle.exists() and not pubmed.exists() and used.exists() and facts.exists()
+    assert derived.evict_idle(now=now + derived.IDLE_S + 1) and not used.exists(), "idle in its turn"
+    assert not derived.stamp_of(used).exists()
+
+
+def test_a_pack_being_built_is_never_evicted(tmp_path, monkeypatch):
+    import fcntl
+    import time
+    monkeypatch.setattr(config, "CACHE_DIR", None)
+    monkeypatch.setattr(config, "FILES_CACHE_DIR", tmp_path / "ssd3")
+    monkeypatch.setattr(config, "PUBMED_PACK_DIR", None)
+    pack = tmp_path / "ssd3" / "legi-pack" / "t" / "a.tar.gz.pack.parquet"
+    pack.parent.mkdir(parents=True)
+    pack.write_bytes(b"x")
+    with open(pack.with_name(pack.name + ".lock"), "a+b") as f:
+        fcntl.flock(f, fcntl.LOCK_EX)                           # derived.building's lock, held
+        assert derived.evict_idle(now=time.time() + 3 * 86400) == []
+    assert pack.exists()
+
+
+def test_a_pack_evicted_under_a_kept_answer_is_built_again_upon_need(tmp_path, monkeypatch):
+    """The pack memo (app/container_pack.py) kept its answer across the
+    eviction: it now asks the file is still there, and builds it again."""
+    import time
+
+    import pyarrow as pa
+
+    from app.container_pack import ContainerPack
+    monkeypatch.setattr(config, "CACHE_DIR", None)
+    monkeypatch.setattr(config, "FILES_CACHE_DIR", tmp_path / "ssd3")
+    monkeypatch.setattr(config, "PUBMED_PACK_DIR", None)
+    origin = tmp_path / "corpus" / "a.tar.gz"
+    origin.parent.mkdir()
+    origin.write_bytes(b"abc")
+    place = tmp_path / "ssd3" / "legi-pack" / "t" / ("a.tar.gz" + derived.PACK_FILE)
+    cp = ContainerPack("test pack", "rows", b"test.version")
+    builds = []
+
+    def build(o, dest):
+        builds.append(dest)
+        return cp.write(o, dest, pa.schema([("a", pa.int64())]), [pa.table({"a": [1]})], 1)
+    assert cp.ensure(origin, lambda: [place], version=1, build=build) == place
+    assert cp.ensure(origin, lambda: [place], version=1, build=build) == place and len(builds) == 1
+    derived._touched.clear()
+    assert [r["path"] for r in derived.evict_idle(now=time.time() + 2 * 86400)] == [str(place)]
+    assert not place.exists()
+    assert cp.ensure(origin, lambda: [place], version=1, build=build) == place
+    assert place.is_file() and len(builds) == 2, "built again upon need"
+
+
+def test_eviction_runs_at_most_once_an_hour(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "CACHE_DIR", None)
+    monkeypatch.setattr(config, "FILES_CACHE_DIR", tmp_path / "ssd3")
+    monkeypatch.setattr(config, "PUBMED_PACK_DIR", None)
+    calls = []
+    monkeypatch.setattr(derived, "evict_idle", lambda **k: calls.append(k) or [])
+    monkeypatch.setattr(derived, "_last_evict", 0.0)
+    derived.evict_due(now=10_000.0)
+    derived.evict_due(now=10_000.0 + derived.EVICT_EVERY_S - 1)
+    derived.evict_due(now=10_000.0 + derived.EVICT_EVERY_S)
+    assert len(calls) == 2

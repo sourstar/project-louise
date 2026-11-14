@@ -528,6 +528,41 @@ def test_a_pack_with_chunks_and_no_label_table_is_refused_never_written_on(tmp_p
     assert (pack.pack_dir(dump) / "00000.parquet").is_file(), "nothing removed"
 
 
+def test_an_idle_pack_goes_with_its_label_table_and_comes_back_upon_need(tmp_path, monkeypatch):
+    """Operator, 2026-11-14: the caches built from the source downloads,
+    "only upon need". An idle pack goes whole, its label table with it; a
+    reader then defers and asks for it (`want`), the evictor leaves the
+    asked-for place alone, and the next scan builds it again although the
+    dump is unchanged — discovering nothing new."""
+    import time
+
+    from app import derived
+    from app.chunking import PlatformMissing
+    dump = a_dump(tmp_path / "origin")
+    monkeypatch.setattr(pack.config, "CACHE_DIR", tmp_path / "ssd5")
+    monkeypatch.setattr(pack.config, "FILES_CACHE_DIR", tmp_path / "ssd3")
+    monkeypatch.setattr(pack.config, "PUBMED_PACK_DIR", None)
+    pack.reset_caches()
+    src = WikidataSource(languages=("en",))
+    state = DiscoverState(corpus_root=tmp_path / "origin", state_dir=_state(tmp_path))
+    assert list(src.discover(state)), "the first scan builds the pack and finds every entity"
+    assert list(src.discover(state)) == [], "unchanged: nothing"
+    d, labels = pack.pack_dir(dump), pack.labels_path(dump)
+    rows = _label_rows(labels)
+    later = time.time() + 2 * 86400
+    gone = derived.evict_idle(now=later)
+    assert [r["kind"] for r in gone] == ["wikidata-pack"] and not d.exists() and not labels.exists()
+    pack.reset_caches()
+    with pytest.raises(PlatformMissing):
+        pack.labels(dump)("Q42", "en")
+    assert pack.wanted(dump)
+    assert derived.evict_idle(now=later + 86400) == [], "asked for: left alone"
+    assert list(src.discover(state)) == [], "built again, nothing new discovered"
+    assert pack.is_complete(dump, ("en",)) and not pack.wanted(dump)
+    assert _label_rows(pack.labels_path(dump)) == rows, "the same table"
+    assert pack.labels(dump)("Q42", "en") == "Douglas Adams"
+
+
 def _state(tmp_path):
     d = tmp_path / "state"
     d.mkdir(exist_ok=True)

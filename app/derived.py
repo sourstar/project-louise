@@ -27,6 +27,7 @@ under the other root.
 """
 from __future__ import annotations
 
+import contextlib
 import fcntl
 import hashlib
 import json
@@ -259,3 +260,193 @@ def held() -> list[Path]:
         found.update(t for k in base.iterdir() if k.is_dir() and root(k.name) == base
                      for t in k.iterdir() if not t.name.startswith("."))
     return sorted(found)
+
+
+# ---- the packs, upon need ------------------------------------------------------------------
+#
+# Operator, 2026-11-14: the source downloads stay on tank, and "don't permanently
+# use the solid state caching for them, only upon need". A FILES kind's UNIT — a
+# container pack file (pubmed's, legi's, page-props'), a wikidata pack directory
+# with its label table — is stamped when it is used and goes once it has been
+# idle for IDLE_S; its reader builds it again the next time it is needed. The
+# standard: a time-to-live cache keyed on last use, the policy of
+# systemd-tmpfiles' `Age=` and tmpreaper. Neither is used itself: both work file
+# by file (a wikidata pack is ~1,300 files and its table, which go together) and
+# read the access time, which the node's datasets turn off (atime=off).
+
+#: a unit unused this long goes (seconds)
+IDLE_S = 24 * 3600
+#: how often a process restamps one unit: a stamp is a write
+TOUCH_EVERY_S = 3600.0
+#: how often the worker looks for idle units
+EVICT_EVERY_S = 3600.0
+#: a container pack's file name ends so (pubmed, legi, page-props)
+PACK_FILE = ".pack.parquet"
+#: a directory unit's stamp, and its writer lock (wikidata pack.py `WRITER`)
+USED, DIR_LOCK = ".used", "writer.lock"
+#: a directory unit a reader asked for while it was gone (wikidata pack.py `want`)
+WANTED = ".wanted"
+_touched: dict[str, float] = {}
+_last_evict = 0.0
+
+
+def _roots() -> list[Path]:
+    return [Path(b) for b in {str(x) for x in (config.CACHE_DIR, config.FILES_CACHE_DIR,
+                                               getattr(config, "PUBMED_PACK_DIR", None)) if x is not None}]
+
+
+def cached(path: Path) -> bool:
+    """`path` lies under a cache this node names (the fast, the files, the
+    pubmed pack's): a pack beside its origin, on tank, is not one."""
+    p = str(Path(path))
+    return any(p == str(r) or p.startswith(str(r).rstrip("/") + "/") for r in _roots())
+
+
+def stamp_of(unit: Path) -> Path:
+    unit = Path(unit)
+    return unit / USED if unit.suffix != ".parquet" else unit.with_name(f".{unit.name}{USED}")
+
+
+def used(unit: Path, *, now: float | None = None) -> None:
+    """`unit` used now: its stamp written at most once an hour a process,
+    and only for a unit in a cache; never fails (a read-only mount, the web's,
+    simply does not stamp)."""
+    now = time.time() if now is None else now
+    key = str(unit)
+    if now - _touched.get(key, 0.0) < TOUCH_EVERY_S or not cached(Path(unit)):
+        return
+    _touched[key] = now
+    s = stamp_of(Path(unit))
+    try:
+        s.touch()
+        os.utime(s, (now, now))
+    except OSError:
+        pass
+
+
+def last_used(unit: Path) -> float:
+    """When `unit` was last used or written: its stamp, its own time, and
+    for a directory its meta.json (a build in progress rewrites it)."""
+    unit = Path(unit)
+    times = []
+    for p in (stamp_of(unit), unit, unit / "meta.json"):
+        try:
+            times.append(p.stat().st_mtime)
+        except OSError:
+            pass
+    return max(times, default=0.0)
+
+
+def units() -> list[tuple[str, Path]]:
+    """Every unit of a FILES kind the caches hold, as (kind, path): the
+    packs of each kind under its root, and PUBMED_PACK_DIR's files."""
+    out: list[tuple[str, Path]] = []
+
+    def files_in(kind: str, d: Path) -> None:
+        with contextlib.suppress(OSError):
+            out.extend((kind, p) for p in sorted(d.iterdir())
+                       if p.name.endswith(PACK_FILE) and not p.name.startswith(".") and p.is_file())
+
+    for kind in sorted(FILES):
+        base = root(kind)
+        if base is None or not (base / kind).is_dir():
+            continue
+        for tag_dir in sorted((base / kind).iterdir()):
+            if tag_dir.name.startswith(".") or not tag_dir.is_dir():
+                continue
+            if kind == "wikidata-pack":
+                out.extend((kind, d) for d in sorted(tag_dir.iterdir())
+                           if d.is_dir() and not d.name.startswith("."))
+            else:
+                files_in(kind, tag_dir)
+    pp = getattr(config, "PUBMED_PACK_DIR", None)
+    if pp is not None and Path(pp).is_dir():
+        files_in("pubmed-pack", Path(pp))
+    return out
+
+
+def _size(unit: Path) -> int:
+    if unit.is_file():
+        return unit.stat().st_size
+    return sum(p.stat().st_size for p in unit.rglob("*") if p.is_file())
+
+
+def _companions(kind: str, unit: Path) -> list[Path]:
+    """What goes with a unit: a wikidata pack's label table, on the fast
+    cache when the two caches are apart (its tag is the pack's: both are
+    keyed on the dump, app/plugins/wikidata/pack.py `labels_path`)."""
+    if kind != "wikidata-pack" or not apart("wikidata-pack", "wikidata-labels"):
+        return []
+    d = root("wikidata-labels") / "wikidata-labels" / unit.parent.name
+    return [d] if d.exists() else []
+
+
+def evict_idle(idle_s: float = IDLE_S, *, now: float | None = None, dry_run: bool = False,
+               log=None) -> list[dict]:
+    """Every unit idle `idle_s` or more, removed — never one a writer holds
+    (its lock is tried, not waited for) nor one a reader asked for
+    (`WANTED`). A pack file goes under its builder's lock (`building`'s),
+    a directory renamed whole first (a reader sees it whole or not at all)
+    and its companions before it. Returns what went (or would go): kind,
+    path, bytes, idle hours."""
+    now = time.time() if now is None else now
+    gone: list[dict] = []
+    for base in _roots():
+        for kind_dir in (k for k in (base.iterdir() if base.is_dir() else ()) if k.is_dir()):
+            for p in kind_dir.iterdir():                             # a killed evictor's leftovers
+                if p.name.endswith(".evicting"):
+                    shutil.rmtree(p, ignore_errors=True)
+                elif p.is_dir():
+                    for q in _named(p, ".", ".evicting"):
+                        shutil.rmtree(q, ignore_errors=True)
+    for kind, unit in units():
+        idle = now - last_used(unit)
+        if idle < idle_s or (unit.is_dir() and (unit / WANTED).exists()):
+            continue
+        row = {"kind": kind, "path": str(unit), "bytes": _size(unit), "idle_h": round(idle / 3600, 1)}
+        if dry_run:
+            gone.append(row)
+            continue
+        if unit.is_dir():
+            try:
+                with writing(unit / DIR_LOCK, "the cache evictor"):
+                    if (unit / WANTED).exists() or now - last_used(unit) < idle_s:
+                        continue
+                    for c in _companions(kind, unit):
+                        tmp = c.with_name(f".{c.name}.{os.getpid()}.evicting")
+                        os.replace(c, tmp)
+                        shutil.rmtree(tmp, ignore_errors=True)
+                    tmp = unit.with_name(f".{unit.name}.{os.getpid()}.evicting")
+                    os.replace(unit, tmp)
+            except Busy:
+                continue
+            shutil.rmtree(tmp, ignore_errors=True)
+        else:
+            with open(unit.with_name(unit.name + ".lock"), "a+b") as f:
+                try:
+                    fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                except OSError:
+                    continue                                       # being built or rebuilt
+                try:
+                    if now - last_used(unit) < idle_s:
+                        continue
+                    unit.unlink(missing_ok=True)
+                    stamp_of(unit).unlink(missing_ok=True)
+                finally:
+                    fcntl.flock(f, fcntl.LOCK_UN)
+        gone.append(row)
+        if log is not None:
+            log(f"[cache] {kind}: {unit} removed, idle {row['idle_h']} h, {row['bytes'] / 2**30:.2f} GiB "
+                f"(built again upon need)")
+    return gone
+
+
+def evict_due(*, now: float | None = None, log=None) -> list[dict]:
+    """`evict_idle`, at most once every EVICT_EVERY_S a process: the
+    worker's maintainer asks each minute."""
+    global _last_evict
+    now = time.time() if now is None else now
+    if now - _last_evict < EVICT_EVERY_S:
+        return []
+    _last_evict = now
+    return evict_idle(now=now, log=log)

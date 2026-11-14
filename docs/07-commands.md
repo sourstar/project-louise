@@ -386,6 +386,9 @@ louise dev                                                             operator 
                                                                        derived state, not the copy, and proves nothing to another peer (03 §3.2)
   unindexable <collection> <uid> [--yes]                               a document the plugin now refuses: out of every index, its error written at once; writes
   mark-embedded <collection>                                           documents whose every chunk has a vector here and whose row says embed_done = 0, marked; writes
+  cache-evict [--idle-hours H] [--dry-run]                             the packs built from the source downloads idle H hours (default 24), removed and built again
+                                                                       upon need — what the worker does once an hour (operator, 2026-11-14: "only upon need");
+                                                                       never one being built, nor one a reader asked for; writes
   rewrite-vectors <collection> [--yes] [--restart] [--drop-old] [--group N]
                                                                        the vector table copied row for row into one with Lance's stable row ids, so a compaction
                                                                        never re-maps the index (operator, 2026-10-31): copy (resumable by fragment group), verify
@@ -2233,7 +2236,12 @@ label table, read at random inside its pack, is its own kind
 (`wikidata-labels`) on the fast cache whenever the two are apart: one
 place a configuration, a reader of a table not there yet defers, and the
 pack's writer carries it there once (SQLite's online backup), removing the
-old copy. Unset, every kind stays where `LOUISE_CACHE_DIR` puts it.
+old copy. Unset, every kind stays where `LOUISE_CACHE_DIR` puts it. The
+packs are kept only upon need (*amended 2026-11-14*, operator: "don't
+permanently use the solid state caching for them, only upon need"): stamped
+when used, removed once idle 24 hours by the worker (once an hour; `dev
+cache-evict` by hand), never while being built or asked for, and built
+again by their readers.
 
 A build area for vector tables (*amended 2026-11-07*, operator: "B, ssd3
 as the build area", docs/notes/storage-tiering.md §8): with
