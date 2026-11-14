@@ -137,7 +137,7 @@ grep -q "^def discard(" "$ROOT/src.new/app/hold/discard.py"                     
 grep -q "token = body.token.strip()" "$ROOT/src.new/app/web.py"                             # e5abaa9 (c321771): /admin/login strips the pasted token
 grep -q '^DISCARDED = ".discarded"' "$ROOT/src.new/app/hold/discard.py"                    # f1492ad (15428cd): discarded parts stay inside the SHARD (EXDEV)
 grep -q '<div class="brand">' "$ROOT/src.new/app/templates/base.html"                      # db3a5c1 (d3fdc91): the name centred above the menu
-grep -q '<div class="brand">Project Louise</div>' "$ROOT/src.new/app/templates/base.html"  # bc066c4 (f4095ac): the header says Project Louise
+grep -q '<div class="brand">{{ site_title() }}</div>' "$ROOT/src.new/app/templates/base.html"  # a48f5f0 (#546): the header says the node's title ("Project Louise" unless [node] title), replacing bc066c4's literal
 grep -q 'name="how" value="search"' "$ROOT/src.new/app/templates/ask.html"                  # 1fc7880 (f485cbe): Ask — one button, the Search only / AI summary switch
 grep -q "^def _map_parts(fn, tasks" "$ROOT/src.new/app/hold/check.py"                       # 8f3cf19 (5dd76db): hold check's parts in processes
 grep -q "^def each_part(fn, tasks" "$ROOT/src.new/app/parallel.py"                          # 981e3f1 (1776cc1): later delta and vectors-sample in processes; whole quota
@@ -446,6 +446,12 @@ from truenas_api_client import Client
 shared, build_env = fm.build_area(os.environ.get("LOUISE_BUILD_HOST") or None)
 print(f"build area: {shared[0][0]} -> {shared[0][1]}" if shared else
       "build area: no ssd3 dataset named or mounted, LOUISE_BUILD_DIR left unset")
+# THE FAST CACHE AREA (operator 2026-11-14, storage-tiering.md §10): ssd5 behind the
+# same container paths, once the copy is compared and READY
+fast = fm.fast_area(os.environ.get("LOUISE_FAST_HOST") or None)
+print("fast area: " + ", ".join(f"{h} -> {t}" for h, t, _ in fast) if fast else
+      "fast area: no ssd5 dataset named, mounted and READY: the caches stay where they are")
+shared = tuple(shared) + fast
 with Client() as c:
     cfg = c.call("app.config", fm.APP)
     said = fm.apply(cfg, shared=shared, env={"LOUISE_CACHE_DIR": "/data/cache", **build_env})

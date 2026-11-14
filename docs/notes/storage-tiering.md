@@ -414,3 +414,32 @@ No AFTER run is more than 2 s above the slowest BEFORE one, except the first
 read after the move. **The backends stay on ssd3.** Free space right after,
 before the snapshots expire and the `*.moved` datasets go: ssd4 594 G (~205 G
 more once its 2-hour snapshots release), ssd5 107 G, ssd3 6.8 T.
+
+## 10. The caches by speed (operator, 2026-11-14)
+
+"For very fast caching (like embedding) use ssd5, for bulk caching use ssd3."
+The node's drives: ssd5 NVMe Gen5 1 TB (Lexar NM990, 944 G, ~517 G free on
+2026-11-14), ssd4 NVMe Gen4 2 TB (the data pool), ssd3 SATA SSD 8 TB (Samsung
+870 QVO), tank raidz HDD 16 TB.
+
+| what | access | drive |
+|---|---|---|
+| the derived caches (`LOUISE_CACHE_DIR`: wikidata's pack 122 G, legi's, page-props, claim index, speech) and the pubmed pack (`PUBMED_PACK_DIR`, 84 G) | random, a parse or a query waits | **ssd5** |
+| a measurement's embedding cache (the chunker mode's and bakeoff's vectors, memory-mapped) | random reads | **ssd5** (the run's `--out`) |
+| bulk: the build area (`LOUISE_BUILD_DIR`, §8), a measurement's scratch, downloads before they are archived | sequential, written once | **ssd3** |
+| the manifests, text indexes and SEARCHED vector tables | random, queries | ssd4 |
+| origins, SHARDs, bundles, exports | sequential, archive | tank |
+
+**How the caches move** (deploy/16f/flatten_mounts.py `fast_area`): an ssd5
+dataset whose subfolders `cache/` and `pubmed-pack/` are mounted over the SAME
+container paths, `/data/cache` and `/data/pubmed-pack`. No path inside the
+containers changes: derived.py keys a cache on its origin's resolved path and
+the cache dir's value, so nothing is found missing and nothing is rebuilt. The
+pubmed pack keeps its own path, never inside `/data/cache`, where its files
+would share `pubmed-pack/`, derived.py's own kind name, and `derived.held` would
+list each as a cache. The deploy mounts the area only once the dataset holds
+`READY`, written after the copy is compared (count, bytes, a sha256 sample), and
+never mounts a missing subfolder, which Docker would create empty. The ssd4
+copies stay hidden under the mounts until the operator's yes to remove them,
+and they are the way back: drop the mounts.
+
