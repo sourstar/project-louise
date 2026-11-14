@@ -20,6 +20,10 @@ measured (published figures disagree).
 
 ### 2026-11-14
 
+- **The source downloads stay (operator: C).** Asked whether to delete the parsed origins on tank
+  (everything but Gutenberg, ~900 GB), the operator chose to keep them all: tank is 63 % full, the
+  deletion cannot be undone, and invariant 11 forbids losing the ability to reproduce what we hold
+  (PubMed's files go at the next baseline; dated Wikidata and Wikipedia dumps are removed upstream).
 - **Two caches — BUILT, not deployed** (operator: "For very fast caching (like embedding) use ssd5, for
   bulk caching use ssd3", then "You need 2 caches, one for fast mmap operations (like vectors caching)
   and one for things like files caching (a decompressed corpus archive to be parsed)").
