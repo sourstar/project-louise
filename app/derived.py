@@ -72,7 +72,8 @@ def key(resolved_path: Path) -> str:
 #: Wikidata's LABEL TABLE is read at random, ~15 lookups a document, and is its
 #: own kind, `wikidata-labels`, on the fast cache (app/plugins/wikidata/pack.py
 #: `labels_path`).
-FILES = frozenset({"pubmed-pack", "legi-pack", "wikipedia-page-props", "wikidata-pack"})
+FILES = frozenset({"pubmed-pack", "legi-pack", "wikipedia-page-props", "wikidata-pack",
+                   "neuris-snapshot"})
 
 
 def root(kind: str) -> Path | None:

@@ -82,7 +82,8 @@ FILES_ENV = {"LOUISE_FILES_CACHE_DIR": "/data/files-cache"}
 READY = "READY"
 #: app/derived.py `FILES`, the kinds of the files cache (tests/test_deploy_
 #: flatten_mounts.py holds the two equal): this runs on the host, without the app
-FILES_KINDS = frozenset({"pubmed-pack", "legi-pack", "wikipedia-page-props", "wikidata-pack"})
+FILES_KINDS = frozenset({"pubmed-pack", "legi-pack", "wikipedia-page-props", "wikidata-pack",
+                         "neuris-snapshot"})
 
 
 def build_area(host: str | None = None, *, is_dataset=None) -> tuple[tuple, dict]:

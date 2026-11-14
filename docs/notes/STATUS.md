@@ -42,7 +42,13 @@ measured (published figures disagree).
   legi's DILA baseline and daily increments, the pre-embedded archive's parquet shards, and
   Gutenberg, one rsync session over the mirror's `gutenberg-epub` tree (books and `pg<id>.rdf`
   together; `rdf-files.tar.bz2` would save no request). Deposits have no origin to bulk.
-  **NeuRIS: NOT bulk first — to build.** `/v1/bulk-zip-links` answered 404 on 2026-10-28 and answers
+  **NeuRIS: bulk first — BUILT, not deployed** (app/acquire/neuris_snapshot.py; the legal session's
+  go and its three conditions; 06 §6.2 amended: provenance). When a pass has at least a quarter of
+  the listing's zips to fetch, the API's `legislation` snapshot is downloaded (Range, budget, files
+  cache) and each zip whose ELI and generation date the listing names now is written from its
+  members; the rest, and every JSON, per law; a member failing its CRC, per law; `records-vs-origin`
+  per law from the API (`refetch`), which also gives NeuRIS a real nightly origin check. Was:
+  `/v1/bulk-zip-links` answered 404 on 2026-10-28 and answers
   today (München, 2026-11-14, from the node): one ZIP of all legislation, rebuilt daily, 631 MB
   (2.15 GB unpacked), on STACKIT object storage with range requests; 5,525 expressions, the API
   listing's count; 20 random laws equal to the per-law ZIPs file for file, byte for byte (so

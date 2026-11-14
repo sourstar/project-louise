@@ -79,6 +79,9 @@ class UnitFetcher(Protocol):
         unit a record's `origin` names, fetched again under `base` at its
         corpus path; the path the plugin reads, and the bytes moved
         (app/acquire/unit_origin.py).
+    Optional, for a fetcher that serves a pass from a BULK (06 §6.2):
+    `prepare(files, pending, collection, endpoint)` before the pass fetches,
+    knowing what it lists and what it has to fetch, and `close()` after it.
     Optional: `reports() -> list[str]` — what the fetcher counted since it was
     last asked (Cellar: units, where their trees came from, what the Data Dump
     gave), said as events by the engine's recording thread every

@@ -1322,6 +1322,16 @@ def _run_acquisition_claimed(con, collection, spec: AcquisitionSpec, profile: st
     waiting = {f.rel_path for f in files if f.rel_path in pending and _backing_off(con, spec, f)}
     pending -= waiting
     skipped = len(files) - len(pending) - len(waiting)
+    # a unit fetcher that serves the pass from a BULK decides here, knowing
+    # what the pass has to fetch (06 §6.2, bulk first: "relevant" is the
+    # share of the requests the bulk would answer); optional, and a failure
+    # leaves the pass to the transport
+    prepare = getattr(spec.unit_fetcher, "prepare", None) if spec.unit_fetcher is not None else None
+    if prepare is not None:
+        try:
+            prepare(files, [f for f in files if f.rel_path in pending], collection, endpoints[0])
+        except Exception as e:   # noqa: BLE001 — an optimisation of the pass, never its failure
+            db.log_event(con, "warn", "acquire", f"bulk transport not prepared: {type(e).__name__}: {e}"[:400])
     items = _build_work_items(files, pending, spec)
 
     manager = get_manager()
@@ -1402,6 +1412,11 @@ def _run_acquisition_claimed(con, collection, spec: AcquisitionSpec, profile: st
         _apply, max_workers=workers, stop=stop)
 
     _unit_reports(con, spec, last_report, final=True)
+    if prepare is not None:
+        # what it opened for the pass (a bulk's index) is let go with it
+        close = getattr(spec.unit_fetcher, "close", None)
+        if close is not None:
+            close()
     # a deferred file (its directory unread this pass) is skipped: nothing
     # moved, nothing recorded, the copy stands — not a failure of the file
     return {"fetched": counters["fetched"], "skipped": skipped + counters["deferred"],
