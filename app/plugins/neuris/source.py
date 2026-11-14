@@ -62,6 +62,13 @@ ZipManager writes each entry with the time of the request), so its bytes
 differ on every fetch while its members do not: `origin_hash` is BLAKE2b-128
 over the zip's MEMBERS — sorted by name, each name and its bytes
 length-prefixed — as Normattiva's covers a member's bytes and not the zip's.
+From parser 3 (operator, 2026-11-14, A) each member is NORMALIZED first
+(`normalize_member`): the portal also rewrites every member on its daily
+rebuild — a fresh random GUID on every element, the HTML render's timestamp
+— while the law is unchanged (München: 26 of 26 sampled expressions differed
+in bytes, none in wording). Those are hashed and read away, so a rebuild
+reproduces the record, and "changed at the origin" means the origin revised
+the law: its words, its notes, its annotations or its editorial status.
 The record is parsed from the expression's JSON too, so the JSON is one more
 member of the unit (`EXPRESSION_JSON`, a name no zip member can have): a
 JSON the origin revised is a revised origin unit, read as "changed at the
@@ -281,11 +288,44 @@ def read_members(data: bytes) -> dict[str, bytes]:
         raise UnindexableDocument(f"not a readable zip: {type(e).__name__}: {e}") from e
 
 
+#: PARSER 3 (operator, 2026-11-14, choice A): what the portal rewrites on
+#: every daily rebuild and that says nothing about the law is the provider's
+#: bookkeeping (invariant 11 (d)), read and hashed away: a fresh random
+#: `GUID` on every LegalDocML element (53,862 in 26 sampled expressions, a
+#: new one on each build, the same generation date or not: München's
+#: comparison of the held manifestations with the bulk of 2026-11-14) and
+#: the HTML render's `<meta name="erzeugt">` timestamp. Everything else stays
+#: byte for byte: the editorial status (`standangabe`), the notes, the
+#: annotations (`domainTerm`), every other attribute and every word.
+NORMALIZATION = "neuris-1: XML members without their GUID attributes; HTML members without <meta name=erzeugt>"
+_GUID_ATTR = re.compile(rb"""\sGUID\s*=\s*(?:"[^"]*"|'[^']*')""")
+_ERZEUGT = re.compile(rb"""<meta\b[^>]*\bname\s*=\s*["']erzeugt["'][^>]*>""", re.IGNORECASE)
+
+
+def normalize_member(name: str, data: bytes) -> bytes:
+    """A member without what the portal regenerates on every build
+    (NORMALIZATION): an XML member's `GUID` attributes, an HTML member's
+    `erzeugt` meta element. Any other member, and every other byte, as
+    fetched. A pure function of (name, bytes), so a verifier who re-fetches
+    the origin reproduces it."""
+    low = name.lower()
+    if low.endswith(".xml"):
+        return _GUID_ATTR.sub(b"", data)
+    if low.endswith((".html", ".htm", ".xhtml")):
+        return _ERZEUGT.sub(b"", data)
+    return data
+
+
+def normalized(members: dict[str, bytes]) -> dict[str, bytes]:
+    return {n: normalize_member(n, b) for n, b in members.items()}
+
+
 def origin_hash(members: dict[str, bytes], expression_json: bytes) -> str:
     """BLAKE2b-128 over the origin unit: the zip's members and the
     expression's JSON, sorted by name, each name and its bytes
     length-prefixed — independent of how the zip that carried them was
-    built (its order, its timestamps, its compression)."""
+    built (its order, its timestamps, its compression). From parser 3 the
+    members are given `normalized` (the caller's)."""
     h = hashlib.blake2b(digest_size=16)
     for name, data in sorted({**members, EXPRESSION_JSON: expression_json}.items()):
         nb = name.encode("utf-8")
@@ -377,7 +417,14 @@ class NeurisSource:
     #: by what its root is — the `rechtsetzungsdokument` every real zip
     #: carries (München's probe) was read as an annex, and refused every
     #: expression; it is kept in `extra.rechtsetzungsdokument` now
-    PARSER_VERSION = 2
+    #: 3 (2026-11-14, operator: A): the members read and hashed `normalized`
+    #: (NORMALIZATION above): the per-build GUIDs and the render timestamp are
+    #: the provider's bookkeeping, so a daily rebuild of an unchanged law gives
+    #: the same `origin_hash` and the same record, and `records-vs-origin`
+    #: says "changed at the origin" only of a law the origin revised. Every
+    #: record's `origin_hash` moves, so a collection on 2 is re-created on 3 by
+    #: the book (5,536 records); its chunks, the same text, keep their vectors.
+    PARSER_VERSION = 3
     #: 06 §6.2: an expression stays listed, a manifestation is regenerated in
     #: place; an older one is not known to stay fetchable (owed from the node)
     origin_versions = "replaces"
@@ -452,9 +499,21 @@ class NeurisSource:
             json_bytes = zpath.with_suffix(".json").read_bytes()
         except OSError as e:
             raise UnindexableDocument(f"{zpath.name}: {type(e).__name__}: {e}") from e
-        members = read_members(zip_bytes)
+        members = self._members(zip_bytes)
         return RawDoc(ref=ref, raw_hash=origin_hash(members, json_bytes), path=zpath,
                       data=_pack(json_bytes, zip_bytes))
+
+    def _members(self, zip_bytes: bytes) -> dict[str, bytes]:
+        """The zip's members as this parser reads and hashes them: from 3,
+        `normalized` (NORMALIZATION); parser 2 read them as fetched."""
+        members = read_members(zip_bytes)
+        return normalized(members) if self.PARSER_VERSION >= 3 else members
+
+    def at_parser_version(self, version: int) -> "NeurisSource | None":
+        """This plugin parsing at `version`, for a collection whose Codex
+        names it (`collections.plugin_at`): 3 is this one, 2 the parser that
+        read the members as fetched (`NeurisSourceV2`)."""
+        return {3: self, 2: _V2}.get(int(version))
 
     def parse(self, raw: RawDoc) -> CanonicalDoc:
         zpath = Path(raw.ref.locator)
@@ -469,7 +528,7 @@ class NeurisSource:
             raise UnindexableDocument(f"{zpath.with_suffix('.json').name}: not JSON: {e}") from e
         if not isinstance(api, dict):
             raise UnindexableDocument(f"{zpath.with_suffix('.json').name}: not a JSON object")
-        members = read_members(zip_bytes)
+        members = self._members(zip_bytes)
         mains = sorted((n for n in members if _is_main(n) is not None), key=lambda n: (_is_main(n), n))
         if not mains:
             raise UnindexableDocument(f"{zpath.name}: the zip holds no regelungstext-N.xml")
@@ -577,7 +636,7 @@ class NeurisSource:
             "preface_notes": act.preface_notes,
             "preamble": act.preamble,
             "conclusions": act.conclusions,
-            "articles": main.articles,
+            "articles": self._articles(main.articles),
             "article_notes": [{"article": a.eid or a.num, "notes": a.notes}
                               for a in act.articles if a.notes],
             "attachment_refs": main.attachment_refs,
@@ -589,7 +648,8 @@ class NeurisSource:
             "rechtsetzungsdokument": collections_,
             "other_xml": other_xml,
             "other_texts": [{"member": n, "frbr": o.frbr, "meta": o.meta, "ris": o.ris,
-                             "preface": o.preface, "articles": o.articles} for n, o in others],
+                             "preface": o.preface, "articles": self._articles(o.articles)}
+                            for n, o in others],
             "members": [{"name": n, "size": len(b),
                          "blake2": hashlib.blake2b(b, digest_size=16).hexdigest()}
                         for n, b in sorted(members.items())],
@@ -619,6 +679,13 @@ class NeurisSource:
             raw_hash=raw.raw_hash,
             issues=found,
         )
+
+    def _articles(self, articles: list[dict]) -> list[dict]:
+        """Each article's ids as parser 2 kept them, but from 3 without the
+        per-build `GUID` (normalized away, it would read "")."""
+        if self.PARSER_VERSION < 3:
+            return articles
+        return [{k: v for k, v in a.items() if k != "GUID"} for a in articles]
 
     def relations(self, doc: CanonicalDoc):
         """06 §6.1's typed edges, by ELI property names (09 §9.14), between
@@ -707,3 +774,14 @@ def modification_target(mod: dict) -> tuple[str, str | None, bool] | None:
 
 def _is_repeal(mod: dict) -> bool:
     return str(mod.get("type") or "").strip().lower() == "repeal"
+
+
+class NeurisSourceV2(NeurisSource):
+    """PARSER 2, KEPT for a collection whose Codex names it (invariant 3: the
+    same parser id and version give the same records): the members read and
+    hashed as fetched, GUIDs and render timestamps included. Removed once no
+    Codex on a node names 2."""
+    PARSER_VERSION = 2
+
+
+_V2 = NeurisSourceV2()
