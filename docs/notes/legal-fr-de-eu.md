@@ -739,10 +739,45 @@ MultiEURLEX, LEMUR on Hugging Face; michalovadek.github.io/euverse
 Every member state, for future national collections (operator, 2026-11-14:
 "Save this for the future"): N-Lex, `https://n-lex.europa.eu/n-lex/`, the
 Publications Office's common gateway to the national legislation
-databases of the EU countries, one portal per state. It is not read
-from this container: `n-lex.europa.eu` is outside the cloud session's
-network allowlist, so the per-country list is to be taken from the node
-or a browser when a national collection is designed. Each portal is
-then checked like Normattiva, legi and NeuRIS were: its origin form,
-whether it offers a bulk download (06 §6.2, bulk first), its licence
-(04 §4.4).
+databases of the EU countries, one portal per state. Read by München from
+the operator's machine on 2026-11-14 (`/n-lex/index?lang=en`, 27 search
+forms `/n-lex/legis_<cc>/<name>_form`; the portal is each form's heading,
+the URL its outbound link, as N-Lex gives them — some are old http://
+addresses, none was opened):
+
+| state | portal (as N-Lex names it) | URL(s) |
+|---|---|---|
+| AT | Rechtsinformationssystem (RIS) / Federal Law Gazette | https://www.ris.bka.gv.at/ (English: https://www.ris.bka.gv.at/defaultEn.aspx) |
+| BE | Moniteur belge / Consolidated legislation (French) | http://justice.belgium.be/fr/service_public_federal_justice/organisation/moniteur_belge/ |
+| BG | Държавен вестник / Official Journal | http://dv.parliament.bg/DVWeb/index.faces |
+| CY | Cypriot Legislation | http://www.cylaw.org/ |
+| CZ | Portál veřejné správy ČR / Legislation | https://www.e-sbirka.cz/ ; https://sbirkapp.gov.cz/ |
+| DE | Gesetze im Internet / Legislation | https://www.gesetze-im-internet.de/ (translations: /Teilliste_translations.html) |
+| DK | retsinformation.dk / Legislation | http://www.retsinformation.dk |
+| EE | Riigi Teataja / Original legislation | https://www.riigiteataja.ee/ert/ert.jsp ; https://www.riigiteataja.ee/en/ |
+| ES | Boletín Oficial del Estado (BOE) / Legislation | http://www.boe.es/ |
+| FI | Finlex / Source Legislation (Finnish) | http://www.finlex.fi/fi/ |
+| FR | Légifrance / Official Journal | https://www.legifrance.gouv.fr/ |
+| GR | ΕΘΝΙΚΟ ΤΥΠΟΓΡΑΦΕΙΟ / Legislation | http://www.et.gr/ |
+| HR | Središnji katalog službenih dokumenata RH | http://www.digured.hr |
+| HU | Nemzeti Jogszabálytár / Legislation | http://www.njt.hu (also njt.hu/njt.php?translated; terminology: https://jogi-terminologia.im.gov.hu/) |
+| IE | Irish Statute Book / Legislation | http://www.irishstatutebook.ie/ |
+| IT | Normattiva / Legislation | https://www.normattiva.it/ |
+| LT | Lietuvos Respublikos Seimas / Legislation | https://e-seimas.lrs.lt/portal/documentSearch/lt ; https://e-tar.lt/portal/en/index |
+| LU | Legilux / Mémorial / Official Gazette | https://www.legilux.public.lu/ |
+| LV | Latvijas Vēstnesis / Official Journal | http://www.vestnesis.lv/ ; https://likumi.lv/ta/en/en/skatitakie |
+| MT | MJCL / Laws of Malta / Maltese law (English) | http://www.justiceservices.gov.mt/LOM.aspx?pageid=27&mode=chrono |
+| NL | Overheid.nl / Wet- en Regelgeving / Legislation | http://www.overheid.nl/ |
+| PL | Internetowy System Aktów Prawnych (ISAP) / Legislation | http://isap.sejm.gov.pl/ |
+| PT (N-Lex `po`) | Diário da República / Digesto / Legislation | http://dre.pt/ |
+| RO | Portal Legislativ / Legislation | http://legislatie.just.ro/ |
+| SK | Slov-Lex / Legislation | https://www.slov-lex.sk/ |
+| SI (N-Lex `sl`) | Pravno-informacijski sistem RS (PIS) / Legislation | https://pisrs.si/ |
+| SE (N-Lex `sv`) | lagrummet.se / Legislation | http://www.lagrummet.se/ (plus three government.se "Swedish statutes in translation" pages) |
+
+Each portal is checked, when its collection is designed, like
+Normattiva, legi and NeuRIS were: its origin form, whether it offers a
+bulk download (06 §6.2, bulk first), its licence (04 §4.4). N-Lex links a
+search portal, which is not always the open-data one: France's is
+Légifrance, its bulk DILA's (legi); Germany's is gesetze-im-internet,
+the collection's NeuRIS.
