@@ -123,21 +123,70 @@ def article_body(article: akn.Article) -> str:
     return "\n".join(x for x in (article_line(article), blocks_text(article.blocks)) if x)
 
 
-def label(article: akn.Article) -> str:
+#: a heading longer than this, after the "((" marker, is an inserted
+#: article's BODY, not its rubric (München's scan of all 23 zips, 2026-11-14:
+#: 389 distinct articles, heading median 726 chars, max 10,921; the 157 long
+#: headings WITHOUT the marker are legitimate rubrics with provenance notes)
+HEADING_BODY_CHARS = 300
+
+
+def heading_is_body(article: akn.Article) -> bool:
+    """Normattiva writes an article INSERTED by an amending act with its whole
+    text inside <heading>, between the "((…))" markers, and often no
+    <paragraph> at all (D.Lgs. 502/1992 art. 3-septies, DPR 1092/1973
+    art. 162). Such a heading is the body: it starts with the marker, and it
+    is long or the article has no text of its own besides it — nothing of
+    its blocks reaches its body (`blocks_text`, the test the source's
+    `line_moved_since` reads back off a record line)."""
+    raw = (article.heading or "").lstrip()
+    if not raw.startswith("(("):
+        return False
+    return len(plain(raw)) > HEADING_BODY_CHARS or not blocks_text(article.blocks)
+
+
+def _rubric(heading: str) -> str:
+    """The rubric at the head of an inserted body: its leading parenthesised
+    group ("(Integrazione sociosanitaria)"), balanced; "" where it has none
+    (the body runs on from its title: "Speciali modalita' di pagamento. Con
+    decreto …"), and a guessed cut is never made."""
+    text = plain(heading).lstrip()
+    if not text.startswith("("):
+        return ""
+    depth = 0
+    for i, ch in enumerate(text):
+        depth += (ch == "(") - (ch == ")")
+        if depth == 0:
+            rubric = text[: i + 1]
+            return rubric if len(rubric) <= HEADING_BODY_CHARS else ""
+    return ""
+
+
+def label_line(article: akn.Article, version: int = 9) -> str:
+    """The article's part of its section label. Parser 9: an inserted
+    article whose heading is its body is named by its number and rubric
+    only (its text stays, once, in the body: `article_body`); parser 8
+    named it by the whole heading, so the header repeated the article in
+    every piece (normattiva:6772420913038766611, a 1,024-token label)."""
+    if int(version) >= 9 and heading_is_body(article):
+        return " — ".join(x for x in (article.num, _rubric(article.heading)) if x)
+    return article_line(article)
+
+
+def label(article: akn.Article, version: int = 9) -> str:
     """The section's heading: the partition, then the article —
     "PARTE I — AMBITO … › Art. 1. — (Oggetto)". An article repealed in
     place reads "(abrogato)" after its number."""
-    head = f"{article.num} — (abrogato)" if is_repealed(article) else article_line(article)
+    head = f"{article.num} — (abrogato)" if is_repealed(article) else label_line(article, version)
     return " › ".join(x for x in (plain(article.partition), head.strip()) if x) or "Testo"
 
 
-def sections(act: akn.Act) -> list[tuple[str, str]]:
+def sections(act: akn.Act, version: int = 9) -> list[tuple[str, str]]:
     """`[(label, text)]`: one per article in reading order, then one per
     annex. An annex with no text in the XML (the origin keeps many as PDF
     or image) is a section with an empty body — present, not chunked. The
     Codice civile arrives this way round: two articles of the decree, then
     its 3,280 articles as annexes named "CODICE CIVILE-art. 906"."""
-    out = [(label(a), article_body(a)) for a in act.articles]
+    out = [(label(a, version), article_body(a)) for a in act.articles]
     out += [(plain(att.name) or "Allegato", blocks_text(att.blocks))
             for att in act.attachments]
     return out

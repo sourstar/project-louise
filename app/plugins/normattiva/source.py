@@ -349,7 +349,15 @@ class NormattivaSource:
     #: measured on the node from the zips' directories). Records parser 7
     #: wrote are unchanged; a parser-8 collection is created and carried from
     #: the parser-7 one by `dev carry --rebuilt` and `--reconcile` (A1c, RULE 1).
-    PARSER_VERSION = 8
+    #: 9 on 2026-11-14: an article INSERTED by an amending act, whose whole text
+    #: Normattiva writes inside <heading> between "((…))" (389 distinct articles
+    #: across the 23 zips, München's scan), is labelled by its number and
+    #: rubric only; its text stays once, in the body (rendition.label_line).
+    #: Parser 8 put it in the label too, and the layer's header repeated it in
+    #: every piece. Parser 8 is kept for a collection whose Codex names it
+    #: (`at_parser_version`); a build from parser-8 lines parses again only the
+    #: lines this parser writes otherwise (`line_moved_since`, RULE 1).
+    PARSER_VERSION = 9
     #: 06 §6.2: the origin keeps its history — Normattiva serves every act in each version that was in force (multivigente) —
     #: so a superseded part version stays checkable and is kept (02 §2.3).
     origin_versions = "history"
@@ -563,7 +571,7 @@ class NormattivaSource:
                                      akn_key(act.frbr.get("work", {}).get("uri")
                                              or act.frbr.get("work", {}).get("this", ""))) if k}),
             extra={k: v for k, v in extra.items() if v not in (None, "", [], {})},
-            sections=rendition.sections(act),
+            sections=rendition.sections(act, self.PARSER_VERSION),
             raw_hash=raw.raw_hash,
             issues=found,
         )
@@ -646,3 +654,42 @@ class NormattivaSource:
                 continue
             seen.add(key)
             yield key, day
+
+    def line_moved_since(self, line: dict, version: int) -> bool:
+        """Would THIS parser write a record line that parser `version` wrote
+        differently? (`records build --records-from`, RULE 1: only the lines
+        this says moved are parsed again, the rest are taken byte for byte.)
+        From 8: an article whose heading is its body (rendition.heading_is_body).
+        The line's labels are plain — the "((" marker is gone — so the rule
+        errs toward parsing again: a section whose label ends with its body's
+        first line (the article line) where that line is longer than
+        HEADING_BODY_CHARS or is the whole body."""
+        if int(version) >= self.PARSER_VERSION:
+            return False
+        if int(version) != 8:
+            return True                 # not a version this rule knows: parse it
+        for label, body in line.get("sections") or []:
+            lines = str(body or "").split("\n")
+            first = lines[0].strip()
+            if not first or not str(label or "").rstrip().endswith(first):
+                continue
+            if len(first) > rendition.HEADING_BODY_CHARS or not any(x.strip() for x in lines[1:]):
+                return True
+        return False
+
+    def at_parser_version(self, version: int) -> "NormattivaSource | None":
+        """This plugin parsing at `version`, for a collection whose Codex names
+        it (`collections.plugin_at`): 9 is this one, 8 the parser before the
+        inserted-article labels (`NormattivaSourceV8`); None for any other."""
+        return {9: self, 8: _V8}.get(int(version))
+
+
+class NormattivaSourceV8(NormattivaSource):
+    """PARSER 8, KEPT for the collections whose Codex names it (invariant 3:
+    the same parser id and version give the same records): an inserted
+    article's heading stays in its label whole. Removed once no Codex on a
+    node names 8."""
+    PARSER_VERSION = 8
+
+
+_V8 = NormattivaSourceV8()

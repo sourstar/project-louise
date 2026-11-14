@@ -618,3 +618,26 @@ a flat scan (`legal_pilot run --exact`), so they share their records, their
 distractors and their search path. Each leg is reported apart (`--legs
 dense|fts|hybrid`), then reranked; with the pool's chunk count in each arm,
 and the smallest difference the test could detect (`compare`: 2.80·sd/√n).
+
+## 10. Normattiva parser 9: an inserted article written in its heading (2026-11-14)
+
+München's AKN scan of the 23 zips: Normattiva writes an article INSERTED by
+an amending act with its whole text inside `<heading>`, between "((…))", and
+often no `<paragraph>` (D.Lgs. 502/1992 art. 3-septies, D.P.R. 1092/1973
+art. 162). Parser 8 put that heading in the section's label, so the layer's
+header (C2) repeated the article in every piece: 389 distinct articles,
+16,138 record occurrences, heading median 726 characters, max 10,921
+(`normattiva:6772420913038766611`, a 1,024-token label). The 157 long
+headings WITHOUT the marker are rubrics with provenance notes, and stay.
+
+Parser 9 (`rendition.heading_is_body`, `label_line`): a heading that starts
+with "((" and is over 300 characters, or is all the article has, is the
+article's body. Its label is the number and the leading parenthesised rubric
+("Art. 3-septies. — (Integrazione sociosanitaria)"), or the number alone
+where the text runs on from its title (no cut is guessed). The text stays,
+once, in the body; nothing is dropped (invariant 11). Parser 8 is kept for
+a Codex that names it (`NormattivaSourceV8`), and `line_moved_since` names
+the parser-8 lines parser 9 writes otherwise, read off the line (a label
+ending with the body's first line, that line over 300 characters or the
+whole body), so a `records build --records-from` parses again only those
+(02, RULE 1; the pubmed 8 → 9 pattern). Tests: tests/test_normattiva_parser9.py.
