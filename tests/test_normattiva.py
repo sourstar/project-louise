@@ -145,7 +145,7 @@ def test_every_version_since_1861_is_discovered(corpus):
     members = {nsrc.split_locator(r.locator)[1] for r in _refs(corpus)}
     assert RD7_O in members and RD7_V1 in members and RD7_V2 in members
     assert RD206_O in members
-    assert nsrc.VALIDITY_FLOOR is None and SOURCE.PARSER_VERSION == 8
+    assert nsrc.VALIDITY_FLOOR is None and SOURCE.PARSER_VERSION == 9
     rd7 = sorted(eli.id_day(int(r.native_id)) for r in _refs(corpus) if "030U0007" in r.locator)
     assert rd7 == [19300110, 19350601, 19500301], "the original, then each version from its own day"
 
