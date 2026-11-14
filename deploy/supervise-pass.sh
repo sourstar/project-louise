@@ -45,7 +45,16 @@
 #                              (120 s) of the run's start is a DEFECT of the pass,
 #                              not a crash (2026-11-09: the legal pilot's `pool`,
 #                              an AttributeError at startup, ran 20 times in 19
-#                              min): not restarted; fix it and run it again
+#                              min): not restarted; fix it and run it again —
+#                              and the SAME ERROR TWICE IN A ROW (the same exit
+#                              and the same last line of output, however long
+#                              each run took) is one too: not restarted
+#                              (2026-11-14: a paragraph measurement died on one
+#                              record's LegalChunkerError after ~27 min, 20
+#                              times in 9 h). An OOM kill never counts, and a
+#                              run that printed nothing has no last line to
+#                              compare. The last run's output is kept in
+#                              $LAST (default /root/supervise/<name>.last.log)
 #
 # Every pass carries its own memory cap (`--memory`; refused without one)
 # and runs FIRST IN LINE for the kernel's OOM killer (`--oom-score-adj`,
@@ -72,6 +81,7 @@
 set -u
 NAME=$1; shift
 HOLD=${HOLD:-/root/supervise/$NAME.hold}
+LAST=${LAST:-$(dirname "$HOLD")/$NAME.last.log}
 MAX_RESTARTS=${MAX_RESTARTS:-20}
 FAST_FAIL_S=${FAST_FAIL_S:-120}
 FAST_FAILS=${FAST_FAILS:-3}
@@ -102,6 +112,7 @@ on_stop() {
 trap on_stop TERM INT
 n=0
 fast=0
+prev=
 while :; do
     [ -x "$CEILING" ] && "$CEILING"
     env_args=()
@@ -110,8 +121,12 @@ while :; do
     # in the background, so a stop asked meanwhile is handled now (bash runs
     # a trap only between commands, and `wait` is one it interrupts)
     started=$SECONDS
-    docker run --rm --sig-proxy=false --name "$NAME" --oom-score-adj "${OOM_SCORE_ADJ:-500}" \
-        "${env_args[@]}" "$@" &
+    # the pass's output to the journal as before AND to $LAST, so its last
+    # line can be compared with the previous run's; its exit status through
+    # a file, since a pipeline's status is tee's
+    rm -f "$LAST.code"
+    ( docker run --rm --sig-proxy=false --name "$NAME" --oom-score-adj "${OOM_SCORE_ADJ:-500}" \
+        "${env_args[@]}" "$@" 2>&1; echo $? > "$LAST.code" ) | tee "$LAST" &
     pid=$!
     # THE PASS'S OWN STATUS, never the interrupted wait's. A trap that
     # interrupts `wait` leaves 128 + the signal (143); the trap says so
@@ -121,8 +136,10 @@ while :; do
     # only while `kill -0` still saw the child: a pass that ended during the
     # trap's `docker stop` (load 30 on the node) was reported 143, not 130
     interrupted=
-    wait "$pid"; code=$?
-    while [ -n "$interrupted" ]; do interrupted=; wait "$pid"; code=$?; done
+    wait "$pid"
+    while [ -n "$interrupted" ]; do interrupted=; wait "$pid"; done
+    code=$(cat "$LAST.code" 2>/dev/null); code=${code:-1}
+    last=$(grep -v '^[[:space:]]*$' "$LAST" 2>/dev/null | tail -1)
     echo "== $(date -u +%FT%TZ) $NAME: exit $code"
     [ "$code" -eq 0 ] && exit 0
     [ -e "$HOLD" ] && { echo "== $NAME: held ($HOLD), not restarted"; exit "$code"; }
@@ -137,6 +154,11 @@ while :; do
         echo "== $NAME: stopped on purpose (SIGTERM, exit $code), not restarted; run it again to resume"
         exit "$code"
     fi
+    if [ "$code" -ne 137 ] && [ "$code" -ne 141 ] && [ -n "$last" ] && [ "$code $last" = "$prev" ]; then
+        echo "== $NAME: exit $code with the same last line twice in a row (\"$last\"): a defect in the pass, not a crash; not restarted — fix it and run it again ($LAST)"
+        exit "$code"
+    fi
+    if [ "$code" -eq 137 ] || [ "$code" -eq 141 ]; then prev=; else prev="$code $last"; fi
     if [ "$code" -ne 137 ] && [ "$code" -ne 141 ] && [ $((SECONDS - started)) -lt "$FAST_FAIL_S" ]; then
         fast=$((fast + 1))
         if [ "$fast" -ge "$FAST_FAILS" ]; then

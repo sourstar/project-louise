@@ -254,3 +254,43 @@ def test_a_pass_that_fails_at_once_three_times_in_a_row_is_not_run_twenty_times(
     env = dict(_fake_docker(slow, [1, 1, 1, 0]), FAST_FAIL_S="0")
     p, calls = _run(slow, env, "--memory=8g", "img")
     assert p.returncode == 0 and len(calls) == 4, "a failure after FAST_FAIL_S is asked again"
+
+
+def _talking_docker(tmp_path: Path, runs: list[tuple[int, str]]) -> dict:
+    """A fake `docker run` that prints its line, then exits with its code."""
+    env = _fake_docker(tmp_path, [code for code, _ in runs])
+    (tmp_path / "lines").write_text("".join(line + "\n" for _, line in runs))
+    (tmp_path / "bin" / "docker").write_text(f"""#!/bin/bash
+echo "$*" >> {tmp_path}/calls
+echo "working"
+head -1 {tmp_path}/lines; sed -i 1d {tmp_path}/lines
+code=$(head -1 {tmp_path}/codes); sed -i 1d {tmp_path}/codes
+exit $code
+""")
+    return dict(env, FAST_FAIL_S="0")
+
+
+def test_the_same_error_twice_in_a_row_is_a_defect_however_long_each_run_took(tmp_path):
+    """2026-11-14: a paragraph measurement died on one record's
+    LegalChunkerError after ~27 min, and the supervisor ran it 20 times in
+    9 h — too slow for the fast-failure rule. The same exit and the same last
+    line twice in a row is a defect: not run a third time, its output kept."""
+    err = "app.chunking_legal.LegalChunkerError: normattiva:1: the header leaves -24 tokens of 1000"
+    env = _talking_docker(tmp_path, [(1, err), (1, err), (0, "done")])
+    p, calls = _run(tmp_path, env, "--memory=8g", "img")
+    assert p.returncode == 1 and len(calls) == 2 and "same last line twice in a row" in p.stdout, p.stdout
+    assert (tmp_path / "build.last.log").read_text().splitlines()[-1] == err, "the last run's output, kept"
+    # another error each time is a crash, asked again; an OOM between two equal errors resets
+    other = tmp_path / "other"
+    other.mkdir()
+    p, calls = _run(other, _talking_docker(other, [(1, "error A"), (1, "error B"), (0, "done")]), "--memory=8g", "img")
+    assert p.returncode == 0 and len(calls) == 3, p.stdout
+    oom = tmp_path / "oom"
+    oom.mkdir()
+    p, calls = _run(oom, _talking_docker(oom, [(1, err), (137, "Killed"), (1, err), (0, "done")]), "--memory=8g", "img")
+    assert p.returncode == 0 and len(calls) == 4, p.stdout
+    # the pass's own status comes through the pipe to tee
+    ok = tmp_path / "ok"
+    ok.mkdir()
+    p, calls = _run(ok, _talking_docker(ok, [(3, "deferred"), (0, "done")]), "--memory=8g", "img")
+    assert p.returncode == 0 and "exit 3" in p.stdout and "working" in p.stdout
