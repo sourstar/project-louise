@@ -272,6 +272,8 @@ def test_an_app_older_than_the_tool_is_named_at_once_not_found_in_a_traceback(tm
     `ImportError: cannot import name 'rendition'`, three times each. The run
     now says which module, from which commit, before reading anything."""
     assert cl.missing_app() == [], "this checkout has what the tool needs"
+    assert cl.missing_app(needs=(), behaves=((lambda: False, "a behaviour", "abc1234"),)) == \
+        ["a behaviour (from abc1234)"], "an app that behaves as before the fix is named too"
     old = (("app.plugins.eurlex.no_such_module", "_sections", "abc1234, a later parser"),
            ("app.plugins.eurlex.rendition", "no_such_name", "def5678, a later reader"))
     assert cl.missing_app(old) == ["app.plugins.eurlex.no_such_module (from abc1234, a later parser)",

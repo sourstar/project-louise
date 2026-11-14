@@ -574,9 +574,24 @@ def _write(out: Path, name: str, payload: dict[str, Any]) -> Path:
 NEEDS = (("app.plugins.eurlex.rendition", "_sections", "da7d6f1, eurlex parser 3"),)
 
 
-def missing_app(needs=None) -> list[str]:
-    """What of `needs` (default `NEEDS`) the app this process imports lacks,
-    in plain words."""
+def _fixed_cuts_once() -> bool:
+    """The app's `fixed` chunker with overlap 0 cuts each paragraph once: an
+    app before 1cd7183 (#644) carried every earlier window into the next
+    (`text[-0:]` is the whole text), the window arm's 40,189-token chunks and
+    the OOM kills of 2026-11-14."""
+    from app import chunking
+    body = "\n\n".join(f"p{i} " + "w " * 50 for i in range(8))
+    cs = list(chunking.chunk_fixed("t:1", 1, [("", body)], 1, {"tokens": 30, "overlap": 0}))
+    return sum(len(c["text"]) for c in cs) <= len(body)
+
+
+#: behaviour the app must have, beside its modules: (check, what, since)
+BEHAVES = ((_fixed_cuts_once, "a `fixed` chunker that cuts each window once at overlap 0", "1cd7183, #644"),)
+
+
+def missing_app(needs=None, behaves=None) -> list[str]:
+    """What of `needs` (default `NEEDS`) and `behaves` (default `BEHAVES`)
+    the app this process imports lacks, in plain words."""
     import importlib
     out = []
     for module, name, since in (NEEDS if needs is None else needs):
@@ -587,6 +602,13 @@ def missing_app(needs=None) -> list[str]:
             continue
         if not hasattr(got, name):
             out.append(f"{module}.{name} (from {since})")
+    for check, what, since in (BEHAVES if behaves is None else behaves):
+        try:
+            ok = check()
+        except Exception:   # noqa: BLE001 — an app that cannot answer lacks it
+            ok = False
+        if not ok:
+            out.append(f"{what} (from {since})")
     return out
 
 
