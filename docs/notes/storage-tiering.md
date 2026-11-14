@@ -417,29 +417,82 @@ more once its 2-hour snapshots release), ssd5 107 G, ssd3 6.8 T.
 
 ## 10. The caches by speed (operator, 2026-11-14)
 
-"For very fast caching (like embedding) use ssd5, for bulk caching use ssd3."
-The node's drives: ssd5 NVMe Gen5 1 TB (Lexar NM990, 944 G, ~517 G free on
-2026-11-14), ssd4 NVMe Gen4 2 TB (the data pool), ssd3 SATA SSD 8 TB (Samsung
-870 QVO), tank raidz HDD 16 TB.
+"For very fast caching (like embedding) use ssd5, for bulk caching use ssd3",
+then "You need 2 caches, one for fast mmap operations (like vectors caching)
+and one for things like files caching (a decompressed corpus archive to be
+parsed)", and "When tank will be full I have another raidz hdd rank1 ready
+with 24 TB". The node's drives: ssd5 NVMe Gen5 1 TB (Lexar NM990, 944 G, ~517 G
+free on 2026-11-14), ssd4 NVMe Gen4 2 TB (the data pool), ssd3 SATA SSD 8 TB
+(Samsung 870 QVO), tank raidz HDD 16 TB, rank1 raidz HDD 24 TB (tank's
+successor).
 
-| what | access | drive |
-|---|---|---|
-| the derived caches (`LOUISE_CACHE_DIR`: wikidata's pack 122 G, legi's, page-props, claim index, speech) and the pubmed pack (`PUBMED_PACK_DIR`, 84 G) | random, a parse or a query waits | **ssd5** |
-| a measurement's embedding cache (the chunker mode's and bakeoff's vectors, memory-mapped) | random reads | **ssd5** (the run's `--out`) |
-| bulk: the build area (`LOUISE_BUILD_DIR`, §8), a measurement's scratch, downloads before they are archived | sequential, written once | **ssd3** |
-| the manifests, text indexes and SEARCHED vector tables | random, queries | ssd4 |
-| origins, SHARDs, bundles, exports | sequential, archive | tank |
+| what | read how | cache / setting | drive |
+|---|---|---|---|
+| wikidata's label table, legi's facts, the claim index, the part caches, the speech clips | at random by a key, or memory-mapped | the FAST cache, `LOUISE_CACHE_DIR` | **ssd5** |
+| a measurement's embedding cache (the chunker mode's and bakeoff's vectors, memory-mapped) | random reads | the run's `--out` | **ssd5** |
+| the packs: pubmed's (`PUBMED_PACK_DIR`, 84 G), wikidata's chunk files (122 G), legi's, wikipedia's page-props | a decompressed archive a parse streams through, a row group a record | the FILES cache, `LOUISE_FILES_CACHE_DIR` (pubmed's keeps its own setting) | **ssd3** |
+| bulk: the build area (`LOUISE_BUILD_DIR`, §8), a measurement's scratch, downloads before they are archived | sequential, written once | | **ssd3** |
+| the manifests, text indexes and SEARCHED vector tables | random, queries | | ssd4 |
+| origins, SHARDs, bundles, exports | sequential, archive | | tank, then rank1 |
 
-**How the caches move** (deploy/16f/flatten_mounts.py `fast_area`): an ssd5
-dataset whose subfolders `cache/` and `pubmed-pack/` are mounted over the SAME
-container paths, `/data/cache` and `/data/pubmed-pack`. No path inside the
-containers changes: derived.py keys a cache on its origin's resolved path and
-the cache dir's value, so nothing is found missing and nothing is rebuilt. The
-pubmed pack keeps its own path, never inside `/data/cache`, where its files
-would share `pubmed-pack/`, derived.py's own kind name, and `derived.held` would
-list each as a cache. The deploy mounts the area only once the dataset holds
-`READY`, written after the copy is compared (count, bytes, a sha256 sample), and
-never mounts a missing subfolder, which Docker would create empty. The ssd4
-copies stay hidden under the mounts until the operator's yes to remove them,
-and they are the way back: drop the mounts.
+**Which kind goes where** is app/derived.py's `FILES`, by how a kind is READ:
+the four packs are decompressed archives; everything else is read at random or
+memory-mapped. A pack on ssd3 costs a parse only where the parse waits on it:
+measured, 180 random row groups/s at the pool's width against ssd4's 296 (§8,
+2b), and a records build reads ~64 a second (~4.1 k records/s, 64 rows a
+group). Since #133 (record_source) the embed and text stages read the SHARD's
+records, not the packs: a pack is read by a records build.
 
+**Wikidata's label table** is the one random-access piece inside a pack (~15
+lookups a document; from tank it was 95 % of a parse). It is its own kind,
+`wikidata-labels`, on the fast cache, whenever the two caches are named apart
+(app/plugins/wikidata/pack.py `labels_path`). ONE place a configuration, never
+a fallback a reader might take: a table not at its place DEFERS its reader, and
+the pack's writer (the scan's `build`, the codes pass) carries it there under
+the pack's writer lock with SQLite's online backup (the WAL's committed pages
+included), renamed whole, then removes the old copy. A pack with chunks and no
+table anywhere is refused in plain words, never written on.
+
+**How the caches move** (deploy/16f/flatten_mounts.py `cache_areas`): two
+datasets, each mounted only once it holds `READY`, written after its copy is
+compared (count, bytes, a sha256 sample); never a missing subfolder, which
+Docker would create empty.
+
+| dataset | subfolder | container path | setting |
+|---|---|---|---|
+| ssd5 (`LOUISE_FAST_HOST`) | `cache/` | `/data/cache` (unchanged) | `LOUISE_CACHE_DIR` |
+| ssd3 (`LOUISE_FILES_HOST`) | `cache/` | `/data/files-cache` | `LOUISE_FILES_CACHE_DIR` |
+| ssd3 | `pubmed-pack/` | `/data/pubmed-pack` (unchanged) | `PUBMED_PACK_DIR` |
+
+The fast area needs the files one beside it: without it the packs would be
+looked for on ssd5, where they were not copied, and rebuilt. The files area
+alone is safe. And an area whose copy lacks one `<kind>/<tag>` of today's
+`/data/cache` (of its kinds), or one file of today's pubmed pack, is not
+mounted: the deploy names what is missing, which would otherwise be rebuilt
+(wikidata's pack, from the dump: days). A cache's tag is its origin's resolved path whatever the root,
+so a kind moves as the same `<kind>/<tag>` bytes and nothing is rebuilt. The
+pubmed pack never goes inside a cache dir: its files would share
+`pubmed-pack/`, a kind name of derived.py's own tree, and `derived.held` would
+list each. The ssd4 copies stay (hidden under the fast mount, or beside the
+files one) as the way back; removing them is the operator's yes, with the
+size.
+
+**The copy, for München** (with the worker stopped, RULE 1):
+1. ssd3: `cache/` ← `/data/cache/{wikidata-pack,legi-pack,wikipedia-page-props}`
+   (each `<kind>/<tag>` whole); `pubmed-pack/` ← `/data/pubmed-pack`. Compare,
+   then `READY`.
+2. ssd5: `cache/` ← every other kind of `/data/cache`. Compare, then `READY`.
+3. Deploy with `LOUISE_FILES_HOST` and `LOUISE_FAST_HOST`. The first scan of
+   wikidata carries its label table from the files cache to ssd5 (a log line,
+   "label table carried"); until then its documents defer.
+
+**rank1** (24 TB raidz HDD) takes over from tank as the archive pool when tank
+is full: new collections' origins, SHARDs and bundles go there by pointing
+`ORIGINS_ROOT`, `SHARDS_ROOT` and `BUNDLES_ROOT` at rank1's datasets; existing
+collections keep their links into tank, and one that outgrows tank moves whole,
+its link swapped. **To build BEFORE that switch:** `forget` and `rename` act on
+a link's folder only when it sits under the CURRENT root (app/hold/forget.py
+`shared_folders`, app/hold/rename.py `plan`), so a collection left on tank would
+be forgotten with its folder left behind, or renamed with its folder keeping the
+old name. They must know every archive root, tank's and rank1's. Open: tank's
+free space and growth rate, to say when.

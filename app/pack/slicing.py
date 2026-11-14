@@ -259,7 +259,12 @@ def context_for(collection, *, log=print, stop=None) -> FamilyContext | None:
         raise ContextUnavailable(f"{collection.name}: the family codes of {dump.name} under {sha[:23]}… "
                                  f"stopped before the end; the next build resumes them")
     import sqlite3
-    con = sqlite3.connect((pack.pack_dir(dump) / "labels.sqlite").resolve().as_uri() + "?mode=ro", uri=True)
+
+    from app.chunking import PlatformMissing
+    try:
+        con = sqlite3.connect(pack.labels_uri(dump) + "?mode=ro", uri=True)   # the label table where this node keeps it
+    except PlatformMissing as e:
+        raise ContextUnavailable(f"{collection.name}: {e}") from None
     try:
         rows = con.execute("SELECT id, parent FROM subclass WHERE id > ?", (fmap.max_item,)).fetchall()
     finally:

@@ -11,7 +11,8 @@ lines' labels. So the pass writes, under `<dump dir>/.pack/<dump name>/`:
   `native_id` (ids.py), `modified`, `lastrevid`, `pruned` and `line` (the
   line's exact bytes, zstd by the writer; `origin_hash` is over them); row
   groups of `ROW_GROUP` rows, so a record is one small read;
-- `labels.sqlite`: `label(id, lang, label)` for the languages asked and
+- `labels.sqlite` (on the FAST cache when the node names the two caches
+  apart, `labels_path`: it is read at random): `label(id, lang, label)` for the languages asked and
   `mul` — of EVERY entity, pruned ones included, since a pruned article is
   still a value other entities name; `language(id, code)`, the Wikimedia
   language code (P424) of every language item; and `name(id, lang,
@@ -148,6 +149,108 @@ class PackError(RuntimeError):
     """The pack cannot be built or read as the dump stands."""
 
 
+#: the pack's LABEL TABLE (module docstring): its file, and its kind on the fast
+#: cache when the node names the two caches apart (`labels_path`)
+LABELS = "labels.sqlite"
+LABELS_KIND = "wikidata-labels"
+
+
+def labels_path(dump: Path) -> Path:
+    """Where the dump's LABEL TABLE belongs. In the pack's directory, as
+    always — or, when the node names the two caches apart (app/derived.py,
+    operator 2026-11-14: the chunk files, a decompressed archive a parse
+    streams through, on the files cache), on the FAST cache,
+    `<CACHE_DIR>/wikidata-labels/<tag of the dump>/labels.sqlite`: it is read
+    at random, ~15 lookups a document, and from spinning disks it was the
+    whole cost of a parse. ONE place for a configuration, never a fallback a
+    reader might take: a table not there yet DEFERS its reader, and the
+    pack's writer carries it there (`carry_labels`)."""
+    if derived.apart("wikidata-pack", LABELS_KIND):
+        return derived.place_kept(LABELS_KIND, dump) / LABELS
+    return pack_dir(dump) / LABELS
+
+
+def _labels_elsewhere(dump: Path) -> list[Path]:
+    """Where an earlier configuration may have left the label table: the
+    pack's directory, the fast cache's place — not `labels_path`."""
+    here = labels_path(dump)
+    fast = derived.place(LABELS_KIND, dump)
+    return [c for c in (pack_dir(dump) / LABELS, None if fast is None else fast / LABELS)
+            if c is not None and c != here]
+
+
+def _drop_labels(dump: Path) -> None:
+    """The label table gone from every place it may be (a pack started over)."""
+    for c in (labels_path(dump), *_labels_elsewhere(dump)):
+        for p in (c, c.with_name(c.name + "-wal"), c.with_name(c.name + "-shm")):
+            p.unlink(missing_ok=True)
+
+
+def carry_labels(dump: Path, *, log: Callable[[str], None] | None = None) -> bool:
+    """UNDER THE PACK'S WRITER LOCK (`WRITER`): the label table carried to
+    `labels_path` from where an earlier configuration left it. SQLite's own
+    online backup (the library's consistent copy, the WAL's committed pages
+    included) into a temporary file of the writer's own, renamed whole; then
+    the old copy removed, so no configuration ever reads a stale one (RULE 1:
+    the same bytes, no pass over the dump). False when nothing was carried."""
+    here = labels_path(dump)
+    if here.is_file():
+        return False
+    src = next((c for c in _labels_elsewhere(dump) if c.is_file()), None)
+    if src is None:
+        return False
+    here.parent.mkdir(parents=True, exist_ok=True)
+    for stale in derived._named(here.parent, LABELS + ".", ".carry"):
+        stale.unlink(missing_ok=True)
+    tmp = here.with_name(f"{LABELS}.{os.getpid()}.carry")
+    t0 = time.monotonic()
+    s = sqlite3.connect(src)
+    try:
+        d = sqlite3.connect(tmp)
+        try:
+            s.backup(d)
+        finally:
+            d.close()
+    finally:
+        s.close()
+    os.replace(tmp, here)
+    for p in (src, src.with_name(src.name + "-wal"), src.with_name(src.name + "-shm")):
+        p.unlink(missing_ok=True)
+    with _files_lock:
+        _tables.clear()
+        _codes_cache.clear()
+        _ready.clear()
+    if log is not None:
+        log(f"[wikidata] pack: {Path(dump).name}: label table carried to {here} from {src} "
+            f"({here.stat().st_size / 2**30:.2f} GiB, {time.monotonic() - t0:.0f} s)")
+    return True
+
+
+def labels_uri(dump: Path) -> str:
+    """The label table's file URI, for a reader to open with `?mode=ro`; a
+    table not at its place yet DEFERS the reader (`labels_path`: never a
+    fallback)."""
+    path = labels_path(dump)
+    if not path.is_file():
+        from app.chunking import PlatformMissing
+        raise PlatformMissing(f"the label table of {Path(dump).name} is not at {path} yet (the pack's writer "
+                              f"carries it there at the next scan): this document is parsed then")
+    return path.resolve().as_uri()
+
+
+def _labels_or_refuse(dump: Path, meta: dict[str, Any]) -> None:
+    """A pack with chunks written and no label table where it belongs, nor
+    anywhere `carry_labels` looks, is refused in plain words: writing on
+    would give an empty table to a pack whose earlier chunks named labels
+    — a wrong pack that passes every check — and starting over would cost
+    the whole pass over the dump. The operator restores the table, or
+    removes the pack's meta.json to rebuild."""
+    if int(meta.get("chunks") or 0) > 0 and not labels_path(dump).is_file():
+        raise PackError(f"{Path(dump).name}: the pack has {meta.get('chunks')} chunk(s) and no label table at "
+                        f"{labels_path(dump)} (nor at {', '.join(map(str, _labels_elsewhere(dump))) or 'any other place'}): "
+                        f"restore it there, or remove {_meta_path(pack_dir(dump))} to rebuild the pack")
+
+
 def _beside(dump: Path) -> Path:
     return Path(dump).parent / PACK_DIRNAME / Path(dump).name
 
@@ -270,7 +373,7 @@ def is_complete(dump: Path, languages: tuple[str, ...]) -> bool:
     adopt_beside(dump)
     meta = read_meta(dump)
     return (_meta_matches(meta, dump, languages) and bool(meta.get("complete")) and bool(meta.get("names_done"))
-            and bool(meta.get("families_done")))
+            and bool(meta.get("families_done")) and labels_path(dump).is_file())
 
 
 def chunk_path(d: Path, chunk: int) -> Path:
@@ -456,6 +559,7 @@ def build(dump: Path, *, languages: tuple[str, ...] = ("en",), log: Callable[[st
     d = pack_dir(dump)
     d.mkdir(parents=True, exist_ok=True)
     with derived.writing(d / WRITER, f"the pack build of {dump.name}"):
+        carry_labels(dump, log=say)
         return _build(dump, d, languages=languages, say=say, stop=stop, chunk=chunk, workers=workers)
 
 
@@ -485,18 +589,21 @@ def _build(dump: Path, d: Path, *, languages: tuple[str, ...], say: Callable[[st
         # another dump, an older version or other languages: start over
         for p in d.glob("*.parquet"):
             p.unlink()
-        for p in (d / "labels.sqlite", d / "labels.sqlite-wal", d / "labels.sqlite-shm"):
-            p.unlink(missing_ok=True)
+        _drop_labels(dump)
         meta = {"pack_version": PACK_VERSION, "size": size, "mtime_ns": mtime, "languages": list(languages),
                 "chunk": chunk, "chunks": 0, "entities": 0, "pruned": 0, "complete": False, "dump": dump.name}
         _write_meta(d, meta)
     if meta.get("complete"):
+        _labels_or_refuse(dump, meta)
         return meta if meta.get("families_done") else _finish(dump, d, meta, say=say, stop=stop, workers=n_workers)
     if meta.get("chunk") != chunk:
         raise PackError(f"the pack was started with chunk {meta.get('chunk')}; resume with the same")
     done_chunks = int(meta["chunks"])
     skip = done_chunks * chunk
-    con = sqlite3.connect(d / "labels.sqlite", isolation_level=None)
+    _labels_or_refuse(dump, meta)
+    labels_file = labels_path(dump)
+    labels_file.parent.mkdir(parents=True, exist_ok=True)
+    con = sqlite3.connect(labels_file, isolation_level=None)
     con.execute("PRAGMA journal_mode=WAL")
     con.execute("PRAGMA synchronous=NORMAL")
     con.execute(_LABELS_SCHEMA)
@@ -948,7 +1055,8 @@ def _finish(dump: Path, d: Path, meta: dict[str, Any], *, say: Callable[[str], N
     entity's code under it with the report (`families_done`); upgrading,
     then the version. Returns the meta, `complete` False while this has not
     ended — the caller defers and the next pass resumes."""
-    con = sqlite3.connect(d / "labels.sqlite", isolation_level=None)
+    _labels_or_refuse(dump, meta)
+    con = sqlite3.connect(labels_path(dump), isolation_level=None)
     try:
         con.execute("PRAGMA journal_mode=WAL")
         con.execute("PRAGMA synchronous=NORMAL")
@@ -1052,7 +1160,7 @@ def language_codes(dump: Path) -> dict[str, str]:
         raise PlatformMissing(f"the wikidata pack of {Path(dump).name} is not ready for parser 2 "
                               f"(version {(read_meta(dump) or {}).get('pack_version')}, names not done): the "
                               f"next scan finishes it, and this document is parsed then")
-    con = sqlite3.connect((pack_dir(dump) / "labels.sqlite").resolve().as_uri() + "?mode=ro", uri=True)
+    con = sqlite3.connect(labels_uri(dump) + "?mode=ro", uri=True)
     try:
         got = dict(con.execute("SELECT id, code FROM language").fetchall())
     finally:
@@ -1086,7 +1194,7 @@ def creation_map(dump: Path) -> bytes:
             raise PackError(f"{map_path(d, sha)} does not hash to {sha}, the pack's own record of it")
         if _code_rules(raw):
             return raw
-    con = sqlite3.connect((d / "labels.sqlite").resolve().as_uri() + "?mode=ro", uri=True)
+    con = sqlite3.connect(labels_uri(dump) + "?mode=ro", uri=True)
     try:
         raw = _creation_map(dump, con, int(meta["max_item"]))
     finally:
@@ -1183,7 +1291,9 @@ def ensure_codes(dump: Path, raw_map: bytes, *, log: Callable[[str], None] | Non
         meta = read_meta(dump) or {}          # again, under the lock: a writer may have just finished
         if (meta.get("families_codes") or {}).get(fmap.sha256):
             return True
-        con = sqlite3.connect(d / "labels.sqlite", isolation_level=None)
+        carry_labels(dump, log=say)
+        _labels_or_refuse(dump, meta)
+        con = sqlite3.connect(labels_path(dump), isolation_level=None)
         try:
             con.execute("PRAGMA journal_mode=WAL")
             con.execute(_FAMILY_CHUNK_SCHEMA)
@@ -1554,7 +1664,7 @@ class LabelTable:
 
     def __init__(self, dump: Path, cache: int = 200_000):
         self.dump = Path(dump)
-        self.path = pack_dir(dump) / "labels.sqlite"
+        self.path = labels_path(dump)
         self._local = threading.local()
         self._cache: OrderedDict = OrderedDict()
         self._max = cache
@@ -1563,6 +1673,10 @@ class LabelTable:
     def _con(self) -> sqlite3.Connection:
         con = getattr(self._local, "con", None)
         if con is None:
+            if not self.path.is_file():
+                from app.chunking import PlatformMissing
+                raise PlatformMissing(f"the label table of {self.dump.name} is not at {self.path} yet (the pack's "
+                                      f"writer carries it there at the next scan): this document is parsed then")
             uri = self.path.resolve().as_uri() + "?mode=ro"
             con = sqlite3.connect(uri, uri=True, check_same_thread=False)
             self._local.con = con

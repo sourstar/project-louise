@@ -22,6 +22,14 @@ PUBMED_PACK_DIR = Path(os.getenv("PUBMED_PACK_DIR")) if os.getenv("PUBMED_PACK_D
 # it (app/derived.py), keyed on the origin's physical identity. Unset: each
 # stays beside its origin, as before. Identity tier: this node's path.
 CACHE_DIR = Path(os.getenv("LOUISE_CACHE_DIR")) if os.getenv("LOUISE_CACHE_DIR") else None
+# The FILES cache (operator, 2026-11-14: "You need 2 caches, one for fast mmap
+# operations (like vectors caching) and one for things like files caching (a
+# decompressed corpus archive to be parsed)"; docs/notes/storage-tiering.md
+# §10): the kinds app/derived.py names FILES — a decompressed archive a parse
+# streams through — go under it; every other derived kind stays under
+# LOUISE_CACHE_DIR, the fast one. Unset: the FILES kinds stay where
+# LOUISE_CACHE_DIR puts them, as before. Identity tier: this node's path.
+FILES_CACHE_DIR = Path(os.getenv("LOUISE_FILES_CACHE_DIR")) if os.getenv("LOUISE_FILES_CACHE_DIR") else None
 # The BUILD AREA (07 §7.8; operator, 2026-11-07, docs/notes/storage-tiering.md
 # §8: "B, ssd3 as the build area"): a vector table a collection is BUILDING —
 # made by `hold collection new` (cases A and F), not yet the one people search

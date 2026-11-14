@@ -438,6 +438,96 @@ def test_reads_stay_beside_the_dump_until_the_adopted_pack_has_landed(tmp_path, 
     assert worker.platform_missing(crossed.value), "the worker defers what crossed the pool"
 
 
+def _label_rows(path):
+    import sqlite3
+    con = sqlite3.connect(path)
+    try:
+        return {t: con.execute(f"SELECT * FROM {t} ORDER BY 1, 2").fetchall()
+                for t in ("label", "language", "name", "subclass")}
+    finally:
+        con.close()
+
+
+def test_with_two_caches_the_chunks_go_to_the_files_one_and_the_label_table_to_the_fast_one(tmp_path,
+                                                                                             monkeypatch):
+    """Operator, 2026-11-14: "2 caches, one for fast mmap operations ... and
+    one for ... a decompressed corpus archive to be parsed". The chunk files
+    are the decompressed dump a parse streams through; the label table is read
+    at random, ~15 lookups a document: the fast cache's."""
+    dump = a_dump(tmp_path / "origin")
+    monkeypatch.setattr(pack.config, "CACHE_DIR", tmp_path / "ssd5")
+    monkeypatch.setattr(pack.config, "FILES_CACHE_DIR", tmp_path / "ssd3")
+    pack.reset_caches()
+    meta = pack.build(dump, languages=("en",), chunk=4, workers=1)
+    d, labels = pack.pack_dir(dump), pack.labels_path(dump)
+    assert meta["complete"] and d.is_relative_to(tmp_path / "ssd3" / "wikidata-pack")
+    assert labels.is_relative_to(tmp_path / "ssd5" / "wikidata-labels") and labels.is_file()
+    assert not (d / "labels.sqlite").exists(), "one place for the table, never two"
+    assert pack.is_complete(dump, ("en",)) and pack.labels(dump)("Q42", "en") == "Douglas Adams"
+    assert pack.language_codes(dump) is not None
+
+
+def test_a_label_table_left_in_the_pack_is_carried_to_the_fast_cache_once(tmp_path, monkeypatch):
+    """A pack built before the files cache existed, its folder copied there by
+    the operator with its label table inside: the next scan's build carries
+    the table to the fast cache — SQLite's backup, the same rows, no pass over
+    the dump — and removes the old copy; until then a reader DEFERS."""
+    from app.chunking import PlatformMissing
+    dump = a_dump(tmp_path / "origin")
+    monkeypatch.setattr(pack.config, "CACHE_DIR", tmp_path / "ssd5")
+    monkeypatch.setattr(pack.config, "FILES_CACHE_DIR", None)
+    pack.reset_caches()
+    pack.build(dump, languages=("en",), chunk=2, workers=1)
+    old = pack.pack_dir(dump)
+    rows = _label_rows(old / "labels.sqlite")
+    chunks = {p.name: p.read_bytes() for p in old.glob("*.parquet")}
+    import shutil
+    shutil.copytree(tmp_path / "ssd5" / "wikidata-pack", tmp_path / "ssd3" / "wikidata-pack")   # the operator's copy
+    monkeypatch.setattr(pack.config, "FILES_CACHE_DIR", tmp_path / "ssd3")
+    pack.reset_caches()
+    moved = pack.pack_dir(dump)
+    assert moved.is_relative_to(tmp_path / "ssd3") and (moved / "labels.sqlite").is_file()
+    assert not pack.labels_path(dump).exists() and not pack.is_complete(dump, ("en",))
+    with pytest.raises(PlatformMissing):
+        pack.labels(dump)("Q42", "en")
+    pack.reset_caches()
+    calls = {"n": 0}
+    real = json.loads
+
+    def counting(s, *a, **k):
+        if isinstance(s, (bytes, bytearray)):
+            calls["n"] += 1
+        return real(s, *a, **k)
+    monkeypatch.setattr(dump_mod.json, "loads", counting)
+    said = []
+    meta = pack.build(dump, languages=("en",), chunk=2, workers=1, log=said.append)
+    assert meta["complete"] and calls["n"] == 0, "no pass over the dump"
+    assert any("label table carried to" in m for m in said)
+    assert _label_rows(pack.labels_path(dump)) == rows, "the same rows"
+    assert not (moved / "labels.sqlite").exists() and not (moved / "labels.sqlite-wal").exists(), \
+        "the old copy gone: no configuration reads a stale one"
+    assert {p.name: p.read_bytes() for p in moved.glob("*.parquet")} == chunks
+    assert pack.is_complete(dump, ("en",)) and pack.labels(dump)("Q42", "en") == "Douglas Adams"
+    assert pack.build(dump, languages=("en",), chunk=2, workers=1, log=said.append) == meta
+    assert sum("label table carried" in m for m in said) == 1, "once"
+
+
+def test_a_pack_with_chunks_and_no_label_table_is_refused_never_written_on(tmp_path, monkeypatch):
+    """Writing on would give an empty table to a pack whose first chunks named
+    labels — a wrong pack that passes every check; starting over would cost
+    the whole pass. Refused in plain words, the pack left as it is."""
+    dump = a_dump(tmp_path / "origin")
+    monkeypatch.setattr(pack.config, "CACHE_DIR", tmp_path / "ssd5")
+    monkeypatch.setattr(pack.config, "FILES_CACHE_DIR", tmp_path / "ssd3")
+    pack.reset_caches()
+    first = pack.build(dump, languages=("en",), chunk=2, workers=1, stop=lambda: True)
+    assert not first["complete"] and first["chunks"] == 1
+    pack.labels_path(dump).unlink()
+    with pytest.raises(pack.PackError, match="no label table"):
+        pack.build(dump, languages=("en",), chunk=2, workers=1)
+    assert (pack.pack_dir(dump) / "00000.parquet").is_file(), "nothing removed"
+
+
 def _state(tmp_path):
     d = tmp_path / "state"
     d.mkdir(exist_ok=True)
