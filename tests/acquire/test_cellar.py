@@ -42,13 +42,15 @@ def _formex(celex_dir: str, lang: str) -> dict[str, bytes]:
     return files
 
 
-def _notice(base: str, celex: str, lang: str, files: dict[str, bytes] | None) -> bytes:
+def _notice(base: str, celex: str, lang: str, files: dict[str, bytes] | None, uuid: str | None = None) -> bytes:
     """A branch notice in Cellar's shape (NOTICE/WORK, NOTICE/EXPRESSION,
     NOTICE/MANIFESTATION with its items' TECHMD), naming the items when
-    `files` is given."""
+    `files` is given; under a Cellar work `uuid`, the items' URIs in
+    Cellar's own shape (`…/resource/cellar/<uuid>.<expr>.<manif>/DOC_<n>`)."""
     code = src.LANGUAGES[lang]
+    where = f"{base}/resource/cellar/{uuid}.0006.02" if uuid else f"{base}/items/{celex}/{lang}"
     items = "".join(
-        f"<MANIFESTATION_HAS_ITEM><URI><VALUE>{base}/items/{celex}/{lang}/DOC_{i}</VALUE><TYPE>cellar</TYPE></URI>"
+        f"<MANIFESTATION_HAS_ITEM><URI><VALUE>{where}/DOC_{i}</VALUE><TYPE>cellar</TYPE></URI>"
         f"<TECHMD><STREAM_NAME type=\"data\"><VALUE>{name}</VALUE></STREAM_NAME>"
         f"<STREAM_SIZE type=\"data\"><VALUE>{len(data)}</VALUE></STREAM_SIZE>"
         f"<STREAM_ORDER type=\"data\"><VALUE>{i}</VALUE></STREAM_ORDER></TECHMD></MANIFESTATION_HAS_ITEM>"
@@ -61,6 +63,17 @@ def _notice(base: str, celex: str, lang: str, files: dict[str, bytes] | None) ->
 
 RDF_FIXTURES = Path(__file__).resolve().parent.parent / "fixtures" / "eurlex" / "rdf"
 _EMPTY_RDF = b'<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"/>'
+
+
+def _dated_tree(base: str, uuid: str, modified: str | None) -> bytes:
+    """A work's tree whose one manifestation states its last modification,
+    as Cellar's does (its items state none)."""
+    stamp = (f'<cmr:lastModificationDate rdf:datatype="http://www.w3.org/2001/XMLSchema#dateTime">'
+             f'{modified}</cmr:lastModificationDate>') if modified else ""
+    return (f'<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" '
+            f'xmlns:cmr="http://publications.europa.eu/ontology/cdm/cmr#">'
+            f'<rdf:Description rdf:about="{base}/resource/cellar/{uuid}.0006.02">{stamp}</rdf:Description>'
+            f'</rdf:RDF>').encode()
 
 
 class Cellar:
@@ -139,6 +152,9 @@ class Cellar:
                         # the work's tree (parser 3): a fixture where one is held
                         rdf_file = RDF_FIXTURES / f"{celex}.rdf"
                         body = rdf_file.read_bytes() if rdf_file.is_file() else _EMPTY_RDF
+                        dated = next((u for (c, _l), u in owner.units.items() if c == celex and u.get("uuid")), None)
+                        if dated is not None:
+                            body = _dated_tree(base, dated["uuid"], dated.get("manif_modified"))
                         owner.rdf_asked.append(celex)
                         return self._send(200, body, {"Content-Type": "application/rdf+xml"})
 
@@ -158,7 +174,14 @@ class Cellar:
                 if path.startswith("/notices/"):
                     _, _, celex, lang = path.split("/")
                     unit = owner.units[(celex, lang)]
-                    return self._send(200, _notice(base, celex, lang, None if unit.get("no_items") else unit["files"]),
+                    return self._send(200, _notice(base, celex, lang, None if unit.get("no_items") else unit["files"],
+                                                   unit.get("uuid")),
+                                      {"Content-Type": "application/xml"})
+                if path.startswith("/resource/cellar/"):
+                    uuid, doc = path.split("/")[3].split(".", 1)[0], path.rsplit("/", 1)[1]
+                    (celex, lang), unit = next(((k, u) for k, u in owner.units.items() if u.get("uuid") == uuid))
+                    names = list(reversed(list(unit["files"])))
+                    return self._send(200, unit["files"][names[int(doc.split("_")[1]) - 1]],
                                       {"Content-Type": "application/xml"})
                 if path.startswith("/items/"):
                     _, _, celex, lang, doc = path.split("/")

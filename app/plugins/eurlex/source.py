@@ -62,8 +62,9 @@ plugin, because a verifier needs it to reproduce our records:
 
   * CELLAR, the Publications Office's repository, by content negotiation on
     `/resource/celex/<CELEX>`: no authentication, every OJ act and every
-    consolidated version (legal-fr-de-eu.md §4.1). Not the Data Dump (EU
-    Login, acts in force only, no consolidations) and not the SOAP service
+    consolidated version (legal-fr-de-eu.md §4.1). The Data Dump is not the
+    ORIGIN (EU Login, acts in force only, no consolidations; it is a
+    transport for items, below) and neither is the SOAP service
     (registration, a daily call limit).
   * FORMEX 4, not XHTML, for the TEXT: the OJ's own production XML carries
     the structure — divisions, articles, numbered paragraphs, points,
@@ -97,10 +98,17 @@ plugin, because a verifier needs it to reproduce our records:
     HTML only, 228 PDF only (5 scans, held as PDFs, said `no-text-layer`).
     Before parser 3 the listing asked for fmx4 alone and these were missing.
     The form read is in the record (`extra.form`).
-  * NOT the Data Dump as a transport, though its Formex is Cellar's byte for
-    byte (30 acts, 82 files): no checksum is published, so a dump file could
-    only be adopted on its size; it holds acts in force only; it needs a
-    browser's EU Login weekly per language (eurlex-forms, 2026-11-14).
+  * The DATA DUMP is a TRANSPORT for items, never the origin (amended
+    2026-11-14, operator: "every time there is a bulk download that saves a
+    relevant amount of single requests to the source, we start from the bulk
+    download first"; it replaces "not the Data Dump as a transport"). An
+    item of an act in force is read from the dump when the notice lists it
+    by that name and size under the same WORK and its manifestation was not
+    modified since the dump was made (app/acquire/datadump.py); the notice,
+    the tree and everything else come from Cellar, which `records-vs-origin`
+    re-fetches. Used only once München's 1,000-item study shows no false
+    adoption under that rule (no checksum is published, and the ETag is a
+    modification time).
 
 THE UNIT AND ITS ORIGIN. Per act version and language, a directory
 `lang=<code>/<yyyy>/<CELEX>/` under the corpus root — `<yyyy>` the CELEX's
