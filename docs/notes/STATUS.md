@@ -20,6 +20,13 @@ measured (published figures disagree).
 
 ### 2026-11-14
 
+- **Idle tables compacted — BUILT, not deployed** (operator: "Always compact tables regularly
+  during idle times"). A table no write touched for a whole index pass (30 min: rows and fragments
+  unchanged) is compacted to one fragment per 1,048,576 rows, once per shape, again after a write;
+  a pass that could not compact (low disk, a lost commit) is retried a pass later. Before, a finished
+  table under both thresholds (256 small fragments light, 4,000 full) stayed in pieces for good:
+  Normattiva's 7.96 M rows in 201 fragments, its dense leg 9.77 s against DAR's 0.24 s at 13.
+  `vector_index.idle_compact_due`; scheduling-log.md, 2026-11-14.
 - **The `fixed` chunker with overlap 0 repeated every earlier window — FIXED.** `text[-0:]` is the
   whole text, so a 300 KB act came out as 30 MB of chunks. It caused the LEMUR dry runs' window arm
   refusal (40,189-token chunks) and the four-language run's 20 OOM kills (the cap unchanged, the

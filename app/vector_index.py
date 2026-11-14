@@ -260,6 +260,72 @@ def _quiet(collection, st: dict) -> bool:
     return now - seen[1] >= config.VECTOR_INDEX_REFRESH_S
 
 
+_shape_seen: dict[str, tuple[tuple, float]] = {}       # lance dir -> ((rows, fragments), seen since)
+#: lance dir -> (the fragments its last idle compaction left, compacted?, when)
+_idle_compacted: dict[str, tuple[int, bool, float]] = {}
+
+
+def _idle(collection, st: dict) -> bool:
+    """No write for a whole index pass (VECTOR_INDEX_REFRESH_S): the row
+    count and the fragment count have not moved. Every commit adds a
+    fragment, so a write of any size restarts the clock; the index's own
+    refresh moves neither. Keyed on the table's path, not its name."""
+    shape = (st.get("rows"), st.get("fragments"))
+    if None in shape:
+        return False
+    key, now = str(collection.lance_dir), time.monotonic()
+    seen = _shape_seen.get(key)
+    if seen is None or seen[0] != shape:
+        _shape_seen[key] = (shape, now)
+        return False
+    return now - seen[1] >= config.VECTOR_INDEX_REFRESH_S
+
+
+def fewest_fragments(rows: int) -> int:
+    """The fragments a full compaction leaves: one per
+    VECTOR_INDEX_FRAGMENT_ROWS rows, one at least."""
+    return max(1, math.ceil(int(rows) / config.VECTOR_INDEX_FRAGMENT_ROWS))
+
+
+def idle_compact_due(collection, st: dict | None) -> bool:
+    """THE IDLE COMPACTION (operator, 2026-11-14: "Always compact tables
+    regularly during idle times"). A table that no write touched for a whole
+    pass (`_idle`) and holds more fragments than a full compaction leaves
+    (`fewest_fragments`) is compacted, whatever its count of small ones.
+
+    Why: the two thresholds left a finished table in pieces for good.
+    Normattiva's 7.96 M rows sat in 201 fragments, under the light
+    compaction's 256 small ones and far under the full one's 4,000, while
+    its dense leg took 9.77 s against DAR's 0.24 s at 13 fragments
+    (2026-11-14). An idle table costs no writer a deferral (`compact` takes
+    it exclusively), so the full pass's cost is paid when nothing waits.
+
+    Once per shape: a compaction that left this table as it is now is not
+    run again until a write changes it; one that did not compact (low disk,
+    a lost commit) is tried again a pass later, not every pass."""
+    if not st:
+        return False
+    fragments, rows = st.get("fragments"), st.get("rows")
+    if not fragments or rows is None or fragments <= fewest_fragments(rows):
+        return False
+    last = _idle_compacted.get(str(collection.lance_dir))
+    if last is not None and last[0] == fragments and (
+            last[1] or time.monotonic() - last[2] < config.VECTOR_INDEX_REFRESH_S):
+        return False
+    return _idle(collection, st)
+
+
+def _idle_compact(collection, con, st: dict, log=None) -> dict | None:
+    """The idle compaction when it is due (`idle_compact_due`), and what it
+    left remembered; None when it is not."""
+    if not idle_compact_due(collection, st):
+        return None
+    out = compact(collection, con, log=log)
+    left = (out.get("after") or {}).get("fragments") or st.get("fragments")
+    _idle_compacted[str(collection.lance_dir)] = (left, bool(out.get("compacted")), time.monotonic())
+    return out
+
+
 def _parts(collection):
     """A split collection's parts (app/vector_parts.py), each a collection
     of its own; None for a single table, or for a part itself."""
@@ -1242,7 +1308,8 @@ def ensure(collection, con=None, *, log=None, may_continue=None) -> dict | None:
         return out
     if not st["indexed"]:
         if st["rows"] < config.VECTOR_INDEX_MIN_ROWS:
-            return None
+            # too small for an index; its fragments are still merged when idle
+            return _idle_compact(collection, con, st, log)
         if con is not None:
             db.log_event(con, "info", "index",
                          f"building the vector index over {st['rows']} rows "
@@ -1286,6 +1353,12 @@ def ensure(collection, con=None, *, log=None, may_continue=None) -> dict | None:
     if compact_due(st):
         out = compact(collection, con, log=log)
         return {"refresh": did, "compact": out} if did is not None else out
+    # neither threshold reached: an idle table is compacted all the same
+    # (operator 2026-11-14, `idle_compact_due`). Not after a refresh in the
+    # same pass: the refresh itself is not a write, but the next pass finds
+    # the table as idle as this one
+    if did is None and (out := _idle_compact(collection, con, st, log)) is not None:
+        return out
     return did
 
 
