@@ -138,3 +138,23 @@ def test_the_unit_fetcher_reads_the_dump_the_env_names(mock, tmp_path, monkeypat
     cellar.UNITS.fetch(_spec(mock).endpoints[0], remote, dest)
     assert not _item_gets(mock) and all((dest.parent / n).read_bytes() == b for n, b in files.items())
     monkeypatch.setattr(datadump, "_DUMPS", None)
+
+
+def test_any_folder_name_zips_at_any_depth_and_other_folders_passed_over(mock, tmp_path):
+    """München's layout: /mnt/tank/louise-measure/datadump-<l>/, beside other
+    measurements' folders."""
+    files = _formex(ACT, "en")
+    mock.add(ACT, "en", ACT, uuid=UUID, manif_modified=OLD)
+    root = tmp_path / "louise-measure"
+    folder = root / "datadump-en"
+    (folder / "fmx").mkdir(parents=True)
+    with zipfile.ZipFile(folder / "fmx" / "EN_FMX_1.zip", "w") as z:
+        for n, b in files.items():
+            z.writestr(f"{UUID}/fmx4/{n}", b)
+    (folder / datadump.STATEMENT).write_text(json.dumps({"language": "en", "created": CREATED}))
+    (root / "speed-benchmark").mkdir()
+    said: list[str] = []
+    dumps = datadump.Dumps(root, log=said.append)
+    got = cellar.fetch_unit(mock.base, ACT, "en", tmp_path / src.unit_rel("en", ACT), dump=dumps.for_language("en"))
+    assert got.from_dump == sum(len(b) for b in files.values()) and not _item_gets(mock)
+    assert not said, "a folder that is not a dump is not reported"
