@@ -106,9 +106,9 @@ plugin, because a verifier needs it to reproduce our records:
     by that name and size under the same WORK and its manifestation was not
     modified since the dump was made (app/acquire/datadump.py); the notice,
     the tree and everything else come from Cellar, which `records-vs-origin`
-    re-fetches. Used only once München's 1,000-item study shows no false
-    adoption under that rule (no checksum is published, and the ETag is a
-    modification time).
+    re-fetches. The date is the guarantee (operator, 2026-11-14: "Assume
+    that cellar always updates the date when a file is changed"): no
+    checksum is published, and the ETag is a modification time.
 
 THE UNIT AND ITS ORIGIN. Per act version and language, a directory
 `lang=<code>/<yyyy>/<CELEX>/` under the corpus root — `<yyyy>` the CELEX's
