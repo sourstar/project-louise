@@ -416,6 +416,31 @@ its files are the per-document responses, fetched by the platform at
 the cutoff into the corpus directory — the plugin's `discover()` and
 `fetch()` then read them there like any other origin.
 
+**Bulk first** (*amended 2026-11-14*, operator: "every time there is a
+bulk download that saves a relevant amount of single requests to the
+source, we start from the bulk download first"). Where the origin also
+publishes a BULK form of what the per-unit origin serves — a dump, an
+archive, an export — the acquisition reads from the bulk first and asks
+the per-unit origin only for what the bulk cannot give: what it lacks,
+and what changed after its date. The bulk is a TRANSPORT, never the
+origin. It is local, like a mirror, outside `origin.spec` and the Codex,
+and the collection's identity and `origin.form` stay the per-unit
+origin's: a peer fed from the bulk and one fed unit by unit write the
+same Codex and the same bytes, and `records-vs-origin` re-fetches from the
+per-unit origin, never the bulk. A byte is taken from a bulk only when
+it is provably the origin's: by a checksum the origin publishes, or,
+where it publishes none, by the name and size the origin's own listing
+states for that unit, and nothing modified since the bulk's date by the
+origin's own dates. A bulk read through a declared mapping is exempt from
+the probe file's same-layout rule above. "Relevant" is counted by the
+acquisition's dry run as the share of requests the bulk would answer;
+a bulk that answers none is not configured. The worked case is EUR-Lex:
+the Data Dump answers the items of acts in force and each work's tree
+(app/acquire/datadump.py, work_trees.py; measured on Italian, 33 % of the
+units, about 20 % of the requests and 43 % of the bytes; the operator,
+2026-11-14: "Assume that cellar always updates the date when a file is
+changed").
+
 ## 6.3 Chunking, per layer
 
 A collection declares its **layers** once, at creation: one chunker per
