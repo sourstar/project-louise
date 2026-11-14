@@ -67,9 +67,10 @@ BUILD_TARGET = "/build"
 #: The FAST area needs the FILES area: without it the FILES kinds would be
 #: looked for on ssd5, where they were not copied, and rebuilt.
 #: The datasets' NAMES ARE MÜNCHEN'S TO REPORT (LOUISE_FAST_HOST and
-#: LOUISE_FILES_HOST at the deploy until they are written here).
-FAST_HOST: str | None = None
-FILES_HOST: str | None = None
+#: LOUISE_FILES_HOST at the deploy override them). Reported 2026-11-14; neither
+#: is mounted before its dataset holds READY.
+FAST_HOST: str | None = "/mnt/ssd5/louise-fast-cache"
+FILES_HOST: str | None = "/mnt/ssd3/louise-files-cache"
 #: (subfolder of the dataset, container path, read-only in `web`)
 FAST_MOUNTS = (("cache", "/data/cache", False),)              # web writes the speech cache
 FILES_MOUNTS = (("cache", "/data/files-cache", True),

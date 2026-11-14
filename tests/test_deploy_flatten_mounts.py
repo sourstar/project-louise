@@ -85,9 +85,14 @@ def test_the_two_cache_areas_are_mounted_once_their_copies_are_ready():
     have = {fast, f"{fast}/READY", f"{fast}/cache",
             files, f"{files}/READY", f"{files}/cache", f"{files}/pubmed-pack"}
     yes = lambda p: True
-    assert fm.FAST_HOST is None and fm.FILES_HOST is None, "the datasets are München's to name"
+    assert (fm.FAST_HOST, fm.FILES_HOST) == ("/mnt/ssd5/louise-fast-cache", "/mnt/ssd3/louise-files-cache"), \
+        "the datasets München named (2026-11-14)"
     shared, env, said = fm.cache_areas(is_dataset=yes, exists=have.__contains__)
-    assert (shared, env) == ((), {}), "no host named: nothing"
+    assert (shared, env) == ((), {}), "the named datasets hold no READY here: nothing"
+    named = {fm.FAST_HOST, f"{fm.FAST_HOST}/READY", f"{fm.FAST_HOST}/cache",
+             fm.FILES_HOST, f"{fm.FILES_HOST}/READY", f"{fm.FILES_HOST}/cache"}
+    shared, env, said = fm.cache_areas(is_dataset=yes, exists=named.__contains__)
+    assert [t for _, t, _ in shared] == ["/data/files-cache", "/data/cache"], "no host given: the named ones"
     shared, env, _ = fm.cache_areas(fast, files, is_dataset=lambda p: False, exists=have.__contains__)
     assert (shared, env) == ((), {}), "not datasets: nothing"
     shared, env, _ = fm.cache_areas(fast, files, is_dataset=yes, exists=(have - {f"{files}/READY"}).__contains__)

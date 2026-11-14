@@ -482,7 +482,8 @@ size.
    (each `<kind>/<tag>` whole); `pubmed-pack/` ← `/data/pubmed-pack`. Compare,
    then `READY`.
 2. ssd5: `cache/` ← every other kind of `/data/cache`. Compare, then `READY`.
-3. Deploy with `LOUISE_FILES_HOST` and `LOUISE_FAST_HOST`. The first scan of
+3. Deploy (`FILES_HOST` /mnt/ssd3/louise-files-cache and `FAST_HOST`
+   /mnt/ssd5/louise-fast-cache, named by München 2026-11-14). The first scan of
    wikidata carries its label table from the files cache to ssd5 (a log line,
    "label table carried"); until then its documents defer.
 
@@ -494,5 +495,12 @@ its link swapped. **To build BEFORE that switch:** `forget` and `rename` act on
 a link's folder only when it sits under the CURRENT root (app/hold/forget.py
 `shared_folders`, app/hold/rename.py `plan`), so a collection left on tank would
 be forgotten with its folder left behind, or renamed with its folder keeping the
-old name. They must know every archive root, tank's and rank1's. Open: tank's
-free space and growth rate, to say when.
+old name. They must know every archive root, tank's and rank1's.
+
+**Tank, 2026-11-14 08:31Z (München, read-only):** 21.8 T raw, 14.0 T allocated
+(63 %), 5.11 TB usable free. The largest datasets: backup 4.19 T (of the SSD
+pools), media 2.74 T, louise-corpora 912 G (wikivec 525, wikidata 184), apps
+890 G. Growth: +8.4 GB a day on louise-corpora, all of it the EUR-Lex fetch
+(lz4 ~7.5× on its XML: the 23 other languages ≈ 200 GB on disk), plus the Data
+Dump copies until 11-20/21. At that pace tank is not near full; a daily log
+(/root/measure/tank-growth.log, 05:00) gives the rate from now on.
