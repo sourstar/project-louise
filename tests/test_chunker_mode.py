@@ -300,6 +300,42 @@ def test_every_arm_reads_four_ways_scored_by_key_and_leaves_nothing_behind(built
                 assert all(x in row["relevant"] or x < 0 for x in row["ranking"]), "gold by key, or a miss"
     assert len(reranked) == 4, "two questions, two arms: the fused list reranked each time"
     assert not any(work.glob("fts-*")), "every arm's throwaway index is removed"
+    assert not any(work.glob("cut-*")), "every arm's cut file is taken back and removed"
+
+
+def test_memory_is_one_arms_worth(built, tmp_path, monkeypatch):
+    """The pilot's OOM kills (2026-11-14, 8 GB, at the moment its first arm's
+    228k vectors were complete): four arms' chunks held at once, every pool
+    record parsed and cached, every cache part in RAM, and two full copies of
+    the arm's matrix while it was normalised. Each, bounded."""
+    from app import plugin_io, record_source
+    enc = Encoder()
+    # the cache's parts are memory-mapped, on reload and once written
+    cache = cm.VectorCache(tmp_path / "v", RECIPE)
+    m, _ = cm.embed(["uno due", "tre quattro"], cache=cache, recipe=RECIPE, query=False, embed_fn=enc,
+                    log=lambda m: None)
+    assert all(isinstance(part, np.memmap) for part in cache._parts)
+    again = cm.VectorCache(tmp_path / "v", RECIPE)
+    assert all(isinstance(part, np.memmap) for part in again._parts)
+    keys = [cm.text_key(t, query=False) for t in ("tre quattro", "uno due")]
+    got = again.matrix(keys)
+    assert got.dtype == np.float32 and got.flags["C_CONTIGUOUS"] and np.allclose(got, m[::-1])
+    # the search normalises the arm's matrix in place: no second array
+    arm = cm.arm_of(built.collection, "shipped")
+    chunks, _ = cm.cut(arm, built, pool_ids(built))
+    vecs = np.asarray(enc(RECIPE, [c["text"] for c in chunks], query=False), dtype=np.float32)
+    search = cm.ArmSearch(arm, built.collection, chunks, vecs, tmp_path / "w")
+    try:
+        assert search.matrix is vecs and np.allclose(np.linalg.norm(vecs, axis=1), 1.0, atol=1e-5)
+    finally:
+        search.close()
+    # the cut parses only what no record holds, and caches nothing on the held collection
+    built._records.clear()
+    monkeypatch.setattr(record_source, "record_for",
+                        lambda c, row: {"title": "T", "sections": [("Art. 1", "testo")]})
+    monkeypatch.setattr(plugin_io, "canonical_doc", lambda *a, **k: pytest.fail("parsed though a record holds it"))
+    _, cost = cm.cut(arm, built, pool_ids(built))
+    assert cost["records_from_records"] == len(pool_ids(built)) and built._records == {}
 
 
 def test_a_question_reaches_the_records_not_chunks_as_the_reader_fuses(built, tmp_path):
