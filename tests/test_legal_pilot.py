@@ -207,6 +207,11 @@ def test_each_search_is_timed_and_the_summary_says_mean_p50_p95_and_total(built)
     assert set(t) == {"mean", "p50", "p95", "total"} and t["total"] >= 0 and t["p95"] >= t["p50"] >= 0
     assert lp.timing([1.0, 2.0, 3.0, 4.0, 100.0]) == {"mean": 22.0, "p50": 3.0, "p95": 100.0, "total": 110.0}
     assert lp.timing([]) == {"mean": None, "p50": None, "p95": None, "total": 0.0}
+    stages = {"languages": 1.0, "catalog": 2.0, "fts": 30.0, "dense": 9000.0, "rerank": 0.0, "total": 9040.0}
+    got = lp.run(built, QUESTIONS, gold, k=10, search_fn=lambda q, **kw: {"lists": [], "timings": stages},
+                 traverse_fn=None)
+    rows = [r for r in got["per_question"] if "index" in r]
+    assert rows and all(r["timings"] == stages for r in rows), "each question keeps the search's own stages"
 
 
 def test_the_reranker_is_the_node_s_none_or_one_lent_and_only_inside_the_run(monkeypatch):

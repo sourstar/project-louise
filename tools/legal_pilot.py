@@ -787,6 +787,9 @@ def run(held: Held, questions: list[dict[str, Any]], gold: dict[int, Gold], *, k
         per_question.append({"index": i, "question": q["question"], "relevant": sorted(relevant),
                              "ranking": ranking, "missed": missed, "reachable_by_edge": reachable,
                              "hits": shown, "seconds": round(seconds[-1], 3),
+                             # the search's own stages (app/retrieval.py: languages, catalog,
+                             # fts, dense — the query's encoding inside it — rerank, total, ms)
+                             "timings": dict(answer.get("timings") or {}) if isinstance(answer, dict) else {},
                              **row})                  # every metric, so two runs pair on any
     summary = {key: (value / n if n else 0.0) for key, value in totals.items()}
     summary["questions_run"] = n
