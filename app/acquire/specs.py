@@ -566,6 +566,11 @@ def _neuris_listing():
     return NeurisListing()
 
 
+def _neuris_snapshot():
+    from .neuris_snapshot import SNAPSHOT
+    return SNAPSHOT
+
+
 #: The API's host. ONLY the test phase answers (probed from the node,
 #: 2026-10-28: the production host has no DNS record); production is this
 #: one line. A path the listing gives is relative to it.
@@ -580,6 +585,11 @@ NEURIS_SPEC = AcquisitionSpec(
         Endpoint(transport=Transport.HTTPS, url=NEURIS_URL, max_conns=2),
     ),
     inventory=_neuris_listing(),
+    # bulk first (06 §6.2): the daily snapshot writes a pass's manifestation
+    # zips when the pass has enough of them to fetch; the JSON, and any zip
+    # it does not hold at the listing's generation date, per law; and
+    # records-vs-origin per law from the API (app/acquire/neuris_snapshot.py)
+    unit_fetcher=_neuris_snapshot(),
     # a manifestation zip and the expression's JSON, side by side under the
     # expression's ELI (app/acquire/neuris_listing.py)
     layout="container-files",

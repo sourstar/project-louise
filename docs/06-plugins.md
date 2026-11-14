@@ -431,7 +431,13 @@ per-unit origin, never the bulk. A byte is taken from a bulk only when
 it is provably the origin's: by a checksum the origin publishes, or,
 where it publishes none, by the name and size the origin's own listing
 states for that unit, and nothing modified since the bulk's date by the
-origin's own dates. A bulk read through a declared mapping is exempt from
+origin's own dates — or by PROVENANCE (*amended 2026-11-14*, NeuRIS): a
+bulk the origin itself publishes and names from its own API is the origin's
+bytes as of its build, taken only for the unit the listing names now (the
+same identifier and the same version date in the member's path), each
+member's own integrity check holding, and with `records-vs-origin` still
+re-fetching per unit from the API, never from the bulk
+(app/acquire/neuris_snapshot.py). A bulk read through a declared mapping is exempt from
 the probe file's same-layout rule above. "Relevant" is counted by the
 acquisition's dry run as the share of requests the bulk would answer;
 a bulk that answers none is not configured. The worked case is EUR-Lex:
