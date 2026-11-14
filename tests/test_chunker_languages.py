@@ -265,3 +265,18 @@ def test_the_command_pilots_then_runs_then_reports(sets, built, tmp_path, monkey
     text = report.read_text(encoding="utf-8")
     assert "## Verdict (reranked mrr@10" in text and "## The structure the reader found" in text
     assert "| de |" in text and "differs by language" in text
+
+
+def test_an_app_older_than_the_tool_is_named_at_once_not_found_in_a_traceback(tmp_path, monkeypatch):
+    """München, 2026-11-14: the dry runs died on the node's older app with
+    `ImportError: cannot import name 'rendition'`, three times each. The run
+    now says which module, from which commit, before reading anything."""
+    assert cl.missing_app() == [], "this checkout has what the tool needs"
+    old = (("app.plugins.eurlex.no_such_module", "_sections", "abc1234, a later parser"),
+           ("app.plugins.eurlex.rendition", "no_such_name", "def5678, a later reader"))
+    assert cl.missing_app(old) == ["app.plugins.eurlex.no_such_module (from abc1234, a later parser)",
+                                   "app.plugins.eurlex.rendition.no_such_name (from def5678, a later reader)"]
+    monkeypatch.setattr(cl, "NEEDS", old[:1])
+    with pytest.raises(SystemExit, match="lacks app.plugins.eurlex.no_such_module .from abc1234"):
+        cl.main(["run", "--sets", str(tmp_path / "nowhere"), "--collection", "x", "--out", str(tmp_path / "o")])
+    assert not (tmp_path / "o").exists(), "nothing read, nothing written"
