@@ -1926,8 +1926,8 @@ it left open is below.
   containers today) and retire the variable. It does not block the cache move: the pack keeps its
   container path, on its own subfolder of the ssd3 files-cache dataset (storage-tiering.md §10).
 
-- **rank1, tank's successor (operator, 2026-11-14: "When tank will be full I have another raidz
-  hdd rank1 ready with 24 TB").** Before the archive roots point at rank1, `forget` and `rename`
+- **tank1, tank's successor (operator, 2026-11-14: "When tank will be full I have another raidz
+  hdd tank1 ready with 24 TB"; its name corrected by the operator from "rank1").** Before the archive roots point at tank1, `forget` and `rename`
   must know every archive root: today they act on a link's folder only under the CURRENT
   `SHARDS_ROOT` / `ORIGINS_ROOT` / `BUNDLES_ROOT` (storage-tiering.md §10). Not near: tank 63 %
   allocated, 5.11 TB free, +8.4 GB a day (the EUR-Lex fetch; München, 2026-11-14); a daily log
