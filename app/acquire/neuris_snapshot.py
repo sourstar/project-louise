@@ -63,6 +63,7 @@ the same pattern under another proof.
 """
 from __future__ import annotations
 
+import io
 import os
 import re
 import threading
@@ -186,8 +187,15 @@ class NeurisSnapshot:
         want = [f for f in pending if manifestation_key(f.rel_path)]
         self.close()
         held = self._held_zip(collection)
+        # what the held snapshot cannot give would go per law: BEFORE that, the
+        # API is asked whether a newer snapshot is out (operator, 2026-11-15,
+        # Frankfurt's item 2, A: "Peek at a newer snapshot's index … before any
+        # per-law fetch, and download it when it holds a pending law"), outside
+        # the once-a-day read
+        lacking = want if held is None else [f for f in want if manifestation_key(f.rel_path)
+                                             not in _held_keys(held)]
         url: str | None = None
-        if held is None or self._link_read_due(collection):
+        if held is None or lacking or self._link_read_due(collection):
             try:
                 url = link(endpoint)
             except TransportError as e:
@@ -198,8 +206,10 @@ class NeurisSnapshot:
         compare = self._revisit_due(collection, named or (held.name if held else None))
         if not want and not compare:
             return []
+        newer = bool(url) and held is not None and named != held.name
+        take_newer = newer and (compare or (lacking and self._holds_any(url, lacking)))
         try:
-            if url and (held is None or named != held.name):
+            if url and (held is None or take_newer):
                 path = self._download(url, collection)
             elif held is not None:
                 path = held
@@ -224,6 +234,21 @@ class NeurisSnapshot:
         self._report(f"snapshot {path.name}: {len(revised)} held manifestation(s) the origin revised in "
                      f"place (the same generation date), rewritten from it in this pass")
         return revised
+
+    def _holds_any(self, url: str, files: list[RemoteFile]) -> bool:
+        """Does the snapshot `url` names hold any of `files`' manifestations?
+        Read from its CENTRAL DIRECTORY alone, by HTTP Range (a few MB of the
+        631 MB: zipfile over a ranged reader, `RangeFile`), never the whole."""
+        try:
+            keys = remote_keys(url)
+        except (TransportError, OSError, zipfile.BadZipFile) as e:
+            self._report(f"the newer snapshot's index not read ({type(e).__name__}: {e}); the held one "
+                         f"is used"[:400])
+            return False
+        hit = sum(1 for f in files if manifestation_key(f.rel_path) in keys)
+        self._report(f"{Path(urlsplit(url).path).name}: its index read by range; it holds {hit} of the "
+                     f"{len(files)} zip(s) the held snapshot does not")
+        return hit > 0
 
     def _held_zip(self, collection) -> Path | None:
         """The snapshot the place holds, the newest by name (its build's
@@ -432,6 +457,89 @@ class NeurisSnapshot:
                 index.setdefault(key, []).append(info)
         with self._lock:
             self._zip, self._path, self._index = zf, path, index
+
+
+def _held_keys(path: Path) -> set[str]:
+    """The manifestation keys a held snapshot holds (its central directory)."""
+    with zipfile.ZipFile(path) as zf:
+        return {k for k in (member_key(n) for n in zf.namelist()) if k is not None}
+
+
+class RangeFile(io.RawIOBase):
+    """A remote file read by HTTP Range, seekable, so `zipfile` reads a zip's
+    end record and central directory from it and nothing else (the standard
+    ZIP layout puts both at the end; RFC 9110 §14 ranges). Every byte drawn
+    from the budget (invariant 5). Blocks of BLOCK bytes, kept while open."""
+    BLOCK = 1 << 20
+
+    def __init__(self, url: str, *, client: httpx.Client | None = None) -> None:
+        self.url = url
+        self._own = client is None
+        self._c = client or httpx.Client(timeout=HTTP_TIMEOUT_S, follow_redirects=True)
+        self._pos = 0
+        self._blocks: dict[int, bytes] = {}
+        r = self._get(0, 0)
+        total = (r.headers.get("content-range") or "").rpartition("/")[2]
+        if r.status_code != 206 or not total.isdigit():
+            raise TransportError(f"{url}: no byte ranges served ({r.status_code})")
+        self.size = int(total)
+
+    def _get(self, a: int, b: int) -> httpx.Response:
+        try:
+            r = self._c.get(self.url, headers={"Range": f"bytes={a}-{b}"})
+        except httpx.HTTPError as e:
+            raise TransportError(f"{self.url}: {type(e).__name__}: {e}") from e
+        budget.acquire_bytes(len(r.content))
+        if r.status_code not in (200, 206):
+            raise TransportError(f"{self.url}: {r.status_code} to a range")
+        return r
+
+    def readable(self) -> bool:
+        return True
+
+    def seekable(self) -> bool:
+        return True
+
+    def tell(self) -> int:
+        return self._pos
+
+    def seek(self, offset: int, whence: int = 0) -> int:
+        self._pos = {0: offset, 1: self._pos + offset, 2: self.size + offset}[whence]
+        return self._pos
+
+    def read(self, n: int = -1) -> bytes:
+        end = self.size if n is None or n < 0 else min(self.size, self._pos + n)
+        out = bytearray()
+        while self._pos < end:
+            i = self._pos // self.BLOCK
+            if i not in self._blocks:
+                a = i * self.BLOCK
+                self._blocks[i] = self._get(a, min(self.size, a + self.BLOCK) - 1).content
+            block = self._blocks[i]
+            off = self._pos - i * self.BLOCK
+            take = block[off: off + (end - self._pos)]
+            if not take:
+                break
+            out += take
+            self._pos += len(take)
+        return bytes(out)
+
+    def readinto(self, b) -> int:
+        data = self.read(len(b))
+        b[:len(data)] = data
+        return len(data)
+
+    def close(self) -> None:
+        if self._own:
+            self._c.close()
+        super().close()
+
+
+def remote_keys(url: str) -> set[str]:
+    """The manifestation keys the snapshot at `url` holds, from its central
+    directory read by range."""
+    with RangeFile(url) as f, zipfile.ZipFile(f) as zf:
+        return {k for k in (member_key(n) for n in zf.namelist()) if k is not None}
 
 
 SNAPSHOT = NeurisSnapshot()
