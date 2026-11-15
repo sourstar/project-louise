@@ -177,6 +177,46 @@ def _linked_by_others(root: Path, name: str, target: Path) -> list[str]:
     return _origin_shared(Path(root), name, target)
 
 
+def read_through(root: Path, name: str) -> dict[str, int]:
+    """The OTHER held collections whose manifest still stores a path under
+    `<root>/<name>/` — they read their corpus through this collection's own
+    link, and its forget would cut them off and, nothing else linking the
+    origin folder, remove the corpus itself (2026-11-15: a carry left
+    Normattiva on parser 10 reading through its source's link, and NeuRIS5
+    the same; app/hold/carry.py `share_origin`). Only collections of the same
+    plugin can hold this one's records, so only their manifests are read,
+    read-only, `LIMIT 1` per column: a forget is an operator's pass, once."""
+    import sqlite3
+    from . import collection as col
+    from .rename import PATH_COLUMNS
+    root = Path(root)
+    try:
+        plugin = col.read(root, name).parser.id
+    except (CodexError, FileNotFoundError, OSError, AttributeError):
+        return {}
+    prefix = str(root / name) + "/"
+    out: dict[str, int] = {}
+    for d in sorted(root.iterdir()) if root.is_dir() else []:
+        manifest = d / "state" / "manifest.sqlite"
+        if d.name == name or not manifest.is_file():
+            continue
+        try:
+            if col.read(root, d.name).parser.id != plugin:
+                continue
+        except (CodexError, FileNotFoundError, OSError, AttributeError):
+            continue
+        con = sqlite3.connect(f"file:{manifest}?mode=ro", uri=True, timeout=60)
+        try:
+            tables = {r[0] for r in con.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+            hits = sum(1 for t, c in PATH_COLUMNS if t in tables and con.execute(
+                f"SELECT 1 FROM {t} WHERE instr({c}, ?) > 0 LIMIT 1", (prefix,)).fetchone())
+        finally:
+            con.close()
+        if hits:
+            out[d.name] = hits
+    return out
+
+
 def shared_folders(root: Path, name: str) -> tuple[list[Path], list[Path]]:
     """`(removed, kept)`: the folders under the shared roots (one mount per
     kind, a folder per collection, 2026-10-12) that `<root>/<name>`'s links
@@ -236,6 +276,13 @@ def forget(root: Path, name: str, *, kinds=None, dry_run: bool = False,
     if kinds:
         return _forget_vectors(root, name, codex, base, kinds=kinds, dry_run=dry_run)
     plan = [p for p in (held, base) if p.exists()]
+    readers = read_through(root, name)
+    if readers:
+        raise CodexError(
+            f"forget {name}: " + ", ".join(sorted(readers)) + f" still read their corpus through "
+            f"{root / name}/ (their manifests store paths under it); forgetting it would cut them "
+            f"off, and remove the corpus with it. Nothing was removed. First, for each: "
+            + "; ".join(f"`louise dev carry {name} {r} --share-origin --yes`" for r in sorted(readers)))
     from app import text_index
     if dry_run:
         out: dict[str, Any] = {"collection": name, "dry_run": True,

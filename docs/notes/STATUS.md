@@ -2005,6 +2005,8 @@ it left open is below.
   target's origin to the source's corpus, removes the empty folder, and re-roots the paths
   (`carry.share_origin`). It refuses a target whose origin holds another corpus. A carry finished earlier
   is repaired by `louise dev carry <from> <to> --share-origin --yes`; NeuRIS5 needs this before its rebuild.
+  `forget` now refuses a collection whose `<root>/<name>/` another held collection of the same plugin still
+  reads through. Unrepaired, NeuRIS's forget would have removed /corpora/NeuRIS, which nothing else links.
 
 - **`PUBMED_PACK_DIR` is an env override beside app/derived.py** (the legal session, 2026-11-14).
   `app/plugins/pubmed/pack.py` `pack_path` takes it first (app/config.py:16), so the node's 84 G pubmed
