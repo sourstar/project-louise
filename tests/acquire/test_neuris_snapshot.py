@@ -274,11 +274,27 @@ def test_a_manifestation_revised_in_place_is_rewritten_from_the_snapshot_at_the_
     got = engine.run_acquisition(con, collection, _spec(base), "full")
     assert got["fetched"] == 0 and _members(held) == before
     # a week on: taken, compared, and only the revised one rewritten (the re-render is no revision)
-    for p in nsnap.NeurisSnapshot.place(collection).glob("*.zip"):
-        os.utime(p, (0, 0))
+    mark = nsnap.NeurisSnapshot.place(collection) / nsnap.COMPARED
+    mark.write_text(json.dumps({"snapshot": "x", "at": 0}))
     for p in nsnap.NeurisSnapshot.place(collection).glob("*.zip"):
         p.unlink()                                 # the API names a newer one: downloaded again
     got = engine.run_acquisition(con, collection, _spec(base), "full")
     assert got["fetched"] == 1 and api.zips_built == 0, "the one revised zip, from the snapshot"
     assert "Interne Abk" in _members(held)[f"{ns.S1016}/{gen}/regelungstext-1.xml"].decode("utf-8")
     assert any("revised in place" in m and " 1 held manifestation" in m for m in _events(con))
+
+
+
+def test_a_snapshot_downloaded_but_never_compared_is_compared_at_the_next_pass(tmp_path, server):
+    """2026-11-15: the first fetch on #672 found a snapshot a full fetch had
+    downloaded the day before, read its date as "compared today", and revised
+    nothing. The comparison has its own mark."""
+    api, base = server
+    collection = _collection(tmp_path, plugin="neuris")
+    con = db.connect(collection)
+    engine.run_acquisition(con, collection, _spec(base), "full")
+    (nsnap.NeurisSnapshot.place(collection) / nsnap.COMPARED).unlink()      # as before #672: none
+    assert nsnap.NeurisSnapshot()._revisit_due(collection), "a fresh zip is no comparison"
+    engine.run_acquisition(con, collection, _spec(base), "full")
+    assert any("revised in place" in m for m in _events(con))
+    assert not nsnap.NeurisSnapshot()._revisit_due(collection)
