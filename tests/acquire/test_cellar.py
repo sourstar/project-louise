@@ -567,3 +567,24 @@ def test_another_language_set_is_another_window(mock):
     _listed(mock)
     _listed(mock, ("lang=en/*", "lang=fr/*"))
     assert _pages(mock) == 2
+
+
+def test_a_body_that_does_not_decode_is_retried_then_a_deferral():
+    """A body its Content-Encoding does not decode is Cellar's episode, as a
+    drop is: retried, and at the end a deferral, never the unit's error
+    (3,258 Italian units, 2026-11-14/15, fetched whole when asked again)."""
+    calls = {"n": 0, "bad": 1}
+
+    def answer(request: httpx.Request) -> httpx.Response:
+        calls["n"] += 1
+        if calls["n"] <= calls["bad"]:
+            return httpx.Response(200, headers={"content-encoding": "gzip"}, content=b"<rdf>not gzip</rdf>")
+        return httpx.Response(200, content=b"<rdf/>")
+
+    client = httpx.Client(transport=httpx.MockTransport(answer))
+    got = cellar._get(client, "http://cellar.test/x", {}, "the tree of X", charge=lambda n: None)
+    assert got.content == b"<rdf/>" and calls["n"] == 2
+    calls.update(n=0, bad=99)
+    with pytest.raises(TransportError) as e:
+        cellar._get(client, "http://cellar.test/x", {}, "the tree of X", charge=lambda n: None)
+    assert engine.transient(str(e.value)) and "DecodingError" in str(e.value)
