@@ -1,0 +1,3404 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<NOTICE decoding="ita" type="branch">
+   <WORK>
+      <URI>
+         <VALUE>http://publications.europa.eu/resource/cellar/b8e4cac3-4287-4e5b-83ce-ac6ac43fc05a</VALUE>
+         <IDENTIFIER>b8e4cac3-4287-4e5b-83ce-ac6ac43fc05a</IDENTIFIER>
+         <TYPE>cellar</TYPE>
+      </URI>
+      <SAMEAS>
+         <URI>
+            <VALUE>http://publications.europa.eu/resource/celex/01979D0491-20061025</VALUE>
+            <IDENTIFIER>01979D0491-20061025</IDENTIFIER>
+            <TYPE>celex</TYPE>
+         </URI>
+      </SAMEAS>
+      <SAMEAS>
+         <URI>
+            <VALUE>http://publications.europa.eu/resource/eli/dec/1979/491/2006-10-25</VALUE>
+            <IDENTIFIER>dec:1979:491:2006-10-25</IDENTIFIER>
+            <TYPE>eli</TYPE>
+         </URI>
+      </SAMEAS>
+      <SAMEAS>
+         <URI>
+            <VALUE>http://publications.europa.eu/resource/consolidation/1979D0491%2F20061025</VALUE>
+            <IDENTIFIER>1979D0491/20061025</IDENTIFIER>
+            <TYPE>consolidation</TYPE>
+         </URI>
+      </SAMEAS>
+      <IDENTIFIER type="data">
+         <VALUE>http://data.europa.eu/eli/dec/1979/491/2006-10-25</VALUE>
+      </IDENTIFIER>
+      <WORK_ID_DOCUMENT type="data">
+         <VALUE>consolidation:1979D0491/20061025</VALUE>
+      </WORK_ID_DOCUMENT>
+      <CREATED_BY type="concept">
+         <URI>
+            <VALUE>http://publications.europa.eu/resource/authority/corporate-body/OP_DATPRO</VALUE>
+            <IDENTIFIER>OP_DATPRO</IDENTIFIER>
+            <TYPE>corporate-body</TYPE>
+         </URI>
+         <OP-CODE>OP_DATPRO</OP-CODE>
+         <IDENTIFIER>OP_DATPRO</IDENTIFIER>
+         <PREFLABEL>Dati provvisori</PREFLABEL>
+         <ANNOTATION>
+            <BUILD_INFO>cdm:CDM_3.2.3  tdm:1523  xslt:3945 saxon:9.0.0.1J JVM:1.6.0_29 metaconvJar:5.11.1 builddate:20/04/2016 15:04:38</BUILD_INFO>
+            <QUALITY_ISSUE>DATMIS</QUALITY_ISSUE>
+            <ERROR_MESSAGE>Data missing</ERROR_MESSAGE>
+         </ANNOTATION>
+      </CREATED_BY>
+      <RESOURCE_LEGAL_NUMBER_NATURAL_CELEX type="data">
+         <VALUE>0491</VALUE>
+      </RESOURCE_LEGAL_NUMBER_NATURAL_CELEX>
+      <WORK_HAS_EXPRESSION type="link">
+         <EMBEDDED_NOTICE>
+            <WORK>
+               <RESOURCE_LEGAL_NUMBER_NATURAL_CELEX type="data">
+                  <VALUE>0491</VALUE>
+               </RESOURCE_LEGAL_NUMBER_NATURAL_CELEX>
+               <RESOURCE_LEGAL_TYPE type="data">
+                  <VALUE>D</VALUE>
+               </RESOURCE_LEGAL_TYPE>
+               <RESOURCE_LEGAL_NUMBER_NATURAL type="data">
+                  <VALUE>491</VALUE>
+               </RESOURCE_LEGAL_NUMBER_NATURAL>
+               <ID_SECTOR type="data">
+                  <VALUE>0</VALUE>
+               </ID_SECTOR>
+               <RESOURCE_LEGAL_ID_CELEX type="data">
+                  <VALUE>01979D0491-20061025</VALUE>
+               </RESOURCE_LEGAL_ID_CELEX>
+               <WORK_HAS_RESOURCE-TYPE type="concept">
+                  <URI>
+                     <VALUE>http://publications.europa.eu/resource/authority/resource-type/CONS_TEXT</VALUE>
+                     <IDENTIFIER>CONS_TEXT</IDENTIFIER>
+                     <TYPE>resource-type</TYPE>
+                  </URI>
+                  <OP-CODE>CONS_TEXT</OP-CODE>
+                  <IDENTIFIER>CONS_TEXT</IDENTIFIER>
+                  <PREFLABEL>Testo consolidato</PREFLABEL>
+               </WORK_HAS_RESOURCE-TYPE>
+               <NUMBER type="data">
+                  <VALUE>1979D0491/20061025</VALUE>
+               </NUMBER>
+               <ID_CELEX type="data">
+                  <VALUE>01979D0491-20061025</VALUE>
+               </ID_CELEX>
+               <WORK_DATE_DOCUMENT type="date">
+                  <VALUE>2006-10-25</VALUE>
+                  <YEAR>2006</YEAR>
+                  <MONTH>10</MONTH>
+                  <DAY>25</DAY>
+               </WORK_DATE_DOCUMENT>
+               <RESOURCE_LEGAL_YEAR type="data">
+                  <VALUE>1979</VALUE>
+               </RESOURCE_LEGAL_YEAR>
+               <YEAR type="data">
+                  <VALUE>1979</VALUE>
+               </YEAR>
+               <TYPE>cdm:resource_legal</TYPE>
+               <TYPE>cdm:act_consolidated</TYPE>
+               <TYPE>cdm:work</TYPE>
+            </WORK>
+            <EXPRESSION>
+               <EXPRESSION_MANIFESTED_BY_MANIFESTATION type="embedded_link">
+                  <SAMEAS>
+                     <URI>
+                        <VALUE>http://publications.europa.eu/resource/celex/01979D0491-20061025.HUN.pdfa1a</VALUE>
+                        <IDENTIFIER>01979D0491-20061025.HUN.pdfa1a</IDENTIFIER>
+                        <TYPE>celex</TYPE>
+                     </URI>
+                  </SAMEAS>
+               </EXPRESSION_MANIFESTED_BY_MANIFESTATION>
+               <EXPRESSION_TITLE type="data">
+                  <VALUE>A Bizottság határozata ( 1979. május 17. ) a szőlőterületekre vonatkozó alapfelmérések adatainak gépi olvasásra alkalmas formába történő átírására vonatkozó kód és egységes szabályok megállapításáról (79/491/EGK) </VALUE>
+               </EXPRESSION_TITLE>
+               <EXPRESSION_MANIFESTED_BY_MANIFESTATION type="embedded_link">
+                  <SAMEAS>
+                     <URI>
+                        <VALUE>http://publications.europa.eu/resource/celex/01979D0491-20061025.HUN.xhtml</VALUE>
+                        <IDENTIFIER>01979D0491-20061025.HUN.xhtml</IDENTIFIER>
+                        <TYPE>celex</TYPE>
+                     </URI>
+                  </SAMEAS>
+               </EXPRESSION_MANIFESTED_BY_MANIFESTATION>
+               <EXPRESSION_USES_LANGUAGE type="concept">
+                  <URI>
+                     <VALUE>http://publications.europa.eu/resource/authority/language/HUN</VALUE>
+                     <IDENTIFIER>HUN</IDENTIFIER>
+                     <TYPE>language</TYPE>
+                  </URI>
+                  <OP-CODE>HUN</OP-CODE>
+                  <IDENTIFIER>HUN</IDENTIFIER>
+                  <PREFLABEL>ungherese</PREFLABEL>
+               </EXPRESSION_USES_LANGUAGE>
+               <EXPRESSION_MANIFESTED_BY_MANIFESTATION type="embedded_link">
+                  <SAMEAS>
+                     <URI>
+                        <VALUE>http://publications.europa.eu/resource/celex/01979D0491-20061025.HUN.fmx4</VALUE>
+                        <IDENTIFIER>01979D0491-20061025.HUN.fmx4</IDENTIFIER>
+                        <TYPE>celex</TYPE>
+                     </URI>
+                  </SAMEAS>
+               </EXPRESSION_MANIFESTED_BY_MANIFESTATION>
+            </EXPRESSION>
+            <MANIFESTATION manifestation-type="pdfa1a">
+               <MANIFESTATION_TYPE type="data">
+                  <VALUE>pdfa1a</VALUE>
+               </MANIFESTATION_TYPE>
+            </MANIFESTATION>
+            <MANIFESTATION manifestation-type="fmx4">
+               <MANIFESTATION_TYPE type="data">
+                  <VALUE>fmx4</VALUE>
+               </MANIFESTATION_TYPE>
+            </MANIFESTATION>
+            <MANIFESTATION manifestation-type="xhtml">
+               <MANIFESTATION_TYPE type="data">
+                  <VALUE>xhtml</VALUE>
+               </MANIFESTATION_TYPE>
+            </MANIFESTATION>
+         </EMBEDDED_NOTICE>
+         <URI>
+            <VALUE>http://publications.europa.eu/resource/cellar/b8e4cac3-4287-4e5b-83ce-ac6ac43fc05a.0006</VALUE>
+            <IDENTIFIER>b8e4cac3-4287-4e5b-83ce-ac6ac43fc05a.0006</IDENTIFIER>
+            <TYPE>cellar</TYPE>
+         </URI>
+         <SAMEAS>
+            <URI>
+               <VALUE>http://publications.europa.eu/resource/consolidation/1979D0491%2F20061025.HUN</VALUE>
+               <IDENTIFIER>1979D0491/20061025.HUN</IDENTIFIER>
+               <TYPE>consolidation</TYPE>
+            </URI>
+         </SAMEAS>
+         <SAMEAS>
+            <URI>
+               <VALUE>http://publications.europa.eu/resource/celex/01979D0491-20061025.HUN</VALUE>
+               <IDENTIFIER>01979D0491-20061025.HUN</IDENTIFIER>
+               <TYPE>celex</TYPE>
+            </URI>
+         </SAMEAS>
+      </WORK_HAS_EXPRESSION>
+      <WORK_HAS_EXPRESSION type="link">
+         <EMBEDDED_NOTICE>
+            <WORK>
+               <RESOURCE_LEGAL_NUMBER_NATURAL_CELEX type="data">
+                  <VALUE>0491</VALUE>
+               </RESOURCE_LEGAL_NUMBER_NATURAL_CELEX>
+               <RESOURCE_LEGAL_TYPE type="data">
+                  <VALUE>D</VALUE>
+               </RESOURCE_LEGAL_TYPE>
+               <RESOURCE_LEGAL_NUMBER_NATURAL type="data">
+                  <VALUE>491</VALUE>
+               </RESOURCE_LEGAL_NUMBER_NATURAL>
+               <ID_SECTOR type="data">
+                  <VALUE>0</VALUE>
+               </ID_SECTOR>
+               <RESOURCE_LEGAL_ID_CELEX type="data">
+                  <VALUE>01979D0491-20061025</VALUE>
+               </RESOURCE_LEGAL_ID_CELEX>
+               <WORK_HAS_RESOURCE-TYPE type="concept">
+                  <URI>
+                     <VALUE>http://publications.europa.eu/resource/authority/resource-type/CONS_TEXT</VALUE>
+                     <IDENTIFIER>CONS_TEXT</IDENTIFIER>
+                     <TYPE>resource-type</TYPE>
+                  </URI>
+                  <OP-CODE>CONS_TEXT</OP-CODE>
+                  <IDENTIFIER>CONS_TEXT</IDENTIFIER>
+                  <PREFLABEL>Testo consolidato</PREFLABEL>
+               </WORK_HAS_RESOURCE-TYPE>
+               <NUMBER type="data">
+                  <VALUE>1979D0491/20061025</VALUE>
+               </NUMBER>
+               <ID_CELEX type="data">
+                  <VALUE>01979D0491-20061025</VALUE>
+               </ID_CELEX>
+               <WORK_DATE_DOCUMENT type="date">
+                  <VALUE>2006-10-25</VALUE>
+                  <YEAR>2006</YEAR>
+                  <MONTH>10</MONTH>
+                  <DAY>25</DAY>
+               </WORK_DATE_DOCUMENT>
+               <RESOURCE_LEGAL_YEAR type="data">
+                  <VALUE>1979</VALUE>
+               </RESOURCE_LEGAL_YEAR>
+               <YEAR type="data">
+                  <VALUE>1979</VALUE>
+               </YEAR>
+               <TYPE>cdm:resource_legal</TYPE>
+               <TYPE>cdm:act_consolidated</TYPE>
+               <TYPE>cdm:work</TYPE>
+            </WORK>
+            <EXPRESSION>
+               <EXPRESSION_MANIFESTED_BY_MANIFESTATION type="embedded_link">
+                  <SAMEAS>
+                     <URI>
+                        <VALUE>http://publications.europa.eu/resource/celex/01979D0491-20061025.NLD.pdfa1a</VALUE>
+                        <IDENTIFIER>01979D0491-20061025.NLD.pdfa1a</IDENTIFIER>
+                        <TYPE>celex</TYPE>
+                     </URI>
+                  </SAMEAS>
+               </EXPRESSION_MANIFESTED_BY_MANIFESTATION>
+               <EXPRESSION_TITLE type="data">
+                  <VALUE>Beschikking van de Commissie van 17 mei 1979 houdende vaststelling van de code en standaardvoorschriften betreffende het inzenden in een voor de machine leesbare vorm, van de gegevens van de basisenquêtes naar de wijnbouwoppervlakten (79/491/EEG) </VALUE>
+               </EXPRESSION_TITLE>
+               <EXPRESSION_MANIFESTED_BY_MANIFESTATION type="embedded_link">
+                  <SAMEAS>
+                     <URI>
+                        <VALUE>http://publications.europa.eu/resource/celex/01979D0491-20061025.NLD.fmx4</VALUE>
+                        <IDENTIFIER>01979D0491-20061025.NLD.fmx4</IDENTIFIER>
+                        <TYPE>celex</TYPE>
+                     </URI>
+                  </SAMEAS>
+               </EXPRESSION_MANIFESTED_BY_MANIFESTATION>
+               <EXPRESSION_USES_LANGUAGE type="concept">
+                  <URI>
+                     <VALUE>http://publications.europa.eu/resource/authority/language/NLD</VALUE>
+                     <IDENTIFIER>NLD</IDENTIFIER>
+                     <TYPE>language</TYPE>
+                  </URI>
+                  <OP-CODE>NLD</OP-CODE>
+                  <IDENTIFIER>NLD</IDENTIFIER>
+                  <PREFLABEL>neerlandese</PREFLABEL>
+               </EXPRESSION_USES_LANGUAGE>
+               <EXPRESSION_MANIFESTED_BY_MANIFESTATION type="embedded_link">
+                  <SAMEAS>
+                     <URI>
+                        <VALUE>http://publications.europa.eu/resource/celex/01979D0491-20061025.NLD.xhtml</VALUE>
+                        <IDENTIFIER>01979D0491-20061025.NLD.xhtml</IDENTIFIER>
+                        <TYPE>celex</TYPE>
+                     </URI>
+                  </SAMEAS>
+               </EXPRESSION_MANIFESTED_BY_MANIFESTATION>
+            </EXPRESSION>
+            <MANIFESTATION manifestation-type="pdfa1a">
+               <MANIFESTATION_TYPE type="data">
+                  <VALUE>pdfa1a</VALUE>
+               </MANIFESTATION_TYPE>
+            </MANIFESTATION>
+            <MANIFESTATION manifestation-type="fmx4">
+               <MANIFESTATION_TYPE type="data">
+                  <VALUE>fmx4</VALUE>
+               </MANIFESTATION_TYPE>
+            </MANIFESTATION>
+            <MANIFESTATION manifestation-type="xhtml">
+               <MANIFESTATION_TYPE type="data">
+                  <VALUE>xhtml</VALUE>
+               </MANIFESTATION_TYPE>
+            </MANIFESTATION>
+         </EMBEDDED_NOTICE>
+         <URI>
+            <VALUE>http://publications.europa.eu/resource/cellar/b8e4cac3-4287-4e5b-83ce-ac6ac43fc05a.0020</VALUE>
+            <IDENTIFIER>b8e4cac3-4287-4e5b-83ce-ac6ac43fc05a.0020</IDENTIFIER>
+            <TYPE>cellar</TYPE>
+         </URI>
+         <SAMEAS>
+            <URI>
+               <VALUE>http://publications.europa.eu/resource/consolidation/1979D0491%2F20061025.NLD</VALUE>
+               <IDENTIFIER>1979D0491/20061025.NLD</IDENTIFIER>
+               <TYPE>consolidation</TYPE>
+            </URI>
+         </SAMEAS>
+         <SAMEAS>
+            <URI>
+               <VALUE>http://publications.europa.eu/resource/celex/01979D0491-20061025.NLD</VALUE>
+               <IDENTIFIER>01979D0491-20061025.NLD</IDENTIFIER>
+               <TYPE>celex</TYPE>
+            </URI>
+         </SAMEAS>
+      </WORK_HAS_EXPRESSION>
+      <WORK_CREATED_BY_AGENT type="concept">
+         <URI>
+            <VALUE>http://publications.europa.eu/resource/authority/corporate-body/OP_DATPRO</VALUE>
+            <IDENTIFIER>OP_DATPRO</IDENTIFIER>
+            <TYPE>corporate-body</TYPE>
+         </URI>
+         <OP-CODE>OP_DATPRO</OP-CODE>
+         <IDENTIFIER>OP_DATPRO</IDENTIFIER>
+         <PREFLABEL>Dati provvisori</PREFLABEL>
+         <ANNOTATION>
+            <BUILD_INFO>cdm:CDM_3.2.3  tdm:1523  xslt:3945 saxon:9.0.0.1J JVM:1.6.0_29 metaconvJar:5.11.1 builddate:20/04/2016 15:04:38</BUILD_INFO>
+            <QUALITY_ISSUE>DATMIS</QUALITY_ISSUE>
+            <ERROR_MESSAGE>Data missing</ERROR_MESSAGE>
+         </ANNOTATION>
+      </WORK_CREATED_BY_AGENT>
+      <WORK_HAS_EXPRESSION type="link">
+         <EMBEDDED_NOTICE>
+            <WORK>
+               <RESOURCE_LEGAL_NUMBER_NATURAL_CELEX type="data">
+                  <VALUE>0491</VALUE>
+               </RESOURCE_LEGAL_NUMBER_NATURAL_CELEX>
+               <RESOURCE_LEGAL_TYPE type="data">
+                  <VALUE>D</VALUE>
+               </RESOURCE_LEGAL_TYPE>
+               <RESOURCE_LEGAL_NUMBER_NATURAL type="data">
+                  <VALUE>491</VALUE>
+               </RESOURCE_LEGAL_NUMBER_NATURAL>
+               <ID_SECTOR type="data">
+                  <VALUE>0</VALUE>
+               </ID_SECTOR>
+               <RESOURCE_LEGAL_ID_CELEX type="data">
+                  <VALUE>01979D0491-20061025</VALUE>
+               </RESOURCE_LEGAL_ID_CELEX>
+               <WORK_HAS_RESOURCE-TYPE type="concept">
+                  <URI>
+                     <VALUE>http://publications.europa.eu/resource/authority/resource-type/CONS_TEXT</VALUE>
+                     <IDENTIFIER>CONS_TEXT</IDENTIFIER>
+                     <TYPE>resource-type</TYPE>
+                  </URI>
+                  <OP-CODE>CONS_TEXT</OP-CODE>
+                  <IDENTIFIER>CONS_TEXT</IDENTIFIER>
+                  <PREFLABEL>Testo consolidato</PREFLABEL>
+               </WORK_HAS_RESOURCE-TYPE>
+               <NUMBER type="data">
+                  <VALUE>1979D0491/20061025</VALUE>
+               </NUMBER>
+               <ID_CELEX type="data">
+                  <VALUE>01979D0491-20061025</VALUE>
+               </ID_CELEX>
+               <WORK_DATE_DOCUMENT type="date">
+                  <VALUE>2006-10-25</VALUE>
+                  <YEAR>2006</YEAR>
+                  <MONTH>10</MONTH>
+                  <DAY>25</DAY>
+               </WORK_DATE_DOCUMENT>
+               <RESOURCE_LEGAL_YEAR type="data">
+                  <VALUE>1979</VALUE>
+               </RESOURCE_LEGAL_YEAR>
+               <YEAR type="data">
+                  <VALUE>1979</VALUE>
+               </YEAR>
+               <TYPE>cdm:resource_legal</TYPE>
+               <TYPE>cdm:act_consolidated</TYPE>
+               <TYPE>cdm:work</TYPE>
+            </WORK>
+            <EXPRESSION>
+               <EXPRESSION_MANIFESTED_BY_MANIFESTATION type="embedded_link">
+                  <SAMEAS>
+                     <URI>
+                        <VALUE>http://publications.europa.eu/resource/celex/01979D0491-20061025.POL.fmx4</VALUE>
+                        <IDENTIFIER>01979D0491-20061025.POL.fmx4</IDENTIFIER>
+                        <TYPE>celex</TYPE>
+                     </URI>
+                  </SAMEAS>
+               </EXPRESSION_MANIFESTED_BY_MANIFESTATION>
+               <EXPRESSION_MANIFESTED_BY_MANIFESTATION type="embedded_link">
+                  <SAMEAS>
+                     <URI>
+                        <VALUE>http://publications.europa.eu/resource/celex/01979D0491-20061025.POL.pdfa1a</VALUE>
+                        <IDENTIFIER>01979D0491-20061025.POL.pdfa1a</IDENTIFIER>
+                        <TYPE>celex</TYPE>
+                     </URI>
+                  </SAMEAS>
+               </EXPRESSION_MANIFESTED_BY_MANIFESTATION>
+               <EXPRESSION_TITLE type="data">
+                  <VALUE>Decyzja Komisji z dnia 17 maja 1979 r. ustanawiająca kod i standardowe zasady zapisu danych, z podstawowych badań statystycznych obszarów uprawy winorośli, w formie do odczytu maszynowego (79/491/EWG) </VALUE>
+               </EXPRESSION_TITLE>
+               <EXPRESSION_USES_LANGUAGE type="concept">
+                  <URI>
+                     <VALUE>http://publications.europa.eu/resource/authority/language/POL</VALUE>
+                     <IDENTIFIER>POL</IDENTIFIER>
+                     <TYPE>language</TYPE>
+                  </URI>
+                  <OP-CODE>POL</OP-CODE>
+                  <IDENTIFIER>POL</IDENTIFIER>
+                  <PREFLABEL>polacco</PREFLABEL>
+               </EXPRESSION_USES_LANGUAGE>
+               <EXPRESSION_MANIFESTED_BY_MANIFESTATION type="embedded_link">
+                  <SAMEAS>
+                     <URI>
+                        <VALUE>http://publications.europa.eu/resource/celex/01979D0491-20061025.POL.xhtml</VALUE>
+                        <IDENTIFIER>01979D0491-20061025.POL.xhtml</IDENTIFIER>
+                        <TYPE>celex</TYPE>
+                     </URI>
+                  </SAMEAS>
+               </EXPRESSION_MANIFESTED_BY_MANIFESTATION>
+            </EXPRESSION>
+            <MANIFESTATION manifestation-type="pdfa1a">
+               <MANIFESTATION_TYPE type="data">
+                  <VALUE>pdfa1a</VALUE>
+               </MANIFESTATION_TYPE>
+            </MANIFESTATION>
+            <MANIFESTATION manifestation-type="fmx4">
+               <MANIFESTATION_TYPE type="data">
+                  <VALUE>fmx4</VALUE>
+               </MANIFESTATION_TYPE>
+            </MANIFESTATION>
+            <MANIFESTATION manifestation-type="xhtml">
+               <MANIFESTATION_TYPE type="data">
+                  <VALUE>xhtml</VALUE>
+               </MANIFESTATION_TYPE>
+            </MANIFESTATION>
+         </EMBEDDED_NOTICE>
+         <URI>
+            <VALUE>http://publications.europa.eu/resource/cellar/b8e4cac3-4287-4e5b-83ce-ac6ac43fc05a.0014</VALUE>
+            <IDENTIFIER>b8e4cac3-4287-4e5b-83ce-ac6ac43fc05a.0014</IDENTIFIER>
+            <TYPE>cellar</TYPE>
+         </URI>
+         <SAMEAS>
+            <URI>
+               <VALUE>http://publications.europa.eu/resource/consolidation/1979D0491%2F20061025.POL</VALUE>
+               <IDENTIFIER>1979D0491/20061025.POL</IDENTIFIER>
+               <TYPE>consolidation</TYPE>
+            </URI>
+         </SAMEAS>
+         <SAMEAS>
+            <URI>
+               <VALUE>http://publications.europa.eu/resource/celex/01979D0491-20061025.POL</VALUE>
+               <IDENTIFIER>01979D0491-20061025.POL</IDENTIFIER>
+               <TYPE>celex</TYPE>
+            </URI>
+         </SAMEAS>
+      </WORK_HAS_EXPRESSION>
+      <WORK_HAS_EXPRESSION type="link">
+         <EMBEDDED_NOTICE>
+            <WORK>
+               <RESOURCE_LEGAL_NUMBER_NATURAL_CELEX type="data">
+                  <VALUE>0491</VALUE>
+               </RESOURCE_LEGAL_NUMBER_NATURAL_CELEX>
+               <RESOURCE_LEGAL_TYPE type="data">
+                  <VALUE>D</VALUE>
+               </RESOURCE_LEGAL_TYPE>
+               <RESOURCE_LEGAL_NUMBER_NATURAL type="data">
+                  <VALUE>491</VALUE>
+               </RESOURCE_LEGAL_NUMBER_NATURAL>
+               <ID_SECTOR type="data">
+                  <VALUE>0</VALUE>
+               </ID_SECTOR>
+               <RESOURCE_LEGAL_ID_CELEX type="data">
+                  <VALUE>01979D0491-20061025</VALUE>
+               </RESOURCE_LEGAL_ID_CELEX>
+               <WORK_HAS_RESOURCE-TYPE type="concept">
+                  <URI>
+                     <VALUE>http://publications.europa.eu/resource/authority/resource-type/CONS_TEXT</VALUE>
+                     <IDENTIFIER>CONS_TEXT</IDENTIFIER>
+                     <TYPE>resource-type</TYPE>
+                  </URI>
+                  <OP-CODE>CONS_TEXT</OP-CODE>
+                  <IDENTIFIER>CONS_TEXT</IDENTIFIER>
+                  <PREFLABEL>Testo consolidato</PREFLABEL>
+               </WORK_HAS_RESOURCE-TYPE>
+               <NUMBER type="data">
+                  <VALUE>1979D0491/20061025</VALUE>
+               </NUMBER>
+               <ID_CELEX type="data">
+                  <VALUE>01979D0491-20061025</VALUE>
+               </ID_CELEX>
+               <WORK_DATE_DOCUMENT type="date">
+                  <VALUE>2006-10-25</VALUE>
+                  <YEAR>2006</YEAR>
+                  <MONTH>10</MONTH>
+                  <DAY>25</DAY>
+               </WORK_DATE_DOCUMENT>
+               <RESOURCE_LEGAL_YEAR type="data">
+                  <VALUE>1979</VALUE>
+               </RESOURCE_LEGAL_YEAR>
+               <YEAR type="data">
+                  <VALUE>1979</VALUE>
+               </YEAR>
+               <TYPE>cdm:resource_legal</TYPE>
+               <TYPE>cdm:act_consolidated</TYPE>
+               <TYPE>cdm:work</TYPE>
+            </WORK>
+            <EXPRESSION>
+               <EXPRESSION_MANIFESTED_BY_MANIFESTATION type="embedded_link">
+                  <SAMEAS>
+                     <URI>
+                        <VALUE>http://publications.europa.eu/resource/celex/01979D0491-20061025.SPA.fmx4</VALUE>
+                        <IDENTIFIER>01979D0491-20061025.SPA.fmx4</IDENTIFIER>
+                        <TYPE>celex</TYPE>
+                     </URI>
+                  </SAMEAS>
+               </EXPRESSION_MANIFESTED_BY_MANIFESTATION>
+               <EXPRESSION_TITLE type="data">
+                  <VALUE>Decisión de la Comisión de 17 de mayo de 1979 por la que se establecen el código y las normas tipo relativas a la transcripción en forma legible por máquina de las encuestas de base sobre las superficies vitícolas (79/491/CEE) </VALUE>
+               </EXPRESSION_TITLE>
+               <EXPRESSION_MANIFESTED_BY_MANIFESTATION type="embedded_link">
+                  <SAMEAS>
+                     <URI>
+                        <VALUE>http://publications.europa.eu/resource/celex/01979D0491-20061025.SPA.xhtml</VALUE>
+                        <IDENTIFIER>01979D0491-20061025.SPA.xhtml</IDENTIFIER>
+                        <TYPE>celex</TYPE>
+                     </URI>
+                  </SAMEAS>
+               </EXPRESSION_MANIFESTED_BY_MANIFESTATION>
+               <EXPRESSION_MANIFESTED_BY_MANIFESTATION type="embedded_link">
+                  <SAMEAS>
+                     <URI>
+                        <VALUE>http://publications.europa.eu/resource/celex/01979D0491-20061025.SPA.pdfa1a</VALUE>
+                        <IDENTIFIER>01979D0491-20061025.SPA.pdfa1a</IDENTIFIER>
+                        <TYPE>celex</TYPE>
+                     </URI>
+                  </SAMEAS>
+               </EXPRESSION_MANIFESTED_BY_MANIFESTATION>
+               <EXPRESSION_USES_LANGUAGE type="concept">
+                  <URI>
+                     <VALUE>http://publications.europa.eu/resource/authority/language/SPA</VALUE>
+                     <IDENTIFIER>SPA</IDENTIFIER>
+                     <TYPE>language</TYPE>
+                  </URI>
+                  <OP-CODE>SPA</OP-CODE>
+                  <IDENTIFIER>SPA</IDENTIFIER>
+                  <PREFLABEL>spagnolo</PREFLABEL>
+               </EXPRESSION_USES_LANGUAGE>
+            </EXPRESSION>
+            <MANIFESTATION manifestation-type="pdfa1a">
+               <MANIFESTATION_TYPE type="data">
+                  <VALUE>pdfa1a</VALUE>
+               </MANIFESTATION_TYPE>
+            </MANIFESTATION>
+            <MANIFESTATION manifestation-type="fmx4">
+               <MANIFESTATION_TYPE type="data">
+                  <VALUE>fmx4</VALUE>
+               </MANIFESTATION_TYPE>
+            </MANIFESTATION>
+            <MANIFESTATION manifestation-type="xhtml">
+               <MANIFESTATION_TYPE type="data">
+                  <VALUE>xhtml</VALUE>
+               </MANIFESTATION_TYPE>
+            </MANIFESTATION>
+         </EMBEDDED_NOTICE>
+         <URI>
+            <VALUE>http://publications.europa.eu/resource/cellar/b8e4cac3-4287-4e5b-83ce-ac6ac43fc05a.0019</VALUE>
+            <IDENTIFIER>b8e4cac3-4287-4e5b-83ce-ac6ac43fc05a.0019</IDENTIFIER>
+            <TYPE>cellar</TYPE>
+         </URI>
+         <SAMEAS>
+            <URI>
+               <VALUE>http://publications.europa.eu/resource/celex/01979D0491-20061025.SPA</VALUE>
+               <IDENTIFIER>01979D0491-20061025.SPA</IDENTIFIER>
+               <TYPE>celex</TYPE>
+            </URI>
+         </SAMEAS>
+         <SAMEAS>
+            <URI>
+               <VALUE>http://publications.europa.eu/resource/consolidation/1979D0491%2F20061025.SPA</VALUE>
+               <IDENTIFIER>1979D0491/20061025.SPA</IDENTIFIER>
+               <TYPE>consolidation</TYPE>
+            </URI>
+         </SAMEAS>
+      </WORK_HAS_EXPRESSION>
+      <RESOURCE_LEGAL_TYPE type="data">
+         <VALUE>D</VALUE>
+      </RESOURCE_LEGAL_TYPE>
+      <WORK_HAS_EXPRESSION type="link">
+         <EMBEDDED_NOTICE>
+            <WORK>
+               <RESOURCE_LEGAL_NUMBER_NATURAL_CELEX type="data">
+                  <VALUE>0491</VALUE>
+               </RESOURCE_LEGAL_NUMBER_NATURAL_CELEX>
+               <RESOURCE_LEGAL_TYPE type="data">
+                  <VALUE>D</VALUE>
+               </RESOURCE_LEGAL_TYPE>
+               <RESOURCE_LEGAL_NUMBER_NATURAL type="data">
+                  <VALUE>491</VALUE>
+               </RESOURCE_LEGAL_NUMBER_NATURAL>
+               <ID_SECTOR type="data">
+                  <VALUE>0</VALUE>
+               </ID_SECTOR>
+               <RESOURCE_LEGAL_ID_CELEX type="data">
+                  <VALUE>01979D0491-20061025</VALUE>
+               </RESOURCE_LEGAL_ID_CELEX>
+               <WORK_HAS_RESOURCE-TYPE type="concept">
+                  <URI>
+                     <VALUE>http://publications.europa.eu/resource/authority/resource-type/CONS_TEXT</VALUE>
+                     <IDENTIFIER>CONS_TEXT</IDENTIFIER>
+                     <TYPE>resource-type</TYPE>
+                  </URI>
+                  <OP-CODE>CONS_TEXT</OP-CODE>
+                  <IDENTIFIER>CONS_TEXT</IDENTIFIER>
+                  <PREFLABEL>Testo consolidato</PREFLABEL>
+               </WORK_HAS_RESOURCE-TYPE>
+               <NUMBER type="data">
+                  <VALUE>1979D0491/20061025</VALUE>
+               </NUMBER>
+               <ID_CELEX type="data">
+                  <VALUE>01979D0491-20061025</VALUE>
+               </ID_CELEX>
+               <WORK_DATE_DOCUMENT type="date">
+                  <VALUE>2006-10-25</VALUE>
+                  <YEAR>2006</YEAR>
+                  <MONTH>10</MONTH>
+                  <DAY>25</DAY>
+               </WORK_DATE_DOCUMENT>
+               <RESOURCE_LEGAL_YEAR type="data">
+                  <VALUE>1979</VALUE>
+               </RESOURCE_LEGAL_YEAR>
+               <YEAR type="data">
+                  <VALUE>1979</VALUE>
+               </YEAR>
+               <TYPE>cdm:resource_legal</TYPE>
+               <TYPE>cdm:act_consolidated</TYPE>
+               <TYPE>cdm:work</TYPE>
+            </WORK>
+            <EXPRESSION>
+               <EXPRESSION_TITLE type="data">
+                  <VALUE>Kommissionens beslut av den 17 maj 1979 om fastställandet av en kod och standardregler för överföring till maskinläslig form av data från de statistiska grundundersökningarna av vinodlingsområden (79/491/EEG) </VALUE>
+               </EXPRESSION_TITLE>
+               <EXPRESSION_MANIFESTED_BY_MANIFESTATION type="embedded_link">
+                  <SAMEAS>
+                     <URI>
+                        <VALUE>http://publications.europa.eu/resource/celex/01979D0491-20061025.SWE.pdfa1a</VALUE>
+                        <IDENTIFIER>01979D0491-20061025.SWE.pdfa1a</IDENTIFIER>
+                        <TYPE>celex</TYPE>
+                     </URI>
+                  </SAMEAS>
+               </EXPRESSION_MANIFESTED_BY_MANIFESTATION>
+               <EXPRESSION_MANIFESTED_BY_MANIFESTATION type="embedded_link">
+                  <SAMEAS>
+                     <URI>
+                        <VALUE>http://publications.europa.eu/resource/celex/01979D0491-20061025.SWE.fmx4</VALUE>
+                        <IDENTIFIER>01979D0491-20061025.SWE.fmx4</IDENTIFIER>
+                        <TYPE>celex</TYPE>
+                     </URI>
+                  </SAMEAS>
+               </EXPRESSION_MANIFESTED_BY_MANIFESTATION>
+               <EXPRESSION_MANIFESTED_BY_MANIFESTATION type="embedded_link">
+                  <SAMEAS>
+                     <URI>
+                        <VALUE>http://publications.europa.eu/resource/celex/01979D0491-20061025.SWE.xhtml</VALUE>
+                        <IDENTIFIER>01979D0491-20061025.SWE.xhtml</IDENTIFIER>
+                        <TYPE>celex</TYPE>
+                     </URI>
+                  </SAMEAS>
+               </EXPRESSION_MANIFESTED_BY_MANIFESTATION>
+               <EXPRESSION_USES_LANGUAGE type="concept">
+                  <URI>
+                     <VALUE>http://publications.europa.eu/resource/authority/language/SWE</VALUE>
+                     <IDENTIFIER>SWE</IDENTIFIER>
+                     <TYPE>language</TYPE>
+                  </URI>
+                  <OP-CODE>SWE</OP-CODE>
+                  <IDENTIFIER>SWE</IDENTIFIER>
+                  <PREFLABEL>svedese</PREFLABEL>
+               </EXPRESSION_USES_LANGUAGE>
+            </EXPRESSION>
+            <MANIFESTATION manifestation-type="pdfa1a">
+               <MANIFESTATION_TYPE type="data">
+                  <VALUE>pdfa1a</VALUE>
+               </MANIFESTATION_TYPE>
+            </MANIFESTATION>
+            <MANIFESTATION manifestation-type="fmx4">
+               <MANIFESTATION_TYPE type="data">
+                  <VALUE>fmx4</VALUE>
+               </MANIFESTATION_TYPE>
+            </MANIFESTATION>
+            <MANIFESTATION manifestation-type="xhtml">
+               <MANIFESTATION_TYPE type="data">
+                  <VALUE>xhtml</VALUE>
+               </MANIFESTATION_TYPE>
+            </MANIFESTATION>
+         </EMBEDDED_NOTICE>
+         <URI>
+            <VALUE>http://publications.europa.eu/resource/cellar/b8e4cac3-4287-4e5b-83ce-ac6ac43fc05a.0015</VALUE>
+            <IDENTIFIER>b8e4cac3-4287-4e5b-83ce-ac6ac43fc05a.0015</IDENTIFIER>
+            <TYPE>cellar</TYPE>
+         </URI>
+         <SAMEAS>
+            <URI>
+               <VALUE>http://publications.europa.eu/resource/celex/01979D0491-20061025.SWE</VALUE>
+               <IDENTIFIER>01979D0491-20061025.SWE</IDENTIFIER>
+               <TYPE>celex</TYPE>
+            </URI>
+         </SAMEAS>
+         <SAMEAS>
+            <URI>
+               <VALUE>http://publications.europa.eu/resource/consolidation/1979D0491%2F20061025.SWE</VALUE>
+               <IDENTIFIER>1979D0491/20061025.SWE</IDENTIFIER>
+               <TYPE>consolidation</TYPE>
+            </URI>
+         </SAMEAS>
+      </WORK_HAS_EXPRESSION>
+      <WORK_HAS_EXPRESSION type="link">
+         <EMBEDDED_NOTICE>
+            <WORK>
+               <RESOURCE_LEGAL_NUMBER_NATURAL_CELEX type="data">
+                  <VALUE>0491</VALUE>
+               </RESOURCE_LEGAL_NUMBER_NATURAL_CELEX>
+               <RESOURCE_LEGAL_TYPE type="data">
+                  <VALUE>D</VALUE>
+               </RESOURCE_LEGAL_TYPE>
+               <RESOURCE_LEGAL_NUMBER_NATURAL type="data">
+                  <VALUE>491</VALUE>
+               </RESOURCE_LEGAL_NUMBER_NATURAL>
+               <ID_SECTOR type="data">
+                  <VALUE>0</VALUE>
+               </ID_SECTOR>
+               <RESOURCE_LEGAL_ID_CELEX type="data">
+                  <VALUE>01979D0491-20061025</VALUE>
+               </RESOURCE_LEGAL_ID_CELEX>
+               <WORK_HAS_RESOURCE-TYPE type="concept">
+                  <URI>
+                     <VALUE>http://publications.europa.eu/resource/authority/resource-type/CONS_TEXT</VALUE>
+                     <IDENTIFIER>CONS_TEXT</IDENTIFIER>
+                     <TYPE>resource-type</TYPE>
+                  </URI>
+                  <OP-CODE>CONS_TEXT</OP-CODE>
+                  <IDENTIFIER>CONS_TEXT</IDENTIFIER>
+                  <PREFLABEL>Testo consolidato</PREFLABEL>
+               </WORK_HAS_RESOURCE-TYPE>
+               <NUMBER type="data">
+                  <VALUE>1979D0491/20061025</VALUE>
+               </NUMBER>
+               <ID_CELEX type="data">
+                  <VALUE>01979D0491-20061025</VALUE>
+               </ID_CELEX>
+               <WORK_DATE_DOCUMENT type="date">
+                  <VALUE>2006-10-25</VALUE>
+                  <YEAR>2006</YEAR>
+                  <MONTH>10</MONTH>
+                  <DAY>25</DAY>
+               </WORK_DATE_DOCUMENT>
+               <RESOURCE_LEGAL_YEAR type="data">
+                  <VALUE>1979</VALUE>
+               </RESOURCE_LEGAL_YEAR>
+               <YEAR type="data">
+                  <VALUE>1979</VALUE>
+               </YEAR>
+               <TYPE>cdm:resource_legal</TYPE>
+               <TYPE>cdm:act_consolidated</TYPE>
+               <TYPE>cdm:work</TYPE>
+            </WORK>
+            <EXPRESSION>
+               <EXPRESSION_MANIFESTED_BY_MANIFESTATION type="embedded_link">
+                  <SAMEAS>
+                     <URI>
+                        <VALUE>http://publications.europa.eu/resource/celex/01979D0491-20061025.FIN.pdfa1a</VALUE>
+                        <IDENTIFIER>01979D0491-20061025.FIN.pdfa1a</IDENTIFIER>
+                        <TYPE>celex</TYPE>
+                     </URI>
+                  </SAMEAS>
+               </EXPRESSION_MANIFESTED_BY_MANIFESTATION>
+               <EXPRESSION_MANIFESTED_BY_MANIFESTATION type="embedded_link">
+                  <SAMEAS>
+                     <URI>
+                        <VALUE>http://publications.europa.eu/resource/celex/01979D0491-20061025.FIN.xhtml</VALUE>
+                        <IDENTIFIER>01979D0491-20061025.FIN.xhtml</IDENTIFIER>
+                        <TYPE>celex</TYPE>
+                     </URI>
+                  </SAMEAS>
+               </EXPRESSION_MANIFESTED_BY_MANIFESTATION>
+               <EXPRESSION_MANIFESTED_BY_MANIFESTATION type="embedded_link">
+                  <SAMEAS>
+                     <URI>
+                        <VALUE>http://publications.europa.eu/resource/celex/01979D0491-20061025.FIN.fmx4</VALUE>
+                        <IDENTIFIER>01979D0491-20061025.FIN.fmx4</IDENTIFIER>
+                        <TYPE>celex</TYPE>
+                     </URI>
+                  </SAMEAS>
+               </EXPRESSION_MANIFESTED_BY_MANIFESTATION>
+               <EXPRESSION_TITLE type="data">
+                  <VALUE>Komission päätös , tehty 17 päivänä toukokuuta 1979, viininviljelyalojen perustutkimusten tulosten siirtoa koneellisesti luettavaan muotoon koskevista standardikoodista ja -säännöistä (79/491/ETY) </VALUE>
+               </EXPRESSION_TITLE>
+               <EXPRESSION_USES_LANGUAGE type="concept">
+                  <URI>
+                     <VALUE>http://publications.europa.eu/resource/authority/language/FIN</VALUE>
+                     <IDENTIFIER>FIN</IDENTIFIER>
+                     <TYPE>language</TYPE>
+                  </URI>
+                  <OP-CODE>FIN</OP-CODE>
+                  <IDENTIFIER>FIN</IDENTIFIER>
+                  <PREFLABEL>finlandese</PREFLABEL>
+               </EXPRESSION_USES_LANGUAGE>
+            </EXPRESSION>
+            <MANIFESTATION manifestation-type="pdfa1a">
+               <MANIFESTATION_TYPE type="data">
+                  <VALUE>pdfa1a</VALUE>
+               </MANIFESTATION_TYPE>
+            </MANIFESTATION>
+            <MANIFESTATION manifestation-type="fmx4">
+               <MANIFESTATION_TYPE type="data">
+                  <VALUE>fmx4</VALUE>
+               </MANIFESTATION_TYPE>
+            </MANIFESTATION>
+            <MANIFESTATION manifestation-type="xhtml">
+               <MANIFESTATION_TYPE type="data">
+                  <VALUE>xhtml</VALUE>
+               </MANIFESTATION_TYPE>
+            </MANIFESTATION>
+         </EMBEDDED_NOTICE>
+         <URI>
+            <VALUE>http://publications.europa.eu/resource/cellar/b8e4cac3-4287-4e5b-83ce-ac6ac43fc05a.0012</VALUE>
+            <IDENTIFIER>b8e4cac3-4287-4e5b-83ce-ac6ac43fc05a.0012</IDENTIFIER>
+            <TYPE>cellar</TYPE>
+         </URI>
+         <SAMEAS>
+            <URI>
+               <VALUE>http://publications.europa.eu/resource/celex/01979D0491-20061025.FIN</VALUE>
+               <IDENTIFIER>01979D0491-20061025.FIN</IDENTIFIER>
+               <TYPE>celex</TYPE>
+            </URI>
+         </SAMEAS>
+         <SAMEAS>
+            <URI>
+               <VALUE>http://publications.europa.eu/resource/consolidation/1979D0491%2F20061025.FIN</VALUE>
+               <IDENTIFIER>1979D0491/20061025.FIN</IDENTIFIER>
+               <TYPE>consolidation</TYPE>
+            </URI>
+         </SAMEAS>
+      </WORK_HAS_EXPRESSION>
+      <ACT_CONSOLIDATED_CONSOLIDATES_RESOURCE_LEGAL type="link">
+         <URI>
+            <VALUE>http://publications.europa.eu/resource/cellar/6644485f-7125-487a-bacf-dee940d26032</VALUE>
+            <IDENTIFIER>6644485f-7125-487a-bacf-dee940d26032</IDENTIFIER>
+            <TYPE>cellar</TYPE>
+         </URI>
+         <SAMEAS>
+            <URI>
+               <VALUE>http://publications.europa.eu/resource/celex/31979D0491</VALUE>
+               <IDENTIFIER>31979D0491</IDENTIFIER>
+               <TYPE>celex</TYPE>
+            </URI>
+         </SAMEAS>
+         <SAMEAS>
+            <URI>
+               <VALUE>http://publications.europa.eu/resource/oj/JOL_1979_129_R_0009_01</VALUE>
+               <IDENTIFIER>JOL_1979_129_R_0009_01</IDENTIFIER>
+               <TYPE>oj</TYPE>
+            </URI>
+         </SAMEAS>
+         <SAMEAS>
+            <URI>
+               <VALUE>http://publications.europa.eu/resource/eli/dec/1979/491/oj</VALUE>
+               <IDENTIFIER>dec:1979:491:oj</IDENTIFIER>
+               <TYPE>eli</TYPE>
+            </URI>
+         </SAMEAS>
+      </ACT_CONSOLIDATED_CONSOLIDATES_RESOURCE_LEGAL>
+      <ACT_CONSOLIDATED_BASED_ON_RESOURCE_LEGAL type="link">
+         <URI>
+            <VALUE>http://publications.europa.eu/resource/cellar/6644485f-7125-487a-bacf-dee940d26032</VALUE>
+            <IDENTIFIER>6644485f-7125-487a-bacf-dee940d26032</IDENTIFIER>
+            <TYPE>cellar</TYPE>
+         </URI>
+         <SAMEAS>
+            <URI>
+               <VALUE>http://publications.europa.eu/resource/celex/31979D0491</VALUE>
+               <IDENTIFIER>31979D0491</IDENTIFIER>
+               <TYPE>celex</TYPE>
+            </URI>
+         </SAMEAS>
+         <SAMEAS>
+            <URI>
+               <VALUE>http://publications.europa.eu/resource/oj/JOL_1979_129_R_0009_01</VALUE>
+               <IDENTIFIER>JOL_1979_129_R_0009_01</IDENTIFIER>
+               <TYPE>oj</TYPE>
+            </URI>
+         </SAMEAS>
+         <SAMEAS>
+            <URI>
+               <VALUE>http://publications.europa.eu/resource/eli/dec/1979/491/oj</VALUE>
+               <IDENTIFIER>dec:1979:491:oj</IDENTIFIER>
+               <TYPE>eli</TYPE>
+            </URI>
+         </SAMEAS>
+      </ACT_CONSOLIDATED_BASED_ON_RESOURCE_LEGAL>
+      <WORK_HAS_EXPRESSION type="link">
+         <EMBEDDED_NOTICE>
+            <WORK>
+               <RESOURCE_LEGAL_NUMBER_NATURAL_CELEX type="data">
+                  <VALUE>0491</VALUE>
+               </RESOURCE_LEGAL_NUMBER_NATURAL_CELEX>
+               <RESOURCE_LEGAL_TYPE type="data">
+                  <VALUE>D</VALUE>
+               </RESOURCE_LEGAL_TYPE>
+               <RESOURCE_LEGAL_NUMBER_NATURAL type="data">
+                  <VALUE>491</VALUE>
+               </RESOURCE_LEGAL_NUMBER_NATURAL>
+               <ID_SECTOR type="data">
+                  <VALUE>0</VALUE>
+               </ID_SECTOR>
+               <RESOURCE_LEGAL_ID_CELEX type="data">
+                  <VALUE>01979D0491-20061025</VALUE>
+               </RESOURCE_LEGAL_ID_CELEX>
+               <WORK_HAS_RESOURCE-TYPE type="concept">
+                  <URI>
+                     <VALUE>http://publications.europa.eu/resource/authority/resource-type/CONS_TEXT</VALUE>
+                     <IDENTIFIER>CONS_TEXT</IDENTIFIER>
+                     <TYPE>resource-type</TYPE>
+                  </URI>
+                  <OP-CODE>CONS_TEXT</OP-CODE>
+                  <IDENTIFIER>CONS_TEXT</IDENTIFIER>
+                  <PREFLABEL>Testo consolidato</PREFLABEL>
+               </WORK_HAS_RESOURCE-TYPE>
+               <NUMBER type="data">
+                  <VALUE>1979D0491/20061025</VALUE>
+               </NUMBER>
+               <ID_CELEX type="data">
+                  <VALUE>01979D0491-20061025</VALUE>
+               </ID_CELEX>
+               <WORK_DATE_DOCUMENT type="date">
+                  <VALUE>2006-10-25</VALUE>
+                  <YEAR>2006</YEAR>
+                  <MONTH>10</MONTH>
+                  <DAY>25</DAY>
+               </WORK_DATE_DOCUMENT>
+               <RESOURCE_LEGAL_YEAR type="data">
+                  <VALUE>1979</VALUE>
+               </RESOURCE_LEGAL_YEAR>
+               <YEAR type="data">
+                  <VALUE>1979</VALUE>
+               </YEAR>
+               <TYPE>cdm:resource_legal</TYPE>
+               <TYPE>cdm:act_consolidated</TYPE>
+               <TYPE>cdm:work</TYPE>
+            </WORK>
+            <EXPRESSION>
+               <EXPRESSION_TITLE type="data">
+                  <VALUE>Decisione della Commissione del 17 maggio 1979 che fissa il codice e le norme-tipo riguardanti la trascrizione in una forma suscettibile di lettura meccanica dei dati relativi alle indagini di base sulle superfici viticole (79/491/CEE) </VALUE>
+               </EXPRESSION_TITLE>
+               <EXPRESSION_MANIFESTED_BY_MANIFESTATION type="embedded_link">
+                  <SAMEAS>
+                     <URI>
+                        <VALUE>http://publications.europa.eu/resource/celex/01979D0491-20061025.ITA.xhtml</VALUE>
+                        <IDENTIFIER>01979D0491-20061025.ITA.xhtml</IDENTIFIER>
+                        <TYPE>celex</TYPE>
+                     </URI>
+                  </SAMEAS>
+               </EXPRESSION_MANIFESTED_BY_MANIFESTATION>
+               <EXPRESSION_MANIFESTED_BY_MANIFESTATION type="embedded_link">
+                  <SAMEAS>
+                     <URI>
+                        <VALUE>http://publications.europa.eu/resource/celex/01979D0491-20061025.ITA.fmx4</VALUE>
+                        <IDENTIFIER>01979D0491-20061025.ITA.fmx4</IDENTIFIER>
+                        <TYPE>celex</TYPE>
+                     </URI>
+                  </SAMEAS>
+               </EXPRESSION_MANIFESTED_BY_MANIFESTATION>
+               <EXPRESSION_USES_LANGUAGE type="concept">
+                  <URI>
+                     <VALUE>http://publications.europa.eu/resource/authority/language/ITA</VALUE>
+                     <IDENTIFIER>ITA</IDENTIFIER>
+                     <TYPE>language</TYPE>
+                  </URI>
+                  <OP-CODE>ITA</OP-CODE>
+                  <IDENTIFIER>ITA</IDENTIFIER>
+                  <PREFLABEL>italiano</PREFLABEL>
+                  <ALTLABEL>italiano</ALTLABEL>
+               </EXPRESSION_USES_LANGUAGE>
+               <EXPRESSION_MANIFESTED_BY_MANIFESTATION type="embedded_link">
+                  <SAMEAS>
+                     <URI>
+                        <VALUE>http://publications.europa.eu/resource/celex/01979D0491-20061025.ITA.pdfa1a</VALUE>
+                        <IDENTIFIER>01979D0491-20061025.ITA.pdfa1a</IDENTIFIER>
+                        <TYPE>celex</TYPE>
+                     </URI>
+                  </SAMEAS>
+               </EXPRESSION_MANIFESTED_BY_MANIFESTATION>
+            </EXPRESSION>
+            <MANIFESTATION manifestation-type="pdfa1a">
+               <MANIFESTATION_TYPE type="data">
+                  <VALUE>pdfa1a</VALUE>
+               </MANIFESTATION_TYPE>
+            </MANIFESTATION>
+            <MANIFESTATION manifestation-type="fmx4">
+               <MANIFESTATION_TYPE type="data">
+                  <VALUE>fmx4</VALUE>
+               </MANIFESTATION_TYPE>
+            </MANIFESTATION>
+            <MANIFESTATION manifestation-type="xhtml">
+               <MANIFESTATION_TYPE type="data">
+                  <VALUE>xhtml</VALUE>
+               </MANIFESTATION_TYPE>
+            </MANIFESTATION>
+         </EMBEDDED_NOTICE>
+         <URI>
+            <VALUE>http://publications.europa.eu/resource/cellar/b8e4cac3-4287-4e5b-83ce-ac6ac43fc05a.0004</VALUE>
+            <IDENTIFIER>b8e4cac3-4287-4e5b-83ce-ac6ac43fc05a.0004</IDENTIFIER>
+            <TYPE>cellar</TYPE>
+         </URI>
+         <SAMEAS>
+            <URI>
+               <VALUE>http://publications.europa.eu/resource/celex/01979D0491-20061025.ITA</VALUE>
+               <IDENTIFIER>01979D0491-20061025.ITA</IDENTIFIER>
+               <TYPE>celex</TYPE>
+            </URI>
+         </SAMEAS>
+         <SAMEAS>
+            <URI>
+               <VALUE>http://publications.europa.eu/resource/consolidation/1979D0491%2F20061025.ITA</VALUE>
+               <IDENTIFIER>1979D0491/20061025.ITA</IDENTIFIER>
+               <TYPE>consolidation</TYPE>
+            </URI>
+         </SAMEAS>
+      </WORK_HAS_EXPRESSION>
+      <RESOURCE_LEGAL_NUMBER_NATURAL type="data">
+         <VALUE>491</VALUE>
+      </RESOURCE_LEGAL_NUMBER_NATURAL>
+      <WORK_HAS_EXPRESSION type="link">
+         <EMBEDDED_NOTICE>
+            <WORK>
+               <RESOURCE_LEGAL_NUMBER_NATURAL_CELEX type="data">
+                  <VALUE>0491</VALUE>
+               </RESOURCE_LEGAL_NUMBER_NATURAL_CELEX>
+               <RESOURCE_LEGAL_TYPE type="data">
+                  <VALUE>D</VALUE>
+               </RESOURCE_LEGAL_TYPE>
+               <RESOURCE_LEGAL_NUMBER_NATURAL type="data">
+                  <VALUE>491</VALUE>
+               </RESOURCE_LEGAL_NUMBER_NATURAL>
+               <ID_SECTOR type="data">
+                  <VALUE>0</VALUE>
+               </ID_SECTOR>
+               <RESOURCE_LEGAL_ID_CELEX type="data">
+                  <VALUE>01979D0491-20061025</VALUE>
+               </RESOURCE_LEGAL_ID_CELEX>
+               <WORK_HAS_RESOURCE-TYPE type="concept">
+                  <URI>
+                     <VALUE>http://publications.europa.eu/resource/authority/resource-type/CONS_TEXT</VALUE>
+                     <IDENTIFIER>CONS_TEXT</IDENTIFIER>
+                     <TYPE>resource-type</TYPE>
+                  </URI>
+                  <OP-CODE>CONS_TEXT</OP-CODE>
+                  <IDENTIFIER>CONS_TEXT</IDENTIFIER>
+                  <PREFLABEL>Testo consolidato</PREFLABEL>
+               </WORK_HAS_RESOURCE-TYPE>
+               <NUMBER type="data">
+                  <VALUE>1979D0491/20061025</VALUE>
+               </NUMBER>
+               <ID_CELEX type="data">
+                  <VALUE>01979D0491-20061025</VALUE>
+               </ID_CELEX>
+               <WORK_DATE_DOCUMENT type="date">
+                  <VALUE>2006-10-25</VALUE>
+                  <YEAR>2006</YEAR>
+                  <MONTH>10</MONTH>
+                  <DAY>25</DAY>
+               </WORK_DATE_DOCUMENT>
+               <RESOURCE_LEGAL_YEAR type="data">
+                  <VALUE>1979</VALUE>
+               </RESOURCE_LEGAL_YEAR>
+               <YEAR type="data">
+                  <VALUE>1979</VALUE>
+               </YEAR>
+               <TYPE>cdm:resource_legal</TYPE>
+               <TYPE>cdm:act_consolidated</TYPE>
+               <TYPE>cdm:work</TYPE>
+            </WORK>
+            <EXPRESSION>
+               <EXPRESSION_USES_LANGUAGE type="concept">
+                  <URI>
+                     <VALUE>http://publications.europa.eu/resource/authority/language/SLV</VALUE>
+                     <IDENTIFIER>SLV</IDENTIFIER>
+                     <TYPE>language</TYPE>
+                  </URI>
+                  <OP-CODE>SLV</OP-CODE>
+                  <IDENTIFIER>SLV</IDENTIFIER>
+                  <PREFLABEL>sloveno</PREFLABEL>
+               </EXPRESSION_USES_LANGUAGE>
+               <EXPRESSION_MANIFESTED_BY_MANIFESTATION type="embedded_link">
+                  <SAMEAS>
+                     <URI>
+                        <VALUE>http://publications.europa.eu/resource/celex/01979D0491-20061025.SLV.pdfa1a</VALUE>
+                        <IDENTIFIER>01979D0491-20061025.SLV.pdfa1a</IDENTIFIER>
+                        <TYPE>celex</TYPE>
+                     </URI>
+                  </SAMEAS>
+               </EXPRESSION_MANIFESTED_BY_MANIFESTATION>
+               <EXPRESSION_MANIFESTED_BY_MANIFESTATION type="embedded_link">
+                  <SAMEAS>
+                     <URI>
+                        <VALUE>http://publications.europa.eu/resource/celex/01979D0491-20061025.SLV.xhtml</VALUE>
+                        <IDENTIFIER>01979D0491-20061025.SLV.xhtml</IDENTIFIER>
+                        <TYPE>celex</TYPE>
+                     </URI>
+                  </SAMEAS>
+               </EXPRESSION_MANIFESTED_BY_MANIFESTATION>
+               <EXPRESSION_TITLE type="data">
+                  <VALUE>Odločba Komisije z dne 17. maja 1979 o določitvi kode in standardnih pravil za prepis podatkov o temeljnih raziskovanjih površin vinogradov v strojno čitljivo obliko (79/491/EGS) </VALUE>
+               </EXPRESSION_TITLE>
+               <EXPRESSION_MANIFESTED_BY_MANIFESTATION type="embedded_link">
+                  <SAMEAS>
+                     <URI>
+                        <VALUE>http://publications.europa.eu/resource/celex/01979D0491-20061025.SLV.fmx4</VALUE>
+                        <IDENTIFIER>01979D0491-20061025.SLV.fmx4</IDENTIFIER>
+                        <TYPE>celex</TYPE>
+                     </URI>
+                  </SAMEAS>
+               </EXPRESSION_MANIFESTED_BY_MANIFESTATION>
+            </EXPRESSION>
+            <MANIFESTATION manifestation-type="pdfa1a">
+               <MANIFESTATION_TYPE type="data">
+                  <VALUE>pdfa1a</VALUE>
+               </MANIFESTATION_TYPE>
+            </MANIFESTATION>
+            <MANIFESTATION manifestation-type="fmx4">
+               <MANIFESTATION_TYPE type="data">
+                  <VALUE>fmx4</VALUE>
+               </MANIFESTATION_TYPE>
+            </MANIFESTATION>
+            <MANIFESTATION manifestation-type="xhtml">
+               <MANIFESTATION_TYPE type="data">
+                  <VALUE>xhtml</VALUE>
+               </MANIFESTATION_TYPE>
+            </MANIFESTATION>
+         </EMBEDDED_NOTICE>
+         <URI>
+            <VALUE>http://publications.europa.eu/resource/cellar/b8e4cac3-4287-4e5b-83ce-ac6ac43fc05a.0001</VALUE>
+            <IDENTIFIER>b8e4cac3-4287-4e5b-83ce-ac6ac43fc05a.0001</IDENTIFIER>
+            <TYPE>cellar</TYPE>
+         </URI>
+         <SAMEAS>
+            <URI>
+               <VALUE>http://publications.europa.eu/resource/consolidation/1979D0491%2F20061025.SLV</VALUE>
+               <IDENTIFIER>1979D0491/20061025.SLV</IDENTIFIER>
+               <TYPE>consolidation</TYPE>
+            </URI>
+         </SAMEAS>
+         <SAMEAS>
+            <URI>
+               <VALUE>http://publications.europa.eu/resource/celex/01979D0491-20061025.SLV</VALUE>
+               <IDENTIFIER>01979D0491-20061025.SLV</IDENTIFIER>
+               <TYPE>celex</TYPE>
+            </URI>
+         </SAMEAS>
+      </WORK_HAS_EXPRESSION>
+      <WORK_HAS_EXPRESSION type="link">
+         <EMBEDDED_NOTICE>
+            <WORK>
+               <RESOURCE_LEGAL_NUMBER_NATURAL_CELEX type="data">
+                  <VALUE>0491</VALUE>
+               </RESOURCE_LEGAL_NUMBER_NATURAL_CELEX>
+               <RESOURCE_LEGAL_TYPE type="data">
+                  <VALUE>D</VALUE>
+               </RESOURCE_LEGAL_TYPE>
+               <RESOURCE_LEGAL_NUMBER_NATURAL type="data">
+                  <VALUE>491</VALUE>
+               </RESOURCE_LEGAL_NUMBER_NATURAL>
+               <ID_SECTOR type="data">
+                  <VALUE>0</VALUE>
+               </ID_SECTOR>
+               <RESOURCE_LEGAL_ID_CELEX type="data">
+                  <VALUE>01979D0491-20061025</VALUE>
+               </RESOURCE_LEGAL_ID_CELEX>
+               <WORK_HAS_RESOURCE-TYPE type="concept">
+                  <URI>
+                     <VALUE>http://publications.europa.eu/resource/authority/resource-type/CONS_TEXT</VALUE>
+                     <IDENTIFIER>CONS_TEXT</IDENTIFIER>
+                     <TYPE>resource-type</TYPE>
+                  </URI>
+                  <OP-CODE>CONS_TEXT</OP-CODE>
+                  <IDENTIFIER>CONS_TEXT</IDENTIFIER>
+                  <PREFLABEL>Testo consolidato</PREFLABEL>
+               </WORK_HAS_RESOURCE-TYPE>
+               <NUMBER type="data">
+                  <VALUE>1979D0491/20061025</VALUE>
+               </NUMBER>
+               <ID_CELEX type="data">
+                  <VALUE>01979D0491-20061025</VALUE>
+               </ID_CELEX>
+               <WORK_DATE_DOCUMENT type="date">
+                  <VALUE>2006-10-25</VALUE>
+                  <YEAR>2006</YEAR>
+                  <MONTH>10</MONTH>
+                  <DAY>25</DAY>
+               </WORK_DATE_DOCUMENT>
+               <RESOURCE_LEGAL_YEAR type="data">
+                  <VALUE>1979</VALUE>
+               </RESOURCE_LEGAL_YEAR>
+               <YEAR type="data">
+                  <VALUE>1979</VALUE>
+               </YEAR>
+               <TYPE>cdm:resource_legal</TYPE>
+               <TYPE>cdm:act_consolidated</TYPE>
+               <TYPE>cdm:work</TYPE>
+            </WORK>
+            <EXPRESSION>
+               <EXPRESSION_MANIFESTED_BY_MANIFESTATION type="embedded_link">
+                  <SAMEAS>
+                     <URI>
+                        <VALUE>http://publications.europa.eu/resource/celex/01979D0491-20061025.DEU.fmx4</VALUE>
+                        <IDENTIFIER>01979D0491-20061025.DEU.fmx4</IDENTIFIER>
+                        <TYPE>celex</TYPE>
+                     </URI>
+                  </SAMEAS>
+               </EXPRESSION_MANIFESTED_BY_MANIFESTATION>
+               <EXPRESSION_TITLE type="data">
+                  <VALUE>Entscheidung der Kommission vom 17. Mai 1979 zur Festlegung eines Kodes und einer Standardregelung zur Übertragung der Ergebnisse der Grunderhebung über Rebflächen in maschinenlesbare Form (79/491/EWG) </VALUE>
+               </EXPRESSION_TITLE>
+               <EXPRESSION_USES_LANGUAGE type="concept">
+                  <URI>
+                     <VALUE>http://publications.europa.eu/resource/authority/language/DEU</VALUE>
+                     <IDENTIFIER>DEU</IDENTIFIER>
+                     <TYPE>language</TYPE>
+                  </URI>
+                  <OP-CODE>DEU</OP-CODE>
+                  <IDENTIFIER>DEU</IDENTIFIER>
+                  <PREFLABEL>tedesco</PREFLABEL>
+               </EXPRESSION_USES_LANGUAGE>
+               <EXPRESSION_MANIFESTED_BY_MANIFESTATION type="embedded_link">
+                  <SAMEAS>
+                     <URI>
+                        <VALUE>http://publications.europa.eu/resource/celex/01979D0491-20061025.DEU.xhtml</VALUE>
+                        <IDENTIFIER>01979D0491-20061025.DEU.xhtml</IDENTIFIER>
+                        <TYPE>celex</TYPE>
+                     </URI>
+                  </SAMEAS>
+               </EXPRESSION_MANIFESTED_BY_MANIFESTATION>
+               <EXPRESSION_MANIFESTED_BY_MANIFESTATION type="embedded_link">
+                  <SAMEAS>
+                     <URI>
+                        <VALUE>http://publications.europa.eu/resource/celex/01979D0491-20061025.DEU.pdfa1a</VALUE>
+                        <IDENTIFIER>01979D0491-20061025.DEU.pdfa1a</IDENTIFIER>
+                        <TYPE>celex</TYPE>
+                     </URI>
+                  </SAMEAS>
+               </EXPRESSION_MANIFESTED_BY_MANIFESTATION>
+            </EXPRESSION>
+            <MANIFESTATION manifestation-type="pdfa1a">
+               <MANIFESTATION_TYPE type="data">
+                  <VALUE>pdfa1a</VALUE>
+               </MANIFESTATION_TYPE>
+            </MANIFESTATION>
+            <MANIFESTATION manifestation-type="fmx4">
+               <MANIFESTATION_TYPE type="data">
+                  <VALUE>fmx4</VALUE>
+               </MANIFESTATION_TYPE>
+            </MANIFESTATION>
+            <MANIFESTATION manifestation-type="xhtml">
+               <MANIFESTATION_TYPE type="data">
+                  <VALUE>xhtml</VALUE>
+               </MANIFESTATION_TYPE>
+            </MANIFESTATION>
+         </EMBEDDED_NOTICE>
+         <URI>
+            <VALUE>http://publications.europa.eu/resource/cellar/b8e4cac3-4287-4e5b-83ce-ac6ac43fc05a.0010</VALUE>
+            <IDENTIFIER>b8e4cac3-4287-4e5b-83ce-ac6ac43fc05a.0010</IDENTIFIER>
+            <TYPE>cellar</TYPE>
+         </URI>
+         <SAMEAS>
+            <URI>
+               <VALUE>http://publications.europa.eu/resource/consolidation/1979D0491%2F20061025.DEU</VALUE>
+               <IDENTIFIER>1979D0491/20061025.DEU</IDENTIFIER>
+               <TYPE>consolidation</TYPE>
+            </URI>
+         </SAMEAS>
+         <SAMEAS>
+            <URI>
+               <VALUE>http://publications.europa.eu/resource/celex/01979D0491-20061025.DEU</VALUE>
+               <IDENTIFIER>01979D0491-20061025.DEU</IDENTIFIER>
+               <TYPE>celex</TYPE>
+            </URI>
+         </SAMEAS>
+      </WORK_HAS_EXPRESSION>
+      <WORK_ID_DOCUMENT type="data">
+         <VALUE>celex:01979D0491-20061025</VALUE>
+      </WORK_ID_DOCUMENT>
+      <DATE_DOCUMENT type="date">
+         <VALUE>2006-10-25</VALUE>
+         <YEAR>2006</YEAR>
+         <MONTH>10</MONTH>
+         <DAY>25</DAY>
+      </DATE_DOCUMENT>
+      <BASED_ON type="link">
+         <URI>
+            <VALUE>http://publications.europa.eu/resource/cellar/6644485f-7125-487a-bacf-dee940d26032</VALUE>
+            <IDENTIFIER>6644485f-7125-487a-bacf-dee940d26032</IDENTIFIER>
+            <TYPE>cellar</TYPE>
+         </URI>
+         <SAMEAS>
+            <URI>
+               <VALUE>http://publications.europa.eu/resource/celex/31979D0491</VALUE>
+               <IDENTIFIER>31979D0491</IDENTIFIER>
+               <TYPE>celex</TYPE>
+            </URI>
+         </SAMEAS>
+         <SAMEAS>
+            <URI>
+               <VALUE>http://publications.europa.eu/resource/oj/JOL_1979_129_R_0009_01</VALUE>
+               <IDENTIFIER>JOL_1979_129_R_0009_01</IDENTIFIER>
+               <TYPE>oj</TYPE>
+            </URI>
+         </SAMEAS>
+         <SAMEAS>
+            <URI>
+               <VALUE>http://publications.europa.eu/resource/eli/dec/1979/491/oj</VALUE>
+               <IDENTIFIER>dec:1979:491:oj</IDENTIFIER>
+               <TYPE>eli</TYPE>
+            </URI>
+         </SAMEAS>
+      </BASED_ON>
+      <ID_SECTOR type="data">
+         <VALUE>0</VALUE>
+      </ID_SECTOR>
+      <CREATIONDATE type="date">
+         <VALUE>1001-01-01T00:00:00.000+00:00</VALUE>
+         <YEAR>1001</YEAR>
+         <MONTH>01</MONTH>
+         <DAY>01</DAY>
+      </CREATIONDATE>
+      <WORK_HAS_EXPRESSION type="link">
+         <EMBEDDED_NOTICE>
+            <WORK>
+               <RESOURCE_LEGAL_NUMBER_NATURAL_CELEX type="data">
+                  <VALUE>0491</VALUE>
+               </RESOURCE_LEGAL_NUMBER_NATURAL_CELEX>
+               <RESOURCE_LEGAL_TYPE type="data">
+                  <VALUE>D</VALUE>
+               </RESOURCE_LEGAL_TYPE>
+               <RESOURCE_LEGAL_NUMBER_NATURAL type="data">
+                  <VALUE>491</VALUE>
+               </RESOURCE_LEGAL_NUMBER_NATURAL>
+               <ID_SECTOR type="data">
+                  <VALUE>0</VALUE>
+               </ID_SECTOR>
+               <RESOURCE_LEGAL_ID_CELEX type="data">
+                  <VALUE>01979D0491-20061025</VALUE>
+               </RESOURCE_LEGAL_ID_CELEX>
+               <WORK_HAS_RESOURCE-TYPE type="concept">
+                  <URI>
+                     <VALUE>http://publications.europa.eu/resource/authority/resource-type/CONS_TEXT</VALUE>
+                     <IDENTIFIER>CONS_TEXT</IDENTIFIER>
+                     <TYPE>resource-type</TYPE>
+                  </URI>
+                  <OP-CODE>CONS_TEXT</OP-CODE>
+                  <IDENTIFIER>CONS_TEXT</IDENTIFIER>
+                  <PREFLABEL>Testo consolidato</PREFLABEL>
+               </WORK_HAS_RESOURCE-TYPE>
+               <NUMBER type="data">
+                  <VALUE>1979D0491/20061025</VALUE>
+               </NUMBER>
+               <ID_CELEX type="data">
+                  <VALUE>01979D0491-20061025</VALUE>
+               </ID_CELEX>
+               <WORK_DATE_DOCUMENT type="date">
+                  <VALUE>2006-10-25</VALUE>
+                  <YEAR>2006</YEAR>
+                  <MONTH>10</MONTH>
+                  <DAY>25</DAY>
+               </WORK_DATE_DOCUMENT>
+               <RESOURCE_LEGAL_YEAR type="data">
+                  <VALUE>1979</VALUE>
+               </RESOURCE_LEGAL_YEAR>
+               <YEAR type="data">
+                  <VALUE>1979</VALUE>
+               </YEAR>
+               <TYPE>cdm:resource_legal</TYPE>
+               <TYPE>cdm:act_consolidated</TYPE>
+               <TYPE>cdm:work</TYPE>
+            </WORK>
+            <EXPRESSION>
+               <EXPRESSION_MANIFESTED_BY_MANIFESTATION type="embedded_link">
+                  <SAMEAS>
+                     <URI>
+                        <VALUE>http://publications.europa.eu/resource/celex/01979D0491-20061025.MLT.xhtml</VALUE>
+                        <IDENTIFIER>01979D0491-20061025.MLT.xhtml</IDENTIFIER>
+                        <TYPE>celex</TYPE>
+                     </URI>
+                  </SAMEAS>
+               </EXPRESSION_MANIFESTED_BY_MANIFESTATION>
+               <EXPRESSION_TITLE type="data">
+                  <VALUE>Id-Deċiżjoni tal-Kummissjoni tas- 17 ta' Mejju 1979 li tistabbilixxi l-kodiċi u r-regoli standard għat-traskrizzjoni f'forma li tinqara bil-magni tad-data tal-istħarriġ basiku ta' żoni bid-dwieli (79/491/KEE) </VALUE>
+               </EXPRESSION_TITLE>
+               <EXPRESSION_MANIFESTED_BY_MANIFESTATION type="embedded_link">
+                  <SAMEAS>
+                     <URI>
+                        <VALUE>http://publications.europa.eu/resource/celex/01979D0491-20061025.MLT.pdfa1a</VALUE>
+                        <IDENTIFIER>01979D0491-20061025.MLT.pdfa1a</IDENTIFIER>
+                        <TYPE>celex</TYPE>
+                     </URI>
+                  </SAMEAS>
+               </EXPRESSION_MANIFESTED_BY_MANIFESTATION>
+               <EXPRESSION_MANIFESTED_BY_MANIFESTATION type="embedded_link">
+                  <SAMEAS>
+                     <URI>
+                        <VALUE>http://publications.europa.eu/resource/celex/01979D0491-20061025.MLT.fmx4</VALUE>
+                        <IDENTIFIER>01979D0491-20061025.MLT.fmx4</IDENTIFIER>
+                        <TYPE>celex</TYPE>
+                     </URI>
+                  </SAMEAS>
+               </EXPRESSION_MANIFESTED_BY_MANIFESTATION>
+               <EXPRESSION_USES_LANGUAGE type="concept">
+                  <URI>
+                     <VALUE>http://publications.europa.eu/resource/authority/language/MLT</VALUE>
+                     <IDENTIFIER>MLT</IDENTIFIER>
+                     <TYPE>language</TYPE>
+                  </URI>
+                  <OP-CODE>MLT</OP-CODE>
+                  <IDENTIFIER>MLT</IDENTIFIER>
+                  <PREFLABEL>maltese</PREFLABEL>
+               </EXPRESSION_USES_LANGUAGE>
+            </EXPRESSION>
+            <MANIFESTATION manifestation-type="pdfa1a">
+               <MANIFESTATION_TYPE type="data">
+                  <VALUE>pdfa1a</VALUE>
+               </MANIFESTATION_TYPE>
+            </MANIFESTATION>
+            <MANIFESTATION manifestation-type="fmx4">
+               <MANIFESTATION_TYPE type="data">
+                  <VALUE>fmx4</VALUE>
+               </MANIFESTATION_TYPE>
+            </MANIFESTATION>
+            <MANIFESTATION manifestation-type="xhtml">
+               <MANIFESTATION_TYPE type="data">
+                  <VALUE>xhtml</VALUE>
+               </MANIFESTATION_TYPE>
+            </MANIFESTATION>
+         </EMBEDDED_NOTICE>
+         <URI>
+            <VALUE>http://publications.europa.eu/resource/cellar/b8e4cac3-4287-4e5b-83ce-ac6ac43fc05a.0005</VALUE>
+            <IDENTIFIER>b8e4cac3-4287-4e5b-83ce-ac6ac43fc05a.0005</IDENTIFIER>
+            <TYPE>cellar</TYPE>
+         </URI>
+         <SAMEAS>
+            <URI>
+               <VALUE>http://publications.europa.eu/resource/consolidation/1979D0491%2F20061025.MLT</VALUE>
+               <IDENTIFIER>1979D0491/20061025.MLT</IDENTIFIER>
+               <TYPE>consolidation</TYPE>
+            </URI>
+         </SAMEAS>
+         <SAMEAS>
+            <URI>
+               <VALUE>http://publications.europa.eu/resource/celex/01979D0491-20061025.MLT</VALUE>
+               <IDENTIFIER>01979D0491-20061025.MLT</IDENTIFIER>
+               <TYPE>celex</TYPE>
+            </URI>
+         </SAMEAS>
+      </WORK_HAS_EXPRESSION>
+      <RESOURCE_LEGAL_ID_CELEX type="data">
+         <VALUE>01979D0491-20061025</VALUE>
+      </RESOURCE_LEGAL_ID_CELEX>
+      <WORK_HAS_EXPRESSION type="link">
+         <EMBEDDED_NOTICE>
+            <WORK>
+               <RESOURCE_LEGAL_NUMBER_NATURAL_CELEX type="data">
+                  <VALUE>0491</VALUE>
+               </RESOURCE_LEGAL_NUMBER_NATURAL_CELEX>
+               <RESOURCE_LEGAL_TYPE type="data">
+                  <VALUE>D</VALUE>
+               </RESOURCE_LEGAL_TYPE>
+               <RESOURCE_LEGAL_NUMBER_NATURAL type="data">
+                  <VALUE>491</VALUE>
+               </RESOURCE_LEGAL_NUMBER_NATURAL>
+               <ID_SECTOR type="data">
+                  <VALUE>0</VALUE>
+               </ID_SECTOR>
+               <RESOURCE_LEGAL_ID_CELEX type="data">
+                  <VALUE>01979D0491-20061025</VALUE>
+               </RESOURCE_LEGAL_ID_CELEX>
+               <WORK_HAS_RESOURCE-TYPE type="concept">
+                  <URI>
+                     <VALUE>http://publications.europa.eu/resource/authority/resource-type/CONS_TEXT</VALUE>
+                     <IDENTIFIER>CONS_TEXT</IDENTIFIER>
+                     <TYPE>resource-type</TYPE>
+                  </URI>
+                  <OP-CODE>CONS_TEXT</OP-CODE>
+                  <IDENTIFIER>CONS_TEXT</IDENTIFIER>
+                  <PREFLABEL>Testo consolidato</PREFLABEL>
+               </WORK_HAS_RESOURCE-TYPE>
+               <NUMBER type="data">
+                  <VALUE>1979D0491/20061025</VALUE>
+               </NUMBER>
+               <ID_CELEX type="data">
+                  <VALUE>01979D0491-20061025</VALUE>
+               </ID_CELEX>
+               <WORK_DATE_DOCUMENT type="date">
+                  <VALUE>2006-10-25</VALUE>
+                  <YEAR>2006</YEAR>
+                  <MONTH>10</MONTH>
+                  <DAY>25</DAY>
+               </WORK_DATE_DOCUMENT>
+               <RESOURCE_LEGAL_YEAR type="data">
+                  <VALUE>1979</VALUE>
+               </RESOURCE_LEGAL_YEAR>
+               <YEAR type="data">
+                  <VALUE>1979</VALUE>
+               </YEAR>
+               <TYPE>cdm:resource_legal</TYPE>
+               <TYPE>cdm:act_consolidated</TYPE>
+               <TYPE>cdm:work</TYPE>
+            </WORK>
+            <EXPRESSION>
+               <EXPRESSION_MANIFESTED_BY_MANIFESTATION type="embedded_link">
+                  <SAMEAS>
+                     <URI>
+                        <VALUE>http://publications.europa.eu/resource/celex/01979D0491-20061025.ENG.pdfa1a</VALUE>
+                        <IDENTIFIER>01979D0491-20061025.ENG.pdfa1a</IDENTIFIER>
+                        <TYPE>celex</TYPE>
+                     </URI>
+                  </SAMEAS>
+               </EXPRESSION_MANIFESTED_BY_MANIFESTATION>
+               <EXPRESSION_MANIFESTED_BY_MANIFESTATION type="embedded_link">
+                  <SAMEAS>
+                     <URI>
+                        <VALUE>http://publications.europa.eu/resource/celex/01979D0491-20061025.ENG.fmx4</VALUE>
+                        <IDENTIFIER>01979D0491-20061025.ENG.fmx4</IDENTIFIER>
+                        <TYPE>celex</TYPE>
+                     </URI>
+                  </SAMEAS>
+               </EXPRESSION_MANIFESTED_BY_MANIFESTATION>
+               <EXPRESSION_USES_LANGUAGE type="concept">
+                  <URI>
+                     <VALUE>http://publications.europa.eu/resource/authority/language/ENG</VALUE>
+                     <IDENTIFIER>ENG</IDENTIFIER>
+                     <TYPE>language</TYPE>
+                  </URI>
+                  <OP-CODE>ENG</OP-CODE>
+                  <IDENTIFIER>ENG</IDENTIFIER>
+                  <PREFLABEL>inglese</PREFLABEL>
+               </EXPRESSION_USES_LANGUAGE>
+               <EXPRESSION_TITLE type="data">
+                  <VALUE>Commission Decision of 17 May 1979 laying down a code and standard rules for the transcription into a machine-readable form of the data of the basic surveys of areas under vines (79/491/EEC) </VALUE>
+               </EXPRESSION_TITLE>
+               <EXPRESSION_MANIFESTED_BY_MANIFESTATION type="embedded_link">
+                  <SAMEAS>
+                     <URI>
+                        <VALUE>http://publications.europa.eu/resource/celex/01979D0491-20061025.ENG.xhtml</VALUE>
+                        <IDENTIFIER>01979D0491-20061025.ENG.xhtml</IDENTIFIER>
+                        <TYPE>celex</TYPE>
+                     </URI>
+                  </SAMEAS>
+               </EXPRESSION_MANIFESTED_BY_MANIFESTATION>
+            </EXPRESSION>
+            <MANIFESTATION manifestation-type="pdfa1a">
+               <MANIFESTATION_TYPE type="data">
+                  <VALUE>pdfa1a</VALUE>
+               </MANIFESTATION_TYPE>
+            </MANIFESTATION>
+            <MANIFESTATION manifestation-type="fmx4">
+               <MANIFESTATION_TYPE type="data">
+                  <VALUE>fmx4</VALUE>
+               </MANIFESTATION_TYPE>
+            </MANIFESTATION>
+            <MANIFESTATION manifestation-type="xhtml">
+               <MANIFESTATION_TYPE type="data">
+                  <VALUE>xhtml</VALUE>
+               </MANIFESTATION_TYPE>
+            </MANIFESTATION>
+         </EMBEDDED_NOTICE>
+         <URI>
+            <VALUE>http://publications.europa.eu/resource/cellar/b8e4cac3-4287-4e5b-83ce-ac6ac43fc05a.0017</VALUE>
+            <IDENTIFIER>b8e4cac3-4287-4e5b-83ce-ac6ac43fc05a.0017</IDENTIFIER>
+            <TYPE>cellar</TYPE>
+         </URI>
+         <SAMEAS>
+            <URI>
+               <VALUE>http://publications.europa.eu/resource/celex/01979D0491-20061025.ENG</VALUE>
+               <IDENTIFIER>01979D0491-20061025.ENG</IDENTIFIER>
+               <TYPE>celex</TYPE>
+            </URI>
+         </SAMEAS>
+         <SAMEAS>
+            <URI>
+               <VALUE>http://publications.europa.eu/resource/consolidation/1979D0491%2F20061025.ENG</VALUE>
+               <IDENTIFIER>1979D0491/20061025.ENG</IDENTIFIER>
+               <TYPE>consolidation</TYPE>
+            </URI>
+         </SAMEAS>
+      </WORK_HAS_EXPRESSION>
+      <RESOURCE_LEGAL_INFORMATION_MISCELLANEOUS type="data">
+         <VALUE>LASTMODIN {32006D0717|http://publications.europa.eu/resource/celex/32006D0717}</VALUE>
+      </RESOURCE_LEGAL_INFORMATION_MISCELLANEOUS>
+      <WORK_HAS_RESOURCE-TYPE type="concept">
+         <URI>
+            <VALUE>http://publications.europa.eu/resource/authority/resource-type/CONS_TEXT</VALUE>
+            <IDENTIFIER>CONS_TEXT</IDENTIFIER>
+            <TYPE>resource-type</TYPE>
+         </URI>
+         <OP-CODE>CONS_TEXT</OP-CODE>
+         <IDENTIFIER>CONS_TEXT</IDENTIFIER>
+         <PREFLABEL>Testo consolidato</PREFLABEL>
+      </WORK_HAS_RESOURCE-TYPE>
+      <WORK_HAS_EXPRESSION type="link">
+         <EMBEDDED_NOTICE>
+            <WORK>
+               <RESOURCE_LEGAL_NUMBER_NATURAL_CELEX type="data">
+                  <VALUE>0491</VALUE>
+               </RESOURCE_LEGAL_NUMBER_NATURAL_CELEX>
+               <RESOURCE_LEGAL_TYPE type="data">
+                  <VALUE>D</VALUE>
+               </RESOURCE_LEGAL_TYPE>
+               <RESOURCE_LEGAL_NUMBER_NATURAL type="data">
+                  <VALUE>491</VALUE>
+               </RESOURCE_LEGAL_NUMBER_NATURAL>
+               <ID_SECTOR type="data">
+                  <VALUE>0</VALUE>
+               </ID_SECTOR>
+               <RESOURCE_LEGAL_ID_CELEX type="data">
+                  <VALUE>01979D0491-20061025</VALUE>
+               </RESOURCE_LEGAL_ID_CELEX>
+               <WORK_HAS_RESOURCE-TYPE type="concept">
+                  <URI>
+                     <VALUE>http://publications.europa.eu/resource/authority/resource-type/CONS_TEXT</VALUE>
+                     <IDENTIFIER>CONS_TEXT</IDENTIFIER>
+                     <TYPE>resource-type</TYPE>
+                  </URI>
+                  <OP-CODE>CONS_TEXT</OP-CODE>
+                  <IDENTIFIER>CONS_TEXT</IDENTIFIER>
+                  <PREFLABEL>Testo consolidato</PREFLABEL>
+               </WORK_HAS_RESOURCE-TYPE>
+               <NUMBER type="data">
+                  <VALUE>1979D0491/20061025</VALUE>
+               </NUMBER>
+               <ID_CELEX type="data">
+                  <VALUE>01979D0491-20061025</VALUE>
+               </ID_CELEX>
+               <WORK_DATE_DOCUMENT type="date">
+                  <VALUE>2006-10-25</VALUE>
+                  <YEAR>2006</YEAR>
+                  <MONTH>10</MONTH>
+                  <DAY>25</DAY>
+               </WORK_DATE_DOCUMENT>
+               <RESOURCE_LEGAL_YEAR type="data">
+                  <VALUE>1979</VALUE>
+               </RESOURCE_LEGAL_YEAR>
+               <YEAR type="data">
+                  <VALUE>1979</VALUE>
+               </YEAR>
+               <TYPE>cdm:resource_legal</TYPE>
+               <TYPE>cdm:act_consolidated</TYPE>
+               <TYPE>cdm:work</TYPE>
+            </WORK>
+            <EXPRESSION>
+               <EXPRESSION_TITLE type="data">
+                  <VALUE>Komisijas Lēmums ( 1979. gada 17. maijs ), ar ko nosaka kodu un standarta noteikumus vīnogulāju stādījumu platību pamatapsekojumu datu transkripcijai mašīnlasāmā formā (79/491/EEK) </VALUE>
+               </EXPRESSION_TITLE>
+               <EXPRESSION_MANIFESTED_BY_MANIFESTATION type="embedded_link">
+                  <SAMEAS>
+                     <URI>
+                        <VALUE>http://publications.europa.eu/resource/celex/01979D0491-20061025.LAV.pdfa1a</VALUE>
+                        <IDENTIFIER>01979D0491-20061025.LAV.pdfa1a</IDENTIFIER>
+                        <TYPE>celex</TYPE>
+                     </URI>
+                  </SAMEAS>
+               </EXPRESSION_MANIFESTED_BY_MANIFESTATION>
+               <EXPRESSION_USES_LANGUAGE type="concept">
+                  <URI>
+                     <VALUE>http://publications.europa.eu/resource/authority/language/LAV</VALUE>
+                     <IDENTIFIER>LAV</IDENTIFIER>
+                     <TYPE>language</TYPE>
+                  </URI>
+                  <OP-CODE>LAV</OP-CODE>
+                  <IDENTIFIER>LAV</IDENTIFIER>
+                  <PREFLABEL>lettone</PREFLABEL>
+               </EXPRESSION_USES_LANGUAGE>
+               <EXPRESSION_MANIFESTED_BY_MANIFESTATION type="embedded_link">
+                  <SAMEAS>
+                     <URI>
+                        <VALUE>http://publications.europa.eu/resource/celex/01979D0491-20061025.LAV.xhtml</VALUE>
+                        <IDENTIFIER>01979D0491-20061025.LAV.xhtml</IDENTIFIER>
+                        <TYPE>celex</TYPE>
+                     </URI>
+                  </SAMEAS>
+               </EXPRESSION_MANIFESTED_BY_MANIFESTATION>
+               <EXPRESSION_MANIFESTED_BY_MANIFESTATION type="embedded_link">
+                  <SAMEAS>
+                     <URI>
+                        <VALUE>http://publications.europa.eu/resource/celex/01979D0491-20061025.LAV.fmx4</VALUE>
+                        <IDENTIFIER>01979D0491-20061025.LAV.fmx4</IDENTIFIER>
+                        <TYPE>celex</TYPE>
+                     </URI>
+                  </SAMEAS>
+               </EXPRESSION_MANIFESTED_BY_MANIFESTATION>
+            </EXPRESSION>
+            <MANIFESTATION manifestation-type="pdfa1a">
+               <MANIFESTATION_TYPE type="data">
+                  <VALUE>pdfa1a</VALUE>
+               </MANIFESTATION_TYPE>
+            </MANIFESTATION>
+            <MANIFESTATION manifestation-type="fmx4">
+               <MANIFESTATION_TYPE type="data">
+                  <VALUE>fmx4</VALUE>
+               </MANIFESTATION_TYPE>
+            </MANIFESTATION>
+            <MANIFESTATION manifestation-type="xhtml">
+               <MANIFESTATION_TYPE type="data">
+                  <VALUE>xhtml</VALUE>
+               </MANIFESTATION_TYPE>
+            </MANIFESTATION>
+         </EMBEDDED_NOTICE>
+         <URI>
+            <VALUE>http://publications.europa.eu/resource/cellar/b8e4cac3-4287-4e5b-83ce-ac6ac43fc05a.0007</VALUE>
+            <IDENTIFIER>b8e4cac3-4287-4e5b-83ce-ac6ac43fc05a.0007</IDENTIFIER>
+            <TYPE>cellar</TYPE>
+         </URI>
+         <SAMEAS>
+            <URI>
+               <VALUE>http://publications.europa.eu/resource/consolidation/1979D0491%2F20061025.LAV</VALUE>
+               <IDENTIFIER>1979D0491/20061025.LAV</IDENTIFIER>
+               <TYPE>consolidation</TYPE>
+            </URI>
+         </SAMEAS>
+         <SAMEAS>
+            <URI>
+               <VALUE>http://publications.europa.eu/resource/celex/01979D0491-20061025.LAV</VALUE>
+               <IDENTIFIER>01979D0491-20061025.LAV</IDENTIFIER>
+               <TYPE>celex</TYPE>
+            </URI>
+         </SAMEAS>
+      </WORK_HAS_EXPRESSION>
+      <WORK_HAS_EXPRESSION type="link">
+         <EMBEDDED_NOTICE>
+            <WORK>
+               <RESOURCE_LEGAL_NUMBER_NATURAL_CELEX type="data">
+                  <VALUE>0491</VALUE>
+               </RESOURCE_LEGAL_NUMBER_NATURAL_CELEX>
+               <RESOURCE_LEGAL_TYPE type="data">
+                  <VALUE>D</VALUE>
+               </RESOURCE_LEGAL_TYPE>
+               <RESOURCE_LEGAL_NUMBER_NATURAL type="data">
+                  <VALUE>491</VALUE>
+               </RESOURCE_LEGAL_NUMBER_NATURAL>
+               <ID_SECTOR type="data">
+                  <VALUE>0</VALUE>
+               </ID_SECTOR>
+               <RESOURCE_LEGAL_ID_CELEX type="data">
+                  <VALUE>01979D0491-20061025</VALUE>
+               </RESOURCE_LEGAL_ID_CELEX>
+               <WORK_HAS_RESOURCE-TYPE type="concept">
+                  <URI>
+                     <VALUE>http://publications.europa.eu/resource/authority/resource-type/CONS_TEXT</VALUE>
+                     <IDENTIFIER>CONS_TEXT</IDENTIFIER>
+                     <TYPE>resource-type</TYPE>
+                  </URI>
+                  <OP-CODE>CONS_TEXT</OP-CODE>
+                  <IDENTIFIER>CONS_TEXT</IDENTIFIER>
+                  <PREFLABEL>Testo consolidato</PREFLABEL>
+               </WORK_HAS_RESOURCE-TYPE>
+               <NUMBER type="data">
+                  <VALUE>1979D0491/20061025</VALUE>
+               </NUMBER>
+               <ID_CELEX type="data">
+                  <VALUE>01979D0491-20061025</VALUE>
+               </ID_CELEX>
+               <WORK_DATE_DOCUMENT type="date">
+                  <VALUE>2006-10-25</VALUE>
+                  <YEAR>2006</YEAR>
+                  <MONTH>10</MONTH>
+                  <DAY>25</DAY>
+               </WORK_DATE_DOCUMENT>
+               <RESOURCE_LEGAL_YEAR type="data">
+                  <VALUE>1979</VALUE>
+               </RESOURCE_LEGAL_YEAR>
+               <YEAR type="data">
+                  <VALUE>1979</VALUE>
+               </YEAR>
+               <TYPE>cdm:resource_legal</TYPE>
+               <TYPE>cdm:act_consolidated</TYPE>
+               <TYPE>cdm:work</TYPE>
+            </WORK>
+            <EXPRESSION>
+               <EXPRESSION_MANIFESTED_BY_MANIFESTATION type="embedded_link">
+                  <SAMEAS>
+                     <URI>
+                        <VALUE>http://publications.europa.eu/resource/celex/01979D0491-20061025.EST.xhtml</VALUE>
+                        <IDENTIFIER>01979D0491-20061025.EST.xhtml</IDENTIFIER>
+                        <TYPE>celex</TYPE>
+                     </URI>
+                  </SAMEAS>
+               </EXPRESSION_MANIFESTED_BY_MANIFESTATION>
+               <EXPRESSION_MANIFESTED_BY_MANIFESTATION type="embedded_link">
+                  <SAMEAS>
+                     <URI>
+                        <VALUE>http://publications.europa.eu/resource/celex/01979D0491-20061025.EST.fmx4</VALUE>
+                        <IDENTIFIER>01979D0491-20061025.EST.fmx4</IDENTIFIER>
+                        <TYPE>celex</TYPE>
+                     </URI>
+                  </SAMEAS>
+               </EXPRESSION_MANIFESTED_BY_MANIFESTATION>
+               <EXPRESSION_TITLE type="data">
+                  <VALUE>Komisjoni otsus , 17. mai 1979 , millega kehtestatakse viinamarjakasvatusalade statistiliste põhivaatluste andmete masinloetavale kujule viimise standardkood ja -eeskirjad (79/491/EMÜ) </VALUE>
+               </EXPRESSION_TITLE>
+               <EXPRESSION_MANIFESTED_BY_MANIFESTATION type="embedded_link">
+                  <SAMEAS>
+                     <URI>
+                        <VALUE>http://publications.europa.eu/resource/celex/01979D0491-20061025.EST.pdfa1a</VALUE>
+                        <IDENTIFIER>01979D0491-20061025.EST.pdfa1a</IDENTIFIER>
+                        <TYPE>celex</TYPE>
+                     </URI>
+                  </SAMEAS>
+               </EXPRESSION_MANIFESTED_BY_MANIFESTATION>
+               <EXPRESSION_USES_LANGUAGE type="concept">
+                  <URI>
+                     <VALUE>http://publications.europa.eu/resource/authority/language/EST</VALUE>
+                     <IDENTIFIER>EST</IDENTIFIER>
+                     <TYPE>language</TYPE>
+                  </URI>
+                  <OP-CODE>EST</OP-CODE>
+                  <IDENTIFIER>EST</IDENTIFIER>
+                  <PREFLABEL>estone</PREFLABEL>
+               </EXPRESSION_USES_LANGUAGE>
+            </EXPRESSION>
+            <MANIFESTATION manifestation-type="pdfa1a">
+               <MANIFESTATION_TYPE type="data">
+                  <VALUE>pdfa1a</VALUE>
+               </MANIFESTATION_TYPE>
+            </MANIFESTATION>
+            <MANIFESTATION manifestation-type="fmx4">
+               <MANIFESTATION_TYPE type="data">
+                  <VALUE>fmx4</VALUE>
+               </MANIFESTATION_TYPE>
+            </MANIFESTATION>
+            <MANIFESTATION manifestation-type="xhtml">
+               <MANIFESTATION_TYPE type="data">
+                  <VALUE>xhtml</VALUE>
+               </MANIFESTATION_TYPE>
+            </MANIFESTATION>
+         </EMBEDDED_NOTICE>
+         <URI>
+            <VALUE>http://publications.europa.eu/resource/cellar/b8e4cac3-4287-4e5b-83ce-ac6ac43fc05a.0018</VALUE>
+            <IDENTIFIER>b8e4cac3-4287-4e5b-83ce-ac6ac43fc05a.0018</IDENTIFIER>
+            <TYPE>cellar</TYPE>
+         </URI>
+         <SAMEAS>
+            <URI>
+               <VALUE>http://publications.europa.eu/resource/celex/01979D0491-20061025.EST</VALUE>
+               <IDENTIFIER>01979D0491-20061025.EST</IDENTIFIER>
+               <TYPE>celex</TYPE>
+            </URI>
+         </SAMEAS>
+         <SAMEAS>
+            <URI>
+               <VALUE>http://publications.europa.eu/resource/consolidation/1979D0491%2F20061025.EST</VALUE>
+               <IDENTIFIER>1979D0491/20061025.EST</IDENTIFIER>
+               <TYPE>consolidation</TYPE>
+            </URI>
+         </SAMEAS>
+      </WORK_HAS_EXPRESSION>
+      <DATE_CREATION_LEGACY type="date">
+         <VALUE>2016-04-20</VALUE>
+         <YEAR>2016</YEAR>
+         <MONTH>04</MONTH>
+         <DAY>20</DAY>
+      </DATE_CREATION_LEGACY>
+      <WORK_HAS_EXPRESSION type="link">
+         <EMBEDDED_NOTICE>
+            <WORK>
+               <RESOURCE_LEGAL_NUMBER_NATURAL_CELEX type="data">
+                  <VALUE>0491</VALUE>
+               </RESOURCE_LEGAL_NUMBER_NATURAL_CELEX>
+               <RESOURCE_LEGAL_TYPE type="data">
+                  <VALUE>D</VALUE>
+               </RESOURCE_LEGAL_TYPE>
+               <RESOURCE_LEGAL_NUMBER_NATURAL type="data">
+                  <VALUE>491</VALUE>
+               </RESOURCE_LEGAL_NUMBER_NATURAL>
+               <ID_SECTOR type="data">
+                  <VALUE>0</VALUE>
+               </ID_SECTOR>
+               <RESOURCE_LEGAL_ID_CELEX type="data">
+                  <VALUE>01979D0491-20061025</VALUE>
+               </RESOURCE_LEGAL_ID_CELEX>
+               <WORK_HAS_RESOURCE-TYPE type="concept">
+                  <URI>
+                     <VALUE>http://publications.europa.eu/resource/authority/resource-type/CONS_TEXT</VALUE>
+                     <IDENTIFIER>CONS_TEXT</IDENTIFIER>
+                     <TYPE>resource-type</TYPE>
+                  </URI>
+                  <OP-CODE>CONS_TEXT</OP-CODE>
+                  <IDENTIFIER>CONS_TEXT</IDENTIFIER>
+                  <PREFLABEL>Testo consolidato</PREFLABEL>
+               </WORK_HAS_RESOURCE-TYPE>
+               <NUMBER type="data">
+                  <VALUE>1979D0491/20061025</VALUE>
+               </NUMBER>
+               <ID_CELEX type="data">
+                  <VALUE>01979D0491-20061025</VALUE>
+               </ID_CELEX>
+               <WORK_DATE_DOCUMENT type="date">
+                  <VALUE>2006-10-25</VALUE>
+                  <YEAR>2006</YEAR>
+                  <MONTH>10</MONTH>
+                  <DAY>25</DAY>
+               </WORK_DATE_DOCUMENT>
+               <RESOURCE_LEGAL_YEAR type="data">
+                  <VALUE>1979</VALUE>
+               </RESOURCE_LEGAL_YEAR>
+               <YEAR type="data">
+                  <VALUE>1979</VALUE>
+               </YEAR>
+               <TYPE>cdm:resource_legal</TYPE>
+               <TYPE>cdm:act_consolidated</TYPE>
+               <TYPE>cdm:work</TYPE>
+            </WORK>
+            <EXPRESSION>
+               <EXPRESSION_MANIFESTED_BY_MANIFESTATION type="embedded_link">
+                  <SAMEAS>
+                     <URI>
+                        <VALUE>http://publications.europa.eu/resource/celex/01979D0491-20061025.ELL.pdfa1a</VALUE>
+                        <IDENTIFIER>01979D0491-20061025.ELL.pdfa1a</IDENTIFIER>
+                        <TYPE>celex</TYPE>
+                     </URI>
+                  </SAMEAS>
+               </EXPRESSION_MANIFESTED_BY_MANIFESTATION>
+               <EXPRESSION_MANIFESTED_BY_MANIFESTATION type="embedded_link">
+                  <SAMEAS>
+                     <URI>
+                        <VALUE>http://publications.europa.eu/resource/celex/01979D0491-20061025.ELL.xhtml</VALUE>
+                        <IDENTIFIER>01979D0491-20061025.ELL.xhtml</IDENTIFIER>
+                        <TYPE>celex</TYPE>
+                     </URI>
+                  </SAMEAS>
+               </EXPRESSION_MANIFESTED_BY_MANIFESTATION>
+               <EXPRESSION_TITLE type="data">
+                  <VALUE>Απόφαση της Επιτροπής της 17ης Μαΐου 1979 περί καταρτίσεως του κώδικος και των τυπικών κανόνων σχετικών με τη μεταγραφή υπό μορφή αναγνώσιμη από μηχανογραφική μονάδα των στοιχείων των βασικών ερευνών των αμπελουργικών εκτάσεων (79/491/ΕΟΚ) </VALUE>
+               </EXPRESSION_TITLE>
+               <EXPRESSION_USES_LANGUAGE type="concept">
+                  <URI>
+                     <VALUE>http://publications.europa.eu/resource/authority/language/ELL</VALUE>
+                     <IDENTIFIER>ELL</IDENTIFIER>
+                     <TYPE>language</TYPE>
+                  </URI>
+                  <OP-CODE>ELL</OP-CODE>
+                  <IDENTIFIER>ELL</IDENTIFIER>
+                  <PREFLABEL>greco</PREFLABEL>
+               </EXPRESSION_USES_LANGUAGE>
+               <EXPRESSION_MANIFESTED_BY_MANIFESTATION type="embedded_link">
+                  <SAMEAS>
+                     <URI>
+                        <VALUE>http://publications.europa.eu/resource/celex/01979D0491-20061025.ELL.fmx4</VALUE>
+                        <IDENTIFIER>01979D0491-20061025.ELL.fmx4</IDENTIFIER>
+                        <TYPE>celex</TYPE>
+                     </URI>
+                  </SAMEAS>
+               </EXPRESSION_MANIFESTED_BY_MANIFESTATION>
+            </EXPRESSION>
+            <MANIFESTATION manifestation-type="pdfa1a">
+               <MANIFESTATION_TYPE type="data">
+                  <VALUE>pdfa1a</VALUE>
+               </MANIFESTATION_TYPE>
+            </MANIFESTATION>
+            <MANIFESTATION manifestation-type="fmx4">
+               <MANIFESTATION_TYPE type="data">
+                  <VALUE>fmx4</VALUE>
+               </MANIFESTATION_TYPE>
+            </MANIFESTATION>
+            <MANIFESTATION manifestation-type="xhtml">
+               <MANIFESTATION_TYPE type="data">
+                  <VALUE>xhtml</VALUE>
+               </MANIFESTATION_TYPE>
+            </MANIFESTATION>
+         </EMBEDDED_NOTICE>
+         <URI>
+            <VALUE>http://publications.europa.eu/resource/cellar/b8e4cac3-4287-4e5b-83ce-ac6ac43fc05a.0011</VALUE>
+            <IDENTIFIER>b8e4cac3-4287-4e5b-83ce-ac6ac43fc05a.0011</IDENTIFIER>
+            <TYPE>cellar</TYPE>
+         </URI>
+         <SAMEAS>
+            <URI>
+               <VALUE>http://publications.europa.eu/resource/consolidation/1979D0491%2F20061025.ELL</VALUE>
+               <IDENTIFIER>1979D0491/20061025.ELL</IDENTIFIER>
+               <TYPE>consolidation</TYPE>
+            </URI>
+         </SAMEAS>
+         <SAMEAS>
+            <URI>
+               <VALUE>http://publications.europa.eu/resource/celex/01979D0491-20061025.ELL</VALUE>
+               <IDENTIFIER>01979D0491-20061025.ELL</IDENTIFIER>
+               <TYPE>celex</TYPE>
+            </URI>
+         </SAMEAS>
+      </WORK_HAS_EXPRESSION>
+      <NUMBER type="data">
+         <VALUE>1979D0491/20061025</VALUE>
+      </NUMBER>
+      <IDENTIFIER type="data">
+         <VALUE>01979D0491-20061025</VALUE>
+      </IDENTIFIER>
+      <ID_CELEX type="data">
+         <VALUE>01979D0491-20061025</VALUE>
+      </ID_CELEX>
+      <DATE type="date">
+         <VALUE>2016-04-20</VALUE>
+         <YEAR>2016</YEAR>
+         <MONTH>04</MONTH>
+         <DAY>20</DAY>
+      </DATE>
+      <LASTMODIFICATIONDATE type="date">
+         <VALUE>2023-01-02T20:27:18.338+01:00</VALUE>
+         <YEAR>2023</YEAR>
+         <MONTH>01</MONTH>
+         <DAY>02</DAY>
+      </LASTMODIFICATIONDATE>
+      <DATE type="date">
+         <VALUE>2006-10-25</VALUE>
+         <YEAR>2006</YEAR>
+         <MONTH>10</MONTH>
+         <DAY>25</DAY>
+      </DATE>
+      <IDENTIFIER type="data">
+         <VALUE>celex:01979D0491-20061025</VALUE>
+      </IDENTIFIER>
+      <WORK_DATE_DOCUMENT type="date">
+         <VALUE>2006-10-25</VALUE>
+         <YEAR>2006</YEAR>
+         <MONTH>10</MONTH>
+         <DAY>25</DAY>
+      </WORK_DATE_DOCUMENT>
+      <ACT_CONSOLIDATED_CONSOLIDATES_RESOURCE_LEGAL type="link">
+         <URI>
+            <VALUE>http://publications.europa.eu/resource/cellar/1e02d77b-08fb-43c7-9022-32c41a30dc34</VALUE>
+            <IDENTIFIER>1e02d77b-08fb-43c7-9022-32c41a30dc34</IDENTIFIER>
+            <TYPE>cellar</TYPE>
+         </URI>
+         <SAMEAS>
+            <URI>
+               <VALUE>http://publications.europa.eu/resource/celex/32006D0717</VALUE>
+               <IDENTIFIER>32006D0717</IDENTIFIER>
+               <TYPE>celex</TYPE>
+            </URI>
+         </SAMEAS>
+         <SAMEAS>
+            <URI>
+               <VALUE>http://publications.europa.eu/resource/oj/JOL_2006_294_R_0059_01</VALUE>
+               <IDENTIFIER>JOL_2006_294_R_0059_01</IDENTIFIER>
+               <TYPE>oj</TYPE>
+            </URI>
+         </SAMEAS>
+         <SAMEAS>
+            <URI>
+               <VALUE>http://publications.europa.eu/resource/eli/dec/2006/717/oj</VALUE>
+               <IDENTIFIER>dec:2006:717:oj</IDENTIFIER>
+               <TYPE>eli</TYPE>
+            </URI>
+         </SAMEAS>
+      </ACT_CONSOLIDATED_CONSOLIDATES_RESOURCE_LEGAL>
+      <WORK_HAS_EXPRESSION type="link">
+         <EMBEDDED_NOTICE>
+            <WORK>
+               <RESOURCE_LEGAL_NUMBER_NATURAL_CELEX type="data">
+                  <VALUE>0491</VALUE>
+               </RESOURCE_LEGAL_NUMBER_NATURAL_CELEX>
+               <RESOURCE_LEGAL_TYPE type="data">
+                  <VALUE>D</VALUE>
+               </RESOURCE_LEGAL_TYPE>
+               <RESOURCE_LEGAL_NUMBER_NATURAL type="data">
+                  <VALUE>491</VALUE>
+               </RESOURCE_LEGAL_NUMBER_NATURAL>
+               <ID_SECTOR type="data">
+                  <VALUE>0</VALUE>
+               </ID_SECTOR>
+               <RESOURCE_LEGAL_ID_CELEX type="data">
+                  <VALUE>01979D0491-20061025</VALUE>
+               </RESOURCE_LEGAL_ID_CELEX>
+               <WORK_HAS_RESOURCE-TYPE type="concept">
+                  <URI>
+                     <VALUE>http://publications.europa.eu/resource/authority/resource-type/CONS_TEXT</VALUE>
+                     <IDENTIFIER>CONS_TEXT</IDENTIFIER>
+                     <TYPE>resource-type</TYPE>
+                  </URI>
+                  <OP-CODE>CONS_TEXT</OP-CODE>
+                  <IDENTIFIER>CONS_TEXT</IDENTIFIER>
+                  <PREFLABEL>Testo consolidato</PREFLABEL>
+               </WORK_HAS_RESOURCE-TYPE>
+               <NUMBER type="data">
+                  <VALUE>1979D0491/20061025</VALUE>
+               </NUMBER>
+               <ID_CELEX type="data">
+                  <VALUE>01979D0491-20061025</VALUE>
+               </ID_CELEX>
+               <WORK_DATE_DOCUMENT type="date">
+                  <VALUE>2006-10-25</VALUE>
+                  <YEAR>2006</YEAR>
+                  <MONTH>10</MONTH>
+                  <DAY>25</DAY>
+               </WORK_DATE_DOCUMENT>
+               <RESOURCE_LEGAL_YEAR type="data">
+                  <VALUE>1979</VALUE>
+               </RESOURCE_LEGAL_YEAR>
+               <YEAR type="data">
+                  <VALUE>1979</VALUE>
+               </YEAR>
+               <TYPE>cdm:resource_legal</TYPE>
+               <TYPE>cdm:act_consolidated</TYPE>
+               <TYPE>cdm:work</TYPE>
+            </WORK>
+            <EXPRESSION>
+               <EXPRESSION_TITLE type="data">
+                  <VALUE>Décision de la Commission du 17 mai 1979 établissant le code et les règles types relatifs à la transcription sous une forme lisible par machine des données des enquêtes de base sur les superficies viticoles (79/491/CEE) </VALUE>
+               </EXPRESSION_TITLE>
+               <EXPRESSION_MANIFESTED_BY_MANIFESTATION type="embedded_link">
+                  <SAMEAS>
+                     <URI>
+                        <VALUE>http://publications.europa.eu/resource/celex/01979D0491-20061025.FRA.pdfa1a</VALUE>
+                        <IDENTIFIER>01979D0491-20061025.FRA.pdfa1a</IDENTIFIER>
+                        <TYPE>celex</TYPE>
+                     </URI>
+                  </SAMEAS>
+               </EXPRESSION_MANIFESTED_BY_MANIFESTATION>
+               <EXPRESSION_MANIFESTED_BY_MANIFESTATION type="embedded_link">
+                  <SAMEAS>
+                     <URI>
+                        <VALUE>http://publications.europa.eu/resource/celex/01979D0491-20061025.FRA.fmx4</VALUE>
+                        <IDENTIFIER>01979D0491-20061025.FRA.fmx4</IDENTIFIER>
+                        <TYPE>celex</TYPE>
+                     </URI>
+                  </SAMEAS>
+               </EXPRESSION_MANIFESTED_BY_MANIFESTATION>
+               <EXPRESSION_USES_LANGUAGE type="concept">
+                  <URI>
+                     <VALUE>http://publications.europa.eu/resource/authority/language/FRA</VALUE>
+                     <IDENTIFIER>FRA</IDENTIFIER>
+                     <TYPE>language</TYPE>
+                  </URI>
+                  <OP-CODE>FRA</OP-CODE>
+                  <IDENTIFIER>FRA</IDENTIFIER>
+                  <PREFLABEL>francese</PREFLABEL>
+               </EXPRESSION_USES_LANGUAGE>
+               <EXPRESSION_MANIFESTED_BY_MANIFESTATION type="embedded_link">
+                  <SAMEAS>
+                     <URI>
+                        <VALUE>http://publications.europa.eu/resource/celex/01979D0491-20061025.FRA.xhtml</VALUE>
+                        <IDENTIFIER>01979D0491-20061025.FRA.xhtml</IDENTIFIER>
+                        <TYPE>celex</TYPE>
+                     </URI>
+                  </SAMEAS>
+               </EXPRESSION_MANIFESTED_BY_MANIFESTATION>
+            </EXPRESSION>
+            <MANIFESTATION manifestation-type="pdfa1a">
+               <MANIFESTATION_TYPE type="data">
+                  <VALUE>pdfa1a</VALUE>
+               </MANIFESTATION_TYPE>
+            </MANIFESTATION>
+            <MANIFESTATION manifestation-type="fmx4">
+               <MANIFESTATION_TYPE type="data">
+                  <VALUE>fmx4</VALUE>
+               </MANIFESTATION_TYPE>
+            </MANIFESTATION>
+            <MANIFESTATION manifestation-type="xhtml">
+               <MANIFESTATION_TYPE type="data">
+                  <VALUE>xhtml</VALUE>
+               </MANIFESTATION_TYPE>
+            </MANIFESTATION>
+         </EMBEDDED_NOTICE>
+         <URI>
+            <VALUE>http://publications.europa.eu/resource/cellar/b8e4cac3-4287-4e5b-83ce-ac6ac43fc05a.0016</VALUE>
+            <IDENTIFIER>b8e4cac3-4287-4e5b-83ce-ac6ac43fc05a.0016</IDENTIFIER>
+            <TYPE>cellar</TYPE>
+         </URI>
+         <SAMEAS>
+            <URI>
+               <VALUE>http://publications.europa.eu/resource/consolidation/1979D0491%2F20061025.FRA</VALUE>
+               <IDENTIFIER>1979D0491/20061025.FRA</IDENTIFIER>
+               <TYPE>consolidation</TYPE>
+            </URI>
+         </SAMEAS>
+         <SAMEAS>
+            <URI>
+               <VALUE>http://publications.europa.eu/resource/celex/01979D0491-20061025.FRA</VALUE>
+               <IDENTIFIER>01979D0491-20061025.FRA</IDENTIFIER>
+               <TYPE>celex</TYPE>
+            </URI>
+         </SAMEAS>
+      </WORK_HAS_EXPRESSION>
+      <RESOURCE_LEGAL_ELI type="data">
+         <VALUE>http://data.europa.eu/eli/dec/1979/491/2006-10-25</VALUE>
+      </RESOURCE_LEGAL_ELI>
+      <RESOURCE_LEGAL_YEAR type="data">
+         <VALUE>1979</VALUE>
+      </RESOURCE_LEGAL_YEAR>
+      <WORK_HAS_EXPRESSION type="link">
+         <EMBEDDED_NOTICE>
+            <WORK>
+               <RESOURCE_LEGAL_NUMBER_NATURAL_CELEX type="data">
+                  <VALUE>0491</VALUE>
+               </RESOURCE_LEGAL_NUMBER_NATURAL_CELEX>
+               <RESOURCE_LEGAL_TYPE type="data">
+                  <VALUE>D</VALUE>
+               </RESOURCE_LEGAL_TYPE>
+               <RESOURCE_LEGAL_NUMBER_NATURAL type="data">
+                  <VALUE>491</VALUE>
+               </RESOURCE_LEGAL_NUMBER_NATURAL>
+               <ID_SECTOR type="data">
+                  <VALUE>0</VALUE>
+               </ID_SECTOR>
+               <RESOURCE_LEGAL_ID_CELEX type="data">
+                  <VALUE>01979D0491-20061025</VALUE>
+               </RESOURCE_LEGAL_ID_CELEX>
+               <WORK_HAS_RESOURCE-TYPE type="concept">
+                  <URI>
+                     <VALUE>http://publications.europa.eu/resource/authority/resource-type/CONS_TEXT</VALUE>
+                     <IDENTIFIER>CONS_TEXT</IDENTIFIER>
+                     <TYPE>resource-type</TYPE>
+                  </URI>
+                  <OP-CODE>CONS_TEXT</OP-CODE>
+                  <IDENTIFIER>CONS_TEXT</IDENTIFIER>
+                  <PREFLABEL>Testo consolidato</PREFLABEL>
+               </WORK_HAS_RESOURCE-TYPE>
+               <NUMBER type="data">
+                  <VALUE>1979D0491/20061025</VALUE>
+               </NUMBER>
+               <ID_CELEX type="data">
+                  <VALUE>01979D0491-20061025</VALUE>
+               </ID_CELEX>
+               <WORK_DATE_DOCUMENT type="date">
+                  <VALUE>2006-10-25</VALUE>
+                  <YEAR>2006</YEAR>
+                  <MONTH>10</MONTH>
+                  <DAY>25</DAY>
+               </WORK_DATE_DOCUMENT>
+               <RESOURCE_LEGAL_YEAR type="data">
+                  <VALUE>1979</VALUE>
+               </RESOURCE_LEGAL_YEAR>
+               <YEAR type="data">
+                  <VALUE>1979</VALUE>
+               </YEAR>
+               <TYPE>cdm:resource_legal</TYPE>
+               <TYPE>cdm:act_consolidated</TYPE>
+               <TYPE>cdm:work</TYPE>
+            </WORK>
+            <EXPRESSION>
+               <EXPRESSION_TITLE type="data">
+                  <VALUE>Decisγo da Comissγo de 17 de Maio de 1979 que estabelece o código e as regras-tipo relativas à transcrição sob uma forma legível por máquina dos dados dos inquéritos de base sobre as superfícies vitícolas (79/491/CEE) </VALUE>
+               </EXPRESSION_TITLE>
+               <EXPRESSION_USES_LANGUAGE type="concept">
+                  <URI>
+                     <VALUE>http://publications.europa.eu/resource/authority/language/POR</VALUE>
+                     <IDENTIFIER>POR</IDENTIFIER>
+                     <TYPE>language</TYPE>
+                  </URI>
+                  <OP-CODE>POR</OP-CODE>
+                  <IDENTIFIER>POR</IDENTIFIER>
+                  <PREFLABEL>portoghese</PREFLABEL>
+               </EXPRESSION_USES_LANGUAGE>
+               <EXPRESSION_MANIFESTED_BY_MANIFESTATION type="embedded_link">
+                  <SAMEAS>
+                     <URI>
+                        <VALUE>http://publications.europa.eu/resource/celex/01979D0491-20061025.POR.fmx4</VALUE>
+                        <IDENTIFIER>01979D0491-20061025.POR.fmx4</IDENTIFIER>
+                        <TYPE>celex</TYPE>
+                     </URI>
+                  </SAMEAS>
+               </EXPRESSION_MANIFESTED_BY_MANIFESTATION>
+               <EXPRESSION_MANIFESTED_BY_MANIFESTATION type="embedded_link">
+                  <SAMEAS>
+                     <URI>
+                        <VALUE>http://publications.europa.eu/resource/celex/01979D0491-20061025.POR.pdfa1a</VALUE>
+                        <IDENTIFIER>01979D0491-20061025.POR.pdfa1a</IDENTIFIER>
+                        <TYPE>celex</TYPE>
+                     </URI>
+                  </SAMEAS>
+               </EXPRESSION_MANIFESTED_BY_MANIFESTATION>
+               <EXPRESSION_MANIFESTED_BY_MANIFESTATION type="embedded_link">
+                  <SAMEAS>
+                     <URI>
+                        <VALUE>http://publications.europa.eu/resource/celex/01979D0491-20061025.POR.xhtml</VALUE>
+                        <IDENTIFIER>01979D0491-20061025.POR.xhtml</IDENTIFIER>
+                        <TYPE>celex</TYPE>
+                     </URI>
+                  </SAMEAS>
+               </EXPRESSION_MANIFESTED_BY_MANIFESTATION>
+            </EXPRESSION>
+            <MANIFESTATION manifestation-type="pdfa1a">
+               <MANIFESTATION_TYPE type="data">
+                  <VALUE>pdfa1a</VALUE>
+               </MANIFESTATION_TYPE>
+            </MANIFESTATION>
+            <MANIFESTATION manifestation-type="fmx4">
+               <MANIFESTATION_TYPE type="data">
+                  <VALUE>fmx4</VALUE>
+               </MANIFESTATION_TYPE>
+            </MANIFESTATION>
+            <MANIFESTATION manifestation-type="xhtml">
+               <MANIFESTATION_TYPE type="data">
+                  <VALUE>xhtml</VALUE>
+               </MANIFESTATION_TYPE>
+            </MANIFESTATION>
+         </EMBEDDED_NOTICE>
+         <URI>
+            <VALUE>http://publications.europa.eu/resource/cellar/b8e4cac3-4287-4e5b-83ce-ac6ac43fc05a.0013</VALUE>
+            <IDENTIFIER>b8e4cac3-4287-4e5b-83ce-ac6ac43fc05a.0013</IDENTIFIER>
+            <TYPE>cellar</TYPE>
+         </URI>
+         <SAMEAS>
+            <URI>
+               <VALUE>http://publications.europa.eu/resource/celex/01979D0491-20061025.POR</VALUE>
+               <IDENTIFIER>01979D0491-20061025.POR</IDENTIFIER>
+               <TYPE>celex</TYPE>
+            </URI>
+         </SAMEAS>
+         <SAMEAS>
+            <URI>
+               <VALUE>http://publications.europa.eu/resource/consolidation/1979D0491%2F20061025.POR</VALUE>
+               <IDENTIFIER>1979D0491/20061025.POR</IDENTIFIER>
+               <TYPE>consolidation</TYPE>
+            </URI>
+         </SAMEAS>
+      </WORK_HAS_EXPRESSION>
+      <RESOURCE_LEGAL_DATE_ENTRY-INTO-FORCE type="date">
+         <VALUE>2006-10-25</VALUE>
+         <YEAR>2006</YEAR>
+         <MONTH>10</MONTH>
+         <DAY>25</DAY>
+      </RESOURCE_LEGAL_DATE_ENTRY-INTO-FORCE>
+      <WORK_HAS_EXPRESSION type="link">
+         <EMBEDDED_NOTICE>
+            <WORK>
+               <RESOURCE_LEGAL_NUMBER_NATURAL_CELEX type="data">
+                  <VALUE>0491</VALUE>
+               </RESOURCE_LEGAL_NUMBER_NATURAL_CELEX>
+               <RESOURCE_LEGAL_TYPE type="data">
+                  <VALUE>D</VALUE>
+               </RESOURCE_LEGAL_TYPE>
+               <RESOURCE_LEGAL_NUMBER_NATURAL type="data">
+                  <VALUE>491</VALUE>
+               </RESOURCE_LEGAL_NUMBER_NATURAL>
+               <ID_SECTOR type="data">
+                  <VALUE>0</VALUE>
+               </ID_SECTOR>
+               <RESOURCE_LEGAL_ID_CELEX type="data">
+                  <VALUE>01979D0491-20061025</VALUE>
+               </RESOURCE_LEGAL_ID_CELEX>
+               <WORK_HAS_RESOURCE-TYPE type="concept">
+                  <URI>
+                     <VALUE>http://publications.europa.eu/resource/authority/resource-type/CONS_TEXT</VALUE>
+                     <IDENTIFIER>CONS_TEXT</IDENTIFIER>
+                     <TYPE>resource-type</TYPE>
+                  </URI>
+                  <OP-CODE>CONS_TEXT</OP-CODE>
+                  <IDENTIFIER>CONS_TEXT</IDENTIFIER>
+                  <PREFLABEL>Testo consolidato</PREFLABEL>
+               </WORK_HAS_RESOURCE-TYPE>
+               <NUMBER type="data">
+                  <VALUE>1979D0491/20061025</VALUE>
+               </NUMBER>
+               <ID_CELEX type="data">
+                  <VALUE>01979D0491-20061025</VALUE>
+               </ID_CELEX>
+               <WORK_DATE_DOCUMENT type="date">
+                  <VALUE>2006-10-25</VALUE>
+                  <YEAR>2006</YEAR>
+                  <MONTH>10</MONTH>
+                  <DAY>25</DAY>
+               </WORK_DATE_DOCUMENT>
+               <RESOURCE_LEGAL_YEAR type="data">
+                  <VALUE>1979</VALUE>
+               </RESOURCE_LEGAL_YEAR>
+               <YEAR type="data">
+                  <VALUE>1979</VALUE>
+               </YEAR>
+               <TYPE>cdm:resource_legal</TYPE>
+               <TYPE>cdm:act_consolidated</TYPE>
+               <TYPE>cdm:work</TYPE>
+            </WORK>
+            <EXPRESSION>
+               <EXPRESSION_MANIFESTED_BY_MANIFESTATION type="embedded_link">
+                  <SAMEAS>
+                     <URI>
+                        <VALUE>http://publications.europa.eu/resource/celex/01979D0491-20061025.LIT.xhtml</VALUE>
+                        <IDENTIFIER>01979D0491-20061025.LIT.xhtml</IDENTIFIER>
+                        <TYPE>celex</TYPE>
+                     </URI>
+                  </SAMEAS>
+               </EXPRESSION_MANIFESTED_BY_MANIFESTATION>
+               <EXPRESSION_USES_LANGUAGE type="concept">
+                  <URI>
+                     <VALUE>http://publications.europa.eu/resource/authority/language/LIT</VALUE>
+                     <IDENTIFIER>LIT</IDENTIFIER>
+                     <TYPE>language</TYPE>
+                  </URI>
+                  <OP-CODE>LIT</OP-CODE>
+                  <IDENTIFIER>LIT</IDENTIFIER>
+                  <PREFLABEL>lituano</PREFLABEL>
+               </EXPRESSION_USES_LANGUAGE>
+               <EXPRESSION_TITLE type="data">
+                  <VALUE>Komisijos sprendimas 1979 m. gegužės 17 d. nustatantis vynuogynų plotų pagrindinių tyrimų duomenų perrašymo į mašininio skaitymo formą kodą ir tipines taisykles (79/491/EEB) </VALUE>
+               </EXPRESSION_TITLE>
+               <EXPRESSION_MANIFESTED_BY_MANIFESTATION type="embedded_link">
+                  <SAMEAS>
+                     <URI>
+                        <VALUE>http://publications.europa.eu/resource/celex/01979D0491-20061025.LIT.pdfa1a</VALUE>
+                        <IDENTIFIER>01979D0491-20061025.LIT.pdfa1a</IDENTIFIER>
+                        <TYPE>celex</TYPE>
+                     </URI>
+                  </SAMEAS>
+               </EXPRESSION_MANIFESTED_BY_MANIFESTATION>
+               <EXPRESSION_MANIFESTED_BY_MANIFESTATION type="embedded_link">
+                  <SAMEAS>
+                     <URI>
+                        <VALUE>http://publications.europa.eu/resource/celex/01979D0491-20061025.LIT.fmx4</VALUE>
+                        <IDENTIFIER>01979D0491-20061025.LIT.fmx4</IDENTIFIER>
+                        <TYPE>celex</TYPE>
+                     </URI>
+                  </SAMEAS>
+               </EXPRESSION_MANIFESTED_BY_MANIFESTATION>
+            </EXPRESSION>
+            <MANIFESTATION manifestation-type="pdfa1a">
+               <MANIFESTATION_TYPE type="data">
+                  <VALUE>pdfa1a</VALUE>
+               </MANIFESTATION_TYPE>
+            </MANIFESTATION>
+            <MANIFESTATION manifestation-type="fmx4">
+               <MANIFESTATION_TYPE type="data">
+                  <VALUE>fmx4</VALUE>
+               </MANIFESTATION_TYPE>
+            </MANIFESTATION>
+            <MANIFESTATION manifestation-type="xhtml">
+               <MANIFESTATION_TYPE type="data">
+                  <VALUE>xhtml</VALUE>
+               </MANIFESTATION_TYPE>
+            </MANIFESTATION>
+         </EMBEDDED_NOTICE>
+         <URI>
+            <VALUE>http://publications.europa.eu/resource/cellar/b8e4cac3-4287-4e5b-83ce-ac6ac43fc05a.0008</VALUE>
+            <IDENTIFIER>b8e4cac3-4287-4e5b-83ce-ac6ac43fc05a.0008</IDENTIFIER>
+            <TYPE>cellar</TYPE>
+         </URI>
+         <SAMEAS>
+            <URI>
+               <VALUE>http://publications.europa.eu/resource/consolidation/1979D0491%2F20061025.LIT</VALUE>
+               <IDENTIFIER>1979D0491/20061025.LIT</IDENTIFIER>
+               <TYPE>consolidation</TYPE>
+            </URI>
+         </SAMEAS>
+         <SAMEAS>
+            <URI>
+               <VALUE>http://publications.europa.eu/resource/celex/01979D0491-20061025.LIT</VALUE>
+               <IDENTIFIER>01979D0491-20061025.LIT</IDENTIFIER>
+               <TYPE>celex</TYPE>
+            </URI>
+         </SAMEAS>
+      </WORK_HAS_EXPRESSION>
+      <WORK_HAS_EXPRESSION type="link">
+         <EMBEDDED_NOTICE>
+            <WORK>
+               <RESOURCE_LEGAL_NUMBER_NATURAL_CELEX type="data">
+                  <VALUE>0491</VALUE>
+               </RESOURCE_LEGAL_NUMBER_NATURAL_CELEX>
+               <RESOURCE_LEGAL_TYPE type="data">
+                  <VALUE>D</VALUE>
+               </RESOURCE_LEGAL_TYPE>
+               <RESOURCE_LEGAL_NUMBER_NATURAL type="data">
+                  <VALUE>491</VALUE>
+               </RESOURCE_LEGAL_NUMBER_NATURAL>
+               <ID_SECTOR type="data">
+                  <VALUE>0</VALUE>
+               </ID_SECTOR>
+               <RESOURCE_LEGAL_ID_CELEX type="data">
+                  <VALUE>01979D0491-20061025</VALUE>
+               </RESOURCE_LEGAL_ID_CELEX>
+               <WORK_HAS_RESOURCE-TYPE type="concept">
+                  <URI>
+                     <VALUE>http://publications.europa.eu/resource/authority/resource-type/CONS_TEXT</VALUE>
+                     <IDENTIFIER>CONS_TEXT</IDENTIFIER>
+                     <TYPE>resource-type</TYPE>
+                  </URI>
+                  <OP-CODE>CONS_TEXT</OP-CODE>
+                  <IDENTIFIER>CONS_TEXT</IDENTIFIER>
+                  <PREFLABEL>Testo consolidato</PREFLABEL>
+               </WORK_HAS_RESOURCE-TYPE>
+               <NUMBER type="data">
+                  <VALUE>1979D0491/20061025</VALUE>
+               </NUMBER>
+               <ID_CELEX type="data">
+                  <VALUE>01979D0491-20061025</VALUE>
+               </ID_CELEX>
+               <WORK_DATE_DOCUMENT type="date">
+                  <VALUE>2006-10-25</VALUE>
+                  <YEAR>2006</YEAR>
+                  <MONTH>10</MONTH>
+                  <DAY>25</DAY>
+               </WORK_DATE_DOCUMENT>
+               <RESOURCE_LEGAL_YEAR type="data">
+                  <VALUE>1979</VALUE>
+               </RESOURCE_LEGAL_YEAR>
+               <YEAR type="data">
+                  <VALUE>1979</VALUE>
+               </YEAR>
+               <TYPE>cdm:resource_legal</TYPE>
+               <TYPE>cdm:act_consolidated</TYPE>
+               <TYPE>cdm:work</TYPE>
+            </WORK>
+            <EXPRESSION>
+               <EXPRESSION_MANIFESTED_BY_MANIFESTATION type="embedded_link">
+                  <SAMEAS>
+                     <URI>
+                        <VALUE>http://publications.europa.eu/resource/celex/01979D0491-20061025.CES.fmx4</VALUE>
+                        <IDENTIFIER>01979D0491-20061025.CES.fmx4</IDENTIFIER>
+                        <TYPE>celex</TYPE>
+                     </URI>
+                  </SAMEAS>
+               </EXPRESSION_MANIFESTED_BY_MANIFESTATION>
+               <EXPRESSION_MANIFESTED_BY_MANIFESTATION type="embedded_link">
+                  <SAMEAS>
+                     <URI>
+                        <VALUE>http://publications.europa.eu/resource/celex/01979D0491-20061025.CES.pdfa1a</VALUE>
+                        <IDENTIFIER>01979D0491-20061025.CES.pdfa1a</IDENTIFIER>
+                        <TYPE>celex</TYPE>
+                     </URI>
+                  </SAMEAS>
+               </EXPRESSION_MANIFESTED_BY_MANIFESTATION>
+               <EXPRESSION_MANIFESTED_BY_MANIFESTATION type="embedded_link">
+                  <SAMEAS>
+                     <URI>
+                        <VALUE>http://publications.europa.eu/resource/celex/01979D0491-20061025.CES.xhtml</VALUE>
+                        <IDENTIFIER>01979D0491-20061025.CES.xhtml</IDENTIFIER>
+                        <TYPE>celex</TYPE>
+                     </URI>
+                  </SAMEAS>
+               </EXPRESSION_MANIFESTED_BY_MANIFESTATION>
+               <EXPRESSION_TITLE type="data">
+                  <VALUE>Rozhodnutí Komise ze dne 17. května 1979 o stanovení kódu a standardních pravidel pro přepis údajů základního zjišťování ploch vinic do strojově čitelné formy (79/491/EHS) </VALUE>
+               </EXPRESSION_TITLE>
+               <EXPRESSION_USES_LANGUAGE type="concept">
+                  <URI>
+                     <VALUE>http://publications.europa.eu/resource/authority/language/CES</VALUE>
+                     <IDENTIFIER>CES</IDENTIFIER>
+                     <TYPE>language</TYPE>
+                  </URI>
+                  <OP-CODE>CES</OP-CODE>
+                  <IDENTIFIER>CES</IDENTIFIER>
+                  <PREFLABEL>ceco</PREFLABEL>
+               </EXPRESSION_USES_LANGUAGE>
+            </EXPRESSION>
+            <MANIFESTATION manifestation-type="pdfa1a">
+               <MANIFESTATION_TYPE type="data">
+                  <VALUE>pdfa1a</VALUE>
+               </MANIFESTATION_TYPE>
+            </MANIFESTATION>
+            <MANIFESTATION manifestation-type="fmx4">
+               <MANIFESTATION_TYPE type="data">
+                  <VALUE>fmx4</VALUE>
+               </MANIFESTATION_TYPE>
+            </MANIFESTATION>
+            <MANIFESTATION manifestation-type="xhtml">
+               <MANIFESTATION_TYPE type="data">
+                  <VALUE>xhtml</VALUE>
+               </MANIFESTATION_TYPE>
+            </MANIFESTATION>
+         </EMBEDDED_NOTICE>
+         <URI>
+            <VALUE>http://publications.europa.eu/resource/cellar/b8e4cac3-4287-4e5b-83ce-ac6ac43fc05a.0009</VALUE>
+            <IDENTIFIER>b8e4cac3-4287-4e5b-83ce-ac6ac43fc05a.0009</IDENTIFIER>
+            <TYPE>cellar</TYPE>
+         </URI>
+         <SAMEAS>
+            <URI>
+               <VALUE>http://publications.europa.eu/resource/consolidation/1979D0491%2F20061025.CES</VALUE>
+               <IDENTIFIER>1979D0491/20061025.CES</IDENTIFIER>
+               <TYPE>consolidation</TYPE>
+            </URI>
+         </SAMEAS>
+         <SAMEAS>
+            <URI>
+               <VALUE>http://publications.europa.eu/resource/celex/01979D0491-20061025.CES</VALUE>
+               <IDENTIFIER>01979D0491-20061025.CES</IDENTIFIER>
+               <TYPE>celex</TYPE>
+            </URI>
+         </SAMEAS>
+      </WORK_HAS_EXPRESSION>
+      <ACT_CONSOLIDATED_DATE type="date">
+         <VALUE>2006-10-25</VALUE>
+         <YEAR>2006</YEAR>
+         <MONTH>10</MONTH>
+         <DAY>25</DAY>
+      </ACT_CONSOLIDATED_DATE>
+      <WORK_HAS_EXPRESSION type="link">
+         <EMBEDDED_NOTICE>
+            <WORK>
+               <RESOURCE_LEGAL_NUMBER_NATURAL_CELEX type="data">
+                  <VALUE>0491</VALUE>
+               </RESOURCE_LEGAL_NUMBER_NATURAL_CELEX>
+               <RESOURCE_LEGAL_TYPE type="data">
+                  <VALUE>D</VALUE>
+               </RESOURCE_LEGAL_TYPE>
+               <RESOURCE_LEGAL_NUMBER_NATURAL type="data">
+                  <VALUE>491</VALUE>
+               </RESOURCE_LEGAL_NUMBER_NATURAL>
+               <ID_SECTOR type="data">
+                  <VALUE>0</VALUE>
+               </ID_SECTOR>
+               <RESOURCE_LEGAL_ID_CELEX type="data">
+                  <VALUE>01979D0491-20061025</VALUE>
+               </RESOURCE_LEGAL_ID_CELEX>
+               <WORK_HAS_RESOURCE-TYPE type="concept">
+                  <URI>
+                     <VALUE>http://publications.europa.eu/resource/authority/resource-type/CONS_TEXT</VALUE>
+                     <IDENTIFIER>CONS_TEXT</IDENTIFIER>
+                     <TYPE>resource-type</TYPE>
+                  </URI>
+                  <OP-CODE>CONS_TEXT</OP-CODE>
+                  <IDENTIFIER>CONS_TEXT</IDENTIFIER>
+                  <PREFLABEL>Testo consolidato</PREFLABEL>
+               </WORK_HAS_RESOURCE-TYPE>
+               <NUMBER type="data">
+                  <VALUE>1979D0491/20061025</VALUE>
+               </NUMBER>
+               <ID_CELEX type="data">
+                  <VALUE>01979D0491-20061025</VALUE>
+               </ID_CELEX>
+               <WORK_DATE_DOCUMENT type="date">
+                  <VALUE>2006-10-25</VALUE>
+                  <YEAR>2006</YEAR>
+                  <MONTH>10</MONTH>
+                  <DAY>25</DAY>
+               </WORK_DATE_DOCUMENT>
+               <RESOURCE_LEGAL_YEAR type="data">
+                  <VALUE>1979</VALUE>
+               </RESOURCE_LEGAL_YEAR>
+               <YEAR type="data">
+                  <VALUE>1979</VALUE>
+               </YEAR>
+               <TYPE>cdm:resource_legal</TYPE>
+               <TYPE>cdm:act_consolidated</TYPE>
+               <TYPE>cdm:work</TYPE>
+            </WORK>
+            <EXPRESSION>
+               <EXPRESSION_TITLE type="data">
+                  <VALUE>Kommissionens beslutning af 17. maj 1979 om fastsættelse af kode og standardregler for overførsel i maskinlæsbar form af resultater fra basisundersøgelser af vinarealerne (79/491/EØF) </VALUE>
+               </EXPRESSION_TITLE>
+               <EXPRESSION_MANIFESTED_BY_MANIFESTATION type="embedded_link">
+                  <SAMEAS>
+                     <URI>
+                        <VALUE>http://publications.europa.eu/resource/celex/01979D0491-20061025.DAN.xhtml</VALUE>
+                        <IDENTIFIER>01979D0491-20061025.DAN.xhtml</IDENTIFIER>
+                        <TYPE>celex</TYPE>
+                     </URI>
+                  </SAMEAS>
+               </EXPRESSION_MANIFESTED_BY_MANIFESTATION>
+               <EXPRESSION_MANIFESTED_BY_MANIFESTATION type="embedded_link">
+                  <SAMEAS>
+                     <URI>
+                        <VALUE>http://publications.europa.eu/resource/celex/01979D0491-20061025.DAN.fmx4</VALUE>
+                        <IDENTIFIER>01979D0491-20061025.DAN.fmx4</IDENTIFIER>
+                        <TYPE>celex</TYPE>
+                     </URI>
+                  </SAMEAS>
+               </EXPRESSION_MANIFESTED_BY_MANIFESTATION>
+               <EXPRESSION_MANIFESTED_BY_MANIFESTATION type="embedded_link">
+                  <SAMEAS>
+                     <URI>
+                        <VALUE>http://publications.europa.eu/resource/celex/01979D0491-20061025.DAN.pdfa1a</VALUE>
+                        <IDENTIFIER>01979D0491-20061025.DAN.pdfa1a</IDENTIFIER>
+                        <TYPE>celex</TYPE>
+                     </URI>
+                  </SAMEAS>
+               </EXPRESSION_MANIFESTED_BY_MANIFESTATION>
+               <EXPRESSION_USES_LANGUAGE type="concept">
+                  <URI>
+                     <VALUE>http://publications.europa.eu/resource/authority/language/DAN</VALUE>
+                     <IDENTIFIER>DAN</IDENTIFIER>
+                     <TYPE>language</TYPE>
+                  </URI>
+                  <OP-CODE>DAN</OP-CODE>
+                  <IDENTIFIER>DAN</IDENTIFIER>
+                  <PREFLABEL>danese</PREFLABEL>
+               </EXPRESSION_USES_LANGUAGE>
+            </EXPRESSION>
+            <MANIFESTATION manifestation-type="pdfa1a">
+               <MANIFESTATION_TYPE type="data">
+                  <VALUE>pdfa1a</VALUE>
+               </MANIFESTATION_TYPE>
+            </MANIFESTATION>
+            <MANIFESTATION manifestation-type="fmx4">
+               <MANIFESTATION_TYPE type="data">
+                  <VALUE>fmx4</VALUE>
+               </MANIFESTATION_TYPE>
+            </MANIFESTATION>
+            <MANIFESTATION manifestation-type="xhtml">
+               <MANIFESTATION_TYPE type="data">
+                  <VALUE>xhtml</VALUE>
+               </MANIFESTATION_TYPE>
+            </MANIFESTATION>
+         </EMBEDDED_NOTICE>
+         <URI>
+            <VALUE>http://publications.europa.eu/resource/cellar/b8e4cac3-4287-4e5b-83ce-ac6ac43fc05a.0003</VALUE>
+            <IDENTIFIER>b8e4cac3-4287-4e5b-83ce-ac6ac43fc05a.0003</IDENTIFIER>
+            <TYPE>cellar</TYPE>
+         </URI>
+         <SAMEAS>
+            <URI>
+               <VALUE>http://publications.europa.eu/resource/consolidation/1979D0491%2F20061025.DAN</VALUE>
+               <IDENTIFIER>1979D0491/20061025.DAN</IDENTIFIER>
+               <TYPE>consolidation</TYPE>
+            </URI>
+         </SAMEAS>
+         <SAMEAS>
+            <URI>
+               <VALUE>http://publications.europa.eu/resource/celex/01979D0491-20061025.DAN</VALUE>
+               <IDENTIFIER>01979D0491-20061025.DAN</IDENTIFIER>
+               <TYPE>celex</TYPE>
+            </URI>
+         </SAMEAS>
+      </WORK_HAS_EXPRESSION>
+      <ELI type="data">
+         <VALUE>http://data.europa.eu/eli/dec/1979/491/2006-10-25</VALUE>
+      </ELI>
+      <IDENTIFIER type="data">
+         <VALUE>consolidation:1979D0491/20061025</VALUE>
+      </IDENTIFIER>
+      <YEAR type="data">
+         <VALUE>1979</VALUE>
+      </YEAR>
+      <WORK_HAS_EXPRESSION type="link">
+         <EMBEDDED_NOTICE>
+            <WORK>
+               <RESOURCE_LEGAL_NUMBER_NATURAL_CELEX type="data">
+                  <VALUE>0491</VALUE>
+               </RESOURCE_LEGAL_NUMBER_NATURAL_CELEX>
+               <RESOURCE_LEGAL_TYPE type="data">
+                  <VALUE>D</VALUE>
+               </RESOURCE_LEGAL_TYPE>
+               <RESOURCE_LEGAL_NUMBER_NATURAL type="data">
+                  <VALUE>491</VALUE>
+               </RESOURCE_LEGAL_NUMBER_NATURAL>
+               <ID_SECTOR type="data">
+                  <VALUE>0</VALUE>
+               </ID_SECTOR>
+               <RESOURCE_LEGAL_ID_CELEX type="data">
+                  <VALUE>01979D0491-20061025</VALUE>
+               </RESOURCE_LEGAL_ID_CELEX>
+               <WORK_HAS_RESOURCE-TYPE type="concept">
+                  <URI>
+                     <VALUE>http://publications.europa.eu/resource/authority/resource-type/CONS_TEXT</VALUE>
+                     <IDENTIFIER>CONS_TEXT</IDENTIFIER>
+                     <TYPE>resource-type</TYPE>
+                  </URI>
+                  <OP-CODE>CONS_TEXT</OP-CODE>
+                  <IDENTIFIER>CONS_TEXT</IDENTIFIER>
+                  <PREFLABEL>Testo consolidato</PREFLABEL>
+               </WORK_HAS_RESOURCE-TYPE>
+               <NUMBER type="data">
+                  <VALUE>1979D0491/20061025</VALUE>
+               </NUMBER>
+               <ID_CELEX type="data">
+                  <VALUE>01979D0491-20061025</VALUE>
+               </ID_CELEX>
+               <WORK_DATE_DOCUMENT type="date">
+                  <VALUE>2006-10-25</VALUE>
+                  <YEAR>2006</YEAR>
+                  <MONTH>10</MONTH>
+                  <DAY>25</DAY>
+               </WORK_DATE_DOCUMENT>
+               <RESOURCE_LEGAL_YEAR type="data">
+                  <VALUE>1979</VALUE>
+               </RESOURCE_LEGAL_YEAR>
+               <YEAR type="data">
+                  <VALUE>1979</VALUE>
+               </YEAR>
+               <TYPE>cdm:resource_legal</TYPE>
+               <TYPE>cdm:act_consolidated</TYPE>
+               <TYPE>cdm:work</TYPE>
+            </WORK>
+            <EXPRESSION>
+               <EXPRESSION_MANIFESTED_BY_MANIFESTATION type="embedded_link">
+                  <SAMEAS>
+                     <URI>
+                        <VALUE>http://publications.europa.eu/resource/celex/01979D0491-20061025.SLK.xhtml</VALUE>
+                        <IDENTIFIER>01979D0491-20061025.SLK.xhtml</IDENTIFIER>
+                        <TYPE>celex</TYPE>
+                     </URI>
+                  </SAMEAS>
+               </EXPRESSION_MANIFESTED_BY_MANIFESTATION>
+               <EXPRESSION_MANIFESTED_BY_MANIFESTATION type="embedded_link">
+                  <SAMEAS>
+                     <URI>
+                        <VALUE>http://publications.europa.eu/resource/celex/01979D0491-20061025.SLK.fmx4</VALUE>
+                        <IDENTIFIER>01979D0491-20061025.SLK.fmx4</IDENTIFIER>
+                        <TYPE>celex</TYPE>
+                     </URI>
+                  </SAMEAS>
+               </EXPRESSION_MANIFESTED_BY_MANIFESTATION>
+               <EXPRESSION_USES_LANGUAGE type="concept">
+                  <URI>
+                     <VALUE>http://publications.europa.eu/resource/authority/language/SLK</VALUE>
+                     <IDENTIFIER>SLK</IDENTIFIER>
+                     <TYPE>language</TYPE>
+                  </URI>
+                  <OP-CODE>SLK</OP-CODE>
+                  <IDENTIFIER>SLK</IDENTIFIER>
+                  <PREFLABEL>slovacco</PREFLABEL>
+               </EXPRESSION_USES_LANGUAGE>
+               <EXPRESSION_TITLE type="data">
+                  <VALUE>Rozhodnutie Komisie zo 17. mája 1979 stanovujúce kódy a štandardné pravidlá pre prepis údajov zo základných zisťovaní plôch vinohradov do strojovo čitateľnej formy (79/491/EHS) </VALUE>
+               </EXPRESSION_TITLE>
+               <EXPRESSION_MANIFESTED_BY_MANIFESTATION type="embedded_link">
+                  <SAMEAS>
+                     <URI>
+                        <VALUE>http://publications.europa.eu/resource/celex/01979D0491-20061025.SLK.pdfa1a</VALUE>
+                        <IDENTIFIER>01979D0491-20061025.SLK.pdfa1a</IDENTIFIER>
+                        <TYPE>celex</TYPE>
+                     </URI>
+                  </SAMEAS>
+               </EXPRESSION_MANIFESTED_BY_MANIFESTATION>
+            </EXPRESSION>
+            <MANIFESTATION manifestation-type="pdfa1a">
+               <MANIFESTATION_TYPE type="data">
+                  <VALUE>pdfa1a</VALUE>
+               </MANIFESTATION_TYPE>
+            </MANIFESTATION>
+            <MANIFESTATION manifestation-type="fmx4">
+               <MANIFESTATION_TYPE type="data">
+                  <VALUE>fmx4</VALUE>
+               </MANIFESTATION_TYPE>
+            </MANIFESTATION>
+            <MANIFESTATION manifestation-type="xhtml">
+               <MANIFESTATION_TYPE type="data">
+                  <VALUE>xhtml</VALUE>
+               </MANIFESTATION_TYPE>
+            </MANIFESTATION>
+         </EMBEDDED_NOTICE>
+         <URI>
+            <VALUE>http://publications.europa.eu/resource/cellar/b8e4cac3-4287-4e5b-83ce-ac6ac43fc05a.0002</VALUE>
+            <IDENTIFIER>b8e4cac3-4287-4e5b-83ce-ac6ac43fc05a.0002</IDENTIFIER>
+            <TYPE>cellar</TYPE>
+         </URI>
+         <SAMEAS>
+            <URI>
+               <VALUE>http://publications.europa.eu/resource/celex/01979D0491-20061025.SLK</VALUE>
+               <IDENTIFIER>01979D0491-20061025.SLK</IDENTIFIER>
+               <TYPE>celex</TYPE>
+            </URI>
+         </SAMEAS>
+         <SAMEAS>
+            <URI>
+               <VALUE>http://publications.europa.eu/resource/consolidation/1979D0491%2F20061025.SLK</VALUE>
+               <IDENTIFIER>1979D0491/20061025.SLK</IDENTIFIER>
+               <TYPE>consolidation</TYPE>
+            </URI>
+         </SAMEAS>
+      </WORK_HAS_EXPRESSION>
+      <TYPE>cdm:resource_legal</TYPE>
+      <TYPE>D</TYPE>
+      <TYPE>cdm:act_consolidated</TYPE>
+      <TYPE>cdm:work</TYPE>
+   </WORK>
+   <EXPRESSION>
+      <URI>
+         <VALUE>http://publications.europa.eu/resource/cellar/b8e4cac3-4287-4e5b-83ce-ac6ac43fc05a.0004</VALUE>
+         <IDENTIFIER>b8e4cac3-4287-4e5b-83ce-ac6ac43fc05a.0004</IDENTIFIER>
+         <TYPE>cellar</TYPE>
+      </URI>
+      <SAMEAS>
+         <URI>
+            <VALUE>http://publications.europa.eu/resource/consolidation/1979D0491%2F20061025.ITA</VALUE>
+            <IDENTIFIER>1979D0491/20061025.ITA</IDENTIFIER>
+            <TYPE>consolidation</TYPE>
+         </URI>
+      </SAMEAS>
+      <SAMEAS>
+         <URI>
+            <VALUE>http://publications.europa.eu/resource/celex/01979D0491-20061025.ITA</VALUE>
+            <IDENTIFIER>01979D0491-20061025.ITA</IDENTIFIER>
+            <TYPE>celex</TYPE>
+         </URI>
+      </SAMEAS>
+      <TITLE type="data">
+         <VALUE>CELEX1</VALUE>
+      </TITLE>
+      <LANG type="data">
+         <VALUE>ita</VALUE>
+      </LANG>
+      <CREATIONDATE type="date">
+         <VALUE>1001-01-01T00:00:00.000+00:00</VALUE>
+         <YEAR>1001</YEAR>
+         <MONTH>01</MONTH>
+         <DAY>01</DAY>
+      </CREATIONDATE>
+      <EXPRESSION_TITLE type="data">
+         <VALUE>Decisione della Commissione del 17 maggio 1979 che fissa il codice e le norme-tipo riguardanti la trascrizione in una forma suscettibile di lettura meccanica dei dati relativi alle indagini di base sulle superfici viticole (79/491/CEE) </VALUE>
+      </EXPRESSION_TITLE>
+      <LASTMODIFICATIONDATE type="date">
+         <VALUE>2019-04-11T00:44:33.634+02:00</VALUE>
+         <YEAR>2019</YEAR>
+         <MONTH>04</MONTH>
+         <DAY>11</DAY>
+      </LASTMODIFICATIONDATE>
+      <EXPRESSION_MANIFESTED_BY_MANIFESTATION type="link">
+         <URI>
+            <VALUE>http://publications.europa.eu/resource/cellar/b8e4cac3-4287-4e5b-83ce-ac6ac43fc05a.0004.03</VALUE>
+            <IDENTIFIER>b8e4cac3-4287-4e5b-83ce-ac6ac43fc05a.0004.03</IDENTIFIER>
+            <TYPE>cellar</TYPE>
+         </URI>
+         <SAMEAS>
+            <URI>
+               <VALUE>http://publications.europa.eu/resource/celex/01979D0491-20061025.ITA.xhtml</VALUE>
+               <IDENTIFIER>01979D0491-20061025.ITA.xhtml</IDENTIFIER>
+               <TYPE>celex</TYPE>
+            </URI>
+         </SAMEAS>
+      </EXPRESSION_MANIFESTED_BY_MANIFESTATION>
+      <TITLE type="data">
+         <VALUE>Decisione della Commissione del 17 maggio 1979 che fissa il codice e le norme-tipo riguardanti la trascrizione in una forma suscettibile di lettura meccanica dei dati relativi alle indagini di base sulle superfici viticole (79/491/CEE) </VALUE>
+      </TITLE>
+      <EXPRESSION_BELONGS_TO_WORK type="link">
+         <URI>
+            <VALUE>http://publications.europa.eu/resource/cellar/b8e4cac3-4287-4e5b-83ce-ac6ac43fc05a</VALUE>
+            <IDENTIFIER>b8e4cac3-4287-4e5b-83ce-ac6ac43fc05a</IDENTIFIER>
+            <TYPE>cellar</TYPE>
+         </URI>
+         <SAMEAS>
+            <URI>
+               <VALUE>http://publications.europa.eu/resource/celex/01979D0491-20061025</VALUE>
+               <IDENTIFIER>01979D0491-20061025</IDENTIFIER>
+               <TYPE>celex</TYPE>
+            </URI>
+         </SAMEAS>
+         <SAMEAS>
+            <URI>
+               <VALUE>http://publications.europa.eu/resource/eli/dec/1979/491/2006-10-25</VALUE>
+               <IDENTIFIER>dec:1979:491:2006-10-25</IDENTIFIER>
+               <TYPE>eli</TYPE>
+            </URI>
+         </SAMEAS>
+         <SAMEAS>
+            <URI>
+               <VALUE>http://publications.europa.eu/resource/consolidation/1979D0491%2F20061025</VALUE>
+               <IDENTIFIER>1979D0491/20061025</IDENTIFIER>
+               <TYPE>consolidation</TYPE>
+            </URI>
+         </SAMEAS>
+      </EXPRESSION_BELONGS_TO_WORK>
+      <EXPRESSION_MANIFESTED_BY_MANIFESTATION type="link">
+         <URI>
+            <VALUE>http://publications.europa.eu/resource/cellar/b8e4cac3-4287-4e5b-83ce-ac6ac43fc05a.0004.02</VALUE>
+            <IDENTIFIER>b8e4cac3-4287-4e5b-83ce-ac6ac43fc05a.0004.02</IDENTIFIER>
+            <TYPE>cellar</TYPE>
+         </URI>
+         <SAMEAS>
+            <URI>
+               <VALUE>http://publications.europa.eu/resource/celex/01979D0491-20061025.ITA.fmx4</VALUE>
+               <IDENTIFIER>01979D0491-20061025.ITA.fmx4</IDENTIFIER>
+               <TYPE>celex</TYPE>
+            </URI>
+         </SAMEAS>
+      </EXPRESSION_MANIFESTED_BY_MANIFESTATION>
+      <EXPRESSION_USES_LANGUAGE type="concept">
+         <URI>
+            <VALUE>http://publications.europa.eu/resource/authority/language/ITA</VALUE>
+            <IDENTIFIER>ITA</IDENTIFIER>
+            <TYPE>language</TYPE>
+         </URI>
+         <OP-CODE>ITA</OP-CODE>
+         <IDENTIFIER>ITA</IDENTIFIER>
+         <PREFLABEL>italiano</PREFLABEL>
+         <ALTLABEL>italiano</ALTLABEL>
+      </EXPRESSION_USES_LANGUAGE>
+      <LANG type="data">
+         <VALUE>it</VALUE>
+      </LANG>
+      <EXPRESSION_MANIFESTED_BY_MANIFESTATION type="link">
+         <URI>
+            <VALUE>http://publications.europa.eu/resource/cellar/b8e4cac3-4287-4e5b-83ce-ac6ac43fc05a.0004.01</VALUE>
+            <IDENTIFIER>b8e4cac3-4287-4e5b-83ce-ac6ac43fc05a.0004.01</IDENTIFIER>
+            <TYPE>cellar</TYPE>
+         </URI>
+         <SAMEAS>
+            <URI>
+               <VALUE>http://publications.europa.eu/resource/celex/01979D0491-20061025.ITA.pdfa1a</VALUE>
+               <IDENTIFIER>01979D0491-20061025.ITA.pdfa1a</IDENTIFIER>
+               <TYPE>celex</TYPE>
+            </URI>
+         </SAMEAS>
+      </EXPRESSION_MANIFESTED_BY_MANIFESTATION>
+   </EXPRESSION>
+   <MANIFESTATION manifestation-type="xhtml">
+      <URI>
+         <VALUE>http://publications.europa.eu/resource/cellar/b8e4cac3-4287-4e5b-83ce-ac6ac43fc05a.0004.03</VALUE>
+         <IDENTIFIER>b8e4cac3-4287-4e5b-83ce-ac6ac43fc05a.0004.03</IDENTIFIER>
+         <TYPE>cellar</TYPE>
+      </URI>
+      <SAMEAS>
+         <URI>
+            <VALUE>http://publications.europa.eu/resource/celex/01979D0491-20061025.ITA.xhtml</VALUE>
+            <IDENTIFIER>01979D0491-20061025.ITA.xhtml</IDENTIFIER>
+            <TYPE>celex</TYPE>
+         </URI>
+      </SAMEAS>
+      <CREATIONDATE type="date">
+         <VALUE>1001-01-01T00:00:00.000+00:00</VALUE>
+         <YEAR>1001</YEAR>
+         <MONTH>01</MONTH>
+         <DAY>01</DAY>
+      </CREATIONDATE>
+      <MANIFESTATION_MANIFESTS_EXPRESSION type="link">
+         <URI>
+            <VALUE>http://publications.europa.eu/resource/cellar/b8e4cac3-4287-4e5b-83ce-ac6ac43fc05a.0004</VALUE>
+            <IDENTIFIER>b8e4cac3-4287-4e5b-83ce-ac6ac43fc05a.0004</IDENTIFIER>
+            <TYPE>cellar</TYPE>
+         </URI>
+         <SAMEAS>
+            <URI>
+               <VALUE>http://publications.europa.eu/resource/celex/01979D0491-20061025.ITA</VALUE>
+               <IDENTIFIER>01979D0491-20061025.ITA</IDENTIFIER>
+               <TYPE>celex</TYPE>
+            </URI>
+         </SAMEAS>
+         <SAMEAS>
+            <URI>
+               <VALUE>http://publications.europa.eu/resource/consolidation/1979D0491%2F20061025.ITA</VALUE>
+               <IDENTIFIER>1979D0491/20061025.ITA</IDENTIFIER>
+               <TYPE>consolidation</TYPE>
+            </URI>
+         </SAMEAS>
+      </MANIFESTATION_MANIFESTS_EXPRESSION>
+      <LASTMODIFICATIONDATE type="date">
+         <VALUE>2016-04-20T15:08:50.309+02:00</VALUE>
+         <YEAR>2016</YEAR>
+         <MONTH>04</MONTH>
+         <DAY>20</DAY>
+      </LASTMODIFICATIONDATE>
+      <MANIFESTATION_TYPE type="data">
+         <VALUE>xhtml</VALUE>
+      </MANIFESTATION_TYPE>
+      <MANIFESTATION_HAS_ITEM>
+         <URI>
+            <VALUE>http://publications.europa.eu/resource/cellar/b8e4cac3-4287-4e5b-83ce-ac6ac43fc05a.0004.03/DOC_1</VALUE>
+            <IDENTIFIER>b8e4cac3-4287-4e5b-83ce-ac6ac43fc05a.0004.03:DOC_1</IDENTIFIER>
+            <TYPE>cellar</TYPE>
+         </URI>
+         <SAMEAS>
+            <URI>
+               <VALUE>http://publications.europa.eu/resource/celex/01979D0491-20061025.ITA.xhtml.CL1979D0491IT0040010.0001.html</VALUE>
+               <IDENTIFIER>01979D0491-20061025.ITA.xhtml.CL1979D0491IT0040010.0001.html</IDENTIFIER>
+               <TYPE>celex</TYPE>
+            </URI>
+         </SAMEAS>
+         <TECHMD>
+            <STREAM_ORDER type="data">
+               <VALUE>1</VALUE>
+            </STREAM_ORDER>
+            <STREAM_LABEL type="data">
+               <VALUE>celex-01979D0491-20061025.ITA.xhtml.techmd.rdf</VALUE>
+            </STREAM_LABEL>
+            <STREAM_NAME type="data">
+               <VALUE>CL1979D0491IT0040010.0001.html</VALUE>
+            </STREAM_NAME>
+            <STREAM_COMPOSITION_LEVEL type="data">
+               <VALUE>0</VALUE>
+            </STREAM_COMPOSITION_LEVEL>
+            <STREAM_SIZE type="data">
+               <VALUE>4423</VALUE>
+            </STREAM_SIZE>
+         </TECHMD>
+         <IDENTIFIER type="data">
+            <VALUE>DOC_1</VALUE>
+         </IDENTIFIER>
+         <ITEM_IDENTIFIER type="data">
+            <VALUE>DOC_1</VALUE>
+         </ITEM_IDENTIFIER>
+         <ITEM_BELONGS_TO_MANIFESTATION type="link">
+            <URI>
+               <VALUE>http://publications.europa.eu/resource/cellar/b8e4cac3-4287-4e5b-83ce-ac6ac43fc05a.0004.03</VALUE>
+               <IDENTIFIER>b8e4cac3-4287-4e5b-83ce-ac6ac43fc05a.0004.03</IDENTIFIER>
+               <TYPE>cellar</TYPE>
+            </URI>
+            <SAMEAS>
+               <URI>
+                  <VALUE>http://publications.europa.eu/resource/celex/01979D0491-20061025.ITA.xhtml</VALUE>
+                  <IDENTIFIER>01979D0491-20061025.ITA.xhtml</IDENTIFIER>
+                  <TYPE>celex</TYPE>
+               </URI>
+            </SAMEAS>
+         </ITEM_BELONGS_TO_MANIFESTATION>
+         <BELONGS_TO type="link">
+            <URI>
+               <VALUE>http://publications.europa.eu/resource/cellar/b8e4cac3-4287-4e5b-83ce-ac6ac43fc05a.0004.03</VALUE>
+               <IDENTIFIER>b8e4cac3-4287-4e5b-83ce-ac6ac43fc05a.0004.03</IDENTIFIER>
+               <TYPE>cellar</TYPE>
+            </URI>
+            <SAMEAS>
+               <URI>
+                  <VALUE>http://publications.europa.eu/resource/celex/01979D0491-20061025.ITA.xhtml</VALUE>
+                  <IDENTIFIER>01979D0491-20061025.ITA.xhtml</IDENTIFIER>
+                  <TYPE>celex</TYPE>
+               </URI>
+            </SAMEAS>
+         </BELONGS_TO>
+      </MANIFESTATION_HAS_ITEM>
+      <TYPE>xhtml</TYPE>
+   </MANIFESTATION>
+   <MANIFESTATION manifestation-type="pdfa1a">
+      <URI>
+         <VALUE>http://publications.europa.eu/resource/cellar/b8e4cac3-4287-4e5b-83ce-ac6ac43fc05a.0004.01</VALUE>
+         <IDENTIFIER>b8e4cac3-4287-4e5b-83ce-ac6ac43fc05a.0004.01</IDENTIFIER>
+         <TYPE>cellar</TYPE>
+      </URI>
+      <SAMEAS>
+         <URI>
+            <VALUE>http://publications.europa.eu/resource/celex/01979D0491-20061025.ITA.pdfa1a</VALUE>
+            <IDENTIFIER>01979D0491-20061025.ITA.pdfa1a</IDENTIFIER>
+            <TYPE>celex</TYPE>
+         </URI>
+      </SAMEAS>
+      <CREATIONDATE type="date">
+         <VALUE>1001-01-01T00:00:00.000+00:00</VALUE>
+         <YEAR>1001</YEAR>
+         <MONTH>01</MONTH>
+         <DAY>01</DAY>
+      </CREATIONDATE>
+      <LASTMODIFICATIONDATE type="date">
+         <VALUE>2016-04-20T15:08:50.309+02:00</VALUE>
+         <YEAR>2016</YEAR>
+         <MONTH>04</MONTH>
+         <DAY>20</DAY>
+      </LASTMODIFICATIONDATE>
+      <MANIFESTATION_HAS_ITEM>
+         <URI>
+            <VALUE>http://publications.europa.eu/resource/cellar/b8e4cac3-4287-4e5b-83ce-ac6ac43fc05a.0004.01/DOC_1</VALUE>
+            <IDENTIFIER>b8e4cac3-4287-4e5b-83ce-ac6ac43fc05a.0004.01:DOC_1</IDENTIFIER>
+            <TYPE>cellar</TYPE>
+         </URI>
+         <SAMEAS>
+            <URI>
+               <VALUE>http://publications.europa.eu/resource/celex/01979D0491-20061025.ITA.pdfa1a.CL1979D0491IT0040010.0001.pdf</VALUE>
+               <IDENTIFIER>01979D0491-20061025.ITA.pdfa1a.CL1979D0491IT0040010.0001.pdf</IDENTIFIER>
+               <TYPE>celex</TYPE>
+            </URI>
+         </SAMEAS>
+         <TECHMD>
+            <STREAM_COMPOSITION_LEVEL type="data">
+               <VALUE>0</VALUE>
+            </STREAM_COMPOSITION_LEVEL>
+            <STREAM_SIZE type="data">
+               <VALUE>457421</VALUE>
+            </STREAM_SIZE>
+            <STREAM_ORDER type="data">
+               <VALUE>1</VALUE>
+            </STREAM_ORDER>
+            <STREAM_NAME type="data">
+               <VALUE>CL1979D0491IT0040010.0001.pdf</VALUE>
+            </STREAM_NAME>
+            <STREAM_LABEL type="data">
+               <VALUE>celex-01979D0491-20061025.ITA.pdfa1a.techmd.rdf</VALUE>
+            </STREAM_LABEL>
+         </TECHMD>
+         <BELONGS_TO type="link">
+            <URI>
+               <VALUE>http://publications.europa.eu/resource/cellar/b8e4cac3-4287-4e5b-83ce-ac6ac43fc05a.0004.01</VALUE>
+               <IDENTIFIER>b8e4cac3-4287-4e5b-83ce-ac6ac43fc05a.0004.01</IDENTIFIER>
+               <TYPE>cellar</TYPE>
+            </URI>
+            <SAMEAS>
+               <URI>
+                  <VALUE>http://publications.europa.eu/resource/celex/01979D0491-20061025.ITA.pdfa1a</VALUE>
+                  <IDENTIFIER>01979D0491-20061025.ITA.pdfa1a</IDENTIFIER>
+                  <TYPE>celex</TYPE>
+               </URI>
+            </SAMEAS>
+         </BELONGS_TO>
+         <ITEM_BELONGS_TO_MANIFESTATION type="link">
+            <URI>
+               <VALUE>http://publications.europa.eu/resource/cellar/b8e4cac3-4287-4e5b-83ce-ac6ac43fc05a.0004.01</VALUE>
+               <IDENTIFIER>b8e4cac3-4287-4e5b-83ce-ac6ac43fc05a.0004.01</IDENTIFIER>
+               <TYPE>cellar</TYPE>
+            </URI>
+            <SAMEAS>
+               <URI>
+                  <VALUE>http://publications.europa.eu/resource/celex/01979D0491-20061025.ITA.pdfa1a</VALUE>
+                  <IDENTIFIER>01979D0491-20061025.ITA.pdfa1a</IDENTIFIER>
+                  <TYPE>celex</TYPE>
+               </URI>
+            </SAMEAS>
+         </ITEM_BELONGS_TO_MANIFESTATION>
+         <ITEM_IDENTIFIER type="data">
+            <VALUE>DOC_1</VALUE>
+         </ITEM_IDENTIFIER>
+         <IDENTIFIER type="data">
+            <VALUE>DOC_1</VALUE>
+         </IDENTIFIER>
+      </MANIFESTATION_HAS_ITEM>
+      <MANIFESTATION_SOURCE-POOL type="data">
+         <VALUE>CERES</VALUE>
+      </MANIFESTATION_SOURCE-POOL>
+      <MANIFESTATION_TYPE type="data">
+         <VALUE>pdfa1a</VALUE>
+      </MANIFESTATION_TYPE>
+      <MANIFESTATION_MANIFESTS_EXPRESSION type="link">
+         <URI>
+            <VALUE>http://publications.europa.eu/resource/cellar/b8e4cac3-4287-4e5b-83ce-ac6ac43fc05a.0004</VALUE>
+            <IDENTIFIER>b8e4cac3-4287-4e5b-83ce-ac6ac43fc05a.0004</IDENTIFIER>
+            <TYPE>cellar</TYPE>
+         </URI>
+         <SAMEAS>
+            <URI>
+               <VALUE>http://publications.europa.eu/resource/celex/01979D0491-20061025.ITA</VALUE>
+               <IDENTIFIER>01979D0491-20061025.ITA</IDENTIFIER>
+               <TYPE>celex</TYPE>
+            </URI>
+         </SAMEAS>
+         <SAMEAS>
+            <URI>
+               <VALUE>http://publications.europa.eu/resource/consolidation/1979D0491%2F20061025.ITA</VALUE>
+               <IDENTIFIER>1979D0491/20061025.ITA</IDENTIFIER>
+               <TYPE>consolidation</TYPE>
+            </URI>
+         </SAMEAS>
+      </MANIFESTATION_MANIFESTS_EXPRESSION>
+      <TYPE>pdfa1a</TYPE>
+   </MANIFESTATION>
+   <MANIFESTATION manifestation-type="fmx4">
+      <URI>
+         <VALUE>http://publications.europa.eu/resource/cellar/b8e4cac3-4287-4e5b-83ce-ac6ac43fc05a.0004.02</VALUE>
+         <IDENTIFIER>b8e4cac3-4287-4e5b-83ce-ac6ac43fc05a.0004.02</IDENTIFIER>
+         <TYPE>cellar</TYPE>
+      </URI>
+      <SAMEAS>
+         <URI>
+            <VALUE>http://publications.europa.eu/resource/celex/01979D0491-20061025.ITA.fmx4</VALUE>
+            <IDENTIFIER>01979D0491-20061025.ITA.fmx4</IDENTIFIER>
+            <TYPE>celex</TYPE>
+         </URI>
+      </SAMEAS>
+      <MANIFESTATION_HAS_ITEM>
+         <URI>
+            <VALUE>http://publications.europa.eu/resource/cellar/b8e4cac3-4287-4e5b-83ce-ac6ac43fc05a.0004.02/DOC_1</VALUE>
+            <IDENTIFIER>b8e4cac3-4287-4e5b-83ce-ac6ac43fc05a.0004.02:DOC_1</IDENTIFIER>
+            <TYPE>cellar</TYPE>
+         </URI>
+         <SAMEAS>
+            <URI>
+               <VALUE>http://publications.europa.eu/resource/celex/01979D0491-20061025.ITA.fmx4.CL1979D0491IT0040010.0001.xml</VALUE>
+               <IDENTIFIER>01979D0491-20061025.ITA.fmx4.CL1979D0491IT0040010.0001.xml</IDENTIFIER>
+               <TYPE>celex</TYPE>
+            </URI>
+         </SAMEAS>
+         <TECHMD>
+            <STREAM_ORDER type="data">
+               <VALUE>1</VALUE>
+            </STREAM_ORDER>
+            <STREAM_SIZE type="data">
+               <VALUE>27189</VALUE>
+            </STREAM_SIZE>
+            <STREAM_COMPOSITION_LEVEL type="data">
+               <VALUE>0</VALUE>
+            </STREAM_COMPOSITION_LEVEL>
+            <STREAM_LABEL type="data">
+               <VALUE>celex-01979D0491-20061025.ITA.fmx4.techmd.rdf</VALUE>
+            </STREAM_LABEL>
+            <STREAM_NAME type="data">
+               <VALUE>CL1979D0491IT0040010.0001.xml</VALUE>
+            </STREAM_NAME>
+         </TECHMD>
+         <ITEM_BELONGS_TO_MANIFESTATION type="link">
+            <URI>
+               <VALUE>http://publications.europa.eu/resource/cellar/b8e4cac3-4287-4e5b-83ce-ac6ac43fc05a.0004.02</VALUE>
+               <IDENTIFIER>b8e4cac3-4287-4e5b-83ce-ac6ac43fc05a.0004.02</IDENTIFIER>
+               <TYPE>cellar</TYPE>
+            </URI>
+            <SAMEAS>
+               <URI>
+                  <VALUE>http://publications.europa.eu/resource/celex/01979D0491-20061025.ITA.fmx4</VALUE>
+                  <IDENTIFIER>01979D0491-20061025.ITA.fmx4</IDENTIFIER>
+                  <TYPE>celex</TYPE>
+               </URI>
+            </SAMEAS>
+         </ITEM_BELONGS_TO_MANIFESTATION>
+         <BELONGS_TO type="link">
+            <URI>
+               <VALUE>http://publications.europa.eu/resource/cellar/b8e4cac3-4287-4e5b-83ce-ac6ac43fc05a.0004.02</VALUE>
+               <IDENTIFIER>b8e4cac3-4287-4e5b-83ce-ac6ac43fc05a.0004.02</IDENTIFIER>
+               <TYPE>cellar</TYPE>
+            </URI>
+            <SAMEAS>
+               <URI>
+                  <VALUE>http://publications.europa.eu/resource/celex/01979D0491-20061025.ITA.fmx4</VALUE>
+                  <IDENTIFIER>01979D0491-20061025.ITA.fmx4</IDENTIFIER>
+                  <TYPE>celex</TYPE>
+               </URI>
+            </SAMEAS>
+         </BELONGS_TO>
+         <ITEM_IDENTIFIER type="data">
+            <VALUE>DOC_1</VALUE>
+         </ITEM_IDENTIFIER>
+         <IDENTIFIER type="data">
+            <VALUE>DOC_1</VALUE>
+         </IDENTIFIER>
+      </MANIFESTATION_HAS_ITEM>
+      <MANIFESTATION_HAS_ITEM>
+         <URI>
+            <VALUE>http://publications.europa.eu/resource/cellar/b8e4cac3-4287-4e5b-83ce-ac6ac43fc05a.0004.02/DOC_2</VALUE>
+            <IDENTIFIER>b8e4cac3-4287-4e5b-83ce-ac6ac43fc05a.0004.02:DOC_2</IDENTIFIER>
+            <TYPE>cellar</TYPE>
+         </URI>
+         <SAMEAS>
+            <URI>
+               <VALUE>http://publications.europa.eu/resource/celex/01979D0491-20061025.ITA.fmx4.CL1979D0491IT0040010.0001.doc.xml</VALUE>
+               <IDENTIFIER>01979D0491-20061025.ITA.fmx4.CL1979D0491IT0040010.0001.doc.xml</IDENTIFIER>
+               <TYPE>celex</TYPE>
+            </URI>
+         </SAMEAS>
+         <TECHMD>
+            <STREAM_SIZE type="data">
+               <VALUE>1199</VALUE>
+            </STREAM_SIZE>
+            <STREAM_ORDER type="data">
+               <VALUE>2</VALUE>
+            </STREAM_ORDER>
+            <STREAM_NAME type="data">
+               <VALUE>CL1979D0491IT0040010.0001.doc.xml</VALUE>
+            </STREAM_NAME>
+            <STREAM_COMPOSITION_LEVEL type="data">
+               <VALUE>0</VALUE>
+            </STREAM_COMPOSITION_LEVEL>
+            <STREAM_LABEL type="data">
+               <VALUE>celex-01979D0491-20061025.ITA.fmx4.techmd.rdf</VALUE>
+            </STREAM_LABEL>
+         </TECHMD>
+         <ITEM_IDENTIFIER type="data">
+            <VALUE>DOC_2</VALUE>
+         </ITEM_IDENTIFIER>
+         <IDENTIFIER type="data">
+            <VALUE>DOC_2</VALUE>
+         </IDENTIFIER>
+         <ITEM_BELONGS_TO_MANIFESTATION type="link">
+            <URI>
+               <VALUE>http://publications.europa.eu/resource/cellar/b8e4cac3-4287-4e5b-83ce-ac6ac43fc05a.0004.02</VALUE>
+               <IDENTIFIER>b8e4cac3-4287-4e5b-83ce-ac6ac43fc05a.0004.02</IDENTIFIER>
+               <TYPE>cellar</TYPE>
+            </URI>
+            <SAMEAS>
+               <URI>
+                  <VALUE>http://publications.europa.eu/resource/celex/01979D0491-20061025.ITA.fmx4</VALUE>
+                  <IDENTIFIER>01979D0491-20061025.ITA.fmx4</IDENTIFIER>
+                  <TYPE>celex</TYPE>
+               </URI>
+            </SAMEAS>
+         </ITEM_BELONGS_TO_MANIFESTATION>
+         <BELONGS_TO type="link">
+            <URI>
+               <VALUE>http://publications.europa.eu/resource/cellar/b8e4cac3-4287-4e5b-83ce-ac6ac43fc05a.0004.02</VALUE>
+               <IDENTIFIER>b8e4cac3-4287-4e5b-83ce-ac6ac43fc05a.0004.02</IDENTIFIER>
+               <TYPE>cellar</TYPE>
+            </URI>
+            <SAMEAS>
+               <URI>
+                  <VALUE>http://publications.europa.eu/resource/celex/01979D0491-20061025.ITA.fmx4</VALUE>
+                  <IDENTIFIER>01979D0491-20061025.ITA.fmx4</IDENTIFIER>
+                  <TYPE>celex</TYPE>
+               </URI>
+            </SAMEAS>
+         </BELONGS_TO>
+      </MANIFESTATION_HAS_ITEM>
+      <MANIFESTATION_SOURCE-POOL type="data">
+         <VALUE>CERES</VALUE>
+      </MANIFESTATION_SOURCE-POOL>
+      <MANIFESTATION_TYPE type="data">
+         <VALUE>fmx4</VALUE>
+      </MANIFESTATION_TYPE>
+      <CREATIONDATE type="date">
+         <VALUE>1001-01-01T00:00:00.000+00:00</VALUE>
+         <YEAR>1001</YEAR>
+         <MONTH>01</MONTH>
+         <DAY>01</DAY>
+      </CREATIONDATE>
+      <MANIFESTATION_MANIFESTS_EXPRESSION type="link">
+         <URI>
+            <VALUE>http://publications.europa.eu/resource/cellar/b8e4cac3-4287-4e5b-83ce-ac6ac43fc05a.0004</VALUE>
+            <IDENTIFIER>b8e4cac3-4287-4e5b-83ce-ac6ac43fc05a.0004</IDENTIFIER>
+            <TYPE>cellar</TYPE>
+         </URI>
+         <SAMEAS>
+            <URI>
+               <VALUE>http://publications.europa.eu/resource/celex/01979D0491-20061025.ITA</VALUE>
+               <IDENTIFIER>01979D0491-20061025.ITA</IDENTIFIER>
+               <TYPE>celex</TYPE>
+            </URI>
+         </SAMEAS>
+         <SAMEAS>
+            <URI>
+               <VALUE>http://publications.europa.eu/resource/consolidation/1979D0491%2F20061025.ITA</VALUE>
+               <IDENTIFIER>1979D0491/20061025.ITA</IDENTIFIER>
+               <TYPE>consolidation</TYPE>
+            </URI>
+         </SAMEAS>
+      </MANIFESTATION_MANIFESTS_EXPRESSION>
+      <LASTMODIFICATIONDATE type="date">
+         <VALUE>2016-04-20T15:08:50.309+02:00</VALUE>
+         <YEAR>2016</YEAR>
+         <MONTH>04</MONTH>
+         <DAY>20</DAY>
+      </LASTMODIFICATIONDATE>
+      <TYPE>fmx4</TYPE>
+   </MANIFESTATION>
+</NOTICE>
