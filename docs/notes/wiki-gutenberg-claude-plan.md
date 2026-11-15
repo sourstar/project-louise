@@ -160,3 +160,61 @@ Points to weigh beyond price:
   pilot's la/el slice decides.
 - §4.2–4.3 apply unchanged: an invariant-5 exemption and a new client
   dependency (both are OpenAI-compatible, so no vendor SDK is needed).
+
+## 6. History and memoirs only; local MoE for English, dense for the rest (2026-11-15)
+
+**Scope:** LoCC C, D, E, F, plus memoirs (biography, autobiography,
+memoirs, diaries, correspondence, personal narratives, CT). Fiction,
+poetry and drama are out, except a memoir. Counted with
+`tools/measure/kg_scope_count.py` on `pg_catalog.csv`, fetched 2026-11-15
+from aleph.pglaf.org:
+
+| | books | chunks (i) | tokens (i) |
+|---|---|---|---|
+| English: history 8,617, memoirs 3,199 | 11,816 | 1.85 M | 1.37 B |
+| other languages: history 2,248, memoirs 530 | 2,778 | 0.43 M | 0.32 B |
+| **total** | **14,594** | **2.28 M** | **1.69 B** (34 % of kept) |
+
+- The books are counted. The memoir count (3,729) matches the 3,752 that
+  München counted, which checks the rule.
+- Chunks and tokens are scaled from book counts, with München's measured
+  means: memoirs 168 chunks and 130 k tokens a book, other kept books
+  152 and 111 k.
+- Other languages: fr 986, de 408, it 318, nl 277, fi 239, es 197,
+  pt 151, zh 56 … la 9, el 30.
+
+**Local models: the two already benchmarked** on the B70, a quiet card,
+2 requests in flight (classical-translation.md):
+- MoE **Qwen3-30B-A3B**: decode 87 tok/s.
+- Dense **Gemma 3 27B**: decode 22.9 tok/s.
+- Prefill was not measured apart (i): 1,500 tok/s assumed for the MoE,
+  400 for the dense model.
+- Per item, MoE / dense: pick 5.5 / 20.8 s, relations 5.1 / 19.4 s,
+  summary 21.7 / 81.8 s.
+- Mentions (GLiNER) are the same in every row: ~1–2 days.
+
+| option | pick | relations | summaries | **card-days / wall clock** | **cost** |
+|---|---|---|---|---|---|
+| **local: MoE for en, dense for the rest** | 118 + 104 d | 87 + 77 d | 7 + 6 d | **~400 d (~13 months)** | electricity only (i ~€0.6–0.9 k) |
+| local: MoE for all languages | 118 + 27 d | 87 + 20 d | 7 + 2 d | ~260 d (~9 months) | electricity only |
+| Qwen API: 3.7-flash, 3.7-plus, 3.8-max (batch) | $220 | $1,350 | $860 | 2–5 days | **~$2.4 k** |
+| Qwen API: all 3.7-flash (batch) | $220 | $100 | $15 | 2–5 days | ~$335 |
+| DeepSeek: flash, v4-pro, v4-pro (off-peak) | $2,150 | $2,340 | $570 | 1–3 days | ~$5.1 k |
+| DeepSeek: all flash (off-peak) | $2,150 | $610 | $130 | 1–3 days | ~$2.9 k |
+| Claude: Haiku 5.5, Sonnet 5.5, Opus 5.5 (batch) | $735 | $4.7 k | $1.8 k | 2–5 days | ~$7.2 k |
+
+How to read it:
+- The dense model takes 19 % of the chunks and **47 % of the card time**:
+  187 days against the MoE's 212. That is the 4× decode gap measured in
+  classical-translation.md.
+- The pick dominates every row. It is one LLM request a chunk, with ten
+  candidates for each mention (§3).
+- Parallel slots were not benchmarked. More slots could cut the local
+  rows 2–4× (i), and the pilot (§1) measures it.
+
+Pros and cons:
+- **Local:** verifiable by any peer (weights pinned, §4.1 holds), no data
+  leaves the node, no new dependency. But it takes 9–13 months of the
+  only card, beside gutenberg-nemo's 12–15 card-days and wikidata.
+- **API:** done in days, at $0.3–7 k. But §4.1–4.4 apply, and every
+  hosted row is a closed or unpinned model for a verifier.
