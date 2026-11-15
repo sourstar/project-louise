@@ -118,7 +118,8 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from tools import encoder_bakeoff as bakeoff  # noqa: E402 — fetch, metrics_for, LICENCE
-from tools.measure import chat_eval  # noqa: E402 — settle, withheld_legs, pilot_ok, ask_code (§12, §13)
+from tools import code_pin  # noqa: E402 — the code a run executes (§13)
+from tools.measure import chat_eval  # noqa: E402 — settle, withheld_legs, pilot_ok (§12, §13)
 
 KS = (1, 3, 5, 10, 20)
 DEFAULT_K = 20
@@ -610,8 +611,10 @@ def pilot_tag(*, reranker: str, k: int, pool_name: str | None, as_of: str | None
     # runs keep the tags their readings were recorded under
     extra = (("" if legs == "hybrid" else f"-legs-{legs}") + ("-exact" if exact else "")
              + ("" if split == "validation" else f"-q-{split}"))
+    # the code: every module of this repository the run imports (tools/code_pin.py;
+    # 2026-11-16, not Ask's code, which a retrieval run does not execute)
     raw = (f"rerank-{reranker}-k{k}-pool-{pool_name or 'none'}-asof-{as_of or 'now'}{extra}"
-           f"-code-{chat_eval.ask_code()[7:19]}")
+           f"-code-{code_pin.digest(Path(__file__))[7:19]}")
     return re.sub(r"[^A-Za-z0-9._-]+", "-", raw)
 
 
@@ -1092,7 +1095,7 @@ def _chunker_run(a, held: Held) -> int:
                 arm[reading]["summary"]["builder_share"] = builder_share(arm[reading]["per_question"], found)
     base = {**_stamp(held), "k": a.k, "pool": a.pool, "pool_records": len(ids), "split": a.split,
             "pool_built_from": pool_file.get("built_from"), "pool_depth": pool_file.get("depth"),
-            "exact": True, "tag": tag, "code": chat_eval.ask_code(), "arms": [x.name for x in arms],
+            "exact": True, "tag": tag, "code": code_pin.digest(Path(__file__)), "arms": [x.name for x in arms],
             "runs": runs.as_dict(), "stored": stored,
             "coverage": {k: v for k, v in cov.items() if k != "gold"}}
     if only is not None:
@@ -1327,7 +1330,7 @@ def main(argv: list[str] | None = None) -> int:
         rr = {"choice": a.reranker, "url": getattr(lent, "url", None),
               "model": getattr(lent, "model", None) or getattr(lent, "rerank_model", None)}
         settings = {"k": a.k, "as_of": a.as_of, "reranker": rr, "pool": a.pool, "tag": tag,
-                    "legs": a.legs, "exact": a.exact, "code": chat_eval.ask_code(), "split": a.split,
+                    "legs": a.legs, "exact": a.exact, "code": code_pin.digest(Path(__file__)), "split": a.split,
                     **({"pool_chunks": pool_chunks(held.con, ids, c.plugin)} if ids is not None else {})}
         if only is not None:
             path = pilot_report(held, questions, got, gold, a.out / "runs" / c.name / f"pilot-{tag}.md",

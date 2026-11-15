@@ -1019,19 +1019,19 @@ def tag(arms: list[Arm], *, k: int, pool_name: str, split: str, stored: bool,
         parser: int | None = None) -> str:
     """The settings a pilot reading is valid for: the arms' layers, k, the
     pool, the questions, whether stored vectors may be taken, and the code
-    (this file, the chunkers, Ask's)."""
+    (every module of this repository the run imports, tools/code_pin.py)."""
     import re
 
-    from tools.measure import chat_eval
+    from tools import code_pin
+    # the arms, by their manifests; the code, by every module of this
+    # repository the run imports (tools/code_pin.py: not Ask's code, not a
+    # hand list — 2026-11-16)
     h = hashlib.sha256()
     for a in arms:
         h.update(a.name.encode() + json.dumps(a.manifest(), sort_keys=True).encode())
-    for f in [Path(__file__), ROOT / "app" / "chunking.py", ROOT / "app" / "chunking_legal.py",
-              ROOT / "app" / "layers.py", ROOT / "app" / "fts.py", ROOT / "app" / "retrieval.py"]:
-        h.update(f.read_bytes())
     raw = (f"chunker-{h.hexdigest()[:12]}-k{k}-pool-{pool_name}-q-{split}"
            f"-vec-{'stored' if stored else 'fresh'}" + (f"-parser{int(parser)}" if parser is not None else "")
-           + f"-code-{chat_eval.ask_code()[7:19]}")
+           + f"-code-{code_pin.digest(Path(__file__))[7:19]}")
     return re.sub(r"[^A-Za-z0-9._-]+", "-", raw)
 
 
