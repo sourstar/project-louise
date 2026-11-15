@@ -266,6 +266,22 @@ def test_the_arms_cut_the_record_the_embed_stage_reads(built, monkeypatch):
     assert not any("TITOLO DEL RECORD" in c["text"] for c in parsed)
 
 
+def test_parse_at_parses_every_record_with_that_parser_and_never_reads_the_lines(built, monkeypatch):
+    """`chunker-run --parse-at N` (2026-11-15): the pool's records as parser N
+    writes them, the collection's lines (parser 8) never read."""
+    from app import record_source
+    arm = cm.arm_of(built.collection, f"on={legal(True)}")
+    ids = pool_ids(built)
+    monkeypatch.setattr(record_source, "record_for",
+                        lambda c, row: {"title": "TITOLO DEL RECORD", "sections": [["x", "y"]]})
+    plugin = built.collection.plugin_instance()
+    parsed, cost = cm.cut(arm, built, ids, parse_with=plugin)
+    assert cost["records_from_records"] == 0 and cost["records"] == len(ids)
+    assert not any("TITOLO DEL RECORD" in c["text"] for c in parsed)
+    assert cm.tag([arm], k=20, pool_name="p", split="validation", stored=False, parser=9) != \
+        cm.tag([arm], k=20, pool_name="p", split="validation", stored=False), "a pilot is read for it"
+
+
 # ---- the readings and the run ------------------------------------------------------------
 
 def _coverage(held):

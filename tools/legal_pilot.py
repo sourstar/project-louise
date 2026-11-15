@@ -1031,6 +1031,16 @@ def _chunker_run(a, held: Held) -> int:
     ids, moved = current_versions(held.con, pool_ids, None)
     print(f"{c.name}: pool {a.pool}: {len(pool_ids)} records → {len(ids)} as the search sees them ({moved})")
     arms = cm.arms_of(c, a.arm or list(cm.DEFAULT_ARMS))
+    parse_with = None
+    if getattr(a, "parse_at", None) is not None:
+        # the records a parser the Codex does not name writes, parsed per record
+        # (2026-11-15: Normattiva's pool on parser 8, the full embedding on 9)
+        parse_with = c.plugin_instance().at_parser_version(int(a.parse_at)) \
+            if hasattr(c.plugin_instance(), "at_parser_version") else None
+        if parse_with is None:
+            print(f"{c.name}: its plugin carries no parser {a.parse_at}", file=sys.stderr)
+            return 2
+        print(f"{c.name}: every pool record parsed at parser {a.parse_at}, not read from the collection's lines")
     if a.dry_run:
         recipe = collections_mod.recipe_for(c)
         count = cm.window_counter(c, recipe)
@@ -1038,14 +1048,16 @@ def _chunker_run(a, held: Held) -> int:
             print(f"{c.name}: its layer pins no tokenizer: the window is not counted", file=sys.stderr)
         for arm in arms:
             try:
-                _, cost = cm.cut(arm, held, ids, count=count, ctx=getattr(recipe, "ctx", None))
+                _, cost = cm.cut(arm, held, ids, count=count, ctx=getattr(recipe, "ctx", None),
+                                 parse_with=parse_with)
             except cm.OverWindow as e:
                 print(f"{arm.name}: REFUSED — {e}")
                 continue
             print(f"{arm.name}: {json.dumps(arm.manifest(), sort_keys=True)}\n  {json.dumps(cost)}")
         return 0
     stored = bool(a.stored)
-    tag = cm.tag(arms, k=a.k, pool_name=a.pool, split=a.split, stored=stored)
+    tag = cm.tag(arms, k=a.k, pool_name=a.pool, split=a.split, stored=stored,
+                 parser=getattr(a, "parse_at", None))
     only = pilot_questions(questions, gold, a.pilot) if a.pilot else None
     if only is None and not chat_eval._pilot_ok_path(a.out, c.name, tag).is_file():
         print(f"{c.name}: no pilot read for these settings (tag {tag}): `chunker-run --pilot 3` with the same "
@@ -1067,7 +1079,7 @@ def _chunker_run(a, held: Held) -> int:
                                    space_id=getattr(getattr(c, "codex", None), "space_id", None), runs=runs)
             got = cm.run(held, questions, gold, arms, ids, k=a.k, workdir=work, recipe=recipe, cache=cache,
                          embed_fn=cm.pinned_embed(runs), stored_fn=cm.default_stored if stored else None,
-                         rerank_fn=rerank, only=only)
+                         rerank_fn=rerank, only=only, parse_with=parse_with)
     except cm.RerankWithheld as e:
         print(f"{c.name}: {e}: nothing is written; run again once the reranker answers", file=sys.stderr)
         return 3
@@ -1186,6 +1198,10 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--dry-run", action="store_true", dest="dry_run",
                    help="cut and count every arm (chunks, characters, the longest in the encoder's tokens, "
                         "how many past its window), embed and search nothing")
+    p.add_argument("--parse-at", type=int, default=None, dest="parse_at",
+                   help="parse every pool record at this parser version (the plugin's at_parser_version), "
+                        "never reading the collection's lines: the arms measured on the records that parser "
+                        "writes; in the tag, so a pilot is read for it")
     p = sub.add_parser("chunker-report", help="every chunker-run file against its first arm, per reading")
     p.add_argument("runs", type=Path, nargs="+")
     p.add_argument("--write", type=Path, default=None, help="the report's markdown, written here too")
