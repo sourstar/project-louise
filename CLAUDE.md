@@ -345,6 +345,20 @@ are the ones that have drifted; prefer to add a test when you touch them.
   **Offering the choice is itself the error**: do not present "proceed
   now, repair afterwards" as an option to the operator, and do not take
   it alone. Stop, fix, verify, then continue.
+- **LEGAL COLLECTIONS: THE BULK FIRST, NO CHERRY-PICKING BEFORE IT IS FULLY
+  USED. NO EXCEPTIONS** (operator, 2026-11-15: "until the bulk download is
+  not fully used no cherry picking is allowed. No exceptions", after the
+  EUR-Lex Italian fetch spent days asking Cellar unit by unit while the
+  Data Dump gave 0 bytes). Where the origin of a legal collection offers a
+  bulk download (EUR-Lex's Data Dump, NeuRIS's snapshot, Normattiva's
+  export, a dump of any kind), every record that bulk can give is built
+  from it FIRST, completely. No per-unit request to the origin's API — no
+  notice, item or tree fetched one unit at a time — runs before that
+  bulk is fully used. Only then may the API fetch what the bulk does NOT
+  hold (repealed acts, past versions, what changed since it was cut), and
+  only that. A pass that would ask the API for a unit the bulk holds, or
+  that asks the API while the bulk is still unused, is a defect, stopped
+  and fixed like any other.
 - **Do not reinvent the wheel** (operator, 2026-10-19; restated
   2026-10-23). Before building a mechanism, use what already does it:
   an available solution PROVEN effective (the library's own call, a tool
