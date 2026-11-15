@@ -260,7 +260,10 @@ CREATE TABLE IF NOT EXISTS validity (
   has_text INTEGER NOT NULL DEFAULT 0,
   in_force INTEGER,
   shown INTEGER NOT NULL DEFAULT 0,
-  synced INTEGER NOT NULL DEFAULT 0
+  synced INTEGER NOT NULL DEFAULT 0,
+  -- why the start is PROVISIONAL, where it is ('publication', 'signing'):
+  -- the origin stated none (NeuRIS's test phase, parser 4); NULL = stated
+  start_basis TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_validity_work ON validity(work, valid_from, native_id);
 CREATE INDEX IF NOT EXISTS idx_validity_native ON validity(native_id);
@@ -440,6 +443,12 @@ def connect(collection=None, *, shared: bool = False) -> sqlite3.Connection:
         from . import validity
         con.execute("INSERT OR IGNORE INTO control(key, value) VALUES(?, ?)",
                     (validity.AMENDMENTS_VERSION_KEY, str(validity.AMENDMENTS_VERSION)))
+    try:
+        # a provisional start's basis (NeuRIS parser 4, 2026-11-15): NULL on
+        # every row of an older manifest, which states its starts
+        con.execute("ALTER TABLE validity ADD COLUMN start_basis TEXT")
+    except sqlite3.OperationalError:
+        pass
     try:
         con.execute("ALTER TABLE bundles ADD COLUMN tier_reached INTEGER")
     except sqlite3.OperationalError:

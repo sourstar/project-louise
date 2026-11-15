@@ -132,8 +132,8 @@ def _keys(con, c: ArticleCitation) -> list[str]:
 
 
 def _versions(con, work: str) -> list[dict]:
-    rows = con.execute("SELECT uid, native_id, valid_from, valid_to, has_text, shown FROM validity "
-                       "WHERE work=? ORDER BY valid_from", (work,)).fetchall()
+    rows = con.execute("SELECT uid, native_id, valid_from, valid_to, has_text, shown, start_basis "
+                       "FROM validity WHERE work=? ORDER BY valid_from", (work,)).fetchall()
     return [dict(r) for r in rows]
 
 
@@ -295,6 +295,10 @@ def _changes(con, work: str, tok: str, annexes: tuple[str, ...] = (), holders: s
 
 #: a statement on an article number several candidates of the version hold
 AMBIGUOUS = "la fonte non indica di quale testo"
+#: a provisional start's basis, as the pinned fact says it
+PROVISIONAL = {"publication": "data di pubblicazione: la fonte non indica l'entrata in vigore",
+               "signing": "data di firma: la fonte non indica l'entrata in vigore",
+               "version-date": "data della versione: la fonte non indica l'entrata in vigore"}
 
 
 def _fact(collection, key: str, act_label: str, c: ArticleCitation, version: dict, chunk: dict,
@@ -303,6 +307,10 @@ def _fact(collection, key: str, act_label: str, c: ArticleCitation, version: dic
                               "in vigore dal": _day(version["valid_from"]),
                               "fino al": _day(version["valid_to"]) or "oggi",
                               "versione": version["uid"], "chunk": chunk.get("chunk_id")}
+    if version.get("start_basis"):
+        # the origin stated no start (NeuRIS's test phase): the day shown is
+        # the act's publication or its signing, said so (validity.describe)
+        fields["inizio provvisorio"] = PROVISIONAL.get(version["start_basis"], version["start_basis"])
     if changes:
         fields["modificato da"] = changes
     # an annex the query named is part of the article's id: the decree's own

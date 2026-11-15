@@ -99,6 +99,18 @@ had, labelled (§5.5). The result says which version it is (§5.3,
 `validity`). The snapshot chain keeps its own meaning for it — when the
 origin's state was held — and is not what a date asks of it.
 
+*Amended 2026-11-15* (operator: "we add a 'draft' flag for the in force
+date, and we use the publishing date as draft. When this information is
+correctly published we replace all the draft dates"). Where the origin
+states no start, its plugin may give a PROVISIONAL one — NeuRIS, whose test
+phase writes 1001-01-01 for every date: the act's publication for its first
+version, the amendment's signing for a later one — and the record says so
+(`extra.valid_from_provisional`, its basis). Every result that shows the
+version's validity says it too (`validity.provisional`: `publication`,
+`signing`, `version-date`), and so does a pinned article. A start the origin
+states replaces it the day it is fetched; the plugin's listing makes that
+fetch happen (neuris_listing `listed_mtime`).
+
 **The fusion unit is the record.** Each leg — the text index, the
 vector index — ranks chunks; chunks of every layer compete as chunks,
 with no per-layer normalisation. A record's rank in a leg is the rank

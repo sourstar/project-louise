@@ -265,3 +265,28 @@ def test_the_two_files_of_an_expression():
 def test_a_head_is_never_asked_of_an_api_listed_origin():
     ep = specs.NEURIS_SPEC.endpoints[0]
     assert transport_https.HttpsTransport().size_of(ep, nl.files_of(ns.listing_item(ns.S1016))[0]) is None
+
+
+
+# ---- the provisional starts (neuris parser 4, 2026-11-15) ----------------------------------------
+
+def test_the_day_the_portal_states_a_start_the_pair_is_fetched_once_again(tmp_path, api_server):
+    """The test phase states none (1001-01-01 or nothing): the comparison is
+    as before. A start stated later moves the listed date: one fetch."""
+    api, base = api_server
+    for e in api.items:
+        api.items[e]["temporalCoverage"] = "1001-01-01/.."
+    collection, con, _ = _pass(tmp_path, base)
+    assert engine.run_acquisition(con, collection, _spec(base), "full")["fetched"] == 0
+    api.items[ns.N130]["temporalCoverage"] = "2025-09-01/.."
+    got = engine.run_acquisition(con, collection, _spec(base), "full")
+    assert got["fetched"] == 2, "the zip and the JSON of the one expression now dated"
+    assert engine.run_acquisition(con, collection, _spec(base), "full")["fetched"] == 0, "then stable"
+
+
+def test_the_listing_says_how_many_expressions_state_their_start():
+    assert nl.stated_start({"temporalCoverage": "1001-01-01/.."}) is None
+    assert nl.stated_start({"temporalCoverage": None}) is None
+    assert nl.stated_start({"temporalCoverage": "2025-09-01/2026-01-01"}) == "2025-09-01"
+    assert nl.listed_mtime(None, None) is None
+    assert nl.listed_mtime(5, None) == 5 and nl.listed_mtime(None, "2025-09-01") == nl.day_end("2025-09-01")
