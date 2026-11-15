@@ -194,6 +194,24 @@ _DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 _MAIN = re.compile(r"(?:^|/)regelungstext-(\d+)\.xml$")
 _FORCE = {"InForce": True, "NotInForce": False}
 _WORK_ELI = re.compile(r"eli/bund/[a-z0-9-]+/\d{4}/[A-Za-z0-9_-]+")
+#: an ELI under a host: the portal's XML writes every FRBR URI as
+#: `https://www.ris.bund.de/eli/…` where the path and the API write `eli/…`
+#: (München, 2026-11-15: 5,536 of 5,536 expressions)
+_HOST = re.compile(r"^[a-z][a-z0-9+.-]*://[^/]+/", re.IGNORECASE)
+#: what the portal's TEST PHASE writes where a date is not known yet: every
+#: lifecycle eventRef of 5,551 of 5,551 regelungstext-1.xml, and every part's
+#: temporalCoverage start (München, 2026-11-15). A placeholder, never a day.
+PLACEHOLDER_DAY = "1001-01-01"
+
+
+def relative_eli(uri) -> str:
+    """`https://www.ris.bund.de/eli/bund/…` → `eli/bund/…`; a relative one as it is."""
+    return _HOST.sub("", str(uri or "").strip())
+
+
+def _real(day):
+    """A stated day, or None where the origin wrote its placeholder."""
+    return None if day in (None, "", PLACEHOLDER_DAY) else day
 
 #: 06 §6.1's Issues: what the parse met in the origin and worked around
 ISSUES = {
@@ -207,6 +225,10 @@ ISSUES = {
     "expression-eli-mismatch": "the FRBRExpression the XML returns is not the expression its "
                                "path and the API name; the XML's is the record's (eli rule 2)",
     "annex-missing": "the act's attachments name a file the manifestation zip does not hold",
+    "start-from-eli": "the origin states no entry into force (its test phase writes 1001-01-01 "
+                      "placeholders, or nothing): the version's start is the point in time of its "
+                      "ELI, the signing of the act or of the amendment that made it (FRBRdate), "
+                      "not its entry into force, which can be later",
 }
 
 #: every key a record's `extra` may carry — fixed for the collection's life
@@ -424,7 +446,16 @@ class NeurisSource:
     #: says "changed at the origin" only of a law the origin revised. Every
     #: record's `origin_hash` moves, so a collection on 2 is re-created on 3 by
     #: the book (5,536 records); its chunks, the same text, keep their vectors.
-    PARSER_VERSION = 3
+    #: 4 (2026-11-15): the real portal (München's raw read of three expressions)
+    #: writes every FRBR URI under its host (`https://www.ris.bund.de/eli/…`),
+    #: which parser 3 compared with the path as is (`expression-eli-mismatch`
+    #: on every record), and in its test phase writes 1001-01-01 for every
+    #: lifecycle date and no ris:inkraft, so no version had a start and the
+    #: validity index read every version of a law as current. Parser 4 strips
+    #: the host (`relative_eli`), reads the placeholder as no day, and where no
+    #: start is stated starts the version at its ELI's point in time, saying so
+    #: (`start-from-eli`). Parsers 3 and 2 are kept for the Codexes naming them.
+    PARSER_VERSION = 4
     #: 06 §6.2: an expression stays listed, a manifestation is regenerated in
     #: place; an older one is not known to stay fetchable (owed from the node)
     origin_versions = "replaces"
@@ -511,9 +542,10 @@ class NeurisSource:
 
     def at_parser_version(self, version: int) -> "NeurisSource | None":
         """This plugin parsing at `version`, for a collection whose Codex
-        names it (`collections.plugin_at`): 3 is this one, 2 the parser that
-        read the members as fetched (`NeurisSourceV2`)."""
-        return {3: self, 2: _V2}.get(int(version))
+        names it (`collections.plugin_at`): 4 is this one, 3 the parser before
+        the host and placeholder reading (`NeurisSourceV3`), 2 the one that read
+        the members as fetched (`NeurisSourceV2`)."""
+        return {4: self, 3: _V3, 2: _V2}.get(int(version))
 
     def parse(self, raw: RawDoc) -> CanonicalDoc:
         zpath = Path(raw.ref.locator)
@@ -556,17 +588,24 @@ class NeurisSource:
         work = main.frbr.get("work", {})
         expr = main.frbr.get("expression", {})
         returned = str(expr.get("FRBRuri") or "")
+        if self.PARSER_VERSION >= 4:
+            returned = relative_eli(returned)        # the XML's host, not another expression
         if returned and returned != expression:
             found.append(Issue("expression-eli-mismatch",
                                f"FRBRExpression {returned}, path {expression}"))
         eli_expression = returned or expression
         eli_work = str(work.get("FRBRuri") or work_of(expression))
+        if self.PARSER_VERSION >= 4:
+            eli_work = relative_eli(eli_work) or work_of(expression)
         p = path_parts(expression)
 
         ris = main.ris
         tc_start, tc_end = coverage(api.get("temporalCoverage"))
         inkraft = ris.get("inkraft") or None
         ausserkraft = ris.get("ausserkraft") or None
+        if self.PARSER_VERSION >= 4:
+            # the test phase's placeholder is no day (PLACEHOLDER_DAY)
+            tc_start, tc_end, inkraft, ausserkraft = map(_real, (tc_start, tc_end, inkraft, ausserkraft))
         conditional = bool(ris.get("bedingtesInkrafttreten"))
         if tc_start and inkraft and tc_start != inkraft:
             found.append(Issue("stated-start-disagrees", f"temporalCoverage {tc_start}, ris:inkraft {inkraft}"))
@@ -574,7 +613,18 @@ class NeurisSource:
             found.append(Issue("stated-end-disagrees", f"temporalCoverage {tc_end}, ris:ausserkraft {ausserkraft}"))
         valid_from = tc_start or inkraft
         if not valid_from and not conditional:
-            found.append(Issue("no-stated-start", f"{expression}: no temporalCoverage start, no ris:inkraft"))
+            if self.PARSER_VERSION >= 4:
+                # parser 4 (2026-11-15): without a start, the version took no
+                # part in validity, and the index read every version of a law
+                # as current (validity.current_columns): its ELI's point in
+                # time orders the chain, and the record says what it is
+                valid_from = p["pit"]
+                basis = next((d.get("name") for d in [expr.get("FRBRdate") or {}] if isinstance(d, dict)), None)
+                found.append(Issue("start-from-eli", f"{expression}: no stated entry into force; starts at "
+                                                     f"its ELI point in time {p['pit']}"
+                                                     + (f" (FRBRdate {basis})" if basis else "")))
+            else:
+                found.append(Issue("no-stated-start", f"{expression}: no temporalCoverage start, no ris:inkraft"))
 
         names = set(members)
         for ref in main.attachment_refs:
@@ -774,6 +824,16 @@ def modification_target(mod: dict) -> tuple[str, str | None, bool] | None:
 
 def _is_repeal(mod: dict) -> bool:
     return str(mod.get("type") or "").strip().lower() == "repeal"
+
+
+class NeurisSourceV3(NeurisSource):
+    """PARSER 3, KEPT for a collection whose Codex names it: the members
+    normalized, the FRBR URIs compared as written, no start but a stated one.
+    Removed once no Codex on a node names 3."""
+    PARSER_VERSION = 3
+
+
+_V3 = NeurisSourceV3()
 
 
 class NeurisSourceV2(NeurisSource):

@@ -48,9 +48,9 @@ def _record(plugin, root: Path, files: dict[str, bytes]):
     return raw.raw_hash, plugin.parse(raw)
 
 
-def test_the_registered_parser_is_3_and_still_carries_2():
-    assert SOURCE.PARSER_VERSION == 3 and isinstance(V2, nsrc.NeurisSourceV2) and V2.PARSER_VERSION == 2
-    assert SOURCE.at_parser_version(3) is SOURCE and SOURCE.at_parser_version(1) is None
+def test_parser_3_is_still_carried_beside_2():
+    assert SOURCE.PARSER_VERSION >= 3 and isinstance(V2, nsrc.NeurisSourceV2) and V2.PARSER_VERSION == 2
+    assert SOURCE.at_parser_version(3).PARSER_VERSION == 3 and SOURCE.at_parser_version(1) is None
 
 
 def test_a_daily_rebuild_of_an_unchanged_law_is_the_same_record(tmp_path):
@@ -103,4 +103,4 @@ def test_a_collection_parses_at_its_codexs_parser():
         return C(plugin="neuris", source="origin",
                  codex=SimpleNamespace(parser=SimpleNamespace(id="neuris", version=v)))
     assert coll(2).plugin_instance() is V2
-    assert coll(3).plugin_instance() is SOURCE
+    assert coll(3).plugin_instance() is SOURCE.at_parser_version(3)
