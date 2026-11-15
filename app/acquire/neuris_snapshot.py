@@ -88,12 +88,13 @@ HTTP_TIMEOUT_S = 60.0
 #: the longest a held corpus goes without being compared with the snapshot
 #: (REVISED IN PLACE above), whether or not the API names a newer one
 REVISIT_S = 7 * 86400
-#: a NEWER snapshot than the one last compared is compared once this long has
-#: passed since that comparison: at most one download a day. 2026-11-15: the
-#: portal annotated every manifestation in place after the 11-14 snapshot was
-#: cut, its per-law answers carried it at once and the snapshot only from its
-#: next build; a week's wait left every record "changed at the origin"
-REVISIT_MIN_S = 86400
+#: kept for its readers; NO LONGER A WAIT (2026-11-16, München: the 11-15
+#: snapshot, named by the day's read at 23:45Z, waited for a day after the
+#: 20:38Z comparison of the 11-14 one, so nothing was downloaded). A newer
+#: snapshot than the one last compared is compared as soon as a read names
+#: it: the link is read at most once a day (LINK_READ_S), so a download is at
+#: most daily already, and bulk first wants a named bulk used, not held off
+REVISIT_MIN_S = 0
 #: how often a pass may READ the snapshot link to learn
 #: whether a newer snapshot is out (operator, 2026-11-15: "once a day"); the
 #: last read is recorded beside the comparison (LINK_READ)
@@ -209,12 +210,19 @@ class NeurisSnapshot:
             except TransportError as e:
                 self._report(f"snapshot link not read ({e})"[:400])
             else:
-                self._mark_link_read(collection)
+                self._mark_link_read(collection, url)
+        else:
+            # what the day's read named, without asking again: a newer
+            # snapshot it named and a pass could not take is taken by the next
+            url = self._last_named(collection)
         named = Path(urlsplit(url).path).name if url else None
         compare = self._revisit_due(collection, named or (held.name if held else None))
         if not want and not compare:
             return []
         newer = bool(url) and held is not None and named != held.name
+        # a newer one than the comparison's is compared now (`_revisit_due`),
+        # so it is taken; the peek at its index answers only a newer one
+        # already compared, which a held zip older than it cannot be
         take_newer = newer and (compare or (lacking and self._holds_any(url, lacking)))
         try:
             if url and (held is None or take_newer):
@@ -280,7 +288,7 @@ class NeurisSnapshot:
         age = time.time() - at
         if age >= REVISIT_S:
             return True
-        return bool(named) and named != against and age >= REVISIT_MIN_S
+        return bool(named) and named != against
 
     def _link_read_due(self, collection) -> bool:
         """The snapshot link never read, or last read LINK_READ_S ago."""
@@ -292,15 +300,24 @@ class NeurisSnapshot:
             return True
         return time.time() - at >= LINK_READ_S
 
-    def _mark_link_read(self, collection) -> None:
+    def _mark_link_read(self, collection, url: str | None = None) -> None:
         import json
         import time
         where = self.place(collection)
         where.mkdir(parents=True, exist_ok=True)
         mark = where / LINK_READ
         tmp = mark.with_name(mark.name + ".part")
-        tmp.write_text(json.dumps({"at": time.time()}))
+        tmp.write_text(json.dumps({"at": time.time(), **({"url": url} if url else {})}))
         os.replace(tmp, mark)
+
+    def _last_named(self, collection) -> str | None:
+        """The snapshot URL the last read of the link named, or None."""
+        import json
+        try:
+            got = json.loads((self.place(collection) / LINK_READ).read_text()).get("url")
+        except (OSError, ValueError, AttributeError):
+            return None
+        return str(got) if got else None
 
     def _mark_compared(self, collection, path: Path) -> None:
         import json
