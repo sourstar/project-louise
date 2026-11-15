@@ -39,9 +39,12 @@ Every pending zip the snapshot holds at the listing's generation date is
 written from it, whatever share of the listing it is; per law only what no
 snapshot holds (a manifestation newer than the snapshot, the per-expression
 JSON, which the snapshot does not carry). The held snapshot is used, or a
-newer one the API names; the link is read at most once a day (LINK_READ_S),
-and a newer snapshot downloaded once (the engine's Range transport, the
-budget, resumable). It lives in the files cache (app/derived.py, kind
+newer one the API names; the link is read at most once a day (LINK_READ_S;
+operator, 2026-11-15: "Check maximum once a day for a new bulk availability.
+If a law is needed intra day use the API"), or whenever none is held (a
+collection being created: "no exceptions at the creation of a new law
+collection"), and a newer snapshot downloaded once (the engine's Range
+transport, the budget, resumable). It lives in the files cache (app/derived.py, kind
 `neuris-snapshot`, keyed on the corpus), the newest only.
 
 REVISED IN PLACE (2026-11-15, München's probe of NeuRIS5's inconclusive
@@ -179,7 +182,8 @@ class NeurisSnapshot:
         at the listing's generation date is written from it, whatever share of
         the listing it is; only what no snapshot holds goes per law. The
         snapshot used is the held one, or a newer one the API names, the link
-        read at most once a day (LINK_READ_S) unless none is held. When the
+        read at most once a day (LINK_READ_S) unless none is held; a law the
+        held one lacks, needed within the day, goes per law. When the
         comparison is due (REVISIT_*), every held manifestation is compared
         and the ones the origin revised in place are answered, for the engine
         to rewrite from the snapshot in this pass. A failure leaves the pass per
@@ -187,15 +191,19 @@ class NeurisSnapshot:
         want = [f for f in pending if manifestation_key(f.rel_path)]
         self.close()
         held = self._held_zip(collection)
-        # what the held snapshot cannot give would go per law: BEFORE that, the
-        # API is asked whether a newer snapshot is out (operator, 2026-11-15,
-        # Frankfurt's item 2, A: "Peek at a newer snapshot's index … before any
-        # per-law fetch, and download it when it holds a pending law"), outside
-        # the once-a-day read
+        # whether a newer snapshot is out is asked AT MOST ONCE A DAY, and a law
+        # needed within the day goes to the API (operator, 2026-11-15: "Bulk
+        # first rule: no exceptions at the creation of a new law collection.
+        # Check maximum once a day for a new bulk availability. If a law is
+        # needed intra day use the API", replacing the same day's A, a peek
+        # before every per-law fetch). The one read outside the day: no
+        # snapshot held — a collection being created takes its bulk first.
+        # On the day's read, a newer snapshot whose index (read by range)
+        # holds a law the held one lacks is downloaded and used.
         lacking = want if held is None else [f for f in want if manifestation_key(f.rel_path)
                                              not in _held_keys(held)]
         url: str | None = None
-        if held is None or lacking or self._link_read_due(collection):
+        if held is None or self._link_read_due(collection):
             try:
                 url = link(endpoint)
             except TransportError as e:
