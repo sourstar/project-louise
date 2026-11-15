@@ -588,3 +588,20 @@ def test_a_body_that_does_not_decode_is_retried_then_a_deferral():
     with pytest.raises(TransportError) as e:
         cellar._get(client, "http://cellar.test/x", {}, "the tree of X", charge=lambda n: None)
     assert engine.transient(str(e.value)) and "DecodingError" in str(e.value)
+
+
+
+def test_a_formex_manifestation_without_a_wrapper_gives_way_to_the_next_form():
+    """82 Italian consolidations of 1976–79 (01978L0764-20160101, München
+    2026-11-15): their fmx4 items name no `….doc.xml`, and the unit was refused."""
+    from types import SimpleNamespace
+    from app.plugins.eurlex.notice import Item
+    def item(name):
+        return Item(uri=f"x/{name}", name=name, size=1, order=1)
+    bare = {"fmx4": [item("CL1978L0764IT0010010.0001.xml")], "xhtml": [item("CL1978L0764IT0010010.html")]}
+    assert cellar.form_of(SimpleNamespace(items=bare)) == "xhtml"
+    wrapped = {**bare, "fmx4": [item("L_1978246IT.01002801.doc.xml"), item("L_1978246IT.01002801.xml")]}
+    assert cellar.form_of(SimpleNamespace(items=wrapped)) == "fmx4"
+    assert cellar.form_of(SimpleNamespace(items={"fmx4": bare["fmx4"]})) == "fmx4", "the only form stays"
+    unnamed = {**bare, "fmx4": [Item(uri="x/DOC_1", name=None, size=None, order=1)]}
+    assert cellar.form_of(SimpleNamespace(items=unnamed)) == "fmx4", "unnamed items: as before"

@@ -85,6 +85,10 @@ HTTP_TIMEOUT_S = 60.0
 #: the longest a held corpus goes without being compared with the snapshot
 #: (REVISED IN PLACE above): one download a week
 REVISIT_S = 7 * 86400
+#: when the held corpus was last compared with a snapshot, beside it in the
+#: place: NOT the zip's date, which is its download's (2026-11-15: a snapshot
+#: downloaded by a full fetch and never compared read as "compared today")
+COMPARED = "compared.json"
 #: threads comparing held manifestations with the snapshot (zlib releases the GIL)
 COMPARE_THREADS = 8
 _DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
@@ -192,17 +196,29 @@ class NeurisSnapshot:
                      f"{len(want)} zip(s) to fetch are in it with the listing's generation date, "
                      f"the rest per law")
         revised = self._revised(files, {f.rel_path for f in pending}, collection, path)
-        os.utime(path)                     # compared now: the next revisit is REVISIT_S away
+        self._mark_compared(collection, path)
         self._report(f"snapshot {path.name}: {len(revised)} held manifestation(s) the origin revised in "
                      f"place (the same generation date), rewritten from it in this pass")
         return revised
 
     def _revisit_due(self, collection) -> bool:
-        """No snapshot held, or the held one compared longer than REVISIT_S ago."""
+        """The held corpus never compared with a snapshot, or last compared
+        longer than REVISIT_S ago (COMPARED, never the zip's own date)."""
+        import json
         import time
-        where = self.place(collection)
-        held = sorted(where.glob("*.zip"), key=lambda p: p.stat().st_mtime) if where.is_dir() else []
-        return not held or time.time() - held[-1].stat().st_mtime >= REVISIT_S
+        try:
+            at = float(json.loads((self.place(collection) / COMPARED).read_text())["at"])
+        except (OSError, ValueError, KeyError, TypeError):
+            return True
+        return time.time() - at >= REVISIT_S
+
+    def _mark_compared(self, collection, path: Path) -> None:
+        import json
+        import time
+        mark = self.place(collection) / COMPARED
+        tmp = mark.with_name(mark.name + ".part")
+        tmp.write_text(json.dumps({"snapshot": path.name, "at": time.time()}))
+        os.replace(tmp, mark)
 
     def _revised(self, files: list[RemoteFile], pending: set[str], collection, path: Path) -> list[str]:
         """The held, listed zips whose members, after the plugin's

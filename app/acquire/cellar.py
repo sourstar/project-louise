@@ -474,8 +474,22 @@ RDF_ACCEPT = "application/rdf+xml;notice=non-inferred-tree"
 
 
 def form_of(note) -> str | None:
-    """The best manifestation the notice lists items for (FORMS)."""
-    return next((f for f in FORMS if note.items.get(f)), None)
+    """The best manifestation the notice lists items for (FORMS). A Formex
+    manifestation whose named items include no wrapper (`….doc.xml`) gives
+    way to the next form the notice lists: its body is found by the wrapper's
+    DOC.MAIN.PUB, and without one the unit was refused ("holds 0 Formex
+    wrappers"; 82 Italian consolidations of 1976–79, München 2026-11-15).
+    Where it is the only form, or an item is unnamed (the 300 Multiple
+    Choices path), it stays Formex as before."""
+    from ..plugins.eurlex import formex
+    listed = [f for f in FORMS if note.items.get(f)]
+    for f in listed:
+        if f == "fmx4" and len(listed) > 1:
+            items = note.items["fmx4"]
+            if all(it.name for it in items) and not any(formex.is_wrapper(it.name) for it in items):
+                continue
+        return f
+    return None
 
 
 def _current_unit(dest: Path, note_now_mtime: int | None, form: str | None):
