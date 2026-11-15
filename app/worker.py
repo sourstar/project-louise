@@ -63,6 +63,9 @@ from .transfer.manager import get_manager
 # a SIGTERM during a fetch was noticed only after the whole acquisition
 # returned, which on a large corpus could be many minutes.
 DEFERRED = "__deferred__"   # a work() result that must not be recorded
+#: a work() result: the document waits for a file the platform must carry
+#: (`PlatformMissing`); not recorded either, and not the encoder's state
+WAITS_PLATFORM = "__waits_platform__"
 
 _stop = threading.Event()
 
@@ -2132,6 +2135,16 @@ def _embed_parallel(con, collection, recipe, *, slots: int | None = None,
                     return (row, None, _timeout_blame(timeout, n), False)
                 timed_out.append(timeout)       # the hold is made on this thread's caller
                 return (row, None, DEFERRED, False)
+            if platform_missing(e):
+                # THE DOCUMENT waits for a file the platform must carry (a pack
+                # not ready, a tokenizer): no request was made, so it says
+                # nothing about the encoder and must not stop the round for the
+                # documents that do not need that file. wikidata, 2026-11-14/15:
+                # its pack gone from the cache, half of every group deferred,
+                # the refill stopped at the first, "0 texts in 0 request(s)"
+                # every 10 s for 22 hours, logged as "encoder unreachable".
+                platform_waits.append(e)
+                return (row, None, WAITS_PLATFORM, False)
             if transient_failure(e):
                 if endpoint_misconfigured(e):
                     wrong_endpoint.append(e)    # the pause is made on this thread's caller
@@ -2188,6 +2201,7 @@ def _embed_parallel(con, collection, recipe, *, slots: int | None = None,
     timed_out: list[BaseException] = []        # read timeouts: the endpoint held as busy
     exhausted: list[BaseException] = []        # out of files or space: said with the census
     answered_here: list[bool] = []             # a document the encoder answered
+    platform_waits: list[BaseException] = []   # documents waiting for a platform file (work)
     endpoint = encoder_timeouts.endpoint_of(recipe)
     place = str(collection.manifest_path)
 
@@ -2217,6 +2231,9 @@ def _embed_parallel(con, collection, recipe, *, slots: int | None = None,
         if err == DEFERRED:
             # the encoder was not answering: leave the row exactly as it was
             deferred += 1
+            return
+        if err == WAITS_PLATFORM:
+            # untouched too, and the round goes on (work's reason)
             return
         if err is not None:
             record_error(row["uid"], err)
@@ -2343,8 +2360,10 @@ def _embed_parallel(con, collection, recipe, *, slots: int | None = None,
                         awaiting and time.time() - waiting_since >= config.EMBED_COMMIT_S):
                     flush()
                 # a dead encoder must not be walked document by document:
-                # stop refilling as soon as a deferral shows up
-                if deferred == 0:
+                # stop refilling as soon as a deferral shows up; and when a
+                # whole group's worth has waited for the platform with nothing
+                # embedded, the rest of the corpus is not walked this round
+                if deferred == 0 and not (len(platform_waits) >= group and not done and not awaiting):
                     refill(pool)
                 stats.recorder().set_in_flight(collection.name, len(in_flight))
         flush()         # what was embedded is written, SIGTERM included
@@ -2377,6 +2396,9 @@ def _embed_parallel(con, collection, recipe, *, slots: int | None = None,
                      f"embedded {done} document(s) at concurrency "
                      f"{recipe.concurrency if slots is None else slots}: "
                      f"{tally.embedded} chunks embedded, {tally.reused} reused")
+    if platform_waits:
+        # the serial path's one line, not "encoder unreachable" every round
+        _say_platform_missing(con, collection, "embed", platform_waits[-1])
     if deferred:
         db.log_event(con, "warn", "embed",
                      f"{deferred} document(s) deferred — encoder unreachable, busy, "

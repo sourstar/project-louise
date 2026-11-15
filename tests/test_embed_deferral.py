@@ -287,3 +287,64 @@ def test_a_missing_platform_file_defers_every_document_and_says_it_once(collecti
     said = [r["message"] for r in con.execute("SELECT message FROM events WHERE level='warn' AND stage='fts'")]
     assert len(said) == 1 and "platform is missing" in said[0], said
     worker._platform_said.clear()
+
+
+def test_the_parallel_path_embeds_the_rest_while_some_wait_for_the_platform(collection, monkeypatch):
+    """wikidata, 2026-11-14/15: its pack gone from the cache, half of every
+    group raised PlatformMissing before any request. The parallel path called
+    it a deferral, stopped refilling at the first, and logged "encoder
+    unreachable" every 10 s for 22 hours with "0 texts in 0 request(s)": the
+    other half, which needed no pack, was never embedded. A document waiting
+    for a platform file says nothing about the encoder: it stays untouched,
+    the others are embedded, and one line names the missing file."""
+    from app.chunking import PlatformMissing
+    worker._platform_said.clear()
+    con = db.connect(collection)
+    db.set_scope(con, {"embed_mode": "all"})
+    for i in range(8):
+        _doc(con, uid=f"g:{i}")
+    recipe = collections_mod.EmbedRecipe(url="http://x", api="openai", model="m", dtype="f16",
+                                         ctx=512, concurrency=2)
+    monkeypatch.setattr(worker, "_load_chunks", lambda row, c: [{"text": "x", "tokens": 1}])
+    embedded = []
+
+    def upsert(nid, *a, **k):
+        if int(nid) % 2 == 0:
+            raise PlatformMissing("the wikidata pack of d.json.bz2 is not ready for parser 2")
+        embedded.append(int(nid))
+        return 1
+    monkeypatch.setattr(worker.embeddings, "upsert_book", upsert)
+    monkeypatch.setattr(worker.embeddings, "may_reuse", lambda row: False)
+    monkeypatch.setattr(worker, "_given", lambda *a, **k: {})
+
+    assert worker._embed_parallel(con, collection, recipe) is True, "the others are work"
+    assert sorted(embedded) == [1, 3, 5, 7], embedded
+    rows = {r["uid"]: r for r in con.execute("SELECT uid, error, retries, embed_done FROM documents")}
+    for i in range(8):
+        r = rows[f"g:{i}"]
+        assert r["error"] is None and r["retries"] == 0, dict(r)
+        assert r["embed_done"] == (i % 2), dict(r)
+    warns = [r["message"] for r in con.execute("SELECT message FROM events WHERE level='warn' AND stage='embed'")]
+    assert any("platform is missing" in m and "wikidata pack" in m for m in warns), warns
+    assert not any("encoder unreachable" in m for m in warns), warns
+    worker._platform_said.clear()
+
+
+def test_the_parallel_path_stops_when_every_document_waits_for_the_platform(collection, monkeypatch):
+    """...and when nothing can be embedded, the round is not work, and the
+    corpus is not walked past a group's worth."""
+    from app.chunking import PlatformMissing
+    worker._platform_said.clear()
+    con = db.connect(collection)
+    db.set_scope(con, {"embed_mode": "all"})
+    for i in range(6):
+        _doc(con, uid=f"g:{i}")
+    recipe = collections_mod.EmbedRecipe(url="http://x", api="openai", model="m", dtype="f16",
+                                         ctx=512, concurrency=2)
+    monkeypatch.setattr(worker, "_load_chunks", lambda row, c: [{"text": "x", "tokens": 1}])
+    monkeypatch.setattr(worker.embeddings, "upsert_book",
+                        lambda *a, **k: (_ for _ in ()).throw(PlatformMissing("no pack")))
+    assert worker._embed_parallel(con, collection, recipe) is False
+    rows = con.execute("SELECT error, retries, embed_done FROM documents").fetchall()
+    assert all(r["error"] is None and r["retries"] == 0 and r["embed_done"] == 0 for r in rows)
+    worker._platform_said.clear()
