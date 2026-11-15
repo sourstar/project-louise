@@ -3389,7 +3389,6 @@ def cmd_dev_eurlex_dump(a) -> int:
     `--carry-from`: then an earlier corpus's units the dump did not give are
     linked in without their notice (RULE 1), in the base or the history
     slice. Resumable: a landed unit is never written again."""
-    from app import slice_scope
     from app.acquire import datadump, eurlex_dump
     c = collections_mod.by_name(a.collection)
     if c is None or c.plugin != "eurlex":
@@ -3404,10 +3403,8 @@ def cmd_dev_eurlex_dump(a) -> int:
     say = lambda m: print(m, file=sys.stderr, flush=True)   # noqa: E731
     langs = [x.strip() for x in a.languages.split(",") if x.strip()] if a.languages else None
     if langs is None:
-        held = slice_scope.held(c)
-        if held is not None:
-            from app.plugins.eurlex.source import LANGUAGES
-            langs = [l for l in LANGUAGES if slice_scope.is_held(f"lang={l}/type=R/year=2000", held)]
+        from app.acquire import cellar
+        langs = cellar.held_languages(c)
     corpus = Path(c.corpus_dir)
     out: dict = {"built": {l: dict(n) for l, n in
                            eurlex_dump.build(dump, corpus, langs, log=say).items()}}

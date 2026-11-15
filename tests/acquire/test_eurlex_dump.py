@@ -163,9 +163,10 @@ def test_an_earlier_corpus_s_units_the_dump_did_not_give_are_carried_without_the
     assert doc.extra["history"] is True and doc.extra["work_celex"] == "31979D0491"
 
 
-def test_a_parser_4_collection_s_per_unit_pass_is_held_back(monkeypatch):
-    """Bulk first: nothing is listed or asked of Cellar for it; parser 3's
-    pass runs as before."""
+def test_a_parser_4_collection_s_per_unit_pass_is_held_back(monkeypatch, tmp_path):
+    """Bulk first: before the dump is built into it, nothing is listed or
+    asked of Cellar for it (tests/acquire/test_eurlex_phase2.py: after);
+    parser 3's pass runs as before."""
     import sqlite3
     from app import db
     from app.acquire import engine, specs
@@ -175,7 +176,8 @@ def test_a_parser_4_collection_s_per_unit_pass_is_held_back(monkeypatch):
     con.executescript(db.SCHEMA)
 
     def coll(v):
-        return SimpleNamespace(name="eurlex4", codex=SimpleNamespace(parser=SimpleNamespace(version=v)))
+        return SimpleNamespace(name="eurlex4", corpus_dir=tmp_path, slices=None,
+                               codex=SimpleNamespace(parser=SimpleNamespace(version=v)))
     assert spec.inventory.held_back(coll(3)) is None
     why = spec.inventory.held_back(coll(4))
     assert "Data Dump" in why and "not asked" in why

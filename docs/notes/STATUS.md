@@ -2003,10 +2003,13 @@ it left open is below.
   plus the items. `louise dev eurlex-dump <collection>` builds every unit the dump holds, with no Cellar
   request (app/acquire/eurlex_dump.py), and `--carry-from` links an earlier corpus's units in without their
   notice (RULE 1). The history slice is `history/lang=<l>/…`, fixed by the unit's place. records-vs-origin
-  re-fetches from Cellar tree-first. OWED, in order: (1) the per-unit pass for what the dump lacks; until
-  then a parser-4 collection's acquisition is held back (`CellarInventory.held_back`). It covers the
-  history slice, acts modified since the dump, and a newer dump at most once a day. (2) A EuroVoc and
-  authority-table reference source for the subjects' labels (bulk SKOS dumps).
+  re-fetches from Cellar tree-first. The per-unit pass (`cellar.TreeInventory`, `TreeUnits`):
+  - it runs only once the dump of every held language is built in (`.eurlex-dump.json`);
+  - a held, current unit costs no request;
+  - a unit not held is placed by its in-force (asked with the SPARQL page) and fetched tree-first;
+  - a held unit is never moved;
+  - a newer dump is built first (`build_newer`).
+  OWED: a EuroVoc and authority-table reference source for the subjects' labels (bulk SKOS dumps).
 
 - **A re-created collection read its corpus through its SOURCE's link (fixed 2026-11-15).** `dev carry`
   copied the source's manifest, whose paths are `<root>/<source>/origin/…`, while `create` had linked the

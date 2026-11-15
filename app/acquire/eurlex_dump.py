@@ -53,6 +53,11 @@ from typing import Callable
 
 #: works per task: a chunk parses its trees once and visits every language
 CHUNK = 400
+#: the corpus root's record of the dump built into it: `{lang: its stated
+#: creation}`, written when a language's build has visited every work. A
+#: parser-4 collection asks Cellar nothing per unit before it names every
+#: language it holds (cellar.CellarInventory.held_back: bulk first)
+STAMP = ".eurlex-dump.json"
 #: one language's zips held open per child (their central directories)
 OPEN_LANGUAGES = 2
 _MEMBER = re.compile(r"^(?P<uuid>[0-9a-f-]{36})/(?P<form>[a-z0-9]+)/(?P<name>[^/]+)$")
@@ -151,10 +156,53 @@ def _work_celex(tree: dict, uuid: str) -> str | None:
     return got[0] if got else None
 
 
+def stamp(corpus: Path) -> dict[str, str]:
+    """`{lang: the creation of the dump built into the corpus}`."""
+    import json
+    try:
+        got = json.loads((Path(corpus) / STAMP).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return {str(k): str(v) for k, v in got.items()} if isinstance(got, dict) else {}
+
+
+def _stamp(corpus: Path, langs: dict[str, str]) -> None:
+    import json
+    path = Path(corpus) / STAMP
+    now = {**stamp(corpus), **langs}
+    tmp = path.with_name(f".{path.name}.{os.getpid()}")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp.write_text(json.dumps(now, sort_keys=True, indent=1), encoding="utf-8")
+    os.replace(tmp, path)
+
+
+def _held_at(corpus: Path, rel: str) -> Path | None:
+    from ..plugins.eurlex import rdf
+    from ..plugins.eurlex.source import HISTORY
+    for base in (corpus, corpus / HISTORY):
+        if (base / rel / rdf.TREE_FILE).is_file():
+            return base / rel
+    return None
+
+
+def _older(unit: Path, note, code: str, celex: str) -> bool:
+    """Whether the held unit's work was last modified before the dump's."""
+    from ..plugins.eurlex import from_tree, rdf
+    from .cellar import _epoch
+    try:
+        held = from_tree.notice(rdf.loads((unit / rdf.TREE_FILE).read_bytes()), code, celex).last_modified
+    except (OSError, ValueError, from_tree.TreeError):
+        return True                         # unreadable: the dump's replaces it
+    a, b = _epoch(held), _epoch(note.last_modified)
+    return a is not None and b is not None and a < b
+
+
 def build_chunk(mtd_paths: tuple[str, ...], uuids: list[str], langs: list[tuple[str, str]],
-                corpus: str) -> dict[str, Counter]:
+                corpus: str, refresh: bool = False) -> dict[str, Counter]:
     """Every unit the dump gives for these works in these languages
-    (`langs`: (code, folder)). A child's task (parallel.each_part)."""
+    (`langs`: (code, folder)). A child's task (parallel.each_part).
+    `refresh` (a dump newer than the one built in): a held unit whose work
+    the dump states modified later is rebuilt from it, where it is held."""
     from ..plugins.eurlex import formex, from_tree, rdf
     from ..plugins.eurlex.source import LANGUAGES, unit_rel
     from .cellar import _land, form_of
@@ -195,7 +243,8 @@ def build_chunk(mtd_paths: tuple[str, ...], uuids: list[str], langs: list[tuple[
                 continue
             tree, celex = got
             rel = unit_rel(lang, celex)
-            if _held(root, rel):
+            at = _held_at(root, rel)
+            if at is not None and not refresh:
                 c["held"] += 1
                 continue
             scoped = rdf.scope(tree, code)
@@ -203,6 +252,9 @@ def build_chunk(mtd_paths: tuple[str, ...], uuids: list[str], langs: list[tuple[
                 note = from_tree.notice(scoped, code, celex)
             except from_tree.TreeError:
                 c["no-work"] += 1
+                continue
+            if at is not None and not _older(at, note, code, celex):
+                c["held"] += 1
                 continue
             form = form_of(note)
             listed = note.items.get(form) or [] if form else []
@@ -221,16 +273,17 @@ def build_chunk(mtd_paths: tuple[str, ...], uuids: list[str], langs: list[tuple[
                     c["formex-refused"] += 1
                     continue
             files[rdf.TREE_FILE] = rdf.dumps(scoped)
-            _land(root / rel, files)
-            c["built"] += 1
+            _land(at if at is not None else root / rel, files)
+            c["refreshed" if at is not None else "built"] += 1
             c["bytes"] += sum(len(b) for b in files.values())
     return counts
 
 
 def build(dump_dir: Path, corpus: Path, languages: list[str] | None = None, *,
-          log: Callable[[str], None] = print, chunk: int = CHUNK) -> dict[str, Counter]:
+          log: Callable[[str], None] = print, chunk: int = CHUNK, refresh: bool = False) -> dict[str, Counter]:
     """Every unit of `languages` (None: every language the dump holds) the
-    dump gives, into `corpus`. Returns the counts by language."""
+    dump gives, into `corpus`; then the stamp names each language's dump.
+    Returns the counts by language."""
     from .. import parallel
     from .datadump import Dumps
     found = Dumps(dump_dir, log=log)._scan()
@@ -247,7 +300,7 @@ def build(dump_dir: Path, corpus: Path, languages: list[str] | None = None, *,
     log(f"[eurlex-dump] {len(uuids)} works in {', '.join(p.name for p in mtd)}; languages "
         f"{', '.join(langs)}; into {corpus}")
     pairs = [(l, str(found[l][0])) for l in langs]
-    tasks = [(tuple(str(p) for p in mtd), uuids[i:i + chunk], pairs, str(corpus))
+    tasks = [(tuple(str(p) for p in mtd), uuids[i:i + chunk], pairs, str(corpus), refresh)
              for i in range(0, len(uuids), chunk)]
     total: dict[str, Counter] = {l: Counter() for l in langs}
     for k, got in enumerate(parallel.each_part(build_chunk, tasks), 1):
@@ -260,7 +313,28 @@ def build(dump_dir: Path, corpus: Path, languages: list[str] | None = None, *,
         c = total[l]
         log(f"[eurlex-dump] {l}: " + ", ".join(f"{k} {v}" for k, v in sorted(c.items()) if k != "bytes")
             + f"; {c['bytes'] >> 20} MiB")
+    # every work visited for every language: the dump is used whole for them
+    _stamp(corpus, {l: found[l][1].isoformat() for l in langs})
     return total
+
+
+def build_newer(dump_dir: Path, corpus: Path, languages: list[str], *,
+                log: Callable[[str], None] = print) -> dict[str, Counter]:
+    """Before a per-unit pass (cellar.TreeUnits.prepare): the languages whose
+    dump under `dump_dir` is newer than the one built into `corpus` are built
+    from it first, a held unit the newer dump states modified later
+    refreshed in place — the bulk before the API, whenever a newer bulk is
+    there. Nothing for a language whose dump was built in already. Reading the
+    folders' statements asks nothing of the origin."""
+    from .datadump import Dumps, _stamp as when
+    found = Dumps(dump_dir, log=log)._scan()
+    had = stamp(corpus)
+    newer = [l for l in languages if l in found
+             and (l not in had or (when(had[l]) or found[l][1]) < found[l][1])]
+    if not newer:
+        return {}
+    log(f"[eurlex-dump] a newer Data Dump of {', '.join(newer)}: built before Cellar is asked")
+    return build(dump_dir, corpus, newer, log=log, refresh=True)
 
 
 # ---- the units an earlier per-unit fetch landed (RULE 1) --------------------------------------

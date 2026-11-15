@@ -107,7 +107,7 @@ _LINK = re.compile(r"""<a\b[^>]*\bhref\s*=\s*["'](?P<href>[^"']+?/DOC_\d+)["'][^
 _HREF = re.compile(r"""(?P<href>https?://[^\s"'<>]+?/DOC_\d+)(?![\w])""")
 _DISPOSITION = re.compile(r"""filename\*?=(?:UTF-8'')?["']?(?P<name>[^"';]+)""", re.IGNORECASE)
 _TAGS = re.compile(r"<[^>]+>")
-_LANG_PATTERN = re.compile(r"^lang=(?P<lang>[a-z]{2})/")
+_LANG_PATTERN = re.compile(r"^(?:history/)?lang=(?P<lang>[a-z]{2})/")
 _USER_AGENT = (f"louise-rag/0.1 (+https://github.com/sourstar/project-louise) "
                f"httpx/{httpx.__version__}")
 
@@ -132,10 +132,18 @@ def unit_of(f: RemoteFile) -> dict:
 TREE_MARK = "tree.json"
 
 
-def rel_path(lang: str, celex: str) -> str:
-    """The unit's completion mark, relative to the corpus root."""
-    from ..plugins.eurlex.source import unit_rel
-    return f"{unit_rel(lang, celex)}/{TREE_MARK}"
+def rel_path(lang: str, celex: str, history: bool = False) -> str:
+    """The unit's completion mark, relative to the corpus root; parser 4's
+    history slice under `history/` (source.HISTORY)."""
+    from ..plugins.eurlex.source import HISTORY, unit_rel
+    return f"{HISTORY + '/' if history else ''}{unit_rel(lang, celex)}/{TREE_MARK}"
+
+
+def is_history(celex: str, in_force: str | None) -> bool:
+    """Parser 4's history slice, for a unit not held yet: a consolidated
+    version, or an act Cellar does not state in force (eurlex_dump.py)."""
+    from ..plugins.eurlex.source import _CONSOLIDATED
+    return bool(_CONSOLIDATED.match(celex)) or str(in_force or "").lower() not in ("true", "1")
 
 
 def languages_of(flt: Filter) -> tuple[str, ...]:
@@ -244,10 +252,15 @@ def fingerprint_query(year: int, languages: tuple[str, ...]) -> str:
             + " }\n GROUP BY ?celex ?language\n}")
 
 
-def page_query(year: int, languages: tuple[str, ...], offset: int) -> str:
-    return (_PREFIXES + "SELECT ?celex ?language (MAX(?modified) AS ?last) WHERE {\n"
+def page_query(year: int, languages: tuple[str, ...], offset: int, force: bool = False) -> str:
+    """A page of the window's rows. `force` (parser 4): each work's
+    `resource_legal_in-force` too, which places a unit not held yet in the
+    base or the history slice (`is_history`)."""
+    return (_PREFIXES + "SELECT ?celex ?language (MAX(?modified) AS ?last)"
+            + (" (SAMPLE(STR(?inforce)) AS ?force)" if force else "") + " WHERE {\n"
             + _window(year, languages)
             + "  OPTIONAL { ?work cmr:lastModificationDate ?modified }\n"
+            + ("  OPTIONAL { ?work cdm:resource_legal_in-force ?inforce }\n" if force else "")
             + f"}}\nGROUP BY ?celex ?language\nORDER BY ?celex ?language\nLIMIT {PAGE} OFFSET {offset}")
 
 
@@ -342,9 +355,12 @@ def _epoch(stamp: str | None) -> int | None:
 
 def listing(endpoint: Endpoint, spec: AcquisitionSpec, flt: Filter, *,
             years: range | None = None, client: httpx.Client | None = None,
-            charge: Callable[[int], None] = budget.acquire_bytes) -> Iterator[RemoteFile]:
+            charge: Callable[[int], None] = budget.acquire_bytes,
+            place: Callable[[str, str, str | None], bool] | None = None) -> Iterator[RemoteFile]:
     """The origin's COMPLETE listing for the profile (the spec's listing
-    contract): every window to its count, every page to the end."""
+    contract): every window to its count, every page to the end. `place`
+    (parser 4): `(celex, lang, in force) → history?`, each work's in-force
+    asked with its page."""
     from ..plugins.eurlex.source import LANGUAGES
     languages = languages_of(flt)
     if not languages:
@@ -356,7 +372,7 @@ def listing(endpoint: Endpoint, spec: AcquisitionSpec, flt: Filter, *,
     try:
         for year in years:
             _stop_check()
-            yield from _window_files(client, endpoint.url, year, languages, code_of, charge)
+            yield from _window_files(client, endpoint.url, year, languages, code_of, charge, place)
     finally:
         if own:
             client.close()
@@ -368,7 +384,7 @@ def _timed_out(e: TransportError) -> bool:
 
 
 def _window_files(client, base: str, year: int, languages: tuple[str, ...], code_of: dict,
-                  charge) -> Iterator[RemoteFile]:
+                  charge, place=None) -> Iterator[RemoteFile]:
     """One CELEX year's files in `languages`. A COUNT THAT TIMES OUT is not
     asked again: the window is split, its languages in two halves, each
     counted and paged on its own, down to one language (the architecture
@@ -385,8 +401,8 @@ def _window_files(client, base: str, year: int, languages: tuple[str, ...], code
     except TransportError as e:
         if len(languages) > 1 and _timed_out(e):
             half = len(languages) // 2
-            yield from _window_files(client, base, year, languages[:half], code_of, charge)
-            yield from _window_files(client, base, year, languages[half:], code_of, charge)
+            yield from _window_files(client, base, year, languages[:half], code_of, charge, place)
+            yield from _window_files(client, base, year, languages[half:], code_of, charge, place)
             return
         raise
     try:
@@ -394,17 +410,21 @@ def _window_files(client, base: str, year: int, languages: tuple[str, ...], code
     except (KeyError, ValueError, IndexError):
         raise TransportError(f"cellar: the count of {year} answered {counted!r:.200}") from None
     latest = (counted[0].get("max") or {}).get("value") if counted else None
-    kept = cellar_listing.held(base, year, languages, want, latest)
+    force = place is not None
+    kept = cellar_listing.held(base, year, languages, want, latest, force=force)
     if kept is not None:
         # the window as the last pass listed it: its count and its latest
         # modification are the same, so no row moved (cellar_listing.py)
-        for celex, lang, mtime in kept:
-            yield RemoteFile(rel_path=rel_path(lang, celex), mtime=mtime, remote=encode(celex, lang))
+        for row in kept:
+            celex, lang, mtime = row[:3]
+            history = place(celex, lang, row[3]) if force else False
+            yield RemoteFile(rel_path=rel_path(lang, celex, history), mtime=mtime,
+                             remote=encode(celex, lang))
         return
     listed: list = []
     got = 0
     while got < want:
-        rows = sparql(client, base, page_query(year, languages, got),
+        rows = sparql(client, base, page_query(year, languages, got, force),
                       what=f"the {year} page at offset {got} ({lang_text})", charge=charge)
         if not rows:
             break
@@ -414,15 +434,21 @@ def _window_files(client, base: str, year: int, languages: tuple[str, ...], code
             if not celex or lang is None:
                 continue
             mtime = _epoch(row.get("last", {}).get("value"))
-            listed.append([celex, lang, mtime])
-            yield RemoteFile(rel_path=rel_path(lang, celex), mtime=mtime, remote=encode(celex, lang))
+            if force:
+                inforce = row.get("force", {}).get("value")
+                listed.append([celex, lang, mtime, inforce])
+                history = place(celex, lang, inforce)
+            else:
+                listed.append([celex, lang, mtime])
+                history = False
+            yield RemoteFile(rel_path=rel_path(lang, celex, history), mtime=mtime, remote=encode(celex, lang))
         got += len(rows)
     if got != want:
         # a Virtuoso answer cut short says nothing: the window is
         # re-listed next pass (worded for engine.transient)
         raise TransportError(f"cellar: the {year} window answered {got} of the {want} rows its "
                              f"count names (connection timed out, the answer cut)")
-    cellar_listing.keep(base, year, languages, want, latest, listed)
+    cellar_listing.keep(base, year, languages, want, latest, listed, force=force)
 
 
 # ---- one unit ---------------------------------------------------------------------------------
@@ -738,16 +764,29 @@ class CellarInventory:
     built_on_request = False
 
     def held_back(self, collection) -> str | None:
-        """A collection on parser 4 takes its units from the Data Dump
-        (eurlex_dump.py; operator, 2026-11-15, B): its per-unit pass — the
-        API for what the dump lacks, the history slice — is not built yet,
-        so nothing is listed or asked of Cellar (bulk first, no exceptions)."""
-        version = getattr(getattr(getattr(collection, "codex", None), "parser", None), "version", None)
-        if version is not None and int(version) >= 4:
-            return (f"{getattr(collection, 'name', 'eurlex')}: parser {version} takes its units from the "
-                    f"Data Dump (louise dev eurlex-dump); the per-unit pass for what the dump lacks "
-                    f"is not built yet, so Cellar is not asked")
+        """BULK FIRST, NO EXCEPTIONS (CLAUDE.md; operator, 2026-11-15, B): a
+        collection on parser 4 asks Cellar nothing per unit until the Data
+        Dump of every language it holds has been built into it
+        (eurlex_dump.py, its stamp); then only what the dump lacks."""
+        if not _tree_mode(collection):
+            return None
+        from . import eurlex_dump
+        langs = held_languages(collection)
+        stamped = eurlex_dump.stamp(Path(collection.corpus_dir))
+        missing = [l for l in langs if l not in stamped]
+        if missing:
+            return (f"{getattr(collection, 'name', 'eurlex')}: the Data Dump of {', '.join(missing)} is not "
+                    f"built into it yet (louise dev eurlex-dump); bulk first, so Cellar is not asked")
         return None
+
+    def for_collection(self, spec: AcquisitionSpec, collection) -> AcquisitionSpec:
+        """The spec a collection fetches by (engine.effective_spec): on
+        parser 4, the listing that places each unit (`TreeInventory`) and
+        the fetch of the tree and the items alone (`TREE_UNITS`)."""
+        if not _tree_mode(collection):
+            return spec
+        from dataclasses import replace
+        return replace(spec, inventory=TreeInventory(Path(collection.corpus_dir)), unit_fetcher=TREE_UNITS)
 
     def list(self, endpoint: Endpoint, spec: AcquisitionSpec, profile_filter: Filter):
         return listing(endpoint, spec, profile_filter)
@@ -784,7 +823,8 @@ class CellarUnits:
             return []
         rate = c["units"] / elapsed * 3600 if elapsed > 0 else 0.0
         return [f"cellar: {c['units']} units in {elapsed / 60:.0f} min ({rate:.0f}/h); trees "
-                f"{c['tree:cellar']} from Cellar, {c['tree:kept']} kept, {c['tree:dump']} from the dump; "
+                f"{c['tree:cellar']} from Cellar, {c['tree:kept']} kept, {c['tree:dump']} from the dump"
+                + (f", {c['tree:held']} held and current" if c["tree:held"] else "") + "; "
                 f"{c['bytes_moved'] >> 20} MiB moved, {c['bytes_from_dump'] >> 20} MiB from the dump"]
 
     def handles(self, remote: RemoteFile) -> bool:
@@ -828,5 +868,85 @@ class CellarUnits:
         raise FileNotFoundError(f"{rel}: no endpoint of {spec.source_id} served it")
 
 
+def held_languages(collection) -> list[str]:
+    """The languages a collection's file holds, in the base or the history
+    (`slices`; every language where it names none). Not slice_scope.held,
+    which is None for an origin that divides by slice itself."""
+    from .. import slice_scope
+    from ..plugins.eurlex.source import LANGUAGES
+    slices = getattr(collection, "slices", None)
+    if slices is None or slices == "all":
+        return sorted(LANGUAGES)
+    held = tuple(str(s) for s in slices)
+    return [l for l in sorted(LANGUAGES) if any(
+        slice_scope.is_held(f"{p}lang={l}/type=R/year=2000", held) for p in ("", "history/"))]
+
+
+def _tree_mode(collection) -> bool:
+    version = getattr(getattr(getattr(collection, "codex", None), "parser", None), "version", None)
+    return version is not None and int(version) >= 4
+
+
+class TreeInventory(CellarInventory):
+    """Parser 4's listing (eurlex_dump.py): each unit at the place it is
+    held — the base or the history slice, fixed when first held — and a unit
+    not held yet placed by its work's in-force (`is_history`)."""
+
+    def __init__(self, corpus: Path) -> None:
+        self.corpus = Path(corpus)
+
+    def for_collection(self, spec, collection):
+        return spec
+
+    def _place(self, celex: str, lang: str, in_force: str | None) -> bool:
+        from ..plugins.eurlex.source import HISTORY, unit_rel
+        rel = unit_rel(lang, celex)
+        if (self.corpus / rel / TREE_MARK).is_file():
+            return False
+        if (self.corpus / HISTORY / rel / TREE_MARK).is_file():
+            return True
+        return is_history(celex, in_force)
+
+    def list(self, endpoint: Endpoint, spec: AcquisitionSpec, profile_filter: Filter):
+        return listing(endpoint, spec, profile_filter, place=self._place)
+
+
+class TreeUnits(CellarUnits):
+    """Parser 4's `UnitFetcher`. A unit held whose tree is as recent as the
+    listing says is answered without a request (the Data Dump built it, or an
+    earlier pass); any other unit is fetched from Cellar — the tree, then the
+    items it names (`fetch_unit_from_tree`) — into the place the listing
+    names. Before the pass, a Data Dump newer than the one built into the
+    collection is built first (`prepare`: bulk first)."""
+
+    def fetch(self, endpoint: Endpoint, remote: RemoteFile, dest: Path) -> int:
+        from ..plugins.eurlex import from_tree, rdf
+        from ..plugins.eurlex.source import LANGUAGES
+        unit = unit_of(remote)
+        if dest.is_file() and remote.mtime is not None:
+            try:
+                note = from_tree.notice(rdf.loads(dest.read_bytes()), LANGUAGES[unit["lang"]], unit["celex"])
+                held = _epoch(note.last_modified)
+            except (OSError, ValueError, from_tree.TreeError):
+                held = None
+            if held is not None and held >= remote.mtime:
+                self._count(Fetched(files={}, moved=0, tree_from="held"))
+                return 0
+        got = fetch_unit_from_tree(endpoint.url, unit["celex"], unit["lang"], dest.parent)
+        self._count(got)
+        return got.moved
+
+    def prepare(self, files: list[RemoteFile], pending: list[RemoteFile], collection,
+                endpoint: Endpoint) -> list[str]:
+        from . import datadump, eurlex_dump
+        dumps = datadump.dumps()
+        if dumps.base is None:
+            return []
+        langs = sorted({unit_of(f)["lang"] for f in pending if is_unit(f)})
+        eurlex_dump.build_newer(dumps.base, Path(collection.corpus_dir), langs)
+        return []
+
+
 INVENTORY = CellarInventory()
 UNITS = CellarUnits()
+TREE_UNITS = TreeUnits()

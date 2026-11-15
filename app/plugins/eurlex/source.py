@@ -115,7 +115,10 @@ plugin, because a verifier needs it to reproduce our records:
     the tree, then the items it names). CELLAR stays the origin. What the
     dump lacks is the HISTORY slice (`history/lang=<l>/…`): consolidated
     versions, and acts not in force when first held; optional to hold and to
-    embed, its per-unit pass not built yet (`cellar.CellarInventory.held_back`).
+    embed. Cellar is asked per unit only once the dump of every language held
+    is built in (`cellar.CellarInventory.held_back`), only for what it lacks
+    (a unit held and current costs no request, `cellar.TreeUnits`), and a
+    newer dump is built first (`eurlex_dump.build_newer`).
     The notice-based reading below is parser 3's, kept for its Codex.
   * The DATA DUMP is a TRANSPORT for items, never the origin (amended
     2026-11-14, operator: "every time there is a bulk download that saves a

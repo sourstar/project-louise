@@ -173,7 +173,11 @@ class Cellar:
                          "language": {"type": "uri",
                                       "value": f"http://publications.europa.eu/resource/authority/language/"
                                                f"{src.LANGUAGES[lg]}"},
-                         "last": {"type": "literal", "value": owner.units[(c, lg)]["modified"]}}
+                         "last": {"type": "literal", "value": owner.units[(c, lg)]["modified"]},
+                         # parser 4's listing asks each work's in-force (cellar.page_query)
+                         **({"force": {"type": "literal", "value": owner.units[(c, lg)].get("in_force", "true")}}
+                            if "?force" in query and owner.units[(c, lg)].get("in_force", "true") is not None
+                            else {})}
                         for c, lg in page]}}
                 self._send(200, json.dumps(body).encode(), {"Content-Type": "application/sparql-results+json"})
 

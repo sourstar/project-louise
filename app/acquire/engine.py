@@ -340,6 +340,11 @@ def effective_spec(collection, spec: AcquisitionSpec,
     languages; growing the profile adds members without a TOML edit.
     """
     from dataclasses import replace
+    # THE INVENTORY'S OWN SPEC FOR THE COLLECTION, where it has one (eurlex on
+    # parser 4: the listing that places each unit and the tree-first fetch)
+    adapt = getattr(spec.inventory, "for_collection", None)
+    if callable(adapt):
+        spec = adapt(spec, collection)
     # A CODEX COLLECTION FETCHES BY ITS CODEX'S FILTERS — the identifying half
     # of the spec it was made from (09 §9.17) — never by a plugin's that has
     # moved since: wikipedia's parser 5 lists each run's page_props, and the
