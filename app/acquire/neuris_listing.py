@@ -195,13 +195,20 @@ class NeurisListing:
             items = self._items(client, base)
             stamps = self._stamps(client, base)
         out: list[RemoteFile] = []
+        stated = 0
         for item in items:
             eli = str(item.get("legislationIdentifier") or "")
-            got = files_of(item, stamps.get(eli))
+            start = stated_start(item)
+            stated += start is not None
+            got = files_of(item, listed_mtime(stamps.get(eli), start))
             if isinstance(got, str):
                 self._report(got)
                 continue
             out.extend(got)
+        # when the portal leaves its test phase, this is where it shows: every
+        # record whose start is provisional (neuris parser 4) waits for it
+        self._report(f"listing: {stated} of {len(items)} expressions state their entry into force"
+                     + ("" if stated else " (the test phase: every start held is provisional)"))
         return iter(out)
 
     # -- the requests -----------------------------------------------------------
@@ -305,6 +312,31 @@ class NeurisListing:
                 self._report(f"changelog {_iso(start)[:10]}: the origin reports {what} deleted; the "
                              f"copy held stands and nothing is removed (invariant 11)")
         return stamps
+
+
+#: what the portal's test phase writes where a date is not known yet (neuris
+#: source.PLACEHOLDER_DAY): never a stated start
+PLACEHOLDER_DAY = "1001-01-01"
+
+
+def stated_start(item: dict) -> str | None:
+    """The entry into force the listing item states (its temporalCoverage's
+    start), or None: absent, open, or the test phase's placeholder."""
+    start = str(item.get("temporalCoverage") or "").partition("/")[0]
+    return start if _DATE.match(start) and start != PLACEHOLDER_DAY else None
+
+
+def listed_mtime(stamp: int | None, start: str | None) -> int | None:
+    """The files' listed date: the changelog's stamp, and the stated start's
+    day (2026-11-15, NeuRIS parser 4's provisional starts). The test phase
+    states none and the stamp is as before; the day the portal states an
+    expression's start, the date moves, so the engine fetches the pair once
+    (`_is_pending`: a listed date unlike the one held) and the parser's
+    stated start replaces the provisional one — the changelog's
+    `allChanged: true` names no expression to fetch again."""
+    dated = day_end(start) if start else None
+    marks = [m for m in (stamp, dated) if m is not None]
+    return max(marks) if marks else None
 
 
 def day_end(day_iso: str) -> int:

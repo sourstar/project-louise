@@ -160,8 +160,11 @@ def of_doc(doc, v: Validity, plugin=None) -> dict[str, Any] | None:
     except ValueError:
         return None
     in_force = (doc.extra or {}).get("in_force")
+    # a start the origin did not state, and why it was taken (NeuRIS's test
+    # phase, parser 4): said on every result that shows it (`describe`)
+    basis = (doc.extra or {}).get("valid_from_provisional")
     out: dict[str, Any] = {
-        "from": start_i, "work": str(work),
+        "from": start_i, "work": str(work), "start_basis": str(basis) if basis else None,
         "has_text": any((body or "").strip() for _, body in (doc.sections or [])),
         "in_force": None if in_force is None else int(bool(in_force)),
         "keys": [str(k) for k in (doc.keys or [])], "closes": []}
@@ -440,11 +443,13 @@ def record(con, uid: str, native_id: int, meta: dict[str, Any]) -> list[str]:
     (the codes: about 400), typically one."""
     work = str(meta["work"])
     con.execute(
-        "INSERT INTO validity(uid, native_id, work, valid_from, valid_to, has_text, in_force, shown, synced) "
-        "VALUES(?,?,?,?,NULL,?,?,0,0) "
+        "INSERT INTO validity(uid, native_id, work, valid_from, valid_to, has_text, in_force, shown, synced, "
+        "start_basis) VALUES(?,?,?,?,NULL,?,?,0,0,?) "
         "ON CONFLICT(uid) DO UPDATE SET native_id=excluded.native_id, work=excluded.work, "
-        "valid_from=excluded.valid_from, has_text=excluded.has_text, in_force=excluded.in_force, synced=0",
-        (uid, int(native_id), work, int(meta["from"]), int(bool(meta["has_text"])), meta.get("in_force")))
+        "valid_from=excluded.valid_from, has_text=excluded.has_text, in_force=excluded.in_force, "
+        "start_basis=excluded.start_basis, synced=0",
+        (uid, int(native_id), work, int(meta["from"]), int(bool(meta["has_text"])), meta.get("in_force"),
+         meta.get("start_basis")))
     con.executemany("INSERT OR IGNORE INTO validity_works(key, work) VALUES(?,?)",
                     [(str(k), work) for k in meta.get("keys") or []])
     touched = _record_closures(con, uid, meta.get("closes") or [])
@@ -618,16 +623,18 @@ def admit(con, w: dict[str, Any], native_ids: Iterable[int]) -> set[int]:
 def describe(con, native_ids: Iterable[int]) -> dict[int, dict[str, Any]]:
     """05 §5.3's `validity` on a result: when the version came into force,
     when the next one did (null while in force), and the origin's force
-    status where it stated one."""
+    status where it stated one; `provisional` where the start is not one
+    the origin stated (its basis: `publication`, `signing`)."""
     ids = sorted({int(i) for i in native_ids})
     out: dict[int, dict[str, Any]] = {}
     for start in range(0, len(ids), 500):
         part = ids[start:start + 500]
         marks = ",".join("?" for _ in part)
-        for r in con.execute(f"SELECT native_id, valid_from, valid_to, in_force, shown FROM validity "
-                             f"WHERE native_id IN ({marks})", part):
+        for r in con.execute(f"SELECT native_id, valid_from, valid_to, in_force, shown, start_basis "
+                             f"FROM validity WHERE native_id IN ({marks})", part):
             out[int(r["native_id"])] = {
                 "from": day_text(r["valid_from"]), "to": day_text(r["valid_to"]),
                 "in_force": None if r["in_force"] is None else bool(r["in_force"]),
-                "current": bool(r["shown"])}
+                "current": bool(r["shown"]),
+                **({"provisional": r["start_basis"]} if r["start_basis"] else {})}
     return out

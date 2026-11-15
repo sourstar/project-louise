@@ -273,13 +273,15 @@ def test_a_stated_start_that_disagrees_is_an_issue_and_the_apis_is_the_records(t
     assert doc.extra["valid_from"] == "2025-05-07"
 
 
-def test_no_stated_start_starts_at_the_eli_point_in_time_and_says_so(corpus):
-    """Parser 4 (2026-11-15): without a stated start the version took no part
-    in validity, and the index read every version as current. It starts at
-    its ELI's point in time, and the record says that is what it is."""
+def test_no_stated_start_is_a_provisional_one_said_on_the_record(corpus):
+    """Parser 4 (2026-11-15, operator: a "draft" in-force date, the
+    publication): without a stated start the version took no part in
+    validity, and the index read every version as current. The fixture's
+    version date is its Verkündung, so the start is that, provisionally."""
     ref = _by_expression(corpus)[ns.S101]
     doc = _doc(ref)
-    assert doc.extra["valid_from"] == ns.S101.split("/")[5] and [i.code for i in doc.issues] == ["start-from-eli"]
+    assert doc.extra["valid_from"] == ns.S101.split("/")[5] and doc.extra["valid_from_provisional"] == "publication"
+    assert [i.code for i in doc.issues] == ["start-provisional"]
     old = SOURCE.at_parser_version(3)
     three = old.parse(old.fetch(ref))
     assert "valid_from" not in three.extra and [i.code for i in three.issues] == ["no-stated-start"], \
@@ -654,7 +656,7 @@ def test_the_rechtsetzungsdokument_every_real_zip_carries_is_kept_never_read_as_
     assert refs == ["regelungstext-1.xml", "anlage-regelungstext-1.xml"]
     assert len(x["annexes"]) == 1, "the annex alone is an annex"
     assert not any("rechtsetzungsdokument" in s[0] for s in doc.sections), "it carries no text to embed"
-    assert SOURCE.PARSER_VERSION == 4
+    assert SOURCE.PARSER_VERSION == 5
 
 
 def test_an_xml_member_of_a_root_not_named_here_is_kept_whole(tmp_path):

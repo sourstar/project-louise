@@ -204,6 +204,28 @@ _HOST = re.compile(r"^[a-z][a-z0-9+.-]*://[^/]+/", re.IGNORECASE)
 PLACEHOLDER_DAY = "1001-01-01"
 
 
+def provisional_start(expr: dict, ex_work: dict, pit: str) -> tuple[str, str]:
+    """`(day, basis)` of a version the origin dates no entry into force for
+    (parser 4), by what its ELI's point in time IS (FRBRExpression's FRBRdate
+    name): `verkuendung` is the publication; `ausfertigung`, a first
+    version's signing, gives way to the act's publication
+    (`exampleOfWork.datePublished`, where real and not before it);
+    `ausfertigung-aenderung` is the amendment's signing (the amending act's
+    publication is another record's); any other name is the version's date."""
+    date = expr.get("FRBRdate") if isinstance(expr.get("FRBRdate"), dict) else {}
+    name = str(date.get("name") or "")
+    if name == "verkuendung":
+        return pit, "publication"
+    if name == "ausfertigung":
+        published = _real(ex_work.get("datePublished"))
+        if published and _DATE.match(str(published)) and str(published) >= pit:
+            return str(published), "publication"
+        return pit, "signing"
+    if name == "ausfertigung-aenderung":
+        return pit, "signing"
+    return pit, "version-date"
+
+
 def relative_eli(uri) -> str:
     """`https://www.ris.bund.de/eli/bund/…` → `eli/bund/…`; a relative one as it is."""
     return _HOST.sub("", str(uri or "").strip())
@@ -225,10 +247,14 @@ ISSUES = {
     "expression-eli-mismatch": "the FRBRExpression the XML returns is not the expression its "
                                "path and the API name; the XML's is the record's (eli rule 2)",
     "annex-missing": "the act's attachments name a file the manifestation zip does not hold",
-    "start-from-eli": "the origin states no entry into force (its test phase writes 1001-01-01 "
-                      "placeholders, or nothing): the version's start is the point in time of its "
-                      "ELI, the signing of the act or of the amendment that made it (FRBRdate), "
-                      "not its entry into force, which can be later",
+    "start-from-eli": "parser 4: the origin states no entry into force (its test phase writes "
+                      "1001-01-01 placeholders, or nothing); the version's start is the point in time "
+                      "of its ELI, not its entry into force",
+    "start-provisional": "the origin states no entry into force (its test phase writes 1001-01-01 "
+                         "placeholders, or nothing): the version's start is PROVISIONAL — the act's "
+                         "publication for its first version, the signing of the amendment for a "
+                         "later one, else the version's own date — and is said so on every result; "
+                         "a stated one replaces it",
 }
 
 #: every key a record's `extra` may carry — fixed for the collection's life
@@ -239,7 +265,7 @@ EXTRA_KEYS = (
     "eli_date_document", "eli_date_publication", "eli_version", "eli_version_date",
     "eli_title", "eli_cites", eli.IN_FORCE,
     # the expression and its validity
-    "point_in_time", "manifestation", "valid_from", "valid_to_stated",
+    "point_in_time", "manifestation", "valid_from", "valid_from_provisional", "valid_to_stated",
     "conditional_entry_into_force", "temporal_coverage", "legal_force",
     # the API's answer: its fields by name, and the whole of it
     "name", "abbreviation", "ris_abbreviation", "alternate_name", "gazette", "api",
@@ -455,7 +481,16 @@ class NeurisSource:
     #: the host (`relative_eli`), reads the placeholder as no day, and where no
     #: start is stated starts the version at its ELI's point in time, saying so
     #: (`start-from-eli`). Parsers 3 and 2 are kept for the Codexes naming them.
-    PARSER_VERSION = 4
+    #: 5 (2026-11-15, operator: "we add a 'draft' flag for the in force date,
+    #: and we use the publishing date as draft. When this information is
+    #: correctly published we replace all the draft dates"): the start a
+    #: version is given is PROVISIONAL and says so — on the record
+    #: (`valid_from_provisional`), in the index (`validity.start_basis`) and on
+    #: every result — the act's publication for its first version, the
+    #: amendment's signing for a later one (`provisional_start`). Parser 4
+    #: (d1138fd) gave every one its ELI date, unmarked; kept for a Codex
+    #: naming 4, none was made from it.
+    PARSER_VERSION = 5
     #: 06 §6.2: an expression stays listed, a manifestation is regenerated in
     #: place; an older one is not known to stay fetchable (owed from the node)
     origin_versions = "replaces"
@@ -542,10 +577,11 @@ class NeurisSource:
 
     def at_parser_version(self, version: int) -> "NeurisSource | None":
         """This plugin parsing at `version`, for a collection whose Codex
-        names it (`collections.plugin_at`): 4 is this one, 3 the parser before
-        the host and placeholder reading (`NeurisSourceV3`), 2 the one that read
-        the members as fetched (`NeurisSourceV2`)."""
-        return {4: self, 3: _V3, 2: _V2}.get(int(version))
+        names it (`collections.plugin_at`): 5 is this one, 4 the parser that
+        started an unstated version at its ELI unmarked (`NeurisSourceV4`), 3 the
+        one before the host and placeholder reading (`NeurisSourceV3`), 2 the
+        one that read the members as fetched (`NeurisSourceV2`)."""
+        return {5: self, 4: _V4, 3: _V3, 2: _V2}.get(int(version))
 
     def parse(self, raw: RawDoc) -> CanonicalDoc:
         zpath = Path(raw.ref.locator)
@@ -611,18 +647,32 @@ class NeurisSource:
             found.append(Issue("stated-start-disagrees", f"temporalCoverage {tc_start}, ris:inkraft {inkraft}"))
         if tc_end and ausserkraft and tc_end != ausserkraft:
             found.append(Issue("stated-end-disagrees", f"temporalCoverage {tc_end}, ris:ausserkraft {ausserkraft}"))
+        ex_work = api.get("exampleOfWork") if isinstance(api.get("exampleOfWork"), dict) else {}
         valid_from = tc_start or inkraft
+        provisional = None
         if not valid_from and not conditional:
             if self.PARSER_VERSION >= 4:
-                # parser 4 (2026-11-15): without a start, the version took no
-                # part in validity, and the index read every version of a law
-                # as current (validity.current_columns): its ELI's point in
-                # time orders the chain, and the record says what it is
-                valid_from = p["pit"]
-                basis = next((d.get("name") for d in [expr.get("FRBRdate") or {}] if isinstance(d, dict)), None)
-                found.append(Issue("start-from-eli", f"{expression}: no stated entry into force; starts at "
-                                                     f"its ELI point in time {p['pit']}"
-                                                     + (f" (FRBRdate {basis})" if basis else "")))
+                # parser 4 (2026-11-15, operator: "we add a 'draft' flag for
+                # the in force date, and we use the publishing date as
+                # draft"): without a start the version took no part in
+                # validity, and the index read every version of a law as
+                # current (validity.current_columns). A PROVISIONAL start, said
+                # on the record and on every result (validity.describe): the
+                # act's publication for its first version (FRBRdate
+                # "ausfertigung"), the amendment's signing for a later one
+                # (its ELI point in time: the amending act's publication is in
+                # another record, not this unit's). A stated start replaces it
+                # the day the origin writes one.
+                if self.PARSER_VERSION >= 5:
+                    valid_from, provisional = provisional_start(expr, ex_work, p["pit"])
+                    found.append(Issue("start-provisional", f"{expression}: no stated entry into force; "
+                                                            f"provisionally {valid_from}, its {provisional}"))
+                else:
+                    # parser 4 as deployed in d1138fd: the ELI's point in time,
+                    # unmarked in the index (kept for a Codex naming 4)
+                    valid_from = p["pit"]
+                    found.append(Issue("start-from-eli", f"{expression}: no stated entry into force; "
+                                                         f"starts at its ELI point in time {p['pit']}"))
             else:
                 found.append(Issue("no-stated-start", f"{expression}: no temporalCoverage start, no ris:inkraft"))
 
@@ -632,7 +682,6 @@ class NeurisSource:
             if want and not any(n == want or n.endswith("/" + want) for n in names):
                 found.append(Issue("annex-missing", f"{want} named by the act, not in {zpath.name}"))
 
-        ex_work = api.get("exampleOfWork") if isinstance(api.get("exampleOfWork"), dict) else {}
         part_of = ex_work.get("isPartOf") if isinstance(ex_work.get("isPartOf"), dict) else {}
         abbreviation = str(api.get("abbreviation") or "").strip()
         ris_abbreviation = str(api.get("risAbbreviation") or "").strip()
@@ -658,6 +707,7 @@ class NeurisSource:
             "point_in_time": p["pit"],
             "manifestation": generated,
             "valid_from": valid_from,
+            "valid_from_provisional": provisional,
             "valid_to_stated": tc_end or ausserkraft,
             "conditional_entry_into_force": conditional or None,
             "temporal_coverage": api.get("temporalCoverage"),
@@ -824,6 +874,16 @@ def modification_target(mod: dict) -> tuple[str, str | None, bool] | None:
 
 def _is_repeal(mod: dict) -> bool:
     return str(mod.get("type") or "").strip().lower() == "repeal"
+
+
+class NeurisSourceV4(NeurisSource):
+    """PARSER 4 (d1138fd), KEPT for a collection whose Codex names it: an
+    unstated start is its ELI's point in time, unmarked. Removed once no
+    Codex on a node names 4."""
+    PARSER_VERSION = 4
+
+
+_V4 = NeurisSourceV4()
 
 
 class NeurisSourceV3(NeurisSource):
