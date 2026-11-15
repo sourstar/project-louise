@@ -234,16 +234,25 @@ def stage_doc(collection, row, doc) -> tuple[str | None, list, bool]:
     return rec.get("title"), [tuple(x) for x in rec.get("sections") or []], True
 
 
-def record_input(held, uid: str) -> tuple[Any, str | None, list, bool] | None:
+def record_input(held, uid: str, plugin=None) -> tuple[Any, str | None, list, bool] | None:
     """(row, title, sections, from the record) as `stage_doc` gives them, for
     one record, KEEPING NOTHING: the record is read where the collection holds
     it and parsed only where it does not. `held._row_and_doc` parsed every
     pool record and cached it for the life of the run — 6,413 Normattiva acts,
-    about 0.5–1 GB, on top of the arms (the pilot's OOM kills, 2026-11-14)."""
+    about 0.5–1 GB, on top of the arms (the pilot's OOM kills, 2026-11-14).
+
+    `plugin` (a parser the collection's Codex does not name, `--parse-at`):
+    every record parsed by it, never read from the collection's lines — the
+    arms measured on the records that parser writes (2026-11-15: the pool's
+    records were Normattiva parser 8's, and parser 9 rewrites the labels of
+    the articles written in their headings)."""
     from app import plugin_io, record_source
     row = held.con.execute("SELECT * FROM documents WHERE uid=?", (uid,)).fetchone()
     if row is None:
         return None
+    if plugin is not None:
+        doc = plugin_io.canonical_doc(plugin, row)
+        return row, doc.title, doc.sections, False
     rec = record_source.record_for(held.collection, row)
     if rec is not None:
         return row, rec.get("title"), [tuple(x) for x in rec.get("sections") or []], True
@@ -252,7 +261,7 @@ def record_input(held, uid: str) -> tuple[Any, str | None, list, bool] | None:
 
 
 def cut(arm: Arm, held, native_ids: Iterable[int], *, count: Callable[[str], int] | None = None,
-        ctx: int | None = None) -> tuple[list[dict], dict[str, Any]]:
+        ctx: int | None = None, parse_with=None) -> tuple[list[dict], dict[str, Any]]:
     """The arm's chunks of every pool record, in record order, each with the
     record's language; and what was cut (records, records missing, chunks,
     characters, the chunker's token estimate). With `count` and `ctx`, every
@@ -265,7 +274,7 @@ def cut(arm: Arm, held, native_ids: Iterable[int], *, count: Callable[[str], int
     chunks: list[dict] = []
     missing = from_records = 0
     for nid in sorted({int(i) for i in native_ids}):
-        got = record_input(held, f"{plugin}:{nid}")
+        got = record_input(held, f"{plugin}:{nid}", parse_with)
         if got is None:
             missing += 1
             continue
@@ -673,7 +682,7 @@ def run(held, questions: list[dict[str, Any]], gold: dict, arms: list[Arm], nati
         k: int, workdir: Path, recipe, cache: VectorCache, embed_fn: Callable | None = None,
         stored_fn: Callable | None = None, rerank_fn: Callable | None = None,
         only: Iterable[int] | None = None, count_fn: Any = _DEFAULT,
-        log: Callable[[str], None] = print) -> dict[str, Any]:
+        log: Callable[[str], None] = print, parse_with=None) -> dict[str, Any]:
     """Every arm over every covered question: `{arm: {"cost", "embedding",
     reading: {"summary", "per_question"}}}`. Arms one after the other, each
     index removed before the next is built (memory is one arm's). Every arm
@@ -702,7 +711,7 @@ def run(held, questions: list[dict[str, Any]], gold: dict, arms: list[Arm], nati
     Path(workdir).mkdir(parents=True, exist_ok=True)
     cuts: dict[str, tuple[Path, dict[str, Any]]] = {}
     for arm in arms:
-        chunks, cost = cut(arm, held, ids, count=count, ctx=ctx)
+        chunks, cost = cut(arm, held, ids, count=count, ctx=ctx, parse_with=parse_with)
         cuts[arm.name] = (_put_cut(Path(workdir), arm.name, chunks), cost)
         del chunks
         log(f"arm {arm.name}: {json.dumps(arm.manifest(), sort_keys=True)} — {cost}")
@@ -1006,7 +1015,8 @@ def report_markdown(rep: dict, metrics: Iterable[str] = ("mrr@10", "recall@10", 
     return "\n".join(lines)
 
 
-def tag(arms: list[Arm], *, k: int, pool_name: str, split: str, stored: bool) -> str:
+def tag(arms: list[Arm], *, k: int, pool_name: str, split: str, stored: bool,
+        parser: int | None = None) -> str:
     """The settings a pilot reading is valid for: the arms' layers, k, the
     pool, the questions, whether stored vectors may be taken, and the code
     (this file, the chunkers, Ask's)."""
@@ -1020,7 +1030,8 @@ def tag(arms: list[Arm], *, k: int, pool_name: str, split: str, stored: bool) ->
               ROOT / "app" / "layers.py", ROOT / "app" / "fts.py", ROOT / "app" / "retrieval.py"]:
         h.update(f.read_bytes())
     raw = (f"chunker-{h.hexdigest()[:12]}-k{k}-pool-{pool_name}-q-{split}"
-           f"-vec-{'stored' if stored else 'fresh'}-code-{chat_eval.ask_code()[7:19]}")
+           f"-vec-{'stored' if stored else 'fresh'}" + (f"-parser{int(parser)}" if parser is not None else "")
+           + f"-code-{chat_eval.ask_code()[7:19]}")
     return re.sub(r"[^A-Za-z0-9._-]+", "-", raw)
 
 
