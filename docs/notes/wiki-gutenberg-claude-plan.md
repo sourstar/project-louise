@@ -104,3 +104,59 @@ Opus summaries ≈ **$9–10 k, ~2 weeks** including the pilot, against
 
 Recommendation: run the pilot (§1) now — it is needed whatever is
 decided — and decide 4.1 on its numbers.
+
+## 5. Recalculated with Qwen (Alibaba Model Studio) and DeepSeek (2026-11-15)
+
+Same token shapes as §3 (i). Prices read 2026-11-15 from the providers'
+pages, USD per 1 M tokens, thinking off:
+- **Qwen, International (Singapore):** Batch API −50 %, which cannot be
+  combined with the context cache.
+  - qwen3.7-flash: $0.03 in / $0.13 out up to 32 K input.
+  - qwen3.8-flash: $0.15 / $0.47.
+  - qwen3.7-plus: $0.4 / $1.6 (20 % promotion).
+  - qwen3.8-max: $2 / $6.
+- **DeepSeek:** there is no Batch API. Off-peak (outside 01–04 and
+  06–10 UTC on weekdays) is half price.
+  - deepseek-flash (V4.1-Flash), off-peak: $0.15 in on a cache miss,
+    $0.003 on a hit, $0.6 out.
+  - deepseek-v4-pro, off-peak: $0.66 / $0.022 / $1.98.
+  - The prefix cache is automatic, so relations' 1.5 K instructions are
+    nearly free.
+
+| job | scope | qwen3.7-flash | qwen3.8-flash | qwen3.7-plus | qwen3.8-max | deepseek-flash | deepseek-v4-pro | Claude (§3) |
+|---|---|---|---|---|---|---|---|---|
+| 2 pick | all kept | **~$650** | ~$3.1 k | — | — | ~$6.4 k | ~$27 k | ~$2 k (Haiku) |
+| 3 relations | C–F, N | ~$60 | ~$260 | **~$740** | ~$3.4 k | ~$340 | ~$1.3 k | ~$2–3 k (Sonnet) |
+| 3 relations | all kept | ~$310 | ~$1.4 k | ~$4.0 k | — | ~$1.8 k | ~$6.9 k | ~$14–22 k |
+| 4 summaries | ~100 k | ~$40 | ~$190 | ~$520 | **~$2.6 k** | ~$390 | ~$1.7 k | ~$5 k (Opus) |
+
+The same roles as §2 (cheap picker, mid-size model for relations, top
+model for summaries), initial scope:
+- **Qwen:** 3.7-flash + 3.7-plus + 3.8-max ≈ **$3.9 k**, or ≈ $1.9 k with
+  summaries on 3.7-plus. Wall clock 3–7 days (batch, 24 h windows).
+- **DeepSeek:** flash + v4-pro + v4-pro ≈ **$9.4 k**, of which the pick is
+  $6.4 k: with no Batch API, the 38 B pick tokens cost 3× Qwen's
+  batch-priced flash. Wall clock ~1–3 days off-peak (2,500 concurrent
+  requests on flash).
+- **Everything on qwen3.7-flash:** ≈ **$750**. This is the floor; quality
+  is unknown until the pilot.
+
+Points to weigh beyond price:
+- **Verification (§4.1).** It changes only where the served model IS a
+  published open-weight checkpoint. Then A-K1's `model` method can pin
+  real weights and a peer can re-run the sample locally.
+  - DeepSeek's API models are V4 checkpoints: check whether the exact
+    builds (`-1017`, `-0813`) are published.
+  - Qwen's `-flash`, `-plus` and `-max` API models are closed. The open
+    ones (qwen3.6-35b-a3b, qwen3.8-27b) are the local candidates of
+    wiki-gutenberg-amendments.md.
+  - Even when the weights are published, a hosted engine is not
+    bit-exact. Agreement is checked at tolerance, as for any `model`
+    method.
+- **Jurisdiction:** DeepSeek is served from China, Qwen International from
+  Singapore. Gutenberg text is public domain, but this would be the
+  node's first outbound model call (§4.4).
+- **Latin and Greek:** no published score for any of these models; the
+  pilot's la/el slice decides.
+- §4.2–4.3 apply unchanged: an invariant-5 exemption and a new client
+  dependency (both are OpenAI-compatible, so no vendor SDK is needed).
