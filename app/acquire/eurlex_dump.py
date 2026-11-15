@@ -51,15 +51,23 @@ from collections import Counter, OrderedDict
 from pathlib import Path
 from typing import Callable
 
-#: works per task: a chunk parses its trees once and visits every language
-CHUNK = 400
+#: works per task: a chunk parses its trees once and visits every language.
+#: MEASURED (2026-11-15): a work's MTD tree is 67-390 KB of XML, 0.24-1.4 MB
+#: parsed (13-86 ms); one language's zips index in ~1.4 s and ~250 MB (FMX's
+#: 122 k members alone 0.78 s). A task holds its chunk's trees and one
+#: language at a time, about 0.4 GB, and pays ~34 s to open the 24 languages
+#: (59 k works: ~300 tasks, ~20 min over 8 children); parsing each tree once
+#: per language instead would cost 24 times its ~50 min
+CHUNK = 200
 #: the corpus root's record of the dump built into it: `{lang: its stated
 #: creation}`, written when a language's build has visited every work. A
 #: parser-4 collection asks Cellar nothing per unit before it names every
 #: language it holds (cellar.CellarInventory.held_back: bulk first)
 STAMP = ".eurlex-dump.json"
-#: one language's zips held open per child (their central directories)
-OPEN_LANGUAGES = 2
+#: one language's zips held open per child (their central directories,
+#: ~250 MB): a task visits the languages in turn, so a second would never be
+#: asked for again before it is evicted
+OPEN_LANGUAGES = 1
 _MEMBER = re.compile(r"^(?P<uuid>[0-9a-f-]{36})/(?P<form>[a-z0-9]+)/(?P<name>[^/]+)$")
 _MTD_MEMBER = re.compile(r"^(?P<uuid>[0-9a-f-]{36})/tree_non_inferred\.rdf$")
 _LG_DOC = re.compile(rb"<LG\.DOC>\s*([A-Z]{2})\s*</LG\.DOC>")
