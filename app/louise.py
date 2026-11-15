@@ -2776,6 +2776,25 @@ def _graceful_stop():
             signal.signal(sig, h)
 
 
+def _is_deferral(e: BaseException) -> bool:
+    """An origin's episode, never the command's fault (exit 3): a
+    TransportError the engine reads as transient, the backoff's Deferred, or
+    an httpx transport fault (a timeout, a refused or dropped connection)."""
+    try:
+        import httpx
+        from app.acquire import backoff, engine
+        from app.acquire.spec import TransferAborted, TransportError
+    except ImportError:                                  # pragma: no cover
+        return False
+    if isinstance(e, TransferAborted):
+        return False                                     # the stop, said as 130 elsewhere
+    if isinstance(e, backoff.Deferred):
+        return True
+    if isinstance(e, TransportError):
+        return engine.transient(str(e))
+    return isinstance(e, (httpx.TimeoutException, httpx.NetworkError, httpx.RemoteProtocolError))
+
+
 def _run_releasing(a) -> int:
     before = None
     try:
@@ -8271,6 +8290,16 @@ def main(argv=None) -> int:
         # and raises its own error type; re-raising it as a CodexError at
         # every call site would be a second implementation of the check.
         from app.acquire.spec import LicenseAckRequiredError
+        # AN ORIGIN AWAY is a DEFERRAL (CLAUDE.md: "Deferral is not failure"),
+        # exit 3 as an endpoint's is above: a transport error the engine reads
+        # as the origin's episode, the backoff's Deferred, httpx's transport
+        # faults (`_is_deferral`). Until 2026-11-15 it fell through to a
+        # traceback and exit 1, and the supervisor read the second one as "the
+        # same error twice: a defect" — Cellar's timeouts stopped the EUR-Lex
+        # chain twice in an hour (München).
+        if _is_deferral(e):
+            print(f"louise: deferred: {e}", file=sys.stderr)
+            return 3
         if not isinstance(e, LicenseAckRequiredError):
             raise
         print(f"louise: {e}", file=sys.stderr)
