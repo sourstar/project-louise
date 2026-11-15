@@ -4232,10 +4232,45 @@ def _recent_events_all(limit: int = 60) -> list[dict]:
     return rows[:limit]
 
 
+def _node_models() -> list[dict]:
+    """The models the node uses beside the collections' own, for the System
+    page's Models panel (operator, 2026-11-15: "In system I don't see any
+    settings for chat, vad, stt, tts and translator, add them"): each with its
+    server, where it is set and how it changes. Shown, not edited here: chat and
+    translation are the app's environment (Tier 1, a restart), speech is
+    platform.toml's `[speech]` written by `louise node speech set` (RULE 2:
+    an operator's choice lives on the command line)."""
+    from . import voice
+    speech = voice.settings_or_none()
+    reading = _reading_models()
+    env = "the app's environment (Tier 1): restart to change"
+    plat = "platform.toml [speech]"
+    rows = [
+        {"use": "chat", "model": config.CHAT_MODEL, "server": config.CHAT_URL,
+         "set_in": env, "change": "CHAT_MODEL=<model>"},
+        {"use": "translation", "model": config.TRANSLATE_MODEL, "server": config.TRANSLATE_URL,
+         "set_in": env, "change": "TRANSLATE_MODEL=<model>"},
+        {"use": "translation, by source language",
+         "model": ", ".join(f"{lang} → {m}" for lang, m in sorted(reading.items())) or None,
+         "server": config.TRANSLATE_URL, "set_in": "platform.toml [translate] reading",
+         "change": 'reading = { la = "<model>", … }'},
+        {"use": "speech to text", "model": speech.stt_model, "server": config.CHAT_URL,
+         "set_in": plat, "change": "louise node speech set --stt <model>"},
+        {"use": "voice activity", "model": speech.vad_model, "server": config.CHAT_URL,
+         "set_in": plat, "change": "louise node speech set --vad <model>"},
+        {"use": "text to speech", "model": speech.tts_model
+         and (speech.tts_model + (f" (voice {speech.tts_voice})" if speech.tts_voice else "")),
+         "server": config.CHAT_URL, "set_in": plat,
+         "change": "louise node speech set --tts <model> --voice <voice>"},
+    ]
+    return rows
+
+
 @admin_router.get("/system", response_class=HTMLResponse)
 def system_page(request: Request):
     collections = collections_mod.load_all()
     return TEMPLATES.TemplateResponse(request, "system.html", {
+        "node_models": _node_models(),
         "active": "system",
         # what load_all refused, and why — Refusal's own docstring promised
         # this page and nothing showed it; a collection naming no encoder is

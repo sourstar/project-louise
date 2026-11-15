@@ -5,6 +5,7 @@ stay open with no token at all — "Ask is LAN-open read-only"
 (architecture-v2.md §15).
 """
 import os
+import re
 import time
 from pathlib import Path
 
@@ -402,6 +403,29 @@ def test_system_page_renders_effective_config_and_boot_report(client):
     assert r.status_code == 200
     assert "Tier 1" in r.text and "Tier 2" in r.text and "Tier 3" in r.text
     assert "Boot-validation report" in r.text
+
+
+def test_system_page_shows_the_node_models(client, monkeypatch):
+    # operator, 2026-11-15: "In system I don't see any settings for chat, vad, stt, tts and translator, add them"
+    from app import config, voice, web
+    from app.platform_config import SpeechConfig
+    monkeypatch.setattr(config, "CHAT_MODEL", "chat-x")
+    monkeypatch.setattr(config, "TRANSLATE_MODEL", "madlad-x")
+    monkeypatch.setattr(voice, "settings_or_none",
+                        lambda: SpeechConfig(stt_model="stt-x", vad_model="vad-x", tts_model="tts-x", tts_voice="v1"))
+    monkeypatch.setattr(web, "_reading_models", lambda: {"la": "index-x"})
+    html = client.get("/admin/system", headers={"X-Admin-Token": "sekrit"}).text
+    assert 'id="sys-models"' in html
+    for use, model in (("chat", "chat-x"), ("translation", "madlad-x"), ("speech to text", "stt-x"),
+                       ("voice activity", "vad-x"), ("text to speech", "tts-x (voice v1)")):
+        row = re.search(rf'<tr data-model-use="{use}"><td>{use}</td><td>([^<]*)</td>', html)
+        assert row and row.group(1) == model, use
+    assert "la → index-x" in html
+    assert "louise node speech set --vad &lt;model&gt;" in html
+    # a speech model unset is said so, not an empty cell
+    monkeypatch.setattr(voice, "settings_or_none", lambda: SpeechConfig())
+    html = client.get("/admin/system", headers={"X-Admin-Token": "sekrit"}).text
+    assert html.count("not set: not offered") == 3
 
 
 def test_system_log_fragment_renders(client):

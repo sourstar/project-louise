@@ -26,6 +26,21 @@
   })();
 </script>
 
+{# THE NODE'S OWN MODELS (operator, 2026-11-15: "In system I don't see any
+   settings for chat, vad, stt, tts and translator, add them"): what each use
+   runs, where, and how it changes — shown here, changed on the command line
+   (RULE 2); an unset one is a use the node does not offer #}
+{% set models_unset = node_models|selectattr('model', 'none')|list %}
+<div class="panel"><details class="sect" id="sys-models">
+  <summary><h2>Models</h2> <span class="note">chat, translation, speech{% if models_unset %} · {{ models_unset|length }} not set{% endif %}</span></summary>
+  <table><tr><th>use</th><th>model</th><th>server</th><th>set in</th><th>to change</th></tr>
+    {% for m in node_models %}
+    <tr data-model-use="{{ m.use }}"><td>{{ m.use }}</td><td>{% if m.model %}{{ m.model }}{% else %}<span class="note">not set: not offered</span>{% endif %}</td>
+      <td>{{ m.server or '—' }}</td><td>{{ m.set_in }}</td><td><code>{{ m.change }}</code></td></tr>
+    {% endfor %}
+  </table>
+</details></div>
+
 <div class="panel"><details class="sect" id="sys-config">
   <summary><h2>Effective configuration</h2> <span class="note">{{ effective.tier2|length }} collection(s) · {{ effective.tier3|length }} runtime override(s)</span></summary>
   <div class="note">Tier 1 — env, what is global to the node (restart to change); what each collection runs is Tier 2:</div>
