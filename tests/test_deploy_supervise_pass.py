@@ -47,6 +47,8 @@ def test_a_pass_is_first_in_line_for_the_oom_killer_and_carries_its_cap(tmp_path
     p, calls = _run(tmp_path, env, "-m", "4g", "img")
     assert p.returncode == 0
     assert "--oom-score-adj 500" in calls[0] and "-m 4g" in calls[0]
+    # 2026-11-16: Docker's default soft nofile (1024) killed a pilot's tantivy writers three times
+    assert "--ulimit nofile=65536:524288" in calls[0]
 
 
 def test_a_pass_without_a_memory_cap_is_refused(tmp_path):

@@ -66,6 +66,9 @@
 #                              compare. The last run's output is kept in
 #                              $LAST (default /root/supervise/<name>.last.log)
 #
+# Every pass also gets 65,536 open files (PASS_NOFILE, soft:hard; 2026-11-16): Docker's
+# default soft limit is 1024, and a chunker pilot's tantivy writers died three times on
+# EMFILE ("an index writer was killed") at it. The hard limit is the daemon's own (524288).
 # Every pass carries its own memory cap (`--memory`; refused without one)
 # and runs FIRST IN LINE for the kernel's OOM killer (`--oom-score-adj`,
 # default 500), under the ceiling on every container together
@@ -139,7 +142,7 @@ while :; do
     # line can be compared with the previous run's; its exit status through
     # a file, since a pipeline's status is tee's
     rm -f "$LAST.code"
-    ( docker run --rm --sig-proxy=false --name "$NAME" --oom-score-adj "${OOM_SCORE_ADJ:-500}" \
+    ( docker run --rm --sig-proxy=false --name "$NAME" --oom-score-adj "${OOM_SCORE_ADJ:-500}" --ulimit "nofile=${PASS_NOFILE:-65536:524288}" \
         "${env_args[@]}" "$@" 2>&1; echo $? > "$LAST.code" ) | tee "$LAST" &
     pid=$!
     # THE PASS'S OWN STATUS, never the interrupted wait's. A trap that
