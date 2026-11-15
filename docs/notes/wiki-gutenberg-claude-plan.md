@@ -261,3 +261,24 @@ What the table says:
     reported for the B70, approved-encoders.md);
   - processing in the quiet periods too, × 1.66 on the calendar (an
     operator decision: it reverses 2026-11-02's suspension).
+
+## 8. The same at 24×7 (operator's assumption, 2026-11-15)
+
+Same books as §6: history (LoCC C–F) and memoirs, 14,594 books, fiction,
+poetry and drama out. Same models and inputs as §7, but processing never
+stops, so calendar days = card-days. Energy and € are unchanged: the work
+is the same.
+
+| part | model | days | kWh | € | share |
+|---|---|---|---|---|---|
+| mentions (en + other) | GLiNER | 1.5 | 11 | 4 | 0.4 % |
+| pick, en | MoE | 118 | 847 | 254 | 29 % |
+| pick, other | dense | 104 | 747 | 224 | 26 % |
+| relations, en | MoE | 87 | 628 | 188 | 22 % |
+| relations, other | dense | 77 | 556 | 167 | 19 % |
+| summaries (en + other) | MoE / dense | 13 | 94 | 28 | 3 % |
+| **total** | | **~400 (~13 months)** | **~2,900** | **~€860** | |
+
+With every language on the MoE: ~260 days (~8.5 months), ~1,900 kWh,
+~€560. The card does nothing else meanwhile: gutenberg-nemo and wikidata
+wait, or share the card and stretch both.
