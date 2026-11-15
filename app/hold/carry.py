@@ -126,6 +126,63 @@ def _paths(root: Path, name: str) -> dict[str, Path]:
             "lance": vector_place.physical(vector_place.table_dir(root, name)), "state": base / "state"}
 
 
+def share_origin(root: Path, from_name: str, to_name: str, *, apply: bool = True,
+                 log=lambda m: None) -> dict[str, Any]:
+    """THE TARGET READS THE SOURCE'S CORPUS, through its OWN link (München,
+    2026-11-15). A carry copies the source's manifest, whose documents'
+    paths are under `<root>/<from>/origin/…`, while `create` gave the target
+    an origin link to a NEW EMPTY folder (`link_shared_roots`). The paths
+    held while the source lived; after its forget and the target's rename
+    onto its name, they resolved through the target's empty link: Normattiva
+    on parser 10 "embed: origin missing", the chunker pilot failed.
+    So: the target's `origin` is linked to the folder the source's resolves
+    to — the one corpus both read, as two sisters already share one, and
+    `forget` keeps a shared origin — its empty folder removed; and every
+    copied path is re-rooted under `<root>/<to>/`, so it reads through the
+    target's own link (rename's `_rewrite_paths`). A target whose origin
+    already holds another corpus is refused, never relinked over.
+    Idempotent: run again, it finds the link shared and the paths re-rooted.
+    `apply=False` says what it would do, and refuses as it would."""
+    from .rename import _rewrite_paths
+    root = Path(root)
+    src, dst = root / from_name / "origin", root / to_name / "origin"
+    out: dict[str, Any] = {}
+    if not (src.exists() or src.is_symlink()):
+        return {"origin": f"{from_name} has no origin: nothing shared"}
+    corpus = src.resolve()
+    if dst.exists() or dst.is_symlink():
+        held = dst.resolve()
+        if held == corpus:
+            out["origin"] = "shared"
+        elif held.is_dir() and not any(held.iterdir()):
+            if not apply:
+                return {"origin": f"would link to {corpus} (an empty {held} now)"}
+            if dst.is_symlink():
+                dst.unlink()
+            elif dst.is_dir():
+                dst.rmdir()
+            if held != dst and held.is_dir() and not any(held.iterdir()):
+                held.rmdir()                           # create's empty folder, nothing in it
+            dst.symlink_to(corpus, target_is_directory=True)
+            out["origin"] = f"linked to {corpus} (was an empty {held})"
+        else:
+            raise CodexError(f"carry: {to_name}'s origin ({held}) holds another corpus than "
+                             f"{from_name}'s ({corpus}); nothing is relinked over it")
+    else:
+        if not apply:
+            return {"origin": f"would link to {corpus}"}
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        dst.symlink_to(corpus, target_is_directory=True)
+        out["origin"] = f"linked to {corpus}"
+    if not apply:
+        return out
+    out["paths"] = _rewrite_paths(root / to_name / "state" / MANIFEST,
+                                  str(root / from_name) + "/", str(root / to_name) + "/")
+    log(f"[carry] {to_name}: origin {out['origin']}; paths re-rooted "
+        + ", ".join(f"{k} {v}" for k, v in out["paths"].items()))
+    return out
+
+
 def _empty_dir(p: Path) -> bool:
     return not p.exists() or (p.is_dir() and not any(p.iterdir()))
 
@@ -805,7 +862,9 @@ def carry(root, from_ref: str, to_ref: str, *, copy: bool = False, apply: bool =
                 f"carry: {to_name} is not empty ({'its manifest holds documents' if docs else ''}"
                 f"{', ' if docs and busy else ''}{', '.join(busy)}); a carry never overwrites")
         plan["documents"] = _documents(sp["manifest"])
+        plan["origin"] = share_origin(root, from_name, to_name, apply=False)["origin"]
         if not apply:
+            log(f"[carry] {from_name} → {to_name}: origin {plan['origin']}")
             log(f"[carry] {from_name} → {to_name}: would {claim['mode']} the manifest "
                 f"({plan['documents']} documents), index/"
                 + (" (no vector: the target makes its own table, A1h)" if unembedded else
@@ -891,6 +950,9 @@ def carry(root, from_ref: str, to_ref: str, *, copy: bool = False, apply: bool =
             f"carry: {tp['manifest']} holds {_documents(tp['manifest'])} document(s) and "
             f"{from_name}'s manifest {src_docs}: the copy is not the source's. Nothing is "
             f"marked done; pause both collections and run the carry again")
+    # the copied paths read the source's corpus through the TARGET's own link
+    # (share_origin: Normattiva on parser 10, 2026-11-15)
+    plan["origin"] = share_origin(root, from_name, to_name, log=log)
     if sister:
         # A1i: the source's vectors stayed with it; nothing in the copy may
         # still say this collection holds one
