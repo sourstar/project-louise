@@ -638,7 +638,8 @@ EURLEX_SPEC = AcquisitionSpec(
     # one listed file — the unit's notice, its completion mark — is one
     # document: a version of an act in one language
     layout="one-file-per-doc",
-    filters=("lang=*",),
+    # parser 4: the history slice's units are under `history/lang=<l>/`
+    filters=("lang=*", "history/lang=*"),
     checksums=ChecksumSource(kind="none"),      # none published; blake2 always applies
     # the SPARQL inventory compared with what is held, by each work's last
     # modification (app/acquire/cellar.py)
@@ -646,14 +647,21 @@ EURLEX_SPEC = AcquisitionSpec(
     etiquette=RateLimit(max_conns=2),
     profiles={
         **{lang: Filter(include=(f"lang={lang}/*",)) for lang in _EURLEX_LANGUAGES},
+        # parser 4 (operator, 2026-11-15: "Add history as a download and
+        # embedding option"): a language's history, held or not
+        **{f"history-{lang}": Filter(include=(f"history/lang={lang}/*",)) for lang in _EURLEX_LANGUAGES},
         "all": Filter(),
     },
     profile_mode="additive",
-    slice_profiles={f"lang={lang}": lang for lang in _EURLEX_LANGUAGES},
+    slice_profiles={**{f"lang={lang}": lang for lang in _EURLEX_LANGUAGES},
+                    **{f"history/lang={lang}": f"history-{lang}" for lang in _EURLEX_LANGUAGES}},
     inventory=cellar.INVENTORY,
     unit_fetcher=cellar.UNITS,
     profile_labels={**{lang: f"every act and consolidated version in Formex, language {lang}"
-                       for lang in _EURLEX_LANGUAGES}, "all": "every language"},
+                       for lang in _EURLEX_LANGUAGES},
+                    **{f"history-{lang}": f"the history of language {lang}: consolidated versions and "
+                                          f"acts not in force (parser 4)" for lang in _EURLEX_LANGUAGES},
+                    "all": "every language"},
     # YELLOW (operator, 2026-11-08, A): CC BY 4.0's attribution is a condition
     # (04 §4.4); the terms are the legal notice verbatim (app/plugins/eurlex/TERMS.txt)
     license_class=LicenseClass.YELLOW,    # CC BY 4.0 content, CC0 metadata (Decision 2011/833/EU)

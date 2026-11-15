@@ -323,7 +323,11 @@ def test_every_language_is_a_slice_the_origin_delivers_whole():
     from app.acquire import spec as acquire_spec
     from app.acquire.specs import ACQUIRE_REGISTRY
     spec = ACQUIRE_REGISTRY["eurlex"]
-    assert set(spec.slice_profiles) == {f"lang={c}" for c in src.LANGUAGES} and len(spec.slice_profiles) == 24
+    # each language, and (parser 4, 2026-11-15) each language's history
+    assert set(spec.slice_profiles) == {f"lang={c}" for c in src.LANGUAGES} | \
+        {f"history/lang={c}" for c in src.LANGUAGES} and len(spec.slice_profiles) == 48
+    assert acquire_spec.profile_for_slices(spec, ["history/lang=it"]) == "history-it"
+    assert acquire_spec.resolve_profile(spec, "history-it").include == ("history/lang=it/*",)
     assert acquire_spec.profile_for_slices(spec, ["lang=fr"]) == "fr"
     assert acquire_spec.profile_for_slices(spec, ["lang=en", "lang=fr", "lang=de", "lang=it"]) == "en,fr,de,it"
     assert acquire_spec.profile_for_slices(spec, ["lang=fr/type=R/year=2016"]) == "fr"
