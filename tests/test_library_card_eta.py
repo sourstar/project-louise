@@ -284,6 +284,38 @@ def test_the_fetch_rate_is_measured_in_the_unit_that_moves(isolated_config):
     _assert_slot_invariant(shelf, _render(shelf))
 
 
+def test_a_leaf_directory_is_one_fetched_document(isolated_config, monkeypatch):
+    """NeuRIS keeps a zip and a JSON per expression, under the expression's
+    ELI: the card read "fetched 11,102 / 11,102" against 5,536 parsed,
+    indexed and embedded (operator, 2026-11-15). A spec that says
+    docs_by_leaf_dir counts the directories, files in parentheses — and a
+    directory holding two dated manifestations is still one document."""
+    from dataclasses import replace
+    from app.acquire.specs import ACQUIRE_REGISTRY, NEURIS_SPEC
+
+    c = replace(collections_mod.default_collection(), acquire_enabled=True)
+    monkeypatch.setitem(ACQUIRE_REGISTRY, c.plugin,
+                        replace(NEURIS_SPEC, source_id="gutenberg"))
+    con = db.connect(c)
+    _seed(con, [(1, 1, 1, 1, None)] * 3)
+    files = [("eli/a/1/deu/2016-07-13.zip", 1), ("eli/a/1/deu/2016-07-13.json", 1),
+             ("eli/a/1/deu/2020-01-01.zip", 1),              # a second manifestation
+             ("eli/b/1/deu/2016-07-13.zip", 1), ("eli/b/1/deu/2016-07-13.json", 1),
+             ("eli/c/1/deu/2016-07-13.zip", 0), ("eli/c/1/deu/2016-07-13.json", 0)]
+    for rel, done in files:
+        con.execute("INSERT INTO fetch_files(source_id,rel_path,fetch_done,bytes_fetched) "
+                    "VALUES('gutenberg',?,?,10)", (rel, done))
+    web.invalidate_counts()
+    shelf = web._collection_shelf(c, {}, "running")
+    f = shelf["fetched"]
+    assert (f["docs_done"], f["docs_total"]) == (2, 3), "directories, not files"
+    assert (f["done"], f["total"]) == (5, 7) and not f["containers"]
+    html = _render(shelf)
+    assert "2 / 3 (5/7)" in html and "fetched (data)" in html
+    assert NEURIS_SPEC.docs_by_leaf_dir and NEURIS_SPEC.layout == "container-files", \
+        "the Codex's layout (09 §9.17) is unchanged"
+
+
 def test_a_re_baselined_stage_does_not_claim_to_be_stalled(isolated_config):
     """The `_stalled` flag is persisted so a stall outlives the render that
     noticed it — and it has to clear with the rest of the history. A stage

@@ -593,6 +593,8 @@ NEURIS_SPEC = AcquisitionSpec(
     # a manifestation zip and the expression's JSON, side by side under the
     # expression's ELI (app/acquire/neuris_listing.py)
     layout="container-files",
+    # ...so a document is that directory: the Library counts fetched documents
+    docs_by_leaf_dir=True,
     filters=("eli/*.zip", "eli/*.json"),
     checksums=ChecksumSource(kind="none"),       # none published
     # the delta is the listing compared with what is held, by path; the

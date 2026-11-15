@@ -168,7 +168,7 @@
      another row the ETA with best/current"): how old the count is and the
      earlier versions still searched are the label's and the bar's tooltips #}
   <div class="stage"><div class="lbl"><span title="{{ stage_title }}{% if c.counts_age is defined and c.counts_age > 120 %} — counted {{ (c.counts_age / 60)|round|int }} min ago, recounted every {{ ((c.counts_every or 120) / 60)|round|int }} min{% endif %}" style="color:{{ dense_color }}">{{ dense_label }}</span><span>{{ c.embed_done|num }} / {{ dense_target|num }}{{ c.embed_done|share(dense_target) }}</span></div>
-    <div class="spine"><span style="width:{{ dense_w }}%;background:var(--lapis)"></span>{% if dense_old %}<span data-superseded-bar="embed" data-superseded="{{ dense_old }}" title="{{ dense_old|num }} earlier version{{ '' if dense_old == 1 else 's' }}: the text changed; the earlier vectors stay in the table, and are searched, until it is embedded again" style="width:{{ dense_old_w }}%;background:var(--superseded)"></span>{% endif %}</div>
+    <div class="spine"><span style="width:{{ dense_w }}%;background:var(--lapis)"></span>{% if dense_old %}<span data-superseded-bar="embed" data-superseded="{{ dense_old }}" title="{{ dense_old|num }} earlier version{{ '' if dense_old == 1 else 's' }}: the text changed; the earlier vectors stay in the table, and are searched, until it is embedded again" style="width:{{ dense_old_w }}%;background:var(--lapis-light)"></span>{% endif %}</div>
     {% if c.embed_eta %}
     {# best: the work left at the whole card (documents a card-second, the
        card record's last 3 h); current: at the rate measured now #}

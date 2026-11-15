@@ -2496,6 +2496,20 @@ def _collection_shelf(collection: collections_mod.Collection,
         elif spec.layout == "one-file-per-doc":
             # one listed file IS one document (a UnitFetcher's completion mark)
             docs_done = fc["done"] or 0
+        elif spec.docs_by_leaf_dir:
+            # one document = the directory its files sit in (NeuRIS: the zip and
+            # the JSON of one expression). rtrim(p, replace(p, '/', '')) is p up
+            # to its last '/', SQLite having no dirname. The total falls back to
+            # the ledger until a pass records it in the listing.
+            leaf = "rtrim(rel_path, replace(rel_path, '/', ''))"
+            row = con.execute(
+                f"SELECT COUNT(DISTINCT {leaf}) total, "
+                f"COUNT(DISTINCT CASE WHEN fetch_done=1 THEN {leaf} END) done "
+                "FROM fetch_files WHERE source_id=? AND extra=0 "
+                "AND instr(rel_path, '/') > 0", (spec.source_id,)).fetchone()
+            docs_done = row["done"] or 0
+            if docs_total is None:
+                docs_total = row["total"] or 0
         # extras (spec.extras): "+ e/E" beside the Louise counter, shown
         # only when the collection opted in or extra rows exist. Format
         # explained in Help, never inline — the GUI stays clean.
@@ -2513,7 +2527,8 @@ def _collection_shelf(collection: collections_mod.Collection,
         fetched = {"done": fc["done"] or 0, "total": fc["total"] or 0,
                    "remote_total": louise_total,
                    "docs_done": docs_done, "docs_total": docs_total,
-                   "containers": spec.layout not in ("one-dir-per-doc", "one-file-per-doc"),
+                   "containers": (spec.layout not in ("one-dir-per-doc", "one-file-per-doc")
+                                  and not spec.docs_by_leaf_dir),
                    "active": active, "complete": complete,
                    "has_extras": has_extras,
                    "extra_done": xc["done"] or 0,

@@ -200,6 +200,14 @@ class AcquisitionSpec:
     #: whose filter includes everything: a spec that lists files beyond a
     #: collection's whole (Normattiva's yearly exports, 2026-10-13) names it
     all_profile: str | None = None
+    #: ONE DOCUMENT = THE DIRECTORY ITS FILES SIT IN, for a container layout whose
+    #: documents each own a leaf directory (NeuRIS: a manifestation zip and the
+    #: expression's JSON under the expression's ELI). Local half: it only lets
+    #: the Library count fetched DOCUMENTS, the unit parsed/indexed use
+    #: (operator, 2026-11-15: "fetched is bigger than parsed/indexed/embedded
+    #: totals" — 11,102 files against 5,536 documents). `layout` is in the
+    #: Codex (09 §9.17) and stays as it is.
+    docs_by_leaf_dir: bool = False
     #: the slices this origin delivers WHOLE, each with the profile that
     #: fetches it (07 §7.3 `records fetch --slice`, amended 2026-10-25): a
     #: slice named as the SHARD's paths name it, at the depth the origin's

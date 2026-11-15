@@ -14,6 +14,10 @@
      2026-11-07: "grey, to symbolize that it's present but not active") —
      between the empty track (--rule) and the muted text, in every theme */
   --superseded:#56677a;
+  /* the EMBEDDED bar's earlier vectors, to be embedded again and searched
+     meanwhile: the embedded colour, lighter (operator, 2026-11-15) — one
+     definition, so every theme mixes its own --lapis */
+  --lapis-light:color-mix(in srgb,var(--lapis) 50%,#fff);
   color-scheme:dark;
 }
 /* THE THEMES (operator, 2026-10-30: "make them selectable by the user, I
