@@ -278,6 +278,31 @@ def _ago(when) -> str:
 TEMPLATES.env.filters["ago"] = _ago
 
 
+def _clock(when, now: float | None = None) -> str:
+    """A unix time as the node's local clock (operator, 2026-11-15: "the
+    timestamp is not human friendly" — the worker log showed 1794761057):
+    '17:44:17' today, '14 Nov 17:44:17' an earlier day — the format of the
+    worker's own log lines, with the day only where it is not today."""
+    try:
+        t = time.localtime(float(when))
+    except (TypeError, ValueError, OverflowError, OSError):
+        return ""
+    today = time.localtime(time.time() if now is None else now)
+    return time.strftime("%H:%M:%S" if t[:3] == today[:3] else "%d %b %H:%M:%S", t)
+
+
+def _full_time(when) -> str:
+    """The same instant in full, for a tooltip: '2026-11-15 17:44:17 CET'."""
+    try:
+        return time.strftime("%Y-%m-%d %H:%M:%S %Z", time.localtime(float(when)))
+    except (TypeError, ValueError, OverflowError, OSError):
+        return ""
+
+
+TEMPLATES.env.filters["clock"] = _clock
+TEMPLATES.env.filters["full_time"] = _full_time
+
+
 #: What the ETA slot shows when work REMAINS and there is no rate to stand
 #: behind, and the compact ETA itself: THE STATUS MODULE'S (app/status.py,
 #: 2026-11-07 — one definition of a collection's status for every surface).

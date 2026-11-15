@@ -409,6 +409,23 @@ def test_system_log_fragment_renders(client):
     assert r.status_code == 200
 
 
+def test_the_log_shows_a_clock_not_a_unix_time():
+    # operator, 2026-11-15: "the timestamp is not human friendly" (the worker log read 1794761057)
+    import time as _t
+    from app import web
+    now = _t.mktime((2026, 11, 15, 17, 50, 0, 0, 0, -1))
+    today = _t.mktime((2026, 11, 15, 17, 44, 17, 0, 0, -1))
+    before = _t.mktime((2026, 11, 14, 9, 5, 3, 0, 0, -1))
+    assert web._clock(today, now) == "17:44:17"
+    assert web._clock(before, now) == "14 Nov 09:05:03"
+    assert web._clock(None) == "" and web._clock("x") == ""
+    assert web._full_time(today).startswith("2026-11-15 17:44:17")
+    html = web.TEMPLATES.env.get_template("_fragments/log_rows.html").render(events=[
+        {"ts": _t.time(), "level": "info", "stage": "embed", "message": "m", "collection": "c", "doc_uid": None}])
+    assert '<span class="t" title="' in html
+    assert str(int(_t.time()))[:6] not in html, "no unix time left in the row"
+
+
 # ---------------- STATUS 5j: translated results and the reader ----------------
 
 
