@@ -1958,6 +1958,17 @@ EMBED_PREPARE_MAX_CHUNKS = 64
 EMBED_COALESCE_DOCS = 64
 
 
+def batch_rate(chunks: int, seconds: float) -> str:
+    """The "embedded" line's tail: ' in 12.4 s, 319.8 chunks/s' — the batch's
+    wall time and the rate over the chunks the encoder embedded (operator,
+    2026-11-15). Minutes past 90 s; no rate where nothing was embedded."""
+    seconds = max(0.0, seconds)
+    took = f"{seconds:.1f} s" if seconds < 90 else f"{int(seconds // 60)} min {int(seconds % 60):02d} s"
+    if chunks <= 0 or seconds <= 0:
+        return f" in {took}"
+    return f" in {took}, {chunks / seconds:.1f} chunks/s"
+
+
 def _embed_parallel(con, collection, recipe, *, slots: int | None = None,
                     keep_going=None) -> bool:
     """CPU-encoder collections (recipe.concurrency > 1) embed several WHOLE
@@ -2175,6 +2186,8 @@ def _embed_parallel(con, collection, recipe, *, slots: int | None = None,
                  + (f" / {pending_chunks} chunks" if pending_chunks else "")
                  + (f" with {recipe.concurrency} workers" if slots is None
                     else f", {slots} submitted and 1 prepared at a time"))
+    # the batch's wall time, for the "embedded" line's time and chunks/s (operator, 2026-11-15)
+    started = time.monotonic()
 
     # A SLIDING WINDOW, not a batch-and-join. Measured live on the AMD
     # instance (60 s GPU trace at 1 Hz): the batch form ran ~20 s at
@@ -2392,10 +2405,15 @@ def _embed_parallel(con, collection, recipe, *, slots: int | None = None,
         # for a while (an answer to anyone else releases it)
         _hold_busy(con, collection, endpoint, timed_out[-1])
     if done:
+        # how long the batch took and its rate (operator, 2026-11-15: "shall report in how much
+        # time the chunks have been embedded and the resulting chunks/s of the batch"): the wall
+        # time from the batch's announcement to its last commit, over the chunks the encoder
+        # embedded — reused ones cost no encoder time and are not counted in the rate
         db.log_event(con, "info", "embed",
                      f"embedded {done} document(s) at concurrency "
                      f"{recipe.concurrency if slots is None else slots}: "
-                     f"{tally.embedded} chunks embedded, {tally.reused} reused")
+                     f"{tally.embedded} chunks embedded, {tally.reused} reused"
+                     + batch_rate(tally.embedded, time.monotonic() - started))
     if platform_waits:
         # the serial path's one line, not "encoder unreachable" every round
         _say_platform_missing(con, collection, "embed", platform_waits[-1])

@@ -258,6 +258,9 @@ def test_the_parallel_stage_reuses_a_reset_document_s_vectors(fake_collection, t
     assert worker._embed_parallel(con, fake_collection, recipe) is True
     assert len(texts) == 4
     assert "4 chunks embedded, 0 reused" in _last_embed_event(con)
+    # the batch's time and rate (operator, 2026-11-15)
+    import re
+    assert re.search(r"4 chunks embedded, 0 reused in \d+\.\d s, \d+\.\d chunks/s$", _last_embed_event(con))
 
     _reset_by_discovery(con)
     texts.clear()
@@ -266,6 +269,13 @@ def test_the_parallel_stage_reuses_a_reset_document_s_vectors(fake_collection, t
     assert con.execute("SELECT COUNT(*) FROM documents WHERE embed_done=1 "
                        "AND embed_version=?", (config.EMBED_VERSION,)).fetchone()[0] == 4
     assert "0 chunks embedded, 4 reused" in _last_embed_event(con)
+    assert "chunks/s" not in _last_embed_event(con), "nothing embedded: a time, no rate"
+
+
+def test_the_batch_rate_reads_as_time_and_chunks_per_second():
+    assert worker.batch_rate(3965, 12.4) == " in 12.4 s, 319.8 chunks/s"
+    assert worker.batch_rate(3965, 125.0) == " in 2 min 05 s, 31.7 chunks/s"
+    assert worker.batch_rate(0, 3.0) == " in 3.0 s"
 
 
 def test_the_parallel_stage_re_embeds_another_version_s_vectors(
