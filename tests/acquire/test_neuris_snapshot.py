@@ -13,6 +13,7 @@ import os
 import json
 import re
 import threading
+import time
 import uuid
 import zipfile
 from dataclasses import replace
@@ -188,7 +189,8 @@ def test_a_daily_delta_is_fetched_per_law_and_the_snapshot_is_not_downloaded(tmp
     api.regenerate(ns.N130, "2026-11-07")
     got = engine.run_acquisition(con, collection, _spec(base), "full")
     assert got["fetched"] == 2 and api.zips_built == 1, "one zip of five: per law"
-    assert api.hits.get("/v1/bulk-zip-links", 0) == links, "under the share: the API is not even asked"
+    assert api.hits.get("/v1/bulk-zip-links", 0) == links + 1, \
+        "under the share: the link alone is asked, to know whether a newer snapshot is out"
     assert any("under 25%" in m for m in _events(con))
 
 
@@ -298,3 +300,23 @@ def test_a_snapshot_downloaded_but_never_compared_is_compared_at_the_next_pass(t
     engine.run_acquisition(con, collection, _spec(base), "full")
     assert any("revised in place" in m for m in _events(con))
     assert not nsnap.NeurisSnapshot()._revisit_due(collection)
+
+
+
+def test_a_newer_snapshot_is_compared_after_a_day_and_the_same_one_is_not(tmp_path, server):
+    """2026-11-15: the portal revised after the 11-14 snapshot; its next build
+    carries it. A newer snapshot is compared once a day has passed since the
+    last comparison; the one already compared is not downloaded again."""
+    api, base = server
+    collection = _collection(tmp_path, plugin="neuris")
+    con = db.connect(collection)
+    engine.run_acquisition(con, collection, _spec(base), "full")
+    mark = nsnap.NeurisSnapshot.place(collection) / nsnap.COMPARED
+    snap = nsnap.NeurisSnapshot()
+    assert not snap._revisit_due(collection, SNAP), "the same snapshot, just compared"
+    assert not snap._revisit_due(collection, "legislation_2026-11-15T23:11:10Z.zip"), "a newer one, under a day"
+    mark.write_text(json.dumps({"snapshot": SNAP, "at": time.time() - nsnap.REVISIT_MIN_S - 1}))
+    assert snap._revisit_due(collection, "legislation_2026-11-15T23:11:10Z.zip"), "a newer one, a day on"
+    assert not snap._revisit_due(collection, SNAP), "the same one, a day on: not before a week"
+    mark.write_text(json.dumps({"snapshot": SNAP, "at": time.time() - nsnap.REVISIT_S - 1}))
+    assert snap._revisit_due(collection, SNAP), "a week on, whichever"
