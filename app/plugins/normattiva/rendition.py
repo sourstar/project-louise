@@ -93,9 +93,22 @@ def is_repealed(article: akn.Article) -> bool:
     return bool(texts) and all(_REPEALED.match(t) for t in texts)
 
 
-def article_line(article: akn.Article) -> str:
+#: what Normattiva's export writes where an article has no rubric:
+#: `<heading>null</heading>` (München, 2026-11-15: 3,083 articles in 2,022
+#: records), an export artefact and not a rubric of the law (parser 10)
+NULL_HEADING = "null"
+
+
+def heading_of(article: akn.Article, version: int = 10) -> str:
+    """The article's heading as the record carries it: from parser 10 the
+    export's literal "null" is no heading."""
+    h = article.heading or ""
+    return "" if int(version) >= 10 and h.strip() == NULL_HEADING else h
+
+
+def article_line(article: akn.Article, version: int = 10) -> str:
     """"Art. 1. — (Delega al Governo …)." — number and rubrica as written."""
-    return " — ".join(x for x in (article.num, plain(article.heading)) if x)
+    return " — ".join(x for x in (article.num, plain(heading_of(article, version))) if x)
 
 
 def _raw_lines(blocks: list[akn.Block]) -> list[str]:
@@ -114,13 +127,13 @@ def blocks_text(blocks: list[akn.Block]) -> str:
     return _tidy(unmark("\n".join(_raw_lines(blocks))))
 
 
-def article_body(article: akn.Article) -> str:
+def article_body(article: akn.Article, version: int = 10) -> str:
     """The text one article contributes: its line, then its commi. Empty
     when it is repealed in place — nothing to embed, and the chunker cuts
     nothing from an empty body."""
     if is_repealed(article):
         return ""
-    return "\n".join(x for x in (article_line(article), blocks_text(article.blocks)) if x)
+    return "\n".join(x for x in (article_line(article, version), blocks_text(article.blocks)) if x)
 
 
 #: a heading longer than this, after the "((" marker, is an inserted
@@ -161,7 +174,7 @@ def _rubric(heading: str) -> str:
     return ""
 
 
-def label_line(article: akn.Article, version: int = 9) -> str:
+def label_line(article: akn.Article, version: int = 10) -> str:
     """The article's part of its section label. Parser 9: an inserted
     article whose heading is its body is named by its number and rubric
     only (its text stays, once, in the body: `article_body`); parser 8
@@ -169,10 +182,10 @@ def label_line(article: akn.Article, version: int = 9) -> str:
     every piece (normattiva:6772420913038766611, a 1,024-token label)."""
     if int(version) >= 9 and heading_is_body(article):
         return " — ".join(x for x in (article.num, _rubric(article.heading)) if x)
-    return article_line(article)
+    return article_line(article, version)
 
 
-def label(article: akn.Article, version: int = 9) -> str:
+def label(article: akn.Article, version: int = 10) -> str:
     """The section's heading: the partition, then the article —
     "PARTE I — AMBITO … › Art. 1. — (Oggetto)". An article repealed in
     place reads "(abrogato)" after its number."""
@@ -180,13 +193,13 @@ def label(article: akn.Article, version: int = 9) -> str:
     return " › ".join(x for x in (plain(article.partition), head.strip()) if x) or "Testo"
 
 
-def sections(act: akn.Act, version: int = 9) -> list[tuple[str, str]]:
+def sections(act: akn.Act, version: int = 10) -> list[tuple[str, str]]:
     """`[(label, text)]`: one per article in reading order, then one per
     annex. An annex with no text in the XML (the origin keeps many as PDF
     or image) is a section with an empty body — present, not chunked. The
     Codice civile arrives this way round: two articles of the decree, then
     its 3,280 articles as annexes named "CODICE CIVILE-art. 906"."""
-    out = [(label(a, version), article_body(a)) for a in act.articles]
+    out = [(label(a, version), article_body(a, version)) for a in act.articles]
     out += [(plain(att.name) or "Allegato", blocks_text(att.blocks))
             for att in act.attachments]
     return out

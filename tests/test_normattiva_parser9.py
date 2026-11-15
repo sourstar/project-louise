@@ -71,9 +71,9 @@ def _sections(xml: str, version: int) -> dict[str, tuple[str, str]]:
     return {a.num: s for a, s in zip(act.articles, rendition.sections(act, version))}
 
 
-def test_the_registered_parser_is_9_and_still_carries_8():
-    assert SOURCE.PARSER_VERSION == 9 and isinstance(V8, nsrc.NormattivaSourceV8) and V8.PARSER_VERSION == 8
-    assert SOURCE.at_parser_version(9) is SOURCE and SOURCE.at_parser_version(7) is None
+def test_parser_9_is_carried_beside_8():
+    assert SOURCE.PARSER_VERSION >= 9 and isinstance(V8, nsrc.NormattivaSourceV8) and V8.PARSER_VERSION == 8
+    assert SOURCE.at_parser_version(9).PARSER_VERSION == 9 and SOURCE.at_parser_version(7) is None
 
 
 def test_an_inserted_article_written_in_its_heading_is_labelled_by_number_and_rubric():
@@ -161,4 +161,31 @@ def test_a_collection_parses_at_its_codexs_parser():
         return C(plugin="normattiva", source="origin",
                  codex=SimpleNamespace(parser=SimpleNamespace(id="normattiva", version=v)))
     assert coll(8).plugin_instance() is V8
-    assert coll(9).plugin_instance() is SOURCE
+    assert coll(9).plugin_instance() is SOURCE.at_parser_version(9)
+
+
+
+# ---- parser 10 (2026-11-15): the export's <heading>null</heading> ----------------------------------
+
+NULL = '<article eId="art_1"><num>Art. 1.</num><heading>null</heading><paragraph><content><p>Dei detti ' \
+       'trecento buoni del tesoro.</p></content></paragraph></article>'
+
+
+def test_parser_10_reads_the_export_s_null_heading_as_none(root):
+    """München's raw article (R.D. 31 ottobre 1894 n. 469): 3,083 articles in
+    2,022 records carry it; parser 9 wrote "Art. 1. — null" in the label and
+    in every piece's header."""
+    assert SOURCE.PARSER_VERSION == 10 and SOURCE.at_parser_version(10) is SOURCE
+    assert _sections(NULL, 10)["Art. 1."] == ("TITOLO I Ordinamento › Art. 1.",
+                                              "Art. 1.\nDei detti trecento buoni del tesoro.")
+    assert _sections(NULL, 9)["Art. 1."][0].endswith("Art. 1. — null"), "parser 9, kept, wrote it"
+    assert _sections(RUBRIC, 10) == _sections(RUBRIC, 9), "a real rubric is untouched"
+
+
+@pytest.mark.parametrize("xml, moved", [(NULL, True), (RUBRIC, False), (NULL + RUBRIC, True), (REPEALED, False)])
+def test_the_parser_9_lines_parser_10_moves_are_the_null_headings(root, xml, moved):
+    _zip(root, MEMBER, _act(xml))
+    nine, ten = _line(SOURCE.at_parser_version(9), root), _line(SOURCE, root)
+    assert SOURCE.line_moved_since(nine, 9) is moved
+    assert (nine["sections"] != ten["sections"]) == moved, "exact: no moved line unnamed, none named in vain"
+    assert SOURCE.line_moved_since(_line(V8, root), 8) or not moved, "from 8 too"

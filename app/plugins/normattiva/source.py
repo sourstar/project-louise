@@ -357,7 +357,11 @@ class NormattivaSource:
     #: every piece. Parser 8 is kept for a collection whose Codex names it
     #: (`at_parser_version`); a build from parser-8 lines parses again only the
     #: lines this parser writes otherwise (`line_moved_since`, RULE 1).
-    PARSER_VERSION = 9
+    #: 10 on 2026-11-15: an article whose `<heading>` is the export's literal
+    #: "null" (3,083 articles in 2,022 records, München) has no heading: parser
+    #: 9 wrote "Art. 1. — null" in its label and in every piece's header
+    #: (rendition.heading_of). Parser 9 kept for a Codex naming it.
+    PARSER_VERSION = 10
     #: 06 §6.2: the origin keeps its history — Normattiva serves every act in each version that was in force (multivigente) —
     #: so a superseded part version stays checkable and is kept (02 §2.3).
     origin_versions = "history"
@@ -659,15 +663,20 @@ class NormattivaSource:
         """Would THIS parser write a record line that parser `version` wrote
         differently? (`records build --records-from`, RULE 1: only the lines
         this says moved are parsed again, the rest are taken byte for byte.)
-        From 8: an article whose heading is its body (rendition.heading_is_body).
-        The line's labels are plain — the "((" marker is gone — so the rule
-        errs toward parsing again: a section whose label ends with its body's
-        first line (the article line) where that line is longer than
-        HEADING_BODY_CHARS or is the whole body."""
+        From 9: an article line ending " — null" (parser 10, the export's null
+        heading). From 8: that, or an article whose heading is its body
+        (rendition.heading_is_body); the line's labels are plain — the "(("
+        marker is gone — so that rule errs toward parsing again: a section
+        whose label ends with its body's first line (the article line) where
+        that line is longer than HEADING_BODY_CHARS or is the whole body."""
         if int(version) >= self.PARSER_VERSION:
             return False
-        if int(version) != 8:
+        if int(version) not in (8, 9):
             return True                 # not a version this rule knows: parse it
+        if self._null_heading_in(line):
+            return True
+        if int(version) == 9:
+            return False
         for label, body in line.get("sections") or []:
             lines = str(body or "").split("\n")
             first = lines[0].strip()
@@ -677,11 +686,32 @@ class NormattivaSource:
                 return True
         return False
 
+    @staticmethod
+    def _null_heading_in(line: dict) -> bool:
+        """A section of the line whose article line ends with the export's
+        literal null heading ("Art. 1. — null"), in its label or its body."""
+        tail = f" — {rendition.NULL_HEADING}"
+        for label, body in line.get("sections") or []:
+            first = str(body or "").split("\n", 1)[0].rstrip()
+            if str(label or "").rstrip().endswith(tail) or first.endswith(tail):
+                return True
+        return False
+
     def at_parser_version(self, version: int) -> "NormattivaSource | None":
         """This plugin parsing at `version`, for a collection whose Codex names
-        it (`collections.plugin_at`): 9 is this one, 8 the parser before the
-        inserted-article labels (`NormattivaSourceV8`); None for any other."""
-        return {9: self, 8: _V8}.get(int(version))
+        it (`collections.plugin_at`): 10 is this one, 9 the parser before the
+        null headings (`NormattivaSourceV9`), 8 the one before the
+        inserted-article labels (`NormattivaSourceV8`); None for any other.""" 
+        return {10: self, 9: _V9, 8: _V8}.get(int(version))
+
+
+class NormattivaSourceV9(NormattivaSource):
+    """PARSER 9, KEPT for a collection whose Codex names it: an article whose
+    heading is the export's "null" keeps it in its label and body line."""
+    PARSER_VERSION = 9
+
+
+_V9 = NormattivaSourceV9()
 
 
 class NormattivaSourceV8(NormattivaSource):
