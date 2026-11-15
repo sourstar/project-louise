@@ -36,6 +36,16 @@
 #                              and called "a defect in the pass"). VERDICTS lists
 #                              the codes; unless set it is "1 4" for `collection
 #                              new`, "1" for `embedder check`, none otherwise
+#   exit 3                     DEFERRED (07 §7.7: what could not run — an
+#                              origin or an endpoint away: `louise` exits 3 on
+#                              a timeout, a dropped connection, a 5xx): again
+#                              after DEFER_WAIT s (600), doubling to
+#                              DEFER_WAIT_MAX (3600), at most MAX_DEFERS (48)
+#                              in a row; never "the same error twice", never
+#                              counted in MAX_RESTARTS (2026-11-15: Cellar's
+#                              timeouts stopped the EUR-Lex chain twice in an
+#                              hour, read as a defect — CLAUDE.md: "Deferral
+#                              is not failure")
 #   exit 137 or 141            again in 60 s with PARSE_PROCESSES halved
 #                              (12 -> 6 -> 3 -> 2): an OOM loop backs off.
 #                              141 is SIGPIPE: until 2026-10-30 a pool child the
@@ -86,6 +96,9 @@ MAX_RESTARTS=${MAX_RESTARTS:-20}
 FAST_FAIL_S=${FAST_FAIL_S:-120}
 FAST_FAILS=${FAST_FAILS:-3}
 PAUSE=${PAUSE:-60}
+DEFER_WAIT=${DEFER_WAIT:-600}
+DEFER_WAIT_MAX=${DEFER_WAIT_MAX:-3600}
+MAX_DEFERS=${MAX_DEFERS:-48}
 PROCS=${PARSE_PROCESSES:-}
 CEILING=${CEILING:-$(dirname "$0")/docker-memory-ceiling.sh}
 capped=
@@ -113,6 +126,7 @@ trap on_stop TERM INT
 n=0
 fast=0
 prev=
+defers=0
 while :; do
     [ -x "$CEILING" ] && "$CEILING"
     env_args=()
@@ -154,6 +168,23 @@ while :; do
         echo "== $NAME: stopped on purpose (SIGTERM, exit $code), not restarted; run it again to resume"
         exit "$code"
     fi
+    if [ "$code" -eq 3 ]; then
+        defers=$((defers + 1))
+        [ "$defers" -gt "$MAX_DEFERS" ] && { echo "== $NAME: deferred $defers times in a row, giving up"; exit 3; }
+        wait_s=$DEFER_WAIT
+        for ((d = 1; d < defers && wait_s < DEFER_WAIT_MAX; d++)); do wait_s=$((wait_s * 2)); done
+        [ "$wait_s" -gt "$DEFER_WAIT_MAX" ] && wait_s=$DEFER_WAIT_MAX
+        echo "== $NAME: deferred (exit 3: the origin or an endpoint away, \"$last\"), again in ${wait_s} s ($defers in a row)"
+        prev=; fast=0
+        # a stop asked during the wait is honoured at once: the trap runs
+        # between commands, and `wait` is one it interrupts
+        sleep "$wait_s" & spid=$!
+        wait "$spid" 2>/dev/null
+        kill "$spid" 2>/dev/null
+        [ -e "$HOLD" ] && { echo "== $NAME: stop asked while deferred, not restarted"; exit 3; }
+        continue
+    fi
+    defers=0
     if [ "$code" -ne 137 ] && [ "$code" -ne 141 ] && [ -n "$last" ] && [ "$code $last" = "$prev" ]; then
         echo "== $NAME: exit $code with the same last line twice in a row (\"$last\"): a defect in the pass, not a crash; not restarted — fix it and run it again ($LAST)"
         exit "$code"

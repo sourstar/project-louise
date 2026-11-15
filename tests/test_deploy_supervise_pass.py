@@ -20,7 +20,7 @@ code=$(head -1 {tmp_path}/codes); sed -i 1d {tmp_path}/codes
 exit $code
 """)
     (bin_ / "docker").chmod(0o755)
-    return dict(os.environ, PATH=f"{bin_}:{os.environ['PATH']}", PAUSE="0",
+    return dict(os.environ, PATH=f"{bin_}:{os.environ['PATH']}", PAUSE="0", DEFER_WAIT="0",
                 HOLD=str(tmp_path / "hold"), CEILING=str(tmp_path / "no-ceiling"))
 
 
@@ -294,3 +294,45 @@ def test_the_same_error_twice_in_a_row_is_a_defect_however_long_each_run_took(tm
     ok.mkdir()
     p, calls = _run(ok, _talking_docker(ok, [(3, "deferred"), (0, "done")]), "--memory=8g", "img")
     assert p.returncode == 0 and "exit 3" in p.stdout and "working" in p.stdout
+
+
+
+def test_a_deferral_is_asked_again_even_with_the_same_last_line(tmp_path):
+    """2026-11-15: Cellar's timeouts ended the EUR-Lex pass twice with the
+    same line, read as "the same error twice: a defect". A deferral (exit 3)
+    is asked again after its wait, outside the defect rules."""
+    bin_ = tmp_path / "bin"
+    bin_.mkdir()
+    (tmp_path / "codes").write_text("3\n3\n3\n0\n")
+    (bin_ / "docker").write_text(f"""#!/bin/bash
+echo "$*" >> {tmp_path}/calls
+echo "louise: deferred: cellar: connection timed out on the count of 1954"
+code=$(head -1 {tmp_path}/codes); sed -i 1d {tmp_path}/codes
+exit $code
+""")
+    (bin_ / "docker").chmod(0o755)
+    env = dict(os.environ, PATH=f"{bin_}:{os.environ['PATH']}", PAUSE="0", DEFER_WAIT="0",
+               HOLD=str(tmp_path / "hold"), CEILING=str(tmp_path / "no-ceiling"), FAST_FAIL_S="0")
+    p, calls = _run(tmp_path, env, "--memory=8g", "img")
+    assert p.returncode == 0 and len(calls) == 4, p.stdout
+    assert p.stdout.count("deferred (exit 3") == 3 and "defect" not in p.stdout
+
+
+def test_deferrals_have_their_own_limit(tmp_path):
+    env = _fake_docker(tmp_path, [3, 3, 3, 0])
+    env["MAX_DEFERS"] = "2"
+    p, calls = _run(tmp_path, env, "--memory=8g", "img")
+    assert p.returncode == 3 and len(calls) == 3 and "giving up" in p.stdout
+
+
+def test_the_cli_exits_3_for_an_origin_away_and_1_for_a_fault():
+    from app import louise
+    from app.acquire import backoff
+    from app.acquire.spec import TransferAborted, TransportError
+    assert louise._is_deferral(TransportError("cellar: connection timed out on the count of 1954"))
+    assert louise._is_deferral(backoff.Deferred("cellar: 503 to the listing"))
+    import httpx
+    assert louise._is_deferral(httpx.ConnectTimeout("x"))
+    assert not louise._is_deferral(TransportError("cellar: L_1997209IT.toc.xml is 1024 bytes, the notice says 1023"))
+    assert not louise._is_deferral(TransferAborted("stop"))
+    assert not louise._is_deferral(ValueError("a defect"))
