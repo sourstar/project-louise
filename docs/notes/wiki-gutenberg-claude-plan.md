@@ -218,3 +218,46 @@ Pros and cons:
   only card, beside gutenberg-nemo's 12–15 card-days and wikidata.
 - **API:** done in days, at $0.3–7 k. But §4.1–4.4 apply, and every
   hosted row is a closed or unpinned model for a verifier.
+
+## 7. The local option, part by part (2026-11-15)
+
+Inputs:
+- §6's per-item times. The MoE (Qwen3-30B-A3B) does English, the dense
+  model (Gemma 3 27B) the other languages; mentions are GLiNER.
+- **Card draw 200 W**, measured at the 230 W cap (node-runbook.md,
+  2026-10-26). **Node 0.3 kW** with CPU and the rest of the system (i).
+- **€0.30/kWh** (i): a parameter, not the operator's tariff.
+- **14.5 processing hours a day.** The quiet periods (06–08, 12–13:30,
+  16:30–22:30) suspend processing (operator 2026-11-02), so calendar days
+  = card-days × 24 / 14.5 = **× 1.66**. §6's "~13 months" left this
+  factor out: the right figure is ~22 months.
+
+| part | model | requests | tokens in / out | card-days | calendar days | kWh | € | share |
+|---|---|---|---|---|---|---|---|---|
+| 1 mentions, en | GLiNER | 1.85 M chunks | 1.37 B / — | 1.2 | 2 | 9 | 3 | 0.3 % |
+| 1 mentions, other | GLiNER | 0.43 M chunks | 0.32 B / — | 0.3 | 0.5 | 2 | 1 | 0.1 % |
+| **2 pick, en** | MoE | 1.85 M | 10.5 B / 0.28 B | **118** | 195 | 847 | 254 | **29 %** |
+| **2 pick, other** | dense | 0.43 M | 2.45 B / 0.06 B | **104** | 172 | 747 | 224 | **26 %** |
+| **3 relations, en** | MoE | 1.48 M | 3.7 B / 0.44 B | **87** | 144 | 628 | 188 | **22 %** |
+| **3 relations, other** | dense | 0.34 M | 0.86 B / 0.10 B | **77** | 128 | 556 | 167 | **19 %** |
+| 4 summaries, en | MoE | 27 k | 0.66 B / 14 M | 7 | 11 | 50 | 15 | 1.7 % |
+| 4 summaries, other | dense | 6 k | 0.15 B / 3 M | 6 | 10 | 44 | 13 | 1.5 % |
+| **total** | | | 20 B / 0.9 B | **400** | **~660 (~22 months)** | **~2,900** | **~€860** | |
+
+What the table says:
+- **Picking and relations are 96 % of the cost.** Mentions and summaries
+  together are under 4 %.
+- **The dense model's 0.43 M chunks cost as much as the MoE's 1.85 M**
+  (187 card-days against 212). Giving the other languages to the MoE
+  saves ~140 card-days (§6), against the quality gap that the pilot's
+  non-English slice measures.
+- **Money is not the constraint:** ~€0.06 a book. The constraint is time
+  on the only card, which also has gutenberg-nemo (12–15 card-days) and
+  wikidata queued.
+- **Levers, in order of what they save (all to be measured):**
+  - the pick as a cross-encoder or as one request per mention, with a
+    shorter prompt (the pick's 13 B prompt tokens are the prefill bill);
+  - parallel slots, 2–4× (i; but "no scaling with parallel slots" is
+    reported for the B70, approved-encoders.md);
+  - processing in the quiet periods too, × 1.66 on the calendar (an
+    operator decision: it reverses 2026-11-02's suspension).
