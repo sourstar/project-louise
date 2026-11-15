@@ -20,6 +20,13 @@ measured (published figures disagree).
 
 ### 2026-11-15
 
+- **Bulk first, checked once a day** (operator, 2026-11-15: "Bulk first rule: no exceptions at the
+  creation of a new law collection. Check maximum once a day for a new bulk availability. If a law is
+  needed intra day use the API"; CLAUDE.md). NeuRIS's snapshot route no longer reads the snapshot link,
+  nor peeks at a newer snapshot's index, before every per-law fetch (the same day's A, #680): the link
+  is read at most once a day, or whenever no snapshot is held (a collection being created); on that
+  read a newer snapshot holding a pending law is still peeked at by range and taken. The held snapshot
+  still answers every pending zip it holds.
 - **Normattiva10 is a ROOT** (München, for the legal session). Normattiva10 was re-created from Normattiva
   (Codex 646f8ed9…: derived_from 40f3032e…, space_from 9cf74d39…) on parser 10, 2026-11-15. It is a root
   because `create` makes roots ("create makes a root"; "space_from belongs to a sister"). The space is

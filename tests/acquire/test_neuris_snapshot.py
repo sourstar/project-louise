@@ -190,8 +190,8 @@ def test_a_daily_delta_is_fetched_per_law_and_the_snapshot_is_not_downloaded(tmp
     api.regenerate(ns.N130, "2026-11-07")
     got = engine.run_acquisition(con, collection, _spec(base), "full")
     assert got["fetched"] == 2 and api.zips_built == 1, "the one zip the snapshot does not hold: per law"
-    assert api.hits.get("/v1/bulk-zip-links", 0) == links + 1, \
-        "a law the held snapshot lacks: the link asked whether a newer one is out (operator, A)"
+    assert api.hits.get("/v1/bulk-zip-links", 0) == links, \
+        "the link was read today: a law needed within the day goes to the API (operator, 2026-11-15)"
     assert any("the 1 it does not hold, per law" in m for m in _events(con))
 
 
@@ -360,15 +360,36 @@ def test_the_link_is_read_at_most_once_a_day(tmp_path, server):
 
 
 
-def test_a_newer_snapshot_holding_a_pending_law_is_peeked_at_by_range_and_taken(tmp_path, server):
-    """Operator, 2026-11-15, A (Frankfurt's item 2): before any per-law fetch,
-    a newer snapshot's index is read by range, and the snapshot downloaded
-    when it holds a pending law; per law only what neither holds."""
+def test_a_law_needed_within_the_day_goes_per_law_without_asking_for_a_newer_snapshot(tmp_path, server):
+    """Operator, 2026-11-15: "Check maximum once a day for a new bulk
+    availability. If a law is needed intra day use the API" — no link read,
+    no peek at a newer snapshot's index, between two daily reads."""
     api, base = server
     collection = _collection(tmp_path, plugin="neuris")
     con = db.connect(collection)
     engine.run_acquisition(con, collection, _spec(base), "full")
     (nsnap.NeurisSnapshot.place(collection) / nsnap.LINK_READ).write_text(json.dumps({"at": time.time()}))
+    links = api.hits.get("/v1/bulk-zip-links", 0)
+    newer = "legislation_2026-11-15T23:11:10.000000000Z.zip"
+    api.regenerate(ns.N130, "2026-11-07")
+    api.snapshot = snapshot_bytes(EXPRESSIONS, generated={ns.N130: "2026-11-07"})
+    api.snap_name = newer
+    got = engine.run_acquisition(con, collection, _spec(base), "full")
+    assert got["fetched"] == 2 and api.zips_built == 1, "N130 per law: the day's read is spent"
+    assert api.hits.get("/v1/bulk-zip-links", 0) == links, "no second read within the day"
+    assert api.hits.get(f"/snapshots/{newer}", 0) == 0, "no peek at the newer snapshot's index"
+
+
+def test_a_newer_snapshot_holding_a_pending_law_is_peeked_at_by_range_on_the_days_read(tmp_path, server):
+    """On the day's read (LINK_READ_S on), a newer snapshot's index is read
+    by range, and the snapshot downloaded when it holds a pending law the
+    held one lacks; per law only what neither holds."""
+    api, base = server
+    collection = _collection(tmp_path, plugin="neuris")
+    con = db.connect(collection)
+    engine.run_acquisition(con, collection, _spec(base), "full")
+    (nsnap.NeurisSnapshot.place(collection) / nsnap.LINK_READ).write_text(
+        json.dumps({"at": time.time() - nsnap.LINK_READ_S - 1}))
     # the origin regenerates N130 and a newer snapshot carries it
     api.regenerate(ns.N130, "2026-11-07")
     api.snapshot = snapshot_bytes(EXPRESSIONS, generated={ns.N130: "2026-11-07"})

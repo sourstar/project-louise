@@ -358,7 +358,13 @@ are the ones that have drifted; prefer to add a test when you touch them.
   hold (repealed acts, past versions, what changed since it was cut), and
   only that. A pass that would ask the API for a unit the bulk holds, or
   that asks the API while the bulk is still unused, is a defect, stopped
-  and fixed like any other.
+  and fixed like any other. ONCE A DAY (operator, the same day: "Bulk
+  first rule: no exceptions at the creation of a new law collection.
+  Check maximum once a day for a new bulk availability. If a law is
+  needed intra day use the API"): a collection being created takes its
+  bulk first, always; afterwards whether a newer bulk is out is asked at
+  most once a day, and a law needed within the day is fetched from the
+  API.
 - **Do not reinvent the wheel** (operator, 2026-10-19; restated
   2026-10-23). Before building a mechanism, use what already does it:
   an available solution PROVEN effective (the library's own call, a tool
