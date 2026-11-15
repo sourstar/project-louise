@@ -1329,7 +1329,14 @@ def _run_acquisition_claimed(con, collection, spec: AcquisitionSpec, profile: st
     prepare = getattr(spec.unit_fetcher, "prepare", None) if spec.unit_fetcher is not None else None
     if prepare is not None:
         try:
-            prepare(files, [f for f in files if f.rel_path in pending], collection, endpoints[0])
+            # its answer: held files the bulk shows the origin revised in place
+            # (NeuRIS, 2026-11-15: the same path, new content), fetched in this pass
+            revised = prepare(files, [f for f in files if f.rel_path in pending], collection, endpoints[0])
+            listed = {f.rel_path for f in files}
+            more = {p for p in (revised or ()) if p in listed} - pending
+            if more:
+                pending |= more
+                skipped -= len(more)
         except Exception as e:   # noqa: BLE001 — an optimisation of the pass, never its failure
             db.log_event(con, "warn", "acquire", f"bulk transport not prepared: {type(e).__name__}: {e}"[:400])
     items = _build_work_items(files, pending, spec)
