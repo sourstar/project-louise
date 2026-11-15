@@ -49,11 +49,13 @@ h2{font-size:14px;color:var(--brass);margin-bottom:10px;letter-spacing:.4px}
 nav{display:flex;flex-direction:column;align-items:center;gap:8px;border-bottom:2px solid var(--line);padding:14px 22px;position:relative}
 /* The logo top left, outside the centred column (operator, 2026-11-13), its background transparent (operator,
    2026-11-14: "Logo's background shall be transparent and on the upper left"): the page's own colour shows
-   through on every theme. A phone keeps it top left too, smaller, beside the centred name */
+   through on every theme. A phone keeps it top left too, smaller, beside the centred name; the menu row
+   starts below it (operator, 2026-11-15: "Ask is way too close to the bottom of the logo"): logo 10-46 px,
+   the first link from 50 px (4 px clear; 12 px was too much, the operator chose 8 from screenshots) */
 nav a.logo{position:absolute;left:16px;top:50%;transform:translateY(-50%);padding:0;line-height:0}
 nav a.logo img{display:block;width:56px;height:56px}
 nav a.logo:hover{background:none;opacity:.85}
-@media (max-width:860px){nav a.logo{left:10px;top:10px;transform:none}nav a.logo img{width:36px;height:36px}}
+@media (max-width:860px){nav a.logo{left:10px;top:10px;transform:none}nav a.logo img{width:36px;height:36px}nav .menu{margin-top:8px}}
 nav .brand{font-size:18px;font-weight:600;text-align:center}
 nav .menu{display:flex;gap:2px;flex-wrap:wrap;justify-content:center;align-items:baseline}
 nav .theme{width:auto;flex:none;font-family:var(--mono);font-size:12px;background:var(--panel2);
