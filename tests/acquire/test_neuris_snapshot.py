@@ -188,10 +188,26 @@ def test_a_daily_delta_is_fetched_per_law_and_the_snapshot_is_not_downloaded(tmp
     links = api.hits.get("/v1/bulk-zip-links", 0)
     api.regenerate(ns.N130, "2026-11-07")
     got = engine.run_acquisition(con, collection, _spec(base), "full")
-    assert got["fetched"] == 2 and api.zips_built == 1, "one zip of five: per law"
+    assert got["fetched"] == 2 and api.zips_built == 1, "the one zip the snapshot does not hold: per law"
     assert api.hits.get("/v1/bulk-zip-links", 0) == links, \
-        "under the share, the link read today already: not asked again (operator: once a day)"
-    assert any("under 25%" in m for m in _events(con))
+        "the link read today already: not asked again (operator: once a day)"
+    assert any("the 1 it does not hold, per law" in m for m in _events(con))
+
+
+def test_a_pending_zip_the_held_snapshot_holds_never_goes_per_law(tmp_path, server):
+    """Operator, 2026-11-15: "until the bulk download is not fully used no
+    cherry picking is allowed. No exceptions" (Frankfurt's review, item 1: a
+    retried failure, or a stopped pass's rest, went to the API under 25 %)."""
+    api, base = server
+    collection = _collection(tmp_path, plugin="neuris")
+    con = db.connect(collection)
+    engine.run_acquisition(con, collection, _spec(base), "full")
+    gen = ns.directory(ns.N130)[0]
+    con.execute("UPDATE fetch_files SET fetch_done=0 WHERE rel_path=?", (f"{ns.N130}/{gen}.zip",))
+    con.commit()
+    built = api.zips_built
+    got = engine.run_acquisition(con, collection, _spec(base), "full")
+    assert got["fetched"] == 1 and api.zips_built == built, "one of five pending, from the held snapshot"
 
 
 def test_no_snapshot_named_means_every_zip_per_law_and_it_is_said(tmp_path, server):

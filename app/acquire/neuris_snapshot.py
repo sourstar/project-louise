@@ -33,13 +33,16 @@ A snapshot member is the origin's by PROVENANCE: the origin publishes it and
 names it from its own API (06 §6.2, amended 2026-11-14), and the zip's CRC
 holds on every member read.
 
-WHEN IT IS DOWNLOADED (`prepare`, before a pass fetches): when the pass has
-at least SHARE of the listing's zips to fetch — "relevant" counted as the
-share of requests the bulk would answer (06 §6.2). A daily delta of a few
-laws is fetched per law. The download is the engine's own Range transport,
-drawn from the budget (invariant 5), resumable; it lives in the files cache
-(app/derived.py, kind `neuris-snapshot`, keyed on the corpus), the newest
-only, re-downloaded when the API names another.
+WHEN IT IS USED (operator, 2026-11-15, CLAUDE.md: "until the bulk download is
+not fully used no cherry picking is allowed. No exceptions"): ALWAYS FIRST.
+Every pending zip the snapshot holds at the listing's generation date is
+written from it, whatever share of the listing it is; per law only what no
+snapshot holds (a manifestation newer than the snapshot, the per-expression
+JSON, which the snapshot does not carry). The held snapshot is used, or a
+newer one the API names; the link is read at most once a day (LINK_READ_S),
+and a newer snapshot downloaded once (the engine's Range transport, the
+budget, resumable). It lives in the files cache (app/derived.py, kind
+`neuris-snapshot`, keyed on the corpus), the newest only.
 
 REVISED IN PLACE (2026-11-15, München's probe of NeuRIS5's inconclusive
 records-vs-origin): the portal revises manifestations WITHOUT moving their
@@ -47,7 +50,7 @@ generation date — it annotated every `ris:abkuerzung` with domainTerm "Interne
 Abkürzung" — and the listing, by path, and the test phase's changelog
 (`allChanged`) never name such a law again: the corpus fell behind silently and
 no record could be verified. So the snapshot is also taken whatever the pass's
-share when the API names a newer one than the last compared (at most once a
+pending when the API names a newer one than the last compared (at most once a
 day, REVISIT_MIN_S) and at least every REVISIT_S (a week), and every held
 manifestation it holds at the listing's generation date is compared with it,
 member by member after the plugin's normalization: one that differs is the
@@ -77,11 +80,6 @@ from .spec import Endpoint, RemoteFile, Transport, TransportError
 LINKS = "v1/bulk-zip-links"
 DATASET = "legislation"
 KIND = "neuris-snapshot"
-#: the share of the listing's manifestation zips a pass must have to fetch
-#: for the snapshot to be taken: below it, the pass's laws are fetched one by
-#: one (a daily delta); at or above it (a first fetch, a full refresh), one
-#: download answers them
-SHARE = 0.25
 HTTP_TIMEOUT_S = 60.0
 #: the longest a held corpus goes without being compared with the snapshot
 #: (REVISED IN PLACE above), whether or not the API names a newer one
@@ -92,7 +90,7 @@ REVISIT_S = 7 * 86400
 #: cut, its per-law answers carried it at once and the snapshot only from its
 #: next build; a week's wait left every record "changed at the origin"
 REVISIT_MIN_S = 86400
-#: how often a pass under the share may READ the snapshot link to learn
+#: how often a pass may READ the snapshot link to learn
 #: whether a newer snapshot is out (operator, 2026-11-15: "once a day"); the
 #: last read is recorded beside the comparison (LINK_READ)
 LINK_READ_S = 86400
@@ -162,8 +160,7 @@ class NeurisSnapshot:
     the prepared snapshot holds is written from its members; every other
     file goes the transport's way. `prepare` decides per pass."""
 
-    def __init__(self, *, share: float = SHARE) -> None:
-        self.share = float(share)
+    def __init__(self) -> None:
         self._lock = threading.Lock()
         self._zip: zipfile.ZipFile | None = None
         self._path: Path | None = None
@@ -175,62 +172,65 @@ class NeurisSnapshot:
 
     def prepare(self, files: list[RemoteFile], pending: list[RemoteFile], collection,
                 endpoint: Endpoint) -> list[str]:
-        """Before a pass fetches: the snapshot opened when the pass has at
-        least `share` of the listing's zips to fetch, or when the held corpus
-        has not been compared with it for REVISIT_S; downloaded first when the
-        API names a newer one than the place holds; else nothing (the pass is
-        per law). A failure leaves the pass per law and is said. Returns the
-        held zips the origin revised in place (REVISED IN PLACE), for the
-        engine to fetch in this pass — from the snapshot."""
-        listed = sum(1 for f in files if manifestation_key(f.rel_path))
+        """Before a pass fetches: THE BULK FIRST, NO EXCEPTIONS (operator,
+        2026-11-15: "until the bulk download is not fully used no cherry
+        picking is allowed"; CLAUDE.md). Every pending zip the snapshot holds
+        at the listing's generation date is written from it, whatever share of
+        the listing it is; only what no snapshot holds goes per law. The
+        snapshot used is the held one, or a newer one the API names, the link
+        read at most once a day (LINK_READ_S) unless none is held. When the
+        comparison is due (REVISIT_*), every held manifestation is compared
+        and the ones the origin revised in place are answered, for the engine
+        to rewrite from the snapshot in this pass. A failure leaves the pass per
+        law and is said."""
         want = [f for f in pending if manifestation_key(f.rel_path)]
         self.close()
+        held = self._held_zip(collection)
         url: str | None = None
-        if not want or len(want) < self.share * max(1, listed):
-            # under the share: taken only to compare, when the held corpus was
-            # never compared, last a week ago, or a day ago and the API names a
-            # newer snapshot — the link read to know which at most once a day
-            # (LINK_READ_S, operator: "once a day")
-            if not self._revisit_due(collection, None) and not self._link_read_due(collection):
-                if want:
-                    self._report(f"snapshot not taken: {len(want)} of {listed} manifestation zip(s) to "
-                                 f"fetch, under {self.share:.0%}; fetched per law")
-                return []
+        if held is None or self._link_read_due(collection):
             try:
                 url = link(endpoint)
             except TransportError as e:
-                self._report(f"snapshot link not read ({e}); the revisit waits"[:400])
-                return []
-            self._mark_link_read(collection)
-            named = Path(urlsplit(url).path).name if url else None
-            if not self._revisit_due(collection, named):
-                if want:
-                    self._report(f"snapshot not taken: {len(want)} of {listed} manifestation zip(s) to "
-                                 f"fetch, under {self.share:.0%}; fetched per law")
-                return []
-        try:
-            if url is None:
-                url = link(endpoint)
+                self._report(f"snapshot link not read ({e})"[:400])
+            else:
                 self._mark_link_read(collection)
-            if url is None:
-                self._report("snapshot not taken: the API names no legislation snapshot now; "
-                             "fetched per law")
+        named = Path(urlsplit(url).path).name if url else None
+        compare = self._revisit_due(collection, named or (held.name if held else None))
+        if not want and not compare:
+            return []
+        try:
+            if url and (held is None or named != held.name):
+                path = self._download(url, collection)
+            elif held is not None:
+                path = held
+            else:
+                self._report("snapshot not taken: the API names no legislation snapshot now and none is "
+                             "held; fetched per law")
                 return []
-            path = self._download(url, collection)
             self._open(path)
         except (TransportError, OSError, zipfile.BadZipFile) as e:
             self.close()
             self._report(f"snapshot not taken: {type(e).__name__}: {e}; fetched per law"[:400])
             return []
-        held = sum(1 for f in want if manifestation_key(f.rel_path) in self._index)
-        self._report(f"snapshot {path.name}: {len(self._index)} manifestation(s); {held} of the "
-                     f"{len(want)} zip(s) to fetch are in it with the listing's generation date, "
-                     f"the rest per law")
+        if want:
+            inside = sum(1 for f in want if manifestation_key(f.rel_path) in self._index)
+            self._report(f"snapshot {path.name}: {len(self._index)} manifestation(s); {inside} of the "
+                         f"{len(want)} zip(s) to fetch are in it with the listing's generation date and "
+                         f"written from it; the {len(want) - inside} it does not hold, per law")
+        if not compare:
+            return []
         revised = self._revised(files, {f.rel_path for f in pending}, collection, path)
         self._mark_compared(collection, path)
         self._report(f"snapshot {path.name}: {len(revised)} held manifestation(s) the origin revised in "
                      f"place (the same generation date), rewritten from it in this pass")
         return revised
+
+    def _held_zip(self, collection) -> Path | None:
+        """The snapshot the place holds, the newest by name (its build's
+        time), or None."""
+        where = self.place(collection)
+        got = sorted(where.glob("legislation_*.zip")) if where.is_dir() else []
+        return got[-1] if got else None
 
     def _revisit_due(self, collection, named: str | None = None) -> bool:
         """The held corpus never compared with a snapshot; last compared
