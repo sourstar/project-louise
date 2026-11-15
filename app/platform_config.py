@@ -172,6 +172,14 @@ class ModelsConfig:
     load_timeout_s: int = 120
     keep_ask_resident: bool = True
     preload_speech: bool = True
+    #: `chat` and `translate` (added 2026-11-15, operator: "I want them to be
+    #: editable from the page for quick testing"): the chat and translation
+    #: models, OVER the environment's CHAT_MODEL and TRANSLATE_MODEL, which stay
+    #: the defaults. Desired state in the file, so the System page and the
+    #: command line write the same thing; unset, the environment's
+    #: (app/config.py resolves both on every read).
+    chat: str | None = None
+    translate: str | None = None
 
 
 @dataclass(frozen=True)
@@ -326,6 +334,95 @@ def _config_dir() -> Path:
 
 def platform_path() -> Path:
     return _config_dir() / "platform.toml"
+
+
+def toml_literal(value: Any) -> str:
+    """A TOML value as written in the file: a string (JSON's escapes are
+    TOML's basic string's), or a {str: str} inline table."""
+    import json
+    if isinstance(value, dict):
+        if not value:
+            return "{}"
+        return "{ " + ", ".join(f"{k} = {json.dumps(str(v), ensure_ascii=False)}"
+                                for k, v in value.items()) + " }"
+    return json.dumps(str(value), ensure_ascii=False)
+
+
+def set_keys(path: Path, table: str, values: dict[str, Any]) -> list[str]:
+    """Each `key = value` of `values` set in `path`'s `[table]` — its line
+    replaced where it stood, added at the table's end, or the table added at
+    the file's end — and a None value's line removed. Every other line kept
+    byte for byte, comments included. The text is read back as the node
+    reads it before it takes the file's place: a file that would not load is
+    never written (ScheduleError, nothing changed). Returns the keys whose
+    line changed. For one-line keys only: a key written as a dotted key or
+    over several lines is refused by the read-back.
+
+    THE STANDARD ALTERNATIVE (CLAUDE.md, "Do not reinvent the wheel"; as
+    app/voice.py `write` says): tomlkit edits a table in place keeping its
+    comments. This is the THIRD writer of platform.toml (with `[speech]` and
+    `[peers]`), where voice.py said tomlkit would pay — adopting it is a new
+    dependency (ask first); this keeps to one-line keys, which is all the
+    System page writes."""
+    path = Path(path)
+    head = re.compile(rf"^\[{re.escape(table)}\]\s*(#.*)?$")
+    try:
+        text = path.read_text(encoding="utf-8") if path.is_file() else ""
+    except OSError as e:
+        raise schedule_mod.ScheduleError(f"{path}: {e}") from None
+    lines = text.splitlines(keepends=True)
+    start = next((i for i, ln in enumerate(lines) if head.match(ln.rstrip("\r\n"))), None)
+    changed: list[str] = []
+    if start is None:
+        add = [f"{k} = {toml_literal(v)}\n" for k, v in values.items() if v is not None]
+        if not add:
+            return []
+        if lines and not lines[-1].endswith("\n"):
+            lines[-1] += "\n"
+        lines += (["\n"] if lines and lines[-1].strip() else []) + [f"[{table}]\n"] + add
+        changed = [k for k, v in values.items() if v is not None]
+    else:
+        end = next((i for i in range(start + 1, len(lines)) if lines[i].startswith("[")), len(lines))
+        for k, v in values.items():
+            key = re.compile(rf"^\s*{re.escape(k)}\s*=")
+            at = next((i for i in range(start + 1, end) if key.match(lines[i])), None)
+            new = None if v is None else f"{k} = {toml_literal(v)}\n"
+            if at is not None:
+                if new is None:
+                    del lines[at]
+                    end -= 1
+                    changed.append(k)
+                elif lines[at] != new:
+                    lines[at] = new
+                    changed.append(k)
+            elif new is not None:
+                ins = end
+                while ins > start + 1 and not lines[ins - 1].strip():
+                    ins -= 1                    # before the blank lines that end the table
+                lines.insert(ins, new)
+                end += 1
+                changed.append(k)
+    if not changed:
+        return []
+    tmp = path.with_name(path.name + f".{table}.tmp")
+    tmp.write_text("".join(lines), encoding="utf-8")
+    try:
+        try:
+            got = tomllib.loads(tmp.read_text(encoding="utf-8")).get(table, {})
+            _load_one(tmp)
+        except tomllib.TOMLDecodeError as e:
+            raise schedule_mod.ScheduleError(
+                f"{path}: with [{table}] rewritten the file would not load ({e}); nothing was changed"
+            ) from None
+        for k, v in values.items():
+            if got.get(k) != v:
+                raise schedule_mod.ScheduleError(
+                    f"{path}: [{table}] {k} written does not read back as set; nothing was changed")
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
+    tmp.replace(path)
+    return changed
 
 
 def _parse_fraction(value: Any, key: str) -> float:
@@ -537,10 +634,16 @@ def _load_one(path: Path) -> PlatformConfig:
         if not isinstance(models_raw.get(key, True), bool):
             raise schedule_mod.ScheduleError(
                 f"models.{key} is true or false, got {models_raw[key]!r} (07 §7.8)")
+    for key in ("chat", "translate"):
+        if models_raw.get(key) is not None and not isinstance(models_raw[key], str):
+            raise schedule_mod.ScheduleError(
+                f"models.{key} is a model name, got {models_raw[key]!r} (07 §7.8)")
     models = ModelsConfig(load_timeout_s=_positive_int(
         models_raw, "load_timeout_s", ModelsConfig().load_timeout_s),
         keep_ask_resident=models_raw.get("keep_ask_resident", True),
-        preload_speech=models_raw.get("preload_speech", True))
+        preload_speech=models_raw.get("preload_speech", True),
+        chat=(models_raw.get("chat") or "").strip() or None,
+        translate=(models_raw.get("translate") or "").strip() or None)
 
     speech = _speech(raw.get("speech", {}) or {})
 

@@ -4106,7 +4106,8 @@ def _effective_config() -> dict:
     tier1 = {
         "CHAT_URL": config.CHAT_URL,
         "CHAT_API": f"{config.CHAT_API} — the protocol CHAT_URL speaks",
-        "CHAT_MODEL": config.CHAT_MODEL,
+        "CHAT_MODEL": config.ENV_CHAT_MODEL + (f" — platform.toml [models] chat = {config.CHAT_MODEL} is in force"
+                                               if config.CHAT_MODEL != config.ENV_CHAT_MODEL else ""),
         "VEGA_URL": config.VEGA_URL or "(unset — an api = \"vega\" encoder embeds nothing)",
         "TRANSLATE_URL": config.TRANSLATE_URL or "(unset — the chat model translates, slowly)",
         "GPU_PROBE_URL": config.GPU_PROBE_URL or "(unset — no GPU panel)",
@@ -4232,10 +4233,112 @@ def _recent_events_all(limit: int = 60) -> list[dict]:
     return rows[:limit]
 
 
+#: the Models panel's fields, in its order: (form field, use, where it is written)
+MODEL_FIELDS = (
+    ("chat", "chat", "platform.toml [models] chat"),
+    ("translate", "translation", "platform.toml [models] translate"),
+    ("reading", "translation, by source language", "platform.toml [translate] reading"),
+    ("stt_model", "speech to text", "platform.toml [speech]"),
+    ("vad_model", "voice activity", "platform.toml [speech]"),
+    ("tts_model", "text to speech", "platform.toml [speech]"),
+    ("tts_voice", "text to speech: voice", "platform.toml [speech]"),
+)
+
+
+def _reading_text(reading: dict[str, str]) -> str:
+    return ", ".join(f"{lang} = {m}" for lang, m in sorted(reading.items()))
+
+
+def _parse_reading(text: str) -> dict[str, str]:
+    """The reading field, 'la = model, grc = model', as the table it writes;
+    ValueError naming what does not read."""
+    out: dict[str, str] = {}
+    for item in filter(None, (p.strip() for p in re.split(r"[,\n;]", text or ""))):
+        lang, sep, model = item.partition("=")
+        lang, model = lang.strip().lower(), model.strip().strip('"').strip()
+        if not sep or not re.fullmatch(r"[a-z]{2,3}(-[a-z0-9]+)?", lang) or not model:
+            raise ValueError(f"{item!r}: a source language and a model, as  la = index-translate-9b")
+        out[lang] = model
+    return out
+
+
+def _node_models() -> list[dict]:
+    """The models the node uses beside the collections' own, for the System
+    page's Models panel (operator, 2026-11-15: "In system I don't see any
+    settings for chat, vad, stt, tts and translator, add them"; then "I want
+    them to be editable from the page for quick testing"): each with its value,
+    its server, and the file key the page writes — the same desired state the
+    command line writes (`node speech set`; `[models]`), applied at the next
+    request, no restart. Chat and translation fall back to the environment's
+    CHAT_MODEL / TRANSLATE_MODEL where [models] names none."""
+    from . import voice
+    speech = voice.settings_or_none()
+    try:
+        files = platform_config.load().models
+    except Exception:   # noqa: BLE001 — the page shows the rest
+        files = platform_config.ModelsConfig()
+    value = {
+        "chat": config.CHAT_MODEL, "translate": config.TRANSLATE_MODEL,
+        "reading": _reading_text(_reading_models()),
+        **{k: getattr(speech, k) or "" for k in platform_config.SPEECH_KEYS},
+    }
+    default = {"chat": config.ENV_CHAT_MODEL, "translate": config.ENV_TRANSLATE_MODEL}
+    server = {"chat": config.CHAT_URL, "translate": config.TRANSLATE_URL, "reading": config.TRANSLATE_URL}
+    return [{"field": f, "use": use, "set_in": where, "value": value[f] or "",
+             "default": default.get(f), "overridden": f in default and bool(getattr(files, f, None)),
+             "server": server.get(f, config.CHAT_URL)}
+            for f, use, where in MODEL_FIELDS]
+
+
+@admin_router.post("/system/models")
+async def system_models_set(request: Request):
+    """The Models panel's form: each field that changed written into
+    platform.toml — `[models] chat|translate` (empty, or the environment's
+    own value: the key removed, the environment's in force), `[translate]
+    reading`, `[speech]` through `voice.write` (as `node speech set`). Each
+    write is read back before it replaces the file. What changed goes to the
+    node's log; an error comes back on the page, nothing changed."""
+    from urllib.parse import quote
+    from . import model_pins, voice
+    form = await request.form()
+    got = {f: str(form.get(f, "")).strip() for f, _, _ in MODEL_FIELDS if f in form}
+    now = {m["field"]: m["value"] for m in _node_models()}
+    path = platform_config.platform_path()
+    said: list[str] = []
+    try:
+        models: dict[str, str | None] = {}
+        for f, env in (("chat", config.ENV_CHAT_MODEL), ("translate", config.ENV_TRANSLATE_MODEL)):
+            if f in got and got[f] != now[f]:
+                models[f] = None if got[f] in ("", env) else got[f]
+                said.append(f"{f} → {got[f] or env + ' (the environment)'}")
+        if "reading" in got and got["reading"] != now["reading"]:
+            reading = _parse_reading(got["reading"])
+            platform_config.set_keys(path, "translate", {"reading": reading or None})
+            said.append(f"reading → {_reading_text(reading) or 'none'}")
+        if models:
+            platform_config.set_keys(path, "models", models)
+        speech = {k: got[k] for k in platform_config.SPEECH_KEYS if k in got and got[k] != now[k]}
+        if speech:
+            voice.write(path, speech)
+            said += [f"{k} → {v or 'none'}" for k, v in speech.items()]
+    except (ValueError, *voice.LOAD_ERRORS) as e:
+        return RedirectResponse(f"/admin/system?models_error={quote(str(e)[:300])}#sys-models", status_code=303)
+    if said:
+        model_pins.node_event("info", "models set from the System page: " + "; ".join(said))
+    return RedirectResponse("/admin/system?models_saved=1#sys-models" if said else "/admin/system#sys-models",
+                            status_code=303)
+
+
 @admin_router.get("/system", response_class=HTMLResponse)
 def system_page(request: Request):
     collections = collections_mod.load_all()
+    from .api import _models_at
     return TEMPLATES.TemplateResponse(request, "system.html", {
+        "node_models": _node_models(),
+        # the model server's names, as the inputs' suggestions; [] when it does not answer
+        "server_models": _models_at(config.CHAT_URL, timeout=1.5) if config.CHAT_URL else [],
+        "models_error": request.query_params.get("models_error"),
+        "models_saved": request.query_params.get("models_saved"),
         "active": "system",
         # what load_all refused, and why — Refusal's own docstring promised
         # this page and nothing showed it; a collection naming no encoder is

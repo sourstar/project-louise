@@ -26,6 +26,33 @@
   })();
 </script>
 
+{# THE NODE'S OWN MODELS (operator, 2026-11-15: "In system I don't see any
+   settings for chat, vad, stt, tts and translator, add them"; "I want them to
+   be editable from the page for quick testing"): each use's model, edited in
+   place and written into platform.toml — the file the command line writes —
+   in force at the next request, no restart. Empty: chat and translation go
+   back to the environment's model; a speech model or the reading table is
+   removed (a voice not offered) #}
+{% set models_unset = node_models|selectattr('value', 'equalto', '')|list %}
+<div class="panel"><details class="sect" id="sys-models"{% if models_error or models_saved %} open{% endif %}>
+  <summary><h2>Models</h2> <span class="note">chat, translation, speech{% if models_unset %} · {{ models_unset|length }} not set{% endif %}</span></summary>
+  {% if models_error %}<div class="note"><span class="badge err">not saved</span> {{ models_error }}</div>{% endif %}
+  {% if models_saved %}<div class="note"><span class="badge">saved</span> in force from the next request</div>{% endif %}
+  <form method="post" action="/admin/system/models">
+  <datalist id="server-models">{% for n in server_models %}<option value="{{ n }}">{% endfor %}</datalist>
+  <table><tr><th>use</th><th>model</th><th>server</th><th>written in</th></tr>
+    {% for m in node_models %}
+    <tr data-model-use="{{ m.use }}"><td>{{ m.use }}</td>
+      <td><input name="{{ m.field }}" value="{{ m.value }}" style="width:100%;min-width:16em"{% if m.field != 'reading' %} list="server-models"{% endif %}
+        placeholder="{% if m.default %}{{ m.default }} (the environment's){% elif m.field == 'reading' %}la = index-translate-9b, grc = …{% else %}not set: not offered{% endif %}">
+        {% if m.default is not none and m.overridden %}<div class="note">over the environment's {{ m.default }}; empty goes back to it</div>{% endif %}</td>
+      <td>{{ m.server or '—' }}</td><td>{{ m.set_in }}</td></tr>
+    {% endfor %}
+  </table>
+  <button type="submit">save</button> <span class="note">written into platform.toml, read back before it replaces the file; in force from the next request. Each change goes to the worker log.</span>
+  </form>
+</details></div>
+
 <div class="panel"><details class="sect" id="sys-config">
   <summary><h2>Effective configuration</h2> <span class="note">{{ effective.tier2|length }} collection(s) · {{ effective.tier3|length }} runtime override(s)</span></summary>
   <div class="note">Tier 1 — env, what is global to the node (restart to change); what each collection runs is Tier 2:</div>

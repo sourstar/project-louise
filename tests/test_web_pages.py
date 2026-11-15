@@ -5,6 +5,7 @@ stay open with no token at all — "Ask is LAN-open read-only"
 (architecture-v2.md §15).
 """
 import os
+import re
 import time
 from pathlib import Path
 
@@ -402,6 +403,93 @@ def test_system_page_renders_effective_config_and_boot_report(client):
     assert r.status_code == 200
     assert "Tier 1" in r.text and "Tier 2" in r.text and "Tier 3" in r.text
     assert "Boot-validation report" in r.text
+
+
+def _model_inputs(html: str) -> dict[str, str]:
+    return dict(re.findall(r'<input name="([a-z_]+)" value="([^"]*)"', html))
+
+
+@pytest.fixture
+def models_page(client, monkeypatch):
+    """The System page against an empty platform.toml in this test's CONFIG_DIR, the model
+    server not asked, and config's two models resolved from the file (not a static patch)."""
+    import os
+    from pathlib import Path
+    from app import api, config
+    monkeypatch.setattr(api, "_models_at", lambda url, timeout=3.0: ["chat-a", "chat-b", "madlad-f16"])
+    for name in ("CHAT_MODEL", "TRANSLATE_MODEL"):
+        if name in vars(config):        # an earlier test's patch, undone to a static value
+            monkeypatch.delattr(config, name)
+    monkeypatch.setattr(config, "ENV_CHAT_MODEL", "chat-env")
+    monkeypatch.setattr(config, "ENV_TRANSLATE_MODEL", "madlad-env")
+    path = Path(os.environ["CONFIG_DIR"]) / "platform.toml"
+    path.write_text('# the node\n[speech]\nstt_model = "stt-x"\nvad_model = "vad-x"\n\n[ask]\nlatency_budget_ms = 9000\n',
+                    encoding="utf-8")
+    return client, path
+
+
+def test_system_page_shows_the_node_models(models_page):
+    # operator, 2026-11-15: "In system I don't see any settings for chat, vad, stt, tts and translator, add them"
+    client, _ = models_page
+    html = client.get("/admin/system", headers={"X-Admin-Token": "sekrit"}).text
+    assert 'id="sys-models"' in html and 'action="/admin/system/models"' in html
+    assert _model_inputs(html) == {"chat": "chat-env", "translate": "madlad-env", "reading": "",
+                                   "stt_model": "stt-x", "vad_model": "vad-x", "tts_model": "", "tts_voice": ""}
+    assert '<option value="madlad-f16">' in html, "the server's models as suggestions"
+
+
+def test_the_models_are_edited_from_the_page(models_page):
+    # operator, 2026-11-15: "I want them to be editable from the page for quick testing"
+    import tomllib
+    from app import config
+    client, path = models_page
+    form = {"chat": "chat-b", "translate": "madlad-env", "reading": "la = index-x, GRC = index-y",
+            "stt_model": "stt-x", "vad_model": "", "tts_model": "tts-z", "tts_voice": "v1"}
+    r = client.post("/admin/system/models", data=form, headers={"X-Admin-Token": "sekrit"}, follow_redirects=False)
+    assert r.status_code == 303 and "models_saved=1" in r.headers["location"]
+    text = path.read_text(encoding="utf-8")
+    got = tomllib.loads(text)
+    assert got["models"] == {"chat": "chat-b"}, "the environment's own value writes no key"
+    assert got["translate"]["reading"] == {"la": "index-x", "grc": "index-y"}
+    assert got["speech"] == {"stt_model": "stt-x", "tts_model": "tts-z", "tts_voice": "v1"}
+    assert text.startswith("# the node\n") and got["ask"] == {"latency_budget_ms": 9000}, "the rest of the file kept"
+    # in force at once: every config.CHAT_MODEL reads the file
+    assert config.CHAT_MODEL == "chat-b" and config.TRANSLATE_MODEL == "madlad-env"
+    html = client.get("/admin/system", headers={"X-Admin-Token": "sekrit"}).text
+    assert _model_inputs(html)["chat"] == "chat-b" and "over the environment's chat-env" in html
+    # empty: back to the environment's
+    r = client.post("/admin/system/models", data={**form, "chat": ""}, headers={"X-Admin-Token": "sekrit"},
+                    follow_redirects=False)
+    assert "models" not in tomllib.loads(path.read_text(encoding="utf-8")) or \
+        "chat" not in tomllib.loads(path.read_text(encoding="utf-8"))["models"]
+    assert config.CHAT_MODEL == "chat-env"
+
+
+def test_a_model_field_that_does_not_read_changes_nothing(models_page):
+    client, path = models_page
+    before = path.read_text(encoding="utf-8")
+    r = client.post("/admin/system/models", data={"reading": "latin index-x"},
+                    headers={"X-Admin-Token": "sekrit"}, follow_redirects=False)
+    assert r.status_code == 303 and "models_error=" in r.headers["location"]
+    assert path.read_text(encoding="utf-8") == before
+    html = client.get(r.headers["location"], headers={"X-Admin-Token": "sekrit"}).text
+    assert "not saved" in html
+
+
+def test_set_keys_edits_one_table_and_keeps_the_rest(tmp_path):
+    import tomllib
+    from app import platform_config as pc
+    p = tmp_path / "platform.toml"
+    p.write_text('[models]  # bounds\nload_timeout_s = 90\n\n[translate]\nslots = 4\n', encoding="utf-8")
+    assert pc.set_keys(p, "models", {"chat": "c1", "translate": None}) == ["chat"]
+    assert pc.set_keys(p, "models", {"chat": "c1"}) == [], "the same value writes nothing"
+    assert pc.set_keys(p, "translate", {"reading": {"la": "m"}}) == ["reading"]
+    got = tomllib.loads(p.read_text(encoding="utf-8"))
+    assert got == {"models": {"load_timeout_s": 90, "chat": "c1"}, "translate": {"slots": 4, "reading": {"la": "m"}}}
+    assert "[models]  # bounds" in p.read_text(encoding="utf-8")
+    assert pc.set_keys(p, "models", {"chat": None}) == ["chat"]
+    assert tomllib.loads(p.read_text(encoding="utf-8"))["models"] == {"load_timeout_s": 90}
+    assert pc.set_keys(p, "deposit", {"x": None}) == [], "removing from a table that is not there"
 
 
 def test_system_log_fragment_renders(client):

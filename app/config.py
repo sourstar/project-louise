@@ -94,7 +94,12 @@ TRANSLATE_URL = os.getenv("TRANSLATE_URL", "").rstrip("/")
 # that serves many models from one address (LocalAI) picks it from there
 # (VeGa switch-over, 2026-10-09; as CHAT_MODEL for CHAT_URL). Unset, no model
 # is named — a server whose URL names the model (`…/upstream/madlad`, 07 §7.8).
-TRANSLATE_MODEL = os.getenv("TRANSLATE_MODEL", "")
+#   TRANSLATE_MODEL and CHAT_MODEL are RESOLVED ON EVERY READ (operator,
+#   2026-11-15: "I want them to be editable from the page for quick testing"):
+#   platform.toml's `[models] translate` / `chat` where set, the environment's
+#   otherwise — module __getattr__ below (PEP 562), so every `config.CHAT_MODEL`
+#   in the app follows the file without a restart.
+ENV_TRANSLATE_MODEL = os.getenv("TRANSLATE_MODEL", "")
 # The GPU probe (app/gpu_probe.py, the `gpu-probe` service): the System
 # page's GPU panel asks it for each card's memory and every process's
 # share. Unset, the panel says so and nothing else changes.
@@ -105,7 +110,40 @@ GPU_PROBE_URL = os.getenv("GPU_PROBE_URL", "").rstrip("/")
 # [encoder]; one that does not is refused (app/collections.py). EMBED_URL,
 # EMBED_MODEL, EMBED_API, EMBED_DTYPE, EMBED_CTX and platform.toml's
 # [encoder_defaults.<plugin>] are gone with it.
-CHAT_MODEL = os.getenv("CHAT_MODEL", "qwen3.6-35b-a3b:latest")
+ENV_CHAT_MODEL = os.getenv("CHAT_MODEL", "qwen3.6-35b-a3b:latest")
+_MODELS_SEEN: tuple = (None, None)     # ((path, mtime_ns, size), ModelsConfig)
+
+
+def _file_models():
+    """platform.toml's `[models]`, re-read only when the file changed (its
+    mtime and size): a translation reads TRANSLATE_MODEL several times a call.
+    A file that does not load gives no override — the environment's models,
+    never a failed chat."""
+    global _MODELS_SEEN
+    from . import platform_config
+    try:
+        p = platform_config.platform_path()
+        st = p.stat()
+        key = (str(p), st.st_mtime_ns, st.st_size)
+    except OSError:
+        return None
+    if _MODELS_SEEN[0] != key:
+        try:
+            models = platform_config.load().models
+        except Exception:   # noqa: BLE001 — a broken file is said by the System page, not by chat
+            models = None
+        _MODELS_SEEN = (key, models)
+    return _MODELS_SEEN[1]
+
+
+def __getattr__(name: str):
+    if name in ("CHAT_MODEL", "TRANSLATE_MODEL"):
+        m = _file_models()
+        chosen = getattr(m, "chat" if name == "CHAT_MODEL" else "translate", None) if m else None
+        return chosen or (ENV_CHAT_MODEL if name == "CHAT_MODEL" else ENV_TRANSLATE_MODEL)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
 RERANK_URL = os.getenv("RERANK_URL", "")  # optional TEI-style /rerank endpoint; empty = disabled
 
 CHUNK_TOKENS = int(os.getenv("CHUNK_TOKENS", "1000"))
