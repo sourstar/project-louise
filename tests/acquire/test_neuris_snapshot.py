@@ -320,10 +320,12 @@ def test_a_snapshot_downloaded_but_never_compared_is_compared_at_the_next_pass(t
 
 
 
-def test_a_newer_snapshot_is_compared_after_a_day_and_the_same_one_is_not(tmp_path, server):
+def test_a_newer_snapshot_is_compared_as_soon_as_it_is_named_and_the_same_one_is_not(tmp_path, server):
     """2026-11-15: the portal revised after the 11-14 snapshot; its next build
-    carries it. A newer snapshot is compared once a day has passed since the
-    last comparison; the one already compared is not downloaded again."""
+    carries it. A newer snapshot is compared as soon as a read names it (the
+    link is read once a day: a download is at most daily already); the one
+    already compared is not, before a week. 2026-11-16 (München): the 11-15
+    snapshot waited a day after the 11-14 one's comparison, nothing taken."""
     api, base = server
     collection = _collection(tmp_path, plugin="neuris")
     con = db.connect(collection)
@@ -331,12 +333,45 @@ def test_a_newer_snapshot_is_compared_after_a_day_and_the_same_one_is_not(tmp_pa
     mark = nsnap.NeurisSnapshot.place(collection) / nsnap.COMPARED
     snap = nsnap.NeurisSnapshot()
     assert not snap._revisit_due(collection, SNAP), "the same snapshot, just compared"
-    assert not snap._revisit_due(collection, "legislation_2026-11-15T23:11:10Z.zip"), "a newer one, under a day"
-    mark.write_text(json.dumps({"snapshot": SNAP, "at": time.time() - nsnap.REVISIT_MIN_S - 1}))
-    assert snap._revisit_due(collection, "legislation_2026-11-15T23:11:10Z.zip"), "a newer one, a day on"
+    assert snap._revisit_due(collection, "legislation_2026-11-15T23:11:10Z.zip"), "a newer one, at once"
+    mark.write_text(json.dumps({"snapshot": SNAP, "at": time.time() - 86400 - 1}))
     assert not snap._revisit_due(collection, SNAP), "the same one, a day on: not before a week"
     mark.write_text(json.dumps({"snapshot": SNAP, "at": time.time() - nsnap.REVISIT_S - 1}))
     assert snap._revisit_due(collection, SNAP), "a week on, whichever"
+
+
+def test_the_days_read_naming_a_newer_snapshot_takes_and_compares_it_in_that_pass(tmp_path, server):
+    """München's 23:45Z pass, 2026-11-15: the 11-14 snapshot compared at
+    20:38Z, the read names the 11-15 one: downloaded and compared at once."""
+    api, base = server
+    collection = _collection(tmp_path, plugin="neuris")
+    con = db.connect(collection)
+    engine.run_acquisition(con, collection, _spec(base), "full")
+    place = nsnap.NeurisSnapshot.place(collection)
+    (place / nsnap.LINK_READ).write_text(json.dumps({"at": time.time() - nsnap.LINK_READ_S - 1}))
+    newer = "legislation_2026-11-15T23:10:33.150580Z.zip"
+    api.snap_name = newer
+    engine.run_acquisition(con, collection, _spec(base), "full")
+    assert json.loads((place / nsnap.COMPARED).read_text())["snapshot"] == newer
+    assert (place / newer).is_file() and any("revised in place" in m and newer in m for m in _events(con))
+
+
+def test_a_newer_snapshot_the_days_read_named_is_taken_by_a_later_pass_without_a_second_read(tmp_path, server):
+    """The read named it and the pass could not take it (a download that
+    failed): the next pass within the day takes it from what the read named,
+    asking the link nothing."""
+    api, base = server
+    collection = _collection(tmp_path, plugin="neuris")
+    con = db.connect(collection)
+    engine.run_acquisition(con, collection, _spec(base), "full")
+    place = nsnap.NeurisSnapshot.place(collection)
+    newer = "legislation_2026-11-15T23:10:33.150580Z.zip"
+    api.snap_name = newer
+    (place / nsnap.LINK_READ).write_text(json.dumps({"at": time.time(), "url": f"{base}/snapshots/{newer}"}))
+    links = api.hits.get("/v1/bulk-zip-links", 0)
+    engine.run_acquisition(con, collection, _spec(base), "full")
+    assert api.hits.get("/v1/bulk-zip-links", 0) == links, "no second read"
+    assert json.loads((place / nsnap.COMPARED).read_text())["snapshot"] == newer
 
 
 
@@ -396,7 +431,10 @@ def test_a_newer_snapshot_holding_a_pending_law_is_peeked_at_by_range_on_the_day
     api.snap_name = "legislation_2026-11-15T23:11:10.000000000Z.zip"
     got = engine.run_acquisition(con, collection, _spec(base), "full")
     assert got["fetched"] == 2 and api.zips_built == 0, "N130 from the newer snapshot, not the API"
-    assert any("its index read by range; it holds 1 of the 1" in m for m in _events(con))
+    # 2026-11-16: a newer snapshot the read names is taken and compared at
+    # once (it may carry revisions in place), so its index is not peeked first
+    place = nsnap.NeurisSnapshot.place(collection)
+    assert json.loads((place / nsnap.COMPARED).read_text())["snapshot"] == api.snap_name
 
 
 def test_the_range_reader_reads_a_zip_s_index_without_the_whole(tmp_path, server):
