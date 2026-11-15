@@ -73,7 +73,9 @@ def key(resolved_path: Path) -> str:
 #: own kind, `wikidata-labels`, on the fast cache (app/plugins/wikidata/pack.py
 #: `labels_path`).
 FILES = frozenset({"pubmed-pack", "legi-pack", "wikipedia-page-props", "wikidata-pack",
-                   "neuris-snapshot"})
+                   "neuris-snapshot", "origin-copy"})
+#: an origin's bulk file read from the files cache (`staged`)
+ORIGIN_COPY = "origin-copy"
 
 
 def root(kind: str) -> Path | None:
@@ -355,7 +357,9 @@ def units() -> list[tuple[str, Path]]:
         for tag_dir in sorted((base / kind).iterdir()):
             if tag_dir.name.startswith(".") or not tag_dir.is_dir():
                 continue
-            if kind == "wikidata-pack":
+            if kind == ORIGIN_COPY:
+                out.append((kind, tag_dir))         # the copy's directory, stamped as one unit
+            elif kind == "wikidata-pack":
                 out.extend((kind, d) for d in sorted(tag_dir.iterdir())
                            if d.is_dir() and not d.name.startswith("."))
             else:
@@ -451,3 +455,82 @@ def evict_due(*, now: float | None = None, log=None) -> list[dict]:
         return []
     _last_evict = now
     return evict_idle(now=now, log=log)
+
+
+# ---- an origin's bulk file, staged in the files cache ---------------------------------------
+#
+# Operator, 2026-11-15: "Whatever reading is actively ongoing on bulk, you can use
+# ssd3 as cache", then "Make this kind of ssd3 caching the norm". An origin file a
+# pass reads AT RANDOM or MORE THAN ONCE — a dump's zip whose members are asked
+# for unit by unit (EUR-Lex's Data Dump: a central directory and a seek per member,
+# on tank's spinning disks) — is read from a copy in the files cache, made upon
+# need and gone after IDLE_S unused like every FILES unit. A file read once from
+# start to end is NOT staged: the copy would itself be that read. The copy is
+# keyed on the origin's physical identity (`tag`) and current only while its size
+# and modification time are the origin's; a cache without room for it (STAGE_FREE
+# kept free after the copy) leaves the reader on the origin, as before.
+# The standard it follows: a read-through cache of whole files (the policy of
+# cachefilesd/FS-Cache, which caches network filesystems per file); FS-Cache
+# itself is not used — tank is a local pool, not an NFS mount, and FS-Cache keys
+# on a network file's cookie, not a local path.
+
+#: the fraction of the files cache left free after a copy
+STAGE_FREE = 0.10
+
+
+def _current(copy: Path, st: os.stat_result) -> bool:
+    try:
+        c = copy.stat()
+    except OSError:
+        return False
+    return c.st_size == st.st_size and int(c.st_mtime) == int(st.st_mtime)
+
+
+def staged(origin: Path, *, log=None) -> Path:
+    """The path to read `origin` from: its copy in the files cache (made here
+    when missing or stale, into a temporary name of the writer's own and renamed
+    whole, under `building`'s lock), or `origin` itself when the node names no
+    files cache, `origin` is not a file or already lies in a cache, or the cache
+    has no room. Never fails for the cache's sake: a copy that cannot be made
+    leaves the reader on the origin and says so."""
+    origin = Path(origin)
+    base = root(ORIGIN_COPY)
+    if config.FILES_CACHE_DIR is None or base is None or cached(origin):
+        return origin
+    try:
+        st = origin.stat()
+    except OSError:
+        return origin
+    if not origin.is_file():
+        return origin
+    unit = place(ORIGIN_COPY, origin)
+    copy = unit / origin.name
+    if _current(copy, st):
+        used(unit)
+        return copy
+    try:
+        with building(copy):
+            if not _current(copy, st):
+                base.mkdir(parents=True, exist_ok=True)
+                du = shutil.disk_usage(base)
+                if du.free - st.st_size < STAGE_FREE * du.total:
+                    if log is not None:
+                        log(f"[cache] {origin}: not staged ({st.st_size / 2**30:.2f} GiB, "
+                            f"{du.free / 2**30:.0f} GiB free in {base}): read from its origin")
+                    return origin
+                t0 = time.monotonic()
+                # the evictor's lock file made now: made by the evictor, it would
+                # date the directory and the copy would never look idle
+                (unit / DIR_LOCK).touch(exist_ok=True)
+                tmp = copy.with_name(f"{copy.name}.{os.getpid()}.tmp")   # `building` removes a killed copy's
+                shutil.copy2(origin, tmp)
+                os.replace(tmp, copy)
+                if log is not None:
+                    log(f"[cache] {origin}: staged in {copy} ({st.st_size / 2**30:.2f} GiB, "
+                        f"{time.monotonic() - t0:.0f} s); read from there")
+    except OSError as e:
+        if log is not None:
+            log(f"[cache] {origin}: not staged ({type(e).__name__}: {e}): read from its origin")
+        return origin
+    used(unit)          # a fresh copy also dates its directory (`last_used`)
+    return copy

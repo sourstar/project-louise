@@ -208,7 +208,7 @@ class Dumps:
             dump = Dump(language=lang, folder=folder, trusted_until=created - MARGIN)
             for p in sorted(folder.rglob("*.zip")):
                 try:
-                    dump.zips.append(zipfile.ZipFile(p))
+                    dump.zips.append(zipfile.ZipFile(_staged(p, self.log)))
                 except (zipfile.BadZipFile, OSError) as e:
                     self.log(f"[datadump] {p}: not read ({e}); its items come from Cellar")
             self._open[lang] = dump
@@ -237,7 +237,7 @@ class Dumps:
                         if "MTD" not in p.name.upper():
                             continue
                         try:
-                            self._mtd.append(zipfile.ZipFile(p))
+                            self._mtd.append(zipfile.ZipFile(_staged(p, self.log)))
                         except (zipfile.BadZipFile, OSError) as e:
                             self.log(f"[datadump] {p}: not read ({e}); its trees come from Cellar")
             data = None
@@ -273,3 +273,11 @@ def dumps() -> Dumps:
             raw = os.environ.get(ENV, "").strip()
             _DUMPS = Dumps(Path(raw) if raw else None)
         return _DUMPS
+
+
+def _staged(p: Path, log) -> Path:
+    """A dump zip read from the files cache (app/derived.py `staged`): its
+    members are asked for unit by unit, a seek each, which tank's spinning
+    disks pay per unit (operator, 2026-11-15: ssd3 caching "the norm")."""
+    from app import derived
+    return derived.staged(p, log=log)

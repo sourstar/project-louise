@@ -527,3 +527,31 @@ pools), media 2.74 T, louise-corpora 912 G (wikivec 525, wikidata 184), apps
 (lz4 ~7.5× on its XML: the 23 other languages ≈ 200 GB on disk), plus the Data
 Dump copies until 11-20/21. At that pace tank is not near full; a daily log
 (/root/measure/tank-growth.log, 05:00) gives the rate from now on.
+
+## 11. An origin's bulk files, read from ssd3: the norm (operator, 2026-11-15)
+
+"Whatever reading is actively ongoing on bulk, you can use ssd3 as cache", then
+"Make this kind of ssd3 caching the norm". An origin file a pass reads **at
+random or more than once** is read from a copy in the files cache (ssd3):
+`derived.staged(origin)`, kind `origin-copy`, keyed on the origin's resolved
+path, current while its size and mtime are the origin's, made under the
+builder's lock into a temporary name and renamed whole, stamped on use and
+evicted after `IDLE_S` (24 h) idle like every files-cache unit. A cache without
+room for it (10 % kept free after the copy), or a node that names no files
+cache, leaves the reader on the origin, and the log says which. The origin on
+tank is never touched; the downloads stay there without expiry (2026-11-14).
+
+- **Staged:** EUR-Lex's Data Dump zips (`datadump.Dumps`: a central directory and a
+  seek per member, unit by unit; LEG_MTD.zip for every unit's tree). Measured on
+  the node by hand the same day: the Italian dump, 28 GB, copied tank → ssd3 in
+  5 min.
+- **Not staged, and why:** a file read once from start to end (a wikidata or
+  wikipedia dump scanned into its pack, PubMed's baseline parsed into its pack):
+  the copy would be that same sequential read, and the pack is what is read at
+  random afterwards (already a files-cache kind). NeuRIS's snapshot is
+  downloaded into the files cache directly.
+- **The standard:** a whole-file read-through cache, the policy of cachefilesd /
+  FS-Cache. FS-Cache itself does not apply: it caches network filesystems by a
+  network file's cookie, and tank is a local pool.
+- A new reader of a bulk file asks whether it reads at random or more than once.
+  If it does, it opens the file through `staged`.
