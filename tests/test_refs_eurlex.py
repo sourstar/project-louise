@@ -146,3 +146,27 @@ def test_the_record_writes_only_registered_ids_into_keys(tmp_path):
 def test_the_entity_is_an_entity():
     assert isinstance(Entity(entity_id="celex:1", kind="act", source_id="eurlex-refs"), Entity)
     assert Path(eref.__file__).name == "eurlex.py"
+
+
+def test_the_units_of_the_data_dump_and_of_the_history_are_synced_from_their_trees(tmp_path):
+    """Parser 4 (2026-11-15): a unit holds no notice; its identity, dates and
+    title come from its tree, the same fields, and the history slice's units
+    are read too. The record and the reference agree on the uid."""
+    from app.plugins.base import DiscoverState
+    from app.plugins.eurlex import SOURCE
+    from tests.test_eurlex_parser4 import _lay
+    root = tmp_path / "refs"
+    _lay(root / "eurlex", "31972R1473", tree_from_mtd=True)
+    _lay(root / "eurlex", "01979D0491-20061025", history=True)
+    con = refs.connect(tmp_path / "refs.db")
+    refs_store.sync_all(con, root)
+    store = refs.RefStore(con, [s.schema() for s in refs.REFS_REGISTRY.values()])
+    acts = {r["celex"]: r for r in store.rows("act")}
+    assert set(acts) == {"31972R1473"} and acts["31972R1473"]["in_force"] == 1
+    assert acts["31972R1473"]["title"].startswith("Regolamento (Euratom, CECA, CEE) n. 1473/72")
+    versions = {v["celex"]: v for v in store.rows("version")}
+    assert versions["01979D0491-20061025"]["work_celex"] == "31979D0491"
+    assert versions["01979D0491-20061025"]["unit"] == "history/lang=it/1979/01979D0491-20061025"
+    refs_ = {Path(r.locator).name: r for r in SOURCE.discover(DiscoverState(corpus_root=root / "eurlex"))}
+    for celex, v in versions.items():
+        assert v["uid"] == f"eurlex:{refs_[celex].native_id}"
