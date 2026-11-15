@@ -98,6 +98,25 @@ plugin, because a verifier needs it to reproduce our records:
     HTML only, 228 PDF only (5 scans, held as PDFs, said `no-text-layer`).
     Before parser 3 the listing asked for fmx4 alone and these were missing.
     The form read is in the record (`extra.form`).
+  * PARSER 4 (2026-11-15, operator, B: "Build every in-force act, in all 24
+    languages, from the Data Dump alone"): the record's facts are read from
+    the TREE (from_tree.py), and a unit is the tree and the items alone — no
+    notice. Measured on München's units: every field the record took from
+    the notice is the same from the tree; what the notice adds is other
+    works' assertions (inverse links, embedded notices), the vocabularies'
+    labels and hierarchy, and the items' stream metadata — none of it this
+    act's (invariant 11). Subjects and authors are concept ids
+    (`eurovoc:1073`); their labels are the vocabularies' (a reference source
+    from EuroVoc's and the authority tables' dumps, OWED). The DATA DUMP
+    builds the units of every act it holds (app/acquire/eurlex_dump.py: the
+    MTD's tree scoped to the language, the items from the language's zips),
+    byte for byte the unit Cellar gives for the same form, which
+    `records-vs-origin` re-fetches from Cellar (`cellar.fetch_unit_from_tree`:
+    the tree, then the items it names). CELLAR stays the origin. What the
+    dump lacks is the HISTORY slice (`history/lang=<l>/…`): consolidated
+    versions, and acts not in force when first held; optional to hold and to
+    embed, its per-unit pass not built yet (`cellar.CellarInventory.held_back`).
+    The notice-based reading below is parser 3's, kept for its Codex.
   * The DATA DUMP is a TRANSPORT for items, never the origin (amended
     2026-11-14, operator: "every time there is a bulk download that saves a
     relevant amount of single requests to the source, we start from the bulk
@@ -167,10 +186,12 @@ from app.backend import OriginForm, Template
 from ..base import (CanonicalDoc, DiscoverState, DocRef, Edge, Erasure, Issue, LicenseClass,
                     Modality, Mutability, PROTOCOL_VERSION, PrivacyClass, RawDoc,
                     UnindexableDocument)
-from . import formex, notice as notice_mod, rdf as rdf_mod, rendition
+from . import formex, from_tree, notice as notice_mod, rdf as rdf_mod, rendition
 
 NOTICE = "notice.xml"
 LANGUAGES = notice_mod.LANGUAGES
+#: the corpus root's folder of the HISTORY slice (parser 4): `history/lang=<l>/<yyyy>/<CELEX>/`
+HISTORY = "history"
 
 #: `0YYYYTNNNN-YYYYMMDD` — a consolidated version's CELEX: sector 0, the
 #: act's CELEX without its sector, the consolidation's date
@@ -226,6 +247,8 @@ EXTRA_KEYS = tuple(k for k in eli.EXTRA_KEYS if k != "eli_uri_schema") + (
     "form", "cdm_rdf",
     # the CDM notice
     "notice_kind", "notice_decoding", "cdm_relations", "cdm_notice",
+    # parser 4: the unit is held in the history slice (`history/lang=<l>/…`)
+    "history",
 )
 
 ISSUES = {
@@ -356,9 +379,11 @@ def _form_held(note, files: dict[str, bytes]) -> str | None:
     return None
 
 
-def _unit_day(unit: Path, celex: str, entries: list[os.DirEntry]) -> str | None:
+def _unit_day(unit: Path, celex: str, entries: list[os.DirEntry], tree_facts: bool = False) -> str | None:
     """The day the unit's id sorts under: a consolidation's CELEX date, an
-    original's OJ publication date from its wrapper's head."""
+    original's OJ publication date from its wrapper's head. An act without
+    Formex: its work's own day, from the notice (parser 3) or from the tree
+    (parser 4: the same date, `from_tree.work_day`)."""
     m = _CONSOLIDATED.match(celex)
     if m:
         return formex.iso(m["date"])
@@ -367,6 +392,12 @@ def _unit_day(unit: Path, celex: str, entries: list[os.DirEntry]) -> str | None:
             with open(e.path, "rb") as f:
                 got = _PUB_DATE.search(f.read(_HEAD))
             return formex.iso(got.group(1).decode()) if got else None
+    if tree_facts:
+        for e in entries:
+            if e.name == rdf_mod.TREE_FILE:
+                with open(e.path, "rb") as f:
+                    return from_tree.work_day(rdf_mod.loads(f.read()), celex)
+        return None
     # an act without Formex (rendition.py): the notice's work, read only as
     # far as its date (notice.work_day)
     for e in entries:
@@ -417,7 +448,16 @@ class EurlexSource:
     #: and an act without Formex read from its XHTML, HTML or PDF
     #: (rendition.py; 13,374 of 43,623 Italian works in force had been left
     #: out). eurlex is re-made on 3, its fetched units completed, not refetched
-    PARSER_VERSION = 3
+    #: 4 on 2026-11-15 (operator, B: "Build every in-force act, in all 24
+    #: languages, from the Data Dump alone"): the record's facts are read from
+    #: the unit's TREE (from_tree.py), never from a notice, so a unit is the
+    #: tree and the items — what the dump holds — and a notice a unit still
+    #: holds is kept whole and read for nothing; subjects and authors are
+    #: concept ids; the history slice (`history/lang=<l>/…`, `extra.history`).
+    #: Parser 3 is kept for the collection whose Codex names it (EurlexSourceV3)
+    PARSER_VERSION = 4
+    #: the facts from the tree (4) or from the notice (3)
+    TREE_FACTS = True
     #: 06 §6.2: Cellar keeps every OJ act and every consolidated version at
     #: its own CELEX: a superseded version stays checkable, and is kept
     origin_versions = "history"
@@ -444,20 +484,36 @@ class EurlexSource:
         {"field": "subjects", "kind": "flat", "separator": None, "authority": None},
     ]
 
+    def at_parser_version(self, version: int) -> "EurlexSource | None":
+        """This plugin parsing at `version`, for a collection whose Codex
+        names it (`collections.plugin_at`): 4 is this one, 3 the one that read
+        the facts from the notice (`EurlexSourceV3`)."""
+        return {4: self, 3: _V3}.get(int(version))
+
     # ---- discovery ---------------------------------------------------------------------------
 
+    def _lang_dirs(self, root: Path) -> list[os.DirEntry]:
+        """`lang=<code>` folders under the corpus root and, parser 4, under
+        its `history/` (the history slice)."""
+        out: list[os.DirEntry] = []
+        for base in (root, root / HISTORY) if self.TREE_FACTS else (root,):
+            if not base.is_dir():
+                continue
+            with os.scandir(base) as langs:
+                out += sorted((e for e in langs if e.is_dir()), key=lambda e: e.name)
+        return out
+
     def discover(self, state: DiscoverState):
-        """Every unit under `lang=<code>/<yyyy>/<CELEX>/` holding its notice —
-        a unit without one is a fetch that did not finish and is not yet a
+        """Every unit under `lang=<code>/<yyyy>/<CELEX>/` (and, parser 4,
+        `history/lang=<code>/…`) holding its tree — and, parser 3, its notice:
+        a unit without them is a fetch that did not finish and is not yet a
         document. Refs come out in native-id order, which is the start day's."""
         root = Path(state.corpus_root)
         if not root.is_dir():
             return
         guard = eli.CollisionGuard()
         held: dict[int, tuple[str, int, int]] = {}
-        with os.scandir(root) as langs:
-            lang_dirs = sorted((e for e in langs if e.is_dir()), key=lambda e: e.name)
-        for ld in lang_dirs:
+        for ld in self._lang_dirs(root):
             m = _LANG_DIR.match(ld.name)
             if m is None or m["lang"] not in LANGUAGES:
                 continue
@@ -477,13 +533,13 @@ class EurlexSource:
                                      scope="container", error=f"unreadable unit: {e}"[:200])
                         continue
                     names = {x.name for x in entries}
-                    if NOTICE not in names or rdf_mod.TREE_FILE not in names:
+                    if (NOTICE not in names and not self.TREE_FACTS) or rdf_mod.TREE_FILE not in names:
                         # not landed yet, or landed before parser 3 kept its
                         # tree: the next fetch completes it (app/acquire/cellar.py)
                         continue
                     try:
-                        day = _unit_day(unit, celex, entries)
-                    except OSError as e:
+                        day = _unit_day(unit, celex, entries, self.TREE_FACTS)
+                    except (OSError, ValueError) as e:
                         day, err = None, str(e)
                     else:
                         err = "no consolidation date in its CELEX and no OJ date in its wrapper"
@@ -520,7 +576,7 @@ class EurlexSource:
             files = {e.name: Path(e.path).read_bytes() for e in unit_files(unit)}
         except OSError as e:
             raise UnindexableDocument(f"{unit}: {type(e).__name__}: {e}") from e
-        for need in (NOTICE, rdf_mod.TREE_FILE):
+        for need in (rdf_mod.TREE_FILE,) if self.TREE_FACTS else (NOTICE, rdf_mod.TREE_FILE):
             if need not in files:
                 raise UnindexableDocument(f"{unit}: no {need}: the unit did not land whole")
         data = frame(files)
@@ -532,14 +588,25 @@ class EurlexSource:
         if lang not in LANGUAGES:
             raise UnindexableDocument(f"{unit}: not under lang=<one of the 24 languages>")
         files = unframe(raw.data or b"")
-        try:
-            note = notice_mod.parse(files.pop(NOTICE))
-        except (KeyError, notice_mod.NoticeError) as e:
-            raise UnindexableDocument(f"{unit}: {e}") from None
+        history = self.TREE_FACTS and unit.parent.parent.parent.name == HISTORY
+        held = None                     # the notice the unit holds, kept whole
+        if NOTICE in files or not self.TREE_FACTS:
+            try:
+                held = notice_mod.parse(files.pop(NOTICE))
+            except (KeyError, notice_mod.NoticeError) as e:
+                raise UnindexableDocument(f"{unit}: {e}") from None
         try:
             tree = rdf_mod.loads(files.pop(rdf_mod.TREE_FILE))
         except (KeyError, ValueError) as e:
             raise UnindexableDocument(f"{unit}: the scoped tree did not read: {e}") from None
+        if self.TREE_FACTS:
+            try:
+                note = from_tree.notice(tree, lang3(lang), celex)
+            except from_tree.TreeError as e:
+                # RULE 2: a tree of another act is refused, never filed here
+                raise UnindexableDocument(f"{unit}: {e}") from None
+        else:
+            note = held
         found: list[Issue] = []
         form = "fmx4" if any(formex.is_wrapper(n) for n in files) else _form_held(note, files)
         root_tag = "CONS.ACT" if _CONSOLIDATED.match(celex) else "ACT"
@@ -668,11 +735,13 @@ class EurlexSource:
             "form": form,
             # Cellar's non-inferred tree, scoped to this language (rdf.py)
             "cdm_rdf": tree,
-            # the CDM notice, whole
-            "notice_kind": note.kind,
-            "notice_decoding": note.decoding,
+            # the CDM notice, whole, where the unit holds one (parser 4: read for nothing)
+            "notice_kind": held.kind if held is not None else None,
+            "notice_decoding": held.decoding if held is not None else None,
             "cdm_relations": [[t, c] for t, c in note.relations],
-            "cdm_notice": note.whole,
+            "cdm_notice": held.whole if held is not None else None,
+            # parser 4: the history slice (slice_name)
+            "history": True if history else None,
         }
         keys = {f"celex:{celex}", f"celex:{work}"}
         if work_eli:
@@ -726,8 +795,23 @@ class EurlexSource:
             yield f"celex:{x['celex']}", ends[0]
 
 
-def slice_name(lang: str, celex: str, native_id: int) -> str:
+def slice_name(lang: str, celex: str, native_id: int, history: bool = False) -> str:
     """`lang=en/type=R/year=2016`: the language, the CELEX type, the year of
     the id's day — a pure function of the record's path and id, so
-    `slice_hint` answers from the manifest row and agrees by construction."""
-    return f"lang={lang}/type={celex_type(celex)}/year={eli.id_date(int(native_id)).year:04d}"
+    `slice_hint` answers from the manifest row and agrees by construction.
+    A unit of the history slice (parser 4, `history/lang=<l>/…`) is under
+    `history/`: `history/lang=en/type=R/year=2016`, so `lang=en` alone holds
+    none of it and `history` holds every language's (slice_scope.is_held)."""
+    name = f"lang={lang}/type={celex_type(celex)}/year={eli.id_date(int(native_id)).year:04d}"
+    return f"{HISTORY}/{name}" if history else name
+
+
+class EurlexSourceV3(EurlexSource):
+    """Parser 3, kept for the collection whose Codex names it (invariant 3):
+    the facts read from the notice, which every unit must hold; no history
+    slice."""
+    PARSER_VERSION = 3
+    TREE_FACTS = False
+
+
+_V3 = EurlexSourceV3()

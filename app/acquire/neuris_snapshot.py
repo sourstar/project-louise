@@ -372,7 +372,7 @@ class NeurisSnapshot:
             self._taken += 1
         return 0
 
-    def refetch(self, spec, locator: str, base: Path) -> tuple[Path, int]:
+    def refetch(self, spec, locator: str, base: Path, *, parser: int | None = None) -> tuple[Path, int]:
         """records-vs-origin: the record's unit — its manifestation zip and the
         expression's JSON beside it — fetched again PER LAW from the API under
         `base` at its corpus path, never from the snapshot (condition 3)."""

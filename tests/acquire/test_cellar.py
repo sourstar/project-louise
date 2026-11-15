@@ -441,7 +441,8 @@ def test_records_vs_origin_refetches_one_unit_by_its_cellar_uri(mock):
     """Through the generic unit origin (app/acquire/unit_origin.py): the spec
     declares a UnitFetcher with `refetch`, and nothing names the plugin."""
     from app.acquire import unit_origin
-    origin = unit_origin.UnitOrigin(_spec(mock))
+    # a parser-3 unit holds its notice (parser 4: tests/acquire/test_eurlex_dump.py)
+    origin = unit_origin.UnitOrigin(_spec(mock), parser=3)
     try:
         out = origin.materialise(f"lang=de/2016/{ACT}")
         assert sorted(p.name for p in out.iterdir()) == sorted([*_formex(ACT, "de"), "notice.xml", "tree.json"])

@@ -19,8 +19,12 @@ import pytest
 from app import plugin_io
 from app.acquire import cellar
 from app.plugins.base import DiscoverState
-from app.plugins.eurlex import SOURCE, notice, rdf
+from app.plugins.eurlex import SOURCE as REGISTERED, notice, rdf
 from app.plugins.eurlex import source as src
+
+# parser 3's behaviour, kept for the Codex that names it (parser 4, 2026-11-15,
+# reads the facts from the tree: tests/test_eurlex_parser4.py)
+SOURCE = REGISTERED.at_parser_version(3)
 
 FIX = Path(__file__).resolve().parent / "fixtures" / "eurlex"
 RDFS = sorted((FIX / "rdf").glob("*.rdf"))

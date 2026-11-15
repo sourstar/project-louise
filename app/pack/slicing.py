@@ -408,7 +408,7 @@ def eurlex_slice(doc: CanonicalDoc, native_id: int) -> str:
     from ..plugins.eurlex.source import slice_name
     x = doc.extra or {}
     return slice_name(str(x.get("language") or doc.language or "und"), str(x.get("celex") or ""),
-                      int(native_id))
+                      int(native_id), bool(x.get("history")))
 
 
 SCHEMES: dict[str, SliceScheme] = {
@@ -455,7 +455,13 @@ SCHEMES: dict[str, SliceScheme] = {
         describe={"keys": ["lang", "type", "year"],
                   "lang": {"field": "extra.language", "rule": "the language the Formex text states (LG.DOC)"},
                   "type": {"field": "extra.celex", "rule": "the CELEX type letters after sector and year"},
-                  "year": {"field": "native_id", "bin": "the year of the id's day"}},
+                  "year": {"field": "native_id", "bin": "the year of the id's day"},
+                  # parser 4 (operator, 2026-11-15: "Add history as a download and
+                  # embedding option"): the slice names open with `history/`
+                  "history": {"field": "extra.history",
+                              "rule": "what the Data Dump does not hold, as the unit was first "
+                                      "held: a consolidated version, or an act its tree did not "
+                                      "state in force; under history/, never moved"}},
         slice_of=eurlex_slice),
 }
 
@@ -545,9 +551,11 @@ def _eurlex_hint(row, context=None) -> str | None:
     from pathlib import PurePath
 
     from ..plugins.eurlex.source import slice_name
+    from ..plugins.eurlex.source import HISTORY
     unit = PurePath(str(row["path"]))
     lang = unit.parent.parent.name.partition("=")[2]
-    return slice_name(lang, unit.name, int(row["native_id"])) if lang else None
+    return slice_name(lang, unit.name, int(row["native_id"]),
+                      unit.parent.parent.parent.name == HISTORY) if lang else None
 
 
 def _pubmed_hint(row, context=None) -> str | None:

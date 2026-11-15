@@ -122,7 +122,7 @@ def test_records_vs_origin_never_reads_the_dump(mock, tmp_path, monkeypatch):
     _dump(tmp_path / "dump", "en", {f"{UUID}/fmx4/{n}": b for n, b in files.items()})
     monkeypatch.setenv(datadump.ENV, str(tmp_path / "dump"))
     monkeypatch.setattr(datadump, "_DUMPS", None)
-    cellar.UNITS.refetch(_spec(mock), src.unit_rel("en", ACT), tmp_path / "again")
+    cellar.UNITS.refetch(_spec(mock), src.unit_rel("en", ACT), tmp_path / "again", parser=3)
     assert len(_item_gets(mock)) == len(files)
 
 

@@ -94,7 +94,8 @@ class UnitFetcher(Protocol):
 
     def fetch(self, endpoint: "Endpoint", remote: RemoteFile, dest: Path) -> int: ...
 
-    def refetch(self, spec: "AcquisitionSpec", locator: str, base: Path) -> tuple[Path, int]: ...
+    def refetch(self, spec: "AcquisitionSpec", locator: str, base: Path, *,
+                parser: int | None = None) -> tuple[Path, int]: ...
 
 
 @dataclass(frozen=True)

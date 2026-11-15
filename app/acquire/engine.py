@@ -1142,6 +1142,15 @@ def run_acquisition(con, collection, spec: AcquisitionSpec, profile: str,
     write (and every db.log_event) happens here, on the caller's thread.
     """
     _require_license_ack(spec, collection)
+    # BULK FIRST (CLAUDE.md): an inventory may hold a collection's per-unit
+    # pass back while its units come from a bulk another pass builds
+    # (eurlex on parser 4: the Data Dump, `louise dev eurlex-dump`); said,
+    # nothing listed, nothing asked of the origin
+    held_back = getattr(spec.inventory, "held_back", None)
+    why = held_back(collection) if callable(held_back) else None
+    if why:
+        db.log_event(con, "info", "acquire", str(why)[:400])
+        return {**_no_counts(), "stopped": str(why)}
     try:
         return _run_acquisition(con, collection, spec, profile, stop, priority, until)
     except TransferAborted as e:

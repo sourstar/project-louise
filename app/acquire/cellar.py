@@ -630,6 +630,64 @@ def fetch_unit(base: str, celex: str, lang: str, dest: Path, *,
             client.close()
 
 
+def fetch_unit_from_tree(base: str, celex: str, lang: str, dest: Path, *,
+                         client: httpx.Client | None = None,
+                         charge: Callable[[int], None] = budget.acquire_bytes) -> Fetched:
+    """A PARSER-4 unit of (CELEX, language) into `dest`, whole or not at all:
+    the work's non-inferred tree scoped to the language (`tree.json`) and the
+    items of the best form the TREE lists (`form_of` on `from_tree.notice`) —
+    no notice (app/plugins/eurlex/from_tree.py: the tree holds every
+    assertion about the act). One request for the tree and one per item. The
+    unit the Data Dump builds (eurlex_dump.py) is this one, byte for byte:
+    what `records-vs-origin` re-fetches to check it."""
+    from ..plugins.eurlex import formex, from_tree, rdf
+    from ..plugins.eurlex.source import LANGUAGES
+    code = LANGUAGES[lang]
+    own = client is None
+    client = client or httpx.Client(timeout=TIMEOUT_S)
+    moved = 0
+
+    def count(n: int) -> None:
+        nonlocal moved
+        moved += n
+        charge(n)
+    try:
+        url = resource_url(base, celex)
+        scoped = rdf.scope(_read_tree(_tree(client, url, celex, count), celex), code)
+        try:
+            note = from_tree.notice(scoped, code, celex)
+        except from_tree.TreeError as e:
+            raise TransportError(f"cellar: the tree of {celex}: {e}") from None
+        form = form_of(note)
+        listed = note.items.get(form) or [] if form else []
+        if not listed or any(not it.name or not _NAME.match(it.name) for it in listed):
+            raise TransportError(f"cellar: the tree of {celex} ({code}) names no item of any of "
+                                 f"{', '.join(FORMS)} by a plain file name")
+        files: dict[str, bytes] = {}
+        for it in listed:
+            _stop_check()
+            if it.name in files or it.name in (NOTICE, rdf.TREE_FILE):
+                raise TransportError(f"cellar: two items of {celex} ({code}) named {it.name}")
+            files[it.name] = _get(client, it.uri, _headers({"Accept-Language": code.lower()}),
+                                  f"{it.name} of {celex} ({code})", charge=count).content
+        if form == "fmx4":
+            wrappers = [n for n in files if formex.is_wrapper(n)]
+            if len(wrappers) != 1:
+                raise TransportError(f"cellar: {celex} ({code}) holds {len(wrappers)} Formex wrappers, not one")
+            stated = re.search(rb"<LG\.DOC>\s*([A-Z]{2})\s*</LG\.DOC>", files[wrappers[0]])
+            if stated and stated.group(1).decode().lower() != lang:
+                raise TransportError(f"cellar: asked for {celex} in {lang}, its Formex is in "
+                                     f"{stated.group(1).decode().lower()}")
+        files[rdf.TREE_FILE] = rdf.dumps(scoped)
+        _land(dest, files)
+        return Fetched(files={n: len(b) for n, b in files.items()}, moved=moved)
+    except httpx.HTTPError as e:
+        raise TransportError(f"cellar: {type(e).__name__}: {e}") from e
+    finally:
+        if own:
+            client.close()
+
+
 def _work_of(note) -> str | None:
     """The work's cellar uuid, from the notice's dated WORK URI."""
     from . import datadump, work_trees
@@ -678,6 +736,18 @@ class CellarInventory:
     """Cellar's `Inventory`: `listing` above, for the profile's languages."""
 
     built_on_request = False
+
+    def held_back(self, collection) -> str | None:
+        """A collection on parser 4 takes its units from the Data Dump
+        (eurlex_dump.py; operator, 2026-11-15, B): its per-unit pass — the
+        API for what the dump lacks, the history slice — is not built yet,
+        so nothing is listed or asked of Cellar (bulk first, no exceptions)."""
+        version = getattr(getattr(getattr(collection, "codex", None), "parser", None), "version", None)
+        if version is not None and int(version) >= 4:
+            return (f"{getattr(collection, 'name', 'eurlex')}: parser {version} takes its units from the "
+                    f"Data Dump (louise dev eurlex-dump); the per-unit pass for what the dump lacks "
+                    f"is not built yet, so Cellar is not asked")
+        return None
 
     def list(self, endpoint: Endpoint, spec: AcquisitionSpec, profile_filter: Filter):
         return listing(endpoint, spec, profile_filter)
@@ -730,21 +800,28 @@ class CellarUnits:
         self._count(got)
         return got.moved
 
-    def refetch(self, spec: AcquisitionSpec, locator: str, base: Path) -> tuple[Path, int]:
+    def refetch(self, spec: AcquisitionSpec, locator: str, base: Path, *,
+                parser: int | None = None) -> tuple[Path, int]:
         """records-vs-origin: a record's `origin` is its unit
-        (`lang=<code>/<yyyy>/<CELEX>`), fetched again under `base` at the same
-        relative path, so the plugin reads it as it reads the corpus."""
+        (`lang=<code>/<yyyy>/<CELEX>`, parser 4 also `history/lang=…`), fetched
+        again under `base` at the same relative path, so the plugin reads it as
+        it reads the corpus. `parser`: the Codex's — before 4 a unit holds the
+        branch notice (`fetch_unit`), from 4 the tree and the items alone
+        (`fetch_unit_from_tree`, the unit the Data Dump builds)."""
         rel = str(locator).partition("#")[0].strip("/")
         out = base / rel
         if out.is_dir():
             return out, 0
         parts = rel.split("/")
+        if parts and parts[0] == "history" and (parser is None or parser >= 4):
+            parts = parts[1:]
         if len(parts) != 3 or not parts[0].startswith("lang="):
             raise FileNotFoundError(f"{rel}: not a Cellar unit (lang=<code>/<yyyy>/<CELEX>)")
         lang, celex = parts[0].partition("=")[2], parts[2]
+        fetch = fetch_unit if parser is not None and parser < 4 else fetch_unit_from_tree
         for endpoint in spec.endpoints:
             try:
-                got = fetch_unit(endpoint.url, celex, lang, out)
+                got = fetch(endpoint.url, celex, lang, out)
             except TransportError:
                 continue
             return out, got.moved
