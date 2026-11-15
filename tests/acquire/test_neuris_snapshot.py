@@ -9,6 +9,7 @@ from the API, never from the snapshot."""
 from __future__ import annotations
 
 import io
+import os
 import json
 import re
 import threading
@@ -239,3 +240,45 @@ def test_the_keys_are_the_origins_form_and_nothing_else():
     assert nsnap.member_key(f"{ns.S1016}/{gen}/") is None
     s = nsnap.NeurisSnapshot()
     assert not s.handles(RemoteFile(rel_path=f"{ns.S1016}/{gen}.zip")), "nothing prepared: per law"
+
+
+
+# ---- revised in place (2026-11-15) -------------------------------------------------------------------
+
+def _annotated(xml: bytes) -> bytes:
+    """What the portal did to every manifestation under the same date (München's
+    probe of NeuRIS5): a domainTerm annotation on the abbreviation."""
+    return xml.replace(b"<ris:abkuerzung ", b'<ris:abkuerzung domainTerm="Interne Abk\xc3\xbcrzung" ', 1)
+
+
+def test_a_manifestation_revised_in_place_is_rewritten_from_the_snapshot_at_the_weekly_revisit(tmp_path, server):
+    api, base = server
+    collection = _collection(tmp_path, plugin="neuris")
+    con = db.connect(collection)
+    engine.run_acquisition(con, collection, _spec(base), "full")
+    gen = ns.directory(ns.S1016)[0]
+    held = collection.corpus_dir / ns.S1016 / f"{gen}.zip"
+    before = _members(held)
+    # the origin re-renders (every GUID new: not a revision) and annotates S1016 in place
+    revised = snapshot_bytes(EXPRESSIONS, rerender=True)
+    import io as _io
+    out = _io.BytesIO()
+    with zipfile.ZipFile(_io.BytesIO(revised)) as zin, zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as zout:
+        for info in zin.infolist():
+            data = zin.read(info)
+            if info.filename.startswith(f"{ns.S1016}/{gen}/regelungstext-1.xml"):
+                data = _annotated(data)
+            zout.writestr(info.filename, data)
+    api.snapshot = out.getvalue()
+    # a quiet pass: nothing pending, and the snapshot compared under a week ago — not taken
+    got = engine.run_acquisition(con, collection, _spec(base), "full")
+    assert got["fetched"] == 0 and _members(held) == before
+    # a week on: taken, compared, and only the revised one rewritten (the re-render is no revision)
+    for p in nsnap.NeurisSnapshot.place(collection).glob("*.zip"):
+        os.utime(p, (0, 0))
+    for p in nsnap.NeurisSnapshot.place(collection).glob("*.zip"):
+        p.unlink()                                 # the API names a newer one: downloaded again
+    got = engine.run_acquisition(con, collection, _spec(base), "full")
+    assert got["fetched"] == 1 and api.zips_built == 0, "the one revised zip, from the snapshot"
+    assert "Interne Abk" in _members(held)[f"{ns.S1016}/{gen}/regelungstext-1.xml"].decode("utf-8")
+    assert any("revised in place" in m and " 1 held manifestation" in m for m in _events(con))

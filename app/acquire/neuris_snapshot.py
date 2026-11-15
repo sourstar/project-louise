@@ -41,6 +41,18 @@ drawn from the budget (invariant 5), resumable; it lives in the files cache
 (app/derived.py, kind `neuris-snapshot`, keyed on the corpus), the newest
 only, re-downloaded when the API names another.
 
+REVISED IN PLACE (2026-11-15, München's probe of NeuRIS5's inconclusive
+records-vs-origin): the portal revises manifestations WITHOUT moving their
+generation date — it annotated every `ris:abkuerzung` with domainTerm "Interne
+Abkürzung" — and the listing, by path, and the test phase's changelog
+(`allChanged`) never name such a law again: the corpus fell behind silently and
+no record could be verified. So the snapshot is also taken at least every
+REVISIT_S (a week, one download) whatever the pass's share, and every held
+manifestation it holds at the listing's generation date is compared with it,
+member by member after the plugin's normalization: one that differs is the
+origin's revision and is rewritten from the snapshot in the same pass
+(`prepare`'s answer, added to the pass by the engine), no request per law.
+
 THE STANDARD, NOT ADOPTED: none for "a bulk as a transport of a per-unit
 origin" beyond the mirror (06 §6.2); EUR-Lex's Data Dump (datadump.py) is
 the same pattern under another proof.
@@ -70,6 +82,11 @@ KIND = "neuris-snapshot"
 #: download answers them
 SHARE = 0.25
 HTTP_TIMEOUT_S = 60.0
+#: the longest a held corpus goes without being compared with the snapshot
+#: (REVISED IN PLACE above): one download a week
+REVISIT_S = 7 * 86400
+#: threads comparing held manifestations with the snapshot (zlib releases the GIL)
+COMPARE_THREADS = 8
 _DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 #: an expression ELI is eight path segments; the generation date the ninth
 _ELI_PARTS = 8
@@ -141,35 +158,78 @@ class NeurisSnapshot:
     # -- what the engine asks -------------------------------------------------
 
     def prepare(self, files: list[RemoteFile], pending: list[RemoteFile], collection,
-                endpoint: Endpoint) -> None:
+                endpoint: Endpoint) -> list[str]:
         """Before a pass fetches: the snapshot opened when the pass has at
-        least `share` of the listing's zips to fetch, downloaded first when
-        the API names a newer one than the place holds; else nothing (the
-        pass is per law). A failure leaves the pass per law and is said."""
+        least `share` of the listing's zips to fetch, or when the held corpus
+        has not been compared with it for REVISIT_S; downloaded first when the
+        API names a newer one than the place holds; else nothing (the pass is
+        per law). A failure leaves the pass per law and is said. Returns the
+        held zips the origin revised in place (REVISED IN PLACE), for the
+        engine to fetch in this pass — from the snapshot."""
         listed = sum(1 for f in files if manifestation_key(f.rel_path))
         want = [f for f in pending if manifestation_key(f.rel_path)]
         self.close()
-        if not want or len(want) < self.share * max(1, listed):
+        due = self._revisit_due(collection)
+        if not due and (not want or len(want) < self.share * max(1, listed)):
             if want:
                 self._report(f"snapshot not taken: {len(want)} of {listed} manifestation zip(s) to "
                              f"fetch, under {self.share:.0%}; fetched per law")
-            return
+            return []
         try:
             url = link(endpoint)
             if url is None:
                 self._report("snapshot not taken: the API names no legislation snapshot now; "
                              "fetched per law")
-                return
+                return []
             path = self._download(url, collection)
             self._open(path)
         except (TransportError, OSError, zipfile.BadZipFile) as e:
             self.close()
             self._report(f"snapshot not taken: {type(e).__name__}: {e}; fetched per law"[:400])
-            return
+            return []
         held = sum(1 for f in want if manifestation_key(f.rel_path) in self._index)
         self._report(f"snapshot {path.name}: {len(self._index)} manifestation(s); {held} of the "
                      f"{len(want)} zip(s) to fetch are in it with the listing's generation date, "
                      f"the rest per law")
+        revised = self._revised(files, {f.rel_path for f in pending}, collection, path)
+        os.utime(path)                     # compared now: the next revisit is REVISIT_S away
+        self._report(f"snapshot {path.name}: {len(revised)} held manifestation(s) the origin revised in "
+                     f"place (the same generation date), rewritten from it in this pass")
+        return revised
+
+    def _revisit_due(self, collection) -> bool:
+        """No snapshot held, or the held one compared longer than REVISIT_S ago."""
+        import time
+        where = self.place(collection)
+        held = sorted(where.glob("*.zip"), key=lambda p: p.stat().st_mtime) if where.is_dir() else []
+        return not held or time.time() - held[-1].stat().st_mtime >= REVISIT_S
+
+    def _revised(self, files: list[RemoteFile], pending: set[str], collection, path: Path) -> list[str]:
+        """The held, listed zips whose members, after the plugin's
+        normalization, differ from the snapshot's at the same generation
+        date: the origin's revisions in place. One snapshot handle a thread."""
+        from concurrent.futures import ThreadPoolExecutor
+
+        from app.plugins.neuris.source import normalized
+        local = threading.local()
+        candidates = [f for f in files if f.rel_path not in pending
+                      and manifestation_key(f.rel_path) in self._index
+                      and (Path(collection.corpus_dir) / f.rel_path).is_file()]
+
+        def differs(f: RemoteFile) -> bool:
+            zf = getattr(local, "zf", None)
+            if zf is None:
+                zf = local.zf = zipfile.ZipFile(path)
+            try:
+                with zipfile.ZipFile(Path(collection.corpus_dir) / f.rel_path) as held:
+                    mine = {i.filename: held.read(i) for i in held.infolist() if not i.is_dir()}
+                theirs = {i.filename: zf.read(i.filename) for i in self._index[manifestation_key(f.rel_path)]}
+            except (zipfile.BadZipFile, zlib.error, EOFError, OSError, KeyError):
+                return True                # a held zip unreadable, or the snapshot's: fetched again
+            return normalized(mine) != normalized(theirs)
+        with ThreadPoolExecutor(max_workers=COMPARE_THREADS, thread_name_prefix="neuris-compare") as pool:
+            flags = list(pool.map(differs, candidates))
+        return [f.rel_path for f, d in zip(candidates, flags) if d]
 
     def handles(self, remote: RemoteFile) -> bool:
         key = manifestation_key(remote.rel_path)
