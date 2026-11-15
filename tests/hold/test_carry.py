@@ -1668,3 +1668,90 @@ def test_facets_decide_no_record_and_a_carried_index_counts_its_own_facets(pair,
     legacy = tmp_path / "legacy"
     ask_facets.write_marker(legacy, "2026-08", "sha256:aa")
     assert ask_facets.marker_facets(legacy) is None, "a marker from before names no facets and stays valid"
+
+
+# ---- the target reads the source's corpus through its own link (2026-11-15) --
+def _origins(root, tmp_path):
+    """`old`'s origin a folder of files, `re`'s the EMPTY folder `create`
+    made (`link_shared_roots` with ORIGINS_ROOT set), and one of `old`'s
+    documents located under `old/origin`, as every live manifest's are."""
+    corpora = tmp_path / "corpora"
+    (corpora / "old" / "akn").mkdir(parents=True)
+    (corpora / "old" / "akn" / "codici.zip").write_bytes(b"the corpus")
+    (corpora / "re").mkdir()
+    for name in ("old", "re"):
+        (root / name / "origin").symlink_to(corpora / name, target_is_directory=True)
+    con = sqlite3.connect(root / "old" / "state" / "manifest.sqlite")
+    uid = con.execute("SELECT uid FROM documents ORDER BY rowid LIMIT 1").fetchone()[0]
+    con.execute("UPDATE documents SET path = ? WHERE uid = ?",
+                (f"{root}/old/origin/akn/codici.zip::x.xml", uid))
+    con.commit(); con.close()
+    return corpora, uid
+
+
+def _path(root, name, uid):
+    con = sqlite3.connect(root / name / "state" / "manifest.sqlite")
+    try:
+        return con.execute("SELECT path FROM documents WHERE uid = ?", (uid,)).fetchone()[0]
+    finally:
+        con.close()
+
+
+def test_a_carried_collection_reads_the_sources_corpus_through_its_own_link(pair, tmp_path):
+    """München, 2026-11-15: Normattiva re-created on parser 10 had an origin
+    linked to a new EMPTY folder; its copied paths read the source's corpus
+    until the source was forgotten and the copy renamed onto its name — then
+    "embed: origin missing". The carry links the target's origin to the
+    source's corpus, removes the empty folder, and re-roots the paths."""
+    from app.hold import rename
+    root, _old, _re, _uids, _ids = _rebuilt_pair(pair)
+    corpora, uid = _origins(root, tmp_path)
+    plan = carry.carry(root, "old", "re", rebuilt=True, copy=True, log=quiet)
+    assert plan["origin"].startswith(f"would link to {corpora / 'old'}")
+    assert (corpora / "re").is_dir(), "a dry run writes nothing"
+    out = carry.carry(root, "old", "re", rebuilt=True, copy=True, apply=True, log=quiet)
+    assert (root / "re" / "origin").resolve() == (corpora / "old").resolve()
+    assert not (corpora / "re").exists(), "create's empty folder is gone"
+    assert out["origin"]["paths"]["documents.path"] >= 1
+    path = _path(root, "re", uid)
+    assert path == f"{root}/re/origin/akn/codici.zip::x.xml"
+    assert Path(path.split("::")[0]).read_bytes() == b"the corpus"
+    assert _path(root, "old", uid).startswith(f"{root}/old/"), "the source's own paths untouched"
+    # the source's forget keeps the folder its sister reads (forget/rename's rule)
+    assert rename._origin_shared(root, "old", corpora / "old") == ["re"]
+    # run again (a resumed carry): the link is shared, nothing more to re-root
+    again = carry.share_origin(root, "old", "re")
+    assert again["origin"] == "shared" and sum(again["paths"].values()) == 0
+
+
+def test_a_target_whose_origin_holds_another_corpus_is_refused_before_anything_moves(pair, tmp_path):
+    root, _old, _re, _uids, _ids = _rebuilt_pair(pair)
+    corpora, _uid = _origins(root, tmp_path)
+    (corpora / "re" / "other.zip").write_bytes(b"another corpus")
+    with pytest.raises(CodexError, match="holds another corpus"):
+        carry.carry(root, "old", "re", rebuilt=True, copy=True, log=quiet)
+    assert not (root / "re" / "state" / carry.MARKER).exists()
+    assert (root / "re" / "origin").resolve() == (corpora / "re").resolve()
+
+
+def test_a_source_with_no_origin_folder_shares_nothing(pair):
+    """The fixtures' corpus outside the root (the live collections all have
+    one): nothing is linked, nothing re-rooted, the carry as before."""
+    root, _old, _re, _uids, _ids = _rebuilt_pair(pair)
+    out = carry.carry(root, "old", "re", rebuilt=True, copy=True, apply=True, log=quiet)
+    assert "nothing shared" in out["origin"]["origin"] and not (root / "re" / "origin").exists()
+
+
+def test_the_command_repairs_a_carry_finished_before_the_origin_was_shared(pair, tmp_path, capsys):
+    """NeuRIS5 (2026-11-15): carried, its origin still the empty folder."""
+    from app import louise
+    root, _old, _re, _uids, _ids = _rebuilt_pair(pair)
+    corpora, uid = _origins(root, tmp_path)
+    import shutil
+    (root / "re" / "state").mkdir(parents=True, exist_ok=True)
+    shutil.copy(root / "old" / "state" / "manifest.sqlite", root / "re" / "state" / "manifest.sqlite")
+    args = ["dev", "carry", "--root", str(root), "old", "re", "--share-origin"]
+    assert louise.main(args) == 0 and (corpora / "re").is_dir(), "without --yes, the plan"
+    assert louise.main([*args, "--yes"]) == 0
+    assert (root / "re" / "origin").resolve() == (corpora / "old").resolve()
+    assert _path(root, "re", uid) == f"{root}/re/origin/akn/codici.zip::x.xml"

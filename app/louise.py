@@ -3399,6 +3399,12 @@ def cmd_dev_carry(a) -> int:
         _print({"predecessor_rows": carry_mod.keep_predecessor_rows(a.root, from_name, to_name,
                                                                     apply=a.yes, log=say)})
         return 0
+    if getattr(a, "share_origin", False):
+        # a carry finished before the carry shared the origin (Normattiva on
+        # parser 10, NeuRIS5, 2026-11-15): the repair alone, idempotent
+        _print({"share_origin": carry_mod.share_origin(a.root, from_name, to_name,
+                                                       apply=a.yes, log=say)})
+        return 0
     if getattr(a, "reconcile", False):
         if not a.yes:
             say(f"[carry] would reconcile {to_name} against {from_name} (--yes)")
@@ -8066,6 +8072,9 @@ def build_parser() -> argparse.ArgumentParser:
                    help="after a same-space carry made before provenance was kept: the "
                         "source's coverage rows copied unkeyed and its bundle tree linked "
                         "(contribute.claimed_uids reads them; never this collection's coverage)")
+    p.add_argument("--share-origin", action="store_true", dest="share_origin",
+                   help="the repair alone, for a carry finished before 2026-11-15: link the "
+                        "target's empty origin to the source's corpus and re-root its paths")
     p.add_argument("--reconcile", action="store_true",
                    help="after `--rebuilt`, the build and the snapshot: keep the vectors of "
                         "every document whose content_hash did not move, embed the rest again")

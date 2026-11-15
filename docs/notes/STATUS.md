@@ -1997,6 +1997,15 @@ it left open is below.
 
 ## Open after the migration
 
+- **A re-created collection read its corpus through its SOURCE's link (fixed 2026-11-15).** `dev carry`
+  copied the source's manifest, whose paths are `<root>/<source>/origin/…`, while `create` had linked the
+  target's `origin` to a new EMPTY `<ORIGINS_ROOT>/<target>`. After the forget and the rename, Normattiva
+  on parser 10 failed with "embed: origin missing" (München). `hold check` passed because
+  `records-vs-origin` re-fetches from the remote origin, not the local corpus. The fix: the carry links the
+  target's origin to the source's corpus, removes the empty folder, and re-roots the paths
+  (`carry.share_origin`). It refuses a target whose origin holds another corpus. A carry finished earlier
+  is repaired by `louise dev carry <from> <to> --share-origin --yes`; NeuRIS5 needs this before its rebuild.
+
 - **`PUBMED_PACK_DIR` is an env override beside app/derived.py** (the legal session, 2026-11-14).
   `app/plugins/pubmed/pack.py` `pack_path` takes it first (app/config.py:16), so the node's 84 G pubmed
   pack (2,124 parquet files, `/data/pubmed-pack`) lives outside `LOUISE_CACHE_DIR`, against invariant
