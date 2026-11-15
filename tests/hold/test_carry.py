@@ -1755,3 +1755,27 @@ def test_the_command_repairs_a_carry_finished_before_the_origin_was_shared(pair,
     assert louise.main([*args, "--yes"]) == 0
     assert (root / "re" / "origin").resolve() == (corpora / "old").resolve()
     assert _path(root, "re", uid) == f"{root}/re/origin/akn/codici.zip::x.xml"
+
+
+def test_a_forget_that_would_cut_a_sister_off_its_corpus_is_refused(pair, tmp_path, monkeypatch):
+    """NeuRIS5 before its repair: its paths read through NeuRIS's link, and
+    nothing else links /corpora/NeuRIS, so NeuRIS's forget would remove the
+    corpus itself. Refused, naming the repair; after it, the forget keeps the
+    corpus the sister now links."""
+    import shutil
+    from app.hold import forget
+    monkeypatch.setenv("ORIGINS_ROOT", str(tmp_path / "corpora"))
+    root, _old, _re, _uids, _ids = _rebuilt_pair(pair)
+    corpora, uid = _origins(root, tmp_path)
+    (root / "re" / "state").mkdir(parents=True, exist_ok=True)
+    shutil.copy(root / "old" / "state" / "manifest.sqlite", root / "re" / "state" / "manifest.sqlite")
+    assert forget.read_through(root, "old") == {"re": 1}
+    for dry in (True, False):
+        with pytest.raises(CodexError, match=r"re still read their corpus.*--share-origin"):
+            forget.forget(root, "old", dry_run=dry)
+    assert (root / "old").is_dir() and (corpora / "old" / "akn" / "codici.zip").is_file()
+    carry.share_origin(root, "old", "re")
+    assert forget.read_through(root, "old") == {}
+    out = forget.forget(root, "old")
+    assert not (root / "old").exists() and str(corpora / "old") not in out["removed"]
+    assert Path(_path(root, "re", uid).split("::")[0]).read_bytes() == b"the corpus"
