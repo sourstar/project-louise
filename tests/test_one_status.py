@@ -301,11 +301,12 @@ def test_the_dense_bar_shows_the_earlier_version_grey(node):
     # them); the earlier versions are the grey segment, counted in its tooltip
     assert f"{done} / {target} · 31,6 %</span>" in html
     assert "earlier version (searched until" not in html
-    # done in the stage's colour, then the earlier version grey, then empty
+    # done in the stage's colour, then the earlier vectors in the same colour lighter
+    # (operator, 2026-11-15: "use the same color used for the embedded ones, just lighter"), then empty
     bar = re.search(r'<span style="width:([\d.]+)%;background:var\(--lapis\)"></span>'
                     r'<span data-superseded-bar="embed" data-superseded="4" title="4 earlier versions: '
-                    r'[^"]*" style="width:([\d.]+)%;background:var\(--superseded\)"></span></div>', html)
-    assert bar, "the grey segment follows the done one"
+                    r'[^"]*" style="width:([\d.]+)%;background:var\(--lapis-light\)"></span></div>', html)
+    assert bar, "the lighter segment follows the done one"
     assert (float(bar.group(1)), float(bar.group(2))) == (round(100 * 6 / 19, 1), round(100 * 4 / 19, 1))
     # the lexical bar: the same, for text that changed
     assert 'data-superseded-bar="fts" data-superseded="4" title="4 earlier versions:' in html

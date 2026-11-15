@@ -1293,6 +1293,9 @@ def _run_acquisition_claimed(con, collection, spec: AcquisitionSpec, profile: st
                           for f in louise_files if "/" in f.rel_path})
     elif spec.layout == "one-file-per-doc":
         docs_total = len(louise_files)
+    elif spec.docs_by_leaf_dir:
+        docs_total = len({f.rel_path.rsplit("/", 1)[0]
+                          for f in louise_files if "/" in f.rel_path})
     db.set_control(con, LISTING_KEY, json.dumps({
         "files_total": len(louise_files),
         "bytes_total": sum(f.size or 0 for f in louise_files),
