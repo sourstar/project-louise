@@ -195,6 +195,12 @@ def _get(client: httpx.Client, url: str, headers: dict, what: str, *,
             r_.episode(f"connection timed out on {what}: {type(e).__name__}", cause=e)
         except httpx.TransportError as e:
             r_.episode(f"{type(e).__name__} on {what}: {e}", cause=e)
+        except httpx.DecodingError as e:
+            # a body its Content-Encoding does not decode ("Error -3 while decompressing data:
+            # incorrect header check"): Cellar's episode, as a drop is — 3,258 Italian units marked
+            # failed over 2026-11-14/15 fetched whole when asked again. httpx's DecodingError is not
+            # a TransportError, so it was raised as the unit's error, out of every selection
+            r_.episode(f"{type(e).__name__} on {what}: {e}", cause=e)
     r_.give_up("cellar: ")
 
 
