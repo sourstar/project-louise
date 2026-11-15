@@ -86,6 +86,7 @@ def test_the_logo_is_top_left_on_every_page_and_served_small(client):
     assert "nav a.logo{position:absolute;left:16px" in css
     # a phone keeps it top left as well (operator, 2026-11-14: "on the upper left"), not in the centred column
     assert "nav a.logo{left:10px;top:10px;transform:none}" in css
+    assert "nav .menu{margin-top:16px}" in css, "on a phone the menu starts below the logo (operator, 2026-11-15)"
 
 
 def test_the_logo_background_is_transparent(client):
