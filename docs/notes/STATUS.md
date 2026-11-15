@@ -18,6 +18,14 @@ build at 12 cores, the GPU uncapped. The card's noise (operator): 0.2 sone
 idle, 3.1 sone at full load, coil whine ~0.9 sone; its fan range is being
 measured (published figures disagree).
 
+### 2026-11-15
+
+- **Normattiva10 is a ROOT** (München, for the legal session). Normattiva10 was re-created from Normattiva
+  (Codex 646f8ed9…: derived_from 40f3032e…, space_from 9cf74d39…) on parser 10, 2026-11-15. It is a root
+  because `create` makes roots ("create makes a root"; "space_from belongs to a sister"). The space is
+  unchanged (space_id 8ddb1bf5…, as for Normattiva and EUR-Lex), and nothing was published from Normattiva
+  (RULE 1). The sister fields were provenance only.
+
 ### 2026-11-14
 
 - **The nightly origin check never asked an origin — FIXED, not deployed** (München, 2026-11-14).
