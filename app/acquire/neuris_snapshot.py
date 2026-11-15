@@ -46,8 +46,9 @@ records-vs-origin): the portal revises manifestations WITHOUT moving their
 generation date — it annotated every `ris:abkuerzung` with domainTerm "Interne
 Abkürzung" — and the listing, by path, and the test phase's changelog
 (`allChanged`) never name such a law again: the corpus fell behind silently and
-no record could be verified. So the snapshot is also taken at least every
-REVISIT_S (a week, one download) whatever the pass's share, and every held
+no record could be verified. So the snapshot is also taken whatever the pass's
+share when the API names a newer one than the last compared (at most once a
+day, REVISIT_MIN_S) and at least every REVISIT_S (a week), and every held
 manifestation it holds at the listing's generation date is compared with it,
 member by member after the plugin's normalization: one that differs is the
 origin's revision and is rewritten from the snapshot in the same pass
@@ -83,8 +84,14 @@ KIND = "neuris-snapshot"
 SHARE = 0.25
 HTTP_TIMEOUT_S = 60.0
 #: the longest a held corpus goes without being compared with the snapshot
-#: (REVISED IN PLACE above): one download a week
+#: (REVISED IN PLACE above), whether or not the API names a newer one
 REVISIT_S = 7 * 86400
+#: a NEWER snapshot than the one last compared is compared once this long has
+#: passed since that comparison: at most one download a day. 2026-11-15: the
+#: portal annotated every manifestation in place after the 11-14 snapshot was
+#: cut, its per-law answers carried it at once and the snapshot only from its
+#: next build; a week's wait left every record "changed at the origin"
+REVISIT_MIN_S = 86400
 #: when the held corpus was last compared with a snapshot, beside it in the
 #: place: NOT the zip's date, which is its download's (2026-11-15: a snapshot
 #: downloaded by a full fetch and never compared read as "compared today")
@@ -173,14 +180,24 @@ class NeurisSnapshot:
         listed = sum(1 for f in files if manifestation_key(f.rel_path))
         want = [f for f in pending if manifestation_key(f.rel_path)]
         self.close()
-        due = self._revisit_due(collection)
-        if not due and (not want or len(want) < self.share * max(1, listed)):
-            if want:
-                self._report(f"snapshot not taken: {len(want)} of {listed} manifestation zip(s) to "
-                             f"fetch, under {self.share:.0%}; fetched per law")
-            return []
+        url: str | None = None
+        if not want or len(want) < self.share * max(1, listed):
+            # under the share: taken only to compare, when the held corpus was
+            # never compared, last a week ago, or a day ago and the API names a
+            # newer snapshot (one request to know which)
+            try:
+                url = link(endpoint)
+            except TransportError as e:
+                self._report(f"snapshot link not read ({e}); the revisit waits"[:400])
+                return []
+            named = Path(urlsplit(url).path).name if url else None
+            if not self._revisit_due(collection, named):
+                if want:
+                    self._report(f"snapshot not taken: {len(want)} of {listed} manifestation zip(s) to "
+                                 f"fetch, under {self.share:.0%}; fetched per law")
+                return []
         try:
-            url = link(endpoint)
+            url = url or link(endpoint)
             if url is None:
                 self._report("snapshot not taken: the API names no legislation snapshot now; "
                              "fetched per law")
@@ -201,16 +218,22 @@ class NeurisSnapshot:
                      f"place (the same generation date), rewritten from it in this pass")
         return revised
 
-    def _revisit_due(self, collection) -> bool:
-        """The held corpus never compared with a snapshot, or last compared
-        longer than REVISIT_S ago (COMPARED, never the zip's own date)."""
+    def _revisit_due(self, collection, named: str | None = None) -> bool:
+        """The held corpus never compared with a snapshot; last compared
+        longer than REVISIT_S ago; or REVISIT_MIN_S ago and the API names
+        another snapshot (`named`) than that comparison's (COMPARED, never
+        the zip's own date)."""
         import json
         import time
         try:
-            at = float(json.loads((self.place(collection) / COMPARED).read_text())["at"])
+            mark = json.loads((self.place(collection) / COMPARED).read_text())
+            at, against = float(mark["at"]), str(mark.get("snapshot") or "")
         except (OSError, ValueError, KeyError, TypeError):
             return True
-        return time.time() - at >= REVISIT_S
+        age = time.time() - at
+        if age >= REVISIT_S:
+            return True
+        return bool(named) and named != against and age >= REVISIT_MIN_S
 
     def _mark_compared(self, collection, path: Path) -> None:
         import json
