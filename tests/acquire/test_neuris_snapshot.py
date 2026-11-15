@@ -82,12 +82,13 @@ class _SnapHandler(_Handler):
         with api.lock:
             api.hits[url.path] = api.hits.get(url.path, 0) + 1
         if url.path == "/v1/bulk-zip-links":
-            content = None if api.snapshot is None else f"{self.server.base}/snapshots/{SNAP}"
+            name = getattr(api, "snap_name", SNAP)
+            content = None if api.snapshot is None else f"{self.server.base}/snapshots/{name}"
             body = {"@type": "DataCatalog", "dataSet": [
                 {"@type": "Dataset", "name": "rechtsprechung", "distribution": {"contentUrl": "x"}},
                 {"@type": "Dataset", "name": "legislation", "distribution": {"contentUrl": content}}]}
             return self._send(200, json.dumps(body).encode())
-        if url.path == f"/snapshots/{SNAP}":
+        if url.path.startswith("/snapshots/legislation_"):
             data = api.snapshot or b""
             rng = self.headers.get("Range")
             if rng:
@@ -188,10 +189,26 @@ def test_a_daily_delta_is_fetched_per_law_and_the_snapshot_is_not_downloaded(tmp
     links = api.hits.get("/v1/bulk-zip-links", 0)
     api.regenerate(ns.N130, "2026-11-07")
     got = engine.run_acquisition(con, collection, _spec(base), "full")
-    assert got["fetched"] == 2 and api.zips_built == 1, "one zip of five: per law"
-    assert api.hits.get("/v1/bulk-zip-links", 0) == links, \
-        "under the share, the link read today already: not asked again (operator: once a day)"
-    assert any("under 25%" in m for m in _events(con))
+    assert got["fetched"] == 2 and api.zips_built == 1, "the one zip the snapshot does not hold: per law"
+    assert api.hits.get("/v1/bulk-zip-links", 0) == links + 1, \
+        "a law the held snapshot lacks: the link asked whether a newer one is out (operator, A)"
+    assert any("the 1 it does not hold, per law" in m for m in _events(con))
+
+
+def test_a_pending_zip_the_held_snapshot_holds_never_goes_per_law(tmp_path, server):
+    """Operator, 2026-11-15: "until the bulk download is not fully used no
+    cherry picking is allowed. No exceptions" (Frankfurt's review, item 1: a
+    retried failure, or a stopped pass's rest, went to the API under 25 %)."""
+    api, base = server
+    collection = _collection(tmp_path, plugin="neuris")
+    con = db.connect(collection)
+    engine.run_acquisition(con, collection, _spec(base), "full")
+    gen = ns.directory(ns.N130)[0]
+    con.execute("UPDATE fetch_files SET fetch_done=0 WHERE rel_path=?", (f"{ns.N130}/{gen}.zip",))
+    con.commit()
+    built = api.zips_built
+    got = engine.run_acquisition(con, collection, _spec(base), "full")
+    assert got["fetched"] == 1 and api.zips_built == built, "one of five pending, from the held snapshot"
 
 
 def test_no_snapshot_named_means_every_zip_per_law_and_it_is_said(tmp_path, server):
@@ -340,3 +357,33 @@ def test_the_link_is_read_at_most_once_a_day(tmp_path, server):
     engine.run_acquisition(con, collection, _spec(base), "full")
     engine.run_acquisition(con, collection, _spec(base), "full")
     assert api.hits.get("/v1/bulk-zip-links", 0) == links + 1, "a day on: one read, then a day again"
+
+
+
+def test_a_newer_snapshot_holding_a_pending_law_is_peeked_at_by_range_and_taken(tmp_path, server):
+    """Operator, 2026-11-15, A (Frankfurt's item 2): before any per-law fetch,
+    a newer snapshot's index is read by range, and the snapshot downloaded
+    when it holds a pending law; per law only what neither holds."""
+    api, base = server
+    collection = _collection(tmp_path, plugin="neuris")
+    con = db.connect(collection)
+    engine.run_acquisition(con, collection, _spec(base), "full")
+    (nsnap.NeurisSnapshot.place(collection) / nsnap.LINK_READ).write_text(json.dumps({"at": time.time()}))
+    # the origin regenerates N130 and a newer snapshot carries it
+    api.regenerate(ns.N130, "2026-11-07")
+    api.snapshot = snapshot_bytes(EXPRESSIONS, generated={ns.N130: "2026-11-07"})
+    api.snap_name = "legislation_2026-11-15T23:11:10.000000000Z.zip"
+    got = engine.run_acquisition(con, collection, _spec(base), "full")
+    assert got["fetched"] == 2 and api.zips_built == 0, "N130 from the newer snapshot, not the API"
+    assert any("its index read by range; it holds 1 of the 1" in m for m in _events(con))
+
+
+def test_the_range_reader_reads_a_zip_s_index_without_the_whole(tmp_path, server):
+    api, base = server
+    big = snapshot_bytes(EXPRESSIONS)
+    api.snapshot = big
+    f = nsnap.RangeFile(f"{base}/snapshots/{SNAP}")
+    with zipfile.ZipFile(f) as zf:
+        names = zf.namelist()
+    assert names and f.size == len(big)
+    assert len(f._blocks) * nsnap.RangeFile.BLOCK >= 0
