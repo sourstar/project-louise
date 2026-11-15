@@ -1,4 +1,4 @@
-<p align="center"><img src="docs/images/louise-logo.png" alt="Louise logo: a glowing green L whose bowl is a globe, rising from an open book, with two red diamonds" width="360"></p>
+<p align="center"><img src="docs/images/louise-logo.png" alt="Louise logo: an L whose bowl is a globe, rising from an open book, with a red diamond" width="360"></p>
 
 # Project Louise - knowledge, kept.
 
