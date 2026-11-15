@@ -92,6 +92,11 @@ REVISIT_S = 7 * 86400
 #: cut, its per-law answers carried it at once and the snapshot only from its
 #: next build; a week's wait left every record "changed at the origin"
 REVISIT_MIN_S = 86400
+#: how often a pass under the share may READ the snapshot link to learn
+#: whether a newer snapshot is out (operator, 2026-11-15: "once a day"); the
+#: last read is recorded beside the comparison (LINK_READ)
+LINK_READ_S = 86400
+LINK_READ = "link-read.json"
 #: when the held corpus was last compared with a snapshot, beside it in the
 #: place: NOT the zip's date, which is its download's (2026-11-15: a snapshot
 #: downloaded by a full fetch and never compared read as "compared today")
@@ -184,12 +189,19 @@ class NeurisSnapshot:
         if not want or len(want) < self.share * max(1, listed):
             # under the share: taken only to compare, when the held corpus was
             # never compared, last a week ago, or a day ago and the API names a
-            # newer snapshot (one request to know which)
+            # newer snapshot — the link read to know which at most once a day
+            # (LINK_READ_S, operator: "once a day")
+            if not self._revisit_due(collection, None) and not self._link_read_due(collection):
+                if want:
+                    self._report(f"snapshot not taken: {len(want)} of {listed} manifestation zip(s) to "
+                                 f"fetch, under {self.share:.0%}; fetched per law")
+                return []
             try:
                 url = link(endpoint)
             except TransportError as e:
                 self._report(f"snapshot link not read ({e}); the revisit waits"[:400])
                 return []
+            self._mark_link_read(collection)
             named = Path(urlsplit(url).path).name if url else None
             if not self._revisit_due(collection, named):
                 if want:
@@ -197,7 +209,9 @@ class NeurisSnapshot:
                                  f"fetch, under {self.share:.0%}; fetched per law")
                 return []
         try:
-            url = url or link(endpoint)
+            if url is None:
+                url = link(endpoint)
+                self._mark_link_read(collection)
             if url is None:
                 self._report("snapshot not taken: the API names no legislation snapshot now; "
                              "fetched per law")
@@ -234,6 +248,26 @@ class NeurisSnapshot:
         if age >= REVISIT_S:
             return True
         return bool(named) and named != against and age >= REVISIT_MIN_S
+
+    def _link_read_due(self, collection) -> bool:
+        """The snapshot link never read, or last read LINK_READ_S ago."""
+        import json
+        import time
+        try:
+            at = float(json.loads((self.place(collection) / LINK_READ).read_text())["at"])
+        except (OSError, ValueError, KeyError, TypeError):
+            return True
+        return time.time() - at >= LINK_READ_S
+
+    def _mark_link_read(self, collection) -> None:
+        import json
+        import time
+        where = self.place(collection)
+        where.mkdir(parents=True, exist_ok=True)
+        mark = where / LINK_READ
+        tmp = mark.with_name(mark.name + ".part")
+        tmp.write_text(json.dumps({"at": time.time()}))
+        os.replace(tmp, mark)
 
     def _mark_compared(self, collection, path: Path) -> None:
         import json

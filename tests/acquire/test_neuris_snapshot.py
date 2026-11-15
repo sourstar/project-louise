@@ -189,8 +189,8 @@ def test_a_daily_delta_is_fetched_per_law_and_the_snapshot_is_not_downloaded(tmp
     api.regenerate(ns.N130, "2026-11-07")
     got = engine.run_acquisition(con, collection, _spec(base), "full")
     assert got["fetched"] == 2 and api.zips_built == 1, "one zip of five: per law"
-    assert api.hits.get("/v1/bulk-zip-links", 0) == links + 1, \
-        "under the share: the link alone is asked, to know whether a newer snapshot is out"
+    assert api.hits.get("/v1/bulk-zip-links", 0) == links, \
+        "under the share, the link read today already: not asked again (operator: once a day)"
     assert any("under 25%" in m for m in _events(con))
 
 
@@ -320,3 +320,23 @@ def test_a_newer_snapshot_is_compared_after_a_day_and_the_same_one_is_not(tmp_pa
     assert not snap._revisit_due(collection, SNAP), "the same one, a day on: not before a week"
     mark.write_text(json.dumps({"snapshot": SNAP, "at": time.time() - nsnap.REVISIT_S - 1}))
     assert snap._revisit_due(collection, SNAP), "a week on, whichever"
+
+
+
+def test_the_link_is_read_at_most_once_a_day(tmp_path, server):
+    """Operator, 2026-11-15: "once a day". Passes under the share read the
+    snapshot link only when the last read is a day old."""
+    api, base = server
+    collection = _collection(tmp_path, plugin="neuris")
+    con = db.connect(collection)
+    engine.run_acquisition(con, collection, _spec(base), "full")
+    place = nsnap.NeurisSnapshot.place(collection)
+    (place / nsnap.LINK_READ).write_text(json.dumps({"at": time.time()}))
+    links = api.hits.get("/v1/bulk-zip-links", 0)
+    for _ in range(3):
+        engine.run_acquisition(con, collection, _spec(base), "full")
+    assert api.hits.get("/v1/bulk-zip-links", 0) == links, "three passes, no read: one a day"
+    (place / nsnap.LINK_READ).write_text(json.dumps({"at": time.time() - nsnap.LINK_READ_S - 1}))
+    engine.run_acquisition(con, collection, _spec(base), "full")
+    engine.run_acquisition(con, collection, _spec(base), "full")
+    assert api.hits.get("/v1/bulk-zip-links", 0) == links + 1, "a day on: one read, then a day again"
