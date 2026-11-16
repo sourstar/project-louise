@@ -70,3 +70,20 @@ def test_the_arena_cap_is_the_repository_yaml_s():
     worker = text.split("\n  worker:\n", 1)[1].split("\n  # ", 1)[0]
     for k, v in sml.ENV["worker"].items():
         assert f"{k}: '{v}'" in worker
+
+
+def test_both_services_get_the_open_file_limit_and_other_limits_stay():
+    """2026-11-16: the chunker pilot's tantivy writers died three times on
+    EMFILE at Docker's default soft nofile of 1024."""
+    cfg = a_config()
+    cfg["services"]["web"]["ulimits"] = {"nproc": 4096}
+    assert sml.apply_ulimits(cfg) == {"web": {"nofile": None}, "worker": {"nofile": None}}
+    assert cfg["services"]["web"]["ulimits"] == {"nproc": 4096, "nofile": {"soft": 65536, "hard": 524288}}
+    assert cfg["services"]["worker"]["ulimits"] == {"nofile": {"soft": 65536, "hard": 524288}}
+    assert "ulimits" not in cfg["services"]["gpu-probe"]
+    assert sml.apply_ulimits(cfg) == {"web": {"nofile": sml.NOFILE}, "worker": {"nofile": sml.NOFILE}}, "idempotent"
+
+
+def test_the_open_file_limit_is_the_repository_yaml_s():
+    text = (Path(__file__).resolve().parents[1] / "deploy" / "truenas-app.yaml").read_text(encoding="utf-8")
+    assert text.count(f"soft: {sml.NOFILE['soft']}") == 2 and text.count(f"hard: {sml.NOFILE['hard']}") == 2

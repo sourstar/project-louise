@@ -142,6 +142,13 @@ services:
     # The worker runs 5-15 GB (München); the web serves searches.
     mem_limit: 12g
     memswap_limit: 12g
+    # OPEN FILES (2026-11-16): Docker's default soft nofile is 1024. The chunker pilot's
+    # tantivy writers died three times on EMFILE ("an index writer was killed") at
+    # it; the worker builds the same indexes. The hard limit is the daemon's own.
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 524288
     # init: without it the app's Python is the container's PID 1, and PID 1
     # must reap orphans. rsync forks a receiver; when rsync exits first (a
     # SIGKILL, some error exits) the receiver is re-parented to PID 1 and
@@ -201,6 +208,10 @@ services:
     # see web: contained and restarted, never a global OOM
     mem_limit: 24g
     memswap_limit: 24g
+    ulimits:                    # see web: open files
+      nofile:
+        soft: 65536
+        hard: 524288
     command: ['python', '-m', 'app.worker']
     init: true                  # reaps rsync's orphaned children — see web
     environment:

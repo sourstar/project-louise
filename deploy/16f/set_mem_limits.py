@@ -30,6 +30,11 @@ KEYS = ("mem_limit", "memswap_limit")
 #: ~100 threads held 47 arenas, 2.9 GB, main 2.4 -> 7.1 GB and OOM-killed; at 2,
 #: main 1.6-3.8 GB over an hour, 0 kills, the rates unchanged
 ENV = {"worker": {"MALLOC_ARENA_MAX": "2"}}
+#: deploy/truenas-app.yaml's open-file limits (2026-11-16): Docker's default
+#: soft nofile is 1024; a chunker pilot's tantivy writers died three times on
+#: EMFILE at it, and the worker builds the same indexes. Hard = the daemon's own
+NOFILE = {"soft": 65536, "hard": 524288}
+ULIMITS = {"web": {"nofile": NOFILE}, "worker": {"nofile": NOFILE}}
 
 
 def apply(cfg: dict, limits: dict[str, str] = LIMITS) -> dict[str, tuple]:
@@ -74,6 +79,25 @@ def apply_env(cfg: dict, env: dict[str, dict[str, str]] = ENV) -> dict[str, dict
     return before
 
 
+def apply_ulimits(cfg: dict, ulimits: dict[str, dict] = ULIMITS) -> dict[str, dict]:
+    """Set each service's `ulimits` entries, in place, keeping any other
+    limit it holds; return what each held before (None where unset)."""
+    services = cfg.get("services")
+    if not isinstance(services, dict):
+        raise ValueError("the app config has no services mapping; not touched")
+    for name in ulimits:
+        if not isinstance(services.get(name), dict):
+            raise ValueError(f"{name}: no such service; not touched")
+    before: dict[str, dict] = {}
+    for name, want in ulimits.items():
+        u = services[name].setdefault("ulimits", {})
+        if not isinstance(u, dict):
+            raise ValueError(f"{name}: ulimits that are not a mapping; not touched")
+        before[name] = {k: u.get(k) for k in want}
+        u.update({k: dict(v) for k, v in want.items()})
+    return before
+
+
 def _env_of(service: dict) -> dict:
     e = service.get("environment") or {}
     if isinstance(e, list):
@@ -88,6 +112,7 @@ def main(argv: list[str]) -> int:
         try:
             before = apply(cfg)
             env_before = apply_env(cfg)
+            ul_before = apply_ulimits(cfg)
         except ValueError as e:
             print(f"set_mem_limits: {e}", file=sys.stderr)
             return 2
@@ -96,8 +121,12 @@ def main(argv: list[str]) -> int:
         for name, want in ENV.items():
             for k, v in want.items():
                 print(f"{name:7} {k} {env_before[name][k]} -> {v}")
+        for name, want in ULIMITS.items():
+            for k, v in want.items():
+                print(f"{name:7} ulimits.{k} {ul_before[name][k]} -> {v}")
         if (all(before[name] == (cap, cap) for name, cap in LIMITS.items())
-                and all(env_before[name][k] == v for name, want in ENV.items() for k, v in want.items())):
+                and all(env_before[name][k] == v for name, want in ENV.items() for k, v in want.items())
+                and all(ul_before[name][k] == v for name, want in ULIMITS.items() for k, v in want.items())):
             print("unchanged")
             return 0
         try:
@@ -119,6 +148,11 @@ def main(argv: list[str]) -> int:
                    if _env_of(services.get(name) or {}).get(k) != v]
         if missing:
             print(f"set_mem_limits: NOT set: {', '.join(missing)}", file=sys.stderr)
+            return 1
+        wrong = [f"{name}.ulimits.{k}" for name, want in ULIMITS.items() for k, v in want.items()
+                 if ((services.get(name) or {}).get("ulimits") or {}).get(k) != v]
+        if wrong:
+            print(f"set_mem_limits: NOT set: {', '.join(wrong)}", file=sys.stderr)
             return 1
         print("set")
         return 0
