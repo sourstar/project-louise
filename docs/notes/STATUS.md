@@ -2007,6 +2007,13 @@ it left open is below.
 
 ## Open after the migration
 
+- **NeuRIS lacks the big codes: the origin's test phase (2026-11-16).** The portal's listing and its 11-15
+  snapshot hold no BGB, HGB or StGB, only acts around them (EGHGB, EGStGB, the Art. 6 Abs. 3 EGHGB
+  notices, amending acts). Old law is otherwise held, from the 1870s. München measured the snapshot's
+  5,525 `vollzitat` and one API search per code. Our listing and parser accept every agent, so this is not
+  a filter. Operator, 2026-11-16: **B**, wait for the portal to migrate them; no second origin
+  (gesetze-im-internet.de) for now. A German search for the codes' subjects finds no code meanwhile.
+
 - **EUR-Lex from the Data Dump alone: parser 4 (2026-11-15, operator B and "Add history as a download
   and embedding option").** Parser 4 reads the facts from the unit's tree, not from the notice
   (app/plugins/eurlex/from_tree.py): every field matched on München's three units. A unit is the tree
