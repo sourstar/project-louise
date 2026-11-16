@@ -84,10 +84,12 @@ def test_the_logo_is_top_left_on_every_page_and_served_small(client):
         assert b[:8] == b"\x89PNG\r\n\x1a\n" and len(b) < 64 * 1024, name
         assert int.from_bytes(b[16:20], "big") == side and int.from_bytes(b[20:24], "big") == side, name
     css = client.get("/static/admin.css").text
-    assert "nav a.logo{position:absolute;left:16px" in css
-    # a phone keeps it top left as well (operator, 2026-11-14: "on the upper left"), not in the centred column
-    assert "nav a.logo{left:10px;top:10px;transform:none}" in css
-    assert "nav .menu{margin-top:8px}" in css, "on a phone the menu starts below the logo (operator, 2026-11-15)"
+    assert "nav a.logo{position:absolute;left:16px;top:14px" in css
+    # a phone keeps it top left as well (operator, 2026-11-14: "on the upper left"), not in the centred column;
+    # the name sits on its middle and the menu starts below it (2026-11-15, 2026-11-16: measured in a
+    # browser by tests/test_header_logo_browser.py)
+    assert "nav a.logo{left:10px}" in css and "nav a.logo{top:10px}" in css
+    assert "min-height:56px;display:flex;align-items:center" in css and "nav .brand{min-height:36px}" in css
 
 
 def test_the_logo_background_is_transparent(client):
@@ -434,7 +436,8 @@ def test_system_page_shows_the_node_models(models_page):
     html = client.get("/admin/system", headers={"X-Admin-Token": "sekrit"}).text
     assert 'id="sys-models"' in html and 'action="/admin/system/models"' in html
     assert _model_inputs(html) == {"chat": "chat-env", "translate": "madlad-env", "reading": "",
-                                   "stt_model": "stt-x", "vad_model": "vad-x", "tts_model": "", "tts_voice": ""}
+                                   "stt_model": "stt-x", "vad_model": "vad-x", "tts_model": "", "tts_voice": "",
+                                   "synthetic_voices": ""}, "the readers' synthetic voices too (2026-11-16)"
     assert '<option value="madlad-f16">' in html, "the server's models as suggestions"
 
 

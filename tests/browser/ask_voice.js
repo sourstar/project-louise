@@ -57,8 +57,8 @@ const sentenceOf = size => KNOWN[(size - 44 - 8000) / 20 - 1];
   // speechDelay: every sentence's wait; slow: a sentence's own; answerJob:
   // 'live' is the answer the test writes into the page's stream itself
   let speechDelay = 0, slow = {}, answerJob = 'a1', offerVoices = false, account = null;
-  const VOICES = { voices: [{ name: 'Philippe', voice: 'localai://voice-profiles/p1', language: 'en' },
-                            { name: 'Valentina', voice: 'localai://voice-profiles/v2', language: 'it' }],
+  const VOICES = { voices: [{ name: 'Voice A', voice: 'localai://voice-profiles/p1', language: 'en' },
+                            { name: 'Voice B', voice: 'localai://voice-profiles/v2', language: 'it' }],
                    default: 'localai://voice-profiles/p1' };
   page.on('pageerror', e => errors.push(e.message));
   h.route(async req => {
@@ -522,8 +522,8 @@ const sentenceOf = size => KNOWN[(size - 44 - 8000) / 20 - 1];
   const tl = await page.evaluate(() => louiseVoice.timeline());
   check(tl && Array.isArray(tl.sentences) && 'first_word' in tl, '17. the reading\'s times are kept', tl);
 
-  // 19. the reader chooses the voice (operator, 2026-11-11: "choose philippe
-  //     or valentina"): the node's voices by name, the choice sent and kept
+  // 19. the reader chooses the voice (operator, 2026-11-11: a configuration tab to
+  //     choose the voice): the node's voices by name, the choice sent and kept
   offerVoices = true;
   const sent = async n => { const t0 = Date.now(); while (posted.speech.length < n && Date.now() - t0 < 8000) await sleep(40); };
   await page.goto('http://localhost/ask');

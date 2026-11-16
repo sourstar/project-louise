@@ -10,10 +10,10 @@ from fastapi.testclient import TestClient
 from app import api, speech
 from tests.deposit.test_deposit_identity import node  # noqa: F401
 
-PHILIPPE = "localai://voice-profiles/1c834741"
-PROFILES = [{"name": "Valentina", "language": "it-IT", "voice": "localai://voice-profiles/db55",
+VOICE_A = "localai://voice-profiles/aaaa1111"
+PROFILES = [{"name": "Voice B", "language": "it-IT", "voice": "localai://voice-profiles/bbbb2222",
              "created_at": "2026-10-16T22:20:25Z"},
-            {"name": "Philippe", "language": "it-IT", "voice": PHILIPPE, "created_at": "2026-10-06T17:11:09Z"}]
+            {"name": "Voice A", "language": "it-IT", "voice": VOICE_A, "created_at": "2026-10-06T17:11:09Z"}]
 
 
 @pytest.mark.parametrize("text, said", [
@@ -76,12 +76,12 @@ def test_the_language_is_told_by_its_commonest_words(text, lang):
 
 
 def test_one_voice_for_every_language():
-    """Operator, 2026-11-07: "Use the same omnivoice philippe voice for all the
+    """Operator, 2026-11-07: "Use the same omnivoice voice for all the
     languages" — French had no profile and got the model's own voice, a
     different speaker at every sentence."""
-    assert speech.voice_for(PHILIPPE, PROFILES) == PHILIPPE
-    assert speech.voice_for("localai://voice-profiles/db55", PROFILES) == "localai://voice-profiles/db55"
-    assert speech.voice_for(None, PROFILES) == PHILIPPE, "none asked: the first profile recorded"
+    assert speech.voice_for(VOICE_A, PROFILES) == VOICE_A
+    assert speech.voice_for("localai://voice-profiles/bbbb2222", PROFILES) == "localai://voice-profiles/bbbb2222"
+    assert speech.voice_for(None, PROFILES) == VOICE_A, "none asked: the first profile recorded"
     assert speech.voice_for("alloy", PROFILES) == "alloy", "a model's named voice is kept"
     assert speech.voice_for(None, []) is None, "no profile: the model's own"
 
@@ -109,17 +109,17 @@ def server(monkeypatch):
 def test_a_sentence_is_relayed_clean_in_its_language_s_voice_and_the_model_stays_pinned(server):
     calls, pins = server
     for text in ("Buonasera, la Divina Commedia è di Dante [3][4].", "E il poema della lingua italiana [5]."):
-        got = speech.synthesize({"model": "omnivoice-cpp", "input": text, "voice": PHILIPPE}, url="http://ai:8080")
+        got = speech.synthesize({"model": "omnivoice-cpp", "input": text, "voice": VOICE_A}, url="http://ai:8080")
         assert got == (200, b"RIFF", "audio/wav")
     assert [c[0] for c in calls] == ["http://ai:8080/v1/audio/speech"] * 2
     assert calls[0][1] == {"model": "omnivoice-cpp", "input": "Buonasera, la Divina Commedia è di Dante.",
-                           "voice": PHILIPPE, "language": "it"}
+                           "voice": VOICE_A, "language": "it"}
     english = speech.synthesize({"model": "omnivoice-cpp", "input": "The poem was written by Dante [1].",
-                                 "voice": PHILIPPE}, url="http://ai:8080")
-    assert english[0] == 200 and calls[-1][1]["voice"] == PHILIPPE and calls[-1][1]["language"] == "en"
+                                 "voice": VOICE_A}, url="http://ai:8080")
+    assert english[0] == 200 and calls[-1][1]["voice"] == VOICE_A and calls[-1][1]["language"] == "en"
     for text in ("La Divine Comédie est le poème de Dante [7 ; 8].", "Elle est écrite en toscan [9]."):
         speech.synthesize({"model": "omnivoice-cpp", "input": text}, url="http://ai:8080")
-    assert [c[1]["voice"] for c in calls[-2:]] == [PHILIPPE, PHILIPPE], "the same voice, sentence after sentence"
+    assert [c[1]["voice"] for c in calls[-2:]] == [VOICE_A, VOICE_A], "the same voice, sentence after sentence"
     assert calls[-2][1]["input"] == "La Divine Comédie est le poème de Dante."
     assert pins == [("hold", "omnivoice-cpp", "speech")] * 5, "pinned from the first sentence, not released between"
     time.sleep(0.5)
@@ -131,9 +131,12 @@ def test_a_text_that_is_only_citations_is_refused(server):
     assert speech.synthesize({"model": "m", "input": "[3][4]"}, url="http://ai")[0] == 400 and calls == []
 
 
-def test_the_route_answers_audio(node, server):  # noqa: F811
+def test_the_route_answers_audio(node, server, monkeypatch):  # noqa: F811
+    # as an admin: a recorded voice is read to an admin only (2026-11-16, tests/test_voice_roles.py)
+    from app import config
+    monkeypatch.setattr(config, "ADMIN_TOKEN", "sekrit")
     r = TestClient(api.app).post("/v1/audio/speech", json={"model": "omnivoice-cpp", "input": "Dante [1].",
-                                                            "voice": PHILIPPE})
+                                                            "voice": VOICE_A}, headers={"X-Admin-Token": "sekrit"})
     assert r.status_code == 200 and r.content == b"RIFF" and r.headers["content-type"] == "audio/wav"
 
 
@@ -167,8 +170,10 @@ def test_the_route_says_the_synthesis_time_and_the_clip_length(node, server, mon
     class R:
         status_code, content, headers = 200, buf.getvalue(), {"content-type": "audio/wav"}
     monkeypatch.setattr(speech.httpc, "post", lambda url, json, **kw: R())
+    from app import config
+    monkeypatch.setattr(config, "ADMIN_TOKEN", "sekrit")
     r = TestClient(api.app).post("/v1/audio/speech", json={"model": "omnivoice-cpp", "input": "Dante wrote it.",
-                                                            "voice": PHILIPPE})
+                                                            "voice": VOICE_A}, headers={"X-Admin-Token": "sekrit"})
     timing = dict(part.strip().split(";dur=") for part in r.headers["server-timing"].split(","))
     assert r.status_code == 200 and float(timing["synth"]) >= 0 and float(timing["audio"]) == 500.0
 
@@ -251,7 +256,7 @@ def test_a_sentence_made_once_is_answered_from_the_fast_drive_after_a_stop(serve
     words — is answered from the fast drive (LOUISE_CACHE_DIR) without the
     model; without a fast drive nothing is kept."""
     calls, _ = server
-    body = {"model": "omnivoice-cpp", "input": "Dante wrote it in 1321.", "voice": PHILIPPE}
+    body = {"model": "omnivoice-cpp", "input": "Dante wrote it in 1321.", "voice": VOICE_A}
     monkeypatch.setattr(speech.config, "CACHE_DIR", None)
     speech.synthesize(dict(body), url="http://ai:8080")
     speech.synthesize(dict(body), url="http://ai:8080")
