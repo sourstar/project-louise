@@ -1187,6 +1187,9 @@ def _attach_metadata_and_enqueue(con, collection, hits: list[dict]) -> None:
         h.pop("rrf", None)
         h.pop(MATCHED, None)        # the search's own bookkeeping, never a field
         h.pop(HEAD, None)
+    # the original publication year, from the record (operator, 2026-11-16)
+    from .ask import works
+    works.attach_first_published(collection, hits)
     # Provenance badge per hit: locally embedded, or imported from a producer
     # and possibly verified (architecture-v2.md §6 T4). Replaces P0.6's
     # hardcoded 'local ✓' placeholder in the Ask provenance drawer.
