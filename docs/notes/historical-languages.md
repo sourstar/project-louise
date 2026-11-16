@@ -145,9 +145,10 @@ stay at answer time.
 - **The claim** `language-stage` (09 §9.5, 02 §2.10, §9.14; Codex version
   9): `subject` a record, `object` the stage's canonical id
   (`iso639-3:<code>`, or a Wikidata item where 639-3 has none), method
-  `matcher` (historical-markers 1) or `human` — no `wikidata`: "A
-  collection has only the information contained in its corpus" (operator,
-  2026-11-16, the same day); a human
+  `matcher` (historical-markers 1, the record alone: its markers, PG's
+  marc520 year, the RDF's translator credit) or `human` — "A collection
+  has only the information contained in its corpus" (operator, 2026-11-16,
+  the same day); a `wikidata` method is ON HOLD, put to the operator; a human
   claim may say `object: null`, "not an older stage". Identified by (type,
   subject, method kind), so a person's and the matcher's coexist; read in
   the order human, matcher. `object_hash` null; the edge

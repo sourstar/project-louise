@@ -107,7 +107,9 @@ STAGE_NAMESPACES = ("iso639-3", "wikidata")
 #: the methods a language-stage claim may be made by (09 §9.5): from the
 #: annotated collection's own corpus alone, or by a person (operator,
 #: 2026-11-16: "A collection has only the information contained in its
-#: corpus" — no Wikidata, no outside source)
+#: corpus"). A `wikidata` method (P407) is ON HOLD until the operator
+#: decides whether an annotation may take claims from Wikidata; until then
+#: it is refused here
 STAGE_METHOD_KINDS = ("matcher", "human")
 CLAIM_TYPES = WORK_TYPES + GRAPH_TYPES
 #: a community's edges: each member → the community claim (09 §9.14)

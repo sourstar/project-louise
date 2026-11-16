@@ -1682,8 +1682,10 @@ the standard has the stage (`iso639-3:enm`) and a Wikidata item otherwise
 (Italian has no 639-3 stage), never a label of ours. Its method is a
 matcher (the markers of the period counted over the whole record and
 what the record itself states, never claimed for a translation) or a
-person — never an outside source: "A collection has only the information
-contained in its corpus" (operator, 2026-11-16). A PERSON CORRECTS IT: a
+person, the matcher reading the annotated corpus alone: "A collection has
+only the information contained in its corpus" (operator, 2026-11-16). A
+Wikidata method is on hold until the operator decides whether an
+annotations collection may take claims from Wikidata. A PERSON CORRECTS IT: a
 `human` claim on the same record is kept beside the matcher's — the claim
 is identified by (type, subject, method kind) — and wins where they are
 read; a `human` claim's `object` may be null, "not an older stage". The
