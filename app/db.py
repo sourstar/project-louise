@@ -267,6 +267,9 @@ CREATE TABLE IF NOT EXISTS validity (
 );
 CREATE INDEX IF NOT EXISTS idx_validity_work ON validity(work, valid_from, native_id);
 CREATE INDEX IF NOT EXISTS idx_validity_native ON validity(native_id);
+-- the daily roll of `shown` (app/validity.py `roll`): the versions starting
+-- since the last roll, by a range, never a scan
+CREATE INDEX IF NOT EXISTS idx_validity_from ON validity(valid_from);
 -- what ends a Work's validity from OUTSIDE its chain (app/validity.py; the
 -- review's §3.2 case 2): the version `by_uid` states that the Work keyed
 -- `key` (one of its canonical ids) is no longer in force from `closed_at`.

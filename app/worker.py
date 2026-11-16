@@ -215,7 +215,8 @@ def _rdf_one(con, row, collection, plugin, now: int, meta: dict | None = None) -
         # Work's chain; a neighbour whose end or `shown` moved has its stage
         # marks reset here, in this transaction, so its index rows follow
         from app import validity
-        validity.record(con, row["uid"], int(row["native_id"]), meta["validity"])
+        validity.record(con, row["uid"], int(row["native_id"]), meta["validity"],
+                        day=validity.today(collection))
     # The catalog index's row (app/catalog.py), keyed on the document's
     # rowid and written by the caller before the marks commit. (The SQLite
     # FTS5 catalog it replaced was written here until 2026-09-19.)
@@ -3478,6 +3479,17 @@ def _index_maintainer() -> None:
                     did = _rederive_amendments(cons[key], c) or did
                 except Exception as e:   # noqa: BLE001 — one re-derivation, not the maintainer
                     db.log_event(cons[key], "warn", "validity", f"amendments: {type(e).__name__}: {e}"[:300])
+                try:
+                    # `shown` to today, once a day (app/validity.py `roll`)
+                    from app import validity as _validity
+                    rolled = _validity.roll(cons[key], c)
+                    if rolled:
+                        db.log_event(cons[key], "info", "validity",
+                                     f"shown rolled to {_validity.get_rolled(cons[key])}: {rolled} work(s) "
+                                     f"recomputed")
+                    did = bool(rolled) or did
+                except Exception as e:   # noqa: BLE001 — one roll, not the maintainer
+                    db.log_event(cons[key], "warn", "validity", f"roll: {type(e).__name__}: {e}"[:300])
                 did = _maintain_ask_indexes(cons[key], c) or did
                 did = _verify_cited(cons[key], c) or did
                 did = _refresh_anchor(cons[key], c) or did
