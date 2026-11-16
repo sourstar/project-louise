@@ -528,7 +528,9 @@ query, then at most three a question, newest first (with `as_of`, the one in
 force that day), each under a 20-second timeout, every byte from the
 budget (§4.3), and only where the language's base is held and its history
 slice is not. A fetched version is the collection's own corpus, fetched
-later: it lands in the history slice, is indexed like any unit and
+later: it lands in the history slice — by way of the worker, the corpus's
+one writer, which takes it from an inbox beside the manifest — is indexed
+like any unit and
 embedded on demand (§5.3's queue, where `embed_slices` names the slice);
 its cited article is pinned as a fact in this answer, labelled as fetched
 now. Never on an ordinary search. The answer's `history` says what was

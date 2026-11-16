@@ -34,8 +34,16 @@ LANGS24 = tuple(f"lang={l}" for l in sorted(src.LANGUAGES))
 
 def coll(corpus: Path, slices=LANGS24):
     return SimpleNamespace(name="eurlex4", plugin="eurlex", corpus_dir=corpus, slices=slices,
+                           manifest_path=corpus.parent / "state" / "manifest.sqlite",
                            codex=SimpleNamespace(parser=SimpleNamespace(version=4)),
                            plugin_instance=lambda: SOURCE)
+
+
+@pytest.fixture(autouse=True)
+def acknowledged(monkeypatch):
+    """The collection's terms acknowledged (invariant 9) unless a test says not."""
+    from app import licensing
+    monkeypatch.setattr(licensing, "state_for", lambda c, spec=None: licensing.ACKNOWLEDGED)
 
 
 @pytest.fixture
@@ -90,25 +98,58 @@ def test_an_ordinary_question_asks_the_origin_nothing(tmp_path, cellar_mock):
     assert out == {"facts": [], "fetches": []} and not cellar_mock.sparql, "no act cited: nothing asked"
 
 
-def test_a_missing_version_lands_in_the_history_slice_bound_to_the_budget_and_is_pinned(tmp_path, cellar_mock):
+def test_a_missing_version_lands_in_the_inbox_bound_to_the_budget_and_is_pinned(tmp_path, cellar_mock):
+    """The web never writes the corpus (mounted read-only there): the unit
+    waits in the collection's inbox, laid out as in the corpus."""
     corpus = tmp_path / "origin"
-    out = _fetch(coll(corpus), history=True)
+    c = coll(corpus)
+    out = _fetch(c, history=True)
     assert [(f["version"], f["status"], f["why"]) for f in out["fetches"]] == [(CONS[0], "fetched", None)]
-    unit = corpus / src.HISTORY / src.unit_rel("it", CONS[0])
-    assert (unit / rdf.TREE_FILE).is_file()
+    rel = Path(src.HISTORY) / src.unit_rel("it", CONS[0])
+    assert (history.inbox_dir(c) / rel / rdf.TREE_FILE).is_file() and not corpus.exists()
     # every read ran bound to the transfer manager at INTERACTIVE priority,
     # with the deadline's stop event (invariant 5; the per-fetch timeout)
     assert cellar_mock.gets and all(p == Priority.INTERACTIVE and s is not None for _u, p, s in cellar_mock.gets)
-    # the collection's own corpus: discovered, parsed and indexed like any unit
-    refs = [r for r in SOURCE.discover(DiscoverState(corpus_root=corpus)) if r.locator == str(unit)]
-    assert len(refs) == 1 and refs[0].error is None
     (fact,) = out["facts"]
     assert "fetched now" in fact["label"] and fact["fields"]["in force from"] == "2006-10-25"
     assert fact["fields"]["text"] and fact["fields"]["fetched"] is True
     assert cellar_mock.logged == out["fetches"], "each fetch in the collection's event log"
-    # asked again: held, nothing fetched
+    # asked again before the worker moved it: in the inbox, nothing fetched
     gets = len(cellar_mock.gets)
-    assert _fetch(coll(corpus), history=True)["fetches"] == [] and len(cellar_mock.gets) == gets
+    assert _fetch(c, history=True)["fetches"] == [] and len(cellar_mock.gets) == gets
+    # the worker moves it into the origin: the collection's own corpus,
+    # discovered like any unit, and the inbox emptied
+    (landed,) = history.adopt(c)
+    assert landed == corpus / rel and (landed / rdf.TREE_FILE).is_file()
+    assert not (history.inbox_dir(c) / rel).exists()
+    refs = [r for r in SOURCE.discover(DiscoverState(corpus_root=corpus)) if r.locator == str(landed)]
+    assert len(refs) == 1 and refs[0].error is None and SOURCE.ref_of_unit(landed) == refs[0]
+    assert _fetch(c, history=True)["fetches"] == [] and len(cellar_mock.gets) == gets, "held: nothing fetched"
+
+
+def test_adopt_takes_out_a_unit_the_origin_holds_and_skips_a_staging_directory(tmp_path):
+    corpus = tmp_path / "origin"
+    c = coll(corpus)
+    rel = Path(src.HISTORY) / src.unit_rel("it", CONS[0])
+    for base in (corpus, history.inbox_dir(c)):
+        (base / rel).mkdir(parents=True)
+        (base / rel / rdf.TREE_FILE).write_text("{}")
+    held_bytes = (corpus / rel / rdf.TREE_FILE).read_bytes()
+    staging = history.inbox_dir(c) / rel.parent / f".{CONS[0]}.staging"
+    staging.mkdir()
+    (staging / rdf.TREE_FILE).write_text("{}")
+    assert history.adopt(c) == [] and not (history.inbox_dir(c) / rel).exists()
+    assert (corpus / rel / rdf.TREE_FILE).read_bytes() == held_bytes, "a held unit is never replaced"
+    assert staging.is_dir(), "an interrupted landing is not a unit"
+
+
+def test_without_the_licence_acknowledgement_nothing_is_fetched(tmp_path, cellar_mock, monkeypatch):
+    from app import licensing
+    monkeypatch.setattr(licensing, "state_for", lambda c, spec=None: licensing.MISSING)
+    monkeypatch.setattr(licensing, "license_class_for", lambda c, spec=None: "yellow")
+    (f,) = _fetch(coll(tmp_path), history=True)["fetches"]
+    assert f["status"] == "refused" and "invariant 9" in f["why"]
+    assert not cellar_mock.sparql and not cellar_mock.gets
 
 
 def test_at_most_limit_fetches_a_question_newest_first_and_the_rest_said(tmp_path, cellar_mock, monkeypatch):
@@ -247,3 +288,54 @@ def test_the_ask_page_shows_every_fetch_and_why(monkeypatch):
     html = web.TEMPLATES.env.get_template("_ask_results.html").render(result={**result, "timings": {}})
     assert "not done within 20 s" in html and "fetched now" in html
     assert "1 more version not fetched, at most 3 a question" in html and "v3" in html
+
+
+# ---- the worker's half -----------------------------------------------------------------
+
+def test_register_adds_exactly_the_given_units(isolated_config, tmp_path):
+    """discovery.register: the units the worker placed, into the manifest as a
+    scan writes them — and nothing else, whatever else the corpus holds."""
+    from app import collections as collections_mod, discovery
+    corpus = tmp_path / "origin"
+    rel = Path(src.HISTORY) / src.unit_rel("it", CONS[0])
+    unit = corpus / rel
+    unit.parent.mkdir(parents=True)
+    import shutil
+    shutil.copytree(CONS[2], unit, ignore=shutil.ignore_patterns("notice.xml", "LEG_MTD*"))
+    other = corpus / src.unit_rel("it", "31972R1473")
+    other.mkdir(parents=True)
+    (other / rdf.TREE_FILE).write_text("{}")
+    c = collections_mod.Collection(
+        name="eurlex4", plugin="eurlex", profile=None, embed_mode_default=None, corpus_dir=corpus,
+        manifest_path=tmp_path / "state" / "manifest.sqlite", fts_dir=tmp_path / "fts",
+        lance_dir=tmp_path / "lancedb")
+    c.manifest_path.parent.mkdir(parents=True)
+    con = db.connect(c)
+    got = discovery.register(con, c, [SOURCE.ref_of_unit(unit), None])
+    assert got["added"] == 1
+    rows = con.execute("SELECT uid, path, in_scope, embed_done FROM documents").fetchall()
+    assert [(r["path"], r["in_scope"], r["embed_done"]) for r in rows] == [(str(unit), 1, 0)]
+    assert discovery.register(con, c, [SOURCE.ref_of_unit(unit)])["added"] == 0, "idempotent"
+    con.close()
+
+
+def test_the_worker_moves_and_registers_what_waits_in_the_inbox(isolated_config, tmp_path, monkeypatch):
+    """worker._adopt_fetched: inbox → origin → one manifest row, one `is_dir`
+    a round when nothing waits."""
+    import shutil
+    from app import collections as collections_mod, worker
+    monkeypatch.setattr(worker, "_license_allows", lambda con, c, use: True)
+    c = collections_mod.Collection(
+        name="eurlex4", plugin="eurlex", profile=None, embed_mode_default=None, corpus_dir=tmp_path / "origin",
+        manifest_path=tmp_path / "state" / "manifest.sqlite", fts_dir=tmp_path / "fts",
+        lance_dir=tmp_path / "lancedb")
+    c.manifest_path.parent.mkdir(parents=True)
+    con = db.connect(c)
+    assert worker._adopt_fetched(con, c) is False, "nothing waits: nothing done"
+    rel = Path(src.HISTORY) / src.unit_rel("it", CONS[0])
+    shutil.copytree(CONS[2], history.inbox_dir(c) / rel, ignore=shutil.ignore_patterns("notice.xml", "LEG_MTD*"))
+    assert worker._adopt_fetched(con, c) is True
+    assert (c.corpus_dir / rel / rdf.TREE_FILE).is_file() and not (history.inbox_dir(c) / rel).exists()
+    assert [r["path"] for r in con.execute("SELECT path FROM documents")] == [str(c.corpus_dir / rel)]
+    assert worker._adopt_fetched(con, c) is False
+    con.close()
