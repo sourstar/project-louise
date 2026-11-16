@@ -15,14 +15,34 @@ the end is DERIVED here, node-locally, into the manifest's `validity`
 table and from there into three columns of the text index and the vector
 table — `valid_from` (an integer YYYYMMDD, the record's own start),
 `valid_to` (the same form, `OPEN` while in force) and `shown` (1 on the
-Work's latest version that has text) — so that a search filters by a
+Work's version shown TODAY, `shown_index`) — so that a search filters by a
 column range and never by a list of ids (05 §5.2's filter takes at most
 20,000; the law holds 190,000 acts).
 
+THE VERSION SHOWN IS THE ONE IN FORCE TODAY (operator, 2026-11-16, "It
+should", amending 05 §5.1's "the latest text": 147 Normattiva laws showed
+a text that takes effect only later — L. 232/2016 its 2027-01-01 version).
+Of the Work's versions that have text, `shown` is on:
+  * the one in force today (`valid_from <= today < valid_to`);
+  * else the latest that started before today — a repealed or expired act
+    in the last text it had, labelled (eli-legal-plugins.md §5.7), and a
+    text suspended today by a version without text in the last one before;
+  * else, every version still to come, the EARLIEST: the text that will
+    first apply (a law in its vacatio legis is found, labelled with its
+    start, never hidden until it applies).
+"Today" is the collection's clock (its Codex's `origin.clock`; UTC without
+one). It moves, so the flag is ROLLED once a day (`roll`, the index
+maintainer): the Works whose text version starts in the days since the
+last roll are recomputed, their moved rows' stages reset as the rdf stage
+resets them — a handful a day; nothing is re-embedded (sync_columns). The
+flag stays stored, and the filter `shown = 1`, rather than resolved at
+read time: a read-time filter needs a second per-row bit (the Work's first
+version) whose first setting re-indexes nearly every record's text, where
+the roll moves only the Works whose version today differs.
+
 What a search does for such a collection (05 §5.1, amended):
-  * without `--as-of`: `shown = 1` — one record per Work, the latest text,
-    so a repealed act is shown in the last text it had and labelled
-    (eli-legal-plugins.md §5.7);
+  * without `--as-of`: `shown = 1` — one record per Work, the version shown
+    today (above);
   * with `--as-of D`: `valid_from <= D < valid_to`, both bounds columns.
     The id's high digits are NOT the lower bound: they sort by the date
     the member NAME carries, which for an original is its publication,
@@ -432,7 +452,7 @@ def write_amendments(con, pairs: Iterable[tuple[str, list]]) -> int:
 
 # ---- the manifest's version table -------------------------------------------
 
-def record(con, uid: str, native_id: int, meta: dict[str, Any]) -> list[str]:
+def record(con, uid: str, native_id: int, meta: dict[str, Any], *, day: int | None = None) -> list[str]:
     """Upsert one version and recompute its Work's chain, inside the caller's
     transaction (the rdf stage's). Returns the uids of the OTHER versions
     whose (valid_to, shown) moved; their stage marks are reset here so
@@ -455,10 +475,63 @@ def record(con, uid: str, native_id: int, meta: dict[str, Any]) -> list[str]:
     touched = _record_closures(con, uid, meta.get("closes") or [])
     if "amends" in meta:
         _record_amendments(con, uid, meta.get("amends") or [])
-    moved = recompute(con, work, except_uid=uid)
+    moved = recompute(con, work, except_uid=uid, day=day)
     for other in sorted(touched - {work}):
-        moved += recompute(con, other)
+        moved += recompute(con, other, day=day)
     return moved
+
+
+#: the control row holding the day `shown` was last rolled to (`roll`)
+ROLLED = "validity_shown_day"
+
+
+def roll(con, collection, *, now=None) -> int:
+    """`shown` to TODAY, once a day (the index maintainer, every round; a
+    day already rolled costs one control read). The Works recomputed are
+    those with a version that has text starting after the last roll and by
+    today — the only ones whose version shown can move: an end alone never
+    moves it (the version ended stays shown until a later one starts). The
+    first roll of a manifest, from "the latest text": every Work with a
+    version still to come. One transaction (BEGIN IMMEDIATE: a writer that
+    reads first). Returns the Works recomputed."""
+    if declared(collection) is None:
+        return 0
+    day = today(collection, now=now)
+    last = get_rolled(con)
+    if last == day:
+        return 0
+    # no DISTINCT: it plans as a walk of idx_validity_work; the range on
+    # idx_validity_from returns the few versions starting, deduplicated here
+    if last is None:
+        q, params = ("SELECT work FROM validity WHERE valid_from > ? AND has_text=1", [day])
+    else:
+        lo, hi = min(last, day), max(last, day)
+        q, params = ("SELECT work FROM validity WHERE valid_from > ? AND valid_from <= ? "
+                     "AND has_text=1", [lo, hi])
+    own = not con.in_transaction
+    if own:
+        con.execute("BEGIN IMMEDIATE")
+    try:
+        works = sorted({r[0] for r in con.execute(q, params)})
+        for work in works:
+            recompute(con, work, day=day)
+        con.execute("INSERT INTO control(key, value) VALUES(?, ?) ON CONFLICT(key) DO UPDATE SET "
+                    "value=excluded.value", (ROLLED, str(day)))
+        if own:
+            con.execute("COMMIT")
+    except BaseException:
+        if own and con.in_transaction:
+            con.execute("ROLLBACK")
+        raise
+    return len(works)
+
+
+def get_rolled(con) -> int | None:
+    r = con.execute("SELECT value FROM control WHERE key=?", (ROLLED,)).fetchone()
+    try:
+        return int(r[0]) if r else None
+    except (TypeError, ValueError):
+        return None
 
 
 def _record_closures(con, by_uid: str, closes) -> set[str]:
@@ -490,22 +563,58 @@ def closed_at(con, work: str) -> int | None:
     return None if r is None or r[0] is None else int(r[0])
 
 
-def recompute(con, work: str, *, except_uid: str | None = None) -> list[str]:
+def today(collection=None, *, now=None) -> int:
+    """Today as YYYYMMDD on the collection's clock (its Codex's
+    `origin.clock`, an IANA zone; UTC without one). `now`: an aware
+    datetime, for tests."""
+    from datetime import datetime, timezone
+    tz = timezone.utc
+    clock = getattr(getattr(getattr(collection, "codex", None), "origin", None), "clock", None)
+    if clock:
+        try:
+            from zoneinfo import ZoneInfo
+            tz = ZoneInfo(str(clock))
+        except Exception:   # noqa: BLE001 — an unknown zone reads UTC
+            tz = timezone.utc
+    return day_int((now or datetime.now(timezone.utc)).astimezone(tz).date())
+
+
+def shown_index(starts: list[int], ends: list[int | None], has_text: list[bool], day: int) -> int | None:
+    """Of a Work's versions in chain order, the one shown on `day` (module
+    docstring): in force that day, else the latest started before it, else
+    the earliest; versions without text never."""
+    text = [i for i, t in enumerate(has_text) if t]
+    live = [i for i in text if starts[i] <= day and (ends[i] is None or day < ends[i])]
+    if live:
+        return live[-1]
+    began = [i for i in text if starts[i] <= day]
+    if began:
+        return began[-1]
+    return text[0] if text else None
+
+
+def recompute(con, work: str, *, except_uid: str | None = None, day: int | None = None) -> list[str]:
     """The chain of one Work: versions in order of (valid_from, native_id);
     each ends where the next starts, the last where another Work's version
     states it is repealed (`closed_at`, if later than its start and it has
-    text) or else open; `shown` is the last version that has text."""
+    text) or else open; `shown` is the version shown on `day` (`shown_index`;
+    today's UTC day when not given)."""
     rows = con.execute(
         "SELECT uid, native_id, valid_from, valid_to, has_text, shown FROM validity "
         "WHERE work=? ORDER BY valid_from, native_id", (work,)).fetchall()
     moved: list[str] = []
-    last_text = max((i for i, r in enumerate(rows) if r["has_text"]), default=None)
     closed = closed_at(con, work) if rows else None
+    ends: list[int | None] = []
     for i, r in enumerate(rows):
         to = int(rows[i + 1]["valid_from"]) if i + 1 < len(rows) else None
         if to is None and closed is not None and r["has_text"] and closed > int(r["valid_from"]):
             to = closed            # review §3.2 case 2: ended from outside its chain
-        shown = 1 if i == last_text else 0
+        ends.append(to)
+    day = int(day) if day is not None else today()
+    pick = shown_index([int(r["valid_from"]) for r in rows], ends, [bool(r["has_text"]) for r in rows], day)
+    for i, r in enumerate(rows):
+        to = ends[i]
+        shown = 1 if i == pick else 0
         if r["valid_to"] == to and int(r["shown"]) == shown:
             continue
         con.execute("UPDATE validity SET valid_to=?, shown=?, synced=0 WHERE uid=?", (to, shown, r["uid"]))

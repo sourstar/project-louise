@@ -93,10 +93,18 @@ version's start (02 §2.3: a record carries nothing computable from it)
 and kept in the index beside the text and the vectors, never in a
 record; versions of one Work are contiguous, so exactly one is admitted
 per Work and no two versions ever meet in a leg (invariant 4). Without
-`--as-of` such a collection shows one record per Work, its latest
-version that has text — so a repealed act is shown in the last text it
-had, labelled (§5.5). The result says which version it is (§5.3,
-`validity`). The snapshot chain keeps its own meaning for it — when the
+`--as-of` such a collection shows one record per Work, the version IN
+FORCE TODAY (*amended 2026-11-16*, operator: "It should", replacing "its
+latest version that has text": 147 Normattiva laws showed a text that
+takes effect only later). Of the Work's versions that have text: the one
+in force today; else the latest that started before today — so a repealed
+act is shown in the last text it had, labelled (§5.5); else, every version
+still to come, the earliest — a law in its vacatio legis is found, labelled
+with its start. "Today" is the collection's clock (its Codex's
+`origin.clock`). The flag is stored and rolled once a day by the index
+maintainer, which recomputes only the Works with a version starting since
+the last roll (app/validity.py `roll`). The result says which version it
+is (§5.3, `validity`). The snapshot chain keeps its own meaning for it — when the
 origin's state was held — and is not what a date asks of it.
 
 *Amended 2026-11-15* (operator: "we add a 'draft' flag for the in force
