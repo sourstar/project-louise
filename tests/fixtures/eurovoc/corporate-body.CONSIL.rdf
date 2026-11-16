@@ -1,0 +1,278 @@
+<skos:Concept rdf:about="http://publications.europa.eu/resource/authority/corporate-body/CONSIL"
+                 at:deprecated="false"
+                 at:protocol.order="A30">
+      <skos:inScheme rdf:resource="http://publications.europa.eu/resource/authority/corporate-body"/>
+      <skos:altLabel xml:lang="fr">Conseil</skos:altLabel>
+      <skos:altLabel xml:lang="el">Συμβούλιο</skos:altLabel>
+      <skos:altLabel xml:lang="hu">Tanács</skos:altLabel>
+      <skos:altLabel xml:lang="lv">Padome</skos:altLabel>
+      <skos:altLabel xml:lang="ro">Consiliu</skos:altLabel>
+      <skos:altLabel xml:lang="es">Consejo</skos:altLabel>
+      <skos:altLabel xml:lang="da">Rådet</skos:altLabel>
+      <skos:altLabel xml:lang="ga">An Chomhairle</skos:altLabel>
+      <skos:altLabel xml:lang="sv">Rådet</skos:altLabel>
+      <skos:altLabel xml:lang="pl">Rada</skos:altLabel>
+      <skos:altLabel xml:lang="sk">Rada</skos:altLabel>
+      <skos:altLabel xml:lang="cs">Rada</skos:altLabel>
+      <skos:altLabel xml:lang="nl">Raad</skos:altLabel>
+      <skos:altLabel xml:lang="et">Nõukogu</skos:altLabel>
+      <skos:altLabel xml:lang="mt">Il-Kunsill</skos:altLabel>
+      <skos:altLabel xml:lang="lt">Taryba</skos:altLabel>
+      <skos:altLabel xml:lang="it">Consiglio</skos:altLabel>
+      <skos:altLabel xml:lang="fi">Neuvosto</skos:altLabel>
+      <skos:altLabel xml:lang="el">Symvoúlio tīs Eurōpaïkī́s Énōsīs</skos:altLabel>
+      <skos:altLabel xml:lang="bg">S″vet na Evropejskiâ s″ûz</skos:altLabel>
+      <skos:altLabel xml:lang="de">Rat</skos:altLabel>
+      <skos:altLabel xml:lang="en">Council</skos:altLabel>
+      <skos:altLabel xml:lang="bg">Съвет</skos:altLabel>
+      <skos:altLabel xml:lang="sl">Svet</skos:altLabel>
+      <skos:altLabel xml:lang="pt">Conselho</skos:altLabel>
+      <skos:notation rdf:datatype="http://publications.europa.eu/ontology/euvoc#OP_CAT">QC</skos:notation>
+      <skos:notation rdf:datatype="http://publications.europa.eu/ontology/euvoc#OJ">CONS</skos:notation>
+      <skos:notation rdf:datatype="http://publications.europa.eu/ontology/euvoc#FD_110">CONS</skos:notation>
+      <skos:notation rdf:datatype="http://publications.europa.eu/ontology/euvoc#XML_RECORD">COB0000014</skos:notation>
+      <skos:notation rdf:datatype="http://publications.europa.eu/ontology/euvoc#EP">CONSIL</skos:notation>
+      <skos:notation rdf:datatype="http://publications.europa.eu/ontology/euvoc#PUB_CORP">CSU</skos:notation>
+      <skos:notation rdf:datatype="http://publications.europa.eu/ontology/euvoc#WHOISWHO">CM</skos:notation>
+      <skos:notation rdf:datatype="http://publications.europa.eu/ontology/euvoc#FD_050">CONS</skos:notation>
+      <skos:notation rdf:datatype="http://publications.europa.eu/ontology/euvoc#DOI_P">10.2860</skos:notation>
+      <skos:notation rdf:datatype="http://publications.europa.eu/ontology/euvoc#LAC">CONSIL</skos:notation>
+      <skos:notation rdf:datatype="http://publications.europa.eu/ontology/euvoc#ISBN_RG">850</skos:notation>
+      <skos:notation rdf:datatype="http://publications.europa.eu/ontology/euvoc#NAC">CONSIL</skos:notation>
+      <skos:exactMatch rdf:resource="http://eurovoc.europa.eu/114"/>
+      <skos:definition xml:lang="en">The Council of the EU is the institution representing the member states’ governments. Also known informally as the EU Council, it is where national ministers from each EU country meet to adopt laws and coordinate policies.</skos:definition>
+      <skos:prefLabel xml:lang="bg">Съвет на Европейския съюз</skos:prefLabel>
+      <skos:prefLabel xml:lang="da">Rådet for Den Europæiske Union</skos:prefLabel>
+      <skos:prefLabel xml:lang="is">Ráð Evrópusambandsins</skos:prefLabel>
+      <skos:prefLabel xml:lang="hu">Az Európai Unió Tanácsa</skos:prefLabel>
+      <skos:prefLabel xml:lang="mt">Il-Kunsill tal-Unjoni Ewropea</skos:prefLabel>
+      <skos:prefLabel xml:lang="ru">Совет Европейского Союза</skos:prefLabel>
+      <skos:prefLabel xml:lang="lv">Eiropas Savienības Padome</skos:prefLabel>
+      <skos:prefLabel xml:lang="fr">Conseil de l’Union européenne</skos:prefLabel>
+      <skos:prefLabel xml:lang="sk">Rada Európskej únie</skos:prefLabel>
+      <skos:prefLabel xml:lang="lt">Europos Sąjungos Taryba</skos:prefLabel>
+      <skos:prefLabel xml:lang="sl">Svet Evropske unije</skos:prefLabel>
+      <skos:prefLabel xml:lang="sv">Europeiska unionens råd</skos:prefLabel>
+      <skos:prefLabel xml:lang="it">Consiglio dell’Unione europea</skos:prefLabel>
+      <skos:prefLabel xml:lang="es">Consejo de la Unión Europea</skos:prefLabel>
+      <skos:prefLabel xml:lang="ga">Comhairle an Aontais Eorpaigh</skos:prefLabel>
+      <skos:prefLabel xml:lang="et">Euroopa Liidu Nõukogu</skos:prefLabel>
+      <skos:prefLabel xml:lang="pl">Rada Unii Europejskiej</skos:prefLabel>
+      <skos:prefLabel xml:lang="hr">Vijeće Europske unije</skos:prefLabel>
+      <skos:prefLabel xml:lang="el">Συμβούλιο της Ευρωπαϊκής Ένωσης</skos:prefLabel>
+      <skos:prefLabel xml:lang="cs">Rada Evropské unie</skos:prefLabel>
+      <skos:prefLabel xml:lang="de">Rat der Europäischen Union</skos:prefLabel>
+      <skos:prefLabel xml:lang="ro">Consiliul Uniunii Europene</skos:prefLabel>
+      <skos:prefLabel xml:lang="tr">Avrupa Birliği Konseyi</skos:prefLabel>
+      <skos:prefLabel xml:lang="pt">Conselho da União Europeia</skos:prefLabel>
+      <skos:prefLabel xml:lang="nl">Raad van de Europese Unie</skos:prefLabel>
+      <skos:prefLabel xml:lang="en">Council of the European Union</skos:prefLabel>
+      <skos:prefLabel xml:lang="fi">Euroopan unionin neuvosto</skos:prefLabel>
+      <owl:sameAs rdf:resource="http://publications.europa.eu/resource/authority/corporate-body/CONSIL_1993_0"/>
+      <dc:identifier>CONSIL</dc:identifier>
+      <atold:op-code>CONSIL</atold:op-code>
+      <at:op-code>CONSIL</at:op-code>
+      <at:start.use>1993-11-01</at:start.use>
+      <at:authority-code>CONSIL</at:authority-code>
+      <at:op-mapped-code>
+         <at:MappedCode>
+            <dc:source>EurLex</dc:source>
+            <at:affected-table>FD_050</at:affected-table>
+            <at:legacy-code>CONS</at:legacy-code>
+         </at:MappedCode>
+      </at:op-mapped-code>
+      <at:op-mapped-code>
+         <at:MappedCode>
+            <dc:source>EurLex</dc:source>
+            <at:affected-table>FD_110</at:affected-table>
+            <at:legacy-code>CONS</at:legacy-code>
+         </at:MappedCode>
+      </at:op-mapped-code>
+      <at:op-mapped-code>
+         <at:MappedCode>
+            <dc:source>PUB</dc:source>
+            <at:affected-table>PUB_CORP</at:affected-table>
+            <at:legacy-code>CSU</at:legacy-code>
+         </at:MappedCode>
+      </at:op-mapped-code>
+      <at:op-mapped-code>
+         <at:MappedCode>
+            <dc:source>WHOISWHO</dc:source>
+            <at:legacy-code>CM</at:legacy-code>
+         </at:MappedCode>
+      </at:op-mapped-code>
+      <at:op-mapped-code>
+         <at:MappedCode>
+            <dc:source>EP</dc:source>
+            <at:legacy-code>CONSIL</at:legacy-code>
+         </at:MappedCode>
+      </at:op-mapped-code>
+      <at:op-mapped-code>
+         <at:MappedCode>
+            <dc:source>OJ</dc:source>
+            <at:legacy-code>CONS</at:legacy-code>
+         </at:MappedCode>
+      </at:op-mapped-code>
+      <skos:broader rdf:resource="http://publications.europa.eu/resource/authority/corporate-body/EURUN"/>
+      <skos:narrower rdf:resource="http://publications.europa.eu/resource/authority/corporate-body/COREPER_I"/>
+      <skos:narrower rdf:resource="http://publications.europa.eu/resource/authority/corporate-body/HWP_CYBER"/>
+      <skos:narrower rdf:resource="http://publications.europa.eu/resource/authority/corporate-body/WP_FRONTIERS"/>
+      <skos:narrower rdf:resource="http://publications.europa.eu/resource/authority/corporate-body/WP_MARITIME"/>
+      <skos:narrower rdf:resource="http://publications.europa.eu/resource/authority/corporate-body/WP_PROCIV"/>
+      <skos:narrower rdf:resource="http://publications.europa.eu/resource/authority/corporate-body/CMT_EDU"/>
+      <skos:narrower rdf:resource="http://publications.europa.eu/resource/authority/corporate-body/CMT_CIVCOM"/>
+      <skos:narrower rdf:resource="http://publications.europa.eu/resource/authority/corporate-body/WP_SPORT"/>
+      <skos:narrower rdf:resource="http://publications.europa.eu/resource/authority/corporate-body/CMT_SC"/>
+      <skos:narrower rdf:resource="http://publications.europa.eu/resource/authority/corporate-body/CMT_TPC"/>
+      <skos:narrower rdf:resource="http://publications.europa.eu/resource/authority/corporate-body/WP_DUAL-USE"/>
+      <skos:narrower rdf:resource="http://publications.europa.eu/resource/authority/corporate-body/WP_CODEV-PI"/>
+      <skos:narrower rdf:resource="http://publications.europa.eu/resource/authority/corporate-body/AHWP_FA"/>
+      <skos:narrower rdf:resource="http://publications.europa.eu/resource/authority/corporate-body/WP_SQ"/>
+      <skos:narrower rdf:resource="http://publications.europa.eu/resource/authority/corporate-body/WP_ASYLUM"/>
+      <skos:narrower rdf:resource="http://publications.europa.eu/resource/authority/corporate-body/WP_IP"/>
+      <skos:narrower rdf:resource="http://publications.europa.eu/resource/authority/corporate-body/AHWP_JHA"/>
+      <skos:narrower rdf:resource="http://publications.europa.eu/resource/authority/corporate-body/WP_GAG"/>
+      <skos:narrower rdf:resource="http://publications.europa.eu/resource/authority/corporate-body/CC_CIS"/>
+      <skos:narrower rdf:resource="http://publications.europa.eu/resource/authority/corporate-body/WP_FOOD"/>
+      <skos:narrower rdf:resource="http://publications.europa.eu/resource/authority/corporate-body/PMG"/>
+      <skos:narrower rdf:resource="http://publications.europa.eu/resource/authority/corporate-body/HWP_HDG"/>
+      <skos:narrower rdf:resource="http://publications.europa.eu/resource/authority/corporate-body/WP_CONUN"/>
+      <skos:narrower rdf:resource="http://publications.europa.eu/resource/authority/corporate-body/GR_FP"/>
+      <skos:narrower rdf:resource="http://publications.europa.eu/resource/authority/corporate-body/CMT_BUDG"/>
+      <skos:narrower rdf:resource="http://publications.europa.eu/resource/authority/corporate-body/AHWP_OSOA"/>
+      <skos:narrower rdf:resource="http://publications.europa.eu/resource/authority/corporate-body/WP_SHIP"/>
+      <skos:narrower rdf:resource="http://publications.europa.eu/resource/authority/corporate-body/WP_AGR"/>
+      <skos:narrower rdf:resource="http://publications.europa.eu/resource/authority/corporate-body/WP_COHOM"/>
+      <skos:narrower rdf:resource="http://publications.europa.eu/resource/authority/corporate-body/HWP_ERCHT"/>
+      <skos:narrower rdf:resource="http://publications.europa.eu/resource/authority/corporate-body/WP_WALC"/>
+      <skos:narrower rdf:resource="http://publications.europa.eu/resource/authority/corporate-body/WP_DP"/>
+      <skos:narrower rdf:resource="http://publications.europa.eu/resource/authority/corporate-body/WP_IMEX"/>
+      <skos:narrower rdf:resource="http://publications.europa.eu/resource/authority/corporate-body/AHWP_MM"/>
+      <skos:narrower rdf:resource="http://publications.europa.eu/resource/authority/corporate-body/CMT_ERAC"/>
+      <skos:narrower rdf:resource="http://publications.europa.eu/resource/authority/corporate-body/CMT_PSC"/>
+      <skos:narrower rdf:resource="http://publications.europa.eu/resource/authority/corporate-body/WP_LEGLING"/>
+      <skos:narrower rdf:resource="http://publications.europa.eu/resource/authority/corporate-body/WP_AG2030"/>
+      <skos:narrower rdf:resource="http://publications.europa.eu/resource/authority/corporate-body/CONSIL_FAC"/>
+      <skos:narrower rdf:resource="http://publications.europa.eu/resource/authority/corporate-body/AHWP_CBAM"/>
+      <skos:narrower rdf:resource="http://publications.europa.eu/resource/authority/corporate-body/WP_CPI"/>
+      <skos:narrower rdf:resource="http://publications.europa.eu/resource/authority/corporate-body/EPC"/>
+      <skos:narrower rdf:resource="http://publications.europa.eu/resource/authority/corporate-body/WP_COMPGRO"/>
+      <skos:narrower rdf:resource="http://publications.europa.eu/resource/authority/corporate-body/WP_ACP"/>
+      <skos:narrower rdf:resource="http://publications.europa.eu/resource/authority/corporate-body/CONSIL_TTE"/>
+      <skos:narrower rdf:resource="http://publications.europa.eu/resource/authority/corporate-body/WP_IFA"/>
+      <skos:narrower rdf:resource="http://publications.europa.eu/resource/authority/corporate-body/WP_AQ"/>
+      <skos:narrower rdf:resource="http://publications.europa.eu/resource/authority/corporate-body/WP_TAX"/>
+      <skos:narrower rdf:resource="http://publications.europa.eu/resource/authority/corporate-body/WP_FISHERIES"/>
+      <skos:narrower rdf:resource="http://publications.europa.eu/resource/authority/corporate-body/WP_TIS"/>
+      <skos:narrower rdf:resource="http://publications.europa.eu/resource/authority/corporate-body/WP_SR"/>
+      <skos:narrower rdf:resource="http://publications.europa.eu/resource/authority/corporate-body/CMT_SPC"/>
+      <skos:narrower rdf:resource="http://publications.europa.eu/resource/authority/corporate-body/WP_COWEB"/>
+      <skos:narrower rdf:resource="http://publications.europa.eu/resource/authority/corporate-body/WP_VISA"/>
+      <skos:narrower rdf:resource="http://publications.europa.eu/resource/authority/corporate-body/CONSIL_ENV"/>
+      <skos:narrower rdf:resource="http://publications.europa.eu/resource/authority/corporate-body/WP_PROBA"/>
+      <skos:narrower rdf:resource="http://publications.europa.eu/resource/authority/corporate-body/WP_RELEX"/>
+      <skos:narrower rdf:resource="http://publications.europa.eu/resource/authority/corporate-body/AHWP_RESUA"/>
+      <skos:narrower rdf:resource="http://publications.europa.eu/resource/authority/corporate-body/CONSIL_ECOFIN"/>
+      <skos:narrower rdf:resource="http://publications.europa.eu/resource/authority/corporate-body/AHWP_DF"/>
+      <skos:narrower rdf:resource="http://publications.europa.eu/resource/authority/corporate-body/WP_COELA"/>
+      <skos:narrower rdf:resource="http://publications.europa.eu/resource/authority/corporate-body/WP_FICO"/>
+      <skos:narrower rdf:resource="http://publications.europa.eu/resource/authority/corporate-body/AHWP_RESILIENCE"/>
+      <skos:narrower rdf:resource="http://publications.europa.eu/resource/authority/corporate-body/AHWP_COVEME"/>
+      <skos:narrower rdf:resource="http://publications.europa.eu/resource/authority/corporate-body/WP_FREMP"/>
+      <skos:narrower rdf:resource="http://publications.europa.eu/resource/authority/corporate-body/WP_NPAE"/>
+      <skos:narrower rdf:resource="http://publications.europa.eu/resource/authority/corporate-body/WP_JUSTCIV"/>
+      <skos:narrower rdf:resource="http://publications.europa.eu/resource/authority/corporate-body/CONSIL_JHA"/>
+      <skos:narrower rdf:resource="http://publications.europa.eu/resource/authority/corporate-body/GR_EXP_CRED"/>
+      <skos:narrower rdf:resource="http://publications.europa.eu/resource/authority/corporate-body/EFC"/>
+      <skos:narrower rdf:resource="http://publications.europa.eu/resource/authority/corporate-body/CONSIL_SG"/>
+      <skos:narrower rdf:resource="http://publications.europa.eu/resource/authority/corporate-body/WP_VET"/>
+      <skos:narrower rdf:resource="http://publications.europa.eu/resource/authority/corporate-body/WP_INFO"/>
+      <skos:narrower rdf:resource="http://publications.europa.eu/resource/authority/corporate-body/WP_MED"/>
+      <skos:narrower rdf:resource="http://publications.europa.eu/resource/authority/corporate-body/GR_ANTICI_SIM"/>
+      <skos:narrower rdf:resource="http://publications.europa.eu/resource/authority/corporate-body/CONSIL_COMPET"/>
+      <skos:narrower rdf:resource="http://publications.europa.eu/resource/authority/corporate-body/CMT_SCIFA"/>
+      <skos:narrower rdf:resource="http://publications.europa.eu/resource/authority/corporate-body/WP_GRIA"/>
+      <skos:narrower rdf:resource="http://publications.europa.eu/resource/authority/corporate-body/WP_AGRIFIN"/>
+      <skos:narrower rdf:resource="http://publications.europa.eu/resource/authority/corporate-body/AHWP_FM"/>
+      <skos:narrower rdf:resource="http://publications.europa.eu/resource/authority/corporate-body/WP_FSBA"/>
+      <skos:narrower rdf:resource="http://publications.europa.eu/resource/authority/corporate-body/WP_COPEN"/>
+      <skos:narrower rdf:resource="http://publications.europa.eu/resource/authority/corporate-body/WP_COMET"/>
+      <skos:narrower rdf:resource="http://publications.europa.eu/resource/authority/corporate-body/WP_TER"/>
+      <skos:narrower rdf:resource="http://publications.europa.eu/resource/authority/corporate-body/AHWP_CY2004"/>
+      <skos:narrower rdf:resource="http://publications.europa.eu/resource/authority/corporate-body/WP_COMP"/>
+      <skos:narrower rdf:resource="http://publications.europa.eu/resource/authority/corporate-body/WP_AVIA"/>
+      <skos:narrower rdf:resource="http://publications.europa.eu/resource/authority/corporate-body/WP_SMOR"/>
+      <skos:narrower rdf:resource="http://publications.europa.eu/resource/authority/corporate-body/WP_RESEARCH"/>
+      <skos:narrower rdf:resource="http://publications.europa.eu/resource/authority/corporate-body/WP_COAFR"/>
+      <skos:narrower rdf:resource="http://publications.europa.eu/resource/authority/corporate-body/AHWP_MFF1"/>
+      <skos:narrower rdf:resource="http://publications.europa.eu/resource/authority/corporate-body/WP_EFTA"/>
+      <skos:narrower rdf:resource="http://publications.europa.eu/resource/authority/corporate-body/AHWP_COMEPP"/>
+      <skos:narrower rdf:resource="http://publications.europa.eu/resource/authority/corporate-body/WP_UK"/>
+      <skos:narrower rdf:resource="http://publications.europa.eu/resource/authority/corporate-body/AHWP_MFF"/>
+      <skos:narrower rdf:resource="http://publications.europa.eu/resource/authority/corporate-body/WP_TH"/>
+      <skos:narrower rdf:resource="http://publications.europa.eu/resource/authority/corporate-body/WP_HA"/>
+      <skos:narrower rdf:resource="http://publications.europa.eu/resource/authority/corporate-body/WP_ENV"/>
+      <skos:narrower rdf:resource="http://publications.europa.eu/resource/authority/corporate-body/WP_COMAR"/>
+      <skos:narrower rdf:resource="http://publications.europa.eu/resource/authority/corporate-body/WP_IXIM"/>
+      <skos:narrower rdf:resource="http://publications.europa.eu/resource/authority/corporate-body/WP_SCHENGEN"/>
+      <skos:narrower rdf:resource="http://publications.europa.eu/resource/authority/corporate-body/WP_COASI"/>
+      <skos:narrower rdf:resource="http://publications.europa.eu/resource/authority/corporate-body/WP_COCON"/>
+      <skos:narrower rdf:resource="http://publications.europa.eu/resource/authority/corporate-body/WP_CODLEG"/>
+      <skos:narrower rdf:resource="http://publications.europa.eu/resource/authority/corporate-body/CMT_EMCO"/>
+      <skos:narrower rdf:resource="http://publications.europa.eu/resource/authority/corporate-body/WP_ENERGY"/>
+      <skos:narrower rdf:resource="http://publications.europa.eu/resource/authority/corporate-body/GR_COCG"/>
+      <skos:narrower rdf:resource="http://publications.europa.eu/resource/authority/corporate-body/AHWP_UAP"/>
+      <skos:narrower rdf:resource="http://publications.europa.eu/resource/authority/corporate-body/WP_POST"/>
+      <skos:narrower rdf:resource="http://publications.europa.eu/resource/authority/corporate-body/WP_DI"/>
+      <skos:narrower rdf:resource="http://publications.europa.eu/resource/authority/corporate-body/CMT_FSC"/>
+      <skos:narrower rdf:resource="http://publications.europa.eu/resource/authority/corporate-body/WP_PU"/>
+      <skos:narrower rdf:resource="http://publications.europa.eu/resource/authority/corporate-body/WP_OR"/>
+      <skos:narrower rdf:resource="http://publications.europa.eu/resource/authority/corporate-body/AHWP_CEF"/>
+      <skos:narrower rdf:resource="http://publications.europa.eu/resource/authority/corporate-body/COREPER_II"/>
+      <skos:narrower rdf:resource="http://publications.europa.eu/resource/authority/corporate-body/WP_COTRA"/>
+      <skos:narrower rdf:resource="http://publications.europa.eu/resource/authority/corporate-body/WP_OSCE_COE"/>
+      <skos:narrower rdf:resource="http://publications.europa.eu/resource/authority/corporate-body/CONSIL_AGRIFISH"/>
+      <skos:narrower rdf:resource="http://publications.europa.eu/resource/authority/corporate-body/WP_COLAC"/>
+      <skos:narrower rdf:resource="http://publications.europa.eu/resource/authority/corporate-body/WP_LANDTRANS"/>
+      <skos:narrower rdf:resource="http://publications.europa.eu/resource/authority/corporate-body/WP_FORESTRY"/>
+      <skos:narrower rdf:resource="http://publications.europa.eu/resource/authority/corporate-body/WP_IE"/>
+      <skos:narrower rdf:resource="http://publications.europa.eu/resource/authority/corporate-body/WP_AVM"/>
+      <skos:narrower rdf:resource="http://publications.europa.eu/resource/authority/corporate-body/WP_CURIA"/>
+      <skos:narrower rdf:resource="http://publications.europa.eu/resource/authority/corporate-body/WP_TRADE"/>
+      <skos:narrower rdf:resource="http://publications.europa.eu/resource/authority/corporate-body/WP_SPACE"/>
+      <skos:narrower rdf:resource="http://publications.europa.eu/resource/authority/corporate-body/WP_CU"/>
+      <skos:narrower rdf:resource="http://publications.europa.eu/resource/authority/corporate-body/WP_TN"/>
+      <skos:narrower rdf:resource="http://publications.europa.eu/resource/authority/corporate-body/CMT_EUMC"/>
+      <skos:narrower rdf:resource="http://publications.europa.eu/resource/authority/corporate-body/CONSIL_PRES"/>
+      <skos:narrower rdf:resource="http://publications.europa.eu/resource/authority/corporate-body/CMT_COSI"/>
+      <skos:narrower rdf:resource="http://publications.europa.eu/resource/authority/corporate-body/WP_PLANT"/>
+      <skos:narrower rdf:resource="http://publications.europa.eu/resource/authority/corporate-body/WP_EJUST"/>
+      <skos:narrower rdf:resource="http://publications.europa.eu/resource/authority/corporate-body/WP_MOG"/>
+      <skos:narrower rdf:resource="http://publications.europa.eu/resource/authority/corporate-body/WP_MAMA"/>
+      <skos:narrower rdf:resource="http://publications.europa.eu/resource/authority/corporate-body/CC_CATS"/>
+      <skos:narrower rdf:resource="http://publications.europa.eu/resource/authority/corporate-body/WP_STAT"/>
+      <skos:narrower rdf:resource="http://publications.europa.eu/resource/authority/corporate-body/CONSIL_SG_1967_0"/>
+      <skos:narrower rdf:resource="http://publications.europa.eu/resource/authority/corporate-body/WP_GAF"/>
+      <skos:narrower rdf:resource="http://publications.europa.eu/resource/authority/corporate-body/WP_TER_INT"/>
+      <skos:narrower rdf:resource="http://publications.europa.eu/resource/authority/corporate-body/WP_COEST"/>
+      <skos:narrower rdf:resource="http://publications.europa.eu/resource/authority/corporate-body/CMT_CULT"/>
+      <skos:narrower rdf:resource="http://publications.europa.eu/resource/authority/corporate-body/AHWP_SCF"/>
+      <skos:narrower rdf:resource="http://publications.europa.eu/resource/authority/corporate-body/COREPER"/>
+      <skos:narrower rdf:resource="http://publications.europa.eu/resource/authority/corporate-body/CONSIL_EPSCO"/>
+      <skos:narrower rdf:resource="http://publications.europa.eu/resource/authority/corporate-body/WP_FSA"/>
+      <skos:narrower rdf:resource="http://publications.europa.eu/resource/authority/corporate-body/GR_NICOLAIDIS"/>
+      <skos:narrower rdf:resource="http://publications.europa.eu/resource/authority/corporate-body/WP_EM"/>
+      <skos:narrower rdf:resource="http://publications.europa.eu/resource/authority/corporate-body/CONSIL_EYCS"/>
+      <skos:narrower rdf:resource="http://publications.europa.eu/resource/authority/corporate-body/WP_LE"/>
+      <skos:narrower rdf:resource="http://publications.europa.eu/resource/authority/corporate-body/WP_YOUTH"/>
+      <skos:narrower rdf:resource="http://publications.europa.eu/resource/authority/corporate-body/CMT_SCA"/>
+      <skos:narrower rdf:resource="http://publications.europa.eu/resource/authority/corporate-body/CONSIL_GAC"/>
+      <skos:narrower rdf:resource="http://publications.europa.eu/resource/authority/corporate-body/AHWP_DI"/>
+      <skos:narrower rdf:resource="http://publications.europa.eu/resource/authority/corporate-body/WP_COJUR"/>
+      <skos:narrower rdf:resource="http://publications.europa.eu/resource/authority/corporate-body/WP_COHAFA"/>
+      <skos:narrower rdf:resource="http://publications.europa.eu/resource/authority/corporate-body/WP_CL"/>
+      <euvoc:protocolOrder>A30</euvoc:protocolOrder>
+      <euvoc:order>A30</euvoc:order>
+      <at:protocol.order>A30</at:protocol.order>
+      <at:protocol-order>A30</at:protocol-order>
+   </skos:Concept>

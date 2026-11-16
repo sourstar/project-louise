@@ -9,7 +9,7 @@ to force reprocessing).
 
 Usage:
   python -m app.louise dev refs-sync --src /path/to/refs-dir [--db /data/refs.db]
-                             [--fetch] [--force]
+                             [--fetch] [--force] [--ack eurovoc]
 """
 import argparse
 from pathlib import Path
@@ -31,7 +31,20 @@ def main() -> None:
                     help="download/refresh the reference dumps into --src first")
     p.add_argument("--force", action="store_true",
                     help="with --fetch: re-download even if the local copy is fresh")
+    p.add_argument("--ack", action="append", default=[], metavar="SOURCE",
+                    help="record the acknowledgement of a yellow source's terms (invariant 9: "
+                         "a timestamp and the sha256 of <src>/<source>/TERMS.txt), then sync; "
+                         "today: eurovoc")
     args = p.parse_args()
+
+    for source_id in args.ack:
+        import time
+        from app.refs import eurovoc
+        if source_id != eurovoc.SOURCE_ID:
+            raise SystemExit(f"--ack {source_id}: no yellow reference source of that name")
+        base = args.src / eurovoc.DIR
+        print(f"terms {base / eurovoc.TERMS}: sha256:{eurovoc.terms_sha256(base)}")
+        print(f"ack {source_id}: {eurovoc.make_ack(base, time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()))}")
 
     if args.fetch:
         for source_id, result in refs_acquire.fetch_all(
@@ -47,6 +60,10 @@ def main() -> None:
     results = refs_store.sync_all(con, args.src, corpora=corpora)
     for source_id, result in results.items():
         print(f"{source_id}: {result}")
+    from app.refs import eurovoc
+    why = eurovoc.held_back(args.src / eurovoc.DIR) if (args.src / eurovoc.DIR).is_dir() else None
+    if why:
+        print(f"eurovoc: held back: {why}")
 
 
 if __name__ == "__main__":

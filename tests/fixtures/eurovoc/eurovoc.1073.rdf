@@ -1,0 +1,114 @@
+<rdf:Description rdf:about="http://eurovoc.europa.eu/1073">
+	<rdf:type rdf:resource="http://www.w3.org/2004/02/skos/core#Concept"/>
+	<broader xmlns="http://www.w3.org/2004/02/skos/core#" rdf:resource="http://eurovoc.europa.eu/1074"/>
+	<inScheme xmlns="http://www.w3.org/2004/02/skos/core#" rdf:resource="http://eurovoc.europa.eu/100141"/>
+	<inScheme xmlns="http://www.w3.org/2004/02/skos/core#" rdf:resource="http://eurovoc.europa.eu/100232"/>
+	<prefLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="mt">taħriġ fuq il-post tax-xogħol</prefLabel>
+	<prefLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="pt">formação em serviço</prefLabel>
+	<prefLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="fi">työpaikkakoulutus</prefLabel>
+	<prefLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="en">in-service training</prefLabel>
+	<prefLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="el">κατάρτιση των εργαζομένων κατά την εργασία</prefLabel>
+	<prefLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="ga">oiliúint inseirbhíse</prefLabel>
+	<prefLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="es">formación en el puesto de trabajo</prefLabel>
+	<prefLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="lt">mokymas darbo laiku</prefLabel>
+	<prefLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="sl">usposabljanje na delovnem mestu</prefLabel>
+	<prefLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="de">Ausbildung am Arbeitsplatz</prefLabel>
+	<prefLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="ro">instruire la locul de muncă</prefLabel>
+	<prefLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="hu">munkahelyi képzés</prefLabel>
+	<prefLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="da">uddannelse i arbejdstiden</prefLabel>
+	<prefLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="sv">personalutbildning</prefLabel>
+	<prefLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="et">täiendkoolitus</prefLabel>
+	<prefLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="hr">izobrazba na radnom mjestu</prefLabel>
+	<prefLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="pl">szkolenie przyzakładowe</prefLabel>
+	<prefLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="it">formazione sul posto di lavoro</prefLabel>
+	<prefLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="sr">обука на радном месту</prefLabel>
+	<prefLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="cs">příprava při zaměstnání</prefLabel>
+	<prefLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="nl">praktijkopleiding</prefLabel>
+	<prefLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="sk">vzdelávanie v rámci zamestnania</prefLabel>
+	<prefLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="bg">обучение по време на работа</prefLabel>
+	<prefLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="sq">trajnim në detyrë</prefLabel>
+	<prefLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="lv">stažēšanās</prefLabel>
+	<prefLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="mk">обука на работното место</prefLabel>
+	<prefLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="fr">formation en cours d'emploi</prefLabel>
+	<altLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="sv">utbildningsavtal</altLabel>
+	<altLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="fi">henkilöstön koulutus</altLabel>
+	<altLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="mk">понатамошна обука и упатства</altLabel>
+	<altLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="el">κατάρτιση προσωπικού</altLabel>
+	<altLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="mk">професионална обука</altLabel>
+	<altLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="fr">perfectionnement professionnel</altLabel>
+	<altLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="et">personali koolitus</altLabel>
+	<altLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="en">on-the-job training</altLabel>
+	<altLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="it">perfezionamento professionale</altLabel>
+	<altLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="it">formazione del personale</altLabel>
+	<altLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="da">personaleuddannelse</altLabel>
+	<altLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="ro">perfecționarea personalului</altLabel>
+	<altLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="lv">tālākizglītošana un mācības</altLabel>
+	<altLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="lt">personalo mokymas</altLabel>
+	<altLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="ro">perfecționare și instruire profesională</altLabel>
+	<altLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="fi">täydennyskoulutus ja opastus</altLabel>
+	<altLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="sk">ďalšie vzdelávanie a pokyny</altLabel>
+	<altLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="de">Personalausbildung</altLabel>
+	<altLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="de">Training on the Job</altLabel>
+	<altLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="sv">utbildning på arbetstid</altLabel>
+	<altLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="lt">mokymas darbo vietoje</altLabel>
+	<altLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="cs">doškolování pracovníků</altLabel>
+	<altLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="da">efteruddannelse</altLabel>
+	<altLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="en">further training and instruction</altLabel>
+	<altLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="es">contrato para la formación</altLabel>
+	<altLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="el">σύμβαση κατάρτισης</altLabel>
+	<altLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="mk">обука за вработените</altLabel>
+	<altLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="de">innerbetriebliche Ausbildung</altLabel>
+	<altLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="sq">trajnim dhe udhëzim i mëtejshëm</altLabel>
+	<altLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="it">contratto di formazione</altLabel>
+	<altLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="el">επαγγελματική τελειοποίηση</altLabel>
+	<altLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="sk">školenie zamestnancov</altLabel>
+	<altLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="sq">trajnim i personelit</altLabel>
+	<altLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="cs">vzdělávání při zaměstnání</altLabel>
+	<altLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="hu">alkalmazottak képzése</altLabel>
+	<altLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="et">väljaõpe töökohal</altLabel>
+	<altLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="hr">izobrazba za zaposlenike</altLabel>
+	<altLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="lt">tęstinis mokymas ir rengimas</altLabel>
+	<altLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="es">formación del personal</altLabel>
+	<altLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="de">Ausbildungsvertrag</altLabel>
+	<altLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="pt">contrato de formação profissional</altLabel>
+	<altLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="es">perfeccionamiento profesional</altLabel>
+	<altLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="et">täiendusõpe</altLabel>
+	<altLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="cs">pracovní školení</altLabel>
+	<altLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="da">uddannelseskontrakt</altLabel>
+	<altLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="lv">personāla izglītošana</altLabel>
+	<altLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="et">täienduskoolitus</altLabel>
+	<altLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="cs">školení zaměstnanců</altLabel>
+	<altLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="fr">formation du personnel</altLabel>
+	<altLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="cs">vzdělávání při práci</altLabel>
+	<altLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="sv">utbildning i arbetet</altLabel>
+	<altLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="en">staff training</altLabel>
+	<altLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="pt">aperfeiçoamento profissional</altLabel>
+	<altLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="fr">contrat-formation</altLabel>
+	<altLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="nl">vorming van het personeel</altLabel>
+	<altLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="sv">utbildningskontrakt</altLabel>
+	<altLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="nl">voortgezette beroepsopleiding</altLabel>
+	<altLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="pt">formação do pessoal</altLabel>
+	<altLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="de">betriebliche Weiterbildung</altLabel>
+	<notation xmlns="http://www.w3.org/2004/02/skos/core#">1073</notation>
+	<related xmlns="http://www.w3.org/2004/02/skos/core#" rdf:resource="http://eurovoc.europa.eu/780"/>
+	<definition xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="lt">Apmokamas mokymas aktyvaus darbo metu.</definition>
+	<definition xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="da">Uddannelse, der gives i perioder med faktisk arbejde og er lønnet.</definition>
+	<definition xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="es">Formación remunerada impartida durante los períodos de trabajo efectivo.</definition>
+	<definition xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="nl">Opleiding tijdens werkuren, waarin de werknemer wordt doorbetaald.</definition>
+	<definition xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="de">Ausbildung, die während bezahlter Arbeitszeit stattfindet.</definition>
+	<definition xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="sq">Trajnim i paguar dhe i ofruar gjatë periudhave të punës aktive.</definition>
+	<definition xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="fi">Todellisella ja palkallisella työajalla annettu koulutus</definition>
+	<definition xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="hr">Plaćena izobrazba koja se odvija tijekom radnoga vremena djelatnika.</definition>
+	<definition xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="fr">Formation rémunérée dispensée pendant les périodes de travail effectif.</definition>
+	<definition xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="pt">Formação remunerada dispensada durante os períodos de trabalho efetivo.</definition>
+	<definition xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="en">Training paid for and given during active work periods.</definition>
+	<definition xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="it">Formazione rimunerata fornita durante l'orario di lavoro effettivo.</definition>
+	<definition xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="cs">Další vzdělávací či profesní příprava umožněná a hrazená zaměstnavatelem zaměstnanci po  dobu jeho pracovního života.</definition>
+	<definition xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="mt">Taħriġ imħallas u mogħti waqt perjodi attivi ta' xogħol.</definition>
+	<definition xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="ro">Formare profesională plătită, desfășurată după angajare în timpul lucrului efectiv.</definition>
+	<definition xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="sk">Školenie zaplatené a vykonávané počas aktívneho pracovného času.</definition>
+	<definition xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="el">Κατάρτιση που πραγματοποιείται κατά τη διάρκεια πραγματικής εργασίας.</definition>
+	<definition xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="sv">Utbildning av anställda på betald arbetstid.</definition>
+	<definition xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="et">Koolitus, mis toimub tasustatava tööaja jooksul.</definition>
+	<definition xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="hu">A munkával eltöltött időszak alatti, a munkaadó által térített szakképzés.</definition>
+</rdf:Description>
