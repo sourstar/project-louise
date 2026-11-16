@@ -579,6 +579,18 @@ def create(root, ref: str, *, snapshot_id: str | None = None, log=print) -> Snap
               bytes=r["bytes"], toolchain="own",
               writer=before.get((r["slice"], r["n"], r["root"]), pack_records.WRITER))
         for r in rows)
+    # EVERY PART IT LISTS IS IN THE SHARD, at its path and its size (München,
+    # 2026-11-16, NeuRIS5: a discard had moved the build's parts aside, and a
+    # FIRST snapshot — no previous to compare its parts with — froze 161 the
+    # SHARD did not hold; the reconcile found them missing). A stat a part,
+    # before anything is read or written
+    absent = [s.path for s in shards if not (shard_dir / s.path).is_file()
+              or (shard_dir / s.path).stat().st_size != int(s.bytes)]
+    if absent:
+        raise CodexError(f"{name}: {len(absent)} of the {len(shards)} part(s) the build lists are not in "
+                         f"the SHARD at their path and size (first: {absent[0]}); a snapshot names only "
+                         f"parts it holds, so nothing was written. A discard made before 2026-11-16 may "
+                         f"have moved them: `hold snapshot discard {name} <id> --repair`")
 
     # A FIRST snapshot's delta is every record added: it needs the uids and
     # never a content hash, and the map of both was wikipedia-v8's peak
