@@ -118,7 +118,33 @@ def _paced(manager, key: str, spec, stop, sem, bound_s: float, sleep=time.sleep)
 
 
 def acquire_endpoint_slot(manager, ranked, spec, stop: threading.Event | None = None, *,
-                          bound_s: float | None = None):
+                          bound_s: float | None = None, priority=None):
+    """`_acquire_slot`, in the priority order of the endpoint's connections:
+    an INTERACTIVE caller (a fetch a query triggers) is registered as waiting
+    (`manager.urgent`) and every other caller leaves the next free slot to it
+    (operator, 2026-11-16: "fetch triggered by a query has higher prio over
+    the regular worker's fetching"). Politeness is the same for both: the
+    slots, the cool-down and `min_interval_s`.
+
+    THE STANDARD, NOT ADOPTED: a priority semaphore (a heap of waiters, as
+    asyncio.PriorityQueue orders them) would order every class; two classes
+    — interactive and the rest — are all the node has, and a gate on the
+    plain semaphore keeps the code the engine already relies on."""
+    from .bucket import Priority
+    urgent = getattr(manager, "urgent", None)
+    if priority is not None and Priority(priority) is Priority.INTERACTIVE and urgent is not None:
+        with urgent([k for k, _e in ranked]):
+            return _acquire_slot(manager, ranked, spec, stop, bound_s=bound_s, yields=False)
+    return _acquire_slot(manager, ranked, spec, stop, bound_s=bound_s, yields=True)
+
+
+def _yields(manager, key: str, yields: bool) -> bool:
+    ask = getattr(manager, "urgent_waiting", None) if yields else None
+    return bool(ask is not None and ask(key))
+
+
+def _acquire_slot(manager, ranked, spec, stop: threading.Event | None = None, *,
+                  bound_s: float | None = None, yields: bool = True):
     """Take a per-endpoint concurrency slot, preferring the fastest mirror that
     has one free right now and is not cooling down.
 
@@ -138,7 +164,7 @@ def acquire_endpoint_slot(manager, ranked, spec, stop: threading.Event | None = 
     # First pass: a free slot on the fastest-measured mirror not cooling down,
     # without blocking.
     for key, endpoint in ranked:
-        if manager.cooled_for(key) > 0:
+        if manager.cooled_for(key) > 0 or _yields(manager, key, yields):
             continue
         sem = manager.endpoint_semaphore(key, manager.endpoint_slots(endpoint, spec))
         if sem.acquire(blocking=False):
@@ -155,7 +181,13 @@ def acquire_endpoint_slot(manager, ranked, spec, stop: threading.Event | None = 
     while True:
         if stop is not None and stop.is_set():
             return None
+        if _yields(manager, key, yields):
+            time.sleep(0.1)                 # an INTERACTIVE caller waits: the next slot is its
+            continue
         if sem.acquire(timeout=0.1):
+            if _yields(manager, key, yields):
+                sem.release()               # it began waiting meanwhile: handed over
+                continue
             if _paced(manager, key, spec, stop, sem, bound):
                 return key, endpoint, sem
             return None

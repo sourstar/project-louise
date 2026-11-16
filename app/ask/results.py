@@ -245,7 +245,7 @@ def search(query: str, *, collections: list[str] | None = None, space: str | Non
            rerank_depth: int = DEFAULT_DEPTH, as_of: str | None = None, freshness: bool = False,
            translate: bool = False, all_languages: bool = False, root: Path | None = None,
            now: float | None = None, run=None, annotations: list[str] | None = None,
-           history: bool = False, history_client=None) -> dict[str, Any]:
+           history: bool = False) -> dict[str, Any]:
     """05 §5.4's `louise_search`: `{lists, facts, unresolved, withheld,
     legs_withheld, translations}`. `run` is query_service.run_search unless
     a test gives another. `annotations`: the annotations collections
@@ -427,9 +427,8 @@ def search(query: str, *, collections: list[str] | None = None, space: str | Non
         # the collection lacks, fetched now from its origin, bounded, every
         # one that was not said with its reason — beside the lists as facts
         try:
-            got = history_mod.fetch(query, named, as_of=validity_mod.day_int(day) if day is not None else None,
-                                    history=asked, store=_refs_store(), query_lang=result.get("query_lang"),
-                                    client=history_client)
+            got = history_mod.ask(query, named, as_of=validity_mod.day_int(day) if day is not None else None,
+                                  history=asked, store=_refs_store(), query_lang=result.get("query_lang"))
         except Exception as e:   # noqa: BLE001 — said, never fatal to the search
             got = {"facts": [], "fetches": [{"collection": None, "act": None, "language": None,
                                              "version": None, "status": history_mod.ERROR,
