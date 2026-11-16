@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import shutil
 import zipfile
+from types import SimpleNamespace
 
 import pytest
 
@@ -161,3 +162,135 @@ def test_the_dump_builds_an_english_text_under_the_italian_expression_and_counts
     assert got["it"]["built"] == 2 and got["it"]["formex-refused"] == 0
     assert got["it"]["text-in-another-language"] == 1
 
+
+
+# ---- Formex with no wrapper of this act: the next form (München, 2026-11-16) ---------------
+# 32011R0540 (hr): two Special Edition wrappers, neither naming a NO.CELEX;
+# 32010R1089, 32011R0094 (hr): the act's own wrapper with a mistyped one;
+# 32004D0382, 32006R1965 (bg, ro): only other acts' wrappers.
+
+HTML_NAME = "31972R1473it.html"
+HTML_BODY = ('<html><head><title>Regolamento 1473/72</title></head><body>'
+             '<p>Regolamento (EURATOM, CECA, CEE) n. 1473/72 del Consiglio</p>'
+             '<p>Articolo 1</p><p>Il testo del regolamento.</p></body></html>').encode()
+
+
+def _with_html(monkeypatch, *, other: bool = False):
+    """The act's tree lists an XHTML manifestation of its own (as the five
+    works' trees do, named after the act's own OJ issue) and, `other`, the
+    other act's Formex files under its fmx4."""
+    import dataclasses
+    from app.plugins.eurlex import from_tree
+    from app.plugins.eurlex.notice import Item
+    real = from_tree.notice
+
+    def listed(tree, lang3, celex=None):
+        note = real(tree, lang3, celex)
+        if celex != FORMEX[0]:
+            return note
+        items = {**note.items, "xhtml": [Item(uri=f"http://cellar/{HTML_NAME}", name=HTML_NAME, size=None,
+                                                order=None)]}
+        if other:
+            items["fmx4"] = note.items["fmx4"] + [Item(uri=f"http://cellar/{n}", name=n, size=None, order=None)
+                                                  for n in (OTHER, OTHER_BODY)]
+        return dataclasses.replace(note, items=items)
+    monkeypatch.setattr(from_tree, "notice", listed)
+
+
+def _no_own_wrapper() -> dict[str, bytes]:
+    """The act's own wrapper names a mistyped CELEX; another act's wrapper beside it."""
+    return {**_own_files(stated="31972D1473"), **_other_files()}
+
+
+def test_formex_with_no_wrapper_of_this_act_is_read_from_the_next_form(tmp_path, monkeypatch):
+    _with_html(monkeypatch)
+    unit = tmp_path / src.unit_rel("it", FORMEX[0])
+    shutil.copytree(FORMEX[2], unit, ignore=shutil.ignore_patterns("notice.xml", "LEG_MTD*"))
+    for name, data in {**_no_own_wrapper(), HTML_NAME: HTML_BODY}.items():
+        (unit / name).write_bytes(data)
+    (ref,) = SOURCE.discover(DiscoverState(corpus_root=tmp_path))
+    assert ref.error is None, "the unit's day from its tree, not another act's wrapper"
+    doc = plugin_io.canonical_doc(SOURCE, {"native_id": ref.native_id, "path": ref.locator})
+    assert doc.extra["form"] == "xhtml" and "Il testo del regolamento" in " ".join(b for _l, b in doc.sections)
+    issue = next(i for i in doc.issues if i.code == "formex-not-this-act")
+    assert "none naming 31972R1473" in issue.detail and "from xhtml" in issue.detail
+    assert {OWN, OTHER, HTML_NAME} <= {it["name"] for it in doc.extra["items"]}, "the Formex held beside it"
+
+
+def test_with_no_next_form_it_is_still_refused_and_said(tmp_path):
+    unit = tmp_path / src.unit_rel("it", FORMEX[0])
+    shutil.copytree(FORMEX[2], unit, ignore=shutil.ignore_patterns("notice.xml", "LEG_MTD*"))
+    for name, data in _no_own_wrapper().items():
+        (unit / name).write_bytes(data)
+    from app.plugins.base import UnindexableDocument
+    (ref,) = SOURCE.discover(DiscoverState(corpus_root=tmp_path))
+    with pytest.raises(UnindexableDocument, match="none naming 31972R1473"):
+        plugin_io.canonical_doc(SOURCE, {"native_id": ref.native_id, "path": ref.locator})
+
+
+def test_the_dump_builds_it_from_the_next_form_with_the_formex_beside(tmp_path, serial, monkeypatch):  # noqa: F811
+    _with_html(monkeypatch, other=True)
+    dump = _dump(tmp_path / "dump")
+    fmx = dump / "datadump-it" / "LEG_IT_FMX.zip"
+    with zipfile.ZipFile(fmx) as z:
+        held = {i.filename: z.read(i) for i in z.infolist()}
+    for name, data in _no_own_wrapper().items():
+        held[f"{FORMEX[1]}/fmx4/{name}"] = data
+    with zipfile.ZipFile(fmx, "w") as z:
+        for name, data in held.items():
+            z.writestr(name, data)
+    with zipfile.ZipFile(dump / "datadump-it" / "LEG_IT_HTML.zip", "a") as z:
+        z.writestr(f"{FORMEX[1]}/xhtml/{HTML_NAME}", HTML_BODY)      # xhtml and html share the zip
+    corpus = tmp_path / "corpus"
+    got = eurlex_dump.build(dump, corpus, ["it"], log=lambda m: None)
+    assert (got["it"]["formex-not-this-act"], got["it"]["formex-refused"], got["it"]["built"]) == (1, 0, 2)
+    unit = corpus / src.unit_rel("it", FORMEX[0])
+    assert {OWN, OTHER, HTML_NAME} <= {p.name for p in unit.iterdir()}
+
+
+def test_without_the_next_form_in_the_dump_it_is_left_to_the_api(tmp_path, serial, monkeypatch):  # noqa: F811
+    """Two wrappers, none this act's, and the XHTML its tree lists not in the
+    dump: the unit is the API's (the incomplete list), never refused."""
+    _with_html(monkeypatch, other=True)
+    dump = _dump(tmp_path / "dump")
+    fmx = dump / "datadump-it" / "LEG_IT_FMX.zip"
+    with zipfile.ZipFile(fmx) as z:
+        held = {i.filename: z.read(i) for i in z.infolist()}
+    for name, data in _no_own_wrapper().items():
+        held[f"{FORMEX[1]}/fmx4/{name}"] = data
+    with zipfile.ZipFile(fmx, "w") as z:
+        for name, data in held.items():
+            z.writestr(name, data)
+    corpus = tmp_path / "corpus"
+    got = eurlex_dump.build(dump, corpus, ["it"], log=lambda m: None)
+    assert (got["it"]["incomplete"], got["it"]["formex-refused"]) == (1, 0)
+    assert FORMEX[0] in eurlex_dump.incomplete(corpus)["it"]
+
+
+def test_cellar_lands_the_next_form_beside_the_formex(tmp_path, monkeypatch):
+    """fetch_unit_from_tree, as the dump builds it: records-vs-origin
+    reproduces the unit."""
+    from app.acquire import cellar
+    from app.plugins.eurlex import rdf
+    _with_html(monkeypatch, other=True)
+    served = {**_no_own_wrapper(), HTML_NAME: HTML_BODY,
+              **{p.name: p.read_bytes() for p in FORMEX[2].iterdir()
+                 if p.name not in ("notice.xml", "tree.json", OWN) and not p.name.startswith("LEG_MTD")}}
+    tree_bytes = (FORMEX[2] / rdf.TREE_FILE).read_bytes()
+
+    def get(client, url, headers, what, *, charge, ok=(200,)):
+        name = url.rsplit("/", 1)[-1]
+        data = tree_bytes if name == FORMEX[0] or url.endswith(FORMEX[0]) else served.get(name)
+        if data is None:
+            from app.plugins.eurlex import from_tree as ft
+            scoped = rdf.loads(tree_bytes)
+            for it in ft.notice(scoped, "ITA", FORMEX[0]).items["fmx4"]:
+                if it.uri == url:
+                    data = served[it.name]
+        charge(len(data))
+        return SimpleNamespace(content=data, headers={})
+    monkeypatch.setattr(cellar, "_get", get)
+    monkeypatch.setattr(cellar, "_read_tree", lambda data, celex: rdf.loads(data))
+    dest = tmp_path / src.unit_rel("it", FORMEX[0])
+    cellar.fetch_unit_from_tree("https://cellar.test", FORMEX[0], "it", dest)
+    assert {OWN, OTHER, OTHER_BODY, HTML_NAME} <= {p.name for p in dest.iterdir()}
