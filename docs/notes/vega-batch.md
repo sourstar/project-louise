@@ -2,8 +2,16 @@
 
 *Architecture session, 2026-11-16, for the operator's "A and B" then "make it
 within the frame of the current architecture". München's measurements of
-the same day are the BEFORE. Status: DESIGN — the wire format (§3) waits for
-the operator's yes (CLAUDE.md: wire-format changes ask first).*
+the same day are the BEFORE. Status: BUILT (operator: "W"), not deployed.
+The deploy is a new wrapper, so a new run: the gate runs again and its
+fingerprints must be byte-identical to today's; then AFTER per §6.*
+
+**Deploy check (first, before the gate):** one VEGA/2 request through the
+node's own LocalAI, its vectors compared byte for byte with the same texts
+sent as VEGA/1. The wrapper answers the batch as one FINAL vector
+(`tokens` 1, `dim` = the concatenation's length), which LocalAI passes on as
+it is. The client checks every item against its receipt, so an answer
+LocalAI changed would be refused and nothing written.
 
 ## 1. What costs the time
 

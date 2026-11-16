@@ -150,3 +150,35 @@ def test_the_wrappers_unavailable_error_reads_as_a_deferral():
             'unavailable: the receipt was not acknowledged: …"}}')
     assert client.is_deferral(500, text)
     assert not client.is_deferral(500, "rpc error: code = InvalidArgument desc = VeGa: …")
+
+
+# ---- VEGA/2: one input carries a request's items (docs/notes/vega-batch.md) --------------
+
+def test_a_batched_request_is_one_input_and_its_answer_splits_by_item():
+    b = client.tag_batch(["a", "b", "c"], batched=True)
+    assert len(b.inputs) == 1 and b.groups == (3,) and len(b.ids) == 3
+    assert [i for i, *_ in vtag.parse_batch(b.inputs[0])] == list(b.ids)
+    assert b.input_digests == client.tag_batch(["a", "b", "c"]).input_digests, \
+        "the items' digests are VEGA/1's"
+    raw = struct.pack("<6f", 1, 2, 3, 4, 5, 6)
+    assert client.unpack(b, [raw]) == [raw[:8], raw[8:16], raw[16:]]
+    assert client.unpack(b, [[1.0, 2.0, 3.0, 4.0, 5.0, 6.0]]) == [raw[:8], raw[8:16], raw[16:]]
+
+
+def test_an_answer_that_does_not_split_is_refused():
+    b = client.tag_batch(["a", "b"], batched=True)
+    with pytest.raises(client.Refusal, match="not 2 equal"):
+        client.unpack(b, [struct.pack("<3f", 1, 2, 3)])
+    with pytest.raises(client.Refusal, match="1 batch input"):
+        client.unpack(b, [b"", b""])
+
+
+def test_more_items_than_one_batch_holds_go_as_several_inputs():
+    b = client.tag_batch(["x"] * (vtag.MAX_ITEMS + 2), batched=True)
+    assert b.groups == (vtag.MAX_ITEMS, 2) and len(b.inputs) == 2
+
+
+def test_a_vega1_batch_passes_unpack_as_it_is():
+    b = client.tag_batch(["a", "b"])
+    assert not b.batched and b.groups == (1, 1)
+    assert client.unpack(b, [[1.0], [2.0]]) == [[1.0], [2.0]]

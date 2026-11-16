@@ -214,8 +214,11 @@ def test_through_vega_the_keep_is_outside_the_tag(monkeypatch):
     assert after["encoding_format"] == before["encoding_format"] == "base64"
     # the tagged input is the same object but for its one-time id: the same
     # form, the same content, so the same input digest
-    (_, form_b, content_b), (_, form_a, content_a) = (vtag.parse(before["input"][0]),
-                                                      vtag.parse(after["input"][0]))
+    # (a VEGA/2 batch since 2026-11-16: its one item, docs/notes/vega-batch.md)
+    def first(s):
+        return vtag.parse_batch(s)[0][:3] if vtag.is_batch(s) else vtag.parse(s)
+    (_, form_b, content_b), (_, form_a, content_a) = (first(before["input"][0]),
+                                                      first(after["input"][0]))
     assert (form_a, content_a) == (form_b, content_b) == ("text", "alpha")
     assert vtag.input_digest(form_a, content_a) == vtag.input_digest(form_b, content_b)
     keep.reset()

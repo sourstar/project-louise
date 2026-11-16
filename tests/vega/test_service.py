@@ -394,3 +394,48 @@ def test_a_log_line_is_written_when_it_is_said(monkeypatch, tmp_path):
     intake = service.Intake(tmp_path / "s.sock", service.ReceiptStore(),
                             service.Runs(RunStore(tmp_path / "r.sqlite")))
     assert intake.log is service.say
+
+
+# ---- a VEGA/2 batch's receipts: one line, all or none (docs/notes/vega-batch.md) --------
+
+def _line(*ns, run_id=RUN_ID):
+    return canonical_json({"kind": "receipts", "run_id": run_id, "receipts": [
+        {k: receipt(n)[k] for k in ("id", "input_digest", "vector_digest")} for n in ns]})
+
+
+def test_a_batchs_receipts_are_held_in_one_line(tmp_path):
+    receipts, runs = ReceiptStore(), Runs(RunStore(tmp_path / "r.sqlite"))
+    assert service.handle(_line(1, 2), receipts, runs)["code"] == service.UNKNOWN_RUN
+    service.handle(canonical_json({"kind": "run", "run_id": RUN_ID, "run": RUN}), receipts, runs)
+    assert service.handle(_line(1, 2, 3), receipts, runs) == {"ok": True}
+    assert receipts.get([receipt(n)["id"] for n in (1, 2, 3)]) == [receipt(n) for n in (1, 2, 3)]
+    assert service.handle(_line(1, 2, 3), receipts, runs) == {"ok": True}, "the same line again"
+
+
+def test_one_conflict_holds_none_of_the_batch(tmp_path):
+    receipts, runs = ReceiptStore(), Runs(RunStore(tmp_path / "r.sqlite"))
+    service.handle(canonical_json({"kind": "run", "run_id": RUN_ID, "run": RUN}), receipts, runs)
+    other = {**receipt(2), "vector_digest": "sha256:" + "99" * 32}
+    receipts.put(other)
+    reply = service.handle(_line(1, 2, 3), receipts, runs)
+    assert reply["ok"] is False and reply["code"] == service.CONFLICT
+    assert receipts.get([receipt(1)["id"], receipt(3)["id"]]) == [], "all or none"
+
+
+@pytest.mark.parametrize("msg", [
+    {"kind": "receipts", "run_id": RUN_ID, "receipts": []},
+    {"kind": "receipts", "run_id": RUN_ID},
+    {"kind": "receipts", "run_id": RUN_ID, "receipts": [dict(receipt(1))]},     # run_id inside
+    {"kind": "receipts", "run_id": "x", "receipts": [{"id": "0" * 32, "input_digest": "x",
+                                                       "vector_digest": "y"}]},
+])
+def test_a_receipts_line_that_is_not_one_is_refused(tmp_path, msg):
+    receipts, runs = ReceiptStore(), Runs(RunStore(tmp_path / "r.sqlite"))
+    service.handle(canonical_json({"kind": "run", "run_id": RUN_ID, "run": RUN}), receipts, runs)
+    reply = service.handle(canonical_json(msg), receipts, runs)
+    assert reply["ok"] is False and reply["code"] == service.INVALID
+
+
+def test_the_batch_bounds_agree():
+    from app.vega import tag as vtag
+    assert service.MAX_BATCH_RECEIPTS == vtag.MAX_ITEMS == service.MAX_IDS

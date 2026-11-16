@@ -30,6 +30,17 @@ binds the text and the cut it was embedded under. THE VECTOR DIGEST is SHA-256 o
 the vector as little-endian float32, concatenated — the bytes the backend
 produced, written `sha256:<hex>` like every identity (09 §9.1).
 
+THE BATCH, VEGA/2 (operator, 2026-11-16, "W"; docs/notes/vega-batch.md): one
+input carries a whole request, so LocalAI calls the wrapper once per request
+instead of once per text:
+
+    MARK2 + canonical JSON of {"form": "batch", "items": [<item>, …]}
+
+where every item is EXACTLY a VEGA/1 tag's object (its id, its form, its
+content, its window), 1 to MAX_ITEMS of them, every id distinct. An item's
+input digest and receipt are therefore VEGA/1's, unchanged. The answer is the
+items' vectors concatenated in item order; Louise splits it evenly.
+
 WIRE FORMAT PENDING 09 §9.12's amendment (vega.md §4): approved in principle
 by the operator, the bytes get their own review.
 """
@@ -44,6 +55,12 @@ from typing import Any, Sequence
 from ..hold.codex import CodexError, canonical_json, digest
 
 MARK = "\x1eVEGA/1\x1e"
+#: a batch of VEGA/1 items in one input (docs/notes/vega-batch.md)
+MARK2 = "\x1eVEGA/2\x1e"
+BATCH = "batch"
+#: most items one batch carries: the receipts route's own bound
+#: (`service.MAX_IDS`), so one read fetches a batch's receipts
+MAX_ITEMS = 1024
 TEXT, PAIR = "text", "pair"
 FORMS = (TEXT, PAIR)
 #: the optional key of either form: the tokens the encoder embeds at most
@@ -163,13 +180,26 @@ def parse_window(s: str) -> tuple[str, str, Item, int | None]:
         raise TagError("an input without a VeGa tag: every input to a vega- model is "
                        "tagged (docs/notes/vega.md)")
     body = s[len(MARK):]
+    obj = _loads(body)
+    got = _item(obj)
+    if _canonical(obj).decode("utf-8") != body:
+        raise TagError("the tag is not in canonical form (09 §9.1)")
+    return got
+
+
+def _loads(body: str) -> Any:
     try:
-        obj = json.loads(body, object_pairs_hook=_no_duplicates, parse_float=_no_float,
-                         parse_constant=_no_float)
+        return json.loads(body, object_pairs_hook=_no_duplicates, parse_float=_no_float,
+                          parse_constant=_no_float)
     except TagError:
         raise
     except ValueError as e:
         raise TagError(f"the tag's JSON does not parse: {e.msg} at {e.pos}") from None
+
+
+def _item(obj: Any) -> tuple[str, str, Item, int | None]:
+    """`(id, form, content, window)` of one VEGA/1 object: a tag's whole body,
+    or one item of a batch."""
     if not isinstance(obj, dict):
         raise TagError("the tag's JSON is an object")
     form = obj.get("form")
@@ -184,9 +214,53 @@ def parse_window(s: str) -> tuple[str, str, Item, int | None]:
         raise TagError("the tag's id is 32 lowercase hexadecimal digits")
     content = _content(form, obj[key])
     window = _window(obj.get(WINDOW))
-    if _canonical(obj).decode("utf-8") != body:
-        raise TagError("the tag is not in canonical form (09 §9.1)")
     return tid, form, (content if form == TEXT else (content[0], content[1])), window
+
+
+def is_batch(s: Any) -> bool:
+    """Whether an input is a VEGA/2 batch (it starts with its marker)."""
+    return isinstance(s, str) and s.startswith(MARK2)
+
+
+def tag_batch(items: Sequence[tuple[str, Item | list[str], int | None]], *,
+              ids: Sequence[str] | None = None) -> tuple[list[str], str]:
+    """`(the items' ids, the one tagged string)` for a batch of
+    `(form, content, window)` items. `ids` is for tests; Louise always takes
+    fresh ones."""
+    if not 1 <= len(items) <= MAX_ITEMS:
+        raise TagError(f"a batch carries 1 to {MAX_ITEMS} items, not {len(items)}")
+    tids = [new_id() for _ in items] if ids is None else list(ids)
+    if len(tids) != len(items) or len(set(tids)) != len(tids):
+        raise TagError("every item of a batch has its own id")
+    objs = []
+    for tid, (form, content, window) in zip(tids, items):
+        if not _ID.fullmatch(tid):
+            raise TagError("the id is 32 lowercase hexadecimal digits")
+        objs.append({**_object(form, content, window), "id": tid})
+    body = _canonical({"form": BATCH, "items": objs})
+    return tids, MARK2 + body.decode("utf-8")
+
+
+def parse_batch(s: str) -> list[tuple[str, str, Item, int | None]]:
+    """Each item of a VEGA/2 batch as `parse_window` gives a VEGA/1 tag, in
+    order, or a TagError naming the rule it breaks."""
+    if not isinstance(s, str) or not s.startswith(MARK2):
+        raise TagError("a batch starts with the VEGA/2 marker")
+    body = s[len(MARK2):]
+    if MARK2 in body or MARK in body:
+        raise TagError("a VeGa marker is inside the batch, not at its start")
+    obj = _loads(body)
+    if not isinstance(obj, dict) or set(obj) != {"form", "items"} or obj.get("form") != BATCH:
+        raise TagError("a batch is exactly {\"form\": \"batch\", \"items\": [...]}")
+    items = obj["items"]
+    if not isinstance(items, list) or not 1 <= len(items) <= MAX_ITEMS:
+        raise TagError(f"a batch carries 1 to {MAX_ITEMS} items")
+    out = [_item(it) for it in items]
+    if len({tid for tid, *_ in out}) != len(out):
+        raise TagError("two items of the batch share an id: an id is one-time")
+    if _canonical(obj).decode("utf-8") != body:
+        raise TagError("the batch is not in canonical form (09 §9.1)")
+    return out
 
 
 def input_digest(form: str, content: Item | list[str], window: int | None = None) -> str:

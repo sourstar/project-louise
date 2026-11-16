@@ -47,6 +47,9 @@ UNAVAILABLE_MARK = "VeGa unavailable"
 #: and when THIS input cannot be embedded as asked (it cannot be cut at the
 #: window exactly): the input's own refusal, an error on its document
 INPUT_MARK = vtag.INPUT_MARK
+#: what a wrapper from before VEGA/2 answers a batch input (it reads no tag
+#: at its start): the endpoint is asked VEGA/1 from then on
+OLD_WRAPPER_MARK = "an input without a VeGa tag"
 
 
 class Refusal(RuntimeError):
@@ -64,20 +67,64 @@ class TaggedBatch:
     ids: tuple[str, ...]
     inputs: tuple[str, ...]          # what goes in the request's `input`, in order
     input_digests: tuple[str, ...]
+    #: how many items each input carries, in order: all 1 for VEGA/1; a VEGA/2
+    #: input carries up to `vtag.MAX_ITEMS` (docs/notes/vega-batch.md)
+    groups: tuple[int, ...] = ()
+    batched: bool = False
 
 
-def tag_batch(items: Sequence[vtag.Item], *, window: int | None = None) -> TaggedBatch:
+def tag_batch(items: Sequence[vtag.Item], *, window: int | None = None,
+              batched: bool = False) -> TaggedBatch:
     """Each item tagged with a fresh id: a text as `text`, a (first, second)
     tuple as `pair` (09 §9.3's input forms) — and `window`, the space's `ctx`,
-    for the encoder to cut it to (docs/notes/char-cut-truncation.md)."""
-    ids, inputs, digests = [], [], []
+    for the encoder to cut it to (docs/notes/char-cut-truncation.md).
+
+    `batched`: the items go as VEGA/2 batches, one input per `vtag.MAX_ITEMS`,
+    so LocalAI calls the wrapper once per batch, not once per item; the ids,
+    the input digests and the receipts are the items' own, as in VEGA/1."""
+    ids, inputs, digests, groups = [], [], [], []
+    shaped = []
     for item in items:
         form = vtag.TEXT if isinstance(item, str) else vtag.PAIR
-        tid, tagged = vtag.tag(form, item, window=window)
-        ids.append(tid)
-        inputs.append(tagged)
+        shaped.append((form, item, window))
         digests.append(vtag.input_digest(form, item, window))
-    return TaggedBatch(tuple(ids), tuple(inputs), tuple(digests))
+    if not batched:
+        for form, item, _ in shaped:
+            tid, tagged = vtag.tag(form, item, window=window)
+            ids.append(tid)
+            inputs.append(tagged)
+            groups.append(1)
+    else:
+        for i in range(0, len(shaped), vtag.MAX_ITEMS):
+            part = shaped[i:i + vtag.MAX_ITEMS]
+            tids, tagged = vtag.tag_batch(part)
+            ids.extend(tids)
+            inputs.append(tagged)
+            groups.append(len(part))
+    return TaggedBatch(tuple(ids), tuple(inputs), tuple(digests), tuple(groups), batched)
+
+
+def unpack(batch: TaggedBatch, vectors: Sequence[list[float] | bytes]) -> list[list[float] | bytes]:
+    """One vector per ITEM, in order: a VEGA/2 input's answer is its items'
+    vectors concatenated, split here into equal parts (the wrapper refuses a
+    batch whose vectors differ in length). A VEGA/1 batch passes as it is.
+    An answer that does not split is a Refusal."""
+    if not batch.batched:
+        return list(vectors)
+    if len(vectors) != len(batch.groups):
+        raise Refusal(f"{len(batch.groups)} batch input(s) were sent and {len(vectors)} "
+                      f"vectors came back")
+    out: list[list[float] | bytes] = []
+    for k, (n, v) in enumerate(zip(batch.groups, vectors)):
+        try:
+            raw = vtag.f32_bytes(v)
+        except ValueError as e:
+            raise Refusal(f"batch {k}: {e}") from None
+        if not raw or len(raw) % (4 * n):
+            raise Refusal(f"batch {k}: {len(raw)} bytes are not {n} equal float32 vectors")
+        size = len(raw) // n
+        out.extend(raw[j * size:(j + 1) * size] for j in range(n))
+    return out
 
 
 def _number(text: str) -> int | float:
@@ -188,7 +235,7 @@ def verify_response(batch: TaggedBatch, body: bytes | str, *, base_url: str,
                     ) -> tuple[list[list[float]], set[str]]:
     """LocalAI's answer to `batch.inputs`, checked against VeGa's receipts:
     `(vectors as floats, in input order, the run ids)`."""
-    vectors = parse_response(body)
+    vectors = unpack(batch, parse_response(body))
     if len(vectors) != len(batch.ids):
         raise Refusal(f"{len(batch.ids)} inputs were sent and {len(vectors)} vectors came "
                       f"back")
@@ -201,6 +248,12 @@ def is_deferral(status: int, text: str) -> bool:
     """Whether LocalAI's error answer is VeGa saying it could not deliver a
     receipt (the wrapper failed the call UNAVAILABLE): a deferral."""
     return status >= 500 and UNAVAILABLE_MARK in text
+
+
+def is_old_wrapper(status: int, text: str) -> bool:
+    """Whether LocalAI's error answer is a wrapper from before VEGA/2 refusing
+    a batch input: the endpoint is asked VEGA/1."""
+    return status >= 400 and OLD_WRAPPER_MARK in text
 
 
 def is_input_refusal(status: int, text: str) -> bool:

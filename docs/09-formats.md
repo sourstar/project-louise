@@ -1851,6 +1851,23 @@ in the form the backend reads. `VEGA/1` is the version of this protocol
 — the tag, the receipt and the routes together — and a change to any of
 them is `VEGA/2`.
 
+*The batch* (*amended 2026-11-16*, operator's "W", docs/notes/vega-batch.md:
+`VEGA/2`). One input may carry a whole request's inputs, so the runner calls
+the wrapper once per request instead of once per input:
+
+```
+"\x1eVEGA/2\x1e" + canonical JSON (§9.1) of {"form": "batch", "items": [<item>, …]}
+```
+
+where every item is exactly a `VEGA/1` tag's object — its `id`, its form, its
+content, its `window` where cut — 1 to 1,024 of them, every `id` distinct.
+An item's input digest and receipt are therefore those of the same input
+sent alone. The wrapper embeds the items in order, one backend call each,
+exactly as it embeds a `VEGA/1` input, and answers ONE final vector: the
+items' vectors concatenated in item order, each the same length. One item
+refused refuses the batch. The wrapper refuses a batch that is not exactly
+this, as it refuses a tag; it still accepts `VEGA/1` inputs.
+
 *The two digests.* The **input digest** is `H` of the canonical JSON of
 the tag's object without its `id` — `{"form": "text", "text": "…"}` or
 `{"form": "pair", "pair": ["…", "…"]}` — what was asked, independent of
@@ -1894,7 +1911,12 @@ way. The wrapper sends `{"kind": "run", "run_id", "run"}`, accepted only
 when `run_id` is `H` of `run`'s canonical JSON, and
 `{"kind": "receipt", "id", "run_id", "input_digest", "vector_digest"}`,
 refused with `unknown-run` when it names a run VeGa was never told; each
-connection is told its run before its first receipt. The answer is
+connection is told its run before its first receipt. A batch's receipts go
+in ONE line, `{"kind": "receipts", "run_id", "receipts": [{"id",
+"input_digest", "vector_digest"}, …]}` (1 to 1,024), held all or none and
+acknowledged once, before the batch's vector goes back (*amended
+2026-11-16*); a service that does not take that line is sent the receipts
+one line each. The answer is
 `{"ok": true}` or `{"ok": false, "code": "unknown-run" · "conflict" ·
 "invalid", "error": "<why>"}`. A line is at most 1 MiB.
 
@@ -1908,7 +1930,9 @@ land on their even neighbour, and of the shortest decimals that read
 back to each finite binary32, which is what the runner (Go) writes,
 these two are the only ones that do (exhaustive over all 4,278,190,080,
 `tools/vega_f32_json.go`) — and `-0` is negative zero, which a general
-reader takes for the integer 0. A vector that is not finite is not verified: it is the
+reader takes for the integer 0. The vector of a `VEGA/2` input is split into
+its items' vectors, equal parts in item order; one that does not split
+evenly is a refusal. A vector that is not finite is not verified: it is the
 engine's numeric failure, which the client asks again for. Louise then
 reads the receipts of the batch and takes its vectors only when every
 input has one, every input digest is the one she computed for what she
@@ -2437,6 +2461,7 @@ names one schema, the one its section fixes:
 | `louise-seals` | 1 | §9.15 |
 | `louise-rage-settings` | 1 | §9.19 |
 | VeGa tag (`\x1eVEGA/1\x1e`), receipt, receipts route | 1 | §9.12 (the version is in the tag's marker; neither the receipt nor the routes carry `kind` or `version`) |
+| VeGa batch (`\x1eVEGA/2\x1e`), the intake's `receipts` line | 2 | §9.12 (*amended 2026-11-16*: items are `VEGA/1` objects; their receipts are unchanged) |
 
 Two rows above were one row each until the figures amendment, and the
 split is the point: a schema pinned beside another moves only when its
