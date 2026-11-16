@@ -20,6 +20,11 @@ measured (published figures disagree).
 
 ### 2026-11-16
 
+- **Each codex.json read once per file** (München's py-spy after #720: the stats publisher 34 % and the share
+  fetch 14 % of the GIL, re-reading and re-serialising every Codex on every `load_all`). `collections.read_codex`
+  keeps the parsed Codex keyed on the file's inode (dev, ino, size, mtime_ns, ctime_ns): any path spelling the
+  file shares it, a rewrite or replace is read again, a bad file raises every time. Test Codex (3.6 KB): 488 µs
+  → 1.8 µs. AFTER on the node: the GIL holders and wikipedia's chunks/s, München, after the deploy.
 - **A recorded voice is the admin's only; every other reader hears a synthetic voice by language**
   (operator, 2026-11-16: "limit the cloned voices to the admin account and remove any reference to the cloned
   voices in the GitHub repo. For the users account allow only synthetic voices according to the language

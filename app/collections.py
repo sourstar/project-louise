@@ -9,6 +9,7 @@ required config or volume mount.
 """
 import math
 import os
+import threading
 import tomllib
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -569,6 +570,47 @@ def louise_root() -> Path:
     return Path(value) if value else config.DATA_DIR
 
 
+#: THE CODEX READ ONCE PER FILE, NOT ONCE PER LOAD (München, 2026-11-16: after
+#: #720, the worker's next GIL holders were the stats publisher, 34 %, and the
+#: share fetch, 14 %, both in `_load_one` → `codex.loads`, re-reading and
+#: re-serialising every collection's codex.json on every `load_all`). A Codex
+#: is immutable (a frozen dataclass of tuples) and `loads` is a pure function
+#: of the file's bytes, so its answer is kept per file and given again while
+#: the file is the same one: keyed on what its inode says — device, inode,
+#: size, mtime and ctime in ns — the file's physical identity whatever path
+#: spells it, so a file rewritten or replaced (a new inode, a new mtime) is
+#: read again at once (CLAUDE.md: caches key on physical identity, never on a
+#: name). A file that does not read raises again on every call: nothing is
+#: kept for it. Measured on the test Codex (3.6 KB): `loads` 488 µs, the
+#: kept answer 1.8 µs (a stat). THE STANDARD: a build tool's stat-based
+#: up-to-date check (make's mtime, git's index stat data); functools.lru_cache
+#: is not used because its key would be the path as spelled.
+CODEX_CACHE_FILES = 256
+_codex_kept: dict[tuple[int, ...], Any] = {}
+_codex_lock = threading.Lock()
+
+
+def _file_ident(p: Path) -> tuple[int, ...]:
+    st = p.stat()
+    return (st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns, st.st_ctime_ns)
+
+
+def read_codex(p: Path):
+    """`codex.loads(p.read_bytes())`, kept while the file is the same one."""
+    from .hold import codex as cx
+    ident = _file_ident(p)
+    with _codex_lock:
+        kept = _codex_kept.get(ident)
+    if kept is not None:
+        return kept
+    codex = cx.loads(p.read_bytes())
+    with _codex_lock:
+        if len(_codex_kept) >= CODEX_CACHE_FILES:
+            _codex_kept.pop(next(iter(_codex_kept)))      # the oldest kept
+        _codex_kept[ident] = codex
+    return codex
+
+
 def _codex_collection(path: Path, raw: dict[str, Any], name: str) -> Collection:
     """A collection the worker runs FROM ITS CODEX (07 §7.8).
 
@@ -602,7 +644,7 @@ def _codex_collection(path: Path, raw: dict[str, Any], name: str) -> Collection:
             f"{path}: names codex {want[:23]}… and there is no {p}. A "
             f"collection's Codex is the first line of its SHARD (07 §7.8); "
             f"without it there is nothing to run")
-    codex = cx.loads(p.read_bytes())
+    codex = read_codex(p)
     if codex.collection_id != want:
         raise ValueError(
             f"{path}: names codex {want[:23]}… and {p} is "
