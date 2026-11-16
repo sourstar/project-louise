@@ -138,10 +138,18 @@ def sync_source(con: sqlite3.Connection, source: ReferenceSource, state: RefSync
 
 
 def sync_all(con: sqlite3.Connection, ref_root: Path,
-             corpora: dict[str, tuple[Path, ...]] | None = None) -> dict[str, dict]:
+             corpora: dict[str, tuple[Path, ...]] | None = None,
+             only: tuple[str, ...] | None = None) -> dict[str, dict]:
+    """Every registered source, or the ones `only` names (an unknown name is
+    refused: a typo must not sync nothing and say nothing)."""
     from . import REFS_REGISTRY
+    if only:
+        unknown = sorted(set(only) - set(REFS_REGISTRY))
+        if unknown:
+            raise KeyError(f"no reference source named {', '.join(unknown)}")
     state = RefSyncState(ref_root=ref_root, corpora=corpora)
-    return {sid: sync_source(con, src, state) for sid, src in REFS_REGISTRY.items()}
+    return {sid: sync_source(con, src, state) for sid, src in REFS_REGISTRY.items()
+            if not only or sid in only}
 
 
 def held_corpora(collections=None) -> dict[str, tuple[Path, ...]]:

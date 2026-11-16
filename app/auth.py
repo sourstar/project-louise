@@ -115,9 +115,10 @@ def require_admin(request: Request) -> None:
 
 
 #: what a user may reach once users exist: Ask and the reader, their
-#: pictures and translation, the machine interfaces (05 §5.4), Connect.
+#: pictures and translation, the machine interfaces (05 §5.4), Connect,
+#: the read-only Library (/library, 2026-11-16).
 #: Login, Help, the peers' routes and the well-known documents stay open.
-READER_PATHS = ("/ask", "/read/", "/connect", "/api/ask/", "/api/search", "/api/verify",
+READER_PATHS = ("/ask", "/read/", "/connect", "/library", "/api/ask/", "/api/search", "/api/verify",
                 "/api/books", "/api/status", "/api/stats", "/api/events", "/v1/")
 
 

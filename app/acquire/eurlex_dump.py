@@ -22,7 +22,7 @@ a Formex wrapper stating another language is refused, as a fetch refuses it.
 
 WHAT IT NEVER DOES: overwrite a held unit (base or history) — a resumed pass
 skips what landed; move a unit; ask the network. A unit lands whole or not at
-all (cellar._land: staged, fsynced, swapped).
+all (cellar.land_many: staged, synced by group commit, swapped).
 
 THE HISTORY SLICE (operator, 2026-11-15: "Add history as a download and
 embedding option"). A unit built from the dump is the base, `lang=<l>/…`.
@@ -59,6 +59,10 @@ from typing import Callable
 #: (59 k works: ~300 tasks, ~20 min over 8 children); parsing each tree once
 #: per language instead would cost 24 times its ~50 min
 CHUNK = 200
+#: a batch of units landed by one group commit (cellar.land_many): at most
+#: this many, or this many bytes, held in a child at once
+LAND_BATCH = 64
+LAND_BYTES = 64 << 20
 #: the corpus root's record of the dump built into it: `{lang: its stated
 #: creation}`, written when a language's build has visited every work. A
 #: parser-4 collection asks Cellar nothing per unit before it names every
@@ -213,9 +217,21 @@ def build_chunk(mtd_paths: tuple[str, ...], uuids: list[str], langs: list[tuple[
     the dump states modified later is rebuilt from it, where it is held."""
     from ..plugins.eurlex import formex, from_tree, rdf
     from ..plugins.eurlex.source import LANGUAGES, unit_rel
-    from .cellar import _land, form_of
+    from .cellar import form_of, land_many
     root = Path(corpus)
     counts: dict[str, Counter] = {}
+    # GROUP COMMIT (cellar.land_many): units land in batches of LAND_BATCH or
+    # LAND_BYTES, two filesystem syncs a batch instead of one fsync a file
+    pending: list[tuple[Path, dict[str, bytes]]] = []
+    pending_rel: set[str] = set()
+    pending_bytes = 0
+
+    def flush() -> None:
+        nonlocal pending_bytes
+        land_many(root, pending)
+        pending.clear()
+        pending_rel.clear()
+        pending_bytes = 0
     trees: dict[str, tuple[dict, str] | str] = {}
     zips = _mtd(mtd_paths)
     for uuid in uuids:
@@ -251,6 +267,9 @@ def build_chunk(mtd_paths: tuple[str, ...], uuids: list[str], langs: list[tuple[
                 continue
             tree, celex = got
             rel = unit_rel(lang, celex)
+            if str(rel) in pending_rel:
+                c["held"] += 1                  # this chunk already lands it
+                continue
             at = _held_at(root, rel)
             if at is not None and not refresh:
                 c["held"] += 1
@@ -281,9 +300,15 @@ def build_chunk(mtd_paths: tuple[str, ...], uuids: list[str], langs: list[tuple[
                     c["formex-refused"] += 1
                     continue
             files[rdf.TREE_FILE] = rdf.dumps(scoped)
-            _land(at if at is not None else root / rel, files)
+            size = sum(len(b) for b in files.values())
+            pending.append((at if at is not None else root / rel, files))
+            pending_rel.add(str(rel))
+            pending_bytes += size
             c["refreshed" if at is not None else "built"] += 1
-            c["bytes"] += sum(len(b) for b in files.values())
+            c["bytes"] += size
+            if len(pending) >= LAND_BATCH or pending_bytes >= LAND_BYTES:
+                flush()
+    flush()
     return counts
 
 

@@ -205,3 +205,41 @@ def test_the_command_resolves_its_collection(monkeypatch, tmp_path):
     a = SimpleNamespace(collection="nope", dump=str(tmp_path), languages=None, carry_from=None)
     with pytest.raises(SystemExit, match="not a held eurlex collection"):
         louise.cmd_dev_eurlex_dump(a)
+
+
+# ---- group commit (München, 2026-11-16: one fsync a file, ~900,000 units on spinning disks)
+
+def test_a_batch_lands_with_two_syncs_and_no_fsync_per_file(tmp_path, monkeypatch):
+    import os as _os
+    events: list[str] = []
+    monkeypatch.setattr(cellar, "_syncfs", lambda p: events.append("sync"))
+    monkeypatch.setattr(_os, "fsync", lambda fd: events.append("fsync"))
+    real_replace = _os.replace
+    monkeypatch.setattr(_os, "replace", lambda a, b: (events.append("swap"), real_replace(a, b))[1])
+    old = tmp_path / "corpus" / "it" / "a"
+    old.mkdir(parents=True)
+    (old / "x.xml").write_bytes(b"old")
+    units = [(tmp_path / "corpus" / "it" / n, {"x.xml": n.encode(), cellar.TREE_MARK: b"tree"}) for n in "abc"]
+    cellar.land_many(tmp_path / "corpus", units)
+    assert "fsync" not in events
+    assert events.count("sync") == 2
+    first_swap = events.index("swap")
+    assert events.index("sync") < first_swap, "every byte synced before any unit becomes visible"
+    assert events[-1] == "sync", "the swaps synced after"
+    for n in "abc":
+        assert (tmp_path / "corpus" / "it" / n / "x.xml").read_bytes() == n.encode()
+    assert not list((tmp_path / "corpus" / "it").glob(".*")), "no staging or old directory left"
+
+
+def test_a_chunk_lands_in_batches_of_land_batch(tmp_path, monkeypatch):
+    calls: list[int] = []
+    monkeypatch.setattr(eurlex_dump, "LAND_BATCH", 2)
+    real = cellar.land_many
+    monkeypatch.setattr(cellar, "land_many", lambda root, units: (calls.append(len(units)), real(root, units))[1])
+    corpus = tmp_path / "corpus"
+    eurlex_dump._LANGS.clear()
+    eurlex_dump._MTDS.clear()
+    got = eurlex_dump.build(_dump(tmp_path / "dump"), corpus, None, log=lambda m: None)
+    built = sum(c["built"] for c in got.values())
+    assert built and sum(calls) == built
+    assert all(n <= 2 for n in calls)

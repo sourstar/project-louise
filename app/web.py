@@ -3127,6 +3127,21 @@ def library_page(request: Request):
     })
 
 
+@ask_router.get("/library", response_class=HTMLResponse)
+def user_library_page(request: Request):
+    """The users' Library (operator, 2026-11-16): one read-only card per
+    collection Ask searches (`load_public`, as `ask_page` lists them), each
+    the admin card's top — the same shelf (`_collection_shelf`) and the same
+    fragment, down to the dense bar, no ETA, no control. Gated like Ask
+    (auth.READER_PATHS)."""
+    measured = _worker_stats()
+    worker_state = node_state.worker_state()
+    shelves = [_collection_shelf(c, measured, worker_state) for c in collections_mod.load_public()]
+    return TEMPLATES.TemplateResponse(request, "user_library.html", {
+        "active": "library", "shelves": shelves, "worker_state": worker_state,
+        "readonly": True})
+
+
 class GrowBody(BaseModel):
     profile: str
     # opted-in EXTRA formats (spec.extras): None = keep the collection's
