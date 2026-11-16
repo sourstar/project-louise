@@ -132,7 +132,7 @@ def test_the_unit_fetcher_keeps_trees_beside_the_corpus_and_records_vs_origin_as
         cellar.UNITS.fetch(_spec(mock).endpoints[0], remote, corpus / remote.rel_path)
     assert mock.rdf_asked == [ACT]
     assert list((corpus / ".pack" / work_trees.KIND).rglob("*.json.gz")), "derived, beside the corpus"
-    cellar.UNITS.refetch(_spec(mock), src.unit_rel("fr", ACT), tmp_path / "again")
+    cellar.UNITS.refetch(_spec(mock), src.unit_rel("fr", ACT), tmp_path / "again", parser=3)
     assert mock.rdf_asked == [ACT, ACT], "the origin is asked, never the store"
 
 

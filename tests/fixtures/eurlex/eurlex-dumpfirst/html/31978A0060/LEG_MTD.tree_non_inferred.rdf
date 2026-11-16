@@ -1,0 +1,621 @@
+<rdf:RDF
+    xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+    xmlns:j.0="http://publications.europa.eu/ontology/cdm#"
+    xmlns:owl="http://www.w3.org/2002/07/owl#"
+    xmlns:j.1="http://www.w3.org/2004/02/skos/core#"
+    xmlns:j.2="http://publications.europa.eu/ontology/annotation#"
+    xmlns:j.3="http://publications.europa.eu/ontology/cdm/cmr#" > 
+  <rdf:Description rdf:about="http://publications.europa.eu/resource/cellar/9f8d2f10-1d07-40df-b89c-de49ee84556c.0004">
+    <owl:sameAs rdf:resource="http://publications.europa.eu/resource/uriserv/OJ.L_.1978.020.01.0028.01.NLD"/>
+    <owl:sameAs rdf:resource="http://publications.europa.eu/resource/oj/JOL_1978_020_R_0028_014.NLD"/>
+    <owl:sameAs rdf:resource="http://publications.europa.eu/resource/celex/31978A0060.NLD"/>
+    <j.3:lang rdf:datatype="http://www.w3.org/2001/XMLSchema#language">nld</j.3:lang>
+    <j.3:lang rdf:datatype="http://www.w3.org/2001/XMLSchema#language">nl</j.3:lang>
+    <j.3:lastModificationDate rdf:datatype="http://www.w3.org/2001/XMLSchema#dateTime">2014-04-19T09:08:39.911+02:00</j.3:lastModificationDate>
+  </rdf:Description>
+  <rdf:Description rdf:about="http://publications.europa.eu/resource/authority/fd_050/F-G">
+    <rdf:type rdf:resource="http://publications.europa.eu/ontology/cdm#ATTO_FD_050"/>
+    <j.1:inScheme rdf:resource="http://publications.europa.eu/resource/authority/fd_050/"/>
+  </rdf:Description>
+  <rdf:Description rdf:about="http://publications.europa.eu/resource/cellar/9f8d2f10-1d07-40df-b89c-de49ee84556c.0004.03">
+    <j.3:lastModificationDate rdf:datatype="http://www.w3.org/2001/XMLSchema#dateTime">2014-04-19T09:08:39.911+02:00</j.3:lastModificationDate>
+    <owl:sameAs rdf:resource="http://publications.europa.eu/resource/oj/JOL_1978_020_R_0028_014.NLD.print"/>
+    <owl:sameAs rdf:resource="http://publications.europa.eu/resource/celex/31978A0060.NLD.print"/>
+    <owl:sameAs rdf:resource="http://publications.europa.eu/resource/uriserv/OJ.L_.1978.020.01.0028.01.NLD.print"/>
+  </rdf:Description>
+  <rdf:Description rdf:about="http://publications.europa.eu/resource/oj/JOL_1978_020_R_0028_014.NLD">
+    <rdf:type rdf:resource="http://publications.europa.eu/ontology/cdm#expression"/>
+    <j.0:expression_uses_language rdf:resource="http://publications.europa.eu/resource/authority/language/NLD"/>
+    <j.0:expression_belongs_to_work rdf:resource="http://publications.europa.eu/resource/oj/JOL_1978_020_R_0028_014"/>
+    <j.0:expression_title_information_additional rdf:datatype="http://www.w3.org/2001/XMLSchema#string">CELEX1</j.0:expression_title_information_additional>
+    <j.0:expression_title rdf:datatype="http://www.w3.org/2001/XMLSchema#string">78/60/EEG: Advies van de Commissie van 14 december 1977 aan de Regering van de Franse Republiek over het ontwerp-besluit tot uitvoering van Richtlijn 76/135/EEG van de Raad van 20 januari 1976 inzake de wederzijdse erkenning van scheepsattesten voor binnenschepen</j.0:expression_title>
+    <j.2:build_info>cdm:CDM_2.1.7  tdm:1523  xslt:3945 saxon:9.0.0.1J JVM:1.6.0_29 metaconvJar:1.2.0 builddate:18/04/2014 13:00:02</j.2:build_info>
+  </rdf:Description>
+  <rdf:Description rdf:about="http://publications.europa.eu/resource/oj/JOL_1978_020_R_0028_014.NLD.html">
+    <rdf:type rdf:resource="http://publications.europa.eu/ontology/cdm#manifestation"/>
+    <j.2:build_info>cdm:CDM_2.1.7  tdm:1523  xslt:3945 saxon:9.0.0.1J JVM:1.6.0_29 metaconvJar:1.2.0 builddate:18/04/2014 13:00:02</j.2:build_info>
+    <j.0:manifestation_type rdf:datatype="http://www.w3.org/2001/XMLSchema#string">html</j.0:manifestation_type>
+    <j.0:manifestation_source-pool rdf:datatype="http://www.w3.org/2001/XMLSchema#string">src/eurlex/content</j.0:manifestation_source-pool>
+    <j.0:manifestation_manifests_expression rdf:resource="http://publications.europa.eu/resource/oj/JOL_1978_020_R_0028_014.NLD"/>
+  </rdf:Description>
+  <rdf:Description rdf:about="http://publications.europa.eu/resource/cellar/9f8d2f10-1d07-40df-b89c-de49ee84556c.0002.02">
+    <j.3:lastModificationDate rdf:datatype="http://www.w3.org/2001/XMLSchema#dateTime">2014-04-19T09:08:39.910+02:00</j.3:lastModificationDate>
+    <owl:sameAs rdf:resource="http://publications.europa.eu/resource/oj/JOL_1978_020_R_0028_014.DEU.html"/>
+    <owl:sameAs rdf:resource="http://publications.europa.eu/resource/celex/31978A0060.DEU.html"/>
+    <owl:sameAs rdf:resource="http://publications.europa.eu/resource/uriserv/OJ.L_.1978.020.01.0028.01.DEU.html"/>
+  </rdf:Description>
+  <rdf:Description rdf:about="http://publications.europa.eu/resource/cellar/9f8d2f10-1d07-40df-b89c-de49ee84556c.0006.02/DOC_1">
+    <j.3:manifestationMimeType>text/html</j.3:manifestationMimeType>
+    <rdf:type rdf:resource="http://publications.europa.eu/ontology/cdm#item"/>
+    <j.0:item_belongs_to_manifestation rdf:resource="http://publications.europa.eu/resource/cellar/9f8d2f10-1d07-40df-b89c-de49ee84556c.0006.02"/>
+    <j.0:item_identifier>DOC_1</j.0:item_identifier>
+    <owl:sameAs rdf:resource="http://publications.europa.eu/resource/oj/JOL_1978_020_R_0028_014.ENG.html.31978A0060en.html"/>
+    <owl:sameAs rdf:resource="http://publications.europa.eu/resource/celex/31978A0060.ENG.html.31978A0060en.html"/>
+    <owl:sameAs rdf:resource="http://publications.europa.eu/resource/uriserv/OJ.L_.1978.020.01.0028.01.ENG.html.31978A0060en.html"/>
+  </rdf:Description>
+  <rdf:Description rdf:about="http://publications.europa.eu/resource/oj/JOL_1978_020_R_0028_014.FRA.html">
+    <rdf:type rdf:resource="http://publications.europa.eu/ontology/cdm#manifestation"/>
+    <j.2:build_info>cdm:CDM_2.1.7  tdm:1523  xslt:3945 saxon:9.0.0.1J JVM:1.6.0_29 metaconvJar:1.2.0 builddate:18/04/2014 13:00:02</j.2:build_info>
+    <j.0:manifestation_type rdf:datatype="http://www.w3.org/2001/XMLSchema#string">html</j.0:manifestation_type>
+    <j.0:manifestation_source-pool rdf:datatype="http://www.w3.org/2001/XMLSchema#string">src/eurlex/content</j.0:manifestation_source-pool>
+    <j.0:manifestation_manifests_expression rdf:resource="http://publications.europa.eu/resource/oj/JOL_1978_020_R_0028_014.FRA"/>
+  </rdf:Description>
+  <rdf:Description rdf:about="http://publications.europa.eu/resource/cellar/9f8d2f10-1d07-40df-b89c-de49ee84556c.0006.01/DOC_1">
+    <j.3:manifestationMimeType>application/pdf;type=pdfa1b</j.3:manifestationMimeType>
+    <rdf:type rdf:resource="http://publications.europa.eu/ontology/cdm#item"/>
+    <j.0:item_belongs_to_manifestation rdf:resource="http://publications.europa.eu/resource/cellar/9f8d2f10-1d07-40df-b89c-de49ee84556c.0006.01"/>
+    <j.0:item_identifier>DOC_1</j.0:item_identifier>
+    <owl:sameAs rdf:resource="http://publications.europa.eu/resource/oj/JOL_1978_020_R_0028_014.ENG.pdfa1b.l_02019780125en00280028.pdf"/>
+    <owl:sameAs rdf:resource="http://publications.europa.eu/resource/celex/31978A0060.ENG.pdfa1b.l_02019780125en00280028.pdf"/>
+    <owl:sameAs rdf:resource="http://publications.europa.eu/resource/uriserv/OJ.L_.1978.020.01.0028.01.ENG.pdfa1b.l_02019780125en00280028.pdf"/>
+  </rdf:Description>
+  <rdf:Description rdf:about="http://publications.europa.eu/resource/cellar/9f8d2f10-1d07-40df-b89c-de49ee84556c.0003.02">
+    <j.3:lastModificationDate rdf:datatype="http://www.w3.org/2001/XMLSchema#dateTime">2014-04-19T09:08:39.910+02:00</j.3:lastModificationDate>
+    <owl:sameAs rdf:resource="http://publications.europa.eu/resource/oj/JOL_1978_020_R_0028_014.ITA.html"/>
+    <owl:sameAs rdf:resource="http://publications.europa.eu/resource/celex/31978A0060.ITA.html"/>
+    <owl:sameAs rdf:resource="http://publications.europa.eu/resource/uriserv/OJ.L_.1978.020.01.0028.01.ITA.html"/>
+  </rdf:Description>
+  <rdf:Description rdf:about="http://publications.europa.eu/resource/cellar/9f8d2f10-1d07-40df-b89c-de49ee84556c.0005.03">
+    <j.3:lastModificationDate rdf:datatype="http://www.w3.org/2001/XMLSchema#dateTime">2014-04-19T09:08:39.912+02:00</j.3:lastModificationDate>
+    <owl:sameAs rdf:resource="http://publications.europa.eu/resource/oj/JOL_1978_020_R_0028_014.DAN.print"/>
+    <owl:sameAs rdf:resource="http://publications.europa.eu/resource/celex/31978A0060.DAN.print"/>
+    <owl:sameAs rdf:resource="http://publications.europa.eu/resource/uriserv/OJ.L_.1978.020.01.0028.01.DAN.print"/>
+  </rdf:Description>
+  <rdf:Description rdf:about="http://publications.europa.eu/resource/cellar/9f8d2f10-1d07-40df-b89c-de49ee84556c.0003.01/DOC_1">
+    <j.3:manifestationMimeType>application/pdf;type=pdfa1b</j.3:manifestationMimeType>
+    <rdf:type rdf:resource="http://publications.europa.eu/ontology/cdm#item"/>
+    <j.0:item_belongs_to_manifestation rdf:resource="http://publications.europa.eu/resource/cellar/9f8d2f10-1d07-40df-b89c-de49ee84556c.0003.01"/>
+    <j.0:item_identifier>DOC_1</j.0:item_identifier>
+    <owl:sameAs rdf:resource="http://publications.europa.eu/resource/oj/JOL_1978_020_R_0028_014.ITA.pdfa1b.l_02019780125it00280028.pdf"/>
+    <owl:sameAs rdf:resource="http://publications.europa.eu/resource/celex/31978A0060.ITA.pdfa1b.l_02019780125it00280028.pdf"/>
+    <owl:sameAs rdf:resource="http://publications.europa.eu/resource/uriserv/OJ.L_.1978.020.01.0028.01.ITA.pdfa1b.l_02019780125it00280028.pdf"/>
+  </rdf:Description>
+  <rdf:Description rdf:about="http://publications.europa.eu/resource/cellar/9f8d2f10-1d07-40df-b89c-de49ee84556c.0001.01">
+    <j.3:lastModificationDate rdf:datatype="http://www.w3.org/2001/XMLSchema#dateTime">2014-04-19T09:08:39.910+02:00</j.3:lastModificationDate>
+    <owl:sameAs rdf:resource="http://publications.europa.eu/resource/oj/JOL_1978_020_R_0028_014.FRA.pdfa1b"/>
+    <owl:sameAs rdf:resource="http://publications.europa.eu/resource/celex/31978A0060.FRA.pdfa1b"/>
+    <owl:sameAs rdf:resource="http://publications.europa.eu/resource/uriserv/OJ.L_.1978.020.01.0028.01.FRA.pdfa1b"/>
+  </rdf:Description>
+  <rdf:Description rdf:about="http://publications.europa.eu/resource/cellar/9f8d2f10-1d07-40df-b89c-de49ee84556c.0003.02/DOC_1">
+    <j.3:manifestationMimeType>text/html</j.3:manifestationMimeType>
+    <rdf:type rdf:resource="http://publications.europa.eu/ontology/cdm#item"/>
+    <j.0:item_belongs_to_manifestation rdf:resource="http://publications.europa.eu/resource/cellar/9f8d2f10-1d07-40df-b89c-de49ee84556c.0003.02"/>
+    <j.0:item_identifier>DOC_1</j.0:item_identifier>
+    <owl:sameAs rdf:resource="http://publications.europa.eu/resource/oj/JOL_1978_020_R_0028_014.ITA.html.31978A0060it.html"/>
+    <owl:sameAs rdf:resource="http://publications.europa.eu/resource/celex/31978A0060.ITA.html.31978A0060it.html"/>
+    <owl:sameAs rdf:resource="http://publications.europa.eu/resource/uriserv/OJ.L_.1978.020.01.0028.01.ITA.html.31978A0060it.html"/>
+  </rdf:Description>
+  <rdf:Description rdf:about="http://publications.europa.eu/resource/oj/JOL_1978_020_R_0028_014.NLD.print">
+    <j.0:manifestation_official-journal_part_durability rdf:datatype="http://www.w3.org/2001/XMLSchema#string">DUR</j.0:manifestation_official-journal_part_durability>
+    <j.0:manifestation_part_of_manifestation rdf:resource="http://publications.europa.eu/resource/oj/JOL_1978_020_R.NLD.print"/>
+    <j.0:manifestation_official-journal_part_page_first rdf:datatype="http://www.w3.org/2001/XMLSchema#string">0028</j.0:manifestation_official-journal_part_page_first>
+    <j.0:manifestation_official-journal_part_legal_basis_printer rdf:datatype="http://www.w3.org/2001/XMLSchema#string">EEC</j.0:manifestation_official-journal_part_legal_basis_printer>
+    <j.0:manifestation_official-journal_part_section_oj rdf:datatype="http://www.w3.org/2001/XMLSchema#string">L2</j.0:manifestation_official-journal_part_section_oj>
+    <j.0:manifestation_official-journal_part_is_corrigendum_printer rdf:datatype="http://www.w3.org/2001/XMLSchema#string">O</j.0:manifestation_official-journal_part_is_corrigendum_printer>
+    <j.0:manifestation_official-journal_part_information_number rdf:datatype="http://www.w3.org/2001/XMLSchema#string">1978/60 (EEC)</j.0:manifestation_official-journal_part_information_number>
+    <rdf:type rdf:resource="http://publications.europa.eu/ontology/cdm#manifestation_official-journal_part"/>
+    <j.0:manifestation_official-journal_part_pages_total rdf:datatype="http://www.w3.org/2001/XMLSchema#string">1</j.0:manifestation_official-journal_part_pages_total>
+    <j.0:manifestation_official-journal_part_page_last rdf:datatype="http://www.w3.org/2001/XMLSchema#string">0028</j.0:manifestation_official-journal_part_page_last>
+    <j.0:manifestation_manifests_expression rdf:resource="http://publications.europa.eu/resource/oj/JOL_1978_020_R_0028_014.NLD"/>
+    <j.2:build_info>cdm:CDM_2.1.7  tdm:1523  xslt:3945 saxon:9.0.0.1J JVM:1.6.0_29 metaconvJar:1.2.0 builddate:18/04/2014 13:00:02</j.2:build_info>
+    <j.0:manifestation_official-journal_part_typedoc_printer rdf:datatype="http://www.w3.org/2001/XMLSchema#string">OPIN</j.0:manifestation_official-journal_part_typedoc_printer>
+    <j.0:manifestation_type rdf:datatype="http://www.w3.org/2001/XMLSchema#string">print</j.0:manifestation_type>
+  </rdf:Description>
+  <rdf:Description rdf:about="http://publications.europa.eu/resource/cellar/9f8d2f10-1d07-40df-b89c-de49ee84556c.0003">
+    <owl:sameAs rdf:resource="http://publications.europa.eu/resource/celex/31978A0060.ITA"/>
+    <owl:sameAs rdf:resource="http://publications.europa.eu/resource/oj/JOL_1978_020_R_0028_014.ITA"/>
+    <owl:sameAs rdf:resource="http://publications.europa.eu/resource/uriserv/OJ.L_.1978.020.01.0028.01.ITA"/>
+    <j.3:lang rdf:datatype="http://www.w3.org/2001/XMLSchema#language">ita</j.3:lang>
+    <j.3:lang rdf:datatype="http://www.w3.org/2001/XMLSchema#language">it</j.3:lang>
+    <j.3:lastModificationDate rdf:datatype="http://www.w3.org/2001/XMLSchema#dateTime">2014-04-19T09:08:39.910+02:00</j.3:lastModificationDate>
+  </rdf:Description>
+  <rdf:Description rdf:about="http://publications.europa.eu/resource/oj/JOL_1978_020_R_0028_014.ELL.print">
+    <rdf:type rdf:resource="http://publications.europa.eu/ontology/cdm#manifestation"/>
+    <j.2:build_info>cdm:CDM_2.1.7  tdm:1523  xslt:3945 saxon:9.0.0.1J JVM:1.6.0_29 metaconvJar:1.2.0 builddate:18/04/2014 13:00:02</j.2:build_info>
+    <j.0:manifestation_type rdf:datatype="http://www.w3.org/2001/XMLSchema#string">print</j.0:manifestation_type>
+    <j.0:manifestation_manifests_expression rdf:resource="http://publications.europa.eu/resource/oj/JOL_1978_020_R_0028_014.ELL"/>
+  </rdf:Description>
+  <rdf:Description rdf:about="http://publications.europa.eu/resource/cellar/9f8d2f10-1d07-40df-b89c-de49ee84556c.0006.03">
+    <j.3:lastModificationDate rdf:datatype="http://www.w3.org/2001/XMLSchema#dateTime">2014-04-19T09:08:39.912+02:00</j.3:lastModificationDate>
+    <owl:sameAs rdf:resource="http://publications.europa.eu/resource/oj/JOL_1978_020_R_0028_014.ENG.print"/>
+    <owl:sameAs rdf:resource="http://publications.europa.eu/resource/celex/31978A0060.ENG.print"/>
+    <owl:sameAs rdf:resource="http://publications.europa.eu/resource/uriserv/OJ.L_.1978.020.01.0028.01.ENG.print"/>
+  </rdf:Description>
+  <rdf:Description rdf:about="http://publications.europa.eu/resource/cellar/9f8d2f10-1d07-40df-b89c-de49ee84556c.0007">
+    <owl:sameAs rdf:resource="http://publications.europa.eu/resource/oj/JOL_1978_020_R_0028_014.ELL"/>
+    <owl:sameAs rdf:resource="http://publications.europa.eu/resource/celex/31978A0060.ELL"/>
+    <j.3:lang rdf:datatype="http://www.w3.org/2001/XMLSchema#language">ell</j.3:lang>
+    <j.3:lang rdf:datatype="http://www.w3.org/2001/XMLSchema#language">el</j.3:lang>
+    <j.3:lastModificationDate rdf:datatype="http://www.w3.org/2001/XMLSchema#dateTime">2014-04-19T09:08:39.912+02:00</j.3:lastModificationDate>
+  </rdf:Description>
+  <rdf:Description rdf:about="http://publications.europa.eu/resource/cellar/9f8d2f10-1d07-40df-b89c-de49ee84556c.0002.01/DOC_1">
+    <j.3:manifestationMimeType>application/pdf;type=pdfa1b</j.3:manifestationMimeType>
+    <rdf:type rdf:resource="http://publications.europa.eu/ontology/cdm#item"/>
+    <j.0:item_belongs_to_manifestation rdf:resource="http://publications.europa.eu/resource/cellar/9f8d2f10-1d07-40df-b89c-de49ee84556c.0002.01"/>
+    <j.0:item_identifier>DOC_1</j.0:item_identifier>
+    <owl:sameAs rdf:resource="http://publications.europa.eu/resource/oj/JOL_1978_020_R_0028_014.DEU.pdfa1b.l_02019780125de00280028.pdf"/>
+    <owl:sameAs rdf:resource="http://publications.europa.eu/resource/celex/31978A0060.DEU.pdfa1b.l_02019780125de00280028.pdf"/>
+    <owl:sameAs rdf:resource="http://publications.europa.eu/resource/uriserv/OJ.L_.1978.020.01.0028.01.DEU.pdfa1b.l_02019780125de00280028.pdf"/>
+  </rdf:Description>
+  <rdf:Description rdf:about="http://publications.europa.eu/resource/oj/JOL_1978_020_R_0028_014.ITA">
+    <rdf:type rdf:resource="http://publications.europa.eu/ontology/cdm#expression"/>
+    <j.0:expression_uses_language rdf:resource="http://publications.europa.eu/resource/authority/language/ITA"/>
+    <j.0:expression_belongs_to_work rdf:resource="http://publications.europa.eu/resource/oj/JOL_1978_020_R_0028_014"/>
+    <j.0:expression_title_information_additional rdf:datatype="http://www.w3.org/2001/XMLSchema#string">CELEX1</j.0:expression_title_information_additional>
+    <j.0:expression_title rdf:datatype="http://www.w3.org/2001/XMLSchema#string">78/60/CEE: Parere della Commissione, del 14 dicembre 1977, diretto al governo della Republica francese in merito al progetto di decreto relativo all'attuazione della direttiva 76/135/CEE del Consiglio, del 20 gennaio 1976, sul reciproco riconoscimento degli attestati di navigabilità rilasciati per le navi della navigazione interna</j.0:expression_title>
+    <j.2:build_info>cdm:CDM_2.1.7  tdm:1523  xslt:3945 saxon:9.0.0.1J JVM:1.6.0_29 metaconvJar:1.2.0 builddate:18/04/2014 13:00:02</j.2:build_info>
+  </rdf:Description>
+  <rdf:Description rdf:about="http://publications.europa.eu/resource/cellar/9f8d2f10-1d07-40df-b89c-de49ee84556c.0002.01">
+    <j.3:lastModificationDate rdf:datatype="http://www.w3.org/2001/XMLSchema#dateTime">2014-04-19T09:08:39.910+02:00</j.3:lastModificationDate>
+    <owl:sameAs rdf:resource="http://publications.europa.eu/resource/oj/JOL_1978_020_R_0028_014.DEU.pdfa1b"/>
+    <owl:sameAs rdf:resource="http://publications.europa.eu/resource/celex/31978A0060.DEU.pdfa1b"/>
+    <owl:sameAs rdf:resource="http://publications.europa.eu/resource/uriserv/OJ.L_.1978.020.01.0028.01.DEU.pdfa1b"/>
+  </rdf:Description>
+  <rdf:Description rdf:about="http://publications.europa.eu/resource/oj/JOL_1978_020_R_0028_014.DAN.print">
+    <j.0:manifestation_official-journal_part_is_corrigendum_printer rdf:datatype="http://www.w3.org/2001/XMLSchema#string">O</j.0:manifestation_official-journal_part_is_corrigendum_printer>
+    <j.0:manifestation_official-journal_part_section_oj rdf:datatype="http://www.w3.org/2001/XMLSchema#string">L2</j.0:manifestation_official-journal_part_section_oj>
+    <j.0:manifestation_official-journal_part_typedoc_printer rdf:datatype="http://www.w3.org/2001/XMLSchema#string">OPIN</j.0:manifestation_official-journal_part_typedoc_printer>
+    <j.0:manifestation_official-journal_part_durability rdf:datatype="http://www.w3.org/2001/XMLSchema#string">DUR</j.0:manifestation_official-journal_part_durability>
+    <j.0:manifestation_official-journal_part_page_last rdf:datatype="http://www.w3.org/2001/XMLSchema#string">0028</j.0:manifestation_official-journal_part_page_last>
+    <j.0:manifestation_official-journal_part_page_first rdf:datatype="http://www.w3.org/2001/XMLSchema#string">0028</j.0:manifestation_official-journal_part_page_first>
+    <j.0:manifestation_part_of_manifestation rdf:resource="http://publications.europa.eu/resource/oj/JOL_1978_020_R.DAN.print"/>
+    <j.0:manifestation_official-journal_part_pages_total rdf:datatype="http://www.w3.org/2001/XMLSchema#string">1</j.0:manifestation_official-journal_part_pages_total>
+    <j.0:manifestation_manifests_expression rdf:resource="http://publications.europa.eu/resource/oj/JOL_1978_020_R_0028_014.DAN"/>
+    <j.0:manifestation_type rdf:datatype="http://www.w3.org/2001/XMLSchema#string">print</j.0:manifestation_type>
+    <j.2:build_info>cdm:CDM_2.1.7  tdm:1523  xslt:3945 saxon:9.0.0.1J JVM:1.6.0_29 metaconvJar:1.2.0 builddate:18/04/2014 13:00:02</j.2:build_info>
+    <j.0:manifestation_official-journal_part_legal_basis_printer rdf:datatype="http://www.w3.org/2001/XMLSchema#string">EEC</j.0:manifestation_official-journal_part_legal_basis_printer>
+    <j.0:manifestation_official-journal_part_information_number rdf:datatype="http://www.w3.org/2001/XMLSchema#string">1978/60 (EEC)</j.0:manifestation_official-journal_part_information_number>
+    <rdf:type rdf:resource="http://publications.europa.eu/ontology/cdm#manifestation_official-journal_part"/>
+  </rdf:Description>
+  <rdf:Description rdf:about="http://publications.europa.eu/resource/oj/JOL_1978_020_R_0028_014.DAN.html">
+    <rdf:type rdf:resource="http://publications.europa.eu/ontology/cdm#manifestation"/>
+    <j.2:build_info>cdm:CDM_2.1.7  tdm:1523  xslt:3945 saxon:9.0.0.1J JVM:1.6.0_29 metaconvJar:1.2.0 builddate:18/04/2014 13:00:02</j.2:build_info>
+    <j.0:manifestation_type rdf:datatype="http://www.w3.org/2001/XMLSchema#string">html</j.0:manifestation_type>
+    <j.0:manifestation_source-pool rdf:datatype="http://www.w3.org/2001/XMLSchema#string">src/eurlex/content</j.0:manifestation_source-pool>
+    <j.0:manifestation_manifests_expression rdf:resource="http://publications.europa.eu/resource/oj/JOL_1978_020_R_0028_014.DAN"/>
+  </rdf:Description>
+  <rdf:Description rdf:nodeID="A0">
+    <rdf:type rdf:resource="http://www.w3.org/2002/07/owl#Axiom"/>
+    <j.2:build_info>cdm:CDM_2.1.7  tdm:1523  xslt:3945 saxon:9.0.0.1J JVM:1.6.0_29 metaconvJar:1.2.0 builddate:18/04/2014 13:00:02</j.2:build_info>
+    <j.2:comment_on_date>{DATNOT|http://publications.europa.eu/resource/authority/fd_335/DATNOT}</j.2:comment_on_date>
+    <j.2:type_of_date>{EV|http://publications.europa.eu/resource/authority/fd_335/EV}</j.2:type_of_date>
+    <owl:annotatedTarget rdf:datatype="http://www.w3.org/2001/XMLSchema#date">1977-12-21</owl:annotatedTarget>
+    <owl:annotatedProperty rdf:resource="http://publications.europa.eu/ontology/cdm#resource_legal_date_entry-into-force"/>
+    <owl:annotatedSource rdf:resource="http://publications.europa.eu/resource/celex/31978A0060"/>
+  </rdf:Description>
+  <rdf:Description rdf:about="http://publications.europa.eu/resource/cellar/9f8d2f10-1d07-40df-b89c-de49ee84556c.0003.01">
+    <j.3:lastModificationDate rdf:datatype="http://www.w3.org/2001/XMLSchema#dateTime">2014-04-19T09:08:39.911+02:00</j.3:lastModificationDate>
+    <owl:sameAs rdf:resource="http://publications.europa.eu/resource/oj/JOL_1978_020_R_0028_014.ITA.pdfa1b"/>
+    <owl:sameAs rdf:resource="http://publications.europa.eu/resource/celex/31978A0060.ITA.pdfa1b"/>
+    <owl:sameAs rdf:resource="http://publications.europa.eu/resource/uriserv/OJ.L_.1978.020.01.0028.01.ITA.pdfa1b"/>
+  </rdf:Description>
+  <rdf:Description rdf:about="http://publications.europa.eu/resource/oj/JOL_1978_020_R_0028_014.ENG.html">
+    <rdf:type rdf:resource="http://publications.europa.eu/ontology/cdm#manifestation"/>
+    <j.2:build_info>cdm:CDM_2.1.7  tdm:1523  xslt:3945 saxon:9.0.0.1J JVM:1.6.0_29 metaconvJar:1.2.0 builddate:18/04/2014 13:00:02</j.2:build_info>
+    <j.0:manifestation_type rdf:datatype="http://www.w3.org/2001/XMLSchema#string">html</j.0:manifestation_type>
+    <j.0:manifestation_source-pool rdf:datatype="http://www.w3.org/2001/XMLSchema#string">src/eurlex/content</j.0:manifestation_source-pool>
+    <j.0:manifestation_manifests_expression rdf:resource="http://publications.europa.eu/resource/oj/JOL_1978_020_R_0028_014.ENG"/>
+  </rdf:Description>
+  <rdf:Description rdf:about="http://publications.europa.eu/resource/oj/JOL_1978_020_R_0028_014.NLD.pdfa1b">
+    <rdf:type rdf:resource="http://publications.europa.eu/ontology/cdm#manifestation"/>
+    <j.2:build_info>cdm:CDM_2.1.7  tdm:1523  xslt:3945 saxon:9.0.0.1J JVM:1.6.0_29 metaconvJar:1.2.0 builddate:18/04/2014 13:00:02</j.2:build_info>
+    <j.0:manifestation_type rdf:datatype="http://www.w3.org/2001/XMLSchema#string">pdfa1b</j.0:manifestation_type>
+    <j.0:manifestation_source-pool rdf:datatype="http://www.w3.org/2001/XMLSchema#string">src/eudor</j.0:manifestation_source-pool>
+    <j.0:manifestation_manifests_expression rdf:resource="http://publications.europa.eu/resource/oj/JOL_1978_020_R_0028_014.NLD"/>
+  </rdf:Description>
+  <rdf:Description rdf:about="http://publications.europa.eu/resource/oj/JOL_1978_020_R_0028_014.FRA.pdfa1b">
+    <rdf:type rdf:resource="http://publications.europa.eu/ontology/cdm#manifestation"/>
+    <j.2:build_info>cdm:CDM_2.1.7  tdm:1523  xslt:3945 saxon:9.0.0.1J JVM:1.6.0_29 metaconvJar:1.2.0 builddate:18/04/2014 13:00:02</j.2:build_info>
+    <j.0:manifestation_type rdf:datatype="http://www.w3.org/2001/XMLSchema#string">pdfa1b</j.0:manifestation_type>
+    <j.0:manifestation_source-pool rdf:datatype="http://www.w3.org/2001/XMLSchema#string">src/eudor</j.0:manifestation_source-pool>
+    <j.0:manifestation_manifests_expression rdf:resource="http://publications.europa.eu/resource/oj/JOL_1978_020_R_0028_014.FRA"/>
+  </rdf:Description>
+  <rdf:Description rdf:about="http://publications.europa.eu/resource/cellar/9f8d2f10-1d07-40df-b89c-de49ee84556c.0001.02">
+    <j.3:lastModificationDate rdf:datatype="http://www.w3.org/2001/XMLSchema#dateTime">2014-04-19T09:08:39.910+02:00</j.3:lastModificationDate>
+    <owl:sameAs rdf:resource="http://publications.europa.eu/resource/oj/JOL_1978_020_R_0028_014.FRA.html"/>
+    <owl:sameAs rdf:resource="http://publications.europa.eu/resource/celex/31978A0060.FRA.html"/>
+    <owl:sameAs rdf:resource="http://publications.europa.eu/resource/uriserv/OJ.L_.1978.020.01.0028.01.FRA.html"/>
+  </rdf:Description>
+  <rdf:Description rdf:about="http://publications.europa.eu/resource/cellar/9f8d2f10-1d07-40df-b89c-de49ee84556c.0004.02/DOC_1">
+    <j.3:manifestationMimeType>text/html</j.3:manifestationMimeType>
+    <rdf:type rdf:resource="http://publications.europa.eu/ontology/cdm#item"/>
+    <j.0:item_belongs_to_manifestation rdf:resource="http://publications.europa.eu/resource/cellar/9f8d2f10-1d07-40df-b89c-de49ee84556c.0004.02"/>
+    <j.0:item_identifier>DOC_1</j.0:item_identifier>
+    <owl:sameAs rdf:resource="http://publications.europa.eu/resource/oj/JOL_1978_020_R_0028_014.NLD.html.31978A0060nl.html"/>
+    <owl:sameAs rdf:resource="http://publications.europa.eu/resource/celex/31978A0060.NLD.html.31978A0060nl.html"/>
+    <owl:sameAs rdf:resource="http://publications.europa.eu/resource/uriserv/OJ.L_.1978.020.01.0028.01.NLD.html.31978A0060nl.html"/>
+  </rdf:Description>
+  <rdf:Description rdf:about="http://publications.europa.eu/resource/oj/JOL_1978_020_R_0028_014.ITA.print">
+    <rdf:type rdf:resource="http://publications.europa.eu/ontology/cdm#manifestation_official-journal_part"/>
+    <j.0:manifestation_official-journal_part_pages_total rdf:datatype="http://www.w3.org/2001/XMLSchema#string">1</j.0:manifestation_official-journal_part_pages_total>
+    <j.0:manifestation_official-journal_part_information_number rdf:datatype="http://www.w3.org/2001/XMLSchema#string">1978/60 (EEC)</j.0:manifestation_official-journal_part_information_number>
+    <j.0:manifestation_type rdf:datatype="http://www.w3.org/2001/XMLSchema#string">print</j.0:manifestation_type>
+    <j.0:manifestation_official-journal_part_page_first rdf:datatype="http://www.w3.org/2001/XMLSchema#string">0028</j.0:manifestation_official-journal_part_page_first>
+    <j.0:manifestation_part_of_manifestation rdf:resource="http://publications.europa.eu/resource/oj/JOL_1978_020_R.ITA.print"/>
+    <j.0:manifestation_official-journal_part_durability rdf:datatype="http://www.w3.org/2001/XMLSchema#string">DUR</j.0:manifestation_official-journal_part_durability>
+    <j.0:manifestation_official-journal_part_section_oj rdf:datatype="http://www.w3.org/2001/XMLSchema#string">L2</j.0:manifestation_official-journal_part_section_oj>
+    <j.0:manifestation_manifests_expression rdf:resource="http://publications.europa.eu/resource/oj/JOL_1978_020_R_0028_014.ITA"/>
+    <j.0:manifestation_official-journal_part_typedoc_printer rdf:datatype="http://www.w3.org/2001/XMLSchema#string">OPIN</j.0:manifestation_official-journal_part_typedoc_printer>
+    <j.0:manifestation_official-journal_part_is_corrigendum_printer rdf:datatype="http://www.w3.org/2001/XMLSchema#string">O</j.0:manifestation_official-journal_part_is_corrigendum_printer>
+    <j.2:build_info>cdm:CDM_2.1.7  tdm:1523  xslt:3945 saxon:9.0.0.1J JVM:1.6.0_29 metaconvJar:1.2.0 builddate:18/04/2014 13:00:02</j.2:build_info>
+    <j.0:manifestation_official-journal_part_page_last rdf:datatype="http://www.w3.org/2001/XMLSchema#string">0028</j.0:manifestation_official-journal_part_page_last>
+    <j.0:manifestation_official-journal_part_legal_basis_printer rdf:datatype="http://www.w3.org/2001/XMLSchema#string">EEC</j.0:manifestation_official-journal_part_legal_basis_printer>
+  </rdf:Description>
+  <rdf:Description rdf:about="http://publications.europa.eu/resource/oj/JOL_1978_020_R_0028_014">
+    <j.0:resource_legal_id_obsolete_document rdf:datatype="http://www.w3.org/2001/XMLSchema#string">31978X0060</j.0:resource_legal_id_obsolete_document>
+    <j.0:resource_legal_id_celex rdf:datatype="http://www.w3.org/2001/XMLSchema#string">31978A0060</j.0:resource_legal_id_celex>
+    <j.0:work_created_by_agent rdf:resource="http://publications.europa.eu/resource/authority/corporate-body/COM"/>
+    <j.0:work_part_of_collection_document rdf:resource="http://publications.europa.eu/resource/authority/document-collection/JO"/>
+    <j.0:resource_legal_date_entry-into-force rdf:datatype="http://www.w3.org/2001/XMLSchema#date">1977-12-21</j.0:resource_legal_date_entry-into-force>
+    <j.0:work_is_about_concept_eurovoc rdf:resource="http://eurovoc.europa.eu/3115"/>
+    <j.0:resource_legal_id_sector rdf:datatype="http://www.w3.org/2001/XMLSchema#string">3</j.0:resource_legal_id_sector>
+    <j.0:work_date_document rdf:datatype="http://www.w3.org/2001/XMLSchema#date">1977-12-14</j.0:work_date_document>
+    <j.2:build_info>cdm:CDM_2.1.7  tdm:1523  xslt:3945 saxon:9.0.0.1J JVM:1.6.0_29 metaconvJar:1.2.0 builddate:18/04/2014 13:00:02</j.2:build_info>
+    <j.0:work_cites_work rdf:resource="http://publications.europa.eu/resource/celex/31976L0135"/>
+    <j.0:work_id_document rdf:datatype="http://www.w3.org/2001/XMLSchema#string">celex:31978A0060</j.0:work_id_document>
+    <j.0:work_id_obsolete_notice rdf:datatype="http://www.w3.org/2001/XMLSchema#positiveInteger">33865</j.0:work_id_obsolete_notice>
+    <j.0:resource_legal_addresses_institution rdf:resource="http://publications.europa.eu/resource/authority/fd_050/F-G"/>
+    <j.0:work_id_document rdf:datatype="http://www.w3.org/2001/XMLSchema#string">oj:JOL_1978_020_R_0028_014</j.0:work_id_document>
+    <j.0:work_is_about_concept_eurovoc rdf:resource="http://eurovoc.europa.eu/4511"/>
+    <j.0:work_is_about_concept_eurovoc rdf:resource="http://eurovoc.europa.eu/4509"/>
+    <j.0:resource_legal_type rdf:datatype="http://www.w3.org/2001/XMLSchema#string">A</j.0:resource_legal_type>
+    <j.0:work_date_creation rdf:datatype="http://www.w3.org/2001/XMLSchema#date">2014-04-18</j.0:work_date_creation>
+    <rdf:type rdf:resource="http://publications.europa.eu/ontology/cdm#opinion"/>
+    <j.0:resource_legal_comment_internal rdf:datatype="http://www.w3.org/2001/XMLSchema#string">VIG1O; # MAN1; PAG10028; # BAS1O; #</j.0:resource_legal_comment_internal>
+    <j.0:resource_legal_based_on_resource_legal rdf:resource="http://publications.europa.eu/resource/celex/11957E"/>
+    <j.0:resource_legal_date_end-of-validity rdf:datatype="http://www.w3.org/2001/XMLSchema#date">9999-12-31</j.0:resource_legal_date_end-of-validity>
+    <j.0:resource_legal_in-force rdf:datatype="http://www.w3.org/2001/XMLSchema#boolean">true</j.0:resource_legal_in-force>
+    <j.0:resource_legal_number_natural_celex rdf:datatype="http://www.w3.org/2001/XMLSchema#positiveInteger">0060</j.0:resource_legal_number_natural_celex>
+    <j.0:date_creation_legacy rdf:datatype="http://www.w3.org/2001/XMLSchema#date">1978-01-25</j.0:date_creation_legacy>
+    <j.0:legislation_secondary_date_notification rdf:datatype="http://www.w3.org/2001/XMLSchema#date">1977-12-21</j.0:legislation_secondary_date_notification>
+    <j.0:work_table-of-contents rdf:parseType="Literal">
+         <table-of-contents>
+            <p>0028 - 0028</p>
+         </table-of-contents>
+      </j.0:work_table-of-contents>
+    <j.0:work_has_resource-type rdf:resource="http://publications.europa.eu/resource/authority/resource-type/OPIN"/>
+    <j.0:work_is_about_concept_eurovoc rdf:resource="http://eurovoc.europa.eu/1085"/>
+    <j.0:resource_legal_published_in_official-journal rdf:resource="http://publications.europa.eu/resource/oj/JOL_1978_020_R"/>
+    <j.0:work_part_of_collection_document rdf:resource="http://publications.europa.eu/resource/authority/document-collection/CELEX"/>
+    <j.0:work_embargo rdf:datatype="http://www.w3.org/2001/XMLSchema#dateTime">1978-01-25T00:00:00+01:00</j.0:work_embargo>
+    <j.0:resource_legal_repertoire rdf:datatype="http://www.w3.org/2001/XMLSchema#string">REP</j.0:resource_legal_repertoire>
+    <j.0:resource_legal_based_on_concept_treaty rdf:resource="http://publications.europa.eu/resource/authority/treaty/TEEC_1957"/>
+    <j.0:work_is_about_concept_eurovoc rdf:resource="http://eurovoc.europa.eu/4515"/>
+    <rdf:type rdf:resource="http://publications.europa.eu/ontology/cdm#legislation_secondary"/>
+    <rdf:type rdf:resource="http://publications.europa.eu/ontology/cdm#resource_legal"/>
+    <j.0:work_date_creation_legacy rdf:datatype="http://www.w3.org/2001/XMLSchema#date">1978-01-25</j.0:work_date_creation_legacy>
+  </rdf:Description>
+  <rdf:Description rdf:about="http://publications.europa.eu/resource/cellar/9f8d2f10-1d07-40df-b89c-de49ee84556c.0004.01">
+    <j.3:lastModificationDate rdf:datatype="http://www.w3.org/2001/XMLSchema#dateTime">2014-04-19T09:08:39.911+02:00</j.3:lastModificationDate>
+    <owl:sameAs rdf:resource="http://publications.europa.eu/resource/oj/JOL_1978_020_R_0028_014.NLD.pdfa1b"/>
+    <owl:sameAs rdf:resource="http://publications.europa.eu/resource/celex/31978A0060.NLD.pdfa1b"/>
+    <owl:sameAs rdf:resource="http://publications.europa.eu/resource/uriserv/OJ.L_.1978.020.01.0028.01.NLD.pdfa1b"/>
+  </rdf:Description>
+  <rdf:Description rdf:about="http://publications.europa.eu/resource/cellar/9f8d2f10-1d07-40df-b89c-de49ee84556c.0002">
+    <owl:sameAs rdf:resource="http://publications.europa.eu/resource/uriserv/OJ.L_.1978.020.01.0028.01.DEU"/>
+    <owl:sameAs rdf:resource="http://publications.europa.eu/resource/celex/31978A0060.DEU"/>
+    <owl:sameAs rdf:resource="http://publications.europa.eu/resource/oj/JOL_1978_020_R_0028_014.DEU"/>
+    <j.3:lang rdf:datatype="http://www.w3.org/2001/XMLSchema#language">deu</j.3:lang>
+    <j.3:lang rdf:datatype="http://www.w3.org/2001/XMLSchema#language">de</j.3:lang>
+    <j.3:lastModificationDate rdf:datatype="http://www.w3.org/2001/XMLSchema#dateTime">2014-04-19T09:08:39.910+02:00</j.3:lastModificationDate>
+  </rdf:Description>
+  <rdf:Description rdf:about="http://publications.europa.eu/resource/oj/JOL_1978_020_R_0028_014.DAN">
+    <rdf:type rdf:resource="http://publications.europa.eu/ontology/cdm#expression"/>
+    <j.0:expression_uses_language rdf:resource="http://publications.europa.eu/resource/authority/language/DAN"/>
+    <j.0:expression_belongs_to_work rdf:resource="http://publications.europa.eu/resource/oj/JOL_1978_020_R_0028_014"/>
+    <j.0:expression_title_information_additional rdf:datatype="http://www.w3.org/2001/XMLSchema#string">CELEX1</j.0:expression_title_information_additional>
+    <j.0:expression_title rdf:datatype="http://www.w3.org/2001/XMLSchema#string">78/60/EØF: Kommissionens udtalelse af 14. december 1977 til regeringen for Den franske Republik vedrørende et udkast til »arrêté« om gennemførelse af Rådets direktiv 76/135/EØF af 20. januar 1976 om gensidig anerkendelse af fartsattester for fartøjer på indre vandveje</j.0:expression_title>
+    <j.2:build_info>cdm:CDM_2.1.7  tdm:1523  xslt:3945 saxon:9.0.0.1J JVM:1.6.0_29 metaconvJar:1.2.0 builddate:18/04/2014 13:00:02</j.2:build_info>
+  </rdf:Description>
+  <rdf:Description rdf:about="http://publications.europa.eu/resource/cellar/9f8d2f10-1d07-40df-b89c-de49ee84556c.0006.02">
+    <j.3:lastModificationDate rdf:datatype="http://www.w3.org/2001/XMLSchema#dateTime">2014-04-19T09:08:39.912+02:00</j.3:lastModificationDate>
+    <owl:sameAs rdf:resource="http://publications.europa.eu/resource/oj/JOL_1978_020_R_0028_014.ENG.html"/>
+    <owl:sameAs rdf:resource="http://publications.europa.eu/resource/celex/31978A0060.ENG.html"/>
+    <owl:sameAs rdf:resource="http://publications.europa.eu/resource/uriserv/OJ.L_.1978.020.01.0028.01.ENG.html"/>
+  </rdf:Description>
+  <rdf:Description rdf:about="http://publications.europa.eu/resource/cellar/9f8d2f10-1d07-40df-b89c-de49ee84556c.0006">
+    <owl:sameAs rdf:resource="http://publications.europa.eu/resource/oj/JOL_1978_020_R_0028_014.ENG"/>
+    <owl:sameAs rdf:resource="http://publications.europa.eu/resource/uriserv/OJ.L_.1978.020.01.0028.01.ENG"/>
+    <owl:sameAs rdf:resource="http://publications.europa.eu/resource/celex/31978A0060.ENG"/>
+    <j.3:lang rdf:datatype="http://www.w3.org/2001/XMLSchema#language">eng</j.3:lang>
+    <j.3:lang rdf:datatype="http://www.w3.org/2001/XMLSchema#language">en</j.3:lang>
+    <j.3:lastModificationDate rdf:datatype="http://www.w3.org/2001/XMLSchema#dateTime">2014-04-19T09:08:39.912+02:00</j.3:lastModificationDate>
+  </rdf:Description>
+  <rdf:Description rdf:about="http://publications.europa.eu/resource/oj/JOL_1978_020_R_0028_014.FRA">
+    <rdf:type rdf:resource="http://publications.europa.eu/ontology/cdm#expression"/>
+    <j.0:expression_uses_language rdf:resource="http://publications.europa.eu/resource/authority/language/FRA"/>
+    <j.0:expression_belongs_to_work rdf:resource="http://publications.europa.eu/resource/oj/JOL_1978_020_R_0028_014"/>
+    <j.0:expression_title_information_additional rdf:datatype="http://www.w3.org/2001/XMLSchema#string">CELEX1</j.0:expression_title_information_additional>
+    <j.0:expression_title rdf:datatype="http://www.w3.org/2001/XMLSchema#string">78/60/CEE: Avis de la Commission, du 14 décembre 1977, adressé au gouvernement de la République française au sujet du projet d'arrêté portant exécution de la directive 76/135/CEE du Conseil, du 20 janvier 1976, sur la reconnaissance réciproque des attestations de navigabilité délivrées pour les bateaux de la navigation intérieure</j.0:expression_title>
+    <j.2:build_info>cdm:CDM_2.1.7  tdm:1523  xslt:3945 saxon:9.0.0.1J JVM:1.6.0_29 metaconvJar:1.2.0 builddate:18/04/2014 13:00:02</j.2:build_info>
+  </rdf:Description>
+  <rdf:Description rdf:about="http://publications.europa.eu/resource/oj/JOL_1978_020_R_0028_014.DEU.html">
+    <rdf:type rdf:resource="http://publications.europa.eu/ontology/cdm#manifestation"/>
+    <j.2:build_info>cdm:CDM_2.1.7  tdm:1523  xslt:3945 saxon:9.0.0.1J JVM:1.6.0_29 metaconvJar:1.2.0 builddate:18/04/2014 13:00:02</j.2:build_info>
+    <j.0:manifestation_type rdf:datatype="http://www.w3.org/2001/XMLSchema#string">html</j.0:manifestation_type>
+    <j.0:manifestation_source-pool rdf:datatype="http://www.w3.org/2001/XMLSchema#string">src/eurlex/content</j.0:manifestation_source-pool>
+    <j.0:manifestation_manifests_expression rdf:resource="http://publications.europa.eu/resource/oj/JOL_1978_020_R_0028_014.DEU"/>
+  </rdf:Description>
+  <rdf:Description rdf:about="http://publications.europa.eu/resource/cellar/9f8d2f10-1d07-40df-b89c-de49ee84556c.0007.02">
+    <j.3:lastModificationDate rdf:datatype="http://www.w3.org/2001/XMLSchema#dateTime">2014-04-19T09:08:39.912+02:00</j.3:lastModificationDate>
+    <owl:sameAs rdf:resource="http://publications.europa.eu/resource/oj/JOL_1978_020_R_0028_014.ELL.print"/>
+    <owl:sameAs rdf:resource="http://publications.europa.eu/resource/celex/31978A0060.ELL.print"/>
+  </rdf:Description>
+  <rdf:Description rdf:about="http://publications.europa.eu/resource/celex/31978A0060">
+    <j.0:resource_legal_year rdf:datatype="http://www.w3.org/2001/XMLSchema#gYear">1978</j.0:resource_legal_year>
+    <j.0:resource_legal_number_natural rdf:datatype="http://www.w3.org/2001/XMLSchema#positiveInteger">60</j.0:resource_legal_number_natural>
+    <j.0:resource_legal_eli rdf:datatype="http://www.w3.org/2001/XMLSchema#anyURI">http://data.europa.eu/eli/opin/1978/60/oj</j.0:resource_legal_eli>
+    <j.0:resource_legal_is_about_concept_directory-code rdf:resource="http://publications.europa.eu/resource/authority/dir-eu-legal-act/07203020"/>
+    <j.0:resource_legal_is_about_subject-matter rdf:resource="http://publications.europa.eu/resource/authority/subject-matter/TRAN"/>
+    <rdf:type rdf:resource="http://publications.europa.eu/ontology/cdm#work"/>
+  </rdf:Description>
+  <rdf:Description rdf:about="http://publications.europa.eu/resource/cellar/9f8d2f10-1d07-40df-b89c-de49ee84556c.0001.01/DOC_1">
+    <j.3:manifestationMimeType>application/pdf;type=pdfa1b</j.3:manifestationMimeType>
+    <rdf:type rdf:resource="http://publications.europa.eu/ontology/cdm#item"/>
+    <j.0:item_belongs_to_manifestation rdf:resource="http://publications.europa.eu/resource/cellar/9f8d2f10-1d07-40df-b89c-de49ee84556c.0001.01"/>
+    <j.0:item_identifier>DOC_1</j.0:item_identifier>
+    <owl:sameAs rdf:resource="http://publications.europa.eu/resource/oj/JOL_1978_020_R_0028_014.FRA.pdfa1b.l_02019780125fr00280028.pdf"/>
+    <owl:sameAs rdf:resource="http://publications.europa.eu/resource/celex/31978A0060.FRA.pdfa1b.l_02019780125fr00280028.pdf"/>
+    <owl:sameAs rdf:resource="http://publications.europa.eu/resource/uriserv/OJ.L_.1978.020.01.0028.01.FRA.pdfa1b.l_02019780125fr00280028.pdf"/>
+  </rdf:Description>
+  <rdf:Description rdf:about="http://publications.europa.eu/resource/cellar/9f8d2f10-1d07-40df-b89c-de49ee84556c.0001.02/DOC_1">
+    <j.3:manifestationMimeType>text/html</j.3:manifestationMimeType>
+    <rdf:type rdf:resource="http://publications.europa.eu/ontology/cdm#item"/>
+    <j.0:item_belongs_to_manifestation rdf:resource="http://publications.europa.eu/resource/cellar/9f8d2f10-1d07-40df-b89c-de49ee84556c.0001.02"/>
+    <j.0:item_identifier>DOC_1</j.0:item_identifier>
+    <owl:sameAs rdf:resource="http://publications.europa.eu/resource/oj/JOL_1978_020_R_0028_014.FRA.html.31978A0060fr.html"/>
+    <owl:sameAs rdf:resource="http://publications.europa.eu/resource/celex/31978A0060.FRA.html.31978A0060fr.html"/>
+    <owl:sameAs rdf:resource="http://publications.europa.eu/resource/uriserv/OJ.L_.1978.020.01.0028.01.FRA.html.31978A0060fr.html"/>
+  </rdf:Description>
+  <rdf:Description rdf:about="http://publications.europa.eu/resource/cellar/9f8d2f10-1d07-40df-b89c-de49ee84556c.0005.01/DOC_1">
+    <j.3:manifestationMimeType>application/pdf;type=pdfa1b</j.3:manifestationMimeType>
+    <rdf:type rdf:resource="http://publications.europa.eu/ontology/cdm#item"/>
+    <j.0:item_belongs_to_manifestation rdf:resource="http://publications.europa.eu/resource/cellar/9f8d2f10-1d07-40df-b89c-de49ee84556c.0005.01"/>
+    <j.0:item_identifier>DOC_1</j.0:item_identifier>
+    <owl:sameAs rdf:resource="http://publications.europa.eu/resource/oj/JOL_1978_020_R_0028_014.DAN.pdfa1b.l_02019780125da00280028.pdf"/>
+    <owl:sameAs rdf:resource="http://publications.europa.eu/resource/celex/31978A0060.DAN.pdfa1b.l_02019780125da00280028.pdf"/>
+    <owl:sameAs rdf:resource="http://publications.europa.eu/resource/uriserv/OJ.L_.1978.020.01.0028.01.DAN.pdfa1b.l_02019780125da00280028.pdf"/>
+  </rdf:Description>
+  <rdf:Description rdf:about="http://publications.europa.eu/resource/oj/JOL_1978_020_R_0028_014.ENG.pdfa1b">
+    <rdf:type rdf:resource="http://publications.europa.eu/ontology/cdm#manifestation"/>
+    <j.2:build_info>cdm:CDM_2.1.7  tdm:1523  xslt:3945 saxon:9.0.0.1J JVM:1.6.0_29 metaconvJar:1.2.0 builddate:18/04/2014 13:00:02</j.2:build_info>
+    <j.0:manifestation_type rdf:datatype="http://www.w3.org/2001/XMLSchema#string">pdfa1b</j.0:manifestation_type>
+    <j.0:manifestation_source-pool rdf:datatype="http://www.w3.org/2001/XMLSchema#string">src/eudor</j.0:manifestation_source-pool>
+    <j.0:manifestation_manifests_expression rdf:resource="http://publications.europa.eu/resource/oj/JOL_1978_020_R_0028_014.ENG"/>
+  </rdf:Description>
+  <rdf:Description rdf:about="http://publications.europa.eu/resource/cellar/9f8d2f10-1d07-40df-b89c-de49ee84556c.0005.01">
+    <j.3:lastModificationDate rdf:datatype="http://www.w3.org/2001/XMLSchema#dateTime">2014-04-19T09:08:39.912+02:00</j.3:lastModificationDate>
+    <owl:sameAs rdf:resource="http://publications.europa.eu/resource/oj/JOL_1978_020_R_0028_014.DAN.pdfa1b"/>
+    <owl:sameAs rdf:resource="http://publications.europa.eu/resource/celex/31978A0060.DAN.pdfa1b"/>
+    <owl:sameAs rdf:resource="http://publications.europa.eu/resource/uriserv/OJ.L_.1978.020.01.0028.01.DAN.pdfa1b"/>
+  </rdf:Description>
+  <rdf:Description rdf:about="http://publications.europa.eu/resource/cellar/9f8d2f10-1d07-40df-b89c-de49ee84556c.0005.02/DOC_1">
+    <j.3:manifestationMimeType>text/html</j.3:manifestationMimeType>
+    <rdf:type rdf:resource="http://publications.europa.eu/ontology/cdm#item"/>
+    <j.0:item_belongs_to_manifestation rdf:resource="http://publications.europa.eu/resource/cellar/9f8d2f10-1d07-40df-b89c-de49ee84556c.0005.02"/>
+    <j.0:item_identifier>DOC_1</j.0:item_identifier>
+    <owl:sameAs rdf:resource="http://publications.europa.eu/resource/oj/JOL_1978_020_R_0028_014.DAN.html.31978A0060da.html"/>
+    <owl:sameAs rdf:resource="http://publications.europa.eu/resource/celex/31978A0060.DAN.html.31978A0060da.html"/>
+    <owl:sameAs rdf:resource="http://publications.europa.eu/resource/uriserv/OJ.L_.1978.020.01.0028.01.DAN.html.31978A0060da.html"/>
+  </rdf:Description>
+  <rdf:Description rdf:about="http://publications.europa.eu/resource/oj/JOL_1978_020_R_0028_014.ELL">
+    <rdf:type rdf:resource="http://publications.europa.eu/ontology/cdm#expression"/>
+    <j.0:expression_uses_language rdf:resource="http://publications.europa.eu/resource/authority/language/ELL"/>
+    <j.0:expression_belongs_to_work rdf:resource="http://publications.europa.eu/resource/oj/JOL_1978_020_R_0028_014"/>
+    <j.0:expression_title_information_additional rdf:datatype="http://www.w3.org/2001/XMLSchema#string">CELEX1</j.0:expression_title_information_additional>
+    <j.0:expression_title rdf:datatype="http://www.w3.org/2001/XMLSchema#string">78/60/ΕΟΚ: Γνώμη της Επιτροπής, της 14ης Δεκεμβρίου 1977, που απευθύνεται στην κυβέρνηση της Γαλλικής Δημοκρατίας σχετικά με σχέδιο διατάγματος περί εκτέλεσης της οδηγίας 76/135/ΕΟΚ του Συμβουλίου, της 20ής Ιανουαρίου 1976, σχετικά με την αμοιβαία αναγνώριση των βεβαιώσεων πλωϊμότητας που εκδίδονται για τα πλοία ναυσιπλοΐας εσωτερικών υδάτων</j.0:expression_title>
+    <j.2:build_info>cdm:CDM_2.1.7  tdm:1523  xslt:3945 saxon:9.0.0.1J JVM:1.6.0_29 metaconvJar:1.2.0 builddate:18/04/2014 13:00:02</j.2:build_info>
+  </rdf:Description>
+  <rdf:Description rdf:about="http://publications.europa.eu/resource/oj/JOL_1978_020_R_0028_014.DEU.print">
+    <j.2:build_info>cdm:CDM_2.1.7  tdm:1523  xslt:3945 saxon:9.0.0.1J JVM:1.6.0_29 metaconvJar:1.2.0 builddate:18/04/2014 13:00:02</j.2:build_info>
+    <rdf:type rdf:resource="http://publications.europa.eu/ontology/cdm#manifestation_official-journal_part"/>
+    <j.0:manifestation_official-journal_part_legal_basis_printer rdf:datatype="http://www.w3.org/2001/XMLSchema#string">EEC</j.0:manifestation_official-journal_part_legal_basis_printer>
+    <j.0:manifestation_part_of_manifestation rdf:resource="http://publications.europa.eu/resource/oj/JOL_1978_020_R.DEU.print"/>
+    <j.0:manifestation_official-journal_part_section_oj rdf:datatype="http://www.w3.org/2001/XMLSchema#string">L2</j.0:manifestation_official-journal_part_section_oj>
+    <j.0:manifestation_official-journal_part_durability rdf:datatype="http://www.w3.org/2001/XMLSchema#string">DUR</j.0:manifestation_official-journal_part_durability>
+    <j.0:manifestation_official-journal_part_page_last rdf:datatype="http://www.w3.org/2001/XMLSchema#string">0028</j.0:manifestation_official-journal_part_page_last>
+    <j.0:manifestation_type rdf:datatype="http://www.w3.org/2001/XMLSchema#string">print</j.0:manifestation_type>
+    <j.0:manifestation_official-journal_part_typedoc_printer rdf:datatype="http://www.w3.org/2001/XMLSchema#string">OPIN</j.0:manifestation_official-journal_part_typedoc_printer>
+    <j.0:manifestation_official-journal_part_pages_total rdf:datatype="http://www.w3.org/2001/XMLSchema#string">1</j.0:manifestation_official-journal_part_pages_total>
+    <j.0:manifestation_official-journal_part_information_number rdf:datatype="http://www.w3.org/2001/XMLSchema#string">1978/60 (EEC)</j.0:manifestation_official-journal_part_information_number>
+    <j.0:manifestation_official-journal_part_is_corrigendum_printer rdf:datatype="http://www.w3.org/2001/XMLSchema#string">O</j.0:manifestation_official-journal_part_is_corrigendum_printer>
+    <j.0:manifestation_official-journal_part_page_first rdf:datatype="http://www.w3.org/2001/XMLSchema#string">0028</j.0:manifestation_official-journal_part_page_first>
+    <j.0:manifestation_manifests_expression rdf:resource="http://publications.europa.eu/resource/oj/JOL_1978_020_R_0028_014.DEU"/>
+  </rdf:Description>
+  <rdf:Description rdf:about="http://publications.europa.eu/resource/oj/JOL_1978_020_R_0028_014.ITA.html">
+    <rdf:type rdf:resource="http://publications.europa.eu/ontology/cdm#manifestation"/>
+    <j.2:build_info>cdm:CDM_2.1.7  tdm:1523  xslt:3945 saxon:9.0.0.1J JVM:1.6.0_29 metaconvJar:1.2.0 builddate:18/04/2014 13:00:02</j.2:build_info>
+    <j.0:manifestation_type rdf:datatype="http://www.w3.org/2001/XMLSchema#string">html</j.0:manifestation_type>
+    <j.0:manifestation_source-pool rdf:datatype="http://www.w3.org/2001/XMLSchema#string">src/eurlex/content</j.0:manifestation_source-pool>
+    <j.0:manifestation_manifests_expression rdf:resource="http://publications.europa.eu/resource/oj/JOL_1978_020_R_0028_014.ITA"/>
+  </rdf:Description>
+  <rdf:Description rdf:about="http://publications.europa.eu/resource/cellar/9f8d2f10-1d07-40df-b89c-de49ee84556c.0001.03">
+    <j.3:lastModificationDate rdf:datatype="http://www.w3.org/2001/XMLSchema#dateTime">2014-04-19T09:08:39.910+02:00</j.3:lastModificationDate>
+    <owl:sameAs rdf:resource="http://publications.europa.eu/resource/oj/JOL_1978_020_R_0028_014.FRA.print"/>
+    <owl:sameAs rdf:resource="http://publications.europa.eu/resource/celex/31978A0060.FRA.print"/>
+    <owl:sameAs rdf:resource="http://publications.europa.eu/resource/uriserv/OJ.L_.1978.020.01.0028.01.FRA.print"/>
+  </rdf:Description>
+  <rdf:Description rdf:about="http://publications.europa.eu/resource/cellar/9f8d2f10-1d07-40df-b89c-de49ee84556c.0004.02">
+    <j.3:lastModificationDate rdf:datatype="http://www.w3.org/2001/XMLSchema#dateTime">2014-04-19T09:08:39.911+02:00</j.3:lastModificationDate>
+    <owl:sameAs rdf:resource="http://publications.europa.eu/resource/oj/JOL_1978_020_R_0028_014.NLD.html"/>
+    <owl:sameAs rdf:resource="http://publications.europa.eu/resource/celex/31978A0060.NLD.html"/>
+    <owl:sameAs rdf:resource="http://publications.europa.eu/resource/uriserv/OJ.L_.1978.020.01.0028.01.NLD.html"/>
+  </rdf:Description>
+  <rdf:Description rdf:about="http://publications.europa.eu/resource/authority/corporate-body/COM">
+    <rdf:type rdf:resource="http://publications.europa.eu/ontology/cdm#institution"/>
+    <j.1:inScheme rdf:resource="http://publications.europa.eu/resource/authority/corporate-body/"/>
+  </rdf:Description>
+  <rdf:Description rdf:about="http://publications.europa.eu/resource/oj/JOL_1978_020_R_0028_014.DEU.pdfa1b">
+    <rdf:type rdf:resource="http://publications.europa.eu/ontology/cdm#manifestation"/>
+    <j.2:build_info>cdm:CDM_2.1.7  tdm:1523  xslt:3945 saxon:9.0.0.1J JVM:1.6.0_29 metaconvJar:1.2.0 builddate:18/04/2014 13:00:02</j.2:build_info>
+    <j.0:manifestation_type rdf:datatype="http://www.w3.org/2001/XMLSchema#string">pdfa1b</j.0:manifestation_type>
+    <j.0:manifestation_source-pool rdf:datatype="http://www.w3.org/2001/XMLSchema#string">src/eudor</j.0:manifestation_source-pool>
+    <j.0:manifestation_manifests_expression rdf:resource="http://publications.europa.eu/resource/oj/JOL_1978_020_R_0028_014.DEU"/>
+  </rdf:Description>
+  <rdf:Description rdf:about="http://publications.europa.eu/resource/cellar/9f8d2f10-1d07-40df-b89c-de49ee84556c.0001">
+    <owl:sameAs rdf:resource="http://publications.europa.eu/resource/oj/JOL_1978_020_R_0028_014.FRA"/>
+    <owl:sameAs rdf:resource="http://publications.europa.eu/resource/uriserv/OJ.L_.1978.020.01.0028.01.FRA"/>
+    <owl:sameAs rdf:resource="http://publications.europa.eu/resource/celex/31978A0060.FRA"/>
+    <j.3:lang rdf:datatype="http://www.w3.org/2001/XMLSchema#language">fra</j.3:lang>
+    <j.3:lang rdf:datatype="http://www.w3.org/2001/XMLSchema#language">fr</j.3:lang>
+    <j.3:lastModificationDate rdf:datatype="http://www.w3.org/2001/XMLSchema#dateTime">2014-04-19T09:08:39.910+02:00</j.3:lastModificationDate>
+  </rdf:Description>
+  <rdf:Description rdf:about="http://publications.europa.eu/resource/oj/JOL_1978_020_R_0028_014.DAN.pdfa1b">
+    <rdf:type rdf:resource="http://publications.europa.eu/ontology/cdm#manifestation"/>
+    <j.2:build_info>cdm:CDM_2.1.7  tdm:1523  xslt:3945 saxon:9.0.0.1J JVM:1.6.0_29 metaconvJar:1.2.0 builddate:18/04/2014 13:00:02</j.2:build_info>
+    <j.0:manifestation_type rdf:datatype="http://www.w3.org/2001/XMLSchema#string">pdfa1b</j.0:manifestation_type>
+    <j.0:manifestation_source-pool rdf:datatype="http://www.w3.org/2001/XMLSchema#string">src/eudor</j.0:manifestation_source-pool>
+    <j.0:manifestation_manifests_expression rdf:resource="http://publications.europa.eu/resource/oj/JOL_1978_020_R_0028_014.DAN"/>
+  </rdf:Description>
+  <rdf:Description rdf:about="http://publications.europa.eu/resource/cellar/9f8d2f10-1d07-40df-b89c-de49ee84556c">
+    <j.3:lastModificationDate rdf:datatype="http://www.w3.org/2001/XMLSchema#dateTime">2022-08-15T14:24:17.455+02:00</j.3:lastModificationDate>
+    <owl:sameAs rdf:resource="http://publications.europa.eu/resource/celex/31978A0060"/>
+    <owl:sameAs rdf:resource="http://publications.europa.eu/resource/oj/JOL_1978_020_R_0028_014"/>
+    <owl:sameAs rdf:resource="http://publications.europa.eu/resource/eli/opin/1978/60/oj"/>
+  </rdf:Description>
+  <rdf:Description rdf:about="http://publications.europa.eu/resource/cellar/9f8d2f10-1d07-40df-b89c-de49ee84556c.0007.01">
+    <j.3:lastModificationDate rdf:datatype="http://www.w3.org/2001/XMLSchema#dateTime">2014-04-19T09:08:39.912+02:00</j.3:lastModificationDate>
+    <owl:sameAs rdf:resource="http://publications.europa.eu/resource/oj/JOL_1978_020_R_0028_014.ELL.html"/>
+    <owl:sameAs rdf:resource="http://publications.europa.eu/resource/celex/31978A0060.ELL.html"/>
+  </rdf:Description>
+  <rdf:Description rdf:about="http://publications.europa.eu/resource/cellar/9f8d2f10-1d07-40df-b89c-de49ee84556c.0006.01">
+    <j.3:lastModificationDate rdf:datatype="http://www.w3.org/2001/XMLSchema#dateTime">2014-04-19T09:08:39.912+02:00</j.3:lastModificationDate>
+    <owl:sameAs rdf:resource="http://publications.europa.eu/resource/oj/JOL_1978_020_R_0028_014.ENG.pdfa1b"/>
+    <owl:sameAs rdf:resource="http://publications.europa.eu/resource/celex/31978A0060.ENG.pdfa1b"/>
+    <owl:sameAs rdf:resource="http://publications.europa.eu/resource/uriserv/OJ.L_.1978.020.01.0028.01.ENG.pdfa1b"/>
+  </rdf:Description>
+  <rdf:Description rdf:about="http://publications.europa.eu/resource/oj/JOL_1978_020_R_0028_014.DEU">
+    <rdf:type rdf:resource="http://publications.europa.eu/ontology/cdm#expression"/>
+    <j.0:expression_uses_language rdf:resource="http://publications.europa.eu/resource/authority/language/DEU"/>
+    <j.0:expression_belongs_to_work rdf:resource="http://publications.europa.eu/resource/oj/JOL_1978_020_R_0028_014"/>
+    <j.0:expression_title_information_additional rdf:datatype="http://www.w3.org/2001/XMLSchema#string">CELEX1</j.0:expression_title_information_additional>
+    <j.0:expression_title rdf:datatype="http://www.w3.org/2001/XMLSchema#string">78/60/EWG: Stellungnahme der Kommission vom 14. Dezember 1977 an die Regierung der Französischen Republik zum Entwurf einer Verordnung für die Durchführung der Richtlinie 76/135/EWG des Rates vom 20. Januar 1976 über die gegenseitige Anerkennung von Schiffsattesten für Binnenschiffe</j.0:expression_title>
+    <j.2:build_info>cdm:CDM_2.1.7  tdm:1523  xslt:3945 saxon:9.0.0.1J JVM:1.6.0_29 metaconvJar:1.2.0 builddate:18/04/2014 13:00:02</j.2:build_info>
+  </rdf:Description>
+  <rdf:Description rdf:about="http://publications.europa.eu/resource/cellar/9f8d2f10-1d07-40df-b89c-de49ee84556c.0005">
+    <owl:sameAs rdf:resource="http://publications.europa.eu/resource/uriserv/OJ.L_.1978.020.01.0028.01.DAN"/>
+    <owl:sameAs rdf:resource="http://publications.europa.eu/resource/celex/31978A0060.DAN"/>
+    <owl:sameAs rdf:resource="http://publications.europa.eu/resource/oj/JOL_1978_020_R_0028_014.DAN"/>
+    <j.3:lang rdf:datatype="http://www.w3.org/2001/XMLSchema#language">dan</j.3:lang>
+    <j.3:lang rdf:datatype="http://www.w3.org/2001/XMLSchema#language">da</j.3:lang>
+    <j.3:lastModificationDate rdf:datatype="http://www.w3.org/2001/XMLSchema#dateTime">2014-04-19T09:08:39.911+02:00</j.3:lastModificationDate>
+  </rdf:Description>
+  <rdf:Description rdf:about="http://publications.europa.eu/resource/cellar/9f8d2f10-1d07-40df-b89c-de49ee84556c.0007.01/DOC_1">
+    <j.3:manifestationMimeType>text/html</j.3:manifestationMimeType>
+    <rdf:type rdf:resource="http://publications.europa.eu/ontology/cdm#item"/>
+    <j.0:item_belongs_to_manifestation rdf:resource="http://publications.europa.eu/resource/cellar/9f8d2f10-1d07-40df-b89c-de49ee84556c.0007.01"/>
+    <j.0:item_identifier>DOC_1</j.0:item_identifier>
+    <owl:sameAs rdf:resource="http://publications.europa.eu/resource/oj/JOL_1978_020_R_0028_014.ELL.html.31978A0060el.html"/>
+    <owl:sameAs rdf:resource="http://publications.europa.eu/resource/celex/31978A0060.ELL.html.31978A0060el.html"/>
+  </rdf:Description>
+  <rdf:Description rdf:about="http://publications.europa.eu/resource/cellar/9f8d2f10-1d07-40df-b89c-de49ee84556c.0002.02/DOC_1">
+    <j.3:manifestationMimeType>text/html</j.3:manifestationMimeType>
+    <rdf:type rdf:resource="http://publications.europa.eu/ontology/cdm#item"/>
+    <j.0:item_belongs_to_manifestation rdf:resource="http://publications.europa.eu/resource/cellar/9f8d2f10-1d07-40df-b89c-de49ee84556c.0002.02"/>
+    <j.0:item_identifier>DOC_1</j.0:item_identifier>
+    <owl:sameAs rdf:resource="http://publications.europa.eu/resource/oj/JOL_1978_020_R_0028_014.DEU.html.31978A0060de.html"/>
+    <owl:sameAs rdf:resource="http://publications.europa.eu/resource/celex/31978A0060.DEU.html.31978A0060de.html"/>
+    <owl:sameAs rdf:resource="http://publications.europa.eu/resource/uriserv/OJ.L_.1978.020.01.0028.01.DEU.html.31978A0060de.html"/>
+  </rdf:Description>
+  <rdf:Description rdf:about="http://publications.europa.eu/resource/cellar/9f8d2f10-1d07-40df-b89c-de49ee84556c.0002.03">
+    <j.3:lastModificationDate rdf:datatype="http://www.w3.org/2001/XMLSchema#dateTime">2014-04-19T09:08:39.910+02:00</j.3:lastModificationDate>
+    <owl:sameAs rdf:resource="http://publications.europa.eu/resource/oj/JOL_1978_020_R_0028_014.DEU.print"/>
+    <owl:sameAs rdf:resource="http://publications.europa.eu/resource/celex/31978A0060.DEU.print"/>
+    <owl:sameAs rdf:resource="http://publications.europa.eu/resource/uriserv/OJ.L_.1978.020.01.0028.01.DEU.print"/>
+  </rdf:Description>
+  <rdf:Description rdf:about="http://publications.europa.eu/resource/oj/JOL_1978_020_R_0028_014.ENG">
+    <rdf:type rdf:resource="http://publications.europa.eu/ontology/cdm#expression"/>
+    <j.0:expression_uses_language rdf:resource="http://publications.europa.eu/resource/authority/language/ENG"/>
+    <j.0:expression_belongs_to_work rdf:resource="http://publications.europa.eu/resource/oj/JOL_1978_020_R_0028_014"/>
+    <j.0:expression_title_information_additional rdf:datatype="http://www.w3.org/2001/XMLSchema#string">CELEX1</j.0:expression_title_information_additional>
+    <j.0:expression_title rdf:datatype="http://www.w3.org/2001/XMLSchema#string">78/60/EEC: Commission Opinion of 14 December 1977 addressed to the Government of the French Republic on a draft order implementing Council Directive 76/135/EEC of 20 January 1976 on reciprocal recognition of navigability licences for inland waterway vessels</j.0:expression_title>
+    <j.2:build_info>cdm:CDM_2.1.7  tdm:1523  xslt:3945 saxon:9.0.0.1J JVM:1.6.0_29 metaconvJar:1.2.0 builddate:18/04/2014 13:00:02</j.2:build_info>
+  </rdf:Description>
+  <rdf:Description rdf:about="http://publications.europa.eu/resource/cellar/9f8d2f10-1d07-40df-b89c-de49ee84556c.0003.03">
+    <j.3:lastModificationDate rdf:datatype="http://www.w3.org/2001/XMLSchema#dateTime">2014-04-19T09:08:39.911+02:00</j.3:lastModificationDate>
+    <owl:sameAs rdf:resource="http://publications.europa.eu/resource/oj/JOL_1978_020_R_0028_014.ITA.print"/>
+    <owl:sameAs rdf:resource="http://publications.europa.eu/resource/celex/31978A0060.ITA.print"/>
+    <owl:sameAs rdf:resource="http://publications.europa.eu/resource/uriserv/OJ.L_.1978.020.01.0028.01.ITA.print"/>
+  </rdf:Description>
+  <rdf:Description rdf:about="http://publications.europa.eu/resource/cellar/9f8d2f10-1d07-40df-b89c-de49ee84556c.0005.02">
+    <j.3:lastModificationDate rdf:datatype="http://www.w3.org/2001/XMLSchema#dateTime">2014-04-19T09:08:39.911+02:00</j.3:lastModificationDate>
+    <owl:sameAs rdf:resource="http://publications.europa.eu/resource/oj/JOL_1978_020_R_0028_014.DAN.html"/>
+    <owl:sameAs rdf:resource="http://publications.europa.eu/resource/celex/31978A0060.DAN.html"/>
+    <owl:sameAs rdf:resource="http://publications.europa.eu/resource/uriserv/OJ.L_.1978.020.01.0028.01.DAN.html"/>
+  </rdf:Description>
+  <rdf:Description rdf:about="http://publications.europa.eu/resource/oj/JOL_1978_020_R_0028_014.ITA.pdfa1b">
+    <rdf:type rdf:resource="http://publications.europa.eu/ontology/cdm#manifestation"/>
+    <j.2:build_info>cdm:CDM_2.1.7  tdm:1523  xslt:3945 saxon:9.0.0.1J JVM:1.6.0_29 metaconvJar:1.2.0 builddate:18/04/2014 13:00:02</j.2:build_info>
+    <j.0:manifestation_type rdf:datatype="http://www.w3.org/2001/XMLSchema#string">pdfa1b</j.0:manifestation_type>
+    <j.0:manifestation_source-pool rdf:datatype="http://www.w3.org/2001/XMLSchema#string">src/eudor</j.0:manifestation_source-pool>
+    <j.0:manifestation_manifests_expression rdf:resource="http://publications.europa.eu/resource/oj/JOL_1978_020_R_0028_014.ITA"/>
+  </rdf:Description>
+  <rdf:Description rdf:about="http://publications.europa.eu/resource/oj/JOL_1978_020_R_0028_014.FRA.print">
+    <j.0:manifestation_official-journal_part_typedoc_printer rdf:datatype="http://www.w3.org/2001/XMLSchema#string">OPIN</j.0:manifestation_official-journal_part_typedoc_printer>
+    <j.0:manifestation_official-journal_part_pages_total rdf:datatype="http://www.w3.org/2001/XMLSchema#string">1</j.0:manifestation_official-journal_part_pages_total>
+    <j.0:manifestation_official-journal_part_page_first rdf:datatype="http://www.w3.org/2001/XMLSchema#string">0028</j.0:manifestation_official-journal_part_page_first>
+    <j.2:build_info>cdm:CDM_2.1.7  tdm:1523  xslt:3945 saxon:9.0.0.1J JVM:1.6.0_29 metaconvJar:1.2.0 builddate:18/04/2014 13:00:02</j.2:build_info>
+    <j.0:manifestation_official-journal_part_section_oj rdf:datatype="http://www.w3.org/2001/XMLSchema#string">L2</j.0:manifestation_official-journal_part_section_oj>
+    <j.0:manifestation_official-journal_part_page_last rdf:datatype="http://www.w3.org/2001/XMLSchema#string">0028</j.0:manifestation_official-journal_part_page_last>
+    <rdf:type rdf:resource="http://publications.europa.eu/ontology/cdm#manifestation_official-journal_part"/>
+    <j.0:manifestation_official-journal_part_legal_basis_printer rdf:datatype="http://www.w3.org/2001/XMLSchema#string">EEC</j.0:manifestation_official-journal_part_legal_basis_printer>
+    <j.0:manifestation_official-journal_part_information_number rdf:datatype="http://www.w3.org/2001/XMLSchema#string">1978/60 (EEC)</j.0:manifestation_official-journal_part_information_number>
+    <j.0:manifestation_part_of_manifestation rdf:resource="http://publications.europa.eu/resource/oj/JOL_1978_020_R.FRA.print"/>
+    <j.0:manifestation_official-journal_part_durability rdf:datatype="http://www.w3.org/2001/XMLSchema#string">DUR</j.0:manifestation_official-journal_part_durability>
+    <j.0:manifestation_manifests_expression rdf:resource="http://publications.europa.eu/resource/oj/JOL_1978_020_R_0028_014.FRA"/>
+    <j.0:manifestation_type rdf:datatype="http://www.w3.org/2001/XMLSchema#string">print</j.0:manifestation_type>
+    <j.0:manifestation_official-journal_part_is_corrigendum_printer rdf:datatype="http://www.w3.org/2001/XMLSchema#string">O</j.0:manifestation_official-journal_part_is_corrigendum_printer>
+  </rdf:Description>
+  <rdf:Description rdf:about="http://publications.europa.eu/resource/cellar/9f8d2f10-1d07-40df-b89c-de49ee84556c.0004.01/DOC_1">
+    <j.3:manifestationMimeType>application/pdf;type=pdfa1b</j.3:manifestationMimeType>
+    <rdf:type rdf:resource="http://publications.europa.eu/ontology/cdm#item"/>
+    <j.0:item_belongs_to_manifestation rdf:resource="http://publications.europa.eu/resource/cellar/9f8d2f10-1d07-40df-b89c-de49ee84556c.0004.01"/>
+    <j.0:item_identifier>DOC_1</j.0:item_identifier>
+    <owl:sameAs rdf:resource="http://publications.europa.eu/resource/oj/JOL_1978_020_R_0028_014.NLD.pdfa1b.l_02019780125nl00280028.pdf"/>
+    <owl:sameAs rdf:resource="http://publications.europa.eu/resource/celex/31978A0060.NLD.pdfa1b.l_02019780125nl00280028.pdf"/>
+    <owl:sameAs rdf:resource="http://publications.europa.eu/resource/uriserv/OJ.L_.1978.020.01.0028.01.NLD.pdfa1b.l_02019780125nl00280028.pdf"/>
+  </rdf:Description>
+  <rdf:Description rdf:about="http://publications.europa.eu/resource/oj/JOL_1978_020_R_0028_014.ELL.html">
+    <rdf:type rdf:resource="http://publications.europa.eu/ontology/cdm#manifestation"/>
+    <j.2:build_info>cdm:CDM_2.1.7  tdm:1523  xslt:3945 saxon:9.0.0.1J JVM:1.6.0_29 metaconvJar:1.2.0 builddate:18/04/2014 13:00:02</j.2:build_info>
+    <j.0:manifestation_type rdf:datatype="http://www.w3.org/2001/XMLSchema#string">html</j.0:manifestation_type>
+    <j.0:manifestation_source-pool rdf:datatype="http://www.w3.org/2001/XMLSchema#string">src/eurlex/content</j.0:manifestation_source-pool>
+    <j.0:manifestation_manifests_expression rdf:resource="http://publications.europa.eu/resource/oj/JOL_1978_020_R_0028_014.ELL"/>
+  </rdf:Description>
+  <rdf:Description rdf:about="http://publications.europa.eu/resource/oj/JOL_1978_020_R_0028_014.ENG.print">
+    <j.0:manifestation_official-journal_part_page_first rdf:datatype="http://www.w3.org/2001/XMLSchema#string">0028</j.0:manifestation_official-journal_part_page_first>
+    <j.0:manifestation_official-journal_part_durability rdf:datatype="http://www.w3.org/2001/XMLSchema#string">DUR</j.0:manifestation_official-journal_part_durability>
+    <j.0:manifestation_type rdf:datatype="http://www.w3.org/2001/XMLSchema#string">print</j.0:manifestation_type>
+    <j.0:manifestation_part_of_manifestation rdf:resource="http://publications.europa.eu/resource/oj/JOL_1978_020_R.ENG.print"/>
+    <j.0:manifestation_official-journal_part_legal_basis_printer rdf:datatype="http://www.w3.org/2001/XMLSchema#string">EEC</j.0:manifestation_official-journal_part_legal_basis_printer>
+    <j.0:manifestation_official-journal_part_page_last rdf:datatype="http://www.w3.org/2001/XMLSchema#string">0028</j.0:manifestation_official-journal_part_page_last>
+    <j.0:manifestation_official-journal_part_is_corrigendum_printer rdf:datatype="http://www.w3.org/2001/XMLSchema#string">O</j.0:manifestation_official-journal_part_is_corrigendum_printer>
+    <j.0:manifestation_official-journal_part_pages_total rdf:datatype="http://www.w3.org/2001/XMLSchema#string">1</j.0:manifestation_official-journal_part_pages_total>
+    <j.0:manifestation_official-journal_part_section_oj rdf:datatype="http://www.w3.org/2001/XMLSchema#string">L2</j.0:manifestation_official-journal_part_section_oj>
+    <j.0:manifestation_official-journal_part_information_number rdf:datatype="http://www.w3.org/2001/XMLSchema#string">1978/60 (EEC)</j.0:manifestation_official-journal_part_information_number>
+    <rdf:type rdf:resource="http://publications.europa.eu/ontology/cdm#manifestation_official-journal_part"/>
+    <j.2:build_info>cdm:CDM_2.1.7  tdm:1523  xslt:3945 saxon:9.0.0.1J JVM:1.6.0_29 metaconvJar:1.2.0 builddate:18/04/2014 13:00:02</j.2:build_info>
+    <j.0:manifestation_manifests_expression rdf:resource="http://publications.europa.eu/resource/oj/JOL_1978_020_R_0028_014.ENG"/>
+    <j.0:manifestation_official-journal_part_typedoc_printer rdf:datatype="http://www.w3.org/2001/XMLSchema#string">OPIN</j.0:manifestation_official-journal_part_typedoc_printer>
+  </rdf:Description>
+</rdf:RDF>

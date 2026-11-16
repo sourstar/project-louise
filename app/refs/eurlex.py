@@ -109,26 +109,33 @@ _TITLE_LANGUAGES = ("en", "fr", "de", "it")
 
 def unit_meta(unit: Path) -> dict | None:
     """What the plugin's discovery and parse say of one unit's identity and
-    validity, from its notice and its wrapper's head: None when the unit is
+    validity, from its notice and its wrapper's head — or, a parser-4 unit
+    holding no notice (the Data Dump's, 2026-11-15), from its tree
+    (app/plugins/eurlex/from_tree.py: the same fields): None when the unit is
     not whole or not readable."""
     from ..plugins import eli as eli_mod
-    from ..plugins.eurlex import formex, notice as notice_mod, source as src
+    from ..plugins.eurlex import formex, from_tree, notice as notice_mod, rdf, source as src
     celex, lang = unit.name, unit.parent.parent.name.partition("=")[2]
     if lang not in src.LANGUAGES:
         return None
+    history = unit.parent.parent.parent.name == src.HISTORY
     try:
         entries = src.unit_files(unit)
         names = {e.name for e in entries}
-        if src.NOTICE not in names:
+        if src.NOTICE in names:
+            note = notice_mod.parse((unit / src.NOTICE).read_bytes())
+            day = src._unit_day(unit, celex, entries)
+        elif rdf.TREE_FILE in names:
+            note = from_tree.notice(rdf.loads((unit / rdf.TREE_FILE).read_bytes()), src.lang3(lang), celex)
+            day = src._unit_day(unit, celex, entries, True)
+        else:
             return None
-        note = notice_mod.parse((unit / src.NOTICE).read_bytes())
-        day = src._unit_day(unit, celex, entries)
         wrapper = next((e.path for e in entries if formex.is_wrapper(e.name)), None)
         published = None
         if wrapper is not None:
             got = src._PUB_DATE.search(Path(wrapper).read_bytes()[:src._HEAD])
             published = formex.iso(got.group(1).decode()) if got else None
-    except (OSError, notice_mod.NoticeError):
+    except (OSError, ValueError, notice_mod.NoticeError, from_tree.TreeError):
         return None
     if day is None or note.celex != celex:
         return None
@@ -149,7 +156,7 @@ def unit_meta(unit: Path) -> dict | None:
         "version": {"uid": f"eurlex:{nid}", "celex": celex, "work_celex": work, "language": lang,
                     "valid_from": valid_from, "expression": expr,
                     "eli": src.PROFILE.absolute("eli/" + own) if own else None,
-                    "unit": src.unit_rel(lang, celex)},
+                    "unit": (f"{src.HISTORY}/" if history else "") + src.unit_rel(lang, celex)},
         "act": None if expr != "ORIGINAL" else {
             "celex": celex, "eli": src.PROFILE.absolute("eli/" + work_eli) if work_eli else None,
             "sector": note.sector or celex[:1], "type": src.celex_type(celex),
@@ -211,8 +218,11 @@ class EurlexRefSource:
             return
         acts: dict[str, tuple[int, dict]] = {}
         versions: list[dict] = []
-        for lang_dir in (p for root in roots
-                         for p in sorted(root.iterdir()) if p.is_dir() and p.name.startswith("lang=")):
+        from ..plugins.eurlex.source import HISTORY
+        # parser 4's history slice too (`history/lang=<l>/…`)
+        bases = [b for root in roots for b in (root, root / HISTORY) if b.is_dir()]
+        for lang_dir in (p for base in bases
+                         for p in sorted(base.iterdir()) if p.is_dir() and p.name.startswith("lang=")):
             lang = lang_dir.name.partition("=")[2]
             rank = _TITLE_LANGUAGES.index(lang) if lang in _TITLE_LANGUAGES else len(_TITLE_LANGUAGES)
             for year in sorted(p for p in lang_dir.iterdir() if p.is_dir()):

@@ -122,11 +122,12 @@ def _ids(values: list[dict] | None) -> list[str]:
     return [v["@id"] for v in values or () if "@id" in v]
 
 
-def scope(tree: dict[str, Any], lang3: str) -> dict[str, Any]:
-    """The tree without another language's expression, its manifestations
-    and items, and the axioms on them (module docstring)."""
+def groups(tree: dict[str, Any]):
+    """`(find, group_props)`: the tree's nodes grouped through `owl:sameAs`
+    (union-find over every node and every sameAs target) — one resource
+    under its several URIs (`celex/…`, `oj/…`, `cellar/…`) — and each
+    group's properties merged."""
     nodes: dict[str, dict] = tree["nodes"]
-    # owl:sameAs groups (union-find over every node and every sameAs target)
     parent: dict[str, str] = {}
 
     def find(x: str) -> str:
@@ -144,6 +145,14 @@ def scope(tree: dict[str, Any], lang3: str) -> dict[str, Any]:
         g = group_props.setdefault(find(u), {})
         for k, v in props.items():
             g.setdefault(k, []).extend(v)
+    return find, group_props
+
+
+def scope(tree: dict[str, Any], lang3: str) -> dict[str, Any]:
+    """The tree without another language's expression, its manifestations
+    and items, and the axioms on them (module docstring)."""
+    nodes: dict[str, dict] = tree["nodes"]
+    find, group_props = groups(tree)
 
     # by the LINKS, not the declared type: a print manifestation carries no
     # rdf:type in the tree (31990R0048's BUL…SWE `.print`), so the type would

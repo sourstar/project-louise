@@ -3380,6 +3380,40 @@ def cmd_dev_rewrite_vectors(a) -> int:
     return 130 if out.get("interrupted") else 0
 
 
+def cmd_dev_eurlex_dump(a) -> int:
+    """`louise dev eurlex-dump <collection> [--dump DIR] [--languages it,fr]
+    [--carry-from DIR]` (operator, 2026-11-15, B): every EUR-Lex unit the Data
+    Dump gives, built from it alone into the collection's corpus — no Cellar
+    request (app/acquire/eurlex_dump.py). The languages are the collection's
+    held ones the dump holds; the dump is `EURLEX_DATADUMP_DIR` unless --dump.
+    `--carry-from`: then an earlier corpus's units the dump did not give are
+    linked in without their notice (RULE 1), in the base or the history
+    slice. Resumable: a landed unit is never written again."""
+    from app.acquire import datadump, eurlex_dump
+    c = collections_mod.by_name(a.collection)
+    if c is None or c.plugin != "eurlex":
+        raise SystemExit(f"{a.collection}: not a held eurlex collection")
+    version = getattr(getattr(c.codex, "parser", None), "version", None)
+    if version is not None and int(version) < 4:
+        raise SystemExit(f"{a.collection}: its Codex names parser {version}, which reads a unit's "
+                         f"notice; a unit of the dump holds none. Re-create it on parser 4 (A1c)")
+    dump = Path(a.dump) if a.dump else Path(os.environ.get(datadump.ENV, "").strip() or ".")
+    if not a.dump and not os.environ.get(datadump.ENV, "").strip():
+        raise SystemExit(f"no dump: set {datadump.ENV} or pass --dump")
+    say = lambda m: print(m, file=sys.stderr, flush=True)   # noqa: E731
+    langs = [x.strip() for x in a.languages.split(",") if x.strip()] if a.languages else None
+    if langs is None:
+        from app.acquire import cellar
+        langs = cellar.held_languages(c)
+    corpus = Path(c.corpus_dir)
+    out: dict = {"built": {l: dict(n) for l, n in
+                           eurlex_dump.build(dump, corpus, langs, log=say).items()}}
+    if a.carry_from:
+        out["carried"] = dict(eurlex_dump.carry(Path(a.carry_from), corpus, log=say))
+    _print(out)
+    return 0
+
+
 def cmd_dev_carry(a) -> int:
     """`louise dev carry <from> <to> [--copy] [--keep producer:<archive>] --yes`
     (07 §7.3; docs/notes/v5-migration.md G1, G2; amendment A1): the source's
@@ -8043,6 +8077,15 @@ def build_parser() -> argparse.ArgumentParser:
                    help="remove the table the swap set aside, once every process reads the new one")
     p.add_argument("--group", type=int, default=8, help="source fragments per append (default 8)")
     p.set_defaults(fn=cmd_dev_rewrite_vectors)
+    p = dverbs.add_parser("eurlex-dump", help="every EUR-Lex unit the Data Dump gives, built from it "
+                                              "alone into the collection's corpus (no Cellar request)")
+    p.add_argument("collection")
+    p.add_argument("--dump", default=None, help="the dump's folder (default EURLEX_DATADUMP_DIR)")
+    p.add_argument("--languages", default=None,
+                   help="comma-separated codes (default: the collection's held languages)")
+    p.add_argument("--carry-from", dest="carry_from", default=None,
+                   help="an earlier eurlex corpus: its units the dump did not give, linked in")
+    p.set_defaults(fn=cmd_dev_eurlex_dump)
     p = dverbs.add_parser("carry", help="a collection's manifest, text index and vector table into a new "
                                         "collection with the same records (amendment A1); writes "
                                         "only with --yes (both collections' locks)")

@@ -117,7 +117,10 @@ def test_legi(tmp_path):
 
 def test_eurlex(tmp_path):
     import tests.test_eurlex as t
-    from app.plugins.eurlex import SOURCE, source as src
+    from app.plugins.eurlex import source as src
+    # parser 3's facets, its fixture's notices re-keyed apart from their trees
+    # (parser 4 reads the tree: tests/test_eurlex_parser4.py)
+    SOURCE = t.SOURCE
     root = t.build_corpus(tmp_path / "eurlex")
     force = b'<RESOURCE_LEGAL_IN-FORCE type="data"><VALUE>%s</VALUE></RESOURCE_LEGAL_IN-FORCE>'
     for celex, said in ((t.ACT, b"true"), (t.DIR, b"false")):

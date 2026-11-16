@@ -43,16 +43,20 @@ def _base() -> Path:
     return derived.place_kept(KIND, root) or (root / derived.BESIDE / KIND)
 
 
-def _path(endpoint: str, year: int, languages: tuple[str, ...]) -> Path:
-    key = hashlib.sha256(f"{endpoint.rstrip('/')}|{year}|{','.join(languages)}".encode()).hexdigest()[:24]
+def _path(endpoint: str, year: int, languages: tuple[str, ...], force: bool = False) -> Path:
+    # parser 4's rows carry each work's in-force (cellar.page_query `force`):
+    # kept apart, never read for a listing of the other shape
+    key = hashlib.sha256((f"{endpoint.rstrip('/')}|{year}|{','.join(languages)}"
+                          + ("|force" if force else "")).encode()).hexdigest()[:24]
     return _base() / f"{year:04d}" / f"{key}.json.gz"
 
 
-def held(endpoint: str, year: int, languages: tuple[str, ...], n: int, last: str | None) -> list | None:
+def held(endpoint: str, year: int, languages: tuple[str, ...], n: int, last: str | None, *,
+         force: bool = False) -> list | None:
     """The window's rows `[[celex, lang, mtime]…]` as the last pass listed
     them, where its fingerprint is still `(n, last)`; None otherwise."""
     try:
-        data = json.loads(gzip.decompress(_path(endpoint, year, languages).read_bytes()))
+        data = json.loads(gzip.decompress(_path(endpoint, year, languages, force).read_bytes()))
     except (OSError, ValueError, EOFError):
         return None
     if data.get("n") != n or data.get("last") != last or len(data.get("rows") or []) > n:
@@ -60,8 +64,9 @@ def held(endpoint: str, year: int, languages: tuple[str, ...], n: int, last: str
     return data["rows"]
 
 
-def keep(endpoint: str, year: int, languages: tuple[str, ...], n: int, last: str | None, rows: list) -> None:
-    path = _path(endpoint, year, languages)
+def keep(endpoint: str, year: int, languages: tuple[str, ...], n: int, last: str | None, rows: list, *,
+         force: bool = False) -> None:
+    path = _path(endpoint, year, languages, force)
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(f".{path.name}.{os.getpid()}.{threading.get_ident()}")
     tmp.write_bytes(gzip.compress(json.dumps({"n": n, "last": last, "rows": rows},

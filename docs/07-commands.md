@@ -429,6 +429,19 @@ louise dev                                                             operator 
                                                                        --records-from <from>`; --unembedded (A1h): from a collection holding NO vector into one with the same records, layers and
                                                                        cleaning (the encoder side of the space alone differing), the manifest and text index carried, no vector table, every document not embedded set to embed_version 0 (none holds an earlier version; 2026-11-07), then `records build <to> --records-from <from>`; --scan: with --keep, one pass over the vector table instead of a walk by document.
                                                                        Every drop above — --keep, --scan, --reconcile, --recut — sets a document left with no row to embed_version 0, after its rows are gone (2026-11-07)
+                                                                       The target reads the source's corpus through its own `origin` link: the carry links it to the
+                                                                       source's corpus, removes `create`'s empty folder and re-roots the copied paths, and refuses a
+                                                                       target whose origin holds another corpus; --share-origin does that alone, for a carry finished
+                                                                       before it did (2026-11-15)
+  eurlex-dump <collection> [--dump <dir>] [--languages <codes>] [--carry-from <dir>]
+                                                                       every EUR-Lex unit the Data Dump gives, built from it alone into a parser-4 collection's corpus:
+                                                                       the MTD tree scoped to each language and the items of the form Cellar would choose; no Cellar
+                                                                       request; a form the dump does not hold whole is left to the API; a landed unit is never written
+                                                                       again; each language stamped once used whole, before which the collection asks Cellar nothing
+                                                                       per unit (bulk first). --dump: the dump's folder (default EURLEX_DATADUMP_DIR); --languages:
+                                                                       comma-separated codes (default the collection's slices); --carry-from: an earlier eurlex corpus,
+                                                                       its units the dump did not give linked in without their notice, in the base or the history
+                                                                       slice (RULE 1). Writes (2026-11-15)
 ```
 
 `--dry-run`, `--json` and `--yes` are not shown per line; §7.7 says which

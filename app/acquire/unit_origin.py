@@ -16,8 +16,11 @@ from .spec import AcquisitionSpec
 
 
 class UnitOrigin:
-    def __init__(self, spec: AcquisitionSpec) -> None:
+    def __init__(self, spec: AcquisitionSpec, parser: int | None = None) -> None:
         self.spec = spec
+        #: the Codex's parser: what a unit holds may depend on it (eurlex: a
+        #: notice before 4, the tree and the items alone from 4)
+        self.parser = parser
         self.fetcher = spec.unit_fetcher
         self.base = Path(tempfile.mkdtemp(prefix=f"louise-{spec.source_id}-origin-"))
         atexit.register(self.close)
@@ -31,7 +34,7 @@ class UnitOrigin:
         return self._rel(locator), None
 
     def materialise(self, locator: str) -> Path:
-        path, moved = self.fetcher.refetch(self.spec, self._rel(locator), self.base)
+        path, moved = self.fetcher.refetch(self.spec, self._rel(locator), self.base, parser=self.parser)
         self.bytes_read += int(moved or 0)
         return path
 
@@ -57,4 +60,5 @@ def for_codex(codex) -> UnitOrigin | None:
     spec = ACQUIRE_REGISTRY.get(getattr(codex, "plugin", None))
     if spec is None or spec.unit_fetcher is None or not hasattr(spec.unit_fetcher, "refetch"):
         return None
-    return UnitOrigin(spec)
+    version = getattr(getattr(codex, "parser", None), "version", None)
+    return UnitOrigin(spec, None if version is None else int(version))

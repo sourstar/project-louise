@@ -23,8 +23,12 @@ from app import chunking, collections as collections_mod, plugin_io
 from app.pack import slicing
 from app.plugins import eli
 from app.plugins.base import DiscoverState, Mutability, UnindexableDocument
-from app.plugins.eurlex import SOURCE, formex, notice, rdf
+from app.plugins.eurlex import SOURCE as REGISTERED, formex, notice, rdf
 from app.plugins.eurlex import source as src
+
+# parser 3's behaviour, kept for the Codex that names it (parser 4, 2026-11-15,
+# reads the facts from the tree: tests/test_eurlex_parser4.py)
+SOURCE = REGISTERED.at_parser_version(3)
 
 FIX = Path(__file__).parent / "fixtures" / "eurlex"
 FORMEX = FIX / "formex"
@@ -319,7 +323,11 @@ def test_every_language_is_a_slice_the_origin_delivers_whole():
     from app.acquire import spec as acquire_spec
     from app.acquire.specs import ACQUIRE_REGISTRY
     spec = ACQUIRE_REGISTRY["eurlex"]
-    assert set(spec.slice_profiles) == {f"lang={c}" for c in src.LANGUAGES} and len(spec.slice_profiles) == 24
+    # each language, and (parser 4, 2026-11-15) each language's history
+    assert set(spec.slice_profiles) == {f"lang={c}" for c in src.LANGUAGES} | \
+        {f"history/lang={c}" for c in src.LANGUAGES} and len(spec.slice_profiles) == 48
+    assert acquire_spec.profile_for_slices(spec, ["history/lang=it"]) == "history-it"
+    assert acquire_spec.resolve_profile(spec, "history-it").include == ("history/lang=it/*",)
     assert acquire_spec.profile_for_slices(spec, ["lang=fr"]) == "fr"
     assert acquire_spec.profile_for_slices(spec, ["lang=en", "lang=fr", "lang=de", "lang=it"]) == "en,fr,de,it"
     assert acquire_spec.profile_for_slices(spec, ["lang=fr/type=R/year=2016"]) == "fr"
@@ -402,7 +410,7 @@ def test_an_original_starts_at_its_entry_into_force_never_before_publication():
 
 def test_registered_with_its_declarations():
     s = collections_mod.PLUGIN_REGISTRY["eurlex"]
-    assert s is SOURCE and s.license_class.value == "yellow" and s.native_id_order == "numeric"
+    assert s is REGISTERED and s.license_class.value == "yellow" and s.native_id_order == "numeric"
     assert s.default_profile["validity"] == {"kind": "versions-per-work", "from": "extra.valid_from",
                                              "work": "extra.validity_work"}
     assert s.default_profile["eli"]["jurisdiction"] == "EU"
@@ -508,7 +516,7 @@ def test_the_markup_is_every_attribute_of_the_body_and_annexes_in_document_order
     for name, held in markup.items():
         root = ET.fromstring((unit / name).read_bytes())
         assert held == [[e.tag, dict(e.attrib)] for e in root.iter() if isinstance(e.tag, str) and e.attrib]
-    assert "markup" in src.EXTRA_KEYS and src.EurlexSource.PARSER_VERSION == 3
+    assert "markup" in src.EXTRA_KEYS and SOURCE.PARSER_VERSION == 3
 
 
 

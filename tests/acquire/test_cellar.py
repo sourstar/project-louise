@@ -173,7 +173,11 @@ class Cellar:
                          "language": {"type": "uri",
                                       "value": f"http://publications.europa.eu/resource/authority/language/"
                                                f"{src.LANGUAGES[lg]}"},
-                         "last": {"type": "literal", "value": owner.units[(c, lg)]["modified"]}}
+                         "last": {"type": "literal", "value": owner.units[(c, lg)]["modified"]},
+                         # parser 4's listing asks each work's in-force (cellar.page_query)
+                         **({"force": {"type": "literal", "value": owner.units[(c, lg)].get("in_force", "true")}}
+                            if "?force" in query and owner.units[(c, lg)].get("in_force", "true") is not None
+                            else {})}
                         for c, lg in page]}}
                 self._send(200, json.dumps(body).encode(), {"Content-Type": "application/sparql-results+json"})
 
@@ -441,7 +445,8 @@ def test_records_vs_origin_refetches_one_unit_by_its_cellar_uri(mock):
     """Through the generic unit origin (app/acquire/unit_origin.py): the spec
     declares a UnitFetcher with `refetch`, and nothing names the plugin."""
     from app.acquire import unit_origin
-    origin = unit_origin.UnitOrigin(_spec(mock))
+    # a parser-3 unit holds its notice (parser 4: tests/acquire/test_eurlex_dump.py)
+    origin = unit_origin.UnitOrigin(_spec(mock), parser=3)
     try:
         out = origin.materialise(f"lang=de/2016/{ACT}")
         assert sorted(p.name for p in out.iterdir()) == sorted([*_formex(ACT, "de"), "notice.xml", "tree.json"])

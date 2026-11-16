@@ -96,7 +96,7 @@ tokens = 60000000
 per = "P1M"
 
 [origin]
-form = "Cellar by content negotiation on /resource/celex/<CELEX>, per act version and language: the Formex 4 manifestation (every item, the body picked by the wrapper's DOC.MAIN.PUB name, never by order) and the CDM branch notice; the inventory by SPARQL in windows of one CELEX year, counted; not XHTML, which carries a layout where Formex carries the structure, not the Data Dump (in force only, no consolidations), not the SOAP service (registration, a quota) (legal-fr-de-eu.md §4.1, §7.1)"
+form = "Cellar by content negotiation on /resource/celex/<CELEX>, per act version and language: the work's non-inferred tree scoped to the language, which holds every assertion about the act, and the items of the best form the tree lists (Formex 4, else XHTML, HTML, then PDF; the Formex body picked by the wrapper's DOC.MAIN.PUB name, never by order); no branch notice (parser 4, 2026-11-15). Bulk first: the unit of every act the Data Dump holds is built from it (its MTD trees and its items, the same bytes Cellar serves, which records-vs-origin re-fetches); what the dump lacks (consolidations, acts not in force: the history slice) is listed by SPARQL in windows of one CELEX year; not the SOAP service (registration, a quota) (legal-fr-de-eu.md §4.1, §7.1; app/acquire/eurlex_dump.py)"
 unit = "file"
 clock = "Europe/Luxembourg"
 cutoff_rule = "record-date"
