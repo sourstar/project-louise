@@ -1151,6 +1151,10 @@ def _relay_answer(job: relay.Job, chat) -> None:
             elif kind == "reading":
                 # the sources read as older language: their badges on the page
                 job.emit("reading", sources=value)
+            elif kind == "read":
+                # how many of the sources the answer was given (api._fit_answer):
+                # the others are marked on the page and in its PDF
+                job.emit("read", count=value)
             elif kind == "cut":
                 job.emit("delta", text=f"\n[answer cut: {value}]")
                 job.emit("cut", why=value)

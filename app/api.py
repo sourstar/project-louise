@@ -20,6 +20,7 @@ read/query endpoints (status/stats/events/books/search/chat) stay open —
 "Ask is LAN-open read-only" (architecture-v2.md §15).
 """
 import contextvars
+import dataclasses
 import json
 import queue
 import sys
@@ -1182,7 +1183,8 @@ async def audio_transcriptions(request: Request):
                     headers={"Louise-VAD": note, "Server-Timing": transcribe.server_timing(steps)})
 
 
-def source_entries(hits: list[dict], reads: list | None = None) -> list[dict]:
+def source_entries(hits: list[dict], reads: list | None = None,
+                   used: int | None = None) -> list[dict]:
     """The answer's [n], in order: what a client shows as its sources —
     the passage, where it is (a path of this node's reader), the work's
     other editions and the claims beside it (05 §5.3). Never a vector.
@@ -1208,32 +1210,127 @@ def source_entries(hits: list[dict], reads: list | None = None) -> list[dict]:
         })
         if n in badges:
             out[-1]["reading"] = badges[n]
+        if used is not None:
+            # whether the answer was given this source (`_fit_answer`)
+            out[-1]["read"] = n <= used
     return out
+
+
+#: THE ANSWER FITS THE CHAT MODEL'S CONTEXT (München, 2026-11-16: "Scandali nei
+#: diari di Sanuto" asked 17,455 tokens of a 16,384 context and the reader got a
+#: bare 400). The prompt is sized before the call (llm.CHARS_PER_TOKEN, an
+#: estimate that errs large), and where the server still says it is over, it is
+#: asked again smaller, by the server's own count (`_refit`), before any word
+#: goes out. Fewer passages first, down to the first one whole, then fewer
+#: prior turns. The sources the reader is shown stay all of them; each says
+#: whether the answer read it (`read`), and so does the PDF.
+MIN_SOURCE_CHARS = 1800
+HISTORY_TURNS = 6
+#: tries at a smaller prompt after the server's refusal
+CONTEXT_RETRIES = 3
+
+
+@dataclasses.dataclass
+class AnswerPrompt:
+    """The answer's prompt as sent: its messages, how many of the hits it gave
+    the model (`used`, the first ones), and the budget that made it."""
+    messages: list[dict]
+    used: int
+    source_chars: int
+    history: int
+    reads: list
+
+
+def _prompt_tokens(messages: list[dict]) -> int:
+    return int(len(json.dumps(messages, ensure_ascii=False)) / llm.CHARS_PER_TOKEN)
+
+
+def _build_answer(body: ChatBody, query: str, result: dict, source_chars: int,
+                  history: int) -> AnswerPrompt:
+    reads: list = []
+    if not body.speed:
+        from . import historical
+        result, reads = historical.prepare(result, query, body.answer_lang, budget=source_chars)
+    messages = retrieval.build_answer_messages(query, result, answer_lang=body.answer_lang,
+                                               source_chars=source_chars)
+    used = retrieval.answer_hits_shown(result["hits"], source_chars) if result["hits"] else 0
+    # keep prior turns for conversational context (before the sources turn)
+    turns = [m for m in body.messages[:-1] if m.get("role") in ("user", "assistant")]
+    turns = turns[-history:] if history > 0 else []
+    # the turns actually kept, so a refit never spends a try on turns that are not there
+    return AnswerPrompt([messages[0]] + turns + [messages[1]], used, source_chars, len(turns),
+                        [r for r in reads if r.n <= used])
+
+
+def _passage_chars(result: dict, used: int) -> int:
+    return sum(len(h["text"][:1800]) for h in result["hits"][:used])
+
+
+def _fit_answer(body: ChatBody, query: str, result: dict, *,
+                source_chars: int = retrieval.ANSWER_SOURCE_CHARS,
+                history: int = HISTORY_TURNS) -> AnswerPrompt:
+    """The prompt sized to the context by its estimate: passages dropped from
+    the end, then prior turns, until it leaves room for the answer."""
+    budget = llm.CONTEXT_TOKENS - llm.ANSWER_TOKENS - llm.MARGIN_TOKENS
+    p = _build_answer(body, query, result, source_chars, history)
+    while _prompt_tokens(p.messages) > budget:
+        over = int((_prompt_tokens(p.messages) - budget) * llm.CHARS_PER_TOKEN) + 1
+        held = _passage_chars(result, p.used)
+        if held > MIN_SOURCE_CHARS:
+            p = _build_answer(body, query, result, max(MIN_SOURCE_CHARS, held - over), p.history)
+        elif p.history > 0:
+            p = _build_answer(body, query, result, p.source_chars, p.history - 2)
+        else:
+            break                        # the first passage alone: the server says the rest
+    return p
+
+
+def _refit(body: ChatBody, query: str, result: dict, p: AnswerPrompt,
+           e: llm.ContextExceeded) -> AnswerPrompt | None:
+    """A smaller prompt after the server counted this one over its context:
+    what must go, in tokens, turned into characters at THIS prompt's own rate
+    (Sanuto's ran ~1.6 a token, where the estimate assumes 3). None where
+    nothing is left to drop."""
+    target = e.available - llm.ANSWER_TOKENS - llm.MARGIN_TOKENS
+    rate = len(json.dumps(p.messages, ensure_ascii=False)) / max(1, e.requested)
+    cut = int(max(1, e.requested - target) * rate * 1.15) + 1
+    held = _passage_chars(result, p.used)
+    if held > MIN_SOURCE_CHARS:
+        return _build_answer(body, query, result, max(MIN_SOURCE_CHARS, held - cut), p.history)
+    if p.history > 0:
+        return _build_answer(body, query, result, p.source_chars, max(0, p.history - 2))
+    return None
 
 
 def _answer_messages(body: ChatBody, query: str, result: dict,
                      reads: list | None = None) -> list[dict]:
-    if not body.speed:
-        from . import historical
-        result, read = historical.prepare(result, query, body.answer_lang)
-        if reads is not None:
-            reads.extend(read)
-    messages = retrieval.build_answer_messages(query, result, answer_lang=body.answer_lang)
-    # keep prior turns for conversational context (before the sources turn)
-    history = [m for m in body.messages[:-1] if m.get("role") in ("user", "assistant")]
-    return [messages[0]] + history[-6:] + [messages[1]]
+    p = _fit_answer(body, query, result)
+    if reads is not None:
+        reads.extend(p.reads)
+    return p.messages
 
 
 def _chat_answer(body: ChatBody, query: str, result: dict, t0: float):
     con = _con()   # query_log lives in the default collection's manifest regardless
-    reads: list = []
-    messages = _answer_messages(body, query, result, reads)
+    prompt = _fit_answer(body, query, result)
+    reads = prompt.reads
     rid = f"chatcmpl-{uuid.uuid4().hex[:12]}"
 
     if not body.stream:
+        for attempt in range(CONTEXT_RETRIES + 1):
+            try:
+                text = llm.chat(prompt.messages, temperature=body.temperature)
+                break
+            except llm.ContextExceeded as e:
+                smaller = _refit(body, query, result, prompt, e)
+                if smaller is None or attempt == CONTEXT_RETRIES:
+                    raise
+                _log_refit(con, e, smaller)
+                prompt = smaller
+        reads = prompt.reads
         # "[3] [4]", not "[3][4]": a client's markdown cleaning reads a pair
         # as a reference link and speaks a number (app/speech.py)
-        answer = speech.spaced_citations(llm.chat(messages, temperature=body.temperature))
+        answer = speech.spaced_citations(text)
         _log_reads(con, reads)
         result["timings"]["llm"] = round((time.time() - t0) * 1000 - result["timings"]["total"], 1)
         result["timings"]["total"] = round((time.time() - t0) * 1000, 1)
@@ -1246,8 +1343,8 @@ def _chat_answer(body: ChatBody, query: str, result: dict, t0: float):
                          "message": {"role": "assistant", "content": answer}}],
         }
         if body.sources:
-            out["louise_sources"] = source_entries(result["hits"], reads)
-            out["louise_pdf"] = pdf_link(body, query, answer, result)
+            out["louise_sources"] = source_entries(result["hits"], reads, prompt.used)
+            out["louise_pdf"] = pdf_link(body, query, answer, result, prompt.used)
         return out
 
     def chunk(delta: str) -> str:
@@ -1260,7 +1357,7 @@ def _chat_answer(body: ChatBody, query: str, result: dict, t0: float):
     def sse():
         # the OpenAI framing of `answer_parts`, which the Ask page's relay
         # reads too (app/relay.py): one path from the model to every reader
-        parts = answer_parts(body, query, result, t0, messages=messages, con=con, reads=reads)
+        parts = answer_parts(body, query, result, t0, prompt=prompt, con=con)
         tail = ""        # the text so far, for a citation pair split across two deltas
         try:
             for kind, value in parts:
@@ -1295,12 +1392,14 @@ def _chat_answer(body: ChatBody, query: str, result: dict, t0: float):
     return StreamingResponse(sse(), media_type="text/event-stream")
 
 
-def pdf_link(body: ChatBody, query: str, answer: str, result: dict) -> str:
+def pdf_link(body: ChatBody, query: str, answer: str, result: dict,
+             used: int | None = None) -> str:
     """The path of this answer's PDF (`GET /api/ask/pdf/<id>`, an Ask route
-    as the reader's are): the answer and its sources kept for it."""
+    as the reader's are): the answer and its sources kept for it, each saying
+    whether the answer read it."""
     from . import ask_pdf
-    pid = ask_pdf.keep(query, answer, source_entries(result["hits"]), answer_lang=body.answer_lang,
-                       collections=body.collections)
+    pid = ask_pdf.keep(query, answer, source_entries(result["hits"], used=used),
+                       answer_lang=body.answer_lang, collections=body.collections)
     return f"/api/ask/pdf/{pid}"
 
 
@@ -1316,8 +1415,15 @@ def _log_reads(con, reads: list | None) -> None:
         db.log_event(con, "info", "chat", line)
 
 
+def _log_refit(con, e: "llm.ContextExceeded", smaller: AnswerPrompt) -> None:
+    db.log_event(con, "info", "chat",
+                 f"the answer's prompt was over the chat model's context ({e.requested:,} of "
+                 f"{e.available:,} tokens): asked again with {smaller.used} source(s) and "
+                 f"{smaller.history} prior turn(s)")
+
+
 def answer_parts(body: ChatBody, query: str, result: dict, t0: float, *,
-                 messages: list[dict] | None = None, con=None, reads: list | None = None):
+                 prompt: AnswerPrompt | None = None, con=None):
     """The answer as it comes from the model: ("sources", entries) first when
     asked, then ("delta", text) and ("keepalive", None) while nothing has
     arrived for KEEPALIVE_S, and ("cut", why) when the stream ended short.
@@ -1335,22 +1441,39 @@ def answer_parts(body: ChatBody, query: str, result: dict, t0: float, *,
     Every answer gets one log line with its size and timing, so the next
     report has a measurement."""
     con = con if con is not None else _con()
-    if messages is None:
-        reads = []
-        messages = _answer_messages(body, query, result, reads)
+    if prompt is None:
+        prompt = _fit_answer(body, query, result)
+    reads = prompt.reads
     q: queue.Queue = queue.Queue()
     stop = threading.Event()
 
     def pump() -> None:
+        p = prompt
         try:
-            it = llm.chat_stream(messages, temperature=body.temperature)
-            while not stop.is_set():
+            for attempt in range(CONTEXT_RETRIES + 1):
+                it = llm.chat_stream(p.messages, temperature=body.temperature)
                 try:
-                    q.put(("delta", next(it)))
+                    first = next(it)
                 except StopIteration as s:
                     q.put(("end", s.value))
                     return
-            it.close()          # the reader left: the endpoint stops writing
+                except llm.ContextExceeded as e:
+                    # refused before any word: asked again smaller (`_refit`)
+                    smaller = _refit(body, query, result, p, e)
+                    if smaller is None or attempt == CONTEXT_RETRIES:
+                        raise
+                    p = smaller
+                    q.put(("refit", (smaller, e)))
+                    continue
+                q.put(("delta", first))
+                while not stop.is_set():
+                    try:
+                        q.put(("delta", next(it)))
+                    except StopIteration as s:
+                        q.put(("end", s.value))
+                        return
+                it.close()          # the reader left: the endpoint stops writing
+                return
         except BaseException as e:      # noqa: BLE001 — said to the reader below
             q.put(("error", e))
     threading.Thread(target=contextvars.copy_context().run, args=(pump,),
@@ -1360,17 +1483,29 @@ def answer_parts(body: ChatBody, query: str, result: dict, t0: float, *,
     first: float | None = None
     why: str | None = None
     written: list[str] = []          # the answer, for its PDF link (sources asked)
+    used = prompt.used
     if reads:
         # each source read as older language, for its badge on the page
         yield ("reading", [{"n": r.n, "reading": r.badge()} for r in reads])
+    yield ("read", used)                 # how many of the sources the answer is given
     if body.sources:
-        yield ("sources", source_entries(result["hits"], reads))
+        yield ("sources", source_entries(result["hits"], reads, used))
     try:
         while True:
             try:
                 kind, value = q.get(timeout=KEEPALIVE_S)
             except queue.Empty:
                 yield ("keepalive", None)
+                continue
+            if kind == "refit":
+                # before any word: the count and the sources said again (a
+                # client keeps the last `louise_sources`)
+                smaller, e = value
+                _log_refit(con, e, smaller)
+                reads, used = smaller.reads, smaller.used
+                yield ("read", used)
+                if body.sources:
+                    yield ("sources", source_entries(result["hits"], reads, used))
                 continue
             if kind == "delta":
                 if first is None:
@@ -1408,7 +1543,7 @@ def answer_parts(body: ChatBody, query: str, result: dict, t0: float, *,
         # origin are available in the list of the sources"): the answer kept
         # for a link a client lists with them (app/ask_pdf.py `keep`)
         yield ("pdf", pdf_link(body, query, "".join(written) + (f"\n[answer cut: {why}]" if why else ""),
-                               result))
+                               result, used))
 
 
 # LAST: every command of the tree as one route (07 §7.4, app/api_commands.py).

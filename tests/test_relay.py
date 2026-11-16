@@ -207,7 +207,7 @@ def test_an_answer_job_relays_the_models_words(isolated_config, monkeypatch):
                                                                   "source_collection": "gutenberg"}],
                                                          "timings": {"total": 1.0}})
     monkeypatch.setattr(api.retrieval, "build_answer_messages",
-                        lambda q, r, answer_lang=None: [{"role": "system", "content": "s"},
+                        lambda q, r, answer_lang=None, **kw: [{"role": "system", "content": "s"},
                                                         {"role": "user", "content": q}])
     c = TestClient(app)
     sid = c.post("/ask/relay", json={"kind": "search", "search": {"query": "whales"}}).json()["id"]

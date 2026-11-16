@@ -369,8 +369,8 @@ def said(reads: list[Read]) -> str:
     return "read as older language: " + "; ".join(f"[{r.n}] {r.badge()}" for r in reads)
 
 
-def prepare(result: dict[str, Any], question: str, answer_lang: str | None = None
-            ) -> tuple[dict[str, Any], list[Read]]:
+def prepare(result: dict[str, Any], question: str, answer_lang: str | None = None, *,
+            budget: int | None = None) -> tuple[dict[str, Any], list[Read]]:
     """The search's result as the answer's prompt reads it under Quality: a
     COPY whose older sources carry their `reading` (the head's words) and
     their text modernised for the model; the result itself, which the page
@@ -379,7 +379,8 @@ def prepare(result: dict[str, Any], question: str, answer_lang: str | None = Non
     one the model sees."""
     from . import retrieval
     hits = list(result.get("hits") or [])
-    n = retrieval.answer_hits_shown(hits) if hits else 0
+    n = (retrieval.answer_hits_shown(hits, retrieval.ANSWER_SOURCE_CHARS if budget is None
+                                      else budget) if hits else 0)
     shown, reads = read_sources(
         [(i, {**h, "text": str(h.get("text") or "")[:1800]}) for i, h in enumerate(hits[:n], 1)],
         question, answer_lang)

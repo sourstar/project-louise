@@ -385,6 +385,7 @@ function relayListen(kind,id,on){
       es.addEventListener('result',e=>{seen(e); on.result&&on.result(JSON.parse(e.data))});
       es.addEventListener('delta',e=>{seen(e); on.delta&&on.delta(JSON.parse(e.data).text)});
       es.addEventListener('reading',e=>{seen(e); on.reading&&on.reading(JSON.parse(e.data).sources)});
+      es.addEventListener('read',e=>{seen(e); on.read&&on.read(JSON.parse(e.data).count)});
       es.addEventListener('stuck',e=>{seen(e); relayStuck(kind,JSON.parse(e.data))});
       es.addEventListener('moving',e=>{seen(e); relayNote('')});
       es.addEventListener('end',e=>{
@@ -496,6 +497,25 @@ function readingBadges(list){
     head.append(' ',b);
   }
 }
+// HOW MANY SOURCES THE ANSWER READ (api._fit_answer, 2026-11-16): the model's
+// context holds the first ones; the others stay listed, marked, and the PDF
+// says the same
+function readCount(n){
+  const box=document.getElementById('hits'); if(!box)return;
+  box.dataset.read=String(n);
+  [...box.querySelectorAll('.hit')].forEach((h,i)=>{
+    const head=h.querySelector('.head'), old=head&&head.querySelector('.badge.unread');
+    if(old)old.remove();
+    if(head&&i>=n){
+      // a source the answer was not given was not read as older language either
+      const r=head.querySelector('.badge.reading'); if(r)r.remove();
+      const b=document.createElement('span'); b.className='badge unread';
+      b.textContent='not read by the answer';
+      b.title="the AI summary's context held the first "+n+' source(s)';
+      head.append(' ',b);
+    }
+  });
+}
 function speedOn(){const r=document.querySelector('input[name="speed"]:checked'); return !!r&&r.value==='speed'}
 function rememberSpeed(){try{localStorage.setItem('louise-speed',speedOn()?'speed':'quality')}catch(e){}}
 (function(){let v=null; try{v=localStorage.getItem('louise-speed')}catch(e){}
@@ -530,13 +550,14 @@ async function ask(){
   // an answer was asked for: it starts where the reader can see its first word
   pane.scrollIntoView({block:'start'});
   let id;
+  delete (document.getElementById('hits')||{dataset:{}}).dataset.read;
   try{
     id=await relayStart('answer',{messages:[{role:'user',content:q}],collections:scopeCollections(),
                                   annotations:scopeAnnotations(),answer_lang:want,search_id:lastSearch,speed:speedOn(),
                                   ...counts()},[]);
   }catch(e){setAnswer(''); relayDropped('answer','it could not start ('+(e.message||e)+')'); return}
   relaySave({answer_lang:want});
-  await relayListen('answer',id,{delta,reading:readingBadges});
+  await relayListen('answer',id,{delta,reading:readingBadges,read:readCount});
   finishAnswer(a,want);
   }finally{tq.hold=false}
   tqPump();              // the entries, now that the answer is out
@@ -566,7 +587,7 @@ async function relayRestore(){
     if(s.answer&&s.answer.id){
       const want=s.answer_lang===undefined?selectedLang():s.answer_lang;
       const {a,delta}=startAnswer(want);
-      await relayListen('answer',s.answer.id,{delta,reading:readingBadges});
+      await relayListen('answer',s.answer.id,{delta,reading:readingBadges,read:readCount});
       finishAnswer(a,want);
     }
   }finally{tq.hold=false}
@@ -1233,6 +1254,10 @@ function pdfPlates(h){
     return {kind:'none', caption:f.dataset.caption||'', note:f.dataset.note||'not available'};
   });
 }
+function readOf(i){
+  const n=(document.getElementById('hits')||{dataset:{}}).dataset.read;
+  return n===undefined||n===''?null:i<parseInt(n,10);
+}
 function pdfReferences(){
   const shown=el=>el?el.textContent.replace(/\s+\n/g,'\n').trim():'';
   const tl=el=>el?(el.dataset.tl||((el.querySelector('[data-tl]')||{dataset:{}}).dataset.tl)||null):null;
@@ -1244,7 +1269,7 @@ function pdfReferences(){
             authors:shown(h.querySelector('[data-authors]'))||null, chapter:shown(ch)||null, passage:shown(s),
             translated_to:tl(s), origin_url:src?src.href:null, book:h.dataset.book||null,
             chunk:h.dataset.cid||null, moved_by:[...h.querySelectorAll('[data-moved]')].map(shown),
-            plates:pdfPlates(h)};
+            read:readOf(i), plates:pdfPlates(h)};
   });
 }
 function pdfCollections(){
