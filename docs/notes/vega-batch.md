@@ -289,6 +289,35 @@ Seen in passing: `scan-EUR-Lex4` (in `eurlex/source.py:338 unit_files`) and
 `scan-gutenberg` (in `cursor.signature` → `stat`) were active in the dump
 although both collections were paused. Not measured further.
 
+### AFTER #720, 2026-11-16 21:44–21:58Z (München; app 7feec0e, the same wrappers)
+
+#720: `seeder.current_snapshot` makes the bounds cache on the shared header
+before the copy, so every view shares it. Wikipedia alone (the 8 others
+paused), the same card. **Not a clean ten minutes**:
+- 21:48–21:50Z a person's query held the node's claim (`query 60s`), and
+  corpus work stood aside by design;
+- vega-bge-m3 was stopped at 21:45:12Z and loaded again at 21:50:10Z.
+So the counted window is 21:50–21:58Z.
+
+| | BEFORE (7efabc6, 20:33–20:43Z) | AFTER (7feec0e, 21:50–21:58Z) |
+|---|---|---|
+| chunks/s (2-min worker lines) | 37.2–41.8 | 85.9 (includes the 21:50 load), 107.7, 78.7, 102.4 |
+| card busy, per minute | 41–49 % | 91.3, 92.1, 92.3, 95.8, **42.4** (21:55Z), 88.4, 92.6 % |
+| engine gaps ≥ 64 ms / calls (`/vega/keeps`) | 864 / 22,377 (3.9 %) | 224 / 45,041 (0.5 %), counted since the 21:50 load |
+| engine gaps 32–64 ms | — | 1,121 |
+| GIL held (py-spy `--gil`) | 57.8 s of 60, 94 % by the embed pool in `Snapshot._keyed` | 9.3 s of 30; `_keyed` is gone from the top |
+
+- The 21:55Z minute (42 %, 12 s of gaps, 34.6 s lost) is unexplained: no
+  query held the claim. It is the one minute under 88 %.
+- Against the per-hop line (8.6 ms a text through LocalAI, ~116 chunks/s),
+  the best 2-minute window reaches 107.7 chunks/s, 93 % of it.
+- GIL holders in the AFTER profile (30 s, behind in sampling, so
+  indicative): stats-publisher 34 %, share-fetch 14 %, archive-pubmed 11 %,
+  pipeline-wikipedia 9 %, claim-index 9 %. The first two spend their time
+  re-reading and re-serialising Codex files (`collections._load_one`,
+  `codex.canonical_json`, `codex.loads`). That is the next candidate, but
+  at 31 % of the GIL it no longer starves the lanes.
+
 ## 7. Tests
 
 - tag: a VEGA/2 round trip, its canonical bytes, and the refusals (an
