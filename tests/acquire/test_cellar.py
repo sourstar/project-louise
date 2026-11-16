@@ -525,6 +525,28 @@ def test_a_window_whose_count_times_out_is_split_by_language_not_asked_again(moc
     assert asked == [3, 1, 2, 1, 1], "all three once, then halves down to one language: never the same query again"
 
 
+def test_the_years_after_a_split_start_at_the_size_that_answered(mock, monkeypatch):
+    """2026-11-16: the split is learned. Asking every year's 24 languages
+    first spent 900 s a year before any row; the years after a timeout start
+    at the size that answered, so each level times out at most once a pass."""
+    real = cellar.sparql
+    sizes: list[int] = []
+
+    def slow_for_many(client, base, query, **kw):
+        n = len(re.findall(r"language/[A-Z]{3}>", query))
+        if "COUNT(" in query:
+            sizes.append(n)
+            if n > 1:
+                raise TransportError("cellar: connection timed out on the count: ReadTimeout after 900 s")
+        return real(client, base, query, **kw)
+    monkeypatch.setattr(cellar, "sparql", slow_for_many)
+    spec = _spec(mock)
+    list(cellar.listing(spec.endpoints[0], spec, Filter(include=("lang=en/*", "lang=fr/*", "lang=de/*")),
+                        years=range(2016, 2018)))
+    assert sizes[:5] == [3, 1, 2, 1, 1], "the first year splits as before"
+    assert sizes[5:] == [1, 1, 1], "the next year starts at one language: no timeout spent again"
+
+
 def test_one_language_whose_count_times_out_is_deferred(mock, monkeypatch):
     def always_slow(client, base, query, **kw):
         raise TransportError("cellar: connection timed out on the count: ReadTimeout")

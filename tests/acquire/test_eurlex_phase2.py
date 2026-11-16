@@ -157,3 +157,89 @@ def test_prepare_builds_a_newer_dump_before_the_pass(tmp_path, serial, monkeypat
     assert cellar.TREE_UNITS.prepare(pending, pending, coll(corpus), None) == []
     assert (corpus / src.unit_rel("it", FORMEX[0]) / "tree.json").is_file()
     assert eurlex_dump.stamp(corpus) == {"it": "2026-11-15T01:00:00+01:00"}
+
+
+# ---- what the bulk lacks, as the bulk states it, first (München, 2026-11-16) --------------
+
+def _incomplete_corpus(tmp_path):
+    """A dump build that left 31972R1473 (it) incomplete: its Formex body missing."""
+    corpus = tmp_path / "corpus"
+    eurlex_dump.build(_dump(tmp_path / "dump", drop="L_1972160IT.01000101.xml"), corpus, ["it"],
+                      log=lambda m: None)
+    return corpus
+
+
+def test_the_build_records_what_it_lacks(tmp_path, serial):  # noqa: F811
+    corpus = _incomplete_corpus(tmp_path)
+    assert eurlex_dump.incomplete(corpus) == {"it": {FORMEX[0]: {"in_force": "true", "tried": None}}}
+    assert eurlex_dump.incomplete_due(corpus, ("it",)) == [("it", FORMEX[0], "true")]
+    assert eurlex_dump.incomplete_due(corpus, ("fr",)) == []
+
+
+def test_the_pass_asks_first_for_what_the_dump_lacks_without_a_listing(tmp_path, serial, mock):  # noqa: F811
+    corpus = _incomplete_corpus(tmp_path)
+    spec = _spec(mock)
+    inv = cellar.TreeInventory(corpus, "eurlex4")
+    got = inv.list(spec.endpoints[0], spec, Filter(include=("lang=it/*",)))
+    assert [f.rel_path for f in got] == [f"lang=it/1972/{FORMEX[0]}/tree.json"]
+    assert cellar.unit_of(got[0]) == {"celex": FORMEX[0], "lang": "it"} and got[0].mtime is None
+    assert not mock.queries(), "no SPARQL: the dump said what it lacks"
+    # a profile without that language lists as before
+    assert all(f.rel_path.startswith(("lang=fr/", "history/lang=fr/"))
+               for f in inv.list(spec.endpoints[0], spec, Filter(include=("lang=fr/*",))))
+
+
+def test_a_unit_cellar_does_not_give_either_is_tried_once_and_the_listing_follows(tmp_path, serial, mock,  # noqa: F811
+                                                                                  monkeypatch):
+    corpus = _incomplete_corpus(tmp_path)
+    remote = RemoteFile(rel_path=f"lang=it/1972/{FORMEX[0]}/tree.json", mtime=None,
+                        remote=cellar.encode(FORMEX[0], "it"))
+
+    def refuse(*a, **kw):
+        raise cellar.TransportError("cellar: the tree of 31972R1473 (ITA) names no item of any form")
+    monkeypatch.setattr(cellar, "fetch_unit_from_tree", refuse)
+    with pytest.raises(cellar.TransportError):
+        cellar.TREE_UNITS.fetch(SimpleNamespace(url="https://cellar.test"), remote, corpus / remote.rel_path)
+    entry = eurlex_dump.incomplete(corpus)["it"][FORMEX[0]]
+    assert "names no item" in entry["tried"] and eurlex_dump.incomplete_due(corpus, ("it",)) == []
+    said = []
+    spec = _spec(mock)
+    inv = cellar.TreeInventory(corpus, "eurlex4")
+    monkeypatch.setattr(inv, "_say", said.append)
+    list(inv.list(spec.endpoints[0], spec, Filter(include=("lang=fr/*",))))
+    assert mock.queries(), "none left to ask first: the complete listing"
+    # a rebuild of the same dump keeps the verdict: not asked first again
+    eurlex_dump.build(_dump(tmp_path / "dump2", drop="L_1972160IT.01000101.xml"), corpus, ["it"],
+                      log=lambda m: None)
+    assert eurlex_dump.incomplete(corpus)["it"][FORMEX[0]]["tried"] == entry["tried"]
+
+
+def test_the_endpoint_going_away_is_no_verdict(tmp_path, serial, monkeypatch):  # noqa: F811
+    corpus = _incomplete_corpus(tmp_path)
+    remote = RemoteFile(rel_path=f"lang=it/1972/{FORMEX[0]}/tree.json", mtime=None,
+                        remote=cellar.encode(FORMEX[0], "it"))
+
+    def down(*a, **kw):
+        raise cellar.TransportError("cellar: ConnectError: timed out")
+    monkeypatch.setattr(cellar, "fetch_unit_from_tree", down)
+    with pytest.raises(cellar.TransportError):
+        cellar.TREE_UNITS.fetch(SimpleNamespace(url="https://cellar.test"), remote, corpus / remote.rel_path)
+    assert eurlex_dump.incomplete_due(corpus, ("it",)) == [("it", FORMEX[0], "true")]
+
+
+def test_the_listing_says_each_window(mock):
+    said = []
+    spec = _spec(mock)
+    list(cellar.listing(spec.endpoints[0], spec, Filter(include=("lang=fr/*",)), years=range(2016, 2018),
+                        say=said.append))
+    assert [m.split(":")[1].split("(")[0].strip() for m in said] == ["listed 2016", "listed 2017"]
+    assert all(" units in " in m for m in said)
+
+
+@pytest.mark.parametrize("text, episode", [
+    ("cellar: 503 to the tree of X (u)", True), ("cellar: 429 to the tree of X (u)", True),
+    ("cellar: ReadTimeout: timed out", True), ("cellar: ConnectError: [Errno 111]", True),
+    ("cellar: 404 to the tree of X (u)", False), ("cellar: the tree of X names no item of any form", False),
+])
+def test_an_episode_is_told_from_a_verdict(text, episode):
+    assert cellar._episode(cellar.TransportError(text)) is episode
