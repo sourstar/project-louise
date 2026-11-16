@@ -1218,6 +1218,21 @@ function paperChoice(){const v=document.getElementById('paper').value; return v=
 function rememberPaper(){try{localStorage.setItem('louise-paper',paperChoice())}catch(e){}}
 (function(){let v=null; try{v=localStorage.getItem('louise-paper')}catch(e){}
   if(v==='a4'||v==='letter')document.getElementById('paper').value=v})();
+// THE PLATES the entry shows, in order: a drawn one by the figure route's
+// collection, uid and hash (the node reads its own bytes), a link by its
+// address, any other with the reason the page gives
+function pdfPlates(h){
+  return [...h.querySelectorAll('.figures > *')].slice(0,24).map(f=>{
+    if(f.matches('figure.plate')){
+      const img=f.querySelector('img'), cap=f.querySelector('figcaption');
+      const u=new URL(img.getAttribute('src'),location.href);
+      return {kind:'img', collection:u.searchParams.get('collection'), uid:u.searchParams.get('uid'),
+              hash:u.searchParams.get('hash'), caption:cap?cap.textContent.trim():''};
+    }
+    if(f.matches('a.plate-link'))return {kind:'link', href:f.href, caption:f.dataset.caption||''};
+    return {kind:'none', caption:f.dataset.caption||'', note:f.dataset.note||'not available'};
+  });
+}
 function pdfReferences(){
   const shown=el=>el?el.textContent.replace(/\s+\n/g,'\n').trim():'';
   const tl=el=>el?(el.dataset.tl||((el.querySelector('[data-tl]')||{dataset:{}}).dataset.tl)||null):null;
@@ -1228,7 +1243,8 @@ function pdfReferences(){
             lang:lang==='?'?null:lang, collection:h.dataset.collection||null,
             authors:shown(h.querySelector('[data-authors]'))||null, chapter:shown(ch)||null, passage:shown(s),
             translated_to:tl(s), origin_url:src?src.href:null, book:h.dataset.book||null,
-            chunk:h.dataset.cid||null, moved_by:[...h.querySelectorAll('[data-moved]')].map(shown)};
+            chunk:h.dataset.cid||null, moved_by:[...h.querySelectorAll('[data-moved]')].map(shown),
+            plates:pdfPlates(h)};
   });
 }
 function pdfCollections(){

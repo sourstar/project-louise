@@ -4,7 +4,8 @@
    source; A4 portrait, Letter in the settings). Laid out by WeasyPrint with
    CSS Paged Media: `@page` sets the paper and its margin boxes carry the
    question and "page n of N" on every page. Nothing here is fetched: no
-   image, no external stylesheet, the fonts are the system's. #}
+   external stylesheet, the fonts are the system's, and a plate is a `data:`
+   image of the node's own bytes (app/ask_pdf.py `plate_shown`). #}
 <html lang="{{ answer_lang or 'en' }}"><head><meta charset="utf-8">
 <title>{{ site }} — {{ question_short }}</title>
 <meta name="author" content="{{ site }}">
@@ -55,6 +56,12 @@
   blockquote.passage { margin: 2pt 0 4pt; padding: 3pt 7pt; background: #f4f2ec; border-left: 2pt solid #c9c6bd;
                        font-size: 9pt; line-height: 1.45; white-space: pre-line; }
   .tr-note { font-size: 7pt; color: #6b6b66; }
+  .plates { display: flex; flex-wrap: wrap; gap: 6pt; margin: 3pt 0 5pt; }
+  figure.plate { margin: 0; max-width: 48%; break-inside: avoid; }
+  figure.plate img { display: block; max-width: 100%; max-height: 70mm; border: .6pt solid #c9c6bd; }
+  figure.plate figcaption, .plate-note { font-family: "Noto Sans", "DejaVu Sans", sans-serif; font-size: 7.5pt;
+                                          color: #6b6b66; margin-top: 2pt; }
+  .plate-note a { color: #2f4f7f; text-decoration: none; overflow-wrap: anywhere; }
   .links { font-size: 7.8pt; line-height: 1.5; }
   .links a { color: #2f4f7f; text-decoration: none; overflow-wrap: anywhere; }
   .links .k { color: #6b6b66; display: inline-block; width: 62pt; }
@@ -88,6 +95,12 @@
     {%- if r.chapter %} · section “{{ r.chapter }}”{% endif %} · rank {{ r.n }} of {{ total }}
     {%- for m in r.moved_by %} · {{ m }}{% endfor %}</div>
   {% if r.passage %}<blockquote class="passage" dir="{{ r.dir }}">{{ r.passage }}{% if r.translated_from %} <span class="tr-note">· translated from {{ r.translated_from }}</span>{% endif %}</blockquote>{% endif %}
+  {% if r.plates %}<div class="plates">
+    {%- for p in r.plates %}
+    {%- if p.kind == 'img' %}<figure class="plate"><img src="{{ p.src }}" alt="{{ p.caption or 'plate' }}">{% if p.caption %}<figcaption dir="auto">{{ p.caption }}</figcaption>{% endif %}</figure>
+    {%- elif p.kind == 'link' %}<div class="plate-note">Illustration{% if p.caption %} “{{ p.caption }}”{% endif %}, shown at the source: <a href="{{ p.href }}">{{ p.href }}</a></div>
+    {%- else %}<div class="plate-note">Illustration{% if p.caption %} “{{ p.caption }}”{% endif %}: {{ p.note }}</div>{% endif %}
+    {%- endfor %}</div>{% endif %}
   <div class="links">
     {%- if r.origin_url %}<span class="k">Original source</span><a href="{{ r.origin_url }}">{{ r.origin_url }}</a>{% else %}<span class="k">Original source</span><span class="tr-note">this collection gives no link to the origin</span>{% endif %}
     {%- if r.reader_url %}<br><span class="k">On {{ site }}</span><a href="{{ r.reader_url }}">{{ r.reader_url }}</a>{% endif %}</div>
