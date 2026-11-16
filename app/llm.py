@@ -34,6 +34,65 @@ from .rage import dispatch
 from .rage import keep as rage_keep
 from .rage.dispatch import Level
 
+#: THE CHAT MODEL'S CONTEXT (every louise-chat-* model file's context_size), the
+#: room kept for the answer and for the template's own tokens, and the
+#: characters per token a request is sized with: low on purpose, so the
+#: estimate errs large (European text runs ~4). An estimate can still be beaten
+#: — Sanuto's diaries ran denser (2026-11-16) — so the answer path also shrinks
+#: on the server's own count (`ContextExceeded`). One definition, read by
+#: app/ask/chat.py and the answer path (app/api.py).
+CONTEXT_TOKENS = 16384
+ANSWER_TOKENS = 1500
+MARGIN_TOKENS = 512
+CHARS_PER_TOKEN = 3.0
+#: how much of a refused request's body its error carries: the server's reason
+ERROR_BODY_CHARS = 300
+
+#: LocalAI's (llama.cpp's) words for a prompt over the model's context
+_CONTEXT_WORDS = re.compile(r"request \((\d+) tokens\) exceeds the available context size "
+                            r"\((\d+) tokens\)")
+
+
+class ChatRefused(httpx.HTTPStatusError):
+    """The chat endpoint answered an error: the status AND the server's reason
+    (the first ERROR_BODY_CHARS of its body), where `raise_for_status` gave a
+    bare "400 Bad Request" (München, 2026-11-16: the reason was "exceeds the
+    available context size", and the reader saw only the status)."""
+
+
+class ContextExceeded(ChatRefused):
+    """The prompt is over the chat model's context, by the server's own count:
+    `requested` tokens against `available`."""
+
+    def __init__(self, message: str, *, request, response, requested: int,
+                 available: int) -> None:
+        super().__init__(message, request=request, response=response)
+        self.requested, self.available = requested, available
+
+
+def refuse_on_error(r: httpx.Response) -> None:
+    """`r.raise_for_status()`, carrying the server's reason: a streamed body is
+    read first. A prompt over the context is a `ContextExceeded`. It wraps
+    httpx's own check, so whatever that calls an error, this does."""
+    try:
+        r.raise_for_status()
+    except httpx.HTTPStatusError:
+        pass
+    else:
+        return
+    try:
+        r.read()
+        text = r.text
+    except Exception:                    # noqa: BLE001 — the status is still said
+        text = ""
+    reason = " ".join(text.split())[:ERROR_BODY_CHARS] or r.reason_phrase
+    message = f"{r.status_code} from {r.request.url}: {reason}"
+    m = _CONTEXT_WORDS.search(text)
+    if m:
+        raise ContextExceeded(message, request=r.request, response=r,
+                              requested=int(m.group(1)), available=int(m.group(2)))
+    raise ChatRefused(message, request=r.request, response=r)
+
 _THINK = re.compile(r"<think>.*?</think>\s*", re.S)
 
 def strip_think(text: str) -> str:
@@ -194,7 +253,7 @@ def chat(messages: list[dict], temperature: float = 0.3, max_tokens: int = 1500,
     with dispatch.call(config.CHAT_URL, level, timeout=timeout), \
             httpx.Client(timeout=timeout) as client:
         r = client.post(url, json=body, headers=dispatch.level_headers())
-        r.raise_for_status()
+        refuse_on_error(r)
         got = r.json()
         model_use.touch(config.CHAT_URL, config.CHAT_MODEL)       # a real answer (app/model_use.py)
         if config.CHAT_API == "openai":
@@ -245,7 +304,7 @@ def chat_tools(messages: list[dict], tools: list[dict] | None, temperature: floa
     with dispatch.call(config.CHAT_URL, level, timeout=config.LLM_TIMEOUT), \
             httpx.Client(timeout=config.LLM_TIMEOUT) as client:
         r = client.post(url, json=body, headers=dispatch.level_headers())
-        r.raise_for_status()
+        refuse_on_error(r)
         got = r.json()
         model_use.touch(config.CHAT_URL, config.CHAT_MODEL)       # a real answer (app/model_use.py)
     msg = got["choices"][0]["message"] if config.CHAT_API == "openai" else got["message"]
@@ -284,7 +343,7 @@ def chat_stream(messages: list[dict], temperature: float = 0.3,
         # generator's later steps run in another copy of the context
         with client.stream("POST", url, json=body,
                            headers=dispatch.level_headers()) as r:
-            r.raise_for_status()
+            refuse_on_error(r)
             model_use.touch(config.CHAT_URL, config.CHAT_MODEL)   # a real answer (app/model_use.py)
             for line in r.iter_lines():
                 if not line:

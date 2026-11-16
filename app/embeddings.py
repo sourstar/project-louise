@@ -8,6 +8,7 @@ slots; order is preserved. Vectors are stored float16 when EMBED_DTYPE=f16
 """
 import contextvars
 import hashlib
+import logging
 import math
 import os
 import re
@@ -597,28 +598,39 @@ def _request_vouched(batch: list[Item], timeout: float,
             f"{recipe.url}: the encoder is declared api = \"vega\" and VEGA_URL is "
             f"unset, so no receipt can be read and nothing is embedded through it "
             f"(docs/notes/vega.md)")
-    tagged = vclient.tag_batch(batch, window=(recipe.ctx or None) if recipe.cut == TOKEN_CUT
-                               else None)
-    body: dict = {"input": list(tagged.inputs), "encoding_format": "base64"}
-    if recipe.model:
-        body["model"] = recipe.model
-    with g.admit(timeout=timeout):
-        # the keep rides the request's `metadata`, outside the tag: no part of
-        # the input's digest nor of the receipt (09 §9.12 fixes the tagged
-        # inputs and `encoding_format` in this body, nothing else)
-        with rage_keep.request(recipe.url, recipe.model,
-                               time.monotonic() if ready is None else ready) as kept:
-            r = _post(recipe, f"{recipe.url}/v1/embeddings", json={**body, **kept.body},
-                      timeout=timeout, headers=level)
-            if r.status_code >= 400:
-                kept.fail()
+    window = (recipe.ctx or None) if recipe.cut == TOKEN_CUT else None
+    # ONE runner call per request, not one per text (VEGA/2, operator's "W",
+    # docs/notes/vega-batch.md), unless this endpoint's wrapper predates it
+    batched = recipe.url not in _VEGA1_ONLY
+    for _try in range(2):
+        tagged = vclient.tag_batch(batch, window=window, batched=batched)
+        body: dict = {"input": list(tagged.inputs), "encoding_format": "base64"}
+        if recipe.model:
+            body["model"] = recipe.model
+        with g.admit(timeout=timeout):
+            # the keep rides the request's `metadata`, outside the tag: no part of
+            # the input's digest nor of the receipt (09 §9.12 fixes the tagged
+            # inputs and `encoding_format` in this body, nothing else)
+            with rage_keep.request(recipe.url, recipe.model,
+                                   time.monotonic() if ready is None else ready) as kept:
+                r = _post(recipe, f"{recipe.url}/v1/embeddings", json={**body, **kept.body},
+                          timeout=timeout, headers=level)
+                if r.status_code >= 400:
+                    kept.fail()
+        if batched and vclient.is_old_wrapper(r.status_code, r.text):
+            _VEGA1_ONLY.add(recipe.url)
+            log.warning("%s: its VeGa wrapper predates VEGA/2 batches; asked one input a "
+                        "call (VEGA/1) from now on", recipe.url)
+            batched = False
+            continue
+        break
     if r.status_code >= 500 and vclient.is_deferral(r.status_code, r.text):
         raise ReceiptDeferred(
             f"{recipe.url}: VeGa's wrapper could not deliver a receipt (HTTP "
             f"{r.status_code}); the answer is not taken")
     r.raise_for_status()
     try:
-        vectors = vclient.parse_response(r.content)
+        vectors = vclient.unpack(tagged, vclient.parse_response(r.content))
         floats = [vclient.as_floats(v) for v in vectors]
     except vclient.Refusal as e:
         raise ReceiptRefused(f"{recipe.url}: {e}") from None
@@ -638,6 +650,13 @@ def _request_vouched(batch: list[Item], timeout: float,
     if runs is not None:
         runs.update(answered)
     return floats
+
+
+log = logging.getLogger(__name__)
+
+#: endpoints whose VeGa wrapper refused a VEGA/2 batch (it predates it): asked
+#: VEGA/1 for the life of this process (`_request_vouched`)
+_VEGA1_ONLY: set[str] = set()
 
 
 def _invalid(v) -> bool:

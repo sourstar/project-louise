@@ -1319,6 +1319,9 @@ class ReceiptClient:
         self._reader: Any = None
         self._told: str | None = None
         self._trees_told: set[str] = set()
+        #: whether the service takes a batch's receipts in one line (it does
+        #: until it names its kinds without `receipts`)
+        self._batch_lines = True
         self._lock = threading.Lock()
 
     def close(self) -> None:
@@ -1387,6 +1390,27 @@ class ReceiptClient:
     def deliver(self, receipt: Mapping[str, str], run_id: str, run: Mapping[str, Any]) -> None:
         with self._lock:
             self._send({"kind": "receipt", **receipt}, run_id, run)
+
+    def deliver_many(self, receipts: list[Mapping[str, str]], run_id: str,
+                     run: Mapping[str, Any]) -> None:
+        """A VEGA/2 batch's receipts in ONE line, held all or none
+        (docs/notes/vega-batch.md). A service from before the `receipts`
+        line — it names its kinds without it — gets them one line each, and
+        is not asked again until this client is made anew."""
+        with self._lock:
+            if self._batch_lines:
+                line = {"kind": "receipts", "run_id": run_id,
+                        "receipts": [{k: r[k] for k in ("id", "input_digest", "vector_digest")}
+                                     for r in receipts]}
+                try:
+                    self._send(line, run_id, run)
+                    return
+                except ReceiptRefused as e:
+                    if "kind is run, receipt" not in str(e) or "receipts" in str(e):
+                        raise
+                    self._batch_lines = False
+            for r in receipts:
+                self._send({"kind": "receipt", **r}, run_id, run)
 
     def publish_passes(self, msg: Mapping[str, Any], run_id: str, run: Mapping[str, Any]) -> None:
         """A load's input count (`PassCount.message`): the run told first where
@@ -2130,6 +2154,85 @@ class Gate:
             raise Refusal("INVALID_ARGUMENT", "VeGa: the request is not a PredictOptions") from None
         if len(req.EmbeddingTokens):
             raise Refusal("INVALID_ARGUMENT", "VeGa: token ids carry no tag; send the tagged text")
+        if vtag.is_batch(req.Embeddings):
+            return self._batch(state, req, forward, call)
+        answer, result, receipt, tell_now = self._one(state, req, forward, call)
+        try:
+            self.receipts.deliver(receipt, state.run_id, state.run)
+        except Unavailable as e:
+            raise Refusal("UNAVAILABLE", f"VeGa unavailable: the receipt was not "
+                                         f"acknowledged: {e}") from None
+        except ReceiptRefused as e:
+            raise Refusal("INTERNAL", f"VeGa: the receipts service refused the receipt: "
+                                      f"{e}") from None
+        if self.passes is not None and self.passes.run_id == state.run_id:
+            self._passes_note(int(result.prompt_tokens))
+        if tell_now and not self._keeps_off:
+            self._keeps_flush()                      # a gate counts on it: before the vector
+        return answer                                # only now: the receipt is held
+
+    def _batch(self, state: Loaded, req: Any, forward: Callable[[bytes], bytes],
+               call: Callable[[str, bytes], bytes] | None) -> bytes:
+        """A VEGA/2 batch (docs/notes/vega-batch.md): each item embedded by
+        `_one` IN ORDER, one backend call each — the decode is still one text
+        at a time, so the bytes are VEGA/1's — then every item's receipt in ONE
+        intake line, acknowledged before the answer: the items' vectors
+        concatenated, as one final vector LocalAI passes through as it is.
+        One item refused refuses the batch, as LocalAI's loop does."""
+        try:
+            items = vtag.parse_batch(req.Embeddings)
+        except vtag.TagError as e:
+            raise Refusal("INVALID_ARGUMENT", f"VeGa: {e}") from None
+        base = req.SerializeToString()
+        vectors: list[float] = []
+        receipts: list[dict[str, str]] = []
+        tokens: list[int] = []
+        tell = False
+        width: int | None = None
+        for tid, form, content, window in items:
+            one = self.pb.PredictOptions.FromString(base)
+            one.Embeddings = vtag.tag(form, content, id=tid, window=window)[1]
+            _answer, result, receipt, tell_now = self._one(state, one, forward, call)
+            got = list(result.embeddings)
+            if width is None:
+                width = len(got)
+            elif len(got) != width:
+                raise Refusal("INTERNAL", f"VeGa: the backend answered vectors of {width} and "
+                                          f"{len(got)} components in one batch; the answer "
+                                          f"could not be split")
+            vectors.extend(got)
+            receipts.append(receipt)
+            tokens.append(int(result.prompt_tokens))
+            tell = tell or tell_now
+        if self.loaded is not state or self.child.pid != state.pid or not self.child.alive():
+            raise Refusal("UNAVAILABLE", "VeGa unavailable: the backend was reloaded while it "
+                                         "answered; ask again")
+        try:
+            self.receipts.deliver_many(receipts, state.run_id, state.run)
+        except Unavailable as e:
+            raise Refusal("UNAVAILABLE", f"VeGa unavailable: the receipts were not "
+                                         f"acknowledged: {e}") from None
+        except ReceiptRefused as e:
+            raise Refusal("INTERNAL", f"VeGa: the receipts service refused the receipts: "
+                                      f"{e}") from None
+        if self.passes is not None and self.passes.run_id == state.run_id:
+            for n in tokens:
+                self._passes_note(n)
+        if tell and not self._keeps_off:
+            self._keeps_flush()
+        # ONE FINAL VECTOR of every item's components: LocalAI passes a final
+        # layout through as it is (its pooling is for a per-token one only)
+        out = self.pb.EmbeddingResult(embeddings=vectors, tokens=1, dim=len(vectors),
+                                      prompt_tokens=sum(tokens),
+                                      layout=self.pb.EMBEDDING_LAYOUT_FINAL)
+        return out.SerializeToString()
+
+    def _one(self, state: Loaded, req: Any, forward: Callable[[bytes], bytes],
+             call: Callable[[str, bytes], bytes] | None) -> tuple[bytes, Any, dict[str, str], bool]:
+        """One tagged input embedded and checked: `(the backend's answer, its
+        result, the receipt to deliver, whether the keeps count is told now)`.
+        Nothing is delivered here: the caller delivers the receipt (one, or a
+        batch's together) before any vector goes out."""
         try:
             tid, form, content, window = vtag.parse_window(req.Embeddings)
         except vtag.TagError as e:
@@ -2198,19 +2301,7 @@ class Gate:
         receipt = {"id": tid, "run_id": state.run_id,
                    "input_digest": vtag.input_digest(form, content, window),
                    "vector_digest": vtag.vector_digest(list(result.embeddings))}
-        try:
-            self.receipts.deliver(receipt, state.run_id, state.run)
-        except Unavailable as e:
-            raise Refusal("UNAVAILABLE", f"VeGa unavailable: the receipt was not "
-                                         f"acknowledged: {e}") from None
-        except ReceiptRefused as e:
-            raise Refusal("INTERNAL", f"VeGa: the receipts service refused the receipt: "
-                                      f"{e}") from None
-        if self.passes is not None and self.passes.run_id == state.run_id:
-            self._passes_note(int(result.prompt_tokens))
-        if tell_now and not self._keeps_off:
-            self._keeps_flush()                      # a gate counts on it: before the vector
-        return answer                                # only now: the receipt is held
+        return answer, result, receipt, bool(tell_now)
 
 
 def token_bound(text: str) -> int:

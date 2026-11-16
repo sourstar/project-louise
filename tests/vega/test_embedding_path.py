@@ -133,6 +133,7 @@ class LocalAI:
         self.alter_vector = None         # after the receipt: LocalAI changed it
         self.alter_input = None          # before the backend: LocalAI changed it
         self.windows: list = []           # each input's window, as tagged
+        self.old_wrapper = False          # a wrapper from before VEGA/2
         self.vector = vector_of
         self.bodies: list[dict] = []
         self.texts = 0
@@ -149,22 +150,35 @@ class LocalAI:
                 "code": 500, "type": "",
                 "message": "rpc error: code = Unavailable desc = VeGa unavailable: "
                            "the receipt was not acknowledged"}})
+        if self.old_wrapper and any(vtag.is_batch(x) for x in json["input"]):
+            return httpx.Response(500, request=request, json={"error": {
+                "code": 500, "type": "",
+                "message": "rpc error: code = InvalidArgument desc = VeGa: an input without a "
+                           "VeGa tag: every input to a vega- model is tagged (docs/notes/vega.md)"}})
         vectors = []
-        for i, tagged in enumerate(json["input"]):
-            tid, form, content, window = vtag.parse_window(tagged)
-            self.windows.append(window)
-            if self.alter_input is not None:
-                content = self.alter_input(content)
-            v = self.vector(form, content)
-            self.texts += 1
-            if self.receipts:
-                run = self.run_of(i) if self.run_of else self.run
-                self.vega.intake({"kind": "receipt", "id": tid, "run_id": run,
-                                  "input_digest": vtag.input_digest(form, content, window),
-                                  "vector_digest": vtag.vector_digest(v)})
-            if self.alter_vector is not None:
-                v = self.alter_vector(v)
-            vectors.append(v)
+        i = 0                                       # the ITEM's index, across batches
+        for tagged in json["input"]:
+            # a VEGA/2 batch is its items, one backend call each, and ONE
+            # vector back, their concatenation (docs/notes/vega-batch.md)
+            items = (vtag.parse_batch(tagged) if vtag.is_batch(tagged)
+                     else [vtag.parse_window(tagged)])
+            out: list[float] = []
+            for tid, form, content, window in items:
+                self.windows.append(window)
+                if self.alter_input is not None:
+                    content = self.alter_input(content)
+                v = self.vector(form, content)
+                self.texts += 1
+                if self.receipts:
+                    run = self.run_of(i) if self.run_of else self.run
+                    self.vega.intake({"kind": "receipt", "id": tid, "run_id": run,
+                                      "input_digest": vtag.input_digest(form, content, window),
+                                      "vector_digest": vtag.vector_digest(v)})
+                if self.alter_vector is not None:
+                    v = self.alter_vector(v)
+                out.extend(v)
+                i += 1
+            vectors.append(out)
         if self.base64 and json.get("encoding_format") == "base64":
             items = ['"' + base64.b64encode(struct.pack(f"<{len(v)}f", *v)).decode() + '"'
                      for v in vectors]
@@ -197,7 +211,13 @@ def localai(vega, monkeypatch):
 
 
 def parsed(body: dict) -> list[tuple[str, object]]:
-    return [vtag.parse(s)[1:] for s in body["input"]]
+    """Each ITEM the body carries, `(form, content)`: a VEGA/2 batch's items
+    in order, or a VEGA/1 input."""
+    out = []
+    for s in body["input"]:
+        items = vtag.parse_batch(s) if vtag.is_batch(s) else [vtag.parse_window(s)]
+        out.extend((form, content) for _tid, form, content, _w in items)
+    return out
 
 
 # ---- what goes, and what comes back -------------------------------------------------
@@ -601,3 +621,28 @@ def test_an_input_vega_cannot_cut_exactly_is_that_inputs_refusal(localai, monkey
     monkeypatch.setattr(embeddings.httpc, "post", refused)
     with pytest.raises(embeddings.InputRefused, match="cannot be cut at 512"):
         embeddings.embed_calibration(RECIPE, ["x"], raw=True)
+
+
+# ---- VEGA/2 (docs/notes/vega-batch.md) -----------------------------------------------------
+
+def test_a_request_goes_as_one_batch_input_and_comes_back_item_by_item(localai, vega,
+                                                                        monkeypatch):
+    monkeypatch.setattr(embeddings, "_VEGA1_ONLY", set())
+    seen: set = set()
+    vectors = embeddings.embed_calibration(RECIPE, ["one", "two", "three"], runs=seen, raw=True)
+    assert vectors == [vector_of("text", t) for t in ("one", "two", "three")]
+    body, = localai.bodies
+    assert len(body["input"]) == 1 and vtag.is_batch(body["input"][0]), "one runner call"
+    assert seen == {R1} and vega.reads == 1
+
+
+def test_an_endpoint_whose_wrapper_predates_vega2_is_asked_vega1_from_then_on(localai, vega,
+                                                                               monkeypatch):
+    monkeypatch.setattr(embeddings, "_VEGA1_ONLY", set())
+    localai.old_wrapper = True
+    assert embeddings.embed_calibration(RECIPE, ["one", "two"], raw=True) == \
+        [vector_of("text", "one"), vector_of("text", "two")]
+    first, again = localai.bodies
+    assert vtag.is_batch(first["input"][0]) and not any(vtag.is_batch(x) for x in again["input"])
+    embeddings.embed_calibration(RECIPE, ["three"], raw=True)
+    assert not vtag.is_batch(localai.bodies[-1]["input"][0]), "remembered for the endpoint"

@@ -20,11 +20,24 @@ PDF from the same HTML and CSS (the operator's choice B, not taken: a print
 dialog, and page numbers that differ per browser); the template here would
 serve it unchanged.
 
-NOTHING IS FETCHED. The template draws no image and loads no stylesheet; the
-fonts are the system's (fontconfig). WeasyPrint's url_fetcher (`_fetcher`)
-refuses every URL, so neither a link in an answer nor a crafted request
-makes the node fetch anything (invariant 5: no bytes move outside the
-budget). Links are written into the PDF, never followed.
+NOTHING IS FETCHED. The template loads no stylesheet; the fonts are the
+system's (fontconfig). WeasyPrint's url_fetcher (`_fetcher`) refuses every
+URL, so neither a link in an answer nor a crafted request makes the node
+fetch anything (invariant 5: no bytes move outside the budget). Links are
+written into the PDF, never followed.
+
+THE PLATES THE PAGE SHOWED ARE IN IT (operator, 2026-11-16: "the results
+pdf is not showing the pictures shown in the results"). A plate is read
+from this node's own corpus by the figure route's own function
+(`figures.figure_bytes`: the record names it, its hash checks, a red-class
+collection or one without its acknowledgement refuses it) and drawn only
+where the route would show it inline (`figures.not_displayable`: jpeg or
+png that the bytes really are, within the caps). It enters the HTML as a
+`data:` image, the one form `_fetcher` serves, decoded from the page
+itself: no URL is followed and nothing travels. A plate that cannot be
+drawn is still listed under its entry with the reason, as the page lists
+it. THE STANDARD: RFC 2397 `data:` URLs, which WeasyPrint's own default
+fetcher serves the same way.
 
 EVERY CHARACTER IS TEXT until a rule makes it markup: Jinja autoescapes the
 template, and the answer's markdown is the Ask page's own subset (ask.html
@@ -33,6 +46,7 @@ written; the node's reader link is built here from its parts.
 """
 from __future__ import annotations
 
+import base64
 import re
 import secrets
 import threading
@@ -63,6 +77,13 @@ MAX_QUESTION = 8_000
 MAX_ANSWER = 200_000
 MAX_PASSAGE = 40_000
 MAX_SHORT = 2_000
+#: plates under one entry, and the bytes of every plate drawn in one PDF: a
+#: plate past the budget is listed, not drawn, and says so
+MAX_PLATES = 24
+MAX_PLATE_BYTES = 48 * 1024 * 1024
+#: the `data:` forms the PDF's fetcher serves: the types the figure route
+#: shows inline (figures.DISPLAYABLE)
+DATA_IMAGES = ("image/jpeg", "image/png")
 
 #: PDFs laid out at once. Layout is CPU work on the web process's threads;
 #: a burst waits its turn, bounded (`render` gives up after WAIT_S), rather
@@ -94,6 +115,20 @@ class Unavailable(RuntimeError):
     and says what supplies it."""
 
 
+class PdfPlate(BaseModel):
+    """One picture under an entry, as the page showed it: `img`, a plate
+    the page drew (the figure route's collection, uid and hash); `link`, one
+    the origin shows (`href`); `none`, one neither drawn nor linked, with the
+    page's reason (`note`)."""
+    kind: Literal["img", "link", "none"] = "img"
+    collection: str | None = Field(default=None, max_length=256)
+    uid: str | None = Field(default=None, max_length=512)
+    hash: str | None = Field(default=None, max_length=200)
+    caption: str = Field(default="", max_length=MAX_SHORT)
+    href: str | None = Field(default=None, max_length=4096)
+    note: str | None = Field(default=None, max_length=MAX_SHORT)
+
+
 class PdfReference(BaseModel):
     """One entry of the page's list, as the reader saw it. `n` is its [n]."""
     n: int = Field(ge=1, le=MAX_REFERENCES)
@@ -113,6 +148,11 @@ class PdfReference(BaseModel):
     chunk: str | None = Field(default=None, max_length=512)
     #: what a weight did to its place (invariant 4, rule 2), as the page says it
     moved_by: list[Short] = Field(default_factory=list, max_length=8)
+    #: the pictures shown under the entry, in the page's order
+    plates: list[PdfPlate] = Field(default_factory=list, max_length=MAX_PLATES)
+    #: whether the answer was given this source; None: not said (2026-11-16:
+    #: the chat model's context holds the first sources, api._fit_answer)
+    read: bool | None = None
 
 
 class AskPdf(BaseModel):
@@ -370,6 +410,48 @@ def filename(question: str, when: datetime) -> str:
     return f"louise-{when:%Y-%m-%d}-{slug(question)}.pdf"
 
 
+# ---- the plates ------------------------------------------------------------
+
+def _plate_bytes(collection: str, uid: str, hash_: str) -> tuple[bytes, str]:
+    """A plate's bytes and type, by the figure route's own function."""
+    from app.ask import figures as figures_mod
+    return figures_mod.figure_bytes(collection, uid, hash_)
+
+
+def plate_shown(p: PdfPlate, budget: list[int]) -> dict:
+    """What the PDF shows for one plate: `img` with its `data:` source where
+    the figure route would draw it inline, else `none` with the reason; a
+    `link` as the origin's http(s) address. `budget` is the bytes left for
+    this PDF's plates (MAX_PLATE_BYTES), spent here."""
+    caption = (p.caption or "").strip()
+    if p.kind == "link":
+        href = safe_url(p.href)
+        if href:
+            return {"kind": "link", "caption": caption, "href": href}
+        return {"kind": "none", "caption": caption, "note": "shown at the source; no address was given"}
+    if p.kind != "img":
+        return {"kind": "none", "caption": caption, "note": (p.note or "not available").strip()}
+    if not (p.collection and p.uid and p.hash):
+        return {"kind": "none", "caption": caption, "note": "not drawn: the page named no plate"}
+    from app.ask import figures as figures_mod
+    try:
+        data, media = _plate_bytes(p.collection, p.uid, p.hash)
+    except figures_mod.FigureNotServed as e:
+        return {"kind": "none", "caption": caption, "note": f"not drawn: {e}"}
+    except Exception as e:   # noqa: BLE001 — a plate left out with its reason, never a PDF refused
+        return {"kind": "none", "caption": caption, "note": f"not drawn: {type(e).__name__}"}
+    why = figures_mod.not_displayable(data, media)
+    if why is not None:
+        return {"kind": "none", "caption": caption, "note": f"not displayable: {why}"}
+    if len(data) > budget[0]:
+        return {"kind": "none", "caption": caption,
+                "note": f"not drawn: this PDF's {MAX_PLATE_BYTES // (1024 * 1024)} MiB of plates are spent; "
+                        "it is on the page"}
+    budget[0] -= len(data)
+    return {"kind": "img", "caption": caption,
+            "src": f"data:{media};base64,{base64.b64encode(data).decode('ascii')}"}
+
+
 # ---- the document ----------------------------------------------------------
 
 def build_html(doc: AskPdf, *, base_url: str, node: str, when: datetime,
@@ -378,6 +460,7 @@ def build_html(doc: AskPdf, *, base_url: str, node: str, when: datetime,
     and what a test reads."""
     numbers = frozenset(r.n for r in doc.references)
     cites = cited(doc.answer)
+    budget = [MAX_PLATE_BYTES]
     refs = []
     for r in sorted(doc.references, key=lambda r: r.n):
         shown_title = r.title.strip() or (r.title_original or "").strip() or f"#{r.n}"
@@ -395,6 +478,8 @@ def build_html(doc: AskPdf, *, base_url: str, node: str, when: datetime,
             "reader_url": reader_url(base_url, r.collection, r.book, r.chunk),
             "moved_by": [m.strip() for m in r.moved_by if m.strip()],
             "cited": r.n in cites,
+            "unread": r.read is False,
+            "plates": [plate_shown(p, budget) for p in r.plates],
         })
     return _ENV.get_template("pdf/answer.html").render(
         paper=PAPER[doc.paper], margin=MARGIN[doc.paper],
@@ -418,11 +503,28 @@ def _refuse(url: str, *args, **kwargs):
     raise ValueError(f"the PDF fetches nothing: {url[:80]!r}")
 
 
+def _data_image(url: str) -> tuple[str, bytes] | None:
+    """(type, bytes) of a `data:` image of DATA_IMAGES in base64 — the form
+    `plate_shown` writes — else None."""
+    for media in DATA_IMAGES:
+        head = f"data:{media};base64,"
+        if url.startswith(head):
+            try:
+                return media, base64.b64decode(url[len(head):], validate=True)
+            except ValueError:
+                return None
+    return None
+
+
 def _fetcher(weasyprint):
-    """WeasyPrint's url_fetcher (from 70, a `URLFetcher`): `fetch` refuses
-    every URL through `_refuse`, and no protocol is allowed besides."""
+    """WeasyPrint's url_fetcher (from 70, a `URLFetcher`): `fetch` serves a
+    plate's `data:` image from the page itself and refuses every other URL
+    through `_refuse`; no protocol is allowed besides."""
     class Refuse(weasyprint.urls.URLFetcher):
         def fetch(self, url, headers=None):
+            got = _data_image(url)
+            if got is not None:
+                return weasyprint.urls.URLFetcherResponse(url, got[1], {"Content-Type": got[0]})
             return _refuse(url)
     return Refuse(allowed_protocols=())
 
@@ -488,7 +590,27 @@ def _reference(n: int, hit: dict, names: dict[str, str]) -> PdfReference:
         authors=_cut(hit.get("authors"), MAX_SHORT) or None, chapter=_cut(hit.get("chapter"), MAX_SHORT) or None,
         passage=_cut(hit.get("passage") if hit.get("passage") is not None else hit.get("text"), MAX_PASSAGE),
         origin_url=_cut(hit.get("origin_url"), 4096) or None,
-        book=book, chunk=_cut(hit.get("chunk_id"), 512) if book else None)
+        book=book, chunk=_cut(hit.get("chunk_id"), 512) if book else None,
+        plates=_hit_plates(hit, hit.get("source_collection") or name),
+        read=hit["read"] if isinstance(hit.get("read"), bool) else None)
+
+
+def _hit_plates(hit: dict, collection: str | None) -> list[PdfPlate]:
+    """A hit's `figures` (05 §5.3, as the API gives them) as the PDF's
+    plates: a plate this node holds is drawn, any other listed with why."""
+    out = []
+    for f in (hit.get("figures") or [])[:MAX_PLATES]:
+        if not isinstance(f, dict) or not f.get("hash"):
+            continue
+        caption = _cut(f.get("caption"), MAX_SHORT)
+        if f.get("state", "held") == "held" and collection and hit.get("uid"):
+            out.append(PdfPlate(kind="img", collection=_cut(collection, 256), uid=_cut(hit["uid"], 512),
+                                hash=_cut(f["hash"], 200), caption=caption))
+        else:
+            out.append(PdfPlate(kind="none", caption=caption,
+                                note="not held on this node" if f.get("state") == "not-held"
+                                else "not carried by this collection"))
+    return out
 
 
 def from_chat(question: str, out: dict, *, paper: str = "a4", tz: str | None = None,

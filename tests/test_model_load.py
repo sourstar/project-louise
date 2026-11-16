@@ -463,7 +463,10 @@ def test_the_vega_receipt_path_is_still_verified_after_a_warm(localai, vega, mon
     assert [vtag.parse(s)[1:] for s in warm["input"]] == [("text", "warm")], \
         "the warm is tagged: the wrapper refuses an untagged input"
     assert warm["model"] == VEGA_MODEL and warm["encoding_format"] == "base64"
-    assert [vtag.parse(s)[1:] for s in real["input"]] == [("text", "one"), ("text", "two")]
+    # the real request goes as one VEGA/2 batch (docs/notes/vega-batch.md)
+    items = [it for s in real["input"]
+             for it in (vtag.parse_batch(s) if vtag.is_batch(s) else [vtag.parse_window(s)])]
+    assert [it[1:3] for it in items] == [("text", "one"), ("text", "two")]
     assert vega.reads == 1, "the real batch's receipts are read; the warm's never"
 
 
