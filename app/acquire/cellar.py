@@ -356,11 +356,14 @@ def _epoch(stamp: str | None) -> int | None:
 def listing(endpoint: Endpoint, spec: AcquisitionSpec, flt: Filter, *,
             years: range | None = None, client: httpx.Client | None = None,
             charge: Callable[[int], None] = budget.acquire_bytes,
-            place: Callable[[str, str, str | None], bool] | None = None) -> Iterator[RemoteFile]:
+            place: Callable[[str, str, str | None], bool] | None = None,
+            say: Callable[[str], None] | None = None) -> Iterator[RemoteFile]:
     """The origin's COMPLETE listing for the profile (the spec's listing
     contract): every window to its count, every page to the end. `place`
     (parser 4): `(celex, lang, in force) → history?`, each work's in-force
-    asked with its page."""
+    asked with its page. `say`: one line a window — its year, languages,
+    rows and seconds, held or asked — so a listing of hours is seen to move
+    (München, 2026-11-16: 31 min without a line)."""
     from ..plugins.eurlex.source import LANGUAGES
     languages = languages_of(flt)
     if not languages:
@@ -369,10 +372,25 @@ def listing(endpoint: Endpoint, spec: AcquisitionSpec, flt: Filter, *,
     years = years if years is not None else range(FIRST_YEAR, time.gmtime().tm_year + 1)
     own = client is None
     client = client or httpx.Client(timeout=TIMEOUT_S)
+    # THE SPLIT, LEARNED (2026-11-16): a count that timed out is split
+    # (`_window_files`), and the years after start at the size that answered
+    # — measured 2026-11-14, 1990's count for 24 languages ran past 900 s
+    # while Italian alone answered in 26-235 s, so asking each year's 24
+    # first spent 900 s a year before any row. Never wider again in a pass.
+    learned = {"group": len(languages)}
     try:
         for year in years:
             _stop_check()
-            yield from _window_files(client, endpoint.url, year, languages, code_of, charge, place)
+            t0, n = time.monotonic(), 0
+            group = max(1, learned["group"])
+            chunks = [languages[i:i + group] for i in range(0, len(languages), group)]
+            for chunk in chunks:
+                for f in _window_files(client, endpoint.url, year, chunk, code_of, charge, place, learned):
+                    n += 1
+                    yield f
+            if say is not None:
+                say(f"cellar: listed {year} ({len(languages)} language(s), {len(chunks)} window(s)): {n} units "
+                    f"in {time.monotonic() - t0:.0f} s")
     finally:
         if own:
             client.close()
@@ -409,8 +427,24 @@ def _timed_out(e: TransportError) -> bool:
     return isinstance(e, backoff.Deferred) or "timed out" in str(e).lower()
 
 
+#: httpx's words for the endpoint going away, and the statuses that are an
+#: episode (backoff.retryable_status) — not a verdict on the unit
+_EPISODE = ("timed out", "timeout", "connecterror", "connection", "readerror", "remoteprotocolerror",
+            "network")
+_EPISODE_STATUS = re.compile(r"cellar: (?:429|5\d\d) to ")
+
+
+def _episode(e: TransportError) -> bool:
+    """The endpoint going away rather than the unit being bad (engine.transient
+    knows rsync's words; these are httpx's and Cellar's)."""
+    from . import backoff, engine
+    text = str(e).lower()
+    return (isinstance(e, backoff.Deferred) or engine.transient(text) or any(m in text for m in _EPISODE)
+            or bool(_EPISODE_STATUS.search(text)))
+
+
 def _window_files(client, base: str, year: int, languages: tuple[str, ...], code_of: dict,
-                  charge, place=None) -> Iterator[RemoteFile]:
+                  charge, place=None, learned: dict | None = None) -> Iterator[RemoteFile]:
     """One CELEX year's files in `languages`. A COUNT THAT TIMES OUT is not
     asked again: the window is split, its languages in two halves, each
     counted and paged on its own, down to one language (the architecture
@@ -427,8 +461,10 @@ def _window_files(client, base: str, year: int, languages: tuple[str, ...], code
     except TransportError as e:
         if len(languages) > 1 and _timed_out(e):
             half = len(languages) // 2
-            yield from _window_files(client, base, year, languages[:half], code_of, charge, place)
-            yield from _window_files(client, base, year, languages[half:], code_of, charge, place)
+            if learned is not None:
+                learned["group"] = min(learned.get("group", len(languages)), max(1, half))
+            yield from _window_files(client, base, year, languages[:half], code_of, charge, place, learned)
+            yield from _window_files(client, base, year, languages[half:], code_of, charge, place, learned)
             return
         raise
     try:
@@ -861,7 +897,8 @@ class CellarInventory:
         if not _tree_mode(collection):
             return spec
         from dataclasses import replace
-        return replace(spec, inventory=TreeInventory(Path(collection.corpus_dir)), unit_fetcher=TREE_UNITS)
+        return replace(spec, inventory=TreeInventory(Path(collection.corpus_dir), collection.name),
+                       unit_fetcher=TREE_UNITS)
 
     def list(self, endpoint: Endpoint, spec: AcquisitionSpec, profile_filter: Filter):
         return listing(endpoint, spec, profile_filter)
@@ -967,11 +1004,15 @@ class TreeInventory(CellarInventory):
     held — the base or the history slice, fixed when first held — and a unit
     not held yet placed by its work's in-force (`is_history`)."""
 
-    def __init__(self, corpus: Path) -> None:
+    def __init__(self, corpus: Path, name: str | None = None) -> None:
         self.corpus = Path(corpus)
+        self.name = name or self.corpus.name
 
     def for_collection(self, spec, collection):
         return spec
+
+    def _say(self, message: str) -> None:
+        print(f"{time.strftime('%H:%M:%S')} [{self.name} info:cellar] {message}", flush=True)
 
     def _place(self, celex: str, lang: str, in_force: str | None) -> bool:
         from ..plugins.eurlex.source import HISTORY, unit_rel
@@ -983,7 +1024,24 @@ class TreeInventory(CellarInventory):
         return is_history(celex, in_force)
 
     def list(self, endpoint: Endpoint, spec: AcquisitionSpec, profile_filter: Filter):
-        return listing(endpoint, spec, profile_filter, place=self._place)
+        """WHAT THE BULK LACKS, AS THE BULK STATES IT, FIRST: the units the
+        Data Dump build recorded as listed and not held whole
+        (eurlex_dump.INCOMPLETE), not held now and not tried — those of the
+        profile's slices — with no listing at all; the complete listing once
+        none is left. A short listing is safe: nothing reads a unit absent
+        from it as gone from the origin (engine.py). Bulk first holds: the
+        record exists only after the dump was used whole (`held_back`)."""
+        from . import eurlex_dump, engine
+        due = []
+        for lang, celex, inf in eurlex_dump.incomplete_due(self.corpus, languages_of(profile_filter)):
+            f = RemoteFile(rel_path=rel_path(lang, celex, self._place(celex, lang, inf)), mtime=None,
+                           remote=encode(celex, lang))
+            if engine._apply_filters([f], spec.filters, profile_filter):
+                due.append(f)
+        if due:
+            self._say(f"the {len(due)} unit(s) the Data Dump lacks whole, asked first, without a listing")
+            return due
+        return listing(endpoint, spec, profile_filter, place=self._place, say=self._say)
 
 
 class TreeUnits(CellarUnits):
@@ -1007,7 +1065,19 @@ class TreeUnits(CellarUnits):
             if held is not None and held >= remote.mtime:
                 self._count(Fetched(files={}, moved=0, tree_from="held"))
                 return 0
-        got = fetch_unit_from_tree(endpoint.url, unit["celex"], unit["lang"], dest.parent)
+        try:
+            got = fetch_unit_from_tree(endpoint.url, unit["celex"], unit["lang"], dest.parent)
+        except TransportError as e:
+            # a unit the dump lacked that Cellar does not give either: not
+            # asked first again (eurlex_dump.mark_tried), so the complete
+            # listing has its turn; the endpoint going away is no verdict
+            from . import eurlex_dump
+            from ..transfer.bucket import TransferAborted as _Aborted
+            if not _episode(e) and not isinstance(e, (TransferAborted, _Aborted)):
+                root = _corpus_of(dest, remote)
+                if root is not None:
+                    eurlex_dump.mark_tried(root, unit["lang"], unit["celex"], str(e))
+            raise
         self._count(got)
         return got.moved
 
@@ -1020,6 +1090,12 @@ class TreeUnits(CellarUnits):
         langs = sorted({unit_of(f)["lang"] for f in pending if is_unit(f)})
         eurlex_dump.build_newer(dumps.base, Path(collection.corpus_dir), langs)
         return []
+
+
+def _corpus_of(dest: Path, remote: RemoteFile) -> Path | None:
+    """The corpus root a unit's file lands under: `dest` less its rel_path."""
+    text, rel = str(dest), str(remote.rel_path)
+    return Path(text[:-len(rel)]) if text.endswith(rel) else None
 
 
 INVENTORY = CellarInventory()

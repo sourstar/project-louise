@@ -46,6 +46,7 @@ from __future__ import annotations
 
 import os
 import re
+import threading
 import zipfile
 from collections import Counter, OrderedDict
 from pathlib import Path
@@ -188,6 +189,74 @@ def _stamp(corpus: Path, langs: dict[str, str]) -> None:
     os.replace(tmp, path)
 
 
+#: the units the dump lists and does not hold whole (`incomplete`): `{lang:
+#: {celex: {"in_force": …, "tried": null | "<why it failed>"}}}`, written by
+#: the build for every language it visited. The per-unit pass asks Cellar
+#: for exactly these FIRST (cellar.TreeInventory: no listing), then lists
+#: (München, 2026-11-16: ~10.5k units waited behind a 24-language listing
+#: of every year since 1952)
+INCOMPLETE = ".eurlex-dump-incomplete.json"
+_incomplete_lock = threading.Lock()
+
+
+def incomplete(corpus: Path) -> dict[str, dict[str, dict]]:
+    import json
+    try:
+        got = json.loads((Path(corpus) / INCOMPLETE).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return got if isinstance(got, dict) else {}
+
+
+def _write_incomplete(corpus: Path, data: dict) -> None:
+    import json
+    path = Path(corpus) / INCOMPLETE
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.{threading.get_ident()}")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp.write_text(json.dumps(data, sort_keys=True), encoding="utf-8")
+    os.replace(tmp, path)
+
+
+def _record_incomplete(corpus: Path, found: dict[str, dict[str, str | None]]) -> None:
+    """The languages just built: their incomplete units as this build found
+    them, a unit tried before keeping its `tried` (it failed at Cellar too,
+    and is not asked again until a newer dump)."""
+    with _incomplete_lock:
+        had = incomplete(corpus)
+        for lang, units in found.items():
+            old = had.get(lang) or {}
+            had[lang] = {celex: {"in_force": inf, "tried": (old.get(celex) or {}).get("tried")}
+                         for celex, inf in sorted(units.items())}
+        _write_incomplete(corpus, had)
+
+
+def incomplete_due(corpus: Path, langs) -> list[tuple[str, str, str | None]]:
+    """(lang, celex, in_force) of the recorded incomplete units of `langs`
+    not held now and not tried: what the per-unit pass asks Cellar for first."""
+    from ..plugins.eurlex.source import unit_rel
+    out = []
+    for lang, units in sorted(incomplete(corpus).items()):
+        if lang not in langs:
+            continue
+        for celex, entry in sorted(units.items()):
+            if (entry or {}).get("tried") or _held_at(Path(corpus), unit_rel(lang, celex)) is not None:
+                continue
+            out.append((lang, celex, (entry or {}).get("in_force")))
+    return out
+
+
+def mark_tried(corpus: Path, lang: str, celex: str, why: str) -> None:
+    """A recorded incomplete unit Cellar did not give either (a failure that
+    is not the endpoint going away): not asked first again."""
+    with _incomplete_lock:
+        had = incomplete(corpus)
+        entry = (had.get(lang) or {}).get(celex)
+        if entry is None:
+            return
+        entry["tried"] = why[:300]
+        _write_incomplete(corpus, had)
+
+
 def _held_at(corpus: Path, rel: str) -> Path | None:
     from ..plugins.eurlex import rdf
     from ..plugins.eurlex.source import HISTORY
@@ -233,6 +302,7 @@ def build_chunk(mtd_paths: tuple[str, ...], uuids: list[str], langs: list[tuple[
         pending_rel.clear()
         pending_bytes = 0
     trees: dict[str, tuple[dict, str] | str] = {}
+    incomplete_found: dict[str, dict[str, str | None]] = {}
     zips = _mtd(mtd_paths)
     for uuid in uuids:
         data = None
@@ -287,6 +357,8 @@ def build_chunk(mtd_paths: tuple[str, ...], uuids: list[str], langs: list[tuple[
             listed = note.items.get(form) or [] if form else []
             if not listed or any(not it.name or it.name not in held_forms.get(form, {}) for it in listed):
                 c["incomplete"] += 1           # the API's (phase 2), never another form
+                inf = None if note.in_force is None else ("true" if note.in_force else "false")
+                incomplete_found.setdefault(lang, {})[celex] = inf
                 continue
             try:
                 files = {it.name: lz.read(held_forms[form][it.name]) for it in listed}
@@ -317,7 +389,12 @@ def build_chunk(mtd_paths: tuple[str, ...], uuids: list[str], langs: list[tuple[
             if len(pending) >= LAND_BATCH or pending_bytes >= LAND_BYTES:
                 flush()
     flush()
+    counts[_INCOMPLETE_KEY] = incomplete_found      # type: ignore[assignment] — popped by `build`
     return counts
+
+
+#: build_chunk's units left incomplete, beside its counts (popped by `build`)
+_INCOMPLETE_KEY = "_incomplete"
 
 
 def build(dump_dir: Path, corpus: Path, languages: list[str] | None = None, *,
@@ -344,7 +421,10 @@ def build(dump_dir: Path, corpus: Path, languages: list[str] | None = None, *,
     tasks = [(tuple(str(p) for p in mtd), uuids[i:i + chunk], pairs, str(corpus), refresh)
              for i in range(0, len(uuids), chunk)]
     total: dict[str, Counter] = {l: Counter() for l in langs}
+    found_incomplete: dict[str, dict[str, str | None]] = {l: {} for l in langs}
     for k, got in enumerate(parallel.each_part(build_chunk, tasks), 1):
+        for l, units in (got.pop(_INCOMPLETE_KEY, None) or {}).items():
+            found_incomplete.setdefault(l, {}).update(units)
         for l, c in got.items():
             total[l].update(c)
         if k % 10 == 0 or k == len(tasks):
@@ -354,7 +434,9 @@ def build(dump_dir: Path, corpus: Path, languages: list[str] | None = None, *,
         c = total[l]
         log(f"[eurlex-dump] {l}: " + ", ".join(f"{k} {v}" for k, v in sorted(c.items()) if k != "bytes")
             + f"; {c['bytes'] >> 20} MiB")
-    # every work visited for every language: the dump is used whole for them
+    # every work visited for every language: the dump is used whole for them,
+    # and what it lacks is named for the per-unit pass to ask first
+    _record_incomplete(corpus, found_incomplete)
     _stamp(corpus, {l: found[l][1].isoformat() for l in langs})
     return total
 

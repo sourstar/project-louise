@@ -20,6 +20,18 @@ measured (published figures disagree).
 
 ### 2026-11-16
 
+- **EUR-Lex4's per-unit pass asks first for what the dump lacks, without a listing** (München: 31 min
+  after the resume, no line, no fetch). The pass listed Cellar for every CELEX year since 1952 in 24
+  languages before fetching anything (the engine takes the whole listing first), and each year's first
+  count asked all 24 at once — measured 2026-11-14 past 900 s for 1990. Now: (1) the dump build records
+  the units it lists and does not hold whole (`.eurlex-dump-incomplete.json`, ~10.5k), and
+  `TreeInventory.list` gives exactly those not held and not tried, of the profile's slices — no SPARQL;
+  a unit Cellar does not give either (not an endpoint episode, `cellar._episode`) is marked tried, so
+  the complete listing has its turn once none is left; (2) the listing learns its split: the years
+  after a timed-out count start at the size that answered; (3) one line a listed year (`cellar: listed
+  <year> (…): N units in S s`), so the rate is measured, not guessed. Bulk first holds: the record
+  exists only after the dump was used whole.
+
 - **EUR-Lex: the act's own Formex wrapper** (app/plugins/eurlex/formex.py `own_wrapper`; München's facts
   from the dump of 2026-11-15). 1,232 Croatian units were refused as "two wrappers" (it: 1, every other
   language 0–26): a Croatian Special Edition volume gives ONE fmx4 manifestation whose items are the
