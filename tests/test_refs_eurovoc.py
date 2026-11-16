@@ -101,3 +101,43 @@ def test_a_sync_held_back_runs_again_once_acknowledged(tmp_path):
     os.utime(base / eurovoc.ACK, (later, later))
     refs_store.sync_all(store.con, tmp_path / "refs")
     assert store.count("concept_label") > 0
+
+
+def test_a_sync_of_one_source_reads_no_other(tmp_path, monkeypatch):
+    """`dev refs-sync --ack eurovoc` syncs eurovoc alone (München,
+    2026-11-16: it re-read clinvar's 442 MB for half an hour)."""
+    import pytest
+    base, store = _synced(tmp_path, terms=b"the reuse notice", ack=True)
+    seen = []
+    real = refs_store.sync_source
+    monkeypatch.setattr(refs_store, "sync_source", lambda con, src, state: seen.append(src.source_id)
+                        or real(con, src, state))
+    refs_store.sync_all(store.con, tmp_path / "refs", only=("eurovoc",))
+    assert seen == ["eurovoc"]
+    with pytest.raises(KeyError, match="eurovok"):
+        refs_store.sync_all(store.con, tmp_path / "refs", only=("eurovok",))
+
+
+def test_the_pass_syncs_the_named_source_alone_one_source_a_child(tmp_path, monkeypatch, capsys):
+    """tools/sync_refs.py: `--ack eurovoc` acknowledges and syncs eurovoc
+    alone; each source is a task of the pass's pool (parallel.each_part)."""
+    import sys
+    from app import parallel
+    from tools import sync_refs
+    base = tmp_path / "refs" / eurovoc.DIR
+    base.mkdir(parents=True)
+    _file(base, "eurovoc", "1073").rename(base / "eurovoc_in_skos_core_concepts.rdf")
+    (base / eurovoc.TERMS).write_bytes(b"the reuse notice")
+    tasks = []
+    real = parallel.each_part
+    monkeypatch.setattr(parallel, "each_part", lambda fn, t, **k: tasks.extend(t) or real(fn, t, **k))
+    monkeypatch.setattr(parallel, "processes", lambda: 1)
+    monkeypatch.setattr(refs_store, "held_corpora", lambda: {})
+    monkeypatch.setattr(sys, "argv", ["sync_refs", "--src", str(tmp_path / "refs"),
+                                      "--db", str(tmp_path / "refs.db"), "--ack", "eurovoc"])
+    sync_refs.main()
+    out = capsys.readouterr().out
+    assert [t[3] for t in tasks] == ["eurovoc"] and "ack eurovoc:" in out
+    assert eurovoc.held_back(base) is None
+    con = refs.connect(tmp_path / "refs.db")
+    assert con.execute("SELECT COUNT(*) FROM concept_label").fetchone()[0] > 0

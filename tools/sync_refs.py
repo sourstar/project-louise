@@ -9,7 +9,7 @@ to force reprocessing).
 
 Usage:
   python -m app.louise dev refs-sync --src /path/to/refs-dir [--db /data/refs.db]
-                             [--fetch] [--force] [--ack eurovoc]
+                             [--fetch] [--force] [--ack eurovoc] [--only SOURCE]
 """
 import argparse
 from pathlib import Path
@@ -17,6 +17,17 @@ from pathlib import Path
 from app.refs import connect
 from app.refs import acquire as refs_acquire
 from app.refs import store as refs_store
+
+
+def _sync_one(db: str | None, src: str, corpora, source_id: str):
+    """One source's sync in a child of the pass's pool: its own connection
+    to refs.db (WAL, a busy timeout: each source writes its own tables in
+    short batch transactions, refs/store.py `sync_source`)."""
+    con = connect(Path(db) if db else None)
+    try:
+        return source_id, refs_store.sync_all(con, Path(src), corpora=corpora, only=(source_id,))[source_id]
+    finally:
+        con.close()
 
 
 def main() -> None:
@@ -33,8 +44,10 @@ def main() -> None:
                     help="with --fetch: re-download even if the local copy is fresh")
     p.add_argument("--ack", action="append", default=[], metavar="SOURCE",
                     help="record the acknowledgement of a yellow source's terms (invariant 9: "
-                         "a timestamp and the sha256 of <src>/<source>/TERMS.txt), then sync; "
-                         "today: eurovoc")
+                         "a timestamp and the sha256 of <src>/<source>/TERMS.txt), then sync "
+                         "that source alone; today: eurovoc")
+    p.add_argument("--only", action="append", default=[], metavar="SOURCE",
+                    help="sync only this source (repeatable); every source otherwise")
     args = p.parse_args()
 
     for source_id in args.ack:
@@ -57,9 +70,22 @@ def main() -> None:
     corpora = refs_store.held_corpora()
     for plugin, roots in sorted(corpora.items()):
         print(f"corpus {plugin}: {', '.join(str(r) for r in roots)}")
-    results = refs_store.sync_all(con, args.src, corpora=corpora)
-    for source_id, result in results.items():
-        print(f"{source_id}: {result}")
+    # --ack syncs what it acknowledged, never every source again (München,
+    # 2026-11-16: `--ack eurovoc` re-read clinvar's 442 MB for half an hour)
+    only = tuple(dict.fromkeys([*args.only, *args.ack])) or None
+    from app import parallel
+    from app.refs import REFS_REGISTRY
+    sids = only or tuple(REFS_REGISTRY)
+    unknown = sorted(set(sids) - set(REFS_REGISTRY))
+    if unknown:
+        raise SystemExit(f"no reference source named {', '.join(unknown)}")
+    con.close()
+    # MULTI-PROCESS (CLAUDE.md): one source a child, the sources independent
+    # (their own tables), so a pass takes the cores the node allows; the same
+    # one process where it allows one (parallel.each_part)
+    tasks = [(str(args.db) if args.db else None, str(args.src), corpora, sid) for sid in sids]
+    for source_id, result in parallel.each_part(_sync_one, tasks):
+        print(f"{source_id}: {result}", flush=True)
     from app.refs import eurovoc
     why = eurovoc.held_back(args.src / eurovoc.DIR) if (args.src / eurovoc.DIR).is_dir() else None
     if why:
