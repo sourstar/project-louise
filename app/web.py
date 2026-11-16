@@ -3036,9 +3036,12 @@ def _license_state(collection: collections_mod.Collection) -> dict:
     from . import licensing
     cls = licensing.license_class_for(collection)
     state = licensing.state_for(collection)
+    from . import credits as credits_mod
     return {
         "class": None if cls == "unknown" else cls,
         "state": state,
+        # whom the text is from, as its licence asks (app/credits.py)
+        "credits": credits_mod.of(collection),
         "ack_recorded": bool(collection.license_ack),
         "acquire_enabled": collection.acquire_enabled,
         # the ack button applies when use is gated: a yellow/red class, no

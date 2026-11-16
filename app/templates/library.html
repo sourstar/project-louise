@@ -67,6 +67,7 @@
        own colour, so a yellow licence reads yellow inside a green
        border instead of the whole badge reading green. #}
     <span class="badge {{ 'err' if c.license.needs_ack else 'ok' }}"{% if c.license.ok %} title="{{ 'terms acknowledged' if c.license.state == 'acknowledged' else 'open license — no acknowledgement needed' }}"{% elif c.license.needs_ack %} title="the terms are not yet acknowledged: Options › acknowledge license…"{% endif %}>license: <span class="lic-{{ c.license.class }}">{{ c.license.class }}</span>{{ ' — ack needed' if c.license.needs_ack else (' ✓' if c.license.ok else '') }}</span>
+    {% for line in c.license.credits or [] %}<div class="note credit">{{ line }}</div>{% endfor %}
     {% endif %}
     {% if c.copy_state and c.copy_state.state != 'in-use' %}
     {# 03 §3.6: a copy this peer has not finished testing. Red once the node

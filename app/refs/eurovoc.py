@@ -56,6 +56,14 @@ from ..plugins.base import LicenseClass, RefColumn, RefRecordBatch, RefSchema, R
 
 SOURCE_ID = "eurovoc"
 DIR = "eurovoc"
+#: whom the labels are from, and the credit the reuse notice asks (operator,
+#: 2026-11-16: "I accept the European Commission reuse notice, add the
+#: credits"): on every result and card of a collection whose subjects are
+#: EuroVoc's (app/credits.py)
+PROVIDER = "Publications Office of the European Union — EuroVoc and the EU authority tables"
+ATTRIBUTION = ("Subject and author labels: EuroVoc and the EU authority tables, © European Union, "
+               "Publications Office of the European Union; reuse authorised under Commission "
+               "Decision 2011/833/EU")
 TERMS = "TERMS.txt"
 ACK = "ack.json"
 FILES = ("eurovoc_in_skos_core_concepts.rdf", "corporatebodies-skos.rdf", "subject-matter-skos.rdf",
