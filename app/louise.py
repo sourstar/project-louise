@@ -3390,6 +3390,7 @@ def cmd_dev_eurlex_dump(a) -> int:
     linked in without their notice (RULE 1), in the base or the history
     slice. Resumable: a landed unit is never written again."""
     from app.acquire import datadump, eurlex_dump
+    from app import collections as collections_mod
     c = collections_mod.by_name(a.collection)
     if c is None or c.plugin != "eurlex":
         raise SystemExit(f"{a.collection}: not a held eurlex collection")

@@ -195,3 +195,13 @@ def test_the_unit_origin_carries_the_codex_s_parser():
         assert got.parser == 4
     finally:
         got.close()
+
+
+def test_the_command_resolves_its_collection(monkeypatch, tmp_path):
+    """`louise dev eurlex-dump` reaches its own checks (2026-11-16 on the node:
+    a NameError on `collections_mod` before the first one)."""
+    from app import collections as collections_mod, louise
+    monkeypatch.setattr(collections_mod, "by_name", lambda name: None)
+    a = SimpleNamespace(collection="nope", dump=str(tmp_path), languages=None, carry_from=None)
+    with pytest.raises(SystemExit, match="not a held eurlex collection"):
+        louise.cmd_dev_eurlex_dump(a)
