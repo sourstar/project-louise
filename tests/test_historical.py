@@ -297,9 +297,10 @@ def test_the_merge_keeps_every_other_claim_and_replaces_the_matchers():
                        "subject_lang": "it", "object_lang": "en"}).encode()
     human = json.dumps(_claim(None, "human", "gutenberg:7")).encode()
     old = json.dumps(_claim(subject="gutenberg:8")).encode()
-    lines, summary = tool.merge([work, human, old], [_claim(subject="gutenberg:9")])
-    assert lines[:2] == [work, human] and len(lines) == 3
-    assert summary == {"kept": 2, "replaced": 1, "language_stage": 1, "claims": 3}
+    v0 = json.dumps({**_claim(subject="gutenberg:6"), "method": {**historical.MATCHER, "version": 0}}).encode()
+    lines, summary = tool.merge([work, human, old, v0], [_claim(subject="gutenberg:9")])
+    assert lines[:2] == [work, human] and len(lines) == 3      # every version of the matcher replaced
+    assert summary == {"kept": 2, "replaced": 2, "language_stage": 1, "claims": 3}
     # a same-work of ONE language needs a stage on one end
     one = json.dumps({"type": "same-work", "subject": "gutenberg:3", "object": "gutenberg:4",
                       "subject_lang": "it", "object_lang": "it"}).encode()

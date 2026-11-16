@@ -20,9 +20,11 @@ historical-markers 1): the medieval markers over the WHOLE record, its
 first publication where stated, never a translation.
 
 THE MERGE. Every line of the existing file is kept as it was, except the
-matcher's own earlier `language-stage` claims, which this pass replaces —
-so a person's claim (`human`) and Wikidata's stay beside the matcher's and
-win where read (09 §9.5: a claim is identified by type, subject and
+matcher's own earlier `language-stage` claims — of ANY version of
+historical-markers, so a new version replaces the old one's claims and two
+matcher claims about one record never share an identity — which this
+pass replaces. A person's claim (`human`) stays beside the matcher's and
+wins where read (09 §9.5: a claim is identified by type, subject and
 method kind). A `same-work` of ONE language is refused unless one of its
 ends carries a `language-stage` claim in the merged file (02 §2.10,
 amended 2026-11-16).
@@ -103,9 +105,11 @@ def merge(existing: list[bytes], stage_claims: list[dict[str, Any]]) -> tuple[li
     they were, less the matcher's earlier stage claims, then the new ones."""
     from app import historical
     from app.hold import codex as cx
-    kept = [line for line in existing
-            if not (json.loads(line).get("type") == "language-stage"
-                    and json.loads(line).get("method") == historical.MATCHER)]
+    def ours(c: dict[str, Any]) -> bool:
+        m = c.get("method") or {}
+        return (c.get("type") == "language-stage" and m.get("kind") == "matcher"
+                and m.get("id") == historical.MATCHER["id"])          # whatever its version
+    kept = [line for line in existing if not ours(json.loads(line))]
     new = [cx.canonical_json(c) for c in sorted(stage_claims, key=lambda c: c["subject"])]
     lines = kept + new
     staged = {json.loads(line)["subject"] for line in lines

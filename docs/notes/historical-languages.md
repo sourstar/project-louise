@@ -164,13 +164,20 @@ stay at answer time.
   publication before 1582 — never for a translation (a `trl` credit),
   never for a work first published from 1582. The stage claimed is
   Wikidata's Old Italian, Q135913388 ("from about 960 until the founding
-  of the Accademia della Crusca in 1582"). **Open:** 1582–1800 Italian has
-  no Wikidata item and no 639-3 code, so the matcher claims nothing for
-  it; such books are read by their passages.
-- **The merge** keeps every line of the existing claims file, replaces only
-  the matcher's earlier stage claims, and refuses a `same-work` of one
-  language unless one end carries a stage (02 §2.10, amended: Dante and a
-  modern Italian rendering).
+  of the Accademia della Crusca in 1582"). 1582–1800 Italian has no
+  Wikidata item and no 639-3 code (searched 2026-11-16: "Middle Italian",
+  "Early Modern Italian", "italiano rinascimentale", none), so the matcher
+  claims nothing for it (architecture: never a label of ours); such books
+  are read by their passages, where the Renaissance spellings are markers.
+  Naming the stage by a standard identifier is vocabulary, like an ISO
+  639-3 code: nothing about a record is read from Wikidata (architecture,
+  under #701).
+- **The merge** keeps every line of the existing claims file and replaces
+  the matcher's earlier stage claims of any version. A `same-work` of one
+  language is refused unless one end carries a stage (02 §2.10, amended:
+  Dante and a modern Italian rendering) — by `create` and `update --claims`
+  over the whole claim set (`read_claims` and the streamed `survey`), not
+  only by the tool.
 - **At answer time** (Quality): the claim is attached to the hit as the
   fact `language_stage` (app/ask/annotations.py); a record with a claim is
   read by it (or not at all for a person's null); a record without one is

@@ -205,3 +205,43 @@ def test_the_claims_are_re_checked_against_the_targets_records_twin_where_it_ser
     assert got.against == {"pubmed-twin": "2026-09"}
     c = claims_by_uid(tmp_path, got.snapshot)["annotations:1"]
     assert c["target_snapshot"] == "2026-09" and got.changed == 2
+
+
+def a_stage(subject="pubmed:1", obj="wikidata:Q135913388", kind="matcher"):
+    method = {"kind": "matcher", "id": "historical-markers", "version": 1} if kind == "matcher" else {"kind": kind}
+    return {"type": "language-stage", "subject": subject, "object": obj, "method": method,
+            "evidence": {"why": "a test"}, "confidence": "0.8", "contributor": "a test annotator"}
+
+
+def test_a_same_work_of_one_language_needs_a_stage_through_create_and_update(tmp_path):
+    """02 §2.10, amended 2026-11-16: two records of ONE language are the same
+    work only where one of them carries a language-stage claim with a stage
+    in the same set — refused by `create` and by `update --claims` alike,
+    not only by the tool that builds the file (architecture's review)."""
+    a_target(tmp_path)
+    one = a_claim("pubmed:3", "pubmed:4", subject_lang="en", object_lang="en")
+    with pytest.raises(ann.AnnotationsError, match="one language"):
+        ann.create(tmp_path, "bare", target_ref="pubmed", from_snapshot=TARGET_SNAPSHOT,
+                   claims=claims_file(one), platform_image="sha256:" + "0" * 64, snapshot_id="2026-09",
+                   key=KEY, now=NOW, nonce="0f" * 16, log=lambda m: None)
+    # a person's "not an older stage" gives no stage: still refused
+    with pytest.raises(ann.AnnotationsError, match="one language"):
+        ann.read_claims(claims_file(one, a_stage("pubmed:3", obj=None, kind="human")), target_plugin="pubmed")
+    assert len(ann.read_claims(claims_file(one, a_stage("pubmed:4")), target_plugin="pubmed")) == 2
+    make(tmp_path)
+    with pytest.raises(ann.AnnotationsError, match="one language"):
+        update(tmp_path, claims=claims_file(a_claim(), one))
+    assert not (col.shard_dir_of(tmp_path, NAME) / "snapshots/2026-10.json").exists(), "nothing written"
+
+
+def test_the_streamed_survey_refuses_it_too(tmp_path):
+    from app.hold import annotations_stream as st
+    one = a_claim("pubmed:1", "pubmed:2", subject_lang="en", object_lang="en")
+    p = tmp_path / "claims.jsonl"
+    p.write_bytes(claims_file(one))
+    with pytest.raises(ann.AnnotationsError, match="one language"):
+        st.survey(st.ClaimsSource(p),
+                  plugins=("pubmed",))
+    p.write_bytes(claims_file(one, a_stage()))
+    src = st.ClaimsSource(p)
+    assert st.survey(src, plugins=("pubmed",)).count == 2
