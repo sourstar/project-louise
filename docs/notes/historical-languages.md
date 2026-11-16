@@ -64,7 +64,11 @@ historical-Italian LLM or GGUF exists. What exists:
 - **French.** 1600–1800: rbawden/modern_french_normalisation (CC BY 4.0,
   97 % word accuracy, 6M params, CPU). Middle French: FreEM-SemiD-norm.
   Old French: BFM2022 (Licence Ouverte), Wiktionary glosses; no translator.
-- **Spanish.** Pending.
+- **Spanish.** Siglo de Oro: modernisa-byt5-base (hf.co/modernisa, Apache-2.0,
+  CER 4.2 % on verse drama, untested on prose). Medieval: no model; Wiktionary
+  Old Spanish glosses, OSTA corpus (CC BY-NC-SA), CODEA's regularised
+  presentations as pairs (terms unknown). 1700–1900: Post Scriptum letters,
+  original ↔ modernised (licence unconfirmed).
 
 The seq2seq normalisers (ByT5, FSMT, M2M) do not run in llama.cpp: each
 would be a small HTTP service (invariant 7), like TRANSLATE_URL.
