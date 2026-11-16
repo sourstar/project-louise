@@ -39,6 +39,23 @@
   <span class="badge err" title="no model could translate the question: every language was searched with it as typed">languages: query not translated</span>
   {% endif %}
 </div>
+{# HISTORY ON REQUEST, NEVER SILENT (operator, 2026-11-16: "Return in the
+   answer if a fetch was not successful and why"; app/ask/history.py): every
+   version asked of the origin for this question, and how it ended. #}
+{% if result.history is defined and result.history and result.history.fetches %}
+<div class="panel" id="history-fetches">
+  <b>Past versions asked of the origin for this question</b>
+  <span class="note">(at most {{ result.history.limit }}, {{ result.history.timeout_s|int }} s each)</span>
+  {% for f in result.history.fetches if f.status != 'limit' %}
+  <div class="note"><span class="badge {{ '' if f.status == 'fetched' else 'err' }}" data-history-status>{{ f.status }}</span>
+    {{ f.version or f.act or '' }}{% if f.language %} ({{ f.language }}){% endif %}{% if f.status == 'fetched' %} — fetched now; added to {{ label(f.collection) }}{% else %} — {{ f.why }}{% endif %}</div>
+  {% endfor %}
+  {% set over = result.history.fetches|selectattr('status', 'equalto', 'limit')|list %}
+  {% if over %}<div class="note"><span class="badge err" data-history-status>limit</span>
+    {{ over|length }} more version{{ '' if over|length == 1 else 's' }} not fetched, at most {{ result.history.limit }} a question — ask again for them:
+    <span dir="auto">{{ over|map(attribute='version')|join(', ') }}</span></div>{% endif %}
+</div>
+{% endif %}
 </div>
 
 {% if result.facts is defined and result.facts %}

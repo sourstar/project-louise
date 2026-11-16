@@ -232,15 +232,26 @@ def _from_shard(c, hit) -> str | None:
         return None
 
 
+def _refs_store():
+    from app import refs
+    try:
+        return refs.get_store()
+    except Exception:   # noqa: BLE001 — no reference store: the grammar needs none
+        return None
+
+
 def search(query: str, *, collections: list[str] | None = None, space: str | None = None,
            filters: dict[str, Any] | None = None, limit: int = DEFAULT_LIMIT,
            rerank_depth: int = DEFAULT_DEPTH, as_of: str | None = None, freshness: bool = False,
            translate: bool = False, all_languages: bool = False, root: Path | None = None,
-           now: float | None = None, run=None, annotations: list[str] | None = None) -> dict[str, Any]:
+           now: float | None = None, run=None, annotations: list[str] | None = None,
+           history: bool = False, history_client=None) -> dict[str, Any]:
     """05 §5.4's `louise_search`: `{lists, facts, unresolved, withheld,
     legs_withheld, translations}`. `run` is query_service.run_search unless
     a test gives another. `annotations`: the annotations collections
-    consulted, by name (None = every one held; 05 §5.3, amended 2026-10-19)."""
+    consulted, by name (None = every one held; 05 §5.3, amended 2026-10-19).
+    `history`: an EU act's past asked for (05 §5.3 `history`, app/ask/
+    history.py) — also when the question says so, or `as_of` is given."""
     from app import collections as collections_mod, identity, query_service
     from app.ask import asof as asof_mod
     if filters is not None and not isinstance(filters, dict):
@@ -408,6 +419,24 @@ def search(query: str, *, collections: list[str] | None = None, space: str | Non
                 fresh_summary["checked"] += got["checked"]
                 for k, v in got["states"].items():
                     fresh_summary["states"][k] = fresh_summary["states"].get(k, 0) + v
+    history_summary: dict[str, Any] | None = None
+    from app.ask import history as history_mod
+    asked = bool(history) or history_mod.asks(query)
+    if asked or day is not None:
+        # 05 §5.3 `history` (operator, 2026-11-16): the cited act's versions
+        # the collection lacks, fetched now from its origin, bounded, every
+        # one that was not said with its reason — beside the lists as facts
+        try:
+            got = history_mod.fetch(query, named, as_of=validity_mod.day_int(day) if day is not None else None,
+                                    history=asked, store=_refs_store(), query_lang=result.get("query_lang"),
+                                    client=history_client)
+        except Exception as e:   # noqa: BLE001 — said, never fatal to the search
+            got = {"facts": [], "fetches": [{"collection": None, "act": None, "language": None,
+                                             "version": None, "status": history_mod.ERROR,
+                                             "why": f"{type(e).__name__}: {e}"[:300]}]}
+        facts.extend(got["facts"])
+        if asked or got["fetches"]:
+            history_summary = history_mod.summary(got, requested=asked)
     out = {
         "lists": lists,
         "facts": facts,
@@ -423,6 +452,7 @@ def search(query: str, *, collections: list[str] | None = None, space: str | Non
                    "excluded": excluded,
                    **({"by_validity": sorted(by_validity)} if by_validity else {})} if day is not None else None),
         "freshness": fresh_summary,
+        "history": history_summary,
         "timings": result.get("timings", {}),
     }
     if space_as_collection:

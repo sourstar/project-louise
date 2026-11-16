@@ -513,6 +513,30 @@ caller's latency and the peer's budget, and a node-wide switch would
 make one question cost differently on two peers with no way for the
 caller to say no.
 
+**History on request** (*amended 2026-11-16*, operator: "No history but
+implement fetch upon request with a limit on the number of fetches per
+query and a timeout per fetch request. Return in the answer if a fetch was
+not successful and why, so it never fails silently"). A legal collection
+whose origin keeps an act's past versions apart from its base (EUR-Lex: the
+consolidations, its `history/lang=<l>` slice) may hold none of them. A
+question that cites an article of such an act and asks for its past —
+`history: true` on `louise_search`, `--history` on `ask search`, the
+question's own words on the Ask page ("history of", "storia", "Fassungen",
+…), or `as_of` with the act's version on that day not held — has the
+versions the collection lacks fetched from the origin now: listed by one
+query, then at most three a question, newest first (with `as_of`, the one in
+force that day), each under a 20-second timeout, every byte from the
+budget (§4.3), and only where the language's base is held and its history
+slice is not. A fetched version is the collection's own corpus, fetched
+later: it lands in the history slice, is indexed like any unit and
+embedded on demand (§5.3's queue, where `embed_slices` names the slice);
+its cited article is pinned as a fact in this answer, labelled as fetched
+now. Never on an ordinary search. The answer's `history` says what was
+asked and how each fetch ended — `fetched`, `limit`, `timeout`,
+`unreachable`, `not-found`, `refused` (the language not held, the origin's
+403, the free-space floor), `error` — with its reason; nothing that was
+not fetched goes unsaid.
+
 ## 5.4 Tools, not a router
 
 A chat interface decides whether a question is semantic, exact or a
@@ -529,12 +553,14 @@ platform image and change only with it:
 
 ```
 louise_search(query, collections?, annotations?, space?, filters?, limit?,
-              rerank_depth?, as_of?, freshness?, translate?, all_languages?)
+              rerank_depth?, as_of?, freshness?, history?, translate?, all_languages?)
     → {lists: [{space_id, question, hits: [<result, §5.3>]}],   -- question is "relevance" (§5.1)
        facts: [<fact, §5.3>], unresolved: [<canonical id>],
        withheld: [{collection_id, shards, reason}],
        legs_withheld: [{collection_id, leg, reason}],     -- leg is "vector"; the copy IS searched, on its text leg (§5.3)
-       translations: [...]}   -- shards: a list, or "all" for a copy in quarantine (§5.3)
+       translations: [...],   -- shards: a list, or "all" for a copy in quarantine (§5.3)
+       history: {requested, limit, timeout_s,
+                 fetches: [{collection, act, language, version, status, why}]} | null}   -- §5.3, amended 2026-11-16
     filters: {keys?: <canonical id> | {not: <canonical id>},      -- §5.2, amended 2026-10-25
               <facet field>: <value> | {not: <value>}}         -- a range facet's value is "FROM..TO",
                                                                -- either end omitted for open (§5.7; amended 2026-10-25)

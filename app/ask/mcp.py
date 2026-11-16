@@ -49,6 +49,11 @@ TOOLS: list[dict[str, Any]] = [
          "rerank_depth": {"type": "integer", "minimum": 1, "maximum": 300, "default": 50},
          "as_of": {"type": "string", "description": "YYYY-MM-DD: the snapshot current at that date"},
          "freshness": {"type": "boolean", "default": False},
+         "history": {"type": "boolean", "default": False,
+                     "description": "true: the past versions of an EU act's article the query cites, "
+                                    "fetched now from the origin where not held — at most a few, each "
+                                    "bounded in time, every one not fetched named with its reason "
+                                    "(the answer's `history`)"},
          "translate": {"type": "boolean", "default": False,
                        "description": "true: the query's translations into the languages held are "
                                       "searched too, as the Ask page searches"},
@@ -123,7 +128,7 @@ def _call_tool(name: str, args: dict[str, Any]) -> Any:
                               rerank_depth=int(args.get("rerank_depth") or results.DEFAULT_DEPTH),
                               as_of=args.get("as_of"), freshness=bool(args.get("freshness")),
                               translate=bool(args.get("translate")), all_languages=bool(args.get("all_languages")),
-                              annotations=args.get("annotations"))
+                              annotations=args.get("annotations"), history=bool(args.get("history")))
     if name == "louise_lookup":
         return lookup.lookup(str(args["id"]))
     if name == "louise_traverse":
