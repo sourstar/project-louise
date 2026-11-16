@@ -67,7 +67,6 @@
        own colour, so a yellow licence reads yellow inside a green
        border instead of the whole badge reading green. #}
     <span class="badge {{ 'err' if c.license.needs_ack else 'ok' }}"{% if c.license.ok %} title="{{ 'terms acknowledged' if c.license.state == 'acknowledged' else 'open license — no acknowledgement needed' }}"{% elif c.license.needs_ack %} title="the terms are not yet acknowledged: Options › acknowledge license…"{% endif %}>license: <span class="lic-{{ c.license.class }}">{{ c.license.class }}</span>{{ ' — ack needed' if c.license.needs_ack else (' ✓' if c.license.ok else '') }}</span>
-    {% for line in c.license.credits or [] %}<div class="note credit">{{ line }}</div>{% endfor %}
     {% endif %}
     {% if c.copy_state and c.copy_state.state != 'in-use' %}
     {# 03 §3.6: a copy this peer has not finished testing. Red once the node
@@ -285,6 +284,10 @@
      tests; the class stays exactly "more", the one look. #}
   <details class="more" data-drawer="details">
     <summary>Details</summary>
+    {# THE CREDITS FIRST (operator, 2026-11-16: "add the credits (if any) at the
+       beginning of the details section of each collection"): whom the text is
+       from, as its licence asks (app/credits.py) #}
+    {% for line in (c.license.credits if c.license else []) or [] %}<div class="note credit" data-credit>{{ line }}</div>{% endfor %}
     {% if c.frozen %}
     <div class="note" data-frozen-since>{{ c.frozen.says }}</div>
     {% endif %}
@@ -475,6 +478,7 @@
      2026-11-02): the description behind Details, every button behind Options #}
   <details class="more" data-drawer="details">
     <summary>Details</summary>
+    {% for line in (a.license.credits if a.license else []) or [] %}<div class="note credit" data-credit>{{ line }}</div>{% endfor %}
     {% if a.title %}<div class="note"><b>{{ a.title }}</b>{% if a.summary %} — {{ a.summary }}{% endif %}</div>{% endif %}
     <div class="note">kinds: {{ a.kinds | join(', ') }}</div>
   </details>

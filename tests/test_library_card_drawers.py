@@ -417,3 +417,26 @@ def test_a_check_older_than_the_stale_bound_is_not_shown_as_running(client, monk
     assert "data-gate-running" not in client.get("/admin/library").text
     node_state.clear_all_gates()
     assert node_state.gates_running() == []
+
+
+def test_the_credits_open_the_details_and_are_not_in_sight(client, monkeypatch):
+    """Operator, 2026-11-16: "add the credits (if any) at the beginning of the
+    details section of each collection"."""
+    from app import credits
+    monkeypatch.setattr(credits, "of", lambda c: ["Corpus: the Origin, CC BY 4.0", "Labels: the Office"])
+    html = client.get("/admin/library").text
+    card_html = html[html.index('data-collection="gutenberg"'):]
+    card_html = card_html[:card_html.index('data-drawer="options"')]
+    details_at = card_html.index('data-drawer="details"')
+    in_sight, details = card_html[:details_at], card_html[details_at:]
+    assert "the Origin" not in in_sight
+    after_summary = details[details.index("</summary>") + len("</summary>"):]
+    first = re.search(r"<div[^>]*>", after_summary)
+    assert first and "data-credit" in first.group(0), "the first line under Details is a credit"
+    assert after_summary.index("the Origin") < after_summary.index("Labels: the Office")
+
+
+def test_no_credit_no_line(client, monkeypatch):
+    from app import credits
+    monkeypatch.setattr(credits, "of", lambda c: [])
+    assert "data-credit" not in client.get("/admin/library").text
