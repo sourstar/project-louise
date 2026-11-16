@@ -228,6 +228,67 @@ alone. Not run here: the node was mid-deploy (7efabc6 staging) when the window
 closed, and `lai.py` already covers `--stages`' path without the pipeline's
 body.
 
+### The GIL, 2026-11-16 20:30–20:44Z (München; app 7efabc6, the same wrappers)
+
+Architecture's hypothesis: the worker's other threads take the GIL from the
+embed lane. The test ran with wikipedia alone (the other eight collections
+paused, then resumed; no gate for 5 min before). It recorded
+`py-spy record --gil -r 200 -d 60` and one `py-spy dump`, then counted 10
+minutes with no profiler attached. `--native` failed on this kernel
+(`UNW_EBADREG`) and was not retried. The files are in
+`/mnt/ssd3/louise-build/gil/`.
+
+**The GIL is saturated:** 57.8 s of GIL-held samples in 60 s.
+
+| Who holds the GIL | Share |
+|---|---|
+| `ThreadPoolExecutor-52_*` (≈ 32 threads) | 77.8 % |
+| `ThreadPoolExecutor-53_*` | 16.5 % |
+| stats-publisher | 1.1 % |
+| claim-index | 1.0 % |
+| `coalesce-wikipedia-0/1` (the embed lanes) | 0.5 % |
+| everything else | < 0.5 % each |
+
+All the pool samples share one stack: `worker.py:2108 work` → `_given` →
+`_possessed_vectors` → `possession.holding` → `Snapshot.lookup_order` →
+`_containing` → `_keyed` (snapshot.py 356 and 362). That is the build of the
+bounds cache: `order_key` of every part's first and last id, then a sort.
+
+**Why it is built for every document.** `seeder.current_snapshot` gives
+each caller its own shallow `copy.copy` VIEW of the shared snapshot (2026-11-08,
+the LazyDelta), and `_keyed` keeps its cache in that view's own `__dict__`
+(`_keyed_cache`). The view is dropped when `holding` returns, so every
+document re-keys the whole snapshot. Measured read-only in the worker:
+
+| Collection | Parts | First lookup | Same view again | Next view |
+|---|---|---|---|---|
+| wikipedia | 26,551 | 34.8 ms | 1.50 ms | 59.7 ms |
+| wikidata | 4,009 | 4.9 ms | 0.18 ms | 4.0 ms |
+
+At wikipedia's ~13 documents a second (≈ 3 chunks a document), that is
+0.45–0.8 s of GIL time every second, spread over the pool's threads. The
+coalesce lanes wait for the GIL to send each request and to read each answer,
+which is the ≈ 200 ms a request found in the per-hop run.
+
+**The window (no profiler attached), 20:33–20:43Z:**
+- 37.2–41.8 chunks/s; card busy 41–49 %; lost 31–36 s/min.
+- `/vega/keeps` for run 955ca309: 22,377 calls; 864 gaps of ≥ 64 ms, of which
+  652 were 256–512 ms. That is about one long gap a request, ≈ 260 s idle in
+  600 s.
+
+**Could not be quieted without code.** The competitor is wikipedia's own
+embed preparation, so no collection pause or node setting removes it. The
+fix is code: one cache per snapshot FILE, shared by every view. Either keep
+`_keyed_cache` on the shared `_shared(...)` object and carry it into the
+copy, or key a module-level cache on the snapshot's physical identity (the
+engineering rule: caches key on physical identity). Then measure the same
+window again: expect the ≥ 64 ms gaps to fall to near zero and wikipedia to
+approach the per-hop 8.6 ms a text.
+
+Seen in passing: `scan-EUR-Lex4` (in `eurlex/source.py:338 unit_files`) and
+`scan-gutenberg` (in `cursor.signature` → `stat`) were active in the dump
+although both collections were paused. Not measured further.
+
 ## 7. Tests
 
 - tag: a VEGA/2 round trip, its canonical bytes, and the refusals (an
