@@ -571,6 +571,33 @@ class EurlexSource:
             yield DocRef(source_id=self.source_id, native_id=str(nid), locator=locator,
                          mtime=mtime, size=size)
 
+    def ref_of_unit(self, unit: Path) -> DocRef | None:
+        """The DocRef discovery gives one landed unit — its id from its day,
+        CELEX, language and version, as `discover` computes it — or None
+        where it is not whole (a unit fetched on request, app/ask/history.py)."""
+        unit = Path(unit)
+        celex, lang = unit.name, unit.parent.parent.name.partition("=")[2]
+        if lang not in LANGUAGES:
+            return None
+        try:
+            entries = unit_files(unit)
+        except OSError:
+            return None
+        names = {x.name for x in entries}
+        if rdf_mod.TREE_FILE not in names or (NOTICE not in names and not self.TREE_FACTS):
+            return None
+        try:
+            day = _unit_day(unit, celex, entries, self.TREE_FACTS)
+            nid = eli.expression_native_id(day, (celex, lang), version_key(celex)) if day else None
+        except (OSError, ValueError):
+            return None
+        if nid is None:
+            return None
+        stats = [x.stat() for x in entries]
+        return DocRef(source_id=self.source_id, native_id=str(nid), locator=str(unit),
+                      mtime=max(s.st_mtime_ns for s in stats) // 1_000_000_000,
+                      size=sum(s.st_size for s in stats))
+
     # ---- fetch and parse ---------------------------------------------------------------------
 
     def fetch(self, ref: DocRef) -> RawDoc:

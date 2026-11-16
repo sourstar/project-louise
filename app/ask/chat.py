@@ -239,6 +239,15 @@ def shown_search(query: str, result: dict[str, Any], sources: Sources, *,
                       f"({w.get('reason')})")
     if result.get("unresolved"):
         blocks.append("No reference row for: " + ", ".join(map(str, result["unresolved"])))
+    fetches = (result.get("history") or {}).get("fetches") or []
+    for f in fetches:
+        if f.get("status") not in ("fetched", "limit"):   # never silent (app/ask/history.py)
+            blocks.append(f"History not fetched: {f.get('version') or f.get('act')} ({f.get('language')}): "
+                          f"{f.get('status')} — {f.get('why')}")
+    over = [str(f.get("version")) for f in fetches if f.get("status") == "limit"]
+    if over:
+        blocks.append(f"History not fetched, {len(over)} more version(s) past the limit of a question "
+                      f"({(result.get('history') or {}).get('limit')}): " + ", ".join(over))
     return "\n\n".join(blocks)
 
 
@@ -267,7 +276,7 @@ def compact(name: str, result: Any) -> Any:
             lists.append({"space_id": lst.get("space_id"), "hits": hits})
         out: dict[str, Any] = {"lists": lists}
         for k in ("facts", "unresolved", "withheld", "legs_withheld", "rerank_withheld",
-                  "as_of", "filtered"):
+                  "as_of", "filtered", "history"):
             v = result.get(k)
             if v:
                 out[k] = v

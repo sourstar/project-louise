@@ -20,6 +20,16 @@ measured (published figures disagree).
 
 ### 2026-11-16
 
+- **EUR-Lex history on request** (app/ask/history.py; 05 §5.3 amended; operator: "fetch upon request
+  with a limit … and a timeout per fetch … never fails silently", "The only new part is the fetch on
+  demand"). A question citing an EU act's article and asking for its past (`history`, the question's
+  words, or `as_of`) lists the act's consolidations in the language (one SPARQL query, 30 s) and fetches
+  the missing ones into `history/lang=<l>/`, at most 3, 20 s each, bound to the budget at INTERACTIVE;
+  every fetch, failed or not, in the answer's `history`, on the Ask page and in the event log. The
+  grow dialog and the on-demand queue are unchanged: a fetched unit embeds where `embed_slices` names
+  its history slice (EUR-Lex4's does, on the operator's word). The web process writes the unit: its
+  `/data` mount must be writable where the collection's origin is.
+
 - **A pilot-ok now binds the code the run imports** (tools/code_pin.py). The chunker, languages and
   retrieval tags pinned app/ask's code, which those runs do not execute, beside six files listed by
   hand: 09162b0, an Ask-only deploy, re-ran the chunker pilot for nothing, and legal_pilot's own scoring

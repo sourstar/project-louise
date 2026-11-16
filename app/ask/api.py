@@ -35,6 +35,9 @@ class SearchBody(BaseModel):
     rerank_depth: int = Field(50, ge=1, le=300)
     as_of: str | None = None
     freshness: bool = False
+    #: an EU act's past asked for: its versions the collection lacks, fetched
+    #: now, bounded (05 §5.3 `history`, app/ask/history.py)
+    history: bool = False
     translate: bool = False
     all_languages: bool = False
     #: the annotations collections consulted, by local name; None = every
@@ -50,7 +53,8 @@ async def search(body: SearchBody) -> JSONResponse:
         out = await run_in_threadpool(
             results.search, body.query, collections=body.collections, space=body.space, filters=body.filters,
             limit=body.limit, rerank_depth=body.rerank_depth, as_of=body.as_of, freshness=body.freshness,
-            translate=body.translate, all_languages=body.all_languages, annotations=body.annotations)
+            translate=body.translate, all_languages=body.all_languages, annotations=body.annotations,
+            history=body.history)
     except CodexError as e:
         code = int(getattr(e, "exit_code", 2))
         return JSONResponse({"exit": code, "error": str(e)}, status_code=STATUS.get(code, 500))

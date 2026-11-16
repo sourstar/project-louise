@@ -378,6 +378,32 @@ def listing(endpoint: Endpoint, spec: AcquisitionSpec, flt: Filter, *,
             client.close()
 
 
+def versions_query(celex: str, lang: str) -> str:
+    """The consolidated versions Cellar holds of one act in one language —
+    by the act's own link (`act_consolidated_based_on_resource_legal`), never
+    a scan of every CELEX — each with its work's last modification."""
+    from ..plugins.eurlex.source import LANGUAGES
+    forms = ", ".join(chr(34) + f + chr(34) for f in FORMS)
+    return (_PREFIXES + "SELECT ?celex (MAX(?modified) AS ?last) WHERE {\n"
+            f"  ?base cdm:resource_legal_id_celex ?bc . FILTER(STR(?bc) = \"{celex}\")\n"
+            "  ?work cdm:act_consolidated_based_on_resource_legal ?base ; cdm:resource_legal_id_celex ?celex .\n"
+            f"  ?expr cdm:expression_belongs_to_work ?work ; cdm:expression_uses_language "
+            f"<{_LANGUAGE_URI}{LANGUAGES[lang]}> .\n"
+            f"  ?manif cdm:manifestation_manifests_expression ?expr ; cdm:manifestation_type ?type .\n"
+            f"  FILTER(STR(?type) IN ({forms}))\n"
+            "  OPTIONAL { ?work cmr:lastModificationDate ?modified }\n"
+            "} GROUP BY ?celex ORDER BY ?celex")
+
+
+def versions_of(base: str, celex: str, lang: str, *, client: httpx.Client,
+                charge: Callable[[int], None] = budget.acquire_bytes) -> list[str]:
+    """The CELEX of every consolidated version of `celex` Cellar holds in
+    `lang` (app/ask/history.py), sorted; raises TransportError."""
+    rows = sparql(client, base, versions_query(celex, lang), what=f"the versions of {celex} ({lang})",
+                  charge=charge)
+    return sorted({r.get("celex", {}).get("value", "") for r in rows} - {""})
+
+
 def _timed_out(e: TransportError) -> bool:
     from . import backoff
     return isinstance(e, backoff.Deferred) or "timed out" in str(e).lower()
