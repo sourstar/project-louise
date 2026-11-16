@@ -546,13 +546,18 @@ def _facts_of(collection, hits: Sequence[dict[str, Any]], work_of: dict[str, str
     the plates of a hit are (app/ask/figures.py), while the file is built
     off the search's thread."""
     from collections import Counter
+    uids = [_uid(h) for h in hits]
+    many = {w for w, n in Counter(work_of[u] for u in uids if u in work_of).items() if n >= 2}
+    return facts_for(collection, [u for u in dict.fromkeys(uids) if work_of.get(u) in many], root=root)
+
+
+def facts_for(collection, want: Sequence[str], *, root: Path | None = None) -> dict[str, EditionFacts]:
+    """`edition_facts` of these records, by uid: the part's facts file once
+    it has one, else one record read (its three fields)."""
     from app.ask import figures as figures_mod
     from app.ask.results import _root
     from app.hold import collection as col
     from app.share import seeder
-    uids = [_uid(h) for h in hits]
-    many = {w for w, n in Counter(work_of[u] for u in uids if u in work_of).items() if n >= 2}
-    want = [u for u in dict.fromkeys(uids) if work_of.get(u) in many]
     if not want:
         return {}
     root = Path(root) if root is not None else _root()
@@ -625,3 +630,24 @@ def _facts_read(tree: Path, shard, uid: str) -> EditionFacts | None:
         return edition_facts(pack_records.read_fields(path, uid, ("title", "date", "extra")))
     except (KeyError, OSError, ValueError):
         return None
+
+
+def attach_years(collection, hits: list[dict[str, Any]], *, root: Path | None = None) -> None:
+    """THE PUBLICATION YEAR ON EVERY HIT (operator, 2026-11-16: "the search
+    results shall show the publication year"): `year`, the edition's year as
+    `edition_facts` reads it from the record — the imprint's (MARC 260) where
+    the origin gives one, else the record's own `date` (02 §2.3: a book's
+    edition year, an article's publication date, an act's date). Read from
+    the part's facts file the edition choice already keeps, so it costs a
+    dict lookup once that file exists. Nothing is set where no year is
+    known; nothing read here can cost the search."""
+    if not hits or getattr(collection, "codex", None) is None:
+        return
+    try:
+        facts = facts_for(collection, list(dict.fromkeys(_uid(h) for h in hits)), root=root)
+    except Exception:   # noqa: BLE001 — a year is a courtesy, never the search's failure
+        return
+    for h in hits:
+        f = facts.get(_uid(h))
+        if f is not None and f.year:
+            h["year"] = f.year

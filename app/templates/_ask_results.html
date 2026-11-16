@@ -84,6 +84,9 @@
        after fts:en as a fix still landing (2026-09-12). Nothing to
        say, nothing drawn. #}
     {% if h.authors %}<span class="badge" data-authors>{{ h.authors }}</span>{% endif %}
+    {# the publication year (operator, 2026-11-16), from the record: an
+       edition's imprint year, else its date #}
+    {% if h.year %}<span class="badge" data-year title="publication year">{{ h.year }}</span>{% endif %}
     <span class="badge brass">{{ h.lang or '?' }}</span>
     {% if h.source_collection %}<span class="badge lapis">{{ label(h.source_collection) }}</span>{% endif %}
     {# CLAUDE.md invariant 4, rule 2: a result a weight moved says so #}

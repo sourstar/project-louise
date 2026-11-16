@@ -387,3 +387,29 @@ def test_gutenberg_names_its_edition_relation_as_a_work_relation():
     tcoll = SimpleNamespace(plugin="gutenberg")
     assert works.work_relations(tcoll) == ("bf:otherEdition",) == SOURCE.WORK_RELATIONS
     assert works.work_relations(SimpleNamespace(plugin="pubmed")) == ()
+
+
+# ---- the publication year on every hit (operator, 2026-11-16) -----------------
+
+def test_every_hit_carries_its_records_year_not_only_a_works_editions(tmp_path):
+    tcoll, hits, _work_of = _two_editions(tmp_path)
+    works.attach_years(tcoll, hits, root=tmp_path)
+    assert [h.get("year") for h in hits] == [2023, 2023, 2023], "pubmed:4, no edition choice, has one too"
+    works.CACHE.queue.join()
+    works.CACHE.clear()
+
+
+def test_a_year_that_cannot_be_read_sets_nothing_and_never_fails(monkeypatch):
+    hits = [hit("pubmed:1", "en")]
+    monkeypatch.setattr(works, "facts_for", lambda *a, **k: (_ for _ in ()).throw(OSError("gone")))
+    works.attach_years(SimpleNamespace(name="pubmed", codex=object()), hits)
+    assert "year" not in hits[0]
+    works.attach_years(SimpleNamespace(name="x", codex=None), hits)      # no Codex: nothing read
+    assert "year" not in hits[0]
+
+
+def test_the_result_page_draws_the_year_badge_only_where_known():
+    from jinja2 import Environment, FileSystemLoader
+    env = Environment(loader=FileSystemLoader("app/templates"))
+    src = env.loader.get_source(env, "_ask_results.html")[0]
+    assert '{% if h.year %}<span class="badge" data-year' in src
