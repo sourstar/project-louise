@@ -79,30 +79,43 @@ def test_a_stage_code_names_its_stage():
     assert "«Middle English»" in shown[1][0] and reads[0].why == "language code"
 
 
-def test_the_first_publication_is_a_trigger_for_the_work_in_its_own_language():
-    shown, reads = historical.read_sources(_numbered(
-        _hit(1, MODERN, first_published=1353, work_lang="it"),
-        _hit(2, MODERN, first_published=1950, work_lang="it"),
-        _hit(3, MODERN)), "x")
-    assert list(shown) == [1] and reads[0].why == "year"
-    assert "first published 1353" in shown[1][0]
+def test_no_year_decides_it_at_answer_time():
+    """b2af94f's year trigger is gone (architecture, 2026-11-16): a record
+    with no claim is read by its passage alone."""
+    assert not historical.read_sources(_numbered(_hit(1, MODERN, first_published=1353)), "x")[0]
     assert historical.first_published({"first_published": "1590"}) == 1590
-    assert historical.first_published({"first_published": "c1590"}) is None
-    # one field: `year` is not read
     assert historical.first_published({"year": 1353}) is None
 
 
-def test_a_translation_is_not_read_as_its_works_period():
-    """A modern Italian Shakespeare is not 1600s Italian (the review's 3)."""
-    for hit in (_hit(1, MODERN, first_published=1600,
-                     authors="Shakespeare, William; Rusconi, Carlo (translator)"),
-                _hit(1, MODERN, first_published=1600, work_lang="en"),
-                _hit(1, MODERN, first_published=1600)):     # its language unknown, no marker
-        assert not historical.read_sources(_numbered(hit), "x")[0], hit
-    # unknown language: the year lowers the bar to one marker
+def _fact(stage, method):
+    return {"stage": stage, "method": method, "collection_id": "sha256:" + "0" * 64,
+            "snapshot_id": "2026-11", "claim": "annotations:1", "confidence": "0.8"}
+
+
+def test_a_record_with_a_claim_is_read_by_its_claim():
+    # the claim reads a modern-looking passage as Old Italian, and names its method
+    shown, reads = historical.read_sources(_numbered(
+        _hit(1, MODERN, language_stage=_fact("wikidata:Q135913388", "wikidata")),
+        _hit(2, MODERN, language_stage=_fact("wikidata:Q135913388", "matcher")),
+        _hit(3, DANTE, language_stage=_fact(None, "human"))), "x")
+    assert sorted(shown) == [1, 2]       # a person's "not an older stage" skips the passage check
+    assert "«Old Italian»" in shown[1][0]
+    assert reads[0].badge() == "Old Italian, by Wikidata"
+    assert reads[1].badge() == "Old Italian, by its text"
     shown, reads = historical.read_sources(
-        _numbered(_hit(1, MODERN + " ch'i' dico", first_published=1600)), "x")
-    assert reads[0].why == "year"
+        _numbered(_hit(1, SEICENTO, language_stage=_fact("wikidata:Q135913388", "human"))), "x")
+    assert reads[0].badge() == "Old Italian, by hand, spelling modernised for the model"
+
+
+def test_a_modern_version_in_the_same_language_is_pointed_at():
+    hits = _numbered(
+        _hit(1, DANTE, language_stage=_fact("wikidata:Q135913388", "wikidata"),
+             editions=[{"uid": "gutenberg:2", "lang": "it", "held": True},
+                       {"uid": "gutenberg:3", "lang": "en", "held": True}]),
+        _hit(2, MODERN), _hit(3, "Midway upon the journey of our life", lang="en"))
+    shown, reads = historical.read_sources(hits, "x")
+    assert "a modern version of it is source [2]" in shown[1][0]
+    assert reads[0].badge().endswith("read with its modern version [2]")
 
 
 def test_a_translation_among_the_sources_is_pointed_at():
@@ -160,7 +173,7 @@ def test_the_answer_carries_no_line_the_model_did_not_write(monkeypatch):
     result = {"hits": [_hit(1, SEICENTO)], "facts": [], "catalog": [], "timings": {"total": 1.0}}
     parts = list(api.answer_parts(body, "q", result, 0.0, con=object()))
     assert "".join(v for k, v in parts if k == "delta") == "Risposta [1]."
-    assert ("reading", [{"n": 1, "reading": "older Italian, spelling modernised for the model"}]) in parts
+    assert ("reading", [{"n": 1, "reading": "older Italian, by this passage, spelling modernised for the model"}]) in parts
     assert any(m.startswith("read as older language: [1]") for m in logged)
 
 
@@ -183,3 +196,113 @@ def test_the_older_rule_goes_before_the_language_rule():
     out = chat.with_older_rule("S." + last, last)
     assert out.endswith(last) and historical.SYSTEM_RULE in out
     assert chat.with_older_rule(out, last) == out
+
+
+# --------------------------------------------------------------------------
+# the claim (09 §9.5, amended 2026-11-16) and its matcher
+
+def _claim(obj="wikidata:Q135913388", kind="matcher", subject="gutenberg:1"):
+    method = dict(historical.MATCHER) if kind == "matcher" else {"kind": kind}
+    return {"type": "language-stage", "subject": subject, "object": obj, "method": method,
+            "evidence": {"why": "t"}, "confidence": "0.8", "contributor": "c"}
+
+
+def test_a_claim_from_each_method_is_valid_and_a_label_is_not():
+    from app.hold import annotations as ann
+    for c in (_claim(), _claim("wikidata:Q135913388", "wikidata"), _claim("iso639-3:enm", "human"),
+              _claim(None, "human")):
+        assert ann.check_claim(c, target_plugin="gutenberg")["type"] == "language-stage"
+    for bad, why in ((_claim("older Italian"), "canonical id"), (_claim("lang:it"), "never by a label"),
+                     (_claim(None), "only in a human claim"), (_claim("iso639-3:ENM"), "ISO 639-3"),
+                     ({**_claim(), "subject_lang": "it", "object_lang": "it"}, "unknown")):
+        with pytest.raises(ann.AnnotationsError, match=why):
+            ann.check_claim(bad, target_plugin="gutenberg")
+    model = {**_claim(), "method": {"kind": "model", "id": "m", "version": 1, "model": "sha256:" + "a" * 64,
+                                    "prompt": "sha256:" + "b" * 64, "temperature": "0"}}
+    with pytest.raises(ann.AnnotationsError, match="matcher, wikidata, human"):
+        ann.check_claim(model, target_plugin="gutenberg")
+
+
+def test_a_person_and_the_matcher_coexist_and_the_person_wins():
+    from app.hold import annotations as ann
+    from app.ask import annotations as ask_ann
+    m, h = _claim(), _claim(None, "human")
+    assert ann.identity_key(m) != ann.identity_key(h)
+    assert ann.identity_key(m) == ann.identity_key({**m, "object": "iso639-3:enm"})
+    idx = ann.ClaimIndex("2026-11", [ann.Claim("annotations:1", m), ann.Claim("annotations:2", h)])
+    assert [c.uid for c in idx.stages["gutenberg:1"]] == ["annotations:1", "annotations:2"]
+    assert not idx.graph and not idx.by_target
+
+    class A:
+        class codex:
+            collection_id = "sha256:" + "1" * 64
+    hit: dict = {"uid": "gutenberg:1"}
+    ask_ann._attach_stage(hit, A, "2026-11", idx.stages["gutenberg:1"])
+    assert hit["language_stage"]["stage"] is None and hit["language_stage"]["method"] == "human"
+    hit = {"uid": "gutenberg:1"}
+    ask_ann._attach_stage(hit, A, "2026-11", idx.stages["gutenberg:1"][:1])
+    assert hit["language_stage"]["method"] == "matcher"
+    ask_ann._attach_stage(hit, A, "2026-11", [ann.Claim("annotations:3", _claim(kind="wikidata"))])
+    assert hit["language_stage"]["method"] == "wikidata"        # Wikidata over the matcher
+
+
+def test_the_claim_is_pinned_to_its_record_alone_and_makes_its_edge():
+    from app.hold import annotations as ann
+    from app.hold import codex as cx
+    held = {"gutenberg:1": {"content_hash": "a" * 32}}
+    subs = [ann.Submitted(1, b"x", ann.check_claim(_claim(), target_plugin="gutenberg")),
+            ann.Submitted(2, b"y", ann.check_claim(_claim(None, "human"), target_plugin="gutenberg"))]
+    pinned = ann.pin(subs, held, "2026-11")
+    assert [(c["subject_hash"], c["object_hash"], c["target_snapshot"]) for c in pinned] == \
+        [("a" * 32, None, "2026-11")] * 2
+    assert ann.state_of(pinned[0], {"gutenberg:1": "a" * 32}) == ann.CURRENT
+    assert ann.state_of(pinned[0], {"gutenberg:1": "b" * 32}) == ann.STALE
+    recs = ann.records_of(pinned, subs, version=cx.GRAPH_VERSION)
+    edges = b"".join(ann.edge_lines(recs, "2026-11"))
+    assert edges.count(b"annotations:language-stage") == 1      # "not an older stage" makes none
+    with pytest.raises(ann.AnnotationsError, match="not\\s+hold"):
+        ann.pin([ann.Submitted(1, b"x", _claim(subject="gutenberg:9"))], held, "2026-11")
+
+
+def _record(uid, text, lang="it", **extra):
+    return {"uid": uid, "lang": lang, "sections": [["", text]], "creators": [], "extra": extra}
+
+
+def test_the_matcher_claims_an_old_italian_work_and_never_a_translation():
+    from app.hold import annotations as ann
+    old = _record("gutenberg:1", " ".join([DANTE] * 3))
+    c = historical.stage_claim(old, "louise")
+    assert c["object"] == "wikidata:Q135913388" and c["method"] == historical.MATCHER
+    assert c["evidence"]["first_published"] is None and c["confidence"] == historical.CONFIDENCE
+    ann.check_claim(c, target_plugin="gutenberg")
+    assert historical.stage_claim(_record("gutenberg:2", MODERN * 20), "louise") is None
+    assert historical.stage_claim({**old, "extra": {"creators_detail": [{"name": "X", "role": "trl"}]}},
+                                  "louise") is None
+    assert historical.stage_claim({**old, "lang": "en"}, "louise") is None
+    # a work first published after the stage's end is not claimed; before it, the bar is lower
+    later = _record("gutenberg:3", " ".join([DANTE] * 3), marc={"520": ["… first published in 1605."]})
+    assert historical.stage_claim(later, "louise") is None
+    sparse = _record("gutenberg:4", " ".join([MODERN] * 300) + " " + DANTE, marc={"520": ["published in 1353"]})
+    got = historical.stage_claim(sparse, "louise")
+    assert got is not None and got["evidence"]["first_published"] == 1353
+    assert historical.stage_claim({**sparse, "extra": {}}, "louise") is None
+    # the Renaissance printing alone is not Old Italian
+    assert historical.stage_claim(_record("gutenberg:5", " ".join([SEICENTO] * 10)), "louise") is None
+
+
+def test_the_merge_keeps_every_other_claim_and_replaces_the_matchers():
+    import json
+    from tools import annotations_language_stage as tool
+    work = json.dumps({"type": "same-work", "subject": "gutenberg:1", "object": "gutenberg:2",
+                       "subject_lang": "it", "object_lang": "en"}).encode()
+    human = json.dumps(_claim(None, "human", "gutenberg:7")).encode()
+    old = json.dumps(_claim(subject="gutenberg:8")).encode()
+    lines, summary = tool.merge([work, human, old], [_claim(subject="gutenberg:9")])
+    assert lines[:2] == [work, human] and len(lines) == 3
+    assert summary == {"kept": 2, "replaced": 1, "language_stage": 1, "claims": 3}
+    # a same-work of ONE language needs a stage on one end
+    one = json.dumps({"type": "same-work", "subject": "gutenberg:3", "object": "gutenberg:4",
+                      "subject_lang": "it", "object_lang": "it"}).encode()
+    with pytest.raises(SystemExit, match="one language"):
+        tool.merge([one], [])
+    assert len(tool.merge([one], [_claim(subject="gutenberg:3")])[0]) == 2

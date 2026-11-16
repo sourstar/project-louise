@@ -16,25 +16,28 @@ the record, never the passage the page shows (invariant 11):
      a vowel, -tione) and says it did, so the model does not take a form
      of the period for a word it does not know. "&" is never rewritten,
      nor "et" before al., cetera, seq. (Procter & Gamble et al.);
-  C. it points the model at a translation the results already hold: an
-     edition of the same work in the answer's language or in English is
-     named beside the older source ("a translation of it is source [k]").
+  C. it points the model at another version the results already hold: an
+     edition of the same work in the answer's language or in English ("a
+     translation of it is source [k]"), or in its own language, a modern
+     rendering of it ("a modern version of it is source [k]": a
+     `same-work` of one language, 02 §2.10, amended 2026-11-16).
 
-WHEN, per source, and only under Quality (Speed skips it all):
-  - the passage itself reads as older language — markers of the period's
-    words and spelling, counted per passage, so a modern book that QUOTES
-    Dante is read so only where it quotes enough to matter;
-  - the record's language is a historical stage by its ISO 639-3 code
-    (`enm`, `fro`, `gmh` …: the standard's own codes, no list of ours);
-  - the work was first published before the reader's `until`
-    (`first_published`, the one date field a hit carries: the WORK's
-    first publication, never PG's release or the edition's year), and
-    this edition is the work in its own language — no translator among
-    its credits, and its language the work's (`work_lang`) where that is
-    known; where it is not known, the year lowers the bar to one marker
-    instead, so a modern Italian Shakespeare is not read as 1600s Italian;
-  - the QUESTION asks about an older period (a century, a period name,
-    a year before 1800): then a single marker in a passage is enough.
+WHEN, per source, and only under Quality (Speed skips it all) — THE
+HYBRID (operator's "B", 2026-11-16): whether a WORK is in an older stage
+is an annotation, the `language-stage` claim (09 §9.5), attached to the hit
+as a fact (`language_stage`, app/ask/annotations.py: a person's claim over
+Wikidata's over the matcher's). So:
+  - a record with a claim is read by its claim — its stage, or not at all
+    where a person said "not an older stage";
+  - a record with none is read as older language only where its PASSAGE
+    shows the period's markers (a modern book QUOTING Dante, read so only
+    where it quotes enough to matter), or where the question asks about
+    an older period and the passage has one marker;
+  - a record whose language is a historical stage by its ISO 639-3 code
+    (`enm`, `fro`, `gmh` …) is read as that stage.
+No year decides it at answer time: the claim's matcher read the work's
+first publication and its translator credit when it made the claim
+(`stage_claim`, below).
 
 ONE FUNCTION FOR BOTH ANSWER PATHS (architecture, 2026-11-16): `prepare`
 for api._answer_messages, `read_sources` for app/ask/chat.py's tool
@@ -53,6 +56,7 @@ TRANSLATE_URL, invariant 7), and a lexicon of historical forms (MIDIA's
 """
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import dataclass, field
 from typing import Any, Iterable
@@ -99,8 +103,6 @@ class Reader:
     patterns: tuple[re.Pattern[str], ...] = ()
     #: markers a passage needs when nothing else says it is older
     threshold: int = 2
-    #: a work first published before this year is older language
-    until: int = 1800
 
 
 def _keep_case(word: str, modern: str) -> str:
@@ -188,18 +190,34 @@ class Read:
     """How one source was read: its stage, why, and the rules applied."""
     n: int
     stage: str
-    why: str                         # "text", "language code", "year", "question"
+    #: "wikidata", "matcher", "human" (the claim's method); "text"
+    #: (its passage), "question", "language code"
+    why: str
     rules: list[str] = field(default_factory=list)
-    translation_in: int | None = None    # the source number of its translation
+    translation_in: int | None = None    # the source number of its other version
+    modern: bool = False                 # that version is a modern one, same language
 
     def badge(self) -> str:
-        """The source's badge: what the reader sees beside it."""
-        out = self.stage
+        """The source's badge: what the reader sees beside it — the stage,
+        by what (the claim's method, 09 §9.5), and what was done."""
+        out = f"{self.stage}, {BY.get(self.why, 'by ' + self.why)}"
         if self.rules:
             out += ", spelling modernised for the model"
         if self.translation_in:
-            out += f", read with its translation [{self.translation_in}]"
+            out += (f", read with its modern version [{self.translation_in}]" if self.modern
+                    else f", read with its translation [{self.translation_in}]")
         return out
+
+
+#: what the badge says the stage was found by
+BY = {"wikidata": "by Wikidata", "matcher": "by its text", "human": "by hand",
+      "text": "by this passage", "question": "by this passage and the question",
+      "language code": "by its language code"}
+#: a claim's stage, named in plain words: the canonical ids the claims use
+STAGE_NAMES: dict[str, str] = {
+    "wikidata:Q135913388": "Old Italian",
+    **{f"iso639-3:{code}": name for code, (_m, name) in STAGE_CODES.items()},
+}
 
 
 def markers(reader: Reader, text: str) -> int:
@@ -238,24 +256,21 @@ def first_published(hit: dict[str, Any]) -> int | None:
         return None
 
 
-def _own_language(hit: dict[str, Any], lang: str) -> bool | None:
-    """This edition is the work in its own language: False for a
-    translation, True where the work's language is known to be this one,
-    None where that is not known."""
-    credits = " ".join(str(hit.get(k) or "") for k in ("authors", "credits"))
-    if _TRANSLATED.search(credits):
-        return False
-    work_lang = str(hit.get("work_lang") or "").lower()
-    if work_lang:
-        return work_lang == lang
-    return None
-
-
 def stage_of(hit: dict[str, Any], *, period_asked: bool) -> tuple[Reader | None, str, str] | None:
     """(the reader, the stage named, why) for a source read as older
-    language, or None. A stage code names its stage even where no reader
-    of its modern language is held yet (A alone)."""
+    language, or None. The record's claim first (`language_stage`, the
+    fact app/ask/annotations.py attaches); the passage only where there is
+    none. A stage code names its stage even where no reader of its modern
+    language is held yet (A alone)."""
     lang = str(hit.get("lang") or "").lower()
+    fact = hit.get("language_stage")
+    if isinstance(fact, dict):
+        stage = fact.get("stage")
+        if stage is None:
+            return None                         # a person said: not an older stage
+        if lang in STAGE_CODES:
+            lang = STAGE_CODES[lang][0]
+        return READERS.get(lang), STAGE_NAMES.get(stage, stage), str(fact.get("method"))
     if lang in STAGE_CODES:
         modern, stage = STAGE_CODES[lang]
         return READERS.get(modern), stage, "language code"
@@ -263,13 +278,6 @@ def stage_of(hit: dict[str, Any], *, period_asked: bool) -> tuple[Reader | None,
     if reader is None:
         return None
     found = markers(reader, str(hit.get("text") or ""))
-    year = first_published(hit)
-    if year is not None and year < reader.until:
-        own = _own_language(hit, lang)
-        if own:
-            return reader, reader.stage, "year"
-        if own is None and found >= 1:
-            return reader, reader.stage, "year"
     if period_asked and found >= 1:
         return reader, reader.stage, "question"
     if found >= reader.threshold:
@@ -277,18 +285,33 @@ def stage_of(hit: dict[str, Any], *, period_asked: bool) -> tuple[Reader | None,
     return None
 
 
-def _translations(numbered: list[tuple[int, dict[str, Any]]], answer_lang: str | None) -> dict[int, int]:
-    """C: source n → the number of a source among these that is another
-    edition of its work, in the answer's language or in English."""
+def _translations(numbered: list[tuple[int, dict[str, Any]]], answer_lang: str | None
+                  ) -> dict[int, tuple[int, bool]]:
+    """C: source n → (the number of a source among these that is another
+    edition of its work, whether it is a MODERN version): one in the
+    source's own language that carries no stage of its own (a modern
+    rendering, 02 §2.10 amended 2026-11-16) first, else one in the
+    answer's language or in English."""
     want = {x for x in (answer_lang, "en") if x}
-    by_uid = {str(h.get("uid")): n for n, h in numbered if h.get("uid")}
-    out: dict[int, int] = {}
+    by_uid = {str(h.get("uid")): (n, h) for n, h in numbered if h.get("uid")}
+    out: dict[int, tuple[int, bool]] = {}
     for n, h in numbered:
+        lang = str(h.get("lang") or "").lower()
+        found: tuple[int, bool] | None = None
         for e in h.get("editions") or []:
-            k = by_uid.get(str(e.get("uid")))
-            if k is not None and k != n and str(e.get("lang") or "").lower() in want:
-                out[n] = k
+            got = by_uid.get(str(e.get("uid")))
+            if got is None or got[0] == n:
+                continue
+            k, other = got
+            elang = str(e.get("lang") or other.get("lang") or "").lower()
+            fact = other.get("language_stage")
+            if elang == lang and not (isinstance(fact, dict) and fact.get("stage")):
+                found = (k, True)
                 break
+            if found is None and elang in want and elang != lang:
+                found = (k, False)
+        if found is not None:
+            out[n] = found
     return out
 
 
@@ -298,8 +321,8 @@ SYSTEM_RULE = (
     "the sense it had then, do not take a form of the period for an error or a modern word, and do "
     "not supply what the passage does not say. Where a source's spelling was modernised for you, it "
     "says so: its words are the source's own, its spelling modernised, and a quotation from it says "
-    "so. Where a translation of an older source is among the sources, use it to understand the "
-    "original and cite both."
+    "so. Where a translation or a modern version of an older source is among the sources, use it to "
+    "understand the original and cite both."
 )
 
 
@@ -329,10 +352,13 @@ def read_sources(numbered: Iterable[tuple[int, dict[str, Any]]], question: str,
             suffix += f" · first published {year}"
         if applied:
             suffix += " · spelling modernised for reading (" + ", ".join(applied) + ")"
-        if n in pairs:
-            suffix += f" · a translation of it is source [{pairs[n]}]"
+        other = pairs.get(n)
+        if other is not None:
+            suffix += (f" · a modern version of it is source [{other[0]}]" if other[1]
+                       else f" · a translation of it is source [{other[0]}]")
         shown[n] = (suffix, text)
-        reads.append(Read(n, stage, why, applied, pairs.get(n)))
+        reads.append(Read(n, stage, why, applied, other[0] if other else None,
+                          bool(other and other[1])))
     return shown, reads
 
 
@@ -340,8 +366,7 @@ def said(reads: list[Read]) -> str:
     """One line for the log: which sources were read so."""
     if not reads:
         return ""
-    return "read as older language: " + "; ".join(f"[{r.n}] {r.badge()} (by its {r.why})"
-                                                  for r in reads)
+    return "read as older language: " + "; ".join(f"[{r.n}] {r.badge()}" for r in reads)
 
 
 def prepare(result: dict[str, Any], question: str, answer_lang: str | None = None
@@ -367,3 +392,90 @@ def prepare(result: dict[str, Any], question: str, answer_lang: str | None = Non
             h = {**h, "reading": suffix, "text": text}
         out.append(h)
     return {**result, "hits": out}, reads
+
+
+# --------------------------------------------------------------------------
+# THE MATCHER: a whole record's stage, claimed (operator's "B" then "A",
+# 2026-11-16: `language-stage` claims in gutenberg-book-editions, 09 §9.5)
+
+#: the matcher's method, as its claims carry it (09 §9.5)
+MATCHER = {"kind": "matcher", "id": "historical-markers", "version": 1}
+#: the stages the matcher claims, by modern language: the stage's canonical
+#: id and the year the standard's description ends it. Italian has no ISO
+#: 639-3 stage; Wikidata's "Old Italian" (Q135913388: "from about 960 until
+#: the founding of the Accademia della Crusca in 1582"). The 1582–1800
+#: language has no item, so the matcher claims none for it: such a record is
+#: read by its passages (`read_sources`), never by a claim of ours
+STAGES: dict[str, tuple[str, int]] = {"it": ("wikidata:Q135913388", 1582)}
+#: the medieval markers a record needs per 1,000 words to be claimed, and
+#: the lower bar where the work's first publication is before the stage's end
+DENSITY = 2.0
+DENSITY_DATED = 0.5
+CONFIDENCE, CONFIDENCE_DATED = "0.8", "0.9"
+#: PG's own summary stating a first publication ("… published in 1605"):
+#: marc520, as app/ask/works.py `first_published` (München's #695) reads it
+_PUBLISHED = re.compile(r"\b(?:first\s+)?published\s+in\s+(1[0-9]{3})\b", re.IGNORECASE)
+
+
+def medieval_markers(reader: Reader, text: str) -> int:
+    """The markers of the MEDIEVAL language alone — its words and its elided
+    and split forms; not the Renaissance printing's spellings, which a
+    1582–1800 book shares and the stage claimed does not cover."""
+    words = sum(1 for w in _WORD.findall(text.lower()) if w in reader.words)
+    return words + sum(len(p.findall(text)) for p in reader.patterns)
+
+
+def _record_text(record: dict[str, Any]) -> str:
+    return "\n".join(str(s[1]) for s in record.get("sections") or [] if len(s) > 1)
+
+
+def is_translation(record: dict[str, Any]) -> bool:
+    """A translator among the record's credits (09 §9.5 `creators` and
+    gutenberg's `extra.creators_detail`, MARC relator `trl`)."""
+    for a in (record.get("extra") or {}).get("creators_detail") or []:
+        if isinstance(a, dict) and a.get("role") in ("trl", "translator"):
+            return True
+    return bool(_TRANSLATED.search(" ".join(map(str, record.get("creators") or []))))
+
+
+def record_first_published(record: dict[str, Any]) -> int | None:
+    """The work's first publication as the record states it: a key of its
+    own where a plugin writes one, else PG's summary (marc520)."""
+    got = first_published(record)
+    if got is not None:
+        return got
+    marc = (record.get("extra") or {}).get("marc") or {}
+    for v in (marc.get("520") or marc.get(520) or []) if isinstance(marc, dict) else []:
+        m = _PUBLISHED.search(json.dumps(v, ensure_ascii=False) if not isinstance(v, str) else v)
+        if m:
+            return int(m.group(1))
+    return None
+
+
+def stage_claim(record: dict[str, Any], contributor: str) -> dict[str, Any] | None:
+    """The matcher's `language-stage` claim about one whole record, or None.
+    Never for a translation, never for a language without a claimed stage,
+    never for a work first published after the stage ends."""
+    lang = str(record.get("lang") or "").lower()
+    reader, stage = READERS.get(lang), STAGES.get(lang)
+    if reader is None or stage is None or is_translation(record):
+        return None
+    obj, ends = stage
+    text = _record_text(record)
+    words = len(_WORD.findall(text))
+    if words == 0:
+        return None
+    year = record_first_published(record)
+    if year is not None and year >= ends:
+        return None
+    found = medieval_markers(reader, text)
+    per_k = found * 1000 / words
+    dated = year is not None
+    if per_k < (DENSITY_DATED if dated else DENSITY):
+        return None
+    why = (f"{found} medieval markers in {words} words"
+           + (f", first published {year}, before {ends}" if dated else ""))
+    return {"type": "language-stage", "subject": record["uid"], "object": obj, "method": dict(MATCHER),
+            "evidence": {"markers": found, "words": words, "per_1000_words": f"{per_k:.2f}",
+                         "first_published": year, "why": why},
+            "confidence": CONFIDENCE_DATED if dated else CONFIDENCE, "contributor": contributor}

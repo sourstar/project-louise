@@ -134,3 +134,44 @@ answer), `read_sources` from `app/ask/chat.py`'s tool results (`ask chat`,
 
 The markers are a heuristic of ours: no detector exists. Tests:
 `tests/test_historical.py`, the review's modern sentences among them.
+
+
+## The hybrid (2026-11-16, operator's "B" then "A")
+
+Relayed by München from the architecture session: whether a WORK is in an
+older stage of its language becomes an ANNOTATION; the answer-time helps
+stay at answer time.
+
+- **The claim** `language-stage` (09 §9.5, 02 §2.10, §9.14; Codex version
+  9): `subject` a record, `object` the stage's canonical id
+  (`iso639-3:<code>`, or a Wikidata item where 639-3 has none), method
+  `matcher` (historical-markers 1), `wikidata` (P407) or `human`; a human
+  claim may say `object: null`, "not an older stage". Identified by (type,
+  subject, method kind), so a person's and the matcher's coexist; read in
+  the order human, Wikidata, matcher. `object_hash` null; the edge
+  `annotations:language-stage` to the stage, none for null.
+- **Where** (operator's "A"): in gutenberg-book-editions, re-created at
+  version 9 (its 4,387 claims carried unchanged), title gaining "and the
+  stage of each edition's language". München re-creates and shares on the
+  operator's word, after Frankfurt's review.
+- **The matcher** (`app/historical.py` `stage_claim`, run by
+  `tools/annotations_language_stage.py` under supervise-pass, parts on the
+  parse pool, resumable per part): the MEDIEVAL markers over the whole
+  record — ≥ 2 per 1,000 words, or ≥ 0.5 where PG's summary states a first
+  publication before 1582 — never for a translation (a `trl` credit),
+  never for a work first published from 1582. The stage claimed is
+  Wikidata's Old Italian, Q135913388 ("from about 960 until the founding
+  of the Accademia della Crusca in 1582"). **Open:** 1582–1800 Italian has
+  no Wikidata item and no 639-3 code, so the matcher claims nothing for
+  it; such books are read by their passages.
+- **The merge** keeps every line of the existing claims file, replaces only
+  the matcher's earlier stage claims, and refuses a `same-work` of one
+  language unless one end carries a stage (02 §2.10, amended: Dante and a
+  modern Italian rendering).
+- **At answer time** (Quality): the claim is attached to the hit as the
+  fact `language_stage` (app/ask/annotations.py); a record with a claim is
+  read by it (or not at all for a person's null); a record without one is
+  read by its passage alone; no year decides it (b2af94f's trigger is
+  gone). The badge names the method: "by Wikidata", "by its text", "by
+  hand", "by this passage". C also points at a modern version in the same
+  language ("a modern version of it is source [k]").

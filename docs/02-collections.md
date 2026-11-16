@@ -1600,7 +1600,9 @@ claim = {type: "same-work" | "translation-of", subject, object,
 ```
 
 - `same-work`: two records are versions of one work in different
-  languages, and neither is said to be the other's source.
+  languages, and neither is said to be the other's source. *Amended
+  2026-11-16*: or in one language, where one of them carries a
+  `language-stage` claim (below).
 - `translation-of`: the subject translates the object. The source language
   is `object_lang` and the target language is `subject_lang`.
 - `method` says how the claim was made: a matcher with its id and version,
@@ -1671,6 +1673,26 @@ chunk for a mention: it is `current` while the chunk's `text_hash` is the
 one it was made against and `stale` once the record's text moved under it
 (a re-cut moves chunk ids and hashes); `subject_hash` keeps covering the
 record. Their edges are 09 §9.14's.
+
+**The stage of a record's language** (*amended 2026-11-16*, operator's
+"B" then "A"; `notes/historical-languages.md`). `language-stage`: a record
+is written in an older stage of its language — `subject` the record (the
+whole work), `object` the stage's canonical id, `iso639-3:<code>` where
+the standard has the stage (`iso639-3:enm`) and a Wikidata item otherwise
+(Italian has no 639-3 stage), never a label of ours. Its method is a
+matcher (the markers of the period counted over the whole record, never
+claimed for a translation), Wikidata (the work's P407 naming the stage,
+preferred where the link is held) or a person. A PERSON CORRECTS IT: a
+`human` claim on the same record is kept beside the matcher's — the claim
+is identified by (type, subject, method kind) — and wins where they are
+read; a `human` claim's `object` may be null, "not an older stage". The
+claims live in the collection that holds the target's versions
+(gutenberg-book-editions, re-created at version 9 for them). The answer
+reads the claim attached to a hit as a fact and helps the model read the
+older text (05 §5.3, Quality only).
+`same-work` joins two records in different languages, OR in one language
+where one of them carries a `language-stage` claim in the same
+collection: Dante in older Italian and a modern Italian rendering of him.
 
 **Methods whose output is not bit-exact** (*amended 2026-10-20*): a
 `model` method names its weights and its prompt by hash and runs at

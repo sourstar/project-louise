@@ -92,10 +92,20 @@ from .codex import Codex, CodexError
 PLUGIN = cx.ANNOTATIONS_PLUGIN
 SAME_WORK, TRANSLATION_OF = "same-work", "translation-of"
 MENTION, RELATION, COMMUNITY = "mention", "relation", "community"
+#: the type of 2026-11-16 (operator's "B"; docs/notes/historical-languages.md):
+#: a record is written in an older stage of its language — subject a record,
+#: object the stage's canonical id (ISO 639-3 where the standard has it,
+#: Wikidata's item otherwise), or null where a person says it is not
+LANGUAGE_STAGE = "language-stage"
 #: the types of 2026-10-09: two records of ONE target
 WORK_TYPES = (SAME_WORK, TRANSLATION_OF)
-#: the types of 2026-10-20 (Codex GRAPH_VERSION): chunk and entity ends
-GRAPH_TYPES = (MENTION, RELATION, COMMUNITY)
+#: the types written at Codex GRAPH_VERSION: the three of 2026-10-20 (chunk
+#: and entity ends) and `language-stage` (2026-11-16: one record end)
+GRAPH_TYPES = (MENTION, RELATION, COMMUNITY, LANGUAGE_STAGE)
+#: the namespaces of a stage: the ISO 639-3 code, or a Wikidata item
+STAGE_NAMESPACES = ("iso639-3", "wikidata")
+#: the methods a language-stage claim may be made by (09 §9.5)
+STAGE_METHOD_KINDS = ("matcher", "wikidata", "human")
 CLAIM_TYPES = WORK_TYPES + GRAPH_TYPES
 #: a community's edges: each member → the community claim (09 §9.14)
 MEMBER_OF = "member-of"
@@ -111,6 +121,7 @@ OWN_KEYS: dict[str, tuple[str, ...]] = {
     MENTION: ("start", "end", "surface"),
     RELATION: ("relation", "evidence_chunk"),
     COMMUNITY: ("members", "summary"),
+    LANGUAGE_STAGE: (),
 }
 #: the 2026-10-09 claim's keys, as callers knew them
 CLAIM_KEYS = COMMON_KEYS[:3] + OWN_KEYS[SAME_WORK] + COMMON_KEYS[3:]
@@ -216,6 +227,33 @@ def _check_entity(v: Any, where: str, plugins: tuple[str, ...], *, property_: bo
     return v
 
 
+_ISO639_3_RE = re.compile(r"^[a-z]{3}$")
+
+
+def _check_stage(v: Any, where: str, method: Any) -> str | None:
+    """A language-stage claim's object: the stage's canonical id —
+    `iso639-3:<code>` where the standard has the stage (`iso639-3:enm`),
+    `wikidata:Q<n>` its item otherwise — or null, which only a person
+    writes: "this record is not in an older stage" (09 §9.5)."""
+    if v is None:
+        if not (isinstance(method, dict) and method.get("kind") == "human"):
+            raise AnnotationsError(f"{where} is null only in a human claim (\"not an older stage\"); "
+                                   f"a method names the stage it found")
+        return None
+    if not isinstance(v, str) or ":" not in v:
+        raise AnnotationsError(f"{where} is the stage's canonical id, iso639-3:<code> or "
+                               f"wikidata:Q<n>, or null, got {v!r}")
+    ns, _, ident = v.partition(":")
+    if ns not in STAGE_NAMESPACES:
+        raise AnnotationsError(f"{where} {v!r}: a stage is named by ISO 639-3 or by Wikidata, never by "
+                               f"a label of ours")
+    if ns == "iso639-3" and not _ISO639_3_RE.match(ident):
+        raise AnnotationsError(f"{where} {v!r} is not an ISO 639-3 code (three lowercase letters)")
+    if ns == "wikidata" and not _entity_ok(ns, ident):
+        raise AnnotationsError(f"{where} {v!r} is not a Wikidata item")
+    return v
+
+
 def _check_chunk_end(v: Any, where: str, plugins: tuple[str, ...]) -> dict[str, Any]:
     if not isinstance(v, dict) or tuple(sorted(v)) != tuple(sorted(CHUNK_END_KEYS)):
         raise AnnotationsError(f"{where} is a chunk of the text target, {{{', '.join(CHUNK_END_KEYS)}}} "
@@ -288,6 +326,9 @@ def check_claim(c: Any, where: str = "claim", *, target_plugin: str | None = Non
             raise AnnotationsError(f"{where}: subject and object are the same entity")
         _check_entity(c["relation"], f"{where}: relation", plugins, property_=True)
         _check_chunk_end(c["evidence_chunk"], f"{where}: evidence_chunk", plugins)
+    elif t == LANGUAGE_STAGE:
+        _check_uid(c["subject"], f"{where}: subject", plugins)
+        _check_stage(c["object"], f"{where}: object", c.get("method"))
     else:                                                   # COMMUNITY
         sub = c["subject"]
         if not isinstance(sub, dict) or set(sub) != {"id", "level"} or not isinstance(sub["id"], str) \
@@ -333,9 +374,12 @@ def check_claim(c: Any, where: str = "claim", *, target_plugin: str | None = Non
                                f"{c['confidence']!r}")
     if not isinstance(c["contributor"], str) or not c["contributor"].strip():
         raise AnnotationsError(f"{where}: contributor names who makes the claim")
+    if t == LANGUAGE_STAGE and m["kind"] not in STAGE_METHOD_KINDS:
+        raise AnnotationsError(f"{where}: a language-stage claim is made by a "
+                               f"{', '.join(STAGE_METHOD_KINDS)} method (09 §9.5)")
     for k in ("subject_hash", "object_hash"):
-        if k in c and c[k] is None and t == COMMUNITY:
-            continue                        # a community pins no record (09 §9.5)
+        if k in c and c[k] is None and (t == COMMUNITY or (t == LANGUAGE_STAGE and k == "object_hash")):
+            continue                        # a community pins no record, a stage no object (09 §9.5)
         if k in c and not (isinstance(c[k], str) and _HEX32_RE.match(c[k])):
             raise AnnotationsError(f"{where}: {k} is a content_hash, 32 lowercase hex digits")
     if "target_snapshot" in c and not (isinstance(c["target_snapshot"], str)
@@ -366,6 +410,10 @@ def identity_key(c: dict[str, Any]) -> tuple:
         return (t, cx.canonical_json(c["subject"]), c["object"], c["start"], c["end"])
     if t == RELATION:
         return (t, c["subject"], c["object"], c["relation"])
+    if t == LANGUAGE_STAGE:
+        # by its record and its method's KIND, so a person's claim and a
+        # matcher's about one record coexist — the person's wins at reading
+        return (t, c["subject"], c["method"]["kind"])
     return (t, c["subject"]["id"], c["subject"]["level"])
 
 
@@ -383,6 +431,8 @@ def identity_tuple(c: dict[str, Any]) -> list:
         return [t, c["subject"], c["object"], c["start"], c["end"]]
     if t == RELATION:
         return [t, c["subject"], c["object"], c["relation"]]
+    if t == LANGUAGE_STAGE:
+        return [t, c["subject"], c["method"]["kind"]]
     return [t, c["subject"]["id"], c["subject"]["level"]]
 
 
@@ -398,6 +448,8 @@ def ends_of(c: dict[str, Any]) -> list[tuple[str, Any]]:
         return [(CHUNK, c["subject"]), (ENTITY, c["object"])]
     if t == RELATION:
         return [(ENTITY, c["subject"]), (ENTITY, c["object"]), (CHUNK, c["evidence_chunk"])]
+    if t == LANGUAGE_STAGE:
+        return [(RECORD, c["subject"])]         # the stage is a canonical id, no target's record
     return [(ENTITY, m) for m in c["members"]]
 
 
@@ -635,6 +687,16 @@ def _pin_one(s: Submitted, held, snapshot_id: str | None, snapshots: dict[str, s
                 raise AnnotationsError(f"claims line {s.line}: a community pins no {k} — it has no "
                                        f"record at either end (09 §9.5)")
             c[k] = None
+    elif t == LANGUAGE_STAGE:
+        stated = c.get("subject_hash")
+        if stated is not None and stated != hashes[0]:
+            raise AnnotationsError(
+                f"claims line {s.line}: subject_hash {stated} is not {c['subject']}'s content_hash in "
+                f"snapshot {snap} ({hashes[0]}): the claim was checked against other text")
+        if c.get("object_hash") is not None:
+            raise AnnotationsError(f"claims line {s.line}: a language-stage claim pins no object_hash — "
+                                   f"its object is a stage, not a record (09 §9.5)")
+        c["subject_hash"], c["object_hash"] = hashes[0], None
     else:
         for k, h in zip(("subject", "object"), hashes):
             stated = c.get(f"{k}_hash")
@@ -717,6 +779,9 @@ def edge_lines(records: Iterable[dict[str, Any]], snapshot_id: str) -> list[byte
             edges.append((c["subject"]["uid"], edge_type(t), c["object"]))
         elif t == RELATION:
             edges.append((entity_uid(c["subject"]), edge_type(t), c["object"]))
+        elif t == LANGUAGE_STAGE:
+            if c["object"] is not None:          # "not an older stage" has no edge
+                edges.append((c["subject"], edge_type(t), c["object"]))
         else:
             edges.extend((entity_uid(m), edge_type(MEMBER_OF), r["uid"]) for m in c["members"])
     edges.sort(key=lambda e: (e[0].encode(), e[1].encode(), e[2].encode()))
@@ -1606,8 +1671,8 @@ def _update_plan(root: Path, name: str, against: Sequence[tuple[str, str]] | Non
 
 def _refuse_graph(plan: _UpdatePlan, graph: bool) -> None:
     if graph and plan.codex.version < cx.GRAPH_VERSION:
-        raise AnnotationsError("a mention, relation or community claim needs a Codex at the graph "
-                               "version (09 §9.3): not this collection's")
+        raise AnnotationsError("a mention, relation, community or language-stage claim needs a Codex "
+                               "at the graph version (09 §9.3): not this collection's")
 
 
 _LEAVES_NONE = ("the update leaves no claim: an annotations collection holds at least one "
@@ -1885,8 +1950,13 @@ class ClaimIndex:
         #: entities, a community by its members; attached by step 3 of
         #: docs/notes/wiki-gutenberg-amendments.md
         self.graph: dict[str, list[Claim]] = {}
+        #: target record uid -> its language-stage claims (2026-11-16), what
+        #: the answer reads as a fact (app/historical.py)
+        self.stages: dict[str, list[Claim]] = {}
         for c in self.claims:
-            into = self.by_target if c.claim["type"] in WORK_TYPES else self.graph
+            t = c.claim["type"]
+            into = (self.by_target if t in WORK_TYPES
+                    else self.stages if t == LANGUAGE_STAGE else self.graph)
             for uid in record_ends(c.claim):
                 into.setdefault(uid, []).append(c)
 
@@ -1958,6 +2028,11 @@ def state_of(claim: dict[str, Any], now: dict[str, str | None]) -> str:
     if claim["type"] == COMMUNITY:
         return UNKNOWN
     ends = ends_of(claim)
+    if claim["type"] == LANGUAGE_STAGE:            # one record end
+        a = now.get(end_uid(*ends[0]))
+        if a is None:
+            return UNKNOWN
+        return CURRENT if a == claim["subject_hash"] else STALE
     a, b = now.get(end_uid(*ends[0])), now.get(end_uid(*ends[1]))
     if a is None or b is None:
         return UNKNOWN
