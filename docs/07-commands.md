@@ -221,7 +221,12 @@ louise hold
                                                                        derived from it (index/facets/, its edges) goes, never the text index or the catalogue. Refused otherwise: a snapshot a peer may hold is superseded, never recalled
                                                                        (01 promise 8). Then `records build --records-from-discarded <snapshot>` takes its
                                                                        record lines, cut afresh, and parses only what it did not list (added 2026-10-30,
-                                                                       RULE 1: wikipedia-v8's 2026-09 listed 21.9 M twins of archive pages)
+                                                                       RULE 1: wikipedia-v8's 2026-09 listed 21.9 M twins of archive pages). Each part's OWN
+                                                                       version moves: under its superseded name where a records build since put a newer one at
+                                                                       the path, which stays; a part that build left as it was is linked aside and kept
+                                                                       (2026-11-16, NeuRIS5). --repair: after a discard made before that, which moved the
+                                                                       build's parts — the latest snapshot's come back, the discarded one's go aside; a dry run
+                                                                       without --yes
   embedder    check <collection>                                       the calibration gate (§3.3) against the run the endpoint states; a pass validates it and keeps its signed statement in `state/`
   embedder    tree-diff <before> <after>                               what differs between two backend trees, path by path: digests read from VEGA_URL or JSON files (vega.md §12); exit 1 when they differ
               benchmark <collection>                                   tokens per second on the calibration set

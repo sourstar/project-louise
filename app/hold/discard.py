@@ -77,6 +77,42 @@ def _members(snap) -> list[str]:
             + [f.path for f in getattr(snap, "figures", ())])
 
 
+def _entries(snap) -> list[tuple[str, str, int]]:
+    """`(path, root, bytes)` of every part the snapshot lists."""
+    return [(e.path, e.root, int(e.bytes))
+            for e in (*snap.shards, *snap.relations, *getattr(snap, "figures", ()))]
+
+
+def _built_since(root: Path, name: str, snap) -> dict[str, str] | None:
+    """The parts a records build made SINCE the snapshot lists, `{path:
+    sha256}` — the build's manifest (state/build/manifest.json) where it
+    names other parts than the snapshot — or None: no build since, or the
+    snapshot's own."""
+    import json
+    path = Path(root) / name / "state" / "build" / "manifest.json"
+    try:
+        listed = {str(s["path"]): str(s.get("sha256") or "") for s in json.loads(path.read_text())["shards"]}
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+    own = {e.path: str(e.root).replace("sha256:", "") for e in snap.shards}
+    return None if listed == own else listed
+
+
+def version_of(shard_dir: Path, rel: str, snapshot_id: str, size: int) -> Path | None:
+    """WHERE THE SNAPSHOT'S OWN VERSION of `rel` is (München, 2026-11-16,
+    NeuRIS5): under its superseded name for `snapshot_id` where a build has
+    since put a newer version at the path (`shard.keep_superseded`), else at
+    the path when it is that version's size — never the newer version at the
+    path, which is another snapshot's to come. None where it is not held."""
+    here = Path(shard_dir) / rel
+    kept = shard_mod.superseded_name(here, snapshot_id)
+    if kept.is_file():
+        return kept if kept.stat().st_size == size else None
+    if here.is_file() and here.stat().st_size == size:
+        return here
+    return None
+
+
 def _published(con, node_con, codex, snapshot_id: str) -> str | None:
     """Why the snapshot may be held elsewhere, or None."""
     from app.share import seeder
@@ -119,7 +155,18 @@ def discard(root: Path, name: str, snapshot_id: str, *, con, node_con=None,
         raise CodexError(f"{name}: {dest} holds a discarded {snapshot_id} already; move it aside first")
     members = _members(snap)
     sig = shard_dir / shard_mod.snapshot_sig_path(snapshot_id)
+    # each part's OWN version, wherever it is: a build since may have kept it
+    # under its superseded name and put the next version at the path; a part
+    # that build left as it was is both's, linked aside and kept in place
+    where = [(rel, version_of(shard_dir, rel, snapshot_id, size)) for rel, _root, size in _entries(snap)]
+    since = _built_since(root, name, snap) or {}
+    shared = {rel for rel, root_, _size in _entries(snap)
+              if since.get(rel) and since[rel] == str(root_).replace("sha256:", "")}
     out = {"collection": name, "snapshot": snapshot_id, "hash": snap.hash, "parts": len(members),
+           "at_path": sum(1 for rel, p in where if p is not None and p == shard_dir / rel),
+           "superseded_name": sum(1 for rel, p in where if p is not None and p != shard_dir / rel),
+           "not_held": sum(1 for _rel, p in where if p is None),
+           "kept_for_the_build_since": len(shared),
            "to": str(dest), "discarded": not dry_run}
     if dry_run:
         return out
@@ -133,11 +180,13 @@ def discard(root: Path, name: str, snapshot_id: str, *, con, node_con=None,
                          f"cannot cross one (EXDEV) and nothing was moved")
     # the parts first, the snapshot file last: an interrupted discard still
     # names its snapshot in the SHARD, and a re-run moves what is left
-    for rel in members:
-        src = shard_dir / rel
-        if src.is_file():
+    for rel, src in where:
+        if src is not None and src.is_file():
             (dest / rel).parent.mkdir(parents=True, exist_ok=True)
-            os.replace(src, dest / rel)
+            if rel in shared and src == shard_dir / rel:
+                os.link(src, dest / rel)
+            else:
+                os.replace(src, dest / rel)
     relation_paths = [r.path for r in snap.relations]
     if relation_paths:
         has = con.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='relations'").fetchone()
@@ -166,4 +215,56 @@ def discard(root: Path, name: str, snapshot_id: str, *, con, node_con=None,
         os.replace(sig, dest / shard_mod.snapshot_sig_path(snapshot_id))
     (dest / shard_mod.snapshot_path(snapshot_id)).parent.mkdir(parents=True, exist_ok=True)
     os.replace(path, dest / shard_mod.snapshot_path(snapshot_id))
+    return out
+
+
+def repair(root: Path, name: str, snapshot_id: str, *, dry_run: bool = True) -> dict[str, Any]:
+    """After a discard made before `version_of` (NeuRIS5, 2026-11-16): the
+    discard moved the parts at their PATHS — the next build's versions —
+    and left its own snapshot's under their superseded names. Each part the
+    LATEST snapshot lists and does not find at its path comes back from the
+    discarded folder where its size is the latest's (moved where the
+    discarded snapshot listed other bytes, linked where the same); then each
+    part of the discarded snapshot still in the SHARD under its superseded
+    name goes into the discarded folder. Nothing is deleted; a dry run says
+    what would move. Idempotent."""
+    from app.share import seeder
+    root = Path(root)
+    shard_dir = col.shard_dir_of(root, name)
+    dest = discarded_dir(root, name, snapshot_id)
+    old_path = dest / shard_mod.snapshot_path(snapshot_id)
+    if not old_path.is_file():
+        raise CodexError(f"{name}: no discarded snapshot {snapshot_id!r} under {dest.parent}")
+    latest = seeder.current_snapshot(shard_dir)
+    if latest is None:
+        raise CodexError(f"{name}: no snapshot in {shard_dir / 'snapshots'} to repair the parts of")
+    old = {rel: (root_, size) for rel, root_, size in _entries(sn.load(old_path))}
+    back, linked, aside, missing = [], [], [], []
+    for rel, root_, size in _entries(latest):
+        here = shard_dir / rel
+        if here.is_file():
+            continue
+        there = dest / rel
+        if there.is_file() and there.stat().st_size == size:
+            (linked if old.get(rel, (None,))[0] == root_ else back).append(rel)
+        else:
+            missing.append(rel)
+    for rel, (root_, size) in old.items():
+        kept = shard_mod.superseded_name(shard_dir / rel, snapshot_id)
+        if kept.is_file() and kept.stat().st_size == size and (rel in back or not (dest / rel).is_file()):
+            aside.append(rel)
+    out = {"collection": name, "latest": latest.snapshot_id, "discarded": snapshot_id,
+           "back": len(back), "linked": len(linked), "aside": len(aside), "not_found": len(missing),
+           **({"first_not_found": missing[0]} if missing else {}), "applied": not dry_run}
+    if dry_run:
+        return out
+    for rel in back:
+        (shard_dir / rel).parent.mkdir(parents=True, exist_ok=True)
+        os.replace(dest / rel, shard_dir / rel)
+    for rel in linked:
+        (shard_dir / rel).parent.mkdir(parents=True, exist_ok=True)
+        os.link(dest / rel, shard_dir / rel)
+    for rel in aside:
+        (dest / rel).parent.mkdir(parents=True, exist_ok=True)
+        os.replace(shard_mod.superseded_name(shard_dir / rel, snapshot_id), dest / rel)
     return out
