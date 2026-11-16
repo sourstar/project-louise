@@ -1148,6 +1148,9 @@ def _relay_answer(job: relay.Job, chat) -> None:
             if kind == "delta":
                 job.touch("answer")
                 job.emit("delta", text=value)
+            elif kind == "reading":
+                # the sources read as older language: their badges on the page
+                job.emit("reading", sources=value)
             elif kind == "cut":
                 job.emit("delta", text=f"\n[answer cut: {value}]")
                 job.emit("cut", why=value)

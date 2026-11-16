@@ -58,9 +58,13 @@
        search reads only the question's language and English instead of
        every main language of the collections. Quality is neither. The
        request still carries the two apart (`speed`, `quick`) for the API
-       and the measurements. Remembered in the browser. #}
+       and the measurements. Remembered in the browser. Quality also reads
+       an older source by its language's reader — named, its spelling
+       modernised for the model, its translation pointed at — where the
+       passage or the question calls for it (app/historical.py, operator
+       2026-11-16); Speed skips it. #}
     <span class="seg" role="radiogroup" aria-label="quality or speed">
-      <label title="the best results: the translation model translates, and the text search reads every main language of the collections"><input type="radio" name="speed" value="quality" onchange="rememberSpeed()" checked> <span>Quality</span></label>
+      <label title="the best results: the translation model translates, the text search reads every main language of the collections, and older language (old Italian, …) is read with its period's help"><input type="radio" name="speed" value="quality" onchange="rememberSpeed()" checked> <span>Quality</span></label>
       <label title="quicker: the chat model translates, and the text search reads only the question's language and English"><input type="radio" name="speed" value="speed" onchange="rememberSpeed()"> <span>Speed</span></label>
     </span>
     {# "show results in": CONTENT only — the answer and every entry IN
@@ -380,6 +384,7 @@ function relayListen(kind,id,on){
       });
       es.addEventListener('result',e=>{seen(e); on.result&&on.result(JSON.parse(e.data))});
       es.addEventListener('delta',e=>{seen(e); on.delta&&on.delta(JSON.parse(e.data).text)});
+      es.addEventListener('reading',e=>{seen(e); on.reading&&on.reading(JSON.parse(e.data).sources)});
       es.addEventListener('stuck',e=>{seen(e); relayStuck(kind,JSON.parse(e.data))});
       es.addEventListener('moving',e=>{seen(e); relayNote('')});
       es.addEventListener('end',e=>{
@@ -478,6 +483,19 @@ function howAsk(){const r=document.querySelector('input[name="how"]:checked'); r
 function rememberHow(){try{localStorage.setItem('louise-how',howAsk())}catch(e){}}
 (function(){let v=null; try{v=localStorage.getItem('louise-how')}catch(e){}
   const r=v&&document.querySelector('input[name="how"][value="'+v+'"]'); if(r)r.checked=true})();
+// THE SOURCES READ AS OLDER LANGUAGE (app/historical.py; architecture,
+// 2026-11-16: a badge on the source, never a line of the answer): hit n,
+// the answer's [n], says how the model was helped to read it. Once per hit.
+function readingBadges(list){
+  const hits=[...document.querySelectorAll('#hits .hit')];
+  for(const r of list||[]){
+    const h=hits[r.n-1], head=h&&h.querySelector('.head');
+    if(!head||head.querySelector('.badge.reading'))continue;
+    const b=document.createElement('span'); b.className='badge brass reading';
+    b.textContent=r.reading; b.title='how the AI summary read this source: '+r.reading;
+    head.append(' ',b);
+  }
+}
 function speedOn(){const r=document.querySelector('input[name="speed"]:checked'); return !!r&&r.value==='speed'}
 function rememberSpeed(){try{localStorage.setItem('louise-speed',speedOn()?'speed':'quality')}catch(e){}}
 (function(){let v=null; try{v=localStorage.getItem('louise-speed')}catch(e){}
@@ -514,11 +532,11 @@ async function ask(){
   let id;
   try{
     id=await relayStart('answer',{messages:[{role:'user',content:q}],collections:scopeCollections(),
-                                  annotations:scopeAnnotations(),answer_lang:want,search_id:lastSearch,
+                                  annotations:scopeAnnotations(),answer_lang:want,search_id:lastSearch,speed:speedOn(),
                                   ...counts()},[]);
   }catch(e){setAnswer(''); relayDropped('answer','it could not start ('+(e.message||e)+')'); return}
   relaySave({answer_lang:want});
-  await relayListen('answer',id,{delta});
+  await relayListen('answer',id,{delta,reading:readingBadges});
   finishAnswer(a,want);
   }finally{tq.hold=false}
   tqPump();              // the entries, now that the answer is out
@@ -548,7 +566,7 @@ async function relayRestore(){
     if(s.answer&&s.answer.id){
       const want=s.answer_lang===undefined?selectedLang():s.answer_lang;
       const {a,delta}=startAnswer(want);
-      await relayListen('answer',s.answer.id,{delta});
+      await relayListen('answer',s.answer.id,{delta,reading:readingBadges});
       finishAnswer(a,want);
     }
   }finally{tq.hold=false}

@@ -66,7 +66,11 @@ def test_chat_route_answers_the_loop_s_object_and_a_refusal_carries_the_exit(cli
                                            "answer_lang": "it"})
     assert r.status_code == 200 and r.json()["answer"] == "Ahab."
     assert seen == {"question": "who?", "collections": ["gutenberg"], "history": [{"role": "user", "content": "hi"}],
-                    "answer_lang": "it"}, "the reader's language reaches the loop"
+                    "answer_lang": "it", "speed": False}, "the reader's language reaches the loop"
+    # the reader's Speed reaches the loop: no older-language reader (app/historical.py)
+    seen.clear()
+    assert client.post("/api/ask/chat", json={"question": "who?", "speed": True}).status_code == 200
+    assert seen["speed"] is True
     monkeypatch.setattr(chat, "ask", lambda *a, **k: (_ for _ in ()).throw(chat.ChatError("CHAT_URL unset")))
     r = client.post("/api/ask/chat", json={"question": "q"})
     assert r.status_code == 409 and r.json() == {"exit": 2, "error": "CHAT_URL unset"}
