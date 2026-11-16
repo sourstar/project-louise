@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% block title %}Library — {{ site_title() }}{% endblock %}
+{% block content %}
+{# THE USERS' LIBRARY (operator, 2026-11-16: "user account, add the Library
+   tab with only the read only collections cards. Each collection card shows
+   only the top information up to the "embedded" bar included, but with no
+   ETA information"): the admin card's top, the same fragment, nothing after
+   the dense bar — no Details, no Options, no control (RULE 2) #}
+{% set mode_fetches = mode_runs(worker_state|default('running'), 'fetch') %}
+<h1>Library</h1>
+{% if not shelves %}
+<div class="panel note">No collection is searched on this node yet.</div>
+{% endif %}
+<div class="grid">
+{% for c in shelves %}
+<div class="panel" data-collection="{{ c.name }}">
+{% include "_fragments/collection_card_top.html" %}
+</div>
+{% endfor %}
+</div>
+{% endblock %}

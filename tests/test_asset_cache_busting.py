@@ -64,8 +64,9 @@ def test_the_licence_class_has_its_own_colour_rule():
         encoding="utf-8")
     for cls in ("green", "yellow", "red", "unknown"):
         assert f".badge .lic-{cls}" in css, f"no colour rule for {cls}"
-    library = (Path(web.__file__).parent / "templates" / "library.html").read_text(
-        encoding="utf-8")
+    # the card's top is its own fragment since 2026-11-16
+    library = (Path(web.__file__).parent / "templates" / "_fragments"
+               / "collection_card_top.html").read_text(encoding="utf-8")
     assert 'class="lic-{{ c.license.class }}"' in library
 
 

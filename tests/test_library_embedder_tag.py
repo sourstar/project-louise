@@ -120,7 +120,10 @@ def test_the_card_shows_the_quantization_where_the_codex_states_it(client, monke
 
 def test_the_template_draws_the_tag_from_the_shelf():
     from pathlib import Path
-    library = (Path(web.__file__).parent / "templates" / "library.html").read_text(encoding="utf-8")
+    # the card's top is its own fragment since 2026-11-16 (library.html and
+    # user_library.html both include it)
+    library = (Path(web.__file__).parent / "templates" / "_fragments"
+               / "collection_card_top.html").read_text(encoding="utf-8")
     assert "{% if c.embedder %}" in library and "c.embedder.served" in library
 
 
