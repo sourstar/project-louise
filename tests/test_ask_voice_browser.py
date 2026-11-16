@@ -45,13 +45,17 @@ def _wav(samples: list[float], rate: int) -> bytes:
     return buf.getvalue()
 
 
-def test_the_ask_page_speaks_and_listens(isolated_config, config_dir, tmp_path):
+def test_the_ask_page_speaks_and_listens(isolated_config, config_dir, tmp_path, monkeypatch):
+    # as an admin sees it: the voice to choose is a recorded one (2026-11-16)
+    from app import config
+    monkeypatch.setattr(config, "ADMIN_TOKEN", "sekrit")
+    admin = {"X-Admin-Token": "sekrit"}
     (config_dir / "platform.toml").write_text(
         '[speech]\nstt_model = "whisper-large-v3"\nvad_model = "silero-vad"\ntts_model = "omnivoice-cpp"\n',
         encoding="utf-8")
-    (tmp_path / "ask.html").write_text(TestClient(app).get("/ask").text, encoding="utf-8")
+    (tmp_path / "ask.html").write_text(TestClient(app).get("/ask", headers=admin).text, encoding="utf-8")
     (config_dir / "platform.toml").write_text("", encoding="utf-8")
-    (tmp_path / "ask_off.html").write_text(TestClient(app).get("/ask").text, encoding="utf-8")
+    (tmp_path / "ask_off.html").write_text(TestClient(app).get("/ask", headers=admin).text, encoding="utf-8")
     hits = [{"chunk_id": f"c:{k}:0:1", "book_id": k, "source_collection": "c", "lang": "en",
              "title": f"Title {k}", "authors": "", "chapter": f"Chapter {k}",
              "text": f"Dante {k} wrote it.", "origin_url": None} for k in (1, 2)]

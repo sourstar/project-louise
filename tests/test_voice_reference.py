@@ -19,7 +19,7 @@ LEAD = 0.40
 # (seconds of speech, its words, seconds of pause after it)
 LAYOUT = [
     (1.2, "Bonjour à tous,", 0.25),
-    (1.5, "je suis Philippe.", 0.60),
+    (1.5, "je suis Louise.", 0.60),
     (0.9, "Aujourd'hui", 0.18),
     (1.6, "nous parlons de la loi,", 0.30),
     (1.4, "et de ses articles.", 0.70),
@@ -124,7 +124,7 @@ def test_no_plan_fits_says_what_would(an):
 
 def test_words_are_placed_in_their_parts_despite_what_the_recogniser_missed():
     transcript = " ".join(TEXTS)
-    heard = ["bonjour a tous", "je suis philippe", "", "nous parlons de la loi", "et de ces articles",
+    heard = ["bonjour a tous", "je suis louise", "", "nous parlons de la loi", "et de ces articles",
              "chaque mot compte", "merci", "a bientot"]
     texts, shares = vr.place(transcript, heard)
     assert texts == TEXTS
@@ -209,11 +209,11 @@ def test_a_wav_it_cannot_read_says_how_to_convert_it(tmp_path):
         vr.read_wav(p)
 
 
-# ---- longer sentence pauses (operator, 2026-11-12: Philippe's 1d, "add it")
+# ---- longer sentence pauses (operator, 2026-11-12: clip "1d", "add it")
 
 def test_two_parts_meet_on_the_first_ones_own_pause(rec, an):
-    """Corrected 2026-11-12: candidate 1 joined "vittime?" to the next
-    sentence on the pause before that sentence (240 ms), not on the
+    """Corrected 2026-11-12: candidate 1 joined its first sentence to the
+    next one on the pause before that sentence (240 ms), not on the
     speaker's own 780 ms after it."""
     audio, _ = rec
     plan = vr.plan_of([0, 1, 5], an)
@@ -247,7 +247,7 @@ def test_a_sentence_pause_is_lengthened_keeping_the_speakers_own_pause_whole(rec
     for g, (p, k, _) in zip(got, ps):
         want = max(p, round(target * RATE)) if k == "sentence" else p
         assert abs(g - want) <= 0.02 * RATE, (k, p, g, want)
-    # the first half of his own pause after "Philippe." is there sample for sample
+    # the first half of the speaker's own pause after "Louise." is there sample for sample
     x = round(vr.XFADE_S * RATE)
     s = audio.samples
     at = vr.lead(an, 0) + (an.parts[1].end - an.parts[0].start)

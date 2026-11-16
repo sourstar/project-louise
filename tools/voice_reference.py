@@ -1,6 +1,6 @@
 """A voice's reference clip, about 10 s, assembled from the parts of a longer
 recording that best keep the speaker: the voice AND the way of pausing
-(operator, 2026-11-12, of Philippe's 27.75 s original: "assemble the most
+(operator, 2026-11-12, of a 27.75 s original: "assemble the most
 meaningful parts of the whole clip in a clip of about 10s. Beyond the pure
 voice to be, the speaker has a distinct style way to make pauses between
 words and sentences").
@@ -11,8 +11,8 @@ WHAT IT KEEPS
   or replaced by digital silence. Inside a part, the pauses are the
   original's. Where two parts meet, the pause is the one the speaker made
   after the first part, at its own length (corrected 2026-11-12: it was the
-  pause before the second part, 240 ms instead of his 780 ms after
-  "vittime?" in Philippe's candidate 1); its last HOLD_S are the second
+  pause before the second part, 240 ms instead of the speaker's own 780 ms
+  after the first sentence of candidate 1); its last HOLD_S are the second
   part's own lead-in. Two parts meet only where both sides are the same kind
   of boundary: a sentence end meets a sentence start, a clause end meets a
   clause start.
@@ -50,8 +50,8 @@ THE STANDARDS USED
 - Splices: a XFADE_S linear crossfade inside a pause; the pause keeps its
   exact length.
 
-LONGER SENTENCE PAUSES (operator, 2026-11-12: Philippe's live clip "1d",
-then "add it"): `assemble --sentence-pause 1.0` makes every sentence pause
+LONGER SENTENCE PAUSES (operator, 2026-11-12: a live clip's "1d", then
+"add it"): `assemble --sentence-pause 1.0` makes every sentence pause
 of the clip at least 1.0 s. The speaker's own pause is kept whole, speech
 tails included; the missing length is the recording's quietest room tone
 (`--room-tone START-END`, else found: ROOM_TONE_S at TONE_MARGIN_S from any
@@ -590,7 +590,7 @@ def pieces(an: Analysis, plan: Plan, sentence_pause_s: float | None = None,
     between two runs the pause the speaker made after the first, at its own
     length: its audio but the last `preroll`, which is the second part's own
     lead-in. With
-    `sentence_pause_s` (operator, 2026-11-12, Philippe's 1d), a sentence pause
+    `sentence_pause_s` (operator, 2026-11-12, clip "1d"), a sentence pause
     shorter than that is made that long: the speaker's own pause is kept
     whole, speech tails included, and the room tone `tone` is inserted at
     its middle, repeated if it must."""

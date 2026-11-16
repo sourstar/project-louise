@@ -143,4 +143,7 @@ patch_cache_s = 604800
 # stt_model = "whisper-large-v3"   # speech to text: the microphone
 # vad_model = "silero-vad"         # voice activity: a clip trimmed to its speech
 # tts_model = "omnivoice-cpp"      # text to speech: the answer read aloud
-# tts_voice = "localai://voice-profiles/1c834741"
+# tts_voice = "localai://voice-profiles/<id>"     # an admin's voice, when none is chosen
+# synthetic_voices = "it=<voice>, en=<voice>"    # every other reader's: a synthetic voice per language.
+#                                                # A recorded (cloned) voice is read to an admin only;
+#                                                # unset, the answer is read aloud to admins only

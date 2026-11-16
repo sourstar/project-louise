@@ -192,10 +192,36 @@ class SpeechConfig:
     stt_model: str | None = None
     vad_model: str | None = None
     tts_model: str | None = None
+    #: the voice an ADMIN hears when none is chosen (a recorded profile)
     tts_voice: str | None = None
+    #: the voices every other reader hears, one per language the answer is in
+    #: — synthetic voices, never a recorded person's: "it=<voice>, en=<voice>"
+    #: (`synthetic_voices`, app/voice.py `synthetic`)
+    synthetic_voices: str | None = None
 
 
-SPEECH_KEYS = ("stt_model", "vad_model", "tts_model", "tts_voice")
+SPEECH_KEYS = ("stt_model", "vad_model", "tts_model", "tts_voice", "synthetic_voices")
+
+
+def synthetic_voices(text: str | None) -> dict[str, str]:
+    """`[speech] synthetic_voices` read: each language's voice, in the order
+    written (the first is said for a language that has none). Raises
+    ScheduleError, naming the entry, for one that is not `language=voice`.
+    A language is its primary tag, lower case ("it-IT" is "it")."""
+    out: dict[str, str] = {}
+    for part in (text or "").split(","):
+        if not part.strip():
+            continue
+        lang, sep, v = part.partition("=")
+        lang = lang.strip().lower().replace("_", "-").split("-")[0]
+        if not sep or not v.strip() or not lang.isalpha() or not 2 <= len(lang) <= 3:
+            raise schedule_mod.ScheduleError(
+                f"speech.synthetic_voices: {part.strip()!r} is not language=voice "
+                f"(\"it=<voice>, en=<voice>\", a language by its ISO code)")
+        if lang in out:
+            raise schedule_mod.ScheduleError(f"speech.synthetic_voices: {lang!r} is given twice")
+        out[lang] = v.strip()
+    return out
 
 
 @dataclass(frozen=True)
@@ -759,6 +785,7 @@ def _speech(raw: Any) -> SpeechConfig:
         if not isinstance(v, str) or not v.strip():
             raise schedule_mod.ScheduleError(
                 f"speech.{k} is a model's (or a voice's) name, a non-empty string, got {v!r}")
+    synthetic_voices(raw.get("synthetic_voices"))       # refused at load, not at a reading
     return SpeechConfig(**{k: raw[k].strip() for k in raw})
 
 

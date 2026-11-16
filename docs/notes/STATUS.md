@@ -20,6 +20,21 @@ measured (published figures disagree).
 
 ### 2026-11-16
 
+- **A recorded voice is the admin's only; every other reader hears a synthetic voice by language**
+  (operator, 2026-11-16: "limit the cloned voices to the admin account and remove any reference to the cloned
+  voices in the GitHub repo. For the users account allow only synthetic voices according to the language
+  spoken"). An admin (the admin token, a user of role admin) chooses among the model server's voice profiles as
+  before. A user or a guest hears `[speech] synthetic_voices` ("it=<voice>, en=<voice>") for the answer's
+  language, the first named where its language has none, chooses nothing, and the voice a request or an account
+  names is not used; with none set the answer is not read aloud to them (409; the page shows no button, `node
+  speech show` says `offered_to_readers`). `node speech set --synthetic`, the System page's Models panel. Every
+  reader route says who asks (a guard test). The repository names no recorded voice any more: the clip recipe
+  is removed, notes and tests say "the recorded voice". OWED ON THE NODE before the web deploy: synthetic
+  profiles per language and `synthetic_voices` set, or users and guests are not read to. Git history still
+  holds the old names; rewriting it is the operator's call.
+- **The title on the logo's middle** (operator, 2026-11-16): the logo sits at the nav's top padding and the
+  title's box is the logo's height, text centred; measured in a browser at 1,280 / 820 / 390 px (centres equal,
+  the menu 8 px below the logo). The header is ~35 px taller on a desktop.
 - **EUR-Lex: Formex with no wrapper of this act is read from the next form** (München's facts, the 7 units
   still refused after #711: 5 works). 32011R0540 hr: two Special Edition wrappers, neither naming a
   NO.CELEX; 32010R1089, 32011R0094 hr: the act's own wrapper with a mistyped NO.CELEX (D for R, a wrong
@@ -469,58 +484,40 @@ measured (published figures disagree).
   - LIVE: 0c95c48 deployed 2026-11-11T08:23:30Z (operator's word; rc 0, relay gate 200). Checks: /ask has one
     "quality or speed" switch and no `textsearch`, the hover:none rule; voice.js has `question(on)` and no
     `q.focus()`; a wikipedia search answers.
-- **Philippe on about 10 s, the candidates** (München, 11-11): 12 parts, none flagged. Top three: (1) 10.18 s, score
-  0.880, two questions and a closing statement; (2) 10.46 s, 0.748; (3) 9.91 s, 0.745. Words match 1.0 / 0.955 / 1.0.
-  Files in /root/measure/philippe-10s/. Speed (omnivoice-cpp, the fixed sentence ×3 warm, node paused; staged
-  profiles removed after): RTF it / en, first call it / en — live full clip 0.752 / 0.763, 10.7 / 11.5 s; candidate 1
-  0.443 / 0.416, 5.7 / 5.6 s; candidate 2 0.463 / 0.408, 6.0 / 6.0 s; candidate 3 0.386 / 0.401, 5.8 / 6.3 s: about
-  1.8× faster than the full clip, as the old 7.90 s cut (0.425). Samples with the operator; live on their word.
-  LIVE since ~09:10Z (operator: "Deal, I like it"): **candidate 1d**, i.e. candidate 1 with its two sentence pauses
-  lengthened to ~1.0 s. His own pauses (780 ms after "vittime?", 620 ms after "dell'arte?") are kept whole, speech
-  tails included; the extra length is his quietest room tone (3.90–4.10 s) inserted mid-pause with 10 ms crossfades.
-  11.04 s; RTF it 0.443 / en 0.428, first call 5.5 / 5.6 s. Dropped on the way: 1b (~830 ms) and 1c (comfort
-  noise; it cut the tail of "dell'arte?"). Same profile id 1c834741: reference.wav = 1d, beside
-  reference-10s-1d.wav, reference-orig-27.75s.wav/.txt, reference-cut-7.90s.wav; previous profile.json at
-  /root/measure/philippe-profile.json.bak-20261111-full; built by /root/measure/philippe-10s/philippe_1d.py.
-  IN THE REPO (operator, 11-12: "Add it"): that script, byte-identical (sha256 875b10…), with its input and
-  output hashes, in tools/voices/ (1d rebuilt byte for byte, verified by München from 223eb9d); and in the tool, for any voice,
-  `assemble --sentence-pause S [--room-tone A-B] [--parts …]`. The tool's join was also corrected: where two parts
-  meet, the pause is the speaker's own after the first part (candidate 1 had taken the 240 ms before the next
-  sentence instead of his 780 ms after "vittime?").
-- **Philippe on about 10 s, keeping the speaker's pauses** (operator, 11-12: "assemble the most meaningful parts
-  of the whole clip in a clip of about 10s. Beyond the pure voice to be, the speaker has a distinct style way to
-  make pauses between words and sentences"): `tools/voice_reference.py` (tests/test_voice_reference.py). It cuts the
-  27.75 s original into parts at its pauses (silencedetect's measure, threshold from the clip's own floor) and places
-  the known transcript's words in them (the node's STT, difflib). Then it assembles 9–11 s of whole sentences and
-  clauses, at most 3 parts. Every pause is one of the speaker's own, at its own length and with its own room tone;
-  parts join only across the same kind of boundary, and the clip ends on a sentence. Three different candidates,
-  ranked by pause style, sound coverage, level, joins and length. The operator's ear decides. München runs it, makes
-  each candidate's fixed sentences (it, en; RTF), the operator listens; live only on the operator's word.
-- **Philippe's voice profile metadata fixed** (`1c834741-…`, LocalAI config mount
-  `voice-profiles/1c834741-3826-4990-8046-388ab4e9607e/`). profile.json still described the 27.75 s original
-  (27,748 ms, its full transcript in references[0]) while the file served, `reference.wav`, is the 7.90 s cut of
-  2026-11-09. Now `audio` and `references[0]` describe `reference.wav` (7,900 ms, 379,244 bytes, the cut's
-  sentence); the original's transcript is kept beside it as `reference-orig-27.75s.txt`, next to
-  `reference-orig-27.75s.wav`; the old profile.json is at /root/measure/philippe-profile.json.bak-20261111. LocalAI
-  reads the file on each list (no reload). Live profile: unchanged, the 7.90 s cut.
-- **Four clips for Philippe (operator, 11-11, "1C"; replacing two, then three).** Three clips of 3–10 s cannot
-  cover the 27.75 s original: its pauses fall at 4.2, 12.4 and 19.6 s. Staged, not live, in
-  /root/measure/philippe-4clips/ with their transcripts (clips.json): 0–4.22, 4.22–12.43, 12.43–19.63 and
-  19.63–27.75 s. The live backend `intel-sycl-f16-omnivoice-cpp` (latest, 2026-10-07) reads one reference
-  (`GetVoice`); the `-development` build (master, 2026-11-10) reads `ref_audios`: it is pinned under its own name
-  after the night chain, tested beside the live one (the fixed sentence ×3, it and en; RTF, first sound, card
-  memory); the live switch waits for the operator's word. RESULT (München): FAILED, rolled back by itself, live
-  unchanged (the 7.90 s cut, RTF 0.424). The pinned copy is refused before it loads ("selected model does not
-  support reference-audio voice cloning": LocalAI keys the capability on the backend's name); `-development`
-  passes that check and crashes at load (a master backend under the v4.12.1 core). NO FIX TO WAIT FOR (checked
-  upstream 11-11, the operator: "check if there is already a fix"): one reference per request everywhere —
-  LocalAI master's omnivoice-cpp wrapper (`refAudioFor`: `req.Voice` or `audio_path`, one buffer to the C call),
-  omnivoice.cpp (`--ref-wav` + `--ref-text`), OmniVoice itself (`ref_audio` + `ref_text`); v4.12.1 is the latest
-  release; multi-reference voice profiles are an open request (LocalAI #11617, audio.cpp/Fish only). The
-  `ref_audios` in LocalAI is the video field of MiniMax-H3 on the stablediffusion backend, not TTS. Four clips
-  in one request would be one longer reference, which this model already reads: the 27.75 s original at RTF 0.74.
-  LIVE NOW (operator in München's session: "use the full clip in the meantime"): Philippe on the full 27.75 s
-  original as one clip with its full transcript; the 7.90 s cut kept as reference-cut-7.90s.wav.
+- **The recorded voice on about 10 s, the candidates** (München, 11-11): 12 parts, none flagged. Top three: (1)
+  10.18 s, score 0.880; (2) 10.46 s, 0.748; (3) 9.91 s, 0.745. Words match 1.0 / 0.955 / 1.0. Speed (omnivoice-cpp,
+  the fixed sentence ×3 warm, node paused): RTF it / en, first call it / en — live full clip 0.752 / 0.763, 10.7 /
+  11.5 s; candidate 1 0.443 / 0.416, 5.7 / 5.6 s; candidate 2 0.463 / 0.408; candidate 3 0.386 / 0.401: about 1.8×
+  faster than the full clip, as the old 7.90 s cut (0.425). LIVE since ~09:10Z on the operator's word: candidate 1
+  with its two sentence pauses lengthened to ~1.0 s (the speaker's own pauses kept whole; the extra length is the
+  recording's quietest room tone inserted mid-pause with 10 ms crossfades): 11.04 s, RTF it 0.443 / en 0.428, first
+  call 5.5 / 5.6 s. The tool does it for any voice: `assemble --sentence-pause S [--room-tone A-B] [--parts …]`; its
+  join was corrected too (where two parts meet, the pause is the speaker's own after the first part). The recipe of
+  that one clip lived in the tools folder until 2026-11-16 (removed: no recorded voice is named in the
+  repository).
+- **A recorded voice on about 10 s, keeping the speaker's pauses** (operator, 11-12: "assemble the most meaningful
+  parts of the whole clip in a clip of about 10s"): `tools/voice_reference.py` (tests/test_voice_reference.py). It
+  cuts a 27.75 s original into parts at its pauses (silencedetect's measure, threshold from the clip's own floor)
+  and places the known transcript's words in them (the node's STT, difflib). Then it assembles 9–11 s of whole
+  sentences and clauses, at most 3 parts. Every pause is one of the speaker's own, at its own length and with its
+  own room tone; parts join only across the same kind of boundary, and the clip ends on a sentence. Three
+  candidates, ranked by pause style, sound coverage, level, joins and length; the operator's ear decides.
+- **A voice profile's metadata fixed** (LocalAI config mount `voice-profiles/<id>/`). profile.json still described
+  the 27.75 s original while the file served, `reference.wav`, was the 7.90 s cut of 2026-11-09. Now `audio` and
+  `references[0]` describe `reference.wav`; the original's transcript is kept beside it. LocalAI reads the file on
+  each list (no reload).
+- **Four reference clips for one voice (operator, 11-11, "1C").** Three clips of 3–10 s cannot cover the 27.75 s
+  original: its pauses fall at 4.2, 12.4 and 19.6 s. The live backend `intel-sycl-f16-omnivoice-cpp` (latest,
+  2026-10-07) reads one reference (`GetVoice`); the `-development` build (master, 2026-11-10) reads `ref_audios`.
+  RESULT (München): FAILED, rolled back by itself, live unchanged (RTF 0.424). The pinned copy is refused before it
+  loads ("selected model does not support reference-audio voice cloning": LocalAI keys the capability on the
+  backend's name); `-development` passes that check and crashes at load (a master backend under the v4.12.1 core).
+  NO FIX TO WAIT FOR (checked upstream 11-11): one reference per request everywhere — LocalAI master's
+  omnivoice-cpp wrapper (`refAudioFor`: `req.Voice` or `audio_path`, one buffer to the C call), omnivoice.cpp
+  (`--ref-wav` + `--ref-text`), OmniVoice itself (`ref_audio` + `ref_text`); v4.12.1 is the latest release;
+  multi-reference voice profiles are an open request (LocalAI #11617, audio.cpp/Fish only). The `ref_audios` in
+  LocalAI is the video field of MiniMax-H3 on the stablediffusion backend, not TTS. Four clips in one request would
+  be one longer reference, which this model already reads: the 27.75 s original at RTF 0.74.
 - **Reranker: llama-nemotron-rerank-1b-v2, LIVE for five collections** (operator, 11-11: B; München).
   `louise-rerank-nemotron-1b` (f16, parallel 1, ctx = batch = ubatch 3,072) is the `[reranker]` of gutenberg,
   wikipedia, wikidata, normattiva and normattiva-nemo; pubmed keeps MedCPT; bge unloaded. Basis: gutenberg MRR@10
@@ -684,7 +681,7 @@ measured (published figures disagree).
 - **Deployed: d794502 (web + worker) live since 2026-11-12 05:37Z**, relay gate 200 — the voice choice (#495), the
   account's voice and hands-free (#496), the microphone report and the second way to record (#497, #499), the
   sisters' shared text index (#490, #494). OPEN: the operator's first try in the car → the `voice: microphone` line.
-- **The reader chooses the voice** (operator, 11-11: "choose philippe or valentina"): Ask › Settings › voice,
+- **The reader chooses the voice** (operator, 11-11: a configuration tab to choose the voice): Ask › Settings › voice,
   the node's recorded voices by name, kept in the browser; none chosen, the node's own; a voice no longer held
   falls back to the node's (app/voice.py `voices`, app/speech.py `held_profile`). Merged, not deployed (web).
   KEPT WITH THE ACCOUNT (operator, 11-11: "Shall a user account can choose it?"): a signed-in user's choice is
@@ -712,7 +709,7 @@ measured (published figures disagree).
 
 ### 2026-11-09: before the pause until Friday — what was done, measured and left (München's final report)
 
-- **Voice**: Philippe's reference cut to 7.90 s (19.80–27.70 s of the 27.75 s original, kept as
+- **Voice**: the recorded voice's reference cut to 7.90 s (19.80–27.70 s of the 27.75 s original, kept as
   reference-orig-27.75s.wav), operator's choice; steps unchanged. The fixed sentence ×3: RTF **0.44** (0.74 before,
   ≤ 1.49 before #438). Live: #438 claim, #440 order + taps, #451/#453 reading claim, #452 buffering (page prefetch +
   `speech-clips` under LOUISE_CACHE_DIR, which is /data/cache on **ssd4**, not ssd3 — Friday's move).
