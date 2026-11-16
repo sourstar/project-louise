@@ -56,7 +56,7 @@ answered within `ANSWER_S`: said, with that reason. The pattern is the
 bundle inbox's: files in a folder both processes write, claimed by rename.
 
 FIRST IN LINE. Every request to Cellar runs on one of its connections
-(specs.EURLEX_SPEC: 2), taken as INTERACTIVE (transfer/pool.py
+(specs.EURLEX_SPEC: 4), taken as INTERACTIVE (transfer/pool.py
 `acquire_endpoint_slot`): while it waits, the regular per-unit pass leaves
 the next free connection to it; its bytes are served first by the budget
 (bucket.py, strict priority with the interactive reserve). Politeness is the
@@ -94,7 +94,7 @@ PICKUP_S = 10.0
 #: … and one taken, answered at most this long after it was posted
 ANSWER_S = PICKUP_S + REQUEST_S + 10.0
 #: the worker looks for requests this often, serving at most CONCURRENT at once
-#: (Cellar's two connections)
+#: (half of Cellar's four connections: a question goes first, the pass keeps two)
 POLL_S = 0.2
 CONCURRENT = 2
 #: answers nobody read and claims a stopped worker left are removed after this

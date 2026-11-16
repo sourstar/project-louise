@@ -336,7 +336,8 @@ D1's choice.
 - **Increments**: Cellar's RSS/Atom feeds [S]; the SPARQL inventory's
   modification dates as the check.
 - Etiquette: no published limit; fewer than five concurrent requests and
-  backoff on 429/503 is the practice reported [S]. Two in flight, paced
+  backoff on 429/503 is the practice reported [S]. Four in flight since
+  2026-11-16 (two gave 582 units an hour, latency-bound), paced
   by the transfer manager.
 
 ### 4.2 Grain and validity — Normattiva's, per language

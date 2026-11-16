@@ -632,8 +632,10 @@ EURLEX_SPEC = AcquisitionSpec(
     endpoints=(
         # Cellar: no authentication, no published limit; fewer than five in
         # flight and backing off on 429/503 is the practice reported (§4.1):
-        # two, paced by the transfer manager
-        Endpoint(transport=Transport.HTTPS, url="https://publications.europa.eu", max_conns=2),
+        # four, paced by the transfer manager (2026-11-16: two gave 582 units
+        # an hour on EUR-Lex4's 10,246 the dump lacks whole, ~17.6 h, at
+        # 0.1 MB/s — the requests' latency, not the bandwidth)
+        Endpoint(transport=Transport.HTTPS, url="https://publications.europa.eu", max_conns=4),
     ),
     # one listed file — the unit's notice, its completion mark — is one
     # document: a version of an act in one language
@@ -644,7 +646,7 @@ EURLEX_SPEC = AcquisitionSpec(
     # the SPARQL inventory compared with what is held, by each work's last
     # modification (app/acquire/cellar.py)
     delta=DeltaSpec(mode="full-resync"),
-    etiquette=RateLimit(max_conns=2),
+    etiquette=RateLimit(max_conns=4),
     profiles={
         **{lang: Filter(include=(f"lang={lang}/*",)) for lang in _EURLEX_LANGUAGES},
         # parser 4 (operator, 2026-11-15: "Add history as a download and

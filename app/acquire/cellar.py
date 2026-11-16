@@ -524,6 +524,10 @@ class Fetched:
     #: where the work's tree came from: `cellar`, `kept` (a unit of another
     #: language fetched it), `dump` (the Data Dump's MTD) — work_trees.py
     tree_from: str = "cellar"
+    #: seconds asking Cellar for the tree, and for the items (the report
+    #: says which dominates: whether trees from the dump would pay)
+    tree_s: float = 0.0
+    items_s: float = 0.0
 
 
 def resource_url(base: str, celex: str) -> str:
@@ -751,7 +755,9 @@ def fetch_unit_from_tree(base: str, celex: str, lang: str, dest: Path, *,
         charge(n)
     try:
         url = resource_url(base, celex)
+        t0 = time.monotonic()
         scoped = rdf.scope(_read_tree(_tree(client, url, celex, count), celex), code)
+        tree_s = time.monotonic() - t0
         try:
             note = from_tree.notice(scoped, code, celex)
         except from_tree.TreeError as e:
@@ -762,6 +768,7 @@ def fetch_unit_from_tree(base: str, celex: str, lang: str, dest: Path, *,
             raise TransportError(f"cellar: the tree of {celex} ({code}) names no item of any of "
                                  f"{', '.join(FORMS)} by a plain file name")
         files: dict[str, bytes] = {}
+        t0 = time.monotonic()
         for it in listed:
             _stop_check()
             if it.name in files or it.name in (NOTICE, rdf.TREE_FILE):
@@ -785,9 +792,10 @@ def fetch_unit_from_tree(base: str, celex: str, lang: str, dest: Path, *,
                                           f"{it.name} of {celex} ({code})", charge=count).content
             # a text in another language under this one's expression lands as
             # the origin files it; the parser labels it (operator, 2026-11-16, B)
+        items_s = time.monotonic() - t0
         files[rdf.TREE_FILE] = rdf.dumps(scoped)
         _land(dest, files)
-        return Fetched(files={n: len(b) for n, b in files.items()}, moved=moved)
+        return Fetched(files={n: len(b) for n, b in files.items()}, moved=moved, tree_s=tree_s, items_s=items_s)
     except httpx.HTTPError as e:
         raise TransportError(f"cellar: {type(e).__name__}: {e}") from e
     finally:
@@ -943,6 +951,8 @@ class CellarUnits:
             self._counts[f"tree:{got.tree_from}"] += 1
             self._counts["bytes_moved"] += got.moved
             self._counts["bytes_from_dump"] += got.from_dump
+            self._counts["tree_ms"] += int(got.tree_s * 1000)
+            self._counts["items_ms"] += int(got.items_s * 1000)
 
     def reports(self) -> list[str]:
         """What the units since the last report took from where: their
@@ -958,7 +968,9 @@ class CellarUnits:
         return [f"cellar: {c['units']} units in {elapsed / 60:.0f} min ({rate:.0f}/h); trees "
                 f"{c['tree:cellar']} from Cellar, {c['tree:kept']} kept, {c['tree:dump']} from the dump"
                 + (f", {c['tree:held']} held and current" if c["tree:held"] else "") + "; "
-                f"{c['bytes_moved'] >> 20} MiB moved, {c['bytes_from_dump'] >> 20} MiB from the dump"]
+                f"{c['bytes_moved'] >> 20} MiB moved, {c['bytes_from_dump'] >> 20} MiB from the dump"
+                + (f"; asking: trees {c['tree_ms'] / 1000:.0f} s, items {c['items_ms'] / 1000:.0f} s"
+                   if c["tree_ms"] or c["items_ms"] else "")]
 
     def handles(self, remote: RemoteFile) -> bool:
         return is_unit(remote)
