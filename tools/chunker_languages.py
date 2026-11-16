@@ -93,6 +93,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from tools import chunker_mode as cm  # noqa: E402
+from tools import code_pin  # noqa: E402 — the code a run executes
 from tools import encoder_bakeoff as bakeoff  # noqa: E402
 
 SET = "lemur"
@@ -528,16 +529,13 @@ def report_markdown(runs: list[dict[str, Any]], *, primary: tuple[str, str] = PR
 def tag(arms: list[Arm], langs: list[str], *, k: int, collection: str) -> str:
     """The settings a pilot reading is valid for: the arms, the languages,
     k, the collection whose encoder runs, and the code."""
-    from tools.measure import chat_eval
+    # the arms by their manifests, the code by every module the run imports
+    # (tools/code_pin.py, 2026-11-16)
     h = hashlib.sha256()
     for a in arms:
         h.update(a.name.encode() + json.dumps(a.manifest(), sort_keys=True).encode())
-    for f in [Path(__file__), Path(cm.__file__), ROOT / "app" / "chunking.py", ROOT / "app" / "chunking_legal.py",
-              ROOT / "app" / "layers.py", ROOT / "app" / "fts.py", ROOT / "app" / "retrieval.py",
-              ROOT / "app" / "plugins" / "eurlex" / "rendition.py"]:
-        h.update(f.read_bytes())
     raw = (f"lemur-{h.hexdigest()[:12]}-k{k}-{'-'.join(langs)}-enc-{collection}"
-           f"-code-{chat_eval.ask_code()[7:19]}")
+           f"-code-{code_pin.digest(Path(__file__))[7:19]}")
     return re.sub(r"[^A-Za-z0-9._-]+", "-", raw)
 
 
@@ -675,7 +673,7 @@ def _run(a) -> int:
     basekeys = {"set": SET, "collection": c.name, "collection_id": getattr(getattr(c, "codex", None), "collection_id", None),
                 "k": a.k, "pool": f"{SET}-parallel", "split": "test", "parallel": said["parallel"],
                 "left_out": said["left_out"], "langs": langs, "structure_found": found, "exact": True,
-                "tag": the_tag, "code": chat_eval.ask_code(), "arms": [x.name for x in arms],
+                "tag": the_tag, "code": code_pin.digest(Path(__file__)), "arms": [x.name for x in arms],
                 "runs": runs.as_dict(), "stored": False}
     if only is not None:
         parts = [f"# LEMUR per-language pilot [{the_tag}]", "",

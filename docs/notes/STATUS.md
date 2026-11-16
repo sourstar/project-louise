@@ -18,6 +18,16 @@ build at 12 cores, the GPU uncapped. The card's noise (operator): 0.2 sone
 idle, 3.1 sone at full load, coil whine ~0.9 sone; its fan range is being
 measured (published figures disagree).
 
+### 2026-11-16
+
+- **A pilot-ok now binds the code the run imports** (tools/code_pin.py). The chunker, languages and
+  retrieval tags pinned app/ask's code, which those runs do not execute, beside six files listed by
+  hand: 09162b0, an Ask-only deploy, re-ran the chunker pilot for nothing, and legal_pilot's own scoring
+  could change under a pilot-ok unnoticed. Now the tag's `-code-` part is a digest of every module of
+  the repository the run imports, at any depth, inside functions too (345 files for the three tools,
+  ~4 s). Old tags no longer match, so the next run of each needs its pilot again. Merged; deployed only
+  after the chunker full run of 2026-11-16 (pilot-ok 23:55Z on b7bc32a) ends.
+
 ### 2026-11-15
 
 - **Bulk first, checked once a day** (operator, 2026-11-15: "Bulk first rule: no exceptions at the
