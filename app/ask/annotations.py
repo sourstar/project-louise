@@ -106,6 +106,28 @@ def target_among(codex, ids: Iterable[str]):
     return next((t for i in ids if (t := target_for(codex, i)) is not None), None)
 
 
+#: the hit's `language_stage` (05 §5.3, amended 2026-11-16)
+STAGE_FIELD = "language_stage"
+#: which method's claim is read where several speak of one record: a
+#: person's over Wikidata's over the matcher's (09 §9.5)
+STAGE_PRECEDENCE = {"human": 0, "wikidata": 1, "matcher": 2}
+
+
+def _attach_stage(h: dict[str, Any], a, snapshot_id: str | None, claims) -> None:
+    """The record's `language-stage` fact: the claim that wins (a person's
+    first), `stage` null where it says "not an older stage". One per hit;
+    a winner already attached from another collection is kept unless this
+    one's method outranks it."""
+    best = min(claims, key=lambda cl: (STAGE_PRECEDENCE.get(cl.claim["method"]["kind"], 9), cl.uid))
+    kind = best.claim["method"]["kind"]
+    have = h.get(STAGE_FIELD)
+    if have is not None and STAGE_PRECEDENCE.get(have["method"], 9) <= STAGE_PRECEDENCE.get(kind, 9):
+        return
+    h[STAGE_FIELD] = {"stage": best.claim["object"], "method": kind,
+                      "collection_id": a.codex.collection_id, "snapshot_id": snapshot_id,
+                      "claim": best.uid, "confidence": best.claim["confidence"]}
+
+
 def attach(lists: list[dict[str, Any]], source_of: dict[int, Any], contexts: dict[str, dict],
            *, root: Path, collections=None) -> list[dict[str, Any]]:
     """Every hit gets `annotations` — `[]` where no held claim names its
@@ -148,7 +170,10 @@ def attach(lists: list[dict[str, Any]], source_of: dict[int, Any], contexts: dic
         for a in mine:
             idx = ann.index_of(col.shard_dir_of(root, a.name))
             trust = None
+            stages = getattr(idx, "stages", None) or {}
             for h in hits:
+                if stages.get(h["uid"]):
+                    _attach_stage(h, a, idx.snapshot_id, stages[h["uid"]])
                 for cl in idx.by_target.get(h["uid"], ()):
                     if trust is None:
                         trust = _trust(root, a)

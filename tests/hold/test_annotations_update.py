@@ -205,3 +205,27 @@ def test_the_claims_are_re_checked_against_the_targets_records_twin_where_it_ser
     assert got.against == {"pubmed-twin": "2026-09"}
     c = claims_by_uid(tmp_path, got.snapshot)["annotations:1"]
     assert c["target_snapshot"] == "2026-09" and got.changed == 2
+
+
+def a_stage(subject="pubmed:1", obj="wikidata:Q135913388", kind="matcher"):
+    method = {"kind": "matcher", "id": "historical-markers", "version": 1} if kind == "matcher" else {"kind": kind}
+    return {"type": "language-stage", "subject": subject, "object": obj, "method": method,
+            "evidence": {"why": "a test"}, "confidence": "0.8", "contributor": "a test annotator"}
+
+
+def test_a_same_work_of_one_language_is_accepted(tmp_path):
+    """02 §2.10, amended 2026-11-16: same-work = "two records are versions of
+    one work — editions in one language or in different languages"
+    (gutenberg-book-editions: 5,644 of its 7,154 claims join editions in one
+    language). Accepted by create, update --claims and the streamed survey,
+    with or without a language-stage claim beside it."""
+    from app.hold import annotations_stream as st
+    a_target(tmp_path)
+    one = a_claim("pubmed:3", "pubmed:4", subject_lang="en", object_lang="en")
+    make(tmp_path)
+    got = update(tmp_path, claims=claims_file(a_claim(), one))
+    assert got.snapshot_id == "2026-10"
+    assert len(ann.read_claims(claims_file(one), target_plugin="pubmed")) == 1
+    p = tmp_path / "claims.jsonl"
+    p.write_bytes(claims_file(one, a_stage("pubmed:4")))
+    assert st.survey(st.ClaimsSource(p), plugins=("pubmed",)).count == 2

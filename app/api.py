@@ -1063,6 +1063,11 @@ class ChatBody(BaseModel):
     # is written from those hits instead of searching again; unknown or
     # expired, the answer searches as before
     search_id: str | None = None
+    # the reader's "Quality / Speed" (operator, 2026-11-09): under Quality,
+    # the default, an older source is read by its language's reader —
+    # named, its spelling modernised for the model, its translation pointed
+    # at (app/historical.py; operator, 2026-11-16); Speed skips it
+    speed: bool = False
 
 def _text_of(content) -> str:
     """A message's text: a string, or OpenAI's list of parts (Open WebUI
@@ -1177,10 +1182,13 @@ async def audio_transcriptions(request: Request):
                     headers={"Louise-VAD": note, "Server-Timing": transcribe.server_timing(steps)})
 
 
-def source_entries(hits: list[dict]) -> list[dict]:
+def source_entries(hits: list[dict], reads: list | None = None) -> list[dict]:
     """The answer's [n], in order: what a client shows as its sources —
     the passage, where it is (a path of this node's reader), the work's
-    other editions and the claims beside it (05 §5.3). Never a vector."""
+    other editions and the claims beside it (05 §5.3). Never a vector.
+    `reading`: how the model was helped to read an older source (its
+    badge, app/historical.py), where it was."""
+    badges = {r.n: r.badge() for r in reads or []}
     out = []
     for n, h in enumerate(hits, 1):
         coll = h.get("source_collection") or str(h.get("chunk_id", "")).split(":", 1)[0]
@@ -1198,10 +1206,18 @@ def source_entries(hits: list[dict]) -> list[dict]:
                              "lang": (a.get("record") or {}).get("lang"), "state": a.get("state")}
                             for a in h.get("annotations") or []],
         })
+        if n in badges:
+            out[-1]["reading"] = badges[n]
     return out
 
 
-def _answer_messages(body: ChatBody, query: str, result: dict) -> list[dict]:
+def _answer_messages(body: ChatBody, query: str, result: dict,
+                     reads: list | None = None) -> list[dict]:
+    if not body.speed:
+        from . import historical
+        result, read = historical.prepare(result, query, body.answer_lang)
+        if reads is not None:
+            reads.extend(read)
     messages = retrieval.build_answer_messages(query, result, answer_lang=body.answer_lang)
     # keep prior turns for conversational context (before the sources turn)
     history = [m for m in body.messages[:-1] if m.get("role") in ("user", "assistant")]
@@ -1210,13 +1226,15 @@ def _answer_messages(body: ChatBody, query: str, result: dict) -> list[dict]:
 
 def _chat_answer(body: ChatBody, query: str, result: dict, t0: float):
     con = _con()   # query_log lives in the default collection's manifest regardless
-    messages = _answer_messages(body, query, result)
+    reads: list = []
+    messages = _answer_messages(body, query, result, reads)
     rid = f"chatcmpl-{uuid.uuid4().hex[:12]}"
 
     if not body.stream:
         # "[3] [4]", not "[3][4]": a client's markdown cleaning reads a pair
         # as a reference link and speaks a number (app/speech.py)
         answer = speech.spaced_citations(llm.chat(messages, temperature=body.temperature))
+        _log_reads(con, reads)
         result["timings"]["llm"] = round((time.time() - t0) * 1000 - result["timings"]["total"], 1)
         result["timings"]["total"] = round((time.time() - t0) * 1000, 1)
         db.log_query(con, "chat", query, "hybrid", body.limit, result["timings"],
@@ -1228,7 +1246,7 @@ def _chat_answer(body: ChatBody, query: str, result: dict, t0: float):
                          "message": {"role": "assistant", "content": answer}}],
         }
         if body.sources:
-            out["louise_sources"] = source_entries(result["hits"])
+            out["louise_sources"] = source_entries(result["hits"], reads)
             out["louise_pdf"] = pdf_link(body, query, answer, result)
         return out
 
@@ -1242,7 +1260,7 @@ def _chat_answer(body: ChatBody, query: str, result: dict, t0: float):
     def sse():
         # the OpenAI framing of `answer_parts`, which the Ask page's relay
         # reads too (app/relay.py): one path from the model to every reader
-        parts = answer_parts(body, query, result, t0, messages=messages, con=con)
+        parts = answer_parts(body, query, result, t0, messages=messages, con=con, reads=reads)
         tail = ""        # the text so far, for a citation pair split across two deltas
         try:
             for kind, value in parts:
@@ -1286,8 +1304,20 @@ def pdf_link(body: ChatBody, query: str, answer: str, result: dict) -> str:
     return f"/api/ask/pdf/{pid}"
 
 
+def _log_reads(con, reads: list | None) -> None:
+    """The log line where a source was read as older language
+    (app/historical.py `said`). The reader sees it as each source's badge
+    (`reading` in source_entries), never as a line of the answer: speech
+    would speak it, the PDF print it, and the model did not write it
+    (architecture, 2026-11-16)."""
+    from . import historical
+    line = historical.said(reads or [])
+    if line:
+        db.log_event(con, "info", "chat", line)
+
+
 def answer_parts(body: ChatBody, query: str, result: dict, t0: float, *,
-                 messages: list[dict] | None = None, con=None):
+                 messages: list[dict] | None = None, con=None, reads: list | None = None):
     """The answer as it comes from the model: ("sources", entries) first when
     asked, then ("delta", text) and ("keepalive", None) while nothing has
     arrived for KEEPALIVE_S, and ("cut", why) when the stream ended short.
@@ -1305,7 +1335,9 @@ def answer_parts(body: ChatBody, query: str, result: dict, t0: float, *,
     Every answer gets one log line with its size and timing, so the next
     report has a measurement."""
     con = con if con is not None else _con()
-    messages = messages if messages is not None else _answer_messages(body, query, result)
+    if messages is None:
+        reads = []
+        messages = _answer_messages(body, query, result, reads)
     q: queue.Queue = queue.Queue()
     stop = threading.Event()
 
@@ -1328,8 +1360,11 @@ def answer_parts(body: ChatBody, query: str, result: dict, t0: float, *,
     first: float | None = None
     why: str | None = None
     written: list[str] = []          # the answer, for its PDF link (sources asked)
+    if reads:
+        # each source read as older language, for its badge on the page
+        yield ("reading", [{"n": r.n, "reading": r.badge()} for r in reads])
     if body.sources:
-        yield ("sources", source_entries(result["hits"]))
+        yield ("sources", source_entries(result["hits"], reads))
     try:
         while True:
             try:
@@ -1353,6 +1388,7 @@ def answer_parts(body: ChatBody, query: str, result: dict, t0: float, *,
     except GeneratorExit:
         stop.set()
         raise
+    _log_reads(con, reads)
     secs = time.time() - t0
     if why is not None:
         yield ("cut", why)

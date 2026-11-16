@@ -200,31 +200,52 @@ class Sources:
 
 
 def shown_search(query: str, result: dict[str, Any], sources: Sources, *,
-                 translated: bool = True) -> str:
+                 translated: bool = True, question: str | None = None,
+                 answer_lang: str | None = None, reads: list | None = None) -> str:
     """A search's answer as the model reads it: each hit as its source [n]
     (a record shown before, by its number alone), the reference facts by
-    their ids, and what was withheld."""
+    their ids, and what was withheld.
+
+    `reads` (a list: the reader's Quality): an older source is read by its
+    language's reader, as the other answer path reads it — the same
+    function, app/historical.py `read_sources` (architecture, 2026-11-16);
+    how each was read is appended to `reads` and to its source entry."""
     said = f"Search: «{query}»" + (" and its translations" if translated else "")
     blocks = [said]
+    numbered: list[tuple[int, bool, dict[str, Any]]] = []
     for lst in result.get("lists", []):
         for h in lst.get("hits", [])[:HITS_PER_LIST]:
             n, fresh = sources.number(h)
-            title = h.get("title") or h.get("uid") or "?"
-            if not fresh:
-                blocks.append(f"[{n}] {title} — shown above")
-                continue
-            by = f" — {h['authors']}" if h.get("authors") else ""
-            head = f"[{n}] {title}{by} ({h.get('lang') or '?'}) · {h.get('uid')}"
-            if h.get("trust_level") == "unverified":
-                head += " · unverified"
-            editions = [f"{e.get('title')} ({e.get('lang')})" for e in (h.get("editions") or [])[:3]]
-            if editions:
-                head += " · other editions held: " + "; ".join(editions)
-            if "text" in h:
-                body = _trim(h.get("text")) or ""
-            else:
-                body = f"(the text is not shown here; the origin: {h.get('origin_url')})"
-            blocks.append(head + "\n" + str(body))
+            numbered.append((n, fresh, h))
+    older: dict[int, tuple[str, str]] = {}
+    if reads is not None:
+        from app import historical
+        older, read = historical.read_sources(
+            [(n, {**h, "text": _trim(h.get("text")) or ""}) for n, fresh, h in numbered
+             if fresh and "text" in h], question or query, answer_lang)
+        for r in read:
+            sources.entries[r.n - 1]["reading"] = r.badge()
+        reads.extend(read)
+    for n, fresh, h in numbered:
+        title = h.get("title") or h.get("uid") or "?"
+        if not fresh:
+            blocks.append(f"[{n}] {title} — shown above")
+            continue
+        by = f" — {h['authors']}" if h.get("authors") else ""
+        head = f"[{n}] {title}{by} ({h.get('lang') or '?'}) · {h.get('uid')}"
+        if h.get("trust_level") == "unverified":
+            head += " · unverified"
+        editions = [f"{e.get('title')} ({e.get('lang')})" for e in (h.get("editions") or [])[:3]]
+        if editions:
+            head += " · other editions held: " + "; ".join(editions)
+        if n in older:
+            head += older[n][0]
+            body = older[n][1]
+        elif "text" in h:
+            body = _trim(h.get("text")) or ""
+        else:
+            body = f"(the text is not shown here; the origin: {h.get('origin_url')})"
+        blocks.append(head + "\n" + str(body))
     for f in result.get("facts", []) or []:
         fid = str(f.get("entity_id") or "")
         sources.ids.add(fid)
@@ -382,6 +403,17 @@ def language_rule(lang: str | None) -> str:
             f"question or the tool results are in.")
 
 
+def with_older_rule(system: str, last_rule: str) -> str:
+    """The system prompt with the older-language rule (app/historical.py)
+    added BEFORE its last sentence, the answer's language, which stays
+    last (`language_rule`: measured there)."""
+    from app import historical
+    if historical.SYSTEM_RULE in system:
+        return system
+    head = system[:-len(last_rule)] if last_rule and system.endswith(last_rule) else system
+    return head + historical.SYSTEM_RULE + (last_rule if system.endswith(last_rule) else "")
+
+
 #: A TOOL CALL WRITTEN AS TEXT (the blind read of 2026-11-03: one model's
 #: answer was a raw `<tool_call>{...}</tool_call>` in 17 of 20 questions —
 #: past the round bound the tools are withheld, and a model that still wants
@@ -452,7 +484,7 @@ def _searched(call: Callable[[str, dict[str, Any]], Any], args: dict[str, Any], 
 def ask(question: str, *, collections: list[str] | None = None, history: list[dict[str, Any]] | None = None,
         call: Callable[[str, dict[str, Any]], Any] | None = None, model=None,
         max_rounds: int = MAX_ROUNDS, answer_lang: str | None = None,
-        passages: bool = False) -> dict[str, Any]:
+        passages: bool = False, speed: bool = False) -> dict[str, Any]:
     """One question through the loop: `{answer, sources, cited, cited_unknown,
     turns: [{tool, arguments, by, result, error, seconds}], rounds,
     exhausted, model_s}`. `model(messages, tools) -> (content,
@@ -464,7 +496,11 @@ def ask(question: str, *, collections: list[str] | None = None, history: list[di
     the tools offered. `model_s` is each model round's wall time and
     `seconds` each search's, so where an answer's time went is read off
     the answer itself (tools/measure/chat_eval.py; operator, 2026-11-03:
-    "Use the chat comparison benchmark to work on the optimizations")."""
+    "Use the chat comparison benchmark to work on the optimizations").
+
+    `speed` is the reader's Speed: without it (Quality, the default) an
+    older source is read by its language's reader (app/historical.py), as
+    on /v1/chat/completions; `reading` names how, in `sources`."""
     from app import config, llm
     from app.ask import mcp
     if not isinstance(question, str) or not question.strip():
@@ -478,7 +514,8 @@ def ask(question: str, *, collections: list[str] | None = None, history: list[di
         system += (f" Search only these collections unless the question says otherwise: {', '.join(collections)}; "
                    f"pass them as `collections`.")
     lang = reader_language(question, answer_lang)
-    system += language_rule(lang)
+    last_rule = language_rule(lang)
+    system += last_rule
     past = [{"role": m["role"], "content": m["content"]} for m in history or []
             if m.get("role") in ("user", "assistant") and isinstance(m.get("content"), str)]
     scope = {"collections": list(collections)} if collections else {}
@@ -488,13 +525,17 @@ def ask(question: str, *, collections: list[str] | None = None, history: list[di
         _searched(call, {"query": question, "translate": True, **scope}, "louise")]
 
     sources = Sources()
+    reads: list | None = None if speed else []
     blocks = []
     for t in turns:
         q, translated = t["arguments"]["query"], bool(t["arguments"].get("translate"))
         if t["error"]:
             blocks.append(f"Search: «{q}» refused: {t['error']}")
         else:
-            blocks.append(shown_search(q, t["result"] or {}, sources, translated=translated))
+            blocks.append(shown_search(q, t["result"] or {}, sources, translated=translated,
+                                       question=question, answer_lang=lang, reads=reads))
+    if reads:
+        system = with_older_rule(system, last_rule)
     messages: list[dict[str, Any]] = [{"role": "system", "content": system}, *past,
                                       {"role": "user", "content": "Sources:\n\n" + "\n\n---\n\n".join(blocks)
                                        + f"\n\nQuestion: {question}"}]
@@ -600,7 +641,12 @@ def ask(question: str, *, collections: list[str] | None = None, history: list[di
             try:
                 result = call(c.name, args)
                 if c.name == "louise_search":
-                    shown: Any = shown_search(str(args.get("query", "")), result or {}, sources)
+                    before = len(reads or [])
+                    shown: Any = shown_search(str(args.get("query", "")), result or {}, sources,
+                                              question=question, answer_lang=lang, reads=reads)
+                    if reads and not before:
+                        # the first older source, found by the model's own search
+                        messages[0]["content"] = with_older_rule(messages[0]["content"], last_rule)
                 else:
                     shown = json.dumps(compact(c.name, result), ensure_ascii=False, default=str)
                 error = None
