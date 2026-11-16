@@ -351,10 +351,13 @@ are the ones that have drifted; prefer to add a test when you touch them.
   (2026-11-16: Gutenberg's first publication is stated only by its own
   marc520 summaries, ~12 % of books), never to import it. Collections meet
   at ASK time only — relations, keys, annotations claims read as facts —
-  and an annotations collection's corpus is its claims (whether it may
-  take claims from an outside source is the operator's decision, asked
-  2026-11-16). Proposing an outside source for a collection's data is
-  itself the error: do not offer it as an option.
+  and an annotations collection's corpus is its claims. An ANNOTATIONS
+  collection MAY take its claims from an outside source (operator,
+  2026-11-16, choice A: Wikidata, for instance), each claim naming its
+  method (09 §9.5 `method`) and shown labelled with it ("by Wikidata") —
+  never as a fact of the annotated collection's own records or hits.
+  Proposing an outside source for a collection's own data is itself the
+  error: do not offer it as an option.
 - **"Fix it after" is NEVER an option** (docs/01, promise 8). A known
   defect is fixed before anything else proceeds — before the feature it
   blocks, before the run already queued, before the deploy that is

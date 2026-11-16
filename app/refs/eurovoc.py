@@ -6,9 +6,11 @@ SOURCE (06 §6.5): the labels of the concept ids an EUR-Lex record carries
 WHY A REFERENCE AND NOT THE RECORD. The record holds what the act's tree
 asserts: "is about <concept>". The label is the vocabulary's, in the
 vocabulary's release, and in thirty languages; the reader's language picks
-one. So labels are facts by key (invariant 4: never a ranking), resolved
-where a page or an index needs them (`labels`), never written into a record
-— a new EuroVoc release changes no record.
+one. A collection holds only the information contained in its corpus
+(CLAUDE.md, 2026-11-16): labels are facts by key read at ASK time, shown
+with their credit, never written into a record or a collection's index and
+never in a ranking (invariant 4) — a new EuroVoc release changes nothing a
+collection holds.
 
 THE ORIGIN FORM, and why (invariant 11; München's measures, 2026-11-16,
 /mnt/tank/louise-measure/euvoc-2026-11-16, fixtures in tests/fixtures/eurovoc):
@@ -58,8 +60,7 @@ SOURCE_ID = "eurovoc"
 DIR = "eurovoc"
 #: whom the labels are from, and the credit the reuse notice asks (operator,
 #: 2026-11-16: "I accept the European Commission reuse notice, add the
-#: credits"): on every result and card of a collection whose subjects are
-#: EuroVoc's (app/credits.py)
+#: credits"): beside a label wherever one is shown at ask time
 PROVIDER = "Publications Office of the European Union — EuroVoc and the EU authority tables"
 ATTRIBUTION = ("Subject and author labels: EuroVoc and the EU authority tables, © European Union, "
                "Publications Office of the European Union; reuse authorised under Commission "
