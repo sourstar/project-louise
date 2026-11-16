@@ -173,6 +173,61 @@ returning N vectors.
   once no gate runs. The `gaps` buckets per request were not separated from that
   load.
 
+### Per hop, clean, 2026-11-16 19:05–19:20Z (München; app c15e120, the same wrappers)
+
+Architecture's method. Node paused, no gate for 5 min before it, the same 2,000
+wikipedia chunks (`/root/measure/wp2k.jsonl`, window 1,024), warm (one batch
+first, untimed). Harnesses in `/mnt/ssd3/louise-build/hop/`: `hop.py` (raw gRPC
+on the bge-m3 wrapper's own socket, the wrapper's `app.vega.tag`, no LocalAI or
+Louise), `lai.py` (the app's own `tag_batch` → POST → `verify_response`), `run.sh`.
+
+| Hop | ms per text | chunks/s |
+|---|---|---|
+| Engine alone, 1 slot, one text a call (parallel:4 fork, earlier today) | 8.5 | 117.7 |
+| **Wrapper direct, VEGA/2 batches of 16** | **8.05** | 124.2 (8.60 / 116.2 over 6,000, under py-spy) |
+| Wrapper direct, VEGA/1, one text a call | 8.10 | 123.4 |
+| **Through LocalAI, VEGA/2, the app's own client** | **8.52 POST + 0.11 receipt check = 8.63** | 115.9 |
+| **The worker's pipeline, wikipedia alone** (19:10–19:20Z, 1,481 requests of 16) | **≈ 20.7** | 42.4–52.4 (card busy 50–64 %, lost 22–30 s/min) |
+
+- **The wrapper and LocalAI together cost ≈ 0.6 ms a text** (8.05 against
+  8.63). The wrapper's own path equals the engine's (the 8.5 ms raw figure was
+  taken through another harness, so 8.05 is no faster engine). The VEGA/2 row
+  above ("the per-item cost is inside the wrapper → backend path") is
+  SUPERSEDED: neither the wrapper nor LocalAI holds the loss.
+- **py-spy of the wrapper** (`record -r 200 --idle -f speedscope`, 60 s, VEGA/2
+  direct; `spy.json`, `dump.txt`): 95 % of the samples in `embedding` are
+  the gRPC call to the backend (`forward` → `_channel._blocking`). The window
+  cut is 1.9 % (`_cut` → `_tokens`, TokenizeString), and the receipts line 1.0 %
+  (`deliver_many`). Digests, tags and JSON are each under 0.3 %.
+- **Over the window:** 158 of the 2,000 (7.9 %) have `token_bound` + 2 over
+  1,024 and pay a TokenizeString. That is the 1.9 % above.
+- **`/vega/keeps`, the engine's idle time before each call** (wikipedia's run
+  955ca309…). The direct phases, ≈ 10,000 calls: 98 % at ≤ 4 ms, none at
+  ≥ 32 ms. The pipeline's 10 min, 27,141 calls: 24,406 at ≤ 4 ms, then **≈ 1,500
+  gaps of 32 ms–4 s** (32: 286, 64: 105, 128: 336, 256: 462, 512: 289, 1,024: 39,
+  2,048: 5, 4,096: 2). That is **one per request** (1,481 requests): every
+  request of the pipeline reaches the engine after the card has been idle about
+  100–500 ms. Their sum, at 50–100 % of each bucket's bound, is 190–385 s of the
+  600, the 22–30 s/min the card record calls lost.
+- **The card record says a wikipedia request was held at the gate the whole
+  time** ("held: wikipedia 60" request-seconds a minute, one in flight). So the
+  idle time falls INSIDE the gate-held window, before the request reaches the
+  wrapper: in `_request_vouched` between `g.admit` and LocalAI's call to the
+  wrapper (`rage_keep.request`, `_post`, LocalAI under the pipeline's own body:
+  `metadata` keep, `Louise-Level`), or in what the 'held' clock counts beyond
+  the POST. `lai.py`'s POST of the same batches (no keep metadata, no level
+  header) took 136 ms a request; the pipeline's held window is ≈ 330 ms.
+
+**Conclusion (Architecture's rule):** the wrapper path is at the engine's cost,
+so stage 2 (one backend call per batch) buys nothing. The ≈ 12 ms a text is on
+Louise's side of the POST, inside the gate-held window, once per request. The
+next measurement is the worker's own request, timed per stage. That means
+`dev embedder-profile --stages` with the pipeline's body (keep metadata, level
+header), plus a `py-spy dump` of the worker's embed threads during wikipedia
+alone. Not run here: the node was mid-deploy (7efabc6 staging) when the window
+closed, and `lai.py` already covers `--stages`' path without the pipeline's
+body.
+
 ## 7. Tests
 
 - tag: a VEGA/2 round trip, its canonical bytes, and the refusals (an
