@@ -1,0 +1,34 @@
+<skos:Concept rdf:about="http://publications.europa.eu/resource/authority/dir-eu-legal-act/07203020"
+                 at:deprecated="false">
+      <skos:inScheme rdf:resource="http://publications.europa.eu/resource/authority/dir-eu-legal-act"/>
+      <skos:broader rdf:resource="http://publications.europa.eu/resource/authority/dir-eu-legal-act/072030"/>
+      <at:authority-code>07203020</at:authority-code>
+      <at:op-code>07203020</at:op-code>
+      <atold:op-code>07203020</atold:op-code>
+      <dc:identifier>07203020</dc:identifier>
+      <at:start.use>1952-07-24</at:start.use>
+      <skos:prefLabel xml:lang="bg">Достъп до пазара</skos:prefLabel>
+      <skos:prefLabel xml:lang="cs">Přístup na trh</skos:prefLabel>
+      <skos:prefLabel xml:lang="da">Markedsadgang</skos:prefLabel>
+      <skos:prefLabel xml:lang="de">Marktzugang</skos:prefLabel>
+      <skos:prefLabel xml:lang="el">Πρόσβαση στην αγορά</skos:prefLabel>
+      <skos:prefLabel xml:lang="en">Market access</skos:prefLabel>
+      <skos:prefLabel xml:lang="et">Turulepääs</skos:prefLabel>
+      <skos:prefLabel xml:lang="fi">Markkinoille pääsy</skos:prefLabel>
+      <skos:prefLabel xml:lang="fr">Accès au marché</skos:prefLabel>
+      <skos:prefLabel xml:lang="ga">Rochtain ar mhargaí</skos:prefLabel>
+      <skos:prefLabel xml:lang="hr">Pristup tržištu</skos:prefLabel>
+      <skos:prefLabel xml:lang="hu">Piacra jutás</skos:prefLabel>
+      <skos:prefLabel xml:lang="it">Accesso al mercato</skos:prefLabel>
+      <skos:prefLabel xml:lang="lv">Piekļuve tirgum</skos:prefLabel>
+      <skos:prefLabel xml:lang="lt">Galimybė patekti į rinką</skos:prefLabel>
+      <skos:prefLabel xml:lang="mt">Aċċess għas-suq</skos:prefLabel>
+      <skos:prefLabel xml:lang="nl">Toegang tot de markt</skos:prefLabel>
+      <skos:prefLabel xml:lang="pl">Dostęp do rynku</skos:prefLabel>
+      <skos:prefLabel xml:lang="pt">Acesso ao mercado</skos:prefLabel>
+      <skos:prefLabel xml:lang="ro">Acces pe piaţă</skos:prefLabel>
+      <skos:prefLabel xml:lang="sk">Prístup na trh</skos:prefLabel>
+      <skos:prefLabel xml:lang="sl">Dostop na trg</skos:prefLabel>
+      <skos:prefLabel xml:lang="es">Acceso al mercado</skos:prefLabel>
+      <skos:prefLabel xml:lang="sv">Marknadstillträde</skos:prefLabel>
+   </skos:Concept>

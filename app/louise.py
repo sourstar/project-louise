@@ -4604,6 +4604,9 @@ def cmd_snapshot_discard(a) -> int:
     root = Path(a.root)
     if a.yes:
         _take_write_lock(root, name, "hold snapshot discard")
+    if getattr(a, "repair", False):
+        _print(discard_mod.repair(root, name, a.snapshot_id, dry_run=not a.yes))
+        return 0
     local = rec.local_collection(root, name, codex)
     with _closing(_db.connect(local)) as con, _closing(peers.connect()) as node_con:
         _print(discard_mod.discard(root, name, a.snapshot_id, con=con, node_con=node_con,
@@ -7600,6 +7603,9 @@ def build_parser() -> argparse.ArgumentParser:
                                           "names, with its parts; its derived indexes go (RULE 1)")
     args_collection(p); p.add_argument("snapshot_id", metavar="snapshot")
     p.add_argument("--yes", action="store_true", help="discard; without it, say what would move")
+    p.add_argument("--repair", action="store_true",
+                   help="after a discard made before 2026-11-16 that moved the next build's parts: "
+                        "bring the latest snapshot's back, put the discarded one's aside")
     p.set_defaults(fn=cmd_snapshot_discard)
 
     p = sverbs.add_parser("delta", help="what changed between two held snapshots of the chain")

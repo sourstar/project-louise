@@ -1,0 +1,396 @@
+{
+ "dataset": "corporate-body",
+ "source": "https://data.europa.eu/api/hub/search/datasets/corporate-body",
+ "version_info": "20260923-0",
+ "modified": "2026-09-23",
+ "access_right": {
+  "resource": "http://publications.europa.eu/resource/authority/access-right/PUBLIC",
+  "label": "public"
+ },
+ "distributions": [
+  {
+   "title": {
+    "de": "Corporate body zipped ATTO XML-Verteilung",
+    "fi": "Yrityksen elin vetoketjullinen ATTO XML jakelu",
+    "pt": "Corporação zipada ATTO XML distribuição",
+    "bg": "Корпоративно тяло с цип ATTO XML дистрибуция",
+    "lt": "Korporatyvinis kūnas su užtrauktuku ATTO XML distribucija",
+    "hr": "Korporativno tijelo sa zatvaračem ATTO XML distribucija",
+    "lv": "Korporatīvais ķermenis ar rāvējslēdzēju ATTO XML izplatīšana",
+    "fr": "Corps de l'entreprise zippé ATTO XML distribution",
+    "hu": "Vállalati test cipzáras ATTO XML disztribúció",
+    "uk": "Корпоративне тіло на блискавці дистрибутив ATTO XML",
+    "sk": "Firemné telo zips ATTO XML distribúcia",
+    "sl": "Korporativna organizacija zipped ATTO XML distribucija",
+    "ga": "Dáileadh XML ATTO zipped comhlacht corparáideach",
+    "sv": "Företagskroppen zippad ATTO XML-distribution",
+    "mt": "Korp korporattiv iżżippjat id-distribuzzjoni ATTO XML",
+    "el": "Εταιρικό σώμα με φερμουάρ ATTO XML διανομή",
+    "en": "Corporate body  zipped ATTO XML distribution",
+    "it": "Corpo societario zippato ATTO Distribuzione XML",
+    "es": "Órgano corporativo con cremallera ATTO distribución XML",
+    "et": "Ettevõtte keha zipped ATTO XML jaotus",
+    "cs": "Korporátní tělo zip ATTO XML distribuce",
+    "pl": "Organ korporacyjny zapinany na zamek dystrybucja ATTO XML",
+    "ro": "Corporație cu fermoar distribuție ATTO XML",
+    "da": "Virksomhedsorgan med lynlås ATTO XML-distribution",
+    "nl": "Bedrijfslichaam gezipte ATTO XML-distributie"
+   },
+   "license": {
+    "resource": "http://data.europa.eu/eli/dec/2011/833/oj",
+    "description": "European Commission reuse notice",
+    "id": "COM_REUSE",
+    "label": "European Commission reuse notice"
+   },
+   "rights": {
+    "resource": "http://publications.europa.eu/resource/authority/access-right/PUBLIC"
+   },
+   "access_url": [
+    "https://op.europa.eu/o/opportal-service/euvoc-download-handler?cellarURI=http%3A%2F%2Fpublications.europa.eu%2Fresource%2Fcellar%2F07e1a665-2b56-11e7-9412-01aa75ed71a1.0001.12%2Fzip&fileName=ATTO_XML_Corporate-body.zip"
+   ],
+   "download_url": [
+    "https://op.europa.eu/o/opportal-service/euvoc-download-handler?cellarURI=http%3A%2F%2Fpublications.europa.eu%2Fresource%2Fcellar%2F07e1a665-2b56-11e7-9412-01aa75ed71a1.0001.12%2Fzip&fileName=ATTO_XML_Corporate-body.zip"
+   ],
+   "format": {
+    "format_types": [
+     {
+      "id": "archive",
+      "label": {
+       "en": "Archive"
+      }
+     },
+     {
+      "id": "compressed",
+      "label": {
+       "en": "Compressed"
+      }
+     },
+     {
+      "id": "package",
+      "label": {
+       "en": "Package"
+      }
+     }
+    ],
+    "resource": "http://publications.europa.eu/resource/authority/file-type/ZIP",
+    "id": "ZIP",
+    "label": "ZIP"
+   }
+  },
+  {
+   "title": {
+    "de": "Körperschaft SKOS_AP_ACT Vertrieb",
+    "fi": "Organisaatio SKOS_AP_ACT-jakelu",
+    "pt": "Corporação SKOS_AP_ACT distribuição",
+    "bg": "Разпределение на юридическото лице SKOS_AP_ACT",
+    "lt": "SKOS_AP_ACT platinimas",
+    "lv": "Korporatīvā struktūra SKOS_AP_ACT izplatīšana",
+    "hr": "Korporativno tijelo SKOS_AP_ACT distribucija",
+    "fr": "Corporatif SKOS_AP_ACT distribution",
+    "hu": "Vállalati szervezet SKOS_AP_ACT disztribúció",
+    "uk": "Корпоративний орган SKOS_AP_ACT дистрибуція",
+    "sk": "Korporátna organizácia SKOS_AP_ACT distribúcia",
+    "sl": "Porazdelitev korporativnega subjekta SKOS_AP_ACT",
+    "ga": "Comhlacht corparáideach maidir le dáileadh SKOS_AP_ACT",
+    "sv": "Bolagsorganisation SKOS_AP_ACT distribution",
+    "mt": "Distribuzzjoni SKOS_AP_ACT tal-korp korporattiv",
+    "el": "Εταιρικός φορέας SKOS_AP_ACT διανομή",
+    "en": "Corporate body SKOS_AP_ACT distribution",
+    "it": "Organo sociale Distribuzione SKOS_AP_ACT",
+    "es": "Órgano corporativo SKOS_AP_ACT distribución",
+    "et": "Juriidiline isik SKOS_AP_ACT jaotus",
+    "cs": "Korporátní orgán SKOS_AP_ACT distribution",
+    "pl": "Organ korporacyjny Dystrybucja SKOS_AP_ACT",
+    "ro": "Distribuția SKOS_AP_ACT către organismul corporativ",
+    "da": "Virksomhedsorgan SKOS_AP_ACT distribution",
+    "nl": "Onderneming SKOS_AP_ACT distributie"
+   },
+   "license": {
+    "resource": "http://data.europa.eu/eli/dec/2011/833/oj",
+    "description": "European Commission reuse notice",
+    "id": "COM_REUSE",
+    "label": "European Commission reuse notice"
+   },
+   "rights": {
+    "resource": "http://publications.europa.eu/resource/authority/access-right/PUBLIC"
+   },
+   "access_url": [
+    "https://op.europa.eu/o/opportal-service/euvoc-download-handler?cellarURI=http%3A%2F%2Fpublications.europa.eu%2Fresource%2Fcellar%2F07e1a665-2b56-11e7-9412-01aa75ed71a1.0001.09%2FDOC_1&fileName=corporatebodies-skos-ap-act.rdf"
+   ],
+   "download_url": [
+    "https://op.europa.eu/o/opportal-service/euvoc-download-handler?cellarURI=http%3A%2F%2Fpublications.europa.eu%2Fresource%2Fcellar%2F07e1a665-2b56-11e7-9412-01aa75ed71a1.0001.09%2FDOC_1&fileName=corporatebodies-skos-ap-act.rdf"
+   ],
+   "format": {
+    "format_types": [
+     {
+      "id": "structured",
+      "label": {
+       "en": "Structured"
+      }
+     },
+     {
+      "id": "textual",
+      "label": {
+       "en": "Textual"
+      }
+     }
+    ],
+    "resource": "http://publications.europa.eu/resource/authority/file-type/RDF_XML",
+    "id": "RDF_XML",
+    "label": "RDF XML"
+   }
+  },
+  {
+   "title": {
+    "de": "Körperschaft CAT-Vertrieb",
+    "fi": "Yritysyhteisö CAT-jakelu",
+    "pt": "Corporação Distribuição de CAT",
+    "bg": "Разпределение на CAT",
+    "lt": "Korporatyvinės organizacijos CAT platinimas",
+    "lv": "Korporatīvās struktūras CAT izplatīšana",
+    "hr": "Distribucija komercijalnog zračnog prijevoza (CAT) za korporativno tijelo",
+    "fr": "Organe de l'entreprise CAT distribution",
+    "hu": "Vállalati szerv CAT forgalmazása",
+    "uk": "Корпоративний орган дистрибуції CAT",
+    "sk": "Distribúcia korporátnych subjektov CAT",
+    "sl": "Porazdelitev CAT med pravne osebe",
+    "ga": "Comhlacht corparáideach Dáileadh CFC",
+    "sv": "Företagets CAT-distribution",
+    "el": "Εταιρικός φορέας Διανομή CAT",
+    "mt": "Distribuzzjoni tal-CAT tal-korp korporattiv",
+    "en": "Corporate body CAT distribution",
+    "it": "Organo societario Distribuzione CAT",
+    "es": "Órgano corporativo Distribución de CAT",
+    "et": "Korporatiivne üksus CAT jaotus",
+    "cs": "Korporátní orgán CAT distribuce",
+    "pl": "Organ korporacyjny Dystrybucja CAT",
+    "ro": "Distribuția CAT la nivelul organismului corporativ",
+    "da": "Virksomhedsorgan CAT distribution",
+    "nl": "Ondernemingsorgaan CAT-distributie"
+   },
+   "license": {
+    "resource": "http://data.europa.eu/eli/dec/2011/833/oj",
+    "description": "European Commission reuse notice",
+    "id": "COM_REUSE",
+    "label": "European Commission reuse notice"
+   },
+   "rights": {
+    "resource": "http://publications.europa.eu/resource/authority/access-right/PUBLIC"
+   },
+   "access_url": [
+    "https://op.europa.eu/o/opportal-service/euvoc-download-handler?cellarURI=http%3A%2F%2Fpublications.europa.eu%2Fresource%2Fcellar%2F07e1a665-2b56-11e7-9412-01aa75ed71a1.0001.11%2FDOC_1&fileName=corporatebodies.xml"
+   ],
+   "download_url": [
+    "https://op.europa.eu/o/opportal-service/euvoc-download-handler?cellarURI=http%3A%2F%2Fpublications.europa.eu%2Fresource%2Fcellar%2F07e1a665-2b56-11e7-9412-01aa75ed71a1.0001.11%2FDOC_1&fileName=corporatebodies.xml"
+   ],
+   "format": {
+    "format_types": [
+     {
+      "id": "structured",
+      "label": {
+       "en": "Structured"
+      }
+     },
+     {
+      "id": "textual",
+      "label": {
+       "en": "Textual"
+      }
+     }
+    ],
+    "resource": "http://publications.europa.eu/resource/authority/file-type/XML",
+    "id": "XML",
+    "label": "XML"
+   }
+  },
+  {
+   "title": {
+    "de": "Körperschaft IMMC_V3 Verteilung",
+    "fi": "Yhteisö IMMC_V3 jakelu",
+    "pt": "Corporação IMMC_V3 distribuição",
+    "bg": "Корпоративно лице IMMC_V3 разпределение",
+    "lt": "Bendrovės IMMC_V3 platinimas",
+    "lv": "Korporatīvās struktūras IMMC_V3 izplatīšana",
+    "hr": "Raspodjela IMMC_V3 prema korporativnom tijelu",
+    "fr": "Corporatif IMMC_V3 distribution",
+    "hu": "Vállalati szervezet IMMC_V3 disztribúció",
+    "uk": "Корпоративний орган дистрибуції IMMC_V3",
+    "sk": "IMMC_V3 distribúcia",
+    "sl": "Porazdelitev korporativnega subjekta IMMC_V3",
+    "ga": "Comhlacht corparáideach IMMC_V3 dáileadh",
+    "sv": "Företagsorganisation IMMC_V3 distribution",
+    "mt": "Distribuzzjoni tal-korp korporattiv IMMC_V3",
+    "el": "Διανομή εταιρικού φορέα IMMC_V3",
+    "en": "Corporate body IMMC_V3 distribution",
+    "it": "Organo sociale IMMC_V3 distribuzione",
+    "es": "Distribución del organismo corporativo IMMC_V3",
+    "et": "Äriühingu IMMC_V3 jaotus",
+    "cs": "Korporátní orgán IMMC_V3 distribuce",
+    "pl": "Dystrybucja IMMC_V3 przez organ korporacyjny",
+    "da": "Virksomhedsorgan IMMC_V3-distribution",
+    "ro": "Distribuția IMMC_V3 către organismul corporativ",
+    "nl": "Vennootschap IMMC_V3 distributie"
+   },
+   "license": {
+    "resource": "http://data.europa.eu/eli/dec/2011/833/oj",
+    "description": "European Commission reuse notice",
+    "id": "COM_REUSE",
+    "label": "European Commission reuse notice"
+   },
+   "rights": {
+    "resource": "http://publications.europa.eu/resource/authority/access-right/PUBLIC"
+   },
+   "access_url": [
+    "https://op.europa.eu/o/opportal-service/euvoc-download-handler?cellarURI=http%3A%2F%2Fpublications.europa.eu%2Fresource%2Fcellar%2F07e1a665-2b56-11e7-9412-01aa75ed71a1.0001.07%2FDOC_1&fileName=at-corporate-body-v3.xsd"
+   ],
+   "download_url": [
+    "https://op.europa.eu/o/opportal-service/euvoc-download-handler?cellarURI=http%3A%2F%2Fpublications.europa.eu%2Fresource%2Fcellar%2F07e1a665-2b56-11e7-9412-01aa75ed71a1.0001.07%2FDOC_1&fileName=at-corporate-body-v3.xsd"
+   ],
+   "format": {
+    "format_types": [
+     {
+      "id": "structured",
+      "label": {
+       "en": "Structured"
+      }
+     },
+     {
+      "id": "textual",
+      "label": {
+       "en": "Textual"
+      }
+     }
+    ],
+    "resource": "http://publications.europa.eu/resource/authority/file-type/XML",
+    "id": "XML",
+    "label": "XML"
+   }
+  },
+  {
+   "title": {
+    "de": "Körperschaft IMMC_V2 Verteilung",
+    "fi": "Yhteisö IMMC_V2 jakelu",
+    "pt": "Corporação IMMC_V2 distribuição",
+    "bg": "Разпределение на IMMC_V2",
+    "lt": "Bendrovės IMMC_V2 platinimas",
+    "lv": "Korporatīvās struktūras IMMC_V2 izplatīšana",
+    "hr": "Raspodjela IMMC_V2 prema korporativnom tijelu",
+    "fr": "Corporatif IMMC_V2 distribution",
+    "hu": "Vállalati szervezet IMMC_V2 disztribúció",
+    "uk": "Корпоративний орган дистрибуції IMMC_V2",
+    "sk": "IMMC_V2 distribúcia",
+    "sl": "Porazdelitev IMMC_V2",
+    "ga": "Comhlacht corparáideach IMMC_V2 dáileadh",
+    "sv": "Företagsorganisation IMMC_V2 distribution",
+    "mt": "Distribuzzjoni tal-korp korporattiv IMMC_V2",
+    "el": "Διανομή εταιρικού φορέα IMMC_V2",
+    "en": "Corporate body IMMC_V2 distribution",
+    "it": "Organo sociale IMMC_V2 distribuzione",
+    "es": "Distribución del organismo corporativo IMMC_V2",
+    "et": "Juriidilise isiku IMMC_V2 jaotus",
+    "cs": "Korporátní orgán IMMC_V2 distribuce",
+    "pl": "Dystrybucja IMMC_V2 przez organ korporacyjny",
+    "ro": "Distribuția IMMC_V2 a organismului corporativ",
+    "da": "Virksomhedsorgan IMMC_V2-distribution",
+    "nl": "Vennootschap IMMC_V2 distributie"
+   },
+   "license": {
+    "resource": "http://data.europa.eu/eli/dec/2011/833/oj",
+    "description": "European Commission reuse notice",
+    "id": "COM_REUSE",
+    "label": "European Commission reuse notice"
+   },
+   "rights": {
+    "resource": "http://publications.europa.eu/resource/authority/access-right/PUBLIC"
+   },
+   "access_url": [
+    "https://op.europa.eu/o/opportal-service/euvoc-download-handler?cellarURI=http%3A%2F%2Fpublications.europa.eu%2Fresource%2Fcellar%2F07e1a665-2b56-11e7-9412-01aa75ed71a1.0001.08%2FDOC_1&fileName=at-corporatebodies-v2.xsd"
+   ],
+   "download_url": [
+    "https://op.europa.eu/o/opportal-service/euvoc-download-handler?cellarURI=http%3A%2F%2Fpublications.europa.eu%2Fresource%2Fcellar%2F07e1a665-2b56-11e7-9412-01aa75ed71a1.0001.08%2FDOC_1&fileName=at-corporatebodies-v2.xsd"
+   ],
+   "format": {
+    "format_types": [
+     {
+      "id": "structured",
+      "label": {
+       "en": "Structured"
+      }
+     },
+     {
+      "id": "textual",
+      "label": {
+       "en": "Textual"
+      }
+     }
+    ],
+    "resource": "http://publications.europa.eu/resource/authority/file-type/XML",
+    "id": "XML",
+    "label": "XML"
+   }
+  },
+  {
+   "title": {
+    "de": "Körperschaft SKOS_CORE Vertrieb",
+    "fi": "Yhteisö SKOS_CORE jakelu",
+    "pt": "Corporação SKOS_CORE distribuição",
+    "bg": "Юридическо лице SKOS_CORE разпределение",
+    "lt": "Korporatyvinis organas SKOS_CORE distribucija",
+    "hr": "Korporativno tijelo SKOS_CORE distribucija",
+    "lv": "Korporatīvā struktūra SKOS_CORE izplatīšana",
+    "fr": "Corporatif SKOS_CORE distribution",
+    "hu": "Vállalati szervezet SKOS_CORE disztribúció",
+    "uk": "Корпоративний орган SKOS_CORE дистрибуція",
+    "sk": "Korporátna organizácia SKOS_CORE distribúcia",
+    "sl": "Poslovna enota SKOS_CORE distribucija",
+    "ga": "Comhlacht corparáideach maidir le dáileadh SKOS_CORE",
+    "sv": "Bolagsorganisation SKOS_CORE distribution",
+    "el": "Εταιρικός φορέας SKOS_CORE Διανομή",
+    "mt": "Distribuzzjoni SKOS_CORE tal-korp korporattiv",
+    "en": "Corporate body SKOS_CORE distribution",
+    "it": "Organo sociale Distribuzione SKOS_CORE",
+    "es": "Órgano corporativo SKOS_CORE distribución",
+    "et": "Juriidiline isik SKOS_CORE jaotus",
+    "cs": "Korporátní orgán SKOS_CORE distribution",
+    "pl": "Organ korporacyjny Dystrybucja SKOS_CORE",
+    "ro": "Distribuție SKOS_CORE corporație",
+    "da": "Virksomhed SKOS_CORE distribution",
+    "nl": "Onderneming SKOS_CORE distributie"
+   },
+   "license": {
+    "resource": "http://data.europa.eu/eli/dec/2011/833/oj",
+    "description": "European Commission reuse notice",
+    "id": "COM_REUSE",
+    "label": "European Commission reuse notice"
+   },
+   "rights": {
+    "resource": "http://publications.europa.eu/resource/authority/access-right/PUBLIC"
+   },
+   "access_url": [
+    "https://op.europa.eu/o/opportal-service/euvoc-download-handler?cellarURI=http%3A%2F%2Fpublications.europa.eu%2Fresource%2Fcellar%2F07e1a665-2b56-11e7-9412-01aa75ed71a1.0001.10%2FDOC_1&fileName=corporatebodies-skos.rdf"
+   ],
+   "download_url": [
+    "https://op.europa.eu/o/opportal-service/euvoc-download-handler?cellarURI=http%3A%2F%2Fpublications.europa.eu%2Fresource%2Fcellar%2F07e1a665-2b56-11e7-9412-01aa75ed71a1.0001.10%2FDOC_1&fileName=corporatebodies-skos.rdf"
+   ],
+   "format": {
+    "format_types": [
+     {
+      "id": "structured",
+      "label": {
+       "en": "Structured"
+      }
+     },
+     {
+      "id": "textual",
+      "label": {
+       "en": "Textual"
+      }
+     }
+    ],
+    "resource": "http://publications.europa.eu/resource/authority/file-type/RDF_XML",
+    "id": "RDF_XML",
+    "label": "RDF XML"
+   }
+  }
+ ]
+}

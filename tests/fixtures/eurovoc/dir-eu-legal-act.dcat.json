@@ -1,0 +1,396 @@
+{
+ "dataset": "dir-eu-legal-act",
+ "source": "https://data.europa.eu/api/hub/search/datasets/dir-eu-legal-act",
+ "version_info": "20171004-0",
+ "modified": "2017-10-04",
+ "access_right": {
+  "resource": "http://publications.europa.eu/resource/authority/access-right/PUBLIC",
+  "label": "public"
+ },
+ "distributions": [
+  {
+   "title": {
+    "de": "Verzeichnis der EU-Rechtsakte SKOS_AP_ACT Verteilung",
+    "fi": "EU:n säädösten luettelo SKOS_AP_ACT-jakelu",
+    "pt": "Repertório dos atos jurídicos da UE Distribuição SKOS_AP_ACT",
+    "bg": "Регистър на правните актове на ЕС SKOS_AP_ACT",
+    "lt": "ES teisės aktų katalogas SKOS_AP_ACT distribucija",
+    "hr": "Katalog pravnih akata EU-a SKOS_AP_ACT distribucija",
+    "lv": "ES tiesību aktu direktorijs SKOS_AP_ACT izplatīšana",
+    "fr": "Répertoire des actes juridiques de l'UE SKOS_AP_ACT distribution",
+    "hu": "Az uniós jogi aktusok jegyzéke SKOS_AP_ACT terjesztés",
+    "uk": "Довідник нормативно-правових актів ЄС SKOS_AP_ACT дистрибуція",
+    "sk": "Zoznam právnych aktov EÚ Distribúcia SKOS_AP_ACT",
+    "sl": "Seznam pravnih aktov EU – distribucija SKOS_AP_ACT",
+    "ga": "Eolaire ar ghníomhartha dlí an Aontais Eorpaigh Dáileadh SKOS_AP_ACT",
+    "sv": "Register över EU-rättsakter SKOS_AP_ACT distribution",
+    "mt": "Direttorju tal-atti legali tal-UE Distribuzzjoni SKOS_AP_ACT",
+    "el": "Ευρετήριο των νομικών πράξεων της ΕΕ SKOS_AP_ACT διανομή",
+    "en": "Directory of EU legal acts SKOS_AP_ACT distribution",
+    "it": "Repertorio degli atti giuridici dell'UE Distribuzione SKOS_AP_ACT",
+    "es": "Directorio de actos jurídicos de la UE Distribución SKOS_AP_ACT",
+    "et": "ELi õigusaktide kataloog SKOS_AP_ACT levitamine",
+    "cs": "Adresář právních aktů EU Distribuce SKOS_AP_ACT",
+    "pl": "Wykaz aktów prawnych UE Dystrybucja SKOS_AP_ACT",
+    "ro": "Repertoriul actelor juridice ale UE Distribuție SKOS_AP_ACT",
+    "da": "Fortegnelse over EU-retsakter SKOS_AP_ACT distribution",
+    "nl": "Repertorium op EU-rechtshandelingen SKOS_AP_ACT distributie"
+   },
+   "license": {
+    "resource": "http://data.europa.eu/eli/dec/2011/833/oj",
+    "description": "European Commission reuse notice",
+    "id": "COM_REUSE",
+    "label": "European Commission reuse notice"
+   },
+   "rights": {
+    "resource": "http://publications.europa.eu/resource/authority/access-right/PUBLIC"
+   },
+   "access_url": [
+    "https://op.europa.eu/o/opportal-service/euvoc-download-handler?cellarURI=http%3A%2F%2Fpublications.europa.eu%2Fresource%2Fcellar%2F9dd064a9-ae7b-11e7-837e-01aa75ed71a1.0001.07%2FDOC_1&fileName=dir-eu-legal-act-skos-ap-act.rdf"
+   ],
+   "download_url": [
+    "https://op.europa.eu/o/opportal-service/euvoc-download-handler?cellarURI=http%3A%2F%2Fpublications.europa.eu%2Fresource%2Fcellar%2F9dd064a9-ae7b-11e7-837e-01aa75ed71a1.0001.07%2FDOC_1&fileName=dir-eu-legal-act-skos-ap-act.rdf"
+   ],
+   "format": {
+    "format_types": [
+     {
+      "id": "structured",
+      "label": {
+       "en": "Structured"
+      }
+     },
+     {
+      "id": "textual",
+      "label": {
+       "en": "Textual"
+      }
+     }
+    ],
+    "resource": "http://publications.europa.eu/resource/authority/file-type/RDF_XML",
+    "id": "RDF_XML",
+    "label": "RDF XML"
+   }
+  },
+  {
+   "title": {
+    "de": "Verzeichnis der EU-Rechtsakte IMMC_V3 Verteilung",
+    "fi": "EU:n säädösten hakemisto IMMC_V3 jakelu",
+    "pt": "Repertório dos atos jurídicos da UE IMMC_V3 distribuição",
+    "bg": "Регистър на правните актове на ЕС IMMC_V3 разпространение",
+    "lt": "ES teisės aktų rodyklė IMMC_V3 platinimas",
+    "hr": "Katalog pravnih akata EU-a – distribucija IMMC_V3",
+    "lv": "ES tiesību aktu direktorijs IMMC_V3 izplatīšana",
+    "fr": "Répertoire des actes juridiques de l'UE IMMC_V3 distribution",
+    "hu": "Az uniós jogi aktusok jegyzéke IMMC_V3 terjesztés",
+    "uk": "Довідник нормативно-правових актів ЄС дистрибуція IMMC_V3",
+    "sk": "Zoznam právnych aktov EÚ IMMC_V3 distribúcia",
+    "sl": "Seznam pravnih aktov EU – distribucija IMMC_V3",
+    "ga": "Eolaire ar dháileadh ghníomhartha dlí an Aontais IMMC_V3",
+    "sv": "Register över EU-rättsakter IMMC_V3 distribution",
+    "mt": "Direttorju tad-distribuzzjoni tal-atti legali tal-UE IMMC_V3",
+    "el": "Ευρετήριο των νομικών πράξεων της ΕΕ IMMC_V3",
+    "en": "Directory of EU legal acts IMMC_V3 distribution",
+    "it": "Repertorio degli atti giuridici dell'UE Distribuzione IMMC_V3",
+    "es": "Repertorio de actos jurídicos de la UE distribución IMMC_V3",
+    "et": "ELi õigusaktide kataloog IMMC_V3 levitamine",
+    "cs": "Rejstřík právních aktů EU Distribuce IMMC_V3",
+    "pl": "Wykaz aktów prawnych UE – dystrybucja IMMC_V3",
+    "da": "Fortegnelse over EU-retsakter IMMC_V3-distribution",
+    "ro": "Repertoriul actelor juridice ale UE Distribuție IMMC_V3",
+    "nl": "Repertorium op EU-rechtshandelingen IMMC_V3 distributie"
+   },
+   "license": {
+    "resource": "http://data.europa.eu/eli/dec/2011/833/oj",
+    "description": "European Commission reuse notice",
+    "id": "COM_REUSE",
+    "label": "European Commission reuse notice"
+   },
+   "rights": {
+    "resource": "http://publications.europa.eu/resource/authority/access-right/PUBLIC"
+   },
+   "access_url": [
+    "https://op.europa.eu/o/opportal-service/euvoc-download-handler?cellarURI=http%3A%2F%2Fpublications.europa.eu%2Fresource%2Fcellar%2F9dd064a9-ae7b-11e7-837e-01aa75ed71a1.0001.08%2FDOC_1&fileName=at-dir-eu-legal-act-v3.xsd"
+   ],
+   "download_url": [
+    "https://op.europa.eu/o/opportal-service/euvoc-download-handler?cellarURI=http%3A%2F%2Fpublications.europa.eu%2Fresource%2Fcellar%2F9dd064a9-ae7b-11e7-837e-01aa75ed71a1.0001.08%2FDOC_1&fileName=at-dir-eu-legal-act-v3.xsd"
+   ],
+   "format": {
+    "format_types": [
+     {
+      "id": "structured",
+      "label": {
+       "en": "Structured"
+      }
+     },
+     {
+      "id": "textual",
+      "label": {
+       "en": "Textual"
+      }
+     }
+    ],
+    "resource": "http://publications.europa.eu/resource/authority/file-type/XML",
+    "id": "XML",
+    "label": "XML"
+   }
+  },
+  {
+   "title": {
+    "de": "Verzeichnis der EU-Rechtsakte SKOS_CORE Vertrieb",
+    "fi": "EU:n säädösten luettelo SKOS_CORE-jakelu",
+    "pt": "Repertório dos atos jurídicos da UE Distribuição SKOS_CORE",
+    "bg": "Регистър на правните актове на ЕС SKOS_CORE разпространение",
+    "lt": "ES teisės aktų katalogas SKOS_CORE distribucija",
+    "lv": "ES tiesību aktu direktorijs SKOS_CORE izplatīšana",
+    "hr": "Katalog pravnih akata EU-a SKOS_CORE distribucija",
+    "fr": "Répertoire des actes juridiques de l'UE SKOS_CORE distribution",
+    "hu": "Az uniós jogi aktusok jegyzéke SKOS_CORE terjesztés",
+    "uk": "Довідник нормативно-правових актів ЄС SKOS_CORE дистрибуція",
+    "sk": "Zoznam právnych aktov EÚ Distribúcia SKOS_CORE",
+    "sl": "Seznam pravnih aktov EU – distribucija SKOS_CORE",
+    "ga": "Eolaire ar ghníomhartha dlí an Aontais Eorpaigh Dáileadh SKOS_CORE",
+    "sv": "Register över EU-rättsakter SKOS_CORE distribution",
+    "mt": "Direttorju tal-atti legali tal-UE Distribuzzjoni SKOS_CORE",
+    "el": "Ευρετήριο των νομικών πράξεων της ΕΕ SKOS_CORE διανομή",
+    "en": "Directory of EU legal acts SKOS_CORE distribution",
+    "it": "Repertorio degli atti giuridici dell'UE Distribuzione SKOS_CORE",
+    "es": "Directorio de actos jurídicos de la UE Distribución de SKOS_CORE",
+    "et": "ELi õigusaktide kataloog SKOS_CORE jaotus",
+    "cs": "Adresář právních aktů EU Distribuce SKOS_CORE",
+    "pl": "Wykaz aktów prawnych UE Dystrybucja SKOS_CORE",
+    "da": "Fortegnelse over EU-retsakter SKOS_CORE distribution",
+    "ro": "Repertoriul actelor juridice ale UE Distribuție SKOS_CORE",
+    "nl": "Repertorium op EU-rechtshandelingen SKOS_CORE distributie"
+   },
+   "license": {
+    "resource": "http://data.europa.eu/eli/dec/2011/833/oj",
+    "description": "European Commission reuse notice",
+    "id": "COM_REUSE",
+    "label": "European Commission reuse notice"
+   },
+   "rights": {
+    "resource": "http://publications.europa.eu/resource/authority/access-right/PUBLIC"
+   },
+   "access_url": [
+    "https://op.europa.eu/o/opportal-service/euvoc-download-handler?cellarURI=http%3A%2F%2Fpublications.europa.eu%2Fresource%2Fcellar%2F9dd064a9-ae7b-11e7-837e-01aa75ed71a1.0001.09%2FDOC_1&fileName=dir-eu-legal-act-skos.rdf"
+   ],
+   "download_url": [
+    "https://op.europa.eu/o/opportal-service/euvoc-download-handler?cellarURI=http%3A%2F%2Fpublications.europa.eu%2Fresource%2Fcellar%2F9dd064a9-ae7b-11e7-837e-01aa75ed71a1.0001.09%2FDOC_1&fileName=dir-eu-legal-act-skos.rdf"
+   ],
+   "format": {
+    "format_types": [
+     {
+      "id": "structured",
+      "label": {
+       "en": "Structured"
+      }
+     },
+     {
+      "id": "textual",
+      "label": {
+       "en": "Textual"
+      }
+     }
+    ],
+    "resource": "http://publications.europa.eu/resource/authority/file-type/RDF_XML",
+    "id": "RDF_XML",
+    "label": "RDF XML"
+   }
+  },
+  {
+   "title": {
+    "de": "Verzeichnis der EU-Rechtsakte CAT-Verteilung",
+    "fi": "Luettelo EU:n säädöksistä CAT-jakelu",
+    "pt": "Repertório dos atos jurídicos da UE Distribuição da CAT",
+    "bg": "Регистър на правните актове на ЕС за разпространение на CAT",
+    "lt": "ES teisės aktų rodyklė CAT platinimas",
+    "hr": "Katalog pravnih akata EU-a Distribucija CAT-a",
+    "lv": "ES tiesību aktu direktorijs CAT izplatīšana",
+    "fr": "Répertoire des actes juridiques de l'UE CAT distribution",
+    "hu": "Az uniós jogi aktusok jegyzéke – CAT-terjesztés",
+    "uk": "Довідник нормативно-правових актів ЄС Розповсюдження CAT",
+    "sk": "Zoznam právnych aktov EÚ Distribúcia CAT",
+    "sl": "Seznam pravnih aktov EU Razdeljevanje CAT",
+    "ga": "Eolaire ar ghníomhartha dlí an AE Dáileadh CAT",
+    "sv": "Register över EU-rättsakter CAT distribution",
+    "el": "Ευρετήριο των νομικών πράξεων της ΕΕ για τη διανομή CAT",
+    "mt": "Direttorju tal-atti legali tal-UE Distribuzzjoni tal-CAT",
+    "en": "Directory of EU legal acts CAT distribution",
+    "it": "Repertorio degli atti giuridici dell'UE",
+    "es": "Repertorio de actos jurídicos de la UE Distribución CAT",
+    "et": "ELi õigusaktide kataloog CAT-levitamine",
+    "cs": "Adresář právních aktů EU CAT distribuce",
+    "pl": "Wykaz aktów prawnych UE Dystrybucja CAT",
+    "da": "Fortegnelse over EU-retsakter CAT distribution",
+    "ro": "Repertoriul actelor juridice ale UE Distribuția CAT",
+    "nl": "Repertorium op EU-rechtshandelingen CAT-distributie"
+   },
+   "license": {
+    "resource": "http://data.europa.eu/eli/dec/2011/833/oj",
+    "description": "European Commission reuse notice",
+    "id": "COM_REUSE",
+    "label": "European Commission reuse notice"
+   },
+   "rights": {
+    "resource": "http://publications.europa.eu/resource/authority/access-right/PUBLIC"
+   },
+   "access_url": [
+    "https://op.europa.eu/o/opportal-service/euvoc-download-handler?cellarURI=http%3A%2F%2Fpublications.europa.eu%2Fresource%2Fcellar%2F9dd064a9-ae7b-11e7-837e-01aa75ed71a1.0001.05%2FDOC_1&fileName=dir-eu-legal-act.xml"
+   ],
+   "download_url": [
+    "https://op.europa.eu/o/opportal-service/euvoc-download-handler?cellarURI=http%3A%2F%2Fpublications.europa.eu%2Fresource%2Fcellar%2F9dd064a9-ae7b-11e7-837e-01aa75ed71a1.0001.05%2FDOC_1&fileName=dir-eu-legal-act.xml"
+   ],
+   "format": {
+    "format_types": [
+     {
+      "id": "structured",
+      "label": {
+       "en": "Structured"
+      }
+     },
+     {
+      "id": "textual",
+      "label": {
+       "en": "Textual"
+      }
+     }
+    ],
+    "resource": "http://publications.europa.eu/resource/authority/file-type/XML",
+    "id": "XML",
+    "label": "XML"
+   }
+  },
+  {
+   "title": {
+    "de": "Verzeichnis der EU-Rechtsakte IMMC_V2 Verteilung",
+    "fi": "EU:n säädösten hakemisto IMMC_V2 jakelu",
+    "pt": "Repertório dos atos jurídicos da UE IMMC_V2 distribuição",
+    "bg": "Регистър на правните актове на ЕС IMMC_V2 разпространение",
+    "lt": "ES teisės aktų rodyklė IMMC_V2 platinimas",
+    "hr": "Katalog pravnih akata EU-a – distribucija IMMC_V2",
+    "lv": "ES tiesību aktu direktorijs IMMC_V2 izplatīšana",
+    "fr": "Répertoire des actes juridiques de l'UE IMMC_V2 distribution",
+    "hu": "Az uniós jogi aktusok jegyzéke IMMC_V2 terjesztés",
+    "uk": "Довідник нормативно-правових актів ЄС дистрибуція IMMC_V2",
+    "sk": "Zoznam právnych aktov EÚ IMMC_V2 distribúcia",
+    "sl": "Seznam pravnih aktov EU – distribucija IMMC_V2",
+    "ga": "Eolaire ar ghníomhartha dlí an Aontais IMMC_V2 dáileachán",
+    "sv": "Register över EU-rättsakter IMMC_V2 distribution",
+    "mt": "Direttorju tal-atti legali tal-UE Distribuzzjoni IMMC_V2",
+    "el": "Ευρετήριο των νομικών πράξεων της ΕΕ IMMC_V2",
+    "en": "Directory of EU legal acts IMMC_V2 distribution",
+    "it": "Repertorio degli atti giuridici dell'UE Distribuzione IMMC_V2",
+    "es": "Repertorio de actos jurídicos de la UE distribución IMMC_V2",
+    "et": "ELi õigusaktide kataloog IMMC_V2 levitamine",
+    "cs": "Rejstřík právních aktů EU Distribuce IMMC_V2",
+    "pl": "Wykaz aktów prawnych UE – dystrybucja IMMC_V2",
+    "da": "Fortegnelse over EU-retsakter IMMC_V2 distribution",
+    "ro": "Repertoriul actelor juridice ale UE Distribuție IMMC_V2",
+    "nl": "Repertorium op EU-rechtshandelingen IMMC_V2-distributie"
+   },
+   "license": {
+    "resource": "http://data.europa.eu/eli/dec/2011/833/oj",
+    "description": "European Commission reuse notice",
+    "id": "COM_REUSE",
+    "label": "European Commission reuse notice"
+   },
+   "rights": {
+    "resource": "http://publications.europa.eu/resource/authority/access-right/PUBLIC"
+   },
+   "access_url": [
+    "https://op.europa.eu/o/opportal-service/euvoc-download-handler?cellarURI=http%3A%2F%2Fpublications.europa.eu%2Fresource%2Fcellar%2F9dd064a9-ae7b-11e7-837e-01aa75ed71a1.0001.04%2FDOC_1&fileName=at-dir-eu-legal-act-v2.xsd"
+   ],
+   "download_url": [
+    "https://op.europa.eu/o/opportal-service/euvoc-download-handler?cellarURI=http%3A%2F%2Fpublications.europa.eu%2Fresource%2Fcellar%2F9dd064a9-ae7b-11e7-837e-01aa75ed71a1.0001.04%2FDOC_1&fileName=at-dir-eu-legal-act-v2.xsd"
+   ],
+   "format": {
+    "format_types": [
+     {
+      "id": "structured",
+      "label": {
+       "en": "Structured"
+      }
+     },
+     {
+      "id": "textual",
+      "label": {
+       "en": "Textual"
+      }
+     }
+    ],
+    "resource": "http://publications.europa.eu/resource/authority/file-type/XML",
+    "id": "XML",
+    "label": "XML"
+   }
+  },
+  {
+   "title": {
+    "de": "Verzeichnis der EU-Rechtsakte gezippt ATTO XML-Verteilung",
+    "fi": "Luettelo EU:n säädöksistä, jotka on pakattu ATTO XML -jakeluun",
+    "pt": "Repertório dos atos jurídicos da UE zipado ATTO XML distribution",
+    "bg": "Регистър на правните актове на ЕС с цип разпространение на ATTO XML",
+    "lt": "ES teisės aktų katalogas zip ATTO XML platinimas",
+    "lv": "ES tiesību aktu direktorijs ar rāvējslēdzēju ATTO XML distribūcija",
+    "hr": "Katalog pravnih akata EU-a sa zatvaračem za distribuciju ATTO XML-a",
+    "fr": "Répertoire des actes juridiques de l'UE zippé ATTO XML distribution",
+    "hu": "Az ATTO XML disztribúciójában tömörített uniós jogi aktusok jegyzéke",
+    "uk": "Довідник нормативно-правових актів ЄС розповсюджується ATTO XML",
+    "sk": "Zoznam právnych aktov EÚ s distribúciou ATTO XML na zips",
+    "sl": "Seznam pravnih aktov EU zipped ATTO XML distribution",
+    "ga": "Eolaire ar ghníomhartha dlí an Aontais Eorpaigh a bhfuil a ndáileadh XML ATTO zipeáilte",
+    "sv": "Register över EU-rättsakter zippade ATTO XML-distribution",
+    "el": "Κατάλογος νομικών πράξεων της ΕΕ με φερμουάρ στη διανομή ATTO XML",
+    "mt": "Direttorju tal-atti legali tal-UE zipped ATTO XML distribution",
+    "en": "Directory of EU legal acts  zipped ATTO XML distribution",
+    "it": "Repertorio degli atti giuridici dell'UE compresso nella distribuzione ATTO XML",
+    "es": "Directorio de actos jurídicos de la UE comprimido ATTO Distribución XML",
+    "et": "ELi õigusaktide kataloog zipped ATTO XML jaotus",
+    "cs": "Adresář právních aktů EU zazipoval distribuci ATTO XML",
+    "pl": "Katalog aktów prawnych UE z zamkiem błyskawicznym w dystrybucji ATTO XML",
+    "ro": "Repertoriul actelor juridice ale UE a închis distribuția ATTO XML",
+    "da": "Register over EU-retsakter zippet ATTO XML-distribution",
+    "nl": "Directory van EU-rechtshandelingen gezipt ATTO XML-distributie"
+   },
+   "license": {
+    "resource": "http://data.europa.eu/eli/dec/2011/833/oj",
+    "description": "European Commission reuse notice",
+    "id": "COM_REUSE",
+    "label": "European Commission reuse notice"
+   },
+   "rights": {
+    "resource": "http://publications.europa.eu/resource/authority/access-right/PUBLIC"
+   },
+   "access_url": [
+    "https://op.europa.eu/o/opportal-service/euvoc-download-handler?cellarURI=http%3A%2F%2Fpublications.europa.eu%2Fresource%2Fcellar%2F9dd064a9-ae7b-11e7-837e-01aa75ed71a1.0001.06%2Fzip&fileName=ATTO_XML_Directory-of-EU-legal-acts.zip"
+   ],
+   "download_url": [
+    "https://op.europa.eu/o/opportal-service/euvoc-download-handler?cellarURI=http%3A%2F%2Fpublications.europa.eu%2Fresource%2Fcellar%2F9dd064a9-ae7b-11e7-837e-01aa75ed71a1.0001.06%2Fzip&fileName=ATTO_XML_Directory-of-EU-legal-acts.zip"
+   ],
+   "format": {
+    "format_types": [
+     {
+      "id": "archive",
+      "label": {
+       "en": "Archive"
+      }
+     },
+     {
+      "id": "compressed",
+      "label": {
+       "en": "Compressed"
+      }
+     },
+     {
+      "id": "package",
+      "label": {
+       "en": "Package"
+      }
+     }
+    ],
+    "resource": "http://publications.europa.eu/resource/authority/file-type/ZIP",
+    "id": "ZIP",
+    "label": "ZIP"
+   }
+  }
+ ]
+}

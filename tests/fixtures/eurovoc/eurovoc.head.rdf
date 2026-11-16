@@ -1,0 +1,289 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rdf:RDF
+	xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+
+<rdf:Description rdf:about="http://eurovoc.europa.eu/5263">
+	<rdf:type rdf:resource="http://www.w3.org/2004/02/skos/core#Concept"/>
+	<broader xmlns="http://www.w3.org/2004/02/skos/core#" rdf:resource="http://eurovoc.europa.eu/2737"/>
+	<inScheme xmlns="http://www.w3.org/2004/02/skos/core#" rdf:resource="http://eurovoc.europa.eu/100254"/>
+	<inScheme xmlns="http://www.w3.org/2004/02/skos/core#" rdf:resource="http://eurovoc.europa.eu/100141"/>
+	<prefLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="fi">ruho</prefLabel>
+	<prefLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="et">rümp</prefLabel>
+	<prefLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="es">pieza en canal</prefLabel>
+	<prefLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="fr">carcasse</prefLabel>
+	<prefLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="lt">skerdena</prefLabel>
+	<prefLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="pt">carcaça</prefLabel>
+	<prefLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="hr">životinjsko truplo</prefLabel>
+	<prefLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="cs">jatečný trup</prefLabel>
+	<prefLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="mk">труп од животно</prefLabel>
+	<prefLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="hu">hasított test</prefLabel>
+	<prefLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="sr">стрвина</prefLabel>
+	<prefLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="el">σφάγιο</prefLabel>
+	<prefLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="bg">животинско тяло</prefLabel>
+	<prefLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="sq">kufomë</prefLabel>
+	<prefLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="ro">carcasă animală</prefLabel>
+	<prefLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="en">carcase</prefLabel>
+	<prefLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="it">carcassa</prefLabel>
+	<prefLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="de">Tierkörper</prefLabel>
+	<prefLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="pl">tusza zwierząt</prefLabel>
+	<prefLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="sv">slaktkropp</prefLabel>
+	<prefLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="sl">trup</prefLabel>
+	<prefLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="nl">karkas</prefLabel>
+	<prefLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="sk">jatočný trup</prefLabel>
+	<prefLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="lv">liemenis</prefLabel>
+	<prefLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="da">slagtekrop</prefLabel>
+	<prefLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="ga">conablach</prefLabel>
+	<prefLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="mt">karkassa</prefLabel>
+	<altLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="cs">jatečné tělo</altLabel>
+	<altLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="hu">hasított féltest</altLabel>
+	<altLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="mk">труп од заклано животно</altLabel>
+	<altLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="hu">vágott test</altLabel>
+	<altLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="es">canal de un animal</altLabel>
+	<altLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="lv">dzīvnieka liemenis</altLabel>
+	<altLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="el">σφάγιο ζώου</altLabel>
+	<altLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="mk">мрша</altLabel>
+	<altLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="hu">vágott féltest</altLabel>
+	<altLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="mk">животински труп</altLabel>
+	<altLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="fr">carcasse animale</altLabel>
+	<altLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="sv">djurkropp</altLabel>
+	<altLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="fi">eläimen ruho</altLabel>
+	<altLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="sk">živočíšny trup/kostra</altLabel>
+	<altLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="sq">stërvinë e kafshës</altLabel>
+	<altLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="en">animal carcase</altLabel>
+	<altLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="de">Schlachtkörper</altLabel>
+	<altLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="nl">dierlijk karkas</altLabel>
+	<altLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="pt">carcaça animal</altLabel>
+	<altLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="it">carcassa animale</altLabel>
+	<notation xmlns="http://www.w3.org/2004/02/skos/core#">5263</notation>
+</rdf:Description>
+
+<rdf:Description rdf:about="http://eurovoc.europa.eu/2737">
+	<rdf:type rdf:resource="http://www.w3.org/2004/02/skos/core#Concept"/>
+	<inScheme xmlns="http://www.w3.org/2004/02/skos/core#" rdf:resource="http://eurovoc.europa.eu/100254"/>
+	<inScheme xmlns="http://www.w3.org/2004/02/skos/core#" rdf:resource="http://eurovoc.europa.eu/100141"/>
+	<prefLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="fi">eläintuote</prefLabel>
+	<prefLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="cs">živočišný produkt</prefLabel>
+	<prefLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="pl">produkt zwierzęcy</prefLabel>
+	<prefLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="de">tierisches Erzeugnis</prefLabel>
+	<prefLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="ga">táirge ainmhí</prefLabel>
+	<prefLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="ro">produs de origine animală</prefLabel>
+	<prefLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="bg">животински продукт</prefLabel>
+	<prefLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="en">animal product</prefLabel>
+	<prefLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="da">animalsk produkt</prefLabel>
+	<prefLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="mk">производ од животинско потекло</prefLabel>
+	<prefLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="sq">produkt shtazor</prefLabel>
+	<prefLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="sv">animalisk produkt</prefLabel>
+	<prefLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="sk">živočíšny produkt</prefLabel>
+	<prefLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="lt">gyvūniniai produktai</prefLabel>
+	<prefLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="sr">производ животињског порекла</prefLabel>
+	<prefLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="el">ζωικό προϊόν</prefLabel>
+	<prefLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="lv">dzīvniekizcelsmes produkts</prefLabel>
+	<prefLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="es">producto de origen animal</prefLabel>
+	<prefLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="fr">produit animal</prefLabel>
+	<prefLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="hr">proizvod životinjskoga podrijetla</prefLabel>
+	<prefLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="sl">živalski proizvod</prefLabel>
+	<prefLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="nl">dierlijk product</prefLabel>
+	<prefLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="et">loomne saadus</prefLabel>
+	<prefLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="mt">prodott mill-annimali</prefLabel>
+	<prefLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="pt">produto animal</prefLabel>
+	<prefLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="hu">állati termék</prefLabel>
+	<prefLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="it">prodotto animale</prefLabel>
+	<altLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="sk">produkt živočíšneho pôvodu</altLabel>
+	<altLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="de">Produkt tierischen Ursprungs</altLabel>
+	<altLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="pt">produto de origem animal</altLabel>
+	<altLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="es">producto ganadero</altLabel>
+	<altLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="et">loomne toode</altLabel>
+	<altLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="de">Erzeugnis der Viehzucht</altLabel>
+	<altLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="it">prodotto del regno animale</altLabel>
+	<altLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="el">κτηνοτροφικό προϊόν</altLabel>
+	<altLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="lv">dzīvnieku izcelsmes produkts</altLabel>
+	<altLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="sk">produkty z hospodárskych zvierat</altLabel>
+	<altLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="en">livestock product</altLabel>
+	<altLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="sv">uppfödningsprodukt</altLabel>
+	<altLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="nl">product van dierlijke oorsprong</altLabel>
+	<altLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="cs">produkty živočišného původu</altLabel>
+	<altLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="fi">eläinperäinen tuote</altLabel>
+	<altLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="en">product of animal origin</altLabel>
+	<altLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="lt">gyvūninės kilmės produktas</altLabel>
+	<altLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="nl">dierlijk produkt</altLabel>
+	<altLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="es">producto animal</altLabel>
+	<altLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="et">loomakasvatussaadus</altLabel>
+	<altLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="sq">produkt blegtoral</altLabel>
+	<altLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="fr">produit de l'élevage</altLabel>
+	<altLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="it">prodotto di origine animale</altLabel>
+	<altLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="ga">táirge de bhunadh ainmhíoch</altLabel>
+	<altLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="it">prodotto dell'allevamento</altLabel>
+	<altLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="hu">állati eredetű termék</altLabel>
+	<altLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="da">produkt af animalsk oprindelse</altLabel>
+	<altLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="sv">produkt med animaliskt ursprung</altLabel>
+	<altLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="mk">сточен производ</altLabel>
+	<altLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="fr">produit d'origine animale</altLabel>
+	<altLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="de">Tierprodukt</altLabel>
+	<altLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="mk">храна од животинско потекло</altLabel>
+	<altLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="nl">veeteeltproduct</altLabel>
+	<altLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="pt">produto de criação de gado</altLabel>
+	<altLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="lv">lopkopības produkts</altLabel>
+	<altLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="cs">produkty z hospodářských zvířat</altLabel>
+	<altLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="sq">produkt me origjinë shtazore</altLabel>
+	<notation xmlns="http://www.w3.org/2004/02/skos/core#">2737</notation>
+	<related xmlns="http://www.w3.org/2004/02/skos/core#" rdf:resource="http://eurovoc.europa.eu/2990"/>
+	<related xmlns="http://www.w3.org/2004/02/skos/core#" rdf:resource="http://eurovoc.europa.eu/4225"/>
+	<related xmlns="http://www.w3.org/2004/02/skos/core#" rdf:resource="http://eurovoc.europa.eu/240"/>
+	<related xmlns="http://www.w3.org/2004/02/skos/core#" rdf:resource="http://eurovoc.europa.eu/2711"/>
+	<related xmlns="http://www.w3.org/2004/02/skos/core#" rdf:resource="http://eurovoc.europa.eu/6787"/>
+	<narrower xmlns="http://www.w3.org/2004/02/skos/core#" rdf:resource="http://eurovoc.europa.eu/5263"/>
+	<narrower xmlns="http://www.w3.org/2004/02/skos/core#" rdf:resource="http://eurovoc.europa.eu/4681"/>
+	<narrower xmlns="http://www.w3.org/2004/02/skos/core#" rdf:resource="http://eurovoc.europa.eu/2302"/>
+	<narrower xmlns="http://www.w3.org/2004/02/skos/core#" rdf:resource="http://eurovoc.europa.eu/4207"/>
+	<narrower xmlns="http://www.w3.org/2004/02/skos/core#" rdf:resource="http://eurovoc.europa.eu/2121"/>
+	<narrower xmlns="http://www.w3.org/2004/02/skos/core#" rdf:resource="http://eurovoc.europa.eu/1907"/>
+	<narrower xmlns="http://www.w3.org/2004/02/skos/core#" rdf:resource="http://eurovoc.europa.eu/1564"/>
+	<narrower xmlns="http://www.w3.org/2004/02/skos/core#" rdf:resource="http://eurovoc.europa.eu/5728"/>
+	<topConceptOf xmlns="http://www.w3.org/2004/02/skos/core#" rdf:resource="http://eurovoc.europa.eu/100254"/>
+	<topConceptOf xmlns="http://www.w3.org/2004/02/skos/core#" rdf:resource="http://eurovoc.europa.eu/100141"/>
+	<scopeNote xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="fr">Utiliser pour les documents qui recouvrent l'ensemble des produits, sinon utiliser un descripteur plus spécifique.</scopeNote>
+	<scopeNote xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="es">Utilizar para los documentos que se refieren al conjunto de los productos. En los demás casos, utilizar un descriptor más específico.</scopeNote>
+	<scopeNote xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="pt">Utilizar nos documentos relativos ao conjunto dos produtos, ou então utilizar um descritor mais específico.</scopeNote>
+	<scopeNote xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="et">Kasutada dokumentide puhul, mis hõlmavad kõiki tooteid, muul juhul kasutada konkreetsemat deskriptorit.</scopeNote>
+	<scopeNote xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="en">Use for documents which cover the entire range of products, otherwise use a more specific descriptor.</scopeNote>
+	<scopeNote xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="it">Da utilizzare per i documenti che trattano l'insieme dei prodotti, altrimenti impiegare un descrittore più specifico.</scopeNote>
+	<scopeNote xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="fi">Käytetään asiakirjoissa, joissa käsitellään kaikkia tuotteita. Muussa tapauksessa käytetään tilannekohtaisia termejä.</scopeNote>
+	<scopeNote xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="el">Να χρησιμοποιείται για έγγραφα που αναφέρονται στο σύνολο των προϊόντων αυτών, ειδεμή να χρησιμοποιούνται ειδικότεροι όροι.</scopeNote>
+	<scopeNote xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="hu">Olyan dokumentumok esetén használandó, melyek a termékek teljes skálájára vonatkoznak, egyébként specifikusabb deszkriptort válasszon.</scopeNote>
+	<scopeNote xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="da">Anvendes i forbindelse med dokumenter, der dækker hele sammenhængen af disse produkter. Ellers anvendes en mere specifik deskriptor.</scopeNote>
+	<scopeNote xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="lv">Lieto dokumentos, apzīmējot plašu produktu klāstu, citā gadījumā izvēlas kādu specifiskāku apzīmējumu.</scopeNote>
+	<scopeNote xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="sq">Përdoret për dokumentet që mbulojnë të gjithë gamën e produkteve, përndryshe përdoret një përshkrues më specifik.</scopeNote>
+	<scopeNote xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="sv">Används för de dokument som omfattar samtliga produkter, i andra fall används en mer specifik deskriptor.</scopeNote>
+	<scopeNote xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="de">Für Dokumente verwenden, die sich auf die Gesamtheit der Produkte beziehen, anderenfalls einen präziseren Deskriptor wählen.</scopeNote>
+	<scopeNote xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="mt">Uża għal dokumenti li jkopru l-firxa sħiħa tal-prodotti, inkella uża deskrittur aktar speċifiku.</scopeNote>
+	<scopeNote xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="hr">Upotrebljava se za dokumente koji pokrivaju cijeli niz proizvoda, inače se upotrebljava određeniji deskriptor.</scopeNote>
+	<scopeNote xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="sk">Použi pri dokumentoch pokrývajúcich celé spektrum produktov, inak použi konkrétnejší deskriptor.</scopeNote>
+	<scopeNote xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="nl">Gebruiken voor de documenten die betrekking hebben op het geheel van de producten, anders de meer specifieke termen gebruiken.</scopeNote>
+	<scopeNote xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="lt">Vartokite dokumentuose, kuriuose kalbama apie visokius produktus, kitais atvejais vartokite konkretesnį terminą.</scopeNote>
+	<scopeNote xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="ro">Folosit pentru documentele care cuprind toată gama de produse, altfel se folosește un descriptor mai specific.</scopeNote>
+</rdf:Description>
+
+<rdf:Description rdf:about="http://eurovoc.europa.eu/100254">
+	<rdf:type rdf:resource="http://www.w3.org/2004/02/skos/core#ConceptScheme"/>
+	<prefLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="it">6011 prodotto animale</prefLabel>
+	<prefLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="pl">6011 produkt zwierzęcy</prefLabel>
+	<prefLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="nl">6011 dierlijk product</prefLabel>
+	<prefLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="sq">6011 prodhimi i kafshëve</prefLabel>
+	<prefLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="lv">6011 dzīvnieku izcelsmes produkts</prefLabel>
+	<prefLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="et">6011 loomne saadus</prefLabel>
+	<prefLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="cs">6011 živočišný výrobek</prefLabel>
+	<prefLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="de">6011 Tierisches Erzeugnis</prefLabel>
+	<prefLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="sl">6011 živalski proizvodi</prefLabel>
+	<prefLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="mt">6011 prodott mill-annimali</prefLabel>
+	<prefLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="es">6011 productos de origen animal</prefLabel>
+	<prefLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="sr">6011 Производ животињског порекла</prefLabel>
+	<prefLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="bg">6011 животински продукт</prefLabel>
+	<prefLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="sv">6011 animalisk produkt</prefLabel>
+	<prefLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="mk">6011 производи од животинско потекло</prefLabel>
+	<prefLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="fi">6011 eläintuote</prefLabel>
+	<prefLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="ga">6011 táirge ainmhí</prefLabel>
+	<prefLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="fr">6011 produit animal</prefLabel>
+	<prefLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="da">6011 animalsk produkt</prefLabel>
+	<prefLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="ro">6011 produse de origine animală</prefLabel>
+	<prefLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="en">6011 animal product</prefLabel>
+	<prefLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="lt">6011 gyvūninis produktas</prefLabel>
+	<prefLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="hr">6011 proizvod životinjskoga podrijetla</prefLabel>
+	<prefLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="hu">6011 állati termékek</prefLabel>
+	<prefLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="el">6011 ζωικό προϊόν</prefLabel>
+	<prefLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="pt">6011 produto animal</prefLabel>
+	<prefLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="sk">6011 živočíšny produkt</prefLabel>
+	<notation xmlns="http://www.w3.org/2004/02/skos/core#">6011</notation>
+</rdf:Description>
+
+<rdf:Description rdf:about="http://eurovoc.europa.eu/100141">
+	<rdf:type rdf:resource="http://www.w3.org/2004/02/skos/core#ConceptScheme"/>
+	<prefLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="et">EuroVoc</prefLabel>
+	<prefLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="bg">EuroVoc</prefLabel>
+	<prefLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="lt">EuroVoc</prefLabel>
+	<prefLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="de">EuroVoc</prefLabel>
+	<prefLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="es">EuroVoc</prefLabel>
+	<prefLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="sv">EuroVoc</prefLabel>
+	<prefLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="sk">EuroVoc</prefLabel>
+	<prefLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="hu">EuroVoc</prefLabel>
+	<prefLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="sq">EuroVoc</prefLabel>
+	<prefLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="sl">EuroVoc</prefLabel>
+	<prefLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="nl">EuroVoc</prefLabel>
+	<prefLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="da">EuroVoc</prefLabel>
+	<prefLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="en">EuroVoc</prefLabel>
+	<prefLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="cs">EuroVoc</prefLabel>
+	<prefLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="fi">EuroVoc</prefLabel>
+	<prefLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="pl">EuroVoc</prefLabel>
+	<prefLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="lv">EuroVoc</prefLabel>
+	<prefLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="fr">EuroVoc</prefLabel>
+	<prefLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="hr">EuroVoc</prefLabel>
+	<prefLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="ga">EuroVoc</prefLabel>
+	<prefLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="pt">EuroVoc</prefLabel>
+	<prefLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="it">EuroVoc</prefLabel>
+	<prefLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="mt">EuroVoc</prefLabel>
+	<prefLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="sr">EuroVoc</prefLabel>
+	<prefLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="el">EuroVoc</prefLabel>
+	<prefLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="mk">EuroVoc</prefLabel>
+	<prefLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="ro">EuroVoc</prefLabel>
+</rdf:Description>
+
+<rdf:Description rdf:about="http://eurovoc.europa.eu/2990">
+	<rdf:type rdf:resource="http://www.w3.org/2004/02/skos/core#Concept"/>
+	<broader xmlns="http://www.w3.org/2004/02/skos/core#" rdf:resource="http://eurovoc.europa.eu/1224"/>
+	<inScheme xmlns="http://www.w3.org/2004/02/skos/core#" rdf:resource="http://eurovoc.europa.eu/100141"/>
+	<inScheme xmlns="http://www.w3.org/2004/02/skos/core#" rdf:resource="http://eurovoc.europa.eu/100250"/>
+	<prefLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="fr">substitut céréalier</prefLabel>
+	<prefLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="lt">grūdinių pašarų pakaitalas</prefLabel>
+	<prefLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="en">cereal substitute</prefLabel>
+	<prefLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="hu">gabonapótló</prefLabel>
+	<prefLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="de">Ersatz von Futtergetreide</prefLabel>
+	<prefLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="cs">náhražka obilovin</prefLabel>
+	<prefLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="da">kornerstatning</prefLabel>
+	<prefLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="pt">substituto cerealífero</prefLabel>
+	<prefLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="mt">sostitut taċ-ċereali</prefLabel>
+	<prefLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="ga">ionadach gránach</prefLabel>
+	<prefLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="hr">nadomjestak za žito</prefLabel>
+	<prefLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="es">sucedáneo de cereales</prefLabel>
+	<prefLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="bg">зърнен заместител</prefLabel>
+	<prefLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="ro">înlocuitor de cereale</prefLabel>
+	<prefLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="sr">замена за житарице</prefLabel>
+	<prefLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="mk">замена за жито</prefLabel>
+	<prefLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="sk">obilninová náhrada</prefLabel>
+	<prefLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="sq">zëvendësues tagjie</prefLabel>
+	<prefLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="pl">substytut zbóż</prefLabel>
+	<prefLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="sl">nadomestek za krmna žita</prefLabel>
+	<prefLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="et">teravilja asendustoode</prefLabel>
+	<prefLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="lv">labības aizstājējs</prefLabel>
+	<prefLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="nl">vervanging voor voedergraan</prefLabel>
+	<prefLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="sv">spannmålsersättning</prefLabel>
+	<prefLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="fi">viljan korvike</prefLabel>
+	<prefLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="it">succedaneo dei cereali</prefLabel>
+	<prefLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="el">υποκατάστατα δημητριακών</prefLabel>
+	<altLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="lt">mėsos ir kaulų miltai</altLabel>
+	<altLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="hu">húsliszt</altLabel>
+	<altLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="de">Tiermehl</altLabel>
+	<altLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="hr">koštano brašno</altLabel>
+	<altLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="el">ζωικά άλευρα</altLabel>
+	<altLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="fi">eläinjauho</altLabel>
+	<altLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="cs">masokostní krmivo</altLabel>
+	<altLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="et">liha- ja kondijahu</altLabel>
+	<altLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="mk">коскено брашно</altLabel>
+	<altLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="sq">mish dhe pluhur kockash</altLabel>
+	<altLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="et">lihakondijahu</altLabel>
+	<altLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="nl">substituut voor graangewassen</altLabel>
+	<altLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="sv">kadavermjöl</altLabel>
+	<altLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="es">harina animal</altLabel>
+	<altLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="da">dyremel</altLabel>
+	<altLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="mk">месно-коскено брашно</altLabel>
+	<altLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="sv">animaliska fodermedel</altLabel>
+	<altLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="lv">gaļas un kaulu milti</altLabel>
+	<altLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="nl">diermeel</altLabel>
+	<altLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="pt">farinha animal</altLabel>
+	<altLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="it">farina animale</altLabel>
+	<altLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="cs">masokostní moučka</altLabel>
+	<altLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="en">meat and bonemeal</altLabel>
+	<altLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="ro">făină din carne și oase</altLabel>
+	<altLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="fr">farine animale</altLabel>
+	<altLabel xmlns="http://www.w3.org/2004/02/skos/core#" xml:lang="hu">csontliszt</altLabel>
+	<notation xmlns="http://www.w3.org/2004/02/skos/core#">2990</notation>
+	<related xmlns="http://www.w3.org/2004/02/skos/core#" rdf:resource="http://eurovoc.europa.eu/2737"/>
+</rdf:Description>

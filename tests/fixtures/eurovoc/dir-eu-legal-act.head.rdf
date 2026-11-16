@@ -1,0 +1,142 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rdf:RDF xmlns:owl="http://www.w3.org/2002/07/owl#"
+         xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+         xmlns:rdfs="http://www.w3.org/2000/01/rdf-schema#"
+         xmlns:skos="http://www.w3.org/2004/02/skos/core#"
+         xmlns:dc="http://purl.org/dc/elements/1.1/"
+         xmlns:dcterms="http://purl.org/dc/terms/"
+         xmlns:atold="http://publications.europa.eu/resource/authority/"
+         xmlns:at="http://publications.europa.eu/ontology/authority/">
+   <skos:ConceptScheme rdf:about="http://publications.europa.eu/resource/authority/dir-eu-legal-act"
+                       at:table.id="dir-eu-legal-act"
+                       at:table.version.number="20171004-0">
+      <owl:versionInfo>20171004-0</owl:versionInfo>
+      <rdfs:label xml:lang="en">Directory of EU legal acts</rdfs:label>
+      <at:prefLabel xml:lang="en">Directory of EU legal acts</at:prefLabel>
+      <skos:prefLabel xml:lang="en">Directory of EU legal acts</skos:prefLabel>
+   </skos:ConceptScheme>
+   <skos:Concept rdf:about="http://publications.europa.eu/resource/authority/dir-eu-legal-act/01"
+                 at:deprecated="false">
+      <skos:inScheme rdf:resource="http://publications.europa.eu/resource/authority/dir-eu-legal-act"/>
+      <skos:narrower rdf:resource="http://publications.europa.eu/resource/authority/dir-eu-legal-act/0107"/>
+      <skos:narrower rdf:resource="http://publications.europa.eu/resource/authority/dir-eu-legal-act/0110"/>
+      <skos:narrower rdf:resource="http://publications.europa.eu/resource/authority/dir-eu-legal-act/0120"/>
+      <skos:narrower rdf:resource="http://publications.europa.eu/resource/authority/dir-eu-legal-act/0130"/>
+      <skos:narrower rdf:resource="http://publications.europa.eu/resource/authority/dir-eu-legal-act/0140"/>
+      <skos:narrower rdf:resource="http://publications.europa.eu/resource/authority/dir-eu-legal-act/0150"/>
+      <skos:narrower rdf:resource="http://publications.europa.eu/resource/authority/dir-eu-legal-act/0160"/>
+      <at:authority-code>01</at:authority-code>
+      <at:op-code>01</at:op-code>
+      <atold:op-code>01</atold:op-code>
+      <dc:identifier>01</dc:identifier>
+      <at:start.use>1952-07-24</at:start.use>
+      <skos:prefLabel xml:lang="bg">Общи, финансови и институционални въпроси</skos:prefLabel>
+      <skos:prefLabel xml:lang="cs">Všeobecné, institucionální a finanční záležitosti</skos:prefLabel>
+      <skos:prefLabel xml:lang="da">Generelle, finansielle og institutionelle spørgsmål</skos:prefLabel>
+      <skos:prefLabel xml:lang="de">Allgemeine, institutionelle und finanzielle Fragen</skos:prefLabel>
+      <skos:prefLabel xml:lang="el">Γενικά, δημοσιονομικά και θεσμικά θέματα</skos:prefLabel>
+      <skos:prefLabel xml:lang="en">General, financial and institutional matters</skos:prefLabel>
+      <skos:prefLabel xml:lang="et">Üldised ning finants- ja institutsioonilised küsimused</skos:prefLabel>
+      <skos:prefLabel xml:lang="fi">Yleiset sekä varainhoitoa ja toimielimiä koskevat asiat</skos:prefLabel>
+      <skos:prefLabel xml:lang="fr">Questions générales, financières et institutionnelles</skos:prefLabel>
+      <skos:prefLabel xml:lang="ga">Gnóthaí ginearálta, airgeadais agus institiúideacha</skos:prefLabel>
+      <skos:prefLabel xml:lang="hr">Opća financijska i institucionalna pitanja</skos:prefLabel>
+      <skos:prefLabel xml:lang="hu">Általános, pénzügyi és intézményi ügyek</skos:prefLabel>
+      <skos:prefLabel xml:lang="it">Questioni generali, istituzionali e finanziarie</skos:prefLabel>
+      <skos:prefLabel xml:lang="lv">Vispārīgi, finanšu un institucionāli jautājumi</skos:prefLabel>
+      <skos:prefLabel xml:lang="lt">Bendrieji, finansų ir instituciniai klausimai</skos:prefLabel>
+      <skos:prefLabel xml:lang="mt">Kwistjonijiet ġenerali, finanzjarji u istituzzjonali</skos:prefLabel>
+      <skos:prefLabel xml:lang="nl">Algemene, institutionele en financiële vraagstukken</skos:prefLabel>
+      <skos:prefLabel xml:lang="pl">Sprawy ogólne, finansowe i instytucjonalne</skos:prefLabel>
+      <skos:prefLabel xml:lang="pt">Questões gerais, institucionais e financeiras</skos:prefLabel>
+      <skos:prefLabel xml:lang="ro">Probleme generale, financiare şi instituţionale</skos:prefLabel>
+      <skos:prefLabel xml:lang="sk">Všeobecné, finančné a inštitucionálne záležitosti</skos:prefLabel>
+      <skos:prefLabel xml:lang="sl">Splošne, finančne in institucionalne zadeve</skos:prefLabel>
+      <skos:prefLabel xml:lang="es">Asuntos generales, financieros e institucionales</skos:prefLabel>
+      <skos:prefLabel xml:lang="sv">Allmänna, finansiella och institutionella frågor</skos:prefLabel>
+   </skos:Concept>
+   <skos:Concept rdf:about="http://publications.europa.eu/resource/authority/dir-eu-legal-act/02"
+                 at:deprecated="false">
+      <skos:inScheme rdf:resource="http://publications.europa.eu/resource/authority/dir-eu-legal-act"/>
+      <skos:narrower rdf:resource="http://publications.europa.eu/resource/authority/dir-eu-legal-act/0205"/>
+      <skos:narrower rdf:resource="http://publications.europa.eu/resource/authority/dir-eu-legal-act/0207"/>
+      <skos:narrower rdf:resource="http://publications.europa.eu/resource/authority/dir-eu-legal-act/0210"/>
+      <skos:narrower rdf:resource="http://publications.europa.eu/resource/authority/dir-eu-legal-act/0220"/>
+      <skos:narrower rdf:resource="http://publications.europa.eu/resource/authority/dir-eu-legal-act/0230"/>
+      <skos:narrower rdf:resource="http://publications.europa.eu/resource/authority/dir-eu-legal-act/0240"/>
+      <skos:narrower rdf:resource="http://publications.europa.eu/resource/authority/dir-eu-legal-act/0250"/>
+      <skos:narrower rdf:resource="http://publications.europa.eu/resource/authority/dir-eu-legal-act/0260"/>
+      <skos:narrower rdf:resource="http://publications.europa.eu/resource/authority/dir-eu-legal-act/0270"/>
+      <at:authority-code>02</at:authority-code>
+      <at:op-code>02</at:op-code>
+      <atold:op-code>02</atold:op-code>
+      <dc:identifier>02</dc:identifier>
+      <at:start.use>1952-07-24</at:start.use>
+      <skos:prefLabel xml:lang="bg">Митнически съюз и свободно движение на стоки</skos:prefLabel>
+      <skos:prefLabel xml:lang="cs">Celní unie a volný pohyb zboží</skos:prefLabel>
+      <skos:prefLabel xml:lang="da">Toldunion og frie varebevægelser</skos:prefLabel>
+      <skos:prefLabel xml:lang="de">Zollunion und freier Warenverkehr</skos:prefLabel>
+      <skos:prefLabel xml:lang="el">Τελωνειακή ένωση και ελεύθερη κυκλοφορία των εμπορευμάτων</skos:prefLabel>
+      <skos:prefLabel xml:lang="en">Customs Union and free movement of goods</skos:prefLabel>
+      <skos:prefLabel xml:lang="et">Tolliliit ja kaupade vaba liikumine</skos:prefLabel>
+      <skos:prefLabel xml:lang="fi">Tulliliitto ja tavaroiden vapaa liikkuvuus</skos:prefLabel>
+      <skos:prefLabel xml:lang="fr">Union douanière et libre circulation des marchandises</skos:prefLabel>
+      <skos:prefLabel xml:lang="ga">Aontas Custaim agus saorghluaiseacht earraí</skos:prefLabel>
+      <skos:prefLabel xml:lang="hr">Carinska unija i slobodno kretanje robe</skos:prefLabel>
+      <skos:prefLabel xml:lang="hu">Vámunió és az áruk szabad mozgása</skos:prefLabel>
+      <skos:prefLabel xml:lang="it">Unione doganale e libera circolazione delle merci</skos:prefLabel>
+      <skos:prefLabel xml:lang="lv">Muitas savienība un brīva preču aprite</skos:prefLabel>
+      <skos:prefLabel xml:lang="lt">Muitų sąjunga ir laisvas prekių judėjimas</skos:prefLabel>
+      <skos:prefLabel xml:lang="mt">Unjoni Doganali u l-moviment liberu tal-prodotti</skos:prefLabel>
+      <skos:prefLabel xml:lang="nl">Douane-unie en vrij verkeer van goederen</skos:prefLabel>
+      <skos:prefLabel xml:lang="pl">Unia celna i swobodny przepływ towarów</skos:prefLabel>
+      <skos:prefLabel xml:lang="pt">União aduaneira e livre circulação das mercadorias</skos:prefLabel>
+      <skos:prefLabel xml:lang="ro">Uniune vamală şi libera circulaţie a mărfurilor</skos:prefLabel>
+      <skos:prefLabel xml:lang="sk">Colná únia a voľný pohyb tovaru</skos:prefLabel>
+      <skos:prefLabel xml:lang="sl">Carinska unija in prosti pretok blaga</skos:prefLabel>
+      <skos:prefLabel xml:lang="es">Unión aduanera y libre circulación de mercancías</skos:prefLabel>
+      <skos:prefLabel xml:lang="sv">Tullunionen och fri rörlighet för varor</skos:prefLabel>
+   </skos:Concept>
+   <skos:Concept rdf:about="http://publications.europa.eu/resource/authority/dir-eu-legal-act/03"
+                 at:deprecated="false">
+      <skos:inScheme rdf:resource="http://publications.europa.eu/resource/authority/dir-eu-legal-act"/>
+      <skos:narrower rdf:resource="http://publications.europa.eu/resource/authority/dir-eu-legal-act/0305"/>
+      <skos:narrower rdf:resource="http://publications.europa.eu/resource/authority/dir-eu-legal-act/0307"/>
+      <skos:narrower rdf:resource="http://publications.europa.eu/resource/authority/dir-eu-legal-act/0310"/>
+      <skos:narrower rdf:resource="http://publications.europa.eu/resource/authority/dir-eu-legal-act/0320"/>
+      <skos:narrower rdf:resource="http://publications.europa.eu/resource/authority/dir-eu-legal-act/0330"/>
+      <skos:narrower rdf:resource="http://publications.europa.eu/resource/authority/dir-eu-legal-act/0340"/>
+      <skos:narrower rdf:resource="http://publications.europa.eu/resource/authority/dir-eu-legal-act/0350"/>
+      <skos:narrower rdf:resource="http://publications.europa.eu/resource/authority/dir-eu-legal-act/0360"/>
+      <skos:narrower rdf:resource="http://publications.europa.eu/resource/authority/dir-eu-legal-act/0370"/>
+      <skos:narrower rdf:resource="http://publications.europa.eu/resource/authority/dir-eu-legal-act/0380"/>
+      <at:authority-code>03</at:authority-code>
+      <at:op-code>03</at:op-code>
+      <atold:op-code>03</atold:op-code>
+      <dc:identifier>03</dc:identifier>
+      <at:start.use>1952-07-24</at:start.use>
+      <skos:prefLabel xml:lang="bg">Селско стопанство</skos:prefLabel>
+      <skos:prefLabel xml:lang="cs">Zemědělství</skos:prefLabel>
+      <skos:prefLabel xml:lang="da">Landbrug</skos:prefLabel>
+      <skos:prefLabel xml:lang="de">Landwirtschaft</skos:prefLabel>
+      <skos:prefLabel xml:lang="el">Γεωργία</skos:prefLabel>
+      <skos:prefLabel xml:lang="en">Agriculture</skos:prefLabel>
+      <skos:prefLabel xml:lang="et">Põllumajandus</skos:prefLabel>
+      <skos:prefLabel xml:lang="fi">Maatalous</skos:prefLabel>
+      <skos:prefLabel xml:lang="fr">Agriculture</skos:prefLabel>
+      <skos:prefLabel xml:lang="ga">Talmhaíocht</skos:prefLabel>
+      <skos:prefLabel xml:lang="hr">Poljoprivreda</skos:prefLabel>
+      <skos:prefLabel xml:lang="hu">Mezőgazdaság</skos:prefLabel>
+      <skos:prefLabel xml:lang="it">Agricoltura</skos:prefLabel>
+      <skos:prefLabel xml:lang="lv">Lauksaimniecība</skos:prefLabel>
+      <skos:prefLabel xml:lang="lt">Žemės ūkis</skos:prefLabel>
+      <skos:prefLabel xml:lang="mt">Agrikoltura</skos:prefLabel>
+      <skos:prefLabel xml:lang="nl">Landbouw</skos:prefLabel>
+      <skos:prefLabel xml:lang="pl">Rolnictwo</skos:prefLabel>
+      <skos:prefLabel xml:lang="pt">Agricultura</skos:prefLabel>
+      <skos:prefLabel xml:lang="ro">Agricultură</skos:prefLabel>
+      <skos:prefLabel xml:lang="sk">Poľnohospodárstvo</skos:prefLabel>
+      <skos:prefLabel xml:lang="sl">Kmetijstvo</skos:prefLabel>
+      <skos:prefLabel xml:lang="es">Agricultura</skos:prefLabel>
+      <skos:prefLabel xml:lang="sv">Jordbruk</skos:prefLabel>
+   </skos:Concept>

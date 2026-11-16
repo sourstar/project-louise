@@ -5,6 +5,7 @@ from .. import config
 from .clinvar_mini import ClinvarMiniSource
 from .eli import EliRefSource
 from .eurlex import CitationResolver as EurlexCitationResolver, EurlexRefSource
+from .eurovoc import EurovocSource
 from .gnomad import GnomadConstraintSource
 from .hgnc import HgncSource
 from .homologene import HomologeneSource
@@ -38,6 +39,10 @@ REFS_REGISTRY = {
     # citations of an EU act in any language held resolved by key
     # (app/refs/eurlex.py; legal-fr-de-eu.md §4.5)
     "eurlex-refs": EurlexRefSource(),
+    # EuroVoc's and the Office's authority tables' labels of the concept ids
+    # an EUR-Lex record carries (parser 4), by key, in the reader's language
+    # (app/refs/eurovoc.py); yellow: synced only once its terms are acknowledged
+    "eurovoc": EurovocSource(),
     # Wikidata's entity ids: the namespace `wikidata` (QIDs, PIDs) for the
     # wikidata collection's keys and wiki-gutenberg's mentions
     # (docs/notes/wikidata-build-plan.md §2)

@@ -202,3 +202,80 @@ def test_a_held_line_whose_unit_the_manifest_proves_changed_is_parsed_again(
               records_from_discarded="2026-08")
     assert changed in parsed, "its unit changed: parsed again"
     assert unknown not in parsed, "no txt_hash is no evidence: its held line is taken"
+
+
+# ---- a build between the snapshot and its discard (NeuRIS5, 2026-11-16) -------
+
+def _rebuilt_after(tmp_path, corpus_dir):
+    """Snapshot 2026-08, then a document removed and the records built again
+    — no snapshot yet — as NeuRIS5 was rebuilt over its 11-15 snapshot: the
+    build keeps 2026-08's versions under their superseded names and puts its
+    own at the paths (shard.keep_superseded)."""
+    root = _collection(tmp_path / "a")
+    con = _manifest(root, corpus_dir)
+    con.close()
+    _build(root, corpus_dir, records_per_shard=2)
+    first = sn.create(root, "gutenberg", snapshot_id="2026-08", log=lambda *_: None)
+    con = _manifest(root, corpus_dir)
+    # two books a part: the first English one gone, lang=en/00001 holds the
+    # other alone — new bytes at the same path
+    gone = con.execute("SELECT uid FROM documents WHERE lang='en' ORDER BY CAST(native_id AS INTEGER) "
+                       "LIMIT 1").fetchone()[0]
+    con.execute("DELETE FROM documents WHERE uid=?", (gone,))
+    con.close()
+    _build(root, corpus_dir, records_per_shard=2)
+    shard = col.shard_dir_of(root, "gutenberg")
+    kept = sorted(p.name for p in (shard / "records").rglob("*.2026-08.jsonl.zst"))
+    assert kept, "the build kept 2026-08's versions under their superseded names"
+    return root, first, shard, _parts(root)
+
+
+def test_a_discard_after_a_build_moves_its_own_versions_never_the_build_s(isolated_config, tmp_path, corpus_dir):
+    root, first, shard, before = _rebuilt_after(tmp_path, corpus_dir)
+    new = {k: v for k, v in before.items() if ".2026-08." not in k}
+    said = _discard(root, dry_run=True)
+    assert said["superseded_name"] >= 1 and said["not_held"] == 0
+    _discard(root)
+    assert _parts(root) == new, "the build's parts stay at their paths; no superseded name is left"
+    away = discard_mod.discarded_dir(root, "gutenberg", "2026-08")
+    for e in first.shards:
+        assert (away / e.path).stat().st_size == e.bytes, "each of 2026-08's own versions, at its path"
+    again = sn.create(root, "gutenberg", snapshot_id="2026-08", log=lambda *_: None)
+    assert all((shard / e.path).stat().st_size == e.bytes for e in again.shards)
+
+
+def test_a_discard_made_the_old_way_is_repaired(isolated_config, tmp_path, corpus_dir):
+    """The discard before the fix moved the parts at their PATHS: the build's.
+    The snapshot made after it lists parts the SHARD no longer has; `repair`
+    brings them back and puts 2026-08's own versions aside."""
+    root, first, shard, before = _rebuilt_after(tmp_path, corpus_dir)
+    away = discard_mod.discarded_dir(root, "gutenberg", "2026-08")
+    import os
+    for rel, _root, size in discard_mod._entries(first):            # the old discard, by path
+        if (shard / rel).is_file():
+            (away / rel).parent.mkdir(parents=True, exist_ok=True)
+            os.replace(shard / rel, away / rel)
+    (away / "snapshots").mkdir(parents=True, exist_ok=True)
+    os.replace(shard / "snapshots" / "2026-08.json", away / "snapshots" / "2026-08.json")
+    sig = shard / "snapshots" / "2026-08.sig.json"
+    if sig.is_file():
+        os.replace(sig, away / "snapshots" / "2026-08.sig.json")
+    # the snapshot made after it lists the build's parts (made here with them
+    # in place, then they go where the old discard had put them)
+    moved = [rel for rel, _r, _s in discard_mod._entries(first) if (away / rel).is_file()]
+    for rel in moved:
+        os.replace(away / rel, shard / rel)
+    again = sn.create(root, "gutenberg", snapshot_id="2026-08", log=lambda *_: None)
+    for rel in moved:
+        os.replace(shard / rel, away / rel)
+    lost = [e.path for e in again.shards if not (shard / e.path).is_file()]
+    assert lost, "the reconcile's refusal: the latest snapshot's parts are not at their paths"
+    plan = discard_mod.repair(root, "gutenberg", "2026-08")
+    assert plan["applied"] is False and plan["back"] + plan["linked"] == len(lost) and plan["not_found"] == 0
+    discard_mod.repair(root, "gutenberg", "2026-08", dry_run=False)
+    assert all((shard / e.path).stat().st_size == e.bytes for e in again.shards)
+    assert not list(shard.rglob("*.2026-08.jsonl.zst")), "no superseded name left in the SHARD"
+    for e in first.shards:
+        assert (away / e.path).stat().st_size == e.bytes
+    again2 = discard_mod.repair(root, "gutenberg", "2026-08")
+    assert again2["back"] == again2["linked"] == again2["aside"] == 0, "idempotent"
