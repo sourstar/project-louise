@@ -663,13 +663,11 @@ def fetch_unit(base: str, celex: str, lang: str, dest: Path, *,
                 files[name] = r.content
         if form == "fmx4":
             try:
-                text_wrapper = formex.own_wrapper(files, celex, files.__getitem__)
+                formex.own_wrapper(files, celex, files.__getitem__)
             except formex.FormexError as e:
                 raise TransportError(f"cellar: {celex} ({code}): {e}") from None
-            stated = re.search(rb"<LG\.DOC>\s*([A-Z]{2})\s*</LG\.DOC>", files[text_wrapper])
-            if stated and stated.group(1).decode().lower() != lang:
-                raise TransportError(f"cellar: asked for {celex} in {lang}, its Formex is in "
-                                     f"{stated.group(1).decode().lower()}")
+            # a text in another language under this one's expression lands as
+            # the origin files it; the parser labels it (operator, 2026-11-16, B)
         tree = rdf.scope(full, code)
         files[NOTICE] = notice_bytes
         files[rdf.TREE_FILE] = rdf.dumps(tree)
@@ -725,13 +723,11 @@ def fetch_unit_from_tree(base: str, celex: str, lang: str, dest: Path, *,
                                   f"{it.name} of {celex} ({code})", charge=count).content
         if form == "fmx4":
             try:
-                text_wrapper = formex.own_wrapper(files, celex, files.__getitem__)
+                formex.own_wrapper(files, celex, files.__getitem__)
             except formex.FormexError as e:
                 raise TransportError(f"cellar: {celex} ({code}): {e}") from None
-            stated = re.search(rb"<LG\.DOC>\s*([A-Z]{2})\s*</LG\.DOC>", files[text_wrapper])
-            if stated and stated.group(1).decode().lower() != lang:
-                raise TransportError(f"cellar: asked for {celex} in {lang}, its Formex is in "
-                                     f"{stated.group(1).decode().lower()}")
+            # a text in another language under this one's expression lands as
+            # the origin files it; the parser labels it (operator, 2026-11-16, B)
         files[rdf.TREE_FILE] = rdf.dumps(scoped)
         _land(dest, files)
         return Fetched(files={n: len(b) for n, b in files.items()}, moved=moved)

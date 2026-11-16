@@ -184,8 +184,11 @@ def test_validity_takes_one_version_per_work_and_language(corpus):
 
 
 def test_the_language_is_read_from_the_origin_and_a_mismatch_refused(corpus):
+    """The English notice and text in a French unit: the origin's expression
+    is English, so it is not this slice's — refused. (A French expression
+    holding an English text is held and labelled: tests/test_eurlex_own_wrapper.py.)"""
     _unit(corpus, "fr", ACT, ACT, _notice_for(ACT))
-    with pytest.raises(UnindexableDocument, match="in 'en', the slice lang=fr"):
+    with pytest.raises(UnindexableDocument, match="the notice's expression is ENG, the slice lang=fr"):
         _doc(corpus, ACT, "fr")
 
 

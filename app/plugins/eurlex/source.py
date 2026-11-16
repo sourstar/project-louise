@@ -237,7 +237,7 @@ OPEN_END = "9999-12-31"
 EXTRA_KEYS = tuple(k for k in eli.EXTRA_KEYS if k != "eli_uri_schema") + (
     eli.IN_FORCE,
     # identity and the version this record is
-    "celex", "work_celex", "language", "language_code", "version_key", "valid_from",
+    "celex", "work_celex", "language", "language_code", "text_language", "version_key", "valid_from",
     "validity_work", "authentic", "sector", "resource_type",
     # the dates and the force status, as the notice states them
     "date_document", "entry_into_force", "end_of_validity", "last_modified",
@@ -270,6 +270,9 @@ ISSUES = {
                                  "original, or the reverse; the CELEX decides the version",
     "no-text-layer": "page(s) of the act's PDF hold no text (a scan): the PDF is held whole in the "
                      "unit, its text is what the other pages give",
+    "text-in-another-language": "the origin files a text in another language under this language's "
+                                "expression: held in this language's slice, the record's language "
+                                "the text's (operator, 2026-11-16, B)",
 }
 
 
@@ -666,15 +669,29 @@ class EurlexSource:
         except formex.FormexError as e:
             raise UnindexableDocument(f"{unit}: {e}") from None
         # RULE 2: the record is what the origin returned. A unit whose
-        # notice or text is another act, or another language, is refused —
-        # never filed under the slice it was asked for
+        # notice or tree is another act's, or another language's expression,
+        # is refused — never filed under the slice it was asked for
         if note.celex != celex:
             raise UnindexableDocument(f"{unit}: the notice is {note.celex}'s, the unit {celex}'s")
-        if act.language != lang:
-            raise UnindexableDocument(f"{unit}: the Formex text is in {act.language!r}, the slice lang={lang}")
         if note.display_language and note.display_language != lang3(lang):
             raise UnindexableDocument(f"{unit}: the notice's expression is {note.display_language}, "
                                       f"the slice lang={lang}")
+        # A TEXT IN ANOTHER LANGUAGE UNDER THIS ONE'S EXPRESSION (operator,
+        # 2026-11-16, B; München: L_2015192IT.01001901, Council Implementing
+        # Decision (EU) 2015/1182 in English as the Italian expression — it 5,
+        # hr 4): held, as the origin files it, in this language's slice, with
+        # the TEXT's language as the record's and the issue on it — never
+        # refused (invariant 11: nothing the origin gives is left out) and
+        # never passed off as this language's text. Only where the origin's
+        # own expression is this one (the tree's), and the text's language
+        # is one of the 24.
+        text_lang = act.language
+        if text_lang != lang:
+            if not note.display_language or text_lang not in LANGUAGES:
+                raise UnindexableDocument(f"{unit}: the Formex text is in {text_lang!r}, the slice lang={lang}")
+            found.append(Issue("text-in-another-language",
+                               f"the origin's {lang3(lang)} expression holds a text in {text_lang} "
+                               f"({act.body_file} states LG.DOC {text_lang.upper()})"))
         expr = version_key(celex)
         consolidated = expr != "ORIGINAL"
         if consolidated != (act.root == "CONS.ACT"):
@@ -739,6 +756,8 @@ class EurlexSource:
             "work_celex": work,
             "language": lang,
             "language_code": lang3(lang),
+            # the text's own language where the origin filed another under this one
+            "text_language": text_lang if text_lang != lang else None,
             "version_key": expr,
             "valid_from": valid_from,
             "validity_work": f"{work}/{lang}",
@@ -786,7 +805,7 @@ class EurlexSource:
             uid=f"{self.source_id}:{raw.ref.native_id}",
             title=act.title or note.expression_title or celex,
             creators=list(note.creators),
-            language=lang,
+            language=text_lang,
             date=act.date or note.date_document,
             subjects=list(note.subjects),
             # 05 §5.2: only ids a reference source registers — `celex`
