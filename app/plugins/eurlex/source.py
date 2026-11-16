@@ -390,11 +390,15 @@ def _unit_day(unit: Path, celex: str, entries: list[os.DirEntry], tree_facts: bo
     m = _CONSOLIDATED.match(celex)
     if m:
         return formex.iso(m["date"])
-    for e in entries:
-        if formex.is_wrapper(e.name):
-            with open(e.path, "rb") as f:
-                got = _PUB_DATE.search(f.read(_HEAD))
-            return formex.iso(got.group(1).decode()) if got else None
+    paths = {e.name: e.path for e in entries}
+    try:
+        own = formex.own_wrapper(paths, celex, lambda n: Path(paths[n]).read_bytes())
+    except formex.FormexError:
+        own = None                         # no wrapper, or none this act's: its work's own day below
+    if own is not None:
+        with open(paths[own], "rb") as f:
+            got = _PUB_DATE.search(f.read(_HEAD))
+        return formex.iso(got.group(1).decode()) if got else None
     if tree_facts:
         for e in entries:
             if e.name == rdf_mod.TREE_FILE:
@@ -643,7 +647,7 @@ class EurlexSource:
         stated_lang = notice_mod.CODE_OF.get(note.display_language or "", lang)
         try:
             if form == "fmx4":
-                act = formex.parse(files)
+                act = formex.parse(files, celex)
             elif form in ("xhtml", "html"):
                 # in their names' order: an OJ item's name carries its page
                 # (`…01001401` page 14, `…01001501` page 15), the notice's order

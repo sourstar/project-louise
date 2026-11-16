@@ -662,10 +662,11 @@ def fetch_unit(base: str, celex: str, lang: str, dest: Path, *,
                                          f"the notice says {size}")
                 files[name] = r.content
         if form == "fmx4":
-            wrappers = [n for n in files if formex.is_wrapper(n)]
-            if len(wrappers) != 1:
-                raise TransportError(f"cellar: {celex} ({code}) holds {len(wrappers)} Formex wrappers, not one")
-            stated = re.search(rb"<LG\.DOC>\s*([A-Z]{2})\s*</LG\.DOC>", files[wrappers[0]])
+            try:
+                text_wrapper = formex.own_wrapper(files, celex, files.__getitem__)
+            except formex.FormexError as e:
+                raise TransportError(f"cellar: {celex} ({code}): {e}") from None
+            stated = re.search(rb"<LG\.DOC>\s*([A-Z]{2})\s*</LG\.DOC>", files[text_wrapper])
             if stated and stated.group(1).decode().lower() != lang:
                 raise TransportError(f"cellar: asked for {celex} in {lang}, its Formex is in "
                                      f"{stated.group(1).decode().lower()}")
@@ -723,10 +724,11 @@ def fetch_unit_from_tree(base: str, celex: str, lang: str, dest: Path, *,
             files[it.name] = _get(client, it.uri, _headers({"Accept-Language": code.lower()}),
                                   f"{it.name} of {celex} ({code})", charge=count).content
         if form == "fmx4":
-            wrappers = [n for n in files if formex.is_wrapper(n)]
-            if len(wrappers) != 1:
-                raise TransportError(f"cellar: {celex} ({code}) holds {len(wrappers)} Formex wrappers, not one")
-            stated = re.search(rb"<LG\.DOC>\s*([A-Z]{2})\s*</LG\.DOC>", files[wrappers[0]])
+            try:
+                text_wrapper = formex.own_wrapper(files, celex, files.__getitem__)
+            except formex.FormexError as e:
+                raise TransportError(f"cellar: {celex} ({code}): {e}") from None
+            stated = re.search(rb"<LG\.DOC>\s*([A-Z]{2})\s*</LG\.DOC>", files[text_wrapper])
             if stated and stated.group(1).decode().lower() != lang:
                 raise TransportError(f"cellar: asked for {celex} in {lang}, its Formex is in "
                                      f"{stated.group(1).decode().lower()}")

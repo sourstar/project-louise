@@ -20,6 +20,20 @@ measured (published figures disagree).
 
 ### 2026-11-16
 
+- **EUR-Lex: the act's own Formex wrapper** (app/plugins/eurlex/formex.py `own_wrapper`; München's facts
+  from the dump of 2026-11-15). 1,232 Croatian units were refused as "two wrappers" (it: 1, every other
+  language 0–26): a Croatian Special Edition volume gives ONE fmx4 manifestation whose items are the
+  files of two acts sharing its FIN.ID (32009L0045's lists 32011D0291's wrapper and body; 32009R0573's
+  lists 21990A0315(01)'s). The act's text is now the wrapper whose NO.CELEX is its own, when exactly one
+  is; the other act's files stay items of the unit (invariant 11). The same rule in the dump builder,
+  `fetch_unit`/`fetch_unit_from_tree`, the parser, the unit's day (the foreign wrapper sorted first
+  would have given 32009R0573 a 1990 day, so a wrong native id) and the refs' publication date. No
+  parser bump: every unit the old reading accepted reads byte for byte the same, and no unit it refused
+  was ever landed; EUR-Lex4 has no records yet. OWED on the node: the dump build again for the
+  languages with formex-refused > 0 (held units are skipped). 5 Italian units (and 4 Croatian) whose
+  wrapper states EN hold an ENGLISH body under the Italian expression (L_2015192IT.01001901: Council
+  Implementing Decision (EU) 2015/1182 in English): still refused, a question to the operator.
+
 - **EUR-Lex history on request** (app/ask/history.py; 05 §5.3 amended; operator: "fetch upon request
   with a limit … and a timeout per fetch … never fails silently", "The only new part is the fetch on
   demand"). A question citing an EU act's article and asking for its past (`history`, the question's

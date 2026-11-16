@@ -335,13 +335,33 @@ def annex_names(wrapper: ET.Element) -> list[str]:
     return out
 
 
-def wrapper_of(files: dict[str, bytes]) -> tuple[str, ET.Element]:
-    names = sorted(n for n in files if is_wrapper(n))
-    if not names:
+_NO_CELEX = re.compile(rb"<NO\.CELEX>\s*([^<\s]+)\s*</NO\.CELEX>")
+
+
+def own_wrapper(names, celex: str | None, read) -> str:
+    """The wrapper of THIS act's text among a manifestation's items: the only
+    one, or — several (München, 2026-11-16: a Croatian Special Edition
+    volume, one fmx4 manifestation whose items are the files of two acts
+    sharing its FIN.ID, 1,241 Croatian works) — the one whose NO.CELEX is the
+    act's own, and only when exactly one is. The other act's files stay items
+    of the unit (the origin lists them under this manifestation: invariant
+    11); only this one is read. `read(name)` gives a wrapper's bytes."""
+    wrappers = sorted(n for n in names if is_wrapper(n))
+    if not wrappers:
         raise FormexError("no wrapper (….doc.xml) among the manifestation's items")
-    if len(names) > 1:
-        raise FormexError(f"two wrappers among the items: {names}")
-    return names[0], _parse(files[names[0]], names[0])
+    if len(wrappers) == 1:
+        return wrappers[0]
+    want = (celex or "").encode()
+    own = [n for n in wrappers if want and want in {m.group(1) for m in _NO_CELEX.finditer(read(n))}]
+    if len(own) != 1:
+        raise FormexError(f"{len(wrappers)} wrappers among the items ({', '.join(wrappers)}), "
+                          f"{'none' if not own else len(own)} naming {celex or 'the act'} as its NO.CELEX")
+    return own[0]
+
+
+def wrapper_of(files: dict[str, bytes], celex: str | None = None) -> tuple[str, ET.Element]:
+    name = own_wrapper(files, celex, files.__getitem__)
+    return name, _parse(files[name], name)
 
 
 def _date_iso(e: ET.Element | None) -> str | None:
@@ -465,10 +485,11 @@ def attributes_of(root: ET.Element) -> list[list]:
     return [[e.tag, dict(e.attrib)] for e in root.iter() if isinstance(e.tag, str) and e.attrib]
 
 
-def parse(files: dict[str, bytes]) -> Act:
-    """The manifestation's items by name → the act. Raises FormexError when
+def parse(files: dict[str, bytes], celex: str | None = None) -> Act:
+    """The manifestation's items by name → the act (`celex`'s, where the
+    items hold more than one act: `own_wrapper`). Raises FormexError when
     the wrapper, the body or an annex it names is missing or unreadable."""
-    wname, wrapper = wrapper_of(files)
+    wname, wrapper = wrapper_of(files, celex)
     bname = body_name(wrapper)
     if bname not in files:
         raise FormexError(f"the wrapper names the body {bname}, which is not among the items")

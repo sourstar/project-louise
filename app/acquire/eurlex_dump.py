@@ -294,9 +294,12 @@ def build_chunk(mtd_paths: tuple[str, ...], uuids: list[str], langs: list[tuple[
                 c["unreadable"] += 1
                 continue
             if form == "fmx4":
-                wrappers = [n for n in files if formex.is_wrapper(n)]
-                stated = _LG_DOC.search(files[wrappers[0]]) if len(wrappers) == 1 else None
-                if len(wrappers) != 1 or (stated and stated.group(1).decode().lower() != lang):
+                try:
+                    text_wrapper = formex.own_wrapper(files, celex, files.__getitem__)   # cellar's rule
+                except formex.FormexError:
+                    text_wrapper = None
+                stated = _LG_DOC.search(files[text_wrapper]) if text_wrapper is not None else None
+                if text_wrapper is None or (stated and stated.group(1).decode().lower() != lang):
                     c["formex-refused"] += 1
                     continue
             files[rdf.TREE_FILE] = rdf.dumps(scoped)
