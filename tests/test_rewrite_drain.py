@@ -17,7 +17,11 @@ def coll(tmp_path, name="normattiva"):
     return SimpleNamespace(name=name, lance_dir=tmp_path / name / "lance")
 
 
-def test_a_write_during_a_rewrite_is_a_deferral(tmp_path):
+def test_a_write_during_a_rewrite_is_a_deferral(tmp_path, monkeypatch):
+    # the writer waits REWRITE_WAIT_S (60 s) for the rewrite before deferring; the
+    # behaviour, not the minute, is under test (München, 2026-11-16: the staging
+    # suite passed its 900 s bound by 16 s, this test alone 60.00 s of it)
+    monkeypatch.setattr(vector_index, "REWRITE_WAIT_S", 0.2)
     c = coll(tmp_path)
     with vector_index.rewrite(c, drain_s=1):
         with pytest.raises(vector_index.RewriteInProgress) as e:
