@@ -95,28 +95,42 @@ from the record's language and date, and the answer says which reader ran.
 Operator: "A, B, C, make it part of the quality search settings and use
 them only if the returned results fall into the use case (some recent
 books may have ancient language quotes, also use the prompt as trigger)".
+Reviewed by the architecture session (through München, the same day):
+design right, five defects fixed, three rulings applied.
 
-`app/historical.py`, called from `api._answer_messages` when the request's
-`speed` is false (Quality, the default; the Ask page now sends `speed` with
-the answer as it did with the search). Per source the answer is given:
+`app/historical.py`, on BOTH answer paths when the request's `speed` is
+false (Quality, the default): `prepare` from `api._answer_messages`
+(/v1/chat/completions and the Ask page, which now sends `speed` with the
+answer), `read_sources` from `app/ask/chat.py`'s tool results (`ask chat`,
+`speed` on its body). Per source the model is given:
 
-- **when:** the passage has ≥ 2 markers of older Italian (period words such
-  as *sanza, puote, avea*; elided *'l, i'*; split *de la*; the spellings B
-  rewrites), or the record's language is an ISO 639-3 historical stage
-  (`enm`, `fro`, `gmh` …), or the question names an older period (a
-  century, *Trecento*, *medieval*, a year before 1800) and the passage has
-  one marker. Per passage, so a modern book quoting Dante is read so only
-  where it quotes.
-- **A:** the head says «older Italian» (or the stage's name) and the system
-  prompt says how to read such a source.
-- **B:** ſ→s, &/et→e, -tione→-zione (never -stione), h- words (huomo→uomo)
-  in the copy the model reads, and the head says which rules ran. The hit
-  the page and the PDF show is untouched (invariant 11).
+- **when:** the passage has ≥ 2 markers of older Italian (period words
+  such as *sanza, puote, avea*; elided *'l, ch'i'*; the lower-case split
+  preposition *de la* before a lower-case word; the spellings B rewrites,
+  but not *et*); or the record's language is an ISO 639-3 historical stage
+  (`enm`, `fro`, `gmh` …); or the work was first published before 1800
+  (`first_published`, the one date field, attached elsewhere: the WORK's
+  first publication) and this edition is the work in its own language — no
+  translator credited, `work_lang` equal where known; where the work's
+  language is not known, the year lowers the bar to one marker; or the
+  question names an older period and the passage has one marker. Per
+  passage, so a modern book quoting Dante is read so only where it quotes.
+  Not markers (the review): *dee, uopo, anco, fora*, capitalised *de la*
+  (Pedro de la Cruz), *&*, *et*.
+- **A:** the head says «older Italian» (or the stage), and "first
+  published <year>" where known; the system prompt says how to read such
+  a source, and that a quotation from a modernised source says so. In
+  `ask chat` it goes before the answer-language sentence, which stays last.
+- **B:** ſ→s, et→e (never before al., cetera, seq.), -tione→-zione (never
+  -stione), h- words (huomo, hauea …) in the copy the model reads. "&" is
+  never rewritten. The hit the page, the PDF and API clients show is
+  untouched (invariant 11).
 - **C:** an edition of the same work in the answer's language or English
-  that is among the sources given is named: "a translation of it is
-  source [k]".
-- The answer ends with one line saying which sources were read so, also
-  logged (`chat`).
+  among the sources given is named: "a translation of it is source [k]".
+- **What the reader sees:** a badge on the source (`reading` in
+  `api.source_entries` and `ask chat`'s `sources`; the Ask page's relay
+  event `reading`), never a line in the answer, which speech would speak
+  and the PDF print. The log line stays (`chat`).
 
 The markers are a heuristic of ours: no detector exists. Tests:
-`tests/test_historical.py`.
+`tests/test_historical.py`, the review's modern sentences among them.
