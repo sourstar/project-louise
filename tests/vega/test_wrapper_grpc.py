@@ -856,3 +856,102 @@ def test_a_run_with_the_canary_and_one_without_are_two_runs(make_node, vega):
     from app.vega import runs as runs_mod
     assert runs_mod.run_id(stated) == off and runs_mod.run_id(on) != off, \
         "switching it off is another run, gated on its own"
+
+
+# ---- VEGA/2: one runner call per request (docs/notes/vega-batch.md) ---------------------
+
+def _post_batch(node, items, window=None, model="vega-fake"):
+    batch = client.tag_batch(items, window=window, batched=True)
+    r = node.localai.post("/v1/embeddings", json={"model": model, "input": list(batch.inputs),
+                                                  "encoding_format": "base64"})
+    return batch, r
+
+
+def test_a_batch_is_one_runner_call_and_its_vectors_are_vega1s_bytes(make_node, vega):
+    node = make_node()
+    texts = ["hello", "wörld", "a third"]
+    one, r1 = node.embed(texts, encoding_format="base64")
+    assert r1.status_code == 200, r1.text
+    v1, _ = node.verify(one, r1)
+    lines: list[int] = []
+    put_many = vega.receipts.put_many
+    vega.receipts.put_many = lambda rs: (lines.append(len(rs)), put_many(rs))[1]
+    before = len(node.calls("Embedding"))
+    batch, r = _post_batch(node, texts)
+    assert r.status_code == 200, r.text
+    assert len(r.json()["data"]) == 1, "one input, one vector back: the items' concatenated"
+    v2, runs = node.verify(batch, r)
+    assert [struct.pack(f"<{len(v)}f", *v) for v in v2] == \
+        [struct.pack(f"<{len(v)}f", *v) for v in v1], "the same bytes as one input a call"
+    assert [c["text"] for c in node.calls("Embedding")[before:]] == texts, \
+        "each item its own backend call, in order"
+    assert lines == [3], "every receipt of the batch in ONE intake line"
+    assert len(runs) == 1
+
+
+def test_a_batchs_receipts_are_held_before_its_vector_leaves(make_node, vega):
+    node = make_node(receipt_timeout_s=10)
+    node.embed(["warm"])
+    entered, release = threading.Event(), threading.Event()
+    put_many = vega.receipts.put_many
+
+    def held(rs):
+        entered.set()
+        release.wait(10)
+        return put_many(rs)
+    vega.receipts.put_many = held
+    out: dict[str, Any] = {}
+    t = threading.Thread(target=lambda: out.update(br=_post_batch(node, ["a", "b"])))
+    t.start()
+    assert entered.wait(10), "the batch's receipts reached VeGa"
+    time.sleep(0.3)
+    assert t.is_alive() and "br" not in out, "no vector before every receipt is held"
+    release.set()
+    t.join(10)
+    batch, r = out["br"]
+    assert r.status_code == 200
+    node.verify(batch, r)
+
+
+def test_one_item_refused_refuses_the_batch(make_node):
+    node = make_node()                                  # loaded without pairs
+    _batch, r = _post_batch(node, ["fine", ("a", "pair")])
+    assert r.status_code == 500 and "a text pair" in r.text
+
+
+def test_a_service_without_the_receipts_line_is_told_them_one_by_one(make_node, vega,
+                                                                      monkeypatch):
+    real = service.handle
+
+    def old(line, *a, **kw):                  # a service from before VEGA/2
+        if json.loads(line).get("kind") == "receipts":
+            return {"ok": False, "code": "invalid",
+                    "error": "a message's kind is run, receipt, tree, passes or keeps"}
+        return real(line, *a, **kw)
+    monkeypatch.setattr(service, "handle", old)
+    node = make_node()
+    batch, r = _post_batch(node, ["x", "y"])
+    assert r.status_code == 200, r.text
+    node.verify(batch, r)
+
+
+def test_a_batch_is_cut_item_by_item_as_each_would_be_alone(make_node):
+    node = make_node(tokenizer=True)
+    texts = ["word " * 40, "short"]
+    one, r1 = node.embed(texts, window=8, encoding_format="base64")
+    assert r1.status_code == 200, r1.text
+    v1, _ = node.verify(one, r1)
+    batch, r = _post_batch(node, texts, window=8)
+    assert r.status_code == 200, r.text
+    v2, _ = node.verify(batch, r)
+    assert v1 == v2
+
+
+def test_a_malformed_batch_is_refused_before_the_backend_sees_it(make_node):
+    node = make_node()
+    node.embed(["warm"])
+    before = len(node.calls("Embedding"))
+    bad = vtag.MARK2 + '{"form":"batch","items":[]}'
+    r = node.localai.post("/v1/embeddings", json={"model": "vega-fake", "input": [bad]})
+    assert r.status_code == 500 and "1 to 1024 items" in r.text
+    assert len(node.calls("Embedding")) == before

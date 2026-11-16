@@ -123,3 +123,46 @@ def test_a_window_that_is_not_a_count_of_tokens_is_refused(window):
     body = '{"form":"text","id":"' + ID + '","text":"x","window":' + json.dumps(window) + "}"
     with pytest.raises(vtag.TagError):
         vtag.parse(vtag.MARK + body)
+
+
+# ---- VEGA/2 (docs/notes/vega-batch.md) ---------------------------------------------------
+
+A, B = "0" * 32, "1" * 32
+
+
+def test_a_batch_round_trips_and_its_items_are_vega1_objects():
+    _ids, s = vtag.tag_batch([("text", "one", None), ("pair", ("a", "b"), 7)], ids=[A, B])
+    assert s.startswith(vtag.MARK2) and vtag.is_batch(s) and not vtag.is_batch("x")
+    assert vtag.parse_batch(s) == [(A, "text", "one", None), (B, "pair", ("a", "b"), 7)]
+    body = json.loads(s[len(vtag.MARK2):])
+    one = vtag.tag("text", "one", id=A)[1]
+    assert body["items"][0] == json.loads(one[len(vtag.MARK):]), "an item IS a VEGA/1 object"
+    assert canonical_json(body).decode() == s[len(vtag.MARK2):]
+
+
+@pytest.mark.parametrize("body, why", [
+    ('{"form":"batch","items":[]}', "1 to 1024 items"),
+    ('{"form":"batch"}', "exactly"),
+    ('{"form":"batch","items":[],"x":1}', "exactly"),
+    ('{"form":"batch","items":[{"form":"batch","id":"' + A + '","items":[]}]}', "form is one of"),
+    ('{"form":"batch","items":[{"form":"text","id":"' + A + '","text":"a"},'
+     '{"form":"text","id":"' + A + '","text":"b"}]}', "share an id"),
+    ('{"items":[{"form":"text","id":"' + A + '","text":"a"}],"form":"batch"}', "canonical"),
+])
+def test_a_batch_that_is_not_one_is_refused(body, why):
+    with pytest.raises(vtag.TagError, match=why):
+        vtag.parse_batch(vtag.MARK2 + body)
+
+
+def test_a_batch_carries_at_most_the_receipts_routes_bound():
+    with pytest.raises(vtag.TagError, match="1 to 1024"):
+        vtag.tag_batch([("text", "x", None)] * (vtag.MAX_ITEMS + 1))
+    with pytest.raises(vtag.TagError, match="its own id"):
+        vtag.tag_batch([("text", "x", None)] * 2, ids=[A, A])
+
+
+def test_a_vega_marker_inside_a_batch_is_refused():
+    _ids, s = vtag.tag_batch([("text", "a", None)], ids=[A])
+    for mark in (vtag.MARK, vtag.MARK2):
+        with pytest.raises(vtag.TagError, match="inside the batch"):
+            vtag.parse_batch(s + mark)

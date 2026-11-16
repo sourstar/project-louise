@@ -6,6 +6,8 @@ descriptions from the wrappers, and Louise reads them.
              One JSON object a line each way, canonical JSON (09 §9.1):
                → {"kind": "run", "run_id": …, "run": {driver, engine, weights}}
                → {"kind": "receipt", "id", "run_id", "input_digest", "vector_digest"}
+               → {"kind": "receipts", "run_id", "receipts": [{"id", "input_digest",
+                  "vector_digest"}, …]}  a VEGA/2 batch's, all held or none
                → {"kind": "tree", "image": …, "tree": {<path>: <entry>, …}}
                → {"kind": "passes", "run_id": …, "ubatch": n, "inputs": n,
                   "over": n, "longest": n, "buckets": {"256": n, …, "more": n}}
@@ -105,7 +107,7 @@ import time
 from collections import OrderedDict
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Any, Callable, Iterable, Mapping
+from typing import Any, Callable, Iterable, Mapping, Sequence
 
 from fastapi import APIRouter, FastAPI, HTTPException, Query
 
@@ -207,6 +209,34 @@ class ReceiptStore:
                 self._items.popitem(last=False)
             self._items[r["id"]] = (now + self.ttl_s, r)
             return True
+
+    def put_many(self, receipts: Sequence[Mapping[str, str]]) -> int:
+        """A VEGA/2 batch's receipts, ALL OR NONE (docs/notes/vega-batch.md):
+        every id checked first — the same receipt again is fine, another one
+        under a held id, or two of one id in the batch, refuses the whole
+        line and stores nothing. Returns how many were new."""
+        rs = [{k: r[k] for k in RECEIPT_KEYS} for r in receipts]
+        with self._lock:
+            now = self.clock()
+            self._expire(now)
+            seen: dict[str, dict[str, str]] = {}
+            for r in rs:
+                if r["id"] in seen and seen[r["id"]] != r:
+                    raise Refused(CONFLICT, "two receipts of the batch hold one id: an id is "
+                                            "one-time")
+                seen[r["id"]] = r
+                held = self._items.get(r["id"])
+                if held is not None and held[1] != r:
+                    raise Refused(CONFLICT, "another receipt holds this id: an id is one-time")
+            new = 0
+            for i, r in seen.items():
+                if i in self._items:
+                    continue
+                while len(self._items) >= self.max_receipts:
+                    self._items.popitem(last=False)
+                self._items[i] = (now + self.ttl_s, r)
+                new += 1
+            return new
 
     def get(self, ids: Iterable[str]) -> list[dict[str, str]]:
         with self._lock:
@@ -428,6 +458,29 @@ def _receipt(msg: dict[str, Any]) -> dict[str, str]:
     return {k: msg[k] for k in RECEIPT_KEYS}
 
 
+#: a VEGA/2 batch's receipts line: one run, at most this many receipts (the
+#: tag's own bound, app/vega/tag.py MAX_ITEMS; a test holds the two equal)
+MAX_BATCH_RECEIPTS = 1024
+BATCH_RECEIPT_KEYS = ("id", "input_digest", "vector_digest")
+
+
+def _receipts(msg: dict[str, Any]) -> list[dict[str, str]]:
+    """The receipts of a `receipts` line, each with the line's run."""
+    if set(msg) != {"kind", "run_id", "receipts"}:
+        raise Refused(INVALID, "a receipts line is exactly kind, run_id, receipts")
+    if not isinstance(msg["run_id"], str) or not DIGEST.fullmatch(msg["run_id"]):
+        raise Refused(INVALID, "a receipts line's run_id is a digest, sha256:<64 hex>")
+    items = msg["receipts"]
+    if not isinstance(items, list) or not 1 <= len(items) <= MAX_BATCH_RECEIPTS:
+        raise Refused(INVALID, f"a receipts line carries 1 to {MAX_BATCH_RECEIPTS} receipts")
+    out = []
+    for r in items:
+        if not isinstance(r, dict) or set(r) != set(BATCH_RECEIPT_KEYS):
+            raise Refused(INVALID, f"a batch receipt is exactly {', '.join(BATCH_RECEIPT_KEYS)}")
+        out.append(_receipt({"kind": "receipt", "run_id": msg["run_id"], **r}))
+    return out
+
+
 def handle(line: bytes, receipts: ReceiptStore, runs: Runs, passes: Passes | None = None,
            notes: list[str] | None = None, keeps: Keeps | None = None) -> dict[str, Any]:
     """One intake message, one answer. The answer to a receipt is `ok` only
@@ -455,6 +508,12 @@ def handle(line: bytes, receipts: ReceiptStore, runs: Runs, passes: Passes | Non
                 raise Refused(UNKNOWN_RUN, "the receipt names a run this service was never "
                                            "told: send the run first")
             receipts.put(r)
+        elif kind == "receipts":
+            rs = _receipts(msg)
+            if not runs.known(msg["run_id"]):
+                raise Refused(UNKNOWN_RUN, "the receipts name a run this service was never "
+                                           "told: send the run first")
+            receipts.put_many(rs)
         elif kind == "tree":
             if set(msg) != {"kind", "image", "tree"}:
                 raise Refused(INVALID, "a tree message is exactly kind, image, tree")
@@ -476,7 +535,7 @@ def handle(line: bytes, receipts: ReceiptStore, runs: Runs, passes: Passes | Non
         else:
             # the wrapper reads "kind is run, receipt" as a service that does
             # not take a count, and stops sending it
-            raise Refused(INVALID, "a message's kind is run, receipt, tree, passes or keeps")
+            raise Refused(INVALID, "a message's kind is run, receipt, receipts, tree, passes or keeps")
     except Refused as e:
         return {"ok": False, "code": e.code, "error": str(e)}
     return {"ok": True}
