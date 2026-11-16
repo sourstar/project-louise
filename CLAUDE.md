@@ -334,6 +334,27 @@ are the ones that have drifted; prefer to add a test when you touch them.
     not yet checked by the wrapper.
 
 ## Engineering rules (blocking in review; each one was paid for)
+- **A COLLECTION HOLDS ONLY THE INFORMATION CONTAINED IN ITS CORPUS — A
+  FUNDAMENTAL RULE** (operator, 2026-10-18: "we would rely on another
+  collection instead of on the source"; restated 2026-11-16, verbatim: "NO!
+  A collection has only the information contained in its corpus", "THIS IS
+  A FUNDAMENTAL FUCKING RULE"). Every field of a record, every fact a
+  result shows (a title, a date, `first_published`, a language, a stage, a
+  key) and every claim a build derives comes from the collection's OWN
+  corpus — its records and its original files (an ebook's text, its
+  catalogue entry, a dump's own tables) — or is ABSENT. Never from another
+  collection, never from an outside source (Wikidata, Open Library,
+  HathiTrust, a web lookup), however much better its coverage: a
+  collection must be reproducible and verifiable from its own origin alone
+  (invariant 11). Where the corpus does not state a fact, the result does
+  not show it; the answer to low coverage is to look deeper INTO the corpus
+  (2026-11-16: Gutenberg's first publication is stated only by its own
+  marc520 summaries, ~12 % of books), never to import it. Collections meet
+  at ASK time only — relations, keys, annotations claims read as facts —
+  and an annotations collection's corpus is its claims (whether it may
+  take claims from an outside source is the operator's decision, asked
+  2026-11-16). Proposing an outside source for a collection's data is
+  itself the error: do not offer it as an option.
 - **"Fix it after" is NEVER an option** (docs/01, promise 8). A known
   defect is fixed before anything else proceeds — before the feature it
   blocks, before the run already queued, before the deploy that is
