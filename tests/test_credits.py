@@ -15,10 +15,13 @@ def _coll(plugin, *entries):
     return SimpleNamespace(name=plugin, plugin=plugin, codex=SimpleNamespace(credits=cs))
 
 
-def test_eurlex_credits_its_corpus_and_eurovoc():
+def test_eurlex_credits_its_corpus_and_no_reference_it_does_not_show():
+    """A credit follows what is shown (CLAUDE.md, 2026-11-16: a collection
+    holds only the information contained in its corpus): EuroVoc's goes
+    beside a label shown at ask time, never on every result."""
     got = credits.of(_coll("eurlex", ("corpus", EURLEX.corpus_attribution)))
-    assert got == [EURLEX.corpus_attribution, eurovoc.ATTRIBUTION]
-    assert "© European Union" in got[0] and "Decision 2011/833/EU" in got[1]
+    assert got == [EURLEX.corpus_attribution] and "© European Union" in got[0]
+    assert "Decision 2011/833/EU" in eurovoc.ATTRIBUTION
 
 
 def test_another_collection_credits_its_corpus_and_archives_each_once():
