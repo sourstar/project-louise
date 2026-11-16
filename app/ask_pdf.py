@@ -150,6 +150,9 @@ class PdfReference(BaseModel):
     moved_by: list[Short] = Field(default_factory=list, max_length=8)
     #: the pictures shown under the entry, in the page's order
     plates: list[PdfPlate] = Field(default_factory=list, max_length=MAX_PLATES)
+    #: whether the answer was given this source; None: not said (2026-11-16:
+    #: the chat model's context holds the first sources, api._fit_answer)
+    read: bool | None = None
 
 
 class AskPdf(BaseModel):
@@ -475,6 +478,7 @@ def build_html(doc: AskPdf, *, base_url: str, node: str, when: datetime,
             "reader_url": reader_url(base_url, r.collection, r.book, r.chunk),
             "moved_by": [m.strip() for m in r.moved_by if m.strip()],
             "cited": r.n in cites,
+            "unread": r.read is False,
             "plates": [plate_shown(p, budget) for p in r.plates],
         })
     return _ENV.get_template("pdf/answer.html").render(
@@ -587,7 +591,8 @@ def _reference(n: int, hit: dict, names: dict[str, str]) -> PdfReference:
         passage=_cut(hit.get("passage") if hit.get("passage") is not None else hit.get("text"), MAX_PASSAGE),
         origin_url=_cut(hit.get("origin_url"), 4096) or None,
         book=book, chunk=_cut(hit.get("chunk_id"), 512) if book else None,
-        plates=_hit_plates(hit, hit.get("source_collection") or name))
+        plates=_hit_plates(hit, hit.get("source_collection") or name),
+        read=hit["read"] if isinstance(hit.get("read"), bool) else None)
 
 
 def _hit_plates(hit: dict, collection: str | None) -> list[PdfPlate]:

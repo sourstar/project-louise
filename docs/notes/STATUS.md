@@ -20,6 +20,15 @@ measured (published figures disagree).
 
 ### 2026-11-16
 
+- **The answer fits the chat model's context; a refused chat says why** (München, 2026-11-16: "Scandali
+  nei diari di Sanuto" asked 17,455 tokens of a 16,384 context; the reader saw a bare 400). The prompt is
+  sized before the call (app/api.py `_fit_answer`: passages dropped from the end, then prior turns, at
+  llm.CHARS_PER_TOKEN 3.0), and where the server still counts it over, asked again smaller at THIS
+  prompt's own rate (`_refit`, up to 3 tries, before any word goes out; Sanuto ran ~1.6 chars a token).
+  The reader still sees every source; each says whether the answer read it (`read`, a "not read by the
+  answer" badge on the page and in the PDF). Every chat call raises `llm.ChatRefused` with the server's
+  reason (≤ 300 chars), `ContextExceeded` with its two counts. One set of context numbers for the answer
+  path and the MCP loop (app/llm.py). Web deploy on the operator's word.
 - **VEGA/2: one runner call per embedding request — BUILT, not deployed** (operator: "W";
   docs/notes/vega-batch.md). One tagged input carries a request's items, each a VEGA/1 object. The
   wrapper embeds the items one by one on parallel:1, so the bytes are VEGA/1's, then delivers all their

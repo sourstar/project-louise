@@ -1669,18 +1669,20 @@ CITE_REMINDER = ("After each statement, cite the source it rests on by its numbe
 ANSWER_SOURCE_CHARS = 24_000
 
 
-def answer_hits_shown(hits: list[dict]) -> int:
-    """How many of `hits` the answer is given: the passages up to
-    ANSWER_SOURCE_CHARS, the first always."""
+def answer_hits_shown(hits: list[dict], budget: int = ANSWER_SOURCE_CHARS) -> int:
+    """How many of `hits` the answer is given: the passages up to `budget`
+    characters (ANSWER_SOURCE_CHARS, or less where the chat model's context
+    is short of room, app/api.py `_fit_answer`), the first always."""
     spent = 0
     for i, h in enumerate(hits, 1):
         spent += len(h["text"][:1800])
-        if i > 1 and spent > ANSWER_SOURCE_CHARS:
+        if i > 1 and spent > budget:
             return i - 1
     return len(hits)
 
 
-def build_answer_messages(query: str, result: dict, answer_lang: str | None = None) -> list[dict]:
+def build_answer_messages(query: str, result: dict, answer_lang: str | None = None, *,
+                          source_chars: int = ANSWER_SOURCE_CHARS) -> list[dict]:
     """`answer_lang` (an ISO code, STATUS 5j "show results in"): the model
     answers in that language directly — cheaper than translating the
     answer afterwards, and the [n] citations stay aligned.
@@ -1696,7 +1698,7 @@ def build_answer_messages(query: str, result: dict, answer_lang: str | None = No
         reached = (f"\nreached from {via['from']} through {via['link']} ({via['on']})"
                    if via else "")
         blocks.append(f"[reference] {label} — {fact['entity_id']}{reached}\n{field_lines}")
-    shown_hits = result["hits"][:answer_hits_shown(result["hits"])]
+    shown_hits = result["hits"][:answer_hits_shown(result["hits"], source_chars)]
     for i, h in enumerate(shown_hits, 1):
         # numbered by position on the page, so [n] still opens hit n
         # Source-qualified location (e.g. "gutenberg:1342 CHAPTER I",

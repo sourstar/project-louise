@@ -57,6 +57,7 @@ from typing import Any
 
 import httpx
 
+from app import llm
 from app.hold.codex import CodexError
 
 MAX_ROUNDS = 6
@@ -316,12 +317,13 @@ def compact(name: str, result: Any) -> Any:
 #: 50 answers failed with a 400 once several searches' results outgrew it).
 #: The chat model's context_size (every louise-chat-* model file), the room kept
 #: for its answer (llm.chat_tools' max_tokens) and for its template's own tokens.
-CONTEXT_TOKENS = 16384
-ANSWER_TOKENS = 1500
-MARGIN_TOKENS = 512
+#: One definition with the answer path's (app/llm.py, 2026-11-16).
+CONTEXT_TOKENS = llm.CONTEXT_TOKENS
+ANSWER_TOKENS = llm.ANSWER_TOKENS
+MARGIN_TOKENS = llm.MARGIN_TOKENS
 #: characters per token assumed when sizing a request: low on purpose, so the
 #: estimate errs large (European text runs ~4; a refused request is the fault)
-CHARS_PER_TOKEN = 3.0
+CHARS_PER_TOKEN = llm.CHARS_PER_TOKEN
 #: what is left of a tool answer that is not a search's, once slimmed
 SLIM_CHARS = 1200
 SLIMMED_TEXT = "(slimmed: the texts dropped to fit the context)"

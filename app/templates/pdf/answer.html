@@ -88,7 +88,7 @@
 {% for r in refs %}
 <div class="ref{% if not r.cited %} uncited{% endif %}" id="ref-{{ r.n }}"><span class="num">[{{ r.n }}]</span><div class="body">
   <div class="title" dir="auto">{{ r.title }}{% if r.title_original %} <span class="orig">— original title: {{ r.title_original }}</span>{% endif %}</div>
-  <div class="facts"><span class="tag{% if r.cited %} cited{% endif %}">{{ 'cited' if r.cited else 'not cited in the answer' }}</span>
+  <div class="facts"><span class="tag{% if r.cited %} cited{% endif %}">{{ 'cited' if r.cited else ('not read by the answer' if r.unread else 'not cited in the answer') }}</span>
     {%- if r.collection %}<span class="tag">{{ r.collection }}</span>{% endif %}
     {%- if r.lang_name %}<span class="tag">{{ r.lang_name }}</span>{% endif %}
     {%- if r.authors %} {{ r.authors }}{% endif %}
