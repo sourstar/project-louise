@@ -26,7 +26,7 @@ WHEN, per source, and only under Quality (Speed skips it all) — THE
 HYBRID (operator's "B", 2026-11-16): whether a WORK is in an older stage
 is an annotation, the `language-stage` claim (09 §9.5), attached to the hit
 as a fact (`language_stage`, app/ask/annotations.py: a person's claim over
-Wikidata's over the matcher's). So:
+the matcher's; the matcher reads the collection's own corpus alone). So:
   - a record with a claim is read by its claim — its stage, or not at all
     where a person said "not an older stage";
   - a record with none is read as older language only where its PASSAGE
@@ -190,7 +190,7 @@ class Read:
     """How one source was read: its stage, why, and the rules applied."""
     n: int
     stage: str
-    #: "wikidata", "matcher", "human" (the claim's method); "text"
+    #: "matcher", "human" (the claim's method); "text"
     #: (its passage), "question", "language code"
     why: str
     rules: list[str] = field(default_factory=list)
@@ -210,7 +210,7 @@ class Read:
 
 
 #: what the badge says the stage was found by
-BY = {"wikidata": "by Wikidata", "matcher": "by its text", "human": "by hand",
+BY = {"matcher": "by its text", "human": "by hand",
       "text": "by this passage", "question": "by this passage and the question",
       "language code": "by its language code"}
 #: a claim's stage, named in plain words: the canonical ids the claims use

@@ -1680,9 +1680,10 @@ is written in an older stage of its language — `subject` the record (the
 whole work), `object` the stage's canonical id, `iso639-3:<code>` where
 the standard has the stage (`iso639-3:enm`) and a Wikidata item otherwise
 (Italian has no 639-3 stage), never a label of ours. Its method is a
-matcher (the markers of the period counted over the whole record, never
-claimed for a translation), Wikidata (the work's P407 naming the stage,
-preferred where the link is held) or a person. A PERSON CORRECTS IT: a
+matcher (the markers of the period counted over the whole record and
+what the record itself states, never claimed for a translation) or a
+person — never an outside source: "A collection has only the information
+contained in its corpus" (operator, 2026-11-16). A PERSON CORRECTS IT: a
 `human` claim on the same record is kept beside the matcher's — the claim
 is identified by (type, subject, method kind) — and wins where they are
 read; a `human` claim's `object` may be null, "not an older stage". The

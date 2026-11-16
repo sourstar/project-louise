@@ -109,8 +109,8 @@ def target_among(codex, ids: Iterable[str]):
 #: the hit's `language_stage` (05 §5.3, amended 2026-11-16)
 STAGE_FIELD = "language_stage"
 #: which method's claim is read where several speak of one record: a
-#: person's over Wikidata's over a matcher's (09 §9.5)
-STAGE_PRECEDENCE = {"human": 0, "wikidata": 1, "matcher": 2}
+#: person's over the matcher's (09 §9.5)
+STAGE_PRECEDENCE = {"human": 0, "matcher": 1}
 
 
 def _attach_stage(h: dict[str, Any], a, snapshot_id: str | None, claims) -> None:

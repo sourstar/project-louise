@@ -104,8 +104,11 @@ WORK_TYPES = (SAME_WORK, TRANSLATION_OF)
 GRAPH_TYPES = (MENTION, RELATION, COMMUNITY, LANGUAGE_STAGE)
 #: the namespaces of a stage: the ISO 639-3 code, or a Wikidata item
 STAGE_NAMESPACES = ("iso639-3", "wikidata")
-#: the methods a language-stage claim may be made by (09 §9.5)
-STAGE_METHOD_KINDS = ("matcher", "wikidata", "human")
+#: the methods a language-stage claim may be made by (09 §9.5): from the
+#: annotated collection's own corpus alone, or by a person (operator,
+#: 2026-11-16: "A collection has only the information contained in its
+#: corpus" — no Wikidata, no outside source)
+STAGE_METHOD_KINDS = ("matcher", "human")
 CLAIM_TYPES = WORK_TYPES + GRAPH_TYPES
 #: a community's edges: each member → the community claim (09 §9.14)
 MEMBER_OF = "member-of"

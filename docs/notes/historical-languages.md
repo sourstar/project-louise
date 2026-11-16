@@ -145,10 +145,12 @@ stay at answer time.
 - **The claim** `language-stage` (09 §9.5, 02 §2.10, §9.14; Codex version
   9): `subject` a record, `object` the stage's canonical id
   (`iso639-3:<code>`, or a Wikidata item where 639-3 has none), method
-  `matcher` (historical-markers 1), `wikidata` (P407) or `human`; a human
+  `matcher` (historical-markers 1) or `human` — no `wikidata`: "A
+  collection has only the information contained in its corpus" (operator,
+  2026-11-16, the same day); a human
   claim may say `object: null`, "not an older stage". Identified by (type,
   subject, method kind), so a person's and the matcher's coexist; read in
-  the order human, Wikidata, matcher. `object_hash` null; the edge
+  the order human, matcher. `object_hash` null; the edge
   `annotations:language-stage` to the stage, none for null.
 - **Where** (operator's "A"): in gutenberg-book-editions, re-created at
   version 9 (its 4,387 claims carried unchanged), title gaining "and the
@@ -172,6 +174,6 @@ stay at answer time.
   fact `language_stage` (app/ask/annotations.py); a record with a claim is
   read by it (or not at all for a person's null); a record without one is
   read by its passage alone; no year decides it (b2af94f's trigger is
-  gone). The badge names the method: "by Wikidata", "by its text", "by
-  hand", "by this passage". C also points at a modern version in the same
+  gone). The badge names the method: "by its text", "by hand", "by this
+  passage". C also points at a modern version in the same
   language ("a modern version of it is source [k]").
