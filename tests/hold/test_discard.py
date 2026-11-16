@@ -260,8 +260,12 @@ def test_a_discard_made_the_old_way_is_repaired(isolated_config, tmp_path, corpu
     sig = shard / "snapshots" / "2026-08.sig.json"
     if sig.is_file():
         os.replace(sig, away / "snapshots" / "2026-08.sig.json")
-    # the snapshot made after it lists the build's parts (made here with them
-    # in place, then they go where the old discard had put them)
+    # snapshot create now refuses parts it does not hold (the node's 3c froze
+    # them): the build's are missing at their paths
+    with pytest.raises(CodexError, match="not in the SHARD at their path and size"):
+        sn.create(root, "gutenberg", snapshot_id="2026-08", log=lambda *_: None)
+    # the snapshot the node made then lists the build's parts (made here with
+    # them in place, then they go where the old discard had put them)
     moved = [rel for rel, _r, _s in discard_mod._entries(first) if (away / rel).is_file()]
     for rel in moved:
         os.replace(away / rel, shard / rel)
