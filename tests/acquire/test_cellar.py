@@ -376,12 +376,13 @@ def test_a_refetch_replaces_the_unit_and_drops_what_the_origin_no_longer_lists(m
     assert not (dest / "stale.xml").exists()
 
 
-def test_another_language_than_asked_is_refused_and_is_the_file_s_failure(mock, tmp_path):
-    mock.units[(ACT, "fr")]["files"] = _formex(ACT, "en")          # Cellar answering English
-    with pytest.raises(TransportError, match="its Formex is in en") as e:
-        cellar.fetch_unit(mock.base, ACT, "fr", tmp_path / src.unit_rel("fr", ACT))
-    assert not engine.transient(str(e.value))
-    assert not (tmp_path / src.unit_rel("fr", ACT)).exists(), "nothing lands"
+def test_a_text_in_another_language_under_the_expression_lands_as_the_origin_files_it(mock, tmp_path):
+    """Operator, 2026-11-16, B: an English text Cellar files under the French
+    expression is held as it is — the parser labels it (`text_language`,
+    the issue), it is never refused at the fetch."""
+    mock.units[(ACT, "fr")]["files"] = _formex(ACT, "en")          # the French expression's items, in English
+    cellar.fetch_unit(mock.base, ACT, "fr", tmp_path / src.unit_rel("fr", ACT))
+    assert (tmp_path / src.unit_rel("fr", ACT)).is_dir()
 
 
 def test_an_item_of_another_size_than_the_notice_says_is_refused(mock, tmp_path, monkeypatch):

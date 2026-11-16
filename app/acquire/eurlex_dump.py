@@ -298,10 +298,15 @@ def build_chunk(mtd_paths: tuple[str, ...], uuids: list[str], langs: list[tuple[
                     text_wrapper = formex.own_wrapper(files, celex, files.__getitem__)   # cellar's rule
                 except formex.FormexError:
                     text_wrapper = None
-                stated = _LG_DOC.search(files[text_wrapper]) if text_wrapper is not None else None
-                if text_wrapper is None or (stated and stated.group(1).decode().lower() != lang):
+                if text_wrapper is None:
                     c["formex-refused"] += 1
                     continue
+                # a text in another language under this one's expression is
+                # held as the origin files it (operator, 2026-11-16, B): the
+                # parser labels it; counted here so the pass says how many
+                stated = _LG_DOC.search(files[text_wrapper])
+                if stated and stated.group(1).decode().lower() != lang:
+                    c["text-in-another-language"] += 1
             files[rdf.TREE_FILE] = rdf.dumps(scoped)
             size = sum(len(b) for b in files.values())
             pending.append((at if at is not None else root / rel, files))

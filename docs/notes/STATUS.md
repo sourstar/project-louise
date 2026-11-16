@@ -30,9 +30,15 @@ measured (published figures disagree).
   would have given 32009R0573 a 1990 day, so a wrong native id) and the refs' publication date. No
   parser bump: every unit the old reading accepted reads byte for byte the same, and no unit it refused
   was ever landed; EUR-Lex4 has no records yet. OWED on the node: the dump build again for the
-  languages with formex-refused > 0 (held units are skipped). 5 Italian units (and 4 Croatian) whose
-  wrapper states EN hold an ENGLISH body under the Italian expression (L_2015192IT.01001901: Council
-  Implementing Decision (EU) 2015/1182 in English): still refused, a question to the operator.
+  languages with formex-refused > 0 (held units are skipped).
+- **EUR-Lex: a text in another language under a language's expression is HELD, labelled** (operator, B).
+  5 Italian and 4 Croatian units hold an English body under their language's expression
+  (L_2015192IT.01001901: Council Implementing Decision (EU) 2015/1182 in English). They were refused at
+  the fetch, the dump build and the parse. Now: landed as the origin files them, in that language's slice
+  (`extra.language` = the expression's), the record's `language` the text's (`en`, so its text index is
+  English), `extra.text_language` and the issue `text-in-another-language` on it. Still refused: a unit
+  whose tree's expression is another language's, or whose text states none of the 24. The dump build
+  counts them (`text-in-another-language`). EUR-Lex4 has no records yet: no parser bump (RULE 1).
 
 - **EUR-Lex history on request** (app/ask/history.py; 05 §5.3 amended; operator: "fetch upon request
   with a limit … and a timeout per fetch … never fails silently", "The only new part is the fetch on

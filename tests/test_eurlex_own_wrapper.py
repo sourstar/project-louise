@@ -118,3 +118,46 @@ def test_the_dump_builds_the_unit_with_every_item_the_origin_lists(tmp_path, ser
     assert got["it"]["formex-refused"] == 0 and got["it"]["built"] == 2
     unit = corpus / src.unit_rel("it", FORMEX[0])
     assert {OTHER, OTHER_BODY, OWN} <= {p.name for p in unit.iterdir()}, "every item the origin lists, landed"
+
+
+# ---- a text in another language under this one's expression (operator, 2026-11-16, B) ------
+
+def _english(files: dict[str, bytes]) -> dict[str, bytes]:
+    return {n: b.replace(b"<LG.DOC>IT</LG.DOC>", b"<LG.DOC>EN</LG.DOC>") for n, b in files.items()}
+
+
+def test_an_english_text_under_the_italian_expression_is_held_and_labelled(tmp_path):
+    """München: L_2015192IT.01001901 holds Council Implementing Decision (EU)
+    2015/1182 in English as the Italian expression. Held in lang=it, the
+    record's language the text's, the issue and `text_language` on it."""
+    from app.pack import slicing
+    unit = tmp_path / src.unit_rel("it", FORMEX[0])
+    shutil.copytree(FORMEX[2], unit, ignore=shutil.ignore_patterns("notice.xml", "LEG_MTD*"))
+    for name, data in _english({p.name: p.read_bytes() for p in unit.iterdir() if p.suffix == ".xml"}).items():
+        (unit / name).write_bytes(data)
+    (ref,) = SOURCE.discover(DiscoverState(corpus_root=tmp_path))
+    doc = plugin_io.canonical_doc(SOURCE, {"native_id": ref.native_id, "path": ref.locator})
+    assert doc.language == "en" and doc.extra["language"] == "it" and doc.extra["text_language"] == "en"
+    assert "text-in-another-language" in [i.code for i in doc.issues]
+    assert slicing.eurlex_slice(doc, int(ref.native_id)).startswith("lang=it/"), "the expression's slice"
+    plain = tmp_path / "plain"
+    shutil.copytree(FORMEX[2], plain / src.unit_rel("it", FORMEX[0]),
+                    ignore=shutil.ignore_patterns("notice.xml", "LEG_MTD*"))
+    (pref,) = SOURCE.discover(DiscoverState(corpus_root=plain))
+    same = plugin_io.canonical_doc(SOURCE, {"native_id": pref.native_id, "path": pref.locator})
+    assert same.language == "it" and "text_language" not in same.extra
+    assert "text-in-another-language" not in [i.code for i in same.issues]
+
+
+def test_the_dump_builds_an_english_text_under_the_italian_expression_and_counts_it(tmp_path, serial):  # noqa: F811
+    dump = _dump(tmp_path / "dump")
+    fmx = dump / "datadump-it" / "LEG_IT_FMX.zip"
+    with zipfile.ZipFile(fmx) as z:
+        held = {i.filename: z.read(i) for i in z.infolist()}
+    with zipfile.ZipFile(fmx, "w") as z:
+        for name, data in _english(held).items():
+            z.writestr(name, data)
+    got = eurlex_dump.build(dump, tmp_path / "corpus", ["it"], log=lambda m: None)
+    assert got["it"]["built"] == 2 and got["it"]["formex-refused"] == 0
+    assert got["it"]["text-in-another-language"] == 1
+
