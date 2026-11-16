@@ -82,7 +82,12 @@ def _collection_embed_fn(collection):
     recipe = recipe_for(collection)
     # stored chunk texts: `embed_chunks` feeds them in their layer's form,
     # and refuses a pair layer's, whose `fields` a text alone does not carry
-    return lambda texts: embeddings.embed_chunks(collection, texts, recipe=recipe)
+    from .. import model_use
+
+    def embed(texts):
+        with model_use.not_work():          # a verification, no model's use (app/model_use.py)
+            return embeddings.embed_chunks(collection, texts, recipe=recipe)
+    return embed
 
 
 def _probe_fn(collection):

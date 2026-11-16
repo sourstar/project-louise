@@ -251,8 +251,11 @@ def verify_chunks(con, collection, chunk_ids: list[str], *, embed_fn=None,
         recipe = recipe_for(collection)
         # each chunk in its layer's form: a pair layer's carries its `fields`
         embed = lambda texts: embeddings.embed_chunks(collection, texts, recipe=recipe)  # noqa: E731
+    from .. import model_use
     try:
-        recomputed = embed([inputs[cid] for cid in targets])
+        # a verification, no model's use (app/model_use.py)
+        with model_use.not_work():
+            recomputed = embed([inputs[cid] for cid in targets])
     except Exception:
         # Transient: the endpoint is down. Leave the chunks unverified rather
         # than marking them failed — an outage is not evidence of forgery.

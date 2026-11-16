@@ -522,6 +522,9 @@ def _synthesize_call(url: str, model: str | None, out: dict, *, last: bool = Fal
         else:
             with pinned(url, [model]):
                 r = httpc.post(f"{url}/v1/audio/speech", json=out, timeout=CALL_TIMEOUT_S)
+    if r.status_code == 200:
+        from app import model_use
+        model_use.touch(url, model or out.get("model"))     # a sentence spoken (app/model_use.py)
     timing = [("synth", round((time.perf_counter() - t0) * 1000.0, 1))]
     clip = audio_ms(r.content) if r.status_code == 200 else None
     if clip is not None:

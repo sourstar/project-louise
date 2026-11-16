@@ -29,6 +29,17 @@ module is what the card does about it, on both sides:
   speech, the rerankers — and a query encoder goes only if they need its
   room, the largest first (spec 4).
 
+THE OLDEST REAL USE GOES FIRST (operator, 2026-11-16: "some embedders have
+not been used in a long time; those ones shall always be evincted instead of
+the ones that are actively used, either for embedding of for querying";
+app/model_evict.py). Before either spec's own victim — the voice before the
+search, the largest query encoder after it — the room is made from the
+loaded models the question does not use, last really used longest ago
+first. The question's query encoders were used seconds ago, so by that rule
+they are the last to go; the spec's order applies only where nothing used
+longer ago can give the room. Where it changes spec 4 ("a query encoder goes
+only if they need its room, the largest first"), the operator's rule wins.
+
 The keeper (app/resident.py `beat`) loads nothing while the claim is held,
 so nothing undoes this mid-question; the claim lingers
 dispatch.QUESTION_LINGER_S after the question's last step (spec 6), then
@@ -234,6 +245,24 @@ def _free(server: str) -> int | None:
     return int(resident._threshold(server) * total) - used
 
 
+def _lru_room(server: str, need: int, protect: set, for_what: str) -> bool:
+    """Whether `need` bytes were made to fit under the line by unloading the
+    loaded models the question does not use (`protect` stays), the OLDEST
+    REAL USE FIRST (app/model_evict.py; operator, 2026-11-16: "some embedders
+    have not been used in a long time; those ones shall always be evincted
+    instead of the ones that are actively used"). The question's own query
+    encoders were used seconds ago: by this rule they are the last to go, so
+    only where nothing used longer ago can give the room does the spec's
+    own order (spec 3: the voice; spec 4: the largest query encoder) apply,
+    as before. Never raises."""
+    try:
+        from app import model_evict
+        return bool(model_evict.make_room(server, need=need, horizon=time.time(), for_what=for_what,
+                                          protect=protect).fits)
+    except Exception:   # noqa: BLE001 — the spec's order then
+        return False
+
+
 def _answer_models(collections: Iterable[Any], *, speed: bool
                    ) -> list[tuple[str, tuple[str, str], Callable[[], object]]]:
     """(role, (server, model), warm) of what the answer meets, in that order:
@@ -295,10 +324,17 @@ def before_search(collections: Iterable[Any], *, speed: bool = False) -> str | N
             needs += size
         server = missing[0][0]
         free = _free(server)
-        tts = _tts()
-        if free is None or tts is None:
+        if free is None:
             return None
         used_by_question = set(_query_encoders(cols)) | {key for _r, key, _w in _answer_models(cols, speed=speed)}
+        # THE OLDEST REAL USE GIVES THE ROOM FIRST (operator, 2026-11-16;
+        # app/model_evict.py): what the question does not use, last used
+        # longest ago first — before the voice, and before the reclaimer
+        if _lru_room(server, needs, used_by_question, "the search's own models"):
+            return None
+        tts = _tts()
+        if tts is None:
+            return None
         held = model_load.held_sizes(server, max_age_s=0.0) or {}
         freeable = sum(b for m, (_pid, b) in held.items() if (server, m) not in used_by_question)
         if needs <= free + freeable or _loaded(*tts) is not True or model_pins.read_pinned(*tts):
@@ -335,6 +371,9 @@ def after_search(collections: Iterable[Any], *, speed: bool = False,
             sizes = [model_load.size_vram(*key) for _r, key, _w in missing]
             free = _free(server)
             need = None if free is None or any(z is None for z in sizes) else sum(sizes) - free
+            if need is not None and need > 0 and _lru_room(
+                    server, sum(sizes), {key for _r, key, _w in answer}, "the answer's models"):
+                need = 0                      # made from the models used longest ago
             encoders = [(s, m) for s, m in _query_encoders(cols)
                         if _loaded(s, m) is True and not model_pins.read_pinned(s, m)]
             encoders.sort(key=lambda k: -(model_load.size_vram(*k) or 0))

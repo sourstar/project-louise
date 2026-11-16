@@ -33,6 +33,9 @@ def test_the_check_mark_means_nothing_gates_use(collection, monkeypatch, cls, st
 
 def test_the_template_draws_the_check_mark_from_ok():
     from pathlib import Path
-    library = (Path(web.__file__).parent / "templates" / "library.html").read_text(encoding="utf-8")
+    # the card's top is its own fragment since 2026-11-16 (library.html and
+    # user_library.html both include it)
+    library = (Path(web.__file__).parent / "templates" / "_fragments"
+               / "collection_card_top.html").read_text(encoding="utf-8")
     assert "' ✓' if c.license.ok" in library
     assert "' ✓' if c.license.ack_recorded" not in library

@@ -95,6 +95,36 @@ def _applies(server: str, model: str) -> bool:
 
 
 _retry_after: dict[str, float] = {}
+#: THIS PROCESS'S OWN FRESH STAMPS, (record path, key, holder) → the stamp
+#: it last wrote (München, 2026-11-16, measured: wikidata's embed threads
+#: spent 21 % of their samples waiting on the record's file lock, two
+#: locked reads of the whole JSON per DOCUMENT — `hold` and `_touch` — when
+#: RENEW_S already meant nothing was written; documents reached the encoder
+#: too slowly to fill its requests, 4.4 texts of 16, the card ~57 % busy).
+#: A stamp younger than RENEW_S is known without the lock: nothing another
+#: process does drops a holder that recent (`reconcile` drops the silent of
+#: HOLDER_TTL_S, the worker's own idle of PIN_IDLE_S), and every drop in
+#: this process clears it (`_drop`). The standard form is a lease with a
+#: client-side cache (Chubby's, Gray & Cheriton 1989); the lease here is
+#: RENEW_S, well inside the holder's TTL.
+_fresh: dict[tuple[str, str, str], float] = {}
+_fresh_lock = threading.Lock()
+
+
+def _fresh_hit(fk: tuple[str, str, str], now: float) -> bool:
+    with _fresh_lock:
+        t = _fresh.get(fk)
+    return t is not None and 0.0 <= now - t < RENEW_S
+
+
+def _fresh_set(fk: tuple[str, str, str], t: float | None) -> None:
+    with _fresh_lock:
+        if t is None:
+            _fresh.pop(fk, None)
+        else:
+            _fresh[fk] = t
+
+
 #: the worker's holders are named so, and a new worker drops a previous one's
 WORKER = "worker "
 #: failures kept in the record for the pages; the count is kept whole
@@ -267,12 +297,16 @@ def hold(url: str | None, model: str | None, holder: str, *,
     k = _key(server, model)
     if now < _retry_after.get(k, 0.0):
         return False                 # failed under a minute ago, and said so
+    fk = (str(_path()), k, holder)
+    if _fresh_hit(fk, now):
+        return True                  # this holder's own stamp, under RENEW_S old: no lock
     try:
         with _state() as st:
             entry = st["pins"].get(k)
             if entry is not None:
                 if now - entry["holders"].get(holder, 0.0) >= RENEW_S:
                     entry["holders"][holder] = now
+                _fresh_set(fk, entry["holders"][holder])
                 return True
             prior, why = _read(server, model)
             if prior is None:
@@ -292,6 +326,7 @@ def hold(url: str | None, model: str | None, holder: str, *,
             st["pins"][k] = {"server": server, "model": model, "prior": prior,
                              "holders": {holder: now}, "collection": collection,
                              "restore_attempts": 0}
+            _fresh_set(fk, now)
             if not prior:
                 _say("info", f"model pin: {model} pinned for {holder} "
                              f"(it was unpinned; restored after)")
@@ -325,6 +360,8 @@ def _restore(st: dict, entry: dict, holder: str, now: float) -> bool:
 def _drop(st: dict, gone: Callable[[str, float], bool], now: float) -> list[tuple[str, str]]:
     """Drops the holders `gone` names; restores every entry left without one.
     Returns (model, holder) per holder dropped."""
+    with _fresh_lock:
+        _fresh.clear()               # a drop in this process: no stamp is known any more
     dropped: list[tuple[str, str]] = []
     for k in list(st["pins"]):
         entry = st["pins"][k]
@@ -528,6 +565,20 @@ def status() -> dict:
             "failures": snap["failures"], "shown": shown(snap["failures"])}
 
 
+def recorded() -> frozenset[tuple[str, str]] | None:
+    """Every (server, model) the record names — pinned for a holder (a gate,
+    a pass, an embed batch), or pinned with its restore pending: what the
+    card's eviction must never touch (app/model_evict.py). From the record
+    alone, one local read and no request per model; None when it cannot be
+    read (the eviction then unloads nothing)."""
+    try:
+        with _state() as st:
+            return frozenset((str(p.get("server")), str(p.get("model"))) for p in st["pins"].values()
+                             if isinstance(p, dict))
+    except (OSError, AttributeError):
+        return None
+
+
 #: a failure newer than this opens the card by itself; older ones wait in it, closed
 FRESH_FAILURE_S = 3600.0
 
@@ -660,7 +711,7 @@ def using(url: str | None, model: str | None, kind: str, *,
             pass
 
 
-def _touch(url: str | None, model: str | None, holder: str) -> None:
+def _touch(url: str | None, model: str | None, holder: str, *, force: bool = False) -> None:
     """Stamp `holder` now where it still holds `model`; nothing otherwise
     (a holder released meanwhile is not re-pinned by the end of its call)."""
     if not url or not model:
@@ -670,11 +721,16 @@ def _touch(url: str | None, model: str | None, holder: str) -> None:
     if not _applies(server, model):
         return
     k = _key(server, model)
+    now = time.time()
+    fk = (str(_path()), k, holder)
+    if not force and _fresh_hit(fk, now):
+        return                       # stamped under RENEW_S ago: the idle clock is that close
     try:
         with _state() as st:
             entry = st["pins"].get(k)
             if entry is not None and holder in entry["holders"]:
-                entry["holders"][holder] = time.time()
+                entry["holders"][holder] = now
+                _fresh_set(fk, now)
     except OSError:
         pass
 
@@ -698,7 +754,7 @@ def holding(url: str | None, model: str | None, holder: str, *,
 
     def beat() -> None:
         while not done.wait(HEARTBEAT_S):
-            _touch(url, model, holder)
+            _touch(url, model, holder, force=True)   # the beat is the stamp itself
     t = threading.Thread(target=beat, name="model-pin-heartbeat", daemon=True)
     t.start()
     try:

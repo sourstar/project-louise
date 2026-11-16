@@ -45,9 +45,23 @@ against the reclaimer.
   read by the GPU probe (app/gpu_probe.py through app/gpu_memory.py's
   query; the worker has no card of its own, invariant 7), the threshold
   read from LocalAI's `GET /api/settings` (`memory_reclaimer_threshold`,
-  else DEFAULT_THRESHOLD). Otherwise it waits, said once: "X stays
+  else DEFAULT_THRESHOLD). Where it does not fit, THE ROOM IS MADE BY THE
+  OLDEST REAL USE (operator, 2026-11-16: "some embedders have not been used
+  in a long time; those ones shall always be evincted instead of the ones
+  that are actively used"; app/model_evict.py): the unpinned models whose
+  last REAL use (app/model_use.py — no warm, no check) is older than this
+  model's own are unloaded, oldest first, until it fits; never one used
+  more recently, so a preload never evicts what is in use (the MADLAD
+  thrash of 2026-11-16: the reclaimer, counting this keeper's warms and the
+  run check's texts as use, took MADLAD 9 times out of 10 minutes after its
+  use, and this keeper loaded it back). Where even those would not make
+  the room, nothing is unloaded and it waits, said once: "X stays
   unloaded: the card has room for it only after space is given back". A
   card or a setting that cannot be read decides nothing: the load is made.
+  THIS CHANGES THE RULE OF 2026-11-08 ("preloaded, not pinned: the
+  reclaimer evicts the least-recently-used model") where the reclaimer's
+  LRU is not the true one: Louise chooses the victim, by true use, before
+  the reclaimer has to; the reclaimer still acts on growth past its line.
 - THE BACK-OFF (`_due`): a model this keeper loaded found off the card again
   within REEVICTED_WITHIN_S is not loaded again for 10 min, then 20, 40 …,
   capped at BACKOFF_CAP_S, and said each time with the model's tier; one
@@ -1175,7 +1189,9 @@ def beat(served: Iterable[Any], *, embed_mode: Callable[[Any], str], state: str 
     the budget measured and filled (`_remember`, `plan`), the models of it
     in the budget the runner does not list loaded — and not backing off —
     loaded behind (`_warm_all`, which checks each one's budget and room
-    again). Pins nothing, unloads nothing. Returns what it did. Never raises
+    again, and makes the room from the models used least recently, operator
+    2026-11-16). Pins nothing; unloads only for a load's room. Returns what
+    it did. Never raises
     past a model."""
     global _last, _last_why, _out_said
     sw = switches()
@@ -1271,7 +1287,9 @@ def _warm_all(items: list[Resident], stop: Callable[[], bool]) -> None:
     in the budget (`plan`, made again before each load: the load before
     may have shown a size never seen), and the card has room for it under
     the reclaimer's line (`room`, read again before each load, since the one
-    before changed it). `items` come in the budget's order, chat first
+    before changed it) — where it is short, made by unloading the models
+    whose last real use is older than this one's (`_make_room`,
+    app/model_evict.py). `items` come in the budget's order, chat first
     (`beat`). The node's mode is asked again before each: a pause stops the
     loads at the next one."""
     for r in items:
@@ -1292,20 +1310,35 @@ def _warm_all(items: list[Resident], stop: Callable[[], bool]) -> None:
             if r.key not in p.fitting:
                 continue                   # out of the budget now: loaded at its first request
         got = room(r)
+        made = None
+        if got is not None and not got.fits:
+            # THE OLDEST REAL USE GIVES WAY, AND ONLY TO A MORE RECENT ONE
+            # (operator, 2026-11-16; app/model_evict.py): the room is made by
+            # unloading the models last used before this one was — never one
+            # used since, so a preload never evicts what is actively used
+            made = _make_room(r, got)
         with _lock:
             t = _track.setdefault(r.key, _Track())
-            tell = got is not None and not got.fits and not t.waiting
-            t.waiting = got is not None and not got.fits
-        if got is not None and not got.fits:
+            short = got is not None and not got.fits and not (made is not None and made.fits)
+            tell = short and not t.waiting
+            t.waiting = short
+        if short:
             if tell:
                 _say("info", f"resident: {r.model} — {r.says()} — stays unloaded: the card has room for "
-                             f"it only after space is given back ({got.says()})")
+                             f"it only after space is given back ({got.says()})"
+                             + (f"; {made.why}" if made is not None and made.why else ""))
             continue
         _say("info", f"resident: loading {r.model} — {r.says()} (not on the card"
-                     + (f"; {got.says()}" if got is not None else "") + ")")
+                     + (f"; {got.says()}" if got is not None else "")
+                     + (f"; room made: {', '.join(made.unloaded)} unloaded" if made is not None and made.unloaded
+                        else "") + ")")
         t0 = time.monotonic()
         try:
-            r.warm()
+            from app import model_evict, model_use
+            # a preload is no use of the model (app/model_use.py), and its room
+            # is made above: the cold-load hook does not make it again
+            with model_use.not_work(), model_evict.room_made():
+                r.warm()
         except Exception as e:   # noqa: BLE001 — a load never takes the keeper down
             _say("warn", f"resident: {r.model} — {r.says()} — not loaded after "
                          f"{time.monotonic() - t0:.1f} s ({type(e).__name__}: {str(e)[:200]}); "
@@ -1313,6 +1346,17 @@ def _warm_all(items: list[Resident], stop: Callable[[], bool]) -> None:
             continue
         with _lock:
             _track.setdefault(r.key, _Track()).warmed_at = _now()
+
+
+def _make_room(r: Resident, got: Room):
+    """`model_evict.make_room` for the preload of `r`: horizon its own last
+    real use (never used: nothing used gives way to it). Never raises."""
+    from app import model_evict
+    try:
+        return model_evict.make_room(r.server, need=got.needs, horizon=_last_used().get(r.key),
+                                     for_what=f"the preload of {r.model}", exclude=(r.model,))
+    except Exception:   # noqa: BLE001 — nothing made: the room check's word stands
+        return None
 
 
 def clear() -> None:

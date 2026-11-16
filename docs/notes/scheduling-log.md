@@ -2854,3 +2854,35 @@ what moves it.
 
 **AFTER.** To fill after the deploy: EUR-Lex's move line once its embedding drains (bytes, seconds), and a dense
 search on it before and after.
+
+## 2026-11-16 — the card's eviction by the oldest REAL use, chosen by Louise before the reclaimer (app/model_evict.py, app/model_use.py) — BEFORE (deploy pending)
+
+**The operator's rule (2026-11-16, verbatim).** "Evinction policy: some embedders have not been used in a long time;
+those ones shall always be evincted instead of the ones that are actively used, either for embedding of for
+querying. A crowded GPU is a good benchmark for an effective evinction policy".
+
+**Scenario (BEFORE, München, the last 12 h of LocalAI's log, `docker logs ix-localai-localai-1 | grep WatchDog`).**
+Node running, the B70 crowded (the resident set preloaded, corpus embedding on demand), LocalAI's memory reclaimer
+at 0.95. It evicts the unpinned model with the oldest `lastUsed`, and `lastUsed` moves on ANY request.
+
+| | |
+|---|---|
+| reclaimer evictions in 12 h | 10 |
+| of which louise-translate-madlad | **9**, each a few minutes after its last real use |
+| loaded and unused for hours meanwhile | omnivoice-cpp (1.7 GB), the rerankers, vega-medcpt-*, vega-qwen3-embedding-4b (2.9 GB), vega-dar-legal-it (2.3 GB) |
+| non-work requests since the 07:31Z worker restart (run check at start) | 36 to qwen3-4b, 17 to dar-legal-it and to medcpt |
+
+Cause: Louise's own traffic counted as use in LocalAI's LRU — the keeper's preload warms (app/resident.py) and the
+worker's run check of 16 texts per encoder at every start — so the idle models looked recent and MADLAD, really
+used minutes earlier, looked the oldest; the keeper then preloaded it again, and the next load evicted it: a thrash.
+
+**The change.** A use record of REAL work only, every role in the one `encoder_use` table (embed, query, rerank,
+chat, translation, TTS, STT/VAD; warms, run checks, gates, calibrations, verifications write nothing). Before
+Louise causes a load that needs room — the keeper's preload, any cold load through `model_load.ensure_loaded`, a
+question's answer models — Louise unloads the loaded, unpinned, idle models it knows, OLDEST REAL USE FIRST, until
+the load fits under the reclaimer's line; a preload or a check never evicts a model used more recently than the
+model it loads. One `/system` read per decision; one pin read per model unloaded.
+
+**AFTER.** To fill after the deploy: the same 12 h count of `WatchDog` evictions (total, MADLAD's share), the
+`card: unloaded …` lines (which models, how long unused), the cold loads per Ask, and whether MADLAD is reloaded
+within 10 min of an eviction.

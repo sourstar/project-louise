@@ -525,3 +525,48 @@ def test_the_system_page_folds_the_card_and_clears_from_it(monkeypatch, tmp_path
     html = c.get("/admin/system").text
     assert "failed call(s)" not in html and "clear these failures" not in html
     assert model_pins.status()["failures"]["count"] == 1, "kept in the record"
+
+
+def _count_states(monkeypatch):
+    """How often the record's file lock is taken."""
+    n = [0]
+    real = model_pins._state
+
+    def counting(*a, **kw):
+        n[0] += 1
+        return real(*a, **kw)
+    monkeypatch.setattr(model_pins, "_state", counting)
+    return n
+
+
+def test_a_fresh_stamp_takes_no_lock_per_document(runner, monkeypatch):
+    """COST (München, 2026-11-16: two locked reads of the whole record per
+    wikidata document, 21 % of the embed threads' samples): within RENEW_S a
+    holder's own hold and end-of-call stamp are known in memory."""
+    n = _count_states(monkeypatch)
+    for _ in range(50):
+        with model_pins.using(URL, M, "embed"):
+            pass
+    assert runner.pinned[M] is True
+    assert n[0] <= 2                               # the first hold, at most its first stamp
+    assert runner.puts() == ["pin"]
+
+
+def test_a_stale_stamp_is_written_again(runner, monkeypatch):
+    t0 = 1_000_000.0
+    assert model_pins.hold(URL, M, "h", now=t0)
+    n = _count_states(monkeypatch)
+    assert model_pins.hold(URL, M, "h", now=t0 + 1)                       # fresh: no lock
+    assert n[0] == 0
+    assert model_pins.hold(URL, M, "h", now=t0 + model_pins.RENEW_S + 1)  # stale: renewed
+    assert n[0] == 1
+    assert model_pins.status()["pins"][0]["holders"]["h"] == t0 + model_pins.RENEW_S + 1
+
+
+def test_a_release_forgets_the_fresh_stamp_so_the_next_hold_pins_again(runner):
+    assert model_pins.hold(URL, M, "worker embed wikidata")
+    model_pins.release("worker embed wikidata")
+    assert runner.pinned[M] is False
+    assert model_pins.hold(URL, M, "worker embed wikidata")               # not a stale hit
+    assert runner.pinned[M] is True
+    assert runner.puts() == ["pin", "unpin", "pin"]

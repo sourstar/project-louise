@@ -19,14 +19,13 @@ Writers, one at a time per collection (`_lock`):
   reads each window INSIDE the lock, so it can never write back metadata
   older than what the rdf stage has just committed.
 
-CONCEPT IDS ARE INDEXED WITH THEIR LABELS (2026-11-16): an EUR-Lex record on
-parser 4 names its subjects and authors by concept id (`eurovoc:1073`,
-`corporate-body:CONSIL`), the vocabulary's label being a reference's
-(app/refs/eurovoc.py). Each such id is written here with its label in the
-document's language (`_with_labels`), so "formazione sul posto di lavoro"
-finds what the notice's labels found; the state records which sync of the
-labels the index was written with, and a collection whose rows carry ids is
-written again when the labels change (`backfill`). The records keep the ids.
+THE COLLECTION'S OWN INFORMATION ONLY (CLAUDE.md, "A collection holds only
+the information contained in its corpus", 2026-11-16): a row is the
+document's title, authors and subjects as the manifest holds them from its
+records. An EUR-Lex record on parser 4 names its subjects by concept id; the
+vocabulary's labels are a reference read at ask time as facts, never written
+here and never in a ranking (invariant 4). The index-time expansion of
+2026-11-16 (#692) was withdrawn the same day.
 
 Until a collection's backfill is complete, `search` returns None and the
 catalog leg is empty (the SQLite FTS5 catalog that answered meanwhile was
@@ -38,11 +37,9 @@ from __future__ import annotations
 
 import json
 import os
-import re
 import threading
 import time
 from pathlib import Path
-from typing import Any
 
 import tantivy
 
@@ -258,70 +255,9 @@ def close_all() -> None:
             writer.wait_merging_threads()
 
 
-#: a subject or author written as a concept id (app/plugins/eurlex/from_tree.py)
-_CONCEPT = re.compile(r"^[a-z][a-z-]*:[A-Za-z0-9_.()-]+$")
-_STAMP: dict[str, tuple[float, Any]] = {}
-
-
-def labels_stamp(*, ttl_s: float = 60.0):
-    """The labels' last sync (refs `ref_meta.synced_at` of `eurovoc`), None
-    while it holds none; read at most once a minute."""
-    now = time.monotonic()
-    got = _STAMP.get("eurovoc")
-    if got is not None and now - got[0] < ttl_s:
-        return got[1]
-    stamp = None
-    try:
-        from app import refs
-        store = refs.read_store()
-        r = store.con.execute("SELECT synced_at FROM ref_meta WHERE source_id='eurovoc'").fetchone()
-        if r and store.con.execute("SELECT 1 FROM concept_label LIMIT 1").fetchone():
-            stamp = r[0]
-    except Exception:   # noqa: BLE001 — no refs, no labels: the ids are written as they are
-        stamp = None
-    _STAMP["eurovoc"] = (now, stamp)
-    return stamp
-
-
-def _with_labels(rows) -> list:
-    """`rows` with each concept id in subjects and authors followed by its
-    label in the row's language (English where it has none); rows without
-    one are as they were, and nothing is asked of the refs then."""
-    rows = list(rows)
-    wanted: dict[str, set[str]] = {}
-    for _rowid, _title, authors, subjects, lang in rows:
-        for field in (authors, subjects):
-            for tok in str(field or "").split("|"):
-                if _CONCEPT.match(tok.strip()):
-                    wanted.setdefault(str(lang or "en"), set()).add(tok.strip())
-    if not wanted or labels_stamp() is None:
-        return rows
-    from app import refs
-    from app.refs import eurovoc
-    store = refs.read_store()
-    got = {lang: eurovoc.labels(store, keys, lang) for lang, keys in wanted.items()}
-
-    def expand(field, lang) -> str:
-        names = got.get(str(lang or "en"), {})
-        return "|".join(f"{t} {names[t.strip()]}" if t.strip() in names else t
-                        for t in str(field or "").split("|")) if field else field
-    return [(rowid, title, expand(authors, lang), expand(subjects, lang), lang)
-            for rowid, title, authors, subjects, lang in rows]
-
-
-def _uses_concepts(con) -> bool:
-    """Whether the collection's documents name concepts by id: the first 200
-    rows by rowid, never a filter the table must walk to satisfy (CLAUDE.md:
-    a per-round cost never scales with the corpus)."""
-    for (subjects,) in con.execute("SELECT subjects FROM documents ORDER BY rowid LIMIT 200"):
-        if any(_CONCEPT.match(t.strip()) for t in str(subjects or "").split("|")):
-            return True
-    return False
-
-
 def _commit(collection, rows) -> int:
     writer = _writer(collection)
-    n = _put(writer, _with_labels(rows))
+    n = _put(writer, rows)
     writer.commit()
     return n
 
@@ -429,13 +365,9 @@ def backfill(con, collection, *, budget_s: float | None = None,
     budget_s = config.CATALOG_BACKFILL_BUDGET_S if budget_s is None else budget_s
     window = config.CATALOG_BACKFILL_WINDOW if window is None else window
     state = read_state(collection)
-    stamp = labels_stamp()
-    if state.get("complete") and state.get("labels") != stamp:
-        if not _uses_concepts(con):
-            # no id to label: said once, never asked again for this stamp
-            _write_state(collection, {**state, "labels": stamp})
-            return None
-        # the labels changed since the rows carrying concept ids were written
+    if state.get("labels"):
+        # written by #692 with a reference's labels (live 2026-11-16 09:22Z):
+        # rebuilt once from the manifest alone, the collection's own information
         state = {}
     elif state.get("complete"):
         return None
@@ -443,8 +375,7 @@ def backfill(con, collection, *, budget_s: float | None = None,
     if top == 0:
         return None
     if not state:
-        state = {**_fresh_start(collection), "labels": stamp}
-        _write_state(collection, state)
+        state = _fresh_start(collection)
     cursor = int(state.get("cursor", 0))
     t0 = time.monotonic()
     written = windows = 0

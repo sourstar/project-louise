@@ -174,6 +174,8 @@ def segments(url: str, model: str, frames: bytes, clock: "_Clock | None" = None)
         raise VadFailed(f"{type(e).__name__}: {e}"[:200]) from None
     if r.status_code != 200:
         raise VadFailed(f"HTTP {r.status_code}")
+    from app import model_use
+    model_use.touch(url, model)                 # a clip's voice activity (app/model_use.py)
     try:
         got = r.json()
     except ValueError:
@@ -263,6 +265,9 @@ def transcribe(audio: bytes, filename: str, content_type: str, fields: list[tupl
         except Exception as e:   # noqa: BLE001 — said to the reader, in plain words
             return _error(502, f"the speech-to-text model at {url} did not answer "
                                f"({type(e).__name__})", vad)
+        if r.status_code == 200:
+            from app import model_use
+            model_use.touch(url, model)                 # a clip transcribed (app/model_use.py)
         clock.lap("stt")
     clock.lap("unpin")
     return Answer(r.status_code, r.content, r.headers.get("content-type", JSON), vad, tuple(clock.steps))

@@ -2007,6 +2007,21 @@ it left open is below.
 
 ## Open after the migration
 
+- **#692 and #693 brought outside information into a collection; withdrawn the same day (2026-11-16).** Under
+  the rule "A collection holds only the information contained in its corpus" (CLAUDE.md, #701), and with
+  invariant 4, EuroVoc labels no longer go into EUR-Lex's catalog index: neither written at index time nor
+  expanded into the query at ask time, which would put a reference into a ranking. A catalog written with
+  labels (its state records `labels`) is rebuilt once from the manifest. EuroVoc's credit no longer sits on
+  every EUR-Lex result: a credit follows what is shown. The EuroVoc reference source stays, for facts by key
+  at ask time. Consequence: EUR-Lex4's catalog leg matches its subjects by concept id, not by word.
+
+- **NeuRIS lacks the big codes: the origin's test phase (2026-11-16).** The portal's listing and its 11-15
+  snapshot hold no BGB, HGB or StGB, only acts around them (EGHGB, EGStGB, the Art. 6 Abs. 3 EGHGB
+  notices, amending acts). Old law is otherwise held, from the 1870s. München measured the snapshot's
+  5,525 `vollzitat` and one API search per code. Our listing and parser accept every agent, so this is not
+  a filter. Operator, 2026-11-16: **B**, wait for the portal to migrate them; no second origin
+  (gesetze-im-internet.de) for now. A German search for the codes' subjects finds no code meanwhile.
+
 - **EUR-Lex from the Data Dump alone: parser 4 (2026-11-15, operator B and "Add history as a download
   and embedding option").** Parser 4 reads the facts from the unit's tree, not from the notice
   (app/plugins/eurlex/from_tree.py): every field matched on München's three units. A unit is the tree
