@@ -58,9 +58,13 @@
        search reads only the question's language and English instead of
        every main language of the collections. Quality is neither. The
        request still carries the two apart (`speed`, `quick`) for the API
-       and the measurements. Remembered in the browser. #}
+       and the measurements. Remembered in the browser. Quality also reads
+       an older source by its language's reader — named, its spelling
+       modernised for the model, its translation pointed at — where the
+       passage or the question calls for it (app/historical.py, operator
+       2026-11-16); Speed skips it. #}
     <span class="seg" role="radiogroup" aria-label="quality or speed">
-      <label title="the best results: the translation model translates, and the text search reads every main language of the collections"><input type="radio" name="speed" value="quality" onchange="rememberSpeed()" checked> <span>Quality</span></label>
+      <label title="the best results: the translation model translates, the text search reads every main language of the collections, and older language (old Italian, …) is read with its period's help"><input type="radio" name="speed" value="quality" onchange="rememberSpeed()" checked> <span>Quality</span></label>
       <label title="quicker: the chat model translates, and the text search reads only the question's language and English"><input type="radio" name="speed" value="speed" onchange="rememberSpeed()"> <span>Speed</span></label>
     </span>
     {# "show results in": CONTENT only — the answer and every entry IN
@@ -514,7 +518,7 @@ async function ask(){
   let id;
   try{
     id=await relayStart('answer',{messages:[{role:'user',content:q}],collections:scopeCollections(),
-                                  annotations:scopeAnnotations(),answer_lang:want,search_id:lastSearch,
+                                  annotations:scopeAnnotations(),answer_lang:want,search_id:lastSearch,speed:speedOn(),
                                   ...counts()},[]);
   }catch(e){setAnswer(''); relayDropped('answer','it could not start ('+(e.message||e)+')'); return}
   relaySave({answer_lang:want});

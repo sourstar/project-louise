@@ -1664,10 +1664,25 @@ CITE_REMINDER = ("After each statement, cite the source it rests on by its numbe
 ANSWER_SOURCE_CHARS = 24_000
 
 
+def answer_hits_shown(hits: list[dict]) -> int:
+    """How many of `hits` the answer is given: the passages up to
+    ANSWER_SOURCE_CHARS, the first always."""
+    spent = 0
+    for i, h in enumerate(hits, 1):
+        spent += len(h["text"][:1800])
+        if i > 1 and spent > ANSWER_SOURCE_CHARS:
+            return i - 1
+    return len(hits)
+
+
 def build_answer_messages(query: str, result: dict, answer_lang: str | None = None) -> list[dict]:
     """`answer_lang` (an ISO code, STATUS 5j "show results in"): the model
     answers in that language directly — cheaper than translating the
-    answer afterwards, and the [n] citations stay aligned."""
+    answer afterwards, and the [n] citations stay aligned.
+
+    A hit's `reading` (app/historical.py `prepare`, the reader's Quality):
+    what its head says of an older stage of its language; with one, the
+    system prompt says how to read such a source."""
     blocks = []
     for fact in result.get("facts", []):
         label = fact.get("label") or fact["entity_id"]
@@ -1676,12 +1691,9 @@ def build_answer_messages(query: str, result: dict, answer_lang: str | None = No
         reached = (f"\nreached from {via['from']} through {via['link']} ({via['on']})"
                    if via else "")
         blocks.append(f"[reference] {label} — {fact['entity_id']}{reached}\n{field_lines}")
-    spent = 0
-    for i, h in enumerate(result["hits"], 1):
+    shown_hits = result["hits"][:answer_hits_shown(result["hits"])]
+    for i, h in enumerate(shown_hits, 1):
         # numbered by position on the page, so [n] still opens hit n
-        spent += len(h["text"][:1800])
-        if i > 1 and spent > ANSWER_SOURCE_CHARS:
-            break
         # Source-qualified location (e.g. "gutenberg:1342 CHAPTER I",
         # "pubmed:38112345 Title") — chunk_id is uid-prefixed with the
         # source plugin (app/chunking.py), so this is recoverable even for
@@ -1691,13 +1703,16 @@ def build_answer_messages(query: str, result: dict, answer_lang: str | None = No
         if h.get("chapter"):
             loc += f" {h['chapter']}"
         head = f"[{i}] {loc} — {h.get('title','?')} — {h.get('authors','?')} ({h.get('lang','?')})"
-        blocks.append(head + "\n" + h["text"][:1800])
+        blocks.append(head + (h.get("reading") or "") + "\n" + h["text"][:1800])
     if result["catalog"]:
         cat = "\n".join(f"- {c['title']} — {c['authors']} (book #{c['book_id']})"
                         for c in result["catalog"][:8])
         blocks.append("[catalog matches]\n" + cat)
     context = "\n\n---\n\n".join(blocks) if blocks else "(no sources found)"
     system = ANSWER_SYSTEM
+    if any(h.get("reading") for h in shown_hits):
+        from . import historical
+        system += historical.SYSTEM_RULE
     if answer_lang:
         system += (f" Write your whole answer in the language with ISO code "
                    f"'{answer_lang}', whatever language the question or the "

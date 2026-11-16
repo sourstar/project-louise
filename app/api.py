@@ -1063,6 +1063,11 @@ class ChatBody(BaseModel):
     # is written from those hits instead of searching again; unknown or
     # expired, the answer searches as before
     search_id: str | None = None
+    # the reader's "Quality / Speed" (operator, 2026-11-09): under Quality,
+    # the default, an older source is read by its language's reader —
+    # named, its spelling modernised for the model, its translation pointed
+    # at (app/historical.py; operator, 2026-11-16); Speed skips it
+    speed: bool = False
 
 def _text_of(content) -> str:
     """A message's text: a string, or OpenAI's list of parts (Open WebUI
@@ -1201,7 +1206,13 @@ def source_entries(hits: list[dict]) -> list[dict]:
     return out
 
 
-def _answer_messages(body: ChatBody, query: str, result: dict) -> list[dict]:
+def _answer_messages(body: ChatBody, query: str, result: dict,
+                     reads: list | None = None) -> list[dict]:
+    if not body.speed:
+        from . import historical
+        result, read = historical.prepare(result, query, body.answer_lang)
+        if reads is not None:
+            reads.extend(read)
     messages = retrieval.build_answer_messages(query, result, answer_lang=body.answer_lang)
     # keep prior turns for conversational context (before the sources turn)
     history = [m for m in body.messages[:-1] if m.get("role") in ("user", "assistant")]
@@ -1210,13 +1221,15 @@ def _answer_messages(body: ChatBody, query: str, result: dict) -> list[dict]:
 
 def _chat_answer(body: ChatBody, query: str, result: dict, t0: float):
     con = _con()   # query_log lives in the default collection's manifest regardless
-    messages = _answer_messages(body, query, result)
+    reads: list = []
+    messages = _answer_messages(body, query, result, reads)
     rid = f"chatcmpl-{uuid.uuid4().hex[:12]}"
 
     if not body.stream:
         # "[3] [4]", not "[3][4]": a client's markdown cleaning reads a pair
         # as a reference link and speaks a number (app/speech.py)
         answer = speech.spaced_citations(llm.chat(messages, temperature=body.temperature))
+        answer += _reads_note(con, reads)
         result["timings"]["llm"] = round((time.time() - t0) * 1000 - result["timings"]["total"], 1)
         result["timings"]["total"] = round((time.time() - t0) * 1000, 1)
         db.log_query(con, "chat", query, "hybrid", body.limit, result["timings"],
@@ -1242,7 +1255,7 @@ def _chat_answer(body: ChatBody, query: str, result: dict, t0: float):
     def sse():
         # the OpenAI framing of `answer_parts`, which the Ask page's relay
         # reads too (app/relay.py): one path from the model to every reader
-        parts = answer_parts(body, query, result, t0, messages=messages, con=con)
+        parts = answer_parts(body, query, result, t0, messages=messages, con=con, reads=reads)
         tail = ""        # the text so far, for a citation pair split across two deltas
         try:
             for kind, value in parts:
@@ -1286,8 +1299,19 @@ def pdf_link(body: ChatBody, query: str, answer: str, result: dict) -> str:
     return f"/api/ask/pdf/{pid}"
 
 
+def _reads_note(con, reads: list) -> str:
+    """The answer's last line where a source was read as older language
+    (app/historical.py `said`), logged with the answer's collection."""
+    from . import historical
+    line = historical.said(reads)
+    if not line:
+        return ""
+    db.log_event(con, "info", "chat", line)
+    return "\n\n_" + line + "_"
+
+
 def answer_parts(body: ChatBody, query: str, result: dict, t0: float, *,
-                 messages: list[dict] | None = None, con=None):
+                 messages: list[dict] | None = None, con=None, reads: list | None = None):
     """The answer as it comes from the model: ("sources", entries) first when
     asked, then ("delta", text) and ("keepalive", None) while nothing has
     arrived for KEEPALIVE_S, and ("cut", why) when the stream ended short.
@@ -1305,7 +1329,9 @@ def answer_parts(body: ChatBody, query: str, result: dict, t0: float, *,
     Every answer gets one log line with its size and timing, so the next
     report has a measurement."""
     con = con if con is not None else _con()
-    messages = messages if messages is not None else _answer_messages(body, query, result)
+    if messages is None:
+        reads = []
+        messages = _answer_messages(body, query, result, reads)
     q: queue.Queue = queue.Queue()
     stop = threading.Event()
 
@@ -1353,6 +1379,13 @@ def answer_parts(body: ChatBody, query: str, result: dict, t0: float, *,
     except GeneratorExit:
         stop.set()
         raise
+    if why is None and first is not None:
+        # which sources were read as older language, said after the answer
+        note = _reads_note(con, reads or [])
+        if note:
+            if body.sources:
+                written.append(note)
+            yield ("delta", note)
     secs = time.time() - t0
     if why is not None:
         yield ("cut", why)

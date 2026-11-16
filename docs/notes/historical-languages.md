@@ -89,3 +89,34 @@ A **reader** (the "translation plugin") is one entry per (ISO 639 language,
 period): its prompt line (A), its pre-pass rules (B), its examples (D), its
 glossary (E) and optionally its model server (F). Summaries and Ask pick it
 from the record's language and date, and the answer says which reader ran.
+
+## Built (2026-11-16): A, B, C under Quality
+
+Operator: "A, B, C, make it part of the quality search settings and use
+them only if the returned results fall into the use case (some recent
+books may have ancient language quotes, also use the prompt as trigger)".
+
+`app/historical.py`, called from `api._answer_messages` when the request's
+`speed` is false (Quality, the default; the Ask page now sends `speed` with
+the answer as it did with the search). Per source the answer is given:
+
+- **when:** the passage has ≥ 2 markers of older Italian (period words such
+  as *sanza, puote, avea*; elided *'l, i'*; split *de la*; the spellings B
+  rewrites), or the record's language is an ISO 639-3 historical stage
+  (`enm`, `fro`, `gmh` …), or the question names an older period (a
+  century, *Trecento*, *medieval*, a year before 1800) and the passage has
+  one marker. Per passage, so a modern book quoting Dante is read so only
+  where it quotes.
+- **A:** the head says «older Italian» (or the stage's name) and the system
+  prompt says how to read such a source.
+- **B:** ſ→s, &/et→e, -tione→-zione (never -stione), h- words (huomo→uomo)
+  in the copy the model reads, and the head says which rules ran. The hit
+  the page and the PDF show is untouched (invariant 11).
+- **C:** an edition of the same work in the answer's language or English
+  that is among the sources given is named: "a translation of it is
+  source [k]".
+- The answer ends with one line saying which sources were read so, also
+  logged (`chat`).
+
+The markers are a heuristic of ours: no detector exists. Tests:
+`tests/test_historical.py`.
