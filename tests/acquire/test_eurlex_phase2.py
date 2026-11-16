@@ -243,3 +243,17 @@ def test_the_listing_says_each_window(mock):
 ])
 def test_an_episode_is_told_from_a_verdict(text, episode):
     assert cellar._episode(cellar.TransportError(text)) is episode
+
+
+def test_cellar_is_asked_on_four_connections_and_the_report_splits_trees_from_items():
+    """2026-11-16: two connections gave 582 units an hour at 0.1 MB/s
+    (latency-bound); Cellar publishes no limit, fewer than five in flight is
+    the practice reported. The report says where a unit's time goes."""
+    from app.acquire import specs
+    from app.transfer.manager import get_manager
+    spec = specs.EURLEX_SPEC
+    assert get_manager().endpoint_slots(spec.endpoints[0], spec) == 4
+    units = cellar.TreeUnits()
+    units._count(cellar.Fetched(files={}, moved=1 << 20, tree_s=2.5, items_s=4.0))
+    (line,) = units.reports()
+    assert "asking: trees 2 s, items 4 s" in line or "asking: trees 3 s, items 4 s" in line
