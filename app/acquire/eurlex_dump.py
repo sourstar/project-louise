@@ -286,7 +286,7 @@ def build_chunk(mtd_paths: tuple[str, ...], uuids: list[str], langs: list[tuple[
     the dump states modified later is rebuilt from it, where it is held."""
     from ..plugins.eurlex import formex, from_tree, rdf
     from ..plugins.eurlex.source import LANGUAGES, unit_rel
-    from .cellar import form_of, land_many
+    from .cellar import form_of, land_many, next_form
     root = Path(corpus)
     counts: dict[str, Counter] = {}
     # GROUP COMMIT (cellar.land_many): units land in batches of LAND_BATCH or
@@ -371,12 +371,28 @@ def build_chunk(mtd_paths: tuple[str, ...], uuids: list[str], langs: list[tuple[
                 except formex.FormexError:
                     text_wrapper = None
                 if text_wrapper is None:
-                    c["formex-refused"] += 1
-                    continue
+                    # no wrapper of THIS act: the next form the tree lists is
+                    # its text, landed beside the Formex items (cellar.next_form)
+                    alt = next_form(note)
+                    alt_listed = note.items.get(alt) or [] if alt else []
+                    if not alt_listed or any(it.name in files for it in alt_listed):
+                        c["formex-refused"] += 1
+                        continue
+                    if any(it.name not in held_forms.get(alt, {}) for it in alt_listed):
+                        c["incomplete"] += 1       # that form the API's (phase 2)
+                        inf = None if note.in_force is None else ("true" if note.in_force else "false")
+                        incomplete_found.setdefault(lang, {})[celex] = inf
+                        continue
+                    try:
+                        files.update({it.name: lz.read(held_forms[alt][it.name]) for it in alt_listed})
+                    except (zipfile.BadZipFile, OSError):
+                        c["unreadable"] += 1
+                        continue
+                    c["formex-not-this-act"] += 1
                 # a text in another language under this one's expression is
                 # held as the origin files it (operator, 2026-11-16, B): the
                 # parser labels it; counted here so the pass says how many
-                stated = _LG_DOC.search(files[text_wrapper])
+                stated = _LG_DOC.search(files[text_wrapper]) if text_wrapper is not None else None
                 if stated and stated.group(1).decode().lower() != lang:
                     c["text-in-another-language"] += 1
             files[rdf.TREE_FILE] = rdf.dumps(scoped)

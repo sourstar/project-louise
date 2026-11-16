@@ -270,6 +270,9 @@ ISSUES = {
                                  "original, or the reverse; the CELEX decides the version",
     "no-text-layer": "page(s) of the act's PDF hold no text (a scan): the PDF is held whole in the "
                      "unit, its text is what the other pages give",
+    "formex-not-this-act": "the expression's Formex holds no wrapper of this act (none naming its "
+                           "CELEX, or only other acts'): the text is read from the next form the "
+                           "tree lists; the Formex items are held beside it",
     "text-in-another-language": "the origin files a text in another language under this language's "
                                 "expression: held in this language's slice, the record's language "
                                 "the text's (operator, 2026-11-16, B)",
@@ -375,10 +378,12 @@ def eli_work_of(path: str | None) -> str | None:
     return None
 
 
-def _form_held(note, files: dict[str, bytes]) -> str | None:
+def _form_held(note, files: dict[str, bytes], skip: tuple[str, ...] = ()) -> str | None:
     """The best form (cellar.FORMS) whose every listed item is in the unit."""
     from ...acquire.cellar import FORMS
     for f in FORMS:
+        if f in skip:
+            continue
         items = note.items.get(f) or []
         if items and all(it.name in files for it in items):
             return f
@@ -646,6 +651,17 @@ class EurlexSource:
             note = held
         found: list[Issue] = []
         form = "fmx4" if any(formex.is_wrapper(n) for n in files) else _form_held(note, files)
+        if form == "fmx4":
+            try:
+                formex.own_wrapper(files, celex, files.__getitem__)
+            except formex.FormexError as e:
+                # no wrapper of THIS act (München, 2026-11-16: 32011R0540 hr,
+                # 32004D0382 bg/ro …): its text from the next form the tree
+                # lists and the unit holds (cellar.next_form); the reason said
+                alt = _form_held(note, files, skip=("fmx4",))
+                if alt is not None:
+                    found.append(Issue("formex-not-this-act", f"{e}: the text is read from {alt}"))
+                    form = alt
         root_tag = "CONS.ACT" if _CONSOLIDATED.match(celex) else "ACT"
         stated_lang = notice_mod.CODE_OF.get(note.display_language or "", lang)
         try:

@@ -20,6 +20,17 @@ measured (published figures disagree).
 
 ### 2026-11-16
 
+- **EUR-Lex: Formex with no wrapper of this act is read from the next form** (München's facts, the 7 units
+  still refused after #711: 5 works). 32011R0540 hr: two Special Edition wrappers, neither naming a
+  NO.CELEX; 32010R1089, 32011R0094 hr: the act's own wrapper with a mistyped NO.CELEX (D for R, a wrong
+  year); 32004D0382, 32006R1965 bg/ro: only other acts' wrappers. A near-miss CELEX is never matched (a
+  guess). As `form_of` already does for a manifestation with no wrapper at all, the next form the tree
+  lists is the text — XHTML for all 7, each named after the act's own OJ issue and held whole in the
+  dump — and the Formex items land beside it (invariant 11: the reason verifiable); the record carries
+  `formex-not-this-act`. The same in the dump build (`formex-not-this-act` counted; that form not in the
+  dump → the incomplete list, the API's), `fetch_unit_from_tree` and the parser. No parser bump: no such
+  unit was ever landed.
+
 - **EUR-Lex4's per-unit pass asks first for what the dump lacks, without a listing** (München: 31 min
   after the resume, no line, no fetch). The pass listed Cellar for every CELEX year since 1952 in 24
   languages before fetching anything (the engine takes the whole listing first), and each year's first

@@ -561,6 +561,17 @@ FORMS = ("fmx4", "xhtml", "html", "pdfa2a", "pdfa1a", "pdfa1b", "pdfx", "pdf")
 RDF_ACCEPT = "application/rdf+xml;notice=non-inferred-tree"
 
 
+def next_form(note, after: str = "fmx4") -> str | None:
+    """The next form after `after` (FORMS order) the notice lists items for,
+    each named by a plain file name: where Formex holds no wrapper of THIS
+    act (formex.own_wrapper — München, 2026-11-16: five works whose Formex
+    names no NO.CELEX, a mistyped one, or only other acts'), its text is
+    read from it. Formex's items still land: the reason stays verifiable."""
+    i = FORMS.index(after)
+    return next((f for f in FORMS[i + 1:] if note.items.get(f)
+                 and all(it.name and _NAME.match(it.name) for it in note.items[f])), None)
+
+
 def form_of(note) -> str | None:
     """The best manifestation the notice lists items for (FORMS). A Formex
     manifestation whose named items include no wrapper (`….doc.xml`) gives
@@ -761,7 +772,17 @@ def fetch_unit_from_tree(base: str, celex: str, lang: str, dest: Path, *,
             try:
                 formex.own_wrapper(files, celex, files.__getitem__)
             except formex.FormexError as e:
-                raise TransportError(f"cellar: {celex} ({code}): {e}") from None
+                # no wrapper of THIS act: the next form the tree lists is its
+                # text, beside the Formex items (`next_form`)
+                alt = next_form(note)
+                if alt is None:
+                    raise TransportError(f"cellar: {celex} ({code}): {e}") from None
+                for it in note.items[alt]:
+                    _stop_check()
+                    if it.name in files or it.name in (NOTICE, rdf.TREE_FILE):
+                        raise TransportError(f"cellar: two items of {celex} ({code}) named {it.name}")
+                    files[it.name] = _get(client, it.uri, _headers({"Accept-Language": code.lower()}),
+                                          f"{it.name} of {celex} ({code})", charge=count).content
             # a text in another language under this one's expression lands as
             # the origin files it; the parser labels it (operator, 2026-11-16, B)
         files[rdf.TREE_FILE] = rdf.dumps(scoped)
