@@ -42,11 +42,19 @@ not fetched is in `fetches` with its reason — `limit`, `timeout`,
 `unreachable`, `not-found`, `refused`, `error` — and so is the listing that
 could not be read. Each fetch is also in the collection's event log.
 
-WHO WRITES. The process answering the question (the web or the API) lands
-the unit, whole or not at all (`cellar._land`), under the history slice,
-which the per-unit pass does not write while that slice is not held — so
-the two never write one unit. Not below the free-space floor
-(app/disk_guard.py): refused, and said.
+WHO WRITES. The process answering the question (the web) never writes the
+corpus — it is mounted read-only there (München, 2026-11-16). It lands the
+unit, whole or not at all (`cellar._land`), in the collection's FETCHED
+inbox beside its manifest (`inbox_dir`, on the writable state volume), at
+the path the unit takes in the corpus; the worker, the corpus's one writer,
+moves it into the origin (`adopt`), registers exactly those units in the
+manifest (discovery.register: a cost per unit, never a scan of the corpus)
+and its slice pass places them. The pattern is the bundle inbox's
+(app/bundles/importer.py `inbox_dir`, worker `_drain_bundle_inbox`). The
+cited article is pinned from the inbox copy, so the answer does not wait for
+the worker. Not below the free-space floor (app/disk_guard.py), and not
+without the collection's licence acknowledgement (invariant 9): refused,
+and said.
 
 THE STANDARD, NOT ADOPTED: the question's words are matched by a short list
 per language, not a classifier; a reader who wants the past without saying
@@ -200,6 +208,11 @@ def fetch(query: str, collections: Iterable, *, as_of: int | None = None, histor
             if getattr(collection, "plugin", None) != "eurlex" or not cellar._tree_mode(collection):
                 continue
             lang = _language(collection, query_lang)
+            refusal = _license_refusal(collection)
+            if refusal is not None:
+                out["fetches"].append({"collection": collection.name, "act": None, "language": lang,
+                                       "version": None, "status": REFUSED, "why": refusal})
+                continue
             if not _base_held(collection, lang):
                 out["fetches"].append({"collection": collection.name, "act": None, "language": lang,
                                        "version": None, "status": REFUSED,
@@ -209,6 +222,7 @@ def fetch(query: str, collections: Iterable, *, as_of: int | None = None, histor
                 continue                     # its history is held: nothing to fetch
             spec_base = _endpoint()
             corpus = Path(collection.corpus_dir)
+            inbox = inbox_dir(collection)
             for want in cited:
                 celex = _celex_of(want.citation)
                 stop = None
@@ -221,7 +235,7 @@ def fetch(query: str, collections: Iterable, *, as_of: int | None = None, histor
                                            "version": None, "status": status,
                                            "why": f"the versions of {celex} could not be listed: {why}"})
                     continue
-                held = {v for v in listed if _held(corpus, lang, v)}
+                held = {v for v in listed if _held(corpus, lang, v) or _held(inbox, lang, v)}
                 for version in wanted_versions(listed, held, as_of, history):
                     entry = {"collection": collection.name, "act": celex, "language": lang,
                              "version": version}
@@ -229,12 +243,12 @@ def fetch(query: str, collections: Iterable, *, as_of: int | None = None, histor
                         out["fetches"].append({**entry, "status": LIMITED,
                                                "why": f"at most {LIMIT} fetches a question"})
                         continue
-                    short = _short_of_space(corpus)
+                    short = _short_of_space(inbox)
                     if short is not None:
                         out["fetches"].append({**entry, "status": REFUSED, "why": short})
                         continue
                     budget -= 1
-                    dest = corpus / _rel(lang, version)
+                    dest = inbox / _rel(lang, version)
                     stop = None
                     try:
                         with _bounded(FETCH_TIMEOUT_S) as stop:
@@ -259,6 +273,55 @@ def summary(got: dict[str, Any], *, requested: bool) -> dict[str, Any]:
     question and how each fetch ended, with its reason."""
     return {"requested": requested, "limit": LIMIT, "timeout_s": FETCH_TIMEOUT_S,
             "fetches": list(got.get("fetches") or [])}
+
+
+def inbox_dir(collection) -> Path:
+    """Where the units fetched on request wait for the worker: beside the
+    collection's manifest (its writable state), laid out as in the corpus."""
+    return Path(collection.manifest_path).parent / "fetched"
+
+
+def adopt(collection, *, log=lambda m: None) -> list[Path]:
+    """The worker's half (the module docstring): every whole unit waiting in
+    the collection's inbox moved into its origin, whole or not at all, and
+    taken out of the inbox; one the origin already holds is only taken out.
+    Returns the units now in the origin. A unit that cannot be moved stays,
+    said, and is tried again next time."""
+    import shutil
+    from app.acquire import cellar
+    from app.plugins.eurlex.source import unit_files
+    inbox = inbox_dir(collection)
+    if not inbox.is_dir():
+        return []
+    corpus = Path(collection.corpus_dir)
+    landed: list[Path] = []
+    for tree in sorted(inbox.glob("*/lang=*/*/*/tree.json")):
+        unit = tree.parent
+        if any(part.startswith(".") for part in unit.relative_to(inbox).parts):
+            continue                       # a staging directory of an interrupted landing
+        rel = unit.relative_to(inbox)
+        target = corpus / rel
+        try:
+            if not (target / tree.name).is_file():
+                cellar._land(target, {e.name: Path(e.path).read_bytes() for e in unit_files(unit)})
+                landed.append(target)
+            shutil.rmtree(unit)
+        except OSError as e:
+            log(f"history on request: {rel} not moved into the origin: {type(e).__name__}: {e}"[:300])
+    return landed
+
+
+def _license_refusal(collection) -> str | None:
+    """Invariant 9: no byte moves from a yellow or red origin without the
+    acknowledgement (app/licensing.py, THE resolution)."""
+    from app import licensing
+    try:
+        if licensing.state_for(collection) != licensing.MISSING:
+            return None
+        return (f"{collection.name}: license_class={licensing.license_class_for(collection)} needs an "
+                f"acknowledgement of the terms before anything is fetched (invariant 9)")
+    except Exception as e:   # noqa: BLE001 — fail closed
+        return f"{collection.name}: its license state cannot be judged ({type(e).__name__}: {e})"[:300]
 
 
 def _short_of_space(corpus: Path) -> str | None:

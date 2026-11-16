@@ -3494,6 +3494,10 @@ def _index_maintainer() -> None:
                 did = _verify_cited(cons[key], c) or did
                 did = _refresh_anchor(cons[key], c) or did
                 did = _heal_origin_missing(cons[key], c) or did
+                try:
+                    did = _adopt_fetched(cons[key], c) or did
+                except Exception as e:   # noqa: BLE001 — one adoption, not the maintainer
+                    db.log_event(cons[key], "warn", "history", f"adoption: {type(e).__name__}: {e}"[:300])
                 turn.spent(time.monotonic() - t0, units=1 if did else 0)
                 # not due, or nothing to fold in: give the slot back rather
                 # than sit on it, and rejoin at the tail when there is work
@@ -4328,6 +4332,35 @@ def _say_origin_missing(con, collection, stage: str, path: str) -> None:
                      f"origin missing: {path} — the documents that read it are set aside (an error "
                      f"naming this file) and cleared by themselves once it is back, checked every "
                      f"{origin_missing.HEAL_EVERY_S / 60:.0f} min; a rename or a mount that is gone?")
+
+
+def _adopt_fetched(con, collection) -> bool:
+    """The units fetched on request at ask time (app/ask/history.py), waiting
+    in the collection's inbox because the web cannot write the corpus: moved
+    into the origin by this process, its one writer, registered in the
+    manifest as exactly those units (discovery.register — a cost per unit,
+    never a scan of the corpus) and placed by the slice pass, which resumes
+    from its cursor over the new rows only. One `is_dir` a round when there
+    is nothing."""
+    from app.ask import history as history_mod
+    if not history_mod.inbox_dir(collection).is_dir():
+        return False
+    if not _license_allows(con, collection, "history adoption"):
+        return False
+    landed = history_mod.adopt(collection, log=lambda m: db.log_event(con, "warn", "history", m))
+    if not landed:
+        return False
+    plugin = collection.plugin_instance()
+    ref_of = getattr(plugin, "ref_of_unit", None)
+    if ref_of is None:
+        _request_discovery(collection.name, "units fetched on request", acquire=False)
+        return True
+    got = discovery.register(con, collection, [ref_of(p) for p in landed], stop=_stop)
+    from app import slice_scope
+    slice_scope.apply(con, collection, stop=_stop)
+    db.log_event(con, "info", "history", f"{len(landed)} unit(s) fetched on request moved into the origin "
+                                         f"and registered (added {got['added']})")
+    return True
 
 
 def _heal_origin_missing(con, collection) -> bool:

@@ -234,6 +234,29 @@ def sync_collection(con, collection, *, stop=None, adopt: bool = False) -> dict:
     return stats
 
 
+def register(con, collection, refs: list[DocRef], *, stop=None) -> dict:
+    """The given refs into the manifest as a scan applies them
+    (`_apply_batch`), and nothing else: a cost per ref, never a walk of the
+    corpus — for units the worker itself just placed (app/ask/history.py
+    `adopt`). A scope config that narrows anything is re-applied; the slice
+    pass (app/slice_scope.py) is the caller's, as after a scan."""
+    counts = {"seen": 0, "added": 0, "changed": 0, "missing": 0, "container_errors": 0, "relocated": 0,
+              "resigned": 0, "superseded": 0, "withdrawn": 0}
+    refs = [r for r in refs if r is not None]
+    if not refs:
+        return counts
+    plugin = collection.plugin_instance()
+    if not _apply_batch(con, plugin, refs, counts, stop, wait=True):
+        counts["interrupted"] = True
+        return counts
+    scope = db.get_scope(con)
+    if counts["added"] and any(scope.get(k) for k in ("languages", "book_ids", "sample_per_lang", "limit")):
+        apply_scope(con)
+    db.log_event(con, "info", "discover", f"registered {len(refs)} unit(s) placed by the worker: "
+                                          f"added {counts['added']}, changed {counts['changed']}")
+    return counts
+
+
 def _signal_committed(state, n: int) -> None:
     state.committed = n
     for hook in state.on_commit:

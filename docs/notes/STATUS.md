@@ -27,8 +27,10 @@ measured (published figures disagree).
   the missing ones into `history/lang=<l>/`, at most 3, 20 s each, bound to the budget at INTERACTIVE;
   every fetch, failed or not, in the answer's `history`, on the Ask page and in the event log. The
   grow dialog and the on-demand queue are unchanged: a fetched unit embeds where `embed_slices` names
-  its history slice (EUR-Lex4's does, on the operator's word). The web process writes the unit: its
-  `/data` mount must be writable where the collection's origin is.
+  its history slice (EUR-Lex4's does, on the operator's word). The web never writes the corpus (it is
+  mounted read-only there, München): it lands the unit in the collection's `state/fetched/` inbox, and
+  the worker's index maintainer moves it into the origin and registers exactly those units
+  (`discovery.register`, a cost per unit, never a corpus scan) — the bundle inbox's pattern.
 
 - **A pilot-ok now binds the code the run imports** (tools/code_pin.py). The chunker, languages and
   retrieval tags pinned app/ask's code, which those runs do not execute, beside six files listed by
