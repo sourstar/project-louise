@@ -119,6 +119,17 @@ class EditionFacts:
     better_as: tuple[str, ...] = ()
     publisher: str = ""
     year: int | None = None
+    #: the WORK's first publication as the origin states it (PG's summary,
+    #: marc520: "… is a novel published in 1920"); never the edition's year
+    first_published: int | None = None
+
+
+#: "published in 1920", "first published in 1605", "originally published in
+#: 1813" — the summary's own statement of the work's first publication
+#: (München's scan of 2,498 PG catalogue records, 2026-11-16: ~10 % state it;
+#: marc906/marc260 are the transcribed EDITION's year, Don Quixote 1928 vs 1605)
+_FIRST_PUBLISHED = re.compile(r"\b(?:first\s+|originally\s+)?published\s+(?:in\s+)?(1[4-9]\d\d|20\d\d)\b",
+                              re.IGNORECASE)
 
 
 #: an abridgement, by the edition's own words — never "unabridged"
@@ -143,9 +154,16 @@ def edition_facts(record: dict[str, Any]) -> EditionFacts:
         publisher = re.split(r"[,;]|\b\d{4}\b", imprint.split(":", 1)[1])[0]
     publisher = re.sub(r"[^\w ]", "", publisher.lower()).strip()
     year = _YEAR.search(imprint) or _YEAR.search(str(record.get("date") or ""))
+    first = None
+    for s in marc.get("520") or []:
+        m = _FIRST_PUBLISHED.search(str(s))
+        if m:
+            first = int(m.group(1))
+            break
     return EditionFacts(abridged=bool(_ABRIDGED.search(words)),
                         better_as=tuple(_BETTER.findall(str(extra.get("description") or ""))),
-                        publisher=publisher, year=int(year.group(1)) if year else None)
+                        publisher=publisher, year=int(year.group(1)) if year else None,
+                        first_published=first)
 
 
 def edition_order(candidates: Sequence[tuple[int, str, str | None]], facts: dict[str, EditionFacts],
@@ -585,18 +603,18 @@ def facts_for(collection, want: Sequence[str], *, root: Path | None = None) -> d
 
 #: the rule `edition_facts` applies; a change to it is a new file name, so a
 #: facts file never outlives the rule that wrote it (invariant 3)
-FACTS_VERSION = 1
+FACTS_VERSION = 2          # 2 (2026-11-16): first_published
 
 
 def _decode(v) -> EditionFacts:
-    return EditionFacts(bool(v[0]), tuple(v[1]), str(v[2]), v[3])
+    return EditionFacts(bool(v[0]), tuple(v[1]), str(v[2]), v[3], v[4] if len(v) > 4 else None)
 
 
 def _make(records: Iterable[dict[str, Any]]) -> dict[str, Any]:
     out = {}
     for r in records:
         f = edition_facts(r)
-        out[str(r["uid"])] = [f.abridged, list(f.better_as), f.publisher, f.year]
+        out[str(r["uid"])] = [f.abridged, list(f.better_as), f.publisher, f.year, f.first_published]
     return out
 
 
@@ -632,22 +650,44 @@ def _facts_read(tree: Path, shard, uid: str) -> EditionFacts | None:
         return None
 
 
-def attach_years(collection, hits: list[dict[str, Any]], *, root: Path | None = None) -> None:
-    """THE PUBLICATION YEAR ON EVERY HIT (operator, 2026-11-16: "the search
-    results shall show the publication year"): `year`, the edition's year as
-    `edition_facts` reads it from the record — the imprint's (MARC 260) where
-    the origin gives one, else the record's own `date` (02 §2.3: a book's
-    edition year, an article's publication date, an act's date). Read from
-    the part's facts file the edition choice already keeps, so it costs a
-    dict lookup once that file exists. Nothing is set where no year is
-    known; nothing read here can cost the search."""
+#: the plugins whose record `date` IS the work's first publication: an
+#: article's publication date, an act's own date (Frankfurt's ruling,
+#: 2026-11-16). Every other plugin's `date` is something else — a book's
+#: transcribed edition, a Wikipedia version's revision — and is never shown
+#: as the first publication.
+DATE_IS_FIRST_PUBLICATION = frozenset({"pubmed", "eurlex", "legi", "neuris", "normattiva"})
+
+
+def first_published(plugin: str | None, f: EditionFacts | None) -> int | None:
+    """The work's first publication year, or None where no source states it."""
+    if f is None:
+        return None
+    if f.first_published:
+        return f.first_published
+    if plugin in DATE_IS_FIRST_PUBLICATION and f.year:
+        return f.year
+    return None
+
+
+def attach_first_published(collection, hits: list[dict[str, Any]], *, root: Path | None = None) -> None:
+    """THE ORIGINAL PUBLICATION YEAR ON EVERY HIT (operator, 2026-11-16: "the
+    search results shall show the publication year", then "Not the year the
+    source has been added to the source, but the original publication year
+    (i.e. a book first publication year)"; choice A: where a source states
+    it, nothing otherwise). `first_published`, an int (05 §5.3): a book's
+    first publication as its origin's summary states it (`edition_facts`),
+    an article's publication year, an act's date — never the PG release date
+    nor the transcribed edition's year. Read from the part's facts file the
+    edition choice already keeps (a dict lookup once it exists); nothing
+    read here can cost the search."""
     if not hits or getattr(collection, "codex", None) is None:
         return
     try:
         facts = facts_for(collection, list(dict.fromkeys(_uid(h) for h in hits)), root=root)
     except Exception:   # noqa: BLE001 — a year is a courtesy, never the search's failure
         return
+    plugin = getattr(collection, "plugin", None)
     for h in hits:
-        f = facts.get(_uid(h))
-        if f is not None and f.year:
-            h["year"] = f.year
+        y = first_published(plugin, facts.get(_uid(h)))
+        if y:
+            h["first_published"] = y

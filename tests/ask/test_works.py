@@ -389,12 +389,34 @@ def test_gutenberg_names_its_edition_relation_as_a_work_relation():
     assert works.work_relations(SimpleNamespace(plugin="pubmed")) == ()
 
 
-# ---- the publication year on every hit (operator, 2026-11-16) -----------------
 
-def test_every_hit_carries_its_records_year_not_only_a_works_editions(tmp_path):
+# ---- the ORIGINAL publication year on every hit (operator, 2026-11-16) --------
+
+def test_a_books_first_publication_is_its_summarys_never_its_editions():
+    rec = {"title": "Don Quixote", "date": "1928",
+           "extra": {"marc": {"906": ["1928"], "260": ["New York : Macmillan, 1928."],
+                              "520": ["\"Don Quixote\" by Miguel de Cervantes is a novel first published in 1605."]}}}
+    f = works.edition_facts(rec)
+    assert f.year == 1928 and f.first_published == 1605
+    assert works.first_published("gutenberg", f) == 1605
+    # no statement of the first publication: nothing, never the edition's year
+    plain = works.edition_facts({"title": "Pride and Prejudice", "date": "1894"})
+    assert works.first_published("gutenberg", plain) is None
+    assert works.edition_facts({"extra": {"marc": {"520": ["A novel written in the 1890s."]}}}).first_published is None
+
+
+def test_an_articles_or_acts_date_is_its_first_publication_elsewhere_nothing():
+    f = works.edition_facts({"title": "x", "date": "2023-05-01"})
+    for plugin in ("pubmed", "eurlex", "legi", "neuris", "normattiva"):
+        assert works.first_published(plugin, f) == 2023
+    for plugin in ("wikipedia", "wikidata", "deposit", None):
+        assert works.first_published(plugin, f) is None, "a revision or unknown date is not a publication"
+
+
+def test_every_hit_carries_first_published_where_known(tmp_path):
     tcoll, hits, _work_of = _two_editions(tmp_path)
-    works.attach_years(tcoll, hits, root=tmp_path)
-    assert [h.get("year") for h in hits] == [2023, 2023, 2023], "pubmed:4, no edition choice, has one too"
+    works.attach_first_published(tcoll, hits, root=tmp_path)
+    assert [h.get("first_published") for h in hits] == [2023, 2023, 2023], "pubmed: its date, every hit"
     works.CACHE.queue.join()
     works.CACHE.clear()
 
@@ -402,14 +424,11 @@ def test_every_hit_carries_its_records_year_not_only_a_works_editions(tmp_path):
 def test_a_year_that_cannot_be_read_sets_nothing_and_never_fails(monkeypatch):
     hits = [hit("pubmed:1", "en")]
     monkeypatch.setattr(works, "facts_for", lambda *a, **k: (_ for _ in ()).throw(OSError("gone")))
-    works.attach_years(SimpleNamespace(name="pubmed", codex=object()), hits)
-    assert "year" not in hits[0]
-    works.attach_years(SimpleNamespace(name="x", codex=None), hits)      # no Codex: nothing read
-    assert "year" not in hits[0]
+    works.attach_first_published(SimpleNamespace(name="pubmed", plugin="pubmed", codex=object()), hits)
+    assert "first_published" not in hits[0]
 
 
-def test_the_result_page_draws_the_year_badge_only_where_known():
-    from jinja2 import Environment, FileSystemLoader
-    env = Environment(loader=FileSystemLoader("app/templates"))
-    src = env.loader.get_source(env, "_ask_results.html")[0]
-    assert '{% if h.year %}<span class="badge" data-year' in src
+def test_the_result_page_draws_the_badge_only_where_known():
+    src = open("app/templates/_ask_results.html", encoding="utf-8").read()
+    assert '{% if h.first_published %}<span class="badge" data-first-published' in src
+    assert "h.year" not in src
