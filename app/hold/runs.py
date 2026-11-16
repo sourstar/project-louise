@@ -625,15 +625,20 @@ class Answers:
         embed = Answers(lambda texts, runs: embeddings.embed_calibration(recipe, texts, runs=runs))
         vectors = embed(texts);  runs.check(…, embed.runs)
 
-    `runs` is fresh per call, so a check is about THESE vectors and no others."""
+    `runs` is fresh per call, so a check is about THESE vectors and no others.
+    Every call is a check's (the gate, the re-check at start, a sample), never
+    a model's use: its requests write no use row (app/model_use.py, operator
+    2026-11-16)."""
 
     def __init__(self, fn: Callable[[list[str], set], list[list[float]]]) -> None:
         self._fn = fn
         self.runs: set = set()
 
     def __call__(self, texts: list[str]) -> list[list[float]]:
+        from app import model_use
         self.runs = set()
-        return self._fn(texts, self.runs)
+        with model_use.not_work():
+            return self._fn(texts, self.runs)
 
 
 def validate(root: Path, name: str, codex: Codex, *, role: str, reference,

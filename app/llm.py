@@ -29,7 +29,7 @@ import re
 from dataclasses import dataclass
 
 import httpx
-from . import config, model_load
+from . import config, model_load, model_use
 from .rage import dispatch
 from .rage import keep as rage_keep
 from .rage.dispatch import Level
@@ -196,6 +196,7 @@ def chat(messages: list[dict], temperature: float = 0.3, max_tokens: int = 1500,
         r = client.post(url, json=body, headers=dispatch.level_headers())
         r.raise_for_status()
         got = r.json()
+        model_use.touch(config.CHAT_URL, config.CHAT_MODEL)       # a real answer (app/model_use.py)
         if config.CHAT_API == "openai":
             return strip_think(got["choices"][0]["message"]["content"] or "")
         return strip_think(got["message"]["content"])
@@ -246,6 +247,7 @@ def chat_tools(messages: list[dict], tools: list[dict] | None, temperature: floa
         r = client.post(url, json=body, headers=dispatch.level_headers())
         r.raise_for_status()
         got = r.json()
+        model_use.touch(config.CHAT_URL, config.CHAT_MODEL)       # a real answer (app/model_use.py)
     msg = got["choices"][0]["message"] if config.CHAT_API == "openai" else got["message"]
     raw_calls = msg.get("tool_calls") or []
     calls = [ToolCall(tc.get("id"), tc["function"]["name"], _arguments(tc["function"].get("arguments")))
@@ -283,6 +285,7 @@ def chat_stream(messages: list[dict], temperature: float = 0.3,
         with client.stream("POST", url, json=body,
                            headers=dispatch.level_headers()) as r:
             r.raise_for_status()
+            model_use.touch(config.CHAT_URL, config.CHAT_MODEL)   # a real answer (app/model_use.py)
             for line in r.iter_lines():
                 if not line:
                     continue

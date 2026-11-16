@@ -150,6 +150,10 @@ _sizes: dict[tuple[str, str], int] = {}
 #: the card): the resident budget's margin is the card's count minus their sum
 #: (`held_sizes`, app/resident.py)
 _held: dict[str, dict[str, int]] = {}
+#: server -> {model: the backend's cpu_percent} as the LAST `/system` answer gave
+#: it: whether a model is serving now, read from the same answer as its size
+#: (app/model_evict.py, which leaves a busy one alone)
+_cpu: dict[str, dict[str, float]] = {}
 #: (server, model) -> the FEWEST bytes `/system` gave as its `size_vram`: the
 #: model AT REST, as its load left it, before a request grows its buffers —
 #: what the resident budget counts (app/resident.py, 2026-11-08)
@@ -194,6 +198,7 @@ def reset() -> None:
         _pids.clear()
         _sizes.clear()
         _held.clear()
+        _cpu.clear()
         _rest.clear()
         _least.clear()
         _seen.clear()
@@ -231,7 +236,7 @@ def _fetch_system(server: str) -> frozenset[str] | None:
     if not isinstance(rows, list):
         raise _NoRoute()
     held = [m for m in rows if isinstance(m, dict) and isinstance(m.get("id"), str)]
-    pids, sizes, now = {}, {}, {}
+    pids, sizes, now, cpu = {}, {}, {}, {}
     # only a row that LISTS its options says whether it was loaded on demand
     listed = {m["id"]: _options_on_demand(m["load_options"]) for m in held
               if isinstance(m.get("load_options"), dict)}
@@ -239,6 +244,11 @@ def _fetch_system(server: str) -> frozenset[str] | None:
         pid = (m.get("process") or {}).get("pid") if isinstance(m.get("process"), dict) else None
         if isinstance(pid, int):
             pids[m["id"]] = pid
+        proc = m.get("process") if isinstance(m.get("process"), dict) else {}
+        try:
+            cpu[m["id"]] = float(proc.get("cpu_percent") or 0.0)
+        except (TypeError, ValueError):
+            cpu[m["id"]] = 0.0
         size = m.get("size_vram")
         ok = isinstance(size, int) and not isinstance(size, bool) and size > 0
         if ok:
@@ -247,6 +257,7 @@ def _fetch_system(server: str) -> frozenset[str] | None:
     with _lock:
         _pids[server] = pids
         _held[server] = now
+        _cpu[server] = cpu
         _seen.update((server, m) for m in now)
         for m in now:
             if m in listed:
@@ -381,6 +392,14 @@ def held_sizes(server: str, max_age_s: float | None = None) -> dict[str, tuple[i
             return None
         pids = _pids.get(server, {})
         return {m: (pids.get(m), now.get(m, 0)) for m in ids}
+
+
+def held_cpu(server: str) -> dict[str, float]:
+    """`{model: cpu_percent}` of the backends as the LAST `/system` answer
+    gave them — no request: read right after `held_sizes`, it is the same
+    answer (app/model_evict.py)."""
+    with _lock:
+        return dict(_cpu.get(server_of(server), {}))
 
 
 class _NoRoute(Exception):
@@ -588,6 +607,7 @@ def ensure_loaded(url: str, model: str | None, warm: Callable[[float], object], 
         if isinstance(flight.error, (LoadTimeout, LoadRefused)):
             raise flight.error
         return time.monotonic() - t0
+    _make_room(server, model)
     t0 = time.monotonic()
     outcome = "failed: interrupted"
     try:
@@ -624,6 +644,21 @@ def ensure_loaded(url: str, model: str | None, warm: Callable[[float], object], 
     if flight.error is not None:
         raise flight.error
     return flight.seconds
+
+
+def _make_room(server: str, model: str) -> None:
+    """LOUISE FREES THE ROOM, NOT THE RECLAIMER (operator, 2026-11-16: the
+    models not used in a long time are evicted instead of the ones actively
+    used; app/model_evict.py): before this cold load, the loaded models with
+    the OLDEST real use are unloaded until it fits under the reclaimer's
+    line, so LocalAI's LRU — which Louise's own warms and checks keep
+    refreshing — never has to choose. Never raises: whatever it cannot tell,
+    the load goes as before."""
+    try:
+        from . import model_evict
+        model_evict.before_load(server, model)
+    except Exception:   # noqa: BLE001 — the load goes as before
+        pass
 
 
 #: the loads started behind a caller: (server, model) -> [thread, when it ended]

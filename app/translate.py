@@ -205,7 +205,9 @@ def _touch() -> None:
     global _touched
     if not config.TRANSLATE_MODEL:
         return
-    from . import node_state
+    from . import model_use, node_state
+    if not model_use.counts():
+        return              # a check's request, not a translation (app/model_use.py)
     try:
         now = time.time()
         with _lock:
