@@ -2886,3 +2886,20 @@ model it loads. One `/system` read per decision; one pin read per model unloaded
 **AFTER.** To fill after the deploy: the same 12 h count of `WatchDog` evictions (total, MADLAD's share), the
 `card: unloaded …` lines (which models, how long unused), the cold loads per Ask, and whether MADLAD is reloaded
 within 10 min of an eviction.
+
+### 2026-11-16 — embed lanes starved by the snapshot views' bounds (#720) — MEASURED
+
+**Scenario (BEFORE, München, app 7efabc6, 20:33–20:43Z, wikipedia alone on the B70, bge-m3, parallel:1).**
+37.2–41.8 chunks/s at 41–49 % card busy. Through LocalAI the same texts cost 8.6 ms each (~116 chunks/s). Engine
+gaps ≥ 64 ms: 864 of 22,377 calls, about one per request. py-spy `--gil` 60 s: the GIL was held 57.8 s, 94 % by the
+embed pool in `possession.holding` → `Snapshot.lookup_order` → `_keyed`; the `coalesce-wikipedia` lanes got 0.5 %.
+Cause: `seeder.current_snapshot` gives each caller a `copy.copy` view, and `_keyed` made its cache on the view, so
+every document re-keyed and sorted the 26,551 parts (34.8 ms first, 59.7 ms on a new view, 1.5 ms cached).
+
+**The change (#720, deployed 7feec0e).** The cache is made on the shared header before the copy; every view shares it.
+
+**AFTER (21:50–21:58Z; 21:48–21:50 excluded: a person's query held the claim; bge-m3 reloaded at 21:50:10).**
+85.9 (with the load), 107.7, 78.7 and 102.4 chunks/s over 2-minute lines: about 2.5× BEFORE. Card busy 88–96 %
+in six of seven minutes, and one unexplained minute at 42 % (21:55Z). Engine gaps ≥ 64 ms: 224 of 45,041 calls
+(0.5 %, from 3.9 %). GIL held 9.3 s of 30 s, with `_keyed` gone from the top. The next holders are
+stats-publisher (34 %) and share-fetch (14 %), both re-reading and re-serialising Codex files. vega-batch.md §6.
