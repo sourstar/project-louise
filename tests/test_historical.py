@@ -93,3 +93,13 @@ def test_speed_turns_it_off_in_the_chat_body():
     reads = []
     api._answer_messages(api.ChatBody(messages=body.messages, speed=True), "q", result, reads)
     assert reads == []
+
+
+def test_the_publication_year_is_a_trigger_and_is_said():
+    # München's `year` (PR #695): the original publication year, one field
+    shown, reads = historical.read_sources([_hit(1, MODERN, year=1353), _hit(2, MODERN, year=1950),
+                                            _hit(3, MODERN)], "x")
+    assert list(shown) == [1] and reads[0].why == "year"
+    assert "first published 1353" in shown[1][0]
+    assert "by its publication year" in historical.said(reads)
+    assert historical.year_of({"year": "c1590"}) is None and historical.year_of({"year": "1590"}) == 1590

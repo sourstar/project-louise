@@ -24,6 +24,8 @@ WHEN, per source, and only under Quality (Speed skips it all):
     QUOTES Dante is read so only where it quotes enough to matter;
   - the record's language is a historical stage by its ISO 639-3 code
     (`enm`, `fro`, `gmh` …: the standard's own codes, no list of ours);
+  - the source's original publication year (`year`) is before the
+    reader's `until`;
   - the QUESTION asks about an older period (a century, a period name,
     a year before 1800): then a single marker in a passage is enough.
 
@@ -82,6 +84,10 @@ class Reader:
     #: markers a passage needs before it is read as older language, when
     #: the question does not ask about a period (and when it does: 1)
     threshold: int = 2
+    #: a source first published before this year is older language
+    #: whatever its passage shows (the hit's `year`, München's PR #695:
+    #: the original publication year where a source states it)
+    until: int = 1800
 
 
 def _rule(name: str, pattern: str, repl: str, flags: int = 0,
@@ -191,6 +197,15 @@ def modernise(reader: Reader, text: str) -> tuple[str, list[str]]:
     return text, applied
 
 
+def year_of(hit: dict[str, Any]) -> int | None:
+    """The hit's original publication year (`year`), where a source states
+    it; None otherwise. ONE date field, the one the results show."""
+    try:
+        return int(str(hit.get("year")).strip()[:4]) if hit.get("year") not in (None, "") else None
+    except ValueError:
+        return None
+
+
 def stage_of(hit: dict[str, Any], *, period_asked: bool) -> tuple[Reader | None, str, str] | None:
     """(the reader, the stage named, why) for a source read as older
     language, or None. A stage code names its stage even where no reader
@@ -202,6 +217,9 @@ def stage_of(hit: dict[str, Any], *, period_asked: bool) -> tuple[Reader | None,
     reader = READERS.get(lang)
     if reader is None:
         return None
+    year = year_of(hit)
+    if year is not None and year < reader.until:
+        return reader, reader.stage, "year"
     found = markers(reader, str(hit.get("text") or ""))
     if period_asked and found >= 1:
         return reader, reader.stage, "question"
@@ -254,6 +272,9 @@ def read_sources(hits: Iterable[dict[str, Any]], question: str, answer_lang: str
         if reader is not None:
             text, applied = modernise(reader, text)
         suffix = f" · «{stage}»"
+        year = year_of(h)
+        if year is not None:
+            suffix += f" · first published {year}"
         if applied:
             suffix += " · spelling modernised for reading (" + ", ".join(applied) + ")"
         if i in pairs:
@@ -269,7 +290,8 @@ def said(reads: list[Read]) -> str:
         return ""
     parts = []
     for r in reads:
-        bits = [r.stage, f"by its {r.why}" if r.why != "question" else "the question asks about the period"]
+        bits = [r.stage, "the question asks about the period" if r.why == "question"
+                else f"by its {'publication year' if r.why == 'year' else r.why}"]
         if r.rules:
             bits.append("spelling modernised for reading")
         if r.translation_in:
