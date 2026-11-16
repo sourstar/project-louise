@@ -30,6 +30,7 @@ from dataclasses import asdict, is_dataclass
 from pathlib import Path
 from typing import Any
 
+from app import credits as credits_mod
 from app.hold.codex import CodexError
 
 LEGACY_SPACE = "legacy"
@@ -58,7 +59,8 @@ def context_for(collection, *, root: Path | None = None, now: float | None = Non
     if codex is None:
         return {"collection_id": None, "lineage_id": None, "snapshot_id": None,
                 "space_id": f"{LEGACY_SPACE}:{collection.plugin}", "trust_level": "unverified",
-                "certification": None, "red": False, "figures": None, "codex": None}
+                "certification": None, "red": False, "figures": None, "codex": None,
+                "credits": credits_mod.of(collection)}
     from app import copy_state
     from app.hold import anchor as anchor_mod, collection as col, equivalence, trust_file
     from app.hold.codex import lineage_id
@@ -92,6 +94,8 @@ def context_for(collection, *, root: Path | None = None, now: float | None = Non
             # 05 §5.3: certification beside the trust level — two axes, never one
             "certification": anchor_mod.certification(root, name, codex, snap, now=now),
             "red": codex.license.cls == "red",
+            # whom the text is from, as its licence asks (app/credits.py)
+            "credits": credits_mod.of(collection),
             "figures": None if getattr(codex, "record_line", 1) == 1 else [], "codex": codex}
 
 
@@ -133,6 +137,7 @@ def result_of(collection, ctx: dict[str, Any], hit: dict[str, Any], rank: int, *
         "producer_key": own_key if producer in (None, "local") else producer,
         "title": hit.get("title"), "authors": hit.get("authors"), "lang": hit.get("lang"),
         "figures": ctx["figures"], "reranked": reranked,
+        "credits": ctx.get("credits") or [],
     }
     if ctx["red"]:
         out["origin_url"] = _origin_url(collection, hit) or hit.get("origin_url")
