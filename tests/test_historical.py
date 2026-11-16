@@ -95,12 +95,12 @@ def _fact(stage, method):
 def test_a_record_with_a_claim_is_read_by_its_claim():
     # the claim reads a modern-looking passage as Old Italian, and names its method
     shown, reads = historical.read_sources(_numbered(
-        _hit(1, MODERN, language_stage=_fact("wikidata:Q135913388", "human")),
+        _hit(1, MODERN, language_stage=_fact("wikidata:Q135913388", "wikidata")),
         _hit(2, MODERN, language_stage=_fact("wikidata:Q135913388", "matcher")),
         _hit(3, DANTE, language_stage=_fact(None, "human"))), "x")
     assert sorted(shown) == [1, 2]       # a person's "not an older stage" skips the passage check
     assert "«Old Italian»" in shown[1][0]
-    assert reads[0].badge() == "Old Italian, by hand"
+    assert reads[0].badge() == "Old Italian, by Wikidata"
     assert reads[1].badge() == "Old Italian, by its text"
     shown, reads = historical.read_sources(
         _numbered(_hit(1, SEICENTO, language_stage=_fact("wikidata:Q135913388", "human"))), "x")
@@ -209,7 +209,8 @@ def _claim(obj="wikidata:Q135913388", kind="matcher", subject="gutenberg:1"):
 
 def test_a_claim_from_each_method_is_valid_and_a_label_is_not():
     from app.hold import annotations as ann
-    for c in (_claim(), _claim("iso639-3:enm", "human"), _claim(None, "human")):
+    for c in (_claim(), _claim("wikidata:Q135913388", "wikidata"), _claim("iso639-3:enm", "human"),
+              _claim(None, "human")):
         assert ann.check_claim(c, target_plugin="gutenberg")["type"] == "language-stage"
     for bad, why in ((_claim("older Italian"), "canonical id"), (_claim("lang:it"), "never by a label"),
                      (_claim(None), "only in a human claim"), (_claim("iso639-3:ENM"), "ISO 639-3"),
@@ -218,9 +219,8 @@ def test_a_claim_from_each_method_is_valid_and_a_label_is_not():
             ann.check_claim(bad, target_plugin="gutenberg")
     model = {**_claim(), "method": {"kind": "model", "id": "m", "version": 1, "model": "sha256:" + "a" * 64,
                                     "prompt": "sha256:" + "b" * 64, "temperature": "0"}}
-    for other in (model, {**_claim(), "method": {"kind": "wikidata"}}):
-        with pytest.raises(ann.AnnotationsError, match="matcher, human"):    # the corpus alone
-            ann.check_claim(other, target_plugin="gutenberg")
+    with pytest.raises(ann.AnnotationsError, match="matcher, wikidata, human"):
+        ann.check_claim(model, target_plugin="gutenberg")
 
 
 def test_a_person_and_the_matcher_coexist_and_the_person_wins():
@@ -242,8 +242,10 @@ def test_a_person_and_the_matcher_coexist_and_the_person_wins():
     hit = {"uid": "gutenberg:1"}
     ask_ann._attach_stage(hit, A, "2026-11", idx.stages["gutenberg:1"][:1])
     assert hit["language_stage"]["method"] == "matcher"
-    ask_ann._attach_stage(hit, A, "2026-11", [ann.Claim("annotations:3", _claim(None, "human"))])
-    assert hit["language_stage"]["method"] == "human"           # a person over the matcher
+    ask_ann._attach_stage(hit, A, "2026-11", [ann.Claim("annotations:3", _claim(kind="wikidata"))])
+    assert hit["language_stage"]["method"] == "wikidata"        # Wikidata over the matcher
+    ask_ann._attach_stage(hit, A, "2026-11", [ann.Claim("annotations:4", _claim(None, "human"))])
+    assert hit["language_stage"]["method"] == "human"           # a person over Wikidata
 
 
 def test_the_claim_is_pinned_to_its_record_alone_and_makes_its_edge():
@@ -301,9 +303,7 @@ def test_the_merge_keeps_every_other_claim_and_replaces_the_matchers():
     lines, summary = tool.merge([work, human, old, v0], [_claim(subject="gutenberg:9")])
     assert lines[:2] == [work, human] and len(lines) == 3      # every version of the matcher replaced
     assert summary == {"kept": 2, "replaced": 2, "language_stage": 1, "claims": 3}
-    # a same-work of ONE language needs a stage on one end
+    # a same-work of ONE language is kept as it is (02 §2.10: editions in one language)
     one = json.dumps({"type": "same-work", "subject": "gutenberg:3", "object": "gutenberg:4",
                       "subject_lang": "it", "object_lang": "it"}).encode()
-    with pytest.raises(SystemExit, match="one language"):
-        tool.merge([one], [])
-    assert len(tool.merge([one], [_claim(subject="gutenberg:3")])[0]) == 2
+    assert tool.merge([one], [])[0] == [one]

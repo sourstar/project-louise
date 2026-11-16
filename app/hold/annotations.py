@@ -104,13 +104,12 @@ WORK_TYPES = (SAME_WORK, TRANSLATION_OF)
 GRAPH_TYPES = (MENTION, RELATION, COMMUNITY, LANGUAGE_STAGE)
 #: the namespaces of a stage: the ISO 639-3 code, or a Wikidata item
 STAGE_NAMESPACES = ("iso639-3", "wikidata")
-#: the methods a language-stage claim may be made by (09 §9.5): from the
-#: annotated collection's own corpus alone, or by a person (operator,
-#: 2026-11-16: "A collection has only the information contained in its
-#: corpus"). A `wikidata` method (P407) is ON HOLD until the operator
-#: decides whether an annotation may take claims from Wikidata; until then
-#: it is refused here
-STAGE_METHOD_KINDS = ("matcher", "human")
+#: the methods a language-stage claim may be made by (09 §9.5): a matcher
+#: reading the annotated record alone, Wikidata (the work's P407 naming the
+#: stage — an annotations collection may take claims from an outside
+#: source, each labelled by its method: operator's "A", 2026-11-16, #703),
+#: or a person
+STAGE_METHOD_KINDS = ("matcher", "wikidata", "human")
 CLAIM_TYPES = WORK_TYPES + GRAPH_TYPES
 #: a community's edges: each member → the community claim (09 §9.14)
 MEMBER_OF = "member-of"
@@ -477,32 +476,6 @@ def record_ends(c: dict[str, Any]) -> list[str]:
     return out
 
 
-def one_language_unstaged(one_language: Iterable[tuple[int, str, str]], staged: set[str]) -> None:
-    """02 §2.10 (amended 2026-11-16): a `same-work` whose two ends are in ONE
-    language is refused unless one of them carries a `language-stage` claim
-    with a stage (a non-null object) in the same claim set — the rule
-    `create` and `update` both apply to the whole set (`read_claims`, the
-    streamed `survey`). `one_language` is (line, subject, object)."""
-    bad = [(i, a, b) for i, a, b in one_language if a not in staged and b not in staged]
-    if bad:
-        first = "; ".join(f"line {i}: {a} ~ {b}" for i, a, b in bad[:8])
-        raise AnnotationsError(
-            f"{len(bad)} same-work claim(s) join two records of one language and neither carries a "
-            f"language-stage claim in this file (02 §2.10): {first}{' …' if len(bad) > 8 else ''}")
-
-
-def same_language_ends(c: dict[str, Any]) -> tuple[str, str] | None:
-    """(subject, object) of a `same-work` whose two ends share a language."""
-    if c.get("type") == SAME_WORK and c.get("subject_lang") == c.get("object_lang"):
-        return c["subject"], c["object"]
-    return None
-
-
-def staged_subject(c: dict[str, Any]) -> str | None:
-    """The record a `language-stage` claim gives a stage to (object non-null)."""
-    return c["subject"] if c.get("type") == LANGUAGE_STAGE and c.get("object") is not None else None
-
-
 def read_claims(data: bytes, *, target_plugin: str | None = None,
                 target_plugins: Sequence[str] | None = None) -> list[Submitted]:
     """The claims file: JSON Lines, one claim per line, blank lines skipped.
@@ -527,9 +500,6 @@ def read_claims(data: bytes, *, target_plugin: str | None = None,
         out.append(Submitted(i, raw, c))
     if not out:
         raise AnnotationsError("the claims file holds no claim")
-    one_language_unstaged(
-        [(s.line, *e) for s in out if (e := same_language_ends(s.claim)) is not None],
-        {u for s in out if (u := staged_subject(s.claim)) is not None})
     return out
 
 

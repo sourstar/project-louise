@@ -496,8 +496,7 @@ def survey_part(ref, start: int, end: int, plugins: tuple[str, ...], orders: dic
     within the range, up to the first refused (`error`: its line, offset and
     length) — every claim's three integers and identity, its ends, what a
     preview counts, and how many lines ended in the range (`newlines`)."""
-    from .annotations import (CHUNK, GRAPH_TYPES, _method_name, _prefix, end_uid, ends_of,
-                              same_language_ends, staged_subject)
+    from .annotations import CHUNK, GRAPH_TYPES, _method_name, _prefix, end_uid, ends_of
     lines, offsets, lengths = array("q"), array("q"), array("q")
     idents = bytearray()
     bufs: dict[str, _EndsBuf] = {}
@@ -505,8 +504,6 @@ def survey_part(ref, start: int, end: int, plugins: tuple[str, ...], orders: dic
     by_type: Counter = Counter()
     by_method: Counter = Counter()
     graph, newlines, error = False, 0, None
-    one_language: list[tuple[int, str, str]] = []     # 02 §2.10: checked over the whole set
-    staged: set[str] = set()
     with _opened(ref) as src:
         for i, offset, line in src.physical(start, end):
             raw = _raw(line)
@@ -524,10 +521,6 @@ def survey_part(ref, start: int, end: int, plugins: tuple[str, ...], orders: dic
             offsets.append(offset)
             lengths.append(len(raw))
             t = c["type"]
-            if (pair := same_language_ends(c)) is not None:
-                one_language.append((i, *pair))
-            if (u := staged_subject(c)) is not None:
-                staged.add(u)
             graph = graph or t in GRAPH_TYPES
             by_type[t] += 1
             by_method[_method_name(c["method"])] += 1
@@ -542,7 +535,7 @@ def survey_part(ref, start: int, end: int, plugins: tuple[str, ...], orders: dic
     return {"lines": lines.tobytes(), "offsets": offsets.tobytes(), "lengths": lengths.tobytes(),
             "idents": bytes(idents), "ends": {p: b.task() for p, b in bufs.items()},
             "contributors": contributors, "by_type": by_type, "by_method": by_method, "graph": graph,
-            "newlines": newlines, "error": error, "one_language": one_language, "staged": staged}
+            "newlines": newlines, "error": error}
 
 
 def _cuts(src: ClaimsSource) -> list[tuple[int, int]]:
@@ -571,10 +564,8 @@ def survey(src: ClaimsSource, *, plugins: tuple[str, ...] = (),
     ends for `read_target`; without it every part is a candidate. With
     `keep_idents`, each claim's identity digest is kept (16 bytes a claim)."""
     from app import parallel
-    from .annotations import AnnotationsError, one_language_unstaged
+    from .annotations import AnnotationsError
     orders = dict(orders or {})
-    one_language: list[tuple[int, str, str]] = []
-    staged: set[str] = set()
     lines, offsets, lengths = array("q"), array("q"), array("q")
     idents = bytearray()
     bufs: dict[str, _EndsBuf] = {}
@@ -596,8 +587,6 @@ def survey(src: ClaimsSource, *, plugins: tuple[str, ...] = (),
         by_type.update(part["by_type"])
         by_method.update(part["by_method"])
         graph = graph or part["graph"]
-        one_language.extend((base + i, a, b) for i, a, b in part["one_language"])
-        staged |= part["staged"]
         if part["error"] is not None:
             i, offset, length = part["error"]
             _refuse_repeat(idents, lines)
@@ -608,7 +597,6 @@ def survey(src: ClaimsSource, *, plugins: tuple[str, ...] = (),
     if not lines:
         raise AnnotationsError("the claims file holds no claim")
     _refuse_repeat(idents, lines)
-    one_language_unstaged(one_language, staged)
     kept = np.frombuffer(bytes(idents), dtype="S16") if keep_idents else None
     del idents
     return Survey(len(lines), np.frombuffer(lines, dtype=np.int64), np.frombuffer(offsets, dtype=np.int64),

@@ -23,11 +23,9 @@ THE MERGE. Every line of the existing file is kept as it was, except the
 matcher's own earlier `language-stage` claims — of ANY version of
 historical-markers, so a new version replaces the old one's claims and two
 matcher claims about one record never share an identity — which this
-pass replaces. A person's claim (`human`) stays beside the matcher's and
-wins where read (09 §9.5: a claim is identified by type, subject and
-method kind). A `same-work` of ONE language is refused unless one of its
-ends carries a `language-stage` claim in the merged file (02 §2.10,
-amended 2026-11-16).
+pass replaces. A person's claim (`human`) and Wikidata's stay beside the
+matcher's and win where read (09 §9.5: a claim is identified by type,
+subject and method kind; a person over Wikidata over the matcher).
 """
 from __future__ import annotations
 
@@ -112,17 +110,6 @@ def merge(existing: list[bytes], stage_claims: list[dict[str, Any]]) -> tuple[li
     kept = [line for line in existing if not ours(json.loads(line))]
     new = [cx.canonical_json(c) for c in sorted(stage_claims, key=lambda c: c["subject"])]
     lines = kept + new
-    staged = {json.loads(line)["subject"] for line in lines
-              if json.loads(line).get("type") == "language-stage" and json.loads(line).get("object")}
-    one_lang = []
-    for line in lines:
-        c = json.loads(line)
-        if c.get("type") == "same-work" and c.get("subject_lang") == c.get("object_lang") \
-                and not ({c["subject"], c["object"]} & staged):
-            one_lang.append(f"{c['subject']} ~ {c['object']}")
-    if one_lang:
-        raise SystemExit(f"{len(one_lang)} same-work claim(s) join two records of one language and "
-                         f"neither carries a language-stage claim (02 §2.10): {'; '.join(one_lang[:8])}")
     return lines, {"kept": len(kept), "replaced": len(existing) - len(kept), "language_stage": len(new),
                    "claims": len(lines)}
 

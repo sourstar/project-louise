@@ -146,12 +146,14 @@ stay at answer time.
   9): `subject` a record, `object` the stage's canonical id
   (`iso639-3:<code>`, or a Wikidata item where 639-3 has none), method
   `matcher` (historical-markers 1, the record alone: its markers, PG's
-  marc520 year, the RDF's translator credit) or `human` — "A collection
-  has only the information contained in its corpus" (operator, 2026-11-16,
-  the same day); a `wikidata` method is ON HOLD, put to the operator; a human
+  marc520 year, the RDF's translator credit — "A collection has only the
+  information contained in its corpus", operator, the same day), `wikidata`
+  (the work's P407; an annotations collection may take claims from an
+  outside source, labelled by method: operator's "A", #703 — the method is
+  allowed, its builder is the next PR) or `human`; a human
   claim may say `object: null`, "not an older stage". Identified by (type,
   subject, method kind), so a person's and the matcher's coexist; read in
-  the order human, matcher. `object_hash` null; the edge
+  the order human, Wikidata, matcher. `object_hash` null; the edge
   `annotations:language-stage` to the stage, none for null.
 - **Where** (operator's "A"): in gutenberg-book-editions, re-created at
   version 9 (its 4,387 claims carried unchanged), title gaining "and the
@@ -173,15 +175,20 @@ stay at answer time.
   639-3 code: nothing about a record is read from Wikidata (architecture,
   under #701).
 - **The merge** keeps every line of the existing claims file and replaces
-  the matcher's earlier stage claims of any version. A `same-work` of one
-  language is refused unless one end carries a stage (02 §2.10, amended:
-  Dante and a modern Italian rendering) — by `create` and `update --claims`
-  over the whole claim set (`read_claims` and the streamed `survey`), not
-  only by the tool.
+  the matcher's earlier stage claims of any version.
+- **`same-work`** (02 §2.10, 09 §9.5, amended): "two records are versions
+  of one work — editions in one language or in different languages". The
+  sentence said "in different languages"; gutenberg-book-editions holds
+  7,154 claims (4,357 wikidata, 2,797 matcher) of which 5,644 join editions
+  in ONE language (counted on the node by München), so the collection was
+  right and the sentence wrong (architecture's ruling). A one-language
+  refusal, built and withdrawn the same day, is not in the code. An older
+  source whose same-work partner carries no stage is pointed at it as
+  "a modern version of it".
 - **At answer time** (Quality): the claim is attached to the hit as the
   fact `language_stage` (app/ask/annotations.py); a record with a claim is
   read by it (or not at all for a person's null); a record without one is
   read by its passage alone; no year decides it (b2af94f's trigger is
-  gone). The badge names the method: "by its text", "by hand", "by this
-  passage". C also points at a modern version in the same
+  gone). The badge names the method: "by its text", "by Wikidata", "by
+  hand", "by this passage". C also points at a modern version in the same
   language ("a modern version of it is source [k]").
