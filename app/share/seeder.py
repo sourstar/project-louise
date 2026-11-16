@@ -60,11 +60,25 @@ def current_snapshot(shard_dir: Path) -> sn.Snapshot | None:
     the load wait for it. Each caller gets its own VIEW of the shared
     header (shards, relations, files, hash): a delta it reads is parsed
     into its view and leaves with it, never held by the cache (a first
-    delta is ~2.8 GB as strings for 40 M uids, measured; LazyDelta)."""
+    delta is ~2.8 GB as strings for 40 M uids, measured; LazyDelta).
+
+    THE BOUNDS ARE SHARED WITH THE HEADER (2026-11-16). A view shares
+    the header's `__dict__` entries only where they exist before the copy
+    (a shallow copy). `Snapshot._keyed`'s cache was created on each view
+    instead, so every view re-keyed and sorted every part's bounds. The
+    embed pool takes a view per document (`possession.holding`): wikipedia's
+    26,551 parts took 35–60 ms a document of pure Python, and its pool held
+    the GIL 57.8 s of 60 while the embed lanes got 0.5 % and the card idled
+    (py-spy --gil, München; docs/notes/vega-batch.md §6). The cache now lives
+    on the shared header, made before the copy, so one view's keying serves
+    every other's. The keyed list is a pure function of the immutable
+    shards and the order, so two threads filling one key at once write the
+    same value."""
     snap = _shared(shard_dir)
     if snap is None or not isinstance(snap.delta, sn.LazyDelta):
         return snap
     import copy
+    snap.__dict__.setdefault("_keyed_cache", {})  # shared by every view (above)
     view = copy.copy(snap)                       # the header shared, the hash with it
     object.__setattr__(view, "delta", snap.delta.fresh())
     return view
