@@ -1340,20 +1340,21 @@ def _ask_result(body: AskQueryBody) -> dict:
     return result
 
 
-def _attach_history(result: dict, body: AskQueryBody, *, client=None) -> None:
+def _attach_history(result: dict, body: AskQueryBody) -> None:
     """05 §5.3 `history` on the Ask page, as the API path gives it
     (app/ask/results.py): a question asking, in its own words, for a cited EU
     act's past (`history.asks`; RULE 2, no form) has the versions the
-    collection lacks fetched now, bounded — pinned as facts, and every fetch
-    shown with how it ended (`_ask_results.html`). Never fatal."""
+    collection lacks fetched now by the worker, bounded — pinned as facts,
+    and every fetch shown with how it ended (`_ask_results.html`). Never
+    fatal."""
     from app.ask import history as history_mod
     if not history_mod.asks(body.query):
         return
     try:
         named = query_service.resolve_collections(body.collections)
         from app import refs
-        got = history_mod.fetch(body.query, named, history=True, store=refs.get_store(),
-                                query_lang=result.get("query_lang"), client=client)
+        got = history_mod.ask(body.query, named, history=True, store=refs.get_store(),
+                              query_lang=result.get("query_lang"))
     except Exception as e:   # noqa: BLE001 — said, never fatal to the search
         got = {"facts": [], "fetches": [{"collection": None, "act": None, "language": None, "version": None,
                                          "status": history_mod.ERROR, "why": f"{type(e).__name__}: {e}"[:300]}]}

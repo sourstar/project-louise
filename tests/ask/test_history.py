@@ -1,9 +1,11 @@
 """History on request (app/ask/history.py; operator, 2026-11-16: "No history
 but implement fetch upon request with a limit on the number of fetches per
 query and a timeout per fetch request. Return in the answer if a fetch was
-not successful and why, so it never fails silently"; "The only new part is
-the fetch on demand"): an EU act's versions the collection lacks, fetched at
-ask time into its history slice — at most LIMIT a question, each bounded,
+not successful and why, so it never fails silently"; "Option B but fetch
+triggered by a query has higher prio over the regular worker's fetching"):
+an EU act's versions the collection lacks, fetched by the WORKER on the
+answering process's request into its history slice — at most LIMIT a
+question, each bounded, on a Cellar connection ahead of the regular pass,
 every byte through the budget — and every one not fetched said with its
 reason. Never on an ordinary search."""
 from __future__ import annotations
@@ -26,7 +28,8 @@ from app.transfer.bucket import Priority
 from app.transfer.manager import current_handle
 from tests.acquire.test_eurlex_dump import CONS
 
-BASE = "https://cellar.test"
+from app.acquire import specs as _specs
+BASE = _specs.ACQUIRE_REGISTRY["eurlex"].endpoints[0].url
 ACT = "31979D0491"
 Q = "storia dell'articolo 1 della decisione 79/491/CEE"
 LANGS24 = tuple(f"lang={l}" for l in sorted(src.LANGUAGES))
@@ -71,7 +74,6 @@ def cellar_mock(monkeypatch):
         return SimpleNamespace(content=served[url], headers={})
     monkeypatch.setattr(cellar, "sparql", sparql)
     monkeypatch.setattr(cellar, "_get", get)
-    monkeypatch.setattr(history, "_endpoint", lambda: BASE)
     monkeypatch.setattr(history, "_log", lambda cs, fetches: state.logged.extend(fetches))
     return state
 
@@ -93,54 +95,30 @@ def test_words_ask_for_the_past_in_each_language_and_a_plain_citation_does_not()
 
 def test_an_ordinary_question_asks_the_origin_nothing(tmp_path, cellar_mock):
     out = history.fetch("Articolo 1 della decisione 79/491/CEE", [coll(tmp_path)], client=object())
-    assert out == {"facts": [], "fetches": []} and not cellar_mock.sparql and not cellar_mock.gets
+    assert out == {"facts": [], "fetches": [], "landed": {}} and not cellar_mock.sparql and not cellar_mock.gets
     out = _fetch(coll(tmp_path), "the history of data protection", history=True)
-    assert out == {"facts": [], "fetches": []} and not cellar_mock.sparql, "no act cited: nothing asked"
+    assert out["fetches"] == [] and not cellar_mock.sparql, "no act cited: nothing asked"
 
 
-def test_a_missing_version_lands_in_the_inbox_bound_to_the_budget_and_is_pinned(tmp_path, cellar_mock):
-    """The web never writes the corpus (mounted read-only there): the unit
-    waits in the collection's inbox, laid out as in the corpus."""
+def test_a_missing_version_lands_in_the_origin_first_in_line_and_is_pinned(tmp_path, cellar_mock):
     corpus = tmp_path / "origin"
     c = coll(corpus)
     out = _fetch(c, history=True)
     assert [(f["version"], f["status"], f["why"]) for f in out["fetches"]] == [(CONS[0], "fetched", None)]
-    rel = Path(src.HISTORY) / src.unit_rel("it", CONS[0])
-    assert (history.inbox_dir(c) / rel / rdf.TREE_FILE).is_file() and not corpus.exists()
-    # every read ran bound to the transfer manager at INTERACTIVE priority,
-    # with the deadline's stop event (invariant 5; the per-fetch timeout)
+    unit = corpus / src.HISTORY / src.unit_rel("it", CONS[0])
+    assert (unit / rdf.TREE_FILE).is_file() and out["landed"] == {"eurlex4": [str(unit)]}
+    # every read ran on a Cellar connection, bound to the transfer manager at
+    # INTERACTIVE priority with the deadline's stop event (invariant 5)
     assert cellar_mock.gets and all(p == Priority.INTERACTIVE and s is not None for _u, p, s in cellar_mock.gets)
+    # the collection's own corpus: discovered like any unit
+    refs = [r for r in SOURCE.discover(DiscoverState(corpus_root=corpus)) if r.locator == str(unit)]
+    assert len(refs) == 1 and refs[0].error is None and SOURCE.ref_of_unit(unit) == refs[0]
     (fact,) = out["facts"]
     assert "fetched now" in fact["label"] and fact["fields"]["in force from"] == "2006-10-25"
     assert fact["fields"]["text"] and fact["fields"]["fetched"] is True
     assert cellar_mock.logged == out["fetches"], "each fetch in the collection's event log"
-    # asked again before the worker moved it: in the inbox, nothing fetched
     gets = len(cellar_mock.gets)
-    assert _fetch(c, history=True)["fetches"] == [] and len(cellar_mock.gets) == gets
-    # the worker moves it into the origin: the collection's own corpus,
-    # discovered like any unit, and the inbox emptied
-    (landed,) = history.adopt(c)
-    assert landed == corpus / rel and (landed / rdf.TREE_FILE).is_file()
-    assert not (history.inbox_dir(c) / rel).exists()
-    refs = [r for r in SOURCE.discover(DiscoverState(corpus_root=corpus)) if r.locator == str(landed)]
-    assert len(refs) == 1 and refs[0].error is None and SOURCE.ref_of_unit(landed) == refs[0]
     assert _fetch(c, history=True)["fetches"] == [] and len(cellar_mock.gets) == gets, "held: nothing fetched"
-
-
-def test_adopt_takes_out_a_unit_the_origin_holds_and_skips_a_staging_directory(tmp_path):
-    corpus = tmp_path / "origin"
-    c = coll(corpus)
-    rel = Path(src.HISTORY) / src.unit_rel("it", CONS[0])
-    for base in (corpus, history.inbox_dir(c)):
-        (base / rel).mkdir(parents=True)
-        (base / rel / rdf.TREE_FILE).write_text("{}")
-    held_bytes = (corpus / rel / rdf.TREE_FILE).read_bytes()
-    staging = history.inbox_dir(c) / rel.parent / f".{CONS[0]}.staging"
-    staging.mkdir()
-    (staging / rdf.TREE_FILE).write_text("{}")
-    assert history.adopt(c) == [] and not (history.inbox_dir(c) / rel).exists()
-    assert (corpus / rel / rdf.TREE_FILE).read_bytes() == held_bytes, "a held unit is never replaced"
-    assert staging.is_dir(), "an interrupted landing is not a unit"
 
 
 def test_without_the_licence_acknowledgement_nothing_is_fetched(tmp_path, cellar_mock, monkeypatch):
@@ -178,6 +156,13 @@ def test_wanted_versions_skips_the_held_and_needs_a_question():
     assert history.wanted_versions(listed, {"01979D0491-20061025"}, 20080101, False) == []
     assert history.wanted_versions(listed, {"01979D0491-20010101"}, None, True) == ["01979D0491-20061025"]
     assert history.wanted_versions(listed, set(), None, False) == []
+
+
+def test_the_question_s_whole_bound_ends_what_is_left(tmp_path, cellar_mock, monkeypatch):
+    cellar_mock.listed = [f"0{ACT[1:]}-{y}0101" for y in (2001, 2003)]
+    monkeypatch.setattr(history, "REQUEST_S", 0.0)
+    (f,) = _fetch(coll(tmp_path), history=True)["fetches"]
+    assert f["status"] == "timeout" and "whole bound" in f["why"] and not cellar_mock.sparql
 
 
 def test_a_fetch_past_its_deadline_is_said_timeout(tmp_path, cellar_mock, monkeypatch):
@@ -250,12 +235,12 @@ def test_the_search_fetches_only_for_a_history_or_as_of_question(tmp_path, monke
     monkeypatch.setattr(db, "connect", lambda c: sqlite3.connect(":memory:"))
     calls = []
 
-    def fake(query, collections, *, as_of=None, history=False, store=None, query_lang=None, client=None):
+    def fake(query, collections, *, as_of=None, history=False, store=None, query_lang=None):
         calls.append((query, as_of, history, query_lang))
         return {"facts": [{"entity_id": "celex:x~art1", "label": "fetched now"}],
                 "fetches": [{"collection": "eurlex4", "act": ACT, "language": "it", "version": "v",
                              "status": "timeout", "why": "not done within 20 s"}]}
-    monkeypatch.setattr(history, "fetch", fake)
+    monkeypatch.setattr(history, "ask", fake)
 
     def run(names, query, k, mode, translate, **kw):
         return {"hits": [], "reranked": False, "timings": {}, "query_lang": "it"}
@@ -280,7 +265,7 @@ def test_the_ask_page_shows_every_fetch_and_why(monkeypatch):
                 "why": "not done within 20 s"},
                {"collection": "eurlex4", "act": ACT, "language": "it", "version": "v3", "status": "limit",
                 "why": "at most 3 fetches a question"}]
-    monkeypatch.setattr(history, "fetch", lambda *a, **kw: {"facts": [], "fetches": fetches})
+    monkeypatch.setattr(history, "ask", lambda *a, **kw: {"facts": [], "fetches": fetches})
     result: dict = {"hits": [], "facts": [], "query_lang": "it"}
     web._attach_history(result, web.AskQueryBody(query="Articolo 1 della decisione 79/491/CEE"))
     assert "history" not in result, "not a history question: nothing asked"
@@ -319,23 +304,162 @@ def test_register_adds_exactly_the_given_units(isolated_config, tmp_path):
     con.close()
 
 
-def test_the_worker_moves_and_registers_what_waits_in_the_inbox(isolated_config, tmp_path, monkeypatch):
-    """worker._adopt_fetched: inbox → origin → one manifest row, one `is_dir`
-    a round when nothing waits."""
+def test_a_request_is_taken_once_answered_and_read(tmp_path):
+    rid = history.post({"query": "q"}, tmp_path)
+    assert [r for r, _ in history.take(tmp_path)] == [rid] and history.take(tmp_path) == [], "claimed once"
+    history.answer(rid, {"facts": [], "fetches": [{"status": "fetched"}]}, tmp_path)
+    assert history.wait(rid, tmp_path) == {"facts": [], "fetches": [{"status": "fetched"}]}
+    assert list(tmp_path.iterdir()) == [], "nothing left behind"
+
+
+def test_a_request_no_worker_takes_is_withdrawn_and_said(tmp_path):
+    rid = history.post({"query": "q"}, tmp_path)
+    assert history.wait(rid, tmp_path, pickup_s=0.2, answer_s=5) == "not-taken"
+    assert history.take(tmp_path) == [], "withdrawn: a worker starting later does not serve it"
+    rid = history.post({"query": "q"}, tmp_path)
+    history.take(tmp_path)
+    assert history.wait(rid, tmp_path, pickup_s=0.1, answer_s=0.3) == "no-answer", "taken, never answered"
+    assert history.sweep(tmp_path, now=time.time() + history.STALE_S + 1) == 1
+
+
+def test_ask_posts_only_a_history_question_citing_an_eu_act_and_says_a_missing_worker(tmp_path):
+    c = coll(tmp_path / "origin")
+    assert history.ask("Articolo 1 della decisione 79/491/CEE", [c], where=tmp_path) == {"facts": [], "fetches": []}
+    assert history.ask("the history of data protection", [c], history=True, where=tmp_path)["fetches"] == []
+    plain = SimpleNamespace(name="normattiva", plugin="normattiva", codex=None)
+    assert history.ask(Q, [plain], history=True, where=tmp_path)["fetches"] == []
+    assert not list(tmp_path.glob("*.req")), "nothing posted"
+    (f,) = history.ask(Q, [c], history=True, where=tmp_path, pickup_s=0.2)["fetches"]
+    assert f["status"] == "unreachable" and "is it running" in f["why"]
+
+
+def test_ask_gets_what_the_worker_served(tmp_path, monkeypatch):
+    import threading
+    c = coll(tmp_path / "origin")
+    seen = []
+
+    def serve(request, *, halt=None):
+        seen.append(request)
+        return {"facts": [{"label": "fetched now"}], "fetches": [{"status": "fetched"}]}
+    monkeypatch.setattr(history, "serve", serve)
+
+    def worker():
+        for _ in range(50):
+            for rid, request in history.take(tmp_path):
+                history.serve_one(rid, request, tmp_path)
+                return
+            time.sleep(0.02)
+    t = threading.Thread(target=worker)
+    t.start()
+    got = history.ask(Q, [c], history=True, query_lang="it", where=tmp_path)
+    t.join()
+    assert got == {"facts": [{"label": "fetched now"}], "fetches": [{"status": "fetched"}]}
+    assert seen[0]["collections"] == ["eurlex4"] and seen[0]["history"] is True and seen[0]["query_lang"] == "it"
+
+
+@pytest.mark.parametrize("mode, fetched, registered", [("running", True, True), ("acquire-only", True, False),
+                                                       ("seed-only", False, False), ("paused", False, False)])
+def test_serve_obeys_the_node_s_mode(tmp_path, monkeypatch, mode, fetched, registered):
+    from app import collections as collections_mod, node_state
+    c = coll(tmp_path / "origin")
+    monkeypatch.setattr(node_state, "peek_worker_state", lambda: mode)
+    monkeypatch.setattr(node_state, "profile_runs", lambda activity: True)
+    monkeypatch.setattr(node_state, "paused_collections", lambda con=None: set())
+    monkeypatch.setattr(collections_mod, "load_all", lambda: [c])
+    monkeypatch.setattr(history, "fetch", lambda *a, **kw: {"facts": [], "fetches": [{"status": "fetched"}],
+                                                             "landed": {"eurlex4": ["/u"]}})
+    reg = []
+    got = history.serve({"query": Q, "collections": ["eurlex4"], "history": True},
+                        register=lambda col, units: reg.append((col.name, units)))
+    if fetched:
+        assert got["fetches"] == [{"status": "fetched"}]
+    else:
+        (f,) = got["fetches"]
+        assert f["status"] == "refused" and mode in f["why"]
+    assert bool(reg) is registered
+
+
+def test_serve_refuses_a_paused_collection_and_names_one_not_held(tmp_path, monkeypatch):
+    from app import collections as collections_mod, node_state
+    monkeypatch.setattr(node_state, "peek_worker_state", lambda: "running")
+    monkeypatch.setattr(node_state, "profile_runs", lambda activity: True)
+    monkeypatch.setattr(node_state, "paused_collections", lambda con=None: {"eurlex4"})
+    monkeypatch.setattr(collections_mod, "load_all", lambda: [coll(tmp_path)])
+    got = history.serve({"query": Q, "collections": ["eurlex4", "gone"], "history": True})
+    assert [(f["collection"], f["status"]) for f in got["fetches"]] == [("eurlex4", "refused"), ("gone", "error")]
+
+
+def test_the_worker_registers_exactly_the_landed_units(isolated_config, tmp_path):
+    """history._register: one manifest row per landed unit, placed by the
+    slice pass — never a scan of the corpus."""
     import shutil
-    from app import collections as collections_mod, worker
-    monkeypatch.setattr(worker, "_license_allows", lambda con, c, use: True)
+    from app import collections as collections_mod
     c = collections_mod.Collection(
         name="eurlex4", plugin="eurlex", profile=None, embed_mode_default=None, corpus_dir=tmp_path / "origin",
         manifest_path=tmp_path / "state" / "manifest.sqlite", fts_dir=tmp_path / "fts",
         lance_dir=tmp_path / "lancedb")
     c.manifest_path.parent.mkdir(parents=True)
+    unit = c.corpus_dir / src.HISTORY / src.unit_rel("it", CONS[0])
+    shutil.copytree(CONS[2], unit, ignore=shutil.ignore_patterns("notice.xml", "LEG_MTD*"))
+    other = c.corpus_dir / src.unit_rel("it", "31972R1473")
+    other.mkdir(parents=True)
+    history._register(c, [unit])
     con = db.connect(c)
-    assert worker._adopt_fetched(con, c) is False, "nothing waits: nothing done"
-    rel = Path(src.HISTORY) / src.unit_rel("it", CONS[0])
-    shutil.copytree(CONS[2], history.inbox_dir(c) / rel, ignore=shutil.ignore_patterns("notice.xml", "LEG_MTD*"))
-    assert worker._adopt_fetched(con, c) is True
-    assert (c.corpus_dir / rel / rdf.TREE_FILE).is_file() and not (history.inbox_dir(c) / rel).exists()
-    assert [r["path"] for r in con.execute("SELECT path FROM documents")] == [str(c.corpus_dir / rel)]
-    assert worker._adopt_fetched(con, c) is False
+    assert [r["path"] for r in con.execute("SELECT path FROM documents")] == [str(unit)]
     con.close()
+
+
+# ---- first in line ---------------------------------------------------------------------
+
+class _OneSlot:
+    """A manager with one connection to one endpoint, and the real gate."""
+    from app.transfer.manager import TransferManager as _TM
+    urgent = _TM.urgent
+    urgent_waiting = _TM.urgent_waiting
+
+    def __init__(self):
+        import threading
+        self._lock = threading.RLock()
+        self._urgent: dict = {}
+        self.sem = threading.BoundedSemaphore(1)
+
+    def endpoint_semaphore(self, key, slots):
+        return self.sem
+
+    def endpoint_slots(self, endpoint, spec):
+        return 1
+
+    def cooled_for(self, key):
+        return 0.0
+
+    def pace(self, key, min_interval):
+        return 0.0
+
+
+def test_a_query_s_fetch_takes_the_next_connection_before_the_regular_pass():
+    """Operator, 2026-11-16: "fetch triggered by a query has higher prio over
+    the regular worker's fetching". The pass waits first; the query's fetch
+    arrives later and is served first."""
+    import threading
+    from app.transfer import pool
+    m = _OneSlot()
+    ranked = [("https://cellar", SimpleNamespace(url="https://cellar"))]
+    assert m.sem.acquire(blocking=False)            # the pass holds the one connection
+    order = []
+
+    def take(who, priority):
+        got = pool.acquire_endpoint_slot(m, ranked, None, priority=priority, bound_s=10)
+        order.append(who)
+        time.sleep(0.05)
+        got[2].release()
+    bulk = threading.Thread(target=take, args=("pass", Priority.BACKFILL))
+    bulk.start()
+    time.sleep(0.3)                                 # the pass is waiting
+    query = threading.Thread(target=take, args=("query", Priority.INTERACTIVE))
+    query.start()
+    time.sleep(0.3)                                 # the query is waiting too
+    m.sem.release()
+    query.join(5)
+    bulk.join(5)
+    assert order == ["query", "pass"]
+    assert not m.urgent_waiting("https://cellar"), "the gate is lifted once it has its connection"

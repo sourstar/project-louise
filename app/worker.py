@@ -3494,10 +3494,6 @@ def _index_maintainer() -> None:
                 did = _verify_cited(cons[key], c) or did
                 did = _refresh_anchor(cons[key], c) or did
                 did = _heal_origin_missing(cons[key], c) or did
-                try:
-                    did = _adopt_fetched(cons[key], c) or did
-                except Exception as e:   # noqa: BLE001 — one adoption, not the maintainer
-                    db.log_event(cons[key], "warn", "history", f"adoption: {type(e).__name__}: {e}"[:300])
                 turn.spent(time.monotonic() - t0, units=1 if did else 0)
                 # not due, or nothing to fold in: give the slot back rather
                 # than sit on it, and rejoin at the tail when there is work
@@ -4334,33 +4330,30 @@ def _say_origin_missing(con, collection, stage: str, path: str) -> None:
                      f"{origin_missing.HEAL_EVERY_S / 60:.0f} min; a rename or a mount that is gone?")
 
 
-def _adopt_fetched(con, collection) -> bool:
-    """The units fetched on request at ask time (app/ask/history.py), waiting
-    in the collection's inbox because the web cannot write the corpus: moved
-    into the origin by this process, its one writer, registered in the
-    manifest as exactly those units (discovery.register — a cost per unit,
-    never a scan of the corpus) and placed by the slice pass, which resumes
-    from its cursor over the new rows only. One `is_dir` a round when there
-    is nothing."""
+def _history_server() -> None:
+    """THE FETCHES A QUESTION ASKS FOR (app/ask/history.py; operator,
+    2026-11-16: "Option B but fetch triggered by a query has higher prio over
+    the regular worker's fetching"): the requests the answering process posts,
+    taken within POLL_S and served at most CONCURRENT at once, each on its own
+    thread so a question never waits behind a round. One `scandir` a poll
+    when nothing waits; stale files swept once a minute. A request taken when
+    the worker stops is answered "the worker is stopping" at its next step."""
     from app.ask import history as history_mod
-    if not history_mod.inbox_dir(collection).is_dir():
-        return False
-    if not _license_allows(con, collection, "history adoption"):
-        return False
-    landed = history_mod.adopt(collection, log=lambda m: db.log_event(con, "warn", "history", m))
-    if not landed:
-        return False
-    plugin = collection.plugin_instance()
-    ref_of = getattr(plugin, "ref_of_unit", None)
-    if ref_of is None:
-        _request_discovery(collection.name, "units fetched on request", acquire=False)
-        return True
-    got = discovery.register(con, collection, [ref_of(p) for p in landed], stop=_stop)
-    from app import slice_scope
-    slice_scope.apply(con, collection, stop=_stop)
-    db.log_event(con, "info", "history", f"{len(landed)} unit(s) fetched on request moved into the origin "
-                                         f"and registered (added {got['added']})")
-    return True
+    active: list[threading.Thread] = []
+    swept = 0.0
+    while not _stop.wait(history_mod.POLL_S):
+        try:
+            active = [t for t in active if t.is_alive()]
+            for rid, request in history_mod.take(n=history_mod.CONCURRENT - len(active)):
+                t = threading.Thread(target=history_mod.serve_one, args=(rid, request),
+                                     kwargs={"halt": _stop}, name=f"history-{rid}", daemon=True)
+                t.start()
+                active.append(t)
+            if time.monotonic() - swept > 60:
+                history_mod.sweep()
+                swept = time.monotonic()
+        except Exception as e:   # noqa: BLE001 — the server must never die
+            print(f"{time.strftime('%H:%M:%S')} [node warn:history] {type(e).__name__}: {e}"[:300], flush=True)
 
 
 def _heal_origin_missing(con, collection) -> bool:
@@ -6719,6 +6712,8 @@ def run_forever():
     # a compaction never idles a pipeline thread or the GPU loop
     threading.Thread(target=_index_maintainer, name="index-maintainer",
                      daemon=True).start()
+    # the fetches a question asks for (app/ask/history.py): first in line
+    threading.Thread(target=_history_server, name="history-requests", daemon=True).start()
     # the annotations collections' derived state: the workspaces a stopped
     # create left, and a large snapshot's claim index (`_claim_index_keeper`)
     threading.Thread(target=_claim_index_keeper, name="claim-index", daemon=True).start()

@@ -27,10 +27,16 @@ measured (published figures disagree).
   the missing ones into `history/lang=<l>/`, at most 3, 20 s each, bound to the budget at INTERACTIVE;
   every fetch, failed or not, in the answer's `history`, on the Ask page and in the event log. The
   grow dialog and the on-demand queue are unchanged: a fetched unit embeds where `embed_slices` names
-  its history slice (EUR-Lex4's does, on the operator's word). The web never writes the corpus (it is
-  mounted read-only there, München): it lands the unit in the collection's `state/fetched/` inbox, and
-  the worker's index maintainer moves it into the origin and registers exactly those units
-  (`discovery.register`, a cost per unit, never a corpus scan) — the bundle inbox's pattern.
+  its history slice (EUR-Lex4's does, on the operator's word). THE WORKER FETCHES (operator: "Option B but
+  fetch triggered by a query has higher prio over the regular worker's fetching"; the web has /corpora
+  read-only, München): the web posts the request in `state/history-requests/` and waits, bounded (10 s
+  to be taken, else "unreachable — is the worker running?"); the worker's `history-requests` thread
+  takes it within 0.2 s, at most 2 at once, lands each version in the origin, registers exactly those
+  units (`discovery.register`, a cost per unit, never a corpus scan) and answers. Each Cellar request
+  takes a connection as INTERACTIVE: the per-unit pass leaves the next free one to it
+  (transfer/pool.py, `manager.urgent`); its bytes were already first in the budget. The node's mode is
+  obeyed (no fetch when paused or seed-only; acquire-only lands, the next scan registers). Supersedes
+  #709's inbox, never deployed.
 
 - **A pilot-ok now binds the code the run imports** (tools/code_pin.py). The chunker, languages and
   retrieval tags pinned app/ask's code, which those runs do not execute, beside six files listed by

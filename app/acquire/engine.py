@@ -1052,7 +1052,7 @@ def _fetch_one_file(transport, endpoint, f: RemoteFile, collection,
 
 def _make_worker(transport, collection, spec, manager, ranked, stop, priority):
     def _work(item: _WorkItem) -> list[_FileResult]:
-        slot = transfer_pool.acquire_endpoint_slot(manager, ranked, spec, stop=stop)
+        slot = transfer_pool.acquire_endpoint_slot(manager, ranked, spec, stop=stop, priority=priority)
         if slot is None:
             return []
         endpoint_key, endpoint, sem = slot

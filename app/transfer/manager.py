@@ -95,6 +95,9 @@ class TransferManager:
                                 reserve_fraction=bw.reserve_interactive, name="up")
         self._semaphores: dict[str, threading.BoundedSemaphore] = {}
         self._slot_counts: dict[str, int] = {}
+        #: INTERACTIVE callers waiting for an endpoint's slot, per key
+        #: (`urgent`): every other caller stands back until they have one
+        self._urgent: dict[str, int] = {}
         self._ewma: dict[str, float] = {}
         self._rsync_active = 0
         self._last_schedule_check = -1e9
@@ -230,6 +233,33 @@ class TransferManager:
             held = self._cool.get(key)
             if held is None or held[0] < end:
                 self._cool[key] = (end, reason)
+
+    @contextmanager
+    def urgent(self, keys):
+        """An INTERACTIVE caller waits for a slot of these endpoints: while it
+        does, `urgent_waiting` tells every other caller to leave the next free
+        slot to it (operator, 2026-11-16: a fetch a query triggers goes before
+        the worker's regular fetching). Bandwidth already serves INTERACTIVE
+        first (bucket.py, strict priority); this is the same order for the
+        endpoint's connections, which a plain semaphore does not keep."""
+        keys = list(keys)
+        with self._lock:
+            for k in keys:
+                self._urgent[k] = self._urgent.get(k, 0) + 1
+        try:
+            yield
+        finally:
+            with self._lock:
+                for k in keys:
+                    n = self._urgent.get(k, 0) - 1
+                    if n > 0:
+                        self._urgent[k] = n
+                    else:
+                        self._urgent.pop(k, None)
+
+    def urgent_waiting(self, key: str) -> bool:
+        with self._lock:
+            return self._urgent.get(key, 0) > 0
 
     def cooled_for(self, key: str) -> float:
         """Seconds left in the endpoint's cool-down; 0 when none runs."""
