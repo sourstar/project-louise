@@ -145,6 +145,34 @@ returning N vectors.
   vectors must be byte-identical and all receipts held.
 - The commit that ships it carries the numbers (scheduling.md §6).
 
+### AFTER, 2026-11-16 (München; deployed: app a6e20fe, louise-vega vega:a6e20fe, every vega- wrapper rebuilt at a6e20fe)
+
+- **Deploy check, before any gate** (`/root/measure/v2check.py`, the app's
+  own `tag_batch`/`unpack`/`verify_response` through the node's LocalAI):
+  vega-bge-m3 64 wikipedia chunks (window 1,024), vega-nemotron-3-embed-1b 64
+  wikidata chunks (window 8,191), vega-qwen3-embedding-4b 16, vega-dar-legal-it
+  16: **0 different, 0 refused**. LocalAI passes the concatenated answer
+  unchanged.
+- **Re-gate:** every vega- space gated on its new run, every FINGERPRINT
+  IDENTICAL to the run it replaces. Nemotron spaces (EUR-Lex, EUR-Lex4,
+  NeuRIS, Normattiva, legi_F, wikidata) run 1f09a0e5…; Normattiva-DAR
+  5588fc4e…; gutenberg ebec8b15…; pubmed 7325195a… (query 2234745a…);
+  wikipedia 955ca309…. All 16/16, batch-invariant True.
+- **Exactness:** 2,000 random wikipedia chunks (seed 20261117), groups of 16,
+  window 1,024: **byte-identical, every receipt held**.
+- **Speed, request level (clean):** the same 2,000 chunks, VEGA/1 and VEGA/2
+  alternating per group of 16, one stream, both warm: **69.5 s against 68.7 s
+  (≈ 1 %)**. Removing LocalAI's per-text hop and the per-text receipt writes
+  gains almost nothing. The per-item cost is inside the wrapper → backend path
+  (§5, stage 2) or in the engine's per-call work, not in the LocalAI hop.
+- **Speed, card level (NOT clean):** wikipedia alone 18:21–18:31Z: card 88–96 %
+  busy, 40.3–44.3 chunks/s (BEFORE 47.7–51.3, 55–71 %). The worker was still
+  gating gutenberg's QUERY run on `vega-qwen3-embedding-4b--gate` through the
+  window (an unnamed gate holder at ~55 s/min), so the busy share is not
+  wikipedia's alone and the chunks/s shared the card. It is to be measured again
+  once no gate runs. The `gaps` buckets per request were not separated from that
+  load.
+
 ## 7. Tests
 
 - tag: a VEGA/2 round trip, its canonical bytes, and the refusals (an
