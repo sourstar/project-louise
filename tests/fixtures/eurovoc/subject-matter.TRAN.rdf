@@ -1,0 +1,34 @@
+<skos:Concept rdf:about="http://publications.europa.eu/resource/authority/subject-matter/TRAN"
+                 at:deprecated="false">
+      <skos:inScheme rdf:resource="http://publications.europa.eu/resource/authority/subject-matter"/>
+      <skos:prefLabel xml:lang="sv">Transport</skos:prefLabel>
+      <skos:prefLabel xml:lang="pl">Transport</skos:prefLabel>
+      <skos:prefLabel xml:lang="ga">Iompar</skos:prefLabel>
+      <skos:prefLabel xml:lang="fi">Liikenne</skos:prefLabel>
+      <skos:prefLabel xml:lang="fr">Transports</skos:prefLabel>
+      <skos:prefLabel xml:lang="lv">Transports</skos:prefLabel>
+      <skos:prefLabel xml:lang="bg">Транспорт</skos:prefLabel>
+      <skos:prefLabel xml:lang="pt">Transportes</skos:prefLabel>
+      <skos:prefLabel xml:lang="es">Transportes</skos:prefLabel>
+      <skos:prefLabel xml:lang="mt">Trasport</skos:prefLabel>
+      <skos:prefLabel xml:lang="ro">Transporturi</skos:prefLabel>
+      <skos:prefLabel xml:lang="de">Verkehr</skos:prefLabel>
+      <skos:prefLabel xml:lang="sk">Doprava</skos:prefLabel>
+      <skos:prefLabel xml:lang="sl">Doprava</skos:prefLabel>
+      <skos:prefLabel xml:lang="cs">Doprava</skos:prefLabel>
+      <skos:prefLabel xml:lang="it">Trasporti</skos:prefLabel>
+      <skos:prefLabel xml:lang="lt">Transportas</skos:prefLabel>
+      <skos:prefLabel xml:lang="el">Μεταφορές</skos:prefLabel>
+      <skos:prefLabel xml:lang="hu">Közlekedés</skos:prefLabel>
+      <skos:prefLabel xml:lang="hr">Promet</skos:prefLabel>
+      <skos:prefLabel xml:lang="nl">Vervoer</skos:prefLabel>
+      <skos:prefLabel xml:lang="en">Transport</skos:prefLabel>
+      <skos:prefLabel xml:lang="da">Transport</skos:prefLabel>
+      <skos:prefLabel xml:lang="et">Transport</skos:prefLabel>
+      <dc:identifier>TRAN</dc:identifier>
+      <atold:op-code>TRAN</atold:op-code>
+      <at:op-code>TRAN</at:op-code>
+      <at:start.use>1952-07-24</at:start.use>
+      <at:authority-code>TRAN</at:authority-code>
+      <skos:topConceptOf rdf:resource="http://publications.europa.eu/resource/authority/subject-matter"/>
+   </skos:Concept>

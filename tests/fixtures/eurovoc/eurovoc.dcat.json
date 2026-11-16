@@ -1,0 +1,735 @@
+{
+ "dataset": "eurovoc",
+ "source": "https://data.europa.eu/api/hub/search/datasets/eurovoc",
+ "version_info": "4.24",
+ "modified": "2026-07-08",
+ "access_right": {
+  "resource": "http://publications.europa.eu/resource/authority/access-right/PUBLIC",
+  "label": "public"
+ },
+ "distributions": [
+  {
+   "title": {
+    "de": "EuroVoc ZIP-Verteilung",
+    "fi": "EuroVoc ZIP -jakelu",
+    "pt": "Distribuição ZIP da EuroVoc",
+    "bg": "Разпределение по ZIP на EuroVoc",
+    "lt": "„EuroVoc“ ZIP platinimas",
+    "hr": "Distribucija EuroVoc ZIP-a",
+    "lv": "EuroVoc ZIP izplatīšana",
+    "fr": "Distribution ZIP EuroVoc",
+    "hu": "EuroVoc ZIP elosztás",
+    "uk": "Розподіл EuroVoc ZIP",
+    "sk": "EuroVoc ZIP distribúcia",
+    "sl": "EuroVoc ZIP distribucija",
+    "ga": "Dáileadh ZIP EuroVoc",
+    "sv": "EuroVoc ZIP-distribution",
+    "mt": "Distribuzzjoni tal-EuroVoc ZIP",
+    "el": "Διανομή EuroVoc ZIP",
+    "en": "EuroVoc ZIP distribution",
+    "it": "Distribuzione ZIP EuroVoc",
+    "es": "Distribución ZIP de EuroVoc",
+    "et": "EuroVoci ZIP-levi",
+    "cs": "Rozdělení ZIP EuroVoc",
+    "pl": "Dystrybucja EuroVoc ZIP",
+    "ro": "Distribuție EuroVoc ZIP",
+    "da": "EuroVoc ZIP-distribution",
+    "nl": "EuroVoc ZIP-distributie"
+   },
+   "license": {
+    "resource": "http://data.europa.eu/eli/dec/2011/833/oj",
+    "description": "European Commission reuse notice",
+    "id": "COM_REUSE",
+    "label": "European Commission reuse notice"
+   },
+   "rights": {
+    "resource": "http://publications.europa.eu/resource/authority/access-right/PUBLIC"
+   },
+   "access_url": [
+    "https://op.europa.eu/o/opportal-service/euvoc-download-handler?cellarURI=http%3A%2F%2Fpublications.europa.eu%2Fresource%2Fcellar%2F9f2bd600-ae7b-11e7-837e-01aa75ed71a1.0001.15%2FDOC_5&fileName=eurovoc_tbx2.zip"
+   ],
+   "download_url": [
+    "https://op.europa.eu/o/opportal-service/euvoc-download-handler?cellarURI=http%3A%2F%2Fpublications.europa.eu%2Fresource%2Fcellar%2F9f2bd600-ae7b-11e7-837e-01aa75ed71a1.0001.15%2FDOC_5&fileName=eurovoc_tbx2.zip"
+   ],
+   "format": {
+    "format_types": [
+     {
+      "id": "archive",
+      "label": {
+       "en": "Archive"
+      }
+     },
+     {
+      "id": "compressed",
+      "label": {
+       "en": "Compressed"
+      }
+     },
+     {
+      "id": "package",
+      "label": {
+       "en": "Package"
+      }
+     }
+    ],
+    "resource": "http://publications.europa.eu/resource/authority/file-type/ZIP",
+    "id": "ZIP",
+    "label": "ZIP"
+   }
+  },
+  {
+   "title": {
+    "de": "EuroVoc EUROVOC_DTD Vertrieb",
+    "fi": "EuroVoc EUROVOC_DTD jakelu",
+    "pt": "EuroVoc EUROVOC_DTD distribuição",
+    "bg": "Разпространение на EuroVoc EUROVOC_DTD",
+    "lt": "EuroVoc EUROVOC_DTD platinimas",
+    "lv": "EuroVoc EUROVOC_DTD izplatīšana",
+    "hr": "Distribucija EuroVoc EUROVOC_DTD",
+    "fr": "EuroVoc EUROVOC_DTD distribution",
+    "hu": "EuroVoc EUROVOC_DTD forgalmazás",
+    "uk": "Розподіл EuroVoc EUROVOC_DTD",
+    "sk": "EuroVoc EUROVOC_DTD distribúcia",
+    "sl": "EuroVoc EUROVOC_DTD distribucija",
+    "ga": "Dáileadh EuroVoc EUROVOC_DTD",
+    "sv": "EuroVoc EUROVOC_DTD-distribution",
+    "el": "Διανομή EuroVoc EUROVOC_DTD",
+    "mt": "Distribuzzjoni tal-EuroVoc EUROVOC_DTD",
+    "en": "EuroVoc EUROVOC_DTD distribution",
+    "it": "EuroVoc EUROVOC _DTD distribuzione",
+    "es": "EuroVoc EUROVOC_DTD distribución",
+    "et": "EuroVoc EUROVOC _DTD jaotus",
+    "cs": "Distribuce EuroVoc EUROVOC_DTD",
+    "pl": "Dystrybucja EuroVoc EUROVOC_DTD",
+    "ro": "Distribuția EuroVoc EUROVOC_DTD",
+    "da": "EuroVoc EUROVOC_DTD distribution",
+    "nl": "EuroVoc EUROVOC_DTD distributie"
+   },
+   "license": {
+    "resource": "http://data.europa.eu/eli/dec/2011/833/oj",
+    "description": "European Commission reuse notice",
+    "id": "COM_REUSE",
+    "label": "European Commission reuse notice"
+   },
+   "rights": {
+    "resource": "http://publications.europa.eu/resource/authority/access-right/PUBLIC"
+   },
+   "access_url": [
+    "https://op.europa.eu/o/opportal-service/euvoc-download-handler?cellarURI=http%3A%2F%2Fpublications.europa.eu%2Fresource%2Fcellar%2F9f2bd600-ae7b-11e7-837e-01aa75ed71a1.0001.12%2FDOC_1&fileName=eurovoc_xml.zip"
+   ],
+   "download_url": [
+    "https://op.europa.eu/o/opportal-service/euvoc-download-handler?cellarURI=http%3A%2F%2Fpublications.europa.eu%2Fresource%2Fcellar%2F9f2bd600-ae7b-11e7-837e-01aa75ed71a1.0001.12%2FDOC_1&fileName=eurovoc_xml.zip"
+   ],
+   "format": {
+    "format_types": [
+     {
+      "id": "archive",
+      "label": {
+       "en": "Archive"
+      }
+     },
+     {
+      "id": "compressed",
+      "label": {
+       "en": "Compressed"
+      }
+     },
+     {
+      "id": "package",
+      "label": {
+       "en": "Package"
+      }
+     }
+    ],
+    "resource": "http://publications.europa.eu/resource/authority/file-type/ZIP",
+    "id": "ZIP",
+    "label": "ZIP"
+   }
+  },
+  {
+   "title": {
+    "de": "EuroVoc SKOS_CORE Vertrieb",
+    "fi": "EuroVoc SKOS_CORE jakelu",
+    "pt": "Distribuição EuroVoc SKOS_CORE",
+    "bg": "Разпределение на EuroVoc SKOS_CORE",
+    "lt": "EuroVoc SKOS_CORE platinimas",
+    "hr": "Distribucija EuroVoc SKOS_CORE",
+    "lv": "EuroVoc SKOS_CORE izplatīšana",
+    "fr": "EuroVoc SKOS_CORE distribution",
+    "hu": "EuroVoc SKOS_CORE forgalmazás",
+    "uk": "Розподіл EuroVoc SKOS_CORE",
+    "sk": "EuroVoc SKOS_CORE distribúcia",
+    "sl": "EuroVoc SKOS_CORE distribucija",
+    "ga": "Dáileadh EuroVoc SKOS_CORE",
+    "sv": "EuroVoc SKOS_CORE-distribution",
+    "mt": "Distribuzzjoni ta' EuroVoc SKOS_CORE",
+    "el": "Διανομή EuroVoc SKOS_CORE",
+    "en": "EuroVoc SKOS_CORE distribution",
+    "it": "Distribuzione EuroVoc SKOS _CORE",
+    "es": "EuroVoc SKOS_CORE distribución",
+    "et": "EuroVoc SKOS_CORE jaotus",
+    "cs": "Distribuce EuroVoc SKOS_CORE",
+    "pl": "Dystrybucja EuroVoc SKOS_CORE",
+    "ro": "Distribuția EuroVoc SKOS_CORE",
+    "da": "EuroVoc SKOS_CORE distribution",
+    "nl": "EuroVoc SKOS_CORE distributie"
+   },
+   "license": {
+    "resource": "http://data.europa.eu/eli/dec/2011/833/oj",
+    "description": "European Commission reuse notice",
+    "id": "COM_REUSE",
+    "label": "European Commission reuse notice"
+   },
+   "rights": {
+    "resource": "http://publications.europa.eu/resource/authority/access-right/PUBLIC"
+   },
+   "access_url": [
+    "https://op.europa.eu/o/opportal-service/euvoc-download-handler?cellarURI=http%3A%2F%2Fpublications.europa.eu%2Fresource%2Fcellar%2F9f2bd600-ae7b-11e7-837e-01aa75ed71a1.0001.09%2FDOC_1&fileName=eurovoc_in_skos_core_concepts.zip"
+   ],
+   "download_url": [
+    "https://op.europa.eu/o/opportal-service/euvoc-download-handler?cellarURI=http%3A%2F%2Fpublications.europa.eu%2Fresource%2Fcellar%2F9f2bd600-ae7b-11e7-837e-01aa75ed71a1.0001.09%2FDOC_1&fileName=eurovoc_in_skos_core_concepts.zip"
+   ],
+   "format": {
+    "format_types": [
+     {
+      "id": "archive",
+      "label": {
+       "en": "Archive"
+      }
+     },
+     {
+      "id": "compressed",
+      "label": {
+       "en": "Compressed"
+      }
+     },
+     {
+      "id": "package",
+      "label": {
+       "en": "Package"
+      }
+     }
+    ],
+    "resource": "http://publications.europa.eu/resource/authority/file-type/ZIP",
+    "id": "ZIP",
+    "label": "ZIP"
+   }
+  },
+  {
+   "title": {
+    "en": "EuroVoc IMMC_V3 distribution"
+   },
+   "license": {
+    "resource": "http://data.europa.eu/eli/dec/2011/833/oj",
+    "description": "European Commission reuse notice",
+    "id": "COM_REUSE",
+    "label": "European Commission reuse notice"
+   },
+   "rights": {
+    "resource": "http://publications.europa.eu/resource/authority/access-right/PUBLIC"
+   },
+   "access_url": [
+    "https://op.europa.eu/o/opportal-service/euvoc-download-handler?cellarURI=http%3A%2F%2Fpublications.europa.eu%2Fresource%2Fcellar%2F9f2bd600-ae7b-11e7-837e-01aa75ed71a1.0001.07%2FDOC_1&fileName=at-eurovoc-v3.xsd"
+   ],
+   "download_url": [
+    "https://op.europa.eu/o/opportal-service/euvoc-download-handler?cellarURI=http%3A%2F%2Fpublications.europa.eu%2Fresource%2Fcellar%2F9f2bd600-ae7b-11e7-837e-01aa75ed71a1.0001.07%2FDOC_1&fileName=at-eurovoc-v3.xsd"
+   ],
+   "format": {
+    "format_types": [
+     {
+      "id": "structured",
+      "label": {
+       "en": "Structured"
+      }
+     },
+     {
+      "id": "textual",
+      "label": {
+       "en": "Textual"
+      }
+     }
+    ],
+    "resource": "http://publications.europa.eu/resource/authority/file-type/XML",
+    "id": "XML",
+    "label": "XML"
+   }
+  },
+  {
+   "title": {
+    "de": "EuroVoc ZIP-Verteilung",
+    "fi": "EuroVoc ZIP -jakelu",
+    "pt": "Distribuição ZIP da EuroVoc",
+    "bg": "Разпределение по ZIP на EuroVoc",
+    "lt": "„EuroVoc“ ZIP platinimas",
+    "hr": "Distribucija EuroVoc ZIP-a",
+    "lv": "EuroVoc ZIP izplatīšana",
+    "fr": "Distribution ZIP EuroVoc",
+    "hu": "EuroVoc ZIP elosztás",
+    "uk": "Розподіл EuroVoc ZIP",
+    "sk": "EuroVoc ZIP distribúcia",
+    "sl": "EuroVoc ZIP distribucija",
+    "ga": "Dáileadh ZIP EuroVoc",
+    "sv": "EuroVoc ZIP-distribution",
+    "mt": "Distribuzzjoni tal-EuroVoc ZIP",
+    "el": "Διανομή EuroVoc ZIP",
+    "en": "EuroVoc ZIP distribution",
+    "it": "Distribuzione ZIP EuroVoc",
+    "es": "Distribución ZIP de EuroVoc",
+    "et": "EuroVoci ZIP-levi",
+    "cs": "Rozdělení ZIP EuroVoc",
+    "pl": "Dystrybucja EuroVoc ZIP",
+    "ro": "Distribuție EuroVoc ZIP",
+    "da": "EuroVoc ZIP-distribution",
+    "nl": "EuroVoc ZIP-distributie"
+   },
+   "license": {
+    "resource": "http://data.europa.eu/eli/dec/2011/833/oj",
+    "description": "European Commission reuse notice",
+    "id": "COM_REUSE",
+    "label": "European Commission reuse notice"
+   },
+   "rights": {
+    "resource": "http://publications.europa.eu/resource/authority/access-right/PUBLIC"
+   },
+   "access_url": [
+    "https://op.europa.eu/o/opportal-service/euvoc-download-handler?cellarURI=http%3A%2F%2Fpublications.europa.eu%2Fresource%2Fcellar%2F9f2bd600-ae7b-11e7-837e-01aa75ed71a1.0001.15%2FDOC_1&fileName=ATTO_SKOS_FD_300.zip"
+   ],
+   "download_url": [
+    "https://op.europa.eu/o/opportal-service/euvoc-download-handler?cellarURI=http%3A%2F%2Fpublications.europa.eu%2Fresource%2Fcellar%2F9f2bd600-ae7b-11e7-837e-01aa75ed71a1.0001.15%2FDOC_1&fileName=ATTO_SKOS_FD_300.zip"
+   ],
+   "format": {
+    "format_types": [
+     {
+      "id": "archive",
+      "label": {
+       "en": "Archive"
+      }
+     },
+     {
+      "id": "compressed",
+      "label": {
+       "en": "Compressed"
+      }
+     },
+     {
+      "id": "package",
+      "label": {
+       "en": "Package"
+      }
+     }
+    ],
+    "resource": "http://publications.europa.eu/resource/authority/file-type/ZIP",
+    "id": "ZIP",
+    "label": "ZIP"
+   }
+  },
+  {
+   "title": {
+    "de": "EuroVoc ZIP-Verteilung",
+    "fi": "EuroVoc ZIP -jakelu",
+    "pt": "Distribuição ZIP da EuroVoc",
+    "bg": "Разпределение по ZIP на EuroVoc",
+    "lt": "„EuroVoc“ ZIP platinimas",
+    "lv": "EuroVoc ZIP izplatīšana",
+    "hr": "Distribucija EuroVoc ZIP-a",
+    "fr": "Distribution ZIP EuroVoc",
+    "hu": "EuroVoc ZIP elosztás",
+    "uk": "Розподіл EuroVoc ZIP",
+    "sk": "EuroVoc ZIP distribúcia",
+    "sl": "EuroVoc ZIP distribucija",
+    "ga": "Dáileadh ZIP EuroVoc",
+    "sv": "EuroVoc ZIP-distribution",
+    "mt": "Distribuzzjoni tal-EuroVoc ZIP",
+    "el": "Διανομή EuroVoc ZIP",
+    "en": "EuroVoc ZIP distribution",
+    "it": "Distribuzione ZIP EuroVoc",
+    "es": "Distribución ZIP de EuroVoc",
+    "et": "EuroVoci ZIP-levi",
+    "cs": "Rozdělení ZIP EuroVoc",
+    "pl": "Dystrybucja EuroVoc ZIP",
+    "ro": "Distribuție EuroVoc ZIP",
+    "da": "EuroVoc ZIP-distribution",
+    "nl": "EuroVoc ZIP-distributie"
+   },
+   "license": {
+    "resource": "http://data.europa.eu/eli/dec/2011/833/oj",
+    "description": "European Commission reuse notice",
+    "id": "COM_REUSE",
+    "label": "European Commission reuse notice"
+   },
+   "rights": {
+    "resource": "http://publications.europa.eu/resource/authority/access-right/PUBLIC"
+   },
+   "access_url": [
+    "https://op.europa.eu/o/opportal-service/euvoc-download-handler?cellarURI=http%3A%2F%2Fpublications.europa.eu%2Fresource%2Fcellar%2F9f2bd600-ae7b-11e7-837e-01aa75ed71a1.0001.15%2FDOC_4&fileName=EuroVoc_MarcXML.zip"
+   ],
+   "download_url": [
+    "https://op.europa.eu/o/opportal-service/euvoc-download-handler?cellarURI=http%3A%2F%2Fpublications.europa.eu%2Fresource%2Fcellar%2F9f2bd600-ae7b-11e7-837e-01aa75ed71a1.0001.15%2FDOC_4&fileName=EuroVoc_MarcXML.zip"
+   ],
+   "format": {
+    "format_types": [
+     {
+      "id": "archive",
+      "label": {
+       "en": "Archive"
+      }
+     },
+     {
+      "id": "compressed",
+      "label": {
+       "en": "Compressed"
+      }
+     },
+     {
+      "id": "package",
+      "label": {
+       "en": "Package"
+      }
+     }
+    ],
+    "resource": "http://publications.europa.eu/resource/authority/file-type/ZIP",
+    "id": "ZIP",
+    "label": "ZIP"
+   }
+  },
+  {
+   "title": {
+    "de": "EuroVoc ZIP-Verteilung",
+    "fi": "EuroVoc ZIP -jakelu",
+    "pt": "Distribuição ZIP da EuroVoc",
+    "bg": "Разпределение по ZIP на EuroVoc",
+    "lt": "„EuroVoc“ ZIP platinimas",
+    "lv": "EuroVoc ZIP izplatīšana",
+    "hr": "Distribucija EuroVoc ZIP-a",
+    "fr": "Distribution ZIP EuroVoc",
+    "hu": "EuroVoc ZIP elosztás",
+    "uk": "Розподіл EuroVoc ZIP",
+    "sk": "EuroVoc ZIP distribúcia",
+    "sl": "EuroVoc ZIP distribucija",
+    "ga": "Dáileadh ZIP EuroVoc",
+    "sv": "EuroVoc ZIP-distribution",
+    "el": "Διανομή EuroVoc ZIP",
+    "mt": "Distribuzzjoni tal-EuroVoc ZIP",
+    "en": "EuroVoc ZIP distribution",
+    "it": "Distribuzione ZIP EuroVoc",
+    "es": "Distribución ZIP de EuroVoc",
+    "et": "EuroVoci ZIP-levi",
+    "cs": "Rozdělení ZIP EuroVoc",
+    "pl": "Dystrybucja EuroVoc ZIP",
+    "ro": "Distribuție EuroVoc ZIP",
+    "da": "EuroVoc ZIP-distribution",
+    "nl": "EuroVoc ZIP-distributie"
+   },
+   "license": {
+    "resource": "http://data.europa.eu/eli/dec/2011/833/oj",
+    "description": "European Commission reuse notice",
+    "id": "COM_REUSE",
+    "label": "European Commission reuse notice"
+   },
+   "rights": {
+    "resource": "http://publications.europa.eu/resource/authority/access-right/PUBLIC"
+   },
+   "access_url": [
+    "https://op.europa.eu/o/opportal-service/euvoc-download-handler?cellarURI=http%3A%2F%2Fpublications.europa.eu%2Fresource%2Fcellar%2F9f2bd600-ae7b-11e7-837e-01aa75ed71a1.0001.15%2FDOC_3&fileName=EuroVoc_Excel_export.zip"
+   ],
+   "download_url": [
+    "https://op.europa.eu/o/opportal-service/euvoc-download-handler?cellarURI=http%3A%2F%2Fpublications.europa.eu%2Fresource%2Fcellar%2F9f2bd600-ae7b-11e7-837e-01aa75ed71a1.0001.15%2FDOC_3&fileName=EuroVoc_Excel_export.zip"
+   ],
+   "format": {
+    "format_types": [
+     {
+      "id": "archive",
+      "label": {
+       "en": "Archive"
+      }
+     },
+     {
+      "id": "compressed",
+      "label": {
+       "en": "Compressed"
+      }
+     },
+     {
+      "id": "package",
+      "label": {
+       "en": "Package"
+      }
+     }
+    ],
+    "resource": "http://publications.europa.eu/resource/authority/file-type/ZIP",
+    "id": "ZIP",
+    "label": "ZIP"
+   }
+  },
+  {
+   "title": {
+    "de": "EuroVoc SKOS_AP_ACT-Verteilung",
+    "fi": "EuroVoc SKOS_AP _ACT -jakelu",
+    "pt": "EuroVoc SKOS_AP_ACT distribuição",
+    "bg": "EuroVoc SKOS_AP_ACT дистрибуция",
+    "lt": "EuroVoc SKOS_AP_ACT platinimas",
+    "lv": "EuroVoc SKOS_AP_ACT izplatīšana",
+    "hr": "EuroVoc SKOS_AP_ACT distribucija",
+    "fr": "EuroVoc SKOS_AP_ACT distribution",
+    "hu": "EuroVoc SKOS_AP_ACT forgalmazás",
+    "uk": "Розподіл EuroVoc SKOS_AP_ACT",
+    "sk": "EuroVoc SKOS_AP_ACT distribúcia",
+    "sl": "Porazdelitev EuroVoc SKOS_AP_ACT",
+    "ga": "EuroVoc SKOS_AP_ACT dáileadh",
+    "sv": "EuroVoc SKOS_AP_ACT-distribution",
+    "mt": "Distribuzzjoni ta' EuroVoc SKOS_AP_ACT",
+    "el": "Διανομή EuroVoc SKOS_AP_ACT",
+    "en": "EuroVoc SKOS_AP_ACT distribution",
+    "it": "Distribuzione EuroVoc SKOS _AP _ACT",
+    "es": "EuroVoc SKOS_AP_ACT distribución",
+    "et": "EuroVoc SKOS_AP_ACT jaotus",
+    "cs": "Distribuce EuroVoc SKOS_AP_ACT",
+    "pl": "Dystrybucja EuroVoc SKOS_AP_ACT",
+    "ro": "EuroVoc SKOS_AP_ACT distribuție",
+    "da": "EuroVoc SKOS_AP_ACT distribution",
+    "nl": "EuroVoc SKOS_AP_ACT distributie"
+   },
+   "license": {
+    "resource": "http://data.europa.eu/eli/dec/2011/833/oj",
+    "description": "European Commission reuse notice",
+    "id": "COM_REUSE",
+    "label": "European Commission reuse notice"
+   },
+   "rights": {
+    "resource": "http://publications.europa.eu/resource/authority/access-right/PUBLIC"
+   },
+   "access_url": [
+    "https://op.europa.eu/o/opportal-service/euvoc-download-handler?cellarURI=http%3A%2F%2Fpublications.europa.eu%2Fresource%2Fcellar%2F9f2bd600-ae7b-11e7-837e-01aa75ed71a1.0001.08%2FDOC_1&fileName=eurovoc-skos-ap-act.rdf"
+   ],
+   "download_url": [
+    "https://op.europa.eu/o/opportal-service/euvoc-download-handler?cellarURI=http%3A%2F%2Fpublications.europa.eu%2Fresource%2Fcellar%2F9f2bd600-ae7b-11e7-837e-01aa75ed71a1.0001.08%2FDOC_1&fileName=eurovoc-skos-ap-act.rdf"
+   ],
+   "format": {
+    "format_types": [
+     {
+      "id": "structured",
+      "label": {
+       "en": "Structured"
+      }
+     },
+     {
+      "id": "textual",
+      "label": {
+       "en": "Textual"
+      }
+     }
+    ],
+    "resource": "http://publications.europa.eu/resource/authority/file-type/RDF_XML",
+    "id": "RDF_XML",
+    "label": "RDF XML"
+   }
+  },
+  {
+   "title": {
+    "de": "EuroVoc SKOS_XL Vertrieb",
+    "fi": "EuroVoc SKOS_XL -jakelu",
+    "pt": "EuroVoc SKOS_XL distribuição",
+    "bg": "EuroVoc SKOS_XL дистрибуция",
+    "lt": "EuroVoc SKOS_XL platinimas",
+    "hr": "Distribucija EuroVoc SKOS_XL",
+    "lv": "EuroVoc SKOS_XL izplatīšana",
+    "fr": "EuroVoc SKOS_XL distribution",
+    "hu": "EuroVoc SKOS_XL forgalmazás",
+    "uk": "Розподіл EuroVoc SKOS_XL",
+    "sk": "EuroVoc SKOS_XL distribúcia",
+    "sl": "EuroVoc SKOS_XL distribucija",
+    "ga": "Dáileadh EuroVoc SKOS_XL",
+    "sv": "EuroVoc SKOS_XL-distribution",
+    "mt": "Distribuzzjoni tal-EuroVoc SKOS_XL",
+    "el": "EuroVoc SKOS_XL διανομή",
+    "en": "EuroVoc SKOS_XL distribution",
+    "it": "Distribuzione EuroVoc SKOS _XL",
+    "es": "EuroVoc SKOS_XL distribución",
+    "et": "EuroVoc SKOS_XL jaotus",
+    "cs": "Distribuce EuroVoc SKOS_XL",
+    "pl": "Dystrybucja EuroVoc SKOS_XL",
+    "ro": "Distribuția EuroVoc SKOS_XL",
+    "da": "EuroVoc SKOS_XL distribution",
+    "nl": "EuroVoc SKOS_XL distributie"
+   },
+   "license": {
+    "resource": "http://data.europa.eu/eli/dec/2011/833/oj",
+    "description": "European Commission reuse notice",
+    "id": "COM_REUSE",
+    "label": "European Commission reuse notice"
+   },
+   "rights": {
+    "resource": "http://publications.europa.eu/resource/authority/access-right/PUBLIC"
+   },
+   "access_url": [
+    "https://op.europa.eu/o/opportal-service/euvoc-download-handler?cellarURI=http%3A%2F%2Fpublications.europa.eu%2Fresource%2Fcellar%2F9f2bd600-ae7b-11e7-837e-01aa75ed71a1.0001.10%2FDOC_1&fileName=eurovoc_skos.zip"
+   ],
+   "download_url": [
+    "https://op.europa.eu/o/opportal-service/euvoc-download-handler?cellarURI=http%3A%2F%2Fpublications.europa.eu%2Fresource%2Fcellar%2F9f2bd600-ae7b-11e7-837e-01aa75ed71a1.0001.10%2FDOC_1&fileName=eurovoc_skos.zip"
+   ],
+   "format": {
+    "format_types": [
+     {
+      "id": "archive",
+      "label": {
+       "en": "Archive"
+      }
+     },
+     {
+      "id": "compressed",
+      "label": {
+       "en": "Compressed"
+      }
+     },
+     {
+      "id": "package",
+      "label": {
+       "en": "Package"
+      }
+     }
+    ],
+    "resource": "http://publications.europa.eu/resource/authority/file-type/ZIP",
+    "id": "ZIP",
+    "label": "ZIP"
+   }
+  },
+  {
+   "title": {
+    "de": "EuroVoc ZIP-Verteilung",
+    "fi": "EuroVoc ZIP -jakelu",
+    "pt": "Distribuição ZIP da EuroVoc",
+    "bg": "Разпределение по ZIP на EuroVoc",
+    "lt": "„EuroVoc“ ZIP platinimas",
+    "hr": "Distribucija EuroVoc ZIP-a",
+    "lv": "EuroVoc ZIP izplatīšana",
+    "fr": "Distribution ZIP EuroVoc",
+    "hu": "EuroVoc ZIP elosztás",
+    "uk": "Розподіл EuroVoc ZIP",
+    "sk": "EuroVoc ZIP distribúcia",
+    "sl": "EuroVoc ZIP distribucija",
+    "ga": "Dáileadh ZIP EuroVoc",
+    "sv": "EuroVoc ZIP-distribution",
+    "mt": "Distribuzzjoni tal-EuroVoc ZIP",
+    "el": "Διανομή EuroVoc ZIP",
+    "en": "EuroVoc ZIP distribution",
+    "it": "Distribuzione ZIP EuroVoc",
+    "es": "Distribución ZIP de EuroVoc",
+    "et": "EuroVoci ZIP-levi",
+    "cs": "Rozdělení ZIP EuroVoc",
+    "pl": "Dystrybucja EuroVoc ZIP",
+    "ro": "Distribuție EuroVoc ZIP",
+    "da": "EuroVoc ZIP-distribution",
+    "nl": "EuroVoc ZIP-distributie"
+   },
+   "license": {
+    "resource": "http://data.europa.eu/eli/dec/2011/833/oj",
+    "description": "European Commission reuse notice",
+    "id": "COM_REUSE",
+    "label": "European Commission reuse notice"
+   },
+   "rights": {
+    "resource": "http://publications.europa.eu/resource/authority/access-right/PUBLIC"
+   },
+   "access_url": [
+    "https://op.europa.eu/o/opportal-service/euvoc-download-handler?cellarURI=%2Fzip&fileName=ATTO_XML_FD_300.zip"
+   ],
+   "download_url": [
+    "https://op.europa.eu/o/opportal-service/euvoc-download-handler?cellarURI=%2Fzip&fileName=ATTO_XML_FD_300.zip"
+   ],
+   "format": {
+    "format_types": [
+     {
+      "id": "archive",
+      "label": {
+       "en": "Archive"
+      }
+     },
+     {
+      "id": "compressed",
+      "label": {
+       "en": "Compressed"
+      }
+     },
+     {
+      "id": "package",
+      "label": {
+       "en": "Package"
+      }
+     }
+    ],
+    "resource": "http://publications.europa.eu/resource/authority/file-type/ZIP",
+    "id": "ZIP",
+    "label": "ZIP"
+   }
+  },
+  {
+   "title": {
+    "de": "EuroVoc SKOS_AP_EU Verteilung",
+    "fi": "EuroVoc SKOS_AP_EU -jakelu",
+    "pt": "EuroVoc SKOS_AP_EU distribuição",
+    "bg": "EuroVoc SKOS_AP_EU разпространение",
+    "lt": "EuroVoc SKOS_AP_EU platinimas",
+    "hr": "EuroVoc SKOS_AP_EU distribucija",
+    "lv": "EuroVoc SKOS_AP_EU izplatīšana",
+    "fr": "EuroVoc SKOS_AP_EU distribution",
+    "hu": "EuroVoc SKOS_AP_EU forgalmazás",
+    "uk": "Розподіл EuroVoc SKOS_AP_EU",
+    "sk": "EuroVoc SKOS_AP_EU distribúcia",
+    "sl": "Porazdelitev EuroVoc SKOS_AP_EU",
+    "ga": "Dáileadh EuroVoc SKOS_AP_EU",
+    "sv": "EuroVoc SKOS_AP_EU-distribution",
+    "mt": "Distribuzzjoni tal-EuroVoc SKOS_AP_EU",
+    "el": "Διανομή EuroVoc SKOS_AP_EU",
+    "en": "EuroVoc SKOS_AP_EU distribution",
+    "it": "Distribuzione EuroVoc SKOS _AP _EU",
+    "es": "EuroVoc SKOS_AP_EU distribución",
+    "et": "EuroVoc SKOS_AP_EU jaotus",
+    "cs": "Distribuce EuroVoc SKOS_AP_EU",
+    "pl": "Dystrybucja EuroVoc SKOS_AP_EU",
+    "da": "EuroVoc SKOS_AP_EU distribution",
+    "ro": "EuroVoc SKOS_AP_EU distribuție",
+    "nl": "EuroVoc SKOS_AP_EU-distributie"
+   },
+   "license": {
+    "resource": "http://data.europa.eu/eli/dec/2011/833/oj",
+    "description": "European Commission reuse notice",
+    "id": "COM_REUSE",
+    "label": "European Commission reuse notice"
+   },
+   "rights": {
+    "resource": "http://publications.europa.eu/resource/authority/access-right/PUBLIC"
+   },
+   "access_url": [
+    "https://op.europa.eu/o/opportal-service/euvoc-download-handler?cellarURI=http%3A%2F%2Fpublications.europa.eu%2Fresource%2Fcellar%2F9f2bd600-ae7b-11e7-837e-01aa75ed71a1.0001.11%2FDOC_1&fileName=eurovoc_skos_ap.zip"
+   ],
+   "download_url": [
+    "https://op.europa.eu/o/opportal-service/euvoc-download-handler?cellarURI=http%3A%2F%2Fpublications.europa.eu%2Fresource%2Fcellar%2F9f2bd600-ae7b-11e7-837e-01aa75ed71a1.0001.11%2FDOC_1&fileName=eurovoc_skos_ap.zip"
+   ],
+   "format": {
+    "format_types": [
+     {
+      "id": "archive",
+      "label": {
+       "en": "Archive"
+      }
+     },
+     {
+      "id": "compressed",
+      "label": {
+       "en": "Compressed"
+      }
+     },
+     {
+      "id": "package",
+      "label": {
+       "en": "Package"
+      }
+     }
+    ],
+    "resource": "http://publications.europa.eu/resource/authority/file-type/ZIP",
+    "id": "ZIP",
+    "label": "ZIP"
+   }
+  }
+ ]
+}
