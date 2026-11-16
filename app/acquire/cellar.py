@@ -756,6 +756,57 @@ def _land(dest: Path, files: dict[str, bytes]) -> None:
     shutil.rmtree(old, ignore_errors=True)
 
 
+def _syncfs(path: Path) -> None:
+    """Every dirty page of the filesystem holding `path` to disk: Linux's
+    syncfs(2) through libc; elsewhere sync(2)."""
+    import ctypes
+    import ctypes.util
+    fd = os.open(path, os.O_RDONLY)
+    try:
+        libc = ctypes.CDLL(ctypes.util.find_library("c") or None, use_errno=True)
+        if getattr(libc, "syncfs", None) is None or libc.syncfs(fd) != 0:
+            os.sync()
+    except OSError:
+        os.sync()
+    finally:
+        os.close(fd)
+
+
+def land_many(root: Path, units: list[tuple[Path, dict[str, bytes]]]) -> None:
+    """`_land` for a batch, by GROUP COMMIT (München, 2026-11-16, measured:
+    EUR-Lex4's dump build had its pool's children in `_land`, the tank's
+    disks 40-50 % busy at ~32 fsyncs/s, 30 of 297 chunks in 54 min — one
+    fsync per FILE of ~900,000 units on spinning disks). Every unit's files
+    into its staging directory unsynced; ONE syncfs; then the swaps; ONE
+    syncfs more. The same guarantee as `_land`: no unit becomes visible at
+    its path before its bytes are on disk, and a crash leaves the old unit
+    or the new, and staging directories the next build clears. The standard
+    form is the database's group commit (one log flush for many
+    transactions); `_land` stays for a single unit."""
+    if not units:
+        return
+    staged: list[tuple[Path, Path, Path]] = []
+    for dest, files in units:
+        parent = dest.parent
+        parent.mkdir(parents=True, exist_ok=True)
+        staging = parent / f".{dest.name}.staging"
+        old = parent / f".{dest.name}.old"
+        shutil.rmtree(staging, ignore_errors=True)
+        shutil.rmtree(old, ignore_errors=True)
+        staging.mkdir()
+        for name in sorted(files, key=lambda n: (n == TREE_MARK, n == NOTICE, n)):
+            (staging / name).write_bytes(files[name])
+        staged.append((dest, staging, old))
+    _syncfs(root)                      # every staged byte durable before any becomes visible
+    for dest, staging, old in staged:
+        if dest.exists():
+            os.replace(dest, old)
+        os.replace(staging, dest)
+    _syncfs(root)                      # the swaps durable
+    for _dest, _staging, old in staged:
+        shutil.rmtree(old, ignore_errors=True)
+
+
 # ---- the two extension points the engine reads (spec.py: Inventory, UnitFetcher) ----
 
 class CellarInventory:
