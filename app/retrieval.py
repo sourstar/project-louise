@@ -663,6 +663,8 @@ def _rerank_call(recipe, body: dict, timeout: float, deadline: float) -> dict:
         except httpx.HTTPStatusError as e:
             e.retried = attempt == 2          # what the reason says
             raise
+        from . import model_use
+        model_use.touch(recipe.url, recipe.model)        # a real rerank (app/model_use.py)
         return r.json()
     raise AssertionError("unreachable")
 

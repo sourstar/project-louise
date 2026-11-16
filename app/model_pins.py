@@ -528,6 +528,20 @@ def status() -> dict:
             "failures": snap["failures"], "shown": shown(snap["failures"])}
 
 
+def recorded() -> frozenset[tuple[str, str]] | None:
+    """Every (server, model) the record names — pinned for a holder (a gate,
+    a pass, an embed batch), or pinned with its restore pending: what the
+    card's eviction must never touch (app/model_evict.py). From the record
+    alone, one local read and no request per model; None when it cannot be
+    read (the eviction then unloads nothing)."""
+    try:
+        with _state() as st:
+            return frozenset((str(p.get("server")), str(p.get("model"))) for p in st["pins"].values()
+                             if isinstance(p, dict))
+    except (OSError, AttributeError):
+        return None
+
+
 #: a failure newer than this opens the card by itself; older ones wait in it, closed
 FRESH_FAILURE_S = 3600.0
 

@@ -1094,7 +1094,7 @@ def checking(root: Path, name: str, codex: Codex, recipe, *, role: str = "docume
     if not runs_mod.applies(codex):
         if role == "query":
             return lambda texts: embeddings.embed_calibration(recipe, texts, query=True)
-        return lambda texts: embeddings.embed_chunks(codex, texts, recipe=recipe)
+        return runs_mod.Answers(lambda texts, _runs: embeddings.embed_chunks(codex, texts, recipe=recipe))
     # a check's queries are raw: the client prefixes the instruction, as a search does
     embed = answers(recipe, query=role == "query", collection=codex, asked=False)
 

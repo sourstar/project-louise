@@ -301,7 +301,9 @@ def _touch(recipe: "collections_mod.EmbedRecipe") -> None:
     model = getattr(recipe, "model", None)
     if not model:
         return
-    from . import model_load, node_state
+    from . import model_load, model_use, node_state
+    if not model_use.counts():
+        return              # a check's, a gate's, a calibration's: no use (app/model_use.py)
     try:
         key = (model_load.server_of(recipe.url), model)
         now = time.time()
@@ -1441,7 +1443,10 @@ def embed_calibration(recipe: "collections_mod.EmbedRecipe", texts: list[Item], 
     if query and any(not isinstance(t, str) for t in texts):
         raise InputFormError("the query side embeds one text in every space; a "
                              "text pair is a document's form (09 §9.3, input forms)")
-    with _pin(_side(recipe, query)):
+    from . import model_use
+    # NONE OF THIS IS A MODEL'S USE (operator, 2026-11-16; app/model_use.py):
+    # the eviction must not take a gate's or a re-check's texts for work
+    with model_use.not_work(), _pin(_side(recipe, query)):
         if one_at_a_time:
             return _embed_one_at_a_time(texts, recipe=recipe, query=query,
                                         timeout=timeout, runs=runs, asked=asked)
