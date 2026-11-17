@@ -480,20 +480,27 @@ def pin_dated(plugin: str, origin: Origin, run: str | None) -> Origin:
     publishes dated dumps (`_origin`); as it is for any other plugin, where
     a `run` is refused — it would name nothing."""
     from dataclasses import replace
+    return replace(origin, spec=pin_dated_spec(plugin, origin.spec, run))
 
+
+def pin_dated_spec(plugin: str, origin_spec: dict[str, Any] | None, run: str | None) -> dict[str, Any] | None:
+    """`pin_dated` on an `origin.spec` alone — the recipe's, or a whole
+    Codex's given as the recipe (louise.cmd_create): the same bytes either
+    way. The spec as it is where the plugin's origin publishes no dated
+    dumps (or is a deposit's or an annotator's)."""
     from app.acquire.specs import ACQUIRE_REGISTRY
 
     from . import origin_run
     spec = ACQUIRE_REGISTRY.get(plugin)
-    if (origin.spec or {}).get("source_id") in ("deposit", "annotations"):
-        return origin
+    if (origin_spec or {}).get("source_id") in ("deposit", "annotations"):
+        return origin_spec
     if not origin_run.spec_dated(spec):
         if run:
             raise TemplateError(f"--run {run}: {plugin}'s origin publishes no dated dumps, so a run "
                                 f"names nothing in its Codex (09 §9.17)")
-        return origin
+        return origin_spec
     try:
-        stated = origin_run.stated_in(origin.spec, spec)
+        stated = origin_run.stated_in(origin_spec, spec)
     except ValueError as e:
         raise TemplateError(f"recipe: origin.spec.files: {e}") from None
     if stated and run and stated != str(run):
@@ -505,10 +512,11 @@ def pin_dated(plugin: str, origin: Origin, run: str | None) -> Origin:
             f"recipe: {plugin}'s origin publishes dated dumps, and its Codex names the FIRST run its "
             f"records are built from (09 §9.17): `origin.spec.files` names none and no --run was given. "
             f"Without a run, records that name their unit by the origin's own key are read in no run "
-            f"and can never be checked against the source (invariant 11). Give --run <YYYYMMDD>: the "
-            f"run the corpus holds, or the one to fetch")
+            f"and can never be checked against the source (invariant 11). Give --run <YYYYMMDD> (the "
+            f"run the corpus holds, or the one to fetch), or name that run's files in the recipe's "
+            f"`[origin.spec]`; a re-creation `<name>.next` takes the run `<name>` holds")
     try:
-        return replace(origin, spec=origin_run.pinned_spec(origin.spec, spec, str(run)))
+        return origin_run.pinned_spec(origin_spec, spec, str(run))
     except ValueError as e:
         raise TemplateError(f"recipe: {e}") from None
 

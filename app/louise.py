@@ -205,8 +205,8 @@ def _whole_codex_run(root, spec: dict, run: str | None, name: str | None) -> dic
     if not isinstance(origin, dict) or not isinstance(plugin, str):
         return spec
     run = _run_for(root, plugin, origin.get("spec"), run, name)
-    pinned = tpl.pin_dated(plugin, cx.Origin(**origin), run)
-    return {**spec, "origin": {**origin, "spec": pinned.spec}}
+    pinned = tpl.pin_dated_spec(plugin, origin.get("spec"), run)
+    return spec if pinned is origin.get("spec") else {**spec, "origin": {**origin, "spec": pinned}}
 
 
 def create_deposit(root, name: str, *, platform_image: str | None = None,
