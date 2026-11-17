@@ -2222,8 +2222,12 @@ def _write_held_file(root, codex, encoder: str | None = None,
     q = json.dumps                 # a TOML basic string, quotes and backslashes escaped
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(".toml.tmp")
+    from app.hold import recreate
     tmp.write_text(f'codex = "{codex.collection_id}"\n'
-                   "slices = []\n"
+                   # a re-creation's interim name: the predecessor's title (07 §7.8)
+                   + recreate.display_lines(root, col.name_of(root, codex.collection_id),
+                                            lambda m: print(f"note: {m}", file=sys.stderr))
+                   + "slices = []\n"
                    # an annotations collection has relations and no vectors (02 §2.10)
                    + ('kinds = ["records", "relations"]\n' if cx.is_annotations(codex)
                       else 'kinds = ["records", "vectors"]\n')
@@ -6043,6 +6047,12 @@ def _origin_unit_from(codex, name: str, origin_dir, *, run: str | None = None):
         plugin = collections_mod.plugin_at(plugin, int(version)) or plugin
     #: an origin resolved in a run is weighed in that run's files
     in_run = {"run": run} if run else {}
+    # WHAT A VERIFIER READS, where the plugin can say (03 §3.2 amended
+    # 2026-11-17): a Range-readable piece by its range, a piece its units
+    # share once (wikipedia: a page's stream, its run's index and page_props)
+    weigher = plugin_io.origin_weigher(plugin, base, run=run)
+    if weigher is not None:
+        return weigher
 
     # ONE `stat` PER FILE, NOT PER RECORD. Measured on the node (pubmed,
     # 2026-09-20): 1,998,732 sampled records point into 651 files, and weighing
@@ -6081,6 +6091,11 @@ def cmd_records_check(a) -> int:
     if getattr(a, "seal", False):
         checks.append("origin-seal")
     a.checks = ",".join(checks)
+    # `--shards SLICE/NNNNN …` (2026-11-17): the parts named, in place of the
+    # seeded sample — `hold check --shards`'s comma form taken too
+    named = getattr(a, "shards", None)
+    if isinstance(named, (list, tuple)):
+        a.shards = ",".join(x for tok in named for x in str(tok).split(",") if x)
     return cmd_check(a)
 
 
@@ -7721,6 +7736,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--snapshot", help="which snapshot (default: the latest)")
     p.add_argument("--live", metavar="DIR",
                    help="with --seal: live mode — the sealed files under DIR re-validated now (03 §3.7)")
+    p.add_argument("--shards", nargs="+", metavar="SLICE/NNNNN",
+                   help="run every check on these parts alone, in place of the seeded sample "
+                        "(a slice as the snapshot names it, e.g. lang=en/pages=12M/00042)")
     p.add_argument("--json", action="store_true")
     p.set_defaults(fn=cmd_records_check)
 

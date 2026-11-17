@@ -265,19 +265,26 @@ def test_the_origin_names_both_files_and_reads_back(corpus):
     assert plugin_io.origin_unit(SOURCE, new, corpus, run="20260801") == (unit, size)
 
 
-def test_an_origin_pair_is_weighed_once_however_many_records_name_it(corpus, monkeypatch):
-    """The cost test of tests/hold/test_check.py, for locators of two pieces:
-    the members must not make every record a new key."""
+def test_an_origin_pair_is_weighed_by_its_stream_and_its_files_stat_once(corpus, monkeypatch):
+    """The cost test of tests/hold/test_check.py, for locators of two pieces.
+    Since 2026-11-17 (03 §3.2 amended) a page's unit is the STREAM it is read
+    from, by Range, and the run's page_props a piece read once a check — so
+    two hundred streams are two hundred units sharing one page_props; and
+    still each FILE is stat-ed once, never once a record."""
     from app import louise
-    weighed = []
-    real = plugin_io.origin_unit
-    monkeypatch.setattr(plugin_io, "origin_unit",
-                        lambda p, o, b: (weighed.append(o), real(p, o, b))[1])
+    stats: list[str] = []
+    real = Path.stat
+    monkeypatch.setattr(Path, "stat", lambda self, *a, **k: (stats.append(self.name), real(self, *a, **k))[1])
+    monkeypatch.setattr(plugin_io, "origin_unit", lambda *a, **k: pytest.fail("weighed as whole files"))
     unit_of = louise._origin_unit_from(SimpleNamespace(plugin="wikipedia"), "wikipedia", corpus)
-    answers = {unit_of(f"enwiki/20260801/{DUMP}.xml.bz2#0::{i}|"
+    answers = [unit_of(f"enwiki/20260801/{DUMP}.xml.bz2#0::{i}|"
                        f"enwiki/20260801/enwiki-20260801-page_props.sql.gz#{i}::{i + 9}")
-               for i in range(200)}
-    assert len(weighed) == 1 and len(answers) == 1
+               for i in range(1, 201)]
+    props = corpus / "enwiki/20260801/enwiki-20260801-page_props.sql.gz"
+    assert len({a.unit for a in answers}) == 200 and [a.size for a in answers] == list(range(1, 201))
+    assert {a.shared for a in answers} == {(("enwiki/20260801/enwiki-20260801-page_props.sql.gz",
+                                             real(props).st_size),)}
+    assert sorted(stats) == sorted({f"{DUMP}.xml.bz2", props.name}), "each file once"
 
 
 def test_genesis_still_reads_an_archive_article_as_one_piece(corpus):

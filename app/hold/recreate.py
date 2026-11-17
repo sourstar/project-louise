@@ -75,6 +75,46 @@ def interim_name(name: str) -> str:
     return f"{name}{INTERIM}"
 
 
+#: the collection file's DISPLAY keys (07 §7.8): what a page shows for the
+#: collection on this peer and nothing else — `title` is the one there is
+DISPLAY_KEYS = ("title",)
+
+
+def predecessor_display(root: Path, name: str) -> dict[str, str]:
+    """THE PREDECESSOR'S DISPLAY KEYS, for a collection created under the
+    interim name of a re-creation (`<pred>.next`) while `<pred>` is held: its
+    collection file's `title` (07 §7.8; the operator's own label on this
+    peer, the Library card's "rename…"). A re-created `wikipedia-articles`,
+    made again from its own claims, lost `title = "Wikipedia - versions"`
+    (München, 2026-11-17, restored by `hold config apply`): the create wrote a
+    file of its own, the forget removed the predecessor's, and the rename
+    moved the new one onto the name. Taken at the create, the one step where
+    both files exist, the rename then carries it with the rest of the file.
+    DESIRED STATE, never runtime state (invariant 10): a file's key into a
+    file. Nothing else is taken here — sharing, slices, kinds, embedding and
+    a method stay the create's until the operator sets them (case F's swap
+    carries the whole file, `carried_file`). `{}` for any other name."""
+    from .deposit import held_file
+    if not name.endswith(INTERIM) or len(name) <= len(INTERIM):
+        return {}
+    path = held_file(Path(root), name[:-len(INTERIM)])
+    try:
+        with open(path, "rb") as f:
+            raw = tomllib.load(f)
+    except (OSError, tomllib.TOMLDecodeError):
+        return {}
+    return {k: raw[k] for k in DISPLAY_KEYS if isinstance(raw.get(k), str) and raw[k]}
+
+
+def display_lines(root: Path, name: str, log=None) -> str:
+    """`predecessor_display` as the collection file's lines, said aloud."""
+    keys = predecessor_display(root, name)
+    if keys and log is not None:
+        log(f"{name}: " + ", ".join(f"{k} {v!r}" for k, v in keys.items())
+            + f" taken from {name[:-len(INTERIM)]}'s collection file (a re-creation under its interim name)")
+    return "".join(f"{k} = {json.dumps(v, ensure_ascii=False)}\n" for k, v in keys.items())
+
+
 # ---- check: what a re-creation may change -----------------------------------
 
 #: what a re-creation never compares: the descriptive block (outside

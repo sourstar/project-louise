@@ -52,12 +52,13 @@ def _write(corpus: Path, run: str, pages, *, wiki: str, props) -> Path:
 
 
 def codex(root: Path, name: str = "wikipedia", *, first: str = FIRST, parser: int | None = None,
-          shard_records: int | None = None):
+          shard_records: int | None = None, archives=()):
     """The Codex, created as `hold collection create` writes one (its
     calibration member and SHARD), pinning every wiki's files of `first`.
     `parser`: a parser version the plugin still carries (5: the byte-range
     origin, `WikipediaSourceV5`); `shard_records`: a part's size, so a
-    fixture of a few pages has several parts."""
+    fixture of a few pages has several parts. `archives`: the archives it
+    credits (the pre-embedded archive's layer, 06 §6.6)."""
     from app.acquire import specs
     from app.acquire.specs import ACQUIRE_REGISTRY
     from app.hold import collection as col
@@ -84,9 +85,10 @@ def codex(root: Path, name: str = "wikipedia", *, first: str = FIRST, parser: in
         from app.hold import template
         recipe["slicing"] = {**template.default_slicing(spec_source()), "shard_records": int(shard_records)}
     Path(root).mkdir(parents=True, exist_ok=True)
+    from app.hold import template as tpl
     return col.create_from_recipe(Path(root), "wikipedia", recipe, platform_image=PLATFORM,
                                   embed=fake_embed, embed_query=fake_query_embed, name=name,
-                                  key=KEY, now=NOW)
+                                  key=KEY, now=NOW, credits=tpl.expand_archives(archives))
 
 
 def spec_source():
@@ -96,12 +98,12 @@ def spec_source():
 
 def node_collection(data_dir: Path, config_dir: Path, name: str = "wikipedia", *,
                     first: str = FIRST, slices: str = '["lang=tr"]', parser: int | None = None,
-                    shard_records: int | None = None):
+                    shard_records: int | None = None, archives=()):
     """The Codex under the node's root, acknowledged, and its collection
     file: one language held, its corpus `<root>/<name>/origin`."""
     from app import louise
     root = Path(data_dir) / "collections"
-    cx = codex(root, name, first=first, parser=parser, shard_records=shard_records)
+    cx = codex(root, name, first=first, parser=parser, shard_records=shard_records, archives=archives)
     assert louise.main(["hold", "collection", "ack", name, "--root", str(root), "--yes"]) == 0
     (Path(config_dir) / "collections").mkdir(parents=True, exist_ok=True)
     (Path(config_dir) / "collections" / f"{name}.toml").write_text(

@@ -104,6 +104,12 @@ louise dev carry wikipedia wikipedia.next --rebuilt --yes
 
 It must say the spaces are the same. A refusal naming anything but `parser` and
 `toolchain.platform_image` means STOP. It also links wikipedia's origin and copies `state/ack.json`.
+Since 2026-11-17 it also copies the derived state the new collection can prove valid (its log line
+"derived state carried"): `state/cpu-reference/` (the same space and calibration set, each file read
+back against its digest) and `state/wikipedia-archive-ids/` (each entry of a shard the corpus holds as
+it is now, keyed on the shard's physical identity; an entry under the old walked-path key is re-keyed).
+The scan cursors are not carried, since the parser moved: the new collection's first scan re-enumerates
+once. Nothing of this needs copying by hand.
 
 **5. The parts** (in its own container under `deploy/supervise-pass.sh`, at the night profile):
 
@@ -134,7 +140,17 @@ louise hold check wikipedia.next --checks roots,records,chunks,records-vs-origin
 ```
 
 Expect records-vs-origin to pass with 0 failed. The first lookup of each wiki builds its index table
-(~1 min for enwiki). Expect vectors-sample to pass at the space's tolerance. Then compare the two
+(~1 min for enwiki). Since 2026-11-17 the check reaches the dump layer under the default bound: a
+page's unit is its stream, and its run's page_props and index are read once a check (03 §3.2, amended).
+Its outcome says, per layer and per wiki, how many sampled records were compared and why the others
+were not; "NO DUMP-LAYER RECORD WAS COMPARED" at its head means this seed reached none (enwiki's
+page_props alone, 458 MB, is over the bound: it is reached only when ranked first). To verify one
+dump-layer part of every wiki at once, give the parts and a bound that holds the runs' shared files:
+
+```bash
+louise hold records check wikipedia.next --origin <wikipedia's corpus> --shards <one dump-layer part per wiki> \
+  --origin-mib <the runs' page_props and index files, in MiB, plus 512>
+``` Expect vectors-sample to pass at the space's tolerance. Then compare the two
 snapshots' parts. Every `records_root`, `chunks_root`, count and first/last id is equal; only `root` and
 `bytes` differ (the carry already held each part to this).
 
@@ -153,7 +169,9 @@ louise hold config apply wikipedia-articles.next --set method=wikipedia-versions
 ```
 
 Every end is read in wikipedia.next's S and every pin is checked: by the book. A claim pinned elsewhere
-refuses the file, naming the line. Expect ~20-30 min (the delta measurement's model gives ~19 min on 3
+refuses the file, naming the line. Created under the interim name while wikipedia-articles is held, the
+new collection file takes its predecessor's `title` ("Wikipedia - versions"), said in the create's log,
+and the rename at step 10 keeps it; `method` is still set by the `config apply` below. Expect ~20-30 min (the delta measurement's model gives ~19 min on 3
 processes for a whole pass). The export may be deleted afterwards (~4 GB, the operator's yes). Then:
 
 ```bash
@@ -169,6 +187,13 @@ louise hold collection forget wikipedia-articles --dry-run     # its parts and c
 ```
 
 Then the same commands with `--yes`, on the operator's word.
+
+The old collection's `state/build/` (12 GB on the node) is its records build's staging: the build
+database (`.build/build.db`, a row per record of the plan, and the parts' entries `hold snapshot create`
+read) and any part a stopped build had not promoted. It is derived, and nothing reads it once step 5 has
+ended (the carry seeded wikipedia.next's own from it). It is a plain folder under
+`data/collections/wikipedia/state/`, so the forget removes it with the directory; `ls -ld` it first, since
+a folder moved elsewhere by hand and linked back would leave its target behind.
 
 **10. The names:**
 

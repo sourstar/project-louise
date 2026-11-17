@@ -849,6 +849,12 @@ def check_records_vs_origin(ctx: Ctx) -> Outcome:
     # bound had run — pubmed's 2 million, 13 GB, to compare a few thousand.
     size_of: dict[str, int | None] = {}
     per_unit: dict[str, int] = {}
+    # WHAT A VERIFIER READS (03 §3.2, amended 2026-11-17): beside a unit's own
+    # bytes, the pieces it shares with other units — read once a check — and
+    # the group (layer, wiki) the report breaks the reach down by
+    shared_of: dict[str, tuple] = {}
+    group_of: dict[str, tuple[str, str]] = {}
+    per_group: dict[tuple[str, str], int] = {}
     sampled_records = 0
     for s in shards:
         try:
@@ -863,9 +869,17 @@ def check_records_vs_origin(ctx: Ctx) -> Outcome:
                 continue
             sampled_records += 1
             if ctx.origin_unit is not None:
-                unit, size = ctx.origin_unit(r["origin"])
+                got = ctx.origin_unit(r["origin"])
+                unit, size = got[0], got[1]
                 size_of.setdefault(unit, size)
                 per_unit[unit] = per_unit.get(unit, 0) + 1
+                shared = getattr(got, "shared", ())
+                if shared and unit not in shared_of:
+                    shared_of[unit] = shared
+                group = getattr(got, "group", None)
+                if group is not None:
+                    group_of.setdefault(unit, group)
+                    per_group[group] = per_group.get(group, 0) + 1
     if not ran:
         return Outcome("records-vs-origin", INCONCLUSIVE,
                        why=_none_held(ctx))
@@ -889,8 +903,10 @@ def check_records_vs_origin(ctx: Ctx) -> Outcome:
                            "that passed without one would certify the copy "
                            "against itself")
 
-    keep, bound = _origin_units_taken(ctx, size_of)
-    in_part = _compared_in_part(ctx, ran, keep, size_of, per_unit, bound)
+    passed: set[str] = set()
+    keep, bound = _origin_units_taken(ctx, size_of, shared_of, passed)
+    in_part = _compared_in_part(ctx, ran, keep, size_of, per_unit, bound, shared_of)
+    compared_in: dict[tuple[str, str], int] = {}
 
     def chosen():
         """The sampled records of the taken units, as (uid, origin, line),
@@ -907,6 +923,8 @@ def check_records_vs_origin(ctx: Ctx) -> Outcome:
                         continue
                     if unit in in_part and r["uid"] not in in_part[unit]:
                         continue
+                    if unit in group_of:
+                        compared_in[group_of[unit]] = compared_in.get(group_of[unit], 0) + 1
                 # THE CODEX'S SHAPE, on both sides. `canonical_line` defaults
                 # to `record_line` 1, which drops the `figures` key — so on a
                 # plates collection this re-canonicalised a shape-2 record as
@@ -958,6 +976,7 @@ def check_records_vs_origin(ctx: Ctx) -> Outcome:
                        ctx.seed, _shard_ids(ctx.codex, ran),
                        why=f"none of the {compared} sampled record(s) could "
                            f"be re-fetched from the origin given")
+    reach = _reach(ctx, per_group, compared_in, group_of, shared_of, keep, passed, in_part)
     reproduced = compared - unreachable - len(errored) - len(changed)
     if not failed and changed and (reproduced <= 0
                                    or len(changed) > CHANGED_AT_ORIGIN_SHARE * (reproduced + len(changed))):
@@ -974,15 +993,16 @@ def check_records_vs_origin(ctx: Ctx) -> Outcome:
             ctx.seed, _shard_ids(ctx.codex, ran),
             why=f"{len(changed)} of {compared} sampled record(s) changed at the origin "
                 f"since the build (more than {CHANGED_AT_ORIGIN_SHARE:.0%} of those "
-                f"re-parsed), so the sample proves nothing either way")
+                f"re-parsed), so the sample proves nothing either way" + reach)
     said = ""
     if bound:
         said = (f" — read {bound['origin_units']} of the {bound['origin_units_sampled']} "
-                f"origin file(s) the sampled shards reach into, {bound['origin_bytes'] >> 20} "
-                f"MiB of the {bound['origin_bytes_bound'] >> 20} MiB one check may read of "
-                f"the origin ({compared} of {sampled_records} sampled records)")
+                f"origin unit(s) the sampled shards reach into, {_mib(bound['origin_bytes'])} "
+                f"of the {_mib(bound['origin_bytes_bound'])} one check may read of "
+                f"the origin, a piece several units share counted once ({compared} of "
+                f"{sampled_records} sampled records)")
         for u in bound.get("origin_units_in_part", ()):
-            said += (f"; {u['unit']} ({u['weight'] >> 20} MiB) heavier than the bound, compared "
+            said += (f"; {u['unit']} ({_mib(u['weight'])}) heavier than the bound, compared "
                      f"in part: {u['compared']} of its {u['sampled']} sampled records, drawn by "
                      f"the seed (03 §3.2, amended 2026-11-01)")
     if ctx.origin_is_copy and not failed:
@@ -1001,7 +1021,7 @@ def check_records_vs_origin(ctx: Ctx) -> Outcome:
             why=f"re-parsed from the copy this node keeps, not re-fetched from the origin: "
                 f"{compared - unreachable - len(errored)} record(s) reproduced from it (the "
                 f"parser and the copy agree); whether the origin still serves these bytes was "
-                f"not asked (03 §3.2)")
+                f"not asked (03 §3.2)" + reach)
     return Outcome("records-vs-origin", FAIL if failed else PASS,
                    {"records": seen, "compared": compared,
                     "failed": sorted(failed)[:64], "moved": sorted(moved)[:64],
@@ -1021,7 +1041,7 @@ def check_records_vs_origin(ctx: Ctx) -> Outcome:
                        # that could not be read is not a record that agreed
                        + (f", {len(errored)} unreadable ({errored[0]})"
                           if errored else "")
-                       + said)
+                       + said + reach)
 
 
 def check_image_equivalence(ctx: Ctx) -> Outcome:
@@ -1153,8 +1173,14 @@ def _moved_only(line: bytes, got: bytes) -> bool:
     return a == b
 
 
+def _weight(unit: str, size_of: dict, shared_of: dict) -> int:
+    """What reading `unit` alone weighs: its own bytes and every piece it
+    shares (09 §9.8's `origin_units_in_part` weight)."""
+    return (size_of.get(unit) or 0) + sum(s or 0 for _, s in shared_of.get(unit, ()))
+
+
 def _compared_in_part(ctx: Ctx, ran, keep, size_of: dict, per_unit: dict,
-                      bound: dict) -> dict[str, set[str]]:
+                      bound: dict, shared_of: dict | None = None) -> dict[str, set[str]]:
     """A UNIT HEAVIER THAN THE BOUND IS COMPARED IN PART (03 §3.2, amended
     2026-11-01, operator, RULE 1): of its `n` sampled records, the
     ⌈n × bound / weight⌉ — at least one — that `sample(seed, …)` ranks first
@@ -1163,13 +1189,18 @@ def _compared_in_part(ctx: Ctx, ran, keep, size_of: dict, per_unit: dict,
     dump file, so its check re-parsed all 3.7 M sampled records, ~27 h at
     38/s; the share is ~6,800. The seed still decides which records, and
     the report names, for each such unit, its weight, `n` and the share.
+    A unit's weight counts the pieces it shares with others too (amended
+    2026-11-17): enwiki's page_props alone, 458 MB, is over the bound, so a
+    stream of enwiki taken first is compared in part rather than not at all.
     Returns {unit: the uids compared}; `bound` gets the record."""
     if keep is None:
         return {}
-    heavy = [u for u in sorted(keep) if (size_of.get(u) or 0) > ctx.origin_bytes]
+    shared_of = shared_of or {}
+    heavy = [u for u in sorted(keep) if _weight(u, size_of, shared_of) > ctx.origin_bytes]
     if not heavy:
         return {}
-    shares = {u: min(per_unit[u], max(1, math.ceil(per_unit[u] * ctx.origin_bytes / size_of[u])))
+    weight = {u: _weight(u, size_of, shared_of) for u in heavy}
+    shares = {u: min(per_unit[u], max(1, math.ceil(per_unit[u] * ctx.origin_bytes / weight[u])))
               for u in heavy}
 
     def uids_of(unit):
@@ -1179,22 +1210,37 @@ def _compared_in_part(ctx: Ctx, ran, keep, size_of: dict, per_unit: dict,
                     yield r["uid"]
     out = {u: set(cx.sample(ctx.seed, shares[u], uids_of(u))) for u in heavy}
     bound["origin_units_in_part"] = [
-        {"unit": u, "weight": size_of[u], "sampled": per_unit[u], "compared": shares[u]}
+        {"unit": u, "weight": weight[u], "sampled": per_unit[u], "compared": shares[u]}
         for u in heavy]
     return out
 
 
-def _origin_units_taken(ctx: Ctx, size_of: dict) -> tuple[set | None, dict]:
-    """The origin units this run reads — `size_of` is unit -> bytes for every
-    unit the sampled records point into — and the bound's record. None when
-    nothing bounds the run (no `origin_unit`): every sampled record is
-    compared. The units are ranked by the ONE sampling rule (09 §9.1) under
-    the shards' seed and taken up to the last that keeps their sizes within
-    `ctx.origin_bytes`, the first whatever it weighs (`_compared_in_part`
-    then compares a share of a unit heavier than the bound)."""
+def _origin_units_taken(ctx: Ctx, size_of: dict, shared_of: dict | None = None,
+                        passed: set | None = None) -> tuple[set | None, dict]:
+    """The origin units this run reads — `size_of` is unit -> its own bytes
+    for every unit the sampled records point into — and the bound's record.
+    None when nothing bounds the run (no `origin_unit`): every sampled record
+    is compared. The units are ranked by the ONE sampling rule (09 §9.1)
+    under the shards' seed and taken in that order, the first whatever it
+    weighs (`_compared_in_part` then compares a share of a unit heavier than
+    the bound), each other while the sum of what is read stays within
+    `ctx.origin_bytes`.
+
+    A PIECE SEVERAL UNITS SHARE IS READ ONCE (03 §3.2, amended 2026-11-17):
+    `shared_of` is unit -> its `(piece, bytes)` read beside its own bytes —
+    wikipedia's page_props and multistream index, read whole by every
+    record of a wiki's run — counted when the first unit needing it is
+    taken and never again. A unit whose OWN bytes do not fit ends the take,
+    as before; one that does not fit only for a shared piece not yet read is
+    PASSED OVER (`passed`), so the units whose pieces are already read are
+    still taken: the first frwiki unit after a dewiki one no longer ends a
+    check that has paid for dewiki's index. The seed still decides every
+    unit; a unit with no shared piece is taken exactly as before."""
     if ctx.origin_unit is None or not size_of:
         return None, {}
+    shared_of = shared_of or {}
     taken: list[str] = []
+    paid: set[str] = set()
     used = unweighed = in_a_row = 0
     for unit in cx.sample(ctx.seed, len(size_of), iter(sorted(size_of))):
         size = size_of[unit]
@@ -1211,13 +1257,79 @@ def _origin_units_taken(ctx: Ctx, size_of: dict) -> tuple[set | None, dict]:
                 continue
             in_a_row = 0
         size = size or 0
-        if taken and used + size > ctx.origin_bytes:
-            break
+        new = {p: (w or 0) for p, w in shared_of.get(unit, ()) if p not in paid}
+        extra = sum(new.values())
+        if taken:
+            if used + size > ctx.origin_bytes:
+                break
+            if used + size + extra > ctx.origin_bytes:
+                if passed is not None:
+                    passed.add(unit)
+                continue
         taken.append(unit)
-        used += size
+        used += size + extra
+        paid.update(new)
     return set(taken), {"origin_units": len(taken), "origin_units_sampled": len(size_of),
                         "origin_bytes": used, "origin_bytes_bound": ctx.origin_bytes,
                         **({"origin_units_unlisted": unweighed} if unweighed else {})}
+
+
+def _mib(n: int) -> str:
+    return f"{n / (1 << 20):,.0f} MiB" if n >= 1 << 20 else f"{n / 1024:,.0f} KiB"
+
+
+def _reach(ctx: Ctx, per_group: dict, compared_in: dict, group_of: dict,
+           shared_of: dict, keep, passed: set, in_part: dict) -> str:
+    """WHAT THE CHECK REACHED, BY LAYER AND GROUP, AND WHY NOT THE REST (03
+    §3.2, amended 2026-11-17) — said in the outcome, never left for the
+    reader to infer: a check that compared no record of a layer says so
+    first, so a pass on wikipedia's archive records alone cannot read as a
+    pass of its dump layer (München, 2026-11-17: 2 records, both from
+    fa/001.parquet, and ~30 M dump-layer records never compared). Empty
+    where the origin's units name no group."""
+    if not per_group:
+        return ""
+    units: dict[tuple, list[str]] = {}
+    for u, g in group_of.items():
+        units.setdefault(g, []).append(u)
+    layers: dict[str, list[tuple]] = {}
+    for g in sorted(per_group):
+        layers.setdefault(g[0], []).append(g)
+    said, missing = [], []
+    for layer, groups in layers.items():
+        n = sum(per_group[g] for g in groups)
+        got = sum(compared_in.get(g, 0) for g in groups)
+        parts = []
+        for g in groups:
+            us = units.get(g, ())
+            if compared_in.get(g):
+                part = f"{g[1]} {compared_in[g]:,} of {per_group[g]:,}"
+                if any(u in in_part for u in us):
+                    part += " (in part: its unit read is heavier than the bound)"
+                parts.append(part)
+                continue
+            pieces: dict[str, int] = {}
+            for u in us:
+                for p, w in shared_of.get(u, ()):
+                    pieces[p] = w or 0
+            weight = sum(pieces.values())
+            names = ", ".join(sorted(p.rsplit("/", 1)[-1] for p in pieces))
+            if any(u in passed for u in us):
+                why = (f"its shared pieces alone ({names}, {_mib(weight)}) are heavier than the "
+                       f"bound: read only when the seed ranks one of its units first"
+                       if weight > ctx.origin_bytes else
+                       f"its shared pieces ({names}, {_mib(weight)}) did not fit beside what "
+                       f"was read before them")
+            elif keep is not None and any(u in keep for u in us):
+                why = "its units were read and none of its records was compared"
+            else:
+                why = "the bound was spent before the seed reached it"
+            parts.append(f"{g[1]} none of {per_group[g]:,}: {why}")
+        said.append(f"{layer} {got:,} of {n:,} sampled record(s) compared ({'; '.join(parts)})")
+        if not got:
+            missing.append(f"no {layer}-layer record was compared")
+    head = (" — " + "; ".join(missing).upper()) if missing else ""
+    return head + " — by layer: " + " · ".join(said)
 
 
 def check_figures(ctx: Ctx) -> Outcome:

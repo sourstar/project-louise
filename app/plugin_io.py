@@ -12,6 +12,7 @@ plugin encoded at discovery (e.g. pubmed's container::index) round-trips.
 """
 import json
 from pathlib import Path
+from typing import NamedTuple
 
 from .plugins.base import CanonicalDoc, DocRef
 
@@ -252,6 +253,34 @@ def origin_unit(plugin, origin: str, base, *, run: str | None = None) -> tuple[s
             size = None
         total = None if total is None or size is None else total + size
     return "+".join(names), total
+
+
+class OriginReads(NamedTuple):
+    """WHAT A VERIFIER READS of the origin to answer for one record
+    (`records-vs-origin`'s bound, app/hold/check.py; 03 §3.2 amended
+    2026-11-17). `unit` is what the seed ranks, `size` the unit's own bytes
+    — a byte range where the origin can be read by Range, the files whole
+    where it cannot — and `shared` the pieces it reads beside them that
+    other units read too, each `(piece, bytes or None)`: a check reads a
+    shared piece ONCE, whichever units need it. `group` — `(layer, name)`,
+    e.g. `("dump", "enwiki")` — is what the report says was reached and what
+    was not; None where the plugin names none. A plain `(unit, size)` is the
+    same as `OriginReads(unit, size)`."""
+    unit: str
+    size: int | None
+    shared: tuple[tuple[str, int | None], ...] = ()
+    group: tuple[str, str] | None = None
+
+
+def origin_weigher(plugin, base, *, run: str | None = None):
+    """`origin -> OriginReads` for one check, or None where the plugin weighs
+    its units as the files its pieces name (`origin_unit`). A plugin whose
+    origin is Range-readable, or whose units share files, gives
+    `origin_weigher(base, run)`: a closure that keeps its own lookups for the
+    check it serves (wikipedia's streams, its page_props and index, its
+    archive's row groups)."""
+    of = getattr(plugin, "origin_weigher", None)
+    return None if of is None else of(Path(base), run)
 
 
 def metadata(plugin, row) -> dict:

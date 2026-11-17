@@ -788,6 +788,22 @@ class WikipediaSource:
         from app import plugin_io
         return locate.files(origin, Path(base), run, lambda piece: plugin_io.generic_local(self, piece, base)[0])
 
+    def carry_state(self, corpus: Path, src_state: Path, dst_state: Path, *, apply: bool) -> dict:
+        """What of a collection's derived state its successor reading the same
+        corpus takes (app/hold/carry.py `derived_state`): the archive's ids
+        cache, by each shard's physical identity (archive.carry_ids)."""
+        return {archive.IDS_DIR: archive.carry_ids(corpus, src_state, dst_state, apply=apply)}
+
+    def origin_weigher(self, base: Path, run: str | None):
+        """`origin -> what a verifier reads for it` for one check (plugin_io.
+        origin_weigher, the records-vs-origin bound; weigh.py): a page's
+        stream by Range, its run's index and page_props shared, an archive
+        article's row groups beside its file's footer."""
+        from app import plugin_io
+
+        from . import weigh
+        return weigh.weigher(base, run, lambda piece: plugin_io.generic_local(self, piece, base)[0])
+
     def run_of_locator(self, locator: str) -> str | None:
         """The dump run a manifest locator reads (app/record_source.py: a
         record naming its page is the row's unit only when built from the

@@ -992,12 +992,14 @@ def _sorted_once(uids: list[str]) -> tuple[str, ...]:
     return tuple(uids)
 
 
-def write_held_file(root: Path, codex: Codex, name: str) -> Path:
+def write_held_file(root: Path, codex: Codex, name: str, log=None) -> Path:
     """07 §7.8's collection file: the Codex, every slice, records and
     relations, nothing embedded (there is nothing to embed), not shared
     until the operator says so. No `[encoder]`: an annotations collection
-    has no space (02 §2.10)."""
+    has no space (02 §2.10). Under a re-creation's interim name, the
+    predecessor's display keys (its `title`; recreate.predecessor_display)."""
     from .deposit import held_file
+    from .recreate import display_lines
     path = held_file(root, name)
     if path.exists():
         import tomllib
@@ -1010,7 +1012,8 @@ def write_held_file(root: Path, codex: Codex, name: str) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(".toml.tmp")
     tmp.write_text(f'codex = "{codex.collection_id}"\n'
-                   'slices = "all"\n'
+                   + display_lines(root, name, log)
+                   + 'slices = "all"\n'
                    'kinds = ["records", "relations"]\n'
                    'embed = "off"\n'
                    "share = false\n", encoding="utf-8")
@@ -1441,7 +1444,7 @@ def _write_collection(root: Path, name: str, targets: Sequence[Target], annotato
     if key is not None:
         sn.sign_snapshot(root, name, snap, key,
                          now=now or time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()))
-    held_path = write_held_file(root, codex, name)
+    held_path = write_held_file(root, codex, name, log=lambda m: log(f"[annotations] {m}"))
     log(f"[annotations] {name}: {count} claim(s) about {names} from "
         f"{', '.join(t.from_snapshot for t in targets)}, "
         f"snapshot {snapshot_id} {snap.hash[:23]}…; held: {held_path}")
