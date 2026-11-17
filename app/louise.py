@@ -5777,7 +5777,7 @@ def run_check(a):
         live=getattr(a, "live", None),
         vectors_for=lambda ids: embeddings.vectors_by_chunk_id(
             ids, collection=local),
-        origin_is_copy=_is_kept_copy(local, origin_dir),
+        origin_is_copy=_is_kept_copy(local, origin_dir, root=a.root, name=name),
         log=lambda m: print(m, file=sys.stderr))
 
     written: dict[str, str] = {}
@@ -5871,17 +5871,44 @@ def _check_origin(a, codex):
     return None
 
 
-def _is_kept_copy(local, origin_dir) -> bool:
-    """`origin_dir` is the collection's own corpus directory — the copy this
-    node keeps, by physical identity (CLAUDE.md: a path, never a name) — so a
-    re-parse from it says nothing of the origin (`check.Ctx.origin_is_copy`)."""
+def _is_kept_copy(local, origin_dir, *, root=None, name: str | None = None) -> bool:
+    """`origin_dir` is the copy this node keeps of the collection's origin, so
+    a re-parse from it says nothing of the origin (`check.Ctx.origin_is_copy`).
+
+    THE KEPT COPY IS FOUND, NEVER ASSUMED ABSENT (2026-11-17): `hold records
+    check` builds its local side with no corpus directory, so the first form
+    of this test (7682c22) compared against None, swallowed the TypeError and
+    answered "not the copy" for every check, and every re-parse of a kept
+    copy since 2026-11-14 was recorded as a PASS (wikipedia's, München). The
+    copy is the local side's corpus where it names one, and the collection's
+    own `<root>/<name>/origin` (collections.origin_dir) always. It is known by
+    PHYSICAL identity (CLAUDE.md): the same directory by its resolved path,
+    by device and inode (a second mount of it), or one inside the other."""
+    import os
     from pathlib import Path
     if not origin_dir:
         return False
+    kept: list[Path] = []
+    if getattr(local, "corpus_dir", None):
+        kept.append(Path(local.corpus_dir))
+    if root is not None and name:
+        kept.append(Path(root) / name / "origin")
     try:
-        return Path(origin_dir).resolve() == Path(local.corpus_dir).resolve()
-    except (OSError, TypeError, AttributeError):
+        given = Path(origin_dir).resolve()
+        given_id = os.stat(given)
+    except (OSError, TypeError, ValueError):
         return False
+    for k in kept:
+        try:
+            k = k.resolve()
+            k_id = os.stat(k)
+        except (OSError, ValueError):
+            continue
+        if given == k or given.is_relative_to(k) or k.is_relative_to(given):
+            return True
+        if (given_id.st_dev, given_id.st_ino) == (k_id.st_dev, k_id.st_ino):
+            return True
+    return False
 
 
 def _reparse_from(codex, name: str, origin_dir, *, run: str | None = None):
