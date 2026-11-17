@@ -173,6 +173,8 @@ verification; robots.txt disallows /TLIO/ (the query system) only, which
 is not used. Non-commercial; not shared with peers, not published, not
 in this repository until the licence is recorded.
 
+**Stopped, 2026-11-17, on the operator's word ("Stop yours"):** the node's own fetch (München's `tlio-fetch.service`, `/mnt/ssd3/louise-ocr/lexicon/tlio/`) is the one. The cloud fetch held 4,300 pages; none left the container. Its earlier status follows.
+
 **Status, 2026-11-17 10:58 UTC:** 3,211 of 43,911 entries; 0.48 s an
 entry measured (one request at a time, no pause while answers come right,
 backoff after a failure); ~5.4 h left if it runs without a stop. Runs in
