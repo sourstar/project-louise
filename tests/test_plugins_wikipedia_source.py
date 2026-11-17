@@ -254,3 +254,30 @@ def test_origin_coverage(corpus):
     for ref in refs[:2]:
         read |= assert_covered(SOURCE, ref, root)
     assert read, "fetch read the dump"
+
+
+def test_a_dump_is_read_from_its_copy_on_the_files_cache(corpus, tmp_path, monkeypatch):
+    """The dump is read stream by stream at random offsets: from its copy on
+    the files cache (ssd3), never by seeks on tank (operator 2026-11-17: "use
+    ssd3 for caching wikipedia and wikidata corpus while rebuilding";
+    app/derived.py `staged`). The page read is the same."""
+    from app import config, derived
+    from app.plugins.wikipedia import source as wsrc
+    refs = {r.native_id: r for r in SOURCE.discover(DiscoverState(corpus_root=corpus))}
+    wsrc._stream_cache.clear()
+    plain = SOURCE.parse(SOURCE.fetch(refs[nid(3)]))
+    monkeypatch.setattr(config, "CACHE_DIR", tmp_path / "ssd5")
+    monkeypatch.setattr(config, "FILES_CACHE_DIR", tmp_path / "ssd3")
+    derived._touched.clear()
+    wsrc._stream_cache.clear()
+    opened: list[str] = []
+    real_open = open
+    monkeypatch.setattr(wsrc, "open", lambda p, *a, **k: (opened.append(str(p)), real_open(p, *a, **k))[1],
+                        raising=False)    # the plugin's own reads, not the copy's
+    staged = SOURCE.parse(SOURCE.fetch(refs[nid(3)]))
+    assert staged.title == plain.title and staged.sections == plain.sections
+    dump = split_locator(refs[nid(3)].locator)[0]
+    copy = derived.place(derived.ORIGIN_COPY, Path(dump)) / Path(dump).name
+    assert copy.read_bytes() == Path(dump).read_bytes()
+    reads = [p for p in opened if p.endswith("multistream.xml.bz2")]
+    assert reads and all(p == str(copy) for p in reads), reads

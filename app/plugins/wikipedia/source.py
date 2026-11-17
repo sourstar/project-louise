@@ -71,6 +71,7 @@ from xml.etree import ElementTree as ET
 
 from ... import chunking
 from .. import cursor
+from app import derived
 from app.backend import OriginForm, Template
 from app.keyed_origin import KeyedOrigin
 from ..base import (CanonicalDoc, DiscoverState, DocRef, Erasure, LicenseClass,
@@ -227,6 +228,15 @@ _STREAM_SLOTS = 2
 
 
 def _stream_pages(dump: Path, start: int, end: int) -> "dict[str, ET.Element]":
+    # the dump is read stream by stream at random offsets, and the whole of it
+    # over a pass: read from its copy on the files cache (ssd3), made once by
+    # one sequential copy, not by seeks on tank's spinning disks (app/derived.py
+    # `staged`; operator 2026-11-15, and 2026-11-17: "use ssd3 for caching
+    # wikipedia and wikidata corpus while rebuilding"). The origin itself when
+    # the node names no files cache or the cache has no room. The archive's
+    # parquet is not staged: a fetch reads only its text columns, a fraction
+    # of each file (the vectors' column is most of it), in row-group order.
+    dump = derived.staged(Path(dump), log=print)
     # keyed on the file's PHYSICAL identity too (CLAUDE.md: caches key on it):
     # a run deleted from the corpus, or a dump replaced at its path, is never
     # answered from what was read of it before (a stat; a missing file raises)
