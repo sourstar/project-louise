@@ -201,7 +201,7 @@ grep -q "^def build_lang_table(tbl, \*, log=None) -> dict:" "$ROOT/src.new/app/v
 grep -q "^def _unship(shipped) -> bytes:" "$ROOT/src.new/app/pack/build.py"              # #148 (65b6261), #221: lines cross compressed (in batches since #221) from child to part writer
 grep -q "^def prefetch_held(collection, rows: list\[dict\]) -> None:" "$ROOT/src.new/app/pack/build.py"   # #149 (e8e4025): a part queued behind each child; held lookups per part
 grep -q "^def _columns_of(buf: list\[dict\], lines: list) -> tuple | None:" "$ROOT/src.new/app/pack/build.py"   # #150 (5487524): a part to its writer as columns and one bytes object
-grep -q "^def _reparse_many_from(codex, name: str, origin_dir):" "$ROOT/src.new/app/louise.py"   # #152 (a2100c5): records-vs-origin re-parses in the parse pool
+grep -q "^def _reparse_many_from(codex, name: str, origin_dir" "$ROOT/src.new/app/louise.py"   # #152 (a2100c5): records-vs-origin re-parses in the parse pool
 grep -q "^def _compared_in_part(ctx: Ctx, ran, keep, size_of: dict, per_unit: dict," "$ROOT/src.new/app/hold/check.py"   # #153 (698dcfd): a heavy origin unit is compared in part, by the seed
 grep -q '^WHOLE_KINDS = ("terms", "validation", "slicing", "calibration", "seals")' "$ROOT/src.new/app/share/holdings.py"   # a8fa256: the family map is a whole-collection member
 grep -q '^SHOWN_ONLY = ("origin",)' "$ROOT/src.new/app/copy_state.py"   # #154 (28b265f): records-vs-origin is optional and gates nothing (operator 2026-11-01)
