@@ -59,9 +59,11 @@ import os
 import signal
 import sys
 import time
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+from types import MappingProxyType
 from typing import Any, Callable, Mapping
 
 from .annotations import AnnotationsError
@@ -113,6 +115,21 @@ class Method:
     #: the plugins of the collections it reads besides its target, declared
     #: (docs/notes/collection-updates.md §4: whom a source's update wakes)
     inputs: tuple[str, ...] = ()
+    #: THE DELTA FORM (collection-updates.md §4, `derive_from_delta`):
+    #: (Context, deltas, out Path, log) -> counts — the claim set `produce`
+    #: writes, byte for byte, made from what the sources' deltas touch
+    #: (`deltas`: source collection name -> (from snapshot, to snapshot), each
+    #: `from` the one the method last read), starting from its own last
+    #: output (the collection's current snapshot); it raises `WholeRun` where
+    #: it cannot apply. None: the method always runs whole, and says why
+    delta: Callable[..., dict[str, Any]] | None = None
+    #: why a method with no delta form runs whole, in plain words
+    whole_because: str = ""
+
+
+class WholeRun(Exception):
+    """A delta form cannot apply this time: the method runs whole, and this
+    says why."""
 
 
 @dataclass(frozen=True)
@@ -173,7 +190,11 @@ METHODS: dict[str, Method] = {
         "wikipedia's articles as works: every other language version same-work as the one shown "
         "(the largest; English on a tie), from the manifest and page_props",
         types=("same-work",), claim_method={"kind": "wikidata"},        # wiki_versions.METHOD
-        label="update by itself when wikipedia holds a newer snapshot"),
+        label="update by itself when wikipedia holds a newer snapshot",
+        whole_because=("its claims are read from the live manifest's lengths (`tokens`) and the page_props' "
+                       "Wikidata items, and a snapshot's delta names neither: it names the records whose title "
+                       "or text changed, not a page whose item moved in page_props, and the manifest runs ahead "
+                       "of the snapshot; the update after it is re-pinned from the delta")),
     "gutenberg-editions": Method(
         "gutenberg-editions", "gutenberg", _gutenberg_editions,
         "gutenberg's editions and translations of a work, re-made every month from this node's own "
@@ -187,7 +208,12 @@ METHODS: dict[str, Method] = {
                  {"kind": "matcher", "id": "gutenberg-editions-note"}, {"kind": "human"}),
         label="update by itself every month from the node's Gutenberg, Wikipedia and Wikidata",
         cadence="monthly", reads_collection=True, preview=_gutenberg_editions_preview,
-        inputs=("wikipedia", "wikidata")),
+        inputs=("wikipedia", "wikidata"),
+        whole_because=("its Wikidata tier reads the node's live wikipedia manifest, the dump's redirects and its "
+                       "page_props, and the live wikidata manifest, none of which a snapshot's delta names (a "
+                       "page_props item that moved, a redirect retargeted); its gutenberg records are read once a "
+                       "part's bytes (a part cache), so only the parts gutenberg re-issued are read, and the "
+                       "update after it is re-pinned from the delta")),
 }
 
 
@@ -491,22 +517,80 @@ def _target_collection(name: str):
 #: beside the claims file a producer wrote: its counts, `against` among them
 #: (what `finish` records in the marker: every collection the method read)
 COUNTS_SUFFIX = ".counts.json"
+#: `finish`'s update from the delta, each target pinned where its claims say
+#: (`annotations.update(since=…)`): the default of every derivation
+FROM_PINS: Mapping[str, str] = MappingProxyType({})
 
 
 def _counts_path(claims: Path) -> Path:
     return Path(claims).with_name(Path(claims).name + COUNTS_SUFFIX)
 
 
-def produce(root: Path, name: str, method_name: str, out: Path, *, log=print) -> dict[str, Any]:
-    """The method's whole claim set, written to `out`; its counts beside it."""
+def produce(root: Path, name: str, method_name: str, out: Path, *, log=print,
+            deltas: Mapping[str, Any] | None = None) -> dict[str, Any]:
+    """The method's whole claim set, written to `out`; its counts beside it.
+    With `deltas` (source name -> (from, to)), by its delta form where it
+    has one and it applies (`delta_applies`, `WholeRun`) — the same bytes —
+    and `counts["form"]` saying which ran and why."""
     method = get(method_name)
     name, tname = resolve(Path(root), name, method)
-    if method.reads_collection:
-        counts = method.produce(Context(Path(root), name, tname), Path(out), log)
-    else:
-        counts = method.produce(_target_collection(tname), Path(out), log)
+    ctx = Context(Path(root), name, tname)
+    counts: dict[str, Any] | None = None
+    form: dict[str, Any] = {"method": "whole", "why": None}
+    if deltas is not None:
+        why = delta_applies(Path(root), name, method, deltas)
+        if why is None:
+            try:
+                counts = method.delta(ctx, {k: tuple(v) for k, v in deltas.items()}, Path(out), log)
+                form = {"method": "delta", "why": None}
+            except WholeRun as e:
+                why = str(e)
+        if counts is None:
+            form["why"] = why
+            log(f"[annotations] {name}: {method.name} runs whole — {why}")
+    if counts is None:
+        if method.reads_collection:
+            counts = method.produce(ctx, Path(out), log)
+        else:
+            counts = method.produce(_target_collection(tname), Path(out), log)
+    if deltas is not None:
+        counts = {**counts, "form": form}
     _counts_path(out).write_text(json.dumps(counts, sort_keys=True))
     return counts
+
+
+def delta_applies(root: Path, name: str, method: Method, deltas: Mapping[str, Any]) -> str | None:
+    """Why `method`'s delta form cannot make `name`'s next claims from
+    `deltas`, in plain words — or None when it can: it has one; its last
+    run made the collection's current snapshot (the claims it starts from
+    are its own output); and every collection that run read either has a
+    delta starting at the snapshot it read, or has not moved since."""
+    from . import collection as col
+    if method.delta is None:
+        return method.whole_because or f"{method.name} has no delta form"
+    mk = read_marker(root, name)
+    if mk is None:
+        return f"no previous run of {method.name} to start from"
+    if mk.get("method") != method.name:
+        return f"the claims were made by {mk.get('method')!r}, not {method.name}: a method change runs whole"
+    current = newest_snapshot_id(col.shard_dir_of(root, name))
+    if mk.get("snapshot") != current:
+        return (f"{name}'s current snapshot {current} is not {method.name}'s last output "
+                f"({mk.get('snapshot')})")
+    read = dict(mk.get("against") or {})
+    for src, (frm, _to) in ((k, tuple(v)) for k, v in deltas.items()):
+        if src in read and read[src] != frm:
+            return f"the delta of {src} starts at {frm}, and {method.name} last read {src} {read[src]}"
+    for src, was in read.items():
+        if src in deltas:
+            continue
+        try:
+            now = newest_snapshot_id(col.shard_dir_of(root, src))
+        except Exception:   # noqa: BLE001 — a source gone: nothing to start from
+            now = None
+        if now != was:
+            return f"{src} moved from {was} to {now}, and no delta of it is given"
+    return None
 
 
 def preview(root: Path, name: str, method_name: str, *, log=print) -> dict[str, Any] | None:
@@ -523,13 +607,20 @@ def preview(root: Path, name: str, method_name: str, *, log=print) -> dict[str, 
 
 
 def finish(root: Path, name: str, method_name: str, claims: Path, *, key=None, now: str | None = None,
-           log=print, guard=None, clock: datetime | None = None, dry_run: bool = False) -> dict[str, Any]:
+           log=print, guard=None, clock: datetime | None = None, dry_run: bool = False,
+           against: Sequence[Sequence[str]] | None = None,
+           since: Mapping[str, str] | None = FROM_PINS) -> dict[str, Any]:
     """`update` with the method's output — set aside what the target's
-    snapshot does not hold yet — and the marker written once it returned."""
+    snapshot does not hold yet — and the marker written once it returned.
+    The update is re-pinned FROM THE DELTA wherever the claims' own pins
+    allow (`since`; app/hold/annotations_delta.py): the same bytes as
+    reading every claimed record, which `since=None` does."""
     from . import annotations as ann
     method = get(method_name)
     got = ann.update(Path(root), name, claims=Path(claims), key=key, now=now, log=log, clock=clock,
-                     dry_run=dry_run, unheld="drop", private=True, guard=guard)
+                     dry_run=dry_run, unheld="drop", private=True, guard=guard,
+                     against=[tuple(a) for a in against] if against else None,
+                     since=None if since is None else dict(since))
     out = got.to_dict()
     if not dry_run:
         try:
@@ -607,28 +698,56 @@ def _said(error: str, fn, *args) -> None:
     sys.exit(0)
 
 
-def _produce_child(root: str, name: str, method_name: str, out: str, error: str) -> None:
+def _produce_child(root: str, name: str, method_name: str, out: str, error: str,
+                   deltas_json: str = "null") -> None:
     from app import parallel
     _stop_outside_last_writes()
     parallel.watch_parent()
-    _said(error, lambda: produce(Path(root), name, method_name, Path(out), log=_child_log))
+    deltas = json.loads(deltas_json)
+    _said(error, lambda: produce(Path(root), name, method_name, Path(out), log=_child_log, deltas=deltas))
 
 
-def _finish_child(root: str, name: str, method_name: str, claims: str, result: str, error: str) -> None:
+def _node_key(name: str):
+    """The node's signing key, read in the update's child alone (the worker
+    never holds it); None — the snapshot written unsigned (09 §9.4) — when
+    there is none."""
+    try:
+        from app.bundles import keys as node_keys
+        return node_keys.load_signing_key()
+    except Exception:   # noqa: BLE001 — no key: the snapshot is held unsigned
+        _child_log(f"[annotations] {name}: no node key: the snapshot is written unsigned")
+        return None
+
+
+def _finish_child(root: str, name: str, method_name: str, claims: str, result: str, error: str,
+                  against_json: str = "null", since_json: str = "{}") -> None:
     from app import parallel
     _stop_outside_last_writes()
     parallel.watch_parent()
 
     def body() -> None:
-        key = None
-        try:
-            from app.bundles import keys as node_keys
-            key = node_keys.load_signing_key()   # in this child alone: the worker never holds it
-        except Exception:   # noqa: BLE001 — no key: the snapshot is held unsigned (09 §9.4)
-            _child_log(f"[annotations] {name}: no node key: the snapshot is written unsigned")
-        got = finish(Path(root), name, method_name, Path(claims), key=key, log=_child_log,
-                     guard=_held_against_stop)
+        got = finish(Path(root), name, method_name, Path(claims), key=_node_key(name), log=_child_log,
+                     guard=_held_against_stop, against=json.loads(against_json),
+                     since=json.loads(since_json))
         Path(result).write_text(json.dumps(got, sort_keys=True))
+    _said(error, body)
+
+
+def _recheck_child(root: str, name: str, result: str, error: str, against_json: str, since_json: str) -> None:
+    """Claims given by hand, re-checked (`update` with no claims file), from
+    the delta: the update's child of `derive_from_delta` for a collection
+    with no method."""
+    from app import parallel
+
+    from . import annotations as ann
+    _stop_outside_last_writes()
+    parallel.watch_parent()
+
+    def body() -> None:
+        against = json.loads(against_json)
+        got = ann.update(Path(root), name, key=_node_key(name), log=_child_log, guard=_held_against_stop,
+                         against=[tuple(a) for a in against] if against else None, since=json.loads(since_json))
+        Path(result).write_text(json.dumps(got.to_dict(), sort_keys=True))
     _said(error, body)
 
 
@@ -681,6 +800,96 @@ def derive_isolated(root: Path, name: str, method_name: str, *, stop=None,
         _run(_finish_child, (str(root), name, method_name, str(claims), str(result), str(error)),
              stop=stop, poll_s=poll_s, label=f"annotations-update {name}", error=error)
         return json.loads(result.read_text())
+
+
+def _targets_of(root: Path, name: str) -> list[tuple[str, set[str]]]:
+    """Each target of the annotations collection `name` as the collection
+    held here that answers for it (`_target_holder`), with every name a
+    caller may give it: the holder's, the target's collection id, and the
+    target's own local name where it is held."""
+    from . import codex as cx
+    from . import collection as col
+    from .annotations import _target_holder
+    _, codex = col.resolve(root, name)
+    out = []
+    for a in cx.targets_of(codex):
+        tname, _tcodex = _target_holder(root, a.collection_id)
+        aliases = {tname, a.collection_id}
+        with contextlib.suppress(Exception):     # not held under its own id: its twin answers
+            aliases.add(col.resolve(root, a.collection_id)[0])
+        out.append((tname, aliases))
+    return out
+
+
+def derive_from_delta(root: Path, name: str, method_name: str | None, deltas: Mapping[str, Any], *,
+                      stop=None, poll_s: float = 1.0, log=print) -> dict[str, Any]:
+    """THE CASCADE'S STEP for one annotations collection woken by its
+    sources' new snapshots (docs/notes/collection-updates.md §4): its next
+    snapshot, made FROM THE DELTA wherever that gives the whole run's bytes,
+    in PROCESSES OF THEIR OWN as `derive_isolated` — the same stop (a stop
+    terminates the child, `Stopped`; the update's last writes are held
+    against it, `_held_against_stop`) and the same failures (`ChildFailed`,
+    a negative exit code for a child the kernel killed, which the caller
+    tries again up to `KILLED_TRIES` times, as `maintain` does).
+
+    `deltas`: each source collection woken for -> (from snapshot, to
+    snapshot). `method_name` None: claims given by hand, RE-CHECKED — the
+    update reads from each target only the records its snapshots since the
+    claims' pin name (app/hold/annotations_delta.py). Otherwise the method
+    runs by its delta form where it has one and it applies (`delta_applies`:
+    no previous run of it, a method change, a source moved with no delta
+    given…), else whole, said why; and its update is re-pinned from the delta
+    the same way. A target named in `deltas` is checked against its `to`;
+    its chain is read from the snapshot the claims themselves are pinned to
+    (a `from` that differs is noted, not used: the claims' pin is what their
+    hashes are of), and a snapshot missing between them reads it whole. The
+    result is `derive_isolated`'s, with `form`: how the method ran and why,
+    and what the update read."""
+    from . import annotations_stream as st
+    from . import collection as col
+    from .annotations import is_annotations
+    root = Path(root)
+    deltas = {str(k): [str(v[0]), str(v[1])] for k, v in dict(deltas or {}).items()}
+    if method_name is None:
+        name, codex = col.resolve(root, name)
+        if not is_annotations(codex):
+            raise AnnotationsError(f"{name} is not an annotations collection (02 §2.10)")
+    else:
+        method = get(method_name)
+        name, _tname = resolve(root, name, method)
+        why = not_fitting(root, name, method)
+        if why is not None:
+            raise AnnotationsError(why)
+    against, since = [], {}
+    for tname, aliases in _targets_of(root, name):
+        key = next((k for k in sorted(aliases) if k in deltas), None)
+        if key is not None:
+            against.append([tname, deltas[key][1]])
+            since[tname] = deltas[key][0]
+    with st.workspace(root, f"method.{name}") as work:
+        claims, result, error = work / "claims.jsonl", work / "result.json", work / "error.txt"
+        if method_name is None:
+            _run(_recheck_child, (str(root), name, str(result), str(error), json.dumps(against), json.dumps(since)),
+                 stop=stop, poll_s=poll_s, label=f"annotations-recheck {name}", error=error)
+            produced = None
+            mform: dict[str, Any] = {"method": None, "why": "claims given by hand: re-checked, no method to run"}
+        else:
+            _run(_produce_child, (str(root), name, method_name, str(claims), str(error), json.dumps(deltas)),
+                 stop=stop, poll_s=poll_s, label=f"annotations-method {name}", error=error)
+            produced = json.loads(_counts_path(claims).read_text())
+            mform = produced.pop("form", None) or {"method": "whole", "why": None}
+            _run(_finish_child, (str(root), name, method_name, str(claims), str(result), str(error),
+                                 json.dumps(against), json.dumps(since)),
+                 stop=stop, poll_s=poll_s, label=f"annotations-update {name}", error=error)
+        got = json.loads(result.read_text())
+    form = {"method": mform["method"], "method_why": mform["why"], "update": got.get("delta")}
+    upd = got.get("delta") or {}
+    log(f"[annotations] {name}: "
+        + (f"{method_name} ran {mform['method']}" + (f" ({mform['why']})" if mform["why"] else "")
+           if method_name else "claims given by hand, re-checked")
+        + f"; the update re-pinned {upd.get('pinned', 0):,} claimed record(s) from the delta and read "
+          f"{upd.get('read', 0):,}: snapshot {got.get('snapshot_id')}")
+    return {"method": method_name, "produced": produced, **got, "form": form}
 
 
 def maintain(root: Path, *, stop=None, log=print, failed: dict[str, Any] | None = None,

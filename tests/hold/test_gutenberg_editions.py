@@ -525,6 +525,80 @@ def test_no_network_is_touched(node, monkeypatch):
     assert got["snapshot_id"] == "2026-11"
 
 
+# ---- from the delta (docs/notes/collection-updates.md §4) --------------------------------
+
+def test_the_part_cache_reads_only_a_part_gutenberg_re_issued_and_gives_the_same_bytes(node, monkeypatch):
+    """A part read once a ROOT: the second run reads no part and writes the
+    first run's bytes; after gutenberg re-issues its part, that part alone is
+    read, and the bytes are a run's with no cache at all."""
+    reads: list[str] = []
+    real = ge._read_part
+    monkeypatch.setattr(ge, "_read_part", lambda path: reads.append(path) or real(path))
+    first = ge.derive(node.root, NAME, "gutenberg", log=lambda m: None).bytes()
+    assert len(reads) == 1
+    said: list[str] = []
+    assert ge.derive(node.root, NAME, "gutenberg", log=said.append).bytes() == first and len(reads) == 1
+    assert any("0 read, 1 unchanged, from the part cache" in m for m in said)
+    a_gutenberg(node.root, BOOKS + [a_book(9000, "en", [EN + "King_Lear"], title="King Lear, again")], sid="2026-11")
+    cached = ge.derive(node.root, NAME, "gutenberg", log=lambda m: None)
+    assert len(reads) == 2, "the re-issued part, read"
+    store = Path(ge.cache_store(col.shard_dir_of(node.root, "gutenberg")))
+    assert len(list(store.glob("v*.json"))) == 1, "the superseded part's file removed"
+    for p in store.glob("v*.json"):
+        p.unlink()
+    cold = ge.derive(node.root, NAME, "gutenberg", log=lambda m: None)
+    assert cached.bytes() == cold.bytes() and cached.bytes() != first
+    # a dry run reads the cache and writes none
+    for p in store.glob("v*.json"):
+        p.unlink()
+    ge.preview(node.root, NAME, "gutenberg", log=lambda m: None)
+    assert not list(store.glob("v*.json"))
+    # a file of another code version is another name: never read as this one's
+    monkeypatch.setattr(ge, "books_version", lambda: 7)
+    ge.derive(node.root, NAME, "gutenberg", log=lambda m: None)
+    assert [p.name.split("-")[0] for p in store.glob("v*.json")] == ["v7"]
+
+
+def test_derive_from_delta_writes_the_whole_derivations_bytes(node, monkeypatch, tmp_path):
+    """The cascade's step after gutenberg's next snapshot: the method whole
+    (its Wikidata tier reads what no delta names), said; its update re-pinned
+    from the delta; every byte the whole derivation's."""
+    import shutil
+    from app import parallel
+    from app.hold import annotations_delta as ad
+    from tests.hold.test_annotations_stream import tree
+    monkeypatch.setattr(ad, "MAX_FRAMES", 1.0)          # 14 books in one frame: served whatever the estimate
+    collection_file.set_values(NAME, {"method": METHOD})
+    changed = [dict(b, sections=[["", "a book, revised"]], content_hash=rec.content_hash(b["title"], [("", "a book, revised")]))
+               if b["uid"] == "gutenberg:71" else b for b in BOOKS]
+    a_gutenberg(node.root, changed, sid="2026-11")
+    twin = tmp_path / "twin" / "collections"
+    shutil.copytree(node.root, twin, symlinks=True)
+    with __import__("app.hold.annotations_stream", fromlist=["x"]).workspace(node.root, "reference") as work:
+        am.produce(node.root, NAME, METHOD, work / "c.jsonl", log=lambda m: None)
+        whole = am.finish(node.root, NAME, METHOD, work / "c.jsonl", key=KEY, now=NOW, clock=NOVEMBER,
+                          log=lambda m: None, since=None)
+    monkeypatch.setattr(parallel, "watch_parent", lambda: None)
+    monkeypatch.setattr(am, "_stop_outside_last_writes", lambda: None)
+    monkeypatch.setattr(am, "_node_key", lambda name: KEY)
+    real_finish = am.finish
+    monkeypatch.setattr(am, "finish", lambda *a, **k: real_finish(*a, **{**k, "now": NOW, "clock": NOVEMBER}))
+
+    def run(target_fn, args, *, stop, poll_s, label, error=None):
+        with pytest.raises(SystemExit) as e:
+            target_fn(*args)
+        if e.value.code:
+            raise am.ChildFailed(e.value.code, error.read_text())
+    monkeypatch.setattr(am, "_run", run)
+    got = am.derive_from_delta(twin, NAME, METHOD, {"gutenberg": (TARGET_SNAPSHOT, "2026-11")}, log=lambda m: None)
+    assert tree(twin / NAME) == tree(node.root / NAME), "the same bytes, every file"
+    assert {k: v for k, v in got.items() if k not in ("form", "delta", "produced", "method")} == \
+        {k: v for k, v in whole.items() if k != "delta"}
+    assert got["form"]["method"] == "whole" and "page_props" in got["form"]["method_why"]
+    u = got["form"]["update"]
+    assert u["targets"]["gutenberg"]["from"] == TARGET_SNAPSHOT and u["pinned"] > 0
+
+
 # ---- the book, as the measurement read it ---------------------------------------------
 
 def test_a_book_is_read_as_the_measurement_wrote_it(monkeypatch, capsys):

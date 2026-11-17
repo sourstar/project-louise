@@ -171,6 +171,25 @@ Open:
 - A claim withdrawn by hand from the Wikidata or same-title tier is made again. The tools kept no list of such
   exclusions, so none is applied. The classical matcher's exclusions stay applied, because its claims are carried.
 
+## From the delta (2026-11-17)
+
+Every derivation's update is now re-pinned from the delta. An end record that the
+target's snapshots since the claims' pin did not change keeps the hash the claims
+already state. Only where that can pay: docs/notes/collection-updates.md §4 "As
+built" gives the rule and the numbers. The bytes are the whole read's, and
+`finish(since=None)` still does the whole read.
+
+- **`Method.delta`** is the optional delta producer, and `WholeRun` is its
+  refusal.
+- **`whole_because`** says why a method runs whole.
+- **`derive_from_delta(root, name, method_name, deltas)`** is the cascade's entry
+  point. `method_name` None means claims given by hand, which are re-checked. It
+  runs in children, as `derive_isolated` does.
+- **Neither method has a delta producer.** Their inputs (live manifests, page_props,
+  redirects) are not in any snapshot's delta.
+- **gutenberg-editions' gutenberg read** goes through a part cache keyed on each
+  part's root.
+
 ## Standardised alternative, not taken
 
 A workflow engine's derived datasets (Airflow datasets, Dagster assets) re-run a step when an input's version moves.

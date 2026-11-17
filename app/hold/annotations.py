@@ -80,6 +80,7 @@ import shutil
 import sys
 import time
 import unicodedata
+from collections.abc import Mapping
 from contextlib import nullcontext
 from dataclasses import dataclass
 from datetime import datetime
@@ -1475,14 +1476,21 @@ class Update:
     dropped: tuple[str, ...]         # re-check only: claims whose record the target no longer holds
     reissued: tuple[str, ...]        # part paths written anew
     snapshot: Any = None             # the Snapshot written; None on a dry run or nothing to do
+    #: with `since` (app/hold/annotations_delta.py): per target, the snapshots
+    #: whose deltas were read and the records taken from the claims' pins and
+    #: read — or why every end was read; None for an update that read them all
+    delta: dict[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
-        return {"snapshot_id": self.snapshot_id, "previous_id": self.previous_id,
-                "against": self.against, "added": self.added, "changed": self.changed,
-                "tombstoned": self.tombstoned, "dropped": list(self.dropped[:64]),
-                "dropped_count": len(self.dropped), "reissued": list(self.reissued),
-                "written": self.snapshot is not None,
-                "snapshot_hash": self.snapshot.hash if self.snapshot is not None else None}
+        out = {"snapshot_id": self.snapshot_id, "previous_id": self.previous_id,
+               "against": self.against, "added": self.added, "changed": self.changed,
+               "tombstoned": self.tombstoned, "dropped": list(self.dropped[:64]),
+               "dropped_count": len(self.dropped), "reissued": list(self.reissued),
+               "written": self.snapshot is not None,
+               "snapshot_hash": self.snapshot.hash if self.snapshot is not None else None}
+        if self.delta is not None:
+            out["delta"] = self.delta
+        return out
 
 
 def _target_holder(root: Path, collection_id: str) -> tuple[str, Codex]:
@@ -1528,7 +1536,7 @@ def update(root: Path, name: str, *, claims: bytes | Path | None = None,
            against: Sequence[tuple[str, str]] | None = None, snapshot_id: str | None = None,
            key=None, now: str | None = None, log=print, dry_run: bool = False,
            clock: datetime | None = None, unheld: str = "refuse", private: bool = False,
-           guard=None, _in_memory: bool = False) -> Update:
+           guard=None, since: Mapping[str, str] | None = None, _in_memory: bool = False) -> Update:
     """`hold annotations update <name>` (02 §2.10, built 2026-10-23): the
     next snapshot of an annotations collection — the SAME collection, its
     Codex and id untouched, so every peer that holds it takes the new
@@ -1567,12 +1575,22 @@ def update(root: Path, name: str, *, claims: bytes | Path | None = None,
     again: it is linked into the workspace, not copied (RULE 1; wikipedia's is
     4.2 GB). `guard`, a context manager, is held around the snapshot's write
     and its signature, so that a stop never leaves one written and unsigned
-    (the method's child defers a stop until it ends)."""
+    (the method's child defers a stop until it ends).
+
+    FROM THE DELTA (2026-11-17, docs/notes/collection-updates.md §4;
+    app/hold/annotations_delta.py): with `since` — {} or target -> the
+    snapshot the caller believes the claims are pinned to (the claims' own
+    pin decides) — an end record the target's snapshots since the claims'
+    pin do not name is taken from the claims' own pins instead of the
+    target's parts, where that can pay; the same bytes, the same result, and
+    `Update.delta` saying what was read and why."""
     from . import annotations_stream as st
     if unheld not in ("refuse", "drop"):
         raise ValueError(f"unheld is 'refuse' or 'drop', got {unheld!r}")
     plan = _update_plan(Path(root), name, against, snapshot_id, clock)
     if _in_memory:
+        if since is not None:
+            raise ValueError("since: the streamed update reads from the delta, not the in-memory proof")
         return _update_in_memory(plan, claims, key=key, now=now, log=log, dry_run=dry_run,
                                  drop=unheld == "drop", guard=guard)
     recheck = claims is None
@@ -1589,7 +1607,8 @@ def update(root: Path, name: str, *, claims: bytes | Path | None = None,
         with src:
             try:
                 return _update_stream(plan, src, work, recheck=recheck, key=key, now=now, log=log,
-                                      dry_run=dry_run, drop=recheck or unheld == "drop", guard=guard)
+                                      dry_run=dry_run, drop=recheck or unheld == "drop", guard=guard,
+                                      since=since)
             finally:
                 st.forget()
 
@@ -1759,16 +1778,40 @@ def _update_in_memory(plan: _UpdatePlan, claims: bytes | None, *, key, now, log,
 
 
 def _update_stream(plan: _UpdatePlan, src, work: Path, *, recheck: bool, key, now, log,
-                   dry_run: bool, drop: bool | None = None, guard=None) -> Update:
+                   dry_run: bool, drop: bool | None = None, guard=None,
+                   since: Mapping[str, str] | None = None) -> Update:
     """`update`'s middle, streamed (app/hold/annotations_stream.py): the
-    same checks in the same order, so the same refusals and the same bytes."""
+    same checks in the same order, so the same refusals and the same bytes.
+    With `since`, the targets' tables from the delta (app/hold/annotations_delta.py)."""
     import numpy as np
-    from . import annotations_stream as st, snapshot as sn
+    from . import annotations_delta as ad, annotations_stream as st, snapshot as sn
     codex, by_plugin = plan.codex, plan.by_plugin
+    held = served = None
+    form: dict[str, Any] | None = None
+    if since is not None:
+        # the targets' chains first, then — where one can be served — what the
+        # previous snapshot's claims pin, read with their numbers (once)
+        served = ad.plan_delta(plan, since, log)
+        if served.touched:
+            held = st.held_claims(plan.shard_tree, plan.prev, pins=True)
+            ad.settle(plan, served, held)
+            held.pins = None
+        form = {"targets": served.form, "pinned": 0, "read": 0}
     sv = st.survey(src, plugins=tuple(by_plugin), keep_idents=True,
                    orders={p: (t.codex.slicing or {}).get("order", "bytes") for p, t in by_plugin.items()})
     _refuse_graph(plan, sv.graph)
-    held_recs = st.Held({p: st.read_target(by_plugin[p], ends, work) for p, ends in sv.ends.items()})
+    read: dict[str, Any] = {}
+    for p, ends in sv.ends.items():
+        if served is not None and p in served.touched:
+            read[p] = ad.table(by_plugin[p], ends, served.pins[p], served.touched[p], work, form)
+            continue
+        read[p] = st.read_target(by_plugin[p], ends, work)
+        if form is not None:
+            form["read"] += len(ends.digests)
+    held_recs = st.Held(read)
+    del read, served
+    if form is not None:
+        log(ad.said(plan.name, form))
     sv.ends = {}                                    # read: the parts are found
     tables = held_recs.save(work)
     del held_recs
@@ -1776,7 +1819,8 @@ def _update_stream(plan: _UpdatePlan, src, work: Path, *, recheck: bool, key, no
     codices = {p: t.codex for p, t in by_plugin.items()}
     # the claims the previous snapshot holds, matched by identity: a claim
     # made before keeps its number, a new one is numbered after the last
-    held = st.held_claims(plan.shard_tree, plan.prev)
+    if held is None:
+        held = st.held_claims(plan.shard_tree, plan.prev)
     at, hit = st._search(held.idents, sv.idents)
     sv.idents = None
     sort = st.ExternalSort(work)
@@ -1823,11 +1867,11 @@ def _update_stream(plan: _UpdatePlan, src, work: Path, *, recheck: bool, key, no
                      tuple(sn.Tombstone(u, "withdrawn") for u in uids(held.numbers[~used])))
     return _update_finish(plan, shards=shards, relations=relations, delta=delta,
                           dropped=[d for _, d in dropped], install=None if recheck else src.install,
-                          key=key, now=now, log=log, dry_run=dry_run, guard=guard)
+                          key=key, now=now, log=log, dry_run=dry_run, guard=guard, form=form)
 
 
 def _update_finish(plan: _UpdatePlan, *, shards, relations, delta, dropped: Sequence[str], install,
-                   key, now, log, dry_run: bool, guard=None) -> Update:
+                   key, now, log, dry_run: bool, guard=None, form: dict[str, Any] | None = None) -> Update:
     """What `update` does once its parts are in staging: the result, the
     period and dry-run returns, the claims file kept (`install` writes the
     new one; None when re-checking), the parts promoted, the superseded kept,
@@ -1842,7 +1886,7 @@ def _update_finish(plan: _UpdatePlan, *, shards, relations, delta, dropped: Sequ
     reissued = tuple(e.path for e in shards if old.get((e.slice, e.n)) != e.root) + \
         tuple(e.path for e in relations if old_rel.get((e.slice, e.n)) != e.root)
     result = Update(sid, prev.snapshot_id, plan.against_of, len(delta.added), len(delta.changed),
-                    len(delta.tombstoned), tuple(dropped), reissued)
+                    len(delta.tombstoned), tuple(dropped), reissued, delta=form)
     if plan.period_refusal is not None and (delta.added or delta.changed or delta.tombstoned):
         shutil.rmtree(staging)
         raise plan.period_refusal
