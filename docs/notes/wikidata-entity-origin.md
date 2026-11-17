@@ -124,6 +124,9 @@ carried parts (75,896,183 records) and snapshot 2026-10 (`93cef74e…`, no `orig
      which check_rss passes on) halves the pool for the next run.
    - The cap is modelled from the measurements below: ~5 GB at 8 processes, with the entity table's
      build. Write the measured peak (`tree_peak_bytes` in the JSON) here.
+   - The worker's own scheduled check holds wikidata.next while it is paused (since this branch), so
+     this check is the only one; `hold collection show wikidata.next` says "held: the collection is
+     paused" under `scheduled_check`.
    - The first lookup builds run 20261012's entity table: ~26 s, ~0.8 GB in one process (modelled:
      4 bytes per item number to Q141 M), and ~0.7–0.9 GB on disk in the pack's directory.
    - Expect roots, records, chunks and vectors-sample to PASS.

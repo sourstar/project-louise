@@ -3031,3 +3031,31 @@ shape. **The node's model at this sandbox's rates:** wikidata's 103.8 GB is ~49 
 fetched again (~86 min at 20 MB/s, ~5.8 h at 5 MB/s; the node's rate from Wikimedia is not measured); enwiki's
 27.1 GB multistream ~5.5 min. **AFTER, on the node:** the first mend's `counts.mended` in `state/update.json` (bytes
 fetched again, seconds) and the keeper round's time from the worker log.
+
+## 2026-11-17 — the scheduled check holds a collection paused on its own (app/scheduled_checks.py `turn`, `summary`) — BEFORE (deploy pending)
+
+**Why.** `turn` asked only the node's mode. After `dev pin-run`, the paused wikidata.next has a new snapshot,
+so it is due. The worker would then check it inside its own 24 GiB cgroup while München checks it in its
+own container (wikidata-entity-origin.md, step 5). That is the OOM again: two checks at once, and two
+writers of attestations. 07 §7.3 holds a collection paused on its own at every stage.
+
+**The change.** `node_state.paused_collections()` is read once a turn, from the node's store opened
+read-only (`node_state.peek`, which creates nothing), and a paused collection is skipped. A store that
+cannot be read runs no check that beat. `hold collection show` says "held: the collection is paused" in
+`scheduled_check`.
+
+**MEASURED here, synthetic** (this 4-core sandbox, other sessions' load; `turn` over 500 collections on the
+idle path, nothing due, 200 turns each):
+
+| | ms a turn |
+|---|---|
+| before (no paused read) | 1.66 |
+| after, none paused | 1.34 |
+| after, half paused | 0.91 |
+
+The read is within this sandbox's noise (~0.1–0.3 ms). Each paused collection saves its snapshot read and
+its due test. No query was added to a manifest.
+
+**AFTER, on the node:** a paused collection with a due snapshot leaves no `scheduled-check.started.json`
+over a night, and `hold collection show <it>` says it is held.
+
