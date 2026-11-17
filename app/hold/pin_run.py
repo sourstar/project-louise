@@ -30,7 +30,11 @@ repeatable (invariant 2; `state/pin-run.json` names the step reached):
      the new one (its published marker with it), and the old id's local
      attestations removed — they attest a Codex no longer held;
   4. a sweep of the collection's small files: none may still name the old
-     id.
+     id. The same sweep runs FIRST, in the plan: every file naming the old id
+     must be one this pass rewrites, re-points or removes — the step-6
+     check's attestations and its note of an origin check that could not run
+     (`state/origin-check.json`, the very defect) are removed — and any other
+     refuses the pin before anything is written, naming it.
 
 tests/hold/test_pin_run.py holds the result to a by-the-book creation with
 the corrected Codex, byte for byte: the SHARD, its snapshot and sidecar, the
@@ -40,10 +44,13 @@ WHAT IT REFUSES (nothing written): a Codex that names a run already; a
 plugin whose origin publishes no dated dumps; a run that is not the one its
 records were read in (the manifest's locators, the carry's source); and
 ANYTHING PUBLISHED OR SHARED — `share = true` in its file, a snapshot the
-seeder served (`share_served`), coverage rows under its id, an attestation
+seeder served (`share_served`), the publisher's record of a pass for it
+(node.sqlite's `publish:<name>`), coverage rows under its id, an attestation
 of it this node published, a certifier's pointer, or another held
-collection naming its id. A collection a peer may hold is superseded, never
-rewritten (01 promise 8).
+collection naming its id. A digest announces only what the node serves
+(app/share/gossip.py `entries`: `share = true` and in use), so these cover
+it. A collection a peer may hold is superseded, never rewritten (01 promise
+8).
 
 AMENDED (RULE 1, named): 07 §7.8's "a name holds one collection for its
 life" yields here for a `.next`-style collection nothing official was
@@ -94,6 +101,24 @@ def corrected(codex: Codex, run: str) -> Codex:
 
 # ---- what may be pinned -------------------------------------------------------
 
+def _publisher_ran(name: str) -> str | None:
+    """node.sqlite's `publish:<name>` (app/worker.py PUBLISH_KEY): the
+    publisher made a pass for this name, which it does only for a collection
+    whose file says `share = true`. None where it never did."""
+    try:
+        from app import node_state
+        con = node_state.connect()
+    except Exception:   # noqa: BLE001 — no node database: nothing published from here
+        return None
+    try:
+        row = con.execute("SELECT value FROM control WHERE key=?", (f"publish:{name}",)).fetchone()
+        return str(row[0]) if row else None
+    except sqlite3.OperationalError:
+        return None
+    finally:
+        con.close()
+
+
 def _published_attestations(collection_id: str) -> int:
     try:
         from app import node_state
@@ -113,7 +138,7 @@ def _manifest_facts(manifest: Path, codex: Codex) -> dict[str, Any]:
     """Read-only: whether the seeder served it, the coverage rows under its
     id, and a sample of the documents' locators."""
     from app.share import coverage as cov
-    out: dict[str, Any] = {"served": None, "coverage": 0, "locators": [], "documents": 0}
+    out: dict[str, Any] = {"served": None, "coverage": 0, "locators": [], "rowids": 0}
     if not manifest.is_file():
         return out
     con = sqlite3.connect(f"file:{manifest.as_posix()}?mode=ro", uri=True)
@@ -130,8 +155,10 @@ def _manifest_facts(manifest: Path, codex: Codex) -> dict[str, Any]:
                 out["coverage"] += con.execute(f"SELECT COUNT(*) FROM {t} WHERE shard LIKE ? ESCAPE '\\'",
                                                (like,)).fetchone()[0]
         if "documents" in tables:
+            # the rowid high-water, a B-tree's last page: a COUNT(*) reads every
+            # row of wikidata's 75.9 M for a number the plan only shows
             top = con.execute("SELECT MAX(rowid) FROM documents").fetchone()[0] or 0
-            out["documents"] = int(con.execute("SELECT COUNT(*) FROM documents").fetchone()[0])
+            out["rowids"] = int(top)
             step = max(1, top // SAMPLE_ROWS)
             ids = list(range(1, top + 1, step))[:SAMPLE_ROWS]
             for i in range(0, len(ids), 500):
@@ -221,6 +248,18 @@ def _decide_run(given: str | None, evidence: dict[str, Any]) -> tuple[str, list[
     return runs.pop(), [f"{k}: {v}" for k, v in said.items()]
 
 
+def under_way(root, ref: str) -> dict[str, Any] | None:
+    """The marker of a pin begun and not done (`apply` finishes it), else
+    None — read only."""
+    from . import collection as col
+    name, _ = col.resolve(Path(root), ref)
+    try:
+        body = json.loads((Path(root) / name / "state" / MARKER).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return body if isinstance(body, dict) and body.get("step") != "done" else None
+
+
 def plan(root, ref: str, *, run: str | None = None) -> dict[str, Any]:
     """Everything checked, nothing written: what `apply` would do."""
     from app.acquire.specs import ACQUIRE_REGISTRY
@@ -254,6 +293,9 @@ def plan(root, ref: str, *, run: str | None = None) -> dict[str, Any]:
         why.append(f"the seeder served it ({facts['served'][:80]})")
     if facts["coverage"]:
         why.append(f"{facts['coverage']} coverage row(s) under its id")
+    ran = _publisher_ran(name)
+    if ran:
+        why.append(f"the publisher made a pass for it ({ran[:80]})")
     n = _published_attestations(codex.collection_id)
     if n:
         why.append(f"this node published {n} attestation(s) of it")
@@ -279,16 +321,65 @@ def plan(root, ref: str, *, run: str | None = None) -> dict[str, Any]:
         raise PinRefused(f"pin-run: {name}'s snapshot {snap.snapshot_id} is not its Codex's first, naming no run")
     attest = root / name / "state" / "attestations" / shard_mod._hex(codex.collection_id)
     sidecar = shard_dir / shard_mod.snapshot_sig_path(snap.snapshot_id)
+    # EVERY FILE NAMING THE OLD ID, BEFORE ANYTHING IS WRITTEN: each one this
+    # pass rewrites, re-points or removes, or the pin is refused naming it
+    import time
+    t0 = time.monotonic()
+    naming = _sweep(root, name, codex.collection_id)
+    kinds = {rel: _known(rel, codex.collection_id, snap.snapshot_id) for rel in naming}
+    unknown = sorted(rel for rel, k in kinds.items() if k is None)
+    if unknown:
+        raise PinRefused(f"pin-run: {', '.join(unknown[:5])}{' …' if len(unknown) > 5 else ''} "
+                         f"name(s) {codex.collection_id}, and this pass does not know what "
+                         f"{'they are' if len(unknown) > 1 else 'it is'}: nothing written. Read "
+                         f"{'them' if len(unknown) > 1 else 'it'}; a file the pin must not break is "
+                         f"a reason to carry to a fresh `.next` instead")
+    swept_s = time.monotonic() - t0
     dump = _dump_of(root, name, new, run)
+    tried = root / name / "state" / _ORIGIN_TRIED
     return {"collection": name, "from": codex.collection_id, "to": new.collection_id, "run": run,
             "run_said_by": said, "snapshot": {"id": snap.snapshot_id, "hash": snap.hash,
                                               "bytes": snaps[0].stat().st_size,
                                               "parts": len(snap.shards), "records": snap.records},
             "space_id": {"from": codex.space_id, "to": new.space_id},
             "removed": {"sidecar": str(sidecar) if sidecar.is_file() else None,
-                        "attestations": sorted(str(p) for p in attest.glob("*.json")) if attest.is_dir() else []},
-            "dump": dump, "documents": facts["documents"],
+                        "attestations": sorted(str(p) for p in attest.glob("*.json")) if attest.is_dir() else [],
+                        "origin_attempt": str(tried) if tried.is_file() else None},
+            "naming": {rel: kinds[rel] for rel in sorted(kinds)}, "swept_s": round(swept_s, 3),
+            "dump": dump, "rowids": facts["rowids"],
             "evidence": {k: v for k, v in evidence.items() if k != "locators"}}
+
+
+#: the state note of a records-vs-origin that could not run (app/copy_state.py
+#: ORIGIN_TRIED) — on wikidata.next, the step-6 check's: the defect itself
+_ORIGIN_TRIED = "origin-check.json"
+
+
+def _known(rel: str, old: str, sid: str) -> str | None:
+    """What this pass does with a file of the collection naming the old id
+    (`rel` from the collection's folder), or None for a file it does not
+    know."""
+    from . import carry as carry_mod
+    from . import line_carry
+    from . import records as rec
+    from . import shard as shard_mod
+    from .cascade import PUBLISHED_DIR
+    hexid = shard_mod._hex(old)
+    known = {
+        "shard/codex.json": "rewritten: the corrected Codex",
+        f"shard/{shard_mod.snapshot_path(sid)}": "written again: collection_id and origin_run",
+        f"shard/{shard_mod.snapshot_sig_path(sid)}": "replaced: this peer's signature of the new snapshot",
+        f"state/{PUBLISHED_DIR}/{sid}.json": "written again by the signature",
+        f"state/{rec.BUILD}/{rec.STAGING_CLAIM}": "re-pointed",
+        f"state/{carry_mod.MARKER}": "re-pointed",
+        f"state/{line_carry.MARKER}": "re-pointed",
+        f"state/{_ORIGIN_TRIED}": "removed: an origin check that could not run, of the Codex replaced",
+    }
+    if rel in known:
+        return known[rel]
+    if rel.startswith(f"state/attestations/{hexid}/"):
+        return "removed: an attestation of the Codex replaced (the checks are run again)"
+    return None
 
 
 def _dump_of(root: Path, name: str, codex: Codex, run: str) -> dict[str, Any]:
@@ -548,10 +639,18 @@ def apply(root, ref: str, *, run: str | None = None, key=None, now: str,
         attest = state / "attestations" / shard_mod._hex(old)
         gone = 0
         if attest.is_dir():
-            for p in attest.glob("*.json"):
-                p.unlink()
-                gone += 1
+            for p in sorted(attest.rglob("*"), reverse=True):
+                if p.is_dir():
+                    p.rmdir()
+                else:
+                    p.unlink()
+                    gone += p.suffix == ".json"
             attest.rmdir()
+        # the step-6 check's note that records-vs-origin could not run: of the
+        # Codex replaced, and its reason was this very defect
+        if (state / _ORIGIN_TRIED).is_file():
+            (state / _ORIGIN_TRIED).unlink()
+            moved.append(f"state/{_ORIGIN_TRIED} removed")
         body["moved"], body["attestations_removed"] = moved, gone
         step("state")
         log(f"[pin-run] {name}: re-pointed {', '.join(moved) or 'nothing'}; {gone} attestation(s) of the "

@@ -135,11 +135,16 @@ def test_pin_run_equals_the_creation_by_the_book_byte_for_byte(data_dir, config_
     att = root / NAME / "state" / "attestations" / bad.collection_id.split(":")[1]
     att.mkdir(parents=True)
     (att / ("ab" * 32 + ".json")).write_text(json.dumps({"collection_id": bad.collection_id}))
+    # and its note that records-vs-origin could not run (louise.cmd_check), the defect itself
+    from app import copy_state
+    copy_state.note_origin_attempt(root, NAME, bad, why="an origin naming an entity is read in a run, and "
+                                                        "none was given", now=NOW)
 
     plan = pin_run.plan(root, NAME)
     assert plan["run"] == RUN and plan["to"] == book_codex.collection_id
     assert plan["space_id"]["from"] == plan["space_id"]["to"], "the space does not move"
-    assert len(plan["removed"]["attestations"]) == 1
+    assert len(plan["removed"]["attestations"]) == 1 and plan["removed"]["origin_attempt"]
+    assert all(plan["naming"].values()) and "state/origin-check.json" in plan["naming"], plan["naming"]
     assert plan["dump"]["missing"] == [f"wikidatawiki/entities/{RUN}/wikidata-{RUN}-md5sums.txt",
                                        f"wikidatawiki/entities/{RUN}/wikidata-{RUN}-sha1sums.txt"]
     assert any("manifest's locators: 20261012" in s for s in plan["run_said_by"])
@@ -181,14 +186,15 @@ def test_a_stopped_pin_resumes_to_the_same_bytes(data_dir, config_dir, isolated_
     assert pin_run._sweep(root, NAME, body["from"]) == []
 
 
-@pytest.mark.parametrize("why", ["share", "served", "attested", "pointer", "named", "run"])
+@pytest.mark.parametrize("why", ["share", "served", "publisher", "attested", "pointer", "named", "run"])
 def test_anything_published_or_shared_is_refused(why, data_dir, config_dir, isolated_config, tmp_path,
                                                 monkeypatch, capsys):
     root, _ = _recreate(data_dir, config_dir, tmp_path, monkeypatch, capsys, corrected=False)
     bad = col.read(root, NAME)
     toml = config_dir / "collections" / f"{NAME}.toml"
     match = {"share": "share = true", "served": "the seeder served it", "attested": "published 1 attestation",
-             "pointer": "a certifier's pointer", "named": "name(s) its id", "run": "the run is said differently"}[why]
+             "pointer": "a certifier's pointer", "named": "name(s) its id", "run": "the run is said differently",
+             "publisher": "the publisher made a pass for it"}[why]
     kw = {}
     if why == "share":
         toml.write_text(toml.read_text().replace("share = false", "share = true"))
@@ -196,6 +202,12 @@ def test_anything_published_or_shared_is_refused(why, data_dir, config_dir, isol
         with sqlite3.connect(root / NAME / "state" / "manifest.sqlite") as con:
             con.execute("INSERT INTO control(key, value) VALUES('share_served', ?)",
                         (json.dumps({"snapshot_id": SID}),))
+    elif why == "publisher":
+        from contextlib import closing
+
+        from app import db, node_state
+        with closing(node_state.connect()) as ncon:
+            db.set_control(ncon, f"publish:{NAME}", json.dumps({"snapshot": SID, "bundled": 0}))
     elif why == "attested":
         from app import node_state
         from app.share import attest
@@ -240,6 +252,45 @@ def test_the_dry_run_says_what_it_would_do(data_dir, config_dir, isolated_config
     before = (root / NAME / "shard" / "codex.json").read_bytes()
     assert louise.main(["dev", "pin-run", NAME, "--root", str(root)]) == 0
     out, err = capsys.readouterr()
-    assert f"would pin run {RUN}" in err and "space unchanged" in err and "nothing written (--yes)" in err
+    assert f"would pin run {RUN}" in err and "space unchanged" in err and "nothing written (--yes does it)" in err
     assert json.loads(out)["plan"]["run"] == RUN
     assert (root / NAME / "shard" / "codex.json").read_bytes() == before
+    # --dry-run writes nothing, --yes beside it or not
+    assert louise.main(["dev", "pin-run", NAME, "--root", str(root), "--dry-run", "--yes"]) == 0
+    capsys.readouterr()
+    assert (root / NAME / "shard" / "codex.json").read_bytes() == before
+    assert not (root / NAME / "state" / pin_run.MARKER).exists()
+
+
+def test_a_file_naming_the_old_id_that_the_pass_does_not_know_refuses_it(data_dir, config_dir, isolated_config,
+                                                                         tmp_path, monkeypatch, capsys):
+    """The sweep runs FIRST: a small file naming the old id that this pass
+    neither rewrites, re-points nor removes — an operator's origin
+    acknowledgement here — refuses the pin before anything is written."""
+    root, _ = _recreate(data_dir, config_dir, tmp_path, monkeypatch, capsys, corrected=False)
+    from app import copy_state
+    bad = col.read(root, NAME)
+    copy_state.record_origin_ack(root, NAME, bad, now=NOW)
+    before = (root / NAME / "shard" / "codex.json").read_bytes()
+    with pytest.raises(pin_run.PinRefused, match=r"state/origin-ack\.json name\(s\) .* does not know"):
+        pin_run.plan(root, NAME)
+    assert louise.main(["dev", "pin-run", NAME, "--root", str(root), "--yes"]) == 2
+    capsys.readouterr()
+    assert (root / NAME / "shard" / "codex.json").read_bytes() == before
+    assert not (root / NAME / "state" / pin_run.MARKER).exists()
+
+
+def test_a_pin_under_way_is_said_by_the_dry_run_and_finished_by_yes(data_dir, config_dir, isolated_config,
+                                                                    tmp_path, monkeypatch, capsys):
+    root, _ = _recreate(data_dir, config_dir, tmp_path, monkeypatch, capsys, corrected=False)
+    with monkeypatch.context() as m:
+        m.setattr(pin_run, "_repoint_json", lambda *a, **k: (_ for _ in ()).throw(KeyboardInterrupt()))
+        with pytest.raises(KeyboardInterrupt):
+            pin_run.apply(root, NAME, key=KEY, now=NOW, log=lambda *_: None)
+    capsys.readouterr()
+    assert louise.main(["dev", "pin-run", NAME, "--root", str(root), "--dry-run"]) == 0
+    _out, err = capsys.readouterr()
+    assert "under way at step codex" in err and "nothing written" in err
+    assert louise.main(["dev", "pin-run", NAME, "--root", str(root), "--yes"]) == 0
+    capsys.readouterr()
+    assert origin_run.codex_run(col.read(root, NAME)) == RUN

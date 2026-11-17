@@ -3613,29 +3613,40 @@ def cmd_dev_carry(a) -> int:
 
 
 def cmd_dev_pin_run(a) -> int:
-    """`louise dev pin-run <collection> [--run R] [--yes]` (app/hold/pin_run.py;
-    München, 2026-11-17): an UNPUBLISHED collection whose dated-dump Codex
-    names no run, given the Codex that names the run its records were read
-    in — its snapshot frozen again over the same parts, re-signed, and what
-    named the old id re-pointed. The plan without --yes (refusals included);
-    with it, under the collection's write lock. Refused (exit 2) for anything
-    published or shared."""
+    """`louise dev pin-run <collection> [--run R] [--dry-run | --yes]`
+    (app/hold/pin_run.py; München, 2026-11-17): an UNPUBLISHED collection
+    whose dated-dump Codex names no run, given the Codex that names the run
+    its records were read in — its snapshot frozen again over the same
+    parts, re-signed, and what named the old id re-pointed. The plan without
+    --yes, and always with --dry-run (refusals included); with --yes, under
+    the collection's write lock. Refused (exit 2) for anything published or
+    shared, and for a file naming the old id the pass does not know."""
     from app.hold import pin_run
     name, _ = col.resolve(a.root, a.collection)
 
     def say(m: str) -> None:
         print(m, file=sys.stderr)
-    if not a.yes:
+    if getattr(a, "dry_run", False) or not a.yes:
+        under_way = pin_run.under_way(a.root, name)
+        if under_way is not None:
+            say(f"[pin-run] {name}: a pin to run {under_way['run']} is under way at step {under_way['step']} "
+                f"({under_way['from'][:23]}… -> {under_way['to'][:23]}…); `--yes` finishes it; nothing written")
+            _print({"under_way": under_way})
+            return 0
         out = pin_run.plan(a.root, name, run=a.run)
         same = out["space_id"]["from"] == out["space_id"]["to"]
+        removed = out["removed"]
         say(f"[pin-run] {name}: would pin run {out['run']} ({'; '.join(out['run_said_by'])}): "
             f"{out['from'][:23]}… -> {out['to'][:23]}…, space {'unchanged' if same else 'MOVED'}; "
             f"snapshot {out['snapshot']['id']} ({out['snapshot']['parts']:,} parts, "
             f"{out['snapshot']['records']:,} records, {out['snapshot']['bytes'] / 2**20:,.1f} MiB) written "
-            f"again with origin_run, re-signed; removed: its sidecar and "
-            f"{len(out['removed']['attestations'])} attestation(s) of the old id; the run's files in "
-            f"the corpus: {len(out['dump']['held'])} held, {len(out['dump']['missing'])} missing; "
-            f"nothing written (--yes)")
+            f"again with origin_run beside the old until the swap ({out['snapshot']['bytes'] / 2**20:,.1f} MiB "
+            f"more for a moment), re-signed; {len(out['naming'])} small file(s) naming the old id, each "
+            f"known (swept in {out['swept_s']:.1f} s); removed: its sidecar, "
+            f"{len(removed['attestations'])} attestation(s) of the old id"
+            f"{', the note of an origin check that could not run' if removed['origin_attempt'] else ''}; "
+            f"the run's files in the corpus: {len(out['dump']['held'])} held, {len(out['dump']['missing'])} "
+            f"missing; nothing written (--yes does it)")
         _print({"plan": out})
         return 0
     _take_write_lock(a.root, name, "louise dev pin-run", exit_code=2)
@@ -8484,6 +8495,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--run", default=None, metavar="YYYYMMDD",
                    help="the run its records were read in, where nothing held says it (else checked "
                         "against what does)")
+    p.add_argument("--dry-run", action="store_true", help="the plan and its refusals; nothing written "
+                                                          "(also without --yes)")
     p.add_argument("--yes", action="store_true", help="do it, under the collection's write lock")
     p.set_defaults(fn=cmd_dev_pin_run)
     p = dverbs.add_parser("genesis", help="one-shot repairs of an archive's ledger; writes")

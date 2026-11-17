@@ -202,7 +202,8 @@ def why_no_run(codex) -> str | None:
             f"so no record of it could ever be checked against the source (invariant 11). A dated-dump "
             f"Codex names the first run its records are built from: `origin.spec.delta.mode` "
             f"\"dated-dumps\" and `origin.spec.files` that run's files (09 §9.17) — `hold collection "
-            f"create --run <YYYYMMDD>` writes them")
+            f"create --run <YYYYMMDD>` writes them; a collection made so and never published is given "
+            f"them in place by `louise dev pin-run <name>`")
 
 
 def refuse_without_run(codex, what: str) -> None:
