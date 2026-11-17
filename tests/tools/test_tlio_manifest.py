@@ -25,10 +25,11 @@ def site(tmp_path: Path):
     (root / "voci").mkdir(parents=True)
     (root / "TLIOlemm").mkdir()
     (root / "TLIOlemm" / "index.html").write_bytes(
-        b"<a href='https://tlio.ovi.cnr.it/voci/000001.htm'> <a href='https://tlio.ovi.cnr.it/voci/000002.htm'>")
+        b"<a href='https://tlio.ovi.cnr.it/voci/000001.htm'> <a href='https://tlio.ovi.cnr.it/voci/000002.htm'>"
+        b" <a href='https://tlio.ovi.cnr.it/voci/r01519.htm'>")
     (root / "TLIOlemm" / "infolemm.htm").write_bytes(
         b"<p>Nel maggio 2023 il lemmario conta oltre 58.268 entrate a fronte delle 44.003 voci pubblicate.</p>")
-    for i in ("000001", "000002"):
+    for i in ("000001", "000002", "r01519"):
         (root / "voci" / f"{i}.htm").write_bytes(PAGE.replace(b"ABACO", i.encode()))
     seen: list[str] = []
 
@@ -62,13 +63,18 @@ def test_the_light_update_fetches_only_what_is_new_and_marks_what_is_gone(tmp_pa
     root, base, seen = site
     raw = tmp_path / "raw"
     held(raw, "000001", PAGE.replace(b"ABACO", b"000001"), time.time())
+    held(raw, "r01519", PAGE, time.time())                     # a cross-reference, listed
     held(raw, "000009", PAGE, time.time())                     # no longer in the lists
     db = tm.connect(raw)
-    s = tm.update(raw, db, tm.Client(base), full=False, log=lambda *_: None)
+    tm.MAX_WITHDRAWN, keep = 0.5, tm.MAX_WITHDRAWN             # 1 of 3 held is gone, on purpose
+    try:
+        s = tm.update(raw, db, tm.Client(base), full=False, log=lambda *_: None)
+    finally:
+        tm.MAX_WITHDRAWN = keep
     assert s["new"] == 1 and s["withdrawn"] == 1 and s["changed"] == 0
-    assert [p for p in seen if p.startswith("/voci/")] == ["/voci/000002.htm"]   # 000001 not asked
+    assert [p for p in seen if p.startswith("/voci/")] == ["/voci/000002.htm"]   # held ones not asked
     st = dict(db.execute("SELECT id,status FROM entries"))
-    assert st == {"000001": "ok", "000002": "ok", "000009": "withdrawn"}
+    assert st == {"000001": "ok", "000002": "ok", "r01519": "ok", "000009": "withdrawn"}
     assert db.execute("SELECT last_modified FROM entries WHERE id='000002'").fetchone()[0]
     assert db.execute("SELECT count(*) FROM lists").fetchone()[0] == 27
 
@@ -79,10 +85,26 @@ def test_the_full_update_refetches_only_a_changed_entry(tmp_path: Path, site):
     db = tm.connect(raw)
     tm.update(raw, db, tm.Client(base), full=False, log=lambda *_: None)
     s = tm.update(raw, db, tm.Client(base), full=True, refresh_lists=False, log=lambda *_: None)
-    assert s["unchanged"] == 2 and s["changed"] == 0                         # both 304
+    assert s["unchanged"] == 3 and s["changed"] == 0                         # all 304, r-id included
     time.sleep(1.1)
     (root / "voci" / "000002.htm").write_bytes(PAGE.replace(b"Arte", b"Arte del conto"))
     s = tm.update(raw, db, tm.Client(base), full=True, refresh_lists=False, parallel=2, log=lambda *_: None)
-    assert s["changed"] == 1 and s["unchanged"] == 1
+    assert s["changed"] == 1 and s["unchanged"] == 2
     assert db.execute("SELECT changed_at IS NOT NULL FROM entries WHERE id='000002'").fetchone()[0] == 1
     assert b"Arte del conto" in gzip.decompress((raw / "voci" / "000002.htm.gz").read_bytes())
+
+
+def test_cross_reference_ids_are_listed():
+    assert tm._ID.findall(b"voci/000120.htm voci/r01519.htm") == [b"000120", b"r01519"]
+
+
+def test_an_update_that_would_withdraw_many_held_entries_stops_and_changes_nothing(tmp_path: Path, site):
+    root, base, seen = site
+    raw = tmp_path / "raw"
+    for i in ("000007", "000008", "000009"):
+        held(raw, i, PAGE, time.time())                        # none of them in the lists
+    db = tm.connect(raw)
+    with pytest.raises(SystemExit, match="no entry"):
+        tm.update(raw, db, tm.Client(base), full=False, log=lambda *_: None)
+    assert set(r[0] for r in db.execute("SELECT status FROM entries")) == {"ok"}
+    assert not [p for p in seen if p.startswith("/voci/")]

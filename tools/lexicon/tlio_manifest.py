@@ -22,6 +22,8 @@ date ("u.r.", ultima revisione) and the editor's date (0.8).
   read again (~27 requests), each list's hash compared with the last, the
   entries new to the lists fetched, those gone from them marked
   withdrawn. It cannot see an entry revised in place.
+  If more than 1 % of the held entries would be withdrawn, it stops and
+  changes no entry: a misread list looks exactly like a mass removal.
 - --update=full: the same, then every held entry asked with an HTTP
   conditional request (RFC 9110 §13: If-None-Match, If-Modified-Since —
   the standard for exactly this; a page without validators is asked
@@ -59,7 +61,11 @@ from pathlib import Path
 BASE = "https://tlio.ovi.cnr.it"
 LETTERS = "abcdefghijklmnopqrstuvwxyz"
 UA = {"User-Agent": "louise-research (local, non-commercial)"}
-_ID = re.compile(rb"voci/(\d+)\.htm")
+#: an entry ("000120") or a cross-reference ("r01519") linked from a list
+_ID = re.compile(rb"voci/([a-z]?\d+)\.htm")
+#: an update that would withdraw more than this share of the held entries
+#: stops, changing nothing: a list misread looks exactly like a mass removal
+MAX_WITHDRAWN = 0.01
 _UR = re.compile(rb"u\.r\.\s*(\d{2}\.\d{2}\.\d{4})")
 _ED = re.compile(rb"0\.8\s*(?:<[^>]+>\s*)*[^<]*?(\d{2}\.\d{2}\.\d{4})")
 _INFO = re.compile(rb"Nel [^<]{3,40}? il lemmario conta[^<]*?pubblicate")
@@ -226,6 +232,10 @@ def update(raw: Path, db: sqlite3.Connection, client: Client, full: bool, parall
     listed = set(ids)
     rows = {r[0]: r for r in db.execute("SELECT id,status,last_modified,etag,fetched_at FROM entries")}
     gone = [i for i, r in rows.items() if r[1] == "ok" and i not in listed]
+    held_ok = sum(1 for r in rows.values() if r[1] == "ok")
+    if held_ok and len(gone) > MAX_WITHDRAWN * held_ok:
+        raise SystemExit(f"{len(gone)} of {held_ok} held entries are not in the lists: stopped, no entry"
+                         " changed (a misread list looks like a mass removal; check the lists)")
     if gone:
         db.executemany("UPDATE entries SET status='withdrawn', checked_at=? WHERE id=?", [(now(), i) for i in gone])
         log(f"withdrawn from the lists: {len(gone)}")
