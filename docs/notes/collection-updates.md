@@ -171,7 +171,12 @@ other sessions; scratchpad harnesses `measure/delta.py` and `ge_perf.py`):
 - **Modelled at the node's sizes.** `wikipedia-articles` (12.3 M claims, 52.9 M
   records) stays a whole pass, about 25× the first row: ~19 min on 3 processes. A
   monthly wikipedia delta is far above the ~0.15 % of records at which its frames
-  stop all being read.
+  stop all being read. **Measured on the node** (München, 2026-11-17 06:47Z, b747b20,
+  quiet window, every collection resumed, wikipedia's embedding idle): `hold annotations
+  update wikipedia-articles --dry-run` took 397.5 s wall, 2,294.5 s user + 292.2 s sys
+  (~6.5 cores), with a 3,466 MiB peak RSS in the largest child and an 8.2 GiB peak
+  workspace on /data. That is about 3× under the model, because the pool ran on ~6.5
+  cores, not 3.
 - `gutenberg-book-editions` gains most. Its update decompressed every frame holding
   a claimed book (~32 GB at 79 k books of ~400 KB); now it decompresses only the
   frames of the books that changed. Its method reads only the parts gutenberg
