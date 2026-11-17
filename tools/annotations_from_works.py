@@ -50,75 +50,25 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-import urllib.parse
 from collections import defaultdict
 from pathlib import Path
 
-CONTRIBUTOR = "Louise reference node (one-language-per-work measurement, 2026-10-09)"
-WIKIDATA = {"kind": "wikidata"}
-WIKIDATA_CONFIDENCE = "0.96875"
-
-
-def split_wiki(url: str) -> tuple[str, str] | None:
-    """('en.wikipedia.org', 'Title with spaces') or None — as
-    tools/measure/one_language_works.py keyed `wiki_map.json`."""
-    u = urllib.parse.urlparse(url.strip())
-    host = u.netloc.lower()
-    if not host.endswith("wikipedia.org"):
-        return None
-    host = host.replace(".m.wikipedia.org", ".wikipedia.org")
-    if u.path.startswith("/wiki/"):
-        title = urllib.parse.unquote(u.path[len("/wiki/"):])
-    else:
-        q = urllib.parse.parse_qs(u.query)
-        if "title" not in q:
-            return None
-        title = q["title"][0]
-    title = title.split("#", 1)[0].replace("_", " ").strip()
-    return (host, title) if title else None
-
-
-def _num(uid: str) -> int:
-    return int(uid.split(":", 1)[1])
+# THE RULE lives in app/gutenberg_editions.py since 2026-11-17, unchanged: the
+# node's own method (`gutenberg-editions`) re-derives these claims every month
+# from its own wikipedia collection instead of the API's answers read here
+from app.gutenberg_editions import (  # noqa: F401
+    CONTRIBUTOR,
+    WIKIDATA,
+    WIKIDATA_CONFIDENCE,
+    found_by_map,
+    split_wiki,
+    wikidata_claims,
+)
 
 
 def claims_of(records: list[dict], wiki_map: dict) -> list[dict]:
-    lang = {r["uid"]: (r.get("lang") or "und") for r in records}
-    item_books: dict[str, list[tuple[str, str]]] = defaultdict(list)   # item -> [(uid, url)]
-    for r in sorted(records, key=lambda r: _num(r["uid"])):
-        found: dict[str, str] = {}
-        for url in r.get("wiki") or []:
-            s = split_wiki(url)
-            q = wiki_map.get("titles", {}).get(f"{s[0]}|{s[1]}") if s else None
-            if q:
-                q = (wiki_map.get("items", {}).get(q) or {}).get("redirect_to") or q
-                found.setdefault(q, url)
-        if len(found) == 1:                    # several items: an anthology, no claim through it
-            (q, url), = found.items()
-            item_books[q].append((r["uid"], url))
-    out: list[dict] = []
-    claimed: set[tuple[str, str]] = set()
-
-    def claim(subject: str, obj: str, method: dict, evidence: dict, confidence: str) -> None:
-        pair = tuple(sorted((subject, obj)))
-        if subject == obj or pair in claimed:
-            return
-        claimed.add(pair)
-        out.append({"type": "same-work", "subject": subject, "object": obj,
-                    "subject_lang": lang[subject], "object_lang": lang[obj],
-                    "method": method, "evidence": evidence, "confidence": confidence,
-                    "contributor": CONTRIBUTOR})
-
-    for q in sorted(item_books, key=lambda q: (int(q[1:]) if q[1:].isdigit() else 0, q)):
-        books = item_books[q]
-        if len(books) < 2:
-            continue
-        centre, centre_url = books[0]
-        for uid, url in books[1:]:
-            claim(uid, centre, WIKIDATA,
-                  {"wikidata": q, "subject_wikipedia": url, "object_wikipedia": centre_url},
-                  WIKIDATA_CONFIDENCE)
-    return out
+    """The claims, the titles answered by the Wikipedia API (`wiki_map.json`)."""
+    return wikidata_claims(records, lambda r: found_by_map(r, wiki_map))
 
 
 def main(argv: list[str] | None = None) -> int:

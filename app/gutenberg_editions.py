@@ -1,0 +1,594 @@
+"""THE VERSIONS OF A GUTENBERG WORK, RE-DERIVED BY THE NODE EVERY MONTH
+(operator, 2026-11-17: the annotations collection `gutenberg-book-editions`
+stops depending on hand-run tools and web APIs; it is re-derived "as if a
+monthly Wikipedia snapshot were downloaded", from the node's OWN collections
+— "if there is a local wikipedia collection it is pointless to download a
+wikipedia snapshot; peers can always check against the snapshot"). The
+method `gutenberg-editions` (app/hold/annotation_methods.py), run once a
+period of the collection's own chain; docs/notes/annotation-methods.md.
+
+ITS OUTPUT IS THE WHOLE CLAIM SET, TIER BY TIER. A tier that is a pure
+function of the node's collections is re-derived; every other claim of the
+current snapshot is CARRIED, written again exactly as it stands.
+
+- `wikidata` (`{"kind": "wikidata"}`, always): each book's "Wikipedia page
+  about this book" URLs (its record's `extra.description`) → that page in
+  the node's wikipedia collection (app/wikipedia_titles.py: the title as
+  the MediaWiki API normalises it, a redirect followed) → its Wikidata item
+  (page_props) → checked against the node's wikidata collection where it
+  is held (an item it lacks was merged or deleted since the page named it).
+  A book naming several items claims nothing (an anthology); a work is a
+  STAR on its lowest ebook number. The claims are tools/annotations_from_
+  works.py's, key for key, so a claim that did not change keeps its uid and
+  its bytes. What the node cannot tell — a wiki it does not hold, a title
+  not read yet, an item missing from its wikidata — is never taken for "no
+  item": a book in that case keeps the item the current snapshot's claims
+  give it, through the URL they name, and a book they give none claims
+  nothing (said, counted).
+- `same-title` (app/gutenberg_titles.py) and `language-stage` (the
+  historical-markers matcher, app/historical.py): re-derived from the
+  gutenberg records alone, and only where the current snapshot holds claims
+  of that method (read off the claims' `method`, never assumed).
+- carried: every other claim (the classical matcher's, the editions notes',
+  a person's): its line of the current claims file, byte for byte. Where a
+  re-derived claim is the same claim as a carried one (09 §9.5 identity: the
+  same pair, either way round, for `same-work`), the carried one stands.
+
+The order is a rule, so the same inputs give the same bytes: the wikidata
+tier in its own order, the carried claims in their lines' order, the
+same-title tier, the stage claims by subject — the order the tools' chain
+wrote them in (works, merge, titles, language stage). A claim that did not
+change is written as its current line.
+
+No network, ever: everything is read from the node's manifests, its SHARD
+parts, the local dump and its page_props.
+"""
+from __future__ import annotations
+
+import ast
+import json
+import re
+import urllib.parse
+from collections import Counter, defaultdict
+from collections.abc import Callable, Iterable
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any
+
+NAME = "gutenberg-editions"
+#: the wikidata tier's attribution, method and confidence, as the claims made
+#: by tools/annotations_from_works.py on 2026-10-09 hold them: kept, so that a
+#: claim that did not change is re-stated byte for byte, not re-issued.
+#: Confidence (30 + 1) / (30 + 2): 30 of 30 hand-checked works were one work
+CONTRIBUTOR = "Louise reference node (one-language-per-work measurement, 2026-10-09)"
+WIKIDATA = {"kind": "wikidata"}
+WIKIDATA_CONFIDENCE = "0.96875"
+#: the language-stage matcher's contributor where the snapshot names none
+#: (tools/annotations_language_stage.py's default)
+STAGE_CONTRIBUTOR = "louise historical-markers"
+
+T_WIKIDATA, T_TITLES, T_STAGE, T_CARRIED = "wikidata", "same-title", "language-stage", "carried"
+DERIVED = (T_WIKIDATA, T_TITLES, T_STAGE)
+TIERS = DERIVED + (T_CARRIED,)
+#: examples of added and withdrawn claims a dry run lists, per tier
+EXAMPLES = 20
+#: why a title answers no item here besides the resolver's (`Resolved.code`)
+NO_WIKIPEDIA, NOT_IN_WIKIDATA = "no one wikipedia", "not in wikidata"
+
+#: PG's catalogue line (app/plugins/gutenberg/source.py `WIKIPEDIA_LINE`)
+WIKI_LINE = re.compile(r"Wikipedia page about this book:\s*(https?://\S+)")
+
+
+# --------------------------------------------------------------------------
+# a book as the tiers read it
+
+def split_wiki(url: str) -> tuple[str, str] | None:
+    """('en.wikipedia.org', 'Title with spaces') or None — as
+    tools/measure/one_language_works.py keyed `wiki_map.json`."""
+    u = urllib.parse.urlparse(url.strip())
+    host = u.netloc.lower()
+    if not host.endswith("wikipedia.org"):
+        return None
+    host = host.replace(".m.wikipedia.org", ".wikipedia.org")
+    if u.path.startswith("/wiki/"):
+        title = urllib.parse.unquote(u.path[len("/wiki/"):])
+    else:
+        q = urllib.parse.parse_qs(u.query)
+        if "title" not in q:
+            return None
+        title = q["title"][0]
+    title = title.split("#", 1)[0].replace("_", " ").strip()
+    return (host, title) if title else None
+
+
+def host_lang(host: str) -> str:
+    """'en.wikipedia.org' → 'en'; '' where the host names no one wiki."""
+    head = host[:-len(".wikipedia.org")] if host.endswith(".wikipedia.org") else ""
+    return "" if "." in head else head
+
+
+def _balanced(u: str) -> str:
+    """A trailing ")" that closes nothing in the URL dropped (the prose around it)."""
+    while u.endswith(")") and u.count(")") > u.count("("):
+        u = u[:-1]
+    return u
+
+
+def _lit(v: Any) -> Any:
+    if isinstance(v, str) and v[:1] in "[{":
+        try:
+            return ast.literal_eval(v)
+        except (ValueError, SyntaxError):
+            return v
+    return v
+
+
+def book_of(record: dict[str, Any]) -> dict[str, Any]:
+    """The fields of a gutenberg record the tiers read — what
+    tools/measure/one_language_records.py wrote per record into the
+    `records.jsonl` the claims were made from, field for field (the title
+    cut at 200 characters and the creators at 6, as those claims hold them;
+    `agents` present, possibly empty, wherever the record has a
+    `creators_detail` list: the same-title rule falls back to the creators'
+    names only where it has none)."""
+    ex = record.get("extra") or {}
+    desc = ex.get("description") or ""
+    out: dict[str, Any] = {"uid": record["uid"], "lang": record.get("lang"),
+                           "title": (record.get("title") or "")[:200],
+                           "creators": (record.get("creators") or [])[:6]}
+    wiki = [_balanced(u.rstrip(".,;")) for u in WIKI_LINE.findall(desc)] if isinstance(desc, str) else []
+    if wiki:
+        out["wiki"] = wiki
+    cd = _lit(ex.get("creators_detail"))
+    if isinstance(cd, list):
+        out["agents"] = [[c.get("role"), c.get("agent_id"), c.get("name")] for c in cd
+                         if isinstance(c, dict) and c.get("agent_id")]
+    marc = _lit(ex.get("marc"))
+    if isinstance(marc, dict):
+        for key, name in (("904", "scan"), ("010", "lccn")):
+            if marc.get(key):
+                out[name] = str(marc[key][0]).strip()
+    return out
+
+
+def _num(uid: str) -> int:
+    return int(uid.split(":", 1)[1])
+
+
+# --------------------------------------------------------------------------
+# the wikidata tier
+
+def found_by_map(book: dict[str, Any], wiki_map: dict) -> dict[str, str]:
+    """The items a book names → the first of its URLs naming each, read
+    through the Wikipedia API's answers (`wiki_map.json`,
+    tools/measure/one_language_works.py) — what tools/annotations_from_works.py
+    reads."""
+    found: dict[str, str] = {}
+    for url in book.get("wiki") or []:
+        s = split_wiki(url)
+        q = wiki_map.get("titles", {}).get(f"{s[0]}|{s[1]}") if s else None
+        if q:
+            q = (wiki_map.get("items", {}).get(q) or {}).get("redirect_to") or q
+            found.setdefault(q, url)
+    return found
+
+
+def wikidata_claims(books: Iterable[dict[str, Any]],
+                    found_of: Callable[[dict[str, Any]], dict[str, str]]) -> list[dict[str, Any]]:
+    """The `same-work` claims of the books whose URLs name ONE item
+    (`found_of`: the items a book names → the URL naming each first), a STAR
+    per item on its lowest ebook number — tools/annotations_from_works.py's
+    rule, whatever answered the titles. A pair is claimed once."""
+    books = list(books)
+    lang = {r["uid"]: (r.get("lang") or "und") for r in books}
+    item_books: dict[str, list[tuple[str, str]]] = defaultdict(list)   # item -> [(uid, url)]
+    for r in sorted(books, key=lambda r: _num(r["uid"])):
+        found = found_of(r)
+        if len(found) == 1:                    # several items: an anthology, no claim through it
+            (q, url), = found.items()
+            item_books[q].append((r["uid"], url))
+    out: list[dict[str, Any]] = []
+    claimed: set[tuple[str, str]] = set()
+    for q in sorted(item_books, key=lambda q: (int(q[1:]) if q[1:].isdigit() else 0, q)):
+        books_q = item_books[q]
+        if len(books_q) < 2:
+            continue
+        centre, centre_url = books_q[0]
+        for uid, url in books_q[1:]:
+            pair = tuple(sorted((uid, centre)))
+            if uid == centre or pair in claimed:
+                continue
+            claimed.add(pair)
+            out.append({"type": "same-work", "subject": uid, "object": centre,
+                        "subject_lang": lang[uid], "object_lang": lang[centre], "method": WIKIDATA,
+                        "evidence": {"wikidata": q, "subject_wikipedia": url, "object_wikipedia": centre_url},
+                        "confidence": WIKIDATA_CONFIDENCE, "contributor": CONTRIBUTOR})
+    return out
+
+
+def tier_of(claim: dict[str, Any]) -> str:
+    """Which tier made a claim, read off its `method`: a same-title or
+    stage claim of any version of its matcher is that tier's."""
+    from . import gutenberg_titles, historical
+    m = claim.get("method") or {}
+    t = claim.get("type")
+    if t == "same-work" and m == WIKIDATA:
+        return T_WIKIDATA
+    if t == "same-work" and m.get("kind") == "matcher" and m.get("id") == gutenberg_titles.METHOD["id"]:
+        return T_TITLES
+    if t == "language-stage" and m.get("kind") == "matcher" and m.get("id") == historical.MATCHER["id"]:
+        return T_STAGE
+    return T_CARRIED
+
+
+# --------------------------------------------------------------------------
+# what the current snapshot holds
+
+@dataclass(frozen=True)
+class Held:
+    """A claim of the current snapshot: as it was submitted (the record's
+    claim less what `create` pinned), its line in the claims file and that
+    line's bytes where the file holds them (and they state no pin)."""
+    claim: dict[str, Any]
+    line: int
+    raw: bytes | None
+    tier: str
+
+
+def held_claims(root: Path, name: str) -> tuple[str | None, list[Held]]:
+    """(the current snapshot's id, its claims in their lines' order)."""
+    from app.share import seeder
+
+    from .hold import annotations as ann
+    from .hold import collection as col
+    from .pack import records as pack_records
+    tree = col.shard_dir_of(root, name)
+    snap = seeder.current_snapshot(tree)
+    if snap is None:
+        return None, []
+    lines: dict[str, bytes] = {}
+    claims_file = Path(root) / name / "origin" / ann.CLAIMS_FILE
+    if claims_file.is_file():
+        for raw in claims_file.read_bytes().split(b"\n"):
+            raw = raw[:-1] if raw.endswith(b"\r") else raw
+            if raw.strip():
+                lines.setdefault(ann.blake128(raw), raw)
+    out: list[Held] = []
+    for s in snap.shards:
+        part = ann._part_file(tree, s, None, snap.snapshot_id)
+        if part is None:
+            raise ann.AnnotationsError(f"{name}: this peer holds no file with the root snapshot "
+                                       f"{snap.snapshot_id} lists for {s.path}")
+        for r in pack_records.iter_records(part):
+            c = {k: v for k, v in ann.claim_of(r).items() if k not in ann.PINNED_KEYS}
+            raw = lines.get(r.get("origin_hash"))
+            if raw is not None and any(k in json.loads(raw) for k in ann.PINNED_KEYS):
+                raw = None                     # a stated pin would have to agree with the new text
+            origin = str(r.get("origin") or "")
+            line = int(origin.rsplit("#", 1)[1]) if origin.rsplit("#", 1)[-1].isdigit() else 0
+            out.append(Held(c, line, raw, tier_of(c)))
+    out.sort(key=lambda h: (h.line, json.dumps(h.claim, sort_keys=True)))
+    return snap.snapshot_id, out
+
+
+# --------------------------------------------------------------------------
+# the node's collections
+
+def _held_of(plugin: str) -> list:
+    """The collections this node runs of `plugin` (their manifests)."""
+    from . import collections as collections_mod
+    served, _ = collections_mod.load_all(skip_unreadable=True)
+    return [c for c in served if c.plugin == plugin]
+
+
+def read_part(path: str, contributor: str | None) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """One part of the target's snapshot (a pool task): every record as
+    `book_of` reads it, and the stage matcher's claims when `contributor`
+    is given (tools/annotations_language_stage.py `scan_part`)."""
+    from . import historical
+    from .pack import records as pack_records
+    books, stages = [], []
+    for r in pack_records.iter_records(Path(path)):
+        books.append(book_of(r))
+        if contributor is not None:
+            c = historical.stage_claim(r, contributor)
+            if c is not None:
+                stages.append(c)
+    return books, stages
+
+
+def items_held(manifest: Path, items: Iterable[str]) -> set[str]:
+    """The items of `items` the wikidata collection's manifest holds — by
+    its unique index (source, native_id), a few hundred at a query."""
+    from . import wikipedia_titles
+    from .plugins.wikidata import ids
+    by_native = {ids.native_id_of(q): q for q in items if ids.is_entity_id(q)}
+    got: set[str] = set()
+    keys = sorted(by_native)
+    con = wikipedia_titles._ro(manifest)
+    try:
+        for i in range(0, len(keys), wikipedia_titles.LOOKUP):
+            batch = keys[i:i + wikipedia_titles.LOOKUP]
+            for (nid,) in con.execute(f"SELECT native_id FROM documents WHERE source = ? AND native_id IN "
+                                      f"({','.join('?' * len(batch))})", ["wikidata", *batch]):
+                got.add(by_native[str(nid)])
+    finally:
+        con.close()
+    return got
+
+
+def _newest(root: Path, name: str) -> str | None:
+    from .hold import annotation_methods as am
+    from .hold import collection as col
+    return am.newest_snapshot_id(col.shard_dir_of(root, name))
+
+
+def resolutions(root: Path, books: list[dict[str, Any]], *, log=print):
+    """Every URL key (`split_wiki`) of the books → what the node's own
+    wikipedia answers for it (`wikipedia_titles.Resolved`), the item checked
+    against the node's wikidata; and the inputs read, by collection name."""
+    from . import wikipedia_titles as wt
+    keys: dict[tuple[str, str], tuple[str, str]] = {}
+    for b in books:
+        for url in b.get("wiki") or []:
+            s = split_wiki(url)
+            if s:
+                keys[s] = (host_lang(s[0]), s[1])
+    inputs: dict[str, str | None] = {}
+    wikis = _held_of("wikipedia")
+    if len(wikis) == 1:
+        inputs[wikis[0].name] = _newest(root, wikis[0].name)
+        got = wt.resolve(wikis[0].manifest_path, set(keys.values()), log=log,
+                         name=wikis[0].name) if keys else {}
+        res = {s: got[keys[s]] for s in keys}
+    else:
+        why = ("this node holds no wikipedia collection" if not wikis else
+               f"this node holds {len(wikis)} wikipedia collections ({', '.join(sorted(c.name for c in wikis))}), "
+               f"and which answers is not guessed")
+        res = {s: wt.Resolved(wt.UNKNOWN, None, NO_WIKIPEDIA, why) for s in keys}
+    wds = _held_of("wikidata")
+    if len(wds) == 1 and res:
+        inputs[wds[0].name] = _newest(root, wds[0].name)
+        present = items_held(wds[0].manifest_path, {r.item for r in res.values() if r.kind == wt.ITEM})
+        res = {s: (r if r.kind != wt.ITEM or r.item in present else
+                   wt.Resolved(wt.UNKNOWN, None, NOT_IN_WIKIDATA,
+                               f"{r.item} is not an item the node's wikidata holds: merged or deleted since "
+                               f"{r.page} named it", r.page, r.redirects))
+               for s, r in res.items()}
+    return res, inputs
+
+
+# --------------------------------------------------------------------------
+# the derivation
+
+@dataclass
+class Derivation:
+    """The method's whole output and what it was made from."""
+    lines: list[tuple[str, dict[str, Any], bytes]]     # (tier, claim, its line)
+    held: list[Held]
+    active: dict[str, bool]
+    inputs: dict[str, str | None]
+    target_uids: frozenset[str]
+    resolution: dict[str, Any]
+    shadowed: dict[str, int] = field(default_factory=dict)   # made again by a carried claim or an earlier tier
+
+    def bytes(self) -> bytes:
+        return b"".join(line + b"\n" for _, _, line in self.lines)
+
+
+def _dumps(c: dict[str, Any]) -> bytes:
+    """A line as tools/annotations_from_works.py and _from_titles wrote it."""
+    return json.dumps(c, ensure_ascii=False, sort_keys=True).encode("utf-8")
+
+
+def _canonical(c: dict[str, Any]) -> bytes:
+    """A line as tools/annotations_language_stage.py wrote it."""
+    from .hold import codex as cx
+    return cx.canonical_json(c)
+
+
+def _same(a: dict[str, Any], b: dict[str, Any]) -> bool:
+    from .hold import annotations as ann
+    from .hold import codex as cx
+    return cx.canonical_json(ann._nfc(a)) == cx.canonical_json(ann._nfc(b))
+
+
+def derive(root: Path, name: str, target: str, *, log=print) -> Derivation:
+    """The whole claim set, tier by tier, from the current snapshot of `name`
+    and the target `target`'s, the node's wikipedia and wikidata."""
+    from app.share import seeder
+
+    from . import gutenberg_titles, parallel
+    from . import wikipedia_titles as wt
+    from .hold import annotations as ann
+    from .hold import collection as col
+    root = Path(root)
+    _, held = held_claims(root, name)
+    active = {T_WIKIDATA: True, T_TITLES: any(h.tier == T_TITLES for h in held),
+              T_STAGE: any(h.tier == T_STAGE for h in held)}
+    contributor = None
+    if active[T_STAGE]:
+        named = Counter(h.claim.get("contributor") for h in held if h.tier == T_STAGE)
+        contributor = min(named.items(), key=lambda kv: (-kv[1], str(kv[0])))[0] or STAGE_CONTRIBUTOR
+
+    # the target's records: ONE pass over its snapshot's parts, on the parse pool
+    tree = col.shard_dir_of(root, target)
+    snap = seeder.current_snapshot(tree)
+    if snap is None or not snap.shards:
+        raise ann.AnnotationsError(f"the target {target} holds no snapshot to derive the claims from")
+    paths = []
+    for s in snap.shards:
+        p = ann._part_file(tree, s, None, snap.snapshot_id)
+        if p is None:
+            raise ann.AnnotationsError(f"{target}: this peer holds no file with the root snapshot "
+                                       f"{snap.snapshot_id} lists for {s.path}")
+        paths.append(str(p))
+    books: list[dict[str, Any]] = []
+    stages: list[dict[str, Any]] = []
+    for b, st in parallel.each_part(read_part, [(p, contributor) for p in paths]):
+        books.extend(b)
+        stages.extend(st)
+    log(f"[annotations] {NAME}: {len(books):,} records of {target} {snap.snapshot_id} read "
+        f"({len(paths)} part(s))")
+
+    # the wikidata tier
+    res, inputs = resolutions(root, books, log=log)
+    inputs = {target: snap.snapshot_id, **inputs}
+    carried_item: dict[str, tuple[str, str]] = {}
+    for h in held:
+        if h.tier == T_WIKIDATA:
+            ev = h.claim.get("evidence") or {}
+            carried_item.setdefault(h.claim["subject"], (ev.get("wikidata"), ev.get("subject_wikipedia")))
+            carried_item.setdefault(h.claim["object"], (ev.get("wikidata"), ev.get("object_wikipedia")))
+    books_by: Counter = Counter()
+
+    def found_of(book: dict[str, Any]) -> dict[str, str]:
+        """The items a book names, by the node's answers: a URL the node
+        cannot answer takes the item the current claims give the book
+        through that very URL; any other is left out — and a book with such
+        a URL and no item of its own in the current claims claims nothing."""
+        found: dict[str, str] = {}
+        mine = carried_item.get(book["uid"])
+        undetermined = kept = False
+        for url in book.get("wiki") or []:
+            s = split_wiki(url)
+            r = res.get(s) if s else None
+            if r is None:
+                continue
+            if r.kind == wt.ITEM:
+                found.setdefault(r.item, url)
+            elif r.kind == wt.UNKNOWN:
+                if mine is not None and url == mine[1] and mine[0]:
+                    found.setdefault(mine[0], url)
+                    kept = True
+                elif mine is None:
+                    undetermined = True
+        if book.get("wiki"):
+            books_by["with a Wikipedia line"] += 1
+        if kept:
+            books_by["their item kept through a URL the node cannot answer"] += 1
+        if undetermined:
+            books_by["undetermined: a URL the node cannot answer, and no item in the current claims"] += 1
+            return {}
+        return found
+    t1 = wikidata_claims(books, found_of)
+    kinds = Counter(r.kind for r in res.values())
+    resolution = {"titles": len(res), "items": kinds.get(wt.ITEM, 0), "none": kinds.get(wt.NONE, 0),
+                  "unknown": kinds.get(wt.UNKNOWN, 0),
+                  "redirects_followed": sum(1 for r in res.values() if r.kind == wt.ITEM and r.redirects),
+                  "by_reason": dict(sorted(Counter(f"{r.kind}: {r.code}" for r in res.values()
+                                                   if r.kind != wt.ITEM).items())),
+                  "wikis_not_held": dict(sorted(Counter(host_lang(s[0]) or s[0] for s, r in res.items()
+                                                        if r.code == wt.NOT_HELD).items())),
+                  "books": dict(sorted(books_by.items()))}
+
+    # the same-title and stage tiers, where the snapshot holds them
+    carried = [h for h in held if h.tier == T_CARRIED]
+    t2: list[dict[str, Any]] = []
+    if active[T_TITLES]:
+        existing = [c for c in (*t1, *(h.claim for h in carried)) if c.get("type") in ann.WORK_TYPES]
+        t2 = gutenberg_titles.claims_of(books, existing)
+    t3 = sorted(stages, key=lambda c: c["subject"]) if active[T_STAGE] else []
+
+    # assembled: a carried claim stands over a re-derived one; an unchanged
+    # claim is written as its current line
+    held_by = {ann.identity_key(h.claim): h for h in held}
+    seen = {ann.identity_key(h.claim) for h in carried}
+    lines: list[tuple[str, dict[str, Any], bytes]] = []
+    shadowed: Counter = Counter()
+
+    def emit(tier: str, cs: list[dict[str, Any]], render) -> None:
+        for c in cs:
+            k = ann.identity_key(c)
+            if k in seen:
+                shadowed[tier] += 1
+                continue
+            seen.add(k)
+            h = held_by.get(k)
+            lines.append((tier, c, h.raw if h is not None and h.raw is not None and _same(h.claim, c)
+                          else render(c)))
+    emit(T_WIKIDATA, t1, _dumps)
+    lines.extend((T_CARRIED, h.claim, h.raw if h.raw is not None else _dumps(h.claim)) for h in carried)
+    emit(T_TITLES, t2, _dumps)
+    emit(T_STAGE, t3, _canonical)
+    return Derivation(lines, held, active, inputs, frozenset(b["uid"] for b in books), resolution,
+                      dict(shadowed))
+
+
+def _brief(c: dict[str, Any]) -> dict[str, Any]:
+    """A claim as a dry run lists it."""
+    return {k: c[k] for k in ("type", "subject", "object", "method", "evidence") if k in c}
+
+
+def report(d: Derivation) -> dict[str, Any]:
+    """Per tier: the claims it makes now (`re_derived`; `carried` for the
+    carried), those kept identical, changed, added, withdrawn, and set aside
+    (an end the target's snapshot does not hold: `update` names and skips
+    them), with up to `EXAMPLES` added and withdrawn claims each."""
+    from .hold import annotations as ann
+    held_by = {ann.identity_key(h.claim): h for h in d.held}
+    made = {ann.identity_key(c) for _, c, _ in d.lines}
+    tiers: dict[str, dict[str, Any]] = {}
+    for t in TIERS:
+        row: dict[str, Any] = {"re_derived": 0, "kept_identical": 0, "changed": 0, "added": 0,
+                               "withdrawn": 0, "set_aside": 0}
+        if t == T_CARRIED:
+            row = {"carried": 0, "set_aside": 0}
+        elif not d.active[t]:
+            row = {"re_derived": False, "why": "the current snapshot holds no claim of this method, so the "
+                                              "tier is not made (its claims, if any, are carried)"}
+        else:
+            row["examples"] = {"added": [], "withdrawn": []}
+            if d.shadowed.get(t):
+                row["already_claimed"] = d.shadowed[t]
+        tiers[t] = row
+    for tier, c, _ in d.lines:
+        row = tiers[tier]
+        if any(u not in d.target_uids for u in ann.record_ends(c)):
+            row["set_aside"] += 1
+        if tier == T_CARRIED:
+            row["carried"] += 1
+            continue
+        row["re_derived"] += 1
+        h = held_by.get(ann.identity_key(c))
+        if h is None:
+            row["added"] += 1
+            if len(row["examples"]["added"]) < EXAMPLES:
+                row["examples"]["added"].append(_brief(c))
+        elif _same(h.claim, c):
+            row["kept_identical"] += 1
+        else:
+            row["changed"] += 1
+    for k, h in held_by.items():
+        if k in made:
+            continue
+        row = tiers[h.tier]
+        if "withdrawn" in row:
+            row["withdrawn"] += 1
+            if len(row["examples"]["withdrawn"]) < EXAMPLES:
+                row["examples"]["withdrawn"].append(_brief(h.claim))
+    return {"method": NAME, "claims": len(d.lines), "held": len(d.held), "against": d.inputs,
+            "tiers": tiers, "resolution": d.resolution}
+
+
+def produce(root: Path, name: str, target: str, out: Path, *, log=print) -> dict[str, Any]:
+    """The method's whole claim set written to `out` (a temporary renamed
+    over it); the counts, with the inputs read under `against`."""
+    d = derive(root, name, target, log=log)
+    out = Path(out)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    tmp = out.with_name(out.name + ".tmp")
+    tmp.write_bytes(d.bytes())
+    tmp.replace(out)
+    by = Counter(t for t, _, _ in d.lines)
+    log(f"[annotations] {NAME} over {target}: {len(d.lines):,} claims — "
+        + ", ".join(f"{by.get(t, 0):,} {t}" for t in TIERS)
+        + f"; titles answered by the node: {d.resolution['items']:,} items, {d.resolution['none']:,} none, "
+          f"{d.resolution['unknown']:,} not answerable here")
+    return {"claims": len(d.lines), "tiers": {t: by.get(t, 0) for t in TIERS}, "against": d.inputs,
+            "resolution": {k: v for k, v in d.resolution.items() if not isinstance(v, dict)}}
+
+
+def preview(root: Path, name: str, target: str, *, log=print) -> dict[str, Any]:
+    """The dry run: what a derivation would change, per tier. Writes nothing."""
+    return report(derive(root, name, target, log=log))

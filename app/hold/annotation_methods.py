@@ -20,8 +20,19 @@ the method reads the live manifest, which runs ahead of the snapshot — is
 set aside and named (`unheld="drop"`), and the next snapshot brings it in.
 
 A hand-made claims file, or one an API or a language model wrote
-(tools/annotations_from_titles.py, _from_works, _from_matches, _merge), is
-NOT a method: those collections keep `hold annotations update --claims`.
+(tools/annotations_from_matches.py), is NOT a method: those collections keep
+`hold annotations update --claims`.
+
+A MONTHLY METHOD (2026-11-17, operator: gutenberg-book-editions "as if a
+monthly Wikipedia snapshot were downloaded"; app/gutenberg_editions.py):
+`gutenberg-editions` re-derives the tiers that are a pure function of the
+node's own gutenberg, wikipedia and wikidata collections and CARRIES every
+other claim as it stands, so its output is still the whole claim set and
+withdraws nothing it does not make. It is due once a period of the
+collection's own chain (`Method.cadence`: the next snapshot's period is open
+and the method has not run in it), not when its target moves; the snapshot
+ids of every collection it read are recorded in `state/method.json`'s
+`against`.
 
 Each pass runs in PROCESSES OF ITS OWN (`derive_isolated`): wikipedia's
 method peaks at 6.8 GiB (München, 2026-11-11) and its update at 2.7 GiB,
@@ -72,7 +83,9 @@ class Method:
     collection it annotates, deterministically."""
     name: str
     plugin: str                                  # the plugin of the ONE collection it annotates
-    produce: Callable[..., dict[str, Any]]       # (target Collection, out Path, log) -> counts
+    #: (target Collection, out Path, log) -> counts; with `reads_collection`,
+    #: (Context, out Path, log) -> counts
+    produce: Callable[..., dict[str, Any]]
     summary: str
     #: the claims it makes — their `type`s and their `method` (02 §2.10) — so
     #: that a collection whose claims are not its own is never handed to it:
@@ -82,6 +95,34 @@ class Method:
     claim_method: Mapping[str, Any] | None = None
     #: the Library's checkbox (RULE 2: what it does, in plain words)
     label: str = ""
+    #: SEVERAL claim methods (2026-11-17), each matched on the keys it names
+    #: (`{"kind": "matcher", "id": "x"}` is every version of matcher x): the
+    #: ones it makes, and the ones it CARRIES unchanged when the collection
+    #: holds them — a claim of either kind fits (`not_fitting`)
+    claim_methods: tuple[Mapping[str, Any], ...] = ()
+    carries: tuple[Mapping[str, Any], ...] = ()
+    #: "monthly": due once a period of the collection's own chain (`due`),
+    #: whatever its target does; None: when the target holds a newer snapshot
+    cadence: str | None = None
+    #: the producer reads the annotations collection itself (to carry its
+    #: claims) and the node's other collections: it is given a `Context`
+    reads_collection: bool = False
+    #: (Context, log) -> what a derivation would change, written nowhere:
+    #: what `hold annotations derive --dry-run` shows beside `due`
+    preview: Callable[..., dict[str, Any]] | None = None
+    #: the plugins of the collections it reads besides its target, declared
+    #: (docs/notes/collection-updates.md §4: whom a source's update wakes)
+    inputs: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class Context:
+    """What a `reads_collection` producer is given: the collections root,
+    the annotations collection and the one collection held here that answers
+    for its target (`resolve`)."""
+    root: Path
+    name: str
+    target: str
 
 
 def _wikipedia_versions(collection, out: Path, log=print) -> dict[str, Any]:
@@ -112,6 +153,20 @@ def _wikipedia_versions(collection, out: Path, log=print) -> dict[str, Any]:
     return counts
 
 
+def _gutenberg_editions(ctx: Context, out: Path, log=print) -> dict[str, Any]:
+    """gutenberg's versions of a work (app/gutenberg_editions.py): the
+    Wikidata tier from the node's own wikipedia and wikidata, the same-title
+    and language-stage tiers from gutenberg's records where the collection
+    holds them, every other claim carried; `out` written whole."""
+    from app import gutenberg_editions
+    return gutenberg_editions.produce(ctx.root, ctx.name, ctx.target, out, log=log)
+
+
+def _gutenberg_editions_preview(ctx: Context, log=print) -> dict[str, Any]:
+    from app import gutenberg_editions
+    return gutenberg_editions.preview(ctx.root, ctx.name, ctx.target, log=log)
+
+
 METHODS: dict[str, Method] = {
     "wikipedia-versions": Method(
         "wikipedia-versions", "wikipedia", _wikipedia_versions,
@@ -119,6 +174,20 @@ METHODS: dict[str, Method] = {
         "(the largest; English on a tie), from the manifest and page_props",
         types=("same-work",), claim_method={"kind": "wikidata"},        # wiki_versions.METHOD
         label="update by itself when wikipedia holds a newer snapshot"),
+    "gutenberg-editions": Method(
+        "gutenberg-editions", "gutenberg", _gutenberg_editions,
+        "gutenberg's editions and translations of a work, re-made every month from this node's own "
+        "collections: the books Wikidata joins (their Wikipedia pages found in this node's wikipedia), "
+        "the same-title and language-stage claims from gutenberg's records where the collection holds "
+        "them; every other claim kept as it stands",
+        types=("same-work", "translation-of", "language-stage"),
+        claim_methods=({"kind": "wikidata"}, {"kind": "matcher", "id": "gutenberg-same-title"},
+                       {"kind": "matcher", "id": "historical-markers"}),
+        carries=({"kind": "matcher", "id": "louise-classical-matcher"},
+                 {"kind": "matcher", "id": "gutenberg-editions-note"}, {"kind": "human"}),
+        label="update by itself every month from the node's Gutenberg, Wikipedia and Wikidata",
+        cadence="monthly", reads_collection=True, preview=_gutenberg_editions_preview,
+        inputs=("wikipedia", "wikidata")),
 }
 
 
@@ -180,7 +249,7 @@ def not_fitting(root: Path, name: str, method: Method) -> str | None:
     mk = read_marker(root, name)
     if mk is not None and mk.get("method") == method.name and mk.get("snapshot") == snap.snapshot_id:
         return None                         # it made them
-    if not method.types and method.claim_method is None:
+    if not method.types and method.claim_method is None and not method.claim_methods and not method.carries:
         return None
     key = (str(tree), snap.hash, method.name)
     if key not in _FITS:
@@ -193,25 +262,69 @@ def not_fitting(root: Path, name: str, method: Method) -> str | None:
 _FITS: dict[tuple[str, str, str], str | None] = {}
 
 
+def _by_fits(method: Method, by: Any) -> bool:
+    """Whether a claim's `method` is one `method` makes or carries: equal to
+    its `claim_method`, or naming every key of one of its `claim_methods` /
+    `carries` with the same value."""
+    if method.claim_method is None and not method.claim_methods and not method.carries:
+        return True
+    if method.claim_method is not None and by == dict(method.claim_method):
+        return True
+    return isinstance(by, dict) and any(all(by.get(k) == v for k, v in p.items())
+                                        for p in (*method.claim_methods, *method.carries))
+
+
+def _methods_said(method: Method) -> str:
+    said = [dict(method.claim_method)] if method.claim_method is not None else []
+    said += [dict(p) for p in (*method.claim_methods, *method.carries)]
+    return " or ".join(json.dumps(p, sort_keys=True) for p in said) or "{}"
+
+
+#: claims read at the head of each sampled part when a method also CARRIES
+#: claims it does not make: enough to find one of its own among them
+SAMPLED_CLAIMS = 256
+
+
+def _makes(method: Method, by: Any) -> bool:
+    """Whether a claim's `method` is one `method` MAKES (not only carries)."""
+    if method.claim_method is not None and by == dict(method.claim_method):
+        return True
+    return isinstance(by, dict) and any(all(by.get(k) == v for k, v in p.items())
+                                        for p in method.claim_methods)
+
+
 def _sampled(tree: Path, snap, method: Method, name: str) -> str | None:
+    """Every sampled claim is one `method` makes or carries; and where it
+    carries claims of others, at least one sampled claim is one it MAKES —
+    else ticking it would add a tier of its own to a collection made of
+    other claims (2026-11-17: a collection of the classical matcher's
+    claims alone does not fit `gutenberg-editions`)."""
     from app.pack import records as pack_records
     from .annotations import _part_file, claim_of
     step = max(1, -(-len(snap.shards) // SAMPLED_PARTS))
+    per_part = SAMPLED_CLAIMS if method.carries else 1
+    own = False
     for shard in snap.shards[::step]:
         p = _part_file(tree, shard, None, snap.snapshot_id)
         if p is None:
             continue
-        for r in pack_records.iter_records(p):
+        for i, r in enumerate(pack_records.iter_records(p)):
+            if i >= per_part:
+                break
             c = claim_of(r)
             kind_ok = not method.types or c.get("type") in method.types
-            by_ok = method.claim_method is None or c.get("method") == dict(method.claim_method)
-            if not (kind_ok and by_ok):
-                return (f"{name}'s claims are not {method.name}'s: part {shard.n}'s first is a "
+            if not (kind_ok and _by_fits(method, c.get("method"))):
+                return (f"{name}'s claims are not {method.name}'s: part {shard.n} holds a "
                         f"{c.get('type')!r} claim by {json.dumps(c.get('method'), sort_keys=True)}, and "
                         f"{method.name} makes {', '.join(method.types) or 'any'} claims by "
-                        f"{json.dumps(dict(method.claim_method or {}), sort_keys=True)}; its output "
-                        f"would withdraw them")
-            break
+                        f"{_methods_said(method)}; "
+                        + ("it is made for a collection of those, not this one" if method.carries
+                           else "its output would withdraw them"))
+            own = own or _makes(method, c.get("method"))
+    if method.carries and not own:
+        return (f"{name}'s sampled claims are all ones {method.name} would only carry, none it makes "
+                f"({json.dumps([dict(m) for m in method.claim_methods], sort_keys=True)}): ticking it "
+                f"would add a tier of its own to a collection made by another tool")
     return None
 
 
@@ -279,15 +392,29 @@ class Due:
     current: str | None          # this collection's current snapshot
     due: bool
     reason: str
+    #: a monthly method's: the period open now, what a failure is remembered by
+    period: str | None = None
+    #: not due, and waiting for something to say once (None: the target's pin
+    #: differs from its newest snapshot)
+    waiting: bool | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return dict(self.__dict__)
 
 
+def open_period(cadence: str, now: datetime) -> str:
+    """The period open at `now` (09 §9.4): the one a snapshot written now
+    is named for at the earliest — November's is 2026-11 from 1 November."""
+    from . import snapshot as sn
+    return sn.next_snapshot_id(sn.snapshot_id_for(now, cadence))
+
+
 def due(root: Path, name: str, method_name: str, *, clock: datetime | None = None) -> Due:
     """Is a derivation due: the target holds a newer snapshot than the one
     the claims are pinned to (or the method changed), and this collection's
-    next snapshot's period is open (one update a period, 09 §9.4)."""
+    next snapshot's period is open (one update a period, 09 §9.4). A MONTHLY
+    method's (`cadence`, 2026-11-17): that period is open and the method has
+    not run in it (`_due_by_period`), whatever its target holds."""
     from . import collection as col
     from .annotations import update_snapshot_id
     root = Path(root)
@@ -305,8 +432,10 @@ def due(root: Path, name: str, method_name: str, *, clock: datetime | None = Non
     else:
         pinned = pinned_snapshot(tree)
 
-    def out(is_due: bool, reason: str) -> Due:
-        return Due(name, method.name, tname, tsnap, pinned, current, is_due, reason)
+    def out(is_due: bool, reason: str, **kw) -> Due:
+        return Due(name, method.name, tname, tsnap, pinned, current, is_due, reason, **kw)
+    if method.cadence is not None:
+        return _due_by_period(method, name, current, mk, clock or datetime.now(timezone.utc), out)
     if current is None:
         return out(False, f"{name} holds no snapshot: `create` makes the first")
     if tsnap is None:
@@ -318,6 +447,32 @@ def due(root: Path, name: str, method_name: str, *, clock: datetime | None = Non
     except AnnotationsError as e:
         return out(False, f"{tname} {tsnap} is newer than {pinned or 'the claims'}' pin, and {e}")
     return out(True, f"{tname} holds {tsnap}, and the claims are pinned to {pinned or 'none'}")
+
+
+def _due_by_period(method: Method, name: str, current: str | None, mk: dict[str, Any] | None,
+                   now: datetime, out) -> Due:
+    """A monthly method's due rule: this collection's next snapshot's period
+    is open (`update_snapshot_id`, one update a period) and the method has
+    not already run in the period open now — it ran when the marker names
+    the period and either wrote that period's snapshot or wrote nothing (a
+    chain behind by more than one period catches up one run at a time, and
+    a run with nothing to write is not repeated in its period)."""
+    from . import snapshot as sn
+    from .annotations import update_snapshot_id
+    period = open_period(method.cadence or "monthly", now)
+    if current is None:
+        return out(False, f"{name} holds no snapshot: `create` makes the first", period=period, waiting=False)
+    ran = mk is not None and mk.get("method") == method.name and mk.get("period") == period
+    try:
+        nxt = update_snapshot_id(current, now)
+    except AnnotationsError as e:
+        return out(False, f"{name} {current} is this period's snapshot: {e}", period=period, waiting=not ran)
+    if ran and (not mk.get("written", True) or mk.get("snapshot") == period):
+        return out(False, f"{method.name} ran in {period} already ({mk.get('at')}, "
+                          f"{'snapshot ' + str(mk.get('snapshot')) if mk.get('written', True) else 'nothing to write'})"
+                          f": the next run is in {sn.next_snapshot_id(period)}", period=period, waiting=False)
+    return out(True, f"{name}'s next snapshot, {nxt}, can be written in {period}, and {method.name} has not "
+                     f"run in it", period=period, waiting=False)
 
 
 # --------------------------------------------------------------------------
@@ -333,11 +488,38 @@ def _target_collection(name: str):
                            f"refused or absent): `hold collection show {name}` says why")
 
 
+#: beside the claims file a producer wrote: its counts, `against` among them
+#: (what `finish` records in the marker: every collection the method read)
+COUNTS_SUFFIX = ".counts.json"
+
+
+def _counts_path(claims: Path) -> Path:
+    return Path(claims).with_name(Path(claims).name + COUNTS_SUFFIX)
+
+
 def produce(root: Path, name: str, method_name: str, out: Path, *, log=print) -> dict[str, Any]:
-    """The method's whole claim set, written to `out`."""
+    """The method's whole claim set, written to `out`; its counts beside it."""
     method = get(method_name)
     name, tname = resolve(Path(root), name, method)
-    return method.produce(_target_collection(tname), Path(out), log)
+    if method.reads_collection:
+        counts = method.produce(Context(Path(root), name, tname), Path(out), log)
+    else:
+        counts = method.produce(_target_collection(tname), Path(out), log)
+    _counts_path(out).write_text(json.dumps(counts, sort_keys=True))
+    return counts
+
+
+def preview(root: Path, name: str, method_name: str, *, log=print) -> dict[str, Any] | None:
+    """What a derivation would change (the method's `preview`), written
+    nowhere; None for a method that shows none."""
+    method = get(method_name)
+    if method.preview is None:
+        return None
+    name, tname = resolve(Path(root), name, method)
+    why = not_fitting(Path(root), name, method)
+    if why is not None:
+        raise AnnotationsError(why)
+    return method.preview(Context(Path(root), name, tname), log)
 
 
 def finish(root: Path, name: str, method_name: str, claims: Path, *, key=None, now: str | None = None,
@@ -345,16 +527,24 @@ def finish(root: Path, name: str, method_name: str, claims: Path, *, key=None, n
     """`update` with the method's output — set aside what the target's
     snapshot does not hold yet — and the marker written once it returned."""
     from . import annotations as ann
+    method = get(method_name)
     got = ann.update(Path(root), name, claims=Path(claims), key=key, now=now, log=log, clock=clock,
                      dry_run=dry_run, unheld="drop", private=True, guard=guard)
     out = got.to_dict()
     if not dry_run:
-        tree_id = got.snapshot_id
-        _write_marker(Path(root), name, {
-            "method": method_name, "snapshot": tree_id, "against": got.against,
-            "at": now or time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-            "added": got.added, "changed": got.changed, "tombstoned": got.tombstoned,
-            "set_aside": len(got.dropped)})
+        try:
+            read = json.loads(_counts_path(claims).read_text()).get("against") or {}
+        except (OSError, ValueError, AttributeError):
+            read = {}
+        doc = {"method": method_name, "snapshot": got.snapshot_id, "against": {**read, **got.against},
+               "at": now or time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+               "added": got.added, "changed": got.changed, "tombstoned": got.tombstoned,
+               "set_aside": len(got.dropped)}
+        if method.cadence is not None:
+            doc["period"] = open_period(method.cadence, clock or datetime.now(timezone.utc))
+            doc["written"] = got.snapshot is not None
+        _write_marker(Path(root), name, doc)
+        out["against"] = doc["against"]
     return out
 
 
@@ -519,9 +709,10 @@ def maintain(root: Path, *, stop=None, log=print, failed: dict[str, Any] | None 
                 failed[key] = str(e)
                 log(f"[annotations] {c.name}: method {method_name} cannot be checked: {e}")
             continue
-        key = f"{c.name}@{method_name}@{d.target_snapshot}"
+        key = f"{c.name}@{method_name}@{d.period or d.target_snapshot}"
         if not d.due:
-            if d.pinned != d.target_snapshot and failed.get(key + "@said") is None:
+            waiting = d.waiting if d.waiting is not None else d.pinned != d.target_snapshot
+            if waiting and failed.get(key + "@said") is None:
                 failed[key + "@said"] = d.reason
                 log(f"[annotations] {c.name}: not derived yet — {d.reason}")
             continue
@@ -542,12 +733,15 @@ def maintain(root: Path, *, stop=None, log=print, failed: dict[str, Any] | None 
                     continue
             else:
                 failed[key] = f"{type(e).__name__}: {e}"
-            log(f"[annotations] {c.name}: method {method_name} against {d.target} {d.target_snapshot} "
-                f"failed ({e}); its claims stay pinned to {d.pinned} until `louise hold annotations "
-                f"derive {c.name}` succeeds or the target's next snapshot")
+            when = (f"in {d.period}" if d.period else f"against {d.target} {d.target_snapshot}")
+            log(f"[annotations] {c.name}: method {method_name} {when} failed ({e}); its claims stay "
+                f"pinned to {d.pinned} until `louise hold annotations derive {c.name}` succeeds or "
+                + ("the next period" if d.period else "the target's next snapshot"))
             continue
-        log(f"[annotations] {c.name}: derived with {method_name} against {d.target} "
-            f"{d.target_snapshot}: snapshot {got.get('snapshot_id')} — {got.get('added', 0):,} added, "
+        when = (f"in {d.period}, against {', '.join(f'{k} {v}' for k, v in (got.get('against') or {}).items())}"
+                if d.period else f"against {d.target} {d.target_snapshot}")
+        log(f"[annotations] {c.name}: derived with {method_name} {when}: snapshot "
+            f"{got.get('snapshot_id')} — {got.get('added', 0):,} added, "
             f"{got.get('changed', 0):,} re-pinned or changed, {got.get('tombstoned', 0):,} withdrawn, "
             f"{got.get('dropped_count', 0):,} set aside (not in {d.target_snapshot} yet)")
         done.append({"collection": c.name, **got})

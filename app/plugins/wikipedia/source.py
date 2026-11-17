@@ -244,6 +244,52 @@ def page_bytes(page: ET.Element) -> bytes:
     return ET.tostring(page, encoding="unicode").encode("utf-8")
 
 
+def item_of(locator: str, native_id: int) -> str | None:
+    """The page's Wikidata item AS ITS RECORD HOLDS IT (`extra.wikidata`,
+    page_props' `wikibase_item`; parser 5), read from the page_props unit its
+    manifest locator names — the bytes `fetch` appends — without reading the
+    page: None when the locator names no unit or the unit no item. A unit
+    that is not where the locator says raises, as `fetch` does (2026-11-17:
+    the `gutenberg-editions` method, app/gutenberg_editions.py)."""
+    _, seg = props_segment(locator)
+    if seg is None:
+        return None
+    props, start, end = seg
+    page_id = decode_native_id(int(native_id))[1]
+    unit = page_props.unit_of(props, page_id)
+    if unit is None or (unit[0], unit[1]) != (start, end):
+        raise RuntimeError(f"page {page_id}: {props.name} holds "
+                           f"{'no rows' if unit is None else f'[{unit[0]}, {unit[1]})'} for it, the "
+                           f"locator [{start}, {end})")
+    return page_props.fields_of(unit[2]).get("wikidata")
+
+
+def redirect_of(locator: str, native_id: int) -> str | None:
+    """The title a REDIRECT page points at, as its record holds it — the
+    dump's `<redirect title>` (`extra.redirect_to`), else its wikitext's
+    target (`redirect_target`) less the `#fragment` — read from the page's
+    own stream in the local dump; None for an article, and for an archive
+    row (layer 1 holds articles only). The `parse` rule: a page is a
+    redirect when its text says `#REDIRECT` or the dump marks it."""
+    body, _ = props_segment(locator)
+    if archive.is_archive_locator(body):
+        return None
+    page_id = decode_native_id(int(native_id))[1]
+    dump, start, end = split_locator(body)
+    page = _stream_pages(dump, start, end).get(str(page_id))
+    if page is None:
+        raise RuntimeError(f"page {native_id} not found in its stream ({locator})")
+    text = page.findtext("revision/text") or ""
+    mark = page.find("redirect")
+    if mark is None and not wikitext.is_redirect(text):
+        return None
+    to = (mark.get("title") or "") if mark is not None else ""
+    if not to.strip():
+        m = re.search(r"\[\[([^\]|]+)", text)
+        to = m.group(1).split("#", 1)[0] if m else ""
+    return to.strip() or None
+
+
 _NOT_AVAILABLE = "not available"
 
 
