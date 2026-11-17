@@ -47,7 +47,7 @@ predecessor's word for a `.next` re-creation, and each carried line is then held
 | path | pros | cons |
 |---|---|---|
 | **`dev pin-run wikidata.next`** (chosen) | rewrites the one snapshot file, its sidecar and a few small files (the 4,009 parts are already run-free and byte-identical to a by-the-book build); seconds per GB of snapshot; extra space = one snapshot file for a moment; the result is byte for byte the creation with the corrected Codex (tests/hold/test_pin_run.py: the SHARD, sidecar, markers, published marker, claim, collection file, the manifest's documents and cursors, the build database) | a new command; amends 07 §7.8's "a name holds one collection for its life" for a collection whose id never left this node; refuses whenever anything was published or shared, or a file names the old id that it does not know |
-| carry to `wikidata.next2` | only the existing carries | 4,009 parts written again (~60 GB more space until wikidata.next is forgotten), the first snapshot's delta re-read (75.9 M uids), the manifest, index and vectors moved a second time; hours |
+| carry to `wikidata.next2` | only the existing carries | 4,009 parts written again (their bytes again in space until wikidata.next is forgotten), the first snapshot's delta re-read (75.9 M uids), the manifest, index and vectors moved a second time; hours |
 | status quo | nothing to do | a snapshot that names entities in no run: unverifiable against the source (invariant 11), never published |
 
 ## München from the node's state of 2026-11-17 (numbered; nothing runs without the operator's word)
@@ -65,13 +65,14 @@ carried parts (75,896,183 records) and snapshot 2026-10 (`93cef74e…`, no `orig
    docker exec W cat /data/collections/wikidata.next.toml                  # share = false; any `snapshot` line: note it
    ```
 2. **Deploy** the image carrying this branch, as §5 of node-runbook.md. Keep both collections paused.
-3. **The dry run** (read only; small memory, seconds):
+3. **The dry run** (read only, seconds; it hashes the snapshot once through the page cache, file-backed
+   and reclaimable, so `docker exec` is fine):
    ```bash
    docker exec W python -m app.louise dev pin-run wikidata.next --dry-run
    ```
    Expect "would pin run 20261012" with:
-   - three sources, all agreeing: the manifest's locators, the line carry's source (wikidata's
-     `snapshot`), and the file;
+   - the sources that name a run, all agreeing: the manifest's locators; the line carry's source,
+     wikidata, by its file's `snapshot`; and wikidata.next's own file, if it states one;
    - "space unchanged", and the new collection id;
    - the snapshot's size (~1.6 GB modelled: 75.9 M uids at ~21 bytes), the extra space it needs for a
      moment;
