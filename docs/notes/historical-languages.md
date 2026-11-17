@@ -43,12 +43,34 @@ historical-Italian LLM or GGUF exists. What exists:
 | corpus | MIDIA (lemmas, POS) | corpusmidia.unito.it | 1200–1900 | 7.5M words | search, CSV export | from sources |
 | corpus | DanteSearch XML | dantesearch.dantenetwork.it/DanteSearchXML.zip | 1300s | all Dante | unknown | yes |
 | lexicon | TLIO | tlio.ovi.cnr.it | <1400 | — | online only | yes |
-| lexicon | MIDIA lexicon: 571,779 historical form → modern lemma pairs | (Alzetta & Montemagni) | 1300–1500 | 70K lemmas | ? | availability unverified |
+| lexicon | MIDIA *formario*: ~550K historical forms → modern lemma + POS (TreeTagger lexicon, built on Morph-it!) | not published; ask infocorpusmidia@gmail.com | 1200–1900 | 70K lemmas | corpus CC BY-NC 4.0; lexicon terms unknown | 2026-11-17: no download (see below) |
 | lexicon | Crusca's five Vocabolario editions | accademiadellacrusca.it | 1612–1923 | — | online only | from documents |
 | lexicon | Tommaseo-Bellini | tommaseobellini.it | 1800s | — | all rights reserved | yes |
 | eval | Bologna historical-Italian LLM benchmark | github.com/Zhangshibf/Benchmarking-Large-Language-Model-on-Historical-Italian | 1200–1900 | ~200 a task | CC BY 4.0 | yes: Minerva-7B 0.16, Claude 0.93 on Manzoni word sense |
 | eval | Zibaldone NER | arxiv.org/abs/2505.20113 | 1817–1832 | 2,899 mentions | ? | paper |
 | eval | UD_Italian-Old | universaldependencies.org/treebanks/it_old | 1300s | 119K tokens | CC BY-SA 4.0 | yes |
+
+## Word lists for scoring or checking words (2026-11-17)
+
+Asked by the louise-ocr session (via München): what can score or check
+OCR words of 1200–1800 Italian. Nothing is downloaded or held by Louise yet.
+
+| resource | what | where | licence | usable now |
+|---|---|---|---|---|
+| MIDIA *formario* | ~550K historical forms → modern lemma, POS; made for TreeTagger over MIDIA's 1200–1900 texts; reused by CODIT (Prague) | not published (D'Achille & Iacobini, SLI LIV, 2022, pp. 210–212); contact infocorpusmidia@gmail.com | corpus CC BY-NC 4.0 (site); the lexicon's terms unknown | no: ask the team (operator's choice; nothing sent) |
+| MIDIA corpus | 7.5M words, ~800 texts, searchable by form, lemma, period | corpusmidia.unito.it (search, per-query CSV export) | CC BY-NC 4.0, cite MIDIA | search only: no bulk; NC is a yellow class (invariant 9) |
+| Morph-it! | 568,771 modern forms → lemma, 28.5K lemmas (Baroni & Zanchetta, Bologna) | sslmit.unibo.it/morphit (site answered 402 on 2026-11-17) | CC BY-SA 2.0 and LGPL (dual, per its readme; confirm on the licence file) | yes, for words still in use; no old forms |
+| Italian Wikisource | 65K texts, old editions among them; a frequency list by period can be derived | hf.co/datasets/wikimedia/wikisource (20231201.it) | CC BY-SA 3.0 | yes: derive the list |
+| UD_Italian-Old | Dante's works, 119K tokens, lemmatised | universaldependencies.org/treebanks/it_old | CC BY-SA 4.0 | yes: small, 1300s only |
+| DanteSearch XML | all of Dante, lemmatised | dantesearch.dantenetwork.it/DanteSearchXML.zip | unknown | no: terms first |
+| TLIO, OVI | Old Italian dictionary and corpus, <1400 | tlio.ovi.cnr.it, ovi.cnr.it | online only, no download | no |
+| RNNTagger (Old Italian) | neural tagger and lemmatiser listing Old Italian | cis.uni-muenchen.de/~schmid/tools/RNNTagger | academic, per its page (unchecked) | a model, not a list: torch, behind HTTP (invariant 7) |
+| BERToldo | BERT models by period (encoder, can score words in context) | github.com/dhfbk/historical-bert | Apache-2.0 | yes: a model, torch |
+
+No language model for chat or generation in historical Italian exists
+(searched 2026-11-16). For 1500–1800 the spelling rules in
+`app/historical.py` (ſ, et, -tione, h-) and its marker words are a small
+start, written by hand, not a list.
 
 ## Other languages (top picks; full tables in this session's reports, to be added)
 
