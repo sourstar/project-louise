@@ -712,11 +712,18 @@ probable or open.
   - Krea 2 (`krea/Krea-2-Raw`; Turbo is a finetune of the same shape):
     transformer 26.3 GB bf16 (≈ 13 B), text encoder 8.9 GB bf16 (≈ 4.4 B,
     an LLM), VAE 0.5 GB — **33 GiB as shipped: does not fit the card
-    alone**. Quantised, if a backend of ours learns the architecture
-    (stable-diffusion.cpp: NOT checked): transformer Q8 ≈ 13.0 GiB /
-    Q4_K_M ≈ 7.0; text encoder Q8 ≈ 4.4 / Q4 ≈ 2.4, or on the CPU;
-    + 0.5 VAE; working memory while an image is made (~0.6–1 GiB at this
-    size) freed between images (image-generation-krea.md §2).
+    alone**. SUPPORTED by stable-diffusion.cpp since 2026-06-25, at the
+    commit the node's LocalAI v4.12.1 pins (0518b343; checked upstream
+    2026-11-17 on the operator's word, "the model is already available":
+    the backend reads `llm_path` and hands it to the engine; no gallery
+    entry at v4.12.1 or master — a hand-written YAML, as flux's).
+    Components (image-generation-krea.md, amended): the DiT as GGUF —
+    Turbo Q8_0 12.7 GiB / Q4_K_M 6.7 / Q3_K_M 5.1 (Raw the same ± 0.1);
+    the text encoder Qwen3-VL-4B-Instruct GGUF Q8_0 4.0 / Q4_K_M 2.3, or
+    on the CPU (`keep_clip_on_cpu`, to confirm it covers the LLM at the
+    pin); the Wan 2.1 VAE 0.24; + the 0.3 process floor. Working memory
+    while an image is made (~0.6–1 GiB at this size) is freed between
+    images (image-generation-krea.md §2).
 
   | set | contexts held (today) | SHARED context, 3.2 GiB (the operator's assumption; shared-context.md §2's peak 3,262 MiB) | weights only |
   |---|---|---|---|
@@ -725,9 +732,9 @@ probable or open.
   | … with UD-Q3_K_XL instead | ≈ 38.7 | ≈ 33 | ≈ 29.6 |
   | 35B Q4, MADLAD dropped — the 35B translates (classical-translation.md: Qwen3-30B-A3B chrF 52.2, MADLAD 35.8) | — | ≈ 32.5 | ≈ 29.3 |
   | 35B Q3, MADLAD dropped | — | ≈ 27.6 | ≈ 24.4 |
-  | + Krea 2, Q4 transformer, text encoder on the CPU | + 7.8 | + 7.8 | + 7.8 |
-  | + Krea 2, Q4 transformer and Q4 text encoder on the card | + 10.2 | + 10.2 | + 10.2 |
-  | + Krea 2, Q8 everything on the card | + 18 | + 18 | + 18 |
+  | + Krea 2 Turbo, Q4_K_M DiT, text encoder on the CPU | + 7.3 | + 7.3 | + 7.3 |
+  | + Krea 2 Turbo, Q4_K_M DiT and Q4_K_M text encoder on the card | + 9.6 | + 9.6 | + 9.6 |
+  | + Krea 2 Turbo, Q8_0 DiT and Q8_0 text encoder on the card | + 17.2 | + 17.2 | + 17.2 |
 
   Today's non-chat weights are 13.6 GiB by the at-rest reading (11-07) and
   14.8 by the mid-question one (11-09, compute buffers grown); the rows use
