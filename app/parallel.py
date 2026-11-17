@@ -466,6 +466,12 @@ def _one(kind: str, collection, row: dict):
         # family context is built once per child and kept
         from .pack import slicing
         return slicing.slice_hint(collection.plugin, row, _family_context(collection))
+    if kind == "discover-hash":
+        # a scan's fetch-and-hash of a ref whose signature moved, and of the
+        # unit its row still names where it never recorded a hash
+        # (app/discovery.py `_hashes`): a dated dump's next run is all this
+        from .discovery import hash_one
+        return hash_one(plugin, row)
     if kind == "metadata":
         return plugin_io.metadata(plugin, row)
     if kind == "prepare":

@@ -5,9 +5,11 @@ changes do we call fetch() to hash content; only when the hash actually
 differs do we reset downstream stage flags for that one document. A
 no-change run is just a stat scan — discover() never touches file content.
 """
+import contextlib
 import dataclasses
 import sqlite3
 import time
+from typing import Any
 
 from . import db
 from .plugins.base import DiscoverState, DocRef
@@ -187,7 +189,7 @@ def sync_collection(con, collection, *, stop=None, adopt: bool = False) -> dict:
         # arrival order exact: the later ref sees the earlier one committed.
         if batch and (uid in batch_uids or len(batch) >= DISCOVER_BATCH_REFS):
             if not _apply_batch(con, plugin, batch, counts, stop, wait=True, adopt=adopt,
-                                withdraw=withdraw):
+                                withdraw=withdraw, collection=collection):
                 interrupted = True      # stop arrived while the manifest was contended
                 batch = []
                 break
@@ -202,7 +204,7 @@ def sync_collection(con, collection, *, stop=None, adopt: bool = False) -> dict:
         # stopping — a contended manifest must not hold SIGTERM past its
         # grace; what is not committed is simply re-enumerated next scan
         if _apply_batch(con, plugin, batch, counts, stop, wait=not interrupted, adopt=adopt,
-                        withdraw=withdraw):
+                        withdraw=withdraw, collection=collection):
             applied += len(batch)
             _signal_committed(state, applied)
         else:
@@ -320,8 +322,53 @@ def _held_hash(plugin, ref, row) -> str | None:
     return held.raw_hash
 
 
+def hash_one(plugin, task: dict) -> tuple[str, str | None]:
+    """The parse pool's "discover-hash" work, one ref (app/parallel.py): the
+    hash of the bytes `fetch` gives for the ref, and — where the row names
+    another unit and never recorded a hash — the held unit's (`_held_hash`).
+    A fetch of the ref that fails raises: the caller then fetches it here, in
+    the scan's own process, and meets the same failure the serial scan did."""
+    ref = task["ref"]
+    raw = plugin.fetch(ref)
+    held = task.get("held")
+    return raw.raw_hash, (_held_hash(plugin, ref, {"path": held}) if held else None)
+
+
+def _hashes(plugin, collection, need: list) -> dict[str, tuple[str, str | None]]:
+    """THE HASHES A BATCH NEEDS, ON THE PARSE POOL (CLAUDE.md: multi-threading
+    is a must): `uid -> (the ref's raw hash, the held unit's or None)` for
+    every `(uid, ref, row)` whose signature moved. A dated dump's next run
+    moves every page's signature, so its scan is ALL hashing — decompress
+    the page's stream, re-serialise it, hash it, and the old run's copy too
+    (`_held_hash`) — and on the scan's one thread it was ~1,700 pages/s
+    whatever the node's cores (2026-11-17, 50,500 synthetic pages). The rows
+    go to `parallel.compute` with the ref's locator as their `path`, so the
+    pool cuts the batch along wikipedia's multistream chunks
+    (`plugin_io.work_span`) and a chunk is decompressed once. In order, one
+    answer per ref; a ref whose task failed is left out and fetched by the
+    caller in-process. No pool (one process, the tests) or no `collection`
+    (`register`): computed here, the same function."""
+    if not need:
+        return {}
+    held_too = bool(getattr(plugin, "ORIGIN_MOVES_ALONE", False))
+    tasks = [{"uid": uid, "native_id": ref.native_id, "path": ref.locator, "ref": ref,
+              "held": (row["path"] if held_too and not row["txt_hash"] and row["path"]
+                       and row["path"] != ref.locator else None)}
+             for uid, ref, row in need]
+    if collection is None:
+        out = {}
+        for t in tasks:
+            # a failure is left out: fetched again by the caller, which raises as before
+            with contextlib.suppress(Exception):
+                out[t["uid"]] = hash_one(plugin, t)
+        return out
+    from . import parallel
+    got = parallel.compute("discover-hash", collection, tasks)
+    return {t["uid"]: tuple(v) for t, (ok, v) in zip(tasks, got) if ok}
+
+
 def _apply_batch(con, plugin, batch: list, counts: dict, stop, *, wait: bool,
-                 adopt: bool = False, withdraw=None) -> bool:
+                 adopt: bool = False, withdraw=None, collection=None) -> bool:
     """Apply one batch of refs to the manifest. Two phases, so the write
     lock is held only for the writes:
 
@@ -353,6 +400,24 @@ def _apply_batch(con, plugin, batch: list, counts: dict, stop, *, wait: bool,
     writes: list[tuple[str, tuple]] = []
     order = getattr(plugin, "origin_order", None)
     to_withdraw: list[str] = []
+    # THE ROWS AND THE HASHES FIRST: every document's row read once, and the
+    # fetch-and-hash of those whose signature moved done for the whole batch
+    # at once on the parse pool (`_hashes`) — the per-ref decisions below are
+    # the same, in the same order, from the same values (nothing is written
+    # before phase 2, so a row read here is the row the loop would read)
+    rows_of: dict[str, Any] = {}
+    need: list = []
+    for ref in batch:
+        if ref.scope == "container" or ref.error:
+            continue
+        uid = f"{ref.source_id}:{ref.native_id}"
+        row = con.execute("SELECT path,mtime,size,txt_hash FROM documents WHERE uid=?", (uid,)).fetchone()
+        rows_of[uid] = row
+        if row is None or adopt or _superseded(order, ref, row):
+            continue
+        if row["mtime"] != ref.mtime or row["size"] != ref.size or _other_unit(order, ref, row):
+            need.append((uid, ref, row))
+    hashed = _hashes(plugin, collection, need)
     for ref in batch:
         uid = f"{ref.source_id}:{ref.native_id}"
         if ref.scope == "container":
@@ -415,7 +480,7 @@ def _apply_batch(con, plugin, batch: list, counts: dict, stop, *, wait: bool,
         # answers from the locator or a derived index; gutenberg's was the
         # one that could not.
         lang = ref.extra.get("lang")
-        row = con.execute(
+        row = rows_of[uid] if uid in rows_of else con.execute(
             "SELECT path,mtime,size,txt_hash FROM documents WHERE uid=?",
             (uid,)).fetchone()
         if _superseded(order, ref, row):
@@ -440,16 +505,20 @@ def _apply_batch(con, plugin, batch: list, counts: dict, stop, *, wait: bool,
             local["resigned"] += 1
         elif (row["mtime"] != ref.mtime or row["size"] != ref.size
               or _other_unit(order, ref, row)):
-            raw = plugin.fetch(ref)                 # no lock held here
-            held_hash = row["txt_hash"] or _held_hash(plugin, ref, row)
-            if raw.raw_hash != held_hash:
+            if uid in hashed:                       # the pool's (`_hashes`), no lock held
+                raw_hash, held_of = hashed[uid]
+            else:                                   # its task failed: here, as before
+                raw_hash = plugin.fetch(ref).raw_hash
+                held_of = None if row["txt_hash"] else _held_hash(plugin, ref, row)
+            held_hash = row["txt_hash"] or held_of
+            if raw_hash != held_hash:
                 writes.append((
                     "UPDATE documents SET path=?,txt_name=?,lang=COALESCE(?,lang),"
                     "mtime=?,size=?,txt_hash=?,"
                     "rdf_done=0,fts_done=0,embed_done=0,summary_done=0,error=NULL,"
                     "retries=0,updated_at=? WHERE uid=?",
                     (ref.locator, txt_name, lang, ref.mtime, ref.size,
-                     raw.raw_hash, now, uid)))
+                     raw_hash, now, uid)))
                 local["changed"] += 1
             elif row["path"] != ref.locator:
                 # the same bytes, re-stamped AND somewhere else: the locator
@@ -459,7 +528,7 @@ def _apply_batch(con, plugin, batch: list, counts: dict, stop, *, wait: bool,
                 writes.append((
                     "UPDATE documents SET path=?,txt_name=?,mtime=?,size=?,txt_hash=?,error=NULL,"
                     "retries=0,updated_at=? WHERE uid=?",
-                    (ref.locator, txt_name, ref.mtime, ref.size, raw.raw_hash, now, uid)))
+                    (ref.locator, txt_name, ref.mtime, ref.size, raw_hash, now, uid)))
                 local["relocated"] += 1
             else:
                 writes.append(("UPDATE documents SET mtime=?,size=? WHERE uid=?",

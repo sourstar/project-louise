@@ -2931,3 +2931,23 @@ build's records/s and how many lines it parsed against how many it carried (core
 `cpu.stat`), the snapshot's time and peak memory, parts re-issued (expected: all, since every line's `origin` names
 the run), the delta's counts, the embedding the changed records cost, free space before the fetch and after the old
 run's deletion.
+
+**The scan of a new run on the parse pool (same branch, 2026-11-17) — MEASURED here, synthetic.** A new run moves
+every page's signature, so its scan is all fetch-and-hash: the page in the new run and, where the row never recorded
+a hash, its copy in the old run (`discovery._held_hash`). BEFORE, that ran on the scan's one thread whatever
+PARSE_PROCESSES said; AFTER, `discovery._hashes` sends each batch's moved refs to the parse pool
+(`parallel.compute("discover-hash")`, cut along the multistream chunks). Scenario: this 4-core container, nothing
+else running; a synthetic trwiki of 50,000 pages in streams of 100 (18.2 MB of run on disk, page_props for every
+page), run A scanned (no hashes recorded), then run B (3,440 pages changed, 500 gone, 500 new) scanned from a copy of
+the same state each time; tool: the branch's measure script (scratch, not committed). Wall time of run B's scan:
+
+| PARSE_PROCESSES | BEFORE (s, warm) | AFTER (s, two runs) | pages/s AFTER |
+|---|---|---|---|
+| 1 | 30.3 | 29.7, 28.1 | ~1,750 |
+| 2 | 29.4 | 22.0, 21.1 | ~2,340 |
+| 3 | 28.1 | 15.8, 16.6 | ~3,120 |
+
+Decisions identical in all nine runs (the manifest's uid, path, txt_hash, marks and error digest
+`d2ce8f161321f4ff`, 50,500 rows; 3,440 changed, 46,060 relocated). What stays serial: the enumeration, the row
+reads and the writes. On the node: the same table on wikipedia's first update, with its real pages (~60 M) and
+PARSE_PROCESSES as deployed.
