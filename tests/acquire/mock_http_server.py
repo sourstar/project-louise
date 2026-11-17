@@ -202,6 +202,9 @@ class _Handler(BaseHTTPRequestHandler):
             return
         if not path.is_file():
             self.send_response(404)
+            # keep-alive needs it: without a length the client waits for a
+            # body that never comes (a read timeout, not a 404)
+            self.send_header("Content-Length", "0")
             self.end_headers()
             return
 

@@ -13,39 +13,35 @@ probe of `wikidatawiki/entities/`, 2026-11-17):
 - Not every run carries the full dump. 20261111's sums list lexemes and
   truthy only, and that run has no `all.json` at all.
 
-So:
+So (operator, 2026-11-17, verbatim: "if the current dump fails, don't use an
+old dump (that should have already been integrated thus it's pointless);
+retry gently to fetch it with the already agreed policy"):
 - A run is COMPLETE for the collection when its md5sums list
   `wikidata-<R>-all.json.bz2`.
-- A sums file not there (404), empty, or listing `all.json.gz` without the
-  `.bz2` is a run still being written: waited for.
-- A run whose sums list files and none of the full dump carries no full dump
-  and never will (`skips`): the pass asks the run before it. The run the
-  cutoff names is therefore the last run begun before the cutoff whose sums
-  list `all.json.bz2` (02 §2.2's rule for dated dumps, applied to the runs
-  that carry this collection's file).
-- After the fetch, the dump's md5 is held to that line (`verify`), the
-  origin's own checksum. A mismatch is the FETCH failing, never the run: the
-  file is removed, its size named, so the next night fetches it again rather
-  than adopting it.
+- A run whose sums are not there (404), empty, or list `all.json.gz` without
+  the `.bz2` is a run still being written: WAITED for, however long it takes
+  (the 3-day pass-over is retired). The update asks again at its nightly
+  beat (app/hold/update.py `complete_run`); a NEWER run that completes first
+  takes its place, and an older one never does.
+- A run whose sums list finished files and none of the full dump carries no
+  full dump and never will (`skips`: lexemes or truthy only, 20261111): it
+  is not a candidate, and the run before it is asked.
+- After the fetch, the dump is held to that md5 line (`expected`), the
+  origin's own checksum. A mismatch is the FETCH failing, never the run, and
+  it is MENDED, never fetched again whole where it can be told apart
+  (app/acquire/repair.py: the dump is one lbzip2 stream, mended by its
+  blocks).
 
-Pure, but for `verify`, which reads the fetched file. The platform fetches the
-sums (app/acquire/completion.py: the budget, the origin's User-Agent, one
-request at a time) and hands their bytes here.
+Pure, but for `expected`, which reads the fetched sums file. The platform
+fetches the sums (app/acquire/completion.py: the budget, the origin's
+User-Agent, one request at a time) and hands their bytes here.
 """
 from __future__ import annotations
 
-import hashlib
 from dataclasses import dataclass
 from pathlib import Path
 
 ENTITIES_DIR = "wikidatawiki/entities"
-#: how long after its run began a run listing all.json.gz may still bring all.json.bz2
-WRITE_DAYS = 3
-
-
-def _day(run: str):
-    from datetime import date
-    return date(int(run[:4]), int(run[4:6]), int(run[6:8]))
 
 
 @dataclass(frozen=True)
@@ -79,6 +75,8 @@ def parse_sums(body: bytes) -> dict[str, str]:
 class Md5Sums:
     """The completion check `WikidataSource.update_completion` declares."""
     origin = "Wikimedia"
+    #: what a run carries for the collection, in the update's words
+    noun = "full dump"
 
     def records(self, run: str, slices) -> list[Record]:
         """One record whatever the slices: one file holds every family."""
@@ -92,55 +90,41 @@ class Md5Sums:
         """None when the run is complete; else what is not, in plain words."""
         run = self._run_of(record)
         if body is None:
-            return f"{record.label}: the run has published no md5sums yet"
+            return "no file finished yet (its md5sums are not published)"
         listed = parse_sums(body)
         if dump_name(run) in listed:
             return None
         if dump_name(run, "gz") in listed:
-            return f"{record.label}: all.json.gz is done and all.json.bz2 is still being written"
+            return ".json.gz done, .bz2 not yet"
         if not listed:
-            return f"{record.label}: its md5sums list no finished file yet"
-        return f"{record.label}: carries no full entity dump"
+            return "no file finished yet (its md5sums list none)"
+        return "carries no full entity dump"
 
     def skips(self, record: Record, body: bytes | None, now=None) -> str | None:
         """Why this run will never carry the collection's file, or None: its
-        sums list finished files and none of the full dump; or they list
-        `all.json.gz` without the `.bz2` more than WRITE_DAYS after the run
-        began (20261109 wrote both within five hours), so a run whose `.bz2`
-        failed does not hold the update for ever."""
+        sums list finished files and none of the full dump, in either form.
+        A run that lists `all.json.gz` is WRITING the dump, and a run with
+        no sums yet may be: both are waited for, never passed over."""
         if body is None:
             return None
         run = self._run_of(record)
         listed = parse_sums(body)
-        if not listed or dump_name(run) in listed:
+        if not listed or dump_name(run) in listed or dump_name(run, "gz") in listed:
             return None
-        if dump_name(run, "gz") in listed:
-            if now is None or (now.date() - _day(run)).days <= WRITE_DAYS:
-                return None
-            return (f"run {run} listed all.json.gz and no all.json.bz2 {WRITE_DAYS} days after it began: "
-                    f"its .bz2 is taken as never coming")
         names = ", ".join(sorted(listed)[:3])
         return f"run {run} carries no full entity dump (its md5sums list {names})"
 
-    def verify(self, run: str, slices, corpus_dir) -> list[str]:
-        """The fetched dump held to the run's md5sums line: `[]` when it
-        matches, else what failed. A mismatch removes the file (its size
-        named) so the next fetch takes it again."""
-        corpus = Path(corpus_dir)
-        sums, dump = corpus / sums_path(run), corpus / ENTITIES_DIR / run / dump_name(run)
+    def expected(self, run: str, slices, corpus_dir, *, fetch=None) -> list:
+        """The fetched dump and its line in the run's md5sums, the origin's
+        own checksum (`repair.Expected`; the sums give no length — the
+        origin's Range answer does). Raises ValueError when the sums cannot
+        be read or do not list the dump."""
+        from app.acquire.repair import Expected
+        sums = Path(corpus_dir) / sums_path(run)
         try:
             want = parse_sums(sums.read_bytes()).get(dump_name(run))
         except OSError as e:
-            return [f"{sums.name}: not readable after the fetch ({e})"]
+            raise ValueError(f"{sums.name}: not readable after the fetch ({e})") from None
         if want is None:
-            return [f"{sums.name} lists no {dump_name(run)}: nothing to verify it against"]
-        h = hashlib.md5()
-        with open(dump, "rb") as f:
-            for block in iter(lambda: f.read(8 << 20), b""):
-                h.update(block)
-        if h.hexdigest() == want:
-            return []
-        size = dump.stat().st_size
-        dump.unlink()
-        return [(f"{dump.name}: md5 {h.hexdigest()}, the origin's sums say {want}: the fetch is bad, not the run. "
-                 f"The file ({size / 2**30:.1f} GiB) is removed and fetched again at the next night")]
+            raise ValueError(f"{sums.name} lists no {dump_name(run)}: nothing to hold it to")
+        return [Expected(rel_path=f"{ENTITIES_DIR}/{run}/{dump_name(run)}", md5=want)]
