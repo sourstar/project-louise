@@ -23,9 +23,10 @@ same collection, signed with the node key. Nobody uploads anything.
 | Update, in a second child | `unheld="drop"`: a claim whose end the target's snapshot does not hold yet is set aside and named, not refused. The method reads the live manifest, which runs ahead of the snapshot. The claims file is hard-linked into place, not copied (RULE 1; wikipedia's is 4.2 GB). |
 | Marker | `state/method.json`: method, snapshot, `against`, counts. |
 
-Only **`wikipedia-versions`** is a method today. It reads the wikipedia collection's manifest and page_props, which
-makes it a pure function of what the node holds. gutenberg's works, titles, matches and merge files depend on API or
-language-model intermediates. They are not methods, so they keep `hold annotations update --claims`.
+Two methods exist. **`wikipedia-versions`** reads the wikipedia collection's manifest and page_props, which makes it a
+pure function of what the node holds. **`gutenberg-editions`** (2026-11-17, below) re-makes gutenberg-book-editions
+every month from the node's gutenberg, wikipedia and wikidata. The classical matcher's claims depend on a language
+model's intermediates; they are not a method, and that method carries them as they stand.
 
 ## The Library's checkbox, and what it guards (2026-11-13)
 
@@ -92,6 +93,83 @@ it, the new name).
    <its snapshot>".
 3. Nothing else. The worker derives once wikipedia's next snapshot is written. Its log line names the counts. Time
    the first one (method and update wall times, peak RSS of each child).
+
+## gutenberg-editions: gutenberg-book-editions re-made every month (2026-11-17)
+
+The operator: the collection must stop depending on hand-run tools and web APIs. The node re-derives it by itself,
+monthly, "as if a monthly Wikipedia snapshot were downloaded", from its own collections: "if there is a local wikipedia
+collection it is pointless to download a wikipedia snapshot; peers can always check against the snapshot." Nothing is
+fetched from the network while it runs. Code: `app/gutenberg_editions.py`, `app/wikipedia_titles.py`,
+`app/gutenberg_titles.py` (the same-title rule, moved out of its tool unchanged).
+
+Turn it on with `method = "gutenberg-editions"` in the collection file, or the card's checkbox **update by itself every
+month from the node's Gutenberg, Wikipedia and Wikidata**.
+
+**What it writes.** The collection's whole claim set, tier by tier:
+
+| Tier | Made from | When |
+|---|---|---|
+| Wikidata | Each book's "Wikipedia page about this book" links, looked up in the node's wikipedia, then the page's Wikidata item. A book naming two items (an anthology) claims nothing. A work is a star on its lowest ebook number. | Always |
+| Same title | gutenberg's records, by the rule of 2026-10-22 | Only if the current snapshot holds such claims |
+| Language stage | gutenberg's records, by the historical-markers matcher | Only if the current snapshot holds such claims |
+| Everything else | Carried: its line of the claims file, byte for byte (the classical matcher's claims, the editions notes, a person's) | Always |
+
+A claim that did not change is written as its current line, so it keeps its uid and its bytes. The same inputs give the
+same file.
+
+**How a title is found locally.** The link's title is normalised as the Wikipedia API normalises it: underscores become
+spaces, extra spaces go, the first letter is upper-cased. A redirect is followed to its target, up to three steps. The
+item comes from the page's page_props, as its record holds it. Where the node holds a wikidata collection, the item must
+be in it. One pass over the wikipedia manifest finds every title: it keeps 8 bytes a page (423 MB for 52.9 M pages),
+sorted, so a redirect's target costs a lookup and not a second pass. Only redirect pages are read from the dump.
+
+**What the node cannot answer**, where the API could:
+
+- a link to a Wikipedia the node does not hold (it holds 11 languages; Gutenberg also links fi, nl, sv, la and others);
+- a title missing in a language some of whose pages have no title yet in the manifest;
+- an item that the page names and the node's wikidata lacks (merged or deleted since). The dump lists no redirects, so
+  a merged item is seen but not followed.
+
+In each case the book keeps the item that its current claim gives it through that same link. A book that has no claim
+yet claims nothing. The dry run counts both. It never reads "the node cannot tell" as "no item", so a gap in the node's
+collections does not withdraw anything.
+
+**When it runs.** Once a period, not when gutenberg moves. It is due when this collection's next snapshot can be written
+(one update a period, 09 §9.4) and the method has not run in the period open now. A run that has nothing to write is not
+repeated in its period. `state/method.json` records the period, whether a snapshot was written, and in `against` the
+snapshot ids of everything read: gutenberg, wikipedia and wikidata. The method declares wikipedia and wikidata as its
+inputs, for the cascade of docs/notes/collection-updates.md §4.
+
+**The dry run.** `louise hold annotations derive gutenberg-book-editions --dry-run` says whether it is due. It also
+shows what a run would change, per tier: re-derived, kept identical, changed, added, withdrawn, carried, set aside
+(naming a record gutenberg's snapshot no longer holds). It lists up to 20 added and 20 withdrawn claims per tier, and
+counts how the titles were answered. Nothing is written.
+
+**Cost**, measured on synthetic fixtures in a 4-core sandbox (2026-11-17):
+
+| Fixture | 1 process | 2 | 3 |
+|---|---|---|---|
+| The manifest pass, 3 M rows (1.8 GiB) | 6.0 s | 4.3 s | 2.9 s |
+| The whole run: a 2 M-row manifest (1.1 GiB), 20,000 gutenberg records in 8 parts, all three tiers, 4,658 titles (425 through a redirect) | 9.8 s | | 11.5 s |
+
+At 2 M rows the pool's start-up outweighs what it saves; at 3 M it halves the pass. Peak memory of the whole run was
+335 MiB for the parent and 320 MiB for the largest child. The pass is linear: 52.9 M rows is about 53 s on 3
+processes. On 12 the disk is the bound (about 32 GiB to read at this fixture's row size), so expect about a minute. The
+sorted index adds about 400 MiB to the parent. The node's real time is to be read off its first run.
+
+**For München** (after the deploy, on the operator's word):
+
+1. `louise hold annotations derive gutenberg-book-editions --dry-run`. Read the tiers. A large `withdrawn` under
+   wikidata, or many "not answerable here" titles, is a reason to stop and look before ticking the box.
+2. `louise hold config apply gutenberg-book-editions --set method=gutenberg-editions`, or the card's checkbox.
+3. Nothing else. The worker runs it in the next open period and logs its counts.
+
+Open:
+
+- The editions-note claims (`gutenberg-editions-note`) are carried until they are withdrawn by hand, as decision 1 A
+  planned. The method does not withdraw them.
+- A claim withdrawn by hand from the Wikidata or same-title tier is made again. The tools kept no list of such
+  exclusions, so none is applied. The classical matcher's exclusions stay applied, because its claims are carried.
 
 ## Standardised alternative, not taken
 

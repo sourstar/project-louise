@@ -18,6 +18,18 @@ build at 12 cores, the GPU uncapped. The card's noise (operator): 0.2 sone
 idle, 3.1 sone at full load, coil whine ~0.9 sone; its fan range is being
 measured (published figures disagree).
 
+### 2026-11-17
+
+- **gutenberg-book-editions re-makes itself every month from the node's own collections** (operator: no hand-run
+  tools, no web APIs; "if there is a local wikipedia collection it is pointless to download a wikipedia snapshot").
+  The method is `gutenberg-editions`. It re-derives the Wikidata tier through the node's wikipedia: the title as the
+  API normalises it, redirects followed, the item from page_props and checked against the node's wikidata. Where
+  the snapshot holds them, it also re-derives the same-title and language-stage tiers from gutenberg's records. It
+  carries every other claim byte for byte. It is due once a period, it records every input's snapshot in
+  `state/method.json`, and `derive --dry-run` shows the diff per tier. Measured on synthetic fixtures: the manifest
+  pass over 3 M rows takes 6.0 s on 1 process and 2.9 s on 3 (about 53 s at 52.9 M rows); a whole run peaks at
+  335 MiB. Not deployed; München's steps are in [annotation-methods.md](annotation-methods.md).
+
 ### 2026-11-16
 
 - **Each codex.json read once per file** (München's py-spy after #720: the stats publisher 34 % and the share
