@@ -687,7 +687,7 @@ the chain, and never ahead of the period open now.
 | `collection_id` | id | yes | the Codex this snapshot applies |
 | `snapshot_id` | `YYYY-MM` or `YYYY-Www` | yes | by the cadence, below |
 | `previous` | id or null | yes | the hash of the snapshot before; `null` on a root's first; on a daughter's first, the hash of the snapshot named by the Codex's `continues_through` |
-| `origin_run` | string | no | for a dated-dump origin, the run this snapshot's records were built from (Wikimedia's `20261101`): the last run before the cutoff (02 §2.2). Absent for other origins, and on snapshots made before the field: their run is the Codex's `files` (*amended 2026-11-17*, operator: B) |
+| `origin_run` | string | no | for a dated-dump origin, the run this snapshot's records were built from (Wikimedia's `20261101`): the last run before the cutoff (02 §2.2) that carries the collection's files, or, while that run is not complete, a newer one that completes first — never an older one (*amended 2026-11-17*, operator: "if the current dump fails, don't use an old dump"; docs/notes/collection-updates.md §6). Absent for other origins, and on snapshots made before the field: their run is the Codex's `files` (*amended 2026-11-17*, operator: B) |
 | `shards` | list of part | yes | every record part the snapshot consists of, sorted by (`slice` bytes, `n`); the key keeps the old word |
 | `relations` | list of relation part | yes | the relations parts (§9.14), same order; `[]` when the collection has none |
 | `figures` | list of figures part | yes | the figures containers (§9.5), same order; `[]` when the collection carries no plates — which is every collection whose Codex has `record_line` 1 |

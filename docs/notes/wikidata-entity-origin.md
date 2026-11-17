@@ -30,9 +30,20 @@ labels.
 | methods with wikidata among their INPUTS (gutenberg-editions) | nothing: an input is a plugin, so the new collection is read (cascade.py) |
 
 **The monthly update runs at parser 3** (collection-updates.md §6). A run is complete when its
-`wikidata-<R>-md5sums.txt` lists `wikidata-<R>-all.json.bz2`. A run carrying no full dump, lexemes only, is
-passed over for the one before it. The fetched dump is held to that md5 line, and a mismatch fails the fetch
-(the file removed, fetched again the next night). At parser 2 the pass refuses: re-create at parser 3 first.
+`wikidata-<R>-md5sums.txt` lists `wikidata-<R>-all.json.bz2`. The update takes the CURRENT run only: the newest
+before the cutoff that carries or is writing the full dump (lexemes-only and truthy-only runs are not candidates).
+While it is incomplete the pass waits and asks again at its nightly beat, saying so ("waiting for Wikimedia's
+20261130 full dump: .json.gz done, .bz2 not yet; asked again tonight"). It never takes an older run; a newer run
+that completes first supersedes it. The fetched dump is held to that md5 line, and a mismatch is MENDED: the dump is
+one bzip2 stream (probed 2026-11-17: 103,755,108,222 bytes, `BZh9`), so its bad 900 kB blocks are found by their
+CRCs on the parse pool and only their bytes are fetched again by Range. Only a dump whose blocks cannot be told
+apart goes again in full, and the message says why. At parser 2 the pass refuses: re-create at parser 3 first. Every
+annotations collection that declares wikidata (gutenberg-editions, by its method's inputs) waits meanwhile, with no
+time cap, rather than derive from the old dump; `hold collection show <it>` says why.
+
+**Before the first update, check** (read only): `louise hold collection update wikidata --dry-run` names the run
+the pass would take. While a mend is under way, `<dump>.mend.json` sits beside the dump; it is the mend's own record
+and is removed when the dump matches. Do not delete it by hand: a stopped mend resumes from it.
 
 ## Sizes and times
 
