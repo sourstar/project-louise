@@ -164,12 +164,15 @@ louise hold
                                                                        network's catalogue, 04 §4.7, and every held collection is listed)
               show <collection>                                        Codex, snapshots, holdings, trust, certification, vitality, configuration, and the copy's state — refused, quarantine or in use — with every reason
                                                                        — and its stages as `node show` counts them, with what holds each (`status`, one status, added 2026-11-07)
-  annotations update <collection> [--claims FILE] [--against TARGET=SNAPSHOT …] [--snapshot ID] [--dry-run]
+  annotations update <collection> [--claims FILE] [--against TARGET=SNAPSHOT …] [--snapshot ID] [--dry-run] [--whole]
                                                                        (amended 2026-10-23, operator: updated, not replaced; 02 §2.10) the next snapshot of the SAME
                                                                        annotations collection: the claims checked against each target's newest snapshot (or
                                                                        --against), a new FILE the whole set from now on (kept claims keep their uids, left out ones
                                                                        tombstoned), no FILE a re-check of the claims held; signed with the node's key; prints
-                                                                       what changed. The Library's annotations card: *re-check claims*, *update with a claims file*
+                                                                       what changed. The Library's annotations card: *re-check claims*, *update with a claims file*.
+                                                                       FROM THE DELTA (2026-11-17, docs/notes/collection-updates.md §4): a target record its
+                                                                       snapshots since the claims' pin did not change is re-pinned from the claims' own pins, not
+                                                                       read, where that can pay — the same bytes; `--whole` reads every one (to measure the two)
   annotations derive <collection> [--dry-run]                          (2026-11-12, RULE 2) the method the collection's file records (`method`, §7.8) run now and
                                                                        `update` with its whole output — a claim whose end the target's snapshot does not hold yet
                                                                        set aside and named; the worker does this by itself once the collection annotated holds a

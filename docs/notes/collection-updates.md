@@ -119,6 +119,65 @@ Nothing else is touched.
 - A method with no delta form runs whole and says so; that is the
   exception.
 
+**As built (2026-11-17): the delta forms.** Code: `app/hold/annotations_delta.py`
+(the update), `annotation_methods.derive_from_delta` and `Method.delta` (the
+keeper's entry point), the gutenberg part cache in `app/gutenberg_editions.py`.
+Tests: `tests/hold/test_annotations_delta.py`, and two in
+`test_gutenberg_editions.py`.
+
+- **The pin is per claim.** Every claim carries `subject_hash`, `object_hash` and
+  `target_snapshot` (09 §9.5), and an update re-pins every claim. So every claim's
+  bytes move and every part is rewritten, whatever the delta. The claims file is
+  read and checked whole, as before.
+- **What the delta saves is the target.** An end record that the target's
+  snapshots since the claims' pin do not name keeps its content hash (a delta is by
+  content hash). That hash is taken from the claims' own pins. Every other end is
+  read as before: a record the chain names, an end no claim pins (a claim set aside
+  last time, a new claim, a community's members) and every chunk end. The table
+  handed to `check_pins` and the part writer is the whole run's, digest for digest,
+  so the bytes are the whole run's. The equality is tested for: a re-check, a new
+  file, a method's live-ahead output brought in a month later, a chain that skipped
+  a snapshot, graph claims on two targets, and on the pool.
+- **The pin is read off the claims, never taken on trust.** A caller's `from` that
+  differs is noted and not used. A snapshot missing between the pin and `to` makes
+  the target read whole, with the reason given.
+- **Taken only where it pays.** A frame of 1,000 records is decompressed whole for
+  one wanted record. A target is served from its delta only when the claimed records
+  its chain changed are expected in at most half its frames. The estimate uses the
+  deltas' lengths, before any uid is hashed.
+- **The three forms.**
+  - Hand-made claims (form 1) go through `update(since=…)`. This is the default of
+    `hold annotations update` (`--whole` reads everything), of the Library's
+    re-check and of every method's update.
+  - `wikipedia-versions` (form 2) has no delta form. Its claims come from the live
+    manifest's `tokens` and page_props' items, and a snapshot delta names neither.
+    Its update is re-pinned from the delta.
+  - `gutenberg-editions` (form 3) has no delta form either. Its Wikidata tier reads
+    the live wikipedia manifest, the dump's redirects and page_props, and the live
+    wikidata manifest. Its gutenberg read goes through a part cache keyed on the
+    part's root and the code's digest, so only re-issued parts are read. Its update
+    is re-pinned from the delta.
+
+**Measured** (synthetic, tmpfs, 3 processes in a 4-core sandbox, load 2–3 from
+other sessions; scratchpad harnesses `measure/delta.py` and `ge_perf.py`):
+
+| Fixture | Whole | From the delta |
+|---|---|---|
+| wikipedia's shape: 2 M records of ~1.2 KB in 1,000 parts; 480 k star claims about 32 % of them; 15 % of the records changed | 44.4 s. The target read is 4.5 s of it; the claims are the rest | Forced: 65.8 s against 65.9 s whole under load, the same bytes. By the estimate: read whole (100 % of frames), decision 0.3 s |
+| the same, claims pinned two snapshots back (two deltas, 375 k uids) | 46.0 s | Forced: 52.9 s, the same bytes |
+| big records: 16 k records of 50 KB; 3,840 claims; 5 records changed or withdrawn | 3.4 s (read 2.6 s) | 1.5 s (1 record read, 5,119 pinned), the same bytes |
+| gutenberg-editions: 4,000 books of ~100 KB in 8 parts; a 2 M-row manifest | method 10.8 s; update 3.5 s | method 7.5 s with no part changed, 8.3 s with one; update 0.2 s (204 pinned, 1 read). The same bytes |
+
+- **Modelled at the node's sizes.** `wikipedia-articles` (12.3 M claims, 52.9 M
+  records) stays a whole pass, about 25× the first row: ~19 min on 3 processes. A
+  monthly wikipedia delta is far above the ~0.15 % of records at which its frames
+  stop all being read.
+- `gutenberg-book-editions` gains most. Its update decompressed every frame holding
+  a claimed book (~32 GB at 79 k books of ~400 KB); now it decompresses only the
+  frames of the books that changed. Its method reads only the parts gutenberg
+  re-issued. The wikipedia manifest pass (~1 min) stays.
+- The node's own times are to be read off its first runs.
+
 **Bounded, idempotent, resumable.**
 - Each collection keeps `state/woken.json`: source, source snapshot, its
   state (`waiting` / `running` / `done` / `failed`), started, finished.

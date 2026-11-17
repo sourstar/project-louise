@@ -47,6 +47,7 @@ from __future__ import annotations
 
 import ast
 import json
+import os
 import re
 import urllib.parse
 from collections import Counter, defaultdict
@@ -281,20 +282,84 @@ def _held_of(plugin: str) -> list:
     return [c for c in served if c.plugin == plugin]
 
 
-def read_part(path: str, contributor: str | None) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+def read_part(path: str, contributor: str | None, memo: str | None = None,
+              keep: bool = False) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """One part of the target's snapshot (a pool task): every record as
     `book_of` reads it, and the stage matcher's claims when `contributor`
-    is given (tools/annotations_language_stage.py `scan_part`)."""
+    is given (tools/annotations_language_stage.py `scan_part`). With `memo`,
+    the part's file in the part cache (`BOOKS`): read from it where it is,
+    and — `keep` — written where it is not."""
+    got = _cached(memo) if memo else None
+    if got is None:
+        got = _read_part(path)
+        if memo and keep:
+            _store(memo, got)
+    books, stages = got
+    return books, ([dict(c, contributor=contributor) for c in stages] if contributor is not None else [])
+
+
+#: THE PART CACHE (2026-11-17, docs/notes/collection-updates.md §4: the
+#: cascade "from the delta, never a full re-scan"): what `read_part` gives of
+#: a part, kept in one file named by the part's ROOT (app/ask/part_cache.py) —
+#: the same bytes give the same books, so a part gutenberg did not re-issue is
+#: never read again — and by `books_version`, the digest of the code that
+#: reads them: any change to this module or to the stage matcher is another
+#: name, so a file is never stale (invariant 3). On the fast drive when one is
+#: named (invariant 6). The stage claims are kept with the contributor
+#: `_ANY` and given the run's own when read: the matcher's only use of it.
+BOOKS_KIND = "gutenberg-editions-books"
+_ANY = ""
+
+
+def books_version() -> int:
+    """The digest of this module's and the stage matcher's source, as the
+    part cache's version."""
+    import hashlib
+
+    from . import historical
+    h = hashlib.blake2b(digest_size=7)
+    for p in (Path(__file__), Path(historical.__file__)):
+        h.update(p.read_bytes())
+    return int.from_bytes(h.digest(), "big")
+
+
+def cache_store(tree: Path) -> Path:
+    """The part cache's directory for gutenberg's SHARD tree `tree`."""
+    from .ask.part_cache import PartCache
+    return PartCache(BOOKS_KIND, books_version()).store(tree)
+
+
+def _read_part(path: str) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     from . import historical
     from .pack import records as pack_records
     books, stages = [], []
     for r in pack_records.iter_records(Path(path)):
         books.append(book_of(r))
-        if contributor is not None:
-            c = historical.stage_claim(r, contributor)
-            if c is not None:
-                stages.append(c)
+        c = historical.stage_claim(r, _ANY)
+        if c is not None:
+            stages.append(c)
     return books, stages
+
+
+def _cached(memo: str) -> tuple[list[dict[str, Any]], list[dict[str, Any]]] | None:
+    try:
+        got = json.loads(Path(memo).read_bytes())
+        return list(got["books"]), list(got["stages"])
+    except (OSError, ValueError, KeyError, TypeError):
+        return None                         # absent or unreadable: the part is read
+
+
+def _store(memo: str, got: tuple[list[dict[str, Any]], list[dict[str, Any]]]) -> None:
+    """Written whole or not at all (a sibling renamed): derived, so a file
+    that cannot be written is read again next time."""
+    p = Path(memo)
+    try:
+        p.parent.mkdir(parents=True, exist_ok=True)
+        tmp = p.with_name(f".{p.name}.{os.getpid()}.tmp")
+        tmp.write_bytes(json.dumps({"books": got[0], "stages": got[1]}, ensure_ascii=False).encode("utf-8"))
+        os.replace(tmp, p)
+    except OSError:
+        pass
 
 
 def items_held(manifest: Path, items: Iterable[str]) -> set[str]:
@@ -393,9 +458,12 @@ def _same(a: dict[str, Any], b: dict[str, Any]) -> bool:
     return cx.canonical_json(ann._nfc(a)) == cx.canonical_json(ann._nfc(b))
 
 
-def derive(root: Path, name: str, target: str, *, log=print) -> Derivation:
+def derive(root: Path, name: str, target: str, *, log=print, keep: bool = True) -> Derivation:
     """The whole claim set, tier by tier, from the current snapshot of `name`
-    and the target `target`'s, the node's wikipedia and wikidata."""
+    and the target `target`'s, the node's wikipedia and wikidata. The
+    target's parts are read through the part cache (`BOOKS_KIND`): only a
+    part whose root has no file yet is read — and, `keep`, its file written
+    and the files of parts the snapshot no longer lists removed."""
     from app.share import seeder
 
     from . import gutenberg_titles, parallel
@@ -416,20 +484,27 @@ def derive(root: Path, name: str, target: str, *, log=print) -> Derivation:
     snap = seeder.current_snapshot(tree)
     if snap is None or not snap.shards:
         raise ann.AnnotationsError(f"the target {target} holds no snapshot to derive the claims from")
-    paths = []
+    from .ask.part_cache import PartCache
+    cache = PartCache(BOOKS_KIND, books_version())
+    store = cache.store(tree)
+    paths, memos = [], []
     for s in snap.shards:
         p = ann._part_file(tree, s, None, snap.snapshot_id)
         if p is None:
             raise ann.AnnotationsError(f"{target}: this peer holds no file with the root snapshot "
                                        f"{snap.snapshot_id} lists for {s.path}")
         paths.append(str(p))
+        memos.append(str(cache.file(store, s)))
+    held_memos = sum(1 for m in memos if Path(m).is_file())
     books: list[dict[str, Any]] = []
     stages: list[dict[str, Any]] = []
-    for b, st in parallel.each_part(read_part, [(p, contributor) for p in paths]):
+    for b, st in parallel.each_part(read_part, [(p, contributor, m, keep) for p, m in zip(paths, memos)]):
         books.extend(b)
         stages.extend(st)
-    log(f"[annotations] {NAME}: {len(books):,} records of {target} {snap.snapshot_id} read "
-        f"({len(paths)} part(s))")
+    log(f"[annotations] {NAME}: {len(books):,} records of {target} {snap.snapshot_id} ({len(paths)} part(s): "
+        f"{len(paths) - held_memos} read, {held_memos} unchanged, from the part cache)")
+    if keep:
+        _prune(store, set(memos))
 
     # the wikidata tier
     res, inputs = resolutions(root, books, log=log)
@@ -515,6 +590,20 @@ def derive(root: Path, name: str, target: str, *, log=print) -> Derivation:
                       dict(shadowed))
 
 
+def _prune(store: Path, current: set[str]) -> None:
+    """The part cache's files of parts (or code) the current snapshot no
+    longer lists: removed, so the cache holds one file a part."""
+    try:
+        old = [p for p in Path(store).glob("v*.json") if str(p) not in current]
+    except OSError:
+        return
+    for p in old:
+        try:
+            p.unlink()
+        except OSError:
+            pass
+
+
 def _brief(c: dict[str, Any]) -> dict[str, Any]:
     """A claim as a dry run lists it."""
     return {k: c[k] for k in ("type", "subject", "object", "method", "evidence") if k in c}
@@ -590,5 +679,6 @@ def produce(root: Path, name: str, target: str, out: Path, *, log=print) -> dict
 
 
 def preview(root: Path, name: str, target: str, *, log=print) -> dict[str, Any]:
-    """The dry run: what a derivation would change, per tier. Writes nothing."""
-    return report(derive(root, name, target, log=log))
+    """The dry run: what a derivation would change, per tier. Writes nothing
+    (the part cache is read, not written)."""
+    return report(derive(root, name, target, log=log, keep=False))

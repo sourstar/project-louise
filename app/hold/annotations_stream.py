@@ -1069,11 +1069,15 @@ class ClaimParts:
 # --------------------------------------------------------------------------
 # an update: the claims the previous snapshot holds
 
-def held_part(tree: str, shard, snapshot_id: str) -> dict[str, Any]:
+def held_part(tree: str, shard, snapshot_id: str, pins: bool = False) -> dict[str, Any]:
     """A task: the claims part `shard` of snapshot `snapshot_id` holds —
     each record's identity digest, number and content hash (`odd`, by
     number, where it is not 32 lowercase hex) — or the refusal
-    `_held_claims` gives where this peer holds no file with its root."""
+    `_held_claims` gives where this peer holds no file with its root.
+    With `pins`, also what each claim PINS (app/hold/annotations_delta.py):
+    by plugin, the digest of every end record it pins a content hash of
+    with that hash, and the `target_snapshot`s its claims are pinned to,
+    by the plugin of their first end (`_pin_one`'s `_snapshot_for`)."""
     from app.pack import records as pack_records
     from .annotations import _part_file, claim_of
     p = _part_file(Path(tree), shard, None, snapshot_id)
@@ -1081,8 +1085,10 @@ def held_part(tree: str, shard, snapshot_id: str) -> dict[str, Any]:
         return {"error": f"{shard.path}: this peer holds no file with the root snapshot "
                          f"{snapshot_id} lists ({shard.root[:23]}…)"}
     idents, numbers, hashes, odd = bytearray(), array("q"), bytearray(), {}
+    pinned = _PinsBuf() if pins else None
     for r in pack_records.iter_records(p):
-        idents += identity_digest(claim_of(r))
+        c = claim_of(r)
+        idents += identity_digest(c)
         n = int(r["native_id"])
         numbers.append(n)
         h = r["content_hash"]
@@ -1091,8 +1097,53 @@ def held_part(tree: str, shard, snapshot_id: str) -> dict[str, Any]:
         else:
             hashes += bytes(16)
             odd[n] = h
-    return {"idents": bytes(idents), "numbers": numbers.tobytes(), "hashes": bytes(hashes), "odd": odd,
-            "error": None}
+        if pinned is not None:
+            pinned.add(c)
+    out = {"idents": bytes(idents), "numbers": numbers.tobytes(), "hashes": bytes(hashes), "odd": odd,
+           "error": None}
+    if pinned is not None:
+        out["pins"] = pinned.task()
+    return out
+
+
+class _PinsBuf:
+    """What a held claim pins (`held_part(pins=True)`): per plugin, each
+    pinned end's uid digest and the content hash the claim states for it —
+    `subject_hash` for the first end, `object_hash` for the second, as
+    `_pin_one` sets them (none for a community, one for a language stage) —
+    and the `target_snapshot`s, by the plugin of the claim's first end."""
+
+    def __init__(self) -> None:
+        self.digests: dict[str, bytearray] = {}
+        self.hashes: dict[str, bytearray] = {}
+        self.odd: dict[str, list[tuple[bytes, Any]]] = {}
+        self.snapshots: dict[str, set] = {}
+
+    def add(self, c: dict[str, Any]) -> None:
+        from .annotations import COMMUNITY, LANGUAGE_STAGE, _prefix, end_uid, ends_of
+        ends = ends_of(c)
+        if not ends:
+            return
+        self.snapshots.setdefault(_prefix(end_uid(*ends[0])), set()).add(c.get("target_snapshot"))
+        t = c.get("type")
+        k = 0 if t == COMMUNITY else 1 if t == LANGUAGE_STAGE else 2
+        for (kind, value), key in zip(ends[:k], ("subject_hash", "object_hash")):
+            h = c.get(key)
+            if h is None:
+                continue                    # not pinned: read
+            uid = end_uid(kind, value)
+            p = _prefix(uid)
+            d = uid_digest(uid)
+            if isinstance(h, str) and _HEX32.fullmatch(h):
+                self.digests.setdefault(p, bytearray()).extend(d)
+                self.hashes.setdefault(p, bytearray()).extend(bytes.fromhex(h))
+            else:
+                self.odd.setdefault(p, []).append((d, h))
+
+    def task(self) -> dict[str, Any]:
+        return {"digests": {p: bytes(b) for p, b in self.digests.items()},
+                "hashes": {p: bytes(b) for p, b in self.hashes.items()},
+                "odd": self.odd, "snapshots": self.snapshots}
 
 
 @dataclass
@@ -1107,6 +1158,9 @@ class HeldClaims:
     hashes: np.ndarray
     odd: dict[int, Any]
     error: str | None
+    #: with `held_claims(pins=True)`: what the claims pin, gathered from every
+    #: part (`_PinsBuf.task` merged), for app/hold/annotations_delta.py
+    pins: dict[str, Any] | None = None
 
     @property
     def top(self) -> int:
@@ -1117,13 +1171,16 @@ class HeldClaims:
         return self.odd[n] if n in self.odd else self.hashes[i].tobytes().hex()
 
 
-def held_claims(shard_tree: Path, snap) -> HeldClaims:
+def held_claims(shard_tree: Path, snap, *, pins: bool = False) -> HeldClaims:
     """The claims `snap` lists, read a part a task on the pool (`held_part`):
     identity digest -> (number, content hash), a later record of the same
-    identity over an earlier, as `_held_claims`'s dict keeps it."""
+    identity over an earlier, as `_held_claims`'s dict keeps it. With
+    `pins`, what they pin too (`HeldClaims.pins`)."""
     from app import parallel
-    tasks = [(str(shard_tree), s, snap.snapshot_id) for s in snap.shards]
+    tasks = [(str(shard_tree), s, snap.snapshot_id, pins) for s in snap.shards]
     idents, numbers, hashes, odd, error = bytearray(), array("q"), bytearray(), {}, None
+    pinned: dict[str, Any] | None = ({"digests": {}, "hashes": {}, "odd": {}, "snapshots": {}}
+                                     if pins else None)
     for got in parallel.each_part(held_part, tasks):
         if error is not None:
             continue
@@ -1134,6 +1191,14 @@ def held_claims(shard_tree: Path, snap) -> HeldClaims:
         numbers.frombytes(got["numbers"])
         hashes += got["hashes"]
         odd.update(got["odd"])
+        if pinned is not None:
+            for k in ("digests", "hashes"):
+                for p, b in got["pins"][k].items():
+                    pinned[k].setdefault(p, bytearray()).extend(b)
+            for p, items in got["pins"]["odd"].items():
+                pinned["odd"].setdefault(p, []).extend(items)
+            for p, ss in got["pins"]["snapshots"].items():
+                pinned["snapshots"].setdefault(p, set()).update(ss)
     ids = np.frombuffer(bytes(idents), dtype="S16")
     ns = np.frombuffer(numbers, dtype=np.int64)
     hs = np.frombuffer(bytes(hashes), dtype=np.uint8).reshape(-1, 16)
@@ -1145,4 +1210,4 @@ def held_claims(shard_tree: Path, snap) -> HeldClaims:
     if odd:
         odd_n = np.fromiter(odd, dtype=np.int64, count=len(odd))
         odd = {int(n): odd[int(n)] for n in odd_n[np.isin(odd_n, kept_numbers)]}
-    return HeldClaims(ids[keep], kept_numbers, hs[keep], odd, error)
+    return HeldClaims(ids[keep], kept_numbers, hs[keep], odd, error, pinned)

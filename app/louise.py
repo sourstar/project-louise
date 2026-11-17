@@ -339,8 +339,12 @@ def cmd_annotations_update(a) -> int:
         except Exception:   # noqa: BLE001 — no key: the snapshot is held unsigned (09 §9.4)
             print("no node key: the snapshot is written unsigned, and `signature` stays "
                   "inconclusive until a key signs it", file=sys.stderr)
+    # from the delta unless asked otherwise: the records the targets' snapshots
+    # since the claims' pin did not change are re-pinned from the claims' own
+    # pins, the same bytes (app/hold/annotations_delta.py)
     got = ann.update(a.root, a.collection, claims=claims, against=against, snapshot_id=a.snapshot,
-                     key=key, now=_utc_now(), dry_run=a.dry_run, log=lambda m: print(m, file=sys.stderr))
+                     key=key, now=_utc_now(), dry_run=a.dry_run, log=lambda m: print(m, file=sys.stderr),
+                     since=None if getattr(a, "whole", False) else {})
     _print(got.to_dict())
     return 0
 
@@ -7504,6 +7508,10 @@ def build_parser() -> argparse.ArgumentParser:
                    help="this snapshot's id (default: the period after the previous one, written during it)")
     p.add_argument("--dry-run", action="store_true",
                    help="check and count what would change; write nothing")
+    p.add_argument("--whole", action="store_true",
+                   help="read every claimed record from the targets, even those their snapshots since the "
+                        "claims' pin did not change (the default re-pins those from the claims' own pins: "
+                        "the same bytes); for measuring the two")
     p.set_defaults(fn=cmd_annotations_update)
     p = averbs.add_parser("derive", help="run the method the collection's file records (method = ...) and "
                                          "update with its whole output — what the worker does by itself "

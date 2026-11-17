@@ -587,8 +587,10 @@ def _update_annotations(args: dict[str, Any]) -> dict[str, Any]:
         key = node_keys.load_signing_key()
     except Exception:   # noqa: BLE001 — no key: the snapshot is written unsigned (09 §9.4)
         key = None
+    # from the delta: the records unchanged since the claims' pin are re-pinned
+    # from their own pins, the same bytes (app/hold/annotations_delta.py)
     got = ann.update(louise._default_root(), args["name"], claims=claims, key=key, now=louise._utc_now(),
-                     log=_job_line)
+                     log=_job_line, since={})
     if claims_path is not None:
         try:
             claims_path.unlink()
