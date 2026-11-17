@@ -104,7 +104,10 @@ def main(args: list[str] | None = None) -> int:
     print(f"tree peak {got['tree_peak_bytes'] / 2**20:,.0f} MiB at {got['tree_peak_at_s']} s; largest process "
           f"{(got['processes'][0]['hwm'] if got['processes'] else 0) / 2**20:,.0f} MiB; "
           f"{len(got['processes'])} process(es); exit {got['exit']} in {got['seconds']} s", file=sys.stderr)
-    return int(got["exit"] or 0)
+    # the command's own exit, and a signal as a shell says it (128 + n): an OOM
+    # kill reads 137, which deploy/supervise-pass.sh answers by halving the pool
+    code = int(got["exit"] or 0)
+    return 128 - code if code < 0 else code
 
 
 if __name__ == "__main__":

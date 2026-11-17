@@ -26,3 +26,10 @@ def test_the_tree_and_its_largest_process_are_read(tmp_path, capsys):
 
 def test_a_failing_command_gives_its_exit(tmp_path):
     assert check_rss.main(["--", sys.executable, "-c", "raise SystemExit(3)"]) == 3
+
+
+def test_a_killed_command_exits_as_a_shell_says_it():
+    """SIGKILL (the memcg's OOM kill) is 137, which deploy/supervise-pass.sh
+    answers by halving the pool and running the pass again."""
+    assert check_rss.main(["--", sys.executable, "-c", "import os, signal; os.kill(os.getpid(), signal.SIGKILL)"]) \
+        == 137

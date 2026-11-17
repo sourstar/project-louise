@@ -98,13 +98,16 @@ carried parts (75,896,183 records) and snapshot 2026-10 (`93cef74e…`, no `orig
    FAILS is an answer, not a crash. The pass runs under `tools/measure/check_rss.py`, so the peak it
    reaches is measured, not assumed.
    ```bash
-   systemd-run --unit louise-wikidata-check -p KillMode=mixed -p TimeoutStopSec=330 --setenv=VERDICTS=1 \
-     /root/louise-rag/deploy/supervise-pass.sh wikidata-check --memory 12g -e PARSE_PROCESSES=8 \
+   systemd-run --unit louise-wikidata-check -p KillMode=mixed -p TimeoutStopSec=330 \
+     --setenv=VERDICTS=1 --setenv=PARSE_PROCESSES=8 \
+     /root/louise-rag/deploy/supervise-pass.sh wikidata-check --memory 12g \
      --volumes-from W --network container:W --env-file <the worker's env> -w /srv <image> \
      python -m tools.measure.check_rss --out /data/tmp/wikidata-next-check-rss.json -- \
      python -m app.louise hold check wikidata.next \
        --checks roots,records,chunks,records-vs-origin,vectors-sample --origin <wikidata's corpus>
    ```
+   - `PARSE_PROCESSES` is given to the supervisor, not to `docker run`, so that an OOM kill (exit 137,
+     which check_rss passes on) halves the pool for the next run.
    - The cap is modelled from the measurements below: ~6 GB at 8 processes, with the entity table's
      build. Write the measured peak (`tree_peak_bytes` in the JSON) here.
    - The first lookup builds run 20261012's entity table: ~30 s, ~1.9 GB in one process (modelled from
