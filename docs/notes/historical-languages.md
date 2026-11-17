@@ -173,6 +173,17 @@ verification; robots.txt disallows /TLIO/ (the query system) only, which
 is not used. Non-commercial; not shared with peers, not published, not
 in this repository until the licence is recorded.
 
+**Complete on the node, 2026-11-17** (München, on the operator's word: 32
+parallel requests, 0 errors, no throttling): 50,115 of the lists' 50,137
+ids held — 43,902 entries and 6,213 cross-references; the other 22 answer
+404. Raw pages gzipped, byte-exact, in
+`/mnt/ssd3/louise-ocr/lexicon/tlio/raw/{lists,voci}/` with infolemm,
+TERMS.txt, TERMS.sha256 and SOURCES; louise-ocr's
+`/mnt/ssd3/louise-ocr/lexicon/it-old/tlio-forms.tsv`, 257,823 rows (form,
+count, century, source, lemma). Same terms: non-commercial, local, not
+shared or published until the licence is recorded. (The lists link
+cross-reference pages too, which the cloud fetch's 43,911 did not count.)
+
 **Stopped, 2026-11-17, on the operator's word ("Stop yours"):** the node's own fetch (München's `tlio-fetch.service`, `/mnt/ssd3/louise-ocr/lexicon/tlio/`) is the one. The cloud fetch held 4,300 pages; none left the container. Its earlier status follows.
 
 **Status, 2026-11-17 10:58 UTC:** 3,211 of 43,911 entries; 0.48 s an
