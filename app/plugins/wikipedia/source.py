@@ -54,6 +54,7 @@ from app.backend import OriginForm, Template
 from ..base import (CanonicalDoc, DiscoverState, DocRef, Erasure, LicenseClass,
                     Modality, Mutability, PROTOCOL_VERSION, PrivacyClass, RawDoc)
 from . import archive, page_props, wikitext
+from . import completion as completion_mod
 from .ids import DUMP_BASE, LANG_ORDINAL, decode_native_id, native_id_of  # noqa: F401
 
 _LOCATOR_SEP = "::"
@@ -368,6 +369,12 @@ class WikipediaSource:
     #: could not find, so records-vs-origin reparsed no wikipedia record.
     LOCATOR_SEP = _LOCATOR_SEP
     LOCATOR_MEMBER_FIELDS = 2
+    #: THE UPDATE BY CADENCE (app/hold/update.py; docs/notes/collection-updates.md
+    #: §1): the origin's own record that the run a cutoff names is complete —
+    #: Wikimedia's dumpstatus.json of each held wiki, `articlesmultistreamdump`
+    #: and `pagepropstable` at "done" (completion.py). A plugin that declares
+    #: none is not updated by the pass, and the pass says so
+    update_completion = completion_mod.DumpStatus()
     #: an archive article that straddles two shards is two pieces, each in
     #: its own file: `origin` locates both, joined the same way
     LOCATOR_SEGMENT_SEP = archive.SEG_SEP
