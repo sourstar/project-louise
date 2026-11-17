@@ -122,10 +122,10 @@ carried parts (75,896,183 records) and snapshot 2026-10 (`93cef74e…`, no `orig
    ```
    - `PARSE_PROCESSES` is given to the supervisor, not to `docker run`, so that an OOM kill (exit 137,
      which check_rss passes on) halves the pool for the next run.
-   - The cap is modelled from the measurements below: ~6 GB at 8 processes, with the entity table's
+   - The cap is modelled from the measurements below: ~5 GB at 8 processes, with the entity table's
      build. Write the measured peak (`tree_peak_bytes` in the JSON) here.
-   - The first lookup builds run 20261012's entity table: ~30 s, ~1.9 GB in one process (modelled from
-     the measured 14.2 bytes an entity), and ~0.7–0.9 GB on disk in the pack's directory.
+   - The first lookup builds run 20261012's entity table: ~26 s, ~0.8 GB in one process (modelled:
+     4 bytes per item number to Q141 M), and ~0.7–0.9 GB on disk in the pack's directory.
    - Expect roots, records, chunks and vectors-sample to PASS.
    - Expect records-vs-origin to be INCONCLUSIVE "kept copy", with `copy_reproduced` = compared and 0
      failed. The corpus is the copy this node keeps, so the parser and the run's copy agree; a PASS
@@ -162,14 +162,18 @@ one part of 20,000 records (the node's ~18,900). "Before" is origin/main's `_chu
 
 **The entity table's build**, a fresh process, 3 threads, a synthetic pack of dense ids:
 
-| entities | packed (now): peak, time | generic (before): peak, time |
-|---|---|---|
-| 4 M | 274 MiB, 1.1 s | 395 MiB, 1.4 s |
-| 8 M | 331 MiB, 1.9 s | 617 MiB, 2.9 s |
-| 16 M | 444 MiB, 4.0 s | 1,049 MiB, 5.1 s |
+| entities | direct-address (now): peak, time | packed sort (5cd1ada): peak, time | generic (before): peak, time |
+|---|---|---|---|
+| 4 M | 227 MiB, 1.1 s | 274 MiB, 1.1 s | 395 MiB, 1.4 s |
+| 8 M | 241 MiB, 1.9 s | 331 MiB, 1.9 s | 617 MiB, 2.9 s |
+| 16 M | 287 MiB, 3.5 s | 444 MiB, 4.0 s | 1,049 MiB, 5.1 s |
 
-The marginal cost is 14.2 bytes an entity packed and 54 bytes generic. So at 118 M entities (modelled):
-~1.9 GB and ~30 s packed, against ~6.6 GB generic.
+The direct-address table is a counting sort: an item's number indexes a uint32 array of ordinals, and the
+properties have a small array of their own. Its marginal cost is 4 bytes per item number, against 14.2
+bytes an entity packed and 54 generic. At 118 M entities, whose largest item is Q141 M, that is ~0.8 GB
+and ~26 s (modelled), against ~1.9 GB packed and ~6.6 GB generic. The table's bytes are the same
+whichever builds it (tests/test_wikidata_entity_table.py). A sort of each chunk to find an entity twice
+in it was half the time at first; a read-back after writing replaces it.
 
 **What scales, and what scaled wrongly.**
 
@@ -179,18 +183,17 @@ The marginal cost is 14.2 bytes an entity packed and 54 bytes generic. So at 118
   each of the pool's processes at once, which is the likely 2.4 GB process the memcg killed. Now it is
   none: one record at a time, and the draw is the same (09 §9.1, `cx.sample_by`).
 - What scales with the run is the entity table's build, in the one process that makes the first lookup.
-  It is proportional and bounded: ~1.9 GB at 118 M.
+  It is proportional and bounded: ~0.8 GB at 118 M (the direct-address table).
 - What scales with the pool, by design, is ~190 MiB of imports per process, and in records-vs-origin
   another ~200 MiB of read caches per process. Those caches are bounded by `READ_CACHE_BYTES` (256 MiB),
   so on the real pack a child may reach ~450 MiB.
-- So the whole check at 8 processes is ~0.43 + 8 × 0.45 + 1.9 ≈ 6 GB (modelled). That is why step 5
+- So the whole check at 8 processes is ~0.43 + 8 × 0.45 + 0.8 ≈ 5 GB (modelled). That is why step 5
   caps it at 12 GiB in its own container, and why it is never run in the worker's 24 GiB beside an
   embedding.
 
-The standard alternative, not adopted: a direct-address table (an item's number indexes a uint32 array of
-ordinals, ~4 bytes for every number up to the largest item, ~0.57 GB at Q141 M; a counting sort). It would
-bound the build at a quarter of the packed sort's peak with no sort. It pays if the build must share a
-process with a pool, or the run grows several-fold. Written down in entities.py beside the packed sort.
+The alternatives, written down in entities.py:
+- the packed sort, which pays over the direct table where the ids are sparse;
+- an external merge sort, which bounds the memory whatever N and would pay at billions of entities.
 
 ## What changes, and what is carried
 

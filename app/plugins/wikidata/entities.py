@@ -91,35 +91,43 @@ def columns_of(path: str):
             np.asarray(t.column("index").to_numpy(), dtype=np.int64))
 
 
-#: THE PACKED SORT (2026-11-17, measured): an entity as ONE int64, its native
-#: id in the high half and its ordinal in the low, sorted in place. The
-#: generic `KeyTable.tables` kept every chunk's two arrays beside their
-#: concatenation, then the sort's order and both sorted copies: ~60 bytes an
-#: entity at the peak (a fresh process's VmHWM at 4 / 8 / 16 M entities:
-#: 451 / 701 / 1,174 MB), ~7.2 GB for 118 M, held by whichever process made
-#: the first lookup — a pool child of `hold check`, beside the worker's own
-#: memory when run by `docker exec` (München, 2026-11-17: the memcg OOM).
-#: Packed: 260 / 308 / 492 MB, ~23 bytes an entity, ~2.8 GB for 118 M, and
-#: 4.2 s against 6.4 s at 16 M. The table is the same bytes
-#: (tests/test_wikidata_entity_table.py). Keys are unique, so sorting the
-#: packed values sorts by key. The standard, not adopted: an external merge
+#: THE DIRECT-ADDRESS TABLE (2026-11-17, the operator's performance rule: a
+#: known speed-up is built, not written down). A COUNTING SORT: an item's
+#: number indexes a uint32 array of ordinals, so the table is written by
+#: walking the array in order — no sort, and 4 bytes for every number up to
+#: the largest item (Q141 M: ~0.57 GB) where the packed sort held ~14 bytes an
+#: entity (~1.9 GB at 118 M). Properties (P1 … P13 k, ids.py's PROPERTY_BASE +
+#: n) are a small array of their own, so the large one spans items only. An
+#: entity listed twice is found as it is placed (its slot already holds an
+#: ordinal, or its chunk lists it twice). The table is the same bytes as the
+#: generic sort's (tests/test_wikidata_entity_table.py), which still takes
+#: a value the arrays cannot hold (a number past `_ITEM_LIMIT`, an ordinal
+#: past `_NONE`). MEASURED (2026-11-17, a fresh process's VmHWM, 3 threads, a
+#: synthetic pack of dense ids, its meta naming the largest item as a
+#: version-3 pack's does): 227 / 241 / 287 MiB in 1.1 / 1.9 / 3.5 s at 4 / 8 /
+#: 16 M entities, against the packed sort's 274 / 331 / 444 MiB in 1.1 / 1.9 /
+#: 4.0 s — ~0.8 GB modelled at 118 M (Q141 M), against ~1.9 GB. A sort of each
+#: chunk to find an entity twice in it (`np.unique`) was half the time; the
+#: read-back below costs a gather (docs/notes/wikidata-entity-origin.md, "The
+#: check's memory").
+#:
+#: THE ALTERNATIVES, WRITTEN DOWN. The PACKED SORT (until today): an entity
+#: as one int64 — its id in the high half, its ordinal in the low — sorted in
+#: place, ~14 bytes an entity at the peak (274 / 331 / 444 MiB at 4 / 8 / 16
+#: M; 1.1 / 1.9 / 4.0 s); it pays over this table where the ids are sparse
+#: (fewer entities than a quarter of the largest number). The generic
+#: `KeyTable.tables` (before it): ~54 bytes an entity. An external merge
 #: sort of sorted runs bounds the memory whatever N, and would pay at a few
-#: billion entities; at 118 M one array fits. Nor a DIRECT-ADDRESS table (a
-#: counting sort: an item's number indexes a uint32 array of ordinals, 4 bytes
-#: for every number to the largest item, ~0.57 GB at Q141 M, no sort), which
-#: would bound the build at a quarter of this one's — worth it when the build
-#: must share a process with a pool. Re-measured 2026-11-17 (a fresh
-#: process, 3 threads, 4 / 8 / 16 M entities): packed 274 / 331 / 444 MiB in
-#: 1.1 / 1.9 / 4.0 s, generic 395 / 617 / 1,049 MiB in 1.4 / 2.9 / 5.1 s — a
-#: marginal 14.2 against 54 bytes an entity, ~1.9 against ~6.6 GB at 118 M
-#: (docs/notes/wikidata-entity-origin.md, "The check's memory").
-_SHIFT = 32
-_LOW = (1 << _SHIFT) - 1
-#: a native id below this fits the high half (an item's number, a property's
-#: PROPERTY_BASE + n, ids.py): 2^31 keeps the packed value positive
-_KEY_LIMIT = 1 << 31
-#: the duplicate check's window: two shifted copies of this many values
-_BLOCK = 1 << 22
+#: billion entities.
+_NONE = 0xFFFF_FFFF
+#: an item's number below this is a slot of the large array; a property's
+#: id is PROPERTY_BASE + n, its n a slot of the small one
+_ITEM_LIMIT = 1 << 31
+#: chunk files read at once, per thread (each read is Arrow's, on threads):
+#: what is held of the chunks beside the arrays
+_WINDOW = 2
+#: slots walked at a time when the table is written (well under 1 MB of transients)
+_WALK = 1 << 16
 #: how long a lookup waits for another process building the table or the
 #: pack (`derived.writing` refuses at once): every pool child of a check
 #: reaches its first lookup together, and one builds while the rest wait
@@ -127,33 +135,94 @@ _BLOCK = 1 << 22
 TABLE_WAIT_S = 600.0
 
 
-def packed_of(path: str):
-    """One chunk file's entities packed (`_SHIFT`), or None where a value
-    does not fit — the generic sort takes the table then. A pool task."""
-    import numpy as np
-    nid, idx = columns_of(path)
-    if len(nid) and (int(nid.min()) < 0 or int(nid.max()) >= _KEY_LIMIT
-                     or int(idx.min()) < 0 or int(idx.max()) > _LOW):
-        return None
-    return (nid << np.int64(_SHIFT)) | idx
+class _Unfit(Exception):
+    """A value the direct-address arrays cannot hold."""
 
 
-def _packed_tables(packed, *, where: str, row_group: int):
-    """`KeyTable.tables`' tables from the packed values, sorted in place."""
+class _Slots:
+    """A growable uint32 array of ordinals, `_NONE` where no entity is."""
+
+    def __init__(self, size: int = 0):
+        import numpy as np
+        self.a = np.full(max(0, int(size)), _NONE, dtype=np.uint32)
+
+    def put(self, slots, ordinals, *, base: int, where: str) -> None:
+        import numpy as np
+        if not len(slots):
+            return
+        top = int(slots.max())
+        if top >= len(self.a):
+            grown = np.full(max(top + 1, len(self.a) + len(self.a) // 2), _NONE, dtype=np.uint32)
+            grown[:len(self.a)] = self.a
+            self.a = grown
+        held = self.a[slots] != _NONE
+        if held.any():
+            raise KeyTableError(f"{where}: key {base + int(slots[np.flatnonzero(held)[0]])} is listed twice; "
+                                f"a key names one unit")
+        o = ordinals.astype(np.uint32)
+        self.a[slots] = o
+        # TWICE IN ONE CHUNK: a chunk's ordinals are distinct lines, so a slot
+        # written twice reads back another's ordinal (one gather; a sort of
+        # each chunk, `np.unique`, was half the build's time)
+        if (self.a[slots] != o).any():
+            srt = np.sort(slots)
+            k = int(srt[np.flatnonzero(srt[1:] == srt[:-1])[0]])
+            raise KeyTableError(f"{where}: key {base + k} is listed twice; a key names one unit")
+
+    def walk(self, base: int):
+        """(keys, ordinals) in key order, `_WALK` slots at a time."""
+        import numpy as np
+        for i in range(0, len(self.a), _WALK):
+            block = self.a[i:i + _WALK]
+            nz = np.flatnonzero(block != _NONE)
+            if len(nz):
+                yield nz.astype(np.int64) + np.int64(base + i), block[nz].astype(np.int64)
+
+
+def _direct_tables(chunks, *, where: str, row_group: int, items_hint: int = 0):
+    """`KeyTable.tables`' tables, the same rows in the same row groups, from
+    each chunk's (native ids, ordinals) placed in the arrays. Raises
+    `_Unfit` (before a table is yielded) where a value does not fit."""
     import numpy as np
     import pyarrow as pa
-    c = np.concatenate(packed) if packed else np.zeros(0, np.int64)
-    packed.clear()
-    c.sort()
-    for i in range(0, max(len(c) - 1, 0), _BLOCK):
-        hi = c[i:i + _BLOCK + 1] >> np.int64(_SHIFT)
-        twice = np.flatnonzero(hi[1:] == hi[:-1])
-        if len(twice):
-            raise KeyTableError(f"{where}: key {int(hi[twice[0]])} is listed twice; a key names one unit")
+
+    from .ids import PROPERTY_BASE
+    items, props = _Slots(items_hint), _Slots()
+    for nid, idx in chunks:
+        if not len(nid):
+            continue
+        if int(nid.min()) < 0 or int(idx.min()) < 0 or int(idx.max()) >= _NONE:
+            raise _Unfit()
+        is_item = nid < PROPERTY_BASE
+        if int(nid[is_item].max(initial=0)) >= _ITEM_LIMIT or                 int((nid[~is_item] - PROPERTY_BASE).max(initial=0)) >= _ITEM_LIMIT:
+            raise _Unfit()
+        items.put(nid[is_item], idx[is_item], base=0, where=where)
+        props.put(nid[~is_item] - PROPERTY_BASE, idx[~is_item], base=PROPERTY_BASE, where=where)
     schema = TABLE.schema()
-    for i in range(0, max(len(c), 1), row_group):
-        g = c[i:i + row_group]
-        yield pa.table({"key": g >> np.int64(_SHIFT), "index": g & np.int64(_LOW)}, schema=schema)
+
+    def rows():
+        yield from items.walk(0)
+        yield from props.walk(PROPERTY_BASE)
+
+    def tables():
+        # each row group filled in its own two buffers, exactly `row_group`
+        # rows but the last, as `KeyTable.tables` cuts them
+        kb, vb = np.empty(row_group, np.int64), np.empty(row_group, np.int64)
+        fill, emitted = 0, False
+        for k, v in rows():
+            at = 0
+            while at < len(k):
+                take = min(row_group - fill, len(k) - at)
+                kb[fill:fill + take] = k[at:at + take]
+                vb[fill:fill + take] = v[at:at + take]
+                fill, at = fill + take, at + take
+                if fill == row_group:
+                    yield pa.table({"key": kb, "index": vb}, schema=schema)
+                    emitted = True
+                    kb, vb, fill = np.empty(row_group, np.int64), np.empty(row_group, np.int64), 0
+        if fill or not emitted:
+            yield pa.table({"key": kb[:fill], "index": vb[:fill]}, schema=schema)
+    return tables()
 
 
 def build(dump: Path, *, workers: int | None = None, mode: str = "threads") -> Path:
@@ -174,23 +243,38 @@ def build(dump: Path, *, workers: int | None = None, mode: str = "threads") -> P
             return path_of(dump)
         files = [str(p) for p in pack.chunk_files(dump)]
 
-        def read(fn):
+        def read():
+            """Each chunk file's (native ids, ordinals), in order, a window of
+            files at a time — never every chunk held at once."""
             if mode == "processes":
-                return list(parallel.each_part(fn, [(f,) for f in files], limit=workers))
+                yield from parallel.each_part(columns_of, [(f,) for f in files], limit=workers)
+                return
             # THREADS, measured (2026-11-17, 12 M entities in 120 chunk files):
             # the pool's processes ship every chunk's arrays back pickled and
             # lost to one process (4.4 s in-process, 5.1 s on 2 processes,
             # 4.8 s on 3); a chunk's read is Arrow's, which lets the GIL go
             from concurrent.futures import ThreadPoolExecutor
             n = max(1, int(workers or parallel.processes()))
+            from collections import deque
             with ThreadPoolExecutor(max_workers=n, thread_name_prefix="wikidata-entities") as ex:
-                return list(ex.map(fn, files))
-        packed = read(packed_of)
-        if any(p is None for p in packed):
-            packed = None
-            tables = _generic_tables(read(columns_of), where=Path(dump).name)
-        else:
-            tables = _packed_tables(packed, where=Path(dump).name, row_group=ROW_GROUP)
+                # a SLIDING window: the next reads run while a chunk is placed,
+                # at most n × _WINDOW chunks held
+                ahead: deque = deque()
+                nxt = 0
+                while nxt < len(files) or ahead:
+                    while nxt < len(files) and len(ahead) < n * _WINDOW:
+                        ahead.append(ex.submit(columns_of, files[nxt]))
+                        nxt += 1
+                    yield ahead.popleft().result()
+        where = Path(dump).name
+        try:
+            try:
+                tables = _direct_tables(read(), where=where, row_group=ROW_GROUP,
+                                        items_hint=int(meta.get("max_item") or 0) + 1)
+            except _Unfit:
+                tables = _generic_tables(list(read()), where=where)
+        except KeyTableError as e:
+            raise EntityTableError(f"{e} (an entity is one line of the dump)") from None
         schema = TABLE.schema().with_metadata(_want(dump))
         out = path_of(dump)
         tmp = out.with_name(f"{out.name}.{os.getpid()}.tmp")
@@ -214,7 +298,7 @@ def build(dump: Path, *, workers: int | None = None, mode: str = "threads") -> P
 
 def _generic_tables(got, *, where: str):
     """`KeyTable.tables` over the chunks' (native ids, ordinals): a value
-    the packed sort cannot hold."""
+    the direct-address arrays cannot hold."""
     import numpy as np
     k = np.concatenate([a for a, _ in got]) if got else np.zeros(0, np.int64)
     v = np.concatenate([b for _, b in got]) if got else np.zeros(0, np.int64)
