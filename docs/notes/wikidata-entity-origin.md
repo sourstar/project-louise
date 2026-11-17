@@ -76,9 +76,13 @@ carried parts (75,896,183 records) and snapshot 2026-10 (`93cef74e…`, no `orig
    - "space unchanged", and the new collection id;
    - the snapshot's size (~1.6 GB modelled: 75.9 M uids at ~21 bytes), the extra space it needs for a
      moment;
-   - every small file naming the old id, each with what is done to it. The removals are: the old
-     sidecar, step 6's attestations of the old id, and `state/origin-check.json` (step 6's note that the
-     check could not run);
+   - every file naming the old id, each with what is done to it (pin_run.py's table, read from the
+     code's writers). The removals are: the old sidecar, step 6's attestations of the old id,
+     `state/origin-check.json` (step 6's note that the check could not run), any origin acknowledgement,
+     gate statement, scheduled-check file or do-nothing update marker made under the old id. This node's
+     RAGE settings are signed again for the new id. An update under way, a peer's RAGE settings, an
+     anchor, a chain or a file the pass does not know refuse it. The kinds not read (record parts,
+     SQLite databases, binary members) are named;
    - "the run's files in the corpus: N held, M missing": the dump (103,409,622,204 bytes) must be held.
      The md5sums are beside it; the sha1sums may not be. records-vs-origin reads the dump alone.
 
@@ -95,6 +99,10 @@ carried parts (75,896,183 records) and snapshot 2026-10 (`93cef74e…`, no `orig
    ~0.7 GB/s, so with one splice and three loads this is ~10–20 s plus the sweep, which the dry run timed.
    A stop resumes from `state/pin-run.json`. After it, `hold collection show wikidata.next` names the new
    id, and the snapshot names `origin_run` 20261012.
+   - **The gate, before any embed resumes**, where the pin removed a statement made under the old id (a
+     carry carries none, so a creation by the book has none): `docker exec W python -m app.louise hold
+     embedder check wikidata.next`. A statement of the same space that wikidata made is borrowed and kept
+     (`runs.statements_for_space`), so this may pass without measuring.
 5. **The checks, in their own container, never in the worker** (step 6's OOM). `VERDICTS=1`: a check that
    FAILS is an answer, not a crash. The pass runs under `tools/measure/check_rss.py`, so the peak it
    reaches is measured, not assumed.

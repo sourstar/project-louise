@@ -264,20 +264,35 @@ def test_the_dry_run_says_what_it_would_do(data_dir, config_dir, isolated_config
 
 def test_a_file_naming_the_old_id_that_the_pass_does_not_know_refuses_it(data_dir, config_dir, isolated_config,
                                                                          tmp_path, monkeypatch, capsys):
-    """The sweep runs FIRST: a small file naming the old id that this pass
-    neither rewrites, re-points nor removes — an operator's origin
-    acknowledgement here — refuses the pin before anything is written."""
+    """The sweep runs FIRST and reads every file as a stream, whatever its
+    size: a file naming the old id that this pass neither rewrites,
+    re-points nor removes — here a 3 MiB JSON with the id past its first
+    MiB — refuses the pin before anything is written; so does a file it
+    cannot read."""
     root, _ = _recreate(data_dir, config_dir, tmp_path, monkeypatch, capsys, corrected=False)
-    from app import copy_state
     bad = col.read(root, NAME)
-    copy_state.record_origin_ack(root, NAME, bad, now=NOW)
+    big = root / NAME / "state" / "notes.json"
+    big.write_text(json.dumps({"pad": "x" * (3 << 20), "about": bad.collection_id}))
     before = (root / NAME / "shard" / "codex.json").read_bytes()
-    with pytest.raises(pin_run.PinRefused, match=r"state/origin-ack\.json name\(s\) .* does not know"):
+    with pytest.raises(pin_run.PinRefused, match=r"state/notes\.json name\(s\) .* does not know"):
         pin_run.plan(root, NAME)
     assert louise.main(["dev", "pin-run", NAME, "--root", str(root), "--yes"]) == 2
     capsys.readouterr()
+    big.unlink()
+    held = root / NAME / "state" / "carry.json"
+    real = open
+
+    def opening(f, *a, **k):
+        if Path(f) == held:
+            raise PermissionError(13, "Permission denied", str(f))
+        return real(f, *a, **k)
+    with monkeypatch.context() as m:
+        m.setattr("builtins.open", opening)
+        with pytest.raises(pin_run.PinRefused, match=r"state/carry\.json could not be read"):
+            pin_run.plan(root, NAME)
     assert (root / NAME / "shard" / "codex.json").read_bytes() == before
     assert not (root / NAME / "state" / pin_run.MARKER).exists()
+    assert pin_run.plan(root, NAME)["not_swept"], "the kinds not read are named"
 
 
 def test_a_pin_under_way_is_said_by_the_dry_run_and_finished_by_yes(data_dir, config_dir, isolated_config,

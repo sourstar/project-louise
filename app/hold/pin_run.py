@@ -40,6 +40,51 @@ tests/hold/test_pin_run.py holds the result to a by-the-book creation with
 the corrected Codex, byte for byte: the SHARD, its snapshot and sidecar, the
 markers and the collection file.
 
+EVERY WRITER UNDER A COLLECTION'S `shard/` AND `state/` THAT WRITES ITS
+collection_id OR ITS HEX (read from the code, 2026-11-17), and what the pin
+does with its file:
+
+  shard/codex.json                      collection.write — rewritten: the corrected Codex
+  shard/snapshots/<S>.json              snapshot.create — written again (`splice`)
+  shard/snapshots/<S>.sig.json          snapshot.sign_snapshot (names the snapshot's hash) —
+                                        replaced by this peer's signature of the new one
+  shard/rage-settings/<key>.json        rage_settings.record — this node's own: signed again for
+                                        the new id, its entries kept; another signer's: REFUSED
+  state/published/<S>.json              cascade.note_published — written again by the signature
+  state/build/.codex.json               records._claim_staging — re-pointed
+  state/carry.json, line-carry.json     carry, line_carry — re-pointed
+  manifest.sqlite `control` values      carry's reconcile and resign cursors — re-pointed
+  state/attestations/<hex>/             check.write_attestations — removed: the checks run again
+  state/origin-check.json               copy_state.note_origin_attempt — removed (step 6's, the defect)
+  state/origin-ack.json                 copy_state.record_origin_ack — removed: the operator's word on
+                                        the Codex replaced, given again (if wanted) after the checks
+  state/calibration.json,               embedder.statement (`embedder check --accept`, the gate) —
+  state/calibration/<role>-<run>.json   removed where they name the old id: a carry carries none
+                                        (carry.py's inventory), and the gate runs again before any
+                                        embed resumes, as for a creation by the book; a statement
+                                        of the space another collection made is kept
+  state/update.json                     update_state — step `due` (nothing done): removed; any
+                                        other step: REFUSED, an update is under way
+  state/scheduled-check{,.started}.json, scheduled_checks — removed: the replaced Codex's check;
+  state/scheduled-check.stderr          the new snapshot is due
+  state/anchor/<hex>.json               anchor — REFUSED: a certifier's anchor (published)
+  state/pointer/<hex>.json              certify — REFUSED: a certifier's pointer (published)
+  state/chain/<hex>.json                share fetch — REFUSED: fetched from a peer
+  manifest.sqlite `coverage` rows       coverage.record — REFUSED: shared parts
+
+Names no id (nothing to do): the record parts and figures containers, the
+calibration and slicing members, validation.json, LICENSE-TERMS, seals (none
+for a green origin), state/cpu-reference/ (the space's and the set's),
+gate-batching.json, ack.json, the scan cursors, the vector table and its
+layout.json (outside shard/ and state/, keyed on the space).
+
+THE SWEEP reads every file of `shard/` and `state/` as a stream, whatever its
+size, except the kinds it names in the plan as not swept: the record parts
+and figures containers (zstd, Parquet), SQLite databases (the manifest's
+control values and coverage rows are read above; a build database holds part
+rows), and binary members (`.safetensors`, `.npy`, `.zst`, `.parquet`). A
+file it cannot read refuses the pin.
+
 WHAT IT REFUSES (nothing written): a Codex that names a run already; a
 plugin whose origin publishes no dated dumps; a run that is not the one its
 records were read in (the manifest's locators, the carry's source); and
@@ -76,8 +121,15 @@ MARKER = "pin-run.json"
 STEPS = ("begun", "snapshot", "codex", "state", "signed", "done")
 #: what the manifest sample reads to tell the run its records were read in
 SAMPLE_ROWS = 1000
-#: the small files the sweep reads under `state/` (larger ones are a pass's data)
-_SWEEP_MAX = 1 << 20
+#: what the sweep does not read, by kind (named in the plan): binary members
+#: and databases, none of which a writer above puts an id in as text
+_NOT_SWEPT = {".zst": "record parts and binary members", ".parquet": "record parts and figures containers",
+              ".safetensors": "calibration vectors", ".npy": "derived arrays",
+              ".sqlite": "SQLite databases (the manifest's control and coverage read apart)",
+              ".db": "SQLite databases (a build's part rows)",
+              "-wal": "SQLite write-ahead logs", "-shm": "SQLite shared memory"}
+#: the sweep reads a file in pieces of this many bytes
+_SWEEP_PIECE = 8 << 20
 
 
 class PinRefused(CodexError):
@@ -334,6 +386,12 @@ def plan(root, ref: str, *, run: str | None = None) -> dict[str, Any]:
     from .certify import pointer_path
     if pointer_path(root, name, codex).is_file():
         why.append("a certifier's pointer names it")
+    from .anchor import state_path as anchor_path
+    if anchor_path(root, name, codex).is_file():
+        why.append("a certifier's anchor names it")
+    from app.share.fetch import CHAIN
+    if (state / CHAIN / f"{shard_mod._hex(codex.collection_id)}.json").is_file():
+        why.append("it was fetched from a peer (state/chain names it)")
     named = _naming(root, name, codex.collection_id)
     if named:
         why.append(f"{', '.join(named)} name(s) its id")
@@ -357,8 +415,8 @@ def plan(root, ref: str, *, run: str | None = None) -> dict[str, Any]:
     # pass rewrites, re-points or removes, or the pin is refused naming it
     import time
     t0 = time.monotonic()
-    naming = _sweep(root, name, codex.collection_id)
-    kinds = {rel: _known(rel, codex.collection_id, snap.snapshot_id) for rel in naming}
+    naming, not_swept = _sweep(root, name, codex.collection_id, with_skipped=True)
+    kinds = {rel: _known(root, name, rel, codex.collection_id, snap.snapshot_id) for rel in naming}
     unknown = sorted(rel for rel, k in kinds.items() if k is None)
     if unknown:
         raise PinRefused(f"pin-run: {', '.join(unknown[:5])}{' …' if len(unknown) > 5 else ''} "
@@ -378,6 +436,7 @@ def plan(root, ref: str, *, run: str | None = None) -> dict[str, Any]:
                         "attestations": sorted(str(p) for p in attest.glob("*.json")) if attest.is_dir() else [],
                         "origin_attempt": str(tried) if tried.is_file() else None},
             "naming": {rel: kinds[rel] for rel in sorted(kinds)}, "swept_s": round(swept_s, 3),
+            "not_swept": not_swept,
             "dump": dump, "rowids": facts["rowids"],
             "evidence": {k: v for k, v in evidence.items() if k != "locators"}}
 
@@ -385,14 +444,24 @@ def plan(root, ref: str, *, run: str | None = None) -> dict[str, Any]:
 #: the state note of a records-vs-origin that could not run (app/copy_state.py
 #: ORIGIN_TRIED) — on wikidata.next, the step-6 check's: the defect itself
 _ORIGIN_TRIED = "origin-check.json"
+#: ... and the operator's acknowledgement of one (ORIGIN_ACK)
+_ORIGIN_ACK = "origin-ack.json"
 
 
-def _known(rel: str, old: str, sid: str) -> str | None:
+#: the scheduled check's own files (app/scheduled_checks.py)
+_SCHEDULED = ("scheduled-check.json", "scheduled-check.started.json", "scheduled-check.stderr")
+#: what a handling starts with when the pin removes the file
+REMOVED = "removed"
+#: ... and when it signs a rage-settings file again
+RESIGNED = "signed again"
+
+
+def _known(root: Path, name: str, rel: str, old: str, sid: str) -> str | None:
     """What this pass does with a file of the collection naming the old id
-    (`rel` from the collection's folder), or None for a file it does not
-    know."""
+    (`rel` from the collection's folder; the module docstring's table), or
+    None for a file it does not know. A file it must not rewrite refuses."""
     from . import carry as carry_mod
-    from . import line_carry
+    from . import line_carry, update_state
     from . import records as rec
     from . import shard as shard_mod
     from .cascade import PUBLISHED_DIR
@@ -405,12 +474,30 @@ def _known(rel: str, old: str, sid: str) -> str | None:
         f"state/{rec.BUILD}/{rec.STAGING_CLAIM}": "re-pointed",
         f"state/{carry_mod.MARKER}": "re-pointed",
         f"state/{line_carry.MARKER}": "re-pointed",
-        f"state/{_ORIGIN_TRIED}": "removed: an origin check that could not run, of the Codex replaced",
+        f"state/{_ORIGIN_TRIED}": f"{REMOVED}: an origin check that could not run, of the Codex replaced",
+        f"state/{_ORIGIN_ACK}": f"{REMOVED}: the operator's acknowledgement of the Codex replaced — given "
+                                f"again, if wanted, after the checks",
+        "state/calibration.json": f"{REMOVED}: a gate statement made under the old id — the gate runs again "
+                                  f"before any embed resumes (a carry carries none)",
     }
+    known.update({f"state/{f}": f"{REMOVED}: the scheduled check of the Codex replaced; the new snapshot is due"
+                  for f in _SCHEDULED})
     if rel in known:
         return known[rel]
     if rel.startswith(f"state/attestations/{hexid}/"):
-        return "removed: an attestation of the Codex replaced (the checks are run again)"
+        return f"{REMOVED}: an attestation of the Codex replaced (the checks are run again)"
+    if rel.startswith("state/calibration/") and rel.endswith(".json"):
+        return (f"{REMOVED}: a gate statement made under the old id — the gate runs again before any embed "
+                f"resumes (a carry carries none; a statement of the space another collection made is kept)")
+    if rel == f"state/{update_state.FILE}":
+        mk = update_state.read(root, name) or {}
+        if mk.get("step") == "due" and not mk.get("moved"):
+            return f"{REMOVED}: an update of the Codex replaced that had done nothing (step due)"
+        raise PinRefused(f"pin-run: {name}'s update of the old Codex is under way (step {mk.get('step')!r}, "
+                         f"state/{update_state.FILE}): finish or abandon it first; nothing written")
+    if rel.startswith("shard/rage-settings/") and rel.endswith(".json"):
+        return (f"{RESIGNED}: this node's RAGE settings for the new id, the entries kept (refused at the pin if "
+                f"another peer signed them)")
     return None
 
 
@@ -565,28 +652,60 @@ def _repoint_file(name: str, old: str, new: str) -> None:
     os.replace(tmp, p)
 
 
-def _sweep(root: Path, name: str, old: str) -> list[str]:
-    """Every small file of the collection that still names `old`."""
+def _not_swept(rel: str) -> str | None:
+    parts = rel.split("/")
+    if parts[:2] in (["shard", "records"], ["shard", "figures"]):
+        return "record parts and figures containers"
+    for suffix, kind in _NOT_SWEPT.items():
+        if rel.endswith(suffix):
+            return kind
+    return None
+
+
+def _names(p: Path, needle: bytes) -> bool:
+    """`needle` anywhere in the file, read in pieces (a piece's tail kept so
+    a match across two is found)."""
+    keep = len(needle) - 1
+    tail = b""
+    with open(p, "rb") as f:
+        while True:
+            piece = f.read(_SWEEP_PIECE)
+            if not piece:
+                return False
+            if needle in tail + piece:
+                return True
+            tail = piece[-keep:] if keep else b""
+
+
+def _sweep(root: Path, name: str, old: str, *, with_skipped: bool = False):
+    """Every file of the collection's `shard/` and `state/` naming `old`
+    (paths from its folder), whatever its size; a file that cannot be read
+    refuses. With `with_skipped`, also {kind: how many} of the files not read
+    (`_NOT_SWEPT`)."""
     hexid = old.split(":", 1)[-1].encode()
-    out = []
+    out: list[str] = []
+    skipped: dict[str, int] = {}
     base = root / name
     for sub in ("shard", "state"):
         d = base / sub
         if not d.is_dir():
             continue
         for p in d.rglob("*"):
-            rel = p.relative_to(base).parts
-            if not p.is_file() or "records" in rel[:2] or p.name == MARKER \
-                    or p.name.endswith((".sqlite", ".db", "-wal", "-shm")):
+            if p.is_dir() or p.name == MARKER:
+                continue
+            rel = str(p.relative_to(base))
+            kind = _not_swept(rel)
+            if kind is not None:
+                skipped[kind] = skipped.get(kind, 0) + 1
                 continue
             try:
-                if p.stat().st_size > _SWEEP_MAX:
-                    continue
-                if hexid in p.read_bytes():
-                    out.append(str(p.relative_to(base)))
-            except OSError:
-                continue
-    return sorted(out)
+                if _names(p, hexid):
+                    out.append(rel)
+            except OSError as e:
+                raise PinRefused(f"pin-run: {p} could not be read ({type(e).__name__}: {e}), so whether it "
+                                 f"names {old} is not known; nothing written") from None
+    out.sort()
+    return (out, dict(sorted(skipped.items()))) if with_skipped else out
 
 
 def apply(root, ref: str, *, run: str | None = None, key=None, now: str,
@@ -607,9 +726,13 @@ def apply(root, ref: str, *, run: str | None = None, key=None, now: str,
         return body
     if body is None:
         p = plan(root, ref, run=run)
+        # a RAGE settings file is signed again only by the key that signed it
+        for rel, action in p["naming"].items():
+            if action.startswith(RESIGNED):
+                _resignable(root / name / rel, key)
         body = {"collection": name, "from": p["from"], "to": p["to"], "run": p["run"],
                 "snapshot_id": p["snapshot"]["id"], "from_snapshot": p["snapshot"]["hash"],
-                "removed": p["removed"], "step": "begun"}
+                "removed": p["removed"], "naming": p["naming"], "step": "begun"}
         _write_json(marker, body)
         log(f"[pin-run] {name}: {p['from'][:23]}… -> {p['to'][:23]}…, run {p['run']} "
             f"({'; '.join(p['run_said_by'])})")
@@ -678,11 +801,20 @@ def apply(root, ref: str, *, run: str | None = None, key=None, now: str,
                     p.unlink()
                     gone += p.suffix == ".json"
             attest.rmdir()
-        # the step-6 check's note that records-vs-origin could not run: of the
-        # Codex replaced, and its reason was this very defect
-        if (state / _ORIGIN_TRIED).is_file():
-            (state / _ORIGIN_TRIED).unlink()
-            moved.append(f"state/{_ORIGIN_TRIED} removed")
+        # what the plan found naming the old id that goes (the module
+        # docstring's table: the step-6 check's origin note, gate statements
+        # made under the old id, the replaced Codex's scheduled check, an
+        # update that had done nothing) and what is signed again
+        for rel, action in sorted((body.get("naming") or {}).items()):
+            f = root / name / rel
+            if rel.startswith("state/attestations/"):
+                continue                                  # above, with their folder
+            if action.startswith(REMOVED):
+                if f.is_file():
+                    f.unlink()
+                    moved.append(f"{rel} removed")
+            elif action.startswith(RESIGNED) and f.is_file() and _resign_rage(f, old, new.collection_id, key):
+                moved.append(f"{rel} signed again")
         body["moved"], body["attestations_removed"] = moved, gone
         step("state")
         log(f"[pin-run] {name}: re-pointed {', '.join(moved) or 'nothing'}; {gone} attestation(s) of the "
@@ -708,6 +840,35 @@ def apply(root, ref: str, *, run: str | None = None, key=None, now: str,
     log(f"[pin-run] {name}: done — {new.collection_id}, snapshot {sid} names run {run}. Before use: "
         f"`hold check {name} --checks roots,records,chunks,records-vs-origin,vectors-sample`")
     return body
+
+
+def _resignable(path: Path, key) -> None:
+    """Refused unless this node's key signed the RAGE settings file at
+    `path` (a peer's measurement is not this node's to sign again)."""
+    from . import envelope as env
+    from . import rage_settings
+    body = rage_settings.read(path)
+    if key is None or body["key"] != env.key_text(key.verify_key):
+        raise PinRefused(f"pin-run: {path} holds RAGE settings for the old id that "
+                         f"{'no node key here can sign again' if key is None else 'another peer signed'}; "
+                         f"nothing written")
+
+
+def _resign_rage(path: Path, old: str, new: str, key) -> bool:
+    """This node's RAGE settings at `path`, its entries and time as they
+    were, signed for `new` (rage_settings.record's body and envelope)."""
+    from . import envelope as env
+    from . import rage_settings
+    from .codex import canonical_json
+    body = rage_settings.read(path)
+    if body["collection_id"] != old:
+        return False
+    _resignable(path, key)
+    envelope = env.sign(rage_settings.DOMAIN, {**body, "collection_id": new}, key)
+    tmp = path.with_suffix(".json.tmp")
+    tmp.write_bytes(canonical_json(envelope))
+    os.replace(tmp, path)
+    return True
 
 
 def _delta_counts(snap) -> tuple[int, int, int] | None:
