@@ -726,7 +726,10 @@ def report(d: Derivation) -> dict[str, Any]:
     """Per tier: the claims it makes now (`re_derived`; `carried` for the
     carried), those kept identical, changed, added, withdrawn, and set aside
     (an end the target's snapshot does not hold: `update` names and skips
-    them), with up to `EXAMPLES` added and withdrawn claims each."""
+    them), with up to `EXAMPLES` added and withdrawn claims each. A
+    withdrawn work claim says whether its two books are still one work
+    through the claims made now (`withdrawn_still_one_work`, and `now` on
+    each example) or apart."""
     from .hold import annotations as ann
     held_by = {ann.identity_key(h.claim): h for h in d.held}
     made = {ann.identity_key(c) for _, c, _ in d.lines}
@@ -761,14 +764,35 @@ def report(d: Derivation) -> dict[str, Any]:
             row["kept_identical"] += 1
         else:
             row["changed"] += 1
+    # WHAT BECAME OF A WITHDRAWN CLAIM (München's dry run, 2026-11-17): its two
+    # books may still be one work through the claims made now (another tier,
+    # another star's centre) or be apart. The made claims' work links, as a
+    # union-find over their ends, answer it per withdrawn claim.
+    parent: dict[str, str] = {}
+
+    def find(x: str) -> str:
+        while parent.setdefault(x, x) != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+    for _, c, _ in d.lines:
+        if c.get("type") in ann.WORK_TYPES and c.get("subject") and c.get("object"):
+            parent[find(c["subject"])] = find(c["object"])
     for k, h in held_by.items():
         if k in made:
             continue
         row = tiers[h.tier]
         if "withdrawn" in row:
             row["withdrawn"] += 1
+            c = h.claim
+            joined = (c.get("type") in ann.WORK_TYPES and bool(c.get("subject")) and bool(c.get("object"))
+                      and find(c["subject"]) == find(c["object"]))
+            if joined:
+                row["withdrawn_still_one_work"] = row.get("withdrawn_still_one_work", 0) + 1
             if len(row["examples"]["withdrawn"]) < EXAMPLES:
-                row["examples"]["withdrawn"].append(_brief(h.claim))
+                row["examples"]["withdrawn"].append(
+                    {**_brief(c), "now": ("still one work through the claims made now" if joined
+                                          else "apart: no claim made now joins the two")})
     return {"method": NAME, "claims": len(d.lines), "held": len(d.held), "against": d.inputs,
             "tiers": tiers, "resolution": d.resolution}
 
