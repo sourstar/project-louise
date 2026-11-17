@@ -81,24 +81,24 @@ def codex_run(codex, spec=None) -> str | None:
 # snapshot, whose records name each ENTITY to be read in a run (09 §9.5),
 # named no run at all: permanently unverifiable against the source
 # (invariant 11). The acquisition spec was dated; only the Codex was not.
-# So: the creation writes, for a plugin whose spec is `dated-dumps`, the
-# three keys of the identifying half the platform reads back from a Codex —
-# `delta` (`is_dated`), `files` naming one run (`pinned_snapshot`) and
-# `filters` (what `pinned_snapshot` and the engine select by) — and refuses
-# where it has no run to write; and nothing creates, carries into or
+# So: the creation writes, for a plugin whose spec is `dated-dumps`, EVERY
+# key of the identifying half the recipe states none for (09 §9.17: "in the
+# Codex: yes" for source_id, transport, url, layout, listing, files, filters,
+# checksums, delta), from the plugin's AcquisitionSpec, in the form
+# wikipedia's Codex already states them (`identifying_half`): `files` naming
+# the one run (`pinned_snapshot` reads it back), `filters` (what it and the
+# engine select by), `delta` (`is_dated`), and the rest as the spec says
+# them. A key the recipe states is never touched, so a Codex already naming
+# its run and its half (wikipedia's) is written as before, byte for byte. It
+# refuses where it has no run to write; and nothing creates, carries into or
 # freezes a Codex whose records name a keyed unit without a run.
 #
-# THE REST OF THE IDENTIFYING HALF (`source_id`, `transport`, `url`,
-# `layout`, `listing`, `checksums`) is still the recipe's to state, as
-# template._origin says: nothing reads it back from a Codex, and its
-# serialisation from a plugin's spec is not settled (pubmed's Codex writes
-# `url` without a scheme, wikipedia's with one). Written down here so the
-# choice can be revisited; a Codex is inside `collection_id`, so adding them
-# is a new collection for every plugin whose recipe states none.
-
-#: what a dated Codex's `delta` is (09 §9.17: `{mode, subdir: string or null}`)
-DATED_DELTA = {"mode": "dated-dumps", "subdir": None}
-
+# FOR A DATED-DUMP PLUGIN ONLY. The other plugins' recipes state their half
+# themselves, as template._origin says, and its serialisation from a spec is
+# not settled for them (pubmed's Codex writes `url` without a scheme,
+# wikipedia's with one): written down here so the choice can be revisited; a
+# Codex is inside `collection_id`, so filling it for them is a new collection
+# for every plugin whose recipe states none.
 
 def spec_dated(spec) -> bool:
     """The plugin's acquisition spec publishes dated dumps a Codex pins."""
@@ -121,22 +121,43 @@ def run_files(spec, run: str, filters=None) -> list[dict]:
     return out
 
 
+def identifying_half(spec) -> dict:
+    """09 §9.17's identifying half of a dated-dump plugin's spec but its
+    `files`, as wikipedia's Codex states it: the origin's own base (the last
+    endpoint: mirrors come first), `listing` "snapshot-index" for an origin
+    of dated dumps it indexes, checksums `{kind, suffix, algo}` ("" for a
+    kind of none), `delta` `{mode, subdir}`."""
+    cs = spec.checksums
+    listing = ("snapshot-index" if spec.snapshot_index is not None
+               else "static" if any(e.static_files for e in spec.endpoints) else "directory")
+    return {"source_id": spec.source_id,
+            "transport": getattr(spec.transport, "value", spec.transport),
+            "url": spec.endpoints[-1].url,
+            "layout": spec.layout,
+            "listing": listing,
+            "filters": list(spec.filters),
+            "checksums": ({"kind": "none", "suffix": "", "algo": ""} if cs.kind == "none"
+                          else {"kind": cs.kind, "suffix": cs.sidecar_suffix, "algo": cs.sidecar_algo}),
+            "delta": {"mode": spec.delta.mode, "subdir": spec.delta.updatefiles_subdir}}
+
+
 def pinned_spec(origin_spec: dict | None, spec, run: str) -> dict:
     """`origin_spec` (a Codex's or a recipe's `origin.spec`) pinning `run`:
-    `delta` dated, `files` the run's, `filters` the plugin's where it states
-    none; every other key as it was, and files it already states for `run`
-    kept as they are (their sizes and checksums too: the same recipe is the
-    same id). A spec pinning another run, or stating another delta mode, is
-    refused — never rewritten."""
+    `files` the run's, and every other key of the identifying half the spec
+    states none for from the plugin's (`identifying_half`); every key it
+    states as it was, and files it already states for `run` kept as they are
+    (their sizes and checksums too: the same recipe is the same id). A spec
+    pinning another run, or stating another delta mode, is refused — never
+    rewritten."""
     out = dict(origin_spec or {})
     delta = out.get("delta")
     if delta not in (None, {}) and (not isinstance(delta, dict) or delta.get("mode") != "dated-dumps"):
         raise ValueError(f"{spec.source_id}: the origin's delta is {delta!r}, and its acquisition spec "
                          f"publishes dated dumps (09 §9.17 `delta.mode` \"dated-dumps\")")
-    if not delta:
-        out["delta"] = dict(DATED_DELTA)
-    if not out.get("filters"):
-        out["filters"] = list(spec.filters)
+    half = identifying_half(spec)
+    for k, v in half.items():
+        if k not in out or out[k] in (None, {}, []):
+            out[k] = v
     from app.acquire import spec as acquire_spec
     had = acquire_spec.pinned_snapshot(spec, out) if out.get("files") else None
     if had is not None and had != str(run):

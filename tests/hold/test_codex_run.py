@@ -63,6 +63,12 @@ def test_the_template_pins_a_dated_plugins_run(tmp_path):
     assert all(f["size"] is None and f["checksum"] is None for f in spec["files"])
     assert spec["filters"] == ["*-all.json.bz2", "*-md5sums.txt", "*-sha1sums.txt"]
     assert origin_run.is_dated(c) and origin_run.codex_run(c) == RUN
+    # THE WHOLE IDENTIFYING HALF (09 §9.17 "in the Codex: yes"), in wikipedia's form
+    assert {k: v for k, v in spec.items() if k not in ("files", "filters")} == {
+        "source_id": "wikidata", "transport": "https", "url": "https://dumps.wikimedia.org",
+        "layout": "single-file", "listing": "snapshot-index",
+        "checksums": {"kind": "none", "suffix": "", "algo": ""},
+        "delta": {"mode": "dated-dumps", "subdir": None}}
     # the same recipe with the same run is the same id; another run is another collection
     assert _create(tmp_path, wr.recipe(), name="w", run=RUN).collection_id == c.collection_id
     assert template.from_recipe("wikidata", wr.recipe(), platform_image=PLATFORM,
@@ -107,6 +113,18 @@ def test_wikipedias_codex_is_unchanged(tmp_path):
                              if __import__("app.acquire.spec", fromlist=["x"]).admitted(f.rel_path, spec["filters"])]
     assert set(spec) == {"source_id", "transport", "url", "layout", "listing", "files", "filters", "checksums",
                          "delta"}
+    # byte for byte: pinned or not, the recipe that states its whole half is the same Codex
+    from unittest import mock
+
+    from app.acquire.specs import ACQUIRE_REGISTRY
+    with mock.patch.object(template, "pin_dated_spec", lambda plugin, s, run: s):
+        unpinned = wiki_runs.codex(tmp_path / "unpinned", "wikipedia")
+    assert unpinned.canonical() == c.canonical()
+    assert origin_run.pinned_spec(spec, ACQUIRE_REGISTRY["wikipedia"], wiki_runs.FIRST) == spec, \
+        "nothing the recipe states is touched"
+    # and the half it states is the one the plugin's spec gives a recipe that states none
+    half = origin_run.identifying_half(ACQUIRE_REGISTRY["wikipedia"])
+    assert {k: spec[k] for k in half} == half
 
 
 # ---- the guards ----------------------------------------------------------------

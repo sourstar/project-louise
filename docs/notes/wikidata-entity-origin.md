@@ -25,9 +25,14 @@ predecessor's word for a `.next` re-creation, and each carried line is then held
 
 **The fix.**
 
-- `create` pins a dated-dump plugin's FIRST run (09 §9.17): `origin.spec` gets `delta.mode`
-  "dated-dumps", the plugin's `filters` and that run's `files`, wherever the recipe (a TOML or a whole
-  Codex) states none. The run comes from, in order:
+- `create` pins a dated-dump plugin's FIRST run (09 §9.17) and writes its WHOLE identifying half: every
+  key the recipe (a TOML or a whole Codex) states none for, from the plugin's acquisition spec, in the
+  form wikipedia's Codex states it. wikidata's becomes `source_id` "wikidata", `transport` "https", `url`
+  "https://dumps.wikimedia.org", `layout` "single-file", `listing` "snapshot-index", `checksums`
+  `{kind "none", suffix "", algo ""}`, `delta` `{mode "dated-dumps", subdir null}`, the plugin's
+  `filters` and that run's `files`. A key the recipe states is never touched, so wikipedia's Codex is
+  byte-identical. Other plugins state their half in their recipes, as before (pubmed's scheme-less `url`
+  is written down in origin_run.py). The run comes from, in order:
   1. the recipe's own `files`;
   2. `--run YYYYMMDD`;
   3. for `<name>.next`, the run `<name>` holds: its Codex's current run, else its file's `snapshot`.
