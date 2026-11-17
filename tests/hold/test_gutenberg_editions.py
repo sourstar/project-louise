@@ -564,6 +564,7 @@ def test_derive_from_delta_writes_the_whole_derivations_bytes(node, monkeypatch,
     (its Wikidata tier reads what no delta names), said; its update re-pinned
     from the delta; every byte the whole derivation's."""
     import shutil
+
     from app import parallel
     from app.hold import annotations_delta as ad
     from tests.hold.test_annotations_stream import tree
