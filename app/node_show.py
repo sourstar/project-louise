@@ -192,4 +192,14 @@ def show() -> dict[str, Any]:
             "jobs": node_state.peek(_jobs, [], table="jobs"),
             # the publisher's last pass per shared collection (07 §7.8 "all p2p")
             "publish": node_state.peek(_publish, {}, table="control"),
+            # the annotations cascade, in plain words (app/hold/cascade.py):
+            # "woke 2 annotations (snapshot 2026-11)", "woken by wikipedia
+            # 2026-11 — done 03:41"
+            "cascade": _cascade(),
             "last_round": last_round(loaded)}
+
+
+def _cascade() -> list[dict[str, Any]]:
+    from app import collections as collections_mod
+    from app.hold import cascade
+    return cascade.shown_all(collections_mod.louise_root() / "collections")

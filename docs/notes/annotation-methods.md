@@ -190,6 +190,14 @@ built" gives the rule and the numbers. The bytes are the whole read's, and
 - **gutenberg-editions' gutenberg read** goes through a part cache keyed on each
   part's root.
 
+## In the cascade (2026-11-17)
+
+The due check is one of the three triggers of the annotations cascade's round (app/hold/cascade_keeper.py,
+docs/notes/collection-updates.md §4). The other two are a declared source's published snapshot and a wake still
+pending. `maintain` is that round for the collections with a method, and the worker runs the whole round. A method's
+`inputs` are declarations, so `hold config apply --set method=…` and the Library's box refuse one that closes a
+cycle, and name the loop.
+
 ## Standardised alternative, not taken
 
 A workflow engine's derived datasets (Airflow datasets, Dagster assets) re-run a step when an input's version moves.

@@ -658,6 +658,13 @@ def _apply(c, raw: dict[str, Any], path: Path, parsed: dict[str, Any], *,
                                                  annotation_methods.get(value))
             if why is not None:
                 raise SetRefused(why)
+            # a method's `inputs` are declarations the cascade follows
+            # (docs/notes/collection-updates.md §4): one that closes a loop
+            # is refused HERE, where it is declared, the loop named
+            from .hold import cascade
+            loop = cascade.cycle_through(collections_mod.louise_root() / "collections", c.name, method=value)
+            if loop:
+                raise SetRefused(cascade.refusal(c.name, loop))
         if key == "share" and value and c.codex.privacy == "never-share":
             raise SetRefused(f"{c.name} is never-share: it is shared with nobody (04 §4.4)")
     plain = {"title": "title", "slices": "slices", "kinds": "kinds",

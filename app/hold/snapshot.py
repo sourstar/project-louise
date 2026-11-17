@@ -796,8 +796,22 @@ def sign_snapshot(root, name: str, snapshot: "Snapshot", key, *,
         except Exception:                               # noqa: BLE001
             existing = None
     doc = sidecar_add(existing, snapshot.hash, key, now=now)
-    p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_bytes(canonical_json(doc))
+    # whole or not at all (a temporary, fsync, rename): a sidecar cut short
+    # parsed as none and was replaced, losing the signatures merged into it
+    from .update_state import write_text_atomic
+    write_text_atomic(p, canonical_json(doc))
+    # THE PUBLISHED MARKER (docs/notes/collection-updates.md §4), here —
+    # the one place a snapshot is signed, whoever publishes it — after the
+    # signature's durable write: what wakes the annotations that declare
+    # this collection (app/hold/cascade.py). A marker not written is
+    # backfilled from the signature by the cascade's keeper
+    from . import cascade
+    try:
+        cascade.note_published(root, name, snapshot, now=now)
+    except OSError as e:
+        import sys
+        print(f"note: {name}: snapshot {snapshot.snapshot_id} is signed, and its published marker was not "
+              f"written ({e}); the cascade's keeper writes it from the signature", file=sys.stderr)
     return doc
 
 

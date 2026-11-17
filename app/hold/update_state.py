@@ -58,12 +58,20 @@ def write(root, name: str, doc: dict[str, Any]) -> None:
 
 
 def write_at(p, doc: dict[str, Any]) -> None:
+    write_text_atomic(p, json.dumps({**doc, "kind": KIND, "version": VERSION}, sort_keys=True, indent=1) + "\n")
+
+
+def write_text_atomic(p, body: str | bytes) -> None:
+    """`body` at `p`, whole or not at all: a temporary beside it, fsync,
+    rename, fsync of the directory — every node-local marker's write (this
+    one, the cascade's `woken.json` and `published/<id>.json`,
+    app/hold/cascade.py) and a snapshot's signatures' sidecar. Bytes are
+    written as they are."""
     p = Path(p)
     p.parent.mkdir(parents=True, exist_ok=True)
-    body = json.dumps({**doc, "kind": KIND, "version": VERSION}, sort_keys=True, indent=1) + "\n"
     tmp = p.with_name(p.name + ".tmp")
-    with open(tmp, "w", encoding="utf-8") as f:
-        f.write(body)
+    with open(tmp, "wb") as f:
+        f.write(body if isinstance(body, bytes) else body.encode("utf-8"))
         f.flush()
         os.fsync(f.fileno())
     os.replace(tmp, p)

@@ -2806,6 +2806,9 @@ def _collection_shelf(collection: collections_mod.Collection,
         # 2026-11: fetching 7 of 11 languages, 41 of 62 GB"; None where the
         # collection is not updated so (no line on its card)
         "update": _update_view(collection),
+        # the annotations cascade, as a source (app/hold/cascade.py):
+        # "woke 2 annotations (snapshot 2026-11)"
+        "cascade": _cascade_view(collection),
         # which processor this collection's encoder spends — the GPU is the
         # scarce one, so "turn embedding on" means something different here
         "embed_device": recipe.spends if recipe is not None else None,
@@ -2837,6 +2840,18 @@ def _update_view(collection) -> dict | None:
         return update_mod.describe(collections_mod.louise_root() / "collections", collection.name, codex)
     except Exception as e:  # noqa: BLE001 — a card never fails
         return {"state": "unknown", "says": f"update state unknown ({type(e).__name__}: {e})"}
+
+
+def _cascade_view(collection) -> dict | None:
+    """The card's cascade line (docs/notes/collection-updates.md §4): what
+    this collection's newest published snapshot woke, and, for an
+    annotations collection, what woke it and where its update stands —
+    markers only; never raises."""
+    from .hold import cascade
+    codex = getattr(collection, "codex", None)
+    if codex is None:
+        return None
+    return cascade.shown(collections_mod.louise_root() / "collections", collection.name, codex)
 
 
 def _annotations_shelf(collection, served: list) -> dict:
@@ -2897,6 +2912,7 @@ def _annotations_shelf(collection, served: list) -> dict:
         "license": _license_state(collection),
         "copy_state": _copy_state(collection),
         "methods": _annotation_methods(root, collection),
+        "cascade": _cascade_view(collection),
     }
 
 
