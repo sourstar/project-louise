@@ -184,6 +184,15 @@ count, century, source, lemma). Same terms: non-commercial, local, not
 shared or published until the licence is recorded. (The lists link
 cross-reference pages too, which the cloud fetch's 43,911 did not count.)
 
+**Light update, 2026-11-17** (operator: "Run the light update"; München, on
+the node, `tools/lexicon/tlio_manifest.py` ae8a209, 16 s): 50,142 ids
+listed (43,911 entries, 6,226 cross-references `r…`, 5 `p…` the first
+fetch's pattern missed); withdrawn 0, new 4, missing 23 (HTTP 404). The
+manifest (`raw/manifest.sqlite`) holds per entry the sha256, size, fetch
+time, TLIO's revision date (19,207 entries state one) and the editor's
+date; the lists' hashes are now recorded, so the next light update says
+which list changed. tlio-forms.tsv: 257,823 → 258,015 rows.
+
 **Stopped, 2026-11-17, on the operator's word ("Stop yours"):** the node's own fetch (München's `tlio-fetch.service`, `/mnt/ssd3/louise-ocr/lexicon/tlio/`) is the one. The cloud fetch held 4,300 pages; none left the container. Its earlier status follows.
 
 **Status, 2026-11-17 10:58 UTC:** 3,211 of 43,911 entries; 0.48 s an
