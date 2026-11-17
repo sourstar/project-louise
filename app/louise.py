@@ -272,8 +272,10 @@ def cmd_annotations_derive(a) -> int:
     """`hold annotations derive <collection> [--dry-run]` (2026-11-12,
     app/hold/annotation_methods.py): the method its collection file records
     run now, and the update with its whole output — what the worker does by
-    itself once the collection annotated holds a newer snapshot. `--dry-run`
-    says whether a derivation is due and why, and runs nothing."""
+    itself once the collection annotated holds a newer snapshot (a monthly
+    method: once a period). `--dry-run` says whether a derivation is due and
+    why and, for a method with a preview, what it would change per tier;
+    nothing is written."""
     from app import collections as collections_mod
     from app.hold import annotation_methods as am, collection as col
     name, _ = col.resolve(a.root, a.collection)
@@ -284,7 +286,14 @@ def cmd_annotations_derive(a) -> int:
                          f"update --claims`). A method is recorded with `hold config apply {name} "
                          f"--set method=<{'|'.join(sorted(am.METHODS))}>`")
     if a.dry_run:
-        _print(am.due(a.root, name, method).to_dict())
+        out = am.due(a.root, name, method).to_dict()
+        # a method that shows its diff (gutenberg-editions, 2026-11-17): per
+        # tier what a derivation would re-derive, keep, add, withdraw, carry
+        # and set aside — computed in memory, written nowhere
+        shown = am.preview(a.root, name, method, log=lambda m: print(m, file=sys.stderr))
+        if shown is not None:
+            out["preview"] = shown
+        _print(out)
         return 0
     key = None
     try:
@@ -7501,7 +7510,8 @@ def build_parser() -> argparse.ArgumentParser:
                                          "once the collection annotated holds a newer snapshot")
     root_arg(p); p.add_argument("collection")
     p.add_argument("--dry-run", action="store_true",
-                   help="say whether a derivation is due and why; run nothing")
+                   help="say whether a derivation is due and why, and for a method that shows one "
+                        "(gutenberg-editions) what it would change per tier; write nothing")
     p.set_defaults(fn=cmd_annotations_derive)
     p = averbs.add_parser("index", help="build the claim index on disk of a LARGE annotations collection's "
                                         "current snapshot (more than 250,000 claims): searched in place, "
