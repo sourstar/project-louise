@@ -95,7 +95,9 @@ louise dev carry wikidata wikidata.next --rebuilt
 louise dev carry wikidata wikidata.next --rebuilt --yes
 ```
 
-STOP if it names any difference but `parser` and `toolchain.platform_image`.
+STOP if it names any difference but `parser` and `toolchain.platform_image`. Since 2026-11-17 the carry
+also copies `state/cpu-reference/` (the same space and calibration set; "derived state carried" in its
+log). The scan cursors stay behind, since the parser moved: wikidata.next's first scan re-enumerates once.
 
 **5. The parts** (its own container, `deploy/supervise-pass.sh`, the night profile):
 
@@ -133,12 +135,18 @@ louise hold collection create annotations --name <c>.next --annotates gutenberg 
 # then the same without --dry-run, and `hold config apply <c>.next --set method=<its method>` if it has one
 ```
 
+Created as `<c>.next` while `<c>` is held, the new collection file takes `<c>`'s `title`; the rename keeps it.
+
 **8. The forgets**, the operator's yes with the sizes their dry runs print:
 
 ```bash
 louise hold collection forget wikidata --dry-run        # the old parts and snapshots; the corpus and the pack KEPT
 louise hold collection forget <c> --dry-run
 ```
+
+The old collection's `state/build/` is its records build's staging (the build database: a row per record
+of the plan, and the parts' entries): derived, read by nothing once step 5 has ended, and removed by the
+forget with the directory (`ls -ld` it first: a folder linked in from elsewhere would leave its target).
 
 **9. The names and resume:**
 

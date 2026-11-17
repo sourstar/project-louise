@@ -149,6 +149,33 @@ sampled" in one respect only: the Codex decides how many parts, and
 the platform how much of the origin one check may read for them
 (operator, 2026-09-20).
 
+**A unit weighs what a verifier reads** (amended 2026-11-17, after
+`records-vs-origin` drew 2 of wikipedia's records, both from its archive
+layer, and its ~30 M dump-layer records were never compared: each named
+its run's whole dump, 26 GB for enwiki, and its page_props, 458 MB).
+Where the origin can be read by Range, the unit is the range a record is
+read from — a multistream page's stream, as the run's own index gives
+it; an archive's row groups, the columns the parse reads — and its
+size is that range's. A piece a verifier must read whole that several
+units read too — a wiki's page_props and its multistream index in one
+run, a parquet's footer — is a **shared piece**: read once a check,
+counted in the bound when the first unit needing it is taken and never
+again. The units are ranked and taken as above; a unit whose own bytes
+do not fit ends the take, as before, and one that does not fit only for
+a shared piece not yet read is **passed over**, so the units whose
+shared pieces are already read are still taken. A unit with no shared
+piece is taken exactly as before, so no other collection's check moves.
+The first unit is still read whatever it weighs, its weight counting
+its shared pieces, and compared in part when that is heavier than the
+bound (enwiki's page_props alone is). The report says, per layer of the
+origin and per group (wikipedia: archive or dump, and the wiki), how
+many sampled records were compared and why the rest were not — passed
+over for a shared piece, or the bound spent before the seed reached
+them — and a layer of which no record was compared is said first: a
+pass on one layer is never read as a pass on the other. Wikidata's dump
+is one bzip2 stream with no index the origin publishes, so its unit is
+the file, compared in part as before.
+
 `hold check <collection>` runs the plan and prints a report; the same
 report is what the worker produces in the background, once per cadence
 for every collection it holds, with a fresh seed each time, and keeps

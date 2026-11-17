@@ -218,7 +218,8 @@ louise hold
                                                                        that change rewritten by the build's own writer — byte for byte a rebuild (RULE 1); refused while
                                                                        a snapshot lists the parts (amended 2026-10-28: wikipedia-v8's archive records carried bare names)
               check <collection> [--origin DIR | --origin-else DIR] [--seal [--live DIR]] [--sample F]
-                                                                       records against their own hashes and roots, against the origin, against the seal
+                    [--shards SLICE/NNNNN …]                           records against their own hashes and roots, against the origin, against the seal;
+                                                                       --shards: these parts alone, in place of the seeded sample (added 2026-11-17)
               seal <collection> <snapshot> --files DIR --trusted-list FILE --lotl FILE --lotl-signers FILE
                    [--format cades|pades|xades] [--revocation FILE …] [--fetch-revocation] [--url URL]
                                                                        the certifier captures the seals' evidence (03 §3.7; 09 §9.15) into seals/<snapshot>.json
@@ -833,6 +834,16 @@ reader needs at the command line:
   lower it; the attestation records the sample actually taken.
   `--origin-mib N` raises what `records-vs-origin` may read of the origin
   for this run — 256 MiB by default — and cannot lower it either (03 §3.2).
+  *Added 2026-11-17:* `records check --shards SLICE/NNNNN …` (or one
+  comma-separated list, as `hold check --shards` takes it) runs every check
+  on the parts named, in place of the seeded sample — an operator verifying
+  chosen parts, e.g. one dump-layer part of each wiki; the slice is written
+  as the snapshot names it (`lang=en/pages=12M/00042`), and a name the
+  snapshot does not list is said, never skipped silently. The bound still
+  applies to what the named parts reach. `records-vs-origin`'s report says,
+  per layer and per group of the origin (wikipedia: archive or dump, and the
+  wiki), how many sampled records were compared and why the others were
+  not; a layer of which none was compared is said first (03 §3.2).
 - **`key`.** `create` writes a new seed at `NODE_KEY_PATH` in the form
   of 09 §9.2, refuses to overwrite one, and prints the public key; a key
   file readable by anyone but its owner is refused at load, never

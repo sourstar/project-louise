@@ -865,6 +865,8 @@ def carry(root, from_ref: str, to_ref: str, *, copy: bool = False, apply: bool =
         plan["origin"] = share_origin(root, from_name, to_name, apply=False)["origin"]
         if not apply:
             log(f"[carry] {from_name} → {to_name}: origin {plan['origin']}")
+            plan["derived"] = derived_state(root, from_name, to_name, src, to, rebuilt=rebuilt,
+                                            apply=False, log=log)
             log(f"[carry] {from_name} → {to_name}: would {claim['mode']} the manifest "
                 f"({plan['documents']} documents), index/"
                 + (" (no vector: the target makes its own table, A1h)" if unembedded else
@@ -953,6 +955,9 @@ def carry(root, from_ref: str, to_ref: str, *, copy: bool = False, apply: bool =
     # the copied paths read the source's corpus through the TARGET's own link
     # (share_origin: Normattiva on parser 10, 2026-11-15)
     plan["origin"] = share_origin(root, from_name, to_name, log=log)
+    # and what is derived from that corpus, the space and the manifest, where
+    # what it is keyed on is the target's too (München, 2026-11-17: by hand)
+    plan["derived"] = derived_state(root, from_name, to_name, src, to, rebuilt=rebuilt, apply=True, log=log)
     if sister:
         # A1i: the source's vectors stayed with it; nothing in the copy may
         # still say this collection holds one
@@ -1010,6 +1015,134 @@ def carry(root, from_ref: str, to_ref: str, *, copy: bool = False, apply: bool =
            f"embedded in its own space (A1i)" if sister else
            f"use: `hold check {to_name} --checks vectors-sample` (amendment A1)"))
     return plan
+
+
+# ---- the derived state a successor takes (RULE 1, 2026-11-17) ---------------
+
+#: WHAT A COLLECTION KEEPS UNDER `state/`, and whether its successor takes it —
+#: the inventory behind `derived_state` (München, 2026-11-17, copied the first
+#: two by hand before forgetting the old wikipedia). By what each is keyed on:
+#:
+#:   cpu-reference/<role>/<run>.json  the CPU twin's vectors of the calibration
+#:       set: keyed on the role, the twin's run, the weights and the set, and a
+#:       function of the space's encoder side (window, instruction). CARRIED in
+#:       the same space with the same calibration set, each file read back
+#:       against its digest first.
+#:   wikipedia-archive-ids/*.npy  the archive's article ids per shard: keyed on
+#:       the shard's physical identity, mtime and size (by its walked path,
+#:       which holds the collection's name, until 2026-11-17). CARRIED, by the
+#:       plugin (`carry_state`), for each shard the corpus holds as it is now.
+#:   <plugin>_scan_cursor.json, <plugin>-<route>_scan_cursor.json  which
+#:       containers the manifest beside it holds, keyed corpus-relative on
+#:       (mtime, size): CARRIED with the manifest when the parser did not move.
+#:       Discovery is the parser's, and a cursor would make the target skip its
+#:       own (`--rebuilt`'s `--resign` re-signs by it): not carried then.
+#:   legi_scan_cursor.json, legi_ids.sqlite  legi's: they hold ABSOLUTE paths,
+#:       under `<root>/<name>/origin/`, so they name the collection: not carried
+#:       (the target's first scan writes its own).
+#:   calibration/  the gate's signed statements: not carried — a statement is
+#:       the SPACE's, and `runs.statements_for_space` already takes (and keeps)
+#:       one another collection of the space holds.
+#:   attestations/, anchor/, pointer/  keyed on the collection_id, which moved.
+#:   build/  the records build's staging (its database holds a row per record:
+#:       12 GB for wikipedia): the target's build or `hold records carry` seeds
+#:       its own from it; it goes with the source's `forget`.
+#:   ack.json  `recreate.carry_ack` (the same terms text).
+#:   carry.json, line-carry.json, rename.json, update.json, reconcile-content
+#:       .sqlite  a pass's own markers and work files, never another's.
+#:   genesis/<archive>/  an archive's download staging, tied to the manifest's
+#:       genesis_imports rows; backend_baseline-<name>.json  a version-2 gate's,
+#:       keyed on the name: neither carried.
+DERIVED = ("cpu-reference", "archive ids (the plugin's carry_state)", "scan cursors")
+
+
+def _carry_cpu_reference(root: Path, from_name: str, to_name: str, src: Codex, to: Codex, *,
+                         apply: bool) -> dict[str, Any]:
+    from . import cpu_reference as cpu_ref
+    out: dict[str, Any] = {"carried": 0, "present": 0, "refused": []}
+    base = Path(root) / from_name / "state" / "cpu-reference"
+    if not base.is_dir():
+        return {**out, "why": "none kept"}
+    if src.space is None or to.space is None or src.space_id != to.space_id:
+        return {**out, "why": "not carried: the spaces differ, and the reference is the space's encoder's"}
+    if src.space.calibration.set != to.space.calibration.set:
+        return {**out, "why": f"not carried: the calibration set moved ({src.space.calibration.set[:23]}… → "
+                              f"{to.space.calibration.set[:23]}…), and the reference is of the set"}
+    for d in sorted(p for p in base.iterdir() if p.is_dir()):
+        for f in sorted(d.glob("*.json")):
+            try:
+                ref = cpu_ref.read(f)
+            except (OSError, ValueError, KeyError, CodexError) as e:
+                out["refused"].append(f"{d.name}/{f.name}: {e}"[:160])
+                continue
+            if ref.role != d.name or ref.set_id != to.space.calibration.set:
+                out["refused"].append(f"{d.name}/{f.name}: of another role or set")
+                continue
+            dst = cpu_ref.directory(Path(root), to_name, d.name) / f.name
+            if dst.is_file() and dst.read_bytes() == f.read_bytes():
+                out["present"] += 1
+                continue
+            out["carried"] += 1
+            if apply:
+                dst.parent.mkdir(parents=True, exist_ok=True)
+                tmp = dst.with_name(f".{dst.name}.{os.getpid()}.tmp")
+                shutil.copyfile(f, tmp)
+                os.replace(tmp, dst)
+    return out
+
+
+def _carry_cursors(root: Path, from_name: str, to_name: str, src: Codex, to: Codex, *,
+                   rebuilt: bool, apply: bool) -> dict[str, Any]:
+    sd, td = Path(root) / from_name / "state", Path(root) / to_name / "state"
+    names = sorted(p.name for p in [sd / f"{src.plugin}_scan_cursor.json",
+                                    *sd.glob(f"{src.plugin}-*_scan_cursor.json")] if p.is_file())
+    if not names:
+        return {"carried": [], "why": "none kept"}
+    if rebuilt or src.plugin != to.plugin:
+        return {"carried": [], "why": "not carried: the parser moved, and discovery is the parser's — the "
+                                      "target scans once by its own"}
+    carried = []
+    for n in names:
+        if (td / n).is_file() and (td / n).read_bytes() == (sd / n).read_bytes():
+            continue
+        carried.append(n)
+        if apply:
+            td.mkdir(parents=True, exist_ok=True)
+            tmp = td / f".{n}.{os.getpid()}.tmp"
+            shutil.copyfile(sd / n, tmp)
+            os.replace(tmp, td / n)
+    return {"carried": carried}
+
+
+def derived_state(root, from_name: str, to_name: str, src: Codex, to: Codex, *, rebuilt: bool = False,
+                  apply: bool = False, log: Callable[[str], None] = print) -> dict[str, Any]:
+    """THE DERIVED STATE THE TARGET TAKES (RULE 1: reuse bytes that are
+    provably identical): what the inventory above names CARRIED, each only
+    where what it is keyed on is the target's too. Copied, never moved — the
+    source keeps its own until it is forgotten. Run after the target's origin
+    is the source's (`share_origin`), so the shards each cache names are the
+    ones the target reads. `apply=False` counts and writes nothing."""
+    from app import collections as collections_mod
+    root = Path(root)
+    out: dict[str, Any] = {
+        "cpu-reference": _carry_cpu_reference(root, from_name, to_name, src, to, apply=apply),
+        "scan cursors": _carry_cursors(root, from_name, to_name, src, to, rebuilt=rebuilt, apply=apply)}
+    plugin = collections_mod.PLUGIN_REGISTRY.get(to.plugin)
+    hook = getattr(plugin, "carry_state", None)
+    corpus = root / from_name / "origin"
+    if hook is not None and corpus.exists():
+        out.update(hook(corpus, root / from_name / "state", root / to_name / "state", apply=apply))
+    verb = "carried" if apply else "would carry"
+    said = []
+    for k, v in out.items():
+        n = v.get("carried")
+        n = len(n) if isinstance(n, list) else n
+        said.append(f"{k} {n}" + (f" ({v['why']})" if v.get("why") else "")
+                    + (f", {v['present']} already there" if v.get("present") else "")
+                    + (f", {v['stale']} of shards no longer there left" if v.get("stale") else "")
+                    + (f", {len(v['refused'])} refused" if v.get("refused") else ""))
+    log(f"[carry] {from_name} → {to_name}: derived state {verb}: " + "; ".join(said))
+    return out
 
 
 # ---- A1c: reconcile a rebuilt target --------------------------------------
