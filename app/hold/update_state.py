@@ -42,15 +42,23 @@ def read(root, name: str) -> dict[str, Any] | None:
     """The marker, or None when there is none or it does not parse (a
     marker is written atomically, so an unparseable one was written by
     hand — and is not read as a step reached)."""
+    return read_at(path(root, name))
+
+
+def read_at(p) -> dict[str, Any] | None:
     try:
-        got = json.loads(path(root, name).read_text(encoding="utf-8"))
+        got = json.loads(Path(p).read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return None
     return got if isinstance(got, dict) and got.get("kind") == KIND else None
 
 
 def write(root, name: str, doc: dict[str, Any]) -> None:
-    p = path(root, name)
+    write_at(path(root, name), doc)
+
+
+def write_at(p, doc: dict[str, Any]) -> None:
+    p = Path(p)
     p.parent.mkdir(parents=True, exist_ok=True)
     body = json.dumps({**doc, "kind": KIND, "version": VERSION}, sort_keys=True, indent=1) + "\n"
     tmp = p.with_name(p.name + ".tmp")

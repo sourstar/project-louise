@@ -41,6 +41,7 @@ why".
 """
 import bz2
 import hashlib
+from array import array
 import ipaddress
 import json
 import re
@@ -72,6 +73,8 @@ _SKIP_TITLE = re.compile(
     r"Gadget|Topic|Book):")
 _DUMP_SUFFIX = "-pages-articles-multistream.xml.bz2"
 _INDEX_SUFFIX = "-pages-articles-multistream-index.txt.bz2"
+#: index lines of the run before, looked up against this run's pages at once
+_GONE_BATCH = 100_000
 #: `<namespace key="14" case="first-letter">Kategorie</namespace>` (or the
 #: articles' own, `<namespace key="0" … />`) in a dump's <siteinfo>
 _NAMESPACE = re.compile(r'<namespace key="(-?\d+)"[^>]*?(?:/>|>([^<]*)</namespace>)')
@@ -397,11 +400,14 @@ class WikipediaSource:
             return
         from .. import walk
         dumps = walk.files(root, f"*{_DUMP_SUFFIX}")   # through links (walk.py)
-        # THE PINNED SNAPSHOT ONLY. Dated dumps coexist in one corpus by
-        # design (acquire/specs.py `_wiki_files`), and the node keeps the
-        # legacy `latest/` beside them: two dumps of one wiki mint the same
-        # ids, and every scan would flip each page between them. A pinned
-        # collection reads `<wiki>/<snapshot>/` and nothing else.
+        # THE CURRENT RUN ONLY. Dated dumps coexist in one corpus by design
+        # (acquire/specs.py `_wiki_files`), and the node keeps the legacy
+        # `latest/` beside them: two dumps of one wiki mint the same ids, and
+        # every scan would flip each page between them. A collection reads
+        # `<wiki>/<run>/` of the run it holds now and nothing else — the
+        # Codex's first run, then each later one an update moves it to
+        # (`state.snapshot` is app/hold/origin_run.py's `current_run`; 02
+        # §2.7, amended 2026-11-17)
         pin = getattr(state, "snapshot", None)
         if pin:
             dumps = [d for d in dumps if d.parent.name == pin]
@@ -504,6 +510,9 @@ class WikipediaSource:
             # stream's end (= the next distinct offset)
             pending: list[tuple[int, str, str]] = []
             last_offset = -1
+            # the pages this run holds, for the ones the run before it held
+            # and this one does not (`_gone_since`); a run's own pages only
+            held = array("q") if pin else None
             try:
                 with bz2.open(index, "rt", encoding="utf-8", errors="replace") as f:
                     for line in f:
@@ -519,6 +528,8 @@ class WikipediaSource:
                         if (title.startswith(skip) if skip else _SKIP_TITLE.match(title)):
                             continue
                         pending.append((offset, page_id, title))
+                        if held is not None:
+                            held.append(int(page_id))
             except Exception as e:  # noqa: BLE001 — truncated/corrupt index: one
                 # error ref, never a dead scan (same rule as pubmed containers)
                 yield DocRef(source_id=self.source_id, native_id=dump.name,
@@ -528,12 +539,82 @@ class WikipediaSource:
                 continue
             if pending:
                 yield from self._flush(pending, 0, dump, sig, lang, covered, props, unit_of)
+            if held is not None:
+                yield from self._gone_since(dump, pin, lang, held, covered, skip)
             # both files staged together, recorded once the dump's refs are
             # committed (cursor.Progress) — an interrupted scan resumes here
             progress.stage(dump)
             progress.stage(index)
             progress.stage(props)
         progress.flush()
+
+    def _gone_since(self, dump: Path, run: str, lang: str, held, covered, skip):
+        """06 §6.1's DELETION SIGNAL for a dated-dump origin: every article
+        the run BEFORE this one held and this run does not (deleted on the
+        wiki, or moved out of its articles' namespaces), as a `deleted` ref,
+        reason `withdrawn` (09 §9.4: "the origin no longer supplies it"). The
+        collection follows its runs (02 §2.7, amended 2026-11-17), so a page
+        the new run lacks leaves every index and the next snapshot — it is
+        never built again from the old run's files, which go once that
+        snapshot is published (06 §6.2). The run before is the newest
+        `<wiki>/<YYYYMMDD>/` older than `run` whose index is on disk; none
+        (a collection's first run, or the old run already deleted): no
+        signal. Its index is read once, when this run's dump is enumerated
+        (the scan cursor skips it after)."""
+        import numpy as np
+        wiki = dump.name.split("-")[0]
+        before = sorted((d.name for d in dump.parent.parent.iterdir()
+                         if d.is_dir() and len(d.name) == 8 and d.name.isdigit() and d.name < run),
+                        reverse=True) if dump.parent.parent.is_dir() else []
+        prev_index = None
+        for prev in before:
+            p = dump.parent.parent / prev / f"{wiki}-{prev}{_INDEX_SUFFIX}"
+            if p.is_file():
+                prev_index = p
+                break
+        if prev_index is None:
+            return
+        prev = prev_index.parent.name
+        locator = str(prev_index.parent / f"{wiki}-{prev}{_DUMP_SUFFIX}")
+        now = np.unique(np.frombuffer(held, dtype=np.int64)) if len(held) else np.zeros(0, np.int64)
+
+        def gone(batch: list[tuple[int, str]]):
+            # one vectorised lookup per batch: a Python call per index line
+            # was most of the pass (enwiki's index is ~23 M lines)
+            ids = np.fromiter((p for p, _ in batch), dtype=np.int64, count=len(batch))
+            at = np.searchsorted(now, ids)
+            there = (at < len(now)) & (now[np.minimum(at, max(len(now) - 1, 0))] == ids) \
+                if len(now) else np.zeros(len(ids), dtype=bool)
+            for k in np.flatnonzero(~there):
+                pid, title = batch[int(k)]
+                if archive.covers(covered, lang, pid):
+                    continue
+                yield DocRef(
+                    source_id=self.source_id, native_id=str(native_id_of(lang, pid)), locator=locator,
+                    error=f"withdrawn: {wiki}'s run {run} no longer holds page {pid} (its run {prev} did)",
+                    deleted=True, extra={"reason": "withdrawn", "lang": lang, "title": title})
+        try:
+            batch: list[tuple[int, str]] = []
+            with bz2.open(prev_index, "rt", encoding="utf-8", errors="replace") as f:
+                for line in f:
+                    _offset, _, rest = line.rstrip("\n").partition(":")
+                    page_id, _, title = rest.partition(":")
+                    if not page_id.isdigit():
+                        continue
+                    if (title.startswith(skip) if skip else _SKIP_TITLE.match(title)):
+                        continue
+                    batch.append((int(page_id), title))
+                    if len(batch) >= _GONE_BATCH:
+                        yield from gone(batch)
+                        batch = []
+            if batch:
+                yield from gone(batch)
+        except (OSError, EOFError, ValueError) as e:
+            # the old run's index unreadable: nothing is withdrawn on its word
+            yield DocRef(source_id=self.source_id, native_id=prev_index.name,
+                         locator=str(prev_index), scope="container",
+                         error=(f"{prev_index.name}: the run before {run} could not be read for the "
+                                f"pages it held ({type(e).__name__}: {e}); none withdrawn")[:300])
 
     def _flush(self, pending, end_offset, dump, sig, lang, covered, props, unit_of):
         for offset, page_id, title in pending:

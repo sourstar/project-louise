@@ -540,7 +540,17 @@ def _local_collection(root, name: str, codex, *, corpus_dir=None):
         # internally consistent.
         layers=layers_mod.layers_for(codex),
         codex=codex,
+        # THE RUN IT HOLDS NOW, for a dated-dump origin (02 §2.7, amended
+        # 2026-11-17): the one answer the worker's loader gives too
+        # (app/hold/origin_run.py). Without it a build's scan read every run
+        # in the corpus, and two runs of one wiki refuse each other
+        snapshot=_run_of(root, name, codex),
     )
+
+
+def _run_of(root, name: str, codex) -> str | None:
+    from . import origin_run
+    return origin_run.current_run(root, name, codex)
 
 
 def _ack_of(codex, state_dir):

@@ -5581,12 +5581,17 @@ def _sync_collections(all_collections, cons, last_discover, pipeline: bool = Fal
             # loaded (nothing is unloaded for being idle, 2026-11-08)
             _release_embedder(kept, cons[kept.name], "the switch")
         if (prev.acquire_enabled, prev.license_ack, prev.profile,
-                prev.extras, prev.peer_source) != \
+                prev.extras, prev.peer_source, prev.snapshot) != \
                 (kept.acquire_enabled, kept.license_ack, kept.profile,
-                 kept.extras, kept.peer_source):
+                 kept.extras, kept.peer_source, kept.snapshot):
+            # `snapshot`: the run of a dated-dump origin it holds moved (an
+            # update by cadence, app/hold/update.py; 02 §2.7 amended
+            # 2026-11-17) — its files are scanned now, not at the interval
             db.log_event(cons[kept.name], "info", "worker",
                          f"collection {kept.name!r} config changed "
-                         f"(acquire/license/profile/extras/peer) — re-discovering")
+                         f"(acquire/license/profile/extras/peer"
+                         + (f"; run {prev.snapshot} -> {kept.snapshot}" if prev.snapshot != kept.snapshot
+                            else "") + ") — re-discovering")
             if pipeline:
                 _request_discovery(kept.name, "config-changed")
             else:
