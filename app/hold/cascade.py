@@ -528,85 +528,82 @@ def refusal(name: str, loop: list[str]) -> str:
 
 
 # --------------------------------------------------------------------------
-# an update in flight
+# a source behind its period
 
-#: from a source's cutoff until its `update.json` appears, at most this long:
-#: the update keeper writes it at its first night beat after the cutoff, so a
-#: dependent due at the same instant (a monthly method on the 1st) waits for
-#: the source's new snapshot rather than take last month's (decided
-#: 2026-11-17, choice B)
-BEGIN_WAIT_S = 24 * 3600
+#: how many periods a source may be behind before the walk stops counting
+#: (a period a month: ~33 years; a loop bound, never reached)
+PERIODS_WALKED = 400
+
+
+def current_period(newest: str, codex, now: datetime) -> str:
+    """The source's CURRENT PERIOD: the latest period whose cutoff has
+    passed (09 §9.4), walked from its newest snapshot's — that one itself
+    while the next one's cutoff is still ahead."""
+    from . import snapshot as sn
+    period = newest
+    for _ in range(PERIODS_WALKED):
+        nxt = sn.next_snapshot_id(period)
+        if now < sn.cutoff_instant(nxt, cadence=codex.update.cadence, day=codex.update.day,
+                                   clock=codex.origin.clock):
+            break
+        period = nxt
+    return period
 
 
 def update_in_flight(root, name: str, codex=None, *, now: datetime | None = None) -> str | None:
-    """Why a dependent waits for `name`'s update by cadence, in plain words,
-    or None. Two cases:
+    """Why a dependent waits for `name`, in plain words, or None (operator,
+    2026-11-17: dependents never derive from an old dump).
 
-    - IN FLIGHT: its `state/update.json` names a step not done, its failure
-      is not exhausted, and the snapshot of the period it makes is not
-      published yet. A step after the snapshot (embed, old-run) is not in
-      flight: what the update delivers to the cascade is published, and the
-      old-run step waits for the cascade itself.
-    - ABOUT TO BEGIN (given `codex`): its cutoff has passed, no marker of
-      that update exists yet, and the update pass would act on it — it is
-      updated by cadence (`update.not_updated` None, which includes a
-      completion check declared), not refused (`origin_names_run`), the
-      node's keeper is on, and the node runs it from its origin with
-      acquisition on (what `worker._update_beat` takes) — for at most
-      `BEGIN_WAIT_S` after the cutoff. A source the pass refuses, or with
-      no `update`, never makes a dependent wait."""
+    A declared source that HAS an update by cadence — an `update` block, a
+    dated origin and a completion check (`update.not_updated` None) — makes
+    its dependents wait while it holds no PUBLISHED snapshot (the snapshot
+    and its signature) of its CURRENT PERIOD (`current_period`: the latest
+    whose cutoff has passed), which the update pass builds from the run that
+    period names (`update.complete_run`). That covers an update in flight,
+    one failed and being retried, one waiting for a human, one refused at an
+    old parser ("re-create wikipedia at parser 6 first") and one not begun.
+    There is no time cap: it waits until the source catches up, and says
+    why. A source with no update by cadence never makes anyone wait. Read
+    from the listing (a stat while it is unchanged) and, behind, the update
+    marker: never the origin, never a part."""
     from . import collection as col
     from . import update as update_mod
     from . import update_state
-    mk = update_state.read(root, name)
-    failure = (mk or {}).get("failure") or {}
-    if int(failure.get("tries") or 0) >= update_mod.MAX_TRIES:
-        return None                          # waits for a human: nothing to wait for here
-    if mk is not None and mk.get("step") not in (None, "done"):
-        period = mk.get("period")
-        if period and published(col.shard_dir_of(Path(root), name), period):
-            return None
-        wait = (mk.get("waiting") or {}).get("says")
-        return f"waits for {name}'s update {period}, at step {mk.get('step')}" + (f" ({wait})" if wait else "")
     if codex is None:
         return None
-    return _update_to_begin(root, name, codex, now or datetime.now(timezone.utc))
-
-
-def _update_to_begin(root, name: str, codex, now: datetime) -> str | None:
-    """The ABOUT-TO-BEGIN case of `update_in_flight`: the cheap checks
-    first (the Codex, the clock, a stat of the listing), the collection file
-    read only inside the window."""
-    from datetime import timedelta
-
-    from app import collections as collections_mod
-    from app import config
-
-    from . import collection as col
-    from . import snapshot as sn
-    from . import update as update_mod
     try:
-        if update_mod.not_updated(codex) is not None or update_mod.origin_names_run(codex):
+        if update_mod.not_updated(codex) is not None:
             return None
-        if not config.UPDATE_KEEPER:
-            return None
-        newest = listing(col.shard_dir_of(Path(root), name)).newest
-        if newest is None:
+        lst = listing(col.shard_dir_of(Path(root), name))
+        if lst.newest is None:
             return None                      # its first snapshot is built by hand
-        nxt = sn.next_snapshot_id(newest)
-        cutoff = sn.cutoff_instant(nxt, cadence=codex.update.cadence, day=codex.update.day,
-                                   clock=codex.origin.clock)
-        # in UTC: an aware datetime in a zone adds WALL time, and the night
-        # the clocks go back (1 November in New York) 24 h of it are 25 real
-        until = cutoff.astimezone(timezone.utc) + timedelta(seconds=BEGIN_WAIT_S)
-        if not (cutoff <= now < until):
-            return None
-        c = collections_mod.by_name(name)
-        if c is None or getattr(c, "source", "origin") == "shard" or not getattr(c, "acquire_enabled", False):
-            return None
-    except Exception:   # noqa: BLE001 — what cannot be read makes nobody wait
-        return None
-    return f"waiting for {name}'s {nxt} update to begin, until {until.astimezone().strftime('%H:%M')}"
+        period = current_period(lst.newest, codex, now or datetime.now(timezone.utc))
+        if period in lst.signed:
+            return None                      # caught up: published (`_publish_newest` backfills its marker)
+        refused = update_mod.origin_names_run(codex)
+        parser = update_mod.current_parser(codex) if refused else None
+    except Exception:   # noqa: BLE001 — a source that cannot be read is said, and waited for
+        return f"waits for {name}'s snapshot of its current period (its state cannot be read)"
+    if refused:
+        return f"waits for {name}'s {period} snapshot: re-create {name} at parser {parser} first"
+    if period == lst.newest:
+        return f"waits for {name}'s snapshot {period} to be published (signed)"
+    mk = update_state.read(root, name) or {}
+    failure = mk.get("failure") or {}
+    mp = str(mk.get("period") or "")
+    if mp and mp <= period and mk.get("step") not in (None, "done"):
+        then = f"; then up to {period}" if mp != period else ""
+        if failure:
+            tries = int(failure.get("tries") or 0)
+            if tries >= update_mod.MAX_TRIES:
+                return (f"waits for {name}'s update {mp}: step {failure.get('step')} failed {tries} times "
+                        f"({failure.get('error')}) and waits for a human (`louise hold collection update "
+                        f"{name} --retry`){then}")
+            return (f"waits for {name}'s update {mp}: step {failure.get('step')} failed ({tries} of "
+                    f"{update_mod.MAX_TRIES}), tried again next night{then}")
+        wait = (mk.get("waiting") or {}).get("says")
+        return f"waits for {name}'s update {mp}, at step {mk.get('step')}" + (f" ({wait})" if wait else "") + then
+    return f"waits for {name}'s update {period} to begin"
 
 
 # --------------------------------------------------------------------------
