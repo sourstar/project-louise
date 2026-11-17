@@ -179,3 +179,39 @@ def test_a_withdrawn_page_leaves_the_manifest_through_discovery(wp):
     assert withdrawn == [f"wikipedia:{native_id_of('tr', 21)}"]
     cheese = rows[str(native_id_of("tr", 20))]
     assert cheese["error"] is None and "/20261101/" in cheese["path"]
+
+
+def test_a_page_never_hashed_is_compared_with_the_unit_it_still_names(wp):
+    """The first scan writes no `txt_hash`; the next run's scan hashes the
+    old run's unit while it is on disk, so an unchanged page is re-pointed
+    with its marks kept — and with the old run gone, it is changed, as
+    before (no evidence)."""
+    import shutil
+
+    from app import db, discovery
+    root, _cx = wp
+    corpus = root / "wikipedia" / "origin"
+    wiki_runs.dump(corpus, "20261001", [(20, "Cheese", "same"), (24, "Salt", "same")])
+    c = collections_mod.by_name("wikipedia")
+    con = db.connect(c)
+    try:
+        discovery.sync_collection(con, c)
+        assert con.execute("SELECT COUNT(*) FROM documents WHERE txt_hash IS NULL").fetchone()[0] == 2
+        con.execute("UPDATE documents SET rdf_done=1, fts_done=1, embed_done=1")
+        con.commit()
+        wiki_runs.dump(corpus, "20261101", [(20, "Cheese", "same"), (24, "Salt", "same")])
+        _snapshot_file(root, "20261101", "2026-11")
+        stats = discovery.sync_collection(con, collections_mod.by_name("wikipedia"))
+        assert stats["changed"] == 0 and stats["relocated"] == 2
+        assert con.execute("SELECT COUNT(*) FROM documents WHERE embed_done=1 AND txt_hash IS NOT NULL "
+                           "AND path LIKE '%/20261101/%'").fetchone()[0] == 2
+        # the old run gone before the next one is read: no evidence, changed
+        wiki_runs.dump(corpus, "20261201", [(20, "Cheese", "same"), (24, "Salt", "same")])
+        con.execute("UPDATE documents SET txt_hash=NULL")
+        con.commit()
+        shutil.rmtree(corpus / "trwiki" / "20261101")
+        _snapshot_file(root, "20261201", "2026-12")
+        stats = discovery.sync_collection(con, collections_mod.by_name("wikipedia"))
+        assert stats["changed"] == 2
+    finally:
+        con.close()

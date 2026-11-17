@@ -44,6 +44,7 @@ import hashlib
 from array import array
 import ipaddress
 import json
+import os
 import re
 from pathlib import Path
 from xml.etree import ElementTree as ET
@@ -201,10 +202,15 @@ _LAST_CHUNK_BYTES = 1 << 20
 
 _stream_lock = threading.Lock()
 _stream_cache: dict = {}        # (dump, start, end) -> {page_id: the page Element}
+_STREAM_SLOTS = 2
 
 
 def _stream_pages(dump: Path, start: int, end: int) -> "dict[str, ET.Element]":
-    key = (str(dump), start, end)
+    # keyed on the file's PHYSICAL identity too (CLAUDE.md: caches key on it):
+    # a run deleted from the corpus, or a dump replaced at its path, is never
+    # answered from what was read of it before (a stat; a missing file raises)
+    st = os.stat(dump)
+    key = (str(dump), start, end, st.st_ino, st.st_size, st.st_mtime_ns)
     with _stream_lock:
         hit = _stream_cache.get(key)
         if hit is not None:
@@ -238,7 +244,12 @@ def _stream_pages(dump: Path, start: int, end: int) -> "dict[str, ET.Element]":
         if pid:
             pages[pid] = page
     with _stream_lock:
-        _stream_cache.clear()           # one slot: streams are read sequentially
+        # TWO slots, the oldest out: streams are read sequentially, and the
+        # scan of a new dump run reads each page's stream in the new run and
+        # in the run before it (discovery `_held_hash`) — one slot would
+        # decompress both streams again for every page
+        while len(_stream_cache) >= _STREAM_SLOTS:
+            _stream_cache.pop(next(iter(_stream_cache)))
         _stream_cache[key] = pages
     return pages
 
@@ -369,6 +380,14 @@ class WikipediaSource:
     #: could not find, so records-vs-origin reparsed no wikipedia record.
     LOCATOR_SEP = _LOCATOR_SEP
     LOCATOR_MEMBER_FIELDS = 2
+    #: a record parsed from the SAME origin bytes at another locator — a page
+    #: of the next dump run, its stream and page_props rows elsewhere — is the
+    #: same line but for its `origin`: the parse reads the locator for the
+    #: wiki's name alone (`extra.wiki`), which a run never moves. So the
+    #: records build of an update carries such a line with the row's
+    #: `origin` instead of parsing the page again (app/pack/build.py
+    #: `held_or_parsed`; 02 §2.7, amended 2026-11-17)
+    ORIGIN_MOVES_ALONE = True
     #: THE UPDATE BY CADENCE (app/hold/update.py; docs/notes/collection-updates.md
     #: §1): the origin's own record that the run a cutoff names is complete —
     #: Wikimedia's dumpstatus.json of each held wiki, `articlesmultistreamdump`

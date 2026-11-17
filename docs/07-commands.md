@@ -152,6 +152,14 @@ louise hold
               forget <collection> [--kinds …] [--yes] [--dry-run] [--here]  stop holding: remove this peer's copy and its state; --here when no worker runs
               rename <collection> <new-name> [--dry-run]               the same collection under another local name; nothing recomputed
               migrate <collection> [--apply]                           the 09 §9.3 fields a Codex predates added, each as null — collection_id moves; printed unless --apply
+              update <collection> [--dry-run] [--retry]                (*amended 2026-11-17*, docs/notes/collection-updates.md) the update by cadence of a collection
+                                                                       whose origin publishes dated runs and whose plugin declares how the origin says a run is
+                                                                       complete: the next complete run fetched, read (02 §2.7: the same collection), built into the
+                                                                       next snapshot (09 §9.4 `origin_run`), embedded where it changed, and its previous run
+                                                                       deleted once that snapshot is published and its annotations cascade has started; resumes at
+                                                                       the step `state/update.json` names; the worker runs it at night; --dry-run says what it would
+                                                                       fetch and its size; --retry a step that failed three times. Exit 0, 1 (a step failed), 2, 3
+                                                                       (waiting), 130
               list                                                     collections held, by lineage (amended 2026-10-25: `--all` dropped — dormant is a state of the
                                                                        network's catalogue, 04 §4.7, and every held collection is listed)
               show <collection>                                        Codex, snapshots, holdings, trust, certification, vitality, configuration, and the copy's state — refused, quarantine or in use — with every reason

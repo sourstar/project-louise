@@ -5,6 +5,7 @@ changes do we call fetch() to hash content; only when the hash actually
 differs do we reset downstream stage flags for that one document. A
 no-change run is just a stat scan — discover() never touches file content.
 """
+import dataclasses
 import sqlite3
 import time
 
@@ -231,6 +232,14 @@ def sync_collection(con, collection, *, stop=None, adopt: bool = False) -> dict:
                      f"resumes next scan {stats}")
     else:
         db.log_event(con, "info", "discover", f"discovery done {stats}")
+    # an update by cadence waiting on this scan of its new run hears that
+    # it read the run whole (app/hold/update.py `note_scan`): after the
+    # last commit, by whichever process scanned
+    try:
+        from .hold import update as update_mod
+        update_mod.note_scan(collection, stats)
+    except Exception as e:   # noqa: BLE001 — a scan never fails on its note
+        db.log_event(con, "warn", "discover", f"the update marker was not told of this scan: {e}"[:300])
     return stats
 
 
@@ -288,6 +297,27 @@ def _other_unit(order, ref, row) -> bool:
         return False
     here, held = order(ref.locator), order(row["path"])
     return here is not None and held is not None and here != held
+
+
+def _held_hash(plugin, ref, row) -> str | None:
+    """THE HELD UNIT'S HASH where the row never recorded one: a row the first
+    scan wrote has no `txt_hash` (discovery hashes on a LATER pass, when its
+    signature moves), so the next run of a dated dump (02 §2.7, amended
+    2026-11-17) read every such page as changed — re-parsed, re-indexed and
+    re-embedded though not a byte of it moved. While the unit the row still
+    names is on disk (the previous run stays until the next snapshot is
+    published, 06 §6.2), its bytes are hashed and compared instead; gone, or
+    unreadable, it proves nothing, and the page is changed, as before. For a
+    plugin whose next run moves a unit's locator and nothing else
+    (`ORIGIN_MOVES_ALONE`, wikipedia); PubMed's update files supersede by
+    content and keep their own path (`_other_unit`, unchanged)."""
+    if not getattr(plugin, "ORIGIN_MOVES_ALONE", False) or not row["path"] or row["path"] == ref.locator:
+        return None
+    try:
+        held = plugin.fetch(dataclasses.replace(ref, locator=row["path"]))
+    except Exception:   # noqa: BLE001 — the old unit unreadable: no evidence
+        return None
+    return held.raw_hash
 
 
 def _apply_batch(con, plugin, batch: list, counts: dict, stop, *, wait: bool,
@@ -411,7 +441,8 @@ def _apply_batch(con, plugin, batch: list, counts: dict, stop, *, wait: bool,
         elif (row["mtime"] != ref.mtime or row["size"] != ref.size
               or _other_unit(order, ref, row)):
             raw = plugin.fetch(ref)                 # no lock held here
-            if raw.raw_hash != row["txt_hash"]:
+            held_hash = row["txt_hash"] or _held_hash(plugin, ref, row)
+            if raw.raw_hash != held_hash:
                 writes.append((
                     "UPDATE documents SET path=?,txt_name=?,lang=COALESCE(?,lang),"
                     "mtime=?,size=?,txt_hash=?,"
@@ -426,9 +457,9 @@ def _apply_batch(con, plugin, batch: list, counts: dict, stop, *, wait: bool,
                 # the next scan — until then the stale path kept the corpus
                 # reading as moved, and every start re-enumerated it
                 writes.append((
-                    "UPDATE documents SET path=?,txt_name=?,mtime=?,size=?,error=NULL,"
+                    "UPDATE documents SET path=?,txt_name=?,mtime=?,size=?,txt_hash=?,error=NULL,"
                     "retries=0,updated_at=? WHERE uid=?",
-                    (ref.locator, txt_name, ref.mtime, ref.size, now, uid)))
+                    (ref.locator, txt_name, ref.mtime, ref.size, raw.raw_hash, now, uid)))
                 local["relocated"] += 1
             else:
                 writes.append(("UPDATE documents SET mtime=?,size=? WHERE uid=?",

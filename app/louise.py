@@ -4540,6 +4540,46 @@ def _trust_level(root, name: str, current) -> dict:
     return {"trust_level": out["level"], "trust_detail": out}
 
 
+def cmd_collection_update(a) -> int:
+    """`hold collection update <collection> [--dry-run] [--retry] [--json]`
+    (app/hold/update.py; docs/notes/collection-updates.md §1): the update by
+    cadence, from the step its marker names to as far as it goes now. Exit
+    0 done or nothing due, 1 a step failed (said, counted), 2 refused, 3
+    waiting, 130 stopped (07 §7.7) — what deploy/supervise-pass.sh reads.
+    SIGTERM, SIGINT or SIGHUP finish the current unit (a file's bytes, a
+    scan's batch, a build's part)."""
+    import json as _json
+
+    from app.hold import update as update_mod
+    from app.transfer.manager import get_manager
+    update_mod.raise_oom_score()
+    stop = threading.Event()
+
+    def on_stop(*_a) -> None:
+        stop.set()
+        with contextlib.suppress(Exception):   # workers parked in the budget see it
+            get_manager().wake_all()
+    if not a.dry_run:
+        for sig in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
+            try:
+                signal.signal(sig, on_stop)
+            except (ValueError, OSError):   # not the main thread
+                pass
+        _whole_quota()
+    got = update_mod.run(a.root, a.collection, stop=stop, dry_run=a.dry_run, retry=a.retry)
+    if a.json:
+        print(_json.dumps(got.to_dict(), sort_keys=True))
+    else:
+        print(f"{a.collection}: {got.says}")
+        fetch = (got.plan or {}).get("fetch")
+        if fetch:
+            print(f"  fetch:   {fetch['files_pending']} of {fetch['files']} file(s), "
+                  f"{fetch['bytes_pending']} of {fetch['bytes_total']} bytes listed "
+                  f"(estimated {fetch['bytes_estimated']}), profile {fetch['profile']}")
+            print(f"  disk:    {fetch['free']} bytes free, {fetch['need']} needed")
+    return got.exit
+
+
 def cmd_collection_migrate(a) -> int:
     if a.apply:
         _take_write_lock(a.root, a.name, "hold collection migrate --apply", exit_code=2)
@@ -7332,6 +7372,18 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = verbs.add_parser("show", help="a Codex and the ids derived from it")
     args_show(p); p.set_defaults(fn=cmd_show)
+
+    p = verbs.add_parser(
+        "update", help="the update by cadence: the origin's next complete run fetched, read, built "
+                       "into the next snapshot, embedded where it changed, and its previous run deleted "
+                       "once that snapshot is published (docs/notes/collection-updates.md)")
+    root_arg(p); p.add_argument("collection")
+    p.add_argument("--dry-run", action="store_true",
+                   help="what it would do now and what it would fetch; nothing moved or written")
+    p.add_argument("--retry", action="store_true",
+                   help="a step that failed three times waits for a human: try it again now")
+    p.add_argument("--json", action="store_true", help="the outcome as one JSON object")
+    p.set_defaults(fn=cmd_collection_update)
 
     p = verbs.add_parser(
         "migrate", help="add the §9.3 fields a Codex predates, each as null")

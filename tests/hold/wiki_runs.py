@@ -21,7 +21,20 @@ def page(pid: int, title: str, text: str, rev: int | None = None) -> str:
 
 def dump(corpus: Path, run: str, pages, *, wiki: str = "trwiki", props=None) -> Path:
     """`<corpus>/<wiki>/<run>/`: one multistream stream per page, its index
-    and the run's page_props (`props`: (page, name, value) rows)."""
+    and the run's page_props (`props`: (page, name, value) rows). Each run's
+    files are stamped with the run's own day, as files fetched a month apart
+    are — two runs written in one second would read as a corpus moved."""
+    import os
+    from datetime import datetime, timezone
+    d = _write(corpus, run, pages, wiki=wiki, props=props)
+    at = datetime.strptime(run, "%Y%m%d").replace(tzinfo=timezone.utc).timestamp()
+    for f in d.iterdir():
+        if f.is_file():
+            os.utime(f, (at, at))
+    return d
+
+
+def _write(corpus: Path, run: str, pages, *, wiki: str, props) -> Path:
     from tests import wikipedia_props
     d = Path(corpus) / wiki / run
     d.mkdir(parents=True, exist_ok=True)
