@@ -40,3 +40,26 @@ def test_the_tsv_is_louise_ocrs_format_and_the_licence_is_byte_exact(tmp_path: P
     assert hashlib.sha256((tmp_path / "LICENCE").read_bytes()).hexdigest() == \
         "3f941b3b89cf7b8370ceb83cc76d2120d471b58735d8ca60238a751a48d7f72f"
     assert (tmp_path / "SOURCES").read_text(encoding="utf-8").startswith("wikisource-it-test\thttps://huggingface.co/")
+
+
+def test_scan_pages_count_by_the_print_year_of_their_edition_and_only_proofread(tmp_path: Path):
+    import bz2
+    page = lambda ns, title, text: (f"<page><title>{title}</title><ns>{ns}</ns><revision><text>{text}</text>"
+                                    "</revision></page>")
+    q = lambda lv: f'&lt;noinclude&gt;&lt;pagequality level="{lv}" user="x" /&gt;&lt;/noinclude&gt;'
+    xml = ('<mediawiki xmlns="http://www.mediawiki.org/xml/export-0.11/">'
+           + page(110, "Indice:Rime.djvu", "{{:MediaWiki:Proofreadpage_index_template\n|Anno=1554\n}}")
+           + page(110, "Indice:Moderna.djvu", "|Anno=1912\n")
+           + page(108, "Pagina:Rime.djvu/1", q(4) + "L&apos;huomo vtile")
+           + page(108, "Pagina:Rime.djvu/2", q(1) + "nonriletta")
+           + page(108, "Pagina:Moderna.djvu/1", q(4) + "uomo")
+           + page(0, "Rime", "testo del namespace principale")
+           + "</mediawiki>").encode()
+    dump = tmp_path / "it-pages-articles.xml.bz2"
+    dump.write_bytes(bz2.compress(xml))
+    years = w.print_years(w._pages(dump))
+    assert years == {"Rime.djvu": 1554, "Moderna.djvu": 1912}
+    counts = w.count_all(w.scan_page_texts(w._pages(dump), years, 1200, 1899, 3), procs=1)
+    assert counts == {("l'", 1500): 1, ("huomo", 1500): 1, ("vtile", 1500): 1}
+    w.write_terms(tmp_path, "wikisource-it-pages-test", dump)
+    assert "print year of their edition" in (tmp_path / "SOURCES").read_text(encoding="utf-8")

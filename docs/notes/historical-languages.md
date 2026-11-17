@@ -118,6 +118,23 @@ it.parquet --out /mnt/ssd3/louise-ocr/lexicon/it-old/`). TLIO's forms
 cannot travel this way: this repository is public and TLIO's use is
 non-commercial and unshared until the operator records its licence.
 
+**Built (2026-11-17), the period's own spelling: `--pages`.** louise-ocr
+measured 18.1 % of GLM-OCR's words unseen, correct period spellings
+(*vtilissimo*) among them: the main namespace dates a text by its WORK and
+often holds a modern, regularised edition. The XML dump's scan pages
+(ns 108, transcribed from the scanned EDITION; ſ as s by Wikisource's
+convention) dated by the edition's PRINT year (ns 110, Anno), proofread
+only (level ≥ 3): `python -m tools.lexicon.wikisource_period_freq --pages
+itwikisource-latest-pages-articles.xml.bz2 --out DIR --source
+wikisource-it-pages-20261101 --from 1400 --to 1899`. Counted on the
+20261101 dump (445 MB; 3,840 dated editions; 3 min 43 s, the XML parse in
+one process — bz2 is one stream; the counting on the pool): 1,361,607
+rows; words by print century 1400s 0.1M, 1500s 1.5M, 1600s 1.6M, 1700s
+4.7M, 1800s 63.5M. *huomo* 1,010 (1500s) where the work-dated list is
+regularised; *vtilissimo* attested; the OCR slip *ehe* 2 in the 1500s
+(proofread pages carry few slips; 46 in the 1800s). TSV sha256
+122663640dd6913940957221a893393f7f2d6cc1175721fcf6097f84747d6fe5.
+
 **(3) BERToldo on CPU.** Eight models (Palmero Aprosio, Menini, Tonelli,
 LT4HALA 2022): BERT-base architecture (110M parameters), 128-token
 window; trained on Wikisource and Liberliber, split till1500,

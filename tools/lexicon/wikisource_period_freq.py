@@ -11,6 +11,19 @@ OCR readings by period"). The format is the one louise-ocr loads as is:
 
     python -m tools.lexicon.wikisource_period_freq it.parquet --out DIR \\
         [--source wikisource-it-20231201] [--from 1200 --to 1899] [--min 1]
+    python -m tools.lexicon.wikisource_period_freq --pages itwikisource-...-pages-articles.xml.bz2 \\
+        --out DIR --source wikisource-it-pages-20261101 [--level 3]
+
+TWO SOURCES, two dates. The Parquet dump (the main namespace) dates a text
+by its WORK, and many of its texts come from modern editions, regularised:
+louise-ocr measured correct period spellings (vtilissimo) as unseen. The
+XML dump's scan pages (ns 108 "Pagina:", transcribed from the scanned
+EDITION, ſ written as s by Wikisource's convention) are dated by the
+edition's print year (ns 110 "Indice:", field Anno) and kept only where
+proofread (pagequality level >= 3, by default): that is the period's own
+spelling. Counted, 20261101 dump: proofread pages of editions printed
+1500-1599 1.5M words (68 editions), 1600-1699 1.6M (77), 1700-1799 4.7M
+(181); in them huomo 1,651 against uomo 422 (1500s), vtile 27.
 
 The input is the Parquet file of hf.co/datasets/wikimedia/wikisource,
 config 20231201.it (CC BY-SA 3.0; the derived list is CC BY-SA 3.0,
@@ -95,24 +108,96 @@ def write(counts: collections.Counter, out: Path, source: str, minimum: int = 1)
 LICENCE = Path(__file__).with_name("CC-BY-SA-3.0.legalcode.txt")
 
 
-def write_terms(out: Path, source: str, parquet: Path) -> None:
+def write_terms(out: Path, source: str, dump: Path) -> None:
     """LICENCE: the CC BY-SA 3.0 legal code, byte-exact; SOURCES: one line."""
     (out / "LICENCE").write_bytes(LICENCE.read_bytes())
+    if dump.name.endswith(".xml.bz2"):
+        where = f"https://dumps.wikimedia.org/itwikisource/ ({dump.name}): scan pages (ns 108) proofread, by the print year of their edition (ns 110 Anno)"
+    else:
+        where = f"https://huggingface.co/datasets/wikimedia/wikisource (config 20231201.it, {dump.name}): by the year of the work"
     (out / "SOURCES").write_text(
-        f"{source}\thttps://huggingface.co/datasets/wikimedia/wikisource (config 20231201.it, {parquet.name})"
-        "\tCC BY-SA 3.0 (and GFDL), the Italian Wikisource contributors; derived word counts by century of the"
-        " work, CC BY-SA 3.0; built by tools/lexicon/wikisource_period_freq.py\n", encoding="utf-8")
+        f"{source}\t{where}\tCC BY-SA 3.0 (and GFDL), the Italian Wikisource contributors; derived word counts"
+        " by century, CC BY-SA 3.0; built by tools/lexicon/wikisource_period_freq.py\n", encoding="utf-8")
+
+
+_ANNO = re.compile(r"\|\s*Anno\s*=\s*([^\n|]*)")
+_QUALITY = re.compile(r'<pagequality level="(\d)"')
+_NOINCLUDE = re.compile(r"<noinclude>.*?</noinclude>", re.S)
+
+
+def _pages(xml_bz2: Path):
+    """(namespace, title, text) of every page of a MediaWiki XML dump."""
+    import bz2
+    import xml.etree.ElementTree as ET
+    for _, el in ET.iterparse(bz2.open(xml_bz2), events=("end",)):
+        if el.tag.endswith("}page"):
+            ns = next((c.text for c in el if c.tag.endswith("}ns")), None)
+            title = next((c.text or "" for c in el if c.tag.endswith("}title")), "")
+            rev = next((c for c in el if c.tag.endswith("}revision")), None)
+            text = next((c.text or "" for c in rev if c.tag.endswith("}text")), "") if rev is not None else ""
+            yield ns, title, text
+            el.clear()
+
+
+def print_years(pages) -> dict[str, int]:
+    """Indice (ns 110) name -> the edition's print year, from its Anno field."""
+    out = {}
+    for ns, title, text in pages:
+        if ns == "110":
+            m = _ANNO.search(text)
+            y = re.search(r"1\d{3}", m.group(1)) if m else None
+            if y:
+                out[title.split(":", 1)[1]] = int(y.group(0))
+    return out
+
+
+def scan_page_texts(pages, years: dict[str, int], lo: int, hi: int, level: int) -> list[tuple[int, str]]:
+    """(century of the print, text) of each scan page proofread to `level`."""
+    out = []
+    for ns, title, text in pages:
+        if ns != "108":
+            continue
+        y = years.get(title.split(":", 1)[1].rsplit("/", 1)[0])
+        q = _QUALITY.search(text)
+        if y is None or not lo <= y <= hi or not q or int(q.group(1)) < level:
+            continue
+        out.append(((y // 100) * 100, _NOINCLUDE.sub(" ", text)))
+    return out
+
+
+def count_all(dated: list[tuple[int, str]], procs: int | None = None) -> collections.Counter:
+    total: collections.Counter = collections.Counter()
+    chunks = [dated[i:i + 500] for i in range(0, len(dated), 500)]
+    if procs == 1:
+        for ch in chunks:
+            total.update(count_texts(ch))
+        return total
+    with mp.get_context("spawn").Pool(procs) as pool:
+        for c in pool.imap_unordered(count_texts, chunks):
+            total.update(c)
+    return total
 
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    ap.add_argument("parquet", type=Path)
+    ap.add_argument("parquet", type=Path, nargs="?")
+    ap.add_argument("--pages", type=Path, help="the XML dump (.xml.bz2): scan pages by print year")
+    ap.add_argument("--level", type=int, default=3, help="the least proofread level of a scan page")
     ap.add_argument("--out", type=Path, required=True, help="the directory to write into")
     ap.add_argument("--source", default="wikisource-it-20231201")
     ap.add_argument("--from", dest="lo", type=int, default=1200)
     ap.add_argument("--to", dest="hi", type=int, default=1899)
     ap.add_argument("--min", type=int, default=1)
     a = ap.parse_args(argv)
+    a.out.mkdir(parents=True, exist_ok=True)
+    if a.pages:
+        years = print_years(_pages(a.pages))                   # two passes: the Indici first
+        counts = count_all(scan_page_texts(_pages(a.pages), years, a.lo, a.hi, a.level))
+        name = f"{a.source}-{a.lo}-{a.hi}.tsv"
+        n = write(counts, a.out / name, a.source, a.min)
+        write_terms(a.out, a.source, a.pages)
+        print(f"{name}: {n} rows ({len(years)} dated editions)")
+        return 0
     import pyarrow.parquet as pq
     t = pq.read_table(a.parquet, columns=["title", "text"]).to_pydict()
     counts = frequencies(t["title"], t["text"], a.lo, a.hi)
