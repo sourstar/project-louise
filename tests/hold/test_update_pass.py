@@ -149,15 +149,18 @@ def test_an_incomplete_run_is_waited_for_never_fetched(node):
     node.publish(NEW, NEW_PAGES, done=False)
     got = node.pass_()
     assert got.state == "waiting" and got.exit == update.EXIT_WAITING
-    assert got.says == ("waiting for Wikimedia's 2026-11-01 run to complete: "
-                        "trwiki: articlesmultistreamdump in-progress")
+    assert got.says == ("waiting for Wikimedia's 20261101 run: trwiki: articlesmultistreamdump in-progress; "
+                        "asked again tonight")
     assert node.marker()["step"] == "due"
-    assert node.origin.request_counts == {"trwiki/20261101/dumpstatus.json": 1}
+    # the current run, and the newer one listed (it would supersede it, had
+    # it completed first); the run the collection reads is never asked
+    assert node.origin.request_counts == {"trwiki/20261101/dumpstatus.json": 1,
+                                          "trwiki/20261201/dumpstatus.json": 1}
     assert node.origin.last_user_agent["trwiki/20261101/dumpstatus.json"].startswith("louise-rag/"), \
         "Wikimedia's User-Agent policy: a product string, never the library's default"
     shown = update.describe(node.root, "wikipedia")
-    assert shown["says"] == ("update 2026-11: waiting for Wikimedia's 2026-11-01 run to complete: "
-                             "trwiki: articlesmultistreamdump in-progress")
+    assert shown["says"] == ("update 2026-11: waiting for Wikimedia's 20261101 run: "
+                             "trwiki: articlesmultistreamdump in-progress; asked again tonight")
 
 
 def test_the_whole_update(node, monkeypatch):
@@ -236,6 +239,107 @@ def test_the_whole_update(node, monkeypatch):
     # once more: nothing is due until the next cutoff, and the origin is not asked
     asked = dict(node.origin.request_counts)
     assert node.pass_().state == "not-due" and node.origin.request_counts == asked
+
+
+def _with_checksums(node, run: str) -> dict[str, bytes]:
+    """The run's dumpstatus.json listing each file with its md5 and size,
+    as Wikimedia's does; the origin's bytes, by name."""
+    import hashlib
+    d = node.origin.root / "trwiki" / run
+    files = {f.name: f.read_bytes() for f in d.iterdir() if f.name != "dumpstatus.json"}
+
+    def listed(names):
+        return {n: {"size": len(files[n]), "url": f"/trwiki/{run}/{n}", "md5": hashlib.md5(files[n]).hexdigest()}
+                for n in names}
+    ms = [n for n in files if "multistream" in n]
+    props = [n for n in files if n.endswith("page_props.sql.gz")]
+    (d / "dumpstatus.json").write_text(json.dumps({"jobs": {
+        "articlesmultistreamdump": {"status": "done", "files": {}},
+        "articlesmultistreamdumprecombine": {"status": "done", "files": listed(ms)},
+        "pagepropstable": {"status": "done", "files": listed(props)}}, "version": "0.8"}))
+    return files
+
+
+def test_a_fetched_dump_off_the_origins_md5_is_mended_by_its_bad_stream_alone(node, monkeypatch):
+    """The origin's checksum held (dumpstatus.json's md5 per file), and a dump
+    that misses it MENDED: its bad stream's bytes fetched again by Range,
+    never the file whole (operator, 2026-11-17)."""
+    from app.acquire import engine
+    node.publish(NEW, NEW_PAGES)
+    files = _with_checksums(node, NEW)
+    name = f"trwiki-{NEW}-pages-articles-multistream.xml.bz2"
+    real = engine.run_acquisition
+
+    def fetched_then_damaged(con, c, spec, profile, **kw):
+        got = real(con, c, spec, profile, **kw)
+        p = node.corpus / "trwiki" / NEW / name
+        b = bytearray(p.read_bytes())
+        b[len(b) // 2] ^= 0x41                       # inside the second page's stream
+        p.write_bytes(bytes(b))
+        return got
+    monkeypatch.setattr(engine, "run_acquisition", fetched_then_damaged)
+    got = node.pass_()
+    assert got.step == "old-run", got.says
+    fetch = node.marker()["steps"]["fetch"]["counts"]
+    assert fetch["verified"] == 3, "the dump, its index and the page_props, each held to its md5"
+    (m,) = fetch["mended"]
+    assert m["state"] == "mended" and m["file"] == name and 0 < m["refetched"] < len(files[name]) / 2
+    rel = f"trwiki/{NEW}/{name}"
+    assert len(node.origin.range_requests[rel]) == 1 and node.origin.request_counts[rel] == 2, \
+        "the whole GET of the fetch, then one Range for the bad stream: never the file again"
+    assert (node.corpus / "trwiki" / NEW / name).read_bytes() == files[name]
+    from app import db
+    con = db.connect(collections_mod.by_name("wikipedia"))
+    try:
+        row = con.execute("SELECT blake2, fetch_done FROM fetch_files WHERE rel_path=?", (rel,)).fetchone()
+    finally:
+        con.close()
+    import hashlib
+    assert tuple(row) == (hashlib.blake2b(files[name], digest_size=16).hexdigest(), 1), "the row: its new bytes"
+
+
+def test_a_fetched_file_that_cannot_be_told_apart_goes_again_in_full_after_its_backoff(node, monkeypatch):
+    from app.acquire import engine
+    node.publish(NEW, NEW_PAGES)
+    _with_checksums(node, NEW)
+    props = f"trwiki-{NEW}-page_props.sql.gz"
+    real = engine.run_acquisition
+
+    def fetched_then_damaged(con, c, spec, profile, **kw):
+        got = real(con, c, spec, profile, **kw)
+        p = node.corpus / "trwiki" / NEW / props
+        if p.is_file():
+            b = bytearray(p.read_bytes())
+            b[len(b) // 2] ^= 0x41
+            p.write_bytes(bytes(b))
+        return got
+    monkeypatch.setattr(engine, "run_acquisition", fetched_then_damaged)
+    got = node.pass_()
+    assert got.state == "failed" and got.step == "fetch"
+    assert "not a bzip2 file" in got.says and "fetched again in full" in got.says, got.says
+    assert not (node.corpus / "trwiki" / NEW / props).exists()
+    # the next night: pending again once its backoff is out (the engine's
+    # gentle policy), fetched whole, and the update goes on
+    monkeypatch.setattr(engine, "run_acquisition", real)
+    monkeypatch.setattr(engine, "retry_wait_s", lambda n: 0)
+    got = node.pass_(now=NOW.replace(day=3))
+    assert got.step == "old-run", got.says
+    assert node.origin.request_counts[f"trwiki/{NEW}/{props}"] == 2
+
+
+def test_a_mend_under_way_is_said_on_the_card(node):
+    from app.acquire import repair
+    wiki_runs.dump(node.corpus, NEW, NEW_PAGES)
+    dump = node.corpus / "trwiki" / NEW / f"trwiki-{NEW}-pages-articles-multistream.xml.bz2"
+    update_state.write(node.root, "wikipedia", {"collection_id": "c", "period": "2026-11", "run": NEW,
+                                                "step": "fetch", "steps": {}, "failure": None})
+    repair.sidecar_of(dump).write_text(json.dumps({"phase": "check", "regions": 1, "region": 4 << 30,
+                                                   "size": 8 << 30, "md5": "0" * 32}))
+    says = update.describe(node.root, "wikipedia")["says"]
+    assert f"mending {dump.name}: its blocks checked, 4.3 of 8.6 GB" in says, says
+    repair.sidecar_of(dump).write_text(json.dumps({"phase": "fetch", "bad": [[0, 9], [20, 30]], "done": 1,
+                                                   "size": 8 << 30, "md5": "0" * 32}))
+    assert f"mending {dump.name}: 1 of 2 bad range(s) fetched again" in update.describe(node.root, "wikipedia")["says"]
 
 
 def test_the_old_run_waits_for_the_annotations_cascade(node, monkeypatch):
@@ -369,6 +473,22 @@ def test_a_collection_whose_origin_names_the_run_is_planned_and_never_run(node5,
     rc = louise.main(["hold", "collection", "update", "wikipedia", "--root", str(node.root)])
     assert rc == 2 and "re-create at parser 6 first" in capsys.readouterr().out
     assert update.describe(node.root, "wikipedia")["state"] == "waits-recreation"
+
+
+def test_a_dependent_of_wikipedia_at_parser_5_waits_for_its_re_creation(node5):
+    """The cascade's wait (app/hold/cascade.py `update_in_flight`) on the
+    real plugin: wikipedia at parser 5 is refused by the pass, so after its
+    cutoff it holds no snapshot of its current period, and a dependent waits
+    — no time cap — saying what would bring it up."""
+    from app.hold import cascade
+    codex = collections_mod.by_name("wikipedia").codex
+    sn.sign_snapshot(node5.root, "wikipedia", node5.snapshot("2026-10"), KEY, now="2026-11-02T00:00:00Z")
+    cascade.reset()
+    before = datetime(2026, 11, 20, tzinfo=timezone.utc)
+    assert cascade.update_in_flight(node5.root, "wikipedia", codex, now=before) is None, "2026-10 is its period"
+    for later in (NOW, NOW.replace(month=12, day=30)):
+        assert cascade.update_in_flight(node5.root, "wikipedia", codex, now=later) == \
+            "waits for wikipedia's 2026-11 snapshot: re-create wikipedia at parser 6 first"
 
 
 def test_only_parser_5_declares_that_its_origin_names_the_run():

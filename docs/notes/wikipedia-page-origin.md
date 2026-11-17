@@ -28,7 +28,12 @@ wikipedia). Nothing else in a line moves.
 | `wikipedia-articles` (12.3 M claims) | created again from its own snapshot's claims, against the new collection (`create annotations`, by the book) | ~20-30 min, ~4 GB export |
 
 The live Codex keeps parser 5 (`WikipediaSourceV5`) until the swap. The deploy changes nothing for it, and
-the update pass refuses it: "re-create at parser 6 first".
+the update pass refuses it: "re-create at parser 6 first". Since 2026-11-17 its dependents WAIT for it too, with no
+time cap: from 2026-12-01 00:00 UTC (the cutoff of wikipedia's 2026-11) an annotations collection that declares
+wikipedia and is due — gutenberg-editions on the 1st, by its method's inputs — says "waits for wikipedia's 2026-11
+snapshot: re-create wikipedia at parser 6 first" and derives nothing from the old dump. So this re-creation is due
+before 1 December. While gutenberg-editions waits, each wikidata run it would read keeps the one before it on disk
+(~104 GB), because wikidata's old-run step waits for the cascade to start.
 
 ## Measured here, and the node's estimates
 
@@ -187,5 +192,13 @@ louise hold collection update wikipedia --dry-run     # planned, not refused: "u
 The next monthly run re-issues only the parts whose pages changed. An unchanged page's line is
 byte-identical (test `test_the_whole_update`). Read the first update's step timings off `state/update.json`
 into the scheduling log, with the parts re-issued against 26,551.
+
+The update takes the current run only (collection-updates.md §6): the newest run before the cutoff, waited for
+while any held wiki's `dumpstatus.json` says the job writing one of its files is not `done` (for a wiki dumped in
+parts, `articlesmultistreamdumprecombine`), asked again at the nightly beat, never replaced by an older run. Each
+fetched file is held to the md5 and size its wiki's `dumpstatus.json` lists. A multistream dump that misses its md5
+is mended: its bad streams are found by their CRCs and only their bytes are fetched again by Range. The page_props
+(gzip) goes again in full when it misses, said why. `state/update.json`'s fetch step lists each mend
+(`counts.mended`: the file, the bytes fetched again, the ranges).
 
 **Wikidata** takes the same mechanism, its entity table built by the node: [wikidata-entity-origin.md](wikidata-entity-origin.md).

@@ -3,6 +3,8 @@
 dump with the run's two checksum files, two connections; the snapshot
 index keeps the dated directories that hold a full dump (not every one
 does)."""
+from types import SimpleNamespace
+
 from app.acquire import spec as acquire_spec, specs
 from app.acquire.specs import WIKIDATA_SPEC
 
@@ -66,3 +68,38 @@ def test_the_snapshot_index_keeps_only_directories_with_a_full_dump(monkeypatch)
     # invariant 5: the top listing and each of the five dated listings, drawn
     assert len(drawn) == len(pages) and sum(drawn) == sum(len(t.encode()) for t in pages.values())
     assert WIKIDATA_SPEC.snapshot_index is specs.wikidata_snapshots
+
+
+def test_the_snapshot_index_keeps_a_run_still_writing_its_full_dump(monkeypatch):
+    """The current run is the newest that carries OR IS WRITING the full dump
+    (operator, 2026-11-17: never an old dump while the current one is not
+    complete): a directory with all.json.gz and no .bz2 yet, and one that
+    lists none of its files yet, are runs the update waits for — dropping
+    them made the run before them look current."""
+    import httpx
+
+    from app.acquire import budget
+    base = "https://dumps.wikimedia.org/wikidatawiki/entities/"
+    pages = {base: '<a href="20261123/">x</a> <a href="20261127/">x</a> <a href="20261130/">x</a> '
+                   '<a href="20261207/">x</a>',
+             base + "20261207/": '<a href="../">../</a>',
+             base + "20261130/": 'wikidata-20261130-all.json.gz wikidata-20261130-md5sums.txt',
+             base + "20261127/": 'wikidata-20261127-lexemes.json.bz2 wikidata-20261127-md5sums.txt',
+             base + "20261123/": 'wikidata-20261123-all.json.bz2 wikidata-20261123-all.json.gz'}
+
+    class Client:
+        def __init__(self, *a, **k):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            pass
+
+        def get(self, url, headers=None):
+            return SimpleNamespace(text=pages[url], content=pages[url].encode(), status_code=200,
+                                   raise_for_status=lambda: None)
+    monkeypatch.setattr(httpx, "Client", Client)
+    monkeypatch.setattr(budget, "acquire_bytes", lambda n: None)
+    assert specs.wikidata_snapshots() == ("20261207", "20261130", "20261123")

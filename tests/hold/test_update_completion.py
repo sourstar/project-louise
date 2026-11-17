@@ -98,3 +98,52 @@ def test_an_origin_that_refuses_is_a_failure_not_a_deferral(monkeypatch):
                            client_factory=lambda: _Client({"enwiki": (403, b"")}))
 
 
+# ---------------------------------------------------------------- the job that writes the file
+
+def _record(run: str, wiki: str, **jobs) -> bytes:
+    """A record as Wikimedia writes it (trwiki's 20261101, read 2026-11-17):
+    `jobs` maps a job to (status, {file name: md5}) — a wiki dumped in parts
+    writes the one multistream file in `articlesmultistreamdumprecombine`."""
+    out = {}
+    for job, (status, files) in jobs.items():
+        out[job] = {"status": status, "files": {
+            n: {"size": 1000 + i, "url": f"/{wiki}/{run}/{n}", "md5": md5, "sha1": "0" * 40}
+            for i, (n, md5) in enumerate(files.items())}}
+    return json.dumps({"jobs": out, "version": "0.8"}).encode()
+
+
+def test_a_wiki_dumped_in_parts_is_complete_only_once_its_recombined_file_is_written():
+    ds = DumpStatus()
+    (r,) = ds.records("20261101", ["lang=tr"])
+    parts = {"trwiki-20261101-pages-articles-multistream1.xml-p1p1500000.bz2": "a" * 32}
+    props = {"trwiki-20261101-page_props.sql.gz": "c" * 32}
+    body = _record("20261101", "trwiki", articlesmultistreamdump=("done", parts),
+                   articlesmultistreamdumprecombine=("in-progress", {}), pagepropstable=("done", props))
+    assert ds.verdict(r, body) == "trwiki: articlesmultistreamdumprecombine in-progress", \
+        "the parts are done, the one file the collection reads is not: waited for"
+    whole = {"trwiki-20261101-pages-articles-multistream.xml.bz2": "b" * 32,
+             "trwiki-20261101-pages-articles-multistream-index.txt.bz2": "d" * 32}
+    body = _record("20261101", "trwiki", articlesmultistreamdump=("done", parts),
+                   articlesmultistreamdumprecombine=("done", whole), pagepropstable=("done", props))
+    assert ds.verdict(r, body) is None
+    got = ds.expected("20261101", ["lang=tr"], "/nowhere", fetch=lambda recs: {r.rel_path: body})
+    assert [(e.rel_path, e.md5) for e in got] == [
+        ("trwiki/20261101/trwiki-20261101-pages-articles-multistream.xml.bz2", "b" * 32),
+        ("trwiki/20261101/trwiki-20261101-pages-articles-multistream-index.txt.bz2", "d" * 32),
+        ("trwiki/20261101/trwiki-20261101-page_props.sql.gz", "c" * 32)], \
+        "each file held to the md5 its own record lists"
+    assert all(e.size for e in got), "and to its length"
+    assert ds.expected("20261101", ["lang=tr"], "/nowhere") == [], "nothing fetched: nothing held"
+
+
+def test_a_wiki_dumped_whole_reads_its_file_off_the_dump_job():
+    ds = DumpStatus()
+    (r,) = ds.records("20261101", ["lang=fa"])
+    whole = {"fawiki-20261101-pages-articles-multistream.xml.bz2": "b" * 32,
+             "fawiki-20261101-pages-articles-multistream-index.txt.bz2": "d" * 32}
+    body = _record("20261101", "fawiki", articlesmultistreamdump=("done", whole),
+                   articlesmultistreamdumprecombine=("skipped", {}),
+                   pagepropstable=("done", {"fawiki-20261101-page_props.sql.gz": "c" * 32}))
+    assert ds.verdict(r, body) is None
+
+
