@@ -126,13 +126,15 @@ sorted, so a redirect's target costs a lookup and not a second pass. Only redire
 **What the node cannot answer**, where the API could:
 
 - a link to a Wikipedia the node does not hold (it holds 11 languages; Gutenberg also links fi, nl, sv, la and others);
-- a title missing in a language some of whose pages have no title yet in the manifest;
+- a title the manifest misses that the run's own index lists, on a page the manifest holds no row of ("held by the
+  run, not read yet"), and any title the manifest misses when the run's dump or index is not on disk ("no dump to
+  tell"). A title the manifest misses is "no page" only when the run's index does not list it (below, 2026-11-17);
 - an item that the page names and the node's wikidata lacks (merged or deleted since). The dump lists no redirects, so
   a merged item is seen but not followed.
 
 In each case the book keeps the item that its current claim gives it through that same link. A book that has no claim
 yet claims nothing. The dry run counts both. It never reads "the node cannot tell" as "no item", so a gap in the node's
-collections does not withdraw anything.
+collections does not withdraw anything. Nor does a "no item" from a run older than the claim it would withdraw.
 
 **When it runs.** Once a period, not when gutenberg moves. It is due when this collection's next snapshot can be written
 (one update a period, 09 §9.4) and the method has not run in the period open now. A run that has nothing to write is not
@@ -197,6 +199,84 @@ docs/notes/collection-updates.md §4). The other two are a declared source's pub
 pending. `maintain` is that round for the collections with a method, and the worker runs the whole round. A method's
 `inputs` are declarations, so `hold config apply --set method=…` and the Library's box refuse one that closes a
 cycle, and name the loop.
+
+## "No page" only on proof (2026-11-17, the node's first dry run)
+
+The node's dry run withdrew 83 wikidata-tier claims and added 19. Real editions were among them. Eight books linked
+through "Journey_to_the_Centre_of_the_Earth" lost their claims against gutenberg:3748, and two linked through
+"When_the_Sleeper_Wakes" lost theirs against 775. Both titles are enwiki redirects, and the manifest holds no row for
+either. The Bouvard and Pécuchet and the Britannica stars went whole for the same reason. Layer 1 holds those articles
+under the archive's 2024 titles ("Bouvard et Pécuchet", page 1078856), and the links use today's titles. It was not a
+title-form fault: titles are stored NFC as raw UTF-8, and a fixture with é and æ titles in both layers resolves. The
+resolver answered "no page" whenever the manifest missed a title. `found_of` then dropped the book's item, and the
+claim went. That broke the method's own rule: what the node cannot answer is never read as "no item".
+
+**What changed** (app/wikipedia_titles.py). A title the manifest misses is looked up in the RUN's own multistream
+index, which lists every page of the run, redirects included. It is one pass per language over the titles missed,
+with set membership, and the languages run in parallel on the parse pool:
+
+| The manifest misses the title, and the run's index | Answer |
+|---|---|
+| does not list it | NONE, "no page" |
+| lists it, and the manifest holds the page by its id, in either layer | its item (`by page id`), with the manifest's own title said |
+| lists it, and it is a redirect | the page read from the run's dump at the index's offset (the plugin's `redirect_of`, read-only), then followed within MAX_HOPS and the loop rule |
+| lists it, not a redirect, and no row holds it | UNKNOWN, "held by the run, not read yet" |
+| is not on disk, or the dump is not | UNKNOWN, "no dump to tell" |
+| cannot be read (cut short) | UNKNOWN, "unreadable" |
+
+The old untitled-rows rule is gone: the index decides. The index's titles are matched both as stored and in the
+dump's XML-escaped form, so a title with `&` or `'` is found whichever form the index writes.
+
+**Evidence older than the claim** (app/gutenberg_editions.py `claim_times`, `made_after`). Nothing records when a
+claim was made. 09 §9.5's claim has no date key, and its record's `date` is null. The contributor's "…, 2026-10-09" is
+text, not a field. A snapshot's id is its period, not its writing: `create` names the period that closed, and an update
+can catch up on an old one. So a claim is dated by the first snapshot holding it, as its signature's earliest time. A
+claim keeps its uid across updates, so that snapshot is the first whose delta adds the uid. A "no item" (no page, no
+item, a loop) from a run cut on or before that day is no evidence against the claim, which is kept through its URL. A
+claim of unknown date, or a run of unknown date, is treated the same way. On the node, the run is 20260801 and the
+tools' claims of 2026-10-09 came after it. Until the node holds a later run, no NONE withdraws them.
+
+**The dry run** says it. `by_reason` counts the new codes. `no_page_titles` lists every "no page" title (at most 100),
+each with up to five of its books. `by_page_id_titles` lists up to 20 titles the manifest holds under another title,
+with that title. `found_by_page_id` and `runs` are counted. The books counter "their item kept: the node's run is older
+than their claim" shows how many the second rule kept.
+
+**Star stability.** The centre is the lowest ebook number among the books whose links name that one item. It depends
+on the membership alone, in any order. An unchanged membership gives the same claims byte for byte, including the URL
+each book names. A member that leaves takes only its own claim. When the centre leaves, the star is re-centred and every
+claim in it is new. That is how the node got 83 withdrawn against 19 added.
+
+**Where the redirects went** is München's question, not answered here. `louise dev wikipedia-coverage [--lang en]
+[--samples N]` (app/wikipedia_coverage.py) is read-only and writes nothing. Per wiki, it compares the run's index page
+ids among the articles (discovery's namespace rule) with the rows of both layers. It reports how many no row holds and
+how many of those the archive covers. A covered page is one the dump pass skips, so with no archive row it is held by
+neither layer. It also reports the rows the run does not list, and a seeded sample with titles. Discovery is
+unchanged. If records are lost, that is a separate fix.
+
+**Cost**, measured on synthetic indexes in a 4-core sandbox (2026-11-17). Titles of one to six words, 46 bytes a line:
+
+| Index | bz2 | Decompression alone | `look_up`, 550 titles | `index_pages` (the check) |
+|---|---|---|---|---|
+| 5 M lines (229 MB) | 46 MB | 8.0 s | 8.7 s, 105 MiB | 8.5 s |
+| 24 M lines (1.13 GB) | 223 MB | 40.9 s | 43.7 s, 111 MiB | 43.8 s, 701 MiB |
+
+A pass is bz2 decompression. A 16 MB slice from the middle of the live enwiki index holds no stream start, so the file
+is one stream and one wiki is one core; the wikis run in parallel. The decompression runs in a thread fed 1 MiB
+chunks, at a 0.1 ms GIL switch interval. With `bz2.open` and the default interval, `look_up` on 5 M lines took
+10.3 s. enwiki's index of the pinned run is 283.6 MB bz2, 1.27 times the 24 M fixture, so expect about 55 s for a
+pass. Every language that misses titles runs one pass a round. A second round comes only for a redirect whose target
+the manifest also misses. Each redirect read from the dump costs one stream's decompression. The coverage check's
+manifest pass read 3 M rows (961 MiB) in 6.4 s on one process and 3.8 s on three. That is about 70 s for 52.9 M rows
+on three, and the index passes run beside it.
+
+Open:
+
+- Layer 1's titles are the archive's (2024-06). A page moved since then is found only through the run's index. The
+  manifest is still asked first, so a 2024 title that the run now gives to another page answers with layer 1's page.
+  Asking the run's index first for every title would remove that case. It was not built: the design settled manifest
+  first.
+- Only a NONE from an older run is set aside. An ITEM from an older run that differs from a claim's item still moves
+  the book to that item's star.
 
 ## Standardised alternative, not taken
 

@@ -21,10 +21,12 @@ current snapshot is CARRIED, written again exactly as it stands.
   STAR on its lowest ebook number. The claims are tools/annotations_from_
   works.py's, key for key, so a claim that did not change keeps its uid and
   its bytes. What the node cannot tell — a wiki it does not hold, a title
-  not read yet, an item missing from its wikidata — is never taken for "no
-  item": a book in that case keeps the item the current snapshot's claims
-  give it, through the URL they name, and a book they give none claims
-  nothing (said, counted).
+  not read yet, a run whose dump is not on disk, an item missing from its
+  wikidata — is never taken for "no item": a book in that case keeps the
+  item the current snapshot's claims give it, through the URL they name,
+  and a book they give none claims nothing (said, counted). Nor is a "no
+  item" from a run OLDER than the claim it would withdraw (`claim_times`):
+  the claim was made against a later Wikipedia than the run can speak for.
 - `same-title` (app/gutenberg_titles.py) and `language-stage` (the
   historical-markers matcher, app/historical.py): re-derived from the
   gutenberg records alone, and only where the current snapshot holds claims
@@ -75,6 +77,10 @@ TIERS = DERIVED + (T_CARRIED,)
 EXAMPLES = 20
 #: why a title answers no item here besides the resolver's (`Resolved.code`)
 NO_WIKIPEDIA, NOT_IN_WIKIDATA = "no one wikipedia", "not in wikidata"
+#: the titles a dry run lists behind "no page", at most (each with its books)
+NO_PAGE_LISTED = 100
+#: books named per listed title, at most
+BOOKS_LISTED = 5
 
 #: PG's catalogue line (app/plugins/gutenberg/source.py `WIKIPEDIA_LINE`)
 WIKI_LINE = re.compile(r"Wikipedia page about this book:\s*(https?://\S+)")
@@ -234,6 +240,7 @@ class Held:
     line: int
     raw: bytes | None
     tier: str
+    uid: str = ""             # its record's uid: a claim keeps it from snapshot to snapshot
 
 
 def held_claims(root: Path, name: str) -> tuple[str | None, list[Held]]:
@@ -267,9 +274,76 @@ def held_claims(root: Path, name: str) -> tuple[str | None, list[Held]]:
                 raw = None                     # a stated pin would have to agree with the new text
             origin = str(r.get("origin") or "")
             line = int(origin.rsplit("#", 1)[1]) if origin.rsplit("#", 1)[-1].isdigit() else 0
-            out.append(Held(c, line, raw, tier_of(c)))
+            out.append(Held(c, line, raw, tier_of(c), str(r.get("uid") or "")))
     out.sort(key=lambda h: (h.line, json.dumps(h.claim, sort_keys=True)))
     return snap.snapshot_id, out
+
+
+def claim_times(root: Path, name: str, uids: Iterable[str]) -> dict[str, str | None]:
+    """Each claim record's uid → when the claim was made AT THE LATEST: the
+    earliest signing time of the first snapshot of `name` that holds it, or
+    of the first signed snapshot after that one; None where none from its
+    first on is signed (`_signed_at`).
+
+    NOTHING RECORDS A CLAIM'S OWN MAKING DATE (2026-11-17): 09 §9.5's claim
+    has no date key and its record's `date` is null; a contributor's text
+    ("…, 2026-10-09") is not a field; a snapshot's id is its period, not its
+    writing (`create` names the period that closed, an update may catch up on
+    one long past). So the snapshot in which the claim first appears is its
+    date, and that snapshot's signature says when it was written. A claim
+    keeps its number, its uid, from snapshot to snapshot, and a new one takes
+    the next (`annotations.update`): its first snapshot is the first whose
+    delta adds the uid. A uid no held snapshot adds is older than all of
+    them, and the oldest held bounds it."""
+    from .hold import collection as col
+    from .hold import shard as shard_mod
+    from .hold import snapshot as sn
+    from .hold.annotations import _SNAP_RE
+    tree = col.shard_dir_of(root, name)
+    try:
+        files = sorted(p for p in (tree / "snapshots").glob("*.json")
+                       if not p.name.endswith(".sig.json") and _SNAP_RE.match(p.name[:-len(".json")]))
+    except OSError:
+        files = []
+    first: dict[str, int] = {}
+    signed: list[str | None] = []
+    for i, f in enumerate(files):
+        try:
+            snap = sn.load(f)
+            for u in snap.delta.added:
+                first.setdefault(u, i)
+            signed.append(_signed_at(tree / shard_mod.snapshot_sig_path(snap.snapshot_id), snap.hash))
+        except Exception:                      # noqa: BLE001 — a snapshot this peer cannot read dates nothing
+            signed.append(None)
+    bound: list[str | None] = [None] * (len(files) + 1)
+    for i in range(len(files) - 1, -1, -1):
+        bound[i] = signed[i] if signed[i] is not None else bound[i + 1]
+    return {u: bound[first.get(u, 0)] for u in uids}
+
+
+def _signed_at(sidecar: Path, snapshot_hash: str) -> str | None:
+    """The earliest time a snapshot's sidecar records a signature at (09
+    §9.4; a sidecar naming another snapshot says nothing about this one)."""
+    try:
+        doc = json.loads(sidecar.read_bytes())
+    except (OSError, ValueError):
+        return None
+    if not isinstance(doc, dict) or doc.get("snapshot") != snapshot_hash:
+        return None
+    times = [g["time"] for g in doc.get("signatures") or [] if isinstance(g, dict) and isinstance(g.get("time"), str)]
+    return min(times) if times else None
+
+
+def made_after(times: list[str | None], run: str | None) -> bool:
+    """Whether a claim may have been made after `run` was cut — any of
+    `times` (`claim_times`); an unknown time or run may have been — so that a
+    "no item" from that run is no evidence against it. A run is dated by its
+    day (`YYYYMMDD`) and a claim by its bound's: a claim of the run's own day
+    is taken as made after it."""
+    from .hold.origin_run import RUN_RE
+    if run is None or not RUN_RE.match(run) or not times or any(t is None for t in times):
+        return True
+    return f"{run[:4]}-{run[4:6]}-{run[6:]}" <= max(str(t)[:10] for t in times)
 
 
 # --------------------------------------------------------------------------
@@ -402,9 +476,13 @@ def resolutions(root: Path, books: list[dict[str, Any]], *, log=print):
     inputs: dict[str, str | None] = {}
     wikis = _held_of("wikipedia")
     if len(wikis) == 1:
-        inputs[wikis[0].name] = _newest(root, wikis[0].name)
-        got = wt.resolve(wikis[0].manifest_path, set(keys.values()), log=log,
-                         name=wikis[0].name) if keys else {}
+        w = wikis[0]
+        inputs[w.name] = _newest(root, w.name)
+        # the run the collection holds, and its dumps: what proves "no page"
+        run = getattr(w, "snapshot", None)
+        dumps = wt.run_dumps(getattr(w, "corpus_dir", None), run)
+        got = wt.resolve(w.manifest_path, set(keys.values()), dumps=dumps, run=run, log=log,
+                         name=w.name) if keys else {}
         res = {s: got[keys[s]] for s in keys}
     else:
         why = ("this node holds no wikipedia collection" if not wikis else
@@ -418,7 +496,7 @@ def resolutions(root: Path, books: list[dict[str, Any]], *, log=print):
         res = {s: (r if r.kind != wt.ITEM or r.item in present else
                    wt.Resolved(wt.UNKNOWN, None, NOT_IN_WIKIDATA,
                                f"{r.item} is not an item the node's wikidata holds: merged or deleted since "
-                               f"{r.page} named it", r.page, r.redirects))
+                               f"{r.page} named it", r.page, r.redirects, r.run))
                for s, r in res.items()}
     return res, inputs
 
@@ -510,21 +588,27 @@ def derive(root: Path, name: str, target: str, *, log=print, keep: bool = True) 
     res, inputs = resolutions(root, books, log=log)
     inputs = {target: snap.snapshot_id, **inputs}
     carried_item: dict[str, tuple[str, str]] = {}
-    for h in held:
-        if h.tier == T_WIKIDATA:
-            ev = h.claim.get("evidence") or {}
-            carried_item.setdefault(h.claim["subject"], (ev.get("wikidata"), ev.get("subject_wikipedia")))
-            carried_item.setdefault(h.claim["object"], (ev.get("wikidata"), ev.get("object_wikipedia")))
+    wd_held = [h for h in held if h.tier == T_WIKIDATA]
+    times = claim_times(root, name, [h.uid for h in wd_held])
+    claimed_at: dict[str, list[str | None]] = defaultdict(list)     # book -> when its claims were made, at the latest
+    for h in wd_held:
+        ev = h.claim.get("evidence") or {}
+        carried_item.setdefault(h.claim["subject"], (ev.get("wikidata"), ev.get("subject_wikipedia")))
+        carried_item.setdefault(h.claim["object"], (ev.get("wikidata"), ev.get("object_wikipedia")))
+        for end in (h.claim["subject"], h.claim["object"]):
+            claimed_at[end].append(times.get(h.uid))
     books_by: Counter = Counter()
 
     def found_of(book: dict[str, Any]) -> dict[str, str]:
         """The items a book names, by the node's answers: a URL the node
-        cannot answer takes the item the current claims give the book
-        through that very URL; any other is left out — and a book with such
-        a URL and no item of its own in the current claims claims nothing."""
+        cannot answer — or answers "no item" from a run older than the
+        book's claims (`made_after`) — takes the item the current claims
+        give the book through that very URL; any other is left out — and a
+        book with a URL the node cannot answer and no item of its own in the
+        current claims claims nothing."""
         found: dict[str, str] = {}
         mine = carried_item.get(book["uid"])
-        undetermined = kept = False
+        undetermined = kept = older = False
         for url in book.get("wiki") or []:
             s = split_wiki(url)
             r = res.get(s) if s else None
@@ -538,24 +622,45 @@ def derive(root: Path, name: str, target: str, *, log=print, keep: bool = True) 
                     kept = True
                 elif mine is None:
                     undetermined = True
+            elif mine is not None and url == mine[1] and mine[0] and made_after(claimed_at[book["uid"]], r.run):
+                found.setdefault(mine[0], url)       # NONE, from a run older than the claim: no evidence
+                older = True
         if book.get("wiki"):
             books_by["with a Wikipedia line"] += 1
         if kept:
             books_by["their item kept through a URL the node cannot answer"] += 1
+        if older:
+            books_by["their item kept: the node's run is older than their claim"] += 1
         if undetermined:
             books_by["undetermined: a URL the node cannot answer, and no item in the current claims"] += 1
             return {}
         return found
     t1 = wikidata_claims(books, found_of)
     kinds = Counter(r.kind for r in res.values())
+    no_page: dict[tuple[str, str], set[str]] = defaultdict(set)
+    for b in books:
+        for url in b.get("wiki") or []:
+            s = split_wiki(url)
+            if s and s in res and res[s].code == wt.NO_PAGE:
+                no_page[s].add(b["uid"])
     resolution = {"titles": len(res), "items": kinds.get(wt.ITEM, 0), "none": kinds.get(wt.NONE, 0),
                   "unknown": kinds.get(wt.UNKNOWN, 0),
                   "redirects_followed": sum(1 for r in res.values() if r.kind == wt.ITEM and r.redirects),
+                  "found_by_page_id": sum(1 for r in res.values() if r.code == wt.BY_PAGE_ID),
+                  "runs": sorted({r.run for r in res.values() if r.run}),
                   "by_reason": dict(sorted(Counter(f"{r.kind}: {r.code}" for r in res.values()
                                                    if r.kind != wt.ITEM).items())),
                   "wikis_not_held": dict(sorted(Counter(host_lang(s[0]) or s[0] for s, r in res.items()
                                                         if r.code == wt.NOT_HELD).items())),
-                  "books": dict(sorted(books_by.items()))}
+                  "books": dict(sorted(books_by.items())),
+                  # title by title: every "no page" (at most NO_PAGE_LISTED), and the titles the manifest
+                  # holds under another (at most EXAMPLES) — what the next dry run is read by
+                  "no_page_titles": [{"wiki": host_lang(s[0]) or s[0], "title": s[1],
+                                      "books": sorted(u, key=_num)[:BOOKS_LISTED]}
+                                     for s, u in sorted(no_page.items())[:NO_PAGE_LISTED]],
+                  "by_page_id_titles": [{"wiki": host_lang(s[0]) or s[0], "title": s[1], "page": r.page,
+                                         "manifest_title": r.stored}
+                                        for s, r in sorted(res.items()) if r.code == wt.BY_PAGE_ID][:EXAMPLES]}
 
     # the same-title and stage tiers, where the snapshot holds them
     carried = [h for h in held if h.tier == T_CARRIED]
@@ -675,7 +780,7 @@ def produce(root: Path, name: str, target: str, out: Path, *, log=print) -> dict
         + f"; titles answered by the node: {d.resolution['items']:,} items, {d.resolution['none']:,} none, "
           f"{d.resolution['unknown']:,} not answerable here")
     return {"claims": len(d.lines), "tiers": {t: by.get(t, 0) for t in TIERS}, "against": d.inputs,
-            "resolution": {k: v for k, v in d.resolution.items() if not isinstance(v, dict)}}
+            "resolution": {k: v for k, v in d.resolution.items() if not isinstance(v, (dict, list))}}
 
 
 def preview(root: Path, name: str, target: str, *, log=print) -> dict[str, Any]:

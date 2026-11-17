@@ -2901,6 +2901,33 @@ def cmd_dev_embed_select(a) -> int:
     return 0
 
 
+def cmd_dev_wikipedia_coverage(a) -> int:
+    """`louise dev wikipedia-coverage [<collection>] [--lang L] [--samples N]`
+    (app/wikipedia_coverage.py; 2026-11-17): per wiki of the collection's run,
+    the pages its multistream index lists among the articles against the rows
+    the manifest holds in either layer — how many no row holds, how many of
+    those the archive covers (held by neither layer), and a sample with their
+    titles. Read-only: the manifest opened read-only, nothing written."""
+    from app import collections as _cm
+    from app import wikipedia_coverage
+    if a.collection:
+        c = _cm.by_name(a.collection)
+        if c is None or c.plugin != "wikipedia":
+            raise CodexError(f"{a.collection}: not a wikipedia collection this node holds")
+    else:
+        served, _ = _cm.load_all(skip_unreadable=True)
+        found = [c for c in served if c.plugin == "wikipedia"]
+        if len(found) != 1:
+            raise CodexError(f"this node holds {len(found)} wikipedia collections"
+                             + (f" ({', '.join(sorted(c.name for c in found))}): name one" if found else ""))
+        c = found[0]
+    if a.samples < 0:
+        raise CodexError("--samples is a count, 0 or more")
+    out = wikipedia_coverage.coverage(c, lang=a.lang, samples=a.samples, log=lambda m: print(m, file=sys.stderr))
+    print(json.dumps(out, indent=2, ensure_ascii=False))
+    return 0
+
+
 def cmd_dev_cache_evict(a) -> int:
     """`louise dev cache-evict [--idle-hours H] [--dry-run]`: what the
     worker's maintainer does once an hour (app/derived.py `evict_idle`), now
@@ -8081,6 +8108,12 @@ def build_parser() -> argparse.ArgumentParser:
     root_arg(p); p.add_argument("collection")
     p.add_argument("--apply", action="store_true", help="write the marks now, under the collection's lock")
     p.set_defaults(fn=cmd_dev_embed_select)
+    p = dverbs.add_parser("wikipedia-coverage", help="the pages of a wikipedia collection's run that no row of its "
+                                                     "manifest holds, per wiki, with a sample; read-only")
+    p.add_argument("collection", nargs="?", help="the wikipedia collection (default: the node's one)")
+    p.add_argument("--lang", help="one wiki only: en, de, …")
+    p.add_argument("--samples", type=int, default=20, help="missing pages listed per wiki (default 20)")
+    p.set_defaults(fn=cmd_dev_wikipedia_coverage)
     p = dverbs.add_parser("mark-embedded", help="documents whose every chunk has a vector here and whose "
                                                  "manifest row says embed_done = 0, marked (writes)")
     root_arg(p); p.add_argument("collection")
