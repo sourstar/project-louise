@@ -485,19 +485,22 @@ louise dev                                                             operator 
                                                                        source's corpus, removes `create`'s empty folder and re-roots the copied paths, and refuses a
                                                                        target whose origin holds another corpus; --share-origin does that alone, for a carry finished
                                                                        before it did (2026-11-15)
-  pin-run <collection> [--run YYYYMMDD] [--yes]                        an UNPUBLISHED collection whose dated-dump Codex names no run (wikidata.next, München,
+  pin-run <collection> [--run YYYYMMDD] [--dry-run | --yes]            an UNPUBLISHED collection whose dated-dump Codex names no run (wikidata.next, München,
                                                                        2026-11-17) given the Codex that names the run its records were read in, IN PLACE (RULE 1;
                                                                        amends §7.8's "a name holds one collection for its life" for a collection whose id never left
                                                                        this node): the Codex is `create --run`'s pin of it; its one snapshot written again — the same
                                                                        parts and members, `collection_id` replaced and `origin_run` written, spliced as a stream —
                                                                        held to the build database and re-signed; codex.json, the collection file's `codex`, the
                                                                        staging's claim, the carry markers and the manifest's cursors re-pointed; the old id's local
-                                                                       attestations removed; then no small file may still name the old id. The run from the
-                                                                       manifest's locators, the line carry's source and the file's `snapshot`, which must agree
-                                                                       (--run is checked against them). Refused (exit 2), nothing written: a Codex naming a run, an
-                                                                       origin of no dated dumps, more than one snapshot, and anything published or shared — `share =
-                                                                       true`, a snapshot the seeder served, coverage rows, a published attestation, a certifier's
-                                                                       pointer, a held Codex naming the id. The plan without --yes; resumable (`state/pin-run.json`)
+                                                                       attestations and its note of an origin check that could not run removed; then no small file
+                                                                       may still name the old id. The same sweep runs FIRST: a file naming the old id that the pass
+                                                                       does not rewrite, re-point or remove refuses the pin, named. The run from the manifest's
+                                                                       locators, the line carry's source and the file's `snapshot`, which must agree (--run is
+                                                                       checked against them). Refused (exit 2), nothing written: a Codex naming a run, an origin of no
+                                                                       dated dumps, more than one snapshot, and anything published or shared — `share = true`, a
+                                                                       snapshot the seeder served, the publisher's `publish:<name>` row, coverage rows, a published
+                                                                       attestation, a certifier's pointer, a held Codex naming the id. The plan with --dry-run or
+                                                                       without --yes (a pin under way is said so); resumable (`state/pin-run.json`)
   eurlex-dump <collection> [--dump <dir>] [--languages <codes>] [--carry-from <dir>]
                                                                        every EUR-Lex unit the Data Dump gives, built from it alone into a parser-4 collection's corpus:
                                                                        the MTD tree scoped to each language and the items of the form Cellar would choose; no Cellar

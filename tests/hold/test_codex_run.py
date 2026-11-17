@@ -221,3 +221,22 @@ def test_a_pin_to_another_run_than_the_sources_is_refused(data_dir, config_dir, 
         carry_mod.carry(root, "wikidata", "wikidata.next", rebuilt=True, apply=True, log=lambda *_: None)
     with pytest.raises(line_carry.CarryRefused, match="pins run 20261101"):
         line_carry.carry(root, "wikidata.next", "wikidata", log=lambda *_: None)
+
+
+def test_a_part_whose_lines_name_another_run_than_the_codex_is_refused(data_dir, config_dir, isolated_config,
+                                                                       tmp_path, capsys):
+    """The per-part hold (line_carry): the source's file says one run and its
+    lines name another — the Codex is pinned to the file's word, and the
+    first part read in another run refuses the carry, nothing replaced."""
+    root, _corpus, _live = wr.live(data_dir, config_dir)
+    toml = config_dir / "collections" / "wikidata.toml"
+    toml.write_text(toml.read_text().replace(f'snapshot = "{RUN}"', 'snapshot = "20261101"'))
+    assert louise.main(wr.create_args(root, wr.whole_recipe(root, tmp_path))) == 0
+    capsys.readouterr()
+    assert origin_run.codex_run(col.read(root, "wikidata.next")) == "20261101"
+    with pytest.raises(line_carry.CarryRefused, match=f"its lines were read in run {RUN}, and wikidata.next's "
+                                                      f"Codex names run 20261101"):
+        line_carry.carry(root, "wikidata.next", "wikidata", log=lambda *_: None)
+    parts = root / "wikidata.next" / "shard" / "records"
+    assert not any(parts.rglob("*.jsonl.zst")) if parts.is_dir() else True, "nothing replaced"
+    assert not (root / "wikidata.next" / "shard" / "snapshots").exists()
