@@ -375,8 +375,9 @@ What **identifies** the origin enters the Codex as `origin.spec`,
 serialised in the canonical form of 09 §9.1, and is therefore part of
 the collection's identity: the transport, the origin's own URL (never a
 mirror), the layout and how the complete listing is enumerated, the
-checksum scheme, the update form, and for a dated-dump origin the dump
-pinned. What is **local** stays out of it: mirrors, etiquette, the
+checksum scheme, the update form, and for a dated-dump origin the FIRST
+run it was built from (*amended 2026-11-17*: later runs are named by each
+snapshot, 09 §9.4 `origin_run`, never by the Codex). What is **local** stays out of it: mirrors, etiquette, the
 profiles and their estimated sizes, the probe file, and every path,
 including the terms file and any key or token. Two peers that create
 the same collection from the same plugin write the same `origin` block
