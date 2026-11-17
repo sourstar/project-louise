@@ -718,19 +718,26 @@ probable or open.
     + 0.5 VAE; working memory while an image is made (~0.6–1 GiB at this
     size) freed between images (image-generation-krea.md §2).
 
-  | set | contexts held (today) | contexts on demand (this patch) |
-  |---|---|---|
-  | today's set, qwen3-8b chat (MEASURED) | 28.2 | 19.8 (weights + floors) |
-  | the same with the 35B UD-Q4_K_M for qwen3-8b | ≈ 43.6 | ≈ 34.5 |
-  | … with UD-Q3_K_XL instead | ≈ 38.7 | ≈ 29.6 |
-  | + Krea 2, Q4 transformer, text encoder on the CPU | ≈ 51 | ≈ 42 |
-  | + Krea 2, Q4 transformer and Q4 text encoder on the card | ≈ 53.5 | ≈ 44.5 |
-  | + Krea 2, Q8 everything on the card | ≈ 61.5 | ≈ 52.5 |
+  | set | contexts held (today) | SHARED context, 3.2 GiB (the operator's assumption; shared-context.md §2's peak 3,262 MiB) | weights only |
+  |---|---|---|---|
+  | today's set, qwen3-8b chat (MEASURED) | 28.2 | ≈ 23 | 19.8 (weights + floors) |
+  | the same with the 35B UD-Q4_K_M for qwen3-8b | ≈ 43.6 | ≈ 38 | ≈ 34.5 |
+  | … with UD-Q3_K_XL instead | ≈ 38.7 | ≈ 33 | ≈ 29.6 |
+  | 35B Q4, MADLAD dropped — the 35B translates (classical-translation.md: Qwen3-30B-A3B chrF 52.2, MADLAD 35.8) | — | ≈ 32.5 | ≈ 29.3 |
+  | 35B Q3, MADLAD dropped | — | ≈ 27.6 | ≈ 24.4 |
+  | + Krea 2, Q4 transformer, text encoder on the CPU | + 7.8 | + 7.8 | + 7.8 |
+  | + Krea 2, Q4 transformer and Q4 text encoder on the card | + 10.2 | + 10.2 | + 10.2 |
+  | + Krea 2, Q8 everything on the card | + 18 | + 18 | + 18 |
 
-  So: nothing of this is resident on a 31.9 GiB card. Even weights alone,
-  contexts on demand, the 35B at Q4 with today's encoders overshoot by
-  ≈ 2.6 GiB before any image model; only a Q3 of the 35B fits weights-only,
-  with ≈ 2 GiB to spare and no room for Krea 2. Krea 2 beside the 35B is a
+  Today's non-chat weights are 13.6 GiB by the at-rest reading (11-07) and
+  14.8 by the mid-question one (11-09, compute buffers grown); the rows use
+  14. So: nothing of this is resident on a 31.9 GiB card as the set stands.
+  With the shared context the 35B at Q4 beside today's models overshoots by
+  ≈ 6 GiB, at Q3 by ≈ 1.3; the ONE resident fit is the 35B at Q3 with
+  MADLAD gone, ≈ 27.6 GiB, 2.7 under the reclaimer's line (0.95 ≈ 30.3);
+  Q4 with MADLAD gone lands at ≈ 32.5 — over within the estimate's error,
+  and 2 GiB past the reclaimer in any case. Krea 2 is resident in no row;
+  Krea 2 beside the 35B is a
   switch, whatever is done: the driver's spill (previous bullet, ~0.8–0.9 s
   per 35B switch, ~0.3 s for a Q4 Krea 2 transformer) or LocalAI's
   unload-and-reload (10 s and more). What the choice costs, per row:

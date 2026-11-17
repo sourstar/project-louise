@@ -30,8 +30,9 @@ measured (published figures disagree).
 - **The set the operator wants on the B70, costed** (operator, 2026-11-17: today's models, the 35B MoE chat for
   qwen3-8b, Krea 2 image generation; STT stays on the iGPU, "500 MB are anyway reserved"). The 35B UD-Q4_K_M
   loads at ≈ 22.1 GiB (file 20.6); Krea 2 is 33 GiB in bf16 as shipped and does not fit alone; the whole set is
-  ≈ 44–62 GiB resident, ≈ 34–52 GiB weights-only with context on demand, against 31.9 GiB — nothing of it is
-  resident; only a Q3 of the 35B fits weights-only, without Krea 2. Whether stable-diffusion.cpp knows Krea 2 is
+  ≈ 44–62 GiB resident, ≈ 38–56 GiB with the shared context the operator assumes (3.2 GiB, the measured peak),
+  ≈ 34–52 GiB weights-only, against 31.9 GiB — nothing of it is resident as the set stands; the one fit is the 35B
+  at Q3 with MADLAD dropped (the 35B translating), ≈ 27.6 GiB, Krea 2 loaded per use. Whether stable-diffusion.cpp knows Krea 2 is
   not checked. [idle-context-brief.md](idle-context-brief.md) §6 "The set the operator wants",
   [image-generation-krea.md](image-generation-krea.md) (amended: Krea 2 is not FLUX.1 Krea dev).
 - **gutenberg-book-editions re-makes itself every month from the node's own collections** (operator: no hand-run
