@@ -248,7 +248,14 @@ are the ones that have drifted; prefer to add a test when you touch them.
     2026-10-25): a superseded part version is kept where the origin keeps
     its history and dropped where it replaces in place, since it can no
     longer be checked against the source (01 promise 7, 06 §6.2
-    `origin_versions`, app/hold/shard.py).
+    `origin_versions`, app/hold/shard.py). The ORIGIN'S OWN FILES in the
+    corpus are another matter (operator, 2026-11-17: "Delete the monthly
+    snapshots once used, the peers can reasonably check the compliancy"):
+    a provider that serves its runs only for a window may have an older
+    run dropped from the corpus once used — after the snapshot built from
+    the next run is published and the annotations cascade it triggers has
+    started, never before; peers check compliance against the origin while
+    it serves the run (06 §6.2, docs/notes/collection-updates.md §3).
     NOTHING IS PRUNED UNLESS WRITTEN (operator, 2026-10-24): "If not
     written explicitly in the guidelines a collection cannot prune any
     information from the corpus, in other words I cannot get from the raw

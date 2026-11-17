@@ -969,6 +969,14 @@ plugin keeps the parser version a live Codex names (`at_parser_version`,
 `collections.plugin_at`), so the deploy of a new parser never parses that
 collection differently from its own records before it is re-created.
 
+**A collection keeps its identity as its origin moves** (*amended
+2026-11-17*, operator: "A collection can either sync with the source downloading single items (like gutenberg) or periodically download a full or an incremental snapshots (like wikipedia). In both cases the collection's identity remains the same."). Whether a collection syncs item by item
+(Gutenberg's catalogue) or takes the origin's periodic full or incremental
+dumps (Wikipedia's monthly runs, PubMed's update files), its next snapshot
+follows the origin under the same `collection_id`. A new run of the origin
+is never a daughter: for dated dumps, the Codex names the first run (09
+§9.17 `files`) and each snapshot names its own (09 §9.4 `origin_run`).
+
 A **daughter** continues the collection. The transition is a snapshot
 boundary, and the two fields that fix it read as one sentence:
 `continues` names the mother's Codex, `continues_through` the last

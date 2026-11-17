@@ -1,6 +1,6 @@
 # Collection updates by cadence, and the annotations cascade
 
-*Design, 2026-11-17. Operator, through München: (1) "Monthly full dumps at
+*Design, 2026-11-17 (§2 and §3 decided the same day). Operator, through München: (1) "Monthly full dumps at
 night" for wikipedia, as a first-class update of any collection from its
 Codex's `update` block, wikidata next; (2) "it must add a signal to wake up
 all the annotations relying on that collection's updates", clarified: "To
@@ -42,25 +42,21 @@ An **update pass** per collection, a maintainer of the worker, run under
   snapshot timings in STATUS. Each step's AFTER goes in the
   scheduling-log, per scheduling.md §6.
 
-## 2. DECISION: where the dump run is named
+## 2. Where the dump run is named (decided: B)
 
-The spec puts the run in the collection's IDENTITY. For a dated-dump
-origin, `origin.spec.files` is "the dump pinned" (09 §9.17, 06 §6.2), and
-`origin.spec` is inside `collection_id`. So under today's rules, a new
-month's dump is a new Codex: a daughter (02 §2.7, `continues`).
+**Operator, 2026-11-17:** "B", and "A collection can either sync with the source downloading single items (like gutenberg) or periodically download a full or an incremental snapshots (like wikipedia). In both cases the collection's identity remains the same."
 
-The other half of the same spec already describes a collection that follows
-its dumps. A snapshot's records are those "the plugin's `cutoff_rule`
-enumerates at that instant: for dated dumps (Wikipedia) the last dump
-before it" (02 §2.2). The two halves disagree.
-
-| choice | pros | cons |
-|---|---|---|
-| **A. A daughter each month** (the spec as written) | No format change. | A new `collection_id` every month. Every annotations collection names its target's `collection_id` (`annotates`, 02 §2.10), so each month would orphan them all: a new annotations Codex each, and the cascade of part 2 broken by design. Peers adopt a new collection monthly. |
-| **B. One collection follows its runs** (amend 09 §9.17 and 06 §6.2) | `collection_id` is stable, and annotations, peers, vectors and the cascade carry on. The cutoff rule already says which run each snapshot holds. RULE 1: no identity churn. | A format amendment. `files` in a dated-dump Codex names the FIRST run (the bytes of today's Codex unchanged), and each snapshot names the run it was built from, a new snapshot field `origin_run`. Peers on the old code read a snapshot of a newer run and must know the field. |
-
-**Recommendation: B.** If the operator says nothing, nothing in part 1 is
-built: A or B changes what step b is.
+- `origin.spec.files` in a dated-dump Codex names the FIRST run (today's
+  Codex bytes are unchanged), and each snapshot names the run it was built
+  from: `origin_run` (09 §9.4, §9.17; 06 §6.2; 02 §2.7).
+- `collection_id` is stable, and annotations, peers, vectors and the
+  cascade carry on across runs.
+- Code: `discover` reads the run of the snapshot being built (the newest
+  `origin_run`, else the Codex's run), and the collection file's `snapshot`
+  check accepts a later run than the Codex's.
+- Peers: a snapshot with `origin_run` read by older code. The field is
+  optional and additive; whether the snapshot reader refuses unknown keys
+  is checked, and amended if so, in the same PR.
 
 ## 3. Old dumps: the rule (decided)
 
