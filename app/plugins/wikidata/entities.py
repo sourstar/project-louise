@@ -104,7 +104,15 @@ def columns_of(path: str):
 #: (tests/test_wikidata_entity_table.py). Keys are unique, so sorting the
 #: packed values sorts by key. The standard, not adopted: an external merge
 #: sort of sorted runs bounds the memory whatever N, and would pay at a few
-#: billion entities; at 118 M one array fits.
+#: billion entities; at 118 M one array fits. Nor a DIRECT-ADDRESS table (a
+#: counting sort: an item's number indexes a uint32 array of ordinals, 4 bytes
+#: for every number to the largest item, ~0.57 GB at Q141 M, no sort), which
+#: would bound the build at a quarter of this one's — worth it when the build
+#: must share a process with a pool. Re-measured 2026-11-17 (a fresh
+#: process, 3 threads, 4 / 8 / 16 M entities): packed 274 / 331 / 444 MiB in
+#: 1.1 / 1.9 / 4.0 s, generic 395 / 617 / 1,049 MiB in 1.4 / 2.9 / 5.1 s — a
+#: marginal 14.2 against 54 bytes an entity, ~1.9 against ~6.6 GB at 118 M
+#: (docs/notes/wikidata-entity-origin.md, "The check's memory").
 _SHIFT = 32
 _LOW = (1 << _SHIFT) - 1
 #: a native id below this fits the high half (an item's number, a property's
