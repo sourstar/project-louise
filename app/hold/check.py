@@ -394,19 +394,25 @@ def _chunks_part(tree: str, codex, path: str, name: str, chunks: int,
     p = Path(tree) / path
     if not p.is_file():
         return None, []
-    seen, failed = 0, []
-    pairs: list[tuple[str, str]] = []
-    for r in pack_records.iter_records(p):
-        seen += 1
-        row = {"uid": r["uid"], "native_id": r.get("native_id", 0)}
-        sections = [tuple(x) for x in r.get("sections") or []]
-        pairs.extend((c["id"], c["text"]) for c in
-                     layers_mod.chunks_for_document(codex, row, sections, title=r.get("title")))
-    if len(pairs) != chunks:
-        failed.append(f"{name}:chunks={len(pairs)} not {chunks}")
-    if rec.chunks_root(pairs) != chunks_root:
+    failed: list[str] = []
+    n = {"records": 0, "chunks": 0}
+
+    def pairs():
+        # ONE RECORD AT A TIME, hashed as cut (2026-11-17): every chunk's
+        # text of the part was held for one root, ~6 KB a record here
+        for r in pack_records.iter_records(p):
+            n["records"] += 1
+            row = {"uid": r["uid"], "native_id": r.get("native_id", 0)}
+            sections = [tuple(x) for x in r.get("sections") or []]
+            for c in layers_mod.chunks_for_document(codex, row, sections, title=r.get("title")):
+                n["chunks"] += 1
+                yield c["id"], c["text"]
+    root = rec.chunks_root(pairs())
+    if n["chunks"] != chunks:
+        failed.append(f"{name}:chunks={n['chunks']} not {chunks}")
+    if root != chunks_root:
         failed.append(f"{name}:chunks_root")
-    return seen, failed
+    return n["records"], failed
 
 
 def check_roots(ctx: Ctx) -> Outcome:

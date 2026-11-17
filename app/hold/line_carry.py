@@ -171,7 +171,19 @@ def carry_part(src: str, dst: str, plugin_id: str, to_version: int, from_version
     from . import records as hold_records
     from . import shard as shard_mod
     t0 = time.monotonic()
-    carry = _carrier(plugin_id, to_version, from_version)
+    carried = _carrier(plugin_id, to_version, from_version)
+    # THE RUNS THE SOURCE'S LINES NAME (a dated origin's `<…>/<run>/…`; a
+    # keyed one names none): the parent holds each part to the run the
+    # target's Codex names, so a part read in another run never takes its place
+    runs: set[str] = set()
+    run_of = _run_reader(plugin_id, to_version)
+
+    def carry(origin: str, native_id) -> str:
+        if run_of is not None:
+            got = run_of(origin)
+            if got:
+                runs.add(got)
+        return carried(origin, native_id)
     index = pack_records.read_index(Path(src))
     lines: list[bytes] = []
     uids: list[str] = []
@@ -206,7 +218,16 @@ def carry_part(src: str, dst: str, plugin_id: str, to_version: int, from_version
     return {"src": src, "dst": dst, "records": len(uids), "chunks": index.chunks,
             "records_root": hold_records.records_root(hashes), "bytes": info.bytes, "sha256": info.sha256,
             "root": shard_mod.pieces_root_of(Path(dst)), "changed": changed, "example": example,
-            "bytes_before": Path(src).stat().st_size, "seconds": time.monotonic() - t0}
+            "bytes_before": Path(src).stat().st_size, "seconds": time.monotonic() - t0,
+            "runs": sorted(runs)}
+
+
+def _run_reader(plugin_id: str, to_version: int):
+    """The plugin's `run_of_locator` (a dated locator or origin's run), or None."""
+    from app import collections as collections_mod
+    plugin = collections_mod.plugin_at(collections_mod.PLUGIN_REGISTRY[plugin_id], int(to_version))
+    fn = getattr(plugin, "run_of_locator", None)
+    return fn if callable(fn) else None
 
 
 # ---- what may be carried --------------------------------------------------------
@@ -220,7 +241,14 @@ def _check(root: Path, from_name: str, src, to_name: str, to) -> tuple[Any, int,
     from .seed import latest_snapshot, record_differences
     if src.collection_id == to.collection_id:
         raise CarryRefused("carry: the source and the target are one collection")
-    diff = record_differences(src, to)
+    from . import origin_run
+    # the origin with the run pinned that the source's records were read in
+    # (09 §9.17; wikidata parser 2 -> 3): the same record bytes, each part held
+    # to that run below (`runs`)
+    try:
+        diff = origin_run.admit_run_pin(root, from_name, src, to, record_differences(src, to), "carry")
+    except CodexError as e:
+        raise CarryRefused(str(e)) from None
     other = [d for d in diff if d not in CARRIED]
     if other or "parser" not in diff:
         raise CarryRefused(
@@ -337,10 +365,19 @@ def carry(root, to_ref: str, from_ref: str, *, workers: int | None = None, dry_r
     root = Path(root)
     to_name, to = col.resolve(root, to_ref)
     from_name, src = col.resolve(root, from_ref)
+    # PARTS NOT FREEZABLE ARE NOT WRITTEN: a target whose records name a keyed
+    # unit names the run they are read in, or its snapshot could name none
+    # (09 §9.4 `origin_run`; München, 2026-11-17)
+    from . import origin_run
+    try:
+        origin_run.refuse_without_run(to, f"carry into {to_name} (nothing was written)")
+    except CodexError as e:
+        raise CarryRefused(str(e)) from None
     # invariant 9: both collections' records are USED here, each through THE gate
     rec.local_collection(root, from_name, src)
     rec.local_collection(root, to_name, to)
     snap, to_v, from_v = _check(root, from_name, src, to_name, to)
+    want_run = origin_run.current_run(root, to_name, to)
     dst_dir = col.shard_dir_of(root, to_name)
     if (dst_dir / "snapshots").is_dir() and any(p for p in (dst_dir / "snapshots").glob("*.json")):
         raise CarryRefused(f"carry: {to_name} holds a snapshot already; its parts are never rewritten (02 §2.2)")
@@ -379,6 +416,12 @@ def carry(root, to_ref: str, from_ref: str, *, workers: int | None = None, dry_r
                     raise CarryRefused(f"carry: {s.path}: {got['records']} records, {got['chunks']} chunks, "
                                        f"records_root {got['records_root'][:23]}… — the snapshot lists "
                                        f"{s.records}, {s.chunks}, {s.records_root[:23]}…; nothing replaced")
+                other_runs = [r for r in got.get("runs") or () if want_run is not None and r != want_run]
+                if other_runs:
+                    Path(got["dst"]).unlink(missing_ok=True)
+                    raise CarryRefused(f"carry: {s.path}: its lines were read in run {other_runs[0]}, and "
+                                       f"{to_name}'s Codex names run {want_run}; a record is read in the run "
+                                       f"its snapshot names (09 §9.4), so nothing was replaced")
                 # THE ROW AND THE MARK FIRST, then the file (module docstring)
                 con.execute("BEGIN IMMEDIATE")
                 con.execute("UPDATE shards SET bytes=?, sha256=?, root=?, written_at=? WHERE slice=? AND n=?",

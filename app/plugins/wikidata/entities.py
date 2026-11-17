@@ -91,11 +91,67 @@ def columns_of(path: str):
             np.asarray(t.column("index").to_numpy(), dtype=np.int64))
 
 
+#: THE PACKED SORT (2026-11-17, measured): an entity as ONE int64, its native
+#: id in the high half and its ordinal in the low, sorted in place. The
+#: generic `KeyTable.tables` kept every chunk's two arrays beside their
+#: concatenation, then the sort's order and both sorted copies: ~60 bytes an
+#: entity at the peak (a fresh process's VmHWM at 4 / 8 / 16 M entities:
+#: 451 / 701 / 1,174 MB), ~7.2 GB for 118 M, held by whichever process made
+#: the first lookup — a pool child of `hold check`, beside the worker's own
+#: memory when run by `docker exec` (München, 2026-11-17: the memcg OOM).
+#: Packed: 260 / 308 / 492 MB, ~23 bytes an entity, ~2.8 GB for 118 M, and
+#: 4.2 s against 6.4 s at 16 M. The table is the same bytes
+#: (tests/test_wikidata_entity_table.py). Keys are unique, so sorting the
+#: packed values sorts by key. The standard, not adopted: an external merge
+#: sort of sorted runs bounds the memory whatever N, and would pay at a few
+#: billion entities; at 118 M one array fits.
+_SHIFT = 32
+_LOW = (1 << _SHIFT) - 1
+#: a native id below this fits the high half (an item's number, a property's
+#: PROPERTY_BASE + n, ids.py): 2^31 keeps the packed value positive
+_KEY_LIMIT = 1 << 31
+#: the duplicate check's window: two shifted copies of this many values
+_BLOCK = 1 << 22
+#: how long a lookup waits for another process building the table or the
+#: pack (`derived.writing` refuses at once): every pool child of a check
+#: reaches its first lookup together, and one builds while the rest wait
+#: (bounded, CLAUDE.md: then deferred — `derived.Busy` — never a failure)
+TABLE_WAIT_S = 600.0
+
+
+def packed_of(path: str):
+    """One chunk file's entities packed (`_SHIFT`), or None where a value
+    does not fit — the generic sort takes the table then. A pool task."""
+    import numpy as np
+    nid, idx = columns_of(path)
+    if len(nid) and (int(nid.min()) < 0 or int(nid.max()) >= _KEY_LIMIT
+                     or int(idx.min()) < 0 or int(idx.max()) > _LOW):
+        return None
+    return (nid << np.int64(_SHIFT)) | idx
+
+
+def _packed_tables(packed, *, where: str, row_group: int):
+    """`KeyTable.tables`' tables from the packed values, sorted in place."""
+    import numpy as np
+    import pyarrow as pa
+    c = np.concatenate(packed) if packed else np.zeros(0, np.int64)
+    packed.clear()
+    c.sort()
+    for i in range(0, max(len(c) - 1, 0), _BLOCK):
+        hi = c[i:i + _BLOCK + 1] >> np.int64(_SHIFT)
+        twice = np.flatnonzero(hi[1:] == hi[:-1])
+        if len(twice):
+            raise KeyTableError(f"{where}: key {int(hi[twice[0]])} is listed twice; a key names one unit")
+    schema = TABLE.schema()
+    for i in range(0, max(len(c), 1), row_group):
+        g = c[i:i + row_group]
+        yield pa.table({"key": g >> np.int64(_SHIFT), "index": g & np.int64(_LOW)}, schema=schema)
+
+
 def build(dump: Path, *, workers: int | None = None, mode: str = "threads") -> Path:
     """The table of `dump`'s pack: one pass over its chunk files on the pool,
     written whole under the pack's writer. Raises `derived.Busy` when
     another process writes the pack (deferred, as a pack build is)."""
-    import numpy as np
     import pyarrow.parquet as pq
 
     from app import parallel
@@ -108,11 +164,11 @@ def build(dump: Path, *, workers: int | None = None, mode: str = "threads") -> P
     with derived.writing(d / pack.WRITER, "the wikidata entity table"):
         if is_fresh(dump):
             return path_of(dump)
-        keys, values = [], []
         files = [str(p) for p in pack.chunk_files(dump)]
-        if mode == "processes":
-            got = parallel.each_part(columns_of, [(f,) for f in files], limit=workers)
-        else:
+
+        def read(fn):
+            if mode == "processes":
+                return list(parallel.each_part(fn, [(f,) for f in files], limit=workers))
             # THREADS, measured (2026-11-17, 12 M entities in 120 chunk files):
             # the pool's processes ship every chunk's arrays back pickled and
             # lost to one process (4.4 s in-process, 5.1 s on 2 processes,
@@ -120,19 +176,20 @@ def build(dump: Path, *, workers: int | None = None, mode: str = "threads") -> P
             from concurrent.futures import ThreadPoolExecutor
             n = max(1, int(workers or parallel.processes()))
             with ThreadPoolExecutor(max_workers=n, thread_name_prefix="wikidata-entities") as ex:
-                got = list(ex.map(columns_of, files))
-        for nid, idx in got:
-            keys.append(nid)
-            values.append(idx)
-        k = np.concatenate(keys) if keys else np.zeros(0, np.int64)
-        v = np.concatenate(values) if values else np.zeros(0, np.int64)
+                return list(ex.map(fn, files))
+        packed = read(packed_of)
+        if any(p is None for p in packed):
+            packed = None
+            tables = _generic_tables(read(columns_of), where=Path(dump).name)
+        else:
+            tables = _packed_tables(packed, where=Path(dump).name, row_group=ROW_GROUP)
         schema = TABLE.schema().with_metadata(_want(dump))
         out = path_of(dump)
         tmp = out.with_name(f"{out.name}.{os.getpid()}.tmp")
         w = pq.ParquetWriter(tmp, schema, compression="zstd", compression_level=3)
         try:
             try:
-                for t in TABLE.tables(k, {"index": v}, where=Path(dump).name, row_group=ROW_GROUP):
+                for t in tables:
                     w.write_table(t.replace_schema_metadata(schema.metadata))
             except KeyTableError as e:
                 raise EntityTableError(f"{e} (an entity is one line of the dump)") from None
@@ -147,14 +204,38 @@ def build(dump: Path, *, workers: int | None = None, mode: str = "threads") -> P
         return out
 
 
-def ensure(dump: Path) -> Path:
-    """The table of `dump`'s pack, built when missing or stale."""
+def _generic_tables(got, *, where: str):
+    """`KeyTable.tables` over the chunks' (native ids, ordinals): a value
+    the packed sort cannot hold."""
+    import numpy as np
+    k = np.concatenate([a for a, _ in got]) if got else np.zeros(0, np.int64)
+    v = np.concatenate([b for _, b in got]) if got else np.zeros(0, np.int64)
+    got.clear()
+    return TABLE.tables(k, {"index": v}, where=where, row_group=ROW_GROUP)
+
+
+def ensure(dump: Path, *, wait_s: float | None = None) -> Path:
+    """The table of `dump`'s pack, built when missing or stale — or, while
+    another process writes the pack or the table, waited for at most
+    `wait_s` (TABLE_WAIT_S), then deferred (`derived.Busy`)."""
+    import time
     key, want = str(dump), _want(dump)
     with _lock:
         hit = _fresh.get(key)
     if hit is not None and hit[0] == want and hit[1].is_file():
         return hit[1]
-    p = path_of(dump) if is_fresh(dump) else build(dump)
+    deadline = time.monotonic() + (TABLE_WAIT_S if wait_s is None else wait_s)
+    while True:
+        if is_fresh(dump):
+            p = path_of(dump)
+            break
+        try:
+            p = build(dump)
+            break
+        except derived.Busy:
+            if time.monotonic() >= deadline:
+                raise
+            time.sleep(0.25)
     with _lock:
         _fresh[key] = (want, p)
     return p
