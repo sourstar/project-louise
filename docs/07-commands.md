@@ -413,6 +413,11 @@ louise dev                                                             operator 
                                                                        uids `reindex --ids` repairs (chunks, index, text; never one whose live origin moved). Exit 1
                                                                        when a document is named; prints the seconds it took. Not a plan row: it checks this node's
                                                                        derived state, not the copy, and proves nothing to another peer (03 §3.2)
+  wikipedia-coverage [<collection>] [--lang L] [--samples N]          per wiki of a wikipedia collection's run, the articles its multistream index lists against
+                                                                       the rows the manifest holds in either layer: how many no row holds, how many of those the
+                                                                       archive covers (the dump pass skips them: held by neither layer), the rows the run does not
+                                                                       list, and a seeded sample of N (default 20) with their titles; one pass over the manifest and
+                                                                       one over each index, on the parse pool; read-only, writes nothing (added 2026-11-17)
   unindexable <collection> <uid> [--yes]                               a document the plugin now refuses: out of every index, its error written at once; writes
   mark-embedded <collection>                                           documents whose every chunk has a vector here and whose row says embed_done = 0, marked; writes
   cache-evict [--idle-hours H] [--dry-run]                             the packs built from the source downloads idle H hours (default 24), removed and built again

@@ -158,7 +158,7 @@ def split_locator(locator: str) -> list[tuple[str, int, int]]:
     return out
 
 
-def covered_articles(root: Path, state_dir: Path | None):
+def covered_articles(root: Path, state_dir: Path | None, *, write: bool = True):
     """`{lang: sorted unique page ids}` — every article the archive holds.
 
     What the dump pass consults so a page the archive covers is read from
@@ -167,7 +167,8 @@ def covered_articles(root: Path, state_dir: Path | None):
     `state_dir`, so a scan with nothing new reads no parquet. Independent
     of the scan cursor on purpose: a shard the cursor skips is still
     coverage. An unreadable shard covers nothing (its discovery reports
-    it)."""
+    it). `write=False`: the cache is read where it is and never written (a
+    read-only check, app/wikipedia_coverage.py)."""
     import numpy as np
     import pyarrow.parquet as pq
     cache = state_dir / "wikipedia-archive-ids" if state_dir is not None else None
@@ -198,7 +199,7 @@ def covered_articles(root: Path, state_dir: Path | None):
                 except (ValueError, AttributeError):
                     continue
             got = np.unique(np.asarray(pages, dtype=np.int64))
-            if path is not None:
+            if path is not None and write:
                 # whole or absent: discover may run in two processes at once
                 cache.mkdir(parents=True, exist_ok=True)
                 tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
