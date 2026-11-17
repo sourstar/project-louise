@@ -482,7 +482,8 @@ def test_a_paused_collection_with_a_due_snapshot_is_held_and_runs_once_resumed(i
     have been checked inside the worker while the operator checked it in
     its own container). The paused set is read once a turn; `show` says
     the check is held."""
-    from app import collections as collections_mod, node_state
+    from app import collections as collections_mod
+    from app import node_state
     from app.share import seeder
     monkeypatch.setattr(seeder, "current_snapshot", lambda d: SimpleNamespace(snapshot_id="2026-09"))
     monkeypatch.setattr(node_state, "peek_worker_state", lambda: "running")
