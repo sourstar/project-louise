@@ -434,6 +434,12 @@ class WikipediaSource:
     #: `origin` instead of parsing the page again (app/pack/build.py
     #: `held_or_parsed`; 02 §2.7, amended 2026-11-17)
     ORIGIN_MOVES_ALONE = True
+    #: each record's `origin` names the run's dated file and byte range
+    #: (09 §9.5), so a new run re-issues every part: the update by cadence
+    #: plans this collection and does not run it until the operator decides
+    #: the origin form (app/hold/update.py `origin_names_run`;
+    #: docs/notes/collection-updates.md §6)
+    origin_names_run = True
     #: THE UPDATE BY CADENCE (app/hold/update.py; docs/notes/collection-updates.md
     #: §1): the origin's own record that the run a cutoff names is complete —
     #: Wikimedia's dumpstatus.json of each held wiki, `articlesmultistreamdump`

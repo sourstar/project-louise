@@ -162,6 +162,11 @@ operator's word.
 - **The old run's gate** (`app/hold/cascade.py`): published = the snapshot and its `.sig.json`; started = every
   annotations collection that declares this one has `state/woken.json` naming the snapshot at `running`, `done` or
   `failed`. Until the cascade (§4) writes `woken.json`, an annotated collection's old run stays.
+- **OPEN, the operator's: the origin form.** Until it is decided, a plugin declaring `origin_names_run`
+  (wikipedia) is planned (`--dry-run`) and refused (exit 2) by the pass and the keeper. The choices: A keep
+  the `origin` naming the dated file and byte range (every part re-issued each run); B a page-id `origin`
+  located in the run through Wikimedia's multistream index (09 §9.5 changed); C an origin-only patch of
+  the parts (09 §9.9's patch, for the `origin` alone).
 - **Found on the way:**
   - every record line's `origin` names the run's file, so a dated-dump update re-issues EVERY part (the delta
     still lists only what changed by content). The records build carries a line whose origin bytes are the same at

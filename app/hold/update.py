@@ -141,6 +141,34 @@ def not_updated(codex) -> str | None:
     return None
 
 
+def origin_names_run(codex) -> bool:
+    """The plugin declares that each record's `origin` names the dated file
+    and byte range of its run (`origin_names_run`, wikipedia): a new run
+    re-issues every part. Until the operator decides the origin form
+    (collection-updates.md §6: A keep, B a page-id origin through the
+    multistream index, C an origin-only patch), the pass plans such a
+    collection (`--dry-run`) and never runs it."""
+    from app import collections as collections_mod
+    plugin = collections_mod.PLUGIN_REGISTRY.get(getattr(codex, "plugin", None))
+    return bool(getattr(plugin, "origin_names_run", False))
+
+
+def origin_form_wait(root, name: str, codex) -> str:
+    """The refusal of a collection whose origin names the run, in plain
+    words, with what a run would re-issue: the newest snapshot's parts and
+    their bytes (its header, kept once per file, app/share/seeder.py)."""
+    from app.share import seeder
+    try:
+        snap = seeder.current_snapshot(Path(root) / name / "shard")
+    except Exception:   # noqa: BLE001 — the refusal is said whatever the snapshot reads
+        snap = None
+    size = (f" ({name}: {len(snap.shards):,} parts, {sum(int(s.bytes) for s in snap.shards) / 2**30:.1f} GiB "
+            f"to every peer)" if snap is not None else "")
+    return (f"not updated by this pass: every part would be re-issued{size} because each record's origin "
+            f"names the dated file and byte range; waiting on the operator's decision on the origin form "
+            f"(collection-updates.md)")
+
+
 def held_slices(collection, spec) -> list[str]:
     """The slices the node holds and the origin delivers whole."""
     from app.acquire import spec as acquire_spec
@@ -268,7 +296,11 @@ def run(root, name: str, *, now: datetime | None = None, stop: threading.Event |
                stop=stop or threading.Event(), log=say,
                fetch_records=fetch_records or completion.records, fetch_runs=fetch_runs or completion.runs)
     if dry_run:
+        # it still PLANS a collection whose origin names the run: what a run
+        # would fetch is what the operator's decision is sized by
         return _dry_run(ctx)
+    if origin_names_run(codex):
+        return Outcome("refused", origin_form_wait(root, name, codex), EXIT_REFUSED)
     # ONE PASS AT A TIME per collection: the worker's keeper and an
     # operator's run never interleave their steps
     try:
@@ -781,6 +813,8 @@ def describe(root, name: str, codex=None) -> dict[str, Any]:
     why = not_updated(codex)
     if why is not None:
         return {"state": "not-updated", "says": f"not updated by cadence: {why}"}
+    if origin_names_run(codex):
+        return {"state": "waits-decision", "says": origin_form_wait(root, name, codex)}
     mk = update_state.read(root, name)
     period = next_period(root, name, codex)
     if mk is None:
@@ -914,6 +948,9 @@ def next_step(root, name: str, codex, *, now: datetime | None = None) -> Next:
     why = not_updated(codex)
     if why is not None:
         return Next(None, why)
+    if origin_names_run(codex):
+        return Next(None, "waits for the operator's decision on the origin form (each record's origin "
+                          "names the run)")
     mk = update_state.read(root, name)
     failure = (mk or {}).get("failure")
     if failure:

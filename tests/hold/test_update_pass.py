@@ -85,6 +85,10 @@ def node(isolated_config, data_dir, config_dir, monkeypatch, tmp_path):
     for cache in (wsrc._stream_cache, archive._groups, archive._layouts):
         cache.clear()
     monkeypatch.setenv("LOUISE_PLATFORM_IMAGE", PLATFORM)
+    # the pass's machinery, as it runs once the operator has decided the
+    # origin form; until then wikipedia is refused (`test_..._origin_names_the_run`)
+    from app.plugins.wikipedia.source import WikipediaSource
+    monkeypatch.setattr(WikipediaSource, "origin_names_run", False)
     origin = MockServer(tmp_path / "wikimedia")
     real = specs.ACQUIRE_REGISTRY["wikipedia"]
     monkeypatch.setitem(specs.ACQUIRE_REGISTRY, "wikipedia", dataclasses.replace(
@@ -318,3 +322,35 @@ def test_the_loader_reads_a_snapshots_run_once_however_often_it_loads(node, monk
     for _ in range(25):
         assert collections_mod.by_name("wikipedia").snapshot == wiki_runs.FIRST
     assert len(reads) == 1
+
+
+def test_a_collection_whose_origin_names_the_run_is_planned_and_never_run(node, monkeypatch, capsys):
+    """Until the operator decides the origin form (collection-updates.md §6),
+    a plugin declaring `origin_names_run` is refused by the pass and by the
+    keeper — exit 2, said in plain words — and its dry run still plans."""
+    from app import louise
+    from app.plugins.wikipedia.source import WikipediaSource
+    monkeypatch.setattr(WikipediaSource, "origin_names_run", True)
+    node.publish(NEW, NEW_PAGES)
+    snap = node.snapshot("2026-10")
+    parts, gib = len(snap.shards), sum(s.bytes for s in snap.shards) / 2 ** 30
+    got = node.pass_()
+    assert got.state == "refused" and got.exit == update.EXIT_REFUSED == 2
+    assert got.says == (f"not updated by this pass: every part would be re-issued (wikipedia: {parts:,} parts, "
+                        f"{gib:.1f} GiB to every peer) because each record's origin names the dated file and "
+                        f"byte range; waiting on the operator's decision on the origin form "
+                        f"(collection-updates.md)")
+    assert node.marker() is None and node.origin.request_counts == {}, "nothing asked, nothing written"
+    plan = node.pass_(dry_run=True)
+    assert plan.state == "dry-run" and plan.plan["fetch"]["files_pending"] == 3, "München sizes the fetch"
+    assert update.next_step(node.root, "wikipedia", collections_mod.by_name("wikipedia").codex,
+                            now=NOW).step is None, "the keeper runs nothing"
+    assert update.describe(node.root, "wikipedia")["says"] == got.says
+    capsys.readouterr()
+    rc = louise.main(["hold", "collection", "update", "wikipedia", "--root", str(node.root)])
+    assert rc == 2 and "waiting on the operator's decision on the origin form" in capsys.readouterr().out
+
+
+def test_wikipedia_declares_that_its_origin_names_the_run():
+    from app.plugins.wikipedia.source import WikipediaSource
+    assert WikipediaSource.origin_names_run is True
