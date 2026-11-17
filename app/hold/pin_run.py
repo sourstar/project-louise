@@ -101,37 +101,53 @@ def corrected(codex: Codex, run: str) -> Codex:
 
 # ---- what may be pinned -------------------------------------------------------
 
+# ---- WHAT MAY HAVE LEFT THIS NODE: read so that a doubt refuses (fails CLOSED)
+#
+# Only a node database that does not exist, or a table that does not exist
+# ("no such table"), says "never published". Anything else that cannot be
+# read — a locked database, a permission, a corrupt file — refuses the pin
+# naming it: "could not tell" is never "nothing was published" (the
+# `_is_kept_copy` defect, #746, was this pattern).
+
+def _node_rows(sql: str, args: tuple, what: str) -> list | None:
+    """`sql` on node.sqlite, read-only; None where the node database or the
+    table does not exist (nothing was ever published from here)."""
+    from app import node_state
+    db = node_state.path()
+    if not db.exists():
+        return None
+    try:
+        con = sqlite3.connect(f"file:{db.as_posix()}?mode=ro", uri=True, timeout=10)
+    except sqlite3.Error as e:
+        raise PinRefused(f"pin-run: {db} could not be opened ({e}), so whether {what} is not known; "
+                         f"nothing written") from None
+    try:
+        return con.execute(sql, args).fetchall()
+    except sqlite3.OperationalError as e:
+        if str(e).startswith("no such table"):
+            return None
+        raise PinRefused(f"pin-run: {db} could not be read ({e}), so whether {what} is not known; "
+                         f"nothing written") from None
+    except sqlite3.Error as e:
+        raise PinRefused(f"pin-run: {db} could not be read ({e}), so whether {what} is not known; "
+                         f"nothing written") from None
+    finally:
+        con.close()
+
+
 def _publisher_ran(name: str) -> str | None:
     """node.sqlite's `publish:<name>` (app/worker.py PUBLISH_KEY): the
     publisher made a pass for this name, which it does only for a collection
     whose file says `share = true`. None where it never did."""
-    try:
-        from app import node_state
-        con = node_state.connect()
-    except Exception:   # noqa: BLE001 — no node database: nothing published from here
-        return None
-    try:
-        row = con.execute("SELECT value FROM control WHERE key=?", (f"publish:{name}",)).fetchone()
-        return str(row[0]) if row else None
-    except sqlite3.OperationalError:
-        return None
-    finally:
-        con.close()
+    rows = _node_rows("SELECT value FROM control WHERE key=?", (f"publish:{name}",),
+                      f"the publisher made a pass for {name}")
+    return str(rows[0][0]) if rows else None
 
 
 def _published_attestations(collection_id: str) -> int:
-    try:
-        from app import node_state
-        con = node_state.connect()
-    except Exception:   # noqa: BLE001 — no node database: nothing published from here
-        return 0
-    try:
-        return int(con.execute("SELECT COUNT(*) FROM attestations_published WHERE collection_id=?",
-                               (collection_id,)).fetchone()[0])
-    except sqlite3.OperationalError:            # no attestation ever published here
-        return 0
-    finally:
-        con.close()
+    rows = _node_rows("SELECT COUNT(*) FROM attestations_published WHERE collection_id=?", (collection_id,),
+                      f"this node published an attestation of {collection_id}")
+    return int(rows[0][0]) if rows else 0
 
 
 def _manifest_facts(manifest: Path, codex: Codex) -> dict[str, Any]:
@@ -140,8 +156,15 @@ def _manifest_facts(manifest: Path, codex: Codex) -> dict[str, Any]:
     from app.share import coverage as cov
     out: dict[str, Any] = {"served": None, "coverage": 0, "locators": [], "rowids": 0}
     if not manifest.is_file():
-        return out
-    con = sqlite3.connect(f"file:{manifest.as_posix()}?mode=ro", uri=True)
+        # its records are frozen (the plan holds a snapshot): a collection with
+        # records and no manifest cannot say whether the seeder served it
+        raise PinRefused(f"pin-run: {manifest} is not there, and the collection holds records: whether the "
+                         f"seeder served it is not known; nothing written")
+    try:
+        con = sqlite3.connect(f"file:{manifest.as_posix()}?mode=ro", uri=True, timeout=10)
+    except sqlite3.Error as e:
+        raise PinRefused(f"pin-run: {manifest} could not be opened ({e}): whether the seeder served it is "
+                         f"not known; nothing written") from None
     con.row_factory = sqlite3.Row
     try:
         tables = {r[0] for r in con.execute("SELECT name FROM sqlite_master WHERE type='table'")}
@@ -165,6 +188,9 @@ def _manifest_facts(manifest: Path, codex: Codex) -> dict[str, Any]:
                 part = ids[i:i + 500]
                 out["locators"] += [r[0] for r in con.execute(
                     f"SELECT path FROM documents WHERE rowid IN ({','.join('?' * len(part))})", part)]
+    except sqlite3.Error as e:
+        raise PinRefused(f"pin-run: {manifest} could not be read ({e}): whether the seeder served it is not "
+                         f"known; nothing written") from None
     finally:
         con.close()
     return out
@@ -176,15 +202,21 @@ def _naming(root: Path, name: str, collection_id: str) -> list[str]:
     from . import collection as col
     hexid = collection_id.split(":", 1)[-1]
     out = []
-    for other, _c in col._held(root):
-        if other == name:
+    # every Codex FILE under the root, read as bytes — those `_held` cannot
+    # load too (it skips them): one that cannot be read refuses
+    for d in sorted(Path(root).iterdir()) if Path(root).is_dir() else []:
+        if d.name == name:
+            continue
+        p = d / col.SHARD_DIR / col.CODEX_FILE
+        if not p.exists() and not p.is_symlink():
             continue
         try:
-            raw = (col.shard_dir_of(root, other) / col.CODEX_FILE).read_bytes()
-        except OSError:
-            continue
+            raw = p.read_bytes()
+        except OSError as e:
+            raise PinRefused(f"pin-run: {p} could not be read ({type(e).__name__}: {e}), so whether {d.name} "
+                             f"names {collection_id} is not known; nothing written") from None
         if hexid.encode() in raw:
-            out.append(other)
+            out.append(d.name)
     return out
 
 

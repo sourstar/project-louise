@@ -294,3 +294,61 @@ def test_a_pin_under_way_is_said_by_the_dry_run_and_finished_by_yes(data_dir, co
     assert louise.main(["dev", "pin-run", NAME, "--root", str(root), "--yes"]) == 0
     capsys.readouterr()
     assert origin_run.codex_run(col.read(root, NAME)) == RUN
+
+
+# ---- a doubt refuses: what cannot be read is never "nothing published" ----------
+
+@pytest.mark.parametrize("case", ["locked node database", "unreadable codex.json", "missing manifest"])
+def test_what_cannot_be_read_refuses_the_pin(case, data_dir, config_dir, isolated_config, tmp_path, monkeypatch,
+                                             capsys):
+    """Only a node database or a table that does not exist says "never
+    published"; a locked database, a Codex file that cannot be read, a
+    collection with records and no manifest refuse the pin, naming what
+    could not be read, and nothing is written."""
+    root, _ = _recreate(data_dir, config_dir, tmp_path, monkeypatch, capsys, corrected=False)
+    before = (root / NAME / "shard" / "codex.json").read_bytes()
+    lock = None
+    if case == "locked node database":
+        from app import node_state
+        node_state.connect().close()                     # the node's database exists
+        lock = sqlite3.connect(node_state.path(), isolation_level=None)
+        lock.execute("PRAGMA locking_mode=EXCLUSIVE")
+        lock.execute("BEGIN EXCLUSIVE")
+        lock.execute("INSERT OR REPLACE INTO control(key, value) VALUES('x', 'y')")
+        match = r"node\.sqlite could not be read \(database is locked\)"
+    elif case == "unreadable codex.json":
+        held = root / "wikidata" / "shard" / "codex.json"
+        real = Path.read_bytes
+
+        def read_bytes(self):
+            if self == held:
+                raise PermissionError(13, "Permission denied", str(self))
+            return real(self)
+        monkeypatch.setattr(Path, "read_bytes", read_bytes)
+        match = r"wikidata/shard/codex\.json could not be read \(PermissionError"
+    else:
+        m = root / NAME / "state" / "manifest.sqlite"
+        m.rename(m.with_name("manifest.sqlite.aside"))
+        match = r"manifest\.sqlite is not there, and the collection holds records"
+    try:
+        with pytest.raises(pin_run.PinRefused, match=match):
+            pin_run.plan(root, NAME)
+    finally:
+        if lock is not None:
+            lock.execute("ROLLBACK")
+            lock.close()
+        if case == "unreadable codex.json":
+            monkeypatch.undo()
+    assert (root / NAME / "shard" / "codex.json").read_bytes() == before
+    assert not (root / NAME / "state" / pin_run.MARKER).exists()
+
+
+def test_a_node_database_or_table_that_does_not_exist_is_never_published(data_dir, config_dir, isolated_config,
+                                                                         tmp_path, monkeypatch, capsys):
+    root, _ = _recreate(data_dir, config_dir, tmp_path, monkeypatch, capsys, corrected=False)
+    from app import node_state
+    node_state.path().unlink(missing_ok=True)
+    assert pin_run._publisher_ran(NAME) is None and pin_run._published_attestations("sha256:aa") == 0
+    node_state.connect().close()                          # no attestations table in it
+    assert pin_run._published_attestations("sha256:aa") == 0
+    assert pin_run.plan(root, NAME)["run"] == RUN
