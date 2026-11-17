@@ -75,6 +75,14 @@
     {{ g.collection }}'s encoder check runs on a separate load of {{ g.model }} since {{ g.since_text }}; this collection keeps embedding
   </div>
   {% endfor %}
+  {# THE UPDATE BY CADENCE (2026-11-17, app/hold/update.py): its state in
+     plain words — "update 2026-11: fetching 7 of 11 languages, 41 of 62 GB" #}
+  {% if c.update and c.update.says %}
+  <div class="note" data-update="{{ c.update.state }}">
+    <span class="badge {{ 'err' if c.update.failure else 'brass' }}" title="the monthly update of this collection from its origin's next run (docs/notes/collection-updates.md)">update</span>
+    {{ c.update.says }}
+  </div>
+  {% endif %}
   {% if c.gate and not c.gate.allowed %}
   <div class="note">
     <span class="badge err">embedding paused</span> {{ c.gate.reason }}

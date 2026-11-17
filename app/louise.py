@@ -4415,8 +4415,19 @@ def cmd_show(a) -> int:
     # the slice scope's own reading (`slice_scope.embed_view`), the one the
     # Library's card and grow dialog show
     out.update(_embed_choice(a.root, name))
+    # the update by cadence, in plain words (app/hold/update.py; 2026-11-17):
+    # "update 2026-11: fetching 7 of 11 languages, 41 of 62 GB"
+    out["update"] = _update_state(a.root, name, codex)
     _print(out)
     return 0
+
+
+def _update_state(root, name: str, codex) -> dict:
+    from app.hold import update as update_mod
+    try:
+        return update_mod.describe(root, name, codex)
+    except Exception as e:   # noqa: BLE001 — show never fails on it
+        return {"state": "unknown", "says": f"unknown ({type(e).__name__}: {e})"}
 
 
 def _embed_choice(root, name: str) -> dict:
