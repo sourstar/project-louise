@@ -72,6 +72,96 @@ No language model for chat or generation in historical Italian exists
 `app/historical.py` (ſ, et, -tione, h-) and its marker words are a small
 start, written by hand, not a list.
 
+## Scoring OCR readings by period (2026-11-17, for louise-ocr)
+
+Asked by louise-ocr via München: scoring OCR candidates of 1200–1800
+Italian WITHOUT modernising (choose between two engines' readings of a
+block, flag improbable words). Nothing here is adopted without the
+operator's choice. "Counted" = measured in this session; else stated.
+
+**(1) What can score candidates by period**
+
+| resource | period | scores by | licence | caveat |
+|---|---|---|---|---|
+| TLIO's lists of forms (each entry's "0.1", every attested spelling; ABBONDARE has ~150) | <1400 | lookup: a form is attested or not, and under which lemma | none stated; the operator, 2026-11-17: "assume we can use it for non commercial purposes, I will clarify the licensing myself" | being fetched (below); non-commercial; NOT shared or published until the licence is recorded |
+| Italian Wikisource, frequency by century | 1200–1900 | log-frequency of the exact form in its century | CC BY-SA 3.0 (a derived list is CC BY-SA, attributed) | many texts are modern critical editions, partly regularised; prints of the 1500s–1700s are closer |
+| BERToldo till1500 / 1500-1700 / 1700-1900 | as named | masked-LM pseudo-log-likelihood of a word in context | Apache-2.0 | uncased (see 3) |
+| Morph-it! | 1900s | lookup | CC BY-SA 2.0 / LGPL | modern forms only: a "probably modern" signal, never a reason to reject an old form |
+| UD_Italian-Old | 1300s (Dante) | lookup, lemma | CC BY-SA 4.0 | 119K tokens |
+| MIDIA *formario* | 1200–1900 | lookup | not published | ask the team (operator's choice) |
+
+Lists are evidence FOR a reading, never against it: an OCR form absent from
+every list is flagged for review, not rejected; old spelling varies freely
+(*abondare / habundare / abunnare*).
+
+**(2) A Wikisource frequency list by century — counted.** The dump
+(hf.co/datasets/wikimedia/wikisource, config 20231201.it, one Parquet
+file, 115 MB, 65,047 pages) has no date field, but each work's root page
+begins with its *Intestazione* (author, year or "XVI secolo", subject)
+and its subpages inherit it (`IncludiIntestazione`). Dated so: 12,078 of
+15,440 works. Words by century of the work: 1200s 0.5M, 1300s 1.5M,
+1400s 0.8M, 1500s 3.0M, 1600s 0.9M, 1700s 1.1M, 1800s 5.8M. Proposed
+format, as louise-ocr asked: TSV `form<TAB>count<TAB>century`, the form
+as written (case-folded only, no accent or ſ folding), a header naming the
+snapshot, the licence and the attribution. Where: built by a script on
+the node's side into louise-ocr's data directory (my container is
+ephemeral and not reachable from there); a few hours' work once chosen.
+
+**(3) BERToldo on CPU.** Eight models (Palmero Aprosio, Menini, Tonelli,
+LT4HALA 2022): BERT-base architecture (110M parameters), 128-token
+window; trained on Wikisource and Liberliber, split till1500,
+1500-1700, 1700-1900, plus "all" and four continued from
+dbmdz/bert-base-italian-xxl-uncased. Scoring a word = mask each of its
+subwords and sum the log-probabilities (pseudo-log-likelihood, Salazar et
+al., ACL 2020): one forward pass per subword, so comparing two readings
+costs a few passes for the words that differ only. Expected tens of ms a
+pass on CPU — NOT measured. Caveats: UNCASED, and BERT's uncased
+tokenizer normally also strips accents, so *perché/perche* and probably
+ſ are not distinguished — check the weights' tokenizer config before use;
+weights are on Google Drive only (no Hub card); torch or ONNX in
+louise-ocr's own container, never in the app (invariant 7); llama.cpp has
+no masked-LM head, so not through the node's engine.
+
+**(4) What a period plugin should carry**
+
+- *Characters, by MUFI* (Medieval Unicode Font Initiative, the standard
+  for medieval characters — do not invent codepoints): ſ, the tironian
+  et ⁊, &, ę (e caudata), æ/œ, the nasal macron and tilde (ā ẽ ũ = a
+  following m/n), ꝑ ꝓ p̄ (per, pro, pre), ꝯ (con), q̃/ꝗ, superscript
+  letters, ligatures (ct, st, ſt, ff); and the OUTPUT convention the
+  plugin declares: diplomatic (marks kept) or semi-diplomatic
+  (abbreviations expanded in brackets), never silently mixed.
+- *Distribution rules*, as evidence: u/v by position (v initial, u
+  medial, until about 1600), i/j/y, ſ never final, h- before vowels
+  (*huomo, hauere*), -tione/-zione, word division (*de la*, *allhora*),
+  the line-end hyphen ("=" or "-"), Roman numerals, catchwords and
+  running heads to drop from the text, not to score.
+- *Abbreviations*: Cappelli's *Lexicon abbreviaturarum*, all 14,357
+  entries, digitised by Ad fontes (University of Zurich), public domain,
+  a ZIP of an Excel table plus an image per abbreviation
+  (adfontes.uzh.ch, "Cappelli: Downloadable Data"; crowdsourced, errors
+  possible). Mostly Latin and manuscript, which old Italian prints share.
+- *Latin*: passages in Latin are common in these books; the plugin needs
+  a Latin lexicon or the language decided per block, or Latin words read
+  as improbable Italian.
+- *Ground truth to measure*: none found for Italian prints. GT4HistOCR
+  (CC BY 4.0) is German Fraktur and Early Modern Latin; a measured set of
+  Italian pages would have to be made.
+
+## TLIO fetch (2026-11-17)
+
+Operator: "Can you gently fetch all the content and make a glossary?",
+then "So far assume we can use it for non commercial purposes, I will
+clarify the licensing myself". The terms text recorded with the data
+(TERMS.txt, sha256 b7e29c1a15627afe0e92925f05e0b5d466c37193c46c10722b7ba3614249ce1d)
+states the site gives no licence, CNR's IRIS says "all rights reserved,
+unless stated otherwise", and the operator's words. 43,911 published
+entries (the 26 lists of tlio.ovi.cnr.it/TLIOlemm/?q=<letter>), one
+request at a time, at most one a second, raw pages kept gzipped for
+verification; robots.txt disallows /TLIO/ (the query system) only, which
+is not used. Non-commercial; not shared with peers, not published, not
+in this repository until the licence is recorded.
+
 ## Other languages (top picks; full tables in this session's reports, to be added)
 
 - **English.** OE: Bosworth-Toller ("free for any purpose") and Wiktionary
