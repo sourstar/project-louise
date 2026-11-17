@@ -692,7 +692,52 @@ probable or open.
   scheme whose working set crosses the card is not viable; and the spill is
   tried, if at all, once, measured with `GGML_SYCL_MEMTRACE=1` beside the
   fdinfo counts (app/gpu_memory.py), before anything depends on it. The
-  weights of the Ask set fit without it through this patch (§1.5).
+  weights of the Ask set fit without it through this patch (§1.5) — with
+  TODAY's chat; not with the 35B (next bullet).
+- **The set the operator wants, costed (2026-11-17)** — today's models, the
+  35B MoE (`louise-chat-qwen3.6-35b-a3b`, Qwen3.6-35B-A3B UD-Q4_K_M) in
+  place of qwen3-8b, and Krea 2 image generation; STT stays on the iGPU
+  (operator: "500 MB are anyway reserved for igpu and they would be wasted
+  otherwise"; stt-on-igpu.md: 516 MB carve-out + 1.3 GB GTT, 0 on the B70)
+  and VAD on the CPU. In GiB against the card's 31.9 (32,656 MiB); the
+  measured rows from this section's figures (the all-resident 30,267 MiB,
+  less qwen3-4b's 1,380 MiB ubatch cut, the 8,585 MiB of context), the
+  rest from file sizes, ESTIMATED:
+  - the 35B: file 22,134,528,992 B = 20.6 GiB; context at 16k ≈ 1.2 GiB
+    (KV ≈ 0.3: 10 full-attention layers of 40, 2 KV heads × 256, f16;
+    logits and compute at ubatch 512 ≈ 0.8, the 248k vocabulary) + the
+    0.26 floor ≈ **22.1 GiB loaded**, two thirds of the card (the YAML's
+    "~20 GB" is the file in GiB). Smaller files of the same repo:
+    UD-IQ4_XS 16.5 GiB, UD-Q3_K_XL 15.7 GiB.
+  - Krea 2 (`krea/Krea-2-Raw`; Turbo is a finetune of the same shape):
+    transformer 26.3 GB bf16 (≈ 13 B), text encoder 8.9 GB bf16 (≈ 4.4 B,
+    an LLM), VAE 0.5 GB — **33 GiB as shipped: does not fit the card
+    alone**. Quantised, if a backend of ours learns the architecture
+    (stable-diffusion.cpp: NOT checked): transformer Q8 ≈ 13.0 GiB /
+    Q4_K_M ≈ 7.0; text encoder Q8 ≈ 4.4 / Q4 ≈ 2.4, or on the CPU;
+    + 0.5 VAE; working memory while an image is made (~0.6–1 GiB at this
+    size) freed between images (image-generation-krea.md §2).
+
+  | set | contexts held (today) | contexts on demand (this patch) |
+  |---|---|---|
+  | today's set, qwen3-8b chat (MEASURED) | 28.2 | 19.8 (weights + floors) |
+  | the same with the 35B UD-Q4_K_M for qwen3-8b | ≈ 43.6 | ≈ 34.5 |
+  | … with UD-Q3_K_XL instead | ≈ 38.7 | ≈ 29.6 |
+  | + Krea 2, Q4 transformer, text encoder on the CPU | ≈ 51 | ≈ 42 |
+  | + Krea 2, Q4 transformer and Q4 text encoder on the card | ≈ 53.5 | ≈ 44.5 |
+  | + Krea 2, Q8 everything on the card | ≈ 61.5 | ≈ 52.5 |
+
+  So: nothing of this is resident on a 31.9 GiB card. Even weights alone,
+  contexts on demand, the 35B at Q4 with today's encoders overshoot by
+  ≈ 2.6 GiB before any image model; only a Q3 of the 35B fits weights-only,
+  with ≈ 2 GiB to spare and no room for Krea 2. Krea 2 beside the 35B is a
+  switch, whatever is done: the driver's spill (previous bullet, ~0.8–0.9 s
+  per 35B switch, ~0.3 s for a Q4 Krea 2 transformer) or LocalAI's
+  unload-and-reload (10 s and more). What the choice costs, per row:
+  spill — fast, invisible, host RAM (8–30 GiB of spill against ~20 GiB of
+  headroom: the Q8 rows do not fit the HOST either); reload — bounded,
+  visible, slow; a Q3 35B — fits weights-only, pays in answer quality, is a
+  new engine run through the gate like any other.
 - **The context share per model**, 2026-11-12 (`size_vram` − the weights
   file; the backends' load lines are not kept at LocalAI's info level):
   qwen3-4b 3,262 MiB (≈ 1.1 GiB KV, ≈ 2.1 GB compute buffers at ubatch

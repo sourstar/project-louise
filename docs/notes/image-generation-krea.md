@@ -7,6 +7,20 @@ session"**. This note is that brief. Nothing has been measured, loaded or
 installed. Everything below is a file size, a published figure, or a line
 of source code, and is labelled as such.*
 
+**Amended 2026-11-17: the operator's target is Krea 2, not FLUX.1 Krea
+[dev].** `krea/Krea-2-Raw` (Krea-2-Turbo is a finetune of the same shape;
+both gated, a Diffusers `Krea2Pipeline`): transformer 26.3 GB bf16 (≈ 13 B,
+three shards), text encoder 8.9 GB bf16 (≈ 4.4 B, an LLM with a chat
+template), VAE 0.5 GB — **33 GiB as shipped, more than the whole card**.
+Quantised to Q8 / Q4_K_M the transformer is ≈ 13.0 / 7.0 GiB, the text
+encoder ≈ 4.4 / 2.4 GiB or on the CPU — IF a backend of ours knows the
+architecture: stable-diffusion.cpp's support for Krea 2 is NOT checked and
+is the first question of the session, before any file is fetched. The
+FLUX.1 Krea figures below stand as this note's worked example; the budget
+of the whole set the operator wants (the 35B chat, Krea 2, today's models)
+is in [idle-context-brief.md](idle-context-brief.md) §6 "The set the
+operator wants": nothing of it is resident on 31.9 GiB.
+
 ## 1. What LocalAI already offers
 
 LocalAI's gallery (`gallery/models/index.yaml`, read 2026-11-11) has two
