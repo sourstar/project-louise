@@ -77,7 +77,7 @@ grep -q "^def _cache_moves\|derived.held" -r "$ROOT/src.new/app/hold/rename.py" 
 grep -q "belongs to \`create annotations\`" "$ROOT/src.new/app/louise.py"          # 33243a5
 grep -q "gpuhwmon" "$ROOT/src.new/deploy/truenas-gpu-governor.yaml"               # fcafd3a
 grep -q "carry-keep-runs" "$ROOT/src.new/app/hold/carry.py"                  # 7b0f3e0
-grep -q "gutenberg-same-title" "$ROOT/src.new/tools/annotations_from_titles.py"   # db990c0
+grep -q "gutenberg-same-title" "$ROOT/src.new/tools/annotations_from_titles.py" "$ROOT/src.new/app/gutenberg_titles.py"   # db990c0; in app/ since #728
 grep -q "^def edition_facts" "$ROOT/src.new/app/ask/works.py"                 # 0b3d245
 grep -q "^def _cursor" "$ROOT/src.new/app/hold/carry.py"                       # c34c86e
 grep -q "^def withdraw" "$ROOT/src.new/app/unindexable.py"                     # 9a4d53c
