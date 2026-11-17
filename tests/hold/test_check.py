@@ -614,6 +614,30 @@ def test_the_kept_copy_is_known_by_its_path(tmp_path):
     assert not louise._is_kept_copy(local, None)
 
 
+def test_the_kept_copy_is_found_when_the_local_side_names_no_corpus(tmp_path):
+    """München, 2026-11-17: `hold records check` builds its local side with no
+    corpus directory, and the check of wikipedia's own corpus came out PASS.
+    The collection's `<root>/<name>/origin` is the kept copy, a link to the
+    corpus included, and so is a directory inside it."""
+    import os
+    from types import SimpleNamespace
+
+    from app import louise
+    corpus = tmp_path / "corpora" / "wikipedia"
+    (corpus / "enwiki" / "20260801").mkdir(parents=True)
+    root = tmp_path / "collections"
+    (root / "wikipedia").mkdir(parents=True)
+    os.symlink(corpus, root / "wikipedia" / "origin")
+    local = SimpleNamespace(corpus_dir=None)
+    assert louise._is_kept_copy(local, root / "wikipedia" / "origin", root=root, name="wikipedia")
+    assert louise._is_kept_copy(local, corpus, root=root, name="wikipedia"), "the link's target"
+    assert louise._is_kept_copy(local, corpus / "enwiki", root=root, name="wikipedia"), "inside the copy"
+    fresh = tmp_path / "fresh"
+    fresh.mkdir()
+    assert not louise._is_kept_copy(local, fresh, root=root, name="wikipedia")
+    assert not louise._is_kept_copy(local, corpus, root=root, name="other"), "another collection's root"
+
+
 def _drifted(real, victim_uid):
     """A re-parse that differs from the record while the origin bytes are
     the ones it was parsed from (`origin_hash` unchanged): what a parser
