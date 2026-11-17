@@ -419,6 +419,20 @@ def test_the_method_fits_the_collection_and_says_what_it_does(node):
     assert collections_mod.load_annotations()[0].method == METHOD
 
 
+def test_a_collection_of_carried_claims_alone_does_not_fit(node):
+    """Ticking the box on a collection the classical matcher made alone would
+    add a Wikidata tier to it: refused (2026-11-17 review)."""
+    root = node.root
+    only = [line for line in node.lines if json.loads(line)["method"].get("id") == "louise-classical-matcher"]
+    assert only, "the fixture holds a classical claim"
+    ann.create(root, "classical-only", target_ref="gutenberg", from_snapshot=TARGET_SNAPSHOT,
+               claims=b"".join(line + b"\n" for line in only), platform_image=PLATFORM,
+               snapshot_id=TARGET_SNAPSHOT, key=KEY, now=NOW, nonce="0f" * 16, annotator=ANNOTATOR,
+               log=lambda m: None)
+    why = am.not_fitting(root, "classical-only", am.METHODS[METHOD])
+    assert why is not None and "would only carry" in why
+
+
 def test_due_once_a_period_and_not_when_the_period_is_not_open(node):
     collection_file.set_values(NAME, {"method": METHOD})
     d = am.due(node.root, NAME, METHOD, clock=NOVEMBER)

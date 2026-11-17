@@ -280,25 +280,51 @@ def _methods_said(method: Method) -> str:
     return " or ".join(json.dumps(p, sort_keys=True) for p in said) or "{}"
 
 
+#: claims read at the head of each sampled part when a method also CARRIES
+#: claims it does not make: enough to find one of its own among them
+SAMPLED_CLAIMS = 256
+
+
+def _makes(method: Method, by: Any) -> bool:
+    """Whether a claim's `method` is one `method` MAKES (not only carries)."""
+    if method.claim_method is not None and by == dict(method.claim_method):
+        return True
+    return isinstance(by, dict) and any(all(by.get(k) == v for k, v in p.items())
+                                        for p in method.claim_methods)
+
+
 def _sampled(tree: Path, snap, method: Method, name: str) -> str | None:
+    """Every sampled claim is one `method` makes or carries; and where it
+    carries claims of others, at least one sampled claim is one it MAKES —
+    else ticking it would add a tier of its own to a collection made of
+    other claims (2026-11-17: a collection of the classical matcher's
+    claims alone does not fit `gutenberg-editions`)."""
     from app.pack import records as pack_records
     from .annotations import _part_file, claim_of
     step = max(1, -(-len(snap.shards) // SAMPLED_PARTS))
+    per_part = SAMPLED_CLAIMS if method.carries else 1
+    own = False
     for shard in snap.shards[::step]:
         p = _part_file(tree, shard, None, snap.snapshot_id)
         if p is None:
             continue
-        for r in pack_records.iter_records(p):
+        for i, r in enumerate(pack_records.iter_records(p)):
+            if i >= per_part:
+                break
             c = claim_of(r)
             kind_ok = not method.types or c.get("type") in method.types
             if not (kind_ok and _by_fits(method, c.get("method"))):
-                return (f"{name}'s claims are not {method.name}'s: part {shard.n}'s first is a "
+                return (f"{name}'s claims are not {method.name}'s: part {shard.n} holds a "
                         f"{c.get('type')!r} claim by {json.dumps(c.get('method'), sort_keys=True)}, and "
                         f"{method.name} makes {', '.join(method.types) or 'any'} claims by "
                         f"{_methods_said(method)}; "
                         + ("it is made for a collection of those, not this one" if method.carries
                            else "its output would withdraw them"))
-            break
+            own = own or _makes(method, c.get("method"))
+    if method.carries and not own:
+        return (f"{name}'s sampled claims are all ones {method.name} would only carry, none it makes "
+                f"({json.dumps([dict(m) for m in method.claim_methods], sort_keys=True)}): ticking it "
+                f"would add a tier of its own to a collection made by another tool")
     return None
 
 
