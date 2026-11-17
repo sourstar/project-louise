@@ -325,6 +325,18 @@ none and its Codex carries `terms_sha256: null`.
 
 ## 6.2 Acquisition
 
+**The origin's dumps held in the corpus** (*amended 2026-11-17*, operator:
+"Delete the monthly snapshots once used, the peers can reasonably check the
+compliancy"). An origin of dated dumps whose provider serves its runs for a
+window only (Wikimedia): the previous run's files are deleted from the
+corpus once the snapshot built from the next run is published and the
+annotations cascade it triggers has started, never before
+(docs/notes/collection-updates.md §3). This is about the origin's files in
+the corpus; Louise's own snapshots and parts follow 02 §2.3. Compliance
+stays checkable by re-fetching from the origin while it serves the run.
+When it no longer does, the snapshots built from it are reproducible only
+from peers (02 §2.2, `origin_reachable_until`).
+
 **Whether the origin keeps its versions** (*amended 2026-10-25*,
 operator: "what really matters in the end is the verifiability"). A plugin
 declares `origin_versions`: `"history"` when the origin keeps earlier

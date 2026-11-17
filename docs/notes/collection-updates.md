@@ -26,6 +26,7 @@ An **update pass** per collection, a maintainer of the worker, run under
 | c. records | `records build`, carrying every record line whose origin bytes are unchanged (`--records-from`, `parser_carried`) | the LATER build (#45) |
 | d. snapshot | `snapshot create` as the delta of the previous one: content-hash added / changed / tombstoned; only the parts that changed re-issued | 02 §2.2, part-deltas.md |
 | e. embed | only the changed chunks; vectors carried where `content_hash` / `source_hash` is unchanged (RULE 1) | #371's `source_hash` reuse |
+| f. old run | the previous run's files deleted from the corpus, once the snapshot is published and the cascade (§4) has started (§3) | — |
 
 - **When.** Inside the node's quiet hours (`quiet` windows, #192), at night.
   Fetching is a writer: it checks free space first (measuring.md).
@@ -61,23 +62,26 @@ before it" (02 §2.2). The two halves disagree.
 **Recommendation: B.** If the operator says nothing, nothing in part 1 is
 built: A or B changes what step b is.
 
-## 3. Old dumps: the rule
+## 3. Old dumps: the rule (decided)
 
-Invariant 11, "everything held is verifiable": a superseded part version is
-kept where the origin keeps its history, and dropped where it replaces in
-place.
+**Operator, 2026-11-17:** "Delete the monthly snapshots once used, the peers
+can reasonably check the compliancy." These are the ORIGIN's monthly dumps
+in the corpus, not Louise's snapshots or parts.
 
-- Wikimedia keeps dated runs, but only the recent ones. While Wikimedia
-  serves a run, every record built from it can be re-fetched and
-  reproduced (`records-vs-origin`). The local copy of that run is then a
-  cache of the origin, not the evidence.
-- **So:** last month's dump may go once the new snapshot is published and
-  its `records` check passes. The node keeps the run of the snapshot it
-  serves, needed for repairs and parses.
-- When Wikimedia stops serving a run, the snapshots built from it are
-  reproducible only from peers (02 §2.2). Their superseded parts follow
-  invariant 11's drop rule, and the collection records
-  `origin_reachable_until`.
+- **Step f of the update:** the previous run's files are deleted from the
+  corpus once the new snapshot is published AND the cascade it triggers
+  (§4) has started. Never before either. A crash between the two leaves the
+  files, and the step is redone.
+- **What stays:** Louise's own snapshots and parts follow 02 §2.3 as before.
+  Peers hold and verify them.
+- **Why compliance stays checkable:** a peer re-fetches from the origin.
+  Wikimedia serves recent dated runs, and `records-vs-origin` samples
+  against the current one. When Wikimedia stops serving a run, its
+  snapshots are reproducible only from peers (02 §2.2), and the collection
+  records `origin_reachable_until`.
+- **Written into the spec:** 06 §6.2, the origin's dumps held in the corpus.
+  CLAUDE.md's invariant 11 is the operator's own text, and it changes on
+  the operator's own word.
 
 ## 4. The cascade (part 2)
 
