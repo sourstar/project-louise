@@ -427,9 +427,19 @@ def held_or_parsed(collection, plugin, row: dict) -> tuple[dict, int, bytes, dic
             "SELECT uid, native_id, path, lang, txt_hash FROM documents WHERE uid=?",
             (row["uid"],)).fetchone()
         if (src is None or not src["txt_hash"] or src["txt_hash"] == line.get("origin_hash")) \
-                and not _origin_moved(collection, plugin, src, line) \
                 and not _parser_moved(plugin, row.get(HELD_FROM), line):
-            return _record_from_line(collection, line)
+            here = _moved_origin(collection, plugin, src, line)
+            if here is None:
+                return _record_from_line(collection, line)
+            if getattr(plugin, "ORIGIN_MOVES_ALONE", False) and src is not None and src["txt_hash"] \
+                    and src["txt_hash"] == line.get("origin_hash"):
+                # THE SAME BYTES AT ANOTHER LOCATOR, the next run of a dated
+                # dump (02 §2.7, amended 2026-11-17): the plugin declares its
+                # parse reads the locator for nothing a run moves, so the line
+                # a parse would write is the held line with the row's
+                # `origin` — taken so, never parsed (RULE 1; the test parses
+                # it and compares the bytes, tests/hold/test_update_pass.py)
+                return _record_from_line(collection, {**line, "origin": here})
     if src is None:
         src = row[HELD_SRC] if HELD_SRC in row else _ro(str(collection.manifest_path)).execute(
             "SELECT uid, native_id, path, lang FROM documents WHERE uid=?", (row["uid"],)).fetchone()
@@ -457,13 +467,19 @@ def _origin_moved(collection, plugin, src, line: dict) -> bool:
     row's `origin`, so the line is parsed again rather than taken with the
     old one. A row with no locator, or one the base does not reach, proves
     nothing and the line is taken, as before."""
+    return _moved_origin(collection, plugin, src, line) is not None
+
+
+def _moved_origin(collection, plugin, src, line: dict) -> str | None:
+    """`_origin_moved`'s answer as the row's own `origin` (09 §9.5), or None
+    where the line's still holds."""
     if src is None or not src["path"] or not line.get("origin"):
-        return False
+        return None
     try:
         here = plugin_io.origin_locator(plugin, src["path"], collection.corpus_dir)
     except (plugin_io.OriginOutsideBase, ValueError, OSError):
-        return False
-    return here != line["origin"]
+        return None
+    return here if here != line["origin"] else None
 
 
 def _record_from_line(collection, line: dict) -> tuple[dict, int, bytes, dict[str, str]]:

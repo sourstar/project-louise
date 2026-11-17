@@ -2802,6 +2802,10 @@ def _collection_shelf(collection: collections_mod.Collection,
         # CLEARLY SHOWN IN THE COLLECTION CARD"): this one's, and another's on
         # the model this one embeds with
         "gating": _gates_on_card(collection, recipe),
+        # the update by cadence, in plain words (app/hold/update.py): "update
+        # 2026-11: fetching 7 of 11 languages, 41 of 62 GB"; None where the
+        # collection is not updated so (no line on its card)
+        "update": _update_view(collection),
         # which processor this collection's encoder spends — the GPU is the
         # scarce one, so "turn embedding on" means something different here
         "embed_device": recipe.spends if recipe is not None else None,
@@ -2817,6 +2821,22 @@ def _collection_shelf(collection: collections_mod.Collection,
                                   None if counts_pending else counts,
                                   fetched=fetched),
     }
+
+
+def _update_view(collection) -> dict | None:
+    """The card's update line: `update.describe` of a collection the pass
+    updates, None for one it does not. Reads the marker and the disk, never
+    the origin; never raises (a card is drawn whatever it says)."""
+    from .hold import update as update_mod
+    codex = getattr(collection, "codex", None)
+    if codex is None:
+        return None
+    try:
+        if update_mod.not_updated(codex) is not None:
+            return None
+        return update_mod.describe(collections_mod.louise_root() / "collections", collection.name, codex)
+    except Exception as e:  # noqa: BLE001 — a card never fails
+        return {"state": "unknown", "says": f"update state unknown ({type(e).__name__}: {e})"}
 
 
 def _annotations_shelf(collection, served: list) -> dict:

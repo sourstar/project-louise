@@ -5,8 +5,8 @@ night" for wikipedia, as a first-class update of any collection from its
 Codex's `update` block, wikidata next; (2) "it must add a signal to wake up
 all the annotations relying on that collection's updates", clarified: "To
 trigger a cascade of updates of the interested annotations once wikipedia
-has completed its one." Nothing here is built yet. One decision blocks part
-1 (§2); part 2 does not depend on it.*
+has completed its one." Part 1 is built (§6, 2026-11-17, deploy pending);
+part 2, the cascade, is not.*
 
 ## 1. The update, any collection with `update.cadence`
 
@@ -202,3 +202,35 @@ other sessions; scratchpad harnesses `measure/delta.py` and `ge_perf.py`):
 Each is a PR with tests (a cost test for every per-round selection,
 scheduling.md §6) and a scheduling-log row. Every deploy waits for the
 operator's word.
+
+## 6. As built (part 1, 2026-11-17, branch `cadence-update-pass`)
+
+- **The current run, one answer** (`app/hold/origin_run.py` `current_run`): the latest of the Codex's `files`
+  run, the newest snapshot's `origin_run`, and the update marker's run once the update has moved it. The node's
+  loader, `records.local_collection`, discovery, acquisition, `stale_unit` and a new snapshot's `origin_run` read
+  it. The collection file's `snapshot` is accepted from the Codex's run on and never read for the run.
+- **The completion check** is the plugin's `update_completion` (wikipedia: `completion.DumpStatus`, jobs
+  `articlesmultistreamdump` and `pagepropstable` at `done` in each held wiki's `dumpstatus.json`), fetched by
+  `app/acquire/completion.py` through the budget with the origin's User-Agent, one request at a time.
+- **The pass**: `louise hold collection update <name> [--dry-run] [--retry]` (`app/hold/update.py`), steps as §1,
+  marker `state/update.json` (`app/hold/update_state.py`). The worker's `_update_keeper` runs it at night (the
+  profile named `night`, `UPDATE_PROFILES`; `UPDATE_HOURS` on a node without profiles), one collection at a time,
+  pausing the collection for the scan, the records and the snapshot. "The node's quiet windows" of #192 suspend
+  parsing (`acquire-only`), so the pass's parse steps cannot run in them; adding `quiet` to `UPDATE_PROFILES` lets
+  the fetch run there too, the rest waits for the night.
+- **The old run's gate** (`app/hold/cascade.py`): published = the snapshot and its `.sig.json`; started = every
+  annotations collection that declares this one has `state/woken.json` naming the snapshot at `running`, `done` or
+  `failed`. Until the cascade (§4) writes `woken.json`, an annotated collection's old run stays.
+- **OPEN, the operator's: the origin form.** Until it is decided, a plugin declaring `origin_names_run`
+  (wikipedia) is planned (`--dry-run`) and refused (exit 2) by the pass and the keeper. The choices: A keep
+  the `origin` naming the dated file and byte range (every part re-issued each run); B a page-id `origin`
+  located in the run through Wikimedia's multistream index (09 §9.5 changed); C an origin-only patch of
+  the parts (09 §9.9's patch, for the `origin` alone).
+- **Found on the way:**
+  - every record line's `origin` names the run's file, so a dated-dump update re-issues EVERY part (the delta
+    still lists only what changed by content). The records build carries a line whose origin bytes are the same at
+    a new locator with the row's `origin` instead of parsing it (`ORIGIN_MOVES_ALONE`, `pack/build.py`);
+  - a page the new run no longer holds is withdrawn by the scan (06 §6.1's deletion signal, reason `withdrawn`),
+    read from the previous run's index while it is on disk;
+  - a row discovery never hashed (`txt_hash` NULL: the first scan does not hash) read as changed on every new run;
+    the scan now hashes the unit the row still names while it is on disk (`discovery._held_hash`).

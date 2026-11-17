@@ -230,6 +230,13 @@ class Snapshot:
     #: key) and the loaded object hashed to sha256:47df84a7…. The
     #: `signature` check was right and the loader was wrong.
     version: int = SNAPSHOT_VERSION
+    #: 09 §9.4 `origin_run` (*amended 2026-11-17*, operator: B): for an origin
+    #: of dated dumps, the run this snapshot's records were built from
+    #: (Wikimedia's "20261101"). OPTIONAL AND ADDITIVE, within version 2: the
+    #: key is written only where there is a run, absent everywhere else —
+    #: never null, a third shape — and a snapshot made before the field reads
+    #: the Codex's `files` run (app/hold/origin_run.py)
+    origin_run: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         out = {
@@ -244,6 +251,8 @@ class Snapshot:
             "files": self.files,
             "delta": self.delta.to_dict(),
         }
+        if self.origin_run is not None:
+            out["origin_run"] = _checked_run(self.origin_run, self.snapshot_id)
         if self.version >= 2:
             # "version 1 is this object WITHOUT `figures`" — so v1 omits the
             # key entirely rather than writing an empty list, which would be
@@ -624,6 +633,14 @@ def create(root, ref: str, *, snapshot_id: str | None = None, log=print) -> Snap
         relations_mod.write(codex, staging=staging, shard_dir=shard_dir, snapshot_id=snapshot_id,
                             promote=True, log=log, name=name)
     relations_mod.require_for(db_path, snapshot_id, name)
+    # 09 §9.4 `origin_run`: the run of a dated-dump origin whose files the
+    # records were built from — the collection's CURRENT run, the one
+    # answer discovery read them by (app/hold/origin_run.py); absent for any
+    # other origin. A re-run for an id that exists keeps that file's, as it
+    # keeps its delta: an older snapshot made before the field stays itself
+    from . import origin_run as origin_run_mod
+    run = (existing.origin_run if existing is not None
+           else origin_run_mod.current_run(Path(root), name, codex))
     snap = Snapshot(
         collection_id=codex.collection_id, snapshot_id=snapshot_id,
         previous=previous.hash if previous else None,
@@ -632,6 +649,7 @@ def create(root, ref: str, *, snapshot_id: str | None = None, log=print) -> Snap
         relations=_relation_shards(shard_dir, shards),
         figures=_figures_shards(shard_dir, codex, shards),
         files=files,
+        origin_run=run,
     )
 
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -1045,6 +1063,39 @@ def container_beside(snapshot_path) -> str:
     return container
 
 
+#: 09 §9.4's top-level keys, by version; `origin_run` optional in both (an
+#: older snapshot never carries it, and a reader of either may meet it)
+_KEYS = {1: frozenset({"kind", "version", "collection_id", "snapshot_id", "previous", "shards",
+                       "relations", "files", "delta"})}
+_KEYS[2] = _KEYS[1] | {"figures"}
+_OPTIONAL = frozenset({"origin_run"})
+
+
+def _checked_run(run: Any, snapshot_id: Any) -> str:
+    """09 §9.4 `origin_run`: a string naming the origin's run. Refused
+    otherwise — null included, which is a third shape the format does not
+    have (the key is absent where there is no run)."""
+    if not isinstance(run, str) or not run or run != run.strip():
+        raise CodexError(f"snapshot {snapshot_id!r}: origin_run is the origin's run as a string "
+                         f"(09 §9.4, \"20261101\"), got {run!r}")
+    return run
+
+
+def _known_keys(d: dict) -> None:
+    """09 §9.18: "in a hashed or signed object an unknown key is refused,
+    both on write and on read". The loader used to DROP one — so a snapshot
+    with a key this build does not know was re-serialised without it and
+    hashed otherwise than its file, and `share fetch` called its producer a
+    liar (the chain "does not link") instead of saying what it met."""
+    allowed = _KEYS.get(d.get("version"), _KEYS[2]) | _OPTIONAL
+    unknown = sorted(set(d) - allowed)
+    if unknown:
+        raise CodexError(f"snapshot {d.get('snapshot_id')!r}: unknown field(s) "
+                         f"{', '.join(unknown)} (09 §9.18: refused, never skipped)")
+    if "origin_run" in d:
+        _checked_run(d["origin_run"], d.get("snapshot_id"))
+
+
 def _load(raw: bytes, container: str = "jsonl") -> Snapshot:
     import json
     d = json.loads(raw)
@@ -1052,6 +1103,7 @@ def _load(raw: bytes, container: str = "jsonl") -> Snapshot:
         raise CodexError(f"not a snapshot: kind={d.get('kind')!r}")
     if d.get("version") not in SNAPSHOT_VERSIONS_READ:
         raise CodexError(f"unsupported snapshot version {d.get('version')!r}")
+    _known_keys(d)
     return Snapshot(
         collection_id=d["collection_id"], snapshot_id=d["snapshot_id"],
         previous=d["previous"],
@@ -1063,7 +1115,8 @@ def _load(raw: bytes, container: str = "jsonl") -> Snapshot:
         # missing key to be guessed at
         figures=tuple(FiguresShard(**f) for f in d.get("figures") or ()),
         files=d["files"],
-        version=int(d["version"]))
+        version=int(d["version"]),
+        origin_run=d.get("origin_run"))
 
 
 def load(path, container: str | None = None) -> Snapshot:
@@ -1118,13 +1171,14 @@ def _load_lazy(path, raw, container: str = "jsonl") -> Snapshot | None:
         raise CodexError(f"not a snapshot: kind={d.get('kind')!r}")
     if d.get("version") not in SNAPSHOT_VERSIONS_READ:
         raise CodexError(f"unsupported snapshot version {d.get('version')!r}")
+    _known_keys(d)
     snap = Snapshot(
         collection_id=d["collection_id"], snapshot_id=d["snapshot_id"], previous=d["previous"],
         shards=tuple(Shard(**s, container=container) for s in d["shards"]),
         delta=LazyDelta(path, start, end),             # type: ignore[arg-type]
         relations=tuple(RelationShard(**r) for r in d["relations"]),
         figures=tuple(FiguresShard(**f) for f in d.get("figures") or ()),
-        files=d["files"], version=int(d["version"]))
+        files=d["files"], version=int(d["version"]), origin_run=d.get("origin_run"))
     h = hashlib.sha256()
     for at in range(0, len(raw), 1 << 22):
         h.update(raw[at:at + (1 << 22)])

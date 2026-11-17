@@ -739,14 +739,7 @@ def _codex_collection(path: Path, raw: dict[str, Any], name: str) -> Collection:
 
     snapshot = defaults["snapshot"]
     if raw.get("snapshot"):
-        stated = str(raw["snapshot"])
-        if snapshot and stated != snapshot:
-            raise ValueError(
-                f"{where}: snapshot = {stated!r} and the Codex pins "
-                f"{snapshot!r} (09 §9.17: a dated-dump origin's `files` are "
-                f"the dump pinned). A name holds one collection for its life "
-                f"(07 §7.8)")
-        snapshot = stated
+        snapshot = _stated_snapshot(str(raw["snapshot"]), snapshot, codex, where)
 
     if source == "shard":
         # the documents are the record shards held: the SHARD is the corpus
@@ -981,7 +974,11 @@ def codex_defaults(codex, name: str, slices, kinds, source: str = "origin") -> d
       Gutenberg mirror for three fetched books (2026-10-07).
     - `genesis_archive`: the archive `credits` names (03 §3.5 admits no
       other), when this peer holds vectors.
-    - `snapshot`: the dump the Codex pins in `origin.spec.files`.
+    - `snapshot`: for a dated-dump origin, the run the collection holds
+      NOW (app/hold/origin_run.py `current_run`: the Codex's first run, the
+      newest snapshot's `origin_run`, an update's moved run — the latest;
+      02 §2.7, amended 2026-11-17); for any other, the dump the Codex pins
+      in `origin.spec.files`, as before.
     - `corpus_dir`: `origin_dir(name)`; the SHARD for `source = "shard"`.
     """
     from .acquire import spec as acquire_spec
@@ -1001,10 +998,20 @@ def codex_defaults(codex, name: str, slices, kinds, source: str = "origin") -> d
         "profile": profile,
         "acquire_enabled": bool(profile and "records" in kinds and source != "shard"),
         "genesis_archive": credited[0] if credited and "vectors" in kinds else None,
-        "snapshot": (acquire_spec.pinned_snapshot(spec, codex.origin.spec)
-                     if spec is not None else None),
+        "snapshot": _current_run(codex, name, spec),
         "corpus_dir": origin_dir(name).parent / "shard" if source == "shard" else origin_dir(name),
     }
+
+
+def _current_run(codex, name: str, spec) -> str | None:
+    """`codex_defaults`' `snapshot`: the one answer (app/hold/origin_run.py)."""
+    from .acquire import spec as acquire_spec
+    from .hold import origin_run
+    if spec is None:
+        return None
+    if origin_run.is_dated(codex, spec):
+        return origin_run.current_run(louise_root() / "collections", name, codex, spec=spec)
+    return acquire_spec.pinned_snapshot(spec, codex.origin.spec)
 
 
 def _parse_slices(value: Any, where: str):
@@ -1067,6 +1074,42 @@ def _codex_encoder(raw: Any, codex, where: str) -> EmbedRecipe | None:
     return replace(recipe, query_instruction=space.query.instruction or None,
                    document_instruction=getattr(space, "document_instruction", None) or None,
                    cut=getattr(space, "cut", None) or "characters")
+
+
+def _stated_snapshot(stated: str, current: str | None, codex, where: str) -> str | None:
+    """The file's `snapshot`, checked against the Codex. A DATED-DUMP origin
+    (02 §2.7, *amended 2026-11-17*: the collection follows its origin's
+    runs and keeps its identity) accepts the Codex's first run or any later
+    one, and the run the collection holds stays the one answer of
+    `origin_run.current_run` — a stated run is a statement, never a second
+    answer, and one that is not the current run is said once. A run before
+    the Codex's first is another collection's, and refused. Any other
+    origin's pin is checked as before: equal to the Codex's, or the stated
+    one where the Codex pins none."""
+    from .hold import origin_run
+    if origin_run.is_dated(codex):
+        first = origin_run.codex_run(codex)
+        if first and (not origin_run.RUN_RE.match(stated) or stated < first):
+            raise ValueError(
+                f"{where}: snapshot = {stated!r} and the Codex's first run is {first!r} "
+                f"(09 §9.17: a dated-dump origin's `files` name the FIRST run; later runs "
+                f"are named by each snapshot, §9.4 `origin_run`). A run before it is not "
+                f"this collection's (07 §7.8)")
+        if first:
+            if stated != current and (where, "snapshot-run") not in _WARNED:
+                import sys
+                _WARNED.add((where, "snapshot-run"))
+                print(f"[warn:config] {where}: snapshot = {stated!r}, and the collection holds run "
+                      f"{current!r} (its newest snapshot or its update, 09 §9.4 `origin_run`): the "
+                      f"run is not read from the file", file=sys.stderr, flush=True)
+            return current
+    if current and stated != current:
+        raise ValueError(
+            f"{where}: snapshot = {stated!r} and the Codex pins "
+            f"{current!r} (09 §9.17: a dated-dump origin's `files` are "
+            f"the dump pinned). A name holds one collection for its life "
+            f"(07 §7.8)")
+    return stated
 
 
 def _warn_deprecated(path: Path, raw: dict) -> None:

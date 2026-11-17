@@ -103,8 +103,8 @@ def test_pages_of_one_stream_share_one_decompression(corpus, monkeypatch):
     assert len(calls) == 1 and a.raw_hash != b.raw_hash
     SOURCE.fetch(refs[nid(3)])              # the second stream
     assert len(calls) == 2
-    SOURCE.fetch(refs[nid(1)])              # back to the first: one slot, re-read
-    assert len(calls) == 3
+    SOURCE.fetch(refs[nid(1)])              # back to the first: TWO slots (2026-11-17), still held —
+    assert len(calls) == 2                  # a new run's scan reads each page in it and in the run before
 
 
 def test_fetch_decompresses_only_one_stream_and_parse_cleans_wikitext(corpus):

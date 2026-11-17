@@ -3043,6 +3043,114 @@ def _claim_index_keeper() -> None:
             _stop.wait(1.0)
 
 
+#: the pauses this worker's update keeper made, by name ("by" of the pause)
+UPDATE_PAUSE_BY = "the update pass (worker)"
+
+
+def _update_keeper() -> None:
+    """THE UPDATE BY CADENCE, run by the node (app/hold/update.py; operator,
+    2026-11-17: "Monthly full dumps at night"). Every UPDATE_BEAT_S, while it
+    is the node's night (`update.window_open`) and the node's mode and
+    profile run what the next step does, each collection the pass updates
+    is taken in turn — ONE AT A TIME — and its pass run in a process of its
+    own (`update.run_child`: `louise hold collection update <name>`, the
+    command deploy/supervise-pass.sh runs too), stopped at its unit when the
+    night ends, the mode stops what it does, or the worker stops.
+
+    The steps that write what the node writes (the scan of the new run, the
+    records, the snapshot: `update.LOCKED`) need the collection's writers:
+    the keeper PAUSES the collection first (RULE 1: a tool that needs the
+    worker's writers asks for a stop) — `node_state.set_paused`, which the
+    round loop answers by finishing the collection's unit and releasing its
+    lock — and resumes it after, only a pause it made itself. A collection
+    the operator paused is left alone. A pause outlives a crash (invariant
+    10's exception), so a restarted worker finds the pass where it was and
+    goes on; nothing waits for an agent.
+
+    A pass that WAITS (the origin's run, the node's embedding, the gate) is
+    asked again after UPDATE_RECHECK_S, never every beat; one that failed is
+    tried again the next night, three times (the marker counts). Its own
+    thread, niced like the index maintainer's."""
+    _lower_own_priority(INDEX_MAINTAINER_NICE)
+    rechecked: dict[str, float] = {}
+    while not _stop.is_set():
+        try:
+            if config.UPDATE_KEEPER:
+                _update_beat(rechecked)
+        except Exception as e:   # noqa: BLE001 — the thread outlives a bad beat
+            print(f"{time.strftime('%H:%M:%S')} [node warn:update] the update keeper's beat failed: "
+                  f"{type(e).__name__}: {e}", flush=True)
+        _stop.wait(config.UPDATE_BEAT_S)
+
+
+def _update_beat(rechecked: dict[str, float], *, run_child=None) -> list[dict]:
+    """One beat of the keeper: what it ran, per collection."""
+    from .hold import lock as lock_mod
+    from .hold import update as update_mod
+
+    def log(m: str) -> None:
+        print(f"{time.strftime('%H:%M:%S')} [node info:update] {m}", flush=True)
+    run_child = run_child or update_mod.run_child
+    ok, why = update_mod.window_open()
+    if not ok:
+        return []
+    root = collections_mod.louise_root() / "collections"
+    done: list[dict] = []
+    for c in collections_mod.load_all():
+        if _stop.is_set():
+            break
+        codex = getattr(c, "codex", None)
+        if codex is None or getattr(c, "source", "origin") == "shard" or not c.acquire_enabled:
+            continue
+        key = str(Path(c.manifest_path))
+        if time.monotonic() < rechecked.get(key, 0.0):
+            continue
+        try:
+            nxt = update_mod.next_step(root, c.name, codex)
+        except Exception as e:   # noqa: BLE001 — one collection's marker never stops the others
+            log(f"{c.name}: the update cannot be planned: {type(e).__name__}: {e}")
+            continue
+        pause = node_state.pause_of(c.name)
+        ours = pause is not None and UPDATE_PAUSE_BY in str(pause.get("by") or "")
+        if pause is not None and not ours:
+            continue                        # the operator's pause: left alone
+        if nxt.step is None or not update_mod.step_allowed(nxt.step, node_state.worker_state()):
+            if ours:                        # a pause a stopped worker left: given back
+                node_state.set_paused(c.name, False, by=UPDATE_PAUSE_BY)
+            continue
+        paused_here = False
+        if nxt.step in update_mod.LOCKED and not ours:
+            node_state.set_paused(c.name, True, by=UPDATE_PAUSE_BY)
+            paused_here = ours = True
+            # the round loop finishes the collection's unit and releases its lock
+            deadline = time.monotonic() + config.UPDATE_STOP_GRACE_S
+            while lock_mod.holder(lock_mod.state_dir(root, c.name)) is not None \
+                    and time.monotonic() < deadline and not _stop.is_set():
+                _stop.wait(2.0)
+        log(f"{c.name}: update pass ({nxt.why}; {why})")
+
+        def stop(step: str = nxt.step) -> bool:
+            return (_stop.is_set() or not update_mod.window_open()[0]
+                    or not update_mod.step_allowed(step, node_state.worker_state()))
+        try:
+            code, out = run_child(c.name, stop=stop, grace_s=config.UPDATE_STOP_GRACE_S)
+        finally:
+            if ours:                        # given back whatever the pass did: the next
+                node_state.set_paused(c.name, False, by=UPDATE_PAUSE_BY)   # beat pauses again
+        said = (out or {}).get("says") or f"exit {code}"
+        log(f"{c.name}: update exit {code}: {said}")
+        reached = (update_mod.update_state.read(root, c.name) or {}).get("step")
+        if code == update_mod.EXIT_WAITING and not (reached in update_mod.LOCKED and not paused_here):
+            # waiting on the origin, the embedding or the gate: asked again
+            # later; one that reached a step needing the writers unpaused is
+            # run again at the next beat, paused
+            rechecked[key] = time.monotonic() + config.UPDATE_RECHECK_S
+        done.append({"collection": c.name, "exit": code, "says": said, "paused": paused_here})
+        if code == update_mod.EXIT_STOPPED:
+            break
+    return done
+
+
 _ask_indexed: dict[str, tuple] = {}
 
 
@@ -5581,12 +5689,17 @@ def _sync_collections(all_collections, cons, last_discover, pipeline: bool = Fal
             # loaded (nothing is unloaded for being idle, 2026-11-08)
             _release_embedder(kept, cons[kept.name], "the switch")
         if (prev.acquire_enabled, prev.license_ack, prev.profile,
-                prev.extras, prev.peer_source) != \
+                prev.extras, prev.peer_source, prev.snapshot) != \
                 (kept.acquire_enabled, kept.license_ack, kept.profile,
-                 kept.extras, kept.peer_source):
+                 kept.extras, kept.peer_source, kept.snapshot):
+            # `snapshot`: the run of a dated-dump origin it holds moved (an
+            # update by cadence, app/hold/update.py; 02 §2.7 amended
+            # 2026-11-17) — its files are scanned now, not at the interval
             db.log_event(cons[kept.name], "info", "worker",
                          f"collection {kept.name!r} config changed "
-                         f"(acquire/license/profile/extras/peer) — re-discovering")
+                         f"(acquire/license/profile/extras/peer"
+                         + (f"; run {prev.snapshot} -> {kept.snapshot}" if prev.snapshot != kept.snapshot
+                            else "") + ") — re-discovering")
             if pipeline:
                 _request_discovery(kept.name, "config-changed")
             else:
@@ -6717,6 +6830,8 @@ def run_forever():
     # the annotations collections' derived state: the workspaces a stopped
     # create left, and a large snapshot's claim index (`_claim_index_keeper`)
     threading.Thread(target=_claim_index_keeper, name="claim-index", daemon=True).start()
+    # the update by cadence, at night, one collection at a time (`_update_keeper`)
+    threading.Thread(target=_update_keeper, name="update-keeper", daemon=True).start()
     # the work the web queues because it holds no private key (app/jobs.py);
     # what a stopped worker left running is queued again first
     requeued = jobs.requeue_running(node_con)

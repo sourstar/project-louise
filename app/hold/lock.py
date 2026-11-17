@@ -87,10 +87,13 @@ class Lock:
         self.release()
 
 
-def take(state: Path, name: str, what: str, *, exit_code: int = 3) -> Lock:
+def take(state: Path, name: str, what: str, *, exit_code: int = 3, file: str = LOCK) -> Lock:
     """The collection's write lock, now, or `Held` naming the holder. `what`
-    is written into the file for whoever finds it taken."""
-    p = lock_path(state)
+    is written into the file for whoever finds it taken. `file`: another
+    lock beside it, by the same rules — the update pass's own
+    (app/hold/update.py), so two passes of one collection never interleave
+    while the collection's writers stay the node's."""
+    p = Path(state) / file
     p.parent.mkdir(parents=True, exist_ok=True)
     f = open(p, "a+b")            # never truncated by an opener that may lose the race
     try:

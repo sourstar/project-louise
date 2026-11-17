@@ -343,6 +343,22 @@ BACKFILL_WALK_BUDGET_S = float(os.getenv("BACKFILL_WALK_BUDGET_S", "1.0"))
 #: re-derives what is open and unclaimed)
 PUBLISH_BEAT_S = float(os.getenv("PUBLISH_BEAT_S", "300"))
 PUBLISH_BUDGET_S = float(os.getenv("PUBLISH_BUDGET_S", "600"))
+#: the worker's UPDATE KEEPER (app/worker.py `_update_keeper`; app/hold/update.py;
+#: operator 2026-11-17, "Monthly full dumps at night"): it runs a collection's
+#: update by cadence only AT NIGHT — while the node profile in force is one
+#: of UPDATE_PROFILES (platform.toml `[schedule]`, node_profile.py), or, on
+#: a node that declares no profile, inside UPDATE_HOURS (local time, the
+#: `[bandwidth] schedule` window grammar) — and each step only where the
+#: node's mode and profile run what it does (`node_state.runs`). How often
+#: it looks; how soon it asks again after a pass that waits (the origin's
+#: run, the node's embedding; at most hourly for the origin); how long a
+#: stopped pass may take to end its unit.
+UPDATE_KEEPER = os.getenv("UPDATE_KEEPER", "1") not in ("0", "false", "off")
+UPDATE_PROFILES = tuple(p.strip() for p in os.getenv("UPDATE_PROFILES", "night").split(",") if p.strip())
+UPDATE_HOURS = os.getenv("UPDATE_HOURS", "00:00-06:00")
+UPDATE_BEAT_S = float(os.getenv("UPDATE_BEAT_S", "300"))
+UPDATE_RECHECK_S = float(os.getenv("UPDATE_RECHECK_S", "3600"))
+UPDATE_STOP_GRACE_S = float(os.getenv("UPDATE_STOP_GRACE_S", "300"))
 
 # ---- model work by priority (app/rage/dispatch.py; docs/notes/scheduling.md §12)
 # How long a reading of the node's interactive claim is reused in-process.
