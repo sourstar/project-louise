@@ -708,7 +708,13 @@ probable or open.
     logits and compute at ubatch 512 ≈ 0.8, the 248k vocabulary) + the
     0.26 floor ≈ **22.1 GiB loaded**, two thirds of the card (the YAML's
     "~20 GB" is the file in GiB). Smaller files of the same repo:
-    UD-IQ4_XS 16.5 GiB, UD-Q3_K_XL 15.7 GiB.
+    UD-IQ4_XS 16.5 GiB, UD-Q3_K_XL 15.7 GiB. **MEASURED (München,
+    2026-11-18, from `/root/measure/q36.log` of 2026-11-03 and
+    `batch35.txt` of 11-08): 21,642 MiB at one stream, ctx 16,384
+    (23,415 at eight); load + first token 28.6 s; prefill 606.5 tok/s;
+    decode 92.2 tok/s alone, 58–68 per stream in the summary batch.** The
+    whole set with München's per-model sizes at rest — 32,367 MiB today,
+    the card's size — is in model-set-summary.md.
   - Krea 2 (`krea/Krea-2-Raw`; Turbo is a finetune of the same shape):
     transformer 26.3 GB bf16 (≈ 13 B), text encoder 8.9 GB bf16 (≈ 4.4 B,
     an LLM), VAE 0.5 GB — **33 GiB as shipped: does not fit the card

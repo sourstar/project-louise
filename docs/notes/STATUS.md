@@ -38,6 +38,12 @@ measured (published figures disagree).
   CPU, Wan 2.1 VAE 0.24; no gallery entry, a hand-written YAML. [idle-context-brief.md](idle-context-brief.md) §6 "The set the operator wants",
   [image-generation-krea.md](image-generation-krea.md) (amended: Krea 2 is not FLUX.1 Krea dev). The whole set in
   one table, measured against estimated, with what was asked of München: [model-set-summary.md](model-set-summary.md).
+  **München's figures (2026-11-18, the node's records):** today's set at rest 32,367 MiB — the card's size, the
+  spill already in use; the 35B MEASURED 21,642 MiB at one stream (28.6 s to the first token, 606.5 tok/s prefill,
+  92.2 tok/s decode); the live chat is qwen3.5-9b, the rerankers nemotron-1b and medcpt; on disk a Krea 2 finetune's
+  Q8_0 DiT (moodyKrea2Mix v4.0) with a misconfigured YAML, no Qwen3-VL-4B text encoder and no Wan 2.1 VAE; the
+  installed image backend's stable-diffusion.cpp commit unrecorded; no measurement of the spill's speed. Nothing of
+  the set is resident; the nearest fit (35B Q3, MADLAD gone, two grown encoders trimmed) sits at the reclaimer's line.
 - **gutenberg-book-editions re-makes itself every month from the node's own collections** (operator: no hand-run
   tools, no web APIs; "if there is a local wikipedia collection it is pointless to download a wikipedia snapshot").
   The method is `gutenberg-editions`. It re-derives the Wikidata tier through the node's wikipedia: the title as the
