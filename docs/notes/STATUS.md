@@ -20,6 +20,13 @@ measured (published figures disagree).
 
 ### 2026-11-17
 
+- **The B70's bus and the host's RAM, and what a VRAM overcommit would cost** (operator, 2026-11-17: the card is
+  on PCIe 5.0 x16, the RAM is DDR5-6400; "keep the numbers in mind for future development"). A model switch under
+  overcommit swaps whole buffers at ~40–45 GB/s effective: ~0.8–0.9 s for a 19 GB chat model, ~0.3 s for MADLAD,
+  against 8–13 s for LocalAI's unload-and-reload; a working set that does not fit beside what cannot leave
+  thrashes at ~12× slower decode; the spill takes 8–18 GB of the ~20 GB of host RAM headroom, and nothing reports
+  it. Estimates, not measurements. Recorded in [idle-context-brief.md](idle-context-brief.md) §6 "What the spill
+  costs" and [node-runbook.md](node-runbook.md) §1.
 - **gutenberg-book-editions re-makes itself every month from the node's own collections** (operator: no hand-run
   tools, no web APIs; "if there is a local wikipedia collection it is pointless to download a wikipedia snapshot").
   The method is `gutenberg-editions`. It re-derives the Wikidata tier through the node's wikipedia: the title as the

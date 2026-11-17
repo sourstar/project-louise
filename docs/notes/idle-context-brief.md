@@ -663,6 +663,36 @@ probable or open.
   `DRM_IOCTL_XE_DEVICE_QUERY` (needs `CAP_PERFMON`; the GPU probe has it).
   Each process also pays a SYCL / Level Zero heap floor of ~270 MiB.
   STATUS 2026-09-20 afternoon.
+- **What the spill costs** (the operator's facts, 2026-11-17: the card is on
+  a PCIe 5.0 x16 link, 64 GB/s raw per direction; the host's RAM is
+  DDR5-6400, 102 GB/s on two channels; everything below is ESTIMATED from
+  them, not measured — "keep the numbers in mind for future development").
+  The driver swaps whole buffer objects, so a model switch under overcommit
+  moves the incoming model in and the outgoing one out at once, both streams
+  through the same DRAM: ~40–45 GB/s effective (~55 on four channels, where
+  PCIe alone limits). A 35B MoE chat at Q4 (~19 GB): ~38 GB moved, ~0.8–0.9 s;
+  MADLAD 7.2 GB: ~0.3 s; a 1–2 GB encoder or reranker: <0.1 s — against
+  13.4 s for chat (7.4 GB) and 8.5 s for MADLAD cold through LocalAI's
+  unload-and-reload (ask-card-workflow.md). Once its buffers are back on
+  the card a model runs at the card's 608 GB/s; nothing is lost but the
+  switch. THE CLIFF: when the active model's working set — weights, its KV
+  cache and compute buffers, plus whatever another process's running job
+  holds — does not fit beside what cannot leave, the driver migrates on
+  every submission and decode reads weights at PCIe speed, ~12× slower than
+  from VRAM, the migration's own cost on top; the 35B at Q4 with a 32k
+  context stands near 25 GB, ~7 GB from it, and torch's caching allocator
+  (image generation) is the usual way across. Host RAM holds the spill:
+  40–50 GB "on the card" is 8–18 GB in host memory, out of the ~20 GB the
+  41.6 GB resident peak leaves on this 63.4 GB host, and the kernel kills
+  model servers when it runs short (M16; gazzetta-plugin.md §7.4a: 21.4 GiB
+  on the card, 22.8 GiB in host RAM, three servers killed, an engine reset in
+  the same second). Nothing reports it: `/system` and the card's used count
+  both read "fits". What this fixes for design: a swap-at-switch scheme costs
+  under a second per chat switch and is ~15× cheaper than reloading; a
+  scheme whose working set crosses the card is not viable; and the spill is
+  tried, if at all, once, measured with `GGML_SYCL_MEMTRACE=1` beside the
+  fdinfo counts (app/gpu_memory.py), before anything depends on it. The
+  weights of the Ask set fit without it through this patch (§1.5).
 - **The context share per model**, 2026-11-12 (`size_vram` − the weights
   file; the backends' load lines are not kept at LocalAI's info level):
   qwen3-4b 3,262 MiB (≈ 1.1 GiB KV, ≈ 2.1 GB compute buffers at ubatch

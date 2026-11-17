@@ -11,8 +11,12 @@ Read first: `CLAUDE.md` (the rules), `docs/notes/STATUS.md` (where things stand)
 
 ## 1. The machine
 
-- **TrueNAS SCALE** host, 12 cpus, 61 GB RAM, ZFS ARC capped at 16 GB.
-- **GPU**: Intel Arc Pro B70, 32 GB VRAM, xe driver, at PCI `0000:03:00.0`. The
+- **TrueNAS SCALE** host, 12 cpus, 61 GB RAM (DDR5-6400; the channel count is not
+  recorded — operator, 2026-11-17), ZFS ARC capped at 16 GB.
+- **GPU**: Intel Arc Pro B70, 32 GB VRAM, 608 GB/s, xe driver, at PCI `0000:03:00.0`,
+  on a PCIe 5.0 x16 link (operator, 2026-11-17; `lspci -vv -s 03:00.0`, `LnkSta`,
+  confirms it). What a VRAM overcommit costs over that link:
+  idle-context-brief.md §6 "What the spill costs". The
   iGPU is `0000:13:00.0`. `/dev/dri/cardN` numbers can swap across reboots (§12):
   always check by PCI address.
 - **Pools**:
