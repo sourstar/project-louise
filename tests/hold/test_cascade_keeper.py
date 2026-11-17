@@ -13,7 +13,7 @@ import json
 import os
 import sqlite3
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -225,7 +225,7 @@ def test_a_wake_waits_while_a_declared_source_has_an_update_in_flight(node):
     update_state.write(node.root, "pubmed", mk)
     assert keep(node) == []
     w = woken(node)
-    assert w["state"] == "waiting" and "pubmed's update 2026-10 is at step fetch" in w["says"], w
+    assert w["state"] == "waiting" and w["says"] == "waits for pubmed's update 2026-10, at step fetch", w
     assert node.ran == []
     update_state.write(node.root, "pubmed", {**mk, "failure": {"step": "fetch", "tries": 3, "error": "x"}})
     (got,) = keep(node)
@@ -243,6 +243,78 @@ def test_an_update_is_in_flight_until_its_snapshot_is_published(node):
         update_state.write(node.root, "pubmed", {**base, "step": step})
         assert cascade.update_in_flight(node.root, "pubmed") is None, \
             f"{step}: its snapshot is published — the old-run step waits for the cascade, never the reverse"
+
+
+#: pubmed's 2026-10 cutoff: 00:00 on 1 November in its origin's clock (America/New_York)
+CUTOFF = datetime(2026, 11, 1, 4, tzinfo=timezone.utc)
+
+
+@pytest.fixture
+def updated_by_cadence(monkeypatch):
+    """pubmed as a source the update pass would act on: updated by cadence,
+    not refused, run from its origin with acquisition on (a test double of
+    what wikipedia's plugin will declare once its origin form is decided)."""
+    from app import collections as collections_mod
+    from app.hold import update as update_mod
+    monkeypatch.setattr(update_mod, "not_updated", lambda codex: None)
+    monkeypatch.setattr(update_mod, "origin_names_run", lambda codex: False)
+    held = SimpleNamespace(name="pubmed", source="origin", acquire_enabled=True)
+    monkeypatch.setattr(collections_mod, "by_name", lambda name: held if name == "pubmed" else None)
+    return held
+
+
+def test_a_wake_waits_for_a_sources_update_to_begin_at_most_24_h(node, updated_by_cadence):
+    publish(node, "2026-09")
+    until = (CUTOFF + timedelta(hours=24)).astimezone().strftime("%H:%M")
+    assert keep(node, CUTOFF + timedelta(hours=1)) == []
+    w = woken(node)
+    assert w["state"] == "waiting" and w["says"] == f"waiting for pubmed's 2026-10 update to begin, until {until}", w
+    assert node.ran == [] and not cascade.old_run_gate(node.root, "pubmed", node.target, "2026-09").open
+    assert keep(node, CUTOFF + timedelta(hours=23, minutes=59)) == [], "still inside the 24 h"
+    (got,) = keep(node, CUTOFF + timedelta(hours=24))
+    assert got["against"] == {"pubmed": "2026-09"}, "the update did not begin within 24 h: the wait ends"
+
+
+def test_the_wait_to_begin_becomes_the_markers_once_it_is_written(node, updated_by_cadence):
+    publish(node, "2026-09")
+    assert keep(node, CUTOFF + timedelta(minutes=5)) == []
+    update_state.write(node.root, "pubmed", {"collection_id": node.target.collection_id, "period": "2026-10",
+                                             "run": "r", "step": "fetch", "steps": {}, "failure": None})
+    assert keep(node, CUTOFF + timedelta(hours=30)) == [], "in flight now: past the 24 h, by its marker"
+    assert woken(node)["says"] == "waits for pubmed's update 2026-10, at step fetch"
+
+
+@pytest.mark.parametrize("why", ["no update block", "refused", "keeper off", "a copy from peers",
+                                 "acquisition off", "before the cutoff"])
+def test_a_source_the_pass_would_not_act_on_makes_no_one_wait(node, updated_by_cadence, monkeypatch, why):
+    from app import config
+    from app.hold import update as update_mod
+    publish(node, "2026-09")
+    at = CUTOFF + timedelta(hours=1)
+    if why == "no update block":
+        monkeypatch.setattr(update_mod, "not_updated", lambda codex: "its Codex declares no `update`")
+    elif why == "refused":
+        monkeypatch.setattr(update_mod, "origin_names_run", lambda codex: True)
+    elif why == "keeper off":
+        monkeypatch.setattr(config, "UPDATE_KEEPER", False)
+    elif why == "a copy from peers":
+        updated_by_cadence.source = "shard"
+    elif why == "acquisition off":
+        updated_by_cadence.acquire_enabled = False
+    else:
+        at = CUTOFF - timedelta(minutes=1)
+    assert cascade.update_in_flight(node.root, "pubmed", node.target, now=at) is None
+    (got,) = keep(node, at)
+    assert got["against"] == {"pubmed": "2026-09"}, why
+
+
+def test_a_real_source_without_a_completion_check_never_waits(node):
+    """No double here: pubmed's plugin declares no completion check, so the
+    pass refuses it (`update.not_updated`) and nothing waits on it."""
+    from app.hold import update as update_mod
+    assert update_mod.not_updated(node.target) is not None
+    publish(node, "2026-09")
+    assert cascade.update_in_flight(node.root, "pubmed", node.target, now=CUTOFF + timedelta(hours=1)) is None
 
 
 # ---- order, transitivity, cycles ----------------------------------------------------------

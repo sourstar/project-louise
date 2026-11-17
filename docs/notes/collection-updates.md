@@ -226,9 +226,18 @@ the shown lines), `app/hold/cascade_keeper.py` (the round). Tests: `tests/hold/t
   At most that is one period (≤ 31 days) of one extra run: wikipedia's is ~62 GB (74 GB declared). This happens when
   the dependent wrote its period's snapshot before the source published. Waiting for another source's in-flight
   update keeps it for the days that update takes.
-- **A race at a period's open, left open.** gutenberg-editions is due at 00:00 UTC on the 1st. The update keeper
-  writes wikipedia's `update.json` at its first night beat after the cutoff (≤ 300 s later). If the method's round
-  comes first, it runs against last month's wikipedia, and wikipedia's new snapshot waits for the next period.
+- **An update about to begin is waited for too (decided 2026-11-17, choice B).** gutenberg-editions is due at 00:00
+  UTC on the 1st, and the update keeper writes wikipedia's `update.json` only at its first night beat after the
+  cutoff (≤ 300 s later). So a source also counts as in flight from its cutoff until its `update.json` appears, for
+  at most 24 h (`cascade.BEGIN_WAIT_S`, real hours, DST included). It counts only when the update pass would act on
+  it:
+  - it is updated by cadence (`update.not_updated` is None: an `update` block, a dated origin, a completion check);
+  - it is not refused (`origin_names_run`, wikipedia's until its origin form is decided);
+  - the node's update keeper is on, and the node runs it from its origin with acquisition on.
+
+  A source the pass refuses, or with no `update` block, never makes a dependent wait. `woken.json` says "waiting for
+  wikipedia's 2026-11 update to begin, until HH:MM". Once the marker is written, the in-flight rule above takes
+  over.
 - **The cost of a round** (this sandbox, 4 cores, median of 5 × 300 rounds, a method collection held). Before, each
   pass ran `annotation_methods.due`: 4.3 ms at 1 snapshot and 2 claims, 12.9 ms at 409 snapshots and 2,000 claims.
   After, a settled round costs 0.46 ms at both sizes: markers and stats only. The cost test counts no part, no

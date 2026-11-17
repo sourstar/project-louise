@@ -24,9 +24,11 @@ snapshot, unless it must wait — said in `woken.json` (`waiting`, `says`):
 
   - a source it declares is itself an annotations collection whose own wake
     is pending: it runs after it (the order, transitively);
-  - a source it declares has an update by cadence IN FLIGHT
-    (`cascade.update_in_flight`): it does not burn its one snapshot of the
-    period on the first source while another is mid-update;
+  - a source it declares has an update by cadence IN FLIGHT, or about to
+    begin — its cutoff passed, the pass would act on it, its marker not
+    written yet, for at most 24 h (`cascade.update_in_flight`): it does not
+    burn its one snapshot of the period on the first source while another
+    is mid-update;
   - its period's snapshot is already written (one snapshot a period, 09 §9.4,
     `annotations.update_snapshot_id`): "one snapshot a period: runs when
     <next period> opens".
@@ -171,7 +173,7 @@ def _sources(root: Path, decl, a: str) -> dict[str, dict[str, Any]]:
         pub = lst.newest_signed
         if pub is not None and not cascade.published_path(root, s, pub).is_file():
             pub = None
-        out[s] = {"id": codex.collection_id, "plugin": getattr(codex, "plugin", None), "via": via,
+        out[s] = {"id": codex.collection_id, "plugin": getattr(codex, "plugin", None), "via": via, "codex": codex,
                   "newest": lst.newest, "published": pub,
                   "annotations": s in decl.sources}
     return out
@@ -184,7 +186,7 @@ def _facts(root: Path, a: str, method: str | None, current: str | None, srcs: Ma
     from . import snapshot as sn
     w = cascade.woken(root, a)
     mk = am.read_marker(root, a) if method else None
-    per = tuple((s, f["newest"], f["published"], cascade.update_in_flight(root, s),
+    per = tuple((s, f["newest"], f["published"], cascade.update_in_flight(root, s, f["codex"], now=now),
                  (cascade.woken(root, s) or {}).get("state") if f["annotations"] else None)
                 for s, f in srcs.items())
     opened = sn.snapshot_id_for(now, sn.cadence_of(current)) if current else None
@@ -375,9 +377,9 @@ def _one(root: Path, a: str, decl, *, now: datetime, failed: dict, log, run, sto
             if up is not None and up.get("state") in cascade.PENDING:
                 waits.append(f"waits for {s}, whose own update is {up.get('state')}"
                              + (f" ({up['says']})" if up.get("says") else ""))
-        why = cascade.update_in_flight(root, s)
+        why = cascade.update_in_flight(root, s, f["codex"], now=now)
         if why:
-            waits.append(f"waits for {why}")
+            waits.append(why)
     if not waits:
         try:
             update_snapshot_id(current, now)
