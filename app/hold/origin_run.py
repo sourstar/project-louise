@@ -167,6 +167,208 @@ def pinned_spec(origin_spec: dict | None, spec, run: str) -> dict:
     return out
 
 
+# --------------------------------------------------------------------------
+# THE RUN A NEW COLLECTION IS BUILT FROM, DETERMINED (RULE 2; 09 §9.17)
+#
+# Where the recipe names no files and the operator gave no --run, the system
+# determines the run, in this order, and says which and why:
+#   (a) the run the corpus holds: the newest run any of whose files the
+#       corpus holds, taken when the update pass's completion check says it
+#       is complete (the plugin's `update_completion`: its records read from
+#       the corpus where it keeps them — wikidata's md5sums — else asked of
+#       the origin) and the corpus holds each file the collection reads of
+#       it. A newer run held and not complete is what the update pass would
+#       wait for, never an older one: refused in plain words;
+#   (b) for `<name>.next`, the run `<name>` holds (`held_run`);
+#   (c) the origin's latest complete run: its index of runs, newest first
+#       (`completion.runs`, a listing that draws from the budget,
+#       invariant 5), the first the completion check says is complete,
+#       past those that never carry the collection's files (`skips`).
+# Refused only where none can tell, saying what is missing and what would
+# supply it.
+
+#: runs asked of the origin before (c) stops (the update's RUNS_ASKED)
+RUNS_ASKED = 8
+
+
+class RunUndetermined(ValueError):
+    """Nothing says which run a new dated-dump collection is built from."""
+
+
+def _hook_of(plugin_id: str):
+    from app import collections as collections_mod
+    plugin = collections_mod.PLUGIN_REGISTRY.get(plugin_id)
+    return getattr(plugin, "update_completion", None)
+
+
+def _corpus_runs(corpus: Path) -> list[str]:
+    """The runs named by a directory of the corpus, at most three levels down
+    (Wikimedia's `<wiki>/<R>/`, `wikidatawiki/entities/<R>/`), newest first."""
+    import os
+    found: set[str] = set()
+    level = [Path(corpus)]
+    for _ in range(3):
+        nxt = []
+        for d in level:
+            try:
+                with os.scandir(d) as it:
+                    for e in it:
+                        if not e.is_dir(follow_symlinks=True):
+                            continue
+                        if RUN_RE.match(e.name):
+                            found.add(e.name)
+                        else:
+                            nxt.append(Path(e.path))
+            except OSError:
+                continue
+        level = nxt
+    return sorted(found, reverse=True)
+
+
+def _slices_held(spec, held: list[str]) -> list[str]:
+    """The slices the origin delivers whole whose profile admits a held file
+    (wikipedia's `lang=it` for `itwiki/…`; every family of wikidata's one dump)."""
+    from app.acquire import spec as acquire_spec
+    out = []
+    for sl, prof in sorted((getattr(spec, "slice_profiles", None) or {}).items()):
+        flt = (spec.profiles or {}).get(prof)
+        if flt is not None and any(acquire_spec.admitted(h, flt.include) for h in held):
+            out.append(sl)
+    return out
+
+
+def _complete(spec, hook, run: str, slices, *, read, fetch_records) -> str | None:
+    """None when the completion check says `run` is complete, else why not.
+    A record is read with `read(rel_path)` (the corpus's copy) where it gives
+    bytes, else asked of the origin."""
+    recs = hook.records(run, slices)
+    bodies = {r.rel_path: read(r.rel_path) for r in recs}
+    away = [r for r in recs if bodies[r.rel_path] is None]
+    if away and fetch_records is not None:
+        bodies.update(fetch_records(spec, away))
+    pending = [v for v in (hook.verdict(r, bodies.get(r.rel_path)) for r in recs) if v]
+    return "; ".join(pending[:3]) if pending else None
+
+
+def _from_corpus(spec, hook, corpus: Path, *, fetch_records) -> tuple[str, str] | None:
+    """(a): `(run, why)`, None where the corpus holds no run's files, or a
+    refusal where its newest is not complete."""
+    runs = []
+    for r in _corpus_runs(corpus):
+        files = [f["rel_path"] for f in run_files(spec, r)]
+        held = [f for f in files if (Path(corpus) / f).is_file()]
+        if held:
+            runs.append((r, files, held))
+    if not runs:
+        return None
+    run, files, held = runs[0]
+    slices = _slices_held(spec, held)
+    from app.acquire import spec as acquire_spec
+    profiles = [(spec.profiles or {}).get((spec.slice_profiles or {}).get(sl)) for sl in slices]
+    wanted = [f for f in files if not profiles or any(p is not None and acquire_spec.admitted(f, p.include)
+                                                       for p in profiles)]
+    missing = [f for f in wanted if f not in held]
+
+    def read(rel: str) -> bytes | None:
+        try:
+            return (Path(corpus) / rel).read_bytes()
+        except OSError:
+            return None
+    why = (f"{len(missing)} of its files not in the corpus yet ({missing[0]})" if missing
+           else _complete(spec, hook, run, slices, read=read, fetch_records=fetch_records))
+    older = [r for r, _f, _h in runs[1:]]
+    if why is None:
+        return run, (f"the run the corpus holds, complete by {hook.origin}'s own record"
+                     + (f" (the newest of {len(runs)} it holds; the update takes the newest, never an older one)"
+                        if older else ""))
+    raise RunUndetermined(
+        f"the corpus holds run {run}, not complete ({why})"
+        + (f", and {', '.join(older)} besides" if older else "")
+        + ": the update would wait for it and never take an older run, so no run is taken. Let its fetch "
+          "finish (`hold records fetch`), or give --run <YYYYMMDD>")
+
+
+def _from_origin(spec, hook, *, fetch_records, fetch_runs) -> tuple[str, str]:
+    """(c): the newest run the origin lists that its completion check says
+    is complete, past those that never carry the collection's files."""
+    slices = sorted(getattr(spec, "slice_profiles", None) or {}) or ["all"]
+    runs = [r for r in fetch_runs(spec) if RUN_RE.match(str(r))][:RUNS_ASKED]
+    skips = getattr(hook, "skips", None)
+    passed = []
+    for run in runs:
+        recs = hook.records(run, slices)
+        bodies = fetch_records(spec, recs)
+        if callable(skips) and recs and all(skips(r, bodies.get(r.rel_path)) for r in recs):
+            continue
+        pending = [v for v in (hook.verdict(r, bodies.get(r.rel_path)) for r in recs) if v]
+        if not pending:
+            return run, (f"{hook.origin}'s latest complete run" + (f" ({', '.join(passed)} newer, not complete yet)"
+                                                                     if passed else ""))
+        passed.append(run)
+    raise RunUndetermined(
+        f"{hook.origin} lists no complete run of the collection's files among its newest {len(runs)}"
+        + (f" ({', '.join(passed)} still being written)" if passed else "")
+        + ": fetch a run into the corpus, or give --run <YYYYMMDD>")
+
+
+def determine(root, plugin_id: str, name: str | None, *, fetch_records=None, fetch_runs=None
+              ) -> tuple[str, str]:
+    """The run a new collection of a dated-dump plugin is built from and why,
+    in plain words (the block above), or `RunUndetermined` saying what is
+    missing and what would supply it. An origin away is a deferral
+    (ConnectionError: exit 3)."""
+    from app.acquire import completion
+    from app.acquire.specs import ACQUIRE_REGISTRY
+
+    from . import recreate
+    spec = ACQUIRE_REGISTRY.get(plugin_id)
+    hook = _hook_of(plugin_id)
+    if hook is None:
+        raise RunUndetermined(f"the {plugin_id} plugin declares no completion check, so which run is complete "
+                              f"is not known: give --run <YYYYMMDD>")
+    asked_records, asked_runs = _ask_origin()
+    fetch_records = fetch_records or asked_records
+    fetch_runs = fetch_runs or asked_runs
+    try:
+        if name:
+            got = _from_corpus(spec, hook, Path(root) / name / "origin", fetch_records=fetch_records)
+            if got is not None:
+                return got
+        if name and name.endswith(recreate.INTERIM):
+            got = _predecessor_run(root, plugin_id, name[:-len(recreate.INTERIM)])
+            if got is not None:
+                return got
+        return _from_origin(spec, hook, fetch_records=fetch_records, fetch_runs=fetch_runs)
+    except completion.OriginAway as e:
+        raise ConnectionError(f"{plugin_id}: which run to build from is asked of the origin, and it did not "
+                              f"answer ({e}); asked again later, or give --run <YYYYMMDD>") from None
+
+
+def _ask_origin():
+    """How the origin is asked (app/acquire/completion.py, through the
+    budget): its completion records and its index of runs. One place, so
+    that no test asks the real origin by accident (tests/conftest.py)."""
+    from app.acquire import completion
+    return completion.records, completion.runs
+
+
+def _predecessor_run(root, plugin_id: str, pred: str) -> tuple[str, str] | None:
+    """(b): the run the held `pred` of the same plugin holds."""
+    from . import collection as col
+    from .codex import CodexError
+    try:
+        held_name, held = col.resolve(Path(root), pred)
+    except CodexError:
+        return None
+    if held_name != pred or held.plugin != plugin_id:
+        return None
+    run = held_run(Path(root), pred, held)
+    if not run:
+        return None
+    return run, (f"the run {pred} holds (its Codex)" if named_run(held)
+                 else f"the run {pred}'s records were read in (collections/{pred}.toml `snapshot`)")
+
+
 def stated_in(origin_spec: dict | None, spec) -> str | None:
     """The run an `origin.spec` already names in its `files` (the dated
     listing's, as `pinned_snapshot` reads it), or None; a list naming no run

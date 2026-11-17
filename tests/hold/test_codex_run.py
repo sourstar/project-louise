@@ -155,8 +155,9 @@ def test_the_whole_codex_path_pins_the_run_its_predecessor_holds(data_dir, confi
     root, _corpus, live = wr.live(data_dir, config_dir)
     assert origin_run.named_run(live) is None and origin_run.held_run(root, "wikidata", live) == RUN
     p = wr.whole_recipe(root, tmp_path)
-    assert louise.main(wr.create_args(root, p, "other")) == 2, "no run, nothing re-created"
-    assert "names the FIRST run" in capsys.readouterr().err
+    assert louise.main(wr.create_args(root, p, "other")) == 2, "no run anywhere, nothing re-created"
+    err = capsys.readouterr().err
+    assert "names the FIRST run" in err and "lists no complete run" in err
     assert not (root / "other").exists()
     assert louise.main(wr.create_args(root, p, "wikidata.next", "--run", "20261101")) == 0
     out, _err = capsys.readouterr()

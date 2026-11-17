@@ -120,12 +120,15 @@ louise hold
                                                                        Codex reuses (RULE 1) — the same space but the query side; only the query side is embedded (added 2026-10-25)
                                                                        (amended 2026-10-08)
                                                                        [--run YYYYMMDD] (added 2026-11-17, München): for a plugin whose origin publishes dated dumps, the
-                                                                       Codex names the FIRST run its records are built from (09 §9.17): `origin.spec` gets `delta.mode`
-                                                                       "dated-dumps", the plugin's `filters` and the run's `files` where the recipe — a TOML or a whole
-                                                                       Codex — names none. The recipe's own `files` first; else --run; else, for `<name>.next`, the run the
-                                                                       held `<name>` of the same plugin holds (its Codex's current run, else its collection file's
-                                                                       `snapshot`), said on stderr; else refused (exit 2). A Codex whose records name a keyed unit and
-                                                                       which names no run is refused by every create
+                                                                       Codex names the FIRST run its records are built from and its whole identifying half (09 §9.17):
+                                                                       every key of `origin.spec` the recipe — a TOML or a whole Codex — states none for, from the
+                                                                       plugin's acquisition spec, in wikipedia's form (a stated key is never touched). The run: the
+                                                                       recipe's own `files`; else --run (an operator's); else DETERMINED (RULE 2) — the run the corpus
+                                                                       holds where the update's completion check says it is complete (the newest, never an older one
+                                                                       while a newer is not), else for `<name>.next` the run the held `<name>` holds, else the origin's
+                                                                       latest complete run (its index, through the budget) — said on stderr and in the Library's
+                                                                       notice; refused (exit 2) where none can tell, saying what would supply it; an origin away is
+                                                                       exit 3. A Codex whose records name a keyed unit and which names no run is refused by every create
               create deposit --name N [--encoder URL [--api A] [--embed-model M] [--query-model M]] [--space-from CODEX | --space FILE]
                                                                        a deposit collection (02 §2.9): no recipe; the node's deposit encoder unless one is named
               create annotations --claims FILE --name N [--annotates C [--from-snapshot S] [--annotates C2 --from-snapshot S2 …]] [--title T] [--summary S] [--annotator A] [--snapshot ID] [--container jsonl|parquet] [--dry-run]

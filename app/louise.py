@@ -155,43 +155,31 @@ def cmd_create(a) -> int:
     return 0
 
 
-def _recreation_run(root, plugin: str, name: str | None) -> tuple[str, str] | None:
-    """THE RUN A RE-CREATION'S RECORDS ARE READ IN, where the system can tell
-    it (RULE 2): `<name>.next` re-creates the held `<name>` of the same
-    plugin (case F, app/hold/recreate.py), whose records were read in the run
-    it holds (`origin_run.held_run`: its Codex's current run, else its
-    collection file's `snapshot`). `(run, where it was read)`, or None."""
-    from app.hold import origin_run, recreate
-    if not name or not name.endswith(recreate.INTERIM):
-        return None
-    pred = name[:-len(recreate.INTERIM)]
-    try:
-        held_name, held = col.resolve(Path(root) if root else _default_root(), pred)
-    except CodexError:
-        return None
-    if held_name != pred or held.plugin != plugin:
-        return None
-    run = origin_run.held_run(Path(root) if root else _default_root(), pred, held)
-    if not run:
-        return None
-    return run, (f"the run {pred} holds (its Codex)" if origin_run.named_run(held)
-                 else f"the run {pred}'s records were read in (collections/{pred}.toml `snapshot`)")
-
-
-def _run_for(root, plugin: str, recipe_spec: dict | None, run: str | None, name: str | None):
-    """`run` as given, else — where the recipe's origin names none — the
-    re-creation's (`_recreation_run`), said on stderr."""
+def _run_for(root, plugin: str, recipe_spec: dict | None, run: str | None, name: str | None,
+             say=None):
+    """`run` as given; else, where the recipe's origin names no files and the
+    plugin's origin publishes dated dumps, the run the system DETERMINES
+    (RULE 2; `origin_run.determine`: the corpus's complete run, a
+    re-creation's predecessor's, the origin's latest complete one), said on
+    stderr and to `say` (the Library's notice) in plain words — or refused
+    saying what is missing and what would supply it."""
     if run or (recipe_spec or {}).get("files"):
         return run
     from app.acquire.specs import ACQUIRE_REGISTRY
     from app.hold import origin_run
     if not origin_run.spec_dated(ACQUIRE_REGISTRY.get(plugin)):
         return run
-    found = _recreation_run(root, plugin, name)
-    if found is None:
-        return run
-    print(f"run: {found[0]} — {found[1]}; its files written into origin.spec (09 §9.17)", file=sys.stderr)
-    return found[0]
+    try:
+        found, why = origin_run.determine(Path(root) if root else _default_root(), plugin, name)
+    except origin_run.RunUndetermined as e:
+        raise tpl.TemplateError(
+            f"{plugin}'s origin publishes dated dumps, and its Codex names the FIRST run its records are built "
+            f"from (09 §9.17): the recipe names none and no --run was given, and {e}") from None
+    line = f"run: {found} — {why}; its files written into origin.spec (09 §9.17)"
+    print(line, file=sys.stderr)
+    if say is not None:
+        say(line)
+    return found
 
 
 def _whole_codex_run(root, spec: dict, run: str | None, name: str | None) -> dict:
@@ -583,7 +571,7 @@ def create_from(root, plugin: str, recipe: dict, *, platform_image: str | None =
                 calibration_set: str | None = None, api: str | None = None,
                 embed_model: str | None = None, query_model: str | None = None,
                 calibration_from: str | None = None, embed: str = "off",
-                run: str | None = None):
+                run: str | None = None, say=None):
     """`hold collection create <plugin> --recipe FILE` — for the command
     line and for its route alike (07 §7.4: the web interface is a client of
     the same function, not a second implementation). Returns the Codex and
@@ -609,7 +597,7 @@ def create_from(root, plugin: str, recipe: dict, *, platform_image: str | None =
     platform_image = preflight_create(recipe, platform_image)
     # THE RUN A DATED-DUMP CODEX NAMES (09 §9.17): `--run`, else a
     # re-creation's predecessor's; the recipe's own `files` first
-    run = _run_for(root, plugin, (recipe.get("origin") or {}).get("spec"), run, name)
+    run = _run_for(root, plugin, (recipe.get("origin") or {}).get("spec"), run, name, say=say)
     # A SLICING THE PLUGIN DERIVES AT CREATION (wikidata's family map,
     # pack-format.md §2 amended 2026-10-24): the block goes into the Codex,
     # the map into the SHARD. A recipe that states its own slicing keeps it

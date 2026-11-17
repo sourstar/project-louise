@@ -34,11 +34,17 @@ predecessor's word for a `.next` re-creation, and each carried line is then held
   byte-identical. Other plugins state their half in their recipes, as before (pubmed's scheme-less `url`
   is written down in origin_run.py). The run comes from, in order:
   1. the recipe's own `files`;
-  2. `--run YYYYMMDD`;
-  3. for `<name>.next`, the run `<name>` holds: its Codex's current run, else its file's `snapshot`.
-     `create` says which on stderr.
+  2. `--run YYYYMMDD` (an operator's);
+  3. DETERMINED, RULE 2 (`origin_run.determine`):
+     - the run the corpus holds, when the update's completion check says it is complete. Of several runs
+       the newest is taken; a newer one not complete is waited for, never passed over for an older, and
+       so refused;
+     - else, for `<name>.next`, the run `<name>` holds: its Codex's current run, else its file's
+       `snapshot`;
+     - else the origin's latest complete run, from its index of runs, through the budget.
 
-  With none of these, `create` refuses (exit 2). Wikipedia's Codex is unchanged, byte for byte.
+  `create` says which run it took and why, on stderr and in the Library's notice. Where none of these can
+  tell, it refuses (exit 2), saying what would supply the run; an origin that does not answer is exit 3.
 - Guards, in plain words, each with a test (tests/hold/test_codex_run.py): nothing creates, carries into
   (`dev carry`, `records carry`) or freezes (`records build`, `snapshot create`) a Codex whose plugin names
   its records' origins by the origin's own key at that parser version and which names no run.
