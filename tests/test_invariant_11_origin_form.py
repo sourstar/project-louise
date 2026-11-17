@@ -69,3 +69,13 @@ def test_the_note_reader_finds_the_section_and_its_end():
     assert origin_form_note(doc).strip() == "— the dump, because it is checksummed."
     assert origin_form_note("No such section.") is None
     assert origin_form_note(None) is None
+
+
+def test_wikipedias_note_says_how_a_unit_is_located_since_parser_6():
+    """The form a verifier needs (06 §6.4, 09 §9.5 amended 2026-11-17, the
+    operator's "Choice B"): the page, its run-free file, the run the snapshot
+    names, and the index of that run."""
+    from app.plugins.wikipedia import source
+    note = " ".join(origin_form_note(source.__doc__ or "").split())
+    for words in ("BY ITS PAGE", "page id", "origin_run", "multistream index", "pp_page"):
+        assert words in note, words

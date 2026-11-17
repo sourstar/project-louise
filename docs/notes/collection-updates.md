@@ -232,7 +232,7 @@ the shown lines), `app/hold/cascade_keeper.py` (the round). Tests: `tests/hold/t
   at most 24 h (`cascade.BEGIN_WAIT_S`, real hours, DST included). It counts only when the update pass would act on
   it:
   - it is updated by cadence (`update.not_updated` is None: an `update` block, a dated origin, a completion check);
-  - it is not refused (`origin_names_run`, wikipedia's until its origin form is decided);
+  - it is not refused (`origin_names_run`: wikipedia's parser 5 until it is re-created at 6, §6);
   - the node's update keeper is on, and the node runs it from its origin with acquisition on.
 
   A source the pass refuses, or with no `update` block, never makes a dependent wait. `woken.json` says "waiting for
@@ -275,15 +275,50 @@ operator's word.
   annotations collection that declares this one has `state/woken.json` naming the snapshot at `running`, `done` or
   `failed`. Until the cascade (§4) writes `woken.json`, an annotated collection's old run stays. Since the
   keeper (§4 "As built: the keeper"), "declares" is the cascade's graph: `annotates` and a method's `inputs`.
-- **OPEN, the operator's: the origin form.** Until it is decided, a plugin declaring `origin_names_run`
-  (wikipedia) is planned (`--dry-run`) and refused (exit 2) by the pass and the keeper. The choices: A keep
-  the `origin` naming the dated file and byte range (every part re-issued each run); B a page-id `origin`
-  located in the run through Wikimedia's multistream index (09 §9.5 changed); C an origin-only patch of
-  the parts (09 §9.9's patch, for the `origin` alone).
+- **DECIDED (operator, 2026-11-17): "Choice B", the origin by page.** The choices were: A keep the
+  `origin` naming the dated file and byte range, so every part is re-issued each run; B a page-id
+  `origin` located in the run through Wikimedia's multistream index; C an origin-only patch of the parts.
+  B is built (branch `wikipedia-page-origin`):
+  - **The form** (09 §9.5 amended): `<wiki>/pages-articles-multistream.xml.bz2#<page id>|<wiki>/page_props.sql.gz#<page id>`,
+    resolved in the snapshot's run. The archive layer's row ranges keep theirs. Wikipedia's parser is 6.
+    Parser 5 (`WikipediaSourceV5`) is kept for the live Codex, which reads and writes the byte range
+    until it is re-created. Both forms resolve.
+  - **The generic mechanism** (`app/keyed_origin.py`): a plugin declares `origin_key` (the key, the run's
+    index, whether the node builds it, from which parser) and five hooks read by `plugin_io`. The key's
+    table is one format, `KeyTable`: sorted int64 keys in Parquet, one row group read per lookup.
+  - **Wikipedia's table** (`app/plugins/wikipedia/stream_index.py`): page id to stream range, built in one
+    pass over the run's index. It is placed by `app/derived.py` (`wikipedia-stream-index`,
+    `LOUISE_CACHE_DIR`), keyed on the run folder's resolved path, and fresh by the index's size and mtime
+    (the CONTAINER_PACK template). The page_props unit is resolved through the existing page_props pack.
+  - **The update pass:** `origin_names_run` is read at the Codex's parser (`plugin_at`). Parser 5 is
+    refused with "re-create at parser 6 first"; parser 6 runs. An unchanged page's line is byte-identical
+    across runs, so the records build takes it as it is. `ORIGIN_MOVES_ALONE` is RETIRED FROM THE BUILD:
+    nothing rewrites an origin there any more. It stays for discovery's `_held_hash`, where a new run
+    still moves a page's locator and not its bytes.
+  - **The re-creation:** `hold records carry` (`app/hold/line_carry.py`) rewrites each line's `origin` in
+    the bytes and takes every other byte. `dev carry --reconcile` reads its proof. `wikipedia-articles`
+    is created again from its own snapshot's claims (`hold annotations claims`) against the new
+    collection. The node's steps are [wikipedia-page-origin.md](wikipedia-page-origin.md).
+  - **Measured** (this sandbox, 4 cores; synthetic wikipedia-shaped parts of 2,000 records, 1.45 MiB
+    stored and 8.9 MiB of lines each):
+
+    | | 1 process | 2 | 3 |
+    |---|---|---|---|
+    | the carry, ms a part | 224 | 137 | 105 |
+    | the carry, records/s | 8,912 | 14,631 | 19,018 |
+    | three indexes of 2 M lines built on the pool, s | 14.1 | 10.1 | 5.9 |
+
+    One index of 2 M lines takes 4.1 s to read and 5.0 s to build; the table is 3.0 bytes a page. A lookup
+    takes 1.13 ms when it reads a row group, 88 µs through `ensure` once the row group is held, and 7 µs on
+    the table once found.
+- **NEXT: wikidata** (operator, 2026-11-17: "Do the wikidata step as well"; branch `wikidata-entity-origin`,
+  stacked on this one). The same problem: its `origin` names the dump and the entity's ordinal. Its JSON
+  dump has no index, so the node builds the entity table of each run (`built=True`) on the same mechanism.
 - **Found on the way:**
   - every record line's `origin` names the run's file, so a dated-dump update re-issues EVERY part (the delta
-    still lists only what changed by content). The records build carries a line whose origin bytes are the same at
-    a new locator with the row's `origin` instead of parsing it (`ORIGIN_MOVES_ALONE`, `pack/build.py`);
+    still lists only what changed by content). The records build carried a line whose origin bytes are the same at
+    a new locator with the row's `origin` instead of parsing it (`ORIGIN_MOVES_ALONE`, `pack/build.py`; retired
+    from the build by B, above);
   - a page the new run no longer holds is withdrawn by the scan (06 §6.1's deletion signal, reason `withdrawn`),
     read from the previous run's index while it is on disk;
   - a row discovery never hashed (`txt_hash` NULL: the first scan does not hash) read as changed on every new run;

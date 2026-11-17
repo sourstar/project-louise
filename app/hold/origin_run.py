@@ -72,6 +72,21 @@ def codex_run(codex, spec=None) -> str | None:
     return acquire_spec.pinned_snapshot(spec, getattr(codex.origin, "spec", None))
 
 
+def run_of(codex, snapshot) -> str | None:
+    """The run a snapshot's records were built from: its `origin_run`, else
+    — a snapshot made before the field — the Codex's run (09 §9.4). What an
+    origin naming a unit by the origin's own key is resolved in (09 §9.5,
+    amended 2026-11-17: wikipedia's page, parser 6). None for an origin of
+    no dated dumps."""
+    run = getattr(snapshot, "origin_run", None) if snapshot is not None else None
+    if run:
+        return str(run)
+    try:
+        return codex_run(codex)
+    except Exception:   # noqa: BLE001 — a Codex whose origin names no run: none
+        return None
+
+
 # --------------------------------------------------------------------------
 # a snapshot's own run, from its tail
 

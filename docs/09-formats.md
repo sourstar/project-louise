@@ -843,9 +843,45 @@ fetchable before an acknowledgement (04 §4.4).
 | `sections` | list of `[heading, text]` | yes | the cleaned text in order (06 §6.1): UTF-8, NFC, LF newlines, no trailing whitespace on any line; `[]` on a pointer record |
 | `figures` | list of figure | `record_line` 2 only | the plates this document carries, in `seq` order; `[]` when it has none, and `[]` on a pointer record. An entry NAMES a figure and never holds it — the bytes are the member `figures-<slice>` (§9.16), which a peer may hold or not. Absent entirely where `record_line` is 1 |
 | `extra` | object | yes | plugin-defined, fixed keys; **everything the origin asserts about the entity that the keys above have no home for** (01 promise 9, 06 §6.4) — ids, publication details, classifications, keywords, an author's identifiers. Its keys are fixed for the collection's LIFE, so a field omitted here is not deferred: adding one bumps the parser and mints a new `collection_id` (§9.3, 02 §2.7). The deposit plugin's are 06 §6.7's: a collection answers at the parser version its Codex names, so one created before a key was added keeps the shape it had (amended 2026-10-25, operator: "Keep all", which added a source page's `html_*`). `origin_url` on a red-class source; `in_force` on a legal source; `seal` on a certified source whose origin file carries a seal, holding that file's `file_hash` (§9.15); `reason` never (a reason belongs to the tombstone) |
-| `origin` | string | yes | the locator of this record's own origin bytes: their path relative to the origin base or their URL — a URL into a credited archive where that archive supplies the document's text (06 §6.4) — and where the document is a member of a container the path or URL followed by `#` and the plugin's member index (06 §6.4); never an absolute local path |
+| `origin` | string | yes | the locator of this record's own origin bytes: their path relative to the origin base or their URL — a URL into a credited archive where that archive supplies the document's text (06 §6.4) — and where the document is a member of a container the path or URL followed by `#` and the plugin's member index (06 §6.4); or, for an origin of dated dumps, the unit named by the ORIGIN'S OWN STABLE KEY and resolved in the snapshot's run through the origin's own index (below, *amended 2026-11-17*, operator: "Choice B"); never an absolute local path |
 | `content_hash` | BLAKE2b-128 | yes | below |
 | `origin_hash` | BLAKE2b-128 | yes | BLAKE2b-128 of this document's own origin bytes, the ones `origin` locates — one record, one hash, whatever the origin ships them in (02 §2.3); a record without one is refused at build |
+
+**An origin named by the origin's own key** (*amended 2026-11-17*,
+operator: "Choice B"; docs/notes/collection-updates.md §6). An origin of
+dated dumps publishes the same documents again in every run, at other
+places in other files. A record whose `origin` named the run's file and
+the place in it changed at every run, and its part with it, whatever the
+document did. Such an origin's record may instead name each unit by a key
+the origin itself keeps across runs. The path is the run-free name of the
+file the unit is read from, and the member after `#` is the key. The unit
+is RESOLVED IN THE RUN THE SNAPSHOT NAMES — the snapshot's `origin_run`
+(§9.4), else the Codex's `files` run (§9.17) — through the origin's own
+index of that run, or, where the origin publishes none, an index built
+from the run in one pass (06 §6.4). `origin_hash` is unchanged: the hash of
+the unit's bytes in that run. So the line of an unchanged document is
+byte-identical from run to run, and a verifier needs the run, which the
+snapshot states. The plugin's parser version says which form its records
+carry; a collection keeps the form its Codex's parser writes.
+
+Wikipedia's form, from parser 6. Each piece is
+`<wiki>/pages-articles-multistream.xml.bz2#<page id>` for the page's own
+bytes and `<wiki>/page_props.sql.gz#<page id>` for its rows of the run's
+page_props table, joined by `|` as before. `<wiki>` is the dump's name of
+the wiki (`itwiki`). In run `R` a piece is read from Wikimedia's
+`<wiki>/<R>/<wiki>-<R>-<file>` under the origin's base. The article's
+stream is the run's multistream index line `offset:page_id:title` whose
+second field is the page id; the stream runs to the next distinct offset,
+or to the end of the file. The rows are the run's `pp_page` rows of the
+page. A piece of the credited archive (a row range of a parquet at a pinned
+revision) is stable already and keeps its form. The form is unambiguous
+per wiki, because a page id is unique within one wiki only and the first
+segment names it. It is unambiguous per unit, because the article and its
+rows are named by their two files and by the key both are keyed on. The
+page id is kept through a move, where the title is not. Parser 5's form,
+`<wiki>/<R>/<wiki>-<R>-pages-articles-multistream.xml.bz2#<start>::<end>`,
+has a run segment and a two-field member, so the two forms never collide,
+and both resolve.
 
 **content_hash** = BLAKE2b-128 of the canonical JSON of the array
 `[title, [[heading, text], …]]` — the title and the sections exactly as

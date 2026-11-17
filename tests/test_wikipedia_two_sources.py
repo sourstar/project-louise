@@ -115,21 +115,30 @@ def test_a_straddlers_origin_names_both_shards_and_reads_back(corpus):
     arch = f"{up.base_url}/resolve/{up.revision}/"
     assert up.revision and "main" not in arch
     ref = _refs(corpus)[str(native_id_of("en", 11, archive=True))]
-    origin = plugin_io.origin_locator(SOURCE, ref.locator, corpus)
+    v5 = SOURCE.at_parser_version(5)              # the byte-range origin, parser 5's
+    origin = plugin_io.record_origin(v5, ref.locator, corpus, ref.native_id)
     # and, since parser 5, the page's rows of the dump run's page_props,
     # relative to the dumps' base like any dump file
     rows, props = origin.rsplit("|", 1)
     assert rows == f"{arch}data/en/000.parquet#2::3|{arch}data/en/001.parquet#0::1"
     assert props.startswith("enwiki/latest/enwiki-latest-page_props.sql.gz#")
-    local, locator = plugin_io.local_locator(SOURCE, origin, corpus)
+    local, locator = plugin_io.local_locator(v5, origin, corpus)
     assert local.is_file() and locator == ref.locator
     assert _doc(ref).sections == [("", "Sun\nstraddle start"), ("", "Sun\nstraddle end")]
     assert _doc(ref).extra["wikidata"] == "Q525"
     assert _doc(ref).extra["page_props"] == {"page_image_free": "The_Sun.jpg"}
+    # parser 6: the archive's rows as they were (stable already), the page_props
+    # rows by page, read in the run (09 §9.5 amended 2026-11-17)
+    new = plugin_io.record_origin(SOURCE, ref.locator, corpus, ref.native_id)
+    assert new == f"{rows}|enwiki/page_props.sql.gz#11"
+    local, locator = plugin_io.local_locator(SOURCE, new, corpus, run="latest")
+    assert local.is_file() and locator == ref.locator
 
     dump_ref = _refs(corpus)[str(native_id_of("en", 20))]
-    assert plugin_io.origin_locator(SOURCE, dump_ref.locator, corpus) == \
+    assert plugin_io.record_origin(v5, dump_ref.locator, corpus, dump_ref.native_id) == \
         f"enwiki/latest/{DUMP}.xml.bz2#0::0"
+    assert plugin_io.record_origin(SOURCE, dump_ref.locator, corpus, dump_ref.native_id) == \
+        "enwiki/pages-articles-multistream.xml.bz2#20"
 
 
 def test_coverage_holds_when_the_cursor_skips_the_archive(corpus, tmp_path, isolated_config):

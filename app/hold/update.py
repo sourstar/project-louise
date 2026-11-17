@@ -141,16 +141,35 @@ def not_updated(codex) -> str | None:
     return None
 
 
-def origin_names_run(codex) -> bool:
-    """The plugin declares that each record's `origin` names the dated file
-    and byte range of its run (`origin_names_run`, wikipedia): a new run
-    re-issues every part. Until the operator decides the origin form
-    (collection-updates.md §6: A keep, B a page-id origin through the
-    multistream index, C an origin-only patch), the pass plans such a
-    collection (`--dry-run`) and never runs it."""
+def _plugin_at_codex(codex):
+    """The plugin parsing at the Codex's parser (`collections.plugin_at`):
+    what the collection's records were written by and are read with."""
     from app import collections as collections_mod
     plugin = collections_mod.PLUGIN_REGISTRY.get(getattr(codex, "plugin", None))
-    return bool(getattr(plugin, "origin_names_run", False))
+    version = getattr(getattr(codex, "parser", None), "version", None)
+    if plugin is None or version is None:
+        return plugin
+    return collections_mod.plugin_at(plugin, int(version)) or plugin
+
+
+def origin_names_run(codex) -> bool:
+    """The plugin, AT THE CODEX'S PARSER, declares that each record's
+    `origin` names the dated file and byte range of its run
+    (`origin_names_run`): a new run would re-issue every part. Wikipedia's
+    parser 5 does; its parser 6 names the page, resolved in the snapshot's
+    run through the origin's own index (operator, 2026-11-17, "Choice B";
+    collection-updates.md §6). The pass plans such a collection
+    (`--dry-run`) and never runs it: it is re-created at the parser that
+    names the page first."""
+    return bool(getattr(_plugin_at_codex(codex), "origin_names_run", False))
+
+
+def current_parser(codex) -> int | None:
+    """The plugin's own parser version, which a refused collection is
+    re-created at."""
+    from app import collections as collections_mod
+    plugin = collections_mod.PLUGIN_REGISTRY.get(getattr(codex, "plugin", None))
+    return int(plugin.PARSER_VERSION) if plugin is not None and hasattr(plugin, "PARSER_VERSION") else None
 
 
 def origin_form_wait(root, name: str, codex) -> str:
@@ -164,9 +183,11 @@ def origin_form_wait(root, name: str, codex) -> str:
         snap = None
     size = (f" ({name}: {len(snap.shards):,} parts, {sum(int(s.bytes) for s in snap.shards) / 2**30:.1f} GiB "
             f"to every peer)" if snap is not None else "")
+    now = current_parser(codex)
+    at = getattr(getattr(codex, "parser", None), "version", "?")
     return (f"not updated by this pass: every part would be re-issued{size} because each record's origin "
-            f"names the dated file and byte range; waiting on the operator's decision on the origin form "
-            f"(collection-updates.md)")
+            f"names the dated file and byte range (parser {at}); re-create at parser {now} first, whose "
+            f"origin names the page (collection-updates.md §6)")
 
 
 def held_slices(collection, spec) -> list[str]:
@@ -814,7 +835,7 @@ def describe(root, name: str, codex=None) -> dict[str, Any]:
     if why is not None:
         return {"state": "not-updated", "says": f"not updated by cadence: {why}"}
     if origin_names_run(codex):
-        return {"state": "waits-decision", "says": origin_form_wait(root, name, codex)}
+        return {"state": "waits-recreation", "says": origin_form_wait(root, name, codex)}
     mk = update_state.read(root, name)
     period = next_period(root, name, codex)
     if mk is None:
@@ -949,8 +970,8 @@ def next_step(root, name: str, codex, *, now: datetime | None = None) -> Next:
     if why is not None:
         return Next(None, why)
     if origin_names_run(codex):
-        return Next(None, "waits for the operator's decision on the origin form (each record's origin "
-                          "names the run)")
+        return Next(None, f"re-create at parser {current_parser(codex)} first (each record's origin names "
+                          f"the run)")
     mk = update_state.read(root, name)
     failure = (mk or {}).get("failure")
     if failure:
