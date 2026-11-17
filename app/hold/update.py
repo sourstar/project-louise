@@ -136,6 +136,11 @@ def not_updated(codex) -> str | None:
         return (f"its origin ({codex.plugin}) is not an origin of dated dumps; the update by "
                 f"cadence follows dated runs (09 §9.17 `delta`)")
     if hook_of(codex) is None:
+        # a plugin may say WHY it declares none: the origin's signal not yet
+        # verified, its candidates named (wikidata's entity dumps, 2026-11-17)
+        unverified = getattr(_plugin_at_codex(codex), "update_completion_unverified", None)
+        if unverified:
+            return f"the {codex.plugin} plugin declares no completion check: {unverified}"
         return (f"the {codex.plugin} plugin declares no completion check (`update_completion`), "
                 f"so this pass cannot tell when the origin's run is complete")
     return None

@@ -7,9 +7,16 @@ articles pruned, everything else the dump states kept (invariant 11).
 Ids (ids.py): an item's native id is its number, a property's is
 `PROPERTY_BASE + n`; `uid = wikidata:<native_id>`; the canonical id
 `wikidata:Q42` goes in `keys` with the ids of its `P31`/`P279` values.
-`origin` is `<dump rel path>#<entity index>`; `origin_hash` covers the
-entity's own line bytes (the unit a query returns); a verifier needs the
-same dump's label table, rebuilt from the dump (06 §6.4).
+The manifest's locator is `<dump path>#<entity index>`, the line's ordinal
+in this node's pack. A RECORD's `origin` names the ENTITY since parser 3
+(operator, 2026-11-17: "Choice B", "Do the wikidata step as well"; 09 §9.5
+amended): `wikidatawiki/entities/all.json.bz2#Q42`, read in the run its
+snapshot names through the entity table the node builds of that run's pack
+(entities.py). Parser 2's records named the dated dump and the ordinal,
+which a new run moves for every entity; a collection whose Codex names 2
+keeps that form (`WikidataSourceV2`) until it is re-created. `origin_hash`
+covers the entity's own line bytes (the unit a query returns); a verifier
+needs the same dump's label table, rebuilt from the dump (06 §6.4).
 
 THE ORIGIN FORM, and why — invariant 11 wants it recorded beside the
 plugin (06 §6.4; decision D1, docs/notes/wikidata-implementation.md).
@@ -26,6 +33,18 @@ not the truthy RDF, which keeps the best rank only; not the API, which
 has no dated form a verifier can re-fetch. The Codex's `origin.form`
 says the same (docs/notes/wikidata-recipe.toml). The lexeme dump is a
 separate file and a later slice (STATUS, 2026-10-24).
+
+A record's unit is located BY ITS ENTITY ID (parser 3, 2026-11-17, the
+operator's "Choice B"): its `origin` is the run-free name of the job's file
+under Wikimedia's directory with the entity id as the member,
+`wikidatawiki/entities/all.json.bz2#Q42`, and it is read in the run the
+snapshot names (09 §9.4 `origin_run`) as `wikidatawiki/entities/<run>/
+wikidata-<run>-all.json.bz2`. The entity id is the dump's own key, the one
+an entity keeps for its life; its ordinal (parser 2's member) moves with
+every entity created or deleted before it. Wikimedia publishes no index of
+the JSON dump, so the node builds the entity table of each run from the
+run's pack in one pass (entities.py) — derived, keyed on the dump's
+physical identity, never exchanged — and a verifier builds the same one.
 """
 from __future__ import annotations
 
@@ -40,10 +59,53 @@ from app.plugins import cursor
 from app.backend import OriginForm, Template
 from app.plugins.base import (CanonicalDoc, DiscoverState, DocRef, Erasure, LicenseClass, Modality, Mutability,
                               PROTOCOL_VERSION, PrivacyClass, RawDoc, UnindexableDocument)
-from app.plugins.wikidata import ids, names, pack, textify
+from app.keyed_origin import KeyedOrigin
+from app.plugins.wikidata import entities, ids, names, pack, textify
 
 _LOCATOR_SEP = "#"
 _DUMP_RE = re.compile(r"^wikidata-(\d{8})-all\.json\.(bz2|gz)$")
+#: Wikimedia's directory of the entity dumps, under the origin's base (acquire/specs.py)
+ENTITIES_DIR = "wikidatawiki/entities"
+#: parser 2's origin: the dated dump and the entity's ordinal in it
+_DATED = re.compile(r"^(?:(?P<dir>.*)/)?wikidata-(?P<run>\d{8})-all\.json\.(?P<z>bz2|gz)#(?P<index>\d+)$")
+#: parser 3's: the run-free name of the job's file, the entity id
+_KEYED = re.compile(r"^wikidatawiki/entities/all\.json\.(?P<z>bz2|gz)#(?P<eid>[QP][1-9]\d*)$")
+
+
+class EntityNotInRun(LookupError):
+    """The run an origin is resolved in does not hold the entity."""
+
+
+def entity_origin(origin: str, native_id) -> str:
+    """Parser 3's `origin` for a record parser 2 wrote with `origin`: the
+    entity named by its id in the run-free name — a pure function of the
+    line's own `origin` and its native id. Parser 3's form is kept, if it
+    names this entity."""
+    eid = ids.entity_id_of(native_id)
+    m = _DATED.match(str(origin))
+    if m is not None:
+        return f"{ENTITIES_DIR}/all.json.{m['z']}#{eid}"
+    m = _KEYED.match(str(origin))
+    if m is not None:
+        if m["eid"] != eid:
+            raise ValueError(f"{origin}: names {m['eid']}, the record is {eid}")
+        return str(origin)
+    raise ValueError(f"{origin!r}: not a wikidata origin (a dated dump's entity, or an entity by its id)")
+
+
+def run_dump(base: Path, run: str, z: str = "bz2") -> Path:
+    """Wikimedia's path of a run's entity dump under the origin base — or,
+    on a corpus laid out otherwise, the one dump of that run it holds."""
+    p = Path(base) / ENTITIES_DIR / run / f"wikidata-{run}-all.json.{z}"
+    if p.is_file():
+        return p
+    found = find_dumps(Path(base), run)
+    if len(found) == 1:
+        return found[0]
+    if found:
+        raise ValueError(f"{len(found)} dumps of run {run} under {base}: which one an origin names is not "
+                         f"known")
+    raise FileNotFoundError(str(p))
 #: what `keys` names besides the entity itself: what it is an instance or a subclass of
 _KEY_PROPERTIES = ("P31", "P279")
 
@@ -108,12 +170,101 @@ class WikidataSource:
     #: format.py); and the HISTORY SECTION (operator: "Go with family slices
     #: and the history section now"): after each language's text, what the
     #: best-rank filter drops, headed `<lang>:history` (textify.history_text)
-    PARSER_VERSION = 2
+    #: 3 (2026-11-17, operator: "Choice B"): a record's `origin` names its
+    #: ENTITY, `wikidatawiki/entities/all.json.bz2#Q42`, resolved in the
+    #: snapshot's run through the run's entity table (entities.py; 09 §9.5
+    #: amended), where 2 named the dated dump and the ordinal. Nothing else in
+    #: a line moves, so a 2 line is carried with its origin alone rewritten
+    #: (`carried_origin`; app/hold/line_carry.py). Parser 2 is kept
+    #: (`WikidataSourceV2`) for a Codex that names it, until it is re-created.
+    PARSER_VERSION = 3
+    #: parser 2's origin named the run (the dated dump); 3's names the entity
+    #: (app/hold/update.py `origin_names_run`: True on `WikidataSourceV2`)
+    origin_names_run = False
+    #: 09 §9.5 (amended 2026-11-17): the entity id, read in the snapshot's run
+    #: through a table the node BUILDS (the dump publishes no index)
+    origin_key = KeyedOrigin(key="entity id", built=True, since=3,
+                             index="the run's entity table, built by the node from the run's pack in one "
+                                   "pass (entity id -> the line's ordinal)")
+    #: THE UPDATE BY CADENCE needs the origin's own word that a run is
+    #: complete (app/hold/update.py `update_completion`). For the JSON entity
+    #: dumps it is not settled from here, and none is guessed: the pass
+    #: refuses wikidata with this reason (`not_updated`)
+    update_completion_unverified = (
+        "the origin's own signal that an entity dump's run is complete is not verified yet. Candidates, to "
+        "be probed from the node: (1) the run's `wikidata-<date>-md5sums.txt` and `-sha1sums.txt` listing "
+        "`wikidata-<date>-all.json.bz2`, if Wikimedia writes them only once the dump is whole; (2) a "
+        "`dumpstatus.json` in `wikidatawiki/entities/<date>/`, which the XML runs publish and the entity "
+        "runs are not known to; (3) the dump's size against the listing's, which is no completion signal. "
+        "The run's file in the directory listing alone is not one either (collection-updates.md §6)")
     #: 06 §6.2: the origin keeps its history — every entity's earlier revisions stay fetchable by revision id —
     #: so a superseded part version stays checkable and is kept (02 §2.3).
     origin_versions = "history"
     LOCATOR_SEP = _LOCATOR_SEP
     LOCATOR_MEMBER_FIELDS = 1
+
+    # ---- the record's origin, by entity (parser 3; app/keyed_origin.py) ----------
+
+    def origin_of(self, locator: str, native_id, base) -> str:
+        """09 §9.5's `origin` for a manifest row: the platform's reading, then
+        the entity by its id (plugin_io.record_origin)."""
+        from app import plugin_io
+        if native_id is None:
+            raise ValueError("a wikidata origin names its entity (parser 3): the record's native id is "
+                             "needed beside its locator")
+        return entity_origin(plugin_io.origin_locator(self, locator, base), native_id)
+
+    def local_of(self, origin: str, base, run: str | None) -> tuple[Path, str]:
+        """`origin` read back as a manifest locator under `base`: an entity id
+        through `run`'s entity table, parser 2's ordinal as the platform reads
+        it — both forms resolve, whichever parser this is."""
+        from app import plugin_io
+        m = _KEYED.match(str(origin))
+        if m is None:
+            return plugin_io.generic_local(self, origin, base)
+        if not run:
+            raise ValueError(f"{origin}: an origin naming an entity is read in a run (09 §9.4 `origin_run`, "
+                             f"else the Codex's), and none was given")
+        dump = run_dump(Path(base), run, m["z"])
+        index = entities.index_of(dump, ids.native_id_of(m["eid"]))
+        if index is None:
+            raise EntityNotInRun(f"{origin}: run {run}'s pack holds no {m['eid']}")
+        return dump, f"{dump}{_LOCATOR_SEP}{index}"
+
+    def origin_files(self, origin: str, base, run: str | None) -> list[Path]:
+        """The file `origin` is read from in `run`, no table read."""
+        from app import plugin_io
+        m = _KEYED.match(str(origin))
+        if m is None:
+            return [plugin_io.generic_local(self, origin, base)[0]]
+        if not run:
+            raise ValueError(f"{origin}: an origin naming an entity is read in a run, and none was given")
+        try:
+            return [run_dump(Path(base), run, m["z"])]
+        except FileNotFoundError:
+            return [Path(base) / ENTITIES_DIR / run / f"wikidata-{run}-all.json.{m['z']}"]
+
+    def run_of_locator(self, locator: str) -> str | None:
+        """The run a manifest locator reads: its dump's date."""
+        m = _DUMP_RE.match(Path(str(locator).rpartition(_LOCATOR_SEP)[0]).name)
+        return m.group(1) if m else None
+
+    def carried_origin(self, origin: str, native_id, version: int) -> str | None:
+        """The `origin` this parser writes for a record parser `version` wrote:
+        from 2, the entity by its id (a pure function of the line); None for a
+        version whose lines differ otherwise."""
+        if int(version) == self.PARSER_VERSION:
+            return origin
+        if int(version) != 2:
+            return None
+        return entity_origin(origin, native_id)
+
+    def at_parser_version(self, version: int) -> WikidataSource | None:
+        """This plugin parsing at `version` (`collections.plugin_at`): 3 is
+        this one, 2 the dated-ordinal origin (`WikidataSourceV2`)."""
+        if int(version) == self.PARSER_VERSION:
+            return self
+        return {3: _V3, 2: _V2}.get(int(version))
     modality = Modality.TEXT
     erasure = Erasure.RETRACTABLE              # entities are deleted; the tombstone stays
     native_id_order = "numeric"
@@ -356,5 +507,27 @@ def index_names(extra: dict) -> tuple[list[tuple[str, str]], int]:
 
 
 WikidataSource.index_names = staticmethod(index_names)
+
+
+class WikidataSourceV2(WikidataSource):
+    """PARSER 2, KEPT for a collection whose Codex names it (invariant 3).
+    Its record's `origin` names the dated dump and the entity's ordinal, so a
+    new run moves every line: the update by cadence refuses it
+    (`origin_names_run`) until it is re-created at 3, whose lines are these
+    with `origin` alone rewritten (`carried_origin`). It reads an entity-id
+    origin too (`local_of`, inherited). Removed once no Codex names 2."""
+    PARSER_VERSION = 2
+    origin_names_run = True
+
+    def origin_of(self, locator: str, native_id, base) -> str:
+        from app import plugin_io
+        return plugin_io.origin_locator(self, locator, base)
+
+    def carried_origin(self, origin: str, native_id, version: int) -> str | None:
+        return origin if int(version) == self.PARSER_VERSION else None
+
+
+_V2 = WikidataSourceV2()
+_V3 = WikidataSource()
 
 SOURCE = WikidataSource()

@@ -311,9 +311,30 @@ operator's word.
     One index of 2 M lines takes 4.1 s to read and 5.0 s to build; the table is 3.0 bytes a page. A lookup
     takes 1.13 ms when it reads a row group, 88 µs through `ensure` once the row group is held, and 7 µs on
     the table once found.
-- **NEXT: wikidata** (operator, 2026-11-17: "Do the wikidata step as well"; branch `wikidata-entity-origin`,
-  stacked on this one). The same problem: its `origin` names the dump and the entity's ordinal. Its JSON
-  dump has no index, so the node builds the entity table of each run (`built=True`) on the same mechanism.
+- **Wikidata, the same mechanism** (operator, 2026-11-17: "Do the wikidata step as well"; branch
+  `wikidata-entity-origin`, stacked on wikipedia's). Its `origin` named the dated dump and the entity's
+  ordinal, which every run moves.
+  - **The form, parser 3:** `wikidatawiki/entities/all.json.bz2#<entity id>` (09 §9.5). Parser 2 is kept
+    (`WikidataSourceV2`), and both forms resolve.
+  - **The table:** the JSON dump has no index, so the node BUILDS one per run (`origin_key.built`):
+    entity id to the line's ordinal. It is read from the run's pack's index columns and written as the
+    pack's side table under the pack's writer (DUMP_PACK). It is placed with the pack, which is keyed on
+    the dump's physical identity, and fresh by the dump's size and mtime and the pack's version and chunk
+    count (`app/plugins/wikidata/entities.py`). It is not a byte range: a bz2 stream cannot be entered at
+    a byte, and the pack keeps the lines by ordinal.
+  - **Measured:** 12 M entities in 120 chunk files, built in 4.2 / 4.0 / 4.0 s on 1 / 2 / 3 of the parse
+    pool's processes and in 3.1 / 2.9 / 2.8 s on threads, which it uses. The sort and the write, one each,
+    are most of it. The table is 5.8 bytes an entity, about 690 MB for 118 M. A lookup takes 0.1 ms cold
+    and ~50 µs warm.
+  - **The update:** wikidata's monthly update is still refused, by its own reason. The origin's signal that
+    an entity dump's run is complete is not verified from here (no network), and none is guessed
+    (`update_completion_unverified`). The candidates, to be probed from the node:
+    1. the run's `-md5sums.txt` / `-sha1sums.txt` listing the dump, if they are written only once it is
+       whole;
+    2. a `dumpstatus.json` under `entities/<date>/`, which the XML runs publish;
+    3. the size against the listing's, which is no completion signal.
+    `origin_names_run` is True at parser 2 and False at 3.
+  - **The node's steps:** [wikidata-entity-origin.md](wikidata-entity-origin.md).
 - **Found on the way:**
   - every record line's `origin` names the run's file, so a dated-dump update re-issues EVERY part (the delta
     still lists only what changed by content). The records build carried a line whose origin bytes are the same at

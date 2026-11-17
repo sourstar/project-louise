@@ -883,6 +883,20 @@ page id is kept through a move, where the title is not. Parser 5's form,
 has a run segment and a two-field member, so the two forms never collide,
 and both resolve.
 
+Wikidata's form, from parser 3 (*amended the same day*, operator: "Do the
+wikidata step as well"), is `wikidatawiki/entities/all.json.bz2#<entity
+id>` (`Q42`, `P31`). In run `R` it is read from Wikimedia's
+`wikidatawiki/entities/<R>/wikidata-<R>-all.json.bz2`. The JSON dump has no
+index, so the line is found through the run's ENTITY TABLE, which the node
+builds in one pass and a verifier builds the same way. The table maps each
+entity of the run to its line's ordinal in dump order (06 §6.4, "a unit
+located by the origin's own key"). The entity id is the dump's own key and
+an entity keeps it for its life; its ordinal moves with every entity
+created or deleted before it. Parser 2's form,
+`wikidatawiki/entities/<R>/wikidata-<R>-all.json.bz2#<ordinal>`, has a run
+segment and a numeric member, so the two forms never collide, and both
+resolve.
+
 **content_hash** = BLAKE2b-128 of the canonical JSON of the array
 `[title, [[heading, text], …]]` — the title and the sections exactly as
 the chunker sees them, so the same hash means the same chunks and the
