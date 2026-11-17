@@ -416,15 +416,18 @@ def parser_carried(from_codex, codex, differences: list[str]) -> int | None:
     """The parser version of the collection `--records-from` names, where
     its lines may be taken across a parser change: the same parser id and
     plugin, the target's Codex on the parser this image runs, and the
-    plugin naming the lines its parser moves (`line_moved_since`). None
-    otherwise — then "parser" stays a difference and the build refuses."""
+    plugin naming the lines its parser moves (`line_moved_since`) or
+    writing them with their `origin` alone rewritten (`carried_origin`,
+    wikipedia 5 -> 6; app/pack/build.py `_from_parser`). None otherwise —
+    then "parser" stays a difference and the build refuses."""
     from app import collections as collections_mod
     if "parser" not in differences or from_codex.plugin != codex.plugin \
             or from_codex.parser.id != codex.parser.id:
         return None
     plugin = collections_mod.PLUGIN_REGISTRY.get(codex.plugin)
     if plugin is None or int(getattr(plugin, "PARSER_VERSION", -1)) != int(codex.parser.version) \
-            or not callable(getattr(plugin, "line_moved_since", None)):
+            or not (callable(getattr(plugin, "line_moved_since", None))
+                    or callable(getattr(plugin, "carried_origin", None))):
         return None
     return int(from_codex.parser.version)
 

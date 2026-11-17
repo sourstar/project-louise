@@ -245,16 +245,24 @@ def test_the_origin_names_both_files_and_reads_back(corpus):
     """09 §9.5: `origin` locates every byte `origin_hash` covers — the page's
     stream and its rows, each relative to the dumps' base."""
     ref = _refs(corpus)[CHEESE]
-    origin = plugin_io.origin_locator(SOURCE, ref.locator, corpus)
+    # parser 5's form, the dated files and their byte ranges (kept for a Codex
+    # that names 5, `WikipediaSourceV5`)
+    v5 = SOURCE.at_parser_version(5)
+    origin = plugin_io.record_origin(v5, ref.locator, corpus, ref.native_id)
     page, props = origin.split("|")
     assert page == f"enwiki/20260801/{DUMP}.xml.bz2#0::0"
     assert props.startswith("enwiki/20260801/enwiki-20260801-page_props.sql.gz#")
-    local, locator = plugin_io.local_locator(SOURCE, origin, corpus)
+    local, locator = plugin_io.local_locator(v5, origin, corpus)
     assert locator == ref.locator
-    unit, size = plugin_io.origin_unit(SOURCE, origin, corpus)
+    unit, size = plugin_io.origin_unit(v5, origin, corpus)
     assert unit == (f"enwiki/20260801/{DUMP}.xml.bz2+"
                     f"enwiki/20260801/enwiki-20260801-page_props.sql.gz")
     assert size == sum((corpus / p).stat().st_size for p in unit.split("+"))
+    # parser 6's, the page in both files, read in the run (09 §9.5 amended 2026-11-17)
+    new = plugin_io.record_origin(SOURCE, ref.locator, corpus, ref.native_id)
+    assert new == "enwiki/pages-articles-multistream.xml.bz2#20|enwiki/page_props.sql.gz#20"
+    assert plugin_io.local_locator(SOURCE, new, corpus, run="20260801")[1] == ref.locator
+    assert plugin_io.origin_unit(SOURCE, new, corpus, run="20260801") == (unit, size)
 
 
 def test_an_origin_pair_is_weighed_once_however_many_records_name_it(corpus, monkeypatch):

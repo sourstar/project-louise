@@ -307,6 +307,16 @@ def cmd_annotations_derive(a) -> int:
     return 0
 
 
+def cmd_annotations_claims(a) -> int:
+    """`hold annotations claims <collection> --out FILE`
+    (app/hold/annotations_export.py): the claims its latest snapshot holds,
+    one per line, pinned as its records hold them — what a re-created target's
+    annotations collection is created from."""
+    from app.hold import annotations_export
+    _print(annotations_export.export(a.root, a.collection, Path(a.out)))
+    return 0
+
+
 def cmd_annotations_index(a) -> int:
     """`hold annotations index <collection>`: the claim index on disk of its
     current snapshot (app/hold/claim_index.py). Idempotent: a built one is
@@ -4731,6 +4741,27 @@ def cmd_records_relocate(a) -> int:
     return 130 if got.interrupted else 0
 
 
+def cmd_records_carry(a) -> int:
+    """`hold records carry <to> --from <from>` (app/hold/line_carry.py): the
+    re-created collection's parts from its predecessor's, each line's origin
+    rewritten by the plugin and every other byte taken; then its first
+    snapshot. Takes the target's lock; SIGTERM or SIGINT finishes the parts in
+    hand and exits 130 (invariant 2); a refusal exits 2."""
+    from app.hold import line_carry
+    name, _codex = col.resolve(a.root, a.collection)
+    if not a.dry_run:
+        _take_write_lock(a.root, name, "hold records carry")
+    with _graceful_stop() as stop:
+        try:
+            got = line_carry.carry(a.root, a.collection, a.from_ref, workers=a.workers, dry_run=a.dry_run,
+                                   stop=stop)
+        except line_carry.CarryRefused as e:
+            print(str(e), file=sys.stderr)
+            return 2
+    _print(got.to_dict())
+    return 130 if got.interrupted else 0
+
+
 def cmd_records_relations(a) -> int:
     """`hold records relations <collection> [--snapshot ID]` (app/hold/
     relations.py `backfill`): the relations parts of the record parts the
@@ -5724,13 +5755,17 @@ def run_check(a):
             pass
 
     origin_dir = _check_origin(a, codex)
+    # the run the snapshot's records were read from: an origin naming a unit
+    # by the origin's own key is resolved in it (09 §9.5, amended 2026-11-17)
+    from app.hold import origin_run as origin_run_mod
+    run = origin_run_mod.run_of(codex, snapshot)
     report = chk.run(
         a.root, name, codex, snapshot, seed=seed,
         checks=a.checks.split(",") if a.checks else None, sample=a.sample,
         embed=embed, reference=reference,
-        reparse=_reparse_from(codex, name, origin_dir),
-        reparse_many=_reparse_many_from(codex, name, origin_dir),
-        origin_unit=_origin_unit_from(codex, name, origin_dir),
+        reparse=_reparse_from(codex, name, origin_dir, run=run),
+        reparse_many=_reparse_many_from(codex, name, origin_dir, run=run),
+        origin_unit=_origin_unit_from(codex, name, origin_dir, run=run),
         weigh_unit=_weigh_from(codex, origin_dir),
         origin_bytes=(int(a.origin_mib) << 20) if getattr(a, "origin_mib", None) else None,
         against=_json(a.against) if getattr(a, "against", None) else None,
@@ -5845,8 +5880,12 @@ def _is_kept_copy(local, origin_dir) -> bool:
         return False
 
 
-def _reparse_from(codex, name: str, origin_dir):
+def _reparse_from(codex, name: str, origin_dir, *, run: str | None = None):
     """`(uid, origin locator) -> the record line that origin produces now`.
+
+    `run`: the dump run the snapshot's records were read from (09 §9.4
+    `origin_run`, else the Codex's), in which an origin naming its unit by
+    the origin's own key is resolved (09 §9.5, amended 2026-11-17).
 
     03 §3.2 wants the origin "re-fetched … and re-parsed with the Codex's
     toolchain". `origin_dir` is that origin as a local base — a fresh
@@ -5886,7 +5925,7 @@ def _reparse_from(codex, name: str, origin_dir):
     def reparse(uid: str, locator: str) -> bytes:
         if prepare is not None:
             prepare(locator)
-        local, path = plugin_io.local_locator(plugin, locator, base)
+        local, path = plugin_io.local_locator(plugin, locator, base, run=run)
         if not local.exists():
             raise FileNotFoundError(str(local))
         row = {"uid": uid, "native_id": uid.rsplit(":", 1)[-1], "path": path}
@@ -5917,7 +5956,7 @@ def _reparse_collection(codex, name: str, base):
 REPARSE_PAGE = 256
 
 
-def _reparse_many_from(codex, name: str, origin_dir):
+def _reparse_many_from(codex, name: str, origin_dir, *, run: str | None = None):
     """`Ctx.reparse_many` for a LOCAL origin: the comparisons of
     `records-vs-origin` in the parse pool's processes, in order (CLAUDE.md,
     multi-core — one wikidata check ran at 38 records/s on one core, ~27 h;
@@ -5938,7 +5977,7 @@ def _reparse_many_from(codex, name: str, origin_dir):
         def pages():
             page: list[dict] = []
             for uid, locator, line in items:
-                page.append({"uid": uid, "locator": locator, "line": line})
+                page.append({"uid": uid, "locator": locator, "line": line, "run": run})
                 if len(page) >= REPARSE_PAGE:
                     pending.append(page)
                     yield page
@@ -5986,7 +6025,7 @@ def _weigh_from(codex, origin_dir):
     return getattr(mo, "weigh", None)
 
 
-def _origin_unit_from(codex, name: str, origin_dir):
+def _origin_unit_from(codex, name: str, origin_dir, *, run: str | None = None):
     """`origin locator -> (the origin file it points into, its size in bytes)`,
     for `records-vs-origin`'s bound (app/hold/check.py: `ORIGIN_BYTES`). With
     the origin as a local base the size is the file's; a file that is not
@@ -5999,6 +6038,11 @@ def _origin_unit_from(codex, name: str, origin_dir):
     from app import collections as collections_mod, plugin_io
     base = Path(origin_dir)
     plugin = collections_mod.PLUGIN_REGISTRY[codex.plugin]
+    version = getattr(getattr(codex, "parser", None), "version", None)
+    if version is not None:
+        plugin = collections_mod.plugin_at(plugin, int(version)) or plugin
+    #: an origin resolved in a run is weighed in that run's files
+    in_run = {"run": run} if run else {}
 
     # ONE `stat` PER FILE, NOT PER RECORD. Measured on the node (pubmed,
     # 2026-09-20): 1,998,732 sampled records point into 651 files, and weighing
@@ -6015,7 +6059,7 @@ def _origin_unit_from(codex, name: str, origin_dir):
         pieces = locator.split(seg) if seg and seg in locator else [locator]
         key = (seg or "").join(p.partition(plugin_io.DEFAULT_MEMBER_SEP)[0] for p in pieces)
         if key not in weighed:
-            weighed[key] = plugin_io.origin_unit(plugin, locator, base)
+            weighed[key] = plugin_io.origin_unit(plugin, locator, base, **in_run)
         return weighed[key]
 
     return origin_unit
@@ -7557,6 +7601,12 @@ def build_parser() -> argparse.ArgumentParser:
                    help="say whether a derivation is due and why, and for a method that shows one "
                         "(gutenberg-editions) what it would change per tier; write nothing")
     p.set_defaults(fn=cmd_annotations_derive)
+    p = averbs.add_parser("claims", help="the claims the latest snapshot holds, one per line, pinned as its "
+                                         "records hold them: a claims file `create annotations` reads (a "
+                                         "re-created target's annotations collection is created from it)")
+    root_arg(p); p.add_argument("collection")
+    p.add_argument("--out", required=True, metavar="FILE", help="where the claims file is written")
+    p.set_defaults(fn=cmd_annotations_claims)
     p = averbs.add_parser("index", help="build the claim index on disk of a LARGE annotations collection's "
                                         "current snapshot (more than 250,000 claims): searched in place, "
                                         "never loaded into the web's memory. create, update and the worker "
@@ -7612,6 +7662,17 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--snapshot", dest="snapshot_id",
                    help="the snapshot the edges are written for (default: the one `snapshot create` takes)")
     p.set_defaults(fn=cmd_records_relations)
+
+    p = rverbs.add_parser("carry", help="a re-created collection's parts from its predecessor's snapshot, each "
+                                        "line's origin rewritten by the plugin, every other byte taken; then "
+                                        "its first snapshot (RULE 1; 02 §2.4 A1c)")
+    root_arg(p); p.add_argument("collection", help="the re-created collection (the target)")
+    p.add_argument("--from", dest="from_ref", required=True, metavar="COLLECTION",
+                   help="the predecessor whose latest snapshot's parts are carried")
+    p.add_argument("--workers", type=int, default=None,
+                   help="parts in parallel (default: the node profile's processes)")
+    p.add_argument("--dry-run", action="store_true", help="check and size it; write nothing")
+    p.set_defaults(fn=cmd_records_carry)
 
     p = rverbs.add_parser("relocate", help="every record's origin written again from the manifest by the "
                                            "build's own function; the parts that change rewritten by the "

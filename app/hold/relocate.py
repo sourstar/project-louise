@@ -64,12 +64,17 @@ class Result:
 _child: dict = {}
 
 
-def _init(name: str, plugin_id: str, corpus: str, manifest: str, record_line: int) -> None:
+def _init(name: str, plugin_id: str, corpus: str, manifest: str, record_line: int,
+          parser_version: int | None = None) -> None:
     from app import collections as collections_mod, parallel
     parallel.watch_parent()                  # the parent decides, while it lives
     for sig in (signal.SIGINT, signal.SIGTERM):
         signal.signal(sig, signal.SIG_IGN)   # the parent decides (module docstring)
     plugin = collections_mod.PLUGIN_REGISTRY[plugin_id]
+    # AT THE CODEX'S PARSER (collections.plugin_at): the origin is the one the
+    # build of this Codex writes — wikipedia's parser 5 its byte range, 6 its page
+    if parser_version is not None:
+        plugin = collections_mod.plugin_at(plugin, int(parser_version)) or plugin
     _child.update(plugin=plugin, corpus=Path(corpus), record_line=record_line,
                   con=sqlite3.connect(f"file:{manifest}?mode=ro", uri=True))
 
@@ -89,11 +94,11 @@ def _relocate_part(path: str, dry_run: bool) -> dict:
     total_chunks = pack_records.read_index(Path(path)).chunks
     changed, examples = 0, []
     for r in records:
-        row = con.execute("SELECT path FROM documents WHERE uid=?", (r["uid"],)).fetchone()
+        row = con.execute("SELECT path, native_id FROM documents WHERE uid=?", (r["uid"],)).fetchone()
         if row is None:
             raise CodexError(f"{r['uid']}: in part {path} but not in the manifest; "
                              f"its origin cannot be recomputed")
-        new = plugin_io.origin_locator(plugin, row[0], corpus)
+        new = plugin_io.record_origin(plugin, row[0], corpus, row[1])
         if new != r.get("origin"):
             if len(examples) < 3:
                 examples.append((r["uid"], r.get("origin"), new))
@@ -148,7 +153,7 @@ def relocate(root, ref: str, *, corpus_dir, workers: int | None = None,
     examples: list = []
     n = max(1, workers or config.available_cpus())
     init = (name, codex.plugin, str(corpus_dir), str(local.manifest_path),
-            int(getattr(codex, "record_line", 1) or 1))
+            int(getattr(codex, "record_line", 1) or 1), int(codex.parser.version))
     expected = {str(shard_dir / r[2]): r for r in rows}
     # SPAWNED, as the parse pool's children are (app/parallel.py): a fork of a
     # process holding threads and SQLite connections is undefined

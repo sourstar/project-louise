@@ -118,10 +118,9 @@ class Outcome:
 # what a collection's update is, read off its Codex and the node
 
 def hook_of(codex):
-    """The plugin's completion check (`update_completion`), or None."""
-    from app import collections as collections_mod
-    plugin = collections_mod.PLUGIN_REGISTRY.get(getattr(codex, "plugin", None))
-    return getattr(plugin, "update_completion", None)
+    """The plugin's completion check (`update_completion`) at the Codex's
+    parser, or None."""
+    return getattr(_plugin_at_codex(codex), "update_completion", None)
 
 
 def not_updated(codex) -> str | None:
@@ -141,16 +140,35 @@ def not_updated(codex) -> str | None:
     return None
 
 
-def origin_names_run(codex) -> bool:
-    """The plugin declares that each record's `origin` names the dated file
-    and byte range of its run (`origin_names_run`, wikipedia): a new run
-    re-issues every part. Until the operator decides the origin form
-    (collection-updates.md §6: A keep, B a page-id origin through the
-    multistream index, C an origin-only patch), the pass plans such a
-    collection (`--dry-run`) and never runs it."""
+def _plugin_at_codex(codex):
+    """The plugin parsing at the Codex's parser (`collections.plugin_at`):
+    what the collection's records were written by and are read with."""
     from app import collections as collections_mod
     plugin = collections_mod.PLUGIN_REGISTRY.get(getattr(codex, "plugin", None))
-    return bool(getattr(plugin, "origin_names_run", False))
+    version = getattr(getattr(codex, "parser", None), "version", None)
+    if plugin is None or version is None:
+        return plugin
+    return collections_mod.plugin_at(plugin, int(version)) or plugin
+
+
+def origin_names_run(codex) -> bool:
+    """The plugin, AT THE CODEX'S PARSER, declares that each record's
+    `origin` names the dated file and byte range of its run
+    (`origin_names_run`): a new run would re-issue every part. Wikipedia's
+    parser 5 does; its parser 6 names the page, resolved in the snapshot's
+    run through the origin's own index (operator, 2026-11-17, "Choice B";
+    collection-updates.md §6). The pass plans such a collection
+    (`--dry-run`) and never runs it: it is re-created at the parser that
+    names the page first."""
+    return bool(getattr(_plugin_at_codex(codex), "origin_names_run", False))
+
+
+def current_parser(codex) -> int | None:
+    """The plugin's own parser version, which a refused collection is
+    re-created at."""
+    from app import collections as collections_mod
+    plugin = collections_mod.PLUGIN_REGISTRY.get(getattr(codex, "plugin", None))
+    return int(plugin.PARSER_VERSION) if plugin is not None and hasattr(plugin, "PARSER_VERSION") else None
 
 
 def origin_form_wait(root, name: str, codex) -> str:
@@ -164,9 +182,11 @@ def origin_form_wait(root, name: str, codex) -> str:
         snap = None
     size = (f" ({name}: {len(snap.shards):,} parts, {sum(int(s.bytes) for s in snap.shards) / 2**30:.1f} GiB "
             f"to every peer)" if snap is not None else "")
+    now = current_parser(codex)
+    at = getattr(getattr(codex, "parser", None), "version", "?")
     return (f"not updated by this pass: every part would be re-issued{size} because each record's origin "
-            f"names the dated file and byte range; waiting on the operator's decision on the origin form "
-            f"(collection-updates.md)")
+            f"names the dated file and byte range (parser {at}); re-create at parser {now} first, whose "
+            f"origin names the page (collection-updates.md §6)")
 
 
 def held_slices(collection, spec) -> list[str]:
@@ -197,6 +217,48 @@ def next_period(root, name: str, codex) -> tuple[str, str, datetime] | None:
     cutoff = sn.cutoff_instant(nxt, cadence=codex.update.cadence, day=codex.update.day,
                                clock=codex.origin.clock)
     return sid, nxt, cutoff
+
+
+#: runs asked, newest first, for one that carries the collection's files
+#: (a hook's `skips`: wikidata's lexemes-only runs), before the pass waits
+RUNS_ASKED = 8
+
+
+def runs_before(runs, cutoff: datetime) -> list[str]:
+    """Every run before the cutoff instant, newest first (`run_before`'s rule)."""
+    day = cutoff.strftime("%Y%m%d")
+    return sorted((str(r) for r in runs if origin_run.RUN_RE.match(str(r)) and str(r) < day), reverse=True)
+
+
+def complete_run(ctx: _Ctx, runs, cutoff: datetime, slices) -> tuple[str, list]:
+    """The run the cutoff names and its completion records, or `_Waiting`.
+    The last run before the cutoff — and, where the hook says a run will
+    never carry the collection's files (`skips`: wikidata's lexemes-only
+    runs), the last one that does: such a run is passed over and the one
+    before it asked, at most RUNS_ASKED. A run that has not completed yet is
+    waited for, never passed over."""
+    skipped: list[str] = []
+    candidates = runs_before(runs, cutoff)
+    if not candidates:
+        raise _Waiting(f"{ctx.hook.origin} offers no run before {cutoff:%Y-%m-%d} yet (of {len(runs)} listed)")
+    skips = getattr(ctx.hook, "skips", None)
+    for run_ in candidates[:RUNS_ASKED]:
+        recs = ctx.hook.records(run_, slices)
+        bodies = ctx.fetch_records(ctx.spec, recs)
+        if callable(skips):
+            why = [w for w in (skips(r, bodies.get(r.rel_path), now=ctx.now) for r in recs) if w]
+            if recs and len(why) == len(recs):
+                skipped.append(why[0])
+                continue
+        pending = [v for v in (ctx.hook.verdict(r, bodies.get(r.rel_path)) for r in recs) if v]
+        if pending:
+            raise _Waiting(f"waiting for {ctx.hook.origin}'s {_day(run_)} run to complete: "
+                           + "; ".join(pending[:4]) + (f"; and {len(pending) - 4} more" if len(pending) > 4 else ""))
+        if skipped:
+            ctx.log(f"passed over: {'; '.join(skipped)}")
+        return run_, recs
+    raise _Waiting(f"no run of {ctx.hook.origin}'s before {cutoff:%Y-%m-%d} carries the collection's files "
+                   f"yet ({'; '.join(skipped[:3])})")
 
 
 def run_before(runs, cutoff: datetime) -> str | None:
@@ -419,20 +481,14 @@ def _due(ctx: _Ctx, mk: dict | None, *, write: bool = True) -> Outcome | None:
     started = _iso()
     try:
         runs = ctx.fetch_runs(ctx.spec)
-        run_ = run_before(runs, cutoff)
-        if run_ is None:
+        if run_before(runs, cutoff) is None:
             raise _Waiting(f"{ctx.hook.origin} offers no run before {cutoff:%Y-%m-%d} yet "
                            f"(of {len(runs)} listed)")
         slices = held_slices(ctx.collection, ctx.spec)
         if not slices:
             return Outcome("refused", "holds no slice its origin delivers whole, so there is nothing to "
                                       "fetch", EXIT_REFUSED, period=nxt)
-        recs = ctx.hook.records(run_, slices)
-        bodies = ctx.fetch_records(ctx.spec, recs)
-        pending = [v for v in (ctx.hook.verdict(r, bodies.get(r.rel_path)) for r in recs) if v]
-        if pending:
-            raise _Waiting(f"waiting for {ctx.hook.origin}'s {_day(run_)} run to complete: "
-                           + "; ".join(pending[:4]) + (f"; and {len(pending) - 4} more" if len(pending) > 4 else ""))
+        run_, recs = complete_run(ctx, runs, cutoff, slices)
     except _Waiting as e:
         if write:
             _write_due_waiting(ctx, mk, nxt, str(e))
@@ -506,9 +562,17 @@ def _fetch(ctx: _Ctx, mk: dict, started: str) -> dict:
     if plan.files_pending:
         raise _Waiting(f"{plan.files_pending} file(s) of run {mk['run']} still to fetch "
                        f"({got.get('waiting', 0)} waiting out a backoff)")
+    # THE ORIGIN'S OWN CHECKSUM, where the hook holds the fetched files to it
+    # (wikidata: the run's md5sums line of its dump). A mismatch is the FETCH
+    # failing, never the run: said, counted, fetched again at the next night
+    verify = getattr(ctx.hook, "verify", None)
+    if callable(verify):
+        bad = verify(mk["run"], held_slices(ctx.collection, ctx.spec), c.corpus_dir)
+        if bad:
+            raise _Failed("; ".join(bad[:3]))
     return _done(ctx, mk, "fetch", started, {
         "files": plan.files_total, "fetched": got.get("fetched", 0), "adopted": got.get("adopted", 0),
-        "bytes": plan.bytes_total})
+        "bytes": plan.bytes_total, "verified": bool(callable(verify))})
 
 
 # ---- run --------------------------------------------------------------------
@@ -814,7 +878,7 @@ def describe(root, name: str, codex=None) -> dict[str, Any]:
     if why is not None:
         return {"state": "not-updated", "says": f"not updated by cadence: {why}"}
     if origin_names_run(codex):
-        return {"state": "waits-decision", "says": origin_form_wait(root, name, codex)}
+        return {"state": "waits-recreation", "says": origin_form_wait(root, name, codex)}
     mk = update_state.read(root, name)
     period = next_period(root, name, codex)
     if mk is None:
@@ -949,8 +1013,8 @@ def next_step(root, name: str, codex, *, now: datetime | None = None) -> Next:
     if why is not None:
         return Next(None, why)
     if origin_names_run(codex):
-        return Next(None, "waits for the operator's decision on the origin form (each record's origin "
-                          "names the run)")
+        return Next(None, f"re-create at parser {current_parser(codex)} first (each record's origin names "
+                          f"the run)")
     mk = update_state.read(root, name)
     failure = (mk or {}).get("failure")
     if failure:

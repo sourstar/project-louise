@@ -31,11 +31,27 @@ def canonical_doc(plugin, row) -> CanonicalDoc:
 DEFAULT_MEMBER_SEP = "#"
 
 
+def record_origin(plugin, locator: str, base, native_id) -> str:
+    """09 §9.5's `origin` a RECORD carries for a manifest row (its locator
+    and its native id): `origin_locator`'s, unless the plugin names a unit
+    by the origin's own stable key rather than by its bytes (09 §9.5,
+    amended 2026-11-17: wikipedia's page from parser 6; app/keyed_origin.py)
+    — it says so through its optional `origin_of(locator, native_id, base)`,
+    read like LOCATOR_SEP: the key may be in the document's id and not in
+    the locator. What the records build writes and every comparison with a
+    written record computes."""
+    of = getattr(plugin, "origin_of", None)
+    if of is not None:
+        return of(locator, native_id, base)
+    return origin_locator(plugin, locator, base)
+
+
 def origin_locator(plugin, locator: str, base) -> str:
-    """09 §9.5's `origin` for `locator` (see `_origin_one`). A unit in
-    several PIECES — an archive article whose rows straddle two shards
-    (wikipedia's layer 1) — locates each piece in its own file, joined by
-    the plugin's `LOCATOR_SEGMENT_SEP`."""
+    """09 §9.5's `origin` for `locator` (see `_origin_one`), by the
+    platform's own reading: the path relative to the base, `#`, the
+    plugin's member. A unit in several PIECES — an archive article whose
+    rows straddle two shards (wikipedia's layer 1) — locates each piece in
+    its own file, joined by the plugin's `LOCATOR_SEGMENT_SEP`."""
     seg = getattr(plugin, "LOCATOR_SEGMENT_SEP", None)
     text = str(locator)
     if seg and seg in text:
@@ -166,9 +182,23 @@ def relative_to_base(p: Path, base: Path) -> Path | None:
     return None
 
 
-def local_locator(plugin, origin: str, base) -> tuple[Path, str]:
+def local_locator(plugin, origin: str, base, *, run: str | None = None) -> tuple[Path, str]:
     """`origin_locator` read back, piece by piece where the unit has
-    several; the path returned is the first piece's file."""
+    several; the path returned is the first piece's file.
+
+    An origin naming a unit by the origin's own key is RESOLVED IN A RUN
+    (09 §9.5, amended 2026-11-17): `run` is the one the record's snapshot
+    names (09 §9.4 `origin_run`, else the Codex's), and the plugin's
+    optional `local_of(origin, base, run)` finds the unit through the run's
+    own index. A plugin without it reads `origin` as below."""
+    of = getattr(plugin, "local_of", None)
+    if of is not None:
+        return of(origin, base, run)
+    return generic_local(plugin, origin, base)
+
+
+def generic_local(plugin, origin: str, base) -> tuple[Path, str]:
+    """`local_locator` by the platform's own reading of 09 §9.5."""
     seg = getattr(plugin, "LOCATOR_SEGMENT_SEP", None)
     if seg and seg in origin:
         pieces = [_local_one(plugin, part, base) for part in origin.split(seg)]
@@ -192,19 +222,26 @@ def _local_one(plugin, origin: str, base) -> tuple[Path, str]:
     return local, str(local) + (f"{sep}{member}" if member else "")
 
 
-def origin_unit(plugin, origin: str, base) -> tuple[str, int | None]:
+def origin_unit(plugin, origin: str, base, *, run: str | None = None) -> tuple[str, int | None]:
     """`(the origin unit a locator points into, its size in bytes)` — the FILE
     part of the locator, never the member after `#`: what has to be fetched to
     answer for the record. A unit of several pieces is all of them, and its
     size their sum. None where a piece is not under `base`: nothing to weigh.
 
     For `records-vs-origin`'s bound (app/hold/check.py): a check reads a
-    seeded sample of these, and no more of the origin than the bound allows."""
+    seeded sample of these, and no more of the origin than the bound allows.
+    An origin resolved in a run (`local_locator`) is weighed by the files of
+    that run, through the plugin's optional `origin_files(origin, base, run)`,
+    which reads no index."""
     seg = getattr(plugin, "LOCATOR_SEGMENT_SEP", None)
-    parts = origin.split(seg) if seg and seg in origin else [origin]
+    files_of = getattr(plugin, "origin_files", None)
+    if files_of is not None:
+        locals_ = list(files_of(origin, base, run))
+    else:
+        parts = origin.split(seg) if seg and seg in origin else [origin]
+        locals_ = [_local_one(plugin, part, base)[0] for part in parts]
     names, total = [], 0
-    for part in parts:
-        local, _ = _local_one(plugin, part, base)
+    for local in locals_:
         try:
             names.append(local.relative_to(base).as_posix())
         except ValueError:

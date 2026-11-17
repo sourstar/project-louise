@@ -416,6 +416,12 @@ def held_or_parsed(collection, plugin, row: dict) -> tuple[dict, int, bytes, dic
     if at is not None:
         line = records.read_record_at(os.path.join(row[HELD_DIR], at["path"]), int(at["frame"]),
                                       int(at["line"]))
+        # A LINE ANOTHER PARSER WROTE, whose line the build's parser writes
+        # with its `origin` alone rewritten (`carried_origin`: wikipedia 5 ->
+        # 6, the page in place of the byte range; 02 §2.4 A1c): that line,
+        # never parsed. Otherwise the line as held, and `moved` says whether
+        # the build's parser writes it differently (`line_moved_since`)
+        line, moved = _from_parser(plugin, row.get(HELD_FROM), line)
         # A HELD LINE IS TAKEN UNLESS THE MANIFEST PROVES ITS UNIT CHANGED
         # (2026-10-31): wikipedia's archive-layer lines were cut from
         # locators without the page_props segment; their rows now name the
@@ -426,20 +432,17 @@ def held_or_parsed(collection, plugin, row: dict) -> tuple[dict, int, bytes, dic
         src = row[HELD_SRC] if HELD_SRC in row else _ro(str(collection.manifest_path)).execute(
             "SELECT uid, native_id, path, lang, txt_hash FROM documents WHERE uid=?",
             (row["uid"],)).fetchone()
+        # THE SAME BYTES AT ANOTHER LOCATOR — a page of a dated dump's next
+        # run — needs nothing here since wikipedia's parser 6 (09 §9.5 amended
+        # 2026-11-17, "Choice B"): the line's `origin` names the page, not its
+        # bytes, so the row's origin IS the line's and the line is taken as it
+        # is. Parser 5's lines named the run's byte range and were carried
+        # here with the row's `origin` until then (ORIGIN_MOVES_ALONE, retired
+        # from the build); an update of a collection on 5 is refused
+        # (app/hold/update.py `origin_names_run`)
         if (src is None or not src["txt_hash"] or src["txt_hash"] == line.get("origin_hash")) \
-                and not _parser_moved(plugin, row.get(HELD_FROM), line):
-            here = _moved_origin(collection, plugin, src, line)
-            if here is None:
-                return _record_from_line(collection, line)
-            if getattr(plugin, "ORIGIN_MOVES_ALONE", False) and src is not None and src["txt_hash"] \
-                    and src["txt_hash"] == line.get("origin_hash"):
-                # THE SAME BYTES AT ANOTHER LOCATOR, the next run of a dated
-                # dump (02 §2.7, amended 2026-11-17): the plugin declares its
-                # parse reads the locator for nothing a run moves, so the line
-                # a parse would write is the held line with the row's
-                # `origin` — taken so, never parsed (RULE 1; the test parses
-                # it and compares the bytes, tests/hold/test_update_pass.py)
-                return _record_from_line(collection, {**line, "origin": here})
+                and not moved and _moved_origin(collection, plugin, src, line) is None:
+            return _record_from_line(collection, line)
     if src is None:
         src = row[HELD_SRC] if HELD_SRC in row else _ro(str(collection.manifest_path)).execute(
             "SELECT uid, native_id, path, lang FROM documents WHERE uid=?", (row["uid"],)).fetchone()
@@ -454,10 +457,27 @@ def _parser_moved(plugin, parser_from, line: dict) -> bool:
     (`line_moved_since`): it is parsed again, as a build by the book
     would. A plugin that declares no rule has every line parsed — and
     `records build` refuses such a source before it gets here."""
+    return _from_parser(plugin, parser_from, line)[1]
+
+
+def _from_parser(plugin, parser_from, line: dict) -> tuple[dict, bool]:
+    """`(the line the build's parser writes for a held line parser
+    `parser_from` wrote, whether it must be parsed instead)`. The same
+    parser: the line, taken. A plugin that writes the line with its `origin`
+    alone rewritten (`carried_origin(origin, native_id, version)`, a pure
+    function of the line; wikipedia 5 -> 6): the rewritten line, taken
+    (02 §2.4 A1c, 02 §2.7 amended 2026-11-17). Else the line, parsed again
+    where `line_moved_since` says it moved, or where the plugin declares no
+    rule at all."""
     if parser_from is None or int(parser_from) == int(getattr(plugin, "PARSER_VERSION", -1)):
-        return False
+        return line, False
+    carry = getattr(plugin, "carried_origin", None)
+    if callable(carry) and line.get("origin"):
+        got = carry(line["origin"], line.get("native_id"), int(parser_from))
+        if got is not None:
+            return {**line, "origin": got}, False
     moved = getattr(plugin, "line_moved_since", None)
-    return True if not callable(moved) else bool(moved(line, int(parser_from)))
+    return line, (True if not callable(moved) else bool(moved(line, int(parser_from))))
 
 
 def _origin_moved(collection, plugin, src, line: dict) -> bool:
@@ -476,7 +496,9 @@ def _moved_origin(collection, plugin, src, line: dict) -> str | None:
     if src is None or not src["path"] or not line.get("origin"):
         return None
     try:
-        here = plugin_io.origin_locator(plugin, src["path"], collection.corpus_dir)
+        # a Row's `in` reads its values, never its keys
+        nid = src["native_id"] if "native_id" in src.keys() else None  # noqa: SIM118
+        here = plugin_io.record_origin(plugin, src["path"], collection.corpus_dir, nid)
     except (plugin_io.OriginOutsideBase, ValueError, OSError):
         return None
     return here if here != line["origin"] else None
@@ -837,8 +859,8 @@ def _record_of(collection, plugin, row) -> tuple[dict, int, bytes, dict[str, str
         # invariant 11 — `origin_hash` below is the hash of the bytes this
         # locates — and what makes `records-vs-origin` a check a stranger
         # can run at all.
-        "origin": plugin_io.origin_locator(plugin, row["path"],
-                                           collection.corpus_dir),
+        "origin": plugin_io.record_origin(plugin, row["path"],
+                                          collection.corpus_dir, row["native_id"]),
         "content_hash": records.content_hash(doc.title or "", sections),
         "origin_hash": doc.raw_hash,
     }

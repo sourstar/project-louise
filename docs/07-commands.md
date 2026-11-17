@@ -164,6 +164,9 @@ louise hold
                                                                        network's catalogue, 04 §4.7, and every held collection is listed)
               show <collection>                                        Codex, snapshots, holdings, trust, certification, vitality, configuration, and the copy's state — refused, quarantine or in use — with every reason
                                                                        — and its stages as `node show` counts them, with what holds each (`status`, one status, added 2026-11-07)
+  annotations claims <collection> --out FILE                    the claims the latest snapshot holds, one per line, each pinned as its record holds it — a claims
+                                                                       file `create annotations` reads: a re-created target's annotations collection is created from it
+                                                                       against the new target, every end read there and every pin checked (amended 2026-11-17)
   annotations update <collection> [--claims FILE] [--against TARGET=SNAPSHOT …] [--snapshot ID] [--dry-run] [--whole]
                                                                        (amended 2026-10-23, operator: updated, not replaced; 02 §2.10) the next snapshot of the SAME
                                                                        annotations collection: the claims checked against each target's newest snapshot (or
@@ -202,6 +205,14 @@ louise hold
                                                                        are written for (default: the one `snapshot create` takes); `snapshot create` refuses any other.
                                                                        Resumable by part; the node's pool (added 2026-11-11, operator: A)
               validation <collection>                                  validation.json written from the Codex's plan (03 §3.2)
+              carry <collection> --from C [--workers N] [--dry-run]
+                                                                       a re-created collection's parts from C's latest snapshot, each line's `origin` rewritten by the
+                                                                       plugin (`carried_origin`) and every other byte taken, written by the build's framing — byte for
+                                                                       byte a build by the book; each part held to C's (uids, records_root, counts) before it takes its
+                                                                       place; then its first snapshot under C's id, signed where this peer has a key, and the proof that
+                                                                       `dev carry --reconcile` reads instead of both snapshots. Refused (exit 2) unless only the parser
+                                                                       and its image differ and C's parts are cut as a build by the book cuts them. Resumable by part,
+                                                                       the node's pool (amended 2026-11-17: wikipedia parser 5 → 6, the origin by page)
               relocate <collection> --corpus DIR [--workers N] [--dry-run]
                                                                        every record's `origin` written again from the manifest by the build's own function, the parts
                                                                        that change rewritten by the build's own writer — byte for byte a rebuild (RULE 1); refused while

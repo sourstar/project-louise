@@ -483,7 +483,8 @@ def _one(kind: str, collection, row: dict):
         # the line that travels back is a word, not the record
         from .hold.check import verdict
         from .pack import build as pack_build, records as pack_records
-        local, path = plugin_io.local_locator(plugin, row["locator"], collection.corpus_dir)
+        local, path = plugin_io.local_locator(plugin, row["locator"], collection.corpus_dir,
+                                              run=row.get("run"))
         if not local.exists():
             raise FileNotFoundError(str(local))
         record, _layer, _blob, _plates = pack_build._record_of(

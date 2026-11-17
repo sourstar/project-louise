@@ -57,7 +57,8 @@ def main(argv: list[str]) -> int:
     snapshot = snap.load(snaps[-1])
     seed = bytes.fromhex(a.seed)
     shards = check.sampled_shards(codex, snapshot, "records-vs-origin", seed=seed, override=a.sample)
-    reparse = louise._reparse_from(codex, name, a.origin)
+    from app.hold import origin_run
+    reparse = louise._reparse_from(codex, name, a.origin, run=origin_run.run_of(codex, snapshot))
     lines: dict[str, list[str]] = {}
     errors: dict[str, str] = {}
     for s in shards:

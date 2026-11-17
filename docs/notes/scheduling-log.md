@@ -2974,3 +2974,23 @@ round after a start costs 2.4 ms and 4.5 ms (the graph, the listings and each co
 On the node, to fill in: the round's time from the worker log, and the first cascade, wikipedia's next published
 snapshot into wikipedia-articles. Record the method and update wall times and the peak RSS of each child, as
 annotation-methods.md asks.
+
+## 2026-11-17 — the whole re-check of a hand-made annotations collection on the node: the BEFORE of the cascade's re-checks
+
+**Scenario.** `louise hold annotations update wikipedia-articles --dry-run` on the live tree b747b20 (#729
+deployed). This is the whole re-check the cascade runs when wikipedia publishes past the claims' pin
+(collection-updates.md §4). Measured by München at 06:47Z in a quiet window with `/usr/bin/time -v`. Every
+collection was resumed, and wikipedia's embedding was idle (its embed mode had just been set to lazy), so the card
+competed with nothing.
+
+| what | value |
+|---|---|
+| claims / ends | 12,326,519 / 24,653,038 |
+| wall | 397.5 s (6 m 38 s), rc 0 |
+| CPU | 2,294.5 s user + 292.2 s sys, about 6.5 cores on average |
+| peak RSS, the largest child | 3,466 MiB |
+| peak workspace | 8.2 GiB on ssd4 (/data), 0.2 GiB on ssd3, 0 on tank; free space sampled every 10 s |
+
+The model in collection-updates.md §4 said ~19 min on 3 processes, so the node is about 3× faster, at ~6.5 cores.
+This is the BEFORE. The AFTER is the first real re-check that the cascade starts: wall, peak RSS and workspace from
+the worker log and `woken.json`. The full output is on the node at /mnt/ssd3/louise-build/quiet-run/dry.out.
