@@ -273,3 +273,38 @@ def test_wikipedia_articles_follows_the_new_collection_and_the_cascade_sees_it(n
     assert decl.sources["wikipedia-articles.next"] == {"wikipedia.next": "annotates"}
     assert "wikipedia-articles.next" in decl.dependents("wikipedia.next")
     assert decl.declaring(w6.collection_id) == ["wikipedia-articles.next"]
+
+
+def test_a_part_cut_by_content_is_held_to_the_rule_as_it_is_carried(tmp_path):
+    """Parts cut by content (02 §2.2, wikidata's) are a pure function of the
+    records: a carried part must end where the rule ends it and nowhere
+    before, or a build by the book would cut it elsewhere."""
+    from app.pack import slicing
+    rule = (2, 6, 4)                                  # min, max, shard_records
+
+    def rec(pid: int) -> dict:
+        nid = str(native_id_of("tr", pid))
+        return {"uid": f"wikipedia:{nid}", "native_id": nid, "lang": "tr", "title": f"P{pid}", "creators": [],
+                "date": None, "subjects": [], "keys": [], "sections": [["", f"text {pid}"]], "extra": {},
+                "origin": f"trwiki/{RUN}/trwiki-{RUN}-pages-articles-multistream.xml.bz2#{pid}::{pid + 9}",
+                "content_hash": f"{pid:032x}", "origin_hash": f"{pid + 1:032x}"}
+    parts, cur = [], []
+    for pid in range(1, 200):
+        cur.append(rec(pid))
+        if slicing.ends_part(cur[-1]["uid"], len(cur), rule):
+            parts.append(cur)
+            cur = []
+    if cur:
+        parts.append(cur)
+    assert len(parts) > 3
+
+    def carry(records, n, last):
+        src = tmp_path / f"src{n}.jsonl.zst"
+        pack_records.write_shard(src, records)
+        return line_carry.carry_part(str(src), str(tmp_path / f"dst{n}.carry"), "wikipedia", 6, 5, rule, last)
+    for n, p in enumerate(parts):
+        assert carry(p, n, n == len(parts) - 1)["records"] == len(p)
+    with pytest.raises(line_carry.CarryRefused, match="ends a part by the content rule"):
+        carry(parts[0] + parts[1], 90, False)
+    with pytest.raises(line_carry.CarryRefused, match="does not end a part"):
+        carry(parts[0][:-1], 91, False)

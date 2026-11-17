@@ -188,4 +188,4 @@ The next monthly run re-issues only the parts whose pages changed. An unchanged 
 byte-identical (test `test_the_whole_update`). Read the first update's step timings off `state/update.json`
 into the scheduling log, with the parts re-issued against 26,551.
 
-**Wikidata is next.** It has the same problem, and its JSON dump has no index (collection-updates.md §6).
+**Wikidata** takes the same mechanism, its entity table built by the node: [wikidata-entity-origin.md](wikidata-entity-origin.md).

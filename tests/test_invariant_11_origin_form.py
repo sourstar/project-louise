@@ -79,3 +79,12 @@ def test_wikipedias_note_says_how_a_unit_is_located_since_parser_6():
     note = " ".join(origin_form_note(source.__doc__ or "").split())
     for words in ("BY ITS PAGE", "page id", "origin_run", "multistream index", "pp_page"):
         assert words in note, words
+
+
+def test_wikidatas_note_says_how_a_unit_is_located_since_parser_3():
+    """The same, for the entity: its id, the run, and the table the node
+    builds since the dump publishes no index (09 §9.5 amended 2026-11-17)."""
+    from app.plugins.wikidata import source
+    note = " ".join(origin_form_note(source.__doc__ or "").split())
+    for words in ("BY ITS ENTITY ID", "origin_run", "no index", "entity table"):
+        assert words in note, words
