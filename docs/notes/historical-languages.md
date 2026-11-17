@@ -192,3 +192,31 @@ stay at answer time.
   gone). The badge names the method: "by its text", "by Wikidata", "by
   hand", "by this passage". C also points at a modern version in the same
   language ("a modern version of it is source [k]").
+
+## The glossary (option E): what is decided (2026-11-17)
+
+Asked by the louise-ocr session (scan-to-EPUB OCR for Italian books
+1200–1800, a separate container and repo), through München.
+
+- **Not chosen, not built.** The operator chose A, B, C on 2026-11-16; E
+  ("glossary pinned in the prompt") was left out. No glossary exists in
+  Louise, and no format was decided. The reader entry per (ISO 639
+  language, period) has a slot for one, empty.
+- **Sources, as researched (table above), none adopted:**
+  - MIDIA's lexicon: 571,779 historical form → modern lemma pairs,
+    1300–1500. Availability and licence unverified.
+  - TLIO: before 1400, online only, no download.
+  - Crusca's five Vocabolario editions: 1612–1923, online only.
+  - Tommaseo-Bellini: 1800s, all rights reserved, not usable.
+- **What binds any glossary Louise uses**, whoever supplies it:
+  - invariant 9: a yellow- or red-class source needs a recorded
+    acknowledgement (timestamp plus sha256 of the terms text, byte-exact)
+    before its data is used. No terms means it is not usable, which is why
+    ita2medieval is out;
+  - a glossary is a READING aid for the chat model at answer time, never a
+    fact of a record: a collection holds only what its corpus says;
+  - its origin and licence are recorded beside it, as for any source.
+- **For OCR post-correction** (louise-ocr's use), nothing is decided here.
+  Whatever the operator obtains from the people they are contacting is
+  that project's choice. If Louise later reads the same glossary, the three
+  rules above apply.
