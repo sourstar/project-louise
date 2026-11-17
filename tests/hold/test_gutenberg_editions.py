@@ -797,3 +797,25 @@ def test_a_book_is_read_as_the_measurement_wrote_it(monkeypatch, capsys):
         mine = ge.book_of(r)
         assert {k: m[k] for k in keys if k in m} == mine
     assert ge.book_of(long)["wiki"] == [EN + "Hamlet", EN + "Ham(let)"] and len(ge.book_of(long)["title"]) == 200
+
+
+def test_a_withdrawn_claim_says_whether_its_books_are_still_one_work():
+    """München's dry run, 2026-11-17: 11 same-title and 3 Wikidata claims
+    withdrawn, and whether each pair was lost or is joined another way could
+    not be read off the report. Now each withdrawn work claim says it."""
+    def claim(s, o, method):
+        return {"type": "same-work", "subject": f"gutenberg:{s}", "object": f"gutenberg:{o}", "method": method}
+    titles = dict(gutenberg_titles.METHOD)
+    held = [ge.Held(claim(2, 1, titles), 0, None, ge.T_TITLES),      # volumes, by title
+            ge.Held(claim(4, 3, ge.WIKIDATA), 1, None, ge.T_WIKIDATA)]
+    made = [claim(1, 9, ge.WIKIDATA), claim(2, 9, ge.WIKIDATA)]       # now one Wikidata star: 1, 2 and 9
+    d = ge.Derivation([(ge.T_WIKIDATA, c, ge._dumps(c)) for c in made], held,
+                      {ge.T_WIKIDATA: True, ge.T_TITLES: True, ge.T_STAGE: False}, {},
+                      frozenset(f"gutenberg:{n}" for n in (1, 2, 3, 4, 9)), {})
+    tiers = ge.report(d)["tiers"]
+    t = tiers[ge.T_TITLES]
+    assert t["withdrawn"] == 1 and t["withdrawn_still_one_work"] == 1
+    assert t["examples"]["withdrawn"][0]["now"] == "still one work through the claims made now"
+    w = tiers[ge.T_WIKIDATA]
+    assert w["withdrawn"] == 1 and "withdrawn_still_one_work" not in w
+    assert w["examples"]["withdrawn"][0]["now"] == "apart: no claim made now joins the two"
