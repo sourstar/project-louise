@@ -326,13 +326,27 @@ operator's word.
     pool's processes and in 3.1 / 2.9 / 2.8 s on threads, which it uses. The sort and the write, one each,
     are most of it. The table is 5.8 bytes an entity, about 690 MB for 118 M. A lookup takes 0.1 ms cold
     and ~50 µs warm.
-  - **The update:** wikidata's monthly update is still refused, by its own reason. The origin's signal that
-    an entity dump's run is complete is not verified from here (no network), and none is guessed
-    (`update_completion_unverified`). The candidates, to be probed from the node:
-    1. the run's `-md5sums.txt` / `-sha1sums.txt` listing the dump, if they are written only once it is
-       whole;
-    2. a `dumpstatus.json` under `entities/<date>/`, which the XML runs publish;
-    3. the size against the listing's, which is no completion signal.
+  - **The update (decided from the origin's own files, the coordinator's read-only probe of
+    `dumps.wikimedia.org/wikidatawiki/entities/`, 2026-11-17).**
+    - What the probe found: an entity run publishes no `dumpstatus.json`, and `20261109/dumpstatus.json`
+      gives 404. Its `wikidata-<R>-md5sums.txt` and `-sha1sums.txt` are rewritten as each file finishes, and
+      list only the finished files, in finishing order. 20261109 wrote `all.json.gz` at 01:29,
+      `all.json.bz2` at 06:01 and the BETA nt/ttl up to 21:40, and the sums at 21:48, listing all six.
+      20261111 lists lexemes and truthy only; that run has no `all.json` at all. Not every run carries the
+      full dump (recent runs: 20261102, 04, 06, 09, 11, 13).
+    - **Complete** means the run's md5sums list `wikidata-<R>-all.json.bz2`
+      (`app/plugins/wikidata/completion.py`, `Md5Sums`). It is fetched through `app/acquire/completion.py`:
+      the budget, the origin's User-Agent, one request at a time.
+    - **Waiting:** a 404, an empty sums file, or `all.json.gz` listed without the `.bz2`. A run listing the
+      `.gz` without the `.bz2` more than 3 days after it began is taken as never bringing it.
+    - **Passed over:** a run whose sums list finished files and none of the full dump never carries it
+      (`skips`). The run the cutoff names is then the last run begun before the cutoff whose sums list
+      `all.json.bz2`. The pass asks at most 8 runs, newest first (`update.complete_run`, generic; a hook
+      without `skips`, wikipedia's, asks the newest alone, as before).
+    - **After the fetch** the dump's md5 is held to that line, the origin's own checksum (`verify`). A
+      mismatch is the FETCH failing, never the run: the step fails (counted, tried again the next night),
+      and the file is removed, its size named, so it is fetched again rather than adopted.
+    - The refusal is lifted at parser 3.
     `origin_names_run` is True at parser 2 and False at 3.
   - **The node's steps:** [wikidata-entity-origin.md](wikidata-entity-origin.md).
 - **Found on the way:**

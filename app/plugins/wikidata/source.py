@@ -60,6 +60,7 @@ from app.backend import OriginForm, Template
 from app.plugins.base import (CanonicalDoc, DiscoverState, DocRef, Erasure, LicenseClass, Modality, Mutability,
                               PROTOCOL_VERSION, PrivacyClass, RawDoc, UnindexableDocument)
 from app.keyed_origin import KeyedOrigin
+from app.plugins.wikidata import completion as completion_mod
 from app.plugins.wikidata import entities, ids, names, pack, textify
 
 _LOCATOR_SEP = "#"
@@ -186,17 +187,11 @@ class WikidataSource:
     origin_key = KeyedOrigin(key="entity id", built=True, since=3,
                              index="the run's entity table, built by the node from the run's pack in one "
                                    "pass (entity id -> the line's ordinal)")
-    #: THE UPDATE BY CADENCE needs the origin's own word that a run is
-    #: complete (app/hold/update.py `update_completion`). For the JSON entity
-    #: dumps it is not settled from here, and none is guessed: the pass
-    #: refuses wikidata with this reason (`not_updated`)
-    update_completion_unverified = (
-        "the origin's own signal that an entity dump's run is complete is not verified yet. Candidates, to "
-        "be probed from the node: (1) the run's `wikidata-<date>-md5sums.txt` and `-sha1sums.txt` listing "
-        "`wikidata-<date>-all.json.bz2`, if Wikimedia writes them only once the dump is whole; (2) a "
-        "`dumpstatus.json` in `wikidatawiki/entities/<date>/`, which the XML runs publish and the entity "
-        "runs are not known to; (3) the dump's size against the listing's, which is no completion signal. "
-        "The run's file in the directory listing alone is not one either (collection-updates.md §6)")
+    #: THE UPDATE BY CADENCE (app/hold/update.py; collection-updates.md §6):
+    #: the origin's own word that a run is complete — the run's md5sums listing
+    #: `wikidata-<R>-all.json.bz2`, a run carrying no full dump passed over, and
+    #: the fetched dump held to that line (completion.py; probed 2026-11-17)
+    update_completion = completion_mod.Md5Sums()
     #: 06 §6.2: the origin keeps its history — every entity's earlier revisions stay fetchable by revision id —
     #: so a superseded part version stays checkable and is kept (02 §2.3).
     origin_versions = "history"

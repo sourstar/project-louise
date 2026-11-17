@@ -29,9 +29,10 @@ labels.
 | annotations collections that ANNOTATE wikidata | created again from their own claims against the new collection, every target named (step 7) |
 | methods with wikidata among their INPUTS (gutenberg-editions) | nothing: an input is a plugin, so the new collection is read (cascade.py) |
 
-**The monthly update stays refused**, by its own reason. The origin's signal that an entity dump's run is
-complete is not verified (collection-updates.md §6 names the candidates). The first probe from the node
-settles it, and it is the operator's to approve before the hook is written.
+**The monthly update runs at parser 3** (collection-updates.md §6). A run is complete when its
+`wikidata-<R>-md5sums.txt` lists `wikidata-<R>-all.json.bz2`. A run carrying no full dump, lexemes only, is
+passed over for the one before it. The fetched dump is held to that md5 line, and a mismatch fails the fetch
+(the file removed, fetched again the next night). At parser 2 the pass refuses: re-create at parser 3 first.
 
 ## Sizes and times
 
@@ -135,5 +136,5 @@ louise hold collection rename wikidata.next wikidata
 louise hold collection rename <c>.next <c>
 louise node resume wikidata
 louise hold config apply wikidata --set embed=<the mode it had>
-louise hold collection update wikidata --dry-run   # refused, naming the unverified completion signal (by design)
+louise hold collection update wikidata --dry-run   # planned: the run the next cutoff names, from its md5sums
 ```

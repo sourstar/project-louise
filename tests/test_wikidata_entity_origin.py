@@ -157,11 +157,13 @@ def test_parser_2s_line_carried_is_a_parse_at_parser_3_line_for_line_and_part_fo
         assert _record(V3, {**row, "path": locator}, tmp_path) == line
 
 
-def test_the_update_pass_refuses_wikidata_until_its_completion_signal_is_verified():
+def test_the_update_pass_takes_wikidata_at_parser_3_and_refuses_it_at_2():
+    """Its completion check is the run's md5sums (tests/test_wikidata_completion.py):
+    at parser 3, whose origin names the entity, the pass runs it; at 2, whose
+    origin names the run, it is refused until re-created."""
     from app.hold import update
     codex = SimpleNamespace(plugin="wikidata", parser=SimpleNamespace(version=3), update=SimpleNamespace(),
                             origin=SimpleNamespace(spec={"delta": {"mode": "dated-dumps"}}))
-    why = update.not_updated(codex)
-    assert why is not None and "not verified yet" in why and "md5sums" in why
+    assert update.not_updated(codex) is None
     assert not update.origin_names_run(codex)
     assert update.origin_names_run(SimpleNamespace(plugin="wikidata", parser=SimpleNamespace(version=2)))
