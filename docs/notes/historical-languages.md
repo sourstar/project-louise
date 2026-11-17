@@ -107,6 +107,17 @@ snapshot, the licence and the attribution. Where: built by a script on
 the node's side into louise-ocr's data directory (my container is
 ephemeral and not reachable from there); a few hours' work once chosen.
 
+**Built (2026-11-17): `tools/lexicon/wikisource_period_freq.py`**, in
+louise-ocr's format (`form	count	century	source`, UTF-8; lower-cased, ſ as
+s, accents and elision kept; century = its first year), with `LICENCE`
+(the CC BY-SA 3.0 legal code, byte-exact, sha256 3f941b3b…f72f) and
+`SOURCES` beside it. 10 s on 8 cores; 602,396 rows for 1200–1899 from the
+20231201.it dump (sha256 of the TSV f46d3ffd…056f). The data is not in the
+repository: the node builds it (`python -m tools.lexicon.wikisource_period_freq
+it.parquet --out /mnt/ssd3/louise-ocr/lexicon/it-old/`). TLIO's forms
+cannot travel this way: this repository is public and TLIO's use is
+non-commercial and unshared until the operator records its licence.
+
 **(3) BERToldo on CPU.** Eight models (Palmero Aprosio, Menini, Tonelli,
 LT4HALA 2022): BERT-base architecture (110M parameters), 128-token
 window; trained on Wikisource and Liberliber, split till1500,
