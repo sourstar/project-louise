@@ -186,10 +186,11 @@ def test_the_last_stream_parses_despite_the_footer_stream(dump):
 
 def test_origin_is_the_dump_and_its_two_field_member_and_reads_back(dump):
     ref = dump["refs"]["3"]
-    origin = plugin_io.origin_locator(SOURCE, ref.locator, dump["root"])
+    v5 = SOURCE.at_parser_version(5)              # the byte-range origin, parser 5's
+    origin = plugin_io.record_origin(v5, ref.locator, dump["root"], ref.native_id)
     _, start, end = wsrc.split_locator(ref.locator)
     assert origin == f"itwiki-20260801-pages-articles-multistream.xml.bz2#{start}::{end}"
-    local, locator = plugin_io.local_locator(SOURCE, origin, dump["root"])
+    local, locator = plugin_io.local_locator(v5, origin, dump["root"])
     assert local.is_file() and locator == ref.locator
 
 

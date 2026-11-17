@@ -964,7 +964,19 @@ again from the origin, every other is taken byte for byte, and the image
 differs with the parser and nothing else does (`records build
 --records-from`, `hold.records.parser_carried`). A parse would give the same
 parts. `records-vs-origin` under the new image shows it before use, as for
-any build. A plugin that names no such lines is parsed by the book. And a
+any build. A plugin that names no such lines is parsed by the book.
+Where the new parser writes EVERY line as the old one did but for its
+`origin`, and the new origin is a pure function of the old line, the plugin
+says so (`carried_origin`). Wikipedia's parser 6 is the case (*amended
+2026-11-17*, operator: "Choice B"): it names the page where parser 5 named
+the dated file and byte range (09 §9.5). The build then takes each line
+with that one value rewritten. `hold records carry` (app/hold/line_carry.py)
+does the same without the build, rewriting the value in the bytes and
+writing each part with the build's framing. It holds each part to the
+source's before it takes its place: the same uids in order, the same
+`records_root`, the same counts. That proof is what `dev carry --reconcile`
+reads instead of both snapshots. The parts are a build's by the book, byte
+for byte, and so is the snapshot. And a
 plugin keeps the parser version a live Codex names (`at_parser_version`,
 `collections.plugin_at`), so the deploy of a new parser never parses that
 collection differently from its own records before it is re-created.

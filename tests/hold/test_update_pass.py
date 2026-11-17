@@ -82,19 +82,28 @@ class Node:
 
 @pytest.fixture
 def node(isolated_config, data_dir, config_dir, monkeypatch, tmp_path):
+    """wikipedia at the plugin's parser (6: each origin names its page, so the
+    pass runs; operator, 2026-11-17, "Choice B")."""
+    yield from _node(data_dir, config_dir, monkeypatch, tmp_path)
+
+
+@pytest.fixture
+def node5(isolated_config, data_dir, config_dir, monkeypatch, tmp_path):
+    """wikipedia whose Codex names parser 5: each origin names the dated file
+    and byte range, so the pass refuses it until it is re-created."""
+    yield from _node(data_dir, config_dir, monkeypatch, tmp_path, parser=5)
+
+
+def _node(data_dir, config_dir, monkeypatch, tmp_path, *, parser: int | None = None):
     for cache in (wsrc._stream_cache, archive._groups, archive._layouts):
         cache.clear()
     monkeypatch.setenv("LOUISE_PLATFORM_IMAGE", PLATFORM)
-    # the pass's machinery, as it runs once the operator has decided the
-    # origin form; until then wikipedia is refused (`test_..._origin_names_the_run`)
-    from app.plugins.wikipedia.source import WikipediaSource
-    monkeypatch.setattr(WikipediaSource, "origin_names_run", False)
     origin = MockServer(tmp_path / "wikimedia")
     real = specs.ACQUIRE_REGISTRY["wikipedia"]
     monkeypatch.setitem(specs.ACQUIRE_REGISTRY, "wikipedia", dataclasses.replace(
         real, endpoints=(Endpoint(transport=Transport.HTTPS, url=origin.base_url, max_conns=2),),
         snapshot_index=lambda: RUNS, estimated_bytes={**real.estimated_bytes, "tr": 50_000}))
-    root, _cx = wiki_runs.node_collection(data_dir, config_dir)
+    root, _cx = wiki_runs.node_collection(data_dir, config_dir, parser=parser)
     corpus = root / "wikipedia" / "origin"
     # 2026-10, as the node holds it: built from the Codex's first run
     wiki_runs.dump(corpus, wiki_runs.FIRST, FIRST_PAGES)
@@ -152,6 +161,7 @@ def test_an_incomplete_run_is_waited_for_never_fetched(node):
 
 
 def test_the_whole_update(node, monkeypatch):
+    before = node.lines(node.snapshot("2026-10"))     # read now: a re-issued part keeps its path
     node.publish(NEW, NEW_PAGES)
     parsed: list[str] = []
     real = pack_build._record_of
@@ -178,7 +188,15 @@ def test_the_whole_update(node, monkeypatch):
     assert [(t.uid, t.reason) for t in snap.delta.tombstoned] == [(uid(21), "withdrawn")]
     lines = node.lines(snap)
     assert set(lines) == {uid(20), uid(22), uid(24)}, "nothing is built from the old run's files"
-    assert all(f"trwiki/{NEW}/" in r["origin"] for r in lines.values())
+    # EACH ORIGIN NAMES ITS PAGE, read in the run the snapshot names (09 §9.5
+    # amended 2026-11-17): no line says which run, and the unchanged page's
+    # line is the very bytes it was in the run before
+    assert all(r["origin"].startswith("trwiki/pages-articles-multistream.xml.bz2#") for r in lines.values())
+    assert not any("/20261" in r["origin"] for r in lines.values())
+    assert pack_records.canonical_line(lines[uid(24)]) == pack_records.canonical_line(before[uid(24)]), \
+        "an unchanged page's line is byte-identical across two runs"
+    assert lines[uid(20)]["origin"] == before[uid(20)]["origin"] and \
+        lines[uid(20)]["origin_hash"] != before[uid(20)]["origin_hash"], "a changed page: its bytes, not its name"
 
     # THE UNCHANGED PAGE WAS CARRIED, never parsed — and its line is the
     # line a parse of the new run writes, byte for byte (RULE 1)
@@ -324,13 +342,14 @@ def test_the_loader_reads_a_snapshots_run_once_however_often_it_loads(node, monk
     assert len(reads) == 1
 
 
-def test_a_collection_whose_origin_names_the_run_is_planned_and_never_run(node, monkeypatch, capsys):
-    """Until the operator decides the origin form (collection-updates.md §6),
-    a plugin declaring `origin_names_run` is refused by the pass and by the
-    keeper — exit 2, said in plain words — and its dry run still plans."""
+def test_a_collection_whose_origin_names_the_run_is_planned_and_never_run(node5, monkeypatch, capsys):
+    """A collection whose Codex names wikipedia's parser 5 — each origin the
+    dated file and byte range — is refused by the pass and by the keeper
+    until it is re-created at parser 6 (collection-updates.md §6) — exit 2,
+    said in plain words — and its dry run still plans."""
     from app import louise
-    from app.plugins.wikipedia.source import WikipediaSource
-    monkeypatch.setattr(WikipediaSource, "origin_names_run", True)
+    node = node5
+    assert collections_mod.by_name("wikipedia").codex.parser.version == 5
     node.publish(NEW, NEW_PAGES)
     snap = node.snapshot("2026-10")
     parts, gib = len(snap.shards), sum(s.bytes for s in snap.shards) / 2 ** 30
@@ -338,8 +357,8 @@ def test_a_collection_whose_origin_names_the_run_is_planned_and_never_run(node, 
     assert got.state == "refused" and got.exit == update.EXIT_REFUSED == 2
     assert got.says == (f"not updated by this pass: every part would be re-issued (wikipedia: {parts:,} parts, "
                         f"{gib:.1f} GiB to every peer) because each record's origin names the dated file and "
-                        f"byte range; waiting on the operator's decision on the origin form "
-                        f"(collection-updates.md)")
+                        f"byte range (parser 5); re-create at parser 6 first, whose origin names the page "
+                        f"(collection-updates.md §6)")
     assert node.marker() is None and node.origin.request_counts == {}, "nothing asked, nothing written"
     plan = node.pass_(dry_run=True)
     assert plan.state == "dry-run" and plan.plan["fetch"]["files_pending"] == 3, "München sizes the fetch"
@@ -348,9 +367,18 @@ def test_a_collection_whose_origin_names_the_run_is_planned_and_never_run(node, 
     assert update.describe(node.root, "wikipedia")["says"] == got.says
     capsys.readouterr()
     rc = louise.main(["hold", "collection", "update", "wikipedia", "--root", str(node.root)])
-    assert rc == 2 and "waiting on the operator's decision on the origin form" in capsys.readouterr().out
+    assert rc == 2 and "re-create at parser 6 first" in capsys.readouterr().out
+    assert update.describe(node.root, "wikipedia")["state"] == "waits-recreation"
 
 
-def test_wikipedia_declares_that_its_origin_names_the_run():
-    from app.plugins.wikipedia.source import WikipediaSource
-    assert WikipediaSource.origin_names_run is True
+def test_only_parser_5_declares_that_its_origin_names_the_run():
+    from app.plugins.wikipedia.source import WikipediaSource, WikipediaSourceV5
+    assert WikipediaSourceV5.origin_names_run is True and WikipediaSourceV5.PARSER_VERSION == 5
+    assert WikipediaSource.origin_names_run is False and WikipediaSource.PARSER_VERSION == 6
+
+
+def test_the_pass_runs_a_collection_at_parser_6(node):
+    """Not refused: planned and due like any dated-dump collection."""
+    assert not update.origin_names_run(collections_mod.by_name("wikipedia").codex)
+    node.publish(NEW, NEW_PAGES)
+    assert node.pass_(dry_run=True).state == "dry-run"

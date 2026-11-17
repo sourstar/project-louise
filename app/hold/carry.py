@@ -1155,6 +1155,17 @@ def reconcile(root, from_ref: str, to_ref: str, *, window: int = WINDOW,
             and held.get("to") == to.collection_id):
         raise CodexError(f"reconcile: {to_name} records no finished `carry --rebuilt` from "
                          f"{from_name} ({marker})")
+    # THE LINE CARRY'S PROOF (app/hold/line_carry.py; RULE 1): the target's
+    # snapshot is the source's parts with each line's `origin` alone
+    # rewritten, proven part by part (uids, records_root, counts) — every
+    # content_hash is the source's, so every document keeps its vectors, and
+    # each origin_hash is the source line's, so no txt_hash moves. The answer
+    # this pass would compute is known: given, without reading the two
+    # snapshots (wikipedia's: 2 × 52.9 M records) or writing a side table
+    from . import line_carry
+    proof = line_carry.proven(root, from_name, to_name, src, to)
+    if proof is not None:
+        return _reconciled_by_proof(root, to_name, to, src, proof, log)
     side_path = _content_table(root, from_name, to_name, log)
     side = sqlite3.connect(f"file:{side_path}?mode=ro", uri=True)
     coll = rec.local_collection(root, to_name, codex=to)
@@ -1231,6 +1242,36 @@ def reconcile(root, from_ref: str, to_ref: str, *, window: int = WINDOW,
         f"{state['rehashed']} txt_hash(es) set to their record's origin_hash. Before use: "
         f"`hold check {to_name} --checks vectors-sample` (A1c)")
     return out
+
+
+def _reconciled_by_proof(root: Path, to_name: str, to: Codex, src: Codex, proof: dict[str, Any],
+                         log: Callable[[str], None]) -> dict[str, Any]:
+    """`reconcile`'s answer where the line carry proved the two snapshots'
+    records the same records: every document kept, none reset, no txt_hash
+    moved; the cursor marked done, as the pass marks it."""
+    from app import db
+
+    from . import records as rec
+    coll = rec.local_collection(root, to_name, codex=to)
+    con = db.connect(coll)
+    try:
+        docs = int(con.execute("SELECT COUNT(*) FROM documents").fetchone()[0])
+        state = {"rowid": None, "kept": docs, "reset": 0, "rehashed": 0, "done": True,
+                 "pair": [src.collection_id, to.collection_id], "by": "line-carry"}
+        con.execute("BEGIN IMMEDIATE")
+        db.set_control(con, RECONCILE_KEY, json.dumps(state, sort_keys=True))
+        con.execute("COMMIT")
+    finally:
+        con.close()
+    log(f"[carry] {to_name}: {docs} document(s) keep their vectors — the line carry proved snapshot "
+        f"{proof['to_snapshot']['id']}'s records {proof['records']:,} of {proof['from_snapshot']['id']}'s, "
+        f"content hash for content hash (state/{_LINE_CARRY_MARKER}); nothing read again, 0 to embed again. "
+        f"Before use: `hold check {to_name} --checks vectors-sample` (A1c)")
+    return {"collection": to_name, "kept": docs, "reset": 0, "rehashed": 0,
+            "records_before": proof["records"], "records_after": proof["records"], "by": "line-carry"}
+
+
+_LINE_CARRY_MARKER = "line-carry.json"
 
 
 # ---- A1d: re-sign a rebuilt target whose source holds no records -----------
