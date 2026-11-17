@@ -519,6 +519,9 @@ class Derivation:
     target_uids: frozenset[str]
     resolution: dict[str, Any]
     shadowed: dict[str, int] = field(default_factory=dict)   # made again by a carried claim or an earlier tier
+    #: per book of the wikidata tier: each URL's answer and the items it names
+    #: (`found_of`), read back by the report for a pair that comes apart
+    books: dict[str, dict[str, Any]] = field(default_factory=dict)
 
     def bytes(self) -> bytes:
         return b"".join(line + b"\n" for _, _, line in self.lines)
@@ -603,6 +606,7 @@ def derive(root: Path, name: str, target: str, *, log=print, keep: bool = True) 
         for end in (h.claim["subject"], h.claim["object"]):
             claimed_at[end].append(times.get(h.uid))
     books_by: Counter = Counter()
+    traces: dict[str, dict[str, Any]] = {}
 
     def found_of(book: dict[str, Any]) -> dict[str, str]:
         """The items a book names, by the node's answers: a URL the node
@@ -616,11 +620,13 @@ def derive(root: Path, name: str, target: str, *, log=print, keep: bool = True) 
         mine = carried_item.get(book["uid"])
         undetermined = kept = False
         older: set[str] = set()
+        answers: list[dict[str, Any]] = []
         for url in book.get("wiki") or []:
             s = split_wiki(url)
             r = res.get(s) if s else None
             if r is None:
                 continue
+            answers.append({"url": url, "answer": r.kind, "item": r.item, "code": r.code})
             claimed = mine is not None and url == mine[1] and bool(mine[0])
             if r.kind == wt.UNKNOWN:
                 if claimed:
@@ -639,6 +645,7 @@ def derive(root: Path, name: str, target: str, *, log=print, keep: bool = True) 
             books_by["their item kept through a URL the node cannot answer"] += 1
         for why in older:
             books_by[why] += 1
+        traces[book["uid"]] = {"urls": answers, "named": sorted(found), "undetermined": undetermined}
         if undetermined:
             books_by["undetermined: a URL the node cannot answer, and no item in the current claims"] += 1
             return {}
@@ -700,7 +707,7 @@ def derive(root: Path, name: str, target: str, *, log=print, keep: bool = True) 
     emit(T_TITLES, t2, _dumps)
     emit(T_STAGE, t3, _canonical)
     return Derivation(lines, held, active, inputs, frozenset(b["uid"] for b in books), resolution,
-                      dict(shadowed))
+                      dict(shadowed), traces)
 
 
 def _prune(store: Path, current: set[str]) -> None:
@@ -715,6 +722,23 @@ def _prune(store: Path, current: set[str]) -> None:
             p.unlink()
         except OSError:
             pass
+
+
+def _end_note(info: dict[str, Any] | None) -> dict[str, Any]:
+    """One end of a pair that came apart, as a dry run shows it: its URLs,
+    the node's answer to each, and why it is or is not in a star."""
+    if info is None:
+        return {"why": "not among the books the wikidata tier read"}
+    named = info.get("named") or []
+    if info.get("undetermined"):
+        why = "a URL the node cannot answer and no item in the current claims: it claims nothing"
+    elif not named:
+        why = "names no item"
+    elif len(named) > 1:
+        why = f"names several items ({', '.join(named)}): an anthology, no claim through it"
+    else:
+        why = f"names {named[0]}"
+    return {"why": why, "urls": info.get("urls") or []}
 
 
 def _brief(c: dict[str, Any]) -> dict[str, Any]:
@@ -790,9 +814,11 @@ def report(d: Derivation) -> dict[str, Any]:
             if joined:
                 row["withdrawn_still_one_work"] = row.get("withdrawn_still_one_work", 0) + 1
             if len(row["examples"]["withdrawn"]) < EXAMPLES:
-                row["examples"]["withdrawn"].append(
-                    {**_brief(c), "now": ("still one work through the claims made now" if joined
-                                          else "apart: no claim made now joins the two")})
+                ex = {**_brief(c), "now": ("still one work through the claims made now" if joined
+                                           else "apart: no claim made now joins the two")}
+                if not joined and c.get("subject") and c.get("object"):
+                    ex["ends"] = {u: _end_note(d.books.get(u)) for u in (c["subject"], c["object"])}
+                row["examples"]["withdrawn"].append(ex)
     return {"method": NAME, "claims": len(d.lines), "held": len(d.held), "against": d.inputs,
             "tiers": tiers, "resolution": d.resolution}
 

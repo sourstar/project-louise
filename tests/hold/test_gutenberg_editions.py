@@ -818,4 +818,29 @@ def test_a_withdrawn_claim_says_whether_its_books_are_still_one_work():
     assert t["examples"]["withdrawn"][0]["now"] == "still one work through the claims made now"
     w = tiers[ge.T_WIKIDATA]
     assert w["withdrawn"] == 1 and "withdrawn_still_one_work" not in w
-    assert w["examples"]["withdrawn"][0]["now"] == "apart: no claim made now joins the two"
+    apart = w["examples"]["withdrawn"][0]
+    assert apart["now"] == "apart: no claim made now joins the two"
+    assert apart["ends"]["gutenberg:4"] == {"why": "not among the books the wikidata tier read"}
+
+
+def test_a_pair_that_comes_apart_shows_each_books_answers():
+    """The one "apart" of München's second dry run (gutenberg:15371 and
+    5612, Q8258): each end shows its URLs, the node's answer to each and
+    why the book is or is not in a star."""
+    c = {"type": "same-work", "subject": "gutenberg:15371", "object": "gutenberg:5612", "method": ge.WIKIDATA}
+    books = {"gutenberg:15371": {"urls": [{"url": "https://fr.wikipedia.org/wiki/Les_Mille_et_Une_Nuits",
+                                           "answer": "item", "item": "Q8258", "code": ""}],
+                                 "named": ["Q8258"], "undetermined": False},
+             "gutenberg:5612": {"urls": [{"url": "https://en.wikipedia.org/wiki/One_Thousand_and_One_Nights",
+                                          "answer": "item", "item": "Q8258", "code": ""},
+                                         {"url": "https://en.wikipedia.org/wiki/Richard_Francis_Burton",
+                                          "answer": "item", "item": "Q193981", "code": ""}],
+                                "named": ["Q193981", "Q8258"], "undetermined": False}}
+    d = ge.Derivation([], [ge.Held(c, 0, None, ge.T_WIKIDATA)],
+                      {ge.T_WIKIDATA: True, ge.T_TITLES: False, ge.T_STAGE: False}, {},
+                      frozenset(books), {}, {}, books)
+    ex = ge.report(d)["tiers"][ge.T_WIKIDATA]["examples"]["withdrawn"][0]
+    assert ex["ends"]["gutenberg:15371"]["why"] == "names Q8258"
+    assert ex["ends"]["gutenberg:5612"]["why"] == ("names several items (Q193981, Q8258): an anthology, "
+                                                  "no claim through it")
+    assert len(ex["ends"]["gutenberg:5612"]["urls"]) == 2
