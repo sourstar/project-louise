@@ -2903,3 +2903,31 @@ every document re-keyed and sorted the 26,551 parts (34.8 ms first, 59.7 ms on a
 in six of seven minutes, and one unexplained minute at 42 % (21:55Z). Engine gaps ≥ 64 ms: 224 of 45,041 calls
 (0.5 %, from 3.9 %). GIL held 9.3 s of 30 s, with `_keyed` gone from the top. The next holders are
 stats-publisher (34 %) and share-fetch (14 %), both re-reading and re-serialising Codex files. vega-batch.md §6.
+
+## 2026-11-17 — the update by cadence: a maintainer that runs each collection's update at night (app/hold/update.py, app/worker.py `_update_keeper`) — BEFORE (deploy pending)
+
+**Scenario (BEFORE).** Nothing acts on a Codex's `update` block. wikipedia holds its 2026-10 snapshot (records of
+the Codex's first run; STATUS has 2026-09's: 74,811,753 records, 37,501 parts, `snapshot create` 39 min 15 s, peak
+7.6 GiB, a 1.9 GB snapshot file), 11 languages, `slices = "all"`. Its dumps per run, as the spec DECLARES them
+(`specs.WIKIPEDIA_SPEC.estimated_bytes["all"]`, HEADs of 2026-09-14 and 2026-10-18 — declared, not counted):
+72,994,976,772 bytes of multistream dumps and indexes + 1,064,488,197 of page_props = **74.06 GB**, where
+collection-updates.md §1 says "about 62 GB" (not counted either). The first `hold collection update wikipedia
+--dry-run` on the node lists the run and states what it fetches; the files carry no size until fetched, so its bytes
+are the declaration's until then.
+
+**The change.** At night only (the node profile named `night`, `UPDATE_PROFILES`; 00:00–06:00 on a node without
+profiles), one collection at a time, every UPDATE_BEAT_S (300 s), the keeper runs `louise hold collection update
+<name>` in a process of its own: the steps due → fetch → run → records → snapshot → embed → old-run, each recorded
+in `state/update.json` after its commit. The collection is PAUSED for the three steps that need its writers (the
+scan of the new run, the records build, the snapshot) and resumed after. What it costs per beat when nothing is due:
+`load_all` (already per round) and, per dated-dump collection, a marker read and the newest snapshot's id; the
+origin is asked (an index of runs and one dumpstatus.json per held wiki) only once the cutoff has passed, and then at
+most once an hour while it waits. Per round, everywhere: `current_run` adds a listing of `snapshots/`, a stat and a
+marker read per dated-dump collection (its snapshot's run read once per file, from the tail).
+
+**AFTER.** To fill on the node, per step of the first update (wikipedia, 2026-11): wall time, bytes fetched and the
+fetch rate against the budget, the scan's counts (seen / changed / relocated / withdrawn) and its time, the records
+build's records/s and how many lines it parsed against how many it carried (cores busy: `docker top`, the cgroup's
+`cpu.stat`), the snapshot's time and peak memory, parts re-issued (expected: all, since every line's `origin` names
+the run), the delta's counts, the embedding the changed records cost, free space before the fetch and after the old
+run's deletion.
