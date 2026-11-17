@@ -173,6 +173,20 @@ verification; robots.txt disallows /TLIO/ (the query system) only, which
 is not used. Non-commercial; not shared with peers, not published, not
 in this repository until the licence is recorded.
 
+**Status, 2026-11-17 10:58 UTC:** 3,211 of 43,911 entries; 0.48 s an
+entry measured (one request at a time, no pause while answers come right,
+backoff after a failure); ~5.4 h left if it runs without a stop. Runs in
+the claude.ai cloud container of the session that wrote this note (its
+scratchpad, `tlio-data/`), under a shell supervisor. It does NOT reliably
+continue while that session is idle: each restart of the session's worker
+kills it (stopped 07:21–10:52 at 2,784), and the hourly check-in meant to
+restart it fails ("access denied") — it resumes only when the session is
+active again. The data is lost if the container is replaced. Updates
+later: `--update` (light: the 26 lists and the info page, new and removed
+entries) or `--update=full` (every entry asked with HTTP conditional
+requests); per-entry hash, Last-Modified, ETag, fetch and revision dates
+in `manifest.sqlite`.
+
 ## Other languages (top picks; full tables in this session's reports, to be added)
 
 - **English.** OE: Bosworth-Toller ("free for any purpose") and Wiktionary
