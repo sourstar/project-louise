@@ -311,12 +311,14 @@ louise share
   offer                                                                the collections neighbours announce that this node does not hold, and who serves each (04 §4.2); `fetch` takes one (added 2026-10-20)
 
 louise ask
-  search <query> [--collections …] [--space …] [--limit N] [--rerank-depth N] [--as-of DATE] [--freshness] [--translate [--all-languages]] [--filter FACET=VALUE | --filter FACET=!VALUE | --filter FACET=[!]FROM..TO …]
+  search <query> [--collections …] [--space …] [--limit N] [--rerank-depth N] [--as-of DATE] [--freshness] [--history] [--translate [--all-languages]] [--filter FACET=VALUE | --filter FACET=!VALUE | --filter FACET=[!]FROM..TO …]
                                                                        the fused list of §5.1, with what §5.3 says about each result; --as-of searches the snapshot
                                                                        current at that date (§5.1); --filter restricts the legs and never ranks (§5.2, §5.7; amended
                                                                        2026-10-07 from per-facet flags: one flag, the facet named in its value, since the facets are
                                                                        the collection's and not known before it is); --filter keys=<id> keeps the records tagged with an
-                                                                       identifier, which a query naming it never does by itself (§5.2, amended 2026-10-25)
+                                                                       identifier, which a query naming it never does by itself (§5.2, amended 2026-10-25);
+                                                                       --history fetches the past versions of a cited EU act's article that the node does not
+                                                                       hold, bounded (§5.3 `history`)
   facets <collection> [<field>] [--under VALUE]                        the fields this collection can be filtered on, or one field's values with this peer's counts (§5.7)
   lookup <id>                                                          a fact by key, from a reference source
   traverse <id> [--relation T] [--depth N] [--collection C] [--resolve-in C …]
