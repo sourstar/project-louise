@@ -445,14 +445,17 @@ def test_the_journey_sleeper_and_moved_titles_keep_their_claims(stars):
     assert (t["kept_identical"], t["withdrawn"], t["added"], t["changed"]) == (6, 0, 0, 0), t
     assert sorted(d.bytes().splitlines()) == sorted(stars.lines), "byte for byte (written in the items' order)"
     r = d.resolution
-    assert r["runs"] == [stars.run] and r["redirects_followed"] == 2 and r["found_by_page_id"] == 2
+    assert r["runs"] == [stars.run] and r["redirects_followed"] == 4 and r["found_by_page_id"] == 4, \
+        "Journey, Sleeper, and the two old titles: redirects of the run; the four Bouvard and Britannica titles " \
+        "reach pages layer 1 holds under other titles"
     assert r["by_reason"] == {"none: no page": 1}
     assert r["no_page_titles"] == [{"wiki": "en", "title": "Nowhere at all", "books": ["gutenberg:90000"]}], \
         "every 'no page' listed, title by title, with its books"
     assert {(x["title"], x["manifest_title"]) for x in r["by_page_id_titles"]} == {
-        ("Bouvard and Pécuchet", "Bouvard et Pécuchet"),
-        ("Eleventh edition of the Encyclopædia Britannica", "Encyclopædia Britannica Eleventh Edition")}
-    assert not r["books"].get("their item kept: the node's run is older than their claim"), \
+        ("Bouvard and Pécuchet", "Bouvard et Pécuchet"), ("Bouvard et Pécuchet", "Bouvard et Pécuchet"),
+        ("Eleventh edition of the Encyclopædia Britannica", "Encyclopædia Britannica Eleventh Edition"),
+        ("Encyclopædia Britannica Eleventh Edition", "Encyclopædia Britannica Eleventh Edition")}
+    assert not r["books"].get(ge.OLDER_NONE) and not r["books"].get(ge.OLDER_ITEM), \
         "the run is newer than the claims: each kept on its own answer"
 
 
@@ -480,8 +483,29 @@ def test_a_none_from_a_run_older_than_the_claim_keeps_it(node):
     late_d = ge.derive(node.root, "late-editions", "gutenberg", log=lambda m: None)
     kept = {(c["subject"], c["object"]) for t, c, _ in late_d.lines if t == ge.T_WIKIDATA}
     assert ("gutenberg:8000", "gutenberg:1532") in kept
-    assert late_d.resolution["books"]["their item kept: the node's run is older than their claim"] == 1
+    assert late_d.resolution["books"][ge.OLDER_NONE] == 1
     assert ge.report(late_d)["tiers"][ge.T_WIKIDATA]["withdrawn"] == 0
+
+
+def test_an_older_runs_other_item_keeps_the_newer_claim(stars):
+    """An older run never overrides a newer claim, in either direction: the
+    run names Q1 for both Bouvard links, a claim made after it says Q77 —
+    kept, Q77, through its URLs. The same claim made before the run: the run
+    is the evidence, the claim re-made with Q1."""
+    line = ge._dumps(wd("gutenberg:25014", "gutenberg:14157", "Q77", EN + "Bouvard_and_P%C3%A9cuchet",
+                        EN + "Bouvard_et_P%C3%A9cuchet", "en", "en"))
+    for name, when, nonce in (("after-the-run", "2026-10-15T00:00:00Z", "0b"), ("before-the-run", BEFORE_THE_RUN, "0a")):
+        ann.create(stars.root, name, target_ref="gutenberg", from_snapshot=TARGET_SNAPSHOT, claims=line + b"\n",
+                   platform_image=PLATFORM, snapshot_id=TARGET_SNAPSHOT, key=KEY, now=when, nonce=nonce * 16,
+                   annotator=ANNOTATOR, log=lambda m: None)
+    after = ge.derive(stars.root, "after-the-run", "gutenberg", log=lambda m: None)
+    items = {(c["subject"], c["object"]): c["evidence"]["wikidata"] for t, c, _ in after.lines if t == ge.T_WIKIDATA}
+    assert items[("gutenberg:25014", "gutenberg:14157")] == "Q77" and line in after.bytes().splitlines()
+    assert after.resolution["books"][ge.OLDER_ITEM] == 2 and not after.resolution["books"].get(ge.OLDER_NONE)
+    assert ge.report(after)["tiers"][ge.T_WIKIDATA]["withdrawn"] == 0
+    before = ge.derive(stars.root, "before-the-run", "gutenberg", log=lambda m: None)
+    items = {(c["subject"], c["object"]): c["evidence"]["wikidata"] for t, c, _ in before.lines if t == ge.T_WIKIDATA}
+    assert items[("gutenberg:25014", "gutenberg:14157")] == "Q1" and not before.resolution["books"].get(ge.OLDER_ITEM)
 
 
 def test_a_claim_is_dated_by_the_first_snapshot_that_holds_it(node):

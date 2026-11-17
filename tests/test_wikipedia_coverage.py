@@ -3,8 +3,9 @@
 collection's run against the rows its manifest holds, per wiki, read-only.
 
 The fixture is tests/test_wikipedia_titles.py's: layer 1 holds pages 10, 20,
-30 and 40, the dump layer the rows of its DUMP_ROWS; the run's redirects 11,
-31, 41, the loop's and the chain's, and page 60 have no row. Here the
+30, 40 and 90, the dump layer the rows of its DUMP_ROWS and UNTITLED; the
+run's redirects 11, 21, 31, 41, the loop's and the chain's, and page 60 have
+no row. Here the
 archive's row of page 40 is missing too: a page the archive covers, which the
 dump pass skips, held by neither layer."""
 import json
@@ -20,7 +21,7 @@ from app.plugins.wikipedia import source as wsrc
 from tests import test_wikipedia_titles as twt
 
 #: the run's articles no row holds: the dump layer's left out, and page 40
-MISSING = {11, 31, 41, 60, 70, 71, 80, 81, 82, 83, 40}
+MISSING = {11, 21, 31, 41, 60, 70, 71, 80, 81, 82, 83, 40}
 
 
 @pytest.fixture
@@ -54,7 +55,7 @@ def test_a_page_missing_from_both_layers_is_reported_and_a_covered_page_is_not(w
     out = wc.coverage(wiki, samples=50, log=lambda m: None)
     en = out["wikis"]["enwiki"]
     assert en["run"] == twt.RUN and en["articles_in_run"] == len(twt.RUN_PAGES), "the category is not an article"
-    assert en["rows"] == {"archive": 4, "dump": 5, "both": 0}
+    assert en["rows"] == {"archive": 5, "dump": 6, "both": 0}, "layer 1: 10, 20, 30, 90 and 99; 91 untitled"
     assert en["missing"] == len(MISSING) and {s["page_id"] for s in en["sample"]} == MISSING
     covered = {s["page_id"]: s["archive_covers"] for s in en["sample"]}
     assert covered[40] is True and en["missing_covered_by_archive"] == 1, \

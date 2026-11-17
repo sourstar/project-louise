@@ -24,9 +24,10 @@ current snapshot is CARRIED, written again exactly as it stands.
   not read yet, a run whose dump is not on disk, an item missing from its
   wikidata — is never taken for "no item": a book in that case keeps the
   item the current snapshot's claims give it, through the URL they name,
-  and a book they give none claims nothing (said, counted). Nor is a "no
-  item" from a run OLDER than the claim it would withdraw (`claim_times`):
-  the claim was made against a later Wikipedia than the run can speak for.
+  and a book they give none claims nothing (said, counted). Nor does a run
+  OLDER than a claim (`claim_times`) override it, in either direction — its
+  "no item" or its other item: the claim was made against a later Wikipedia
+  than the run can speak for.
 - `same-title` (app/gutenberg_titles.py) and `language-stage` (the
   historical-markers matcher, app/historical.py): re-derived from the
   gutenberg records alone, and only where the current snapshot holds claims
@@ -77,6 +78,10 @@ TIERS = DERIVED + (T_CARRIED,)
 EXAMPLES = 20
 #: why a title answers no item here besides the resolver's (`Resolved.code`)
 NO_WIKIPEDIA, NOT_IN_WIKIDATA = "no one wikipedia", "not in wikidata"
+#: a book whose claim is newer than the run that answers otherwise, kept: the
+#: run said "no item" (no page, no item, a loop) or named another item
+OLDER_NONE = "kept: run older than the claim (no page)"
+OLDER_ITEM = "kept: run older than the claim (other item)"
 #: the titles a dry run lists behind "no page", at most (each with its books)
 NO_PAGE_LISTED = 100
 #: books named per listed title, at most
@@ -336,10 +341,10 @@ def _signed_at(sidecar: Path, snapshot_hash: str) -> str | None:
 
 def made_after(times: list[str | None], run: str | None) -> bool:
     """Whether a claim may have been made after `run` was cut — any of
-    `times` (`claim_times`); an unknown time or run may have been — so that a
-    "no item" from that run is no evidence against it. A run is dated by its
-    day (`YYYYMMDD`) and a claim by its bound's: a claim of the run's own day
-    is taken as made after it."""
+    `times` (`claim_times`); an unknown time or run may have been — so that
+    what that run answers otherwise ("no item", another item) is no evidence
+    against it. A run is dated by its day (`YYYYMMDD`) and a claim by its
+    bound's: a claim of the run's own day is taken as made after it."""
     from .hold.origin_run import RUN_RE
     if run is None or not RUN_RE.match(run) or not times or any(t is None for t in times):
         return True
@@ -601,36 +606,39 @@ def derive(root: Path, name: str, target: str, *, log=print, keep: bool = True) 
 
     def found_of(book: dict[str, Any]) -> dict[str, str]:
         """The items a book names, by the node's answers: a URL the node
-        cannot answer — or answers "no item" from a run older than the
-        book's claims (`made_after`) — takes the item the current claims
-        give the book through that very URL; any other is left out — and a
-        book with a URL the node cannot answer and no item of its own in the
-        current claims claims nothing."""
+        cannot answer takes the item the current claims give the book
+        through that very URL, and so does one a run OLDER than the book's
+        claims (`made_after`) answers otherwise — "no item" or another item:
+        an older run never overrides a newer claim, in either direction. Any
+        other is left out, and a book with a URL the node cannot answer and
+        no item of its own in the current claims claims nothing."""
         found: dict[str, str] = {}
         mine = carried_item.get(book["uid"])
-        undetermined = kept = older = False
+        undetermined = kept = False
+        older: set[str] = set()
         for url in book.get("wiki") or []:
             s = split_wiki(url)
             r = res.get(s) if s else None
             if r is None:
                 continue
-            if r.kind == wt.ITEM:
-                found.setdefault(r.item, url)
-            elif r.kind == wt.UNKNOWN:
-                if mine is not None and url == mine[1] and mine[0]:
+            claimed = mine is not None and url == mine[1] and bool(mine[0])
+            if r.kind == wt.UNKNOWN:
+                if claimed:
                     found.setdefault(mine[0], url)
                     kept = True
                 elif mine is None:
                     undetermined = True
-            elif mine is not None and url == mine[1] and mine[0] and made_after(claimed_at[book["uid"]], r.run):
-                found.setdefault(mine[0], url)       # NONE, from a run older than the claim: no evidence
-                older = True
+            elif claimed and r.item != mine[0] and made_after(claimed_at[book["uid"]], r.run):
+                found.setdefault(mine[0], url)       # the claim is newer than the run: the run is no evidence
+                older.add(OLDER_NONE if r.kind == wt.NONE else OLDER_ITEM)
+            elif r.kind == wt.ITEM:
+                found.setdefault(r.item, url)
         if book.get("wiki"):
             books_by["with a Wikipedia line"] += 1
         if kept:
             books_by["their item kept through a URL the node cannot answer"] += 1
-        if older:
-            books_by["their item kept: the node's run is older than their claim"] += 1
+        for why in older:
+            books_by[why] += 1
         if undetermined:
             books_by["undetermined: a URL the node cannot answer, and no item in the current claims"] += 1
             return {}

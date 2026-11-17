@@ -41,12 +41,16 @@ EN = "https://en.wikipedia.org/wiki/"
 ARCHIVE = [(10, "Bouvard et Pécuchet", "A novel by Flaubert."),
            (20, "Encyclopædia Britannica Eleventh Edition", "An encyclopaedia."),
            (30, "Journey to the Center of the Earth", "A novel by Verne."),
-           (40, "The Sleeper Awakes", "A novel by Wells.")]
+           (40, "The Sleeper Awakes", "A novel by Wells."),
+           (90, "Mercury", "The planet.")]
 #: the run's dump, every page: (page, title, text, redirect target)
 RUN_PAGES = [(10, "Bouvard and Pécuchet", "A novel by Flaubert.", None),
              (11, "Bouvard et Pécuchet", "#REDIRECT [[Bouvard and Pécuchet]]", "Bouvard and Pécuchet"),
              (12, "Bouvard and Pecuchet", "#REDIRECT [[Bouvard and Pécuchet]]", "Bouvard and Pécuchet"),
              (20, "Eleventh edition of the Encyclopædia Britannica", "An encyclopaedia.", None),
+             (21, "Encyclopædia Britannica Eleventh Edition",
+              "#REDIRECT [[Eleventh edition of the Encyclopædia Britannica]]",
+              "Eleventh edition of the Encyclopædia Britannica"),
              (30, "Journey to the Center of the Earth", "A novel by Verne.", None),
              (31, "Journey to the Centre of the Earth", "#REDIRECT [[Journey to the Center of the Earth]]",
               "Journey to the Center of the Earth"),
@@ -62,14 +66,20 @@ RUN_PAGES = [(10, "Bouvard and Pécuchet", "A novel by Flaubert.", None),
              (81, "Hop 2", "#REDIRECT [[Hop 3]]", "Hop 3"),
              (82, "Hop 3", "#REDIRECT [[Hop 4]]", "Hop 4"),
              (83, "Hop 4", "#REDIRECT [[Hop 5]]", "Hop 5"),
-             (84, "Hop 5", "The end of the chain.", None)]
+             (84, "Hop 5", "The end of the chain.", None),
+             # page 90 moved since 2024 to "Mercury (planet)"; its old title is another page now
+             (90, "Mercury (planet)", "The planet.", None),
+             (91, "Mercury", "Mercury may refer to a planet, an element or a god.", None)]
 PROPS = [(10, "wikibase_item", "Q1"), (20, "wikibase_item", "Q2"), (30, "wikibase_item", "Q3"),
          (40, "wikibase_item", "Q4"), (50, "wikibase_item", "Q5"), (52, "wikibase_item", "Q6"),
-         (60, "wikibase_item", "Q7"), (84, "wikibase_item", "Q8")]
+         (60, "wikibase_item", "Q7"), (84, "wikibase_item", "Q8"), (90, "wikibase_item", "Q308"),
+         (91, "wikibase_item", "Q9")]
 #: the dump-layer pages the manifest holds rows for: not the redirects 11,
-#: 31, 41, nor 60, nor the loop's and the chain's redirects (the node's
+#: 21, 31, 41, nor 60, nor the loop's and the chain's redirects (the node's
 #: pattern); the chain's end, 84, is held
 DUMP_ROWS = frozenset({12, 50, 51, 52, 84})
+#: dump-layer rows the rdf stage has not read yet: no title, no text
+UNTITLED = frozenset({91})
 
 
 def _page(pid: int, title: str, text: str, redirect: str | None) -> str:
@@ -107,10 +117,12 @@ def an_archive(corpus: Path, rows=ARCHIVE) -> None:
                    corpus / "data" / "en" / "000.parquet")
 
 
-def a_manifest(path: Path, refs, *, dump_rows=DUMP_ROWS, pages=RUN_PAGES, archive_rows=ARCHIVE) -> Path:
+def a_manifest(path: Path, refs, *, dump_rows=DUMP_ROWS, pages=RUN_PAGES, archive_rows=ARCHIVE,
+               untitled=UNTITLED) -> Path:
     """The manifest as the node's holds it: every archive article under the
     ARCHIVE's title, with text; the dump-layer pages of `dump_rows` under
-    their run's title, a redirect with no chunk."""
+    their run's title, a redirect with no chunk; those of `untitled` with no
+    title and no text yet."""
     title_of = {p[0]: (p[1], p[3] is None) for p in pages}
     archive_title = {p: t for p, t, _ in archive_rows}
     con = sqlite3.connect(path)
@@ -122,6 +134,10 @@ def a_manifest(path: Path, refs, *, dump_rows=DUMP_ROWS, pages=RUN_PAGES, archiv
             title, text = archive_title[pid], True
         elif pid in dump_rows:
             title, text = title_of[pid]
+        elif pid in untitled:
+            con.execute("INSERT INTO documents(uid, source, native_id, path) VALUES (?,?,?,?)",
+                        (f"wikipedia:{n}", "wikipedia", str(n), r.locator))
+            continue
         else:
             continue
         con.execute("INSERT INTO documents(uid, source, native_id, path, title, fts_done, chunks) VALUES (?,?,?,?,?,1,?)",
@@ -141,8 +157,8 @@ def wiki(tmp_path):
     an_archive(corpus)
     a_run(corpus)
     refs = [r for r in SOURCE.discover(DiscoverState(corpus_root=corpus, snapshot=RUN)) if r.scope == "document"]
-    assert {int(r.native_id) for r in refs if int(r.native_id) < DUMP_BASE} == {10, 20, 30, 40}, \
-        "layer 1 holds the archive's four articles; the dump pass skips them"
+    assert {int(r.native_id) for r in refs if int(r.native_id) < DUMP_BASE} == {p for p, _, _ in ARCHIVE}, \
+        "layer 1 holds the archive's articles; the dump pass skips them"
     manifest = a_manifest(tmp_path / "wikipedia.db", refs)
     return SimpleNamespace(corpus=corpus, manifest=manifest, dumps=wt.run_dumps(corpus, RUN), tmp=tmp_path,
                            refs=refs)
@@ -183,10 +199,51 @@ def test_a_moved_article_layer_1_holds_under_its_old_title_is_found_by_its_page_
     assert (b.kind, b.item, b.code, b.stored) == (wt.ITEM, "Q1", wt.BY_PAGE_ID, "Bouvard et Pécuchet")
     assert (e.kind, e.item, e.code, e.stored) == (wt.ITEM, "Q2", wt.BY_PAGE_ID, "Encyclopædia Britannica Eleventh Edition")
     old = got[("en", "Bouvard et Pécuchet")]
-    assert (old.item, old.code, old.redirects) == ("Q1", "", 0), "the manifest's own title: layer 1's row, directly"
+    assert (old.item, old.code, old.redirects) == ("Q1", wt.BY_PAGE_ID, 1), \
+        "the run's page so titled is a redirect (page 11), whatever layer 1's row is titled"
     red = got[("en", "Bouvard and Pecuchet")]
     assert (red.item, red.code, red.redirects) == ("Q1", wt.BY_PAGE_ID, 1), \
         "a redirect row the manifest holds, to the run's title it does not: by page id"
+
+
+def test_a_title_the_run_gives_another_page_answers_with_the_runs_page(wiki):
+    """Layer 1 holds page 90 under its 2024 title "Mercury"; the run moved it
+    to "Mercury (planet)" and "Mercury" is page 91 now (a row not read yet).
+    The run's index decides: "Mercury" is page 91's item, never layer 1's."""
+    got = resolve(wiki, ["Mercury", "Mercury (planet)"])
+    m, planet = got[("en", "Mercury")], got[("en", "Mercury (planet)")]
+    assert (m.kind, m.item, m.page) == (wt.ITEM, "Q9", f"wikipedia:{native_id_of('en', 91)}")
+    assert (planet.item, planet.code, planet.stored) == ("Q308", wt.BY_PAGE_ID, "Mercury")
+    fallback = resolve(wiki, ["Mercury", "Mercury (planet)"], dumps={})
+    assert fallback[("en", "Mercury")].item == "Q308", "without the run's index, the manifest's titles as before"
+    assert fallback[("en", "Mercury (planet)")].code == wt.NO_DUMP
+
+
+def test_a_wiki_without_its_runs_index_falls_back_to_the_manifests_titles(tmp_path, monkeypatch):
+    """de's index is not on disk: its titles are the manifest's, a found one
+    answers as it always did, a missing one is UNKNOWN; en, whose index is on
+    disk, answers by the run. The manifest's title pass is made only for de."""
+    wsrc._stream_cache.clear()
+    corpus = tmp_path / "wikipedia"
+    an_archive(corpus)
+    a_run(corpus)
+    de_pages = [(500, "Bouvard und Pécuchet", "Ein Roman.", None)]
+    a_run(corpus, de_pages, [(500, "wikibase_item", "Q1")], lang="de")
+    refs = [r for r in SOURCE.discover(DiscoverState(corpus_root=corpus, snapshot=RUN)) if r.scope == "document"]
+    m = a_manifest(tmp_path / "m.db", refs, pages=RUN_PAGES + de_pages, dump_rows=DUMP_ROWS | {500})
+    dumps = wt.run_dumps(corpus, RUN)
+    passes = []
+    real = wt.index
+    monkeypatch.setattr(wt, "index", lambda *a, **k: passes.append(1) or real(*a, **k))
+    en_only = wt.resolve(m, [("en", "Mercury")], dumps=dumps, run=RUN, log=lambda s: None)
+    assert en_only[("en", "Mercury")].item == "Q9" and passes == [], "every wanted wiki has its index: no title pass"
+    wt.index_path(dumps["de"]).unlink()
+    got = wt.resolve(m, [("de", "Bouvard_und_Pécuchet"), ("de", "Fehlt"), ("en", "Mercury")], dumps=dumps,
+                     run=RUN, log=lambda s: None)
+    assert passes == [1]
+    assert (got[("de", "Bouvard_und_Pécuchet")].item, got[("de", "Bouvard_und_Pécuchet")].code) == ("Q1", "")
+    assert (got[("de", "Fehlt")].kind, got[("de", "Fehlt")].code) == (wt.UNKNOWN, wt.NO_DUMP)
+    assert got[("en", "Mercury")].item == "Q9", "en still by its run"
 
 
 def test_non_ascii_titles_are_matched_in_both_layers_as_nfc(wiki):
@@ -238,6 +295,19 @@ def test_the_redirect_loop_and_max_hops_still_hold_through_the_index(wiki):
     assert (got[("en", "Hop 1")].kind, got[("en", "Hop 1")].code) == (wt.NONE, wt.LOOP), \
         f"four redirects: longer than MAX_HOPS ({wt.MAX_HOPS})"
     assert (got[("en", "Hop 2")].item, got[("en", "Hop 2")].redirects) == ("Q8", wt.MAX_HOPS)
+
+
+def test_every_hop_is_a_lookup_in_one_pass_over_the_runs_index(wiki, monkeypatch):
+    """A redirect's target is looked up in the table the pass left, never a
+    second pass: three redirects, four rounds, one read of the index."""
+    passes = []
+    real = wt.run_index
+    monkeypatch.setattr(wt, "run_index", lambda ix: passes.append(ix) or real(ix))
+    said: list[str] = []
+    got = wt.resolve(wiki.manifest, [("en", "Hop 2"), ("en", "Journey to the Centre of the Earth")], dumps=wiki.dumps,
+                     run=RUN, log=said.append)
+    assert got[("en", "Hop 2")].item == "Q8" and len(passes) == 1
+    assert any("4 round(s)" in m and "by id" in m for m in said), said
 
 
 def test_an_escaped_index_title_is_found_as_the_title(wiki):

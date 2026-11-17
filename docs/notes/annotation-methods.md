@@ -126,15 +126,15 @@ sorted, so a redirect's target costs a lookup and not a second pass. Only redire
 **What the node cannot answer**, where the API could:
 
 - a link to a Wikipedia the node does not hold (it holds 11 languages; Gutenberg also links fi, nl, sv, la and others);
-- a title the manifest misses that the run's own index lists, on a page the manifest holds no row of ("held by the
-  run, not read yet"), and any title the manifest misses when the run's dump or index is not on disk ("no dump to
-  tell"). A title the manifest misses is "no page" only when the run's index does not list it (below, 2026-11-17);
+- a title the run's own index lists, on a page the manifest holds no row of ("held by the run, not read yet"), and
+  any title the manifest misses when the run's dump or index is not on disk ("no dump to tell"). A title is "no page"
+  only when the run's index does not list it (below, 2026-11-17);
 - an item that the page names and the node's wikidata lacks (merged or deleted since). The dump lists no redirects, so
   a merged item is seen but not followed.
 
 In each case the book keeps the item that its current claim gives it through that same link. A book that has no claim
 yet claims nothing. The dry run counts both. It never reads "the node cannot tell" as "no item", so a gap in the node's
-collections does not withdraw anything. Nor does a "no item" from a run older than the claim it would withdraw.
+collections does not withdraw anything. Nor does a run older than the claim, whatever it answers.
 
 **When it runs.** Once a period, not when gutenberg moves. It is due when this collection's next snapshot can be written
 (one update a period, 09 §9.4) and the method has not run in the period open now. A run that has nothing to write is not
@@ -211,35 +211,41 @@ title-form fault: titles are stored NFC as raw UTF-8, and a fixture with é and 
 resolver answered "no page" whenever the manifest missed a title. `found_of` then dropped the book's item, and the
 claim went. That broke the method's own rule: what the node cannot answer is never read as "no item".
 
-**What changed** (app/wikipedia_titles.py). A title the manifest misses is looked up in the RUN's own multistream
-index, which lists every page of the run, redirects included. It is one pass per language over the titles missed,
-with set membership, and the languages run in parallel on the parse pool:
+**What changed** (app/wikipedia_titles.py). THE RUN IS AUTHORITATIVE FOR TITLES. Where a wiki's run has its
+multistream index on disk, every wanted title of that wiki is looked up there. The index lists every page of the run,
+redirects included. It is one pass per language, with set membership, and the languages run in parallel on the parse
+pool. The page is then read from the manifest by its id, in either layer, through the primary key:
 
-| The manifest misses the title, and the run's index | Answer |
+| The run's index | Answer |
 |---|---|
-| does not list it | NONE, "no page" |
-| lists it, and the manifest holds the page by its id, in either layer | its item (`by page id`), with the manifest's own title said |
+| does not list the title | NONE, "no page" |
+| lists it, and the manifest holds the page with text | its item; `by page id` where the manifest holds it under another title, that title said |
 | lists it, and it is a redirect | the page read from the run's dump at the index's offset (the plugin's `redirect_of`, read-only), then followed within MAX_HOPS and the loop rule |
+| lists it, not a redirect, held without text | its item |
 | lists it, not a redirect, and no row holds it | UNKNOWN, "held by the run, not read yet" |
-| is not on disk, or the dump is not | UNKNOWN, "no dump to tell" |
-| cannot be read (cut short) | UNKNOWN, "unreadable" |
 
-The old untitled-rows rule is gone: the index decides. The index's titles are matched both as stored and in the
-dump's XML-escaped form, so a title with `&` or `'` is found whichever form the index writes.
+A 2024 title the run now gives to another page answers with that page, never with the one layer 1 held under it. The
+manifest's titles are the fallback, only for a wiki whose index is not on disk. There a found title answers as before,
+and a missing one is UNKNOWN, "no dump to tell". An index cut short falls back the same way, and its misses are
+"unreadable". The manifest's title pass, 52.9 M rows and 423 MB, is made only for a fallback wiki. The old
+untitled-rows rule is gone. The index's titles are matched both as stored and in the dump's XML-escaped form, so a
+title with `&` or `'` is found whichever form the index writes.
 
 **Evidence older than the claim** (app/gutenberg_editions.py `claim_times`, `made_after`). Nothing records when a
 claim was made. 09 §9.5's claim has no date key, and its record's `date` is null. The contributor's "…, 2026-10-09" is
 text, not a field. A snapshot's id is its period, not its writing: `create` names the period that closed, and an update
 can catch up on an old one. So a claim is dated by the first snapshot holding it, as its signature's earliest time. A
-claim keeps its uid across updates, so that snapshot is the first whose delta adds the uid. A "no item" (no page, no
-item, a loop) from a run cut on or before that day is no evidence against the claim, which is kept through its URL. A
-claim of unknown date, or a run of unknown date, is treated the same way. On the node, the run is 20260801 and the
-tools' claims of 2026-10-09 came after it. Until the node holds a later run, no NONE withdraws them.
+claim keeps its uid across updates, so that snapshot is the first whose delta adds the uid. A run cut on or before
+that day never overrides the claim, in either direction. A "no item" (no page, no item, a loop) and another item are
+both no evidence: the claim is kept through its URL. A claim of unknown date, or a run of unknown date, is treated the
+same way. On the node, the run is 20260801 and the tools' claims of 2026-10-09 came after it. Until the node holds a
+later run, that run changes none of them.
 
 **The dry run** says it. `by_reason` counts the new codes. `no_page_titles` lists every "no page" title (at most 100),
 each with up to five of its books. `by_page_id_titles` lists up to 20 titles the manifest holds under another title,
-with that title. `found_by_page_id` and `runs` are counted. The books counter "their item kept: the node's run is older
-than their claim" shows how many the second rule kept.
+with that title. `found_by_page_id` and `runs` are counted. Under `books`, "kept: run older than the claim (no
+page)" and "kept: run older than the claim (other item)" show how many the second rule kept. The first counts every
+NONE: no page, no item, a loop.
 
 **Star stability.** The centre is the lowest ebook number among the books whose links name that one item. It depends
 on the membership alone, in any order. An unchanged membership gives the same claims byte for byte, including the URL
@@ -264,19 +270,36 @@ A pass is bz2 decompression. A 16 MB slice from the middle of the live enwiki in
 is one stream and one wiki is one core; the wikis run in parallel. The decompression runs in a thread fed 1 MiB
 chunks, at a 0.1 ms GIL switch interval. With `bz2.open` and the default interval, `look_up` on 5 M lines took
 10.3 s. enwiki's index of the pinned run is 283.6 MB bz2, 1.27 times the 24 M fixture, so expect about 55 s for a
-pass. Every language that misses titles runs one pass a round. A second round comes only for a redirect whose target
-the manifest also misses. Each redirect read from the dump costs one stream's decompression. The coverage check's
-manifest pass read 3 M rows (961 MiB) in 6.4 s on one process and 3.8 s on three. That is about 70 s for 52.9 M rows
-on three, and the index passes run beside it.
+pass. The coverage check's manifest pass read 3 M rows (961 MiB) in 6.4 s on one process and 3.8 s on three. That is
+about 70 s for 52.9 M rows on three, and the index passes run beside it.
 
-Open:
+**One pass a wiki, every hop a lookup.** Index first, a redirect's target is looked up in the run's index again: a
+second full pass per language for every round, about 55 s each on enwiki. So the pass keeps a table instead
+(`RunIndex`): per line, the 64-bit hash of its title (Python's own, in the child that built it) and its page id; per
+stream, its first line and its offset. That is 12 bytes a line. Each wiki is then resolved whole in its own pool task
+(`resolve_by_run`): the pass, every round's lookups in the table, the pages by id, the redirects read from the dump in
+the dump's order. On the 24 M-line fixture the pass that builds the table took 44.2 s, against 43.7 s for set
+membership alone (40.9 s of either is decompression). The table holds 278 MiB, at 444 MiB peak RSS. A lookup round of
+8,000 titles takes 1.32 s.
 
-- Layer 1's titles are the archive's (2024-06). A page moved since then is found only through the run's index. The
-  manifest is still asked first, so a 2024 title that the run now gives to another page answers with layer 1's page.
-  Asking the run's index first for every title would remove that case. It was not built: the design settled manifest
-  first.
-- Only a NONE from an older run is set aside. An ITEM from an older run that differs from a claim's item still moves
-  the book to that item's star.
+**Index first against manifest first** was measured end to end on one synthetic run. It has 5 M pages and 400 of them
+are redirects to articles, with no manifest row, as on the node. The manifest is 2,003 MiB and the index holds 100 pages
+a stream. There are 8,200 wanted titles: 7,000 articles, the 400 redirects and 800 absent titles. Manifest first is
+commit 0b6e182, index first is this one:
+
+| | 1 process | 3 processes |
+|---|---|---|
+| Manifest first: the title pass, then the index for the 1,200 missed | 26.1 s (7.6 s of it the index) | 15.6 s |
+| Index first: one pass, 2 rounds in its table, 7,400 pages by id | 11.2 s (0.29 s of it by id) | 10.2 s |
+
+Each page-id lookup is a uid read on the primary key (`UID_SQL`, plan-checked): two uids a page, one for each layer,
+500 a query. The fixture's redirect streams hold one page each, so its 400 dump reads cost nothing. A real stream of
+100 pages costs tens of ms to read, and those reads run one after another in the wiki's task: allow about 15 s for 500
+redirects on enwiki. On the node, manifest first was the 52.9 M-row pass, about a minute on three processes, then
+enwiki's index pass, about 55 s. Index first is enwiki's pass and its reads, about 70 s, with the other wikis beside
+it. The 423 MB title index is no longer built unless a wiki has no index on disk.
+
+Open: the coverage check's numbers on the node (the redirects' rows).
 
 ## Standardised alternative, not taken
 
