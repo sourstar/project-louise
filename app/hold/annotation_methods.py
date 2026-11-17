@@ -894,64 +894,18 @@ def derive_from_delta(root: Path, name: str, method_name: str | None, deltas: Ma
 
 def maintain(root: Path, *, stop=None, log=print, failed: dict[str, Any] | None = None,
              clock: datetime | None = None, run=None) -> list[dict[str, Any]]:
-    """The keeper's pass (app/worker.py): every annotations collection held
-    here whose file records a method, derived where it is due. Bounded —
-    one collection at a time, `stop()` asked between them and inside each
+    """Every annotations collection held here whose file records a method,
+    derived where it is due — the cascade's round (app/hold/cascade_keeper.py,
+    the ONE place that decides: a method due, a source published, a wake
+    pending) restricted to the collections with a method. Bounded — one
+    collection at a time, `stop()` asked between them and inside each
     child's wait; a failure is said once per (collection, method, target
-    snapshot) and left until one of them changes, except a child killed by
-    a signal (the OOM killer), tried again `KILLED_TRIES` times."""
-    from app import collections as collections_mod
-    failed = {} if failed is None else failed
-    run = run or derive_isolated
-    done: list[dict[str, Any]] = []
-    for c in collections_mod.load_annotations():
-        method_name = getattr(c, "method", None)
-        if not method_name:
-            continue
-        if stop is not None and stop():
-            break
-        try:
-            d = due(root, c.name, method_name, clock=clock)
-        except Exception as e:   # noqa: BLE001 — said once, the others go on
-            key = f"{c.name}@{method_name}@due:{type(e).__name__}:{e}"
-            if key not in failed:
-                failed[key] = str(e)
-                log(f"[annotations] {c.name}: method {method_name} cannot be checked: {e}")
-            continue
-        key = f"{c.name}@{method_name}@{d.period or d.target_snapshot}"
-        if not d.due:
-            waiting = d.waiting if d.waiting is not None else d.pinned != d.target_snapshot
-            if waiting and failed.get(key + "@said") is None:
-                failed[key + "@said"] = d.reason
-                log(f"[annotations] {c.name}: not derived yet — {d.reason}")
-            continue
-        seen = failed.get(key)
-        if isinstance(seen, str) or (isinstance(seen, int) and seen >= KILLED_TRIES):
-            continue
-        log(f"[annotations] {c.name}: deriving with {method_name} — {d.reason}")
-        try:
-            got = run(root, c.name, method_name, stop=stop)
-        except Stopped:
-            break
-        except Exception as e:   # noqa: BLE001 — said once; the target's next snapshot is tried
-            if isinstance(e, ChildFailed) and e.exitcode < 0:
-                failed[key] = (seen or 0) + 1
-                if failed[key] < KILLED_TRIES:
-                    log(f"[annotations] {c.name}: {e}; tried again at the next pass "
-                        f"({failed[key]} of {KILLED_TRIES})")
-                    continue
-            else:
-                failed[key] = f"{type(e).__name__}: {e}"
-            when = (f"in {d.period}" if d.period else f"against {d.target} {d.target_snapshot}")
-            log(f"[annotations] {c.name}: method {method_name} {when} failed ({e}); its claims stay "
-                f"pinned to {d.pinned} until `louise hold annotations derive {c.name}` succeeds or "
-                + ("the next period" if d.period else "the target's next snapshot"))
-            continue
-        when = (f"in {d.period}, against {', '.join(f'{k} {v}' for k, v in (got.get('against') or {}).items())}"
-                if d.period else f"against {d.target} {d.target_snapshot}")
-        log(f"[annotations] {c.name}: derived with {method_name} {when}: snapshot "
-            f"{got.get('snapshot_id')} — {got.get('added', 0):,} added, "
-            f"{got.get('changed', 0):,} re-pinned or changed, {got.get('tombstoned', 0):,} withdrawn, "
-            f"{got.get('dropped_count', 0):,} set aside (not in {d.target_snapshot} yet)")
-        done.append({"collection": c.name, **got})
-    return done
+    snapshot or period) and left until one of them changes, except a child
+    killed by a signal (the OOM killer), tried again `KILLED_TRIES` times.
+    `run(root, name, method_name, stop=)` is the derivation (the cascade's
+    is `derive_from_delta`)."""
+    from . import cascade_keeper
+    step = None if run is None else (
+        lambda root_, name, method_name, deltas, stop=None: run(root_, name, method_name, stop=stop))
+    return cascade_keeper.keep_round(root, stop=stop, log=log, failed=failed, clock=clock, run=step,
+                                     methods_only=True)

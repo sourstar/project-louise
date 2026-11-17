@@ -83,6 +83,14 @@
     {{ c.update.says }}
   </div>
   {% endif %}
+  {# THE ANNOTATIONS CASCADE (app/hold/cascade.py): what this collection's
+     newest published snapshot woke — "woke 2 annotations (snapshot 2026-11)" #}
+  {% if c.cascade and c.cascade.says %}
+  <div class="note" data-cascade>
+    <span class="badge brass" title="the annotations collections that declare this one are updated after each snapshot it publishes (docs/notes/collection-updates.md §4)">annotations</span>
+    {{ c.cascade.says }}
+  </div>
+  {% endif %}
   {% if c.gate and not c.gate.allowed %}
   <div class="note">
     <span class="badge err">embedding paused</span> {{ c.gate.reason }}
@@ -335,6 +343,13 @@
   <div class="note">
     {% if a.claims is not none %}{{ a.claims|num }} claim{{ '' if a.claims == 1 else 's' }} in snapshot {{ a.snapshot }}{% else %}{{ a.note }}{% endif %}
   </div>
+  {# the cascade (app/hold/cascade.py): "woken by wikipedia 2026-11 — running, started 03:12" #}
+  {% if a.cascade and a.cascade.says %}
+  <div class="note" data-cascade="{{ a.cascade.state or '' }}">
+    <span class="badge {{ 'err' if a.cascade.state == 'failed' else 'brass' }}" title="updated by itself after a collection it declares publishes a snapshot (docs/notes/collection-updates.md §4)">update</span>
+    {{ a.cascade.says }}
+  </div>
+  {% endif %}
   <div class="row">
     <div>
       <label class="check" title="serve this collection's claims and their edges as members (04 §4.3). Unchecked: nothing new is served, the transfers under way finish first">

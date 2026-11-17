@@ -3006,16 +3006,19 @@ def _claim_index_keeper() -> None:
     for wikipedia's); then, at boot and whenever the files change, every
     LARGE annotations snapshot held here with no claim index gets one
     (`claim_index.maintain`) — without it its claims group nothing at search.
-    Before that, every annotations collection whose file records a METHOD
-    is re-derived once the collection it annotates holds a newer snapshot
-    (`annotation_methods.maintain`, 2026-11-12, RULE 2: no file uploaded by
-    hand), in processes of their own.
+    Before that, THE ANNOTATIONS CASCADE (`cascade_keeper.keep_round`,
+    docs/notes/collection-updates.md §4): every annotations collection that
+    declares a source which PUBLISHED a newer snapshot is woken and updated,
+    in Kahn's order, transitively — and every one whose file records a METHOD
+    is re-derived when it is due (2026-11-12, RULE 2: no file uploaded by
+    hand; `annotation_methods.maintain` is the same round, methods only), in
+    processes of their own; `state/woken.json` says where each stands.
     Its own thread, low priority, so a round never waits for it; idempotent
     (a built index is skipped) and bounded (a failed build is said once per
     snapshot); paused with the node's index work (`_maintenance_allowed`);
     out at the worker's stop within a second, or between two parts of a
     build."""
-    from .hold import annotation_methods, annotations_stream, claim_index
+    from .hold import annotations_stream, cascade_keeper, claim_index
     _lower_own_priority(INDEX_MAINTAINER_NICE)
 
     def log(m: str) -> None:
@@ -3031,9 +3034,9 @@ def _claim_index_keeper() -> None:
         _claim_index_poke.clear()
         if _maintenance_allowed():
             try:
-                annotation_methods.maintain(root, stop=_stop.is_set, log=log, failed=derived)
+                cascade_keeper.keep_round(root, stop=_stop.is_set, log=log, failed=derived)
             except Exception as e:   # noqa: BLE001 — the thread outlives a bad pass
-                log(f"annotation method pass failed: {type(e).__name__}: {e}")
+                log(f"the annotations cascade's round failed: {type(e).__name__}: {e}")
             try:
                 claim_index.maintain(root, stop=_stop.is_set, log=log, failed=failed, isolated=True)
             except Exception as e:   # noqa: BLE001 — the thread outlives a bad pass

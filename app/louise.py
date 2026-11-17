@@ -4431,8 +4431,17 @@ def cmd_show(a) -> int:
     # the update by cadence, in plain words (app/hold/update.py; 2026-11-17):
     # "update 2026-11: fetching 7 of 11 languages, 41 of 62 GB"
     out["update"] = _update_state(a.root, name, codex)
+    # the annotations cascade (app/hold/cascade.py; 2026-11-17): as a source,
+    # "woke 2 annotations (snapshot 2026-11)"; as an annotations collection,
+    # "woken by wikipedia 2026-11 — running, started 03:12"
+    out["cascade"] = _cascade_state(a.root, name, codex)
     _print(out)
     return 0
+
+
+def _cascade_state(root, name: str, codex) -> dict | None:
+    from app.hold import cascade
+    return cascade.shown(root, name, codex)
 
 
 def _update_state(root, name: str, codex) -> dict:

@@ -2951,3 +2951,26 @@ Decisions identical in all nine runs (the manifest's uid, path, txt_hash, marks 
 `d2ce8f161321f4ff`, 50,500 rows; 3,440 changed, 46,060 relocated). What stays serial: the enumeration, the row
 reads and the writes. On the node: the same table on wikipedia's first update, with its real pages (~60 M) and
 PARSE_PROCESSES as deployed.
+
+## 2026-11-17 — the annotations cascade: one round decides every annotations update (app/hold/cascade_keeper.py, in the worker's claim index keeper) — BEFORE (deploy pending)
+
+**Scenario (BEFORE).** The claim index keeper ran `annotation_methods.maintain` every 300 s and whenever a collection
+file changed. Per pass, for each collection with a method, it ran `due()`. That call resolves the collection (it
+parses every held Codex), samples its claims (cached per snapshot), lists the target's and its own snapshots, reads
+the method marker, and reads the first claim of the first part while no marker matches. Nothing woke a collection of
+claims given by hand, or a method's inputs. Measured here (this 4-core sandbox, nothing else running, median of
+5 × 300 calls, tool: a scratch harness, not committed): `due()` costs **4.3 ms** at 1 snapshot and 2 claims, and
+**12.9 ms** at 409 snapshots and 2,000 claims. It grows with the snapshots held.
+
+**The change.** The same thread runs `cascade_keeper.keep_round` instead (collection-updates.md §4 "As built: the
+keeper"). Each annotations collection's decision is a function of its markers (`woken.json`, `method.json`, the
+sources' `update.json` and `published/<id>.json`), the snapshot listings (one stat of each directory, relisted when
+it moved, git's racy rule) and the open period. It is not taken again while those are the same. The runs are what
+`maintain` ran, in the same children, plus a re-check of hand-made claims when a declared source publishes.
+
+**AFTER (synthetic, same harness).** A settled round costs **0.46 ms at both sizes**: 1 snapshot and 2 claims, and
+409 snapshots and 2,000 claims. The cost test counts 0 parts, 0 SQLite connections and 0 snapshot listings. The first
+round after a start costs 2.4 ms and 4.5 ms (the graph, the listings and each collection's claims' pin, read once).
+On the node, to fill in: the round's time from the worker log, and the first cascade, wikipedia's next published
+snapshot into wikipedia-articles. Record the method and update wall times and the peak RSS of each child, as
+annotation-methods.md asks.

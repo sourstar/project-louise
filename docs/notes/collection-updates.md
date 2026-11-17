@@ -6,7 +6,7 @@ Codex's `update` block, wikidata next; (2) "it must add a signal to wake up
 all the annotations relying on that collection's updates", clarified: "To
 trigger a cascade of updates of the interested annotations once wikipedia
 has completed its one." Part 1 is built (§6, 2026-11-17, deploy pending);
-part 2, the cascade, is not.*
+part 2, the cascade, is built (§4 "As built: the keeper", 2026-11-17, deploy pending).*
 
 ## 1. The update, any collection with `update.cadence`
 
@@ -191,6 +191,59 @@ other sessions; scratchpad harnesses `measure/delta.py` and `ge_perf.py`):
 - on each annotations collection: "woken by wikipedia 2026-11 — running,
   started 03:12" and then "— done 03:41".
 
+**As built (2026-11-17): the keeper.** Code: `app/hold/cascade.py` (the published marker, the graph, the gate,
+the shown lines), `app/hold/cascade_keeper.py` (the round). Tests: `tests/hold/test_cascade_keeper.py`.
+
+- **Published.** `snapshot.sign_snapshot` writes `state/published/<id>.json` after the sidecar's durable write. It
+  is the one place a snapshot is signed, so `snapshot create`, the update pass, an annotations create or update and a
+  re-creation all write it, once per snapshot hash. The sidecar's own write is now atomic (temporary, fsync, rename).
+  A snapshot signed with no marker is backfilled by the round from a stat and the sidecar's `snapshot` field, never
+  a re-hash. That covers one signed before this, or adopted with its sidecar. Only each source's newest signed
+  snapshot is backfilled.
+- **Who is woken: one graph.** `cascade.declarations` has an edge S → A for each target in A's `annotates` (the held
+  collection answering for it, a records twin included) and for each held collection of a plugin in A's method's
+  `inputs`. The gate's `annotators` reads the same graph, so gutenberg-book-editions holds wikipedia's old run too.
+- **Order.** Kahn's algorithm over the graph. A collection waits while an annotations collection it declares has a
+  wake pending. Within one round, a collection's own new snapshot wakes the ones after it: transitive.
+- **Cycles.** A cycle is refused where it is declared, the loop named: `collection_file` (so `hold config apply --set
+  method=` and the Library's box) and annotations `create`. The round refuses one written by hand, and says so once.
+- **When a collection runs.** It runs when it is woken (a declared source's newest published snapshot is newer than
+  what its last run read). It also runs when its method is due (`maintain`'s trigger, folded in; `maintain` is the
+  round restricted to method collections), or when a wake is pending. It runs once, against every declared source's
+  newest snapshot. It waits instead, said in `woken.json`, in three cases:
+  - an annotations source has a wake pending;
+  - a declared source's update is in flight: its `update.json` is not done, its failure is not exhausted, and its
+    period's snapshot is not published. An update at `embed` or `old-run` has delivered, so it never deadlocks with
+    the gate;
+  - its own period's snapshot is written ("one snapshot a period: runs when 2026-12 opens").
+- **The run.** `derive_from_delta` in its own children. A killed child is tried again `KILLED_TRIES` times. A refusal
+  is said once per process. A worker that dies during a run (`woken.json` found `running`, not stopped) resumes it
+  with the same sources. Three such deaths fail it until a source moves, recorded in the file, so a run that takes
+  the worker down cannot loop it. A stop leaves `running` and `stopped`, and is resumed without being counted.
+- **Only what is made here.** Claims given by hand are re-checked only where their claims file is held
+  (`origin/claims.jsonl`). A collection adopted from a peer takes its publisher's snapshots.
+- **What a wait keeps on disk.** A queued wake is not started, so the source's old run stays while a dependent waits.
+  At most that is one period (≤ 31 days) of one extra run: wikipedia's is ~62 GB (74 GB declared). This happens when
+  the dependent wrote its period's snapshot before the source published. Waiting for another source's in-flight
+  update keeps it for the days that update takes.
+- **An update about to begin is waited for too (decided 2026-11-17, choice B).** gutenberg-editions is due at 00:00
+  UTC on the 1st, and the update keeper writes wikipedia's `update.json` only at its first night beat after the
+  cutoff (≤ 300 s later). So a source also counts as in flight from its cutoff until its `update.json` appears, for
+  at most 24 h (`cascade.BEGIN_WAIT_S`, real hours, DST included). It counts only when the update pass would act on
+  it:
+  - it is updated by cadence (`update.not_updated` is None: an `update` block, a dated origin, a completion check);
+  - it is not refused (`origin_names_run`, wikipedia's until its origin form is decided);
+  - the node's update keeper is on, and the node runs it from its origin with acquisition on.
+
+  A source the pass refuses, or with no `update` block, never makes a dependent wait. `woken.json` says "waiting for
+  wikipedia's 2026-11 update to begin, until HH:MM". Once the marker is written, the in-flight rule above takes
+  over.
+- **The cost of a round** (this sandbox, 4 cores, median of 5 × 300 rounds, a method collection held). Before, each
+  pass ran `annotation_methods.due`: 4.3 ms at 1 snapshot and 2 claims, 12.9 ms at 409 snapshots and 2,000 claims.
+  After, a settled round costs 0.46 ms at both sizes: markers and stats only. The cost test counts no part, no
+  manifest and no listing of a snapshots directory. The first round after a start costs 2.4 ms and 4.5 ms (the
+  listing and the claims' pin, read once).
+
 ## 5. Order of work
 
 1. This note; the operator's choice in §2.
@@ -220,7 +273,8 @@ operator's word.
   the fetch run there too, the rest waits for the night.
 - **The old run's gate** (`app/hold/cascade.py`): published = the snapshot and its `.sig.json`; started = every
   annotations collection that declares this one has `state/woken.json` naming the snapshot at `running`, `done` or
-  `failed`. Until the cascade (§4) writes `woken.json`, an annotated collection's old run stays.
+  `failed`. Until the cascade (§4) writes `woken.json`, an annotated collection's old run stays. Since the
+  keeper (§4 "As built: the keeper"), "declares" is the cascade's graph: `annotates` and a method's `inputs`.
 - **OPEN, the operator's: the origin form.** Until it is decided, a plugin declaring `origin_names_run`
   (wikipedia) is planned (`--dry-run`) and refused (exit 2) by the pass and the keeper. The choices: A keep
   the `origin` naming the dated file and byte range (every part re-issued each run); B a page-id `origin`

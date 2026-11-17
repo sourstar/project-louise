@@ -1391,7 +1391,13 @@ def _write_collection(root: Path, name: str, targets: Sequence[Target], annotato
     be the Codex's."""
     from datetime import datetime
     from zoneinfo import ZoneInfo
-    from . import collection as col, snapshot as sn
+    from . import cascade, collection as col, snapshot as sn
+    # the targets are declarations the cascade follows (docs/notes/
+    # collection-updates.md §4): one that closes a loop is refused here, the
+    # loop named, before a byte is written
+    loop = cascade.cycle_through(root, name, targets=[t.codex.collection_id for t in targets])
+    if loop:
+        raise AnnotationsError(cascade.refusal(name, loop))
     first = targets[0]
     tt = (first.codex.descriptive.title or first.name).strip()
     names = ", ".join(t.name for t in targets)
