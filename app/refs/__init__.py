@@ -14,7 +14,9 @@ from .neuris import CitationResolver as NeurisCitationResolver, NeurisRefSource
 from .normattiva import CitationResolver, NormattivaRefSource
 from .resolver import CompositeResolver, DictResolver
 from .store import RefStore, connect, ensure_schema
+from .tlio import TlioSource
 from .wikidata import WikidataRefSource
+from .wikisource_readings import WikisourceReadingsSource
 
 REFS_REGISTRY = {
     "hgnc": HgncSource(),
@@ -47,6 +49,13 @@ REFS_REGISTRY = {
     # wikidata collection's keys and wiki-gutenberg's mentions
     # (docs/notes/wikidata-build-plan.md §2)
     "wikidata-refs": WikidataRefSource(),
+    # historical Italian: the readings of old forms, by the print year a
+    # record states (app/refs/readings.py; app/historical.py's reader):
+    # spellings and their modern forms, both attested in Wikisource's
+    # print-dated scan pages (green), and TLIO's glosses before 1400 (red,
+    # synced only once its terms are acknowledged)
+    "wikisource-readings": WikisourceReadingsSource(),
+    "tlio": TlioSource(),
 }
 
 #: every registered resolver in turn; `expand` follows the declared links

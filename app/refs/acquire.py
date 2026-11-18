@@ -123,6 +123,13 @@ def _homologene_transform(raw: Path, final: Path) -> None:
     tmp.replace(final)
 
 
+def _wikisource_readings_transform(raw: Path, final: Path) -> None:
+    """it.wikisource's XML dump -> the reading pairs and the 1900s counts
+    (app/refs/wikisource_readings.py)."""
+    from . import wikisource_readings
+    wikisource_readings.transform(raw, final)
+
+
 REF_DUMPS: tuple[RefDump, ...] = (
     RefDump(
         source_id="hgnc",
@@ -157,6 +164,16 @@ REF_DUMPS: tuple[RefDump, ...] = (
         final_name="gnomad_constraint.tsv",
         max_age_days=365,     # v2.1.1 is a frozen release; refetch is hygiene
         transform=_gnomad_transform,
+    ),
+    RefDump(
+        # CC BY-SA 3.0 / GFDL (green): the monthly dump, 445 MB on 20261101
+        source_id="wikisource-readings",
+        base_url="https://dumps.wikimedia.org/itwikisource/latest",
+        rel_path="itwikisource-latest-pages-articles.xml.bz2",
+        raw_name="itwikisource-pages-articles.xml.bz2",
+        final_name="wikisource_readings.tsv",
+        max_age_days=30,
+        transform=_wikisource_readings_transform,
     ),
 )
 
