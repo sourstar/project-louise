@@ -326,8 +326,10 @@ München): the reading is two REFERENCE SOURCES (06 §6.5, amended):
   is read as an original, by its first publication 1819, while his
   *Puritani di Scozia* (43458/9) carry trl. `translation-of` claims: none
   in gutenberg-book-editions (all 7,160 are same-work), so no claim marks
-  one. What remains unknown: `reading_year_rules --claims` counts the
-  cross-language same-work pairs with no mark on either side.
+  one. What remains unknown, counted on the node at 1b8fbc6
+  (`reading_year_rules --claims`): of 1,507 cross-language same-work
+  pairs, 268 have no translation mark on either side, 15 of them with an
+  Italian side — the Italian records that may be unmarked translations.
 - *The year (first ruling)*: `publication_year_fields`, declared per plugin, in order —
   gutenberg `("first_published", "date")` (operator: "work's
   first-publication year is the default, and print year of the edition
