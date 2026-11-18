@@ -80,6 +80,7 @@ import shutil
 import sys
 import time
 import unicodedata
+from collections import Counter
 from collections.abc import Mapping
 from contextlib import nullcontext
 from dataclasses import dataclass
@@ -1173,13 +1174,17 @@ def _refs(target_ref: str | None, from_snapshot: str | None,
 
 def _checked(root: Path, target_ref: str | None = None, from_snapshot: str | None = None,
              claims: bytes = b"", *, annotator: str | None,
-             targets: Sequence[tuple[str, str]] | None = None) -> Checked:
+             targets: Sequence[tuple[str, str]] | None = None, repin: bool = False) -> Checked:
     """What `create` checks before it writes anything: the targets, the
     claims file, every claim's ends in the target snapshots — each chunk
-    end re-cut — and the one annotator."""
+    end re-cut — and the one annotator. With `repin`, the claims' own pins
+    are dropped first and taken anew, as an update re-checks them."""
     ts = _targets(Path(root), _refs(target_ref, from_snapshot, targets))
     by_plugin = {t.plugin: t for t in ts}
     submitted = read_claims(claims, target_plugins=tuple(by_plugin))
+    if repin:
+        submitted = [Submitted(s.line, s.raw, {k: v for k, v in s.claim.items() if k not in PINNED_KEYS})
+                     for s in submitted]
     wanted: dict[str, set[str]] = {}
     text_for: dict[str, set[str]] = {}
     for s_ in submitted:
@@ -1221,6 +1226,10 @@ class Streamed:
     sort: Any
     snapshots: dict[str, str]
     codices: dict[str, Codex]
+    #: `create --repin`: the claims' own pins dropped, every claim pinned anew
+    strip: bool = False
+    #: what the re-pin moved (`annotations_stream.repinned`), with `strip`
+    moved: dict[str, int] | None = None
 
     @property
     def graph(self) -> bool:
@@ -1230,7 +1239,8 @@ class Streamed:
         """The claim records in numbering order, read back from `src`, as
         `write_snapshot` writes them (`annotations_stream.ClaimParts`)."""
         from . import annotations_stream as st
-        parts = st.ClaimParts(src, self.survey, self.sort, self.tables, self.snapshots, self.codices)
+        parts = st.ClaimParts(src, self.survey, self.sort, self.tables, self.snapshots, self.codices,
+                              strip=self.strip)
         self.survey = self.tables = self.sort = None     # the parts hold what they need
         return parts
 
@@ -1243,7 +1253,7 @@ def _version_for(targets: Sequence[Target], container: str, graph: bool) -> int:
 
 
 def _checked_stream(ts: tuple[Target, ...], src, *, annotator: str | None, container: str,
-                    work: Path | None, sort: bool = False) -> Streamed:
+                    work: Path | None, sort: bool = False, repin: bool = False) -> Streamed:
     """`_checked`, streaming (app/hold/annotations_stream.py), for the
     targets `ts` (`_targets`, the first check): the same checks in the same
     order, so the same refusal — the claims file, every claim's ends in the
@@ -1251,7 +1261,9 @@ def _checked_stream(ts: tuple[Target, ...], src, *, annotator: str | None, conta
     their offsets and the digests of their ends; the targets' tables saved in
     the workspace `work` for the pool's children (none: read here, for a file
     given as bytes). With `sort`, the claims are also put in numbering order
-    there (`records_of`'s), for `Streamed.records`."""
+    there (`records_of`'s), for `Streamed.records`. With `repin`, the claims'
+    own pins are dropped and each is pinned anew, as an update re-checks the
+    claims it holds (`create --repin`), and what moved is counted."""
     from . import annotations_stream as st
     by_plugin = {t.plugin: t for t in ts}
     sv = st.survey(src, plugins=tuple(by_plugin),
@@ -1267,7 +1279,9 @@ def _checked_stream(ts: tuple[Target, ...], src, *, annotator: str | None, conta
     snapshots = {p: t.from_snapshot for p, t in by_plugin.items()}
     codices = {p: t.codex for p, t in by_plugin.items()}
     order = st.ExternalSort(work) if sort and work is not None else None
-    st.check_pins(src, sv, tables, snapshots=snapshots, codices=codices, sort=order, version=version)
+    moved: Counter = Counter()
+    st.check_pins(src, sv, tables, snapshots=snapshots, codices=codices, sort=order, version=version,
+                  strip=repin, moved=moved)
     contributors = sorted(sv.contributors)
     annotator = annotator or (contributors[0] if len(contributors) == 1 else None)
     if not annotator:
@@ -1276,7 +1290,8 @@ def _checked_stream(ts: tuple[Target, ...], src, *, annotator: str | None, conta
                                f"credits one annotator: give a claims file whose claims name one "
                                f"contributor, or name the annotator the Codex credits on the "
                                f"command line with --annotator")
-    return Streamed(ts, annotator, sv, tables, version, order, snapshots, codices)
+    return Streamed(ts, annotator, sv, tables, version, order, snapshots, codices, strip=repin,
+                    moved=dict(sorted(moved.items())) if repin else None)
 
 
 def _method_name(m: dict[str, Any]) -> str:
@@ -1285,7 +1300,8 @@ def _method_name(m: dict[str, Any]) -> str:
 
 def preview(root: Path, *, target_ref: str | None = None, from_snapshot: str | None = None,
             claims: bytes | Path, annotator: str | None = None,
-            targets: Sequence[tuple[str, str]] | None = None, container: str = cx.JSONL) -> dict[str, Any]:
+            targets: Sequence[tuple[str, str]] | None = None, container: str = cx.JSONL,
+            repin: bool = False) -> dict[str, Any]:
     """`create annotations --dry-run`: the claims checked against the target
     snapshot(s) exactly as `create` checks them, counted, nothing written —
     for a file of thousands of claims about a live collection, the measure
@@ -1301,7 +1317,7 @@ def preview(root: Path, *, target_ref: str | None = None, from_snapshot: str | N
     with (nullcontext() if bytes_given else st.workspace(root, f"preview.{secrets.token_hex(6)}")) as work, \
             st.ClaimsSource(claims) as src:
         try:
-            ch = _checked_stream(ts, src, annotator=annotator, container=container, work=work)
+            ch = _checked_stream(ts, src, annotator=annotator, container=container, work=work, repin=repin)
         finally:
             st.forget()
     first = ch.targets[0]
@@ -1315,6 +1331,7 @@ def preview(root: Path, *, target_ref: str | None = None, from_snapshot: str | N
             "by_type": dict(sorted(sv.by_type.items())),
             "by_method": dict(sorted(sv.by_method.items())),
             "parts": -(-sv.count // per_part),
+            **({"repinned": ch.moved or {}} if repin else {}),
             "written": False}
 
 
@@ -1323,7 +1340,7 @@ def create(root: Path, name: str, *, target_ref: str | None = None, from_snapsho
            annotator: str | None = None, snapshot_id: str | None = None,
            key=None, now: str | None = None, nonce: str | None = None,
            log=print, targets: Sequence[tuple[str, str]] | None = None,
-           container: str = cx.JSONL, _in_memory: bool = False) -> tuple[Codex, Any]:
+           container: str = cx.JSONL, repin: bool = False, _in_memory: bool = False) -> tuple[Codex, Any]:
     """`hold collection create annotations` (07 §7.3): the Codex, the
     claims kept as this collection's origin, the record and relations
     parts, `validation.json`, the first snapshot (signed when this peer has
@@ -1344,7 +1361,17 @@ def create(root: Path, name: str, *, target_ref: str | None = None, from_snapsho
     the parse pool (app/hold/annotations_stream.py). Every byte written is
     what the in-memory path, `_in_memory` — every claim held, as until
     2026-11-10, kept for that proof alone — writes
-    (tests/hold/test_annotations_stream.py)."""
+    (tests/hold/test_annotations_stream.py).
+
+    `repin` (07 §7.3 `--repin`, 2026-11-18): A RE-CREATED TARGET WHOSE TEXT
+    MOVED. A claims file pinned to the predecessor (`hold annotations
+    claims`) is refused line by line where a record's content or the
+    snapshot moved; with `repin` its own pins are dropped and every claim is
+    pinned anew against the new target, exactly as `update` re-checks the
+    claims it holds — the same rule for a target re-created at a new parser
+    (gutenberg 10 -> 12) as for a target's next snapshot — and what moved is
+    said: the claims whose record's TEXT moved, by method, before a byte is
+    written (`preview`)."""
     from . import annotations_stream as st, collection as col
     root = Path(root)
     col.check_name(name)
@@ -1353,7 +1380,8 @@ def create(root: Path, name: str, *, target_ref: str | None = None, from_snapsho
     def hold(codex: Codex) -> None:
         col.create(root, codex, name=name)
     if _in_memory:
-        ch = _checked(root, target_ref, from_snapshot, claims, annotator=annotator, targets=targets)
+        ch = _checked(root, target_ref, from_snapshot, claims, annotator=annotator, targets=targets,
+                      repin=repin)
         return _write_collection(
             root, name, ch.targets, ch.annotator, ch.graph, hold, container=container, title=title,
             summary=summary, platform_image=platform_image, nonce=nonce, snapshot_id=snapshot_id, key=key,
@@ -1364,7 +1392,11 @@ def create(root: Path, name: str, *, target_ref: str | None = None, from_snapsho
     st.sweep(root, log)
     with st.workspace(root, f"create.{name}") as work, st.private_source(claims, work) as src:
         try:
-            cs = _checked_stream(ts, src, annotator=annotator, container=container, work=work, sort=True)
+            cs = _checked_stream(ts, src, annotator=annotator, container=container, work=work, sort=True,
+                                 repin=repin)
+            if repin:
+                log(f"[annotations] {name}: re-pinned against {', '.join(t.name for t in cs.targets)}: "
+                    + (", ".join(f"{k} {v:,}" for k, v in (cs.moved or {}).items()) or "nothing moved"))
             return _write_collection(
                 root, name, cs.targets, cs.annotator, cs.graph, hold, container=container, title=title,
                 summary=summary, platform_image=platform_image, nonce=nonce, snapshot_id=snapshot_id, key=key,
