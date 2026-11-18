@@ -317,7 +317,7 @@ origin published; it is never rendered, because rendering is what runs it.
 
 **Caps, applied before decoding.** At most 16 MiB of bytes per figure, at
 most 64 megapixels once the header is read but before any pixel is, and
-at most 4,096 figures per record. The first two are what stop a
+at most 16,384 figures per record (*amended 2026-11-18*, below). The first two are what stop a
 decompression bomb — a few hundred kilobytes of PNG that decodes to
 tens of gigabytes — and they are applied to the DECLARED dimensions in
 the header, so the decoder is never handed something it will die inside.
@@ -340,7 +340,19 @@ The count cap was 1,024 and refused eleven books, the largest carrying
 3,503 images — which is 0.025 % of the corpus and the WRONG 0.025 %:
 they are the most illustrated books in it, which is what a plates
 collection is for. A rule that admits a novel's frontispiece and refuses
-an illustrated natural history is backwards, so the cap is 4,096.
+an illustrated natural history is backwards, so the cap was 4,096.
+
+*Amended 2026-11-18.* That measurement counted the images the parser of
+the day carried. Gutenberg's parser 11 carries EVERY plate (operator,
+2026-10-25: "Every plate"), and the first whole build at parser 12 refused
+gutenberg:47273, which names 4,464 figures — a real book refused, which is
+the one thing the count cap must not do, and its figures may not be dropped
+or folded either (invariant 11). The cap is 16,384: four times the largest
+real record seen, the margin the byte cap keeps over the plates it was
+measured on. It still stops a record from naming the unbounded; a record
+over it still aborts the build (pack/build.py) and fails `hold check`'s
+`figures` row. A peer on a build before this amendment fails that row for
+such a record until it updates.
 
 The media-type list was measured too: `image/jpeg` and `image/png` cover
 99.66 % of that corpus. SVG is REAL in it — 2,407 images — so refusing
