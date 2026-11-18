@@ -49,15 +49,19 @@ predecessor's word for a `.next` re-creation, and each carried line is then held
   (`dev carry`, `records carry`) or freezes (`records build`, `snapshot create`) a Codex whose plugin names
   its records' origins by the origin's own key at that parser version and which names no run.
   `records carry` holds each part to the run the target names: a line read in another run refuses it.
-- `louise dev pin-run`: an UNPUBLISHED collection gets the corrected Codex in place (below).
-- The check's memory: vectors-sample and chunks cut a part one record at a time, and the entity table's
-  sort is packed (measured below). The checks run in their own container, never in the worker.
+- `louise dev pin-run`: an UNPUBLISHED collection gets the corrected Codex in place (below). Every file a
+  writer under `shard/` and `state/` puts the old id in is handled by pin_run.py's table, which was read
+  from the code. What may have left the node is read so that a doubt refuses: a locked node database, an
+  unreadable Codex file or a missing manifest refuses the pin.
+- The check's memory: vectors-sample and chunks cut a part one record at a time, and the entity table is
+  a direct-address table (measured below). The checks run in their own container, never in the worker,
+  and the worker's scheduled check holds a collection paused on its own.
 
 **Why in place, not a carry to a fresh `.next`** (RULE 1; nothing was published, `share = false`):
 
 | path | pros | cons |
 |---|---|---|
-| **`dev pin-run wikidata.next`** (chosen) | rewrites the one snapshot file, its sidecar and a few small files (the 4,009 parts are already run-free and byte-identical to a by-the-book build); seconds per GB of snapshot; extra space = one snapshot file for a moment; the result is byte for byte the creation with the corrected Codex (tests/hold/test_pin_run.py: the SHARD, sidecar, markers, published marker, claim, collection file, the manifest's documents and cursors, the build database) | a new command; amends 07 §7.8's "a name holds one collection for its life" for a collection whose id never left this node; refuses whenever anything was published or shared, or a file names the old id that it does not know |
+| **`dev pin-run wikidata.next`** (chosen) | rewrites the one snapshot file, its sidecar and a few small files (the 4,009 parts are already run-free and byte-identical to a by-the-book build); seconds per GB of snapshot; extra space = one snapshot file for a moment; the result is byte for byte the creation with the corrected Codex (tests/hold/test_pin_run.py: the SHARD, sidecar, markers, published marker, claim, collection file, the manifest's documents and cursors, the build database); a wikidata.next holding every writer's file, its vectors split by family, pins cleanly and its vectors still pass vectors-sample (tests/hold/test_pin_run_writers.py) | a new command; amends 07 §7.8's "a name holds one collection for its life" for a collection whose id never left this node; refuses whenever anything was published or shared, or a file names the old id that it does not know |
 | carry to `wikidata.next2` | only the existing carries | 4,009 parts written again (their bytes again in space until wikidata.next is forgotten), the first snapshot's delta re-read (75.9 M uids), the manifest, index and vectors moved a second time; hours |
 | status quo | nothing to do | a snapshot that names entities in no run: unverifiable against the source (invariant 11), never published |
 
