@@ -88,7 +88,7 @@ def test_a_unit_held_and_current_costs_no_request_and_a_stale_one_is_fetched_tre
     unit = _held_unit(corpus, FORMEX[0], "2022-07-22T18:52:20.917+02:00")
     called = []
     monkeypatch.setattr(cellar, "fetch_unit_from_tree",
-                        lambda base, celex, lang, dest: called.append((celex, lang, dest))
+                        lambda base, celex, lang, dest, trees=None: called.append((celex, lang, dest))
                         or cellar.Fetched(files={}, moved=7))
     remote = RemoteFile(rel_path=cellar.rel_path("it", FORMEX[0]), remote=cellar.encode(FORMEX[0], "it"),
                         mtime=cellar._epoch("2022-07-22T16:52:20Z"))
@@ -257,3 +257,70 @@ def test_cellar_is_asked_on_four_connections_and_the_report_splits_trees_from_it
     units._count(cellar.Fetched(files={}, moved=1 << 20, tree_s=2.5, items_s=4.0))
     (line,) = units.reports()
     assert "asking: trees 2 s, items 4 s" in line or "asking: trees 3 s, items 4 s" in line
+
+
+# ---- one tree per work within a pass (München, 2026-11-18: trees 1,144 s, items 33 s) ------
+
+def test_a_tree_cellar_served_serves_the_work_s_other_languages_within_the_window(tmp_path):
+    import threading
+    from app.acquire import work_trees
+    now = [1_000_000.0]
+    store = work_trees.RecentTrees(tmp_path / "trees", window_s=3600, clock=lambda: now[0])
+    asked = []
+
+    def ask():
+        asked.append(1)
+        return b"<rdf:RDF/>"
+    import os
+    assert store.get("32016R0679", ask) == (b"<rdf:RDF/>", "cellar")
+    os.utime(store._path("32016R0679"), (now[0], now[0]))
+    assert store.get("32016R0679", ask) == (b"<rdf:RDF/>", "kept") and len(asked) == 1
+    now[0] += 3601
+    assert store.get("32016R0679", ask)[1] == "cellar" and len(asked) == 2, "past the window: Cellar again"
+    store._path("32016R0679").write_bytes(b"not gzip")
+    os.utime(store._path("32016R0679"), (now[0], now[0]))
+    assert store.get("32016R0679", ask)[1] == "cellar", "a file not whole is asked again"
+    # two connections on one work at once: one request
+    asked.clear()
+    slow = threading.Event()
+
+    def ask_slow():
+        asked.append(1)
+        slow.wait(0.3)
+        return b"<rdf:RDF/>"
+    got = []
+    ts = [threading.Thread(target=lambda: got.append(store.get("32019L0790", ask_slow)[1])) for _ in range(3)]
+    for t in ts:
+        t.start()
+    for t in ts:
+        t.join()
+    os_kept = sorted(got)
+    assert len(asked) == 1 and os_kept == ["cellar", "kept", "kept"]
+
+
+def test_the_pass_asks_a_work_s_tree_once_for_its_units(tmp_path, monkeypatch):
+    """fetch_unit_from_tree with the pass's store: the second unit of the
+    work takes the kept tree, and the report says so."""
+    from app.acquire import work_trees
+    from app.plugins.eurlex import rdf
+    from tests.acquire.test_eurlex_dump import CONS
+    served = {cellar.resource_url("https://cellar.test", CONS[0]): (CONS[2] / rdf.TREE_FILE).read_bytes()}
+    from app.plugins.eurlex import from_tree
+    for it in from_tree.notice(rdf.loads(served[next(iter(served))]), "ITA", CONS[0]).items["fmx4"]:
+        served[it.uri] = (CONS[2] / it.name).read_bytes()
+    asked = []
+
+    def get(client, url, headers, what, *, charge, ok=(200,)):
+        asked.append(url)
+        return SimpleNamespace(content=served[url], headers={})
+    monkeypatch.setattr(cellar, "_get", get)
+    monkeypatch.setattr(cellar, "_read_tree", lambda data, celex: rdf.loads(data))
+    store = work_trees.RecentTrees(tmp_path / "trees")
+    a = cellar.fetch_unit_from_tree("https://cellar.test", CONS[0], "it", tmp_path / "a", client=object(),
+                                    trees=store)
+    b = cellar.fetch_unit_from_tree("https://cellar.test", CONS[0], "it", tmp_path / "b", client=object(),
+                                    trees=store)
+    tree_url = cellar.resource_url("https://cellar.test", CONS[0])
+    assert asked.count(tree_url) == 1 and (a.tree_from, b.tree_from) == ("cellar", "kept")
+    assert b.tree_s == 0.0
+    assert (tmp_path / "a" / rdf.TREE_FILE).read_bytes() == (tmp_path / "b" / rdf.TREE_FILE).read_bytes()

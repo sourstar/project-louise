@@ -20,6 +20,16 @@ measured (published figures disagree).
 
 ### 2026-11-18
 
+- **EUR-Lex4's pass asks a work's tree once, not once per language** (app/acquire/work_trees.py
+  `RecentTrees`; München after #757: "165 units in 6 min (1695/h) … asking: trees 1144 s, items 33 s").
+  The non-inferred tree is the WORK's (no Accept-Language; `rdf.scope` cuts the unit's language), and
+  the dump's incomplete list is 10,528 units of 1,537 works. A tree Cellar served is kept on disk (derived,
+  by CELEX, its bytes gzip'd) and serves the work's other languages for 6 h — a pass's units come in path
+  order, language first, so a work's languages lie a language block apart; within the window a kept tree
+  is as current as fetching those units that much earlier in the same pass. A lock per work: four
+  connections on one work ask once. `records-vs-origin` never reads it. Expected ~6.8x fewer tree
+  requests: the ~5,800 left in ~40–60 min instead of ~3.4 h.
+
 - **EUR-Lex4's per-unit pass stalled on four Hungarian items — fixed** (München: 0 units in 72 h, each
   round `{'fetched': 0, 'failed': 4, 'total': 5977}`). Four `…hu.html` items came with a Content-Encoding
   their body does not decode; `_get` treated a DecodingError as an episode (since the 3,258 Italian

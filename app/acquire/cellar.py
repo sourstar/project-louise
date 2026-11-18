@@ -756,7 +756,8 @@ def fetch_unit(base: str, celex: str, lang: str, dest: Path, *,
 
 def fetch_unit_from_tree(base: str, celex: str, lang: str, dest: Path, *,
                          client: httpx.Client | None = None,
-                         charge: Callable[[int], None] = budget.acquire_bytes) -> Fetched:
+                         charge: Callable[[int], None] = budget.acquire_bytes,
+                         trees=None) -> Fetched:
     """A PARSER-4 unit of (CELEX, language) into `dest`, whole or not at all:
     the work's non-inferred tree scoped to the language (`tree.json`) and the
     items of the best form the TREE lists (`form_of` on `from_tree.notice`) —
@@ -778,8 +779,15 @@ def fetch_unit_from_tree(base: str, celex: str, lang: str, dest: Path, *,
     try:
         url = resource_url(base, celex)
         t0 = time.monotonic()
-        scoped = rdf.scope(_read_tree(_tree(client, url, celex, count), celex), code)
-        tree_s = time.monotonic() - t0
+        # the tree is the WORK's, every language's in it (no Accept-Language):
+        # `trees` (work_trees.RecentTrees) serves one Cellar served for the
+        # work's other languages within the pass
+        if trees is not None:
+            data, tree_from = trees.get(celex, lambda: _tree(client, url, celex, count))
+        else:
+            data, tree_from = _tree(client, url, celex, count), "cellar"
+        scoped = rdf.scope(_read_tree(data, celex), code)
+        tree_s = time.monotonic() - t0 if tree_from == "cellar" else 0.0
         try:
             note = from_tree.notice(scoped, code, celex)
         except from_tree.TreeError as e:
@@ -817,7 +825,8 @@ def fetch_unit_from_tree(base: str, celex: str, lang: str, dest: Path, *,
         items_s = time.monotonic() - t0
         files[rdf.TREE_FILE] = rdf.dumps(scoped)
         _land(dest, files)
-        return Fetched(files={n: len(b) for n, b in files.items()}, moved=moved, tree_s=tree_s, items_s=items_s)
+        return Fetched(files={n: len(b) for n, b in files.items()}, moved=moved, tree_from=tree_from,
+                       tree_s=tree_s, items_s=items_s)
     except httpx.HTTPError as e:
         raise TransportError(f"cellar: {type(e).__name__}: {e}") from e
     finally:
@@ -1120,8 +1129,11 @@ class TreeUnits(CellarUnits):
             if held is not None and held >= remote.mtime:
                 self._count(Fetched(files={}, moved=0, tree_from="held"))
                 return 0
+        root = _corpus_of(dest, remote)
         try:
-            got = fetch_unit_from_tree(endpoint.url, unit["celex"], unit["lang"], dest.parent)
+            from . import work_trees
+            got = fetch_unit_from_tree(endpoint.url, unit["celex"], unit["lang"], dest.parent,
+                                       trees=work_trees.recent_for(root) if root is not None else None)
         except TransportError as e:
             # a unit the dump lacked that Cellar does not give either: not
             # asked first again (eurlex_dump.mark_tried), so the complete
@@ -1129,7 +1141,6 @@ class TreeUnits(CellarUnits):
             from . import eurlex_dump
             from ..transfer.bucket import TransferAborted as _Aborted
             if not _episode(e) and not isinstance(e, (TransferAborted, _Aborted)):
-                root = _corpus_of(dest, remote)
                 if root is not None:
                     eurlex_dump.mark_tried(root, unit["lang"], unit["celex"], str(e))
             raise
