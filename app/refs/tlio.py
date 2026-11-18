@@ -45,10 +45,18 @@ LANG = "it"
 #: 2 (2026-11-18): an entry of several senses gives its lemma alone, no
 #: definition — its first sense is not the sense in context (the node:
 #: "satisfaccia" read as paying a debt)
-PARSER_VERSION = 2
+#: 3 (2026-11-18): the 1900s bar for a form is TLIO's own, lower
+#: (`MODERN_PER_MILLION`): a form printed in the 1900s at all often is a
+#: modern spelling another lemma owns — fuoro (furono, 32 in 57.0 M) listed
+#: under fuoco alone, abborri (aborri, 19) under abborrare alone, where no
+#: second lemma and no stem test (abborr- is abborrare's own) can tell
+PARSER_VERSION = 3
 PERIOD = (1100, 1400)
 GLOSS_CHARS = 200
-MODERN_PER_MILLION = wikisource_readings.MODERN_PER_MILLION
+#: a form printed in the 1900s this often (a million words) gives no gloss:
+#: a quarter of wikisource-readings' bar (there a form must be OLD-only to
+#: pair; here a gloss is a guess at a sense, and a wrong one misleads)
+MODERN_PER_MILLION = wikisource_readings.MODERN_PER_MILLION / 4
 CHUNK = 500
 
 _SECTIONS = ["0.1", "0.2", "0.3", "0.4", "0.5", "0.6", "0.7", "0.8"]

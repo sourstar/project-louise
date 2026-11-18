@@ -157,3 +157,16 @@ def test_an_entry_of_one_sense_gives_its_definition_and_of_several_its_lemma_alo
     assert rows["abondava"]["gloss"] == "Essere presente in grande quantità."
     rows = {r["orig"]: r for r in tlio.rows_of([tlio.parse(PAGE)], {}, 0)}
     assert rows["abondava"]["gloss"] == "" and rows["abondava"]["lemma"] == "abbondare"
+
+
+
+def test_a_form_printed_in_the_1900s_a_few_times_a_million_gives_no_gloss():
+    """The node, 2026-11-18 (57.0 M modern words): fuoro (furono) 32, listed
+    under fuoco alone; abborri (aborri) 19, under abborrare alone — one row
+    each, so only the 1900s bar can tell. cuoci 3, risurgeran 1 kept."""
+    total = 56_976_342
+    modern = {"fuoro": 32, "abborri": 19, "risurgeran": 1}
+    entries = [{"lemma": "fuoco", "forms": ["fuoro"], "definition": "", "senses": 2},
+               {"lemma": "abborrare", "forms": ["abborri"], "definition": "", "senses": 2},
+               {"lemma": "risórgere", "forms": ["risurgeran"], "definition": "", "senses": 2}]
+    assert [r["orig"] for r in tlio.rows_of(entries, modern, total)] == ["risurgeran"]
