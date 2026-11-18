@@ -122,6 +122,10 @@ class EditionFacts:
     #: the WORK's first publication as the origin states it (PG's summary,
     #: marc520: "… is a novel published in 1920"); never the edition's year
     first_published: int | None = None
+    #: a translator among the record's credits (MARC relator `trl`,
+    #: historical.is_translation): its text is not the work's original
+    #: language, so the original's first publication dates no word of it
+    translated: bool = False
 
 
 #: "published in 1920", "first published in 1605", "originally published in
@@ -160,10 +164,11 @@ def edition_facts(record: dict[str, Any]) -> EditionFacts:
         if m:
             first = int(m.group(1))
             break
+    from app import historical
     return EditionFacts(abridged=bool(_ABRIDGED.search(words)),
                         better_as=tuple(_BETTER.findall(str(extra.get("description") or ""))),
                         publisher=publisher, year=int(year.group(1)) if year else None,
-                        first_published=first)
+                        first_published=first, translated=historical.is_translation(record))
 
 
 def edition_order(candidates: Sequence[tuple[int, str, str | None]], facts: dict[str, EditionFacts],
@@ -603,18 +608,20 @@ def facts_for(collection, want: Sequence[str], *, root: Path | None = None) -> d
 
 #: the rule `edition_facts` applies; a change to it is a new file name, so a
 #: facts file never outlives the rule that wrote it (invariant 3)
-FACTS_VERSION = 2          # 2 (2026-11-16): first_published
+FACTS_VERSION = 3          # 2 (2026-11-16): first_published; 3 (2026-11-18): translated
 
 
 def _decode(v) -> EditionFacts:
-    return EditionFacts(bool(v[0]), tuple(v[1]), str(v[2]), v[3], v[4] if len(v) > 4 else None)
+    return EditionFacts(bool(v[0]), tuple(v[1]), str(v[2]), v[3], v[4] if len(v) > 4 else None,
+                        bool(v[5]) if len(v) > 5 else False)
 
 
 def _make(records: Iterable[dict[str, Any]]) -> dict[str, Any]:
     out = {}
     for r in records:
         f = edition_facts(r)
-        out[str(r["uid"])] = [f.abridged, list(f.better_as), f.publisher, f.year, f.first_published]
+        out[str(r["uid"])] = [f.abridged, list(f.better_as), f.publisher, f.year, f.first_published,
+                              f.translated]
     return out
 
 

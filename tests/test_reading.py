@@ -197,3 +197,15 @@ def test_the_collection_is_not_reread_per_rerank(monkeypatch):
     for _ in range(5):
         reading.years([{"chunk_id": "pubmed:1:0:1", "source_collection": "pubmed"}])
     assert calls == ["pubmed"]
+
+
+def test_a_translations_first_publication_is_the_originals_and_never_used():
+    rec = {"title": "Viaggi di Gulliver", "date": "1842",
+           "extra": {"marc": {"520": ["Gulliver's Travels was first published in 1726."]},
+                     "creators_detail": [{"name": "Swift, Jonathan", "role": "aut"},
+                                         {"name": "Barbieri, Gaetano", "role": "trl"}]}}
+    f = works.edition_facts(rec)
+    assert f.translated and f.first_published == 1726
+    assert reading.year_of(reading.year_fields("gutenberg"), f) == 1842        # never 1726
+    del rec["date"]
+    assert reading.year_of(reading.year_fields("gutenberg"), works.edition_facts(rec)) is None

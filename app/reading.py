@@ -61,6 +61,11 @@ def year_of(fields: tuple[str, ...], facts) -> int | None:
     if facts is None:
         return None
     for f in fields:
+        if f == "first_published" and getattr(facts, "translated", False):
+            # a translation's first publication is the ORIGINAL's, in another
+            # language: it does not apply (operator: "or the year does not
+            # apply, the annotation is not used"; architecture, 2026-11-18)
+            continue
         v = facts.first_published if f == "first_published" else facts.year if f == "date" else None
         if v:
             return int(v)
