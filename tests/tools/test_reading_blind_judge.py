@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
 from types import SimpleNamespace
 
 from tools.measure import reading_blind_judge as bj
@@ -39,8 +38,11 @@ def test_the_page_never_names_the_arms():
 
 
 def test_make_writes_the_page_and_the_key_apart_and_refuses_under_30(monkeypatch, tmp_path, capsys):
-    from app import collections as collections_mod, llm, reading
-    from tools.measure import reading_known_items as ki, reading_store, reading_summary_eval as ev
+    from app import collections as collections_mod
+    from app import llm, reading
+    from tools.measure import reading_known_items as ki
+    from tools.measure import reading_store
+    from tools.measure import reading_summary_eval as ev
     text = " ".join(f"Il re {i} entrò nella sala che non era più tempo." for i in range(40))
     recs = [{"uid": f"gutenberg:{i}", "lang": "it", "title": "Commedia",
              "sections": [["I", "x"], ["II", "y"], ["III", text]]} for i in range(3)]
@@ -131,4 +133,26 @@ def test_make_refuses_when_no_commit_is_known(monkeypatch, tmp_path, capsys):
     assert bj.main(["make", "--collection", "g", "--out-dir", str(out), "--weights-sha256", "w",
                     "--readings-tsv", str(tmp_path / "t")]) == 2
     assert "no commit known" in capsys.readouterr().err and not out.exists()
+
+
+def test_a_copy_untracked_inside_another_checkout_is_not_that_checkouts_commit(tmp_path, monkeypatch):
+    """Architecture's review of #758: the tool extracted inside another
+    checkout was recorded as that checkout's HEAD."""
+    import importlib.util
+    import shutil
+    import subprocess
+    repo = tmp_path / "other"
+    repo.mkdir()
+    for args in (["init", "-q"], ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty",
+                                  "-m", "x"]):
+        subprocess.run(["git", *args], cwd=repo, check=True, capture_output=True)
+    copy = repo / "reading_blind_judge.py"
+    shutil.copy(bj.__file__, copy)
+    spec = importlib.util.spec_from_file_location("bj_copy", copy)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    monkeypatch.setenv(mod.COMMIT_ENV, "b" * 40)
+    assert mod.commit_of() == ("b" * 40, "env")
+    monkeypatch.delenv(mod.COMMIT_ENV)
+    assert mod.commit_of() == ("", "")
 

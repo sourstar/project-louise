@@ -103,19 +103,24 @@ COMMIT_ENV = "LOUISE_SOURCE_COMMIT"
 def commit_of() -> tuple[str, str]:
     """(the commit this code runs from, how it is known): key.json names it,
     so the operator's result can be reproduced from main (operator's "A",
-    2026-11-18, replacing export-subst). "checkout": `git rev-parse`
-    ("+dirty" where tracked files differ); "env": COMMIT_ENV, 40 hex
-    characters; ("", "") otherwise — and `make` then refuses, never writing
-    a commit it does not know."""
+    2026-11-18). "checkout": `git rev-parse` ("+dirty" where tracked files
+    differ) — only where THIS file is tracked by that checkout (architecture's
+    review: an archive of one commit unpacked under a checkout of another
+    was recorded as the other's HEAD); "env": COMMIT_ENV, 40 lowercase hex;
+    ("", "") otherwise — and `make` then refuses."""
     import os
     import subprocess
-    here = Path(__file__).resolve().parent
+    me = Path(__file__).resolve()
+
+    def git(*args: str) -> subprocess.CompletedProcess:
+        return subprocess.run(["git", *args], cwd=me.parent, capture_output=True, text=True, timeout=10,
+                              check=False)
     try:
-        out = subprocess.run(["git", "rev-parse", "HEAD"], cwd=here, capture_output=True, text=True, timeout=10)
-        if out.returncode == 0 and re.fullmatch(r"[0-9a-f]{40}", out.stdout.strip()):
-            dirty = subprocess.run(["git", "status", "--porcelain", "--untracked-files=no"], cwd=here,
-                                   capture_output=True, text=True, timeout=10)
-            return out.stdout.strip() + ("+dirty" if dirty.stdout.strip() else ""), "checkout"
+        if git("ls-files", "--error-unmatch", me.name).returncode == 0:
+            out = git("rev-parse", "HEAD")
+            if out.returncode == 0 and re.fullmatch(r"[0-9a-f]{40}", out.stdout.strip()):
+                dirty = git("status", "--porcelain", "--untracked-files=no")
+                return out.stdout.strip() + ("+dirty" if dirty.stdout.strip() else ""), "checkout"
     except (OSError, subprocess.SubprocessError):
         pass
     sha = os.environ.get(COMMIT_ENV, "").strip()
@@ -223,8 +228,10 @@ def _score(key: list[dict], choices: list[dict], keep) -> dict:
 
 
 def make(a) -> int:
-    from app import collections as collections_mod, llm, reading
-    from tools.measure import reading_known_items as ki, reading_store
+    from app import collections as collections_mod
+    from app import llm, reading
+    from tools.measure import reading_known_items as ki
+    from tools.measure import reading_store
     from tools.measure import reading_summary_eval as ev
     commit, source = commit_of()
     if not commit:
