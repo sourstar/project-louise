@@ -234,7 +234,16 @@ _CENTURY = re.compile(r"\b(?:(early|mid|middle|late)[\s-]+)?(?:" + _ORD + r")(?:
 #: approved): its writing, composition or publication — "written", "composed",
 #: "created", "penned", "compiled", "published", "printed", "first performed"
 #: (a play's composition), "from the Nth century"
-_CONTEXT = re.compile(r"(?i)\b(written|composed|created|penned|compiled|published|printed|first\s+performed|from)\b")
+_CONTEXT = re.compile(r"(?i)\b(written|composed|created|penned|produced|crafted|compiled|published|printed|"
+                      r"first\s+performed|from)\b")
+#: a writing verb GOVERNING the century: within a few words, then in /
+#: during / around / circa before it (München's before/after on the node,
+#: 2026-11-18: "written during the late 19th century", "composed in verse
+#: during the early 16th century" are writing, though "during" alone is
+#: setting) — the setting words apply only where no writing verb governs
+_GOVERNED = re.compile(r"(?i)\b(written|composed|created|penned|produced|crafted|compiled|published|printed|"
+                       r"first\s+performed)\b(?:\s+[\w'’,-]+){0,4}?\s+(?:in|during|around|circa|c\.|about)"
+                       r"\s+(?:the\s+)?$")
 #: never its setting or subject: "set in", "set during", "takes place",
 #: "during", "about", "of" immediately before the century (17850 "historical
 #: novel set in the 16th century", 68090 "Set in 17th-century Netherlands")
@@ -256,12 +265,13 @@ def century_statement(summaries) -> tuple[tuple[int, int] | None, str, str]:
             start = max(text.rfind(".", 0, m.start()), text.rfind("!", 0, m.start()),
                         text.rfind("?", 0, m.start())) + 1
             pre = text[start:m.start()]
-            if _SETTING.search(pre):
+            governed = _GOVERNED.search(pre)
+            if not governed and _SETTING.search(pre):
                 continue                                    # its setting or subject, never its date
             after = text[m.end():m.end() + 2]
             if "-centur" in m.group(0).lower() and re.match(r"\s\w", after):
                 continue                                    # "a 14th-century poem": adjectival
-            ctx = [c.group(1).lower() for c in _CONTEXT.finditer(pre)]
+            ctx = [governed.group(1).lower()] if governed else [c.group(1).lower() for c in _CONTEXT.finditer(pre)]
             if not ctx:
                 continue                                    # no writing or publication said
             end = text.find(".", m.end())
@@ -796,8 +806,9 @@ def facts_for(collection, want: Sequence[str], *, root: Path | None = None) -> d
 
 #: the rule `edition_facts` applies; a change to it is a new file name, so a
 #: facts file never outlives the rule that wrote it (invariant 3)
-FACTS_VERSION = 7          # 2 (2026-11-16): first_published; 3: translated; 4: lived, century; 5: a stated
-                           # translation; 6: summary_auto, volume_group; 7: the century in context only
+FACTS_VERSION = 8          # 2 (2026-11-16): first_published; 3: translated; 4: lived, century; 5: a stated
+                           # translation; 6: summary_auto, volume_group; 7: the century in context only;
+                           # 8: a writing verb governs (during, produced, crafted)
 
 
 def _decode(v) -> EditionFacts:

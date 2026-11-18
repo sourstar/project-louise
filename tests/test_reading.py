@@ -468,3 +468,19 @@ def test_the_report_of_a_summary_date_outside_the_authors_life():
 def test_gutenberg_declares_the_summary_date_issue():
     from app.plugins.gutenberg import source
     assert works.SUMMARY_DATE_OUTSIDE_LIFE in source.ISSUES
+
+
+
+def test_a_writing_verb_governs_during_and_produced_and_crafted_are_writing():
+    # München's before/after on the node, 2026-11-18
+    assert works.stated_century(["A novel written during the late 19th century."])[0] == (1867, 1899)   # 32193
+    assert works.stated_century(["The poem was composed in verse during the early 16th century."])[0] == (1500, 1533)  # 31285
+    assert works.stated_century(["It was likely composed during the 16th century."])[0] == (1500, 1599)   # 6938
+    assert works.stated_century(["A work likely penned during the mid 18th century."])[0] == (1734, 1766)
+    assert works.stated_century(["The text was produced in the early 19th century."])[0] == (1800, 1833)
+    assert works.stated_century(["A treatise produced during the 17th century."])[0] == (1600, 1699)    # 27608
+    assert works.stated_century(["It was crafted in the late 19th century."])[0] == (1867, 1899)       # 37900
+    # setting, no writing verb governing: none
+    assert works.stated_century(["A study of music in Italy during the late 18th century."])[0] is None  # 43181
+    assert works.stated_century(["It describes a trial held in early 20th-century Italy."])[0] is None   # 25211
+    assert works.stated_century(["A novel that challenged 19th-century morality."])[0] is None           # 69113
