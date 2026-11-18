@@ -191,3 +191,6 @@ The fiction ones add "-- Fiction" and drop Biographies.
 - Every heading is to be checked against the LC name authority file
   (id.loc.gov).
 - The moderate-confidence rows (77) go in a second batch, if at all.
+
+**For wiki-gutenberg (operator, 2026-11-18: "No"): the 15 uncertain are
+out.** They are recorded as NO in `wiki-gutenberg-memoir-titles-<lang>.toml`.

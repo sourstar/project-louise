@@ -5,6 +5,19 @@
 # (pg-catalogue-corrections/README.md, part B), neither is a memoir as written.
 #   36970  The Confessions of a Poacher: told to an editor
 #   59530  Wine-Dark Seas and Tropic Skies: "Reminiscences and a Romance"
+# 2026-11-18, "No" to the uncertain of the 252 Biographies conflicts checked on the text
+# (pg-catalogue-corrections/README.md, B2):
+#   3878  Memoirs of the Courts of Louis XV and XVI. — Volume 3 Being 
+#   3879  Memoirs of the Courts of Louis XV and XVI. — Volume 4 Being 
+#   3880  Memoirs of the Courts of Louis XV and XVI. — Volume 5 Being 
+#   3881  Memoirs of the Courts of Louis XV and XVI. — Volume 6 Being 
+#   3882  Memoirs of the Courts of Louis XV and XVI. — Volume 7 Being 
+#   12967  Memoirs and Historical Chronicles of the Courts of Europe Me
+#   30717  East Anglia: Personal Recollections and Historical Associati
+#   32343  An Englishman in Paris: Notes and Recollections
+#   52215  Memoirs of the Marchioness of Pompadour (vol. 2 of 2)
+#   56578  The Writings of Thomas Jefferson, Vol. 9 (of 9) Being His Au
+#   63641  The New York Tombs Inside and Out! Scenes and Reminiscences 
 decided = "2026-11-18"
 yes = []
-no = [36970, 59530]
+no = [3878, 3879, 3880, 3881, 3882, 12967, 30717, 32343, 36970, 52215, 56578, 59530, 63641]

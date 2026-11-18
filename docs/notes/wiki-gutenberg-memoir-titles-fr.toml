@@ -1,0 +1,12 @@
+# wiki-gutenberg: fr books added to (or kept out of) the memoir group by title.
+# Operator decisions, keyed by Project Gutenberg ebook number; its sha256 goes into
+# the annotations Codex `method` beside the subject rule (invariant 11).
+# 2026-11-18, "No" to the uncertain of the 252 Biographies conflicts checked on the text
+# (pg-catalogue-corrections/README.md, B2):
+#   18942  Mémoires de Joseph Fouché, Duc d'Otrante, Ministre de la Pol
+#   19008  Mémoires de Joseph Fouché, Duc d'Otrante, Ministre de la Pol
+#   28258  À terre & en l'air... Mémoires du Géant
+#   38166  Mémoires pour servir à l'Histoire de France sous Napoléon, T
+decided = "2026-11-18"
+yes = []
+no = [18942, 19008, 28258, 38166]
