@@ -626,13 +626,12 @@ def header_fields(path: Path) -> dict[str, str]:
     `pg_text.header_fields` read them for the txt edition only, so an
     epub-form record carried none (audit, 2026-09-14): the prose around
     them is boilerplate, the fields are not."""
-    from .pg_text import _HEADER_FIELD
-    out: dict[str, str] = {}
-    for line in _read(path)[0].replace("\n\n", "\n").splitlines():
-        got = _HEADER_FIELD.match(line.strip())
-        if got and got.group(2).strip():
-            out[got.group(1).strip()] = got.group(2).strip()
-    return out
+    # the txt edition's reading (parser 12): a field runs on over the lines
+    # of its paragraph (a `<br/>`-wrapped credit), and a paragraph break
+    # ends it — the first form read each line alone and lost a wrapped
+    # credit's second half
+    from .pg_text import fields_of_lines
+    return fields_of_lines(_read(path)[0].splitlines())
 
 
 def _is_marker(para: str) -> bool:

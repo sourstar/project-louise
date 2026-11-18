@@ -329,7 +329,18 @@ class GutenbergSource:
     #: never in `content_hash` (09 §9.5) and the marker never depended on
     #: the type. The collection that adopts this parser is a new one whose
     #: vectors all carry (02 §2.4 A1c, `louise dev carry --rebuilt`).
-    PARSER_VERSION = 11
+    #: PARSER 12 (2026-11-18, München's count: 45,926 of 79,658 records
+    #: hold a fragment): a header field runs on over its unindented
+    #: continuation lines (PG wraps a credit without indenting it), a URL's
+    #: colon starts no field, and a producer credit is read on one line and
+    #: cut at its EARLIEST note — "the Online" and "the Online\nDistributed
+    #: Proofreading Team at http://www.pgdp.net (This\nfile was produced"
+    #: were two producers of one cut credit. `extra.text_header` and the
+    #: producers of `extra.creators_detail` move; `sections`, every chunk
+    #: and every vector do not, so the collection that adopts it carries
+    #: its vectors (02 §2.4 A1c, `louise dev carry --rebuilt`). marc508 kept
+    #: the credit verbatim throughout: nothing was lost, only mis-split.
+    PARSER_VERSION = 12
     #: 06 §6.2: Project Gutenberg rewrites a book's files under the same
     #: number, and keeps no earlier version anyone can fetch — a part this
     #: collection re-issues can only be checked against its newer self, so
@@ -577,16 +588,15 @@ class GutenbergSource:
         # unparsed sentence in a header blob credited them less precisely
         # than everyone else in the same record.
         #
-        # From both places PG writes them: the text file's `Credits:`
-        # field and the RDF's marc508.
-        produced = []
-        for credit in ([text_header.get("Credits", "")]
-                       + list(meta["marc"].get("508", []))):
-            produced.extend(pg_text.producers(credit))
+        # From both places PG writes them: the RDF's marc508 (verbatim, so
+        # first) and the text file's `Credits:` field — once each, a
+        # fragment of a cut credit dropped (parser 12, pg_text.merged_producers)
+        produced = pg_text.merged_producers(list(meta["marc"].get("508", []))
+                                            + [text_header.get("Credits", "")])
         named = {a.get("name") for a in meta["creators_detail"]}
         credits_detail = list(meta["creators_detail"]) + [
             {"name": n, "role": "producer"}
-            for n in dict.fromkeys(produced) if n not in named]
+            for n in produced if n not in named]
         subjects = [s.strip() for s in meta["subjects"].split("|") if s.strip()]
         edition_year, edition_source = edition_date(meta["marc"], text_header)
         return CanonicalDoc(

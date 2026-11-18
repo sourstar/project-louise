@@ -65,7 +65,7 @@ grep -q "def determinism_lacks" "$ROOT/src.new/deploy/vega/vega_wrapper.py"   # 
 grep -q "def keep_producer_scan" "$ROOT/src.new/app/hold/carry.py"           # e3f4687
 grep -q "embeddings.scan_columns(coll" "$ROOT/src.new/app/hold/carry.py"     # b561ef8
 grep -q "^def mentions" "$ROOT/src.new/app/ask/figures.py"                   # de64164
-grep -q "PARSER_VERSION = 11" "$ROOT/src.new/app/plugins/gutenberg/source.py"   # 693ffcc (10: f9bdf66)
+grep -q "PARSER_VERSION = 12" "$ROOT/src.new/app/plugins/gutenberg/source.py"   # parser 12: whole credits (11: 693ffcc, 10: f9bdf66)
 grep -q "gh-115634" "$ROOT/src.new/app/parallel.py"                              # c3dcb4c
 grep -qE "^(PAGES|ROWS)_AHEAD = " "$ROOT/src.new/app/parallel.py"                 # 21da0e3 (PAGES_AHEAD = 16; in rows since 4cafea4)
 grep -q "CREATE TABLE IF NOT EXISTS issues" "$ROOT/src.new/app/db.py"            # 787ebad
