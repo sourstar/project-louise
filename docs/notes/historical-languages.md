@@ -321,10 +321,13 @@ München): the reading is two REFERENCE SOURCES (06 §6.5, amended):
   stating it (`historical.is_translation`). Counted by München on the
   node's 1,112 Italian gutenberg records: 80 trl credits; PG's RDF holds no
   marc041, 240 or 500 for them; 4 statements, 2 without trl (54167, 40326):
-  82 marked. UNMARKED translations exist and cannot be told apart: Scott's
-  *La promessa sposa di Lammermoor* (42881–42883) has no mark anywhere and
-  is read as an original, by its first publication 1819, while his
-  *Puritani di Scozia* (43458/9) carry trl. `translation-of` claims: none
+  82 marked. And its FRONT MATTER (architecture, 2026-11-18): the "Front
+  matter" section, else the first 5,000 characters — "Translated by",
+  "tradotto dal <lingua>/da <Nome>", "volgarizzat…", "versione italiana",
+  "recato in italiano"; never deep in the body ("tradotta dal regno dei
+  sogni", 45334). Scott's *La promessa sposa di Lammermoor* (42881–42883),
+  with no credit and no summary saying so, is caught by its title page's
+  "Translated by Gaetano Barbieri". `translation-of` claims: none
   in gutenberg-book-editions (all 7,160 are same-work), so no claim marks
   one. What remains unknown, counted on the node at 1b8fbc6
   (`reading_year_rules --claims`): of 1,507 cross-language same-work

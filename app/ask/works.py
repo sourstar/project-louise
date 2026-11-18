@@ -806,9 +806,9 @@ def facts_for(collection, want: Sequence[str], *, root: Path | None = None) -> d
 
 #: the rule `edition_facts` applies; a change to it is a new file name, so a
 #: facts file never outlives the rule that wrote it (invariant 3)
-FACTS_VERSION = 8          # 2 (2026-11-16): first_published; 3: translated; 4: lived, century; 5: a stated
+FACTS_VERSION = 9          # 2 (2026-11-16): first_published; 3: translated; 4: lived, century; 5: a stated
                            # translation; 6: summary_auto, volume_group; 7: the century in context only;
-                           # 8: a writing verb governs (during, produced, crafted)
+                           # 8: a writing verb governs (during, produced, crafted); 9: front matter
 
 
 def _decode(v) -> EditionFacts:
@@ -857,7 +857,12 @@ def _facts_read(tree: Path, shard, uid: str) -> EditionFacts | None:
     from app.pack import records as pack_records
     path = Path(tree) / shard_mod.shard_path(shard.slice, shard.n)
     try:
-        return edition_facts(pack_records.read_fields(path, uid, ("title", "date", "extra")))
+        # a FRAME part (gutenberg's) is read whole anyway: its sections too, for
+        # the front matter that marks a translation (historical.is_translation),
+        # as the part's facts file reads it; a Parquet part never decompresses
+        # its books' sections for this (967 ms a search, München 2026-10-22)
+        fields = ("title", "date", "extra") if pack_records.is_parquet(path) else ("title", "date", "extra", "sections")
+        return edition_facts(pack_records.read_fields(path, uid, fields))
     except (KeyError, OSError, ValueError):
         return None
 

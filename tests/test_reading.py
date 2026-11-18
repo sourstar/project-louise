@@ -484,3 +484,33 @@ def test_a_writing_verb_governs_during_and_produced_and_crafted_are_writing():
     assert works.stated_century(["A study of music in Italy during the late 18th century."])[0] is None  # 43181
     assert works.stated_century(["It describes a trial held in early 20th-century Italy."])[0] is None   # 25211
     assert works.stated_century(["A novel that challenged 19th-century morality."])[0] is None           # 69113
+
+
+
+def test_the_front_matter_marks_a_translation_and_the_body_never():
+    from app import historical
+    lammermoor = {"title": "La promessa sposa di Lammermoor", "extra": {"creators_detail": [{"role": "cre"}]},
+                  "sections": [["Front matter", "LA PROMESSA SPOSA DI LAMMERMOOR. Translated by Gaetano Barbieri."],
+                               ["Capitolo I", "Testo."]]}                                              # 42881
+    assert historical.is_translation(lammermoor)
+    assert historical.is_translation({"sections": [["Front matter", "I DIALOGHI DI LUCIANO VOLGARIZZATI"]]})
+    assert historical.is_translation({"sections": [["Front matter", "PRIMA VERSIONE ITALIANA DI G. B."]]})  # 67846
+    assert historical.is_translation({"sections": [["Front matter", "VOLGARIZZAMENTO ANTICO TOSCANO"]]})  # 60864
+    assert historical.is_translation({"sections": [["Front matter", "tradotto dal francese da un anonimo"]]})
+    assert historical.is_translation({"sections": [["Front matter", "recato in italiano da L. P."]]})
+    # 45334: a figure, not a translation
+    assert not historical.is_translation({"sections": [["Front matter", "una storia tradotta dal regno dei sogni"]]})
+    # no Front matter section: the first 5,000 characters only; a phrase deep in the body is never read
+    deep = {"sections": [["Capitolo I", "x " * 3000], ["Capitolo XX", "Translated by nobody, said the knight."]]}
+    assert not historical.is_translation(deep)
+    early = {"sections": [["Capitolo I", "Translated by Ugo Foscolo. " + "x " * 3000]]}
+    assert historical.is_translation(early)
+
+
+def test_a_translation_by_its_front_matter_is_never_read():
+    rec = {"title": "La promessa sposa di Lammermoor", "date": "1830",
+           "extra": {"marc": {"520": ["... by Walter Scott is a historical novel published in 1819."]},
+                     "creators_detail": [{"name": "Scott, Walter", "role": "cre", "birth": "1771", "death": "1832"}]},
+           "sections": [["Front matter", "Translated by Gaetano Barbieri."]]}
+    y = _year(rec)
+    assert y == 1819 and y.translated

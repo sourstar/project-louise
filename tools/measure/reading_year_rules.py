@@ -54,6 +54,8 @@ def main(argv: list[str] | None = None) -> int:
     from_summary: collections.Counter = collections.Counter()
     claimed: frozenset = frozenset()      # translation-of claims: none on the node; marks are the corpus's own
     by_claim_only, unmarked, unmarked_examples = 0, 0, []
+    from app import historical as _hist
+    front_new, front_examples = 0, []
     _TR = re.compile(r"(?i)\btranslat(?:ed|ion|or)\b|\btradott[oa]\b|\btraduzione\b")
     for r in records_of(a.collection, random.Random(0)):
         if not str(r.get("lang") or "").lower().startswith(a.lang):
@@ -82,6 +84,15 @@ def main(argv: list[str] | None = None) -> int:
             auto[("first publication" if "its first publication" in y.by else "century")] += 1
         if y is not None and ("its first publication" in y.by or "century" in y.by) and "is outside them" not in y.by:
             from_summary[("first publication" if "its first publication" in y.by else "century")] += 1
+        if f.translated and not any(isinstance(c, dict) and c.get("role") in ("trl", "translator")
+                                    for c in ((r.get("extra") or {}).get("creators_detail") or [])) \
+                and not _hist._STATED.search(" ".join([str(r.get("title") or "")] + [
+                    str(x) for k in ("500", "520") for x in ((((r.get("extra") or {}).get("marc") or {}).get(k)) or [])])):
+            front_new += 1                                    # marked by its front matter alone
+            if len(front_examples) < a.examples:
+                m = _hist._FRONT.search(_hist.front_matter(r))
+                front_examples.append({"uid": r["uid"], "title": str(r.get("title") or "")[:60],
+                                       "words": m.group(0) if m else ""})
         if r["uid"] in claimed and not f.translated:
             by_claim_only += 1
         if not f.translated and r["uid"] not in claimed and _TR.search(summary):
@@ -128,6 +139,9 @@ def main(argv: list[str] | None = None) -> int:
                       "century_forms": dict(forms.most_common(20)),
                       "century_unparsed": unparsed, "century_unparsed_examples": unparsed_examples,
                       "translations_by_claim_only": by_claim_only,
+                      "translations": sum(1 for _u, f_, _y in entries if f_.translated),
+                      "translations_by_front_matter_only": front_new,
+                      "translations_by_front_matter_examples": front_examples,
                       "translations_unmarked_candidates": unmarked,
                       "translations_unmarked_examples": unmarked_examples,
                       "examples": examples},

@@ -497,13 +497,41 @@ _STATED = re.compile(r"\b(?:tradott[oa]|traduzione|versione\s+di|recat[oa]\s+in|
                      r"translated|translation)\b", re.IGNORECASE)
 
 
+#: a translation stated by the record's FRONT MATTER — its title page, what
+#: PG transcribed of it (architecture's ruling, 2026-11-18): read only there,
+#: never deep in the body, where "tradotta dal regno dei sogni" is a figure
+_LANGS = (r"(?:l')?(?:inglese|francese|tedesco|latino|greco|spagnuolo|spagnolo|portoghese|russo|ebraico|"
+          r"arabo|olandese|svedese|danese|polacco|english|french|german|latin|greek|spanish)")
+_FRONT = re.compile(r"(?:\btranslated\s+by\b"
+                    r"|\btradott[oaie]\s+(?:da|dal|dalla|dallo|dall['’])\s*(?:" + _LANGS + r"\b|(?-i:[A-ZÀ-Ý])[\w'’.-]+)"
+                    r"|\bvolgarizzat|\bvolgarizzament"
+                    r"|\bversione\s+italiana\b"
+                    r"|\brecat[oaie]\s+in\s+(?:italiano|lingua|volgare)\b)", re.IGNORECASE)
+#: the front matter read where a record has no "Front matter" section: its
+#: first characters
+FRONT_CHARS = 5000
+
+
+def front_matter(record: dict[str, Any]) -> str:
+    """The record's "Front matter" section where it has one (pg_text,
+    pg_epub), else the first FRONT_CHARS of its text."""
+    secs = record.get("sections") or []
+    for sec in secs:
+        if isinstance(sec, (list, tuple)) and len(sec) >= 2 and str(sec[0]).strip().lower() == "front matter":
+            return str(sec[1])
+    return " ".join(str(sec[1]) for sec in secs if isinstance(sec, (list, tuple)) and len(sec) >= 2)[:FRONT_CHARS]
+
+
 def is_translation(record: dict[str, Any]) -> bool:
     """The record's OWN CORPUS says it is a translation (architecture,
     2026-11-18): a translator among its credits (09 §9.5 `creators` and
-    gutenberg's `extra.creators_detail`, MARC relator `trl`), or its title or
-    its summary (marc500, marc520) stating it. A record with none of these is
-    read as an original — the corpus cannot tell an unmarked translation
-    (Scott's Lammermoor, 42881-42883) from one."""
+    gutenberg's `extra.creators_detail`, MARC relator `trl`); its title or
+    its summary (marc500, marc520) stating it; or its FRONT MATTER stating
+    it ("Translated by", "tradotto dal francese", "volgarizzato",
+    "versione italiana", "recato in italiano") — Scott's Lammermoor (42881),
+    with no credit and no summary saying so, is caught by its title page's
+    "Translated by Gaetano Barbieri". A record none of these marks is read
+    as an original."""
     for a in (record.get("extra") or {}).get("creators_detail") or []:
         if isinstance(a, dict) and a.get("role") in ("trl", "translator"):
             return True
@@ -511,7 +539,9 @@ def is_translation(record: dict[str, Any]) -> bool:
         return True
     marc = (record.get("extra") or {}).get("marc") or {}
     stated = [str(record.get("title") or ""), *(str(x) for k in ("500", "520") for x in (marc.get(k) or []))]
-    return bool(_STATED.search(" ".join(stated)))
+    if _STATED.search(" ".join(stated)):
+        return True
+    return bool(_FRONT.search(front_matter(record)))
 
 
 def record_first_published(record: dict[str, Any]) -> int | None:
