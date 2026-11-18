@@ -51,6 +51,21 @@ def test_a_corpus_on_disk_becomes_record_shards_in_the_shard(
         "records/lang=en/00001.jsonl.zst", "records/lang=fr/00001.jsonl.zst"]
 
 
+def test_a_build_that_finds_no_document_is_refused_and_writes_nothing(isolated_config, tmp_path):
+    """The node, 2026-11-18: a re-creation script went on past a carry the
+    worker refused, and the build ran on gutenberg.next's empty manifest
+    and empty corpus — 0 records, its build state and validation.json
+    written, exit 0. Nothing to build is a refusal, before any staging."""
+    root = _collection(tmp_path)
+    empty = tmp_path / "empty-corpus"
+    empty.mkdir()
+    with pytest.raises(RecordsError, match="nothing to build"):
+        rec.build(root, "gutenberg", corpus_dir=empty, log=lambda *_: None)
+    shard = root / "gutenberg" / "shard"
+    assert not (shard / "records").exists() and not (shard / "validation.json").exists()
+    assert not (root / "gutenberg" / "state" / "build").exists()
+
+
 def test_the_shard_holds_only_records_after_a_build(
         isolated_config, tmp_path, corpus_dir):
     """07 §7.8: the SHARD holds only what the Codex or a snapshot names. The
