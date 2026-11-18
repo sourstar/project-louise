@@ -124,9 +124,11 @@ def year_of(fields: tuple[str, ...], facts) -> Year | None:
     if facts is None:
         return None
     translated = bool(getattr(facts, "translated", False))
+    # a year read from PG's machine-written summary says so (architecture, 2026-11-18)
+    auto = ", by PG's automatic summary" if getattr(facts, "summary_auto", False) else ""
     for f in fields:
         if f == "first_published" and facts.first_published:
-            return Year(facts.first_published, f"its first publication ({facts.first_published})", translated)
+            return Year(facts.first_published, f"its first publication ({facts.first_published}){auto}", translated)
         if f == "lived":
             life = getattr(facts, "lived", None)
             cent = getattr(facts, "century", None)
@@ -134,14 +136,58 @@ def year_of(fields: tuple[str, ...], facts) -> Year | None:
                 lo, hi = max(life[0], cent[0]), min(life[1], cent[1])
                 if lo <= hi:
                     return Year(_mid((lo, hi)), f"its summary's century and its author's dates "
-                                                f"({_short(facts.century_text)}, {facts.lived_span})", translated)
+                                                f"({_short(facts.century_text)}, {facts.lived_span}){auto}", translated)
                 return Year(_mid(life), f"its author's dates ({facts.lived_span}) (its summary's "
                                         f"'{_short(facts.century_text)} century' is outside them)", translated)
             if life:
                 return Year(_mid(life), f"its author's dates ({facts.lived_span})", translated)
             if cent:
-                return Year(_mid(cent), f"its summary's century ({_short(facts.century_text)})", translated)
+                return Year(_mid(cent), f"its summary's century ({_short(facts.century_text)}){auto}", translated)
     return None
+
+
+CENTURY_ALONE = "its summary's century ("
+
+
+def share_volumes(entries) -> tuple[dict[str, "Year"], dict[str, int]]:
+    """THE VOLUMES OF ONE WORK SHARE ONE YEAR (architecture, 2026-11-18,
+    option A narrowed): among the records placed by the summary's century
+    ALONE, those of one `volume_group` (the authors' PG agent ids and the
+    title without its volume markers) take the MAJORITY century among them,
+    a tie the earliest; a record placed by its first publication or by its
+    author's dates keeps its own year. `entries`: (uid, facts, Year).
+    Returns ({uid: its new Year}, {"groups", "changed", "ties"})."""
+    from .ask.works import stated_century  # noqa: F401 — the century spans are the facts'
+    groups: dict[str, list[tuple[str, Any, Year]]] = {}
+    for uid, f, y in entries:
+        g = getattr(f, "volume_group", "") if f is not None else ""
+        if g and y is not None and y.by.startswith(CENTURY_ALONE) and getattr(f, "century", None):
+            groups.setdefault(g, []).append((uid, f, y))
+    out: dict[str, Year] = {}
+    stats = {"groups": 0, "changed": 0, "ties": 0}
+    for members in groups.values():
+        if len(members) < 2:
+            continue
+        stats["groups"] += 1
+        votes: dict[tuple, int] = {}
+        text_of: dict[tuple, str] = {}
+        for _u, f, _y in members:
+            key = tuple(f.century)
+            votes[key] = votes.get(key, 0) + 1
+            text_of.setdefault(key, f.century_text)
+        top = max(votes.values())
+        best = sorted(k for k, v in votes.items() if v == top)
+        if len(best) > 1:
+            stats["ties"] += 1
+        span = best[0]                                       # a tie: the earliest
+        for uid, f, y in members:
+            auto = ", by PG's automatic summary" if getattr(f, "summary_auto", False) else ""
+            new = Year(_mid(span), f"its work's volumes ({_short(text_of[span])}, {votes[span]} of "
+                                   f"{len(members)} volumes){auto}", y.translated)
+            if int(new) != int(y):
+                stats["changed"] += 1
+            out[uid] = new
+    return out, stats
 
 
 def collection_of(hit: dict[str, Any]) -> str:
@@ -229,12 +275,19 @@ def index_years(col, deadline: float | None = None) -> dict[str, Any] | None:
             except (OSError, ValueError, KeyError):
                 continue                            # unreadable now: not done, tried next time
         years = idx["years"]
+        seen = idx.setdefault("facts", {})
         for u, f in facts.items():
             y = year_of(fields, f)
             if y:
                 years[u] = y
+                if getattr(f, "volume_group", ""):
+                    seen[u] = f                              # for the volumes' shared year, below
         done.add((s.slice, s.n))
     idx["complete"] = len(done) >= len(snap.shards)
+    if idx["complete"]:
+        shared, idx["volumes"] = share_volumes((u, f, idx["years"].get(u)) for u, f in seen.items())
+        idx["years"].update(shared)
+        idx.pop("facts", None)
     return idx
 
 

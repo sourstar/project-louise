@@ -142,6 +142,13 @@ class EditionFacts:
     #: words as stated ("early 14th century")
     century: tuple[int, int] | None = None
     century_text: str = ""
+    #: the summary (marc520) is PG's own machine-written one, ending "(This is
+    #: an automatically generated summary.)": every year read from it says so
+    #: (architecture, 2026-11-18; 1,087 of the node's 1,091 Italian summaries)
+    summary_auto: bool = False
+    #: the record's WORK among its volumes: its authors' PG agent ids and its
+    #: title without volume markers (`volume_key`); "" without an author id
+    volume_group: str = ""
 
 
 #: "published in 1920", "first published in 1605", "originally published in
@@ -164,6 +171,24 @@ def stated_first_published(summaries) -> int | None:
 
 #: an anthology: creators' midpoints further apart than this give no year
 LIVED_SPREAD = 50
+
+#: PG's machine-written summary, as it signs itself
+AUTO_SUMMARY = "(This is an automatically generated summary.)"
+#: a volume marker (architecture, 2026-11-18): Vol./Volume/Tomo/Parte/Libro/
+#: Book with a Roman or Arabic numeral, or a numeral alone at the end
+_VOL_MARK = re.compile(r"(?i)[\s,.;:–—-]*\b(?:vol(?:ume)?|tomo|parte|libro|book)\b\.?\s*(?:[ivxlcdm]+|\d+)\b\.?"
+                       r"|[\s,.;:–—-]+(?:[ivxlcdm]+|\d+)\.?\s*$")
+
+
+def volume_key(title: str, agent_ids) -> str:
+    """One work's key across its volumes: the authors' agent ids and the title
+    with its volume markers stripped; "" without an author id."""
+    ids = sorted({str(a) for a in agent_ids if a})
+    if not ids:
+        return ""
+    t = _VOL_MARK.sub(" ", str(title or ""))
+    t = re.sub(r"[^\w]+", " ", t.lower()).strip()
+    return "|".join(ids) + "|" + t
 
 
 def lifetime(record: dict[str, Any], translated: bool) -> tuple[tuple[int, int] | None, str]:
@@ -251,11 +276,16 @@ def edition_facts(record: dict[str, Any]) -> EditionFacts:
     translated = historical.is_translation(record)
     lived, span = lifetime(record, False)            # the WORK's authors, a translation's too
     century, century_text = stated_century(marc.get("520"))
+    auto = any(AUTO_SUMMARY in str(x) for x in (marc.get("520") or []))
+    authors = [a.get("agent_id") for a in extra.get("creators_detail") or []
+               if isinstance(a, dict) and str(a.get("role") or "") in ("aut", "author", "cre", "creator")]
+    group = volume_key(str(record.get("title") or ""), authors)
     return EditionFacts(abridged=bool(_ABRIDGED.search(words)),
                         better_as=tuple(_BETTER.findall(str(extra.get("description") or ""))),
                         publisher=publisher, year=int(year.group(1)) if year else None,
                         first_published=first, translated=translated, lived=lived, lived_span=span,
-                        century=century, century_text=century_text)
+                        century=century, century_text=century_text, summary_auto=auto,
+                        volume_group=group)
 
 
 def edition_order(candidates: Sequence[tuple[int, str, str | None]], facts: dict[str, EditionFacts],
@@ -695,14 +725,16 @@ def facts_for(collection, want: Sequence[str], *, root: Path | None = None) -> d
 
 #: the rule `edition_facts` applies; a change to it is a new file name, so a
 #: facts file never outlives the rule that wrote it (invariant 3)
-FACTS_VERSION = 5          # 2 (2026-11-16): first_published; 3: translated; 4: lived, century; 5: a stated translation
+FACTS_VERSION = 6          # 2 (2026-11-16): first_published; 3: translated; 4: lived, century; 5: a stated
+                           # translation; 6: summary_auto, volume_group
 
 
 def _decode(v) -> EditionFacts:
     return EditionFacts(bool(v[0]), tuple(v[1]), str(v[2]), v[3], v[4] if len(v) > 4 else None,
                         bool(v[5]) if len(v) > 5 else False, tuple(v[6]) if len(v) > 6 and v[6] else None,
                         str(v[7]) if len(v) > 7 else "", tuple(v[8]) if len(v) > 8 and v[8] else None,
-                        str(v[9]) if len(v) > 9 else "")
+                        str(v[9]) if len(v) > 9 else "", bool(v[10]) if len(v) > 10 else False,
+                        str(v[11]) if len(v) > 11 else "")
 
 
 def _make(records: Iterable[dict[str, Any]]) -> dict[str, Any]:
@@ -711,7 +743,8 @@ def _make(records: Iterable[dict[str, Any]]) -> dict[str, Any]:
         f = edition_facts(r)
         out[str(r["uid"])] = [f.abridged, list(f.better_as), f.publisher, f.year, f.first_published,
                               f.translated, list(f.lived) if f.lived else None, f.lived_span,
-                              list(f.century) if f.century else None, f.century_text]
+                              list(f.century) if f.century else None, f.century_text, f.summary_auto,
+                              f.volume_group]
     return out
 
 
@@ -785,6 +818,10 @@ def attach_first_published(collection, hits: list[dict[str, Any]], *, root: Path
         return
     plugin = getattr(collection, "plugin", None)
     for h in hits:
-        y = first_published(plugin, facts.get(_uid(h)))
+        f = facts.get(_uid(h))
+        y = first_published(plugin, f)
         if y:
             h["first_published"] = y
+            if f is not None and f.first_published == y and f.summary_auto:
+                # the year is read from PG's machine-written summary: shown so (architecture, 2026-11-18)
+                h["first_published_by"] = "PG's automatic summary"

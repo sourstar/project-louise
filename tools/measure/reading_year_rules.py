@@ -49,6 +49,9 @@ def main(argv: list[str] | None = None) -> int:
     n = 0
     unparsed, unparsed_examples = 0, []
     by_author: list[dict] = []
+    entries: list = []
+    auto: collections.Counter = collections.Counter()
+    from_summary: collections.Counter = collections.Counter()
     claimed: frozenset = frozenset()      # translation-of claims: none on the node; marks are the corpus's own
     by_claim_only, unmarked, unmarked_examples = 0, 0, []
     _TR = re.compile(r"(?i)\btranslat(?:ed|ion|or)\b|\btradott[oa]\b|\btraduzione\b")
@@ -74,6 +77,11 @@ def main(argv: list[str] | None = None) -> int:
         if f.century_text:
             forms[re.sub(r"\d+(st|nd|rd|th)", "Nth", f.century_text.lower())] += 1
         y = reading.year_of(fields, f)
+        entries.append((r["uid"], f, y))
+        if y is not None and f.summary_auto and ("its first publication" in y.by or "century" in y.by):
+            auto[("first publication" if "its first publication" in y.by else "century")] += 1
+        if y is not None and ("its first publication" in y.by or "century" in y.by) and "is outside them" not in y.by:
+            from_summary[("first publication" if "its first publication" in y.by else "century")] += 1
         if r["uid"] in claimed and not f.translated:
             by_claim_only += 1
         if not f.translated and r["uid"] not in claimed and _TR.search(summary):
@@ -110,7 +118,11 @@ def main(argv: list[str] | None = None) -> int:
                           "neither_side_marked": sum(1 for x, y in cross if not marked[x] and not marked[y]),
                           "with_an_italian_side_unmarked": sum(1 for x, y in cross if not marked[x] and not marked[y]
                                                                and "it" in (lang_of[x], lang_of[y]))}
+    shared, volume_stats = reading.share_volumes(entries)
+    volume_examples = [{"uid": u, "year": int(yy), "by": yy.by} for u, yy in list(shared.items())[: a.examples]]
     print(json.dumps({"collection": a.collection, "records": n, "rules": dict(rules.most_common()),
+                      "from_the_summary": dict(from_summary), "from_pgs_automatic_summary": dict(auto),
+                      "volumes": volume_stats, "volume_examples": volume_examples,
                       "unmarked_translation_pairs": unmarked_pairs,
                       "by_author": by_author,
                       "century_forms": dict(forms.most_common(20)),

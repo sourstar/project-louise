@@ -104,7 +104,7 @@
     {# the ORIGINAL publication year (operator, 2026-11-16: "Not the year the
        source has been added to the source, but the original publication
        year"): shown only where a source states it #}
-    {% if h.first_published %}<span class="badge" data-first-published title="first published">{{ h.first_published }}</span>{% endif %}
+    {% if h.first_published %}<span class="badge" data-first-published title="first published{% if h.first_published_by %}, by {{ h.first_published_by }}{% endif %}">{{ h.first_published }}{% if h.first_published_by %} · by {{ h.first_published_by }}{% endif %}</span>{% endif %}
     <span class="badge brass">{{ h.lang or '?' }}</span>
     {% if h.source_collection %}<span class="badge lapis">{{ label(h.source_collection) }}</span>{% endif %}
     {# CLAUDE.md invariant 4, rule 2: a result a weight moved says so #}

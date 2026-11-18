@@ -362,3 +362,61 @@ def test_a_translation_is_marked_by_its_own_corpus_only():
                   "extra": {"creators_detail": [{"role": "cre", "name": "Scott, Walter"}],
                             "marc": {"520": ["... by Walter Scott is a historical novel published in 1819."]}}}
     assert not historical.is_translation(lammermoor)
+
+
+AUTO = " (This is an automatically generated summary.)"
+
+
+def test_a_volume_marker_never_separates_a_work():
+    k = works.volume_key("Opera nova amorosa", ["a1"])
+    for title in ["Opera nova amorosa, Vol. 1", "Opera nova amorosa Volume III", "Opera nova amorosa. Tomo II",
+                  "Opera nova amorosa, Parte 2", "Opera nova amorosa - Libro IV", "Opera nova amorosa, Book 3",
+                  "Opera nova amorosa 3"]:
+        assert works.volume_key(title, ["a1"]) == k, title
+    assert works.volume_key("Opera nova amorosa, Vol. 1", ["a2"]) != k
+    assert works.volume_key("Opera nova amorosa", []) == ""
+
+
+def _vol(uid, n, century, title="Opera nova amorosa", summary_extra=""):
+    rec = {"title": f"{title}, Vol. {n}",
+           "extra": {"marc": {"520": [f"A poem written in the {century} century.{summary_extra}{AUTO}"]},
+                     "creators_detail": [{"name": "Notturno", "role": "cre", "agent_id": "2/agents/1"}]}}
+    f = works.edition_facts(rec)
+    return uid, f, _year(rec)
+
+
+def test_the_volumes_placed_by_the_century_alone_share_its_majority():
+    entries = [_vol("g:30738", 1, "early 16th"), _vol("g:31285", 2, "early 16th"), _vol("g:31818", 3, "early 17th")]
+    assert entries[2][2] == 1616
+    shared, stats = reading.share_volumes(entries)
+    assert {u: int(y) for u, y in shared.items()} == {"g:30738": 1516, "g:31285": 1516, "g:31818": 1516}
+    assert shared["g:31818"].by == "its work's volumes (early 16th, 2 of 3 volumes), by PG's automatic summary"
+    assert stats == {"groups": 1, "changed": 1, "ties": 0}
+
+
+def test_a_tie_takes_the_earliest_and_a_dated_volume_keeps_its_own_year():
+    a, b = _vol("g:1", 1, "early 17th"), _vol("g:2", 2, "early 16th")
+    shared, stats = reading.share_volumes([a, b])
+    assert int(shared["g:1"]) == 1516 and stats["ties"] == 1
+    rec = {"title": "Opera nova amorosa, Vol. 3", "extra": {"marc": {"520": ["It was published in 1530." + AUTO]},
+           "creators_detail": [{"name": "Notturno", "role": "cre", "agent_id": "2/agents/1"}]}}
+    dated = ("g:3", works.edition_facts(rec), _year(rec))
+    shared, _ = reading.share_volumes([a, b, dated])
+    assert "g:3" not in shared
+
+
+def test_a_year_from_pgs_automatic_summary_says_so():
+    y = _year(_rec(summary="The novel was first published in 1605." + AUTO))
+    assert y.by == "its first publication (1605), by PG's automatic summary"
+    y = _year(_rec(summary="written in the early 14th century." + AUTO))
+    assert y.by == "its summary's century (early 14th), by PG's automatic summary"
+    assert _year(_rec(summary="first published in 1605.")).by == "its first publication (1605)"
+
+
+def test_the_shown_first_publication_says_when_pgs_automatic_summary_states_it(monkeypatch):
+    from types import SimpleNamespace
+    f = works.edition_facts({"extra": {"marc": {"520": ["It was first published in 1605." + AUTO]}}})
+    monkeypatch.setattr(works, "facts_for", lambda col, uids, root=None: {"gutenberg:1": f})
+    hits = [{"chunk_id": "gutenberg:1:0:1"}]
+    works.attach_first_published(SimpleNamespace(name="g", plugin="gutenberg", codex=object()), hits)
+    assert hits[0]["first_published"] == 1605 and hits[0]["first_published_by"] == "PG's automatic summary"
