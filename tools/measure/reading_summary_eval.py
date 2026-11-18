@@ -145,7 +145,10 @@ def answer(query: str, searched: dict, *, glossary: bool) -> tuple[str, bool]:
     if not glossary:
         reading.years = lambda hits, collection=None: {}
     try:
-        prepared, reads = historical.prepare(result, query, "it")
+        # both arms under Quality, as an Ask under Quality runs (explicit, not
+        # the ContextVar's default); the arms differ by the record's year alone
+        with reading.quality(True):
+            prepared, reads = historical.prepare(result, query, "it")
     finally:
         reading.years = real
     changed = any(r.glossary for r in reads)
@@ -177,6 +180,19 @@ def paired_stats(diffs: list[float], permutations: int, seed: int) -> dict:
     boots = sorted(statistics.mean(rng.choice(diffs) for _ in diffs) for _ in range(2000))
     return {"n": len(diffs), "mean_diff": round(obs, 4), "p": round((extreme + 1) / (permutations + 1), 4),
             "ci95": [round(boots[49], 4), round(boots[1949], 4)]}
+
+
+def readings_in(text: str, year) -> int:
+    """How many words of `text` the tables read at `year` for the answer —
+    the glossary's own steps (reading.lookup, reading.apply)."""
+    from app import reading
+    found = reading.lookup(reading.words_of([text]))
+    return len(reading.apply(text, year, found, reading.CHAT)[1])
+
+
+#: passages drawn from a record before it is given up for want of a word the
+#: tables read (the node, 9160bf1: random passages held none, ON == OFF)
+DRAWS = 24
 
 
 def _light(r: dict) -> dict:
@@ -231,7 +247,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--claims", type=Path, required=True)
     ap.add_argument("--from", dest="lo", type=int, default=1200)
     ap.add_argument("--to", dest="hi", type=int, default=1900)
-    ap.add_argument("--per-record", type=int, default=2, help="passages a historical record, at most")
+    ap.add_argument("--per-record", type=int, default=6, help="passages a historical record, at most")
     ap.add_argument("--n", type=int, default=150, help="pairs judged, at most")
     ap.add_argument("--out", type=Path, required=True)
     ap.add_argument("--permutations", type=int, default=10000)
@@ -261,7 +277,7 @@ def main(argv: list[str] | None = None) -> int:
     whole = texts_of(a.collection, {r["uid"] for r, _m in pairs}) if pairs else {}
     pairs = [(whole[r["uid"]], m) for r, m in pairs if r["uid"] in whole]
     items: list[dict] = []
-    misaligned = refused = 0
+    misaligned = refused = no_reading = 0
     with open(a.out, "w", encoding="utf-8") as out:
         out.write(json.dumps({"set": "reading-summary-eval", "chat_model": config.CHAT_MODEL,
                               "weights_sha256": a.weights_sha256, "judges": [config.CHAT_MODEL, *a.judge_model],
@@ -276,10 +292,15 @@ def main(argv: list[str] | None = None) -> int:
             if len(items) >= a.n:
                 break
             used: set[str] = set()
+            from app import reading
+            year = reading.years([{"chunk_id": f"{r['uid']}:0:1", "source_collection": a.collection}]).get(0)
             for _p in range(a.per_record):
-                passage = next((p for p in (ki.passage_of(r, rng) for _t in range(6))
-                                if p is not None and p[:200] not in used), None)
+                # a passage holding a word the tables read at the record's year:
+                # one without is ON == OFF by construction and measures nothing
+                passage = next((p for p in (ki.passage_of(r, rng) for _t in range(DRAWS))
+                                if p is not None and p[:200] not in used and year and readings_in(p, year)), None)
                 if passage is None:
+                    no_reading += 1
                     break
                 used.add(passage[:200])
                 q = llm.strip_think(llm.chat([{"role": "user", "content": ki.PROMPT + passage}],
@@ -305,18 +326,24 @@ def main(argv: list[str] | None = None) -> int:
                 without_g, _ = answer(query, hist, glossary=False)
                 print(f"pair {len(items) + 1}: {r['uid']} -> {modern}", file=sys.stderr, flush=True)
                 items.append({"uid": r["uid"], "gold_uid": modern, "query": query, "alignment": al,
+                              "year": int(year), "year_by": getattr(year, "by", ""),
+                              "readings_in_passage": readings_in(passage, year),
+                              "readings_in_answered_text": readings_in(str(hist["hits"][0].get("text") or ""), year),
                               "glossary_changed": did, "gold": gold, "on": with_g, "off": without_g})
         # PHASE 2, BY MODEL: each judge over every answer before the next (one load
         # each); BLIND — each answer alone, the arms in random order, never named
         judges = [None, *a.judge_model]
         for jm in judges:
-            for it in items:
+            for it in (x for x in items if x["glossary_changed"]):
                 arms = [("on", it["on"]), ("off", it["off"])]
                 rng.shuffle(arms)
                 for arm, text in arms:
                     it.setdefault("judged", {}).setdefault(jm or "first", {})[arm] = judge(it["query"], it["gold"], text, jm)
         on, off, second = [], [], []
         for it in items:
+            if not it["glossary_changed"]:
+                out.write(json.dumps(it, ensure_ascii=False) + "\n")
+                continue                     # ON == OFF by construction: not judged, not compared
             first = it["judged"]["first"]
             if first["on"]["agreement"] is not None and first["off"]["agreement"] is not None:
                 on.append(first["on"]["agreement"]); off.append(first["off"]["agreement"])
@@ -327,7 +354,8 @@ def main(argv: list[str] | None = None) -> int:
                         second.append((x, y))
             out.write(json.dumps(it, ensure_ascii=False) + "\n")
         diff = paired_stats([x - y for x, y in zip(on, off)], a.permutations, a.seed)
-        summary = {**before, "refused_queries": refused, "dropped_misaligned": misaligned, "judged": len(on),
+        summary = {**before, "refused_queries": refused, "dropped_misaligned": misaligned,
+                   "records_without_a_passage_the_tables_read": no_reading, "answered": len(items), "judged": len(on),
                    "glossary_changed": sum(1 for it in items if it["glossary_changed"]),
                    "agreement_on": round(statistics.mean(on), 3) if on else None,
                    "agreement_off": round(statistics.mean(off), 3) if off else None,

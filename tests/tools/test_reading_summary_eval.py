@@ -79,6 +79,26 @@ def test_an_answer_goes_through_the_ask_paths_own_steps(monkeypatch):
     assert any("Il mercante tornò." in str(m) for m in seen[0])
 
 
+def test_the_on_arm_reads_the_glossary_and_the_off_arm_does_not(monkeypatch):
+    """München's check (9160bf1, ON and OFF byte-identical): the ON arm's
+    prompt carries the glossary's text, the OFF arm's does not."""
+    from types import SimpleNamespace
+    from app import llm, reading
+    seen = []
+    monkeypatch.setattr(llm, "chat", lambda m, temperature, max_tokens: seen.append(str(m)) or "R.")
+    monkeypatch.setattr(reading, "years", lambda hits, collection=None: {0: reading.Year(1350, "x")})
+    monkeypatch.setattr(reading, "lookup", lambda words, store=None: SimpleNamespace(version="v"))
+    monkeypatch.setattr(reading, "apply", lambda text, y, found, use, lang=None:
+                        (text.replace("huomo", "uomo"), ["huomo"]))
+    searched = {"hits": [{"chunk_id": "gutenberg:1:0:1", "uid": "gutenberg:1", "book_id": 1,
+                          "text": "Il huomo tornò.", "title": "Novelle", "lang": "it"}],
+                "catalog": [], "facts": [], "timings": {}}
+    _t, on = e.answer("Chi tornò?", searched, glossary=True)
+    _t, off = e.answer("Chi tornò?", searched, glossary=False)
+    assert on is True and off is False
+    assert "Il uomo tornò." in seen[0] and "Il uomo tornò." not in seen[1]
+
+
 def test_the_search_is_never_translated(monkeypatch):
     from app import retrieval
     asked = []
@@ -105,7 +125,9 @@ def test_its_own_pairs_and_each_judge_over_all_answers_before_the_next(monkeypat
     monkeypatch.setattr(llm, "chat", lambda m, temperature, max_tokens: "Che cosa accadde nella sala?")
     monkeypatch.setattr(e, "best_passage", lambda con, col, q, uid: {"hits": [{"text": "t " + uid}], "catalog": []})
     monkeypatch.setattr(e, "align", lambda h, g, judge_model=None: 4.0)
-    monkeypatch.setattr(e, "answer", lambda q, res, glossary: ("on" if glossary else "off", False))
+    monkeypatch.setattr(e, "answer", lambda q, res, glossary: ("on" if glossary else "off", glossary))
+    monkeypatch.setattr(reading, "years", lambda hits, collection=None: {0: reading.Year(1350, "x")})
+    monkeypatch.setattr(e, "readings_in", lambda text, year: 1)
     order = []
     monkeypatch.setattr(e, "judge", lambda q, gold, cand, jm=None: order.append(jm) or
                         {"agreement": 4.0 if cand == "on" else 3.0, "contradictions": 0})
@@ -157,3 +179,39 @@ def test_pairing_keeps_claimed_records_light_and_reads_only_the_sampled_texts(mo
     (light, modern), = pairs
     assert modern == "gutenberg:2" and len(json.dumps(light)) < 1000           # no text kept
     assert e.texts_of("g", {"gutenberg:1"})["gutenberg:1"]["sections"][1][1] == "x" * 100_000
+
+
+
+def test_passages_without_a_word_the_tables_read_are_not_drawn_and_unchanged_answers_not_judged(monkeypatch, tmp_path):
+    """The node at 9160bf1: 14 judged, ON == OFF byte for byte — random
+    passages held no word the tables read."""
+    from types import SimpleNamespace
+    from app import collections as collections_mod, llm, reading
+    text = " ".join(f"Il re {i} entrò nella sala che non era più tempo." for i in range(40))
+    rec = {"uid": "gutenberg:1", "lang": "it", "title": "Commedia", "sections": [["I", "x"], ["II", "y"], ["III", text]]}
+    plain = dict(rec, uid="gutenberg:3")
+    monkeypatch.setattr(e, "pairs_of", lambda c, n, s: ([(rec, "gutenberg:2"), (plain, "gutenberg:4")], {}))
+    monkeypatch.setattr(e, "texts_of", lambda name, uids: {"gutenberg:1": rec, "gutenberg:3": plain})
+    monkeypatch.setattr(collections_mod, "by_name", lambda n: SimpleNamespace(name=n))
+    monkeypatch.setattr(reading, "tables_held", lambda store=None: "wikisource-readings 3 abc")
+    monkeypatch.setattr(reading, "years", lambda hits, collection=None: {0: reading.Year(1350, "x")})
+    monkeypatch.setattr(e, "ro_connect", lambda c: None)
+    monkeypatch.setattr(llm, "chat", lambda m, temperature, max_tokens: "Che cosa accadde nella sala?")
+    monkeypatch.setattr(e, "best_passage", lambda con, col, q, uid: {"hits": [{"text": "t " + uid}], "catalog": []})
+    monkeypatch.setattr(e, "align", lambda h, g, judge_model=None: 4.0)
+    drawn = []
+    monkeypatch.setattr(e, "readings_in", lambda t, y: 0 if "gutenberg:3" in drawn[-1:] else 2)
+    import tools.measure.reading_known_items as ki
+    real = ki.passage_of
+    monkeypatch.setattr(ki, "passage_of", lambda r, rng: drawn.append(r["uid"]) or real(r, rng))
+    calls = iter([("gold", False), ("on", False), ("off", False)] * 10)
+    monkeypatch.setattr(e, "answer", lambda q, res, glossary: next(calls))
+    judged = []
+    monkeypatch.setattr(e, "judge", lambda q, gold, cand, jm=None: judged.append(cand) or
+                        {"agreement": 3.0, "contradictions": 0})
+    out = tmp_path / "eval.jsonl"
+    e.main(["--collection", "g", "--claims", str(tmp_path / "c"), "--out", str(out), "--weights-sha256", "a",
+            "--per-record", "1"])
+    summary = [json.loads(x) for x in out.read_text(encoding="utf-8").splitlines()][-1]["summary"]
+    assert summary["records_without_a_passage_the_tables_read"] == 1      # gutenberg:3: no word read
+    assert summary["answered"] == 1 and summary["judged"] == 0 and judged == []
