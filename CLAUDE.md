@@ -128,7 +128,13 @@ are the ones that have drifted; prefer to add a test when you touch them.
    global knob that re-pins collections whose chunker never changed.
    *Enforced: test (golden) + boot (space pin).*
 4. FUSION TYPES AND WEIGHTS. ReferenceSource lookups are facts-by-key:
-   they go into the LLM context as pinned blocks and NEVER enter a ranking.
+   they go into the LLM context as pinned blocks and NEVER enter a ranking
+   as items or weights; a reader's normalisation of the text the reranker
+   reads is a reorder under the WEIGHTS rule (operator, 2026-11-18: "Yes to
+   both, replacing the words the reranker does not know with the words it
+   knows, just enables it to do its job"; under Quality only — operator,
+   2026-11-18: "Keep the word replacement under quality search only" —
+   every hit it moved saying so in `moved_by`, docs/05 §5.6, app/reading.py).
    Within a collection, the ranked lists of its legs that answer the same
    question ALWAYS go through RRF (their scores share no scale). Two ranked
    lists that answer different questions (docs/05 §5.1) are presented

@@ -1106,7 +1106,7 @@ the compressor and its level, honest peers agree on `root` as well.
 **Worked example.** Two lines. A Gutenberg record (green, text travels):
 
 ```
-{"uid":"gutenberg:1342","native_id":"1342","lang":"en","title":"Pride and Prejudice","creators":["Austen, Jane"],"date":"1998-06-01","subjects":["Courtship -- Fiction","England -- Fiction"],"keys":[],"sections":[["Chapter 1","It is a truth universally acknowledged, …"],["Chapter 2","Mr. Bennet was among the earliest …"],…],"extra":{"loc_class":"PR"},"origin":"1/3/4/1342/1342-0.txt","content_hash":"2c9e6f0b1a8d4e7f3b5c0a9d8e7f6a1b","origin_hash":"f1e2d3c4b5a69788796a5b4c3d2e1f00"}
+{"uid":"gutenberg:1342","native_id":"1342","lang":"en","title":"Pride and Prejudice","creators":["Austen, Jane"],"date":"1813","subjects":["Courtship -- Fiction","England -- Fiction"],"keys":[],"sections":[["Chapter 1","It is a truth universally acknowledged, …"],["Chapter 2","Mr. Bennet was among the earliest …"],…],"extra":{"loc_class":"PR","date_source":"marc906","issued":"1998-06-01"},"origin":"1/3/4/1342/1342-0.txt","content_hash":"2c9e6f0b1a8d4e7f3b5c0a9d8e7f6a1b","origin_hash":"f1e2d3c4b5a69788796a5b4c3d2e1f00"}
 ```
 
 A PubMed pointer record (red, text stays where it was fetched):

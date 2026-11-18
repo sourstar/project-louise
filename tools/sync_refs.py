@@ -43,21 +43,16 @@ def main() -> None:
     p.add_argument("--force", action="store_true",
                     help="with --fetch: re-download even if the local copy is fresh")
     p.add_argument("--ack", action="append", default=[], metavar="SOURCE",
-                    help="record the acknowledgement of a yellow source's terms (invariant 9: "
+                    help="record the acknowledgement of a yellow or red source's terms (invariant 9: "
                          "a timestamp and the sha256 of <src>/<source>/TERMS.txt), then sync "
-                         "that source alone; today: eurovoc")
+                         "that source alone; today: eurovoc, tlio")
     p.add_argument("--only", action="append", default=[], metavar="SOURCE",
                     help="sync only this source (repeatable); every source otherwise")
     args = p.parse_args()
 
     for source_id in args.ack:
-        import time
-        from app.refs import eurovoc
-        if source_id != eurovoc.SOURCE_ID:
-            raise SystemExit(f"--ack {source_id}: no yellow reference source of that name")
-        base = args.src / eurovoc.DIR
-        print(f"terms {base / eurovoc.TERMS}: sha256:{eurovoc.terms_sha256(base)}")
-        print(f"ack {source_id}: {eurovoc.make_ack(base, time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()))}")
+        for line in ack(args.src, source_id):
+            print(line)
 
     if args.fetch:
         for source_id, result in refs_acquire.fetch_all(
@@ -90,6 +85,42 @@ def main() -> None:
     why = eurovoc.held_back(args.src / eurovoc.DIR) if (args.src / eurovoc.DIR).is_dir() else None
     if why:
         print(f"eurovoc: held back: {why}")
+    from app import licensing
+    from app.plugins.base import LicenseClass
+    for sid in sids:
+        source = REFS_REGISTRY[sid]
+        if sid == eurovoc.SOURCE_ID or getattr(source, "license_class", None) not in (
+                LicenseClass.YELLOW, LicenseClass.RED):
+            continue
+        base = args.src / getattr(source, "ref_dir", sid)
+        why = licensing.ref_held_back(base, sid) if base.is_dir() else None
+        if why:
+            print(f"{sid}: held back: {why}")
+
+
+def ack(src: Path, source_id: str) -> list[str]:
+    """Record the acknowledgement of a yellow or red reference source's terms;
+    the lines to print. EVERY registered source of either class (architecture,
+    2026-11-18: "the next source needs no CLI change"), its terms at
+    `<src>/<its ref_dir, else its id>/TERMS.txt`, through the reference-source
+    resolution of app/licensing.py; eurovoc keeps its own record
+    (app/refs/eurovoc.py)."""
+    import time
+    from app import licensing
+    from app.plugins.base import LicenseClass
+    from app.refs import REFS_REGISTRY, eurovoc
+    now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    source = REFS_REGISTRY.get(source_id)
+    if source is None or getattr(source, "license_class", LicenseClass.GREEN) not in (
+            LicenseClass.YELLOW, LicenseClass.RED):
+        raise SystemExit(f"--ack {source_id}: no yellow or red reference source of that name")
+    if source_id == eurovoc.SOURCE_ID:
+        base = Path(src) / eurovoc.DIR
+        return [f"terms {base / eurovoc.TERMS}: sha256:{eurovoc.terms_sha256(base)}",
+                f"ack {source_id}: {eurovoc.make_ack(base, now)}"]
+    base = Path(src) / getattr(source, "ref_dir", source_id)
+    return [f"terms {base / licensing.REF_TERMS}: sha256:{licensing.terms_sha256(base / licensing.REF_TERMS)}",
+            f"ack {source_id}: {licensing.make_ref_ack(base, now)}"]
 
 
 if __name__ == "__main__":
