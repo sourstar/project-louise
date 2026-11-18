@@ -5982,7 +5982,7 @@ def _check_origin(a, codex, *, local=None, run: str | None = None):
 
         from app import bz2_blocks
         from app.acquire import block_origin
-        copy = fallback or getattr(local, "corpus_dir", None)
+        copy = fallback or _kept_copy_dir(a, local)
         deadline = time.monotonic() + block_origin.NIGHTLY_BUILD_S if fallback else None
         with _graceful_stop() as stop:
             try:
@@ -5999,6 +5999,31 @@ def _check_origin(a, codex, *, local=None, run: str | None = None):
         return None
     if fallback and mo is None:
         return fallback
+    return None
+
+
+def _kept_copy_dir(a, local):
+    """The copy this node keeps of a collection's origin, for a check by hand
+    (the nightly names it, `--origin-else`): the local side's corpus where it
+    names one, the collection's file's (`collections.by_name`), else the
+    collection's own `<root>/<name>/origin` (collections.origin_dir) — the
+    first that is a directory, or None."""
+    from pathlib import Path
+
+    from app import collections as collections_mod
+    name = getattr(local, "name", None) or getattr(a, "collection", None)
+    found = [getattr(local, "corpus_dir", None)]
+    try:
+        c = collections_mod.by_name(name) if name else None
+    except Exception:                                   # noqa: BLE001 — another place to look, not a fault
+        c = None
+    found.append(getattr(c, "corpus_dir", None))
+    root = getattr(a, "root", None)
+    found.append((Path(root) if root is not None else collections_mod.louise_root() / "collections")
+                 / str(name) / "origin")
+    for d in found:
+        if d and Path(d).is_dir():
+            return Path(d)
     return None
 
 
@@ -6080,7 +6105,8 @@ def _reparse_from(codex, name: str, origin_dir, *, run: str | None = None):
             why = getattr(mo, "why_not", None) or "the origin cannot be read here"
 
             def unplaced(uid: str, locator: str) -> bytes:
-                raise FileNotFoundError(why)
+                from app.hold.check import OriginAway
+                raise OriginAway(why)
             return unplaced
         base, prepare = mo.base, mo.materialise
     # THE CODEX COMES WITH IT. 03 §3.2 asks for the origin "re-parsed with

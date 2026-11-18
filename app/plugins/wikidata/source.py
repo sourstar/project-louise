@@ -235,6 +235,27 @@ class WikidataSource:
             raise EntityNotInRun(f"{origin}: run {run}'s pack holds no {m['eid']}")
         return dump, f"{dump}{_LOCATOR_SEP}{index}"
 
+    def origin_ordinals(self, dump: Path):
+        """`origin -> the ordinal of its line in dump`, for one check of the
+        block origin (app/acquire/block_origin.py), which asks it of every
+        sampled record twice (~3.8 M on the node): `local_of` without its
+        three stats and its paths a record (76 µs measured, the run's dump
+        and table found again each time) — the table ensured once here, an
+        entity's ordinal one lookup in it. None for an origin of another
+        form (parser 2's, read by `local_of`) or another suffix."""
+        table = entities.ensure(Path(dump))
+        z = Path(dump).name.rsplit(".", 1)[-1]
+
+        def ordinal(origin: str) -> int | None:
+            m = _KEYED.match(str(origin))
+            if m is None or m["z"] != z:
+                return None
+            got = entities.TABLE.lookup(table, ids.native_id_of(m["eid"]))
+            if got is None:
+                raise EntityNotInRun(f"{origin}: {Path(dump).name}'s pack holds no {m['eid']}")
+            return int(got[0])
+        return ordinal
+
     def origin_files(self, origin: str, base, run: str | None) -> list[Path]:
         """The file `origin` is read from in `run`, no table read."""
         from app import plugin_io

@@ -156,33 +156,26 @@ def test_equal_blocks_reproduce_every_record_from_the_origin(recreated, origin, 
     assert "re-parsed from the origin" in o.why
     # THE BUDGET (invariant 5): every byte the origin sent was drawn from it
     assert sum(drawn) == mo.bytes_read + 1 > 0, "the blocks, the header and the one-byte length probe"
-    # the bound counts what was fetched — the blocks once and the header — to
-    # within the byte two neighbouring blocks share where their boundary is
-    # not on a byte (fetched once in a run, counted with each block)
-    ix = mo.index
-    assert mo.bytes_read <= o.detail["origin_bytes"] <= mo.bytes_read + ix.blocks
+    # the bound counts what was fetched: each unit's range, whole, by one Range
+    # (and the 4-byte header and the 1-byte length probe beside them)
+    assert o.detail["origin_bytes"] == mo.bytes_read - 4
 
 
-def test_a_block_shared_by_two_records_is_fetched_once(recreated, origin):
+def test_a_range_shared_by_two_records_is_fetched_once(recreated, origin):
     root, corpus, codex, snap = recreated
     _serve(origin, corpus)
     mo = _reader(codex, origin.base_url)
     o = _check(root, corpus, codex, snap)
     assert o.result == chk.PASS, o.why
-    ranges = _ranges(origin)
-    blocks = [r for r in ranges if r[0] > 0]
-    assert len(blocks) == len(set(blocks)), "no range asked twice"
-    ix = mo.index
-    covered = set()
-    for a, b in blocks:
-        ks = [k for k in range(ix.blocks) if ix.byte_range(k, k)[0] >= a and ix.byte_range(k, k)[1] - 1 <= b]
-        assert not covered.intersection(ks), "no block fetched twice"
-        covered.update(ks)
-    # Q42 and Q5 are side by side in the dump: one block, one unit, one fetch
+    ranges = [r for r in _ranges(origin) if r[0] > 0]
+    assert len(ranges) == len(set(ranges)), "no range asked twice"
+    # Q42 and Q5 are side by side in the dump: one range, one unit, one fetch
     q42 = mo.blocks_of("wikidatawiki/entities/all.json.bz2#Q42")
     q5 = mo.blocks_of("wikidatawiki/entities/all.json.bz2#Q5")
     assert q42 == q5
-    assert mo.requests == len(blocks) + 1, "one Range a run of blocks, and the header"
+    s, e = mo.index.byte_range(*q42)
+    assert ranges.count((s, e - 1)) == 1
+    assert mo.requests == len(ranges) + 1 == o.detail["origin_units"] + 1, "one Range a unit, and the header"
     assert o.detail["origin_units"] < o.detail["compared"], "records sharing a unit are compared off one fetch"
 
 
@@ -253,6 +246,24 @@ def test_the_bound_counts_the_bytes_fetched(recreated, origin, monkeypatch):
     assert mo.bytes_read <= bound and o.detail["origin_bytes"] <= bound
     assert sum(b - a + 1 for a, b in _ranges(origin)) <= bound + 1
     assert 0 < o.detail["compared"] < FILLERS + 5, "a share, drawn by the seed"
+
+
+def test_a_check_by_hand_finds_the_copy_and_builds_the_index_whole(recreated, origin, monkeypatch):
+    """`hold check` with no `--origin` and no `--origin-else` (the operator's,
+    in its own container): the copy is the collection's own corpus, its index
+    is built whole whatever the nightly's time, and the origin is asked."""
+    root, corpus, codex, snap = recreated
+    _serve(origin, corpus)
+    _reader(codex, origin.base_url)
+    monkeypatch.setattr(block_origin, "NIGHTLY_BUILD_S", 0.0)
+    own = root / "wikidata.next" / "origin"
+    o = _check(root, corpus, codex, snap, origin_else=False)
+    assert o.result == chk.PASS and o.detail["origin"] == "reachable", o.why
+    assert louise._member_origin(codex).base == own, "the collection's own `<root>/<name>/origin`"
+    # no copy anywhere this node looks: said, with what supplies it — never guessed
+    own.rename(own.with_name("origin.away"))
+    o = _check(root, corpus, codex, snap, origin_else=False)
+    assert o.result == chk.INCONCLUSIVE and "`--origin-else DIR` names the copy" in o.why, o.why
 
 
 def test_the_kept_copy_given_as_the_origin_stays_kept_copy(recreated, origin):

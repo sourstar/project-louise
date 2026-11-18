@@ -15,16 +15,27 @@ ask: it re-parsed the kept copy and said INCONCLUSIVE "kept copy" (München,
 HOW. The copy's BLOCK INDEX (app/bz2_blocks.py: indexed_bzip2's block
 offsets, and where the unit lines begin) says which blocks hold a sampled
 record's line — the record's entity, its ordinal through the run's entity
-table, then two searches. A record's UNIT is that block range; its blocks are
-SHARED PIECES (03 §3.2, amended 2026-11-17, #745), so a block that several
-records' ranges hold is fetched and counted once, and the bound
-(`check.ORIGIN_BYTES`) counts the bytes a check really fetches. The stream's
-4-byte header ("BZh" and the level) is a shared piece of every unit. Each
-block's bytes, [⌊start bit / 8⌋, ⌈end bit / 8⌉), are fetched by Range from
-the Codex's `origin.spec.url` and the run's file path, through the budgeted
-HTTPS client the mend uses (zipdelta.HttpRangeReader: every byte drawn from
-the budget after it arrived, invariant 5), with at most the endpoint's
-`max_conns` requests at once, and compared with the copy's same bytes.
+table, then two searches. A record's UNIT is that block range (03 §3.2,
+amended 2026-11-17: "the unit is the range a record is read from"), weighed
+by its compressed bytes, [⌊start bit / 8⌋, ⌈end bit / 8⌉): the records whose
+lines lie in the same blocks are one unit, fetched once and compared off that
+one fetch, and the bound (`check.ORIGIN_BYTES`) counts the bytes a check
+fetches — each unit's range is fetched whole, by one Range, so what is
+counted is what moves (and the 4-byte stream header and the 1-byte length
+probe, once a check, beside it). The range is asked of the Codex's
+`origin.spec.url` and the run's file path through the budgeted HTTPS client
+the mend uses (zipdelta.HttpRangeReader: every byte drawn from the budget
+after it arrived, invariant 5), at most the endpoint's `max_conns` at once,
+and compared with the copy's same bytes.
+
+NOT TAKEN: each block a SHARED PIECE of the units that read it (#745), so a
+block two overlapping ranges hold — a line across a block boundary, 1.8 % of
+the units measured — is fetched and counted once. It saves at most those
+bytes, and only where both ranges are taken (a few in ten thousand of a
+check's units on wikidata's ~10^6), while every unit then holds its pieces in
+the check's tables for the whole pass: measured 447 bytes a unit against 202
+(840,000 units: 358 MiB against 162). Where the bound takes most units of a
+small dump the shared pieces would pay; there it is a change of `unit` alone.
 
 WHY EQUAL BYTES REPRODUCE THE RECORD FROM THE ORIGIN. A bzip2 block is
 decoded from its own bits alone: its 48-bit magic, its CRC, its Huffman
@@ -119,10 +130,13 @@ class BlockOrigin:
         self._local = threading.local()
         self._away: str | None = None             # why the origin is asked no more this check
         self._head: tuple[str, str | None] | None = None
-        self._blocks: dict[int, Any] = {}         # block -> its comparison: an Event and a verdict
+        #: block range -> its comparison (a future; or its outcome, for
+        #: `materialise`): one fetch a unit a check
         self._units: dict[tuple[int, int], Any] = {}
-        self._reads: dict[tuple[int, int], Any] = {}
-        self._pieces: dict[int, str] = {}
+        self._settled: dict[tuple[int, int], tuple[str, str | None]] = {}
+        #: the plugin's `origin -> ordinal` for this check (`origin_ordinals`)
+        self._ordinal: Callable[[str], int | None] | None = None
+        self._readers: list[Any] = []
 
     # ---- binding ----------------------------------------------------------------
 
@@ -136,7 +150,19 @@ class BlockOrigin:
         r = getattr(self._local, "reader", None)
         if r is None:
             r = self._local.reader = self._reader_for(f"{self.url}/{self.rel}")
+            with self._lock:
+                self._readers.append(r)
         return r
+
+    def close(self) -> None:
+        """Every held connection closed (the end of a check's comparisons)."""
+        with self._lock:
+            readers, self._readers = self._readers, []
+        for r in readers:
+            close = getattr(r, "close", None)
+            if callable(close):
+                close()
+        self._local = threading.local()
 
     def run_file(self, run: str) -> str | None:
         """The run's data file, `rel_path` under the origin's base: the one
@@ -163,13 +189,15 @@ class BlockOrigin:
         # A CHECK'S OWN: what one check asked of the origin is never another's
         self.bytes_read = self.requests = 0
         self._away, self._head = None, None
-        self._blocks, self._units, self._reads, self._pieces = {}, {}, {}, {}
+        self._units, self._settled = {}, {}
         self._local = threading.local()
+        self._ordinal = None
         if not run:
             self.why_not = "the snapshot names no run of the origin to read its records in"
         elif self.base is None:
-            self.why_not = ("this node keeps no copy of the origin, and the blocks a record is read from are "
-                            "found in the copy's block index")
+            self.why_not = ("no copy of the origin was found on this node (the collection's corpus, its "
+                            "`<root>/<name>/origin`), and the blocks a record is read from are found in the copy's "
+                            "block index — `--origin-else DIR` names the copy")
         elif (rel := self.run_file(run)) is None:
             self.why_not = f"run {run} names no single .bz2 file in the plugin's spec"
         else:
@@ -194,6 +222,12 @@ class BlockOrigin:
             if framing is not None:
                 self.why_not = f"{self.dump.name}: {framing}, so a record's ordinal cannot be placed in its blocks"
                 self.index = None
+        ordinals = getattr(self.plugin, "origin_ordinals", None)
+        if self.index is not None and callable(ordinals):
+            try:
+                self._ordinal = ordinals(self.dump)
+            except Exception:        # noqa: BLE001 — `local_of` answers, record by record, and says why
+                self._ordinal = None
         return self.why_not
 
     def _copy_file(self, rel: str) -> Path | None:
@@ -209,23 +243,10 @@ class BlockOrigin:
 
     # ---- the units ---------------------------------------------------------------
 
-    def _piece(self, k: int) -> str:
-        p = self._pieces.get(k)
-        if p is None:
-            p = self._pieces[k] = f"{self.rel}#block {k}"
-        return p
-
-    def _reads_of(self, a: int, b: int):
-        got = self._reads.get((a, b))
-        if got is None:
-            from app.plugin_io import OriginReads
-            ix = self.index
-            pieces = [(f"{self.rel}#header", 4)]
-            for k in range(a, b + 1):
-                s, e = ix.byte_range(k, k)
-                pieces.append((self._piece(k), e - s))
-            got = self._reads[(a, b)] = OriginReads(f"{self.rel}#blocks {a}-{b}", 0, tuple(pieces))
-        return got
+    def unit_name(self, a: int, b: int) -> str:
+        """A unit's name, what the seed ranks (09 §9.1): the run's file and
+        its blocks — `wikidata-20261012-all.json.bz2#blocks 123-124`."""
+        return f"{Path(self.rel).name}#blocks {a}-{b}"
 
     def blocks_of(self, locator: str) -> tuple[int, int]:
         """(first, last) block of the copy's stream holding the record's line:
@@ -235,6 +256,13 @@ class BlockOrigin:
         from app import plugin_io
         if self.index is None:
             raise FileNotFoundError(self.why_not or "the copy's block index is not loaded")
+        if self._ordinal is not None:
+            # the plugin's lookup for one check (wikidata: the run's entity
+            # table, ensured once): what `local_of` answers, without its
+            # stats and paths a record
+            got = self._ordinal(locator)
+            if got is not None:
+                return self.index.line_blocks(got)
         path, local = plugin_io.local_locator(self.plugin, locator, self.base, run=self.run)
         if Path(path).name != self.dump.name:
             raise ValueError(f"{locator}: read from {Path(path).name} in run {self.run}, not {self.dump.name}")
@@ -244,21 +272,21 @@ class BlockOrigin:
             raise ValueError(f"{locator}: its line in {self.dump.name} is not named by an ordinal ({member!r})")
         return self.index.line_blocks(int(member))
 
-    def unit(self, locator: str):
-        """`records-vs-origin`'s unit of a record: its block range, weighing
-        nothing of its own; its blocks and the header are pieces it shares
-        with every unit that reads them. Without the copy's index the unit
-        is the FILE, weighed whole — what a verifier would read, compared in
-        part as before (03 §3.2) — and its comparisons say why. A record the
-        index cannot place is a unit of its own, weighing nothing: its
-        comparison says why."""
+    def unit(self, locator: str) -> tuple[str, int]:
+        """`records-vs-origin`'s unit of a record and what it weighs: its
+        block range and the range's compressed bytes. Without the copy's
+        index the unit is the FILE, weighed whole — what a verifier would
+        read, compared in part as before (03 §3.2) — and its comparisons say
+        why. A record the index cannot place is a unit of its own, weighing
+        nothing: its comparison says why."""
         if self.index is None:
             return self._whole()
         try:
             a, b = self.blocks_of(locator)
         except Exception:        # noqa: BLE001 — said by the comparison, record by record
-            return f"{self.rel}#{locator}", 0
-        return self._reads_of(a, b)
+            return f"{Path(self.rel).name}#{locator}", 0
+        s, e = self.index.byte_range(a, b)
+        return self.unit_name(a, b), e - s
 
     def _whole(self) -> tuple[str, int]:
         if self.dump is not None:
@@ -338,75 +366,22 @@ class BlockOrigin:
         self._head = ("header", why)
         return why
 
-    def _block_equal(self, ks: list[int]) -> dict[int, bool]:
-        """Each block of `ks` (contiguous) compared once a check: the blocks
-        no other comparison has claimed are fetched in one Range, the others
-        waited for."""
-        mine: list[int] = []
-        theirs: list[Any] = []
-        with self._lock:
-            for k in ks:
-                slot = self._blocks.get(k)
-                if slot is None:
-                    slot = self._blocks[k] = [threading.Event(), None]
-                    mine.append(k)
-                else:
-                    theirs.append((k, slot))
-        out: dict[int, bool] = {}
-        try:
-            runs: list[list[int]] = []
-            for k in mine:
-                if runs and runs[-1][-1] == k - 1:
-                    runs[-1].append(k)
-                else:
-                    runs.append([k])
-            for run in runs:
-                s, e = self.index.byte_range(run[0], run[-1])
-                theirs_bytes = self._ask(s, e)
-                ours = self._copy_bytes(s, e)
-                for k in run:
-                    ks_, ke = self.index.byte_range(k, k)
-                    eq = theirs_bytes[ks_ - s:ke - s] == ours[ks_ - s:ke - s]
-                    with self._lock:
-                        self._blocks[k][1] = eq
-                        self._blocks[k][0].set()
-                    out[k] = eq
-        except BaseException as exc:
-            # a block this call claimed and could not compare: its waiters
-            # are told so, and a later comparison may claim it again
-            with self._lock:
-                for k in mine:
-                    slot = self._blocks.get(k)
-                    if slot is not None and slot[1] is None:
-                        slot[1] = exc
-                        slot[0].set()
-                        del self._blocks[k]
-            raise
-        for k, slot in theirs:
-            slot[0].wait()
-            if isinstance(slot[1], BaseException):
-                if isinstance(slot[1], FileNotFoundError):
-                    raise FileNotFoundError(str(slot[1]))
-                raise slot[1]
-            out[k] = bool(slot[1])
-        return out
-
     def compare(self, a: int, b: int) -> tuple[str, str | None]:
-        """Blocks a..b of the origin against the copy's: ("same", None), or
-        ("changed", why), or ("unreachable", why)."""
+        """Blocks a..b of the origin against the copy's, their range fetched
+        whole by one Range: ("same", None), or ("changed", why), or
+        ("unreachable", why)."""
         try:
             differs = self._header()
             if differs is not None:
                 return "changed", differs
-            eq = self._block_equal(list(range(a, b + 1)))
-        except FileNotFoundError as e:
-            return "unreachable", str(e)
-        bad = [k for k in range(a, b + 1) if not eq[k]]
-        if not bad:
+            s, e = self.index.byte_range(a, b)
+            theirs = self._ask(s, e)
+        except FileNotFoundError as exc:
+            return "unreachable", str(exc)
+        if theirs == self._copy_bytes(s, e):
             return _SAME, None
-        s, e = self.index.byte_range(bad[0], bad[-1])
-        return "changed", (f"the origin's bytes {s:,}-{e - 1:,} of {self.rel} (block {bad[0]:,}"
-                           + (f" to {bad[-1]:,}" if len(bad) > 1 else "") + ") are not the copy's")
+        return "changed", (f"the origin's bytes {s:,}-{e - 1:,} of {self.rel} (block {a:,}"
+                           + (f" to {b:,}" if b > a else "") + ") are not the copy's")
 
     def _unit_future(self, ex: ThreadPoolExecutor, key: tuple[int, int]):
         with self._lock:
@@ -418,12 +393,20 @@ class BlockOrigin:
     def materialise(self, locator: str) -> Path:
         """`_reparse_from`'s preparation of one record (image-equivalence, a
         check without the pool): its blocks compared, and the copy returned
-        to re-parse from when they are the origin's. FileNotFoundError when
-        the origin cannot answer; OriginBlocksChanged when its bytes differ."""
-        a, b = self.blocks_of(locator)
-        outcome, why = self.compare(a, b)
+        to re-parse from when they are the origin's. `check.OriginAway` (a
+        FileNotFoundError) when the origin cannot answer, its reason said;
+        OriginBlocksChanged when its bytes differ."""
+        key = self.blocks_of(locator)
+        with self._lock:
+            got = self._settled.get(key)
+        if got is None:
+            got = self.compare(*key)
+            with self._lock:
+                self._settled[key] = got
+        outcome, why = got
         if outcome == "unreachable":
-            raise FileNotFoundError(why)
+            from app.hold.check import OriginAway
+            raise OriginAway(why)
         if outcome != _SAME:
             raise OriginBlocksChanged(why)
         return self.base
@@ -472,12 +455,15 @@ class BlockOrigin:
                         if got is not None:
                             yield got
 
-            for got in local_many(routed()):
+            try:
+                for got in local_many(routed()):
+                    while side:
+                        yield side.popleft()
+                    yield got
                 while side:
                     yield side.popleft()
-                yield got
-            while side:
-                yield side.popleft()
+            finally:
+                self.close()
         return many
 
 

@@ -808,15 +808,25 @@ def verdict(line: bytes, got: bytes) -> str:
     return "failed"
 
 
+class OriginAway(FileNotFoundError):
+    """A record's origin unit cannot be re-fetched, and the origin said why
+    (it does not answer, it no longer serves the run, the copy that places
+    the unit is not there): UNREACHABLE, a deferral, its reason said in the
+    outcome. A plain FileNotFoundError is a unit not there, as before."""
+
+
 def _compared_here(reparse, items):
     """`Ctx.reparse_many` in this process, one record at a time."""
     for uid, locator, line in items:
         try:
             got = reparse(uid, locator)
-        except FileNotFoundError as e:
-            # the reason travels (an origin that will not answer says why;
-            # app/acquire/block_origin.py), and is said where none was reached
+        except OriginAway as e:
+            # the origin's own reason travels, and is said where none was
+            # reached (app/acquire/block_origin.py)
             yield uid, "unreachable", (str(e) or None)
+            continue
+        except FileNotFoundError:
+            yield uid, "unreachable", None
             continue
         except Exception as e:                          # noqa: BLE001
             yield uid, "errored", f"{uid}: {type(e).__name__}: {e}"[:200]
