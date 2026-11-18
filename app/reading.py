@@ -82,6 +82,12 @@ GLOSS_CHARS = 120
 #: glosses made the model answer "the sources do not contain it" where the
 #: plain text answered; summary agreement ON 2.125 against OFF 2.75)
 CHAT_GLOSSES = 5
+#: TLIO's glosses in the CHAT copy: OFF by default (architecture's ruling on
+#: #751, 2026-11-18, invariant 4 (3)): 8 judged answers pointed down (ON
+#: 2.125 vs OFF 2.75); they return only after a run of at least 30 judged
+#: answers shows ON >= OFF and the operator approves. The reranker's copy
+#: reads them (MRR@10 0.5596 vs 0.555, 109 queries)
+CHAT_TLIO = False
 #: a word, as the readings' forms are cut (accents and an elision kept)
 _WORD = re.compile(r"[^\W\d_]+['’]?")
 
@@ -634,7 +640,10 @@ def apply(text: str, year: int, found: Lookup, purpose: str, lang: str = "it") -
 
     def one(m: re.Match) -> str:
         w = m.group(0)
-        r = best(found.by_form.get(w.lower(), []), year, lang)
+        cands = found.by_form.get(w.lower(), [])
+        if purpose == CHAT and not CHAT_TLIO:
+            cands = [c for c in cands if c.source != "tlio"]
+        r = best(cands, year, lang)
         if r is None:
             return w
         if r.kind == REPLACE and r.reg:

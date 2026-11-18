@@ -48,7 +48,8 @@ ROWS = [row("wikisource-readings", "huomo", readings.REPLACE, reg="uomo"),
         row("tlio", "huomo", readings.GLOSS, lemma="uomo", gloss="Essere umano", lo=1100, hi=1400)]
 
 
-def test_a_replacement_keeps_case_and_a_gloss_differs_for_the_reranker_and_the_model(tmp_path):
+def test_a_replacement_keeps_case_and_a_gloss_differs_for_the_reranker_and_the_model(tmp_path, monkeypatch):
+    monkeypatch.setattr(reading, "CHAT_TLIO", True)       # the chat copy's TLIO glosses, as the eval's ON arm reads them
     st = _store(tmp_path, ROWS)
     found = reading.lookup(reading.words_of(["L'Huomo abondava"]), st)
     assert "wikisource-readings 1 " in found.version and "tlio 1 " in found.version
@@ -607,7 +608,8 @@ def test_a_form_listed_under_several_lemmas_is_not_glossed():
     assert reading.best([_gloss("talpe", "talpa")], 1300).lemma == "talpa"
 
 
-def test_the_chat_copy_glosses_each_form_once_and_a_few_a_text():
+def test_the_chat_copy_glosses_each_form_once_and_a_few_a_text(monkeypatch):
+    monkeypatch.setattr(reading, "CHAT_TLIO", True)
     forms = [f"forma{c}" for c in "abcdefgh"]
     found = reading.Lookup()
     found.by_form = {f: [_gloss(f, "l" + f)] for f in forms}
@@ -617,3 +619,29 @@ def test_the_chat_copy_glosses_each_form_once_and_a_few_a_text():
     assert out.count("[lformaa") == 1                                   # its first occurrence only
     out, used = reading.apply(text, 1300, found, reading.RERANK)        # the reranker's copy unchanged
     assert out.count("[") == 16
+
+
+
+def test_tlio_glosses_are_off_in_the_chat_copy_by_default_and_on_in_the_rerankers():
+    """Architecture's ruling on #751 (2026-11-18): a default needs a judged
+    measurement; 8 answers pointed down."""
+    from app.refs.readings import Reading
+    assert reading.CHAT_TLIO is False
+    found = reading.Lookup()
+    found.by_form = {"talpe": [_gloss("talpe", "talpa")],
+                     "huomo": [Reading(orig="huomo", reg="uomo", kind="replace", lemma="", gloss="", lang="it",
+                                       period_from=1100, period_to=1899, method="m", source="wikisource-readings")]}
+    out, used = reading.apply("huomo e talpe", 1300, found, reading.CHAT)
+    assert out == "uomo e talpe" and [r.source for r in used] == ["wikisource-readings"]
+    out, _u = reading.apply("huomo e talpe", 1300, found, reading.RERANK)
+    assert out == "uomo e talpe [talpa]"
+
+
+def test_the_misread_forms_of_the_nodes_rows_get_no_reading_where_ambiguous():
+    """The node's 8 rows (2026-11-18): fuoro (furono) read as fuoco, "fire";
+    cuoci (cuocere) as cuoco; abborri (aborrire) as abborrare. A form TLIO
+    lists under several lemmas gets none; the right lemma where only it."""
+    for form, wrong, right in [("fuoro", "fuoco", "essere"), ("cuoci", "cuoco", "cuocere"),
+                               ("abborri", "abborrare", "aborrire")]:
+        assert reading.best([_gloss(form, wrong), _gloss(form, right)], 1300) is None, form
+        assert reading.best([_gloss(form, right)], 1300).lemma == right

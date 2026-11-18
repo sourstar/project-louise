@@ -148,7 +148,14 @@ def answer(query: str, searched: dict, *, glossary: bool) -> tuple[str, bool]:
         # both arms under Quality, as an Ask under Quality runs (explicit, not
         # the ContextVar's default); the arms differ by the record's year alone
         with reading.quality(True):
-            prepared, reads = historical.prepare(result, query, "it")
+            # the ON arm reads every table, TLIO's glosses included: the
+            # product's default leaves them out of the chat copy until this
+            # measurement shows ON >= OFF (reading.CHAT_TLIO)
+            keep, reading.CHAT_TLIO = reading.CHAT_TLIO, glossary
+            try:
+                prepared, reads = historical.prepare(result, query, "it")
+            finally:
+                reading.CHAT_TLIO = keep
     finally:
         reading.years = real
     changed = any(r.glossary for r in reads)

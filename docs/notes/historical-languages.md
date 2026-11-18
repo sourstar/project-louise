@@ -580,3 +580,9 @@ form at its first occurrence, `CHAT_GLOSSES` = 5 a text; a form listed under
 several lemmas is not glossed; an entry of several senses gives its lemma
 alone. The reranker's copy is unchanged (it measured +0.005). Remeasured
 from the commit that carries them.
+
+Architecture's ruling the same day: TLIO's glosses in the CHAT copy OFF by
+default (`reading.CHAT_TLIO`) until at least 30 judged answers show ON >=
+OFF and the operator approves; the reranker's copy keeps them. The wrong
+lemmas are tests on the branch (fuoro, cuoci, abborri: none where the form
+is ambiguous). The eval's ON arm turns `CHAT_TLIO` on for its own answers.

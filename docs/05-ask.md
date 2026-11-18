@@ -844,7 +844,13 @@ same order. Under QUALITY only — the request's Quality/Speed choice
 (operator, 2026-11-18: "Keep the word replacement under quality search
 only"); under Speed no year, no lookup, no copy, no moved_by; off for its
 measurement (`retrieval.READING_RERANK`, from the command line). The chat model's
-copy (§5.3 answer) carries the lemma and its definition, capped.
+copy (§5.3 answer) carries the replacements; TLIO's lemma and definition
+there are OFF by default (architecture's ruling, 2026-11-18, invariant 4
+(3): 8 judged answers, agreement ON 2.125 against OFF 2.75), back only
+once at least 30 judged answers show ON ≥ OFF and the operator approves
+(`reading.CHAT_TLIO`); then each form once, at most `CHAT_GLOSSES` a text.
+A form TLIO lists under several lemmas is read by neither copy, and an
+entry of several senses gives its lemma alone.
 
 ## 5.7 Facets: the categories, and what is in them
 
