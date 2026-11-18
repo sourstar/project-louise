@@ -44,6 +44,29 @@ def signal_handlers_are_restored():
 
 
 @pytest.fixture(autouse=True)
+def nothing_only_a_child_does_is_done_here():
+    """A pool's stand-in on threads runs the pool's initializer in THIS
+    process; what only a CHILD does must not run here, since nothing undoes
+    it for the rest of the session (2026-11-18, the full ordered run): the
+    parent watch (`parallel.watch_parent`, a thread that polls for ever) —
+    eight of them spun without pause in every later test that made
+    `time.sleep` a no-op, and the vega gate's 2.7 s took 30 min a test — and
+    the children's nice, +10 on pytest itself for every pool."""
+    import threading
+    before = {t.ident for t in threading.enumerate() if t.name == "parent-watch"}
+    nice = os.nice(0) if hasattr(os, "nice") else None
+    yield
+    started = [t for t in threading.enumerate()
+               if t.name == "parent-watch" and t.ident not in before]
+    now = os.nice(0) if hasattr(os, "nice") else None
+    if started or now != nice:
+        pytest.fail(f"this test did in the test process what only a pool's child does: "
+                    f"{len(started)} parent-watch thread(s) started, nice {nice} -> {now} "
+                    f"(run the pool's own initializer, not parallel.child_start's)",
+                    pytrace=False)
+
+
+@pytest.fixture(autouse=True)
 def fresh_worker_state():
     """Module-level cursors and memos are per PROCESS, so one test's
     completed walk must not decide the next test's selection (that leak
