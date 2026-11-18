@@ -132,8 +132,9 @@ carried parts (75,896,183 records) and snapshot 2026-10 (`93cef74e…`, no `orig
    ```
    - `PARSE_PROCESSES` is given to the supervisor, not to `docker run`, so that an OOM kill (exit 137,
      which check_rss passes on) halves the pool for the next run.
-   - The cap is modelled from the measurements below: ~5 GB at 8 processes, with the entity table's
-     build. Write the measured peak (`tree_peak_bytes` in the JSON) here.
+   - The cap was modelled at ~5 GB for 8 processes. MEASURED on the node (2026-11-18, below): 11,291
+     MiB of summed RSS at 2,003.6 s of 2,279 s, not OOM-killed at 12g. The model was off by more than
+     2×; see "Measured on the node".
    - The worker's own scheduled check holds wikidata.next while it is paused (since this branch), so
      this check is the only one; `hold collection show wikidata.next` says "held: the collection is
      paused" under `scheduled_check`.
@@ -203,6 +204,30 @@ in it was half the time at first; a read-back after writing replaces it.
 - So the whole check at 8 processes is ~0.43 + 8 × 0.45 + 0.8 ≈ 5 GB (modelled). That is why step 5
   caps it at 12 GiB in its own container, and why it is never run in the worker's 24 GiB beside an
   embedding.
+
+**Measured on the node, 2026-11-18** (München, step 5: d696742, `--memory 12g`, PARSE_PROCESSES=8,
+nproc 12, one run, exit 0 in 2,279 s; `/data/tmp/wikidata-next-check-rss.json`):
+
+- The summed peak was 11,291 MiB (11,839,963,136 bytes) at 2,003.6 s.
+- There were 50 processes over the run: the parent, the multiprocessing resource tracker, and 48 spawned
+  children, which is six pools of 8. Each check builds its own pool (`parallel.each_part`), so the pools
+  ran one after another, not at once; the file cannot say which were alive at the peak.
+- The parent reached 1,673 MiB. That fits the entity table being built in the parent (~0.43 + ~0.8 GB
+  modelled, plus the table's read).
+- The children reached far more than the ~450 MiB modelled: 14 of them reached 786–882 MiB, and the
+  rest 500–750 MiB. One pool of 8 such children plus the parent is ≈ 8.3 GiB of summed RSS on its own.
+- The sum counts a page shared between processes once per process, so 11.3 GiB is an upper bound on
+  what the memory cgroup charged. That bound held: no OOM at 12g, 0.7 GiB under the cap.
+
+What is not known yet, and how the next run tells it: which check's children reach ~850 MiB, and what
+they hold beyond ~190 MiB of imports and the 256 MiB read cache. `tools/measure/check_rss.py` now records
+the processes alive at the peak, each process's first and last time seen, their Pss (shared pages split
+among their sharers, as smem reports it), and the cgroup's own `memory.peak` and `anon` peak. The next
+check of a wikidata run under it gives the real charge, and the model is corrected from that, not
+guessed. Until then the cap stays 12g, under `supervise-pass.sh`, which halves the pool after an OOM kill.
+The worker's scheduled check runs a quarter of the pool (`check_processes`: 3 of 12): ~1.7 GiB plus
+3 × ~0.9 ≈ 4.3 GiB summed, against the 4 GiB it is admitted with while no peak of it is recorded. The
+first scheduled run records its own peak, and later admissions use it × 1.2.
 
 The alternatives, written down in entities.py:
 - the packed sort, which pays over the direct table where the ids are sparse;
