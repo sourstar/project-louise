@@ -444,6 +444,8 @@ def _rerank_list(query: str, hits: list[dict], recipe, budget_s: float,
 #: 4's WEIGHTS rule, so every hit it moved says so and by how much
 #: (`moved_by`: its place had the original been read, and its place now).
 #: False only for the measurement of it (tools/measure, from the command line).
+#: Under QUALITY only (operator, 2026-11-18: "Keep the word replacement under
+#: quality search only"): the request's choice, `reading.quality`.
 READING_RERANK = True
 
 
@@ -468,9 +470,9 @@ def _reading_copies(head: list[dict], owner: list[tuple[int, dict]], texts: list
     """{text index: its ORIGINAL text} for the texts the reader changed (each
     changed in `texts` in place), and the reading's version. Nothing on any
     failure: the rerank reads the texts as they were."""
-    if not READING_RERANK:
-        return {}, "", {}
     from . import reading
+    if not READING_RERANK or not reading.quality_on():
+        return {}, "", {}                       # under Speed: no year, no lookup, no copy (operator)
     try:
         years = reading.years(head)
         if not years:

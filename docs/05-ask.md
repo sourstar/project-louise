@@ -840,8 +840,10 @@ changed text is scored in the same call, and each record whose place
 differs carries `moved_by` `{"weight": "historical reading (<source>
 <ref_version> <digest>; …)", "from": <its place read as it was>, "to":
 <its place now>}`; nothing is removed; the same reading versions give the
-same order. On by default; off only for its measurement
-(`retrieval.READING_RERANK`, from the command line). The chat model's
+same order. Under QUALITY only — the request's Quality/Speed choice
+(operator, 2026-11-18: "Keep the word replacement under quality search
+only"); under Speed no year, no lookup, no copy, no moved_by; off for its
+measurement (`retrieval.READING_RERANK`, from the command line). The chat model's
 copy (§5.3 answer) carries the lemma and its definition, capped.
 
 ## 5.7 Facets: the categories, and what is in them

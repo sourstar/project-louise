@@ -39,6 +39,39 @@ from typing import Any, Iterable
 
 from .refs.readings import GLOSS, REPLACE, Reading, table_digest
 
+import contextvars
+from contextlib import contextmanager
+
+#: THE READER RUNS UNDER QUALITY ONLY (operator, 2026-11-18: "Keep the word
+#: replacement under quality search only"; architecture: the one flag is the
+#: request's Quality/Speed choice). Each path that reranks or answers sets it
+#: from its request (`quality`); a path that carries no choice keeps the Ask
+#: path's default, Quality. Under Speed: no year, no table lookup, no copy,
+#: no moved_by.
+_QUALITY: contextvars.ContextVar[bool] = contextvars.ContextVar("louise_reading_quality", default=True)
+
+
+@contextmanager
+def quality(on: bool):
+    """The block's reader: on under Quality (`on`), off under Speed."""
+    token = _QUALITY.set(bool(on))
+    try:
+        yield
+    finally:
+        _QUALITY.reset(token)
+
+
+def quality_on() -> bool:
+    return _QUALITY.get()
+
+
+def under(on: bool, fn, *args, **kwargs):
+    """`fn(*args, **kwargs)` with the reader set: for a call that runs in a
+    worker thread, where the caller's context is not the thread's."""
+    with quality(on):
+        return fn(*args, **kwargs)
+
+
 #: the sources the reader reads, in precedence order (a replacement first)
 SOURCES = (("wikisource-readings", "wikisource_reading"), ("tlio", "tlio_reading"))
 RERANK, CHAT = "rerank", "chat"

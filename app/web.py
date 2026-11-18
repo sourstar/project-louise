@@ -1119,7 +1119,8 @@ def _relay_search(job: relay.Job, body: AskQueryBody) -> None:
     from . import question_card
     cols = _question_collections(body.collections)
     question_card.before_search(cols, speed=body.speed)
-    with mt.speed(body.speed):
+    from . import reading
+    with mt.speed(body.speed), reading.quality(not body.speed):
         result = _ask_result(body)
     question_card.after_search(cols, speed=body.speed)
     _say_search_timings(body, result)

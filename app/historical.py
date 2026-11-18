@@ -402,6 +402,8 @@ def _glossary(numbered: list[tuple[int, dict[str, Any]]]) -> dict[int, tuple[int
     in the reading's language (app/reading.py). Nothing on any failure: no
     reading is the text as it was."""
     from . import reading
+    if not reading.quality_on():
+        return {}                               # under Speed: the glossary never runs (operator)
     try:
         hits = [h for _n, h in numbered]
         years = reading.years(hits)
