@@ -70,3 +70,35 @@ def test_the_scratch_tables_come_through_the_products_own_sync(tmp_path):
         assert v.startswith("wikisource-readings 3 ") and reading.lookup(["huomo"]).by_form["huomo"][0].reg == "uomo"
     finally:
         reading.STORE_OVERRIDE = None
+
+
+def test_the_scratch_tables_take_tlio_only_once_its_terms_are_acknowledged(tmp_path, capsys):
+    """Operator, 2026-11-18: TLIO's ack recorded (A); the measurements read it
+    from the node's acked copy through its own licence gate."""
+    import gzip
+    from app import licensing
+    from app.refs import readings as rdg, tlio, wikisource_readings as wr
+    from tests.test_refs_readings import PAGE
+    from tools.measure import reading_store
+    tsv = tmp_path / "w" / "w.tsv"
+    tsv.parent.mkdir()
+    cols = [c.name for c in rdg.COLUMNS]
+    row = {"id": "it|huomo|1400|1899", "orig": "huomo", "reg": "uomo", "kind": "replace", "lemma": "", "gloss": "",
+           "lang": "it", "period_from": "1400", "period_to": "1899", "method": "wikisource-variants 3"}
+    tsv.write_text("\t".join(cols) + "\n" + "\t".join(row[c] for c in cols) + "\n", encoding="utf-8")
+    (tsv.parent / wr.MODERN).write_text("#total\t1000000\nabbandono\t40\n", encoding="utf-8")
+    root = tmp_path / "refs"
+    base = root / tlio.DIR
+    (base / "raw" / "voci").mkdir(parents=True)
+    (base / "raw" / "voci" / "000120.htm.gz").write_bytes(gzip.compress(PAGE))
+    (base / licensing.REF_TERMS).write_bytes(b"TLIO: no licence stated; non-commercial, local.\n")
+    try:
+        assert "tlio" not in reading_store.use(tsv, root)                      # terms, no ack
+        assert "tlio: NOT synced" in capsys.readouterr().err
+        licensing.make_ref_ack(base, "2026-11-18T00:00:00Z")
+        reading._word_cache.clear()
+        v = reading_store.use(tsv, root)
+        assert "tlio" in v and reading.lookup(["abondava"]).by_form["abondava"][0].lemma == "abbondare"
+        assert not (base / "refs.db").exists()                                 # the node's copy untouched
+    finally:
+        reading.STORE_OVERRIDE = None

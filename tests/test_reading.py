@@ -573,3 +573,22 @@ def test_node_show_carries_the_reading_line(monkeypatch):
     from app import node_show
     monkeypatch.setattr(reading, "tables_held", lambda store=None: "")
     assert node_show._reading_status([SimpleNamespace(plugin="gutenberg")]) == reading.NOT_SYNCED
+
+
+def test_a_source_synced_to_no_rows_is_not_a_table_held(tmp_path):
+    """TLIO held back by its licence gate syncs to an empty table: the
+    version must not name it (measured on the scratch tables, 2026-11-18)."""
+    import sqlite3
+    from app.refs import readings as rdg, store as rs
+    con = rs.connect(tmp_path / "refs.db")
+    con.execute('CREATE TABLE IF NOT EXISTS ref_meta (source_id TEXT PRIMARY KEY, ref_version TEXT, synced_at TEXT)')
+    cols = ", ".join(f'"{c.name}" TEXT' for c in rdg.COLUMNS)
+    con.execute(f'CREATE TABLE tlio_reading ({cols})')
+    con.execute("INSERT OR REPLACE INTO ref_meta (source_id, ref_version, synced_at) VALUES ('tlio', '1', 'x')")
+    con.commit()
+    con.row_factory = sqlite3.Row
+
+    class S:
+        pass
+    s = S(); s.con = con
+    assert reading._version(s, "tlio", "tlio_reading") == ""

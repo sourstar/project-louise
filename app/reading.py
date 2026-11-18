@@ -405,7 +405,10 @@ def _version(store, name: str, table: str, deadline: float | None = None) -> str
         import time
         store.con.set_progress_handler(lambda: 1 if time.monotonic() > deadline else 0, WARM_CHECK_STEPS)
     try:
-        v = f"{name} {row[0]} {table_digest(store.con, table)}"
+        # a source synced to NO rows (tlio held back by its licence gate) is
+        # not a table held: its version would claim a reading nothing gives
+        empty = store.con.execute(f'SELECT 1 FROM "{table}" LIMIT 1').fetchone() is None
+        v = "" if empty else f"{name} {row[0]} {table_digest(store.con, table)}"
     finally:
         if deadline is not None:
             store.con.set_progress_handler(None, 0)

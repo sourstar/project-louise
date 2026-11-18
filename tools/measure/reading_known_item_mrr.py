@@ -64,9 +64,11 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--seed", type=int, default=1)
     ap.add_argument("--readings-tsv", type=Path, help="the derived pairs file: a scratch table synced from it "
                                                       "by the product's own sync, before the node's")
+    from tools.measure import reading_store as _rs
+    ap.add_argument(_rs.ARG[0], **_rs.ARG[1])
     a = ap.parse_args(argv)
     from tools.measure import reading_store
-    version = reading_store.use(a.readings_tsv)
+    version = reading_store.use(a.readings_tsv, a.tlio_root)
     if not version:
         return reading_store.refuse("no reading table is held: copy ON would read nothing and be compared with "
                                     "OFF. Sync wikisource-readings, or pass --readings-tsv")

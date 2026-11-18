@@ -78,9 +78,11 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--depth", type=int, default=50)
     ap.add_argument("--runs", type=int, default=5)
     ap.add_argument("--readings-tsv", type=Path)
+    from tools.measure import reading_store as _rs
+    ap.add_argument(_rs.ARG[0], **_rs.ARG[1])
     ap.add_argument("--seed", type=int, default=1)
     a = ap.parse_args(argv)
-    store = scratch_store(a.readings_tsv) if a.readings_tsv else None
+    store = _rs.scratch(a.readings_tsv, a.tlio_root) if a.readings_tsv else None
     for name in a.collection:
         hits = sample_hits(name, a.depth, a.seed)
         records = hits[::2]                                   # reading.years is per record
