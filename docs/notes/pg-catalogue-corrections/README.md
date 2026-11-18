@@ -78,6 +78,40 @@ Examples:
 - *Mémoires de Mr. d'Artagnan*: Courtilz's pseudo-memoir, filed both
   ways.
 
+**The 42 category conflicts, checked on the text (2026-11-18).** The
+opening pages of each were read from aleph.pglaf.org; the verdicts are in
+the CSV's `checked_on_text` and `proposal` columns.
+- **17 are memoirs.** Two are uncertain: *The Confessions of a Poacher*
+  is told to an editor; *Wine-Dark Seas* is "Reminiscences and a
+  Romance".
+- **25 are not memoirs:** novels, satire, parodies, and Byron's poems
+  and plays.
+
+Miscatalogued, to propose:
+
+| ebook | book | error | fix |
+|---|---|---|---|
+| 49294 | Suttner, *Lay Down Your Arms* | a novel with topical headings only ("War; Peace") | "War -- Fiction"; "Peace -- Fiction" |
+| 27878 | *Mémoires de Mr. d'Artagnan* (Courtilz de Sandras, 1700) | an apocryphal memoir, i.e. a novel, catalogued under d'Artagnan as a person and in Biographies | "Artagnan, Charles de Batz-Castelmore, comte d' -- Fiction"; drop Biographies |
+| 71731 | Mendès & Lesclide, *Véritables mémoires de Cagliostro* | fiction under the person heading | "Cagliostro, Alessandro, conte di, 1743-1795 -- Fiction" |
+| 6890–6892 | Hauff, *Mitteilungen aus den Memoiren des Satan* | "Devil in literature" is the heading for STUDIES of the theme | "Devil -- Fiction" |
+| 38746 | Rosenbach, *The Unpublishable Memoirs* | stories, no fiction heading | "Book collectors -- Fiction" |
+| 29012 | *Mémoires d'une contemporaine* (Ida Saint-Elme) | memoirs in Novels / Historical Novels | drop those categories; "France -- History -- 1789-1815 -- Personal narratives" |
+| 58290 | Adam, *Derniers souvenirs d'un musicien* | recollections and sketches in Novels | drop Novels; "Composers -- Biography" |
+| 28622 | Byron, *Œuvres complètes*, tome 7 (tragedies) | in Historical Novels | Drama |
+| 5410, 5414, 5415 | Hamilton, *Memoirs of Count Grammont* | Biographies in one volume, Historical Novels in others | one category for the work: Biographies |
+
+Memoirs whose record has no memoir heading. The category is right; the
+LCSH form is missing: 3657 (Baker), 28955 (the Globe mutiny), 29085
+(*Bill o'th Hoylus End*), 34063 (Woodcock), 40840 (*Ten Years Among the
+Mail Bags*), 43379 (*Hands Up*), 63405 (Lovell), 45670 (Luckner,
+*Seeteufel*). Each takes "-- Personal narratives" or "-- Biography"; the
+wording is in the CSV.
+
+Moderate confidence, left out of the first submission: 12920 (*The
+"Goldfish"*), 30487 (*Confessions of a Neurasthenic*), 36970 (*The
+Confessions of a Poacher*).
+
 ## C. One observation, not per book
 
 **PG's categories differ between volumes in 1,437 of the 1,901
