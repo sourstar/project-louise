@@ -3,10 +3,18 @@ forms, both attested in Italian Wikisource's proofread scan pages
 (architecture's ruling, 2026-11-18; docs/notes/historical-languages.md,
 "Proposal: a reading annotation for historical Italian").
 
-THE ORIGIN. The XML dump of it.wikisource (dumps.wikimedia.org,
-`itwikisource-latest-pages-articles.xml.bz2`, CC BY-SA 3.0 and GFDL),
-fetched by `refs/acquire.py` on the node's budgeted, Range-resumable
-transport (invariant 5). Its scan pages (namespace 108, "Pagina:") are
+THE ORIGIN FORM, and why. The XML dump of it.wikisource, ONE form every
+time: `itwikisource-<run>-pages-articles.xml.bz2` of a DATED run
+(dumps.wikimedia.org/itwikisource/<run>/; CC BY-SA 3.0 and GFDL) — the
+pages-articles dump holds the scan pages (ns 108) and their indexes (ns
+110) this source reads; the Hugging Face Parquet (main namespace only) has
+neither. `resolve_run` names the run (Wikimedia's own RSS for the newest
+complete one) and its published sha1, `refs/acquire.py` fetches it on the
+node's budgeted, Range-resumable transport (invariant 5) and checks the
+sha1 before anything is derived; the run is recorded beside the pairs
+(`RUN`) and in each pair's `method`, so the table's digest — its version —
+names the run it came from (architecture, 2026-11-18: two copies of one
+size and two hashes are two dumps). Its scan pages (namespace 108, "Pagina:") are
 transcribed from the scanned EDITION, ſ written as s by Wikisource's
 convention, and dated here by that edition's PRINT year (namespace 110,
 "Indice:", field Anno); only pages proofread (pagequality level >= 3) are
@@ -104,6 +112,47 @@ _ROMAN = re.compile(r"^[ivxlcdm]+j?$")
 #: (bapt → batt, dict → ditt): no Italian word ends so
 _CUT = re.compile(r"[^\Waeiouàèéìòóù'’]{2}$")
 _ACCENT = {"a": "à", "e": "éè", "i": "ì", "o": "ò", "u": "ù"}
+
+
+RUN = "wikisource_readings.run.json"
+_RSS = "latest/itwikisource-latest-pages-articles.xml.bz2-rss.xml"
+
+
+def resolve_run(ref_root: Path, transport) -> dict:
+    """{base_url, rel_path, raw_name, sha1, run} of the newest complete run:
+    Wikimedia's RSS for the latest pages-articles dump names its run, the
+    run's sha1sums file its checksum. Both fetched on the same transport."""
+    import json as _json
+    from ..acquire.spec import Endpoint, RemoteFile, Transport
+    base = "https://dumps.wikimedia.org/itwikisource"
+    ep = Endpoint(transport=Transport.HTTPS, url=base)
+    rss = Path(ref_root) / "itwikisource-pages-articles-rss.xml"
+    rss.unlink(missing_ok=True)
+    transport.fetch_one(ep, RemoteFile(rel_path=_RSS), rss, 0)
+    m = re.search(r"itwikisource-(\d{8})-pages-articles\.xml\.bz2", rss.read_text(encoding="utf-8"))
+    if not m:
+        raise ValueError(f"{rss}: no run named")
+    run = m.group(1)
+    sums = Path(ref_root) / f"itwikisource-{run}-sha1sums.txt"
+    sums.unlink(missing_ok=True)
+    transport.fetch_one(ep, RemoteFile(rel_path=f"{run}/itwikisource-{run}-sha1sums.txt"), sums, 0)
+    name = f"itwikisource-{run}-pages-articles.xml.bz2"
+    sha1 = next((ln.split()[0] for ln in sums.read_text(encoding="utf-8").splitlines()
+                 if ln.split()[-1:] == [name]), None)
+    if sha1 is None:
+        raise ValueError(f"{sums}: no checksum for {name}")
+    (Path(ref_root) / RUN).write_text(_json.dumps({"run": run, "file": name, "sha1": sha1}) + "\n",
+                                      encoding="utf-8")
+    return {"base_url": base, "rel_path": f"{run}/{name}", "raw_name": name, "sha1": sha1, "run": run}
+
+
+def run_of(ref_root: Path) -> str:
+    """The run the pairs beside `RUN` come from, or "" when unrecorded."""
+    import json as _json
+    try:
+        return str(_json.loads((Path(ref_root) / RUN).read_text(encoding="utf-8")).get("run") or "")
+    except (OSError, ValueError):
+        return ""
 
 
 def form_of(word: str) -> str:
@@ -220,7 +269,7 @@ def variants(form: str) -> set[str]:
     return out
 
 
-def derive(counts: collections.Counter) -> tuple[list[dict], dict[str, int], int]:
+def derive(counts: collections.Counter, run: str = "") -> tuple[list[dict], dict[str, int], int]:
     """(the pairs, the 1900s counts, the 1900s word total)."""
     modern: dict[str, int] = collections.Counter()
     old: dict[str, dict[int, int]] = collections.defaultdict(dict)
@@ -246,7 +295,7 @@ def derive(counts: collections.Counter) -> tuple[list[dict], dict[str, int], int
         rows.append({"id": readings.row_id(form, LANG, lo, hi), "orig": form, "reg": best[1],
                      "kind": readings.REPLACE, "lemma": "", "gloss": "", "lang": LANG,
                      "period_from": lo, "period_to": hi,
-                     "method": f"wikisource-variants {RULES_VERSION}"})
+                     "method": f"wikisource-variants {RULES_VERSION}" + (f" {run}" if run else "")})
     rows.sort(key=lambda r: r["id"])
     return rows, dict(modern), total
 
@@ -257,7 +306,7 @@ def transform(raw: Path, final: Path, procs: int | None = None) -> None:
     procs = parallel.processes() if procs is None else procs
     years = print_years(pages(raw))                                 # two passes: the Indici first
     counts = count_stream(scan_pages(pages(raw), years, 1400, 1999), procs)
-    rows, modern, total = derive(counts)
+    rows, modern, total = derive(counts, run_of(final.parent))
     tmp = final.with_name(final.name + ".tmp")
     with open(tmp, "w", newline="", encoding="utf-8") as f:
         w = csv.DictWriter(f, fieldnames=[c.name for c in TABLE.columns], delimiter="\t")

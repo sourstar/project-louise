@@ -33,6 +33,11 @@ class RefDump:
     max_age_days: int = 30
     # transform(raw_path, final_path) — absent means the raw IS the final
     transform: Callable[[Path, Path], None] | None = None
+    # resolve(ref_root, transport) -> {"base_url", "rel_path", "raw_name",
+    # "sha1"}: an origin that names its runs (Wikimedia's dated dumps) gives
+    # the one run to fetch and its published checksum, checked before the
+    # transform (a file whose bytes are not the run's is never derived from)
+    resolve: Callable[[Path, object], dict] | None = None
 
 
 def _clinvar_transform(raw: Path, final: Path) -> None:
@@ -130,6 +135,13 @@ def _wikisource_readings_transform(raw: Path, final: Path) -> None:
     wikisource_readings.transform(raw, final)
 
 
+def _wikisource_readings_resolve(ref_root: Path, transport) -> dict:
+    """The newest complete run of it.wikisource's dump and its published
+    sha1 (app/refs/wikisource_readings.py `resolve_run`)."""
+    from . import wikisource_readings
+    return wikisource_readings.resolve_run(ref_root, transport)
+
+
 REF_DUMPS: tuple[RefDump, ...] = (
     RefDump(
         source_id="hgnc",
@@ -168,12 +180,13 @@ REF_DUMPS: tuple[RefDump, ...] = (
     RefDump(
         # CC BY-SA 3.0 / GFDL (green): the monthly dump, 445 MB on 20261101
         source_id="wikisource-readings",
-        base_url="https://dumps.wikimedia.org/itwikisource/latest",
-        rel_path="itwikisource-latest-pages-articles.xml.bz2",
-        raw_name="itwikisource-pages-articles.xml.bz2",
+        base_url="https://dumps.wikimedia.org/itwikisource",   # the dated run: `resolve`
+        rel_path="",
+        raw_name="",
         final_name="wikisource_readings.tsv",
         max_age_days=30,
         transform=_wikisource_readings_transform,
+        resolve=_wikisource_readings_resolve,
     ),
 )
 
@@ -191,16 +204,30 @@ def fetch_one(dump: RefDump, ref_root: Path, *, force: bool = False,
     if not force and _is_fresh(final, dump.max_age_days):
         return {"status": "fresh", "path": str(final)}
 
-    raw = ref_root / dump.raw_name
     transport = transport or HttpsTransport()
-    endpoint = Endpoint(transport=Transport.HTTPS, url=dump.base_url)
+    base_url, rel_path, raw_name, sha1 = dump.base_url, dump.rel_path, dump.raw_name, None
+    if dump.resolve is not None:
+        got = dump.resolve(ref_root, transport)
+        base_url, rel_path, raw_name, sha1 = got["base_url"], got["rel_path"], got["raw_name"], got.get("sha1")
+    raw = ref_root / raw_name
+    endpoint = Endpoint(transport=Transport.HTTPS, url=base_url)
     part = raw.with_name(raw.name + ".part")
     resume_from = part.stat().st_size if part.is_file() else 0
-    size = transport.fetch_one(endpoint, RemoteFile(rel_path=dump.rel_path),
+    size = transport.fetch_one(endpoint, RemoteFile(rel_path=rel_path),
                                 raw, resume_from)
+    if sha1 is not None:
+        import hashlib
+        h = hashlib.sha1()
+        with open(raw, "rb") as f:
+            for chunk in iter(lambda: f.read(1 << 20), b""):
+                h.update(chunk)
+        if h.hexdigest() != sha1:
+            raw.unlink(missing_ok=True)
+            raise TransportError(f"{dump.source_id}: {raw_name} is not the run's file "
+                                 f"(sha1 {h.hexdigest()}, published {sha1}): removed, nothing derived")
     if dump.transform is not None:
         dump.transform(raw, final)
-    return {"status": "fetched", "bytes": size, "path": str(final)}
+    return {"status": "fetched", "bytes": size, "path": str(final), **({"sha1": sha1} if sha1 else {})}
 
 
 def fetch_all(ref_root: Path, *, force: bool = False, transport=None) -> dict[str, dict]:
