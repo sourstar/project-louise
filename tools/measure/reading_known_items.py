@@ -44,18 +44,38 @@ from pathlib import Path
 MAX_WORDS = 25
 COPY_RUN = 4
 PROMPT = (
-    "Qui sotto c'è un brano di un libro o di un atto in italiano antico. Scrivi UNA sola domanda di "
-    "ricerca, in italiano moderno, che un lettore di oggi potrebbe scrivere in un motore di ricerca per "
-    "trovare proprio questo testo, basandoti solo su ciò che il brano dice (persone, fatti, luoghi, idee). "
-    "Non citare il titolo né l'autore, non copiare più di tre parole di fila dal brano, al massimo "
-    f"{MAX_WORDS} parole. Rispondi con la sola domanda, senza virgolette né spiegazioni.\n\nBrano:\n")
+    "Qui sotto c'è un brano di un libro in italiano antico. Scrivi UNA sola DOMANDA di ricerca, in "
+    "italiano moderno, che un lettore di oggi potrebbe scrivere in un motore di ricerca per trovare "
+    "proprio questo brano: chiedi di ciò che il brano dice (fatti, idee, luoghi), senza aggiungere nulla "
+    "che il brano non dica. Non usare nomi propri di personaggi o di persone, non citare il titolo né "
+    "l'autore, non copiare più di tre parole di fila dal brano, al massimo "
+    f"{MAX_WORDS} parole, e termina con il punto interrogativo. Rispondi con la sola domanda, senza "
+    "virgolette né spiegazioni.\n\nBrano:\n")
+#: the sections a passage is never taken from: a book's first ones are its
+#: front matter (title page, dedication, notice), München's review 2026-11-18
+FRONT_SECTIONS = 2
+#: a passage more than this share digits, brackets or capitals is a list,
+#: an errata, a title page — not prose a reader would ask about
+MAX_NOISE = 0.08
 
 _WORD = re.compile(r"[^\W\d_]+", re.UNICODE)
 
 
+def noisy(text: str) -> bool:
+    """Mostly digits, brackets or capitals: an errata list, a title page."""
+    letters = [c for c in text if c.isalpha()]
+    odd = sum(1 for c in text if c.isdigit() or c in "[]()|_*=#")
+    caps = sum(1 for c in letters if c.isupper())
+    return not letters or odd / len(text) > MAX_NOISE or caps / len(letters) > 3 * MAX_NOISE
+
+
 def passage_of(record: dict, rng: random.Random) -> str | None:
-    """A section's 500-900 characters, ending at a sentence end."""
-    secs = [str(t) for _h, t in (record.get("sections") or []) if len(str(t)) >= 500]
+    """A section's 500-900 characters of prose, ending at a sentence end,
+    never from the front matter (the first FRONT_SECTIONS of a longer book)."""
+    all_secs = list(record.get("sections") or [])
+    if len(all_secs) > FRONT_SECTIONS + 1:
+        all_secs = all_secs[FRONT_SECTIONS:]
+    secs = [str(t) for _h, t in all_secs if len(str(t)) >= 500]
     if not secs:
         return None
     text = rng.choice(secs)
@@ -64,7 +84,8 @@ def passage_of(record: dict, rng: random.Random) -> str | None:
     start = start + m.end() if m and start else start
     chunk = text[start:start + 900]
     end = max(chunk.rfind(". "), chunk.rfind("? "), chunk.rfind("! "))
-    return (chunk[:end + 1] if end >= 500 else chunk).strip()
+    got = (chunk[:end + 1] if end >= 500 else chunk).strip()
+    return None if noisy(got) else got
 
 
 def refused(query: str, passage: str, title: str) -> str | None:
@@ -74,6 +95,8 @@ def refused(query: str, passage: str, title: str) -> str | None:
         return "empty"
     if len(words) > MAX_WORDS:
         return f"longer than {MAX_WORDS} words"
+    if not q.rstrip().endswith("?"):
+        return "not a question"
     tw = [w.lower() for w in _WORD.findall(title or "")]
     if tw and len(tw) >= 2 and " ".join(tw[:3]) in " ".join(words):
         return "names the title"

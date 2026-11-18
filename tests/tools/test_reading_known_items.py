@@ -12,14 +12,19 @@ PASSAGE = ("Messer Torello da Pavia, ritornando di Levante, fu da tutti tenuto m
 
 def test_a_query_is_refused_for_the_title_a_copied_run_or_its_length():
     assert k.refused("Chi era il mercante di Pavia creduto morto?", PASSAGE, "Il Decameron") is None
-    assert k.refused("il decameron di boccaccio e Torello", PASSAGE, "Il Decameron") == "names the title"
-    assert k.refused("fu da tutti tenuto morto", PASSAGE, "Il Decameron") == "copies 4 words of the passage"
+    assert k.refused("il decameron di boccaccio e Torello?", PASSAGE, "Il Decameron") == "names the title"
+    assert k.refused("fu da tutti tenuto morto?", PASSAGE, "Il Decameron") == "copies 4 words of the passage"
+    assert k.refused("Il mercante di Pavia creduto morto", PASSAGE, "X") == "not a question"
     assert k.refused(" ".join(["parola"] * 30), PASSAGE, "X") == "longer than 25 words"
     assert k.refused("", PASSAGE, "X") == "empty"
 
 
 def test_a_passage_is_a_sections_text_cut_at_a_sentence_end():
     rec = {"sections": [["I", "Breve."], ["II", ("Una frase lunga che continua. " * 40)]]}
+    front = {"sections": [["T", "DI ANNA RADCLIFFE VOL. IV MILANO 1820 " * 20], ["D", "Dedica " * 100],
+                          ["I", "Una frase lunga che continua. " * 40], ["II", "Altra frase che segue. " * 40]]}
+    assert "RADCLIFFE" not in (k.passage_of(front, random.Random(2)) or "")
+    assert k.noisy("19 - | ma l'ira [disprezeo] 20 - | 21 (p. 3) [x] 22 - | 23 - | 24 [y] 25 |")
     p = k.passage_of(rec, random.Random(1))
     assert 500 <= len(p) <= 900 and p.endswith(".")
     assert k.passage_of({"sections": [["I", "corto"]]}, random.Random(1)) is None
