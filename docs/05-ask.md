@@ -823,6 +823,35 @@ loading took longer than N s"; a query encoder's does the same to the
 vector leg, in `legs_withheld`. A runner that cannot say what it holds
 is asked as before, and its load counts against the budget.
 
+*Amended 2026-11-18* (operator: "Yes to both, replacing the words the
+reranker does not know with the words it knows, just enables it to do its
+job"; docs/notes/historical-languages.md, "Proposal: a reading annotation
+for historical Italian"). **The reranker reads a copy of each record's
+chunks with its period's old words read**, where the record states a
+publication year a reading holds — the fields its plugin declares, in
+order (`publication_year_fields`; gutenberg: the work's first publication,
+then the print year of the edition PG transcribed; never PG's release
+date) — and no copy otherwise. A word with an attested modern form (the
+`wikisource-readings` reference source, 06 §6.5) is replaced by it, case
+kept; one with only a lemma (`tlio`) keeps its place with the lemma after
+it, `abondava [abbondare]`. The result shows the record's own text. This
+is a reorder under invariant 4's WEIGHTS rule: the ORIGINAL of each
+changed text is scored in the same call, and each record whose place
+differs carries `moved_by` `{"weight": "historical reading (<source>
+<ref_version> <digest>; …)", "from": <its place read as it was>, "to":
+<its place now>}`; nothing is removed; the same reading versions give the
+same order. Under QUALITY only — the request's Quality/Speed choice
+(operator, 2026-11-18: "Keep the word replacement under quality search
+only"); under Speed no year, no lookup, no copy, no moved_by; off for its
+measurement (`retrieval.READING_RERANK`, from the command line). The chat model's
+copy (§5.3 answer) carries the replacements; TLIO's lemma and definition
+there are OFF by default (architecture's ruling, 2026-11-18, invariant 4
+(3): 8 judged answers, agreement ON 2.125 against OFF 2.75), back only
+once at least 30 judged answers show ON ≥ OFF and the operator approves
+(`reading.CHAT_TLIO`); then each form once, at most `CHAT_GLOSSES` a text.
+A form TLIO lists under several lemmas is read by neither copy, and an
+entry of several senses gives its lemma alone.
+
 ## 5.7 Facets: the categories, and what is in them
 
 A filter nobody can enumerate is close to useless — nobody guesses

@@ -1096,8 +1096,13 @@ async def chat_completions(body: ChatBody, request: Request):
     # it is one call to the model, which nothing can interrupt midway; it
     # runs in a worker thread so this endpoint never blocks the loop.
     try:
+        import functools
+        from . import reading
         result = await cancel.while_connected(
-            request, _run_search, searched, query, body.limit, "hybrid", True,
+            # the reader's Quality/Speed, set in the worker thread the search runs in;
+            # the search's own arguments unchanged
+            request, functools.partial(reading.under, not body.speed, _run_search),
+            searched, query, body.limit, "hybrid", True,
             verify=body.verify, rerank_depth=body.rerank_depth,
             all_languages=body.all_languages,
             # the page's own "show results in", so a work's one hit is the

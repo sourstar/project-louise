@@ -190,6 +190,11 @@ ISSUES = {
                           "the reference is dropped from the text and the figures",
     "epub-document-missing": "the epub's reading order (spine) names a document the epub does "
                              "not contain or its manifest does not list; that text is not read",
+    # operator, 2026-11-18: "Add these inconsistencies to the report but before
+    # double check for postumous publications" — app/ask/works.py
+    "summary-date-outside-life": "PG's summary (marc520) dates the work before its author's birth, or "
+                                 "says it was written after the author's death (a posthumous "
+                                 "publication is never reported); the reader judges",
 }
 
 
@@ -248,6 +253,18 @@ def _refuse_if_broken(meta: dict, native_id: int) -> None:
 class GutenbergSource:
     source_id = "gutenberg"
     license_class = LicenseClass.GREEN
+    #: the record fields stating its WORK's year, in order, for the historical
+    #: reader (app/reading.py; app/ask/works.py `EditionFacts`; architecture's
+    #: ruling, 2026-11-18): the first publication PG's marc520 summary
+    #: states, then its authors' lifetime with the summary's century
+    #: (operator: "Author's birth/death places the book in time pretty
+    #: precisely (assume a date in the middle)"; "The century publication
+    #: date is equally important"). Never the edition's year nor a
+    #: translator's dates (operator: "Publication date (not the first) is
+    #: totally unreliable, do not consider it at all, same for
+    #: translations"), never `extra.issued`. A translation keeps its work's
+    #: year and is never read by the glossary.
+    publication_year_fields = ("first_published", "lived")
     # 06 §6.1's corpus credit. Green, so nothing compels it — and it is here
     # anyway: a provider that asks for nothing is still the provider, and
     # 02 §2.7 puts a corpus entry in every collection's `credits`.
@@ -599,6 +616,13 @@ class GutenbergSource:
             for n in produced if n not in named]
         subjects = [s.strip() for s in meta["subjects"].split("|") if s.strip()]
         edition_year, edition_source = edition_date(meta["marc"], text_header)
+        # the summary's date against the author's lifetime, by the year rule's
+        # own functions (app/ask/works.py): reported, never applied to the record
+        from app.ask import works as _works
+        why = _works.summary_date_outside_life({"date": edition_year, "extra": {
+            "marc": meta["marc"], "creators_detail": meta["creators_detail"]}})
+        if why:
+            found.append(Issue(_works.SUMMARY_DATE_OUTSIDE_LIFE, why))
         return CanonicalDoc(
             uid=f"{self.source_id}:{native_id}",
             title=meta["title"],

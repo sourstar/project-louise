@@ -483,10 +483,19 @@ def _searched(call: Callable[[str, dict[str, Any]], Any], args: dict[str, Any], 
             "seconds": round(time.monotonic() - t0, 3)}
 
 
-def ask(question: str, *, collections: list[str] | None = None, history: list[dict[str, Any]] | None = None,
-        call: Callable[[str, dict[str, Any]], Any] | None = None, model=None,
-        max_rounds: int = MAX_ROUNDS, answer_lang: str | None = None,
-        passages: bool = False, speed: bool = False) -> dict[str, Any]:
+def ask(question: str, *, speed: bool = False, **kwargs: Any) -> dict[str, Any]:
+    """`_ask` under the reader's Quality/Speed: the historical reader runs in
+    its searches and its sources only under Quality (operator, 2026-11-18:
+    "Keep the word replacement under quality search only")."""
+    from app import reading
+    with reading.quality(not speed):
+        return _ask(question, speed=speed, **kwargs)
+
+
+def _ask(question: str, *, collections: list[str] | None = None, history: list[dict[str, Any]] | None = None,
+         call: Callable[[str, dict[str, Any]], Any] | None = None, model=None,
+         max_rounds: int = MAX_ROUNDS, answer_lang: str | None = None,
+         passages: bool = False, speed: bool = False) -> dict[str, Any]:
     """One question through the loop: `{answer, sources, cited, cited_unknown,
     turns: [{tool, arguments, by, result, error, seconds}], rounds,
     exhausted, model_s}`. `model(messages, tools) -> (content,
@@ -522,7 +531,8 @@ def ask(question: str, *, collections: list[str] | None = None, history: list[di
             if m.get("role") in ("user", "assistant") and isinstance(m.get("content"), str)]
     scope = {"collections": list(collections)} if collections else {}
 
-    # Louise's search: the question as the Ask tab searches it
+    # Louise's search: the question as the Ask tab searches it — and every
+    # later search the model asks for — under the reader's Quality/Speed (`ask`)
     turns: list[dict[str, Any]] = [
         _searched(call, {"query": question, "translate": True, **scope}, "louise")]
 

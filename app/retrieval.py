@@ -436,6 +436,64 @@ def _rerank_list(query: str, hits: list[dict], recipe, budget_s: float,
         return _rerank_held(query, hits, recipe, budget_s, depth, queries)
 
 
+#: 05 §5.6 (amended 2026-11-18): the reranker reads a COPY of a record's
+#: chunks with its period's old words read (app/reading.py) where the record
+#: states a year a reading holds. Operator, 2026-11-18: "Yes to both,
+#: replacing the words the reranker does not know with the words it knows,
+#: just enables it to do its job" — on by default; a reorder under invariant
+#: 4's WEIGHTS rule, so every hit it moved says so and by how much
+#: (`moved_by`: its place had the original been read, and its place now).
+#: False only for the measurement of it (tools/measure, from the command line).
+#: Under QUALITY only (operator, 2026-11-18: "Keep the word replacement under
+#: quality search only"): the request's choice, `reading.quality`.
+READING_RERANK = True
+
+
+#: the last time a reading failure was logged, by collection: at most one a minute each
+_reading_logged: dict[str, float] = {}
+READING_LOG_EVERY_S = 60.0
+
+
+def _reading_failed(collection: str, e: BaseException) -> None:
+    """The reading's fallback, said: at most once a minute per collection,
+    naming it (every log line names its collection, CLAUDE.md)."""
+    now = time.monotonic()
+    if now - _reading_logged.get(collection, float("-inf")) < READING_LOG_EVERY_S:
+        return
+    _reading_logged[collection] = now
+    print(f"{time.strftime('%H:%M:%S')} [{collection} warn:reading] the reranker reads the texts as "
+          f"they were: {type(e).__name__}: {e}", flush=True)
+
+
+def _reading_copies(head: list[dict], owner: list[tuple[int, dict]], texts: list[str]
+                    ) -> tuple[dict[int, str], str, dict[int, int]]:
+    """{text index: its ORIGINAL text} for the texts the reader changed (each
+    changed in `texts` in place), and the reading's version. Nothing on any
+    failure: the rerank reads the texts as they were."""
+    from . import reading
+    if not READING_RERANK or not reading.quality_on():
+        return {}, "", {}                       # under Speed: no year, no lookup, no copy (operator)
+    try:
+        years = reading.years(head)
+        if not years:
+            return {}, "", {}
+        chunks = [(t, i, c) for t, (i, c) in enumerate(owner) if i in years]
+        found = reading.lookup(reading.words_of(c.get("text") or "" for _t, _i, c in chunks))
+    except Exception as e:   # noqa: BLE001 — a reading is a help, never the search's failure
+        _reading_failed(reading.collection_of(head[0]) if head else "?", e)
+        return {}, "", {}
+    originals: dict[int, str] = {}
+    for t, i, c in chunks:
+        body = c.get("text") or ""
+        lang = str(head[i].get("lang") or "").lower()[:2]
+        new, used = reading.apply(body, years[i], found, reading.RERANK, lang=lang)
+        if used and new != body:
+            originals[t] = texts[t]
+            title = head[i].get(HEAD) or ""
+            texts[t] = f"{title}\n\n{new}" if title else new
+    return originals, found.version, years
+
+
 def _rerank_held(query: str, hits: list[dict], recipe, budget_s: float, depth: int,
                  queries: dict[str, str] | None) -> tuple[list[dict], bool]:
     """`_rerank_list`'s work, inside the list's one claim."""
@@ -448,6 +506,16 @@ def _rerank_held(query: str, hits: list[dict], recipe, budget_s: float, depth: i
             body_text = c.get("text") or ""
             texts.append(f"{title}\n\n{body_text}" if title else body_text)
             owner.append((i, c))
+    # THE READER'S COPY, and the ORIGINALS of the texts it changed, scored
+    # too (the ruling: "score the ORIGINAL copy too, but only for the hits
+    # whose copy changed"): appended after the copies, so the delta of each
+    # moved hit is measured in the same call
+    originals, reading_version, reading_years = _reading_copies(head, owner, texts)
+    original_of: dict[int, int] = {}          # the original's text index -> its copy's
+    for t, text in originals.items():
+        original_of[len(texts)] = t
+        texts.append(text)
+        owner.append(owner[t])
     budget_s = budget_s * max(1.0, len(texts) / max(1, len(head)))
     # WARMED BEFORE THE CUT: the cut asks the reranker's own tokenizer, and a
     # cold one took that request as its load — 10 s timeout, the text cut by
@@ -512,24 +580,48 @@ def _rerank_held(query: str, hits: list[dict], recipe, budget_s: float, depth: i
         for local, t in enumerate(idx):
             scores[t] = got[at[part[local]]]
     best: dict[int, tuple[float, dict]] = {}
+    as_was: dict[int, float] = {}             # each record's best score had nothing been read
     for t, (i, c) in enumerate(owner):
+        if t in original_of:
+            as_was[i] = max(as_was.get(i, float("-inf")), scores[t])
+            continue
         if i not in best or scores[t] > best[i][0]:
             best[i] = (scores[t], c)
+        if t not in originals:
+            as_was[i] = max(as_was.get(i, float("-inf")), scores[t])
     ranked = []
-    if RERANK_LANGUAGE_ORDER == "slots" and len(groups) > 1 and set(best) == set(range(len(head))):
-        order = _by_language_slots(head, [best[i][0] for i in range(len(head))])
-    else:
-        order = _rerank_order([best[i][0] for i in range(len(head))], fuse=RERANK_FUSE) \
-            if set(best) == set(range(len(head))) else sorted(best, key=lambda i: (-best[i][0], i))
-    moved: dict[int, dict] = {}
+
+    def _ordered(score_of: dict[int, float]) -> list[int]:
+        if RERANK_LANGUAGE_ORDER == "slots" and len(groups) > 1 and set(score_of) == set(range(len(head))):
+            return _by_language_slots(head, [score_of[i] for i in range(len(head))])
+        return _rerank_order([score_of[i] for i in range(len(head))], fuse=RERANK_FUSE) \
+            if set(score_of) == set(range(len(head))) else sorted(score_of, key=lambda i: (-score_of[i], i))
+    order = _ordered({i: b[0] for i, b in best.items()})
+    moved: dict[int, list[dict]] = {}
+    if originals:
+        # CLAUDE.md invariant 4 (2), WEIGHTS (amended 2026-11-18): "every
+        # result it moved" — every record whose place differs from its place
+        # had nothing been read, `read` saying whether its own copy changed
+        # (False: it moved because another record was read)
+        before = _ordered(as_was)
+        from . import reading
+        changed = {owner[t][0] for t in originals}
+        at_before = {r: k for k, r in enumerate(before)}
+        for k, i in enumerate(order):
+            if i in at_before and at_before[i] != k:
+                entry = {"weight": reading.label(reading_version), "from": at_before[i] + 1, "to": k + 1,
+                         "read": i in changed}
+                if i in changed and getattr(reading_years.get(i), "by", ""):
+                    entry["by"] = reading_years[i].by        # what dated it: shown as the badge shows it
+                moved.setdefault(i, []).append(entry)
     if CATALOG_FIRST:
         before = order
         order = _catalog_first(order, head)
         if order and before and order[0] != before[0]:
             # CLAUDE.md invariant 4, rule 2: a weight's result says what moved
             # it and how far — here from the reranker's place to the first
-            moved[order[0]] = {"weight": "catalog_first", "from": before.index(order[0]) + 1,
-                               "to": 1}
+            moved.setdefault(order[0], []).append({"weight": "catalog_first",
+                                                   "from": before.index(order[0]) + 1, "to": 1})
     for i in order:
         score, c = best[i]
         h = dict(head[i])
@@ -538,7 +630,7 @@ def _rerank_held(query: str, hits: list[dict], recipe, budget_s: float, depth: i
             h.update({f: c[f] for f in ("chunk_id", "text", "chapter") if f in c})
         h["rerank_score"] = score
         if i in moved:
-            h["moved_by"] = [moved[i]]
+            h["moved_by"] = moved[i]
         ranked.append(h)
     return ranked + tail, True
 

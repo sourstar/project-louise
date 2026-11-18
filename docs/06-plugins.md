@@ -801,6 +801,19 @@ value)`, on a column the table declares in `indexes`. A reference source may shi
 entities` — as a pure function of the query text and the tables' current
 content; a resolver never returns a bare symbol.
 
+*Amended 2026-11-18* (architecture's ruling; docs/notes/historical-languages.md):
+**readings** of historical forms are reference sources, one per origin —
+`wikisource-readings` (green: spellings and their modern forms, both
+attested in it.wikisource's proofread scan pages dated by print year) and
+`tlio` (red: TLIO's forms before 1400 with their lemma and definition,
+synced only once its terms are acknowledged). A table row is a pair in
+TEI P5's `<orig>`/`<reg>` vocabulary (app/refs/readings.py): `orig`, `reg`
+where a modern form is attested, `kind` `replace` or `gloss`, `lemma`,
+`gloss`, `lang`, `period_from`..`period_to`, `method`. No Codex: its
+version is `ref_version` and a digest of the synced table. A form that is
+itself a 1900s word gives no row. Applied at ask time only, to the copies
+the reranker (05 §5.6) and the chat model read, by the record's own year.
+
 ## 6.6 From a plugin to a collection
 
 1. The plugin is added to the platform and released; the release image

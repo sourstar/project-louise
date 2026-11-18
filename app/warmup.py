@@ -100,10 +100,16 @@ def _back(up: dict[str, bool]) -> set[str]:
 
 
 def _watch() -> None:
+    # the historical reader's table versions, off the query path: at start,
+    # and at each look, so a sync run by another process is warmed here
+    # (app/reading.py `warm`; a version already computed costs one SELECT)
+    from app import reading
+    reading.warm()
     warm_all("web start")
     up: dict[str, bool] = {}
     while True:
         time.sleep(POLL_S)
+        reading.warm()
         back = _back(up)
         if back:
             warm_all("model server back: " + ", ".join(sorted(back)), only=back)

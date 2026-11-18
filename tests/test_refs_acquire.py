@@ -89,12 +89,34 @@ HOMOLOGENE_DATA = ("3\t9606\t34\tACADM\t4557231\tNP_000007.1\n"
                     "3\t10090\t11364\tAcadm\t6680618\tNP_031408.1\n").encode()
 
 
+def _wikisource_bz2() -> bytes:
+    """A minimal it.wikisource XML dump: one edition printed 1554 (app/refs/wikisource_readings.py)."""
+    import bz2
+    q = '&lt;noinclude&gt;&lt;pagequality level="4" user="x" /&gt;&lt;/noinclude&gt;'
+    xml = ('<mediawiki xmlns="http://www.mediawiki.org/xml/export-0.11/"><page><title>Indice:R.djvu</title>'
+           '<ns>110</ns><revision><text>|Anno=1554\n</text></revision></page><page><title>Pagina:R.djvu/1'
+           f'</title><ns>108</ns><revision><text>{q}huomo</text></revision></page></mediawiki>')
+    return bz2.compress(xml.encode())
+
+
+def _wikisource_run(dump: bytes, sha1: str | None = None) -> dict:
+    """Wikimedia's RSS naming the run, the run's sha1sums, the run's dump."""
+    import hashlib
+    name = "itwikisource-20261101-pages-articles.xml.bz2"
+    rss = (f'<rss><channel><item><description>&lt;a href="http://download.wikimedia.org/itwikisource/20261101/'
+           f'{name}"&gt;{name}&lt;/a&gt;</description></item></channel></rss>').encode()
+    sums = f"{sha1 or hashlib.sha1(dump).hexdigest()}  {name}\n".encode()
+    return {"latest/itwikisource-latest-pages-articles.xml.bz2-rss.xml": rss,
+            "20261101/itwikisource-20261101-sha1sums.txt": sums, f"20261101/{name}": dump}
+
+
 @pytest.fixture
 def fake_transport():
     return FakeTransport({"hgnc_complete_set.txt": HGNC_TSV,
                            "variant_summary.txt.gz": _clinvar_gz(),
                            "gnomad.v2.1.1.lof_metrics.by_gene.txt.bgz": _gnomad_bgz(),
-                           "homologene.data": HOMOLOGENE_DATA})
+                           "homologene.data": HOMOLOGENE_DATA,
+                           **_wikisource_run(_wikisource_bz2())})
 
 
 def test_fetch_all_downloads_transforms_and_is_freshness_gated(tmp_path, fake_transport):
@@ -197,3 +219,16 @@ def test_link_columns_are_indexed_at_real_scale(tmp_path, fake_transport):
         "EXPLAIN QUERY PLAN SELECT * FROM clinvar_variant WHERE gene_symbol='AP5Z1'"
     ).fetchall()
     assert any("idx_clinvar_variant_gene_symbol" in r["detail"] for r in plan)
+
+
+def test_wikisource_readings_fetch_names_its_run_and_refuses_a_file_not_the_runs(tmp_path):
+    from app.refs import acquire as acq, wikisource_readings as wr
+    dump = next(d for d in acq.REF_DUMPS if d.source_id == "wikisource-readings")
+    good = FakeTransport(_wikisource_run(_wikisource_bz2()))
+    got = acq.fetch_one(dump, tmp_path, transport=good)
+    assert got["status"] == "fetched" and wr.run_of(tmp_path) == "20261101"
+    assert (tmp_path / "itwikisource-20261101-pages-articles.xml.bz2").is_file()
+    bad = FakeTransport(_wikisource_run(_wikisource_bz2(), sha1="0" * 40))
+    with pytest.raises(acq.TransportError, match="not the run's file"):
+        acq.fetch_one(dump, tmp_path / "b", transport=bad, force=True)
+    assert not (tmp_path / "b" / "itwikisource-20261101-pages-articles.xml.bz2").exists()
