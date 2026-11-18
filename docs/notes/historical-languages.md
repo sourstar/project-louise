@@ -559,3 +559,24 @@ Asked by the louise-ocr session (scan-to-EPUB OCR for Italian books
   Whatever the operator obtains from the people they are contacting is
   that project's choice. If Louise later reads the same glossary, the three
   rules above apply.
+
+## The glossary with TLIO, first measured (2026-11-18)
+
+TLIO acknowledged (operator, A). On the node, v3 Wikisource pairs + TLIO 1:
+known-item MRR@10 ON 0.5596 vs OFF 0.555 (+0.0046, CI [0, 0.0138], 20 of
+109 queries moved, the gain in the 1200s); lookup+apply 7.3 ms; summary
+agreement ON 2.125 vs OFF 2.75 (8 judged, CI [-1.375, 0.0]) — worse.
+
+München read the 8 rows. Causes, in weight:
+1. Overload: up to 35 glosses a passage (Inferno XXI); the model answered
+   "the sources do not contain it", or lost a name (Curio) the plain text gave.
+2. Wrong sense: a form under a homograph's lemma (fuoro → fuoco; cuoci →
+   cuoco; abborri → abborrare), or TLIO's FIRST sense where another is meant
+   (satisfaccia → paying a debt).
+3. The judge: no penalty for modern wording found.
+
+Fixes (reader 2026-11-18, tlio PARSER_VERSION 2): the chat copy glosses each
+form at its first occurrence, `CHAT_GLOSSES` = 5 a text; a form listed under
+several lemmas is not glossed; an entry of several senses gives its lemma
+alone. The reranker's copy is unchanged (it measured +0.005). Remeasured
+from the commit that carries them.

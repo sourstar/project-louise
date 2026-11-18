@@ -77,6 +77,11 @@ SOURCES = (("wikisource-readings", "wikisource_reading"), ("tlio", "tlio_reading
 RERANK, CHAT = "rerank", "chat"
 #: the definition the chat copy carries, at most
 GLOSS_CHARS = 120
+#: the glosses the chat copy of one text carries, at most, each form at its
+#: first occurrence only (the node, 2026-11-18, TLIO: Inferno XXI with 35
+#: glosses made the model answer "the sources do not contain it" where the
+#: plain text answered; summary agreement ON 2.125 against OFF 2.75)
+CHAT_GLOSSES = 5
 #: a word, as the readings' forms are cut (accents and an elision kept)
 _WORD = re.compile(r"[^\W\d_]+['’]?")
 
@@ -599,7 +604,13 @@ def best(readings: list[Reading], year: int, lang: str = "it") -> Reading | None
     order = {n: k for k, (n, _t) in enumerate(SOURCES)}
     ok = [r for r in readings if r.applies(year) and r.lang == lang]
     ok.sort(key=lambda r: (0 if r.kind == REPLACE else 1, order.get(r.source, 9)))
-    return ok[0] if ok else None
+    if not ok:
+        return None
+    # a form listed under SEVERAL lemmas is ambiguous: no gloss rather than a
+    # guess (the node: "fuoro", furono, glossed as fuoco "fire")
+    if ok[0].kind == GLOSS and len({r.lemma for r in ok if r.kind == GLOSS}) > 1:
+        return None
+    return ok[0]
 
 
 def apply(text: str, year: int, found: Lookup, purpose: str, lang: str = "it") -> tuple[str, list[Reading]]:
@@ -619,14 +630,23 @@ def apply(text: str, year: int, found: Lookup, purpose: str, lang: str = "it") -
     if not any(f in low for f in found.by_form):            # substring checks, in C: no form here
         return text, used
 
+    glossed: set[str] = set()
+
     def one(m: re.Match) -> str:
         w = m.group(0)
         r = best(found.by_form.get(w.lower(), []), year, lang)
         if r is None:
             return w
-        used.append(r)
         if r.kind == REPLACE and r.reg:
+            used.append(r)
             return _keep_case(w, r.reg)
+        if purpose == CHAT and r.kind == GLOSS:
+            # each form once, and a few a text: a gloss is a help to read the
+            # passage, never more words than the passage (CHAT_GLOSSES)
+            if w.lower() in glossed or len(glossed) >= CHAT_GLOSSES:
+                return w
+            glossed.add(w.lower())
+        used.append(r)
         if r.kind == GLOSS and r.lemma:
             if purpose == CHAT and r.gloss:
                 g = r.gloss if len(r.gloss) <= GLOSS_CHARS else r.gloss[:GLOSS_CHARS].rsplit(" ", 1)[0] + "…"

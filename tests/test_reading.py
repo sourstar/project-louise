@@ -592,3 +592,28 @@ def test_a_source_synced_to_no_rows_is_not_a_table_held(tmp_path):
         pass
     s = S(); s.con = con
     assert reading._version(s, "tlio", "tlio_reading") == ""
+
+
+
+def _gloss(form, lemma, gloss="g"):
+    from app.refs.readings import Reading
+    return Reading(orig=form, reg="", kind="gloss", lemma=lemma, gloss=gloss, lang="it", period_from=1100,
+                   period_to=1400, method="t", source="tlio")
+
+
+def test_a_form_listed_under_several_lemmas_is_not_glossed():
+    """The node, 2026-11-18: "fuoro" (furono) glossed as fuoco, "fire"."""
+    assert reading.best([_gloss("fuoro", "fuoco"), _gloss("fuoro", "essere")], 1300) is None
+    assert reading.best([_gloss("talpe", "talpa")], 1300).lemma == "talpa"
+
+
+def test_the_chat_copy_glosses_each_form_once_and_a_few_a_text():
+    forms = [f"forma{c}" for c in "abcdefgh"]
+    found = reading.Lookup()
+    found.by_form = {f: [_gloss(f, "l" + f)] for f in forms}
+    text = " ".join(forms + forms)
+    out, used = reading.apply(text, 1300, found, reading.CHAT)
+    assert out.count("[") == reading.CHAT_GLOSSES and len(used) == reading.CHAT_GLOSSES
+    assert out.count("[lformaa") == 1                                   # its first occurrence only
+    out, used = reading.apply(text, 1300, found, reading.RERANK)        # the reranker's copy unchanged
+    assert out.count("[") == 16

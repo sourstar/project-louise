@@ -42,7 +42,10 @@ DIR = "tlio"
 TABLE = readings.table("tlio_reading")
 LANG = "it"
 #: the derivation's version; a change is a new ref_version (invariant 3)
-PARSER_VERSION = 1
+#: 2 (2026-11-18): an entry of several senses gives its lemma alone, no
+#: definition — its first sense is not the sense in context (the node:
+#: "satisfaccia" read as paying a debt)
+PARSER_VERSION = 2
 PERIOD = (1100, 1400)
 GLOSS_CHARS = 200
 MODERN_PER_MILLION = wikisource_readings.MODERN_PER_MILLION
@@ -82,12 +85,14 @@ def parse(raw: bytes) -> dict:
         f = f.rpartition(" : ")[2].partition(" . cfr.")[0].strip().rstrip(".").lower()
         if f and _WORD.match(f):
             forms.append(f)
-    definition = ""
+    definition, senses = "", 0
     d = body.get("0.7", "")
     if d:
         parts = re.split(r"(?:^| )\d+(?:\.\d+)* (?=\S)", " " + d)
         definition = next((p.strip() for p in parts if p.strip()), "")
-    return {"lemma": lemma, "pos": pos_, "forms": forms, "definition": definition[:GLOSS_CHARS]}
+        senses = len(set(re.findall(r"(?:^| )(\d+)(?:\.\d+)* (?=\S)", " " + d))) or 1
+    return {"lemma": lemma, "pos": pos_, "forms": forms, "definition": definition[:GLOSS_CHARS],
+            "senses": senses}
 
 
 def parse_pages(paths: list[str]) -> list[dict]:
@@ -109,7 +114,8 @@ def rows_of(entries, modern: dict[str, int], total: int) -> Iterator[dict]:
             if form == e["lemma"] or (total and modern.get(form, 0) >= floor):
                 continue
             yield {"id": readings.row_id(form, LANG, lo, hi) + "|" + e["lemma"], "orig": form, "reg": "",
-                   "kind": readings.GLOSS, "lemma": e["lemma"], "gloss": e["definition"], "lang": LANG,
+                   "kind": readings.GLOSS, "lemma": e["lemma"],
+                   "gloss": e["definition"] if e.get("senses", 1) <= 1 else "", "lang": LANG,
                    "period_from": lo, "period_to": hi, "method": f"tlio-forms {PARSER_VERSION}"}
 
 

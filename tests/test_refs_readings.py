@@ -92,7 +92,7 @@ def test_a_tlio_page_parses_into_its_lemma_forms_and_first_definition():
     e = tlio.parse(PAGE)
     assert e["lemma"] == "abbondare" and e["pos"] == "v."
     assert e["forms"] == ["abonda", "abondava", "habundare", "abbandono", "abunnare"]
-    assert e["definition"] == "Essere presente in grande quantità."
+    assert e["definition"] == "Essere presente in grande quantità." and e["senses"] == 2
 
 
 def test_tlio_is_not_synced_before_its_terms_are_acknowledged(tmp_path: Path):
@@ -109,7 +109,7 @@ def test_tlio_is_not_synced_before_its_terms_are_acknowledged(tmp_path: Path):
     r = got["abondava"]
     assert (r["kind"], r["lemma"], r["reg"], r["period_from"], r["period_to"]) == \
         (readings.GLOSS, "abbondare", "", 1100, 1400)
-    assert r["gloss"] == "Essere presente in grande quantità."
+    assert r["gloss"] == ""                 # two senses: the lemma alone (PARSER_VERSION 2)
 
 
 def test_the_terms_are_hashed_byte_exact(tmp_path: Path):
@@ -147,3 +147,13 @@ def test_short_forms_numerals_cut_words_and_foreign_ys_give_no_pair():
     got = {r["orig"]: r["reg"] for r in wr.derive(c)[0]}
     assert got == {"cio": "ciò", "cosi": "così", "hora": "ora", "auea": "avea"}
     assert "y" not in "".join("".join(v) for v in wr.variants("dyk"))
+
+
+
+def test_an_entry_of_one_sense_gives_its_definition_and_of_several_its_lemma_alone():
+    one = PAGE.replace(b" 2 Altro.", b"")
+    assert tlio.parse(one)["senses"] == 1
+    rows = {r["orig"]: r for r in tlio.rows_of([tlio.parse(one)], {}, 0)}
+    assert rows["abondava"]["gloss"] == "Essere presente in grande quantità."
+    rows = {r["orig"]: r for r in tlio.rows_of([tlio.parse(PAGE)], {}, 0)}
+    assert rows["abondava"]["gloss"] == "" and rows["abondava"]["lemma"] == "abbondare"
