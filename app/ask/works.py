@@ -126,16 +126,22 @@ class EditionFacts:
     #: historical.is_translation): its text is not the work's original
     #: language, so the original's first publication dates no word of it
     translated: bool = False
-    #: the creators' dates (architecture's ruling, 2026-11-18, on the
+    #: the creators' LIFETIME (architecture's ruling, 2026-11-18, on the
     #: operator's "Author's birth/death places the book in time pretty
-    #: precisely (assume a date in the middle)"): floor((birth + death) / 2)
-    #: of the TRANSLATORS for a translation, of the AUTHORS (roles aut, cre)
-    #: otherwise, from the record's own `extra.creators_detail`; several
-    #: within 50 years of each other give the floor of their mean, wider is
-    #: an anthology and gives none; a missing year gives none, never guessed
-    lived: int | None = None
+    #: precisely (assume a date in the middle)"): the earliest birth to the
+    #: latest death of the TRANSLATORS for a translation, of the AUTHORS
+    #: (roles aut, cre) otherwise, from the record's own
+    #: `extra.creators_detail`; None for an anthology (midpoints more than
+    #: LIVED_SPREAD apart) or where a creator lacks a year (never guessed)
+    lived: tuple[int, int] | None = None
     #: their dates as shown: "1265–1321", several joined by ", "
     lived_span: str = ""
+    #: the CENTURY the summary states ("written in the early 14th century",
+    #: marc520; operator, 2026-11-18: "The century publication date is
+    #: equally important, don't we parse it?"), as a span of years, and its
+    #: words as stated ("early 14th century")
+    century: tuple[int, int] | None = None
+    century_text: str = ""
 
 
 #: "published in 1920", "first published in 1605", "originally published in
@@ -160,27 +166,62 @@ def stated_first_published(summaries) -> int | None:
 LIVED_SPREAD = 50
 
 
-def lived_midpoint(record: dict[str, Any], translated: bool) -> tuple[int | None, str]:
-    """(the year, the dates shown) by the creators' dates: the translators'
-    for a translation, the authors' (aut, cre) otherwise — never editors,
-    illustrators, commentators or annotators; None where a creator of that
-    role lacks a year, or where they lived more than LIVED_SPREAD apart."""
+def lifetime(record: dict[str, Any], translated: bool) -> tuple[tuple[int, int] | None, str]:
+    """(the creators' lifetime, their dates shown): the translators' for a
+    translation, the authors' (aut, cre) otherwise — never editors,
+    illustrators, commentators or annotators. Several within LIVED_SPREAD
+    of each other (by their midpoints): the earliest birth to the latest
+    death; wider, an anthology: None. A creator of the role without both
+    years: None, never guessed."""
     roles = ("trl", "translator") if translated else ("aut", "author", "cre", "creator")
-    mids, spans = [], []
+    lives, spans = [], []
     for a in (record.get("extra") or {}).get("creators_detail") or []:
         if not isinstance(a, dict) or str(a.get("role") or "") not in roles:
             continue
         try:
             b, d = int(str(a.get("birth") or "").strip()), int(str(a.get("death") or "").strip())
         except ValueError:
-            return None, ""                         # a creator without both years: none, never guessed
+            return None, ""
         if b > d:
             return None, ""
-        mids.append((b + d) // 2)
+        lives.append((b, d))
         spans.append(f"{b}–{d}")
-    if not mids or max(mids) - min(mids) > LIVED_SPREAD:
+    if not lives:
         return None, ""
-    return sum(mids) // len(mids), ", ".join(spans)
+    mids = [(b + d) // 2 for b, d in lives]
+    if max(mids) - min(mids) > LIVED_SPREAD:
+        return None, ""
+    return (min(b for b, _d in lives), max(d for _b, d in lives)), ", ".join(spans)
+
+
+_ORDINAL_WORDS = {"first": 1, "second": 2, "third": 3, "fourth": 4, "fifth": 5, "sixth": 6, "seventh": 7,
+                  "eighth": 8, "ninth": 9, "tenth": 10, "eleventh": 11, "twelfth": 12, "thirteenth": 13,
+                  "fourteenth": 14, "fifteenth": 15, "sixteenth": 16, "seventeenth": 17, "eighteenth": 18,
+                  "nineteenth": 19, "twentieth": 20, "twenty-first": 21}
+_ORD = r"(\d{1,2})(?:st|nd|rd|th)|(" + "|".join(sorted(_ORDINAL_WORDS, key=len, reverse=True)) + r")"
+#: "early 14th century", "the mid-15th century", "late nineteenth century",
+#: "14th–15th century", "the 16th century"
+_CENTURY = re.compile(r"\b(?:(early|mid|middle|late)[\s-]+)?(?:" + _ORD + r")(?:\s*(?:[-–]|to|or|and)\s*(?:"
+                      + _ORD + r"))?[\s-]+centur(?:y|ies)\b", re.IGNORECASE)
+
+
+def stated_century(summaries) -> tuple[tuple[int, int] | None, str]:
+    """(the span of years, the words) of the first century the summary
+    states: the Nth is (N-1)00-(N-1)99; early its first third, mid its
+    second, late its last; "Nth-Mth" from the first's start to the last's end."""
+    for s in summaries or []:
+        m = _CENTURY.search(str(s))
+        if not m:
+            continue
+        q = (m.group(1) or "").lower()
+        n = int(m.group(2)) if m.group(2) else _ORDINAL_WORDS[m.group(3).lower()]
+        last = (int(m.group(4)) if m.group(4) else _ORDINAL_WORDS[m.group(5).lower()]) if (m.group(4) or m.group(5)) else n
+        lo, hi = (n - 1) * 100, (last - 1) * 100 + 99
+        if last == n and q:
+            lo, hi = {"early": (lo, lo + 33), "mid": (lo + 34, lo + 66), "middle": (lo + 34, lo + 66),
+                      "late": (lo + 67, lo + 99)}[q]
+        return (lo, hi), m.group(0).strip()
+    return None, ""
 
 
 #: an abridgement, by the edition's own words — never "unabridged"
@@ -208,11 +249,13 @@ def edition_facts(record: dict[str, Any]) -> EditionFacts:
     first = stated_first_published(marc.get("520"))
     from app import historical
     translated = historical.is_translation(record)
-    lived, span = lived_midpoint(record, translated)
+    lived, span = lifetime(record, translated)
+    century, century_text = stated_century(marc.get("520"))
     return EditionFacts(abridged=bool(_ABRIDGED.search(words)),
                         better_as=tuple(_BETTER.findall(str(extra.get("description") or ""))),
                         publisher=publisher, year=int(year.group(1)) if year else None,
-                        first_published=first, translated=translated, lived=lived, lived_span=span)
+                        first_published=first, translated=translated, lived=lived, lived_span=span,
+                        century=century, century_text=century_text)
 
 
 def edition_order(candidates: Sequence[tuple[int, str, str | None]], facts: dict[str, EditionFacts],
@@ -652,13 +695,14 @@ def facts_for(collection, want: Sequence[str], *, root: Path | None = None) -> d
 
 #: the rule `edition_facts` applies; a change to it is a new file name, so a
 #: facts file never outlives the rule that wrote it (invariant 3)
-FACTS_VERSION = 4          # 2 (2026-11-16): first_published; 3: translated; 4 (2026-11-18): lived
+FACTS_VERSION = 4          # 2 (2026-11-16): first_published; 3: translated; 4 (2026-11-18): lived, century
 
 
 def _decode(v) -> EditionFacts:
     return EditionFacts(bool(v[0]), tuple(v[1]), str(v[2]), v[3], v[4] if len(v) > 4 else None,
-                        bool(v[5]) if len(v) > 5 else False, v[6] if len(v) > 6 else None,
-                        str(v[7]) if len(v) > 7 else "")
+                        bool(v[5]) if len(v) > 5 else False, tuple(v[6]) if len(v) > 6 and v[6] else None,
+                        str(v[7]) if len(v) > 7 else "", tuple(v[8]) if len(v) > 8 and v[8] else None,
+                        str(v[9]) if len(v) > 9 else "")
 
 
 def _make(records: Iterable[dict[str, Any]]) -> dict[str, Any]:
@@ -666,7 +710,8 @@ def _make(records: Iterable[dict[str, Any]]) -> dict[str, Any]:
     for r in records:
         f = edition_facts(r)
         out[str(r["uid"])] = [f.abridged, list(f.better_as), f.publisher, f.year, f.first_published,
-                              f.translated, f.lived, f.lived_span]
+                              f.translated, list(f.lived) if f.lived else None, f.lived_span,
+                              list(f.century) if f.century else None, f.century_text]
     return out
 
 

@@ -66,21 +66,47 @@ class Year(int):
         return y
 
 
+def _mid(span: tuple[int, int]) -> int:
+    return (span[0] + span[1]) // 2
+
+
+def _short(century_text: str) -> str:
+    """"written in the early 14th century" -> "early 14th"."""
+    return re.sub(r"(?i)\s*centur(?:y|ies)$", "", re.sub(r"(?i)^the\s+", "", century_text.strip()))
+
+
 def year_of(fields: tuple[str, ...], facts) -> Year | None:
-    """The first declared field the record's facts state (app/ask/works.py
-    `EditionFacts`), in the ruled order (architecture, 2026-11-18):
-    `first_published` — never for a translation, whose first publication is
-    the original's in another language; `lived` — the creators' midpoint,
-    the translator's for a translation; `date` — the edition PG transcribed."""
+    """The year the record's facts give (app/ask/works.py `EditionFacts`), in
+    the ruled order (architecture, 2026-11-18):
+    `first_published` — a stated year, never for a translation (the
+    original's, in another language);
+    `lived` — the creators' lifetime L WITH the summary's century C, used
+    together: L∩C non-empty, its midpoint; no overlap, C is the edition's
+    century, rejected, and L's midpoint; L alone, its midpoint; C alone (no
+    dates, an anthology), its midpoint. A translation: the translator's L,
+    never C (the original's);
+    `date` — the edition PG transcribed."""
     if facts is None:
         return None
     translated = bool(getattr(facts, "translated", False))
     for f in fields:
         if f == "first_published" and facts.first_published and not translated:
             return Year(facts.first_published, f"its first publication ({facts.first_published})")
-        if f == "lived" and getattr(facts, "lived", None):
+        if f == "lived":
+            life = getattr(facts, "lived", None)
+            cent = None if translated else getattr(facts, "century", None)
             who = "translator's" if translated else "author's"
-            return Year(facts.lived, f"its {who} dates ({facts.lived_span})")
+            if life and cent:
+                lo, hi = max(life[0], cent[0]), min(life[1], cent[1])
+                if lo <= hi:
+                    return Year(_mid((lo, hi)), f"its summary's century and its {who} dates "
+                                                f"({_short(facts.century_text)}, {facts.lived_span})")
+                return Year(_mid(life), f"its {who} dates ({facts.lived_span}) (its summary's "
+                                        f"'{_short(facts.century_text)} century' is outside them)")
+            if life:
+                return Year(_mid(life), f"its {who} dates ({facts.lived_span})")
+            if cent:
+                return Year(_mid(cent), f"its summary's century ({_short(facts.century_text)})")
         if f == "date" and facts.year:
             return Year(facts.year, f"its edition ({facts.year})")
     return None

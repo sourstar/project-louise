@@ -274,3 +274,47 @@ def test_one_definition_of_a_stated_first_publication_for_both_readers():
         rec = {"extra": {"marc": {"520": [text]}}}
         assert works.edition_facts(rec).first_published == year
         assert historical.record_first_published(rec) == year
+
+
+def _aut(name, b, d, role="aut"):
+    return {"name": name, "role": role, "birth": str(b), "death": str(d)}
+
+
+def test_the_century_with_the_authors_dates():
+    # Dante, "early 14th century": 1300-1333 ∩ 1265-1321 = 1300-1321 -> 1310
+    y = _year(_rec(date="1880", summary="It was written in the early 14th century.",
+                   creators=[_aut("Dante", 1265, 1321)]))
+    assert y == 1310 and y.by == "its summary's century and its author's dates (early 14th, 1265–1321)"
+    # Serao, late 19th: 1867-1899 ∩ 1856-1927 -> 1883
+    assert _year(_rec(date="1910", summary="written in the late 19th century",
+                      creators=[_aut("Serao", 1856, 1927)])) == 1883
+
+
+def test_a_century_outside_the_authors_dates_is_the_editions_and_rejected():
+    y = _year(_rec(date="1840", summary="It was likely written in the early 19th century.",
+                   creators=[_aut("Giannone", 1676, 1748)]))
+    assert y == 1712
+    assert y.by == "its author's dates (1676–1748) (its summary's 'early 19th century' is outside them)"
+    assert _year(_rec(summary="likely written in the late 19th century", creators=[_aut("Sanudo", 1466, 1536)])) == 1501
+    assert _year(_rec(summary="written in the early 19th century", creators=[_aut("Ariosto", 1474, 1533)])) == 1503
+
+
+def test_a_translation_never_takes_the_originals_century():
+    y = _year(_rec(date="1842", summary="written in the early 18th century",
+                   creators=[_aut("Swift", 1667, 1745), _aut("Barbieri", 1774, 1853, "trl")]))
+    assert y == 1813 and y.by == "its translator's dates (1774–1853)"
+
+
+def test_an_anthology_or_a_record_without_dates_takes_the_century_alone():
+    y = _year(_rec(date="1890", summary="Poems written in the 14th century.",
+                   creators=[_aut("A", 1265, 1321), _aut("B", 1480, 1530)]))
+    assert y == 1349 and y.by == "its summary's century (14th)"
+    y = _year(_rec(date="1890", summary="A text written in the mid fifteenth century."))
+    assert y == 1450 and y.by == "its summary's century (mid fifteenth)"
+
+
+def test_the_century_forms_parsed():
+    for text, span in [("early 14th century", (1300, 1333)), ("the mid-15th century", (1434, 1466)),
+                       ("late nineteenth century", (1867, 1899)), ("the 14th–15th centuries", (1300, 1499)),
+                       ("16th century", (1500, 1599)), ("in 1605", None)]:
+        assert works.stated_century([text])[0] == span, text
