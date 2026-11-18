@@ -115,14 +115,12 @@
        request, made each time. #}
     <label class="inline" title="translate the question into every language the collections hold, not only the main ones">
       <input id="all-langs" type="checkbox"> all languages</label>
-    {# THE VOICE THAT READS THE ANSWER (operator, 2026-11-11: a configuration
-       tab to choose the voice): for an admin, the node's recorded voices by
-       name (GET /ask/voices), the choice kept with the account (POST
+    {# THE VOICE THAT READS THE ANSWER (operator, 2026-11-11: "there the user
+       can choose philippe or valentina"): the node's recorded voices by name
+       (GET /ask/voices), the reader's choice kept with their account (POST
        /ask/voice, users.toml; operator, 2026-11-11: "Shall a user account
-       can choose it?"), else in the browser; none chosen, the node's own.
-       Every other reader has nothing to choose: the synthetic voice of the
-       answer's language (operator, 2026-11-16; app/voice.py). Filled by
-       /static/voice.js; hidden with fewer than two voices #}
+       can choose it?"), else in the browser; none chosen, the node's own. Filled by /static/voice.js; hidden with fewer
+       than two voices, since there is nothing to choose #}
     {# THE PAPER THE PDF IS LAID OUT ON (operator, 2026-11-11: "portrait A4
        but configurable in the settings to portrait letter"), remembered in
        this browser like the counts #}
