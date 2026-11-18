@@ -806,9 +806,10 @@ def facts_for(collection, want: Sequence[str], *, root: Path | None = None) -> d
 
 #: the rule `edition_facts` applies; a change to it is a new file name, so a
 #: facts file never outlives the rule that wrote it (invariant 3)
-FACTS_VERSION = 9          # 2 (2026-11-16): first_published; 3: translated; 4: lived, century; 5: a stated
+FACTS_VERSION = 10         # 2 (2026-11-16): first_published; 3: translated; 4: lived, century; 5: a stated
                            # translation; 6: summary_auto, volume_group; 7: the century in context only;
-                           # 8: a writing verb governs (during, produced, crafted); 9: front matter
+                           # 8: a writing verb governs (during, produced, crafted); 9: front matter;
+                           # 10: front matter narrowed (capitals, or agent/source)
 
 
 def _decode(v) -> EditionFacts:

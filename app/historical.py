@@ -502,10 +502,16 @@ _STATED = re.compile(r"\b(?:tradott[oa]|traduzione|versione\s+di|recat[oa]\s+in|
 #: never deep in the body, where "tradotta dal regno dei sogni" is a figure
 _LANGS = (r"(?:l')?(?:inglese|francese|tedesco|latino|greco|spagnuolo|spagnolo|portoghese|russo|ebraico|"
           r"arabo|olandese|svedese|danese|polacco|english|french|german|latin|greek|spanish)")
+#: a title page STATES a translation in one of two ways (architecture,
+#: 2026-11-18, narrowed after the node: 62038 and 56500's front matter only
+#: TALKED ABOUT volgarizzamenti): its TYPE, in capitals, case-sensitive —
+_FRONT_CAPS = re.compile(r"\b(?:VOLGARIZZAT[A-Z]*|VOLGARIZZAMENT[A-Z]*|VERSIONE\s+ITALIANA|TRADOTT[A-Z]*|"
+                         r"TRANSLATED)\b")
+#: — or a statement with its AGENT or SOURCE, in any case
 _FRONT = re.compile(r"(?:\btranslated\s+by\b"
                     r"|\btradott[oaie]\s+(?:da|dal|dalla|dallo|dall['’])\s*(?:" + _LANGS + r"\b|(?-i:[A-ZÀ-Ý])[\w'’.-]+)"
-                    r"|\bvolgarizzat|\bvolgarizzament"
-                    r"|\bversione\s+italiana\b"
+                    r"|\bvolgarizzat[oaie]\s+(?:da|dal|dalla|dallo|dall['’]|per)\b"
+                    r"|\bversione\s+italiana\s+(?:di|da|del|dal)\b"
                     r"|\brecat[oaie]\s+in\s+(?:italiano|lingua|volgare)\b)", re.IGNORECASE)
 #: the front matter read where a record has no "Front matter" section: its
 #: first characters
@@ -527,8 +533,10 @@ def is_translation(record: dict[str, Any]) -> bool:
     2026-11-18): a translator among its credits (09 §9.5 `creators` and
     gutenberg's `extra.creators_detail`, MARC relator `trl`); its title or
     its summary (marc500, marc520) stating it; or its FRONT MATTER stating
-    it ("Translated by", "tradotto dal francese", "volgarizzato",
-    "versione italiana", "recato in italiano") — Scott's Lammermoor (42881),
+    it — in title-page capitals ("VOLGARIZZAMENTO", "VERSIONE ITALIANA",
+    "TRADOTTO", "TRANSLATED") or with its agent or source ("Translated by",
+    "tradotto dal francese", "volgarizzato da", "versione italiana di",
+    "recato in italiano"); a preface only talking of volgarizzamenti is not — Scott's Lammermoor (42881),
     with no credit and no summary saying so, is caught by its title page's
     "Translated by Gaetano Barbieri". A record none of these marks is read
     as an original."""
@@ -541,7 +549,8 @@ def is_translation(record: dict[str, Any]) -> bool:
     stated = [str(record.get("title") or ""), *(str(x) for k in ("500", "520") for x in (marc.get(k) or []))]
     if _STATED.search(" ".join(stated)):
         return True
-    return bool(_FRONT.search(front_matter(record)))
+    front = front_matter(record)
+    return bool(_FRONT_CAPS.search(front) or _FRONT.search(front))
 
 
 def record_first_published(record: dict[str, Any]) -> int | None:

@@ -90,7 +90,8 @@ def main(argv: list[str] | None = None) -> int:
                     str(x) for k in ("500", "520") for x in ((((r.get("extra") or {}).get("marc") or {}).get(k)) or [])])):
             front_new += 1                                    # marked by its front matter alone
             if len(front_examples) < a.examples:
-                m = _hist._FRONT.search(_hist.front_matter(r))
+                fm = _hist.front_matter(r)
+                m = _hist._FRONT_CAPS.search(fm) or _hist._FRONT.search(fm)
                 front_examples.append({"uid": r["uid"], "title": str(r.get("title") or "")[:60],
                                        "words": m.group(0) if m else ""})
         if r["uid"] in claimed and not f.translated:

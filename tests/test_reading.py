@@ -493,7 +493,7 @@ def test_the_front_matter_marks_a_translation_and_the_body_never():
                   "sections": [["Front matter", "LA PROMESSA SPOSA DI LAMMERMOOR. Translated by Gaetano Barbieri."],
                                ["Capitolo I", "Testo."]]}                                              # 42881
     assert historical.is_translation(lammermoor)
-    assert historical.is_translation({"sections": [["Front matter", "I DIALOGHI DI LUCIANO VOLGARIZZATI"]]})
+    assert historical.is_translation({"sections": [["Front matter", "I DIALOGHI DI LUCIANO VOLGARIZZATI _DAL greco"]]})
     assert historical.is_translation({"sections": [["Front matter", "PRIMA VERSIONE ITALIANA DI G. B."]]})  # 67846
     assert historical.is_translation({"sections": [["Front matter", "VOLGARIZZAMENTO ANTICO TOSCANO"]]})  # 60864
     assert historical.is_translation({"sections": [["Front matter", "tradotto dal francese da un anonimo"]]})
@@ -514,3 +514,14 @@ def test_a_translation_by_its_front_matter_is_never_read():
            "sections": [["Front matter", "Translated by Gaetano Barbieri."]]}
     y = _year(rec)
     assert y == 1819 and y.translated
+
+
+
+def test_a_preface_talking_of_volgarizzamenti_is_not_a_translation():
+    from app import historical
+    for text in ["Nella prefazione: i volgarizzamenti del Trecento sono testimoni preziosi della lingua.",   # 62038
+                 "Questa edizione, condotta sull'autografo, ricorda la versione italiana più antica."]:     # 56500
+        assert not historical.is_translation({"sections": [["Front matter", text]]}), text
+    for text in ["volgarizzato da fra Domenico Cavalca", "versione italiana di Vincenzo Monti",
+                 "TRADOTTA DALL'INGLESE", "TRANSLATED FROM THE ENGLISH"]:
+        assert historical.is_translation({"sections": [["Front matter", text]]}), text
