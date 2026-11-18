@@ -194,3 +194,43 @@ The fiction ones add "-- Fiction" and drop Biographies.
 
 **For wiki-gutenberg (operator, 2026-11-18: "No"): the 15 uncertain are
 out.** They are recorded as NO in `wiki-gutenberg-memoir-titles-<lang>.toml`.
+
+## B3. The last 93 review rows, checked on the text (2026-11-18)
+
+`review-rows-checked.csv`: 32 memoirs, 3 biographies, 55 not memoirs, 3
+uncertain (52518, 45157, 48250). The uncertain are NO, as the operator
+decided for the earlier ones.
+
+## Every proposed heading checked against the Library of Congress (2026-11-18)
+
+`tools/measure/lc_heading_check.py` looks each heading up in id.loc.gov,
+LC's Linked Data Service.
+- It finds the longest prefix LC established as one heading ("United
+  States--History--Civil War, 1861-1865").
+- Then it looks up each free-floating subdivision (a subject label, or a
+  name label for a geographic one).
+- "-- Personal narratives, British", and the like, is accepted by
+  pattern under a war.
+
+Result: `lc-heading-check.csv`.
+- **173 of 176 headings are confirmed**, by URI.
+- **3 are right by LC's indirect geographic practice**, which the label
+  service cannot confirm: "City missionaries -- New York (State) -- New
+  York -- Biography", "Missionaries -- Iraq -- Baghdad -- Diaries",
+  "Princesses -- Germany -- Prussia -- Biography".
+
+Names corrected to LC's authorized form. Most were life dates the readers
+gave from memory:
+
+| proposed | LC authorized form |
+|---|---|
+| Hausset, Madame du, 1713-1801 | Du Hausset, Mme., approximately 1720- |
+| Russell, Frances Anna Maria (Elliot) Russell, countess, 1815-1898 | Russell, Frances Russell, Countess, 1815-1898 |
+| Timberlake, Henry, 1730-1765 | Timberlake, Henry, -1765 |
+| Saint-Elme, Ida, 1776-1845 | Saint-Elme, Ida, 1778-1845 |
+| Rémusat, Claire Elisabeth Jeanne Gravier de Vergennes, comtesse de, 1780-1821 | Rémusat, Madame de (Claire Elisabeth Jeanne Gravier de Vergennes), 1780-1821 |
+| Tolstaia, Aleksandra Andreevna, grafinia, 1817-1904 | Tolstai︠a︡, A. A. (Aleksandra Andreevna), grafini︠a︡, 1817-1904 |
+| Princesses -- Prussia -- Biography | Princesses -- Germany -- Prussia -- Biography |
+
+Two have **no LC authority**: Butler, Pardee, and "Urbino, Dukes of". The
+proposals say so, and the cataloguer establishes them.
