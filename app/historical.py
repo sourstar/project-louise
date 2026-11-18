@@ -202,6 +202,9 @@ class Read:
     #: what dated it, for a source read by its year ("its author's dates
     #: (1265–1321)"; app/reading.py `Year.by`)
     by: str = ""
+    #: whom the readings applied are from, TLIO's disclaimer with it
+    #: (app/reading.py `credits`); shown in the badge
+    credits: list[str] = field(default_factory=list)
 
     def badge(self) -> str:
         """The source's badge: what the reader sees beside it — the stage,
@@ -215,6 +218,8 @@ class Read:
         if self.translation_in:
             out += (f", read with its modern version [{self.translation_in}]" if self.modern
                     else f", read with its translation [{self.translation_in}]")
+        if self.credits:
+            out += " (" + "; ".join(self.credits) + ")"
         return out
 
 
@@ -385,7 +390,8 @@ def read_sources(numbered: Iterable[tuple[int, dict[str, Any]]], question: str,
         shown[n] = (suffix, text)
         reads.append(Read(n, stage, why, applied, other[0] if other else None,
                           bool(other and other[1]), g[2] if g is not None else "",
-                          getattr(g[0], "by", "") if g is not None else ""))
+                          getattr(g[0], "by", "") if g is not None else "",
+                          list(g[3]) if g is not None else []))
     return shown, reads
 
 
@@ -396,7 +402,7 @@ def _lang(h: dict[str, Any]) -> str:
     return str(h.get("lang") or "").lower()[:2]
 
 
-def _glossary(numbered: list[tuple[int, dict[str, Any]]]) -> dict[int, tuple[int, str, str]]:
+def _glossary(numbered: list[tuple[int, dict[str, Any]]]) -> dict[int, tuple[int, str, str, list[str]]]:
     """{n: (the record's year, the text with its period's readings, their
     version)} for the sources whose record states a year a reading holds,
     in the reading's language (app/reading.py). Nothing on any failure: no
@@ -417,7 +423,7 @@ def _glossary(numbered: list[tuple[int, dict[str, Any]]]) -> dict[int, tuple[int
         n, h = numbered[i]
         text, used = reading.apply(str(h.get("text") or ""), y, found, reading.CHAT, lang=_lang(h))
         if used:
-            out[n] = (y, text, found.version)
+            out[n] = (y, text, found.version, reading.credits(r.source for r in used))
     return out
 
 

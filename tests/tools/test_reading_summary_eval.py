@@ -89,7 +89,7 @@ def test_the_on_arm_reads_the_glossary_and_the_off_arm_does_not(monkeypatch):
     monkeypatch.setattr(reading, "years", lambda hits, collection=None: {0: reading.Year(1350, "x")})
     monkeypatch.setattr(reading, "lookup", lambda words, store=None: SimpleNamespace(version="v"))
     monkeypatch.setattr(reading, "apply", lambda text, y, found, use, lang=None:
-                        (text.replace("huomo", "uomo"), ["huomo"]))
+                        (text.replace("huomo", "uomo"), [SimpleNamespace(source="wikisource-readings")]))
     searched = {"hits": [{"chunk_id": "gutenberg:1:0:1", "uid": "gutenberg:1", "book_id": 1,
                           "text": "Il huomo tornò.", "title": "Novelle", "lang": "it"}],
                 "catalog": [], "facts": [], "timings": {}}

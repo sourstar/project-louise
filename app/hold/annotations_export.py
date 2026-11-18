@@ -15,6 +15,9 @@ aside); `create` refuses such a file. The snapshot's claims are the claims
 that hold: created again against the re-created target, `create` reads
 every end there (by the book) and checks each pin — a record whose content
 moved, or a pin to another snapshot, refuses the file, naming the line.
+A target re-created at a NEW PARSER moves both (gutenberg 10 -> 12,
+2026-11-18): `create --repin` pins every claim anew, as `update` re-checks
+the claims it holds, and says first how many rest on text that moved.
 
 MULTI-CORE: one part per task in the parse pool (`parallel.each_part`), the
 lines written here in the parts' order.

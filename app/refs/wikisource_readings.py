@@ -64,6 +64,10 @@ from . import readings
 SOURCE_ID = "wikisource-readings"
 TABLE = readings.table("wikisource_reading")
 FINAL = "wikisource_readings.tsv"
+#: whom the spellings are from (CC BY-SA 3.0 asks the credit; operator,
+#: 2026-11-18: "add the usual credits")
+ATTRIBUTION = ("Old and modern spellings: derived from the Italian Wikisource dumps "
+               "(it.wikisource.org, its contributors, Wikimedia Foundation), CC BY-SA 3.0")
 MODERN = "wikisource_modern.tsv"
 LANG = "it"
 
@@ -342,6 +346,9 @@ class WikisourceReadingsSource:
     source_id = SOURCE_ID
     ref_version = RULES_VERSION
     license_class = LicenseClass.GREEN          # CC BY-SA 3.0: credited, shared alike
+    #: the credit shown beside a reading of it (app/credits.py: a credit
+    #: follows what is shown)
+    attribution = ATTRIBUTION
     namespaces: list[str] = []
 
     def schema(self) -> RefSchema:

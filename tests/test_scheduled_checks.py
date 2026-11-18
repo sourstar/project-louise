@@ -518,3 +518,30 @@ def test_a_store_that_cannot_be_read_runs_no_check_this_beat(isolated_config, mo
     ran = []
     assert sc.turn(stop=lambda: False, log=lambda m: None, now=NOW,
                    run=lambda c, stop: ran.append(c.name) or {"outcome": "pass"}) is None and ran == []
+
+
+def test_an_annotations_collection_is_checked_like_any_other(isolated_config, monkeypatch):
+    """`load_all` leaves annotations collections out (02 §2.10: nothing for the
+    worker's stages), and the turn listed only it: wikipedia-articles sat in
+    quarantine on the node, "roots not yet run on this peer", with no
+    attestation ever written (2026-11-18). Now it is due like any collection,
+    and checked against its own SHARD — no corpus is passed as its origin."""
+    from app import collections as collections_mod
+    from app.hold import codex as cx
+    root = _running_with_a_snapshot(monkeypatch)
+    (root / "articles").mkdir(parents=True)
+    articles = SimpleNamespace(name="articles", source="shard", corpus_dir=root / "articles" / "shard",
+                               codex=SimpleNamespace(collection_id="sha256:" + "a" * 64, update=None,
+                                                     annotates=SimpleNamespace(collection_id="sha256:" + "d" * 64)))
+    assert cx.is_annotations(articles.codex)
+    monkeypatch.setattr(collections_mod, "load_annotations", lambda: [articles])
+    from app.hold import collection as col
+    real_where = col.where_now
+    monkeypatch.setattr(col, "where_now", lambda r, name, cid: name if cid == articles.codex.collection_id
+                        else real_where(r, name, cid))     # this stand-in holds no Codex file
+    ran = []
+    assert sc.turn(stop=lambda: False, log=lambda m: None, now=NOW, run=_passes(ran)) == "articles"
+    assert sc.turn(stop=lambda: False, log=lambda m: None, now=NOW, run=_passes(ran)) == "gutenberg"
+    assert ran == ["articles", "gutenberg"], "by name, one a turn, the annotations collection among them"
+    assert sc.last(root, "articles")["snapshot_id"] == "2026-09"
+    assert "--origin-else" not in sc.argv_for(articles)

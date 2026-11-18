@@ -47,7 +47,14 @@ _SKIP = frozenset({"script", "style"})
 _WORD_FIRST = (r"(?:Articolo|Article|Artikel|Artículo|Artigo|Άρθρο|Член|Článek|Článok|Članak|Člen|"
                r"Artykuł|Articolul|Artikolu|Airteagal|Artikkel)")
 _NUM = r"\d+\s*(?:[.º°o]+|\.?o)?(?:\s*(?:bis|ter|quater|quinquies|sexies|[a-z]))?"
-_ARTICLE = re.compile(rf"^(?:{_WORD_FIRST}\s+{_NUM}|\d+\s*\.?\s*(?:artikla|cikk|pants|straipsnis))\s*$", re.I)
+#: the first article's French heading, "Article premier" / "Article 1er"
+#: (2026-11-14, LEMUR's dry run: missed, French article 1 was folded into the
+#: preamble — French found 0.593 of the articles), and a single article's
+#: heading in the languages that name it so: "Article unique", "Articolo
+#: unico", "Artículo único", "Artigo único"
+_ORDINAL = r"(?:Article\s+(?:premier|1er)|(?:Article|Articolo|Artículo|Artigo)\s+(?:unique|unico|único))"
+_ARTICLE = re.compile(rf"^(?:{_WORD_FIRST}\s+{_NUM}|{_ORDINAL}|\d+\s*\.?\s*(?:artikla|cikk|pants|straipsnis))\s*$",
+                      re.I)
 #: an annex's heading, alone on its line, after the articles
 _ANNEX = re.compile(r"^(?:ALLEGATO|ANNEX|ANHANG|ANEXO|ANNEXE|ΠΑΡΑΡΤΗΜΑ|ПРИЛОЖЕНИЕ|PŘÍLOHA|PRÍLOHA|"
                     r"PRILOG|PRILOGA|ZAŁĄCZNIK|ANEXA|ANNESS|IARSCRÍBHINN|LISA|LIITE|MELLÉKLET|"

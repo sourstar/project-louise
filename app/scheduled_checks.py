@@ -560,7 +560,13 @@ def turn(*, stop: Callable[[], bool], log: Callable[[str], None], now: float | N
         return None
     root = collections_mod.louise_root() / "collections"
     try:
-        collections = collections_mod.load_all()
+        # EVERY COLLECTION IT HOLDS (03 §3.2), the ANNOTATIONS ones too (02
+        # §2.10: held, checked and shared like any collection). `load_all`
+        # leaves them out — nothing for the worker's stages — and until
+        # 2026-11-18 so did this turn: wikipedia-articles sat in quarantine,
+        # "roots not yet run on this peer", with no attestation at all, until
+        # someone typed `hold check` (the node, München)
+        collections = [*collections_mod.load_all(), *collections_mod.load_annotations()]
     except Exception:   # noqa: BLE001 — the next beat
         return None
     # A COLLECTION PAUSED ON ITS OWN IS HELD AT EVERY STAGE (07 §7.3, §7.8),

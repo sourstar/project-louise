@@ -38,6 +38,13 @@ from ..plugins.base import LicenseClass, RefRecordBatch, RefSchema, RefSyncState
 from . import readings, wikisource_readings
 
 SOURCE_ID = "tlio"
+#: the credit shown beside a reading of it, and the DISCLAIMER the operator
+#: asked for (2026-11-18: "About TLIO write a disclaimer that no explicit
+#: licensing is mentioned, add the usual credits")
+ATTRIBUTION = ("Old Italian lemmas and definitions: Tesoro della Lingua Italiana delle Origini (TLIO), "
+               "Opera del Vocabolario Italiano, CNR (tlio.ovi.cnr.it)")
+DISCLAIMER = ("TLIO states no explicit licence for its content; it is used on this node, for "
+              "non-commercial purposes, pending clarification of its terms")
 DIR = "tlio"
 TABLE = readings.table("tlio_reading")
 LANG = "it"
@@ -134,6 +141,7 @@ class TlioSource:
     source_id = SOURCE_ID
     ref_version = PARSER_VERSION
     license_class = LicenseClass.RED
+    attribution = ATTRIBUTION + ". " + DISCLAIMER
     #: its directory under ref_root: the pages, TERMS.txt and ack.json
     ref_dir = DIR
     namespaces: list[str] = []

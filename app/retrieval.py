@@ -610,7 +610,9 @@ def _rerank_held(query: str, hits: list[dict], recipe, budget_s: float, depth: i
         for k, i in enumerate(order):
             if i in at_before and at_before[i] != k:
                 entry = {"weight": reading.label(reading_version), "from": at_before[i] + 1, "to": k + 1,
-                         "read": i in changed}
+                         "read": i in changed,
+                         # whom the readings are from (operator, 2026-11-18: "add the usual credits")
+                         "credits": reading.credits(reading.sources_in(reading_version))}
                 if i in changed and getattr(reading_years.get(i), "by", ""):
                     entry["by"] = reading_years[i].by        # what dated it: shown as the badge shows it
                 moved.setdefault(i, []).append(entry)

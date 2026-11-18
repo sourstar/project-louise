@@ -298,7 +298,8 @@ def cmd_create_annotations(a) -> int:
     container = getattr(a, "container", None) or "jsonl"
     if getattr(a, "dry_run", False):
         _print(ann.preview(a.root, targets=targets, container=container,
-                           claims=Path(a.claims), annotator=a.annotator))
+                           claims=Path(a.claims), annotator=a.annotator,
+                           repin=bool(getattr(a, "repin", False))))
         return 0
     key = None
     try:
@@ -311,7 +312,8 @@ def cmd_create_annotations(a) -> int:
         a.root, a.name, targets=targets, container=container,
         claims=Path(a.claims), platform_image=preflight_create({}, a.platform_image),
         title=a.title, summary=a.summary, annotator=a.annotator, snapshot_id=a.snapshot,
-        key=key, now=_utc_now(), log=lambda m: print(m, file=sys.stderr))
+        key=key, now=_utc_now(), log=lambda m: print(m, file=sys.stderr),
+        repin=bool(getattr(a, "repin", False)))
     print(codex.collection_id)
     return 0
 
@@ -7638,6 +7640,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--container", default=None, choices=("jsonl", "parquet"),
                    help="create annotations: the record parts' container (09 §9.5, 2026-10-20); "
                         "jsonl unless said, and parquet is declared but not yet written")
+    p.add_argument("--repin", action="store_true",
+                   help="create annotations: the claims' own pins dropped and each pinned anew against the "
+                        "targets, as an update re-checks them — for a re-created target whose records' text "
+                        "moved (a new parser); what moved is said by method, and --dry-run says it first")
     p.add_argument("--claims", default=None, metavar="FILE",
                    help="create annotations: JSON Lines, one claim per line (09 §9.5, amended "
                         "2026-10-09)")

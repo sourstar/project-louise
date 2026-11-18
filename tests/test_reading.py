@@ -645,3 +645,16 @@ def test_the_misread_forms_of_the_nodes_rows_get_no_reading_where_ambiguous():
                                ("abborri", "abborrare", "aborrire")]:
         assert reading.best([_gloss(form, wrong), _gloss(form, right)], 1300) is None, form
         assert reading.best([_gloss(form, right)], 1300).lemma == right
+
+
+
+def test_the_readings_carry_their_credits_and_tlio_its_disclaimer():
+    """Operator, 2026-11-18: "About TLIO write a disclaimer that no explicit
+    licensing is mentioned, add the usual credits"."""
+    got = reading.credits(["tlio", "wikisource-readings", "tlio"])
+    assert len(got) == 2 and "Wikisource" in got[0] and "CC BY-SA 3.0" in got[0]
+    assert "TLIO" in got[1] and "no explicit licence" in got[1]
+    assert reading.sources_in("wikisource-readings 3 a; tlio 3 b") == ["wikisource-readings", "tlio"]
+    from app.historical import Read
+    b = Read(1, "Italian of 1310", "year", glossary="v", credits=got).badge()
+    assert "no explicit licence" in b
