@@ -391,3 +391,21 @@ worse it's tainting the scope."
   left to the operator.
 - Owed: the same question for history books for children, which are
   still in the history scope (392 books).
+
+## 11. Decided (operator, 2026-11-18): "I approve the recommended choices"
+
+| # | decision | what it means |
+|---|---|---|
+| 1 | **Local models**, no paid API | §4's blockers (verification, invariant 5, the dependency) do not arise. Every claim is re-runnable by a peer |
+| 2 | **24×7 during the graph runs only** | the quiet periods of 2026-11-02 are suspended for step 7's runs and restored after. The benchmarks and the pilot keep the night windows |
+| 3 | **Memoir candidates accepted by category**, review rows by their check on the text | `wiki-gutenberg-memoir-titles-{it,en,fr,de,es}.toml`. Yes: en 1,202, fr 187, de 54, es 38, it 40. The 93 review rows not yet read are being read on the text, with the same brief |
+| 4 | **Children's books out of the history scope too** | `kg_scope_count`: the scope is **14,141 books** (history en 8,309, other 2,238; memoirs en 3,072, other 522), before the title lists |
+| 5 | **GLiNER (torch) and a Leiden library approved** | for step 4, when it starts |
+
+Next, in this session:
+- the Library of Congress name authority check of every proposed Gutenberg
+  heading;
+- the selection rule written for the annotations Codex `method`, with the
+  title lists' hashes.
+
+On the node: steps 1–3, handed to München.

@@ -73,7 +73,8 @@ def main(path):
             memoir = is_memoir(subs, locc, row["Bookshelves"])
             if is_out(subs, locc) and not memoir:
                 continue
-            hist = is_history(locc)
+            # Children's books are out of the history scope too (operator, 2026-11-18).
+            hist = is_history(locc) and not is_juvenile(subs, row["Bookshelves"])
             if not (hist or memoir):
                 continue
             lang = row["Language"].split(";")[0].strip()

@@ -1,0 +1,9 @@
+# wiki-gutenberg: de books added to (or kept out of) the memoir group by title.
+# Operator decisions, keyed by Project Gutenberg ebook number; its sha256 goes into
+# the annotations Codex `method` beside the subject rule (invariant 11).
+# 2026-11-18, operator: "I approve the recommended choices": each category accepted as a block
+# (wiki-gutenberg-memoir-candidates/README.md); a review row checked on the text takes its verdict
+# (pg-catalogue-corrections/README.md B, B2): memoir or biography YES, otherwise NO.
+decided = "2026-11-18"
+yes = [2404, 2405, 10823, 12266, 15787, 15890, 22492, 22635, 24746, 28280, 30097, 30695, 38638, 39809, 41371, 42651, 44677, 44971, 45670, 46141, 46154, 46624, 46868, 47193, 47260, 48374, 48488, 49132, 49938, 51430, 53060, 53061, 53322, 54391, 55419, 55895, 56546, 58607, 58640, 59219, 60712, 60768, 60769, 62481, 63601, 66437, 66673, 67700, 68221, 71434, 76937, 79332, 79333, 79334]
+no = [6890, 6891, 6892, 7240, 7292, 7323, 7503, 7996, 15898, 16264, 17622, 18101, 24176, 25722, 25796, 27775, 30628, 31114, 31170, 31216, 35312, 36779, 36813, 37267, 39430, 39575, 40117, 40261, 40737, 43733, 44366, 44368, 44575, 44784, 45956, 46411, 46767, 47547, 48543, 50770, 50870, 51359, 54440, 54758, 55633, 57661, 57853, 59187, 60344, 60845, 61287, 61584, 62006, 66499, 66904, 68593, 69287, 69472, 75813, 76593, 76661, 76663, 77226, 77337, 78383, 79185]
