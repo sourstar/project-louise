@@ -7,6 +7,7 @@ collections asks (app/hold/origin_run.py). An UNKNOWN key is refused (09
 §9.18): the loader used to drop it, so the object hashed otherwise than its
 file."""
 import json
+import os
 
 import pytest
 
@@ -108,7 +109,14 @@ def test_the_tail_reader_reads_a_file_once_per_identity(tmp_path, monkeypatch):
     for _ in range(50):
         assert orun.snapshot_run(p) == "20261101"
     assert len(reads) == 1
-    p.write_bytes(_snap("20261201").canonical())      # another file at the path
+    # ANOTHER FILE AT THE PATH, as a snapshot is written: a new file renamed
+    # over it (a new inode). An in-place rewrite of the same size can keep
+    # every stat field — the kernel stamps mtime from a coarse clock (one
+    # jiffy, ~4 ms), and the node's run did it inside one (2026-11-18,
+    # '20261101' == '20261201'); no snapshot is ever rewritten in place.
+    tmp = p.with_name(p.name + ".tmp")
+    tmp.write_bytes(_snap("20261201").canonical())
+    os.replace(tmp, p)
     assert orun.snapshot_run(p) == "20261201" and len(reads) == 2
 
 
