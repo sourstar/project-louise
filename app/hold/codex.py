@@ -2344,6 +2344,15 @@ def sample(seed: bytes, n: int, universe: Iterable[str]) -> list[str]:
     pins the two against each other, because "obviously equivalent" is how
     a sampling function silently stops being reproducible.
     """
+    return sample_by(seed, n, universe, lambda i: i)
+
+
+def sample_by(seed: bytes, n: int, items: Iterable[Any], id_of) -> list[Any]:
+    """`sample` over `items`, each scored by its id `id_of(item)`: the
+    same draw, the same order, and each drawn item kept WITH what it carries
+    — a check that needs the drawn chunks' inputs holds `n` of them, never a
+    part's every chunk (vectors-sample, 2026-11-17: ~36 KB a record held
+    for the 16 it embeds)."""
     import heapq
     import hmac
 
@@ -2354,12 +2363,12 @@ def sample(seed: bytes, n: int, universe: Iterable[str]) -> list[str]:
     if n < 0:
         raise CodexError("a sample size is not negative")
 
-    def score(i: str) -> tuple[int, bytes]:
-        raw = i.encode("utf-8")
+    def score(item) -> tuple[int, bytes]:
+        raw = id_of(item).encode("utf-8")
         tag = hmac.new(seed, raw, hashlib.sha256).digest()
         return int.from_bytes(tag[:8], "big"), raw
 
-    return heapq.nsmallest(n, universe, key=score)
+    return heapq.nsmallest(n, items, key=score)
 
 
 def sample_size(fraction: str, universe_size: int) -> int:

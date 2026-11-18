@@ -534,6 +534,12 @@ def create(root, ref: str, *, snapshot_id: str | None = None, log=print) -> Snap
     from . import collection as col, shard as shard_mod, records as rec
 
     name, codex = col.resolve(Path(root), ref)
+    # A SNAPSHOT WHOSE RECORDS NAME A KEYED UNIT NAMES THE RUN THEY ARE READ
+    # IN (09 §9.4 `origin_run`, §9.5): refused before anything is read where
+    # neither it nor its Codex could (München, 2026-11-17: wikidata's
+    # parser-3 snapshot named none, and records-vs-origin could not run)
+    from . import origin_run as origin_run_mod
+    origin_run_mod.refuse_without_run(codex, f"{name}: snapshot create (nothing was written)")
     # invariant 9: a snapshot is signed and published with the SHARD. Its
     # input exists only after a gated build, but the terms can change in
     # between — built through the gate like every other stage (audit)
@@ -638,7 +644,6 @@ def create(root, ref: str, *, snapshot_id: str | None = None, log=print) -> Snap
     # answer discovery read them by (app/hold/origin_run.py); absent for any
     # other origin. A re-run for an id that exists keeps that file's, as it
     # keeps its delta: an older snapshot made before the field stays itself
-    from . import origin_run as origin_run_mod
     run = (existing.origin_run if existing is not None
            else origin_run_mod.current_run(Path(root), name, codex))
     snap = Snapshot(

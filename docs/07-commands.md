@@ -119,6 +119,16 @@ louise hold
                                                                        [--calibration-from NAME]: a held collection whose document-side reference vectors and envelope the new
                                                                        Codex reuses (RULE 1) — the same space but the query side; only the query side is embedded (added 2026-10-25)
                                                                        (amended 2026-10-08)
+                                                                       [--run YYYYMMDD] (added 2026-11-17, München): for a plugin whose origin publishes dated dumps, the
+                                                                       Codex names the FIRST run its records are built from and its whole identifying half (09 §9.17):
+                                                                       every key of `origin.spec` the recipe — a TOML or a whole Codex — states none for, from the
+                                                                       plugin's acquisition spec, in wikipedia's form (a stated key is never touched). The run: the
+                                                                       recipe's own `files`; else --run (an operator's); else DETERMINED (RULE 2) — the run the corpus
+                                                                       holds where the update's completion check says it is complete (the newest, never an older one
+                                                                       while a newer is not), else for `<name>.next` the run the held `<name>` holds, else the origin's
+                                                                       latest complete run (its index, through the budget) — said on stderr and in the Library's
+                                                                       notice; refused (exit 2) where none can tell, saying what would supply it; an origin away is
+                                                                       exit 3. A Codex whose records name a keyed unit and which names no run is refused by every create
               create deposit --name N [--encoder URL [--api A] [--embed-model M] [--query-model M]] [--space-from CODEX | --space FILE]
                                                                        a deposit collection (02 §2.9): no recipe; the node's deposit encoder unless one is named
               create annotations --claims FILE --name N [--annotates C [--from-snapshot S] [--annotates C2 --from-snapshot S2 …]] [--title T] [--summary S] [--annotator A] [--snapshot ID] [--container jsonl|parquet] [--dry-run]
@@ -212,7 +222,11 @@ louise hold
                                                                        place; then its first snapshot under C's id, signed where this peer has a key, and the proof that
                                                                        `dev carry --reconcile` reads instead of both snapshots. Refused (exit 2) unless only the parser
                                                                        and its image differ and C's parts are cut as a build by the book cuts them. Resumable by part,
-                                                                       the node's pool (amended 2026-11-17: wikipedia parser 5 → 6, the origin by page)
+                                                                       the node's pool (amended 2026-11-17: wikipedia parser 5 → 6, the origin by page). Admits the
+                                                                       origin pinned to the run C's records were read in (`dev carry` A1j), each part held to it: a
+                                                                       line naming another run refuses its part. Refused, nothing written, into a Codex whose records
+                                                                       name a keyed unit (wikidata's entity, wikipedia's page) and which names no run; so are
+                                                                       `records build` and `snapshot create` of one (09 §9.4 `origin_run`; München, 2026-11-17)
               relocate <collection> --corpus DIR [--workers N] [--dry-run]
                                                                        every record's `origin` written again from the manifest by the build's own function, the parts
                                                                        that change rewritten by the build's own writer — byte for byte a rebuild (RULE 1); refused while
@@ -454,7 +468,11 @@ louise dev                                                             operator 
                                                                        differ; no snapshot is compared and the target builds its own records; --reconcile, after
                                                                        that build and snapshot, keeps the vectors of every document whose content_hash did not move,
                                                                        resets the rest to embed again and sets each txt_hash to its record's origin_hash. --rebuilt
-                                                                       also admits an origin that only ADDS files beside those read (A1d, 2026-10-18); --resign, where
+                                                                       also admits an origin that only ADDS files beside those read (A1d, 2026-10-18), and (A1j,
+                                                                       2026-11-17) one that only PINS the run the source's records were read in — `origin.spec` given
+                                                                       `delta.mode` "dated-dumps", the plugin's filters and that run's files where the source's names
+                                                                       none (wikidata parser 2 -> 3; the run as this node resolves it: the source Codex's current run,
+                                                                       else its collection file's `snapshot`), a pin to another run refused; --resign, where
                                                                        the source holds no records: the target's own discovery once, every moved document taking its
                                                                        new locator and signature with txt_hash unset and every mark and vector kept, then a seeded
                                                                        sample re-cut by the target's parser must hold exactly the chunk texts the vector table holds
@@ -470,6 +488,27 @@ louise dev                                                             operator 
                                                                        source's corpus, removes `create`'s empty folder and re-roots the copied paths, and refuses a
                                                                        target whose origin holds another corpus; --share-origin does that alone, for a carry finished
                                                                        before it did (2026-11-15)
+  pin-run <collection> [--run YYYYMMDD] [--dry-run | --yes]            an UNPUBLISHED collection whose dated-dump Codex names no run (wikidata.next, München,
+                                                                       2026-11-17) given the Codex that names the run its records were read in, IN PLACE (RULE 1;
+                                                                       amends §7.8's "a name holds one collection for its life" for a collection whose id never left
+                                                                       this node): the Codex is `create --run`'s pin of it; its one snapshot written again — the same
+                                                                       parts and members, `collection_id` replaced and `origin_run` written, spliced as a stream —
+                                                                       held to the build database and re-signed; codex.json, the collection file's `codex`, the
+                                                                       staging's claim, the carry markers and the manifest's cursors re-pointed; every other file a
+                                                                       writer under `shard/` and `state/` puts the old id in taken as app/hold/pin_run.py's table says
+                                                                       (removed: attestations, the origin note and ack, gate statements made under it — the gate runs
+                                                                       again before any embed —, the scheduled check's files, a do-nothing update; this node's RAGE
+                                                                       settings signed again); then no file may still name the old id. The same sweep runs FIRST,
+                                                                       every file streamed whatever its size, the kinds not read named: a file naming the old id the
+                                                                       pass does not know, or one it cannot read, refuses the pin. The run from the manifest's
+                                                                       locators, the line carry's source and the file's `snapshot`, which must agree (--run is
+                                                                       checked against them). Refused (exit 2), nothing written: a Codex naming a run, an origin of no
+                                                                       dated dumps, more than one snapshot, an update under way, a peer's RAGE settings, and anything
+                                                                       published or shared — `share = true`, a snapshot the seeder served, the publisher's
+                                                                       `publish:<name>` row, coverage rows, a published attestation, a certifier's pointer or anchor,
+                                                                       a chain fetched from a peer, a held Codex naming the id; and whatever of these cannot be read
+                                                                       (a locked node database, a Codex file, a missing manifest): a doubt refuses. The plan with
+                                                                       --dry-run or without --yes (a pin under way is said so); resumable (`state/pin-run.json`)
   eurlex-dump <collection> [--dump <dir>] [--languages <codes>] [--carry-from <dir>]
                                                                        every EUR-Lex unit the Data Dump gives, built from it alone into a parser-4 collection's corpus:
                                                                        the MTD tree scoped to each language and the items of the form Cellar would choose; no Cellar

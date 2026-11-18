@@ -265,7 +265,11 @@ def test_records_check_shards_runs_the_named_parts_alone(wiki, capsys):
     import json
     report = json.loads(capsys.readouterr().out)
     (rvo,) = [c for c in report["checks"] if c["check"] == "records-vs-origin"]
-    assert rvo["result"] == "pass" and rvo["detail"]["records"] == rvo["detail"]["compared"] == 8
+    # the fixture's origin is the copy this node keeps: a re-parse of it is
+    # INCONCLUSIVE, never a pass (d1905f1, 03 §3.2) — the parts named alone
+    # are still what was compared, and every record of them reproduced
+    assert rvo["result"] == "inconclusive" and rvo["detail"]["origin"] == "kept copy"
+    assert rvo["detail"]["records"] == rvo["detail"]["compared"] == rvo["detail"]["copy_reproduced"] == 8
     # and the comma form `hold check --shards` takes
     rc = louise.main(["hold", "records", "check", "wikipedia", "--root", str(root), "--origin", str(corpus),
                       "--seed", "00" * 32, "--json", "--shards", ",".join(want)])

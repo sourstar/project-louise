@@ -688,6 +688,10 @@ def carry(root, from_ref: str, to_ref: str, *, copy: bool = False, apply: bool =
     root = Path(root)
     from_name, src = col.resolve(root, from_ref)
     to_name, to = col.resolve(root, to_ref)
+    # nothing is carried INTO a Codex whose records name a keyed unit and
+    # which names no run to read it in (09 §9.5, §9.17; München, 2026-11-17)
+    from . import origin_run
+    origin_run.refuse_without_run(to, f"carry into {to_name} (nothing was written)")
     if sister and (unembedded or resliced or rebuilt or keep or recut):
         raise CodexError("carry --sister carries no vector: no --unembedded, --resliced, --rebuilt, "
                          "--keep or --recut with it")
@@ -719,6 +723,9 @@ def carry(root, from_ref: str, to_ref: str, *, copy: bool = False, apply: bool =
             raise CodexError("carry: the source and the target are one collection")
         other = [d for d in record_differences(src, to) if d not in RECORDS_REBUILT
                  and not (d == "origin" and origin_only_adds(src, to))]
+        # the origin with the run pinned that the source's records were read
+        # in (09 §9.17; wikidata parser 2 -> 3, whose live Codex names none)
+        other = origin_run.admit_run_pin(root, from_name, src, to, other, "carry --rebuilt")
         if other:
             raise CodexError(
                 f"carry --rebuilt: {to.collection_id} and {src.collection_id} differ in "

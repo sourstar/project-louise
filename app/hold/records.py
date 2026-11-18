@@ -291,6 +291,11 @@ def build(root, ref: str, *, corpus_dir=None, snapshot_id: str | None = None,
     from . import collection as col
 
     name, codex = col.resolve(Path(root), ref)
+    # PARTS THAT COULD NEVER BE FROZEN are never built: records naming a keyed
+    # unit need the run they are read in (09 §9.4 `origin_run`, §9.5), and a
+    # Codex naming none makes a snapshot that names none (München, 2026-11-17)
+    from . import origin_run
+    origin_run.refuse_without_run(codex, f"{name}: records build (nothing was built)")
     shard_dir, state_dir, staging = _paths(root, name)
     state_dir.mkdir(parents=True, exist_ok=True)
 
@@ -351,6 +356,10 @@ def build(root, ref: str, *, corpus_dir=None, snapshot_id: str | None = None,
         # beside the records (05 §5.7; 02 §2.7 amended 2026-11-12, RULE 1):
         # nothing else may differ
         other = [d for d in record_differences(from_codex, codex) if d not in ("slicing", "layers")]
+        # the run its records were read in, pinned by the target (09 §9.17;
+        # origin_run.admit_run_pin): the same record bytes
+        other = origin_run.admit_run_pin(root, from_name, from_codex, codex, other,
+                                         f"{name}: --records-from {from_name}")
         # A PARSER CHANGE whose moved lines the target's parser names
         # (2026-11-08, pubmed 8 → 9, RULE 1): the lines it says it would
         # write differently are parsed again, the rest taken byte for byte.

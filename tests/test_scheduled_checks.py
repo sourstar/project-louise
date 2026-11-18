@@ -474,3 +474,47 @@ def test_the_peak_is_the_check_s_whole_session(tmp_path):
     assert got["outcome"] == "pass" and got["peak_rss"] >= 192 * MIB, got.get("peak_rss")
     assert heard and heard == sorted(heard) and heard[-1] <= got["peak_rss"]
     assert sc.session_rss(os.getpid() + 10 ** 7) is None, "no such session"
+
+
+def test_a_paused_collection_with_a_due_snapshot_is_held_and_runs_once_resumed(isolated_config, monkeypatch):
+    """07 §7.3: a collection paused on its own is held at every stage — its
+    scheduled check too (München, 2026-11-17: wikidata.next, paused, would
+    have been checked inside the worker while the operator checked it in
+    its own container). The paused set is read once a turn; `show` says
+    the check is held."""
+    from app import collections as collections_mod
+    from app import node_state
+    from app.share import seeder
+    monkeypatch.setattr(seeder, "current_snapshot", lambda d: SimpleNamespace(snapshot_id="2026-09"))
+    monkeypatch.setattr(node_state, "peek_worker_state", lambda: "running")
+    ran, reads = [], []
+    real = node_state.paused_collections
+
+    def counted(con=None):
+        reads.append(1)
+        return real(con)
+    monkeypatch.setattr(node_state, "paused_collections", counted)
+
+    def fake(c, stop):
+        ran.append(c.name)
+        return {"exit": 0, "outcome": "pass", "secs": 2.0, "report": None}
+    root = collections_mod.louise_root() / "collections"
+    node_state.set_paused("gutenberg", True)
+    reads.clear()
+    assert sc.turn(stop=lambda: False, log=lambda m: None, now=NOW, run=fake) is None and ran == []
+    assert len(reads) == 1, "read once a turn, not once a collection"
+    assert sc.summary(root, "gutenberg")["held"].startswith("held: the collection is paused")
+    node_state.set_paused("gutenberg", False)
+    assert sc.turn(stop=lambda: False, log=lambda m: None, now=NOW, run=fake) == "gutenberg"
+    assert ran == ["gutenberg"] and "held" not in sc.summary(root, "gutenberg")
+
+
+def test_a_store_that_cannot_be_read_runs_no_check_this_beat(isolated_config, monkeypatch):
+    from app import node_state
+    from app.share import seeder
+    monkeypatch.setattr(seeder, "current_snapshot", lambda d: SimpleNamespace(snapshot_id="2026-09"))
+    monkeypatch.setattr(node_state, "peek_worker_state", lambda: "running")
+    monkeypatch.setattr(node_state, "peek", lambda read, absent, *, error=None, table="control": error)
+    ran = []
+    assert sc.turn(stop=lambda: False, log=lambda m: None, now=NOW,
+                   run=lambda c, stop: ran.append(c.name) or {"outcome": "pass"}) is None and ran == []

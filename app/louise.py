@@ -125,6 +125,10 @@ def cmd_create(a) -> int:
         if a.encoder:                      # refused before anything is created
             model_keys(a.encoder, embed_model=keys["embed_model"],
                        query_model=keys["query_model"])
+        # A DATED-DUMP CODEX NAMES ITS RUN (09 §9.17; München, 2026-11-17: the
+        # parser-3 wikidata Codex, the live one with its parser and image
+        # changed, carried `{"files": null}` and its snapshot named no run)
+        spec = _whole_codex_run(a.root, spec, getattr(a, "run", None), a.name)
         # its NAME and its query side as given (2026-11-08: pubmed's parser-9
         # re-creation — a whole Codex named "pubmed-<hex>", its MedCPT query
         # endpoint dropped), and the MEMBERS it names copied from the held
@@ -144,10 +148,54 @@ def cmd_create(a) -> int:
                               api=getattr(a, "api", None),
                               embed_model=getattr(a, "embed_model", None),
                               query_model=getattr(a, "query_model", None),
-                              calibration_from=getattr(a, "calibration_from", None))
+                              calibration_from=getattr(a, "calibration_from", None),
+                              run=getattr(a, "run", None))
     print(f"held: {held}", file=sys.stderr)
     print(codex.collection_id)
     return 0
+
+
+def _run_for(root, plugin: str, recipe_spec: dict | None, run: str | None, name: str | None,
+             say=None):
+    """`run` as given; else, where the recipe's origin names no files and the
+    plugin's origin publishes dated dumps, the run the system DETERMINES
+    (RULE 2; `origin_run.determine`: the corpus's complete run, a
+    re-creation's predecessor's, the origin's latest complete one), said on
+    stderr and to `say` (the Library's notice) in plain words — or refused
+    saying what is missing and what would supply it."""
+    from app.hold import origin_run
+    origin_run.UNDETERMINED.set(None)            # this create's own reason only
+    if run or (recipe_spec or {}).get("files"):
+        return run
+    from app.acquire.specs import ACQUIRE_REGISTRY
+    if not origin_run.spec_dated(ACQUIRE_REGISTRY.get(plugin)):
+        return run
+    try:
+        found, why = origin_run.determine(Path(root) if root else _default_root(), plugin, name)
+    except origin_run.RunUndetermined as e:
+        # refused where the Codex is made (template.pin_dated_spec), in these words
+        origin_run.UNDETERMINED.set(str(e))
+        return run
+    line = f"run: {found} — {why}; its files written into origin.spec (09 §9.17)"
+    print(line, file=sys.stderr)
+    if say is not None:
+        say(line)
+    return found
+
+
+def _whole_codex_run(root, spec: dict, run: str | None, name: str | None) -> dict:
+    """A whole Codex given as the recipe (`create --recipe codex.json`, no
+    plugin), its run pinned for a plugin whose origin publishes dated dumps
+    (template.pin_dated), from `--run` or the re-creation's; the Codex as it
+    is for any other plugin."""
+    from app.hold import template as tpl
+    origin = spec.get("origin")
+    plugin = spec.get("plugin")
+    if not isinstance(origin, dict) or not isinstance(plugin, str):
+        return spec
+    run = _run_for(root, plugin, origin.get("spec"), run, name)
+    pinned = tpl.pin_dated_spec(plugin, origin.get("spec"), run)
+    return spec if pinned is origin.get("spec") else {**spec, "origin": {**origin, "spec": pinned}}
 
 
 def create_deposit(root, name: str, *, platform_image: str | None = None,
@@ -523,7 +571,8 @@ def create_from(root, plugin: str, recipe: dict, *, platform_image: str | None =
                 query_encoder: str | None = None, name: str | None = None,
                 calibration_set: str | None = None, api: str | None = None,
                 embed_model: str | None = None, query_model: str | None = None,
-                calibration_from: str | None = None, embed: str = "off"):
+                calibration_from: str | None = None, embed: str = "off",
+                run: str | None = None, say=None):
     """`hold collection create <plugin> --recipe FILE` — for the command
     line and for its route alike (07 §7.4: the web interface is a client of
     the same function, not a second implementation). Returns the Codex and
@@ -547,6 +596,9 @@ def create_from(root, plugin: str, recipe: dict, *, platform_image: str | None =
     # SHA-256 of nothing, and the live gutenberg Codex carries exactly that
     # placeholder (found 2026-09-14), so no identity may name no build again.
     platform_image = preflight_create(recipe, platform_image)
+    # THE RUN A DATED-DUMP CODEX NAMES (09 §9.17): `--run`, else a
+    # re-creation's predecessor's; the recipe's own `files` first
+    run = _run_for(root, plugin, (recipe.get("origin") or {}).get("spec"), run, name, say=say)
     # A SLICING THE PLUGIN DERIVES AT CREATION (wikidata's family map,
     # pack-format.md §2 amended 2026-10-24): the block goes into the Codex,
     # the map into the SHARD. A recipe that states its own slicing keeps it
@@ -619,7 +671,8 @@ def create_from(root, plugin: str, recipe: dict, *, platform_image: str | None =
                                    # RULE 1: a held twin's document-side reference reused
                                    calibration_from=(col.shard_dir_of(
                                        Path(root), col.resolve(root, calibration_from)[0])
-                                       if calibration_from else None))
+                                       if calibration_from else None),
+                                   run=run)
     if space_from and (codex.space.envelope,
                        codex.space.calibration.vectors) != drifted:
         print(f"warning: --space-from {space_from} recorded reference "
@@ -3545,6 +3598,54 @@ def cmd_dev_carry(a) -> int:
         out["ack"] = recreate.carry_ack(a.root, from_name, to_name, to_codex)
         say(f"[carry] licence acknowledgement: {out['ack']}")
     _print(out)
+    return 0
+
+
+def cmd_dev_pin_run(a) -> int:
+    """`louise dev pin-run <collection> [--run R] [--dry-run | --yes]`
+    (app/hold/pin_run.py; München, 2026-11-17): an UNPUBLISHED collection
+    whose dated-dump Codex names no run, given the Codex that names the run
+    its records were read in — its snapshot frozen again over the same
+    parts, re-signed, and what named the old id re-pointed. The plan without
+    --yes, and always with --dry-run (refusals included); with --yes, under
+    the collection's write lock. Refused (exit 2) for anything published or
+    shared, and for a file naming the old id the pass does not know."""
+    from app.hold import pin_run
+    name, _ = col.resolve(a.root, a.collection)
+
+    def say(m: str) -> None:
+        print(m, file=sys.stderr)
+    if getattr(a, "dry_run", False) or not a.yes:
+        under_way = pin_run.under_way(a.root, name)
+        if under_way is not None:
+            say(f"[pin-run] {name}: a pin to run {under_way['run']} is under way at step {under_way['step']} "
+                f"({under_way['from'][:23]}… -> {under_way['to'][:23]}…); `--yes` finishes it; nothing written")
+            _print({"under_way": under_way})
+            return 0
+        out = pin_run.plan(a.root, name, run=a.run)
+        same = out["space_id"]["from"] == out["space_id"]["to"]
+        removed = out["removed"]
+        say(f"[pin-run] {name}: would pin run {out['run']} ({'; '.join(out['run_said_by'])}): "
+            f"{out['from'][:23]}… -> {out['to'][:23]}…, space {'unchanged' if same else 'MOVED'}; "
+            f"snapshot {out['snapshot']['id']} ({out['snapshot']['parts']:,} parts, "
+            f"{out['snapshot']['records']:,} records, {out['snapshot']['bytes'] / 2**20:,.1f} MiB) written "
+            f"again with origin_run beside the old until the swap ({out['snapshot']['bytes'] / 2**20:,.1f} MiB "
+            f"more for a moment), re-signed; {len(out['naming'])} small file(s) naming the old id, each "
+            f"known (swept in {out['swept_s']:.1f} s); removed: its sidecar, "
+            f"{len(removed['attestations'])} attestation(s) of the old id"
+            f"{', the note of an origin check that could not run' if removed['origin_attempt'] else ''}; "
+            f"the run's files in the corpus: {len(out['dump']['held'])} held, {len(out['dump']['missing'])} "
+            f"missing; nothing written (--yes does it)")
+        _print({"plan": out})
+        return 0
+    _take_write_lock(a.root, name, "louise dev pin-run", exit_code=2)
+    key = None
+    try:
+        from app.bundles import keys as node_keys
+        key = node_keys.load_signing_key()
+    except Exception as e:                              # noqa: BLE001 — an unsigned peer still works
+        say(f"note: unsigned — {e}")
+    _print({"pin_run": pin_run.apply(a.root, name, run=a.run, key=key, now=_utc_now(), log=say)})
     return 0
 
 
@@ -7434,6 +7535,11 @@ def build_parser() -> argparse.ArgumentParser:
                         "envelope the new Codex reuses (RULE 1): its space must be the "
                         "recipe's but for the query side, the document engine included; "
                         "only the query side is embedded")
+    p.add_argument("--run", default=None, metavar="YYYYMMDD",
+                   help="for a plugin whose origin publishes dated dumps (wikipedia, wikidata): the "
+                        "FIRST run the collection's records are built from, written into "
+                        "origin.spec.files with delta.mode dated-dumps (09 §9.17) where the recipe "
+                        "names none; a re-creation <name>.next takes the run <name> holds")
     # `create annotations` (02 §2.10): claims about another collection's records
     p.add_argument("--annotates", default=None, metavar="COLLECTION", action="append",
                    help="create annotations: the collection the claims are about (id, prefix or name); "
@@ -8371,6 +8477,17 @@ def build_parser() -> argparse.ArgumentParser:
                         "document — for a table too large to visit document by document")
     p.add_argument("--yes", action="store_true", help="do it; without it, the checks and the plan")
     p.set_defaults(fn=cmd_dev_carry)
+    p = dverbs.add_parser("pin-run", help="an unpublished collection whose dated-dump Codex names no run "
+                                          "given the Codex naming the run its records were read in, its "
+                                          "snapshot frozen again; the plan without --yes")
+    root_arg(p); p.add_argument("collection")
+    p.add_argument("--run", default=None, metavar="YYYYMMDD",
+                   help="the run its records were read in, where nothing held says it (else checked "
+                        "against what does)")
+    p.add_argument("--dry-run", action="store_true", help="the plan and its refusals; nothing written "
+                                                          "(also without --yes)")
+    p.add_argument("--yes", action="store_true", help="do it, under the collection's write lock")
+    p.set_defaults(fn=cmd_dev_pin_run)
     p = dverbs.add_parser("genesis", help="one-shot repairs of an archive's ledger; writes")
     gverbs = p.add_subparsers(dest="what", required=True)
     p = gverbs.add_parser("recheck", help="reopen final shards that still have documents the archive "

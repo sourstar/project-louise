@@ -88,6 +88,17 @@ def no_served_weights_are_remembered():
 
 
 @pytest.fixture(autouse=True)
+def no_origin_is_asked_for_a_run(monkeypatch):
+    """A create that names no run asks the origin for its latest complete
+    one (app/hold/origin_run.py `determine`, (c)) — never the real origin in
+    a test: it lists no run here, unless a test gives its own fetchers
+    (tests/hold/test_run_determined.py)."""
+    from app.hold import origin_run
+    monkeypatch.setattr(origin_run, "_ask_origin", lambda: (
+        lambda spec, recs, **k: {r.rel_path: None for r in recs}, lambda spec: ()))
+
+
+@pytest.fixture(autouse=True)
 def no_model_is_pinned(monkeypatch):
     """app/model_pins.py pins a LocalAI model while it processes. No test's
     runner has LocalAI's pin API and its hosts do not exist, so nothing is

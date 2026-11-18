@@ -424,6 +424,7 @@ operator's word.
     anyone wait. The old-run gate is unchanged. Its cost: a stat of the listing and, behind, the update marker.
     `origin_names_run` is True at parser 2 and False at 3.
   - **The node's steps:** [wikidata-entity-origin.md](wikidata-entity-origin.md).
+  - **A dated-dump Codex names its run** (2026-11-17, branch `wikidata-codex-run`): wikidata's live Codex carried `origin.spec = {"files": null}` (its recipe stated no spec), so its parser-3 snapshot named no run and records-vs-origin could not run; `create` now pins a dated plugin's first run (the recipe's files, `--run`, or a `.next` re-creation's predecessor's), nothing creates, carries into or freezes a keyed Codex naming none, `dev pin-run` corrects the unpublished wikidata.next in place, and the checks run in their own container ([wikidata-entity-origin.md](wikidata-entity-origin.md), "München from the node's state of 2026-11-17").
 - **Found on the way:**
   - every record line's `origin` names the run's file, so a dated-dump update re-issues EVERY part (the delta
     still lists only what changed by content). The records build carried a line whose origin bytes are the same at
