@@ -586,3 +586,14 @@ default (`reading.CHAT_TLIO`) until at least 30 judged answers show ON >=
 OFF and the operator approves; the reranker's copy keeps them. The wrong
 lemmas are tests on the branch (fuoro, cuoci, abborri: none where the form
 is ambiguous). The eval's ON arm turns `CHAT_TLIO` on for its own answers.
+
+The summary eval at e812174 (tlio 3): 7 judged, ON 1.857 vs OFF 2.429,
+too few — 20 records in span, 4 with a passage TLIO reads. Operator's
+choice C (2026-11-18): judge it blind himself.
+`tools/measure/reading_blind_judge.py` needs no modern version, so it
+draws from every Italian record of 1100–1400: `make` writes judge.html
+(the passage, the query, two answers as A and B) and key.json apart;
+`score` unblinds (wins, ties, errors per arm, sign test). TLIO's glosses
+return to the chat copy only at 30 judged or more, ON winning at least as
+often as OFF, with no more errors. One leak the page cannot hide: an ON
+answer may quote a bracketed gloss.
