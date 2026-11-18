@@ -324,8 +324,19 @@ def build(root, ref: str, *, corpus_dir=None, snapshot_id: str | None = None,
         if not held:
             log(f"[records build] {name}: manifest is empty, scanning {corpus_dir}")
             discovery.sync_collection(con, src)
+            held = con.execute("SELECT COUNT(*) FROM documents").fetchone()[0]
     finally:
         con.close()
+    if not held:
+        # NOTHING TO BUILD IS A REFUSAL, never a build of nothing (the node,
+        # 2026-11-18: a re-creation script went on past a carry the worker
+        # refused, and this built 0 records into gutenberg.next, writing its
+        # build state and validation.json and exiting 0). Before a byte of
+        # staging is written: the empty corpus, and what fills it, named
+        raise RecordsError(
+            f"{name}: nothing to build — its manifest is empty and {corpus_dir} holds no document "
+            f"the scan finds. A re-creation's records come after its carry (`dev carry`), a new "
+            f"collection's after `records fetch` (07 §7.3); nothing was written")
 
     _claim_staging(staging, codex)
     frozen = _frozen_into(staging)
