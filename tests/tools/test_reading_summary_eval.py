@@ -62,3 +62,26 @@ def test_a_same_work_claim_pairs_in_either_direction(tmp_path):
                       encoding="utf-8")
     recs = {"gutenberg:997": {"lang": "it"}, "gutenberg:1005": {"lang": "en"}}
     assert e.modern_partners(claims, recs) == {"gutenberg:997": "gutenberg:1005"}
+
+
+
+def test_an_answer_goes_through_the_ask_paths_own_steps(monkeypatch):
+    """The real historical.prepare and retrieval.build_answer_messages, on a
+    result shaped as the search makes it (the node's crash: KeyError 'catalog')."""
+    from app import llm, reading
+    seen = []
+    monkeypatch.setattr(llm, "chat", lambda m, temperature, max_tokens: seen.append(m) or "La risposta.")
+    monkeypatch.setattr(reading, "years", lambda hits, collection=None: {})
+    searched = {"hits": [{"chunk_id": "gutenberg:1:0:1", "uid": "gutenberg:1", "book_id": 1, "text": "Il mercante tornò.",
+                          "title": "Novelle", "lang": "it"}], "catalog": [], "facts": [], "timings": {}}
+    text, changed = e.answer("Chi tornò?", searched, glossary=True)
+    assert text == "La risposta." and changed is False
+    assert any("Il mercante tornò." in str(m) for m in seen[0])
+
+
+def test_the_search_is_never_translated(monkeypatch):
+    from app import retrieval
+    asked = []
+    monkeypatch.setattr(retrieval, "search", lambda con, q, **kw: asked.append(kw) or {"hits": [{"x": 1}], "catalog": []})
+    got = e.best_passage(None, object(), "q", "gutenberg:5")
+    assert asked[0]["translate"] is False and asked[0]["book_ids"] == {5} and got["catalog"] == []

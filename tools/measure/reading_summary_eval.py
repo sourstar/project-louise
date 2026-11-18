@@ -122,17 +122,24 @@ def ro_connect(collection) -> sqlite3.Connection:
 
 
 def best_passage(con, col, query: str, uid: str) -> dict | None:
+    """The search's own result for the query within one record — its one
+    best hit, the result's other keys (catalog, facts…) as the search made
+    them — or None. NO translation: the query is Italian and a translation
+    loaded the translation model for nothing (the node, 2026-11-18); a modern
+    English version is matched by the vector leg."""
     from app import retrieval
     native = int(uid.split(":", 1)[1])
-    res = retrieval.search(con, query, k=1, mode="hybrid", translate=True, collection=col, book_ids={native})
+    res = retrieval.search(con, query, k=1, mode="hybrid", translate=False, collection=col, book_ids={native})
     hits = res.get("hits") or []
-    return hits[0] if hits else None
+    return {**res, "hits": hits[:1]} if hits else None
 
 
-def answer(query: str, hit: dict, *, glossary: bool) -> tuple[str, bool]:
-    """(the chat model's answer from this one passage, whether the glossary changed it)."""
+def answer(query: str, searched: dict, *, glossary: bool) -> tuple[str, bool]:
+    """(the chat model's answer from this one search result, whether the
+    glossary changed it) — the Ask path's own steps: historical.prepare,
+    then retrieval.build_answer_messages."""
     from app import historical, llm, reading, retrieval
-    result = {"hits": [dict(hit)]}
+    result = {**searched, "hits": [dict(h) for h in searched.get("hits") or []]}
     real = reading.years
     if not glossary:
         reading.years = lambda hits, collection=None: {}
@@ -225,7 +232,7 @@ def main(argv: list[str] | None = None) -> int:
             hist_hit, gold_hit = best_passage(con, col, q["query"], q["uid"]), best_passage(con, col, q["query"], gold_uid)
             if hist_hit is None or gold_hit is None:
                 continue
-            al = align(str(hist_hit.get("text") or ""), str(gold_hit.get("text") or ""))
+            al = align(str(hist_hit["hits"][0].get("text") or ""), str(gold_hit["hits"][0].get("text") or ""))
             if al is None or al < MIN_ALIGNMENT:
                 misaligned += 1
                 out.write(json.dumps({"qid": q["qid"], "uid": q["uid"], "gold_uid": gold_uid,
