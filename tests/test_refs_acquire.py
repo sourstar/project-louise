@@ -89,12 +89,23 @@ HOMOLOGENE_DATA = ("3\t9606\t34\tACADM\t4557231\tNP_000007.1\n"
                     "3\t10090\t11364\tAcadm\t6680618\tNP_031408.1\n").encode()
 
 
+def _wikisource_bz2() -> bytes:
+    """A minimal it.wikisource XML dump: one edition printed 1554 (app/refs/wikisource_readings.py)."""
+    import bz2
+    q = '&lt;noinclude&gt;&lt;pagequality level="4" user="x" /&gt;&lt;/noinclude&gt;'
+    xml = ('<mediawiki xmlns="http://www.mediawiki.org/xml/export-0.11/"><page><title>Indice:R.djvu</title>'
+           '<ns>110</ns><revision><text>|Anno=1554\n</text></revision></page><page><title>Pagina:R.djvu/1'
+           f'</title><ns>108</ns><revision><text>{q}huomo</text></revision></page></mediawiki>')
+    return bz2.compress(xml.encode())
+
+
 @pytest.fixture
 def fake_transport():
     return FakeTransport({"hgnc_complete_set.txt": HGNC_TSV,
                            "variant_summary.txt.gz": _clinvar_gz(),
                            "gnomad.v2.1.1.lof_metrics.by_gene.txt.bgz": _gnomad_bgz(),
-                           "homologene.data": HOMOLOGENE_DATA})
+                           "homologene.data": HOMOLOGENE_DATA,
+                           "itwikisource-latest-pages-articles.xml.bz2": _wikisource_bz2()})
 
 
 def test_fetch_all_downloads_transforms_and_is_freshness_gated(tmp_path, fake_transport):
