@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from types import SimpleNamespace
 
 from tools.measure import reading_blind_judge as bj
@@ -61,7 +62,7 @@ def test_make_writes_the_page_and_the_key_apart_and_refuses_under_30(monkeypatch
     key = json.loads((out / "key.json").read_text(encoding="utf-8"))
     page = (out / "judge.html").read_text(encoding="utf-8")
     assert len(key["items"]) == 3 and "tlio 3" in key["reading_tables"]
-    assert key["commit"].split("+")[0] and len(key["commit"].split("+")[0]) == 40
+    assert len(key["commit"].split("+")[0]) == 40 and key["commit_source"] == "checkout"
     assert key["items_with_a_tell"] == 3 and all(it["tell"] for it in key["items"])
     assert "tlio" not in page.lower()                                     # the key stays out of the page
     for k, it in enumerate(key["items"]):
@@ -107,17 +108,29 @@ def test_a_bracketed_lemma_in_an_answer_is_a_tell_and_scored_apart():
     assert got["judged"] == 30 and got["without_a_tell"]["judged"] == 20
 
 
-
-def test_without_a_checkout_the_commit_comes_from_the_archives_env(monkeypatch):
-    """The node runs a `git archive` of the commit: no .git, no git."""
+def test_the_commit_from_the_archive_the_checkout_or_unknown(monkeypatch):
     import subprocess
+    from app import code_commit
+    monkeypatch.setattr(code_commit, "COMMIT", "a" * 40)
+    assert bj.commit_of() == ("a" * 40, "archive")
+    monkeypatch.setattr(code_commit, "COMMIT", "$Format:%H$")
+    sha, source = bj.commit_of()
+    assert source == "checkout" and len(sha.split("+")[0]) == 40
 
     def no_git(*a, **k):
         raise FileNotFoundError("git")
     monkeypatch.setattr(subprocess, "run", no_git)
-    monkeypatch.setenv("LOUISE_MEASURE_COMMIT", "A" * 40)
-    assert bj.commit_of() == "a" * 40 + " (archive)"
-    monkeypatch.setenv("LOUISE_MEASURE_COMMIT", "not-a-sha")
-    assert bj.commit_of() == ""
-    monkeypatch.delenv("LOUISE_MEASURE_COMMIT")
-    assert bj.commit_of() == ""
+    assert bj.commit_of() == ("", "unknown")
+
+
+def test_git_archive_writes_heads_sha_into_the_module(tmp_path):
+    """export-subst: the sha is inside the archived bytes (node-runbook.md:105)."""
+    import io
+    import subprocess
+    import tarfile
+    root = Path(bj.__file__).resolve().parents[2]
+    head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=root, capture_output=True, text=True).stdout.strip()
+    tar = subprocess.run(["git", "archive", "HEAD", "app/code_commit.py"], cwd=root, capture_output=True).stdout
+    body = tarfile.open(fileobj=io.BytesIO(tar)).extractfile("app/code_commit.py").read().decode()
+    assert f'COMMIT = "{head}"' in body
+

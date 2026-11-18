@@ -95,25 +95,27 @@ def tells(answers: list[str], lemmas: set[str]) -> bool:
     return any(f"[{lm.lower()}" in a for lm in lemmas if lm for a in low)
 
 
-def commit_of() -> str:
-    """The commit this tool runs from: key.json names it, so the operator's
-    result can be reproduced from main. From git in a checkout ("+dirty"
-    where tracked files differ); from LOUISE_MEASURE_COMMIT where there is
-    none (the node runs a `git archive` of the commit, no .git), marked
-    " (archive)"; "" when neither says."""
-    import os
+def commit_of() -> tuple[str, str]:
+    """(the commit this code runs from, how it is known): key.json names it,
+    so the operator's result can be reproduced from main (architecture,
+    2026-11-18). "archive": git's own `export-subst` wrote it into
+    app/code_commit.py when the node's `git archive` was made — inside the
+    bytes that ran; "checkout": `git rev-parse` ("+dirty" where tracked
+    files differ); "unknown": "", never a guess."""
     import subprocess
+    from app import code_commit
+    if re.fullmatch(r"[0-9a-f]{40}", code_commit.COMMIT):
+        return code_commit.COMMIT, "archive"
     here = Path(__file__).resolve().parent
     try:
         out = subprocess.run(["git", "rev-parse", "HEAD"], cwd=here, capture_output=True, text=True, timeout=10)
-        if out.returncode == 0 and out.stdout.strip():
+        if out.returncode == 0 and re.fullmatch(r"[0-9a-f]{40}", out.stdout.strip()):
             dirty = subprocess.run(["git", "status", "--porcelain", "--untracked-files=no"], cwd=here,
                                    capture_output=True, text=True, timeout=10)
-            return out.stdout.strip() + ("+dirty" if dirty.stdout.strip() else "")
+            return out.stdout.strip() + ("+dirty" if dirty.stdout.strip() else ""), "checkout"
     except (OSError, subprocess.SubprocessError):
         pass
-    sha = os.environ.get("LOUISE_MEASURE_COMMIT", "").strip().lower()
-    return f"{sha} (archive)" if re.fullmatch(r"[0-9a-f]{40}", sha) else ""
+    return "", "unknown"
 
 
 def sign_test(wins: int, losses: int) -> float:
@@ -270,10 +272,11 @@ def make(a) -> int:
                         "tlio_readings": [{"orig": x.orig, "lemma": x.lemma} for x in only],
                         "shipped_readings": [{"orig": x.orig, "reg": x.reg or "", "source": x.source} for x in off_r]})
             print(f"item {len(items)}: {r['uid']}", file=sys.stderr, flush=True)
+    commit, source = commit_of()
     a.out_dir.mkdir(parents=True, exist_ok=True)
     (a.out_dir / "judge.html").write_text(page(items), encoding="utf-8")
     (a.out_dir / "key.json").write_text(json.dumps(
-        {"commit": commit_of(), "reading_tables": version, "seed": a.seed, "weights_sha256": a.weights_sha256, "span": SPAN,
+        {"commit": commit, "commit_source": source, "reading_tables": version, "seed": a.seed, "weights_sha256": a.weights_sha256, "span": SPAN,
          "records_in_span": seen, "records_without_a_passage_the_tables_read": without, "refused_queries": refused,
          "answered_texts_without_a_tlio_reading": no_tlio, "items_with_a_tell": sum(k["tell"] for k in key),
          "items": key, "rule": RULE}, ensure_ascii=False), encoding="utf-8")

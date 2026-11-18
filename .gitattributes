@@ -10,3 +10,4 @@ app/static/vendor/** -text
 *.png binary
 *.npy binary
 tools/lexicon/*.legalcode.txt -text
+app/code_commit.py export-subst
