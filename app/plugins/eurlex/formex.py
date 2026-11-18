@@ -294,6 +294,9 @@ class Act:
     #: every element's ATTRIBUTES in the body and each annex item, in
     #: document order: `{file: [[tag, {name: value}], …]}` (`attributes_of`)
     markup: dict = field(default_factory=dict)
+    #: the files the wrapper names that the manifestation does not hold
+    #: (parser 5: said on the record, never the record refused)
+    missing: list = field(default_factory=list)
     #: an act read from another form (rendition.py): its sections as read
     rendered_sections: list | None = None
 
@@ -324,6 +327,19 @@ def body_name(wrapper: ET.Element) -> str:
         if name:
             return name
     raise FormexError("the wrapper names no DOC.MAIN.PUB/REF.PHYS file: no body to read")
+
+
+def main_names(wrapper: ET.Element) -> list[str]:
+    """Every file of the main document, BY NAME, in the wrapper's order:
+    DOC.MAIN.PUB's REF.PHYS (parser 5: a Special Edition splits an act's
+    main document over several items — 31968R0259 hr/bg/ro, its first a
+    table, the act after it — and only the first was read)."""
+    out = []
+    for ref in wrapper.iterfind("./FMX/DOC.MAIN.PUB/REF.PHYS"):
+        name = ref.attrib.get("FILE")
+        if name and name not in out:
+            out.append(name)
+    return out
 
 
 def annex_names(wrapper: ET.Element) -> list[str]:
@@ -464,6 +480,61 @@ def _final(e: ET.Element | None, col: Collect) -> Any:
 
 
 _ACT_KNOWN = {"BIB.INSTANCE", "TITLE", "PREAMBLE", "ENACTING.TERMS", "FINAL"}
+#: the roots read as an act (parser 5: AGR, an agreement, has its shape)
+_ACT_ROOTS = ("ACT", "CONS.ACT", "AGR")
+
+
+def _corrections(root: ET.Element, col: Collect) -> list[tuple[str, str]]:
+    """A corrigendum's corrections (CORR/CONTENTS.CORR/CORRECTION), one
+    section each: labelled by where it applies (DESCRIPTION), its text the
+    old reading then the new, in the origin's own words."""
+    out: list[tuple[str, str]] = []
+    for i, c in enumerate(root.iter("CORRECTION"), 1):
+        where = c.find("DESCRIPTION")
+        label = norm(inline(where, col)) if where is not None else ""
+        body: list[str] = []
+        for part in c:
+            if isinstance(part.tag, str) and part.tag != "DESCRIPTION":
+                body += lines(part, 0, col)
+        out.append((label or f"Correction {i}", "\n".join(x for x in body if x.strip())))
+    if not out:
+        out = _contents(root, col)
+    return out
+
+
+def _contents(root: ET.Element, col: Collect) -> list[tuple[str, str]]:
+    """Any other body (GENERAL …): its CONTENTS (or the root's own blocks)
+    by group — a GR.SEQ's TITLE labels its text — and what stands outside a
+    group as one section, so no word is left out."""
+    holder = root.find("CONTENTS")
+    holder = holder if holder is not None else root
+    out: list[tuple[str, str]] = []
+    loose: list[str] = []
+    for c in holder:
+        if not isinstance(c.tag, str) or c.tag in ("BIB.INSTANCE", "TITLE"):
+            continue
+        if c.tag == "GR.SEQ":
+            t = c.find("TITLE")
+            label = norm(heading(t, col)) if t is not None else ""
+            body = [x for part in c if isinstance(part.tag, str) and part is not t for x in lines(part, 0, col)]
+            out.append((label or "Contents", "\n".join(x for x in body if x.strip())))
+        else:
+            loose += lines(c, 0, col)
+    if loose:
+        out.insert(0, ("Contents", "\n".join(x for x in loose if x.strip())))
+    return out
+
+
+def _rendered(own: list | None, recitals: list, articles: list, more: list, annexes: list) -> list | None:
+    """The sections where parser 5 reads more than an act's (a body that is
+    not an act, other main files): None where an act alone was read, so
+    `sections` reads it as before."""
+    if own is None and not more:
+        return None
+    out = list(own) if own is not None else list(recitals) + [
+        (" › ".join(x for x in (a.partition, " — ".join(y for y in (a.num, a.title) if y)) if x)
+         or "Enacting terms", a.body) for a in articles]
+    return out + list(more) + [(a.title or "Annex", a.body) for a in annexes]
 _CONS_KNOWN = {"INFO.CONSLEG", "INFO.PROD", "CONS.DOC"}
 _CONS_DOC_KNOWN = {"BIB.INSTANCE", "FAM.COMP", "TITLE", "PREAMBLE", "ENACTING.TERMS", "FINAL",
                    "CONS.ANNEX"}
@@ -490,17 +561,26 @@ def parse(files: dict[str, bytes], celex: str | None = None) -> Act:
     items hold more than one act: `own_wrapper`). Raises FormexError when
     the wrapper, the body or an annex it names is missing or unreadable."""
     wname, wrapper = wrapper_of(files, celex)
-    bname = body_name(wrapper)
-    if bname not in files:
-        raise FormexError(f"the wrapper names the body {bname}, which is not among the items")
-    root = _parse(files[bname], bname)
+    mains = main_names(wrapper)
+    if not mains:
+        raise FormexError("the wrapper names no DOC.MAIN.PUB/REF.PHYS file: no body to read")
+    held_mains = [n for n in mains if n in files]
+    if not held_mains:
+        raise FormexError(f"the wrapper names the body {mains[0]}, which is not among the items")
+    parsed = {n: _parse(files[n], n) for n in held_mains}
+    # THE BODY (parser 5): the first main file shaped as an act — an ACT, a
+    # CONS.ACT, an AGR (an agreement: a preamble and articles, as an ACT) —
+    # else the first; every other main file is read as text after it
+    bname = next((n for n in held_mains if parsed[n].tag in _ACT_ROOTS), held_mains[0])
+    root = parsed[bname]
     markup: dict[str, list] = {bname: attributes_of(root)}
     col = Collect()
     pub = wrapper.find("./PUBLICATION.REF/DATE")
     meta: dict[str, Any] = {}
     consleg: dict = {}
     base_celex = None
-    if root.tag == "ACT":
+    rendered: list[tuple[str, str]] | None = None
+    if root.tag in ("ACT", "AGR"):
         doc = root
         known = _ACT_KNOWN
     elif root.tag == "CONS.ACT":
@@ -522,7 +602,13 @@ def parse(files: dict[str, bytes], celex: str | None = None) -> Act:
             got = fam.find("./BIB.DATA/NO.CELEX")
             base_celex = norm(got.text) if got is not None else None
     else:
-        raise FormexError(f"{bname}: the body is a {root.tag}, not an ACT or a CONS.ACT")
+        # parser 5: a body that is not an act — a corrigendum (CORR: its
+        # corrections, each the place, the old reading and the new), a
+        # GENERAL document (its CONTENTS by group), any other root — read as
+        # its own sections, every element kept as a tree (invariant 11)
+        doc = root
+        known = {"BIB.INSTANCE", "TITLE"}
+        rendered = _corrections(root, col) if root.tag == "CORR" else _contents(root, col)
     bib = doc.find("BIB.INSTANCE")
     if bib is not None:
         meta["bib_instance"] = tree(bib)
@@ -548,9 +634,22 @@ def parse(files: dict[str, bytes], celex: str | None = None) -> Act:
         if isinstance(c.tag, str) and c.tag not in known:
             meta.setdefault("other", []).append({c.tag: tree(c)})
     annexes = [_annex(a, bname, col) for a in doc.iterfind("CONS.ANNEX")]
+    missing = [n for n in mains if n not in files]
+    # the other main files, read as text after the body, in the wrapper's order
+    more: list[tuple[str, str]] = []
+    for name in held_mains:
+        if name == bname:
+            continue
+        other = parsed[name]
+        markup[name] = attributes_of(other)
+        meta.setdefault("main_documents", []).append({"file": name, other.tag: tree(other)})
+        more += _corrections(other, col) if other.tag == "CORR" else _contents(other, col)
     for name in annex_names(wrapper):
         if name not in files:
-            raise FormexError(f"the wrapper names the annex {name}, which is not among the items")
+            # parser 5: a file the wrapper names and the origin's manifestation
+            # does not hold (31983R0707 hr, 29 units): said, not refused
+            missing.append(name)
+            continue
         a = _parse(files[name], name)
         markup[name] = attributes_of(a)
         if a.tag != "ANNEX":
@@ -560,7 +659,7 @@ def parse(files: dict[str, bytes], celex: str | None = None) -> Act:
     # every other XML item the manifestation holds (the OJ issue's `toc`):
     # kept as a tree, never dropped; a non-XML item (an image) is held in
     # the unit and named in the record's `items`
-    read = {wname, bname, *annex_names(wrapper)}
+    read = {wname, *mains, *annex_names(wrapper)}
     for name in sorted(files):
         if name not in read and name.lower().endswith(".xml"):
             meta.setdefault("other_items", {})[name] = tree(_parse(files[name], name))
@@ -573,7 +672,9 @@ def parse(files: dict[str, bytes], celex: str | None = None) -> Act:
                base_celex=base_celex, recitals=recitals, articles=articles, annexes=annexes,
                meta=meta, notes=col.notes, references=col.references,
                modifications=col.modifications, instructions=col.instructions,
-               wrapper=tree(wrapper), markup={k: v for k, v in markup.items() if v})
+               wrapper=tree(wrapper), markup={k: v for k, v in markup.items() if v},
+               rendered_sections=_rendered(rendered, recitals, articles, more, annexes),
+               missing=missing)
 
 
 def sections(act: Act) -> list[tuple[str, str]]:

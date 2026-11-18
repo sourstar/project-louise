@@ -213,8 +213,11 @@ def test_the_body_is_picked_by_name_never_by_order():
         formex.parse(files)
     files = {p.name: p.read_bytes() for p in (FORMEX / ACT).iterdir()}
     del files["L_2016176EN.01005101.xml"]
-    with pytest.raises(formex.FormexError, match="names the annex"):
-        formex.parse(files)
+    # parser 5: a file the wrapper names and the manifestation does not hold
+    # is said (`missing`, the record's `item-not-held`), never the record refused
+    act = formex.parse(files)
+    assert act.missing == ["L_2016176EN.01005101.xml"]
+    assert all(a.file != "L_2016176EN.01005101.xml" for a in act.annexes) and act.articles
 
 
 def test_formex_6_names_and_an_item_no_annex_is_kept():

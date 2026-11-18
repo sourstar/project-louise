@@ -471,7 +471,9 @@ chunks of up to 40,189 tokens, and the four-language run was OOM-killed twenty t
 - **French "Article premier".** French acts head article 1 "Article premier", which `rendition._ARTICLE`
   does not match. The first article is folded into the preamble, which explains most of French's
   shortfall. This is a parser defect in the eurlex plugin (the legal session's): fix it, with a parser
-  version, before French records are built.
+  version, before French records are built. FIXED in eurlex parser 5 (2026-11-18): "Article premier",
+  "Article 1er" and a single article's "unique / unico / único" head an article; LEMUR's French arm
+  re-runs on it.
 - **81 acts are too few** for a randomization test per language. `encoder_bakeoff fetch --suite
   lemur-<code>-full` takes every split (train + validation + test, about 6× the acts). Nothing is
   trained here, so every split is held-out data.
