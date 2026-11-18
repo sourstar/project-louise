@@ -545,10 +545,34 @@ def _anchors(record: dict[str, Any]) -> tuple[tuple[str, ...], tuple[str, ...]]:
 
 def _near(front: str, m: re.Match, anchors: tuple[tuple[str, ...], tuple[str, ...]]) -> bool:
     """The record's own title words (both) or an author's surname within NEAR of the match."""
-    window = _fold(front[max(0, m.start() - NEAR): m.end() + NEAR])
+    return _has_anchor(front[max(0, m.start() - NEAR): m.end() + NEAR], anchors)
+
+
+def _has_anchor(text: str, anchors: tuple[tuple[str, ...], tuple[str, ...]]) -> bool:
+    window = _fold(text)
     has = lambda w: re.search(r"\b" + re.escape(w) + r"\b", window) is not None
     title, surnames = anchors
     return bool((title and all(has(w) for w in title)) or any(has(s) for s in surnames))
+
+
+def _near_lines(front: str, m: re.Match, anchors: tuple[tuple[str, ...], tuple[str, ...]]) -> bool:
+    """A statement with its agent is about this record when the record's
+    anchor stands on the statement's own line or on the nearest NON-BLANK
+    line before it — a wrapped title page ("…by Sir Walter Scott,⏎Translated
+    by Gaetano Barbieri") is one statement; a publisher's list ("RAVENNA by
+    Corrado Ricci.⏎⏎VENICE by Pompeo Molmenti. Translated by Alethea Wiel."),
+    one book an entry, is not about the record its other entries name
+    (41600). Blank lines are skipped: they separate entries, never one
+    statement's halves."""
+    lines = front.split("\n")
+    pos = 0
+    for k, line in enumerate(lines):
+        if pos + len(line) >= m.start():
+            break
+        pos += len(line) + 1
+    own = lines[k] if lines else ""
+    before = next((lines[j] for j in range(k - 1, -1, -1) if lines[j].strip()), "")
+    return _has_anchor(own, anchors) or _has_anchor(before, anchors)
 
 
 def front_matter(record: dict[str, Any]) -> str:
@@ -584,7 +608,11 @@ def is_translation(record: dict[str, Any]) -> bool:
         return True
     front = front_matter(record)
     anchors = _anchors(record)
-    return any(_near(front, m, anchors) for pat in (_FRONT_CAPS, _FRONT) for m in pat.finditer(front))
+    # rule 1, title-page capitals: the record's anchor within NEAR characters;
+    # rule 2, a statement with its agent: on its own line or the nearest
+    # non-blank line before it (architecture, 2026-11-18)
+    return (any(_near(front, m, anchors) for m in _FRONT_CAPS.finditer(front))
+            or any(_near_lines(front, m, anchors) for m in _FRONT.finditer(front)))
 
 
 def record_first_published(record: dict[str, Any]) -> int | None:

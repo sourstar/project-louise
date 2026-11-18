@@ -521,8 +521,8 @@ def test_a_statement_not_about_this_record_is_not_a_translation():
     not_caught = [
         # 41600: a publisher's list of other books, far from this record's title and author
         _book("Le cronache della città", "Balzani, Ugo",
-              "LE CRONACHE DELLA CITTÀ di Ugo Balzani." + filler +
-              "Other books: VENICE by Pompeo Molmenti. Translated by Alethea Wiel."),
+              "LE CRONACHE DELLA CITTÀ di Ugo Balzani.\n" + filler +
+              "\n\nOther books:\nVENICE by Pompeo Molmenti. Translated by Alethea Wiel."),
         # 62038, 56500: a preface talking of volgarizzamenti, no title-page type, no agent
         _book("Le cronache italiane", "Balzani, Ugo", "i volgarizzamenti del Trecento sono testimoni preziosi."),
         _book("Rime", "Petrarca, Francesco", "edizione condotta sull'autografo; la versione italiana più antica."),
@@ -539,3 +539,21 @@ def test_a_translation_by_its_front_matter_keeps_its_works_year_and_is_never_rea
     rec["date"] = "1830"
     y = _year(rec)
     assert y == 1819 and y.translated
+
+
+
+def test_an_agent_statement_is_about_this_record_by_its_own_line_or_the_one_before():
+    from app import historical
+    one_line = _book("La promessa sposa di Lammermoor", "Scott, Walter",
+                     "ROMANZO STORICO\n\nby Sir Walter Scott, Translated by Gaetano Barbieri\n")
+    wrapped = _book("La promessa sposa di Lammermoor", "Scott, Walter",
+                    "ROMANZO STORICO\n\nby Sir Walter Scott,\nTranslated by Gaetano Barbieri\n")
+    assert historical.is_translation(one_line) and historical.is_translation(wrapped)
+    # 41600: the series list names this book within 400 characters, but on another entry's line
+    series = _book("I bagni di Lucca", "Bonaventura, A.",
+                   "COLLEZIONE DI MONOGRAFIE\nI BAGNI DI LUCCA di A. Bonaventura.\n\nRAVENNA by Corrado Ricci.\n\n"
+                   "VENICE by Pompeo Molmenti. Translated by Alethea Wiel.\n")
+    assert not historical.is_translation(series)
+    # rule 1 keeps its 400 characters: the title page's type with the title near it
+    assert historical.is_translation(_book("I viaggi di Gio. da Mandavilla", "Mandeville, John",
+                                           "I VIAGGI\nDI GIO. DA MANDAVILLA\n\n\nVOLGARIZZAMENTO\nANTICO TOSCANO"))
