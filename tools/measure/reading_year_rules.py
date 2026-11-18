@@ -13,6 +13,7 @@ forms read, records with no year, and a few examples of each.
 from __future__ import annotations
 
 import argparse
+from pathlib import Path
 import collections
 import json
 import re
@@ -35,6 +36,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--collection", required=True)
     ap.add_argument("--lang", default="it")
     ap.add_argument("--examples", type=int, default=5)
+    ap.add_argument("--claims", type=Path, help="the book-editions claims: count the cross-language same-work "
+                                               "pairs with no translation mark on either side")
     ap.add_argument("--author", help="also list every record whose creators name this (e.g. 'porta')")
     a = ap.parse_args(argv)
     from app import collections as collections_mod
@@ -46,7 +49,7 @@ def main(argv: list[str] | None = None) -> int:
     n = 0
     unparsed, unparsed_examples = 0, []
     by_author: list[dict] = []
-    claimed = reading.translations_claimed(col) if col is not None else frozenset()
+    claimed: frozenset = frozenset()      # translation-of claims: none on the node; marks are the corpus's own
     by_claim_only, unmarked, unmarked_examples = 0, 0, []
     _TR = re.compile(r"(?i)\btranslat(?:ed|ion|or)\b|\btradott[oa]\b|\btraduzione\b")
     for r in records_of(a.collection, random.Random(0)):
@@ -87,7 +90,28 @@ def main(argv: list[str] | None = None) -> int:
                                    "creators": [(c.get("name"), c.get("role"), c.get("birth"), c.get("death"))
                                                 for c in ((r.get("extra") or {}).get("creators_detail") or [])
                                                 if isinstance(c, dict)][:4]})
+    unmarked_pairs = None
+    if a.claims:
+        from app import historical
+        pairs = []
+        with open(a.claims, encoding="utf-8") as fh:
+            for line in fh:
+                c = json.loads(line)
+                if c.get("type") == "same-work":
+                    pairs.append((str(c.get("subject")), str(c.get("object"))))
+        need = {u for p in pairs for u in p}
+        marked, lang_of = {}, {}
+        for r in records_of(a.collection, random.Random(0), lang=None):
+            if r["uid"] in need:
+                marked[r["uid"]] = historical.is_translation(r)
+                lang_of[r["uid"]] = str(r.get("lang") or "")[:2]
+        cross = [(x, y) for x, y in pairs if x in lang_of and y in lang_of and lang_of[x] != lang_of[y]]
+        unmarked_pairs = {"cross_language_same_work": len(cross),
+                          "neither_side_marked": sum(1 for x, y in cross if not marked[x] and not marked[y]),
+                          "with_an_italian_side_unmarked": sum(1 for x, y in cross if not marked[x] and not marked[y]
+                                                               and "it" in (lang_of[x], lang_of[y]))}
     print(json.dumps({"collection": a.collection, "records": n, "rules": dict(rules.most_common()),
+                      "unmarked_translation_pairs": unmarked_pairs,
                       "by_author": by_author,
                       "century_forms": dict(forms.most_common(20)),
                       "century_unparsed": unparsed, "century_unparsed_examples": unparsed_examples,

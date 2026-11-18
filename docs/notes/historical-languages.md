@@ -316,6 +316,18 @@ München): the reading is two REFERENCE SOURCES (06 §6.5, amended):
   too; its `language-stage` claim still gives the chat copy A and B. The
   known-item set leaves translations out and counts them. The bullet below
   is the first ruling, superseded.
+- *What marks a translation (architecture, 2026-11-18)*: the record's OWN
+  corpus only — a `trl` credit, or its title or summary (marc500, marc520)
+  stating it (`historical.is_translation`). Counted by München on the
+  node's 1,112 Italian gutenberg records: 80 trl credits; PG's RDF holds no
+  marc041, 240 or 500 for them; 4 statements, 2 without trl (54167, 40326):
+  82 marked. UNMARKED translations exist and cannot be told apart: Scott's
+  *La promessa sposa di Lammermoor* (42881–42883) has no mark anywhere and
+  is read as an original, by its first publication 1819, while his
+  *Puritani di Scozia* (43458/9) carry trl. `translation-of` claims: none
+  in gutenberg-book-editions (all 7,160 are same-work), so no claim marks
+  one. What remains unknown: `reading_year_rules --claims` counts the
+  cross-language same-work pairs with no mark on either side.
 - *The year (first ruling)*: `publication_year_fields`, declared per plugin, in order —
   gutenberg `("first_published", "date")` (operator: "work's
   first-publication year is the default, and print year of the edition

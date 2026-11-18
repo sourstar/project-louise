@@ -488,13 +488,30 @@ def _record_text(record: dict[str, Any]) -> str:
     return "\n".join(str(s[1]) for s in record.get("sections") or [] if len(s) > 1)
 
 
+#: a translation STATED by the record's own title or summary (architecture,
+#: 2026-11-18: "its title, subtitle, marc500 or marc520 STATES it").
+#: Counted on the node's 1,112 Italian gutenberg records: 4 match, 2 of them
+#: without a trl credit (54167 "…in Italiana tradotto", 40326 "Traduzione di
+#: …"); PG's RDF holds no marc041, 240 or 500 for them.
+_STATED = re.compile(r"\b(?:tradott[oa]|traduzione|versione\s+di|recat[oa]\s+in|volgarizzament[oi]|"
+                     r"translated|translation)\b", re.IGNORECASE)
+
+
 def is_translation(record: dict[str, Any]) -> bool:
-    """A translator among the record's credits (09 §9.5 `creators` and
-    gutenberg's `extra.creators_detail`, MARC relator `trl`)."""
+    """The record's OWN CORPUS says it is a translation (architecture,
+    2026-11-18): a translator among its credits (09 §9.5 `creators` and
+    gutenberg's `extra.creators_detail`, MARC relator `trl`), or its title or
+    its summary (marc500, marc520) stating it. A record with none of these is
+    read as an original — the corpus cannot tell an unmarked translation
+    (Scott's Lammermoor, 42881-42883) from one."""
     for a in (record.get("extra") or {}).get("creators_detail") or []:
         if isinstance(a, dict) and a.get("role") in ("trl", "translator"):
             return True
-    return bool(_TRANSLATED.search(" ".join(map(str, record.get("creators") or []))))
+    if _TRANSLATED.search(" ".join(map(str, record.get("creators") or []))):
+        return True
+    marc = (record.get("extra") or {}).get("marc") or {}
+    stated = [str(record.get("title") or ""), *(str(x) for k in ("500", "520") for x in (marc.get(k) or []))]
+    return bool(_STATED.search(" ".join(stated)))
 
 
 def record_first_published(record: dict[str, Any]) -> int | None:

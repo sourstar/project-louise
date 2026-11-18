@@ -695,7 +695,7 @@ def facts_for(collection, want: Sequence[str], *, root: Path | None = None) -> d
 
 #: the rule `edition_facts` applies; a change to it is a new file name, so a
 #: facts file never outlives the rule that wrote it (invariant 3)
-FACTS_VERSION = 4          # 2 (2026-11-16): first_published; 3: translated; 4 (2026-11-18): lived, century
+FACTS_VERSION = 5          # 2 (2026-11-16): first_published; 3: translated; 4: lived, century; 5: a stated translation
 
 
 def _decode(v) -> EditionFacts:

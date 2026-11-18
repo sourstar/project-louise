@@ -311,49 +311,11 @@ def years(hits: list[dict[str, Any]], collection=None) -> dict[int, int]:
                     known[u] = year_of(fields, facts.get(u)) or Year(0)
         except Exception:   # noqa: BLE001 — a year is a courtesy, never the search's failure
             continue
-        claimed = translations_claimed(col) if any(known.get(u) for u in uids.values()) else frozenset()
         for i, u in uids.items():
             y = known.get(u)
             if y:
-                out[i] = Year(int(y), y.by, True) if u in claimed and not y.translated else y
+                out[i] = y
     return out
-
-
-#: (the annotations trees, their snapshots) -> the uids a `translation-of`
-#: claim names as the translation; re-read when a snapshot changes
-_claimed: dict[tuple, frozenset[str]] = {}
-
-
-def translations_claimed(col) -> frozenset[str]:
-    """The records of `col` that a `translation-of` claim of an annotations
-    collection held and usable here names as the TRANSLATION (its subject),
-    by any method (architecture, 2026-11-18: "A record is a translation if
-    it has a `trl` credit OR it is the subject of a `translation-of`
-    claim"; collections meet at ask time through annotations). Never
-    raises: none read is none claimed."""
-    try:
-        from .ask import annotations as ann_facts, works
-        from .ask.results import _root
-        from .hold import annotations as ann, collection as col_mod
-        root = _root()
-        trees = []
-        for a in works._usable(col, None):
-            idx = ann.index_of(col_mod.shard_dir_of(root, a.name))
-            trees.append((a.name, getattr(idx, "snapshot_id", None), id(idx), idx))
-        key = tuple(t[:3] for t in trees)
-        if key in _claimed:
-            return _claimed[key]
-        got: set[str] = set()
-        for _n, _s, _i, idx in trees:
-            for uid, claims in (getattr(idx, "by_target", None) or {}).items():
-                for c in claims:
-                    if c.claim.get("type") == "translation-of" and c.claim.get("subject") == uid:
-                        got.add(uid)
-        _claimed.clear()
-        _claimed[key] = frozenset(got)
-        return _claimed[key]
-    except Exception:   # noqa: BLE001 — a mark not read is a mark not applied
-        return frozenset()
 
 
 @dataclass
