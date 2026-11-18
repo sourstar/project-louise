@@ -182,6 +182,17 @@ def paired_stats(diffs: list[float], permutations: int, seed: int) -> dict:
             "ci95": [round(boots[49], 4), round(boots[1949], 4)]}
 
 
+def readings_used(text: str, year) -> list[dict]:
+    """Each word of `text` the tables read at `year` for the answer, as the
+    glossary rewrote it — what a reviewer needs to tell a wrong sense
+    (a homograph) from a right one."""
+    from app import reading
+    found = reading.lookup(reading.words_of([text]))
+    return [{"orig": r.orig, "kind": r.kind, "reg": r.reg or "", "lemma": r.lemma or "",
+             "gloss": (r.gloss or "")[:120], "source": r.source}
+            for r in reading.apply(text, year, found, reading.CHAT)[1]]
+
+
 def readings_in(text: str, year) -> int:
     """How many words of `text` the tables read at `year` for the answer —
     the glossary's own steps (reading.lookup, reading.apply)."""
@@ -331,6 +342,9 @@ def main(argv: list[str] | None = None) -> int:
                               "year": int(year), "year_by": getattr(year, "by", ""),
                               "readings_in_passage": readings_in(passage, year),
                               "readings_in_answered_text": readings_in(str(hist["hits"][0].get("text") or ""), year),
+                              "readings": readings_used(str(hist["hits"][0].get("text") or ""), year),
+                              "historical_text": str(hist["hits"][0].get("text") or "")[:1800],
+                              "gold_text": str(gold_hit["hits"][0].get("text") or "")[:1800],
                               "glossary_changed": did, "gold": gold, "on": with_g, "off": without_g})
         # PHASE 2, BY MODEL: each judge over every answer before the next (one load
         # each); BLIND — each answer alone, the arms in random order, never named

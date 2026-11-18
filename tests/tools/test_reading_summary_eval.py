@@ -215,3 +215,14 @@ def test_passages_without_a_word_the_tables_read_are_not_drawn_and_unchanged_ans
     summary = [json.loads(x) for x in out.read_text(encoding="utf-8").splitlines()][-1]["summary"]
     assert summary["records_without_a_passage_the_tables_read"] == 1      # gutenberg:3: no word read
     assert summary["answered"] == 1 and summary["judged"] == 0 and judged == []
+
+
+def test_each_row_names_the_readings_the_glossary_applied(monkeypatch):
+    from app import reading
+    from app.refs.readings import Reading
+    r = Reading(orig="huomo", reg="uomo", kind="replace", lemma="", gloss="", lang="it", period_from=1400,
+                period_to=1899, method="m", source="wikisource-readings")
+    monkeypatch.setattr(reading, "lookup", lambda words, store=None: None)
+    monkeypatch.setattr(reading, "apply", lambda text, y, found, use, lang="it": (text, [r]))
+    assert e.readings_used("Il huomo", reading.Year(1500, "x")) == [
+        {"orig": "huomo", "kind": "replace", "reg": "uomo", "lemma": "", "gloss": "", "source": "wikisource-readings"}]
