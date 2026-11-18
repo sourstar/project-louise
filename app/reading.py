@@ -385,33 +385,48 @@ def warm_years(bound_s: float = YEARS_WARM_BOUND_S) -> None:
     t.start()
 
 
+#: the readings of words already asked, by the tables' version — most of a
+#: rerank's words recur across queries (and most have no reading: cached
+#: too). Cleared when the version changes; bounded.
+_word_cache: dict[str, list[Reading]] = {}
+_word_cache_version = {"v": ""}
+WORD_CACHE_MAX = 500_000
+
+
 def lookup(words: Iterable[str], store=None) -> Lookup:
     """The readings of these words (lower-cased), from the synced tables —
-    by key, an indexed SEARCH per chunk of 500 words."""
+    by key, an indexed SEARCH per chunk of 500 words not yet cached."""
     if store is None:
         from . import refs
         store = refs.read_store()
     want = sorted({w.lower() for w in words})
     out = Lookup()
-    versions = []
     have = set(store.tables())
-    for name, table in SOURCES:
-        if table not in have:
+    present = [(name, table) for name, table in SOURCES if table in have]
+    versions = [v for v in (_version(store, name, table) for name, table in present) if v]
+    out.version = "; ".join(versions)
+    if _word_cache_version["v"] != out.version or len(_word_cache) > WORD_CACHE_MAX:
+        _word_cache.clear()
+        _word_cache_version["v"] = out.version
+    ask = [w for w in want if w not in _word_cache]
+    got: dict[str, list[Reading]] = {w: [] for w in ask}
+    for name, table in present:
+        if not _version(store, name, table):
             continue
-        v = _version(store, name, table)
-        if not v:
-            continue
-        versions.append(v)
-        for i in range(0, len(want), 500):
-            part = want[i:i + 500]
+        for i in range(0, len(ask), 500):
+            part = ask[i:i + 500]
             marks = ",".join("?" for _ in part)
             for r in store.con.execute(
                     f"SELECT orig, reg, kind, lemma, gloss, lang, period_from, period_to, method "
                     f"FROM {table} WHERE orig IN ({marks})", part):
-                out.by_form.setdefault(r[0], []).append(
+                got.setdefault(r[0], []).append(
                     Reading(r[0], r[1] or None, r[2], r[3] or None, r[4] or None, r[5], int(r[6]), int(r[7]),
                             r[8], name))
-    out.version = "; ".join(versions)
+    _word_cache.update(got)
+    for w in want:
+        rs = _word_cache.get(w)
+        if rs:
+            out.by_form[w] = rs
     return out
 
 

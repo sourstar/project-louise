@@ -305,3 +305,12 @@ def test_a_slow_batch_is_bounded_and_gives_no_year(monkeypatch, capsys):
     monkeypatch.setattr(works_mod, "facts_for", lambda c, uids, **k: time.sleep(0.5) or {})
     assert reading.years([{"chunk_id": "gutenberg:1:0:1"}], col) == {}
     assert "[gutenberg-it warn:reading] years not read within" in capsys.readouterr().out
+
+
+def test_a_words_readings_are_cached_within_a_version(tmp_path):
+    st = _store(tmp_path, ROWS)
+    reading._word_cache.clear(); reading._word_cache_version["v"] = ""
+    a = reading.lookup(["huomo", "casa"], st)
+    assert "huomo" in a.by_form and "casa" not in a.by_form and "casa" in reading._word_cache
+    st.con.execute("DELETE FROM wikisource_reading")          # unchanged version: the cache answers
+    assert reading.lookup(["huomo"], st).by_form["huomo"][0].reg == "uomo"

@@ -92,6 +92,10 @@ def main(argv: list[str] | None = None) -> int:
     for name in a.collection:
         hits = sample_hits(name, a.depth, a.seed)
         records = hits[::2]                                   # reading.years is per record
+        # the cold call's parts: the collection files and the snapshot, which a
+        # web process's own search has already loaded, then the reader's batch
+        t0 = time.perf_counter(); col_obj = reading._collection(name); t_col = time.perf_counter() - t0
+        t0 = time.perf_counter(); col_obj is not None and reading._snapshot_of(col_obj); t_snap = time.perf_counter() - t0
         t0 = time.perf_counter(); years = reading.years(records); cold = time.perf_counter() - t0
         warm = []
         for _ in range(a.runs):
@@ -115,6 +119,8 @@ def main(argv: list[str] | None = None) -> int:
             look.append(time.perf_counter() - t0)
             changed = sum(1 for (t, used) in out if used)
         print(json.dumps({"collection": name, "records": len(records), "with_year": len(years),
+                          "cold_collection_ms": round(t_col * 1000, 1),
+                          "cold_snapshot_ms": round(t_snap * 1000, 1),
                           "years_cold_ms": round(cold * 1000, 1),
                           "years_warm_ms": round(statistics.median(warm) * 1000, 1),
                           "index_build_s": round(index_s, 1),
