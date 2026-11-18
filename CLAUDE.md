@@ -132,8 +132,9 @@ are the ones that have drifted; prefer to add a test when you touch them.
    as items or weights; a reader's normalisation of the text the reranker
    reads is a reorder under the WEIGHTS rule (operator, 2026-11-18: "Yes to
    both, replacing the words the reranker does not know with the words it
-   knows, just enables it to do its job"; on by default, every hit it moved
-   saying so in `moved_by`, docs/05 §5.6, app/reading.py).
+   knows, just enables it to do its job"; under Quality only — operator,
+   2026-11-18: "Keep the word replacement under quality search only" —
+   every hit it moved saying so in `moved_by`, docs/05 §5.6, app/reading.py).
    Within a collection, the ranked lists of its legs that answer the same
    question ALWAYS go through RRF (their scores share no scale). Two ranked
    lists that answer different questions (docs/05 §5.1) are presented
