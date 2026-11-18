@@ -15,7 +15,9 @@ in a temporary directory (never the node's) and times the lookup there.
 Per collection, `depth` records sampled from its snapshot's first parts
 (seeded), each a hit of its first section's first 600 characters (two
 chunks a record, as the reranker sends): `reading.years` timed cold (the
-first call of the process) and warm, how many hits stated a year, and
+first call of the process) and warm, then the year index built
+(`reading.index_years`, the web process's warm) and `reading.years` timed
+on it, how many hits stated a year, and
 `reading.lookup` + `reading.apply` over the 2 x depth texts. One JSON line
 per collection on stdout.
 """
@@ -94,6 +96,12 @@ def main(argv: list[str] | None = None) -> int:
         warm = []
         for _ in range(a.runs):
             t0 = time.perf_counter(); reading.years(records); warm.append(time.perf_counter() - t0)
+        # the year index, as the web process's warm builds it at start (off the query path)
+        from app import reading as rd
+        t0 = time.perf_counter(); idx = rd.index_years(rd._collection(name)); index_s = time.perf_counter() - t0
+        indexed = []
+        for _ in range(a.runs):
+            t0 = time.perf_counter(); rd.years(records); indexed.append(time.perf_counter() - t0)
         texts = [h["text"] for h in hits]
         reading.warm(store=store) if store is not None else reading.warm()
         look = []
@@ -109,6 +117,10 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps({"collection": name, "records": len(records), "with_year": len(years),
                           "years_cold_ms": round(cold * 1000, 1),
                           "years_warm_ms": round(statistics.median(warm) * 1000, 1),
+                          "index_build_s": round(index_s, 1),
+                          "index_complete": bool(idx and idx["complete"]),
+                          "index_records_with_year": len([v for v in (idx or {}).get("years", {}).values() if v]),
+                          "years_indexed_ms": round(statistics.median(indexed) * 1000, 2),
                           "lookup_apply_ms": round(statistics.median(look) * 1000, 1),
                           "texts": len(texts), "texts_changed": changed,
                           "version": found.version}), flush=True)

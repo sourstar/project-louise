@@ -145,3 +145,55 @@ def test_a_normattiva_hit_is_never_read_and_never_moved(monkeypatch):
     hits = [{"chunk_id": "normattiva:1865-03-20;2248:0:1", "source_collection": "normattiva-it",
              "text": "Le leggi sono pubblicate"}]
     assert reading.years(hits) == {} and called == []         # no fields declared: its facts never read
+
+
+def _fake_collection(monkeypatch, facts_by_part):
+    """A gutenberg collection whose snapshot has these parts' facts."""
+    from types import SimpleNamespace
+    from app.ask import works as works_mod
+    shards = [SimpleNamespace(slice="main", n=i) for i in range(len(facts_by_part))]
+    snap = SimpleNamespace(shards=shards)
+    col = SimpleNamespace(name="gutenberg-it", plugin="gutenberg", codex=object())
+    monkeypatch.setattr(reading, "_snapshot_of", lambda c: ("/tree/gutenberg-it", snap))
+    monkeypatch.setattr(works_mod, "part_facts", lambda tree, store, s: facts_by_part[s.n])
+    monkeypatch.setattr(works_mod, "facts_dir", lambda root, name, tree: "/store")
+    reading._year_index.clear()
+    return col
+
+
+def test_the_year_index_answers_a_rerank_with_nothing_looked_up(monkeypatch):
+    from app.ask import works as works_mod
+    f = works_mod.EditionFacts
+    col = _fake_collection(monkeypatch, [{"gutenberg:1": f(first_published=1605, year=1851)},
+                                         {"gutenberg:2": f(year=1554), "gutenberg:3": f()}])
+    idx = reading.index_years(col)
+    assert idx["complete"] and idx["years"] == {"gutenberg:1": 1605, "gutenberg:2": 1554}
+    monkeypatch.setattr(works_mod, "facts_for", lambda *a, **k: (_ for _ in ()).throw(AssertionError("looked up")))
+    hits = [{"chunk_id": f"gutenberg:{i}:0:1"} for i in (1, 2, 3, 9)]
+    assert reading.years(hits, col) == {0: 1605, 1: 1554}
+
+
+def test_before_the_index_is_complete_the_missing_records_are_read_in_one_batch(monkeypatch):
+    from app.ask import works as works_mod
+    f = works_mod.EditionFacts
+    col = _fake_collection(monkeypatch, [{}])
+    asked = []
+    monkeypatch.setattr(works_mod, "facts_for",
+                        lambda c, uids, **k: asked.append(list(uids)) or {"gutenberg:2": f(year=1554)})
+    hits = [{"chunk_id": f"gutenberg:{i}:0:1"} for i in (1, 2, 2)]
+    assert reading.years(hits, col) == {1: 1554, 2: 1554}
+    assert asked == [["gutenberg:1", "gutenberg:2"]]          # one batch, each record once
+    assert reading.years(hits, col) == {1: 1554, 2: 1554}
+    assert asked[1:] == []                                    # both remembered, the yearless one too
+
+
+def test_the_collection_is_not_reread_per_rerank(monkeypatch):
+    from types import SimpleNamespace
+    from app import collections as collections_mod
+    calls = []
+    monkeypatch.setattr(collections_mod, "by_name",
+                        lambda n: calls.append(n) or SimpleNamespace(name=n, plugin="pubmed"))
+    reading._collections.clear()
+    for _ in range(5):
+        reading.years([{"chunk_id": "pubmed:1:0:1", "source_collection": "pubmed"}])
+    assert calls == ["pubmed"]
