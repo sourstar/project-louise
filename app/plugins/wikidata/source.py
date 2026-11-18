@@ -55,6 +55,7 @@ from pathlib import Path
 from typing import Iterator
 
 from app import derived
+from app.bz2_blocks import Lines
 from app.plugins import cursor
 from app.backend import OriginForm, Template
 from app.plugins.base import (CanonicalDoc, DiscoverState, DocRef, Erasure, LicenseClass, Modality, Mutability,
@@ -197,6 +198,14 @@ class WikidataSource:
     origin_versions = "history"
     LOCATOR_SEP = _LOCATOR_SEP
     LOCATOR_MEMBER_FIELDS = 1
+    #: RECORDS-VS-ORIGIN BY THE DUMP'S BLOCKS (2026-11-18, operator: "A";
+    #: app/acquire/block_origin.py): the dump is one bzip2 stream framed as
+    #: dump.py reads it — `[`, one entity a line opening with `{`, `]` — so
+    #: a manifest locator's ordinal is the dump's unit line of that ordinal,
+    #: and the copy's block index (app/bz2_blocks.py) says which blocks hold
+    #: it. The index holds the file to this framing before an ordinal is
+    #: placed in it.
+    origin_lines = Lines(opens=b"{", head=b"[", tail=b"]")
 
     # ---- the record's origin, by entity (parser 3; app/keyed_origin.py) ----------
 

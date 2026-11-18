@@ -813,8 +813,10 @@ def _compared_here(reparse, items):
     for uid, locator, line in items:
         try:
             got = reparse(uid, locator)
-        except FileNotFoundError:
-            yield uid, "unreachable", None
+        except FileNotFoundError as e:
+            # the reason travels (an origin that will not answer says why;
+            # app/acquire/block_origin.py), and is said where none was reached
+            yield uid, "unreachable", (str(e) or None)
             continue
         except Exception as e:                          # noqa: BLE001
             yield uid, "errored", f"{uid}: {type(e).__name__}: {e}"[:200]
@@ -953,17 +955,24 @@ def check_records_vs_origin(ctx: Ctx) -> Outcome:
     # that had every reason to believe 1.6M records had drifted from
     # PubMed, and the collection's own records were perfect.
     failed, moved, changed, errored, unreachable, compared = [], [], [], [], 0, 0
+    # WHY, where the origin said: the first reason an unreachable or a changed
+    # record came with (an origin away, a run no longer served, a block whose
+    # bytes are not the copy's — app/acquire/block_origin.py), said in the
+    # outcome; a verdict's own "changed" carries none
+    why_unreachable = why_changed = None
     for uid, outcome, error in (ctx.reparse_many(chosen()) if ctx.reparse_many is not None
                                 else _compared_here(ctx.reparse, chosen())):
         compared += 1
         if outcome == "unreachable":
             unreachable += 1
+            why_unreachable = why_unreachable or error
         elif outcome == "errored":
             errored.append(error)
         elif outcome == "moved":
             moved.append(uid)
         elif outcome == "changed":
             changed.append(uid)
+            why_changed = why_changed or error
         elif outcome == "failed":
             failed.append(uid)
     if errored and not failed:
@@ -981,7 +990,8 @@ def check_records_vs_origin(ctx: Ctx) -> Outcome:
                         "origin": "unreachable"},
                        ctx.seed, _shard_ids(ctx.codex, ran),
                        why=f"none of the {compared} sampled record(s) could "
-                           f"be re-fetched from the origin given")
+                           f"be re-fetched from the origin given"
+                           + (f": {why_unreachable}" if why_unreachable else ""))
     reach = _reach(ctx, per_group, compared_in, group_of, shared_of, keep, passed, in_part)
     reproduced = compared - unreachable - len(errored) - len(changed)
     if not failed and changed and (reproduced <= 0
@@ -999,7 +1009,8 @@ def check_records_vs_origin(ctx: Ctx) -> Outcome:
             ctx.seed, _shard_ids(ctx.codex, ran),
             why=f"{len(changed)} of {compared} sampled record(s) changed at the origin "
                 f"since the build (more than {CHANGED_AT_ORIGIN_SHARE:.0%} of those "
-                f"re-parsed), so the sample proves nothing either way" + reach)
+                f"re-parsed), so the sample proves nothing either way"
+                + (f" — first: {why_changed}" if why_changed else "") + reach)
     said = ""
     if bound:
         said = (f" — read {bound['origin_units']} of the {bound['origin_units_sampled']} "
@@ -1041,8 +1052,10 @@ def check_records_vs_origin(ctx: Ctx) -> Outcome:
                           if moved else "")
                        + (f", {len(changed)} changed at the origin (their origin unit "
                           f"revised since the build: not reproducible, no evidence against "
-                          f"them)" if changed else "")
-                       + (f", {unreachable} not there" if unreachable else "")
+                          f"them" + (f"; first: {why_changed}" if why_changed else "") + ")"
+                          if changed else "")
+                       + (f", {unreachable} not there" + (f" ({why_unreachable})" if why_unreachable else "")
+                          if unreachable else "")
                        # named, never folded into the count above: a record
                        # that could not be read is not a record that agreed
                        + (f", {len(errored)} unreadable ({errored[0]})"
