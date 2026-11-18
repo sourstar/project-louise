@@ -117,11 +117,11 @@ compressed a block.
 2. The first index build: either the nightly does it in two nights at 3 threads, or (recommended) once, in
    its own container at the node's cores, `deploy/supervise-pass.sh`'s form (`--memory 4g` is ample):
    ```bash
-   python -m app.louise hold check wikidata.next --checks records-vs-origin
+   python -m app.louise hold check wikidata --checks records-vs-origin
    ```
-   - With no `--origin` it finds the copy itself: `<root>/wikidata.next/origin`, which `dev carry` linked
-     to wikidata's corpus (step 4 below); after the rename, `wikidata`'s own. By hand it builds the index
-     whole, then asks the origin.
+   - The collection is `wikidata` since step 8's rename (2026-11-18). With no `--origin` it finds the copy
+     itself: the collection's corpus, `<root>/wikidata/origin` (the dump kept at step 7's forget). By hand
+     it builds the index whole, then asks the origin.
    - A stop resumes at the next run. `--origin-else DIR` would bound the build to an hour, as the nightly.
    - Expected: ~30 min at 12 threads, ~43 MB on `LOUISE_CACHE_DIR`.
 3. Expect PASS "N record(s) re-parsed from the origin" (~19,000 modelled), `origin` "reachable", ≤ 256 MiB
