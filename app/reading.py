@@ -423,9 +423,7 @@ def warm(bound_s: float = WARM_BOUND_S, store=None) -> dict[str, str]:
     import time
     out: dict[str, str] = {}
     try:
-        if store is None:
-            from . import refs
-            store = refs.read_store()
+        store = _store(store)
         have = set(store.tables())
         deadline = time.monotonic() + bound_s
         for name, table in SOURCES:
@@ -527,12 +525,32 @@ _word_cache_version = {"v": ""}
 WORD_CACHE_MAX = 500_000
 
 
+#: a MEASUREMENT's own reading tables (tools/measure, --readings-tsv): a
+#: scratch refs.db built from a derived file before the node's sync; None in
+#: the product, which reads the node's refs.db
+STORE_OVERRIDE = None
+
+
+def _store(store=None):
+    if store is not None:
+        return store
+    if STORE_OVERRIDE is not None:
+        return STORE_OVERRIDE
+    from . import refs
+    return refs.read_store()
+
+
+def tables_held(store=None) -> str:
+    """The version of the reading tables held, "" when none is synced — a
+    measurement of the reader refuses to report then (it would compare the
+    reader OFF with itself)."""
+    return lookup([], store).version
+
+
 def lookup(words: Iterable[str], store=None) -> Lookup:
     """The readings of these words (lower-cased), from the synced tables —
     by key, an indexed SEARCH per chunk of 500 words not yet cached."""
-    if store is None:
-        from . import refs
-        store = refs.read_store()
+    store = _store(store)
     want = sorted({w.lower() for w in words})
     out = Lookup()
     have = set(store.tables())
@@ -622,3 +640,29 @@ def words_of(texts: Iterable[str]) -> set[str]:
 def label(version: str) -> str:
     """moved_by's weight name: "historical reading (<source>, <version>)"."""
     return f"historical reading ({version})"
+
+
+
+#: the plain words a node says while its reading tables are not synced
+#: (architecture, 2026-11-18, under RULE 2: "a node whose reading tables are
+#: not synced reads nothing, correctly, but it must SAY so")
+NOT_SYNCED = ("historical reading: no tables synced (wikisource-readings, tlio); "
+              "`louise dev refs-sync --only wikisource-readings` supplies them")
+
+
+def status(plugins=None) -> str | None:
+    """`node show`'s and `hold collection show`'s line about the reader: the
+    tables held and their versions, or NOT_SYNCED; None where no collection
+    the line is for declares year fields (`plugins`: their plugin names;
+    None, every collection held). Never raises."""
+    try:
+        if plugins is None:
+            from . import collections as collections_mod
+            held, _bad = collections_mod.load_all(skip_unreadable=True)
+            plugins = [getattr(c, "plugin", None) for c in held]
+        if not any(year_fields(p) for p in plugins):
+            return None
+        v = tables_held()
+        return f"historical reading: {v}" if v else NOT_SYNCED
+    except Exception as e:   # noqa: BLE001 — a status line never fails its page
+        return f"historical reading: its tables cannot be read ({type(e).__name__})"

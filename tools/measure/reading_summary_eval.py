@@ -222,11 +222,21 @@ def main(argv: list[str] | None = None) -> int:
                     help="a second judge, another family (e.g. louise-chat-command-r7b-q8); repeatable")
     ap.add_argument("--judge-weights", action="append", default=[], metavar="MODEL=SHA256")
     ap.add_argument("--seed", type=int, default=1)
+    ap.add_argument("--readings-tsv", type=Path, help="the derived pairs file: a scratch table synced from it "
+                                                      "by the product's own sync, before the node's")
     a = ap.parse_args(argv)
+    from tools.measure import reading_store
+    version = reading_store.use(a.readings_tsv)
+    if not version:
+        return reading_store.refuse("no reading table is held: the glossary ON arm would equal OFF. Sync "
+                                    "wikisource-readings, or pass --readings-tsv")
     col = collections_mod.by_name(a.collection)
+    if col is None:
+        return reading_store.refuse(f"no collection named {a.collection}")
     con = ro_connect(col)
     rng = random.Random(a.seed)
     pairs, before = pairs_of(a.claims, a.collection, (a.lo, a.hi))
+    print(f"pairs before sampling: {json.dumps(before)}", file=sys.stderr, flush=True)
     rng.shuffle(pairs)
     items: list[dict] = []
     misaligned = refused = 0
@@ -237,7 +247,7 @@ def main(argv: list[str] | None = None) -> int:
                               "prompt_sha256": {"query": _sha(ki.PROMPT), "judge": _sha(JUDGE), "align": _sha(ALIGN),
                                                 "older_rule": _sha(historical.SYSTEM_RULE)},
                               "min_alignment": MIN_ALIGNMENT, "seed": a.seed, "span": [a.lo, a.hi], "rule": RULE,
-                              "pairs_before_sampling": before}, ensure_ascii=False) + "\n")
+                              "pairs_before_sampling": before, "reading_tables": version}, ensure_ascii=False) + "\n")
         # PHASE 1, the chat model only: queries from the historical passages, the
         # modern passage found by the historical one, alignment, the three answers
         for r, modern in pairs:
@@ -271,6 +281,7 @@ def main(argv: list[str] | None = None) -> int:
                 gold, _ = answer(query, gold_hit, glossary=False)
                 with_g, did = answer(query, hist, glossary=True)
                 without_g, _ = answer(query, hist, glossary=False)
+                print(f"pair {len(items) + 1}: {r['uid']} -> {modern}", file=sys.stderr, flush=True)
                 items.append({"uid": r["uid"], "gold_uid": modern, "query": query, "alignment": al,
                               "glossary_changed": did, "gold": gold, "on": with_g, "off": without_g})
         # PHASE 2, BY MODEL: each judge over every answer before the next (one load
@@ -305,8 +316,12 @@ def main(argv: list[str] | None = None) -> int:
                    "to_the_operator": bool(diff.get("ci95") and diff["ci95"][1] < 0),
                    "too_few": len(on) < 30,
                    "rule": RULE}
+        summary["reading_tables"] = version
         out.write(json.dumps({"summary": summary}) + "\n")
-    print(json.dumps(summary), file=sys.stderr)
+    print(json.dumps(summary), file=sys.stderr, flush=True)
+    if not summary["judged"]:
+        return reading_store.refuse(f"nothing was judged ({json.dumps(before)}; refused {refused}, misaligned "
+                                    f"{misaligned}): no number")
     return 0
 
 

@@ -154,6 +154,11 @@ def _publish(c) -> dict[str, Any]:
     return out
 
 
+def _reading_status(loaded) -> str | None:
+    from app import reading
+    return reading.status([getattr(c, "plugin", None) for c in loaded])
+
+
 def show() -> dict[str, Any]:
     from app import collections as collections_mod, health, node_state
     got = collections_mod.load_all(skip_unreadable=True)
@@ -196,6 +201,9 @@ def show() -> dict[str, Any]:
             # "woke 2 annotations (snapshot 2026-11)", "woken by wikipedia
             # 2026-11 — done 03:41"
             "cascade": _cascade(),
+            # the historical reader's tables, or that none is synced (RULE 2;
+            # app/reading.py `status`)
+            "historical_reading": _reading_status(loaded),
             "last_round": last_round(loaded)}
 
 

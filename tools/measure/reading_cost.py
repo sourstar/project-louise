@@ -67,17 +67,9 @@ def sample_hits(name: str, depth: int, seed: int) -> list[dict]:
 
 
 def scratch_store(tsv: Path):
-    import shutil
-    import sqlite3
-    from app.plugins.base import RefSyncState
-    from app.refs import store as rs, wikisource_readings as wr
-    d = Path(tempfile.mkdtemp(prefix="reading-cost-"))
-    shutil.copy(tsv, d / wr.FINAL)
-    con = rs.connect(d / "refs.db")
-    rs.sync_source(con, wr.WikisourceReadingsSource(), RefSyncState(ref_root=d))
-    con.row_factory = sqlite3.Row
-    return rs.RefStore(con, [wr.WikisourceReadingsSource().schema()])
-
+    """The shared scratch tables, synced by the product's own sync (tools/measure/reading_store.py)."""
+    from tools.measure import reading_store
+    return reading_store.scratch(tsv)
 
 def main(argv: list[str] | None = None) -> int:
     from app import reading

@@ -557,3 +557,19 @@ def test_an_agent_statement_is_about_this_record_by_its_own_line_or_the_one_befo
     # rule 1 keeps its 400 characters: the title page's type with the title near it
     assert historical.is_translation(_book("I viaggi di Gio. da Mandavilla", "Mandeville, John",
                                            "I VIAGGI\nDI GIO. DA MANDAVILLA\n\n\nVOLGARIZZAMENTO\nANTICO TOSCANO"))
+
+
+def test_a_node_without_reading_tables_says_so_and_what_supplies_them(monkeypatch):
+    monkeypatch.setattr(reading, "tables_held", lambda store=None: "")
+    assert reading.status(["gutenberg"]) == reading.NOT_SYNCED
+    assert "refs-sync --only wikisource-readings" in reading.NOT_SYNCED
+    assert reading.status(["pubmed"]) is None                    # no collection here dates its records
+    monkeypatch.setattr(reading, "tables_held", lambda store=None: "wikisource-readings 3 abc")
+    assert reading.status(["gutenberg", "pubmed"]) == "historical reading: wikisource-readings 3 abc"
+
+
+def test_node_show_carries_the_reading_line(monkeypatch):
+    from types import SimpleNamespace
+    from app import node_show
+    monkeypatch.setattr(reading, "tables_held", lambda store=None: "")
+    assert node_show._reading_status([SimpleNamespace(plugin="gutenberg")]) == reading.NOT_SYNCED

@@ -62,7 +62,14 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--depth", type=int, default=50)
     ap.add_argument("--permutations", type=int, default=10000)
     ap.add_argument("--seed", type=int, default=1)
+    ap.add_argument("--readings-tsv", type=Path, help="the derived pairs file: a scratch table synced from it "
+                                                      "by the product's own sync, before the node's")
     a = ap.parse_args(argv)
+    from tools.measure import reading_store
+    version = reading_store.use(a.readings_tsv)
+    if not version:
+        return reading_store.refuse("no reading table is held: copy ON would read nothing and be compared with "
+                                    "OFF. Sync wikisource-readings, or pass --readings-tsv")
     lines = [json.loads(x) for x in a.set.read_text(encoding="utf-8").splitlines() if x.strip()]
     queries = [q for q in lines if "qid" in q and not q.get("refused")]
     col = collections_mod.by_name(a.collection)
@@ -70,7 +77,9 @@ def main(argv: list[str] | None = None) -> int:
     rows = []
     with open(a.out, "w", encoding="utf-8") as out:
         out.write(json.dumps({"set": a.set.name, "set_header": lines[0] if lines and "qid" not in lines[0] else None,
-                              "depth": a.depth, "seed": a.seed, "rule": RULE}, ensure_ascii=False) + "\n")
+                              "depth": a.depth, "seed": a.seed, "rule": RULE, "reading_tables": version,
+                              "tables_from": str(a.readings_tsv) if a.readings_tsv else "the node's refs.db"},
+                             ensure_ascii=False) + "\n")
         for q in queries:
             on_hits, off_hits = search(con, col, q["query"], a.depth, True), search(con, col, q["query"], a.depth, False)
             r_on, r_off = rank_of(on_hits, q["uid"]), rank_of(off_hits, q["uid"])
@@ -98,8 +107,12 @@ def main(argv: list[str] | None = None) -> int:
         loss = (overall["mrr_off"] or 0) - (overall["mrr_on"] or 0)
         summary = {**overall, "by_century": {k: block(v) for k, v in sorted(by_century.items())},
                    "loss_over_0_02": loss > 0.02, "rule": RULE}
+        summary["reading_tables"] = version
         out.write(json.dumps({"summary": summary}, ensure_ascii=False) + "\n")
     print(json.dumps(summary), file=sys.stderr)
+    if not overall["queries_with_a_moved_hit"]:
+        return reading_store.refuse("zero queries had a hit whose copy changed: the run measured nothing "
+                                    "(the rows are written, the number is not a result)")
     return 0
 
 

@@ -98,6 +98,8 @@ def test_its_own_pairs_and_each_judge_over_all_answers_before_the_next(monkeypat
                                                                     "gutenberg:4")], {"records_with_a_modern_version": 2,
                                                                                       "historical_in_span": 2}))
     monkeypatch.setattr(collections_mod, "by_name", lambda n: SimpleNamespace(name=n))
+    from app import reading
+    monkeypatch.setattr(reading, "tables_held", lambda store=None: "wikisource-readings 3 abc")
     monkeypatch.setattr(e, "ro_connect", lambda c: None)
     monkeypatch.setattr(llm, "chat", lambda m, temperature, max_tokens: "Che cosa accadde nella sala?")
     monkeypatch.setattr(e, "best_passage", lambda con, col, q, uid: {"hits": [{"text": "t " + uid}], "catalog": []})
@@ -115,3 +117,22 @@ def test_its_own_pairs_and_each_judge_over_all_answers_before_the_next(monkeypat
     assert order == [None] * 4 + ["louise-chat-command-r7b-q8"] * 4
     summary = lines[-1]["summary"]
     assert summary["judged"] == 2 and summary["agreement_on"] == 4.0 and summary["too_few"] is True
+
+
+
+def test_it_refuses_without_reading_tables_and_says_why_when_nothing_was_judged(monkeypatch, tmp_path, capsys):
+    from types import SimpleNamespace
+    from app import collections as collections_mod, reading
+    monkeypatch.setattr(reading, "tables_held", lambda store=None: "")
+    assert e.main(["--collection", "g", "--claims", str(tmp_path / "c"), "--out", str(tmp_path / "o"),
+                   "--weights-sha256", "a"]) == 2
+    assert "REFUSED: no reading table is held" in capsys.readouterr().err
+    monkeypatch.setattr(reading, "tables_held", lambda store=None: "wikisource-readings 3 abc")
+    monkeypatch.setattr(collections_mod, "by_name", lambda n: SimpleNamespace(name=n))
+    monkeypatch.setattr(e, "ro_connect", lambda c: None)
+    monkeypatch.setattr(e, "pairs_of", lambda claims, name, span: ([], {"records_with_a_modern_version": 0,
+                                                                        "historical_in_span": 0}))
+    assert e.main(["--collection", "g", "--claims", str(tmp_path / "c"), "--out", str(tmp_path / "o"),
+                   "--weights-sha256", "a"]) == 2
+    err = capsys.readouterr().err
+    assert "pairs before sampling" in err and "REFUSED: nothing was judged" in err

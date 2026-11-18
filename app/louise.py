@@ -4577,8 +4577,22 @@ def cmd_show(a) -> int:
     # "woke 2 annotations (snapshot 2026-11)"; as an annotations collection,
     # "woken by wikipedia 2026-11 — running, started 03:12"
     out["cascade"] = _cascade_state(a.root, name, codex)
+    # the historical reader (app/reading.py; RULE 2): its tables, or that none
+    # is synced and what supplies them — for a collection whose plugin dates
+    # its records (gutenberg), absent otherwise
+    from app import reading
+    line = reading.status([getattr(codex, "plugin", None) or _plugin_of(codex)])
+    if line:
+        out["historical_reading"] = line
     _print(out)
     return 0
+
+
+def _plugin_of(codex) -> str | None:
+    try:
+        return codex.get("plugin") if isinstance(codex, dict) else getattr(codex, "plugin", None)
+    except Exception:   # noqa: BLE001
+        return None
 
 
 def _cascade_state(root, name: str, codex) -> dict | None:
