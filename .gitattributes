@@ -9,3 +9,4 @@ calibration/** -text
 app/static/vendor/** -text
 *.png binary
 *.npy binary
+tools/lexicon/*.legalcode.txt -text

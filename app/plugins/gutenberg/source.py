@@ -190,6 +190,11 @@ ISSUES = {
                           "the reference is dropped from the text and the figures",
     "epub-document-missing": "the epub's reading order (spine) names a document the epub does "
                              "not contain or its manifest does not list; that text is not read",
+    # operator, 2026-11-18: "Add these inconsistencies to the report but before
+    # double check for postumous publications" — app/ask/works.py
+    "summary-date-outside-life": "PG's summary (marc520) dates the work before its author's birth, or "
+                                 "says it was written after the author's death (a posthumous "
+                                 "publication is never reported); the reader judges",
 }
 
 
@@ -248,6 +253,18 @@ def _refuse_if_broken(meta: dict, native_id: int) -> None:
 class GutenbergSource:
     source_id = "gutenberg"
     license_class = LicenseClass.GREEN
+    #: the record fields stating its WORK's year, in order, for the historical
+    #: reader (app/reading.py; app/ask/works.py `EditionFacts`; architecture's
+    #: ruling, 2026-11-18): the first publication PG's marc520 summary
+    #: states, then its authors' lifetime with the summary's century
+    #: (operator: "Author's birth/death places the book in time pretty
+    #: precisely (assume a date in the middle)"; "The century publication
+    #: date is equally important"). Never the edition's year nor a
+    #: translator's dates (operator: "Publication date (not the first) is
+    #: totally unreliable, do not consider it at all, same for
+    #: translations"), never `extra.issued`. A translation keeps its work's
+    #: year and is never read by the glossary.
+    publication_year_fields = ("first_published", "lived")
     # 06 §6.1's corpus credit. Green, so nothing compels it — and it is here
     # anyway: a provider that asks for nothing is still the provider, and
     # 02 §2.7 puts a corpus entry in every collection's `credits`.
@@ -329,7 +346,18 @@ class GutenbergSource:
     #: never in `content_hash` (09 §9.5) and the marker never depended on
     #: the type. The collection that adopts this parser is a new one whose
     #: vectors all carry (02 §2.4 A1c, `louise dev carry --rebuilt`).
-    PARSER_VERSION = 11
+    #: PARSER 12 (2026-11-18, München's count: 45,926 of 79,658 records
+    #: hold a fragment): a header field runs on over its unindented
+    #: continuation lines (PG wraps a credit without indenting it), a URL's
+    #: colon starts no field, and a producer credit is read on one line and
+    #: cut at its EARLIEST note — "the Online" and "the Online\nDistributed
+    #: Proofreading Team at http://www.pgdp.net (This\nfile was produced"
+    #: were two producers of one cut credit. `extra.text_header` and the
+    #: producers of `extra.creators_detail` move; `sections`, every chunk
+    #: and every vector do not, so the collection that adopts it carries
+    #: its vectors (02 §2.4 A1c, `louise dev carry --rebuilt`). marc508 kept
+    #: the credit verbatim throughout: nothing was lost, only mis-split.
+    PARSER_VERSION = 12
     #: 06 §6.2: Project Gutenberg rewrites a book's files under the same
     #: number, and keeps no earlier version anyone can fetch — a part this
     #: collection re-issues can only be checked against its newer self, so
@@ -577,18 +605,24 @@ class GutenbergSource:
         # unparsed sentence in a header blob credited them less precisely
         # than everyone else in the same record.
         #
-        # From both places PG writes them: the text file's `Credits:`
-        # field and the RDF's marc508.
-        produced = []
-        for credit in ([text_header.get("Credits", "")]
-                       + list(meta["marc"].get("508", []))):
-            produced.extend(pg_text.producers(credit))
+        # From both places PG writes them: the RDF's marc508 (verbatim, so
+        # first) and the text file's `Credits:` field — once each, a
+        # fragment of a cut credit dropped (parser 12, pg_text.merged_producers)
+        produced = pg_text.merged_producers(list(meta["marc"].get("508", []))
+                                            + [text_header.get("Credits", "")])
         named = {a.get("name") for a in meta["creators_detail"]}
         credits_detail = list(meta["creators_detail"]) + [
             {"name": n, "role": "producer"}
-            for n in dict.fromkeys(produced) if n not in named]
+            for n in produced if n not in named]
         subjects = [s.strip() for s in meta["subjects"].split("|") if s.strip()]
         edition_year, edition_source = edition_date(meta["marc"], text_header)
+        # the summary's date against the author's lifetime, by the year rule's
+        # own functions (app/ask/works.py): reported, never applied to the record
+        from app.ask import works as _works
+        why = _works.summary_date_outside_life({"date": edition_year, "extra": {
+            "marc": meta["marc"], "creators_detail": meta["creators_detail"]}})
+        if why:
+            found.append(Issue(_works.SUMMARY_DATE_OUTSIDE_LIFE, why))
         return CanonicalDoc(
             uid=f"{self.source_id}:{native_id}",
             title=meta["title"],

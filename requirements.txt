@@ -132,3 +132,11 @@ tokenizers==0.22.1
 # parse otherwise than json.loads goes to json.loads. Prebuilt manylinux
 # cp312 wheels, no toolchain in the image.
 orjson==3.13.0
+# RANDOM ACCESS INTO ONE BZIP2 STREAM (operator, 2026-11-18: "A"; app/bz2_blocks.py):
+# records-vs-origin asks wikidata's 103 GB one-stream dump for the blocks around
+# each sampled record, found in the copy's block index — indexed_bzip2's parallel
+# reader and its `block_offsets()` (MIT, github.com/mxmlnkn/indexed_bzip2). 1.7.0,
+# released 2025-07-21, prebuilt manylinux_2_28 cp312 x86_64 wheel (no toolchain in
+# the image); 2.0.0 was released 2026-11-18, too new to take (pinned versions are
+# at least two weeks old).
+indexed_bzip2==1.7.0

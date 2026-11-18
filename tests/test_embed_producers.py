@@ -214,11 +214,14 @@ def test_a_background_thread_started_by_one_does_not_compound(monkeypatch):
 
 
 @linux_only
-def test_a_parse_child_sits_at_the_workers_base_plus_ten_whoever_started_it():
+def test_a_parse_child_sits_at_the_workers_base_plus_ten_whoever_started_it(monkeypatch):
     """A child process inherits its starter's nice; started from a lowered
     pipeline thread, a relative nice(10) put it at 15, below the index
     maintainer — whose rule is that it yields to parsing."""
     from app import parallel
+    # the child's parent watch is a thread for the life of the process: not
+    # in the test's (tests/conftest.py, nothing_only_a_child_does_is_done_here)
+    monkeypatch.setattr(parallel, "watch_parent", lambda: None)
     base = os.getpriority(os.PRIO_PROCESS, os.getpid())
     seen = {}
 

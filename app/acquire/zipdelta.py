@@ -34,7 +34,7 @@ import zipfile
 import zlib
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable, Protocol
+from typing import Any, Callable, NamedTuple, Protocol
 
 from . import backoff as _backoff_defaults
 from .spec import TransportError
@@ -66,6 +66,25 @@ class MemberMismatch(TransportError):
 
 class DeltaNotWorthIt(TransportError):
     """More than `WHOLE_IS_CHEAPER` of the file changed: fetch it whole."""
+
+
+class RangeRefused(TransportError):
+    """The origin answered a Range request with neither 206 nor 200: `status`
+    is its code — 404 or 410, the file no longer served (a dated dump's run
+    gone: app/acquire/block_origin.py). A TransportError, so every caller
+    that caught the transport's error before catches this one."""
+
+    def __init__(self, message: str, status: int) -> None:
+        super().__init__(message)
+        self.status = int(status)
+
+
+class _Answer(NamedTuple):
+    """An origin's answer to one Range request: its status, its headers, and
+    its body — empty for a 200, which is never read (`HttpRangeReader._answer`)."""
+    status_code: int
+    headers: Any
+    content: bytes
 
 
 class RangeReader(Protocol):
@@ -105,7 +124,8 @@ class HttpRangeReader:
     ATTEMPTS = _backoff_defaults.DEFAULT_ATTEMPTS
 
     def __init__(self, url: str, headers: dict, *, charge: Callable[[int], None] | None = None,
-                 timeout: float = 60.0, sleep: Callable[[float], None] | None = None) -> None:
+                 timeout: float = 60.0, sleep: Callable[[float], None] | None = None,
+                 keep_alive: bool = False) -> None:
         self.url, self.headers, self.timeout = url, dict(headers), timeout
         if charge is None:
             from . import budget
@@ -113,6 +133,39 @@ class HttpRangeReader:
         self.charge = charge
         self.sleep = sleep if sleep is not None else _sleep
         self._total: int | None = None
+        #: KEEP-ALIVE, for a reader that asks many small ranges of one file
+        #: (records-vs-origin's blocks, app/acquire/block_origin.py: ~100 KB
+        #: each, thousands a check): one connection held for the reader's
+        #: life instead of a TLS handshake a range. Off by default: the
+        #: mend's and the delta's few large ranges keep a client a request.
+        #: One reader a thread; a dropped connection is opened again for the
+        #: retry.
+        self.keep_alive = bool(keep_alive)
+        self._client = None
+
+    def _held(self):
+        if not self.keep_alive:
+            return None
+        if self._client is None:
+            import httpx
+            self._client = httpx.Client(timeout=self.timeout, follow_redirects=True)
+        return self._client
+
+    def close(self) -> None:
+        if self._client is not None:
+            try:
+                self._client.close()
+            finally:
+                self._client = None
+
+    def _answer(self, client, range_header: str) -> _Answer:
+        """One request, streamed: A 200 IS THE WHOLE FILE and its body is never
+        read — an origin that ignored Range would otherwise pour a 103 GB dump
+        into this process's memory before any caller could say
+        RangeUnsupported (2026-11-18, found while wiring the block origin);
+        any other answer's body is read, as before."""
+        with client.stream("GET", self.url, headers={**self.headers, "Range": range_header}) as r:
+            return _Answer(r.status_code, r.headers, b"" if r.status_code == 200 else r.read())
 
     def _get(self, range_header: str):
         """One Range request, answered or the transport's error (`TransportError`,
@@ -126,9 +179,14 @@ class HttpRangeReader:
                            sleep=self.sleep)
         for _ in r_:
             try:
-                with httpx.Client(timeout=self.timeout, follow_redirects=True) as client:
-                    r = client.get(self.url, headers={**self.headers, "Range": range_header})
+                held = self._held()
+                if held is not None:
+                    r = self._answer(held, range_header)
+                else:
+                    with httpx.Client(timeout=self.timeout, follow_redirects=True) as client:
+                        r = self._answer(client, range_header)
             except httpx.TransportError as e:          # timeouts, drops, resets
+                self.close()                           # a held connection: a fresh one for the retry
                 r_.episode(f"{type(e).__name__}: {e}", cause=e)
                 continue
             except httpx.HTTPError as e:
@@ -145,7 +203,7 @@ class HttpRangeReader:
             if r.status_code == 200:
                 raise RangeUnsupported(f"{self.url}: the origin answered a one-byte Range with the whole file")
             if r.status_code != 206:
-                raise TransportError(f"{self.url}: {r.status_code} to a Range request")
+                raise RangeRefused(f"{self.url}: {r.status_code} to a Range request", r.status_code)
             cr = r.headers.get("content-range", "")
             try:
                 self._total = int(cr.rsplit("/", 1)[1])
@@ -159,7 +217,7 @@ class HttpRangeReader:
         if r.status_code == 200:
             raise RangeUnsupported(f"{self.url}: the origin ignored Range and answered 200")
         if r.status_code != 206:
-            raise TransportError(f"{self.url}: {r.status_code} to Range {start}-{end}")
+            raise RangeRefused(f"{self.url}: {r.status_code} to Range {start}-{end}", r.status_code)
         self.charge(len(r.content))
         return r.content
 

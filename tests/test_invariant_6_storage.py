@@ -206,6 +206,7 @@ _DERIVED_WRITERS = {
     "app/acquire/work_trees.py": "eurlex's whole tree per work, fetched again from Cellar on a miss",
     "app/acquire/cellar_listing.py": "Cellar's listing windows kept between passes, paged again on a miss",
     "app/acquire/neuris_snapshot.py": "NeuRIS's daily snapshot, a transport downloaded again from the API's link",
+    "app/bz2_blocks.py": "a one-stream bz2 file's block index, rebuilt from the file (records-vs-origin's blocks)",
 }
 
 
