@@ -342,3 +342,17 @@ def test_records_vs_origin_compares_the_codexs_shape_on_both_sides(plates_shard)
     assert out.result == chk.PASS, out.why
     assert out.detail["failed"] == []
     assert out.detail["records"] >= 2
+
+
+def test_the_cap_admits_the_most_illustrated_real_book_and_the_document_says_the_same():
+    """08 §8.7, amended 2026-11-18: gutenberg:47273 at parser 12 names 4,464
+    figures and the build refused it at 4,096 — a real book, which the cap
+    must never refuse. 16,384 now, and docs/08 states the number the code
+    applies."""
+    from pathlib import Path
+    from app.hold import figures as fig
+    from app.pack import build
+    build._refuse_too_many_figures({"uid": "gutenberg:47273", "figures": [{}] * 4464})
+    assert fig.MAX_PER_RECORD == 16_384
+    doc = (Path(__file__).resolve().parents[2] / "docs" / "08-adversarial.md").read_text(encoding="utf-8")
+    assert f"at most {fig.MAX_PER_RECORD:,} figures per record" in doc
