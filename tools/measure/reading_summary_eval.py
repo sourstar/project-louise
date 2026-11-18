@@ -179,10 +179,21 @@ def paired_stats(diffs: list[float], permutations: int, seed: int) -> dict:
             "ci95": [round(boots[49], 4), round(boots[1949], 4)]}
 
 
+def _light(r: dict) -> dict:
+    """A record without its text: what pairing and the translation marks
+    read — its front matter kept, never its sections (the node: loading
+    every claimed record whole killed the run at 8 GB, 2026-11-18)."""
+    from app import historical
+    return {"uid": r["uid"], "lang": r.get("lang"), "title": r.get("title"), "creators": r.get("creators"),
+            "extra": r.get("extra"), "sections": [["Front matter", historical.front_matter(r)]]}
+
+
 def pairs_of(claims: Path, collection: str, span: tuple[int, int]) -> tuple[list[tuple[dict, str]], dict]:
     """The eval's OWN set (architecture, 2026-11-18): every historical record
     (Italian, its work's year in `span`, not a translation) with a held
-    MODERN version (`modern_partners`), and the count before sampling."""
+    MODERN version (`modern_partners`), and the count before sampling. One
+    streamed pass, each claimed record kept LIGHT (`_light`); the texts of
+    the historical records sampled are read after (`texts_of`)."""
     from app import reading
     from tools.measure.reading_known_items import records_of
     wanted: set[str] = set()
@@ -191,8 +202,8 @@ def pairs_of(claims: Path, collection: str, span: tuple[int, int]) -> tuple[list
             c = json.loads(line)
             if c.get("type") in ("same-work", "translation-of"):
                 wanted.update((str(c.get("subject")), str(c.get("object"))))
-    records = {r["uid"]: r for r in records_of(collection, random.Random(0), lang=None) if r["uid"] in wanted}
-    partners = modern_partners(claims, {u: {k: v for k, v in r.items() if k != "sections"} for u, r in records.items()})
+    records = {r["uid"]: _light(r) for r in records_of(collection, random.Random(0), lang=None) if r["uid"] in wanted}
+    partners = modern_partners(claims, records)
     out = []
     for hist, modern in partners.items():
         r = records[hist]
@@ -202,7 +213,14 @@ def pairs_of(claims: Path, collection: str, span: tuple[int, int]) -> tuple[list
         if y is None or y.translated or not span[0] <= y <= span[1]:
             continue
         out.append((r, modern))
-    return out, {"records_with_a_modern_version": len(partners), "historical_in_span": len(out)}
+    return out, {"claimed_records": len(records), "records_with_a_modern_version": len(partners),
+                 "historical_in_span": len(out)}
+
+
+def texts_of(collection: str, uids: set[str]) -> dict[str, dict]:
+    """The whole records of these uids only, in one streamed pass."""
+    from tools.measure.reading_known_items import records_of
+    return {r["uid"]: r for r in records_of(collection, random.Random(0), lang=None) if r["uid"] in uids}
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -238,6 +256,10 @@ def main(argv: list[str] | None = None) -> int:
     pairs, before = pairs_of(a.claims, a.collection, (a.lo, a.hi))
     print(f"pairs before sampling: {json.dumps(before)}", file=sys.stderr, flush=True)
     rng.shuffle(pairs)
+    # the texts of the records sampled only — at most --n of them, read whole
+    pairs = pairs[: a.n]
+    whole = texts_of(a.collection, {r["uid"] for r, _m in pairs}) if pairs else {}
+    pairs = [(whole[r["uid"]], m) for r, m in pairs if r["uid"] in whole]
     items: list[dict] = []
     misaligned = refused = 0
     with open(a.out, "w", encoding="utf-8") as out:

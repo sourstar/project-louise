@@ -97,6 +97,7 @@ def test_its_own_pairs_and_each_judge_over_all_answers_before_the_next(monkeypat
     monkeypatch.setattr(e, "pairs_of", lambda claims, name, span: ([(rec, "gutenberg:2"), (dict(rec, uid="gutenberg:3"),
                                                                     "gutenberg:4")], {"records_with_a_modern_version": 2,
                                                                                       "historical_in_span": 2}))
+    monkeypatch.setattr(e, "texts_of", lambda name, uids: {u: dict(rec, uid=u) for u in uids})
     monkeypatch.setattr(collections_mod, "by_name", lambda n: SimpleNamespace(name=n))
     from app import reading
     monkeypatch.setattr(reading, "tables_held", lambda store=None: "wikisource-readings 3 abc")
@@ -136,3 +137,23 @@ def test_it_refuses_without_reading_tables_and_says_why_when_nothing_was_judged(
                    "--weights-sha256", "a"]) == 2
     err = capsys.readouterr().err
     assert "pairs before sampling" in err and "REFUSED: nothing was judged" in err
+
+
+
+def test_pairing_keeps_claimed_records_light_and_reads_only_the_sampled_texts(monkeypatch, tmp_path):
+    from tools.measure import reading_known_items as ki
+    from app import reading
+    claims = tmp_path / "c.jsonl"
+    claims.write_text(json.dumps({"type": "same-work", "subject": "gutenberg:2", "object": "gutenberg:1"}) + "\n",
+                      encoding="utf-8")
+    big = {"uid": "gutenberg:1", "lang": "it", "title": "Commedia", "extra": {},
+           "sections": [["Front matter", "LA COMMEDIA"], ["Canto I", "x" * 100_000]]}
+    eng = {"uid": "gutenberg:2", "lang": "en", "title": "The Divine Comedy", "extra": {}, "sections": [["I", "y"]]}
+    other = {"uid": "gutenberg:9", "lang": "en", "title": "Unclaimed", "extra": {}, "sections": [["I", "z" * 100_000]]}
+    monkeypatch.setattr(ki, "records_of", lambda name, rng, lang="it": iter([big, eng, other]))
+    monkeypatch.setattr(reading, "years", lambda hits, collection=None: {0: reading.Year(1310, "x")})
+    pairs, before = e.pairs_of(claims, "g", (1200, 1900))
+    assert before == {"claimed_records": 2, "records_with_a_modern_version": 1, "historical_in_span": 1}
+    (light, modern), = pairs
+    assert modern == "gutenberg:2" and len(json.dumps(light)) < 1000           # no text kept
+    assert e.texts_of("g", {"gutenberg:1"})["gutenberg:1"]["sections"][1][1] == "x" * 100_000
