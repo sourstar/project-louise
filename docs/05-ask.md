@@ -823,6 +823,27 @@ loading took longer than N s"; a query encoder's does the same to the
 vector leg, in `legs_withheld`. A runner that cannot say what it holds
 is asked as before, and its load counts against the budget.
 
+*Amended 2026-11-18* (operator: "Yes to both, replacing the words the
+reranker does not know with the words it knows, just enables it to do its
+job"; docs/notes/historical-languages.md, "Proposal: a reading annotation
+for historical Italian"). **The reranker reads a copy of each record's
+chunks with its period's old words read**, where the record states a
+publication year a reading holds — the fields its plugin declares, in
+order (`publication_year_fields`; gutenberg: the work's first publication,
+then the print year of the edition PG transcribed; never PG's release
+date) — and no copy otherwise. A word with an attested modern form (the
+`wikisource-readings` reference source, 06 §6.5) is replaced by it, case
+kept; one with only a lemma (`tlio`) keeps its place with the lemma after
+it, `abondava [abbondare]`. The result shows the record's own text. This
+is a reorder under invariant 4's WEIGHTS rule: the ORIGINAL of each
+changed text is scored in the same call, and each record whose place
+differs carries `moved_by` `{"weight": "historical reading (<source>
+<ref_version> <digest>; …)", "from": <its place read as it was>, "to":
+<its place now>}`; nothing is removed; the same reading versions give the
+same order. On by default; off only for its measurement
+(`retrieval.READING_RERANK`, from the command line). The chat model's
+copy (§5.3 answer) carries the lemma and its definition, capped.
+
 ## 5.7 Facets: the categories, and what is in them
 
 A filter nobody can enumerate is close to useless — nobody guesses
