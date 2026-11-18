@@ -493,7 +493,7 @@ def _record_text(record: dict[str, Any]) -> str:
 #: Counted on the node's 1,112 Italian gutenberg records: 4 match, 2 of them
 #: without a trl credit (54167 "…in Italiana tradotto", 40326 "Traduzione di
 #: …"); PG's RDF holds no marc041, 240 or 500 for them.
-_STATED = re.compile(r"\b(?:tradott[oa]|traduzione|versione\s+di|recat[oa]\s+in|volgarizzament[oi]|"
+_STATED = re.compile(r"\b(?:tradott[oa]|traduzion[ei]|versione\s+di|recat[oa]\s+in|volgarizzament[oi]|"
                      r"translated|translation)\b", re.IGNORECASE)
 
 
@@ -516,6 +516,39 @@ _FRONT = re.compile(r"(?:\btranslated\s+by\b"
 #: the front matter read where a record has no "Front matter" section: its
 #: first characters
 FRONT_CHARS = 5000
+
+
+#: a front-matter statement counts only ABOUT THIS RECORD (architecture,
+#: 2026-11-18): its own title's first two significant words, or one of its
+#: authors' surnames, within NEAR characters before or after it — a
+#: publisher's list of other books on the title page (41600: "VENICE by
+#: Pompeo Molmenti. Translated by Alethea Wiel") is not about the record
+NEAR = 400
+_SKIP = frozenset("il lo la i gli le l un una uno di del della dello dei degli delle da dal dalla dallo dai "
+                  "in a al alla allo ai e ed o per con su the an of and to by".split())
+
+
+def _fold(text: str) -> str:
+    import unicodedata
+    return "".join(c for c in unicodedata.normalize("NFKD", text) if not unicodedata.combining(c)).lower()
+
+
+def _anchors(record: dict[str, Any]) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """(the title's first two significant words, the authors' surnames), folded."""
+    words = [w for w in re.findall(r"[^\W\d_]+", _fold(str(record.get("title") or ""))) if w not in _SKIP]
+    names = [str(a.get("name") or "") for a in (record.get("extra") or {}).get("creators_detail") or []
+             if isinstance(a, dict) and str(a.get("role") or "") in ("aut", "author", "cre", "creator")]
+    names += [str(c) for c in record.get("creators") or []]
+    surnames = {_fold(n.split(",")[0]).strip().split()[-1] for n in names if n.strip() and n.split(",")[0].strip()}
+    return tuple(words[:2]), tuple(sorted(s for s in surnames if len(s) > 2))
+
+
+def _near(front: str, m: re.Match, anchors: tuple[tuple[str, ...], tuple[str, ...]]) -> bool:
+    """The record's own title words (both) or an author's surname within NEAR of the match."""
+    window = _fold(front[max(0, m.start() - NEAR): m.end() + NEAR])
+    has = lambda w: re.search(r"\b" + re.escape(w) + r"\b", window) is not None
+    title, surnames = anchors
+    return bool((title and all(has(w) for w in title)) or any(has(s) for s in surnames))
 
 
 def front_matter(record: dict[str, Any]) -> str:
@@ -550,7 +583,8 @@ def is_translation(record: dict[str, Any]) -> bool:
     if _STATED.search(" ".join(stated)):
         return True
     front = front_matter(record)
-    return bool(_FRONT_CAPS.search(front) or _FRONT.search(front))
+    anchors = _anchors(record)
+    return any(_near(front, m, anchors) for pat in (_FRONT_CAPS, _FRONT) for m in pat.finditer(front))
 
 
 def record_first_published(record: dict[str, Any]) -> int | None:

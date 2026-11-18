@@ -487,41 +487,55 @@ def test_a_writing_verb_governs_during_and_produced_and_crafted_are_writing():
 
 
 
-def test_the_front_matter_marks_a_translation_and_the_body_never():
+
+
+
+def _book(title, author, front, **extra):
+    return {"title": title, "extra": {"creators_detail": [{"name": author, "role": "cre"}], **extra},
+            "sections": [["Front matter", front], ["Capitolo I", "Testo."]]}
+
+
+def test_the_front_matter_marks_a_translation_about_this_record():
     from app import historical
-    lammermoor = {"title": "La promessa sposa di Lammermoor", "extra": {"creators_detail": [{"role": "cre"}]},
-                  "sections": [["Front matter", "LA PROMESSA SPOSA DI LAMMERMOOR. Translated by Gaetano Barbieri."],
-                               ["Capitolo I", "Testo."]]}                                              # 42881
-    assert historical.is_translation(lammermoor)
-    assert historical.is_translation({"sections": [["Front matter", "I DIALOGHI DI LUCIANO VOLGARIZZATI _DAL greco"]]})
-    assert historical.is_translation({"sections": [["Front matter", "PRIMA VERSIONE ITALIANA DI G. B."]]})  # 67846
-    assert historical.is_translation({"sections": [["Front matter", "VOLGARIZZAMENTO ANTICO TOSCANO"]]})  # 60864
-    assert historical.is_translation({"sections": [["Front matter", "tradotto dal francese da un anonimo"]]})
-    assert historical.is_translation({"sections": [["Front matter", "recato in italiano da L. P."]]})
-    # 45334: a figure, not a translation
-    assert not historical.is_translation({"sections": [["Front matter", "una storia tradotta dal regno dei sogni"]]})
-    # no Front matter section: the first 5,000 characters only; a phrase deep in the body is never read
-    deep = {"sections": [["Capitolo I", "x " * 3000], ["Capitolo XX", "Translated by nobody, said the knight."]]}
-    assert not historical.is_translation(deep)
-    early = {"sections": [["Capitolo I", "Translated by Ugo Foscolo. " + "x " * 3000]]}
-    assert historical.is_translation(early)
+    caught = [
+        _book("La promessa sposa di Lammermoor", "Scott, Walter",
+              "LA PROMESSA SPOSA DI LAMMERMOOR, by Sir Walter Scott, Translated by Gaetano Barbieri. "
+              "VOLGARIZZATI _DAL_ inglese"),                                                        # 42881
+        _book("Garibaldi e Montevideo", "Dumas, Alexandre",
+              "GARIBALDI E MONTEVIDEO DI ALESSANDRO DUMAS VERSIONE ITALIANA"),                       # 53485
+        _book("I viaggi di Gio. da Mandavilla", "Mandeville, John",
+              "I VIAGGI DI GIO. DA MANDAVILLA VOLGARIZZAMENTO ANTICO TOSCANO"),                     # 60864
+        _book("Le avventure di Telemaco", "Fénelon, François",
+              "LE AVVENTURE DI TELEMACO, PRIMA VERSIONE ITALIANA"),                                 # 67846-like
+        _book("Dialoghi di Luciano", "Luciano", "I DIALOGHI DI LUCIANO volgarizzati dal greco"),
+        _book("Storia della Grecia", "Grote, George", "STORIA DELLA GRECIA di Giorgio Grote, recata in italiano"),
+    ]
+    for rec in caught:
+        assert historical.is_translation(rec), rec["title"]
+    assert historical.is_translation({"title": "Traduzioni", "extra": {}})                           # 47890
 
 
-def test_a_translation_by_its_front_matter_is_never_read():
-    rec = {"title": "La promessa sposa di Lammermoor", "date": "1830",
-           "extra": {"marc": {"520": ["... by Walter Scott is a historical novel published in 1819."]},
-                     "creators_detail": [{"name": "Scott, Walter", "role": "cre", "birth": "1771", "death": "1832"}]},
-           "sections": [["Front matter", "Translated by Gaetano Barbieri."]]}
+def test_a_statement_not_about_this_record_is_not_a_translation():
+    from app import historical
+    filler = " " + "Testo della prefazione. " * 30 + " "
+    not_caught = [
+        # 41600: a publisher's list of other books, far from this record's title and author
+        _book("Le cronache della città", "Balzani, Ugo",
+              "LE CRONACHE DELLA CITTÀ di Ugo Balzani." + filler +
+              "Other books: VENICE by Pompeo Molmenti. Translated by Alethea Wiel."),
+        # 62038, 56500: a preface talking of volgarizzamenti, no title-page type, no agent
+        _book("Le cronache italiane", "Balzani, Ugo", "i volgarizzamenti del Trecento sono testimoni preziosi."),
+        _book("Rime", "Petrarca, Francesco", "edizione condotta sull'autografo; la versione italiana più antica."),
+        # 72321-like: a body figure, lower-case
+        _book("Novelle", "Verga, Giovanni", "una storia tradotta dal regno dei sogni"),
+    ]
+    for rec in not_caught:
+        assert not historical.is_translation(rec), rec["title"]
+
+
+def test_a_translation_by_its_front_matter_keeps_its_works_year_and_is_never_read():
+    rec = _book("La promessa sposa di Lammermoor", "Scott, Walter", "by Sir Walter Scott, Translated by Gaetano Barbieri",
+                marc={"520": ["... by Walter Scott is a historical novel published in 1819."]})
+    rec["date"] = "1830"
     y = _year(rec)
     assert y == 1819 and y.translated
-
-
-
-def test_a_preface_talking_of_volgarizzamenti_is_not_a_translation():
-    from app import historical
-    for text in ["Nella prefazione: i volgarizzamenti del Trecento sono testimoni preziosi della lingua.",   # 62038
-                 "Questa edizione, condotta sull'autografo, ricorda la versione italiana più antica."]:     # 56500
-        assert not historical.is_translation({"sections": [["Front matter", text]]}), text
-    for text in ["volgarizzato da fra Domenico Cavalca", "versione italiana di Vincenzo Monti",
-                 "TRADOTTA DALL'INGLESE", "TRANSLATED FROM THE ENGLISH"]:
-        assert historical.is_translation({"sections": [["Front matter", text]]}), text
