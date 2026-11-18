@@ -124,7 +124,7 @@ def decided_ebooks(paths: list[Path]) -> set[int]:
 
 def write_csv(rows: list[Candidate], path: Path) -> None:
     with path.open("w", newline="", encoding="utf-8") as f:
-        w = csv.writer(f)
+        w = csv.writer(f, lineterminator="\n")
         w.writerow(["ebook", "url", "title", "author", "locc", "subjects", "word", "now", "category", "suggestion", "decision"])
         for c in rows:
             w.writerow([c.ebook, f"https://www.gutenberg.org/ebooks/{c.ebook}", c.title, c.author, c.locc,
