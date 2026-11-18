@@ -11,6 +11,40 @@ import os
 
 import pytest
 
+
+def _app_env_names() -> set[str]:
+    """Every environment variable the app reads, by name, from its source:
+    os.getenv("X"), os.environ.get("X"), os.environ["X"]."""
+    import re
+    pat = re.compile(r"""os\.(?:getenv|environ\.get)\(\s*["']([A-Z][A-Z0-9_]+)["']"""
+                     r"""|os\.environ\[\s*["']([A-Z][A-Z0-9_]+)["']\s*\]""")
+    names: set[str] = set()
+    for f in (Path(__file__).parent.parent / "app").rglob("*.py"):
+        try:
+            text = f.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue
+        for m in pat.finditer(text):
+            names.add(m.group(1) or m.group(2))
+    return names
+
+
+#: what a process needs to run at all, never removed
+_KEEP = {"PATH", "HOME", "TMPDIR", "TEMP", "TMP", "TZ", "LANG", "LC_ALL", "USER", "PYTHONPATH",
+         "SSL_CERT_FILE", "REQUESTS_CA_BUNDLE", "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY",
+         "http_proxy", "https_proxy", "no_proxy"}
+
+# A TEST RUN IS HERMETIC WHEREVER IT RUNS (2026-11-18: the suite run inside
+# the node's worker image failed 13 tests that pass elsewhere, and spent ~30
+# min a test in tests/vega — the image's own environment, its model URLs,
+# pack and cache directories, reached the code under test). Every variable
+# the app reads is removed before any app module is imported; a test that
+# needs one sets it itself (monkeypatch.setenv). LOUISE_TEST_KEEP_ENV=1 keeps
+# them, for a deliberate run against a live node's settings.
+if os.environ.get("LOUISE_TEST_KEEP_ENV") != "1":
+    for _name in _app_env_names() - _KEEP:
+        os.environ.pop(_name, None)
+
 # the web's background warm of the question path's models (app/warmup.py)
 # is off in tests: a test that starts the app talks to no model server
 os.environ["LOUISE_WARMUP"] = "0"
