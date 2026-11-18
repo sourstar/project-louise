@@ -317,3 +317,46 @@ Notes:
   (CLAUDE.md, "A fix that makes a running job faster").
 - **Dependencies to ask first:** GLiNER under louise-python (torch);
   Leiden (`leidenalg` + `python-igraph`, or `graspologic`).
+
+## 10. Italian memoirs first, then memoirs before history (operator, 2026-11-18)
+
+"I want to start from historical memories in Italian: allows me to verify
+the results and to extract knowledge that is usually not present in the
+mainstream books. Actually memories can be the first and most valuable
+group of books to be processed."
+
+**The Italian slice, counted** (`pg_catalog.csv`, 1,108 Italian texts):
+- **26 books by the memoir rule** (§6: subjects Biography, Memoirs,
+  Correspondence, Personal narratives …, or LoCC CT). 16 of them are also
+  history (LoCC C–F). Examples: *Memorie di un vecchio carbonaro
+  ravegnano*, *I Mille*, *Dallo Stelvio al mare* (WWI personal
+  narratives), *Dal cellulare a Finalborgo*.
+- **The rule misses memoirs whose subjects do not say so.** *Ricordi di
+  un garibaldino* (2 vols) and *Ricordi intorno alle Cinque Giornate di
+  Milano* carry only "Italy -- History -- …". They are in the scope as
+  history, but not in the memoir group. Their titles say what they are:
+  52 Italian titles hold memorie, ricordi, diario, lettere, vita di,
+  autobiografia or confessioni. Some of those are not memoirs (*Memorie
+  di Giuda*, *Memorie del Presbiterio* is fiction).
+- **Italian history + memoirs: 318 books.**
+
+| first slice | books | chunks (i) | time, dense / MoE (i) |
+|---|---|---|---|
+| Italian memoirs, rule as written | 26 | ~4.4 k | ~2 days / ~0.6 day |
+| Italian history + memoirs | 318 | ~49 k | ~21 days / ~6 days |
+
+**The run order becomes:**
+1. **Italian memoirs** (the first instance, step 6).
+2. **Memoirs in every language**: 3,729 books, ~626 k chunks. English
+   537 k on the MoE, about 60 days for pick and relations. Other
+   languages 89 k: dense ~37 days, MoE ~10. Summaries ~3 days. **About
+   70–100 days.**
+3. **History**: the remaining 10,865 books, ~1.65 M chunks, ~200–300
+   days.
+
+Every step publishes when it is done, so a memoir graph exists after
+about 3 months.
+
+**Open: widen the memoir rule with title words?** See the question in
+the reply of 2026-11-18. The rule is the records' own, written in the
+Codex `method` before it applies (invariant 11).
