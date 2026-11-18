@@ -95,17 +95,20 @@ def tells(answers: list[str], lemmas: set[str]) -> bool:
     return any(f"[{lm.lower()}" in a for lm in lemmas if lm for a in low)
 
 
+#: the commit a run without a checkout names (the node runs a `git archive`):
+#: set by the node's recipe from the archived sha, 40 hex characters
+COMMIT_ENV = "LOUISE_SOURCE_COMMIT"
+
+
 def commit_of() -> tuple[str, str]:
     """(the commit this code runs from, how it is known): key.json names it,
-    so the operator's result can be reproduced from main (architecture,
-    2026-11-18). "archive": git's own `export-subst` wrote it into
-    app/code_commit.py when the node's `git archive` was made — inside the
-    bytes that ran; "checkout": `git rev-parse` ("+dirty" where tracked
-    files differ); "unknown": "", never a guess."""
+    so the operator's result can be reproduced from main (operator's "A",
+    2026-11-18, replacing export-subst). "checkout": `git rev-parse`
+    ("+dirty" where tracked files differ); "env": COMMIT_ENV, 40 hex
+    characters; ("", "") otherwise — and `make` then refuses, never writing
+    a commit it does not know."""
+    import os
     import subprocess
-    from app import code_commit
-    if re.fullmatch(r"[0-9a-f]{40}", code_commit.COMMIT):
-        return code_commit.COMMIT, "archive"
     here = Path(__file__).resolve().parent
     try:
         out = subprocess.run(["git", "rev-parse", "HEAD"], cwd=here, capture_output=True, text=True, timeout=10)
@@ -115,7 +118,10 @@ def commit_of() -> tuple[str, str]:
             return out.stdout.strip() + ("+dirty" if dirty.stdout.strip() else ""), "checkout"
     except (OSError, subprocess.SubprocessError):
         pass
-    return "", "unknown"
+    sha = os.environ.get(COMMIT_ENV, "").strip()
+    if re.fullmatch(r"[0-9a-f]{40}", sha):
+        return sha, "env"
+    return "", ""
 
 
 def sign_test(wins: int, losses: int) -> float:
@@ -220,6 +226,11 @@ def make(a) -> int:
     from app import collections as collections_mod, llm, reading
     from tools.measure import reading_known_items as ki, reading_store
     from tools.measure import reading_summary_eval as ev
+    commit, source = commit_of()
+    if not commit:
+        return reading_store.refuse(f"no commit known: not a git checkout, and {COMMIT_ENV} is not a 40-character "
+                                    "hex sha. Set it from the archived commit; the operator's result must name "
+                                    "the code that made it")
     version = reading_store.use(a.readings_tsv, a.tlio_root)
     if "tlio" not in version:
         return reading_store.refuse("TLIO's table is not held: nothing to judge (pass --tlio-root, its ack recorded)")
@@ -272,7 +283,6 @@ def make(a) -> int:
                         "tlio_readings": [{"orig": x.orig, "lemma": x.lemma} for x in only],
                         "shipped_readings": [{"orig": x.orig, "reg": x.reg or "", "source": x.source} for x in off_r]})
             print(f"item {len(items)}: {r['uid']}", file=sys.stderr, flush=True)
-    commit, source = commit_of()
     a.out_dir.mkdir(parents=True, exist_ok=True)
     (a.out_dir / "judge.html").write_text(page(items), encoding="utf-8")
     (a.out_dir / "key.json").write_text(json.dumps(

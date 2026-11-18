@@ -108,29 +108,27 @@ def test_a_bracketed_lemma_in_an_answer_is_a_tell_and_scored_apart():
     assert got["judged"] == 30 and got["without_a_tell"]["judged"] == 20
 
 
-def test_the_commit_from_the_archive_the_checkout_or_unknown(monkeypatch):
+def test_the_commit_from_the_checkout_the_env_or_nothing(monkeypatch):
     import subprocess
-    from app import code_commit
-    monkeypatch.setattr(code_commit, "COMMIT", "a" * 40)
-    assert bj.commit_of() == ("a" * 40, "archive")
-    monkeypatch.setattr(code_commit, "COMMIT", "$Format:%H$")
     sha, source = bj.commit_of()
     assert source == "checkout" and len(sha.split("+")[0]) == 40
 
     def no_git(*a, **k):
         raise FileNotFoundError("git")
     monkeypatch.setattr(subprocess, "run", no_git)
-    assert bj.commit_of() == ("", "unknown")
+    monkeypatch.setenv(bj.COMMIT_ENV, "a" * 40)
+    assert bj.commit_of() == ("a" * 40, "env")
+    for bad in ("A" * 40, "a" * 39, "abc", "a" * 40 + " "  + "x"):
+        monkeypatch.setenv(bj.COMMIT_ENV, bad)
+        assert bj.commit_of() == ("", ""), bad
+    monkeypatch.delenv(bj.COMMIT_ENV)
+    assert bj.commit_of() == ("", "")
 
 
-def test_git_archive_writes_heads_sha_into_the_module(tmp_path):
-    """export-subst: the sha is inside the archived bytes (node-runbook.md:105)."""
-    import io
-    import subprocess
-    import tarfile
-    root = Path(bj.__file__).resolve().parents[2]
-    head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=root, capture_output=True, text=True).stdout.strip()
-    tar = subprocess.run(["git", "archive", "HEAD", "app/code_commit.py"], cwd=root, capture_output=True).stdout
-    body = tarfile.open(fileobj=io.BytesIO(tar)).extractfile("app/code_commit.py").read().decode()
-    assert f'COMMIT = "{head}"' in body
+def test_make_refuses_when_no_commit_is_known(monkeypatch, tmp_path, capsys):
+    monkeypatch.setattr(bj, "commit_of", lambda: ("", ""))
+    out = tmp_path / "j"
+    assert bj.main(["make", "--collection", "g", "--out-dir", str(out), "--weights-sha256", "w",
+                    "--readings-tsv", str(tmp_path / "t")]) == 2
+    assert "no commit known" in capsys.readouterr().err and not out.exists()
 
