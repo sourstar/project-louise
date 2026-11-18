@@ -144,3 +144,34 @@ def test_many_members_rebuild_with_a_zip64_directory(tmp_path):
     with zipfile.ZipFile(out) as z:
         assert len(z.infolist()) == len(big) + 1 and z.testzip() is None
         assert z.read("D/065999_X_ORIGINALE_V0.xml") == b"<a>65999</a>"
+
+
+def test_a_200_to_a_range_is_never_read_into_memory(mock_server):
+    """An origin that ignores Range answers with the whole file: the reader
+    says RangeUnsupported at once, never reading the body first (a 103 GB
+    dump would be poured into memory; 2026-11-18). Served at 50 kB/s, the
+    800 kB body would take 16 s to read."""
+    import time
+    (mock_server.root / "big.bin").write_bytes(b"x" * 800_000)
+    mock_server.no_ranges.add("big.bin")
+    mock_server.drip("big.bin", 50_000)
+    charged = []
+    r = zipdelta.HttpRangeReader(f"{mock_server.base_url}/big.bin", {}, charge=charged.append)
+    t0 = time.monotonic()
+    with pytest.raises(zipdelta.RangeUnsupported):
+        r.read(0, 99)
+    with pytest.raises(zipdelta.RangeUnsupported):
+        r.total()
+    assert time.monotonic() - t0 < 8 and charged == []
+
+
+def test_a_refused_range_carries_its_status_and_a_held_connection_is_reused(mock_server):
+    (mock_server.root / "f.bin").write_bytes(bytes(range(256)) * 40)
+    r = zipdelta.HttpRangeReader(f"{mock_server.base_url}/f.bin", {}, charge=lambda n: None, keep_alive=True)
+    assert r.read(10, 19) == bytes(range(10, 20)) and r.read(300, 301) == bytes([300 % 256, 301 % 256])
+    assert r.total() == 10_240
+    r.close()
+    gone = zipdelta.HttpRangeReader(f"{mock_server.base_url}/gone.bin", {}, charge=lambda n: None)
+    with pytest.raises(zipdelta.RangeRefused) as e:
+        gone.read(0, 3)
+    assert e.value.status == 404 and isinstance(e.value, zipdelta.TransportError)

@@ -202,6 +202,5 @@ def test_another_builder_defers_this_one(tmp_path, no_cache):
     from app import derived
     p = _dump(tmp_path, _units(300))
     out = bb.index_path(p)
-    with derived.writing(out.with_name(out.name + ".lock"), "another pass"):
-        with pytest.raises(derived.Busy):
-            bb.build(p, LINES, threads=1)
+    with derived.writing(out.with_name(out.name + ".lock"), "another pass"), pytest.raises(derived.Busy):
+        bb.build(p, LINES, threads=1)

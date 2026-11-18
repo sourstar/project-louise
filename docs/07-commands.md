@@ -883,6 +883,17 @@ reader needs at the command line:
   per layer and per group of the origin (wikipedia: archive or dump, and the
   wiki), how many sampled records were compared and why the others were
   not; a layer of which none was compared is said first (03 §3.2).
+  *Added 2026-11-18:* a dated dump that is ONE bzip2 stream (wikidata's
+  `all.json.bz2`) is asked by its blocks: with no `--origin`,
+  `records-vs-origin` fetches by Range only the compressed blocks around
+  each sampled record and compares them with the copy's (03 §3.2). The
+  copy's block index is built first where it is missing — on the cores the
+  node allows, resumable (a stop exits 130 and the next check goes on from
+  where it stopped), placed on the fast cache. By hand the copy is the
+  collection's corpus (its file's, else `<root>/<name>/origin`) and the
+  index is built whole; the nightly check (`--origin-else`) builds it for at
+  most an hour a night and, until it is whole, re-parses the kept copy and
+  says so. `--origin <the kept copy>` is still INCONCLUSIVE "kept copy".
 - **`key`.** `create` writes a new seed at `NODE_KEY_PATH` in the form
   of 09 §9.2, refuses to overwrite one, and prints the public key; a key
   file readable by anyone but its owner is refused at load, never

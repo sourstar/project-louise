@@ -35,7 +35,9 @@ bytes, and only where both ranges are taken (a few in ten thousand of a
 check's units on wikidata's ~10^6), while every unit then holds its pieces in
 the check's tables for the whole pass: measured 447 bytes a unit against 202
 (840,000 units: 358 MiB against 162). Where the bound takes most units of a
-small dump the shared pieces would pay; there it is a change of `unit` alone.
+small dump the shared pieces would pay (the fixture's every line a record: the
+units' ranges sum to ~3x its blocks); there it is a change of `unit` and
+`compare` alone (the block-level fetch of 9f9efbc's parent).
 
 WHY EQUAL BYTES REPRODUCE THE RECORD FROM THE ORIGIN. A bzip2 block is
 decoded from its own bits alone: its 48-bit magic, its CRC, its Huffman
@@ -86,9 +88,10 @@ from __future__ import annotations
 
 import threading
 from collections import deque
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 from .spec import AcquisitionSpec, TransferAborted, Transport, TransportError
 
@@ -114,7 +117,7 @@ class BlockOrigin:
                  reader_for: Callable[[str], Any] | None = None) -> None:
         self.spec, self.codex, self.plugin, self.lines = spec, codex, plugin, lines
         self.endpoint = spec.endpoints[-1]        # the origin's own base, as the Codex states it
-        self.url = str(((getattr(codex.origin, "spec", None) or {}).get("url") or self.endpoint.url)).rstrip("/")
+        self.url = str((getattr(codex.origin, "spec", None) or {}).get("url") or self.endpoint.url).rstrip("/")
         self.max_conns = max(1, int(getattr(self.endpoint, "max_conns", 1) or 1))
         self._reader_for = reader_for or self._http_reader
         self.base: Path | None = None             # the copy: the corpus the records were parsed from
@@ -368,8 +371,8 @@ class BlockOrigin:
 
     def compare(self, a: int, b: int) -> tuple[str, str | None]:
         """Blocks a..b of the origin against the copy's, their range fetched
-        whole by one Range: ("same", None), or ("changed", why), or
-        ("unreachable", why)."""
+        whole by one Range: ("same", None), ("changed", why), ("unreachable",
+        why), or ("errored", why) where the copy's own bytes cannot be read."""
         try:
             differs = self._header()
             if differs is not None:
@@ -378,7 +381,11 @@ class BlockOrigin:
             theirs = self._ask(s, e)
         except FileNotFoundError as exc:
             return "unreachable", str(exc)
-        if theirs == self._copy_bytes(s, e):
+        try:
+            ours = self._copy_bytes(s, e)
+        except OSError as exc:
+            return "errored", f"the copy's bytes {s:,}-{e - 1:,} of {self.dump.name} could not be read: {exc}"
+        if theirs == ours:
             return _SAME, None
         return "changed", (f"the origin's bytes {s:,}-{e - 1:,} of {self.rel} (block {a:,}"
                            + (f" to {b:,}" if b > a else "") + ") are not the copy's")
@@ -407,6 +414,8 @@ class BlockOrigin:
         if outcome == "unreachable":
             from app.hold.check import OriginAway
             raise OriginAway(why)
+        if outcome == "errored":
+            raise OSError(why)
         if outcome != _SAME:
             raise OriginBlocksChanged(why)
         return self.base

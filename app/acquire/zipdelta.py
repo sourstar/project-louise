@@ -34,7 +34,7 @@ import zipfile
 import zlib
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable, Protocol
+from typing import Any, Callable, NamedTuple, Protocol
 
 from . import backoff as _backoff_defaults
 from .spec import TransportError
@@ -77,6 +77,14 @@ class RangeRefused(TransportError):
     def __init__(self, message: str, status: int) -> None:
         super().__init__(message)
         self.status = int(status)
+
+
+class _Answer(NamedTuple):
+    """An origin's answer to one Range request: its status, its headers, and
+    its body — empty for a 200, which is never read (`HttpRangeReader._answer`)."""
+    status_code: int
+    headers: Any
+    content: bytes
 
 
 class RangeReader(Protocol):
@@ -150,6 +158,15 @@ class HttpRangeReader:
             finally:
                 self._client = None
 
+    def _answer(self, client, range_header: str) -> _Answer:
+        """One request, streamed: A 200 IS THE WHOLE FILE and its body is never
+        read — an origin that ignored Range would otherwise pour a 103 GB dump
+        into this process's memory before any caller could say
+        RangeUnsupported (2026-11-18, found while wiring the block origin);
+        any other answer's body is read, as before."""
+        with client.stream("GET", self.url, headers={**self.headers, "Range": range_header}) as r:
+            return _Answer(r.status_code, r.headers, b"" if r.status_code == 200 else r.read())
+
     def _get(self, range_header: str):
         """One Range request, answered or the transport's error (`TransportError`,
         never httpx's own class: the engine's per-file boundary catches ours),
@@ -164,10 +181,10 @@ class HttpRangeReader:
             try:
                 held = self._held()
                 if held is not None:
-                    r = held.get(self.url, headers={**self.headers, "Range": range_header})
+                    r = self._answer(held, range_header)
                 else:
                     with httpx.Client(timeout=self.timeout, follow_redirects=True) as client:
-                        r = client.get(self.url, headers={**self.headers, "Range": range_header})
+                        r = self._answer(client, range_header)
             except httpx.TransportError as e:          # timeouts, drops, resets
                 self.close()                           # a held connection: a fresh one for the retry
                 r_.episode(f"{type(e).__name__}: {e}", cause=e)

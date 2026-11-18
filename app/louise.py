@@ -5982,6 +5982,10 @@ def _check_origin(a, codex, *, local=None, run: str | None = None):
 
         from app import bz2_blocks
         from app.acquire import block_origin
+        wanted = (str(a.checks).split(",") if getattr(a, "checks", None)
+                  else list(getattr(getattr(codex, "validation", None), "checks", None) or ()))
+        if not {"records-vs-origin", "image-equivalence"} & set(wanted):
+            return None                     # nothing re-parsed from the origin: no index to build
         copy = fallback or _kept_copy_dir(a, local)
         deadline = time.monotonic() + block_origin.NIGHTLY_BUILD_S if fallback else None
         with _graceful_stop() as stop:

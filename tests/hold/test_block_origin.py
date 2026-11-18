@@ -223,6 +223,16 @@ def test_a_run_the_origin_no_longer_serves_is_inconclusive_with_its_reason(recre
     assert mo.requests == 0 and len(_ranges(origin)) <= 2, "asked once, then not again"
 
 
+def test_an_origin_that_ignores_range_is_inconclusive_with_its_reason(recreated, origin):
+    root, corpus, codex, snap = recreated
+    _serve(origin, corpus)
+    origin.no_ranges.add(REL)
+    _reader(codex, origin.base_url)
+    o = _check(root, corpus, codex, snap)
+    assert o.result == chk.INCONCLUSIVE and o.detail["origin"] == "unreachable", o.why
+    assert "does not serve" in o.why and "by Range" in o.why
+
+
 def test_an_origin_that_does_not_answer_is_inconclusive_a_deferral(recreated):
     root, corpus, codex, snap = recreated
     _reader(codex, "http://127.0.0.1:9")             # nothing listens there
@@ -275,6 +285,17 @@ def test_the_kept_copy_given_as_the_origin_stays_kept_copy(recreated, origin):
     assert _ranges(origin) == [], "the origin is not asked"
 
 
+def test_a_check_that_re_parses_nothing_builds_no_index(recreated):
+    import argparse
+    root, corpus, _codex, _snap = recreated
+    a = argparse.Namespace(root=root, collection="wikidata.next", snapshot=None, seed="00" * 32, checks="roots",
+                           sample=None, origin_dir=None, origin_else=str(corpus), origin_mib=None, against=None,
+                           shards=None, live=None)
+    louise.run_check(a)
+    lines = bz2_blocks.Lines(opens=b"{", head=b"[", tail=b"]")
+    assert bz2_blocks.load(corpus / REL, lines) is None and bz2_blocks.progress(corpus / REL) is None
+
+
 def test_only_a_dated_one_stream_dump_naming_its_run_is_asked_by_its_blocks(recreated):
     root, _corpus, codex, _snap = recreated
     assert isinstance(block_origin.for_codex(codex), block_origin.BlockOrigin)
@@ -291,7 +312,7 @@ def test_a_stop_during_the_index_build_exits_130_and_the_next_check_resumes(recr
     130 (invariant 2, 07 §7.7)."""
     import contextlib
     import threading
-    root, corpus, codex, snap = recreated
+    root, corpus, codex, _snap = recreated
     _serve(origin, corpus)
     _reader(codex, origin.base_url)
 

@@ -63,9 +63,9 @@ import json
 import os
 import threading
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable
 
 VERSION = 1
 #: the derived kind (app/derived.py): read at random, so the fast cache
@@ -553,7 +553,7 @@ def build(dump: Path, lines: Lines, *, threads: int | None = None, stop: Callabl
         exact = np.append(st.exact, False)
         st.seconds = base_s + time.monotonic() - t0
         meta = {"version": VERSION, "identity": ident, "opens": lines.opens.hex(), "header": header.hex(),
-                "decompressed": int(total), "blocks": int(len(st.bits)), "units": int(units),
+                "decompressed": int(total), "blocks": len(st.bits), "units": int(units),
                 "others": [[p, b] for p, b in st.others], "others_n": int(st.others_n),
                 "last_line_at": int(st.last_line_at), "threads": n_threads, "seconds": round(st.seconds, 1)}
         _write(out, meta, bits, dec, first, exact)
