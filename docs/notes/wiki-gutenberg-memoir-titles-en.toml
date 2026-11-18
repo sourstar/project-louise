@@ -1,0 +1,10 @@
+# wiki-gutenberg: English books added to (or kept out of) the memoir group by title.
+# Operator decisions, keyed by Project Gutenberg ebook number. Its sha256 goes into
+# the annotations Codex `method` beside the subject rule (invariant 11).
+# 2026-11-18, "Drop the 2 uncertain": checked on the text
+# (pg-catalogue-corrections/README.md, part B), neither is a memoir as written.
+#   36970  The Confessions of a Poacher: told to an editor
+#   59530  Wine-Dark Seas and Tropic Skies: "Reminiscences and a Romance"
+decided = "2026-11-18"
+yes = []
+no = [36970, 59530]

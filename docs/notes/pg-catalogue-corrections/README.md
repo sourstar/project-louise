@@ -130,3 +130,8 @@ plainly wrong: Fabre's *The Life of the Fly* is in "Biographies".
   "Diaries -- Fiction" put *A Lame Dog's Diary* and Lu Xun's *狂人日記*
   in the memoir group.
 - **The scope is now 14,533 books, of which 3,594 are memoirs.**
+
+**For wiki-gutenberg (operator, 2026-11-18): the two uncertain are dropped.**
+*The Confessions of a Poacher* (36970) and *Wine-Dark Seas* (59530) are
+NO (`wiki-gutenberg-memoir-titles-en.toml`). No Gutenberg proposal is
+made for 36970.
