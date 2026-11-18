@@ -24,9 +24,17 @@ the passage does not say. `score` unblinds: ON's wins, OFF's, the ties, a
 two-sided sign test, the errors per arm, and the RULE below. Nothing in
 judge.html says which arm is which; the key is never shown on the page.
 
-The ON arm is the product's chat copy with TLIO's glosses on
-(`reading.CHAT_TLIO`); OFF the copy without any reading (no year). Both
-under Quality, the Ask path's own steps (reading_summary_eval.answer).
+THE ARMS (architecture, 2026-11-18): OFF is the SHIPPED chat copy — the
+record's year kept, its Wikisource replacements read, `reading.CHAT_TLIO`
+False; ON the same with `CHAT_TLIO` True. The difference is TLIO's glosses
+alone, the decision asked. An item is kept only where ON reads a TLIO gloss
+OFF does not. Both under Quality, the Ask path's own steps
+(historical.prepare, retrieval.build_answer_messages).
+
+THE TELLS. An answer may quote the glossary's notation (`form [lemma: …]`,
+`[lemma]`), which names its arm. key.json records, per item, whether either
+answer carries a bracketed lemma of that item's TLIO readings; `make`
+prints how many; `score` reports over all items and over those without.
 """
 from __future__ import annotations
 
@@ -41,6 +49,49 @@ from pathlib import Path
 RULE = ("TLIO's glosses return to the chat copy only if at least 30 items are judged and ON wins at least "
         "as often as OFF, with no more errors (architecture, 2026-11-18); the result to the operator")
 SPAN = (1100, 1400)
+
+
+def prepared(query: str, searched: dict, tlio: bool) -> dict:
+    """The search result as the answer's prompt reads it: the shipped chat
+    copy, TLIO's glosses on or off (`reading.CHAT_TLIO`), under Quality."""
+    from app import historical, reading
+    result = {**searched, "hits": [dict(h) for h in searched.get("hits") or []]}
+    keep, reading.CHAT_TLIO = reading.CHAT_TLIO, tlio
+    try:
+        with reading.quality(True):
+            out, _reads = historical.prepare(result, query, "it")
+    finally:
+        reading.CHAT_TLIO = keep
+    return out
+
+
+def answer(query: str, searched: dict, tlio: bool) -> str:
+    from app import llm, retrieval
+    msgs = retrieval.build_answer_messages(query, prepared(query, searched, tlio), "it")
+    return llm.strip_think(llm.chat(msgs, temperature=0.0, max_tokens=600)).strip()
+
+
+def arm_readings(text: str, year, tlio: bool) -> list:
+    """The readings the chat copy of `text` applies at `year`, TLIO on or off."""
+    from app import reading
+    found = reading.lookup(reading.words_of([text]))
+    keep, reading.CHAT_TLIO = reading.CHAT_TLIO, tlio
+    try:
+        return reading.apply(text, year, found, reading.CHAT)[1]
+    finally:
+        reading.CHAT_TLIO = keep
+
+
+def tlio_only(on: list, off: list) -> list:
+    """ON's TLIO readings that OFF does not apply."""
+    have = {(r.orig, r.source, r.lemma) for r in off}
+    return [r for r in on if r.source == "tlio" and (r.orig, r.source, r.lemma) not in have]
+
+
+def tells(answers: list[str], lemmas: set[str]) -> bool:
+    """Whether an answer quotes the glossary's notation for one of these lemmas."""
+    low = [a.lower() for a in answers]
+    return any(f"[{lm.lower()}" in a for lm in lemmas if lm for a in low)
 
 
 def sign_test(wins: int, losses: int) -> float:
@@ -108,14 +159,21 @@ document.getElementById('save').onclick = () => {{
 
 
 def score(key: list[dict], choices: list[dict]) -> dict:
-    """Unblinded: ON's wins, OFF's, ties, errors per arm, the sign test, the rule."""
+    """Unblinded, over all items and over those without a tell."""
+    out = _score(key, choices, lambda kk: True)
+    out["without_a_tell"] = _score(key, choices, lambda kk: not kk.get("tell"))
+    return out
+
+
+def _score(key: list[dict], choices: list[dict], keep) -> dict:
+    """ON's wins, OFF's, ties, errors per arm, the sign test, the rule."""
     by_id = {c["id"]: c for c in choices}
     won = lost = same = 0
     err = {"on": 0, "off": 0}
     judged = 0
     for k, kk in enumerate(key):
         c = by_id.get(k)
-        if not c or not c.get("pick"):
+        if not keep(kk) or not c or not c.get("pick"):
             continue
         judged += 1
         on = kk["on"]                                  # "A" or "B"
@@ -147,7 +205,7 @@ def make(a) -> int:
     con = ev.ro_connect(col)
     rng = random.Random(a.seed)
     items, key = [], []
-    seen = refused = without = 0
+    seen = refused = without = no_tlio = 0
     for r in ki.records_of(a.collection, rng, lang="it"):
         if len(items) >= a.n:
             break
@@ -174,25 +232,32 @@ def make(a) -> int:
             hit = ev.best_passage(con, col, query, r["uid"])
             if hit is None:
                 continue
-            on, changed = ev.answer(query, hit, glossary=True)
-            if not changed:
-                continue                                 # ON == OFF: nothing to judge
-            off, _ = ev.answer(query, hit, glossary=False)
+            answered = str(hit["hits"][0].get("text") or "")
+            off_r = arm_readings(answered, y, False)
+            only = tlio_only(arm_readings(answered, y, True), off_r)
+            if not only:
+                no_tlio += 1
+                continue                                 # ON == OFF in what is decided: nothing to judge
+            on, off = answer(query, hit, True), answer(query, hit, False)
+            tell = tells([on, off], {x.lemma for x in only})
             first_on = rng.random() < 0.5
             items.append({"query": query, "title": str(r.get("title") or ""), "year": int(y),
                           "passage": str(hit["hits"][0].get("text") or "")[:1800],
                           "A": on if first_on else off, "B": off if first_on else on})
-            key.append({"uid": r["uid"], "on": "A" if first_on else "B",
-                        "readings": ev.readings_used(str(hit["hits"][0].get("text") or ""), y)})
+            key.append({"uid": r["uid"], "on": "A" if first_on else "B", "tell": tell,
+                        "tlio_readings": [{"orig": x.orig, "lemma": x.lemma} for x in only],
+                        "shipped_readings": [{"orig": x.orig, "reg": x.reg or "", "source": x.source} for x in off_r]})
             print(f"item {len(items)}: {r['uid']}", file=sys.stderr, flush=True)
     a.out_dir.mkdir(parents=True, exist_ok=True)
     (a.out_dir / "judge.html").write_text(page(items), encoding="utf-8")
     (a.out_dir / "key.json").write_text(json.dumps(
         {"reading_tables": version, "seed": a.seed, "weights_sha256": a.weights_sha256, "span": SPAN,
          "records_in_span": seen, "records_without_a_passage_the_tables_read": without, "refused_queries": refused,
+         "answered_texts_without_a_tlio_reading": no_tlio, "items_with_a_tell": sum(k["tell"] for k in key),
          "items": key, "rule": RULE}, ensure_ascii=False), encoding="utf-8")
-    print(json.dumps({"items": len(items), "records_in_span": seen, "without": without, "refused": refused}),
-          file=sys.stderr)
+    print(json.dumps({"items": len(items), "items_with_a_tell": sum(k["tell"] for k in key),
+                      "records_in_span": seen, "without": without, "refused": refused,
+                      "answered_texts_without_a_tlio_reading": no_tlio}), file=sys.stderr)
     if len(items) < 30:
         return reading_store.refuse(f"{len(items)} items, under the 30 the rule needs: the page is written, "
                                     "judging it cannot decide")
