@@ -302,6 +302,9 @@ ISSUES = {
 
 class NormattivaSource:
     source_id = "normattiva"
+    #: the act's own date states its year (app/reading.py; architecture,
+    #: 2026-11-18: "normattiva and the legal collections: the act's own date")
+    publication_year_fields = ("date",)
     ISSUES = ISSUES
     LOCATOR_SEP = _LOCATOR_SEP
     ELI_PROFILE = PROFILE

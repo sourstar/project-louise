@@ -196,6 +196,9 @@ class Read:
     rules: list[str] = field(default_factory=list)
     translation_in: int | None = None    # the source number of its other version
     modern: bool = False                 # that version is a modern one, same language
+    #: the readings of its period applied to the model's copy (app/reading.py):
+    #: their version, "" where none applied
+    glossary: str = ""
 
     def badge(self) -> str:
         """The source's badge: what the reader sees beside it — the stage,
@@ -203,6 +206,8 @@ class Read:
         out = f"{self.stage}, {BY.get(self.why, 'by ' + self.why)}"
         if self.rules:
             out += ", spelling modernised for the model"
+        if self.glossary:
+            out += ", old words read with its period's glossary"
         if self.translation_in:
             out += (f", read with its modern version [{self.translation_in}]" if self.modern
                     else f", read with its translation [{self.translation_in}]")
@@ -212,6 +217,7 @@ class Read:
 #: what the badge says the stage was found by
 BY = {"matcher": "by its text", "wikidata": "by Wikidata", "human": "by hand",
       "text": "by this passage", "question": "by this passage and the question",
+      "year": "by its publication year",
       "language code": "by its language code"}
 #: a claim's stage, named in plain words: the canonical ids the claims use
 STAGE_NAMES: dict[str, str] = {
@@ -228,11 +234,19 @@ def markers(reader: Reader, text: str) -> int:
             + sum(len(p.findall(text)) for p in reader.patterns))
 
 
-def modernise(reader: Reader, text: str) -> tuple[str, list[str]]:
+#: B's hand-written h- word list: where a year triggers the glossary, its
+#: attested pairs take this rule's place (architecture, 2026-11-18, point 5)
+H_RULE = "h- (huomo → uomo)"
+
+
+def modernise(reader: Reader, text: str, skip: frozenset[str] = frozenset()) -> tuple[str, list[str]]:
     """B: the text with the period's spelling modernised, and the rules that
-    changed something. A copy for the model to read; nothing else."""
+    changed something. A copy for the model to read; nothing else. `skip`:
+    rules not applied (B's h- list where the glossary read the text)."""
     applied = []
     for r in reader.rules:
+        if r.name in skip:
+            continue
         if r.table is not None:
             table = r.table
             new = r.pattern.sub(lambda m: _keep_case(m.group(1), table[m.group(1).lower()]), text)
@@ -335,31 +349,68 @@ def read_sources(numbered: Iterable[tuple[int, dict[str, Any]]], question: str,
     numbered = list(numbered)
     period = asks_about_period(question)
     pairs = _translations(numbered, answer_lang)
+    glossed = _glossary(numbered)
     shown: dict[int, tuple[str, str]] = {}
     reads: list[Read] = []
     for n, h in numbered:
         got = stage_of(h, period_asked=period)
-        if got is None:
+        g = glossed.get(n)
+        if got is None and g is None:
             continue
+        if got is None:
+            # read by its year alone: the glossary's trigger (operator, 2026-11-18)
+            got = (READERS.get(_lang(h)), f"{_LANG_NAMES.get(_lang(h), _lang(h))} of {g[0]}", "year")
         reader, stage, why = got
-        text = str(h.get("text") or "")
+        text = g[1] if g is not None else str(h.get("text") or "")
         applied: list[str] = []
         if reader is not None:
-            text, applied = modernise(reader, text)
+            text, applied = modernise(reader, text, frozenset({H_RULE}) if g is not None else frozenset())
         suffix = f" · «{stage}»"
         year = first_published(h)
         if year is not None:
             suffix += f" · first published {year}"
         if applied:
             suffix += " · spelling modernised for reading (" + ", ".join(applied) + ")"
+        if g is not None and g[2]:
+            suffix += " · old words read with its period's glossary, [in brackets]"
         other = pairs.get(n)
         if other is not None:
             suffix += (f" · a modern version of it is source [{other[0]}]" if other[1]
                        else f" · a translation of it is source [{other[0]}]")
         shown[n] = (suffix, text)
         reads.append(Read(n, stage, why, applied, other[0] if other else None,
-                          bool(other and other[1])))
+                          bool(other and other[1]), g[2] if g is not None else ""))
     return shown, reads
+
+
+_LANG_NAMES = {"it": "Italian"}
+
+
+def _lang(h: dict[str, Any]) -> str:
+    return str(h.get("lang") or "").lower()[:2]
+
+
+def _glossary(numbered: list[tuple[int, dict[str, Any]]]) -> dict[int, tuple[int, str, str]]:
+    """{n: (the record's year, the text with its period's readings, their
+    version)} for the sources whose record states a year a reading holds,
+    in the reading's language (app/reading.py). Nothing on any failure: no
+    reading is the text as it was."""
+    from . import reading
+    try:
+        hits = [h for _n, h in numbered]
+        years = reading.years(hits)
+        if not years:
+            return {}
+        found = reading.lookup(reading.words_of(str(hits[i].get("text") or "") for i in years))
+    except Exception:   # noqa: BLE001 — the glossary is a help, never the answer's failure
+        return {}
+    out = {}
+    for i, y in years.items():
+        n, h = numbered[i]
+        text, used = reading.apply(str(h.get("text") or ""), y, found, reading.CHAT, lang=_lang(h))
+        if used:
+            out[n] = (y, text, found.version)
+    return out
 
 
 def said(reads: list[Read]) -> str:
