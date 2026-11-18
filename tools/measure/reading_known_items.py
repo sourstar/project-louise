@@ -140,6 +140,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--stratum", action="append", required=True, type=stratum,
                     help="<collection>:<from year>:<to year>")
     ap.add_argument("--kept", type=int, default=60, help="queries kept per stratum")
+    ap.add_argument("--per-record", type=int, default=1,
+                    help="passages (queries) per record, at most: a stratum of few books still fills")
     ap.add_argument("--weights-sha256", required=True, help="the chat model's weights file sha256")
     ap.add_argument("--out", type=Path, required=True)
     ap.add_argument("--seed", type=int, default=1)
