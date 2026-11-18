@@ -447,6 +447,22 @@ def _rerank_list(query: str, hits: list[dict], recipe, budget_s: float,
 READING_RERANK = True
 
 
+#: the last time a reading failure was logged, by collection: at most one a minute each
+_reading_logged: dict[str, float] = {}
+READING_LOG_EVERY_S = 60.0
+
+
+def _reading_failed(collection: str, e: BaseException) -> None:
+    """The reading's fallback, said: at most once a minute per collection,
+    naming it (every log line names its collection, CLAUDE.md)."""
+    now = time.monotonic()
+    if now - _reading_logged.get(collection, float("-inf")) < READING_LOG_EVERY_S:
+        return
+    _reading_logged[collection] = now
+    print(f"{time.strftime('%H:%M:%S')} [{collection} warn:reading] the reranker reads the texts as "
+          f"they were: {type(e).__name__}: {e}", flush=True)
+
+
 def _reading_copies(head: list[dict], owner: list[tuple[int, dict]], texts: list[str]
                     ) -> tuple[dict[int, str], str]:
     """{text index: its ORIGINAL text} for the texts the reader changed (each
@@ -461,7 +477,8 @@ def _reading_copies(head: list[dict], owner: list[tuple[int, dict]], texts: list
             return {}, ""
         chunks = [(t, i, c) for t, (i, c) in enumerate(owner) if i in years]
         found = reading.lookup(reading.words_of(c.get("text") or "" for _t, _i, c in chunks))
-    except Exception:   # noqa: BLE001 — a reading is a help, never the search's failure
+    except Exception as e:   # noqa: BLE001 — a reading is a help, never the search's failure
+        _reading_failed(reading.collection_of(head[0]) if head else "?", e)
         return {}, ""
     originals: dict[int, str] = {}
     for t, i, c in chunks:
@@ -580,15 +597,19 @@ def _rerank_held(query: str, hits: list[dict], recipe, budget_s: float, depth: i
     order = _ordered({i: b[0] for i, b in best.items()})
     moved: dict[int, list[dict]] = {}
     if originals:
-        # CLAUDE.md invariant 4, WEIGHTS (amended 2026-11-18): the reader's
-        # copy reorders; each record it moved says from where to where
+        # CLAUDE.md invariant 4 (2), WEIGHTS (amended 2026-11-18): "every
+        # result it moved" — every record whose place differs from its place
+        # had nothing been read, `read` saying whether its own copy changed
+        # (False: it moved because another record was read)
         before = _ordered(as_was)
         from . import reading
         changed = {owner[t][0] for t in originals}
-        for i in changed:
-            if i in before and i in order and before.index(i) != order.index(i):
+        at_before = {r: k for k, r in enumerate(before)}
+        for k, i in enumerate(order):
+            if i in at_before and at_before[i] != k:
                 moved.setdefault(i, []).append({"weight": reading.label(reading_version),
-                                                "from": before.index(i) + 1, "to": order.index(i) + 1})
+                                                "from": at_before[i] + 1, "to": k + 1,
+                                                "read": i in changed})
     if CATALOG_FIRST:
         before = order
         order = _catalog_first(order, head)

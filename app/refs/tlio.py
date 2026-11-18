@@ -117,6 +117,8 @@ class TlioSource:
     source_id = SOURCE_ID
     ref_version = PARSER_VERSION
     license_class = LicenseClass.RED
+    #: its directory under ref_root: the pages, TERMS.txt and ack.json
+    ref_dir = DIR
     namespaces: list[str] = []
 
     def schema(self) -> RefSchema:

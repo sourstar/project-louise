@@ -54,9 +54,13 @@ def test_the_copy_moves_a_hit_and_says_from_where_to_where(reranker, huomo):
     ranked, ok = retrieval._rerank_held("chi era l'uomo", [dict(h) for h in HITS], RECIPE, 5.0, 50, None)
     assert ok and [h["chunk_id"] for h in ranked] == ["c:2", "c:3", "c:1"]
     assert ranked[0]["moved_by"] == [{"weight": "historical reading (wikisource-readings 1 abc)",
-                                      "from": 3, "to": 1}]
+                                      "from": 3, "to": 1, "read": True}]
     assert ranked[0]["text"] == "l'huomo e l'huomo"               # the hit shown: its own text
-    assert "moved_by" not in ranked[1] and "moved_by" not in ranked[2]
+    # c:3 (1st -> 2nd) and c:1 (2nd -> 3rd) moved because another record was read: they say so
+    assert ranked[1]["moved_by"] == [{"weight": "historical reading (wikisource-readings 1 abc)",
+                                      "from": 1, "to": 2, "read": False}]
+    assert ranked[2]["moved_by"] == [{"weight": "historical reading (wikisource-readings 1 abc)",
+                                      "from": 2, "to": 3, "read": False}]
     # the copy and, for the hit it changed only, the original: scored in the same call
     assert reranker[0] == ["un altro testo", "l'uomo e l'uomo", "un uomo", "l'huomo e l'huomo"]
 
@@ -78,3 +82,15 @@ def test_the_same_versions_give_the_same_order(reranker, huomo):
     a, _ = retrieval._rerank_held("q", [dict(h) for h in HITS], RECIPE, 5.0, 50, None)
     b, _ = retrieval._rerank_held("q", [dict(h) for h in HITS], RECIPE, 5.0, 50, None)
     assert [(h["chunk_id"], h.get("moved_by")) for h in a] == [(h["chunk_id"], h.get("moved_by")) for h in b]
+
+
+def test_a_failing_reading_falls_back_and_says_so_once_a_minute(reranker, monkeypatch, capsys):
+    def boom(hits, collection=None):
+        raise RuntimeError("refs.db locked")
+    monkeypatch.setattr(reading, "years", boom)
+    monkeypatch.setattr(retrieval, "_reading_logged", {})
+    hits = [dict(h, source_collection="gutenberg-it") for h in HITS]
+    for _ in range(3):
+        ranked, ok = retrieval._rerank_held("q", [dict(h) for h in hits], RECIPE, 5.0, 50, None)
+    out = capsys.readouterr().out
+    assert ok and out.count("[gutenberg-it warn:reading]") == 1 and "refs.db locked" in out
