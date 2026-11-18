@@ -194,7 +194,8 @@ def _direct_tables(chunks, *, where: str, row_group: int, items_hint: int = 0):
         if int(nid.min()) < 0 or int(idx.min()) < 0 or int(idx.max()) >= _NONE:
             raise _Unfit()
         is_item = nid < PROPERTY_BASE
-        if int(nid[is_item].max(initial=0)) >= _ITEM_LIMIT or                 int((nid[~is_item] - PROPERTY_BASE).max(initial=0)) >= _ITEM_LIMIT:
+        if (int(nid[is_item].max(initial=0)) >= _ITEM_LIMIT
+                or int((nid[~is_item] - PROPERTY_BASE).max(initial=0)) >= _ITEM_LIMIT):
             raise _Unfit()
         items.put(nid[is_item], idx[is_item], base=0, where=where)
         props.put(nid[~is_item] - PROPERTY_BASE, idx[~is_item], base=PROPERTY_BASE, where=where)
