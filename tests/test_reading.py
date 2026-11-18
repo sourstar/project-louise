@@ -260,9 +260,11 @@ def test_an_anthology_or_a_record_without_dates_takes_the_century_alone():
 
 
 def test_the_century_forms_parsed():
-    for text, span in [("early 14th century", (1300, 1333)), ("the mid-15th century", (1434, 1466)),
-                       ("late nineteenth century", (1867, 1899)), ("the 14th–15th centuries", (1300, 1499)),
-                       ("16th century", (1500, 1599)), ("in 1605", None)]:
+    for text, span in [("written in the early 14th century", (1300, 1333)),
+                       ("composed in the mid-15th century", (1434, 1466)),
+                       ("published in the late nineteenth century", (1867, 1899)),
+                       ("written in the 14th–15th centuries", (1300, 1499)),
+                       ("printed in the 16th century", (1500, 1599)), ("in 1605", None)]:
         assert works.stated_century([text])[0] == span, text
 
 
@@ -319,10 +321,14 @@ def test_a_words_readings_are_cached_within_a_version(tmp_path):
 def test_every_century_form_the_nodes_summaries_use():
     # the forms München's count found on the node's 1,112 Italian records, 2026-11-18
     for text, span in [("written in the 14th and 15th centuries", (1300, 1499)),
-                       ("the sixteenth century", (1500, 1599)), ("the early 14th-century", (1300, 1333)),
-                       ("a nineteenth-century novel", (1800, 1899)),
-                       ("the early twentieth-century", (1900, 1933)), ("late nineteenth-century", (1867, 1899)),
-                       ("early 14th centuries", (1300, 1333)), ("a first-century text", (0, 99))]:
+                       ("written in the sixteenth century", (1500, 1599)),
+                       ("written in the early 14th-century.", (1300, 1333)),
+                       ("published in the early twentieth-century", (1900, 1933)),
+                       ("composed in the late nineteenth-century", (1867, 1899)),
+                       ("written in the early 14th centuries", (1300, 1333)),
+                       ("a text from the first-century", (0, 99)),
+                       # adjectival, the work's kind and not its date: none (architecture, 2026-11-18)
+                       ("a nineteenth-century novel", None), ("an early 14th-century poem written", None)]:
         assert works.stated_century([text])[0] == span, text
 
 
@@ -420,3 +426,45 @@ def test_the_shown_first_publication_says_when_pgs_automatic_summary_states_it(m
     hits = [{"chunk_id": "gutenberg:1:0:1"}]
     works.attach_first_published(SimpleNamespace(name="g", plugin="gutenberg", codex=object()), hits)
     assert hits[0]["first_published"] == 1605 and hits[0]["first_published_by"] == "PG's automatic summary"
+
+
+
+def test_a_century_is_the_works_only_in_a_writing_or_publication_context():
+    # the node's examples, 2026-11-18
+    for text in ["Mulazzi's work is a historical novel set in the 16th century.",                    # 17850
+                 "Set in 17th-century Netherlands, the novel follows a tulip grower.",               # 68090
+                 "A historical account set in the 14th century, it was written later.",              # 58247
+                 "It is a study of music in Italy during the late 18th and early 19th centuries."]:  # 43181
+        assert works.stated_century([text])[0] is None, text
+    assert works.stated_century(["The commentary was likely written in the early 20th century."])[0] == (1900, 1933)
+    assert works.stated_century(["It was likely written in the late 19th century."])[0] == (1867, 1899)
+    assert works.stated_century(["The play was first performed in the early 16th century."])[0] == (1500, 1533)
+    assert works.century_statement(["It was published in the 16th century."])[2] == "published"
+
+
+def _life_rec(summary, birth, death, date=None):
+    rec = {"extra": {"marc": {"520": [summary]},
+                     "creators_detail": [{"name": "A", "role": "aut", "birth": str(birth), "death": str(death)}]}}
+    if date:
+        rec["date"] = date
+    return rec
+
+
+def test_the_report_of_a_summary_date_outside_the_authors_life():
+    giannone = _life_rec("It was likely written in the early 19th century.", 1676, 1748, "1820")
+    assert works.summary_date_outside_life(giannone) is None            # the edition's own year inside: not reported
+    giannone.pop("date")
+    assert "written" in works.summary_date_outside_life(giannone)
+    pitre = _life_rec("A collection of tales written in the early 18th century.", 1841, 1916)
+    assert works.summary_date_outside_life(pitre) == ("the summary says 'early 18th century' (written); "
+                                                      "the author lived 1841–1916")
+    posthumous = _life_rec("The diary was published in the late 19th century.", 1700, 1760)
+    assert works.summary_date_outside_life(posthumous) is None          # a posthumous publication
+    setting = _life_rec("A novel set in the 14th century.", 1850, 1900)
+    assert works.summary_date_outside_life(setting) is None             # its setting, never its date
+    assert works.summary_date_outside_life(_life_rec("written in the 14th century", 1265, 1321)) is None
+
+
+def test_gutenberg_declares_the_summary_date_issue():
+    from app.plugins.gutenberg import source
+    assert works.SUMMARY_DATE_OUTSIDE_LIFE in source.ISSUES

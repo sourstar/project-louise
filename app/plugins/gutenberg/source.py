@@ -190,6 +190,11 @@ ISSUES = {
                           "the reference is dropped from the text and the figures",
     "epub-document-missing": "the epub's reading order (spine) names a document the epub does "
                              "not contain or its manifest does not list; that text is not read",
+    # operator, 2026-11-18: "Add these inconsistencies to the report but before
+    # double check for postumous publications" — app/ask/works.py
+    "summary-date-outside-life": "PG's summary (marc520) dates the work before its author's birth, or "
+                                 "says it was written after the author's death (a posthumous "
+                                 "publication is never reported); the reader judges",
 }
 
 
@@ -601,6 +606,13 @@ class GutenbergSource:
             for n in dict.fromkeys(produced) if n not in named]
         subjects = [s.strip() for s in meta["subjects"].split("|") if s.strip()]
         edition_year, edition_source = edition_date(meta["marc"], text_header)
+        # the summary's date against the author's lifetime, by the year rule's
+        # own functions (app/ask/works.py): reported, never applied to the record
+        from app.ask import works as _works
+        why = _works.summary_date_outside_life({"date": edition_year, "extra": {
+            "marc": meta["marc"], "creators_detail": meta["creators_detail"]}})
+        if why:
+            found.append(Issue(_works.SUMMARY_DATE_OUTSIDE_LIFE, why))
         return CanonicalDoc(
             uid=f"{self.source_id}:{native_id}",
             title=meta["title"],

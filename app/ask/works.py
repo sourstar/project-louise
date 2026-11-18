@@ -230,23 +230,94 @@ _CENTURY = re.compile(r"\b(?:(early|mid|middle|late)[\s-]+)?(?:" + _ORD + r")(?:
                       + _ORD + r"))?[\s-]+centur(?:y|ies)\b", re.IGNORECASE)
 
 
-def stated_century(summaries) -> tuple[tuple[int, int] | None, str]:
-    """(the span of years, the words) of the first century the summary
-    states: the Nth is (N-1)00-(N-1)99; early its first third, mid its
+#: the words that make a century the WORK's (architecture, 2026-11-18,
+#: approved): its writing, composition or publication — "written", "composed",
+#: "created", "penned", "compiled", "published", "printed", "first performed"
+#: (a play's composition), "from the Nth century"
+_CONTEXT = re.compile(r"(?i)\b(written|composed|created|penned|compiled|published|printed|first\s+performed|from)\b")
+#: never its setting or subject: "set in", "set during", "takes place",
+#: "during", "about", "of" immediately before the century (17850 "historical
+#: novel set in the 16th century", 68090 "Set in 17th-century Netherlands")
+_SETTING = re.compile(r"(?i)\b(?:set\s+in|set\s+during|takes?\s+place(?:\s+in)?|during|about|of)\s+(?:the\s+)?$")
+_PUBLISHED_WORDS = ("published", "printed")
+
+
+def century_statement(summaries) -> tuple[tuple[int, int] | None, str, str]:
+    """(the span, the words, the kind) of the first century the summary
+    states AS THE WORK'S: in a writing, composition or publication context
+    of its sentence, never its setting or subject, never an adjectival
+    "Nth-century <noun>". The kind: "published" (published, printed) or
+    "written" (the others); "edition" where the sentence speaks of an
+    edition. The Nth is (N-1)00-(N-1)99; early its first third, mid its
     second, late its last; "Nth-Mth" from the first's start to the last's end."""
     for s in summaries or []:
-        m = _CENTURY.search(str(s))
-        if not m:
-            continue
-        q = (m.group(1) or "").lower()
-        n = int(m.group(2)) if m.group(2) else _ORDINAL_WORDS[m.group(3).lower()]
-        last = (int(m.group(4)) if m.group(4) else _ORDINAL_WORDS[m.group(5).lower()]) if (m.group(4) or m.group(5)) else n
-        lo, hi = (n - 1) * 100, (last - 1) * 100 + 99
-        if last == n and q:
-            lo, hi = {"early": (lo, lo + 33), "mid": (lo + 34, lo + 66), "middle": (lo + 34, lo + 66),
-                      "late": (lo + 67, lo + 99)}[q]
-        return (lo, hi), m.group(0).strip()
-    return None, ""
+        text = str(s)
+        for m in _CENTURY.finditer(text):
+            start = max(text.rfind(".", 0, m.start()), text.rfind("!", 0, m.start()),
+                        text.rfind("?", 0, m.start())) + 1
+            pre = text[start:m.start()]
+            if _SETTING.search(pre):
+                continue                                    # its setting or subject, never its date
+            after = text[m.end():m.end() + 2]
+            if "-centur" in m.group(0).lower() and re.match(r"\s\w", after):
+                continue                                    # "a 14th-century poem": adjectival
+            ctx = [c.group(1).lower() for c in _CONTEXT.finditer(pre)]
+            if not ctx:
+                continue                                    # no writing or publication said
+            end = text.find(".", m.end())
+            sentence = text[start:end if end >= 0 else len(text)]
+            kind = ("edition" if re.search(r"(?i)\bedition\b", sentence)
+                    else "published" if ctx[-1] in _PUBLISHED_WORDS else "written")
+            q = (m.group(1) or "").lower()
+            n = int(m.group(2)) if m.group(2) else _ORDINAL_WORDS[m.group(3).lower()]
+            last = (int(m.group(4)) if m.group(4) else _ORDINAL_WORDS[m.group(5).lower()]) \
+                if (m.group(4) or m.group(5)) else n
+            lo, hi = (n - 1) * 100, (last - 1) * 100 + 99
+            if last == n and q:
+                lo, hi = {"early": (lo, lo + 33), "mid": (lo + 34, lo + 66), "middle": (lo + 34, lo + 66),
+                          "late": (lo + 67, lo + 99)}[q]
+            return (lo, hi), m.group(0).strip(), kind
+    return None, "", ""
+
+
+def stated_century(summaries) -> tuple[tuple[int, int] | None, str]:
+    """(the span, the words) of `century_statement`."""
+    span, words, _kind = century_statement(summaries)
+    return span, words
+
+
+#: the origin-issues code (app/issues.py; operator, 2026-11-18: "Add these
+#: inconsistencies to the report but before double check for postumous
+#: publications"), reported by gutenberg's parse through the year rule's own
+#: functions
+SUMMARY_DATE_OUTSIDE_LIFE = "summary-date-outside-life"
+
+
+def summary_date_outside_life(record: dict[str, Any]) -> str | None:
+    """Why the summary's date contradicts the author's lifetime, or None. A
+    date before the author's birth; a date after death the summary says was
+    WRITTEN, with no edition in its sentence. Never a posthumous PUBLICATION
+    (the summary speaks of publication, or the edition's own year falls
+    inside the stated span)."""
+    marc = (record.get("extra") or {}).get("marc") or {}
+    life, span_text = lifetime(record, False)
+    if not life:
+        return None
+    summaries = marc.get("520") or []
+    first = stated_first_published(summaries)
+    if first is not None and first < life[0]:
+        return f"the summary says first published in {first}; the author lived {span_text}"
+    span, words, kind = century_statement(summaries)
+    if span is None:
+        return None
+    edition = _YEAR.search(str(record.get("date") or ""))
+    if edition and span[0] <= int(edition.group(1)) <= span[1]:
+        return None                                         # the edition's century, not the work's
+    if span[1] < life[0]:
+        return f"the summary says '{words}' ({kind}); the author lived {span_text}"
+    if span[0] > life[1] and kind == "written":
+        return f"the summary says '{words}' (written); the author lived {span_text}"
+    return None
 
 
 #: an abridgement, by the edition's own words — never "unabridged"
