@@ -282,3 +282,38 @@ is the same.
 With every language on the MoE: ~260 days (~8.5 months), ~1,900 kWh,
 ~€560. The card does nothing else meanwhile: gutenberg-nemo and wikidata
 wait, or share the card and stretch both.
+
+## 9. Roadmap (2026-11-18)
+
+Scope: history and memoirs (§6). Local models, 24×7 (§8). Each step
+ends at a gate, and a step starts only after the gate before it.
+"Done" = in the repo with tests (CLAUDE.md).
+
+| # | step | what | duration (i) | gate (output) |
+|---|---|---|---|---|
+| 0 | **Decide** (operator) | (a) local or API (§4.1); (b) MoE for every language, or split with the dense model (§6); (c) 24×7, which reverses 2026-11-02's quiet periods; (d) the first slice: la + el (39 books) or a small English one | 1 day | four answers |
+| 1 | **Engine checks** (night) | Qwen3-30B-A3B and Gemma 3 27B on the deployed SYCL llama.cpp: same bytes at temperature 0 over 3 fresh loads (invariant 12); **prefill tok/s** and **parallel-slot scaling**, the two unmeasured inputs; GLiNER determinism under torch (invariant 12 "Open") | 2 nights | engine statements + a measured throughput table |
+| 2 | **Benchmarks** (existing harnesses) | pick: `kg_link_pick_eval.py` on Mewsli-X, LLM pick against a cross-encoder pick; relations: `kg_relations_eval.py` on Re-DocRED; summaries: `summary_eval.py` (WikiLingua, BookSum); MoE against dense on the non-English rows | 3–4 nights | acc@1, F1, chrF, tok/s per model: settles 0(b) and the pick's form |
+| 3 | **Pilot** (§1) | 1,000 stratified chunks of the scope, end to end; mentions per chunk, ≥ 2-mention share, community count; the `model-agreement` floor from 1,000 mentions re-run twice (decided 2026-10-20) | 2 nights | §6–8 recomputed from counts, not (i); go / no-go |
+| 4 | **Build the methods** (`tools/`) | GLiNER mentions over a collection's chunks (parse pool, resumable per chunk, `supervise-pass.sh`); linking (search in wikidata's vectors + the chosen picker); relations; Leiden communities + summaries. Each method is written into the Codex `method` | 1–2 weeks | tests green; a dry run on 100 chunks |
+| 4b | **Ask side** (amendments, order step 3) | `attach` places a mention on its chunk; relations on either end; a community as a fact; the reader highlights mentions | 1 week, beside 4 | browser check |
+| 5 | **Prerequisite: wikidata embedded** | linking searches wikidata's Nemotron vectors | per STATUS.md | wikidata vectors served |
+| 6 | **First instance** (amendments, order step 5) | the slice from 0(d): create the annotations Codex (version 9, two targets, Parquet); run all four jobs; `hold records build`, snapshot, `hold check` with `model-agreement`; read a hand sample | la + el: ~1–3 days | checks PASS + a hand-read sample |
+| 7a | **Run: English mentions** | GLiNER over 1.85 M chunks | ~1.5 days | claims written |
+| 7b | **Run: English pick** | MoE (or the picker step 2 chose) | ~118 days | |
+| 7c | **Run: English relations** | MoE | ~87 days | |
+| 7d | **Run: other languages, pick + relations** | dense ~181 days, or MoE ~47 (0(b)) | 47–181 days | |
+| 7e | **Communities + summaries** | Leiden on the whole graph, then summaries | ~13 days | |
+| 8 | **Publish** | records build, snapshot, checks, share; the claims follow gutenberg to gutenberg-nemo by re-pinning the target (amendments, "Which gutenberg") | 1–2 days | snapshot signed, peers adopt |
+
+Notes:
+- **Total** to step 8: ~1 month of preparation (steps 0–6), then
+  **~270–400 days** of runs (7). Each run publishes as it completes:
+  7a + 7b + 7c give a usable English entity graph without waiting for 7d.
+- **The card is exclusive during 7.** gutenberg-nemo (12–15 card-days)
+  and wikidata's embedding should finish before 7b, or the runs stretch.
+- **Every run is resumable** (invariant 2), so a faster picker or more
+  slots found during 7 is deployed at once and the run resumed
+  (CLAUDE.md, "A fix that makes a running job faster").
+- **Dependencies to ask first:** GLiNER under louise-python (torch);
+  Leiden (`leidenalg` + `python-igraph`, or `graspologic`).
