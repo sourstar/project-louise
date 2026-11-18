@@ -413,9 +413,13 @@ def _start(tmp_path, stubs, make_node_dirs):
     import subprocess
     for name, text in STAND_INS.items():
         (stubs.dir / name).write_text(text)
+    # the wrapper imports `app`: the repo root goes on its path by name. It
+    # was reached only through the empty entry an unset PYTHONPATH left
+    # (read as the working directory), so any PYTHONPATH broke both tests
+    root = str(Path(__file__).resolve().parents[2])
+    path = [str(stubs.dir), root, *filter(None, os.environ.get("PYTHONPATH", "").split(os.pathsep))]
     env = dict(os.environ, VEGA_CONFIG=str(make_node_dirs / "vega.json"),
-               FAKE_BACKEND_LOG=str(tmp_path / "backend.log"),
-               PYTHONPATH=os.pathsep.join([str(stubs.dir), os.environ.get("PYTHONPATH", "")]))
+               FAKE_BACKEND_LOG=str(tmp_path / "backend.log"), PYTHONPATH=os.pathsep.join(path))
     port = vw.free_port()
     proc = subprocess.Popen([sys.executable, str(vw.__file__), "--addr", f"127.0.0.1:{port}"],
                             env=env, stderr=subprocess.PIPE, text=True)
