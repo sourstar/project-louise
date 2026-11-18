@@ -409,3 +409,24 @@ Next, in this session:
   title lists' hashes.
 
 On the node: steps 1–3, handed to München.
+
+## 12. The selection rule written down; the Codex has no field for it (2026-11-18)
+
+`docs/notes/wiki-gutenberg-selection.toml`, rule `wiki-gutenberg-select`
+version 1. It holds:
+- the subject rule's words and classes;
+- the five title lists' sha256;
+- the reference implementation's sha256 (`kg_scope_count.py`).
+
+**The scope it selects: 14,602 books.**
+
+| | English | other languages |
+|---|---|---|
+| memoirs | 4,305 | 845 |
+| history | 7,452 | 2,000 |
+
+**Open: where a Codex pins it.**
+- 09 §9.3 refuses any key an annotations Codex does not list, and a
+  claim's `method` has fixed keys.
+- So pinning the rule is a format amendment, a question for the operator
+  (CLAUDE.md: "wire-format changes: ask first").

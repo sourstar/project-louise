@@ -1,0 +1,35 @@
+# wiki-gutenberg: which gutenberg books the annotations collection makes claims about.
+# The selection rule, version 1, as the operator decided it (2026-11-08 … 2026-11-18;
+# wiki-gutenberg-amendments.md "Which books", wiki-gutenberg-claude-plan.md §10–§11).
+# A selection, not a pruning: every gutenberg record stays; books outside get no claims.
+# NOT YET PINNED in any Codex: the field to carry it is an open operator decision.
+id = "wiki-gutenberg-select"
+version = 1
+
+[read_from]
+fields = ["Subjects", "LoCC", "Bookshelves", "Language", "Title"]  # pg_catalog.csv, kept in each record
+
+[subjects]
+memoir_words = ["Biography", "Autobiography", "Memoirs", "Diaries", "Correspondence", "Personal narratives"]
+memoir_class = "LoCC CT"
+exempt_last_parts = ["History and criticism", "Technique", "Study and teaching", "Bibliography", "Theory"]
+fiction_words = ["fiction", "poetry", "drama"]
+fiction_genres = "\b(stories|bildungsromans|romances|novels|tales|fables|legends|picaresque literature)\b"
+fiction_class = "LoCC PZ"
+juvenile = "a subject containing \"juvenile\", or a bookshelf containing \"children\""
+history_class = "LoCC C, D, E, F"
+
+[rule]
+out = "fiction (fiction_words or fiction_genres on a heading's last part, or PZ), unless a memoir; and every book for children"
+memoir = "a memoir word on a heading that is not itself a fiction form, or CT; then the title lists"
+in = "memoir or history, and not out"
+
+[title_lists]  # yes adds a book to the memoir group, no keeps it out; sha256 of each file
+"wiki-gutenberg-memoir-titles-it.toml" = "c972c9425980f0a980cd66b2f866619361fb82ac46418c6941901e0208efe1cf"
+"wiki-gutenberg-memoir-titles-en.toml" = "30c46918f2f591249e77073a9e1c9540ff90f47424fa1856afa9c5f580b7d666"
+"wiki-gutenberg-memoir-titles-fr.toml" = "7a3e5fec3914e99d2c5f9e23b5074b2fa9ee7908539491150d03e3071c8995aa"
+"wiki-gutenberg-memoir-titles-de.toml" = "784fb9c4a34e12f2352f030d9c39dd45b1e5f54c8bbff9c29154ad555a3d76a7"
+"wiki-gutenberg-memoir-titles-es.toml" = "a99950f94063d0b6620505c3eeeb54eefa7225d314bfb32c7e48a7e2fd9691d0"
+
+[reference_implementation]
+"tools/measure/kg_scope_count.py" = "4683f7c488c5ee62267d5e5db3ad399a57bd40cc6bf42fc37f21e90e1d6b711f"
