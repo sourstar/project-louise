@@ -35,6 +35,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--collection", required=True)
     ap.add_argument("--lang", default="it")
     ap.add_argument("--examples", type=int, default=5)
+    ap.add_argument("--author", help="also list every record whose creators name this (e.g. 'porta')")
     a = ap.parse_args(argv)
     from app import collections as collections_mod
     col = collections_mod.by_name(a.collection)
@@ -44,27 +45,55 @@ def main(argv: list[str] | None = None) -> int:
     examples: dict[str, list] = collections.defaultdict(list)
     n = 0
     unparsed, unparsed_examples = 0, []
+    by_author: list[dict] = []
+    claimed = reading.translations_claimed(col) if col is not None else frozenset()
+    by_claim_only, unmarked, unmarked_examples = 0, 0, []
+    _TR = re.compile(r"(?i)\btranslat(?:ed|ion|or)\b|\btradott[oa]\b|\btraduzione\b")
     for r in records_of(a.collection, random.Random(0)):
         if not str(r.get("lang") or "").lower().startswith(a.lang):
             continue
         n += 1
         f = works.edition_facts(r)
+        if a.author and any(a.author.lower() in str(c.get("name") or "").lower()
+                            for c in ((r.get("extra") or {}).get("creators_detail") or []) if isinstance(c, dict)):
+            yy = reading.year_of(fields, f)
+            by_author.append({"uid": r["uid"], "title": str(r.get("title") or "")[:60],
+                              "year": int(yy) if yy else None, "by": getattr(yy, "by", "") if yy else "",
+                              "creators": [(c.get("name"), c.get("role"), c.get("birth"), c.get("death"))
+                                           for c in ((r.get("extra") or {}).get("creators_detail") or [])
+                                           if isinstance(c, dict)]})
         summary = " ".join(str(x) for x in (((r.get("extra") or {}).get("marc") or {}).get("520") or []))
-        if re.search(r"(?i)centur", summary) and not f.century_text:
+        if re.search(r"(?i)centur", summary) and not f.century_text and not f.first_published:
+            # a record its first publication places needs no century (architecture)
             unparsed += 1
             if len(unparsed_examples) < a.examples:
                 unparsed_examples.append({"uid": r["uid"], "summary": summary[:200]})
         if f.century_text:
             forms[re.sub(r"\d+(st|nd|rd|th)", "Nth", f.century_text.lower())] += 1
         y = reading.year_of(fields, f)
+        if r["uid"] in claimed and not f.translated:
+            by_claim_only += 1
+        if not f.translated and r["uid"] not in claimed and _TR.search(summary):
+            unmarked += 1
+            if len(unmarked_examples) < a.examples:
+                unmarked_examples.append({"uid": r["uid"], "title": str(r.get("title") or "")[:60],
+                                          "summary": summary[:160]})
         rule = rule_of(getattr(y, "by", "") if y else "")
         rules[rule] += 1
         if len(examples[rule]) < a.examples:
             examples[rule].append({"uid": r["uid"], "title": str(r.get("title") or "")[:60],
-                                   "year": int(y) if y else None, "by": getattr(y, "by", "") if y else ""})
+                                   "year": int(y) if y else None, "by": getattr(y, "by", "") if y else "",
+                                   # the creators' own dates, as the record states them
+                                   "creators": [(c.get("name"), c.get("role"), c.get("birth"), c.get("death"))
+                                                for c in ((r.get("extra") or {}).get("creators_detail") or [])
+                                                if isinstance(c, dict)][:4]})
     print(json.dumps({"collection": a.collection, "records": n, "rules": dict(rules.most_common()),
+                      "by_author": by_author,
                       "century_forms": dict(forms.most_common(20)),
                       "century_unparsed": unparsed, "century_unparsed_examples": unparsed_examples,
+                      "translations_by_claim_only": by_claim_only,
+                      "translations_unmarked_candidates": unmarked,
+                      "translations_unmarked_examples": unmarked_examples,
                       "examples": examples},
                      ensure_ascii=False, indent=1))
     return 0

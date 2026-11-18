@@ -48,7 +48,8 @@ def test_the_set_records_its_writer_and_counts_its_strata(monkeypatch, tmp_path)
     assert head["chat_model"] == "qwen-test" and head["weights_sha256"] == "abc" and head["temperature"] == 0
     assert len(head["prompt_sha256"]) == 64 and head["strata"] == ["g:1100:1899"]
     assert len(body) == 2 and all(b["refused"] is None for b in body) and {t for t, _m in seen} == {0.0}
-    assert tail == {"counts": {"g:1100:1899": {"kept": 2, "refused": 0}}}
+    assert {k_: v for k_, v in tail["counts"]["g:1100:1899"].items() if k_ in ("kept", "refused")} == \
+        {"kept": 2, "refused": 0}
     # the writer is given the passage alone: never the record's title
     assert all("Rime" not in m[0]["content"] and body[0]["passage"] in seen[0][1][0]["content"]
                for _t, m in seen)
@@ -66,7 +67,8 @@ def test_several_passages_per_record_fill_a_stratum_of_few_books(monkeypatch, tm
     k.main(["--stratum", "g:1300:1399", "--stratum", "g:1500:1599", "--kept", "3", "--per-record", "3",
             "--weights-sha256", "abc", "--out", str(out)])
     tail = json.loads(out.read_text(encoding="utf-8").splitlines()[-1])
-    assert tail["counts"] == {"g:1300:1399": {"kept": 3, "refused": 0}, "g:1500:1599": {"kept": 0, "refused": 0}}
+    got = {st: (c["kept"], c["refused"]) for st, c in tail["counts"].items()}
+    assert got == {"g:1300:1399": (2, 0), "g:1500:1599": (0, 0)}          # one work: at most 2
 
 
 def test_translations_are_left_out_and_counted(monkeypatch, tmp_path):
@@ -81,4 +83,33 @@ def test_translations_are_left_out_and_counted(monkeypatch, tmp_path):
     out = tmp_path / "set.jsonl"
     k.main(["--stratum", "g:1700:1799", "--kept", "5", "--weights-sha256", "abc", "--out", str(out)])
     tail = json.loads(out.read_text(encoding="utf-8").splitlines()[-1])
-    assert tail["counts"]["g:1700:1799"] == {"kept": 1, "refused": 0, "translations_excluded": 1}
+    c = tail["counts"]["g:1700:1799"]
+    assert (c["kept"], c["refused"], c["translations_excluded"]) == (1, 0, 1)
+
+
+def test_a_multi_volume_work_and_one_author_cannot_fill_a_stratum(monkeypatch, tmp_path):
+    import json
+    from app import llm, reading
+    vol = lambda i: {"uid": f"gutenberg:{i}", "lang": "it", "title": f"Istoria civile del regno di Napoli, Vol. {i}",
+                     "extra": {"creators_detail": [{"role": "aut", "name": "Giannone, Pietro"}]},
+                     "sections": [["I", "Una frase lunga che continua sul regno. " * 30]] * 4}
+    other = lambda i, au: {"uid": f"gutenberg:{i}", "lang": "it", "title": f"Opera {'ABCDEFG'[i % 7]}",
+                           "extra": {"creators_detail": [{"role": "aut", "name": au}]},
+                           "sections": [["I", "Una frase lunga che continua sul mercante. " * 30]] * 4}
+    recs = [vol(1), vol(2), vol(3)] + [other(10 + i, "Muratori") for i in range(4)] + [other(20, "Gozzi")]
+    monkeypatch.setattr(k, "records_of", lambda name, rng: iter(recs))
+    monkeypatch.setattr(reading, "years", lambda hits, collection=None: {0: reading.Year(1750, "x")})
+    monkeypatch.setattr(llm, "chat", lambda m, temperature, max_tokens: "Chi governava il regno?")
+    out = tmp_path / "set.jsonl"
+    k.main(["--stratum", "g:1700:1799", "--kept", "20", "--per-record", "3", "--weights-sha256", "a",
+            "--out", str(out)])
+    lines = [json.loads(x) for x in out.read_text(encoding="utf-8").splitlines()]
+    body = [x for x in lines[1:-1]]
+    by_title = {}
+    for b in body:
+        by_title.setdefault(k._VOLUME.sub("", b["title"]).strip(), 0)
+        by_title[k._VOLUME.sub("", b["title"]).strip()] += 1
+    assert by_title["Istoria civile del regno di Napoli"] == 2        # the work, not each volume
+    assert sum(1 for b in body if b["title"].startswith("Opera") and b["uid"] != "gutenberg:20") == 4  # Muratori: 4
+    tail = lines[-1]["counts"]["g:1700:1799"]
+    assert tail["kept"] == 8 and tail["works"] == 4

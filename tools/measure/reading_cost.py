@@ -92,6 +92,13 @@ def main(argv: list[str] | None = None) -> int:
     for name in a.collection:
         hits = sample_hits(name, a.depth, a.seed)
         records = hits[::2]                                   # reading.years is per record
+        # the modules a web process's own search has imported before any rerank:
+        # imported here first, their cost reported apart (München's unexplained
+        # ~0.8 s cold, 2026-11-18, was these first imports)
+        t0 = time.perf_counter()
+        import app.retrieval, app.ask.works, app.ask.figures, app.ask.results  # noqa: E401,F401
+        import app.share.seeder, app.hold.collection, app.pack.records  # noqa: E401,F401
+        t_imports = time.perf_counter() - t0
         # the cold call's parts: the collection files and the snapshot, which a
         # web process's own search has already loaded, then the reader's batch
         t0 = time.perf_counter(); col_obj = reading._collection(name); t_col = time.perf_counter() - t0
@@ -126,6 +133,7 @@ def main(argv: list[str] | None = None) -> int:
             sql.append(t1 - t0); app_.append(t2 - t1); look.append(t2 - t0)
             changed = sum(1 for (t, used) in out if used)
         print(json.dumps({"collection": name, "records": len(records), "with_year": len(years),
+                          "cold_imports_ms": round(t_imports * 1000, 1),
                           "cold_collection_ms": round(t_col * 1000, 1),
                           "cold_snapshot_ms": round(t_snap * 1000, 1),
                           "years_cold_ms": round(cold * 1000, 1),

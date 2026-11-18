@@ -347,3 +347,31 @@ def test_the_index_from_a_child_is_installed_with_its_years_sources(monkeypatch)
     reading._index_off_process(col, 10)
     got = reading.years([{"chunk_id": "gutenberg:1:0:1"}, {"chunk_id": "gutenberg:2:0:1"}], col)
     assert got == {0: 1310, 1: 1726} and got[1].translated and got[0].by.startswith("its author's")
+
+
+def test_a_translation_of_claim_marks_a_record_without_a_trl_credit(monkeypatch):
+    from app.ask import works as works_mod
+    f = works_mod.EditionFacts
+    col = _fake_collection(monkeypatch, [{"gutenberg:1": f(first_published=1819), "gutenberg:2": f(first_published=1605)}])
+    reading.index_years(col)
+    monkeypatch.setattr(reading, "translations_claimed", lambda c: frozenset({"gutenberg:1"}))
+    got = reading.years([{"chunk_id": "gutenberg:1:0:1"}, {"chunk_id": "gutenberg:2:0:1"}], col)
+    assert got == {0: 1819, 1: 1605} and got[0].translated and not got[1].translated
+    assert reading.apply("l'huomo", got[0], reading.Lookup({"huomo": []}, "v"), reading.RERANK) == ("l'huomo", [])
+
+
+def test_translations_claimed_reads_the_subjects_of_translation_of_claims(monkeypatch):
+    from types import SimpleNamespace
+    from app.ask import works as works_mod, results as results_mod
+    from app.hold import annotations as ann
+    claim = lambda t, s, o: SimpleNamespace(claim={"type": t, "subject": s, "object": o})
+    idx = SimpleNamespace(snapshot_id="s1", by_target={
+        "gutenberg:1": [claim("translation-of", "gutenberg:1", "gutenberg:9")],
+        "gutenberg:9": [claim("translation-of", "gutenberg:1", "gutenberg:9")],
+        "gutenberg:2": [claim("same-work", "gutenberg:2", "gutenberg:3")]})
+    monkeypatch.setattr(works_mod, "_usable", lambda c, a: [SimpleNamespace(name="gutenberg-book-editions")])
+    monkeypatch.setattr(ann, "index_of", lambda tree: idx)
+    from pathlib import Path
+    monkeypatch.setattr(results_mod, "_root", lambda: Path("/root"))
+    reading._claimed.clear()
+    assert reading.translations_claimed(SimpleNamespace(name="gutenberg-it")) == frozenset({"gutenberg:1"})

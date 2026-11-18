@@ -20,7 +20,11 @@ could type to find that passage's content. The writer sees the ORIGINAL
 passage only — never the reader's copy, the record's title or any other hit
 (the ruling). The target is that record.
 
-Translations (a `trl` credit) are left out — the glossary never reads them —
+At most PER_WORK queries a WORK (its same-work cluster from `--claims`,
+else its title without volume markers, with its author) and PER_AUTHOR an
+author, per stratum; each stratum's count of books and works is in the
+footer, a short stratum reported as it is, never pooled. Translations (a
+`trl` credit or a `translation-of` claim, `reading.years`) are left out — the glossary never reads them —
 and counted per stratum (`translations_excluded`). A query is REFUSED, and
 kept with its reason for review, if it names the
 title, copies four or more consecutive words of the passage, is longer
@@ -153,6 +157,49 @@ def _one(out, r: dict, name: str, key: str, y: int, rng: random.Random, made: di
     return qid
 
 
+#: architecture, 2026-11-18: a multi-volume work (Giannone's Istoria civile,
+#: 8 of the 1700s' 20) must not fill a stratum
+PER_WORK, PER_AUTHOR = 2, 4
+_VOLUME = re.compile(r"(?i)\b(?:vol(?:ume)?|tomo|parte|libro|book|canto)\.?\s*(?:[ivxlcdm]+|\d+)\b|[,;:(\[].*$|\d+")
+
+
+def author_of(r: dict) -> str:
+    for a in (r.get("extra") or {}).get("creators_detail") or []:
+        if isinstance(a, dict) and str(a.get("role") or "") in ("aut", "author", "cre", "creator"):
+            return str(a.get("name") or "").strip().lower()
+    return str((r.get("creators") or [""])[0]).strip().lower()
+
+
+def work_key(r: dict, cluster: dict[str, str]) -> str:
+    """The record's WORK: its same-work cluster, else its title without its
+    volume and part markers, with its author."""
+    if r["uid"] in cluster:
+        return "cluster:" + cluster[r["uid"]]
+    title = _VOLUME.sub("", str(r.get("title") or "")).strip().lower()
+    return f"{title}|{author_of(r)}"
+
+
+def clusters(claims: Path | None) -> dict[str, str]:
+    """{uid: its same-work cluster's root} (union-find over same-work claims)."""
+    if claims is None:
+        return {}
+    parent: dict[str, str] = {}
+
+    def find(x: str) -> str:
+        while parent.setdefault(x, x) != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+    with open(claims, encoding="utf-8") as f:
+        for line in f:
+            c = json.loads(line)
+            if c.get("type") == "same-work":
+                a, b = find(str(c.get("subject"))), find(str(c.get("object")))
+                if a != b:
+                    parent[a] = b
+    return {u: find(u) for u in list(parent)}
+
+
 def stratum(spec: str) -> tuple[str, int, int]:
     name, lo, hi = spec.rsplit(":", 2)
     return name, int(lo), int(hi)
@@ -165,6 +212,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--stratum", action="append", required=True, type=stratum,
                     help="<collection>:<from year>:<to year>")
     ap.add_argument("--kept", type=int, default=60, help="queries kept per stratum")
+    ap.add_argument("--claims", type=Path, help="the annotations' claims file: same-work clusters are works")
     ap.add_argument("--per-record", type=int, default=1,
                     help="passages (queries) per record, at most: a stratum of few books still fills")
     ap.add_argument("--weights-sha256", required=True, help="the chat model's weights file sha256")
@@ -180,9 +228,13 @@ def main(argv: list[str] | None = None) -> int:
                               "prompt_sha256": hashlib.sha256(PROMPT.encode("utf-8")).hexdigest(),
                               "temperature": 0, "seed": a.seed,
                               "strata": [f"{n}:{lo}:{hi}" for n, lo, hi in a.stratum]}, ensure_ascii=False) + "\n")
+        cluster = clusters(a.claims)
         for name, lo, hi in a.stratum:
             key = f"{name}:{lo}:{hi}"
             made = counts.setdefault(key, {"kept": 0, "refused": 0})
+            per_work: dict[str, int] = {}
+            per_author: dict[str, int] = {}
+            books: set[str] = set()
             for r in records_of(name, rng):
                 if made["kept"] >= a.kept:
                     break
@@ -194,10 +246,20 @@ def main(argv: list[str] | None = None) -> int:
                     # the glossary never reads a translation (architecture, 2026-11-18): out of the set
                     made["translations_excluded"] = made.get("translations_excluded", 0) + 1
                     continue
+                w, au = work_key(r, cluster), author_of(r)
                 for _p in range(a.per_record):
-                    if made["kept"] >= a.kept:
+                    if made["kept"] >= a.kept or per_work.get(w, 0) >= PER_WORK \
+                            or (au and per_author.get(au, 0) >= PER_AUTHOR):
                         break
+                    before = made["kept"]
                     qid = _one(out, r, name, key, y, rng, made, qid, llm)
+                    if made["kept"] > before:
+                        per_work[w] = per_work.get(w, 0) + 1
+                        if au:
+                            per_author[au] = per_author.get(au, 0) + 1
+                        books.add(r["uid"])
+            made["books"] = len(books)
+            made["works"] = len(per_work)
             print(f"{key}: {made['kept']} kept, {made['refused']} refused", file=sys.stderr)
         out.write(json.dumps({"counts": counts}) + "\n")
     return 0
