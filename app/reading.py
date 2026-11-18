@@ -357,6 +357,55 @@ def warm(bound_s: float = WARM_BOUND_S, store=None) -> dict[str, str]:
 
 #: the year indexes' warm bound, apart from the digests'
 YEARS_WARM_BOUND_S = 600.0
+#: the index is built in a SPAWNED CHILD PROCESS, its result handed back:
+#: built in the web process's own thread, the first build (271 s on the
+#: node's gutenberg, 2026-11-18, reading every part's records) held the
+#: interpreter lock against the searches beside it (architecture). The
+#: thread here only waits on the child. False builds in-thread (tests).
+INDEX_IN_CHILD = True
+
+
+def _index_in_child(name: str, bound_s: float) -> tuple[dict[str, tuple[int, str, bool]], bool] | None:
+    """In the child: the collection's year index, as plain values."""
+    import time
+    from . import collections as collections_mod
+    col = collections_mod.by_name(name)
+    if col is None:
+        return None
+    idx = index_years(col, time.monotonic() + bound_s)
+    if idx is None:
+        return None
+    return ({u: (int(y), getattr(y, "by", ""), bool(getattr(y, "translated", False)))
+             for u, y in idx["years"].items()}, bool(idx["complete"]))
+
+
+def _index_off_process(col, bound_s: float) -> None:
+    """The collection's year index built in a child process and installed
+    here; in this thread where the child cannot run (or INDEX_IN_CHILD is
+    off). A complete index costs one look."""
+    import time
+    tree, snap = _snapshot_of(col)
+    if snap is None:
+        return
+    idx = _index_for(tree, snap)
+    if idx["complete"]:
+        return
+    if not INDEX_IN_CHILD:
+        index_years(col, time.monotonic() + bound_s)
+        return
+    import concurrent.futures as cf
+    import multiprocessing
+    try:
+        with cf.ProcessPoolExecutor(max_workers=1, mp_context=multiprocessing.get_context("spawn")) as ex:
+            got = ex.submit(_index_in_child, col.name, bound_s).result(timeout=bound_s + 60)
+    except Exception:   # noqa: BLE001 — a child that cannot run: built here, as before
+        index_years(col, time.monotonic() + bound_s)
+        return
+    if got is None:
+        return
+    years, complete = got
+    idx["years"].update({u: Year(y, by, tr) for u, (y, by, tr) in years.items()})
+    idx["complete"] = complete
 _years_warming = {"thread": None}
 
 
@@ -374,10 +423,9 @@ def warm_years(bound_s: float = YEARS_WARM_BOUND_S) -> None:
         try:
             from . import collections as collections_mod
             held, _bad = collections_mod.load_all(skip_unreadable=True)
-            deadline = time.monotonic() + bound_s
             for col in held:
                 if year_fields(getattr(col, "plugin", None)):
-                    index_years(col, deadline)
+                    _index_off_process(col, bound_s)
         except Exception:   # noqa: BLE001 — a warm never fails anything
             pass
     t = threading.Thread(target=run, name="reading-years", daemon=True)

@@ -108,15 +108,22 @@ def main(argv: list[str] | None = None) -> int:
             t0 = time.perf_counter(); rd.years(records); indexed.append(time.perf_counter() - t0)
         texts = [h["text"] for h in hits]
         reading.warm(store=store) if store is not None else reading.warm()
-        look = []
+        look, sql, app_ = [], [], []
         changed = 0
-        for _ in range(a.runs):
+        first_lookup = None
+        for run in range(a.runs):
+            if run == 0:
+                reading._word_cache.clear(); reading._word_cache_version["v"] = ""
             t0 = time.perf_counter()
             found = reading.lookup(reading.words_of(texts), store) if store is not None else \
                 reading.lookup(reading.words_of(texts))
+            t1 = time.perf_counter()
             out = [reading.apply(h["text"], years.get(i // 2, 0), found, reading.RERANK)
                    for i, h in enumerate(hits) if (i // 2) in years]
-            look.append(time.perf_counter() - t0)
+            t2 = time.perf_counter()
+            if run == 0:
+                first_lookup = t1 - t0                   # the word cache empty: what a new query's words cost
+            sql.append(t1 - t0); app_.append(t2 - t1); look.append(t2 - t0)
             changed = sum(1 for (t, used) in out if used)
         print(json.dumps({"collection": name, "records": len(records), "with_year": len(years),
                           "cold_collection_ms": round(t_col * 1000, 1),
@@ -128,6 +135,9 @@ def main(argv: list[str] | None = None) -> int:
                           "index_records_with_year": len([v for v in (idx or {}).get("years", {}).values() if v]),
                           "years_indexed_ms": round(statistics.median(indexed) * 1000, 2),
                           "lookup_apply_ms": round(statistics.median(look) * 1000, 1),
+                          "lookup_uncached_ms": round((first_lookup or 0) * 1000, 1),
+                          "lookup_cached_ms": round(statistics.median(sql[1:] or sql) * 1000, 2),
+                          "apply_ms": round(statistics.median(app_) * 1000, 2),
                           "texts": len(texts), "texts_changed": changed,
                           "version": found.version}), flush=True)
     return 0

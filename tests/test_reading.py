@@ -314,3 +314,36 @@ def test_a_words_readings_are_cached_within_a_version(tmp_path):
     assert "huomo" in a.by_form and "casa" not in a.by_form and "casa" in reading._word_cache
     st.con.execute("DELETE FROM wikisource_reading")          # unchanged version: the cache answers
     assert reading.lookup(["huomo"], st).by_form["huomo"][0].reg == "uomo"
+
+
+def test_every_century_form_the_nodes_summaries_use():
+    # the forms München's count found on the node's 1,112 Italian records, 2026-11-18
+    for text, span in [("written in the 14th and 15th centuries", (1300, 1499)),
+                       ("the sixteenth century", (1500, 1599)), ("the early 14th-century", (1300, 1333)),
+                       ("a nineteenth-century novel", (1800, 1899)),
+                       ("the early twentieth-century", (1900, 1933)), ("late nineteenth-century", (1867, 1899)),
+                       ("early 14th centuries", (1300, 1333)), ("a first-century text", (0, 99))]:
+        assert works.stated_century([text])[0] == span, text
+
+
+def test_the_index_from_a_child_is_installed_with_its_years_sources(monkeypatch):
+    from app.ask import works as works_mod
+    f = works_mod.EditionFacts
+    col = _fake_collection(monkeypatch, [{}])
+    monkeypatch.setattr(reading, "INDEX_IN_CHILD", True)
+
+    class Ex:
+        def __init__(self, **k): pass
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def submit(self, fn, name, bound):
+            class F:
+                def result(self, timeout=None):
+                    return ({"gutenberg:1": (1310, "its author's dates (1265–1321)", False),
+                             "gutenberg:2": (1726, "its first publication (1726)", True)}, True)
+            return F()
+    import concurrent.futures as cf
+    monkeypatch.setattr(cf, "ProcessPoolExecutor", Ex)
+    reading._index_off_process(col, 10)
+    got = reading.years([{"chunk_id": "gutenberg:1:0:1"}, {"chunk_id": "gutenberg:2:0:1"}], col)
+    assert got == {0: 1310, 1: 1726} and got[1].translated and got[0].by.startswith("its author's")

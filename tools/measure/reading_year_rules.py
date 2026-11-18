@@ -43,11 +43,17 @@ def main(argv: list[str] | None = None) -> int:
     forms: collections.Counter = collections.Counter()
     examples: dict[str, list] = collections.defaultdict(list)
     n = 0
+    unparsed, unparsed_examples = 0, []
     for r in records_of(a.collection, random.Random(0)):
         if not str(r.get("lang") or "").lower().startswith(a.lang):
             continue
         n += 1
         f = works.edition_facts(r)
+        summary = " ".join(str(x) for x in (((r.get("extra") or {}).get("marc") or {}).get("520") or []))
+        if re.search(r"(?i)centur", summary) and not f.century_text:
+            unparsed += 1
+            if len(unparsed_examples) < a.examples:
+                unparsed_examples.append({"uid": r["uid"], "summary": summary[:200]})
         if f.century_text:
             forms[re.sub(r"\d+(st|nd|rd|th)", "Nth", f.century_text.lower())] += 1
         y = reading.year_of(fields, f)
@@ -57,7 +63,9 @@ def main(argv: list[str] | None = None) -> int:
             examples[rule].append({"uid": r["uid"], "title": str(r.get("title") or "")[:60],
                                    "year": int(y) if y else None, "by": getattr(y, "by", "") if y else ""})
     print(json.dumps({"collection": a.collection, "records": n, "rules": dict(rules.most_common()),
-                      "century_forms": dict(forms.most_common(20)), "examples": examples},
+                      "century_forms": dict(forms.most_common(20)),
+                      "century_unparsed": unparsed, "century_unparsed_examples": unparsed_examples,
+                      "examples": examples},
                      ensure_ascii=False, indent=1))
     return 0
 
