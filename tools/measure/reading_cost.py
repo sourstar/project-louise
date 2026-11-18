@@ -1,9 +1,11 @@
 """MEASUREMENT (not product code): what the historical reader costs a rerank
 at depth 50 on the node's REAL manifests (architecture, 2026-11-18, fix c:
 "Time reading.years and reading.lookup on the node against the real
-gutenberg and normattiva manifests BEFORE the deploy"; measuring.md §6).
+gutenberg and normattiva manifests BEFORE the deploy"; measuring.md §6) —
+gutenberg alone since the operator's "Only Gutenberg, normattiva language is
+too recent" (2026-11-18).
 
-    python -m tools.measure.reading_cost --collection gutenberg --collection normattiva \\
+    python -m tools.measure.reading_cost --collection gutenberg \\
         [--depth 50] [--runs 5] [--readings-tsv wikisource_readings.tsv] [--seed 1]
 
 READ-ONLY on the node: it reads the collections' snapshots and records and

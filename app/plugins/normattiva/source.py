@@ -302,9 +302,10 @@ ISSUES = {
 
 class NormattivaSource:
     source_id = "normattiva"
-    #: the act's own date states its year (app/reading.py; architecture,
-    #: 2026-11-18: "normattiva and the legal collections: the act's own date")
-    publication_year_fields = ("date",)
+    #: NO publication-year fields: the historical reader (app/reading.py)
+    #: never reads an act (operator, 2026-11-18: "Only Gutenberg, normattiva
+    #: language is too recent")
+    publication_year_fields: tuple[str, ...] = ()
     ISSUES = ISSUES
     LOCATOR_SEP = _LOCATOR_SEP
     ELI_PROFILE = PROFILE

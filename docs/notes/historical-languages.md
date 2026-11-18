@@ -305,7 +305,9 @@ München): the reading is two REFERENCE SOURCES (06 §6.5, amended):
 - *The year*: `publication_year_fields`, declared per plugin, in order —
   gutenberg `("first_published", "date")` (operator: "work's
   first-publication year is the default, and print year of the edition
-  Project Gutenberg transcribed is the fallback"), normattiva `("date",)`;
+  Project Gutenberg transcribed is the fallback"); normattiva declares NONE
+  (operator, 2026-11-18: "Only Gutenberg, normattiva language is too
+  recent"), so its acts are never read nor moved;
   none declared, nothing applied; PG's release date (`extra.issued`)
   never read (tests/test_reading.py: 1605 / 1851 / none, never 2004).
 - *Measured, 20261101 dump*: 3,417 replace pairs (MIN_OLD 3, MIN_LEN 5,
@@ -335,9 +337,9 @@ München): the reading is two REFERENCE SOURCES (06 §6.5, amended):
   the tables that made it.
 
 **The measurement, its rule stated BEFORE the run** (the ruling; the
-chunker report's form). Set: ≥ 30 judged queries whose relevant record
-is a gutenberg Italian book stating a year 1400–1899 (or before 1400,
-for TLIO), written and judged before the run, kept with the run. Harness:
+chunker report's form). Set (amended the same day): a KNOWN-ITEM set, gutenberg only, ≥ 100 queries
+kept, written by the node's chat model from a sampled passage alone
+(tools/measure/reading_known_items.py, temperature 0, seeded). Harness:
 the one that measured titles (`tools/measure/rerank_variants.py`, the
 API's path, bit-exact reranker); `retrieval.READING_RERANK` True and
 False, from the command line, same depth, same everything else. Metric:

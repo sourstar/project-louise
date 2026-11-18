@@ -15,7 +15,7 @@ from app.refs import readings, store as ref_store
 
 def test_gutenberg_declares_the_works_year_first_then_the_editions():
     assert reading.year_fields("gutenberg") == ("first_published", "date")
-    assert reading.year_fields("normattiva") == ("date",)
+    assert reading.year_fields("normattiva") == ()        # operator: "normattiva language is too recent"
     assert reading.year_fields("pubmed") == ()          # declares none: nothing is applied
 
 
@@ -132,3 +132,16 @@ def test_a_warm_past_its_bound_leaves_the_digest_to_the_first_query(tmp_path, mo
     reading._versions.clear()
     assert reading.warm(bound_s=-1.0, store=st) == {}          # interrupted at once
     assert reading.lookup(["huomo"], st).version                # the query computes it, once
+
+
+def test_a_normattiva_hit_is_never_read_and_never_moved(monkeypatch):
+    from types import SimpleNamespace
+    from app import collections as collections_mod
+    from app.ask import works as works_mod
+    col = SimpleNamespace(name="normattiva-it", plugin="normattiva", codex=object())
+    monkeypatch.setattr(collections_mod, "by_name", lambda name: col)
+    called = []
+    monkeypatch.setattr(works_mod, "facts_for", lambda *a, **k: called.append(a) or {})
+    hits = [{"chunk_id": "normattiva:1865-03-20;2248:0:1", "source_collection": "normattiva-it",
+             "text": "Le leggi sono pubblicate"}]
+    assert reading.years(hits) == {} and called == []         # no fields declared: its facts never read

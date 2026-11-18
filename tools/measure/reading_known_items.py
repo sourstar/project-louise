@@ -5,7 +5,7 @@ model let's see what it produces"). docs/notes/historical-languages.md,
 "Built (2026-11-18)".
 
     python -m tools.measure.reading_known_items \\
-        --stratum <gutenberg's>:1100:1899 --stratum <normattiva's>:1861:1899 \\
+        --stratum <gutenberg's>:1100:1899 \\
         --kept 60 --weights-sha256 <the chat model's GGUF sha256> --out known_items.jsonl [--seed 1]
 
 Architecture's ruling, 2026-11-18: SEEDED AND STRATIFIED — per stratum
