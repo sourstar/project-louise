@@ -226,3 +226,18 @@ def test_each_row_names_the_readings_the_glossary_applied(monkeypatch):
     monkeypatch.setattr(reading, "apply", lambda text, y, found, use, lang="it": (text, [r]))
     assert e.readings_used("Il huomo", reading.Year(1500, "x")) == [
         {"orig": "huomo", "kind": "replace", "reg": "uomo", "lemma": "", "gloss": "", "source": "wikisource-readings"}]
+
+
+
+def test_the_passage_draw_reads_tlio_as_the_on_arm_does(monkeypatch):
+    """The node at e133b0c: the draw ran under CHAT_TLIO's default (off) and
+    found TLIO's words in no passage."""
+    from types import SimpleNamespace
+    from app import reading
+    from app.refs.readings import Reading
+    g = Reading(orig="talpe", reg="", kind="gloss", lemma="talpa", gloss="", lang="it", period_from=1100,
+                period_to=1400, method="t", source="tlio")
+    monkeypatch.setattr(reading, "lookup", lambda words, store=None: SimpleNamespace(by_form={"talpe": [g]}, version="v"))
+    assert reading.CHAT_TLIO is False
+    assert e.readings_in("le talpe", reading.Year(1300, "x")) == 1
+    assert reading.CHAT_TLIO is False                                   # restored

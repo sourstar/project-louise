@@ -189,23 +189,33 @@ def paired_stats(diffs: list[float], permutations: int, seed: int) -> dict:
             "ci95": [round(boots[49], 4), round(boots[1949], 4)]}
 
 
+def _on_arm(text: str, year):
+    """reading.apply as the ON arm reads: every table, TLIO's glosses in the
+    chat copy included (the product's default leaves them out,
+    reading.CHAT_TLIO; the node at e133b0c: the draw under the default found
+    a passage in 1 record of 20, TLIO not looked at)."""
+    from app import reading
+    found = reading.lookup(reading.words_of([text]))
+    keep, reading.CHAT_TLIO = reading.CHAT_TLIO, True
+    try:
+        return reading.apply(text, year, found, reading.CHAT)[1]
+    finally:
+        reading.CHAT_TLIO = keep
+
+
 def readings_used(text: str, year) -> list[dict]:
     """Each word of `text` the tables read at `year` for the answer, as the
     glossary rewrote it — what a reviewer needs to tell a wrong sense
     (a homograph) from a right one."""
-    from app import reading
-    found = reading.lookup(reading.words_of([text]))
     return [{"orig": r.orig, "kind": r.kind, "reg": r.reg or "", "lemma": r.lemma or "",
              "gloss": (r.gloss or "")[:120], "source": r.source}
-            for r in reading.apply(text, year, found, reading.CHAT)[1]]
+            for r in _on_arm(text, year)]
 
 
 def readings_in(text: str, year) -> int:
     """How many words of `text` the tables read at `year` for the answer —
     the glossary's own steps (reading.lookup, reading.apply)."""
-    from app import reading
-    found = reading.lookup(reading.words_of([text]))
-    return len(reading.apply(text, year, found, reading.CHAT)[1])
+    return len(_on_arm(text, year))
 
 
 #: passages drawn from a record before it is given up for want of a word the
