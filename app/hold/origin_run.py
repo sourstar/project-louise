@@ -34,6 +34,7 @@ canonical JSON sorts its keys, so `origin_run` sits just before
 """
 from __future__ import annotations
 
+import contextvars
 import json
 import mmap
 import os
@@ -193,6 +194,11 @@ RUNS_ASKED = 8
 
 class RunUndetermined(ValueError):
     """Nothing says which run a new dated-dump collection is built from."""
+
+
+#: why the last `determine` of this context could not tell — the plain words
+#: the creation's refusal gives (template.pin_dated_spec), where it refuses
+UNDETERMINED: contextvars.ContextVar[str | None] = contextvars.ContextVar("undetermined", default=None)
 
 
 def _hook_of(plugin_id: str):

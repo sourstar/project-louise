@@ -163,18 +163,19 @@ def _run_for(root, plugin: str, recipe_spec: dict | None, run: str | None, name:
     re-creation's predecessor's, the origin's latest complete one), said on
     stderr and to `say` (the Library's notice) in plain words — or refused
     saying what is missing and what would supply it."""
+    from app.hold import origin_run
+    origin_run.UNDETERMINED.set(None)            # this create's own reason only
     if run or (recipe_spec or {}).get("files"):
         return run
     from app.acquire.specs import ACQUIRE_REGISTRY
-    from app.hold import origin_run
     if not origin_run.spec_dated(ACQUIRE_REGISTRY.get(plugin)):
         return run
     try:
         found, why = origin_run.determine(Path(root) if root else _default_root(), plugin, name)
     except origin_run.RunUndetermined as e:
-        raise tpl.TemplateError(
-            f"{plugin}'s origin publishes dated dumps, and its Codex names the FIRST run its records are built "
-            f"from (09 §9.17): the recipe names none and no --run was given, and {e}") from None
+        # refused where the Codex is made (template.pin_dated_spec), in these words
+        origin_run.UNDETERMINED.set(str(e))
+        return run
     line = f"run: {found} — {why}; its files written into origin.spec (09 §9.17)"
     print(line, file=sys.stderr)
     if say is not None:

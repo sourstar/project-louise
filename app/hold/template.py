@@ -508,13 +508,15 @@ def pin_dated_spec(plugin: str, origin_spec: dict[str, Any] | None, run: str | N
                             f"names one first run (09 §9.17)")
     run = stated or run
     if not run:
+        why = origin_run.UNDETERMINED.get()
         raise TemplateError(
             f"recipe: {plugin}'s origin publishes dated dumps, and its Codex names the FIRST run its "
-            f"records are built from (09 §9.17): `origin.spec.files` names none and no --run was given. "
-            f"Without a run, records that name their unit by the origin's own key are read in no run "
-            f"and can never be checked against the source (invariant 11). Give --run <YYYYMMDD> (the "
-            f"run the corpus holds, or the one to fetch), or name that run's files in the recipe's "
-            f"`[origin.spec]`; a re-creation `<name>.next` takes the run `<name>` holds")
+            f"records are built from (09 §9.17): `origin.spec.files` names none and no --run was given"
+            + (f", and nothing determines it: {why}. " if why else ". ")
+            + "Without a run, records that name their unit by the origin's own key are read in no run "
+              "and can never be checked against the source (invariant 11). Give --run <YYYYMMDD> (the "
+              "run the corpus holds, or the one to fetch), or name that run's files in the recipe's "
+              "`[origin.spec]`; a re-creation `<name>.next` takes the run `<name>` holds")
     try:
         return origin_run.pinned_spec(origin_spec, spec, str(run))
     except ValueError as e:
