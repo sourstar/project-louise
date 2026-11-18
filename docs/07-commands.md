@@ -2466,7 +2466,10 @@ encoder — applies at the next round, and the change is logged with the
 collection's name. An edited `[encoder]` re-runs `embedder check`
 before the next embed. `hold config apply` is the same reload on demand
 and, with `--set`, the way a script or the web interface edits one value
-without opening the file; `--set` writes the file, then applies it.
+without opening the file; `--set` writes the file, then applies it. A
+list value is given as the file writes it (`--set 'embed_slices=["a", "b"]'`)
+or by commas (`--set embed_slices=a,b`); a refusal names the key set
+(*amended 2026-11-18*).
 
 **A copy's state is per collection, and derived.** A copy is *refused*,
 in *quarantine* or *in use* (03 §3.6): computed at start and between

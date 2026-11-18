@@ -537,8 +537,21 @@ def _bool(key: str, text: str) -> bool:
     return low == "true"
 
 
-def _names(text: str) -> list[str]:
-    return [v.strip() for v in text.split(",") if v.strip()]
+def _names(text: str, key: str) -> list[str]:
+    """A list value of `--set`: names separated by commas (`a,b`), or the
+    TOML array the file itself writes (`["a", "b"]`, read by tomllib — a
+    slice name never holds a comma, but a list pasted from the file did, and
+    was split inside its brackets: München, 2026-11-18)."""
+    t = text.strip()
+    if t.startswith("["):
+        try:
+            got = tomllib.loads(f"v = {t}")["v"]
+        except tomllib.TOMLDecodeError as e:
+            raise ValueError(f"{key} = {t}: not a TOML list ({e})") from None
+        if not isinstance(got, list) or not all(isinstance(v, str) for v in got):
+            raise ValueError(f"{key} is a list of names, got {t}")
+        return [v.strip() for v in got if v.strip()]
+    return [v.strip() for v in t.split(",") if v.strip()]
 
 
 def _parse(key: str, text: str, where: str) -> Any:
@@ -554,9 +567,9 @@ def _parse(key: str, text: str, where: str) -> Any:
         if key == "title":
             return text or None
         if key == "slices":
-            return "all" if text == "all" else collections_mod._parse_slices(_names(text), where)
+            return "all" if text == "all" else collections_mod._parse_slices(_names(text, key), where)
         if key == "kinds":
-            return collections_mod._parse_kinds(_names(text), where)
+            return collections_mod._parse_kinds(_names(text, key), where)
         if key == "method":
             return collections_mod._parse_method(text or None, where)
         if key == "embed_select":
@@ -569,16 +582,16 @@ def _parse(key: str, text: str, where: str) -> Any:
         if key in ("share_slices", "embed_slices"):
             if text in ("", "all"):
                 return None
-            got = collections_mod._parse_slices(_names(text), where)
+            got = collections_mod._parse_slices(_names(text, key), where, key)
             return got if isinstance(got, tuple) else None
         if key == "share_kinds":
             if text in ("", "all"):
                 return None
-            bad = [k for k in _names(text) if k not in collections_mod.SHARE_KINDS]
+            bad = [k for k in _names(text, key) if k not in collections_mod.SHARE_KINDS]
             if bad:
                 raise ValueError(f"share_kinds names {bad}; the member kinds served are "
                                  f"{', '.join(collections_mod.SHARE_KINDS)} (02 §2.6)")
-            return tuple(_names(text))
+            return tuple(_names(text, key))
         if key == "encoder.api":
             if text not in _ENCODER_APIS:
                 raise ValueError(f"encoder.api is one of {', '.join(_ENCODER_APIS)}, got {text!r}")
