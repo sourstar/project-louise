@@ -25,7 +25,15 @@ def is_out(subs, locc):
     return False
 
 
-def is_memoir(subs, locc):
+def is_juvenile(subs, shelves=""):
+    """A book for children: a "Juvenile ..." subject, or a children's bookshelf
+    (operator, 2026-11-18: "No biographies for children")."""
+    return any("juvenile" in s.lower() for s in subs) or "children" in shelves.lower()
+
+
+def is_memoir(subs, locc, shelves=""):
+    if is_juvenile(subs, shelves):
+        return False
     if any(c.strip().startswith("CT") for c in locc.split(";")):
         return True
     return any(w.lower() in s.lower() for s in subs for w in IN_WORDS)
@@ -43,7 +51,7 @@ def main(path):
             if row["Type"] != "Text":
                 continue
             subs, locc = subjects(row), row["LoCC"]
-            memoir = is_memoir(subs, locc)
+            memoir = is_memoir(subs, locc, row["Bookshelves"])
             if is_out(subs, locc) and not memoir:
                 continue
             hist = is_history(locc)

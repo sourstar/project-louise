@@ -5,7 +5,10 @@
 `memoir-candidates-<lang>.csv`. The rule is the one the operator decided
 on the Italian list (wiki-gutenberg-claude-plan.md §10): memoirs,
 biographies, first-person chronicles and eyewitness accounts, travel
-included, YES; fiction and history or criticism, NO.*
+included, YES; fiction and history or criticism, NO. Amended the same
+day: **no books for children**, and **anything not shown to be a memoir is
+out** ("it is a waste of GPU time and even worse it's tainting the
+scope").*
 
 A candidate is a text whose TITLE holds one of its language's memoir
 words, and which the subject rule does not already put in the memoir
@@ -20,47 +23,55 @@ group.
 | it, addendum | viaggio, viaggi, impressioni: the travel words the first Italian pass did not search. The 54 decided books are not proposed again. |
 
 **Each row's category** comes from its record alone (subjects, LoCC,
-title), by the first rule that matches. Nothing is read from the books.
+title, bookshelves), by the first rule that matches. Nothing is read from
+the books.
 
 | category | the rule | suggestion |
 |---|---|---|
 | fiction, poetry or drama | the scope rule's OUT (§6) | no |
-| periodical | the subject "Periodicals", or an issue number, magazine, weekly, monthly, quarterly, proceedings, bulletin in the title. A volume number alone does not count | no |
-| history or criticism | a subject ending "History and criticism", "Historiography", "Study and teaching", "Criticism and interpretation" | no |
-| travel account | a subject with "Description and travel", "Voyages and travels", "Discovery and exploration", or LoCC G | yes |
-| eyewitness or source | a subject with "Personal narratives", "Sources", "Captivities", "Prisoners", "Pioneers", "Frontier and pioneer life" | yes |
-| about a person | a personal-name subject ("Surname, Forename, 1807-1882") | yes |
-| review | none of the above | ? |
+| for children | a "Juvenile …" subject or a children's bookshelf. It also takes such books out of the memoir group itself (`kg_scope_count.is_juvenile`) | no |
+| guidebook | a "Guidebooks" subject | no |
+| not a memoir by its subjects | Quotations, Essays, Sermons, Speeches, Addresses, Handbooks/manuals, Textbooks, Cookery, Health and hygiene, Readers, Dictionaries, Encyclopedias, Catalogs, Hymns, Prayers, Legends | no |
+| periodical | the subject "Periodicals", or an issue number, magazine, weekly, monthly, quarterly, proceedings or bulletin in the title. A volume number alone does not count | no |
+| history or criticism | a subject ending "History and criticism", "Historiography", "Study and teaching" or "Criticism and interpretation" | no |
+| travel account | a subject with "Description and travel", "Voyages and travels" or "Discovery and exploration", or LoCC G | yes |
+| eyewitness or source | a subject with "Personal narratives", "Sources", "Captivities", "Prisoners", "Pioneers" or "Frontier and pioneer life" | yes |
+| about a person | a personal-name subject ("Surname, Forename, 1807-1882") AND a life word or an own-account word in the title (life of, story of, biography, memoir, recollections, diary …) | yes |
+| review: own account in the title | none of the above, but the title says it is the author's own account (memoirs, recollections, reminiscences, diary, autobiography, personal, confessions, journal of a …) | ? |
+| not a memoir by its record | none of the above. Out by default: nothing in the record shows a memoir | no |
 
-**Counts:**
+**Counts** (after the amendment):
 
 | category | suggestion | en | fr | de | es | it |
 |---|---|---|---|---|---|---|
-| about a person | yes | 374 | 53 | 9 | 5 | 1 |
-| eyewitness or source | yes | 58 | 18 | 1 | 0 | 0 |
-| travel account | yes | 714 | 74 | 42 | 33 | 14 |
-| review | ? | 844 | 149 | 29 | 10 | 1 |
-| fiction, poetry or drama | no | 543 | 80 | 38 | 20 | 3 |
-| periodical | no | 442 | 40 | 0 | 0 | 0 |
-| history or criticism | no | 24 | 4 | 1 | 2 | 0 |
-| **total** | | **2999** | **418** | **120** | **70** | **19** |
+| travel account | yes | 689 | 73 | 42 | 33 | 14 |
+| eyewitness or source | yes | 56 | 18 | 1 | 0 | 0 |
+| about a person | yes | 286 | 44 | 7 | 5 | 0 |
+| review: own account in the title | ? | 305 | 74 | 8 | 2 | 0 |
+| fiction, poetry or drama | no | 546 | 80 | 38 | 20 | 3 |
+| for children | no | 100 | 1 | 2 | 0 | 0 |
+| guidebook | no | 2 | 0 | 0 | 0 | 0 |
+| not a memoir by its subjects | no | 47 | 2 | 0 | 0 | 0 |
+| periodical | no | 431 | 40 | 0 | 0 | 0 |
+| history or criticism | no | 22 | 3 | 1 | 2 | 0 |
+| not a memoir by its record | no | 541 | 83 | 21 | 8 | 2 |
+| **total yes** | | 1031 | 135 | 50 | 38 | 14 |
+| **total ?** | | 305 | 74 | 8 | 2 | 0 |
+| **total no** | | 1689 | 209 | 62 | 30 | 5 |
 
 How to mark:
 - Decide a CATEGORY at once, with exceptions by ebook number. Example:
-  "en: travel yes, except 1234". Row by row is only needed for
-  **review** (en 844, fr 149, de 29, es 10, it 1).
+  "en: travel yes, except 1234". Only **review: own account in the
+  title** needs reading row by row: en 305, fr 74, de 8, es 2.
 - Or fill the `decision` column of the CSV in a spreadsheet.
 - The answers become `wiki-gutenberg-memoir-titles-<lang>.toml`, like
   the Italian one. A "no" is kept, so the book is not proposed again.
 
-What a spot check of 12 English rows per category showed:
-- **review** holds real memoirs whose subjects name only a place:
-  *John Long's journal, 1768-1782*, *Personal Recollections of
-  Birmingham*, *Sixty Years in Southern California … Reminiscences*.
-  It also holds what is not a memoir: *The Physical Life of Woman*,
-  *Philosophical Letters of Schiller*, legends (*Life of St. Declan*).
-- **about a person** includes biographies for children (*The boys' life
-  of Edison*). By the rule ("Biography" is IN) they are yes. Say if
-  juvenile biographies should be no.
-- **travel account** includes scientific expeditions (*Journal of
-  Researches … Beagle*). These are eyewitness accounts, so yes.
+Still in the "?" rows, from a spot check of 15 English rows:
+- **Real memoirs:** *The Greville Memoirs*, *Personal Narrative of Events,
+  From 1799 to 1815*, *Reminiscences of the Thirty-Fourth Regiment, Mass.*,
+  *Recollections of Manilla*.
+- **Not memoirs:**
+  - *Reminiscences of a Stock Operator* is a novel in memoir form.
+  - *Confessions and Criticisms* is essays.
+  - *Memoir of the Services of the Bengal Artillery* is a unit history.

@@ -47,14 +47,37 @@ TRAVEL = ("Description and travel", "Voyages and travels", "Travel", "Discovery 
 WITNESS = ("Personal narratives", "Sources", "Captivities", "Prisoners", "Pioneers", "Frontier and pioneer life")
 
 #: category -> suggestion
+#: Words that say the book is the author's own account. A "review" row with one
+#: of them is left to the operator; without one it is out (operator,
+#: 2026-11-18: "keep out anything not being a memory").
+FIRST_PERSON = re.compile(
+    r"\b(memoirs?|recollections?|reminiscences?|diary|diaries|autobiography|my life|my own|personal|"
+    r"confessions?|eyewitness|eye-witness|journal of (a|an|my)|"
+    r"mémoires|souvenirs?|ma vie|autobiographie|"
+    r"erinnerungen|lebenserinnerungen|denkwürdigkeiten|memoiren|tagebuch|tagebücher|selbstbiographie|aus meinem leben|bekenntnisse|"
+    r"memorias|recuerdos?|mi vida|autobiografía|confesiones|"
+    r"memorie|ricordi|diario|autobiografia|la mia vita|confessioni)\b", re.I)
+
+#: A biography's own word: with a personal-name subject, it makes the book a life.
+BIO = re.compile(r"\b(life of|lives of|story of|biography|vie de|vida de|vita di|leben)\b", re.I)
+
+#: Subjects that say the book is not an account of lived events.
+NOT_MEMOIR = ("Quotations", "essays", "Essays", "Sermons", "Speeches", "Addresses", "Handbooks, manuals",
+              "Textbooks", "Cookery", "Health and hygiene", "Readers", "Dictionaries", "Encyclopedias",
+              "Catalogs", "Hymns", "Prayers", "Legends")
+
 SUGGEST = {
     "fiction, poetry or drama": "no",
+    "for children": "no",
+    "guidebook": "no",
+    "not a memoir by its subjects": "no",
     "periodical": "no",
     "history or criticism": "no",
     "travel account": "yes",
     "eyewitness or source": "yes",
     "about a person": "yes",
-    "review": "?",
+    "review: own account in the title": "?",
+    "not a memoir by its record": "no",
 }
 
 
@@ -74,10 +97,16 @@ class Candidate:
         return SUGGEST[self.category]
 
 
-def categorize(title: str, subs: list[str], locc: str) -> str:
+def categorize(title: str, subs: list[str], locc: str, shelves: str = "") -> str:
     """The category, from the record alone. The first rule that matches wins."""
     if scope.is_out(subs, locc):
         return "fiction, poetry or drama"
+    if scope.is_juvenile(subs, shelves):
+        return "for children"
+    if any("Guidebooks" in s for s in subs):
+        return "guidebook"
+    if any(n in s for s in subs for n in NOT_MEMOIR):
+        return "not a memoir by its subjects"
     if PERIODICAL.search(title) or any("Periodicals" in s for s in subs):
         return "periodical"
     if any(s.split("--")[-1].strip() in CRITICISM for s in subs):
@@ -86,9 +115,11 @@ def categorize(title: str, subs: list[str], locc: str) -> str:
         return "travel account"
     if any(w in s for s in subs for w in WITNESS):
         return "eyewitness or source"
-    if any(PERSON.match(s) for s in subs):
+    if any(PERSON.match(s) for s in subs) and (BIO.search(title) or FIRST_PERSON.search(title)):
         return "about a person"
-    return "review"
+    if FIRST_PERSON.search(title):
+        return "review: own account in the title"
+    return "not a memoir by its record"
 
 
 def candidates(catalog: Path, lang: str, decided: set[int] = frozenset()) -> list[Candidate]:
@@ -104,11 +135,11 @@ def candidates(catalog: Path, lang: str, decided: set[int] = frozenset()) -> lis
             if not m or ebook in decided:
                 continue
             subs, locc = scope.subjects(r), r["LoCC"]
-            if scope.is_memoir(subs, locc):
+            if scope.is_memoir(subs, locc, r["Bookshelves"]):
                 continue
             now = "out" if scope.is_out(subs, locc) else ("history" if scope.is_history(locc) else "not in scope")
             out.append(Candidate(ebook, title, r["Authors"].split(";")[0].strip(), locc,
-                                 "; ".join(subs), m.group(1).lower(), now, categorize(title, subs, locc)))
+                                 "; ".join(subs), m.group(1).lower(), now, categorize(title, subs, locc, r["Bookshelves"])))
     order = list(SUGGEST)
     out.sort(key=lambda c: (order.index(c.category), c.ebook))
     return out

@@ -376,3 +376,18 @@ no matter if it's travel or otherwise. I confirm the no."
   chronicles and eyewitness accounts count. The same title pass is owed
   for the other languages, each list marked by the operator, before step
   2 of the run order (memoirs in every language).
+
+### Decided (operator, 2026-11-18): no books for children, nothing that is not a memoir
+
+"No biographies for children, and keep out anything not being a memory
+like 'The Physical Life of Woman': it is a waste of GPU time and even
+worse it's tainting the scope."
+- **Children's books leave the memoir group:** a "Juvenile …" subject or
+  a children's bookshelf (`kg_scope_count.is_juvenile`). The memoir
+  group goes from 3,729 to **3,598** books (en 3,074, other 524).
+- **A title candidate is out unless its record shows a memoir**, as a
+  travel account, an eyewitness account or source, or a life (a person
+  and a life word). Only titles that state the author's own account are
+  left to the operator.
+- Owed: the same question for history books for children, which are
+  still in the history scope (392 books).

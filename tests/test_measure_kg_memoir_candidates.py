@@ -45,7 +45,7 @@ def test_decided_books_are_not_proposed_again(tmp_path: Path) -> None:
     dec = tmp_path / "decided.toml"
     dec.write_text('decided = "2026-11-18"\nyes = [1]\nno = []\n', encoding="utf-8")
     assert [c.ebook for c in m.candidates(cat, "it", m.decided_ebooks([dec]))] == [2]
-    assert m.candidates(cat, "it")[0].category == "review"
+    assert m.candidates(cat, "it")[0].category == "review: own account in the title"
 
 
 def test_periodical_before_travel(tmp_path: Path) -> None:
@@ -59,4 +59,29 @@ def test_a_volume_number_is_not_a_periodical(tmp_path: Path) -> None:
                                "Great Britain -- History -- George III, 1760-1820", "DA", ""],
                               ["2", "Text", "", "Chambers's Journal of Popular Literature, No. 702", "en", "C", "", "AP", ""]])
     got = {c.ebook: c.category for c in m.candidates(cat, "en")}
-    assert got == {1: "review", 2: "periodical"}
+    assert got == {1: "review: own account in the title", 2: "periodical"}
+
+
+def test_children_guidebooks_and_non_memoirs_are_out(tmp_path: Path) -> None:
+    cat = _catalog(tmp_path, [
+        ["1", "Text", "", "The boys' life of Edison", "en", "M", "Edison, Thomas A., 1847-1931 -- Juvenile literature", "TK", ""],
+        ["2", "Text", "", "The Physical Life of Woman", "en", "N", "Women -- Health and hygiene", "RG", ""],
+        ["3", "Text", "", "Travels in Rome", "en", "B", "Rome (Italy) -- Guidebooks", "DG", ""],
+        ["4", "Text", "", "Personal Recollections of Birmingham", "en", "U", "Birmingham (England)", "DA", ""],
+        ["5", "Text", "", "The Life of Washington", "en", "P", "Washington, George, 1732-1799", "E", "Children's Biography"],
+    ])
+    got = {c.ebook: (c.category, c.suggestion) for c in m.candidates(cat, "en")}
+    assert got == {1: ("for children", "no"), 2: ("not a memoir by its subjects", "no"),
+                   3: ("guidebook", "no"), 4: ("review: own account in the title", "?"),
+                   5: ("for children", "no")}
+
+
+def test_a_person_needs_a_life_word_and_quotations_are_out(tmp_path: Path) -> None:
+    cat = _catalog(tmp_path, [
+        ["1", "Text", "", "Answer to Dr. Priestley's Letters to a Philosophical Unbeliever", "en", "H",
+         "Free thought; Priestley, Joseph, 1733-1804. Letters", "B", ""],
+        ["2", "Text", "", "Quotes and Images From The Confessions of Jean Jacques Rousseau", "en", "R", "Quotations", "PN", ""],
+        ["3", "Text", "", "Life of Chopin", "en", "L", "Chopin, Frédéric, 1810-1849", "ML", ""],
+    ])
+    got = {c.ebook: c.category for c in m.candidates(cat, "en")}
+    assert got == {1: "not a memoir by its record", 2: "not a memoir by its subjects", 3: "about a person"}
