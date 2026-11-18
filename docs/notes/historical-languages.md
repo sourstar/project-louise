@@ -302,7 +302,21 @@ München): the reading is two REFERENCE SOURCES (06 §6.5, amended):
 `retrieval._rerank_held` (05 §5.6, amended); the chat model's copy in
 `historical.read_sources` (both answer paths).
 
-- *The year*: `publication_year_fields`, declared per plugin, in order —
+- *The year, as finally ruled (2026-11-18)*: the WORK's, for every
+  gutenberg record — the first publication PG's summary states (one
+  definition, 1000–2099), then its authors' lifetime L with the summary's
+  century C ("[early|mid|late] Nth century"): L∩C its midpoint, no overlap
+  C rejected as the edition's, L or C alone its midpoint; never the
+  edition's year nor a translator's dates (operator: "Publication date (not
+  the first) is totally unreliable, do not consider it at all, same for
+  translations. What's the purpose of using a Plato translation of the 1950
+  to place a Plato book in a timeline???"). A translation keeps its work's
+  year and the glossary NEVER reads it (a 1950 Plato at -388 would fall in
+  TLIO's period). The cost: a medieval volgarizzamento loses the glossary
+  too; its `language-stage` claim still gives the chat copy A and B. The
+  known-item set leaves translations out and counts them. The bullet below
+  is the first ruling, superseded.
+- *The year (first ruling)*: `publication_year_fields`, declared per plugin, in order —
   gutenberg `("first_published", "date")` (operator: "work's
   first-publication year is the default, and print year of the edition
   Project Gutenberg transcribed is the fallback"); normattiva declares NONE

@@ -13,24 +13,6 @@ from app.plugins.base import RefSyncState
 from app.refs import readings, store as ref_store
 
 
-def test_gutenberg_declares_the_works_year_first_then_the_editions():
-    assert reading.year_fields("gutenberg") == ("first_published", "lived", "date")
-    assert reading.year_fields("normattiva") == ()        # operator: "normattiva language is too recent"
-    assert reading.year_fields("pubmed") == ()          # declares none: nothing is applied
-
-
-def test_the_year_is_the_works_then_the_editions_and_never_the_release_date():
-    rec = {"title": "Don Chisciotte", "date": "1851",
-           "extra": {"issued": "2004-01-01", "marc": {"520": ["The novel was first published in 1605."]}}}
-    fields = reading.year_fields("gutenberg")
-    assert reading.year_of(fields, works.edition_facts(rec)) == 1605
-    rec["extra"]["marc"] = {}
-    assert reading.year_of(fields, works.edition_facts(rec)) == 1851
-    del rec["date"]
-    assert reading.year_of(fields, works.edition_facts(rec)) is None      # never 2004
-    assert reading.year_of((), works.edition_facts({"date": "1851"})) is None
-
-
 def _store(tmp_path, rows):
     con = ref_store.connect(tmp_path / "refs.db")
 
@@ -165,7 +147,8 @@ def test_the_year_index_answers_a_rerank_with_nothing_looked_up(monkeypatch):
     from app.ask import works as works_mod
     f = works_mod.EditionFacts
     col = _fake_collection(monkeypatch, [{"gutenberg:1": f(first_published=1605, year=1851)},
-                                         {"gutenberg:2": f(year=1554), "gutenberg:3": f()}])
+                                         {"gutenberg:2": f(lived=(1500, 1608), lived_span="1500–1608"),
+                                          "gutenberg:3": f(year=1880)}])
     idx = reading.index_years(col)
     assert idx["complete"] and idx["years"] == {"gutenberg:1": 1605, "gutenberg:2": 1554}
     monkeypatch.setattr(works_mod, "facts_for", lambda *a, **k: (_ for _ in ()).throw(AssertionError("looked up")))
@@ -179,7 +162,8 @@ def test_before_the_index_is_complete_the_missing_records_are_read_in_one_batch(
     col = _fake_collection(monkeypatch, [{}])
     asked = []
     monkeypatch.setattr(works_mod, "facts_for",
-                        lambda c, uids, **k: asked.append(list(uids)) or {"gutenberg:2": f(year=1554)})
+                        lambda c, uids, **k: asked.append(list(uids)) or
+                        {"gutenberg:2": f(lived=(1500, 1608), lived_span="1500–1608")})
     hits = [{"chunk_id": f"gutenberg:{i}:0:1"} for i in (1, 2, 2)]
     assert reading.years(hits, col) == {1: 1554, 2: 1554}
     assert asked == [["gutenberg:1", "gutenberg:2"]]          # one batch, each record once
@@ -197,19 +181,6 @@ def test_the_collection_is_not_reread_per_rerank(monkeypatch):
     for _ in range(5):
         reading.years([{"chunk_id": "pubmed:1:0:1", "source_collection": "pubmed"}])
     assert calls == ["pubmed"]
-
-
-def test_a_translations_first_publication_is_the_originals_and_never_used():
-    rec = {"title": "Viaggi di Gulliver", "date": "1842",
-           "extra": {"marc": {"520": ["Gulliver's Travels was first published in 1726."]},
-                     "creators_detail": [{"name": "Swift, Jonathan", "role": "aut"},
-                                         {"name": "Barbieri, Gaetano", "role": "trl"}]}}
-    f = works.edition_facts(rec)
-    assert f.translated and f.first_published == 1726
-    assert reading.year_of(reading.year_fields("gutenberg"), f) == 1842        # never 1726
-    del rec["date"]
-    assert reading.year_of(reading.year_fields("gutenberg"), works.edition_facts(rec)) is None
-
 
 
 def _rec(**kw):
@@ -233,25 +204,6 @@ def test_dante_by_his_dates_reaches_the_tlio_glosses(tmp_path):
     st = _store(tmp_path, ROWS)
     found = reading.lookup(["abondava"], st)
     assert reading.apply("abondava", y, found, reading.RERANK)[0] == "abondava [abbondare]"
-
-
-def test_a_translation_takes_its_translators_dates_never_the_originals_year():
-    y = _year(_rec(date="1842", summary="It was first published in 1726.",
-                   creators=[{"name": "Swift", "role": "aut", "birth": "1667", "death": "1745"},
-                             {"name": "Barbieri", "role": "trl", "birth": "1774", "death": "1853"}]))
-    assert y == 1813 and y.by == "its translator's dates (1774–1853)"
-
-
-def test_a_death_year_alone_gives_the_editions_year():
-    y = _year(_rec(date="1880", creators=[{"name": "X", "role": "aut", "birth": "", "death": "1321"}]))
-    assert y == 1880 and y.by == "its edition (1880)"
-
-
-def test_two_authors_two_hundred_years_apart_give_the_editions_year():
-    y = _year(_rec(date="1890", creators=[{"name": "A", "role": "aut", "birth": "1265", "death": "1321"},
-                                          {"name": "B", "role": "aut", "birth": "1480", "death": "1530"},
-                                          {"name": "E", "role": "edt", "birth": "1850", "death": "1900"}]))
-    assert y == 1890
 
 
 def test_two_authors_of_one_time_give_the_mean_and_editors_never_count():
@@ -299,12 +251,6 @@ def test_a_century_outside_the_authors_dates_is_the_editions_and_rejected():
     assert _year(_rec(summary="written in the early 19th century", creators=[_aut("Ariosto", 1474, 1533)])) == 1503
 
 
-def test_a_translation_never_takes_the_originals_century():
-    y = _year(_rec(date="1842", summary="written in the early 18th century",
-                   creators=[_aut("Swift", 1667, 1745), _aut("Barbieri", 1774, 1853, "trl")]))
-    assert y == 1813 and y.by == "its translator's dates (1774–1853)"
-
-
 def test_an_anthology_or_a_record_without_dates_takes_the_century_alone():
     y = _year(_rec(date="1890", summary="Poems written in the 14th century.",
                    creators=[_aut("A", 1265, 1321), _aut("B", 1480, 1530)]))
@@ -318,3 +264,44 @@ def test_the_century_forms_parsed():
                        ("late nineteenth century", (1867, 1899)), ("the 14th–15th centuries", (1300, 1499)),
                        ("16th century", (1500, 1599)), ("in 1605", None)]:
         assert works.stated_century([text])[0] == span, text
+
+
+def test_gutenberg_declares_its_works_year_only():
+    assert reading.year_fields("gutenberg") == ("first_published", "lived")
+
+
+def test_the_works_year_never_the_editions_nor_the_release_date():
+    rec = {"title": "Don Chisciotte", "date": "1851",
+           "extra": {"issued": "2004-01-01", "marc": {"520": ["The novel was first published in 1605."]}}}
+    assert _year(rec) == 1605
+    rec["extra"]["marc"] = {}
+    assert _year(rec) is None                                   # never 1851, never 2004
+
+
+def test_a_death_year_alone_or_authors_two_centuries_apart_give_no_year():
+    assert _year(_rec(date="1880", creators=[{"name": "X", "role": "aut", "birth": "", "death": "1321"}])) is None
+    assert _year(_rec(date="1890", creators=[_aut("A", 1265, 1321), _aut("B", 1480, 1530)])) is None
+
+
+def test_a_translation_keeps_its_works_year_and_is_never_read(tmp_path):
+    plato = _year(_rec(date="1950", creators=[_aut("Plato", -428, -348), _aut("Tr", 1900, 1980, "trl")]))
+    assert plato == -388 and plato.translated and plato.by == "its author's dates (-428–-348)"
+    gulliver = _year(_rec(date="1842", summary="It was first published in 1726.",
+                          creators=[_aut("Swift", 1667, 1745), _aut("Barbieri", 1774, 1853, "trl")]))
+    assert gulliver == 1726 and gulliver.translated
+    st = _store(tmp_path, ROWS)
+    found = reading.lookup(["abondava", "huomo"], st)
+    for y in (plato, gulliver):
+        assert reading.apply("l'huomo abondava", y, found, reading.RERANK) == ("l'huomo abondava", [])
+        assert reading.apply("l'huomo abondava", y, found, reading.CHAT) == ("l'huomo abondava", [])
+
+
+def test_a_slow_batch_is_bounded_and_gives_no_year(monkeypatch, capsys):
+    import time
+    from app.ask import works as works_mod
+    col = _fake_collection(monkeypatch, [{}])
+    monkeypatch.setattr(reading, "BATCH_BOUND_S", 0.05)
+    monkeypatch.setattr(reading, "_batch_logged", {})
+    monkeypatch.setattr(works_mod, "facts_for", lambda c, uids, **k: time.sleep(0.5) or {})
+    assert reading.years([{"chunk_id": "gutenberg:1:0:1"}], col) == {}
+    assert "[gutenberg-it warn:reading] years not read within" in capsys.readouterr().out

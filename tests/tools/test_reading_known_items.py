@@ -62,3 +62,18 @@ def test_several_passages_per_record_fill_a_stratum_of_few_books(monkeypatch, tm
             "--weights-sha256", "abc", "--out", str(out)])
     tail = json.loads(out.read_text(encoding="utf-8").splitlines()[-1])
     assert tail["counts"] == {"g:1300:1399": {"kept": 3, "refused": 0}, "g:1500:1599": {"kept": 0, "refused": 0}}
+
+
+def test_translations_are_left_out_and_counted(monkeypatch, tmp_path):
+    import json
+    from app import llm, reading
+    recs = [{"uid": f"gutenberg:{i}", "lang": "it", "title": "T",
+             "sections": [["I", "Una frase lunga che continua sul mercante. " * 30]]} for i in range(2)]
+    monkeypatch.setattr(k, "records_of", lambda name, rng: iter(recs))
+    monkeypatch.setattr(reading, "years", lambda hits, collection=None: {
+        0: reading.Year(1726, "x", translated=hits[0]["chunk_id"].startswith("gutenberg:0"))})
+    monkeypatch.setattr(llm, "chat", lambda m, temperature, max_tokens: "Chi era il mercante?")
+    out = tmp_path / "set.jsonl"
+    k.main(["--stratum", "g:1700:1799", "--kept", "5", "--weights-sha256", "abc", "--out", str(out)])
+    tail = json.loads(out.read_text(encoding="utf-8").splitlines()[-1])
+    assert tail["counts"]["g:1700:1799"] == {"kept": 1, "refused": 0, "translations_excluded": 1}

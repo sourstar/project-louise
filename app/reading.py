@@ -56,13 +56,16 @@ def year_fields(plugin: str | None) -> tuple[str, ...]:
 
 
 class Year(int):
-    """A record's year, and what states it, as the badge and moved_by show it
-    ("its first publication (1605)", "its author's dates (1265–1321)")."""
+    """A record's year — its WORK's — and what states it, as the badge and
+    moved_by show it ("its first publication (1605)", "its author's dates
+    (1265–1321)"); `translated`: the record's text is a translation, which
+    the glossary never reads (architecture, 2026-11-18)."""
     by: str = ""
+    translated: bool = False
 
-    def __new__(cls, value: int, by: str = "") -> "Year":
+    def __new__(cls, value: int, by: str = "", translated: bool = False) -> "Year":
         y = super().__new__(cls, value)
-        y.by = by
+        y.by, y.translated = by, translated
         return y
 
 
@@ -76,39 +79,35 @@ def _short(century_text: str) -> str:
 
 
 def year_of(fields: tuple[str, ...], facts) -> Year | None:
-    """The year the record's facts give (app/ask/works.py `EditionFacts`), in
-    the ruled order (architecture, 2026-11-18):
-    `first_published` — a stated year, never for a translation (the
-    original's, in another language);
-    `lived` — the creators' lifetime L WITH the summary's century C, used
-    together: L∩C non-empty, its midpoint; no overlap, C is the edition's
-    century, rejected, and L's midpoint; L alone, its midpoint; C alone (no
-    dates, an anthology), its midpoint. A translation: the translator's L,
-    never C (the original's);
-    `date` — the edition PG transcribed."""
+    """The WORK's year the record's facts give (app/ask/works.py
+    `EditionFacts`), translations included (architecture, 2026-11-18, on the
+    operator's "Publication date (not the first) is totally unreliable, do
+    not consider it at all, same for translations"): `first_published` — a
+    stated year; `lived` — the AUTHORS' lifetime L with the summary's century
+    C, used together: L∩C non-empty, its midpoint; no overlap, C is the
+    edition's century, rejected, and L's midpoint; L alone, its midpoint; C
+    alone (no dates, an anthology), its midpoint. The translators' dates and
+    the edition's year are never used: none, and nothing is applied."""
     if facts is None:
         return None
     translated = bool(getattr(facts, "translated", False))
     for f in fields:
-        if f == "first_published" and facts.first_published and not translated:
-            return Year(facts.first_published, f"its first publication ({facts.first_published})")
+        if f == "first_published" and facts.first_published:
+            return Year(facts.first_published, f"its first publication ({facts.first_published})", translated)
         if f == "lived":
             life = getattr(facts, "lived", None)
-            cent = None if translated else getattr(facts, "century", None)
-            who = "translator's" if translated else "author's"
+            cent = getattr(facts, "century", None)
             if life and cent:
                 lo, hi = max(life[0], cent[0]), min(life[1], cent[1])
                 if lo <= hi:
-                    return Year(_mid((lo, hi)), f"its summary's century and its {who} dates "
-                                                f"({_short(facts.century_text)}, {facts.lived_span})")
-                return Year(_mid(life), f"its {who} dates ({facts.lived_span}) (its summary's "
-                                        f"'{_short(facts.century_text)} century' is outside them)")
+                    return Year(_mid((lo, hi)), f"its summary's century and its author's dates "
+                                                f"({_short(facts.century_text)}, {facts.lived_span})", translated)
+                return Year(_mid(life), f"its author's dates ({facts.lived_span}) (its summary's "
+                                        f"'{_short(facts.century_text)} century' is outside them)", translated)
             if life:
-                return Year(_mid(life), f"its {who} dates ({facts.lived_span})")
+                return Year(_mid(life), f"its author's dates ({facts.lived_span})", translated)
             if cent:
-                return Year(_mid(cent), f"its summary's century ({_short(facts.century_text)})")
-        if f == "date" and facts.year:
-            return Year(facts.year, f"its edition ({facts.year})")
+                return Year(_mid(cent), f"its summary's century ({_short(facts.century_text)})", translated)
     return None
 
 
@@ -206,6 +205,48 @@ def index_years(col, deadline: float | None = None) -> dict[str, Any] | None:
     return idx
 
 
+#: the bound of a query's own batch while the index is building (architecture,
+#: 2026-11-18): measured on the node, 1.2 s cold (the index: 110 s the first
+#: build after a FACTS_VERSION change, 0.5 s after)
+BATCH_BOUND_S = 5.0
+_batch_pool = None
+_batch_logged: dict[str, float] = {}
+
+
+def _say(collection: str, msg: str, every_s: float = 60.0) -> None:
+    import time
+    now = time.monotonic()
+    if now - _batch_logged.get(collection + msg[:20], float("-inf")) < every_s:
+        return
+    _batch_logged[collection + msg[:20]] = now
+    print(f"{time.strftime('%H:%M:%S')} [{collection} {msg}", flush=True)
+
+
+def _facts_bounded(col, uids: list[str]):
+    """`works.facts_for` of these records, at most BATCH_BOUND_S: past it,
+    None (the read goes on in its thread, its result unused), said at most
+    once a minute naming the collection. Each batch read is logged —
+    `[<collection> info:reading] years read for N records in M ms (index
+    building)` — so the window's queries can be counted on the node."""
+    import concurrent.futures as cf
+    import time
+    from .ask import works
+    global _batch_pool
+    if _batch_pool is None:
+        _batch_pool = cf.ThreadPoolExecutor(max_workers=2, thread_name_prefix="reading-batch")
+    t0 = time.monotonic()
+    fut = _batch_pool.submit(works.facts_for, col, uids)
+    try:
+        got = fut.result(timeout=BATCH_BOUND_S)
+    except cf.TimeoutError:
+        _say(col.name, f"warn:reading] years not read within {BATCH_BOUND_S:.0f} s for {len(uids)} records "
+                       "(index building): no reading for this query")
+        return None
+    print(f"{time.strftime('%H:%M:%S')} [{col.name} info:reading] years read for {len(uids)} records in "
+          f"{(time.monotonic() - t0) * 1000:.0f} ms (index building)", flush=True)
+    return got
+
+
 def years(hits: list[dict[str, Any]], collection=None) -> dict[int, int]:
     """{index of a hit: its record's year} for the hits whose record states
     one its plugin declares. `collection` where every hit is of one; by each
@@ -229,7 +270,9 @@ def years(hits: list[dict[str, Any]], collection=None) -> dict[int, int]:
             uids = {i: works._uid(hits[i]) for i in idx}
             missing = [] if index["complete"] else list(dict.fromkeys(u for u in uids.values() if u not in known))
             if missing:
-                facts = works.facts_for(col, missing)
+                facts = _facts_bounded(col, missing)
+                if facts is None:
+                    continue                        # past the bound: no year, no reading, no moved_by
                 for u in missing:
                     # 0: read, and states no year — remembered too, never asked again
                     known[u] = year_of(fields, facts.get(u)) or Year(0)
@@ -390,8 +433,14 @@ def best(readings: list[Reading], year: int, lang: str = "it") -> Reading | None
 
 
 def apply(text: str, year: int, found: Lookup, purpose: str, lang: str = "it") -> tuple[str, list[Reading]]:
-    """The copy of `text` read at `year`, and the readings it used."""
+    """The copy of `text` read at `year`, and the readings it used. A
+    TRANSLATION's text is returned as it is (`Year.translated`): its year is
+    the work's, and the work's year does not apply to the translator's
+    Italian (architecture, 2026-11-18: a 1950 Plato at -388 would fall in
+    TLIO's period)."""
     used: list[Reading] = []
+    if getattr(year, "translated", False):
+        return text, used
 
     def one(m: re.Match) -> str:
         w = m.group(0)

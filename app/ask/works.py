@@ -126,11 +126,11 @@ class EditionFacts:
     #: historical.is_translation): its text is not the work's original
     #: language, so the original's first publication dates no word of it
     translated: bool = False
-    #: the creators' LIFETIME (architecture's ruling, 2026-11-18, on the
+    #: the authors' LIFETIME (architecture's ruling, 2026-11-18, on the
     #: operator's "Author's birth/death places the book in time pretty
     #: precisely (assume a date in the middle)"): the earliest birth to the
-    #: latest death of the TRANSLATORS for a translation, of the AUTHORS
-    #: (roles aut, cre) otherwise, from the record's own
+    #: latest death of the AUTHORS (roles aut, cre) — of the WORK, a
+    #: translation's too, never its translators' — from the record's own
     #: `extra.creators_detail`; None for an anthology (midpoints more than
     #: LIVED_SPREAD apart) or where a creator lacks a year (never guessed)
     lived: tuple[int, int] | None = None
@@ -249,7 +249,7 @@ def edition_facts(record: dict[str, Any]) -> EditionFacts:
     first = stated_first_published(marc.get("520"))
     from app import historical
     translated = historical.is_translation(record)
-    lived, span = lifetime(record, translated)
+    lived, span = lifetime(record, False)            # the WORK's authors, a translation's too
     century, century_text = stated_century(marc.get("520"))
     return EditionFacts(abridged=bool(_ABRIDGED.search(words)),
                         better_as=tuple(_BETTER.findall(str(extra.get("description") or ""))),

@@ -20,7 +20,9 @@ could type to find that passage's content. The writer sees the ORIGINAL
 passage only — never the reader's copy, the record's title or any other hit
 (the ruling). The target is that record.
 
-A query is REFUSED, and kept with its reason for review, if it names the
+Translations (a `trl` credit) are left out — the glossary never reads them —
+and counted per stratum (`translations_excluded`). A query is REFUSED, and
+kept with its reason for review, if it names the
 title, copies four or more consecutive words of the passage, is longer
 than `MAX_WORDS` words, or is empty. The FIRST line is the set's header:
 the chat model's id (CHAT_MODEL) and weights hash (`--weights-sha256`, as
@@ -164,6 +166,10 @@ def main(argv: list[str] | None = None) -> int:
                 hit = {"chunk_id": f"{r['uid']}:0:1", "source_collection": name}
                 y = reading.years([hit]).get(0)
                 if y is None or not lo <= y <= hi:
+                    continue
+                if getattr(y, "translated", False):
+                    # the glossary never reads a translation (architecture, 2026-11-18): out of the set
+                    made["translations_excluded"] = made.get("translations_excluded", 0) + 1
                     continue
                 for _p in range(a.per_record):
                     if made["kept"] >= a.kept:

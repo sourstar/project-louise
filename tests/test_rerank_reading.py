@@ -94,3 +94,13 @@ def test_a_failing_reading_falls_back_and_says_so_once_a_minute(reranker, monkey
         ranked, ok = retrieval._rerank_held("q", [dict(h) for h in hits], RECIPE, 5.0, 50, None)
     out = capsys.readouterr().out
     assert ok and out.count("[gutenberg-it warn:reading]") == 1 and "refs.db locked" in out
+
+
+def test_a_translation_is_never_read_nor_moved(reranker, monkeypatch):
+    found = reading.Lookup({"huomo": [Reading("huomo", "uomo", REPLACE, None, None, "it", 1400, 1899,
+                                              "wikisource-variants 3", "wikisource-readings")]}, "v")
+    monkeypatch.setattr(reading, "years", lambda hits, collection=None: {
+        1: reading.Year(1726, "its first publication (1726)", translated=True)})
+    monkeypatch.setattr(reading, "lookup", lambda words, store=None: found)
+    ranked, _ = retrieval._rerank_held("q", [dict(h) for h in HITS], RECIPE, 5.0, 50, None)
+    assert reranker[0] == [h["text"] for h in HITS] and not any("moved_by" in h for h in ranked)
