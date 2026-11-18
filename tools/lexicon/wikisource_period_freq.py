@@ -120,49 +120,15 @@ def write_terms(out: Path, source: str, dump: Path) -> None:
         " by century, CC BY-SA 3.0; built by tools/lexicon/wikisource_period_freq.py\n", encoding="utf-8")
 
 
-_ANNO = re.compile(r"\|\s*Anno\s*=\s*([^\n|]*)")
-_QUALITY = re.compile(r'<pagequality level="(\d)"')
-_NOINCLUDE = re.compile(r"<noinclude>.*?</noinclude>", re.S)
-
-
-def _pages(xml_bz2: Path):
-    """(namespace, title, text) of every page of a MediaWiki XML dump."""
-    import bz2
-    import xml.etree.ElementTree as ET
-    for _, el in ET.iterparse(bz2.open(xml_bz2), events=("end",)):
-        if el.tag.endswith("}page"):
-            ns = next((c.text for c in el if c.tag.endswith("}ns")), None)
-            title = next((c.text or "" for c in el if c.tag.endswith("}title")), "")
-            rev = next((c for c in el if c.tag.endswith("}revision")), None)
-            text = next((c.text or "" for c in rev if c.tag.endswith("}text")), "") if rev is not None else ""
-            yield ns, title, text
-            el.clear()
-
-
-def print_years(pages) -> dict[str, int]:
-    """Indice (ns 110) name -> the edition's print year, from its Anno field."""
-    out = {}
-    for ns, title, text in pages:
-        if ns == "110":
-            m = _ANNO.search(text)
-            y = re.search(r"1\d{3}", m.group(1)) if m else None
-            if y:
-                out[title.split(":", 1)[1]] = int(y.group(0))
-    return out
+# THE DUMP'S PAGES, by the one parser the reading reference source uses
+# (app/refs/wikisource_readings.py; architecture, 2026-11-18: the derivation
+# moved into that source; this tool keeps louise-ocr's TSV of counts)
+from app.refs.wikisource_readings import pages as _pages, print_years, scan_pages as _scan_pages  # noqa: E402
 
 
 def scan_page_texts(pages, years: dict[str, int], lo: int, hi: int, level: int) -> list[tuple[int, str]]:
     """(century of the print, text) of each scan page proofread to `level`."""
-    out = []
-    for ns, title, text in pages:
-        if ns != "108":
-            continue
-        y = years.get(title.split(":", 1)[1].rsplit("/", 1)[0])
-        q = _QUALITY.search(text)
-        if y is None or not lo <= y <= hi or not q or int(q.group(1)) < level:
-            continue
-        out.append(((y // 100) * 100, _NOINCLUDE.sub(" ", text)))
-    return out
+    return list(_scan_pages(pages, years, lo, hi, level))
 
 
 def count_all(dated: list[tuple[int, str]], procs: int | None = None) -> collections.Counter:

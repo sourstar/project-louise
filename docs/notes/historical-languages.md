@@ -292,6 +292,47 @@ say NO ("If there is no publication year ... the annotation is not used"),
 so the ruling should say whether the existing marker trigger stays for the
 model's copy or goes.
 
+## Built (2026-11-18): the reader, as ruled
+
+Architecture's ruling, the operator's words (all 2026-11-18, through
+München): the reading is two REFERENCE SOURCES (06 §6.5, amended):
+`wikisource-readings` (app/refs/wikisource_readings.py) and `tlio`
+(app/refs/tlio.py), one table each in TEI's orig/reg vocabulary
+(app/refs/readings.py); the reader `app/reading.py`; the reranker's copy in
+`retrieval._rerank_held` (05 §5.6, amended); the chat model's copy in
+`historical.read_sources` (both answer paths).
+
+- *The year*: `publication_year_fields`, declared per plugin, in order —
+  gutenberg `("first_published", "date")` (operator: "work's
+  first-publication year is the default, and print year of the edition
+  Project Gutenberg transcribed is the fallback"), normattiva `("date",)`;
+  none declared, nothing applied; PG's release date (`extra.issued`)
+  never read (tests/test_reading.py: 1605 / 1851 / none, never 2004).
+- *Measured, 20261101 dump*: 3,417 replace pairs (MIN_OLD 3, MIN_LEN 5,
+  a modern form ≥ 1 a million 1900s words, the old form < 5 % of it in
+  the 1900s), 3 min 43 s on 8 cores. Not yet synced on the node.
+- *Cost* (this cloud container, NOT the node; synthetic texts, the real
+  3,417-pair table and a 250,000-row table of TLIO's size): lookup and
+  apply for 100 texts (depth 50, two chunks each) 12.9 ms a rerank; the
+  version digests 385 ms, once after each sync, on the first query. Owed:
+  the same on the node's real path (measuring.md §6), and `reading.years`'
+  facts lookup, not measured here.
+- *No rerank cache exists* in the code (searched 2026-11-18): the
+  version is in each moved hit's `moved_by` instead, so a reorder names
+  the tables that made it.
+
+**The measurement, its rule stated BEFORE the run** (the ruling; the
+chunker report's form). Set: ≥ 30 judged queries whose relevant record
+is a gutenberg Italian book stating a year 1400–1899 (or before 1400,
+for TLIO), written and judged before the run, kept with the run. Harness:
+the one that measured titles (`tools/measure/rerank_variants.py`, the
+API's path, bit-exact reranker); `retrieval.READING_RERANK` True and
+False, from the command line, same depth, same everything else. Metric:
+reranked MRR@10; also R@10 and the number of hits `moved_by` names. Rule:
+ON stays if MRR@10(on) ≥ MRR@10(off) − 0.02; a loss of more than 0.02
+goes to the operator the same day with the hits it moved. The number is
+recorded here whatever it is.
+
 ## Other languages (top picks; full tables in this session's reports, to be added)
 
 - **English.** OE: Bosworth-Toller ("free for any purpose") and Wiktionary
