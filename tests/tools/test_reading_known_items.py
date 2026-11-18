@@ -34,7 +34,7 @@ def test_the_set_records_its_writer_and_counts_its_strata(monkeypatch, tmp_path)
     import json
     from app import config, llm, reading
     recs = [{"uid": f"gutenberg:{i}", "lang": "it", "title": "Rime",
-             "sections": [["I", "Una frase lunga che continua sul mercante. " * 30]]} for i in range(5)]
+             "sections": [["I", " ".join(f"Una frase lunga {i} che continua sul mercante." for i in range(60))]]} for i in range(5)]
     monkeypatch.setattr(k, "records_of", lambda name, rng: iter(recs))
     monkeypatch.setattr(reading, "years", lambda hits, collection=None: {0: 1554})
     monkeypatch.setattr(config, "CHAT_MODEL", "qwen-test")
@@ -59,7 +59,7 @@ def test_several_passages_per_record_fill_a_stratum_of_few_books(monkeypatch, tm
     import json
     from app import llm, reading
     recs = [{"uid": "gutenberg:1", "lang": "it", "title": "Commedia",
-             "sections": [["I", "Una frase lunga che continua sul mercante. " * 30]]}]
+             "sections": [["I", " ".join(f"Una frase lunga {i} che continua sul mercante." for i in range(60))]]}]
     monkeypatch.setattr(k, "records_of", lambda name, rng: iter(recs))
     monkeypatch.setattr(reading, "years", lambda hits, collection=None: {0: 1320})
     monkeypatch.setattr(llm, "chat", lambda m, temperature, max_tokens: "Chi era il mercante?")
@@ -75,7 +75,7 @@ def test_translations_are_left_out_and_counted(monkeypatch, tmp_path):
     import json
     from app import llm, reading
     recs = [{"uid": f"gutenberg:{i}", "lang": "it", "title": "T",
-             "sections": [["I", "Una frase lunga che continua sul mercante. " * 30]]} for i in range(2)]
+             "sections": [["I", " ".join(f"Una frase lunga {i} che continua sul mercante." for i in range(60))]]} for i in range(2)]
     monkeypatch.setattr(k, "records_of", lambda name, rng: iter(recs))
     monkeypatch.setattr(reading, "years", lambda hits, collection=None: {
         0: reading.Year(1726, "x", translated=hits[0]["chunk_id"].startswith("gutenberg:0"))})
@@ -92,10 +92,10 @@ def test_a_multi_volume_work_and_one_author_cannot_fill_a_stratum(monkeypatch, t
     from app import llm, reading
     vol = lambda i: {"uid": f"gutenberg:{i}", "lang": "it", "title": f"Istoria civile del regno di Napoli, Vol. {i}",
                      "extra": {"creators_detail": [{"role": "aut", "name": "Giannone, Pietro"}]},
-                     "sections": [["I", "Una frase lunga che continua sul regno. " * 30]] * 4}
+                     "sections": [["I", " ".join(f"Una frase lunga {i} che continua sul regno." for i in range(60))]] * 4}
     other = lambda i, au: {"uid": f"gutenberg:{i}", "lang": "it", "title": f"Opera {'ABCDEFG'[i % 7]}",
                            "extra": {"creators_detail": [{"role": "aut", "name": au}]},
-                           "sections": [["I", "Una frase lunga che continua sul mercante. " * 30]] * 4}
+                           "sections": [["I", " ".join(f"Una frase lunga {i} che continua sul mercante." for i in range(60))]] * 4}
     recs = [vol(1), vol(2), vol(3)] + [other(10 + i, "Muratori") for i in range(4)] + [other(20, "Gozzi")]
     monkeypatch.setattr(k, "records_of", lambda name, rng: iter(recs))
     monkeypatch.setattr(reading, "years", lambda hits, collection=None: {0: reading.Year(1750, "x")})
@@ -113,3 +113,27 @@ def test_a_multi_volume_work_and_one_author_cannot_fill_a_stratum(monkeypatch, t
     assert sum(1 for b in body if b["title"].startswith("Opera") and b["uid"] != "gutenberg:20") == 4  # Muratori: 4
     tail = lines[-1]["counts"]["g:1700:1799"]
     assert tail["kept"] == 8 and tail["works"] == 4
+
+
+def test_editorial_notes_and_other_languages_are_never_passages():
+    assert k._EDITORIAL.search("La trascrizione di quest'opera è stata effettuata sulla base dell'edizione")
+    assert k._EDITORIAL.search("La Calandria non ha un suo proprio frontespizio")
+    assert not k._EDITORIAL.search("Il re entrò nella sala e tutti tacquero.")
+    assert k.italian("Il re entrò nella sala e tutti tacquero, che non era più tempo di ridere per una sola parola.")
+    assert not k.italian("Heu semel in pania cuncti veschiamur amoris, quod est sed cum ad ut enim autem nec quae.")
+    assert not k.italian("Socialiste? Il deviendra socialiste, dans le pays des pauvres, avec les ouvriers qui sont la.")
+
+
+def test_several_passages_of_one_record_are_distinct(monkeypatch, tmp_path):
+    import json
+    from app import llm, reading
+    rec = {"uid": "gutenberg:1", "lang": "it", "title": "T",
+           "sections": [["I", "x"], ["II", "y"], ["III", ("Il re entrò nella sala e tutti tacquero, che non era più "
+                                                       "tempo di ridere per una sola parola. ") * 12]]}
+    monkeypatch.setattr(k, "records_of", lambda name, rng: iter([rec]))
+    monkeypatch.setattr(reading, "years", lambda hits, collection=None: {0: reading.Year(1550, "x")})
+    monkeypatch.setattr(llm, "chat", lambda m, temperature, max_tokens: "Che cosa accadde nella sala?")
+    out = tmp_path / "set.jsonl"
+    k.main(["--stratum", "g:1500:1599", "--kept", "5", "--per-record", "2", "--weights-sha256", "a", "--out", str(out)])
+    body = [json.loads(x) for x in out.read_text(encoding="utf-8").splitlines()[1:-1]]
+    assert len({b["passage"][:200] for b in body}) == len(body)

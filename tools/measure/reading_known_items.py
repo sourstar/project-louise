@@ -65,6 +65,31 @@ MAX_NOISE = 0.08
 _WORD = re.compile(r"[^\W\d_]+", re.UNICODE)
 
 
+#: an editor's or transcriber's note inside the text, in modern Italian, about
+#: the edition rather than the work (München's review, 2026-11-18: "La
+#: trascrizione di quest'opera è stata effettuata…", "non ha un suo proprio
+#: frontespizio", "Il manoscritto della presente memoria…")
+_EDITORIAL = re.compile(r"(?i)\b(?:trascrizion[ei]|trascrittor[ei]|frontespizi[oi]|la\s+presente\s+edizione|"
+                        r"quest[ao]\s+edizione|edizione\s+del\s+1\d{3}|il\s+manoscritto\s+della\s+present[ei]|"
+                        r"nota\s+del(?:l')?\s*(?:trascrittore|curatore|editore)|errata[\s-]corrige)\b")
+#: the function words of Italian, and of the two languages its old books
+#: quote most (München's review: Folengo's macaronic Latin, a French passage)
+_IT = frozenset("il lo gli della delle dello degli che di del per una sono non questo questa quella anche più come "
+                "ma nel nella alla dalla ancora quando".split())
+_FR = frozenset("le les des est une pas qui avec dans pour sur au aux du ce cette sont mais".split())
+_LA = frozenset("est sunt quod cum sed ad ut enim autem atque vel nec quae qui quam esse erat".split())
+
+
+def italian(text: str) -> bool:
+    """The passage reads as Italian: its Italian function words at least as
+    many as French or Latin ones, and at least 4 a hundred words."""
+    words = [w.lower() for w in _WORD.findall(text)]
+    if not words:
+        return False
+    it, fr, la = (sum(1 for w in words if w in s_) for s_ in (_IT, _FR, _LA))
+    return it >= max(fr, la) and it >= 0.04 * len(words)
+
+
 def noisy(text: str) -> bool:
     """Mostly digits, brackets or capitals: an errata list, a title page."""
     letters = [c for c in text if c.isalpha()]
@@ -89,7 +114,7 @@ def passage_of(record: dict, rng: random.Random) -> str | None:
     chunk = text[start:start + 900]
     end = max(chunk.rfind(". "), chunk.rfind("? "), chunk.rfind("! "))
     got = (chunk[:end + 1] if end >= 500 else chunk).strip()
-    return None if noisy(got) else got
+    return None if noisy(got) or _EDITORIAL.search(got) or not italian(got) else got
 
 
 def refused(query: str, passage: str, title: str) -> str | None:
@@ -136,11 +161,20 @@ def records_of(name: str, rng: random.Random, lang: str | None = "it"):
         yield from recs
 
 
-def _one(out, r: dict, name: str, key: str, y: int, rng: random.Random, made: dict, qid: int, llm) -> int:
-    """One passage of the record to the chat model, its query written to the set."""
-    passage = passage_of(r, rng)
+def _one(out, r: dict, name: str, key: str, y: int, rng: random.Random, made: dict, qid: int, llm,
+         used: set | None = None) -> int:
+    """One passage of the record to the chat model, its query written to the set;
+    never a passage of the record already drawn (`used`), tried a few times."""
+    passage = None
+    for _try in range(6):
+        p = passage_of(r, rng)
+        if p is not None and (used is None or p[:200] not in used):
+            passage = p
+            break
     if passage is None:
         return qid
+    if used is not None:
+        used.add(passage[:200])
     try:
         query = llm.strip_think(llm.chat([{"role": "user", "content": PROMPT + passage}],
                                          temperature=0.0, max_tokens=120)).strip()
@@ -248,12 +282,13 @@ def main(argv: list[str] | None = None) -> int:
                     made["translations_excluded"] = made.get("translations_excluded", 0) + 1
                     continue
                 w, au = work_key(r, cluster), author_of(r)
+                used: set[str] = set()                          # this record's passages: never one twice
                 for _p in range(a.per_record):
                     if made["kept"] >= a.kept or per_work.get(w, 0) >= PER_WORK \
                             or (au and per_author.get(au, 0) >= PER_AUTHOR):
                         break
                     before = made["kept"]
-                    qid = _one(out, r, name, key, y, rng, made, qid, llm)
+                    qid = _one(out, r, name, key, y, rng, made, qid, llm, used)
                     if made["kept"] > before:
                         per_work[w] = per_work.get(w, 0) + 1
                         if au:
