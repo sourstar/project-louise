@@ -4,10 +4,9 @@ Nothing here touches the real /data or /corpus; every test gets its own
 tmp_path-backed copy so tests never interfere with each other or with a real
 deployment.
 """
+import os
 import shutil
 from pathlib import Path
-
-import os
 
 import pytest
 
@@ -20,16 +19,47 @@ os.environ["LOUISE_RESIDENT"] = "0"
 
 FIXTURE_CORPUS = Path(__file__).parent / "fixtures" / "gutenberg-mini" / "corpus"
 
+#: the signals a command or a tool takes over for its stop (07 §7.7)
+_STOP_SIGNALS = tuple(getattr(__import__("signal"), n) for n in ("SIGTERM", "SIGINT", "SIGHUP", "SIGALRM")
+                      if hasattr(__import__("signal"), n))
+
+
+@pytest.fixture(autouse=True)
+def signal_handlers_are_restored():
+    """A test that runs a command or a tool IN THIS PROCESS (louise.main,
+    tools/measure/*.main) lets it install its own SIGTERM/SIGINT handler —
+    and most never put the previous one back, harmless in the process of
+    their own they run in in production. In the suite it LEAKED into every
+    later test (2026-11-18, the full ordered run: tests/test_stop_orphans
+    "DID NOT RAISE Stopped" and test_process_signals failed there and only
+    there, and the run's own SIGTERM surfaced as wikitext_identity's
+    KeyboardInterrupt 400 files later). Each test now ends with the handlers
+    it began with."""
+    import signal
+    saved = {s: signal.getsignal(s) for s in _STOP_SIGNALS}
+    yield
+    for s, h in saved.items():
+        if signal.getsignal(s) is not h and h is not None:
+            signal.signal(s, h)
+
 
 @pytest.fixture(autouse=True)
 def fresh_worker_state():
     """Module-level cursors and memos are per PROCESS, so one test's
     completed walk must not decide the next test's selection (that leak
     is exactly the bug the re-index cursor's key had in production)."""
-    from app import (cpu_limit, encoder_timeouts, language_plan, parallel, sched, sizing,
-                     translate, worker)
-    from app.rage import dispatch
+    from app import (
+        cpu_limit,
+        encoder_timeouts,
+        language_plan,
+        parallel,
+        sched,
+        sizing,
+        translate,
+        worker,
+    )
     from app.bundles import genesis
+    from app.rage import dispatch
     dispatch.reset()
     encoder_timeouts.reset()
     language_plan.reset()
@@ -353,6 +383,7 @@ def _codex_template():
     Codex collection: the tree is content-addressed, so every copy is the
     same collection."""
     import tempfile
+
     from app.hold import collection as col
     from tests.hold.conftest import KEY, NOW, PLATFORM, fake_embed, fake_query_embed
     from tests.hold.test_template import recipe
@@ -409,6 +440,7 @@ def test_collection_files_name_an_encoder(request, monkeypatch):
     if request.node.get_closest_marker("strict_encoder"):
         return
     import dataclasses
+
     from app import collections as collections_mod
     real = collections_mod._load_one
 
@@ -465,6 +497,7 @@ def _legal_tokenizer():
     test that cuts a legi / neuris / eurlex record runs without the 17 MB
     file — the window is then a count of words."""
     from tokenizers import Tokenizer, models, pre_tokenizers
+
     from app import chunking_legal
     from app.plugins.wikidata import chunker as wd
     had = wd._tokenizers.get(chunking_legal.NEMOTRON_TOKENIZER)
