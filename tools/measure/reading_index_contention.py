@@ -1,7 +1,8 @@
 """MEASUREMENT (not product code): search latency while the reader's year
 index is built (architecture, 2026-11-18: "measure search latency DURING
 it ... If p95 rises, move the build"). The build now runs in a spawned
-child (`reading.INDEX_IN_CHILD`); `--in-thread` measures the old way too.
+child (`reading.INDEX_IN_CHILD`); `--in-thread` adds a second line for the
+old in-thread build.
 
     python -m tools.measure.reading_index_contention --collection <gutenberg's> \\
         --set known_items.jsonl [--n 40] [--in-thread]
@@ -35,7 +36,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--collection", required=True)
     ap.add_argument("--set", type=Path, required=True)
     ap.add_argument("--n", type=int, default=40)
-    ap.add_argument("--in-thread", action="store_true", help="build in the web thread, as before the child")
+    ap.add_argument("--in-thread", action="store_true",
+                    help="ALSO measure the old in-thread build, after the child's (two lines)")
     a = ap.parse_args(argv)
     os.environ["LOUISE_CACHE_DIR"] = tempfile.mkdtemp(prefix="reading-contention-")
     from app import collections as collections_mod, reading, retrieval
@@ -52,27 +54,32 @@ def main(argv: list[str] | None = None) -> int:
     for q in queries[:3]:
         one(q)                                                   # warm the search's own caches
     base = [one(q) for q in queries]
-    reading.INDEX_IN_CHILD = not a.in_thread
-    reading._year_index.clear()
-    t_build = {"s": None}
+    def phase(in_child: bool) -> dict:
+        reading.INDEX_IN_CHILD = in_child
+        reading._year_index.clear()
+        t_build = {"s": None}
 
-    def build() -> None:
-        t0 = time.perf_counter()
-        reading._index_off_process(col, 1800)
-        t_build["s"] = time.perf_counter() - t0
-    th = threading.Thread(target=build, daemon=True)
-    th.start()
-    during, k = [], 0
-    while th.is_alive() and k < 10 * len(queries):
-        during.append(one(queries[k % len(queries)]))
-        k += 1
-    th.join()
-    print(json.dumps({"collection": a.collection, "in_child": not a.in_thread,
-                      "baseline": {"n": len(base), "p50_ms": pct(base, 0.5), "p95_ms": pct(base, 0.95)},
-                      "during_build": {"n": len(during), "p50_ms": pct(during, 0.5), "p95_ms": pct(during, 0.95)},
-                      "build_s": round(t_build["s"] or 0, 1),
-                      "median_ratio": round(statistics.median(during) / statistics.median(base), 2)
-                      if during and base else None}))
+        def build() -> None:
+            t0 = time.perf_counter()
+            reading._index_off_process(col, 1800)
+            t_build["s"] = time.perf_counter() - t0
+        th = threading.Thread(target=build, daemon=True)
+        th.start()
+        during, k = [], 0
+        while th.is_alive() and k < 10 * len(queries):
+            during.append(one(queries[k % len(queries)]))
+            k += 1
+        th.join()
+        return {"in_child": in_child,
+                "baseline": {"n": len(base), "p50_ms": pct(base, 0.5), "p95_ms": pct(base, 0.95)},
+                "during_build": {"n": len(during), "p50_ms": pct(during, 0.5), "p95_ms": pct(during, 0.95)},
+                "build_s": round(t_build["s"] or 0, 1),
+                "median_ratio": round(statistics.median(during) / statistics.median(base), 2)
+                if during and base else None}
+    # the child build always; --in-thread adds the old in-thread build after it, for the comparison
+    for in_child in ([True, False] if a.in_thread else [True]):
+        os.environ["LOUISE_CACHE_DIR"] = tempfile.mkdtemp(prefix="reading-contention-")   # worst case each time
+        print(json.dumps({"collection": a.collection, **phase(in_child)}), flush=True)
     return 0
 
 

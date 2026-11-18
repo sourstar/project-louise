@@ -111,7 +111,7 @@ def refused(query: str, passage: str, title: str) -> str | None:
     return None
 
 
-def records_of(name: str, rng: random.Random):
+def records_of(name: str, rng: random.Random, lang: str | None = "it"):
     from app import collections as collections_mod
     from app.ask.results import _root
     from app.hold import collection as col, shard as shard_mod
@@ -130,7 +130,8 @@ def records_of(name: str, rng: random.Random):
         path = tree / shard_mod.shard_path(s.slice, s.n)
         if not path.is_file():
             continue
-        recs = [r for r in pack_records.iter_records(path) if str(r.get("lang") or "").lower().startswith("it")]
+        recs = [r for r in pack_records.iter_records(path)
+                if lang is None or str(r.get("lang") or "").lower().startswith(lang)]
         rng.shuffle(recs)
         yield from recs
 

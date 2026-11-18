@@ -53,3 +53,12 @@ def test_alignment_is_read(monkeypatch):
     from app import llm
     monkeypatch.setattr(llm, "chat", lambda m, temperature, max_tokens: '{"alignment": 2}')
     assert e.align("old", "new") == 2.0
+
+
+def test_a_same_work_claim_pairs_in_either_direction(tmp_path):
+    # the node's claims: Dante (gutenberg:997, it) is the OBJECT of same-work claims to English records
+    claims = tmp_path / "c.jsonl"
+    claims.write_text(json.dumps({"type": "same-work", "subject": "gutenberg:1005", "object": "gutenberg:997"}) + "\n",
+                      encoding="utf-8")
+    recs = {"gutenberg:997": {"lang": "it"}, "gutenberg:1005": {"lang": "en"}}
+    assert e.modern_partners(claims, recs) == {"gutenberg:997": "gutenberg:1005"}

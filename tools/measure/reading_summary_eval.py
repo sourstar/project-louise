@@ -199,7 +199,9 @@ def main(argv: list[str] | None = None) -> int:
                                                                        or c.get("object") in targets):
                 wanted.update((str(c.get("subject")), str(c.get("object"))))
     records = {}
-    for r in records_of(a.collection, random.Random(0)):
+    # every language: the modern versions are English records too (records_of
+    # keeps Italian ones by default — the first node run paired nothing so)
+    for r in records_of(a.collection, random.Random(0), lang=None):
         if r["uid"] in wanted:
             records[r["uid"]] = {k: v for k, v in r.items() if k != "sections"}
     partners = {h: m for h, m in modern_partners(a.claims, records).items() if h in targets}
