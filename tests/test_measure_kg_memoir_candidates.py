@@ -85,3 +85,13 @@ def test_a_person_needs_a_life_word_and_quotations_are_out(tmp_path: Path) -> No
     ])
     got = {c.ebook: c.category for c in m.candidates(cat, "en")}
     assert got == {1: "not a memoir by its record", 2: "not a memoir by its subjects", 3: "about a person"}
+
+
+def test_scope_fiction_genres_and_fiction_diaries() -> None:
+    from tools.measure import kg_scope_count as scope
+    assert scope.is_out(["Bildungsromans"], "PT")
+    assert scope.is_out(["Algonquian Indians -- Legends"], "E")
+    assert not scope.is_out(["Legends -- History and criticism"], "GR")
+    assert not scope.is_memoir(["Diaries -- Fiction", "Love stories"], "PR")
+    assert scope.is_memoir(["Dramatists, Irish -- 20th century -- Biography"], "PR")
+    assert scope.is_memoir(["Generals -- United States -- Biography"], "E")
