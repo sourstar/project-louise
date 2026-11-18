@@ -57,7 +57,8 @@ GLOSS_CHARS = 200
 #: a quarter of wikisource-readings' 1.0, written as a literal and never
 #: derived from it, so a change there cannot move this floor without tlio's
 #: version. There a form must be OLD-only to pair; here a gloss is a guess
-#: at a sense, and a wrong one misleads
+#: at a sense, and a wrong one misleads. Set at tlio 3 from the node's
+#: counts in 56,976,342 1900s words: fuoro 32, abborri 19 dropped (floor 14)
 MODERN_PER_MILLION = 0.25     # tlio's own: a change here is a PARSER_VERSION (invariant 3)
 CHUNK = 500
 
