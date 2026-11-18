@@ -135,3 +135,59 @@ plainly wrong: Fabre's *The Life of the Fly* is in "Biographies".
 *The Confessions of a Poacher* (36970) and *Wine-Dark Seas* (59530) are
 NO (`wiki-gutenberg-memoir-titles-en.toml`). No Gutenberg proposal is
 made for 36970.
+
+## B2. The 252 "Biographies" conflicts, checked on the text (2026-11-18)
+
+Every record here is in PG's category Biographies (or the French "Biographie,
+Mémoires…" shelf), but none has an LCSH biography or memoir heading.
+- **Who read them:** four parallel readers, each taking the opening ~30 KB
+  of every book from aleph.pglaf.org, with one brief and one set of
+  criteria.
+- **The check:** the merge has all 252, none missing. Two verdicts were
+  re-read by hand and agree (10693, Ellenborough's diary; 19543, *Memorias
+  de un vigilante*).
+- The per-book verdicts, quotes and fixes are in
+  `memoir-category-conflicts.csv`: columns `verdict`, `confidence`,
+  `checked_on_text`, `proposal`.
+
+| verdict | books |
+|---|---|
+| memoir | 182 |
+| biography | 32 |
+| not a memoir | 23 |
+| uncertain | 15: 3878, 3879, 3880, 3881, 3882 (the Lamballe/Du Hausset "secret memoirs", authenticity doubtful); 18942 (Fouché, authorship disputed); 12967, 19008, 28258, 30717, 32343, 38166, 52215, 56578, 63641 |
+
+Not memoirs (23), each with its quote in the CSV:
+- **Pseudo-memoirs and fiction:**
+  - Du Barry 2082 and 2563: by Lamothe-Langon, as PG's own transcriber's
+    note says.
+  - *Reminiscences of a Stock Operator* (60979): Lefèvre's fictional
+    narrator.
+  - *Anastasia* (68616): Eugenia Smith's claimant narrative.
+  - *Memorias de un vigilante* (19543).
+  - Pompadour 1766 (52003): known as apocryphal from outside the text;
+    moderate confidence.
+- **Essays, studies, indexes, papers:**
+  - Huxley's school reader (1315), *The Book-Hunter* (22136),
+    *Confessions of a Book-Lover* (24003).
+  - Taine's study of Saint-Simon (17044) and the "affaire du bonnet"
+    study (61789).
+  - Widger's indexes (28860, 29250) and Jefferson's papers, vol. 8
+    (56313).
+  - Fabre's *The Life of the Fly* (3422).
+- **Polemic and self-help:** *Auricular Confession* (37695), *Living the
+  Radiant Life* (56306), *Confessions of a railroad signalman* (63374),
+  *Personal Experience of a Physician* (6481).
+- **Other:** *Century of Inventions* (48575), *The Dismal Swamp* (20186),
+  *Gems of Reminiscence* (49739), *Stufen*, aphorisms (15898).
+
+**PG fixes proposed: 209 records.** Most add a missing form heading
+("-- Biography", "-- Personal narratives", "-- Diaries", "Autobiographies").
+The fiction ones add "-- Fiction" and drop Biographies.
+
+**Before sending:**
+- Some name headings carry life dates the readers knew, not dates read
+  in the text.
+- Every heading is to be checked against the LC name authority file
+  (id.loc.gov).
+- The moderate-confidence rows (77) go in a second batch, if at all.
