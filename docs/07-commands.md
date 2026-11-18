@@ -131,13 +131,18 @@ louise hold
                                                                        exit 3. A Codex whose records name a keyed unit and which names no run is refused by every create
               create deposit --name N [--encoder URL [--api A] [--embed-model M] [--query-model M]] [--space-from CODEX | --space FILE]
                                                                        a deposit collection (02 §2.9): no recipe; the node's deposit encoder unless one is named
-              create annotations --claims FILE --name N [--annotates C [--from-snapshot S] [--annotates C2 --from-snapshot S2 …]] [--title T] [--summary S] [--annotator A] [--snapshot ID] [--container jsonl|parquet] [--dry-run]
+              create annotations --claims FILE --name N [--annotates C [--from-snapshot S] [--annotates C2 --from-snapshot S2 …]] [--title T] [--summary S] [--annotator A] [--snapshot ID] [--container jsonl|parquet] [--repin] [--dry-run]
                                                                        an annotations collection (02 §2.10; amended 2026-10-09): no recipe, no encoder; each claim's
                                                                        target hashes read from C's snapshot S; writes the parts, the relations, the first snapshot
                                                                        (signed with the node's key when there is one) and the file; prints its id. `--dry-run`
                                                                        (2026-10-19) checks the file against S exactly as the write would and prints the counts.
                                                                        Without --annotates the targets are the held collections the claims' uids name, each
-                                                                       from its newest snapshot; a target without --from-snapshot, its newest (2026-10-25, §7.4)
+                                                                       from its newest snapshot; a target without --from-snapshot, its newest (2026-10-25, §7.4).
+                                                                       `--repin` (2026-11-18): the claims' own pins are dropped and every claim is pinned anew
+                                                                       against the targets, as `annotations update` re-checks the claims it holds — for a target
+                                                                       re-created at a new parser, whose records' text and snapshot moved; the dry run and the
+                                                                       log count the claims whose record's text moved, by method, and those moved to another
+                                                                       snapshot of the same text
                                                                        (claims, target records named, by type and method), writing nothing. Several claims
                                                                        files for one collection are merged first with `tools/annotations_merge.py` (the
                                                                        wikidata claims whole, a matcher claim only where its books are not one work yet)
@@ -176,7 +181,8 @@ louise hold
                                                                        — and its stages as `node show` counts them, with what holds each (`status`, one status, added 2026-11-07)
   annotations claims <collection> --out FILE                    the claims the latest snapshot holds, one per line, each pinned as its record holds it — a claims
                                                                        file `create annotations` reads: a re-created target's annotations collection is created from it
-                                                                       against the new target, every end read there and every pin checked (amended 2026-11-17)
+                                                                       against the new target, every end read there and every pin checked (amended 2026-11-17); where
+                                                                       the target's text moved (a new parser), with `--repin` (2026-11-18)
   annotations update <collection> [--claims FILE] [--against TARGET=SNAPSHOT …] [--snapshot ID] [--dry-run] [--whole]
                                                                        (amended 2026-10-23, operator: updated, not replaced; 02 §2.10) the next snapshot of the SAME
                                                                        annotations collection: the claims checked against each target's newest snapshot (or
