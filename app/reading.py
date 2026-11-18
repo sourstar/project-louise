@@ -504,6 +504,13 @@ def apply(text: str, year: int, found: Lookup, purpose: str, lang: str = "it") -
     used: list[Reading] = []
     if getattr(year, "translated", False):
         return text, used
+    # most texts hold no form with a reading (94 of 100 on the node, 2026-11-18):
+    # a set intersection decides that before any word is substituted
+    if not found.by_form:
+        return text, used
+    low = text.lower()
+    if not any(f in low for f in found.by_form):            # substring checks, in C: no form here
+        return text, used
 
     def one(m: re.Match) -> str:
         w = m.group(0)
