@@ -54,9 +54,11 @@ PARSER_VERSION = 3
 PERIOD = (1100, 1400)
 GLOSS_CHARS = 200
 #: a form printed in the 1900s this often (a million words) gives no gloss:
-#: a quarter of wikisource-readings' bar (there a form must be OLD-only to
-#: pair; here a gloss is a guess at a sense, and a wrong one misleads)
-MODERN_PER_MILLION = wikisource_readings.MODERN_PER_MILLION / 4
+#: a quarter of wikisource-readings' 1.0, written as a literal and never
+#: derived from it, so a change there cannot move this floor without tlio's
+#: version. There a form must be OLD-only to pair; here a gloss is a guess
+#: at a sense, and a wrong one misleads
+MODERN_PER_MILLION = 0.25     # tlio's own: a change here is a PARSER_VERSION (invariant 3)
 CHUNK = 500
 
 _SECTIONS = ["0.1", "0.2", "0.3", "0.4", "0.5", "0.6", "0.7", "0.8"]

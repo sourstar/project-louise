@@ -170,3 +170,4 @@ def test_a_form_printed_in_the_1900s_a_few_times_a_million_gives_no_gloss():
                {"lemma": "abborrare", "forms": ["abborri"], "definition": "", "senses": 2},
                {"lemma": "risórgere", "forms": ["risurgeran"], "definition": "", "senses": 2}]
     assert [r["orig"] for r in tlio.rows_of(entries, modern, total)] == ["risurgeran"]
+    assert tlio.MODERN_PER_MILLION == 0.25 and tlio.PARSER_VERSION == 3      # its own literal, its own version
