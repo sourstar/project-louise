@@ -669,6 +669,21 @@ def words_of(texts: Iterable[str]) -> set[str]:
     return {w.lower() for t in texts for w in _WORD.findall(t or "")}
 
 
+def credits(sources) -> list[str]:
+    """The credit lines of these reading sources (by id), in SOURCES order,
+    each once — shown beside what they read (app/credits.py)."""
+    from .refs import tlio, wikisource_readings
+    by = {"wikisource-readings": wikisource_readings.WikisourceReadingsSource.attribution,
+          "tlio": tlio.TlioSource.attribution}
+    want = set(sources)
+    return [by[n] for n, _t in SOURCES if n in want and n in by]
+
+
+def sources_in(version: str) -> list[str]:
+    """The source ids a tables' version names ("wikisource-readings 3 …; tlio 3 …")."""
+    return [p.split(" ", 1)[0] for p in (version or "").split("; ") if p.strip()]
+
+
 def label(version: str) -> str:
     """moved_by's weight name: "historical reading (<source>, <version>)"."""
     return f"historical reading ({version})"

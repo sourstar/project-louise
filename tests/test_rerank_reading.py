@@ -54,13 +54,17 @@ def test_the_copy_moves_a_hit_and_says_from_where_to_where(reranker, huomo):
     ranked, ok = retrieval._rerank_held("chi era l'uomo", [dict(h) for h in HITS], RECIPE, 5.0, 50, None)
     assert ok and [h["chunk_id"] for h in ranked] == ["c:2", "c:3", "c:1"]
     assert ranked[0]["moved_by"] == [{"weight": "historical reading (wikisource-readings 1 abc)",
-                                      "from": 3, "to": 1, "read": True}]
+                                      "from": 3, "to": 1, "read": True,
+                                      "credits": [reading.credits(["wikisource-readings"])[0]]}]
+    assert "Wikisource" in ranked[0]["moved_by"][0]["credits"][0]
     assert ranked[0]["text"] == "l'huomo e l'huomo"               # the hit shown: its own text
     # c:3 (1st -> 2nd) and c:1 (2nd -> 3rd) moved because another record was read: they say so
     assert ranked[1]["moved_by"] == [{"weight": "historical reading (wikisource-readings 1 abc)",
-                                      "from": 1, "to": 2, "read": False}]
+                                      "from": 1, "to": 2, "read": False,
+                                      "credits": reading.credits(["wikisource-readings"])}]
     assert ranked[2]["moved_by"] == [{"weight": "historical reading (wikisource-readings 1 abc)",
-                                      "from": 2, "to": 3, "read": False}]
+                                      "from": 2, "to": 3, "read": False,
+                                      "credits": reading.credits(["wikisource-readings"])}]
     # the copy and, for the hit it changed only, the original: scored in the same call
     assert reranker[0] == ["un altro testo", "l'uomo e l'uomo", "un uomo", "l'huomo e l'huomo"]
 
