@@ -119,6 +119,9 @@ class Cellar:
         self.units: dict[tuple[str, str], dict] = {}
         self.requests: list[tuple[str, str, dict]] = []
         self.fail: dict[str, int] = {}          # path prefix → 503s still to answer
+        #: path prefix → "until-identity" | "always": the item's body sent
+        #: with a Content-Encoding it does not have (2026-11-18, Hungarian .html)
+        self.bad_coding: dict[str, str] = {}
         self.short_pages = False                # the pages answer fewer rows than the count
         self.rdf_asked: list[str] = []          # the CELEX whose tree was asked
         self.lock = threading.Lock()
@@ -235,8 +238,12 @@ class Cellar:
                     _, _, celex, lang, doc = path.split("/")
                     names = list(reversed(list(owner.units[(celex, lang)]["files"])))
                     name = names[int(doc.split("_")[1]) - 1]
+                    mode = next((m for prefix, m in owner.bad_coding.items() if path.startswith(prefix)), None)
+                    lie = mode == "always" or (mode == "until-identity"
+                                               and self.headers.get("Accept-Encoding") != "identity")
                     return self._send(200, owner.units[(celex, lang)]["files"][name],
-                                      {"Content-Type": "application/xml"})
+                                      {"Content-Type": "application/xml",
+                                       **({"Content-Encoding": "gzip"} if lie else {})})
                 self._send(404)
 
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), H)
@@ -383,6 +390,29 @@ def test_a_text_in_another_language_under_the_expression_lands_as_the_origin_fil
     mock.units[(ACT, "fr")]["files"] = _formex(ACT, "en")          # the French expression's items, in English
     cellar.fetch_unit(mock.base, ACT, "fr", tmp_path / src.unit_rel("fr", ACT))
     assert (tmp_path / src.unit_rel("fr", ACT)).is_dir()
+
+
+def test_a_body_its_content_encoding_does_not_decode_is_asked_again_at_once_as_identity(mock, tmp_path):
+    """2026-11-18 (München): four Hungarian .html items came with a
+    Content-Encoding their body does not decode; as episodes they cooled
+    Cellar for every worker and EUR-Lex4's pass deferred all 5,977 units.
+    Asked again at once with `Accept-Encoding: identity`, with no wait."""
+    import time as _time
+    mock.bad_coding[f"/items/{ACT}/en/DOC_1"] = "until-identity"
+    t0 = _time.monotonic()
+    cellar.fetch_unit(mock.base, ACT, "en", tmp_path / src.unit_rel("en", ACT))
+    assert _time.monotonic() - t0 < 5, "no backoff wait"
+    asked = [h for _m, p, h in (r[:3] for r in mock.requests) if p == f"/items/{ACT}/en/DOC_1"]
+    assert len(asked) == 2 and asked[1].get("Accept-Encoding") == "identity"
+    assert (tmp_path / src.unit_rel("en", ACT)).is_dir()
+
+
+def test_a_body_undecodable_even_as_identity_is_the_item_s_verdict_never_an_episode(mock, tmp_path):
+    mock.bad_coding[f"/items/{ACT}/en/DOC_1"] = "always"
+    with pytest.raises(TransportError, match="even asked for identity") as e:
+        cellar.fetch_unit(mock.base, ACT, "en", tmp_path / src.unit_rel("en", ACT))
+    assert not cellar._episode(e.value) and not engine.transient(str(e.value)), \
+        "a verdict: marked tried, the endpoint not cooled, the pass goes on"
 
 
 def test_an_item_of_another_size_than_the_notice_says_is_refused(mock, tmp_path, monkeypatch):
@@ -597,26 +627,30 @@ def test_another_language_set_is_another_window(mock):
     assert _pages(mock) == 2
 
 
-def test_a_body_that_does_not_decode_is_retried_then_a_deferral():
-    """A body its Content-Encoding does not decode is Cellar's episode, as a
-    drop is: retried, and at the end a deferral, never the unit's error
-    (3,258 Italian units, 2026-11-14/15, fetched whole when asked again)."""
-    calls = {"n": 0, "bad": 1}
+def test_a_body_that_does_not_decode_is_asked_again_as_identity_then_a_verdict():
+    """A body its Content-Encoding does not decode is asked again at once for
+    identity (RFC 9110 §12.5.3): the 3,258 Italian units of 2026-11-14/15
+    came whole when asked again. Undecodable even so, it is the item's
+    verdict, never an episode — as an episode, four Hungarian items cooled
+    Cellar for every worker and stalled EUR-Lex4's pass (2026-11-18)."""
+    calls = {"n": 0, "bad": 1, "asked": []}
 
     def answer(request: httpx.Request) -> httpx.Response:
         calls["n"] += 1
+        calls["asked"].append(request.headers.get("accept-encoding"))
         if calls["n"] <= calls["bad"]:
             return httpx.Response(200, headers={"content-encoding": "gzip"}, content=b"<rdf>not gzip</rdf>")
         return httpx.Response(200, content=b"<rdf/>")
 
     client = httpx.Client(transport=httpx.MockTransport(answer))
     got = cellar._get(client, "http://cellar.test/x", {}, "the tree of X", charge=lambda n: None)
-    assert got.content == b"<rdf/>" and calls["n"] == 2
-    calls.update(n=0, bad=99)
+    assert got.content == b"<rdf/>" and calls["n"] == 2 and calls["asked"][1] == "identity"
+    calls.update(n=0, bad=99, asked=[])
     with pytest.raises(TransportError) as e:
         cellar._get(client, "http://cellar.test/x", {}, "the tree of X", charge=lambda n: None)
-    assert engine.transient(str(e.value)) and "DecodingError" in str(e.value)
-
+    assert calls["n"] == 2, "asked twice, never retried as an episode"
+    assert not engine.transient(str(e.value)) and not cellar._episode(e.value)
+    assert "even asked for identity" in str(e.value)
 
 
 def test_a_formex_manifestation_without_a_wrapper_gives_way_to_the_next_form():

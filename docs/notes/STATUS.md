@@ -18,6 +18,17 @@ build at 12 cores, the GPU uncapped. The card's noise (operator): 0.2 sone
 idle, 3.1 sone at full load, coil whine ~0.9 sone; its fan range is being
 measured (published figures disagree).
 
+### 2026-11-18
+
+- **EUR-Lex4's per-unit pass stalled on four Hungarian items — fixed** (München: 0 units in 72 h, each
+  round `{'fetched': 0, 'failed': 4, 'total': 5977}`). Four `…hu.html` items came with a Content-Encoding
+  their body does not decode; `_get` treated a DecodingError as an episode (since the 3,258 Italian
+  units of 2026-11-14/15 that came whole when asked again), so the four, on four connections, cooled
+  Cellar for every worker past what a round waits for, and every other unit was deferred, round after
+  round; worded "connection timed out: deferred", they were never marked tried either. Now a body that
+  does not decode is asked again AT ONCE with `Accept-Encoding: identity` (RFC 9110 §12.5.3), without
+  cooling the endpoint; undecodable even so, it is the item's verdict (marked tried, the pass goes on).
+
 ### 2026-11-17
 
 - **gutenberg-book-editions re-makes itself every month from the node's own collections** (operator: no hand-run

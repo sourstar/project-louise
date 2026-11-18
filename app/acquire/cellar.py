@@ -184,30 +184,52 @@ def _get(client: httpx.Client, url: str, headers: dict, what: str, *,
     Retry-After honoured) — then raised in words the engine's `transient`
     reads as a deferral."""
     from . import backoff
+
+    def once(hdrs: dict):
+        """(status, retry-after, None) for an episode's status, else
+        (None, None, the response); a non-ok status raises."""
+        with client.stream("GET", url, headers=hdrs, follow_redirects=follow) as r:
+            if backoff.retryable_status(r.status_code):
+                return r.status_code, r.headers.get("retry-after"), None
+            body = bytearray()
+            for chunk in r.iter_bytes(_CHUNK):
+                body += chunk
+                charge(len(chunk))
+            if r.status_code not in ok:
+                raise TransportError(f"cellar: {r.status_code} to {what} ({url})")
+            return None, None, httpx.Response(r.status_code, headers=r.headers, content=bytes(body),
+                                              request=r.request)
+
     r_ = backoff.Retry(what, _policy())
     for _ in r_:
         try:
-            with client.stream("GET", url, headers=headers, follow_redirects=follow) as r:
-                if backoff.retryable_status(r.status_code):
-                    r_.episode(f"{r.status_code} to {what}", retry_after=r.headers.get("retry-after"))
-                    continue
-                body = bytearray()
-                for chunk in r.iter_bytes(_CHUNK):
-                    body += chunk
-                    charge(len(chunk))
-                if r.status_code not in ok:
-                    raise TransportError(f"cellar: {r.status_code} to {what} ({url})")
-                return httpx.Response(r.status_code, headers=r.headers, content=bytes(body),
-                                      request=r.request)
+            try:
+                status, after, got = once(headers)
+            except httpx.DecodingError:
+                # a body its Content-Encoding does not decode ("Error -3 while
+                # decompressing data: incorrect header check"): asked again AT
+                # ONCE for the body as it is — `Accept-Encoding: identity`, RFC
+                # 9110 §12.5.3 — and WITHOUT cooling the endpoint: it answered;
+                # its coding of this one body failed. 2026-11-14/15, 3,258
+                # Italian units failing so were fetched whole when asked again;
+                # 2026-11-18, four Hungarian .html items failed eight times each,
+                # and as episodes they cooled Cellar for every worker until
+                # EUR-Lex4's pass deferred all its 5,977 units, round after round
+                # (München). Undecodable even as identity: the item's verdict,
+                # said, and the pass goes on.
+                try:
+                    status, after, got = once({**headers, "Accept-Encoding": "identity"})
+                except httpx.DecodingError as e:
+                    raise TransportError(f"cellar: {what}: its body does not decode as its "
+                                         f"Content-Encoding says, even asked for identity "
+                                         f"({type(e).__name__}: {e})"[:400]) from e
+            if got is None:
+                r_.episode(f"{status} to {what}", retry_after=after)
+                continue
+            return got
         except httpx.TimeoutException as e:
             r_.episode(f"connection timed out on {what}: {type(e).__name__}", cause=e)
         except httpx.TransportError as e:
-            r_.episode(f"{type(e).__name__} on {what}: {e}", cause=e)
-        except httpx.DecodingError as e:
-            # a body its Content-Encoding does not decode ("Error -3 while decompressing data:
-            # incorrect header check"): Cellar's episode, as a drop is — 3,258 Italian units marked
-            # failed over 2026-11-14/15 fetched whole when asked again. httpx's DecodingError is not
-            # a TransportError, so it was raised as the unit's error, out of every selection
             r_.episode(f"{type(e).__name__} on {what}: {e}", cause=e)
     r_.give_up("cellar: ")
 
