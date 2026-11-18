@@ -119,3 +119,21 @@ def test_the_terms_are_hashed_byte_exact(tmp_path: Path):
     assert licensing.ref_held_back(base, "tlio") is None
     (base / licensing.REF_TERMS).write_bytes(b"terms\n")                # converted: not the text acknowledged
     assert "not acknowledged" in licensing.ref_held_back(base, "tlio")
+
+
+def test_the_derivations_parameters_are_its_version():
+    # a change to any of these is a new RULES_VERSION (ref_version): change both together
+    assert (wr.RULES_VERSION, wr.MIN_OLD, wr.MIN_LEN, wr.MODERN_PER_MILLION, wr.HOMOGRAPH_SHARE,
+            wr.MAX_SITES) == (2, 3, 5, 1.0, 0.05, 8)
+    assert wr.WikisourceReadingsSource.ref_version == wr.RULES_VERSION
+
+
+def test_the_homograph_bar_is_relative_to_the_modern_form():
+    # measured on the 20261101 dump, per million 1900s words: perche 15 against
+    # perché 751 (reprints of old texts: kept); gioja 16.3 against gioia 127.9 (excluded)
+    c = counts(perche_1500=1085, perche_1900=15, **{"perché_1900": 751},
+               gioja_1800=400, gioja_1900=163, gioia_1900=1279, filler_1900=1_000_000 - 2208)
+    rows, _modern, _total = wr.derive(c)
+    got = {r["orig"]: r["reg"] for r in rows}
+    assert got.get("perche") == "perché"
+    assert "gioja" not in got

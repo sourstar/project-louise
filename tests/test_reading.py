@@ -109,3 +109,26 @@ def test_the_model_reads_the_glossed_copy_and_the_shown_hit_is_untouched(monkeyp
 
 
 _real_lookup = reading.lookup
+
+
+def test_the_warm_computes_the_versions_off_the_query_path_and_a_query_reuses_them(tmp_path):
+    st = _store(tmp_path, ROWS)
+    reading._versions.clear()
+    got = reading.warm(store=st)
+    assert set(got) == {"wikisource-readings", "tlio"}
+    calls = []
+    real = reading.table_digest
+    try:
+        reading.table_digest = lambda con, name: calls.append(name) or real(con, name)
+        assert reading.lookup(["huomo"], st).version == "; ".join(got[n] for n, _t in reading.SOURCES)
+        assert calls == []                       # the query computed nothing
+    finally:
+        reading.table_digest = real
+
+
+def test_a_warm_past_its_bound_leaves_the_digest_to_the_first_query(tmp_path, monkeypatch):
+    st = _store(tmp_path, ROWS)
+    monkeypatch.setattr(reading, "WARM_CHECK_STEPS", 1)
+    reading._versions.clear()
+    assert reading.warm(bound_s=-1.0, store=st) == {}          # interrupted at once
+    assert reading.lookup(["huomo"], st).version                # the query computes it, once

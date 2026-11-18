@@ -104,18 +104,64 @@ class Lookup:
 
 
 _versions: dict[tuple, str] = {}
+_versions_lock = __import__("threading").Lock()
+#: the warm's bound: past it the digest's query is interrupted (SQLite's
+#: progress handler) and the first query computes it itself, once
+WARM_BOUND_S = 60.0
+#: SQLite virtual-machine steps between two looks at the bound
+WARM_CHECK_STEPS = 10_000
 
 
-def _version(store, name: str, table: str) -> str:
+def _version(store, name: str, table: str, deadline: float | None = None) -> str:
+    """`<source> <ref_version> <digest of its synced table>`, computed once a
+    sync — by the warm (`warm`), or by the first query that needs it before
+    the warm is done. Keyed on the refs.db FILE (physical identity) and the
+    sync: a new sync is a new digest."""
     row = store.con.execute("SELECT ref_version, synced_at FROM ref_meta WHERE source_id=?", (name,)).fetchone()
     if row is None:
         return ""
-    # keyed on the refs.db FILE (physical identity) and the sync: a new sync is a new digest
     path = store.con.execute("PRAGMA database_list").fetchone()[2]
     key = (path, name, row[0], row[1])
-    if key not in _versions:
-        _versions[key] = f"{name} {row[0]} {table_digest(store.con, table)}"
-    return _versions[key]
+    with _versions_lock:
+        got = _versions.get(key)
+    if got is not None:
+        return got
+    if deadline is not None:
+        import time
+        store.con.set_progress_handler(lambda: 1 if time.monotonic() > deadline else 0, WARM_CHECK_STEPS)
+    try:
+        v = f"{name} {row[0]} {table_digest(store.con, table)}"
+    finally:
+        if deadline is not None:
+            store.con.set_progress_handler(None, 0)
+    with _versions_lock:
+        _versions[key] = v
+    return v
+
+
+def warm(bound_s: float = WARM_BOUND_S, store=None) -> dict[str, str]:
+    """Every synced reading table's version computed, OFF the query path
+    (architecture, 2026-11-18): at the process's start and whenever a newer
+    sync is seen (app/warmup.py's watcher), each under the bound. What could
+    not be computed in time is left to the first query. Never raises."""
+    import sqlite3
+    import time
+    out: dict[str, str] = {}
+    try:
+        if store is None:
+            from . import refs
+            store = refs.read_store()
+        have = set(store.tables())
+        deadline = time.monotonic() + bound_s
+        for name, table in SOURCES:
+            if table in have:
+                try:
+                    out[name] = _version(store, name, table, deadline)
+                except sqlite3.OperationalError:     # interrupted at the bound
+                    pass
+    except Exception:   # noqa: BLE001 — a warm never fails anything
+        pass
+    return out
 
 
 def lookup(words: Iterable[str], store=None) -> Lookup:

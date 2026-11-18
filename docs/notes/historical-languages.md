@@ -311,6 +311,19 @@ München): the reading is two REFERENCE SOURCES (06 §6.5, amended):
 - *Measured, 20261101 dump*: 3,417 replace pairs (MIN_OLD 3, MIN_LEN 5,
   a modern form ≥ 1 a million 1900s words, the old form < 5 % of it in
   the 1900s), 3 min 43 s on 8 cores. Not yet synced on the node.
+  The bar is RELATIVE (architecture accepted it, 2026-11-18; a derivation
+  parameter, so in `ref_version`, now 2): *perche* is printed 15 a million
+  1900s words (reprints of old texts) against *perché*'s 751 — kept;
+  *gioja* 16.3 against *gioia*'s 127.9 — still current then, excluded. An
+  absolute 1-a-million bar dropped *perche* (tests/test_refs_readings.py).
+- *The digest* is computed OFF the query path: `reading.warm`, at the web
+  process's start and at each look of its watcher (a sync runs in another
+  process), under a 60 s bound SQLite enforces; a query before the warm
+  computes it once. No schema change.
+- *The cost on the node*: `python -m tools.measure.reading_cost
+  --collection <gutenberg's> --collection <normattiva's>
+  [--readings-tsv wikisource_readings.tsv]`, read-only, one JSON line per
+  collection (reading.years cold and warm, lookup + apply at depth 50).
 - *Cost* (this cloud container, NOT the node; synthetic texts, the real
   3,417-pair table and a 250,000-row table of TLIO's size): lookup and
   apply for 100 texts (depth 50, two chunks each) 12.9 ms a rerank; the

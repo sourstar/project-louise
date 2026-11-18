@@ -59,8 +59,13 @@ FINAL = "wikisource_readings.tsv"
 MODERN = "wikisource_modern.tsv"
 LANG = "it"
 
-#: the derivation's rules; a change is a new ref_version (invariant 3)
-RULES_VERSION = 1
+#: the derivation's version: its rules AND its parameters below (MIN_OLD,
+#: MIN_LEN, MODERN_PER_MILLION, HOMOGRAPH_SHARE, MAX_SITES) — a change to any
+#: is a new ref_version (invariant 3; architecture, 2026-11-18: "it is a
+#: derivation parameter, so it goes into ref_version"). tests/
+#: test_refs_readings.py pins the parameters to this number. 2: the
+#: homograph bar relative to the modern form (was absolute), MIN_LEN.
+RULES_VERSION = 2
 #: a form must be printed this often in 1400-1899 to give a pair (an OCR or
 #: transcription slip is printed once or twice)
 MIN_OLD = 3
