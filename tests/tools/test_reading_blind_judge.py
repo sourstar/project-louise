@@ -105,3 +105,19 @@ def test_a_bracketed_lemma_in_an_answer_is_a_tell_and_scored_apart():
     choices = [{"id": k, "pick": "A", "err_A": False, "err_B": False} for k in range(30)]
     got = bj.score(key, choices)
     assert got["judged"] == 30 and got["without_a_tell"]["judged"] == 20
+
+
+
+def test_without_a_checkout_the_commit_comes_from_the_archives_env(monkeypatch):
+    """The node runs a `git archive` of the commit: no .git, no git."""
+    import subprocess
+
+    def no_git(*a, **k):
+        raise FileNotFoundError("git")
+    monkeypatch.setattr(subprocess, "run", no_git)
+    monkeypatch.setenv("LOUISE_MEASURE_COMMIT", "A" * 40)
+    assert bj.commit_of() == "a" * 40 + " (archive)"
+    monkeypatch.setenv("LOUISE_MEASURE_COMMIT", "not-a-sha")
+    assert bj.commit_of() == ""
+    monkeypatch.delenv("LOUISE_MEASURE_COMMIT")
+    assert bj.commit_of() == ""

@@ -43,6 +43,7 @@ import html
 import json
 import math
 import random
+import re
 import sys
 from pathlib import Path
 
@@ -95,18 +96,24 @@ def tells(answers: list[str], lemmas: set[str]) -> bool:
 
 
 def commit_of() -> str:
-    """The commit this tool runs from, "" outside a checkout: key.json names
-    it, so the operator's result can be reproduced from main."""
+    """The commit this tool runs from: key.json names it, so the operator's
+    result can be reproduced from main. From git in a checkout ("+dirty"
+    where tracked files differ); from LOUISE_MEASURE_COMMIT where there is
+    none (the node runs a `git archive` of the commit, no .git), marked
+    " (archive)"; "" when neither says."""
+    import os
     import subprocess
+    here = Path(__file__).resolve().parent
     try:
-        out = subprocess.run(["git", "rev-parse", "HEAD"], cwd=Path(__file__).resolve().parent,
-                             capture_output=True, text=True, timeout=10)
-        dirty = subprocess.run(["git", "status", "--porcelain", "--untracked-files=no"],
-                               cwd=Path(__file__).resolve().parent, capture_output=True, text=True, timeout=10)
+        out = subprocess.run(["git", "rev-parse", "HEAD"], cwd=here, capture_output=True, text=True, timeout=10)
+        if out.returncode == 0 and out.stdout.strip():
+            dirty = subprocess.run(["git", "status", "--porcelain", "--untracked-files=no"], cwd=here,
+                                   capture_output=True, text=True, timeout=10)
+            return out.stdout.strip() + ("+dirty" if dirty.stdout.strip() else "")
     except (OSError, subprocess.SubprocessError):
-        return ""
-    sha = out.stdout.strip() if out.returncode == 0 else ""
-    return sha + ("+dirty" if sha and dirty.stdout.strip() else "")
+        pass
+    sha = os.environ.get("LOUISE_MEASURE_COMMIT", "").strip().lower()
+    return f"{sha} (archive)" if re.fullmatch(r"[0-9a-f]{40}", sha) else ""
 
 
 def sign_test(wins: int, losses: int) -> float:
