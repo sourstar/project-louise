@@ -14,7 +14,7 @@ from app.refs import readings, store as ref_store
 
 
 def test_gutenberg_declares_the_works_year_first_then_the_editions():
-    assert reading.year_fields("gutenberg") == ("first_published", "date")
+    assert reading.year_fields("gutenberg") == ("first_published", "lived", "date")
     assert reading.year_fields("normattiva") == ()        # operator: "normattiva language is too recent"
     assert reading.year_fields("pubmed") == ()          # declares none: nothing is applied
 
@@ -209,3 +209,68 @@ def test_a_translations_first_publication_is_the_originals_and_never_used():
     assert reading.year_of(reading.year_fields("gutenberg"), f) == 1842        # never 1726
     del rec["date"]
     assert reading.year_of(reading.year_fields("gutenberg"), works.edition_facts(rec)) is None
+
+
+
+def _rec(**kw):
+    rec = {"title": "t", "extra": {"marc": {}, "creators_detail": []}}
+    if "date" in kw:
+        rec["date"] = kw.pop("date")
+    if "summary" in kw:
+        rec["extra"]["marc"]["520"] = [kw.pop("summary")]
+    rec["extra"]["creators_detail"] = kw.pop("creators", [])
+    return rec
+
+
+def _year(rec):
+    return reading.year_of(reading.year_fields("gutenberg"), works.edition_facts(rec))
+
+
+def test_dante_by_his_dates_reaches_the_tlio_glosses(tmp_path):
+    y = _year(_rec(date="1880", creators=[{"name": "Dante Alighieri", "role": "aut", "birth": "1265",
+                                           "death": "1321"}]))
+    assert y == 1293 and y.by == "its author's dates (1265–1321)"
+    st = _store(tmp_path, ROWS)
+    found = reading.lookup(["abondava"], st)
+    assert reading.apply("abondava", y, found, reading.RERANK)[0] == "abondava [abbondare]"
+
+
+def test_a_translation_takes_its_translators_dates_never_the_originals_year():
+    y = _year(_rec(date="1842", summary="It was first published in 1726.",
+                   creators=[{"name": "Swift", "role": "aut", "birth": "1667", "death": "1745"},
+                             {"name": "Barbieri", "role": "trl", "birth": "1774", "death": "1853"}]))
+    assert y == 1813 and y.by == "its translator's dates (1774–1853)"
+
+
+def test_a_death_year_alone_gives_the_editions_year():
+    y = _year(_rec(date="1880", creators=[{"name": "X", "role": "aut", "birth": "", "death": "1321"}]))
+    assert y == 1880 and y.by == "its edition (1880)"
+
+
+def test_two_authors_two_hundred_years_apart_give_the_editions_year():
+    y = _year(_rec(date="1890", creators=[{"name": "A", "role": "aut", "birth": "1265", "death": "1321"},
+                                          {"name": "B", "role": "aut", "birth": "1480", "death": "1530"},
+                                          {"name": "E", "role": "edt", "birth": "1850", "death": "1900"}]))
+    assert y == 1890
+
+
+def test_two_authors_of_one_time_give_the_mean_and_editors_never_count():
+    y = _year(_rec(date="1890", creators=[{"name": "A", "role": "aut", "birth": "1300", "death": "1360"},
+                                          {"name": "B", "role": "cre", "birth": "1310", "death": "1370"},
+                                          {"name": "E", "role": "edt", "birth": "1850", "death": "1900"}]))
+    assert y == 1335 and y.by == "its author's dates (1300–1360, 1310–1370)"
+
+
+def test_a_stated_first_publication_wins_and_shows_itself():
+    y = _year(_rec(date="1880", summary="Published in 1350.",
+                   creators=[{"name": "A", "role": "aut", "birth": "1300", "death": "1360"}]))
+    assert y == 1350 and y.by == "its first publication (1350)"
+
+
+def test_one_definition_of_a_stated_first_publication_for_both_readers():
+    from app import historical
+    for text, year in [("first published in 1350", 1350), ("Published in 1605.", 1605),
+                       ("originally published in 2005", 2005), ("written in the 14th century", None)]:
+        rec = {"extra": {"marc": {"520": [text]}}}
+        assert works.edition_facts(rec).first_published == year
+        assert historical.record_first_published(rec) == year

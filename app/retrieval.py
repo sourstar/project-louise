@@ -464,22 +464,22 @@ def _reading_failed(collection: str, e: BaseException) -> None:
 
 
 def _reading_copies(head: list[dict], owner: list[tuple[int, dict]], texts: list[str]
-                    ) -> tuple[dict[int, str], str]:
+                    ) -> tuple[dict[int, str], str, dict[int, int]]:
     """{text index: its ORIGINAL text} for the texts the reader changed (each
     changed in `texts` in place), and the reading's version. Nothing on any
     failure: the rerank reads the texts as they were."""
     if not READING_RERANK:
-        return {}, ""
+        return {}, "", {}
     from . import reading
     try:
         years = reading.years(head)
         if not years:
-            return {}, ""
+            return {}, "", {}
         chunks = [(t, i, c) for t, (i, c) in enumerate(owner) if i in years]
         found = reading.lookup(reading.words_of(c.get("text") or "" for _t, _i, c in chunks))
     except Exception as e:   # noqa: BLE001 — a reading is a help, never the search's failure
         _reading_failed(reading.collection_of(head[0]) if head else "?", e)
-        return {}, ""
+        return {}, "", {}
     originals: dict[int, str] = {}
     for t, i, c in chunks:
         body = c.get("text") or ""
@@ -489,7 +489,7 @@ def _reading_copies(head: list[dict], owner: list[tuple[int, dict]], texts: list
             originals[t] = texts[t]
             title = head[i].get(HEAD) or ""
             texts[t] = f"{title}\n\n{new}" if title else new
-    return originals, found.version
+    return originals, found.version, years
 
 
 def _rerank_held(query: str, hits: list[dict], recipe, budget_s: float, depth: int,
@@ -508,7 +508,7 @@ def _rerank_held(query: str, hits: list[dict], recipe, budget_s: float, depth: i
     # too (the ruling: "score the ORIGINAL copy too, but only for the hits
     # whose copy changed"): appended after the copies, so the delta of each
     # moved hit is measured in the same call
-    originals, reading_version = _reading_copies(head, owner, texts)
+    originals, reading_version, reading_years = _reading_copies(head, owner, texts)
     original_of: dict[int, int] = {}          # the original's text index -> its copy's
     for t, text in originals.items():
         original_of[len(texts)] = t
@@ -607,9 +607,11 @@ def _rerank_held(query: str, hits: list[dict], recipe, budget_s: float, depth: i
         at_before = {r: k for k, r in enumerate(before)}
         for k, i in enumerate(order):
             if i in at_before and at_before[i] != k:
-                moved.setdefault(i, []).append({"weight": reading.label(reading_version),
-                                                "from": at_before[i] + 1, "to": k + 1,
-                                                "read": i in changed})
+                entry = {"weight": reading.label(reading_version), "from": at_before[i] + 1, "to": k + 1,
+                         "read": i in changed}
+                if i in changed and getattr(reading_years.get(i), "by", ""):
+                    entry["by"] = reading_years[i].by        # what dated it: shown as the badge shows it
+                moved.setdefault(i, []).append(entry)
     if CATALOG_FIRST:
         before = order
         order = _catalog_first(order, head)

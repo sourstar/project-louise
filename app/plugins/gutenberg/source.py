@@ -248,14 +248,17 @@ def _refuse_if_broken(meta: dict, native_id: int) -> None:
 class GutenbergSource:
     source_id = "gutenberg"
     license_class = LicenseClass.GREEN
-    #: the record fields stating its publication year, in order, for the
-    #: historical reader (app/reading.py): the WORK's first publication (PG's
-    #: own marc520 summary) first, the print year of the edition PG
-    #: transcribed (`date`, `edition_date`) as the fallback — operator,
-    #: 2026-11-18: "work's first-publication year is the default, and print
-    #: year of the edition Project Gutenberg transcribed is the fallback".
-    #: Never `extra.issued`, PG's release date.
-    publication_year_fields = ("first_published", "date")
+    #: the record fields stating its year, in order, for the historical reader
+    #: (app/reading.py; app/ask/works.py `EditionFacts`; architecture's
+    #: ruling, 2026-11-18): the WORK's first publication (PG's marc520
+    #: summary; never for a translation), then the midpoint of its authors'
+    #: birth and death years (`extra.creators_detail`; its TRANSLATORS' for a
+    #: translation — operator: "Author's birth/death places the book in time
+    #: pretty precisely (assume a date in the middle)"), then the print year
+    #: of the edition PG transcribed (`date`; operator: "print year of the
+    #: edition Project Gutenberg transcribed is the fallback"). Never
+    #: `extra.issued`, PG's release date.
+    publication_year_fields = ("first_published", "lived", "date")
     # 06 §6.1's corpus credit. Green, so nothing compels it — and it is here
     # anyway: a provider that asks for nothing is still the provider, and
     # 02 §2.7 puts a corpus entry in every collection's `credits`.

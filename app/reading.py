@@ -55,20 +55,34 @@ def year_fields(plugin: str | None) -> tuple[str, ...]:
     return tuple(getattr(src, "publication_year_fields", ()) or ())
 
 
-def year_of(fields: tuple[str, ...], facts) -> int | None:
+class Year(int):
+    """A record's year, and what states it, as the badge and moved_by show it
+    ("its first publication (1605)", "its author's dates (1265–1321)")."""
+    by: str = ""
+
+    def __new__(cls, value: int, by: str = "") -> "Year":
+        y = super().__new__(cls, value)
+        y.by = by
+        return y
+
+
+def year_of(fields: tuple[str, ...], facts) -> Year | None:
     """The first declared field the record's facts state (app/ask/works.py
-    `EditionFacts`: `first_published` the work's, `date` the edition's)."""
+    `EditionFacts`), in the ruled order (architecture, 2026-11-18):
+    `first_published` — never for a translation, whose first publication is
+    the original's in another language; `lived` — the creators' midpoint,
+    the translator's for a translation; `date` — the edition PG transcribed."""
     if facts is None:
         return None
+    translated = bool(getattr(facts, "translated", False))
     for f in fields:
-        if f == "first_published" and getattr(facts, "translated", False):
-            # a translation's first publication is the ORIGINAL's, in another
-            # language: it does not apply (operator: "or the year does not
-            # apply, the annotation is not used"; architecture, 2026-11-18)
-            continue
-        v = facts.first_published if f == "first_published" else facts.year if f == "date" else None
-        if v:
-            return int(v)
+        if f == "first_published" and facts.first_published and not translated:
+            return Year(facts.first_published, f"its first publication ({facts.first_published})")
+        if f == "lived" and getattr(facts, "lived", None):
+            who = "translator's" if translated else "author's"
+            return Year(facts.lived, f"its {who} dates ({facts.lived_span})")
+        if f == "date" and facts.year:
+            return Year(facts.year, f"its edition ({facts.year})")
     return None
 
 
@@ -192,7 +206,7 @@ def years(hits: list[dict[str, Any]], collection=None) -> dict[int, int]:
                 facts = works.facts_for(col, missing)
                 for u in missing:
                     # 0: read, and states no year — remembered too, never asked again
-                    known[u] = year_of(fields, facts.get(u)) or 0
+                    known[u] = year_of(fields, facts.get(u)) or Year(0)
         except Exception:   # noqa: BLE001 — a year is a courtesy, never the search's failure
             continue
         for i, u in uids.items():

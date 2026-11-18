@@ -199,11 +199,15 @@ class Read:
     #: the readings of its period applied to the model's copy (app/reading.py):
     #: their version, "" where none applied
     glossary: str = ""
+    #: what dated it, for a source read by its year ("its author's dates
+    #: (1265–1321)"; app/reading.py `Year.by`)
+    by: str = ""
 
     def badge(self) -> str:
         """The source's badge: what the reader sees beside it — the stage,
         by what (the claim's method, 09 §9.5), and what was done."""
-        out = f"{self.stage}, {BY.get(self.why, 'by ' + self.why)}"
+        out = f"{self.stage}, " + (f"by {self.by}" if self.why == "year" and self.by
+                                   else BY.get(self.why, "by " + self.why))
         if self.rules:
             out += ", spelling modernised for the model"
         if self.glossary:
@@ -372,14 +376,16 @@ def read_sources(numbered: Iterable[tuple[int, dict[str, Any]]], question: str,
         if applied:
             suffix += " · spelling modernised for reading (" + ", ".join(applied) + ")"
         if g is not None and g[2]:
-            suffix += " · old words read with its period's glossary, [in brackets]"
+            by = getattr(g[0], "by", "")
+            suffix += " · old words read with its period's glossary, [in brackets]" + (f", dated by {by}" if by else "")
         other = pairs.get(n)
         if other is not None:
             suffix += (f" · a modern version of it is source [{other[0]}]" if other[1]
                        else f" · a translation of it is source [{other[0]}]")
         shown[n] = (suffix, text)
         reads.append(Read(n, stage, why, applied, other[0] if other else None,
-                          bool(other and other[1]), g[2] if g is not None else ""))
+                          bool(other and other[1]), g[2] if g is not None else "",
+                          getattr(g[0], "by", "") if g is not None else ""))
     return shown, reads
 
 
@@ -466,7 +472,6 @@ DENSITY_DATED = 0.5
 CONFIDENCE, CONFIDENCE_DATED = "0.8", "0.9"
 #: PG's own summary stating a first publication ("… published in 1605"):
 #: marc520, as app/ask/works.py `first_published` (München's #695) reads it
-_PUBLISHED = re.compile(r"\b(?:first\s+)?published\s+in\s+(1[0-9]{3})\b", re.IGNORECASE)
 
 
 def medieval_markers(reader: Reader, text: str) -> int:
@@ -497,11 +502,11 @@ def record_first_published(record: dict[str, Any]) -> int | None:
     if got is not None:
         return got
     marc = (record.get("extra") or {}).get("marc") or {}
-    for v in (marc.get("520") or marc.get(520) or []) if isinstance(marc, dict) else []:
-        m = _PUBLISHED.search(json.dumps(v, ensure_ascii=False) if not isinstance(v, str) else v)
-        if m:
-            return int(m.group(1))
-    return None
+    from app.ask import works
+    # THE one definition of a stated first publication (architecture, 2026-11-18)
+    return works.stated_first_published([v if isinstance(v, str) else json.dumps(v, ensure_ascii=False)
+                                         for v in ((marc.get("520") or marc.get(520) or [])
+                                                   if isinstance(marc, dict) else [])])
 
 
 def stage_claim(record: dict[str, Any], contributor: str) -> dict[str, Any] | None:

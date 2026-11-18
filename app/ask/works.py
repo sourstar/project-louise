@@ -126,14 +126,61 @@ class EditionFacts:
     #: historical.is_translation): its text is not the work's original
     #: language, so the original's first publication dates no word of it
     translated: bool = False
+    #: the creators' dates (architecture's ruling, 2026-11-18, on the
+    #: operator's "Author's birth/death places the book in time pretty
+    #: precisely (assume a date in the middle)"): floor((birth + death) / 2)
+    #: of the TRANSLATORS for a translation, of the AUTHORS (roles aut, cre)
+    #: otherwise, from the record's own `extra.creators_detail`; several
+    #: within 50 years of each other give the floor of their mean, wider is
+    #: an anthology and gives none; a missing year gives none, never guessed
+    lived: int | None = None
+    #: their dates as shown: "1265–1321", several joined by ", "
+    lived_span: str = ""
 
 
 #: "published in 1920", "first published in 1605", "originally published in
 #: 1813" — the summary's own statement of the work's first publication
 #: (München's scan of 2,498 PG catalogue records, 2026-11-16: ~10 % state it;
 #: marc906/marc260 are the transcribed EDITION's year, Don Quixote 1928 vs 1605)
-_FIRST_PUBLISHED = re.compile(r"\b(?:first\s+|originally\s+)?published\s+(?:in\s+)?(1[4-9]\d\d|20\d\d)\b",
+_FIRST_PUBLISHED = re.compile(r"\b(?:first\s+|originally\s+)?published\s+(?:in\s+)?(1\d\d\d|20\d\d)\b",
                               re.IGNORECASE)
+#: ONE definition of a stated first publication, for both its readers
+#: (`edition_facts` here, `historical.record_first_published`; architecture,
+#: 2026-11-18): 1000-2099 — the two patterns read 1400-2099 and 1000-1999
+#: and so disagreed on every medieval and every modern year
+def stated_first_published(summaries) -> int | None:
+    for s in summaries or []:
+        m = _FIRST_PUBLISHED.search(str(s))
+        if m:
+            return int(m.group(1))
+    return None
+
+
+#: an anthology: creators' midpoints further apart than this give no year
+LIVED_SPREAD = 50
+
+
+def lived_midpoint(record: dict[str, Any], translated: bool) -> tuple[int | None, str]:
+    """(the year, the dates shown) by the creators' dates: the translators'
+    for a translation, the authors' (aut, cre) otherwise — never editors,
+    illustrators, commentators or annotators; None where a creator of that
+    role lacks a year, or where they lived more than LIVED_SPREAD apart."""
+    roles = ("trl", "translator") if translated else ("aut", "author", "cre", "creator")
+    mids, spans = [], []
+    for a in (record.get("extra") or {}).get("creators_detail") or []:
+        if not isinstance(a, dict) or str(a.get("role") or "") not in roles:
+            continue
+        try:
+            b, d = int(str(a.get("birth") or "").strip()), int(str(a.get("death") or "").strip())
+        except ValueError:
+            return None, ""                         # a creator without both years: none, never guessed
+        if b > d:
+            return None, ""
+        mids.append((b + d) // 2)
+        spans.append(f"{b}–{d}")
+    if not mids or max(mids) - min(mids) > LIVED_SPREAD:
+        return None, ""
+    return sum(mids) // len(mids), ", ".join(spans)
 
 
 #: an abridgement, by the edition's own words — never "unabridged"
@@ -158,17 +205,14 @@ def edition_facts(record: dict[str, Any]) -> EditionFacts:
         publisher = re.split(r"[,;]|\b\d{4}\b", imprint.split(":", 1)[1])[0]
     publisher = re.sub(r"[^\w ]", "", publisher.lower()).strip()
     year = _YEAR.search(imprint) or _YEAR.search(str(record.get("date") or ""))
-    first = None
-    for s in marc.get("520") or []:
-        m = _FIRST_PUBLISHED.search(str(s))
-        if m:
-            first = int(m.group(1))
-            break
+    first = stated_first_published(marc.get("520"))
     from app import historical
+    translated = historical.is_translation(record)
+    lived, span = lived_midpoint(record, translated)
     return EditionFacts(abridged=bool(_ABRIDGED.search(words)),
                         better_as=tuple(_BETTER.findall(str(extra.get("description") or ""))),
                         publisher=publisher, year=int(year.group(1)) if year else None,
-                        first_published=first, translated=historical.is_translation(record))
+                        first_published=first, translated=translated, lived=lived, lived_span=span)
 
 
 def edition_order(candidates: Sequence[tuple[int, str, str | None]], facts: dict[str, EditionFacts],
@@ -608,12 +652,13 @@ def facts_for(collection, want: Sequence[str], *, root: Path | None = None) -> d
 
 #: the rule `edition_facts` applies; a change to it is a new file name, so a
 #: facts file never outlives the rule that wrote it (invariant 3)
-FACTS_VERSION = 3          # 2 (2026-11-16): first_published; 3 (2026-11-18): translated
+FACTS_VERSION = 4          # 2 (2026-11-16): first_published; 3: translated; 4 (2026-11-18): lived
 
 
 def _decode(v) -> EditionFacts:
     return EditionFacts(bool(v[0]), tuple(v[1]), str(v[2]), v[3], v[4] if len(v) > 4 else None,
-                        bool(v[5]) if len(v) > 5 else False)
+                        bool(v[5]) if len(v) > 5 else False, v[6] if len(v) > 6 else None,
+                        str(v[7]) if len(v) > 7 else "")
 
 
 def _make(records: Iterable[dict[str, Any]]) -> dict[str, Any]:
@@ -621,7 +666,7 @@ def _make(records: Iterable[dict[str, Any]]) -> dict[str, Any]:
     for r in records:
         f = edition_facts(r)
         out[str(r["uid"])] = [f.abridged, list(f.better_as), f.publisher, f.year, f.first_published,
-                              f.translated]
+                              f.translated, f.lived, f.lived_span]
     return out
 
 
