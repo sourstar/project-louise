@@ -61,6 +61,7 @@ def test_make_writes_the_page_and_the_key_apart_and_refuses_under_30(monkeypatch
     key = json.loads((out / "key.json").read_text(encoding="utf-8"))
     page = (out / "judge.html").read_text(encoding="utf-8")
     assert len(key["items"]) == 3 and "tlio 3" in key["reading_tables"]
+    assert key["commit"].split("+")[0] and len(key["commit"].split("+")[0]) == 40
     assert key["items_with_a_tell"] == 3 and all(it["tell"] for it in key["items"])
     assert "tlio" not in page.lower()                                     # the key stays out of the page
     for k, it in enumerate(key["items"]):

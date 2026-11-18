@@ -94,6 +94,21 @@ def tells(answers: list[str], lemmas: set[str]) -> bool:
     return any(f"[{lm.lower()}" in a for lm in lemmas if lm for a in low)
 
 
+def commit_of() -> str:
+    """The commit this tool runs from, "" outside a checkout: key.json names
+    it, so the operator's result can be reproduced from main."""
+    import subprocess
+    try:
+        out = subprocess.run(["git", "rev-parse", "HEAD"], cwd=Path(__file__).resolve().parent,
+                             capture_output=True, text=True, timeout=10)
+        dirty = subprocess.run(["git", "status", "--porcelain", "--untracked-files=no"],
+                               cwd=Path(__file__).resolve().parent, capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    sha = out.stdout.strip() if out.returncode == 0 else ""
+    return sha + ("+dirty" if sha and dirty.stdout.strip() else "")
+
+
 def sign_test(wins: int, losses: int) -> float:
     """Two-sided exact binomial p for wins against losses, ties left out."""
     n = wins + losses
@@ -251,7 +266,7 @@ def make(a) -> int:
     a.out_dir.mkdir(parents=True, exist_ok=True)
     (a.out_dir / "judge.html").write_text(page(items), encoding="utf-8")
     (a.out_dir / "key.json").write_text(json.dumps(
-        {"reading_tables": version, "seed": a.seed, "weights_sha256": a.weights_sha256, "span": SPAN,
+        {"commit": commit_of(), "reading_tables": version, "seed": a.seed, "weights_sha256": a.weights_sha256, "span": SPAN,
          "records_in_span": seen, "records_without_a_passage_the_tables_read": without, "refused_queries": refused,
          "answered_texts_without_a_tlio_reading": no_tlio, "items_with_a_tell": sum(k["tell"] for k in key),
          "items": key, "rule": RULE}, ensure_ascii=False), encoding="utf-8")
