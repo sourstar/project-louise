@@ -8,8 +8,9 @@ of the historical language for the AI summary").
         --claims <gutenberg-book-editions' claims.jsonl> --set known_items.jsonl \\
         --out summary_eval.jsonl [--permutations 10000] [--seed 1]
 
-For each KEPT query of the known-item set whose target record has a held
-MODERN version — a `same-work` or `translation-of` claim joining it to an
+ITS OWN SET (architecture, 2026-11-18: the known-item set held 8 of 109
+targets with a modern version): every historical Italian record of the
+span, not a translation, with a held MODERN version — a `same-work` or `translation-of` claim joining it to an
 English record, or to an Italian TRANSLATION (a `trl` credit) — read-only:
 
 1. the query searched within the historical record and within the modern
@@ -178,13 +179,42 @@ def paired_stats(diffs: list[float], permutations: int, seed: int) -> dict:
             "ci95": [round(boots[49], 4), round(boots[1949], 4)]}
 
 
-def main(argv: list[str] | None = None) -> int:
-    from app import collections as collections_mod
+def pairs_of(claims: Path, collection: str, span: tuple[int, int]) -> tuple[list[tuple[dict, str]], dict]:
+    """The eval's OWN set (architecture, 2026-11-18): every historical record
+    (Italian, its work's year in `span`, not a translation) with a held
+    MODERN version (`modern_partners`), and the count before sampling."""
+    from app import reading
     from tools.measure.reading_known_items import records_of
+    wanted: set[str] = set()
+    with open(claims, encoding="utf-8") as f:
+        for line in f:
+            c = json.loads(line)
+            if c.get("type") in ("same-work", "translation-of"):
+                wanted.update((str(c.get("subject")), str(c.get("object"))))
+    records = {r["uid"]: r for r in records_of(collection, random.Random(0), lang=None) if r["uid"] in wanted}
+    partners = modern_partners(claims, {u: {k: v for k, v in r.items() if k != "sections"} for u, r in records.items()})
+    out = []
+    for hist, modern in partners.items():
+        r = records[hist]
+        if not str(r.get("lang") or "").startswith("it"):
+            continue
+        y = reading.years([{"chunk_id": f"{hist}:0:1", "source_collection": collection}]).get(0)
+        if y is None or y.translated or not span[0] <= y <= span[1]:
+            continue
+        out.append((r, modern))
+    return out, {"records_with_a_modern_version": len(partners), "historical_in_span": len(out)}
+
+
+def main(argv: list[str] | None = None) -> int:
+    from app import collections as collections_mod, config, historical, llm
+    from tools.measure import reading_known_items as ki
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--collection", required=True)
     ap.add_argument("--claims", type=Path, required=True)
-    ap.add_argument("--set", type=Path, required=True, help="the known-item set (reading_known_items)")
+    ap.add_argument("--from", dest="lo", type=int, default=1200)
+    ap.add_argument("--to", dest="hi", type=int, default=1900)
+    ap.add_argument("--per-record", type=int, default=2, help="passages a historical record, at most")
+    ap.add_argument("--n", type=int, default=150, help="pairs judged, at most")
     ap.add_argument("--out", type=Path, required=True)
     ap.add_argument("--permutations", type=int, default=10000)
     ap.add_argument("--weights-sha256", required=True, help="the chat model's weights file sha256")
@@ -193,77 +223,79 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--judge-weights", action="append", default=[], metavar="MODEL=SHA256")
     ap.add_argument("--seed", type=int, default=1)
     a = ap.parse_args(argv)
-    lines = [json.loads(x) for x in a.set.read_text(encoding="utf-8").splitlines() if x.strip()]
-    queries = [q for q in lines if "qid" in q and not q.get("refused")]
     col = collections_mod.by_name(a.collection)
-    # only the targets and the records claims join them to are kept, never the whole collection
-    targets = {q["uid"] for q in queries}
-    wanted = set(targets)
-    with open(a.claims, encoding="utf-8") as f:
-        for line in f:
-            c = json.loads(line)
-            if c.get("type") in ("same-work", "translation-of") and (c.get("subject") in targets
-                                                                       or c.get("object") in targets):
-                wanted.update((str(c.get("subject")), str(c.get("object"))))
-    records = {}
-    # every language: the modern versions are English records too (records_of
-    # keeps Italian ones by default — the first node run paired nothing so)
-    for r in records_of(a.collection, random.Random(0), lang=None):
-        if r["uid"] in wanted:
-            records[r["uid"]] = {k: v for k, v in r.items() if k != "sections"}
-    partners = {h: m for h, m in modern_partners(a.claims, records).items() if h in targets}
     con = ro_connect(col)
-    from app import config, historical
     rng = random.Random(a.seed)
-    on, off, changed, rows, misaligned = [], [], 0, 0, 0
-    second: list[tuple[float, float]] = []                   # (first judge, second judge) per judged answer
+    pairs, before = pairs_of(a.claims, a.collection, (a.lo, a.hi))
+    rng.shuffle(pairs)
+    items: list[dict] = []
+    misaligned = refused = 0
     with open(a.out, "w", encoding="utf-8") as out:
         out.write(json.dumps({"set": "reading-summary-eval", "chat_model": config.CHAT_MODEL,
                               "weights_sha256": a.weights_sha256, "judges": [config.CHAT_MODEL, *a.judge_model],
                               "judge_weights": a.judge_weights,
-                              "prompt_sha256": {"judge": _sha(JUDGE), "align": _sha(ALIGN),
+                              "prompt_sha256": {"query": _sha(ki.PROMPT), "judge": _sha(JUDGE), "align": _sha(ALIGN),
                                                 "older_rule": _sha(historical.SYSTEM_RULE)},
-                              "min_alignment": MIN_ALIGNMENT, "seed": a.seed, "rule": RULE},
-                             ensure_ascii=False) + "\n")
-        for q in queries:
-            gold_uid = partners.get(q["uid"])
-            if gold_uid is None:
-                continue
-            hist_hit, gold_hit = best_passage(con, col, q["query"], q["uid"]), best_passage(con, col, q["query"], gold_uid)
-            if hist_hit is None or gold_hit is None:
-                continue
-            al = align(str(hist_hit["hits"][0].get("text") or ""), str(gold_hit["hits"][0].get("text") or ""))
-            if al is None or al < MIN_ALIGNMENT:
-                misaligned += 1
-                out.write(json.dumps({"qid": q["qid"], "uid": q["uid"], "gold_uid": gold_uid,
-                                      "alignment": al, "dropped": "misaligned"}, ensure_ascii=False) + "\n")
-                continue
-            gold, _ = answer(q["query"], gold_hit, glossary=False)
-            with_g, did = answer(q["query"], hist_hit, glossary=True)
-            without_g, _ = answer(q["query"], hist_hit, glossary=False)
-            # BLIND: each answer alone, the two in random order, never labelled
-            arms = [("on", with_g), ("off", without_g)]
-            rng.shuffle(arms)
-            judged: dict[str, dict] = {}
-            for arm, text in arms:
-                judged[arm] = judge(q["query"], gold, text)
-                for jm in a.judge_model:
-                    other = judge(q["query"], gold, text, jm)
-                    judged[arm].setdefault("others", {})[jm] = other
-                    if judged[arm]["agreement"] is not None and other["agreement"] is not None:
-                        second.append((judged[arm]["agreement"], other["agreement"]))
-            j_on, j_off = judged["on"], judged["off"]
-            rows += 1
-            changed += did
-            if j_on["agreement"] is not None and j_off["agreement"] is not None:
-                on.append(j_on["agreement"]); off.append(j_off["agreement"])
-            out.write(json.dumps({"qid": q["qid"], "uid": q["uid"], "gold_uid": gold_uid, "query": q["query"],
-                                  "alignment": al, "glossary_changed": did, "gold": gold, "on": with_g,
-                                  "off": without_g, "judge_on": j_on, "judge_off": j_off}, ensure_ascii=False) + "\n")
-            out.flush()
+                              "min_alignment": MIN_ALIGNMENT, "seed": a.seed, "span": [a.lo, a.hi], "rule": RULE,
+                              "pairs_before_sampling": before}, ensure_ascii=False) + "\n")
+        # PHASE 1, the chat model only: queries from the historical passages, the
+        # modern passage found by the historical one, alignment, the three answers
+        for r, modern in pairs:
+            if len(items) >= a.n:
+                break
+            used: set[str] = set()
+            for _p in range(a.per_record):
+                passage = next((p for p in (ki.passage_of(r, rng) for _t in range(6))
+                                if p is not None and p[:200] not in used), None)
+                if passage is None:
+                    break
+                used.add(passage[:200])
+                q = llm.strip_think(llm.chat([{"role": "user", "content": ki.PROMPT + passage}],
+                                             temperature=0.0, max_tokens=120)).strip().splitlines()[0:1]
+                query = (q[0] if q else "").strip().strip('"«»“”')
+                if ki.refused(query, passage, str(r.get("title") or "")):
+                    refused += 1
+                    continue
+                hist = best_passage(con, col, query, r["uid"])
+                # the MODERN passage found by the historical passage itself (a longer,
+                # content-full query: the short one matched 6 of 8 wrongly, the node)
+                gold_hit = best_passage(con, col, passage[:500], modern)
+                if hist is None or gold_hit is None:
+                    continue
+                al = align(str(hist["hits"][0].get("text") or ""), str(gold_hit["hits"][0].get("text") or ""))
+                if al is None or al < MIN_ALIGNMENT:
+                    misaligned += 1
+                    out.write(json.dumps({"uid": r["uid"], "gold_uid": modern, "query": query, "alignment": al,
+                                          "dropped": "misaligned"}, ensure_ascii=False) + "\n")
+                    continue
+                gold, _ = answer(query, gold_hit, glossary=False)
+                with_g, did = answer(query, hist, glossary=True)
+                without_g, _ = answer(query, hist, glossary=False)
+                items.append({"uid": r["uid"], "gold_uid": modern, "query": query, "alignment": al,
+                              "glossary_changed": did, "gold": gold, "on": with_g, "off": without_g})
+        # PHASE 2, BY MODEL: each judge over every answer before the next (one load
+        # each); BLIND — each answer alone, the arms in random order, never named
+        judges = [None, *a.judge_model]
+        for jm in judges:
+            for it in items:
+                arms = [("on", it["on"]), ("off", it["off"])]
+                rng.shuffle(arms)
+                for arm, text in arms:
+                    it.setdefault("judged", {}).setdefault(jm or "first", {})[arm] = judge(it["query"], it["gold"], text, jm)
+        on, off, second = [], [], []
+        for it in items:
+            first = it["judged"]["first"]
+            if first["on"]["agreement"] is not None and first["off"]["agreement"] is not None:
+                on.append(first["on"]["agreement"]); off.append(first["off"]["agreement"])
+            for jm in a.judge_model:
+                for arm in ("on", "off"):
+                    x, y = first[arm]["agreement"], it["judged"][jm][arm]["agreement"]
+                    if x is not None and y is not None:
+                        second.append((x, y))
+            out.write(json.dumps(it, ensure_ascii=False) + "\n")
         diff = paired_stats([x - y for x, y in zip(on, off)], a.permutations, a.seed)
-        summary = {"queries": len(queries), "with_modern_version": rows + misaligned,
-                   "dropped_misaligned": misaligned, "judged": rows, "glossary_changed": changed,
+        summary = {**before, "refused_queries": refused, "dropped_misaligned": misaligned, "judged": len(on),
+                   "glossary_changed": sum(1 for it in items if it["glossary_changed"]),
                    "agreement_on": round(statistics.mean(on), 3) if on else None,
                    "agreement_off": round(statistics.mean(off), 3) if off else None,
                    "on_minus_off": diff,
@@ -271,6 +303,7 @@ def main(argv: list[str] | None = None) -> int:
                    if second else None,
                    "judges_mean_abs_diff": round(statistics.mean(abs(x - y) for x, y in second), 3) if second else None,
                    "to_the_operator": bool(diff.get("ci95") and diff["ci95"][1] < 0),
+                   "too_few": len(on) < 30,
                    "rule": RULE}
         out.write(json.dumps({"summary": summary}) + "\n")
     print(json.dumps(summary), file=sys.stderr)

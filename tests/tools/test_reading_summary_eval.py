@@ -85,3 +85,33 @@ def test_the_search_is_never_translated(monkeypatch):
     monkeypatch.setattr(retrieval, "search", lambda con, q, **kw: asked.append(kw) or {"hits": [{"x": 1}], "catalog": []})
     got = e.best_passage(None, object(), "q", "gutenberg:5")
     assert asked[0]["translate"] is False and asked[0]["book_ids"] == {5} and got["catalog"] == []
+
+
+def test_its_own_pairs_and_each_judge_over_all_answers_before_the_next(monkeypatch, tmp_path):
+    from types import SimpleNamespace
+    from app import collections as collections_mod, llm
+    from tools.measure import reading_known_items as ki
+    rec = {"uid": f"gutenberg:{1}", "lang": "it", "title": "Commedia",
+           "sections": [["I", "x"], ["II", "y"], ["III", " ".join(f"Il re {i} entrò nella sala che non era più tempo."
+                                                              for i in range(40))]]}
+    monkeypatch.setattr(e, "pairs_of", lambda claims, name, span: ([(rec, "gutenberg:2"), (dict(rec, uid="gutenberg:3"),
+                                                                    "gutenberg:4")], {"records_with_a_modern_version": 2,
+                                                                                      "historical_in_span": 2}))
+    monkeypatch.setattr(collections_mod, "by_name", lambda n: SimpleNamespace(name=n))
+    monkeypatch.setattr(e, "ro_connect", lambda c: None)
+    monkeypatch.setattr(llm, "chat", lambda m, temperature, max_tokens: "Che cosa accadde nella sala?")
+    monkeypatch.setattr(e, "best_passage", lambda con, col, q, uid: {"hits": [{"text": "t " + uid}], "catalog": []})
+    monkeypatch.setattr(e, "align", lambda h, g, judge_model=None: 4.0)
+    monkeypatch.setattr(e, "answer", lambda q, res, glossary: ("on" if glossary else "off", False))
+    order = []
+    monkeypatch.setattr(e, "judge", lambda q, gold, cand, jm=None: order.append(jm) or
+                        {"agreement": 4.0 if cand == "on" else 3.0, "contradictions": 0})
+    out = tmp_path / "eval.jsonl"
+    e.main(["--collection", "g", "--claims", str(tmp_path / "c"), "--out", str(out), "--weights-sha256", "a",
+            "--judge-model", "louise-chat-command-r7b-q8", "--per-record", "1"])
+    lines = [json.loads(x) for x in out.read_text(encoding="utf-8").splitlines()]
+    assert lines[0]["pairs_before_sampling"] == {"records_with_a_modern_version": 2, "historical_in_span": 2}
+    # every answer by the first judge, then every one by the second: two model switches at most
+    assert order == [None] * 4 + ["louise-chat-command-r7b-q8"] * 4
+    summary = lines[-1]["summary"]
+    assert summary["judged"] == 2 and summary["agreement_on"] == 4.0 and summary["too_few"] is True
