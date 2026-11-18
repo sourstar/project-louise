@@ -171,7 +171,12 @@ other sessions; scratchpad harnesses `measure/delta.py` and `ge_perf.py`):
 - **Modelled at the node's sizes.** `wikipedia-articles` (12.3 M claims, 52.9 M
   records) stays a whole pass, about 25× the first row: ~19 min on 3 processes. A
   monthly wikipedia delta is far above the ~0.15 % of records at which its frames
-  stop all being read.
+  stop all being read. **Measured on the node** (München, 2026-11-17 06:47Z, b747b20,
+  quiet window, every collection resumed, wikipedia's embedding idle): `hold annotations
+  update wikipedia-articles --dry-run` took 397.5 s wall, 2,294.5 s user + 292.2 s sys
+  (~6.5 cores), with a 3,466 MiB peak RSS in the largest child and an 8.2 GiB peak
+  workspace on /data. That is about 3× under the model, because the pool ran on ~6.5
+  cores, not 3.
 - `gutenberg-book-editions` gains most. Its update decompressed every frame holding
   a claimed book (~32 GB at 79 k books of ~400 KB); now it decompresses only the
   frames of the books that changed. Its method reads only the parts gutenberg
@@ -212,9 +217,9 @@ the shown lines), `app/hold/cascade_keeper.py` (the round). Tests: `tests/hold/t
   round restricted to method collections), or when a wake is pending. It runs once, against every declared source's
   newest snapshot. It waits instead, said in `woken.json`, in three cases:
   - an annotations source has a wake pending;
-  - a declared source's update is in flight: its `update.json` is not done, its failure is not exhausted, and its
-    period's snapshot is not published. An update at `embed` or `old-run` has delivered, so it never deadlocks with
-    the gate;
+  - a declared source is BEHIND: it has an update by cadence and holds no published snapshot of its current period
+    (§6, "The current dump only"; this replaced the in-flight rule and the 24 h wait below). An update at `embed`
+    or `old-run` has published, so it never deadlocks with the gate;
   - its own period's snapshot is written ("one snapshot a period: runs when 2026-12 opens").
 - **The run.** `derive_from_delta` in its own children. A killed child is tried again `KILLED_TRIES` times. A refusal
   is said once per process. A worker that dies during a run (`woken.json` found `running`, not stopped) resumes it
@@ -223,21 +228,16 @@ the shown lines), `app/hold/cascade_keeper.py` (the round). Tests: `tests/hold/t
 - **Only what is made here.** Claims given by hand are re-checked only where their claims file is held
   (`origin/claims.jsonl`). A collection adopted from a peer takes its publisher's snapshots.
 - **What a wait keeps on disk.** A queued wake is not started, so the source's old run stays while a dependent waits.
-  At most that is one period (≤ 31 days) of one extra run: wikipedia's is ~62 GB (74 GB declared). This happens when
-  the dependent wrote its period's snapshot before the source published. Waiting for another source's in-flight
-  update keeps it for the days that update takes.
-- **An update about to begin is waited for too (decided 2026-11-17, choice B).** gutenberg-editions is due at 00:00
-  UTC on the 1st, and the update keeper writes wikipedia's `update.json` only at its first night beat after the
-  cutoff (≤ 300 s later). So a source also counts as in flight from its cutoff until its `update.json` appears, for
-  at most 24 h (`cascade.BEGIN_WAIT_S`, real hours, DST included). It counts only when the update pass would act on
-  it:
-  - it is updated by cadence (`update.not_updated` is None: an `update` block, a dated origin, a completion check);
-  - it is not refused (`origin_names_run`, wikipedia's until its origin form is decided);
-  - the node's update keeper is on, and the node runs it from its origin with acquisition on.
-
-  A source the pass refuses, or with no `update` block, never makes a dependent wait. `woken.json` says "waiting for
-  wikipedia's 2026-11 update to begin, until HH:MM". Once the marker is written, the in-flight rule above takes
-  over.
+  This happens when the dependent wrote its period's snapshot before the source published: at most one period
+  (≤ 31 days) of one extra run, wikipedia's ~62 GB (74 GB declared). A dependent waiting for ANOTHER source that is
+  behind keeps this source's old run for as long as that one takes, and the wait has no cap since 2026-11-17
+  (§6): gutenberg-editions declares wikipedia and wikidata, so while wikipedia is refused at parser 5 every
+  wikidata run it publishes keeps the one before it on disk (~104 GB) until wikipedia is re-created and caught up.
+- **RETIRED 2026-11-17: the 24 h wait for an update to begin** (decided the same morning, choice B). A source
+  counted as in flight from its cutoff until its `update.json` appeared, for at most 24 h (`cascade.BEGIN_WAIT_S`),
+  and only when this node's keeper would update it. The operator's rule of the same day ("if the current dump fails,
+  don't use an old dump") replaced it with the source-behind wait of §6, which has no time cap and no condition on
+  the node's keeper: a dependent never derives from an old dump.
 - **The cost of a round** (this sandbox, 4 cores, median of 5 × 300 rounds, a method collection held). Before, each
   pass ran `annotation_methods.due`: 4.3 ms at 1 snapshot and 2 claims, 12.9 ms at 409 snapshots and 2,000 claims.
   After, a settled round costs 0.46 ms at both sizes: markers and stats only. The cost test counts no part, no
@@ -262,9 +262,13 @@ operator's word.
   run, the newest snapshot's `origin_run`, and the update marker's run once the update has moved it. The node's
   loader, `records.local_collection`, discovery, acquisition, `stale_unit` and a new snapshot's `origin_run` read
   it. The collection file's `snapshot` is accepted from the Codex's run on and never read for the run.
-- **The completion check** is the plugin's `update_completion` (wikipedia: `completion.DumpStatus`, jobs
-  `articlesmultistreamdump` and `pagepropstable` at `done` in each held wiki's `dumpstatus.json`), fetched by
-  `app/acquire/completion.py` through the budget with the origin's User-Agent, one request at a time.
+- **The completion check** is the plugin's `update_completion` (wikipedia: `completion.DumpStatus`, in each held
+  wiki's `dumpstatus.json` the job that writes each file the collection reads at `done`), fetched by
+  `app/acquire/completion.py` through the budget with the origin's User-Agent, one request at a time. *Found
+  2026-11-17* (trwiki's 20261101 record): a wiki dumped in parts writes the one
+  `pages-articles-multistream.xml.bz2` the collection reads in `articlesmultistreamdumprecombine`, after
+  `articlesmultistreamdump` has written the parts. Only the latter was asked, so such a wiki read as complete before
+  its file was written. The job whose `files` list the name now answers, the recombine job where none lists it yet.
 - **The pass**: `louise hold collection update <name> [--dry-run] [--retry]` (`app/hold/update.py`), steps as §1,
   marker `state/update.json` (`app/hold/update_state.py`). The worker's `_update_keeper` runs it at night (the
   profile named `night`, `UPDATE_PROFILES`; `UPDATE_HOURS` on a node without profiles), one collection at a time,
@@ -275,15 +279,157 @@ operator's word.
   annotations collection that declares this one has `state/woken.json` naming the snapshot at `running`, `done` or
   `failed`. Until the cascade (§4) writes `woken.json`, an annotated collection's old run stays. Since the
   keeper (§4 "As built: the keeper"), "declares" is the cascade's graph: `annotates` and a method's `inputs`.
-- **OPEN, the operator's: the origin form.** Until it is decided, a plugin declaring `origin_names_run`
-  (wikipedia) is planned (`--dry-run`) and refused (exit 2) by the pass and the keeper. The choices: A keep
-  the `origin` naming the dated file and byte range (every part re-issued each run); B a page-id `origin`
-  located in the run through Wikimedia's multistream index (09 §9.5 changed); C an origin-only patch of
-  the parts (09 §9.9's patch, for the `origin` alone).
+- **DECIDED (operator, 2026-11-17): "Choice B", the origin by page.** The choices were: A keep the
+  `origin` naming the dated file and byte range, so every part is re-issued each run; B a page-id
+  `origin` located in the run through Wikimedia's multistream index; C an origin-only patch of the parts.
+  B is built (branch `wikipedia-page-origin`):
+  - **The form** (09 §9.5 amended): `<wiki>/pages-articles-multistream.xml.bz2#<page id>|<wiki>/page_props.sql.gz#<page id>`,
+    resolved in the snapshot's run. The archive layer's row ranges keep theirs. Wikipedia's parser is 6.
+    Parser 5 (`WikipediaSourceV5`) is kept for the live Codex, which reads and writes the byte range
+    until it is re-created. Both forms resolve.
+  - **The generic mechanism** (`app/keyed_origin.py`): a plugin declares `origin_key` (the key, the run's
+    index, whether the node builds it, from which parser) and five hooks read by `plugin_io`. The key's
+    table is one format, `KeyTable`: sorted int64 keys in Parquet, one row group read per lookup.
+  - **Wikipedia's table** (`app/plugins/wikipedia/stream_index.py`): page id to stream range, built in one
+    pass over the run's index. It is placed by `app/derived.py` (`wikipedia-stream-index`,
+    `LOUISE_CACHE_DIR`), keyed on the run folder's resolved path, and fresh by the index's size and mtime
+    (the CONTAINER_PACK template). The page_props unit is resolved through the existing page_props pack.
+  - **The update pass:** `origin_names_run` is read at the Codex's parser (`plugin_at`). Parser 5 is
+    refused with "re-create at parser 6 first"; parser 6 runs. An unchanged page's line is byte-identical
+    across runs, so the records build takes it as it is. `ORIGIN_MOVES_ALONE` is RETIRED FROM THE BUILD:
+    nothing rewrites an origin there any more. It stays for discovery's `_held_hash`, where a new run
+    still moves a page's locator and not its bytes.
+  - **The re-creation:** `hold records carry` (`app/hold/line_carry.py`) rewrites each line's `origin` in
+    the bytes and takes every other byte. `dev carry --reconcile` reads its proof. `wikipedia-articles`
+    is created again from its own snapshot's claims (`hold annotations claims`) against the new
+    collection. The node's steps are [wikipedia-page-origin.md](wikipedia-page-origin.md).
+  - **Measured** (this sandbox, 4 cores; synthetic wikipedia-shaped parts of 2,000 records, 1.45 MiB
+    stored and 8.9 MiB of lines each):
+
+    | | 1 process | 2 | 3 |
+    |---|---|---|---|
+    | the carry, ms a part | 224 | 137 | 105 |
+    | the carry, records/s | 8,912 | 14,631 | 19,018 |
+    | three indexes of 2 M lines built on the pool, s | 14.1 | 10.1 | 5.9 |
+
+    One index of 2 M lines takes 4.1 s to read and 5.0 s to build; the table is 3.0 bytes a page. A lookup
+    takes 1.13 ms when it reads a row group, 88 µs through `ensure` once the row group is held, and 7 µs on
+    the table once found.
+- **Wikidata, the same mechanism** (operator, 2026-11-17: "Do the wikidata step as well"; branch
+  `wikidata-entity-origin`, stacked on wikipedia's). Its `origin` named the dated dump and the entity's
+  ordinal, which every run moves.
+  - **The form, parser 3:** `wikidatawiki/entities/all.json.bz2#<entity id>` (09 §9.5). Parser 2 is kept
+    (`WikidataSourceV2`), and both forms resolve.
+  - **The table:** the JSON dump has no index, so the node BUILDS one per run (`origin_key.built`):
+    entity id to the line's ordinal. It is read from the run's pack's index columns and written as the
+    pack's side table under the pack's writer (DUMP_PACK). It is placed with the pack, which is keyed on
+    the dump's physical identity, and fresh by the dump's size and mtime and the pack's version and chunk
+    count (`app/plugins/wikidata/entities.py`). It is not a byte range: a bz2 stream cannot be entered at
+    a byte, and the pack keeps the lines by ordinal.
+  - **Measured:** 12 M entities in 120 chunk files, built in 4.2 / 4.0 / 4.0 s on 1 / 2 / 3 of the parse
+    pool's processes and in 3.1 / 2.9 / 2.8 s on threads, which it uses. The sort and the write, one each,
+    are most of it. The table is 5.8 bytes an entity, about 690 MB for 118 M. A lookup takes 0.1 ms cold
+    and ~50 µs warm.
+  - **The update (decided from the origin's own files, the coordinator's read-only probe of
+    `dumps.wikimedia.org/wikidatawiki/entities/`, 2026-11-17).**
+    - What the probe found: an entity run publishes no `dumpstatus.json`, and `20261109/dumpstatus.json`
+      gives 404. Its `wikidata-<R>-md5sums.txt` and `-sha1sums.txt` are rewritten as each file finishes, and
+      list only the finished files, in finishing order. 20261109 wrote `all.json.gz` at 01:29,
+      `all.json.bz2` at 06:01 and the BETA nt/ttl up to 21:40, and the sums at 21:48, listing all six.
+      20261111 lists lexemes and truthy only; that run has no `all.json` at all. Not every run carries the
+      full dump (recent runs: 20261102, 04, 06, 09, 11, 13).
+    - **Complete** means the run's md5sums list `wikidata-<R>-all.json.bz2`
+      (`app/plugins/wikidata/completion.py`, `Md5Sums`). It is fetched through `app/acquire/completion.py`:
+      the budget, the origin's User-Agent, one request at a time.
+    - **Waiting:** a 404, an empty sums file, or `all.json.gz` listed without the `.bz2`, however long it takes.
+      *Retired 2026-11-17:* a run listing the `.gz` without the `.bz2` more than 3 days after it began was taken
+      as never bringing it, and the run before it was taken. See "The current dump only" below.
+    - **Not a candidate:** a run whose sums list finished files and none of the full dump never carries it
+      (`skips`: lexemes or truthy only).
+    - **After the fetch** the dump's md5 is held to that line, the origin's own checksum (`expected`). A
+      mismatch is the FETCH failing, never the run, and it is MENDED (below). *Until 2026-11-17* the file was
+      removed and its row left done, so the next night did not fetch it at all and failed on the missing file.
+    - The refusal is lifted at parser 3.
+- **The current dump only, and mended, never fetched again whole (operator, 2026-11-17, verbatim: "if the current
+  dump fails, don't use an old dump (that should have already been integrated thus it's pointless); retry gently to
+  fetch it with the already agreed policy. If available, a resume is always preferable over a dumb full
+  re-download").** Branch `current-dump-only`.
+  - **The current run** (`update.complete_run`, generic): the newest run begun before the cutoff that carries, or is
+    writing, the collection's files, and is newer than the run the collection reads (`origin_run.current_run`; one
+    not newer is already integrated). Wikidata's lexemes-only or truthy-only runs are not candidates (`skips`).
+    Complete, it is taken. Incomplete, the pass WAITS and asks again at the keeper's next beat of the night
+    (`UPDATE_RECHECK_S`), with the policy already in place: the budget, the origin's User-Agent, one request at a
+    time. It never takes an older run. A NEWER run, begun on the cutoff's day or after, that completes first
+    supersedes it ("newer is never pointless"; 09 §9.4 `origin_run` amended). At most 8 runs are asked a pass.
+  - **Wikidata's run index** keeps the directories that hold or may be writing the full dump: `all.json.bz2` or
+    `.gz` listed, or none of the run's files yet. It dropped every directory without `all.json.bz2`, so a run
+    writing its dump was invisible and the one before it looked current.
+  - **Said** in `hold collection show` and on the Library card: "update 2026-11: waiting for Wikimedia's 20261130
+    full dump: .json.gz done, .bz2 not yet; asked again tonight".
+  - **How a dated-dump file was fetched before.** `transport_https.fetch_one`: one streaming GET into `<file>.part`,
+    each 64 KiB chunk fsynced and then charged to the budget. A `.part` left by a stop or a fault resumed with an
+    open `Range: bytes=<its length>-`, and an origin answering 200 restarted it from 0. Within a pass a transient
+    fault resumed `STREAM_ATTEMPTS` times; across passes, after the engine's backoff (`RETRY_BACKOFF_S`, 1, 5, 10,
+    30, 60, 120 minutes, then every 120). So a PARTIAL file resumed by Range. A file that LANDED whole but short or
+    wrong did not: nothing compared its length (the specs list these files without a size), and wikidata's md5
+    check removed all 103.8 GB.
+  - **The mend** (`app/acquire/repair.py`, from the fetch step, `update._held_to_origin`). Each file the hook names
+    is held to the origin's md5: wikidata's md5sums line; wikipedia's `dumpstatus.json` `md5` and `size` per file,
+    asked again through the budget (wikipedia was held to no checksum before). Where it differs:
+    - (a) shorter than the origin's length (the record's `size`, or a one-byte Range's `Content-Range`): the rest is
+      fetched from its length by closed Range requests and appended. Longer: cut at the length. Then the md5 again.
+    - (b) the origin's length, wrong bytes, bzip2: its units are located and checked, the bad ones' bytes fetched
+      again by Range and written in place, then the md5 again. The units are bzip2's own: a stream starts `BZh1`-`9`
+      on a byte and ends with the 48-bit magic 0x177245385090 and its combined CRC; a block starts with the magic
+      0x314159265359 at any bit offset and carries its data's CRC. A block is checked as `bzip2recover` checks it,
+      alone in a stream of one block, decompressed by libbz2. Each stream's combined CRC is folded from its blocks'.
+      Every bit is accounted for by a block, a stream header or a stream end that checks out, and whatever is not is
+      bad. Wikipedia's multistream dump is mended stream by stream (a stream per 100 pages). The regions (64 MiB) are
+      checked on the parse pool (`parallel.each_part`).
+    - (c) only where the units cannot be told apart does the file go again in full, and the message says why: not a
+      bzip2 file (a gzip of one member, the page_props: one CRC for the whole), every block checking out, more than
+      half the file bad, the md5 still wrong after the mend, or an origin that ignores Range. Its row is reset, so the
+      next fetch takes it whole after the engine's backoff, and the step fails, said and counted.
+    - A mended file's row takes its new blake2. Every byte is drawn from the budget (`_stream_range`: each chunk after
+      its fsync). A stop ends at the region being checked or the Range step (8 MiB) being written. `<file>.mend.json`
+      beside it, written atomically after the bytes it describes, records how far it came, and the next pass resumes
+      there (invariant 2).
+  - **Wikidata's dump, probed** (one Range request, `bytes=0-8191`, 2026-11-17, `20261109`): 103,755,108,222 bytes
+    (`Content-Range`), `Last-Modified` 2026-11-11 06:01:27 GMT, `BZh9` at byte 0, the first block's magic at bit 32,
+    no other stream header and no other block magic in the first 8 KB. It is one stream (lbzip2's output), so it is
+    mended block by block (~900 kB of JSON a block). Its streams alone could not be told apart, which would have meant
+    (c), 104 GB again.
+  - **Measured** (this sandbox, 4 cores, loopback origin, one byte flipped mid-file; scratchpad harness
+    `measure_mend.py`; the scheduling-log row of 2026-11-17, "the mend"):
+
+    | file | size | fetched again | Range requests | mend, 1 process | 3 processes |
+    |---|---|---|---|---|---|
+    | wikipedia's shape: 1,500 streams of 100 pages | 257,824,375 B | 171,898 B (0.067 %), the bad stream's block | 1 | 39.8 s (check 37.1 s) | 18.3 s (check 15.0 s) |
+    | wikidata's shape: one stream, 339 blocks of JSON | 23,723,088 B | 69,984 B (0.30 %), the bad block | 2 (the length, the block) | 8.5 s (check 8.0 s) | 3.7 s (check 3.2 s) |
+
+    The check is libbz2 decompressing every block: here 6.9 MB/s of bz2 a process on the wiki shape (libbz2 alone
+    6.4) and 3.0 MB/s on the JSON shape (31 MB/s of JSON out). The rest is two md5 passes (~1.2 s for 258 MB).
+    **Modelled at the node's sizes**, at this sandbox's rates: wikidata's 103.8 GB is ~35,000 process-seconds, ~49 min
+    on 12 processes, against fetching 103.8 GB again from Wikimedia (~86 min at 20 MB/s, ~5.8 h at 5 MB/s; the
+    node's rate from Wikimedia is not measured). enwiki's 27.1 GB multistream is ~65 min on one process, ~5.5 min on
+    12. The node's own numbers come from its first mend, in `state/update.json` (`counts.mended`: bytes, seconds).
+  - **Dependents never derive from an old dump** (`cascade.update_in_flight`, the keeper's wait). An annotations
+    collection waits while a declared source that has an update by cadence (an `update` block, a dated origin, a
+    completion check) holds no PUBLISHED snapshot of its current period, the latest whose cutoff has passed. The
+    update pass builds that snapshot from the run the period names. This covers an update in flight, one failed and
+    being retried, one waiting for a human ("…and waits for a human (`louise hold collection update wikipedia
+    --retry`)"), one refused at an old parser ("waits for wikipedia's 2026-11 snapshot: re-create wikipedia at parser
+    6 first"), and one not begun. There is no time cap, and nothing about this node's keeper: it waits until the
+    source catches up, and says why in `woken.json` and on the card. A source with no update by cadence never makes
+    anyone wait. The old-run gate is unchanged. Its cost: a stat of the listing and, behind, the update marker.
+    `origin_names_run` is True at parser 2 and False at 3.
+  - **The node's steps:** [wikidata-entity-origin.md](wikidata-entity-origin.md).
+  - **A dated-dump Codex names its run** (2026-11-17, branch `wikidata-codex-run`): wikidata's live Codex carried `origin.spec = {"files": null}` (its recipe stated no spec), so its parser-3 snapshot named no run and records-vs-origin could not run; `create` now pins a dated plugin's first run (the recipe's files, `--run`, or a `.next` re-creation's predecessor's), nothing creates, carries into or freezes a keyed Codex naming none, `dev pin-run` corrects the unpublished wikidata.next in place, and the checks run in their own container ([wikidata-entity-origin.md](wikidata-entity-origin.md), "München from the node's state of 2026-11-17").
 - **Found on the way:**
   - every record line's `origin` names the run's file, so a dated-dump update re-issues EVERY part (the delta
-    still lists only what changed by content). The records build carries a line whose origin bytes are the same at
-    a new locator with the row's `origin` instead of parsing it (`ORIGIN_MOVES_ALONE`, `pack/build.py`);
+    still lists only what changed by content). The records build carried a line whose origin bytes are the same at
+    a new locator with the row's `origin` instead of parsing it (`ORIGIN_MOVES_ALONE`, `pack/build.py`; retired
+    from the build by B, above);
   - a page the new run no longer holds is withdrawn by the scan (06 §6.1's deletion signal, reason `withdrawn`),
     read from the previous run's index while it is on disk;
   - a row discovery never hashed (`txt_hash` NULL: the first scan does not hash) read as changed on every new run;

@@ -131,16 +131,27 @@ def picked_inputs(shard_tree: str, codex, path: str, seed: bytes, n: int
     """One sampled part, cut and sampled: `(the picked chunk ids, what is
     re-embedded for each)`. Module-level, so the pool's children run it
     (app/parallel.py `each_part`): cutting a part is the expensive half of
-    this check, and only sixteen ids and their inputs come back."""
+    this check, and only sixteen ids and their inputs come back.
+
+    ONE RECORD AT A TIME (2026-11-17, measured on a wikidata-shaped part):
+    the part was decoded into a list and cut whole, ~36 KB held a record of
+    4.8 KB of JSON for the 16 chunks it embeds — a 20,000-record wikidata
+    part near 2 GB in one child, the size of the process München's memcg
+    OOM killed during this check. The draw is 09 §9.1's (`cx.sample_by`, the
+    same scores and order over the same ids), keeping `n` inputs."""
     from pathlib import Path
     from app.pack import records as pack_records
     from . import land
-    cut = land.cut(codex, list(pack_records.iter_records(Path(shard_tree) / path)))
-    ids = sorted(cut)
-    picked = cx.sample(seed, min(n, len(ids)), iter(ids)) if ids else []
-    # a pair layer's chunk with its `fields`, re-cut from the record; a text
-    # layer's text, as ever
-    return picked, {cid: land.input_of(cut, cid) for cid in picked}
+
+    def chunks():
+        for rec in pack_records.iter_records(Path(shard_tree) / path):
+            one = land.cut(codex, [rec])
+            for cid in one:
+                # a pair layer's chunk with its `fields`, re-cut from the
+                # record; a text layer's text, as ever
+                yield cid, land.input_of(one, cid)
+    drawn = cx.sample_by(seed, n, chunks(), lambda item: item[0])
+    return [cid for cid, _ in drawn], dict(drawn)
 
 
 def check(codex, snapshot: snap.Snapshot, *, seed: bytes,

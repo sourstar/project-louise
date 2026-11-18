@@ -377,7 +377,10 @@ the collection's identity: the transport, the origin's own URL (never a
 mirror), the layout and how the complete listing is enumerated, the
 checksum scheme, the update form, and for a dated-dump origin the FIRST
 run it was built from (*amended 2026-11-17*: later runs are named by each
-snapshot, 09 §9.4 `origin_run`, never by the Codex). What is **local** stays out of it: mirrors, etiquette, the
+snapshot, 09 §9.4 `origin_run`, never by the Codex). A record of such an
+origin locates its unit by the origin's own key, resolved in the snapshot's
+run (§6.4, amended the same day, "Choice B"), so a new run re-issues only
+the parts whose documents changed. What is **local** stays out of it: mirrors, etiquette, the
 profiles and their estimated sizes, the probe file, and every path,
 including the terms file and any key or token. Two peers that create
 the same collection from the same plugin write the same `origin` block
@@ -685,6 +688,25 @@ by the member the plugin extracted — so `records-vs-origin` knows what
 to re-fetch without the producer's manifest. The locator is the
 `DocRef.locator` discovery produced (§6.1); an absolute path never
 enters a record.
+
+**A unit located by the origin's own key** (*amended 2026-11-17*,
+operator: "Choice B"; 09 §9.5). An origin of dated dumps places each
+document elsewhere in every run, so a locator naming the place moves every
+line at every run. Such a plugin may name each unit by a key the origin
+keeps across runs, in the run-free name of its file, and resolve it in the
+run the snapshot names. The origin's own index of that run answers where
+the unit is: Wikimedia's multistream index for a page. Where the origin
+publishes no index, the node builds one from the run in one pass, on the
+parse pool. Either way the key's table is DERIVED data, placed by
+app/derived.py and keyed on the index's or the dump's physical identity
+(07 §7.8). It is rebuilt when that file changes, never exchanged, and
+answers a lookup without reading the index. The plugin declares this
+(`origin_key`, app/keyed_origin.py) from the parser version that writes
+the form. A collection whose Codex names an earlier parser keeps writing
+and reading the earlier locator until it is re-created (§6.1
+`PARSER_VERSION`). The manifest's locator stays the node's own, the bytes'
+place in this node's copy, and only the record's `origin` changes form.
+Wikipedia's form is 09 §9.5's.
 
 **A record whose text a credited archive supplies is located in that
 archive.** A layer may be drawn from a pre-embedded archive's own text

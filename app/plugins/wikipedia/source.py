@@ -11,6 +11,14 @@ Locator format (plugin-opaque per §2, survives the manifest like pubmed's):
 and, since parser 5, when the dump run's `page_props` holds rows for the
 page, a last segment naming them (page_props.py):
     "…|<page_props path>::<start>::<end>"          decompressed bytes.
+That is THIS NODE's locator, in the manifest. A RECORD's `origin` (09 §9.5)
+names the page, never its bytes, since parser 6 (locate.py; operator,
+2026-11-17, "Choice B"): `<wiki>/pages-articles-multistream.xml.bz2#<page
+id>|<wiki>/page_props.sql.gz#<page id>`, read in the run its snapshot names
+through the run's own multistream index (stream_index.py) and page_props
+table. Parser 5's records named the dated file and the byte range, and
+every monthly run moved every line; a collection whose Codex names 5 keeps
+reading and writing that form (`WikipediaSourceV5`) until it is re-created.
 
 ONE COLLECTION, WIKIVEC'S LANGUAGES, TWO LAYERS (operator, 2026-09-10 and
 2026-09-14; docs/notes/wikipedia-two-layers.md). The native id carries the
@@ -29,6 +37,18 @@ multistream), Cirrus search dumps, HTML dumps and the live API. Taken:
     per page, so a record is re-derived from its one stream without
     re-reading the dump. Cirrus and HTML dumps are pre-rendered and lossy
     for our purposes; the API has no dated form a verifier can re-fetch;
+  * a record's unit is located BY ITS PAGE (parser 6, 2026-11-17, the
+    operator's "Choice B"): its `origin` names the page id in the run-free
+    name of each job's file, `<wiki>/pages-articles-multistream.xml.bz2#<id>`
+    and `<wiki>/page_props.sql.gz#<id>`, and is read in the run the
+    snapshot names (09 §9.4 `origin_run`) through the origin's OWN index of
+    that run — the multistream index's `offset:page_id:title` for the
+    article's stream, the table's primary key (pp_page) for its rows. The
+    page id is the key both are keyed on and the one a page keeps when it
+    is moved; the run is the snapshot's to state. So a monthly run changes
+    the line of a page that changed and no other, where the dated file and
+    byte range (parser 5) changed every line, and re-issued every part, at
+    every run (docs/notes/collection-updates.md §6);
   * where the credited pre-embedded archive (wikivec's parquet, layer 1)
     covers an article, its text is read from the archive instead, and
     `extra.source` says per record which of the two it came from
@@ -51,10 +71,12 @@ from xml.etree import ElementTree as ET
 
 from ... import chunking
 from .. import cursor
+from app import derived
 from app.backend import OriginForm, Template
+from app.keyed_origin import KeyedOrigin
 from ..base import (CanonicalDoc, DiscoverState, DocRef, Erasure, LicenseClass,
                     Modality, Mutability, PROTOCOL_VERSION, PrivacyClass, RawDoc)
-from . import archive, page_props, wikitext
+from . import archive, locate, page_props, wikitext
 from . import completion as completion_mod
 from .ids import DUMP_BASE, LANG_ORDINAL, decode_native_id, native_id_of  # noqa: F401
 
@@ -206,6 +228,15 @@ _STREAM_SLOTS = 2
 
 
 def _stream_pages(dump: Path, start: int, end: int) -> "dict[str, ET.Element]":
+    # the dump is read stream by stream at random offsets, and the whole of it
+    # over a pass: read from its copy on the files cache (ssd3), made once by
+    # one sequential copy, not by seeks on tank's spinning disks (app/derived.py
+    # `staged`; operator 2026-11-15, and 2026-11-17: "use ssd3 for caching
+    # wikipedia and wikidata corpus while rebuilding"). The origin itself when
+    # the node names no files cache or the cache has no room. The archive's
+    # parquet is not staged: a fetch reads only its text columns, a fraction
+    # of each file (the vectors' column is most of it), in row-group order.
+    dump = derived.staged(Path(dump), log=print)
     # keyed on the file's PHYSICAL identity too (CLAUDE.md: caches key on it):
     # a run deleted from the corpus, or a dump replaced at its path, is never
     # answered from what was read of it before (a stat; a missing file raises)
@@ -390,6 +421,9 @@ class WikipediaSource:
     #: range of the archive's shards; page_props is a SQL dump read from its pack
     backend = (OriginForm("the pages-articles multistream dump", Template.MEMBER),
                OriginForm("the page_props SQL dump", Template.CONTAINER_PACK, ("wikipedia-page-props",)),
+               # parser 6: a page's origin is read in a run through the run's own
+               # index, a bz2 text no lookup can seek — its table (stream_index.py)
+               OriginForm("the multistream index", Template.CONTAINER_PACK, ("wikipedia-stream-index",)),
                OriginForm("the pre-embedded archive's Parquet shards", Template.MEMBER))
     protocol_version = PROTOCOL_VERSION
     #: 2 since 2026-09-12: promise 9. Version 1 published the prose and
@@ -416,7 +450,16 @@ class WikipediaSource:
     #: the page, as gutenberg's covers its catalogue entry. Title and
     #: sections do not move, so neither does a chunk (02 §2.4 A1d;
     #: docs/notes/wikipedia-qids.md).
-    PARSER_VERSION = 5
+    #: 6 since 2026-11-17 (operator: "Choice B"): a record's `origin` names its
+    #: PAGE, `<wiki>/pages-articles-multistream.xml.bz2#<page id>` and
+    #: `<wiki>/page_props.sql.gz#<page id>`, resolved in the snapshot's run
+    #: through the run's own index (locate.py; 09 §9.5 amended), where 5's named
+    #: the dated file and byte range. Nothing else in a line moves: title,
+    #: sections, extra and both hashes are 5's byte for byte, so a 5 line is
+    #: carried with its `origin` rewritten (`carried_origin`; 02 §2.4 A1c;
+    #: app/hold/line_carry.py). Parser 5 is kept (`WikipediaSourceV5`) for a
+    #: collection whose Codex names it, until it is re-created.
+    PARSER_VERSION = 6
     #: 06 §6.2: the origin keeps its history — every page's earlier revisions stay fetchable by revision id —
     #: so a superseded part version stays checkable and is kept (02 §2.3).
     origin_versions = "history"
@@ -426,20 +469,27 @@ class WikipediaSource:
     #: could not find, so records-vs-origin reparsed no wikipedia record.
     LOCATOR_SEP = _LOCATOR_SEP
     LOCATOR_MEMBER_FIELDS = 2
-    #: a record parsed from the SAME origin bytes at another locator — a page
-    #: of the next dump run, its stream and page_props rows elsewhere — is the
-    #: same line but for its `origin`: the parse reads the locator for the
-    #: wiki's name alone (`extra.wiki`), which a run never moves. So the
-    #: records build of an update carries such a line with the row's
-    #: `origin` instead of parsing the page again (app/pack/build.py
-    #: `held_or_parsed`; 02 §2.7, amended 2026-11-17)
+    #: a page of the next dump run whose bytes did not change has its stream
+    #: and page_props rows elsewhere: its LOCATOR moves and nothing else. The
+    #: scan of a new run reads it so (app/discovery.py `_held_hash`: a row
+    #: that never recorded a hash is compared by the unit it still names).
+    #: Since parser 6 the record line does not move with it — its `origin`
+    #: names the page, not the bytes — so the records build takes the held
+    #: line as it is, and no longer rewrites an `origin` (02 §2.7, amended
+    #: 2026-11-17)
     ORIGIN_MOVES_ALONE = True
-    #: each record's `origin` names the run's dated file and byte range
-    #: (09 §9.5), so a new run re-issues every part: the update by cadence
-    #: plans this collection and does not run it until the operator decides
-    #: the origin form (app/hold/update.py `origin_names_run`;
-    #: docs/notes/collection-updates.md §6)
-    origin_names_run = True
+    #: parser 5's records named the run's dated file and byte range, so a
+    #: new run re-issued every part; parser 6's name the page (locate.py) and
+    #: the update by cadence runs (app/hold/update.py `origin_names_run`:
+    #: True on `WikipediaSourceV5`, refused until re-created at 6)
+    origin_names_run = False
+    #: 09 §9.5 (amended 2026-11-17): from parser 6 a record's `origin` names its
+    #: page by the page id, read in the snapshot's run through the run's own
+    #: indexes — the origin publishes them, nothing is built but their tables
+    #: (app/keyed_origin.py; locate.py, stream_index.py)
+    origin_key = KeyedOrigin(key="page id", built=False, since=6,
+                             index="the run's multistream index (offset:page_id:title) and its page_props "
+                                   "table (pp_page), Wikimedia's own")
     #: THE UPDATE BY CADENCE (app/hold/update.py; docs/notes/collection-updates.md
     #: §1): the origin's own record that the run a cutoff names is complete —
     #: Wikimedia's dumpstatus.json of each held wiki, `articlesmultistreamdump`
@@ -718,6 +768,77 @@ class WikipediaSource:
         """`origin_url_of` read back: the archive file's corpus-relative path."""
         prefix = _archive_prefix()
         return url[len(prefix):] if url.startswith(prefix) else None
+
+    # ---- the record's origin, by page (parser 6; locate.py) ------------------
+
+    def origin_of(self, locator: str, native_id, base) -> str:
+        """09 §9.5's `origin` for a manifest locator (plugin_io.origin_locator):
+        the platform's reading, then each dated piece named by the page —
+        a pure function of the two and the document's page id."""
+        from app import plugin_io
+        if native_id is None:
+            raise ValueError("a wikipedia origin names its page (parser 6): the record's native id is "
+                             "needed beside its locator")
+        return locate.page_origin(plugin_io.origin_locator(self, locator, base),
+                                  decode_native_id(int(native_id))[1])
+
+    def local_of(self, origin: str, base, run: str | None) -> tuple[Path, str]:
+        """`origin` read back as a manifest locator under `base` (plugin_io.
+        local_locator): a page-form piece through `run`'s index or page_props
+        table, parser 5's byte range and an archive's rows as the platform
+        reads them — so BOTH forms resolve, whichever parser this is."""
+        from app import plugin_io
+        located = locate.resolve(origin, Path(base), run,
+                                 lambda piece: plugin_io.generic_local(self, piece, base)[1])
+        return Path(located.split(archive.SEG_SEP, 1)[0].split(_LOCATOR_SEP, 1)[0]), located
+
+    def origin_files(self, origin: str, base, run: str | None) -> list[Path]:
+        """The files `origin`'s pieces are read from in `run`, no index read
+        (plugin_io.origin_unit, the records-vs-origin bound)."""
+        from app import plugin_io
+        return locate.files(origin, Path(base), run, lambda piece: plugin_io.generic_local(self, piece, base)[0])
+
+    def carry_state(self, corpus: Path, src_state: Path, dst_state: Path, *, apply: bool) -> dict:
+        """What of a collection's derived state its successor reading the same
+        corpus takes (app/hold/carry.py `derived_state`): the archive's ids
+        cache, by each shard's physical identity (archive.carry_ids)."""
+        return {archive.IDS_DIR: archive.carry_ids(corpus, src_state, dst_state, apply=apply)}
+
+    def origin_weigher(self, base: Path, run: str | None):
+        """`origin -> what a verifier reads for it` for one check (plugin_io.
+        origin_weigher, the records-vs-origin bound; weigh.py): a page's
+        stream by Range, its run's index and page_props shared, an archive
+        article's row groups beside its file's footer."""
+        from app import plugin_io
+
+        from . import weigh
+        return weigh.weigher(base, run, lambda piece: plugin_io.generic_local(self, piece, base)[0])
+
+    def run_of_locator(self, locator: str) -> str | None:
+        """The dump run a manifest locator reads (app/record_source.py: a
+        record naming its page is the row's unit only when built from the
+        run the row names)."""
+        return locate.run_of_locator(locator)
+
+    def carried_origin(self, origin: str, native_id, version: int) -> str | None:
+        """The `origin` this parser writes for a record parser `version` wrote
+        with `origin`, where the two parsers' lines differ in `origin` ALONE
+        (02 §2.4 A1c; app/hold/line_carry.py, app/pack/build.py): from 5, the
+        page form of the same pieces. None for a version whose lines differ
+        otherwise — such a line is parsed."""
+        if int(version) == self.PARSER_VERSION:
+            return origin
+        if int(version) != 5:
+            return None
+        return locate.page_origin(origin, decode_native_id(int(native_id))[1])
+
+    def at_parser_version(self, version: int) -> "WikipediaSource | None":
+        """This plugin parsing at `version`, for a collection whose Codex names
+        it (`collections.plugin_at`): 6 is this one, 5 the byte-range origin
+        (`WikipediaSourceV5`); None for any other."""
+        if int(version) == self.PARSER_VERSION:
+            return self
+        return {6: _V6, 5: _V5}.get(int(version))
 
     def _archive_ref(self, pending: dict, lang: str, props: Path, unit_of) -> DocRef:
         """An archive article's ref: wikivec's own id, so the archive's
@@ -1007,3 +1128,27 @@ class WikipediaSource:
             sections=sections,
             raw_hash=raw.raw_hash,
         )
+
+
+class WikipediaSourceV5(WikipediaSource):
+    """PARSER 5, KEPT for the collections whose Codex names it (invariant 3:
+    the same parser id and version give the same records). Its record's
+    `origin` names the run's dated file and the stream's byte range, so a
+    new run moves every line: the update by cadence refuses such a
+    collection (`origin_names_run`) until it is re-created at parser 6,
+    whose lines are these with `origin` alone rewritten (`carried_origin`).
+    It reads a page-form origin too (`local_of`, inherited): both forms
+    resolve. Removed once no Codex on a node names 5."""
+    PARSER_VERSION = 5
+    origin_names_run = True
+
+    def origin_of(self, locator: str, native_id, base) -> str:
+        from app import plugin_io
+        return plugin_io.origin_locator(self, locator, base)
+
+    def carried_origin(self, origin: str, native_id, version: int) -> str | None:
+        return origin if int(version) == self.PARSER_VERSION else None
+
+
+_V5 = WikipediaSourceV5()
+_V6 = WikipediaSource()

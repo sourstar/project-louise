@@ -125,6 +125,10 @@ def cmd_create(a) -> int:
         if a.encoder:                      # refused before anything is created
             model_keys(a.encoder, embed_model=keys["embed_model"],
                        query_model=keys["query_model"])
+        # A DATED-DUMP CODEX NAMES ITS RUN (09 §9.17; München, 2026-11-17: the
+        # parser-3 wikidata Codex, the live one with its parser and image
+        # changed, carried `{"files": null}` and its snapshot named no run)
+        spec = _whole_codex_run(a.root, spec, getattr(a, "run", None), a.name)
         # its NAME and its query side as given (2026-11-08: pubmed's parser-9
         # re-creation — a whole Codex named "pubmed-<hex>", its MedCPT query
         # endpoint dropped), and the MEMBERS it names copied from the held
@@ -144,10 +148,54 @@ def cmd_create(a) -> int:
                               api=getattr(a, "api", None),
                               embed_model=getattr(a, "embed_model", None),
                               query_model=getattr(a, "query_model", None),
-                              calibration_from=getattr(a, "calibration_from", None))
+                              calibration_from=getattr(a, "calibration_from", None),
+                              run=getattr(a, "run", None))
     print(f"held: {held}", file=sys.stderr)
     print(codex.collection_id)
     return 0
+
+
+def _run_for(root, plugin: str, recipe_spec: dict | None, run: str | None, name: str | None,
+             say=None):
+    """`run` as given; else, where the recipe's origin names no files and the
+    plugin's origin publishes dated dumps, the run the system DETERMINES
+    (RULE 2; `origin_run.determine`: the corpus's complete run, a
+    re-creation's predecessor's, the origin's latest complete one), said on
+    stderr and to `say` (the Library's notice) in plain words — or refused
+    saying what is missing and what would supply it."""
+    from app.hold import origin_run
+    origin_run.UNDETERMINED.set(None)            # this create's own reason only
+    if run or (recipe_spec or {}).get("files"):
+        return run
+    from app.acquire.specs import ACQUIRE_REGISTRY
+    if not origin_run.spec_dated(ACQUIRE_REGISTRY.get(plugin)):
+        return run
+    try:
+        found, why = origin_run.determine(Path(root) if root else _default_root(), plugin, name)
+    except origin_run.RunUndetermined as e:
+        # refused where the Codex is made (template.pin_dated_spec), in these words
+        origin_run.UNDETERMINED.set(str(e))
+        return run
+    line = f"run: {found} — {why}; its files written into origin.spec (09 §9.17)"
+    print(line, file=sys.stderr)
+    if say is not None:
+        say(line)
+    return found
+
+
+def _whole_codex_run(root, spec: dict, run: str | None, name: str | None) -> dict:
+    """A whole Codex given as the recipe (`create --recipe codex.json`, no
+    plugin), its run pinned for a plugin whose origin publishes dated dumps
+    (template.pin_dated), from `--run` or the re-creation's; the Codex as it
+    is for any other plugin."""
+    from app.hold import template as tpl
+    origin = spec.get("origin")
+    plugin = spec.get("plugin")
+    if not isinstance(origin, dict) or not isinstance(plugin, str):
+        return spec
+    run = _run_for(root, plugin, origin.get("spec"), run, name)
+    pinned = tpl.pin_dated_spec(plugin, origin.get("spec"), run)
+    return spec if pinned is origin.get("spec") else {**spec, "origin": {**origin, "spec": pinned}}
 
 
 def create_deposit(root, name: str, *, platform_image: str | None = None,
@@ -304,6 +352,16 @@ def cmd_annotations_derive(a) -> int:
               "inconclusive until a key signs it", file=sys.stderr)
     _print(am.derive(a.root, name, method, key=key, now=_utc_now(),
                      log=lambda m: print(m, file=sys.stderr)))
+    return 0
+
+
+def cmd_annotations_claims(a) -> int:
+    """`hold annotations claims <collection> --out FILE`
+    (app/hold/annotations_export.py): the claims its latest snapshot holds,
+    one per line, pinned as its records hold them — what a re-created target's
+    annotations collection is created from."""
+    from app.hold import annotations_export
+    _print(annotations_export.export(a.root, a.collection, Path(a.out)))
     return 0
 
 
@@ -513,7 +571,8 @@ def create_from(root, plugin: str, recipe: dict, *, platform_image: str | None =
                 query_encoder: str | None = None, name: str | None = None,
                 calibration_set: str | None = None, api: str | None = None,
                 embed_model: str | None = None, query_model: str | None = None,
-                calibration_from: str | None = None, embed: str = "off"):
+                calibration_from: str | None = None, embed: str = "off",
+                run: str | None = None, say=None):
     """`hold collection create <plugin> --recipe FILE` — for the command
     line and for its route alike (07 §7.4: the web interface is a client of
     the same function, not a second implementation). Returns the Codex and
@@ -537,6 +596,9 @@ def create_from(root, plugin: str, recipe: dict, *, platform_image: str | None =
     # SHA-256 of nothing, and the live gutenberg Codex carries exactly that
     # placeholder (found 2026-09-14), so no identity may name no build again.
     platform_image = preflight_create(recipe, platform_image)
+    # THE RUN A DATED-DUMP CODEX NAMES (09 §9.17): `--run`, else a
+    # re-creation's predecessor's; the recipe's own `files` first
+    run = _run_for(root, plugin, (recipe.get("origin") or {}).get("spec"), run, name, say=say)
     # A SLICING THE PLUGIN DERIVES AT CREATION (wikidata's family map,
     # pack-format.md §2 amended 2026-10-24): the block goes into the Codex,
     # the map into the SHARD. A recipe that states its own slicing keeps it
@@ -609,7 +671,8 @@ def create_from(root, plugin: str, recipe: dict, *, platform_image: str | None =
                                    # RULE 1: a held twin's document-side reference reused
                                    calibration_from=(col.shard_dir_of(
                                        Path(root), col.resolve(root, calibration_from)[0])
-                                       if calibration_from else None))
+                                       if calibration_from else None),
+                                   run=run)
     if space_from and (codex.space.envelope,
                        codex.space.calibration.vectors) != drifted:
         print(f"warning: --space-from {space_from} recorded reference "
@@ -2212,8 +2275,12 @@ def _write_held_file(root, codex, encoder: str | None = None,
     q = json.dumps                 # a TOML basic string, quotes and backslashes escaped
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(".toml.tmp")
+    from app.hold import recreate
     tmp.write_text(f'codex = "{codex.collection_id}"\n'
-                   "slices = []\n"
+                   # a re-creation's interim name: the predecessor's title (07 §7.8)
+                   + recreate.display_lines(root, col.name_of(root, codex.collection_id),
+                                            lambda m: print(f"note: {m}", file=sys.stderr))
+                   + "slices = []\n"
                    # an annotations collection has relations and no vectors (02 §2.10)
                    + ('kinds = ["records", "relations"]\n' if cx.is_annotations(codex)
                       else 'kinds = ["records", "vectors"]\n')
@@ -2901,6 +2968,33 @@ def cmd_dev_embed_select(a) -> int:
     return 0
 
 
+def cmd_dev_wikipedia_coverage(a) -> int:
+    """`louise dev wikipedia-coverage [<collection>] [--lang L] [--samples N]`
+    (app/wikipedia_coverage.py; 2026-11-17): per wiki of the collection's run,
+    the pages its multistream index lists among the articles against the rows
+    the manifest holds in either layer — how many no row holds, how many of
+    those the archive covers (held by neither layer), and a sample with their
+    titles. Read-only: the manifest opened read-only, nothing written."""
+    from app import collections as _cm
+    from app import wikipedia_coverage
+    if a.collection:
+        c = _cm.by_name(a.collection)
+        if c is None or c.plugin != "wikipedia":
+            raise CodexError(f"{a.collection}: not a wikipedia collection this node holds")
+    else:
+        served, _ = _cm.load_all(skip_unreadable=True)
+        found = [c for c in served if c.plugin == "wikipedia"]
+        if len(found) != 1:
+            raise CodexError(f"this node holds {len(found)} wikipedia collections"
+                             + (f" ({', '.join(sorted(c.name for c in found))}): name one" if found else ""))
+        c = found[0]
+    if a.samples < 0:
+        raise CodexError("--samples is a count, 0 or more")
+    out = wikipedia_coverage.coverage(c, lang=a.lang, samples=a.samples, log=lambda m: print(m, file=sys.stderr))
+    print(json.dumps(out, indent=2, ensure_ascii=False))
+    return 0
+
+
 def cmd_dev_cache_evict(a) -> int:
     """`louise dev cache-evict [--idle-hours H] [--dry-run]`: what the
     worker's maintainer does once an hour (app/derived.py `evict_idle`), now
@@ -3504,6 +3598,54 @@ def cmd_dev_carry(a) -> int:
         out["ack"] = recreate.carry_ack(a.root, from_name, to_name, to_codex)
         say(f"[carry] licence acknowledgement: {out['ack']}")
     _print(out)
+    return 0
+
+
+def cmd_dev_pin_run(a) -> int:
+    """`louise dev pin-run <collection> [--run R] [--dry-run | --yes]`
+    (app/hold/pin_run.py; München, 2026-11-17): an UNPUBLISHED collection
+    whose dated-dump Codex names no run, given the Codex that names the run
+    its records were read in — its snapshot frozen again over the same
+    parts, re-signed, and what named the old id re-pointed. The plan without
+    --yes, and always with --dry-run (refusals included); with --yes, under
+    the collection's write lock. Refused (exit 2) for anything published or
+    shared, and for a file naming the old id the pass does not know."""
+    from app.hold import pin_run
+    name, _ = col.resolve(a.root, a.collection)
+
+    def say(m: str) -> None:
+        print(m, file=sys.stderr)
+    if getattr(a, "dry_run", False) or not a.yes:
+        under_way = pin_run.under_way(a.root, name)
+        if under_way is not None:
+            say(f"[pin-run] {name}: a pin to run {under_way['run']} is under way at step {under_way['step']} "
+                f"({under_way['from'][:23]}… -> {under_way['to'][:23]}…); `--yes` finishes it; nothing written")
+            _print({"under_way": under_way})
+            return 0
+        out = pin_run.plan(a.root, name, run=a.run)
+        same = out["space_id"]["from"] == out["space_id"]["to"]
+        removed = out["removed"]
+        say(f"[pin-run] {name}: would pin run {out['run']} ({'; '.join(out['run_said_by'])}): "
+            f"{out['from'][:23]}… -> {out['to'][:23]}…, space {'unchanged' if same else 'MOVED'}; "
+            f"snapshot {out['snapshot']['id']} ({out['snapshot']['parts']:,} parts, "
+            f"{out['snapshot']['records']:,} records, {out['snapshot']['bytes'] / 2**20:,.1f} MiB) written "
+            f"again with origin_run beside the old until the swap ({out['snapshot']['bytes'] / 2**20:,.1f} MiB "
+            f"more for a moment), re-signed; {len(out['naming'])} small file(s) naming the old id, each "
+            f"known (swept in {out['swept_s']:.1f} s); removed: its sidecar, "
+            f"{len(removed['attestations'])} attestation(s) of the old id"
+            f"{', the note of an origin check that could not run' if removed['origin_attempt'] else ''}; "
+            f"the run's files in the corpus: {len(out['dump']['held'])} held, {len(out['dump']['missing'])} "
+            f"missing; nothing written (--yes does it)")
+        _print({"plan": out})
+        return 0
+    _take_write_lock(a.root, name, "louise dev pin-run", exit_code=2)
+    key = None
+    try:
+        from app.bundles import keys as node_keys
+        key = node_keys.load_signing_key()
+    except Exception as e:                              # noqa: BLE001 — an unsigned peer still works
+        say(f"note: unsigned — {e}")
+    _print({"pin_run": pin_run.apply(a.root, name, run=a.run, key=key, now=_utc_now(), log=say)})
     return 0
 
 
@@ -4704,6 +4846,27 @@ def cmd_records_relocate(a) -> int:
     return 130 if got.interrupted else 0
 
 
+def cmd_records_carry(a) -> int:
+    """`hold records carry <to> --from <from>` (app/hold/line_carry.py): the
+    re-created collection's parts from its predecessor's, each line's origin
+    rewritten by the plugin and every other byte taken; then its first
+    snapshot. Takes the target's lock; SIGTERM or SIGINT finishes the parts in
+    hand and exits 130 (invariant 2); a refusal exits 2."""
+    from app.hold import line_carry
+    name, _codex = col.resolve(a.root, a.collection)
+    if not a.dry_run:
+        _take_write_lock(a.root, name, "hold records carry")
+    with _graceful_stop() as stop:
+        try:
+            got = line_carry.carry(a.root, a.collection, a.from_ref, workers=a.workers, dry_run=a.dry_run,
+                                   stop=stop)
+        except line_carry.CarryRefused as e:
+            print(str(e), file=sys.stderr)
+            return 2
+    _print(got.to_dict())
+    return 130 if got.interrupted else 0
+
+
 def cmd_records_relations(a) -> int:
     """`hold records relations <collection> [--snapshot ID]` (app/hold/
     relations.py `backfill`): the relations parts of the record parts the
@@ -5697,13 +5860,17 @@ def run_check(a):
             pass
 
     origin_dir = _check_origin(a, codex)
+    # the run the snapshot's records were read from: an origin naming a unit
+    # by the origin's own key is resolved in it (09 §9.5, amended 2026-11-17)
+    from app.hold import origin_run as origin_run_mod
+    run = origin_run_mod.run_of(codex, snapshot)
     report = chk.run(
         a.root, name, codex, snapshot, seed=seed,
         checks=a.checks.split(",") if a.checks else None, sample=a.sample,
         embed=embed, reference=reference,
-        reparse=_reparse_from(codex, name, origin_dir),
-        reparse_many=_reparse_many_from(codex, name, origin_dir),
-        origin_unit=_origin_unit_from(codex, name, origin_dir),
+        reparse=_reparse_from(codex, name, origin_dir, run=run),
+        reparse_many=_reparse_many_from(codex, name, origin_dir, run=run),
+        origin_unit=_origin_unit_from(codex, name, origin_dir, run=run),
         weigh_unit=_weigh_from(codex, origin_dir),
         origin_bytes=(int(a.origin_mib) << 20) if getattr(a, "origin_mib", None) else None,
         against=_json(a.against) if getattr(a, "against", None) else None,
@@ -5711,7 +5878,7 @@ def run_check(a):
         live=getattr(a, "live", None),
         vectors_for=lambda ids: embeddings.vectors_by_chunk_id(
             ids, collection=local),
-        origin_is_copy=_is_kept_copy(local, origin_dir),
+        origin_is_copy=_is_kept_copy(local, origin_dir, root=a.root, name=name),
         log=lambda m: print(m, file=sys.stderr))
 
     written: dict[str, str] = {}
@@ -5805,21 +5972,52 @@ def _check_origin(a, codex):
     return None
 
 
-def _is_kept_copy(local, origin_dir) -> bool:
-    """`origin_dir` is the collection's own corpus directory — the copy this
-    node keeps, by physical identity (CLAUDE.md: a path, never a name) — so a
-    re-parse from it says nothing of the origin (`check.Ctx.origin_is_copy`)."""
+def _is_kept_copy(local, origin_dir, *, root=None, name: str | None = None) -> bool:
+    """`origin_dir` is the copy this node keeps of the collection's origin, so
+    a re-parse from it says nothing of the origin (`check.Ctx.origin_is_copy`).
+
+    THE KEPT COPY IS FOUND, NEVER ASSUMED ABSENT (2026-11-17): `hold records
+    check` builds its local side with no corpus directory, so the first form
+    of this test (7682c22) compared against None, swallowed the TypeError and
+    answered "not the copy" for every check, and every re-parse of a kept
+    copy since 2026-11-14 was recorded as a PASS (wikipedia's, München). The
+    copy is the local side's corpus where it names one, and the collection's
+    own `<root>/<name>/origin` (collections.origin_dir) always. It is known by
+    PHYSICAL identity (CLAUDE.md): the same directory by its resolved path,
+    by device and inode (a second mount of it), or one inside the other."""
+    import os
     from pathlib import Path
     if not origin_dir:
         return False
+    kept: list[Path] = []
+    if getattr(local, "corpus_dir", None):
+        kept.append(Path(local.corpus_dir))
+    if root is not None and name:
+        kept.append(Path(root) / name / "origin")
     try:
-        return Path(origin_dir).resolve() == Path(local.corpus_dir).resolve()
-    except (OSError, TypeError, AttributeError):
+        given = Path(origin_dir).resolve()
+        given_id = os.stat(given)
+    except (OSError, TypeError, ValueError):
         return False
+    for k in kept:
+        try:
+            k = k.resolve()
+            k_id = os.stat(k)
+        except (OSError, ValueError):
+            continue
+        if given == k or given.is_relative_to(k) or k.is_relative_to(given):
+            return True
+        if (given_id.st_dev, given_id.st_ino) == (k_id.st_dev, k_id.st_ino):
+            return True
+    return False
 
 
-def _reparse_from(codex, name: str, origin_dir):
+def _reparse_from(codex, name: str, origin_dir, *, run: str | None = None):
     """`(uid, origin locator) -> the record line that origin produces now`.
+
+    `run`: the dump run the snapshot's records were read from (09 §9.4
+    `origin_run`, else the Codex's), in which an origin naming its unit by
+    the origin's own key is resolved (09 §9.5, amended 2026-11-17).
 
     03 §3.2 wants the origin "re-fetched … and re-parsed with the Codex's
     toolchain". `origin_dir` is that origin as a local base — a fresh
@@ -5859,7 +6057,7 @@ def _reparse_from(codex, name: str, origin_dir):
     def reparse(uid: str, locator: str) -> bytes:
         if prepare is not None:
             prepare(locator)
-        local, path = plugin_io.local_locator(plugin, locator, base)
+        local, path = plugin_io.local_locator(plugin, locator, base, run=run)
         if not local.exists():
             raise FileNotFoundError(str(local))
         row = {"uid": uid, "native_id": uid.rsplit(":", 1)[-1], "path": path}
@@ -5890,7 +6088,7 @@ def _reparse_collection(codex, name: str, base):
 REPARSE_PAGE = 256
 
 
-def _reparse_many_from(codex, name: str, origin_dir):
+def _reparse_many_from(codex, name: str, origin_dir, *, run: str | None = None):
     """`Ctx.reparse_many` for a LOCAL origin: the comparisons of
     `records-vs-origin` in the parse pool's processes, in order (CLAUDE.md,
     multi-core — one wikidata check ran at 38 records/s on one core, ~27 h;
@@ -5911,7 +6109,7 @@ def _reparse_many_from(codex, name: str, origin_dir):
         def pages():
             page: list[dict] = []
             for uid, locator, line in items:
-                page.append({"uid": uid, "locator": locator, "line": line})
+                page.append({"uid": uid, "locator": locator, "line": line, "run": run})
                 if len(page) >= REPARSE_PAGE:
                     pending.append(page)
                     yield page
@@ -5959,7 +6157,7 @@ def _weigh_from(codex, origin_dir):
     return getattr(mo, "weigh", None)
 
 
-def _origin_unit_from(codex, name: str, origin_dir):
+def _origin_unit_from(codex, name: str, origin_dir, *, run: str | None = None):
     """`origin locator -> (the origin file it points into, its size in bytes)`,
     for `records-vs-origin`'s bound (app/hold/check.py: `ORIGIN_BYTES`). With
     the origin as a local base the size is the file's; a file that is not
@@ -5972,6 +6170,17 @@ def _origin_unit_from(codex, name: str, origin_dir):
     from app import collections as collections_mod, plugin_io
     base = Path(origin_dir)
     plugin = collections_mod.PLUGIN_REGISTRY[codex.plugin]
+    version = getattr(getattr(codex, "parser", None), "version", None)
+    if version is not None:
+        plugin = collections_mod.plugin_at(plugin, int(version)) or plugin
+    #: an origin resolved in a run is weighed in that run's files
+    in_run = {"run": run} if run else {}
+    # WHAT A VERIFIER READS, where the plugin can say (03 §3.2 amended
+    # 2026-11-17): a Range-readable piece by its range, a piece its units
+    # share once (wikipedia: a page's stream, its run's index and page_props)
+    weigher = plugin_io.origin_weigher(plugin, base, run=run)
+    if weigher is not None:
+        return weigher
 
     # ONE `stat` PER FILE, NOT PER RECORD. Measured on the node (pubmed,
     # 2026-09-20): 1,998,732 sampled records point into 651 files, and weighing
@@ -5988,7 +6197,7 @@ def _origin_unit_from(codex, name: str, origin_dir):
         pieces = locator.split(seg) if seg and seg in locator else [locator]
         key = (seg or "").join(p.partition(plugin_io.DEFAULT_MEMBER_SEP)[0] for p in pieces)
         if key not in weighed:
-            weighed[key] = plugin_io.origin_unit(plugin, locator, base)
+            weighed[key] = plugin_io.origin_unit(plugin, locator, base, **in_run)
         return weighed[key]
 
     return origin_unit
@@ -6010,6 +6219,11 @@ def cmd_records_check(a) -> int:
     if getattr(a, "seal", False):
         checks.append("origin-seal")
     a.checks = ",".join(checks)
+    # `--shards SLICE/NNNNN …` (2026-11-17): the parts named, in place of the
+    # seeded sample — `hold check --shards`'s comma form taken too
+    named = getattr(a, "shards", None)
+    if isinstance(named, (list, tuple)):
+        a.shards = ",".join(x for tok in named for x in str(tok).split(",") if x)
     return cmd_check(a)
 
 
@@ -7321,6 +7535,11 @@ def build_parser() -> argparse.ArgumentParser:
                         "envelope the new Codex reuses (RULE 1): its space must be the "
                         "recipe's but for the query side, the document engine included; "
                         "only the query side is embedded")
+    p.add_argument("--run", default=None, metavar="YYYYMMDD",
+                   help="for a plugin whose origin publishes dated dumps (wikipedia, wikidata): the "
+                        "FIRST run the collection's records are built from, written into "
+                        "origin.spec.files with delta.mode dated-dumps (09 §9.17) where the recipe "
+                        "names none; a re-creation <name>.next takes the run <name> holds")
     # `create annotations` (02 §2.10): claims about another collection's records
     p.add_argument("--annotates", default=None, metavar="COLLECTION", action="append",
                    help="create annotations: the collection the claims are about (id, prefix or name); "
@@ -7530,6 +7749,12 @@ def build_parser() -> argparse.ArgumentParser:
                    help="say whether a derivation is due and why, and for a method that shows one "
                         "(gutenberg-editions) what it would change per tier; write nothing")
     p.set_defaults(fn=cmd_annotations_derive)
+    p = averbs.add_parser("claims", help="the claims the latest snapshot holds, one per line, pinned as its "
+                                         "records hold them: a claims file `create annotations` reads (a "
+                                         "re-created target's annotations collection is created from it)")
+    root_arg(p); p.add_argument("collection")
+    p.add_argument("--out", required=True, metavar="FILE", help="where the claims file is written")
+    p.set_defaults(fn=cmd_annotations_claims)
     p = averbs.add_parser("index", help="build the claim index on disk of a LARGE annotations collection's "
                                         "current snapshot (more than 250,000 claims): searched in place, "
                                         "never loaded into the web's memory. create, update and the worker "
@@ -7586,6 +7811,17 @@ def build_parser() -> argparse.ArgumentParser:
                    help="the snapshot the edges are written for (default: the one `snapshot create` takes)")
     p.set_defaults(fn=cmd_records_relations)
 
+    p = rverbs.add_parser("carry", help="a re-created collection's parts from its predecessor's snapshot, each "
+                                        "line's origin rewritten by the plugin, every other byte taken; then "
+                                        "its first snapshot (RULE 1; 02 §2.4 A1c)")
+    root_arg(p); p.add_argument("collection", help="the re-created collection (the target)")
+    p.add_argument("--from", dest="from_ref", required=True, metavar="COLLECTION",
+                   help="the predecessor whose latest snapshot's parts are carried")
+    p.add_argument("--workers", type=int, default=None,
+                   help="parts in parallel (default: the node profile's processes)")
+    p.add_argument("--dry-run", action="store_true", help="check and size it; write nothing")
+    p.set_defaults(fn=cmd_records_carry)
+
     p = rverbs.add_parser("relocate", help="every record's origin written again from the manifest by the "
                                            "build's own function; the parts that change rewritten by the "
                                            "build's writer (RULE 1; refused while a snapshot lists them)")
@@ -7633,6 +7869,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--snapshot", help="which snapshot (default: the latest)")
     p.add_argument("--live", metavar="DIR",
                    help="with --seal: live mode — the sealed files under DIR re-validated now (03 §3.7)")
+    p.add_argument("--shards", nargs="+", metavar="SLICE/NNNNN",
+                   help="run every check on these parts alone, in place of the seeded sample "
+                        "(a slice as the snapshot names it, e.g. lang=en/pages=12M/00042)")
     p.add_argument("--json", action="store_true")
     p.set_defaults(fn=cmd_records_check)
 
@@ -8081,6 +8320,12 @@ def build_parser() -> argparse.ArgumentParser:
     root_arg(p); p.add_argument("collection")
     p.add_argument("--apply", action="store_true", help="write the marks now, under the collection's lock")
     p.set_defaults(fn=cmd_dev_embed_select)
+    p = dverbs.add_parser("wikipedia-coverage", help="the pages of a wikipedia collection's run that no row of its "
+                                                     "manifest holds, per wiki, with a sample; read-only")
+    p.add_argument("collection", nargs="?", help="the wikipedia collection (default: the node's one)")
+    p.add_argument("--lang", help="one wiki only: en, de, …")
+    p.add_argument("--samples", type=int, default=20, help="missing pages listed per wiki (default 20)")
+    p.set_defaults(fn=cmd_dev_wikipedia_coverage)
     p = dverbs.add_parser("mark-embedded", help="documents whose every chunk has a vector here and whose "
                                                  "manifest row says embed_done = 0, marked (writes)")
     root_arg(p); p.add_argument("collection")
@@ -8232,6 +8477,17 @@ def build_parser() -> argparse.ArgumentParser:
                         "document — for a table too large to visit document by document")
     p.add_argument("--yes", action="store_true", help="do it; without it, the checks and the plan")
     p.set_defaults(fn=cmd_dev_carry)
+    p = dverbs.add_parser("pin-run", help="an unpublished collection whose dated-dump Codex names no run "
+                                          "given the Codex naming the run its records were read in, its "
+                                          "snapshot frozen again; the plan without --yes")
+    root_arg(p); p.add_argument("collection")
+    p.add_argument("--run", default=None, metavar="YYYYMMDD",
+                   help="the run its records were read in, where nothing held says it (else checked "
+                        "against what does)")
+    p.add_argument("--dry-run", action="store_true", help="the plan and its refusals; nothing written "
+                                                          "(also without --yes)")
+    p.add_argument("--yes", action="store_true", help="do it, under the collection's write lock")
+    p.set_defaults(fn=cmd_dev_pin_run)
     p = dverbs.add_parser("genesis", help="one-shot repairs of an archive's ledger; writes")
     gverbs = p.add_subparsers(dest="what", required=True)
     p = gverbs.add_parser("recheck", help="reopen final shards that still have documents the archive "

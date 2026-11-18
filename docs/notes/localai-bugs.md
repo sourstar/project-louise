@@ -1376,6 +1376,32 @@ MADLAD's test copy).
 **Card gates before it moves into the series** (staged/README.md; the brief
 §2 and §7).
 
+## Nice to have for the next round of backend patches
+
+Not planned, and no work until a round of backend patches is opened. Each
+entry says what it is, what it would cost, and what it replaces.
+
+### N1. Qwen3-TTS VoiceDesign: `/v1/audio/speech` honours `instructions`
+
+*Operator, 2026-11-17, through München: "Voice llama.cpp patch tell
+architecture to write it down in the nice to have for the next round of
+backend patches".*
+
+- **What.** Upstream's `server-chat.cpp:810` ignores the `instructions`
+  field of `/v1/audio/speech`. The patch would pass it into Qwen3-TTS's
+  VoiceDesign prompt template, so a voice described in words is spoken by
+  our own llama.cpp backend, the one engine every model runs on (the
+  operator's A, 2026-11-02).
+- **Cost.** About 1–3 days, by München's estimate, plus the card gates
+  every patch passes before it moves into the series (staged/README.md).
+- **The alternative, rejected.** Importing qwentts.cpp: about 30k lines with
+  a ggml of its own (München's review).
+- **What runs today.** LocalAI's gallery backend
+  `qwen3-tts-cpp-1.7b-voicedesign` (MIT, 2.2 GB, on the B70) honours
+  `instructions`, at about 2–6 s a sentence (München's tests, 2026-11-17).
+  The operator makes the voices himself; the test voice samples were
+  deleted.
+
 ## Requests
 
 Searched on 2026-10-02 and 2026-10-03: nobody has asked for R1, R2, R3 or R5.

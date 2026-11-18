@@ -242,7 +242,7 @@ def node(tmp_path, monkeypatch):
     a_wiki(corpus, "de", DE_PAGES, DE_PROPS)
     refs = [r for r in WIKIPEDIA.discover(DiscoverState(corpus_root=corpus)) if not r.error]
     assert len(refs) == len(EN_PAGES) + len(DE_PAGES)
-    wiki = SimpleNamespace(name="wikipedia", plugin="wikipedia",
+    wiki = SimpleNamespace(name="wikipedia", plugin="wikipedia", corpus_dir=corpus,
                            manifest_path=a_manifest(tmp_path / "wikipedia.db", refs))
     items = SimpleNamespace(name="wikidata", plugin="wikidata",
                             manifest_path=a_wikidata(tmp_path / "wikidata.db", ["Q480", "Q181598", "Q9"]))
@@ -326,17 +326,27 @@ def test_an_item_the_nodes_wikidata_lacks_is_not_taken_for_none(node):
 
 
 def test_a_title_in_a_language_not_read_yet_is_unknown_not_none(tmp_path):
+    """"No page" only on proof (2026-11-17): a title the manifest misses is
+    looked up in the run's own index — held by the run and not read here,
+    UNKNOWN; listed nowhere, NONE; no index to ask, UNKNOWN. Untitled rows no
+    longer decide it: the index does (tests/test_wikipedia_titles.py)."""
     from app.plugins.wikipedia import ids
     corpus = tmp_path / "c"
-    a_wiki(corpus, "en", EN_PAGES, EN_PROPS)
+    a_wiki(corpus, "en", EN_PAGES + [(7, "Nowhere yet", "Nowhere yet is a page.", None)], EN_PROPS)
     refs = [r for r in WIKIPEDIA.discover(DiscoverState(corpus_root=corpus)) if not r.error]
-    m = a_manifest(tmp_path / "m.db", refs, untitled=[ids.native_id_of("en", 99)])
-    got = wt.resolve(m, [("en", "Nowhere"), ("en", "Don_Quixote"), ("fr", "Nulle part")], log=lambda s: None)
-    assert got[("en", "Nowhere")].kind == wt.UNKNOWN and got[("en", "Nowhere")].code == wt.NOT_READ
+    m = a_manifest(tmp_path / "m.db", [r for r in refs if r.extra["title"] != "Nowhere yet"],
+                   untitled=[ids.native_id_of("en", 99)])
+    dumps = wt.run_dumps(corpus, None)
+    got = wt.resolve(m, [("en", "Nowhere_yet"), ("en", "Nowhere"), ("en", "Don_Quixote"), ("fr", "Nulle part")],
+                     dumps=dumps, log=lambda s: None)
+    assert got[("en", "Nowhere_yet")].kind == wt.UNKNOWN and got[("en", "Nowhere_yet")].code == wt.NOT_READ
+    assert (got[("en", "Nowhere")].kind, got[("en", "Nowhere")].code) == (wt.NONE, wt.NO_PAGE)
+    assert got[("en", "Nowhere")].run == "20261001", "the run whose index proves it"
     assert got[("en", "Don_Quixote")].item == "Q480"
     assert got[("fr", "Nulle part")].code == wt.NOT_HELD
     m2 = a_manifest(tmp_path / "m2.db", refs)
-    assert wt.resolve(m2, [("en", "Nowhere")], log=lambda s: None)[("en", "Nowhere")].code == wt.NO_PAGE
+    assert wt.resolve(m2, [("en", "Nowhere")], log=lambda s: None)[("en", "Nowhere")].code == wt.NO_DUMP, \
+        "no index to ask: never 'no page'"
     none_held = wt.resolve(tmp_path / "absent.db", [("fi", "Muu"), ("", "x")], log=lambda s: None)
     assert {r.code for r in none_held.values()} == {wt.NOT_HELD}, "no pass, no manifest opened"
 
@@ -363,6 +373,169 @@ def test_the_pass_on_the_pool_finds_what_it_finds_here(node, monkeypatch):
     monkeypatch.setattr(wt, "TASK_ROWS", 2)
     pooled = wt.index(node.wiki.manifest_path, log=lambda m: None)
     assert pooled.words.tolist() == here.words.tolist() and pooled.titled == here.titled
+
+
+# ---- "no page" only on proof; evidence older than the claim (the node's dry run, 2026-11-17) --------
+
+#: the books of the node's withdrawn stars, each star's centre its lowest number
+STARS = [a_book(3748, "en", [EN + "Journey_to_the_Center_of_the_Earth"], title="Voyage"),
+         a_book(4791, "en", [EN + "Journey_to_the_Centre_of_the_Earth"], title="Journey I"),
+         a_book(8983, "fr", [EN + "Journey_to_the_Centre_of_the_Earth"], title="Voyage II"),
+         a_book(775, "en", [EN + "The_Sleeper_Awakes"], title="Sleeper"),
+         a_book(12163, "en", [EN + "When_the_Sleeper_Wakes"], title="Sleeper I"),
+         a_book(51529, "de", [EN + "When_the_Sleeper_Wakes"], title="Sleeper II"),
+         a_book(14157, "en", [EN + "Bouvard_et_P%C3%A9cuchet"], title="Bouvard"),
+         a_book(25014, "en", [EN + "Bouvard_and_P%C3%A9cuchet"], title="Bouvard I"),
+         a_book(27479, "en", [EN + "Encyclop%C3%A6dia_Britannica_Eleventh_Edition"], title="EB"),
+         a_book(30685, "en", [EN + "Eleventh_edition_of_the_Encyclop%C3%A6dia_Britannica"], title="EB I"),
+         a_book(90000, "en", [EN + "Nowhere_at_all"], title="Nowhere")]
+STAR_CLAIMS = [("gutenberg:4791", "gutenberg:3748", "Q3", "Journey_to_the_Centre_of_the_Earth",
+                "Journey_to_the_Center_of_the_Earth", "en", "en"),
+               ("gutenberg:8983", "gutenberg:3748", "Q3", "Journey_to_the_Centre_of_the_Earth",
+                "Journey_to_the_Center_of_the_Earth", "fr", "en"),
+               ("gutenberg:12163", "gutenberg:775", "Q4", "When_the_Sleeper_Wakes", "The_Sleeper_Awakes", "en", "en"),
+               ("gutenberg:51529", "gutenberg:775", "Q4", "When_the_Sleeper_Wakes", "The_Sleeper_Awakes", "de", "en"),
+               ("gutenberg:25014", "gutenberg:14157", "Q1", "Bouvard_and_P%C3%A9cuchet", "Bouvard_et_P%C3%A9cuchet",
+                "en", "en"),
+               ("gutenberg:30685", "gutenberg:27479", "Q2", "Eleventh_edition_of_the_Encyclop%C3%A6dia_Britannica",
+                "Encyclop%C3%A6dia_Britannica_Eleventh_Edition", "en", "en")]
+#: the claims were made (their snapshot signed) before the node's run, 20260801:
+#: a "no page" from that run would be evidence against them
+BEFORE_THE_RUN = "2026-07-01T00:00:00Z"
+
+
+@pytest.fixture
+def stars(tmp_path, monkeypatch):
+    """The node's pattern: the wikipedia of tests/test_wikipedia_titles.py
+    (layer 1's 2024 titles, the run's redirects without manifest rows), and
+    the stars the tools made through the live API."""
+    from tests import test_wikipedia_titles as twt
+    root = tmp_path / "louise" / "collections"
+    root.mkdir(parents=True)
+    (tmp_path / "config" / "collections").mkdir(parents=True)
+    monkeypatch.setenv("LOUISE_ROOT", str(tmp_path / "louise"))
+    monkeypatch.setenv("CONFIG_DIR", str(tmp_path / "config"))
+    a_gutenberg(root, STARS)
+    corpus = tmp_path / "wikipedia"
+    twt.an_archive(corpus)
+    twt.a_run(corpus)
+    refs = [r for r in WIKIPEDIA.discover(DiscoverState(corpus_root=corpus, snapshot=twt.RUN)) if r.scope == "document"]
+    wiki = SimpleNamespace(name="wikipedia", plugin="wikipedia", corpus_dir=corpus, snapshot=twt.RUN,
+                           manifest_path=twt.a_manifest(tmp_path / "wikipedia.db", refs))
+    items = SimpleNamespace(name="wikidata", plugin="wikidata",
+                            manifest_path=a_wikidata(tmp_path / "wikidata.db", [f"Q{i}" for i in range(1, 9)]))
+    held_snapshot(root, "wikipedia")
+    held_snapshot(root, "wikidata", "2026-09")
+    monkeypatch.setattr(ge, "_held_of", lambda plugin: {"wikipedia": [wiki], "wikidata": [items]}.get(plugin, []))
+    lines = [ge._dumps(wd(s, o, q, EN + su, EN + ou, sl, ol)) for s, o, q, su, ou, sl, ol in STAR_CLAIMS]
+    ann.create(root, NAME, target_ref="gutenberg", from_snapshot=TARGET_SNAPSHOT,
+               claims=b"".join(line + b"\n" for line in lines), platform_image=PLATFORM, snapshot_id=TARGET_SNAPSHOT,
+               key=KEY, now=BEFORE_THE_RUN, nonce="0d" * 16, annotator=ANNOTATOR, log=lambda m: None)
+    return SimpleNamespace(root=root, wiki=wiki, lines=lines, corpus=corpus, run=twt.RUN)
+
+
+def test_the_journey_sleeper_and_moved_titles_keep_their_claims(stars):
+    """The eight Journey books and the two Sleeper books through enwiki
+    redirects the manifest holds no row for; Bouvard and the Britannica
+    through titles layer 1 holds under the archive's 2024 ones: every claim
+    kept as it stands, none withdrawn, none re-centred."""
+    d = ge.derive(stars.root, NAME, "gutenberg", log=lambda m: None)
+    shown = ge.report(d)
+    t = shown["tiers"][ge.T_WIKIDATA]
+    assert (t["kept_identical"], t["withdrawn"], t["added"], t["changed"]) == (6, 0, 0, 0), t
+    assert sorted(d.bytes().splitlines()) == sorted(stars.lines), "byte for byte (written in the items' order)"
+    r = d.resolution
+    assert r["runs"] == [stars.run] and r["redirects_followed"] == 4 and r["found_by_page_id"] == 4, \
+        "Journey, Sleeper, and the two old titles: redirects of the run; the four Bouvard and Britannica titles " \
+        "reach pages layer 1 holds under other titles"
+    assert r["by_reason"] == {"none: no page": 1}
+    assert r["no_page_titles"] == [{"wiki": "en", "title": "Nowhere at all", "books": ["gutenberg:90000"]}], \
+        "every 'no page' listed, title by title, with its books"
+    assert {(x["title"], x["manifest_title"]) for x in r["by_page_id_titles"]} == {
+        ("Bouvard and Pécuchet", "Bouvard et Pécuchet"), ("Bouvard et Pécuchet", "Bouvard et Pécuchet"),
+        ("Eleventh edition of the Encyclopædia Britannica", "Encyclopædia Britannica Eleventh Edition"),
+        ("Encyclopædia Britannica Eleventh Edition", "Encyclopædia Britannica Eleventh Edition")}
+    assert not r["books"].get(ge.OLDER_NONE) and not r["books"].get(ge.OLDER_ITEM), \
+        "the run is newer than the claims: each kept on its own answer"
+
+
+def test_without_the_runs_dump_the_claims_are_kept_and_nothing_is_no_page(stars):
+    wt.index_path(wt.run_dumps(stars.corpus, stars.run)["en"]).unlink()
+    d = ge.derive(stars.root, NAME, "gutenberg", log=lambda m: None)
+    t = ge.report(d)["tiers"][ge.T_WIKIDATA]
+    assert (t["kept_identical"], t["withdrawn"]) == (6, 0)
+    assert "none: no page" not in d.resolution["by_reason"] and d.resolution["by_reason"]["unknown: no dump to tell"] == 5
+
+
+def test_a_none_from_a_run_older_than_the_claim_keeps_it(node):
+    """Orphan names no item in the node's run (20261001). Claims signed
+    2026-09-08: the run is newer, the claim withdrawn (the dry run's test).
+    The same claims signed 2026-10-15: the run predates them, its "no item"
+    is no evidence, the claim kept."""
+    late = "2026-10-15T00:00:00Z"
+    ann.create(node.root, "late-editions", target_ref="gutenberg", from_snapshot=TARGET_SNAPSHOT,
+               claims=b"".join(line + b"\n" for line in node.lines), platform_image=PLATFORM,
+               snapshot_id=TARGET_SNAPSHOT, key=KEY, now=late, nonce="0c" * 16, annotator=ANNOTATOR, log=lambda m: None)
+    _, held = ge.held_claims(node.root, "late-editions")
+    assert set(ge.claim_times(node.root, "late-editions", [h.uid for h in held]).values()) == {late}
+    _, by = derived(node)
+    assert (ge.T_WIKIDATA, "gutenberg:8000", "gutenberg:1532") not in by, "newer run: withdrawn"
+    late_d = ge.derive(node.root, "late-editions", "gutenberg", log=lambda m: None)
+    kept = {(c["subject"], c["object"]) for t, c, _ in late_d.lines if t == ge.T_WIKIDATA}
+    assert ("gutenberg:8000", "gutenberg:1532") in kept
+    assert late_d.resolution["books"][ge.OLDER_NONE] == 1
+    assert ge.report(late_d)["tiers"][ge.T_WIKIDATA]["withdrawn"] == 0
+
+
+def test_an_older_runs_other_item_keeps_the_newer_claim(stars):
+    """An older run never overrides a newer claim, in either direction: the
+    run names Q1 for both Bouvard links, a claim made after it says Q77 —
+    kept, Q77, through its URLs. The same claim made before the run: the run
+    is the evidence, the claim re-made with Q1."""
+    line = ge._dumps(wd("gutenberg:25014", "gutenberg:14157", "Q77", EN + "Bouvard_and_P%C3%A9cuchet",
+                        EN + "Bouvard_et_P%C3%A9cuchet", "en", "en"))
+    for name, when, nonce in (("after-the-run", "2026-10-15T00:00:00Z", "0b"), ("before-the-run", BEFORE_THE_RUN, "0a")):
+        ann.create(stars.root, name, target_ref="gutenberg", from_snapshot=TARGET_SNAPSHOT, claims=line + b"\n",
+                   platform_image=PLATFORM, snapshot_id=TARGET_SNAPSHOT, key=KEY, now=when, nonce=nonce * 16,
+                   annotator=ANNOTATOR, log=lambda m: None)
+    after = ge.derive(stars.root, "after-the-run", "gutenberg", log=lambda m: None)
+    items = {(c["subject"], c["object"]): c["evidence"]["wikidata"] for t, c, _ in after.lines if t == ge.T_WIKIDATA}
+    assert items[("gutenberg:25014", "gutenberg:14157")] == "Q77" and line in after.bytes().splitlines()
+    assert after.resolution["books"][ge.OLDER_ITEM] == 2 and not after.resolution["books"].get(ge.OLDER_NONE)
+    assert ge.report(after)["tiers"][ge.T_WIKIDATA]["withdrawn"] == 0
+    before = ge.derive(stars.root, "before-the-run", "gutenberg", log=lambda m: None)
+    items = {(c["subject"], c["object"]): c["evidence"]["wikidata"] for t, c, _ in before.lines if t == ge.T_WIKIDATA}
+    assert items[("gutenberg:25014", "gutenberg:14157")] == "Q1" and not before.resolution["books"].get(ge.OLDER_ITEM)
+
+
+def test_a_claim_is_dated_by_the_first_snapshot_that_holds_it(node):
+    """Kept through an update, a claim keeps its first snapshot's time; one
+    the update adds takes the update's."""
+    collection_file.set_values(NAME, {"method": METHOD})
+    am.derive(node.root, NAME, METHOD, key=KEY, now="2026-11-17T12:00:00Z", clock=NOVEMBER, log=lambda m: None)
+    _, held = ge.held_claims(node.root, NAME)
+    times = ge.claim_times(node.root, NAME, [h.uid for h in held])
+    by_subject = {h.claim["subject"]: times[h.uid] for h in held if h.tier == ge.T_WIKIDATA}
+    assert by_subject == {"gutenberg:2000": NOW, "gutenberg:5903": NOW, "gutenberg:3000": "2026-11-17T12:00:00Z"}
+    assert ge.made_after([NOW], "20260908") and not ge.made_after([NOW], "20260909")
+    assert ge.made_after([None], "20991231") and ge.made_after([NOW], None), "unknown: no evidence"
+
+
+def test_a_star_keeps_its_centre_while_its_membership_does():
+    """The centre is the lowest ebook number among the books naming the item
+    and no other: a function of the membership alone, in any order. A member
+    that leaves takes its own claim only; the centre leaving re-centres the
+    star, and every claim of it is new — what 83 withdrawn against 19 added
+    on the node was."""
+    books = [{"uid": f"gutenberg:{n}", "lang": "en", "wiki": [EN + "X"]} for n in (3748, 4791, 8983)]
+
+    def one(b):
+        return {"Q3": b["wiki"][0]}
+    a = ge.wikidata_claims(books, one)
+    assert ge.wikidata_claims(list(reversed(books)), one) == a and {c["object"] for c in a} == {"gutenberg:3748"}
+    assert ge.wikidata_claims(books[:2], one) == a[:1], "a member leaves: the others' claims stand"
+    assert [(c["subject"], c["object"]) for c in ge.wikidata_claims(books[1:], one)] == [
+        ("gutenberg:8983", "gutenberg:4791")], "the centre leaves: re-centred on the lowest left"
 
 
 # ---- the other tiers, and what is carried -------------------------------------------
@@ -624,3 +797,50 @@ def test_a_book_is_read_as_the_measurement_wrote_it(monkeypatch, capsys):
         mine = ge.book_of(r)
         assert {k: m[k] for k in keys if k in m} == mine
     assert ge.book_of(long)["wiki"] == [EN + "Hamlet", EN + "Ham(let)"] and len(ge.book_of(long)["title"]) == 200
+
+
+def test_a_withdrawn_claim_says_whether_its_books_are_still_one_work():
+    """München's dry run, 2026-11-17: 11 same-title and 3 Wikidata claims
+    withdrawn, and whether each pair was lost or is joined another way could
+    not be read off the report. Now each withdrawn work claim says it."""
+    def claim(s, o, method):
+        return {"type": "same-work", "subject": f"gutenberg:{s}", "object": f"gutenberg:{o}", "method": method}
+    titles = dict(gutenberg_titles.METHOD)
+    held = [ge.Held(claim(2, 1, titles), 0, None, ge.T_TITLES),      # volumes, by title
+            ge.Held(claim(4, 3, ge.WIKIDATA), 1, None, ge.T_WIKIDATA)]
+    made = [claim(1, 9, ge.WIKIDATA), claim(2, 9, ge.WIKIDATA)]       # now one Wikidata star: 1, 2 and 9
+    d = ge.Derivation([(ge.T_WIKIDATA, c, ge._dumps(c)) for c in made], held,
+                      {ge.T_WIKIDATA: True, ge.T_TITLES: True, ge.T_STAGE: False}, {},
+                      frozenset(f"gutenberg:{n}" for n in (1, 2, 3, 4, 9)), {})
+    tiers = ge.report(d)["tiers"]
+    t = tiers[ge.T_TITLES]
+    assert t["withdrawn"] == 1 and t["withdrawn_still_one_work"] == 1
+    assert t["examples"]["withdrawn"][0]["now"] == "still one work through the claims made now"
+    w = tiers[ge.T_WIKIDATA]
+    assert w["withdrawn"] == 1 and "withdrawn_still_one_work" not in w
+    apart = w["examples"]["withdrawn"][0]
+    assert apart["now"] == "apart: no claim made now joins the two"
+    assert apart["ends"]["gutenberg:4"] == {"why": "not among the books the wikidata tier read"}
+
+
+def test_a_pair_that_comes_apart_shows_each_books_answers():
+    """The one "apart" of München's second dry run (gutenberg:15371 and
+    5612, Q8258): each end shows its URLs, the node's answer to each and
+    why the book is or is not in a star."""
+    c = {"type": "same-work", "subject": "gutenberg:15371", "object": "gutenberg:5612", "method": ge.WIKIDATA}
+    books = {"gutenberg:15371": {"urls": [{"url": "https://fr.wikipedia.org/wiki/Les_Mille_et_Une_Nuits",
+                                           "answer": "item", "item": "Q8258", "code": ""}],
+                                 "named": ["Q8258"], "undetermined": False},
+             "gutenberg:5612": {"urls": [{"url": "https://en.wikipedia.org/wiki/One_Thousand_and_One_Nights",
+                                          "answer": "item", "item": "Q8258", "code": ""},
+                                         {"url": "https://en.wikipedia.org/wiki/Richard_Francis_Burton",
+                                          "answer": "item", "item": "Q193981", "code": ""}],
+                                "named": ["Q193981", "Q8258"], "undetermined": False}}
+    d = ge.Derivation([], [ge.Held(c, 0, None, ge.T_WIKIDATA)],
+                      {ge.T_WIKIDATA: True, ge.T_TITLES: False, ge.T_STAGE: False}, {},
+                      frozenset(books), {}, {}, books)
+    ex = ge.report(d)["tiers"][ge.T_WIKIDATA]["examples"]["withdrawn"][0]
+    assert ex["ends"]["gutenberg:15371"]["why"] == "names Q8258"
+    assert ex["ends"]["gutenberg:5612"]["why"] == ("names several items (Q193981, Q8258): an anthology, "
+                                                  "no claim through it")
+    assert len(ex["ends"]["gutenberg:5612"]["urls"]) == 2

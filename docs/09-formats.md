@@ -687,7 +687,7 @@ the chain, and never ahead of the period open now.
 | `collection_id` | id | yes | the Codex this snapshot applies |
 | `snapshot_id` | `YYYY-MM` or `YYYY-Www` | yes | by the cadence, below |
 | `previous` | id or null | yes | the hash of the snapshot before; `null` on a root's first; on a daughter's first, the hash of the snapshot named by the Codex's `continues_through` |
-| `origin_run` | string | no | for a dated-dump origin, the run this snapshot's records were built from (Wikimedia's `20261101`): the last run before the cutoff (02 §2.2). Absent for other origins, and on snapshots made before the field: their run is the Codex's `files` (*amended 2026-11-17*, operator: B) |
+| `origin_run` | string | no | for a dated-dump origin, the run this snapshot's records were built from (Wikimedia's `20261101`): the last run before the cutoff (02 §2.2) that carries the collection's files, or, while that run is not complete, a newer one that completes first — never an older one (*amended 2026-11-17*, operator: "if the current dump fails, don't use an old dump"; docs/notes/collection-updates.md §6). Absent for other origins, and on snapshots made before the field: their run is the Codex's `files` (*amended 2026-11-17*, operator: B) |
 | `shards` | list of part | yes | every record part the snapshot consists of, sorted by (`slice` bytes, `n`); the key keeps the old word |
 | `relations` | list of relation part | yes | the relations parts (§9.14), same order; `[]` when the collection has none |
 | `figures` | list of figures part | yes | the figures containers (§9.5), same order; `[]` when the collection carries no plates — which is every collection whose Codex has `record_line` 1 |
@@ -843,9 +843,59 @@ fetchable before an acknowledgement (04 §4.4).
 | `sections` | list of `[heading, text]` | yes | the cleaned text in order (06 §6.1): UTF-8, NFC, LF newlines, no trailing whitespace on any line; `[]` on a pointer record |
 | `figures` | list of figure | `record_line` 2 only | the plates this document carries, in `seq` order; `[]` when it has none, and `[]` on a pointer record. An entry NAMES a figure and never holds it — the bytes are the member `figures-<slice>` (§9.16), which a peer may hold or not. Absent entirely where `record_line` is 1 |
 | `extra` | object | yes | plugin-defined, fixed keys; **everything the origin asserts about the entity that the keys above have no home for** (01 promise 9, 06 §6.4) — ids, publication details, classifications, keywords, an author's identifiers. Its keys are fixed for the collection's LIFE, so a field omitted here is not deferred: adding one bumps the parser and mints a new `collection_id` (§9.3, 02 §2.7). The deposit plugin's are 06 §6.7's: a collection answers at the parser version its Codex names, so one created before a key was added keeps the shape it had (amended 2026-10-25, operator: "Keep all", which added a source page's `html_*`). `origin_url` on a red-class source; `in_force` on a legal source; `seal` on a certified source whose origin file carries a seal, holding that file's `file_hash` (§9.15); `reason` never (a reason belongs to the tombstone) |
-| `origin` | string | yes | the locator of this record's own origin bytes: their path relative to the origin base or their URL — a URL into a credited archive where that archive supplies the document's text (06 §6.4) — and where the document is a member of a container the path or URL followed by `#` and the plugin's member index (06 §6.4); never an absolute local path |
+| `origin` | string | yes | the locator of this record's own origin bytes: their path relative to the origin base or their URL — a URL into a credited archive where that archive supplies the document's text (06 §6.4) — and where the document is a member of a container the path or URL followed by `#` and the plugin's member index (06 §6.4); or, for an origin of dated dumps, the unit named by the ORIGIN'S OWN STABLE KEY and resolved in the snapshot's run through the origin's own index (below, *amended 2026-11-17*, operator: "Choice B"); never an absolute local path |
 | `content_hash` | BLAKE2b-128 | yes | below |
 | `origin_hash` | BLAKE2b-128 | yes | BLAKE2b-128 of this document's own origin bytes, the ones `origin` locates — one record, one hash, whatever the origin ships them in (02 §2.3); a record without one is refused at build |
+
+**An origin named by the origin's own key** (*amended 2026-11-17*,
+operator: "Choice B"; docs/notes/collection-updates.md §6). An origin of
+dated dumps publishes the same documents again in every run, at other
+places in other files. A record whose `origin` named the run's file and
+the place in it changed at every run, and its part with it, whatever the
+document did. Such an origin's record may instead name each unit by a key
+the origin itself keeps across runs. The path is the run-free name of the
+file the unit is read from, and the member after `#` is the key. The unit
+is RESOLVED IN THE RUN THE SNAPSHOT NAMES — the snapshot's `origin_run`
+(§9.4), else the Codex's `files` run (§9.17) — through the origin's own
+index of that run, or, where the origin publishes none, an index built
+from the run in one pass (06 §6.4). `origin_hash` is unchanged: the hash of
+the unit's bytes in that run. So the line of an unchanged document is
+byte-identical from run to run, and a verifier needs the run, which the
+snapshot states. The plugin's parser version says which form its records
+carry; a collection keeps the form its Codex's parser writes.
+
+Wikipedia's form, from parser 6. Each piece is
+`<wiki>/pages-articles-multistream.xml.bz2#<page id>` for the page's own
+bytes and `<wiki>/page_props.sql.gz#<page id>` for its rows of the run's
+page_props table, joined by `|` as before. `<wiki>` is the dump's name of
+the wiki (`itwiki`). In run `R` a piece is read from Wikimedia's
+`<wiki>/<R>/<wiki>-<R>-<file>` under the origin's base. The article's
+stream is the run's multistream index line `offset:page_id:title` whose
+second field is the page id; the stream runs to the next distinct offset,
+or to the end of the file. The rows are the run's `pp_page` rows of the
+page. A piece of the credited archive (a row range of a parquet at a pinned
+revision) is stable already and keeps its form. The form is unambiguous
+per wiki, because a page id is unique within one wiki only and the first
+segment names it. It is unambiguous per unit, because the article and its
+rows are named by their two files and by the key both are keyed on. The
+page id is kept through a move, where the title is not. Parser 5's form,
+`<wiki>/<R>/<wiki>-<R>-pages-articles-multistream.xml.bz2#<start>::<end>`,
+has a run segment and a two-field member, so the two forms never collide,
+and both resolve.
+
+Wikidata's form, from parser 3 (*amended the same day*, operator: "Do the
+wikidata step as well"), is `wikidatawiki/entities/all.json.bz2#<entity
+id>` (`Q42`, `P31`). In run `R` it is read from Wikimedia's
+`wikidatawiki/entities/<R>/wikidata-<R>-all.json.bz2`. The JSON dump has no
+index, so the line is found through the run's ENTITY TABLE, which the node
+builds in one pass and a verifier builds the same way. The table maps each
+entity of the run to its line's ordinal in dump order (06 §6.4, "a unit
+located by the origin's own key"). The entity id is the dump's own key and
+an entity keeps it for its life; its ordinal moves with every entity
+created or deleted before it. Parser 2's form,
+`wikidatawiki/entities/<R>/wikidata-<R>-all.json.bz2#<ordinal>`, has a run
+segment and a numeric member, so the two forms never collide, and both
+resolve.
 
 **content_hash** = BLAKE2b-128 of the canonical JSON of the array
 `[title, [[heading, text], …]]` — the title and the sections exactly as
@@ -1345,7 +1395,7 @@ run — *inconclusive* (03 §3.1) — produces no attestation.
 | `roots` | exact | `{failed: [part…]}` |
 | `records` | exact | `{records: n, failed: [uid…]}` — content and origin hashes present and, where the text is, reproduced |
 | `chunks` | exact | `{records: n, failed: [uid…]}` |
-| `records-vs-origin` | exact | `{records: n, compared: m, origin_units: k, origin_units_sampled: K, origin_bytes: b, origin_bytes_bound: B, failed: [uid…], moved: [uid…], origin: "reachable"}` — `records` the sampled parts hold, `compared` those of the `k` origin units read out of the `K` the sampled parts reach into, `b` bytes read within the bound `B` (03 §3.2); a failing entry names the first differing record; `moved` names records whose line differs in `origin_hash` alone, which do not fail the check (03 §3.2, amended 2026-10-07; a reader of an older detail treats it as absent); `origin_units_in_part: [{unit, weight, sampled, compared}…]` names each unit heavier than the bound and the seeded share of its sampled records compared (03 §3.2, amended 2026-11-01; absent when none) |
+| `records-vs-origin` | exact | `{records: n, compared: m, origin_units: k, origin_units_sampled: K, origin_bytes: b, origin_bytes_bound: B, failed: [uid…], moved: [uid…], origin: "reachable"}` — `records` the sampled parts hold, `compared` those of the `k` origin units read out of the `K` the sampled parts reach into, `b` bytes read within the bound `B` (03 §3.2); a failing entry names the first differing record; `moved` names records whose line differs in `origin_hash` alone, which do not fail the check (03 §3.2, amended 2026-10-07; a reader of an older detail treats it as absent); `origin_units_in_part: [{unit, weight, sampled, compared}…]` names each unit heavier than the bound and the seeded share of its sampled records compared (03 §3.2, amended 2026-11-01; absent when none). *Amended 2026-11-17 (03 §3.2):* a unit is what a verifier reads — a Range-readable origin's range (a multistream stream, an archive's row groups), else its files — `b` counts each piece several units share (a wiki's page_props and index, a parquet's footer) once, and a unit's `weight` counts its shared pieces; no key changes |
 | `image-equivalence` | exact | `{against: "reference-image", reference_image: id, records: n, compared: m, failed: [uid…], errored: k, reference_errored: j}` — `records` the reference re-parsed, `compared` those this image re-parsed, `failed` those whose line differs (03 §3.4, added 2026-10-07); never counted toward a trust level |
 | `vectors-sample` | statistical | `{chunks: n, passed: n, median: decimal, failed: [chunk id…], producers: [key…]}` — the producers whose bundles supplied the sampled vectors; two producers when the attestation compares duplicate bundles (04 §4.5) |
 | `calibration` | statistical | `{n: 16, passed: n, median: decimal}` |

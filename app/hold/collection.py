@@ -69,6 +69,12 @@ def default_name(root: Path, codex: Codex) -> str:
 def write(root: Path, codex: Codex, predecessor: Codex | None = None, *,
           name: str | None = None) -> Path:
     cx.validate(codex, predecessor)
+    # A CODEX WHOSE RECORDS NAME A KEYED UNIT NAMES THE RUN IT IS READ IN
+    # (09 §9.5, §9.17; München, 2026-11-17: wikidata's parser-3 Codex named
+    # none, and its snapshot could never be checked against the source).
+    # Every create, derive, continue and replace writes through here
+    from . import origin_run
+    origin_run.refuse_without_run(codex, "create")
     root.mkdir(parents=True, exist_ok=True)
     # Idempotence is by IDENTITY, not by name: writing a Codex this root
     # already holds is nothing to do, whatever it is called here. Only a
@@ -445,7 +451,8 @@ def create_from_recipe(root: Path, plugin: str, recipe: dict[str, Any], *,
                        space_version: int | None = None,
                        pairs: bytes | None = None,
                        calibration_from: Path | None = None,
-                       slicing_member: bytes | None = None) -> Codex:
+                       slicing_member: bytes | None = None,
+                       run: str | None = None) -> Codex:
     """`hold collection create <plugin> --recipe FILE` (06 §6.6, 07 §7.3).
 
     `calibration_from`: a held collection's SHARD whose document-side
@@ -455,6 +462,10 @@ def create_from_recipe(root: Path, plugin: str, recipe: dict[str, Any], *,
     `slicing_member`: the bytes of the map the recipe's slicing block names
     by sha256 (wikidata's family map, pack-format.md §2 amended
     2026-10-24), written as the SHARD member `slicing/<hex>.json`.
+
+    `run`: for a plugin whose origin publishes dated dumps, the run the
+    Codex names where the recipe's `origin.spec.files` name none (09 §9.17;
+    template.pin_dated) — `create --run`.
 
     `pairs`: the bytes of a PAIR space's calibration set — 512 title-and-
     abstract pairs drawn from the collection's records by
@@ -526,7 +537,7 @@ def create_from_recipe(root: Path, plugin: str, recipe: dict[str, Any], *,
     # are the same bytes every time (invariant 12), so refusing before them
     # loses nothing and embedding before refusing gains nothing.
     _dry_build(plugin, recipe, platform_image=platform_image, credits=credits,
-               space_version=space_version, needs_query=needs_query)
+               space_version=space_version, needs_query=needs_query, run=run)
 
     reused = (_reused_calibration(Path(calibration_from), recipe, set_id)
               if calibration_from is not None else None)
@@ -543,7 +554,7 @@ def create_from_recipe(root: Path, plugin: str, recipe: dict[str, Any], *,
 
     codex = template.from_recipe(plugin, recipe, platform_image=platform_image,
                                  calibration=(vectors_hash, envelope_hash, query_hash),
-                                 credits=credits, space_version=space_version)
+                                 credits=credits, space_version=space_version, run=run)
     created = create(root, codex, name=name)
     d = shard_dir_of(root, name_of(root, created.collection_id))
     write_calibration(d, codex, vectors, envelope, key=key, now=now,
@@ -622,17 +633,18 @@ _PLACEHOLDER = "sha256:" + "00" * 32
 
 
 def _dry_build(plugin: str, recipe: dict[str, Any], *, platform_image: str, credits: tuple,
-               space_version: int | None, needs_query: bool) -> None:
+               space_version: int | None, needs_query: bool, run: str | None = None) -> None:
     """The recipe's Codex with placeholder hashes, validated and read back
     from its own bytes — every refusal the real build would make, before
     an encoder is called. Returns nothing: the dry Codex names no reference
     and is not a collection."""
     dry_codex(plugin, recipe, platform_image=platform_image, credits=credits,
-              space_version=space_version, needs_query=needs_query)
+              space_version=space_version, needs_query=needs_query, run=run)
 
 
 def dry_codex(plugin: str, recipe: dict[str, Any], *, platform_image: str, credits: tuple = (),
-              space_version: int | None = None, needs_query: bool | None = None) -> Codex:
+              space_version: int | None = None, needs_query: bool | None = None,
+              run: str | None = None) -> Codex:
     """The Codex the recipe WOULD make, its calibration hashes placeholders,
     validated and read back from its own bytes: what its `space_id` and its
     engine are before anything is measured or made (`hold collection new`
@@ -647,7 +659,7 @@ def dry_codex(plugin: str, recipe: dict[str, Any], *, platform_image: str, credi
     dry = template.from_recipe(plugin, recipe, platform_image=platform_image,
                                calibration=(_PLACEHOLDER, _PLACEHOLDER,
                                             _PLACEHOLDER if needs_query else None),
-                               credits=credits, space_version=space_version)
+                               credits=credits, space_version=space_version, run=run)
     cx.validate(dry)
     return cx.from_dict(json.loads(dry.canonical()))
 

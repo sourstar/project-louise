@@ -449,11 +449,17 @@ def _wikidata_files(snapshot: str) -> tuple[RemoteFile, ...]:
 
 
 def wikidata_snapshots(timeout: float = 30.0, *, probe: int = 6) -> tuple[str, ...]:
-    """The dump dates that hold a FULL JSON dump, newest first. Not every
-    dated directory does: 20261014 held lexemes and the truthy RDF, 20261016
-    lexemes only (München, 2026-10-19), so the newest directory is not the
-    newest dump — each of the newest `probe` directories is listed and kept
-    only where `wikidata-<date>-all.json.bz2` is among its files."""
+    """The dump dates that hold, or are WRITING, a full JSON dump, newest
+    first. Not every dated directory does: 20261014 held lexemes and the
+    truthy RDF, 20261016 lexemes only (München, 2026-10-19), so the newest
+    directory is not the newest dump — each of the newest `probe` directories
+    is listed and kept where `wikidata-<date>-all.json.bz2` or `.gz` is among
+    its files, or where none of the run's files is there yet (a run just
+    begun, which may be writing it). A directory listing the run's files and
+    no full dump is dropped. Kept, a run still being written is WAITED for by the
+    update (its md5sums say when it is complete, app/plugins/wikidata/
+    completion.py), never passed over for the one before it (operator,
+    2026-11-17: "if the current dump fails, don't use an old dump")."""
     import httpx
 
     from . import budget
@@ -469,7 +475,8 @@ def wikidata_snapshots(timeout: float = 30.0, *, probe: int = 6) -> tuple[str, .
             budget.acquire_bytes(len(listing.content))
             if listing.status_code != 200:
                 continue
-            if f"wikidata-{date}-all.json.bz2" in listing.text:
+            full = any(f"wikidata-{date}-all.json.{z}" in listing.text for z in ("bz2", "gz"))
+            if full or f"wikidata-{date}-" not in listing.text:
                 out.append(date)
     return tuple(out)
 

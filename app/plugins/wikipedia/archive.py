@@ -17,6 +17,7 @@ straddle a shard boundary.
 """
 import hashlib
 import os
+import shutil
 import threading
 from collections import OrderedDict
 from pathlib import Path
@@ -43,6 +44,9 @@ _layouts: OrderedDict = OrderedDict()     # path -> (mtime, [row group start off
 #: then 256 MiB of its own
 _groups = read_cache("wikipedia archive")
 _MAX_LAYOUTS = 64
+#: the columns a fetch reads of a row group — never the vectors' column; what a
+#: verifier reads by Range is these columns' chunks (weigh.py)
+READ_COLUMNS = ("id", "url", "title", "text")
 
 
 def _layout(path: str) -> tuple[list[int], int]:
@@ -73,7 +77,7 @@ def _group_table(path: str, g: int):
     hit = _groups.get(key)
     if hit is not None and hit[0] == mtime:
         return hit[1]
-    table = pq.ParquetFile(path).read_row_group(g, columns=["id", "url", "title", "text"])
+    table = pq.ParquetFile(path).read_row_group(g, columns=list(READ_COLUMNS))
     _groups.put(key, (mtime, table), table.nbytes)
     return table
 
@@ -158,34 +162,69 @@ def split_locator(locator: str) -> list[tuple[str, int, int]]:
     return out
 
 
-def covered_articles(root: Path, state_dir: Path | None):
+#: the per-shard cache of the archive's article ids, under a collection's state
+IDS_DIR = "wikipedia-archive-ids"
+#: a cache file keyed on the shard's PHYSICAL identity (its resolved path)
+PHYSICAL = "p-"
+
+
+def _ids_tag(path: str, st) -> str:
+    return hashlib.blake2b(f"{path}:{st.st_mtime_ns}:{st.st_size}".encode(), digest_size=16).hexdigest()
+
+
+def ids_names(shard: Path, st) -> tuple[str, str]:
+    """`(the cache file by the shard's physical identity, the one by the path
+    as walked)` — the second is how it was keyed until 2026-11-17. The walked
+    path runs through `<root>/<name>/origin/`, so it held the COLLECTION'S
+    NAME: a re-created collection under `<name>.next` reading the very same
+    shards missed every entry, and the hand copy München made worked only once
+    the rename gave the old name back (CLAUDE.md: caches key on physical
+    identity, never on a name)."""
+    return (f"{PHYSICAL}{_ids_tag(os.path.realpath(shard), st)}.npy", f"{_ids_tag(str(shard), st)}.npy")
+
+
+def _load_ids(path: Path):
+    import numpy as np
+    if not path.is_file():
+        return None
+    try:
+        return np.load(path)
+    except (OSError, ValueError):   # a file another writer left half-written: read again
+        return None
+
+
+def covered_articles(root: Path, state_dir: Path | None, *, write: bool = True):
     """`{lang: sorted unique page ids}` — every article the archive holds.
 
     What the dump pass consults so a page the archive covers is read from
     the archive ONLY, never minted twice under two ids. Read from the `id`
-    column alone, and cached per shard by (path, mtime_ns, size) under
-    `state_dir`, so a scan with nothing new reads no parquet. Independent
-    of the scan cursor on purpose: a shard the cursor skips is still
-    coverage. An unreadable shard covers nothing (its discovery reports
-    it)."""
+    column alone, and cached per shard by its physical identity (resolved
+    path, mtime_ns, size) under `state_dir`, so a scan with nothing new reads
+    no parquet. Independent of the scan cursor on purpose: a shard the
+    cursor skips is still coverage. An unreadable shard covers nothing (its
+    discovery reports it). `write=False`: the cache is read where it is and
+    never written (a read-only check, app/wikipedia_coverage.py). An entry
+    under the walked path's key (before 2026-11-17) is read and, writing,
+    moved to its physical key: nothing is read again for the change."""
     import numpy as np
     import pyarrow.parquet as pq
-    cache = state_dir / "wikipedia-archive-ids" if state_dir is not None else None
+    cache = state_dir / IDS_DIR if state_dir is not None else None
     parts: dict[str, list] = {}
     for shard in shards(root):
         lang = lang_of_shard(shard.relative_to(root))
         if lang is None:
             continue
         st = shard.stat()
-        tag = hashlib.blake2b(f"{shard}:{st.st_mtime_ns}:{st.st_size}".encode(),
-                              digest_size=16).hexdigest()
-        path = cache / f"{tag}.npy" if cache is not None else None
-        got = None
-        if path is not None and path.is_file():
-            try:
-                got = np.load(path)
-            except (OSError, ValueError):   # a file another writer left half-written: read again
-                got = None
+        name, legacy = ids_names(shard, st)
+        path = cache / name if cache is not None else None
+        got = _load_ids(path) if path is not None else None
+        if got is None and cache is not None:
+            got = _load_ids(cache / legacy)
+            if got is not None and write:
+                try:
+                    os.replace(cache / legacy, path)
+                except OSError:
+                    pass
         if got is None:
             try:
                 col = pq.read_table(shard, columns=["id"]).column(0).to_pylist()
@@ -198,7 +237,7 @@ def covered_articles(root: Path, state_dir: Path | None):
                 except (ValueError, AttributeError):
                     continue
             got = np.unique(np.asarray(pages, dtype=np.int64))
-            if path is not None:
+            if path is not None and write:
                 # whole or absent: discover may run in two processes at once
                 cache.mkdir(parents=True, exist_ok=True)
                 tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
@@ -207,6 +246,43 @@ def covered_articles(root: Path, state_dir: Path | None):
                 os.replace(tmp, path)
         parts.setdefault(lang, []).append(got)
     return {lang: np.unique(np.concatenate(p)) for lang, p in parts.items()}
+
+
+def carry_ids(root: Path, src_state: Path, dst_state: Path, *, apply: bool) -> dict:
+    """THE ARCHIVE'S IDS CACHE, CARRIED to a successor reading the same shards
+    (`hold/carry.py`'s derived state; München, 2026-11-17, copied it by hand).
+    An entry is carried when it is the cache of a shard under `root` as that
+    shard is NOW — its physical identity, mtime and size, which is exactly
+    what the target's own scan will look it up by — under its physical key,
+    an entry kept under the walked path's key renamed to it. An entry of a
+    shard that changed or went is not carried. Returns the counts."""
+    src, dst = Path(src_state) / IDS_DIR, Path(dst_state) / IDS_DIR
+    out = {"carried": 0, "present": 0, "stale": 0, "bytes": 0}
+    if not src.is_dir():
+        return out
+    held = {p.name for p in src.glob("*.npy")}
+    used: set[str] = set()
+    for shard in shards(root):
+        if lang_of_shard(shard.relative_to(root)) is None:
+            continue
+        st = shard.stat()
+        name, legacy = ids_names(shard, st)
+        have = name if name in held else legacy if legacy in held else None
+        if have is None:
+            continue
+        used.add(have)
+        if (dst / name).is_file():
+            out["present"] += 1
+            continue
+        out["carried"] += 1
+        out["bytes"] += (src / have).stat().st_size
+        if apply:
+            dst.mkdir(parents=True, exist_ok=True)
+            tmp = dst / f".{name}.{os.getpid()}.tmp"
+            shutil.copyfile(src / have, tmp)
+            os.replace(tmp, dst / name)
+    out["stale"] = len(held - used)
+    return out
 
 
 def covers(covered: dict, lang: str, page_id: int) -> bool:

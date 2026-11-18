@@ -24,11 +24,13 @@ snapshot, unless it must wait — said in `woken.json` (`waiting`, `says`):
 
   - a source it declares is itself an annotations collection whose own wake
     is pending: it runs after it (the order, transitively);
-  - a source it declares has an update by cadence IN FLIGHT, or about to
-    begin — its cutoff passed, the pass would act on it, its marker not
-    written yet, for at most 24 h (`cascade.update_in_flight`): it does not
-    burn its one snapshot of the period on the first source while another
-    is mid-update;
+  - a source it declares has an update by cadence and holds no published
+    snapshot of its current period (`cascade.update_in_flight`: the update
+    in flight, failed and retried, waiting for a human, refused at an old
+    parser, or not begun) — with NO time cap (operator, 2026-11-17:
+    dependents never derive from an old dump; it replaced the 24 h wait for
+    an update to begin): it does not burn its one snapshot of the period on
+    the first source while another is behind;
   - its period's snapshot is already written (one snapshot a period, 09 §9.4,
     `annotations.update_snapshot_id`): "one snapshot a period: runs when
     <next period> opens".

@@ -14,12 +14,18 @@ THE STEPS, each committed and only then recorded in the marker
 (`state/update.json`, app/hold/update_state.py — invariant 2):
 
   due       the period after the newest snapshot's has closed (09 §9.4), and
-            the origin says the run its cutoff names — the last run before
-            00:00 on `update.day` in `origin.clock` (02 §2.2) — is complete
-            for every slice held
+            the origin says the CURRENT run is complete for every slice
+            held: the last run before 00:00 on `update.day` in
+            `origin.clock` (02 §2.2) that carries the collection's files and
+            is newer than the run it reads — waited for while incomplete,
+            never an older one, a newer one complete first taking its place
+            (`complete_run`; operator, 2026-11-17)
   fetch     every held slice's files of that run, through the acquisition
             engine: the one budget (invariant 5), the origin's etiquette, a
-            free-space check first, resumable at the byte
+            free-space check first, resumable at the byte; then each held to
+            the origin's own md5 and MENDED where it differs, never fetched
+            again whole where its parts can be told apart
+            (app/acquire/repair.py)
   run       the collection reads the new run (`moved`, the current run of
             app/hold/origin_run.py), and its scan re-points what is the same,
             re-opens what changed and withdraws what the run no longer holds
@@ -118,10 +124,9 @@ class Outcome:
 # what a collection's update is, read off its Codex and the node
 
 def hook_of(codex):
-    """The plugin's completion check (`update_completion`), or None."""
-    from app import collections as collections_mod
-    plugin = collections_mod.PLUGIN_REGISTRY.get(getattr(codex, "plugin", None))
-    return getattr(plugin, "update_completion", None)
+    """The plugin's completion check (`update_completion`) at the Codex's
+    parser, or None."""
+    return getattr(_plugin_at_codex(codex), "update_completion", None)
 
 
 def not_updated(codex) -> str | None:
@@ -141,16 +146,35 @@ def not_updated(codex) -> str | None:
     return None
 
 
-def origin_names_run(codex) -> bool:
-    """The plugin declares that each record's `origin` names the dated file
-    and byte range of its run (`origin_names_run`, wikipedia): a new run
-    re-issues every part. Until the operator decides the origin form
-    (collection-updates.md §6: A keep, B a page-id origin through the
-    multistream index, C an origin-only patch), the pass plans such a
-    collection (`--dry-run`) and never runs it."""
+def _plugin_at_codex(codex):
+    """The plugin parsing at the Codex's parser (`collections.plugin_at`):
+    what the collection's records were written by and are read with."""
     from app import collections as collections_mod
     plugin = collections_mod.PLUGIN_REGISTRY.get(getattr(codex, "plugin", None))
-    return bool(getattr(plugin, "origin_names_run", False))
+    version = getattr(getattr(codex, "parser", None), "version", None)
+    if plugin is None or version is None:
+        return plugin
+    return collections_mod.plugin_at(plugin, int(version)) or plugin
+
+
+def origin_names_run(codex) -> bool:
+    """The plugin, AT THE CODEX'S PARSER, declares that each record's
+    `origin` names the dated file and byte range of its run
+    (`origin_names_run`): a new run would re-issue every part. Wikipedia's
+    parser 5 does; its parser 6 names the page, resolved in the snapshot's
+    run through the origin's own index (operator, 2026-11-17, "Choice B";
+    collection-updates.md §6). The pass plans such a collection
+    (`--dry-run`) and never runs it: it is re-created at the parser that
+    names the page first."""
+    return bool(getattr(_plugin_at_codex(codex), "origin_names_run", False))
+
+
+def current_parser(codex) -> int | None:
+    """The plugin's own parser version, which a refused collection is
+    re-created at."""
+    from app import collections as collections_mod
+    plugin = collections_mod.PLUGIN_REGISTRY.get(getattr(codex, "plugin", None))
+    return int(plugin.PARSER_VERSION) if plugin is not None and hasattr(plugin, "PARSER_VERSION") else None
 
 
 def origin_form_wait(root, name: str, codex) -> str:
@@ -164,9 +188,11 @@ def origin_form_wait(root, name: str, codex) -> str:
         snap = None
     size = (f" ({name}: {len(snap.shards):,} parts, {sum(int(s.bytes) for s in snap.shards) / 2**30:.1f} GiB "
             f"to every peer)" if snap is not None else "")
+    now = current_parser(codex)
+    at = getattr(getattr(codex, "parser", None), "version", "?")
     return (f"not updated by this pass: every part would be re-issued{size} because each record's origin "
-            f"names the dated file and byte range; waiting on the operator's decision on the origin form "
-            f"(collection-updates.md)")
+            f"names the dated file and byte range (parser {at}); re-create at parser {now} first, whose "
+            f"origin names the page (collection-updates.md §6)")
 
 
 def held_slices(collection, spec) -> list[str]:
@@ -197,6 +223,93 @@ def next_period(root, name: str, codex) -> tuple[str, str, datetime] | None:
     cutoff = sn.cutoff_instant(nxt, cadence=codex.update.cadence, day=codex.update.day,
                                clock=codex.origin.clock)
     return sid, nxt, cutoff
+
+
+#: runs asked, newest first, before the pass waits: the current run (past the
+#: runs that never carry the collection's files, a hook's `skips`: wikidata's
+#: lexemes-only runs) and the newer ones that may supersede it
+RUNS_ASKED = 8
+#: when a run still being written is asked again (the keeper's beat, at night)
+ASKED_AGAIN = "asked again tonight"
+
+
+def runs_before(runs, cutoff: datetime) -> list[str]:
+    """Every run before the cutoff instant, newest first (`run_before`'s rule)."""
+    day = cutoff.strftime("%Y%m%d")
+    return sorted((str(r) for r in runs if origin_run.RUN_RE.match(str(r)) and str(r) < day), reverse=True)
+
+
+def complete_run(ctx: _Ctx, runs, cutoff: datetime, slices, *, held: str | None = None) -> tuple[str, list]:
+    """The run the update takes and its completion records, or `_Waiting`
+    (operator, 2026-11-17, verbatim: "if the current dump fails, don't use an
+    old dump (that should have already been integrated thus it's pointless);
+    retry gently to fetch it with the already agreed policy").
+
+    THE CURRENT RUN is the newest run begun before the cutoff (02 §2.2) that
+    carries, or is writing, the collection's files, and is newer than
+    `held`, the run the collection reads: a run not newer is already
+    integrated, and a run the hook says will never carry the files
+    (`skips`: wikidata's lexemes-only runs) is not a candidate. Complete, it
+    is taken. Incomplete, it is WAITED for and asked again at the keeper's
+    next beat of the night (the policy in place: the budget, the origin's
+    User-Agent, one request at a time) — never passed over, never for an
+    older run. A NEWER run (begun on the cutoff's day or after) that is
+    complete first supersedes it, since newer is never pointless (09 §9.4
+    `origin_run`, amended 2026-11-17). At most RUNS_ASKED runs are asked."""
+    day = cutoff.strftime("%Y%m%d")
+    ordered = sorted({str(r) for r in runs if origin_run.RUN_RE.match(str(r))}, reverse=True)
+    fresh = [r for r in ordered if held is None or r > str(held)]
+    before, after = [r for r in fresh if r < day], [r for r in fresh if r >= day]
+    skips = getattr(ctx.hook, "skips", None)
+    noun = getattr(ctx.hook, "noun", "run")
+    skipped: list[str] = []
+    asked = 0
+
+    def ask(run_: str):
+        recs = ctx.hook.records(run_, slices)
+        bodies = ctx.fetch_records(ctx.spec, recs)
+        if callable(skips):
+            why = [w for w in (skips(r, bodies.get(r.rel_path), now=ctx.now) for r in recs) if w]
+            if recs and len(why) == len(recs):
+                return recs, None, why[0]
+        return recs, [v for v in (ctx.hook.verdict(r, bodies.get(r.rel_path)) for r in recs) if v], None
+
+    current: tuple[str, list[str]] | None = None
+    for run_ in before:
+        if asked >= RUNS_ASKED:
+            break
+        asked += 1
+        recs, pending, skip = ask(run_)
+        if skip:
+            skipped.append(skip)
+            continue
+        if not pending:
+            if skipped:
+                ctx.log(f"passed over, never carrying the collection's files: {'; '.join(skipped)}")
+            return run_, recs
+        current = (run_, pending)
+        break
+    for run_ in after:
+        if asked >= RUNS_ASKED:
+            break
+        asked += 1
+        recs, pending, skip = ask(run_)
+        if skip or pending:
+            continue
+        ctx.log(f"{ctx.hook.origin}'s {run_} {noun} is complete first"
+                + (f" and supersedes {current[0]}, still not complete" if current else "")
+                + ": newer is never pointless")
+        return run_, recs
+    if current is not None:
+        run_, pending = current
+        raise _Waiting(f"waiting for {ctx.hook.origin}'s {run_} {noun}: " + "; ".join(pending[:4])
+                       + (f"; and {len(pending) - 4} more" if len(pending) > 4 else "") + f"; {ASKED_AGAIN}")
+    newer = f"newer than {held}, which the collection reads, " if held else ""
+    if skipped:
+        raise _Waiting(f"waiting for {ctx.hook.origin}'s next {noun}: no run {newer}before {cutoff:%Y-%m-%d} "
+                       f"carries the collection's files yet ({'; '.join(skipped[:3])}); {ASKED_AGAIN}")
+    raise _Waiting(f"waiting for {ctx.hook.origin}'s next {noun}: it offers no run {newer}before "
+                   f"{cutoff:%Y-%m-%d} yet (of {len(ordered)} listed); {ASKED_AGAIN}")
 
 
 def run_before(runs, cutoff: datetime) -> str | None:
@@ -417,22 +530,15 @@ def _due(ctx: _Ctx, mk: dict | None, *, write: bool = True) -> Outcome | None:
         return Outcome("not-due", f"up to date ({newest}); the next update, {nxt}, after "
                                   f"{cutoff:%Y-%m-%d %H:%M} {ctx.codex.origin.clock}", EXIT_DONE, period=nxt)
     started = _iso()
+    # the run the collection reads: a run not newer is already integrated
+    current = origin_run.current_run(ctx.root, ctx.name, ctx.codex, spec=ctx.spec)
     try:
         runs = ctx.fetch_runs(ctx.spec)
-        run_ = run_before(runs, cutoff)
-        if run_ is None:
-            raise _Waiting(f"{ctx.hook.origin} offers no run before {cutoff:%Y-%m-%d} yet "
-                           f"(of {len(runs)} listed)")
         slices = held_slices(ctx.collection, ctx.spec)
         if not slices:
             return Outcome("refused", "holds no slice its origin delivers whole, so there is nothing to "
                                       "fetch", EXIT_REFUSED, period=nxt)
-        recs = ctx.hook.records(run_, slices)
-        bodies = ctx.fetch_records(ctx.spec, recs)
-        pending = [v for v in (ctx.hook.verdict(r, bodies.get(r.rel_path)) for r in recs) if v]
-        if pending:
-            raise _Waiting(f"waiting for {ctx.hook.origin}'s {_day(run_)} run to complete: "
-                           + "; ".join(pending[:4]) + (f"; and {len(pending) - 4} more" if len(pending) > 4 else ""))
+        run_, recs = complete_run(ctx, runs, cutoff, slices, held=current)
     except _Waiting as e:
         if write:
             _write_due_waiting(ctx, mk, nxt, str(e))
@@ -447,7 +553,6 @@ def _due(ctx: _Ctx, mk: dict | None, *, write: bool = True) -> Outcome | None:
     if not write:
         return Outcome("due", f"due: {nxt} from {ctx.hook.origin}'s {_day(run_)} run", EXIT_DONE,
                        period=nxt, run=run_)
-    current = origin_run.current_run(ctx.root, ctx.name, ctx.codex, spec=ctx.spec)
     doc = {"collection_id": ctx.codex.collection_id, "period": nxt, "run": run_,
            "from": {"snapshot": newest, "run": current}, "step": "due", "moved": False, "scan": None,
            "steps": {}, "failure": None, "last": _last_of(mk)}
@@ -487,28 +592,122 @@ def _fetch(ctx: _Ctx, mk: dict, started: str) -> dict:
     profile = c.profile
     if not profile:
         raise _Refused(f"{ctx.name}: no profile resolves its slices, so nothing can be fetched")
+    try:
+        # invariant 9 before the first byte, the mend's Range requests too
+        engine._require_license_ack(ctx.spec, c)
+    except LicenseAckRequiredError as e:
+        raise _Refused(str(e)) from None
+    got: dict = {}
     con = db.connect(c)
     try:
-        try:
-            got = engine.run_acquisition(con, c, ctx.spec, profile, stop=ctx.stop)
-        except LicenseAckRequiredError as e:
-            raise _Refused(str(e)) from None
-        except DiskPreflightError as e:
-            raise _Failed(f"not enough free space for run {mk['run']}: {e}") from None
-        if ctx.stop.is_set() or got.get("stopped") or got.get("aborted"):
-            raise _Stopped(str(got.get("stopped") or "the fetch was interrupted, partial files kept"))
-        if got.get("failed"):
-            raise _Failed(f"{got['failed']} of {got['total']} file(s) of run {mk['run']} failed to fetch; "
-                          f"each is tried again after its backoff")
         plan = engine.plan_acquisition(con, c, ctx.spec, profile)
+        # nothing left to fetch (a pass that stopped in the mend, or failed
+        # its check): straight to the check, never a disk preflight sized
+        # for the whole run
+        if plan.files_pending:
+            try:
+                got = engine.run_acquisition(con, c, ctx.spec, profile, stop=ctx.stop)
+            except LicenseAckRequiredError as e:
+                raise _Refused(str(e)) from None
+            except DiskPreflightError as e:
+                raise _Failed(f"not enough free space for run {mk['run']}: {e}") from None
+            if ctx.stop.is_set() or got.get("stopped") or got.get("aborted"):
+                raise _Stopped(str(got.get("stopped") or "the fetch was interrupted, partial files kept"))
+            if got.get("failed"):
+                raise _Failed(f"{got['failed']} of {got['total']} file(s) of run {mk['run']} failed to fetch; "
+                              f"each is tried again after its backoff")
+            plan = engine.plan_acquisition(con, c, ctx.spec, profile)
     finally:
         con.close()
     if plan.files_pending:
         raise _Waiting(f"{plan.files_pending} file(s) of run {mk['run']} still to fetch "
                        f"({got.get('waiting', 0)} waiting out a backoff)")
+    checked = _held_to_origin(ctx, c, mk)
     return _done(ctx, mk, "fetch", started, {
         "files": plan.files_total, "fetched": got.get("fetched", 0), "adopted": got.get("adopted", 0),
-        "bytes": plan.bytes_total})
+        "bytes": plan.bytes_total, "verified": len(checked),
+        "mended": [m.to_dict() for m in checked if m.state != "ok"]})
+
+
+def _held_to_origin(ctx: _Ctx, c, mk: dict) -> list:
+    """THE ORIGIN'S OWN CHECKSUM, where the hook names it (`expected`:
+    wikidata's md5sums line, wikipedia's dumpstatus.json): each fetched file
+    held to it, and MENDED where it differs (app/acquire/repair.py: resumed
+    from its length, or its bad bzip2 units fetched again by Range — never a
+    dumb full re-download where they can be told apart). A mismatch is the
+    FETCH failing, never the run. A file that must go again in full has its
+    row reset, so the next fetch takes it whole after its backoff (the
+    engine's RETRY_BACKOFF_S), and the step fails, said and counted."""
+    from app.acquire import completion, repair, transport_https, zipdelta
+    from app.acquire.spec import TransportError
+    from app.transfer.bucket import Priority
+    from app.transfer.manager import Direction, get_manager
+    expected = getattr(ctx.hook, "expected", None)
+    if not callable(expected):
+        return []
+    try:
+        wants = expected(mk["run"], held_slices(ctx.collection, ctx.spec), c.corpus_dir,
+                         fetch=lambda recs: ctx.fetch_records(ctx.spec, recs))
+    except ValueError as e:
+        raise _Failed(str(e)) from None
+    except completion.OriginAway as e:
+        raise _Waiting(f"the origin did not answer for its checksums: {e}") from None
+    endpoint = ctx.spec.endpoints[0]
+    base = endpoint.url.rstrip("/")
+    headers = transport_https.headers_for(endpoint)
+    out: list = []
+    again: list = []
+    for want in wants:
+        path = Path(c.corpus_dir) / want.rel_path
+        if not path.is_file():
+            again.append(repair.Mended(want.rel_path, "again", f"{path.name} is not on disk: fetched again in full"))
+            continue
+        # the budget's bucket at the update's class, no stop bound: a stop
+        # ends the mend at its range or region (invariant 2), recorded
+        with get_manager().bind(Priority.BACKFILL, Direction.DOWN, endpoint_key=base):
+            try:
+                m = repair.ensure(path, want, url=f"{base}/{want.rel_path}", headers=headers, stop=ctx.stop,
+                                  log=ctx.log)
+            except repair.Stopped as e:
+                raise _Stopped(str(e)) from None
+            except (transport_https.RangeUnsupported, zipdelta.RangeUnsupported) as e:
+                m = repair._again(path, want, f"the origin does not serve Range ({e}), so it cannot be "
+                                              f"resumed or mended", 0, time.monotonic())
+            except TransportError as e:
+                raise _Waiting(f"the origin did not answer the mend of {path.name} (resumed next time from "
+                               f"where it stopped): {e}") from None
+        out.append(m)
+        if m.state == "again":
+            again.append(m)
+        elif m.state != "ok":
+            ctx.log(m.says)
+    _note_rows(ctx, c, out, again)
+    if again:
+        raise _Failed("; ".join(m.says for m in again[:3]))
+    return out
+
+
+def _note_rows(ctx: _Ctx, c, checked: list, again: list) -> None:
+    """The engine's rows: a mended file's digest is its new bytes'; a file
+    to go again is pending, after its backoff."""
+    from app import db
+    mended = [m for m in checked if m.state in ("cut", "resumed", "mended") and m.blake2]
+    if not (mended or again):
+        return
+    con = db.connect(c)
+    try:
+        con.execute("BEGIN IMMEDIATE")
+        for m in mended:
+            con.execute("UPDATE fetch_files SET blake2=?, bytes_fetched=?, updated_at=? "
+                        "WHERE source_id=? AND rel_path=?",
+                        (m.blake2, m.size, int(time.time()), ctx.spec.source_id, m.rel_path))
+        for m in again:
+            con.execute("UPDATE fetch_files SET fetch_done=0, bytes_fetched=0, error=?, retries=retries+1, "
+                        "updated_at=? WHERE source_id=? AND rel_path=?",
+                        (m.says[:500], int(time.time()), ctx.spec.source_id, m.rel_path))
+        con.execute("COMMIT")
+    finally:
+        con.close()
 
 
 # ---- run --------------------------------------------------------------------
@@ -814,7 +1013,7 @@ def describe(root, name: str, codex=None) -> dict[str, Any]:
     if why is not None:
         return {"state": "not-updated", "says": f"not updated by cadence: {why}"}
     if origin_names_run(codex):
-        return {"state": "waits-decision", "says": origin_form_wait(root, name, codex)}
+        return {"state": "waits-recreation", "says": origin_form_wait(root, name, codex)}
     mk = update_state.read(root, name)
     period = next_period(root, name, codex)
     if mk is None:
@@ -884,6 +1083,7 @@ def _fetch_progress(root: Path, name: str, codex, mk: dict) -> str:
         slices = held_slices(c, spec)
         corpus = Path(c.corpus_dir)
         done_slices, have = 0, 0
+        mending: list[str] = []
         for s in slices:
             prof = spec.slice_profiles.get(s)
             files = engine._list_and_filter(spec, prof, run_) if prof else []
@@ -893,6 +1093,9 @@ def _fetch_progress(root: Path, name: str, codex, mk: dict) -> str:
                 part = p.with_name(p.name + ".part")
                 if p.is_file():
                     have += p.stat().st_size
+                    said = _mending(p)
+                    if said:
+                        mending.append(said)
                 else:
                     whole = False
                     if part.is_file():
@@ -900,9 +1103,29 @@ def _fetch_progress(root: Path, name: str, codex, mk: dict) -> str:
             done_slices += whole
         total = acquire_spec.estimated_bytes_for(spec, c.profile)
         word = "languages" if all(s.startswith("lang=") for s in slices) else "slices"
-        return f"{done_slices} of {len(slices)} {word}, {_gb(have)} of {_gb(total)} GB"
+        return f"{done_slices} of {len(slices)} {word}, {_gb(have)} of {_gb(total)} GB" + \
+            "".join(f"; {m}" for m in mending[:3])
     except Exception as e:   # noqa: BLE001 — a show never fails on progress
         return f"progress unknown ({type(e).__name__})"
+
+
+def _mending(p: Path) -> str | None:
+    """A mend under way, from its sidecar (app/acquire/repair.py), in words."""
+    import json
+
+    from app.acquire import repair
+    try:
+        st = json.loads(repair.sidecar_of(p).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    total = int(st.get("size") or 0)
+    if st.get("phase") == "fetch":
+        return (f"mending {p.name}: {int(st.get('done') or 0)} of {len(st.get('bad') or [])} bad range(s) "
+                f"fetched again")
+    if st.get("phase") == "check":
+        seen = min(total, int(st.get("regions") or 0) * int(st.get("region") or 0))
+        return f"mending {p.name}: its blocks checked, {_gb(seen)} of {_gb(total)} GB"
+    return f"mending {p.name}: resuming it from its length"
 
 
 # --------------------------------------------------------------------------
@@ -949,8 +1172,8 @@ def next_step(root, name: str, codex, *, now: datetime | None = None) -> Next:
     if why is not None:
         return Next(None, why)
     if origin_names_run(codex):
-        return Next(None, "waits for the operator's decision on the origin form (each record's origin "
-                          "names the run)")
+        return Next(None, f"re-create at parser {current_parser(codex)} first (each record's origin names "
+                          f"the run)")
     mk = update_state.read(root, name)
     failure = (mk or {}).get("failure")
     if failure:

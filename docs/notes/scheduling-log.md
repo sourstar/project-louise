@@ -2974,3 +2974,88 @@ round after a start costs 2.4 ms and 4.5 ms (the graph, the listings and each co
 On the node, to fill in: the round's time from the worker log, and the first cascade, wikipedia's next published
 snapshot into wikipedia-articles. Record the method and update wall times and the peak RSS of each child, as
 annotation-methods.md asks.
+
+## 2026-11-17 — the whole re-check of a hand-made annotations collection on the node: the BEFORE of the cascade's re-checks
+
+**Scenario.** `louise hold annotations update wikipedia-articles --dry-run` on the live tree b747b20 (#729
+deployed). This is the whole re-check the cascade runs when wikipedia publishes past the claims' pin
+(collection-updates.md §4). Measured by München at 06:47Z in a quiet window with `/usr/bin/time -v`. Every
+collection was resumed, and wikipedia's embedding was idle (its embed mode had just been set to lazy), so the card
+competed with nothing.
+
+| what | value |
+|---|---|
+| claims / ends | 12,326,519 / 24,653,038 |
+| wall | 397.5 s (6 m 38 s), rc 0 |
+| CPU | 2,294.5 s user + 292.2 s sys, about 6.5 cores on average |
+| peak RSS, the largest child | 3,466 MiB |
+| peak workspace | 8.2 GiB on ssd4 (/data), 0.2 GiB on ssd3, 0 on tank; free space sampled every 10 s |
+
+The model in collection-updates.md §4 said ~19 min on 3 processes, so the node is about 3× faster, at ~6.5 cores.
+This is the BEFORE. The AFTER is the first real re-check that the cascade starts: wall, peak RSS and workspace from
+the worker log and `woken.json`. The full output is on the node at /mnt/ssd3/louise-build/quiet-run/dry.out.
+
+## 2026-11-17 — the current dump only, and the mend: a dump off the origin's md5 is mended by its bad bzip2 units, never fetched again whole (app/acquire/repair.py, app/hold/update.py, app/hold/cascade.py) — BEFORE (deploy pending)
+
+**The rule** (operator, 2026-11-17, verbatim): "if the current dump fails, don't use an old dump (that should have
+already been integrated thus it's pointless); retry gently to fetch it with the already agreed policy. If available,
+a resume is always preferable over a dumb full re-download." Branch `current-dump-only`; collection-updates.md §6.
+
+**BEFORE.** A wikidata dump whose md5 missed its sums line was removed whole (103,755,108,222 bytes, the probed
+20261109 dump) and its row left done, so the next night did not fetch it and failed on the missing file; had it been
+fetched, it was 103.8 GB again. A wikipedia dump was held to no checksum. A partial `.part` already resumed by an open
+Range. A wikidata run listing `all.json.gz` without the `.bz2` was passed over after 3 days for the run before it, and
+the run index dropped runs still writing their dump, so the one before looked current. A dependent waited at most 24 h
+for a source's update to begin.
+
+**The change.** The update takes the current run only, waits for it (asked again at the keeper's hourly recheck in the
+night), and a newer run complete first supersedes it. After the fetch each file is held to the origin's md5 (wikidata's
+sums, wikipedia's dumpstatus.json); a short file resumes from its length; a full-length bzip2 file is checked block by
+block on the parse pool (64 MiB regions) and only its bad units are fetched again by Range. A dependent waits, with no
+cap, while a declared source with an update by cadence holds no published snapshot of its current period. What a
+settled keeper round adds per declared source: the listing's stat (already read) and, only when the source is behind,
+its `update.json`.
+
+**MEASURED here, synthetic** (this 4-core sandbox, load 0.4–1 from other sessions; a loopback origin serving Range;
+one byte flipped mid-file; regions of 8 MiB and 4 MiB so the small files give the pool work; scratchpad harness
+`measure_mend.py`):
+
+| file | size | fetched again | requests | 1 process | 3 processes |
+|---|---|---|---|---|---|
+| wikipedia's shape: 1,500 streams of 100 pages (2.2:1) | 257,824,375 B | 171,898 B, 0.067 % | 1 Range | 39.8 s (check 37.1) | 18.3 s (check 15.0) |
+| wikidata's shape: one stream, 339 blocks of JSON (10.6:1) | 23,723,088 B | 69,984 B, 0.30 % | 2 (length, block) | 8.5 s (check 8.0) | 3.7 s (check 3.2) |
+
+Every byte fetched again was drawn from the budget (counted: 171,898 and 69,985 with the one-byte length). The check
+runs at libbz2's own rate: 6.9 MB/s of bz2 a process on the wiki shape (libbz2 alone 6.4) and 3.0 MB/s on the JSON
+shape. **The node's model at this sandbox's rates:** wikidata's 103.8 GB is ~49 min on 12 processes against 103.8 GB
+fetched again (~86 min at 20 MB/s, ~5.8 h at 5 MB/s; the node's rate from Wikimedia is not measured); enwiki's
+27.1 GB multistream ~5.5 min. **AFTER, on the node:** the first mend's `counts.mended` in `state/update.json` (bytes
+fetched again, seconds) and the keeper round's time from the worker log.
+
+## 2026-11-17 — the scheduled check holds a collection paused on its own (app/scheduled_checks.py `turn`, `summary`) — BEFORE (deploy pending)
+
+**Why.** `turn` asked only the node's mode. After `dev pin-run`, the paused wikidata.next has a new snapshot,
+so it is due. The worker would then check it inside its own 24 GiB cgroup while München checks it in its
+own container (wikidata-entity-origin.md, step 5). That is the OOM again: two checks at once, and two
+writers of attestations. 07 §7.3 holds a collection paused on its own at every stage.
+
+**The change.** `node_state.paused_collections()` is read once a turn, from the node's store opened
+read-only (`node_state.peek`, which creates nothing), and a paused collection is skipped. A store that
+cannot be read runs no check that beat. `hold collection show` says "held: the collection is paused" in
+`scheduled_check`.
+
+**MEASURED here, synthetic** (this 4-core sandbox, other sessions' load; `turn` over 500 collections on the
+idle path, nothing due, 200 turns each):
+
+| | ms a turn |
+|---|---|
+| before (no paused read) | 1.66 |
+| after, none paused | 1.34 |
+| after, half paused | 0.91 |
+
+The read is within this sandbox's noise (~0.1–0.3 ms). Each paused collection saves its snapshot read and
+its due test. No query was added to a manifest.
+
+**AFTER, on the node:** a paused collection with a due snapshot leaves no `scheduled-check.started.json`
+over a night, and `hold collection show <it>` says it is held.
+

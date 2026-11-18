@@ -146,7 +146,7 @@ def lookup(collection, row) -> tuple[dict | None, str]:
         # locates exactly the row's own — a dated dump's byte range, the
         # same bytes, so the same hash. The sampled byte check stands behind it
         loc = _locator(collection, row)
-        if loc is not None and rec.get("origin") == loc:
+        if loc is not None and rec.get("origin") == loc and _same_run(collection, row, snap):
             return rec, "fresh"
         return None, "no-origin-hash"
     return None, "not-in-snapshot"
@@ -157,10 +157,30 @@ def _locator(collection, row) -> str | None:
     writes it (`plugin_io.origin_locator`), or None."""
     from . import plugin_io
     try:
-        return plugin_io.origin_locator(collection.plugin_instance(), str(row["path"]),
-                                        collection.corpus_dir)
+        return plugin_io.record_origin(collection.plugin_instance(), str(row["path"]),
+                                       collection.corpus_dir, row["native_id"])
     except Exception:   # noqa: BLE001 — no locator, no proof: parse
         return None
+
+
+def _same_run(collection, row, snap) -> bool:
+    """An origin that names its unit by the origin's own key (wikipedia's
+    page, parser 6; 09 §9.5 amended 2026-11-17) says the same PAGE in every
+    run, not the same bytes: equal origins are the row's own unit only where
+    the row reads the run the record was built from (09 §9.4 `origin_run`,
+    else the Codex's). A plugin that does not say which run a locator reads
+    (`run_of_locator`) names its bytes, and equal origins suffice, as before."""
+    try:
+        run_of = getattr(collection.plugin_instance(), "run_of_locator", None)
+    except Exception:   # noqa: BLE001 — no plugin to say a run: the origins' equality, as before
+        return True
+    if run_of is None:
+        return True
+    here = run_of(str(row["path"]))
+    if here is None:
+        return True                  # no dated piece: an archive's rows, pinned by revision
+    from .hold import origin_run
+    return here == origin_run.run_of(getattr(collection, "codex", None), snap)
 
 
 def _sampled(uid: str) -> bool:

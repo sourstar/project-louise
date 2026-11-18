@@ -475,6 +475,54 @@ def _origin_from_recipe(block: dict[str, Any]) -> Origin:
     return Origin(**b)
 
 
+def pin_dated(plugin: str, origin: Origin, run: str | None) -> Origin:
+    """`origin` with its run pinned where `plugin`'s acquisition spec
+    publishes dated dumps (`_origin`); as it is for any other plugin, where
+    a `run` is refused — it would name nothing."""
+    from dataclasses import replace
+    return replace(origin, spec=pin_dated_spec(plugin, origin.spec, run))
+
+
+def pin_dated_spec(plugin: str, origin_spec: dict[str, Any] | None, run: str | None) -> dict[str, Any] | None:
+    """`pin_dated` on an `origin.spec` alone — the recipe's, or a whole
+    Codex's given as the recipe (louise.cmd_create): the same bytes either
+    way. The spec as it is where the plugin's origin publishes no dated
+    dumps (or is a deposit's or an annotator's)."""
+    from app.acquire.specs import ACQUIRE_REGISTRY
+
+    from . import origin_run
+    spec = ACQUIRE_REGISTRY.get(plugin)
+    if (origin_spec or {}).get("source_id") in ("deposit", "annotations"):
+        return origin_spec
+    if not origin_run.spec_dated(spec):
+        if run:
+            raise TemplateError(f"--run {run}: {plugin}'s origin publishes no dated dumps, so a run "
+                                f"names nothing in its Codex (09 §9.17)")
+        return origin_spec
+    try:
+        stated = origin_run.stated_in(origin_spec, spec)
+    except ValueError as e:
+        raise TemplateError(f"recipe: origin.spec.files: {e}") from None
+    if stated and run and stated != str(run):
+        raise TemplateError(f"--run {run}: the recipe's origin.spec.files name run {stated}; a Codex "
+                            f"names one first run (09 §9.17)")
+    run = stated or run
+    if not run:
+        why = origin_run.UNDETERMINED.get()
+        raise TemplateError(
+            f"recipe: {plugin}'s origin publishes dated dumps, and its Codex names the FIRST run its "
+            f"records are built from (09 §9.17): `origin.spec.files` names none and no --run was given"
+            + (f", and nothing determines it: {why}. " if why else ". ")
+            + "Without a run, records that name their unit by the origin's own key are read in no run "
+              "and can never be checked against the source (invariant 11). Give --run <YYYYMMDD> (the "
+              "run the corpus holds, or the one to fetch), or name that run's files in the recipe's "
+              "`[origin.spec]`; a re-creation `<name>.next` takes the run `<name>` holds")
+    try:
+        return origin_run.pinned_spec(origin_spec, spec, str(run))
+    except ValueError as e:
+        raise TemplateError(f"recipe: {e}") from None
+
+
 _FILE_KEYS = ("rel_path", "size", "checksum")
 
 
@@ -503,7 +551,8 @@ def _file_entry(f, i: int) -> dict[str, Any]:
 def from_recipe(plugin: str, recipe: dict[str, Any], *,
                 platform_image: str,
                 calibration: tuple[str, str],
-                credits: tuple = (), space_version: int | None = None) -> Codex:
+                credits: tuple = (), space_version: int | None = None,
+                run: str | None = None) -> Codex:
     """Build a Codex from a plugin's defaults and a creator's recipe.
 
     `calibration` is `(vectors_hash, envelope_hash)` — what the caller got
@@ -561,7 +610,7 @@ def from_recipe(plugin: str, recipe: dict[str, Any], *,
     codex = Codex(
         descriptive=Descriptive(**recipe["descriptive"]),
         plugin=plugin,
-        origin=_origin(source, recipe),
+        origin=_origin(source, recipe, run),
         toolchain=Toolchain(recipe.get("toolchain", {}).get("platform_image")
                             or platform_image, None),
         parser=(Parser(**recipe["parser"]) if "parser" in recipe
@@ -649,15 +698,25 @@ def _record_line(recipe: dict[str, Any]) -> int:
     return want
 
 
-def _origin(source, recipe: dict[str, Any]) -> Origin:
+def _origin(source, recipe: dict[str, Any], run: str | None = None) -> Origin:
     """The origin block is the plugin's — it names the source, the form
     taken and why, and the acquisition spec (06 §6.2, §6.4; 09 §9.17). Until
     the plugin's `AcquisitionSpec` is serialised into it, which is migration
     step 2's work, the recipe supplies it and `create` refuses without it
     rather than inventing an origin the collection cannot be verified
-    against (invariant 11)."""
+    against (invariant 11).
+
+    A DATED-DUMP ORIGIN NAMES ITS RUN (09 §9.17: "for a dated-dump origin
+    the FIRST run the collection was built from"; München, 2026-11-17): for
+    a plugin whose acquisition spec is `dated-dumps`, the spec gets
+    `delta.mode` "dated-dumps", the plugin's `filters` and the run's `files`
+    wherever the recipe states none (app/hold/origin_run.py `pinned_spec`) —
+    the run the recipe's own `files` name, else `run` (`create --run`).
+    Without either the recipe is refused: wikidata's was made with
+    `{"files": null}`, and its parser-3 snapshot then named no run to read
+    its entities in."""
     if "origin" in recipe:
-        return _origin_from_recipe(recipe["origin"])
+        return pin_dated(source.source_id, _origin_from_recipe(recipe["origin"]), run)
     raise TemplateError(
         f"recipe: origin is required. {source.source_id}'s acquisition spec "
         f"is not yet serialised into the Codex (06 §6.2, 09 §9.17), so the "

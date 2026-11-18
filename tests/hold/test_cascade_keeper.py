@@ -218,103 +218,134 @@ def test_one_snapshot_a_period_a_second_wake_waits_for_the_next(node):
     assert woken(node)["state"] == "done" and cascade.old_run_gate(node.root, "pubmed", node.target, "2026-10").open
 
 
-def test_a_wake_waits_while_a_declared_source_has_an_update_in_flight(node):
-    publish(node, "2026-09")
-    mk = {"collection_id": node.target.collection_id, "period": "2026-10", "run": "20261001", "step": "fetch",
-          "steps": {}, "failure": None}
-    update_state.write(node.root, "pubmed", mk)
-    assert keep(node) == []
-    w = woken(node)
-    assert w["state"] == "waiting" and w["says"] == "waits for pubmed's update 2026-10, at step fetch", w
-    assert node.ran == []
-    update_state.write(node.root, "pubmed", {**mk, "failure": {"step": "fetch", "tries": 3, "error": "x"}})
-    (got,) = keep(node)
-    assert got["against"] == {"pubmed": "2026-09"}, "a failure exhausted is not in flight: it runs"
-
-
-def test_an_update_is_in_flight_until_its_snapshot_is_published(node):
-    base = {"collection_id": "c", "period": "2026-09", "run": "r", "steps": {}, "failure": None}
-    assert cascade.update_in_flight(node.root, "pubmed") is None, "no marker"
-    for step, flying in (("due", True), ("fetch", True), ("records", True), ("snapshot", True), ("done", False)):
-        update_state.write(node.root, "pubmed", {**base, "step": step})
-        assert bool(cascade.update_in_flight(node.root, "pubmed")) is flying, step
-    publish(node, "2026-09")
-    for step in ("embed", "old-run"):
-        update_state.write(node.root, "pubmed", {**base, "step": step})
-        assert cascade.update_in_flight(node.root, "pubmed") is None, \
-            f"{step}: its snapshot is published — the old-run step waits for the cascade, never the reverse"
-
-
 #: pubmed's 2026-10 cutoff: 00:00 on 1 November in its origin's clock (America/New_York)
 CUTOFF = datetime(2026, 11, 1, 4, tzinfo=timezone.utc)
 
 
 @pytest.fixture
 def updated_by_cadence(monkeypatch):
-    """pubmed as a source the update pass would act on: updated by cadence,
-    not refused, run from its origin with acquisition on (a test double of
-    what wikipedia's plugin will declare once its origin form is decided)."""
-    from app import collections as collections_mod
+    """pubmed as a source with an update by cadence: an `update` block, a
+    dated origin and a completion check (a test double of what wikipedia's
+    and wikidata's plugins declare), not refused."""
     from app.hold import update as update_mod
     monkeypatch.setattr(update_mod, "not_updated", lambda codex: None)
     monkeypatch.setattr(update_mod, "origin_names_run", lambda codex: False)
-    held = SimpleNamespace(name="pubmed", source="origin", acquire_enabled=True)
-    monkeypatch.setattr(collections_mod, "by_name", lambda name: held if name == "pubmed" else None)
-    return held
 
 
-def test_a_wake_waits_for_a_sources_update_to_begin_at_most_24_h(node, updated_by_cadence):
+def _marker(node, step: str, failure=None, period="2026-10") -> dict:
+    mk = {"collection_id": node.target.collection_id, "period": period, "run": "20261101", "step": step,
+          "steps": {}, "failure": failure}
+    update_state.write(node.root, "pubmed", mk)
+    return mk
+
+
+def test_a_wake_waits_while_a_declared_source_has_an_update_in_flight(node, updated_by_cadence):
     publish(node, "2026-09")
-    until = (CUTOFF + timedelta(hours=24)).astimezone().strftime("%H:%M")
+    _marker(node, "fetch")
     assert keep(node, CUTOFF + timedelta(hours=1)) == []
     w = woken(node)
-    assert w["state"] == "waiting" and w["says"] == f"waiting for pubmed's 2026-10 update to begin, until {until}", w
-    assert node.ran == [] and not cascade.old_run_gate(node.root, "pubmed", node.target, "2026-09").open
-    assert keep(node, CUTOFF + timedelta(hours=23, minutes=59)) == [], "still inside the 24 h"
-    (got,) = keep(node, CUTOFF + timedelta(hours=24))
-    assert got["against"] == {"pubmed": "2026-09"}, "the update did not begin within 24 h: the wait ends"
+    assert w["state"] == "waiting" and w["says"] == "waits for pubmed's update 2026-10, at step fetch", w
+    assert node.ran == []
 
 
-def test_the_wait_to_begin_becomes_the_markers_once_it_is_written(node, updated_by_cadence):
+def test_a_source_is_waited_for_until_it_publishes_its_current_periods_snapshot(node, updated_by_cadence):
+    """Its CURRENT PERIOD: the latest whose cutoff has passed. Before
+    2026-10's cutoff that is 2026-09, published; after it, 2026-10, until
+    the snapshot built from the run it names is published — whatever step
+    the update is at, or none."""
     publish(node, "2026-09")
-    assert keep(node, CUTOFF + timedelta(minutes=5)) == []
-    update_state.write(node.root, "pubmed", {"collection_id": node.target.collection_id, "period": "2026-10",
-                                             "run": "r", "step": "fetch", "steps": {}, "failure": None})
-    assert keep(node, CUTOFF + timedelta(hours=30)) == [], "in flight now: past the 24 h, by its marker"
-    assert woken(node)["says"] == "waits for pubmed's update 2026-10, at step fetch"
+    after = CUTOFF + timedelta(hours=1)
+    assert cascade.update_in_flight(node.root, "pubmed", node.target, now=CUTOFF - timedelta(minutes=1)) is None
+    assert cascade.update_in_flight(node.root, "pubmed", node.target, now=after) == \
+        "waits for pubmed's update 2026-10 to begin", "no marker yet: no 24 h cap any more"
+    for step in ("due", "fetch", "records", "snapshot"):
+        _marker(node, step)
+        assert cascade.update_in_flight(node.root, "pubmed", node.target, now=after) == \
+            f"waits for pubmed's update 2026-10, at step {step}"
+    assert cascade.update_in_flight(node.root, "pubmed", node.target, now=after + timedelta(days=62)) == \
+        "waits for pubmed's update 2026-10, at step snapshot; then up to 2026-12", "two periods later: said"
+    target_next(node.root, node.target, {"pubmed:2": "two, as of 2026-10"}, sid="2026-10")
+    assert cascade.update_in_flight(node.root, "pubmed", node.target, now=after) == \
+        "waits for pubmed's snapshot 2026-10 to be published (signed)"
+    d = col.shard_dir_of(node.root, "pubmed")
+    sn.sign_snapshot(node.root, "pubmed", sn.load(d / shard_mod.snapshot_path("2026-10")), KEY, now=NOW)
+    for step in ("embed", "old-run", "done"):
+        _marker(node, step)
+        assert cascade.update_in_flight(node.root, "pubmed", node.target, now=after) is None, \
+            f"{step}: published — the old-run step waits for the cascade, never the reverse"
 
 
-@pytest.mark.parametrize("why", ["no update block", "refused", "keeper off", "a copy from peers",
-                                 "acquisition off", "before the cutoff"])
-def test_a_source_the_pass_would_not_act_on_makes_no_one_wait(node, updated_by_cadence, monkeypatch, why):
+def test_a_dependent_stays_waiting_across_nights_while_the_sources_fetch_fails(node, updated_by_cadence):
+    """No time cap, and a failure exhausted is no reason to take the old
+    run: the dependent waits until the source catches up, and says why."""
+    publish(node, "2026-09")
+    for night, tries in enumerate((1, 2, 3, 3, 3), start=1):
+        _marker(node, "fetch", failure={"step": "fetch", "tries": tries, "error": "TransportError: 503",
+                                        "night": f"2026-11-{night:02d}"})
+        assert keep(node, CUTOFF + timedelta(days=night)) == [], night
+        w = woken(node)
+        assert w["state"] == "waiting" and node.ran == [], (night, w)
+        if tries < 3:
+            assert w["says"] == (f"waits for pubmed's update 2026-10: step fetch failed ({tries} of 3), "
+                                 f"tried again next night")
+        else:
+            assert w["says"] == ("waits for pubmed's update 2026-10: step fetch failed 3 times "
+                                 "(TransportError: 503) and waits for a human (`louise hold collection update "
+                                 "pubmed --retry`)")
+    assert not cascade.old_run_gate(node.root, "pubmed", node.target, "2026-09").open
+    assert "waits for a human" in cascade.shown(node.root, NAME, col.resolve(node.root, NAME)[1])["says"], \
+        "said on the card"
+
+
+def test_it_runs_once_the_source_publishes_its_current_run(node, updated_by_cadence):
+    publish(node, "2026-09")
+    _marker(node, "fetch", failure={"step": "fetch", "tries": 1, "error": "x", "night": "2026-11-01"})
+    assert keep(node, CUTOFF + timedelta(days=3)) == [] and woken(node)["state"] == "waiting"
+    publish(node, "2026-10")
+    _marker(node, "embed")
+    (got,) = keep(node, CUTOFF + timedelta(days=4))
+    assert got["against"] == {"pubmed": "2026-10"}, "the new run's snapshot, never the old one"
+    assert woken(node)["state"] == "done"
+
+
+@pytest.mark.parametrize("why", ["keeper off", "a copy from peers", "acquisition off"])
+def test_the_wait_does_not_end_on_the_nodes_word_alone(node, updated_by_cadence, monkeypatch, why):
+    """The 24 h wait counted only a source this node's keeper would update;
+    now a source behind is waited for whoever is to bring it up."""
+    from app import collections as collections_mod
     from app import config
+    publish(node, "2026-09")
+    held = SimpleNamespace(name="pubmed", source="shard" if why == "a copy from peers" else "origin",
+                           acquire_enabled=why != "acquisition off")
+    monkeypatch.setattr(collections_mod, "by_name", lambda name: held if name == "pubmed" else None)
+    if why == "keeper off":
+        monkeypatch.setattr(config, "UPDATE_KEEPER", False)
+    assert keep(node, CUTOFF + timedelta(days=30)) == []
+    assert woken(node)["says"] == "waits for pubmed's update 2026-10 to begin", why
+
+
+def test_a_source_refused_at_an_old_parser_makes_it_wait_and_says_to_re_create_it(node, updated_by_cadence,
+                                                                                    monkeypatch):
     from app.hold import update as update_mod
     publish(node, "2026-09")
-    at = CUTOFF + timedelta(hours=1)
-    if why == "no update block":
-        monkeypatch.setattr(update_mod, "not_updated", lambda codex: "its Codex declares no `update`")
-    elif why == "refused":
-        monkeypatch.setattr(update_mod, "origin_names_run", lambda codex: True)
-    elif why == "keeper off":
-        monkeypatch.setattr(config, "UPDATE_KEEPER", False)
-    elif why == "a copy from peers":
-        updated_by_cadence.source = "shard"
-    elif why == "acquisition off":
-        updated_by_cadence.acquire_enabled = False
-    else:
-        at = CUTOFF - timedelta(minutes=1)
-    assert cascade.update_in_flight(node.root, "pubmed", node.target, now=at) is None
-    (got,) = keep(node, at)
-    assert got["against"] == {"pubmed": "2026-09"}, why
+    monkeypatch.setattr(update_mod, "origin_names_run", lambda codex: True)
+    monkeypatch.setattr(update_mod, "current_parser", lambda codex: 6)
+    assert keep(node, CUTOFF + timedelta(days=2)) == []
+    assert woken(node)["says"] == "waits for pubmed's 2026-10 snapshot: re-create pubmed at parser 6 first"
 
 
-def test_a_real_source_without_a_completion_check_never_waits(node):
+def test_a_source_without_an_update_by_cadence_makes_no_one_wait(node, monkeypatch):
     """No double here: pubmed's plugin declares no completion check, so the
-    pass refuses it (`update.not_updated`) and nothing waits on it."""
+    pass refuses it (`update.not_updated`) and nothing waits on it — even
+    with a marker written by hand, and long after its cutoff."""
     from app.hold import update as update_mod
     assert update_mod.not_updated(node.target) is not None
     publish(node, "2026-09")
-    assert cascade.update_in_flight(node.root, "pubmed", node.target, now=CUTOFF + timedelta(hours=1)) is None
+    _marker(node, "fetch")
+    at = CUTOFF + timedelta(days=40)
+    assert cascade.update_in_flight(node.root, "pubmed", node.target, now=at) is None
+    (got,) = keep(node, at)
+    assert got["against"] == {"pubmed": "2026-09"}
 
 
 # ---- order, transitivity, cycles ----------------------------------------------------------
