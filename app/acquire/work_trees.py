@@ -151,3 +151,80 @@ def store_for(corpus_root: Path) -> WorkTrees:
         if key not in _STORES:
             _STORES[key] = WorkTrees.under(Path(corpus_root), datadump.dumps())
         return _STORES[key]
+
+
+# ---- parser 4: one tree per work within a pass -------------------------------------------
+
+#: parser 4's kind: the tree Cellar served for a work, by CELEX, its bytes as
+#: served (gzip), so the work's other languages are not asked again
+CELEX_KIND = "eurlex-celex-trees"
+#: how long one serves them (2026-11-18, München: EUR-Lex4's pass on the
+#: dump's incomplete list spent 1,144 s asking trees against 33 s for items,
+#: 10,528 units of 1,537 works). A tree Cellar served within this window is
+#: as current as fetching those units that much earlier in the same pass;
+#: past it, Cellar is asked again. A pass's units come in path order —
+#: language first — so a work's languages lie a language block apart: the
+#: window spans the pass, not minutes.
+RECENT_S = 6 * 3600.0
+
+
+class RecentTrees:
+    """Parser 4's store (cellar.fetch_unit_from_tree `trees`): parser 3's
+    `WorkTrees` validates a kept tree by the unit's fresh notice, which
+    parser 4 does not ask; a pass's window stands in for it. A lock per
+    work, so the connections fetching one work's languages at once ask
+    Cellar once. `records-vs-origin` never reads it."""
+
+    def __init__(self, base: Path, *, window_s: float = RECENT_S,
+                 clock: Callable[[], float] | None = None) -> None:
+        import time
+        self.base = base
+        self.window_s = window_s
+        self.clock = clock or time.time
+        self._locks: dict[str, threading.Lock] = {}
+        self._guard = threading.Lock()
+
+    @classmethod
+    def under(cls, corpus_root: Path) -> "RecentTrees":
+        place = derived.place_kept(CELEX_KIND, corpus_root) or (corpus_root / derived.BESIDE / CELEX_KIND)
+        return cls(place)
+
+    def _path(self, celex: str) -> Path:
+        from urllib.parse import quote
+        return self.base / celex[:5] / f"{quote(celex, safe='')}.rdf.gz"
+
+    def _lock(self, celex: str) -> threading.Lock:
+        with self._guard:
+            return self._locks.setdefault(celex, threading.Lock())
+
+    def get(self, celex: str, ask: Callable[[], bytes]) -> tuple[bytes, str]:
+        """The work's tree as Cellar served it, and where it came from:
+        `kept` (served within the window) or `cellar` (`ask()`, then kept)."""
+        import zlib
+        path = self._path(celex)
+        with self._lock(celex):
+            try:
+                if self.clock() - path.stat().st_mtime <= self.window_s:
+                    return gzip.decompress(path.read_bytes()), "kept"
+            except (OSError, EOFError, zlib.error):
+                pass                        # none, or not whole: asked of Cellar
+            data = ask()
+            path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = path.with_name(f".{path.name}.{os.getpid()}.{threading.get_ident()}")
+            tmp.write_bytes(gzip.compress(data, 6))
+            os.replace(tmp, path)
+            return data, "cellar"
+
+
+_RECENT: dict[str, RecentTrees] = {}
+
+
+def recent_for(corpus_root: Path) -> RecentTrees:
+    """The process's parser-4 store for a corpus root (keyed on its resolved path)."""
+    key = str(Path(corpus_root).resolve())
+    with _STORES_LOCK:
+        got = _RECENT.get(key)
+        if got is None:
+            got = _RECENT[key] = RecentTrees.under(Path(corpus_root))
+        return got
+
