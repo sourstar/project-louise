@@ -145,6 +145,23 @@ def test_the_legacy_html_act_is_read_by_its_headings_words(renditions):
         "the Dublin Core head kept: the OJ source"
 
 
+@pytest.mark.parametrize("heading", ["Article premier", "Article 1er", "Articolo unico"])
+def test_the_first_article_named_by_a_word_is_an_article_not_the_preamble(renditions, heading):
+    """LEMUR's dry run (2026-11-14): French heads article 1 "Article
+    premier", which the heading reader missed — the article folded into the
+    preamble, French at 0.593 of the articles. A single article's "unico",
+    "unique", "único" the same."""
+    unit = renditions / src.unit_rel("it", "31988D0540")
+    page = unit / "31988D0540it.html"
+    page.write_bytes(page.read_bytes().replace(b"<p>Articolo 1</p>", f"<p>{heading}</p>".encode()))
+    doc = _doc(renditions, "31988D0540")
+    labels = [l for l, _ in doc.sections]
+    assert labels == ["Preamble", heading, "Articolo 2", "Articolo 3", "Articolo 4"]
+    first = dict(doc.sections)[heading]
+    assert "Sono approvati a nome della Comunità" in first
+    assert "Sono approvati" not in dict(doc.sections)["Preamble"]
+
+
 def test_the_pdf_act_is_read_from_its_text_layer(renditions):
     doc = _doc(renditions, "32004D0411")
     assert doc.extra["form"] == "pdf" and [l for l, _ in doc.sections][:2] == ["Preamble", "Articolo 1"]

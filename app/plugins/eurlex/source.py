@@ -238,6 +238,7 @@ EXTRA_KEYS = tuple(k for k in eli.EXTRA_KEYS if k != "eli_uri_schema") + (
     eli.IN_FORCE,
     # identity and the version this record is
     "celex", "work_celex", "language", "language_code", "text_language", "version_key", "valid_from",
+    "valid_from_provisional", "body_root",
     "validity_work", "authentic", "sector", "resource_type",
     # the dates and the force status, as the notice states them
     "date_document", "entry_into_force", "end_of_validity", "last_modified",
@@ -270,6 +271,12 @@ ISSUES = {
                                  "original, or the reverse; the CELEX decides the version",
     "no-text-layer": "page(s) of the act's PDF hold no text (a scan): the PDF is held whole in the "
                      "unit, its text is what the other pages give",
+    "start-from-document-date": "no publication and no entry into force is stated: the act's own date "
+                                "is its provisional start, and says so (valid_from_provisional)",
+    "no-start-of-validity": "no publication, entry into force or date of the act is stated: the record "
+                            "is held and takes no part in the validity filter",
+    "item-not-held": "the Formex wrapper names a file the expression's manifestation does not list: "
+                     "the record holds the rest, and names it",
     "formex-not-this-act": "the expression's Formex holds no wrapper of this act (none naming its "
                            "CELEX, or only other acts'): the text is read from the next form the "
                            "tree lists; the Formex items are held beside it",
@@ -469,8 +476,19 @@ class EurlexSource:
     #: tree and the items — what the dump holds — and a notice a unit still
     #: holds is kept whole and read for nothing; subjects and authors are
     #: concept ids; the history slice (`history/lang=<l>/…`, `extra.history`).
-    #: Parser 3 is kept for the collection whose Codex names it (EurlexSourceV3)
-    PARSER_VERSION = 4
+    #: Parser 3 is kept for the collection whose Codex names it (EurlexSourceV3).
+    #: 5 on 2026-11-18 (EUR-Lex4's parse: 11,486 documents refused, and the
+    #: LEMUR dry run's French): a body that is not an act is read — an
+    #: agreement (AGR) as an act, a corrigendum (CORR) by its corrections, a
+    #: GENERAL document by its groups — every main file of a Special Edition
+    #: read, not the first; a file the wrapper names and the manifestation does
+    #: not hold said, not refused; a start of validity the origin does not
+    #: state provisional and said (the act's own date), or absent; "Article
+    #: premier" and a single article's heading are articles (rendition.py);
+    #: `extra.body_root`, `extra.valid_from_provisional`. Parser 4 is not
+    #: carried: EUR-Lex4, the one Codex naming it, published nothing and is
+    #: re-created as EUR-Lex5 (RULE 1, 02 §2.4 A1c).
+    PARSER_VERSION = 5
     #: the facts from the tree (4) or from the notice (3)
     TREE_FACTS = True
     #: 06 §6.2: Cellar keeps every OJ act and every consolidated version at
@@ -503,7 +521,7 @@ class EurlexSource:
         """This plugin parsing at `version`, for a collection whose Codex
         names it (`collections.plugin_at`): 4 is this one, 3 the one that read
         the facts from the notice (`EurlexSourceV3`)."""
-        return {4: self, 3: _V3}.get(int(version))
+        return {5: self, 3: _V3}.get(int(version))
 
     # ---- discovery ---------------------------------------------------------------------------
 
@@ -667,6 +685,8 @@ class EurlexSource:
         try:
             if form == "fmx4":
                 act = formex.parse(files, celex)
+                for name in act.missing:
+                    found.append(Issue("item-not-held", f"{act.wrapper_file} names {name}"))
             elif form in ("xhtml", "html"):
                 # in their names' order: an OJ item's name carries its page
                 # (`…01001401` page 14, `…01001501` page 15), the notice's order
@@ -729,16 +749,33 @@ class EurlexSource:
                 work = celex
         else:
             work = celex
-            published = act.publication_date
+            # the OJ date the Formex wrapper states, else the work's own
+            # publication date in its tree (parser 5: a Special Edition
+            # wrapper states PUBLICATION.REF.SE, not PUBLICATION.REF)
+            published = act.publication_date or note.date_publication
             valid_from = original_start(note.entry_into_force, published)
             early = [d for d in note.entry_into_force if published and d < published]
             if early:
                 found.append(Issue("entry-into-force-before-publication",
                                    f"entry into force {early[0]}, published {published}"))
+        # NO START STATED (parser 5; 3,415 units of 1958–62 read from HTML or a
+        # PDF, refused by parser 4): held, never refused (invariant 11). As
+        # NeuRIS parser 5 (operator, 2026-11-15: "we use the publishing date
+        # as draft"), a start the origin does not state is PROVISIONAL and
+        # says so: the act's own date where neither a publication nor an
+        # entry into force is stated (`valid_from_provisional`, on every
+        # result through validity.start_basis); with no date at all, the
+        # record takes no part in the validity filter, and says why.
+        provisional = None
+        if not valid_from and note.date_document:
+            valid_from = note.date_document
+            provisional = "the act's own date: no publication or entry into force is stated"
+            found.append(Issue("start-from-document-date", f"{celex}: {valid_from}"))
         if not valid_from:
-            raise UnindexableDocument(f"{unit}: no start of validity: no OJ date and no entry into force")
+            found.append(Issue("no-start-of-validity", f"{celex}: no publication, entry into force or "
+                                                       f"date of the act stated"))
         ends = [d for d in note.end_of_validity if d != OPEN_END]
-        if any(d < valid_from for d in ends):
+        if valid_from and any(d < valid_from for d in ends):
             found.append(Issue("end-before-start", f"end of validity {min(ends)}, start {valid_from}"))
         if note.in_force is False and not ends:
             found.append(Issue("not-in-force-without-end", celex))
@@ -776,6 +813,10 @@ class EurlexSource:
             "text_language": text_lang if text_lang != lang else None,
             "version_key": expr,
             "valid_from": valid_from,
+            "valid_from_provisional": provisional,
+            # the body's root as the Formex states it (parser 5: ACT,
+            # CONS.ACT, AGR, CORR, GENERAL …): what kind of document it is
+            "body_root": act.root if form == "fmx4" else None,
             "validity_work": f"{work}/{lang}",
             "authentic": False if consolidated else None,
             "sector": note.sector or celex[:1],

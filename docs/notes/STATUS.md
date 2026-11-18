@@ -20,6 +20,23 @@ measured (published figures disagree).
 
 ### 2026-11-18
 
+- **EUR-Lex parser 5 — BUILT, needs EUR-Lex5** (EUR-Lex4's parse refused 11,486 documents; München's
+  samples, /root/measure/eu4-samples.txt on the node). Each read now, none refused:
+  - a corrigendum (CORR, 4,487) by its corrections: one section each, labelled where it applies, the old
+    reading then the new;
+  - a GENERAL body (4,030): every main file of the wrapper read, the body the first shaped as an act
+    (31968R0259 hr/bg/ro: a table first, the act after it — parser 4 read the table alone), the others as
+    sections after it; a GENERAL document alone by its groups;
+  - an agreement (AGR, 31) as an act;
+  - a file the wrapper names and the manifestation lacks (29): `item-not-held`, the rest held;
+  - no start of validity stated (3,415, 1958–62 HTML/PDF): the act's own date as a PROVISIONAL start,
+    said (`valid_from_provisional` → `validity.start_basis`, as NeuRIS parser 5), or, no date at all,
+    held outside the validity filter (`no-start-of-validity`); the tree's `date_publication` is read
+    where the Formex wrapper states none (a Special Edition's PUBLICATION.REF.SE);
+  - French "Article premier" / "Article 1er" and a single article's heading are articles (LEMUR: French
+    at 0.593); `extra.body_root`. Parser 4 is not carried: EUR-Lex4 (paused, nothing published) is
+    re-created as EUR-Lex5 on its origin (RULE 1, A1c) and re-parsed (~80 min of stage time).
+
 - **EUR-Lex4's pass asks a work's tree once, not once per language** (app/acquire/work_trees.py
   `RecentTrees`; München after #757: "165 units in 6 min (1695/h) … asking: trees 1144 s, items 33 s").
   The non-inferred tree is the WORK's (no Accept-Language; `rdf.scope` cuts the unit's language), and
