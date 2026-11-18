@@ -35,3 +35,21 @@ def test_the_paired_statistics():
     assert s["n"] == 20 and s["mean_diff"] == 1.0 and s["p"] < 0.01 and s["ci95"] == [1.0, 1.0]
     z = e.paired_stats([1.0, -1.0] * 10, 2000, 1)
     assert z["mean_diff"] == 0.0 and z["p"] > 0.5
+
+
+def test_a_judge_of_another_family_is_asked_by_its_own_model_name(monkeypatch):
+    from app import config, llm
+    seen = []
+    monkeypatch.setattr(config, "CHAT_MODEL", "louise-chat-qwen3.5-9b-q4-p0")
+    monkeypatch.setattr(llm, "chat", lambda m, temperature, max_tokens: seen.append(config.CHAT_MODEL) or
+                        '{"agreement": 3, "contradictions": 0}')
+    e.judge("q", "g", "c", "louise-chat-command-r7b-q8")
+    e.judge("q", "g", "c")
+    assert seen == ["louise-chat-command-r7b-q8", "louise-chat-qwen3.5-9b-q4-p0"]
+    assert config.CHAT_MODEL == "louise-chat-qwen3.5-9b-q4-p0"
+
+
+def test_alignment_is_read(monkeypatch):
+    from app import llm
+    monkeypatch.setattr(llm, "chat", lambda m, temperature, max_tokens: '{"alignment": 2}')
+    assert e.align("old", "new") == 2.0
