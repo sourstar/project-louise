@@ -5859,11 +5859,11 @@ def run_check(a):
         except emb.GateDeferred:
             pass
 
-    origin_dir = _check_origin(a, codex)
     # the run the snapshot's records were read from: an origin naming a unit
     # by the origin's own key is resolved in it (09 §9.5, amended 2026-11-17)
     from app.hold import origin_run as origin_run_mod
     run = origin_run_mod.run_of(codex, snapshot)
+    origin_dir = _check_origin(a, codex, local=local, run=run)
     report = chk.run(
         a.root, name, codex, snapshot, seed=seed,
         checks=a.checks.split(",") if a.checks else None, sample=a.sample,
@@ -5957,18 +5957,77 @@ def cmd_check(a) -> int:
     return 0 if report.ok else 1
 
 
-def _check_origin(a, codex):
+def _check_origin(a, codex, *, local=None, run: str | None = None):
     """The origin `hold check` re-parses from: the one given (`--origin`);
     else the Codex's own network origin, which `_reparse_from` reaches with
     none given; else, for the nightly check (`--origin-else`), the copy this
     node keeps — a re-parse that proves the parser and the copy agree and is
-    said so (`check.Ctx.origin_is_copy`), never a pass of records-vs-origin."""
+    said so (`check.Ctx.origin_is_copy`), never a pass of records-vs-origin.
+
+    A DATED ONE-STREAM BZIP2 DUMP (app/acquire/block_origin.py) is asked by
+    its blocks, which the copy's block index finds: the index is loaded, or
+    built here — never on the worker's round path — on the cores the node
+    allows. The nightly check builds it for at most `NIGHTLY_BUILD_S` and,
+    while it is not whole, re-parses the kept copy as before and says why
+    (the next night resumes the build); any other check builds it whole. A
+    stop (SIGTERM, SIGINT) ends the build at its next step, its state
+    written, and the command exits 130 (invariant 2)."""
     given = getattr(a, "origin_dir", None)
     if given:
         return given
     fallback = getattr(a, "origin_else", None)
-    if fallback and _member_origin(codex) is None:
+    mo = _member_origin(codex)
+    if mo is not None and callable(getattr(mo, "prepare", None)):
+        import time
+
+        from app import bz2_blocks
+        from app.acquire import block_origin
+        wanted = (str(a.checks).split(",") if getattr(a, "checks", None)
+                  else list(getattr(getattr(codex, "validation", None), "checks", None) or ()))
+        if not {"records-vs-origin", "image-equivalence"} & set(wanted):
+            return None                     # nothing re-parsed from the origin: no index to build
+        copy = fallback or _kept_copy_dir(a, local)
+        deadline = time.monotonic() + block_origin.NIGHTLY_BUILD_S if fallback else None
+        with _graceful_stop() as stop:
+            try:
+                why = mo.prepare(copy, run, stop=stop.is_set, deadline=deadline,
+                                 log=lambda m: print(m, file=sys.stderr))
+            except bz2_blocks.Incomplete as e:
+                print(f"note: {e}", file=sys.stderr)
+                raise Stopped("SIGTERM") from None
+        if why is not None:
+            print(f"note: records-vs-origin cannot ask the origin by its blocks: {why}"
+                  + ("; the copy this node keeps is re-parsed meanwhile" if fallback else ""), file=sys.stderr)
+            if fallback:
+                return fallback
+        return None
+    if fallback and mo is None:
         return fallback
+    return None
+
+
+def _kept_copy_dir(a, local):
+    """The copy this node keeps of a collection's origin, for a check by hand
+    (the nightly names it, `--origin-else`): the local side's corpus where it
+    names one, the collection's file's (`collections.by_name`), else the
+    collection's own `<root>/<name>/origin` (collections.origin_dir) — the
+    first that is a directory, or None."""
+    from pathlib import Path
+
+    from app import collections as collections_mod
+    name = getattr(local, "name", None) or getattr(a, "collection", None)
+    found = [getattr(local, "corpus_dir", None)]
+    try:
+        c = collections_mod.by_name(name) if name else None
+    except Exception:                                   # noqa: BLE001 — another place to look, not a fault
+        c = None
+    found.append(getattr(c, "corpus_dir", None))
+    root = getattr(a, "root", None)
+    found.append((Path(root) if root is not None else collections_mod.louise_root() / "collections")
+                 / str(name) / "origin")
+    for d in found:
+        if d and Path(d).is_dir():
+            return Path(d)
     return None
 
 
@@ -6044,6 +6103,15 @@ def _reparse_from(codex, name: str, origin_dir, *, run: str | None = None):
         mo = _member_origin(codex)
         if mo is None:
             return None
+        if mo.base is None:
+            # a block origin with no copy to place its records in (it says
+            # why): nothing re-fetched, each record unreachable for that reason
+            why = getattr(mo, "why_not", None) or "the origin cannot be read here"
+
+            def unplaced(uid: str, locator: str) -> bytes:
+                from app.hold.check import OriginAway
+                raise OriginAway(why)
+            return unplaced
         base, prepare = mo.base, mo.materialise
     # THE CODEX COMES WITH IT. 03 §3.2 asks for the origin "re-parsed with
     # the Codex's toolchain", and two of the things that decides are in the
@@ -6100,7 +6168,15 @@ def _reparse_many_from(codex, name: str, origin_dir, *, run: str | None = None):
 
     from app import parallel
     if not origin_dir:
-        return None
+        # a one-stream dump asked by its blocks (app/acquire/block_origin.py):
+        # the blocks compared here, under this process's budget, and the
+        # records whose blocks are the origin's re-parsed from the copy in
+        # the pool — the comparison below, over the copy
+        mo = _member_origin(codex)
+        with_local = getattr(mo, "many_with", None)
+        if with_local is None or getattr(mo, "base", None) is None:
+            return None
+        return with_local(_reparse_many_from(codex, name, mo.base, run=run))
     collection = _reparse_collection(codex, name, origin_dir)
 
     def many(items):
@@ -6137,13 +6213,14 @@ def _member_origin(codex):
     (app/acquire/member_origin.py) or its documents' files
     (app/acquire/file_origin.py): `_reparse_from`, `_origin_unit_from` and
     `_weigh_from` share its listings and its temporary base."""
-    from app.acquire import file_origin, member_origin, unit_origin
+    from app.acquire import block_origin, file_origin, member_origin, unit_origin
     key = getattr(codex, "collection_id", id(codex))
     if key not in _member_origins:
-        # by what the spec declares: zip members, a mirror tree, or a unit
-        # its UnitFetcher fetches again (app/acquire/unit_origin.py)
+        # by what the spec declares: zip members, a mirror tree, a unit its
+        # UnitFetcher fetches again (app/acquire/unit_origin.py), or the
+        # blocks of a dated one-stream bzip2 dump (app/acquire/block_origin.py)
         _member_origins[key] = (member_origin.for_codex(codex) or file_origin.for_codex(codex)
-                                or unit_origin.for_codex(codex))
+                                or unit_origin.for_codex(codex) or block_origin.for_codex(codex))
     return _member_origins[key]
 
 

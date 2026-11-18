@@ -219,3 +219,36 @@ def test_parse_assignments_names_every_key():
         assert key in str(e.value)
     assert collection_file.parse_assignments(["embed_mode = off", "share=true"]) == {
         "embed": "off", "share": "true"}
+
+
+def test_a_list_is_set_as_the_file_writes_it_or_by_commas(isolated_config, capsys):
+    """München, 2026-11-18: `--set embed_slices=[...]`, a list pasted as the
+    file writes it, was split on the commas inside its brackets and the
+    refusal blamed `slices`. The TOML array and the comma form set the same
+    bytes; a bad name in a list is refused naming the key that was set."""
+    assert louise.main(["hold", "config", "apply", "gutenberg",
+                        "--set", 'embed_slices=["lang=en", "lang=de"]']) == 0
+    capsys.readouterr()
+    by_toml = _file().read_bytes()
+    assert _toml()["embed_slices"] == ["lang=en", "lang=de"]
+    assert louise.main(["hold", "config", "apply", "gutenberg", "--set", "embed_slices=all"]) == 0
+    capsys.readouterr()
+    assert louise.main(["hold", "config", "apply", "gutenberg", "--set", "embed_slices=lang=en,lang=de"]) == 0
+    capsys.readouterr()
+    assert _file().read_bytes() == by_toml
+    assert louise.main(["hold", "config", "apply", "gutenberg",
+                        "--set", 'share_kinds=["records", "vectors"]']) == 0
+    capsys.readouterr()
+    assert collections_mod.by_name("gutenberg").share_kinds == ("records", "vectors")
+    for bad, says in (('embed_slices=["lang=en", "not a slice!"]', "embed_slices = "),
+                      ('share_slices=["lang=en", "not a slice!"]', "share_slices = "),
+                      ('embed_slices=["lang=en", 3]', "embed_slices is a list of names"),
+                      ('embed_slices=["lang=en"', "embed_slices = "),
+                      ("slices=not a slice!", "slices = ")):
+        before = _file().read_bytes()
+        assert louise.main(["hold", "config", "apply", "gutenberg", "--set", bad]) == 2
+        err = capsys.readouterr().err
+        assert says in err, (bad, err)
+        if bad.startswith(("embed_slices", "share_slices")):
+            assert ": slices" not in err, err
+        assert _file().read_bytes() == before

@@ -45,10 +45,12 @@ def recipe(*, shard_records: int = 2) -> dict:
             "slicing": {**template.default_slicing(source), "shard_records": int(shard_records)}}
 
 
-def live(data_dir: Path, config_dir: Path, *, name: str = "wikidata", run: str | None = None):
+def live(data_dir: Path, config_dir: Path, *, name: str = "wikidata", run: str | None = None, dump=None):
     """The live collection at parser 2 — the Codex naming no run unless
-    `run` — its file stating `snapshot`, its corpus holding the run's dump,
-    scanned, built and frozen as SID. Returns (root, corpus, codex)."""
+    `run` — its file stating `snapshot`, its corpus holding the run's dump
+    (`dump(corpus, RUN)` writes it where given: a dump of many bzip2 blocks,
+    tests/hold/test_block_origin.py), scanned, built and frozen as SID.
+    Returns (root, corpus, codex)."""
     from unittest import mock
 
     from app import collections as collections_mod
@@ -72,7 +74,7 @@ def live(data_dir: Path, config_dir: Path, *, name: str = "wikidata", run: str |
         f'codex = "{codex.collection_id}"\nslices = "all"\nkinds = ["records", "vectors"]\nshare = false\n'
         f'snapshot = "{RUN}"\n', encoding="utf-8")
     corpus = root / name / "origin"
-    a_dump(corpus, RUN)
+    (dump or a_dump)(corpus, RUN)
     c = collections_mod.by_name(name)
     con = db.connect(c)
     try:

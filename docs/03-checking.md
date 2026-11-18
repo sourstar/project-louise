@@ -173,8 +173,19 @@ many sampled records were compared and why the rest were not — passed
 over for a shared piece, or the bound spent before the seed reached
 them — and a layer of which no record was compared is said first: a
 pass on one layer is never read as a pass on the other. Wikidata's dump
-is one bzip2 stream with no index the origin publishes, so its unit is
-the file, compared in part as before.
+is one bzip2 stream with no index the origin publishes; *amended
+2026-11-18 (operator: "A")*, the verifier's COPY gives the index: where a
+dated dump is one `.bz2` stream framed one unit a line, the copy's block
+index (where each bzip2 block begins, in bits, and which unit lines it
+holds) names the blocks a record's line lies in, and the unit is that
+block range — its compressed bytes fetched by Range and compared with
+the copy's, the stream's header and length beside them. Equal bits over
+a block decode to equal bytes (a block is decoded from its own bits), so
+a record whose blocks are the origin's and whose line re-parses from the
+copy byte for byte is reproduced from the origin; blocks that differ make
+their records changed at the origin. Without the index (not built yet, or
+no copy) the unit is the file, compared in part as before
+(docs/notes/wikidata-entity-origin.md, "Verifying against the origin").
 
 `hold check <collection>` runs the plan and prints a report; the same
 report is what the worker produces in the background, once per cadence
