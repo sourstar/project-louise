@@ -106,6 +106,28 @@ def records_of(name: str, rng: random.Random):
         yield from recs
 
 
+def _one(out, r: dict, name: str, key: str, y: int, rng: random.Random, made: dict, qid: int, llm) -> int:
+    """One passage of the record to the chat model, its query written to the set."""
+    passage = passage_of(r, rng)
+    if passage is None:
+        return qid
+    try:
+        query = llm.strip_think(llm.chat([{"role": "user", "content": PROMPT + passage}],
+                                         temperature=0.0, max_tokens=120)).strip()
+    except Exception as e:   # noqa: BLE001 — one failed call is one passage skipped, said
+        print(f"{name} {r['uid']}: chat failed: {type(e).__name__}: {e}", file=sys.stderr)
+        return qid
+    query = query.splitlines()[0].strip().strip('"«»“”') if query else ""
+    qid += 1
+    why = refused(query, passage, str(r.get("title") or ""))
+    made["refused" if why else "kept"] += 1
+    out.write(json.dumps({"qid": qid, "stratum": key, "collection": name, "uid": r["uid"], "year": y,
+                          "title": r.get("title"), "passage": passage, "query": query, "refused": why},
+                         ensure_ascii=False) + "\n")
+    out.flush()
+    return qid
+
+
 def stratum(spec: str) -> tuple[str, int, int]:
     name, lo, hi = spec.rsplit(":", 2)
     return name, int(lo), int(hi)
@@ -141,23 +163,10 @@ def main(argv: list[str] | None = None) -> int:
                 y = reading.years([hit]).get(0)
                 if y is None or not lo <= y <= hi:
                     continue
-                passage = passage_of(r, rng)
-                if passage is None:
-                    continue
-                try:
-                    query = llm.strip_think(llm.chat([{"role": "user", "content": PROMPT + passage}],
-                                                     temperature=0.0, max_tokens=120)).strip()
-                except Exception as e:   # noqa: BLE001 — one failed call is one record skipped, said
-                    print(f"{name} {r['uid']}: chat failed: {type(e).__name__}: {e}", file=sys.stderr)
-                    continue
-                query = query.splitlines()[0].strip().strip('"«»“”') if query else ""
-                qid += 1
-                why = refused(query, passage, str(r.get("title") or ""))
-                made["refused" if why else "kept"] += 1
-                line = {"qid": qid, "stratum": key, "collection": name, "uid": r["uid"], "year": y,
-                        "title": r.get("title"), "passage": passage, "query": query, "refused": why}
-                out.write(json.dumps(line, ensure_ascii=False) + "\n")
-                out.flush()
+                for _p in range(a.per_record):
+                    if made["kept"] >= a.kept:
+                        break
+                    qid = _one(out, r, name, key, y, rng, made, qid, llm)
             print(f"{key}: {made['kept']} kept, {made['refused']} refused", file=sys.stderr)
         out.write(json.dumps({"counts": counts}) + "\n")
     return 0

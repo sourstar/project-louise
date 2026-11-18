@@ -47,3 +47,18 @@ def test_the_set_records_its_writer_and_counts_its_strata(monkeypatch, tmp_path)
     # the writer is given the passage alone: never the record's title
     assert all("Rime" not in m[0]["content"] and body[0]["passage"] in seen[0][1][0]["content"]
                for _t, m in seen)
+
+
+def test_several_passages_per_record_fill_a_stratum_of_few_books(monkeypatch, tmp_path):
+    import json
+    from app import llm, reading
+    recs = [{"uid": "gutenberg:1", "lang": "it", "title": "Commedia",
+             "sections": [["I", "Una frase lunga che continua sul mercante. " * 30]]}]
+    monkeypatch.setattr(k, "records_of", lambda name, rng: iter(recs))
+    monkeypatch.setattr(reading, "years", lambda hits, collection=None: {0: 1320})
+    monkeypatch.setattr(llm, "chat", lambda m, temperature, max_tokens: "Chi era il mercante?")
+    out = tmp_path / "set.jsonl"
+    k.main(["--stratum", "g:1300:1399", "--stratum", "g:1500:1599", "--kept", "3", "--per-record", "3",
+            "--weights-sha256", "abc", "--out", str(out)])
+    tail = json.loads(out.read_text(encoding="utf-8").splitlines()[-1])
+    assert tail["counts"] == {"g:1300:1399": {"kept": 3, "refused": 0}, "g:1500:1599": {"kept": 0, "refused": 0}}
