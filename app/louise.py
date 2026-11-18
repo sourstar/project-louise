@@ -3727,7 +3727,7 @@ def cmd_node_speech(a) -> int:
         if a.speech_verb == "set":
             changes = {k: getattr(a, k) for k in SPEECH_KEYS if getattr(a, k) is not None}
             if not changes:
-                print("louise node speech set: nothing to set — give --stt, --vad, --tts, --voice or --synthetic "
+                print("louise node speech set: nothing to set — give --stt, --vad, --tts or --voice "
                       "(an empty value removes one)", file=sys.stderr)
                 return 2
             out = voice.write(platform_config.platform_path(), changes)
@@ -7513,11 +7513,7 @@ def build_parser() -> argparse.ArgumentParser:
     q.add_argument("--tts", dest="tts_model", default=None, metavar="MODEL",
                    help="text to speech (/v1/audio/speech): the answer is read aloud with it")
     q.add_argument("--voice", dest="tts_voice", default=None, metavar="VOICE",
-                   help="an admin's voice, for every language; unset, the model server's first voice "
-                        "profile")
-    q.add_argument("--synthetic", dest="synthetic_voices", default=None, metavar="LANG=VOICE,…",
-                   help="the synthetic voice of each language, which every reader but an admin hears "
-                        "(\"it=<voice>, en=<voice>\"); unset, the answer is read aloud to admins only")
+                   help="the voice, for every language; unset, the model server's first voice profile")
     q.set_defaults(fn=cmd_node_speech)
 
     p = nverbs.add_parser("title", help="the node's title: the label at the top left of every page and a "
