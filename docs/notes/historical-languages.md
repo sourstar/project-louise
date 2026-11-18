@@ -226,6 +226,72 @@ entries) or `--update=full` (every entry asked with HTTP conditional
 requests); per-entry hash, Last-Modified, ETag, fetch and revision dates
 in `manifest.sqlite`.
 
+## Proposal: a reading annotation for historical Italian (2026-11-18, for the architecture session)
+
+Operator, 2026-11-18, verbatim: "make an annotation to correctly interpret
+the old fashioned italian words. This annotation will be used to replace
+the ancient expressions before the results are passed to the reranker and
+before they are processed by the chat model for the AI summary. Since the
+sources must carry a publication year, louise search engine is able to know
+wether to use it or not. Of there is no publication year, or the year does
+not apply, the annotation is not used." The architecture session decides
+the implementation; nothing is built in app/ before its ruling.
+
+**What it is.** A held annotation of (historical form, period) → reading
+(a modern form, or a gloss), each pair naming its method and source. At ask
+time, for a hit whose publication year falls in a pair's period, the COPY
+the reranker reads and the COPY the chat model reads have the form replaced;
+the hit the page, the PDF and API clients show is never touched (invariant
+11, as `historical.prepare` does today). No year, or a year outside every
+period: nothing applied.
+
+**The pairs, by source** (all already held, licences as recorded):
+
+| source | pairs it gives | period | replace or gloss | licence |
+|---|---|---|---|---|
+| spelling rules (`app/historical.py`: ſ, -tione, h-, u/v, et) | form → modern form (*huomo → uomo*, *vtile → utile*) | 1500–1800 | replace: grammar is kept | ours |
+| Wikisource, print-dated scan pages × work-dated pages | a variant and its modern form both attested, joined by the rule that maps one to the other (louise-ocr's `it_old._key`: u/v, i/j, h-, ph, ti+vowel, ct/pt) | 1400–1899, by print century | replace, where the modern form is attested ≥ N times in the 1900s | CC BY-SA 3.0 |
+| TLIO forms (258,015) | form → LEMMA (*abondava → ABBONDARE*), with the definition | < 1400 | GLOSS, not replace: a lemma is a citation form (*abondava* → *abbondare* breaks the sentence); the copy reads *abondava [abbondare: …]* | non-commercial, local: `share = false`, never to peers |
+
+**Four points for the ruling.**
+
+1. *Its shape.* A glossary is facts about WORDS, not claims about records:
+   09 §9.5's claim has a record as subject. Either a reference source
+   (facts by key, pinned, never ranked — invariant 4) used as a TEXT
+   TRANSFORM, or an annotations collection whose claims' subject is a
+   word. Which, and its Codex form?
+2. *It reorders.* Replacing words in the reranker's input changes the
+   order: invariant 4's WEIGHTS rule applies — a named source (yes), every
+   moved hit shows what moved it (`moved_by: "historical reading"`), the
+   reader's choice (Quality on, as today) or a default measured on the
+   judged query set (`tools/measure/fusion_calibration.py`, a historical
+   subset to be judged) and approved by the operator, never removing, the
+   same versions giving the same order.
+3. *Which year.* For SPELLING the edition's print year matters (a 1910
+   edition of Boccaccio is regularised); for VOCABULARY the work's date
+   (its words stay medieval in any edition). A record states at most
+   `first_published` (the WORK's, where its own corpus says so: ~12 % of
+   gutenberg's books, 2026-11-16) — the corpus-only rule forbids taking it
+   elsewhere. Proposed: spelling pairs by the edition's year where stated,
+   else the work's; TLIO glosses by the work's year. Coverage follows the
+   corpus: no year, no reading.
+4. *Where it runs.* The reranker's copy is built per hit after fusion and
+   before `rerank` (app/retrieval.py), the chat model's in
+   `historical.prepare` (both answer paths). A lookup per word of the
+   reranked depth (50 by default): a dictionary, microseconds a hit, so
+   no measurable cost — to be timed on the real path before it is claimed.
+   Its version (each source's snapshot and the rules' version) is part of
+   the reranker's input, so a cached rerank keys on it.
+
+The current answer-time helps (markers, `language-stage` claims, the
+spelling pre-pass in the model's copy) stay; the annotation replaces their
+spelling step with attested pairs and adds the reranker's copy and the
+glosses. The trigger becomes the year, as the operator said; the markers
+and the stage claim remain for books with no year? — the operator's words
+say NO ("If there is no publication year ... the annotation is not used"),
+so the ruling should say whether the existing marker trigger stays for the
+model's copy or goes.
+
 ## Other languages (top picks; full tables in this session's reports, to be added)
 
 - **English.** OE: Bosworth-Toller ("free for any purpose") and Wiktionary
