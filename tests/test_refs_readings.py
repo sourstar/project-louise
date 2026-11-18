@@ -33,11 +33,11 @@ def counts(**kw) -> collections.Counter:
 
 
 def test_a_pair_needs_both_forms_attested_and_is_dropped_where_the_old_form_is_a_modern_word():
-    c = counts(huomo_1500=5, huomo_1600=4, uomo_1900=3000, filler_1900=1_000_000,
+    c = counts(huomo_1500=6, huomo_1600=5, uomo_1900=3000, filler_1900=1_000_000,
                hauere_1500=4, avere_1900=2000,
                habito_1500=9, abito_1900=500, habito_1900=200,          # still printed: a 1900s word
                zzqqx_1500=1,                                            # a slip
-               vtile_1500=3, utile_1900=900)
+               vtile_1500=10, utile_1900=900)
     rows, modern, total = wr.derive(c)
     got = {r["orig"]: (r["reg"], r["period_from"], r["period_to"]) for r in rows}
     assert got["huomo"] == ("uomo", 1500, 1699)
@@ -55,7 +55,7 @@ def _dump(tmp_path: Path) -> Path:
     modern = " ".join(["uomo"] * 50 + ["parola"] * 10)
     xml = ('<mediawiki xmlns="http://www.mediawiki.org/xml/export-0.11/">'
            + page(110, "Indice:Rime.djvu", "|Anno=1554\n") + page(110, "Indice:Oggi.djvu", "|Anno=1952\n")
-           + "".join(page(108, f"Pagina:Rime.djvu/{i}", q + "L'huomo") for i in range(4))
+           + "".join(page(108, f"Pagina:Rime.djvu/{i}", q + "L'huomo") for i in range(10))
            + page(108, "Pagina:Oggi.djvu/1", q + modern) + "</mediawiki>").encode()
     p = tmp_path / "it.xml.bz2"
     p.write_bytes(bz2.compress(xml))
@@ -123,8 +123,8 @@ def test_the_terms_are_hashed_byte_exact(tmp_path: Path):
 
 def test_the_derivations_parameters_are_its_version():
     # a change to any of these is a new RULES_VERSION (ref_version): change both together
-    assert (wr.RULES_VERSION, wr.MIN_OLD, wr.MIN_LEN, wr.MODERN_PER_MILLION, wr.HOMOGRAPH_SHARE,
-            wr.MAX_SITES) == (2, 3, 5, 1.0, 0.05, 8)
+    assert (wr.RULES_VERSION, wr.MIN_OLD, wr.MIN_LEN, wr.SHORT, wr.MIN_OLD_SHORT, wr.MODERN_PER_MILLION,
+            wr.HOMOGRAPH_SHARE, wr.MAX_SITES) == (3, 3, 4, 6, 10, 1.0, 0.05, 8)
     assert wr.WikisourceReadingsSource.ref_version == wr.RULES_VERSION
 
 
@@ -137,3 +137,13 @@ def test_the_homograph_bar_is_relative_to_the_modern_form():
     got = {r["orig"]: r["reg"] for r in rows}
     assert got.get("perche") == "perché"
     assert "gioja" not in got
+
+
+def test_short_forms_numerals_cut_words_and_foreign_ys_give_no_pair():
+    c = counts(filler_1900=1_000_000, **{"ciò_1900": 900, "così_1900": 800, "ora_1900": 700, "ein_1900": 40,
+               "batt_1900": 30, "ciii_1900": 30, "dik_1900": 20, "avea_1900": 300},
+               cio_1500=50, cosi_1500=40, hora_1500=2941, hein_1700=4, bapt_1500=9, ciij_1500=9,
+               dyk_1700=9, auea_1500=30)
+    got = {r["orig"]: r["reg"] for r in wr.derive(c)[0]}
+    assert got == {"cio": "ciò", "cosi": "così", "hora": "ora", "auea": "avea"}
+    assert "y" not in "".join("".join(v) for v in wr.variants("dyk"))

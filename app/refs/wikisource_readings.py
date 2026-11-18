@@ -28,7 +28,7 @@ of old texts) against *perché*'s 751 — a historical spelling, kept; *gioja*
 ones louise-ocr's `it_old._key` normalises: v for u at a word's start
 (*vtile*), u for v inside one (*hauere*), an initial h before a vowel
 (*huomo*), ph for f, ti before a vowel for zi (*oratione*), ct and pt for tt,
-j for i, y for i, an unaccented final vowel (*perche*). Nothing is
+j for i, an unaccented final vowel (*perche*). Nothing is
 inferred that the two attestations do not both carry.
 
 The 1900s counts are written beside the pairs (`MODERN`), so `tlio`'s sync
@@ -64,13 +64,26 @@ LANG = "it"
 #: is a new ref_version (invariant 3; architecture, 2026-11-18: "it is a
 #: derivation parameter, so it goes into ref_version"). tests/
 #: test_refs_readings.py pins the parameters to this number. 2: the
-#: homograph bar relative to the modern form (was absolute), MIN_LEN.
-RULES_VERSION = 2
+#: homograph bar relative to the modern form (was absolute), MIN_LEN 5.
+#: 3: MIN_LEN 4 (3 for a final accent), numerals and cut words dropped by
+#: rule (`_ROMAN`, `_CUT`), no y → i (a y in these prints is a foreign word's),
+#: a short form printed at least MIN_OLD_SHORT times and never elided.
+RULES_VERSION = 3
 #: a form must be printed this often in 1400-1899 to give a pair (an OCR or
 #: transcription slip is printed once or twice)
 MIN_OLD = 3
-#: shorter forms are abbreviations (pj, conj) more often than words
-MIN_LEN = 5
+#: shorter forms are abbreviations or foreign words (pj, had, ham) more often
+#: than Italian ones. 5 (version 2) dropped 502 of 3,416 pairs on the 20261101
+#: dump, auea → avea, cosi → così, deue → deve among them; version 3 takes 4,
+#: and a 3-letter form only for a final accent restored (cio → ciò, gia → già)
+MIN_LEN = 4
+#: a form shorter than SHORT must be printed at least MIN_OLD_SHORT times:
+#: measured on the 20261101 dump, the 4- and 5-letter forms of foreign words
+#: in these prints are rare (hein 4, heis 5, huis 3, hijs 4), the Italian ones
+#: are not (hora 2,941, hore 441, hebbe 1,097, hamo 20, hara 24, haro 12)
+SHORT, MIN_OLD_SHORT = 6, 10
+#: a final accent restored: the one change a 3-letter form may give (cio → ciò)
+_ACCENTED = "àèéìòóù"
 #: printed this often a million words in the 1900s: a modern word
 MODERN_PER_MILLION = 1.0
 #: a form printed in the 1900s at least this share of its modern form's
@@ -85,6 +98,11 @@ _NOINCLUDE = re.compile(r"<noinclude>.*?</noinclude>", re.S)
 #: a word: letters (accented included), an optional elision apostrophe
 WORD = re.compile(r"[^\W\d_]+['’]?")
 _VOWELS = "aeiouàèéìòóù"
+#: a Roman numeral, j for the final i included (ciij, xvj): never a word to read
+_ROMAN = re.compile(r"^[ivxlcdm]+j?$")
+#: a "modern form" ending in two consonants is an abbreviation cut short
+#: (bapt → batt, dict → ditt): no Italian word ends so
+_CUT = re.compile(r"[^\Waeiouàèéìòóù'’]{2}$")
 _ACCENT = {"a": "à", "e": "éè", "i": "ì", "o": "ò", "u": "ù"}
 
 
@@ -177,8 +195,9 @@ def _sites(form: str) -> list[tuple[int, int, tuple[str, ...]]]:
             out.append((i, i + 1, ("z",)))                          # oratione (not -stione)
         elif ch in "cp" and nxt == "t":
             out.append((i, i + 1, ("t",)))                          # facto, scripto
-        elif ch in "jy":
-            out.append((i, i + 1, ("i",)))                          # gioja, hyeri
+        elif ch == "j":
+            out.append((i, i + 1, ("i",)))                          # gioja, principj (not y: in these
+                                                                    # prints a y is a foreign word's)
     if form and form[-1] in _ACCENT and len(form) > 2:
         out.append((n - 1, n, tuple(_ACCENT[form[-1]])))           # perche
     return out[:MAX_SITES]
@@ -214,11 +233,15 @@ def derive(counts: collections.Counter) -> tuple[list[dict], dict[str, int], int
     floor = MODERN_PER_MILLION * total / 1e6
     rows = []
     for form, by in old.items():
-        if sum(by.values()) < MIN_OLD or len(form) < MIN_LEN:
-            continue                                                # a slip, or an abbreviation (pj, conj)
+        if sum(by.values()) < MIN_OLD or len(form) < 3 or _ROMAN.match(form):
+            continue                                                # a slip, an abbreviation, a numeral
         best = max(((modern.get(v, 0), v) for v in variants(form)), default=(0, ""))
-        if best[0] < floor or modern.get(form, 0) >= HOMOGRAPH_SHARE * best[0]:
-            continue                                                # no modern form, or a 1900s word too
+        if len(form) < MIN_LEN and not (best[1][:-1] == form[:-1] and best[1][-1:] in _ACCENTED):
+            continue                                                # short: only a final accent (cio → ciò)
+        if len(form) < SHORT and (sum(by.values()) < MIN_OLD_SHORT or form[-1] in "'’"):
+            continue                                                # short and rare, or short and elided: noise
+        if best[0] < floor or modern.get(form, 0) >= HOMOGRAPH_SHARE * best[0] or _CUT.search(best[1]):
+            continue                                                # no modern form, a 1900s word, a cut word
         lo, hi = min(by), max(by) + 99
         rows.append({"id": readings.row_id(form, LANG, lo, hi), "orig": form, "reg": best[1],
                      "kind": readings.REPLACE, "lemma": "", "gloss": "", "lang": LANG,

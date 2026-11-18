@@ -318,6 +318,16 @@ München): the reading is two REFERENCE SOURCES (06 §6.5, amended):
   1900s words (reprints of old texts) against *perché*'s 751 — kept;
   *gioja* 16.3 against *gioia*'s 127.9 — still current then, excluded. An
   absolute 1-a-million bar dropped *perche* (tests/test_refs_readings.py).
+  *Version 3* (2026-11-18): version 2's 5-letter minimum (my 3,416 pairs
+  were derived BEFORE it; München's 2,900 after, on another copy of the
+  dump: sha256 51e95656… against mine e327357c…, both 445,564,638 bytes)
+  dropped auea → avea, cosi → così, cio → ciò, deue → deve. Now: 4 letters,
+  3 for a restored final accent; a form under 6 letters printed ≥ 10 times
+  and not elided; no Roman numerals (ciij); no "modern form" ending in two
+  consonants (bapt → batt); no y → i (a y in these prints is a foreign
+  word's: boys → bois, dyk → dik). 2,652 pairs on my copy; 50 random all
+  sound; known false ones left: huile → vile (French), hasta → asta and
+  haber → aber (Spanish), hauto → auto (avuto).
 - *The digest* is computed OFF the query path: `reading.warm`, at the web
   process's start and at each look of its watcher (a sync runs in another
   process), under a 60 s bound SQLite enforces; a query before the warm
