@@ -918,6 +918,7 @@ async function createCollection(){
     const d=j.result;
     box.innerHTML=head+`<div class="note">Created <b>${esc(d.name)}</b>: <code>${esc(d.collection_id)}</code><br>
       file <b>${esc(d.held)}</b> — it takes every slice and embeds on demand.</div>
+      ${d.notice?`<div class="note">${esc(d.notice)}</div>`:''}
       <pre class="cli">${esc(d.cli)}</pre>`;
     setTimeout(()=>location.reload(),3500);
   }catch(e){box.innerHTML='<div class="note" style="color:var(--err)">'+esc(e)+'</div>'}
