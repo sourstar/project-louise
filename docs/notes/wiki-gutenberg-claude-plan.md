@@ -360,3 +360,19 @@ about 3 months.
 **Open: widen the memoir rule with title words?** See the question in
 the reply of 2026-11-18. The rule is the records' own, written in the
 Codex `method` before it applies (invariant 11).
+
+### Decided (operator, 2026-11-18): the Italian title list
+
+"Yes medieval first person chronicles, absolutely! Yes eyewitness account,
+no matter if it's travel or otherwise. I confirm the no."
+- 26 of the 54 candidates are YES: memoirs, biographies, first-person
+  chronicles and eyewitness accounts, travel included. The other 28 are
+  NO: fiction, and history or criticism that is not a memoir.
+- The list: `wiki-gutenberg-memoir-titles-it.toml`, marked in
+  `wiki-gutenberg-memoir-candidates-it.md`.
+- **The Italian memoir slice is 52 books** (26 by subjects + 26 by
+  title): ~8.7 k chunks (i), ~4 days on the dense model, ~1 on the MoE.
+- **The meaning of "memoir" is widened by this decision:** first-person
+  chronicles and eyewitness accounts count. The same title pass is owed
+  for the other languages, each list marked by the operator, before step
+  2 of the run order (memoirs in every language).

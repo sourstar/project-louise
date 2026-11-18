@@ -1,0 +1,9 @@
+# wiki-gutenberg: Italian books added to (or kept out of) the memoir group by title.
+# Decided by the operator 2026-11-18 on wiki-gutenberg-memoir-candidates-it.md:
+# "Yes medieval first person chronicles, absolutely! Yes eyewitness account,
+# no matter if it's travel or otherwise. I confirm the no."
+# Keyed by Project Gutenberg ebook number. Its sha256 goes into the annotations
+# Codex `method` beside the subject rule (invariant 11).
+decided = "2026-11-18"
+yes = []
+no = [13627, 17853, 27640, 31000, 35405, 35716, 36109, 40885, 41821, 42541, 43486, 46100, 46101, 46494, 46495, 47328, 48267, 48600, 49394, 50996, 51325, 51400, 51402, 51462, 51528, 52281, 53350, 56500, 59655, 61304, 61305, 61541, 61542, 61885, 62038, 64393, 65073, 67974, 70905, 71232, 73640, 73895, 76089, 76090, 76091, 76092, 76093, 76094, 76095, 76096, 76516, 76517, 76518, 76598]
