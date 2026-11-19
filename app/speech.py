@@ -1,5 +1,5 @@
 """Speech for the programs that read Louise's answers aloud (operator,
-2026-11-06: Open WebUI's voice on LocalAI's omnivoice, one recorded voice
+2026-11-06: Open WebUI's voice on LocalAI's omnivoice, the Philippe voice
 for Italian and any voice for the other languages; "it doesn't skip the
 references like [7] but it pronounces them"; "keep the text to speech
 pinned as long as there is text to process").
@@ -17,21 +17,14 @@ own `/v1/audio/speech` after the three things only Louise knows:
   keeps "[7]", and reads "[3][4]" or "[3](…)" as a link, keeping the bare
   "3" — so `/v1` writes a space after a citation followed by a bracket or
   a parenthesis (`spaced_citations`), and this module removes the brackets.
-- ONE VOICE FOR EVERY LANGUAGE, FOR AN ADMIN (operator, 2026-11-07: "Use
-  the same omnivoice voice for all the languages, let's see how it goes",
+- ONE VOICE FOR EVERY LANGUAGE (operator, 2026-11-07: "Use the same
+  omnivoice philippe voice for all the languages, let's see how it goes",
   replacing 11-06's voice per language). The voice asked for is used
   whatever the text's language; none asked, the first profile recorded in
   LocalAI (`/api/voice-profiles`). Never the model's own voice where a
   profile exists: OmniVoice without one is a different speaker at every
   sentence, which is what French got while it had no French profile. The
   text's language still goes as `language`, so the voice speaks it.
-- A RECORDED VOICE IS READ TO AN ADMIN ONLY (operator, 2026-11-16: "limit
-  the cloned voices to the admin account … For the users account allow only
-  synthetic voices according to the language spoken"). Any other reader is
-  read to in the node's synthetic voice for the text's language (`[speech]
-  synthetic_voices`, app/voice.py), the first one named where the language
-  has none; the voice the request or the account names is not used. With
-  no synthetic voice held, nothing is read to them (409, the reason said).
 - THE MODEL STAYS LOADED WHILE IT SPEAKS. A client sends an answer one
   sentence at a time, and LocalAI's reclaimer may evict a model between two
   calls; the model is pinned (app/model_pins.py) from the first sentence and
@@ -443,40 +436,20 @@ def _clip_put(key: str, data: bytes, ctype: str) -> None:
         pass
 
 
-def synthesize(body: dict[str, Any], url: str | None = None, *,
-               admin: bool = True) -> tuple[int, bytes, str]:
+def synthesize(body: dict[str, Any], url: str | None = None) -> tuple[int, bytes, str]:
     """(status, audio or error body, content type) for an OpenAI speech
     request, relayed to the model server; the model and the voice the
     node's (`[speech]`, app/voice.py) where the request names none."""
-    return synthesize_timed(body, url, admin=admin)[:3]
-
-
-def synthetic_for(lang: str | None, voices: dict[str, str], profiles: list[dict]) -> str | None:
-    """The synthetic voice a reader who is not an admin hears: the one the
-    node names for `lang`, else the first named; a profile the server no
-    longer holds is passed over. None: no synthetic voice is held."""
-    first = [voices[lang]] if lang in voices else []
-    for v in first + [v for k, v in voices.items() if k != lang]:
-        if held_profile(v, profiles):
-            return v
-    return None
-
-
-#: what a reader who is not an admin is told when no synthetic voice is held
-NO_SYNTHETIC = (b'{"error": {"message": "no synthetic voice is set on this node, and a recorded '
-                b'voice is read to an admin only"}}')
+    return synthesize_timed(body, url)[:3]
 
 
 def synthesize_timed(body: dict[str, Any], url: str | None = None, *,
                      reading: str | None = None, n: int | None = None,
-                     last: bool = False, account_voice: str | None = None,
-                     admin: bool = True) -> tuple[int, bytes, str, list]:
+                     last: bool = False, account_voice: str | None = None) -> tuple[int, bytes, str, list]:
     """`synthesize` and its `Server-Timing` (W3C; 2026-11-08, to measure the
     reading's start and its pauses): `turn` the wait for the reading's
     sentence before (`Turns`), `synth` the model server's call in ms, `audio`
-    the clip's length in ms where it is a WAV. `admin` False: the reader is
-    not an admin, and hears the synthetic voice of the text's language only
-    (module docstring); every route a reader reaches says which it is."""
+    the clip's length in ms where it is a WAV."""
     from app import voice as node_voice
     url = (url or config.CHAT_URL).rstrip("/")
     text = speakable(str(body.get("input") or ""))
@@ -494,21 +467,15 @@ def synthesize_timed(body: dict[str, Any], url: str | None = None, *,
     # own), else the one the asker's account keeps (app/users.py) — unless it
     # names a profile the server no longer holds — a browser remembering a
     # voice since removed (app/voice.py `voices`): then the node's, never an error
-    if lang and "language" not in out:
-        out["language"] = lang
-    if admin:
-        asked = next((v for v in (body.get("voice") or None, account_voice or None)
-                      if v and held_profile(v, held)), None)
-        voice = voice_for(asked or node.tts_voice or None, held)
-    else:
-        spoken = str(out.get("language") or "").replace("_", "-").split("-")[0].lower() or None
-        voice = synthetic_for(spoken, node_voice.synthetic(node), held)
-        if voice is None:
-            return 409, NO_SYNTHETIC, "application/json", []
+    asked = next((v for v in (body.get("voice") or None, account_voice or None)
+                  if v and held_profile(v, held)), None)
+    voice = voice_for(asked or node.tts_voice or None, held)
     if voice:
         out["voice"] = voice
     else:
         out.pop("voice", None)
+    if lang and "language" not in out:
+        out["language"] = lang
     # NUMBERS AND DATES IN THE TEXT'S OWN WORDS (operator, 2026-11-08, A): the
     # one voice reads digits as it learned them, in Italian (app/speech_numbers.py)
     from app import speech_numbers

@@ -56,15 +56,11 @@ nav{display:flex;flex-direction:column;align-items:center;gap:8px;border-bottom:
    through on every theme. A phone keeps it top left too, smaller, beside the centred name; the menu row
    starts below it (operator, 2026-11-15: "Ask is way too close to the bottom of the logo"): logo 10-46 px,
    the first link from 50 px (4 px clear; 12 px was too much, the operator chose 8 from screenshots) */
-/* THE NAME ON THE LOGO'S MIDDLE (operator, 2026-11-16: "Align the title to the center of the logo; it looks
-   currently aligned to the top"): the logo sits at the nav's top padding, and the name's box is the logo's
-   height with the text centred in it, so the two centres meet on every screen; the menu follows 8 px below */
-nav a.logo{position:absolute;left:16px;top:14px;padding:0;line-height:0}
+nav a.logo{position:absolute;left:16px;top:50%;transform:translateY(-50%);padding:0;line-height:0}
 nav a.logo img{display:block;width:56px;height:56px}
 nav a.logo:hover{background:none;opacity:.85}
-nav .brand{font-size:18px;font-weight:600;text-align:center;min-height:56px;display:flex;align-items:center;
-  justify-content:center}
-@media (max-width:860px){nav a.logo{left:10px}nav a.logo img{width:36px;height:36px}nav .brand{min-height:36px}}
+@media (max-width:860px){nav a.logo{left:10px;top:10px;transform:none}nav a.logo img{width:36px;height:36px}nav .menu{margin-top:8px}}
+nav .brand{font-size:18px;font-weight:600;text-align:center}
 nav .menu{display:flex;gap:2px;flex-wrap:wrap;justify-content:center;align-items:baseline}
 nav .theme{width:auto;flex:none;font-family:var(--mono);font-size:12px;background:var(--panel2);
   color:var(--muted);border:1px solid var(--line);border-radius:3px;padding:3px 6px;margin-left:6px}
@@ -211,7 +207,6 @@ pre.cli{background:var(--ink);border:1px solid var(--line);border-radius:3px;pad
 @media (max-width:760px){
   body{overflow-wrap:anywhere}
   nav{padding:10px 12px}
-  nav a.logo{top:10px}                 /* at the nav's own top padding, as the name (THE NAME ON THE LOGO'S MIDDLE) */
   nav a{padding:6px 8px}
   main{padding:14px 12px}
   .panel{padding:12px}
