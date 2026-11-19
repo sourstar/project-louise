@@ -208,6 +208,84 @@ def test_verify_resets_only_what_differs_from_what_the_worker_would_derive_now(p
     assert dry["per_second"] > 0 and dry["whole_pass_hours"] is not None
     got = derived_check.verify(root, "re", apply=True, log=quiet)
     assert got["reset"] == 1 and _marks(coll, stale["uid"])[:2] == (0, 0)
-    assert not _held(coll, stale) and all(_held(coll, r) for r in rows[1:])
+    assert _held(coll, stale), "still searchable until its re-index replaces its rows (architecture, #767)"
+    assert all(_held(coll, r) for r in rows[1:])
     assert all(_marks(coll, r["uid"])[:2] == (1, 1) for r in rows[1:])
     assert derived_check.verify(root, "re", log=quiet)["chunks"] == 0, "the reset one is no longer done"
+    # its re-index replaces the stale rows (delete-then-insert in its group)
+    fts.index_book(stale["lang"] or "en", int(stale["native_id"]), worker._load_chunks(stale, coll), coll)
+    chunks = fts.book_chunks(fts.group_for(stale["lang"] or "en"), int(stale["native_id"]), coll)
+    assert chunks and all(c["text"] != "old" for c in chunks)
+
+
+def test_a_document_whose_text_index_group_changes_leaves_no_row_in_the_old_group(pair, corpus_dir, monkeypatch):  # noqa: F811
+    """Its re-index writes the new group alone: the old group's rows go at
+    once, and only for such a document."""
+    from app import worker
+    from app.hold import derived_check
+    root, coll, uids, ids, rows, out = _reconciled(pair, corpus_dir, monkeypatch)
+    from app import parallel
+    moved = rows[0]
+    metas = parallel.compute("metadata", coll, rows)
+    new_lang = metas[0][1]["lang"]
+    old_lang = "de" if fts.group_for(new_lang) != "de" else "fr"
+    con = db.connect(coll)
+    try:
+        for r, (ok, meta) in zip(rows, metas):
+            lang = old_lang if r["uid"] == moved["uid"] else meta["lang"]   # the manifest's, from an old parse
+            con.execute("UPDATE documents SET title=?, authors=?, lang=?, subjects=?, bookshelves=? WHERE uid=?",
+                        (meta["title"], meta["authors"], lang, meta["subjects"], meta["bookshelves"], r["uid"]))
+        con.commit()
+        rows = con.execute("SELECT * FROM documents ORDER BY rowid").fetchall()
+    finally:
+        con.close()
+    for r in rows:
+        fts.index_book(r["lang"], int(r["native_id"]), worker._load_chunks(r, coll), coll)
+    old_group = fts.group_for(old_lang)
+    assert old_group != fts.group_for(new_lang) and fts.books_held(old_group, [int(moved["native_id"])], coll) > 0
+    got = derived_check.verify(root, "re", apply=True, log=quiet)
+    assert (got["document"], got["regrouped"], got["reset"]) == (1, 1, 1), got
+    assert fts.books_held(old_group, [int(moved["native_id"])], coll) == 0, "no row left in the old group"
+    assert all(_held(coll, r) for r in rows[1:]), "the others untouched"
+
+
+def test_a_stop_between_the_old_group_s_delete_and_the_marks_is_caught_by_the_next_pass(
+        pair, corpus_dir, monkeypatch):  # noqa: F811
+    """Architecture's review of #769: the old group's rows go BEFORE the marks
+    commit. A failure between the two leaves the marks done and the stored
+    chunks gone; the next pass finds them gone, resets the document, and no
+    old-group row is left."""
+    from app import parallel, worker
+    from app.hold import derived_check
+    root, coll, uids, ids, rows, out = _reconciled(pair, corpus_dir, monkeypatch)
+    moved = rows[0]
+    metas = parallel.compute("metadata", coll, rows)
+    new_lang = metas[0][1]["lang"]
+    old_lang = "de" if fts.group_for(new_lang) != "de" else "fr"
+    con = db.connect(coll)
+    try:
+        for r, (ok, meta) in zip(rows, metas):
+            lang = old_lang if r["uid"] == moved["uid"] else meta["lang"]
+            con.execute("UPDATE documents SET title=?, authors=?, lang=?, subjects=?, bookshelves=? WHERE uid=?",
+                        (meta["title"], meta["authors"], lang, meta["subjects"], meta["bookshelves"], r["uid"]))
+        con.commit()
+        rows = con.execute("SELECT * FROM documents ORDER BY rowid").fetchall()
+    finally:
+        con.close()
+    for r in rows:
+        fts.index_book(r["lang"], int(r["native_id"]), worker._load_chunks(r, coll), coll)
+    old_group = fts.group_for(old_lang)
+    real = fts.delete_books
+
+    def delete_then_stop(group, ids, collection=None):
+        real(group, ids, collection)
+        raise RuntimeError("stopped between the delete and the marks")
+    monkeypatch.setattr(fts, "delete_books", delete_then_stop)
+    with pytest.raises(RuntimeError, match="between the delete and the marks"):
+        derived_check.verify(root, "re", apply=True, log=quiet)
+    assert fts.books_held(old_group, [int(moved["native_id"])], coll) == 0
+    assert _marks(coll, moved["uid"])[:2] == (1, 1), "the marks not committed"
+    monkeypatch.setattr(fts, "delete_books", real)
+    got = derived_check.verify(root, "re", apply=True, again=True, log=quiet)
+    assert got["reset"] >= 1 and _marks(coll, moved["uid"])[:2] == (0, 0), "the next pass resets it"
+    assert fts.books_held(old_group, [int(moved["native_id"])], coll) == 0, "no old-group row left"
