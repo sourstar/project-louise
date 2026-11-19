@@ -217,6 +217,12 @@ def _rdf_one(con, row, collection, plugin, now: int, meta: dict | None = None) -
         from app import validity
         validity.record(con, row["uid"], int(row["native_id"]), meta["validity"],
                         day=validity.today(collection))
+    else:
+        # a re-parse that states no start any more leaves the chain (one
+        # primary-key read when it held none; app/validity.py `forget`)
+        from app import validity
+        if validity.declared(collection) is not None:
+            validity.forget(con, row["uid"], day=validity.today(collection))
     # The catalog index's row (app/catalog.py), keyed on the document's
     # rowid and written by the caller before the marks commit. (The SQLite
     # FTS5 catalog it replaced was written here until 2026-09-19.)

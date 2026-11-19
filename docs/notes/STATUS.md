@@ -18,6 +18,22 @@ build at 12 cores, the GPU uncapped. The card's noise (operator): 0.2 sone
 idle, 3.1 sone at full load, coil whine ~0.9 sone; its fan range is being
 measured (published figures disagree).
 
+### 2026-11-19
+
+- **A1c's derived rows follow the record — FIXED, the repair owed** (docs/02 §2.4 A1c amended). `carry
+  --rebuilt` copied the manifest's rdf/fts marks, its validity table and the text index, and `reconcile`
+  reset only `embed_done` where `content_hash` moved, while the worker's validity, catalogue and
+  text-index rows come from its own parse. Confirmed by München (read-only): NeuRIS 51 of 5,536 records
+  without a validity row (out of the in-force filter); Normattiva ~1.5 % (3 of 200) with parser 9's
+  "— null" headings in its text index. Now `reconcile` compares each record's parse digest (every field
+  but `origin`, `origin_hash`, `content_hash`): moved → rdf/fts marks reset, its validity row
+  (`validity.forget`, chain left to the re-record), text-index and catalogue rows
+  (`unindexable.withdraw_many(vectors=False)`) deleted; vectors by `content_hash` as before. The rdf stage
+  now takes a version's row away when its parse states no start (`_rdf_one`). Repairs:
+  `louise dev rederive <c> --yes` (every document derived again: NeuRIS, Normattiva) and `--verify`
+  (app/hold/derived_check.py, on the parse pool, resumable; its dry run counts and times: pubmed,
+  wikidata).
+
 ### 2026-11-18
 
 - **EUR-Lex parser 5 — BUILT, needs EUR-Lex5** (EUR-Lex4's parse refused 11,486 documents; München's

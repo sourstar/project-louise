@@ -481,6 +481,30 @@ def record(con, uid: str, native_id: int, meta: dict[str, Any], *, day: int | No
     return moved
 
 
+def forget(con, uid: str, *, day: int | None = None, chain: bool = True) -> list[str]:
+    """One version out of the table — a re-parse that no longer states a
+    start (2026-11-19: the A1c re-derive; `record` only ever upserted, so a
+    version a new parser dates no more kept the old one's row) — with the
+    closures and amendments it stated, inside the caller's transaction; its
+    Work's chain recomputed. Returns the uids of the other versions that
+    moved (their stage marks reset by `recompute`). Nothing when it holds no
+    row: one primary-key read. `chain=False`: the row alone, the chain left
+    to the `record` that writes the version again (the A1c re-derive: a gap
+    of minutes, its neighbours not reset for nothing)."""
+    row = con.execute("SELECT work FROM validity WHERE uid=?", (uid,)).fetchone()
+    if row is None:
+        return []
+    touched = _record_closures(con, uid, [])         # its closures go; the Works they keyed
+    con.execute("DELETE FROM validity WHERE uid=?", (uid,))
+    _record_amendments(con, uid, [])
+    if not chain:
+        return []
+    moved = recompute(con, str(row[0]), day=day)
+    for other in sorted(touched - {str(row[0])}):
+        moved += recompute(con, other, day=day)
+    return moved
+
+
 #: the control row holding the day `shown` was last rolled to (`roll`)
 ROLLED = "validity_shown_day"
 
