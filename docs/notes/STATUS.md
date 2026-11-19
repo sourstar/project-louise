@@ -20,6 +20,66 @@ measured (published figures disagree).
 
 ### 2026-11-19
 
+- **EUR-Lex: the Data Dump files 9 acts' contents under other files' names — FIXED, not deployed**
+  (formex.py `not_its_name`, `stated_place`, `swapped`; eurlex_dump.py `held_not_its_name`). Counted over
+  EUR-Lex5's 932,781 units (tools/measure/eurlex_units_check.py, München): 226 units, the same 9 acts of
+  2014–15 in every language (32015D1735: a TIFF as the body's `.xml`; 32014R1011, 32015R0003, 32015R0207,
+  32015R0220, 32015R0228, 32015R0341, 32015R0523, 32015R0864: body and annex in each other's place), hr 18
+  more. Cellar serves them right (32015R0207 de, unchanged since 2015-05-05). The test: a file's first
+  bytes against its extension; and, within one OJ issue and volume, the act's own files in the order of
+  the page/sequence their names encode state pages in the same order (an inversion is a swap; a Special
+  Edition's numbering — +82 on every file, an offset per OJ issue, +1 after a page break — keeps it; the
+  first rule, an absolute page check, flagged 10,141 units, hr 7,194). Now the parser refuses such a unit
+  with its reason (never another file's text in its place); the dump build never lands one, and records
+  a held one for the per-unit pass to ask Cellar first; a unit Cellar was asked for once is not asked
+  every pass (`fetched`).
+
+- **EUR-Lex: a Formex INCLUSION was never read — FIXED, not deployed** (app/plugins/eurlex/formex.py
+  `_include`). 32021R1971: Annex I's file (876 bytes) is `<QUOT.S><INCL.ELEMENT FILEREF="…01000302.xml"
+  TYPE="FORMEX.DOC"/></QUOT.S>`; the 39 MB of tables (2,687 pages) are the included file's, kept only as a
+  tree in `extra.formex.other_items` and in no section: every annex read as 0 characters (invariant 11).
+  Now each FORMEX.DOC inclusion in the text is read where it stands, recursively (the one in
+  BIB.INSTANCE/INCLUSIONS is the listing, not read; a cycle is said, `inclusion_cycles`; a file the
+  manifestation lacks is `item-not-held`); the included file's BIB.INSTANCE and markup kept
+  (`extra.formex.inclusions`). Annex I: 0 → 20.6 M characters, the parse 5.9 s / 1.06 GB peak (its XHTML
+  24 s / 1.6 GB). No parser bump (EUR-Lex5 has no records, RULE 1); the units already parsed are the
+  units check's `units-with-an-included-document` (`--list-included`), to be derived again. THE WORKER'S
+  OOM LOOP (43 kills): EUR-Lex5's sources over 100 MB, mostly XHTML of acts whose Formex is a zip
+  (#774); a parse child peaks at ~26x the source (München: 32021R2017 el, parse 2.06 GB, parse + chunk
+  5.25 GB — `chunking_legal.split` encodes a whole 19 M-character section). 359 pending ones parked by
+  München (RULE 1, an error that discovery clears when the re-formed unit lands); the chunker's memory and
+  a large-document admission are architecture's (OPEN).
+
+- **EUR-Lex: a Formex manifestation served as one zip is Formex — BUILT, not deployed** (app/plugins/eurlex/
+  formex.py `unpack`; cellar.py `form_of`, `lacks_package`, `TreeUnits._reform`; eurlex_dump.py). Cellar serves
+  some fmx4 manifestations as ONE item, a zip of the wrapper, body and figures (32024R1689
+  `OJABA_L_202401689_ENG.fmx4.zip`; 32015D1735's English one, repackaged at Cellar 2026-11-19 15:38 CET).
+  `form_of` saw no wrapper among the item names and read those acts from XHTML — the AI Act is held as
+  `L_202401689EN.html` (München). The Data Dump holds no `*.zip` member in any of its 24 FMX zips, so every
+  such unit is the API's. Now: the package is held as served and read through by every check, the unit's
+  day, the reference source and the parser (`extra.items` names each member and its package; a unit
+  without one parses byte for byte as before — no parser bump, EUR-Lex5 has no records, RULE 1). A held
+  unit lacking the package its OWN tree lists is re-formed: from the dump where it holds it (`reformed`),
+  else recorded for the per-unit pass to ask first (`package-not-in-dump`, `incomplete_due`); the regular
+  listing asks again only for a language the dump build has re-formed (`.eurlex-dump-packages.json`:
+  bulk first). Counted by tools/measure/eurlex_units_check.py (read-only), which also counts every held
+  file whose first bytes disagree with its extension and each Formex body or annex whose root is not
+  what the wrapper names it as: 32015D1735 (19 languages) is the Data Dump's own swap — its member
+  `…01004901.xml` is a TIFF and the body's XML is `…01005202.tif`, 11 members matching the unit name for
+  name — which Cellar corrected today; a swap leaving XML under an XML name errors nowhere. OWED: the
+  re-form run (dump build over EUR-Lex5) and the check's counts; the corrected 32015D1735 is fetched
+  through the fix below.
+- **EUR-Lex: "modified since" read the WORK's date only — FIXED, not deployed** (32015D1735: the work
+  2026-11-02, its English expression and manifestations 2026-11-19; the listing and the held tree both
+  compared the work's `cmr:lastModificationDate`, so a manifestation Cellar replaced was never fetched
+  again). Now both compare the UNIT's: the latest of its work, its expression and its manifestations
+  (`cellar.MODIFIED` in the page and fingerprint queries; `Notice.modified` from the tree and the branch
+  notice; the dump build's older/newer test). A record's `last_modified` stays the work's (no record
+  changes). In the dump's own trees the work's date is the latest (the fixtures: equal), so dump-built
+  units are not asked again for it; a unit whose expression or manifestation is newer is — what changed
+  since the bulk was cut. The kept window listings are keyed on the new shape
+  (`cellar_listing.SHAPE`): every window is listed once again after the deploy.
+
 - **A1c's derived rows follow the record — FIXED, the repair owed** (docs/02 §2.4 A1c amended). `carry
   --rebuilt` copied the manifest's rdf/fts marks, its validity table and the text index, and `reconcile`
   reset only `embed_done` where `content_hash` moved, while the worker's validity, catalogue and

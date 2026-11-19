@@ -582,6 +582,15 @@ def index_book(lang: str, book_id: int, chunks: list[dict], collection=None):
     """One document, one commit — for callers that genuinely have one."""
     index_books([(lang, book_id, chunks)], collection)
 
+def groups_for_lang(collection, lang: str | None) -> list[str]:
+    """The groups a document of `lang` sits in: its language's group, and
+    for a `mul` record every group its sections can be in (as `delete_book`)."""
+    lang = lang or "und"
+    if lang == MULTILINGUAL:
+        return list(dict.fromkeys([group_for(l) for l in section_languages(collection)] + [group_for(lang)]))
+    return [group_for(lang)]
+
+
 def delete_book(lang: str, book_id: int, collection=None):
     """A `mul` record's sections may be in several groups
     (`by_section_language`): it is deleted from each group its sections can
@@ -727,6 +736,32 @@ def chunk_counts(collection, book_ids: list[int]) -> dict[int, int]:
         for b in got["n"]["buckets"]:
             k = int(b["key"])
             out[k] = out.get(k, 0) + int(b["doc_count"])
+    return out
+
+
+def stored_by_group(collection, book_ids: list[int]) -> dict[int, dict[str, list[tuple[str, str, str]]]]:
+    """`stored_chunks`, kept apart by group: `{book: {group: [(chunk id,
+    heading, text)…]}}` — what each group's index holds of each document
+    (app/hold/derived_check.py: the group a document's rows sit in is not
+    always the one its language names now)."""
+    out: dict[int, dict[str, list[tuple[str, str, str]]]] = {}
+    if not book_ids:
+        return out
+    for group in existing_groups(collection):
+        idx = get_index(group, collection)
+        idx.reload()
+        q = tantivy.Query.term_set_query(idx.schema, "book_id", list(book_ids))
+        searcher = idx.searcher()
+        total = searcher.search(q, 1, count=True).count
+        if not total:
+            continue
+        for _score, addr in searcher.search(q, total).hits:
+            doc = searcher.doc(addr)
+            out.setdefault(int(doc["book_id"][0]), {}).setdefault(group, []).append(
+                (doc["chunk_id"][0], doc["chapter"][0] if doc["chapter"] else "", doc["body"][0]))
+    for groups in out.values():
+        for v in groups.values():
+            v.sort()
     return out
 
 

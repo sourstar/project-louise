@@ -50,7 +50,7 @@ import threading
 import zipfile
 from collections import Counter, OrderedDict
 from pathlib import Path
-from typing import Callable
+from typing import Any, Callable
 
 #: works per task: a chunk parses its trees once and visits every language.
 #: MEASURED (2026-11-15): a work's MTD tree is 67-390 KB of XML, 0.24-1.4 MB
@@ -189,6 +189,31 @@ def _stamp(corpus: Path, langs: dict[str, str]) -> None:
     os.replace(tmp, path)
 
 
+#: the languages whose units a build has re-formed from the dump where a
+#: held unit lacked its Formex package (2026-11-19): after it, the per-unit
+#: pass may ask Cellar for what still lacks one (cellar.TreeUnits._reform)
+PACKAGES = ".eurlex-dump-packages.json"
+
+
+def packages_read(corpus: Path) -> set[str]:
+    import json
+    try:
+        got = json.loads((Path(corpus) / PACKAGES).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return set()
+    return {str(x) for x in got} if isinstance(got, list) else set()
+
+
+def _mark_packages(corpus: Path, langs: list[str]) -> None:
+    import json
+    path = Path(corpus) / PACKAGES
+    now = sorted(packages_read(corpus) | set(langs))
+    tmp = path.with_name(f".{path.name}.{os.getpid()}")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp.write_text(json.dumps(now), encoding="utf-8")
+    os.replace(tmp, path)
+
+
 #: the units the dump lists and does not hold whole (`incomplete`): `{lang:
 #: {celex: {"in_force": …, "tried": null | "<why it failed>"}}}`, written by
 #: the build for every language it visited. The per-unit pass asks Cellar
@@ -225,24 +250,63 @@ def _record_incomplete(corpus: Path, found: dict[str, dict[str, str | None]]) ->
         had = incomplete(corpus)
         for lang, units in found.items():
             old = had.get(lang) or {}
-            had[lang] = {celex: {"in_force": inf, "tried": (old.get(celex) or {}).get("tried")}
+            had[lang] = {celex: {**(inf if isinstance(inf, dict) else {"in_force": inf}),
+                                 "tried": (old.get(celex) or {}).get("tried"),
+                                 **({"fetched": (old.get(celex) or {}).get("fetched")}
+                                    if (old.get(celex) or {}).get("fetched") else {})}
                          for celex, inf in sorted(units.items())}
         _write_incomplete(corpus, had)
 
 
 def incomplete_due(corpus: Path, langs) -> list[tuple[str, str, str | None]]:
     """(lang, celex, in_force) of the recorded incomplete units of `langs`
-    not held now and not tried: what the per-unit pass asks Cellar for first."""
-    from ..plugins.eurlex.source import unit_rel
+    not held now and not tried: what the per-unit pass asks Cellar for first.
+    A unit recorded to RE-FORM (held, lacking the Formex package its tree
+    lists, which the dump does not give) is due while it still lacks it."""
+    from ..plugins.eurlex import from_tree, rdf
+    from ..plugins.eurlex.source import LANGUAGES, unit_rel
+    from .cellar import lacks_package
     out = []
     for lang, units in sorted(incomplete(corpus).items()):
         if lang not in langs:
             continue
         for celex, entry in sorted(units.items()):
-            if (entry or {}).get("tried") or _held_at(Path(corpus), unit_rel(lang, celex)) is not None:
-                continue
-            out.append((lang, celex, (entry or {}).get("in_force")))
+            entry = entry or {}
+            if entry.get("tried") or entry.get("fetched"):
+                continue                    # Cellar asked once for it: not again until a newer dump
+            at = _held_at(Path(corpus), unit_rel(lang, celex))
+            if at is not None:
+                if not entry.get("reform"):
+                    continue
+                try:
+                    note = from_tree.notice(rdf.loads((at / rdf.TREE_FILE).read_bytes()), LANGUAGES[lang], celex)
+                except (OSError, ValueError, from_tree.TreeError):
+                    note = None
+                if note is not None and not lacks_package(at, note) and not held_not_its_name(at, celex):
+                    continue
+            out.append((lang, celex, entry.get("in_force")))
+    # BY ACT, then language (as the listing, `ORDER BY ?celex ?language`): a
+    # work's tree is asked once and its other languages take it from
+    # work_trees.RecentTrees (6 h). Language by language, one language's
+    # ~9.7k units (~5.7 h at the 1,695 units an hour measured after #759)
+    # outlived the cache, and each work's tree (~7 s of a unit's ~7.2 s)
+    # was asked again in every language
+    out.sort(key=lambda t: (t[1], t[0]))
     return out
+
+
+def mark_fetched(corpus: Path, lang: str, celex: str) -> None:
+    """A recorded unit Cellar gave: not asked first again (a re-form that
+    Cellar serves as wrongly as the dump would otherwise be asked every
+    pass); a newer dump's build records it afresh."""
+    import time as _time
+    with _incomplete_lock:
+        had = incomplete(corpus)
+        entry = (had.get(lang) or {}).get(celex)
+        if entry is None or entry.get("fetched"):
+            return
+        entry["fetched"] = _time.strftime("%Y-%m-%dT%H:%M:%SZ", _time.gmtime())
+        _write_incomplete(corpus, had)
 
 
 def mark_tried(corpus: Path, lang: str, celex: str, why: str) -> None:
@@ -257,6 +321,32 @@ def mark_tried(corpus: Path, lang: str, celex: str, why: str) -> None:
         _write_incomplete(corpus, had)
 
 
+def held_not_its_name(unit: Path, celex: str) -> list[str]:
+    """Why a held Formex unit's files are not the ones their names say
+    (formex.not_its_name, from each file's first bytes); [] where they are,
+    or where the unit holds no Formex wrapper of this act (a package, a
+    rendition: nothing to judge here)."""
+    from ..plugins.eurlex import formex
+    from ..plugins.eurlex.source import unit_files
+    try:
+        entries = unit_files(unit)
+    except OSError:
+        return []
+    paths = {e.name: e.path for e in entries}
+    if not any(formex.is_wrapper(n) for n in paths):
+        return []
+    try:
+        wname = formex.own_wrapper(paths, celex, lambda n: Path(paths[n]).read_bytes())
+        wrapper = formex._parse(Path(paths[wname]).read_bytes(), wname)
+        heads = {}
+        for n, p in paths.items():
+            with open(p, "rb") as f:
+                heads[n] = f.read(formex._HEAD_BYTES)
+    except (OSError, formex.FormexError):
+        return []
+    return formex.not_its_name(heads, wrapper, wname)
+
+
 def _held_at(corpus: Path, rel: str) -> Path | None:
     from ..plugins.eurlex import rdf
     from ..plugins.eurlex.source import HISTORY
@@ -266,16 +356,36 @@ def _held_at(corpus: Path, rel: str) -> Path | None:
     return None
 
 
-def _older(unit: Path, note, code: str, celex: str) -> bool:
-    """Whether the held unit's work was last modified before the dump's."""
+def _held_modified(unit: Path, code: str, celex: str):
     from ..plugins.eurlex import from_tree, rdf
     from .cellar import _epoch
+    note = from_tree.notice(rdf.loads((unit / rdf.TREE_FILE).read_bytes()), code, celex)
+    return _epoch(note.modified or note.last_modified)
+
+
+def _older(unit: Path, note, code: str, celex: str) -> bool:
+    """Whether the held unit's work was last modified before the dump's."""
+    from ..plugins.eurlex import from_tree
+    from .cellar import _epoch
     try:
-        held = from_tree.notice(rdf.loads((unit / rdf.TREE_FILE).read_bytes()), code, celex).last_modified
+        a = _held_modified(unit, code, celex)
     except (OSError, ValueError, from_tree.TreeError):
         return True                         # unreadable: the dump's replaces it
-    a, b = _epoch(held), _epoch(note.last_modified)
+    b = _epoch(note.modified or note.last_modified)
     return a is not None and b is not None and a < b
+
+
+def _newer(unit: Path, note, code: str, celex: str) -> bool:
+    """Whether the held unit's work was last modified AFTER the dump's: a
+    state the dump does not hold (an unreadable tree is not newer)."""
+    from ..plugins.eurlex import from_tree
+    from .cellar import _epoch
+    try:
+        a = _held_modified(unit, code, celex)
+    except (OSError, ValueError, from_tree.TreeError):
+        return False
+    b = _epoch(note.modified or note.last_modified)
+    return a is not None and b is not None and a > b
 
 
 def build_chunk(mtd_paths: tuple[str, ...], uuids: list[str], langs: list[tuple[str, str]],
@@ -286,7 +396,7 @@ def build_chunk(mtd_paths: tuple[str, ...], uuids: list[str], langs: list[tuple[
     the dump states modified later is rebuilt from it, where it is held."""
     from ..plugins.eurlex import formex, from_tree, rdf
     from ..plugins.eurlex.source import LANGUAGES, unit_rel
-    from .cellar import form_of, land_many, next_form
+    from .cellar import form_of, lacks_package, land_many, next_form
     root = Path(corpus)
     counts: dict[str, Counter] = {}
     # GROUP COMMIT (cellar.land_many): units land in batches of LAND_BATCH or
@@ -302,7 +412,27 @@ def build_chunk(mtd_paths: tuple[str, ...], uuids: list[str], langs: list[tuple[
         pending_rel.clear()
         pending_bytes = 0
     trees: dict[str, tuple[dict, str] | str] = {}
-    incomplete_found: dict[str, dict[str, str | None]] = {}
+    #: works whose tree names a zip anywhere: the only ones whose held units
+    #: can lack a Formex package (formex.unpack), checked on disk
+    zipped: set[str] = set()
+    incomplete_found: dict[str, dict[str, Any]] = {}
+
+    def package_lacked(at: Path | None, code: str, celex: str):
+        """The held unit's OWN tree's note where that unit lacks the Formex
+        package its tree lists (landed while `form_of` read a packaged
+        manifestation as XHTML, 2026-11-19), else None. Its own tree, never
+        the dump's: a unit the API landed may be newer than the dump."""
+        if at is None:
+            return None
+        try:
+            note = from_tree.notice(rdf.loads((at / rdf.TREE_FILE).read_bytes()), code, celex)
+        except (OSError, ValueError, from_tree.TreeError):
+            return None
+        return note if lacks_package(at, note) else None
+
+    def record(lang: str, celex: str, note, reform: bool) -> None:
+        inf = None if note.in_force is None else ("true" if note.in_force else "false")
+        incomplete_found.setdefault(lang, {})[celex] = {"in_force": inf, "reform": True} if reform else inf
     zips = _mtd(mtd_paths)
     for uuid in uuids:
         data = None
@@ -322,6 +452,8 @@ def build_chunk(mtd_paths: tuple[str, ...], uuids: list[str], langs: list[tuple[
             continue
         celex = _work_celex(tree, uuid)
         trees[uuid] = (tree, celex) if celex else "no-celex"
+        if b".zip" in data:
+            zipped.add(uuid)
     for lang, folder in langs:
         c = counts.setdefault(lang, Counter())
         lz = _lang(folder)
@@ -330,7 +462,16 @@ def build_chunk(mtd_paths: tuple[str, ...], uuids: list[str], langs: list[tuple[
             got = trees[uuid]
             held_forms = lz.index.get(uuid)
             if not held_forms:
-                c["not-in-language"] += 1
+                # a unit the API landed for a language the dump lacks, holding
+                # XHTML for a packaged Formex: the API's to re-form, recorded
+                lacked = package_lacked(_held_at(root, unit_rel(lang, got[1])), code, got[1]) \
+                    if uuid in zipped and not isinstance(got, str) else None
+                if lacked is not None:
+                    c["incomplete"] += 1
+                    c["package-not-in-dump"] += 1
+                    record(lang, got[1], lacked, True)
+                else:
+                    c["not-in-language"] += 1
                 continue
             if isinstance(got, str):
                 c[got] += 1
@@ -341,7 +482,24 @@ def build_chunk(mtd_paths: tuple[str, ...], uuids: list[str], langs: list[tuple[
                 c["held"] += 1                  # this chunk already lands it
                 continue
             at = _held_at(root, rel)
-            if at is not None and not refresh:
+            # A HELD UNIT LACKING ITS FORMEX PACKAGE (2026-11-19): `form_of`
+            # read a manifestation served as one zip as XHTML; it is re-formed
+            # from the dump, or recorded for the API where the dump lacks it
+            reform = uuid in zipped and package_lacked(at, code, celex) is not None
+            if at is not None and not reform and held_not_its_name(at, celex):
+                # A HELD UNIT WHOSE FILES ARE NOT THEIR NAMES' (2026-11-19: the
+                # dump's 9 acts of 2014–15): the dump gives the same bytes, so
+                # the API's — Cellar serves them right (32015R0207 de)
+                try:
+                    note = from_tree.notice(rdf.scope(tree, code), code, celex)
+                except from_tree.TreeError:
+                    c["no-work"] += 1
+                    continue
+                c["incomplete"] += 1
+                c["dump-not-its-name"] += 1
+                record(lang, celex, note, True)
+                continue
+            if at is not None and not refresh and not reform:
                 c["held"] += 1
                 continue
             scoped = rdf.scope(tree, code)
@@ -351,14 +509,23 @@ def build_chunk(mtd_paths: tuple[str, ...], uuids: list[str], langs: list[tuple[
                 c["no-work"] += 1
                 continue
             if at is not None and not _older(at, note, code, celex):
-                c["held"] += 1
-                continue
+                if not reform:
+                    c["held"] += 1
+                    continue
+                if _newer(at, note, code, celex):
+                    # held NEWER than the dump: what changed since it was cut is the API's
+                    c["incomplete"] += 1
+                    c["package-not-in-dump"] += 1
+                    record(lang, celex, note, True)
+                    continue
+                # the dump's own state: re-formed from it
             form = form_of(note)
             listed = note.items.get(form) or [] if form else []
             if not listed or any(not it.name or it.name not in held_forms.get(form, {}) for it in listed):
                 c["incomplete"] += 1           # the API's (phase 2), never another form
-                inf = None if note.in_force is None else ("true" if note.in_force else "false")
-                incomplete_found.setdefault(lang, {})[celex] = inf
+                if reform:
+                    c["package-not-in-dump"] += 1
+                record(lang, celex, note, reform)
                 continue
             try:
                 files = {it.name: lz.read(held_forms[form][it.name]) for it in listed}
@@ -367,9 +534,10 @@ def build_chunk(mtd_paths: tuple[str, ...], uuids: list[str], langs: list[tuple[
                 continue
             if form == "fmx4":
                 try:
-                    text_wrapper = formex.own_wrapper(files, celex, files.__getitem__)   # cellar's rule
+                    view = formex.unpack(files)[0]      # a package read through
+                    text_wrapper = formex.own_wrapper(view, celex, view.__getitem__)   # cellar's rule
                 except formex.FormexError:
-                    text_wrapper = None
+                    view, text_wrapper = files, None
                 if text_wrapper is None:
                     # no wrapper of THIS act: the next form the tree lists is
                     # its text, landed beside the Formex items (cellar.next_form)
@@ -380,8 +548,7 @@ def build_chunk(mtd_paths: tuple[str, ...], uuids: list[str], langs: list[tuple[
                         continue
                     if any(it.name not in held_forms.get(alt, {}) for it in alt_listed):
                         c["incomplete"] += 1       # that form the API's (phase 2)
-                        inf = None if note.in_force is None else ("true" if note.in_force else "false")
-                        incomplete_found.setdefault(lang, {})[celex] = inf
+                        record(lang, celex, note, reform)
                         continue
                     try:
                         files.update({it.name: lz.read(held_forms[alt][it.name]) for it in alt_listed})
@@ -392,7 +559,16 @@ def build_chunk(mtd_paths: tuple[str, ...], uuids: list[str], langs: list[tuple[
                 # a text in another language under this one's expression is
                 # held as the origin files it (operator, 2026-11-16, B): the
                 # parser labels it; counted here so the pass says how many
-                stated = _LG_DOC.search(files[text_wrapper]) if text_wrapper is not None else None
+                if text_wrapper is not None:
+                    wrong = formex.not_its_name(view, formex._parse(view[text_wrapper], text_wrapper),
+                                                text_wrapper)
+                    if wrong:
+                        # never landed from the dump: the API's (Cellar serves it right)
+                        c["incomplete"] += 1
+                        c["dump-not-its-name"] += 1
+                        record(lang, celex, note, at is not None)
+                        continue
+                stated = _LG_DOC.search(view[text_wrapper]) if text_wrapper is not None else None
                 if stated and stated.group(1).decode().lower() != lang:
                     c["text-in-another-language"] += 1
             files[rdf.TREE_FILE] = rdf.dumps(scoped)
@@ -400,7 +576,7 @@ def build_chunk(mtd_paths: tuple[str, ...], uuids: list[str], langs: list[tuple[
             pending.append((at if at is not None else root / rel, files))
             pending_rel.add(str(rel))
             pending_bytes += size
-            c["refreshed" if at is not None else "built"] += 1
+            c["reformed" if reform else "refreshed" if at is not None else "built"] += 1
             c["bytes"] += size
             if len(pending) >= LAND_BATCH or pending_bytes >= LAND_BYTES:
                 flush()
@@ -454,6 +630,7 @@ def build(dump_dir: Path, corpus: Path, languages: list[str] | None = None, *,
     # and what it lacks is named for the per-unit pass to ask first
     _record_incomplete(corpus, found_incomplete)
     _stamp(corpus, {l: found[l][1].isoformat() for l in langs})
+    _mark_packages(corpus, langs)
     return total
 
 

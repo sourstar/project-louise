@@ -83,6 +83,14 @@ plugin, because a verifier needs it to reproduce our records:
   * THE BODY BY NAME: the item the Formex wrapper (`….doc.xml`) names as
     DOC.MAIN.PUB, never the first or the second the origin lists (§7.1: the
     order differs between an act and its consolidation).
+  * A FORMEX PACKAGE IS FORMEX (2026-11-19): Cellar serves some
+    manifestations as ONE item, a zip of the wrapper, the body and the
+    figures (the OJ's act-by-act publication, 32024R1689
+    `OJABA_L_202401689_ENG.fmx4.zip`). The zip is held as served — the
+    bytes the origin gave, which records-vs-origin compares — and read
+    through (`formex.unpack`); the record's `items` name each member and
+    the package it came in. Before, `cellar.form_of` saw no wrapper among
+    the item names and read those acts from XHTML.
   * THE NON-INFERRED TREE beside the notice (parser 3, 2026-11-14:
     `Accept: application/rdf+xml;notice=non-inferred-tree`, rdf.py). München
     compared it triple by triple with the notice over 1,698 Italian acts:
@@ -397,6 +405,20 @@ def _form_held(note, files: dict[str, bytes], skip: tuple[str, ...] = ()) -> str
     return None
 
 
+def wrapper_head(celex: str, entries: list[os.DirEntry]) -> bytes:
+    """The head (`_HEAD` bytes) of the act's own Formex wrapper among the
+    unit's files — inside its package where the manifestation is one zip
+    (formex.unpack). Raises FormexError where there is none of this act's."""
+    paths = {e.name: e.path for e in entries}
+    if any(formex.is_package(n) for n in paths):
+        held = {n: Path(p).read_bytes() for n, p in paths.items() if formex.is_package(n) or formex.is_wrapper(n)}
+        view = formex.unpack(held)[0]
+        return view[formex.own_wrapper(view, celex, view.__getitem__)][:_HEAD]
+    own = formex.own_wrapper(paths, celex, lambda n: Path(paths[n]).read_bytes())
+    with open(paths[own], "rb") as f:
+        return f.read(_HEAD)
+
+
 def _unit_day(unit: Path, celex: str, entries: list[os.DirEntry], tree_facts: bool = False) -> str | None:
     """The day the unit's id sorts under: a consolidation's CELEX date, an
     original's OJ publication date from its wrapper's head. An act without
@@ -405,14 +427,12 @@ def _unit_day(unit: Path, celex: str, entries: list[os.DirEntry], tree_facts: bo
     m = _CONSOLIDATED.match(celex)
     if m:
         return formex.iso(m["date"])
-    paths = {e.name: e.path for e in entries}
     try:
-        own = formex.own_wrapper(paths, celex, lambda n: Path(paths[n]).read_bytes())
+        head = wrapper_head(celex, entries)
     except formex.FormexError:
-        own = None                         # no wrapper, or none this act's: its work's own day below
-    if own is not None:
-        with open(paths[own], "rb") as f:
-            got = _PUB_DATE.search(f.read(_HEAD))
+        head = None                        # no wrapper, or none this act's: its work's own day below
+    if head is not None:
+        got = _PUB_DATE.search(head)
         return formex.iso(got.group(1).decode()) if got else None
     if tree_facts:
         for e in entries:
@@ -432,6 +452,12 @@ def _unit_day(unit: Path, celex: str, entries: list[os.DirEntry], tree_facts: bo
 class EurlexSource:
     source_id = "eurlex"
     ISSUES = ISSUES
+    #: the parse pool's large-document lane (app/parallel.py): what a parse
+    #: of one unit holds per byte of its `size` (the unit's files, summed at
+    #: discovery). MEASURED 2026-11-19 (München, its own container): 32021R2017
+    #: el, 204,218,240 bytes, peak 5,248,708,608 to chunk (25.7x), 2,055,856,128
+    #: for its metadata (10.1x) — the larger, rounded up
+    PARSE_PEAK_PER_BYTE = 26
     ELI_PROFILE = PROFILE
     #: 09 §9.3's `profile`: the ELI implementation and the validity axis of
     #: one record per version per language (app/validity.py)
@@ -668,10 +694,16 @@ class EurlexSource:
         else:
             note = held
         found: list[Issue] = []
-        form = "fmx4" if any(formex.is_wrapper(n) for n in files) else _form_held(note, files)
+        # a Formex manifestation served as one zip is read through it, the zip
+        # held as served (formex.unpack; 32024R1689, 32015D1735)
+        try:
+            view, packed = formex.unpack(files)
+        except formex.FormexError as e:
+            raise UnindexableDocument(f"{unit}: {e}") from None
+        form = "fmx4" if any(formex.is_wrapper(n) for n in view) else _form_held(note, files)
         if form == "fmx4":
             try:
-                formex.own_wrapper(files, celex, files.__getitem__)
+                formex.own_wrapper(view, celex, view.__getitem__)
             except formex.FormexError as e:
                 # no wrapper of THIS act (München, 2026-11-16: 32011R0540 hr,
                 # 32004D0382 bg/ro …): its text from the next form the tree
@@ -684,7 +716,7 @@ class EurlexSource:
         stated_lang = notice_mod.CODE_OF.get(note.display_language or "", lang)
         try:
             if form == "fmx4":
-                act = formex.parse(files, celex)
+                act = formex.parse(view, celex)
                 for name in act.missing:
                     found.append(Issue("item-not-held", f"{act.wrapper_file} names {name}"))
             elif form in ("xhtml", "html"):
@@ -826,7 +858,8 @@ class EurlexSource:
             "end_of_validity": note.end_of_validity,
             "last_modified": note.last_modified,
             # the Formex manifestation, every assertion beside the text
-            "items": [{"name": n, "bytes": len(b)} for n, b in sorted(files.items())],
+            "items": [{"name": n, "bytes": len(b)} for n, b in sorted(files.items())]
+                     + [{"name": n, "bytes": len(view[n]), "in": packed[n]} for n in sorted(packed)],
             "body_file": act.body_file,
             "wrapper_file": act.wrapper_file,
             "formex_wrapper": act.wrapper,

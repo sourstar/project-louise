@@ -257,6 +257,16 @@ def _window(year: int, languages: tuple[str, ...]) -> str:
             f"  FILTER(STR(?type) IN ({', '.join(chr(34) + f + chr(34) for f in FORMS)}))\n")
 
 
+#: A UNIT'S LAST MODIFICATION, as the listing reads it: the latest of its
+#: work's, its expression's and its manifestations' (2026-11-19: Cellar
+#: replaced 32015D1735's English Formex at 2026-11-19 and left the work's date
+#: at 2026-11-02 — the work's alone never saw it). The held side compares the
+#: same: `Notice.modified`, from the unit's tree (from_tree) or branch notice
+MODIFIED = ("OPTIONAL { { ?work cmr:lastModificationDate ?modified } UNION "
+            "{ ?expr cmr:lastModificationDate ?modified } UNION "
+            "{ ?manif cmr:lastModificationDate ?modified } }")
+
+
 def count_query(year: int, languages: tuple[str, ...]) -> str:
     return (_PREFIXES + "SELECT (COUNT(*) AS ?n) WHERE {\n SELECT DISTINCT ?celex ?language WHERE {\n"
             + _window(year, languages) + " }\n}")
@@ -270,7 +280,7 @@ def fingerprint_query(year: int, languages: tuple[str, ...]) -> str:
     return (_PREFIXES + "SELECT (COUNT(*) AS ?n) (MAX(?last) AS ?max) WHERE {\n"
             " SELECT ?celex ?language (MAX(?modified) AS ?last) WHERE {\n"
             + _window(year, languages)
-            + "  OPTIONAL { ?work cmr:lastModificationDate ?modified }\n"
+            + "  " + MODIFIED + "\n"
             + " }\n GROUP BY ?celex ?language\n}")
 
 
@@ -281,7 +291,7 @@ def page_query(year: int, languages: tuple[str, ...], offset: int, force: bool =
     return (_PREFIXES + "SELECT ?celex ?language (MAX(?modified) AS ?last)"
             + (" (SAMPLE(STR(?inforce)) AS ?force)" if force else "") + " WHERE {\n"
             + _window(year, languages)
-            + "  OPTIONAL { ?work cmr:lastModificationDate ?modified }\n"
+            + "  " + MODIFIED + "\n"
             + ("  OPTIONAL { ?work cdm:resource_legal_in-force ?inforce }\n" if force else "")
             + f"}}\nGROUP BY ?celex ?language\nORDER BY ?celex ?language\nLIMIT {PAGE} OFFSET {offset}")
 
@@ -605,16 +615,32 @@ def form_of(note) -> str | None:
     DOC.MAIN.PUB, and without one the unit was refused ("holds 0 Formex
     wrappers"; 82 Italian consolidations of 1976–79, München 2026-11-15).
     Where it is the only form, or an item is unnamed (the 300 Multiple
-    Choices path), it stays Formex as before."""
+    Choices path), it stays Formex as before. A PACKAGE — the manifestation
+    served as one zip (`formex.unpack`: 32024R1689, every act of the OJ's
+    act-by-act publication) — is Formex: its wrapper is inside, and skipping
+    it read those acts from XHTML (2026-11-19)."""
     from ..plugins.eurlex import formex
     listed = [f for f in FORMS if note.items.get(f)]
     for f in listed:
         if f == "fmx4" and len(listed) > 1:
             items = note.items["fmx4"]
-            if all(it.name for it in items) and not any(formex.is_wrapper(it.name) for it in items):
+            if all(it.name for it in items) and not any(formex.is_wrapper(it.name) or formex.is_package(it.name)
+                                                        for it in items):
                 continue
         return f
     return None
+
+
+def lacks_package(unit: Path, note) -> bool:
+    """Whether the held unit lacks the Formex package (formex.unpack: the
+    manifestation served as one zip) that `note` — its own tree's — lists as
+    the form to read: a unit landed while `form_of` read such a manifestation
+    as XHTML (2026-11-19, 32024R1689), to be re-formed."""
+    from ..plugins.eurlex import formex
+    if form_of(note) != "fmx4":
+        return False
+    return any(it.name and formex.is_package(it.name) and not (Path(unit) / it.name).is_file()
+               for it in note.items.get("fmx4", []))
 
 
 def _current_unit(dest: Path, note_now_mtime: int | None, form: str | None):
@@ -631,7 +657,7 @@ def _current_unit(dest: Path, note_now_mtime: int | None, form: str | None):
         note = notice_mod.parse(data)
     except (OSError, notice_mod.NoticeError):
         return None
-    held = _epoch(note.last_modified)
+    held = _epoch(note.modified or note.last_modified)
     form = form or form_of(note)
     if held is None or held < note_now_mtime or form is None:
         return None
@@ -736,7 +762,8 @@ def fetch_unit(base: str, celex: str, lang: str, dest: Path, *,
                 files[name] = r.content
         if form == "fmx4":
             try:
-                formex.own_wrapper(files, celex, files.__getitem__)
+                view = formex.unpack(files)[0]          # a package read through
+                formex.own_wrapper(view, celex, view.__getitem__)
             except formex.FormexError as e:
                 raise TransportError(f"cellar: {celex} ({code}): {e}") from None
             # a text in another language under this one's expression lands as
@@ -807,7 +834,8 @@ def fetch_unit_from_tree(base: str, celex: str, lang: str, dest: Path, *,
                                   f"{it.name} of {celex} ({code})", charge=count).content
         if form == "fmx4":
             try:
-                formex.own_wrapper(files, celex, files.__getitem__)
+                view = formex.unpack(files)[0]          # a package read through
+                formex.own_wrapper(view, celex, view.__getitem__)
             except formex.FormexError as e:
                 # no wrapper of THIS act: the next form the tree lists is its
                 # text, beside the Formex items (`next_form`)
@@ -1123,10 +1151,10 @@ class TreeUnits(CellarUnits):
         if dest.is_file() and remote.mtime is not None:
             try:
                 note = from_tree.notice(rdf.loads(dest.read_bytes()), LANGUAGES[unit["lang"]], unit["celex"])
-                held = _epoch(note.last_modified)
+                held = _epoch(note.modified or note.last_modified)
             except (OSError, ValueError, from_tree.TreeError):
                 held = None
-            if held is not None and held >= remote.mtime:
+            if held is not None and held >= remote.mtime and not self._reform(dest, remote, note):
                 self._count(Fetched(files={}, moved=0, tree_from="held"))
                 return 0
         root = _corpus_of(dest, remote)
@@ -1144,8 +1172,22 @@ class TreeUnits(CellarUnits):
                 if root is not None:
                     eurlex_dump.mark_tried(root, unit["lang"], unit["celex"], str(e))
             raise
+        if remote.mtime is None and root is not None:
+            from . import eurlex_dump
+            eurlex_dump.mark_fetched(root, unit["lang"], unit["celex"])   # asked first once
         self._count(got)
         return got.moved
+
+    def _reform(self, dest: Path, remote: RemoteFile, note) -> bool:
+        """A held unit lacking the Formex package its tree lists is asked
+        again, once the dump build has re-formed this language's units from
+        the bulk (eurlex_dump.packages_read): what is still lacking then is
+        what the bulk does not give (bulk first)."""
+        from . import eurlex_dump
+        if not lacks_package(dest.parent, note):
+            return False
+        root = _corpus_of(dest, remote)
+        return root is not None and unit_of(remote)["lang"] in eurlex_dump.packages_read(root)
 
     def prepare(self, files: list[RemoteFile], pending: list[RemoteFile], collection,
                 endpoint: Endpoint) -> list[str]:

@@ -67,6 +67,166 @@ def is_wrapper(name: str) -> bool:
     return bool(_WRAPPER.search(name))
 
 
+#: a Formex manifestation Cellar serves as ONE item, a zip of its files (the
+#: OJ's act-by-act publication: 32024R1689 → `OJABA_L_202401689_ENG.fmx4.zip`;
+#: 32015D1735, repackaged 2026-11-19 → `32015D1735.eng.fmx4.zip`)
+_PACKAGE = re.compile(r"\.zip$", re.IGNORECASE)
+_ZIP_MAGIC = b"PK\x03\x04"
+#: a package's members, uncompressed, at most (a damaged or hostile zip is refused)
+PACKAGE_MAX = 1 << 30
+#: a member's name as a unit holds files: one plain file name
+_MEMBER_NAME = re.compile(r"^[^/\\\x00]+$")
+
+
+#: what a file's first bytes are
+_MAGIC = ((b"II*\x00", "tiff"), (b"MM\x00*", "tiff"), (b"%PDF", "pdf"), (b"\xff\xd8\xff", "jpeg"),
+          (b"\x89PNG\r\n\x1a\n", "png"), (b"GIF8", "gif"), (b"PK\x03\x04", "zip"))
+#: what a file of that extension holds
+EXTENSION_KIND = {".xml": "markup", ".html": "markup", ".htm": "markup", ".xhtml": "markup", ".tif": "tiff",
+                  ".tiff": "tiff", ".pdf": "pdf", ".jpg": "jpeg", ".jpeg": "jpeg", ".png": "png", ".gif": "gif",
+                  ".zip": "zip"}
+#: an OJ Formex file's name: `<coll>_<year><no><lg>.<volume><page><sequence>.xml`
+_OJ_FILE = re.compile(r"^[A-Z]_\d{4}\d{3}[A-Z]{2}\.(?P<vol>\d{2})(?P<page>\d{4})(?P<seq>\d{2})\.xml$", re.IGNORECASE)
+_BIB = re.compile(rb"<BIB\.INSTANCE>(.*?)(?:</BIB\.INSTANCE>|\Z)", re.S)
+_DOC_REF = re.compile(rb"<DOCUMENT\.REF\b.*?</DOCUMENT\.REF>", re.S)
+_PAGE_FIRST = re.compile(rb"<PAGE\.FIRST>\s*(\d+)\s*</PAGE\.FIRST>")
+_PAGE_SEQ = re.compile(rb"<PAGE\.SEQ>\s*(\d+)\s*</PAGE\.SEQ>")
+
+
+def item_kind(head: bytes) -> str:
+    """What a file's first bytes say it is: tiff, pdf, … or markup."""
+    if not head:
+        return "empty"
+    for magic, name in _MAGIC:
+        if head.startswith(magic):
+            return name
+    if head.lstrip(b"\xef\xbb\xbf \t\r\n").startswith(b"<"):
+        return "markup"
+    return "other"
+
+
+#: an OJ Formex file's name: its issue (`L_2015038DE`), volume, page and sequence
+_OJ_PLACE = re.compile(r"^(?P<issue>[A-Z]_\d{7}[A-Z]{2})\.(?P<vol>\d{2})(?P<page>\d{4})(?P<seq>\d{2})\.xml$",
+                       re.IGNORECASE)
+
+
+def stated_place(name: str, head: bytes) -> tuple[str, int, int, int, int] | None:
+    """(issue and volume, the name's page, its sequence, the page and the
+    sequence the file's own BIB.INSTANCE states — its DOCUMENT.REF is the
+    wrapper's and is not read); None where the name is not an OJ file's or
+    the file states no page."""
+    m = _OJ_PLACE.match(name)
+    if m is None or item_kind(head) != "markup":
+        return None
+    bib = _BIB.search(head)
+    if bib is None:
+        return None
+    own = _DOC_REF.sub(b"", bib.group(1))
+    first, seq = _PAGE_FIRST.search(own), _PAGE_SEQ.search(own)
+    if first is None:
+        return None
+    return (f"{m['issue'].upper()}.{m['vol']}", int(m["page"]), int(m["seq"]), int(first.group(1)),
+            int(seq.group(1)) if seq is not None else 0)
+
+
+def swapped(places: dict[str, tuple[str, int, int, int, int] | None]) -> list[str]:
+    """The files of ONE unit that sit in each other's place (2026-11-19,
+    32015R0207 de: the body's name holds the annex, which states page 5, the
+    annex's name the body, page 1). Within one OJ issue and volume, files in
+    the order of the page and sequence their names encode state pages and
+    sequences in the same order: an inversion is a swap. What a Special
+    Edition does keeps the order — its own page numbers (31968L0193 bg:
+    +82), one offset per OJ issue its volume collects (31998D0379 bg: 2, 3,
+    73, 100), a page more after a page break (31998D0436 bg: 153, 153, 154,
+    154) — and is never named. A file alone in its issue cannot be judged."""
+    by_issue: dict[str, list[tuple[tuple[int, int], tuple[int, int], str]]] = {}
+    for name, p in places.items():
+        if p is not None:
+            by_issue.setdefault(p[0], []).append(((p[1], p[2]), (p[3], p[4]), name))
+    out: set[str] = set()
+    for files in by_issue.values():
+        files.sort()
+        for (_n1, s1, a), (_n2, s2, b) in zip(files, files[1:]):
+            if s2 < s1:
+                out.update((a, b))
+    return sorted(out)
+
+
+def not_its_name(files: dict[str, bytes], wrapper: ET.Element, wname: str) -> list[str]:
+    """Why the act's own files are not the ones their names say — each a
+    reason, none where they are (2026-11-19: the Data Dump's 9 acts of
+    2014–15, 32015D1735 a TIFF as its body's `.xml`, 32015R0207 its annex
+    under its body's name; Cellar serves them right). Only the files the
+    act's own wrapper names: a Special Edition unit holds another act's
+    files too, numbered in their own order."""
+    named = [n for n in dict.fromkeys([*main_names(wrapper), *annex_names(wrapper)]) if n in files]
+    why = [w for n in [wname, *named] if (w := misnamed(n, files[n][:_HEAD_BYTES])) is not None]
+    off = swapped({n: stated_place(n, files[n][:_HEAD_BYTES]) for n in named})
+    if off:
+        why.append("in each other's place: " + ", ".join(off))
+    return why
+
+
+#: what `misnamed` and `stated_place` read of a file
+_HEAD_BYTES = 4096
+
+
+def misnamed(name: str, head: bytes) -> str | None:
+    """Why a file is not the one its name says, from its first bytes
+    (`head`, a few KB) alone: they are not what its extension holds
+    (2026-11-19: the Data Dump files 32015D1735's TIFF as `…01004901.xml`).
+    None where nothing says so. A Formex file under another Formex file's
+    name is the unit's question (`stated_place`, `swapped`)."""
+    import os
+    want, got = EXTENSION_KIND.get(os.path.splitext(name)[1].lower()), item_kind(head)
+    if want is not None and got != want:
+        return f"{name} holds {got}, not {want}"
+    return None
+
+
+def is_package(name: str) -> bool:
+    """An item named as a zip: the manifestation's files packed in one."""
+    return bool(_PACKAGE.search(name or ""))
+
+
+def unpack(files: dict[str, bytes]) -> tuple[dict[str, bytes], dict[str, str]]:
+    """The manifestation's files as the reader takes them: every item, and
+    each package's members in its place. The package stays HELD as the
+    origin served it (invariant 11: the unit is what Cellar gave, and
+    records-vs-origin compares those bytes); only the reading opens it.
+    Returns (the files to read, member → the package it came from).
+
+    THE STANDARD: the zip (PKWARE APPNOTE), read by Python's own zipfile,
+    each member's CRC-32 checked. A member that is not one plain file name,
+    a package over PACKAGE_MAX, or a member whose name an item of other
+    bytes already holds is refused: the reading must be one the origin's
+    bytes determine."""
+    import io
+    import zipfile
+    out = {n: b for n, b in files.items() if not (is_package(n) and b[:4] == _ZIP_MAGIC)}
+    came: dict[str, str] = {}
+    for name in sorted(files):
+        data = files[name]
+        if not (is_package(name) and data[:4] == _ZIP_MAGIC):
+            continue
+        try:
+            with zipfile.ZipFile(io.BytesIO(data)) as z:
+                infos = [i for i in z.infolist() if not i.is_dir()]
+                if sum(i.file_size for i in infos) > PACKAGE_MAX:
+                    raise FormexError(f"{name}: its members are over {PACKAGE_MAX} bytes")
+                for i in infos:
+                    if not _MEMBER_NAME.match(i.filename) or i.filename in (".", ".."):
+                        raise FormexError(f"{name}: member {i.filename!r} is not a plain file name")
+                    got = z.read(i)
+                    if i.filename in out and out[i.filename] != got:
+                        raise FormexError(f"{name}: member {i.filename} differs from the item of that name")
+                    out[i.filename] = got
+                    came[i.filename] = name
+        except (zipfile.BadZipFile, zipfile.LargeZipFile, OSError, EOFError) as e:
+            raise FormexError(f"{name}: not a readable zip: {e}") from None
+    return out, came
+
+
 def norm(text: str | None) -> str:
     return _WS.sub(" ", text or "").strip()
 
@@ -320,6 +480,50 @@ def _parse(data: bytes, name: str) -> ET.Element:
         raise FormexError(f"{name}: not XML: {e}") from None
 
 
+def _include(root: ET.Element, files: dict[str, bytes], name: str, ancestors: frozenset,
+             found: dict) -> None:
+    """FORMEX INCLUSIONS READ IN PLACE (2026-11-19; 32021R1971: Annex I's file,
+    876 bytes, is `<QUOT.S><INCL.ELEMENT FILEREF="…01000302.xml"
+    TYPE="FORMEX.DOC"/></QUOT.S>` — the 39 MB of tables, 2,687 pages, are the
+    included file's, and the reader read none of them). Each
+    `INCL.ELEMENT TYPE="FORMEX.DOC"` in the text is replaced, where it stands,
+    by the included document's content (its root's children but its
+    BIB.INSTANCE, as a CONTENTS block), itself resolved the same way. The one
+    in BIB.INSTANCE/INCLUSIONS is the listing of the same inclusion and is
+    not read. The included file's BIB.INSTANCE and markup are kept
+    (`found`: invariant 11); a file it names and the manifestation lacks is
+    said (`missing`); one including itself back is not read again."""
+    parents = {c: p for p in root.iter() for c in p}
+    for el in list(root.iter("INCL.ELEMENT")):
+        if el.attrib.get("TYPE") != "FORMEX.DOC":
+            continue
+        parent = parents.get(el)
+        if parent is None or parent.tag == "INCLUSIONS":
+            continue
+        ref = el.attrib.get("FILEREF") or ""
+        if ref not in files:
+            if ref:
+                found["missing"].append(ref)
+            continue
+        if ref in ancestors:
+            found["cycles"].append({"file": ref, "into": name})
+            continue
+        sub = _parse(files[ref], ref)
+        _include(sub, files, ref, ancestors | {ref}, found)
+        bib = sub.find("BIB.INSTANCE")
+        found["included"].append({"file": ref, "into": name, "root": sub.tag,
+                                  **({"bib_instance": tree(bib)} if bib is not None else {})})
+        found["markup"][ref] = attributes_of(sub)
+        block = ET.Element("CONTENTS")
+        for c in sub:
+            if c.tag != "BIB.INSTANCE":
+                block.append(c)
+        block.tail = el.tail
+        at = list(parent).index(el)
+        parent.remove(el)
+        parent.insert(at, block)
+
+
 def body_name(wrapper: ET.Element) -> str:
     """The body's file, BY NAME: DOC.MAIN.PUB's REF.PHYS."""
     for ref in wrapper.iterfind("./FMX/DOC.MAIN.PUB/REF.PHYS"):
@@ -561,6 +765,12 @@ def parse(files: dict[str, bytes], celex: str | None = None) -> Act:
     items hold more than one act: `own_wrapper`). Raises FormexError when
     the wrapper, the body or an annex it names is missing or unreadable."""
     wname, wrapper = wrapper_of(files, celex)
+    # A FILE UNDER ANOTHER'S NAME is never read as what its name says: the
+    # record would be another file's text in its place, every check passing
+    wrong = not_its_name(files, wrapper, wname)
+    if wrong:
+        raise FormexError(f"a file is not the one its name says ({'; '.join(wrong)}): the unit is "
+                          f"fetched again from the origin")
     mains = main_names(wrapper)
     if not mains:
         raise FormexError("the wrapper names no DOC.MAIN.PUB/REF.PHYS file: no body to read")
@@ -568,6 +778,9 @@ def parse(files: dict[str, bytes], celex: str | None = None) -> Act:
     if not held_mains:
         raise FormexError(f"the wrapper names the body {mains[0]}, which is not among the items")
     parsed = {n: _parse(files[n], n) for n in held_mains}
+    found: dict[str, Any] = {"missing": [], "cycles": [], "included": [], "markup": {}}
+    for n, tr in parsed.items():
+        _include(tr, files, n, frozenset({n}), found)
     # THE BODY (parser 5): the first main file shaped as an act — an ACT, a
     # CONS.ACT, an AGR (an agreement: a preamble and articles, as an ACT) —
     # else the first; every other main file is read as text after it
@@ -651,6 +864,7 @@ def parse(files: dict[str, bytes], celex: str | None = None) -> Act:
             missing.append(name)
             continue
         a = _parse(files[name], name)
+        _include(a, files, name, frozenset({name}), found)
         markup[name] = attributes_of(a)
         if a.tag != "ANNEX":
             meta.setdefault("sub_documents", []).append({"file": name, a.tag: tree(a)})
@@ -659,7 +873,13 @@ def parse(files: dict[str, bytes], celex: str | None = None) -> Act:
     # every other XML item the manifestation holds (the OJ issue's `toc`):
     # kept as a tree, never dropped; a non-XML item (an image) is held in
     # the unit and named in the record's `items`
-    read = {wname, *mains, *annex_names(wrapper)}
+    if found["included"]:
+        meta["inclusions"] = found["included"]
+    if found["cycles"]:
+        meta["inclusion_cycles"] = found["cycles"]
+    markup.update(found["markup"])
+    missing += [n for n in dict.fromkeys(found["missing"]) if n not in missing]
+    read = {wname, *mains, *annex_names(wrapper), *(i["file"] for i in found["included"])}
     for name in sorted(files):
         if name not in read and name.lower().endswith(".xml"):
             meta.setdefault("other_items", {})[name] = tree(_parse(files[name], name))
