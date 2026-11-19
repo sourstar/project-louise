@@ -67,10 +67,12 @@ def pg_author(field: str) -> tuple[str, int, int] | None:
 
 def query(q: str, tries: int = 5) -> list[dict[str, Any]]:
     """The bindings as {var: {"value", "xml:lang"?}}."""
-    url = SPARQL + "?" + urllib.parse.urlencode({"query": q})
+    body = urllib.parse.urlencode({"query": q}).encode()      # POSTed: a long VALUES list overflows a URL
     for attempt in range(tries):
         try:
-            with urllib.request.urlopen(urllib.request.Request(url, headers=UA), timeout=180) as r:
+            req = urllib.request.Request(SPARQL, data=body, headers={
+                **UA, "Content-Type": "application/x-www-form-urlencoded"})
+            with urllib.request.urlopen(req, timeout=180) as r:
                 d = json.load(r)
             time.sleep(1)
             return d["results"]["bindings"]
@@ -119,8 +121,8 @@ def works(pairs: list[tuple[str, str, str]], log=print):
     item of a prolific author times out; work qid -> its P2034 values."""
     by: dict[tuple[str, str, str], set[str]] = defaultdict(set)
     has: dict[str, set[str]] = defaultdict(set)
-    for i in range(0, len(pairs), 200):
-        chunk = pairs[i:i + 200]
+    for i in range(0, len(pairs), 100):
+        chunk = pairs[i:i + 100]
         vals = " ".join(f"(wd:{a} {_lit(t)}@{l})" for a, t, l in chunk)
         rows = query(f'SELECT ?a ?l ?w ?g WHERE {{ VALUES (?a ?l) {{ {vals} }} ?w rdfs:label ?l ; wdt:P50 ?a . '
                      f'OPTIONAL {{ ?w wdt:P2034 ?g }} }}')
@@ -129,7 +131,7 @@ def works(pairs: list[tuple[str, str, str]], log=print):
             by[(qid(b, "a"), b["l"]["value"], b["l"].get("xml:lang", ""))].add(w)
             if "g" in b:
                 has[w].add(b["g"]["value"])
-        log(f"works: {min(i + 200, len(pairs)):,} of {len(pairs):,} (author, title) pairs")
+        log(f"works: {min(i + 100, len(pairs)):,} of {len(pairs):,} (author, title) pairs", flush=True) if log is print else log(f"works: {min(i + 100, len(pairs)):,}")
     return by, has
 
 
