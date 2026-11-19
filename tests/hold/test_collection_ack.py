@@ -189,3 +189,31 @@ def test_a_recipe_pinning_the_wrong_terms_hash_is_refused(isolated_config,
     with pytest.raises(CodexError, match="byte-exact"):
         col.create_from_recipe(root, "pubmed", recipe, platform_image=PLATFORM,
                                embed=fake_embed, embed_query=fake_query_embed, name="pubmed", key=KEY, now=NOW)
+
+
+def test_a_forget_hands_its_acknowledgement_to_a_collection_that_relied_on_it(yellow):
+    """The node, 2026-11-19: EUR-Lex5, re-created with no record of its own,
+    was acknowledged all day through EUR-Lex4's record of the same terms
+    (§9.13: an acknowledgement is of a text, peer-wide). Forgetting EUR-Lex4
+    would have left it unacknowledged, and the worker would have withheld it.
+    The forget first gives every held collection pinning those terms and
+    holding no record of its own a copy of it; another terms text is never
+    carried."""
+    from app.hold import forget as forget_mod
+    root, codex, terms = yellow
+    from pathlib import Path
+    terms.write_bytes((Path(__file__).resolve().parents[2] / "app" / "plugins" / "pubmed" / "TERMS.txt")
+                      .read_bytes())          # the text `TERMS` is the hash of
+    assert louise.main(["hold", "collection", "ack", "pubmed", "--root", str(root), "--yes"]) == 0
+    from dataclasses import replace
+    sibling = replace(codex, cleaning_version=codex.cleaning_version + 1)     # another collection, the same terms
+    assert sibling.collection_id != codex.collection_id
+    col.create(root, sibling, name="pubmed2")
+    record = (root / "pubmed" / "state" / "ack.json").read_bytes()
+    assert not (root / "pubmed2" / "state" / "ack.json").exists()
+    dry = forget_mod.forget(root, "pubmed", dry_run=True)
+    assert dry["ack_carried_to"] == ["pubmed2"] and not (root / "pubmed2" / "state" / "ack.json").exists()
+    out = forget_mod.forget(root, "pubmed")
+    assert out["ack_carried_to"] == ["pubmed2"]
+    assert (root / "pubmed2" / "state" / "ack.json").read_bytes() == record, "the same record, byte for byte"
+    assert not (root / "pubmed").exists()
