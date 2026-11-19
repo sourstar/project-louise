@@ -168,17 +168,21 @@ def verify(root, name: str, *, apply: bool = False, every: int = 1, limit: int |
                 # replace its rows — the fts stage deletes then inserts in its
                 # group, the rdf stage writes or forgets its validity row — never
                 # out of them for the hours a pass over 41 M documents takes
+                # but a document whose text-index group changes: its re-index
+                # writes the new group alone, so the old group's rows go now —
+                # BEFORE its marks (architecture's review of #769): a stop between
+                # leaves its marks done and its stored chunks gone, which the next
+                # pass finds and resets; the other order would leave the old rows
+                # for good, a document whose fts is not done never selected again
+                for row, groups in regrouped:
+                    for g in groups:
+                        fts.delete_books(g, [int(row["native_id"])], coll)
                 con.execute("BEGIN IMMEDIATE")
                 for i in range(0, len(moved), 500):
                     part = moved[i:i + 500]
                     con.execute(f"UPDATE documents SET {REDERIVE_MARKS} WHERE uid IN "
                                 f"({','.join('?' * len(part))})", part)
                 con.execute("COMMIT")
-                # but a document whose text-index group changes: its re-index
-                # writes the new group alone, so the old group's rows go now
-                for row, groups in regrouped:
-                    for g in groups:
-                        fts.delete_books(g, [int(row["native_id"])], coll)
                 counts["reset"] += len(moved)
                 counts["regrouped"] += len(regrouped)
             if keep:
