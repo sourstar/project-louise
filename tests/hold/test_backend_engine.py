@@ -178,7 +178,9 @@ def test_an_unknown_codex_version_is_still_refused():
     # container and is refused for that (tests/hold/test_annotations.py); 10 the
     # exactness amendment's since 2026-11-01 (tests/hold/test_codex_exactness.py);
     # 11 the document instruction's since 2026-11-02
-    # (tests/hold/test_codex_document_instruction.py); 12 is unknown
+    # (tests/hold/test_codex_document_instruction.py), 12 the selection's since
+    # 2026-11-18, for an annotations Codex alone (tests/hold/test_codex_select.py);
+    # 13 is unknown
     d["version"] = 7
     with pytest.raises(CodexError, match="missing field.*annotates"):
         cx.loads(canonical_json(d))
@@ -186,7 +188,10 @@ def test_an_unknown_codex_version_is_still_refused():
     with pytest.raises(CodexError, match="declares its record parts' container"):
         cx.validate(cx.loads(canonical_json(d)))
     d["version"] = 12
-    with pytest.raises(CodexError, match="unsupported Codex version 12"):
+    with pytest.raises(CodexError, match="version 12 Codex is an annotations Codex"):
+        cx.loads(canonical_json(d))
+    d["version"] = 13
+    with pytest.raises(CodexError, match="unsupported Codex version 13"):
         cx.loads(canonical_json(d))
 
 
