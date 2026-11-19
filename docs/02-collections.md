@@ -699,7 +699,17 @@ frozen, every document whose `content_hash` is the source snapshot's keeps
 its vectors, its chunks being a function of its title and sections alone
 (invariant 3); every other one — revised at the origin, new, or gone —
 loses them and is embedded again (`--reconcile`); and `vectors-sample`
-passes before use, as for any carry. Gutenberg's parser 9 is the case:
+passes before use, as for any carry. *(Amended 2026-11-19, the A1c
+re-derive; confirmed on NeuRIS and Normattiva:)* what the worker derived
+from its own parse — the validity rows, the catalogue row and the text-index
+rows — follows the RECORD, not its content: every document whose record line
+moved, `extra` included, provenance (`origin`, `origin_hash`) aside, has
+those rows deleted and its rdf and fts marks reset, so the worker derives
+them again at the target's parser; its vectors follow `content_hash` alone.
+A target reconciled before this, with no source snapshot left, is repaired
+by `louise dev rederive` (every document derived again) or, for a large one,
+`--verify` (only those whose chunks, fields or validity differ from what the
+worker would derive now). Gutenberg's parser 9 is the case:
 `origin_hash` now covers the book's catalogue entry, so every record's
 bytes moved and not one chunk did. *Amendment A1d (RULE 1, 2026-10-18):*
 the parser may also read an origin file the source's did not — the

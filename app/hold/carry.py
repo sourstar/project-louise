@@ -1155,6 +1155,11 @@ def derived_state(root, from_name: str, to_name: str, src: Codex, to: Codex, *, 
 # ---- A1c: reconcile a rebuilt target --------------------------------------
 
 RECONCILE_KEY = "carry_reconcile"
+#: a document's marks, reset where what the worker derived from its own parse
+#: is the old parser's (2026-11-19): the rdf stage writes its validity and
+#: catalogue rows again, the fts stage its text-index rows (delete-then-
+#: insert, keyed on the document); its vectors are reconcile's to keep or not
+REDERIVE_MARKS = "rdf_done=0, fts_done=0"
 
 
 def _content_of(root: Path, name: str) -> dict[str, tuple[str, str | None]]:
@@ -1192,12 +1197,28 @@ def _digest(v: str | None) -> bytes | None:
     return None if v is None else hashlib.blake2b(v.encode("utf-8"), digest_size=16).digest()
 
 
-def _part_content(path: str, with_origin: bool) -> list[tuple[str, bytes | None, str | None]]:
+#: a record's provenance, not what its parse gave (`_parsed_digest`)
+_PROVENANCE = ("origin", "origin_hash", "content_hash")
+
+
+def _parsed_digest(r: dict) -> bytes:
+    """What the PARSE gave a record — every field but its provenance — as a
+    digest (2026-11-19, the A1c defect: NeuRIS5's provisional starts live in
+    `extra`, outside `content_hash`, and the worker's validity and text-index
+    rows, derived from its own parse, kept parser 4's: 51 documents out of
+    the in-force filter, Normattiva ~1.5 % with parser 9's "— null"
+    headings in its text index)."""
+    line = {k: v for k, v in r.items() if k not in _PROVENANCE}
+    return _digest(json.dumps(line, sort_keys=True, ensure_ascii=False, separators=(",", ":"))) or b""
+
+
+def _part_content(path: str, with_origin: bool) -> list[tuple[str, bytes | None, str | None, bytes]]:
     """One part's (uid, content digest, origin_hash — the target's only: the
-    source's is never read), in the part's order — a pool task
-    (`parallel.each_part`), module-level so it pickles."""
+    source's is never read —, parse digest), in the part's order — a pool
+    task (`parallel.each_part`), module-level so it pickles."""
     from app.pack import records as pack_records
-    return [(r["uid"], _digest(r.get("content_hash")), r.get("origin_hash") if with_origin else None)
+    return [(r["uid"], _digest(r.get("content_hash")), r.get("origin_hash") if with_origin else None,
+             _parsed_digest(r))
             for r in pack_records.iter_records(Path(path))]
 
 
@@ -1210,7 +1231,8 @@ def _content_table(root: Path, from_name: str, to_name: str, log: Callable[[str]
     path = _paths(root, to_name)["state"] / CONTENT_DB
     sides = ((_BEFORE, from_name, latest_snapshot(root, from_name)),
              (_AFTER, to_name, latest_snapshot(root, to_name)))
-    key = json.dumps([[n, s.snapshot_id] for _side, n, s in sides])
+    # "v2": the parse digest (`lh`) beside the content; a table of v1 is made again
+    key = json.dumps(["v2"] + [[n, s.snapshot_id] for _side, n, s in sides])
     con = sqlite3.connect(path)
     try:
         con.execute("PRAGMA journal_mode=WAL")
@@ -1221,7 +1243,7 @@ def _content_table(root: Path, from_name: str, to_name: str, log: Callable[[str]
             con.execute("DROP TABLE IF EXISTS content")
             con.execute("DROP TABLE IF EXISTS parts")
         con.execute("INSERT OR REPLACE INTO meta VALUES('for', ?)", (key,))
-        con.execute("CREATE TABLE IF NOT EXISTS content(side INTEGER, uid TEXT, ch BLOB, oh TEXT, "
+        con.execute("CREATE TABLE IF NOT EXISTS content(side INTEGER, uid TEXT, ch BLOB, oh TEXT, lh BLOB, "
                     "PRIMARY KEY(side, uid)) WITHOUT ROWID")
         con.execute("CREATE TABLE IF NOT EXISTS parts(side INTEGER, path TEXT, "
                     "PRIMARY KEY(side, path)) WITHOUT ROWID")
@@ -1237,8 +1259,8 @@ def _content_table(root: Path, from_name: str, to_name: str, log: Callable[[str]
             tasks = [(str(d / p), side == _AFTER) for p in todo]
             for n, (part, rows) in enumerate(zip(todo, parallel.each_part(_part_content, tasks)), 1):
                 con.execute("BEGIN")
-                con.executemany("INSERT OR REPLACE INTO content VALUES(?,?,?,?)",
-                                [(side, u, ch, oh) for u, ch, oh in rows])
+                con.executemany("INSERT OR REPLACE INTO content VALUES(?,?,?,?,?)",
+                                [(side, u, ch, oh, lh) for u, ch, oh, lh in rows])
                 con.execute("INSERT INTO parts VALUES(?,?)", (side, part))
                 con.execute("COMMIT")
                 if n % 200 == 0:
@@ -1249,14 +1271,14 @@ def _content_table(root: Path, from_name: str, to_name: str, log: Callable[[str]
     return path
 
 
-def _content_window(con, side: int, uids: list[str]) -> dict[str, tuple[bytes | None, str | None]]:
-    out: dict[str, tuple[bytes | None, str | None]] = {}
+def _content_window(con, side: int, uids: list[str]) -> dict[str, tuple[bytes | None, str | None, bytes | None]]:
+    out: dict[str, tuple[bytes | None, str | None, bytes | None]] = {}
     for i in range(0, len(uids), 500):
         part = uids[i:i + 500]
-        for u, ch, oh in con.execute(
-                f"SELECT uid, ch, oh FROM content WHERE side=? AND uid IN ({','.join('?' * len(part))})",
+        for u, ch, oh, lh in con.execute(
+                f"SELECT uid, ch, oh, lh FROM content WHERE side=? AND uid IN ({','.join('?' * len(part))})",
                 [side, *part]):
-            out[u] = (ch, oh)
+            out[u] = (ch, oh, lh)
     return out
 
 
@@ -1334,6 +1356,14 @@ def reconcile(root, from_ref: str, to_ref: str, *, window: int = WINDOW,
             rehash = [(after[r["uid"]][1], r["uid"]) for r in rows
                       if r["uid"] in after and after[r["uid"]][1]
                       and r["txt_hash"] != after[r["uid"]][1]]
+            # WHAT THE WORKER DERIVED FROM ITS OWN PARSE (2026-11-19): a record
+            # whose parse moved — any field, not only the content — has its
+            # validity, catalogue and text-index rows from the old parser:
+            # derived again (`rederived`), its vectors kept where its content
+            # did not move
+            rederive = [r["uid"] for r in rows
+                        if r["uid"] not in after or r["uid"] not in before
+                        or after[r["uid"]][2] != before[r["uid"]][2]]
             pending = state.get("pending") or {}
             if pending.get("rowid") != last:
                 # step 1: marked not done (and rehashed) FIRST — a document
@@ -1345,10 +1375,26 @@ def reconcile(root, from_ref: str, to_ref: str, *, window: int = WINDOW,
                     con.execute(f"UPDATE documents SET embed_done=0 WHERE uid IN ({marks})", part)
                     con.execute(f"DELETE FROM chunk_verification WHERE uid IN ({marks})", part)
                 con.executemany("UPDATE documents SET txt_hash=? WHERE uid=?", rehash)
-                pending = {"rowid": last, "reset": len(stale), "rehashed": len(rehash)}
+                for i in range(0, len(rederive), 500):
+                    part = rederive[i:i + 500]
+                    con.execute(f"UPDATE documents SET {REDERIVE_MARKS} WHERE uid IN ({','.join('?' * len(part))})",
+                                part)
+                # their validity rows go with the marks (architecture, 2026-11-19:
+                # the old parser's row never served meanwhile); the rdf stage
+                # writes the new parser's
+                from app import validity as validity_mod
+                for uid in rederive:
+                    validity_mod.forget(con, uid, chain=False)
+                pending = {"rowid": last, "reset": len(stale), "rehashed": len(rehash),
+                           "rederived": len(rederive)}
                 db.set_control(con, RECONCILE_KEY,
                                json.dumps({**state, "pending": pending}, sort_keys=True))
                 con.execute("COMMIT")
+            # step 2a: the text-index and catalogue rows of those derived again
+            # (their vectors are step 2's to keep or not); repeatable
+            if rederive:
+                from app import unindexable
+                unindexable.withdraw_many(con, coll, rederive, vectors=False)
             # step 2: their rows, under the vector write lock
             if stale:
                 books = sorted({int(r["native_id"]) for r in stale})
@@ -1362,7 +1408,8 @@ def reconcile(root, from_ref: str, to_ref: str, *, window: int = WINDOW,
             # step 3: the cursor
             state = {"rowid": last, "kept": state["kept"] + len(same),
                      "reset": state["reset"] + pending["reset"],
-                     "rehashed": state["rehashed"] + pending["rehashed"], "done": False,
+                     "rehashed": state["rehashed"] + pending["rehashed"],
+                     "rederived": state.get("rederived", 0) + pending.get("rederived", 0), "done": False,
                      "pair": pair}
             con.execute("BEGIN IMMEDIATE")
             db.set_control(con, RECONCILE_KEY, json.dumps(state, sort_keys=True))
@@ -1375,13 +1422,62 @@ def reconcile(root, from_ref: str, to_ref: str, *, window: int = WINDOW,
     for suffix in ("", "-wal", "-shm"):
         Path(str(side_path) + suffix).unlink(missing_ok=True)
     out = {"collection": to_name, "kept": state["kept"], "reset": state["reset"],
-           "rehashed": state["rehashed"], "records_before": counts.get(_BEFORE, 0),
-           "records_after": counts.get(_AFTER, 0)}
+           "rehashed": state["rehashed"], "rederived": state.get("rederived", 0),
+           "records_before": counts.get(_BEFORE, 0), "records_after": counts.get(_AFTER, 0)}
     log(f"[carry] {to_name}: {state['kept']} document(s) keep their vectors (same "
         f"content_hash as {from_name}), {state['reset']} to embed again, "
+        f"{state.get('rederived', 0)} whose parse moved derived again (validity, catalogue, text index), "
         f"{state['rehashed']} txt_hash(es) set to their record's origin_hash. Before use: "
         f"`hold check {to_name} --checks vectors-sample` (A1c)")
     return out
+
+
+REDERIVE_KEY = "carry_rederive"
+
+
+def rederive(root, name: str, *, apply: bool = False, again: bool = False, window: int = 50_000,
+             log: Callable[[str], None] = print) -> dict[str, Any]:
+    """THE REPAIR where no source snapshot is left to compare with (2026-11-19:
+    NeuRIS5's source was forgotten): every document's derived marks reset
+    (`REDERIVE_MARKS`), so the worker parses each again at the collection's
+    own parser and writes its validity, catalogue and text-index rows again —
+    by the book, as a fresh scan would. Vectors untouched: they are the
+    records' (reconcile kept them by content). A window of rows a
+    transaction, resumable from its cursor; the dry run counts."""
+    from . import collection as col
+    from app import db
+    root = Path(root)
+    name, codex = col.resolve(root, name)
+    manifest = _paths(root, name)["manifest"]
+    con = sqlite3.connect(manifest)
+    con.row_factory = sqlite3.Row
+    try:
+        con.execute("PRAGMA journal_mode=WAL")
+        total = int(con.execute("SELECT COUNT(*) FROM documents").fetchone()[0])
+        if not apply:
+            return {"collection": name, "documents": total, "would_reset": total,
+                    "marks": REDERIVE_MARKS}
+        fresh = {"rowid": 0, "reset": 0, "done": False}
+        state = _cursor(con, REDERIVE_KEY, [codex.collection_id], fresh)
+        if again:
+            state = {**fresh, "pair": [codex.collection_id]}
+        while not state.get("done"):
+            row = con.execute("SELECT MAX(rowid) FROM (SELECT rowid FROM documents WHERE rowid > ? "
+                              "ORDER BY rowid LIMIT ?)", (state["rowid"], window)).fetchone()
+            if row is None or row[0] is None:
+                state["done"] = True
+            con.execute("BEGIN IMMEDIATE")
+            if not state.get("done"):
+                n = con.execute(f"UPDATE documents SET {REDERIVE_MARKS} WHERE rowid > ? AND rowid <= ?",
+                                (state["rowid"], int(row[0]))).rowcount
+                state = {**state, "rowid": int(row[0]), "reset": state["reset"] + n}
+            db.set_control(con, REDERIVE_KEY, json.dumps(state, sort_keys=True))
+            con.execute("COMMIT")
+        log(f"[carry] {name}: {state['reset']} document(s) to derive again at its parser "
+            f"(validity, catalogue, text index); its vectors kept")
+        return {"collection": name, "documents": total, "reset": state["reset"], "done": True}
+    finally:
+        con.close()
 
 
 def _reconciled_by_proof(root: Path, to_name: str, to: Codex, src: Codex, proof: dict[str, Any],

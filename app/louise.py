@@ -3524,6 +3524,30 @@ def cmd_dev_eurlex_dump(a) -> int:
     return 0
 
 
+def cmd_dev_rederive(a) -> int:
+    """`louise dev rederive <collection> [--yes] [--again]`: every document's
+    derived marks reset, so the worker parses each again at the collection's
+    parser and writes its validity, catalogue and text-index rows again
+    (app/hold/carry.py `rederive`; the A1c repair where no source snapshot is
+    left, 2026-11-19). A dry run without --yes; its vectors are kept."""
+    from app.hold import carry as carry_mod
+    say = lambda m: print(m, file=sys.stderr)              # noqa: E731
+    if a.verify:
+        # pubmed, wikidata: only what differs from what the worker would derive now
+        import signal
+        import threading
+        from app.hold import derived_check
+        stop = threading.Event()
+        for sig in (signal.SIGTERM, signal.SIGINT):
+            signal.signal(sig, lambda *_: stop.set())
+        out = derived_check.verify(a.root, a.collection, apply=a.yes, every=a.every, limit=a.limit,
+                                   again=a.again, stop=stop, log=say)
+        _print({"verify": out})
+        return 130 if stop.is_set() else 0
+    _print({"rederive": carry_mod.rederive(a.root, a.collection, apply=a.yes, again=a.again, log=say)})
+    return 0
+
+
 def cmd_dev_carry(a) -> int:
     """`louise dev carry <from> <to> [--copy] [--keep producer:<archive>] --yes`
     (07 §7.3; docs/notes/v5-migration.md G1, G2; amendment A1): the source's
@@ -8526,6 +8550,19 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--carry-from", dest="carry_from", default=None,
                    help="an earlier eurlex corpus: its units the dump did not give, linked in")
     p.set_defaults(fn=cmd_dev_eurlex_dump)
+    p = dverbs.add_parser("rederive", help="every document derived again at the collection's parser "
+                                           "(validity, catalogue, text index; its vectors kept): the "
+                                           "A1c repair where no source snapshot is left; writes only with --yes")
+    root_arg(p)
+    p.add_argument("collection")
+    p.add_argument("--yes", action="store_true")
+    p.add_argument("--again", action="store_true", help="start over when an earlier rederive finished")
+    p.add_argument("--verify", action="store_true",
+                   help="only the documents whose chunks, fields or validity row differ from what the "
+                        "worker would derive now (app/hold/derived_check.py; on the parse pool, resumable)")
+    p.add_argument("--every", type=int, default=1, metavar="N", help="with --verify: one document in N (a sample)")
+    p.add_argument("--limit", type=int, default=None, metavar="N", help="with --verify: at most N documents")
+    p.set_defaults(fn=cmd_dev_rederive)
     p = dverbs.add_parser("carry", help="a collection's manifest, text index and vector table into a new "
                                         "collection with the same records (amendment A1); writes "
                                         "only with --yes (both collections' locks)")
