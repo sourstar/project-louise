@@ -43,3 +43,15 @@ def test_sizes_come_from_the_image_tables_the_local_one_first(tmp_path, monkeypa
     wfb.sizes(["it"], tmp_path, log=lambda m: None)
     got = json.loads((tmp_path / "it.files.json").read_text())
     assert {n: f["scan_bytes"] for n, f in got.items()} == {"L'Italia.djvu": 123456, "Local.pdf": 500, "Gone.pdf": None}
+
+
+def test_found_on_de_and_fr():
+    assert wfb.bucket_of(["Romans_historiques"]) == "fiction"
+    assert wfb.bucket_of(["Romans_autobiographiques", "Mémoires"]) == "fiction"
+    assert wfb.bucket_of(["Prix_Goncourt"]) == "other"
+    assert wfb.bucket_of(["United_States_Supreme_Court_decisions"]) == "law and official"
+    assert wfb.bucket_of(["Geschichte_(Meyers_Konversations-Lexikon)"]) == "reference"
+    assert wfb.bucket_of(["RE:Autor:Ernst_Meyer_(Historiker)"]) == "reference"
+    assert wfb.bucket_of(["ADB:Autor:Wilhelm_Scherer", "Geschichte"]) == "reference"
+    assert wfb.bucket_of(["Chroniques_de_Maupassant"]) == "reference"
+    assert wfb.bucket_of(["Chronique_de_la_quinzaine_-_1902"]) == "reference"
