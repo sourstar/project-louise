@@ -14,8 +14,11 @@ For every document the stages marked done, on the parse pool
     language, subjects, shelves) against the manifest's;
   * where the plugin declares validity, the start the metadata states now
     against the validity row (start, work, basis, text, force).
-Only what differs is reset (`carry.REDERIVE_MARKS`) and loses its text-index,
-catalogue and validity rows; its vectors are the records' and stay. A dry run
+Only what differs has its marks reset (`carry.REDERIVE_MARKS`): it stays in
+search and in the in-force filter until its stages replace its rows
+(architecture's review of #767); only a document whose text-index group
+changes loses its old group's rows at once. Its vectors are the records' and
+stay. A dry run
 counts, with its rate and the time the whole pass would take; `--sample`
 checks every n-th document to measure first.
 
@@ -103,14 +106,14 @@ def verify(root, name: str, *, apply: bool = False, every: int = 1, limit: int |
     over); a dry run or a sample keeps none."""
     import json
     from contextlib import closing
-    from app import db, parallel, unindexable, validity as validity_mod
+    from app import db, fts, parallel, validity as validity_mod
     from . import collection as col, records as rec
     from .carry import REDERIVE_MARKS
     root = Path(root)
     name, codex = col.resolve(root, name)
     coll = rec.local_collection(root, name, codex)
     declared = validity_mod.declared(coll) is not None
-    counts = {"checked": 0, "chunks": 0, "document": 0, "validity": 0, "failed": 0, "reset": 0}
+    counts = {"checked": 0, "chunks": 0, "document": 0, "validity": 0, "failed": 0, "reset": 0, "regrouped": 0}
     t0 = time.monotonic()
     with closing(db.connect(coll)) as con:
         total = int(con.execute("SELECT COUNT(*) FROM documents WHERE rdf_done=1 AND fts_done=1 "
@@ -139,6 +142,7 @@ def verify(root, name: str, *, apply: bool = False, every: int = 1, limit: int |
             page = handed.popleft()
             metas = parallel.compute("metadata", coll, page)
             moved: list[str] = []
+            regrouped: list[tuple] = []          # (row, the groups it leaves)
             for row, (ok, chunks), (ok_m, meta) in zip(page, got, metas):
                 counts["checked"] += 1
                 if not ok or not ok_m:
@@ -155,17 +159,28 @@ def verify(root, name: str, *, apply: bool = False, every: int = 1, limit: int |
                 if why:
                     counts[why] += 1
                     moved.append(row["uid"])
+                    left = set(_groups(coll, row["lang"])) - set(_groups(coll, meta.get("lang")))
+                    if left:
+                        regrouped.append((row, sorted(left)))
             if apply and moved:
+                # THE MARKS ONLY (architecture's review of #767): a moved document
+                # stays in search and in the in-force filter until its stages
+                # replace its rows — the fts stage deletes then inserts in its
+                # group, the rdf stage writes or forgets its validity row — never
+                # out of them for the hours a pass over 41 M documents takes
                 con.execute("BEGIN IMMEDIATE")
                 for i in range(0, len(moved), 500):
                     part = moved[i:i + 500]
                     con.execute(f"UPDATE documents SET {REDERIVE_MARKS} WHERE uid IN "
                                 f"({','.join('?' * len(part))})", part)
-                for uid in moved:
-                    validity_mod.forget(con, uid, chain=False)
                 con.execute("COMMIT")
-                unindexable.withdraw_many(con, coll, moved, vectors=False)
+                # but a document whose text-index group changes: its re-index
+                # writes the new group alone, so the old group's rows go now
+                for row, groups in regrouped:
+                    for g in groups:
+                        fts.delete_books(g, [int(row["native_id"])], coll)
                 counts["reset"] += len(moved)
+                counts["regrouped"] += len(regrouped)
             if keep:
                 con.execute("BEGIN IMMEDIATE")
                 db.set_control(con, CURSOR_KEY, json.dumps({"for": codex.collection_id,
