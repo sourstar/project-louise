@@ -283,6 +283,13 @@ def incomplete_due(corpus: Path, langs) -> list[tuple[str, str, str | None]]:
                 if note is not None and not lacks_package(at, note):
                     continue
             out.append((lang, celex, entry.get("in_force")))
+    # BY ACT, then language (as the listing, `ORDER BY ?celex ?language`): a
+    # work's tree is asked once and its other languages take it from
+    # work_trees.RecentTrees (6 h). Language by language, one language's
+    # ~9.7k units (~5.7 h at the 1,695 units an hour measured after #759)
+    # outlived the cache, and each work's tree (~7 s of a unit's ~7.2 s)
+    # was asked again in every language
+    out.sort(key=lambda t: (t[1], t[0]))
     return out
 
 

@@ -78,6 +78,62 @@ PACKAGE_MAX = 1 << 30
 _MEMBER_NAME = re.compile(r"^[^/\\\x00]+$")
 
 
+#: what a file's first bytes are
+_MAGIC = ((b"II*\x00", "tiff"), (b"MM\x00*", "tiff"), (b"%PDF", "pdf"), (b"\xff\xd8\xff", "jpeg"),
+          (b"\x89PNG\r\n\x1a\n", "png"), (b"GIF8", "gif"), (b"PK\x03\x04", "zip"))
+#: what a file of that extension holds
+EXTENSION_KIND = {".xml": "markup", ".html": "markup", ".htm": "markup", ".xhtml": "markup", ".tif": "tiff",
+                  ".tiff": "tiff", ".pdf": "pdf", ".jpg": "jpeg", ".jpeg": "jpeg", ".png": "png", ".gif": "gif",
+                  ".zip": "zip"}
+#: an OJ Formex file's name: `<coll>_<year><no><lg>.<volume><page><sequence>.xml`
+_OJ_FILE = re.compile(r"^[A-Z]_\d{4}\d{3}[A-Z]{2}\.(?P<vol>\d{2})(?P<page>\d{4})(?P<seq>\d{2})\.xml$", re.IGNORECASE)
+_BIB = re.compile(rb"<BIB\.INSTANCE>(.*?)(?:</BIB\.INSTANCE>|\Z)", re.S)
+_DOC_REF = re.compile(rb"<DOCUMENT\.REF\b.*?</DOCUMENT\.REF>", re.S)
+_PAGE_FIRST = re.compile(rb"<PAGE\.FIRST>\s*(\d+)\s*</PAGE\.FIRST>")
+_PAGE_SEQ = re.compile(rb"<PAGE\.SEQ>\s*(\d+)\s*</PAGE\.SEQ>")
+
+
+def item_kind(head: bytes) -> str:
+    """What a file's first bytes say it is: tiff, pdf, … or markup."""
+    if not head:
+        return "empty"
+    for magic, name in _MAGIC:
+        if head.startswith(magic):
+            return name
+    if head.lstrip(b"\xef\xbb\xbf \t\r\n").startswith(b"<"):
+        return "markup"
+    return "other"
+
+
+def misnamed(name: str, head: bytes) -> str | None:
+    """Why a file is not the one its name says, from its first bytes
+    (`head`, a few KB) alone; None where nothing says so (2026-11-19: the Data
+    Dump files 32015D1735's TIFF as `…01004901.xml`, 32015R0207's annex as
+    the body's `…01000101.xml`):
+      * its first bytes are not what its extension holds;
+      * an OJ Formex file states, in its own BIB.INSTANCE, the page and the
+        sequence its name encodes (`…01000501.xml`: volume 01, page 5,
+        sequence 1) — another page or sequence is another file's content.
+        The DOCUMENT.REF inside names the WRAPPER's and is not read."""
+    import os
+    want, got = EXTENSION_KIND.get(os.path.splitext(name)[1].lower()), item_kind(head)
+    if want is not None and got != want:
+        return f"{name} holds {got}, not {want}"
+    m = _OJ_FILE.match(name)
+    if m is None or got != "markup":
+        return None
+    bib = _BIB.search(head)
+    if bib is None:
+        return None
+    own = _DOC_REF.sub(b"", bib.group(1))
+    first, seq = _PAGE_FIRST.search(own), _PAGE_SEQ.search(own)
+    if first is not None and int(first.group(1)) != int(m["page"]):
+        return f"{name} states page {int(first.group(1))}, its name page {int(m['page'])}"
+    if seq is not None and int(seq.group(1)) != int(m["seq"]):
+        return f"{name} states sequence {int(seq.group(1))}, its name {int(m['seq'])}"
+    return None
+
+
 def is_package(name: str) -> bool:
     """An item named as a zip: the manifestation's files packed in one."""
     return bool(_PACKAGE.search(name or ""))
