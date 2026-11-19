@@ -377,6 +377,16 @@ louise node
   checkpoint watch [--after 2h] [--dry-run] [--json]                   the watchdog's one check: no beat for --after and past any declared step -> the dev units on stdout one a line (or
                                                                        JSON) and the restore; exit 0 nothing to do, 10 restored, 11 expired under --dry-run, 1 the restore failed in part
   health [<collection>] [--errors]                                     every stage's state per collection; exit 1 when a stage has work it cannot start (added 2026-10-08)
+  release-oom --cause TEXT | --diagnostic TEXT                         lift the OOM HOLD (operator, 2026-11-19: "the very first time a worker is killed because of OOM, it is
+                                                                       not relauched until the cause has been determined or diagnostics has been added"): the first time
+                                                                       the kernel kills for memory in the worker's cgroup — the worker, a parse-pool child, any process in
+                                                                       it — state/oom-hold.json is written with what it was doing (the worker's last lines, the parts in
+                                                                       flight, the cgroup's peak), the worker stops at its units and its guard (`python -m
+                                                                       app.worker_guard`, the container's command) starts none while it is in force; `node show` says
+                                                                       it first. --cause names what was determined, --diagnostic what was added that names it the next
+                                                                       time, one of them in words; both kept in state/oom-holds.jsonl; exit 2 with none in force. An
+                                                                       operator pass has its own beside its supervisor's hold file: `deploy/release-oom.sh <name>
+                                                                       --cause|--diagnostic` (added 2026-11-19)
   speech show                                                          the Ask page's voice: the speech models as the node resolves them (platform.toml `[speech]`, §7.8),
                                                                        the model server they run on, what the page offers and why not, whether the server lists each
                                                                        model (`GET /v1/models`) (added 2026-11-07, operator)
@@ -423,6 +433,13 @@ louise dev                                                             operator 
                                                                        chunks > 0) that hold no vector — never embedded again, missing from dense search — with --apply marked not
                                                                        embedded (embed_done 0, embed_version 0), guarded `embed_done = 1` and the version read; its own cursor
                                                                        (added 2026-11-07)
+  rederive <collection> [--yes] [--again] [--verify [--every N] [--limit N]]
+                                                                       every document's derived marks reset, so the worker parses each again at the collection's parser
+                                                                       and writes its validity, catalogue and text-index rows again, its vectors kept (app/hold/carry.py;
+                                                                       the A1c repair where no source snapshot is left); --verify instead resets only the documents whose
+                                                                       chunks, fields or validity row differ from what the worker would derive now, strays deleted first
+                                                                       (app/hold/derived_check.py; on the parse pool, resumable; --every N one document in N, --limit N
+                                                                       at most N); --again starts over once one finished; a dry run without --yes; writes (added 2026-11-19)
   reindex <collection> --ids FILE [--yes]                              the documents FILE lists (a uid a line) queued for the text-index stage again — fts_done = 0, embedding untouched; for rows indexed under an earlier parse (`index-drift --ids-out` lists them); writes (added 2026-10-25)
   index-drift <collection> [--shards S,…] [--cut-all] [--sample F] [--seed HEX] [--snapshot ID] [--ids-out FILE]
                                                                        the documents whose SERVED state disagrees with the latest held snapshot's records (added
@@ -1822,6 +1839,8 @@ sensible its own behaviour looks.
 | 2 | refused: a rule stood in the way before anything was done — an invariant, a licence, a missing acknowledgement, an unknown collection, no key, a schema not this platform's |
 | 3 | deferred: nothing is wrong and nothing was done — an origin, an encoder or a peer was unreachable, a lock was held; retry later |
 | 130 | interrupted after a clean commit (SIGTERM or SIGINT) |
+| 137 | a process of the pass's cgroup was killed for memory — the pass itself, or a parse-pool child, whose parts are then not computed again (`parallel.MemoryKilled`); `deploy/supervise-pass.sh` holds it until `deploy/release-oom.sh` names the cause or the diagnostic (operator, 2026-11-19; added the same day) |
+| 75 | the worker alone: it stopped at its units after a memory kill in its cgroup, the OOM hold written; its guard keeps it down until `node release-oom` (added 2026-11-19) |
 
 A command never exits 1 for a deferral and never 0 for a failure. The
 message on stderr names the unit — the part, the document, the bundle,

@@ -228,13 +228,18 @@ def each_part(fn, tasks: list[tuple], *, limit: int | None = None):
     # BOUNDED: at most 2n tasks in flight or done and not yet taken. Results
     # the caller has not reached do not pile up when it is the slower side —
     # the records build's plan commits every window it gets (75.9 M rows).
-    # A CHILD THE KERNEL KILLED (BrokenProcessPool: an OOM, a SIGKILL) does
-    # not end the pass: a pool of half the size takes the parts not yet
-    # answered, in order, and at one process they are computed here
-    # (operator, 2026-10-30: a kill recovers by itself, "not involving this
-    # agent. This applies to any worker").
+    # A CHILD THE KERNEL KILLED (BrokenProcessPool, a SIGKILL) does not end
+    # the pass: a pool of half the size takes the parts not yet answered, in
+    # order, and at one process they are computed here (operator,
+    # 2026-10-30: a kill recovers by itself, "not involving this agent").
+    # EXCEPT FOR MEMORY (operator, 2026-11-19): a child the memory killer
+    # took (the cgroup's oom_kill rose, app/oom_hold.py) ends the pass with
+    # MemoryKilled — exit 137, held by its supervisor until the cause is
+    # known; the same parts met the same document 43 times in one day.
     nxt = 0                                 # the next task to submit
     taken = 0                               # the next result to yield
+    from . import oom_hold
+    oom_hold.baseline()                     # read BEFORE a child can be killed
     ex = ProcessPoolExecutor(max_workers=n, mp_context=multiprocessing.get_context("spawn"),
                              initializer=watch_parent)
     window: deque = deque()
@@ -249,9 +254,12 @@ def each_part(fn, tasks: list[tuple], *, limit: int | None = None):
                 nxt += 1
             try:
                 got = window[0].result()
-            except BrokenProcessPool:
+            except BrokenProcessPool as e:
                 ex.shutdown(wait=False, cancel_futures=True)
                 window.clear()
+                # killed for MEMORY: the pass ends here and is held (operator,
+                # 2026-11-19); any other kill: the unanswered go again
+                _raise_if_killed(f"{len(tasks) - taken} part(s) of {getattr(fn, '__name__', fn)} unanswered", e)
                 nxt = taken                 # the unanswered go again
                 n //= 2
                 print(f"[parse pool] a child was killed: {len(tasks) - taken} part(s) go again "
@@ -276,6 +284,8 @@ def pool() -> ProcessPoolExecutor | None:
     n = processes()
     if n <= 1 or _disabled:
         return None
+    from . import oom_hold
+    oom_hold.baseline()                     # read BEFORE a child can be killed
     old = None
     with _lock:
         if _pool is None or _pool_size != n:
@@ -840,6 +850,34 @@ def _partition(collection, rows: list[dict], want: int) -> list[list[dict]]:
 # task, Dask's worker resources). Adopting one would replace this pool; it
 # would pay once many plugins declare peaks — one does today.
 
+#: WHAT THE POOL HOLDS NOW, for a memory kill's hold (app/oom_hold.py): per
+#: part in flight, its collection, its kind, its rows' uids and sizes. Written
+#: by the batch that submits (two dict operations a part), read by the
+#: worker's watcher only when the kernel has killed.
+_in_flight: dict[int, dict] = {}
+_in_flight_lock = threading.Lock()
+#: the rows named per part in a hold (the rest are counted)
+IN_FLIGHT_ROWS = 20
+
+
+def _enter(key: int, kind: str, collection, part: list[dict]) -> None:
+    with _in_flight_lock:
+        _in_flight[key] = {"collection": getattr(collection, "name", None), "kind": kind, "rows": len(part),
+                           "bytes": sum(int(r.get("size") or 0) for r in part),
+                           "uids": [[r.get("uid"), r.get("size")] for r in part[:IN_FLIGHT_ROWS]]}
+
+
+def _leave(key: int) -> None:
+    with _in_flight_lock:
+        _in_flight.pop(key, None)
+
+
+def in_flight() -> list[dict]:
+    """The parts the pool holds now, largest first."""
+    with _in_flight_lock:
+        return sorted((dict(v) for v in _in_flight.values()), key=lambda v: -v["bytes"])
+
+
 #: a row whose estimated parse peak reaches this takes the large lane
 LARGE_PEAK_BYTES = 2 * 2 ** 30
 #: the time a large row's parse may take, per byte: 32021R2017's 63.1 s for
@@ -854,6 +892,28 @@ _large_lane = threading.BoundedSemaphore(1)
 class MemoryWait(RuntimeError):
     """A document too large to parse beside what runs now: deferred, never
     an error on it (the worker's `transient_failure`); retried next round."""
+
+
+class MemoryKilled(MemoryWait):
+    """A process of this cgroup was killed for memory (app/oom_hold.py;
+    operator, 2026-11-19: "not relauched until the cause has been
+    determined"): what it held is NOT computed again — not on a pool of
+    half the size, not in this process, where the same part would kill the
+    worker itself. In the worker a deferral, the worker being held and
+    stopping (`oom_hold.killed` ran its handler); a pass ends with exit 137
+    (app/louise.py `main`), which its supervisor holds."""
+
+    def __init__(self, before: int, after: int, what: str) -> None:
+        super().__init__(f"the kernel killed a parse-pool child for memory ({what}; the cgroup's oom_kill "
+                         f"{before} -> {after}): not computed again until the cause is known")
+        self.before, self.after = before, after
+
+
+def _raise_if_killed(what: str, cause: BaseException | None = None) -> None:
+    from . import oom_hold
+    k = oom_hold.killed()
+    if k is not None:
+        raise MemoryKilled(k[0], k[1], what) from cause
 
 
 def peak_per_byte(collection) -> float:
@@ -1016,7 +1076,8 @@ def compute(kind: str, collection, rows) -> list[tuple[bool, object]]:
     # collection stopped and SIGTERM could not have been honoured either.
     # On a timeout or a broken pool the batch is computed in-process and
     # the pool is rebuilt; after PARSE_MAX_FAILURES in a row this process
-    # stops using children until it restarts.
+    # stops using children until it restarts. A pool broken by the MEMORY
+    # killer is not: MemoryKilled, a deferral, the worker held (2026-11-19).
     #
     # THE WINDOW IS KEPT FULL, not refilled a wave at a time. It used to
     # submit a wave of tasks, wait for ALL of them, and only then submit the
@@ -1071,6 +1132,7 @@ def compute(kind: str, collection, rows) -> list[tuple[bool, object]]:
                     f.add_done_callback(give_back)
                 else:
                     f = ex.submit(_compute, kind, collection, parts[nxt])
+                _enter(id(f), kind, collection, parts[nxt])
                 futures.append(f)
                 nxt += 1
                 mine += 1
@@ -1079,7 +1141,12 @@ def compute(kind: str, collection, rows) -> list[tuple[bool, object]]:
             if isinstance(oldest, list):          # a part deferred, nothing in flight for it
                 out.extend(oldest)
                 continue
-            out.extend(oldest.result(timeout=max(1.0, deadline - time.monotonic())))
+            try:
+                out.extend(oldest.result(timeout=max(1.0, deadline - time.monotonic())))
+            except BaseException:
+                futures.insert(0, oldest)         # still in flight, for what is said below
+                raise
+            _leave(id(oldest))
             mine -= 1
             _occupy(name, -1)
         _note_success()
@@ -1087,14 +1154,26 @@ def compute(kind: str, collection, rows) -> list[tuple[bool, object]]:
     except (RuntimeError, TimeoutError, OSError, CancelledError) as e:
         # RuntimeError: BrokenProcessPool, or "cannot schedule new futures
         # after shutdown" from a pool another caller stopped meanwhile
+        from . import oom_hold
+        # FIRST, while its parts are still in flight: a child killed for
+        # memory runs the worker's handler, which records them in the hold
+        kill = oom_hold.killed()
         for f in futures:
             if not isinstance(f, list):
                 f.cancel()
+                _leave(id(f))
         for give_back in lanes:
             give_back()
         _note_failure(e, ex)
+        if kill is not None:
+            # its rows are not parsed again here, where they would kill the
+            # worker itself (2026-11-19: 43 kills in a day)
+            raise MemoryKilled(kill[0], kill[1], f"{kind} of {getattr(collection, 'name', collection)}") from e
         return _in_process(kind, collection, plain, k)
     finally:
+        for f in futures:
+            if not isinstance(f, list):
+                _leave(id(f))
         # whatever is still held on the way out — the timeout and the broken
         # pool leave a window's worth — or the next collection inherits a
         # budget that has been eaten by a batch that is long over.
@@ -1311,6 +1390,7 @@ def compute_pages(kind: str, collection, pages, *, stop=None, say=None):
                         _occupy(name, -1)
                 _note_failure(e, owner.get(fut))
                 owner.clear()
+                _raise_if_killed(f"{kind} of {getattr(collection, 'name', collection)}", e)
                 # what was not answered, in-process; what finished is kept;
                 # what was still queued goes to the next pool
                 results[page_no][i] = _compute(kind, collection, part)

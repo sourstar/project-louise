@@ -212,7 +212,9 @@ services:
       nofile:
         soft: 65536
         hard: 524288
-    command: ['python', '-m', 'app.worker']
+    # the worker run by its guard: kept down after a memory kill until released
+    # (app/worker_guard.py, app/oom_hold.py; operator, 2026-11-19)
+    command: ['python', '-m', 'app.worker_guard']
     init: true                  # reaps rsync's orphaned children — see web
     environment:
       <<: *env

@@ -186,7 +186,12 @@ def show() -> dict[str, Any]:
         # not; None when the governor is not running
         from app import gpu
         profile["gpu_applied"] = gpu.governor().get("level")
+    from app import oom_hold
+    held = oom_hold.held()
     return {"mode": ov["mode"], "overrides": ov,
+            # a memory kill holds the worker down until released (app/oom_hold.py;
+            # operator, 2026-11-19): said first, in plain words, with its record
+            **({"oom_hold": {"says": oom_hold.describe(held), "record": held}} if held else {}),
             # the quiet / day / night profile in force (platform.toml [schedule]):
             # what background CPU work and the card may use now, and until when
             "profile": profile,

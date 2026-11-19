@@ -223,6 +223,19 @@ def no_real_data_dir(tmp_path_factory, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def no_real_memory_counter(tmp_path_factory, monkeypatch):
+    """No test reads the cgroup the suite runs in (app/oom_hold.py): a pool
+    test whose child dies would otherwise ask the real `memory.events`, and a
+    kill the kernel made elsewhere in the container would read as its own.
+    The baseline, the handler and the kill seen are per test."""
+    from app import oom_hold
+    monkeypatch.setattr(oom_hold, "CGROUP_DIR", str(tmp_path_factory.mktemp("no-cgroup") / "absent"))
+    oom_hold._reset()
+    yield
+    oom_hold._reset()
+
+
+@pytest.fixture(autouse=True)
 def the_real_node_store_is_never_touched():
     """app/node_state.py resolves `<LOUISE_ROOT or DATA_DIR>/state/node.sqlite`
     — on a node's volume, that node's LIVE mode. Two tests without

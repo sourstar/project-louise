@@ -46,10 +46,23 @@
 #                              timeouts stopped the EUR-Lex chain twice in an
 #                              hour, read as a defect — CLAUDE.md: "Deferral
 #                              is not failure")
-#   exit 137 or 141            again in 60 s with PARSE_PROCESSES halved
-#                              (12 -> 6 -> 3 -> 2): an OOM loop backs off.
-#                              141 is SIGPIPE: until 2026-10-30 a pool child the
-#                              kernel killed took its parent with it
+#   exit 137                   HELD, NOT RESTARTED (operator, 2026-11-19: "the
+#                              very first time a worker is killed because of
+#                              OOM, it is not relauched until the cause has
+#                              been determined or diagnostics has been added";
+#                              CLAUDE.md). The kernel's OOM kill is SIGKILL,
+#                              137; a deliberate stop touches the hold file
+#                              first and is said above. $OOM_HOLD is written —
+#                              when, and the pass's last lines — and the pass
+#                              is not started again, by this supervisor or a
+#                              later one, until `deploy/release-oom.sh <name>
+#                              --cause TEXT | --diagnostic TEXT` lifts it.
+#                              Until 2026-11-19 it came back with
+#                              PARSE_PROCESSES halved, meeting the same
+#                              document each time
+#   exit 141                   SIGPIPE: until 2026-10-30 a pool child the
+#                              kernel killed took its parent with it; again in
+#                              60 s, like any crash
 #   any other exit             again in 60 s, at most MAX_RESTARTS times — but
 #                              FAST_FAILS (3) in a row each within FAST_FAIL_S
 #                              (120 s) of the run's start is a DEFECT of the pass,
@@ -94,6 +107,7 @@
 set -u
 NAME=$1; shift
 HOLD=${HOLD:-/root/supervise/$NAME.hold}
+OOM_HOLD=${OOM_HOLD:-$(dirname "$HOLD")/$NAME.oom-hold}
 LAST=${LAST:-$(dirname "$HOLD")/$NAME.last.log}
 MAX_RESTARTS=${MAX_RESTARTS:-20}
 FAST_FAIL_S=${FAST_FAIL_S:-120}
@@ -118,6 +132,11 @@ for ((i = 1; i < $#; i++)); do
 done
 VERDICTS=${VERDICTS-$gate}
 mkdir -p "$(dirname "$HOLD")"
+if [ -e "$OOM_HOLD" ]; then
+    echo "== $NAME: held by a memory kill ($OOM_HOLD), not started until released:" \
+         "deploy/release-oom.sh $NAME --cause TEXT | --diagnostic TEXT"
+    exit 137
+fi
 rm -f "$HOLD"
 on_stop() {
     interrupted=1
@@ -188,12 +207,21 @@ while :; do
         continue
     fi
     defers=0
-    if [ "$code" -ne 137 ] && [ "$code" -ne 141 ] && [ -n "$last" ] && [ "$code $last" = "$prev" ]; then
+    if [ "$code" -eq 137 ]; then
+        { echo "held: $(date -u +%FT%TZ) $NAME exit 137 (SIGKILL: the kernel's OOM killer, or a kill -9)"
+          echo "release: deploy/release-oom.sh $NAME --cause TEXT | --diagnostic TEXT"
+          echo "its last lines ($LAST):"
+          tail -40 "$LAST" 2>/dev/null; } > "$OOM_HOLD"
+        echo "== $NAME: killed (exit 137, a memory kill): HELD, not restarted until the cause is known" \
+             "($OOM_HOLD; operator, 2026-11-19)"
+        exit 137
+    fi
+    if [ "$code" -ne 141 ] && [ -n "$last" ] && [ "$code $last" = "$prev" ]; then
         echo "== $NAME: exit $code with the same last line twice in a row (\"$last\"): a defect in the pass, not a crash; not restarted — fix it and run it again ($LAST)"
         exit "$code"
     fi
-    if [ "$code" -eq 137 ] || [ "$code" -eq 141 ]; then prev=; else prev="$code $last"; fi
-    if [ "$code" -ne 137 ] && [ "$code" -ne 141 ] && [ $((SECONDS - started)) -lt "$FAST_FAIL_S" ]; then
+    if [ "$code" -eq 141 ]; then prev=; else prev="$code $last"; fi
+    if [ "$code" -ne 141 ] && [ $((SECONDS - started)) -lt "$FAST_FAIL_S" ]; then
         fast=$((fast + 1))
         if [ "$fast" -ge "$FAST_FAILS" ]; then
             echo "== $NAME: exit $code within ${FAST_FAIL_S} s of its start $fast times in a row: a defect in the pass, not a crash; not restarted — fix it and run it again"
@@ -204,9 +232,5 @@ while :; do
     fi
     n=$((n + 1))
     [ "$n" -ge "$MAX_RESTARTS" ] && { echo "== $NAME: $n restarts, giving up"; exit "$code"; }
-    if [ "$code" -eq 137 ] || [ "$code" -eq 141 ]; then
-        cur=${PROCS:-$(nproc)}
-        PROCS=$(( cur / 2 > 2 ? cur / 2 : 2 ))
-    fi
     sleep "$PAUSE"
 done
