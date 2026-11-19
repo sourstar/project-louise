@@ -199,3 +199,17 @@ def test_the_per_unit_pass_asks_again_for_a_lacking_package_only_after_the_bulk(
     assert units._reform(unit / rdf.TREE_FILE, remote, note)
     (unit / PKG).write_bytes(_package())
     assert not units._reform(unit / rdf.TREE_FILE, remote, note)
+
+
+def test_the_units_asked_first_come_by_act_then_language(tmp_path):
+    """One work's tree serves its every language (work_trees.RecentTrees):
+    the incomplete units are asked act by act, not language by language."""
+    import json
+    corpus = tmp_path / "corpus"
+    corpus.mkdir()
+    rec = {lang: {c: {"in_force": "true", "tried": None} for c in ("32001R0001", "32002R0002")}
+           for lang in ("de", "fr", "it")}
+    (corpus / eurlex_dump.INCOMPLETE).write_text(json.dumps(rec))
+    got = eurlex_dump.incomplete_due(corpus, {"de", "fr", "it"})
+    assert [(c, l) for l, c, _ in got] == [("32001R0001", "de"), ("32001R0001", "fr"), ("32001R0001", "it"),
+                                           ("32002R0002", "de"), ("32002R0002", "fr"), ("32002R0002", "it")]
