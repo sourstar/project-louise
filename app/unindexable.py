@@ -36,13 +36,16 @@ def withdraw(con, collection, uid: str) -> dict[str, Any]:
     return {"uid": uid, "withdrawn": True, "book_id": book}
 
 
-def withdraw_many(con, collection, uids) -> int:
+def withdraw_many(con, collection, uids, *, vectors: bool = True) -> int:
     """`withdraw` for many documents, one commit per index rather than one
     per document (the commit is what costs: fts.delete_books) — what the
     origin RETRACTED in one discovery batch (06 §6.1's deletion signal,
     app/discovery.py): a day of PubMed's update files can delete hundreds.
     Same rule as `withdraw`: a failure to write an index raises, and the
-    caller defers. Returns how many documents were found."""
+    caller defers. Returns how many documents were found. `vectors=False`:
+    the lexical entries and catalogue rows alone — what the worker derives
+    from its own parse, for a document whose vectors stay (app/hold/carry.py,
+    the A1c re-derive, 2026-11-19)."""
     from app import catalog, embeddings, fts
     uids = sorted(set(uids))
     rows = []
@@ -65,7 +68,7 @@ def withdraw_many(con, collection, uids) -> int:
             by_group.setdefault(fts.group_for(lang), []).append(book)
     for group, ids in sorted(by_group.items()):
         fts.delete_books(group, ids, collection)
-    if books:
+    if books and vectors:
         embeddings.delete_books(books, collection, lock_con=con)
     if rows:
         catalog.delete_rows(collection, [r["rowid"] for r in rows])
