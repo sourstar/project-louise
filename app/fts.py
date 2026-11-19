@@ -391,6 +391,27 @@ def index_books(entries, collection=None) -> None:
             # the names ride on the record's first part (its first chunk)
             by_group.setdefault(group_for(part_lang), []).append(
                 (part_lang, book_id, part, extra, names if k == 0 else None))
+    # A DOCUMENT IN ONE GROUP ONLY (2026-11-19): its rows in a group this
+    # write does not put it in are its old ones — written when its language
+    # mapped there (pubmed: ~297k documents held in "en" and in their own
+    # group after their language changed) — and go in the same pass. A read
+    # per group finds them (`groups_holding`, the terms aggregation
+    # `chunk_counts` uses); a group's writer commits only where it holds one.
+    written: dict[int, set[str]] = {}
+    for group, items in by_group.items():
+        for _lang, book_id, *_rest in items:
+            written.setdefault(int(book_id), set()).add(group)
+    strays: dict[str, list[int]] = {}
+    for book_id, groups in groups_holding(collection, list(written)).items():
+        for g in groups - written[book_id]:
+            strays.setdefault(g, []).append(book_id)
+    for group, ids in sorted(strays.items()):
+        idx = get_index(group, collection)
+        writer, lock = _writer((str(base_of(collection)), group), idx)
+        with lock:
+            for book_id in ids:
+                writer.delete_documents("book_id", book_id)
+            writer.commit()
     for group, items in by_group.items():
         idx = get_index(group, collection)
         algorithm = pystem_algorithm(group)
@@ -727,6 +748,53 @@ def chunk_counts(collection, book_ids: list[int]) -> dict[int, int]:
         for b in got["n"]["buckets"]:
             k = int(b["key"])
             out[k] = out.get(k, 0) + int(b["doc_count"])
+    return out
+
+
+def groups_holding(collection, book_ids: list[int]) -> dict[int, set[str]]:
+    """The groups whose index holds rows of each of `book_ids` — a READ, one
+    term-set query and tantivy's `terms` aggregation per group, no stored
+    document read (as `chunk_counts`). A document the index lacks is absent.
+    In windows under tantivy's bucket limit (65,000)."""
+    out: dict[int, set[str]] = {}
+    ids = sorted({int(b) for b in book_ids})
+    if not ids:
+        return out
+    for group in existing_groups(collection):
+        idx = get_index(group, collection)
+        idx.reload()
+        for i in range(0, len(ids), 60_000):
+            part = ids[i:i + 60_000]
+            q = tantivy.Query.term_set_query(idx.schema, "book_id", part)
+            got = idx.searcher().aggregate(q, {"n": {"terms": {"field": "book_id", "size": len(part) + 1}}})
+            for b in got["n"]["buckets"]:
+                out.setdefault(int(b["key"]), set()).add(group)
+    return out
+
+
+def stored_by_group(collection, book_ids: list[int]) -> dict[int, dict[str, list[tuple[str, str, str]]]]:
+    """`stored_chunks`, kept apart by group: `{book: {group: [(chunk id,
+    heading, text)…]}}` — what each group's index holds of each document
+    (app/hold/derived_check.py: the group a document's rows sit in is not
+    always the one its language names now)."""
+    out: dict[int, dict[str, list[tuple[str, str, str]]]] = {}
+    if not book_ids:
+        return out
+    for group in existing_groups(collection):
+        idx = get_index(group, collection)
+        idx.reload()
+        q = tantivy.Query.term_set_query(idx.schema, "book_id", list(book_ids))
+        searcher = idx.searcher()
+        total = searcher.search(q, 1, count=True).count
+        if not total:
+            continue
+        for _score, addr in searcher.search(q, total).hits:
+            doc = searcher.doc(addr)
+            out.setdefault(int(doc["book_id"][0]), {}).setdefault(group, []).append(
+                (doc["chunk_id"][0], doc["chapter"][0] if doc["chapter"] else "", doc["body"][0]))
+    for groups in out.values():
+        for v in groups.values():
+            v.sort()
     return out
 
 

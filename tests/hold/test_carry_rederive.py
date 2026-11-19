@@ -244,7 +244,8 @@ def test_a_document_whose_text_index_group_changes_leaves_no_row_in_the_old_grou
     old_group = fts.group_for(old_lang)
     assert old_group != fts.group_for(new_lang) and fts.books_held(old_group, [int(moved["native_id"])], coll) > 0
     got = derived_check.verify(root, "re", apply=True, log=quiet)
-    assert (got["document"], got["regrouped"], got["reset"]) == (1, 1, 1), got
+    # its rows are not in the group its language names now: its chunks differ there
+    assert (got["chunks"], got["regrouped"], got["reset"]) == (1, 1, 1), got
     assert fts.books_held(old_group, [int(moved["native_id"])], coll) == 0, "no row left in the old group"
     assert all(_held(coll, r) for r in rows[1:]), "the others untouched"
 
@@ -289,3 +290,144 @@ def test_a_stop_between_the_old_group_s_delete_and_the_marks_is_caught_by_the_ne
     got = derived_check.verify(root, "re", apply=True, again=True, log=quiet)
     assert got["reset"] >= 1 and _marks(coll, moved["uid"])[:2] == (0, 0), "the next pass resets it"
     assert fts.books_held(old_group, [int(moved["native_id"])], coll) == 0, "no old-group row left"
+
+
+def _now_fields(coll, rows, *, lang_of=None):
+    """The rdf stage's fields written as it would now (the manifest's lang
+    the parse's), `lang_of(row, lang)` overriding the language."""
+    from app import parallel
+    con = db.connect(coll)
+    try:
+        for r, (ok, meta) in zip(rows, parallel.compute("metadata", coll, rows)):
+            lang = lang_of(r, meta["lang"]) if lang_of else meta["lang"]
+            con.execute("UPDATE documents SET title=?, authors=?, lang=?, subjects=?, bookshelves=? WHERE uid=?",
+                        (meta["title"], meta["authors"], lang, meta["subjects"], meta["bookshelves"], r["uid"]))
+        con.commit()
+        return con.execute("SELECT * FROM documents ORDER BY rowid").fetchall()
+    finally:
+        con.close()
+
+
+def _other_lang(lang: str) -> str:
+    return "de" if fts.group_for(lang) != "de" else "fr"
+
+
+def test_rows_left_in_the_group_of_a_language_the_manifest_no_longer_states_are_found_and_go(
+        pair, corpus_dir, monkeypatch):  # noqa: F811
+    """München, pubmed 2026-11-19: the manifest's lang already pl, its rows in
+    "en" (written when it was en). Read in the "other" group alone, verify
+    found nothing, reset it, and the re-index left the "en" rows (~297k
+    documents twice). Now its rows are found where they are and go."""
+    from app import worker
+    from app.hold import derived_check
+    root, coll, uids, ids, rows, out = _reconciled(pair, corpus_dir, monkeypatch)
+    rows = _now_fields(coll, rows)
+    moved = rows[0]
+    old_lang = _other_lang(moved["lang"])
+    for r in rows:     # the fts stage wrote it when its language was another
+        fts.index_book(old_lang if r["uid"] == moved["uid"] else r["lang"], int(r["native_id"]),
+                       worker._load_chunks(r, coll), coll)
+    old, new = fts.group_for(old_lang), fts.group_for(moved["lang"])
+    nid = int(moved["native_id"])
+    assert fts.books_held(old, [nid], coll) > 0 and fts.books_held(new, [nid], coll) == 0
+    got = derived_check.verify(root, "re", apply=True, log=quiet)
+    assert (got["chunks"], got["regrouped"], got["reset"], got["strays"]) == (1, 1, 1, 0), got
+    assert fts.books_held(old, [nid], coll) == 0, "its old rows gone"
+    # the fts stage's turn: the new group alone holds it
+    fts.index_book(moved["lang"], nid, worker._load_chunks(moved, coll), coll)
+    assert fts.groups_holding(coll, [nid]) == {nid: {new}}
+
+
+def test_a_document_held_twice_loses_the_old_group_s_rows_and_keeps_its_marks(pair, corpus_dir, monkeypatch):  # noqa: F811
+    """The ~297k already re-indexed: right in their own group, and in "en"
+    too. The "en" rows go; nothing is derived again."""
+    from app import worker
+    from app.hold import derived_check
+    root, coll, uids, ids, rows, out = _reconciled(pair, corpus_dir, monkeypatch)
+    rows = _now_fields(coll, rows)
+    for r in rows:
+        fts.index_book(r["lang"], int(r["native_id"]), worker._load_chunks(r, coll), coll)
+    twice = rows[0]
+    nid, old_lang = int(twice["native_id"]), _other_lang(twice["lang"])
+    old = fts.group_for(old_lang)
+    idx = fts.get_index(old, coll)       # its old copy, written beside the new one
+    writer, lock = fts._writer((str(fts.base_of(coll)), old), idx)
+    with lock:
+        fts._add_one(writer, fts.pystem_algorithm(old), old_lang, nid, worker._load_chunks(twice, coll))
+        writer.commit()
+    assert fts.groups_holding(coll, [nid])[nid] == {old, fts.group_for(twice["lang"])}
+    dry = derived_check.verify(root, "re", log=quiet)
+    assert (dry["chunks"], dry["strays"], dry["regrouped"]) == (0, 1, 1), dry
+    got = derived_check.verify(root, "re", apply=True, log=quiet)
+    assert (got["reset"], got["strays"]) == (0, 1), got
+    assert fts.groups_holding(coll, [nid]) == {nid: {fts.group_for(twice["lang"])}}
+    assert _marks(coll, twice["uid"])[:2] == (1, 1), "nothing to derive again"
+
+
+def test_the_fts_stage_s_write_takes_a_document_out_of_every_other_group(isolated_config, tmp_path):
+    """index_books: a document written into one group leaves no row in
+    another — a language changed between two writes never leaves two
+    copies, whoever reset it."""
+    from app import collections as collections_mod
+    coll = collections_mod.Collection(
+        name="groups", plugin="gutenberg", profile=None, embed_mode_default=None, corpus_dir=tmp_path / "c",
+        manifest_path=tmp_path / "groups" / "manifest.db", fts_dir=tmp_path / "groups" / "fts",
+        lance_dir=tmp_path / "groups" / "lancedb")
+    fts.index_book("en", 7, [{"id": "d:7:0:1", "chapter": "", "text": "an English text"}], coll)
+    fts.index_book("de", 8, [{"id": "d:8:0:1", "chapter": "", "text": "ein Text"}], coll)
+    assert fts.groups_holding(coll, [7, 8]) == {7: {"en"}, 8: {"de"}}
+    fts.index_book("de", 7, [{"id": "d:7:0:1", "chapter": "", "text": "ein deutscher Text"}], coll)
+    assert fts.groups_holding(coll, [7, 8]) == {7: {"de"}, 8: {"de"}}
+    assert [c["text"] for c in fts.book_chunks("de", 7, coll)] == ["ein deutscher Text"]
+
+
+def test_a_writer_waits_for_the_worker_s_transaction_and_a_stop_ends_the_wait(monkeypatch):
+    import sqlite3
+    import threading
+    from app.hold import derived_check
+    monkeypatch.setattr(derived_check.time, "sleep", lambda s: None)
+
+    class Busy:
+        def __init__(self, fails):
+            self.fails, self.calls = fails, 0
+
+        def execute(self, sql):
+            self.calls += 1
+            if self.calls <= self.fails:
+                raise sqlite3.OperationalError("database is locked")
+    con = Busy(3)
+    derived_check._begin(con, None)
+    assert con.calls == 4, "waited, then began"
+    stop = threading.Event()
+    stop.set()
+    with pytest.raises(sqlite3.OperationalError, match="locked"):
+        derived_check._begin(Busy(1), stop)
+    with pytest.raises(sqlite3.OperationalError, match="no such table"):
+        derived_check._begin(type("E", (), {"execute": lambda self, q: (_ for _ in ()).throw(
+            sqlite3.OperationalError("no such table"))})(), None)
+
+
+def test_a_stop_while_the_profile_pauses_the_pool_ends_the_pass_as_a_stop(pair, corpus_dir, monkeypatch):  # noqa: F811
+    """München: a SIGTERM ended the pass with exit 1 — `compute_pages` raises
+    `Interrupted` when its stop is set while the node profile pauses it. The
+    pass stops at its page boundary; its cursor is not marked done."""
+    import json
+    import threading
+    from app import parallel
+    from app.hold import derived_check
+    root, coll, uids, ids, rows, out = _reconciled(pair, corpus_dir, monkeypatch)
+
+    def interrupted(kind, collection, pages, *, stop=None, say=None):
+        raise parallel.Interrupted()
+        yield  # pragma: no cover
+    monkeypatch.setattr(parallel, "compute_pages", interrupted)
+    stop = threading.Event()
+    stop.set()
+    got = derived_check.verify(root, "re", apply=True, stop=stop, log=quiet)
+    assert got["checked"] == 0
+    con = db.connect(coll)
+    try:
+        held = json.loads(db.get_control(con, derived_check.CURSOR_KEY) or "{}")
+    finally:
+        con.close()
+    assert not held.get("done"), "stopped, not done"
