@@ -518,6 +518,8 @@ def _compute(kind: str, collection, rows: list[dict]) -> list[tuple[bool, object
 def raise_for(err: dict):
     """Re-raise a child's failure with the class the worker's error
     handling keys on (an UnindexableDocument stays a corpus fact)."""
+    if err.get("type") == "MemoryWait":
+        raise MemoryWait(err.get("msg", ""))
     from .plugins.base import UnindexableDocument
     if err.get("type") == "UnindexableDocument":
         raise UnindexableDocument(err.get("msg", ""))
@@ -810,6 +812,176 @@ def _partition(collection, rows: list[dict], want: int) -> list[list[dict]]:
     return parts
 
 
+# ------------------------------------------------------- the large-document lane
+#
+# THE NODE, 2026-11-19 (München): 41 OOM kills of the worker in a day, its
+# 24 GiB cap reached. EUR-Lex5's largest acts are 180-204 MB of Formex each,
+# in 24 languages that sit next to one another in rowid order. Measured in a
+# container of its own, one of them (32021R2017 el, 204,218,240 bytes)
+# peaks at 5.25 GB to chunk (25.7x its bytes) in 63.1 s, and 2.06 GB for its
+# metadata (10.1x) in 21.4 s. Three in flight at once, beside the parse
+# pool's other children (~0.93 GB each) and the main process (6-7 GB), pass
+# the cap. And a batch of them outlived `compute`'s 120 s deadline (the
+# worker's log: 3 documents, 351 s of parse), so the pool was thrown away
+# and the whole batch parsed AGAIN in the main process — the main process
+# was what the kernel killed at 19:14 and 20:23.
+#
+# So a plugin whose rows' `size` is the bytes their parse reads declares how
+# much a parse holds per byte (`PARSE_PEAK_PER_BYTE`; EUR-Lex 26, measured).
+# A row whose peak reaches LARGE_PEAK_BYTES is a part of its own, never more
+# than one such part is in flight in the process, it starts only when the
+# worker's cgroup has room for its peak, its batch's deadline is extended by
+# the time its bytes take, and it is never parsed in the main process: where
+# the pool cannot take it, it is DEFERRED (`MemoryWait`), never an error on
+# the document (CLAUDE.md, "deferral is not failure").
+#
+# Standardised alternative, not taken: Kubernetes-style per-task memory
+# requests on a scheduler that places tasks by them (Ray's `memory=` on a
+# task, Dask's worker resources). Adopting one would replace this pool; it
+# would pay once many plugins declare peaks — one does today.
+
+#: a row whose estimated parse peak reaches this takes the large lane
+LARGE_PEAK_BYTES = 2 * 2 ** 30
+#: the time a large row's parse may take, per byte: 32021R2017's 63.1 s for
+#: 204,218,240 bytes, alone, times four for the children it shares the cores with
+LARGE_SECONDS_PER_BYTE = 4 * 63.1 / 204_218_240
+#: how long a large row waits for the lane and for room before it is
+#: deferred: bounded, and short enough that a stop is honoured soon after
+LARGE_WAIT_S = 120.0
+_large_lane = threading.BoundedSemaphore(1)
+
+
+class MemoryWait(RuntimeError):
+    """A document too large to parse beside what runs now: deferred, never
+    an error on it (the worker's `transient_failure`); retried next round."""
+
+
+def peak_per_byte(collection) -> float:
+    """The plugin's `PARSE_PEAK_PER_BYTE`: what its parse holds per byte of
+    a row's `size`; 0 where it declares none (its rows' size is a
+    container's, or it was never measured) — those rows never take the
+    lane. Read once a batch: `plugin_instance` checks a fetched copy's
+    integrity."""
+    try:
+        return float(getattr(type(collection.plugin_instance()), "PARSE_PEAK_PER_BYTE", 0) or 0)
+    except Exception:   # noqa: BLE001 — a collection without a plugin here: no lane
+        return 0.0
+
+
+def peak_of(k: float, row: dict) -> int:
+    """The bytes a parse of `row` is expected to hold (`peak_per_byte` × size)."""
+    try:
+        return int(k * int(row.get("size") or 0)) if k else 0
+    except (TypeError, ValueError):
+        return 0
+
+
+def _large(k: float, part: list[dict]) -> int:
+    """A large part's peak (it holds one row), else 0."""
+    peak = peak_of(k, part[0]) if len(part) == 1 else 0
+    return peak if peak >= LARGE_PEAK_BYTES else 0
+
+
+def _isolate_large(k: float, parts: list[list[dict]]) -> list[list[dict]]:
+    """Every row whose peak reaches LARGE_PEAK_BYTES alone in a part, the
+    parts' order and every other row's place kept."""
+    out: list[list[dict]] = []
+    for part in parts:
+        run: list[dict] = []
+        for row in part:
+            if peak_of(k, row) >= LARGE_PEAK_BYTES:
+                if run:
+                    out.append(run)
+                    run = []
+                out.append([row])
+            else:
+                run.append(row)
+        if run:
+            out.append(run)
+    return out
+
+
+def _room(peak: int) -> bool:
+    """Has the worker's cgroup room for `peak` more bytes? True where no
+    limit reads (no cgroup v2): the lane alone bounds it then."""
+    from .scheduled_checks import cgroup_memory
+    got = cgroup_memory()
+    if got is None:
+        return True
+    limit, used = got
+    return limit - used >= peak
+
+
+def never_fits(peak: int) -> str | None:
+    """Why a parse of `peak` bytes can never run in this worker, or None: an
+    estimate past the cgroup's whole limit is not a moment's shortage, and a
+    deferral would ask again every round for ever (München's park of
+    2026-11-19: 32015R2446R(01) de, 911 MB, ~24 GB at 26x, under a 24 GiB
+    cap). It is the document's error, said with both numbers, so a person
+    sees it — raise the worker's memory, or make the parse hold less."""
+    from .scheduled_checks import cgroup_memory
+    got = cgroup_memory()
+    if got is None or peak < got[0] * NEVER_FITS_FRACTION:
+        return None
+    return (f"its parse is estimated at {peak / 2 ** 30:.1f} GB ({LARGE_PEAK_NOTE}), more than "
+            f"{NEVER_FITS_FRACTION:.0%} of the worker's whole memory limit ({got[0] / 2 ** 30:.1f} GB), "
+            f"the room it can ever have beside the worker's own process: it is never admitted until "
+            f"the limit is raised or the parse holds less")
+
+
+#: the share of the cgroup's limit a parse can ever be given: the main
+#: process alone held 6-7 GB of the 24 GiB at the kills of 2026-11-19
+#: (München), so room past two thirds of the limit never comes
+NEVER_FITS_FRACTION = 2 / 3
+#: what the estimate is, for the message a too-large document carries
+LARGE_PEAK_NOTE = "the plugin's PARSE_PEAK_PER_BYTE times its size"
+
+
+def _take_lane(peak: int, *, wait: bool, until: float) -> bool:
+    """The large lane, with room for `peak`: at once, or — `wait` — until
+    `until`. False when it is not to be had."""
+    while True:
+        if _large_lane.acquire(blocking=False):
+            if _room(peak):
+                return True
+            _large_lane.release()
+        if not wait or time.monotonic() >= until:
+            return False
+        time.sleep(1.0)
+
+
+def _lane_releaser():
+    """The lane given back ONCE, by whichever comes first: the part's future
+    finishing, or its batch failing (a pool whose manager is stuck never
+    finishes its futures, and the lane would stay taken for good)."""
+    done = threading.Lock()
+
+    def release(_f=None) -> None:
+        if done.acquire(blocking=False):
+            _large_lane.release()
+    return release
+
+
+def _deferred(kind: str, collection, part: list[dict], why: str) -> list[tuple[bool, object]]:
+    """A large part's rows, deferred: never parsed in the main process."""
+    return [(False, {"type": "MemoryWait", "msg": why})] * len(part)
+
+
+def _in_process(kind: str, collection, rows: list[dict], k: float) -> list[tuple[bool, object]]:
+    """The fallback of a pool that cannot answer: the rows computed here, but
+    a large one deferred — parsing it in the main process is how the worker
+    was killed (2026-11-19)."""
+    if not any(peak_of(k, r) >= LARGE_PEAK_BYTES for r in rows):
+        return _compute(kind, collection, rows)
+    out: list[tuple[bool, object]] = []
+    for row in rows:
+        if peak_of(k, row) >= LARGE_PEAK_BYTES:
+            out.extend(_deferred(kind, collection, [row], "a large document waits for the parse pool"))
+        else:
+            out.extend(_compute(kind, collection, [row]))
+    return out
+
+
 def compute(kind: str, collection, rows) -> list[tuple[bool, object]]:
     """chunks | metadata | record for every row, in order. `rows` may be
     sqlite3.Row objects (converted; only plain fields travel)."""
@@ -817,10 +989,16 @@ def compute(kind: str, collection, rows) -> list[tuple[bool, object]]:
     if not plain:
         return []
     ex = pool()
-    if ex is None or len(plain) == 1:
+    k = peak_per_byte(collection)
+    big = any(peak_of(k, r) >= LARGE_PEAK_BYTES for r in plain)
+    if ex is None:
+        return _in_process(kind, collection, plain, k)
+    if len(plain) == 1 and not big:
         return _compute(kind, collection, plain)
     n = processes()
     parts = _partition(collection, plain, n * PARTS_PER_CHILD)
+    if big:
+        parts = _isolate_large(k, parts)
     # ADMISSION (docs/notes/scheduling.md §10, B) — see `slots` above. The
     # budget is the whole pool; the cap is recomputed on every refill, so a
     # collection alone holds all of it and gives slots up only to a
@@ -852,6 +1030,7 @@ def compute(kind: str, collection, rows) -> list[tuple[bool, object]]:
     # still consumed in order, so a failing document still costs itself and
     # never its neighbours.
     futures: list = []
+    lanes: list = []                      # this batch's large-lane releases (one-shot)
     mine = 0
     _want(name, 1)
     try:
@@ -861,11 +1040,45 @@ def compute(kind: str, collection, rows) -> list[tuple[bool, object]]:
         while nxt < len(parts) or futures:
             cap = cpu_limit.cap(slots(name, budget), lim, floor=1)
             while nxt < len(parts) and len(futures) < cap:
-                futures.append(ex.submit(_compute, kind, collection, parts[nxt]))
+                peak = _large(k, parts[nxt])
+                too_big = never_fits(peak) if peak else None
+                if too_big:
+                    futures.append([(False, {"type": "TooLarge", "msg": too_big})])
+                    nxt += 1
+                    continue
+                if peak:
+                    # one large part in flight in the process, with room for
+                    # its peak: wait for it only when nothing else is in
+                    # flight here to drain meanwhile
+                    if not _take_lane(peak, wait=not futures, until=time.monotonic() + LARGE_WAIT_S):
+                        if futures:
+                            break
+                        done = _deferred(kind, collection, parts[nxt],
+                                         f"no room for a {peak / 2 ** 30:.1f} GB parse within "
+                                         f"{LARGE_WAIT_S:.0f} s")
+                        futures.append(done)
+                        nxt += 1
+                        continue
+                    deadline = max(deadline, time.monotonic() + config.PARSE_TIMEOUT_S
+                                   + LARGE_SECONDS_PER_BYTE * int(parts[nxt][0].get("size") or 0))
+                    give_back = _lane_releaser()
+                    lanes.append(give_back)
+                    try:
+                        f = ex.submit(_compute, kind, collection, parts[nxt])
+                    except BaseException:
+                        give_back()
+                        raise
+                    f.add_done_callback(give_back)
+                else:
+                    f = ex.submit(_compute, kind, collection, parts[nxt])
+                futures.append(f)
                 nxt += 1
                 mine += 1
                 _occupy(name, 1)
             oldest = futures.pop(0)
+            if isinstance(oldest, list):          # a part deferred, nothing in flight for it
+                out.extend(oldest)
+                continue
             out.extend(oldest.result(timeout=max(1.0, deadline - time.monotonic())))
             mine -= 1
             _occupy(name, -1)
@@ -875,9 +1088,12 @@ def compute(kind: str, collection, rows) -> list[tuple[bool, object]]:
         # RuntimeError: BrokenProcessPool, or "cannot schedule new futures
         # after shutdown" from a pool another caller stopped meanwhile
         for f in futures:
-            f.cancel()
+            if not isinstance(f, list):
+                f.cancel()
+        for give_back in lanes:
+            give_back()
         _note_failure(e, ex)
-        return _compute(kind, collection, plain)
+        return _in_process(kind, collection, plain, k)
     finally:
         # whatever is still held on the way out — the timeout and the broken
         # pool leave a window's worth — or the next collection inherits a
