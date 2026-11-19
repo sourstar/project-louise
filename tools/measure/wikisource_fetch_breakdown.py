@@ -203,6 +203,8 @@ def _scan_sizes(lang: str, names: list[str], log) -> dict[str, int]:
 #: pattern matches is "other": Wikisource's maintenance categories (SAL, "Testi
 #: del XIX secolo", "Textos corregidos") name no subject.
 BUCKETS: tuple[tuple[str, str], ...] = (
+    # first: a film's page transcludes its VIDEO, and "Drama_film" is no play (en, 2026-11-19)
+    ("film", r"\bfilms?\b|_films?\b|\bfilm_|stummfilm|\bfilms?_muets?"),
     ("fiction", r"novel|romanz|\broman\b|\bromane|\bromans\b|raccont|cuento|nouvelle|erzählung|short.stor|fiction"
                 r"|fiab|fábula|fabula|\bfable|märchen|\bcontes?\b|favol|leggend|legend"),
     ("poetry", r"poes|poet|poem|poèm|sonet|sonnet|gedicht|lyrik|\brime\b|\bcanti\b|\bcanto\b|lirich|ballad|\bverse"
@@ -214,9 +216,13 @@ BUCKETS: tuple[tuple[str, str], ...] = (
                r"|\bcartas\b|\bbriefe\b|briefwechsel|carteggi|correspond|epistol|personal_narrative"),
     ("travel", r"viagg|voyage|viaje|\breise|travel"),
     ("biography", r"biogra|\bvite\b|\bvidas\b|lebensbeschreib|nekrolog|obituar|nécrolog"),
-    ("history", r"storia|storic|histor|geschicht|chronic|cronac|cronic|chroniq|chronik|annali|annales|anales"),
+    ("history", r"storia|storic(?!_places)|histor(?!ic_places)|geschicht|chronic|cronac|cronic|chroniq|chronik|annali|annales|anales"),
     ("law and official", r"diritto|\bleggi\b|\blegge\b|decret|costituz|constitu|\bloi\b|\blois\b|\bdroit"
-                         r"|gesetz|\brecht|\bley\b|\bleyes\b|derecho|resoluci|tratad|trattat|treat|statut|ordinanz"),
+                         r"|gesetz|\brecht|\bley\b|\bleyes\b|derecho|resoluci|tratad|trattat|treat|statut|ordinanz"
+                         r"|\blaws?\b|_laws?\b|court|executive_order|proclamation|public_law|_acts?_of\b|historic_places"),
+    ("religion", r"bibbia|\bbible|biblia\b|_biblia|\bbibel|biblical|_of_the_bible|sermon|theolog|religi|scriptur|hymn|predig|prediche|omeli|homil|sermón|sermons"),
+    ("reference", r"encyclop|cyclopæd|cyclopaed|dictionar|dizionar|diccionar|wörterbuch|lexikon|lexicon"
+                  r"|enciclop|almanac|almanach|periodical|periodic|zeitschrift|magazine|newspaper|journal_of"),
 )
 _BUCKET_RE = [(name, re.compile(rx, re.I)) for name, rx in BUCKETS]
 #: Categories that name no subject of the work: a CITATION ("Testi in cui è
