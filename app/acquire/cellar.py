@@ -257,6 +257,16 @@ def _window(year: int, languages: tuple[str, ...]) -> str:
             f"  FILTER(STR(?type) IN ({', '.join(chr(34) + f + chr(34) for f in FORMS)}))\n")
 
 
+#: A UNIT'S LAST MODIFICATION, as the listing reads it: the latest of its
+#: work's, its expression's and its manifestations' (2026-11-19: Cellar
+#: replaced 32015D1735's English Formex at 2026-11-19 and left the work's date
+#: at 2026-11-02 — the work's alone never saw it). The held side compares the
+#: same: `Notice.modified`, from the unit's tree (from_tree) or branch notice
+MODIFIED = ("OPTIONAL { { ?work cmr:lastModificationDate ?modified } UNION "
+            "{ ?expr cmr:lastModificationDate ?modified } UNION "
+            "{ ?manif cmr:lastModificationDate ?modified } }")
+
+
 def count_query(year: int, languages: tuple[str, ...]) -> str:
     return (_PREFIXES + "SELECT (COUNT(*) AS ?n) WHERE {\n SELECT DISTINCT ?celex ?language WHERE {\n"
             + _window(year, languages) + " }\n}")
@@ -270,7 +280,7 @@ def fingerprint_query(year: int, languages: tuple[str, ...]) -> str:
     return (_PREFIXES + "SELECT (COUNT(*) AS ?n) (MAX(?last) AS ?max) WHERE {\n"
             " SELECT ?celex ?language (MAX(?modified) AS ?last) WHERE {\n"
             + _window(year, languages)
-            + "  OPTIONAL { ?work cmr:lastModificationDate ?modified }\n"
+            + "  " + MODIFIED + "\n"
             + " }\n GROUP BY ?celex ?language\n}")
 
 
@@ -281,7 +291,7 @@ def page_query(year: int, languages: tuple[str, ...], offset: int, force: bool =
     return (_PREFIXES + "SELECT ?celex ?language (MAX(?modified) AS ?last)"
             + (" (SAMPLE(STR(?inforce)) AS ?force)" if force else "") + " WHERE {\n"
             + _window(year, languages)
-            + "  OPTIONAL { ?work cmr:lastModificationDate ?modified }\n"
+            + "  " + MODIFIED + "\n"
             + ("  OPTIONAL { ?work cdm:resource_legal_in-force ?inforce }\n" if force else "")
             + f"}}\nGROUP BY ?celex ?language\nORDER BY ?celex ?language\nLIMIT {PAGE} OFFSET {offset}")
 
@@ -647,7 +657,7 @@ def _current_unit(dest: Path, note_now_mtime: int | None, form: str | None):
         note = notice_mod.parse(data)
     except (OSError, notice_mod.NoticeError):
         return None
-    held = _epoch(note.last_modified)
+    held = _epoch(note.modified or note.last_modified)
     form = form or form_of(note)
     if held is None or held < note_now_mtime or form is None:
         return None
@@ -1141,7 +1151,7 @@ class TreeUnits(CellarUnits):
         if dest.is_file() and remote.mtime is not None:
             try:
                 note = from_tree.notice(rdf.loads(dest.read_bytes()), LANGUAGES[unit["lang"]], unit["celex"])
-                held = _epoch(note.last_modified)
+                held = _epoch(note.modified or note.last_modified)
             except (OSError, ValueError, from_tree.TreeError):
                 held = None
             if held is not None and held >= remote.mtime and not self._reform(dest, remote, note):

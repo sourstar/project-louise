@@ -88,6 +88,12 @@ class Notice:
     #: the work's own DATE_PUBLICATION (an act without a Formex wrapper is
     #: dated by it: its OJ day, as a wrapper's PUBLICATION.REF dates one)
     date_publication: str | None = None
+    #: THE UNIT'S last modification: the latest of the work's, this
+    #: language's expression's and its manifestations' (2026-11-19: Cellar
+    #: replaced 32015D1735's English Formex leaving its work's date at
+    #: 2026-11-02). What a listing compares (cellar.page_query), never a
+    #: record's field — `last_modified` stays the work's
+    modified: str | None = None
 
 
 @dataclass(frozen=True)
@@ -203,7 +209,24 @@ def parse(data: bytes) -> Notice:
         last_modified=_first(work, "LASTMODIFICATIONDATE"),
         date_publication=_first(work, "DATE_PUBLICATION"),
         subjects=_labels(work, "IS_ABOUT"), creators=_labels(work, "CREATED_BY_AGENT"),
-        relations=relations, items=_items(root, work), whole=tree(root), dated=_dated(root))
+        relations=relations, items=_items(root, work), whole=tree(root), dated=(dated := _dated(root)),
+        modified=latest(list(dated.values()) + [w for w in [_first(work, "LASTMODIFICATIONDATE")] if w]))
+
+
+def latest(values: list[str]) -> str | None:
+    """The latest of ISO instants, compared as instants (their offsets
+    differ: `…+01:00`, `…+02:00`); None for none."""
+    from datetime import datetime
+
+    def at(v: str):
+        try:
+            t = datetime.fromisoformat(v.strip().replace("Z", "+00:00"))
+        except ValueError:
+            return None
+        return t if t.tzinfo is not None else None
+    dated = [(at(v), v) for v in values if v]
+    dated = [(t, v) for t, v in dated if t is not None]
+    return max(dated)[1].strip() if dated else None
 
 
 def _dated(root: ET.Element) -> dict[str, str]:

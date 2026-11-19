@@ -37,11 +37,18 @@ measured (published figures disagree).
   what the wrapper names it as: 32015D1735 (19 languages) is the Data Dump's own swap — its member
   `…01004901.xml` is a TIFF and the body's XML is `…01005202.tif`, 11 members matching the unit name for
   name — which Cellar corrected today; a swap leaving XML under an XML name errors nowhere. OWED: the
-  re-form run (dump build over EUR-Lex5), the check's counts, and #30 below so the corrected 32015D1735
-  is seen at all.
-- **EUR-Lex: "modified since" reads the WORK's date only — OPEN** (32015D1735: the work 2026-11-02, its
-  English expression and manifestations 2026-11-19; the listing and the held tree both compare the
-  work's `cmr:lastModificationDate`, so a manifestation Cellar replaces is never fetched again).
+  re-form run (dump build over EUR-Lex5) and the check's counts; the corrected 32015D1735 is fetched
+  through the fix below.
+- **EUR-Lex: "modified since" read the WORK's date only — FIXED, not deployed** (32015D1735: the work
+  2026-11-02, its English expression and manifestations 2026-11-19; the listing and the held tree both
+  compared the work's `cmr:lastModificationDate`, so a manifestation Cellar replaced was never fetched
+  again). Now both compare the UNIT's: the latest of its work, its expression and its manifestations
+  (`cellar.MODIFIED` in the page and fingerprint queries; `Notice.modified` from the tree and the branch
+  notice; the dump build's older/newer test). A record's `last_modified` stays the work's (no record
+  changes). In the dump's own trees the work's date is the latest (the fixtures: equal), so dump-built
+  units are not asked again for it; a unit whose expression or manifestation is newer is — what changed
+  since the bulk was cut. The kept window listings are keyed on the new shape
+  (`cellar_listing.SHAPE`): every window is listed once again after the deploy.
 
 - **A1c's derived rows follow the record — FIXED, the repair owed** (docs/02 §2.4 A1c amended). `carry
   --rebuilt` copied the manifest's rdf/fts marks, its validity table and the text index, and `reconcile`

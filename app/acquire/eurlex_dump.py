@@ -310,7 +310,8 @@ def _held_at(corpus: Path, rel: str) -> Path | None:
 def _held_modified(unit: Path, code: str, celex: str):
     from ..plugins.eurlex import from_tree, rdf
     from .cellar import _epoch
-    return _epoch(from_tree.notice(rdf.loads((unit / rdf.TREE_FILE).read_bytes()), code, celex).last_modified)
+    note = from_tree.notice(rdf.loads((unit / rdf.TREE_FILE).read_bytes()), code, celex)
+    return _epoch(note.modified or note.last_modified)
 
 
 def _older(unit: Path, note, code: str, celex: str) -> bool:
@@ -321,7 +322,7 @@ def _older(unit: Path, note, code: str, celex: str) -> bool:
         a = _held_modified(unit, code, celex)
     except (OSError, ValueError, from_tree.TreeError):
         return True                         # unreadable: the dump's replaces it
-    b = _epoch(note.last_modified)
+    b = _epoch(note.modified or note.last_modified)
     return a is not None and b is not None and a < b
 
 
@@ -334,7 +335,7 @@ def _newer(unit: Path, note, code: str, celex: str) -> bool:
         a = _held_modified(unit, code, celex)
     except (OSError, ValueError, from_tree.TreeError):
         return False
-    b = _epoch(note.last_modified)
+    b = _epoch(note.modified or note.last_modified)
     return a is not None and b is not None and a > b
 
 
