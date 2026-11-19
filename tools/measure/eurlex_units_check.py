@@ -14,9 +14,10 @@ Per unit, on the parse pool's processes (`parallel.each_part`):
   1. every file's first bytes against its extension (`.xml` / `.html` must
      open with markup, `.tif` with a TIFF header, `.pdf` with `%PDF`, …):
      each (extension → what it holds) pair that disagrees, counted; and each
-     OJ Formex file whose own BIB.INSTANCE states another page or sequence
-     than its name encodes (`formex.misnamed`: 32015R0207 de, the annex's
-     content under the body's name);
+     OJ Formex file whose own BIB.INSTANCE places it elsewhere than its name
+     does, against the unit's own numbering (`formex.swapped`: 32015R0207 de,
+     the annex's content under the body's name; a Special Edition's constant
+     page offset is its numbering, 31968L0193 bg +82);
   2. in a Formex unit, the root of each file the act's own wrapper names
      (`DOC.MAIN.PUB` the body: ACT, CONS.ACT, AGR, CORR, GENERAL …;
      `DOC.SUB.PUB` an annex: ANNEX) — a body filed under an annex's name,
@@ -118,11 +119,7 @@ def check_chunk(chunk: list[tuple[str, str, str]], examples: int) -> dict:
                 continue
             with open(e.path, "rb") as f:
                 heads[e.name] = f.read(_HEAD)
-            why = formex.misnamed(e.name, heads[e.name])
-            if why is not None and "states" in why:
-                mism["formex states another page or sequence"] += 1
-                show("states another page or sequence", f"{unit.parent.parent.name}/{year}/{unit.name}: {why}")
-            wrong = wrong or why is not None
+            wrong = wrong or formex.misnamed(e.name, heads[e.name]) is not None
             ext = os.path.splitext(e.name)[1].lower()
             want, got = EXPECT.get(ext), kind(heads[e.name])
             if want is not None and got != want:
@@ -130,6 +127,13 @@ def check_chunk(chunk: list[tuple[str, str, str]], examples: int) -> dict:
                 show(f"{ext} holds {got}", f"{unit.parent.parent.name}/{year}/{unit.name}/{e.name}")
         if any(EXPECT.get(os.path.splitext(n)[1].lower()) not in (None, kind(h)) for n, h in heads.items()):
             c["units-with-a-misnamed-file"] += 1
+        places = {n: formex.stated_place(n, h) for n, h in heads.items()}
+        off = formex.swapped(places)
+        if off:
+            mism["formex file in another's place"] += len(off)
+            wrong = True
+            show("in another's place", f"{unit.parent.parent.name}/{year}/{unit.name}: "
+                 + ", ".join(f"{n} {places[n]}" for n in off[:4]))
         if wrong:
             c["units-with-a-file-not-its-name"] += 1
             c[f"not-its-name {lang}"] += 1

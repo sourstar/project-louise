@@ -47,31 +47,42 @@ def test_a_swap_a_lacked_package_and_a_sound_unit_are_each_counted(tmp_path):
     assert PKG not in {p.name for p in (tmp_path / "c").rglob("*")}, "read-only"
 
 
-def test_a_formex_file_stating_another_page_is_not_its_name():
-    """32015R0207 de: the annex's content (its own BIB.INSTANCE: page 5,
-    sequence 1) filed as the body's `…01000101.xml`; the DOCUMENT.REF inside
-    names the wrapper's page and is not read."""
+def _oj(page: int, seq: int = 1, root: str = "ANNEX") -> bytes:
+    return (f'<?xml version="1.0"?><{root}><BIB.INSTANCE><DOCUMENT.REF FILE="L_2015038DE.01000101.doc.xml">'
+            f'<PAGE.FIRST>1</PAGE.FIRST><PAGE.SEQ>1</PAGE.SEQ></DOCUMENT.REF><PAGE.FIRST>{page}</PAGE.FIRST>'
+            f'<PAGE.SEQ>{seq}</PAGE.SEQ></BIB.INSTANCE></{root}>').encode()
+
+
+def test_a_file_s_place_is_read_against_its_unit_s_own_numbering():
+    """32015R0207 de: the annex's content (its own BIB.INSTANCE: page 5) under
+    the body's name, the body's under the annex's; the DOCUMENT.REF inside
+    names the wrapper's page and is not read. A Special Edition's constant
+    offset (31968L0193 bg: +82 on every file) is its numbering."""
     from app.plugins.eurlex import formex
-    annex = (b'<?xml version="1.0"?><ANNEX><BIB.INSTANCE><DOCUMENT.REF FILE="L_2015038DE.01000101.doc.xml">'
-             b'<PAGE.FIRST>1</PAGE.FIRST><PAGE.SEQ>1</PAGE.SEQ><VOLUME.REF>01</VOLUME.REF></DOCUMENT.REF>'
-             b'<NO.SEQ>0001.0001</NO.SEQ><PAGE.FIRST>5</PAGE.FIRST><PAGE.SEQ>1</PAGE.SEQ></BIB.INSTANCE>')
-    assert formex.misnamed("L_2015038DE.01000501.xml", annex) is None
-    assert "states page 5, its name page 1" in formex.misnamed("L_2015038DE.01000101.xml", annex)
+    body, annex = "L_2015038DE.01000101.xml", "L_2015038DE.01000501.xml"
+    assert formex.stated_place(annex, _oj(5)) == (0, 0)
+    assert formex.stated_place(body, _oj(5)) == (4, 0)
+    assert formex.stated_place("CL2016R0679EN0000020.0001.xml", _oj(5)) is None, "a consolidation's name"
+    sound = {body: formex.stated_place(body, _oj(1, root="ACT")), annex: formex.stated_place(annex, _oj(5)),
+             "L_2015038DE.01004301.xml": formex.stated_place("L_2015038DE.01004301.xml", _oj(43))}
+    assert formex.swapped(sound) == []
+    swap = {**sound, body: formex.stated_place(body, _oj(5)), annex: formex.stated_place(annex, _oj(1, root="ACT"))}
+    assert formex.swapped(swap) == [body, annex]
+    se = {n: formex.stated_place(n, _oj(int(n[-10:-6]) + 82)) for n in
+          ("L_1968093BG.01001501.xml", "L_1968093BG.01002101.xml", "L_1968093BG.01002201.xml")}
+    assert formex.swapped(se) == [], "a Special Edition's own numbering"
     assert "holds tiff" in formex.misnamed("L_2015252EN.01004901.xml", b"II*\x00....")
     assert "holds markup" in formex.misnamed("L_2015252EN.01005202.tif", b"<?xml")
-    assert formex.misnamed("CL2016R0679EN0000020.0001.xml", annex) is None, "a consolidation's name: not read"
-    assert formex.misnamed(BODY, _items(FX)[BODY]) is None, "the fixture's act is its name's"
+    assert formex.misnamed(BODY, _items(FX)[BODY]) is None
 
 
-def test_the_check_counts_a_unit_whose_file_states_another_page(tmp_path):
+def test_the_check_counts_a_unit_whose_files_are_in_each_other_s_place(tmp_path):
     items = _items(FX)
-    moved = items[BODY].replace(b"<PAGE.LAST>", b"<PAGE.LAST>", 1)
-    # the act's own page restated as 9: another file's content under the body's name
-    own = moved.split(b"</DOCUMENT.REF>", 1)
-    moved = own[0] + b"</DOCUMENT.REF>" + own[1].replace(b"<PAGE.FIRST>1</PAGE.FIRST>", b"<PAGE.FIRST>9</PAGE.FIRST>", 1)
-    _unit(tmp_path, CELEX, {**items, BODY: moved, rdf.TREE_FILE: _scoped((FX / MTD).read_bytes())})
+    swapped = {**items, "L_1972160IT.01000101.xml": _oj(5, root="ANNEX").replace(b"2015038DE", b"1972160IT"),
+               "L_1972160IT.01000501.xml": items[BODY]}
+    _unit(tmp_path, CELEX, {**swapped, rdf.TREE_FILE: _scoped((FX / MTD).read_bytes())})
     got = chk.check_chunk(chk.units(tmp_path, None), 3)
-    assert got["misnamed"]["formex states another page or sequence"] == 1
+    assert got["misnamed"]["formex file in another's place"] == 2, got["misnamed"]
     assert got["counts"]["units-with-a-file-not-its-name"] == 1 and got["counts"]["not-its-name it"] == 1
 
 

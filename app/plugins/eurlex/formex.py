@@ -105,32 +105,60 @@ def item_kind(head: bytes) -> str:
     return "other"
 
 
-def misnamed(name: str, head: bytes) -> str | None:
-    """Why a file is not the one its name says, from its first bytes
-    (`head`, a few KB) alone; None where nothing says so (2026-11-19: the Data
-    Dump files 32015D1735's TIFF as `…01004901.xml`, 32015R0207's annex as
-    the body's `…01000101.xml`):
-      * its first bytes are not what its extension holds;
-      * an OJ Formex file states, in its own BIB.INSTANCE, the page and the
-        sequence its name encodes (`…01000501.xml`: volume 01, page 5,
-        sequence 1) — another page or sequence is another file's content.
-        The DOCUMENT.REF inside names the WRAPPER's and is not read."""
-    import os
-    want, got = EXTENSION_KIND.get(os.path.splitext(name)[1].lower()), item_kind(head)
-    if want is not None and got != want:
-        return f"{name} holds {got}, not {want}"
+def stated_place(name: str, head: bytes) -> tuple[int, int] | None:
+    """(page, sequence) an OJ Formex file's own BIB.INSTANCE states, LESS the
+    page and sequence its name encodes: (0, 0) for a file where its name
+    says; None where the name is not an OJ file's or the file states none.
+    A Special Edition numbers its own pages: every file of the unit then
+    differs by the same offset (31968L0193 bg: +82), which `swapped` reads
+    as numbering, never as a swap."""
     m = _OJ_FILE.match(name)
-    if m is None or got != "markup":
+    if m is None or item_kind(head) != "markup":
         return None
     bib = _BIB.search(head)
     if bib is None:
         return None
     own = _DOC_REF.sub(b"", bib.group(1))
     first, seq = _PAGE_FIRST.search(own), _PAGE_SEQ.search(own)
-    if first is not None and int(first.group(1)) != int(m["page"]):
-        return f"{name} states page {int(first.group(1))}, its name page {int(m['page'])}"
-    if seq is not None and int(seq.group(1)) != int(m["seq"]):
-        return f"{name} states sequence {int(seq.group(1))}, its name {int(m['seq'])}"
+    if first is None:
+        return None
+    return (int(first.group(1)) - int(m["page"]),
+            (int(seq.group(1)) - int(m["seq"])) if seq is not None else 0)
+
+
+def swapped(places: dict[str, tuple[int, int] | None]) -> list[str]:
+    """The files of ONE unit whose stated place is not where their name says,
+    against the unit's own numbering: the offset most of its files share
+    (`stated_place`). 32015R0207 de: the body +4, the annex -4, every other
+    file 0 — those two. A tie is read against (0, 0) where a tied offset is
+    it; otherwise every file of the unit is named.""" 
+    from collections import Counter
+    offs = {n: o for n, o in places.items() if o is not None}
+    if len(set(offs.values())) <= 1:
+        return []
+    ranked = Counter(offs.values()).most_common()
+    top = [o for o, k in ranked if k == ranked[0][1]]
+    if len(top) == 1:
+        usual = top[0]
+    elif (0, 0) in top:
+        usual = (0, 0)          # a tie: a file where its name says is the numbering
+    else:
+        return sorted(offs)
+    return sorted(n for n, o in offs.items() if o != usual)
+
+
+def misnamed(name: str, head: bytes) -> str | None:
+    """Why a file is not the one its name says, from its first bytes
+    (`head`, a few KB) alone: they are not what its extension holds
+    (2026-11-19: the Data Dump files 32015D1735's TIFF as `…01004901.xml`).
+    None where nothing says so. A Formex file under another Formex file's
+    name is the unit's question (`stated_place`, `swapped`): an OJ file states
+    the page and sequence its name encodes (`…01000501.xml`: page 5, sequence
+    1) in its own BIB.INSTANCE (the DOCUMENT.REF inside is the wrapper's)."""
+    import os
+    want, got = EXTENSION_KIND.get(os.path.splitext(name)[1].lower()), item_kind(head)
+    if want is not None and got != want:
+        return f"{name} holds {got}, not {want}"
     return None
 
 
