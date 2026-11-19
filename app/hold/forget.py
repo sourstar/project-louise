@@ -251,6 +251,36 @@ def shared_folders(root: Path, name: str) -> tuple[list[Path], list[Path]]:
     return removed, kept
 
 
+def ack_heirs(root: Path, name: str, *, dry_run: bool = False) -> list[str]:
+    """The held collections that pin the terms `name`'s acknowledgement
+    records and hold no record of their own — each given a copy of it
+    (`recreate.carry_ack`: the same bytes, the operator's acknowledgement of
+    that terms text on this peer), unless `dry_run`. Their names."""
+    import json
+
+    from . import collection as col, recreate
+    src = Path(root) / name / "state" / "ack.json"
+    if not src.is_file():
+        return []
+    try:
+        terms = json.loads(src.read_text(encoding="utf-8")).get("terms_sha256")
+    except (OSError, ValueError):
+        return []
+    out = []
+    for d in sorted(p for p in Path(root).iterdir() if p.is_dir() and p.name != name):
+        if (d / "state" / "ack.json").is_file():
+            continue
+        try:
+            codex = col.read(root, d.name)
+        except (CodexError, FileNotFoundError, OSError):
+            continue
+        if terms and getattr(getattr(codex, "license", None), "terms_sha256", None) == terms:
+            if not dry_run:
+                recreate.carry_ack(root, name, d.name, codex)
+            out.append(d.name)
+    return out
+
+
 def forget(root: Path, name: str, *, kinds=None, dry_run: bool = False,
            retire: Callable[[str], None] | None = None) -> dict[str, Any]:
     """Remove the copy at `<root>/<name>` and its held file — or, with
@@ -284,9 +314,18 @@ def forget(root: Path, name: str, *, kinds=None, dry_run: bool = False,
             f"off, and remove the corpus with it. Nothing was removed. First, for each: "
             + "; ".join(f"`louise dev carry {name} {r} --share-origin --yes`" for r in sorted(readers)))
     from app import text_index
+    # THE ACKNOWLEDGEMENT OUTLIVES THE FORGET (2026-11-19, München): a held
+    # collection pinning the same terms text with no record of its own was
+    # acknowledged through this one's (04 §4.4, licensing.state_for's peer
+    # rule) — EUR-Lex5 through EUR-Lex4's, which the operator was forgetting.
+    # Each such collection is given the record first, as a re-creation
+    # carries it (`recreate.carry_ack`), so nothing is left unacknowledged
+    # by a forget (invariant 9)
+    handed = ack_heirs(root, name, dry_run=dry_run)
     if dry_run:
         out: dict[str, Any] = {"collection": name, "dry_run": True,
-                               "would_remove": [str(p) for p in plan], "removed": []}
+                               "would_remove": [str(p) for p in plan], "removed": [],
+                               **({"ack_carried_to": handed} if handed else {})}
         # a text index shared with sisters stays while one of them is held,
         # and goes with its last member (app/text_index.py)
         shared = text_index.leave_at_forget(root, name, dry_run=True)
@@ -340,6 +379,8 @@ def forget(root: Path, name: str, *, kinds=None, dry_run: bool = False,
         removed.append(str(base))
     text_index.invalidate()
     out = {"collection": name, "erased_deposits": erased, "removed": removed}
+    if handed:
+        out["ack_carried_to"] = handed
     if shared is not None:
         out["text_index"] = shared
     return out
