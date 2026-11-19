@@ -61,10 +61,10 @@ def test_the_speech_models_are_read_from_the_platform_file(cfgdir):
     assert voice.settings() == SpeechConfig(), "no file: none set"
     (cfgdir / "platform.toml").write_text(
         '[speech]\nstt_model = "whisper-large-v3"\nvad_model = " silero-vad "\n'
-        'tts_model = "omnivoice-cpp"\ntts_voice = "localai://voice-profiles/aaaa1111"\n', encoding="utf-8")
+        'tts_model = "omnivoice-cpp"\ntts_voice = "localai://voice-profiles/1c834741"\n', encoding="utf-8")
     assert voice.settings() == SpeechConfig(stt_model="whisper-large-v3", vad_model="silero-vad",
                                             tts_model="omnivoice-cpp",
-                                            tts_voice="localai://voice-profiles/aaaa1111")
+                                            tts_voice="localai://voice-profiles/1c834741")
     assert voice.settings() == platform_config.load().speech
 
 
@@ -97,11 +97,9 @@ def test_a_voice_not_set_is_not_offered_and_the_operator_is_told_how(cfgdir):
     assert voice.settings_or_none() == SpeechConfig()
 
 
-def test_the_page_asks_the_node_what_it_offers(cfgdir, monkeypatch):
-    from app import config
-    monkeypatch.setattr(config, "ADMIN_TOKEN", "sekrit")
+def test_the_page_asks_the_node_what_it_offers(cfgdir):
     (cfgdir / "platform.toml").write_text('[speech]\ntts_model = "omnivoice-cpp"\n', encoding="utf-8")
-    r = TestClient(api.app).get("/ask/voice", headers={"X-Admin-Token": "sekrit"})
+    r = TestClient(api.app).get("/ask/voice")
     assert r.status_code == 200 and r.json() == voice.offered()
     assert r.json()["output"]["available"] and not r.json()["input"]["available"]
 
@@ -114,7 +112,7 @@ def test_set_writes_the_table_and_keeps_every_other_line(cfgdir, capsys, no_serv
     assert code == 0
     assert out["changed"] == ["stt_model", "vad_model"]
     assert out["speech"] == {"stt_model": "whisper-large-v3", "vad_model": "silero-vad",
-                             "tts_model": None, "tts_voice": None, "synthetic_voices": None}
+                             "tts_model": None, "tts_voice": None}
     assert out["offered"]["input"]["available"] and not out["offered"]["output"]["available"]
     assert out["listed"] == {"silero-vad": True, "whisper-large-v3": True}
     text = (cfgdir / "platform.toml").read_text(encoding="utf-8")
@@ -194,7 +192,7 @@ def test_the_route_of_the_command_tree_answers_show(cfgdir, monkeypatch, no_serv
 
 def test_a_speech_request_naming_no_model_or_voice_gets_the_nodes(cfgdir, monkeypatch):
     (cfgdir / "platform.toml").write_text(
-        '[speech]\ntts_model = "omnivoice-cpp"\ntts_voice = "localai://voice-profiles/aaaa1111"\n', encoding="utf-8")
+        '[speech]\ntts_model = "omnivoice-cpp"\ntts_voice = "localai://voice-profiles/1c834741"\n', encoding="utf-8")
     calls, pins = [], []
 
     class R:
@@ -209,7 +207,7 @@ def test_a_speech_request_naming_no_model_or_voice_gets_the_nodes(cfgdir, monkey
     monkeypatch.setattr(speech, "_profiles", (0.0, []))
     assert speech.synthesize({"input": "Dante wrote it [3]."}, url="http://ai")[0] == 200
     assert calls[-1] == {"input": "Dante wrote it.", "model": "omnivoice-cpp",
-                         "voice": "localai://voice-profiles/aaaa1111"}
+                         "voice": "localai://voice-profiles/1c834741"}
     assert pins == ["omnivoice-cpp"], "the node's model pinned while it speaks"
     speech.synthesize({"input": "Dante.", "model": "kokoro", "voice": "alloy"}, url="http://ai")
     assert (calls[-1]["model"], calls[-1]["voice"]) == ("kokoro", "alloy"), "a client's own choice is kept"
@@ -220,17 +218,9 @@ def test_a_speech_request_naming_no_model_or_voice_gets_the_nodes(cfgdir, monkey
 
 # ---- the Ask page ------------------------------------------------------------
 
-def page(config_dir, table: str, admin: bool = True) -> str:
-    """The Ask page as an admin sees it (a recorded voice is an admin's,
-    2026-11-16), or as a guest."""
-    from app import config
+def page(config_dir, table: str) -> str:
     (config_dir / "platform.toml").write_text(table, encoding="utf-8")
-    was = config.ADMIN_TOKEN
-    config.ADMIN_TOKEN = "sekrit"
-    try:
-        return TestClient(api.app).get("/ask", headers={"X-Admin-Token": "sekrit"} if admin else {}).text
-    finally:
-        config.ADMIN_TOKEN = was
+    return TestClient(api.app).get("/ask").text
 
 
 def test_the_page_has_no_button_for_a_voice_the_node_does_not_offer(isolated_config, config_dir):
@@ -252,25 +242,25 @@ def test_the_gpu_panel_counts_the_speech_models_as_louises():
     assert uses == {"whisper-large-v3": ["speech to text"], "omnivoice-cpp": ["speech"]}
 
 
-# ---- the reader's voice (operator, 2026-11-11: a configuration tab to choose the voice) --
+# ---- the reader's voice (operator, 2026-11-11: "choose philippe or valentina") --
 
-VOICE_A = "localai://voice-profiles/aaaa1111"
-VOICE_B = "localai://voice-profiles/bbbb2222"
+PHILIPPE = "localai://voice-profiles/1c834741"
+VALENTINA = "localai://voice-profiles/db55"
 
 
 @pytest.fixture
 def two_voices(cfgdir, monkeypatch):
     (cfgdir / "platform.toml").write_text(
-        f'[speech]\ntts_model = "omnivoice-cpp"\ntts_voice = "{VOICE_A}"\n', encoding="utf-8")
+        f'[speech]\ntts_model = "omnivoice-cpp"\ntts_voice = "{PHILIPPE}"\n', encoding="utf-8")
     calls = []
 
     class R:
         status_code, content, headers = 200, b"RIFF", {"content-type": "audio/wav"}
 
         def json(self):
-            return {"data": [{"name": "Voice B", "language": "it-IT", "voice": VOICE_B,
+            return {"data": [{"name": "Valentina", "language": "it-IT", "voice": VALENTINA,
                               "created_at": "2026-10-16T22:20:25Z"},
-                             {"name": "Voice A", "language": "it-IT", "voice": VOICE_A,
+                             {"name": "Philippe", "language": "it-IT", "voice": PHILIPPE,
                               "created_at": "2026-10-06T17:11:09Z"}]}
     monkeypatch.setattr(speech.httpc, "get", lambda url, **kw: R())
     monkeypatch.setattr(speech.httpc, "post", lambda url, json, **kw: calls.append(json) or R())
@@ -284,24 +274,19 @@ def two_voices(cfgdir, monkeypatch):
 
 def test_the_reader_chooses_among_the_nodes_recorded_voices(two_voices):
     got = voice.voices()
-    assert [v["name"] for v in got["voices"]] == ["Voice A", "Voice B"], "in the order they were recorded"
-    assert got["default"] == VOICE_A, "none chosen: the node's own"
-    from app import config
-    config.ADMIN_TOKEN, was = "sekrit", config.ADMIN_TOKEN
-    try:
-        assert TestClient(api.app).get("/ask/voices", headers={"X-Admin-Token": "sekrit"}).json() == got
-    finally:
-        config.ADMIN_TOKEN = was
+    assert [v["name"] for v in got["voices"]] == ["Philippe", "Valentina"], "in the order they were recorded"
+    assert got["default"] == PHILIPPE, "none chosen: the node's own"
+    assert TestClient(api.app).get("/ask/voices").json() == got
 
 
 def test_the_readers_voice_speaks_and_one_no_longer_held_falls_back_to_the_nodes(two_voices):
     calls = two_voices
-    assert speech.synthesize({"input": "Dante.", "voice": VOICE_B}, url="http://ai")[0] == 200
-    assert calls[-1]["voice"] == VOICE_B, "the reader's choice"
+    assert speech.synthesize({"input": "Dante.", "voice": VALENTINA}, url="http://ai")[0] == 200
+    assert calls[-1]["voice"] == VALENTINA, "the reader's choice"
     speech.synthesize({"input": "Dante.", "voice": "localai://voice-profiles/gone"}, url="http://ai")
-    assert calls[-1]["voice"] == VOICE_A, "a voice the server no longer holds: the node's, not an error"
+    assert calls[-1]["voice"] == PHILIPPE, "a voice the server no longer holds: the node's, not an error"
     speech.synthesize({"input": "Dante."}, url="http://ai")
-    assert calls[-1]["voice"] == VOICE_A
+    assert calls[-1]["voice"] == PHILIPPE
 
 
 def test_no_answer_read_aloud_no_voice_to_choose(cfgdir):
@@ -315,28 +300,27 @@ def test_the_voice_choice_is_on_the_page_only_where_the_answer_is_read(isolated_
     assert 'id="voice-pick"' in settings[:settings.index("</details>")], "under the Ask page's Settings"
 
 
-# ---- the account's voice (operator, 2026-11-11: "Shall a user account can choose it?";
-#      2026-11-16: a recorded voice is an admin's, so an ADMIN account)
+# ---- the account's voice (operator, 2026-11-11: "Shall a user account can choose it?")
 
 def test_an_account_keeps_its_voice_and_every_client_of_it_hears_it(two_voices, monkeypatch):
     from app import config, users
     calls = two_voices
     monkeypatch.setattr(config, "ADMIN_TOKEN", "sekrit")
-    _, token = users.add("ada", role="admin")
+    _, token = users.add("ada")
     c, h = TestClient(api.app), {"Authorization": f"Bearer {token}"}
     assert c.get("/ask/voices", headers=h).json()["account"] == {"name": "ada", "voice": None}
-    r = c.post("/ask/voice", headers=h, json={"voice": VOICE_B})
-    assert r.status_code == 200 and r.json()["account"] == {"name": "ada", "voice": VOICE_B}
-    assert f'voice = "{VOICE_B}"' in users.path().read_text(), "kept with the account, in users.toml"
+    r = c.post("/ask/voice", headers=h, json={"voice": VALENTINA})
+    assert r.status_code == 200 and r.json()["account"] == {"name": "ada", "voice": VALENTINA}
+    assert f'voice = "{VALENTINA}"' in users.path().read_text(), "kept with the account, in users.toml"
     assert c.post("/v1/audio/speech", headers=h, json={"input": "Dante."}).status_code == 200
-    assert calls[-1]["voice"] == VOICE_B, "a client naming no voice hears the account's"
-    c.post("/v1/audio/speech", headers=h, json={"input": "Dante.", "voice": VOICE_A})
-    assert calls[-1]["voice"] == VOICE_A, "a request naming one is read in it"
+    assert calls[-1]["voice"] == VALENTINA, "a client naming no voice hears the account's"
+    c.post("/v1/audio/speech", headers=h, json={"input": "Dante.", "voice": PHILIPPE})
+    assert calls[-1]["voice"] == PHILIPPE, "a request naming one is read in it"
     assert c.post("/ask/voice", headers=h, json={"voice": "localai://voice-profiles/nope"}).status_code == 400
-    assert users.voice_of("ada") == VOICE_B, "a voice the node does not offer is refused, nothing kept"
+    assert users.voice_of("ada") == VALENTINA, "a voice the node does not offer is refused, nothing kept"
     assert c.post("/ask/voice", headers=h, json={"voice": None}).json()["account"]["voice"] is None
     c.post("/v1/audio/speech", headers=h, json={"input": "Dante."})
-    assert calls[-1]["voice"] == VOICE_A, "none chosen: the node's"
+    assert calls[-1]["voice"] == PHILIPPE, "none chosen: the node's"
 
 
 def test_no_account_no_voice_kept_by_the_node_and_one_since_removed_is_the_nodes(two_voices, monkeypatch):
@@ -345,15 +329,15 @@ def test_no_account_no_voice_kept_by_the_node_and_one_since_removed_is_the_nodes
     monkeypatch.setattr(config, "ADMIN_TOKEN", "sekrit")
     c = TestClient(api.app)
     assert c.get("/ask/voices").json()["account"] is None, "a guest: the browser keeps it"
-    assert c.post("/ask/voice", json={"voice": VOICE_B}).status_code == 409
-    assert c.post("/ask/voice", headers={"X-Admin-Token": "sekrit"}, json={"voice": VOICE_B}).status_code == 409, \
+    assert c.post("/ask/voice", json={"voice": VALENTINA}).status_code == 409
+    assert c.post("/ask/voice", headers={"X-Admin-Token": "sekrit"}, json={"voice": VALENTINA}).status_code == 409, \
         "the admin token is no account"
-    _, token = users.add("ada", role="admin")
+    _, token = users.add("ada")
     users.set_voice("ada", "localai://voice-profiles/gone")
     h = {"Authorization": f"Bearer {token}"}
     assert c.get("/ask/voices", headers=h).json()["account"] == {"name": "ada", "voice": None}
     c.post("/v1/audio/speech", headers=h, json={"input": "Dante."})
-    assert calls[-1]["voice"] == VOICE_A, "a voice the server no longer holds: the node's, never an error"
+    assert calls[-1]["voice"] == PHILIPPE, "a voice the server no longer holds: the node's, never an error"
 
 
 # ---- the microphone's report (operator, 2026-11-11: "when the phone is connected to the car the mic of louise does not work")
