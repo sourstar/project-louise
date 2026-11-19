@@ -619,6 +619,47 @@ def unembedded_why_not(lance: Path, manifest: Path) -> str | None:
     return None
 
 
+#: where a carry keeps the target's own collection file it replaced
+FILE_BEFORE_CARRY = ".toml.before-carry"
+
+
+def carry_file(root, from_name: str, to_name: str, collection_id: str, *,
+               log: Callable[[str], None] = print) -> str:
+    """THE PREDECESSOR'S COLLECTION FILE, CARRIED (07 §7.8; the node,
+    2026-11-19: gutenberg.next, carried --rebuilt, kept the file `create`
+    writes — `slices = []`, `embed = "off"` — where gutenberg held
+    "all"/"all", and was swapped into place so; München set both by hand). A
+    re-creation of the SAME collection at a new parser (`rebuilt`, A1c) or a
+    new cut (`recut`, A1e) holds what its predecessor held: every key of the
+    predecessor's file, its codex the target's and `embed` "off" until the
+    operator turns it on — `recreate.carried_file`, the rule `hold collection
+    new --re-create`'s swap already follows. The target's own file is kept
+    beside it (`FILE_BEFORE_CARRY`). A predecessor file that does not carry
+    by its two lines is said, and left for the operator; never a guess."""
+    from . import deposit, recreate
+    src = deposit.held_file(Path(root), from_name)
+    dst = deposit.held_file(Path(root), to_name)
+    if not src.is_file():
+        log(f"[carry] {to_name}: {from_name} has no collection file here ({src}); its own kept")
+        return f"not carried: {from_name} has no collection file here"
+    try:
+        body, mode = recreate.carried_file(src.read_text(encoding="utf-8"), collection_id)
+    except CodexError as e:
+        log(f"[carry] {to_name}: its collection file is NOT carried — {e}; set it by hand from {src}")
+        return f"not carried: {e}"
+    if dst.is_file():
+        if dst.read_text(encoding="utf-8") == body:
+            return "carried (already)"
+        os.replace(dst, dst.with_name(dst.name.removesuffix(".toml") + FILE_BEFORE_CARRY))
+    tmp = dst.with_suffix(".toml.carry")
+    tmp.write_text(body, encoding="utf-8")
+    os.replace(tmp, dst)
+    log(f"[carry] {to_name}: collection file carried from {from_name} (its slices, kinds, sharing, "
+        f"encoder, reranker); embed \"off\" — {from_name} embedded {mode!r}: "
+        f"`louise hold config apply {to_name} --set embed={mode}` after the swap")
+    return f"carried from {from_name}; embed off (was {mode!r})"
+
+
 def carry(root, from_ref: str, to_ref: str, *, copy: bool = False, apply: bool = False,
           keep: str | None = None, rebuilt: bool = False, recut: bool = False,
           resliced: bool = False, unembedded: bool = False, sister: bool = False,
@@ -1002,6 +1043,8 @@ def carry(root, from_ref: str, to_ref: str, *, copy: bool = False, apply: bool =
     if same and not shares:
         final.update(same_space=True, predecessors=_predecessors_of(sp["state"], src.collection_id))
     marker.write_text(json.dumps(final, sort_keys=True), encoding="utf-8")
+    if rebuilt or recut:
+        plan["collection_file"] = carry_file(root, from_name, to_name, to.collection_id, log=log)
     log(f"[carry] {from_name} → {to_name}: manifest {done['manifest']}, index/ "
         f"{done['index']}, lance/ {done.get('lance', 'not carried (A1i)' if sister else 'not carried (A1h)')}"
         + (f", state/bundles {done.get('bundles')}, state/share {done.get('share')}" if shares and not copy else "")

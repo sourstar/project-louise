@@ -495,7 +495,8 @@ stay at answer time.
   the order human, Wikidata, matcher. `object_hash` null; the edge
   `annotations:language-stage` to the stage, none for null.
 - **Where** (operator's "A"): in gutenberg-book-editions, re-created at
-  version 9 (its 4,387 claims carried unchanged), title gaining "and the
+  version 9 (its claims carried unchanged: 7,160 same-work at its 2026-11
+  snapshot, see below), title gaining "and the
   stage of each edition's language". München re-creates and shares on the
   operator's word, after Frankfurt's review.
 - **The matcher** (`app/historical.py` `stage_claim`, run by
@@ -518,12 +519,28 @@ stay at answer time.
 - **`same-work`** (02 §2.10, 09 §9.5, amended): "two records are versions
   of one work — editions in one language or in different languages". The
   sentence said "in different languages"; gutenberg-book-editions holds
-  7,154 claims (4,357 wikidata, 2,797 matcher) of which 5,644 join editions
-  in ONE language (counted on the node by München), so the collection was
+  7,154 claims at its 2026-09 snapshot (4,357 wikidata, 2,797 matcher), of
+  which 5,644 join editions in ONE language (counted on the node by
+  München), so the collection was
   right and the sentence wrong (architecture's ruling). A one-language
   refusal, built and withdrawn the same day, is not in the code. An older
   source whose same-work partner carries no stage is pointed at it as
   "a modern version of it".
+- **The count today** (München on the node, 2026-11-19, for the parser-12
+  re-creation): `hold annotations claims gutenberg-book-editions` gives
+  7,160 lines, all `same-work`: 4,365 wikidata and 2,795 matcher (2,765
+  same-title rule, 19 one-language-per-work, 11 classical-translation).
+  The 2026-09 snapshot's 7,154 changed by the collection's own monthly
+  method (`gutenberg-editions`): 2026-10 added 32, tombstoned 83, changed
+  33 (7,103); 2026-11 added 71, tombstoned 14, changed 24 (7,160). The
+  re-creation adds the 18 human `translation-of` claims (operator,
+  2026-11-18).
+- **What gutenberg (parser 12) does not hold**: 34 of its 79,866 documents
+  give no record, as in the parser-10 collection. Gutenberg never published
+  33 of them as books (gutenberg:0, 182–199, 1070–1072, 1648, 1691, 1766,
+  1767, 1789, 1914, 1964, 1984, 2001, 2091, 2200: "no epub, txt or rdf"),
+  and one is book 673, Webster's Unabridged Dictionary, whose encoding the
+  origin itself declares broken.
 - **At answer time** (Quality): the claim is attached to the hit as the
   fact `language_stage` (app/ask/annotations.py); a record with a claim is
   read by it (or not at all for a person's null); a record without one is
