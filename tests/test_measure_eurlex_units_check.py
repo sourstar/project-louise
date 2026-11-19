@@ -53,24 +53,29 @@ def _oj(page: int, seq: int = 1, root: str = "ANNEX") -> bytes:
             f'<PAGE.SEQ>{seq}</PAGE.SEQ></BIB.INSTANCE></{root}>').encode()
 
 
-def test_a_file_s_place_is_read_against_its_unit_s_own_numbering():
-    """32015R0207 de: the annex's content (its own BIB.INSTANCE: page 5) under
-    the body's name, the body's under the annex's; the DOCUMENT.REF inside
-    names the wrapper's page and is not read. A Special Edition's constant
-    offset (31968L0193 bg: +82 on every file) is its numbering."""
+def test_a_file_s_place_is_read_against_the_order_of_its_issue():
+    """32015R0207 de: the annex's content (its own BIB.INSTANCE: page 5)
+    under the body's name, the body's (page 1) under the annex's — the order
+    inverted. A Special Edition keeps the order whatever its numbering
+    (München, 2026-11-19, bg): +82 on every file; one offset per OJ issue
+    its volume collects; a page more after a page break."""
     from app.plugins.eurlex import formex
     body, annex = "L_2015038DE.01000101.xml", "L_2015038DE.01000501.xml"
-    assert formex.stated_place(annex, _oj(5)) == (0, 0)
-    assert formex.stated_place(body, _oj(5)) == (4, 0)
+    assert formex.stated_place(annex, _oj(5)) == ("L_2015038DE.01", 5, 1, 5, 1)
     assert formex.stated_place("CL2016R0679EN0000020.0001.xml", _oj(5)) is None, "a consolidation's name"
-    sound = {body: formex.stated_place(body, _oj(1, root="ACT")), annex: formex.stated_place(annex, _oj(5)),
-             "L_2015038DE.01004301.xml": formex.stated_place("L_2015038DE.01004301.xml", _oj(43))}
-    assert formex.swapped(sound) == []
-    swap = {**sound, body: formex.stated_place(body, _oj(5)), annex: formex.stated_place(annex, _oj(1, root="ACT"))}
-    assert formex.swapped(swap) == [body, annex]
-    se = {n: formex.stated_place(n, _oj(int(n[-10:-6]) + 82)) for n in
-          ("L_1968093BG.01001501.xml", "L_1968093BG.01002101.xml", "L_1968093BG.01002201.xml")}
-    assert formex.swapped(se) == [], "a Special Edition's own numbering"
+
+    def places(stated: dict[str, int]) -> dict:
+        return {n: formex.stated_place(n, _oj(p)) for n, p in stated.items()}
+    third = "L_2015038DE.01004301.xml"
+    assert formex.swapped(places({body: 1, annex: 5, third: 43})) == []
+    assert formex.swapped(places({body: 5, annex: 1, third: 43})) == [body, annex]
+    se = {f"L_1968093BG.0100{p:02d}01.xml": p + 82 for p in (15, 21, 22)}
+    assert formex.swapped(places(se)) == [], "a Special Edition's own numbering"
+    several = {"L_1998097BG.01000101.xml": 3, "L_1998104BG.01000101.xml": 4, "L_1998169BG.01000201.xml": 75}
+    assert formex.swapped(places(several)) == [], "an offset per OJ issue"
+    drift = {f"L_1998143BG.0100{p:02d}01.xml": s for p, s in ((10, 163), (12, 165), (14, 168), (16, 170))}
+    assert formex.swapped(places(drift)) == [], "a page more after a break keeps the order"
+    assert formex.swapped(places({body: 9})) == [], "alone in its issue: not judged"
     assert "holds tiff" in formex.misnamed("L_2015252EN.01004901.xml", b"II*\x00....")
     assert "holds markup" in formex.misnamed("L_2015252EN.01005202.tif", b"<?xml")
     assert formex.misnamed(BODY, _items(FX)[BODY]) is None
