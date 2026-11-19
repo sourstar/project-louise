@@ -663,16 +663,20 @@ probable or open.
   `DRM_IOCTL_XE_DEVICE_QUERY` (needs `CAP_PERFMON`; the GPU probe has it).
   Each process also pays a SYCL / Level Zero heap floor of ~270 MiB.
   STATUS 2026-09-20 afternoon.
-- **What the spill costs** (the operator's facts, 2026-11-17: the card is on
-  a PCIe 5.0 x16 link, 64 GB/s raw per direction; the host's RAM is
-  DDR5-6400, 102 GB/s on two channels; everything below is ESTIMATED from
+- **What the spill costs** (the link and the RAM READ on the node
+  2026-11-19, node-runbook.md §1: PCIe 5.0 x16 on the card's upstream
+  bridge, 64 GB/s raw per direction; 2 × 32 GB DDR5 dual channel RUNNING
+  AT 5200 MT/s, 83 GB/s theoretical, ~70 practical — the EXPO-6400 profile
+  the BIOS shows is not in effect; the costs below are ESTIMATED from
   them, not measured — "keep the numbers in mind for future development").
   The driver swaps whole buffer objects, so a model switch under overcommit
   moves the incoming model in and the outgoing one out at once, both streams
-  through the same DRAM: ~40–45 GB/s effective (~55 on four channels, where
-  PCIe alone limits). A 35B MoE chat at Q4 (~19 GB): ~38 GB moved, ~0.8–0.9 s;
-  MADLAD 7.2 GB: ~0.3 s; a 1–2 GB encoder or reranker: <0.1 s — against
-  13.4 s for chat (7.4 GB) and 8.5 s for MADLAD cold through LocalAI's
+  through the same DRAM, which is the limit at 5200: **~35 GB/s effective**
+  (~45 if the RAM ran at 6400). The 35B as measured (21,642 MiB = 22.7 GB):
+  ~45 GB moved, **~1.3 s**; MADLAD (4,850 MiB): ~0.3 s; a Q8 Krea 2 DiT
+  (12.7 GiB): ~0.8 s; a 1–2 GB encoder or reranker: <0.1 s — against
+  28.6 s for the 35B's load to its first token (measured), 13.4 s for the
+  old chat (7.4 GB) and 8.5 s for MADLAD cold through LocalAI's
   unload-and-reload (ask-card-workflow.md). Once its buffers are back on
   the card a model runs at the card's 608 GB/s; nothing is lost but the
   switch. THE CLIFF: when the active model's working set — weights, its KV

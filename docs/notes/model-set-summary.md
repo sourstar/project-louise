@@ -68,10 +68,11 @@ already fills it. The nearest thing to a resident fit is the 35B at Q3
 with MADLAD gone AND the two grown encoders trimmed: ≈ 30 GiB with the
 shared context, at the reclaimer's line, no margin — and still no Krea 2.
 Every other arrangement is a switch: the driver's spill (idle-context-brief.md
-§6 "What the spill costs": ~0.8–0.9 s per 35B switch, E; **no measurement
-of the spill's speed exists** — the 11-03 fdinfo snapshot in q36.log,
-7.69 GiB VRAM / 862 MiB GTT for one process, has no timing) or LocalAI's
-unload-and-reload (the 35B's load + first token: 28.6 s measured).
+§6 "What the spill costs": **~1.3 s per 35B switch** at the RAM's running
+5200 MT/s over the Gen5 x16 link, E; **no measurement of the spill's speed
+exists** — the 11-03 fdinfo snapshot in q36.log, 7.69 GiB VRAM / 862 MiB
+GTT for one process, has no timing) or LocalAI's unload-and-reload (the
+35B's load + first token: 28.6 s measured).
 
 ## 3. Krea 2 on the node (München's inventory, 2026-11-18)
 
@@ -104,9 +105,13 @@ unload-and-reload (the 35B's load + first token: 28.6 s measured).
 ## 4. Open
 
 - The spill's speed: nothing measured (§2); the estimate stands alone.
-- `lspci -vv -s 03:00.0 | grep LnkSta` and `dmidecode -t memory`: never
-  read; the operator's word in München's session (the operator's own
-  statement, 2026-11-17: PCIe 5.0 x16, DDR5-6400; channels unknown).
+- ~~The link and the RAM~~ READ by the operator 2026-11-19 (node-runbook.md
+  §1): the slot link is PCIe 5.0 x16 (the card's upstream bridge `01:00.0`,
+  `max 32.0 GT/s x16, now x16`; the endpoint reports an internal 2.5 GT/s
+  x1 — read the bridge); the RAM is 2 × 32 GB DDR5 dual channel at
+  **5200 MT/s** by the firmware's report, the BIOS's EXPO-6400 profile not
+  in effect. Still open: whether to re-apply it (6000 by hand is the
+  recommendation) — a bandwidth measurement first.
 - The installed stablediffusion-ggml's stable-diffusion.cpp commit (§3).
 - dar-legal-it's and qwen3-4b's at-rest growth (§1).
 - parakeet's cost to a running embed pass (stt-on-igpu.md).

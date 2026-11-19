@@ -22,8 +22,11 @@ measured (published figures disagree).
 
 - **The B70's bus and the host's RAM, and what a VRAM overcommit would cost** (operator, 2026-11-17: the card is
   on PCIe 5.0 x16, the RAM is DDR5-6400; "keep the numbers in mind for future development"). A model switch under
-  overcommit swaps whole buffers at ~40–45 GB/s effective: ~0.8–0.9 s for a 19 GB chat model, ~0.3 s for MADLAD,
-  against 8–13 s for LocalAI's unload-and-reload; a working set that does not fit beside what cannot leave
+  overcommit swaps whole buffers at ~35 GB/s effective (CORRECTED 2026-11-19 after the operator's reads: the slot
+  link IS Gen5 x16 on the card's upstream bridge `01:00.0` — the endpoint `03:00.0` reports an internal 2.5 GT/s x1,
+  read the bridge; the RAM is 2 × 32 GB dual channel RUNNING AT 5200 MT/s per the firmware, the BIOS's EXPO-6400
+  profile not in effect — open): ~1.3 s for the 35B as measured (21.6 GiB), ~0.3 s for MADLAD,
+  against 28.6 s for the 35B's measured load and 8–13 s for LocalAI's unload-and-reload of the others; a working set that does not fit beside what cannot leave
   thrashes at ~12× slower decode; the spill takes 8–18 GB of the ~20 GB of host RAM headroom, and nothing reports
   it. Estimates, not measurements. Recorded in [idle-context-brief.md](idle-context-brief.md) §6 "What the spill
   costs" and [node-runbook.md](node-runbook.md) §1.

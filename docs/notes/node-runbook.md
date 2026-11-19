@@ -11,12 +11,20 @@ Read first: `CLAUDE.md` (the rules), `docs/notes/STATUS.md` (where things stand)
 
 ## 1. The machine
 
-- **TrueNAS SCALE** host, 12 cpus, 61 GB RAM (DDR5-6400; the channel count is not
-  recorded — operator, 2026-11-17), ZFS ARC capped at 16 GB.
-- **GPU**: Intel Arc Pro B70, 32 GB VRAM, 608 GB/s, xe driver, at PCI `0000:03:00.0`,
-  on a PCIe 5.0 x16 link (operator, 2026-11-17; `lspci -vv -s 03:00.0`, `LnkSta`,
-  confirms it). What a VRAM overcommit costs over that link:
-  idle-context-brief.md §6 "What the spill costs". The
+- **TrueNAS SCALE** host, 12 cpus, 61 GB RAM: 2 × 32 GB DDR5 on channels A and B
+  (dual channel), an EXPO-6400 kit with a 5600 JEDEC base, **running at 5200 MT/s**
+  by the firmware's own report (`dmidecode -t memory`, `Configured Memory Speed`,
+  read 2026-11-19) although the BIOS menu shows the EXPO profile selected — the
+  profile is not in effect (AM5 falls back to JEDEC after a failed training); open
+  until a bandwidth measurement or a BIOS session settles it. ZFS ARC capped at 16 GB.
+- **GPU**: Intel Arc Pro B70 (Battlemage G21, `8086:e223`), 32 GB VRAM, 608 GB/s, xe
+  driver, at PCI `0000:03:00.0`, on a **PCIe 5.0 x16 link** — read 2026-11-19 from
+  sysfs: the card's upstream bridge `01:00.0` to the root port `00:01.1` is
+  `max 32.0 GT/s x16, now 32.0 GT/s x16`. The endpoint `03:00.0` and the on-card
+  downstream bridge `02:01.0` report an INTERNAL link of 2.5 GT/s x1: read the
+  bridge, never the endpoint, for the slot link (`/sys/bus/pci/devices/…/..`,
+  `max_link_speed`, `current_link_width`). What a VRAM overcommit costs over that
+  link: idle-context-brief.md §6 "What the spill costs". The
   iGPU is `0000:13:00.0`. `/dev/dri/cardN` numbers can swap across reboots (§12):
   always check by PCI address.
 - **Pools**:
