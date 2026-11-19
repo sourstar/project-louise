@@ -20,6 +20,22 @@ measured (published figures disagree).
 
 ### 2026-11-19
 
+- **EUR-Lex: a Formex INCLUSION was never read — FIXED, not deployed** (app/plugins/eurlex/formex.py
+  `_include`). 32021R1971: Annex I's file (876 bytes) is `<QUOT.S><INCL.ELEMENT FILEREF="…01000302.xml"
+  TYPE="FORMEX.DOC"/></QUOT.S>`; the 39 MB of tables (2,687 pages) are the included file's, kept only as a
+  tree in `extra.formex.other_items` and in no section: every annex read as 0 characters (invariant 11).
+  Now each FORMEX.DOC inclusion in the text is read where it stands, recursively (the one in
+  BIB.INSTANCE/INCLUSIONS is the listing, not read; a cycle is said, `inclusion_cycles`; a file the
+  manifestation lacks is `item-not-held`); the included file's BIB.INSTANCE and markup kept
+  (`extra.formex.inclusions`). Annex I: 0 → 20.6 M characters, the parse 5.9 s / 1.06 GB peak (its XHTML
+  24 s / 1.6 GB). No parser bump (EUR-Lex5 has no records, RULE 1); the units already parsed are the
+  units check's `units-with-an-included-document` (`--list-included`), to be derived again. THE WORKER'S
+  OOM LOOP (43 kills): EUR-Lex5's sources over 100 MB, mostly XHTML of acts whose Formex is a zip
+  (#774); a parse child peaks at ~26x the source (München: 32021R2017 el, parse 2.06 GB, parse + chunk
+  5.25 GB — `chunking_legal.split` encodes a whole 19 M-character section). 359 pending ones parked by
+  München (RULE 1, an error that discovery clears when the re-formed unit lands); the chunker's memory and
+  a large-document admission are architecture's (OPEN).
+
 - **EUR-Lex: a Formex manifestation served as one zip is Formex — BUILT, not deployed** (app/plugins/eurlex/
   formex.py `unpack`; cellar.py `form_of`, `lacks_package`, `TreeUnits._reform`; eurlex_dump.py). Cellar serves
   some fmx4 manifestations as ONE item, a zip of the wrapper, body and figures (32024R1689

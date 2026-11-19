@@ -73,3 +73,13 @@ def test_the_check_counts_a_unit_whose_file_states_another_page(tmp_path):
     got = chk.check_chunk(chk.units(tmp_path, None), 3)
     assert got["misnamed"]["formex states another page or sequence"] == 1
     assert got["counts"]["units-with-a-file-not-its-name"] == 1 and got["counts"]["not-its-name it"] == 1
+
+
+def test_a_unit_holding_an_included_document_is_counted_and_listed(tmp_path):
+    from tests.test_eurlex_parser5 import INCLUDED, WRAPPER as W5, ACT as ACT5, _annex_including, _wrapper
+    _unit(tmp_path, CELEX, {W5: _wrapper(["A.xml"], ["N.xml"]), "A.xml": ACT5,
+                            "N.xml": _annex_including("T.xml"), "T.xml": INCLUDED,
+                            rdf.TREE_FILE: _scoped((FX / MTD).read_bytes())})
+    got = chk.check_chunk(chk.units(tmp_path, None), 3)
+    assert got["counts"]["units-with-an-included-document"] == 1 and len(got["included"]) == 1
+    assert got["examples"]["included document"][0].endswith(": T.xml")

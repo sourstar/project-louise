@@ -430,6 +430,50 @@ def _parse(data: bytes, name: str) -> ET.Element:
         raise FormexError(f"{name}: not XML: {e}") from None
 
 
+def _include(root: ET.Element, files: dict[str, bytes], name: str, ancestors: frozenset,
+             found: dict) -> None:
+    """FORMEX INCLUSIONS READ IN PLACE (2026-11-19; 32021R1971: Annex I's file,
+    876 bytes, is `<QUOT.S><INCL.ELEMENT FILEREF="…01000302.xml"
+    TYPE="FORMEX.DOC"/></QUOT.S>` — the 39 MB of tables, 2,687 pages, are the
+    included file's, and the reader read none of them). Each
+    `INCL.ELEMENT TYPE="FORMEX.DOC"` in the text is replaced, where it stands,
+    by the included document's content (its root's children but its
+    BIB.INSTANCE, as a CONTENTS block), itself resolved the same way. The one
+    in BIB.INSTANCE/INCLUSIONS is the listing of the same inclusion and is
+    not read. The included file's BIB.INSTANCE and markup are kept
+    (`found`: invariant 11); a file it names and the manifestation lacks is
+    said (`missing`); one including itself back is not read again."""
+    parents = {c: p for p in root.iter() for c in p}
+    for el in list(root.iter("INCL.ELEMENT")):
+        if el.attrib.get("TYPE") != "FORMEX.DOC":
+            continue
+        parent = parents.get(el)
+        if parent is None or parent.tag == "INCLUSIONS":
+            continue
+        ref = el.attrib.get("FILEREF") or ""
+        if ref not in files:
+            if ref:
+                found["missing"].append(ref)
+            continue
+        if ref in ancestors:
+            found["cycles"].append({"file": ref, "into": name})
+            continue
+        sub = _parse(files[ref], ref)
+        _include(sub, files, ref, ancestors | {ref}, found)
+        bib = sub.find("BIB.INSTANCE")
+        found["included"].append({"file": ref, "into": name, "root": sub.tag,
+                                  **({"bib_instance": tree(bib)} if bib is not None else {})})
+        found["markup"][ref] = attributes_of(sub)
+        block = ET.Element("CONTENTS")
+        for c in sub:
+            if c.tag != "BIB.INSTANCE":
+                block.append(c)
+        block.tail = el.tail
+        at = list(parent).index(el)
+        parent.remove(el)
+        parent.insert(at, block)
+
+
 def body_name(wrapper: ET.Element) -> str:
     """The body's file, BY NAME: DOC.MAIN.PUB's REF.PHYS."""
     for ref in wrapper.iterfind("./FMX/DOC.MAIN.PUB/REF.PHYS"):
@@ -678,6 +722,9 @@ def parse(files: dict[str, bytes], celex: str | None = None) -> Act:
     if not held_mains:
         raise FormexError(f"the wrapper names the body {mains[0]}, which is not among the items")
     parsed = {n: _parse(files[n], n) for n in held_mains}
+    found: dict[str, Any] = {"missing": [], "cycles": [], "included": [], "markup": {}}
+    for n, tr in parsed.items():
+        _include(tr, files, n, frozenset({n}), found)
     # THE BODY (parser 5): the first main file shaped as an act — an ACT, a
     # CONS.ACT, an AGR (an agreement: a preamble and articles, as an ACT) —
     # else the first; every other main file is read as text after it
@@ -761,6 +808,7 @@ def parse(files: dict[str, bytes], celex: str | None = None) -> Act:
             missing.append(name)
             continue
         a = _parse(files[name], name)
+        _include(a, files, name, frozenset({name}), found)
         markup[name] = attributes_of(a)
         if a.tag != "ANNEX":
             meta.setdefault("sub_documents", []).append({"file": name, a.tag: tree(a)})
@@ -769,7 +817,13 @@ def parse(files: dict[str, bytes], celex: str | None = None) -> Act:
     # every other XML item the manifestation holds (the OJ issue's `toc`):
     # kept as a tree, never dropped; a non-XML item (an image) is held in
     # the unit and named in the record's `items`
-    read = {wname, *mains, *annex_names(wrapper)}
+    if found["included"]:
+        meta["inclusions"] = found["included"]
+    if found["cycles"]:
+        meta["inclusion_cycles"] = found["cycles"]
+    markup.update(found["markup"])
+    missing += [n for n in dict.fromkeys(found["missing"]) if n not in missing]
+    read = {wname, *mains, *annex_names(wrapper), *(i["file"] for i in found["included"])}
     for name in sorted(files):
         if name not in read and name.lower().endswith(".xml"):
             meta.setdefault("other_items", {})[name] = tree(_parse(files[name], name))

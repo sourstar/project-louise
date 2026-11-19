@@ -98,6 +98,7 @@ def check_chunk(chunk: list[tuple[str, str, str]], examples: int) -> dict:
     roots: Counter = Counter()
     lacked: Counter = Counter()
     shown: dict[str, list[str]] = defaultdict(list)
+    included: list[str] = []
 
     def show(key: str, what: str) -> None:
         if len(shown[key]) < examples:
@@ -138,6 +139,15 @@ def check_chunk(chunk: list[tuple[str, str, str]], examples: int) -> dict:
             if files:
                 _wname, wrapper = formex.wrapper_of(files, unit.name)
                 c["formex-units"] += 1
+                # an XML item the wrapper never names (but its toc): an
+                # INCLUDED document (formex._include; 32021R1971's 39 MB annex)
+                named = {_wname, *formex.main_names(wrapper), *formex.annex_names(wrapper)}
+                unnamed = [n for n in heads if n.lower().endswith(".xml") and n not in named
+                           and not n.lower().endswith(".toc.xml") and not formex.is_wrapper(n)]
+                if unnamed:
+                    c["units-with-an-included-document"] += 1
+                    included.append(path)
+                    show("included document", f"{unit.parent.parent.name}/{year}/{unit.name}: {unnamed[0]}")
                 for n in formex.main_names(wrapper):
                     tag = root_tag(heads[n]) if n in heads else "not-held"
                     roots[f"main {tag if tag in ACT_ROOTS or tag in ('not-held', 'ANNEX') else 'other'}"] += 1
@@ -159,7 +169,8 @@ def check_chunk(chunk: list[tuple[str, str, str]], examples: int) -> dict:
         if lacks_package(unit, note):
             lacked[f"{lang} {year}"] += 1
             show("package lacked", f"{unit.parent.parent.name}/{year}/{unit.name}")
-    return {"counts": c, "misnamed": mism, "roots": roots, "package_lacked": lacked, "examples": dict(shown)}
+    return {"counts": c, "misnamed": mism, "roots": roots, "package_lacked": lacked, "examples": dict(shown),
+            "included": included}
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -169,6 +180,8 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--every", type=int, default=1, help="one unit in N (a sample)")
     p.add_argument("--examples", type=int, default=5)
     p.add_argument("--chunk", type=int, default=2000)
+    p.add_argument("--list-included", default=None, metavar="FILE",
+                   help="write the unit paths holding an included Formex document, one a line")
     a = p.parse_args(argv)
     from app import parallel
     langs = set(a.lang.split(",")) if a.lang else None
@@ -176,9 +189,11 @@ def main(argv: list[str] | None = None) -> int:
     tasks = [(todo[i:i + a.chunk], a.examples) for i in range(0, len(todo), a.chunk)]
     total = {"counts": Counter(), "misnamed": Counter(), "roots": Counter(), "package_lacked": Counter()}
     shown: dict[str, list[str]] = defaultdict(list)
+    included: list[str] = []
     for got in parallel.each_part(check_chunk, tasks):
         for k in total:
             total[k].update(got[k])
+        included += got["included"]
         for k, v in got["examples"].items():
             shown[k].extend(v[:max(0, a.examples - len(shown[k]))])
     by_lang: Counter = Counter()
@@ -186,6 +201,8 @@ def main(argv: list[str] | None = None) -> int:
         by_lang[k.split()[0]] += v
     out = {"corpus": a.corpus, "every": a.every, **{k: dict(v.most_common()) for k, v in total.items()},
            "package_lacked_by_language": dict(by_lang.most_common()), "examples": dict(shown)}
+    if a.list_included:
+        Path(a.list_included).write_text("".join(f"{u}\n" for u in included), encoding="utf-8")
     print(json.dumps(out, indent=1, sort_keys=False))
     return 0
 
