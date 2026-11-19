@@ -16,8 +16,12 @@ Precision over recall, every rule strict:
   EBOOK'S LANGUAGE is exactly the ebook's title, cut at its first subtitle
   mark (as written, or with a capital first letter). Exactly one, or no match.
   An item already carrying this ebook number is skipped.
-Most existing P2034 sit on work items (3,544 of 4,128 on 2026-11-19), so the
-work item is the target, as is usual on Wikidata.
+- THE TARGET IS A WORK: an item typed as an edition or translation (Q3331189)
+  — a MODERN publisher's edition carries the work's title too — or as a
+  series (book series Q277759, novel series Q1667921, series of creative works
+  Q7725310) is never the target (a hand check of 25 matches on 2026-11-19 found
+  one of each). Most existing P2034 sit on work items (3,544 of 4,128), as is
+  usual on Wikidata.
 
 Writes DIR/matches.csv (each match with its evidence), DIR/quickstatements.txt
 and prints the counts.
@@ -135,6 +139,22 @@ def works(pairs: list[tuple[str, str, str]], log=print):
     return by, has
 
 
+#: Item types that are never the target (see the module docstring).
+NOT_A_WORK = ("Q3331189", "Q277759", "Q1667921", "Q7725310")
+
+
+def not_works(qids: list[str], log=print) -> set[str]:
+    """The items among `qids` typed as an edition or a series."""
+    out: set[str] = set()
+    excl = " ".join(f"wd:{q}" for q in NOT_A_WORK)
+    for i in range(0, len(qids), 300):
+        vals = " ".join(f"wd:{q}" for q in qids[i:i + 300])
+        for b in query(f"SELECT DISTINCT ?w WHERE {{ VALUES ?w {{ {vals} }} VALUES ?t {{ {excl} }} ?w wdt:P31 ?t }}"):
+            out.add(qid(b, "w"))
+    log(f"targets typed as an edition or a series: {len(out):,} of {len(qids):,}")
+    return out
+
+
 def main(argv: list[str] | None = None) -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("catalog", type=Path)
@@ -157,6 +177,8 @@ def main(argv: list[str] | None = None) -> None:
     stats["author matched"] = len(books)
     pairs = sorted({(aq, f, lang) for _, lang, title, _, aq in books for f in title_forms(title)})
     by, has = works(pairs)
+    excluded = not_works(sorted({w for ws in by.values() for w in ws}))
+    by = {k: {w for w in ws if w not in excluded} for k, ws in by.items()}
     a.out.mkdir(parents=True, exist_ok=True)
     with (a.out / "matches.csv").open("w", newline="", encoding="utf-8") as f, \
             (a.out / "quickstatements.txt").open("w", encoding="utf-8") as qs:
