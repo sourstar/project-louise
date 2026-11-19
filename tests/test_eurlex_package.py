@@ -213,3 +213,33 @@ def test_the_units_asked_first_come_by_act_then_language(tmp_path):
     got = eurlex_dump.incomplete_due(corpus, {"de", "fr", "it"})
     assert [(c, l) for l, c, _ in got] == [("32001R0001", "de"), ("32001R0001", "fr"), ("32001R0001", "it"),
                                            ("32002R0002", "de"), ("32002R0002", "fr"), ("32002R0002", "it")]
+
+
+def test_a_dump_unit_whose_files_are_not_their_names_is_the_api_s_never_landed(tmp_path, serial):
+    """The Data Dump's 9 acts of 2014–15 (32015D1735: a TIFF as the body's
+    `.xml`): never landed from the dump; a held one recorded for Cellar
+    first, asked once (`fetched`), then due no more."""
+    import json
+    folder = tmp_path / "dump" / "datadump-it"
+    folder.mkdir(parents=True)
+    (folder / "datadump.json").write_text(json.dumps({"language": "it", "created": "2026-11-15T01:00:00+01:00"}))
+    body = "L_1972160IT.01000101.xml"
+    with zipfile.ZipFile(folder / "LEG_IT_FMX.zip", "w") as z:
+        for n, b in _items(FX).items():
+            z.writestr(f"{UUID}/fmx4/{n}", b"II*\x00" + b"\x00" * 64 if n == body else b)
+    with zipfile.ZipFile(folder / "LEG_MTD.zip", "w") as z:
+        z.writestr(f"{UUID}/tree_non_inferred.rdf", (FX / MTD).read_bytes())
+    corpus = tmp_path / "corpus"
+    got = eurlex_dump.build(tmp_path / "dump", corpus, ["it"], log=lambda m: None)["it"]
+    assert got["dump-not-its-name"] == 1 and not got["built"], got
+    assert not (corpus / src.unit_rel("it", CELEX)).exists(), "never landed from the dump"
+    assert [c for _l, c, _f in eurlex_dump.incomplete_due(corpus, {"it"})] == [CELEX]
+    # held as the dump gave it (an earlier build): recorded for the API, due until Cellar was asked once
+    unit = _unit(corpus, {**_items(FX), body: b"II*\x00" + b"\x00" * 64, rdf.TREE_FILE: _scoped((FX / MTD).read_bytes())})
+    eurlex_dump._LANGS.clear()
+    again = eurlex_dump.build(tmp_path / "dump", corpus, ["it"], log=lambda m: None)["it"]
+    assert again["dump-not-its-name"] == 1 and not again["held"], again
+    assert eurlex_dump.held_not_its_name(unit, CELEX)
+    assert [c for _l, c, _f in eurlex_dump.incomplete_due(corpus, {"it"})] == [CELEX]
+    eurlex_dump.mark_fetched(corpus, "it", CELEX)
+    assert eurlex_dump.incomplete_due(corpus, {"it"}) == [], "asked once: not every pass"

@@ -142,3 +142,49 @@ class SimpleCollection:
 
     def plugin_instance(self):
         return SOURCE
+
+
+# ---- Formex inclusions (2026-11-19, 32021R1971) ------------------------------------------
+
+def _annex_including(ref: str, *, listed: bool = True) -> bytes:
+    incl = f'<INCL.ELEMENT FILEREF="{ref}" TYPE="FORMEX.DOC"/>'
+    return ('<ANNEX>' + BIB.replace('</BIB.INSTANCE>', f'<INCLUSIONS>{incl}</INCLUSIONS></BIB.INSTANCE>'
+                                    if listed else '</BIB.INSTANCE>')
+            + f'<TITLE><TI><P>ANNEX I</P></TI></TITLE><CONTENTS><QUOT.S LEVEL="1">{incl}</QUOT.S>'
+            '</CONTENTS></ANNEX>').encode()
+
+
+INCLUDED = ('<ANNEX>' + BIB.replace('<NO.DOC>1</NO.DOC>', '<NO.DOC>1</NO.DOC><PAGE.FIRST>3</PAGE.FIRST>')
+            + '<TITLE><TI><P>ANNEX I</P></TI></TITLE><CONTENTS><TBL COLS="2"><CORPUS>'
+            '<ROW><CELL COL="1">C 101.00</CELL><CELL COL="2">Low default portfolios</CELL></ROW>'
+            '<ROW><CELL COL="1">C 102.00</CELL><CELL COL="2">High default portfolios</CELL></ROW>'
+            '</CORPUS></TBL></CONTENTS></ANNEX>').encode()
+
+
+def test_an_included_formex_document_is_read_where_it_is_included():
+    """32021R1971: Annex I's file only includes the 39 MB of its tables
+    (`INCL.ELEMENT TYPE="FORMEX.DOC"`); the reader read none of them."""
+    files = {WRAPPER: _wrapper(["A.xml"], ["N.xml"]), "A.xml": ACT, "N.xml": _annex_including("T.xml"),
+             "T.xml": INCLUDED}
+    act = formex.parse(files)
+    text = dict(formex.sections(act))["ANNEX I"]
+    assert "C 101.00 | Low default portfolios" in text and "C 102.00 | High default portfolios" in text
+    assert text.count("C 101.00") == 1, "read once: the BIB.INSTANCE's INCLUSIONS listing is not read"
+    assert [i["file"] for i in act.meta["inclusions"]] == ["T.xml"] and act.meta["inclusions"][0]["into"] == "N.xml"
+    assert "bib_instance" in act.meta["inclusions"][0], "the included file's own record kept"
+    assert "T.xml" not in (act.meta.get("other_items") or {}), "no longer kept as a tree beside the text"
+    assert "T.xml" in act.markup
+
+
+def test_an_included_file_the_manifestation_lacks_is_said_and_one_including_back_is_not_read_again():
+    act = formex.parse({WRAPPER: _wrapper(["A.xml"], ["N.xml"]), "A.xml": ACT, "N.xml": _annex_including("T.xml")})
+    assert act.missing == ["T.xml"]
+    loop = _annex_including("N.xml", listed=False).replace(b"<ANNEX>", b"<ANNEX>", 1)
+    act = formex.parse({WRAPPER: _wrapper(["A.xml"], ["N.xml"]), "A.xml": ACT, "N.xml": _annex_including("T.xml"),
+                        "T.xml": loop})
+    assert act.meta["inclusion_cycles"] == [{"file": "N.xml", "into": "T.xml"}]
+
+
+def test_a_manifestation_without_inclusions_reads_as_before():
+    plain = formex.parse({WRAPPER: _wrapper(["A.xml"]), "A.xml": ACT})
+    assert "inclusions" not in plain.meta and plain.missing == []

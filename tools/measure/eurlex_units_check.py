@@ -14,9 +14,10 @@ Per unit, on the parse pool's processes (`parallel.each_part`):
   1. every file's first bytes against its extension (`.xml` / `.html` must
      open with markup, `.tif` with a TIFF header, `.pdf` with `%PDF`, …):
      each (extension → what it holds) pair that disagrees, counted; and each
-     OJ Formex file whose own BIB.INSTANCE states another page or sequence
-     than its name encodes (`formex.misnamed`: 32015R0207 de, the annex's
-     content under the body's name);
+     pair of OJ Formex files of one issue whose own BIB.INSTANCE pages run
+     against the order of their names (`formex.swapped`: 32015R0207 de, the
+     annex's content under the body's name; a Special Edition's numbering
+     keeps the order);
   2. in a Formex unit, the root of each file the act's own wrapper names
      (`DOC.MAIN.PUB` the body: ACT, CONS.ACT, AGR, CORR, GENERAL …;
      `DOC.SUB.PUB` an annex: ANNEX) — a body filed under an annex's name,
@@ -98,6 +99,7 @@ def check_chunk(chunk: list[tuple[str, str, str]], examples: int) -> dict:
     roots: Counter = Counter()
     lacked: Counter = Counter()
     shown: dict[str, list[str]] = defaultdict(list)
+    included: list[str] = []
 
     def show(key: str, what: str) -> None:
         if len(shown[key]) < examples:
@@ -117,11 +119,7 @@ def check_chunk(chunk: list[tuple[str, str, str]], examples: int) -> dict:
                 continue
             with open(e.path, "rb") as f:
                 heads[e.name] = f.read(_HEAD)
-            why = formex.misnamed(e.name, heads[e.name])
-            if why is not None and "states" in why:
-                mism["formex states another page or sequence"] += 1
-                show("states another page or sequence", f"{unit.parent.parent.name}/{year}/{unit.name}: {why}")
-            wrong = wrong or why is not None
+            wrong = wrong or formex.misnamed(e.name, heads[e.name]) is not None
             ext = os.path.splitext(e.name)[1].lower()
             want, got = EXPECT.get(ext), kind(heads[e.name])
             if want is not None and got != want:
@@ -129,15 +127,32 @@ def check_chunk(chunk: list[tuple[str, str, str]], examples: int) -> dict:
                 show(f"{ext} holds {got}", f"{unit.parent.parent.name}/{year}/{unit.name}/{e.name}")
         if any(EXPECT.get(os.path.splitext(n)[1].lower()) not in (None, kind(h)) for n, h in heads.items()):
             c["units-with-a-misnamed-file"] += 1
-        if wrong:
-            c["units-with-a-file-not-its-name"] += 1
-            c[f"not-its-name {lang}"] += 1
         # the act's own wrapper: what its named files are
         try:
             files = {n: (unit / n).read_bytes() for n in heads if formex.is_wrapper(n)}
             if files:
                 _wname, wrapper = formex.wrapper_of(files, unit.name)
                 c["formex-units"] += 1
+                # files in each other's place, among the ACT'S OWN files only
+                # (formex.not_its_name: what the parser and the dump build refuse)
+                own = [n for n in dict.fromkeys([*formex.main_names(wrapper), *formex.annex_names(wrapper)])
+                       if n in heads]
+                places = {n: formex.stated_place(n, heads[n]) for n in own}
+                off = formex.swapped(places)
+                if off:
+                    mism["formex file in another's place"] += len(off)
+                    wrong = True
+                    show("in another's place", f"{unit.parent.parent.name}/{year}/{unit.name}: "
+                         + ", ".join(f"{n} states p{places[n][3]} s{places[n][4]}" for n in off[:4]))
+                # an XML item the wrapper never names (but its toc): an
+                # INCLUDED document (formex._include; 32021R1971's 39 MB annex)
+                named = {_wname, *formex.main_names(wrapper), *formex.annex_names(wrapper)}
+                unnamed = [n for n in heads if n.lower().endswith(".xml") and n not in named
+                           and not n.lower().endswith(".toc.xml") and not formex.is_wrapper(n)]
+                if unnamed:
+                    c["units-with-an-included-document"] += 1
+                    included.append(path)
+                    show("included document", f"{unit.parent.parent.name}/{year}/{unit.name}: {unnamed[0]}")
                 for n in formex.main_names(wrapper):
                     tag = root_tag(heads[n]) if n in heads else "not-held"
                     roots[f"main {tag if tag in ACT_ROOTS or tag in ('not-held', 'ANNEX') else 'other'}"] += 1
@@ -150,6 +165,9 @@ def check_chunk(chunk: list[tuple[str, str, str]], examples: int) -> dict:
                         show(f"annex is {tag if tag else kind(heads[n])}", f"{unit.name} {lang} {n}")
         except (OSError, formex.FormexError):
             c["formex-unreadable-wrapper"] += 1
+        if wrong:
+            c["units-with-a-file-not-its-name"] += 1
+            c[f"not-its-name {lang}"] += 1
         # a Formex package the held tree lists and the unit lacks
         try:
             note = from_tree.notice(rdf.loads((unit / rdf.TREE_FILE).read_bytes()), src.LANGUAGES[lang], unit.name)
@@ -159,7 +177,8 @@ def check_chunk(chunk: list[tuple[str, str, str]], examples: int) -> dict:
         if lacks_package(unit, note):
             lacked[f"{lang} {year}"] += 1
             show("package lacked", f"{unit.parent.parent.name}/{year}/{unit.name}")
-    return {"counts": c, "misnamed": mism, "roots": roots, "package_lacked": lacked, "examples": dict(shown)}
+    return {"counts": c, "misnamed": mism, "roots": roots, "package_lacked": lacked, "examples": dict(shown),
+            "included": included}
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -169,6 +188,8 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--every", type=int, default=1, help="one unit in N (a sample)")
     p.add_argument("--examples", type=int, default=5)
     p.add_argument("--chunk", type=int, default=2000)
+    p.add_argument("--list-included", default=None, metavar="FILE",
+                   help="write the unit paths holding an included Formex document, one a line")
     a = p.parse_args(argv)
     from app import parallel
     langs = set(a.lang.split(",")) if a.lang else None
@@ -176,9 +197,11 @@ def main(argv: list[str] | None = None) -> int:
     tasks = [(todo[i:i + a.chunk], a.examples) for i in range(0, len(todo), a.chunk)]
     total = {"counts": Counter(), "misnamed": Counter(), "roots": Counter(), "package_lacked": Counter()}
     shown: dict[str, list[str]] = defaultdict(list)
+    included: list[str] = []
     for got in parallel.each_part(check_chunk, tasks):
         for k in total:
             total[k].update(got[k])
+        included += got["included"]
         for k, v in got["examples"].items():
             shown[k].extend(v[:max(0, a.examples - len(shown[k]))])
     by_lang: Counter = Counter()
@@ -186,6 +209,8 @@ def main(argv: list[str] | None = None) -> int:
         by_lang[k.split()[0]] += v
     out = {"corpus": a.corpus, "every": a.every, **{k: dict(v.most_common()) for k, v in total.items()},
            "package_lacked_by_language": dict(by_lang.most_common()), "examples": dict(shown)}
+    if a.list_included:
+        Path(a.list_included).write_text("".join(f"{u}\n" for u in included), encoding="utf-8")
     print(json.dumps(out, indent=1, sort_keys=False))
     return 0
 

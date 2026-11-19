@@ -1172,6 +1172,9 @@ class TreeUnits(CellarUnits):
                 if root is not None:
                     eurlex_dump.mark_tried(root, unit["lang"], unit["celex"], str(e))
             raise
+        if remote.mtime is None and root is not None:
+            from . import eurlex_dump
+            eurlex_dump.mark_fetched(root, unit["lang"], unit["celex"])   # asked first once
         self._count(got)
         return got.moved
 

@@ -202,12 +202,26 @@ def _batch_log(con, stage: str, collection, msg: str, *, docs: int = 0, chunks: 
         db.log_event(con, "info", stage, msg)
 
 
-def _rdf_one(con, row, collection, plugin, now: int, meta: dict | None = None) -> tuple:
+def _rdf_one(con, row, collection, plugin, now: int, meta: dict | None = None,
+             left: dict[str, list[int]] | None = None) -> tuple:
     if meta is None:
         meta = plugin_io.metadata(plugin, row)
+    # A LANGUAGE THAT LEAVES ITS TEXT-INDEX GROUP (architecture's review of
+    # #776; München, pubmed 2026-11-19: ~297k documents held in "en" and in
+    # their own group). A document the text index has written whose new
+    # language's groups leave one of its old language's: its rows there are
+    # deleted by the caller, that writer committed BEFORE this batch's SQLite
+    # commit (`left`), and its fts is done again in this same UPDATE — its
+    # re-index writes the new group alone, which deletes and inserts there
+    moved = False
+    if left is not None and (row["fts_done"] or (row["fts_version"] or 0) > 0):
+        gone = set(fts.groups_for_lang(collection, row["lang"])) - set(fts.groups_for_lang(collection, meta["lang"]))
+        for g in gone:
+            left.setdefault(g, []).append(int(row["native_id"]))
+        moved = bool(gone)
     con.execute(
         "UPDATE documents SET title=?,authors=?,lang=?,subjects=?,bookshelves=?,"
-        "work=?,rdf_done=1,updated_at=? WHERE uid=?",
+        "work=?,rdf_done=1,updated_at=?" + (",fts_done=0" if moved else "") + " WHERE uid=?",
         (meta["title"], meta["authors"], meta["lang"], meta["subjects"],
          meta["bookshelves"], plugin_io.work_identity(meta), now, row["uid"]))
     if meta.get("validity"):
@@ -372,7 +386,8 @@ def stage_rdf(con, row, collection) -> None:
     # below need the lock, and they are seconds for a batch.
     if not con.in_transaction:               # direct callers wrap the stage
         con.execute("BEGIN IMMEDIATE")
-    entries = [_rdf_one(con, row, collection, plugin, now, meta=first)]
+    left: dict[str, list[int]] = {}       # group -> the documents whose language left it
+    entries = [_rdf_one(con, row, collection, plugin, now, meta=first, left=left)]
     # the origin's inconsistencies each read met (06 §6.1, amended
     # 2026-10-25), recorded in this same transaction for the codes the read
     # checks — `None` when a plugin's lazy read says nothing about them
@@ -382,7 +397,7 @@ def stage_rdf(con, row, collection) -> None:
         if not ok:
             continue                        # a peer never fails the round
         try:
-            entries.append(_rdf_one(con, peer, collection, plugin, now, meta=meta))
+            entries.append(_rdf_one(con, peer, collection, plugin, now, meta=meta, left=left))
             n += 1
         except Exception:   # noqa: BLE001
             continue
@@ -394,6 +409,11 @@ def stage_rdf(con, row, collection) -> None:
     # a sister reading a shared text index copies these documents' marks once
     # this commits (`_execute_step`, text_index.parsed)
     _committed.rdf = [row["uid"], *(p["uid"] for p in peers)]
+    # the rows of a language's old group go, that writer committed before the
+    # marks (as the catalog below): a rollback leaves rdf pending, and the
+    # next pass finds the same old language and deletes again (a no-op)
+    for g, ids in sorted(left.items()):
+        fts.delete_books(g, ids, collection)
     # The catalog index is committed HERE, before the caller commits the
     # marks (invariant 2). A failure is CatalogUnavailable: the transaction
     # rolls back and the batch is deferred, never recorded as an error.

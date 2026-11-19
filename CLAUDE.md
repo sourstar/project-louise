@@ -447,7 +447,20 @@ are the ones that have drifted; prefer to add a test when you touch them.
   pass runs under `deploy/supervise-pass.sh` (rerun until it completes,
   the pool halved after an OOM); a pool child the kernel kills never ends
   its pass (`parallel.each_part`, `parallel.compute`). A process that
-  needs an agent to come back is a defect, fixed like any other.
+  needs an agent to come back is a defect, fixed like any other. Memory
+  kills are the exception, below.
+- **AN OOM KILL IS NOT RELAUNCHED UNTIL ITS CAUSE IS KNOWN** (operator,
+  2026-11-19, verbatim: "the very first time a worker is killed because of
+  OOM, it is not relauched until the cause has been determined or
+  diagnostics has been added"; after 43 OOM kills of the worker in one day,
+  each restart meeting the same 180 MB EUR-Lex documents). It amends the
+  rule above for memory kills only. The FIRST time the kernel kills a worker
+  for memory — the worker, one of its pool children, or an operator pass —
+  it is not relaunched: not by its restart policy, not by a chain, not by
+  `supervise-pass.sh` halving its pool. It stays down and says why, until
+  the cause is determined (what it was processing, the measured peak) or a
+  diagnostic is added that will name it the next time, and is released
+  naming which. Every other crash restarts on its own, as above.
 - A per-round cost scales with the work available, never with the size of
   a list or the corpus. If a per-item cost depends on how much has been
   processed so far, it is a bug however fast it looks at fixture scale.
