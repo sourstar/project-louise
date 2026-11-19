@@ -45,3 +45,31 @@ def test_a_swap_a_lacked_package_and_a_sound_unit_are_each_counted(tmp_path):
     assert dict(c["package_lacked"]) == {"it 1972": 1} and not chk.check_chunk(
         chk.units(tmp_path / "a", None), 3)["package_lacked"]
     assert PKG not in {p.name for p in (tmp_path / "c").rglob("*")}, "read-only"
+
+
+def test_a_formex_file_stating_another_page_is_not_its_name():
+    """32015R0207 de: the annex's content (its own BIB.INSTANCE: page 5,
+    sequence 1) filed as the body's `…01000101.xml`; the DOCUMENT.REF inside
+    names the wrapper's page and is not read."""
+    from app.plugins.eurlex import formex
+    annex = (b'<?xml version="1.0"?><ANNEX><BIB.INSTANCE><DOCUMENT.REF FILE="L_2015038DE.01000101.doc.xml">'
+             b'<PAGE.FIRST>1</PAGE.FIRST><PAGE.SEQ>1</PAGE.SEQ><VOLUME.REF>01</VOLUME.REF></DOCUMENT.REF>'
+             b'<NO.SEQ>0001.0001</NO.SEQ><PAGE.FIRST>5</PAGE.FIRST><PAGE.SEQ>1</PAGE.SEQ></BIB.INSTANCE>')
+    assert formex.misnamed("L_2015038DE.01000501.xml", annex) is None
+    assert "states page 5, its name page 1" in formex.misnamed("L_2015038DE.01000101.xml", annex)
+    assert "holds tiff" in formex.misnamed("L_2015252EN.01004901.xml", b"II*\x00....")
+    assert "holds markup" in formex.misnamed("L_2015252EN.01005202.tif", b"<?xml")
+    assert formex.misnamed("CL2016R0679EN0000020.0001.xml", annex) is None, "a consolidation's name: not read"
+    assert formex.misnamed(BODY, _items(FX)[BODY]) is None, "the fixture's act is its name's"
+
+
+def test_the_check_counts_a_unit_whose_file_states_another_page(tmp_path):
+    items = _items(FX)
+    moved = items[BODY].replace(b"<PAGE.LAST>", b"<PAGE.LAST>", 1)
+    # the act's own page restated as 9: another file's content under the body's name
+    own = moved.split(b"</DOCUMENT.REF>", 1)
+    moved = own[0] + b"</DOCUMENT.REF>" + own[1].replace(b"<PAGE.FIRST>1</PAGE.FIRST>", b"<PAGE.FIRST>9</PAGE.FIRST>", 1)
+    _unit(tmp_path, CELEX, {**items, BODY: moved, rdf.TREE_FILE: _scoped((FX / MTD).read_bytes())})
+    got = chk.check_chunk(chk.units(tmp_path, None), 3)
+    assert got["misnamed"]["formex states another page or sequence"] == 1
+    assert got["counts"]["units-with-a-file-not-its-name"] == 1 and got["counts"]["not-its-name it"] == 1
