@@ -50,19 +50,57 @@ def _stdout_widowed() -> bool:
         return False
 
 
-def finish(code: int) -> NoReturn:
-    """Exit with `code` after the observable half of a normal exit.
-    Called from the main thread, once, as the last thing the process
-    does."""
+#: how long the observable half of an exit may take — threads joined, the
+#: atexit callbacks run — before the process leaves anyway (`finish`). Long
+#: enough for the work an exit legitimately finishes (a thread pool's queued
+#: writes, `parallel`'s own stop, the atexit callbacks); a stuck join is
+#: hours, never minutes
+FINISH_BOUND_S = 300.0
+
+
+def _flush() -> None:
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.flush()
+        except Exception:  # noqa: BLE001 — a closed pipe has nothing left to say
+            pass
+
+
+def _leave_after(code: int, bound_s: float) -> None:
+    """THE EXIT IS BOUNDED (CLAUDE.md: a thread never waits without a bound).
+    `threading._shutdown` joins every non-daemon thread with none: a parse
+    pool's manager that outlived `parallel.discard` held gutenberg.next's
+    refused build for two hours, twice (the node, 2026-11-19, "a stopped
+    pool's manager is still waiting after 5 s", then nothing). This daemon
+    waits the bound, says which threads are still running — every stack, by
+    faulthandler, the standard library's — and leaves with the SAME code:
+    the work's outcome was already decided, only its exit was stuck."""
+    if threading.Event().wait(bound_s):
+        return
+    alive = sorted(t.name for t in threading.enumerate()
+                   if t is not threading.current_thread() and t.is_alive() and not t.daemon)
+    print(f"[exit] {bound_s:.0f} s after the end, still running: {', '.join(alive) or '(none)'}; "
+          f"leaving with {code}", file=sys.stderr, flush=True)
+    try:
+        import faulthandler
+        faulthandler.dump_traceback(file=sys.stderr, all_threads=True)
+    except Exception:  # noqa: BLE001, S110 — the stacks are a help, never a condition of leaving
+        pass
+    _flush()
+    os._exit(code)
+
+
+def finish(code: int, bound_s: float | None = None) -> NoReturn:
+    """Exit with `code` after the observable half of a normal exit, bounded
+    (`_leave_after`). Called from the main thread, once, as the last thing
+    the process does."""
+    bound = FINISH_BOUND_S if bound_s is None else bound_s
+    threading.Thread(target=_leave_after, args=(code, bound), name="exit-bound", daemon=True).start()
     try:
         threading._shutdown()          # Py_FinalizeEx's first step: join threads
         atexit._run_exitfuncs()        # its second
     finally:
-        for stream in (sys.stdout, sys.stderr):
-            try:
-                stream.flush()
-            except Exception:  # noqa: BLE001 — a closed pipe has nothing left to say
-                pass
+        _flush()
         os._exit(code)
 
 

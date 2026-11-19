@@ -76,12 +76,14 @@ from typing import Iterable, Iterator, Mapping
 import pyarrow as pa
 
 FIGURES_DIR = "figures"
-#: 08 §8.7: at most 16,384 figures per record — what a RECORD may name, so a
+#: 08 §8.7: at most 65,536 figures per record — what a RECORD may name, so a
 #: hostile record cannot make itself a container. Refused at build and failed
-#: by `hold check`'s `figures` row. 4,096 until 2026-11-18, when gutenberg:47273
-#: at parser 12 ("every plate") named 4,464 and the build refused a real book —
-#: the cap's own rule is that it refuses none (08 §8.7, amended).
-MAX_PER_RECORD = 16_384
+#: by `hold check`'s `figures` row. The cap's own rule is that it refuses no
+#: real record (08 §8.7, amended 2026-11-19): measured over the WHOLE gutenberg
+#: corpus at parser 12 ("every plate"), the most is gutenberg:61985, "Harrods
+#: for Everything", 17,167 figures (16,994 distinct); 4,096 until 2026-11-18,
+#: 16,384 for a night, each set from one book.
+MAX_PER_RECORD = 65_536
 SUFFIX = ".fig.zst"
 TAG = b"LOUISE-FIGURES-1"          # 16 bytes, like LOUISE-PACK-IDX1
 FOOTER = b"LFG1"
