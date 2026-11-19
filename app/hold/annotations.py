@@ -801,17 +801,22 @@ def build_codex(target: Codex | None, from_snapshot: str | None, *, title: str, 
                 annotator: str, platform_image: str, nonce: str | None = None,
                 attribution: str | None = None, erasure: str = "retractable",
                 targets: Sequence[tuple[Codex, str]] | None = None, container: str = cx.JSONL,
-                graph: bool = False) -> Codex:
+                graph: bool = False, selects: Sequence[cx.Select | None] | None = None) -> Codex:
     """02 §2.10's Codex: every field present, the space and work null,
     no layers, the target(s) and the snapshot the claims hold from. Version
     7 for one target, JSONL parts and the two 2026-10-09 claim types; the
     GRAPH_VERSION list where there are several targets, a Parquet container
-    or a graph claim type (`graph`) — 09 §9.3's version rule, so the
-    collections already written keep their bytes."""
+    or a graph claim type (`graph`); SELECT_VERSION where a target declares
+    its selection rule (`selects`, one per target, None for a target taken
+    whole) — 09 §9.3's version rule, so the collections already written keep
+    their bytes."""
     pairs = tuple(targets) if targets else ((target, from_snapshot),)
+    sels = tuple(selects) if selects else (None,) * len(pairs)
+    if len(sels) != len(pairs):
+        raise AnnotationsError(f"{len(sels)} selection(s) for {len(pairs)} target(s): one per target, "
+                               f"none for a target taken whole")
     cx.refuse_unbuilt_container(container)
-    version = (cx.GRAPH_VERSION if len(pairs) > 1 or container != cx.JSONL or graph
-               else cx.ANNOTATIONS_VERSION)
+    version = _version(len(pairs), container, graph, any(x is not None for x in sels))
     slicing: dict[str, Any] = {"keys": [], "unknown": SLICE, "shard_records": SHARD_RECORDS,
                                "order": "numeric"}
     if version >= cx.GRAPH_VERSION:
@@ -844,7 +849,7 @@ def build_codex(target: Codex | None, from_snapshot: str | None, *, title: str, 
         facets=(),
         version=version,
         record_line=1,
-        annotates=tuple(cx.Annotates(t.collection_id, snap) for t, snap in pairs),
+        annotates=tuple(cx.Annotates(t.collection_id, snap, sel) for (t, snap), sel in zip(pairs, sels)),
     )
     cx.validate(codex)
     return codex
@@ -1245,15 +1250,52 @@ class Streamed:
         return parts
 
 
-def _version_for(targets: Sequence[Target], container: str, graph: bool) -> int:
-    """`build_codex`'s version rule: 7 for one target, JSONL parts and the
-    2026-10-09 claim types; GRAPH_VERSION otherwise."""
-    return (cx.GRAPH_VERSION if len(targets) > 1 or container != cx.JSONL or graph
+def _version(n_targets: int, container: str, graph: bool, selected: bool) -> int:
+    """09 §9.3's version rule for an annotations Codex: SELECT_VERSION where a
+    target declares a selection; else GRAPH_VERSION for several targets, a
+    Parquet container or a graph claim type; else 7."""
+    if selected:
+        return cx.SELECT_VERSION
+    return (cx.GRAPH_VERSION if n_targets > 1 or container != cx.JSONL or graph
             else cx.ANNOTATIONS_VERSION)
 
 
+def select_of(path: Path) -> cx.Select:
+    """A selection rule file (09 §9.3 SELECT_VERSION) as the Codex pins it:
+    the file is TOML with top-level `id` and `version`; the pin is those two
+    and the sha256 of the file's bytes, exactly as read (never re-encoded:
+    one changed byte is another rule)."""
+    import hashlib
+    import tomllib
+    data = Path(path).read_bytes()
+    try:
+        rule = tomllib.loads(data.decode("utf-8"))
+    except (UnicodeDecodeError, tomllib.TOMLDecodeError) as e:
+        raise AnnotationsError(f"{path}: a selection rule is a TOML file ({e})") from e
+    rid, ver = rule.get("id"), rule.get("version")
+    if not isinstance(rid, str) or not rid or not isinstance(ver, int) or isinstance(ver, bool) or ver < 1:
+        raise AnnotationsError(f"{path}: a selection rule names itself, id = \"…\" and version = <n ≥ 1>")
+    return cx.Select(rid, ver, hashlib.sha256(data).hexdigest())
+
+
+def _any_select(selects: Sequence[cx.Select | None] | None, n_targets: int) -> bool:
+    """Does a target declare a selection? One entry per target, or none."""
+    if selects is None:
+        return False
+    if len(selects) != n_targets:
+        raise AnnotationsError(f"{len(selects)} selection(s) for {n_targets} target(s): one --select per "
+                               f"--annotates, '-' for a target taken whole")
+    return any(x is not None for x in selects)
+
+
+def _version_for(targets: Sequence[Target], container: str, graph: bool, selected: bool = False) -> int:
+    """`build_codex`'s version rule (`_version`), for the targets read."""
+    return _version(len(targets), container, graph, selected)
+
+
 def _checked_stream(ts: tuple[Target, ...], src, *, annotator: str | None, container: str,
-                    work: Path | None, sort: bool = False, repin: bool = False) -> Streamed:
+                    work: Path | None, sort: bool = False, repin: bool = False,
+                    selected: bool = False) -> Streamed:
     """`_checked`, streaming (app/hold/annotations_stream.py), for the
     targets `ts` (`_targets`, the first check): the same checks in the same
     order, so the same refusal — the claims file, every claim's ends in the
@@ -1275,7 +1317,7 @@ def _checked_stream(ts: tuple[Target, ...], src, *, annotator: str | None, conta
         ends.summaries = None                       # read: the parts are found
     tables = held if work is None else held.save(work)
     del held
-    version = _version_for(ts, container, sv.graph)
+    version = _version_for(ts, container, sv.graph, selected)
     snapshots = {p: t.from_snapshot for p, t in by_plugin.items()}
     codices = {p: t.codex for p, t in by_plugin.items()}
     order = st.ExternalSort(work) if sort and work is not None else None
@@ -1301,7 +1343,7 @@ def _method_name(m: dict[str, Any]) -> str:
 def preview(root: Path, *, target_ref: str | None = None, from_snapshot: str | None = None,
             claims: bytes | Path, annotator: str | None = None,
             targets: Sequence[tuple[str, str]] | None = None, container: str = cx.JSONL,
-            repin: bool = False) -> dict[str, Any]:
+            repin: bool = False, selects: Sequence[cx.Select | None] | None = None) -> dict[str, Any]:
     """`create annotations --dry-run`: the claims checked against the target
     snapshot(s) exactly as `create` checks them, counted, nothing written —
     for a file of thousands of claims about a live collection, the measure
@@ -1317,7 +1359,8 @@ def preview(root: Path, *, target_ref: str | None = None, from_snapshot: str | N
     with (nullcontext() if bytes_given else st.workspace(root, f"preview.{secrets.token_hex(6)}")) as work, \
             st.ClaimsSource(claims) as src:
         try:
-            ch = _checked_stream(ts, src, annotator=annotator, container=container, work=work, repin=repin)
+            ch = _checked_stream(ts, src, annotator=annotator, container=container, work=work, repin=repin,
+                                 selected=_any_select(selects, len(ts)))
         finally:
             st.forget()
     first = ch.targets[0]
@@ -1340,13 +1383,15 @@ def create(root: Path, name: str, *, target_ref: str | None = None, from_snapsho
            annotator: str | None = None, snapshot_id: str | None = None,
            key=None, now: str | None = None, nonce: str | None = None,
            log=print, targets: Sequence[tuple[str, str]] | None = None,
-           container: str = cx.JSONL, repin: bool = False, _in_memory: bool = False) -> tuple[Codex, Any]:
+           container: str = cx.JSONL, repin: bool = False, selects: Sequence[cx.Select | None] | None = None,
+           _in_memory: bool = False) -> tuple[Codex, Any]:
     """`hold collection create annotations` (07 §7.3): the Codex, the
     claims kept as this collection's origin, the record and relations
     parts, `validation.json`, the first snapshot (signed when this peer has
     a key) and the collection file. `targets` — (collection, from_snapshot)
     pairs, `--annotates` and `--from-snapshot` repeated — or the one
-    `target_ref` / `from_snapshot`.
+    `target_ref` / `from_snapshot`. `selects`: each target's selection rule
+    (`--select`, 09 §9.3 SELECT_VERSION), None for a target taken whole.
 
     The claims are checked first and the targets read before anything is
     written, so a refused file leaves nothing behind. A name already
@@ -1385,7 +1430,7 @@ def create(root: Path, name: str, *, target_ref: str | None = None, from_snapsho
         return _write_collection(
             root, name, ch.targets, ch.annotator, ch.graph, hold, container=container, title=title,
             summary=summary, platform_image=platform_image, nonce=nonce, snapshot_id=snapshot_id, key=key,
-            now=now, log=log, version=None, records=lambda version: records_of(ch.pinned, ch.submitted,
+            now=now, log=log, version=None, selects=selects, records=lambda version: records_of(ch.pinned, ch.submitted,
                                                                                version=version),
             count=len(ch.pinned), install=lambda dst: dst.write_bytes(claims))
     ts = _targets(root, _refs(target_ref, from_snapshot, targets))
@@ -1393,14 +1438,14 @@ def create(root: Path, name: str, *, target_ref: str | None = None, from_snapsho
     with st.workspace(root, f"create.{name}") as work, st.private_source(claims, work) as src:
         try:
             cs = _checked_stream(ts, src, annotator=annotator, container=container, work=work, sort=True,
-                                 repin=repin)
+                                 repin=repin, selected=_any_select(selects, len(ts)))
             if repin:
                 log(f"[annotations] {name}: re-pinned against {', '.join(t.name for t in cs.targets)}: "
                     + (", ".join(f"{k} {v:,}" for k, v in (cs.moved or {}).items()) or "nothing moved"))
             return _write_collection(
                 root, name, cs.targets, cs.annotator, cs.graph, hold, container=container, title=title,
                 summary=summary, platform_image=platform_image, nonce=nonce, snapshot_id=snapshot_id, key=key,
-                now=now, log=log, version=cs.version, records=lambda version: cs.records(src),
+                now=now, log=log, version=cs.version, selects=selects, records=lambda version: cs.records(src),
                 count=cs.survey.count, install=src.install)
         finally:
             st.forget()
@@ -1417,7 +1462,8 @@ def _write_collection(root: Path, name: str, targets: Sequence[Target], annotato
                       hold, *,
                       container: str, title: str | None, summary: str | None, platform_image: str,
                       nonce: str | None, snapshot_id: str | None, key, now: str | None, log,
-                      version: int | None, records, count: int, install) -> tuple[Codex, Any]:
+                      version: int | None, records, count: int, install,
+                      selects: Sequence[cx.Select | None] | None = None) -> tuple[Codex, Any]:
     """What `create` writes once the claims are checked: the Codex (`hold`
     makes it, or the one the name holds is resumed), the parts and the first snapshot from
     `records(the Codex's version)`, the claims file as the origin
@@ -1438,7 +1484,7 @@ def _write_collection(root: Path, name: str, targets: Sequence[Target], annotato
     names = ", ".join(t.name for t in targets)
     wanted = build_codex(
         None, None, targets=[(t.codex, t.from_snapshot) for t in targets], container=container,
-        graph=graph,
+        graph=graph, selects=selects,
         title=title or f"Annotations on {tt}",
         summary=summary or (f"Claims about the records of {names} "
                             f"({first.codex.collection_id[:19]}…) from snapshot "
