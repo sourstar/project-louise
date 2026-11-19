@@ -430,3 +430,19 @@ version 1. It holds:
   claim's `method` has fixed keys.
 - So pinning the rule is a format amendment, a question for the operator
   (CLAUDE.md: "wire-format changes: ask first").
+
+### Decided (operator, 2026-11-18): option A, a Codex field. Built 2026-11-19
+
+- **The field:** Codex version 12, `annotates[].select` `{id, version,
+  sha256}` (09 §9.3, §9.18; `app/hold/codex.py` SELECT_VERSION).
+  - Written for an annotations Codex with a selected target alone, so
+    every Codex already written keeps its bytes.
+  - Inside `collection_id`, so another rule is another collection.
+- **The command:** `hold collection create annotations … --select FILE`,
+  one per `--annotates`, `-` for a target taken whole
+  (`annotations.select_of` pins the file's bytes).
+- Tests: `tests/hold/test_codex_select.py`.
+- **Still to build before the first publication (step 8):** the rule's
+  bytes travelling with the SHARD, as LICENSE-TERMS does (§9.13). Until
+  then a peer holds the pin, not the rule. A wire-format question for the
+  operator.

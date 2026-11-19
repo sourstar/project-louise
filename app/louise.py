@@ -248,8 +248,9 @@ def cmd_create_annotations(a) -> int:
     # the claims file is streamed by path, never read whole (12.3 M claims: 4 GB)
     targets = ann.resolve_targets(a.root, Path(a.claims), a.annotates, a.from_snapshot)
     container = getattr(a, "container", None) or "jsonl"
+    selects = annotation_selects(getattr(a, "select", None), len(targets))
     if getattr(a, "dry_run", False):
-        _print(ann.preview(a.root, targets=targets, container=container,
+        _print(ann.preview(a.root, targets=targets, container=container, selects=selects,
                            claims=Path(a.claims), annotator=a.annotator))
         return 0
     key = None
@@ -260,7 +261,7 @@ def cmd_create_annotations(a) -> int:
         print("no node key: the snapshot is written unsigned, and `signature` stays "
               "inconclusive until a key signs it", file=sys.stderr)
     codex, snap = ann.create(
-        a.root, a.name, targets=targets, container=container,
+        a.root, a.name, targets=targets, container=container, selects=selects,
         claims=Path(a.claims), platform_image=preflight_create({}, a.platform_image),
         title=a.title, summary=a.summary, annotator=a.annotator, snapshot_id=a.snapshot,
         key=key, now=_utc_now(), log=lambda m: print(m, file=sys.stderr))
@@ -334,6 +335,19 @@ def cmd_annotations_update(a) -> int:
                      key=key, now=_utc_now(), dry_run=a.dry_run, log=lambda m: print(m, file=sys.stderr))
     _print(got.to_dict())
     return 0
+
+
+def annotation_selects(select, n_targets: int):
+    """`--select FILE`, once per --annotates in the same order, `-` for a target
+    the claims take whole (09 §9.3, amended 2026-11-18): each file pinned as
+    {id, version, sha256}; None when no --select is given."""
+    from app.hold import annotations as ann
+    if not select:
+        return None
+    if len(select) != n_targets:
+        raise CodexError(f"create annotations names {n_targets} target(s) and {len(select)} --select: "
+                         f"one --select per --annotates, in the same order, '-' for a target taken whole")
+    return [None if s == "-" else ann.select_of(Path(s)) for s in select]
 
 
 def annotation_targets(annotates, from_snapshot) -> list[tuple[str, str]]:
@@ -7207,6 +7221,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--from-snapshot", default=None, dest="from_snapshot", metavar="ID", action="append",
                    help="create annotations: the target snapshot the claims are checked against "
                         "and hold from (the Codex's annotates.from_snapshot); one per --annotates")
+    p.add_argument("--select", default=None, metavar="FILE", action="append",
+                   help="create annotations: the rule file choosing which of the target's records the "
+                        "claims are about (09 §9.3, amended 2026-11-18; TOML with id and version), "
+                        "pinned in the Codex by its sha256; one per --annotates, '-' for a target "
+                        "taken whole")
     p.add_argument("--container", default=None, choices=("jsonl", "parquet"),
                    help="create annotations: the record parts' container (09 §9.5, 2026-10-20); "
                         "jsonl unless said, and parquet is declared but not yet written")

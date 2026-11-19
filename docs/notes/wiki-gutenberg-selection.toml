@@ -2,7 +2,9 @@
 # The selection rule, version 1, as the operator decided it (2026-11-08 … 2026-11-18;
 # wiki-gutenberg-amendments.md "Which books", wiki-gutenberg-claude-plan.md §10–§11).
 # A selection, not a pruning: every gutenberg record stays; books outside get no claims.
-# NOT YET PINNED in any Codex: the field to carry it is an open operator decision.
+# Pinned in the annotations Codex (version 12, 09 §9.3 annotates[].select, operator 2026-11-18 option A):
+#   hold collection create annotations --annotates gutenberg … --select docs/notes/wiki-gutenberg-selection.toml
+# Any change to these bytes is another rule, and so another collection.
 id = "wiki-gutenberg-select"
 version = 1
 
