@@ -67,6 +67,60 @@ def is_wrapper(name: str) -> bool:
     return bool(_WRAPPER.search(name))
 
 
+#: a Formex manifestation Cellar serves as ONE item, a zip of its files (the
+#: OJ's act-by-act publication: 32024R1689 → `OJABA_L_202401689_ENG.fmx4.zip`;
+#: 32015D1735, repackaged 2026-11-19 → `32015D1735.eng.fmx4.zip`)
+_PACKAGE = re.compile(r"\.zip$", re.IGNORECASE)
+_ZIP_MAGIC = b"PK\x03\x04"
+#: a package's members, uncompressed, at most (a damaged or hostile zip is refused)
+PACKAGE_MAX = 1 << 30
+#: a member's name as a unit holds files: one plain file name
+_MEMBER_NAME = re.compile(r"^[^/\\\x00]+$")
+
+
+def is_package(name: str) -> bool:
+    """An item named as a zip: the manifestation's files packed in one."""
+    return bool(_PACKAGE.search(name or ""))
+
+
+def unpack(files: dict[str, bytes]) -> tuple[dict[str, bytes], dict[str, str]]:
+    """The manifestation's files as the reader takes them: every item, and
+    each package's members in its place. The package stays HELD as the
+    origin served it (invariant 11: the unit is what Cellar gave, and
+    records-vs-origin compares those bytes); only the reading opens it.
+    Returns (the files to read, member → the package it came from).
+
+    THE STANDARD: the zip (PKWARE APPNOTE), read by Python's own zipfile,
+    each member's CRC-32 checked. A member that is not one plain file name,
+    a package over PACKAGE_MAX, or a member whose name an item of other
+    bytes already holds is refused: the reading must be one the origin's
+    bytes determine."""
+    import io
+    import zipfile
+    out = {n: b for n, b in files.items() if not (is_package(n) and b[:4] == _ZIP_MAGIC)}
+    came: dict[str, str] = {}
+    for name in sorted(files):
+        data = files[name]
+        if not (is_package(name) and data[:4] == _ZIP_MAGIC):
+            continue
+        try:
+            with zipfile.ZipFile(io.BytesIO(data)) as z:
+                infos = [i for i in z.infolist() if not i.is_dir()]
+                if sum(i.file_size for i in infos) > PACKAGE_MAX:
+                    raise FormexError(f"{name}: its members are over {PACKAGE_MAX} bytes")
+                for i in infos:
+                    if not _MEMBER_NAME.match(i.filename) or i.filename in (".", ".."):
+                        raise FormexError(f"{name}: member {i.filename!r} is not a plain file name")
+                    got = z.read(i)
+                    if i.filename in out and out[i.filename] != got:
+                        raise FormexError(f"{name}: member {i.filename} differs from the item of that name")
+                    out[i.filename] = got
+                    came[i.filename] = name
+        except (zipfile.BadZipFile, zipfile.LargeZipFile, OSError, EOFError) as e:
+            raise FormexError(f"{name}: not a readable zip: {e}") from None
+    return out, came
+
+
 def norm(text: str | None) -> str:
     return _WS.sub(" ", text or "").strip()
 
