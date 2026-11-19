@@ -1190,3 +1190,74 @@ def test_a_pass_whose_tasks_hold_much_memory_bounds_its_processes(monkeypatch):
     monkeypatch.setattr(config, "PARSE_PROCESSES", 4)
     assert set(parallel.each_part(_pid, [(i,) for i in range(5)], limit=1)) == {os.getpid()}
     assert os.getpid() not in set(parallel.each_part(_pid, [(i,) for i in range(5)], limit=2))
+
+
+def _dies_for_memory(events: str, i: int) -> int:
+    """Killed by the kernel's memory killer at task 2: its cgroup counter
+    rises first, as the kernel's does."""
+    import os
+    import signal
+    if i == 2:
+        p = Path(events)
+        k = int(p.read_text().rsplit("oom_kill ", 1)[1])
+        p.write_text(f"oom_kill {k + 1}\n")
+        os.kill(os.getpid(), signal.SIGKILL)
+    return i * i
+
+
+def test_a_pass_whose_child_was_killed_for_memory_ends_and_computes_nothing_again(tmp_path, monkeypatch):
+    """Operator, 2026-11-19: "the very first time a worker is killed because
+    of OOM, it is not relauched until the cause has been determined" — the
+    parts are not run again on a smaller pool, where they met the same
+    document 43 times in one day; the pass ends (exit 137, held by its
+    supervisor). A SIGKILL that is not the memory killer's still recovers
+    (test_a_pass_survives_a_child_the_kernel_killed)."""
+    from app import oom_hold
+    cg = tmp_path / "cgroup"
+    cg.mkdir()
+    (cg / "memory.events").write_text("oom_kill 7\n")
+    monkeypatch.setattr(oom_hold, "CGROUP_DIR", str(cg))
+    monkeypatch.setattr(config, "PARSE_PROCESSES", 4)
+    got: list[int] = []
+    with pytest.raises(parallel.MemoryKilled, match="oom_kill 7 -> 8") as e:
+        for x in parallel.each_part(_dies_for_memory, [(str(cg / "memory.events"), i) for i in range(12)]):
+            got.append(x)  # noqa: PERF402 — what came before the kill, kept as it came
+    assert (e.value.before, e.value.after) == (7, 8) and 4 not in got, "nothing after the kill is computed"
+
+
+def test_a_batch_whose_child_was_killed_for_memory_is_not_parsed_in_the_worker(isolated_config, tmp_path,
+                                                                               corpus_dir, monkeypatch):
+    """The worker's batch: a child killed for memory used to send its rows to
+    `_in_process`, where the same document killed the worker itself. Now the
+    handler (the worker's hold) sees the parts still in flight, and the batch
+    is a deferral (MemoryKilled is a MemoryWait, `worker.transient_failure`)."""
+    from concurrent.futures import Future
+    from concurrent.futures.process import BrokenProcessPool
+    from app import oom_hold
+    c, rows = _gutenberg(tmp_path, corpus_dir)
+    assert len(rows) > 1
+    cg = tmp_path / "cgroup"
+    cg.mkdir()
+    (cg / "memory.events").write_text("oom_kill 0\n")
+    monkeypatch.setattr(oom_hold, "CGROUP_DIR", str(cg))
+    seen: list[list[dict]] = []
+    oom_hold.on_kill(lambda b, a: seen.append(parallel.in_flight()))
+
+    class KilledPool:
+        def submit(self, *a, **k):
+            (cg / "memory.events").write_text("oom_kill 1\n")
+            f = Future()
+            f.set_exception(BrokenProcessPool("a child died"))
+            return f
+
+    monkeypatch.setattr(config, "PARSE_PROCESSES", 4)
+    oom_hold.baseline()
+    monkeypatch.setattr(parallel, "pool", lambda: KilledPool())
+    monkeypatch.setattr(parallel, "_in_process", lambda *a: pytest.fail("parsed again in the worker"))
+    with pytest.raises(parallel.MemoryKilled) as e:
+        parallel.compute("chunks", c, rows)
+    assert isinstance(e.value, parallel.MemoryWait) and worker.transient_failure(e.value)
+    (flight,) = seen
+    assert flight and {f["collection"] for f in flight} == {"g"}, "the hold names what was in flight"
+    assert parallel.in_flight() == [], "and nothing is left registered"
+    parallel.reset_failures()

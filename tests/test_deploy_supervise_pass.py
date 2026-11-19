@@ -1,6 +1,8 @@
-"""deploy/supervise-pass.sh and deploy/docker-memory-ceiling.sh — a pass the
-kernel kills comes back by itself (operator, 2026-10-30), and the caps of
-what runs at once never make a GLOBAL OOM. Run against a fake `docker`."""
+"""deploy/supervise-pass.sh and deploy/docker-memory-ceiling.sh — a pass that
+crashes comes back by itself (operator, 2026-10-30), one the kernel kills
+for memory is held until its cause is known (operator, 2026-11-19), and the
+caps of what runs at once never make a GLOBAL OOM. Run against a fake
+`docker`."""
 import os
 import subprocess
 from pathlib import Path
@@ -31,15 +33,43 @@ def _run(tmp_path, env, *args):
     return p, calls
 
 
-def test_a_kill_and_a_sigpipe_both_halve_the_pool_and_the_pass_runs_to_its_end(tmp_path):
-    """München, 2026-10-30: run 2 died 141 (SIGPIPE: the pool's parent, a
-    child OOM-killed) and run 3 started at 6 again."""
-    env = _fake_docker(tmp_path, [137, 141, 1, 0])
+def test_a_memory_kill_holds_the_pass_until_it_is_released(tmp_path):
+    """Operator, 2026-11-19 ("the very first time a worker is killed because
+    of OOM, it is not relauched until the cause has been determined or
+    diagnostics has been added"): exit 137 is held, never run again with
+    the pool halved; a later supervisor does not start it either; the
+    release, naming the cause or the diagnostic, lifts it and is kept."""
+    env = _talking_docker(tmp_path, [(137, "Killed")])
     env["PARSE_PROCESSES"] = "12"
     p, calls = _run(tmp_path, env, "--memory", "12g", "img", "louise", "hold", "records", "build")
-    assert p.returncode == 0, p.stdout + p.stderr
-    procs = [next((a for a in c.split() if a.startswith("PARSE_PROCESSES=")), None) for c in calls]
-    assert procs == ["PARSE_PROCESSES=12", "PARSE_PROCESSES=6", "PARSE_PROCESSES=3", "PARSE_PROCESSES=3"]
+    assert p.returncode == 137 and len(calls) == 1 and "HELD, not restarted" in p.stdout, p.stdout
+    held = tmp_path / "build.oom-hold"
+    assert "exit 137" in held.read_text() and "Killed" in held.read_text(), "when, and its last lines"
+    p, calls = _run(tmp_path, env, "--memory", "12g", "img")
+    assert p.returncode == 137 and len(calls) == 1 and "not started until released" in p.stdout
+    rel = subprocess.run(["bash", str(DEPLOY / "release-oom.sh"), "build", "--diagnostic"], env=env,
+                         capture_output=True, text=True, timeout=30, check=False)
+    assert rel.returncode == 2 and held.exists(), "a release says it in words"
+    rel = subprocess.run(["bash", str(DEPLOY / "release-oom.sh"), "build", "--cause",
+                          "32021R2017 el: 5.25 GB to chunk"], env=env, capture_output=True, text=True, timeout=30,
+                         check=False)
+    assert rel.returncode == 0 and not held.exists(), rel.stdout + rel.stderr
+    assert "cause: 32021R2017 el" in (tmp_path / "oom-holds.log").read_text()
+    (tmp_path / "codes").write_text("0\n")
+    (tmp_path / "lines").write_text("done\n")
+    p, calls = _run(tmp_path, env, "--memory", "12g", "img")
+    assert p.returncode == 0 and len(calls) == 2, "released, it runs again"
+    assert "PARSE_PROCESSES=12" in calls[-1], "never with the pool halved"
+
+
+def test_a_sigpipe_is_a_crash_and_comes_back_with_its_pool_whole(tmp_path):
+    """141 (SIGPIPE) is no memory kill: again in PAUSE, as any crash, and the
+    pool is no longer halved."""
+    env = _fake_docker(tmp_path, [141, 0])
+    env["PARSE_PROCESSES"] = "12"
+    p, calls = _run(tmp_path, env, "--memory", "12g", "img")
+    assert p.returncode == 0 and len(calls) == 2
+    assert all("PARSE_PROCESSES=12" in c for c in calls)
 
 
 def test_a_pass_is_first_in_line_for_the_oom_killer_and_carries_its_cap(tmp_path):
@@ -71,15 +101,16 @@ def test_a_pass_stopped_on_purpose_is_not_restarted(tmp_path, code):
     """Operator, 2026-10-31: "if I stop it from freenas, likely because I want
     to fix something that might actually lead to the crash, it shouldn't
     restart by itself". A `docker stop` is SIGTERM: the pass exits 130 (07
-    §7.7), or 143 if it did not catch it. The OOM killer's SIGKILL (137)
-    still brings it back."""
+    §7.7), or 143 if it did not catch it. The OOM killer's SIGKILL (137) is
+    held too, since 2026-11-19 (operator: not relaunched until its cause is
+    known)."""
     env = _fake_docker(tmp_path, [code, 0])
     p, calls = _run(tmp_path, env, "--memory=8g", "img")
     assert p.returncode == code and len(calls) == 1 and "stopped on purpose" in p.stdout
     oom = tmp_path / "oom"
     oom.mkdir()
     p, calls = _run(oom, _fake_docker(oom, [137, 0]), "--memory=8g", "img")
-    assert p.returncode == 0 and len(calls) == 2, "an OOM kill comes back by itself"
+    assert p.returncode == 137 and len(calls) == 1, "a memory kill is held, not run again"
 
 
 def test_a_refused_pass_is_not_restarted_and_a_deferred_one_is(tmp_path):
@@ -133,7 +164,7 @@ def test_no_docker_cgroup_is_said_and_is_not_an_error(tmp_path):
 
 
 def test_the_supervisor_applies_the_ceiling_before_every_run(tmp_path):
-    env = _fake_docker(tmp_path, [137, 0])
+    env = _fake_docker(tmp_path, [1, 0])
     ceiling = tmp_path / "ceiling.sh"
     ceiling.write_text(f"#!/bin/bash\necho x >> {tmp_path}/ceilings\n")
     ceiling.chmod(0o755)
@@ -250,7 +281,7 @@ def test_a_pass_that_fails_at_once_three_times_in_a_row_is_not_run_twenty_times(
     oom = tmp_path / "oom"
     oom.mkdir()
     p, calls = _run(oom, _fake_docker(oom, [137, 137, 137, 0]), "--memory=8g", "img")
-    assert p.returncode == 0 and len(calls) == 4, "OOM kills come back, however fast"
+    assert p.returncode == 137 and len(calls) == 1, "a memory kill is held at once (operator, 2026-11-19)"
     slow = tmp_path / "slow"
     slow.mkdir()
     env = dict(_fake_docker(slow, [1, 1, 1, 0]), FAST_FAIL_S="0")
@@ -282,14 +313,14 @@ def test_the_same_error_twice_in_a_row_is_a_defect_however_long_each_run_took(tm
     p, calls = _run(tmp_path, env, "--memory=8g", "img")
     assert p.returncode == 1 and len(calls) == 2 and "same last line twice in a row" in p.stdout, p.stdout
     assert (tmp_path / "build.last.log").read_text().splitlines()[-1] == err, "the last run's output, kept"
-    # another error each time is a crash, asked again; an OOM between two equal errors resets
+    # another error each time is a crash, asked again; a SIGPIPE between two equal errors resets
     other = tmp_path / "other"
     other.mkdir()
     p, calls = _run(other, _talking_docker(other, [(1, "error A"), (1, "error B"), (0, "done")]), "--memory=8g", "img")
     assert p.returncode == 0 and len(calls) == 3, p.stdout
     oom = tmp_path / "oom"
     oom.mkdir()
-    p, calls = _run(oom, _talking_docker(oom, [(1, err), (137, "Killed"), (1, err), (0, "done")]), "--memory=8g", "img")
+    p, calls = _run(oom, _talking_docker(oom, [(1, err), (141, "Broken pipe"), (1, err), (0, "done")]), "--memory=8g", "img")
     assert p.returncode == 0 and len(calls) == 4, p.stdout
     # the pass's own status comes through the pipe to tee
     ok = tmp_path / "ok"

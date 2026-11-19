@@ -6776,6 +6776,7 @@ def run_forever():
     signal.signal(signal.SIGHUP, _handle_sigterm)
     _register_stack_dump()
     _start_stop_watch()
+    _start_oom_watch()
     from . import jobs, run_check
     all_collections = collections_mod.load_all()
     # the record of which kept statements THIS start has re-checked, which
@@ -7166,10 +7167,39 @@ def main() -> int:
 
 
 def exit_code() -> int:
-    """0 for `node stop` or a run that ended by itself, 130 for a signal (07 §7.7)."""
+    """0 for `node stop` or a run that ended by itself, 130 for a signal (07 §7.7),
+    EXIT_HELD after a memory kill in its cgroup (app/oom_hold.py): its guard
+    keeps it down."""
+    from . import oom_hold
+    if _oom_held.is_set():
+        return oom_hold.EXIT_HELD
     if _stop_requested.is_set():
         return 0
     return 130 if _stop.is_set() else 0
+
+
+#: set when the kernel killed a process of this worker's cgroup for memory
+#: (`_on_oom_kill`): the worker stops its units and exits EXIT_HELD
+_oom_held = threading.Event()
+
+
+def _on_oom_kill(before: int, after: int) -> None:
+    """THE FIRST MEMORY KILL IN THE CGROUP (operator, 2026-11-19, "A"): the
+    hold written with what the parse pool had in flight — the parts, their
+    collections, uids and sizes — and the cgroup's peak, then the worker
+    stops at its units like a SIGTERM and its guard keeps it down."""
+    from . import oom_hold, parallel
+    rec = oom_hold.hold("cgroup", {"oom_kill": [before, after], "memory_peak": oom_hold.memory_peak(),
+                                   "in_flight": parallel.in_flight()})
+    print(f"[oom] {oom_hold.describe(rec)}", file=sys.stderr, flush=True)
+    _oom_held.set()
+    _handle_sigterm(signal.SIGTERM, None)
+
+
+def _start_oom_watch() -> None:
+    from . import oom_hold
+    oom_hold.on_kill(_on_oom_kill)          # a pool that sees a child die asks at once
+    threading.Thread(target=oom_hold.watch, args=(_stop, _on_oom_kill), name="oom-watch", daemon=True).start()
 
 
 

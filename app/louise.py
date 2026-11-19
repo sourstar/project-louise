@@ -3731,6 +3731,21 @@ def cmd_embedder_tree_diff(a) -> int:
     return 0 if not (d["added"] or d["removed"] or d["changed"]) else 1
 
 
+def cmd_node_release_oom(a) -> int:
+    """`node release-oom --cause TEXT | --diagnostic TEXT` (07 §7.3): the
+    worker's OOM hold lifted, naming which (app/oom_hold.py); its guard
+    starts the worker within HOLD_POLL_S. Exit 2 where no hold is in force."""
+    from app import oom_hold
+    try:
+        out = oom_hold.release(cause=a.cause, diagnostic=a.diagnostic)
+    except ValueError as e:
+        print(f"louise node release-oom: {e}", file=sys.stderr)
+        return 2
+    _print({"released": out["released"].get("at"), **{k: out[k] for k in ("cause", "diagnostic") if k in out},
+            "says": "the worker's guard starts it again within seconds"})
+    return 0
+
+
 def cmd_node_show(a) -> int:
     """`node show` (07 §7.3): state per collection, the current stage, the
     last round's cost, the overrides in force, the verbs running under the
@@ -7455,6 +7470,12 @@ def build_parser() -> argparse.ArgumentParser:
     p = nverbs.add_parser("show", help="state per collection, the current stage, the last round's cost, "
                                       "the overrides in force, the verbs running under the node")
     p.set_defaults(fn=cmd_node_show)
+    p = nverbs.add_parser("release-oom", help="lift the hold a memory kill put on the worker (operator, "
+                                             "2026-11-19): name the cause determined or the diagnostic added")
+    rel = p.add_mutually_exclusive_group(required=True)
+    rel.add_argument("--cause", default=None, help="what it was processing and its measured peak, in words")
+    rel.add_argument("--diagnostic", default=None, help="what was added that will name it the next time")
+    p.set_defaults(fn=cmd_node_release_oom)
     p = nverbs.add_parser("resume", help="the node, or one collection")
     p.add_argument("collection", nargs="?", default=None)
     p.set_defaults(fn=cmd_node_resume)
@@ -8785,8 +8806,15 @@ def main(argv=None) -> int:
         print(f"louise: {root} is not a directory; --root is "
               f"<LOUISE_ROOT>/collections (07 §7.8)", file=sys.stderr)
         return 2
+    from app import parallel
     try:
         return _run_releasing(a)
+    except parallel.MemoryKilled as e:
+        # a parse-pool child killed for memory (app/oom_hold.py): the pass is
+        # not run again until the cause is known — 137, which
+        # deploy/supervise-pass.sh holds (operator, 2026-11-19)
+        print(f"louise: {e} — exit 137", file=sys.stderr)
+        return 137
     except KeyboardInterrupt as e:
         # SIGTERM (`Stopped`) or SIGINT: what was in hand finished or rolled
         # back, nothing half-written; run the same command again (07 §7.7)
