@@ -190,6 +190,13 @@ Wikidata carries a genre (P136) on fewer than 5 % of sitelinked items. So:
 
 ## The operator's two choices
 
+**Decided (operator, 2026-11-19, in München's session):**
+1. Scans: "Names + hashes (Recommended)". The `scans` kind is not fetched.
+2. Wikimedia terms: "Acknowledge (Recommended)". The acknowledgement is
+   recorded, byte-exact, when the plugin's first fetch runs (invariant 9).
+
+The choices as they were put:
+
 **1. Scans: take the bytes or not.** The page images of the works, about
 10.5 GB for the three Italian categories alone.
 
