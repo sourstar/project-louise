@@ -452,6 +452,12 @@ def _unit_day(unit: Path, celex: str, entries: list[os.DirEntry], tree_facts: bo
 class EurlexSource:
     source_id = "eurlex"
     ISSUES = ISSUES
+    #: the parse pool's large-document lane (app/parallel.py): what a parse
+    #: of one unit holds per byte of its `size` (the unit's files, summed at
+    #: discovery). MEASURED 2026-11-19 (München, its own container): 32021R2017
+    #: el, 204,218,240 bytes, peak 5,248,708,608 to chunk (25.7x), 2,055,856,128
+    #: for its metadata (10.1x) — the larger, rounded up
+    PARSE_PEAK_PER_BYTE = 26
     ELI_PROFILE = PROFILE
     #: 09 §9.3's `profile`: the ELI implementation and the validity axis of
     #: one record per version per language (app/validity.py)
