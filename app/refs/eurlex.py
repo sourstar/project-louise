@@ -130,14 +130,13 @@ def unit_meta(unit: Path) -> dict | None:
             day = src._unit_day(unit, celex, entries, True)
         else:
             return None
-        paths = {e.name: e.path for e in entries}
         try:
-            wrapper = paths[formex.own_wrapper(paths, celex, lambda n: Path(paths[n]).read_bytes())]
+            head = src.wrapper_head(celex, entries)     # a package read through
         except formex.FormexError:
-            wrapper = None
+            head = None
         published = None
-        if wrapper is not None:
-            got = src._PUB_DATE.search(Path(wrapper).read_bytes()[:src._HEAD])
+        if head is not None:
+            got = src._PUB_DATE.search(head)
             published = formex.iso(got.group(1).decode()) if got else None
     except (OSError, ValueError, notice_mod.NoticeError, from_tree.TreeError):
         return None

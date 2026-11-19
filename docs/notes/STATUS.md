@@ -20,6 +20,29 @@ measured (published figures disagree).
 
 ### 2026-11-19
 
+- **EUR-Lex: a Formex manifestation served as one zip is Formex — BUILT, not deployed** (app/plugins/eurlex/
+  formex.py `unpack`; cellar.py `form_of`, `lacks_package`, `TreeUnits._reform`; eurlex_dump.py). Cellar serves
+  some fmx4 manifestations as ONE item, a zip of the wrapper, body and figures (32024R1689
+  `OJABA_L_202401689_ENG.fmx4.zip`; 32015D1735's English one, repackaged at Cellar 2026-11-19 15:38 CET).
+  `form_of` saw no wrapper among the item names and read those acts from XHTML — the AI Act is held as
+  `L_202401689EN.html` (München). The Data Dump holds no `*.zip` member in any of its 24 FMX zips, so every
+  such unit is the API's. Now: the package is held as served and read through by every check, the unit's
+  day, the reference source and the parser (`extra.items` names each member and its package; a unit
+  without one parses byte for byte as before — no parser bump, EUR-Lex5 has no records, RULE 1). A held
+  unit lacking the package its OWN tree lists is re-formed: from the dump where it holds it (`reformed`),
+  else recorded for the per-unit pass to ask first (`package-not-in-dump`, `incomplete_due`); the regular
+  listing asks again only for a language the dump build has re-formed (`.eurlex-dump-packages.json`:
+  bulk first). Counted by tools/measure/eurlex_units_check.py (read-only), which also counts every held
+  file whose first bytes disagree with its extension and each Formex body or annex whose root is not
+  what the wrapper names it as: 32015D1735 (19 languages) is the Data Dump's own swap — its member
+  `…01004901.xml` is a TIFF and the body's XML is `…01005202.tif`, 11 members matching the unit name for
+  name — which Cellar corrected today; a swap leaving XML under an XML name errors nowhere. OWED: the
+  re-form run (dump build over EUR-Lex5), the check's counts, and #30 below so the corrected 32015D1735
+  is seen at all.
+- **EUR-Lex: "modified since" reads the WORK's date only — OPEN** (32015D1735: the work 2026-11-02, its
+  English expression and manifestations 2026-11-19; the listing and the held tree both compare the
+  work's `cmr:lastModificationDate`, so a manifestation Cellar replaces is never fetched again).
+
 - **A1c's derived rows follow the record — FIXED, the repair owed** (docs/02 §2.4 A1c amended). `carry
   --rebuilt` copied the manifest's rdf/fts marks, its validity table and the text index, and `reconcile`
   reset only `embed_done` where `content_hash` moved, while the worker's validity, catalogue and
