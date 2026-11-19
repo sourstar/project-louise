@@ -308,3 +308,27 @@ def test_a_part_cut_by_content_is_held_to_the_rule_as_it_is_carried(tmp_path):
         carry(parts[0] + parts[1], 90, False)
     with pytest.raises(line_carry.CarryRefused, match="does not end a part"):
         carry(parts[0][:-1], 91, False)
+
+
+def test_a_rebuilt_carry_carries_the_predecessors_collection_file(node, config_dir):
+    """The node, 2026-11-19: gutenberg.next, carried --rebuilt, kept the file
+    `create` writes (no slice held, embed off) where gutenberg held all and
+    embedded all, and was swapped into place so. The carry now gives the
+    target its predecessor's file — its codex its own, embed "off" until the
+    operator turns it on — and keeps the target's own beside it."""
+    import tomllib
+    root, _corpus, w5, w6 = node
+    files = Path(config_dir) / "collections"
+    (files / "wikipedia.toml").write_text(
+        f'codex = "{w5.collection_id}"\nembed = "all"\nslices = ["lang=tr"]\nkinds = ["records", "vectors"]\n'
+        f'share = true\n', encoding="utf-8")
+    own = f'codex = "{w6.collection_id}"\nslices = []\nembed = "off"\n'
+    (files / "wikipedia.next.toml").write_text(own, encoding="utf-8")
+    plan = carry_mod.carry(root, "wikipedia", "wikipedia.next", rebuilt=True, apply=True, copy=True,
+                           log=lambda *_: None)
+    got = tomllib.loads((files / "wikipedia.next.toml").read_text(encoding="utf-8"))
+    assert got == {"codex": w6.collection_id, "embed": "off", "slices": ["lang=tr"],
+                   "kinds": ["records", "vectors"], "share": True}
+    assert (files / "wikipedia.next.toml.before-carry").read_text(encoding="utf-8") == own
+    assert plan["collection_file"] == "carried from wikipedia; embed off (was 'all')"
+    assert not list(files.glob("*.carry"))
