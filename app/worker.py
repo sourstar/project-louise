@@ -4576,9 +4576,13 @@ def transient_failure(exc: BaseException) -> bool:
     endpoint's state, never the document's: the document is untouched and
     stays selectable, while `backend_gate.embed_allowed` gates the new run
     at once or pauses the collection's embedding and says why."""
+    from . import parallel
     return (endpoint_unavailable(exc) or manifest_contended(exc)
             or vector_store_contended(exc) or run_not_validated(exc) or platform_missing(exc)
             or resources_exhausted(exc)
+            # a document too large to parse beside what runs now (2026-11-19):
+            # the pool's large lane defers it; nothing is wrong with it
+            or isinstance(exc, parallel.MemoryWait)
             # the vector table lacks the validity columns the collection
             # declares: the TABLE's state, repaired once by `hold vectors
             # validity-columns`; every document defers until then (2026-10-13)

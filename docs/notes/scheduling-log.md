@@ -3059,3 +3059,40 @@ its due test. No query was added to a manifest.
 **AFTER, on the node:** a paused collection with a due snapshot leaves no `scheduled-check.started.json`
 over a night, and `hold collection show <it>` says it is held.
 
+
+## 2026-11-19 — the parse pool's large-document lane (app/parallel.py `compute`; EUR-Lex `PARSE_PEAK_PER_BYTE`) — BEFORE (deploy pending)
+
+**Scenario (München, the node, 2026-11-19).**
+- The worker's container has a 24 GiB cap and the profile "quiet: 12 cores", so 11 parse slots.
+- The worker was OOM-killed 41 times: 35 from 08:03Z to 17:35Z, and 6 from 19:03Z to 20:24Z (memory.peak = the limit; memory.events oom_kill).
+- What had work then:
+  - EUR-Lex5's re-parse, resumed at 07:42Z;
+  - Normattiva's full re-derive (342 k rdf/fts, until 17:10Z);
+  - gutenberg's re-derive (47 k rdf / 48 k fts, 735 embeds);
+  - pubmed's reset re-index (from 19:00Z);
+  - wikidata's embedding.
+- EUR-Lex5 was paused at 20:30Z, and no kill followed in the hour after.
+
+**BEFORE, measured.**
+- One act, 32021R2017 el (204,218,240 bytes, in a container of its own):
+  - chunks: 63.1 s, peak RSS 5.25 GB (25.7× its bytes);
+  - metadata: 21.4 s, 2.06 GB (10.1×).
+- The worker's EUR-Lex5 fts batches:
+  - 3 documents / 1,253 chunks: 351 s of parse;
+  - 52 / 20,516: 2,106 s.
+- `compute`'s deadline is 120 s for the whole batch, so such a batch threw the pool away and parsed itself again in the main process. The main process was what the kernel killed at 19:14Z and 20:23Z (5.75 and 6.94 GB anon).
+- The 24 language versions of one act sit next to each other in rowid order, so several 4–10 GB children ran at once.
+
+**The change.**
+- A row whose `PARSE_PEAK_PER_BYTE` × `size` reaches 2 GiB is a part of its own.
+- At most one such part is in flight in the process.
+- It starts only when the cgroup's working set leaves room for its peak, waiting at most 120 s, then is deferred (`MemoryWait`, never an error).
+- Its batch's deadline grows by 4 × 63.1 s per 204 MB.
+- It is never parsed in the main process: the no-pool, single-row and timeout fallbacks defer it.
+- A peak past ⅔ of the limit is the document's error (`TooLarge`), with both numbers.
+- EUR-Lex declares 26.
+
+**AFTER.** To be completed after the deploy:
+- the kill count over 24 h with EUR-Lex5 running;
+- EUR-Lex5 rdf/fts docs/s against today's 18/s;
+- the lane's deferrals per hour.
