@@ -251,7 +251,9 @@ def _record_incomplete(corpus: Path, found: dict[str, dict[str, str | None]]) ->
         for lang, units in found.items():
             old = had.get(lang) or {}
             had[lang] = {celex: {**(inf if isinstance(inf, dict) else {"in_force": inf}),
-                                 "tried": (old.get(celex) or {}).get("tried")}
+                                 "tried": (old.get(celex) or {}).get("tried"),
+                                 **({"fetched": (old.get(celex) or {}).get("fetched")}
+                                    if (old.get(celex) or {}).get("fetched") else {})}
                          for celex, inf in sorted(units.items())}
         _write_incomplete(corpus, had)
 
@@ -270,8 +272,8 @@ def incomplete_due(corpus: Path, langs) -> list[tuple[str, str, str | None]]:
             continue
         for celex, entry in sorted(units.items()):
             entry = entry or {}
-            if entry.get("tried"):
-                continue
+            if entry.get("tried") or entry.get("fetched"):
+                continue                    # Cellar asked once for it: not again until a newer dump
             at = _held_at(Path(corpus), unit_rel(lang, celex))
             if at is not None:
                 if not entry.get("reform"):
@@ -280,7 +282,7 @@ def incomplete_due(corpus: Path, langs) -> list[tuple[str, str, str | None]]:
                     note = from_tree.notice(rdf.loads((at / rdf.TREE_FILE).read_bytes()), LANGUAGES[lang], celex)
                 except (OSError, ValueError, from_tree.TreeError):
                     note = None
-                if note is not None and not lacks_package(at, note):
+                if note is not None and not lacks_package(at, note) and not held_not_its_name(at, celex):
                     continue
             out.append((lang, celex, entry.get("in_force")))
     # BY ACT, then language (as the listing, `ORDER BY ?celex ?language`): a
@@ -293,6 +295,20 @@ def incomplete_due(corpus: Path, langs) -> list[tuple[str, str, str | None]]:
     return out
 
 
+def mark_fetched(corpus: Path, lang: str, celex: str) -> None:
+    """A recorded unit Cellar gave: not asked first again (a re-form that
+    Cellar serves as wrongly as the dump would otherwise be asked every
+    pass); a newer dump's build records it afresh."""
+    import time as _time
+    with _incomplete_lock:
+        had = incomplete(corpus)
+        entry = (had.get(lang) or {}).get(celex)
+        if entry is None or entry.get("fetched"):
+            return
+        entry["fetched"] = _time.strftime("%Y-%m-%dT%H:%M:%SZ", _time.gmtime())
+        _write_incomplete(corpus, had)
+
+
 def mark_tried(corpus: Path, lang: str, celex: str, why: str) -> None:
     """A recorded incomplete unit Cellar did not give either (a failure that
     is not the endpoint going away): not asked first again."""
@@ -303,6 +319,32 @@ def mark_tried(corpus: Path, lang: str, celex: str, why: str) -> None:
             return
         entry["tried"] = why[:300]
         _write_incomplete(corpus, had)
+
+
+def held_not_its_name(unit: Path, celex: str) -> list[str]:
+    """Why a held Formex unit's files are not the ones their names say
+    (formex.not_its_name, from each file's first bytes); [] where they are,
+    or where the unit holds no Formex wrapper of this act (a package, a
+    rendition: nothing to judge here)."""
+    from ..plugins.eurlex import formex
+    from ..plugins.eurlex.source import unit_files
+    try:
+        entries = unit_files(unit)
+    except OSError:
+        return []
+    paths = {e.name: e.path for e in entries}
+    if not any(formex.is_wrapper(n) for n in paths):
+        return []
+    try:
+        wname = formex.own_wrapper(paths, celex, lambda n: Path(paths[n]).read_bytes())
+        wrapper = formex._parse(Path(paths[wname]).read_bytes(), wname)
+        heads = {}
+        for n, p in paths.items():
+            with open(p, "rb") as f:
+                heads[n] = f.read(formex._HEAD_BYTES)
+    except (OSError, formex.FormexError):
+        return []
+    return formex.not_its_name(heads, wrapper, wname)
 
 
 def _held_at(corpus: Path, rel: str) -> Path | None:
@@ -444,6 +486,19 @@ def build_chunk(mtd_paths: tuple[str, ...], uuids: list[str], langs: list[tuple[
             # read a manifestation served as one zip as XHTML; it is re-formed
             # from the dump, or recorded for the API where the dump lacks it
             reform = uuid in zipped and package_lacked(at, code, celex) is not None
+            if at is not None and not reform and held_not_its_name(at, celex):
+                # A HELD UNIT WHOSE FILES ARE NOT THEIR NAMES' (2026-11-19: the
+                # dump's 9 acts of 2014–15): the dump gives the same bytes, so
+                # the API's — Cellar serves them right (32015R0207 de)
+                try:
+                    note = from_tree.notice(rdf.scope(tree, code), code, celex)
+                except from_tree.TreeError:
+                    c["no-work"] += 1
+                    continue
+                c["incomplete"] += 1
+                c["dump-not-its-name"] += 1
+                record(lang, celex, note, True)
+                continue
             if at is not None and not refresh and not reform:
                 c["held"] += 1
                 continue
@@ -504,6 +559,15 @@ def build_chunk(mtd_paths: tuple[str, ...], uuids: list[str], langs: list[tuple[
                 # a text in another language under this one's expression is
                 # held as the origin files it (operator, 2026-11-16, B): the
                 # parser labels it; counted here so the pass says how many
+                if text_wrapper is not None:
+                    wrong = formex.not_its_name(view, formex._parse(view[text_wrapper], text_wrapper),
+                                                text_wrapper)
+                    if wrong:
+                        # never landed from the dump: the API's (Cellar serves it right)
+                        c["incomplete"] += 1
+                        c["dump-not-its-name"] += 1
+                        record(lang, celex, note, at is not None)
+                        continue
                 stated = _LG_DOC.search(view[text_wrapper]) if text_wrapper is not None else None
                 if stated and stated.group(1).decode().lower() != lang:
                     c["text-in-another-language"] += 1

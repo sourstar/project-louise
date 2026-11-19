@@ -81,14 +81,35 @@ def test_a_file_s_place_is_read_against_the_order_of_its_issue():
     assert formex.misnamed(BODY, _items(FX)[BODY]) is None
 
 
-def test_the_check_counts_a_unit_whose_files_are_in_each_other_s_place(tmp_path):
+def _swapped_unit_files() -> dict[str, bytes]:
+    """The fixture's act with its body and an annex in each other's place,
+    its wrapper naming both (32015R0207 de's shape), and another act's file
+    of the same issue beside them, numbered its own way."""
+    from tests.test_eurlex_parser5 import WRAPPER as W5, _wrapper
     items = _items(FX)
-    swapped = {**items, "L_1972160IT.01000101.xml": _oj(5, root="ANNEX").replace(b"2015038DE", b"1972160IT"),
-               "L_1972160IT.01000501.xml": items[BODY]}
-    _unit(tmp_path, CELEX, {**swapped, rdf.TREE_FILE: _scoped((FX / MTD).read_bytes())})
+    body, annex = "L_1972160IT.01000101.xml", "L_1972160IT.01000501.xml"
+    return {W5: _wrapper([body], [annex]), body: _oj(5, root="ANNEX").replace(b"2015038DE", b"1972160IT"),
+            annex: items[BODY], "L_1972160IT.01000301.xml": _oj(90)}
+
+
+def test_the_check_counts_a_unit_whose_files_are_in_each_other_s_place(tmp_path):
+    _unit(tmp_path, CELEX, {**_swapped_unit_files(), rdf.TREE_FILE: _scoped((FX / MTD).read_bytes())})
     got = chk.check_chunk(chk.units(tmp_path, None), 3)
     assert got["misnamed"]["formex file in another's place"] == 2, got["misnamed"]
     assert got["counts"]["units-with-a-file-not-its-name"] == 1 and got["counts"]["not-its-name it"] == 1
+
+
+def test_the_parser_refuses_a_unit_whose_files_are_in_each_other_s_place():
+    """The record would be the annex's text as the body: refused with its
+    reason, never read (the unit is fetched again from Cellar)."""
+    import pytest
+    from app.plugins.eurlex import formex
+    with pytest.raises(formex.FormexError, match="in each other's place: L_1972160IT.01000101.xml, "
+                                                 "L_1972160IT.01000501.xml"):
+        formex.parse(_swapped_unit_files())
+    tiff = {**_items(FX), BODY: b"II*\x00" + b"\x00" * 64}
+    with pytest.raises(formex.FormexError, match="holds tiff"):
+        formex.parse(tiff)
 
 
 def test_a_unit_holding_an_included_document_is_counted_and_listed(tmp_path):

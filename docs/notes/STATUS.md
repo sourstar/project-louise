@@ -20,6 +20,20 @@ measured (published figures disagree).
 
 ### 2026-11-19
 
+- **EUR-Lex: the Data Dump files 9 acts' contents under other files' names — FIXED, not deployed**
+  (formex.py `not_its_name`, `stated_place`, `swapped`; eurlex_dump.py `held_not_its_name`). Counted over
+  EUR-Lex5's 932,781 units (tools/measure/eurlex_units_check.py, München): 226 units, the same 9 acts of
+  2014–15 in every language (32015D1735: a TIFF as the body's `.xml`; 32014R1011, 32015R0003, 32015R0207,
+  32015R0220, 32015R0228, 32015R0341, 32015R0523, 32015R0864: body and annex in each other's place), hr 18
+  more. Cellar serves them right (32015R0207 de, unchanged since 2015-05-05). The test: a file's first
+  bytes against its extension; and, within one OJ issue and volume, the act's own files in the order of
+  the page/sequence their names encode state pages in the same order (an inversion is a swap; a Special
+  Edition's numbering — +82 on every file, an offset per OJ issue, +1 after a page break — keeps it; the
+  first rule, an absolute page check, flagged 10,141 units, hr 7,194). Now the parser refuses such a unit
+  with its reason (never another file's text in its place); the dump build never lands one, and records
+  a held one for the per-unit pass to ask Cellar first; a unit Cellar was asked for once is not asked
+  every pass (`fetched`).
+
 - **EUR-Lex: a Formex INCLUSION was never read — FIXED, not deployed** (app/plugins/eurlex/formex.py
   `_include`). 32021R1971: Annex I's file (876 bytes) is `<QUOT.S><INCL.ELEMENT FILEREF="…01000302.xml"
   TYPE="FORMEX.DOC"/></QUOT.S>`; the 39 MB of tables (2,687 pages) are the included file's, kept only as a

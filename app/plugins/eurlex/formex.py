@@ -152,6 +152,25 @@ def swapped(places: dict[str, tuple[str, int, int, int, int] | None]) -> list[st
     return sorted(out)
 
 
+def not_its_name(files: dict[str, bytes], wrapper: ET.Element, wname: str) -> list[str]:
+    """Why the act's own files are not the ones their names say — each a
+    reason, none where they are (2026-11-19: the Data Dump's 9 acts of
+    2014–15, 32015D1735 a TIFF as its body's `.xml`, 32015R0207 its annex
+    under its body's name; Cellar serves them right). Only the files the
+    act's own wrapper names: a Special Edition unit holds another act's
+    files too, numbered in their own order."""
+    named = [n for n in dict.fromkeys([*main_names(wrapper), *annex_names(wrapper)]) if n in files]
+    why = [w for n in [wname, *named] if (w := misnamed(n, files[n][:_HEAD_BYTES])) is not None]
+    off = swapped({n: stated_place(n, files[n][:_HEAD_BYTES]) for n in named})
+    if off:
+        why.append("in each other's place: " + ", ".join(off))
+    return why
+
+
+#: what `misnamed` and `stated_place` read of a file
+_HEAD_BYTES = 4096
+
+
 def misnamed(name: str, head: bytes) -> str | None:
     """Why a file is not the one its name says, from its first bytes
     (`head`, a few KB) alone: they are not what its extension holds
@@ -746,6 +765,12 @@ def parse(files: dict[str, bytes], celex: str | None = None) -> Act:
     items hold more than one act: `own_wrapper`). Raises FormexError when
     the wrapper, the body or an annex it names is missing or unreadable."""
     wname, wrapper = wrapper_of(files, celex)
+    # A FILE UNDER ANOTHER'S NAME is never read as what its name says: the
+    # record would be another file's text in its place, every check passing
+    wrong = not_its_name(files, wrapper, wname)
+    if wrong:
+        raise FormexError(f"a file is not the one its name says ({'; '.join(wrong)}): the unit is "
+                          f"fetched again from the origin")
     mains = main_names(wrapper)
     if not mains:
         raise FormexError("the wrapper names no DOC.MAIN.PUB/REF.PHYS file: no body to read")

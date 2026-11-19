@@ -127,22 +127,23 @@ def check_chunk(chunk: list[tuple[str, str, str]], examples: int) -> dict:
                 show(f"{ext} holds {got}", f"{unit.parent.parent.name}/{year}/{unit.name}/{e.name}")
         if any(EXPECT.get(os.path.splitext(n)[1].lower()) not in (None, kind(h)) for n, h in heads.items()):
             c["units-with-a-misnamed-file"] += 1
-        places = {n: formex.stated_place(n, h) for n, h in heads.items()}
-        off = formex.swapped(places)
-        if off:
-            mism["formex file in another's place"] += len(off)
-            wrong = True
-            show("in another's place", f"{unit.parent.parent.name}/{year}/{unit.name}: "
-                 + ", ".join(f"{n} states p{places[n][3]} s{places[n][4]}" for n in off[:4]))
-        if wrong:
-            c["units-with-a-file-not-its-name"] += 1
-            c[f"not-its-name {lang}"] += 1
         # the act's own wrapper: what its named files are
         try:
             files = {n: (unit / n).read_bytes() for n in heads if formex.is_wrapper(n)}
             if files:
                 _wname, wrapper = formex.wrapper_of(files, unit.name)
                 c["formex-units"] += 1
+                # files in each other's place, among the ACT'S OWN files only
+                # (formex.not_its_name: what the parser and the dump build refuse)
+                own = [n for n in dict.fromkeys([*formex.main_names(wrapper), *formex.annex_names(wrapper)])
+                       if n in heads]
+                places = {n: formex.stated_place(n, heads[n]) for n in own}
+                off = formex.swapped(places)
+                if off:
+                    mism["formex file in another's place"] += len(off)
+                    wrong = True
+                    show("in another's place", f"{unit.parent.parent.name}/{year}/{unit.name}: "
+                         + ", ".join(f"{n} states p{places[n][3]} s{places[n][4]}" for n in off[:4]))
                 # an XML item the wrapper never names (but its toc): an
                 # INCLUDED document (formex._include; 32021R1971's 39 MB annex)
                 named = {_wname, *formex.main_names(wrapper), *formex.annex_names(wrapper)}
@@ -164,6 +165,9 @@ def check_chunk(chunk: list[tuple[str, str, str]], examples: int) -> dict:
                         show(f"annex is {tag if tag else kind(heads[n])}", f"{unit.name} {lang} {n}")
         except (OSError, formex.FormexError):
             c["formex-unreadable-wrapper"] += 1
+        if wrong:
+            c["units-with-a-file-not-its-name"] += 1
+            c[f"not-its-name {lang}"] += 1
         # a Formex package the held tree lists and the unit lacks
         try:
             note = from_tree.notice(rdf.loads((unit / rdf.TREE_FILE).read_bytes()), src.LANGUAGES[lang], unit.name)
