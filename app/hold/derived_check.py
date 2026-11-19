@@ -45,11 +45,7 @@ _DOC_FIELDS = ("title", "authors", "lang", "subjects", "bookshelves")
 
 def _groups(collection, lang: str | None) -> list[str]:
     from app import fts
-    lang = lang or "und"
-    if lang == fts.MULTILINGUAL:
-        return list(dict.fromkeys([fts.group_for(l) for l in fts.section_languages(collection)]
-                                  + [fts.group_for(lang)]))
-    return [fts.group_for(lang)]
+    return fts.groups_for_lang(collection, lang)
 
 
 def _held_by_group(held: dict[str, list], uid: str) -> dict[str, set[tuple[str, str, str]]]:

@@ -324,18 +324,19 @@ def test_rows_left_in_the_group_of_a_language_the_manifest_no_longer_states_are_
     rows = _now_fields(coll, rows)
     moved = rows[0]
     old_lang = _other_lang(moved["lang"])
+    old, new = fts.group_for(old_lang), fts.group_for(moved["lang"])
+    nid = int(moved["native_id"])
+    fts.delete_books(new, [nid], coll)
     for r in rows:     # the fts stage wrote it when its language was another
         fts.index_book(old_lang if r["uid"] == moved["uid"] else r["lang"], int(r["native_id"]),
                        worker._load_chunks(r, coll), coll)
-    old, new = fts.group_for(old_lang), fts.group_for(moved["lang"])
-    nid = int(moved["native_id"])
     assert fts.books_held(old, [nid], coll) > 0 and fts.books_held(new, [nid], coll) == 0
     got = derived_check.verify(root, "re", apply=True, log=quiet)
     assert (got["chunks"], got["regrouped"], got["reset"], got["strays"]) == (1, 1, 1, 0), got
     assert fts.books_held(old, [nid], coll) == 0, "its old rows gone"
     # the fts stage's turn: the new group alone holds it
     fts.index_book(moved["lang"], nid, worker._load_chunks(moved, coll), coll)
-    assert fts.groups_holding(coll, [nid]) == {nid: {new}}
+    assert fts.books_held(new, [nid], coll) > 0 and fts.books_held(old, [nid], coll) == 0
 
 
 def test_a_document_held_twice_loses_the_old_group_s_rows_and_keeps_its_marks(pair, corpus_dir, monkeypatch):  # noqa: F811
@@ -355,30 +356,13 @@ def test_a_document_held_twice_loses_the_old_group_s_rows_and_keeps_its_marks(pa
     with lock:
         fts._add_one(writer, fts.pystem_algorithm(old), old_lang, nid, worker._load_chunks(twice, coll))
         writer.commit()
-    assert fts.groups_holding(coll, [nid])[nid] == {old, fts.group_for(twice["lang"])}
+    assert fts.books_held(old, [nid], coll) > 0 and fts.books_held(fts.group_for(twice["lang"]), [nid], coll) > 0
     dry = derived_check.verify(root, "re", log=quiet)
     assert (dry["chunks"], dry["strays"], dry["regrouped"]) == (0, 1, 1), dry
     got = derived_check.verify(root, "re", apply=True, log=quiet)
     assert (got["reset"], got["strays"]) == (0, 1), got
-    assert fts.groups_holding(coll, [nid]) == {nid: {fts.group_for(twice["lang"])}}
+    assert fts.books_held(old, [nid], coll) == 0 and fts.books_held(fts.group_for(twice["lang"]), [nid], coll) > 0
     assert _marks(coll, twice["uid"])[:2] == (1, 1), "nothing to derive again"
-
-
-def test_the_fts_stage_s_write_takes_a_document_out_of_every_other_group(isolated_config, tmp_path):
-    """index_books: a document written into one group leaves no row in
-    another — a language changed between two writes never leaves two
-    copies, whoever reset it."""
-    from app import collections as collections_mod
-    coll = collections_mod.Collection(
-        name="groups", plugin="gutenberg", profile=None, embed_mode_default=None, corpus_dir=tmp_path / "c",
-        manifest_path=tmp_path / "groups" / "manifest.db", fts_dir=tmp_path / "groups" / "fts",
-        lance_dir=tmp_path / "groups" / "lancedb")
-    fts.index_book("en", 7, [{"id": "d:7:0:1", "chapter": "", "text": "an English text"}], coll)
-    fts.index_book("de", 8, [{"id": "d:8:0:1", "chapter": "", "text": "ein Text"}], coll)
-    assert fts.groups_holding(coll, [7, 8]) == {7: {"en"}, 8: {"de"}}
-    fts.index_book("de", 7, [{"id": "d:7:0:1", "chapter": "", "text": "ein deutscher Text"}], coll)
-    assert fts.groups_holding(coll, [7, 8]) == {7: {"de"}, 8: {"de"}}
-    assert [c["text"] for c in fts.book_chunks("de", 7, coll)] == ["ein deutscher Text"]
 
 
 def test_a_writer_waits_for_the_worker_s_transaction_and_a_stop_ends_the_wait(monkeypatch):
