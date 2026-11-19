@@ -29,3 +29,17 @@ def test_a_scan_shared_by_two_works_of_one_category_counts_once(tmp_path):
     assert res["memoir"] == {"works": 2, "text_bytes": 15 + 150, "scan_files": 2, "scan_bytes": 1000,
                              "scan_unknown": 1, "top": ["Diari", "Lettere"]}
     assert res["fiction"]["scan_files"] == 1 and res["fiction"]["text_bytes"] == 101
+
+
+def test_sizes_come_from_the_image_tables_the_local_one_first(tmp_path, monkeypatch):
+    (tmp_path / "it.files.json").write_text(json.dumps({
+        "L'Italia.djvu": {"page_bytes": 1, "scan_bytes": None},
+        "Local.pdf": {"page_bytes": 1, "scan_bytes": 7}, "Gone.pdf": {"page_bytes": 1, "scan_bytes": 3}}))
+    local = [b"INSERT INTO `image` VALUES\n", b"('Local.pdf',500,0,0,'a:0:{}',0,'BITMAP'),\n"]
+    commons = [b"('L\\'Italia.djvu',123456,0,0,'x',0),\n", b"('Local.pdf',999,0,0,'x',0),\n",
+               b"('Other.djvu',1,0,0,'x',0),\n"]
+    monkeypatch.setattr(wfb, "_lines", lambda lang, table: iter(local))
+    monkeypatch.setattr(wfb, "_dump_lines", lambda url: iter(commons))
+    wfb.sizes(["it"], tmp_path, log=lambda m: None)
+    got = json.loads((tmp_path / "it.files.json").read_text())
+    assert {n: f["scan_bytes"] for n, f in got.items()} == {"L'Italia.djvu": 123456, "Local.pdf": 500, "Gone.pdf": None}

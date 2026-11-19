@@ -1,6 +1,7 @@
 """How much a Wikisource collection would fetch, per work and per book category.
 
     python -m tools.measure.wikisource_fetch_breakdown scan LANG --out DIR [--no-scans]
+    python -m tools.measure.wikisource_fetch_breakdown sizes LANG... --out DIR
     python -m tools.measure.wikisource_fetch_breakdown categories LANG --out DIR [--top 80]
 
 For docs/notes/wikisource-fetch-breakdown.md (operator, 2026-11-19: "since it
@@ -64,12 +65,51 @@ def _lines(lang: str, table: str) -> Iterator[bytes]:
     """The data lines of one dump table, streamed and decompressed: an INSERT
     with its tuples on one line (older dumps) or one tuple per line after it
     (the dumps of 2026)."""
-    url = DUMPS.format(w=f"{lang}wikisource", t=table)
+    yield from _dump_lines(DUMPS.format(w=f"{lang}wikisource", t=table))
+
+
+def _dump_lines(url: str) -> Iterator[bytes]:
     with urllib.request.urlopen(urllib.request.Request(url, headers=UA), timeout=120) as r, \
             gzip.GzipFile(fileobj=r) as g:
         for line in g:
             if line.startswith((b"INSERT INTO", b"(")):
                 yield line
+
+
+#: Commons' `image` table: the latest dump directory's is empty (45 bytes, a
+#: failed run, 2026-11-19), so the last complete one is named.
+COMMONS_IMAGE = "https://dumps.wikimedia.org/commonswiki/20261001/commonswiki-20261001-image.sql.gz"
+_IMG = re.compile(rb"^\('((?:[^'\\]|\\.)*)',(\d+),")
+
+
+def sizes(langs: list[str], out: Path, *, commons: str = COMMONS_IMAGE, log=print) -> None:
+    """Every scan file's size, from the `image` tables MediaWiki publishes —
+    each wiki's own, then Commons' — streamed ONCE for all `langs`: the same
+    numbers the imageinfo API gives (img_size), without its rate limit (429
+    after a few hundred requests, a batch then lost). A file on both keeps the
+    local one, the one MediaWiki serves."""
+    files = {l: json.loads((out / f"{l}.files.json").read_text(encoding="utf-8")) for l in langs}
+    want = {n for fs in files.values() for n in fs}
+    found: dict[str, dict[str, int]] = {l: {} for l in langs}
+    t0 = time.time()
+    for l in langs:
+        for line in _lines(l, "image"):
+            m = _IMG.match(line)
+            if m and (n := _unescape(m.group(1))) in files[l]:
+                found[l][n] = int(m.group(2))
+        log(f"[{l}] local image table: {len(found[l]):,} of {len(files[l]):,} ({time.time() - t0:.0f}s)")
+    rest = want - {n for f in found.values() for n in f}
+    shared: dict[str, int] = {}
+    for line in _dump_lines(commons):
+        m = _IMG.match(line)
+        if m and (n := _unescape(m.group(1))) in rest:
+            shared[n] = int(m.group(2))
+    log(f"commons image table: {len(shared):,} of {len(rest):,} ({time.time() - t0:.0f}s)")
+    for l in langs:
+        for n, f in files[l].items():
+            f["scan_bytes"] = found[l].get(n, shared.get(n))
+        (out / f"{l}.files.json").write_text(json.dumps(files[l], ensure_ascii=False))
+        log(f"[{l}] sizes known: {sum(f['scan_bytes'] is not None for f in files[l].values()):,} of {len(files[l]):,}")
 
 
 def _file_of(page_title: str) -> str:
@@ -281,20 +321,24 @@ def categories(lang: str, out: Path, top: int) -> None:
 
 def main(argv: list[str] | None = None) -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("cmd", choices=("scan", "categories", "breakdown"))
-    ap.add_argument("lang", choices=sorted(PAGE_NS))
+    ap.add_argument("cmd", choices=("scan", "sizes", "categories", "breakdown"))
+    ap.add_argument("lang", choices=sorted(PAGE_NS), nargs="+")
     ap.add_argument("--out", type=Path, required=True)
     ap.add_argument("--no-scans", action="store_true")
     ap.add_argument("--top", type=int, default=80)
     a = ap.parse_args(argv)
-    if a.cmd == "scan":
-        scan(a.lang, a.out, scans=not a.no_scans, log=lambda m: print(m, file=sys.stderr, flush=True))
-    elif a.cmd == "categories":
-        categories(a.lang, a.out, a.top)
-    else:
-        for b, r in sorted(breakdown(a.lang, a.out).items(), key=lambda kv: -kv[1]["text_bytes"]):
-            print(f"{a.lang}\t{b}\t{r['works']}\t{r['text_bytes'] / 1e6:.1f} MB text\t{r['scan_files']} scans"
-                  f"\t{r['scan_bytes'] / 1e9:.2f} GB\t{'; '.join(r['top'])[:150]}")
+    log = lambda m: print(m, file=sys.stderr, flush=True)  # noqa: E731
+    if a.cmd == "sizes":
+        return sizes(a.lang, a.out, log=log)
+    for lang in a.lang:
+        if a.cmd == "scan":
+            scan(lang, a.out, scans=not a.no_scans, log=log)
+        elif a.cmd == "categories":
+            categories(lang, a.out, a.top)
+        else:
+            for b, r in sorted(breakdown(lang, a.out).items(), key=lambda kv: -kv[1]["text_bytes"]):
+                print(f"{lang}\t{b}\t{r['works']}\t{r['text_bytes'] / 1e6:.1f} MB text\t{r['scan_files']} scans"
+                      f"\t{r['scan_bytes'] / 1e9:.2f} GB\t{'; '.join(r['top'])[:150]}")
 
 
 if __name__ == "__main__":
