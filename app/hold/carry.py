@@ -1559,7 +1559,12 @@ def rederive_listed(root, name: str, lines: list[str], *, apply: bool = False, s
     name, _codex = col.resolve(root, name)
     wanted = {ln.strip() for ln in lines if ln.strip()}
     keys = {_unit_key(w) for w in wanted}
-    records = latest_snapshot(root, name) is not None
+    try:
+        records = latest_snapshot(root, name) is not None
+    except CodexError:
+        # no snapshot: the collection holds no records (EUR-Lex5, 2026-11-20:
+        # `latest_snapshot` refuses where there is none, it never answers None)
+        records = False
     manifest = _paths(root, name)["manifest"]
     con = sqlite3.connect(manifest, timeout=60)
     con.row_factory = sqlite3.Row

@@ -14,6 +14,8 @@ deleted; its vectors follow `content_hash` alone. `rederive` is the repair
 where no source snapshot is left: every document derived again."""
 from __future__ import annotations
 
+import shutil
+
 import pytest
 
 from app import db, embeddings, fts, validity
@@ -446,7 +448,10 @@ def test_without_records_a_listed_embedded_document_is_embedded_again(pair, corp
     The check lists unit PATHS from its own mount; they match under the
     slice folder."""
     root, coll, uids, _ids, _rows, _out = _reconciled(pair, corpus_dir, monkeypatch)
-    monkeypatch.setattr(carry, "latest_snapshot", lambda root, name: None)
+    from app.hold import collection as col
+    # the real function, unpatched: where no snapshot is held it refuses
+    # (CodexError), it never answers None — the node's EUR-Lex5, 2026-11-20
+    shutil.rmtree(col.shard_dir_of(root, "re") / "snapshots")
     _set(coll, "UPDATE documents SET embed_done=1")
     _set(coll, "UPDATE documents SET path='/data/collections/re/origin/lang=it/2021/32021R1971' WHERE uid=?", uids[0])
     _set(coll, "UPDATE documents SET path='/data/collections/re/origin/history/lang=de/2015/32015D1735', "
