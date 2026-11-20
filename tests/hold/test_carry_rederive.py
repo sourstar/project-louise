@@ -415,3 +415,34 @@ def test_a_stop_while_the_profile_pauses_the_pool_ends_the_pass_as_a_stop(pair, 
     finally:
         con.close()
     assert not held.get("done"), "stopped, not done"
+
+
+def test_the_units_listed_are_derived_again_and_nothing_else(pair, corpus_dir, monkeypatch, tmp_path):  # noqa: F811
+    """EUR-Lex5, 2026-11-20: the 36,393 units holding an included Formex
+    document, listed by the units check under ANOTHER prefix than the
+    manifest's; their done documents reset, a pending one and one in error
+    left, every other document untouched."""
+    from app.louise import main as louise_main
+    root, coll, uids, ids, rows, out = _reconciled(pair, corpus_dir, monkeypatch)
+    assert len(uids) >= 3
+    con = db.connect(coll)
+    try:
+        for i, u in enumerate(uids):
+            con.execute("UPDATE documents SET path=?, rdf_done=1, fts_done=1, error=NULL WHERE uid=?",
+                        (f"/data/collections/re/origin/lang=it/2015/3201{i}R0001", u))
+        con.execute("UPDATE documents SET error='parked' WHERE uid=?", (uids[1],))
+        con.commit()
+    finally:
+        con.close()
+    listed = tmp_path / "included.txt"
+    listed.write_text(f"/build/origin-x/lang=it/2015/32010R0001\n/build/origin-x/lang=it/2015/32011R0001\n"
+                      f"/build/origin-x/lang=it/1999/31999R9999\n", encoding="utf-8")
+    dry = carry.rederive_units(root, "re", listed, log=quiet)
+    assert (dry["listed"], dry["documents"], dry["reset"], dry["in_error"], dry["not_in_manifest"]) == (3, 2, 1, 1, 1)
+    assert _marks(coll, uids[0])[:2] == (1, 1), "a dry run writes nothing"
+    assert louise_main(["dev", "rederive", "--root", str(root), "re", "--units", str(listed), "--yes"]) == 0
+    assert _marks(coll, uids[0])[:2] == (0, 0), "listed and done: derived again"
+    assert _marks(coll, uids[1])[:2] == (1, 1), "in error: left for its own turn"
+    assert all(_marks(coll, u)[:2] == (1, 1) for u in uids[2:]), "not listed: untouched"
+    assert carry.unit_key("/data/x/history/lang=de/2001/32001R0001/") == "history/lang=de/2001/32001R0001"
+    assert carry.unit_key("/elsewhere/file") is None

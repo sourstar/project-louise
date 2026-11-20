@@ -1523,6 +1523,80 @@ def rederive(root, name: str, *, apply: bool = False, again: bool = False, windo
         con.close()
 
 
+def unit_key(path: str) -> str | None:
+    """A unit's place in its corpus, whatever the prefix it is seen under:
+    from `history/lang=` or `lang=` on (`/data/collections/EUR-Lex5/origin/
+    lang=bg/2013/32013D0410` and `/build/origin-EUR-Lex4/lang=bg/2013/32013D0410`
+    are one unit); None for a path holding neither."""
+    p = str(path).replace("\\", "/").rstrip("/")
+    for mark in ("/history/lang=", "/lang="):
+        i = p.find(mark)
+        if i >= 0:
+            return p[i + 1:]
+    return p if p.startswith(("history/lang=", "lang=")) else None
+
+
+def rederive_units(root, name: str, units: Path, *, apply: bool = False, window: int = 50_000,
+                   log: Callable[[str], None] = print) -> dict[str, Any]:
+    """`rederive` for the documents of the units LISTED in `units` (one path a
+    line, as tools/measure/eurlex_units_check.py `--list-included` writes
+    them; 2026-11-20: EUR-Lex5's 36,393 units holding an included Formex
+    document, whose parse now reads it): their derived marks reset
+    (`REDERIVE_MARKS`) where they were done, so the worker derives each again
+    at the deployed parser. Units match on their place in the corpus
+    (`unit_key`), never on the prefix a container sees them under. A
+    document in error (parked, refused) is left as it is: its own turn comes
+    when its unit changes. A dry run counts; a window of rows a transaction."""
+    from . import collection as col
+    from .derived_check import _begin
+    name, _codex = col.resolve(root, name)
+    want = {k for k in (unit_key(line.strip()) for line in Path(units).read_text(encoding="utf-8").splitlines()
+                        if line.strip()) if k}
+    manifest = _paths(Path(root), name)["manifest"]
+    con = sqlite3.connect(manifest, timeout=60)
+    con.row_factory = sqlite3.Row
+    counts = {"listed": len(want), "documents": 0, "reset": 0, "pending": 0, "in_error": 0}
+    seen: set[str] = set()
+    try:
+        con.execute("PRAGMA journal_mode=WAL")
+        con.execute("PRAGMA busy_timeout=60000")
+        last = 0
+        while True:
+            rows = con.execute("SELECT rowid, uid, path, rdf_done, fts_done, error FROM documents "
+                               "WHERE rowid > ? ORDER BY rowid LIMIT ?", (last, window)).fetchall()
+            if not rows:
+                break
+            last = int(rows[-1]["rowid"])
+            reset: list[str] = []
+            for r in rows:
+                k = unit_key(r["path"] or "")
+                if k is None or k not in want:
+                    continue
+                seen.add(k)
+                counts["documents"] += 1
+                if r["error"] is not None:
+                    counts["in_error"] += 1
+                elif r["rdf_done"] or r["fts_done"]:
+                    reset.append(r["uid"])
+                else:
+                    counts["pending"] += 1
+            counts["reset"] += len(reset)
+            if apply and reset:
+                _begin(con, None)
+                for i in range(0, len(reset), 500):
+                    part = reset[i:i + 500]
+                    con.execute(f"UPDATE documents SET {REDERIVE_MARKS} WHERE uid IN ({','.join('?' * len(part))})",
+                                part)
+                con.execute("COMMIT")
+    finally:
+        con.close()
+    counts["not_in_manifest"] = len(want - seen)
+    log(f"[carry] {name}: {counts['listed']} unit(s) listed, {counts['documents']} document(s) — "
+        f"{'reset' if apply else 'would reset'} {counts['reset']}, already pending {counts['pending']}, "
+        f"in error (left) {counts['in_error']}; {counts['not_in_manifest']} listed unit(s) not in the manifest")
+    return {"collection": name, **counts, "applied": apply}
+
+
 def _reconciled_by_proof(root: Path, to_name: str, to: Codex, src: Codex, proof: dict[str, Any],
                          log: Callable[[str], None]) -> dict[str, Any]:
     """`reconcile`'s answer where the line carry proved the two snapshots'

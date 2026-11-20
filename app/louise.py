@@ -3544,6 +3544,10 @@ def cmd_dev_rederive(a) -> int:
                                    again=a.again, stop=stop, log=say)
         _print({"verify": out})
         return 130 if stop.is_set() else 0
+    if getattr(a, "units", None):
+        # the documents of the units listed (eurlex_units_check --list-included)
+        _print({"rederive": carry_mod.rederive_units(a.root, a.collection, Path(a.units), apply=a.yes, log=say)})
+        return 0
     _print({"rederive": carry_mod.rederive(a.root, a.collection, apply=a.yes, again=a.again, log=say)})
     return 0
 
@@ -8587,6 +8591,9 @@ def build_parser() -> argparse.ArgumentParser:
                         "worker would derive now (app/hold/derived_check.py; on the parse pool, resumable)")
     p.add_argument("--every", type=int, default=1, metavar="N", help="with --verify: one document in N (a sample)")
     p.add_argument("--limit", type=int, default=None, metavar="N", help="with --verify: at most N documents")
+    p.add_argument("--units", default=None, metavar="FILE",
+                   help="only the documents of the units this file lists, one path a line "
+                        "(tools/measure/eurlex_units_check.py --list-included); matched on lang=… on")
     p.set_defaults(fn=cmd_dev_rederive)
     p = dverbs.add_parser("carry", help="a collection's manifest, text index and vector table into a new "
                                         "collection with the same records (amendment A1); writes "
