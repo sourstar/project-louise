@@ -3532,6 +3532,23 @@ def cmd_dev_rederive(a) -> int:
     left, 2026-11-19). A dry run without --yes; its vectors are kept."""
     from app.hold import carry as carry_mod
     say = lambda m: print(m, file=sys.stderr)              # noqa: E731
+    if a.ids:
+        # the documents a list names: a uid or a document's path a line (the
+        # EUR-Lex units check's --list-included); their embedding too where
+        # the collection holds no records
+        if a.verify or a.again or a.every != 1 or a.limit is not None:
+            print("louise dev rederive: --ids derives the listed documents again; it takes no --verify, "
+                  "--again, --every or --limit", file=sys.stderr)
+            return 2
+        import signal
+        import threading
+        stop = threading.Event()
+        for sig in (signal.SIGTERM, signal.SIGINT):
+            signal.signal(sig, lambda *_: stop.set())
+        lines = Path(a.ids).read_text(encoding="utf-8").splitlines()
+        out = carry_mod.rederive_listed(a.root, a.collection, lines, apply=a.yes, stop=stop, log=say)
+        _print({"rederive": out})
+        return 130 if stop.is_set() else 0
     if a.verify:
         # pubmed, wikidata: only what differs from what the worker would derive now
         import signal
@@ -8587,6 +8604,10 @@ def build_parser() -> argparse.ArgumentParser:
                         "worker would derive now (app/hold/derived_check.py; on the parse pool, resumable)")
     p.add_argument("--every", type=int, default=1, metavar="N", help="with --verify: one document in N (a sample)")
     p.add_argument("--limit", type=int, default=None, metavar="N", help="with --verify: at most N documents")
+    p.add_argument("--ids", default=None, metavar="FILE",
+                   help="only the documents FILE lists, a uid or a document's path a line (the EUR-Lex "
+                        "units check's --list-included); their embedding too where the collection holds no "
+                        "records")
     p.set_defaults(fn=cmd_dev_rederive)
     p = dverbs.add_parser("carry", help="a collection's manifest, text index and vector table into a new "
                                         "collection with the same records (amendment A1); writes "
