@@ -46,6 +46,7 @@ FILES="requirements.txt requirements-dev.txt requirements-build.txt constraints.
 TGZ=/tmp/louise-src.tgz
 COMMIT=$(cat /tmp/louise-commit)
 HOLD=/root/supervise/louise.hold
+PASS_BIN=/root/supervise/bin
 say() { printf '\n=== %s %s\n' "$(date -u +%H:%M:%SZ)" "$*"; }
 [ ! -e "$HOLD" ] || { echo "$HOLD exists: Louise is held by the operator; no deploy begins (rm it to deploy)"; exit 1; }
 
@@ -238,6 +239,9 @@ grep -q 'Embed which' "$ROOT/src.new/app/templates/library.html"                
 grep -q '^MEASURED_CPU_WORST: dict\[str, float\] = {' "$ROOT/src.new/app/hold/embedder.py"       # #205: the 16-bit review line
 grep -q '^RUN python -m compileall -q -j 0 app tools' "$ROOT/src.new/Dockerfile"                   # #208: the image compiles its own code
 grep -q '^def _structured_code(code)' "$ROOT/src.new/app/plugins/wikipedia/wikitext.py"           # #219 A, #222 A2: the wikitext parse (IDENTICAL on 100,000 real pages first)
+test -s "$ROOT/src.new/app/worker_guard.py" && grep -q "'app.worker_guard'" "$ROOT/src.new/deploy/truenas-app.yaml"   # #779: the worker run by its guard (the OOM hold)
+grep -q '^def apply(cfg: dict, want: dict' "$ROOT/src.new/deploy/16f/set_commands.py"            # the file's commands reach the live app, in the image's update
+grep -q 'HELD, not restarted' "$ROOT/src.new/deploy/supervise-pass.sh" && test -x "$ROOT/src.new/deploy/release-oom.sh"   # #779: a pass killed for memory is held
 grep -q '^_CITE_SHORT = re.compile' "$ROOT/src.new/app/refs/normattiva.py"                        # #219 B: the citation scan
 grep -q '^SHIP_BATCH_RECORDS = 64' "$ROOT/src.new/app/pack/build.py" && grep -q '^orjson==3.13.0' "$ROOT/src.new/constraints.txt"   # #221 C+F: the records child, orjson
 grep -q '^def set_paused(name: str, paused: bool, \*, by: str = "") -> set\[str\]:' "$ROOT/src.new/app/node_state.py"   # #122 (4ef5c49): a pause records who and when
@@ -367,6 +371,20 @@ echo "$COMMIT" > "$ROOT/src/.deployed-commit"
 NEW_ID=$(docker inspect louise-rag:local --format '{{.Id}}')
 echo "louise-rag:local = $NEW_ID"
 
+say "4b. the pass supervisor and its release where the passes run them ($PASS_BIN)"
+# The passes run /root/supervise/bin/supervise-pass.sh, a copy no deploy updated: #779's
+# memory hold reached it by hand (München, 2026-11-20). Installed by RENAME, never written
+# over: a pass running the one before keeps reading the file it opened (bash reads a
+# script as it runs; lessons-learned.md, 2026-10-31), and the next pass runs this one.
+mkdir -p "$PASS_BIN"
+for f in supervise-pass.sh release-oom.sh; do
+  dst="$PASS_BIN/$f"
+  if cmp -s "$ROOT/src/deploy/$f" "$dst"; then echo "$f unchanged"; continue; fi
+  [ ! -e "$dst" ] || cp -p "$dst" "$dst.pre-$COMMIT"
+  install -m 0755 "$ROOT/src/deploy/$f" "$dst.new.$$" && mv -f "$dst.new.$$" "$dst"
+  echo "$f installed$( [ -e "$dst.pre-$COMMIT" ] && echo ", the one before kept as $f.pre-$COMMIT")"
+done
+
 say "5. restart: stop (wait for the job), LOUISE_PLATFORM_IMAGE, start"
 # the containers are recreated: their logs go with them unless kept (2026-10-23: a
 # mode write between 12:25 and 12:34 could no longer be looked for after the 13:49 deploy)
@@ -492,7 +510,21 @@ done
 for i in $(seq 1 60); do w=$(curl -s -m 5 -o /dev/null -w "%{http_code}" http://127.0.0.1:30042/healthz); [ "$w" = 200 ] && break; sleep 2; done
 echo "web /healthz $w, worker $(docker inspect -f '{{.State.Status}}' ix-louise-rag-worker-1)"; [ "$w" = 200 ]
 [ "$(docker inspect -f '{{.State.Status}}' ix-louise-rag-worker-1)" = running ]
+# the worker runs what deploy/truenas-app.yaml says (set_commands.py, in the image's update)
+want=$(python3 -c "import json, sys, yaml; print(json.dumps(yaml.safe_load(open(sys.argv[1]))['services']['worker']['command'], separators=(',', ':')))" "$ROOT/src/deploy/truenas-app.yaml")
+got=$(docker inspect ix-louise-rag-worker-1 --format '{{json .Config.Cmd}}')
+echo "worker command $got (the file: $want)"; [ "$got" = "$want" ]
 STARTED=1; trap - EXIT INT TERM          # the start is verified: no self-healing past here
+say "6a. the OOM hold sees the worker's memory kills (operator, 2026-11-19)"
+# without the cgroup's counter the guard cannot tell a memory kill from a crash and
+# restarts it like one: the rule would be void while every other check passed
+if docker exec ix-louise-rag-worker-1 grep -q '^oom_kill ' /sys/fs/cgroup/memory.events; then
+  echo "worker cgroup: $(docker exec ix-louise-rag-worker-1 grep '^oom_kill ' /sys/fs/cgroup/memory.events)"
+else
+  echo "the worker's /sys/fs/cgroup/memory.events has no oom_kill: the OOM hold cannot see a memory kill here"; exit 1
+fi
+docker top ix-louise-rag-worker-1 -eo pid,args | grep 'app.worker_guard' >/dev/null && echo "the guard runs the worker" \
+  || { echo "no app.worker_guard process in the worker container"; exit 1; }
 say "6b. the secrets by path, the same identity"
 for c in ix-louise-rag-web-1 ix-louise-rag-worker-1; do
   docker exec "$c" sh -c 'test -z "${ADMIN_TOKEN+x}"' && echo "$c: no ADMIN_TOKEN value in the env" || { echo "$c: ADMIN_TOKEN still in the env"; exit 1; }

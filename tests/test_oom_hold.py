@@ -162,6 +162,35 @@ def test_every_other_end_is_the_worker_own_and_its_restart_policy_acts(tmp_path,
     assert (rc, runs) == (code, 1) and oom_hold.held() is None
 
 
+def test_the_watcher_samples_which_process_holds_what(tmp_path, monkeypatch):
+    cg = _cgroup(tmp_path)
+    proc = tmp_path / "proc"
+    for pid, anon, adj, cmd in ((7, 6_000_000, 0, b"python\0-m\0app.worker\0"),
+                                (9, 4_700_000, 500, b"python\0-c\0from multiprocessing.spawn\0")):
+        d = proc / str(pid)
+        d.mkdir(parents=True)
+        (d / "status").write_text(f"Name:\tpython\nRssAnon:\t{anon} kB\nRssFile:\t10 kB\n")
+        (d / "oom_score_adj").write_text(f"{adj}\n")
+        (d / "cmdline").write_bytes(cmd)
+    (cg / "cgroup.procs").write_text("9\n7\n12\n")       # 12: gone meanwhile
+    got = oom_hold.processes(str(cg), proc=str(proc))
+    assert [(p["pid"], p["rss_anon"], p["oom_score_adj"]) for p in got] == [
+        (7, 6_000_000 * 1024, 0), (9, 4_700_000 * 1024, 500)], "largest first"
+    assert got[0]["cmd"] == "python -m app.worker"
+    assert oom_hold.processes(str(tmp_path / "none")) == []
+    monkeypatch.setattr(oom_hold, "CGROUP_DIR", str(cg))
+    monkeypatch.setattr(oom_hold, "processes", lambda cgroup=None: [{"pid": 7}])
+    stop = threading.Event()
+    t = threading.Thread(target=oom_hold.watch, args=(stop, lambda b, a: None), kwargs={"every_s": 0.01})
+    t.start()
+    end = time.monotonic() + 5
+    while not oom_hold.last_sample() and time.monotonic() < end:
+        time.sleep(0.01)
+    stop.set()
+    t.join(5)
+    assert oom_hold.last_sample()["processes"] == [{"pid": 7}]
+
+
 def test_the_worker_watcher_writes_the_hold_with_what_was_in_flight(monkeypatch):
     from app import parallel, worker
     monkeypatch.setattr(worker, "_oom_held", threading.Event())
@@ -180,6 +209,7 @@ def test_the_worker_watcher_writes_the_hold_with_what_was_in_flight(monkeypatch)
     assert rec["kind"] == "cgroup" and rec["oom_kill"] == [4, 5]
     (part,) = rec["in_flight"]
     assert part["collection"] == "eurlex5" and part["uids"] == [["32021R2017-el", 180_000_000]] and part["bytes"] == 180_000_000
+    assert rec["reserved"] == 0 and "processes_before" in rec and "processes_now" in rec, "which process held what"
     assert stopped == [signal.SIGTERM] and worker.exit_code() == oom_hold.EXIT_HELD
 
 

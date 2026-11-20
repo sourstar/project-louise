@@ -7190,7 +7190,9 @@ def _on_oom_kill(before: int, after: int) -> None:
     stops at its units like a SIGTERM and its guard keeps it down."""
     from . import oom_hold, parallel
     rec = oom_hold.hold("cgroup", {"oom_kill": [before, after], "memory_peak": oom_hold.memory_peak(),
-                                   "in_flight": parallel.in_flight()})
+                                   "in_flight": parallel.in_flight(), "reserved": parallel.reserved(),
+                                   "processes_before": oom_hold.last_sample(),
+                                   "processes_now": oom_hold.processes()})
     print(f"[oom] {oom_hold.describe(rec)}", file=sys.stderr, flush=True)
     _oom_held.set()
     _handle_sigterm(signal.SIGTERM, None)
