@@ -415,7 +415,8 @@ def _note_success() -> None:
             _failures = 0
 
 
-def _note_failure(exc: BaseException, ex: ProcessPoolExecutor | None = None) -> None:
+def _note_failure(exc: BaseException, ex: ProcessPoolExecutor | None = None, *,
+                  killed: bool = False) -> None:
     """A pool that did not answer: rebuild it, and give up on children
     entirely if it keeps happening. Printed, not log_event'd — this module
     has no manifest connection, and the worker's stdout IS the log.
@@ -435,8 +436,13 @@ def _note_failure(exc: BaseException, ex: ProcessPoolExecutor | None = None) -> 
         failures = _failures
         if failures >= max(1, config.PARSE_MAX_FAILURES) and not _disabled:
             _disabled = True
-    print(f"[parse pool] {type(exc).__name__}: computing this batch in-process "
-          f"(failure {failures} of {config.PARSE_MAX_FAILURES})"
+    # what happens to the batch, as it happens (2026-11-20: "computing this
+    # batch in-process" was printed for a batch whose child the kernel had
+    # killed for memory, which `compute` then held, never computing it here)
+    print(f"[parse pool] {type(exc).__name__}: "
+          + ("a child killed for memory: the batch is NOT computed again (the worker is held) "
+             if killed else "computing this batch in-process ")
+          + f"(failure {failures} of {config.PARSE_MAX_FAILURES})"
           + ("; children DISABLED until restart" if _disabled else ""),
           file=sys.stderr, flush=True)
 
@@ -1416,7 +1422,7 @@ def compute(kind: str, collection, rows) -> list[tuple[bool, object]]:
                 _leave(id(f))
         for give_back in lanes:
             give_back()
-        _note_failure(e, ex)
+        _note_failure(e, ex, **({"killed": True} if kill is not None else {}))
         if kill is not None:
             # its rows are not parsed again here, where they would kill the
             # worker itself (2026-11-19: 43 kills in a day)
@@ -1642,7 +1648,8 @@ def compute_pages(kind: str, collection, pages, *, stop=None, say=None):
                         f.cancel()
                         mine -= 1
                         _occupy(name, -1)
-                _note_failure(e, owner.get(fut))
+                from . import oom_hold
+                _note_failure(e, owner.get(fut), **({"killed": True} if oom_hold.killed() is not None else {}))
                 owner.clear()
                 _raise_if_killed(f"{kind} of {getattr(collection, 'name', collection)}", e)
                 # what was not answered, in-process; what finished is kept;
