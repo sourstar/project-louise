@@ -3144,3 +3144,43 @@ over a night, and `hold collection show <it>` says it is held.
 - the give-back lines (MB per part);
 - EUR-Lex5 fts docs/s against 232 documents in 122.5 s;
 - the largest process in the samples.
+
+## 2026-11-20 — a large part in a bounded process of its own; the chunker's encode bounded (app/parallel.py `_LaneTask`, app/chunking_legal.py `_spans`) — BEFORE (deploy pending for the lane)
+
+**BEFORE, the second OOM hold (05cc32a, 21:44:03Z; München).**
+- One kill; the cgroup at 24.0 GB.
+- In flight: one EUR-Lex5 fts row, 32018R0688 el, 128 MB, estimated 3.25 GB (26×).
+- The killed child held 11.16 GB anon, 87× its bytes. It sat beside the main process at 4.21 GB and ten children at 0.86–0.94 GB.
+- #785's admission worked on the estimate; the estimate is not a bound.
+
+**Measured (tools/measure/parse_peak.py, #786; own 16g containers).**
+
+| Act | Size | metadata | chunks | fts |
+|---|---|---|---|---|
+| 32018R0688 el | 128 MB | 2.93 GB (21.8×) | 11.18 GB (83.2×), 54.3 M characters | = chunks |
+| 32021R2017 el | 204 MB | 1.97 GB (9.7×) | 5.18 GB (25.4×), 23.6 M characters | = chunks |
+
+- ~206–219 bytes a character: the peak followed the text, from one encode of a whole section.
+
+**Done, live as 92bba7b since 23:05:08Z (#787).**
+- The chunker's encode is bounded to 200,000 characters.
+- Identical by construction for the pinned tokenizer. Held identical on the node:
+  - EUR-Lex5: the 50 largest, the two acts, 300 sampled;
+  - Normattiva: 282 + 30;
+  - NeuRIS: 271;
+  - legi_F: 30.
+- 0688's chunks rise after it: 2.94 GB (21.9×), against 11.18 GB before.
+- EUR-Lex5 resumed at about 23:3xZ.
+
+**The change (this row).**
+- A large part runs in a process of its own, used once. Its RLIMIT_DATA is the room its admission granted.
+- Past it, the process fails alone:
+  - a MemoryError in Python;
+  - a SIGABRT from Rust: the pinned tokenizer under the limit prints "memory allocation of 67108864 bytes failed" and aborts, measured here.
+- The row is then asked again with twice the room. Past ⅔ of the limit it is the document's TooLarge error.
+- A cgroup kill is still the hold's.
+
+**AFTER.** To be completed after the deploy:
+- kills over 24 h;
+- MemoryWait and TooLarge from the lane, per day;
+- the lane's spawn cost per large row, against its parse time.
