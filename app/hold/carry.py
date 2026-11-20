@@ -1523,6 +1523,84 @@ def rederive(root, name: str, *, apply: bool = False, again: bool = False, windo
         con.close()
 
 
+def _unit_key(path: str) -> str:
+    """A document's path as it lies under its slice folder (`lang=<code>/…`,
+    `history/lang=<code>/…`), else the path itself: the same unit named from
+    another mount (the worker's /data, a pass's /corpus) is the same key."""
+    parts = Path(os.path.normpath(path)).parts
+    for i, part in enumerate(parts):
+        if part.startswith("lang="):
+            start = i - 1 if i and parts[i - 1] == "history" else i
+            return "/".join(parts[start:])
+    return os.path.normpath(path)
+
+
+def rederive_listed(root, name: str, lines: list[str], *, apply: bool = False, stop=None,
+                    log: Callable[[str], None] = print) -> dict[str, Any]:
+    """THE DOCUMENTS A LIST NAMES derived again (2026-11-20, EUR-Lex5: the
+    36,393 units the units check lists as holding an included Formex document,
+    `--list-included`, whose text parser 5 now reads where it stands — Annex I
+    of 32021R1971, 0 to 20.6 M characters — with no parser bump, RULE 1).
+    A line is a uid or a document's path (the check's unit paths; matched
+    under its slice folder, `_unit_key`, whatever the mount).
+
+    Each document's rdf/fts marks are reset, as `rederive` does. Where the
+    collection holds NO RECORDS its vectors are its own chunks' (EUR-Lex5
+    embeds four languages from the worker's cut), so an embedded document's
+    `embed_done` is reset too, and the embed stage replaces its vectors
+    (`embeddings.upsert_book`: delete, then insert) — what discovery does to
+    a document whose bytes changed. Where it holds records, its vectors are
+    the records' and stay. Marks only, as `derived_check.verify`: a document
+    stays in search until its stages replace its rows. Safe to run again —
+    it resets again; the dry run counts."""
+    from . import collection as col
+    from .derived_check import _begin
+    root = Path(root)
+    name, _codex = col.resolve(root, name)
+    wanted = {ln.strip() for ln in lines if ln.strip()}
+    keys = {_unit_key(w) for w in wanted}
+    records = latest_snapshot(root, name) is not None
+    manifest = _paths(root, name)["manifest"]
+    con = sqlite3.connect(manifest, timeout=60)
+    con.row_factory = sqlite3.Row
+    try:
+        con.execute("PRAGMA journal_mode=WAL")
+        hit: list[str] = []
+        named: set[str] = set()
+        embedded = 0
+        # one walk of the manifest: the list is matched in memory, never a
+        # `path IN (…)` per window, which no index answers
+        for row in con.execute("SELECT uid, path, embed_done FROM documents"):
+            k = _unit_key(row["path"]) if row["path"] else None
+            if row["uid"] in wanted or (k is not None and k in keys):
+                hit.append(row["uid"])
+                named.add(row["uid"] if row["uid"] in wanted else k)
+                embedded += row["embed_done"] == 1
+        unmatched = len(wanted) - len({w for w in wanted if w in named or _unit_key(w) in named})
+        marks = REDERIVE_MARKS + ("" if records else
+                                  ", embed_done=CASE WHEN embed_done=1 THEN 0 ELSE embed_done END")
+        out = {"collection": name, "listed": len(wanted), "documents": len(hit), "unmatched": unmatched,
+               "embedded": embedded, "vectors": "kept: the records'" if records else
+               "embedded again: the collection holds no records", "marks": marks}
+        if not apply:
+            return {**out, "would_reset": len(hit)}
+        reset = 0
+        for i in range(0, len(hit), 500):
+            if stop is not None and stop.is_set():
+                break
+            part = hit[i:i + 500]
+            _begin(con, stop)
+            reset += con.execute(f"UPDATE documents SET {marks} WHERE uid IN ({','.join('?' * len(part))})",
+                                 part).rowcount
+            con.execute("COMMIT")
+        log(f"[carry] {name}: {reset} listed document(s) to derive again at its parser"
+            + ("; its vectors kept (the records')" if records else
+               f"; {embedded} embedded one(s) embedded again (no records: its vectors are its chunks')"))
+        return {**out, "reset": reset, "done": reset == len(hit)}
+    finally:
+        con.close()
+
+
 def _reconciled_by_proof(root: Path, to_name: str, to: Codex, src: Codex, proof: dict[str, Any],
                          log: Callable[[str], None]) -> dict[str, Any]:
     """`reconcile`'s answer where the line carry proved the two snapshots'

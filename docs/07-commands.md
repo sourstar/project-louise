@@ -433,13 +433,16 @@ louise dev                                                             operator 
                                                                        chunks > 0) that hold no vector — never embedded again, missing from dense search — with --apply marked not
                                                                        embedded (embed_done 0, embed_version 0), guarded `embed_done = 1` and the version read; its own cursor
                                                                        (added 2026-11-07)
-  rederive <collection> [--yes] [--again] [--verify [--every N] [--limit N]]
+  rederive <collection> [--yes] [--again] [--verify [--every N] [--limit N]] [--ids FILE]
                                                                        every document's derived marks reset, so the worker parses each again at the collection's parser
                                                                        and writes its validity, catalogue and text-index rows again, its vectors kept (app/hold/carry.py;
                                                                        the A1c repair where no source snapshot is left); --verify instead resets only the documents whose
                                                                        chunks, fields or validity row differ from what the worker would derive now, strays deleted first
                                                                        (app/hold/derived_check.py; on the parse pool, resumable; --every N one document in N, --limit N
-                                                                       at most N); --again starts over once one finished; a dry run without --yes; writes (added 2026-11-19)
+                                                                       at most N); --again starts over once one finished; --ids FILE instead the documents FILE lists, a
+                                                                       uid or a document's path a line (the EUR-Lex units check's --list-included), their embedding
+                                                                       reset too where the collection holds no records (its vectors are its chunks'; added 2026-11-20);
+                                                                       a dry run without --yes; writes (added 2026-11-19)
   reindex <collection> --ids FILE [--yes]                              the documents FILE lists (a uid a line) queued for the text-index stage again — fts_done = 0, embedding untouched; for rows indexed under an earlier parse (`index-drift --ids-out` lists them); writes (added 2026-10-25)
   index-drift <collection> [--shards S,…] [--cut-all] [--sample F] [--seed HEX] [--snapshot ID] [--ids-out FILE]
                                                                        the documents whose SERVED state disagrees with the latest held snapshot's records (added
