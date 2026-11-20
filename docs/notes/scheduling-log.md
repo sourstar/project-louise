@@ -3121,3 +3121,26 @@ over a night, and `hold collection show <it>` says it is held.
 - MemoryWait deferrals per hour;
 - EUR-Lex5 fts docs/s against the 232 documents in 122.5 s above;
 - the largest process in the samples.
+
+## 2026-11-20 — the parse pool admits by the cgroup's measured room (app/parallel.py `_reserve`) — BEFORE (deploy pending)
+
+**BEFORE, the first OOM hold (ba84645, #781's budget live; München, oom-hold.json).**
+- Held since 14:42:50Z. The kernel killed two parse children, 2.9 and 2.5 GB anon RSS, oom_score_adj 500. The cgroup's peak was 24.0 GB; memory.events since the deploy: oom 4, oom_kill 2.
+- In flight: 7 fts parts, all EUR-Lex5, 4 rows each (mostly ~17 MB acts), 280 MB of source. Estimates 0.59–1.7 GB each, 7.12 GB in all, inside the 16 GB budget.
+- The sample 7 s before: the main process 4.12 GB, and 11 children at 1.88, 1.66, 1.64, 1.56, 1.51, 1.44, 1.08, 1.08, 1.04, 0.84 and 0.69 GB. That is ~18.5 GB, with 11 children for 7 parts.
+- Reading: #781's budget counted only the estimates in flight. The main process and what each child KEEPS between parts (their plugin caches: 12 idle children held 10.8 GiB on 2026-10-28, `release_idle`) were outside it. The two killed held their keep plus their part.
+
+**The change.**
+- A part is admitted only where the cgroup's working set (current less inactive_file), plus every estimate in flight, plus its own, stays within 85 % of the limit (20.4 GB of 24 GiB).
+  - It is never exempted, even with nothing reserved. Where it does not fit, the part waits at most 120 s, then is deferred.
+  - Estimates in flight are counted whole, so what of them is already resident counts twice. This is the safe side; the cost is fewer heavy parts at once when the children are large.
+- A batch that deferred a part for room stops the pool's children (`recycle_for_room`). It does so only where no other batch, of another collection or of another stage of the same one, is inside the pool. The next batch starts fresh ones.
+- A batch of ONE row whose estimate passes 256 MB goes through the pool's admission. Before, it was parsed in the main process unmeasured.
+- A child that ran a part with an estimate, and holds more than 512 MB after it, collects and calls glibc's `malloc_trim`. Each give-back of ≥ 64 MB is logged ("[parse pool] child … gave back …"), so whether a keep is free heap or held caches is read off the log, not assumed.
+
+**AFTER.** To be completed after the deploy and the release, EUR-Lex5 running:
+- kills over 24 h;
+- deferrals for room per hour, and the recycles' lines;
+- the give-back lines (MB per part);
+- EUR-Lex5 fts docs/s against 232 documents in 122.5 s;
+- the largest process in the samples.
