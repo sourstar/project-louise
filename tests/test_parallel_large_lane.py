@@ -285,3 +285,105 @@ def test_a_parse_child_goes_first_for_the_oom_killer():
     r = subprocess.run([sys.executable, "-c", code],
                        capture_output=True, text=True, timeout=60, check=False)
     assert r.stdout.strip() == str(parallel.CHILD_OOM_SCORE_ADJ) == "500", r.stderr
+
+
+# --- the measured side (2026-11-20, the first OOM hold) ---------------------------
+#
+# 14:42:50Z: the estimates in flight were 7.12 GB, inside the 16 GB budget,
+# while the cgroup already held 18.5 GB — the main process 4.12 GB and eleven
+# children at 0.69-1.88 GB, four with nothing in flight. Two children killed
+# at 2.5 and 2.9 GB: their keep plus their part.
+
+GB = 2 ** 30
+
+
+def _cgroup(monkeypatch, used: int, limit: int = 24 * GB):
+    from app import scheduled_checks
+    monkeypatch.setattr(scheduled_checks, "cgroup_memory", lambda cgroup=None: (limit, used))
+
+
+def test_a_part_is_admitted_only_within_the_measured_room(fake_compute, monkeypatch):
+    pool = _HeldPool()
+    monkeypatch.setattr(parallel, "pool", lambda: pool)
+    monkeypatch.setattr(parallel, "pool_memory", lambda: 16 * GB)
+    monkeypatch.setattr(parallel, "LARGE_WAIT_S", 0.05)
+    monkeypatch.setattr(parallel, "_in_process", lambda *a: pytest.fail("parsed in the main process"))
+    _cgroup(monkeypatch, used=int(19.5 * GB))            # 19.5 + 1.56 > 0.85 x 24 GiB
+    got = parallel.compute("fts", _coll(), _rows([MID]))
+    assert got[0][0] is False and got[0][1]["type"] == "MemoryWait", "no room: deferred"
+    assert pool.reserved_at_submit == [] and parallel.reserved() == 0, "nothing started"
+    _cgroup(monkeypatch, used=10 * GB)
+    rows = _rows([MID] * 6)
+    assert parallel.compute("fts", _coll(), rows) == [(True, r["uid"]) for r in rows], "room: admitted"
+    # 10 GB resident: 0.85 x 24 GiB leaves room for four 1.5 GB estimates in flight at once
+    assert max(pool.reserved_at_submit) <= 0.85 * 24 * GB - 10 * GB
+
+
+def test_the_room_is_never_exempted_where_nothing_is_reserved():
+    """The budget grants a part alone; the measured room does not: a pool
+    whose idle children hold the room defers it."""
+    assert parallel.reserved() == 0
+    import app.scheduled_checks as sc
+    real = sc.cgroup_memory
+    sc.cgroup_memory = lambda cgroup=None: (24 * GB, 23 * GB)
+    try:
+        assert parallel._reserve(K * MID, wait=False, until=0) is False
+    finally:
+        sc.cgroup_memory = real
+    assert parallel.reserved() == 0
+
+
+def test_a_deferral_for_room_stops_the_childrens_keep_only_when_alone(monkeypatch):
+    stopped: list = []
+    monkeypatch.setattr(parallel, "discard", lambda ex, *a, **k: stopped.append(ex))
+    monkeypatch.setattr(parallel, "_pool", "the pool")
+    monkeypatch.setattr(parallel, "_pool_size", 11)
+    monkeypatch.setattr(parallel, "_wanting", {"eurlex": 1, "pubmed": 1})
+    monkeypatch.setattr(parallel, "_held", {"pubmed": 3})
+    assert parallel.recycle_for_room("eurlex") == 0 and stopped == [], "pubmed is inside: kept"
+    monkeypatch.setattr(parallel, "_wanting", {"eurlex": 2})
+    monkeypatch.setattr(parallel, "_held", {"eurlex": 2})
+    assert parallel.recycle_for_room("eurlex", own_slots=0) == 0, "another eurlex stage is inside: kept"
+    monkeypatch.setattr(parallel, "_wanting", {"eurlex": 1})
+    monkeypatch.setattr(parallel, "_held", {})
+    assert parallel.recycle_for_room("eurlex") == 11 and stopped == ["the pool"] and parallel._pool is None
+
+
+def test_the_batch_that_was_short_of_room_stops_the_keep(fake_compute, monkeypatch):
+    pool = _HeldPool()
+    monkeypatch.setattr(parallel, "pool", lambda: pool)
+    monkeypatch.setattr(parallel, "pool_memory", lambda: 16 * GB)
+    monkeypatch.setattr(parallel, "LARGE_WAIT_S", 0.05)
+    _cgroup(monkeypatch, used=23 * GB)
+    asked: list = []
+    monkeypatch.setattr(parallel, "recycle_for_room", lambda name, own_slots=0: asked.append((name, own_slots)))
+    parallel.compute("fts", _coll(), _rows([MID]))
+    assert asked == [("eurlex", 0)]
+    asked.clear()
+    _cgroup(monkeypatch, used=2 * GB)
+    parallel.compute("fts", _coll(), _rows([MID]))
+    assert asked == [], "room: nothing stopped"
+
+
+def test_a_heavy_part_gives_back_what_it_freed_and_says_it(monkeypatch, capsys):
+    seq = iter([900 * 2 ** 20, 200 * 2 ** 20])
+    monkeypatch.setattr(parallel, "_rss_anon", lambda: next(seq))
+    monkeypatch.setattr(parallel, "_compute", lambda kind, c, rows: [(True, r["uid"]) for r in rows])
+    assert parallel._compute_heavy("fts", _coll(), _rows([MID])) == [(True, "e:0")]
+    assert "gave back 700 MB after a fts part of 60.0 MB" in capsys.readouterr().err
+    monkeypatch.setattr(parallel, "_rss_anon", lambda: 100 * 2 ** 20)
+    assert parallel._give_back() is None, "below the threshold: nothing collected"
+
+
+def test_only_a_part_with_an_estimate_runs_the_give_back(fake_compute, monkeypatch):
+    seen: list = []
+
+    class P(_HeldPool):
+        def submit(self, fn, kind, collection, part):
+            seen.append(fn.__name__)
+            return super().submit(fn, kind, collection, part)
+    monkeypatch.setattr(parallel, "pool", lambda: P())
+    monkeypatch.setattr(parallel, "pool_memory", lambda: None)
+    parallel.compute("fts", _coll(), _rows([MID, MID]))
+    parallel.compute("fts", _coll(k=False), _rows([MID, MID]))
+    assert set(seen[:2]) == {"_compute_heavy"} and set(seen[2:]) == {"compute"}, seen
