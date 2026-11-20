@@ -190,12 +190,47 @@ def killed(cgroup: str | None = None) -> tuple[int, int] | None:
 
 
 def _reset() -> None:
-    """Tests: forget the baseline, the handler and the kill seen."""
+    """Tests: forget the baseline, the handler, the kill seen and the sample."""
     global _handler, _fired
     with _lock:
         _base.clear()
         _handler = None
         _fired = None
+        _sample.clear()
+
+
+#: the processes sampled last, for a hold: which one held what (2026-11-20:
+#: nine kills, and which were the main process and which its children was
+#: read off the kernel's log by hand)
+_sample: dict[str, Any] = {}
+
+
+def processes(cgroup: str | None = None, *, proc: str = "/proc") -> list[dict[str, Any]]:
+    """Every process of the cgroup (`cgroup.procs`) with its anonymous memory
+    (RssAnon), its `oom_score_adj` and its command line's first words,
+    largest first; [] where the cgroup does not list them."""
+    try:
+        pids = [int(x) for x in Path(cgroup or CGROUP_DIR, "cgroup.procs").read_text(encoding="ascii").split()]
+    except (OSError, ValueError):
+        return []
+    out = []
+    for pid in pids:
+        try:
+            status = Path(proc, str(pid), "status").read_text(encoding="ascii", errors="replace")
+            anon = next((int(line.split()[1]) * 1024 for line in status.splitlines()
+                         if line.startswith("RssAnon:")), None)
+            adj = int(Path(proc, str(pid), "oom_score_adj").read_text(encoding="ascii").strip())
+            cmd = Path(proc, str(pid), "cmdline").read_bytes().split(b"\0")
+        except (OSError, ValueError):
+            continue                        # gone meanwhile
+        out.append({"pid": pid, "rss_anon": anon, "oom_score_adj": adj,
+                    "cmd": " ".join(c.decode("utf-8", "replace") for c in cmd[:4] if c)[:120]})
+    return sorted(out, key=lambda p: -(p["rss_anon"] or 0))
+
+
+def last_sample() -> dict[str, Any]:
+    """The watcher's last sample: when, and `processes()` then."""
+    return dict(_sample)
 
 
 def watch(stop, handler: Callable[[int, int], None], *, every_s: float = 5.0,
@@ -203,10 +238,14 @@ def watch(stop, handler: Callable[[int, int], None], *, every_s: float = 5.0,
     """The worker's watcher thread: `handler(before, after)` the first time
     the cgroup's `oom_kill` rises past this process's baseline (`killed`,
     which a pool asks too, at a child's death); returns then, or at `stop`.
-    Where the counter does not read, it watches nothing."""
+    Every `every_s` it samples the cgroup's processes (`processes`), so the
+    hold says which held what just before the kill. Where the counter does
+    not read, it watches nothing."""
     on_kill(handler)
     if baseline(cgroup) is None:
         return
     while not stop.wait(every_s):
         if killed(cgroup) is not None:
             return
+        _sample.update({"at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                        "processes": processes(cgroup)})
