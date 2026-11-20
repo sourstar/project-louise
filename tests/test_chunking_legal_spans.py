@@ -153,3 +153,20 @@ def test_the_identity_tool_compares_the_two_reads(monkeypatch):
     assert seen == [cl.SPAN_CHARS, 10 ** 15] and got["identical"] is False and got["first_difference"] == 0
     monkeypatch.setattr(parallel, "_compute", lambda kind, c, rows: [(True, [{"id": "a", "chapter": "", "text": "t"}])])
     assert lci.compare(object(), {"uid": "eurlex:1", "size": 10})["identical"] is True
+
+
+def test_the_identity_samples_only_documents_with_text(tmp_path):
+    import sqlite3
+    from types import SimpleNamespace
+
+    from tools.measure import legal_chunk_identity as lci
+    con = sqlite3.connect(tmp_path / "m.sqlite")
+    con.row_factory = sqlite3.Row
+    con.execute("CREATE TABLE documents(uid TEXT, size INT, error TEXT, in_scope INT, chunks INT)")
+    con.executemany("INSERT INTO documents VALUES(?,?,?,?,?)", [
+        ("n:1", 900, None, 1, 0), ("n:2", 800, None, 1, 4), ("n:3", 700, None, 0, 4),
+        ("n:4", 600, "parked", 1, 4), ("n:5", 500, None, 1, None), ("n:6", 400, None, 1, 2)])
+    largest = lci._rows(con, SimpleNamespace(uids=None, largest=5, every=1, limit=None))
+    assert [r["uid"] for r in largest] == ["n:2", "n:6"], "no textless, out-of-scope or parked row"
+    every = lci._rows(con, SimpleNamespace(uids=None, largest=None, every=1, limit=None))
+    assert [r["uid"] for r in every] == ["n:2", "n:6"]

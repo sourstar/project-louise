@@ -7,7 +7,9 @@ deployed) and once in one encode (SPAN_CHARS past any text: as until
     python -m tools.measure.legal_chunk_identity <collection> [--uids FILE] [--largest N] [--every N] [--limit N]
 
 `--uids`: one uid a line; `--largest N`: the N largest documents by size;
-`--every N`: one document in N by rowid. Read-only. RUN IT IN A CONTAINER
+`--every N`: one document in N by rowid — both among the documents the
+worker has cut (in scope, chunks > 0); a document that cuts to nothing is
+reported with its 0 chunks, so a sample of them is seen to prove nothing. Read-only. RUN IT IN A CONTAINER
 OF ITS OWN with a memory cap: the whole encode is the one that held 11.18 GB
 for 32018R0688 el. One JSON line a document, then the totals; exit 1 when
 any document differs.
@@ -59,10 +61,13 @@ def _rows(con, a) -> list[dict]:
         uids = [u.strip() for u in Path(a.uids).read_text(encoding="utf-8").splitlines() if u.strip()]
         rows = [con.execute("SELECT * FROM documents WHERE uid=?", (u,)).fetchone() for u in uids]
         return [dict(r) for r in rows if r is not None]
+    # only documents the worker has cut (2026-11-20: Normattiva's sample by
+    # rowid alone was rows with no text, 0 chunks each — it proved nothing)
+    has_text = "error IS NULL AND in_scope = 1 AND COALESCE(chunks, 0) > 0"
     if a.largest:
-        return [dict(r) for r in con.execute("SELECT * FROM documents WHERE error IS NULL "
+        return [dict(r) for r in con.execute(f"SELECT * FROM documents WHERE {has_text} "
                                              "ORDER BY size DESC LIMIT ?", (a.largest,))]
-    return [dict(r) for r in con.execute("SELECT * FROM documents WHERE error IS NULL AND rowid % ? = 0 "
+    return [dict(r) for r in con.execute(f"SELECT * FROM documents WHERE {has_text} AND rowid % ? = 0 "
                                          "ORDER BY rowid LIMIT ?", (max(1, a.every), a.limit or -1))]
 
 

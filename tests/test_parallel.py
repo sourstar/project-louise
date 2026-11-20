@@ -1261,3 +1261,14 @@ def test_a_batch_whose_child_was_killed_for_memory_is_not_parsed_in_the_worker(i
     assert flight and {f["collection"] for f in flight} == {"g"}, "the hold names what was in flight"
     assert parallel.in_flight() == [], "and nothing is left registered"
     parallel.reset_failures()
+
+
+def test_a_lane_task_in_its_own_process_answers_as_the_pool(isolated_config, tmp_path, corpus_dir):
+    """2026-11-20: a large part runs in a process of its own (`_LaneTask`,
+    spawned, used once, its data limit the room granted); what it computes
+    is what the pool computes."""
+    c, rows = _gutenberg(tmp_path, corpus_dir)
+    row = rows[0]
+    want = parallel._compute("chunks", c, [row])
+    t = parallel._LaneTask("chunks", c, [row], 2 << 30)
+    assert t.result(timeout=300) == want
