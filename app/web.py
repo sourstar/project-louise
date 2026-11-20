@@ -445,14 +445,13 @@ RESULT_LANGUAGES = (
 
 @ask_router.get("/ask", response_class=HTMLResponse)
 def ask_page(request: Request):
-    from . import auth, voice
+    from . import voice
     return TEMPLATES.TemplateResponse(request, "ask.html", {
         "active": "ask", "collections": collections_mod.load_public(), "result": None,
         "annotations": _ask_annotations(),
         # the microphone and the speaker, where the node sets their models
-        # (app/voice.py `offered`): a voice not offered has no button — for a
-        # reader who is not an admin, one with no synthetic voice set
-        "voice": voice.offered(admin=auth.admin(getattr(request.state, "viewer", None))),
+        # (app/voice.py `offered`): a voice not offered has no button
+        "voice": voice.offered(),
         "result_languages": RESULT_LANGUAGES,
         "default_results": retrieval.DEFAULT_RESULTS,
         "default_rerank_depth": retrieval.RERANK_TOP_N,
@@ -461,14 +460,13 @@ def ask_page(request: Request):
 
 
 @ask_router.get("/ask/voice")
-def ask_voice(request: Request):
+def ask_voice():
     """What the Ask page offers of voice — `input` (the microphone), `output`
     (the answer read aloud) — each `available` or not, and `why` not in the
     operator's words with the command that supplies it (app/voice.py). The
-    page only hides a button; the models are the node's, never asked. A
-    reader who is not an admin is read to in a synthetic voice only."""
-    from . import auth, voice
-    return voice.offered(admin=auth.admin(getattr(request.state, "viewer", None)))
+    page only hides a button; the models are the node's, never asked."""
+    from . import voice
+    return voice.offered()
 
 
 @ask_router.get("/ask/voices")
@@ -478,8 +476,7 @@ def ask_voices(request: Request):
     chose none, and the voice the reader's account keeps (app/voice.py
     `voices`; operator, 2026-11-11)."""
     from . import auth, voice
-    v = getattr(request.state, "viewer", None)
-    return voice.voices(auth.account(v), admin=auth.admin(v))
+    return voice.voices(auth.account(getattr(request.state, "viewer", None)))
 
 
 #: what a recording's report may say (app/static/voice.js `micInfo`), and its size
@@ -527,14 +524,11 @@ def ask_voice_choose(request: Request, body: AskVoiceBody):
     "Shall a user account can choose it?"): every browser and client of the
     account hears it. 409 without an account — the browser keeps it."""
     from . import auth, users, voice
-    v = getattr(request.state, "viewer", None)
-    name = auth.account(v)
+    name = auth.account(getattr(request.state, "viewer", None))
     if not name:
         raise HTTPException(409, "no account: this browser keeps the voice")
     try:
-        return voice.choose(name, body.voice, admin=auth.admin(v))
-    except voice.NotAllowed as e:
-        raise HTTPException(403, str(e)) from None
+        return voice.choose(name, body.voice)
     except (ValueError, users.UserError) as e:
         raise HTTPException(400, str(e)) from None
 
@@ -4332,9 +4326,7 @@ MODEL_FIELDS = (
     ("stt_model", "speech to text", "platform.toml [speech]"),
     ("vad_model", "voice activity", "platform.toml [speech]"),
     ("tts_model", "text to speech", "platform.toml [speech]"),
-    ("tts_voice", "text to speech: an admin's voice", "platform.toml [speech]"),
-    ("synthetic_voices", "text to speech: everyone else's, by language (it=…, en=…)",
-     "platform.toml [speech]"),
+    ("tts_voice", "text to speech: voice", "platform.toml [speech]"),
 )
 
 
