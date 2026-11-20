@@ -242,6 +242,7 @@ grep -q '^def _structured_code(code)' "$ROOT/src.new/app/plugins/wikipedia/wikit
 test -s "$ROOT/src.new/app/worker_guard.py" && grep -q "'app.worker_guard'" "$ROOT/src.new/deploy/truenas-app.yaml"   # #779: the worker run by its guard (the OOM hold)
 grep -q '^def apply(cfg: dict, want: dict' "$ROOT/src.new/deploy/16f/set_commands.py"            # the file's commands reach the live app, in the image's update
 grep -q 'HELD, not restarted' "$ROOT/src.new/deploy/supervise-pass.sh" && test -x "$ROOT/src.new/deploy/release-oom.sh"   # #779: a pass killed for memory is held
+grep -q '^def spans_are_exact(tok: Any) -> bool:' "$ROOT/src.new/app/chunking_legal.py"   # the legal chunker reads a text in bounded spans
 grep -q '^_CITE_SHORT = re.compile' "$ROOT/src.new/app/refs/normattiva.py"                        # #219 B: the citation scan
 grep -q '^SHIP_BATCH_RECORDS = 64' "$ROOT/src.new/app/pack/build.py" && grep -q '^orjson==3.13.0' "$ROOT/src.new/constraints.txt"   # #221 C+F: the records child, orjson
 grep -q '^def set_paused(name: str, paused: bool, \*, by: str = "") -> set\[str\]:' "$ROOT/src.new/app/node_state.py"   # #122 (4ef5c49): a pause records who and when
@@ -349,6 +350,10 @@ print('the live platform.toml, read by the staged code: profile now', np.active(
 docker run --rm -v "$ROOT/src.new:/srv" -w /srv -e PYTHONPATH=/srv \
   louise-rag:staged timeout -s KILL 900 python -m pytest -q -p no:cacheprovider \
     tests/vega/ tests/test_localai_backends.py
+# the legal chunker's bounded encode, byte for byte the whole one, against the image's OWN pinned
+# tokenizer (2026-11-20, the second OOM hold): required here, never skipped
+docker run --rm -v "$ROOT/src.new:/srv" -w /srv -e PYTHONPATH=/srv -e LOUISE_REQUIRE_PINNED_TOKENIZER=1 \
+  louise-rag:staged timeout -s KILL 900 python -m pytest -q -p no:cacheprovider tests/test_chunking_legal_spans.py
 find "$ROOT/src.new" -name '__pycache__' -type d -prune -exec rm -rf {} +
 rm -rf "$ROOT/src.new/tests/fixtures/pubmed-mini/.pack"
 
