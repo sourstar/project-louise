@@ -525,11 +525,9 @@
     return out;
   }
 
-  // THE READER'S VOICE (operator, 2026-11-11: a configuration tab to choose
-  // the voice): for an admin, one of the node's recorded voices (GET
-  // /ask/voices), kept in this browser; none kept, the node's own. Any other
-  // reader is given none to choose (operator, 2026-11-16): the node reads to
-  // them in the synthetic voice of the answer's language. A voice the node no longer holds
+  // THE READER'S VOICE (operator, 2026-11-11: "choose philippe or
+  // valentina"): one of the node's recorded voices (GET /ask/voices), kept in
+  // this browser; none kept, the node's own. A voice the node no longer holds
   // is not sent (and the node would speak its own anyway, app/speech.py).
   // A READER WITH AN ACCOUNT (operator, 2026-11-11: "Shall a user account
   // can choose it?") keeps it with the account (POST /ask/voice,
