@@ -3096,3 +3096,28 @@ over a night, and `hold collection show <it>` says it is held.
 - the kill count over 24 h with EUR-Lex5 running;
 - EUR-Lex5 rdf/fts docs/s against today's 18/s;
 - the lane's deferrals per hour.
+
+**AFTER, first night (d3f6d87, live since 2026-11-19 22:14Z; München).**
+- Nine OOM kills in the worker container, 03:39Z to 04:08Z; the worker restarted at 04:08:02Z (RestartCount 3).
+- The killed processes' anon-rss: 6.16, 5.39, 5.27, 7.22, 6.89, 4.71, 4.50, 4.50 and 8.63 GB.
+- Just before, EUR-Lex5's fts alone, every other collection idle:
+  - 232 documents / 3,197 chunks in one commit, 122.5 s (parse 120.1, parsed ahead);
+  - 9 documents / 142 chunks, 179.4 s (parse 140.0).
+- The lane did what it was built for, but it counts one row of ≥ ~82 MB. The 40–82 MB acts went through the ordinary pool, several to a part, eleven slots of them, and a child holds every result of its part beside the parse in hand.
+
+## 2026-11-20 — the parse pool's memory: parts cut by estimate, one budget (app/parallel.py `compute`) — BEFORE (deploy pending)
+
+**The change** (the commit after #780):
+- A part of a plugin that declares `PARSE_PEAK_PER_BYTE` is cut where its rows' estimates sum past 2 GiB (`PART_PEAK_BYTES`). Its estimate is the sum of its rows', which covers the results a child keeps.
+- Every part in flight reserves its estimate from one budget per process, ⅔ of the cgroup's limit (16 GiB under the worker's 24 GiB).
+- A part that does not fit waits for parts in flight to finish: at once where its batch has some, at most 120 s where it has none. It is then deferred (`MemoryWait`), never parsed in the main process.
+- A parse child's `oom_score_adj` is 500, so the kernel takes a child before the main process. Three of the nine kills took the main process.
+- The OOM hold records the watcher's last 5 s sample of the cgroup's processes (RssAnon, oom_score_adj, command), the sample at the kill, and the reservation in flight.
+- Measured, not assumed: glibc gives lxml's memory back after a 64 MB parse (RssAnon 391 MB at the peak, 73 MB after, with or without `malloc_trim`). A child's high-water mark is not what it keeps.
+- Nothing moves for a plugin that declares no peak, or where no cgroup limit reads.
+
+**AFTER.** To be completed after the deploy, EUR-Lex5 running:
+- kills over 24 h;
+- MemoryWait deferrals per hour;
+- EUR-Lex5 fts docs/s against the 232 documents in 122.5 s above;
+- the largest process in the samples.

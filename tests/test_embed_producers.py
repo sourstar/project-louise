@@ -125,10 +125,19 @@ def test_one_collections_slow_stream_never_holds_anothers_encoder(tmp_path, monk
     monkeypatch.setattr(worker, "_producer_step", step)
     worker._sync_embed_producers([slow, fast])
     try:
-        deadline = time.monotonic() + 5
-        while calls["fast"] < 5 and time.monotonic() < deadline:
+        # FROM THE MOMENT the slow stream is held, the fast one goes on. Not
+        # a fixed window from the start: on the node's deploy run (8c56161,
+        # 2026-11-20, a busy host) the slow thread could take its first step
+        # after the fast one had taken five, and `slow == 1` failed although
+        # nothing waited on anything. Bounded generously, never timed.
+        deadline = time.monotonic() + 30
+        while calls["slow"] < 1 and time.monotonic() < deadline:
             time.sleep(0.01)
-        assert calls["slow"] == 1 and calls["fast"] >= 5, calls
+        assert calls["slow"] == 1, calls
+        held_at = calls["fast"]
+        while calls["fast"] < held_at + 5 and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert calls["slow"] == 1 and calls["fast"] >= held_at + 5, (held_at, calls)
     finally:
         release.set()
         threads = [t for t, _ in worker._embed_producers.values()]

@@ -182,3 +182,106 @@ def test_a_document_that_can_never_fit_is_its_error_not_an_endless_deferral(fake
     assert got[1] == (True, "e:1") and pool.max_large == 1, "only the one that fits was submitted"
     assert not worker.transient_failure(RuntimeError("TooLarge: " + got[0][1]["msg"])), \
         "an error a person sees, not a deferral"
+
+
+# --- the pool's memory (2026-11-20) --------------------------------------------
+#
+# Nine kills of the worker from 03:39Z to 04:08Z under EUR-Lex5's text index:
+# the 40-82 MB acts below the lane's threshold went through the ordinary pool,
+# several to a part, eleven slots of them, and the processes killed held
+# 4.5-8.6 GB. A part is now cut where its rows' estimates sum past
+# PART_PEAK_BYTES, and every part in flight reserves its estimate from one
+# budget per process.
+
+MID = 60 * 2 ** 20                                  # a 60 MB act: ~1.5 GB at 26x
+
+
+def test_a_part_is_cut_where_its_estimates_would_pass_the_part_bound():
+    parts = [_rows([MID] * 5 + [BIG, 10, 10])]
+    got = parallel._cut_by_peak(K, parts)
+    assert [r["uid"] for p in got for r in p] == [r["uid"] for r in parts[0]], "every row, in order"
+    assert all(parallel.part_peak(K, p) <= parallel.PART_PEAK_BYTES or len(p) == 1 for p in got)
+    assert [len(p) for p in got] == [1, 1, 1, 1, 1, 1, 2], "1.5 GB each: one act a part; the large alone"
+    small = [_rows([10] * 8)]
+    assert parallel._cut_by_peak(K, small) == small, "small rows are not cut"
+    assert parallel._cut_by_peak(0, parts) == parts, "a plugin declaring no peak is cut as before"
+
+
+class _HeldPool(_Pool):
+    """Futures that finish only when taken, recording the reservation at each
+    submit: the estimates in flight at once."""
+
+    def __init__(self):
+        super().__init__()
+        self.reserved_at_submit = []
+
+    def submit(self, fn, kind, collection, part):
+        f = super().submit(fn, kind, collection, part)
+        self.reserved_at_submit.append(parallel.reserved())
+        return f
+
+
+def test_the_estimates_in_flight_never_pass_the_budget(fake_compute, monkeypatch):
+    pool = _HeldPool()
+    budget = 3 * K * MID + 1                        # three acts at once
+    monkeypatch.setattr(parallel, "pool", lambda: pool)
+    monkeypatch.setattr(parallel, "pool_memory", lambda: budget)
+    rows = _rows([MID] * 10)
+    got = parallel.compute("fts", _coll(), rows)
+    assert got == [(True, r["uid"]) for r in rows], "every row computed, in order, none deferred"
+    assert max(pool.reserved_at_submit) <= budget and max(pool.reserved_at_submit) == 3 * K * MID
+    assert parallel.reserved() == 0, "every reservation given back"
+    assert fake_compute["in_process"] == []
+
+
+def test_a_part_the_budget_cannot_take_is_deferred_never_parsed_here(fake_compute, monkeypatch):
+    """Another batch holds the budget and this one has nothing in flight to
+    drain: it waits LARGE_WAIT_S, then its rows are deferred (MemoryWait, a
+    transient failure), never parsed in the main process."""
+    pool = _HeldPool()
+    monkeypatch.setattr(parallel, "pool", lambda: pool)
+    monkeypatch.setattr(parallel, "pool_memory", lambda: 2 * K * MID)
+    monkeypatch.setattr(parallel, "LARGE_WAIT_S", 0.05)
+    monkeypatch.setattr(parallel, "_in_process", lambda *a: pytest.fail("parsed in the main process"))
+    assert parallel._reserve(2 * K * MID, wait=False, until=0)      # another batch's
+    give_back = parallel._reservation_releaser(2 * K * MID)
+    try:
+        got = parallel.compute("fts", _coll(), _rows([MID, MID]))
+    finally:
+        give_back()
+        give_back()                                  # once only
+    assert [ok for ok, _ in got] == [False, False] and {v["type"] for _, v in got} == {"MemoryWait"}
+    with pytest.raises(parallel.MemoryWait):
+        parallel.raise_for(got[0][1])
+    assert worker.transient_failure(parallel.MemoryWait("x")) and parallel.reserved() == 0
+
+
+def test_a_failed_batch_gives_its_reservations_back(fake_compute, monkeypatch):
+    pool = _HeldPool()
+    pool.raise_on = "e:0"
+    monkeypatch.setattr(parallel, "pool", lambda: pool)
+    monkeypatch.setattr(parallel, "pool_memory", lambda: 10 * K * MID)
+    monkeypatch.setattr(parallel, "_in_process", lambda kind, c, rows, k: [(True, r["uid"]) for r in rows])
+    parallel.compute("fts", _coll(), _rows([MID] * 4))
+    assert parallel.reserved() == 0
+
+
+def test_with_no_limit_to_read_nothing_is_reserved_or_waited_for(fake_compute, monkeypatch):
+    pool = _HeldPool()
+    monkeypatch.setattr(parallel, "pool", lambda: pool)
+    monkeypatch.setattr(parallel, "pool_memory", lambda: None)
+    rows = _rows([MID] * 6)
+    assert parallel.compute("fts", _coll(), rows) == [(True, r["uid"]) for r in rows]
+    assert parallel.reserved() == 0
+
+
+def test_a_parse_child_goes_first_for_the_oom_killer():
+    """Three of the nine kills took the main process, which holds the rounds
+    and writes the hold with what the pool had in flight."""
+    import subprocess
+    import sys
+    code = ("from app import parallel; parallel._first_for_the_oom_killer(); "
+            "print(open('/proc/self/oom_score_adj').read().strip())")
+    r = subprocess.run([sys.executable, "-c", code],
+                       capture_output=True, text=True, timeout=60, check=False)
+    assert r.stdout.strip() == str(parallel.CHILD_OOM_SCORE_ADJ) == "500", r.stderr

@@ -187,6 +187,22 @@ def _child_init(knobs: dict, base: int | None = None) -> None:
         pass
     for k, v in knobs.items():
         setattr(config, k, v)
+    _first_for_the_oom_killer()
+
+
+#: a parse child's `oom_score_adj` (2026-11-20): of the nine kills of that
+#: morning three took the worker's main process, the one that holds the
+#: rounds and writes the hold with what the pool had in flight (app/oom_hold.py).
+#: A child goes first; raising one's own score needs no privilege.
+CHILD_OOM_SCORE_ADJ = 500
+
+
+def _first_for_the_oom_killer() -> None:
+    try:
+        with open("/proc/self/oom_score_adj", "w") as f:
+            f.write(str(CHILD_OOM_SCORE_ADJ))
+    except OSError:
+        pass
 
 
 def _base_nice() -> int | None:
@@ -860,10 +876,10 @@ _in_flight_lock = threading.Lock()
 IN_FLIGHT_ROWS = 20
 
 
-def _enter(key: int, kind: str, collection, part: list[dict]) -> None:
+def _enter(key: int, kind: str, collection, part: list[dict], *, peak: int = 0) -> None:
     with _in_flight_lock:
         _in_flight[key] = {"collection": getattr(collection, "name", None), "kind": kind, "rows": len(part),
-                           "bytes": sum(int(r.get("size") or 0) for r in part),
+                           "bytes": sum(int(r.get("size") or 0) for r in part), "estimated_peak": peak,
                            "uids": [[r.get("uid"), r.get("size")] for r in part[:IN_FLIGHT_ROWS]]}
 
 
@@ -997,6 +1013,112 @@ NEVER_FITS_FRACTION = 2 / 3
 LARGE_PEAK_NOTE = "the plugin's PARSE_PEAK_PER_BYTE times its size"
 
 
+# THE POOL'S MEMORY (2026-11-20, München: nine OOM kills of the worker from
+# 03:39Z to 04:08Z under EUR-Lex5's text index, the killed processes holding
+# 4.5-8.6 GB, every other collection idle). The lane above counts ONE large
+# row; the 40-82 MB acts below its threshold went through the ordinary pool,
+# eleven slots of them, several to a part — and a child holds every result
+# of its part until the part ends, beside the parse in hand. So, for a plugin
+# that declares its peak per byte:
+#   - a part is CUT where its rows' estimated peaks sum past PART_PEAK_BYTES
+#     (a large row stays alone, as before): the estimate of a part is the sum
+#     of its rows', which covers the results a child keeps;
+#   - every part in flight RESERVES its estimate from one budget per process,
+#     POOL_MEMORY_FRACTION of the cgroup's limit; a part that does not fit
+#     waits for the parts in flight to finish — at once where its batch has
+#     some, bounded by LARGE_WAIT_S where it has none — and is then deferred
+#     (MemoryWait), never parsed in the main process.
+# A plugin that declares no peak reserves nothing and is cut as before; with
+# no cgroup limit to read there is no budget (the lane's rules still hold).
+# Measured before it, not assumed: glibc gives lxml's memory back after a
+# 64 MB parse (RssAnon 391 MB at the peak, 73 MB after, with or without
+# malloc_trim), so a child's high-water is not what is kept: what it holds
+# is what its part has computed.
+# Standardised: a weighted semaphore (bytes), the admission Ray and Dask do
+# with a task's declared `memory` resource; see the note above on adopting one.
+
+#: the share of the cgroup's limit the pool's estimates may hold at once: the
+#: room a parse can ever have beside the main process (NEVER_FITS_FRACTION)
+POOL_MEMORY_FRACTION = NEVER_FITS_FRACTION
+#: a part's rows are cut where their estimates sum past this: the lane's
+#: threshold, so an ordinary part never holds more than a large row does
+PART_PEAK_BYTES = LARGE_PEAK_BYTES
+_reserved = 0
+_reserved_cv = threading.Condition()
+
+
+def pool_memory() -> int | None:
+    """The bytes the pool's estimates may hold at once, or None (no limit)."""
+    from .scheduled_checks import cgroup_memory
+    got = cgroup_memory()
+    return int(got[0] * POOL_MEMORY_FRACTION) if got is not None else None
+
+
+def part_peak(k: float, part: list[dict]) -> int:
+    """A part's estimate: the sum of its rows' (`peak_of`)."""
+    return sum(peak_of(k, r) for r in part) if k else 0
+
+
+def _cut_by_peak(k: float, parts: list[list[dict]]) -> list[list[dict]]:
+    """`_isolate_large`, and every run cut where its estimates would sum past
+    PART_PEAK_BYTES; the order of the rows kept. Nothing moves for a plugin
+    that declares no peak."""
+    if not k:
+        return parts
+    out: list[list[dict]] = []
+    for part in _isolate_large(k, parts):
+        if len(part) == 1:
+            out.append(part)
+            continue
+        run: list[dict] = []
+        held = 0
+        for row in part:
+            p = peak_of(k, row)
+            if run and held + p > PART_PEAK_BYTES:
+                out.append(run)
+                run, held = [], 0
+            run.append(row)
+            held += p
+        out.append(run)
+    return out
+
+
+def _reserve(need: int, *, wait: bool, until: float) -> bool:
+    """`need` bytes of the pool's budget, at once or — `wait` — until
+    `until`. Always granted where nothing is reserved (a part that fits the
+    limit at all runs alone; `never_fits` refused the others) or no budget
+    reads. False when it is not to be had."""
+    global _reserved
+    budget = pool_memory()
+    with _reserved_cv:
+        while budget is not None and _reserved and _reserved + need > budget:
+            if not wait or time.monotonic() >= until:
+                return False
+            _reserved_cv.wait(min(1.0, max(0.01, until - time.monotonic())))
+        _reserved += need
+        return True
+
+
+def _reservation_releaser(need: int):
+    """The reservation given back ONCE: the part's future done, or its batch
+    failed (as `_lane_releaser`)."""
+    done = threading.Lock()
+
+    def release(_f=None) -> None:
+        global _reserved
+        if done.acquire(blocking=False):
+            with _reserved_cv:
+                _reserved = max(0, _reserved - need)
+                _reserved_cv.notify_all()
+    return release
+
+
+def reserved() -> int:
+    """The bytes the parts in flight have reserved now."""
+    with _reserved_cv:
+        return _reserved
+
+
 def _take_lane(peak: int, *, wait: bool, until: float) -> bool:
     """The large lane, with room for `peak`: at once, or — `wait` — until
     `until`. False when it is not to be had."""
@@ -1057,8 +1179,8 @@ def compute(kind: str, collection, rows) -> list[tuple[bool, object]]:
         return _compute(kind, collection, plain)
     n = processes()
     parts = _partition(collection, plain, n * PARTS_PER_CHILD)
-    if big:
-        parts = _isolate_large(k, parts)
+    if k:
+        parts = _cut_by_peak(k, parts)      # the large rows alone, every part within PART_PEAK_BYTES
     # ADMISSION (docs/notes/scheduling.md §10, B) — see `slots` above. The
     # budget is the whole pool; the cap is recomputed on every refill, so a
     # collection alone holds all of it and gives slots up only to a
@@ -1107,6 +1229,7 @@ def compute(kind: str, collection, rows) -> list[tuple[bool, object]]:
                     futures.append([(False, {"type": "TooLarge", "msg": too_big})])
                     nxt += 1
                     continue
+                gives: list = []                  # this part's one-shot releases
                 if peak:
                     # one large part in flight in the process, with room for
                     # its peak: wait for it only when nothing else is in
@@ -1120,19 +1243,35 @@ def compute(kind: str, collection, rows) -> list[tuple[bool, object]]:
                         futures.append(done)
                         nxt += 1
                         continue
+                    gives.append(_lane_releaser())
+                need = part_peak(k, parts[nxt])
+                if need:
+                    # THE POOL'S MEMORY: the estimates of every part in flight
+                    # within the budget, waited for as the lane is
+                    if not _reserve(need, wait=not futures, until=time.monotonic() + LARGE_WAIT_S):
+                        for give in gives:
+                            give()
+                        if futures:
+                            break
+                        futures.append(_deferred(kind, collection, parts[nxt],
+                                                 f"no room in the parse pool's memory for a part estimated "
+                                                 f"at {need / 2 ** 30:.1f} GB within {LARGE_WAIT_S:.0f} s"))
+                        nxt += 1
+                        continue
+                    gives.append(_reservation_releaser(need))
+                if peak:
                     deadline = max(deadline, time.monotonic() + config.PARSE_TIMEOUT_S
                                    + LARGE_SECONDS_PER_BYTE * int(parts[nxt][0].get("size") or 0))
-                    give_back = _lane_releaser()
-                    lanes.append(give_back)
-                    try:
-                        f = ex.submit(_compute, kind, collection, parts[nxt])
-                    except BaseException:
-                        give_back()
-                        raise
-                    f.add_done_callback(give_back)
-                else:
+                lanes.extend(gives)
+                try:
                     f = ex.submit(_compute, kind, collection, parts[nxt])
-                _enter(id(f), kind, collection, parts[nxt])
+                except BaseException:
+                    for give in gives:
+                        give()
+                    raise
+                for give in gives:
+                    f.add_done_callback(give)
+                _enter(id(f), kind, collection, parts[nxt], peak=need)
                 futures.append(f)
                 nxt += 1
                 mine += 1
