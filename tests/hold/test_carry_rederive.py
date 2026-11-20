@@ -14,6 +14,8 @@ deleted; its vectors follow `content_hash` alone. `rederive` is the repair
 where no source snapshot is left: every document derived again."""
 from __future__ import annotations
 
+import shutil
+
 import pytest
 
 from app import db, embeddings, fts, validity
@@ -446,7 +448,10 @@ def test_without_records_a_listed_embedded_document_is_embedded_again(pair, corp
     The check lists unit PATHS from its own mount; they match under the
     slice folder."""
     root, coll, uids, _ids, _rows, _out = _reconciled(pair, corpus_dir, monkeypatch)
-    monkeypatch.setattr(carry, "latest_snapshot", lambda root, name: None)
+    from app.hold import collection as col
+    # the real function, unpatched: where no snapshot is held it refuses
+    # (CodexError), it never answers None — the node's EUR-Lex5, 2026-11-20
+    shutil.rmtree(col.shard_dir_of(root, "re") / "snapshots")
     _set(coll, "UPDATE documents SET embed_done=1")
     _set(coll, "UPDATE documents SET path='/data/collections/re/origin/lang=it/2021/32021R1971' WHERE uid=?", uids[0])
     _set(coll, "UPDATE documents SET path='/data/collections/re/origin/history/lang=de/2015/32015D1735', "
@@ -468,3 +473,16 @@ def test_dev_rederive_ids_takes_no_whole_collection_flags(tmp_path, capsys):
     for extra in (["--verify"], ["--again"], ["--every", "2"], ["--limit", "5"]):
         assert louise.main(["dev", "rederive", "--root", str(tmp_path), "x", "--ids", str(ids), *extra]) == 2
     assert "takes no --verify" in capsys.readouterr().err
+
+
+def test_a_snapshot_that_does_not_load_is_never_read_as_no_records(pair, corpus_dir, monkeypatch):  # noqa: F811
+    """Records or not is asked of the snapshots' presence: a broken one must
+    not make a records collection's vectors look like its chunks' — they
+    would all be embedded again."""
+    from app.hold import collection as col
+    root, coll, uids, _ids, _rows, _out = _reconciled(pair, corpus_dir, monkeypatch)
+    _set(coll, "UPDATE documents SET embed_done=1")
+    for p in (col.shard_dir_of(root, "re") / "snapshots").glob("*.json"):
+        p.write_text("{not json")
+    got = carry.rederive_listed(root, "re", [uids[0]], apply=True, log=quiet)
+    assert "records" in got["vectors"] and _marks(coll, uids[0]) == (0, 0, 1), "its vectors kept"

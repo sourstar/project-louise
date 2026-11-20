@@ -49,7 +49,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from .codex import TOKEN_CUT, Codex, CodexError
-from .seed import latest_snapshot, refuse_unless_same_records
+from .seed import latest_snapshot, refuse_unless_same_records, snapshot_ids
 
 MARKER = "carry.json"
 MANIFEST = "manifest.sqlite"
@@ -1559,7 +1559,11 @@ def rederive_listed(root, name: str, lines: list[str], *, apply: bool = False, s
     name, _codex = col.resolve(root, name)
     wanted = {ln.strip() for ln in lines if ln.strip()}
     keys = {_unit_key(w) for w in wanted}
-    records = latest_snapshot(root, name) is not None
+    # whether the collection holds records at all — asked of the snapshots'
+    # presence (`seed.snapshot_ids`), never by catching `latest_snapshot`'s
+    # refusal, which a snapshot that does not load raises too (München,
+    # 2026-11-20: EUR-Lex5 holds none, and `latest_snapshot` refuses there)
+    records = bool(snapshot_ids(root, name))
     manifest = _paths(root, name)["manifest"]
     con = sqlite3.connect(manifest, timeout=60)
     con.row_factory = sqlite3.Row
