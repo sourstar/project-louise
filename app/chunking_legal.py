@@ -49,6 +49,12 @@ VERSION 2 (2026-11-08, from the first real Normattiva records cut by v1):
 Version 1 cuts as it always did (invariant 3): a layer pinned to it gives
 the same chunks.
 
+BOUNDED (2026-11-20, no version: the pieces are byte for byte the same):
+no encode reads more than SPAN_CHARS characters — a count and a token window
+read the text in spans cut at a space between two non-spaces, which the
+pinned tokenizer's pre-tokenization never crosses (`spans_are_exact`). One
+encode of a 54.3 M-character text held 11.18 GB (EUR-Lex5's 32018R0688 el).
+
 VERSION 3 (2026-11-08, München's profile of normattiva-nemo's records build:
 `_count` under `_pack` was 87-92 % of every pool child's time, ~4.5 h for
 341,959 records): units are PACKED LINEARLY. v2 re-encoded the whole growing
@@ -138,8 +144,99 @@ def _tokenizer(params: dict) -> Any:
     return wd.tokenizer_for(params.get("tokenizer"))
 
 
+# THE BOUNDED ENCODE (2026-11-20, the second OOM hold; München's
+# tools/measure/parse_peak.py): EUR-Lex5's 32018R0688 el, 128 MB, 54.3 M
+# characters, its `chunks` rose 11.18 GB (83x its bytes; ~206 bytes a
+# character) — and 32021R2017 el 5.18 GB for 23.6 M characters (~219 a
+# character): the peak follows the TEXT, because `split` counted a whole
+# section in one encode and `_windows` encoded a whole over-long sentence and
+# listed every offset. Now no encode reads more than SPAN_CHARS: a text is
+# read in spans cut at a plain space whose neighbours are not white space,
+# and the spans' counts summed, their offsets shifted — the SAME numbers, by
+# construction, for a tokenizer whose pre-tokenization is local there
+# (`spans_are_exact`): no normalizer, its split a regex with no lookbehind
+# that no match crosses at such a space (the pinned Nemotron-3-Embed-1B
+# tokenizer: every alternative but `\s+(?!\S)` stops before a space, and
+# that one cannot end at a space followed by a non-space), then ByteLevel
+# without its own regex, and no added token holding a space; or a plain
+# whitespace split. Any other tokenizer is encoded whole, as before. No
+# chunker version moves: the pieces are byte for byte the pieces
+# (invariant 3; tests/test_chunking_legal_spans.py against the pinned
+# tokenizer, tools/measure/legal_chunk_identity.py on the node's documents).
+# Standardised alternative, not taken: the tokenizers library's own batch
+# or streaming encode has no bounded-memory count; a tokenizer-agnostic
+# bound would need it.
+SPAN_CHARS = 200_000
+_SAFE_CUT = re.compile(r"(?<=\S) (?=\S)")
+#: the pre-tokenizers whose pre-tokens never cross a space between two
+#: non-spaces, and so whose encoding is the spans' (`spans_are_exact`)
+_EXACT_SPLIT = ("[^\\r\\n\\p{L}\\p{N}]?[\\p{Lu}\\p{Lt}\\p{Lm}\\p{Lo}\\p{M}]*[\\p{Ll}\\p{Lm}\\p{Lo}\\p{M}]+|"
+                "[^\\r\\n\\p{L}\\p{N}]?[\\p{Lu}\\p{Lt}\\p{Lm}\\p{Lo}\\p{M}]+[\\p{Ll}\\p{Lm}\\p{Lo}\\p{M}]*|"
+                "\\p{N}| ?[^\\s\\p{L}\\p{N}]+[\\r\\n/]*|\\s*[\\r\\n]+|\\s+(?!\\S)|\\s+")
+_exact: dict[int, bool] = {}
+
+
+def spans_are_exact(tok: Any) -> bool:
+    """Is `tok`'s encoding of a text the concatenation of its encodings of
+    the text cut at a space between two non-spaces (`_SAFE_CUT`)? Read off
+    the tokenizer's own declaration (`to_str`), once per tokenizer."""
+    key = id(tok)
+    got = _exact.get(key)
+    if got is None:
+        got = _declared_exact(tok)
+        _exact[key] = got
+    return got
+
+
+def _declared_exact(tok: Any) -> bool:
+    import json
+    try:
+        d = json.loads(tok.to_str())
+    except Exception:   # noqa: BLE001 — a tokenizer that does not say: encoded whole
+        return False
+    if d.get("normalizer") is not None:
+        return False
+    if any(" " in (a.get("content") or "") for a in d.get("added_tokens") or []):
+        return False
+    pre = d.get("pre_tokenizer") or {}
+    if pre.get("type") == "WhitespaceSplit":
+        return True
+    steps = pre.get("pretokenizers") if pre.get("type") == "Sequence" else None
+    if not steps or len(steps) != 2:
+        return False
+    split, byte = steps
+    return (split.get("type") == "Split" and (split.get("pattern") or {}).get("Regex") == _EXACT_SPLIT
+            and split.get("behavior") == "Isolated" and not split.get("invert")
+            and byte.get("type") == "ByteLevel" and not byte.get("use_regex") and not byte.get("add_prefix_space"))
+
+
+def _spans(tok: Any, text: str) -> list[tuple[int, int]]:
+    """(start, end) of the spans `text` is encoded in: itself where it is
+    short or the tokenizer is not span-exact; else cut at the first safe
+    space at or past every SPAN_CHARS (a run with no safe space is one span)."""
+    if len(text) <= SPAN_CHARS or not spans_are_exact(tok):
+        return [(0, len(text))]
+    out: list[tuple[int, int]] = []
+    start = 0
+    while len(text) - start > SPAN_CHARS:
+        m = _SAFE_CUT.search(text, start + SPAN_CHARS)
+        if m is None:
+            break
+        out.append((start, m.start()))
+        start = m.start()
+    out.append((start, len(text)))
+    return out
+
+
 def _count(tok: Any, text: str) -> int:
-    return len(tok.encode(text, add_special_tokens=False).ids)
+    return sum(len(tok.encode(text[a:b], add_special_tokens=False).ids) for a, b in _spans(tok, text))
+
+
+def _token_ends(tok: Any, text: str):
+    """Each token's end offset in `text`, in order, a span at a time."""
+    for a, b in _spans(tok, text):
+        for _s, e in tok.encode(text[a:b], add_special_tokens=False).offsets:
+            yield a + e
 
 
 def _lines_split(text: str, mark: re.Pattern) -> list[str]:
@@ -171,7 +268,34 @@ def _sentences(text: str) -> list[str]:
 
 def _windows(tok: Any, text: str, budget: int) -> list[str]:
     """Consecutive windows of `budget` tokens, cut at token boundaries, the
-    whole text kept: the last resort for one sentence past the window."""
+    whole text kept: the last resort for one sentence past the window.
+    The tokens' ends are read a span at a time (`_token_ends`): a window is
+    cut after its `budget`-th token where another token follows, the last
+    one runs to the text's end — as when every offset was listed first."""
+    out: list[str] = []
+    begin = 0
+    n = 0
+    pending: int | None = None          # the end of a window's last token, cut once another follows
+    for end in _token_ends(tok, text):
+        if pending is not None:
+            out.append(text[begin:pending])
+            begin = pending
+            pending = None
+        n += 1
+        if n % budget == 0:
+            pending = end
+    if n:
+        out.append(text[begin:])
+        begin = len(text)
+    if begin < len(text) and text[begin:].strip():
+        out[-1:] = [out[-1] + text[begin:]] if out else [text[begin:]]
+    return [w for w in out if w.strip()] or [text]
+
+
+def _windows_listed(tok: Any, text: str, budget: int) -> list[str]:
+    """`_windows` as it was until 2026-11-20 — every offset listed from one
+    encode of the whole text; kept as the reference the bounded one is held
+    to (tests/test_chunking_legal_spans.py)."""
     enc = tok.encode(text, add_special_tokens=False)
     offsets = list(enc.offsets)
     out: list[str] = []
