@@ -359,6 +359,157 @@ def release_idle(idle_s: float, *, now: float | None = None) -> int:
     return n
 
 
+# THE LANE'S OWN PROCESS (2026-11-20, after the second OOM hold): an
+# estimate is not a bound — 32018R0688 el's fts held 11.18 GB against 3.25
+# estimated, and the kernel killed it inside the worker's cgroup. A large
+# part (one row, `_isolate_large`) now runs in a process of its own, used
+# once, whose data limit (RLIMIT_DATA, POSIX setrlimit: the heap and every
+# private writable mapping) is the room its admission granted
+# (`_allowance`). Past it, only that process fails — a MemoryError in
+# Python, an abort in a Rust allocator (the tokenizer's) — never a child of
+# the shared pool and never the main process; and the row is known
+# exactly, so it is asked again with twice the room (`remembered`), or,
+# past the most this worker can ever give (`never_fits`), it is the
+# document's error, said with both numbers. A cgroup kill (the counter
+# rose) is still the OOM hold's.
+# Standardised alternative, not taken: a cgroup v2 child group per part
+# (`memory.max`, the kernel's own bound, Rust allocations included without
+# an abort) — it needs the container's cgroup delegated (nsdelegate, a
+# writable cgroup.subtree_control), which the node's Docker does not give.
+_remembered: dict[tuple[str, str], int] = {}
+_remembered_lock = threading.Lock()
+
+
+def _row_key(collection, row: dict) -> tuple[str, str]:
+    """A row's identity for what its parse was seen to need: the manifest's
+    path (physical identity) and the uid."""
+    return (str(getattr(collection, "manifest_path", None) or getattr(collection, "name", "")),
+            str(row.get("uid")))
+
+
+def remembered(collection, row: dict) -> int:
+    """The room a row's parse was seen to need past its estimate (0: none)."""
+    with _remembered_lock:
+        return _remembered.get(_row_key(collection, row), 0)
+
+
+def _remember(collection, row: dict, need: int) -> None:
+    with _remembered_lock:
+        k = _row_key(collection, row)
+        _remembered[k] = max(_remembered.get(k, 0), int(need))
+
+
+def _allowance(need: int) -> int | None:
+    """The room a large part is given, as measured once its own estimate is
+    reserved: the cgroup's share less what is resident and what the OTHER
+    parts in flight reserved — never less than its estimate; None where no
+    limit reads (no bound is set)."""
+    from .scheduled_checks import cgroup_memory
+    got = cgroup_memory()
+    if got is None:
+        return None
+    limit, used = got
+    with _reserved_cv:
+        others = max(0, _reserved - need)
+    return max(int(need), int(limit * ADMIT_FRACTION) - used - others)
+
+
+def _vm_data() -> int | None:
+    try:
+        with open("/proc/self/status", encoding="ascii") as f:
+            for line in f:
+                if line.startswith("VmData:"):
+                    return int(line.split()[1]) * 1024
+    except (OSError, ValueError):
+        return None
+    return None
+
+
+def _compute_bounded(kind: str, collection, rows: list[dict], allowance: int | None):
+    """In the lane's own process: its data limit set to what it holds now
+    plus `allowance` (never above the hard limit), then the part."""
+    if allowance:
+        import resource
+        vm = _vm_data()
+        if vm is not None:
+            _soft, hard = resource.getrlimit(resource.RLIMIT_DATA)
+            want = vm + int(allowance)
+            if hard != resource.RLIM_INFINITY:
+                want = min(want, hard)
+            resource.setrlimit(resource.RLIMIT_DATA, (want, hard))
+    return _compute_heavy(kind, collection, rows)
+
+
+def _lane_executor() -> ProcessPoolExecutor:
+    """One process, one task, gone after it."""
+    return ProcessPoolExecutor(max_workers=1, mp_context=multiprocessing.get_context("spawn"),
+                               initializer=_child_init, initargs=(_knobs(), _base_nice()),
+                               max_tasks_per_child=1)
+
+
+class _LaneTask:
+    """A large part in its own process, as a future `compute` collects: its
+    `result` answers per row — the end of its process past its bound
+    included — and raises only a timeout, or the cgroup's own kill."""
+
+    def __init__(self, kind: str, collection, part: list[dict], allowance: int | None) -> None:
+        self.kind, self.collection, self.part, self.allowance = kind, collection, part, allowance
+        self._ex = _lane_executor()
+        self._f = self._ex.submit(_compute_bounded, kind, collection, part, allowance)
+        self._procs = list((getattr(self._ex, "_processes", None) or {}).values())
+
+    def add_done_callback(self, cb) -> None:
+        self._f.add_done_callback(lambda _f: cb(self))
+
+    def cancel(self) -> bool:
+        got = self._f.cancel()
+        if isinstance(self._ex, ProcessPoolExecutor):
+            discard(self._ex)               # its process terminated: nobody reads its answer
+        else:
+            self._ex.shutdown(wait=False)
+        return got
+
+    def _exitcode(self) -> int | None:
+        for p in self._procs:
+            code = getattr(p, "exitcode", None)
+            if code is not None:
+                return code
+        return None
+
+    def _past_bound(self, why: str) -> list[tuple[bool, object]]:
+        given = self.allowance or part_peak(peak_per_byte(self.collection), self.part)
+        need = 2 * int(given)
+        for row in self.part:
+            _remember(self.collection, row, need)
+        too_big = never_fits(need, note=f"twice the {given / 2 ** 30:.1f} GB its parse passed ({why})")
+        if too_big:
+            return [(False, {"type": "TooLarge", "msg": too_big})] * len(self.part)
+        return [(False, {"type": "MemoryWait",
+                         "msg": f"its parse passed the {given / 2 ** 30:.1f} GB it was given ({why}): "
+                                f"asked again with {need / 2 ** 30:.1f} GB"})] * len(self.part)
+
+    def result(self, timeout: float | None = None) -> list[tuple[bool, object]]:
+        try:
+            rows = self._f.result(timeout=timeout)
+        except BrokenProcessPool:
+            import signal as _signal
+
+            from . import oom_hold
+            self._ex.shutdown(wait=False)
+            if oom_hold.killed() is not None:
+                raise                       # the cgroup's kill: the OOM hold's, in `compute`
+            code = self._exitcode()
+            if code == -_signal.SIGABRT:
+                return self._past_bound("its process aborted: a Rust allocation refused")
+            return [(False, {"type": "RuntimeError",
+                             "msg": f"its parse's own process ended by signal {-code if code else '?'}"})] \
+                * len(self.part)
+        self._ex.shutdown(wait=False)
+        if any(not ok and isinstance(v, dict) and v.get("type") == "MemoryError" for ok, v in rows):
+            return self._past_bound("a MemoryError")
+        return rows
+
+
 def recycle_for_room(name: str | None, own_slots: int = 0) -> int:
     """The pool stopped (`discard`) because its children's KEEP holds the
     room a part needs (2026-11-20: eleven children at 0.69-1.88 GB, four of
@@ -1017,7 +1168,7 @@ def _room(peak: int) -> bool:
     return limit - used >= peak
 
 
-def never_fits(peak: int) -> str | None:
+def never_fits(peak: int, *, note: str | None = None) -> str | None:
     """Why a parse of `peak` bytes can never run in this worker, or None: an
     estimate past the cgroup's whole limit is not a moment's shortage, and a
     deferral would ask again every round for ever (München's park of
@@ -1028,7 +1179,7 @@ def never_fits(peak: int) -> str | None:
     got = cgroup_memory()
     if got is None or peak < got[0] * NEVER_FITS_FRACTION:
         return None
-    return (f"its parse is estimated at {peak / 2 ** 30:.1f} GB ({LARGE_PEAK_NOTE}), more than "
+    return (f"its parse is estimated at {peak / 2 ** 30:.1f} GB ({note or LARGE_PEAK_NOTE}), more than "
             f"{NEVER_FITS_FRACTION:.0%} of the worker's whole memory limit ({got[0] / 2 ** 30:.1f} GB), "
             f"the room it can ever have beside the worker's own process: it is never admitted until "
             f"the limit is raised or the parse holds less")
@@ -1340,7 +1491,10 @@ def compute(kind: str, collection, rows) -> list[tuple[bool, object]]:
             cap = cpu_limit.cap(slots(name, budget), lim, floor=1)
             while nxt < len(parts) and len(futures) < cap:
                 peak = _large(k, parts[nxt])
-                too_big = never_fits(peak) if peak else None
+                seen = remembered(collection, parts[nxt][0]) if peak else 0
+                peak = max(peak, seen)
+                too_big = (never_fits(peak, note="twice the room its parse passed before" if seen > 0 else None)
+                           if peak else None)
                 if too_big:
                     futures.append([(False, {"type": "TooLarge", "msg": too_big})])
                     nxt += 1
@@ -1360,7 +1514,7 @@ def compute(kind: str, collection, rows) -> list[tuple[bool, object]]:
                         nxt += 1
                         continue
                     gives.append(_lane_releaser())
-                need = part_peak(k, parts[nxt])
+                need = max(part_peak(k, parts[nxt]), peak)
                 if need:
                     # THE POOL'S MEMORY: the estimates of every part in flight
                     # within the budget, waited for as the lane is
@@ -1383,7 +1537,10 @@ def compute(kind: str, collection, rows) -> list[tuple[bool, object]]:
                                    + LARGE_SECONDS_PER_BYTE * int(parts[nxt][0].get("size") or 0))
                 lanes.extend(gives)
                 try:
-                    f = ex.submit(_compute_heavy if need else _compute, kind, collection, parts[nxt])
+                    # a LARGE part in a process of its own, bounded by the room
+                    # granted; every other part in the shared pool
+                    f = (_LaneTask(kind, collection, parts[nxt], _allowance(need)) if peak else
+                         ex.submit(_compute_heavy if need else _compute, kind, collection, parts[nxt]))
                 except BaseException:
                     for give in gives:
                         give()
