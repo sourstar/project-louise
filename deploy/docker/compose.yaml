@@ -103,7 +103,9 @@ services:
     pull_policy: never
     restart: unless-stopped
     init: true
-    command: ["python", "-m", "app.worker"]
+    # the worker run by its guard: kept down after a memory kill until released
+    # (app/worker_guard.py, app/oom_hold.py; operator, 2026-11-19)
+    command: ["python", "-m", "app.worker_guard"]
     depends_on:
       init:
         condition: service_completed_successfully
