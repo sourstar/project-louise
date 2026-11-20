@@ -14,6 +14,8 @@ deleted; its vectors follow `content_hash` alone. `rederive` is the repair
 where no source snapshot is left: every document derived again."""
 from __future__ import annotations
 
+import shutil
+
 import pytest
 
 from app import db, embeddings, fts, validity
@@ -415,3 +417,72 @@ def test_a_stop_while_the_profile_pauses_the_pool_ends_the_pass_as_a_stop(pair, 
     finally:
         con.close()
     assert not held.get("done"), "stopped, not done"
+
+
+# ---- the documents a list names (2026-11-20, EUR-Lex5's included documents) ----------
+
+def _set(coll, sql, *args):
+    con = db.connect(coll)
+    try:
+        con.execute(sql, args)
+        con.commit()
+    finally:
+        con.close()
+
+
+def test_a_listed_document_is_derived_again_its_vectors_the_records(pair, corpus_dir, monkeypatch):  # noqa: F811
+    root, coll, uids, _ids, _rows, _out = _reconciled(pair, corpus_dir, monkeypatch)
+    _set(coll, "UPDATE documents SET embed_done=1")
+    listed = [uids[0], "", "gutenberg:no-such-uid"]
+    dry = carry.rederive_listed(root, "re", listed, log=quiet)
+    assert (dry["listed"], dry["documents"], dry["unmatched"], dry["would_reset"]) == (2, 1, 1, 1)
+    assert "records" in dry["vectors"] and _marks(coll, uids[0]) == (1, 1, 1), "a dry run"
+    got = carry.rederive_listed(root, "re", listed, apply=True, log=quiet)
+    assert got["reset"] == 1 and _marks(coll, uids[0]) == (0, 0, 1), "its vectors are the records': kept"
+    assert all(_marks(coll, u) == (1, 1, 1) for u in uids[1:]), "nothing it does not list"
+
+
+def test_without_records_a_listed_embedded_document_is_embedded_again(pair, corpus_dir, monkeypatch):  # noqa: F811
+    """EUR-Lex5 holds no records: its vectors are the worker's cut of its own
+    parse, and a parse that now reads an included annex cuts other chunks.
+    The check lists unit PATHS from its own mount; they match under the
+    slice folder."""
+    root, coll, uids, _ids, _rows, _out = _reconciled(pair, corpus_dir, monkeypatch)
+    from app.hold import collection as col
+    # the real function, unpatched: where no snapshot is held it refuses
+    # (CodexError), it never answers None — the node's EUR-Lex5, 2026-11-20
+    shutil.rmtree(col.shard_dir_of(root, "re") / "snapshots")
+    _set(coll, "UPDATE documents SET embed_done=1")
+    _set(coll, "UPDATE documents SET path='/data/collections/re/origin/lang=it/2021/32021R1971' WHERE uid=?", uids[0])
+    _set(coll, "UPDATE documents SET path='/data/collections/re/origin/history/lang=de/2015/32015D1735', "
+               "embed_done=0 WHERE uid=?", uids[1])
+    listed = ["/corpus/lang=it/2021/32021R1971", "/corpus/history/lang=de/2015/32015D1735",
+              "/corpus/lang=de/2015/32015D1735"]          # the base slice's: not held here
+    got = carry.rederive_listed(root, "re", listed, apply=True, log=quiet)
+    assert (got["documents"], got["unmatched"], got["embedded"], got["reset"]) == (2, 1, 1, 2)
+    assert "embedded again" in got["vectors"]
+    assert _marks(coll, uids[0]) == (0, 0, 0), "embedded: embedded again from its new chunks"
+    assert _marks(coll, uids[1]) == (0, 0, 0), "not embedded: left not embedded"
+    assert all(_marks(coll, u) == (1, 1, 1) for u in uids[2:])
+
+
+def test_dev_rederive_ids_takes_no_whole_collection_flags(tmp_path, capsys):
+    from app import louise
+    ids = tmp_path / "ids.txt"
+    ids.write_text("eurlex:1\n")
+    for extra in (["--verify"], ["--again"], ["--every", "2"], ["--limit", "5"]):
+        assert louise.main(["dev", "rederive", "--root", str(tmp_path), "x", "--ids", str(ids), *extra]) == 2
+    assert "takes no --verify" in capsys.readouterr().err
+
+
+def test_a_snapshot_that_does_not_load_is_never_read_as_no_records(pair, corpus_dir, monkeypatch):  # noqa: F811
+    """Records or not is asked of the snapshots' presence: a broken one must
+    not make a records collection's vectors look like its chunks' — they
+    would all be embedded again."""
+    from app.hold import collection as col
+    root, coll, uids, _ids, _rows, _out = _reconciled(pair, corpus_dir, monkeypatch)
+    _set(coll, "UPDATE documents SET embed_done=1")
+    for p in (col.shard_dir_of(root, "re") / "snapshots").glob("*.json"):
+        p.write_text("{not json")
+    got = carry.rederive_listed(root, "re", [uids[0]], apply=True, log=quiet)
+    assert "records" in got["vectors"] and _marks(coll, uids[0]) == (0, 0, 1), "its vectors kept"
