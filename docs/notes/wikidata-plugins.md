@@ -1,4 +1,4 @@
-# Wikidata, wiki-gutenberg and "the guide in the car" — the operator's design
+# Wikidata, wiki-gutenberg and "Philippe in the car" — the operator's design
 
 *Operator, 2026-10-19: the collection is called **wiki-gutenberg** here
 and in every note; the original document calls it "gutenberg-wd-kg".*
@@ -283,9 +283,9 @@ chunks/graph. Wikipedia joins through QIDs.
 
 ---
 
-## The guide in the car — voice guide to history and geography
+## Philippe in the car — voice guide to history and geography
 
-While you drive, the guide tells you about the history, geography and events
+While you drive, Philippe tells you about the history, geography and events
 of the places around you, using Wikidata, wiki-gutenberg, Gutenberg and
 Wikipedia.
 
@@ -295,7 +295,7 @@ Wikipedia.
 - Listeners present are implicit (voices heard recently; only yours = only
   you) or declared ("it's me and Heike"); a declared presence holds until you
   say otherwise.
-- Unknown person: the guide greets them and asks for consent to record their
+- Unknown person: Philippe greets them and asks for consent to record their
   voiceprint (biometric data, GDPR). If they decline: session guest, nothing
   saved.
 - Memory per listener and per QID: overview first, then details; moves on
@@ -312,10 +312,10 @@ Wikipedia.
 | Voice recognition | Enrolls and identifies voiceprints | LocalAI /v1/voice/register and /v1/voice/identify (SpeechBrain ECAPA-TDNN); diarization /v1/audio/diarization (sherpa-onnx). The voiceprint store is in memory only: we must make it persistent |
 | Listener database | People, consent, what was told per QID and level | To write (SQLite) |
 | Location search | Nearby QIDs (Wikidata P625) ranked by importance and direction | To write (spatial index on Wikidata data) |
-| Orchestrator | Listeners present + nearby QIDs + memory → the guide's prompt and tools | LocalAGI as agent base, or our own code |
+| Orchestrator | Listeners present + nearby QIDs + memory → Philippe's prompt and tools | LocalAGI as agent base, or our own code |
 | Text memory | Free-form conversation notes | Louise (already developed; LocalRecall not needed) |
 
-### The guide's tools
+### Philippe's tools
 
 - `search_nearby(position, radius)`
 - `search_graph(qid)`
@@ -482,5 +482,5 @@ before building. Not yet a full check.
    source registers).
 8. **Wikipedia's QID** (open item): to check in the code before the forward
    derivation.
-9. **The guide** handles biometric voiceprints (GDPR, consent): an
+9. **Philippe** handles biometric voiceprints (GDPR, consent): an
    application on top of Louise, outside the collection specs.
