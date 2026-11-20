@@ -97,6 +97,16 @@ def refuse_unless_same_records(src: Codex, dst: Codex, what: str) -> None:
             f"parts are not the same parts, and nothing is carried")
 
 
+def snapshot_ids(root: Path, name: str) -> list[str]:
+    """The snapshots `name`'s SHARD holds, oldest first; [] where it holds
+    none — a collection that holds no records (EUR-Lex5, 2026-11-20). Asks
+    only whether they exist, never loads one: a snapshot that does not load
+    is an error of its own, not "no records"."""
+    from . import collection as col
+    d = col.shard_dir_of(Path(root), name) / "snapshots"
+    return sorted(p.stem for p in d.glob("*.json") if not p.name.endswith(".sig.json")) if d.is_dir() else []
+
+
 def latest_snapshot(root: Path, name: str, snapshot_id: str | None = None):
     """The named snapshot of `name`'s SHARD, or its latest."""
     from . import collection as col, shard as shard_mod, snapshot as sn
@@ -106,8 +116,7 @@ def latest_snapshot(root: Path, name: str, snapshot_id: str | None = None):
         if not p.is_file():
             raise CodexError(f"{name} holds no snapshot {snapshot_id!r}")
         return sn.load(p)
-    ids = sorted(p.stem for p in (d / "snapshots").glob("*.json")
-                 if not p.name.endswith(".sig.json")) if (d / "snapshots").is_dir() else []
+    ids = snapshot_ids(root, name)
     if not ids:
         raise CodexError(f"{name} holds no snapshot: there are no parts to name")
     return sn.load(d / "snapshots" / f"{ids[-1]}.json")
