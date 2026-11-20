@@ -15,7 +15,7 @@
 #                              stops a pass to fix something, and a pass that
 #                              came back by itself would undo the stop
 #                              (operator, 2026-10-31). The kernel's OOM kill
-#                              is SIGKILL, 137, and still comes back
+#                              is SIGKILL, 137: held, below
 #   a hold file present        stopped on purpose: `touch $HOLD` before a
 #                              deliberate stop (deploy, measurement)
 #   exit 2                     REFUSED (07 §7.7: "a rule stood in the way
