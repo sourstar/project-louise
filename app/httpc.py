@@ -77,3 +77,49 @@ def reset() -> None:
             old.close()
         except Exception:                               # noqa: BLE001
             pass
+
+
+# THE SERVER'S REASON ON EVERY REFUSAL (2026-11-21, the Bug session: an Ask
+# question answered "400 Bad Request" and nothing else). `raise_for_status`
+# names the status alone; LocalAI says why in the body ("exceeds the
+# available context size", an unknown field, an unloaded model). The chat
+# calls carried it since 2026-11-16 (app/llm.py `refuse_on_error`); the
+# reranker, the translator and the encoder did not.
+#: what of a refusal's body is said
+ERROR_BODY_CHARS = 300
+
+
+class ModelRefused(httpx.HTTPStatusError):
+    """A model server's error answer: the status AND the first
+    ERROR_BODY_CHARS of its body. An `httpx.HTTPStatusError`, `.response`
+    and `.request` kept, so every handler of one handles it."""
+
+
+def refusal(r: httpx.Response) -> tuple[str, str]:
+    """(message, body) of an error answer: "<status> from <url>: <reason>",
+    a streamed body read first; the reason the status phrase where the body
+    says nothing or cannot be read."""
+    try:
+        r.read()
+        text = r.text
+    except Exception:                    # noqa: BLE001 — the status is still said
+        text = ""
+    try:
+        url = r.request.url
+    except Exception:                    # noqa: BLE001 — a response built without its request
+        url = "the model server"
+    reason = " ".join(text.split())[:ERROR_BODY_CHARS] or getattr(r, "reason_phrase", "") or "no reason given"
+    return f"{r.status_code} from {url}: {reason}", text
+
+
+def raise_for_status(r: httpx.Response, cls: type[httpx.HTTPStatusError] = ModelRefused) -> None:
+    """`r.raise_for_status()`, carrying the server's reason (`refusal`). It
+    wraps httpx's own check, so whatever that calls an error, this does;
+    anything but an httpx Response is left to its own check, as before."""
+    try:
+        r.raise_for_status()
+    except httpx.HTTPStatusError as e:
+        if not isinstance(r, httpx.Response):
+            raise
+        message, _ = refusal(r)
+        raise cls(message, request=e.request, response=r) from None
