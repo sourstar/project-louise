@@ -20,25 +20,37 @@ from typing import Callable, Iterable, Sequence
 from app import config
 
 
-def mark_embedded(con, collection, uids: Iterable[str], *, synced: bool = True) -> int:
+def mark_embedded(con, collection, uids: Iterable[str], *, synced: bool = True,
+                  columns: dict[str, dict] | None = None) -> int:
     """`embed_done = 1`, this `EMBED_VERSION`, `updated_at` now, for each uid;
     its imported-provenance rows go (the chunks are this peer's now) and
     its queue entry with them. `synced`: the rows just written carry a
     versioned collection's columns (the worker's writes do; a build through
     `embeddings.upsert_chunks` does not) — only then are they marked
-    synced (app/validity.py). Returns how many rows the UPDATE touched."""
+    synced (app/validity.py). `columns`: uid -> the validity columns its
+    vectors were written with; such a uid is marked — embedded and synced —
+    only while the version table still holds them (V6 of the 2026-11-21
+    review: a daily roll that reset it meanwhile keeps its reset). Returns
+    how many rows the UPDATE touched."""
     from app import validity as validity_mod
     from app.bundles import ledger as bundle_ledger
     now = int(time.time())
     ids = [str(u) for u in uids]
+    columns = columns or {}
     touched = 0
     for uid in ids:
-        touched += con.execute(
-            "UPDATE documents SET embed_done=1, embed_version=?, updated_at=? WHERE uid=?",
-            (config.EMBED_VERSION, now, uid)).rowcount
+        sql = "UPDATE documents SET embed_done=1, embed_version=?, updated_at=? WHERE uid=?"
+        params: tuple = (config.EMBED_VERSION, now, uid)
+        if columns.get(uid):
+            cond, more = validity_mod.still(uid, columns[uid])
+            sql, params = f"{sql} AND {cond}", params + more
+        touched += con.execute(sql, params).rowcount
         bundle_ledger.clear_verification(con, uid)
         con.execute("DELETE FROM embed_queue WHERE uid=?", (uid,))
     if synced and ids and validity_mod.declared(collection) is not None:
+        for uid in [u for u in ids if columns.get(u)]:
+            validity_mod.mark_synced_if(con, uid, columns[uid])
+        ids = [u for u in ids if not columns.get(u)]
         native = []
         for u in ids:
             try:

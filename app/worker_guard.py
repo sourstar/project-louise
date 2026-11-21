@@ -29,7 +29,7 @@ import sys
 import threading
 import time
 
-from . import oom_hold
+from . import log_file, oom_hold
 
 HOLD_POLL_S = 10.0
 HOLD_SAY_S = 600.0
@@ -78,9 +78,11 @@ def _loop(argv, command, poll_s, say_s, stopping, child) -> int:
         before = oom_hold.oom_kills()
         # unbuffered: a SIGKILL takes what a buffer held, and the last lines
         # are what the hold names
+        # its lines reach the log file through `_relay` (app/log_file.py):
+        # the worker does not write it again
         proc = subprocess.Popen(command or [sys.executable, "-m", "app.worker", *(argv or [])],
                                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1,
-                                env={**os.environ, "PYTHONUNBUFFERED": "1"})
+                                env={**os.environ, "PYTHONUNBUFFERED": "1", log_file.WRITTEN_BY: "worker-guard"})
         child[:] = [proc]
         if stopping.is_set():               # a stop between the check and the start
             proc.send_signal(signal.SIGTERM)
@@ -110,7 +112,8 @@ def _loop(argv, command, poll_s, say_s, stopping, child) -> int:
 
 
 def _relay(proc: subprocess.Popen, tail: collections.deque[str]) -> None:
-    """The worker's lines to the container's log, the last TAIL kept."""
+    """The worker's lines to the container's log — and, through `main`'s
+    `log_file.tee_std`, to the worker's log file — the last TAIL kept."""
     assert proc.stdout is not None
     for line in proc.stdout:
         sys.stdout.write(line)
@@ -119,6 +122,10 @@ def _relay(proc: subprocess.Popen, tail: collections.deque[str]) -> None:
 
 
 def main() -> int:
+    # THE WORKER'S LOG FILE (O1, 2026-11-21): this process reads every line
+    # the worker and its children write, and outlives them; its own lines (a
+    # memory kill's hold) are the ones the file exists for
+    log_file.tee_std("worker")
     return run(sys.argv[1:])
 
 

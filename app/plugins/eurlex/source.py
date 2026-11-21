@@ -737,6 +737,38 @@ class EurlexSource:
                       mtime=max(s.st_mtime_ns for s in stats) // 1_000_000_000,
                       size=sum(s.st_size for s in stats))
 
+    def parse_size(self, row) -> int | None:
+        """The bytes a parse of this unit reads, for the parse pool's memory
+        estimate (app/parallel.py `peak_of`; P3 of the 2026-11-21 review): its
+        files, and each Formex PACKAGE's members UNPACKED beside the package's
+        own bytes — `formex.unpack` holds both while it reads. The members'
+        sizes come from the zip's central directory (PKWARE APPNOTE §4.3.12,
+        read by the standard library's zipfile), no member inflated: one
+        scandir of the unit and, for a package, its directory read. A Formex
+        package deflates ~4.3x, so its `size` was a quarter of what its parse
+        holds. The row's `size` (DocRef.size) keeps its meaning: the unit's
+        files on disk, discovery's change test. None where the unit does not
+        read (the parse says why)."""
+        import zipfile
+        try:
+            entries = unit_files(Path(row["path"]))
+        except (OSError, KeyError, TypeError):
+            return None
+        total = 0
+        for e in entries:
+            try:
+                size = e.stat().st_size
+            except OSError:
+                continue
+            total += size
+            if formex.is_package(e.name):
+                try:
+                    with zipfile.ZipFile(e.path) as z:
+                        total += sum(i.file_size for i in z.infolist() if not i.is_dir())
+                except (zipfile.BadZipFile, zipfile.LargeZipFile, OSError, EOFError, ValueError):
+                    pass                # not a readable zip: read as the file it is
+        return total
+
     # ---- fetch and parse ---------------------------------------------------------------------
 
     def fetch(self, ref: DocRef) -> RawDoc:

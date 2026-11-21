@@ -370,11 +370,20 @@ def stage_rdf(con, row, collection) -> None:
             (config.MAX_RETRIES, row["uid"], want - 1)).fetchall()
     _prefetch_ahead(con, collection, "rdf", row)
     # the batch's parse goes to the PARSE POOL (amendment 47); the writes
-    # stay here, inside the caller's transaction
+    # stay here, inside the caller's transaction. In the worker's rounds it
+    # stops at a part boundary with the worker or its mode (P7, `_execute_step`)
     metas = parallel.metadata_for_rows(collection, [row, *peers])
     ok, first = metas[0]
+    lead = row
     if not ok:
-        parallel.raise_for(first)            # unguarded: its failure IS the round's
+        if not _deferred_row(first) or not any(o for o, _m in metas[1:]):
+            parallel.raise_for(first)        # unguarded: its failure IS the round's
+        # THE SELECTED ROW DEFERRED (P1 of the 2026-11-21 review): it stays
+        # pending, untouched, and costs itself — never its batch, which a
+        # large act deferred round after round would otherwise hold back for
+        # as long as the lane is busy. The first peer that answered leads
+        i = next(i for i, (o, _m) in enumerate(metas) if o)
+        lead, first = peers[i - 1], metas[i][1]
     # THE WRITE LOCK BEGINS HERE, not before the parse (CLAUDE.md: long
     # non-DB work stays outside the transaction). The pool round trip above
     # is the batch's long part — 51.7 s for 2,000 documents, measured on the
@@ -387,14 +396,14 @@ def stage_rdf(con, row, collection) -> None:
     if not con.in_transaction:               # direct callers wrap the stage
         con.execute("BEGIN IMMEDIATE")
     left: dict[str, list[int]] = {}       # group -> the documents whose language left it
-    entries = [_rdf_one(con, row, collection, plugin, now, meta=first, left=left)]
+    entries = [_rdf_one(con, lead, collection, plugin, now, meta=first, left=left)]
     # the origin's inconsistencies each read met (06 §6.1, amended
     # 2026-10-25), recorded in this same transaction for the codes the read
     # checks — `None` when a plugin's lazy read says nothing about them
-    found = [(row["uid"], first["issues"])] if first.get("issues") is not None else []
+    found = [(lead["uid"], first["issues"])] if first.get("issues") is not None else []
     n = 1
     for peer, (ok, meta) in zip(peers, metas[1:]):
-        if not ok:
+        if not ok or peer is lead:
             continue                        # a peer never fails the round
         try:
             entries.append(_rdf_one(con, peer, collection, plugin, now, meta=meta, left=left))
@@ -408,7 +417,7 @@ def stage_rdf(con, row, collection) -> None:
                                checked=plugin_io.metadata_checks(plugin), now=now)
     # a sister reading a shared text index copies these documents' marks once
     # this commits (`_execute_step`, text_index.parsed)
-    _committed.rdf = [row["uid"], *(p["uid"] for p in peers)]
+    _committed.rdf = [*([row["uid"]] if lead is row else []), *(p["uid"] for p in peers)]
     # the rows of a language's old group go, that writer committed before the
     # marks (as the catalog below): a rollback leaves rdf pending, and the
     # next pass finds the same old language and deletes again (a no-op)
@@ -421,8 +430,10 @@ def stage_rdf(con, row, collection) -> None:
     took = time.monotonic() - t0
     sizing.sizer().record(_batch_key(collection, "rdf"), n, took)
     _batch_log(con, "rdf", collection,
-               f"extracted {n} documents in one transaction ({took:.1f}s)",
-               docs=n, secs=took, emit=n > 1)
+               f"extracted {n} documents in one transaction ({took:.1f}s)"
+               + ("" if lead is row else f"; {row['uid']} deferred, left pending "
+                                         f"({str(metas[0][1].get('msg', ''))[:200]})"),
+               docs=n, secs=took, emit=n > 1 or lead is not row)
 
 # Every peer query carries the row's ROWID (`rid`): the marks find each row
 # by it (`_MARK_INDEXED`), never by a descent of the uid index.
@@ -691,10 +702,19 @@ def _fts_ahead_rows(want: int) -> int:
 
 def _fts_link(collection, rows: list, known: list, names: bool) -> lookahead.Ahead:
     """One link of the look-ahead: `rows`' parse, the ones not `known`
-    computed by `parallel.fts_for_rows` on a daemon thread from now on."""
-    return lookahead.Ahead(
-        rows, known, lambda todo: parallel.fts_for_rows(collection, todo, names=names),
-        name=f"fts-ahead-{collection.name}")
+    computed by `parallel.fts_for_rows` on a daemon thread from now on.
+
+    CONTROLLED (P4 of the 2026-11-21 review: an abandoned take only cancelled
+    the Future, the compute went on holding the large lane, and the stage
+    parsed the same rows again): the parse stops at its next part boundary
+    when the link is let go of, the worker stops or its mode holds parsing
+    (`parallel.controlled`, a large part's own process terminated), and it
+    beats while it works within its bound, so the take waits for a large
+    act's parse instead of parsing it a second time (`lookahead.Chain.take`)."""
+    def parse(todo, control):
+        with parallel.controlled(stop=_AnyStop(control, _stop, _parse_held), beat=control.beat):
+            return parallel.fts_for_rows(collection, todo, names=names)
+    return lookahead.Ahead(rows, known, parse, name=f"fts-ahead-{collection.name}", controlled=True)
 
 
 def _fts_enough(pairs: list, budget: int | None = None) -> bool:
@@ -741,8 +761,9 @@ def _fts_take_ahead(con, row, collection) -> list | None:
         return None
     # BOUNDED (§3 rule 2): ONE bound for every link the batch waits for; the
     # parse is `parallel.compute`, whose own watchdog and in-process fall-back
-    # run inside it; a batch not answered by then is abandoned and parsed
-    # here, as a batch always was
+    # run inside it. The first link is waited for while its parse beats —
+    # alive within compute's own bound (P4) — and one quiet for the bound is
+    # abandoned (its parse told to stop) and parsed here, as a batch always was
     want, budget = fts_sizes(collection)
     taken = chain.take(want, lambda pairs: _fts_enough(pairs, budget),
                        timeout=config.PARSE_TIMEOUT_S)
@@ -759,6 +780,12 @@ def _fts_take_ahead(con, row, collection) -> list | None:
             out.append((now, _CHANGED))
     if not out or out[0][0]["uid"] != row["uid"] or out[0][1] is _CHANGED:
         _fts_ahead.drop(key)                # the selected row itself changed: parse it now
+        return None
+    ok, value = out[0][1]
+    if not ok and isinstance(value, dict) and value.get("type") == "Stopped":
+        # its parse was stopped (a stop or a mode since lifted): parsed now,
+        # under this stage's own stop
+        _fts_ahead.drop(key)
         return None
     return out
 
@@ -820,6 +847,26 @@ def drop_fts_ahead(collection=None) -> None:
 #: the uids a stage's batch wrote, for what runs after its commit
 #: (`_execute_step`): the shared text index's pushes (app/text_index.py)
 _committed = threading.local()
+#: whether this thread's last step was deferred for MEMORY (`_execute_step`):
+#: its pipeline thread waits WORKER_IDLE_SLEEP before it selects again, where
+#: a row the pool cannot take now would otherwise be asked for in a loop
+_deferral = threading.local()
+
+
+def _parse_stop():
+    """What stops a stage's parse in the pool at its next part boundary
+    (`parallel.controlled`; P7 of the 2026-11-21 review): the worker's stop,
+    and its mode holding parsing — what stops for SIGTERM stops for the mode
+    (scheduling.md pitfall 16). Read at call time: a test's or a reload's
+    events are the ones in force."""
+    return _AnyStop(_stop, _parse_held)
+
+
+def _deferred_row(err) -> bool:
+    """A per-row result the pool deferred — the large lane or the pool's
+    memory (MemoryWait), or its batch stopped (Stopped): the row is left
+    pending, untouched, and the batch's other rows are written."""
+    return isinstance(err, dict) and err.get("type") in ("MemoryWait", "Stopped")
 
 
 def _reads_shared(collection) -> bool:
@@ -927,7 +974,8 @@ def stage_fts(con, row, collection) -> None:
         rows = [_with_rid(con, row), *(dict(p) for p in peers)]
         # the batch's fetch/parse/chunk goes to the PARSE POOL (amendment 47):
         # one (ok, chunks) per row, in order; the selected row's failure IS the
-        # round's, a peer's failure drops the peer
+        # round's, a peer's failure drops the peer. In the worker's rounds it
+        # stops at a part boundary with the worker or its mode (P7, `_execute_step`)
         computed = list(zip(rows, parallel.fts_for_rows(collection, rows, names=with_names)))
     # THE BATCH'S TIME, SPLIT (München, 2026-11-09: normattiva-nemo's long
     # documents, batches of 1-2 at 1.6-25 s each, could not be told apart as
@@ -942,12 +990,24 @@ def stage_fts(con, row, collection) -> None:
         entities_of[r["uid"]] = value["entities"]
         return value["chunks"]
     first_row, (ok, first) = computed[0]
+    rest = computed[1:]
+    deferred = None                     # the selected row, deferred (P1)
     if not ok:
-        parallel.raise_for(first)
+        if not _deferred_row(first) or not any(o for _r, (o, _v) in rest):
+            parallel.raise_for(first)
+        # THE SELECTED ROW DEFERRED (P1 of the 2026-11-21 review): it stays
+        # pending, untouched, and costs itself — never its batch, which a
+        # large act deferred round after round would otherwise hold back for
+        # as long as the lane is busy. The first peer that answered leads; the
+        # deferred row goes back to the look-ahead with the rows not written
+        deferred = (first_row, first)
+        i = next(i for i, (_r, (o, _v)) in enumerate(rest) if o)
+        first_row, (ok, first) = rest[i]
+        rest = rest[i + 1:]
     chunks = _unpack(first_row, first)
     batch = [(first_row, chunks)]
     n_chunks = len(chunks)
-    for peer, (ok, peer_value) in computed[1:]:
+    for peer, (ok, peer_value) in rest:
         # the chunk cap, and the batch's own size: what the look-ahead hands
         # over is whole links, and may hold more rows than a batch takes
         if n_chunks >= budget or len(batch) >= want:
@@ -994,6 +1054,21 @@ def stage_fts(con, row, collection) -> None:
             continue        # simply re-runs; never poisons the selected row
         marks.append(mark)
         tags[peer["uid"]] = tag
+    if cols:
+        # A MARK FROM THE COLUMNS READ (V6 of the 2026-11-21 review): the
+        # daily roll, or a neighbour's rdf, may have moved a row's validity
+        # columns — and reset its fts_done — since they were read above for
+        # its index rows. Inside this write transaction nothing moves them
+        # now: a row whose columns are not the ones written is left unmarked,
+        # its reset kept, and is indexed again with its new columns
+        nid_of = {r["uid"]: int(r["native_id"]) for r, _ch in batch}
+        moved = validity.moved_since(con, {nid_of[m[1]]: cols[nid_of[m[1]]] for m in marks
+                                           if nid_of.get(m[1]) in cols})
+        if moved:
+            marks = [m for m in marks if nid_of.get(m[1]) not in moved]
+            db.log_event(con, "info", "fts",
+                         f"{len(moved)} document(s) left to index again: their validity columns moved "
+                         f"while they were indexed (the daily roll, or a version recorded)")
     # ONE statement each for the batch (measured: scheduling-log.md,
     # 2026-11-07). Neither can fail for one row and not the others: no column
     # written is in a unique index or carries a check, and the tags are a set
@@ -1033,8 +1108,11 @@ def stage_fts(con, row, collection) -> None:
     _batch_log(con, "fts", collection,
                f"indexed {len(batch)} documents / {n_chunks} chunks in one commit ({took:.1f}s: "
                f"parse {parse_s:.1f}, index {index_s:.1f}, the rest {max(0.0, took - parse_s - index_s):.1f}"
-               + (", parsed ahead)" if ahead else ")"),
-               docs=len(batch), chunks=n_chunks, secs=took, emit=len(batch) > 1, waited=parse_s)
+               + (", parsed ahead)" if ahead else ")")
+               + (f"; {deferred[0]['uid']} deferred, left pending ({str(deferred[1].get('msg', ''))[:200]})"
+                  if deferred else ""),
+               docs=len(batch), chunks=n_chunks, secs=took, emit=len(batch) > 1 or deferred is not None,
+               waited=parse_s)
 
 #: how long a collection's embed stage stays idle before its encoder's pin
 #: is restored (app/model_pins.py): the idle boundary of the stage (two
@@ -1171,9 +1249,10 @@ def stage_embed(con, row, collection) -> None:
                                columns=cols, **_given(con, collection, row, chunks))
         if cols:
             # a document whose every vector was kept rewrote no row: the two
-            # columns follow the version table in place (app/validity.py)
+            # columns follow the version table in place (app/validity.py) —
+            # marked synced only while they are still the ones written (V6)
             embeddings.sync_columns(int(row["native_id"]), cols, collection, lock_con=con, refuse=True)
-            validity.mark_synced(con, [int(row["native_id"])])
+            validity.mark_synced_if(con, row["uid"], cols)
     finally:
         stats.recorder().set_in_flight(collection.name, 0)
         _pin_end(pin)
@@ -1184,9 +1263,19 @@ def stage_embed(con, row, collection) -> None:
     # every vector was kept is not encoder work, and is not recorded.
     _record_embedded(collection, started, counts)
     bundle_ledger.clear_verification(con, row["uid"])   # no longer imported provenance
-    con.execute(
-        "UPDATE documents SET embed_done=1,embed_version=?,updated_at=? WHERE uid=?",
-        (config.EMBED_VERSION, int(time.time()), row["uid"]))
+    # V6 (2026-11-21): a versioned record is marked only while its columns
+    # are the ones its vectors were written with, in ONE statement (no
+    # transaction here): a roll or a neighbour's record that reset it
+    # meanwhile keeps its reset, and the next round writes the new columns
+    sql = "UPDATE documents SET embed_done=1,embed_version=?,updated_at=? WHERE uid=?"
+    params: tuple = (config.EMBED_VERSION, int(time.time()), row["uid"])
+    if cols:
+        cond, more = validity.still(row["uid"], cols)
+        sql, params = f"{sql} AND {cond}", params + more
+    if not con.execute(sql, params).rowcount and cols:
+        db.log_event(con, "info", "embed",
+                     "left to embed again: its validity columns moved while it was embedded "
+                     "(the daily roll, or a version recorded)", row["uid"])
     db.log_event(con, "info", "embed",
                  f"embedded {counts.embedded} chunks, reused {counts.reused}"
                  + (f" ({counts.crossed} from other versions)" if counts.crossed else ""), row["uid"])
@@ -2120,6 +2209,8 @@ def _embed_parallel(con, collection, recipe, *, slots: int | None = None,
                     from app import validity
                     nid = int(row["native_id"])
                     cols = validity.columns_for(tcon, collection, [nid]).get(nid)
+                    if cols:
+                        cols_of[row["uid"]] = cols      # its mark is written from them (V6)
                     try:
                         # `stop` bounds SIGTERM to one slice of a long
                         # document (stage_embed's reason: gutenberg 4656 is
@@ -2248,11 +2339,17 @@ def _embed_parallel(con, collection, recipe, *, slots: int | None = None,
     from app import validity as validity_mod
     versioned = validity_mod.declared(collection) is not None
 
+    #: uid -> the validity columns its vectors were written with (`work`):
+    #: its mark is written only while the version table holds them (V6)
+    cols_of: dict[str, dict] = {}
+
     def mark_done(uids) -> None:
         # the rows just written carry the version table's columns: synced
-        # (app/validity.py), as stage_embed marks them
+        # (app/validity.py), as stage_embed marks them — each only while they
+        # are still its columns (V6)
         from app import embed_marks
-        embed_marks.mark_embedded(con, collection, uids, synced=versioned)
+        embed_marks.mark_embedded(con, collection, uids, synced=versioned,
+                                  columns={u: cols_of.pop(u) for u in uids if u in cols_of} or None)
 
     def record_error(uid, err) -> None:
         missing = origin_missing.path_of(err)
@@ -4614,6 +4711,9 @@ def transient_failure(exc: BaseException) -> bool:
             # a document too large to parse beside what runs now (2026-11-19):
             # the pool's large lane defers it; nothing is wrong with it
             or isinstance(exc, parallel.MemoryWait)
+            # its batch stopped at a part boundary (the worker stopping, its
+            # mode holding parsing, a look-ahead let go of; 2026-11-21, P7)
+            or isinstance(exc, parallel.Stopped)
             # the vector table lacks the validity columns the collection
             # declares: the TABLE's state, repaired once by `hold vectors
             # validity-columns`; every document defers until then (2026-10-13)
@@ -4662,10 +4762,17 @@ def _execute_step(con, collection, stage, row) -> bool:
     """
     t0 = time.time()
     _committed.rdf = _committed.fts = ()
+    _deferral.memory = False
     if stage not in _NO_OUTER_TRANSACTION:
         con.execute("BEGIN IMMEDIATE")
     try:
-        STAGES[stage](con, row, collection)
+        # THE WORKER'S ROUNDS STOP WITH THE WORKER (P7 of the 2026-11-21
+        # review): the parse pool's work for rdf and fts honours the worker's
+        # stop and its mode at the next part boundary (`parallel.controlled`);
+        # a direct caller of a stage (a deposit indexing its document) is not
+        # one of the rounds, and its parse runs to its end as before
+        with parallel.controlled(stop=_parse_stop() if stage in ("rdf", "fts") else None):
+            STAGES[stage](con, row, collection)
         if stage == "embed":
             con.execute("DELETE FROM embed_queue WHERE uid=?", (row["uid"],))
         if con.in_transaction:
@@ -4683,6 +4790,26 @@ def _execute_step(con, collection, stage, row) -> bool:
             db.log_event(con, "info", stage,
                          f"{stage} interrupted — the node is stopping, or its mode "
                          f"no longer runs this ({e})")
+            return False
+        if isinstance(e, parallel.Stopped):
+            # its batch stopped at a part boundary in the parse pool (P7 of
+            # the 2026-11-21 review): nothing of the document was written
+            db.log_event(con, "info", stage,
+                         f"{stage} interrupted — the node is stopping, or its mode no longer "
+                         f"parses; the document is untouched ({e})"[:500])
+            return False
+        if isinstance(e, parallel.MemoryWait):
+            # A DEFERRAL, NEVER AN ERROR (P1 of the 2026-11-21 review): the
+            # large lane or the pool's memory could not take the selected row
+            # now, and `error=…, retries=1` took the large acts out of every
+            # selection. The row stays pending, untouched. A memory KILL is a
+            # MemoryWait too (MemoryKilled): the worker's hold is already
+            # written and its stop begun (app/oom_hold.py, `_on_oom_kill`);
+            # nothing of it is written on the document either
+            _deferral.memory = True
+            db.log_event(con, "warn", stage,
+                         f"{stage} deferred — {e}; the document is untouched and will be "
+                         f"retried"[:500], row["uid"])
             return False
         if manifest_contended(e):
             # Another writer had the manifest. Nothing is wrong with this
@@ -5364,7 +5491,8 @@ def _pipeline_worker(collection, gone: threading.Event) -> None:
                         last_idle = time.time()
                     time.sleep(config.WORKER_IDLE_SLEEP)
                     continue
-                if _execute_step(con, collection, stage, row) and stage == "fts":
+                did = _execute_step(con, collection, stage, row)
+                if did and stage == "fts":
                     # A document just became embeddable. ANNOUNCE it (§10,
                     # B2) instead of leaving the encoder rotation to find
                     # out on its next sweep: a collection that becomes
@@ -5372,6 +5500,11 @@ def _pipeline_worker(collection, gone: threading.Event) -> None:
                     # a whole rotation to say so.
                     sched.scheduler().demand(embed_resource(collection),
                                              collection.name)
+                elif not did and getattr(_deferral, "memory", False):
+                    # the selected row deferred for memory with nothing else
+                    # written (P1): the same row is the next selection, so the
+                    # pool is given an idle beat to free room, never a loop
+                    time.sleep(config.WORKER_IDLE_SLEEP)
             except Exception as e:   # noqa: BLE001 — a pipeline thread must outlive any step
                 if manifest_contended(e):
                     # a writer outside _execute_step's own handling (queue
@@ -7318,5 +7451,9 @@ def _release_locks() -> None:
         _locks.pop(name).release()
 
 if __name__ == "__main__":
-    from . import process_exit
+    from . import log_file, process_exit
+    # its log file (O1, 2026-11-21): written by its guard when it has one,
+    # which reads its every line; by itself otherwise
+    if not os.environ.get(log_file.WRITTEN_BY):
+        log_file.tee_std("worker")
     process_exit.run(main)

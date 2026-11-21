@@ -844,6 +844,51 @@ def columns_for(con, collection, native_ids: Iterable[int]) -> dict[int, dict[st
     return index_columns(con, native_ids)
 
 
+# A MARK WRITTEN FROM THE COLUMNS READ (2026-11-21, V6 of the EUR-Lex review).
+# The fts and embed stages read a record's three columns, write its index rows
+# with them — long work, outside any transaction — and then mark it done. The
+# daily `roll` (the maintainer's thread) and a neighbour's `record` (the rdf
+# stage) reset `fts_done`/`embed_done` when the columns move, and a mark
+# written after that reset, from the columns read before it, made the reset
+# lost: the index and the vectors kept the old `shown`. So a mark is written
+# only where the version table still holds the columns the rows were written
+# with; otherwise the row stays reset and its stage runs again. A
+# compare-and-set on the columns themselves (optimistic concurrency, the
+# columns read as the version), so no schema change.
+
+def moved_since(con, read: dict[int, dict[str, int]]) -> set[int]:
+    """The records of `read` (native id -> the columns their rows were
+    written with, `index_columns`'s) whose columns are not those now. Inside
+    the caller's write transaction, nothing moves them between this read and
+    its marks."""
+    if not read:
+        return set()
+    now = index_columns(con, read.keys())
+    return {nid for nid, cols in read.items() if now.get(nid) != cols}
+
+
+#: the condition of a mark written from a record's columns: the version table
+#: holds them still (a record without a version row reads as its id's
+#: default, `current_columns`, and is marked)
+_STILL = ("NOT EXISTS (SELECT 1 FROM validity v WHERE v.uid=? AND NOT (v.valid_from=? AND "
+          f"COALESCE(v.valid_to, {OPEN})=? AND v.shown=?))")
+
+
+def still(uid: str, cols: dict[str, int]) -> tuple[str, tuple]:
+    """`(SQL condition, its parameters)` for one mark (`moved_since` in one
+    statement, for a writer outside a transaction: the embed stage)."""
+    return _STILL, (str(uid), int(cols["valid_from"]), int(cols["valid_to"]), int(cols["shown"]))
+
+
+def mark_synced_if(con, uid: str, cols: dict[str, int]) -> bool:
+    """`synced = 1` for one version, only while its columns are still `cols`
+    (the ones its vectors were just written with). Whether it was marked."""
+    return con.execute(
+        f"UPDATE validity SET synced=1 WHERE uid=? AND valid_from=? AND COALESCE(valid_to, {OPEN})=? "
+        "AND shown=?", (str(uid), int(cols["valid_from"]), int(cols["valid_to"]), int(cols["shown"]))
+    ).rowcount > 0
+
+
 def mark_synced(con, native_ids: Iterable[int]) -> None:
     ids = [int(i) for i in native_ids]
     for start in range(0, len(ids), 500):
