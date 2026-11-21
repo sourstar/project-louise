@@ -120,11 +120,3 @@ def test_a_unit_holding_an_included_document_is_counted_and_listed(tmp_path):
     got = chk.check_chunk(chk.units(tmp_path, None), 3)
     assert got["counts"]["units-with-an-included-document"] == 1 and len(got["included"]) == 1
     assert got["examples"]["included document"][0].endswith(": T.xml")
-
-
-def test_the_check_counts_a_wrapper_under_another_name(tmp_path):
-    from tests.test_eurlex_package import _shifted_files
-    _unit(tmp_path, CELEX, {**_shifted_files(), rdf.TREE_FILE: _scoped((FX / MTD).read_bytes())})
-    got = chk.check_chunk(chk.units(tmp_path, None), 3)
-    assert got["misnamed"]["wrapper under another name"] == 1
-    assert got["counts"]["units-with-a-file-not-its-name"] == 1

@@ -419,24 +419,6 @@ def wrapper_head(celex: str, entries: list[os.DirEntry]) -> bytes:
         return f.read(_HEAD)
 
 
-def _wrapper_by_content(celex: str, entries: list[os.DirEntry]) -> bytes | None:
-    """The head of the XML file whose content is this act's Formex wrapper
-    (root DOC: the only one, or the one naming the act as its NO.CELEX),
-    whatever its name; None where none is."""
-    heads = []
-    for e in entries:
-        if not e.name.lower().endswith(".xml"):
-            continue
-        with open(e.path, "rb") as f:
-            head = f.read(_HEAD)
-        if formex.root_tag(head[:formex._HEAD_BYTES]) == "DOC":
-            heads.append(head)
-    if len(heads) == 1:
-        return heads[0]
-    own = [h for h in heads if f"<NO.CELEX>{celex}</NO.CELEX>".encode() in h]
-    return own[0] if len(own) == 1 else None
-
-
 def _unit_day(unit: Path, celex: str, entries: list[os.DirEntry], tree_facts: bool = False) -> str | None:
     """The day the unit's id sorts under: a consolidation's CELEX date, an
     original's OJ publication date from its wrapper's head. An act without
@@ -451,18 +433,7 @@ def _unit_day(unit: Path, celex: str, entries: list[os.DirEntry], tree_facts: bo
         head = None                        # no wrapper, or none this act's: its work's own day below
     if head is not None:
         got = _PUB_DATE.search(head)
-        if got:
-            return formex.iso(got.group(1).decode())
-        # A FILE UNDER THE WRAPPER'S NAME THAT IS NO WRAPPER (2026-11-21:
-        # 32013D0410's dump files, 24 languages: ANNEX VII as `….doc.xml`, the
-        # wrapper as the body's `.xml`): the day is read from the file that IS
-        # this act's wrapper by its content — the OJ day Cellar's own unit
-        # states, so the act's id stays when the unit is fetched again — and
-        # the act is LISTED, its parse refusing it with the reason, never left
-        # out of every scan with a warning; else the work's own day below
-        got = _PUB_DATE.search(_wrapper_by_content(celex, entries) or b"")
-        if got:
-            return formex.iso(got.group(1).decode())
+        return formex.iso(got.group(1).decode()) if got else None
     if tree_facts:
         for e in entries:
             if e.name == rdf_mod.TREE_FILE:
