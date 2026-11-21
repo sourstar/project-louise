@@ -7416,5 +7416,9 @@ def _release_locks() -> None:
         _locks.pop(name).release()
 
 if __name__ == "__main__":
-    from . import process_exit
+    from . import log_file, process_exit
+    # its log file (O1, 2026-11-21): written by its guard when it has one,
+    # which reads its every line; by itself otherwise
+    if not os.environ.get(log_file.WRITTEN_BY):
+        log_file.tee_std("worker")
     process_exit.run(main)

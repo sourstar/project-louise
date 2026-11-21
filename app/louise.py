@@ -3850,7 +3850,7 @@ def cmd_node_resident(a) -> int:
 
 #: The web process `node start` runs beside the worker: the image's own
 #: command (Dockerfile), so one node started either way serves the same app.
-WEB_COMMAND = ("-m", "uvicorn", "app.api:app", "--host", "0.0.0.0")
+WEB_COMMAND = ("-m", "app.web_main", "app.api:app", "--host", "0.0.0.0")
 WEB_STOP_WAIT_S = 30.0
 
 

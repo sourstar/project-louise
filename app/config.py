@@ -762,6 +762,25 @@ def ensure_dirs():
     LANCE_DIR.mkdir(parents=True, exist_ok=True)
 
 
+# THE PROCESSES' OWN LOG FILES (2026-11-21, O1 of the EUR-Lex review): the
+# worker kept no log file, and Docker's log dies with its container — every
+# deploy and the 01:56Z kernel panic erased the evidence of 2026-11-19/20.
+# The worker's (written by its guard, its children's lines included) and the
+# web's lines go to `<log_dir()>/worker.log` and `web.log` as well as to the
+# container's log, rotated at LOG_FILE_BYTES with LOG_FILE_BACKUPS kept:
+# at most (backups + 1) x bytes each, 384 MiB by default (app/log_file.py).
+# LOG_FILE_BYTES=0 turns them off. Identity tier: this node's paths.
+LOG_FILE_BYTES = int(os.getenv("LOG_FILE_BYTES", str(64 << 20)))
+LOG_FILE_BACKUPS = int(os.getenv("LOG_FILE_BACKUPS", "5"))
+
+
+def log_dir() -> Path:
+    """`$LOG_DIR`, else `<DATA_DIR>/logs`: on the node's own data, a local
+    filesystem (invariant 6). Read at CALL time, as `louise_root`."""
+    value = os.getenv("LOG_DIR")
+    return Path(value) if value else DATA_DIR / "logs"
+
+
 def louise_root() -> Path:
     """`<LOUISE_ROOT>` — the ONE directory of 07 §7.8, whose
     `collections/<name>/` holds each Codex collection's SHARD, state, index
