@@ -135,6 +135,11 @@ The cut differs, so the layer's version and the space_id move:
 
 The recipes state version 3.
 
+**Version 4 (2026-11-21), built and not shipped in any layer:** sentences
+and points in the 24 EU languages (P8 of the EUR-Lex review). It is a
+change of the shared space. What it changes, what it measures and what
+moving the space takes are in [legal-chunker-v4.md](legal-chunker-v4.md).
+
 **Open: the Codice civile's hierarchy.** Its 3,280 articles arrive as
 annexes named "CODICE CIVILE-art. N", with no partition. So their header
 names the act (the record's title) and the article, without Libro or Titolo:
