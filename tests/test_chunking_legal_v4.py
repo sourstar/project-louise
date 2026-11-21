@@ -5,13 +5,17 @@ FROZEN literal, pinned here by its sha256), no cut after their abbreviations
 — and version 3 byte for byte what it was. v4 cuts as v3 wherever a text
 holds none of the new capitals and none of the new abbreviations, by
 construction; held here on the four legal plugins' real fixtures (it, fr,
-de, en) and on texts built from them."""
+de, en) and on texts built from them. Its abbreviations, checked against the
+Interinstitutional Style Guide and real EUR-Lex text
+(docs/notes/legal-chunker-v4-abbreviations.md), are held on real sentences
+of the 24 languages (tests/fixtures/eurlex/sentences/)."""
 from __future__ import annotations
 
 import hashlib
 import random
 import re
 import unicodedata
+from pathlib import Path
 
 import pytest
 from tokenizers import Tokenizer, models, pre_tokenizers
@@ -104,9 +108,11 @@ def test_the_capitals_are_capitals_of_the_named_blocks_and_hold_v3_s():
 
 
 #: the three patterns v4 cuts by: a change to any of them is a new version
+#: (the abbreviations and the before-number forms as checked against the Style
+#: Guide and real text, 2026-11-21: legal-chunker-v4-abbreviations.md)
 PATTERNS_SHA256 = {"end": "06a5996d0b0c7e07e87c264f693bb0871ec413c09ff0f98f1cb3edfb7751f1b3",
-                   "abbreviations": "f724ac973e24a06f2116449920eb965cc3a3bf45f2cb03ae4766e0e74bdc2e12",
-                   "before_number": "48e404b0401d4225c53d7f98908bf63737c8d4cc5565e15c31838b8fbdd696a5",
+                   "abbreviations": "1ac075b0ede2cc1be77dcd972e50397db00361784306d03a788f6d7350b915b4",
+                   "before_number": "681359da2986a57fddc46dee1c58c2d2a4a47f57cec4e6299c5fa29063561fc2",
                    "point": "02ff0919c338a8c13312f35c99c148add689b3f5a5846af683b73391d01a7a8e"}
 
 
@@ -124,6 +130,31 @@ def test_the_abbreviations_are_the_24_languages_and_new_to_v3():
         assert not cl._ABBREVIATIONS.search(f + "."), f"{f!r}: v3 knows it already"
         assert len(f) + 2 < cl._V4_LOOKBACK
     assert len("Buchst.") + 1 < cl._V4_LOOKBACK, "v3's longest form within the look back too"
+    assert not set(cl.ABBREVIATION_FORMS_V4) & set(cl.ABBREVIATIONS_V4_BEFORE_NUMBER)
+
+
+def test_no_form_that_ends_a_sentence_elsewhere_is_refused_before_a_capital():
+    """The union of the 24 lists applies to every language: a form that is a
+    word or a unit in one is refused before a number at most. "i" (German
+    "i. V. m.", in no EU German text) is a Danish and Swedish preposition that
+    ends sentences, "kap" a Hungarian verb, "vol" the "% vol." of alcoholic
+    strength, "cap" an English word, "sal" Spanish salt, "por" Hungarian
+    powder; the Bulgarian year "г." is also the gram, the Lithuanian year "m."
+    the metre (legal-chunker-v4-abbreviations.md)."""
+    words = {"i", "kap", "Kap", "vol", "cap", "sal", "por", "г", "m"}
+    assert not words & set(cl.ABBREVIATION_FORMS_V4)
+    assert {"kap", "Kap", "vol", "cap"} <= set(cl.ABBREVIATIONS_V4_BEFORE_NUMBER)
+    (p,) = [x for x in _paragraphs("32019L0790da.html") if "som de indgår i. Udgivere" in x]
+    cut = cl._sentences(p, 4)
+    assert cut[0].endswith("den pressepublikation, som de indgår i.")
+    assert cut[1].startswith("Udgivere af pressepublikationer bør derfor")
+    # written for the test: each such form ends a sentence before a capital, a
+    # number follows it in a reference
+    assert cl._sentences("A sorozat is kap. A monográfiák is.", 4) == ["A sorozat is kap.", "A monográfiák is."]
+    assert cl._sentences("The strength is 12 % vol. The wine is red.", 4) == \
+        ["The strength is 12 % vol.", "The wine is red."]
+    assert cl._sentences("The fee cap. The rate.", 4) == ["The fee cap.", "The rate."]
+    assert cl._sentences("Se kap. 5 og vol. 34, cap. 6.", 4) == ["Se kap. 5 og vol. 34, cap. 6."]
 
 
 # ---- identity with v3 where nothing new stands -------------------------------------------------------
@@ -229,82 +260,327 @@ def test_at_a_forced_window_only_a_new_abbreviation_moves_a_fixture_s_cut(fixtur
     assert not any(s.endswith("D.Lgs.") for s in cl._sentences(note, 4))
 
 
-# ---- the 24 languages' sentences (written for the test in each language's drafting
-# conventions — no fixture holds a body in these languages; EUR-Lex's are English) -------------------
+# ---- the 24 languages' sentences: REAL text. Each a paragraph of a Cellar item trimmed to
+# whole lines (tests/fixtures/eurlex/sentences/, its README: every kept byte as served), as
+# the EUR-Lex plugin's rendition reader reads it — the text a record's section holds ---------
 
+SENTENCES = Path(__file__).parent / "fixtures" / "eurlex" / "sentences"
+
+
+def _paragraphs(name: str) -> list[str]:
+    """The fixture's lines of text as `rendition.parse_html` reads them."""
+    from types import SimpleNamespace
+
+    from app.plugins.eurlex import rendition
+    note = SimpleNamespace(expression_title=None, date_document=None, date_publication=None)
+    act = rendition.parse_html({name: (SENTENCES / name).read_bytes()}, [name], lang="", root="", note=note)
+    return [line for _label, body in act.rendered_sections for line in body.split("\n")]
+
+
+#: per language: (fixture, does v3 cut it otherwise, the paragraph's sentences as v4
+#: cuts them) — the GDPR's (32016R0679) recital 1 or 17, a sentence end before a
+#: capital v3 saw or not; its footnote 6, Regulation No 45/2001 and its OJ page, one
+#: sentence however many full stops; and where a new form stands elsewhere, that
+#: paragraph: Danish "Stk.", German "z. B." and "u. a." (32016R1036), Hungarian "sz."
+#: (02016R1036-20180608), Polish "r.", Lithuanian "d."
 GOLDEN_V4 = {
-    "el": ["Τα κράτη μέλη εφαρμόζουν το άρθ. 5 παρ. 2 του κανονισμού (ΕΕ) αριθ. 1093/2010.",
-           "Η Επιτροπή ενημερώνεται χωρίς καθυστέρηση.",
-           "Βλ. επίσης σ. 12 της ΕΕ L 119."],
-    "bg": ["Държавите членки прилагат чл. 5, ал. 2 от Регламент (ЕС) № 1093/2010.",
-           "Съветът се информира незабавно.",
-           "Вж. също стр. 3 и т. 4."],
-    "cs": ["Členské státy uplatňují čl. 5 odst. 2 písm. a) nařízení (EU) č. 1093/2010.",
-           "Členské státy o tom informují Komisi.",
-           "Viz Úř. věst. L 119, 4.5.2016, s. 1."],
-    "pl": ["Państwa członkowskie stosują art. 5 ust. 2 lit. a) rozporządzenia (UE) nr 1093/2010.",
-           "Środki te zgłasza się Komisji.",
-           "Zob. Dz.U. L 119 z 4.5.2016, s. 1."],
-    "hu": ["A tagállamok alkalmazzák a 2011. évi CXII. tv. 5. §-át és az 1093/2010/EU rendelet 5. cikkét.",
-           "Őket a Bizottság tájékoztatja.",
-           "Vö. HL L 119., 2016.5.4., 1. o."],
-    "ro": ["Statele membre aplică art. 5 alin. (2) lit. (a) din Regulamentul (UE) nr. 1093/2010.",
-           "Ținând seama de acestea, Comisia este informată.",
-           "A se vedea JO L 119, 4.5.2016, p. 1."],
-    "lt": ["Valstybės narės taiko Reglamento (ES) Nr. 1093/2010 5 str. 2 dalį.",
-           "Šios priemonės pranešamos Komisijai.",
-           "Žr. OL L 119, 2016 5 4, p. 1."],
-    "lv": ["Dalībvalstis piemēro Regulas (ES) Nr. 1093/2010 5. panta 2. punktu.",
-           "Šos pasākumus paziņo Komisijai, sk. 7. pantu.",
-           "Ēdināšanas pakalpojumiem to nepiemēro."],
-    "mt": ["L-Istati Membri għandhom japplikaw l-Art. 5, par. 2, tar-Regolament (UE) Nru 1093/2010.",
-           "Żmien twil ma għandux jgħaddi.",
-           "Ara wkoll ĠU L 119, 4.5.2016, p. 1."],
-    "sk": ["Členské štáty uplatňujú čl. 5 ods. 2 nariadenia (EÚ) č. 1093/2010.",
-           "Ďalšie opatrenia sa oznamujú Komisii.",
-           "Pozri Ú. v. EÚ L 119, 4.5.2016, s. 1."],
-    "sl": ["Države članice uporabljajo člen 5(2) Uredbe (EU) št. 1093/2010, glej tudi odst. 3 in tč. (a).",
-           "Člen 7 se ne uporablja.",
-           "Glej UL L 119, 4.5.2016, str. 1."],
-    "hr": ["Države članice primjenjuju članak 5. stavak 2. točku (a) Uredbe (EU) br. 1093/2010, "
-           "vidi i čl. 7 st. 3.",
-           "Što se tiče rokova, primjenjuje se članak 9.",
-           "Vidjeti SL L 119, 4.5.2016., str. 1."],
-    "et": ["Liikmesriigid kohaldavad määruse (EL) nr 1093/2010 artikli 5 lõiget 2.",
-           "Šveitsi suhtes kohaldatakse artiklit 7.",
-           "Vt ELT L 119, 4.5.2016, lk 1."],
-    "fi": ["Jäsenvaltioiden on sovellettava asetuksen (EU) N:o 1093/2010 5 artiklan 2 kohtaa, ks. myös s. 12.",
-           "Äänestys toimitetaan kirjallisesti.",
-           "Ks. EUVL L 119, 4.5.2016, s. 1."],
-    "ga": ["Cuirfidh na Ballstáit Airt. 5 de Rialachán (AE) Uimh. 1093/2010 i bhfeidhm.",
-           "Ní bheidh feidhm ag Airteagal 7.",
-           "Féach IO L 119, 4.5.2016, lch. 1."],
+    "bg": [
+        ("32016R0679bg.html", True, [
+            "Защитата на физическите лица във връзка с обработването на лични данни е основно право.",
+            "Член 8, параграф 1 от Хартата на основните права на Европейския съюз („Хартата“) и член 16, параграф 1 от Договора за функционирането на Европейския съюз (ДФЕС) предвиждат, че всеки има право на защита на личните му данни.",
+        ]),
+        ("32016R0679bg.html", True, [
+            "(6) Регламент (ЕО) № 45/2001 на Европейския парламент и на Съвета от 18 декември 2000 г. относно защитата на лицата по отношение на обработката на лични данни от институции и органи на Общността и за свободното движение на такива данни (ОВ L 8, 12.1.2001 г., стр. 1).",
+        ]),
+    ],
+    "cs": [
+        ("32016R0679cs.html", True, [
+            "Ochrana fyzických osob v souvislosti se zpracováním osobních údajů je základním právem.",
+            "Ustanovení čl. 8 odst. 1 Listiny základních práv Evropské unie (dále jen „Listina“) a čl. 16 odst. 1 Smlouvy o fungování Evropské unie (dále jen „Smlouva o fungování EU“) přiznávají každému právo na ochranu osobních údajů, které se jej týkají.",
+        ]),
+        ("32016R0679cs.html", True, [
+            "(6) Nařízení Evropského parlamentu a Rady (ES) č. 45/2001 ze dne 18. prosince 2000 o ochraně fyzických osob v souvislosti se zpracováním osobních údajů orgány a institucemi Společenství a o volném pohybu těchto údajů (Úř. věst. L 8, 12.1.2001, s. 1).",
+        ]),
+    ],
+    "da": [
+        ("32016R0679da.html", True, [
+            "Beskyttelse af fysiske personer i forbindelse med behandling af personoplysninger er en grundlæggende rettighed.",
+            "I artikel 8, stk. 1, i Den Europæiske Unions charter om grundlæggende rettigheder (»chartret«) og i artikel 16, stk. 1, i traktaten om Den Europæiske Unions funktionsmåde (TEUF) fastsættes det, at enhver har ret til beskyttelse af personoplysninger, der vedrører den pågældende.",
+        ]),
+        ("32016R0679da.html", True, [
+            "3.",
+            "Stk. 1 berører ikke medlemsstaternes generelle aftaleret, som f.eks. bestemmelser om gyldighed, indgåelse eller virkning af en kontrakt, når der er tale om et barn.",
+        ]),
+        ("32016R0679da.html", True, [
+            "(6) Europa-Parlamentets og Rådets forordning (EF) nr. 45/2001 af 18. december 2000 om beskyttelse af fysiske personer i forbindelse med behandling af personoplysninger i fællesskabsinstitutionerne og -organerne og om fri udveksling af sådanne oplysninger (EFT L 8 af 12.1.2001, s. 1).",
+        ]),
+    ],
+    "de": [
+        ("32016R0679de.html", False, [
+            "Der Schutz natürlicher Personen bei der Verarbeitung personenbezogener Daten ist ein Grundrecht.",
+            "Gemäß Artikel 8 Absatz 1 der Charta der Grundrechte der Europäischen Union (im Folgenden „Charta“) sowie Artikel 16 Absatz 1 des Vertrags über die Arbeitsweise der Europäischen Union (AEUV) hat jede Person das Recht auf Schutz der sie betreffenden personenbezogenen Daten.",
+        ]),
+        ("32016R0679de.html", True, [
+            "Ist nach Völkerrecht das Recht eines Mitgliedstaats anwendbar, z. B. in einer diplomatischen oder konsularischen Vertretung eines Mitgliedstaats, so sollte die Verordnung auch auf einen nicht in der Union niedergelassenen Verantwortlichen Anwendung finden.",
+        ]),
+        ("32016R1036de.html", True, [
+            "Es sollten die Bedingungen festgesetzt werden, unter denen vorläufige Zölle eingeführt werden können, u. a. Bedingungen wonach vorläufige Zölle frühestens 60 Tage und spätestens neun Monate nach der Einleitung des Verfahrens eingeführt werden können.",
+            "Aus Verwaltungsgründen sollte ferner vorgesehen werden, dass diese Zölle in allen Fällen von der Kommission entweder direkt für einen Zeitraum von neun Monaten oder in zwei Phasen von sechs und drei Monaten eingeführt werden können.",
+        ]),
+    ],
+    "el": [
+        ("32016R0679el.html", True, [
+            "Ο κανονισμός (EΚ) αριθ. 45/2001 του Ευρωπαϊκού Κοινοβουλίου και του Συμβουλίου (6) εφαρμόζεται στην επεξεργασία δεδομένων προσωπικού χαρακτήρα από τα θεσμικά και λοιπά όργανα, οργανισμούς και υπηρεσίες της Ένωσης.",
+            "Ο κανονισμός (EΚ) αριθ. 45/2001 και άλλες νομικές πράξεις της Ένωσης οι οποίες είναι εφαρμοστέες σε μια τέτοια επεξεργασία δεδομένων προσωπικού χαρακτήρα θα πρέπει να προσαρμοστούν στις αρχές και τους κανόνες που θεσπίζονται στον παρόντα κανονισμό και να εφαρμόζονται υπό το πρίσμα του παρόντος κανονισμού.",
+            "Για να εξασφαλιστεί ένα ισχυρό και συνεκτικό πλαίσιο προστασίας των δεδομένων στην Ένωση, μετά την έκδοσή του παρόντος κανονισμού θα πρέπει να ακολουθήσουν οι αναγκαίες προσαρμογές του κανονισμού (ΕΚ) αριθ. 45/2001, ώστε να καταστεί δυνατή η εφαρμογή ταυτόχρονα με τον παρόντα κανονισμό.",
+        ]),
+        ("32016R0679el.html", True, [
+            "(6) Κανονισμός (ΕΚ) αριθ. 45/2001 του Ευρωπαϊκού Κοινοβουλίου και του Συμβουλίου, της 18ης Δεκεμβρίου 2000, σχετικά με την προστασία των φυσικών προσώπων έναντι της επεξεργασίας δεδομένων προσωπικού χαρακτήρα από τα όργανα και τους οργανισμούς της Κοινότητας και σχετικά με την ελεύθερη κυκλοφορία των δεδομένων αυτών (ΕΕ L 8 της 12.1.2001, σ. 1).",
+        ]),
+    ],
+    "en": [
+        ("32016R0679en.html", False, [
+            "The protection of natural persons in relation to the processing of personal data is a fundamental right.",
+            "Article 8(1) of the Charter of Fundamental Rights of the European Union (the ‘Charter’) and Article 16(1) of the Treaty on the Functioning of the European Union (TFEU) provide that everyone has the right to the protection of personal data concerning him or her.",
+        ]),
+        ("32016R0679en.html", False, [
+            "(6) Regulation (EC) No 45/2001 of the European Parliament and of the Council of 18 December 2000 on the protection of individuals with regard to the processing of personal data by the Community institutions and bodies and on the free movement of such data (OJ L 8, 12.1.2001, p. 1).",
+        ]),
+    ],
+    "es": [
+        ("32016R0679es.html", False, [
+            "La protección de las personas físicas en relación con el tratamiento de datos personales es un derecho fundamental.",
+            "El artículo 8, apartado 1, de la Carta de los Derechos Fundamentales de la Unión Europea («la Carta») y el artículo 16, apartado 1, del Tratado de Funcionamiento de la Unión Europea (TFUE) establecen que toda persona tiene derecho a la protección de los datos de carácter personal que le conciernan.",
+        ]),
+        ("32016R0679es.html", False, [
+            "(6) Reglamento (CE) n.o 45/2001 del Parlamento Europeo y del Consejo, de 18 de diciembre de 2000, relativo a la protección de las personas físicas en lo que respecta al tratamiento de datos personales por las instituciones y los organismos comunitarios y a la libre circulación de estos datos (DO L 8 de 12.1.2001, p. 1).",
+        ]),
+    ],
+    "et": [
+        ("32016R0679et.html", False, [
+            "Füüsiliste isikute kaitse isikuandmete töötlemisel on põhiõigus.",
+            "Euroopa Liidu põhiõiguste harta („harta“) artikli 8 lõikes 1 ja Euroopa Liidu toimimise lepingu („ELi toimimise leping“) artikli 16 lõikes 1 on sätestatud, et igaühel on õigus oma isikuandmete kaitsele.",
+        ]),
+        ("32016R0679et.html", False, [
+            "(6) Euroopa Parlamendi ja nõukogu 18. detsembri 2000. aasta määrus (EÜ) nr 45/2001 füüsiliste isikute kaitse kohta isikuandmete töötlemisel ühenduse institutsioonides ja asutustes ning selliste andmete vaba liikumise kohta (EÜT L 8, 12.1.2001, lk 1).",
+        ]),
+    ],
+    "fi": [
+        ("32016R0679fi.html", False, [
+            "Luonnollisten henkilöiden suojelu henkilötietojen käsittelyn yhteydessä on perusoikeus.",
+            "Euroopan unionin perusoikeuskirjan, jäljempänä ’perusoikeuskirja’, 8 artiklan 1 kohdan ja Euroopan unionin toiminnasta tehdyn sopimuksen (SEUT) 16 artiklan 1 kohdan mukaan jokaisella on oikeus henkilötietojensa suojaan.",
+        ]),
+        ("32016R0679fi.html", True, [
+            "(6) Euroopan parlamentin ja neuvoston asetus (EY) N:o 45/2001, annettu 18 päivänä joulukuuta 2000, yksilöiden suojelusta yhteisöjen toimielinten ja elinten suorittamassa henkilötietojen käsittelyssä ja näiden tietojen vapaasta liikkuvuudesta (EYVL L 8, 12.1.2001, s. 1).",
+        ]),
+    ],
+    "fr": [
+        ("32016R0679fr.html", False, [
+            "La protection des personnes physiques à l'égard du traitement des données à caractère personnel est un droit fondamental.",
+            "L'article 8, paragraphe 1, de la Charte des droits fondamentaux de l'Union européenne (ci-après dénommée «Charte») et l'article 16, paragraphe 1, du traité sur le fonctionnement de l'Union européenne disposent que toute personne a droit à la protection des données à caractère personnel la concernant.",
+        ]),
+        ("32016R0679fr.html", False, [
+            "(6) Règlement (CE) no 45/2001 du Parlement européen et du Conseil du 18 décembre 2000 relatif à la protection des personnes physiques à l'égard du traitement des données à caractère personnel par les institutions et organes communautaires et à la libre circulation de ces données (JO L 8 du 12.1.2001, p. 1).",
+        ]),
+    ],
+    "ga": [
+        ("32016R0679ga.html", True, [
+            "Tá feidhm ag Rialachán (CE) Uimh 45/2001 ó Pharlaimint na hEorpa agus ón gComhairle (6) maidir le sonraí pearsanta a phróiseáil ag institiúidí, comhlachtaí, oifigí agus gníomhaireachtaí an Aontais.",
+            "Ba cheart Rialachán (CE) Uimh. 45/2001 agus na gníomhartha dlí eile de chuid an Aontais is infheidhme maidir leis an bpróiseáil sin ar shonraí pearsanta a chur in oiriúint do na prionsabail agus do na rialacha a bhunaítear sa Rialachán seo agus a chur i bhfeidhm i bhfianaise an Rialacháin seo.",
+            "D'fhonn creat láidir, comhtháite cosanta sonraí a chur ar fáil san Aontas, ba cheart na hoiriúnuithe riachtanacha ar Rialachán (CE) Uimh. 45/2001 a dhéanamh tar éis an Rialachán seo a ghlacadh, d'fhonn go bhféadfar iad a chur i bhfeidhm i gcomhthráth leis an Rialachán seo.",
+        ]),
+        ("32016R0679ga.html", True, [
+            "(6) Rialachán (CE) Uimh.45/2001 ó Pharlaimint na hEorpa agus ón gComhairle an 18 Nollaig 2000 maidir le daoine aonair a chosaint i ndáil le sonraí pearsanta a phróiseáil ag institiúidí agus ag comhlachtaí an Chomhphobail agus maidir le saorghluaiseacht sonraí den sórt sin (IO L 8, 12.1.2001, lch. 1).",
+        ]),
+    ],
+    "hr": [
+        ("32016R0679hr.html", True, [
+            "Uredba (EZ) br. 45/2001 Europskog parlamenta i Vijeća (6) primjenjuje se na obradu osobnih podataka koju obavljaju institucije, tijela, uredi i agencije Unije.",
+            "Uredba (EZ) br. 45/2001 i drugi pravni akti Unije primjenjivi na takvu obradu osobnih podataka trebali bi se prilagoditi načelima i pravilima iz ove Uredbe i primjenjivati s obzirom na ovu Uredbu.",
+            "Kako bi se osigurao čvrst i usklađen okvir za zaštitu podataka u Uniji, nakon donošenja ove Uredbe trebale bi uslijediti potrebne prilagodbe Uredbe (EZ) br. 45/2001 kako bi se omogućila istovremena primjena obiju uredaba.",
+        ]),
+        ("32016R0679hr.html", True, [
+            "(6) Uredba (EZ) br. 45/2001 Europskog parlamenta i Vijeća od 18. prosinca 2000. o zaštiti pojedinaca u vezi s obradom osobnih podataka u institucijama i tijelima Zajednice i o slobodnom kretanju takvih podataka (SL L 8, 12.1.2001., str. 1.).",
+        ]),
+    ],
+    "hu": [
+        ("32016R0679hu.html", False, [
+            "A természetes személyek személyes adataik kezelésével összefüggő védelme alapvető jog.",
+            "Az Európai Unió Alapjogi Chartája (Charta) 8. cikkének (1) bekezdése és az Európai Unió működéséről szóló szerződés (EUMSZ) 16. cikkének (1) bekezdése rögzíti, hogy mindenkinek joga van a rá vonatkozó személyes adatok védelméhez.",
+        ]),
+        ("32016R0679hu.html", False, [
+            "(6) Az Európai Parlament és a Tanács 45/2001/EK rendelete (2000. december 18.) a személyes adatok közösségi intézmények és szervek által történő feldolgozása tekintetében az egyének védelméről, valamint az ilyen adatok szabad áramlásáról (HL L 8., 2001.1.12., 1. o.).",
+        ]),
+        ("02016R1036-20180608hu.html", True, [
+            "1.",
+            "Egyezmény a kényszer- vagy kötelező munkáról, 29. sz. (1930)",
+        ]),
+    ],
+    "it": [
+        ("32016R0679it.html", False, [
+            "La protezione delle persone fisiche con riguardo al trattamento dei dati di carattere personale è un diritto fondamentale.",
+            "L'articolo 8, paragrafo 1, della Carta dei diritti fondamentali dell'Unione europea («Carta») e l'articolo 16, paragrafo 1, del trattato sul funzionamento dell'Unione europea («TFUE») stabiliscono che ogni persona ha diritto alla protezione dei dati di carattere personale che la riguardano.",
+        ]),
+        ("32016R0679it.html", True, [
+            "(6) Regolamento (CE) n. 45/2001 del Parlamento europeo e del Consiglio, del 18 dicembre 2000, concernente la tutela delle persone fisiche in relazione al trattamento dei dati personali da parte delle istituzioni e degli organismi comunitari, nonché la libera circolazione di tali dati (GU L 8 del 12.1.2001, pag. 1).",
+        ]),
+    ],
+    "lt": [
+        ("32016R0679lt.html", False, [
+            "fizinių asmenų apsauga tvarkant asmens duomenis yra pagrindinė teisė.",
+            "Europos Sąjungos pagrindinių teisių chartijos (toliau – Chartija) 8 straipsnio 1 dalyje ir Sutarties dėl Europos Sąjungos veikimo (toliau – SESV) 16 straipsnio 1 dalyje numatyta, kad kiekvienas asmuo turi teisę į savo asmens duomenų apsaugą;",
+        ]),
+        ("32016R0679lt.html", True, [
+            "(6) 2000 m. gruodžio 18 d. Europos Parlamento ir Tarybos reglamentas (EB) Nr. 45/2001 dėl asmenų apsaugos Bendrijos institucijoms ir įstaigoms tvarkant asmens duomenis ir laisvo tokių duomenų judėjimo (OL L 8, 2001 1 12, p. 1).",
+        ]),
+    ],
+    "lv": [
+        ("32016R0679lv.html", False, [
+            "Fizisku personu aizsardzība attiecībā uz personas datu aizsardzību ir pamattiesības.",
+            "Eiropas Savienības Pamattiesību hartas (“harta”) 8. panta 1. punkts un Līguma par Eiropas Savienības darbību (LESD) 16. panta 1. punkts paredz, ka ikvienai personai ir tiesības uz savu personas datu aizsardzību.",
+        ]),
+        ("32016R0679lv.html", False, [
+            "(6) Eiropas Parlamenta un Padomes Regula (EK) Nr. 45/2001 (2000. gada 18. decembris) par fizisku personu aizsardzību attiecībā uz personas datu apstrādi Kopienas iestādēs un struktūrās un par šādu datu brīvu apriti (OV L 8, 12.1.2001., 1. lpp.).",
+        ]),
+    ],
+    "mt": [
+        ("32016R0679mt.html", False, [
+            "Il-protezzjoni tal-persuni fiżiċi fir-rigward tal-ipproċessar ta' data personali hija dritt fundamentali.",
+            "L-Artikolu 8(1) tal-Karta tad-Drittijiet Fundamentali tal-Unjoni Ewropea (il-“Karta”) u l-Artikolu 16(1) tat-Trattat dwar il-Funzjonament tal-Unjoni Ewropea (TFUE) jipprevedu li kull persuna għandha dritt għall-protezzjoni tad-data personali li tirrigwardaha.",
+        ]),
+        ("32016R0679mt.html", False, [
+            "(6) Ir-Regolament (KE) Nru 45/2001 tal-Parlament Ewropew u tal-Kunsill tat-18 ta' Diċembru 2000 dwar il-protezzjoni tal-individwu fir-rigward tal-ipproċessar ta' data personali mill-istituzzjonijiet u l-korpi tal-Komunità u dwar il-moviment liberu ta' dik id-data (ĠU L 8, 12.1.2001, p. 1).",
+        ]),
+    ],
+    "nl": [
+        ("32016R0679nl.html", True, [
+            "Verordening (EG) nr. 45/2001 van het Europees Parlement en de Raad (6) is van toepassing op de verwerking van persoonsgegevens door de instellingen, organen en instanties van de Unie.",
+            "Verordening (EG) nr. 45/2001 en andere rechtshandelingen van de Unie die van toepassing zijn op een dergelijke verwerking van persoonsgegevens, moeten aan de beginselen en regels van de onderhavige verordening worden aangepast en in het licht van de onderhavige verordening worden toegepast.",
+            "Om de Unie een sterk en coherent kader inzake gegevensbescherming ter beschikking te stellen, moet Verordening (EG) nr. 45/2001 waar nodig worden aangepast zodra de onderhavige verordening is vastgesteld, opdat deze op hetzelfde tijdstip als de onderhavige verordening van toepassing kan worden.",
+        ]),
+        ("32016R0679nl.html", True, [
+            "(6) Verordening (EG) nr. 45/2001 van het Europees Parlement en de Raad van 18 december 2000 betreffende de bescherming van natuurlijke personen in verband met de verwerking van persoonsgegevens door de communautaire instellingen en organen en betreffende het vrije verkeer van die gegevens (PB L 8 van 12.1.2001, blz. 1).",
+        ]),
+    ],
+    "pl": [
+        ("32016R0679pl.html", True, [
+            "Ochrona osób fizycznych w związku z przetwarzaniem danych osobowych jest jednym z praw podstawowych.",
+            "Art. 8 ust. 1 Karty praw podstawowych Unii Europejskiej (zwanej dalej „Kartą praw podstawowych”) oraz art. 16 ust. 1 Traktatu o funkcjonowaniu Unii Europejskiej (TFUE) stanowią, że każda osoba ma prawo do ochrony danych osobowych jej dotyczących.",
+        ]),
+        ("32016R0679pl.html", True, [
+            "(6) Rozporządzenie (WE) nr 45/2001 Parlamentu Europejskiego i Rady z dnia 18 grudnia 2000 r. o ochronie osób fizycznych w związku z przetwarzaniem danych osobowych przez instytucje i organy wspólnotowe i o swobodnym przepływie takich danych (Dz.U. L 8 z 12.1.2001, s. 1).",
+        ]),
+        ("32016R0679pl.html", True, [
+            "Zgodnie z art. 28 ust. 2 rozporządzenia (WE) nr 45/2001 przeprowadzono konsultacje z Europejskim Inspektorem Ochrony Danych, który wydał opinię w dniu 7 marca 2012 r. (17).",
+        ]),
+    ],
+    "pt": [
+        ("32016R0679pt.html", False, [
+            "A proteção das pessoas singulares relativamente ao tratamento de dados pessoais é um direito fundamental.",
+            "O artigo 8.o, n.o 1, da Carta dos Direitos Fundamentais da União Europeia («Carta») e o artigo 16.o, n.o 1, do Tratado sobre o Funcionamento da União Europeia (TFUE) estabelecem que todas as pessoas têm direito à proteção dos dados de caráter pessoal que lhes digam respeito.",
+        ]),
+        ("32016R0679pt.html", False, [
+            "(6) Regulamento (CE) n.o 45/2001 do Parlamento Europeu e do Conselho, de 18 de dezembro de 2000, relativo à proteção das pessoas singulares no que diz respeito ao tratamento de dados pessoais pelas instituições e pelos órgãos comunitários e à livre circulação desses dados (JO L 8 de 12.1.2001, p. 1).",
+        ]),
+    ],
+    "ro": [
+        ("32016R0679ro.html", True, [
+            "Regulamentul (CE) nr. 45/2001 al Parlamentului European și al Consiliului (6) se aplică prelucrării de date cu caracter personal de către instituțiile, organele, oficiile și agențiile Uniunii.",
+            "Regulamentul (CE) nr. 45/2001 și alte acte juridice ale Uniunii aplicabile unei asemenea prelucrări a datelor cu caracter personal ar trebui adaptate la principiile și normele stabilite în prezentul regulament și aplicate în conformitate cu prezentul regulament.",
+            "În vederea asigurării unui cadru solid și coerent în materie de protecție a datelor în Uniune, ar trebui ca după adoptarea prezentului regulament să se aducă Regulamentului (CE) nr. 45/2001 adaptările necesare, astfel încât acestea să poată fi aplicate odată cu prezentul regulament.",
+        ]),
+        ("32016R0679ro.html", True, [
+            "(6) Regulamentul (CE) nr. 45/2001 al Parlamentului European și al Consiliului din 18 decembrie 2000 privind protecția persoanelor fizice cu privire la prelucrarea datelor cu caracter personal de către instituțiile și organele comunitare și privind libera circulație a acestor date (JO L 8, 12.1.2001, p. 1).",
+        ]),
+    ],
+    "sk": [
+        ("32016R0679sk.html", True, [
+            "Ochrana fyzických osôb v súvislosti so spracúvaním osobných údajov patrí medzi základné práva.",
+            "V článku 8 ods. 1 Charty základných práv Európskej únie (ďalej len „Charta“) a v článku 16 ods. 1 Zmluvy o fungovaní Európskej únie (ZFEÚ) sa stanovuje, že každý má právo na ochranu osobných údajov, ktoré sa ho týkajú.",
+        ]),
+        ("32016R0679sk.html", True, [
+            "(6) Nariadenie Európskeho parlamentu a Rady (ES) č. 45/2001 z 18. decembra 2000 o ochrane jednotlivcov so zreteľom na spracovanie osobných údajov inštitúciami a orgánmi spoločenstva a o voľnom pohybe takýchto údajov (Ú. v. ES L 8, 12.1.2001, s. 1).",
+        ]),
+    ],
+    "sl": [
+        ("32016R0679sl.html", True, [
+            "Uredba (ES) št. 45/2001 Evropskega parlamenta in Sveta (6) se uporablja za obdelavo osebnih podatkov s strani institucij, organov, uradov in agencij Unije.",
+            "Uredbo (ES) št. 45/2001 in druge pravne akte Unije, ki se uporabljajo za tako obdelavo osebnih podatkov, bi bilo treba prilagoditi načelom in pravilom, določenim v tej uredbi, in jih uporabljati ob upoštevanju te uredbe.",
+            "Za zagotovitev trdnega in usklajenega okvira varstva podatkov v Uniji bi bilo treba po sprejetju te uredbe prilagoditi tudi Uredbo (ES) št. 45/2001, da bi se lahko začela uporabljati sočasno s to uredbo.",
+        ]),
+        ("32016R0679sl.html", True, [
+            "(6) Uredba (ES) št. 45/2001 Evropskega parlamenta in Sveta z dne 18. decembra 2000 o varstvu posameznikov pri obdelavi osebnih podatkov v institucijah in organih Skupnosti in o prostem pretoku takih podatkov (UL L 8, 12.1.2001, str. 1).",
+        ]),
+    ],
+    "sv": [
+        ("32016R0679sv.html", False, [
+            "Skyddet för fysiska personer vid behandling av personuppgifter är en grundläggande rättighet.",
+            "Artikel 8.1 i Europeiska unionens stadga om de grundläggande rättigheterna (nedan kallad stadgan) och artikel 16.1 i fördraget om Europeiska unionens funktionssätt (EUF-fördraget) föreskriver att var och en har rätt till skydd av de personuppgifter som rör honom eller henne.",
+        ]),
+        ("32016R0679sv.html", True, [
+            "(6) Europaparlamentets och rådets förordning (EG) nr 45/2001 av den 18 december 2000 om skydd för enskilda då gemenskapsinstitutionerna och gemenskapsorganen behandlar personuppgifter och om den fria rörligheten för sådana uppgifter (EGT L 8, 12.1.2001, s. 1).",
+        ]),
+    ],
 }
 
 
+def test_every_language_has_real_goldens():
+    assert sorted(GOLDEN_V4) == sorted(lang for lang, _forms in cl.ABBREVIATIONS_V4)
+    for lang, golden in GOLDEN_V4.items():
+        assert any(len(want) > 1 for _n, _m, want in golden), f"{lang}: a sentence end"
+        assert any(len(want) == 1 or moved for _n, moved, want in golden), f"{lang}: a refused cut"
+
+
 @pytest.mark.parametrize("lang", sorted(GOLDEN_V4))
-def test_v4_cuts_each_language_at_its_sentence_ends_and_never_after_an_abbreviation(lang, word):
-    want = GOLDEN_V4[lang]
+def test_v4_cuts_real_text_at_its_sentence_ends_and_never_after_an_abbreviation(lang, word):
+    for name, moved, want in GOLDEN_V4[lang]:
+        text = " ".join(want)
+        assert text in _paragraphs(name), f"{name}: a paragraph of the fixture, verbatim"
+        assert cl._sentences(text, 4) == want
+        assert (cl._sentences(text, 3) != want) == moved
+    # through the chunker's own split, at a window of the longest sentence: every
+    # piece whole sentences, the text whole
+    want = max((w for _n, _m, w in GOLDEN_V4[lang]), key=len)
     text = " ".join(want)
-    assert cl._sentences(text, 4) == want
-    # through the chunker's own split, at a window of the longest sentence:
-    # every piece is whole sentences, the text whole
     pieces = cl.split(word, text, max(len(s.split()) for s in want), version=4)
     runs = {" ".join(want[i:j]) for i in range(len(want)) for j in range(i + 1, len(want) + 1)}
     assert len(pieces) > 1 and all(p in runs for p in pieces) and " ".join(pieces) == text
 
 
 def test_v3_saw_neither_the_capitals_nor_the_abbreviations():
-    """What v4 changes, on two of them: v3 cut Greek after "άρθ.", "παρ.",
-    "αριθ." and "σ." (a digit follows) and never before "Η" or "Β"."""
-    el = " ".join(GOLDEN_V4["el"])
-    assert cl._sentences(el, 3) == ["Τα κράτη μέλη εφαρμόζουν το άρθ.", "5 παρ.", "2 του κανονισμού (ΕΕ) αριθ.",
-                                    "1093/2010. Η Επιτροπή ενημερώνεται χωρίς καθυστέρηση. Βλ. επίσης σ.",
-                                    "12 της ΕΕ L 119."]
-    cs = " ".join(GOLDEN_V4["cs"])
-    assert cl._sentences(cs, 3) == ["Členské státy uplatňují čl.", "5 odst.", "2 písm. a) nařízení (EU) č.",
-                                    "1093/2010. Členské státy o tom informují Komisi.", "Viz Úř. věst.",
-                                    "L 119, 4.5.2016, s.", "1."]
+    """What v4 changes, on real text: v3 cut the Czech and the Greek footnote
+    after "č.", "věst.", "s.", "αριθ." and "σ." (a digit or a capital follows),
+    and never cut the Bulgarian recital before "Член" (a capital it did not see)."""
+    def v3_cuts_after(lang: str, i: int) -> list[str]:
+        _name, _moved, want = GOLDEN_V4[lang][i]
+        return [s.rsplit(" ", 1)[-1] for s in cl._sentences(" ".join(want), 3)[:-1]]
+    assert v3_cuts_after("cs", 1) == ["č.", "věst.", "s."]
+    assert v3_cuts_after("el", 1) == ["αριθ.", "σ."]
+    assert v3_cuts_after("bg", 0) == []
+
+
+def test_a_polish_committee_do_spraw_is_no_sentence_end():
+    """"Grupa Robocza ds. Ochrony Osób Fizycznych" (do spraw): Polish names
+    every committee so (Guide pl § 10.3.1); v3 cut after "ds."."""
+    (p,) = [x for x in _paragraphs("32016R0679pl.html") if "Grupę Roboczą ds." in x]
+    whole = ("Powinna ona zastąpić Grupę Roboczą ds. Ochrony Osób Fizycznych w zakresie Przetwarzania "
+             "Danych Osobowych, powołaną na mocy dyrektywy 95/46/WE.")
+    assert whole in cl._sentences(p, 4) and len(cl._sentences(p, 4)) == 8
+    assert whole not in cl._sentences(p, 3) and len(cl._sentences(p, 3)) == 9
+
+
+def test_an_unece_revision_is_no_sentence_end():
+    """"UN/ECE Regulation 49 Rev. 06" in 32017R2400's annex (a real Formex
+    fixture): v3 cut after "Rev."."""
+    import xml.etree.ElementTree as ET
+
+    from app.plugins.eurlex.formex import norm
+    f = Path(__file__).parent / "fixtures" / "eurlex" / "coverage" / "32017R2400_en" / "L_2017349EN.01005801.xml"
+    text = ("Fuels compatible with use by the engine declared by the manufacturer in accordance with "
+            "paragraph 4.6.2. of UN/ECE Regulation 49 Rev. 06 (as applicable)")
+    assert text in {norm("".join(c.itertext())) for c in ET.parse(f).iter("CELL")}
+    assert cl._sentences(text, 4) == [text]
+    assert cl._sentences(text, 3) == [text[:text.index(" 06 (")], "06 (as applicable)"]
 
 
 @pytest.mark.parametrize("marks", [["α)", "β)", "γ)", "στ)"], ["(α)", "(β)", "(γ)", "(δ)"],

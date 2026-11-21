@@ -2,7 +2,9 @@
 
 **Status:** v4 is BUILT (app/chunking_legal.py, tests/test_chunking_legal_v4.py) and
 cuts nothing on the node: `CHUNK_VERSION` and `SHARED_LAYER` stay 3, so every layer
-cuts as before. The measurement is built (tools/measure/legal_chunker_drift.py) and
+cuts as before. Its abbreviations are CHECKED against the Style Guide and real EUR-Lex
+text in the 24 languages and corrected (2026-11-21,
+[legal-chunker-v4-abbreviations.md](legal-chunker-v4-abbreviations.md)). The measurement is built (tools/measure/legal_chunker_drift.py) and
 has not run on the node. The migration below is PROPOSED, not built. Moving the space
 is the operator's decision (P8 of docs/notes/eurlex-review-2026-11-21.md, on branch
 `ccr-bbc107f7-4at6fd`).
@@ -18,16 +20,17 @@ level and point level knew four languages:
   sentences. It fell to `_windows`, which cuts mid-sentence. The same is true of any
   sentence that opens with Č, Š, Ž, Ł, Ő, Ș, Ț, Ż and so on.
 - **The abbreviations were it/de/fr/en only.** The lookahead also takes a digit, so
-  v3 cut "άρθ. | 5", "αριθ. | 1093/2010", "čl. | 5", "Úř. věst. | L 119", "s. | 1".
+  v3 cut "αριθ. | 45/2001", "čl. | 8 odst. | 1", "stk. | 1", "Úř. věst. | L 8", "s. | 1".
   It made the same cut in German and Italian, on forms its list lacked. The fixtures
   show two: NeuRIS's "BGBl. | I 2020" and Normattiva's "Il D.Lgs. | 2 gennaio 2018".
 - **A point was an ASCII letter.** The Greek and Bulgarian marks, "α)", "(β)", "а)",
   were never points, so those paragraphs went straight to their sentences.
 
-What v3 makes of a Greek text (from the test):
+What v3 makes of the GDPR's Greek footnote 6 and Bulgarian recital 1 (from the test):
 
-    Τα κράτη μέλη εφαρμόζουν το άρθ. | 5 παρ. | 2 του κανονισμού (ΕΕ) αριθ. |
-    1093/2010. Η Επιτροπή ενημερώνεται χωρίς καθυστέρηση. Βλ. επίσης σ. | 12 …
+    (6) Κανονισμός (ΕΚ) αριθ. | 45/2001 του Ευρωπαϊκού Κοινοβουλίου … (ΕΕ L 8 της
+    12.1.2001, σ. | 1).
+    … лични данни е основно право. Член 8, параграф 1 …       (no cut before "Член")
 
 **Where it bites:** only a section or an outline past the window (8,175 tokens)
 reaches the point or sentence level. In the samples of legal-chunking-retrieval.md §1,
@@ -39,19 +42,27 @@ el has 54.3 M characters. The drift tool (§3) counts the real ones.
 | level | v3 | v4 |
 |---|---|---|
 | sentence start | Latin-1 capitals | `CAPITALS_V4`: every Lu/Lt letter of Basic Latin, Latin-1, Latin Extended-A and -B, Greek (not the Coptic letters) and Cyrillic. That is 403 letters, a frozen literal, sha256 `e8fe079e…5119af0`. It is UAX #29's `Upper` over those blocks, written out once from Python 3.12's tables (3.13 gives the same letters) and never read from the interpreter again |
-| no cut after | it/de/fr/en forms | also the 24 languages' forms for article, paragraph, subparagraph, point, letter, number, page, the Official Journal, "see", "e.g." and "i.e.". It also refuses a cut after an initial in a new capital. Six short forms that are also units ("s" for seconds, "st", "т", "σ", "ν", "l") refuse only before a number |
+| no cut after | it/de/fr/en forms | also the forms the 24 languages' legal text writes for article, paragraph, number, page, the Official Journal, "see", "e.g." and "i.e." (101 in all, each checked). It also refuses a cut after an initial in a new capital. Seven short forms that are also units or words ("s" for seconds, "т", "σ", "vol", "cap", "kap", "Kap") refuse only before a number |
 | point | `a)`, `(a)`, `1°`, `1)` | also `α)`, `στ)`, `(β)`, `а)`, `(б)` |
 | paragraph, windows | — | unchanged |
 
-**The abbreviations follow the Interinstitutional Style Guide's conventions** (how each
-language cites the OJ, and how it refers to an act's subdivisions), written down from
-memory. style-guide.europa.eu does not resolve from the agent's network. Each form says
-what it stands for, so someone with the Guide can check it before the space moves.
+**The abbreviations are checked** (2026-11-21) against the Interinstitutional Style
+Guide in each language (§ 3.1 the OJ, § 3.2 references to acts and their subdivisions,
+Part Four, Annex A3) and against 143 Cellar items in the 24 languages. The first lists
+were written from memory, when style-guide.europa.eu did not resolve from the agent's
+network: 108 of their 210 forms left them (nine for the before-number list), most because EU acts write the subdivisions in
+full (every language but cs, sk, pl and da; the Greek Guide forbids abbreviating them),
+some because they are wrong ("pkt." is Danish "punktum", Polish "nr" takes no full stop,
+"i" ends Danish sentences); 17 are added. Each form, its verdict and its source:
+[legal-chunker-v4-abbreviations.md](legal-chunker-v4-abbreviations.md).
 
 Left out on purpose:
-- forms that end a sentence as often as they continue one: "etc." and its counterparts,
-  the year (r., г., g., m.), "lpp."/"o." after a page number;
-- forms that are words elsewhere ("ill", "mm", "ns", "oz", "all").
+- forms that end a sentence as often as they continue one: "etc." and "et seq." and their
+  counterparts, "lpp."/"o." after a page number. The dates were measured: the Polish year
+  "r." and the Lithuanian day "d." continue their sentence in 18 of 21 and 81 of 84
+  cases, so they are in; the Bulgarian year "г." (the gram) and the Lithuanian year "m."
+  (the metre) are out;
+- forms that are words elsewhere ("sal", "por", "i", "ill", "mm", "ns", "oz", "all").
 
 Estonian writes its abbreviations without a full stop, so it has none.
 
@@ -75,9 +86,10 @@ The tests:
   NeuRIS's "BGBl." moves a sentence but no chunk.
 - Every fixture text that holds nothing new has v3's sentences. So do 300 texts built
   from fixture sentences, at every level.
-- Golden sentences for el, bg, cs, pl, hu, ro, lt, lv, mt, sk, sl, hr, et, fi and ga
-  split at their ends and never after an abbreviation. They were written for the test,
-  because no fixture holds a body in those languages.
+- Golden sentences in all 24 languages split at their ends and never after an
+  abbreviation. They are real: paragraphs of 27 Cellar items trimmed to whole lines
+  (tests/fixtures/eurlex/sentences/), read by the plugin's rendition reader, each
+  checked verbatim against its fixture and against v3's cut.
 
 **What v4 leaves as v3 had it.** Neither a capital nor an abbreviation decides these, so
 by its own rule v4 does not touch them:

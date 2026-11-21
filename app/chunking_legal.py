@@ -72,18 +72,20 @@ docs/notes/legal-chunker-v4.md): the SENTENCE level of the 24 EU languages.
 v3 saw a sentence start only in a Latin-1 capital, so a paragraph past the
 window in el, bg, cs, sk, sl, hr, pl, hu, ro, lt, lv or mt was never split at
 its sentences and fell to `_windows`, mid-sentence; and it knew only it/de/
-fr/en abbreviations, so "čl. 5", "чл. 5", "αριθ. 1093/2010" or "Úř. věst. L"
+fr/en abbreviations, so "čl. 5", "stk. 2", "αριθ. 1093/2010" or "Úř. věst. L"
 were cut after the abbreviation (the lookahead takes a digit). v4:
   * a sentence may start with any capital of the Latin, Greek and Cyrillic
     blocks the 24 languages write in — CAPITALS_V4, a FROZEN literal (never
     read off the interpreter's Unicode tables: invariant 3), pinned by its
     sha256 in tests/test_chunking_legal_v4.py;
-  * no cut after the abbreviations of the 24 languages for article,
-    paragraph, point, letter, number, subparagraph, page, the Official
-    Journal, "see", "for example" (ABBREVIATIONS_V4), nor after an initial in
-    a new capital; six short forms that are also units or words ("s",
-    seconds; "st", "т", "σ", "ν", "l") only before a number
-    (ABBREVIATIONS_V4_BEFORE_NUMBER);
+  * no cut after the abbreviations the 24 languages' legal text writes for
+    article, paragraph, point, letter, number, page, the Official Journal,
+    "see", "for example", "that is" (ABBREVIATIONS_V4, each checked against
+    the Interinstitutional Style Guide and real EUR-Lex text:
+    docs/notes/legal-chunker-v4-abbreviations.md), nor after an initial in a
+    new capital; seven short forms that are also units or words ("s",
+    seconds; "т", tonnes; "σ"; "vol", "% vol."; "cap", "kap", "Kap") only
+    before a number (ABBREVIATIONS_V4_BEFORE_NUMBER);
   * a Greek or Bulgarian point, "α)", "(β)", "а)", is a point (POINT_V4):
     v3's POINT knew ASCII letters only, so such a paragraph skipped its
     points for its sentences.
@@ -194,118 +196,133 @@ def _v3_capital(c: str) -> bool:
 NEW_CAPITALS_V4 = "".join(c for c in CAPITALS_V4 if not _v3_capital(c))
 
 # THE ABBREVIATIONS, by language: each form as written before its full stop
-# (an inner space is any white space), and what it stands for. Taken from the
-# Interinstitutional Style Guide's conventions (Publications Office of the
-# EU): its citation of the Official Journal in each language ("OJ L 119,
-# 4.5.2016, p. 1." and its 23 counterparts) and its references to the
-# subdivisions of an act (article, paragraph, subparagraph, point, letter,
-# number) — WRITTEN FROM THE GUIDE'S CONVENTIONS AS KNOWN, NOT RE-READ:
-# style-guide.europa.eu does not resolve from the agent's network
-# (2026-11-21; as for the Formex fixtures, tests/fixtures/eurlex/README.md),
-# so each entry says what it abbreviates for a reader with the Guide to check
-# before the shared space moves (legal-chunker-v4.md). Beside them, the
-# legislation's own (BGBl., D.Lgs.) and "see", "for example", "that is".
+# (an inner space is any white space), what it stands for, and WHERE IT IS
+# WRITTEN SO. CHECKED (2026-11-21) against the Interinstitutional Style Guide
+# in each language (style-guide.europa.eu, the edition of 18.11.2026: § 3.1
+# the Official Journal, § 3.2.2-3.2.3 references to acts and their
+# subdivisions, § 2.7, § 5.9, Part Four and Annex A3), and against real text:
+# 143 Cellar items (six acts in the 24 languages), the fixtures under
+# tests/fixtures/ (EUR-Lex, Normattiva, LEGI, NeuRIS). "§" below is the
+# language's Guide section, "×n" the occurrences before a digit or a capital
+# in the Cellar items; the per-language tables, every form removed and why:
+# docs/notes/legal-chunker-v4-abbreviations.md. A form neither the Guide nor
+# the text writes with a full stop is not here: EU acts write the
+# subdivisions in full in el, bg, de, es, fr, it, nl, pt, ro, hr, sl, lt,
+# lv, mt, ga, hu (each Guide's § 3.2.3; el § 10.10(c): abbreviating them "is
+# expressly forbidden"); only cs (čl., odst., písm.: § 10.8), sk (ods.,
+# písm.), pl (ust.) and da (stk.) abbreviate them. Estonian writes its
+# abbreviations without a full stop (§ 3.1 "EÜT L 32, 6.2.1968, lk 6"; "nr",
+# "lk" ×195 bare, none dotted), so it has none here.
 # LEFT OUT ON PURPOSE: a form that ends a sentence as often as it continues
-# one — "etc." and its 23 counterparts (atd., itd., и др., κ.λπ., stb. …), the
-# year (r., г., g., m.), "lpp."/"o." after a page number, "Sb."/"Z. z."
-# after an act's number — where taking it would join two sentences; a form
-# that is a word or a unit elsewhere ("ill", "mm", "ns", "oz", "all"); and
-# every form v3 already knows (`_ABBREVIATIONS`: art., Nr., p., lit., v. …).
-# Estonian writes its abbreviations without a full stop (lk, nr, lg, vt, nt),
-# so it has none here: no full stop, no cut to refuse.
+# one — "etc." and "et seq." and their counterparts (atd., itd., и др., κ.λπ.,
+# stb., ff., suiv., segg., köv. …), "lpp."/"o." after a page number,
+# "Sb."/"Z. z." after an act's number — where taking it would join two
+# sentences; a form that is a word or a unit elsewhere ("sal", Spanish salt;
+# "por", Hungarian powder; "i", a Danish and Swedish preposition that ends a
+# sentence: "som de indgår i."; the year "г." is also the Bulgarian gram, the
+# Lithuanian year "m." the metre, so neither is here, while the Polish year
+# "r." and the Lithuanian day "d." are: a date before a capital continues its
+# sentence in 18 of 21 and 81 of 84 cases); and every form v3 already knows
+# (`_ABBREVIATIONS`: art., Nr., p., lit., v. …).
 ABBREVIATIONS_V4: tuple[tuple[str, tuple[str, ...]], ...] = (
-    ("bg", ("чл", "Чл",                      # член (article)
-            "ал",                            # алинея (paragraph)
-            "стр",                           # страница (page: "ОВ L 119, 4.5.2016 г., стр. 1")
-            "бр",                            # брой (number, issue)
-            "вж", "Вж", "напр", "Напр",      # виж (see), например
-            "т.е", "т.нар")),                # тоест, така наречен
-    ("cs", ("čl", "Čl",                      # článek (article)
-            "odst", "pododst",               # odstavec, pododstavec (paragraph, subparagraph)
-            "písm",                          # písmeno (letter)
-            "č",                             # číslo (number: "nařízení (EU) č. 1093/2010")
-            "věst",                          # "Úř. věst. L 119, 4.5.2016, s. 1" (the Official Journal)
-            "příl",                          # příloha (annex)
-            "např", "Např", "tj", "tzv", "resp")),
-    ("da", ("stk",                           # stykke (paragraph: "artikel 5, stk. 1")
-            "pkt", "nr", "kap",              # punkt, nummer, kapitel
-            "jf", "Jf", "f.eks", "dvs", "bl.a")),
-    ("de", ("ABl",                           # Amtsblatt ("ABl. L 119 vom 4.5.2016, S. 1")
-            "BGBl", "GVBl", "RGBl", "BAnz",  # the federal, Land and Reich gazettes, the Bundesanzeiger
-            "UAbs", "Unterabs",              # Unterabsatz (subparagraph)
-            "Anh", "Anl", "Abschn", "Kap", "Halbs", "Alt", "Fn", "Rz",
-            "i.V.m", "i",                    # in Verbindung mit, also spaced "i. V. m."
-            "z",                             # "z. B." spaced (v3 knows "z.B.")
-            "d.h", "u.a", "sog", "insb", "ff", "Vgl")),
-    ("el", ("άρθ", "άρθρ", "Άρθ",            # άρθρο (article)
-            "παρ", "υποπαρ",                 # παράγραφος, υποπαράγραφος
-            "εδ",                            # εδάφιο (subparagraph)
-            "περ",                           # περίπτωση (point)
-            "στοιχ",                         # στοιχείο (letter, item)
-            "αριθ",                          # αριθμός (number: "κανονισμός (ΕΕ) αριθ. 1093/2010")
-            "σελ", "κεφ",                    # σελίδα (page), κεφάλαιο (chapter)
-            "βλ", "Βλ", "π.χ", "δηλ")),      # βλέπε, παραδείγματος χάριν, δηλαδή
-    ("en", ("cf", "Cf", "e.g", "i.e", "subpara", "vol", "sect")),
-    ("es", ("apdo", "apdos", "párr",         # apartado, párrafo
-            "núm", "núms", "pág", "págs",    # número, página
-            "arts", "ap", "cap", "vol", "cf", "p. ej")),
-    ("et", ()),                              # written without a full stop: lk, nr, lg, p, vt, nt
-    ("fi", ("ks", "Ks", "vrt", "Vrt", "esim")),   # katso, vertaa, esimerkiksi; page "s." below
-    ("fr", ("paragr", "cf", "vol", "sect")),
-    ("ga", ("Airt",                          # Airteagal (article)
-            "Uimh",                          # Uimhir (number)
-            "lch",                           # leathanach (page: "IO L 119, 4.5.2016, lch. 1")
-            "m.sh")),                        # mar shampla (for example)
-    ("hr", ("čl", "Čl",                      # članak (article); stavak "st." below
-            "podst",                         # podstavak (subparagraph)
-            "br",                            # broj (number: "Uredba (EU) br. 1093/2010")
-            "str",                           # stranica ("SL L 119, 4.5.2016., str. 1")
-            "npr", "Npr", "tj")),
-    ("hu", ("bek",                           # bekezdés (paragraph)
-            "tv",                            # törvény (act: "2011. évi CXII. tv. 5. §")
-            "sz",                            # szám (number)
-            "pl", "vö", "Vö", "ld", "Ld", "ún")),   # például, vesd össze, lásd, úgynevezett
-    ("it", ("pag", "pagg",                   # pagina ("GU L 119 del 4.5.2016, pag. 1")
-            "par", "sez", "cap", "vol",      # paragrafo, sezione, capitolo, volume
-            "D.Lgs", "d.lgs", "D.lgs", "d.Lgs", "d.l")),  # decreto legislativo, decreto-legge; legge "l." below
-    ("lt", ("str",                           # straipsnis (article: "5 str. 2 d.")
-            "psl",                           # puslapis (page)
-            "žr", "Žr", "pvz", "Pvz", "t. y")),   # žiūrėti, pavyzdžiui, tai yra
-    ("lv", ("apakšp",                        # apakšpunkts (subpoint)
-            "sk", "Sk", "piem", "Piem", "t.i")),  # skatīt, piemēram, tas ir
-    ("mt", ("par", "subpar",                 # paragrafu, subparagrafu
-            "eż")),                          # eżempju
-    ("nl", ("nr", "blz",                     # nummer, bladzijde ("PB L 119 van 4.5.2016, blz. 1")
-            "jo",                            # juncto ("art. 5 jo. art. 7")
-            "bijv", "d.w.z", "o.a", "zgn")),
-    ("pl", ("ust", "Ust",                    # ustęp (paragraph)
-            "str", "poz", "nr",              # strona (page), pozycja (item), numer; page "s." below
-            "Dz",                            # Dziennik ("Dz. U.", the Journal of Laws)
-            "zob", "Zob", "np", "tj", "tzn", "m.in")),
-    ("pt", ("alín", "arts", "pág", "cap", "vol", "cf")),   # alínea, artigos, página
-    ("ro", ("alin",                          # alineatul (paragraph)
-            "pct",                           # punctul (point)
-            "nr",                            # numărul ("Regulamentul (UE) nr. 1093/2010")
-            "par", "subpar", "subparagr", "cf")),
-    ("sk", ("čl", "Čl",                      # článok (article)
-            "ods", "podods",                 # odsek, pododsek (paragraph, subparagraph)
-            "písm", "č", "príl",             # písmeno, číslo, príloha
-            "napr", "Napr", "tzv", "t. j", "resp")),
-    ("sl", ("čl", "Čl",                      # člen (article)
-            "odst", "pododst",               # odstavek, pododstavek
-            "tč",                            # točka (point)
-            "št",                            # številka (number)
-            "str",                           # stran ("UL L 119, 4.5.2016, str. 1")
-            "npr", "tj", "t. i",             # na primer, to je, tako imenovani
-            "Ur. l")),                       # "Ur. l. RS" (the Official Gazette)
-    ("sv", ("kap", "jfr", "Jfr", "s.k", "dvs", "bl.a")),   # kapitel, jämför, så kallad
+    ("bg", ("стр",                           # страница, page: "ОВ L 32, 6.2.1968 г., стр. 6" (§ 3.1; ×89)
+            "бр",                            # брой, issue: "бр. 1—2" (§ 10.1.8)
+            "вж", "Вж",                      # виж, see (§ 2.7, § 3.2.1, § 5.9.1)
+            "срв",                           # сравни, cf. (§ 10.4.2, Annex A3)
+            "напр",                          # например (§ 3.1, § 10.1.1)
+            "т.е", "т.нар")),                # тоест, така наречен (§ 10.1.1, § 10.4.2)
+    ("cs", ("čl", "Čl",                      # článek (§ 3.2.3, § 10.8; ×392, ×425)
+            "odst",                          # odstavec (§ 3.2.3, § 10.8; ×822)
+            "písm",                          # písmeno (§ 3.2.3, § 10.8)
+            "č",                             # číslo: "nařízení (EU) č. 127/2010" (§ 3.2.2; ×103)
+            "věst",                          # "Úř. věst. L 32, 6.2.1968, s. 6" (§ 3.1; ×89)
+            "např", "Např",                  # například (Annex A3)
+            "tj", "tzv",                     # to jest, takzvaný (§ 3.1, § 3.2.4)
+            "srov")),                        # srovnej, cf. (§ 3.3.1)
+    ("da", ("stk", "Stk",                    # stykke: "artikel 1, stk. 2" (§ 3.2.3; ×1134), "Stk. 1 berører" (×10)
+            "nr",                            # nummer: "forordning (EU) nr. 127/2010" (§ 3.2.2; ×118)
+            "pr",                            # per: "indført pr. 1. januar 1968" (§ 3.1)
+            "jf", "f.eks", "dvs", "bl.a")),  # jævnfør, for eksempel, det vil sige, blandt andet
+    ("de", ("ABl",                           # Amtsblatt: "ABl. L 32 vom 6.2.1968, S. 6" (§ 3.1; ×90)
+            "BGBl",                          # Bundesgesetzblatt: "BGBl. I 2020, 1234" (NeuRIS fixture)
+            "z",                             # "z. B." spaced (§ 3.2.1, § 10.1; ×16); v3 knows "z.B."
+            "d.h", "d. h",                   # das heißt (§ 3.1, § 3.2.1)
+            "u. a")),                        # unter anderem: "u. a. Bedingungen" (§ 10.1; 32016R1036)
+    ("el", ("αριθ",                          # αριθμός: "κανονισμός (ΕΕ) αριθ. 127/2010" (§ 3.2.2; ×112)
+            "σελ",                           # σελίδα, page: "σ." is the Guide's (§ 3.1), "σελ." Union texts
+                                             # write too ("όπως και η συντομογραφία σελ.", Annex A3)
+            "βλ", "Βλ",                      # βλέπε, see (§ 2.7, § 5.9.1, § 10.1.2)
+            "π.χ", "δηλ")),                  # παραδείγματος χάριν, δηλαδή (Annex A3)
+    ("en", ("e.g", "i.e",                    # (§ 10.8; fixtures)
+            "Rev",                           # revision: "UN/ECE Regulation 49 Rev. 06" (fixtures)
+            "Vol")),                         # volume: "Vol. 34, Issue 3" (§ 5.9.4)
+    ("es", ("párr", "arts", "p. ej")),       # párrafo, artículos, por ejemplo (Annex A3)
+    ("et", ()),
+    ("fi", ("ks", "Ks",                      # katso, see (§ 2.7, § 3.2.1, § 5.9.1)
+            "vrt", "Vrt",                    # vertaa, cf. (§ 10.8)
+            "esim", "Esim")),                # esimerkiksi (§ 3.1, § 3.2.1, § 3.2.2)
+    ("fr", ("cf",)),                         # confer (Part Four, Annexe B; LEGI fixture)
+    ("ga", ("Uimh",                          # Uimhir: "Rialachán (AE) Uimh. 1234/2010" (§ 3.2.2; ×97)
+            "lch")),                         # leathanach: "IO L 32, 6.2.1968, lch. 6" (§ 3.1; ×79)
+                                             # (and "e.g.", § 10.5, which is en's)
+    ("hr", ("br",                            # broj: "Uredba (EU) br. 127/2010" (§ 3.2.2; ×103)
+            "str",                           # stranica: "SL L 32, 6.2.1968., str. 6." (§ 3.1; ×90)
+            "npr", "tj")),                   # na primjer, to jest (§ 3.1, § 10.1.12)
+    ("hu", ("sz",                            # szám: "29. sz. (1930)" (§ 5.9.3, § 10.1.8; ×8)
+            "pl", "vö", "ún")),              # például, vesd össze, úgynevezett (§ 3.2.1, § 10.3)
+    ("it", ("pag",                           # pagina: "GU L 32 del 6.2.1968, pag. 6" (§ 3.1; ×93)
+            "pagg",                          # pagine (§ 5.9.3, Annex A3)
+            "D.Lgs")),                       # decreto legislativo: "Il D.Lgs. 2 gennaio 2018" (Normattiva fixture)
+    ("lt", ("žr", "Žr",                      # žiūrėk, see (§ 2.7, § 5.9.1)
+            "pvz", "Pvz",                    # pavyzdžiui (§ 10.1.1, Annex A3)
+            "plg",                           # palygink, cf. (§ 10.1.6, Annex A3)
+            "t. y",                          # tai yra (§ 3.2.2, § 10.1.1)
+            "str",                           # straipsnis (Annex A3)
+            "d")),                           # diena, the date's day: "2016 m. balandžio 27 d. Europos
+                                             # Parlamento ir Tarybos reglamentas" (§ 3.2.2, § 10.1.1;
+                                             # 81 of 84 continue their sentence)
+    ("lv", ("sk", "Sk",                      # skatīt, see (§ 2.7, § 3.2.1, § 5.9.1)
+            "piem",                          # piemēram (§ 10.1.1, Annex A3)
+            "t.i", "t. i",                   # tas ir: "t. i." (§ 10.6, § 10.7), "t.i.," (31992L0043 lv ×3)
+            "Lpp")),                         # lappuse, in the legacy header "L 206, 22/07/1992 Lpp. 0007"
+    ("mt", ("eż",                            # eżempju (§ 10.1.1, Annex A3); paragrafu is "para." (v3)
+            "Vol")),                         # volum (§ 5.9.4)
+    ("nl", ("nr",                            # nummer: "Verordening (EU) nr. 127/2010" (§ 3.2.2; ×111)
+            "blz",                           # bladzijde: "PB L 32 van 6.2.1968, blz. 6" (§ 3.1; ×92)
+            "bv",                            # bijvoorbeeld, "afgekort als bv. (en niet bijv.)" (§ 10.4.1, § 3.1)
+            "d.w.z", "o.a")),                # dat wil zeggen, onder andere (§ 3.2.2, § 10.1)
+    ("pl", ("ust", "Ust",                    # ustęp: "art. 1 ust. 2 lit. a)" (§ 3.2.3; ×1135, ×12)
+            "str",                           # strona, in the special edition: "Dz.U. C 75 …, str. 12." (31992L0043)
+            "poz",                           # pozycja: "Dz.U. 2020 poz. 1024" (Annex A3)
+            "Dz",                            # "Dz. U." spaced (§ 9.5.3); "Dz.U." is v3's
+            "ds",                            # do spraw: "Grupę Roboczą ds. Ochrony" (§ 10.3.1; ×80)
+            "zob", "Zob",                    # zobacz, see (§ 2.7, § 3.2.1)
+            "np", "tj", "tzn", "m.in",       # na przykład, to jest, to znaczy, między innymi (§ 10.3.1)
+            "r")),                           # rok, the date's year: "do dnia 9 czerwca 2020 r. Komisja dokonuje"
+                                             # (§ 3.1; ×18 of 21 continue, as "(dotychczas nieopublikowane)")
+    ("pt", ("cf",)),                         # confira (§ 10.4.12, Annex A3)
+    ("ro", ("nr",                            # numărul: "Regulamentul (UE) nr. 127/2010" (§ 3.2.2; ×104)
+            "alin",                          # alineatul (Annex A3)
+            "cf")),                          # confer (§ 10.1.1)
+    ("sk", ("ods",                           # odsek: "článok 1 ods. 2 písm. a)" (§ 3.2.3; ×798)
+            "písm",                          # písmeno (§ 3.2.3)
+            "č",                             # číslo: "nariadenie (ES) č. 1292/96" (§ 3.2.2; ×104)
+            "napr", "tzv", "t. j", "resp")), # napríklad, takzvaný, to jest, respektíve (§ 10.1.4, Annex A3)
+    ("sl", ("št",                            # številka: "Uredba (EU) št. 127/2010" (§ 3.2.2; ×104)
+            "str",                           # stran: "UL L 32, 6.2.1968, str. 6" (§ 3.1; ×93)
+            "npr", "tj", "t. i")),           # na primer, to je, tako imenovani (§ 3.1, § 3.2.3, § 10.1.7)
+    ("sv", ("s.k", "dvs", "bl.a")),          # så kallad, det vill säga, bland annat (§ 10.4.2, § 10.4.10)
 )
 #: forms that are a unit or a word elsewhere, refused as a cut only where a
-#: NUMBER follows: "s. 1" is a page in cs, sk, pl, da, sv, fi ("10 s. The"
-#: is ten seconds), "st. 2" a Croatian stavak, "т. 1" a Bulgarian точка,
-#: "σ. 1" a Greek page, "ν. 4624/2019" a Greek law, "l. 241/1990" an Italian
-#: legge
-ABBREVIATIONS_V4_BEFORE_NUMBER: tuple[str, ...] = ("s", "st", "т", "σ", "ν", "l")
+#: NUMBER follows: "s. 6" is the page in cs, da, fi, pl, sk, sv (§ 3.1; "10 s.
+#: The" is ten seconds), "т. 19" a Bulgarian точка (§ 5.9.3; "т" tonnes), "σ. 6"
+#: the Greek page (§ 3.1), "vol. 34" a volume in es, fr, it, pt, ro (§ 5.9.4;
+#: "% vol." the alcoholic strength ends a sentence), "cap. 6" a Romanian
+#: capitol (§ 3.1; es, pt Annex A3; "cap" an English word), "kap." a Danish,
+#: Swedish (Annex A3) and Maltese (§ 10.1.1) chapter, "Kap." the Maltese
+#: (Annex A3) — "kap" ends a Hungarian sentence ("… t kap. A …"), "Kap" is a
+#: German cape
+ABBREVIATIONS_V4_BEFORE_NUMBER: tuple[str, ...] = ("s", "т", "σ", "vol", "cap", "kap", "Kap")
 
 _V4_DIGITS = "0123456789"
 #: what may stand before an abbreviation of v4: white space or an opening
