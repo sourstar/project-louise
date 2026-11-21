@@ -12,8 +12,9 @@ counts what it will move, from the manifest alone, per collection:
     nothing re-embedded);
   * of those, the ones whose new end is already past (the text shown today
     is not the text in force) and the ones ended in the future;
-  * the new ends by year, and examples (the Work, its last start, the day,
-    the statement that says it).
+  * the new ends by year, by the deciding statement's kind and by how it is
+    dated (its own day, or its stating version's start), and examples (the
+    Work, its last start, the day, the statement that decides it).
 
 The manifest is opened read-only (`mode=ro`); every query is indexed
 (idx_validity_works_work, the amendments' target index, the validity
@@ -28,6 +29,7 @@ import argparse
 import json
 import sqlite3
 import sys
+import zlib
 from collections import Counter
 from pathlib import Path
 
@@ -44,7 +46,8 @@ def measure(con: sqlite3.Connection, *, today: int, examples: int = 10) -> dict:
     for key in targets:
         works |= {r[0] for r in con.execute("SELECT work FROM validity_works WHERE key=?", (key,))}
     out = {"statements_targets": len(targets), "works_targeted": len(works), "would_end": 0,
-           "ended_already": 0, "ends_later": 0, "already_ended": 0, "by_year": Counter(), "examples": []}
+           "ended_already": 0, "ends_later": 0, "already_ended": 0, "by_year": Counter(),
+           "by_kind": Counter(), "by_dating": Counter(), "examples": {}}
     for work in sorted(works):
         last = con.execute("SELECT uid, valid_from, valid_to FROM validity WHERE work=? AND has_text=1 "
                            "ORDER BY valid_from DESC, native_id DESC LIMIT 1", (work,)).fetchone()
@@ -54,19 +57,29 @@ def measure(con: sqlite3.Connection, *, today: int, examples: int = 10) -> dict:
                             (work, last["valid_from"])).fetchone()
         if later is not None:
             continue                       # a version without text after it ends it already
-        day = validity.first_change(con, work, int(last["valid_from"]))
-        if day is None:
+        got = validity.first_change_detail(con, work, int(last["valid_from"]))
+        if got is None:
             continue
+        day, why = got
         if last["valid_to"] is not None and int(last["valid_to"]) <= day:
             out["already_ended"] += 1      # a repeal on or before it: nothing moves
             continue
         out["would_end"] += 1
         out["ended_already" if day <= today else "ends_later"] += 1
         out["by_year"][str(day)[:4]] += 1
-        if len(out["examples"]) < examples:
-            out["examples"].append({"work": work, "last": last["uid"], "from": int(last["valid_from"]),
-                                    "until": day})
+        out["by_kind"][str(why["kind"])] += 1
+        # whether the day is the statement's own or its stating version's start
+        out["by_dating"]["stated day" if why["day"] is not None else "stating version's start"] += 1
+        # up to `examples` per kind, spread over the collection (a work's crc,
+        # not its place in the order: the first Works sort into one cluster)
+        if zlib.crc32(work.encode()) % 17 == 0 or len(out["examples"].get(str(why["kind"]), [])) == 0:
+            bucket = out["examples"].setdefault(str(why["kind"]), [])
+            if len(bucket) < examples:
+                bucket.append({"work": work, "last": last["uid"], "from": int(last["valid_from"]),
+                               "until": day, "because": why})
     out["by_year"] = dict(sorted(out["by_year"].items()))
+    out["by_kind"] = dict(out["by_kind"].most_common())
+    out["by_dating"] = dict(out["by_dating"])
     return out
 
 

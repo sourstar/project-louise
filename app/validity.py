@@ -332,25 +332,67 @@ def _record_amendments(con, by_uid: str, rows) -> set[str]:
 WHOLE_REPEALS = ("repeals", "repealed_by", "repeal")
 
 
+#: a day from which nothing is dated: LEGI's DATE_DEBUT/DATE_FIN for "a date
+#: still to be fixed" (2999-01-01), the CDM's open end (9999-12-31). A
+#: statement on or after it names no day (`first_change`)
+UNDATED_FROM = 29_990_101
+
+
+#: a Work's statements of change (`first_change_detail`), plan-checked
+CHANGES_SQL = (
+    "SELECT a.stated_by, a.target, a.article, a.amending, a.day, a.kind, s.work, s.valid_from "
+    "FROM validity_works k JOIN validity_amendments a ON a.target = k.key "
+    "LEFT JOIN validity s ON s.uid = a.stated_by "
+    f"WHERE k.work = ? AND (a.kind NOT IN ({','.join('?' for _ in WHOLE_REPEALS)}) OR a.article != '')")
+
+
+def first_change_detail(con, work: str, after: int) -> tuple[int, dict] | None:
+    """`(day, statement)` of the earliest change after `after` that a held
+    statement says the Work's text underwent (2026-11-21, the EUR-Lex5
+    review's V3/V4): an amending act's own statement on any of the Work's
+    canonical ids — from the day it names, else the day its own validity
+    starts — or a version of the Work naming the act that amended it and
+    the day. That day the NEXT version starts, whether or not this
+    collection holds it: the text held before it is not the text in force
+    after it.
+
+    A STATEMENT IS DATED BY ITS FIRST VERSION (München's measurement,
+    2026-11-21: legi_F 161,627 Works and Normattiva 28,418 read as ended
+    where both hold every version). An amending act's later versions repeat
+    the statements of its first — LEGI's links on every version of the
+    amending article, Normattiva's day falling back to each version's own
+    start — so the day of a statement is the EARLIEST the amending Work
+    gives it, per (amending Work, target, article, kind); a repetition is
+    not a change. A day on or after UNDATED_FROM names none. An act's
+    statement on itself (a version of the same Work) is not a change from
+    outside. Indexed: the Work's keys (idx_validity_works_work), their
+    statements (the amendments' target index), each stating version by its
+    uid; grouped here (a Work's statements: tens, a code's thousands)."""
+    rows = con.execute(CHANGES_SQL, (work, *WHOLE_REPEALS)).fetchall()
+    first: dict[tuple, tuple[int, dict]] = {}
+    for stated_by, target, article, amending, day, kind, s_work, s_from in rows:
+        if amending:                                   # passive: the Work's own version names its amender
+            key, d = ("by", str(amending), target, article, kind), day
+        else:
+            if s_work is not None and str(s_work) == work:
+                continue                               # the act on itself
+            key = ("act", str(s_work) if s_work is not None else str(stated_by), target, article, kind)
+            d = day if day is not None else s_from
+        if d is None or int(d) >= UNDATED_FROM:
+            continue
+        d = int(d)
+        if key not in first or d < first[key][0]:
+            first[key] = (d, {"stated_by": stated_by, "target": target, "article": article,
+                              "amending": amending or s_work or stated_by, "kind": kind,
+                              "day": day, "stating_from": s_from})
+    later = [v for v in first.values() if v[0] > int(after)]
+    return min(later, key=lambda v: (v[0], str(v[1]["stated_by"]))) if later else None
+
+
 def first_change(con, work: str, after: int) -> int | None:
-    """The earliest day after `after` from which a held statement says the
-    Work's text changed (2026-11-21, the EUR-Lex5 review's V3/V4): an
-    amending act's own statement on any of the Work's canonical ids — from
-    the day it names, else the day its own validity starts — or a version
-    of the Work naming the act that amended it and the day. That day the
-    NEXT version starts, whether or not this collection holds it: the text
-    held before it is not the text in force after it. An act's statement on
-    itself (a version of the same Work) is not a change from outside.
-    Indexed: the Work's keys (idx_validity_works_work), their statements
-    (the amendments' target index), each stating version by its uid."""
-    r = con.execute(
-        "SELECT MIN(d) FROM (SELECT COALESCE(a.day, CASE WHEN a.amending = '' THEN s.valid_from END) AS d "
-        "FROM validity_works k JOIN validity_amendments a ON a.target = k.key "
-        "LEFT JOIN validity s ON s.uid = a.stated_by "
-        f"WHERE k.work = ? AND (a.kind NOT IN ({','.join('?' for _ in WHOLE_REPEALS)}) OR a.article != '') "
-        "AND (a.amending != '' OR s.work IS NULL OR s.work != ?)) WHERE d > ?",
-        (work, *WHOLE_REPEALS, work, int(after))).fetchone()
-    return None if r is None or r[0] is None else int(r[0])
+    """The day of `first_change_detail`, or None."""
+    got = first_change_detail(con, work, after)
+    return got[0] if got is not None else None
 
 
 def changed_at(con, work: str, version: dict) -> int | None:

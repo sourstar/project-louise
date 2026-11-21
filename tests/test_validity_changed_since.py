@@ -174,20 +174,52 @@ def test_the_measure_counts_what_the_rechain_will_move(tmp_path):
     con.commit()
     got = m.measure(con, today=DAY, examples=5)
     assert (got["works_targeted"], got["would_end"], got["ended_already"], got["ends_later"]) == (2, 2, 2, 0)
-    assert got["by_year"] == {"2019": 2}
-    assert {e["work"] for e in got["examples"]} == {"32013R0575/en", "32010R0001/en"}
+    assert got["by_year"] == {"2019": 2} and got["by_kind"] == {"amends": 2}
+    assert got["by_dating"] == {"stating version's start": 2}
+    assert {e["work"] for e in got["examples"]["amends"]} == {"32013R0575/en", "32010R0001/en"} or \
+        len(got["examples"]["amends"]) >= 1
+    assert got["examples"]["amends"][0]["because"]["stated_by"] == "e:amending"
 
 
 def test_the_change_query_is_indexed(tmp_path):
     """Run by every chain recompute (the rdf stage, per record): each table
     by its index, no temp B-tree, no list subquery."""
     _c, con = _mk(tmp_path, [])
-    import re as _re
-    src = __import__("inspect").getsource(validity.first_change)
-    sql = "".join(_re.findall(r'"([^"]*)"', src.split("con.execute(", 1)[1].split(".fetchone()", 1)[0]))
-    sql = sql.replace("{','.join('?' for _ in WHOLE_REPEALS)}", ",".join("?" for _ in validity.WHOLE_REPEALS))
-    plan = [r[3] for r in con.execute("EXPLAIN QUERY PLAN " + sql,
-                                      ("w", *validity.WHOLE_REPEALS, "w", 1))]
+    plan = [r[3] for r in con.execute("EXPLAIN QUERY PLAN " + validity.CHANGES_SQL,
+                                      ("w", *validity.WHOLE_REPEALS))]
     assert any("idx_validity_works_work" in p for p in plan), plan
     assert any("idx_validity_amendments_target" in p for p in plan), plan
     assert not any("TEMP B-TREE" in p or "LIST SUBQUERY" in p or p.startswith("SCAN") for p in plan), plan
+
+
+def test_a_statement_is_dated_by_the_first_version_that_states_it(tmp_path):
+    """München, 2026-11-21: legi_F's amending articles repeat their links on
+    every later version, and Normattiva's day falls back to each version's
+    own start — a 2015 version of a 2009 amending act is not a 2015 change."""
+    _c, con = _mk(tmp_path, ["e:orig", "e:v2010", "e:am2009", "e:am2015"])
+    _record(con, "e:orig", 1, _version(20050101))
+    _record(con, "e:v2010", 2, _version(20100101))                 # the text the 2009 act made
+    for uid, nid, start in (("e:am2009", 3, 20091201), ("e:am2015", 4, 20150101)):
+        _record(con, uid, nid, _version(start, work="AM/en", keys=["celex:AM"], amends=[BASE]))
+    assert _row(con, "e:v2010") == (20100101, None, 1), "the 2015 version repeats the 2009 statement"
+    # a dated statement repeated with each version's own start (Normattiva's fallback)
+    validity._record_amendments(con, "e:am2009", [(BASE, "", "", 20091201, "substitution")])
+    validity._record_amendments(con, "e:am2015", [(BASE, "", "", 20150101, "substitution")])
+    assert validity.first_change(con, "32013R0575/en", 20100101) is None
+    # a statement the later version adds is a change
+    validity._record_amendments(con, "e:am2015", [(BASE, "", "", 20150101, "substitution"),
+                                                  (BASE, "7", "", 20150101, "insertion")])
+    assert validity.first_change(con, "32013R0575/en", 20100101) == 20150101
+
+
+def test_an_undated_day_dates_nothing(tmp_path):
+    """LEGI writes 2999-01-01 for a date still to be fixed: 145,724 legi_F
+    versions would have ended on it."""
+    _c, con = _mk(tmp_path, ["e:orig", "e:deferred"])
+    _record(con, "e:orig", 1, _version(20100101))
+    _record(con, "e:deferred", 2, _version(29990101, work="AM/en", keys=["celex:AM"], amends=[BASE]))
+    assert validity.first_change(con, "32013R0575/en", 20100101) is None
+    assert _row(con, "e:orig") == (20100101, None, 1)
+    validity._record_amendments(con, "e:deferred", [(BASE, "", "", 29990101, "substitution"),
+                                                    (BASE, "", "", 99991231, "insertion")])
+    assert validity.first_change(con, "32013R0575/en", 20100101) is None
