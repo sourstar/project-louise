@@ -143,11 +143,15 @@ def cut_window(collection, lo: int, hi: int, to_version: int, keep: int) -> dict
             skipped["another chunker's layer"] += 1
             continue
         now, then, w_now, w_then = got
-        texts_now, texts_then = Counter(x["text"] for x in now), Counter(x["text"] for x in then)
+        # BY THE TEXTS A DOCUMENT HOLDS, not their multiplicity: a carry by
+        # chunk hash keeps a vector for every chunk whose text is held at all
+        # (06 §6.3, embeddings.upsert_book; hold/rechunk.py, whose dry run this
+        # is held to), so a text cut twice where it was cut once is no work
+        texts_now, texts_then = {x["text"] for x in now}, {x["text"] for x in then}
         differ = [x["text"] for x in now] != [x["text"] for x in then]
         c.update(documents=1, chunks=len(now), chunks_to=len(then), documents_differ=int(differ),
-                 chunks_to_embed=sum((texts_then - texts_now).values()),
-                 chunks_dropped=sum((texts_now - texts_then).values()),
+                 chunks_to_embed=sum(1 for x in then if x["text"] not in texts_now),
+                 chunks_dropped=sum(1 for x in now if x["text"] not in texts_then),
                  windowed=w_now, windowed_to=w_then,
                  documents_windowed=int(w_now > 0), documents_windowed_to=int(w_then > 0))
         if differ and kept[lang] < keep:

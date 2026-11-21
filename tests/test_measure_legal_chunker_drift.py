@@ -77,6 +77,24 @@ def test_a_window_is_cut_by_the_stage_s_own_path_and_skips_what_the_stage_skips(
     assert got["langs"]["fr"]["documents_differ"] == 0
 
 
+def test_to_embed_and_dropped_count_the_texts_a_document_holds_not_their_multiplicity(collection, monkeypatch):
+    """What a carry by chunk hash cannot keep (06 §6.3; hold/rechunk.py):
+    a text v4 cuts twice that v3 cut once is held, so no work; a text v4 no
+    longer cuts is dropped once a chunk that held it."""
+    now = [{"text": "a"}, {"text": "b"}, {"text": "b"}]
+    then = [{"text": "a"}, {"text": "a"}, {"text": "c"}]
+    monkeypatch.setattr(drift, "cut_both", lambda *a, **k: (now, then, 0, 0))
+    con = db.connect(collection)
+    try:
+        top = con.execute("SELECT MAX(rowid) FROM documents").fetchone()[0]
+        n = con.execute("SELECT COUNT(*) FROM documents WHERE error IS NULL AND in_scope=1").fetchone()[0]
+    finally:
+        con.close()
+    got = drift.cut_window(collection, 0, top, 4, 0)
+    totals = {k: sum(v.get(k, 0) for v in got["langs"].values()) for k in ("chunks_to_embed", "chunks_dropped")}
+    assert totals == {"chunks_to_embed": n, "chunks_dropped": 2 * n}, "c once a document; b twice"
+
+
 def test_the_pass_runs_on_the_parse_pool_at_the_profile_s_cores(collection, monkeypatch):
     seen = {}
 
