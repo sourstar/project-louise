@@ -25,9 +25,26 @@ def connect(path: Path | None = None) -> sqlite3.Connection:
     # the input's own mtime at the last sync, for a source that knows its input
     # (`input_mtime`): compared exactly, where `synced_at` is a truncated clock
     # and an input written in the same second as the sync would never re-sync
-    if "input_mtime" not in {r[1] for r in con.execute("PRAGMA table_info('ref_meta')")}:
-        con.execute("ALTER TABLE ref_meta ADD COLUMN input_mtime REAL")
+    if not _has_input_mtime(con):
+        # A WRITER THAT READS FIRST TAKES BEGIN IMMEDIATE (CLAUDE.md): two
+        # processes opening the store at once both saw the column missing and
+        # the second ALTER failed, "duplicate column name" (2026-11-21, the
+        # engine review's run of test_two_collections_progress_concurrently).
+        # Checked again under the write lock; the common case reads only
+        con.execute("BEGIN IMMEDIATE")
+        try:
+            if not _has_input_mtime(con):
+                con.execute("ALTER TABLE ref_meta ADD COLUMN input_mtime REAL")
+            con.execute("COMMIT")
+        except BaseException:
+            if con.in_transaction:
+                con.execute("ROLLBACK")
+            raise
     return con
+
+
+def _has_input_mtime(con: sqlite3.Connection) -> bool:
+    return "input_mtime" in {r[1] for r in con.execute("PRAGMA table_info('ref_meta')")}
 
 
 class RefSchemaError(RuntimeError):
