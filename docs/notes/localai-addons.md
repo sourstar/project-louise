@@ -97,7 +97,14 @@ by digest whatever the build, and installs by name from the command line
 But it needs the owner on, and so reopens the second path architecture wants
 closed unless sign-in is on (inv. 8, R3). Both readings agree on now.
 
-## Decision (operator, 2026-11-21, via München)
+## Decision (operator, 2026-11-21, in this session)
+
+**Switched off**: `LOCALAI_ADDONS_ENABLED=false` and
+`LOCALAI_ADDONS_BACKEND_LIBRARY=false` in the LocalAI app's env (a node
+action, München's). It replaces the earlier choice below. Option B is not
+built while the owner is off.
+
+### Superseded: on, with sign-in (operator, earlier the same day, via München)
 
 **On, with sign-in**, not the switch-off. Wiring asked of architecture: Louise
 sends a LocalAI API key read from a FILE on every call (inv. 8 on Louise's
