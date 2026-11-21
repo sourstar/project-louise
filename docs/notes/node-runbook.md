@@ -17,7 +17,8 @@ Read first: `CLAUDE.md` (the rules), `docs/notes/STATUS.md` (where things stand)
   read 2026-11-19) although the BIOS menu shows the EXPO profile selected — the
   profile is not in effect (AM5 falls back to JEDEC after a failed training); open
   until a bandwidth measurement or a BIOS session settles it. ZFS ARC capped at 16 GB.
-- **GPU**: Intel Arc Pro B70 (Battlemage G21, `8086:e223`), 32 GB VRAM, 608 GB/s, xe
+- **GPU**: Intel Arc Pro B70 (`8086:e223`; `lspci` labels it "Battlemage G21" from its
+  id table, the AOT target is `bmg-g31` — build.sh), 32 GB VRAM, 608 GB/s, xe
   driver, at PCI `0000:03:00.0`, on a **PCIe 5.0 x16 link** — read 2026-11-19 from
   sysfs: the card's upstream bridge `01:00.0` to the root port `00:01.1` is
   `max 32.0 GT/s x16, now 32.0 GT/s x16`. The endpoint `03:00.0` and the on-card

@@ -712,10 +712,14 @@ probable or open.
   takes the card's path, set high none does, so the path no longer depends
   on the batch size — the invariant-12 objection to this way (the gate's
   short texts on the CPU, the batches on the GPU) is answered by setting
-  it, and the run is then measured like any other. Everything below is
-  ALREADY AT OUR PIN; the 2026-11-20 builds add nothing on SYCL, offload or
-  the server, only a fix for the MoE cache beside a quantized KV cache
-  (#32636, b12569).
+  it, and the run is then measured like any other. CORRECTED the same day
+  (llama-cpp-update-2026-11-21.md): the router, `--fit`, `--cpu-moe` and
+  the env are at our pin (2026-10-31); the MoE cache's completion
+  (ClassLRU, `--moe-cache-cpu-share`, 11-06…08), the SYCL device-side MoE
+  scheduler (#30156, 11-10) and the BMG VRAM check (#31285, 11-07) are
+  AFTER it and come with the update; the 2026-11-20 builds add nothing on
+  SYCL, offload or the server beyond a fix for the MoE cache beside a
+  quantized KV cache (#32636, b12569).
   - **The MoE cache** (`--cpu-moe` / `--n-cpu-moe N` + `--moe-cache-mib N`
     + `--moe-cache-cpu-share F`; `docs/moe-cache.md`; PRs #30966, #31233,
     merged 2026-11-06/07): the experts stay in host RAM, the most used ones

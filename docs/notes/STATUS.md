@@ -20,6 +20,15 @@ measured (published figures disagree).
 
 ### 2026-11-21
 
+- **What updating the llama.cpp backend to LocalAI 5.0.1's pin gains — the report** (operator: "run unattended,
+  give me a report later"): [llama-cpp-update-2026-11-21.md](llama-cpp-update-2026-11-21.md). For the 35B MoE: the
+  SYCL device-side MoE scheduler (#30156: prefill +23 % at 2k tokens, +136 % at short prompts, B60) and the completed
+  MoE cache (≈ 9 GiB on the card instead of 21.6, E; SYCL unmeasured); for every model: the BMG VRAM check (#31285)
+  ends the silent spill — a load onto a full card fails instead, so the resident budget must hold before each load;
+  for the encoders: nothing but a re-gate of every space. Our live series rebases with context refreshes (P5 and
+  P10 apply as they are, P7 is upstream and dropped, P11 applies in its upstream form); the staged P8/P9 conflict.
+  `--fit` is ON by default in LocalAI's backend at both bases: `fit: off` goes into every encoder YAML. Recommended:
+  the chat model first on its own backend at the new pin (the P10 precedent), the series after, in a window.
 - **Latest llama.cpp checked against our pin, for the full card** (operator: "check latest llama.cpp"; master b12600
   of 11-20 against `ddf48f8`). Nothing newer on SYCL, offload or the server; everything relevant is ALREADY AT OUR
   PIN: the **MoE cache** (`--cpu-moe` + `--moe-cache-mib N` + `--moe-cache-cpu-share F`, merged 11-06/07) — the
