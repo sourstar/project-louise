@@ -34,10 +34,13 @@ never displace each other. A version starts:
     the day the latest included amendment applies, not the day the text was
     produced (§4.2); Formex's INFO.CONSLEG START.DATE is kept and compared;
   * an original, at its ENTRY INTO FORCE as the CDM notice states it
-    (RESOURCE_LEGAL_DATE_ENTRY-INTO-FORCE), never before its publication in
-    the OJ, and at the publication where the notice states none
-    (`original_start` — Normattiva's rule, one rule for the three
-    jurisdictions, §4.2: entry into force, not application).
+    (RESOURCE_LEGAL_DATE_ENTRY-INTO-FORCE) — before its publication in the
+    OJ where the notice says so (D1 of the EUR-Lex5 review, 2026-11-21,
+    choice B: a decision takes effect on notification to its addressee,
+    Art. 297(2) TFEU; 129,887 acts), never before the act's own date (no
+    act enters into force before it is adopted) — and at the publication
+    where the notice states none (`original_start`; §4.2: entry into force,
+    not application).
 
 Consolidated texts have NO LEGAL EFFECT; only the Official Journal is
 authentic: every consolidated record says so (`authentic: false`).
@@ -270,8 +273,12 @@ ISSUES = {
                           "Formex FAM.COMP; the notice's is the Work",
     "no-base-act": "a consolidated version names no act it is based on, in the notice or the "
                    "Formex; it is a Work of its own",
-    "entry-into-force-before-publication": "the notice's entry into force precedes the OJ publication; "
-                                           "validity starts at the publication",
+    "entry-into-force-before-publication": "the notice's entry into force precedes the OJ publication "
+                                           "(a decision takes effect on notification, Art. 297(2) "
+                                           "TFEU); validity starts at the entry into force",
+    "entry-into-force-before-adoption": "the notice states an entry into force before the act's own "
+                                        "date; that date starts nothing (no act is in force before "
+                                        "it is adopted)",
     "end-before-start": "the notice's end of validity precedes the version's start",
     "not-in-force-without-end": "the notice says the act is not in force and states no end of "
                                 "validity: it stays open-ended, labelled (under-closed)",
@@ -354,14 +361,18 @@ def unit_files(unit: Path) -> list[os.DirEntry]:
                        and not e.name.endswith(".part")), key=lambda e: e.name)
 
 
-def original_start(entry_into_force: list[str], published: str | None) -> str | None:
+def original_start(entry_into_force: list[str], published: str | None,
+                   adopted: str | None = None) -> str | None:
     """An original's start of validity: the earliest entry into force the
-    notice states on or after its OJ publication; the publication where it
-    states none (nothing enters into force before it is published)."""
-    later = sorted(d for d in entry_into_force if not published or d >= published)
-    if later:
-        return later[0]
-    return published or (sorted(entry_into_force)[0] if entry_into_force else None)
+    notice states on or after the act's own date `adopted` — whether before
+    its OJ publication or after (D1, 2026-11-21, choice B: a decision takes
+    effect on notification, Art. 297(2) TFEU) — and the publication where it
+    states none such. An entry into force before the act's own date starts
+    nothing: no act is in force before it is adopted."""
+    stated = sorted(d for d in entry_into_force if not adopted or d >= adopted)
+    if stated:
+        return stated[0]
+    return published or (sorted(entry_into_force)[0] if entry_into_force and not adopted else None)
 
 
 def eli_data_uri(uri: str | None) -> str | None:
@@ -857,8 +868,13 @@ class EurlexSource:
             # publication date in its tree (parser 5: a Special Edition
             # wrapper states PUBLICATION.REF.SE, not PUBLICATION.REF)
             published = act.publication_date or note.date_publication
-            valid_from = original_start(note.entry_into_force, published)
-            early = [d for d in note.entry_into_force if published and d < published]
+            valid_from = original_start(note.entry_into_force, published, note.date_document)
+            adopted = note.date_document
+            before = [d for d in note.entry_into_force if adopted and d < adopted]
+            early = [d for d in note.entry_into_force if published and d < published and d not in before]
+            if before:
+                found.append(Issue("entry-into-force-before-adoption",
+                                   f"entry into force {before[0]}, the act of {adopted}"))
             if early:
                 found.append(Issue("entry-into-force-before-publication",
                                    f"entry into force {early[0]}, published {published}"))

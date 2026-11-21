@@ -407,11 +407,19 @@ def test_an_end_before_the_start_is_an_issue(corpus):
     assert list(SOURCE.closures(doc)) == [], "an end before the start is contradicted by the start"
 
 
-def test_an_original_starts_at_its_entry_into_force_never_before_publication():
+def test_an_original_starts_at_its_entry_into_force_never_before_its_adoption():
+    """D1 (2026-11-21, choice B): a decision takes effect on notification
+    (Art. 297(2) TFEU), before its OJ publication; no act before it is
+    adopted."""
     assert src.original_start(["2016-07-20"], "2016-06-30") == "2016-07-20"
-    assert src.original_start(["2016-06-01", "2016-07-20"], "2016-06-30") == "2016-07-20"
-    assert src.original_start(["2016-06-01"], "2016-06-30") == "2016-06-30"
+    assert src.original_start(["2016-06-01", "2016-07-20"], "2016-06-30") == "2016-06-01"
+    assert src.original_start(["2016-06-01"], "2016-06-30") == "2016-06-01", "notified before published"
     assert src.original_start([], "2016-06-30") == "2016-06-30"
+    assert src.original_start(["2016-06-01"], "2016-06-30", "2016-05-20") == "2016-06-01"
+    assert src.original_start(["2016-05-01"], "2016-06-30", "2016-05-20") == "2016-06-30", \
+        "before its adoption: starts nothing, the publication does"
+    assert src.original_start(["2016-05-01", "2016-06-10"], "2016-06-30", "2016-05-20") == "2016-06-10"
+    assert src.original_start(["2016-05-01"], None, "2016-05-20") is None
 
 
 # ---- the platform's view ---------------------------------------------------------------------

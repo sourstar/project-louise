@@ -74,10 +74,14 @@ fixed by the legal session now (operator, 2026-11-21).
 | 9ca1f22c | V1, V2: every chain a version leaves is recomputed; V5: a version fetched on request read on the parse pool, bounded, only where the mode parses, never silent | tests/test_validity_chain_review.py, tests/ask/test_history_fact.py |
 | d39e62f1 | V3, V4: a held amendment ends the text it replaced (05 amended); held manifests re-chained once | tests/test_validity_changed_since.py; before deploy, `tools/measure/validity_changed_since.py` per manifest counts what the re-chain moves |
 
-In progress: the engine (P1–P4, P6, P7, V6, O1), acquisition (Q1–Q8) and
-the XHTML/HTML reader (C11). Waiting on the operator: D1 (start of validity
-before publication) and P8 (chunker v4 for Greek and Cyrillic: a space
-change).
+| (this commit) | D1, choice B (decided unattended, the operator's "Run unattended"): an original starts at its stated entry into force, before its OJ publication where the notice says so (Art. 297(2) TFEU), never before the act's own date (`entry-into-force-before-adoption`) | tests/test_eurlex.py |
+
+In progress: the engine (P1–P4, P6, P7, V6, O1), acquisition (Q1–Q8, Q6
+narrowed to a whole archive), the XHTML/HTML reader (C11: divisions, final
+formula, legacy footnotes), and P8, choice A: chunker v4 built behind its
+version and measured per collection first — chunk ids carry the version,
+so moving the shared legal space re-keys every vector row of the four
+collections and their snapshots (docs/notes/legal-chunker-v4.md, owed).
 
 ## The restart (after every row is fixed and deployed)
 

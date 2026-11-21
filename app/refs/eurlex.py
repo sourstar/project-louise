@@ -144,7 +144,7 @@ def unit_meta(unit: Path) -> dict | None:
         return None
     expr = src.version_key(celex)
     if expr == "ORIGINAL":
-        valid_from, work = src.original_start(note.entry_into_force, published), celex
+        valid_from, work = src.original_start(note.entry_into_force, published, note.date_document), celex
     else:
         valid_from, work = formex.iso(celex[-8:]), note.base_celex or celex
     try:
