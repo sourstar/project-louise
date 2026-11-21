@@ -349,3 +349,75 @@ def test_a_newer_dump_clears_tried_and_fetched_for_the_units_it_records_again(tm
     eurlex_dump.build_newer(_dated_dump(tmp_path / "d4", "2026-11-29T01:00:00+01:00", drop=drop), corpus,
                             ["it"], log=lambda m: None)
     assert not eurlex_dump.incomplete(corpus)["it"][FORMEX[0]].get("fetched"), "fetched cleared too"
+
+
+# ---- Q6: an unreadable bulk holds the pass back; never the API, never a language stamped -------
+
+def _coll(corpus: Path):
+    return SimpleNamespace(name="eurlex5", corpus_dir=corpus, slices=None,
+                           codex=SimpleNamespace(parser=SimpleNamespace(version=5)))
+
+
+def _cut(p: Path) -> None:
+    p.write_bytes(p.read_bytes()[: p.stat().st_size // 2])         # still being copied
+
+
+def test_a_newer_dump_whose_mtd_does_not_open_holds_the_pass_back(tmp_path, serial, monkeypatch):  # noqa: F811
+    """Reproduced: `works()` raised into prepare, the engine logged "bulk
+    transport not prepared" and asked Cellar for every pending unit."""
+    from app.acquire import datadump
+    from app.acquire.spec import HeldBack
+    from tests.acquire.test_eurlex_dump import _dump
+    corpus = tmp_path / "corpus"
+    corpus.mkdir()
+    eurlex_dump._stamp(corpus, {"it": "2026-10-01T01:00:00+01:00"})
+    dump = _dump(tmp_path / "dump")
+    for p in dump.rglob("*MTD*.zip"):
+        _cut(p)
+    monkeypatch.setattr(datadump, "_DUMPS", datadump.Dumps(dump))
+    pending = [RemoteFile(rel_path=cellar.rel_path("it", FORMEX[0]), remote=cellar.encode(FORMEX[0], "it"), mtime=1)]
+    with pytest.raises(HeldBack, match="LEG_MTD.zip does not read.*bulk first"):
+        cellar.TREE_UNITS.prepare(pending, pending, _coll(corpus), None)
+    assert eurlex_dump.stamp(corpus) == {"it": "2026-10-01T01:00:00+01:00"}, "not stamped"
+
+
+def test_any_failure_of_a_newer_dump_s_build_holds_the_pass_back(tmp_path, serial, monkeypatch):  # noqa: F811
+    from app.acquire import datadump
+    from app.acquire.spec import HeldBack
+    from tests.acquire.test_eurlex_dump import _dump
+    monkeypatch.setattr(datadump, "_DUMPS", datadump.Dumps(_dump(tmp_path / "dump")))
+    monkeypatch.setattr(eurlex_dump, "build_newer", lambda *a, **k: (_ for _ in ()).throw(KeyError("uuid")))
+    pending = [RemoteFile(rel_path=cellar.rel_path("it", FORMEX[0]), remote=cellar.encode(FORMEX[0], "it"), mtime=1)]
+    with pytest.raises(HeldBack, match="eurlex5: a newer Data Dump of it was not built.*KeyError"):
+        cellar.TREE_UNITS.prepare(pending, pending, _coll(tmp_path / "corpus"), None)
+
+
+def test_an_item_zip_that_does_not_open_stops_the_build_and_stamps_nothing(tmp_path, serial):  # noqa: F811
+    """Reproduced: LangZips skipped it ("left to the API"), its units were
+    counted not-in-language — never recorded for the API either — and the
+    language was stamped built from that dump."""
+    from tests.acquire.test_eurlex_dump import _dump
+    corpus = tmp_path / "corpus"
+    dump = _dump(tmp_path / "dump")
+    _cut(dump / "datadump-it" / "LEG_IT_HTML.zip")
+    with pytest.raises(eurlex_dump.BulkUnreadable, match="LEG_IT_HTML.zip does not read"):
+        eurlex_dump.build(dump, corpus, ["it"], log=lambda m: None)
+    assert eurlex_dump.stamp(corpus) == {} and eurlex_dump.incomplete(corpus) == {}
+    assert eurlex_dump.packages_read(corpus) == set()
+
+
+def test_a_member_that_does_not_read_stops_the_build(tmp_path, serial):  # noqa: F811
+    import zipfile
+    from tests.acquire.test_eurlex_dump import _dump
+    corpus = tmp_path / "corpus"
+    dump = _dump(tmp_path / "dump")
+    path = dump / "datadump-it" / "LEG_IT_HTML.zip"
+    with zipfile.ZipFile(path) as z:
+        info = z.infolist()[0]
+    data = bytearray(path.read_bytes())
+    at = info.header_offset + 30 + len(info.filename.encode()) + len(info.extra) + 10
+    data[at] ^= 0xFF                                               # its CRC-32 no longer matches
+    path.write_bytes(bytes(data))
+    with pytest.raises(eurlex_dump.BulkUnreadable, match="member"):
+        eurlex_dump.build(dump, corpus, ["it"], log=lambda m: None)
+    assert eurlex_dump.stamp(corpus) == {}

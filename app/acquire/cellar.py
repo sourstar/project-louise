@@ -1234,12 +1234,26 @@ class TreeUnits(CellarUnits):
 
     def prepare(self, files: list[RemoteFile], pending: list[RemoteFile], collection,
                 endpoint: Endpoint) -> list[str]:
+        """A newer Data Dump built in before Cellar is asked (bulk first).
+        A newer dump that does not read, or whose build fails for any other
+        reason, HOLDS THE PASS BACK (spec.HeldBack, said why; review
+        2026-11-21, Q6): its failure was the engine's "bulk transport not
+        prepared" and the pass asked Cellar for every unit, the newer bulk
+        unused. A stop ends the pass."""
         from . import datadump, eurlex_dump
+        from .spec import HeldBack
         dumps = datadump.dumps()
         if dumps.base is None:
             return []
         langs = sorted({unit_of(f)["lang"] for f in pending if is_unit(f)})
-        eurlex_dump.build_newer(dumps.base, Path(collection.corpus_dir), langs)
+        try:
+            eurlex_dump.build_newer(dumps.base, Path(collection.corpus_dir), langs)
+        except (TransferAborted, HeldBack):
+            raise
+        except Exception as e:  # noqa: BLE001 — whatever stopped the bulk, Cellar waits for it
+            raise HeldBack(f"{getattr(collection, 'name', 'eurlex')}: a newer Data Dump of {', '.join(langs)} "
+                           f"was not built ({type(e).__name__}: {str(e)[:300]}); bulk first, so Cellar is "
+                           f"not asked for its units until it is") from e
         return []
 
 

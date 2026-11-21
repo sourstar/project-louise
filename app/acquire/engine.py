@@ -35,7 +35,7 @@ from . import transport_https
 from . import updatefiles
 from .transport_https import RangeUnsupported
 from .spec import (AcquisitionPlan, AcquisitionSpec, ChecksumSource, DiskPreflightError,
-                    Endpoint, Filter, LicenseAckRequiredError, RemoteFile, TransferAborted,
+                    Endpoint, Filter, HeldBack, LicenseAckRequiredError, RemoteFile, TransferAborted,
                     Transport, TransportError, estimated_bytes_for, resolve_profile)
 from .transports import REGISTRY
 
@@ -1179,6 +1179,13 @@ def run_acquisition(con, collection, spec: AcquisitionSpec, profile: str,
         return {**_no_counts(), "stopped": str(why)}
     try:
         return _run_acquisition(con, collection, spec, profile, stop, priority, until)
+    except HeldBack as e:
+        # BULK FIRST, from the pass itself (spec.HeldBack): a bulk the unit
+        # fetcher must use first is there and cannot be used (an unreadable
+        # newer dump, its build failed) — the pass ends here, said, nothing
+        # asked of the origin's per-unit API; the next pass tries the bulk again
+        db.log_event(con, "warn", "acquire", str(e)[:400])
+        return {**_no_counts(), "stopped": str(e)}
     except TransferAborted as e:
         # A STOP BEFORE THE POOL — in the listing, the benchmark, the index
         # resolve or the planning — is a stop, not a failure: it returns
@@ -1363,7 +1370,9 @@ def _run_acquisition_claimed(con, collection, spec: AcquisitionSpec, profile: st
     # a unit fetcher that serves the pass from a BULK decides here, knowing
     # what the pass has to fetch (06 §6.2, bulk first: "relevant" is the
     # share of the requests the bulk would answer); optional, and a failure
-    # leaves the pass to the transport
+    # leaves the pass to the transport — EXCEPT a stop, and a bulk that must
+    # be used first and cannot (spec.HeldBack; review 2026-11-21, Q6): both
+    # end the pass before the origin is asked anything
     prepare = getattr(spec.unit_fetcher, "prepare", None) if spec.unit_fetcher is not None else None
     if prepare is not None:
         try:
@@ -1375,6 +1384,11 @@ def _run_acquisition_claimed(con, collection, spec: AcquisitionSpec, profile: st
             if more:
                 pending |= more
                 skipped -= len(more)
+        except (TransferAborted, HeldBack):
+            close = getattr(spec.unit_fetcher, "close", None)
+            if close is not None:
+                close()             # what it opened for the pass, let go with it
+            raise
         except Exception as e:   # noqa: BLE001 — an optimisation of the pass, never its failure
             db.log_event(con, "warn", "acquire", f"bulk transport not prepared: {type(e).__name__}: {e}"[:400])
     items = _build_work_items(files, pending, spec)

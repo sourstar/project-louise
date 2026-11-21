@@ -53,6 +53,8 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Callable
 
+from .spec import HeldBack
+
 #: works per task: a chunk parses its trees once and visits every language.
 #: MEASURED (2026-11-15): a work's MTD tree is 67-390 KB of XML, 0.24-1.4 MB
 #: parsed (13-86 ms); one language's zips index in ~1.4 s and ~250 MB (FMX's
@@ -79,12 +81,29 @@ _MTD_MEMBER = re.compile(r"^(?P<uuid>[0-9a-f-]{36})/tree_non_inferred\.rdf$")
 _LG_DOC = re.compile(rb"<LG\.DOC>\s*([A-Z]{2})\s*</LG\.DOC>")
 
 
+class BulkUnreadable(HeldBack):
+    """A zip of the dump, or a member of one, that does not read (still being
+    copied, cut, corrupt). BULK FIRST (review 2026-11-21, Q6): the build
+    stops — nothing stamped, nothing recorded for the API — and the pass is
+    held back, said why (spec.HeldBack). Until then an unreadable newer MTD
+    sent the whole pass to Cellar with the bulk unused, and an unreadable
+    item zip was skipped "left to the API" with its language stamped built:
+    its units never in the dump's record, asked of Cellar by the listing."""
+
+
+def _unreadable(p, e: BaseException) -> BulkUnreadable:
+    return BulkUnreadable(f"the Data Dump's {p} does not read ({type(e).__name__}: {e}): bulk first, so its "
+                          f"build stops and Cellar is not asked for its units until it reads")
+
+
 class LangZips:
-    """One language's item zips, indexed `uuid → form → name → (zip, info)`."""
+    """One language's item zips, indexed `uuid → form → name → (zip, info)`.
+    A zip that does not open raises BulkUnreadable (Q6)."""
 
     def __init__(self, folder: Path, log=print) -> None:
         from .datadump import _staged
         self.zips: list[zipfile.ZipFile] = []
+        self.paths: list[Path] = []
         self.index: dict[str, dict[str, dict[str, tuple[int, zipfile.ZipInfo]]]] = {}
         for p in sorted(folder.rglob("*.zip")):
             if "MTD" in p.name.upper():
@@ -94,19 +113,26 @@ class LangZips:
                 # place: their members are asked for only by the few acts with
                 # no Formex and no HTML, and staging one would fill the cache
                 zf = zipfile.ZipFile(p if "PDF" in p.name.upper() else _staged(p, log))
+                infos = zf.infolist()
             except (zipfile.BadZipFile, OSError) as e:
-                log(f"[eurlex-dump] {p}: not read ({e}); its items are left to the API")
-                continue
+                self.close()
+                raise _unreadable(p, e) from e
             i = len(self.zips)
             self.zips.append(zf)
-            for info in zf.infolist():
+            self.paths.append(p)
+            for info in infos:
                 m = _MEMBER.match(info.filename)
                 if m:
                     self.index.setdefault(m["uuid"], {}).setdefault(m["form"], {})[m["name"]] = (i, info)
 
     def read(self, ref: tuple[int, zipfile.ZipInfo]) -> bytes:
+        """The member's bytes, its CRC-32 checked; one that does not read
+        raises BulkUnreadable (Q6), never leaves its unit to the API."""
         i, info = ref
-        return self.zips[i].read(info)          # its CRC-32 checked
+        try:
+            return self.zips[i].read(info)
+        except (zipfile.BadZipFile, OSError, EOFError) as e:
+            raise _unreadable(f"{self.paths[i]} member {info.filename}", e) from e
 
     def close(self) -> None:
         for z in self.zips:
@@ -131,7 +157,15 @@ def _mtd(paths: tuple[str, ...]) -> list[zipfile.ZipFile]:
     from .datadump import _staged
     got = _MTDS.get(paths)
     if got is None:
-        got = _MTDS[paths] = [zipfile.ZipFile(_staged(Path(p), print)) for p in paths]
+        got = []
+        for p in paths:
+            try:
+                got.append(zipfile.ZipFile(_staged(Path(p), print)))
+            except (zipfile.BadZipFile, OSError) as e:
+                for z in got:
+                    z.close()
+                raise _unreadable(p, e) from e
+        _MTDS[paths] = got
     return got
 
 
@@ -147,10 +181,16 @@ def mtd_zips(folders: list[Path]) -> list[Path]:
 
 
 def works(mtd: list[Path]) -> list[str]:
+    """The works the MTD zips hold; one that does not open raises
+    BulkUnreadable (Q6: it raised into `prepare`, whose failure the engine
+    took for "not prepared" and asked Cellar for every unit)."""
     out: set[str] = set()
     for p in mtd:
-        with zipfile.ZipFile(p) as z:
-            out.update(m["uuid"] for m in map(_MTD_MEMBER.match, z.namelist()) if m)
+        try:
+            with zipfile.ZipFile(p) as z:
+                out.update(m["uuid"] for m in map(_MTD_MEMBER.match, z.namelist()) if m)
+        except (zipfile.BadZipFile, OSError) as e:
+            raise _unreadable(p, e) from e
     return sorted(out)
 
 
@@ -650,6 +690,8 @@ def build_chunk(mtd_paths: tuple[str, ...], uuids: list[str], langs: list[tuple[
                 break
             except KeyError:
                 continue
+            except (zipfile.BadZipFile, OSError, EOFError) as e:
+                raise _unreadable(f"{z.filename} member {uuid}/tree_non_inferred.rdf", e) from e
         if data is None:
             trees[uuid] = "mtd-missing"
             continue
@@ -737,11 +779,8 @@ def build_chunk(mtd_paths: tuple[str, ...], uuids: list[str], langs: list[tuple[
                     c["package-not-in-dump"] += 1
                 record(lang, celex, note, reform, at, held_note)
                 continue
-            try:
-                files = {it.name: lz.read(held_forms[form][it.name]) for it in listed}
-            except (zipfile.BadZipFile, OSError):
-                c["unreadable"] += 1
-                continue
+            # a member that does not read stops the build (LangZips.read, Q6)
+            files = {it.name: lz.read(held_forms[form][it.name]) for it in listed}
             if form == "fmx4":
                 try:
                     view = formex.unpack(files)[0]      # a package read through
@@ -760,11 +799,7 @@ def build_chunk(mtd_paths: tuple[str, ...], uuids: list[str], langs: list[tuple[
                         c["incomplete"] += 1       # that form the API's (phase 2)
                         record(lang, celex, note, reform, at, held_note)
                         continue
-                    try:
-                        files.update({it.name: lz.read(held_forms[alt][it.name]) for it in alt_listed})
-                    except (zipfile.BadZipFile, OSError):
-                        c["unreadable"] += 1
-                        continue
+                    files.update({it.name: lz.read(held_forms[alt][it.name]) for it in alt_listed})
                     c["formex-not-this-act"] += 1
                 # a text in another language under this one's expression is
                 # held as the origin files it (operator, 2026-11-16, B): the
