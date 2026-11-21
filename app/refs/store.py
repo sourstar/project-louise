@@ -16,7 +16,7 @@ def connect(path: Path | None = None) -> sqlite3.Connection:
     path.parent.mkdir(parents=True, exist_ok=True)
     con = sqlite3.connect(path, timeout=30, isolation_level=None)
     con.row_factory = sqlite3.Row
-    con.execute("PRAGMA journal_mode=WAL")
+    _wal(con)
     con.execute("PRAGMA synchronous=NORMAL")
     con.execute("PRAGMA busy_timeout=15000")
     con.execute(
@@ -41,6 +41,30 @@ def connect(path: Path | None = None) -> sqlite3.Connection:
                 con.execute("ROLLBACK")
             raise
     return con
+
+
+#: tries of the WAL switch while another opener holds the file (`_wal`)
+WAL_TRIES = 100
+WAL_WAIT_S = 0.05
+
+
+def _wal(con: sqlite3.Connection) -> None:
+    """WAL, the store's mode (invariant 6). SWITCHING a file not yet in WAL
+    needs it exclusively, and SQLite answers "database is locked" AT ONCE —
+    the busy handler is not run for a journal-mode change — when another
+    opener holds it: a new store opened by the worker and the web together
+    on a first boot (2026-11-21, 8 openers at once: 40 % of rounds). Bounded:
+    WAL_TRIES × WAL_WAIT_S, then the error. A store already in WAL answers
+    at once (the mode persists in the file)."""
+    import time
+    for attempt in range(WAL_TRIES):
+        try:
+            con.execute("PRAGMA journal_mode=WAL")
+            return
+        except sqlite3.OperationalError as e:
+            if "locked" not in str(e) and "busy" not in str(e) or attempt == WAL_TRIES - 1:
+                raise
+            time.sleep(WAL_WAIT_S)
 
 
 def _has_input_mtime(con: sqlite3.Connection) -> bool:

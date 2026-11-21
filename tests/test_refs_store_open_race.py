@@ -1,6 +1,8 @@
-"""Two processes opening the refs store at once (2026-11-21): the column
-check and its ALTER ran with no lock, and the second ALTER failed with
-"duplicate column name". Checked again under BEGIN IMMEDIATE."""
+"""Openers of the refs store at once (2026-11-21): the column check and its
+ALTER ran with no lock (the second ALTER: "duplicate column name"), and a
+store not yet in WAL refused its switch to WAL at once, "database is locked"
+(SQLite runs no busy handler for a journal-mode change). The ALTER checked
+again under BEGIN IMMEDIATE; the switch retried, bounded."""
 from __future__ import annotations
 
 import sqlite3
@@ -17,7 +19,7 @@ def _old_store(path):
 
 
 def test_many_openers_at_once_add_the_column_once(tmp_path):
-    for round_ in range(15):
+    for round_ in range(40):
         path = tmp_path / f"refs{round_}.sqlite"
         _old_store(path)
         gate, errors = threading.Barrier(8), []
