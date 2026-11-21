@@ -337,7 +337,7 @@ _FORMS: tuple[_Forms, ...] = (
            art=r"articles?", conn=r"of", conj=r"and|or|to",
            sub=r"paragraphs?|subparagraphs?|points?|indents?|first|second|third|fourth|sentence",
            source="32016R0679 Art. 93(2) 'Article 5 of Regulation (EU) No 182/2011'; 32023R1773 rec. 18 "
-                  "'Article 16 of Commission Implementing Regulation (EU) 2023/1070', Art. 5 'Article 170(1) of "
+                  "'Article 16 of Commission Implementing Regulation (EU) 2023/1070', Art. 6 'Article 170(1) of "
                   "Delegated Regulation (EU) 2015/2446'"),
     _Forms("fr", R=r"r[èe]glements?", L=r"directives?", D=r"d[ée]cisions?",
            gap=r"d['’]\s?ex[ée]cution|d[ée]l[ée]gu[ée]s?|cadre|du\s+conseil|de\s+la\s+commission"
@@ -345,7 +345,7 @@ _FORMS: tuple[_Forms, ...] = (
            art=r"articles?", conn=r"du|de\s+la|des|de", conj=r"et|ou|à", link=r"de\s+l['’]|l['’]|aux?",
            sub=r"paragraphes?|alin[ée]as?|points?|premier|première|deuxième|troisième|tirets?|phrase",
            source="32016R0679 Art. 93(2) 'l'article 5 du règlement (UE) no 182/2011', rec. 19 'décision-cadre "
-                  "2008/977/JAI'; 32023R1773 Art. 5 'l’article 170, paragraphe 1, du règlement délégué (UE) "
+                  "2008/977/JAI'; 32023R1773 Art. 6 'l’article 170, paragraphe 1, du règlement délégué (UE) "
                   "2015/2446', title 'RÈGLEMENT D’EXÉCUTION (UE) 2023/1773'"),
     _Forms("de", R=r"verordnung(?:en)?", L=r"richtlinien?", D=r"beschl(?:uss(?:es)?|üsse)|entscheidung(?:en)?",
            pre=r"delegierten?",
@@ -353,7 +353,7 @@ _FORMS: tuple[_Forms, ...] = (
            link=r"des|der|den|dem",
            sub=r"absatz|abs\.|unterabsatz|uabs\.|buchstaben?|buchst\.|satz|nummer|nr\.|ziffer",
            source="32016R0679 Art. 93(2) 'Artikel 5 der Verordnung (EU) Nr. 182/2011', rec. 19 'des "
-                  "Rahmenbeschlusses 2008/977/JI'; 32023R1773 Art. 5 'Artikel 170 Absatz 1 der delegierten "
+                  "Rahmenbeschlusses 2008/977/JI'; 32023R1773 Art. 6 'Artikel 170 Absatz 1 der delegierten "
                   "Verordnung (EU) 2015/2446', rec. 18 'Artikel 16 der Durchführungsverordnung (EU) 2023/1070'"),
     _Forms("it", R=r"regolament[oi]", L=r"direttiv[ae]", D=r"decision[ei]",
            gap=r"di\s+esecuzione|delegat[oi]|quadro|del\s+consiglio|della\s+commissione",
@@ -361,42 +361,42 @@ _FORMS: tuple[_Forms, ...] = (
            conj=r"e|o|a", link=r"dell['’]|all['’]|l['’]|agli|degli", opener=r"da",
            sub=r"paragraf[oi]|comm[ai]|letter[ae]|punt[oi]|primo|secondo|terzo",
            source="32016R0679 Art. 93(2) 'l'articolo 5 del regolamento (UE) n. 182/2011'; 32023R1773 rec. 18 "
-                  "'all’articolo 16 del regolamento di esecuzione (UE) 2023/1070', Art. 5 'dell’articolo 170, "
+                  "'all’articolo 16 del regolamento di esecuzione (UE) 2023/1070', Art. 6 'dell’articolo 170, "
                   "paragrafo 1, del regolamento delegato (UE) 2015/2446'"),
     _Forms("es", R=r"reglamentos?", L=r"directivas?", D=r"decisi[óo]n(?:es)?",
            gap=r"de\s+ejecuci[óo]n|delegados?|marco",
            art=r"art[íi]culos?", conn=r"del|de\s+la|de\s+los|de\s+las|de", conj=r"y|o|a", link=r"el|los",
            sub=r"apartados?|letras?|p[áa]rrafos?|puntos?|guiones?",
            source="32016R0679 Art. 93(2) 'el artículo 5 del Reglamento (UE) n.o 182/2011'; 32023R1773 rec. 18 "
-                  "'el artículo 16 del Reglamento de Ejecución (UE) 2023/1070', Art. 5 'el artículo 170, "
+                  "'el artículo 16 del Reglamento de Ejecución (UE) 2023/1070', Art. 6 'el artículo 170, "
                   "apartado 1, del Reglamento Delegado (UE) 2015/2446'"),
     _Forms("pt", R=r"regulamentos?", L=r"dir(?:e|ec)tivas?", D=r"decis(?:ão|ao|ões|oes)",
            gap=r"de\s+execu[çc][ãa]o|delegados?|quadro",
            art=r"artigos?", conn=r"do|da|dos|das", conj=r"e|ou|a", link=r"nos?|os?|aos?",
            sub=r"n\.?\s?[ºo°]|al[íi]neas?|par[áa]grafos?|pontos?|subpar[áa]grafos?",
            source="32016R0679 Art. 93(2) 'o artigo 5.o do Regulamento (UE) n.o 182/2011', rec. 19 "
-                  "'Decisão-Quadro 2008/977/JAI'; 32023R1773 Art. 5 'o artigo 170.o, n.o 1, do Regulamento "
+                  "'Decisão-Quadro 2008/977/JAI'; 32023R1773 Art. 6 'o artigo 170.o, n.o 1, do Regulamento "
                   "Delegado (UE) 2015/2446', rec. 18 'o artigo 16.o do Regulamento de Execução (UE) 2023/1070'"),
     _Forms("nl", R=r"verordening(?:en)?", L=r"richtl(?:ij|ĳ)n(?:en)?", D=r"besluit(?:en)?",
            pre=r"gedelegeerde",
            art=r"artikel(?:en)?", conn=r"van(?:\s+de|\s+het)?", conj=r"en|of|tot\s+en\s+met", link=r"de",
            sub=r"lid|leden|punt(?:en)?|onder|alinea|eerste|tweede|derde|volzin",
            source="32016R0679 Art. 93(2) 'artikel 5 van Verordening (EU) nr. 182/2011', rec. 42 'Richtlĳn "
-                  "93/13/EEG' (the OJ's ĳ ligature); 32023R1773 Art. 5 'artikel 170, lid 1, van Gedelegeerde "
+                  "93/13/EEG' (the OJ's ĳ ligature); 32023R1773 Art. 6 'artikel 170, lid 1, van Gedelegeerde "
                   "Verordening (EU) 2015/2446', rec. 18 'artikel 16 van Uitvoeringsverordening (EU) 2023/1070'"),
     _Forms("da", R=r"forordning(?:en|er|erne)?", L=r"direktiv(?:et|er|erne)?",
            D=r"afgørelse(?:n|r|rne)?|beslutning(?:en|er)?",
            pre=r"europa-parlamentets\s+og\s+rådets|rådets|kommissionens|delegerede?|delegeret",
            art=r"artikel", conn=r"i|af", conj=r"og|eller",
            sub=r"stk\.|litra|nr\.|afsnit|punktum",
-           source="32016R0679 Art. 93(2) 'artikel 5 i forordning (EU) nr. 182/2011', rec. 103 'artikel 25, "
+           source="32016R0679 Art. 93(2) 'artikel 5 i forordning (EU) nr. 182/2011', rec. 106 'artikel 25, "
                   "stk. 6, eller artikel 26, stk. 4, i direktiv 95/46/EF', Art. 4(25) 'artikel 1, stk. 1, litra b), "
                   "i Europa-Parlamentets og Rådets direktiv (EU) 2015/1535'; 32023R1773 'gennemførelsesforordning'"),
     _Forms("sv", R=r"förordning(?:en|ar|arna)?", L=r"direktiv(?:et|en)?", D=r"beslut(?:et)?",
            pre=r"europaparlamentets\s+och\s+rådets|rådets|kommissionens|delegerade?",
            art=r"artikel|artiklarna|artiklar", conn=r"i", conj=r"och|eller",
            sub=r"punkt(?:en)?|led(?:en)?|stycket|första|andra|tredje",
-           source="32016R0679 Art. 93(2) 'artikel 5 i förordning (EU) nr 182/2011', rec. 103 'artikel 25.6 eller "
+           source="32016R0679 Art. 93(2) 'artikel 5 i förordning (EU) nr 182/2011', rec. 106 'artikel 25.6 eller "
                   "26.4 i direktiv 95/46/EG', Art. 4(25) 'artikel 1.1 b i Europaparlamentets och rådets direktiv "
                   "(EU) 2015/1535'; 32023R1773 'genomförandeförordning'"),
     _Forms("cs", R=r"nařízení(?:m|ch)?", L=r"směrnic(?:e|i|í)?", D=r"rozhodnutí(?:m)?",
@@ -408,7 +408,7 @@ _FORMS: tuple[_Forms, ...] = (
            sub=r"odst\.|písm\.|bod(?:u|ě)?|pododstav(?:ec|ce)|věta|věty",
            source="32016R0679 Art. 93(2) 'článek 5 nařízení (EU) č. 182/2011', rec. 172 'čl. 28 odst. 2 nařízení "
                   "(ES) č. 45/2001'; 32018R0825 rec. 21 'čl. 7 odst. 2a nařízení (EU) 2016/1036'; 32023R1773 "
-                  "Art. 5 'čl. 170 odst. 1 nařízení v přenesené pravomoci (EU) 2015/2446'"),
+                  "Art. 6 'čl. 170 odst. 1 nařízení v přenesené pravomoci (EU) 2015/2446'"),
     _Forms("sk", R=r"nariaden(?:ie|ia|í|iu|ím)", L=r"smernic(?:a|e|u|i|ou)|smerníc",
            D=r"rozhodnut(?:ie|ia|í|iu|ím)",
            gap=r"európskeho\s+parlamentu\s+a\s+rady|rady|komisie",
@@ -416,7 +416,7 @@ _FORMS: tuple[_Forms, ...] = (
            art=r"článok|článku|článkom|článkoch|články|článkov",
            conj=r"a|alebo|až",
            sub=r"ods\.|písm\.|bod(?:u|e)?|pododsek(?:u)?|veta|vety",
-           source="32016R0679 rec. 103 'článku 25 ods. 6 alebo článku 26 ods. 4 smernice 95/46/ES', rec. 172 "
+           source="32016R0679 rec. 106 'článku 25 ods. 6 alebo článku 26 ods. 4 smernice 95/46/ES', rec. 172 "
                   "'článkom 28 ods. 2 nariadenia (ES) č. 45/2001'; 32023R1773 rec. 18 'článku 16 vykonávacieho "
                   "nariadenia Komisie (EÚ) 2023/1070'"),
     _Forms("pl", R=r"rozporządze(?:nie|nia|niu|niem|ń)", L=r"dyrektyw(?:a|y|ie|ę|ą)?", D=r"decyz(?:ja|ji|ję|ją|je)",
@@ -424,7 +424,7 @@ _FORMS: tuple[_Forms, ...] = (
                r"|delegowan(?:e|ego|ym|ej)|ramow(?:a|ej|ą)",
            art=r"artykuł(?:u|em|e|y|ów)?|art\.", conj=r"i|lub|oraz",
            sub=r"ust\.|lit\.|pkt|akapit|zdanie|tiret",
-           source="32016R0679 rec. 103 'art. 25 ust. 6 lub art. 26 ust. 4 dyrektywy 95/46/WE', rec. 172 'art. 28 "
+           source="32016R0679 rec. 106 'art. 25 ust. 6 lub art. 26 ust. 4 dyrektywy 95/46/WE', rec. 172 'art. 28 "
                   "ust. 2 rozporządzenia (WE) nr 45/2001'; 32023R1773 rec. 18 'art. 16 rozporządzenia "
                   "wykonawczego Komisji (UE) 2023/1070'"),
     _Forms("sl", R=r"uredb(?:a|e|i|o|ama|ah)", L=r"direktiv(?:a|e|i|o|ami|ama)", D=r"sklep(?:a|u|om|ov)?",
@@ -432,14 +432,14 @@ _FORMS: tuple[_Forms, ...] = (
            pre=r"izvedben(?:a|e|i|ega|em)|delegiran(?:a|e|i|ega)|okvirn(?:i|ega|em)",
            art=r"člen(?:a|u|om|i|ov|e)?", conj=r"in|ali|do",
            sub=r"odstav(?:ek|ka)|točk(?:a|e|i)|pododstav(?:ek|ka)",
-           source="32016R0679 Art. 93(2) 'člen 5 Uredbe (EU) št. 182/2011', rec. 103 'člena 25(6) ali člena 26(4) "
+           source="32016R0679 Art. 93(2) 'člen 5 Uredbe (EU) št. 182/2011', rec. 106 'člena 25(6) ali člena 26(4) "
                   "Direktive 95/46/ES'; 32023R1773 rec. 2 'Izvedbeni uredbi Komisije (EU) 2018/2066'"),
     _Forms("hr", R=r"uredb(?:a|e|i|u|om|ama)", L=r"direktiv(?:a|e|i|u|om)", D=r"odluk(?:a|e|u|om)|odluci",
            gap=r"europskog\s+parlamenta\s+i\s+vijeća|vijeća|komisije",
            pre=r"provedben(?:a|e|oj|om)|delegiran(?:a|e|oj|om)|okvirn(?:a|e|oj|om)",
            art=r"član(?:ak|ka|ku|kom|ci|aka|cima|ke)", conj=r"i|ili|do", opener=r"od",
            sub=r"stav(?:ak|ka|ku|kom)|točk(?:a|e|i|om)|podstav(?:ak|ka|ku|kom)",
-           source="32016R0679 Art. 93(2) 'članak 5. Uredbe (EU) br. 182/2011', rec. 103 'članka 25. stavka 6. i "
+           source="32016R0679 Art. 93(2) 'članak 5. Uredbe (EU) br. 182/2011', rec. 106 'članka 25. stavka 6. i "
                   "članka 26. stavka 4. Direktive 95/46/EZ', rec. 172 'člankom 28. stavkom 2. Uredbe (EZ) br. "
                   "45/2001'; 32023R1773 rec. 2 'Provedbenoj uredbi Komisije (EU) 2018/2066'"),
     _Forms("bg", R=r"регламент(?:а|ът|и|ите)?", L=r"директив(?:а|ата|и|ите)", D=r"решени(?:е|ето|я|ята)",
@@ -449,7 +449,7 @@ _FORMS: tuple[_Forms, ...] = (
            sub=r"параграф|алинея|буква|точка",
            source="32016R0679 Art. 93(2) 'член 5 от Регламент (ЕС) № 182/2011', Art. 4(25) 'член 1, параграф 1, "
                   "точка б) от Директива (ЕС) 2015/1535'; 32023R1773 rec. 18 'член 16 от Регламент за изпълнение "
-                  "(ЕС) 2023/1070', Art. 5 'член 175 от Делегиран регламент (ЕС) 2015/2446'"),
+                  "(ЕС) 2023/1070', Art. 6 'член 175 от Делегиран регламент (ЕС) 2015/2446'"),
     _Forms("el", R=_tonos(r"κανονισμ(?:ός|ού|ό|οί|ών|ούς)"), L=_tonos(r"οδηγ(?:ία|ίας|ίες|ιών)"),
            D=_tonos(r"απόφασ(?:η|ης|εις|εως)|αποφάσε(?:ις|ων|ως)"),
            gap=_tonos(r"πλαίσι(?:ο|ου)|του\s+συμβουλίου|της\s+επιτροπής"),
@@ -501,7 +501,7 @@ _FORMS: tuple[_Forms, ...] = (
                  r"(?:\s+\d+(?:\s?[a-z](?![^\W\d_]))?\s+(?:ala)?kohd\w*)*(?:\s*,?\s*(?:ja|tai)\s+\d+(?:\s?[a-z](?![^\W\d_]))?"
                  r"(?:\s*(?:[–—-]|,|ja)\s*\d+)*\s+artikl[ao]\w*(?:\s+\d+(?:\s?[a-z](?![^\W\d_]))?\s+(?:ala)?kohd\w*)*)*",
            num_word=r"artikl[ao]\w*", sub=r"(?:ala)?kohd\w*",
-           source="32016R0679 Art. 93(2) 'asetuksen (EU) N:o 182/2011 5 artiklaa', rec. 103 'direktiivin 95/46/EY "
+           source="32016R0679 Art. 93(2) 'asetuksen (EU) N:o 182/2011 5 artiklaa', rec. 106 'direktiivin 95/46/EY "
                   "25 artiklan 6 kohdan', Art. 4(25) 'direktiivin (EU) 2015/1535 (19) 1 artiklan'; 32018R0825 "
                   "'asetuksen (EU) 2016/1036 7 artiklan 2 a kohdassa'"),
     _Forms("et", R=r"määrus(?:e|t|es|ega|ele|est|ed|i|te|tele)?", L=r"direktiiv(?:i|iga|is|ist|ile|id|e)?",
@@ -510,7 +510,7 @@ _FORMS: tuple[_Forms, ...] = (
                  r"(?:\s*,?\s*(?:ja|või)\s+artik(?:kel|li\w*)\s+\d+[a-z]?(?:\s*(?:[–—-]|,|ja)\s*\d+[a-z]?)*"
                  r"(?:\s+(?:lõi|punkt)\w*\s+\d+[a-z]?)*)*",
            sub=r"lõi\w*|punkt\w*",
-           source="32016R0679 Art. 93(2) 'määruse (EL) nr 182/2011 artiklit 5', rec. 103 'direktiivi 95/46/EÜ "
+           source="32016R0679 Art. 93(2) 'määruse (EL) nr 182/2011 artiklit 5', rec. 106 'direktiivi 95/46/EÜ "
                   "artikli 25 lõike 6'; 32018R0825 rec. 21 'määruse (EL) 2016/1036 artikli 7 lõikes 2a'"),
     _Forms("lv", R=r"regul(?:a|as|u|ā|ai|ām|ās)", L=r"direktīv(?:a|as|u|ā|ai|ām|ās)",
            D=r"(?:pamat)?lēmum(?:s|a|u|ā|am|i|us)",
@@ -518,7 +518,7 @@ _FORMS: tuple[_Forms, ...] = (
                  r"(?:\s+\d+(?:\.?[a-z])?\.\s*(?:apakš)?punkt\w*)*(?:\s*,?\s*(?:un|vai)\s+\d+(?:\.?[a-z])?\."
                  r"(?:\s*(?:[–—-]|,|un)\s*\d+(?:\.?[a-z])?\.)*\s*pant\w*(?:\s+\d+(?:\.?[a-z])?\.\s*(?:apakš)?punkt\w*)*)*",
            num_word=r"pant\w*", sub=r"(?:apakš)?punkt\w*|daļ\w*",
-           source="32016R0679 Art. 93(2) 'Regulas (ES) Nr. 182/2011 5. pantu', rec. 103 'Direktīvas 95/46/EK 25. "
+           source="32016R0679 Art. 93(2) 'Regulas (ES) Nr. 182/2011 5. pantu', rec. 106 'Direktīvas 95/46/EK 25. "
                   "panta 6. punktu'; 32018R0825 rec. 21 'Regulas (ES) 2016/1036 7. panta 2.a punktā'"),
     _Forms("lt", R=r"reglament(?:as|o|ą|u|e|ai|ui|ų|us|uose|ams)", L=r"direktyv(?:a|os|ą|oje|ai|as|oms|ų)",
            D=r"sprendim(?:as|o|ą|u|e|ai|ui|ų|us|ams)",
@@ -526,7 +526,7 @@ _FORMS: tuple[_Forms, ...] = (
                  r"(?:\s*,?\s*(?:ir|bei|arba)\s+\d+[a-z]?(?:\s*(?:[–—-]|,|ir|bei)\s*\d+[a-z]?)*\s+straipsn\w*"
                  r"(?:\s+\d+\s+(?:dal|punkt)\w*)*)*",
            num_word=r"straipsn\w*", sub=r"dal\w*|punkt\w*",
-           source="32016R0679 Art. 93(2) 'Reglamento (ES) Nr. 182/2011 5 straipsnis', rec. 103 'Direktyvos "
+           source="32016R0679 Art. 93(2) 'Reglamento (ES) Nr. 182/2011 5 straipsnis', rec. 106 'Direktyvos "
                   "95/46/EB 25 straipsnio 6 dalimi'; 32018R0825 'Reglamento (ES) 2016/1036 5 straipsnio 9 dalį'"),
 )
 

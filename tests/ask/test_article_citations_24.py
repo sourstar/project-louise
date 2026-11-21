@@ -36,12 +36,12 @@ PROVISIONS = {
     "93(3)": ("32016R0679 Art. 93(3): 'Article 8 of Regulation (EU) No 182/2011'", "32011R0182", "8"),
     "rec172": ("32016R0679 recital 172: 'Article 28(2) of Regulation (EC) No 45/2001'", "32001R0045", "28"),
     "4(25)": ("32016R0679 Art. 4(25): 'point (b) of Article 1(1) of Directive (EU) 2015/1535'", "32015L1535", "1"),
-    "25(6)": ("32016R0679 Art. 45(9) and recital 103: 'Article 25(6) of Directive 95/46/EC'", "31995L0046", "25"),
+    "25(6)": ("32016R0679 Art. 45, Art. 97, recital 106: 'Article 25(6) of Directive 95/46/EC'", "31995L0046", "25"),
     "825rec21": ("32018R0825 recital 21: 'Article 7(2a) of Regulation (EU) 2016/1036'", "32016R1036", "7"),
-    "825art4": ("32018R0825 Art. 4: 'Article 5(9) of Regulation (EU) 2016/1036'", "32016R1036", "5"),
+    "825art5": ("32018R0825 Art. 5: 'Article 5(9) of Regulation (EU) 2016/1036'", "32016R1036", "5"),
     "1773rec18": ("32023R1773 recital 18: 'Article 16 of Commission Implementing Regulation (EU) 2023/1070'",
                   "32023R1070", "16"),
-    "1773art5": ("32023R1773 Art. 5: 'Article 170(1) of Delegated Regulation (EU) 2015/2446'", "32015R2446", "170"),
+    "1773art6": ("32023R1773 Art. 6: 'Article 170(1) of Delegated Regulation (EU) 2015/2446'", "32015R2446", "170"),
     # the fixtures' own (tests/fixtures/eurlex/README.md): the one citation of an article of another act by
     # number their non-English items hold
     "726rec1": ("tests/fixtures/eurlex/rendition/32004R0726ro.html recital 1: 'Article 71 of Council Regulation "
@@ -57,9 +57,9 @@ ROWS: tuple[tuple[str, str, str], ...] = (
     ('en', 'Article 1(1) of Directive (EU) 2015/1535', '4(25)'),
     ('en', 'Article 25(6) of Directive 95/46/EC', '25(6)'),
     ('en', 'Article 7(2a) of Regulation (EU) 2016/1036', '825rec21'),
-    ('en', 'Article 5(9) of Regulation (EU) 2016/1036', '825art4'),
+    ('en', 'Article 5(9) of Regulation (EU) 2016/1036', '825art5'),
     ('en', 'Article 16 of Commission Implementing Regulation (EU) 2023/1070', '1773rec18'),
-    ('en', 'Article 170(1) of Delegated Regulation (EU) 2015/2446', '1773art5'),
+    ('en', 'Article 170(1) of Delegated Regulation (EU) 2015/2446', '1773art6'),
     # fr
     ('fr', 'article 5 du règlement (UE) no 182/2011', '93(2)'),
     ('fr', 'article 8 du règlement (UE) no 182/2011', '93(3)'),
@@ -67,9 +67,9 @@ ROWS: tuple[tuple[str, str, str], ...] = (
     ('fr', 'article 1er, paragraphe 1, point b), de la directive (UE) 2015/1535', '4(25)'),
     ('fr', 'article 25, paragraphe 6, de la directive 95/46/CE', '25(6)'),
     ('fr', 'article 7, paragraphe 2 bis, du règlement (UE) 2016/1036', '825rec21'),
-    ('fr', 'article 5, paragraphe 9, du règlement (UE) 2016/1036', '825art4'),
+    ('fr', 'article 5, paragraphe 9, du règlement (UE) 2016/1036', '825art5'),
     ('fr', 'article 16 du règlement d’exécution (UE) 2023/1070', '1773rec18'),
-    ('fr', 'article 170, paragraphe 1, du règlement délégué (UE) 2015/2446', '1773art5'),
+    ('fr', 'article 170, paragraphe 1, du règlement délégué (UE) 2015/2446', '1773art6'),
     # de
     ('de', 'Artikel 5 der Verordnung (EU) Nr. 182/2011', '93(2)'),
     ('de', 'Artikel 8 der Verordnung (EU) Nr. 182/2011', '93(3)'),
@@ -77,9 +77,9 @@ ROWS: tuple[tuple[str, str, str], ...] = (
     ('de', 'Artikels 1 Nummer 1 Buchstabe b der Richtlinie (EU) 2015/1535', '4(25)'),
     ('de', 'Artikel 25 Absatz 6 der Richtlinie 95/46/EG', '25(6)'),
     ('de', 'Artikel 7 Absatz 2a der Verordnung (EU) 2016/1036', '825rec21'),
-    ('de', 'Artikel 5 Absatz 9 der Verordnung (EU) 2016/1036', '825art4'),
+    ('de', 'Artikel 5 Absatz 9 der Verordnung (EU) 2016/1036', '825art5'),
     ('de', 'Artikel 16 der Durchführungsverordnung (EU) 2023/1070', '1773rec18'),
-    ('de', 'Artikel 170 Absatz 1 der delegierten Verordnung (EU) 2015/2446', '1773art5'),
+    ('de', 'Artikel 170 Absatz 1 der delegierten Verordnung (EU) 2015/2446', '1773art6'),
     # it
     ('it', 'articolo 5 del regolamento (UE) n. 182/2011', '93(2)'),
     ('it', 'articolo 8 del regolamento (UE) n. 182/2011', '93(3)'),
@@ -87,9 +87,9 @@ ROWS: tuple[tuple[str, str, str], ...] = (
     ('it', 'articolo 1, paragrafo 1, lettera b), della direttiva (UE) 2015/1535', '4(25)'),
     ('it', 'articolo 25, paragrafo 6, della direttiva 95/46/CE', '25(6)'),
     ('it', 'articolo 7, paragrafo 2 bis, del regolamento (UE) 2016/1036', '825rec21'),
-    ('it', 'articolo 5, paragrafo 9, del regolamento (UE) 2016/1036', '825art4'),
+    ('it', 'articolo 5, paragrafo 9, del regolamento (UE) 2016/1036', '825art5'),
     ('it', 'articolo 16 del regolamento di esecuzione (UE) 2023/1070', '1773rec18'),
-    ('it', 'articolo 170, paragrafo 1, del regolamento delegato (UE) 2015/2446', '1773art5'),
+    ('it', 'articolo 170, paragrafo 1, del regolamento delegato (UE) 2015/2446', '1773art6'),
     # es
     ('es', 'artículo 5 del Reglamento (UE) n.o 182/2011', '93(2)'),
     ('es', 'artículo 8 del Reglamento (UE) n.o 182/2011', '93(3)'),
@@ -97,9 +97,9 @@ ROWS: tuple[tuple[str, str, str], ...] = (
     ('es', 'artículo 1, apartado 1, letra b), de la Directiva (UE) 2015/1535', '4(25)'),
     ('es', 'artículo 25, apartado 6, de la Directiva 95/46/CE', '25(6)'),
     ('es', 'artículo 7, apartado 2 bis, del Reglamento (UE) 2016/1036', '825rec21'),
-    ('es', 'artículo 5, apartado 9, del Reglamento (UE) 2016/1036', '825art4'),
+    ('es', 'artículo 5, apartado 9, del Reglamento (UE) 2016/1036', '825art5'),
     ('es', 'artículo 16 del Reglamento de Ejecución (UE) 2023/1070', '1773rec18'),
-    ('es', 'artículo 170, apartado 1, del Reglamento Delegado (UE) 2015/2446', '1773art5'),
+    ('es', 'artículo 170, apartado 1, del Reglamento Delegado (UE) 2015/2446', '1773art6'),
     # pt
     ('pt', 'artigo 5.o do Regulamento (UE) n.o 182/2011', '93(2)'),
     ('pt', 'artigo 8.o do Regulamento (UE) n.o 182/2011', '93(3)'),
@@ -107,9 +107,9 @@ ROWS: tuple[tuple[str, str, str], ...] = (
     ('pt', 'artigo 1.o, n.o 1, alínea b), da Diretiva (UE) 2015/1535', '4(25)'),
     ('pt', 'artigo 25.o, n.o 6, da Diretiva 95/46/CE', '25(6)'),
     ('pt', 'artigo 7.o, n.o 2-A, do Regulamento (UE) 2016/1036', '825rec21'),
-    ('pt', 'artigo 5.o, n.o 9, do Regulamento (UE) 2016/1036', '825art4'),
+    ('pt', 'artigo 5.o, n.o 9, do Regulamento (UE) 2016/1036', '825art5'),
     ('pt', 'artigo 16.o do Regulamento de Execução (UE) 2023/1070', '1773rec18'),
-    ('pt', 'artigo 170.o, n.o 1, do Regulamento Delegado (UE) 2015/2446', '1773art5'),
+    ('pt', 'artigo 170.o, n.o 1, do Regulamento Delegado (UE) 2015/2446', '1773art6'),
     # nl
     ('nl', 'artikel 5 van Verordening (EU) nr. 182/2011', '93(2)'),
     ('nl', 'artikel 8 van Verordening (EU) nr. 182/2011', '93(3)'),
@@ -117,9 +117,9 @@ ROWS: tuple[tuple[str, str, str], ...] = (
     ('nl', 'artikel 1, lid 1, punt b), van Richtlijn (EU) 2015/1535', '4(25)'),
     ('nl', 'artikel 25, lid 6, van Richtlijn 95/46/EG', '25(6)'),
     ('nl', 'artikel 7, lid 2 bis, van Verordening (EU) 2016/1036', '825rec21'),
-    ('nl', 'artikel 5, lid 9, van Verordening (EU) 2016/1036', '825art4'),
+    ('nl', 'artikel 5, lid 9, van Verordening (EU) 2016/1036', '825art5'),
     ('nl', 'artikel 16 van Uitvoeringsverordening (EU) 2023/1070', '1773rec18'),
-    ('nl', 'artikel 170, lid 1, van Gedelegeerde Verordening (EU) 2015/2446', '1773art5'),
+    ('nl', 'artikel 170, lid 1, van Gedelegeerde Verordening (EU) 2015/2446', '1773art6'),
     # da
     ('da', 'artikel 5 i forordning (EU) nr. 182/2011', '93(2)'),
     ('da', 'artikel 8 i forordning (EU) nr. 182/2011', '93(3)'),
@@ -127,9 +127,9 @@ ROWS: tuple[tuple[str, str, str], ...] = (
     ('da', 'artikel 1, stk. 1, litra b), i Europa-Parlamentets og Rådets direktiv (EU) 2015/1535', '4(25)'),
     ('da', 'artikel 25, stk. 6, i direktiv 95/46/EF', '25(6)'),
     ('da', 'artikel 7, stk. 2a, i forordning (EU) 2016/1036', '825rec21'),
-    ('da', 'artikel 5, stk. 9, i forordning (EU) 2016/1036', '825art4'),
+    ('da', 'artikel 5, stk. 9, i forordning (EU) 2016/1036', '825art5'),
     ('da', 'artikel 16 i Kommissionens gennemførelsesforordning (EU) 2023/1070', '1773rec18'),
-    ('da', 'artikel 170, stk. 1, i delegeret forordning (EU) 2015/2446', '1773art5'),
+    ('da', 'artikel 170, stk. 1, i delegeret forordning (EU) 2015/2446', '1773art6'),
     # sv
     ('sv', 'artikel 5 i förordning (EU) nr 182/2011', '93(2)'),
     ('sv', 'artikel 8 i förordning (EU) nr 182/2011', '93(3)'),
@@ -137,9 +137,9 @@ ROWS: tuple[tuple[str, str, str], ...] = (
     ('sv', 'artikel 1.1 b i Europaparlamentets och rådets direktiv (EU) 2015/1535', '4(25)'),
     ('sv', 'artikel 25.6 eller 26.4 i direktiv 95/46/EG', '25(6)'),
     ('sv', 'artikel 7.2a i förordning (EU) 2016/1036', '825rec21'),
-    ('sv', 'artikel 5.9 i förordning (EU) 2016/1036', '825art4'),
+    ('sv', 'artikel 5.9 i förordning (EU) 2016/1036', '825art5'),
     ('sv', 'artikel 16 i kommissionens genomförandeförordning (EU) 2023/1070', '1773rec18'),
-    ('sv', 'artikel 170.1 i delegerad förordning (EU) 2015/2446', '1773art5'),
+    ('sv', 'artikel 170.1 i delegerad förordning (EU) 2015/2446', '1773art6'),
     # cs
     ('cs', 'článek 5 nařízení (EU) č. 182/2011', '93(2)'),
     ('cs', 'článek 8 nařízení (EU) č. 182/2011', '93(3)'),
@@ -147,9 +147,9 @@ ROWS: tuple[tuple[str, str, str], ...] = (
     ('cs', 'čl. 1 odst. 1 písm. b) směrnice (EU) 2015/1535', '4(25)'),
     ('cs', 'čl. 25 odst. 6 směrnice 95/46/ES', '25(6)'),
     ('cs', 'čl. 7 odst. 2a nařízení (EU) 2016/1036', '825rec21'),
-    ('cs', 'čl. 5 odst. 9 nařízení (EU) 2016/1036', '825art4'),
+    ('cs', 'čl. 5 odst. 9 nařízení (EU) 2016/1036', '825art5'),
     ('cs', 'článku 16 prováděcího nařízení Komise (EU) 2023/1070', '1773rec18'),
-    ('cs', 'čl. 170 odst. 1 nařízení v přenesené pravomoci (EU) 2015/2446', '1773art5'),
+    ('cs', 'čl. 170 odst. 1 nařízení v přenesené pravomoci (EU) 2015/2446', '1773art6'),
     # sk
     ('sk', 'článok 5 nariadenia (EÚ) č. 182/2011', '93(2)'),
     ('sk', 'článok 8 nariadenia (EÚ) č. 182/2011', '93(3)'),
@@ -157,9 +157,9 @@ ROWS: tuple[tuple[str, str, str], ...] = (
     ('sk', 'článku 1 bode 1 písm. b) smernice Európskeho parlamentu a Rady (EÚ) 2015/1535', '4(25)'),
     ('sk', 'článku 25 ods. 6 smernice 95/46/ES', '25(6)'),
     ('sk', 'článku 7 ods. 2a nariadenia (EÚ) 2016/1036', '825rec21'),
-    ('sk', 'článku 5 ods. 9 nariadenia (EÚ) 2016/1036', '825art4'),
+    ('sk', 'článku 5 ods. 9 nariadenia (EÚ) 2016/1036', '825art5'),
     ('sk', 'článku 16 vykonávacieho nariadenia Komisie (EÚ) 2023/1070', '1773rec18'),
-    ('sk', 'článkom 170 ods. 1 delegovaného nariadenia (EÚ) 2015/2446', '1773art5'),
+    ('sk', 'článkom 170 ods. 1 delegovaného nariadenia (EÚ) 2015/2446', '1773art6'),
     # pl
     ('pl', 'art. 5 rozporządzenia (UE) nr 182/2011', '93(2)'),
     ('pl', 'art. 8 rozporządzenia (UE) nr 182/2011', '93(3)'),
@@ -167,9 +167,9 @@ ROWS: tuple[tuple[str, str, str], ...] = (
     ('pl', 'art. 1 ust. 1 lit. b) dyrektywy Parlamentu Europejskiego i Rady (UE) 2015/1535', '4(25)'),
     ('pl', 'art. 25 ust. 6 dyrektywy 95/46/WE', '25(6)'),
     ('pl', 'art. 7 ust. 2a rozporządzenia (UE) 2016/1036', '825rec21'),
-    ('pl', 'art. 5 ust. 9 rozporządzenia (UE) nr 2016/1036', '825art4'),
+    ('pl', 'art. 5 ust. 9 rozporządzenia (UE) nr 2016/1036', '825art5'),
     ('pl', 'art. 16 rozporządzenia wykonawczego Komisji (UE) 2023/1070', '1773rec18'),
-    ('pl', 'art. 170 ust. 1 rozporządzenia delegowanego (UE) 2015/2446', '1773art5'),
+    ('pl', 'art. 170 ust. 1 rozporządzenia delegowanego (UE) 2015/2446', '1773art6'),
     # sl
     ('sl', 'člen 5 Uredbe (EU) št. 182/2011', '93(2)'),
     ('sl', 'člen 8 Uredbe (EU) št. 182/2011', '93(3)'),
@@ -177,9 +177,9 @@ ROWS: tuple[tuple[str, str, str], ...] = (
     ('sl', 'člena 1(1) Direktive (EU) 2015/1535', '4(25)'),
     ('sl', 'člena 25(6) Direktive 95/46/ES', '25(6)'),
     ('sl', 'členu 7(2a) Uredbe (EU) 2016/1036', '825rec21'),
-    ('sl', 'členom 5(9) Uredbe (EU) 2016/1036', '825art4'),
+    ('sl', 'členom 5(9) Uredbe (EU) 2016/1036', '825art5'),
     ('sl', 'člena 16 Izvedbene uredbe Komisije (EU) 2023/1070', '1773rec18'),
-    ('sl', 'členom 170(1) Delegirane uredbe (EU) 2015/2446', '1773art5'),
+    ('sl', 'členom 170(1) Delegirane uredbe (EU) 2015/2446', '1773art6'),
     # hr
     ('hr', 'članak 5. Uredbe (EU) br. 182/2011', '93(2)'),
     ('hr', 'članak 8. Uredbe (EU) br. 182/2011', '93(3)'),
@@ -187,9 +187,9 @@ ROWS: tuple[tuple[str, str, str], ...] = (
     ('hr', 'člankom 1. stavkom 1. točkom 2. Direktive 2015/1535', '4(25)'),
     ('hr', 'članka 25. stavka 6. Direktive 95/46/EZ', '25(6)'),
     ('hr', 'članku 7. stavku 2.a Uredbe (EU) 2016/1036', '825rec21'),
-    ('hr', 'člankom 5. stavkom 9. Uredbe (EU) 2016/1036', '825art4'),
+    ('hr', 'člankom 5. stavkom 9. Uredbe (EU) 2016/1036', '825art5'),
     ('hr', 'članku 16. Provedbene uredbe Komisije (EU) 2023/1070', '1773rec18'),
-    ('hr', 'člankom 170. stavkom 1. Delegirane uredbe (EU) 2015/2446', '1773art5'),
+    ('hr', 'člankom 170. stavkom 1. Delegirane uredbe (EU) 2015/2446', '1773art6'),
     # bg
     ('bg', 'член 5 от Регламент (ЕС) № 182/2011', '93(2)'),
     ('bg', 'член 8 от Регламент (ЕС) № 182/2011', '93(3)'),
@@ -197,9 +197,9 @@ ROWS: tuple[tuple[str, str, str], ...] = (
     ('bg', 'член 1, параграф 1, точка б) от Директива (ЕС) 2015/1535', '4(25)'),
     ('bg', 'член 25, параграф 6 от Директива 95/46/ЕО', '25(6)'),
     ('bg', 'член 7, параграф 2а от Регламент (ЕС) 2016/1036', '825rec21'),
-    ('bg', 'член 5, параграф 9 от Регламент (ЕО) 2016/1036', '825art4'),
+    ('bg', 'член 5, параграф 9 от Регламент (ЕО) 2016/1036', '825art5'),
     ('bg', 'член 16 от Регламент за изпълнение (ЕС) 2023/1070', '1773rec18'),
-    ('bg', 'член 170, параграф 1 от Делегиран регламент (ЕС) 2015/2446', '1773art5'),
+    ('bg', 'член 170, параграф 1 от Делегиран регламент (ЕС) 2015/2446', '1773art6'),
     # el
     ('el', 'άρθρο 5 του κανονισμού (ΕΕ) αριθ. 182/2011', '93(2)'),
     ('el', 'άρθρο 8 του κανονισμού (ΕΕ) αριθ. 182/2011', '93(3)'),
@@ -207,18 +207,18 @@ ROWS: tuple[tuple[str, str, str], ...] = (
     ('el', 'άρθρου 1 παράγραφος 1 στοιχείο β) της οδηγίας (ΕΕ) 2015/1535', '4(25)'),
     ('el', 'άρθρου 25 παράγραφος 6 της οδηγίας 95/46/ΕΚ', '25(6)'),
     ('el', 'άρθρο 7 παράγραφος 2α του κανονισμού (ΕΕ) 2016/1036', '825rec21'),
-    ('el', 'άρθρο 5 παράγραφος 9 του κανονισμού (ΕΕ) 2016/1036', '825art4'),
+    ('el', 'άρθρο 5 παράγραφος 9 του κανονισμού (ΕΕ) 2016/1036', '825art5'),
     ('el', 'άρθρο 16 του εκτελεστικού κανονισμού (ΕΕ) 2023/1070', '1773rec18'),
-    ('el', 'άρθρο 170 παράγραφος 1 του κατ’ εξουσιοδότηση κανονισμού (ΕΕ) 2015/2446', '1773art5'),
+    ('el', 'άρθρο 170 παράγραφος 1 του κατ’ εξουσιοδότηση κανονισμού (ΕΕ) 2015/2446', '1773art6'),
     # ro
     ('ro', 'articolul 5 din Regulamentul (UE) nr. 182/2011', '93(2)'),
     ('ro', 'articolul 8 din Regulamentul (UE) nr. 182/2011', '93(3)'),
     ('ro', 'articolul 28 alineatul (2) din Regulamentul (CE) nr. 45/2001', 'rec172'),
     ('ro', 'articolului 25 alineatul (6) din Directiva 95/46/CE', '25(6)'),
     ('ro', 'articolul 7 alineatul (2a) din Regulamentul (UE) 2016/1036', '825rec21'),
-    ('ro', 'articolului 5 alineatul (9) din Regulamentul (UE) 2016/1036', '825art4'),
+    ('ro', 'articolului 5 alineatul (9) din Regulamentul (UE) 2016/1036', '825art5'),
     ('ro', 'articolul 16 din Regulamentul de punere în aplicare (UE) 2023/1070', '1773rec18'),
-    ('ro', 'articolul 170 alineatul (1) din Regulamentul delegat (UE) 2015/2446', '1773art5'),
+    ('ro', 'articolul 170 alineatul (1) din Regulamentul delegat (UE) 2015/2446', '1773art6'),
     ('ro', 'Articolul 71 din Regulamentul (CEE) nr. 2309/93 al Consiliului din 22 iulie 1993', '726rec1'),
     # mt
     ('mt', 'Artikolu 5 tar-Regolament (UE) Nru 182/2011', '93(2)'),
@@ -227,9 +227,9 @@ ROWS: tuple[tuple[str, str, str], ...] = (
     ('mt', 'Artikolu 1(1) tad-Direttiva (UE) 2015/1535', '4(25)'),
     ('mt', 'Artikolu 25(6) tad-Direttiva 95/46/KE', '25(6)'),
     ('mt', 'Artikolu 7(2a) tar-Regolament (UE) 2016/1036', '825rec21'),
-    ('mt', 'Artikolu 5(9) tar-Regolament (UE) 2016/1036', '825art4'),
+    ('mt', 'Artikolu 5(9) tar-Regolament (UE) 2016/1036', '825art5'),
     ('mt', 'Artikolu 16 tar-Regolament ta’ Implimentazzjoni tal-Kummissjoni (UE) 2023/1070', '1773rec18'),
-    ('mt', 'Artikolu 170(1) tar-Regolament Delegat (UE) 2015/2446', '1773art5'),
+    ('mt', 'Artikolu 170(1) tar-Regolament Delegat (UE) 2015/2446', '1773art6'),
     # ga
     ('ga', 'Airteagal 5 de Rialachán (AE) Uimh. 182/2011', '93(2)'),
     ('ga', 'Airteagal 8 de Rialachán (AE) Uimh. 182/2011', '93(3)'),
@@ -237,18 +237,18 @@ ROWS: tuple[tuple[str, str, str], ...] = (
     ('ga', 'Airteagal 1(1) de Threoir (AE) 2015/1535', '4(25)'),
     ('ga', 'Airteagal 25(6) de Threoir 95/46/CE', '25(6)'),
     ('ga', 'Airteagal 7(2a) de Rialachán (AE) 2016/1036', '825rec21'),
-    ('ga', 'Airteagal 5(9) de Rialachán (AE) 2016/1036', '825art4'),
+    ('ga', 'Airteagal 5(9) de Rialachán (AE) 2016/1036', '825art5'),
     ('ga', 'Airteagal 16 de Rialachán Cur Chun Feidhme (AE) 2023/1070', '1773rec18'),
-    ('ga', 'Airteagal 170(1) de Rialachán Tarmligthe (AE) 2015/2446', '1773art5'),
+    ('ga', 'Airteagal 170(1) de Rialachán Tarmligthe (AE) 2015/2446', '1773art6'),
     # hu
     ('hu', 'a 182/2011/EU rendelet 5. cikkét', '93(2)'),
     ('hu', 'a 45/2001/EK rendelet 28. cikkének', 'rec172'),
     ('hu', 'az (EU) 2015/1535 európai parlamenti és tanácsi irányelv (19) 1. cikke', '4(25)'),
     ('hu', 'a 95/46/EK irányelv 25. cikk', '25(6)'),
     ('hu', '(EU) 2016/1036 rendelet 7. cikkének', '825rec21'),
-    ('hu', 'az (EU) 2016/1036 rendelet 5. cikkének', '825art4'),
+    ('hu', 'az (EU) 2016/1036 rendelet 5. cikkének', '825art5'),
     ('hu', 'az (EU) 2023/1070 bizottsági végrehajtási rendelet (7) 16. cikkében', '1773rec18'),
-    ('hu', 'az (EU) 2015/2446 felhatalmazáson alapuló rendelet 170. cikkének', '1773art5'),
+    ('hu', 'az (EU) 2015/2446 felhatalmazáson alapuló rendelet 170. cikkének', '1773art6'),
     # fi
     ('fi', 'asetuksen (EU) N:o 182/2011 5 artiklaa', '93(2)'),
     ('fi', 'asetuksen (EU) N:o 182/2011 8 artiklaa', '93(3)'),
@@ -256,9 +256,9 @@ ROWS: tuple[tuple[str, str, str], ...] = (
     ('fi', 'direktiivin (EU) 2015/1535 (19) 1 artiklan', '4(25)'),
     ('fi', 'direktiivin 95/46/EY 25 artiklan', '25(6)'),
     ('fi', 'asetuksen (EU) 2016/1036 7 artiklan', '825rec21'),
-    ('fi', 'asetuksen (EU) 2016/1036 5 artiklan', '825art4'),
+    ('fi', 'asetuksen (EU) 2016/1036 5 artiklan', '825art5'),
     ('fi', 'asetuksen (EU) 2023/1070 (7) 16 artiklassa', '1773rec18'),
-    ('fi', 'asetuksen (EU) 2015/2446 170 artiklan', '1773art5'),
+    ('fi', 'asetuksen (EU) 2015/2446 170 artiklan', '1773art6'),
     # et
     ('et', 'määruse (EL) nr 182/2011 artiklit 5', '93(2)'),
     ('et', 'määruse (EL) nr 182/2011 artiklit 8', '93(3)'),
@@ -266,9 +266,9 @@ ROWS: tuple[tuple[str, str, str], ...] = (
     ('et', 'direktiivi (EL) 2015/1535 (19) artikli 1', '4(25)'),
     ('et', 'direktiivi 95/46/EÜ artikli 25', '25(6)'),
     ('et', 'Määruse (EL) 2016/1036 artikli 7', '825rec21'),
-    ('et', 'määruse (EL) 2016/1036 artikli 5', '825art4'),
+    ('et', 'määruse (EL) 2016/1036 artikli 5', '825art5'),
     ('et', 'määruse (EL) 2023/1070 (7) artiklis 16', '1773rec18'),
-    ('et', 'määruse (EL) 2015/2446 artikli 170', '1773art5'),
+    ('et', 'määruse (EL) 2015/2446 artikli 170', '1773art6'),
     # lv
     ('lv', 'Regulas (ES) Nr. 182/2011 5. pantu', '93(2)'),
     ('lv', 'Regulas (ES) Nr. 182/2011 8. pantu', '93(3)'),
@@ -276,9 +276,9 @@ ROWS: tuple[tuple[str, str, str], ...] = (
     ('lv', 'Direktīvas (ES) 2015/1535 (19) 1. panta', '4(25)'),
     ('lv', 'Direktīvas 95/46/EK 25. panta', '25(6)'),
     ('lv', 'Regulas (ES) 2016/1036 7. panta', '825rec21'),
-    ('lv', 'Regulas (ES) 2016/1036 5. panta', '825art4'),
+    ('lv', 'Regulas (ES) 2016/1036 5. panta', '825art5'),
     ('lv', 'regulas (ES) 2023/1070 (7) 16. pantā', '1773rec18'),
-    ('lv', 'regulas (ES) 2015/2446 170. panta', '1773art5'),
+    ('lv', 'regulas (ES) 2015/2446 170. panta', '1773art6'),
     # lt
     ('lt', 'Reglamento (ES) Nr. 182/2011 5 straipsnis', '93(2)'),
     ('lt', 'Reglamento (ES) Nr. 182/2011 8 straipsnis', '93(3)'),
@@ -286,9 +286,9 @@ ROWS: tuple[tuple[str, str, str], ...] = (
     ('lt', 'direktyvos (ES) 2015/1535 (19) 1 straipsnio', '4(25)'),
     ('lt', 'Direktyvos 95/46/EB 25 straipsnio', '25(6)'),
     ('lt', 'Reglamento (ES) 2016/1036 7 straipsnio', '825rec21'),
-    ('lt', 'Reglamento (ES) 2016/1036 5 straipsnio', '825art4'),
+    ('lt', 'Reglamento (ES) 2016/1036 5 straipsnio', '825art5'),
     ('lt', 'reglamento (ES) 2023/1070 (7) 16 straipsnyje', '1773rec18'),
-    ('lt', 'reglamento (ES) 2015/2446 170 straipsnio', '1773art5'),
+    ('lt', 'reglamento (ES) 2015/2446 170 straipsnio', '1773art6'),
 )
 
 #: (language, what it is, the text): a number run that is no act — the OJ's page, a formula — and the
@@ -496,18 +496,18 @@ REAL_TEXT_CASES = (
     ("die Richtlinien 2001/95/EG", "32001L0095", None),
     # 32016R0679 (el) Art. 2(3): an organisation in two scripts, Latin E and Greek Κ
     ("Ο κανονισμός (EΚ) αριθ. 45/2001", "32001R0045", None),
-    # 32018R0825 (bg) Art. 4: the OJ's (ЕО) on a 2016 act — the year first all the same
+    # 32018R0825 (bg) Art. 5: the OJ's (ЕО) on a 2016 act — the year first all the same
     ("член 5, параграф 9 от Регламент (ЕО) 2016/1036", "32016R1036", "5"),
     # 32016R0679 (fr) Art. 4(25): the first article, "1er"
     ("l'article 1er, paragraphe 1, point b), de la directive (UE) 2015/1535", "32015L1535", "1"),
-    # 32016R0679 (sv) recital 103: two articles in the Swedish dotted form, the first named
+    # 32016R0679 (sv) recital 106: two articles in the Swedish dotted form, the first named
     ("artikel 25.6 eller 26.4 i direktiv 95/46/EG", "31995L0046", "25"),
-    # 32016R0679 (ga) recital 103: the Irish OJ's own "Regulation" for the directive, read as written
+    # 32016R0679 (ga) recital 106: the Irish OJ's own "Regulation" for the directive, read as written
     ("Airteagal 26(4) de Rialachán 95/46/CE", "31995R0046", "26"),
     # tests/fixtures/eurlex/eurlex-dumpfirst/formex/31972R1473 (it): a heading, then the sentence — the
     # article nearest the act, never the heading's
     ("Articolo 84 All'articolo 2, ultimo comma del regolamento (CEE, Euratom, CECA) n. 259/68", "31968R0259", "2"),
-    # 32016R0679 (en) recital 103: a list starts at its first article, in every language alike (LISTS)
+    # 32016R0679 (en) recital 106: a list starts at its first article, in every language alike (LISTS)
     ("Article 25(6) or Article 26(4) of Directive 95/46/EC", "31995L0046", "25"),
     ("čl. 25 odst. 6 nebo čl. 26 odst. 4 směrnice 95/46/ES", "31995L0046", "25"),
 )
@@ -856,7 +856,7 @@ def _eu_languages(root, *langs):
     return root
 
 
-#: 32018R0825 Art. 4, second paragraph, verbatim: "Article 5(9) of Regulation (EU) 2016/1036"
+#: 32018R0825 Art. 5, verbatim: "Article 5(9) of Regulation (EU) 2016/1036"
 QUESTIONS = (
     ("hu", "az eljárás megindításáról szóló, az (EU) 2016/1036 rendelet 5. cikkének (9) bekezdése", "5. cikkének"),
     ("el", "σύμφωνα με το άρθρο 5 παράγραφος 9 του κανονισμού (ΕΕ) 2016/1036", "άρθρο 5"),
