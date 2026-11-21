@@ -251,7 +251,12 @@ def test_a_command_holds_its_encoder_for_the_whole_block(isolated_config, monkey
                         lambda *a, **k: renewed.append(time.monotonic()) or real(*a, **k))
     with encoder_use.held(recipe, holder="hold embedder cpu-reference pid 9", every_s=0.05):
         assert node_state.leased_encoders() == {(URL, "vega-4b-cpu")}
-        time.sleep(0.3)                          # one long call
+        # one long call: renewed while it runs. Waited for, bounded — a fixed
+        # 0.3 s gave 2 renewals under the full suite's load, where each lease
+        # write is slower (2026-11-21), and 3+ alone
+        t0 = time.monotonic()
+        while len(renewed) < 3 and time.monotonic() - t0 < 10.0:
+            time.sleep(0.05)
         assert len(renewed) >= 3, "renewed while the call runs"
     assert node_state.leased_encoders() == set()
     with pytest.raises(RuntimeError):
