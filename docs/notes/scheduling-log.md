@@ -3121,3 +3121,66 @@ over a night, and `hold collection show <it>` says it is held.
 - MemoryWait deferrals per hour;
 - EUR-Lex5 fts docs/s against the 232 documents in 122.5 s above;
 - the largest process in the samples.
+
+## 2026-11-20 — the parse pool admits by the cgroup's measured room (app/parallel.py `_reserve`) — BEFORE (deploy pending)
+
+**BEFORE, the first OOM hold (ba84645, #781's budget live; München, oom-hold.json).**
+- Held since 14:42:50Z. The kernel killed two parse children, 2.9 and 2.5 GB anon RSS, oom_score_adj 500. The cgroup's peak was 24.0 GB; memory.events since the deploy: oom 4, oom_kill 2.
+- In flight: 7 fts parts, all EUR-Lex5, 4 rows each (mostly ~17 MB acts), 280 MB of source. Estimates 0.59–1.7 GB each, 7.12 GB in all, inside the 16 GB budget.
+- The sample 7 s before: the main process 4.12 GB, and 11 children at 1.88, 1.66, 1.64, 1.56, 1.51, 1.44, 1.08, 1.08, 1.04, 0.84 and 0.69 GB. That is ~18.5 GB, with 11 children for 7 parts.
+- Reading: #781's budget counted only the estimates in flight. The main process and what each child KEEPS between parts (their plugin caches: 12 idle children held 10.8 GiB on 2026-10-28, `release_idle`) were outside it. The two killed held their keep plus their part.
+
+**The change.**
+- A part is admitted only where the cgroup's working set (current less inactive_file), plus every estimate in flight, plus its own, stays within 85 % of the limit (20.4 GB of 24 GiB).
+  - It is never exempted, even with nothing reserved. Where it does not fit, the part waits at most 120 s, then is deferred.
+  - Estimates in flight are counted whole, so what of them is already resident counts twice. This is the safe side; the cost is fewer heavy parts at once when the children are large.
+- A batch that deferred a part for room stops the pool's children (`recycle_for_room`). It does so only where no other batch, of another collection or of another stage of the same one, is inside the pool. The next batch starts fresh ones.
+- A batch of ONE row whose estimate passes 256 MB goes through the pool's admission. Before, it was parsed in the main process unmeasured.
+- A child that ran a part with an estimate, and holds more than 512 MB after it, collects and calls glibc's `malloc_trim`. Each give-back of ≥ 64 MB is logged ("[parse pool] child … gave back …"), so whether a keep is free heap or held caches is read off the log, not assumed.
+
+**AFTER.** To be completed after the deploy and the release, EUR-Lex5 running:
+- kills over 24 h;
+- deferrals for room per hour, and the recycles' lines;
+- the give-back lines (MB per part);
+- EUR-Lex5 fts docs/s against 232 documents in 122.5 s;
+- the largest process in the samples.
+
+## 2026-11-20 — a large part in a bounded process of its own; the chunker's encode bounded (app/parallel.py `_LaneTask`, app/chunking_legal.py `_spans`) — BEFORE (deploy pending for the lane)
+
+**BEFORE, the second OOM hold (05cc32a, 21:44:03Z; München).**
+- One kill; the cgroup at 24.0 GB.
+- In flight: one EUR-Lex5 fts row, 32018R0688 el, 128 MB, estimated 3.25 GB (26×).
+- The killed child held 11.16 GB anon, 87× its bytes. It sat beside the main process at 4.21 GB and ten children at 0.86–0.94 GB.
+- #785's admission worked on the estimate; the estimate is not a bound.
+
+**Measured (tools/measure/parse_peak.py, #786; own 16g containers).**
+
+| Act | Size | metadata | chunks | fts |
+|---|---|---|---|---|
+| 32018R0688 el | 128 MB | 2.93 GB (21.8×) | 11.18 GB (83.2×), 54.3 M characters | = chunks |
+| 32021R2017 el | 204 MB | 1.97 GB (9.7×) | 5.18 GB (25.4×), 23.6 M characters | = chunks |
+
+- ~206–219 bytes a character: the peak followed the text, from one encode of a whole section.
+
+**Done, live as 92bba7b since 23:05:08Z (#787).**
+- The chunker's encode is bounded to 200,000 characters.
+- Identical by construction for the pinned tokenizer. Held identical on the node:
+  - EUR-Lex5: the 50 largest, the two acts, 300 sampled;
+  - Normattiva: 282 + 30;
+  - NeuRIS: 271;
+  - legi_F: 30.
+- 0688's chunks rise after it: 2.94 GB (21.9×), against 11.18 GB before.
+- EUR-Lex5 resumed at about 23:3xZ.
+
+**The change (this row).**
+- A large part runs in a process of its own, used once. Its RLIMIT_DATA is the room its admission granted.
+- Past it, the process fails alone:
+  - a MemoryError in Python;
+  - a SIGABRT from Rust: the pinned tokenizer under the limit prints "memory allocation of 67108864 bytes failed" and aborts, measured here.
+- The row is then asked again with twice the room. Past ⅔ of the limit it is the document's TooLarge error.
+- A cgroup kill is still the hold's.
+
+**AFTER.** To be completed after the deploy:
+- kills over 24 h;
+- MemoryWait and TooLarge from the lane, per day;
+- the lane's spawn cost per large row, against its parse time.

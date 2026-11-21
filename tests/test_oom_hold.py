@@ -233,3 +233,13 @@ def test_a_pass_whose_child_was_killed_for_memory_exits_137(monkeypatch, capsys)
         parallel.MemoryKilled(0, 1, "record of eurlex5")))
     assert louise.main(["node", "show"]) == 137
     assert "killed a parse-pool child for memory" in capsys.readouterr().err
+
+
+def test_a_batch_held_for_memory_is_never_said_to_be_computed_in_process(capsys):
+    """München, 2026-11-20 21:44Z: "computing this batch in-process" was
+    printed for a batch `compute` then held, the main process at 4.37 GB."""
+    from app import parallel
+    parallel._note_failure(RuntimeError("x"), None, killed=True)
+    err = capsys.readouterr().err
+    assert "NOT computed again" in err and "computing this batch in-process" not in err
+    parallel.reset_failures()

@@ -359,6 +359,180 @@ def release_idle(idle_s: float, *, now: float | None = None) -> int:
     return n
 
 
+# THE LANE'S OWN PROCESS (2026-11-20, after the second OOM hold): an
+# estimate is not a bound — 32018R0688 el's fts held 11.18 GB against 3.25
+# estimated, and the kernel killed it inside the worker's cgroup. A large
+# part (one row, `_isolate_large`) now runs in a process of its own, used
+# once, whose data limit (RLIMIT_DATA, POSIX setrlimit: the heap and every
+# private writable mapping) is the room its admission granted
+# (`_allowance`). Past it, only that process fails — a MemoryError in
+# Python, an abort in a Rust allocator (the tokenizer's) — never a child of
+# the shared pool and never the main process; and the row is known
+# exactly, so it is asked again with twice the room (`remembered`), or,
+# past the most this worker can ever give (`never_fits`), it is the
+# document's error, said with both numbers. A cgroup kill (the counter
+# rose) is still the OOM hold's.
+# Standardised alternative, not taken: a cgroup v2 child group per part
+# (`memory.max`, the kernel's own bound, Rust allocations included without
+# an abort) — it needs the container's cgroup delegated (nsdelegate, a
+# writable cgroup.subtree_control), which the node's Docker does not give.
+_remembered: dict[tuple[str, str], int] = {}
+_remembered_lock = threading.Lock()
+
+
+def _row_key(collection, row: dict) -> tuple[str, str]:
+    """A row's identity for what its parse was seen to need: the manifest's
+    path (physical identity) and the uid."""
+    return (str(getattr(collection, "manifest_path", None) or getattr(collection, "name", "")),
+            str(row.get("uid")))
+
+
+def remembered(collection, row: dict) -> int:
+    """The room a row's parse was seen to need past its estimate (0: none)."""
+    with _remembered_lock:
+        return _remembered.get(_row_key(collection, row), 0)
+
+
+def _remember(collection, row: dict, need: int) -> None:
+    with _remembered_lock:
+        k = _row_key(collection, row)
+        _remembered[k] = max(_remembered.get(k, 0), int(need))
+
+
+def _allowance(need: int) -> int | None:
+    """The room a large part is given, as measured once its own estimate is
+    reserved: the cgroup's share less what is resident and what the OTHER
+    parts in flight reserved — never less than its estimate; None where no
+    limit reads (no bound is set)."""
+    from .scheduled_checks import cgroup_memory
+    got = cgroup_memory()
+    if got is None:
+        return None
+    limit, used = got
+    with _reserved_cv:
+        others = max(0, _reserved - need)
+    return max(int(need), int(limit * ADMIT_FRACTION) - used - others)
+
+
+def _vm_data() -> int | None:
+    try:
+        with open("/proc/self/status", encoding="ascii") as f:
+            for line in f:
+                if line.startswith("VmData:"):
+                    return int(line.split()[1]) * 1024
+    except (OSError, ValueError):
+        return None
+    return None
+
+
+def _compute_bounded(kind: str, collection, rows: list[dict], allowance: int | None):
+    """In the lane's own process: its data limit set to what it holds now
+    plus `allowance` (never above the hard limit), then the part."""
+    if allowance:
+        import resource
+        vm = _vm_data()
+        if vm is not None:
+            _soft, hard = resource.getrlimit(resource.RLIMIT_DATA)
+            want = vm + int(allowance)
+            if hard != resource.RLIM_INFINITY:
+                want = min(want, hard)
+            resource.setrlimit(resource.RLIMIT_DATA, (want, hard))
+    return _compute_heavy(kind, collection, rows)
+
+
+def _lane_executor() -> ProcessPoolExecutor:
+    """One process, one task, gone after it."""
+    return ProcessPoolExecutor(max_workers=1, mp_context=multiprocessing.get_context("spawn"),
+                               initializer=_child_init, initargs=(_knobs(), _base_nice()),
+                               max_tasks_per_child=1)
+
+
+class _LaneTask:
+    """A large part in its own process, as a future `compute` collects: its
+    `result` answers per row — the end of its process past its bound
+    included — and raises only a timeout, or the cgroup's own kill."""
+
+    def __init__(self, kind: str, collection, part: list[dict], allowance: int | None) -> None:
+        self.kind, self.collection, self.part, self.allowance = kind, collection, part, allowance
+        self._ex = _lane_executor()
+        self._f = self._ex.submit(_compute_bounded, kind, collection, part, allowance)
+        self._procs = list((getattr(self._ex, "_processes", None) or {}).values())
+
+    def add_done_callback(self, cb) -> None:
+        self._f.add_done_callback(lambda _f: cb(self))
+
+    def cancel(self) -> bool:
+        got = self._f.cancel()
+        if isinstance(self._ex, ProcessPoolExecutor):
+            discard(self._ex)               # its process terminated: nobody reads its answer
+        else:
+            self._ex.shutdown(wait=False)
+        return got
+
+    def _exitcode(self) -> int | None:
+        for p in self._procs:
+            code = getattr(p, "exitcode", None)
+            if code is not None:
+                return code
+        return None
+
+    def _past_bound(self, why: str) -> list[tuple[bool, object]]:
+        given = self.allowance or part_peak(peak_per_byte(self.collection), self.part)
+        need = 2 * int(given)
+        for row in self.part:
+            _remember(self.collection, row, need)
+        too_big = never_fits(need, note=f"twice the {given / 2 ** 30:.1f} GB its parse passed ({why})")
+        if too_big:
+            return [(False, {"type": "TooLarge", "msg": too_big})] * len(self.part)
+        return [(False, {"type": "MemoryWait",
+                         "msg": f"its parse passed the {given / 2 ** 30:.1f} GB it was given ({why}): "
+                                f"asked again with {need / 2 ** 30:.1f} GB"})] * len(self.part)
+
+    def result(self, timeout: float | None = None) -> list[tuple[bool, object]]:
+        try:
+            rows = self._f.result(timeout=timeout)
+        except BrokenProcessPool:
+            import signal as _signal
+
+            from . import oom_hold
+            self._ex.shutdown(wait=False)
+            if oom_hold.killed() is not None:
+                raise                       # the cgroup's kill: the OOM hold's, in `compute`
+            code = self._exitcode()
+            if code == -_signal.SIGABRT:
+                return self._past_bound("its process aborted: a Rust allocation refused")
+            return [(False, {"type": "RuntimeError",
+                             "msg": f"its parse's own process ended by signal {-code if code else '?'}"})] \
+                * len(self.part)
+        self._ex.shutdown(wait=False)
+        if any(not ok and isinstance(v, dict) and v.get("type") == "MemoryError" for ok, v in rows):
+            return self._past_bound("a MemoryError")
+        return rows
+
+
+def recycle_for_room(name: str | None, own_slots: int = 0) -> int:
+    """The pool stopped (`discard`) because its children's KEEP holds the
+    room a part needs (2026-11-20: eleven children at 0.69-1.88 GB, four of
+    them idle, beside a 4.12 GB main process; their plugin caches, as
+    `release_idle` found on 2026-10-28) — only where no other batch is inside
+    the pool or holds a slot, another collection's or another stage's of the
+    same one (the caller's own `own_slots` aside), since stopping it under
+    them would send their parts in-process. The next `pool()` starts fresh
+    children. Returns how many it had (0: nothing stopped)."""
+    global _pool, _pool_size
+    with _lock:
+        with _held_lock:
+            others = (any(k != name for k in _wanting) or _wanting.get(name, 0) > 1
+                      or any(v for k, v in _held.items() if k != name) or _held.get(name, 0) > own_slots)
+        if _pool is None or others:
+            return 0
+        ex, n, _pool, _pool_size = _pool, _pool_size, None, 0
+    discard(ex)
+    print(f"[parse pool] its {n} children stopped: what they kept held the room a "
+          f"{name} part needed; the next batch starts fresh ones", file=sys.stderr, flush=True)
+    return n
+
+
 def shutdown() -> None:
     """The pool stopped (`discard`): after a failure, and when the process
     stops."""
@@ -392,7 +566,8 @@ def _note_success() -> None:
             _failures = 0
 
 
-def _note_failure(exc: BaseException, ex: ProcessPoolExecutor | None = None) -> None:
+def _note_failure(exc: BaseException, ex: ProcessPoolExecutor | None = None, *,
+                  killed: bool = False) -> None:
     """A pool that did not answer: rebuild it, and give up on children
     entirely if it keeps happening. Printed, not log_event'd — this module
     has no manifest connection, and the worker's stdout IS the log.
@@ -412,8 +587,13 @@ def _note_failure(exc: BaseException, ex: ProcessPoolExecutor | None = None) -> 
         failures = _failures
         if failures >= max(1, config.PARSE_MAX_FAILURES) and not _disabled:
             _disabled = True
-    print(f"[parse pool] {type(exc).__name__}: computing this batch in-process "
-          f"(failure {failures} of {config.PARSE_MAX_FAILURES})"
+    # what happens to the batch, as it happens (2026-11-20: "computing this
+    # batch in-process" was printed for a batch whose child the kernel had
+    # killed for memory, which `compute` then held, never computing it here)
+    print(f"[parse pool] {type(exc).__name__}: "
+          + ("a child killed for memory: the batch is NOT computed again (the worker is held) "
+             if killed else "computing this batch in-process ")
+          + f"(failure {failures} of {config.PARSE_MAX_FAILURES})"
           + ("; children DISABLED until restart" if _disabled else ""),
           file=sys.stderr, flush=True)
 
@@ -988,7 +1168,7 @@ def _room(peak: int) -> bool:
     return limit - used >= peak
 
 
-def never_fits(peak: int) -> str | None:
+def never_fits(peak: int, *, note: str | None = None) -> str | None:
     """Why a parse of `peak` bytes can never run in this worker, or None: an
     estimate past the cgroup's whole limit is not a moment's shortage, and a
     deferral would ask again every round for ever (München's park of
@@ -999,7 +1179,7 @@ def never_fits(peak: int) -> str | None:
     got = cgroup_memory()
     if got is None or peak < got[0] * NEVER_FITS_FRACTION:
         return None
-    return (f"its parse is estimated at {peak / 2 ** 30:.1f} GB ({LARGE_PEAK_NOTE}), more than "
+    return (f"its parse is estimated at {peak / 2 ** 30:.1f} GB ({note or LARGE_PEAK_NOTE}), more than "
             f"{NEVER_FITS_FRACTION:.0%} of the worker's whole memory limit ({got[0] / 2 ** 30:.1f} GB), "
             f"the room it can ever have beside the worker's own process: it is never admitted until "
             f"the limit is raised or the parse holds less")
@@ -1083,20 +1263,103 @@ def _cut_by_peak(k: float, parts: list[list[dict]]) -> list[list[dict]]:
     return out
 
 
+#: THE MEASURED SIDE (2026-11-20, the first OOM hold, 14:42:50Z): the
+#: estimates in flight were 7.12 GB, inside the 16 GB budget, while the
+#: cgroup already held 18.5 GB — the main process 4.12 GB and eleven children
+#: at 0.69-1.88 GB, four of them with nothing in flight: what a child keeps
+#: between parts is outside every estimate. The two killed held 2.5 and 2.9 GB,
+#: its keep plus its part. So a part is admitted only where the cgroup's
+#: WORKING SET (`cgroup_memory`: current less inactive_file, the kubelet's
+#: figure), plus every estimate in flight, plus its own, stays within this
+#: share of the limit. The estimates in flight are counted whole, the part of
+#: them already resident twice: the safe side, and its cost is fewer heavy
+#: parts at once when the children are large.
+ADMIT_FRACTION = 0.85
+#: a batch of ONE row is computed in the main process (no pickling) only
+#: below this estimate; above it, it is admitted like any part
+IN_PROCESS_PEAK_BYTES = 256 * 2 ** 20
+
+
+def _measured_room(need: int) -> bool:
+    """Room in the cgroup, as measured now, for `need` beside what is in
+    flight; True where no limit reads."""
+    from .scheduled_checks import cgroup_memory
+    got = cgroup_memory()
+    if got is None:
+        return True
+    limit, used = got
+    return used + _reserved + need <= limit * ADMIT_FRACTION
+
+
 def _reserve(need: int, *, wait: bool, until: float) -> bool:
     """`need` bytes of the pool's budget, at once or — `wait` — until
-    `until`. Always granted where nothing is reserved (a part that fits the
-    limit at all runs alone; `never_fits` refused the others) or no budget
-    reads. False when it is not to be had."""
+    `until`: within the budget (granted where nothing is reserved: a part
+    that fits the limit at all runs alone; `never_fits` refused the others)
+    AND within the cgroup's measured room (`_measured_room`, never
+    exempted: a pool whose idle children hold the room defers the part, it
+    does not start it). False when it is not to be had."""
     global _reserved
     budget = pool_memory()
     with _reserved_cv:
-        while budget is not None and _reserved and _reserved + need > budget:
+        while ((budget is not None and _reserved and _reserved + need > budget)
+               or not _measured_room(need)):
             if not wait or time.monotonic() >= until:
                 return False
             _reserved_cv.wait(min(1.0, max(0.01, until - time.monotonic())))
         _reserved += need
         return True
+
+
+#: a child gives back the heap a heavy part freed (glibc's `malloc_trim`,
+#: after `gc.collect`): above this resident memory, after a part that
+#: reserved an estimate. Measured where it runs: each give-back of at least
+#: TRIM_SAY_BYTES is said, so whether a child's keep was free heap or held
+#: objects is read off the worker's log, not assumed (a 64 MB lxml parse
+#: alone kept nothing, 2026-11-20; the node's idle children kept ~1 GB).
+TRIM_ABOVE_BYTES = 512 * 2 ** 20
+TRIM_SAY_BYTES = 64 * 2 ** 20
+
+
+def _rss_anon() -> int | None:
+    try:
+        with open("/proc/self/status", encoding="ascii") as f:
+            for line in f:
+                if line.startswith("RssAnon:"):
+                    return int(line.split()[1]) * 1024
+    except (OSError, ValueError):
+        return None
+    return None
+
+
+def _give_back() -> tuple[int, int] | None:
+    """(before, after) when this process held more than TRIM_ABOVE_BYTES and
+    gave back what it could; None otherwise. Never raises."""
+    before = _rss_anon()
+    if before is None or before < TRIM_ABOVE_BYTES:
+        return None
+    try:
+        import ctypes
+        import gc
+        gc.collect()
+        ctypes.CDLL("libc.so.6").malloc_trim(0)
+    except (OSError, AttributeError):
+        return None
+    after = _rss_anon()
+    return (before, after) if after is not None else None
+
+
+def _compute_heavy(kind: str, collection, rows: list[dict]) -> list[tuple[bool, object]]:
+    """`_compute`, then the child gives back what the part freed — for a
+    part that reserved an estimate (a plugin declaring its peak), never for
+    the light parts of the others, where the collect would cost more than
+    it gives."""
+    out = _compute(kind, collection, rows)
+    got = _give_back()
+    if got is not None and got[0] - got[1] >= TRIM_SAY_BYTES:
+        print(f"[parse pool] child {os.getpid()} gave back {(got[0] - got[1]) / 2 ** 20:.0f} MB after "
+              f"a {kind} part of {sum(int(r.get('size') or 0) for r in rows) / 2 ** 20:.1f} MB "
+              f"({got[0] / 2 ** 30:.2f} -> {got[1] / 2 ** 30:.2f} GB resident)", file=sys.stderr, flush=True)
+    return out
 
 
 def _reservation_releaser(need: int):
@@ -1175,7 +1438,10 @@ def compute(kind: str, collection, rows) -> list[tuple[bool, object]]:
     big = any(peak_of(k, r) >= LARGE_PEAK_BYTES for r in plain)
     if ex is None:
         return _in_process(kind, collection, plain, k)
-    if len(plain) == 1 and not big:
+    if len(plain) == 1 and not big and part_peak(k, plain) < IN_PROCESS_PEAK_BYTES:
+        # one light row is cheaper here than pickled; one that carries an
+        # estimate goes through the pool's admission, never into the main
+        # process unmeasured (2026-11-20)
         return _compute(kind, collection, plain)
     n = processes()
     parts = _partition(collection, plain, n * PARTS_PER_CHILD)
@@ -1214,6 +1480,7 @@ def compute(kind: str, collection, rows) -> list[tuple[bool, object]]:
     # never its neighbours.
     futures: list = []
     lanes: list = []                      # this batch's large-lane releases (one-shot)
+    short_of_room = False                 # a part deferred for the cgroup's room (`recycle_for_room`)
     mine = 0
     _want(name, 1)
     try:
@@ -1224,7 +1491,10 @@ def compute(kind: str, collection, rows) -> list[tuple[bool, object]]:
             cap = cpu_limit.cap(slots(name, budget), lim, floor=1)
             while nxt < len(parts) and len(futures) < cap:
                 peak = _large(k, parts[nxt])
-                too_big = never_fits(peak) if peak else None
+                seen = remembered(collection, parts[nxt][0]) if peak else 0
+                peak = max(peak, seen)
+                too_big = (never_fits(peak, note="twice the room its parse passed before" if seen > 0 else None)
+                           if peak else None)
                 if too_big:
                     futures.append([(False, {"type": "TooLarge", "msg": too_big})])
                     nxt += 1
@@ -1244,7 +1514,7 @@ def compute(kind: str, collection, rows) -> list[tuple[bool, object]]:
                         nxt += 1
                         continue
                     gives.append(_lane_releaser())
-                need = part_peak(k, parts[nxt])
+                need = max(part_peak(k, parts[nxt]), peak)
                 if need:
                     # THE POOL'S MEMORY: the estimates of every part in flight
                     # within the budget, waited for as the lane is
@@ -1253,6 +1523,9 @@ def compute(kind: str, collection, rows) -> list[tuple[bool, object]]:
                             give()
                         if futures:
                             break
+                        # deferred with nothing of its batch in flight: where the
+                        # cgroup has no room, the children's keep is what holds it
+                        short_of_room = short_of_room or not _measured_room(need)
                         futures.append(_deferred(kind, collection, parts[nxt],
                                                  f"no room in the parse pool's memory for a part estimated "
                                                  f"at {need / 2 ** 30:.1f} GB within {LARGE_WAIT_S:.0f} s"))
@@ -1264,7 +1537,10 @@ def compute(kind: str, collection, rows) -> list[tuple[bool, object]]:
                                    + LARGE_SECONDS_PER_BYTE * int(parts[nxt][0].get("size") or 0))
                 lanes.extend(gives)
                 try:
-                    f = ex.submit(_compute, kind, collection, parts[nxt])
+                    # a LARGE part in a process of its own, bounded by the room
+                    # granted; every other part in the shared pool
+                    f = (_LaneTask(kind, collection, parts[nxt], _allowance(need)) if peak else
+                         ex.submit(_compute_heavy if need else _compute, kind, collection, parts[nxt]))
                 except BaseException:
                     for give in gives:
                         give()
@@ -1303,7 +1579,7 @@ def compute(kind: str, collection, rows) -> list[tuple[bool, object]]:
                 _leave(id(f))
         for give_back in lanes:
             give_back()
-        _note_failure(e, ex)
+        _note_failure(e, ex, **({"killed": True} if kill is not None else {}))
         if kill is not None:
             # its rows are not parsed again here, where they would kill the
             # worker itself (2026-11-19: 43 kills in a day)
@@ -1313,6 +1589,8 @@ def compute(kind: str, collection, rows) -> list[tuple[bool, object]]:
         for f in futures:
             if not isinstance(f, list):
                 _leave(id(f))
+        if short_of_room:
+            recycle_for_room(name, own_slots=mine)
         # whatever is still held on the way out — the timeout and the broken
         # pool leave a window's worth — or the next collection inherits a
         # budget that has been eaten by a batch that is long over.
@@ -1527,7 +1805,8 @@ def compute_pages(kind: str, collection, pages, *, stop=None, say=None):
                         f.cancel()
                         mine -= 1
                         _occupy(name, -1)
-                _note_failure(e, owner.get(fut))
+                from . import oom_hold
+                _note_failure(e, owner.get(fut), **({"killed": True} if oom_hold.killed() is not None else {}))
                 owner.clear()
                 _raise_if_killed(f"{kind} of {getattr(collection, 'name', collection)}", e)
                 # what was not answered, in-process; what finished is kept;
