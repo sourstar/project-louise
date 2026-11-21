@@ -308,3 +308,44 @@ def test_a_stop_on_a_due_unit_is_neither_a_verdict_nor_an_episode(tmp_path, seri
     with pytest.raises(TransferAborted):
         cellar.TREE_UNITS.fetch(SimpleNamespace(url="https://cellar.test"), due, corpus / due.rel_path)
     assert eurlex_dump.incomplete_due(corpus, ("it",)) == [("it", FORMEX[0], "true")], "due at once"
+
+
+# ---- Q8: a NEWER dump records its incomplete units afresh -------------------------------------
+
+def _dated_dump(base: Path, created: str, **kw) -> Path:
+    import json
+    from tests.acquire.test_eurlex_dump import _dump
+    got = _dump(base, **kw)
+    (got / "datadump-it" / "datadump.json").write_text(json.dumps({"language": "it", "created": created}))
+    return got
+
+
+def test_a_newer_dump_clears_tried_and_fetched_for_the_units_it_records_again(tmp_path, serial):  # noqa: F811
+    """Reproduced: `tried` and `fetched` kept through a newer dump's build,
+    so a unit Cellar failed (or gave) once was never asked first again, as
+    "until a newer dump" and "records it afresh" promise."""
+    corpus = tmp_path / "corpus"
+    drop = "L_1972160IT.01000101.xml"
+    eurlex_dump.build(_dated_dump(tmp_path / "d1", "2026-11-15T01:00:00+01:00", drop=drop), corpus, ["it"],
+                      log=lambda m: None)
+    eurlex_dump.mark_tried(corpus, "it", FORMEX[0], "cellar: the tree names no item")
+    eurlex_dump.mark_deferred(corpus, "it", FORMEX[0], "cellar: 503 to the tree")
+    assert eurlex_dump.incomplete_due(corpus, ("it",)) == []
+    # the same dump again: the verdict kept (test_eurlex_phase2)
+    eurlex_dump.build(_dated_dump(tmp_path / "d2", "2026-11-15T01:00:00+01:00", drop=drop), corpus, ["it"],
+                      log=lambda m: None)
+    assert eurlex_dump.incomplete(corpus)["it"][FORMEX[0]]["tried"]
+    eurlex_dump._LANGS.clear()
+    eurlex_dump._MTDS.clear()
+    got = eurlex_dump.build_newer(_dated_dump(tmp_path / "d3", "2026-11-22T01:00:00+01:00", drop=drop), corpus,
+                                  ["it"], log=lambda m: None)
+    assert got["it"]["incomplete"] == 1
+    entry = eurlex_dump.incomplete(corpus)["it"][FORMEX[0]]
+    assert not entry.get("tried") and not entry.get("fetched") and not entry.get("deferred"), entry
+    assert eurlex_dump.incomplete_due(corpus, ("it",)) == [("it", FORMEX[0], "true")], "asked first again"
+    eurlex_dump.mark_fetched(corpus, "it", FORMEX[0])
+    eurlex_dump._LANGS.clear()
+    eurlex_dump._MTDS.clear()
+    eurlex_dump.build_newer(_dated_dump(tmp_path / "d4", "2026-11-29T01:00:00+01:00", drop=drop), corpus,
+                            ["it"], log=lambda m: None)
+    assert not eurlex_dump.incomplete(corpus)["it"][FORMEX[0]].get("fetched"), "fetched cleared too"

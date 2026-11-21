@@ -388,14 +388,19 @@ def _mark(corpus: Path, marks: list[tuple[str, str, str, Any]]) -> None:
             _write_incomplete(corpus, _current(corpus))
 
 
-def _record_incomplete(corpus: Path, found: dict[str, dict[str, str | None]]) -> None:
+def _record_incomplete(corpus: Path, found: dict[str, dict[str, str | None]],
+                       afresh: frozenset[str] | set[str] = frozenset()) -> None:
     """The languages just built: their incomplete units as this build found
-    them, a unit tried before keeping its `tried` (it failed at Cellar too,
-    and is not asked again until a newer dump)."""
+    them. A rebuild of the SAME dump keeps a unit's `tried` and `fetched` (it
+    failed at Cellar too, or Cellar gave it: not asked first again until a
+    newer dump). A language built from a NEWER dump (`afresh`) records each
+    unit afresh, its marks cleared: the newer bulk is asked first, then
+    Cellar once more for what it still lacks (review 2026-11-21, Q8: the
+    marks were kept through every newer dump, against both docstrings)."""
     with _locked(corpus):
         had = _current(corpus)
         for lang, units in found.items():
-            old = had.get(lang) or {}
+            old = {} if lang in afresh else (had.get(lang) or {})
             had[lang] = {celex: {**(inf if isinstance(inf, dict) else {"in_force": inf}),
                                  "tried": (old.get(celex) or {}).get("tried"),
                                  **({"fetched": (old.get(celex) or {}).get("fetched")}
@@ -832,8 +837,13 @@ def build(dump_dir: Path, corpus: Path, languages: list[str] | None = None, *,
         log(f"[eurlex-dump] {l}: " + ", ".join(f"{k} {v}" for k, v in sorted(c.items()) if k != "bytes")
             + f"; {c['bytes'] >> 20} MiB")
     # every work visited for every language: the dump is used whole for them,
-    # and what it lacks is named for the per-unit pass to ask first
-    _record_incomplete(corpus, found_incomplete)
+    # and what it lacks is named for the per-unit pass to ask first — afresh
+    # for a language whose dump is newer than the one built in (Q8), or none
+    # was stamped (its record's marks are of no dump known)
+    from .datadump import _stamp as when
+    had = stamp(corpus)
+    afresh = {l for l in langs if l not in had or (when(had[l]) or found[l][1]) < found[l][1]}
+    _record_incomplete(corpus, found_incomplete, afresh)
     _stamp(corpus, {l: found[l][1].isoformat() for l in langs})
     _mark_packages(corpus, langs)
     return total
