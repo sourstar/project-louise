@@ -467,8 +467,8 @@ def test_the_reversed_look_back_is_the_grammar():
     """`_BEFORE` is the grammar, `_BEFORE_REV` how it is run (one anchored
     match on the reversed window): the same type word, organisation and "No"
     at every number run of every text here, at every window length."""
-    for text in [r[1] for r in ROWS] + [r[1] for r in LISTS] + [n[2] for n in NEGATIVES] \
-            + [q for q, *_ in REAL_TEXT_CASES]:
+    for text in [r[1] for r in ROWS] + [r[1] for r in LISTS] + [r[1] for r in COORDINATIONS] \
+            + [n[2] for n in NEGATIVES] + [q for q, *_ in REAL_TEXT_CASES]:
         for m in eref._NUMBERS.finditer(text):
             for lo in (120, 50, 20, 8):
                 w = text[max(0, m.start() - lo):m.start()]
@@ -779,6 +779,374 @@ def test_the_pin_takes_max_articles_of_a_list(tmp_path, isolated_config):
     [f, g] = articles.pin("Articles 5 and 6 of Regulation (EU) 2016/1036", [c])
     assert (f["entity_id"], g["entity_id"]) == (f"celex:{ACT}~art5", f"celex:{ACT}~art6")
     assert f["label"].endswith("— Articles 5 (text in force)")
+
+
+# ---- a coordination of acts: "Regulations (EU) 2016/1036 and (EU) 2016/1037", each act ----------------
+
+#: the five coordinations of the five acts, as English reads them (the acts, in the text's order)
+COORDINATION_ACTS = {
+    "K1": ("32018R0825 recital 1 (nl: recital 26): 'Regulations (EU) 2016/1036 (2) and (EU) 2016/1037 (3)'",
+           ("32016R1036", "32016R1037")),
+    "K2": ("32022R2065 recital 10: 'Regulations (EU) 2019/1148 (8), (EU) 2019/1150 (9), (EU) 2021/784 (10) and "
+           "(EU) 2021/1232 (11)'", ("32019R1148", "32019R1150", "32021R0784", "32021R1232")),
+    "K3": ("32022R2065 recital 10: 'Regulations (EU) 2017/2394 (13) and (EU) 2019/1020 (14)'",
+           ("32017R2394", "32019R1020")),
+    "K4": ("32022R2065 recital 10: 'Directives 2001/95/EC (15), 2005/29/EC (16), 2011/83/EU (17) and 2013/11/EU (18)'",
+           ("32001L0095", "32005L0029", "32011L0083", "32013L0011")),
+    "K5": ("32022R2065 recital 11: 'Directives 2001/29/EC (21), 2004/48/EC (22) and (EU) 2019/790 (23)'",
+           ("32001L0029", "32004L0048", "32019L0790")),
+    "K6": ("32022R2065 Art. 2: 'Directives 2001/95/EC and 2013/11/EU'", ("32001L0095", "32013L0011")),
+}
+
+#: (language, the coordination as that language's Official Journal writes it, verbatim from the same Cellar
+#: items, the coordination) — where Dutch and Irish repeat the type word ("Verordening (EU) 2016/1036 (2) en
+#: Verordening (EU) 2016/1037", read before this), the coordination the same act writes elsewhere
+COORDINATIONS: tuple[tuple[str, str, str], ...] = (
+    # en
+    ('en', 'are not members of the Union are contained in Regulations (EU) 2016/1036 (2) and (EU) 2016/1037', 'K1'),
+    ('en',
+     'thereof regarding video-sharing platforms, Regulations (EU) 2019/1148 (8), (EU) 2019/1150 (9), (EU) '
+     '2021/784 (10) and (EU) 2021/1232', 'K2'),
+    ('en', 'Union law on consumer protection, in particular Regulations (EU) 2017/2394 (13) and (EU) 2019/1020', 'K3'),
+    ('en',
+     '(14) of the European Parliament and of the Council, Directives 2001/95/EC (15), 2005/29/EC (16), '
+     '2011/83/EU (17) and 2013/11/EU', 'K4'),
+    ('en',
+     'Union law on copyright and related rights, including Directives 2001/29/EC (21), 2004/48/EC (22) and (EU) '
+     '2019/790', 'K5'),
+    # fr
+    ('fr', 'dans les règlements du Parlement européen et du Conseil (UE) 2016/1036 (2) et (UE) 2016/1037', 'K1'),
+    ('fr',
+     'concernant les plateformes de partage de vidéos, les règlements (UE) 2019/1148 (8), (UE) 2019/1150 (9), '
+     '(UE) 2021/784 (10) et (UE) 2021/1232', 'K2'),
+    ('fr', 'protection des consommateurs, en particulier les règlements (UE) 2017/2394 (13) et (UE) 2019/1020', 'K3'),
+    ('fr',
+     '2019/1020 (14) du Parlement européen et du Conseil, les directives 2001/95/CE (15), 2005/29/CE (16), '
+     '2011/83/UE (17) et 2013/11/UE', 'K4'),
+    ('fr',
+     'droit d’auteur et les droits voisins, y compris les directives 2001/29/CE (21), 2004/48/CE (22) et (UE) '
+     '2019/790', 'K5'),
+    # de
+    ('de', 'nicht zur Union gehörenden Ländern sind in den Verordnungen (EU) 2016/1036 (2) und (EU) 2016/1037', 'K1'),
+    ('de',
+     'in Bezug auf Video-Sharing-Plattformen, die Verordnungen (EU) 2019/1148, (8), (EU) 2019/1150 (9), (EU) '
+     '2021/784 (10) und (EU) 2021/1232', 'K2'),
+    ('de', 'über den Verbraucherschutz – insbesondere die Verordnungen (EU) 2017/2394 (13) und (EU) 2019/1020', 'K3'),
+    ('de',
+     '(14) des Europäischen Parlaments und des Rates, die Richtlinien 2001/95/EG (15), 2005/29/EG (16), '
+     '2011/83/EU (17) und 2013/11/EU', 'K4'),
+    ('de',
+     'Urheberrecht und verwandte Schutzrechte – insbesondere die Richtlinien 2001/29/EG (21), 2004/48/EG (22) '
+     'und (EU) 2019/790', 'K5'),
+    # it
+    ('it', "paesi non membri dell'Unione sono contenute nei regolamenti (UE) 2016/1036 (2) e (UE) 2016/1037", 'K1'),
+    ('it',
+     'piattaforme per la condivisione di video, i regolamenti (UE) 2019/1148 (8)(UE) 2019/1150 (9), (UE) '
+     '2021/784 (10), (UE) 2021/1232', 'K2'),
+    ('it', 'sulla tutela dei consumatori, in particolare, i regolamenti (UE) 2017/2394 (13) e (UE) 2019/1020', 'K3'),
+    ('it',
+     '2019/1020 del Parlamento europeo e del Consiglio (14), le direttive 2001/95/CE (15), 2005/29/CE (16), '
+     '2011/83/UE (17) e 2013/11/UE', 'K4'),
+    ('it',
+     "di diritto d'autore e diritti connessi, comprese le direttive 2001/29/CE (21), 2004/48/CE (22) e (UE) "
+     '2019/790', 'K5'),
+    # es
+    ('es', 'ordinario (1), Considerando lo siguiente: (1) Los Reglamentos (UE) 2016/1036 (2) y (UE) 2016/1037', 'K1'),
+    ('es',
+     'plataformas de distribución de vídeos, los Reglamentos (UE) 2019/1148 (8), (UE) 2019/1150 (9), (UE) '
+     '2021/784 (10) y (UE) 2021/1232', 'K2'),
+    ('es', 'protección de los consumidores, en particular los Reglamentos (UE) 2017/2394 (13) y (UE) 2019/1020', 'K3'),
+    ('es',
+     '2019/1020 (14) del Parlamento Europeo y del Consejo, las Directivas 2001/95/CE (15), 2005/29/CE (16), '
+     '2011/83/UE (17) y 2013/11/UE', 'K4'),
+    ('es',
+     'derechos de autor y derechos conexos, incluidas las Directivas 2001/29/CE (21), 2004/48/CE (22) y (UE) '
+     '2019/790', 'K5'),
+    # pt
+    ('pt', 'países não membros da União está consagrado nos Regulamentos (UE) 2016/1036 (2) e (UE) 2016/1037', 'K1'),
+    ('pt',
+     'respeita às plataformas de partilha de vídeos, os Regulamentos (UE) 2019/1148 (8), (UE) 2019/1150 (9), '
+     '(UE) 2021/784 (10) e (UE) 2021/1232', 'K2'),
+    ('pt', 'de defesa dos consumidores, nomeadamente os Regulamentos (UE) 2017/2394 (13) e (UE) 2019/1020', 'K3'),
+    ('pt',
+     '2019/1020 (14) do Parlamento Europeu e do Conselho, as Diretivas 2001/95/CE (15), 2005/29/CE (16), '
+     '2011/83/UE (17), e 2013/11/UE', 'K4'),
+    ('pt',
+     'direitos de autor e direitos conexos, incluindo as Diretivas 2001/29/CE (21), 2004/48/CE (22) e (UE) '
+     '2019/790', 'K5'),
+    # nl
+    ('nl', 'handelingen. (26) Verordeningen (EU) 2016/1036 en (EU) 2016/1037', 'K1'),
+    ('nl',
+     'daarvan met betrekking tot videoplatforms, Verordeningen (EU) 2019/1148 (8), (EU) 2019/1150 (9), (EU) '
+     '2021/784 (10) en (EU) 2021/1232', 'K2'),
+    ('nl', 'inbegrip van Verordeningen (EU) 2017/2394 en (EU) 2019/1020', 'K3'),
+    ('nl', '(EU) 2019/1020, en Richtlijnen 2001/95/EG en 2013/11/EU', 'K6'),
+    ('nl',
+     'auteursrecht en de daaraan verbonden rechten, waaronder de Richtlijnen 2001/29/EG (21), 2004/48/EG (22) en '
+     '(EU) 2019/790', 'K5'),
+    # da
+    ('da', 'Unionen, findes i Europa-Parlamentets og Rådets forordning (EU) 2016/1036 (2) og (EU) 2016/1037', 'K1'),
+    ('da',
+     'videodelingsplatforme, Europa-Parlamentets og Rådets forordning (EU) 2019/1148 (8), (EU) 2019/1150 (9), '
+     '(EU) 2021/784 (10), (EU) 2021/1232', 'K2'),
+    ('da',
+     'forbrugerbeskyttelse, navnlig Europa-Parlamentets og Rådets forordning (EU) 2017/2394 (13) og (EU) '
+     '2019/1020', 'K3'),
+    ('da',
+     '(EU) 2019/1020 (14), Europa-Parlamentets og Rådets direktiv 2001/95/EF (15), 2005/29/EF (16), 2011/83/EU '
+     '(17) og 2013/11/EU', 'K4'),
+    ('da',
+     'rettigheder, herunder Europa-Parlamentets og Rådets direktiv 2001/29/EF (21), 2004/48/EF (22) og (EU) '
+     '2019/790', 'K5'),
+    # sv
+    ('sv', 'unionen finns i Europaparlamentets och rådets förordningar (EU) 2016/1036 (2) och (EU) 2016/1037', 'K1'),
+    ('sv',
+     'videodelningsplattformar. Europaparlamentets och rådets förordningar (EU) 2019/1148 (8), (EU) 2019/1150 '
+     '(9), (EU) 2021/784 (10) och (EU) 2021/1232', 'K2'),
+    ('sv',
+     'konsumentskydd, särskilt Europaparlamentets och rådets förordningar (EU) 2017/2394 (13) och (EU) 2019/1020', 'K3'),
+    ('sv',
+     '(EU) 2019/1020 (14) och Europaparlamentets och rådets direktiv 2001/95/EG (15), 2005/29/EG (16), '
+     '2011/83/EU (17) och 2013/11/EU', 'K4'),
+    ('sv',
+     'rättigheter, inbegripet Europaparlamentets och rådets direktiv 2001/29/EG (21), 2004/48/EG (22) och (EU) '
+     '2019/790', 'K5'),
+    # cs
+    ('cs', 'jsou obsažena v nařízeních Evropského parlamentu a Rady (EU) 2016/1036 (2) a (EU) 2016/1037', 'K1'),
+    ('cs',
+     'sdílení videonahrávek, nařízení Evropského parlamentu a Rady (EU) 2019/1148 (8), (EU) 2019/1150 (9), (EU) '
+     '2021/784 (10) a (EU) 2021/1232', 'K2'),
+    ('cs', 'spotřebitele, zejména nařízení Evropského parlamentu a Rady (EU) 2017/2394 (13) a (EU) 2019/1020', 'K3'),
+    ('cs',
+     'a (EU) 2019/1020 (14), směrnice Evropského parlamentu a Rady 2001/95/ES (15), 2005/29/ES (16), 2011/83/EU '
+     '(17) a 2013/11/EU', 'K4'),
+    ('cs',
+     'ním souvisejících, včetně směrnic Evropského parlamentu a Rady 2001/29/ES (21), 2004/48/ES (22) a (EU) '
+     '2019/790', 'K5'),
+    # sk
+    ('sk', 'zaoberajú prípravou delegovaných aktov. (26) Nariadenia (EÚ) 2016/1036 a (EÚ) 2016/1037', 'K1'),
+    ('sk',
+     'zdieľanie videí, nariadenia Európskeho parlamentu a Rady (EÚ) 2019/1148 (8), (EÚ) 2019/1150 (9), (EÚ) '
+     '2021/784 (10) a (EÚ) 2021/1232', 'K2'),
+    ('sk', 'spotrebiteľov, najmä nariadenia Európskeho parlamentu a Rady (EÚ) 2017/2394 (13) a (EÚ) 2019/1020', 'K3'),
+    ('sk',
+     'a (EÚ) 2019/1020 (14), smernice Európskeho parlamentu a Rady 2001/95/ES (15), 2005/29/ES (16), 2011/83/EÚ '
+     '(17) a 2013/11/EÚ', 'K4'),
+    ('sk',
+     'súvisiacich práv vrátane smerníc Európskeho parlamentu a Rady 2001/29/ES (21), 2004/48/ES (22) a (EÚ) '
+     '2019/790', 'K5'),
+    # pl
+    ('pl', 'się w rozporządzeniach Parlamentu Europejskiego i Rady (UE) 2016/1036 (2) oraz (UE) 2016/1037', 'K1'),
+    ('pl',
+     'plików wideo, rozporządzenia Parlamentu Europejskiego i Rady (UE) 2019/1148 (8), (UE) 2019/1150 (9), (UE) '
+     '2021/784 (10) i (UE) 2021/1232', 'K2'),
+    ('pl', 'szczególności, rozporządzeń Parlamentu Europejskiego i Rady (UE) 2017/2394 (13) i (UE) 2019/1020', 'K3'),
+    ('pl',
+     '2019/1020 (14) oraz dyrektyw Parlamentu Europejskiego i Rady 2001/95/WE (15), 2005/29/WE (16), 2011/83/UE '
+     '(17) i 2013/11/UE', 'K4'),
+    ('pl',
+     'praw pokrewnych, w tym dyrektyw Parlamentu Europejskiego i Rady 2001/29/WE (21), 2004/48/WE (22) i (UE) '
+     '2019/790', 'K5'),
+    # sl
+    ('sl', 'iz držav, ki niso članice Unije, so navedena v uredbah (EU) 2016/1036 (2) in (EU) 2016/1037', 'K1'),
+    ('sl',
+     'določbami glede platform za izmenjavo videoposnetkov, uredbe (EU) 2019/1148 (8), (EU) 2019/1150 (9), (EU) '
+     '2021/784 (10) in (EU) 2021/1232', 'K2'),
+    ('sl', 'posegati v pravo Unije o varstvu potrošnikov, zlasti v uredbi (EU) 2017/2394 (13) in (EU) 2019/1020', 'K3'),
+    ('sl',
+     '(EU) 2019/1020 (14) Evropskega parlamenta in Sveta, direktive 2001/95/ES (15), 2005/29/ES (16), 2011/83/EU '
+     '(17) in 2013/11/EU', 'K4'),
+    ('sl',
+     'avtorski pravici in sorodnih pravicah, vključno z direktivami 2001/29/ES (21), 2004/48/ES (22) in (EU) '
+     '2019/790', 'K5'),
+    # hr
+    ('hr', 'Unije sadržana su u uredbama Europskog parlamenta i Vijeća (EU) 2016/1036 (2) i (EU) 2016/1037', 'K1'),
+    ('hr',
+     'u pogledu platformi za razmjenu video sadržaja, uredbe (EU) 2019/1148 (8), (EU) 2019/1150 (9), (EU) '
+     '2021/784 (10) i (EU) 2021/1232', 'K2'),
+    ('hr', 'pitanje pravo Unije o zaštiti potrošača, a posebno uredbe (EU) 2017/2394 (13), (EU) 2019/1020', 'K3'),
+    ('hr',
+     '(EU) 2019/1020 (14) Europskog parlamenta i Vijeća, direktive 2001/95/EZ (15), 2005/29/EZ (16), 2011/83/EU '
+     '(17) i 2013/11/EU', 'K4'),
+    ('hr',
+     'Unije o autorskom pravu i srodnim pravima, uključujući direktive 2001/29/EZ (21), 2004/48/EZ (22) i (EU) '
+     '2019/790', 'K5'),
+    # bg
+    ('bg', 'държави, които не са членки на Съюза, се съдържат в регламенти (ЕС) 2016/1036 (2) и (ЕС) 2016/1037', 'K1'),
+    ('bg',
+     'на платформите за споделяне на видеоклипове, регламенти (ЕС) 2019/1148 (8), (ЕС) 2019/1150 (9), (ЕС) '
+     '2021/784 (10) и (ЕС) 2021/1232', 'K2'),
+    ('bg', 'относно защитата на потребителите, и по-специално регламенти (ЕС) 2017/2394 (13) и (ЕС) 2019/1020', 'K3'),
+    ('bg',
+     '2019/1020 (14) на Европейския парламент и на Съвета и директиви 2001/95/ЕО (15), 2005/29/ЕО (16), '
+     '2011/83/ЕС (17) и 2013/11/ЕС', 'K4'),
+    ('bg',
+     'авторското право и сродните му права, включително директиви 2001/29/ЕО (21), 2004/48/ЕО (22) и (ЕС) '
+     '2019/790', 'K5'),
+    # el
+    ('el', 'δεν είναι μέλη της Ένωσης περιέχονται στους κανονισμούς (ΕΕ) 2016/1036 (2) και (ΕΕ) 2016/1037', 'K1'),
+    ('el',
+     'όσον αφορά τις πλατφόρμες ανταλλαγής βίντεο, οι κανονισμοί (ΕΕ) 2019/1148 (8), (ΕΕ) 2019/1150 (9), (ΕΕ) '
+     '2021/784 (10) και (ΕΕ) 2021/1232', 'K2'),
+    ('el', 'προστασία των καταναλωτών, ειδικότερα τους κανονισμούς (ΕΕ) 2017/2394 (13) και (ΕΕ) 2019/1020', 'K3'),
+    ('el',
+     'του Ευρωπαϊκού Κοινοβουλίου και του Συμβουλίου, τις οδηγίες 2001/95/ΕΚ (15), 2005/29/ΕΚ (16), 2011/83/ΕE '
+     '(17) και 2013/11/ΕΕ', 'K4'),
+    ('el',
+     'και τα συγγενικά δικαιώματα, συμπεριλαμβανομένων των οδηγιών 2001/29/ΕΚ (21), 2004/48/ΕΚ (22) και (ΕΕ) '
+     '2019/790', 'K5'),
+    # ro
+    ('ro', 'sunt membre ale Uniunii sunt cuprinse în Regulamentele (UE) 2016/1036 (2) și (UE) 2016/1037', 'K1'),
+    ('ro',
+     'platformele de partajare a materialelor video, Regulamentele (UE) 2019/1148 (8), (UE) 2019/1150 (9), (UE) '
+     '2021/784 (10) și (UE) 2021/1232', 'K2'),
+    ('ro', 'privind protecția consumatorilor, în special Regulamentelor (UE) 2017/2394 (13) și (UE) 2019/1020', 'K3'),
+    ('ro',
+     'ale Parlamentului European și ale Consiliului, Directivelor 2001/95/CE (15), 2005/29/CE (16), 2011/83/UE '
+     '(17) și 2013/11/UE', 'K4'),
+    ('ro',
+     'dreptul de autor și drepturile conexe, inclusiv Directivelor 2001/29/CE (21), 2004/48/CE (22) și (UE) '
+     '2019/790', 'K5'),
+    # mt
+    ('mt', 'pajjiżi li mhumiex membri tal-Unjoni jinsabu fir-Regolamenti (UE) 2016/1036 (2) u (UE) 2016/1037', 'K1'),
+    ('mt',
+     "fiha dwar pjattaformi ta' video-sharing, ir-Regolament (UE) 2019/1148 (8), (UE) 2019/1150 (9), (UE) "
+     '2021/784 (10) u (EU) 2021/1232', 'K2'),
+    ('mt', "il-protezzjoni tal-konsumatur, b'mod partikolari r-Regolamenti (UE) 2017/2394 (13) u (UE) 2019/1020", 'K3'),
+    ('mt',
+     '2019/1020 (14) tal-Parlament Ewropew u tal-Kunsill, id-Direttivi 2001/95/KE (15), 2005/29/KE (16), '
+     '2011/83/UE (17) u 2013/11/UE', 'K4'),
+    ('mt',
+     'id-drittijiet tal-awtur u drittijiet relatati, inklużi d-Direttivi 2001/29/KE (21), 2004/48/KE (22) u (UE) '
+     '2019/790', 'K5'),
+    # ga
+    ('ga', '(AE) 2019/1020 agus Treoracha 2001/95/CE agus 2013/11/AE', 'K6'),
+    ('ga',
+     'forálacha di maidir le hardáin comhroinnte físeán, Rialacháin (AE) 2019/1148 (8), (AE) 2019/1150 (9), (AE) '
+     '2021/784 (10) agus (AE) 2021/1232', 'K2'),
+    ('ga',
+     'Aontais maidir le cosaint tomhaltóirí, go háirithe Rialacháin (AE) 2017/2394 (13) agus (AE) 2019/1020', 'K3'),
+    ('ga',
+     '2019/1020 (14) ó Pharlaimint na hEorpa agus ón gComhairle, Treoracha 2001/95/CE (15), 2005/29/CE (16), '
+     '2011/83/AE (17) agus 2013/11/AE', 'K4'),
+    ('ga',
+     'cóipcheart agus cearta lena mbaineann, lena n-áirítear Treoracha 2001/29/CE (21), 2004/48/CE (22) agus '
+     '(AE) 2019/790', 'K5'),
+    # hu
+    ('hu',
+     'behozatallal szembeni védelemre vonatkozó közös szabályokat az (EU) 2016/1036 (2), illetve az (EU) '
+     '2016/1037 (3) európai parlamenti és tanácsi rendelet', 'K1'),
+    ('hu',
+     'tekintetében meghatározott egyedi rendelkezéseket, valamint az (EU) 2019/1148 (8), az (EU) 2019/1150 (9), '
+     'az (EU) 2021/784 (10) és az (EU) 2021/1232 (11) európai parlamenti és tanácsi rendeletet', 'K2'),
+    ('hu',
+     'fogyasztóvédelemre vonatkozó uniós jogot, különösen az (EU) 2017/2394 (13) és az (EU) 2019/1020 (14) '
+     'európai parlamenti és tanácsi rendeletet', 'K3'),
+    ('hu',
+     '(EU) 2019/1020 (14) európai parlamenti és tanácsi rendeletet, a 2001/95/EK (15), a 2005/29/EK (16), a '
+     '2011/83/EU (17) és a 2013/11/EU (18) európai parlamenti és tanácsi irányelvet', 'K4'),
+    ('hu',
+     'és a szomszédos jogokról szóló uniós jogot, többek között a 2001/29/EK (21), a 2004/48/EK (22) és az (EU) '
+     '2019/790 (23) európai parlamenti és tanácsi irányelvet', 'K5'),
+    # fi
+    ('fi', 'sisältyvät Euroopan parlamentin ja neuvoston asetuksiin (EU) 2016/1036 (2) ja (EU) 2016/1037', 'K1'),
+    ('fi',
+     'erityissäännökset, Euroopan parlamentin ja neuvoston asetuksiin (EU) 2019/1148 (8), (EU) 2019/1150 (9), '
+     '(EU) 2021/784 (10) ja (EU) 2021/1232', 'K2'),
+    ('fi', 'erityisesti Euroopan parlamentin ja neuvoston asetuksiin (EU) 2017/2394 (13) ja (EU) 2019/1020', 'K3'),
+    ('fi',
+     '2019/1020 (14), Euroopan parlamentin ja neuvoston direktiiveihin 2001/95/EY (15), 2005/29/EY (16), '
+     '2011/83/EU (17) ja 2013/11/EU', 'K4'),
+    ('fi',
+     'mukaan lukien Euroopan parlamentin ja neuvoston direktiivit 2001/29/EY (21), 2004/48/EY (22) ja (EU) '
+     '2019/790', 'K5'),
+    # et
+    ('et',
+     'ühiseeskirjad sisalduvad Euroopa Parlamendi ja nõukogu määrustes (EL) 2016/1036 (2) ja (EL) 2016/1037', 'K1'),
+    ('et',
+     'käsitlevad sätted, Euroopa Parlamendi ja nõukogu määrused (EL) 2019/1148 (8), (EL) 2019/1150 (9), (EL) '
+     '2021/784 (10) ja (EL) 2021/1232', 'K2'),
+    ('et', 'õigust, eelkõige Euroopa Parlamendi ja nõukogu määrusi (EL) 2017/2394 (13) ja (EL) 2019/1020', 'K3'),
+    ('et',
+     '(EL) 2019/1020 (14), Euroopa Parlamendi ja nõukogu direktiive 2001/95/EÜ (15), 2005/29/EÜ (16), 2011/83/EL '
+     '(17) ja 2013/11/EL', 'K4'),
+    ('et',
+     'õigust, sealhulgas Euroopa Parlamendi ja nõukogu direktiive 2001/29/EÜ (21), 2004/48/EÜ (22) ja (EL) '
+     '2019/790', 'K5'),
+    # lv
+    ('lv',
+     'dalībvalstis, ir ietverti Eiropas Parlamenta un Padomes Regulās (ES) 2016/1036 (2) un (ES) 2016/1037', 'K1'),
+    ('lv',
+     'kopīgošanas platformām, Eiropas Parlamenta un Padomes Regulas (ES) 2019/1148 (8), (ES) 2019/1150 (9), (ES) '
+     '2021/784 (10) un (ES) 2021/1232', 'K2'),
+    ('lv',
+     'aizsardzības akti, jo īpaši Eiropas Parlamenta un Padomes Regulas (ES) 2017/2394 (13) un (ES) 2019/1020', 'K3'),
+    ('lv',
+     '(ES) 2019/1020 (14), Eiropas Parlamenta un Padomes Direktīvas 2001/95/EK (15), 2005/29/EK (16), 2011/83/ES '
+     '(17) un 2013/11/ES', 'K4'),
+    ('lv',
+     'blakustiesībām, tostarp Eiropas Parlamenta un Padomes Direktīvas 2001/29/EK (21), 2004/48/EK (22) un (ES) '
+     '2019/790', 'K5'),
+    # lt
+    ('lt', 'nustatytos Europos Parlamento ir Tarybos reglamentuose (ES) 2016/1036 (2) ir (ES) 2016/1037', 'K1'),
+    ('lt',
+     'medžiaga platformų, Europos Parlamento ir Tarybos reglamentai (ES) 2019/1148 (8), (ES) 2019/1150 (9), (ES) '
+     '2021/784 (10) ir (ES) 2021/1232', 'K2'),
+    ('lt',
+     'apsaugos, visų pirma Europos Parlamento ir Tarybos reglamentams (ES) 2017/2394 (13) bei (ES) 2019/1020', 'K3'),
+    ('lt',
+     '(ES) 2019/1020 (14), Europos Parlamento ir Tarybos direktyvoms 2001/95/EB (15), 2005/29/EB (16), '
+     '2011/83/ES (17) bei 2013/11/ES', 'K4'),
+    ('lt',
+     'susijusių teisių, įskaitant Europos Parlamento ir Tarybos direktyvas 2001/29/EB (21), 2004/48/EB (22) bei '
+     '(ES) 2019/790', 'K5'),
+)
+
+
+@pytest.mark.parametrize("lang, text, key", COORDINATIONS, ids=[f"{r[0]}-{r[2]}" for r in COORDINATIONS])
+def test_every_act_of_a_coordination_is_read(lang, text, key):
+    _where, acts = COORDINATION_ACTS[key]
+    assert [c["celex"] for c in eref.citations(text) if c["celex"] in acts] == list(acts), (lang, text)
+
+
+def test_every_language_has_its_five_coordinations_and_its_and():
+    counts = collections.Counter(r[0] for r in COORDINATIONS)
+    assert set(counts) == {f.lang for f in eref._FORMS} and set(counts.values()) == {5}
+    assert all(f.conj for f in eref._FORMS), "each language says what joins two acts"
+    assert not any(f.range and re.fullmatch(f.range, w) for f in eref._FORMS for w in ("and", "et", "und")), \
+        "a range's word never joins two acts"
+
+
+def test_what_joins_two_acts_and_what_does_not():
+    """Between the first act's number and the next one's (`_coordinated`)."""
+    for glue in (" and (EU) ", " (2) and (EU) ", " (8), (EU) ", ", (8), (EU) ", " (8)(UE) ", " (15), ",
+                 " (17) a ", " és az (EU) ", " (2), illetve az (EU) ", " ja (EU) ", " bei (ES) "):
+        text = "2016/1036" + glue + "2016/1037"
+        assert eref._coordinated(text, 9, len(text) - 9) is not None, glue
+    for glue in (" to (EU) ", " ", " of the members of ", " and Directive ", " (OJ L 119, 4.5.2016, p. 1) and "):
+        text = "2016/1036" + glue + "2016/1037"
+        assert eref._coordinated(text, 9, len(text) - 9) is None, glue
+    assert [c["celex"] for c in eref.citations("Regulation (EU) 2016/679 and 1/3 of the members")] == ["32016R0679"]
+
+
+def test_an_article_with_a_coordination_is_its_first_act_s_unless_of_each():
+    """WRITTEN HERE, not OJ text: no text of the five acts cites an article
+    with a coordination. Each is the real coordination K1 with an article,
+    before it or (fi lv hu) after it as those languages write one: the
+    first act's (operator, 2026-11-21) — "of each of" (a question form,
+    `_QUESTION_FORMS`) every act's."""
+    first = ("32016R1036", "5")
+    for text in ("Article 5 of Regulations (EU) 2016/1036 (2) and (EU) 2016/1037",
+                 "čl. 5 nařízení Evropského parlamentu a Rady (EU) 2016/1036 (2) a (EU) 2016/1037",
+                 "l'article 5 des règlements (UE) 2016/1036 (2) et (UE) 2016/1037",
+                 "asetuksiin (EU) 2016/1036 (2) ja (EU) 2016/1037 5 artiklassa",
+                 "Regulās (ES) 2016/1036 (2) un (ES) 2016/1037 5. pantā",
+                 "az (EU) 2016/1036 (2), illetve az (EU) 2016/1037 (3) európai parlamenti és tanácsi rendelet 5. cikke"):
+        assert _pairs(text) == [first], text
+        assert [c["celex"] for c in eref.citations(text)] == ["32016R1036", "32016R1037"], text
+    assert _pairs("Article 5 of each of Regulations (EU) 2016/1036 (2) and (EU) 2016/1037") == \
+        [first, ("32016R1037", "5")]
+    assert any(f.each for f in eref._QUESTION_FORMS) and not any(f.each for f in eref._FORMS)
 
 
 # ---- question forms: what a reader types and the Official Journal never writes ----------------

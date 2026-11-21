@@ -311,7 +311,9 @@ class _Forms:
     after: str = ""             # the article AFTER the act: its whole form
     num_first: str = ""         # the article's word AFTER its number, the article before the act ("5. člen")
     num_word: str = ""          # the article's word after its number, the article after the act ("5. cikke")
-    conj: str = ""              # what joins a list's articles: and, or, a range's "to" ("Articles 6 and 8")
+    conj: str = ""              # and, or: what joins a list's articles, a coordination's acts
+    range: str = ""             # a range's word between its two ends ("Articles 3 to 7")
+    each: str = ""              # an article "of each of" the coordinated acts that follow
     link: str = ""              # a word between the conjunction and the next article's word ("o el artículo")
     opener: str = ""            # a range's word before its first number ("articoli da 3 a 7")
     type_after: bool = False    # the type word after the number (hu)
@@ -334,7 +336,7 @@ def _tonos(pattern: str) -> str:
 _FORMS: tuple[_Forms, ...] = (
     _Forms("en", R=r"regulations?", L=r"directives?", D=r"decisions?",
            pre=r"council|commission|implementing|delegated|framework",
-           art=r"articles?", conn=r"of", conj=r"and|or|to",
+           art=r"articles?", conn=r"of", conj=r"and|or", range=r"to",
            sub=r"paragraphs?|subparagraphs?|points?|indents?|first|second|third|fourth|sentence",
            source="32016R0679 Art. 93(2) 'Article 5 of Regulation (EU) No 182/2011'; 32023R1773 rec. 18 "
                   "'Article 16 of Commission Implementing Regulation (EU) 2023/1070', Art. 6 'Article 170(1) of "
@@ -342,14 +344,14 @@ _FORMS: tuple[_Forms, ...] = (
     _Forms("fr", R=r"r[èe]glements?", L=r"directives?", D=r"d[ée]cisions?",
            gap=r"d['’]\s?ex[ée]cution|d[ée]l[ée]gu[ée]s?|cadre|du\s+conseil|de\s+la\s+commission"
                r"|du\s+parlement\s+européen\s+et\s+du\s+conseil",
-           art=r"articles?", conn=r"du|de\s+la|des|de", conj=r"et|ou|à", link=r"de\s+l['’]|l['’]|aux?",
+           art=r"articles?", conn=r"du|de\s+la|des|de", conj=r"et|ou", range=r"à", link=r"de\s+l['’]|l['’]|aux?",
            sub=r"paragraphes?|alin[ée]as?|points?|premier|première|deuxième|troisième|tirets?|phrase",
            source="32016R0679 Art. 93(2) 'l'article 5 du règlement (UE) no 182/2011', rec. 19 'décision-cadre "
                   "2008/977/JAI'; 32023R1773 Art. 6 'l’article 170, paragraphe 1, du règlement délégué (UE) "
                   "2015/2446', title 'RÈGLEMENT D’EXÉCUTION (UE) 2023/1773'"),
     _Forms("de", R=r"verordnung(?:en)?", L=r"richtlinien?", D=r"beschl(?:uss(?:es)?|üsse)|entscheidung(?:en)?",
            pre=r"delegierten?",
-           art=r"artikel(?:n|s)?", conn=r"der|des", conj=r"und|oder|bis",
+           art=r"artikel(?:n|s)?", conn=r"der|des", conj=r"und|oder", range=r"bis",
            link=r"des|der|den|dem",
            sub=r"absatz|abs\.|unterabsatz|uabs\.|buchstaben?|buchst\.|satz|nummer|nr\.|ziffer",
            source="32016R0679 Art. 93(2) 'Artikel 5 der Verordnung (EU) Nr. 182/2011', rec. 19 'des "
@@ -358,28 +360,28 @@ _FORMS: tuple[_Forms, ...] = (
     _Forms("it", R=r"regolament[oi]", L=r"direttiv[ae]", D=r"decision[ei]",
            gap=r"di\s+esecuzione|delegat[oi]|quadro|del\s+consiglio|della\s+commissione",
            art=r"articol[oi]", conn=r"del|della|dello|dei|delle|degli", glued=r"dell['’]",
-           conj=r"e|o|a", link=r"dell['’]|all['’]|l['’]|agli|degli", opener=r"da",
+           conj=r"e|o", range=r"a", link=r"dell['’]|all['’]|l['’]|agli|degli", opener=r"da",
            sub=r"paragraf[oi]|comm[ai]|letter[ae]|punt[oi]|primo|secondo|terzo",
            source="32016R0679 Art. 93(2) 'l'articolo 5 del regolamento (UE) n. 182/2011'; 32023R1773 rec. 18 "
                   "'all’articolo 16 del regolamento di esecuzione (UE) 2023/1070', Art. 6 'dell’articolo 170, "
                   "paragrafo 1, del regolamento delegato (UE) 2015/2446'"),
     _Forms("es", R=r"reglamentos?", L=r"directivas?", D=r"decisi[óo]n(?:es)?",
            gap=r"de\s+ejecuci[óo]n|delegados?|marco",
-           art=r"art[íi]culos?", conn=r"del|de\s+la|de\s+los|de\s+las|de", conj=r"y|o|a", link=r"el|los",
+           art=r"art[íi]culos?", conn=r"del|de\s+la|de\s+los|de\s+las|de", conj=r"y|o", range=r"a", link=r"el|los",
            sub=r"apartados?|letras?|p[áa]rrafos?|puntos?|guiones?",
            source="32016R0679 Art. 93(2) 'el artículo 5 del Reglamento (UE) n.o 182/2011'; 32023R1773 rec. 18 "
                   "'el artículo 16 del Reglamento de Ejecución (UE) 2023/1070', Art. 6 'el artículo 170, "
                   "apartado 1, del Reglamento Delegado (UE) 2015/2446'"),
     _Forms("pt", R=r"regulamentos?", L=r"dir(?:e|ec)tivas?", D=r"decis(?:ão|ao|ões|oes)",
            gap=r"de\s+execu[çc][ãa]o|delegados?|quadro",
-           art=r"artigos?", conn=r"do|da|dos|das", conj=r"e|ou|a", link=r"nos?|os?|aos?",
+           art=r"artigos?", conn=r"do|da|dos|das", conj=r"e|ou", range=r"a", link=r"nos?|os?|aos?",
            sub=r"n\.?\s?[ºo°]|al[íi]neas?|par[áa]grafos?|pontos?|subpar[áa]grafos?",
            source="32016R0679 Art. 93(2) 'o artigo 5.o do Regulamento (UE) n.o 182/2011', rec. 19 "
                   "'Decisão-Quadro 2008/977/JAI'; 32023R1773 Art. 6 'o artigo 170.o, n.o 1, do Regulamento "
                   "Delegado (UE) 2015/2446', rec. 18 'o artigo 16.o do Regulamento de Execução (UE) 2023/1070'"),
     _Forms("nl", R=r"verordening(?:en)?", L=r"richtl(?:ij|ĳ)n(?:en)?", D=r"besluit(?:en)?",
            pre=r"gedelegeerde",
-           art=r"artikel(?:en)?", conn=r"van(?:\s+de|\s+het)?", conj=r"en|of|tot\s+en\s+met", link=r"de",
+           art=r"artikel(?:en)?", conn=r"van(?:\s+de|\s+het)?", conj=r"en|of", range=r"tot\s+en\s+met", link=r"de",
            sub=r"lid|leden|punt(?:en)?|onder|alinea|eerste|tweede|derde|volzin",
            source="32016R0679 Art. 93(2) 'artikel 5 van Verordening (EU) nr. 182/2011', rec. 42 'Richtlĳn "
                   "93/13/EEG' (the OJ's ĳ ligature); 32023R1773 Art. 6 'artikel 170, lid 1, van Gedelegeerde "
@@ -404,7 +406,7 @@ _FORMS: tuple[_Forms, ...] = (
                r"|evropské\s+centrální\s+banky",
            pre=r"prováděcí(?:ho|m)?|rámcov(?:é|ého|ém)",
            art=r"článek|článku|článkem|článcích|články|článků|čl\.",
-           conj=r"a|nebo|až",
+           conj=r"a|nebo", range=r"až",
            sub=r"odst\.|písm\.|bod(?:u|ě)?|pododstav(?:ec|ce)|věta|věty",
            source="32016R0679 Art. 93(2) 'článek 5 nařízení (EU) č. 182/2011', rec. 172 'čl. 28 odst. 2 nařízení "
                   "(ES) č. 45/2001'; 32018R0825 rec. 21 'čl. 7 odst. 2a nařízení (EU) 2016/1036'; 32023R1773 "
@@ -414,12 +416,12 @@ _FORMS: tuple[_Forms, ...] = (
            gap=r"európskeho\s+parlamentu\s+a\s+rady|rady|komisie",
            pre=r"vykonávac(?:ie|ieho|om|iemu|í)|delegovan(?:é|ého|om|ému|ý)|rámcov(?:é|ého|om)",
            art=r"článok|článku|článkom|článkoch|články|článkov",
-           conj=r"a|alebo|až",
+           conj=r"a|alebo", range=r"až",
            sub=r"ods\.|písm\.|bod(?:u|e)?|pododsek(?:u)?|veta|vety",
            source="32016R0679 rec. 106 'článku 25 ods. 6 alebo článku 26 ods. 4 smernice 95/46/ES', rec. 172 "
                   "'článkom 28 ods. 2 nariadenia (ES) č. 45/2001'; 32023R1773 rec. 18 'článku 16 vykonávacieho "
                   "nariadenia Komisie (EÚ) 2023/1070'"),
-    _Forms("pl", R=r"rozporządze(?:nie|nia|niu|niem|ń)", L=r"dyrektyw(?:a|y|ie|ę|ą)?", D=r"decyz(?:ja|ji|ję|ją|je)",
+    _Forms("pl", R=r"rozporządze(?:nie|nia|niu|niem|ń|niach|niami|niom)", L=r"dyrektyw(?:a|y|ie|ę|ą)?", D=r"decyz(?:ja|ji|ję|ją|je)",
            gap=r"parlamentu\s+europejskiego\s+i\s+rady|rady|komisji|wykonawcz(?:e|ego|ym|ej|a|ą)"
                r"|delegowan(?:e|ego|ym|ej)|ramow(?:a|ej|ą)",
            art=r"artykuł(?:u|em|e|y|ów)?|art\.", conj=r"i|lub|oraz",
@@ -430,14 +432,14 @@ _FORMS: tuple[_Forms, ...] = (
     _Forms("sl", R=r"uredb(?:a|e|i|o|ama|ah)", L=r"direktiv(?:a|e|i|o|ami|ama)", D=r"sklep(?:a|u|om|ov)?",
            gap=r"evropskega\s+parlamenta\s+in\s+sveta|sveta|komisije",
            pre=r"izvedben(?:a|e|i|ega|em)|delegiran(?:a|e|i|ega)|okvirn(?:i|ega|em)",
-           art=r"člen(?:a|u|om|i|ov|e)?", conj=r"in|ali|do",
+           art=r"člen(?:a|u|om|i|ov|e)?", conj=r"in|ali", range=r"do",
            sub=r"odstav(?:ek|ka)|točk(?:a|e|i)|pododstav(?:ek|ka)",
            source="32016R0679 Art. 93(2) 'člen 5 Uredbe (EU) št. 182/2011', rec. 106 'člena 25(6) ali člena 26(4) "
                   "Direktive 95/46/ES'; 32023R1773 rec. 2 'Izvedbeni uredbi Komisije (EU) 2018/2066'"),
     _Forms("hr", R=r"uredb(?:a|e|i|u|om|ama)", L=r"direktiv(?:a|e|i|u|om)", D=r"odluk(?:a|e|u|om)|odluci",
            gap=r"europskog\s+parlamenta\s+i\s+vijeća|vijeća|komisije",
            pre=r"provedben(?:a|e|oj|om)|delegiran(?:a|e|oj|om)|okvirn(?:a|e|oj|om)",
-           art=r"član(?:ak|ka|ku|kom|ci|aka|cima|ke)", conj=r"i|ili|do", opener=r"od",
+           art=r"član(?:ak|ka|ku|kom|ci|aka|cima|ke)", conj=r"i|ili", range=r"do", opener=r"od",
            sub=r"stav(?:ak|ka|ku|kom)|točk(?:a|e|i|om)|podstav(?:ak|ka|ku|kom)",
            source="32016R0679 Art. 93(2) 'članak 5. Uredbe (EU) br. 182/2011', rec. 106 'članka 25. stavka 6. i "
                   "članka 26. stavka 4. Direktive 95/46/EZ', rec. 172 'člankom 28. stavkom 2. Uredbe (EZ) br. "
@@ -454,7 +456,7 @@ _FORMS: tuple[_Forms, ...] = (
            D=_tonos(r"απόφασ(?:η|ης|εις|εως)|αποφάσε(?:ις|ων|ως)"),
            gap=_tonos(r"πλαίσι(?:ο|ου)|του\s+συμβουλίου|της\s+επιτροπής"),
            pre=_tonos(r"εκτελεστικ(?:ός|ού|ό|ή|ής)|κατ['’]\s?εξουσιοδότηση"),
-           art=_tonos(r"άρθρ(?:ο|ου|α|ων)"), conn=_tonos(r"του|της|των"), conj=_tonos(r"και|ή|έως"),
+           art=_tonos(r"άρθρ(?:ο|ου|α|ων)"), conn=_tonos(r"του|της|των"), conj=_tonos(r"και|ή"), range=_tonos(r"έως"),
            link=_tonos(r"του|της|στο|στα|τα|το"),
            sub=_tonos(r"παράγραφ(?:ος|ο|ου)|παρ\.|στοιχεί(?:ο|ου)|εδάφι(?:ο|ου)|περίπτωση"),
            source="32016R0679 Art. 93(2) 'το άρθρο 5 του κανονισμού (ΕΕ) αριθ. 182/2011', Art. 4(25) 'του άρθρου 1 "
@@ -472,14 +474,14 @@ _FORMS: tuple[_Forms, ...] = (
     _Forms("mt", R=r"regolament(?:i)?", L=r"direttiv(?:a|i)", D=r"deċiżjoni(?:jiet)?|decizjoni(?:jiet)?",
            gap=r"ta['’]\s?implimentazzjoni|delegat[i]?|qafas|kwadru|tal-kunsill|tal-kummissjoni"
                r"|tal-parlament\s+ewropew\s+u\s+tal-kunsill",
-           art=r"artikolu|artikoli", conn=r"ta['’]", glued=r"ta[lċdnrstxżz]-", conj=r"u|jew|sa", link=r"l-|il-",
+           art=r"artikolu|artikoli", conn=r"ta['’]", glued=r"ta[lċdnrstxżz]-", conj=r"u|jew", range=r"sa", link=r"l-|il-",
            sub=r"paragrafu|punt|subparagrafu",
            source="32016R0679 Art. 93(2) 'l-Artikolu 5 tar-Regolament (UE) Nru 182/2011', Art. 4(25) 'tal-Artikolu "
                   "1(1) tad-Direttiva (UE) 2015/1535', rec. 42 'mad-Direttiva tal-Kunsill 93/13/KEE'; 32023R1773 "
                   "rec. 19 'fl-Artikolu 30 tar-Regolament ta’ Implimentazzjoni (UE) 2023/1070'"),
     _Forms("ga", R=r"rialach[áa]i?n", L=r"(?:dt|th|t)reo(?:ir|racha)", D=r"g?ch?inn(?:eadh|idh|t[íi])",
            gap=r"cur\s+chun\s+feidhme|tarmligthe|r[ée]ime",
-           art=r"airteagal|airteagail", conn=r"de|den", glued=r"d['’]", conj=r"agus|nó|go",
+           art=r"[ht]?airteag(?:al|ail)", conn=r"de|den", glued=r"d['’]", conj=r"agus|nó", range=r"go",
            sub=r"m[íi]r|pointe|fomh[íi]r",
            source="32016R0679 Art. 93(2) 'Airteagal 5 de Rialachán (AE) Uimh. 182/2011', Art. 4(25) "
                   "'d'Airteagal 1(1) de Threoir (AE) 2015/1535'; 32023R1773 rec. 18 'Airteagal 16 de Rialachán "
@@ -490,26 +492,26 @@ _FORMS: tuple[_Forms, ...] = (
            after=r"(?:\d+[a-z]?\.?(?:\s*(?:[–—-]|,|és|vagy)\s*(?:az?\s+)?)?)*\d+[a-z]?\.\s*cikk\w*"
                  r"(?:\s*\(\d+[a-z]?\))?(?:\s*,?\s*(?:és|vagy)\s+(?:az?\s+)?(?:\d+[a-z]?\.?(?:\s*(?:[–—-]|,|és)\s*)?)*"
                  r"\d+[a-z]?\.\s*cikk\w*(?:\s*\(\d+[a-z]?\))?)*",
-           num_word=r"cikk\w*", sub=r"bekezdés\w*|pont\w*",
+           num_word=r"cikk\w*", sub=r"bekezdés\w*|pont\w*", conj=r"és|vagy|illetve",
            source="32016R0679 Art. 93(2) 'a 182/2011/EU rendelet 5. cikkét', rec. 172 'a 45/2001/EK rendelet 28. "
                   "cikkének (2) bekezdésével', Art. 4(25) 'az (EU) 2015/1535 európai parlamenti és tanácsi "
                   "irányelv (19) 1. cikke'; 32018R0825 'az (EU) 2016/1036 rendelet 5. cikkének (9) bekezdése'"),
     _Forms("fi", R=r"asetu(?:s|ksen|ksessa|ksella|ksesta|kseen|sta|kset|sten|ksiin|ksia)",
-           L=r"direktiivi(?:n|ssä|llä|stä|in|ä|t|en|eihin)?",
+           L=r"direktiiv(?:i(?:n|ssä|llä|stä|in|ä|t|en)?|eihin|ejä|eissä|ien)",
            D=r"päätö(?:s|ksen|ksessä|ksellä|ksestä|kseen|stä|kset|sten)",
            after=r"\d+(?:\s?[a-z](?![^\W\d_]))?(?:\s*(?:[–—-]|,|ja|tai)\s*\d+(?:\s?[a-z](?![^\W\d_]))?)*\s+artikl[ao]\w*"
                  r"(?:\s+\d+(?:\s?[a-z](?![^\W\d_]))?\s+(?:ala)?kohd\w*)*(?:\s*,?\s*(?:ja|tai)\s+\d+(?:\s?[a-z](?![^\W\d_]))?"
                  r"(?:\s*(?:[–—-]|,|ja)\s*\d+)*\s+artikl[ao]\w*(?:\s+\d+(?:\s?[a-z](?![^\W\d_]))?\s+(?:ala)?kohd\w*)*)*",
-           num_word=r"artikl[ao]\w*", sub=r"(?:ala)?kohd\w*",
+           num_word=r"artikl[ao]\w*", sub=r"(?:ala)?kohd\w*", conj=r"ja|tai",
            source="32016R0679 Art. 93(2) 'asetuksen (EU) N:o 182/2011 5 artiklaa', rec. 106 'direktiivin 95/46/EY "
                   "25 artiklan 6 kohdan', Art. 4(25) 'direktiivin (EU) 2015/1535 (19) 1 artiklan'; 32018R0825 "
                   "'asetuksen (EU) 2016/1036 7 artiklan 2 a kohdassa'"),
-    _Forms("et", R=r"määrus(?:e|t|es|ega|ele|est|ed|i|te|tele)?", L=r"direktiiv(?:i|iga|is|ist|ile|id|e)?",
+    _Forms("et", R=r"määrus(?:e|t|es|ega|ele|est|ed|i|te|tele|tes|test)?", L=r"direktiiv(?:i|iga|is|ist|ile|id|e)?",
            D=r"otsus(?:e|t|es|ega|ele|est|ed)?",
            after=r"artik(?:kel|li\w*)\s+\d+[a-z]?(?:\s*(?:[–—-]|,|ja|või)\s*\d+[a-z]?)*(?:\s+(?:lõi|punkt)\w*\s+\d+[a-z]?)*"
                  r"(?:\s*,?\s*(?:ja|või)\s+artik(?:kel|li\w*)\s+\d+[a-z]?(?:\s*(?:[–—-]|,|ja)\s*\d+[a-z]?)*"
                  r"(?:\s+(?:lõi|punkt)\w*\s+\d+[a-z]?)*)*",
-           sub=r"lõi\w*|punkt\w*",
+           sub=r"lõi\w*|punkt\w*", conj=r"ja|või",
            source="32016R0679 Art. 93(2) 'määruse (EL) nr 182/2011 artiklit 5', rec. 106 'direktiivi 95/46/EÜ "
                   "artikli 25 lõike 6'; 32018R0825 rec. 21 'määruse (EL) 2016/1036 artikli 7 lõikes 2a'"),
     _Forms("lv", R=r"regul(?:a|as|u|ā|ai|ām|ās)", L=r"direktīv(?:a|as|u|ā|ai|ām|ās)",
@@ -517,7 +519,7 @@ _FORMS: tuple[_Forms, ...] = (
            after=r"\d+(?:\.?[a-z])?\.(?:\s*(?:[–—-]|,|un|vai)\s*\d+(?:\.?[a-z])?\.)*\s*pant\w*"
                  r"(?:\s+\d+(?:\.?[a-z])?\.\s*(?:apakš)?punkt\w*)*(?:\s*,?\s*(?:un|vai)\s+\d+(?:\.?[a-z])?\."
                  r"(?:\s*(?:[–—-]|,|un)\s*\d+(?:\.?[a-z])?\.)*\s*pant\w*(?:\s+\d+(?:\.?[a-z])?\.\s*(?:apakš)?punkt\w*)*)*",
-           num_word=r"pant\w*", sub=r"(?:apakš)?punkt\w*|daļ\w*",
+           num_word=r"pant\w*", sub=r"(?:apakš)?punkt\w*|daļ\w*", conj=r"un|vai",
            source="32016R0679 Art. 93(2) 'Regulas (ES) Nr. 182/2011 5. pantu', rec. 106 'Direktīvas 95/46/EK 25. "
                   "panta 6. punktu'; 32018R0825 rec. 21 'Regulas (ES) 2016/1036 7. panta 2.a punktā'"),
     _Forms("lt", R=r"reglament(?:as|o|ą|u|e|ai|ui|ų|us|uose|ams)", L=r"direktyv(?:a|os|ą|oje|ai|as|oms|ų)",
@@ -525,7 +527,7 @@ _FORMS: tuple[_Forms, ...] = (
            after=r"\d+[a-z]?(?:\s*(?:[–—-]|,|ir|bei|arba)\s*\d+[a-z]?)*\s+straipsn\w*(?:\s+\d+\s+(?:dal|punkt)\w*)*"
                  r"(?:\s*,?\s*(?:ir|bei|arba)\s+\d+[a-z]?(?:\s*(?:[–—-]|,|ir|bei)\s*\d+[a-z]?)*\s+straipsn\w*"
                  r"(?:\s+\d+\s+(?:dal|punkt)\w*)*)*",
-           num_word=r"straipsn\w*", sub=r"dal\w*|punkt\w*",
+           num_word=r"straipsn\w*", sub=r"dal\w*|punkt\w*", conj=r"ir|bei|arba",
            source="32016R0679 Art. 93(2) 'Reglamento (ES) Nr. 182/2011 5 straipsnis', rec. 106 'Direktyvos "
                   "95/46/EB 25 straipsnio 6 dalimi'; 32018R0825 'Reglamento (ES) 2016/1036 5 straipsnio 9 dalį'"),
 )
@@ -540,6 +542,8 @@ _FORMS: tuple[_Forms, ...] = (
 #: evidence rule: here, as what it is.
 _QUESTION_FORMS: tuple[_Forms, ...] = (
     _Forms("en", art=r"art\.", source="the OJ writes 'Article 5'"),
+    _Forms("en", each=r"each\s+of", source="the OJ writes no 'of each of' before coordinated acts in the five "
+                                           "acts; the operator's words (2026-11-21)"),
     _Forms("fr", art=r"art\.", source="the OJ writes 'article 5'"),
     _Forms("de", art=r"art\.", source="the OJ writes 'Artikel 5'"),
     _Forms("it", art=r"art\.", source="the OJ writes 'articolo 5'"),
@@ -719,10 +723,14 @@ _HEAD = rf"(?:(?:{_ART_WORD})\s*(?:(?:{_OPENER})\s+)?{_ANUM}|{_NUM_FIRST})"
 #: between two numbers; a range's opener ("da 3 a 7", "od 3. do 7."). An
 #: article's word only after a conjunction or a comma: "Articolo 84
 #: All'articolo 2" is a heading and a sentence, never a list
-_LIST_TOKEN = (rf"(?:(?:{_union('conj')})\s+(?:(?:{_union('link')})\s*)?|,\s*)"
+_JOIN = rf"{_union('conj')}|{_union('range')}"
+_LIST_TOKEN = (rf"(?:(?:{_JOIN})\s+(?:(?:{_union('link')})\s*)?|,\s*)"
                rf"(?:{_ART_WORD})(?=\s*(?:(?:{_OPENER})\s+)?\d)"
-               rf"|(?:{_union('conj')})(?![^\W\d_])|(?:{_OPENER})(?=\s+\d)|[–—-]")
-_TAIL = rf"(?:(?:the|la)\s+)?(?:(?:{_union('pre')})[\s-]+){{0,3}}[^\W\d_]*+$"
+               rf"|(?:{_JOIN})(?![^\W\d_])|(?:{_OPENER})(?=\s+\d)|[–—-]")
+#: after the connector: "of each of" (the coordinated acts that follow cite
+#: the article too), "the", the institution or the kind, a compound's first part
+_TAIL = (rf"(?:(?P<each>{_union('each', _ALL)})\s+)?(?:(?:the|la)\s+)?(?:(?:{_union('pre')})[\s-]+){{0,3}}"
+         rf"[^\W\d_]*+$")
 _ARTICLE = re.compile(
     rf"(?=[ačчάα\d])"          # every article word's first letter, or a number first
     rf"(?P<art>{_HEAD}(?:[\s,]*(?:{_TOKEN}|{_LIST_TOKEN})){{0,16}}?)\s*,?\s*(?:(?:{_union('conn')})\s+"
@@ -773,11 +781,12 @@ _ART_AFTER = re.compile(rf"\s*(?:\(\d{{1,3}}\)\s*)?(?:az?\s+)?(?P<art>{_union('a
 #: article's word after its numbers, a paragraph's or point's word, a call
 #: in brackets
 _PARSE = re.compile(
+    rf"\([^()]*\)"              # a call in brackets, wherever it stands ("25(6)")
+    rf"|(?<!\w)(?:"           # every other item starts a word: the scan skips the inside of words
     rf"(?P<artw>(?:{_ART_WORD}|artik(?:kel|li\w*))(?=\s*(?:(?:{_OPENER})\s+)?\d))"
     rf"|(?P<num>{_ANUM})"
     rf"|(?P<numw>(?:{_union('num_word', _ALL)}|{_union('num_first', _ALL)})(?![^\W\d_]))"
-    rf"|(?P<sub>(?:{_union('sub')})(?![^\W\d_]))"
-    rf"|\([^()]*\)",
+    rf"|(?P<sub>(?:{_union('sub')})(?![^\W\d_])))",
     re.IGNORECASE)
 #: the article words whose number takes a dot, an ordinal ("6. cikk", "6. pants", "6. člen")
 _DOTTED = re.compile(r"cikk|pant|člen", re.IGNORECASE)
@@ -864,7 +873,30 @@ def _year_number(a: str, b: str, letter: str, *, no: bool, org: bool, after: boo
 def _art_text(m: re.Match | None) -> str | None:
     if m is None:
         return None
-    return _WS.sub(" ", next(g for g in m.groupdict().values() if g is not None)).strip(" ,") or None
+    groups = m.groupdict()
+    return _WS.sub(" ", groups.get("art") or groups.get("lib") or "").strip(" ,") or None
+
+
+#: what joins two acts of a coordination, from the first one's number to the
+#: next one's: a footnote's call, a comma or and/or (never a range's word),
+#: Hungarian's article, the next one's organisation and "No" — "Regulations
+#: (EU) 2019/1148 (8), (EU) 2019/1150 (9), (EU) 2021/784 (10) and (EU)
+#: 2021/1232", "Directives 2001/29/EC (21), 2004/48/EC (22) and (EU)
+#: 2019/790" (32022R2065), "regolamenti (UE) 2019/1148 (8)(UE) 2019/1150",
+#: "Verordnungen (EU) 2019/1148, (8), (EU) 2019/1150"
+_COORD = re.compile(
+    rf"\s*(?:\(\d{{1,3}}\)\s*)?(?P<sep>,|(?:{_union('conj')})(?![^\W\d_]))?\s*(?:\(\d{{1,3}}\)\s*,?\s*)?"
+    rf"(?:(?P<sep2>{_union('conj')})\s+)?(?:az?\s+)?(?:\((?P<org>{_ORGS})\)\s*)?(?:(?P<no>{_NO})\s*)?",
+    re.IGNORECASE)
+
+
+def _coordinated(text: str, start: int, end: int) -> re.Match | None:
+    """`text[start:end]`, between two number runs, joins two acts: a
+    separator or the next one's organisation, nothing else."""
+    if end <= start:
+        return None
+    m = _COORD.fullmatch(text, start, end)
+    return m if m is not None and (m.group("sep") or m.group("sep2") or m.group("org")) else None
 
 
 def _occurrences(text: str) -> list[tuple[int, str, str | None]]:
@@ -875,29 +907,64 @@ def _occurrences(text: str) -> list[tuple[int, str, str | None]]:
     found: list[tuple[int, str, str | None]] = [
         (m.start(), m.group("celex"), None) for m in _CELEX.finditer(text)
         if not m.start() or text[m.start() - 1] not in _ALNUM]
-    for m in _NUMBERS.finditer(text):
-        if m.start() and (text[m.start() - 1] == "/" or text[m.start() - 1].isdecimal()):
-            continue                                      # inside a longer run: "12345/6", "1/2/3"
+    runs = [m for m in _NUMBERS.finditer(text)
+            if not (m.start() and (text[m.start() - 1] == "/" or text[m.start() - 1].isdecimal()))]
+    acts: list[tuple[str, tuple[int, str], str | None] | None] = []    # per run: letter, (year, number), art
+    hu: list[bool] = []         # per run: its type named after it, Hungarian's way
+    prev = None     # the act a coordination continues: (its run's end, its letter, the article "of each",
+    #                 the coordination's first act)
+    for i, m in enumerate(runs):
         before = text[max(0, m.start() - _WINDOW):m.start()]
         b = _BEFORE_REV.match(before[::-1])
+        act, hu_type = None, False
         if b is not None:
             letter = "R" if b.group("R") else "L" if b.group("L") else "D"
             got = _year_number(m.group("a"), m.group("b"), letter, no=bool(b.group("no")),
                                org=bool(b.group("org") or m.group("suffix")), after=False)
-            art = _art_text(_article_before(before, len(before) - b.end())) \
-                or _art_text(_ART_AFTER.match(text, m.end()))
-        else:
-            t = _TYPE_AFTER.match(text, m.end())          # hu: "a 182/2011/EU rendelet"
-            if t is None:
-                continue
+            a = _article_before(before, len(before) - b.end())
+            art = _art_text(a) or _art_text(_ART_AFTER.match(text, m.end()))
+            each = art if a is not None and a.groupdict().get("each") else None
+            act = (letter, got, art) if got else None
+            prev = (m.end(), letter, each, i) if got else None
+        elif (t := _TYPE_AFTER.match(text, m.end())) is not None:      # hu: "a 182/2011/EU rendelet"
             letter = "R" if t.group("R") else "L" if t.group("L") else "D"
             org = _ORG_BEFORE.search(text, max(0, m.start() - 40), m.start()) is not None
             got = _year_number(m.group("a"), m.group("b"), letter, no=False, org=org, after=True)
-            art = _art_text(_ART_AFTER.match(text, t.end()))
-        if got is None:
-            continue
-        year, number = got
-        found.append((m.start(), f"3{year:04d}{letter}{int(number):04d}", art))
+            act = (letter, got, _art_text(_ART_AFTER.match(text, t.end()))) if got else None
+            prev = None
+            hu_type = True
+        elif prev is not None and (c := _coordinated(text, prev[0], m.start())) is not None:
+            # the next act of a coordination: the first one's type. An article
+            # with the list — before it, or after it as fi et lv lt write it —
+            # is the FIRST act's (operator, 2026-11-21), "of each of" all of theirs
+            letter, each, head = prev[1], prev[2], prev[3]
+            got = _year_number(m.group("a"), m.group("b"), letter, no=bool(c.group("no")),
+                               org=bool(c.group("org") or m.group("suffix")), after=False)
+            after = _art_text(_ART_AFTER.match(text, m.end()))
+            if after and not each and acts[head] is not None and acts[head][2] is None:
+                acts[head] = (*acts[head][:2], after)
+            act = (letter, got, each) if got else None
+            prev = (m.end(), letter, each, head) if got else None
+        else:
+            prev = None
+        acts.append(act)
+        hu.append(act is not None and hu_type)
+    # Hungarian names the type once, after the last act: "az (EU) 2017/2394 és
+    # az (EU) 2019/1020 rendeletet" (32022R2065) — each act before it, its type
+    for i in range(len(runs) - 2, -1, -1):
+        nxt = acts[i + 1]
+        if acts[i] is None and nxt is not None and hu[i + 1] \
+                and _coordinated(text, runs[i].end(), runs[i + 1].start()) is not None:
+            m = runs[i]
+            org = _ORG_BEFORE.search(text, max(0, m.start() - 40), m.start()) is not None
+            got = _year_number(m.group("a"), m.group("b"), nxt[0], no=False, org=org, after=True)
+            if got:          # the article after the type word: the coordination's first act's
+                acts[i], hu[i] = (nxt[0], got, nxt[2]), True
+                acts[i + 1] = (*nxt[:2], None)
+    for m, act in zip(runs, acts):
+        if act is not None:
+            letter, (year, number), art = act
+            found.append((m.start(), f"3{year:04d}{letter}{int(number):04d}", art))
     return sorted(found, key=lambda t: t[0])
 
 
