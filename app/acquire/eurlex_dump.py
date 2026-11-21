@@ -53,7 +53,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Callable
 
-from .spec import HeldBack
+from .spec import HeldBack, TransferAborted
 
 #: works per task: a chunk parses its trees once and visits every language.
 #: MEASURED (2026-11-15): a work's MTD tree is 67-390 KB of XML, 0.24-1.4 MB
@@ -832,13 +832,78 @@ def build_chunk(mtd_paths: tuple[str, ...], uuids: list[str], langs: list[tuple[
 
 #: build_chunk's units left incomplete, beside its counts (popped by `build`)
 _INCOMPLETE_KEY = "_incomplete"
+#: A BUILD STOPPED AT A CHUNK BOUNDARY RESUMES AFTER ITS CHUNKS (review
+#: 2026-11-21, Q7): one JSON line a chunk whose units landed — its index, its
+#: counts, the units it left to the API — under the run it belongs to (the
+#: dump's languages and creation, refresh, the chunk size, the works). Read by
+#: the next build of the same run, which computes only the chunks not in it;
+#: removed once the build completes and its stamp is written. A line lost to
+#: a crash costs that chunk again (its units are found held). Appended with
+#: one write(2) on O_APPEND: two builds at once do not interleave a line
+PROGRESS = ".eurlex-dump-progress.jsonl"
+
+
+class Stopped(TransferAborted):
+    """The build stopped at a chunk boundary on a stop (SIGTERM, a pause):
+    every unit of the chunks done landed and recorded (PROGRESS), the stamp
+    not written; the next build resumes after them (Q7, invariant 2)."""
+
+
+def _stop_set(stop: Callable[[], bool] | None) -> bool:
+    return stop is not None and bool(stop())
+
+
+def _run_id(dumps: dict[str, str], refresh: bool, chunk: int, uuids: list[str]) -> str:
+    import hashlib
+    import json
+    h = hashlib.sha256(json.dumps({"dump": dumps, "refresh": refresh, "chunk": chunk},
+                                  sort_keys=True).encode("utf-8"))
+    for u in uuids:
+        h.update(u.encode("utf-8") + b"\n")
+    return h.hexdigest()[:24]
+
+
+def _progress(corpus: Path, run: str) -> dict[int, dict]:
+    """The chunks a build of `run` landed: `{index: its line}`."""
+    import json
+    try:
+        lines = (Path(corpus) / PROGRESS).read_bytes().splitlines()
+    except OSError:
+        return {}
+    out: dict[int, dict] = {}
+    for line in lines:
+        try:
+            got = json.loads(line)
+        except ValueError:
+            continue                        # a line a crash cut
+        if isinstance(got, dict) and got.get("run") == run and isinstance(got.get("k"), int):
+            out[got["k"]] = got
+    return out
+
+
+def _progress_add(corpus: Path, run: str, k: int, counts: dict, found: dict) -> None:
+    import json
+    line = json.dumps({"run": run, "k": k, "counts": {l: dict(c) for l, c in counts.items()},
+                       "incomplete": found}, sort_keys=True, separators=(",", ":")) + "\n"
+    fd = os.open(Path(corpus) / PROGRESS, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o644)
+    try:
+        os.write(fd, line.encode("utf-8"))
+    finally:
+        os.close(fd)
 
 
 def build(dump_dir: Path, corpus: Path, languages: list[str] | None = None, *,
-          log: Callable[[str], None] = print, chunk: int = CHUNK, refresh: bool = False) -> dict[str, Counter]:
+          log: Callable[[str], None] = print, chunk: int = CHUNK, refresh: bool = False,
+          stop: Callable[[], bool] | None = None) -> dict[str, Counter]:
     """Every unit of `languages` (None: every language the dump holds) the
     dump gives, into `corpus`; then the stamp names each language's dump.
-    Returns the counts by language."""
+    Returns the counts by language. `stop()` true: the build ends at the next
+    chunk boundary, raising Stopped — what it built landed, its chunks
+    recorded (PROGRESS), the stamp unwritten — and the next build of the same
+    dump resumes after those chunks (review 2026-11-21, Q7: no stop was read
+    during a build, and a SIGTERM waited for a ~932k-unit refresh). The
+    chunks in flight in the pool's children finish first: one a child."""
+    import contextlib
     from .. import parallel
     from .datadump import Dumps
     found = Dumps(dump_dir, log=log)._scan()
@@ -859,14 +924,37 @@ def build(dump_dir: Path, corpus: Path, languages: list[str] | None = None, *,
              for i in range(0, len(uuids), chunk)]
     total: dict[str, Counter] = {l: Counter() for l in langs}
     found_incomplete: dict[str, dict[str, str | None]] = {l: {} for l in langs}
-    for k, got in enumerate(parallel.each_part(build_chunk, tasks), 1):
-        for l, units in (got.pop(_INCOMPLETE_KEY, None) or {}).items():
-            found_incomplete.setdefault(l, {}).update(units)
-        for l, c in got.items():
-            total[l].update(c)
-        if k % 10 == 0 or k == len(tasks):
-            built = sum(c["built"] for c in total.values())
-            log(f"[eurlex-dump] {k}/{len(tasks)} chunks: {built} units built")
+
+    def take(counts: dict, units: dict) -> None:
+        for l, got_units in (units or {}).items():
+            found_incomplete.setdefault(l, {}).update(got_units)
+        for l, c in counts.items():
+            total.setdefault(l, Counter()).update(c)
+    run = _run_id({l: found[l][1].isoformat() for l in langs}, refresh, chunk, uuids)
+    done = _progress(corpus, run)
+    if done:
+        for k in sorted(done):
+            take(done[k].get("counts") or {}, done[k].get("incomplete") or {})
+        log(f"[eurlex-dump] resumed: {len(done)}/{len(tasks)} chunks landed before, not built again")
+    else:
+        (Path(corpus) / PROGRESS).unlink(missing_ok=True)       # another run's, or none
+        Path(corpus).mkdir(parents=True, exist_ok=True)
+    todo = [k for k in range(len(tasks)) if k not in done]
+    if todo and _stop_set(stop):
+        raise Stopped(f"stopped before the build: {len(done)}/{len(tasks)} chunks landed, the stamp not written")
+    with contextlib.closing(parallel.each_part(build_chunk, [tasks[k] for k in todo])) as parts:
+        for n, (k, got) in enumerate(zip(todo, parts), len(done) + 1):
+            units = got.pop(_INCOMPLETE_KEY, None) or {}
+            take(got, units)
+            _progress_add(corpus, run, k, got, units)          # after the chunk's units landed
+            if n % 10 == 0 or n == len(tasks):
+                built = sum(c["built"] for c in total.values())
+                log(f"[eurlex-dump] {n}/{len(tasks)} chunks: {built} units built")
+            if n < len(tasks) and _stop_set(stop):
+                # the chunks in flight finish as the pool closes (one a child)
+                raise Stopped(f"stopped at a chunk boundary: {n}/{len(tasks)} chunks landed and recorded (those "
+                              f"in flight land as the pool closes), the stamp not written; the next build "
+                              f"resumes after them")
     for l in langs:
         c = total[l]
         log(f"[eurlex-dump] {l}: " + ", ".join(f"{k} {v}" for k, v in sorted(c.items()) if k != "bytes")
@@ -881,11 +969,12 @@ def build(dump_dir: Path, corpus: Path, languages: list[str] | None = None, *,
     _record_incomplete(corpus, found_incomplete, afresh)
     _stamp(corpus, {l: found[l][1].isoformat() for l in langs})
     _mark_packages(corpus, langs)
+    (Path(corpus) / PROGRESS).unlink(missing_ok=True)          # complete: nothing to resume
     return total
 
 
 def build_newer(dump_dir: Path, corpus: Path, languages: list[str], *,
-                log: Callable[[str], None] = print) -> dict[str, Counter]:
+                log: Callable[[str], None] = print, stop: Callable[[], bool] | None = None) -> dict[str, Counter]:
     """Before a per-unit pass (cellar.TreeUnits.prepare): the languages whose
     dump under `dump_dir` is newer than the one built into `corpus` are built
     from it first, a held unit the newer dump states modified later
@@ -900,7 +989,7 @@ def build_newer(dump_dir: Path, corpus: Path, languages: list[str], *,
     if not newer:
         return {}
     log(f"[eurlex-dump] a newer Data Dump of {', '.join(newer)}: built before Cellar is asked")
-    return build(dump_dir, corpus, newer, log=log, refresh=True)
+    return build(dump_dir, corpus, newer, log=log, refresh=True, stop=stop)
 
 
 # ---- the units an earlier per-unit fetch landed (RULE 1) --------------------------------------

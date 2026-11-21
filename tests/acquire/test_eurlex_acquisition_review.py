@@ -421,3 +421,99 @@ def test_a_member_that_does_not_read_stops_the_build(tmp_path, serial):  # noqa:
     with pytest.raises(eurlex_dump.BulkUnreadable, match="member"):
         eurlex_dump.build(dump, corpus, ["it"], log=lambda m: None)
     assert eurlex_dump.stamp(corpus) == {}
+
+
+# ---- Q7: a stop ends the build at a chunk boundary; the next build resumes after it ------------
+
+def _counting(monkeypatch) -> list[list[str]]:
+    """The works of every chunk computed (build_chunk), in order."""
+    calls: list[list[str]] = []
+    real = eurlex_dump.build_chunk
+    monkeypatch.setattr(eurlex_dump, "build_chunk", lambda *a: calls.append(list(a[1])) or real(*a))
+    return calls
+
+
+def test_a_stop_ends_the_build_at_a_chunk_boundary_and_the_next_resumes_after_it(tmp_path, serial,  # noqa: F811
+                                                                                  monkeypatch):
+    """Reproduced: no stop was read during `prepare`'s build — a SIGTERM
+    waited for a ~932k-unit refresh, then SIGKILL, then the build again."""
+    from tests.acquire.test_eurlex_dump import HTML, _dump
+    from app.plugins.eurlex import source as src
+    corpus = tmp_path / "corpus"
+    dump = _dump(tmp_path / "dump")
+    calls = _counting(monkeypatch)
+    # three works, one a chunk, in uuid order: the consolidation (no Italian item), the Formex act, the HTML act
+    with pytest.raises(eurlex_dump.Stopped, match="2/3 chunks landed"):
+        eurlex_dump.build(dump, corpus, ["it"], log=lambda m: None, chunk=1, stop=lambda: len(calls) >= 2)
+    assert (corpus / src.unit_rel("it", FORMEX[0]) / rdf.TREE_FILE).is_file(), "what it built, landed"
+    assert not (corpus / src.unit_rel("it", HTML[0])).exists(), "the chunk after the stop not computed"
+    assert eurlex_dump.stamp(corpus) == {} and eurlex_dump.incomplete(corpus) == {}, "the stamp only when whole"
+    said: list[str] = []
+    got = eurlex_dump.build(dump, corpus, ["it"], log=said.append, chunk=1)
+    assert calls[2:] == [[HTML[1]]], "resumed after the chunks landed: only the third computed"
+    assert any("resumed: 2/3 chunks" in m for m in said)
+    assert got["it"]["built"] == 2 and got["it"]["not-in-language"] == 1, "the counts of the whole build"
+    assert eurlex_dump.stamp(corpus) == {"it": "2026-11-15T01:00:00+01:00"}
+    assert not (corpus / eurlex_dump.PROGRESS).exists(), "complete: nothing to resume"
+
+
+def test_a_resumed_build_records_what_the_chunks_before_the_stop_left_to_the_api(tmp_path, serial,  # noqa: F811
+                                                                                 monkeypatch):
+    from tests.acquire.test_eurlex_dump import _dump
+    corpus = tmp_path / "corpus"
+    dump = _dump(tmp_path / "dump", drop="L_1972160IT.01000101.xml")    # the Formex act incomplete, chunk 2
+    calls = _counting(monkeypatch)
+    with pytest.raises(eurlex_dump.Stopped):
+        eurlex_dump.build(dump, corpus, ["it"], log=lambda m: None, chunk=1, stop=lambda: len(calls) >= 2)
+    eurlex_dump.build(dump, corpus, ["it"], log=lambda m: None, chunk=1)
+    assert len(calls) == 3
+    assert eurlex_dump.incomplete(corpus) == {"it": {FORMEX[0]: {"in_force": "true", "tried": None}}}
+
+
+def test_another_dump_s_progress_is_not_resumed(tmp_path, serial, monkeypatch):  # noqa: F811
+    corpus = tmp_path / "corpus"
+    calls = _counting(monkeypatch)
+    with pytest.raises(eurlex_dump.Stopped):
+        eurlex_dump.build(_dated_dump(tmp_path / "d1", "2026-11-15T01:00:00+01:00"), corpus, ["it"],
+                          log=lambda m: None, chunk=1, stop=lambda: len(calls) >= 2)
+    eurlex_dump.build(_dated_dump(tmp_path / "d2", "2026-11-22T01:00:00+01:00"), corpus, ["it"],
+                      log=lambda m: None, chunk=1)
+    assert len(calls) == 5, "a newer dump: every chunk computed"
+
+
+def test_prepare_s_build_reads_the_pass_s_stop(tmp_path, serial, monkeypatch):  # noqa: F811
+    import threading
+    from app.acquire import datadump
+    from app.acquire.spec import TransferAborted
+    from app.transfer.bucket import Priority
+    from app.transfer.manager import get_manager
+    from tests.acquire.test_eurlex_dump import _dump
+    corpus = tmp_path / "corpus"
+    monkeypatch.setattr(datadump, "_DUMPS", datadump.Dumps(_dump(tmp_path / "dump")))
+    pending = [RemoteFile(rel_path=cellar.rel_path("it", FORMEX[0]), remote=cellar.encode(FORMEX[0], "it"), mtime=1)]
+    stop = threading.Event()
+    stop.set()
+    with get_manager().bind(Priority.BACKFILL, stop=stop):
+        with pytest.raises(TransferAborted):
+            cellar.TREE_UNITS.prepare(pending, pending, _coll(corpus), None)
+    assert eurlex_dump.stamp(corpus) == {}
+
+
+def test_the_command_exits_130_on_a_stop(tmp_path, monkeypatch):
+    import signal
+    from app import collections as collections_mod, louise
+    coll = SimpleNamespace(plugin="eurlex", corpus_dir=tmp_path / "corpus", slices=None,
+                           codex=SimpleNamespace(parser=SimpleNamespace(version=5)))
+    monkeypatch.setattr(collections_mod, "by_name", lambda name: coll)
+    seen = {}
+
+    def build(*a, stop, **k):
+        seen["stop"] = stop
+        signal.raise_signal(signal.SIGTERM)          # the handler sets the stop, nothing dies
+        assert stop()
+        raise eurlex_dump.Stopped("stopped at a chunk boundary: 1/3 chunks landed")
+    monkeypatch.setattr(eurlex_dump, "build", build)
+    before = signal.getsignal(signal.SIGTERM)
+    a = SimpleNamespace(collection="eurlex5", dump=str(tmp_path), languages="it", carry_from=None)
+    assert louise.cmd_dev_eurlex_dump(a) == 130
+    assert signal.getsignal(signal.SIGTERM) is before, "its handlers restored"

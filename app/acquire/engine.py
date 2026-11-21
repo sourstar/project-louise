@@ -1372,13 +1372,15 @@ def _run_acquisition_claimed(con, collection, spec: AcquisitionSpec, profile: st
     # share of the requests the bulk would answer); optional, and a failure
     # leaves the pass to the transport — EXCEPT a stop, and a bulk that must
     # be used first and cannot (spec.HeldBack; review 2026-11-21, Q6): both
-    # end the pass before the origin is asked anything
+    # end the pass before the origin is asked anything. It runs under the
+    # pass's stop, bound as a listing's is, so a long build reads it (Q7)
     prepare = getattr(spec.unit_fetcher, "prepare", None) if spec.unit_fetcher is not None else None
     if prepare is not None:
         try:
             # its answer: held files the bulk shows the origin revised in place
             # (NeuRIS, 2026-11-15: the same path, new content), fetched in this pass
-            revised = prepare(files, [f for f in files if f.rel_path in pending], collection, endpoints[0])
+            with _listing_bound(stop, priority):
+                revised = prepare(files, [f for f in files if f.rel_path in pending], collection, endpoints[0])
             listed = {f.rel_path for f in files}
             more = {p for p in (revised or ()) if p in listed} - pending
             if more:

@@ -177,6 +177,16 @@ def test_a_bulk_that_must_be_used_first_and_cannot_holds_the_pass_said_never_the
     assert con.execute("SELECT COUNT(*) FROM fetch_files").fetchone()[0] == 0, "nothing recorded against a file"
 
 
+def test_a_stop_reaches_prepare_and_ends_the_pass_there(tmp_path):
+    import threading
+    from app.acquire.spec import TransferAborted
+    stop = threading.Event()
+    units = PreparingUnits(raises=TransferAborted("stopped at a chunk boundary"), on_prepare=stop.set)
+    con, out = _pass(tmp_path, units, stop=stop)
+    assert units.seen_stop is stop, "prepare runs under the pass's stop"
+    assert units.fetched == [] and "chunk boundary" in out["stopped"]
+
+
 def test_any_other_failure_of_prepare_still_leaves_the_pass_to_the_transport(tmp_path):
     units = PreparingUnits(raises=RuntimeError("an index that did not open"))
     con, out = _pass(tmp_path, units)

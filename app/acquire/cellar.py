@@ -160,10 +160,15 @@ def languages_of(flt: Filter) -> tuple[str, ...]:
     return tuple(sorted(got))
 
 
-def _stop_check() -> None:
+def _stop_requested() -> bool:
+    """Whether the stop bound to this thread (the pass's) is set."""
     handle = current_handle()
     stop = getattr(handle, "stop", None) if handle is not None else None
-    if stop is not None and stop.is_set():
+    return stop is not None and stop.is_set()
+
+
+def _stop_check() -> None:
+    if _stop_requested():
         raise TransferAborted("cellar: stopped between requests")
 
 
@@ -1239,7 +1244,9 @@ class TreeUnits(CellarUnits):
         reason, HOLDS THE PASS BACK (spec.HeldBack, said why; review
         2026-11-21, Q6): its failure was the engine's "bulk transport not
         prepared" and the pass asked Cellar for every unit, the newer bulk
-        unused. A stop ends the pass."""
+        unused. A stop — the pass's, which the engine binds around prepare —
+        ends the build at its next chunk boundary and the pass with it (Q7:
+        none was read, and a SIGTERM waited for the whole build)."""
         from . import datadump, eurlex_dump
         from .spec import HeldBack
         dumps = datadump.dumps()
@@ -1247,7 +1254,7 @@ class TreeUnits(CellarUnits):
             return []
         langs = sorted({unit_of(f)["lang"] for f in pending if is_unit(f)})
         try:
-            eurlex_dump.build_newer(dumps.base, Path(collection.corpus_dir), langs)
+            eurlex_dump.build_newer(dumps.base, Path(collection.corpus_dir), langs, stop=_stop_requested)
         except (TransferAborted, HeldBack):
             raise
         except Exception as e:  # noqa: BLE001 — whatever stopped the bulk, Cellar waits for it
