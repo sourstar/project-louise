@@ -4,6 +4,9 @@ a few elements (tests/fixtures/eurlex/rendition/, README: which, and how):
   1. a QUOTED article heading (an amending act's replacement text) is the
      quoting article's text, not an article — in a list item's table cell,
      nested in the article's own element, or after a quoted one;
+  2. the annex headings that put the number first (et, hu, lt, lv), ro's
+     "ANEXĂ", legacy Maltese "L-Artikolu"/"L-ANNESS", and an inserted
+     article's mark in every language ("14a. cikk", "14.o-A", "Член 14а");
   3. a heading in a table cell (a correlation table's "Articolul 12") is not
      an article."""
 from __future__ import annotations
@@ -11,6 +14,8 @@ from __future__ import annotations
 import re
 import types
 from pathlib import Path
+
+import pytest
 
 from app.plugins.eurlex import rendition
 
@@ -90,6 +95,84 @@ def test_the_quote_tracker_never_holds_a_heading_numbered_at_or_below_the_quotat
     _, articles, annexes = rendition._sections(lines)
     assert [a.num for a in articles] == ["Article 1", "Article 2"]
     assert [a.title for a in annexes] == ["ANNEX"]
+
+
+# ---- 2. headings in the 24 languages --------------------------------------------------------
+
+#: each language's article 1, its inserted article 14a, annex I and annex Ia,
+#: as 02016R1036-20180608's consolidated XHTML states them (fetched from
+#: Cellar on 2026-11-21, one per language; NBSP as norm reads it)
+HEADINGS = {
+    "bg": ("Член 1", "Член 14а", "ПРИЛОЖЕНИЕ I", "ПРИЛОЖЕНИЕ Iа"),
+    "cs": ("Článek 1", "Článek 14a", "PŘÍLOHA I", "PŘÍLOHA Ia"),
+    "da": ("Artikel 1", "Artikel 14a", "BILAG I", "BILAG Ia"),
+    "de": ("Artikel 1", "Artikel 14a", "ANHANG I", "ANHANG Ia"),
+    "el": ("Άρθρο 1", "Άρθρο 14α", "ΠΑΡΑΡΤΗΜΑ I", "ΠΑΡΑΡΤΗΜΑ Ια"),
+    "en": ("Article 1", "Article 14a", "ANNEX I", "ANNEX Ia"),
+    "es": ("Artículo 1", "Artículo 14 bis", "ANEXO I", "ANEXO I BIS"),
+    "et": ("Artikkel 1", "Artikkel 14a", "I LISA", "Ia LISA"),
+    "fi": ("1 artikla", "14 a artikla", "LIITE I", "LIITE I a"),
+    "fr": ("Article premier", "Article 14 bis", "ANNEXE I", "ANNEXE I bis"),
+    "ga": ("Airteagal 1", "Airteagal 14a", "IARSCRÍBHINN I", "IARSCRÍBHINN Ia"),
+    "hr": ("Članak 1.", "Članak 14.a", "PRILOG I.", "PRILOG I.a"),
+    "hu": ("1. cikk", "14a. cikk", "I. MELLÉKLET", "Ia. MELLÉKLET"),
+    "it": ("Articolo 1", "Articolo 14 bis", "ALLEGATO I", "ALLEGATO I bis"),
+    "lt": ("1 straipsnis", "14a straipsnis", "I PRIEDAS", "Ia PRIEDAS"),
+    "lv": ("1. pants", "14.a pants", "I PIELIKUMS", "Ia PIELIKUMS"),
+    "mt": ("Artikolu 1", "Artikolu 14a", "ANNESS I", "ANNESS Ia"),
+    "nl": ("Artikel 1", "Artikel 14 bis", "BIJLAGE I", "BIJLAGE I bis"),
+    "pl": ("Artykuł 1", "Artykuł 14a", "ZAŁĄCZNIK I", "ZAŁĄCZNIK Ia"),
+    "pt": ("Artigo 1.o", "Artigo 14.o-A", "ANEXO I", "ANEXO I-A"),
+    "ro": ("Articolul 1", "Articolul 14a", "ANEXA I", "ANEXA Ia"),
+    "sk": ("Článok 1", "Článok 14a", "PRÍLOHA I", "PRÍLOHA Ia"),
+    "sl": ("Člen 1", "Člen 14a", "PRILOGA I", "PRILOGA Ia"),
+    "sv": ("Artikel 1", "Artikel 14a", "BILAGA I", "BILAGA Ia"),
+}
+
+
+@pytest.mark.parametrize("lang", sorted(HEADINGS))
+def test_every_language_s_article_and_annex_headings_are_read_by_their_words(lang):
+    """The legacy HTML and the PDF carry no class: the words decide. Before
+    C11 the inserted article was missed in bg, el, fi, hu, lt, lv, pt and the
+    annexes in et, hu, lt, lv."""
+    article, inserted, annex, annex_a = HEADINGS[lang]
+    assert rendition._ARTICLE.match(article) and rendition._ARTICLE.match(inserted)
+    assert rendition._ANNEX.match(annex) and rendition._ANNEX.match(annex_a)
+
+
+@pytest.mark.parametrize("heading", ["L-Artikolu 1", "Artikolu 14a"])
+def test_legacy_maltese_articles_carry_their_article(heading):
+    assert rendition._ARTICLE.match(heading)
+
+
+@pytest.mark.parametrize("heading", ["ANEXĂ", "L-ANNESS I", "MELLÉKLET", "LISA", "PRIEDAS", "PIELIKUMS",
+                                     "BILAGA 1"])
+def test_a_single_annex_and_the_other_legacy_forms_are_annexes(heading):
+    assert rendition._ANNEX.match(heading)
+
+
+@pytest.mark.parametrize("line", ["Article 5 of", "Article 5 to", "the Article 5", "I. melléklet szerint",
+                                  "Annex I"])
+def test_text_that_only_names_an_article_or_an_annex_is_no_heading(line):
+    assert not rendition._ARTICLE.match(line) and not rendition._ANNEX.match(line)
+
+
+@pytest.mark.parametrize("name, arts, annexes", [
+    ("31992L0043et.html", ["Artikkel 1", "Artikkel 24"], ["I LISA", "II LISA"]),
+    ("31992L0043hu.html", ["1. cikk", "24. cikk"], ["I. MELLÉKLET", "II. MELLÉKLET"]),
+    ("31992L0043lt.html", ["1 straipsnis", "24 straipsnis"], ["I PRIEDAS", "II PRIEDAS"]),
+    ("31992L0043lv.html", ["1. pants", "24. pants"], ["I PIELIKUMS", "II PIELIKUMS"]),
+    ("31992L0043mt.html", ["L-Artikolu 1", "L-Artikolu 24"], ["L-ANNESS I", "L-ANNESS II"]),
+    ("32004R0726ro.html", ["Articolul 1", "Articolul 90"], ["ANEXĂ"]),
+], ids=lambda x: x if isinstance(x, str) else None)
+def test_legacy_html_annexes_are_their_own_sections_not_the_last_article_s(name, arts, annexes):
+    """31992L0043 lt/lv/et/hu: "Article 24" held ~54K characters, Annexes I–VI
+    in it; mt found no article at all; 32004R0726 ro no annex."""
+    act = _read(name)
+    assert [a.num for a in act.articles] == arts
+    assert [a.title for a in act.annexes] == annexes
+    last = _sections(act)[arts[-1]]
+    assert not any(a in last for a in annexes)
 
 
 # ---- 3. a heading in a table cell -----------------------------------------------------------

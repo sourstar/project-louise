@@ -25,8 +25,8 @@ WHAT IS A HEADING (C11, docs/notes/eurlex-review-2026-11-21.md). Three
 dialects: the OJ's XHTML (fmx2xhtml, CONVEX: `oj-ti-art`, `oj-doc-ti`),
 the consolidated text's XHTML (`title-article-norm`, `title-annex-1`), and
 the legacy HTML and the PDF, read by the headings' own words in the 24
-languages (`_ARTICLE`, `_ANNEX`). In every dialect a heading is NOT an
-article or an annex where it stands
+languages (`_ARTICLE`, `_ANNEX`, the number first in et, fi, hu, lt, lv). In
+every dialect a heading is NOT an article or an annex where it stands
   - in a table cell: an amending act's quoted article in a list item (32018R0825
     en: 12 "articles" against 5), a correlation table's "Articolul 12";
   - in a quotation: its text opens a quote mark, or its class says so
@@ -60,24 +60,36 @@ _SKIP = frozenset({"script", "style"})
 #: an article's heading in the 24 languages, alone on its line (the legacy
 #: HTML and the PDF carry no class saying so): "Articolo 1", "Article 5",
 #: "Artikel 2", "Artículo 3", "Artigo 4.o", "Άρθρο 1", "Член 1", "Článek 1",
-#: "Članak 1", "Člen 1", "Artykuł 1", "Articolul 1", "Artikolu 1", "Airteagal 1",
-#: "Artikkel 1", and the forms that put the number first: "1 artikla",
-#: "1. cikk", "1. pants", "1 straipsnis"
+#: "Članak 1", "Člen 1", "Artykuł 1", "Articolul 1", "Artikolu 1" (and the
+#: legacy Maltese "L-Artikolu 1"), "Airteagal 1", "Artikkel 1", and the forms
+#: that put the number first: "1 artikla", "1. cikk", "1. pants", "1 straipsnis"
 _WORD_FIRST = (r"(?:Articolo|Article|Artikel|Artículo|Artigo|Άρθρο|Член|Článek|Článok|Članak|Člen|"
-               r"Artykuł|Articolul|Artikolu|Airteagal|Artikkel)")
-_NUM = r"\d+\s*(?:[.º°o]+|\.?o)?(?:\s*(?:bis|ter|quater|quinquies|sexies|[a-z]))?"
+               r"Artykuł|Articolul|(?:L-)?Artikolu|Airteagal|Artikkel)")
+#: an inserted article's mark, as the 24 languages write it (02016R1036-20180608
+#: in each, C11): "14a" (cs da de en et ga mt pl ro sk sl sv), "14α" (el),
+#: "14а" (bg, Cyrillic), "14 bis" (es fr it nl), "14.a" (hr), "14.o-A" (pt),
+#: and number first "14 a artikla" (fi), "14a. cikk" (hu), "14.a pants" (lv),
+#: "14a straipsnis" (lt)
+_LATIN = r"(?:bis|ter|quater|quinquies|sexies|septies|octies|novies|decies)"
+_LETTER = r"[a-zα-ωа-я]"
+_NUM = rf"\d+(?:{_LETTER}{{1,3}}|(?:\.?[º°o]|\.)?(?:\s*-?\s*(?:{_LATIN}|{_LETTER}))?)\.?"
+_NUM_FIRST = rf"\d+{_LETTER}{{0,3}}\s*\.?\s*(?:{_LETTER}\s*\.?\s*)?(?:artikla|cikk|pants|straipsnis)"
 #: the first article's French heading, "Article premier" / "Article 1er"
 #: (2026-11-14, LEMUR's dry run: missed, French article 1 was folded into the
 #: preamble — French found 0.593 of the articles), and a single article's
 #: heading in the languages that name it so: "Article unique", "Articolo
 #: unico", "Artículo único", "Artigo único"
 _ORDINAL = r"(?:Article\s+(?:premier|1er)|(?:Article|Articolo|Artículo|Artigo)\s+(?:unique|unico|único))"
-_ARTICLE = re.compile(rf"^(?:{_WORD_FIRST}\s+{_NUM}|{_ORDINAL}|\d+\s*\.?\s*(?:artikla|cikk|pants|straipsnis))\s*$",
-                      re.IGNORECASE)
-#: an annex's heading, alone on its line, after the articles
-_ANNEX = re.compile(r"^(?:ALLEGATO|ANNEX|ANHANG|ANEXO|ANNEXE|ΠΑΡΑΡΤΗΜΑ|ПРИЛОЖЕНИЕ|PŘÍLOHA|PRÍLOHA|"
-                    r"PRILOG|PRILOGA|ZAŁĄCZNIK|ANEXA|ANNESS|IARSCRÍBHINN|LISA|LIITE|MELLÉKLET|"
-                    r"PIELIKUMS|PRIEDAS|BIJLAGE|BILAG|BILAGA)\b.{0,40}$")
+_ARTICLE = re.compile(rf"^(?:{_WORD_FIRST}\s+{_NUM}|{_ORDINAL}|{_NUM_FIRST})\s*$", re.IGNORECASE)
+#: an annex's heading, alone on its line, after the articles: the word first
+#: ("ANNEX I", "ANEXĂ" — ro's single annex —, "L-ANNESS I" — legacy mt), or
+#: the number first, as et, hu, lv and lt write it ("I LISA", "I. MELLÉKLET",
+#: "Ia PIELIKUMS", "I PRIEDAS"; 31992L0043, 32003L0087, 02016R1036-20180608)
+_ANNEX_WORD = (r"(?:ALLEGATO|ANNEXE|ANNEX|ANHANG|ANEXO|ΠΑΡΑΡΤΗΜΑ|ПРИЛОЖЕНИЕ|PŘÍLOHA|PRÍLOHA|PRILOGA|PRILOG|"
+               r"ZAŁĄCZNIK|ANEXA|ANEXĂ|(?:L-)?ANNESS|IARSCRÍBHINN|LIITE|BIJLAGE|BILAGA|BILAG|"
+               r"LISA|MELLÉKLET|PIELIKUMS|PRIEDAS)")
+_ANNEX_NUM_FIRST = r"(?:[IVXLC]+|\d+)[a-zа-я]?\.?\s+(?:LISA|MELLÉKLET|PIELIKUMS|PRIEDAS)"
+_ANNEX = re.compile(rf"^(?:{_ANNEX_WORD}|{_ANNEX_NUM_FIRST})\b.{{0,40}}$")
 #: the marks a quotation opens with, in the 24 languages' typography
 #: (‘…’ en, «…» fr it es pt el, „…“ de bg cs hu lt pl ro sk sl, »…« da,
 #: ”…” fi sv, and the legacy HTML's straight quotes)
