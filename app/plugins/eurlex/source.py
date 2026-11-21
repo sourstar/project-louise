@@ -656,6 +656,49 @@ class EurlexSource:
             yield DocRef(source_id=self.source_id, native_id=str(nid), locator=locator,
                          mtime=mtime, size=size)
 
+    def superseded_ids(self, ref: DocRef) -> list[str]:
+        """The ids this unit could have had under another of its forms
+        (discovery retires a row held under one at this locator: one unit,
+        one document — 2026-11-21, the 37,695 EUR-Lex5 units held twice). A
+        unit is dated by its wrapper's OJ day where it holds one, by its
+        tree's work day otherwise: a unit that gained or lost its Formex
+        (a re-form into a package, a rendition replaced) moved between the
+        two. Both are computed; the other one is the answer."""
+        unit = Path(ref.locator)
+        celex, lang = unit.name, unit.parent.parent.name.partition("=")[2]
+        if lang not in LANGUAGES or _CONSOLIDATED.match(celex):
+            return []
+        try:
+            entries = unit_files(unit)
+        except OSError:
+            return []
+        days: set[str] = set()
+        try:
+            head = wrapper_head(celex, entries)
+            got = _PUB_DATE.search(head)
+            if got:
+                days.add(formex.iso(got.group(1).decode()))
+        except (formex.FormexError, OSError):
+            pass
+        for e in entries:
+            if e.name == rdf_mod.TREE_FILE:
+                try:
+                    with open(e.path, "rb") as f:
+                        d = from_tree.work_day(rdf_mod.loads(f.read()), celex)
+                except (OSError, ValueError):
+                    d = None
+                if d:
+                    days.add(d)
+        out = []
+        for d in sorted(x for x in days if x):
+            try:
+                nid = str(eli.expression_native_id(d, (celex, lang), version_key(celex)))
+            except ValueError:
+                continue
+            if nid != str(ref.native_id):
+                out.append(nid)
+        return out
+
     def ref_of_unit(self, unit: Path) -> DocRef | None:
         """The DocRef discovery gives one landed unit — its id from its day,
         CELEX, language and version, as `discover` computes it — or None

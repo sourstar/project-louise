@@ -3524,6 +3524,20 @@ def cmd_dev_eurlex_dump(a) -> int:
     return 0
 
 
+def cmd_dev_retire_superseded(a) -> int:
+    """`louise dev retire-superseded <collection> [--yes]`: a unit held under
+    two ids keeps the one it has now; the other rows are retired from every
+    index and tombstoned (app/hold/identity.py; 2026-11-21, EUR-Lex5's
+    37,695). A dry run without --yes; with it, the collection's write lock."""
+    from app.hold import identity
+    name, _ = col.resolve(a.root, a.collection)
+    if a.yes:
+        _take_write_lock(a.root, name, "louise dev retire-superseded", exit_code=2)
+    say = lambda m: print(m, file=sys.stderr)              # noqa: E731
+    _print({"retire_superseded": identity.retire_superseded(a.root, name, apply_it=a.yes, log=say)})
+    return 0
+
+
 def cmd_dev_rederive(a) -> int:
     """`louise dev rederive <collection> [--yes] [--again]`: every document's
     derived marks reset, so the worker parses each again at the collection's
@@ -8592,6 +8606,13 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--carry-from", dest="carry_from", default=None,
                    help="an earlier eurlex corpus: its units the dump did not give, linked in")
     p.set_defaults(fn=cmd_dev_eurlex_dump)
+    p = dverbs.add_parser("retire-superseded", help="a unit held under two ids keeps the one it has now; "
+                                                    "the others leave every index, tombstoned (one unit, "
+                                                    "one document); writes only with --yes")
+    root_arg(p)
+    p.add_argument("collection")
+    p.add_argument("--yes", action="store_true")
+    p.set_defaults(fn=cmd_dev_retire_superseded)
     p = dverbs.add_parser("rederive", help="every document derived again at the collection's parser "
                                            "(validity, catalogue, text index; its vectors kept): the "
                                            "A1c repair where no source snapshot is left; writes only with --yes")
