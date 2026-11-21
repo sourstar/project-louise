@@ -97,7 +97,15 @@ by digest whatever the build, and installs by name from the command line
 But it needs the owner on, and so reopens the second path architecture wants
 closed unless sign-in is on (inv. 8, R3). Both readings agree on now.
 
-## Decision (operator, 2026-11-21, in this session)
+## Decision (operator, 2026-11-21, later, via München)
+
+Add-ons **on again** at LocalAI's next restart (the NAS reboot), "to see what's
+available"; `LOCALAI_ADDONS_BACKEND_LIBRARY` stays `false`. Sign-in stays off,
+so the owner is again open to every caller on the LAN (Security, above), and
+our source build reads the mutable development add-on index (Voice
+`0.0.0-development`, signed by master). The switch-off below is superseded.
+
+### Superseded: switched off (operator, 2026-11-21, in this session)
 
 **Switched off**: `LOCALAI_ADDONS_ENABLED=false` and
 `LOCALAI_ADDONS_BACKEND_LIBRARY=false` in the LocalAI app's env (a node
