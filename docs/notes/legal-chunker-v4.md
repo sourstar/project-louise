@@ -5,9 +5,11 @@ cuts nothing on the node: `CHUNK_VERSION` and `SHARED_LAYER` stay 3, so every la
 cuts as before. Its abbreviations are CHECKED against the Style Guide and real EUR-Lex
 text in the 24 languages and corrected (2026-11-21,
 [legal-chunker-v4-abbreviations.md](legal-chunker-v4-abbreviations.md)). The measurement is built (tools/measure/legal_chunker_drift.py) and
-has not run on the node. The migration below is PROPOSED, not built. Moving the space
-is the operator's decision (P8 of docs/notes/eurlex-review-2026-11-21.md, on branch
-`ccr-bbc107f7-4at6fd`).
+has not run on the node. The carry the migration needs, `dev carry --rechunked`
+(amendment A1k, §4.3 step 4, §4.5), is BUILT and tested on fixtures (2026-11-21), never
+run on a node; it is a proposal for the architecture session. The creation side (§4.6)
+and the case's declaration are PROPOSED, not built. Moving the space is the operator's
+decision (P8 of docs/notes/eurlex-review-2026-11-21.md, on branch `ccr-bbc107f7-4at6fd`).
 
 ## 1. The defect
 
@@ -131,12 +133,18 @@ For each language, the tool reports:
 - the documents whose chunk texts differ;
 - **to embed:** the v4 chunks whose text the document does not already hold. This is
   the whole encoder cost of the migration;
-- **dropped:** the v3 chunks that v4 no longer cuts;
+- **dropped:** the v3 chunks whose text v4 no longer cuts;
 - the chunks that fell to `_windows` at v3 and at v4;
 - a few examples.
 
 It runs on the parse pool at the profile's cores. Run it in its own container with a
 memory cap: a child meets the worker's peaks on EUR-Lex5's largest units.
+
+Both counts go by the texts a document holds, not by how many times it holds them
+(fixed 2026-11-21): the tool first subtracted multisets, so a text v4 cuts twice where v3
+cut it once counted as one to embed, while the carry by chunk hash keeps it. The
+carry's dry run (§4.5) gives the same numbers on a fully embedded source
+(tests/hold/test_rechunk.py).
 
 Expected: "to embed" near 0 for Normattiva, legi_F and NeuRIS5, where only the new
 it/fr/de forms in paragraphs past the window move a cut. For EUR-Lex5 it is the
@@ -169,43 +177,77 @@ paragraphs past the window in the other 20 languages.
 | the licence acknowledgement | the terms text is the same (`recreate.carry_ack`) |
 
 Not carried:
-- the text index (it stores the old ids);
-- the chunk-hash holder table (it names the old ids);
+- the text index (it stores the old ids); its catalogue (`index/_catalog`, by `rowid`) is;
+- the chunk-hash holder table (it names the old ids): the re-key records the new ids of
+  every document it completes, as the embed stage would;
 - bundles and their evidence;
 - the gate's statements: the gate runs once for S4, and its four collections share that
   run (`statements_for_space`).
 
-### 4.3 The mechanism (proposed, not built)
+### 4.3 The mechanism (the carry BUILT, the rest proposed)
 
 This is a new case of new-collection.md: **F on a chunker version.** It is a
 re-creation (case F, `<name>.next`) whose Codex differs from its predecessor's only in
 its layers' chunker VERSION: the same chunker id, params, rule and input, and an empty
-`space_differences`. It is declared in app/hold/workflow.py, and it uses the existing
-steps except one new carry.
+`space_differences`. It is to be declared in app/hold/workflow.py (not built), and it
+uses the existing steps except one new carry (built).
 
 1. **Code.** `CHUNK_VERSION = 4`, so `SHARED_LAYER` and the three recipes state v4 (the
-   recipe tests hold them byte for byte). `_carry_cpu_reference` carries across spaces
-   whose `space_differences` is empty and whose calibration set is the same, not only
-   within one `space_id`.
-2. `hold collection new <plugin> --name <name> --re-create`, at v4.
+   recipe tests hold them byte for byte): at the move, not before (§4.6).
+   `_carry_cpu_reference` carries across spaces whose `space_differences` is empty, whose
+   layers differ by their version alone and whose calibration set is the same, not only
+   within one `space_id`: BUILT (A1k only; every other pair as before).
+2. `hold collection new <plugin> --name <name> --re-create`, at v4 (§4.6: the workflow
+   refuses it today).
 3. `hold records build <name>.next --records-from <name>`, then `hold snapshot create`.
-4. **New: `dev carry <name> <name>.next --rechunked` (amendment A1k; A1j is the
-   origin-run pin of 07 §7.3).**
-   - It refuses any other difference.
-   - It copies the manifest and empties the index stage's marks (`RELAYERED_MARKS`), so
-     the worker indexes each document again.
-   - It sets `embed_done` 1 → 0 and keeps `embed_version`, so `may_reuse` holds.
-   - It empties `SISTER_EMPTIED` (the chunk-hash holders, `chunk_verification`, bundles,
-     queues) and the control rows that speak of S3.
-   - It copies the vector table and re-pins it to S4.
+4. **`dev carry <name> <name>.next --rechunked` (amendment A1k, BUILT 2026-11-21; A1j is
+   the origin-run pin of 07 §7.3).** app/hold/carry.py (the refusals and the manifest),
+   app/hold/rechunk.py (the re-key), tests/hold/test_rechunk.py.
+   - It refuses, writing nothing: any record difference but the layers (and the facets);
+     layers that differ in more than their version, or not at all; any
+     `space_differences` (weights, dim, dtype, ctx, cut, pooling, normalisation, both
+     instructions, the query encoder, the epoch, the cleaning): nothing is crossed with
+     it; a target that is not empty; a source table pinned to another space or width;
+     a caller that does not hold BOTH write locks (the lock files name this process).
+     The checks are carry.py's own, extended, never a copy.
+   - It copies the manifest (the source keeps everything) and resets it as a relayered
+     sister's (`_sister_reset`, A1i): `embed_done` 1 → 0 and every `embed_version` 0
+     (nothing is held yet), every index mark and count (`RELAYERED_MARKS`), the
+     chunk-hash holders, `chunk_verification`, the queues, the bundles, the gate's and
+     the share paths' control rows, the validity sync marks. It copies `index/_catalog`
+     (a function of the same rows by `rowid`) and no other index file, the CPU
+     reference, the scan cursors and the collection file (embed "off"), and re-pins the
+     space to S4. Run again after it finished, it changes nothing: its reset would undo
+     the re-key's marks.
+   - **The re-key** walks the source's documents by rowid in windows from a cursor. Each
+     window is a task of the parse pool at the profile's cores. A child cuts every
+     in-scope document at the TARGET's layers as the stages cut it (parallel.py's
+     "chunks" kind) and returns each chunk's id, seq, chapter and BLAKE2b-128, never its
+     text. Then, a group of at most 8,192 new chunks at a time, the source's rows of the
+     group are read by `book_id` (`held_chunks`). A new chunk whose text hash is the
+     hash of a row the same document holds (never by position) takes that row's vector
+     bytes, its text and the record's `source_hash`, under its new id, seq and chapter,
+     with the target's validity columns. Only the rows of a document whose vectors the
+     embed stage would keep are read (`may_reuse`). The rows go through the embed
+     stage's own batch writer (`write_pending`).
+   - Then, in one BEGIN IMMEDIATE after the window's rows are durable: each document
+     whose every chunk carried and that was embedded in the source is marked embedded
+     (`mark_embedded`, its validity columns synced, the chunk hashes recorded in a
+     versioned collection, as the embed stage does), then the counts and the cursor.
+     Every other document stays not embedded at version 0. The embed stage keeps its
+     carried rows by (id, text) and embeds the rest (tested).
+   - Invariant 2: a window's range is committed before its first write. A stop or a kill
+     after a write and before the cursor leaves it: the next run deletes what the
+     window's documents hold in the target table (by `book_id`), then cuts the window
+     again. SIGTERM is honoured at a window boundary (exit 130). At the end the table
+     must hold exactly the rows carried, or `CarryMismatch` (exit 1).
 5. **The gate, once for S4,** on the node's Nemotron run.
 6. **The worker.**
    - The index stage cuts and indexes each document at v4, on CPU.
-   - The embed stage re-keys each document through the existing code. In
-     `upsert_book` no stored id matches a v4 id, so the document is rebuilt. Every
-     chunk whose text hash the document (or, in these versioned collections, another
-     version of it) already holds keeps that vector under its new id. Only the drift
-     tool's "to embed" chunks reach the encoder.
+   - The embed stage embeds the documents the re-key left not embedded. In `upsert_book`
+     every carried row matches its v4 id and text and is kept. Only the "to embed"
+     chunks reach the encoder, fewer where a versioned collection carries a text from
+     another version of the Work (`cross_carry`, 06 §6.3).
 7. **Before use.**
    - 0 rows whose id does not end in `:4`.
    - `hold check <name>.next --checks vectors-sample`.
@@ -246,11 +288,14 @@ Recommendation: A. If the operator says nothing, nothing moves until the drift n
 
 | choice | effect | pros | cons |
 |---|---|---|---|
-| **A. The embed stage's carry by chunk hash (recommended)** | each document's rows are deleted and re-added under the new ids | existing code (06 §6.3, `upsert_book`); exact for changed documents too | one Lance delete and add per document, as fast as the embed stage writes |
-| B. One Lance `update` of `id` for the documents the drift found identical, the embed stage for the rest | one rewrite of the table's fragments | probably faster on millions of documents | new code and a second path; needs the drift's per-document verdict kept |
+| A. The embed stage's carry by chunk hash | the table copied, each document's rows deleted and re-added under the new ids by `upsert_book` | existing code (06 §6.3); exact for changed documents too | one Lance delete and add per document, at the embed stage's pace and only while the encoder's lane serves it; a copied table of S3 ids pinned to S4 meanwhile |
+| B. One Lance `update` of `id` for the documents the drift found identical, the embed stage for the rest | one rewrite of the table's fragments | probably faster on millions of documents | an `update` sets no per-row value (`seq`, `chapter`); the rows v4 no longer cuts stay to delete; needs the drift's per-document verdict kept |
+| **C. The carry's own re-key, `dev carry --rechunked` (BUILT 2026-11-21, recommended)** | the target's table written fresh, every row whose text v4 cuts again under its new id; the embed stage gets only the rest | CPU only, no encoder lane; the same keep-by-chunk-hash rule as A; resumable by window; its dry run gives the numbers first; the documents it completes are marked embedded at once | new code (app/hold/rechunk.py, ~460 lines, and ~150 in carry.py); reads the source by `book_id` a group at a time, whose cost on the node is not measured |
 
-Recommendation: A, timed on a pilot of one window. B is used only if the comparison of
-finish times favours it (CLAUDE.md: take the shorter). If the operator says nothing: A.
+Recommendation: C, timed on a pilot window (`--dry-run` reports seconds for the cut,
+the reads and the writes). If the per-window read dominates, the standardised
+alternative is a sort-merge scan of the source's table, as `carry.keep_producer_scan`
+does (rechunk.py says it). If the operator says nothing: C.
 
 **M3 — the gate for S4.** This is the validation of the Nemotron run for the new space id.
 
@@ -260,6 +305,74 @@ finish times favours it (CLAUDE.md: take the shorter). If the operator says noth
 | B. Admit S3's statements in S4 | no run | no card time | a new trust rule for one gate run; a statement would speak for a space it never measured |
 
 Recommendation: A. If the operator says nothing: A.
+
+### 4.5 How to run the carry (built; not run on a node)
+
+After steps 1–3 (`<name>.next` made at v4, its parts from `<name>`'s record lines, its
+snapshot frozen), with the worker stopped for both (RULE 1; the carry needs both write
+locks: `louise node pause <name>` and `<name>.next`):
+
+```bash
+louise dev carry <name> <name>.next --rechunked             # the refusals and the plan; writes nothing
+louise dev carry <name> <name>.next --rechunked --dry-run   # the whole pass, per language: documents,
+                                                            # chunks, carried, to embed, dropped; seconds
+                                                            # of cut / read / write; writes nothing
+louise dev carry <name> <name>.next --rechunked --yes       # the manifest, the ack, then the re-key
+```
+
+- `--window N` sets the documents (rowids) a pool task cuts (500); `--processes N` asks
+  fewer processes than the profile allows. Run it under `deploy/supervise-pass.sh` in a
+  container with a memory cap: a child cuts a document as the index stage does and meets
+  its peaks (EUR-Lex5's largest units).
+- Stopped (SIGTERM, a kill, an OOM), the same `--yes` resumes: the carry says "carried
+  earlier", the re-key goes on from its cursor and first undoes a window stopped
+  between its write and its cursor.
+- The dry run's "to embed" is the drift tool's on a fully embedded source (§3). A source
+  whose documents are not all embedded gives more: their chunks are to embed either way.
+- Before use: `0` rows whose id does not end in `:4` (the target holds no other), the gate
+  for S4 (M3), `hold check <name>.next --checks vectors-sample`; the worker then indexes
+  every document and embeds the "to embed" chunks.
+- To time on the pilot: the index stage takes a document marked embedded with
+  `fts_done = 0` by its fresh selection (`_FTS_FRESH`, as for `dev reindex`), not by its
+  look-ahead chain, which reads `embed_done = 0` rows only (worker.py `_FTS_NEXT`). Most
+  documents of the four are marked embedded by the re-key, so their re-index runs
+  without the look-ahead.
+
+### 4.6 The creation side: what re-creating the four at v4 needs (PROPOSED, not built)
+
+What `SHARED_LAYER` binds today:
+- the `default_layers` of the legi, neuris and eurlex plugins: what `create` writes into a
+  Codex whose recipe states no `[[layers]]` (hold/template.py), and the layer
+  `layers.layers_for` gives such a collection;
+- the three recipes (legi, neuris, eurlex) state the same block with `version = 3`, held
+  to it byte for byte (tests/test_legi_recipe.py, test_eurlex_recipe.py);
+- case E, `--space-from <held>` (louise.py `_space_from_recipe`): the recipe's own layers,
+  else the plugin's default, must equal the held space's layers, and a recipe that states
+  a space must state that `space_id`. So once S4 is held, a collection created
+  `--space-from` an S4 collection is refused while `SHARED_LAYER` or its recipe says 3,
+  and a case-A creation from the recipe lands in S3, alone.
+- Normattiva is not among them: its recipe (normattiva-recipe.toml) is the original
+  DAR-legal-it collection's, its plugin's default is `akn_article`, and the node's
+  Normattiva was made by case J (`--sister-of normattiva --space-from legi`), its layer
+  copied from legi's space. No recipe makes its Codex.
+
+What the re-creation meets today: `hold collection new --re-create` refuses a recipe whose
+space moves (`recreate.refusal`: "A re-creation keeps the space"); its carry samples the
+predecessor's vectors by the NEW chunk ids (`recreate.sample`, `vectors_by_chunk_id`),
+which end in `:4` and find none; and it carries the table whole.
+
+The smallest change, at the move (one commit, on the operator's go):
+
+| choice | effect | pros | cons |
+|---|---|---|---|
+| **A. Derive from the predecessor: `--re-create --chunker-version 4` (recommended)** | the predecessor's Codex with every layer's chunker version set to 4, nothing else; case F admits a space that moves by `layers_version_only` alone, its sample looks a chunk's vector up by its text in the same document, and its carry is `--rechunked` | the same route for all four, Normattiva included; no recipe is read, so none can drift; the check is the carry's own | a new flag and ~40 lines in louise.py (`_recreate_check`, `_recreate_carry`); a second way to make a Codex in case F |
+| B. Recipes at v4: the three recipes' `version = 3` → `4`, case F admits A1k, a recipe for Normattiva's Codex written | the re-creations read their recipes, as case F does now | no new flag | Normattiva needs a recipe that does not exist (its Codex is derived); four files to keep equal to one layer |
+| C. Status quo: the hand route (`create` from an edited Codex, `records build --records-from`, `dev carry --rechunked`) | nothing changes in the workflow | nothing to build | each step typed by hand on the node, the case-F checks (the interim name, the swap) not run |
+
+In every choice, the same commit sets `CHUNK_VERSION = 4` (one line; `SHARED_LAYER`
+follows, the two tests that pin 3 move to 4) and the three recipes' `version = 4` (one
+line each), so that a legal collection created after the move lands in S4. Recommendation:
+A. If the operator says nothing: nothing moves until the drift numbers are in (M1), then A.
 
 ## 5. Conclusion
 
@@ -273,6 +386,8 @@ The rest is CPU:
 - a re-key of every vector row;
 - one gate run.
 
-What is still to build: the `--rechunked` carry (A1k), the relaxed CPU-reference carry,
-the case's declaration, and `CHUNK_VERSION = 4`. Each comes with its tests, and all of
-it waits for the drift numbers and the operator's go.
+Built (2026-11-21, tested, not run on a node): the `--rechunked` carry (A1k) and its
+dry run, the relaxed CPU-reference carry, the drift tool's counts by held text. Still to
+build: the case's declaration in the workflow (§4.6, A), and `CHUNK_VERSION = 4` with the
+three recipe lines. Each comes with its tests, and all of it waits for the drift numbers,
+architecture's review of A1k and the operator's go.

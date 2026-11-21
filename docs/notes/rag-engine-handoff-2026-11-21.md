@@ -70,5 +70,12 @@ Each one is proposed, not built generically. Architecture decides the API.
 ## 4. Open, on the same branch
 
 - C11: the XHTML/HTML reader's division headings, final formula, legacy footnotes.
-- P8, chunker v4: the shared legal space's ids carry the chunker version. Moving it re-keys every vector row of the four collections and their snapshots. docs/notes/legal-chunker-v4.md proposes the mechanism; that mechanism is architecture's to approve.
+- P8, chunker v4: the shared legal space's ids carry the chunker version. Moving it re-keys every vector row of the four collections and their snapshots. docs/notes/legal-chunker-v4.md §4 is the plan; architecture approves it.
+  - **Built for review, never run on a node:** amendment A1k (02 §2.4, marked PROPOSED), `louise dev carry <from> <to> --rechunked [--dry-run | --yes]`. The target's space differs from the source's only by the layers' chunker version. The manifest is copied as a relayered sister's (A1i reset). Then each window of documents is cut at the target's layers on the parse pool. A new chunk takes the vector bytes of a row the same document holds with the same text hash, never matched by position. The rows go through the embed stage's writer (`write_pending`). A complete document is marked embedded; the embed stage gets the rest.
+  - **Where:** app/hold/rechunk.py (the re-key) and app/hold/carry.py (the refusals, the copy, the CPU reference across an A1k pair); tests/hold/test_rechunk.py, 30 tests; notes §4.3 and §4.5. The drift tool now counts by held text, as the carry does; its dry run matches the carry's numbers (test).
+  - **For architecture to settle:**
+    - adopt A1k, or not;
+    - the per-window read of the source by `book_id` against a sort-merge scan (`keep_producer_scan`'s pattern), decided by a pilot's timings;
+    - Lance `merge_insert("id")` was not used: `id` carries no index, so it would read the whole target table every window. The resume deletes the stopped window by `book_id` instead;
+    - the creation side (§4.6): the recommendation is `--re-create --chunker-version 4`, deriving from the predecessor's Codex, because no recipe makes Normattiva's. `CHUNK_VERSION` and `SHARED_LAYER` stay 3 until the move.
 - Seen, not this review's: `tests/hold/test_block_origin.py` needs `indexed_bzip2`, and `test_process_signals` needs jinja2; neither is in this sandbox.

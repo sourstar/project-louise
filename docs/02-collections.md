@@ -756,6 +756,22 @@ anyone from the Codex alone (`admitted_spaces`). Its bundles pass T0 (03
 changes and nobody fetches them again; the carry moves `state/bundles` and
 `state/share` too and re-keys the coverage rows to the new collection
 instead of clearing them. Gutenberg's 43 GB of bundles are the case.
+*Amendment A1k (RULE 1, PROPOSED 2026-11-21 for the architecture session,
+not in force until approved; docs/notes/legal-chunker-v4.md §4.3):* the space
+may also differ by its layers' chunker VERSION, and only that way — the same
+records but for the layers, each layer the same chunker, parameters, rule and
+input, and the function equal (`space_differences` empty: the query
+instruction and the cut are not crossed with it). The layers are inside
+`space_id` and the version inside every chunk id, so no row keeps its id; but
+the same cleaned text has the same vector, the rule 06 §6.3 applies within a
+space when a record is cut again. So the target's manifest is the source's
+with every embed and index mark emptied (as A1i's relayered sister's), and
+every chunk the new version cuts whose text a row of the same document holds
+— by its chunk hash, never its position — takes that row's vector bytes under
+its new id (`louise dev carry --rechunked`); a document whose every chunk was
+kept is marked embedded, and every other chunk is the embed stage's. The gate
+runs once for the new space and `vectors-sample` passes before use, as for any
+carry. The shared legal space's `legal_article` 3 → 4 is the case.
 
 The **calibration** block is the contract for anyone who wants to
 contribute vectors. The calibration set is corpus-independent: a fixed
