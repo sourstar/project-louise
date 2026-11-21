@@ -36,6 +36,7 @@
     louise node health [<collection>] [--errors]
     louise dev genesis recheck <collection> | recount <collection> [--yes]
     louise dev carry <from> <to> [--copy] [--keep producer:ARCHIVE] [--rebuilt|--reconcile|--resign|--recut] [--yes]
+    louise dev carry <from> <to> --rechunked [--dry-run | --yes] [--window N] [--processes N]
 
 The previous tree (`python -m app.cli`, 07 §7.6) is retired (2026-10-08):
 every name it had that is still useful is one of these.
@@ -3611,6 +3612,11 @@ def cmd_dev_carry(a) -> int:
         for name in sorted({from_name, to_name}):
             _take_write_lock(a.root, name, "louise dev carry", exit_code=2)
     say = lambda m: print(m, file=sys.stderr)              # noqa: E731
+    if getattr(a, "rechunked", False):
+        return _dev_carry_rechunked(a, from_name, to_name, say)
+    if getattr(a, "dry_run", False):
+        raise CodexError("--dry-run is --rechunked's whole pass with nothing written; every other carry's "
+                         "dry run is the command without --yes")
     if getattr(a, "predecessor_rows", False):
         _print({"predecessor_rows": carry_mod.keep_predecessor_rows(a.root, from_name, to_name,
                                                                     apply=a.yes, log=say)})
@@ -3673,6 +3679,61 @@ def cmd_dev_carry(a) -> int:
         say(f"[carry] licence acknowledgement: {out['ack']}")
     _print(out)
     return 0
+
+
+#: what `dev carry --rechunked` takes nothing else with: each is another carry
+_NOT_WITH_RECHUNKED = ("keep", "rebuilt", "recut", "resliced", "unembedded", "reconcile", "resign", "scan",
+                       "predecessor_rows", "share_origin")
+
+
+def _dev_carry_rechunked(a, from_name: str, to_name: str, say) -> int:
+    """`louise dev carry <from> <to> --rechunked [--dry-run | --yes]` (A1k,
+    PROPOSED 2026-11-21; app/hold/rechunk.py): into a successor whose space
+    differs only by its layers' chunker version. Without --yes, the refusals
+    and the plan; with --dry-run, the whole pass — per language, the chunks
+    carried, to embed and dropped — writing nothing; with --yes (both write
+    locks, taken above), the manifest copied, the licence acknowledgement
+    carried, then the re-key, resumable, SIGTERM at a window boundary (exit
+    130). Always copies: the source keeps everything until its forget."""
+    import signal
+    import threading
+
+    from app.hold import carry as carry_mod, rechunk, recreate
+    others = [f"--{f.replace('_', '-')}" for f in _NOT_WITH_RECHUNKED if getattr(a, f, None)]
+    if others:
+        raise CodexError(f"--rechunked moves the layers' version alone: no {', '.join(others)} with it")
+    if getattr(a, "dry_run", False) and a.yes:
+        raise CodexError("--dry-run writes nothing and --yes writes: one or the other")
+    window = int(getattr(a, "window", None) or rechunk.WINDOW)
+    processes = getattr(a, "processes", None)
+    if getattr(a, "dry_run", False):
+        _print({"rechunked": rechunk.rekey(a.root, from_name, to_name, apply=False, window=window,
+                                           processes=processes, log=say)})
+        return 0
+    if not a.yes:
+        _print({"carry": carry_mod.carry(a.root, from_name, to_name, copy=True, rechunked=True, apply=False,
+                                         log=say)})
+        say("[carry] then the re-key writes every vector whose text the new version cuts again under its new "
+            "id; `--dry-run` counts it per language, `--yes` does both (A1k)")
+        return 0
+    stop = threading.Event()
+    before = {sig: signal.getsignal(sig) for sig in (signal.SIGTERM, signal.SIGINT)}
+    for sig in before:
+        signal.signal(sig, lambda *_: stop.set())
+    try:
+        out: dict = {"carry": carry_mod.carry(a.root, from_name, to_name, copy=True, rechunked=True,
+                                              apply=True, log=say)}
+        # the acknowledgement BEFORE the re-key, which uses the target's data (invariant 9)
+        _, to_codex = col.resolve(a.root, to_name)
+        out["ack"] = recreate.carry_ack(a.root, from_name, to_name, to_codex)
+        say(f"[carry] licence acknowledgement: {out['ack']}")
+        out["rechunked"] = rechunk.rekey(a.root, from_name, to_name, apply=True, window=window,
+                                         processes=processes, stop=stop, log=say)
+    finally:
+        for sig, handler in before.items():
+            signal.signal(sig, handler)
+    _print(out)
+    return 130 if stop.is_set() else 0
 
 
 def cmd_dev_pin_run(a) -> int:
@@ -8689,6 +8750,18 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--scan", action="store_true",
                    help="with --keep: one pass over the vector table instead of a walk by "
                         "document — for a table too large to visit document by document")
+    p.add_argument("--rechunked", action="store_true",
+                   help="into a successor whose space differs ONLY by its layers' chunker version (A1k, "
+                        "proposed): the manifest copied with every embed and index mark emptied, then every "
+                        "vector whose chunk text the new version cuts again written under its new id; the "
+                        "rest is the embed stage's. Always copies")
+    p.add_argument("--dry-run", action="store_true", dest="dry_run",
+                   help="with --rechunked: the whole pass, per language — chunks carried, to embed, "
+                        "dropped — and nothing written")
+    p.add_argument("--window", type=int, default=None, metavar="N",
+                   help="with --rechunked: documents (rowids) a task of the parse pool (default 500)")
+    p.add_argument("--processes", type=int, default=None, metavar="N",
+                   help="with --rechunked: fewer processes than the node profile allows, never more")
     p.add_argument("--yes", action="store_true", help="do it; without it, the checks and the plan")
     p.set_defaults(fn=cmd_dev_carry)
     p = dverbs.add_parser("pin-run", help="an unpublished collection whose dated-dump Codex names no run "

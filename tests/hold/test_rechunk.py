@@ -597,3 +597,25 @@ def test_a_move_another_mode_or_a_re_key_before_its_carry_is_refused(move):
     with Locks(root):
         with pytest.raises(CodexError, match="records no finished"):
             rechunk.rekey(root, "v3", "v4", apply=True, log=quiet)
+
+
+# ---- the command ----------------------------------------------------------------
+
+def test_the_command_plans_counts_then_carries(move, capsys):
+    from app import louise
+    root, *_ = move
+    before = _files(root / "v3", root / "v4")
+    assert louise.main(["dev", "carry", "v3", "v4", "--root", str(root), "--rechunked"]) == 0
+    assert json.loads(capsys.readouterr().out)["carry"]["apply"] is False
+    assert louise.main(["dev", "carry", "v3", "v4", "--root", str(root), "--rechunked", "--dry-run",
+                        "--window", "2"]) == 0
+    dry = json.loads(capsys.readouterr().out)["rechunked"]
+    assert _files(root / "v3", root / "v4") == before, "neither writes"
+    assert louise.main(["dev", "carry", "v3", "v4", "--root", str(root), "--rechunked", "--yes"]) == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out["rechunked"]["done"] and out["rechunked"]["totals"] == dry["totals"]
+    assert out["ack"] and out["carry"]["rechunked"] is True
+    assert louise.main(["dev", "carry", "v3", "v4", "--root", str(root), "--rechunked", "--keep",
+                        "producer:x"]) == 2
+    assert louise.main(["dev", "carry", "v3", "v4", "--root", str(root), "--rechunked", "--dry-run",
+                        "--yes"]) == 2
