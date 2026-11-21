@@ -78,7 +78,11 @@ fixed by the legal session now (operator, 2026-11-21).
 
 | 515b3dc9 (merge) | Q1–Q8: a kept tree serves a unit only as late as its listing; a deferred due unit waits its backoff, the listing runs; a failed fetch records the version that failed; the incomplete record flock'ed and appended to (426 → 0.1 ms a mark; 280 s → 1.8 s a listing); an unreadable dump ARCHIVE holds the pass back, an unreadable MEMBER leaves its unit to Cellar after the bulk; an unreadable `datadump.json` said; the build stops at a chunk boundary and resumes; a newer dump clears tried/fetched; one build of a corpus at a time | tests/acquire/test_eurlex_acquisition_review.py, test_fetch_backoff.py, test_common_engine.py |
 
-In progress: the engine (P1–P4, P6, P7, V6, O1), the XHTML/HTML reader (C11: divisions, final
+| merge of the engine branch | P1: a memory deferral is never an error, its peers written; P2: the pool's watchdog per part, answers kept, the pool back after 300 s on probation; P3: a package's parse size from its central directory, unpacked; P4: an abandoned look-ahead stops its parse; P6: a `mul` record leaves the groups its chunks no longer reach; P7: a stop honoured within 1 s at part boundaries (was ≈222 s); V6: the fts/embed marks written only where the validity columns did not move; O1: /data/logs/worker.log and web.log, rotating, 384 MiB at most each (the node runs app.worker_guard: the children's lines included; the web image rebuilt) | tests/test_worker_memory_deferral.py, test_parallel_watchdog.py, test_parallel_parse_size.py, test_fts_lookahead_stop.py, test_fts_mul_regroup.py, test_validity_marks.py, test_log_file.py |
+| 40ecdee9 | V3/V4 corrected on München's count: a statement dated by the first version that states it, an undated day (2999-01-01) none — legi_F's 161,627 and Normattiva's 28,418 were repetitions | tests/test_validity_changed_since.py |
+| 787261aa | the refs store's column check raced (found by the engine run) | tests/test_refs_store_open_race.py |
+
+In progress: the XHTML/HTML reader (C11: divisions, final
 formula, legacy footnotes), and P8, choice A: chunker v4 built behind its
 version and measured per collection first — chunk ids carry the version,
 so moving the shared legal space re-keys every vector row of the four
