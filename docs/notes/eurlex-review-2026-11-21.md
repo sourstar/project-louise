@@ -74,10 +74,11 @@ fixed by the legal session now (operator, 2026-11-21).
 | 9ca1f22c | V1, V2: every chain a version leaves is recomputed; V5: a version fetched on request read on the parse pool, bounded, only where the mode parses, never silent | tests/test_validity_chain_review.py, tests/ask/test_history_fact.py |
 | d39e62f1 | V3, V4: a held amendment ends the text it replaced (05 amended); held manifests re-chained once | tests/test_validity_changed_since.py; before deploy, `tools/measure/validity_changed_since.py` per manifest counts what the re-chain moves |
 
-| (this commit) | D1, choice B (decided unattended, the operator's "Run unattended"): an original starts at its stated entry into force, before its OJ publication where the notice says so (Art. 297(2) TFEU), never before the act's own date (`entry-into-force-before-adoption`) | tests/test_eurlex.py |
+| a7e0e8a8 | D1, choice B (decided unattended, the operator's "Run unattended"): an original starts at its stated entry into force, before its OJ publication where the notice says so (Art. 297(2) TFEU), never before the act's own date (`entry-into-force-before-adoption`) | tests/test_eurlex.py |
 
-In progress: the engine (P1–P4, P6, P7, V6, O1), acquisition (Q1–Q8, Q6
-narrowed to a whole archive), the XHTML/HTML reader (C11: divisions, final
+| 515b3dc9 (merge) | Q1–Q8: a kept tree serves a unit only as late as its listing; a deferred due unit waits its backoff, the listing runs; a failed fetch records the version that failed; the incomplete record flock'ed and appended to (426 → 0.1 ms a mark; 280 s → 1.8 s a listing); an unreadable dump ARCHIVE holds the pass back, an unreadable MEMBER leaves its unit to Cellar after the bulk; an unreadable `datadump.json` said; the build stops at a chunk boundary and resumes; a newer dump clears tried/fetched; one build of a corpus at a time | tests/acquire/test_eurlex_acquisition_review.py, test_fetch_backoff.py, test_common_engine.py |
+
+In progress: the engine (P1–P4, P6, P7, V6, O1), the XHTML/HTML reader (C11: divisions, final
 formula, legacy footnotes), and P8, choice A: chunker v4 built behind its
 version and measured per collection first — chunk ids carry the version,
 so moving the shared legal space re-keys every vector row of the four
