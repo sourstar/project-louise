@@ -130,7 +130,9 @@ def test_the_xhtml_act_is_read_in_articles_and_annexes(renditions):
     doc = _doc(renditions, "32010D0699")
     labels = [l for l, _ in doc.sections]
     assert doc.extra["form"] == "xhtml" and doc.language == "it"
-    assert labels[:3] == ["Preamble", "Articolo 1", "Articolo 2"]
+    # each recital its own section, as Formex's (C11, eurlex-review-2026-11-21)
+    assert labels[:6] == ["Preamble"] + [f"considerando quanto segue ({i})" for i in (1, 2, 3)] + \
+        ["Articolo 1", "Articolo 2"]
     assert "Articolo 13 — Entrata in vigore" in labels[-3] and labels[-2:] == ["ALLEGATO I", "ALLEGATO II"]
     assert sum(1 for l in labels if l.startswith("Progetto di DECISIONE")) == 14, \
         "the annexed draft's 13 articles and its heading, under its title"

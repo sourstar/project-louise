@@ -8,10 +8,14 @@ the listing asked for fmx4 alone. Invariant 11: the act is taken in the best
 form the origin has (cellar.FORMS), never left out.
 
 WHAT IS KEPT, every word and every attribute:
-  - the TEXT in sections in reading order: a preamble, each article (an
-    article heading opens one), each annex (a document title after the
-    articles), and the rest where it falls. Nothing is dropped. A heading the
-    reader does not recognise leaves its words in the section before it;
+  - the TEXT in sections in reading order: a preamble, each numbered recital
+    (as formex `_recitals`: "Whereas (1)"), each article (an article heading
+    opens one), each annex (a document title after the articles), and the
+    rest where it falls. Nothing is dropped. A heading the reader does not
+    recognise leaves its words in the section before it;
+  - the FOOTNOTES (the XHTML's `note`, the consolidated text's `footnote`)
+    out of the text and into the record's notes, each with the section that
+    calls it — where formex.Collect puts a Formex NOTE;
   - the MARKUP: every element's attributes in document order (`markup`,
     as formex.attributes_of keeps Formex's);
   - the HEAD: the title and every <meta> (legacy HTML's Dublin Core: the
@@ -22,11 +26,12 @@ WHAT IS KEPT, every word and every attribute:
 Script and style contents are chrome, not the act (invariant 11 (a)).
 
 WHAT IS A HEADING (C11, docs/notes/eurlex-review-2026-11-21.md). Three
-dialects: the OJ's XHTML (fmx2xhtml, CONVEX: `oj-ti-art`, `oj-doc-ti`),
-the consolidated text's XHTML (`title-article-norm`, `title-annex-1`), and
-the legacy HTML and the PDF, read by the headings' own words in the 24
-languages (`_ARTICLE`, `_ANNEX`, the number first in et, fi, hu, lt, lv). In
-every dialect a heading is NOT an article or an annex where it stands
+dialects: the OJ's XHTML (fmx2xhtml, CONVEX: `oj-ti-art`, `oj-doc-ti`,
+`oj-note`), the consolidated text's XHTML (`title-article-norm`,
+`title-annex-1`, `footnote`), and the legacy HTML and the PDF, read by the
+headings' own words in the 24 languages (`_ARTICLE`, `_ANNEX`, the number
+first in et, fi, hu, lt, lv). In every dialect a heading is NOT an article
+or an annex where it stands
   - in a table cell: an amending act's quoted article in a list item (32018R0825
     en: 12 "articles" against 5), a correlation table's "Articolul 12";
   - in a quotation: its text opens a quote mark, or its class says so
@@ -46,7 +51,7 @@ node's (PDFium, Chrome's engine).
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from html.parser import HTMLParser
 from typing import Any
 
@@ -90,6 +95,9 @@ _ANNEX_WORD = (r"(?:ALLEGATO|ANNEXE|ANNEX|ANHANG|ANEXO|ΠΑΡΑΡΤΗΜΑ|ПРИ
                r"LISA|MELLÉKLET|PIELIKUMS|PRIEDAS)")
 _ANNEX_NUM_FIRST = r"(?:[IVXLC]+|\d+)[a-zа-я]?\.?\s+(?:LISA|MELLÉKLET|PIELIKUMS|PRIEDAS)"
 _ANNEX = re.compile(rf"^(?:{_ANNEX_WORD}|{_ANNEX_NUM_FIRST})\b.{{0,40}}$")
+#: a numbered recital's number, alone (an XHTML table's first cell) or
+#: opening its paragraph (legacy HTML): "(12)"
+_RECITAL = re.compile(r"^\((\d+)\)(?:\s+\S.*)?$")
 #: the marks a quotation opens with, in the 24 languages' typography
 #: (‘…’ en, «…» fr it es pt el, „…“ de bg cs hu lt pl ro sk sl, »…« da,
 #: ”…” fi sv, and the legacy HTML's straight quotes)
@@ -104,6 +112,7 @@ _ROMAN = {"I": 1, "V": 5, "X": 10, "L": 50, "C": 100}
 #: the classes by dialect (the OJ's XHTML with "oj-" off, the consolidated text's)
 _ART_CLS = {"oj": "ti-art", "cons": "title-article-norm"}
 _STI_CLS = {"oj": "sti-art", "cons": "stitle-article-norm"}
+_NOTE_CLS = frozenset({"note", "footnote"})
 _QUOTED_CLS = "quotation-ti"
 
 
@@ -128,6 +137,8 @@ class _Line:
     classes: frozenset = frozenset()          # every class of that block, "oj-" off
     blocks: tuple = ()                        # the open blocks, outermost first: (serial, tag, id)
     cell: bool = False                        # inside a table cell
+    anchors: tuple = ()                       # the <a id|name> it holds
+    links: tuple = ()                         # the "#…" targets of its <a href>
 
     @property
     def path(self) -> tuple[int, ...]:
@@ -152,6 +163,8 @@ class _Reader(HTMLParser):
         self.title: list[str] = []
         self.serial = serial
         self._buf: list[str] = []
+        self._anchors: list[str] = []
+        self._links: list[str] = []
         # the open blocks: (tag, first class, every class, serial, id)
         self._classes: list[tuple[str, str, frozenset, int, str]] = []
         self._skip = 0
@@ -166,7 +179,9 @@ class _Reader(HTMLParser):
         if text:
             cls, classes = self._cls()
             self.lines.append(_Line(cls, text, classes, tuple((s, t, i) for t, _c, _cs, s, i in self._classes),
-                                    any(t in _CELL for t, *_ in self._classes)))
+                                    any(t in _CELL for t, *_ in self._classes),
+                                    tuple(self._anchors), tuple(self._links)))
+            self._anchors, self._links = [], []
 
     def handle_starttag(self, tag, attrs):
         a = {k: (v if v is not None else "") for k, v in attrs}
@@ -178,6 +193,10 @@ class _Reader(HTMLParser):
             self.metas.append(a)
         if tag == "title":
             self._in_title = True
+        if tag == "a":
+            self._anchors += [v for k in ("id", "name") if (v := a.get(k))]
+            if a.get("href", "").startswith("#"):
+                self._links.append(a["href"][1:])
         if tag in _BLOCK:
             self._flush()
             if tag not in ("br", "hr"):
@@ -222,6 +241,8 @@ class _Read:
     sections: list[tuple[str, str]]
     articles: list[Article]
     annexes: list[Annex]
+    recitals: list[tuple[str, str]] = field(default_factory=list)
+    notes: list[dict] = field(default_factory=list)
 
 
 def _dialect(lines: list[_Line]) -> str:
@@ -237,15 +258,22 @@ def _dialect(lines: list[_Line]) -> str:
 class _Layout:
     """The sections being laid out, line by line (`_read`)."""
 
-    def __init__(self, dialect: str) -> None:
-        self.dialect = dialect
+    def __init__(self, dialect: str, recitals: bool) -> None:
+        self.dialect, self.recitals = dialect, recitals
         self.preamble: list[Any] = ["Preamble", []]
         self.sections: list[list[Any]] = [self.preamble]
         self.owners: list[tuple[Any, list[Any]]] = []        # (article or annex, its section)
+        self.recs: list[list[Any]] = []                     # the recitals' sections
+        self.notes: list[tuple[dict, tuple, list[Any]]] = []  # (note, its back links, where it stands)
+        self.placed: dict[str, list[Any]] = {}              # an anchor -> the section its line went to
         self.kind = "preamble"
         self.has_article = False            # an annex heading comes after an article
         self.partition = ""
         self.container: int | None = None   # the open article heading's own parent (0: the document)
+        self.rec: list[Any] | None = None   # the open recital: [its section, its element (None: a paragraph)]
+        self.expected = 1                   # the next recital's number
+        self.init = ""                      # the line before the first recital ("Whereas:")
+        self.cur = self.preamble            # the section the last line went to
         self.quote: str | None = None       # words: a quotation a quoted "article" / "annex" heading opened
         self.quoted: tuple[int, str] | None = None  # the number of its last heading
 
@@ -280,17 +308,36 @@ class _Layout:
         return article and free and not nested, annex and free and not nested and self.has_article
 
     def after(self, line: _Line) -> None:
+        for a in line.anchors:
+            self.placed[a] = self.cur
         if self.quote and _CLOSING.search(line.text):
             self.quote = None
 
     # ---- where it goes ----------------------------------------------------------------------
 
+    def note(self, line: _Line, follows_note: bool) -> None:
+        if self.notes and follows_note and not (line.anchors or line.links):
+            self.notes[-1][0]["text"] += "\n" + line.text        # the same note's next line
+            return
+        self.notes.append(({"section": "", **({"@": {"id": line.anchors[0]}} if line.anchors else {}),
+                            "text": line.text}, line.links, self.cur))
+
     def article(self, line: _Line) -> None:
+        rec = self.rec
+        if self.kind == "preamble" and rec is not None and rec[1] is None:
+            # a paragraph's recital runs to the next: the enacting formula
+            # ("HAVE ADOPTED THIS DIRECTIVE:", its last line ending so) and the
+            # headings after it (32004R0726's "TITLE I") are the preamble's
+            body = rec[0][1]
+            j = next((i for i in range(len(body) - 1, 0, -1) if body[i].endswith(":")), None)
+            if j is not None:
+                self.preamble[1] += body[j:]
+                del body[j:]
         label = f"{self.partition} › {line.text}" if self.partition else line.text
         self.sections.append([label, []])
         self.owners.append((Article(identifier=None, num=line.text, title="", partition=self.partition, body=""),
                             self.sections[-1]))
-        self.kind, self.container = "article", line.parent
+        self.kind, self.container, self.rec, self.cur = "article", line.parent, None, self.sections[-1]
         self.has_article = True
 
     def subtitle(self, line: _Line) -> bool:
@@ -312,12 +359,57 @@ class _Layout:
             self.owners.append((Annex(file=None, title=line.text, body=""), self.sections[-1]))
         # the articles that follow belong to it (an annexed act's own articles)
         self.partition = self.sections[-1][0]
-        self.kind, self.container = "annex", None
+        self.kind, self.container, self.rec, self.cur = "annex", None, None, self.sections[-1]
         if self.quote == "article":
             self.quote = None
 
+    def in_preamble(self, line: _Line) -> None:
+        text, rec = line.text, self.rec
+        if not self.recitals:
+            self.preamble[1].append(text)
+            self.cur = self.preamble
+            return
+        if rec is not None and rec[1] is not None and rec[1] not in line.path:
+            rec = self.rec = None                       # its element closed
+        m = _RECITAL.match(text)
+        rct = next((s for s, _t, i in reversed(line.blocks) if i.startswith("rct_")), None)
+        # a recital starts: CONVEX's `rct_N` element; else the next number, as
+        # a table row's first cell (the row is the recital) or opening a
+        # paragraph outside any open recital's element (it runs to the next)
+        starts, element = False, None
+        if rct is not None and (rec is None or rec[1] != rct):
+            starts, element = True, rct
+        elif m and int(m[1]) == self.expected and not (rec is not None and rec[1] is not None):
+            starts = True
+            element = next((s for s, t, _i in reversed(line.blocks) if t == "tr"), None) if line.cell else None
+        if starts:
+            if not self.recs:
+                last = self.preamble[1][-1] if self.preamble[1] else ""
+                self.init = last if last.endswith(":") else ""
+            num = f"({m[1]})" if m else ""
+            if m:
+                self.expected = int(m[1]) + 1
+            label = " ".join(x for x in (self.init.rstrip(":").strip(), num) if x) or "Recital"
+            self.sections.append([label, [text]])
+            self.recs.append(self.sections[-1])
+            self.rec, self.cur = [self.sections[-1], element], self.sections[-1]
+        elif rec is not None:
+            body = rec[0][1]
+            if len(body) == 1 and _RECITAL.match(body[0]) and " " not in body[0]:
+                body[0] = f"{body[0]} {text}"           # "(1)" | its text: one line, as Formex's NP
+            else:
+                body.append(text)
+            self.cur = rec[0]
+        else:
+            self.preamble[1].append(text)
+            self.cur = self.preamble
+
     def body(self, line: _Line) -> None:
-        (self.preamble if self.kind == "preamble" else self.sections[-1])[1].append(line.text)
+        if self.kind == "preamble":
+            self.in_preamble(line)
+        else:
+            self.sections[-1][1].append(line.text)
+            self.cur = self.sections[-1]
 
     # ---- the result -------------------------------------------------------------------------
 
@@ -325,15 +417,33 @@ class _Layout:
         for owner, sec in self.owners:
             owner.body = "\n".join(sec[1])
         out = [(label, "\n".join(body)) for label, body in self.sections if body or label != "Preamble"]
+        notes = [{**note, "section": next((self.placed[x] for x in links if x in self.placed), stands)[0]}
+                 for note, links, stands in self.notes]
         return _Read(out, [o for o, _ in self.owners if isinstance(o, Article)],
-                     [o for o, _ in self.owners if isinstance(o, Annex)])
+                     [o for o, _ in self.owners if isinstance(o, Annex)],
+                     [(s[0], "\n".join(s[1])) for s in self.recs], notes)
 
 
-def _read(lines: list[_Line]) -> _Read:
-    """The act's sections, articles and annexes from its lines in reading
-    order (module docstring: WHAT IS A HEADING)."""
-    lay = _Layout(_dialect(lines))
+def _read(lines: list[_Line], *, recitals: bool = True) -> _Read:
+    """The act's sections, articles, annexes, recitals and footnotes from its
+    lines in reading order (module docstring: WHAT IS A HEADING).
+
+    RECITALS (`recitals`): in the preamble, each numbered recital is a
+    section of its own, labelled as formex `_recitals` labels it — the
+    preamble's line before the first ("Whereas:") and the number: "Whereas
+    (1)" — where the XHTML marks one (CONVEX's `rct_N`, a table row whose
+    first cell is "(1)") or, in legacy HTML, a paragraph opens with the next
+    number. What follows a recital outside its element ("HAVE ADOPTED THIS
+    REGULATION:") is the preamble's again. FOOTNOTES go to the notes, each
+    with the section its call stands in (the note's back link)."""
+    lay = _Layout(_dialect(lines), recitals)
+    follows_note = False
     for line in lines:
+        if line.classes & _NOTE_CLS:
+            lay.note(line, follows_note)
+            follows_note = True
+            continue
+        follows_note = False
         article, annex = lay.heads(line)
         if article:
             lay.article(line)
@@ -348,8 +458,9 @@ def _read(lines: list[_Line]) -> _Read:
 
 def _sections(lines: list) -> tuple[list[tuple[str, str]], list[Article], list[Annex]]:
     """`(sections, articles, annexes)` from lines in reading order — `_Line`s,
-    or `(class, text)` pairs (tools/chunker_languages.py)."""
-    r = _read([x if isinstance(x, _Line) else _Line(x[0], x[1]) for x in lines])
+    or `(class, text)` pairs (tools/chunker_languages.py) — recitals left in
+    the preamble, as a PDF's (`_read` reads the rest)."""
+    r = _read([x if isinstance(x, _Line) else _Line(x[0], x[1]) for x in lines], recitals=False)
     return r.sections, r.articles, r.annexes
 
 
@@ -357,8 +468,8 @@ def _act(root: str, body_file: str, lang: str, title: str, note, read: _Read,
          meta: dict, markup: dict) -> Act:
     act = Act(root=root, body_file=body_file, wrapper_file="", language=lang, title=title,
               date=note.date_document, publication_date=note.date_publication, consleg={},
-              base_celex=None, recitals=[], articles=read.articles, annexes=read.annexes,
-              meta=meta, notes=[], references=[], modifications=[], instructions=[], wrapper=None,
+              base_celex=None, recitals=read.recitals, articles=read.articles, annexes=read.annexes,
+              meta=meta, notes=read.notes, references=[], modifications=[], instructions=[], wrapper=None,
               markup=markup, rendered_sections=read.sections)
     return act
 
@@ -403,6 +514,9 @@ def parse_pdf(files: dict[str, bytes], names: list[str], *, lang: str, root: str
                 lines += [_Line("", norm(t)) for t in text.splitlines() if norm(t)]
         finally:
             doc.close()
-    read = _read(lines)
+    # a PDF's lines are its pages' printed lines, each page's footnotes among
+    # them: no element bounds a recital there, and its recitals stay in the
+    # preamble (as before C11)
+    read = _read(lines, recitals=False)
     title = note.expression_title or ""
     return _act(root, names[0], lang, title, note, read, {"pdf": info, "form": "pdf"}, {}), blank

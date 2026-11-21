@@ -8,7 +8,9 @@ a few elements (tests/fixtures/eurlex/rendition/, README: which, and how):
      "ANEXĂ", legacy Maltese "L-Artikolu"/"L-ANNESS", and an inserted
      article's mark in every language ("14a. cikk", "14.o-A", "Член 14а");
   3. a heading in a table cell (a correlation table's "Articolul 12") is not
-     an article."""
+     an article;
+  4. the footnotes go to the record's notes, with the section that calls
+     them, and each numbered recital is a section — as formex.py reads them."""
 from __future__ import annotations
 
 import re
@@ -200,3 +202,69 @@ def test_without_classes_a_cell_still_heads_nothing():
     assert [a.num for a in act.articles] == ["Articolul 1", "Articolul 14a", "Articolul 23a", "Articolul 24",
                                              "Articolul 25"]
     assert [a.title for a in act.annexes] == ["ANEXA I", "ANEXA II"]
+
+
+# ---- 4. footnotes and recitals --------------------------------------------------------------
+
+def test_footnotes_are_the_record_s_notes_with_the_section_that_calls_them():
+    """32016R0679 en: all 21 footnotes were in "Article 99". As formex.Collect
+    does for a NOTE: out of the text, into `notes`, with its caller's section
+    (the footnote's back link to its call); a quoted act's own footnote
+    ("(*4)") with the article quoting it."""
+    act = _read("32018R0825en.html")
+    called = {n["text"].split(")")[0] + ")": n["section"] for n in act.notes}
+    assert called == {"(1)": "Preamble", "(2)": "Whereas (1)", "(3)": "Whereas (1)", "(*4)": "Article 2"}
+    assert act.notes[1]["@"] == {"id": "ntr1-L_2018143EN.01000101-E0001"}
+    text = "\n".join(t for _, t in act.rendered_sections)
+    assert "Position of the European Parliament of 16 April 2014" not in text
+    assert all(n["text"] not in text for n in act.notes)
+
+
+def test_a_consolidated_text_s_footnotes_are_notes_too():
+    act = _read("02016R1036-20180608ro.html")
+    assert [(n["section"], n["text"]) for n in act.notes] == [
+        ("Articolul 23a — Exercitarea delegării de competențe", "( 7 ) JO L 123, 12.5.2016, p. 1.")]
+    assert "JO L 123" not in _sections(act)["ANEXA II"]
+
+
+def test_each_numbered_recital_is_a_section_labelled_as_formex_labels_it():
+    """32016R0679 en: its 173 recitals were one "Preamble" section; Formex
+    gives one each, "Whereas (1)" … The enacting formula after them is the
+    preamble's."""
+    act = _read("32018R0825en.html")
+    labels = [label for label, _ in act.rendered_sections]
+    assert labels[:4] == ["Preamble", "Whereas (1)", "Whereas (26)", "Article 1"]
+    assert act.recitals == [(label, _sections(act)[label]) for label in ("Whereas (1)", "Whereas (26)")]
+    assert _sections(act)["Whereas (26)"] == \
+        "(26) Regulations (EU) 2016/1036 and (EU) 2016/1037 should therefore be amended accordingly,"
+    preamble = _sections(act)["Preamble"]
+    assert preamble.endswith("Whereas:\nHAVE ADOPTED THIS REGULATION:")
+
+
+def test_the_old_xhtml_s_recitals_are_its_table_rows():
+    """fmx2xhtml 3.2 (32010D0699 it, 2012): a recital is a table row, "(1)"
+    its first cell; "HA ADOTTATO LA PRESENTE DECISIONE:" after them."""
+    xhtml = FIX / "xhtml" / "32010D0699"
+    names = sorted(p.name for p in xhtml.glob("*.html"))
+    act = rendition.parse_html({n: (xhtml / n).read_bytes() for n in names}, names, lang="it", root="ACT",
+                               note=NOTE)
+    assert [label for label, _ in act.recitals] == [f"considerando quanto segue ({i})" for i in (1, 2, 3)]
+    assert act.recitals[0][1].startswith("(1) L’articolo 70 dell’accordo euromediterraneo")
+    assert dict(act.rendered_sections)["Preamble"].endswith("HA ADOTTATO LA PRESENTE DECISIONE:")
+
+
+def test_legacy_html_recitals_run_to_the_next_and_the_enacting_formula_is_the_preamble_s():
+    """32004R0726 ro (legacy HTML): "(1) …" paragraphs after "întrucât:";
+    the formula and the title heading before Article 1 go back to the preamble."""
+    act = _read("32004R0726ro.html")
+    assert [label for label, _ in act.recitals] == ["întrucât (1)", "întrucât (2)"]
+    assert "ADOPTĂ" not in act.recitals[-1][1]
+    assert _sections(act)["Preamble"].endswith("ADOPTĂ PREZENTUL REGULAMENT:\nTITLUL I\n"
+                                               "DEFINIȚII ȘI DOMENIU DE APLICARE")
+
+
+def test_a_pdf_s_recitals_stay_in_its_preamble():
+    lines = [rendition._Line("", t) for t in ("considerando quanto segue:", "(1) Ai sensi della direttiva",
+                                               "(2) La Commissione", "Articolo 1", "testo")]
+    sections, _articles, _annexes = rendition._sections(lines)
+    assert [label for label, _ in sections] == ["Preamble", "Articolo 1"]
