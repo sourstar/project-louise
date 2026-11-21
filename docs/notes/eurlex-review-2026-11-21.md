@@ -65,6 +65,43 @@ fixed by the legal session now (operator, 2026-11-21).
 | O1 | deploy | the worker keeps no log file; every deploy and the panic erased it | the 11-19/20 evidence lost | A |
 | D1 | eurlex start of validity | 129,887 acts state an entry into force before their OJ publication (a decision takes effect on notification, Art. 297(2) TFEU); validity starts at the publication | in-force filter wrong between notification and publication | the operator's decision |
 
+## Fixed (branch `ccr-bbc107f7-4at6fd`)
+
+| Commit | Findings | Held by |
+|---|---|---|
+| b54a82ae | C2–C10: the Formex reader | tests/test_eurlex_coverage.py — 175/175 acts of 14 shapes, every fragment and every CLG mark (before: 43 acts, 7,059 fragments lost) |
+| 8c8f03de | C1, P5: one unit, one document; the 37,695 repaired by `louise dev retire-superseded` | tests/test_eurlex_identity.py, tests/test_discovery_language_move.py |
+| 9ca1f22c | V1, V2: every chain a version leaves is recomputed; V5: a version fetched on request read on the parse pool, bounded, only where the mode parses, never silent | tests/test_validity_chain_review.py, tests/ask/test_history_fact.py |
+| d39e62f1 | V3, V4: a held amendment ends the text it replaced (05 amended); held manifests re-chained once | tests/test_validity_changed_since.py; before deploy, `tools/measure/validity_changed_since.py` per manifest counts what the re-chain moves |
+
+In progress: the engine (P1–P4, P6, P7, V6, O1), acquisition (Q1–Q8) and
+the XHTML/HTML reader (C11). Waiting on the operator: D1 (start of validity
+before publication) and P8 (chunker v4 for Greek and Cyrillic: a space
+change).
+
+## The restart (after every row is fixed and deployed)
+
+Each step is München's, on the legal session's word, reported every 5
+minutes; a step whose numbers are wrong stops the next.
+
+1. Read-only first: `tools/measure/validity_changed_since.py` on every legal
+   manifest (what the re-chain moves); `tools/measure/eurlex_units_check.py`
+   on EUR-Lex5's corpus with `--list-included` (the problem list's units).
+2. `louise dev retire-superseded EUR-Lex5` (dry run), then `--yes`: the
+   duplicates retired (expected 37,695).
+3. EUR-Lex5's TOML `acquire_enabled = false` (desired state: nothing
+   fetched, no dump build) — then the collection unpaused, still unserved.
+4. The PROBLEM SLICE first, `louise dev rederive EUR-Lex5 --ids problem.txt
+   --yes`: the 1,909 indexed with no chunk, every corrigendum (`CORR`
+   bodies), every unit the units check counts not its name (swapped,
+   shifted, misnamed), every Formex package, the 200 largest units, and the
+   kept row of each retired duplicate. Checked when drained: 0 chunkless,
+   0 errors but the stated refusals, the coverage of a sample read.
+5. Then the rest: `--ids rest.txt` (every other live uid), never the whole
+   collection again (RULE 1: the slice is not derived twice).
+6. Only then `acquire_enabled = true` (the re-forms, the per-unit pass), and
+   EUR-Lex5 served again.
+
 ## Order
 
 1. The reader (C2–C11) with a COVERAGE TEST: every text fragment of the
