@@ -87,11 +87,11 @@ fixed by the legal session now (operator, 2026-11-21).
 | 63c1fa2c (merge) | C11, the XHTML/HTML reader: quoted headings, table cells and nested elements never articles; number-first annexes and lettered articles in the 24 languages; footnotes to the notes, numbered recitals as sections; division headings as label prefixes (labels identical to Formex 3 → 10 of 10 dual-form acts); the final formula and signatures a "Final" section; legacy footnotes filed under the section that calls them (1,349 notes in 126 of 128 acts); legacy amending acts' articles 54 → 56 of 57 against Formex (the last one is the origin's: 31998R1191's item holds the next act); the flaky dump-build test was its own zip timestamps | tests/test_eurlex_rendition.py (coverage on 374 real items) |
 | 24d90986 | an article's label read in the 24 languages, its number in one spelling ("14 bis" = "14α" = "14а" = "14a") | tests/ask/test_article_citations.py |
 | f4b55b53 | test_mirrors isolated from the process-wide transfer manager | — |
+| 873a49f7 | the act and its article cited in the 24 languages (en fr de it es pt nl before), each language's forms read in five acts' own text in it (from Cellar): every language reads ≥ 0.96 of English's act citations and ≥ 0.94 of its (act, article) pairs on those acts; the article nearest the act (a heading's "Articolo 84" was taken for the sentence's article 2, every language); per question 15.3 → 17.2 µs mean, per act at indexing 14.1 → 7.1 ms. Not read, in any language, before or after: an act coordinated after another ("Regulations (EU) 2016/1036 and (EU) 2016/1037", ~6 % of the acts' runs), a list's earlier articles. The 17 languages' documents get their cited acts' tags (doc_keys, local) at their next text-index pass: the re-derivation below | tests/ask/test_article_citations_24.py (215 real citations, 72 negatives, a Hungarian and a Greek question pinned) |
 
 NeuRIS's 0 amendments, checked (München, read-only, 2026-11-21): 0 of 5,536 records hold `active_modifications`, and 0 of the corpus's 15,785 LegalDocML files (zip members included) holds `activeModifications`, `passiveModifications`, `textualMod` or an `analysis` block (control: `akn:meta` in 15,785 of 15,785, `akn:lifecycle` in 5,551). The test-phase origin states none; the reader drops nothing.
 
-In progress: the citation grammar in the 24 languages (the act and its
-article in a question: today en fr de it es pt nl), and P8, choice A: chunker v4 built behind its
+In progress: P8, choice A: chunker v4 built behind its
 version and measured per collection first — chunk ids carry the version,
 so moving the shared legal space re-keys every vector row of the four
 collections and their snapshots (docs/notes/legal-chunker-v4.md, owed).
