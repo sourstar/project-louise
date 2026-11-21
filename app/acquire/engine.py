@@ -35,7 +35,7 @@ from . import transport_https
 from . import updatefiles
 from .transport_https import RangeUnsupported
 from .spec import (AcquisitionPlan, AcquisitionSpec, ChecksumSource, DiskPreflightError,
-                    Endpoint, Filter, LicenseAckRequiredError, RemoteFile, TransferAborted,
+                    Endpoint, Filter, HeldBack, LicenseAckRequiredError, RemoteFile, TransferAborted,
                     Transport, TransportError, estimated_bytes_for, resolve_profile)
 from .transports import REGISTRY
 
@@ -533,6 +533,18 @@ def _upsert_failed(con, source_id: str, f: RemoteFile, endpoint_url: str, bytes_
     is what bounds the quiet: after DEFER_ATTEMPTS the deferral is
     reported as an error, so a file that genuinely cannot cross still
     reaches a human instead of retrying in silence forever.
+
+    THE VERSION THAT FAILED is recorded (review 2026-11-21, Q3): the
+    listing's size and date, where it states them, so `_backing_off` holds
+    the wait to the file that failed. Until then a conflict kept the FIRST
+    failure's size and date, and every later listing that dated the file
+    otherwise read as "the origin published another file", tried at once,
+    every pass — a retry storm on every collection whose file moved once
+    (and on a held file whose newer version fails, whose row stayed done).
+    A row whose held version is older than the one that failed is not done:
+    its version is not held (`_is_pending` would otherwise read the failed
+    version as current). A size or date the listing does not state keeps
+    the one recorded.
     """
     previous = con.execute(
         "SELECT retries FROM fetch_files WHERE source_id=? AND rel_path=?",
@@ -546,6 +558,12 @@ def _upsert_failed(con, source_id: str, f: RemoteFile, endpoint_url: str, bytes_
         "VALUES(?,?,?,?,?,?,0,?,?,1,?,?) "
         "ON CONFLICT(source_id,rel_path) DO UPDATE SET "
         "bytes_fetched=excluded.bytes_fetched,error=excluded.error,retries=retries+1,"
+        # every SET reads the row as it was: the done flag judged on the old version
+        "fetch_done=CASE WHEN (excluded.remote_size IS NOT NULL "
+        "AND excluded.remote_size IS NOT fetch_files.remote_size) OR (excluded.remote_mtime IS NOT NULL "
+        "AND excluded.remote_mtime IS NOT fetch_files.remote_mtime) THEN 0 ELSE fetch_files.fetch_done END,"
+        "remote_size=COALESCE(excluded.remote_size,fetch_files.remote_size),"
+        "remote_mtime=COALESCE(excluded.remote_mtime,fetch_files.remote_mtime),"
         "extra=excluded.extra,updated_at=excluded.updated_at",
         (source_id, f.rel_path, endpoint_url, f.size, f.mtime, bytes_fetched, profile,
          stored, int(f.extra), int(time.time())))
@@ -631,7 +649,10 @@ def _backing_off(con, spec: AcquisitionSpec, f: RemoteFile, *, now: float | None
         "WHERE source_id=? AND rel_path=?", (spec.source_id, f.rel_path)).fetchone()
     if row is None or row["fetch_done"] or not row["retries"]:
         return False
-    if row["remote_size"] != f.size or row["remote_mtime"] != f.mtime:
+    # the row holds the version that last failed (_upsert_failed); a size or
+    # date the listing does not state is no evidence of another file
+    if (f.size is not None and row["remote_size"] != f.size) or \
+            (f.mtime is not None and row["remote_mtime"] != f.mtime):
         return False            # the origin published another file: a new file, tried at once
     now = time.time() if now is None else now
     return now < int(row["updated_at"] or 0) + retry_wait_s(int(row["retries"]))
@@ -1158,6 +1179,13 @@ def run_acquisition(con, collection, spec: AcquisitionSpec, profile: str,
         return {**_no_counts(), "stopped": str(why)}
     try:
         return _run_acquisition(con, collection, spec, profile, stop, priority, until)
+    except HeldBack as e:
+        # BULK FIRST, from the pass itself (spec.HeldBack): a bulk the unit
+        # fetcher must use first is there and cannot be used (an unreadable
+        # newer dump, its build failed) — the pass ends here, said, nothing
+        # asked of the origin's per-unit API; the next pass tries the bulk again
+        db.log_event(con, "warn", "acquire", str(e)[:400])
+        return {**_no_counts(), "stopped": str(e)}
     except TransferAborted as e:
         # A STOP BEFORE THE POOL — in the listing, the benchmark, the index
         # resolve or the planning — is a stop, not a failure: it returns
@@ -1342,18 +1370,27 @@ def _run_acquisition_claimed(con, collection, spec: AcquisitionSpec, profile: st
     # a unit fetcher that serves the pass from a BULK decides here, knowing
     # what the pass has to fetch (06 §6.2, bulk first: "relevant" is the
     # share of the requests the bulk would answer); optional, and a failure
-    # leaves the pass to the transport
+    # leaves the pass to the transport — EXCEPT a stop, and a bulk that must
+    # be used first and cannot (spec.HeldBack; review 2026-11-21, Q6): both
+    # end the pass before the origin is asked anything. It runs under the
+    # pass's stop, bound as a listing's is, so a long build reads it (Q7)
     prepare = getattr(spec.unit_fetcher, "prepare", None) if spec.unit_fetcher is not None else None
     if prepare is not None:
         try:
             # its answer: held files the bulk shows the origin revised in place
             # (NeuRIS, 2026-11-15: the same path, new content), fetched in this pass
-            revised = prepare(files, [f for f in files if f.rel_path in pending], collection, endpoints[0])
+            with _listing_bound(stop, priority):
+                revised = prepare(files, [f for f in files if f.rel_path in pending], collection, endpoints[0])
             listed = {f.rel_path for f in files}
             more = {p for p in (revised or ()) if p in listed} - pending
             if more:
                 pending |= more
                 skipped -= len(more)
+        except (TransferAborted, HeldBack):
+            close = getattr(spec.unit_fetcher, "close", None)
+            if close is not None:
+                close()             # what it opened for the pass, let go with it
+            raise
         except Exception as e:   # noqa: BLE001 — an optimisation of the pass, never its failure
             db.log_event(con, "warn", "acquire", f"bulk transport not prepared: {type(e).__name__}: {e}"[:400])
     items = _build_work_items(files, pending, spec)

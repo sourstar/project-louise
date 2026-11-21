@@ -130,3 +130,64 @@ def test_an_inventory_is_what_a_pass_plans_and_its_reports_are_said(tmp_path, mo
     assert row["fetch_done"] == 1
     logged = [r["message"] for r in con.execute("SELECT message FROM events")]
     assert any("reported deleted" in m for m in logged), "the inventory's report, said as an event"
+
+
+# ---- a unit fetcher's prepare: a stop and a bulk that must be used first end the pass --------
+# (review 2026-11-21, Q6 and Q7: an unreadable newer bulk was "not prepared", a warning, and the
+# pass went on to the origin's per-unit API for everything; a stop never reached a long build)
+
+class PreparingUnits(FakeUnits):
+    def __init__(self, raises=None, on_prepare=None):
+        super().__init__()
+        self.raises, self.on_prepare = raises, on_prepare
+        self.seen_stop, self.closed = "unbound", False
+
+    def prepare(self, files, pending, collection, endpoint):
+        from app.transfer.manager import current_handle
+        handle = current_handle()
+        self.seen_stop = getattr(handle, "stop", None) if handle is not None else "unbound"
+        if self.on_prepare is not None:
+            self.on_prepare()
+        if self.raises is not None:
+            raise self.raises
+        return []
+
+    def close(self):
+        self.closed = True
+
+
+def _pass(tmp_path, units, **kw):
+    files = [RemoteFile(rel_path="a/1/mark.xml", remote="unit:1", mtime=1)]
+    spec = _spec(FakeInventory(files), units)
+    _manager(workers=1)
+    collection = _collection(tmp_path, plugin="fake")
+    con = db.connect(collection)
+    return con, engine.run_acquisition(con, collection, spec, "demo", **kw)
+
+
+def test_a_bulk_that_must_be_used_first_and_cannot_holds_the_pass_said_never_the_api(tmp_path):
+    from app.acquire.spec import HeldBack
+    why = "fake: the newer bulk does not read (LEG_MTD.zip: File is not a zip file); bulk first"
+    units = PreparingUnits(raises=HeldBack(why))
+    con, out = _pass(tmp_path, units)
+    assert units.fetched == [] and out["fetched"] == 0 and out["stopped"] == why
+    assert units.closed, "what prepare opened, let go"
+    warned = [r["message"] for r in con.execute("SELECT message FROM events WHERE level='warn'")]
+    assert why in warned
+    assert con.execute("SELECT COUNT(*) FROM fetch_files").fetchone()[0] == 0, "nothing recorded against a file"
+
+
+def test_a_stop_reaches_prepare_and_ends_the_pass_there(tmp_path):
+    import threading
+    from app.acquire.spec import TransferAborted
+    stop = threading.Event()
+    units = PreparingUnits(raises=TransferAborted("stopped at a chunk boundary"), on_prepare=stop.set)
+    con, out = _pass(tmp_path, units, stop=stop)
+    assert units.seen_stop is stop, "prepare runs under the pass's stop"
+    assert units.fetched == [] and "chunk boundary" in out["stopped"]
+
+
+def test_any_other_failure_of_prepare_still_leaves_the_pass_to_the_transport(tmp_path):
+    units = PreparingUnits(raises=RuntimeError("an index that did not open"))
+    con, out = _pass(tmp_path, units)
+    assert units.fetched == ["a/1/mark.xml"] and out["fetched"] == 1

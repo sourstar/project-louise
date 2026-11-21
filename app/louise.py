@@ -3497,7 +3497,12 @@ def cmd_dev_eurlex_dump(a) -> int:
     held ones the dump holds; the dump is `EURLEX_DATADUMP_DIR` unless --dump.
     `--carry-from`: then an earlier corpus's units the dump did not give are
     linked in without their notice (RULE 1), in the base or the history
-    slice. Resumable: a landed unit is never written again."""
+    slice. Resumable: a landed unit is never written again. SIGTERM or
+    SIGINT: the build stops at its next chunk boundary, what it built landed
+    and its chunks recorded, the stamp unwritten, exit 130; the next run
+    resumes after the chunks done (invariant 2; review 2026-11-21, Q7)."""
+    import signal
+    import threading
     from app.acquire import datadump, eurlex_dump
     from app import collections as collections_mod
     c = collections_mod.by_name(a.collection)
@@ -3516,8 +3521,20 @@ def cmd_dev_eurlex_dump(a) -> int:
         from app.acquire import cellar
         langs = cellar.held_languages(c)
     corpus = Path(c.corpus_dir)
-    out: dict = {"built": {l: dict(n) for l, n in
-                           eurlex_dump.build(dump, corpus, langs, log=say).items()}}
+    stop = threading.Event()
+    before = {sig: signal.signal(sig, lambda *_: stop.set()) for sig in (signal.SIGTERM, signal.SIGINT)}
+    try:
+        built = eurlex_dump.build(dump, corpus, langs, log=say, stop=stop.is_set)
+    except eurlex_dump.BuildRunning as e:
+        say(f"[eurlex-dump] {e}")
+        return 3                            # deferred: another build of the corpus holds it
+    except eurlex_dump.Stopped as e:
+        say(f"[eurlex-dump] {e}")
+        return 130
+    finally:
+        for sig, handler in before.items():
+            signal.signal(sig, handler)
+    out: dict = {"built": {l: dict(n) for l, n in built.items()}}
     if a.carry_from:
         out["carried"] = dict(eurlex_dump.carry(Path(a.carry_from), corpus, log=say))
     _print(out)
