@@ -114,6 +114,53 @@ _ART_CLS = {"oj": "ti-art", "cons": "title-article-norm"}
 _STI_CLS = {"oj": "sti-art", "cons": "stitle-article-norm"}
 _NOTE_CLS = frozenset({"note", "footnote"})
 _QUOTED_CLS = "quotation-ti"
+#: DIVISIONS — part, title, chapter, section, sub-section — label the articles
+#: under them, as Formex's DIVISION does ("CHAPTER II — Principles › Article
+#: 5"). CONVEX says which by its element's id (`prt_I`, `prt_I.tis_II`,
+#: `cpt_III.sct_1`; its title in `….tit_1`): the number line is not always
+#: `oj-ti-section-1` (et, fi, hu, lt, lv: `oj-ti-grseq-1`, 32013R0575). The
+#: older XHTML and the consolidated text by their classes, the legacy HTML
+#: and the PDF by the heading's words; the level, there, by the word.
+_DIV_ID = re.compile(r"(?:^|\.)(prt|tis|cpt|sct|sbs)_[^.]+$")
+_DIV_LEVEL = {"prt": 1, "tis": 2, "cpt": 3, "sct": 4, "sbs": 5}
+_DIV_HEAD_CLS = frozenset({"ti-section-1", "title-division-1"})
+_DIV_TITLE_CLS = frozenset({"ti-section-2", "title-division-2"})
+#: the division words of the 24 languages, by level (32013R0575's CONVEX in
+#: each, read by its element ids; 32004R0726's legacy HTML in 22)
+_DIV_WORDS = {
+    5: ("Sub-section|Subsection|Sous-section|Unterabschnitt|Sottosezione|Subsección|Subsecção|Subseção|"
+        "Onderafdeling|Pododdíl|Pododdiel|Podsekcja|alszakasz|Subsecțiunea|Subsecţiunea|Подраздел|Ενότητα|"
+        "Ενοτητα|Underafdeling|Underavsnitt|Alajakso|Alajagu|apakšiedaļa|Poskirsnis|Subtaqsima|Pododdelek|"
+        "Pododjeljak|Foroinn"),
+    4: ("Section|Abschnitt|Sezione|Sección|Secção|Seção|Afdeling|Oddíl|Oddiel|Sekcja|szakasz|Secțiunea|"
+        "Secţiunea|Раздел|Τμήμα|Τμημα|Avsnitt|Jakso|Jagu|iedaļa|Skirsnis|Taqsima|Oddelek|Odjeljak|Roinn"),
+    3: ("Chapter|Chapitre|Kapitel|Capo|Capítulo|Hoofdstuk|Kapitola|Rozdział|Fejezet|Capitolul|Глава|Κεφάλαιο|"
+        "Κεφαλαιο|Luku|Peatükk|Nodaļa|Skyrius|Kapitolu|Poglavje|Poglavlje|Caibidil"),
+    2: ("Title|Titre|Titel|Titolo|Título|Hlava|Tytuł|Cím|Titlul|Дял|Τίτλος|Τιτλος|Afsnit|Avdelning|Osasto|"
+        "Jaotis|Sadaļa|Antraštinė dalis|Titolu|Naslov|Glava|Teideal"),
+    1: "Part|Partie|Teil|Parte|Deel|Část|Časť|Część|Rész|Partea|Част|Μέρος|Μερος|Del|Osa|Daļa|Dalis|Parti|Dio|Cuid",
+}
+#: its number: roman (Latin or Greek letters), arabic, a letter after it, a
+#: dot ("TITLE I", "1. FEJEZET", "GLAVA I.", "TITEL IIa"); or spelled, each
+#: word capitalised ("PART ONE", "ERSTER TEIL", "Μεροσ Δευτερο", "PARTEA A
+#: DOUA", "CUID a hAON DÉAG": ro's and ga's "a" before it)
+_DIV_NUM = r"(?:[IVXLCΙΧ]+|\d+)(?:\s?[a-zα-ωа-я])?\.?"
+_DIV_ORD = r"(?:a\s+)?[^\W\d_]+(?:\s+[^\W\d_]+)?"
+_DIVISION = {level: (re.compile(rf"^(?:(?:{words})\s+{_DIV_NUM}|{_DIV_NUM}\s+(?:{words}))$", re.IGNORECASE),
+                     re.compile(rf"^(?:(?:{words})\s+{_DIV_ORD}|{_DIV_ORD}\s+(?:{words}))$", re.IGNORECASE))
+             for level, words in sorted(_DIV_WORDS.items(), reverse=True)}
+
+
+def _division_level(text: str) -> int | None:
+    """The level a division heading's words give (1 part … 5 sub-section),
+    None for a line that is no division heading."""
+    for level, (numbered, spelled) in _DIVISION.items():
+        if numbered.match(text):
+            return level
+        if spelled.match(text) and all(w[0].isupper() or w in ("a", "A") or (w[0] == "h" and w[1:2].isupper())
+                                       for w in text.split()):
+            return level
+    return None
 
 
 def _number(heading: str) -> tuple[int, str] | None:
@@ -255,6 +302,25 @@ def _dialect(lines: list[_Line]) -> str:
     return "words"
 
 
+@dataclass
+class _Div:
+    """A division heading while its articles are read."""
+    level: int
+    head: str
+    element: int | None                      # its CONVEX element (None: the older forms, by level)
+    where: tuple[list[Any], int]             # the section and the place it stands in
+    title: list[str] = field(default_factory=list)
+    used: bool = False                       # an article under it carries its label
+
+    @property
+    def label(self) -> str:
+        return " — ".join(x for x in (self.head, " ".join(self.title)) if x)
+
+    @property
+    def lines(self) -> list[str]:
+        return [x for x in (self.head, *self.title) if x]
+
+
 class _Layout:
     """The sections being laid out, line by line (`_read`)."""
 
@@ -276,6 +342,76 @@ class _Layout:
         self.cur = self.preamble            # the section the last line went to
         self.quote: str | None = None       # words: a quotation a quoted "article" / "annex" heading opened
         self.quoted: tuple[int, str] | None = None  # the number of its last heading
+        self.divs: list[_Div] = []          # the divisions the next article stands in, outermost first
+        self.titled: _Div | None = None     # the division whose title the next line may be
+        self.unused: list[_Div] = []        # divisions no article took: their words go back as text
+
+    # ---- divisions ------------------------------------------------------------------------------
+
+    def _close(self, keep: int) -> None:
+        """The divisions from `keep` on end: an unused one's words are text."""
+        for d in self.divs[keep:]:
+            if not d.used:
+                self.unused.append(d)
+        del self.divs[keep:]
+        self.titled = None
+
+    def division(self, line: _Line) -> bool:
+        """A division's heading or title: it labels the articles under it
+        and is no section's text. True where the line is one."""
+        if any(d.element is not None and d.element not in line.path for d in self.divs):
+            self._close(next(i for i, d in enumerate(self.divs) if d.element is not None
+                             and d.element not in line.path))
+        if self.kind not in ("preamble", "article", "annex"):
+            return False
+        text, cls = line.text, line.cls
+        free = not (line.cell or _QUOTED_CLS in line.classes or text.startswith(_OPENING))
+        nested = self.container not in (None, 0) and self.container in line.path \
+            and line.parent != self.container
+        el = next(((s, i) for s, _t, i in reversed(line.blocks) if _DIV_ID.search(i)), None)
+        if el is not None:
+            # CONVEX: the first line in a division's element is its heading,
+            # its `….tit_N` child its title (the consolidated text's: the
+            # `title-division-2` after it)
+            serial, eid = el
+            in_title = any(i.startswith(eid + ".tit_") for _s, _t, i in line.blocks)
+            held = next((d for d in self.divs if d.element == serial), None)
+            if held is not None:
+                if in_title or (self.titled is held and cls in _DIV_TITLE_CLS):
+                    held.title.append(text)
+                    return True
+                self.titled = None
+                return False
+            if nested or not free:
+                return False
+            level = _DIV_LEVEL[_DIV_ID.search(eid).group(1)]
+            self._open(level, "" if in_title else text, serial)
+            if in_title:
+                self.divs[-1].title.append(text)
+            return True
+        if self.titled is not None and (cls in _DIV_TITLE_CLS if self.dialect != "words" else (
+                not _ARTICLE.match(text) and not _ANNEX.match(text) and _division_level(text) is None
+                and not re.search(r"[.;:,]$", text))):
+            self.titled.title.append(text)
+            if self.dialect == "words":
+                self.titled = None                      # one line: the words' title
+            return True
+        self.titled = None
+        if not free or nested or (self.dialect == "words" and self.quote):
+            return False
+        if self.dialect != "words" and cls not in _DIV_HEAD_CLS:
+            return False
+        level = _division_level(text)
+        if level is None and self.dialect == "words":
+            return False
+        self._open(level or 9, text, None)
+        return True
+
+    def _open(self, level: int, head: str, element: int | None) -> None:
+        keep = next((i for i, d in enumerate(self.divs) if d.level >= level), len(self.divs))
+        self._close(keep)
+        self.divs.append(_Div(level, head, element, (self.cur, len(self.cur[1]))))
+        self.titled = self.divs[-1]
 
     # ---- what a line is ---------------------------------------------------------------------
 
@@ -326,16 +462,22 @@ class _Layout:
         rec = self.rec
         if self.kind == "preamble" and rec is not None and rec[1] is None:
             # a paragraph's recital runs to the next: the enacting formula
-            # ("HAVE ADOPTED THIS DIRECTIVE:", its last line ending so) and the
-            # headings after it (32004R0726's "TITLE I") are the preamble's
+            # ("HAVE ADOPTED THIS DIRECTIVE:", its last line ending so) and
+            # what follows it is the preamble's
             body = rec[0][1]
             j = next((i for i in range(len(body) - 1, 0, -1) if body[i].endswith(":")), None)
             if j is not None:
                 self.preamble[1] += body[j:]
                 del body[j:]
-        label = f"{self.partition} › {line.text}" if self.partition else line.text
+        # its partition: the annex it stands in (an annexed act's), the
+        # divisions, outermost first — Formex's "CHAPTER II — Principles › …"
+        partition = " › ".join([self.partition] * bool(self.partition) + [d.label for d in self.divs])
+        for d in self.divs:
+            d.used = True
+        self.titled = None
+        label = f"{partition} › {line.text}" if partition else line.text
         self.sections.append([label, []])
-        self.owners.append((Article(identifier=None, num=line.text, title="", partition=self.partition, body=""),
+        self.owners.append((Article(identifier=None, num=line.text, title="", partition=partition, body=""),
                             self.sections[-1]))
         self.kind, self.container, self.rec, self.cur = "article", line.parent, None, self.sections[-1]
         self.has_article = True
@@ -349,6 +491,7 @@ class _Layout:
         return True
 
     def annex(self, line: _Line) -> None:
+        self._close(0)
         if self.kind == "annex" and not self.sections[-1][1]:
             # a heading on several lines ("Progetto di" / "DECISIONE N. …" /
             # …): one heading, its lines joined
@@ -414,6 +557,10 @@ class _Layout:
     # ---- the result -------------------------------------------------------------------------
 
     def read(self) -> _Read:
+        self._close(0)
+        for d in reversed(self.unused):                 # where they stood, the last first
+            sec, at = d.where
+            sec[1][at:at] = d.lines
         for owner, sec in self.owners:
             owner.body = "\n".join(sec[1])
         out = [(label, "\n".join(body)) for label, body in self.sections if body or label != "Preamble"]
@@ -444,6 +591,9 @@ def _read(lines: list[_Line], *, recitals: bool = True) -> _Read:
             follows_note = True
             continue
         follows_note = False
+        if lay.division(line):
+            lay.after(line)
+            continue
         article, annex = lay.heads(line)
         if article:
             lay.article(line)

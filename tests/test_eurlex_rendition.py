@@ -177,7 +177,7 @@ def test_legacy_html_annexes_are_their_own_sections_not_the_last_article_s(name,
     act = _read(name)
     assert [a.num for a in act.articles] == arts
     assert [a.title for a in act.annexes] == annexes
-    last = _sections(act)[arts[-1]]
+    last = next(t for label, t in act.rendered_sections if label.rsplit(" › ", 1)[-1] == arts[-1])
     assert not any(a in last for a in annexes)
 
 
@@ -259,12 +259,11 @@ def test_the_old_xhtml_s_recitals_are_its_table_rows():
 
 def test_legacy_html_recitals_run_to_the_next_and_the_enacting_formula_is_the_preamble_s():
     """32004R0726 ro (legacy HTML): "(1) …" paragraphs after "întrucât:";
-    the formula and the title heading before Article 1 go back to the preamble."""
+    the formula before Article 1 goes back to the preamble."""
     act = _read("32004R0726ro.html")
     assert [label for label, _ in act.recitals] == ["întrucât (1)", "întrucât (2)"]
     assert "ADOPTĂ" not in act.recitals[-1][1]
-    assert _sections(act)["Preamble"].endswith("ADOPTĂ PREZENTUL REGULAMENT:\nTITLUL I\n"
-                                               "DEFINIȚII ȘI DOMENIU DE APLICARE")
+    assert _sections(act)["Preamble"].endswith("ADOPTĂ PREZENTUL REGULAMENT:")
 
 
 def test_a_pdf_s_recitals_stay_in_its_preamble():
@@ -272,6 +271,123 @@ def test_a_pdf_s_recitals_stay_in_its_preamble():
                                                "(2) La Commissione", "Articolo 1", "testo")]
     sections, _articles, _annexes = rendition._sections(lines)
     assert [label for label, _ in sections] == ["Preamble", "Articolo 1"]
+
+
+# ---- 5. divisions ---------------------------------------------------------------------------
+
+def test_convex_divisions_label_their_articles_as_formex_labels_them():
+    """32016R0679 en: chapter and section headings were text at the end of
+    the article before them. Now each article's label carries them, as
+    Formex's ("CHAPTER III — Rights of the data subject › Section 1 — …"),
+    read by CONVEX's element ids; a new section replaces the old under the
+    same chapter."""
+    act = _read("32016R0679en.html")
+    assert [label for label, _ in act.rendered_sections if label != "Preamble"] == [
+        "CHAPTER I — General provisions › Article 1 — Subject-matter and objectives",
+        ("CHAPTER III — Rights of the data subject › Section 1 — Transparency and modalities › Article 12 — "
+         "Transparent information, communication and modalities for the exercise of the rights of the data subject"),
+        ("CHAPTER III — Rights of the data subject › Section 2 — Information and access to personal data › "
+         "Article 13 — Information to be provided where personal data are collected from the data subject")]
+    assert act.articles[1].partition == \
+        "CHAPTER III — Rights of the data subject › Section 1 — Transparency and modalities"
+    text = "\n".join(t for _, t in act.rendered_sections)
+    assert "CHAPTER" not in text and "Section 1" not in text and "General provisions" not in text
+
+
+def test_the_older_xhtml_s_divisions_by_their_classes():
+    """fmx2xhtml 3.2 (32010D0699 it): `ti-section-1` / `ti-section-2`, the
+    annexed draft decision's parts."""
+    xhtml = FIX / "xhtml" / "32010D0699"
+    names = sorted(p.name for p in xhtml.glob("*.html"))
+    act = rendition.parse_html({n: (xhtml / n).read_bytes() for n in names}, names, lang="it", root="ACT",
+                               note=NOTE)
+    parts = [a.partition.rsplit(" › ", 1)[-1] for a in act.articles[2:]]
+    assert parts[:4] == ["PARTE I — DISPOSIZIONI GENERALI"] * 3 + \
+        ["PARTE II — RELAZIONI TRA GLI STATI MEMBRI E L’ALGERIA"]
+    assert parts[-1] == "PARTE IV — DISPOSIZIONI TRANSITORIE E FINALI"
+    assert all(a.partition.startswith("Progetto di DECISIONE") for a in act.articles[2:])
+
+
+def test_legacy_divisions_by_their_words():
+    """32004R0726 ro: "TITLUL I" ended the preamble, "TITLUL V" Article 89's
+    text; each is now its articles' label, with its title line."""
+    act = _read("32004R0726ro.html")
+    assert [label for label, _ in act.rendered_sections if "Articolul" in label] == [
+        "TITLUL I — DEFINIȚII ȘI DOMENIU DE APLICARE › Articolul 1",
+        "TITLUL V — DISPOZIȚII GENERALE ȘI FINALE › Articolul 90"]
+    assert "TITLUL" not in "\n".join(t for _, t in act.rendered_sections)
+
+
+#: each language's part, title, chapter, section and sub-section heading as
+#: 32013R0575's CONVEX states them (its element ids say which; fetched from
+#: Cellar on 2026-11-21) — hr from its older XHTML (no ids)
+DIVISIONS = {
+    "bg": ["ПЪРВА ЧАСТ", "ДЯЛ I", "ГЛАВА 1", "Раздел 1", "Подраздел 1"],
+    "cs": ["ČÁST PRVNÍ", "HLAVA I", "KAPITOLA 1", "Oddíl 1", "Pododdíl 1"],
+    "da": ["FØRSTE DEL", "AFSNIT I", "KAPITEL 1", "Afdeling 1", "Underafdeling 1"],
+    "de": ["ERSTER TEIL", "TITEL I", "KAPITEL 1", "Abschnitt 1", "Unterabschnitt 1"],
+    "el": ["ΜΕΡΟΣ ΠΡΩΤΟ", "ΤΙΤΛΟΣ I", "ΚΕΦΑΛΑΙΟ 1", "Τμήμα Ι", "Ενότητα 1"],
+    "en": ["PART ONE", "TITLE I", "CHAPTER 1", "Section 1", "Sub-Section 1"],
+    "es": ["PARTE PRIMERA", "TÍTULO I", "CAPÍTULO 1", "Sección 1", "Subsección 1"],
+    "et": ["I OSA", "I JAOTIS", "1. PEATÜKK", "1. Jagu", "1. Alajagu"],
+    "fi": ["ENSIMMÄINEN OSA", "I OSASTO", "1 LUKU", "1 Jakso", "1 Alajakso"],
+    "fr": ["PREMIÈRE PARTIE", "TITRE I", "CHAPITRE 1", "Section 1", "Sous-Section 1"],
+    "ga": ["CUID A hAON", "TEIDEAL I", "CAIBIDIL 1", "Roinn 1", "Foroinn 1"],
+    "hr": ["DIO PRVI", "GLAVA I.", "POGLAVLJE 1.", "Odjeljak 1.", "Pododjeljak 1."],
+    "hu": ["ELSŐ RÉSZ", "I. CÍM", "1. FEJEZET", "1. szakasz", "1. alszakasz"],
+    "it": ["PARTE UNO", "TITOLO I", "CAPO 1", "Sezione 1", "Sottosezione 1"],
+    "lt": ["PIRMA DALIS", "I ANTRAŠTINĖ DALIS", "1 SKYRIUS", "1 Skirsnis", "1 Poskirsnis"],
+    "lv": ["PIRMĀ DAĻA", "I SADAĻA", "1. NODAĻA", "1. iedaļa", "1. apakšiedaļa"],
+    "mt": ["PARTI WIEĦED", "TITOLU I", "KAPITOLU 1", "Taqsima 1", "Subtaqsima 1"],
+    "nl": ["DEEL EEN", "TITEL I", "HOOFDSTUK 1", "Afdeling 1", "Onderafdeling 1"],
+    "pl": ["CZĘŚĆ PIERWSZA", "TYTUŁ I", "ROZDZIAŁ 1", "Sekcja 1", "Podsekcja 1"],
+    "pt": ["PARTE I", "TÍTULO I", "CAPÍTULO 1", "Secção 1", "Subsecção 1"],
+    "ro": ["PARTEA ÎNTÂI", "TITLUL I", "CAPITOLUL 1", "Secțiunea 1", "Subsecțiunea 1"],
+    "sk": ["PRVÁ ČASŤ", "HLAVA I", "KAPITOLA 1", "Oddiel 1", "Pododdiel 1"],
+    "sl": ["DEL 1", "NASLOV I", "POGLAVJE 1", "Oddelek 1", "Pododdelek 1"],
+    "sv": ["DEL ETT", "AVDELNING I", "KAPITEL 1", "Avsnitt 1", "Underavsnitt 1"],
+}
+
+
+@pytest.mark.parametrize("lang", sorted(DIVISIONS))
+def test_every_language_s_division_words_give_their_level(lang):
+    """Read by words (legacy HTML, PDF, the older XHTML): all 3,694 of
+    32013R0575's division headings in 23 languages get their element's level."""
+    assert [rendition._division_level(h) for h in DIVISIONS[lang]] == [1, 2, 3, 4, 5]
+
+
+@pytest.mark.parametrize("heading", ["PARTEA A DOUA", "CUID a hAON DÉAG", "Μεροσ Δευτερο", "DEL TRE"])
+def test_a_spelled_part_is_a_part(heading):
+    assert rendition._division_level(heading) == 1
+
+
+@pytest.mark.parametrize("line", ["Section 2 of Annex I", "PART OF THE TERRITORY", "Title", "Article 5",
+                                  "the Chapter 1"])
+def test_a_line_that_only_names_a_division_is_no_heading(line):
+    assert rendition._division_level(line) is None
+
+
+def test_a_new_division_replaces_its_level_and_those_below_it():
+    """By words: a chapter replaces the chapter, under the same title; a new
+    title closes both."""
+    lines = [rendition._Line("", t) for t in (
+        "TITLE I", "GENERAL", "Chapter 1", "Scope", "Article 1", "text", "Chapter 2", "Article 2", "text",
+        "TITLE II", "Article 3", "text")]
+    _, articles, _ = rendition._sections(lines)
+    assert [a.partition for a in articles] == ["TITLE I — GENERAL › Chapter 1 — Scope",
+                                               "TITLE I — GENERAL › Chapter 2", "TITLE II"]
+
+
+def test_a_division_no_article_takes_stays_text_where_it_stands():
+    """32004L0039's annex: "Section A" / "Investment services and activities"
+    head no article: they stay its text, in place."""
+    lines = [rendition._Line("", t) for t in (
+        "Article 1", "text", "ANNEX I", "LIST OF SERVICES", "Section A", "Investment services and activities",
+        "(1) Reception and transmission of orders", "Section B", "Ancillary services", "(1) Safekeeping")]
+    sections, _, _ = rendition._sections(lines)
+    assert dict(sections)["ANNEX I"] == ("LIST OF SERVICES\nSection A\nInvestment services and activities\n"
+                                         "(1) Reception and transmission of orders\nSection B\nAncillary services\n"
+                                         "(1) Safekeeping")
 
 
 # ---- coverage -------------------------------------------------------------------------------

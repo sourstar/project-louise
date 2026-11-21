@@ -64,7 +64,8 @@ Commission Decision 2011/833/EU, as above.
 | `32016D1837en.html` | `L_2016280EN.01002801.doc.html` (`5178dcf6…`) | a quoted "‘Article 3" nested in `art_1`, in no table, before the act's own Article 3 |
 | `02016R1036-20180608ro.html` | `CL2016R1036RO0020010.0001.html` (`73ad8662…`) | a consolidated text (fmx2xhtml 7.9): `title-article-norm` "Articolul 14a", annexes, the correlation table's "Articolul 12" cells, a `footnote` |
 | `31992L0043{et,hu,lt,lv,mt}.html` | `31992L0043et.html` (`31998927…`), `…hu` (`6855e4d7…`), `…lt` (`a50a271e…`), `…lv` (`8e7e718d…`), `…mt` (`cae0131d…`) | legacy HTML: annexes numbered first ("I LISA", "I. MELLÉKLET", "I PRIEDAS", "I PIELIKUMS"), Maltese "L-Artikolu 1", "L-ANNESS I" |
-| `32004R0726ro.html` | `32004R0726ro.html` (`641bfaa8…`) | legacy HTML: the single "ANEXĂ", numbered recitals "(1) …", the enacting formula and "TITLUL I" before Article 1 |
+| `32004R0726ro.html` | `32004R0726ro.html` (`641bfaa8…`) | legacy HTML: the single "ANEXĂ", numbered recitals "(1) …", the enacting formula, "TITLUL I" and "TITLUL V" with their titles, the final formula, footnotes [1]–[3] and their calls |
+| `32016R0679en.html` | `L_2016119EN.01000101.doc.html` (`962539af…`) | CONVEX: `cpt_I`, `cpt_III.sct_1`, `cpt_III.sct_2` and an article in each, the final formula, a footnote |
 | `31997L0011en.html` | `31997L0011en.html` (`0ffcc88f…`) | legacy HTML: "'Article 3" closed by a backtick, "'Article 4", then the act's "Article 2"; "'ANNEX I" then the quoted "ANNEX II" |
 | `32003L0051en.html` | `32003L0051en.html` (`4d4849d5…`) | legacy HTML: '"Article 42e' then the quoted "Article 42f" |
 
@@ -119,7 +120,8 @@ b8b63946be24b8a58e73e3b8167db1b0ae1064c1808800ab0841678424303718  rendition/3199
 720cd092d7917bc6c50f63d87d096cdfee0ba2ffe273f38e0d29a3b0caac9bd8  rendition/31992L0043mt.html
 319b895a85e9fdb021df785d363e2a99f5f652e308c135a0ed5d049429f16fda  rendition/31997L0011en.html
 da1f60e94392fa5f5322a256a48624ec9bfbc1d388782e1c7ce7230cbe251a87  rendition/32003L0051en.html
-684aafeb3d1b112e1cbc60e56b38ef36890175cc251840456e7662515908128f  rendition/32004R0726ro.html
+a65d076ea77f70028cac958b6a501a6525c4fbe5395a7f364f6d2a9cb15f454c  rendition/32004R0726ro.html
+0761be802244d8b5c7c9016272202891ccc9d83907e9d39a3a030d93c114c559  rendition/32016R0679en.html
 e1a65fafee46fe7ac3f5eaa581aed2b4b594d69f477cae8ce611fdbafb174caa  rendition/32016D1837en.html
 d633b984caec06809880c81bb254d8f3f0886978a91b6c0dab80b305e230b001  rendition/32018R0825en.html
 ```
