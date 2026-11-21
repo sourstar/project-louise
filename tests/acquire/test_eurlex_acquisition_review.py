@@ -464,6 +464,70 @@ def test_one_work_s_tree_that_does_not_read_in_an_mtd_that_opens_is_counted_and_
     assert eurlex_dump.stamp(corpus) == {"it": "2026-11-15T01:00:00+01:00"}
 
 
+# ---- a dump folder whose datadump.json does not read is never skipped silently ------------------
+# (coordinator, 2026-11-21: Dumps._scan printed it and went on; a worker's pass said nothing)
+
+def _two_dumps(tmp_path, *, unreadable_newest: bool) -> tuple[Path, Path, Path]:
+    import os
+    from tests.acquire.test_eurlex_dump import _dump
+    base = _dump(tmp_path / "dumps")
+    bad = base / "datadump-it-2026-11-22"
+    bad.mkdir()
+    (bad / "datadump.json").write_text('{"language": "it", "created": ')        # cut mid-copy
+    (bad / "LEG_MTD.zip").write_bytes(b"PK")
+    good = base / "datadump-it"
+    old, new = 1_790_000_000, 1_795_000_000
+    for p in [bad, *bad.iterdir()]:
+        os.utime(p, (new, new) if unreadable_newest else (old, old))
+    for p in [good, *good.iterdir()]:
+        os.utime(p, (old, old) if unreadable_newest else (new, new))
+    return base, bad, good
+
+
+@pytest.mark.parametrize("newest", [False, True])
+def test_an_unreadable_statement_is_a_warning_each_day_and_never_holds_the_pass_back(tmp_path, serial,  # noqa: F811
+                                                                                    monkeypatch, newest):
+    from app.acquire import datadump
+    base, bad, _good = _two_dumps(tmp_path, unreadable_newest=newest)
+    monkeypatch.setattr(eurlex_dump, "_unread_said", {})
+    monkeypatch.setattr(datadump, "_DUMPS", datadump.Dumps(base))
+    corpus = tmp_path / "corpus"
+    eurlex_dump.build(base, corpus, ["it"], log=lambda m: None)          # the readable dump is still a bulk
+    assert eurlex_dump.stamp(corpus) == {"it": "2026-11-15T01:00:00+01:00"}
+    inv = cellar.TreeInventory(corpus, "eurlex5")
+    (said,) = inv.reports()
+    assert str(bad) in said and "datadump.json" in said and "unreadable" in said, said
+    assert ("newest" in said and "not used" in said) is newest, said
+    italian = SimpleNamespace(**{**vars(_coll(corpus)), "slices": ("lang=it",)})
+    assert inv.held_back(italian) is None, "not held back"
+    assert inv.reports() == [], "once a day per folder"
+    import time
+    assert eurlex_dump.unread_statements(base, corpus, now=time.time() + 86_401), "the next day, again"
+
+
+def test_a_worker_pass_says_the_unreadable_statement_as_a_warning_event(tmp_path, serial, monkeypatch):  # noqa: F811
+    """End to end through the engine: the inventory's reports are logged as
+    warnings of the collection, and the pass goes on from the readable dump."""
+    from app import db
+    from app.acquire import datadump, engine, specs
+    from tests.acquire.test_engine_transfer import _collection, _manager
+    base, bad, _good = _two_dumps(tmp_path, unreadable_newest=True)
+    monkeypatch.setattr(eurlex_dump, "_unread_said", {})
+    monkeypatch.setattr(datadump, "_DUMPS", datadump.Dumps(base))
+    collection = _collection(tmp_path, plugin="eurlex")
+    eurlex_dump.build(base, collection.corpus_dir, ["it"], log=lambda m: None)
+    spec = specs.ACQUIRE_REGISTRY["eurlex"]
+    monkeypatch.setattr(engine, "_require_license_ack", lambda *a, **k: None)
+    monkeypatch.setattr(engine, "effective_spec", lambda c, s, p, **k: __import__("dataclasses").replace(
+        s, inventory=cellar.TreeInventory(c.corpus_dir, "eurlex5"), unit_fetcher=cellar.TREE_UNITS))
+    monkeypatch.setattr(cellar.TreeInventory, "list", lambda self, *a: [])
+    _manager(workers=1)
+    con = db.connect(collection)
+    engine.run_acquisition(con, collection, spec, "it")
+    warned = [r["message"] for r in con.execute("SELECT message FROM events WHERE level='warn'")]
+    assert any(str(bad) in m and "not used" in m for m in warned), warned
+
+
 # ---- Q7: a stop ends the build at a chunk boundary; the next build resumes after it ------------
 
 def _counting(monkeypatch) -> list[list[str]]:

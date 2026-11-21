@@ -1146,6 +1146,16 @@ class TreeInventory(CellarInventory):
     def _say(self, message: str) -> None:
         print(f"{time.strftime('%H:%M:%S')} [{self.name} info:cellar] {message}", flush=True)
 
+    def reports(self) -> list[str]:
+        """What the engine says as warnings of the collection after the
+        listing (spec.Inventory `reports`): each Data Dump folder whose
+        datadump.json does not read, once a day (eurlex_dump.unread_statements;
+        coordinator, 2026-11-21: never skipped silently). Nothing is held
+        back for it."""
+        from . import datadump, eurlex_dump
+        base = datadump.dumps().base
+        return eurlex_dump.unread_statements(base, self.corpus) if base is not None else []
+
     def _place(self, celex: str, lang: str, in_force: str | None) -> bool:
         from ..plugins.eurlex.source import HISTORY, unit_rel
         rel = unit_rel(lang, celex)

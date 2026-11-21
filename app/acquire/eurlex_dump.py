@@ -241,6 +241,60 @@ def _stamp(corpus: Path, langs: dict[str, str]) -> None:
     os.replace(tmp, path)
 
 
+#: A DUMP FOLDER WHOSE STATEMENT DOES NOT READ is never skipped silently
+#: (coordinator, 2026-11-21): `Dumps._scan` printed it and went on, and a
+#: worker's pass said nothing. Said as a warning of the collection at most
+#: this often per folder (`unread_statements`, through TreeInventory.reports)
+UNREAD_SAY_S = 24 * 3600.0
+#: (corpus, folder) -> when it was last said; the process's
+_unread_said: dict[tuple[str, str], float] = {}
+
+
+def _latest(folder: Path) -> float:
+    """A dump folder's latest change: its own, its statement's, its zips'."""
+    times = []
+    for p in [folder, folder / "datadump.json", *folder.rglob("*.zip")]:
+        try:
+            times.append(p.stat().st_mtime)
+        except OSError:
+            continue
+    return max(times, default=0.0)
+
+
+def unread_statements(dump_dir: Path, corpus: Path, *, now: float | None = None) -> list[str]:
+    """One warning for each dump folder under `dump_dir` whose datadump.json
+    does not read (missing beside its zips, cut, not its form), not said for
+    this corpus within UNREAD_SAY_S. It holds nothing back: the dumps that
+    read are a bulk still, used as before. Where the folder is the NEWEST —
+    changed after every folder that reads, by its files' times, since its
+    own creation is what does not read — the warning says the newer dump is
+    not used and why."""
+    import time as _time
+    from .datadump import STATEMENT, statement
+    base = Path(dump_dir)
+    if not base.is_dir():
+        return []
+    now = _time.time() if now is None else now
+    folders = [p for p in sorted(base.iterdir()) if p.is_dir()
+               and ((p / STATEMENT).is_file() or next(p.rglob("*.zip"), None) is not None)]
+    read = {p: statement(p) for p in folders}
+    newest_read = max((_latest(p) for p, got in read.items() if not isinstance(got, str)), default=None)
+    out = []
+    for folder, got in read.items():
+        if not isinstance(got, str):
+            continue
+        key = (str(Path(corpus).resolve()), str(folder.resolve()))
+        if now - _unread_said.get(key, float("-inf")) < UNREAD_SAY_S:
+            continue
+        _unread_said[key] = now
+        if newest_read is None or _latest(folder) > newest_read:
+            out.append(f"the newest Data Dump folder is not used: {got}; the dumps built in stand, and "
+                       f"Cellar is asked only for what they lack")
+        else:
+            out.append(f"a Data Dump folder is not used: {got}; the dumps that read are used as before")
+    return out
+
+
 #: the languages whose units a build has re-formed from the dump where a
 #: held unit lacked its Formex package (2026-11-19): after it, the per-unit
 #: pass may ask Cellar for what still lacks one (cellar.TreeUnits._reform)
