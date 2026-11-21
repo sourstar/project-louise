@@ -15,6 +15,7 @@ land. Until then architecture can review commit by commit.
 |---|---|---|---|---|
 | `superseded_ids(ref) -> list[str]` | app/discovery.py `_apply_batch` | the ids the unit was held under before (a form change moved its id): discovery retires those rows at the same locator — out of every index, validity forgotten, tombstoned with the reason | eurlex | 8c8f03de |
 | `parse_size(row) -> int \| None` | app/plugin_io.py `parse_size`, app/parallel.py `learn_parse_sizes` | the bytes a parse reads, where `size` misleads (a zip: its members unpacked, from the central directory) — the pool's admission estimate | eurlex | 15b5b5c3, 96d4bb01 |
+| `VALIDITY_ENDS_AT_AMENDMENT` (class attribute) | app/validity.py `of_doc`, `rechain` | the base holds originals, not every version: a held amendment ends the text it replaced (chain rule 2) | eurlex | (this branch) |
 | `ArticleNotes.changed` (field) | app/ask/articles.py `_ended_note` | the words for "text until {day}; amended since, the amended text is not held" | the four legal refs | d39e62f1 |
 | `UnitFetcher.prepare` may raise `spec.HeldBack` | app/acquire/engine.py | a bulk that must be used first cannot be: the pass ends, said, the per-unit API never asked; `prepare` runs under the pass's listing bound and stop | eurlex (`TreeUnits`) | 0786761f, 49f59827, 8ae7ad00 |
 
@@ -23,7 +24,7 @@ land. Until then architecture can review commit by commit.
 - **Validity chains** (app/validity.py; docs/05 amended 2026-11-21):
   - `forget` always recomputes the chain (V1);
   - `record` recomputes the Work a version leaves (V2);
-  - CHAIN RULE 2: a Work's last version also ends at the first day a held statement says its text changed (`first_change_detail`). Statements are dated by the FIRST version that states them, and a day from `UNDATED_FROM` (2999-01-01) names none;
+  - CHAIN RULE 2, for a plugin that declares `VALIDITY_ENDS_AT_AMENDMENT` (EUR-Lex: originals only, its consolidations a slice): a Work's last version also ends at the first day a held statement says its text changed (`first_change_detail`). Statements are dated by the FIRST version that states them, and a day from `UNDATED_FROM` (2999-01-01) names none. A collection whose origin dates every version keeps the origin's word: Normattiva's 20,365 and legi_F's 14,382 would otherwise have been ended. The declaration is kept in the manifest (`validity_changes_end`);
   - recorded and forgotten statements recompute the Works they target;
   - held manifests are re-chained once by the index maintainer (`CHAIN_VERSION`, `rechain`, worker `_rechain_validity`);
   - commits 9ca1f22c, d39e62f1, 40ecdee9. Before deploy: `tools/measure/validity_changed_since.py` per manifest. München's first count found the dating defect; the second count is under way.

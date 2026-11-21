@@ -197,6 +197,7 @@ def of_doc(doc, v: Validity, plugin=None) -> dict[str, Any] | None:
                 continue       # a day the origin wrote unreadably closes nothing
     if plugin is not None:
         out["amends"] = amendments_of_doc(doc, plugin)
+        out["changes_end"] = ends_at_amendment(plugin)
     return out
 
 
@@ -332,6 +333,43 @@ def _record_amendments(con, by_uid: str, rows) -> set[str]:
 WHOLE_REPEALS = ("repeals", "repealed_by", "repeal")
 
 
+#: THE CHAIN RULE 2 IS A PLUGIN'S DECLARATION (München's second count,
+#: 2026-11-21): Normattiva, LEGI and NeuRIS publish EVERY version with its
+#: own start and end (vigenza, DATE_FIN, the expressions) — the origin's own
+#: word on which text is in force, which a statement in another act must
+#: not override (Normattiva's 20,365 "insertion" ends: the salva-leggi lists
+#: and pre-1946 conversions; legi_F's 14,382). EUR-Lex's base holds an act's
+#: ORIGINAL and its consolidations only as a slice fetched on request: there
+#: nothing says the original's text is current, and a held amendment is the
+#: corpus's word that it is not (76,922). A plugin declares it with
+#: `VALIDITY_ENDS_AT_AMENDMENT = True`; the manifest keeps the declaration
+#: (`declare_changes_end`), so a chain recomputed without the plugin at hand
+#: follows it.
+CHANGES_END_KEY = "validity_changes_end"
+
+
+def ends_at_amendment(plugin) -> bool:
+    return bool(getattr(plugin, "VALIDITY_ENDS_AT_AMENDMENT", False))
+
+
+def declare_changes_end(con, on: bool) -> bool:
+    """The manifest's declaration set to `on`, inside the caller's
+    transaction; True when it moved (its chains then need `rechain`)."""
+    from app import db
+    was = changes_end(con)
+    if was != bool(on):
+        db.set_control(con, CHANGES_END_KEY, "1" if on else "0")
+        return True
+    return False
+
+
+def changes_end(con) -> bool:
+    """Whether a held amendment ends a Work's last version in this manifest
+    (one primary-key read)."""
+    from app import db
+    return str(db.get_control(con, CHANGES_END_KEY, "0") or "0") == "1"
+
+
 #: a day from which nothing is dated: LEGI's DATE_DEBUT/DATE_FIN for "a date
 #: still to be fixed" (2999-01-01), the CDM's open end (9999-12-31). A
 #: statement on or after it names no day (`first_change`)
@@ -400,7 +438,7 @@ def changed_at(con, work: str, version: dict) -> int | None:
     ended it: its last version, ended by a held amendment (`first_change`)
     and not by a repeal on or before that day. None otherwise."""
     end = version.get("valid_to")
-    if end is None:
+    if end is None or not changes_end(con):
         return None
     later = con.execute("SELECT 1 FROM validity WHERE work=? AND valid_from > ? LIMIT 1",
                         (work, int(version["valid_from"]))).fetchone()
@@ -550,8 +588,9 @@ def write_amendments(con, pairs: Iterable[tuple[str, list]]) -> int:
     for uid, rows in pairs:
         touched |= _record_amendments(con, uid, rows)
         n += 1
-    for work in sorted(touched):
-        recompute(con, work)       # a statement may end a Work's last version (`first_change`)
+    if changes_end(con):
+        for work in sorted(touched):
+            recompute(con, work)   # a statement may end a Work's last version (`first_change`)
     return n
 
 
@@ -583,9 +622,13 @@ def record(con, uid: str, native_id: int, meta: dict[str, Any], *, day: int | No
          meta.get("start_basis")))
     con.executemany("INSERT OR IGNORE INTO validity_works(key, work) VALUES(?,?)",
                     [(str(k), work) for k in meta.get("keys") or []])
+    if "changes_end" in meta:
+        declare_changes_end(con, bool(meta["changes_end"]))
     touched = _record_closures(con, uid, meta.get("closes") or [])
     if "amends" in meta:
-        touched |= _record_amendments(con, uid, meta.get("amends") or [])
+        targets = _record_amendments(con, uid, meta.get("amends") or [])
+        if changes_end(con):
+            touched |= targets       # an amendment ends a target's last version (rule 2)
     moved = recompute(con, work, except_uid=uid, day=day)
     for other in sorted((touched | ({left} if left else set())) - {work}):
         moved += recompute(con, other, day=day)
@@ -609,7 +652,9 @@ def forget(con, uid: str, *, day: int | None = None, chain: bool = True) -> list
         return []
     touched = _record_closures(con, uid, [])         # its closures go; the Works they keyed
     con.execute("DELETE FROM validity WHERE uid=?", (uid,))
-    touched |= _record_amendments(con, uid, [])
+    targets = _record_amendments(con, uid, [])
+    if changes_end(con):
+        touched |= targets
     moved = recompute(con, str(row[0]), day=day)
     for other in sorted(touched - {str(row[0])}):
         moved += recompute(con, other, day=day)
@@ -634,8 +679,8 @@ def chain_current(con) -> bool:
         return False
 
 
-def rechain(con, *, day: int | None = None, window: int = 2000,
-            should_stop=lambda: False) -> tuple[int, int, bool]:
+def rechain(con, *, day: int | None = None, window: int = 2000, should_stop=lambda: False,
+            ends_at_amendment_: bool | None = None) -> tuple[int, int, bool]:
     """Every Work's chain recomputed under CHAIN_VERSION: the Works walked in
     order from a cursor (idx_validity_work, a covering range — never the
     table at once), a window a transaction (BEGIN IMMEDIATE: a writer that
@@ -646,6 +691,21 @@ def rechain(con, *, day: int | None = None, window: int = 2000,
     works_n = moved_n = 0
     if chain_current(con):
         return 0, 0, True
+    if ends_at_amendment_ is not None or not changes_end(con):
+        con.execute("BEGIN IMMEDIATE")
+        try:
+            if ends_at_amendment_ is not None:
+                declare_changes_end(con, ends_at_amendment_)
+            if not changes_end(con):
+                # rule 2 does not apply here: no chain moves, nothing to walk
+                db.set_control(con, CHAIN_VERSION_KEY, str(CHAIN_VERSION))
+                con.execute("COMMIT")
+                return 0, 0, True
+            con.execute("COMMIT")
+        except BaseException:
+            if con.in_transaction:
+                con.execute("ROLLBACK")
+            raise
     while not should_stop():
         con.execute("BEGIN IMMEDIATE")
         try:
@@ -785,15 +845,17 @@ def recompute(con, work: str, *, except_uid: str | None = None, day: int | None 
     """The chain of one Work: versions in order of (valid_from, native_id);
     each ends where the next starts, the last where another Work's version
     states it is repealed (`closed_at`, if later than its start and it has
-    text) or where a held statement says its text changed (`first_change`:
-    the next version starts that day, held or not — 2026-11-21, the review's
-    V3/V4), whichever is first, or else open; `shown` is the version shown
+    text) or, where the plugin declares it (`changes_end`), where a held
+    statement says its text changed (`first_change`: the next version starts
+    that day, held or not — 2026-11-21, the review's V3/V4), whichever is
+    first, or else open; `shown` is the version shown
     on `day` (`shown_index`; today's UTC day when not given)."""
     rows = con.execute(
         "SELECT uid, native_id, valid_from, valid_to, has_text, shown FROM validity "
         "WHERE work=? ORDER BY valid_from, native_id", (work,)).fetchall()
     moved: list[str] = []
     closed = closed_at(con, work) if rows else None
+    by_change = bool(rows) and changes_end(con)
     ends: list[int | None] = []
     for i, r in enumerate(rows):
         to = int(rows[i + 1]["valid_from"]) if i + 1 < len(rows) else None
@@ -801,7 +863,8 @@ def recompute(con, work: str, *, except_uid: str | None = None, day: int | None 
             start = int(r["valid_from"])
             # review §3.2 case 2: ended from outside its chain — a repeal, or
             # a change whose text this collection does not hold (yet)
-            outside = [d for d in (closed, first_change(con, work, start)) if d is not None and d > start]
+            change = first_change(con, work, start) if by_change else None
+            outside = [d for d in (closed, change) if d is not None and d > start]
             to = min(outside) if outside else None
         ends.append(to)
     day = int(day) if day is not None else today()

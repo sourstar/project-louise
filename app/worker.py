@@ -3393,6 +3393,7 @@ def _rechain_validity(con, collection) -> bool:
     t0 = time.monotonic()
     works, moved, done = validity.rechain(
         con, day=validity.today(collection),
+        ends_at_amendment_=validity.ends_at_amendment(collection.plugin_instance()),
         should_stop=lambda: (_stop.is_set() or collection.name in node_state.paused_collections()
                              or not _maintenance_allowed() or time.monotonic() - t0 > 60.0))
     if works or done:

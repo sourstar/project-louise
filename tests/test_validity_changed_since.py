@@ -22,13 +22,14 @@ def _mk(tmp_path, uids):
     for n, uid in enumerate(uids, 1):
         con.execute("INSERT INTO documents(uid, source, native_id, path, rdf_done, fts_done, embed_done) "
                     "VALUES(?,?,?,?,1,1,1)", (uid, "eurlex", str(n), f"/x/{n}"))
+    validity.declare_changes_end(con, True)        # EUR-Lex's declaration (the rdf stage's meta)
     con.commit()
     return c, con
 
 
-def _version(start, work="32013R0575/en", keys=(BASE,), amends=()):
+def _version(start, work="32013R0575/en", keys=(BASE,), amends=(), changes_end=True):
     return {"from": start, "work": work, "has_text": True, "in_force": 1, "keys": list(keys), "closes": [],
-            "amends": [(t, "", "", None, "amends") for t in amends]}
+            "amends": [(t, "", "", None, "amends") for t in amends], "changes_end": changes_end}
 
 
 def _row(con, uid):
@@ -223,3 +224,40 @@ def test_an_undated_day_dates_nothing(tmp_path):
     validity._record_amendments(con, "e:deferred", [(BASE, "", "", 29990101, "substitution"),
                                                     (BASE, "", "", 99991231, "insertion")])
     assert validity.first_change(con, "32013R0575/en", 20100101) is None
+
+
+def test_a_plugin_that_publishes_every_version_is_never_ended_by_a_statement(tmp_path):
+    """München's second count (2026-11-21): Normattiva 20,365 and legi_F
+    14,382 versions would have ended on another act's statement, where the
+    origin itself dates every version. Only a plugin that declares
+    VALIDITY_ENDS_AT_AMENDMENT (EUR-Lex: originals, consolidations a slice)
+    ends a text at a held amendment."""
+    from app.plugins.eurlex.source import EurlexSource
+    from app.plugins.legi.source import LegiSource
+    from app.plugins.normattiva.source import NormattivaSource
+    assert validity.ends_at_amendment(EurlexSource())
+    assert not validity.ends_at_amendment(NormattivaSource()) and not validity.ends_at_amendment(LegiSource())
+    _c, con = _mk(tmp_path, ["e:orig", "e:amending"])
+    validity.declare_changes_end(con, False)
+    con.commit()
+    _record(con, "e:orig", 1, _version(20130628, changes_end=False))
+    _record(con, "e:amending", 2, _version(20190627, work="AM/en", keys=["celex:AM"], amends=[BASE],
+                                           changes_end=False))
+    assert _row(con, "e:orig") == (20130628, None, 1), "the origin's own dates stand"
+    v = articles._versions(con, "32013R0575/en")[-1]
+    assert validity.changed_at(con, "32013R0575/en", {**v, "valid_to": 20190627}) is None
+    # its manifest is re-chained by marking alone: nothing walked, nothing moved
+    assert validity.rechain(con, day=DAY, ends_at_amendment_=False) == (0, 0, True)
+    assert validity.chain_current(con)
+
+
+def test_the_declaration_turned_on_rechains_the_manifest(tmp_path):
+    _c, con = _mk(tmp_path, ["e:orig", "e:amending"])
+    validity.declare_changes_end(con, False)
+    con.commit()
+    _record(con, "e:orig", 1, _version(20130628, changes_end=False))
+    _record(con, "e:amending", 2, _version(20190627, work="AM/en", keys=["celex:AM"], amends=[BASE],
+                                           changes_end=False))
+    assert _row(con, "e:orig") == (20130628, None, 1)
+    works, moved, done = validity.rechain(con, day=DAY, ends_at_amendment_=True)
+    assert done and moved == 1 and _row(con, "e:orig") == (20130628, 20190627, 1)

@@ -492,6 +492,12 @@ def _unit_day(unit: Path, celex: str, entries: list[os.DirEntry], tree_facts: bo
 class EurlexSource:
     source_id = "eurlex"
     ISSUES = ISSUES
+    #: the base holds an act's ORIGINAL, its consolidations only as the
+    #: history slice fetched on request: a held amendment ends the original's
+    #: text (app/validity.py, chain rule 2; the EUR-Lex5 review's V3/V4).
+    #: Normattiva, LEGI and NeuRIS publish every version with its own dates
+    #: and do not declare it
+    VALIDITY_ENDS_AT_AMENDMENT = True
     #: the parse pool's large-document lane (app/parallel.py): what a parse
     #: of one unit holds per byte of its `size` (the unit's files, summed at
     #: discovery). MEASURED 2026-11-19 (München, its own container): 32021R2017
