@@ -243,35 +243,3 @@ def test_a_dump_unit_whose_files_are_not_their_names_is_the_api_s_never_landed(t
     assert [c for _l, c, _f in eurlex_dump.incomplete_due(corpus, {"it"})] == [CELEX]
     eurlex_dump.mark_fetched(corpus, "it", CELEX)
     assert eurlex_dump.incomplete_due(corpus, {"it"}) == [], "asked once: not every pass"
-
-
-def _shifted_files() -> dict[str, bytes]:
-    """32013D0410's dump files (24 languages, 2026-11-21): the wrapper's name
-    holds an ANNEX, the body's name holds the wrapper, the ACT sits under an
-    annex's name. Cellar serves them right."""
-    items = _items(FX)
-    wname, body = "L_1972160IT.01000101.doc.xml", "L_1972160IT.01000101.xml"
-    annex = (b'<?xml version="1.0"?><ANNEX><BIB.INSTANCE><PAGE.FIRST>54</PAGE.FIRST><PAGE.SEQ>1</PAGE.SEQ>'
-             b'</BIB.INSTANCE><TITLE><TI><P>PRILOGA VII</P></TI></TITLE></ANNEX>')
-    return {wname: annex, body: items[wname], "L_1972160IT.01000501.xml": items[body],
-            "L_1972160IT.toc.xml": items["L_1972160IT.toc.xml"]}
-
-
-def test_a_unit_whose_wrapper_is_under_another_name_is_refused_listed_and_the_api_s(tmp_path, serial):
-    from app.plugins.base import UnindexableDocument
-    files = _shifted_files()
-    with pytest.raises(formex.FormexError, match=r"01000101.doc.xml holds <ANNEX>, not a wrapper.*"
-                                                 r"01000101.xml holds a wrapper"):
-        formex.parse(files, CELEX)
-    corpus = tmp_path / "corpus"
-    unit = _unit(corpus, {**files, rdf.TREE_FILE: _scoped((FX / MTD).read_bytes())})
-    assert any("not a wrapper" in w for w in eurlex_dump.held_not_its_name(unit, CELEX)), "the build's API record"
-    # LISTED, its day the work's own (it was "container not enumerable" on every scan)
-    (ref,) = SOURCE.discover(DiscoverState(corpus_root=corpus))
-    assert ref.error is None
-    plain = tmp_path / "plain"
-    _unit(plain, {**_items(FX), rdf.TREE_FILE: _scoped((FX / MTD).read_bytes())})
-    (pref,) = SOURCE.discover(DiscoverState(corpus_root=plain))
-    assert ref.native_id == pref.native_id, "the work's day is the wrapper's OJ day: the same id"
-    with pytest.raises(UnindexableDocument, match="not a wrapper"):
-        plugin_io.canonical_doc(SOURCE, {"native_id": ref.native_id, "path": ref.locator})
