@@ -62,6 +62,11 @@ Each one is proposed, not built generically. Architecture decides the API.
 | **History on request** | app/ask/history.py (Cellar) | hooks `versions_of(work)` and `fetch_version(...)`, the bounded fetch and parse in the engine | LEGI, Normattiva past versions |
 | **The chain measured before it moves** | tools/measure/validity_changed_since.py | the maintainer's re-derive passes count what they will move and say it before applying | every one-off re-derive |
 
+## 3b. An engine gap found on the way (not built)
+
+- **Entity tags have one global version.** `config.ENTITY_VERSION` re-tags every document of every collection. The EUR-Lex citation grammar now reads 24 languages, and it also reads more in the old seven: implementing acts, "des Artikels", "n.o", the act nearest the article. Documents already indexed keep their old tags until their next text-index pass. A bump would re-index pubmed and wikipedia for a few EU citations. **Proposed:** a version per resolver (`refs.RESOLVER`'s parts), so that only documents tagged by a resolver that changed are re-tagged. The four legal collections are re-indexed by the chunker v4 move anyway.
+- **The refs store** switched to WAL without a retry, so a brand-new store opened by two processes at once failed with "database is locked" (609a8403). The same pattern may sit in other stores opened at boot (the node's own state, the manifests' first open). **Proposed:** one shared helper for opening a store in WAL.
+
 ## 4. Open, on the same branch
 
 - C11: the XHTML/HTML reader's division headings, final formula, legacy footnotes.
