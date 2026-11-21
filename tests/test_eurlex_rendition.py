@@ -10,11 +10,15 @@ a few elements (tests/fixtures/eurlex/rendition/, README: which, and how):
   3. a heading in a table cell (a correlation table's "Articolul 12") is not
      an article;
   4. the footnotes go to the record's notes, with the section that calls
-     them, and each numbered recital is a section — as formex.py reads them."""
+     them, and each numbered recital is a section — as formex.py reads them.
+And the COVERAGE: every text node of a fixture's body ends in a section (its
+label or its text) or the notes."""
 from __future__ import annotations
 
+import collections
 import re
 import types
+from html.parser import HTMLParser
 from pathlib import Path
 
 import pytest
@@ -268,3 +272,46 @@ def test_a_pdf_s_recitals_stay_in_its_preamble():
                                                "(2) La Commissione", "Articolo 1", "testo")]
     sections, _articles, _annexes = rendition._sections(lines)
     assert [label for label, _ in sections] == ["Preamble", "Articolo 1"]
+
+
+# ---- coverage -------------------------------------------------------------------------------
+
+class _Nodes(HTMLParser):
+    """Every text node of the body, script, style and title aside."""
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.nodes: list[str] = []
+        self._skip = 0
+
+    def handle_starttag(self, tag, attrs):
+        self._skip += tag in ("script", "style", "title")
+
+    def handle_endtag(self, tag):
+        self._skip -= tag in ("script", "style", "title")
+
+    def handle_data(self, data):
+        text = re.sub(r"\s+", "", data)
+        if text and not self._skip:
+            self.nodes.append(text)
+
+
+COVERED = sorted(REND.glob("*.html")) + [FIX / "html" / "31988D0540" / "31988D0540it.html"] + \
+    sorted((FIX / "xhtml" / "32010D0699").glob("*.html"))
+
+
+@pytest.mark.parametrize("path", COVERED, ids=lambda p: p.name)
+def test_every_text_node_of_the_body_ends_in_a_section_or_the_notes(path):
+    """Invariant 11 as a test: each text node (its characters, whitespace
+    aside) is in a section's label or text or in a note, and no character of
+    the body is held fewer times than the body has it."""
+    act = rendition.parse_html({path.name: path.read_bytes()}, [path.name], lang="xx", root="ACT", note=NOTE)
+    held = re.sub(r"\s+", "", "".join(f"{label}{text}" for label, text in act.rendered_sections)
+                  + "".join(n["text"] for n in act.notes))
+    p = _Nodes()
+    p.feed(path.read_text(encoding="utf-8", errors="replace"))
+    p.close()
+    assert p.nodes
+    assert [n for n in p.nodes if n not in held] == []
+    short = collections.Counter("".join(p.nodes)) - collections.Counter(held)
+    assert not short, short.most_common(5)
