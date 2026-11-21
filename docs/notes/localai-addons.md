@@ -101,7 +101,9 @@ closed unless sign-in is on (inv. 8, R3). Both readings agree on now.
 
 **Switched off**: `LOCALAI_ADDONS_ENABLED=false` and
 `LOCALAI_ADDONS_BACKEND_LIBRARY=false` in the LocalAI app's env (a node
-action, München's). It replaces the earlier choice below. Option B is not
+action, München's). LIVE since 01:48:33Z (München): `/api/addons/*` answers
+503 "add-ons are turned off on this instance"; backends, fingerprint vectors
+and rerank unchanged. It replaces the earlier choice below. Option B is not
 built while the owner is off.
 
 ### Superseded: on, with sign-in (operator, earlier the same day, via München)
