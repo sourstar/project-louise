@@ -84,10 +84,14 @@ fixed by the legal session now (operator, 2026-11-21).
 
 | e1addb75 | chain rule 2 only where the plugin declares it (`VALIDITY_ENDS_AT_AMENDMENT`: EUR-Lex): München's second count, Normattiva 20,365 and legi_F 14,382 versions ended against the origin's own dates, EUR-Lex5 76,922 as intended | tests/test_validity_changed_since.py |
 
+| 63c1fa2c (merge) | C11, the XHTML/HTML reader: quoted headings, table cells and nested elements never articles; number-first annexes and lettered articles in the 24 languages; footnotes to the notes, numbered recitals as sections; division headings as label prefixes (labels identical to Formex 3 → 10 of 10 dual-form acts); the final formula and signatures a "Final" section; legacy footnotes filed under the section that calls them (1,349 notes in 126 of 128 acts); legacy amending acts' articles 54 → 56 of 57 against Formex (the last one is the origin's: 31998R1191's item holds the next act); the flaky dump-build test was its own zip timestamps | tests/test_eurlex_rendition.py (coverage on 374 real items) |
+| 24d90986 | an article's label read in the 24 languages, its number in one spelling ("14 bis" = "14α" = "14а" = "14a") | tests/ask/test_article_citations.py |
+| f4b55b53 | test_mirrors isolated from the process-wide transfer manager | — |
+
 NeuRIS's 0 amendments, checked (München, read-only, 2026-11-21): 0 of 5,536 records hold `active_modifications`, and 0 of the corpus's 15,785 LegalDocML files (zip members included) holds `activeModifications`, `passiveModifications`, `textualMod` or an `analysis` block (control: `akn:meta` in 15,785 of 15,785, `akn:lifecycle` in 5,551). The test-phase origin states none; the reader drops nothing.
 
-In progress: the XHTML/HTML reader (C11: divisions, final
-formula, legacy footnotes), and P8, choice A: chunker v4 built behind its
+In progress: the citation grammar in the 24 languages (the act and its
+article in a question: today en fr de it es pt nl), and P8, choice A: chunker v4 built behind its
 version and measured per collection first — chunk ids carry the version,
 so moving the shared legal space re-keys every vector row of the four
 collections and their snapshots (docs/notes/legal-chunker-v4.md, owed).
