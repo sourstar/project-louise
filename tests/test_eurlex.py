@@ -172,7 +172,9 @@ def test_the_consolidation_is_another_version_of_the_same_work(corpus):
     # the amendment marks: which act changed which text
     mods = x["modifications"]
     assert {m["ACTIVE.DOC"] for m in mods if m["pi"] == "CLG.MDFO"} == {"32017R2321", "32018R0825"}
-    assert len(mods) == 70 and mods[0]["section"].startswith("Article 2")
+    # 72: every mark the files hold (70 until 2026-11-21: the two marking Annex
+    # Ia's insertion stood directly under a TITLE and were lost)
+    assert len(mods) == 72 and mods[0]["section"].startswith("Article 2")
     assert doc.issues == []
 
 

@@ -1,0 +1,81 @@
+# EUR-Lex5 review, 2026-11-21
+
+The operator stopped EUR-Lex5 (paused, frozen, out of serving: München,
+09:48–09:53Z) and ordered a review of the collection and of the engine:
+"It will not start again until any … issue has not been understood and
+fixed … Any further run of eurlex has to start from the problematic parts
+and monitored every 5 minutes." The legal session is in charge; München
+runs its exact steps.
+
+Sources: München's read-only measurements (`/root/measure/eu5-review/` on
+the node, items a–u), and four independent code reviews, each reproducing
+its findings (scratch tests under the session's scratchpad `review-*/`).
+Every row below was reproduced or traced to its lines; none is a guess.
+
+## The collection as it stood (09:36–09:47Z)
+
+970,426 documents: rdf 931,552, fts 929,975, embed off; 486 errors. Units by
+form: Formex 470,755, legacy HTML 309,936, Formex package (zip) 105,495, PDF
+only 46,593. Issues: entry-into-force-before-publication 129,887,
+start-from-document-date 48,509, end-before-start 908, no-text-layer 418.
+1,909 documents indexed with 0 chunks. The node: kernel panic 01:56Z (ZFS
+write thread, a general protection fault in the slab allocator — not the
+app's; no OOM before it), whole node paused by the operator 09:46Z.
+
+## Findings
+
+Owner: L = the legal session's code, A = architecture's (the engine), both
+fixed by the legal session now (operator, 2026-11-21).
+
+| # | Where | Defect | Effect | Owner |
+|---|---|---|---|---|
+| C1 | discovery + eurlex `_unit_day` | a unit re-formed into a zip got a new native id (its wrapper's OJ day, not the tree's work day); discovery never retires a row its unit no longer yields | **37,695 units held twice**, both indexed | L (#774) |
+| C2 | formex `_corrections` | a real corrigendum's text is inside DESCRIPTION (QUOT.S, a TBL); only OLD/NEW.CORR were read | every Formex corrigendum indexed empty | L (parser 5) |
+| C3 | formex `_recitals` | DIV.CONSID (headed recital groups) read into no section | 6/140 acts; up to 219 recitals each | L |
+| C4 | formex `parse` | an annexed document whose root is not ANNEX (an ACT, GENERAL, AGR) kept only as a tree; an AGR of COLL.LETTERS read as nothing; an agreement's P recitals into meta only | ~5/140 acts; 3/16 agreements empty | L |
+| C5 | formex `lines` | text buffered before a TBL (through P, QUOT.S) dropped | 11/140 acts | L |
+| C6 | formex `lines` | TI.BLK inside a table dropped | 5/140 acts | L |
+| C7 | formex | consolidation marks (CLG PIs) in LIST, CORPUS, TITLE, CONS.DOC, NOTE not collected | up to 60 % of a consolidation's marks | L |
+| C8 | formex `inline` | DLIST/TERM/DEFINITION/CELL glued; a table nested in a CELL emitted twice | 4/140 acts | L |
+| C9 | formex `own_wrapper` | a single wrapper is taken whatever act it names (hr: 3 acts of 2009–11 hold a 1998 act's package) | another act's text in the record | L |
+| C10 | formex | a wrapper naming no main file held reads as an empty act | indexed empty | L |
+| C11 | rendition | quoted article headings in XHTML amending acts become articles; annex headings number-first (hu, lv, lt, et, ro) missed; "14a. cikk" missed; correlation-table cells become articles; footnotes all in the last section; recitals one section | every XHTML/HTML amending act; annexes merged into the last article | L |
+| V1 | validity `forget(chain=False)` | the chain is left to a `record` that may never come (a re-parse stating no start, a refused re-parse) | a Work out of the in-force filter | L (A1c) |
+| V2 | validity `record` | a version moving to another Work leaves the old Work's chain stale | no version of it shown | L |
+| V3 | ask/articles, validity.describe | with no history slice held, an amended original is pinned as "text in force today" | outdated law as current | L |
+| V4 | ask/history | a version fetched "as of" a day becomes the shown, open-ended version for every later reader | outdated law as current | L |
+| V5 | ask/history `_fact` | the fetched version parsed outside every bound, in the worker, in acquire-only mode; a refused parse said "fetched" | OOM risk; silent failure | L |
+| V6 | worker roll vs fts/embed | the daily validity roll's reset can be overwritten by a stage that read before it | stale `shown` in the index and vectors | A |
+| P1 | worker `_execute_step` | a `MemoryWait` (a deferral) on the selected row written as a permanent error | the large acts out of every selection | A |
+| P2 | parallel `compute` | one deadline for the whole batch; a timeout recomputes the batch in the main process; after 3 the pool is off for the process's life (`reset_failures` never called) | **the fts crawl (0.7 → 73 ms/doc)**, one core | A |
+| P3 | parallel estimate | a zip package's size is its compressed bytes (Formex deflates ~4.3x) | a big package in an uncapped shared child: OOM | L (#774) + A |
+| P4 | fts look-ahead | an abandoned take does not stop its compute; the row is parsed twice, the lane held | doubled large parses, then P1 | A |
+| P5 | discovery + rdf | a re-scan that changes `lang` writes it before the rdf stage compares; the old group's rows stay | the pubmed duplicate again by another path | L (#776) |
+| P6 | fts `index_books` | a `mul` record that loses a section keeps its rows in that group | stale rows | A |
+| P7 | parallel | a stop is not checked inside a batch (a large part: ~730 s against a 120 s grace) | SIGKILL mid-unit | A |
+| P8 | chunking_legal `_SENTENCE_END` | Greek and Cyrillic sentences never split | an over-long el/bg paragraph cut mid-sentence (needs chunker v4: a space change — the operator's decision) | L |
+| Q1 | cellar + work_trees | a tree kept 6 h is landed whatever the listing's newer date; the engine records the unit current | a stale unit for good | L (#759) |
+| Q2 | cellar `TreeInventory.list` | one due unit failing as an episode returns the due list forever: no listing again | no new act ever fetched | L (#717) |
+| Q3 | engine backoff | `_upsert_failed` keeps the first failure's date; a moved date reads as a new file, asked at once every pass | retry storms, every collection | A |
+| Q4 | eurlex_dump incomplete record | a per-PROCESS lock; the CLI build races the worker | lost re-form and fetched marks | L |
+| Q5 | eurlex_dump | `mark_fetched` rewrites the whole 15 MiB record per unit; `incomplete_due` re-parses every held re-form unit per listing | ~11 min/h serialized, 26 GiB/h written | L |
+| Q6 | cellar prepare / eurlex_dump | an unreadable newer dump: the pass goes to Cellar for everything (bulk first broken); an unreadable item zip stamped built | API instead of bulk | L |
+| Q7 | eurlex_dump build | no stop checked during `prepare`'s build | SIGKILL, the build again | L |
+| Q8 | eurlex_dump | `tried`/`fetched` never cleared by a newer dump | never asked first again | L |
+| O1 | deploy | the worker keeps no log file; every deploy and the panic erased it | the 11-19/20 evidence lost | A |
+| D1 | eurlex start of validity | 129,887 acts state an entry into force before their OJ publication (a decision takes effect on notification, Art. 297(2) TFEU); validity starts at the publication | in-force filter wrong between notification and publication | the operator's decision |
+
+## Order
+
+1. The reader (C2–C11) with a COVERAGE TEST: every text fragment of the
+   files an act's wrapper names (and their inclusions) is in a section, a
+   note or the record's kept trees, on real acts of every form and
+   language — invariant 11 as a test, not a review.
+2. Identity (C1, P5): one unit is one document; the repair of the 37,695.
+3. The engine (P1–P4, P6, P7, V6, O1) and acquisition (Q1–Q8).
+4. Validity and history (V1–V5).
+5. Then EUR-Lex5 re-derived whole (parser 5 amended in place: nothing
+   published, RULE 1), the problematic units FIRST (the duplicates, the
+   1,909 empty ones, corrigenda, the swapped/shifted, the packages, the
+   large ones), München reporting every 5 minutes; the rest only after
+   that slice reads right.
