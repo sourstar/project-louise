@@ -82,6 +82,10 @@ fixed by the legal session now (operator, 2026-11-21).
 | 40ecdee9 | V3/V4 corrected on München's count: a statement dated by the first version that states it, an undated day (2999-01-01) none — legi_F's 161,627 and Normattiva's 28,418 were repetitions | tests/test_validity_changed_since.py |
 | 787261aa | the refs store's column check raced (found by the engine run) | tests/test_refs_store_open_race.py |
 
+| e1addb75 | chain rule 2 only where the plugin declares it (`VALIDITY_ENDS_AT_AMENDMENT`: EUR-Lex): München's second count, Normattiva 20,365 and legi_F 14,382 versions ended against the origin's own dates, EUR-Lex5 76,922 as intended | tests/test_validity_changed_since.py |
+
+NeuRIS's 0 amendments, checked (München, read-only, 2026-11-21): 0 of 5,536 records hold `active_modifications`, and 0 of the corpus's 15,785 LegalDocML files (zip members included) holds `activeModifications`, `passiveModifications`, `textualMod` or an `analysis` block (control: `akn:meta` in 15,785 of 15,785, `akn:lifecycle` in 5,551). The test-phase origin states none; the reader drops nothing.
+
 In progress: the XHTML/HTML reader (C11: divisions, final
 formula, legacy footnotes), and P8, choice A: chunker v4 built behind its
 version and measured per collection first — chunk ids carry the version,
