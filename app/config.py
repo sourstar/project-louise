@@ -534,8 +534,15 @@ PARSE_TASKS_PER_CHILD = int(os.getenv("PARSE_TASKS_PER_CHILD", "500"))
 # but finite.
 PARSE_TIMEOUT_S = float(os.getenv("PARSE_TIMEOUT_S", "120"))
 # Consecutive pool failures after which this process stops using children
-# altogether and computes in-process until the next restart.
+# for PARSE_RETRY_S, computing in-process meanwhile (a heavy document is
+# deferred, never parsed in the main process). Then the pool is tried again
+# on probation: one more failure and it is off for twice as long, up to
+# PARSE_RETRY_MAX_S; an answered batch clears it (app/parallel.py). Until
+# 2026-11-21 it was off until the next restart, and EUR-Lex5's text index
+# crawled on one core (0.7 -> 73 ms/doc, P2 of the review).
 PARSE_MAX_FAILURES = int(os.getenv("PARSE_MAX_FAILURES", "3"))
+PARSE_RETRY_S = float(os.getenv("PARSE_RETRY_S", "300"))
+PARSE_RETRY_MAX_S = float(os.getenv("PARSE_RETRY_MAX_S", "3600"))
 # An idle parse pool is RELEASED after this many seconds with no caller
 # inside it (app/parallel.release_idle): its children hold the plugin caches
 # they grew while parsing — measured 10.8 GiB in 12 children, resident 26-42

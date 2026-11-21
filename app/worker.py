@@ -370,8 +370,10 @@ def stage_rdf(con, row, collection) -> None:
             (config.MAX_RETRIES, row["uid"], want - 1)).fetchall()
     _prefetch_ahead(con, collection, "rdf", row)
     # the batch's parse goes to the PARSE POOL (amendment 47); the writes
-    # stay here, inside the caller's transaction
-    metas = parallel.metadata_for_rows(collection, [row, *peers])
+    # stay here, inside the caller's transaction. It stops at a part
+    # boundary with the worker or its mode (P7, `_parse_stop`)
+    with parallel.controlled(stop=_parse_stop()):
+        metas = parallel.metadata_for_rows(collection, [row, *peers])
     ok, first = metas[0]
     if not ok:
         parallel.raise_for(first)            # unguarded: its failure IS the round's
@@ -822,6 +824,15 @@ def drop_fts_ahead(collection=None) -> None:
 _committed = threading.local()
 
 
+def _parse_stop():
+    """What stops a stage's parse in the pool at its next part boundary
+    (`parallel.controlled`; P7 of the 2026-11-21 review): the worker's stop,
+    and its mode holding parsing — what stops for SIGTERM stops for the mode
+    (scheduling.md pitfall 16). Read at call time: a test's or a reload's
+    events are the ones in force."""
+    return _AnyStop(_stop, _parse_held)
+
+
 def _reads_shared(collection) -> bool:
     """A sister that READS a shared text index (app/text_index.py): its index
     stage copies its writer's marks instead of indexing; never selected for
@@ -927,8 +938,10 @@ def stage_fts(con, row, collection) -> None:
         rows = [_with_rid(con, row), *(dict(p) for p in peers)]
         # the batch's fetch/parse/chunk goes to the PARSE POOL (amendment 47):
         # one (ok, chunks) per row, in order; the selected row's failure IS the
-        # round's, a peer's failure drops the peer
-        computed = list(zip(rows, parallel.fts_for_rows(collection, rows, names=with_names)))
+        # round's, a peer's failure drops the peer. It stops at a part
+        # boundary with the worker or its mode (P7, `_parse_stop`)
+        with parallel.controlled(stop=_parse_stop()):
+            computed = list(zip(rows, parallel.fts_for_rows(collection, rows, names=with_names)))
     # THE BATCH'S TIME, SPLIT (München, 2026-11-09: normattiva-nemo's long
     # documents, batches of 1-2 at 1.6-25 s each, could not be told apart as
     # parse-bound or commit-bound from the total): the parse waited for or
@@ -4583,6 +4596,9 @@ def transient_failure(exc: BaseException) -> bool:
             # a document too large to parse beside what runs now (2026-11-19):
             # the pool's large lane defers it; nothing is wrong with it
             or isinstance(exc, parallel.MemoryWait)
+            # its batch stopped at a part boundary (the worker stopping, its
+            # mode holding parsing, a look-ahead let go of; 2026-11-21, P7)
+            or isinstance(exc, parallel.Stopped)
             # the vector table lacks the validity columns the collection
             # declares: the TABLE's state, repaired once by `hold vectors
             # validity-columns`; every document defers until then (2026-10-13)
@@ -4652,6 +4668,13 @@ def _execute_step(con, collection, stage, row) -> bool:
             db.log_event(con, "info", stage,
                          f"{stage} interrupted — the node is stopping, or its mode "
                          f"no longer runs this ({e})")
+            return False
+        if isinstance(e, parallel.Stopped):
+            # its batch stopped at a part boundary in the parse pool (P7 of
+            # the 2026-11-21 review): nothing of the document was written
+            db.log_event(con, "info", stage,
+                         f"{stage} interrupted — the node is stopping, or its mode no longer "
+                         f"parses; the document is untouched ({e})"[:500])
             return False
         if manifest_contended(e):
             # Another writer had the manifest. Nothing is wrong with this
