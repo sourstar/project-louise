@@ -28,9 +28,17 @@ DEAD = "http://127.0.0.1:9"      # nothing listens: connection refused
 
 @pytest.fixture(autouse=True)
 def clean_down_state():
+    """The mirrors' down state AND the transfer manager are process-wide: an
+    earlier test that left DEAD's host cooled had it ranked last (the
+    manager's rule, as it should), so it was never tried and never marked
+    down — this module failed after others in one run, never alone
+    (2026-11-21). A fresh manager each test."""
+    from app.transfer.manager import set_manager
     mirrors.reset_down_state()
+    set_manager(None)
     yield
     mirrors.reset_down_state()
+    set_manager(None)
 
 
 @pytest.fixture
