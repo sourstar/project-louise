@@ -97,7 +97,17 @@ by digest whatever the build, and installs by name from the command line
 But it needs the owner on, and so reopens the second path architecture wants
 closed unless sign-in is on (inv. 8, R3). Both readings agree on now.
 
-## Recommendation
+## Decision (operator, 2026-11-21, via München)
+
+**On, with sign-in**, not the switch-off. Wiring asked of architecture: Louise
+sends a LocalAI API key read from a FILE on every call (inv. 8 on Louise's
+side); then `LOCALAI_AUTH=true`, registration by invite or approval,
+named-user ownership. Nothing changes on the node until that is deployed. To
+check in that wiring: where LocalAI itself keeps the key (an env value would
+be R3 again; a key issued to a user and held in LocalAI's store is not).
+Option B stays possible, since the owner stays on.
+
+## Recommendation (before the decision)
 
 - B is the only Add-ons use that simplifies deployment; A is rejected; C is
   not a deployment matter.
