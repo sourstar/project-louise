@@ -49,6 +49,25 @@ From `op-cellar-git/eurlex-xml-format` @ `a4b891042e1cfe4d43617d994da50b02e95712
 | `EN-CELEX-02009R1223-20191218.xml` | `new/samples/` | a branch notice of a CONSOLIDATED version (`ACT_CONSOLIDATED_BASED_ON_RESOURCE_LEGAL`, the ELI of the version). Its first line is an editor's banner — `<!-- edited with XMLSpy v2019 rel. 3 sp1 … by DG OP -->` — a HAND-EDITED sample: its expressions sit inside WORK with `display="true"`, where Cellar's own notices put the branch's EXPRESSION beside WORK |
 | `celex_32018R0196_object_work.xml` | `new/samples/` | an OBJECT notice of Regulation (EU) 2018/196's work, hand-edited (the same XMLSpy banner) |
 
+## Trimmed from Cellar, 2026-11-21 (`rendition/`)
+
+C11 of docs/notes/eurlex-review-2026-11-21.md (`tests/test_eurlex_rendition.py`).
+Each item fetched as above (branch notice, Accept-Language the 3-letter
+code, the item over https), then TRIMMED: whole lines (XHTML, one element a
+line) or whole `<p>…</p>` paragraphs of `<TXT_TE>` (legacy HTML) left out,
+every kept byte as Cellar served it, so each file is a few KB. Reuse:
+Commission Decision 2011/833/EU, as above.
+
+| file | item (its sha256 as served) | what it shows |
+|---|---|---|
+| `32018R0825en.html` | `L_2018143EN.01000101.doc.html` (`79e0fdae…`) | CONVEX XHTML of an amending act: "‘Article 32a" and "Article 32b" quoted in a list item's cell, a quoted footnote "(*4)", the annex's quoted "‘ANNEX Ia" (`oj-quotation-ti`), recitals `rct_1`, `rct_26`, footnotes 1–3 |
+| `32016D1837en.html` | `L_2016280EN.01002801.doc.html` (`5178dcf6…`) | a quoted "‘Article 3" nested in `art_1`, in no table, before the act's own Article 3 |
+| `02016R1036-20180608ro.html` | `CL2016R1036RO0020010.0001.html` (`73ad8662…`) | a consolidated text (fmx2xhtml 7.9): `title-article-norm` "Articolul 14a", annexes, the correlation table's "Articolul 12" cells, a `footnote` |
+| `31992L0043{et,hu,lt,lv,mt}.html` | `31992L0043et.html` (`31998927…`), `…hu` (`6855e4d7…`), `…lt` (`a50a271e…`), `…lv` (`8e7e718d…`), `…mt` (`cae0131d…`) | legacy HTML: annexes numbered first ("I LISA", "I. MELLÉKLET", "I PRIEDAS", "I PIELIKUMS"), Maltese "L-Artikolu 1", "L-ANNESS I" |
+| `32004R0726ro.html` | `32004R0726ro.html` (`641bfaa8…`) | legacy HTML: the single "ANEXĂ", numbered recitals "(1) …", the enacting formula and "TITLUL I" before Article 1 |
+| `31997L0011en.html` | `31997L0011en.html` (`0ffcc88f…`) | legacy HTML: "'Article 3" closed by a backtick, "'Article 4", then the act's "Article 2"; "'ANNEX I" then the quoted "ANNEX II" |
+| `32003L0051en.html` | `32003L0051en.html` (`4d4849d5…`) | legacy HTML: '"Article 42e' then the quoted "Article 42f" |
+
 ## What is not here, and how the tests stand in for it
 
 No repository found holds a notice and the Formex of the SAME act. The
@@ -92,4 +111,15 @@ f2855f459c0b62618afbeb81547269cbac5c222f5a402a8c87235a77c1b60039  rdf/02016R1036
 8e7a008f18b5454bbbac0a872c6168ba1b7cb3f7ac80ae20efa7e8c531a3223d  xhtml/32010D0699/L_2010306IT.01001401.doc.html
 e24d253b2e692fdeb6cd426b357d012c20fa97bb30378f1e2d6a5259a888de6c  xhtml/32010D0699/L_2010306IT.01001501.doc.html
 f0c413c49c5c3d3bb9cc248367a2b634ac3d06253b4b9dea9541837aceaab20a  xhtml/32010D0699/notice.xml
+5f08ba82d7012876de213b64a74536f7c8f0a8b283bd5618231cefa1ccf505a0  rendition/02016R1036-20180608ro.html
+71d6d0b851e8cebb290978f9465a317b7f76ea8ade7a04b0931b80d9a30ce62d  rendition/31992L0043et.html
+95519b90a0bbfb30214cf1b08432810d82fd4486c2a7989efbe6ccc8817bfccd  rendition/31992L0043hu.html
+1fe4666bc05086d835da541938c1007c8cb97cdcdd8ab94f88eb419a81f9a722  rendition/31992L0043lt.html
+b8b63946be24b8a58e73e3b8167db1b0ae1064c1808800ab0841678424303718  rendition/31992L0043lv.html
+720cd092d7917bc6c50f63d87d096cdfee0ba2ffe273f38e0d29a3b0caac9bd8  rendition/31992L0043mt.html
+319b895a85e9fdb021df785d363e2a99f5f652e308c135a0ed5d049429f16fda  rendition/31997L0011en.html
+da1f60e94392fa5f5322a256a48624ec9bfbc1d388782e1c7ce7230cbe251a87  rendition/32003L0051en.html
+684aafeb3d1b112e1cbc60e56b38ef36890175cc251840456e7662515908128f  rendition/32004R0726ro.html
+e1a65fafee46fe7ac3f5eaa581aed2b4b594d69f477cae8ce611fdbafb174caa  rendition/32016D1837en.html
+d633b984caec06809880c81bb254d8f3f0886978a91b6c0dab80b305e230b001  rendition/32018R0825en.html
 ```
