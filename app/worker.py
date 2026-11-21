@@ -703,10 +703,19 @@ def _fts_ahead_rows(want: int) -> int:
 
 def _fts_link(collection, rows: list, known: list, names: bool) -> lookahead.Ahead:
     """One link of the look-ahead: `rows`' parse, the ones not `known`
-    computed by `parallel.fts_for_rows` on a daemon thread from now on."""
-    return lookahead.Ahead(
-        rows, known, lambda todo: parallel.fts_for_rows(collection, todo, names=names),
-        name=f"fts-ahead-{collection.name}")
+    computed by `parallel.fts_for_rows` on a daemon thread from now on.
+
+    CONTROLLED (P4 of the 2026-11-21 review: an abandoned take only cancelled
+    the Future, the compute went on holding the large lane, and the stage
+    parsed the same rows again): the parse stops at its next part boundary
+    when the link is let go of, the worker stops or its mode holds parsing
+    (`parallel.controlled`, a large part's own process terminated), and it
+    beats while it works within its bound, so the take waits for a large
+    act's parse instead of parsing it a second time (`lookahead.Chain.take`)."""
+    def parse(todo, control):
+        with parallel.controlled(stop=_AnyStop(control, _stop, _parse_held), beat=control.beat):
+            return parallel.fts_for_rows(collection, todo, names=names)
+    return lookahead.Ahead(rows, known, parse, name=f"fts-ahead-{collection.name}", controlled=True)
 
 
 def _fts_enough(pairs: list, budget: int | None = None) -> bool:
@@ -753,8 +762,9 @@ def _fts_take_ahead(con, row, collection) -> list | None:
         return None
     # BOUNDED (§3 rule 2): ONE bound for every link the batch waits for; the
     # parse is `parallel.compute`, whose own watchdog and in-process fall-back
-    # run inside it; a batch not answered by then is abandoned and parsed
-    # here, as a batch always was
+    # run inside it. The first link is waited for while its parse beats —
+    # alive within compute's own bound (P4) — and one quiet for the bound is
+    # abandoned (its parse told to stop) and parsed here, as a batch always was
     want, budget = fts_sizes(collection)
     taken = chain.take(want, lambda pairs: _fts_enough(pairs, budget),
                        timeout=config.PARSE_TIMEOUT_S)
@@ -771,6 +781,12 @@ def _fts_take_ahead(con, row, collection) -> list | None:
             out.append((now, _CHANGED))
     if not out or out[0][0]["uid"] != row["uid"] or out[0][1] is _CHANGED:
         _fts_ahead.drop(key)                # the selected row itself changed: parse it now
+        return None
+    ok, value = out[0][1]
+    if not ok and isinstance(value, dict) and value.get("type") == "Stopped":
+        # its parse was stopped (a stop or a mode since lifted): parsed now,
+        # under this stage's own stop
+        _fts_ahead.drop(key)
         return None
     return out
 
