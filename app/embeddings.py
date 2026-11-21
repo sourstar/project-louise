@@ -468,14 +468,14 @@ def _request_vectors(batch: list[Item], timeout: float,
                 r = _post(recipe, f"{recipe.url}/v1/embeddings",
                           json={**_body(recipe, batch), **kept.body},
                           timeout=timeout, headers=level)
-                r.raise_for_status()
+                httpc.raise_for_status(r)
             data = _parsed(r, recipe, lambda x: sorted(x.json()["data"],
                                                        key=lambda d: d["index"]))
             _note_run(r, runs)
             return _parsed(r, recipe, lambda x: [d["embedding"] for d in data])
         r = _post(recipe, f"{recipe.url}/api/embed", json=_body(recipe, batch),
                   timeout=timeout, headers=level)
-        r.raise_for_status()
+        httpc.raise_for_status(r)
         vectors = _parsed(r, recipe, lambda x: x.json()["embeddings"])
         _note_run(r, runs)
         return vectors
@@ -628,7 +628,7 @@ def _request_vouched(batch: list[Item], timeout: float,
         raise ReceiptDeferred(
             f"{recipe.url}: VeGa's wrapper could not deliver a receipt (HTTP "
             f"{r.status_code}); the answer is not taken")
-    r.raise_for_status()
+    httpc.raise_for_status(r)
     try:
         vectors = vclient.unpack(tagged, vclient.parse_response(r.content))
         floats = [vclient.as_floats(v) for v in vectors]

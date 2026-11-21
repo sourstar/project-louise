@@ -753,7 +753,7 @@ def _rerank_call(recipe, body: dict, timeout: float, deadline: float) -> dict:
                 timeout = left
                 continue
         try:
-            r.raise_for_status()
+            httpc.raise_for_status(r)         # the server's reason with the status
         except httpx.HTTPStatusError as e:
             e.retried = attempt == 2          # what the reason says
             raise
