@@ -13,7 +13,7 @@ import pytest
 from app.acquire import cellar, eurlex_dump, work_trees
 from app.acquire.spec import RemoteFile
 from app.plugins.eurlex import from_tree, rdf
-from tests.acquire.test_eurlex_dump import FORMEX, MTD, _items
+from tests.acquire.test_eurlex_dump import FORMEX, MTD, _items, serial  # noqa: F401
 
 
 # ---- Q1: a kept tree older than the listing's date is never landed as current ----------------
@@ -128,3 +128,118 @@ def test_the_cli_build_and_the_worker_lose_none_of_each_other_s_marks(tmp_path):
     got = eurlex_dump.incomplete(corpus)
     fetched = sum(1 for i in range(n) if (got["it"].get(f"32000R{i:05d}") or {}).get("fetched"))
     assert (fetched, len(got.get("fr") or {})) == (n, 40)
+
+
+# ---- Q5: a mark and a listing cost per unit of work, not per record size ---------------------
+
+def _record(corpus: Path, n_per_lang: int = 10_000) -> dict:
+    import json
+    corpus.mkdir(parents=True, exist_ok=True)
+    rec = {lang: {f"3{2000 + i % 25}R{i:05d}": {"in_force": "true", "reform": True, "tried": None}
+                  for i in range(n_per_lang)} for lang in cellar.held_languages(SimpleNamespace(slices=None))}
+    (corpus / eurlex_dump.INCOMPLETE).write_text(json.dumps(rec, sort_keys=True))
+    return rec
+
+
+def test_a_mark_appends_a_line_and_never_rewrites_the_record(tmp_path):
+    """Reproduced: 15.6 MiB at 240k entries rewritten per unit, 379 ms under
+    the lock (measured here 426 ms; after, 0.10 ms)."""
+    import time
+    corpus = tmp_path / "corpus"
+    rec = _record(corpus)
+    path = corpus / eurlex_dump.INCOMPLETE
+    before = eurlex_dump._sig(path)
+    assert before[2] > 15 << 20
+    keys = [(l, c) for l in sorted(rec) for c in list(rec[l])[:20]]
+    t0 = time.monotonic()
+    for l, c in keys:
+        eurlex_dump.mark_fetched(corpus, l, c)
+    eurlex_dump.mark_tried(corpus, *keys[-1], "cellar: 404 to the tree")
+    per = (time.monotonic() - t0) / len(keys)
+    assert eurlex_dump._sig(path) == before, "the record is not rewritten by a mark"
+    assert (corpus / eurlex_dump.MARKS).stat().st_size < 120 * (len(keys) + 2), "a line a mark"
+    assert per < 0.02, f"{per * 1000:.1f} ms a mark"
+    got = eurlex_dump.incomplete(corpus)
+    assert all(got[l][c]["fetched"] for l, c in keys) and got[keys[-1][0]][keys[-1][1]]["tried"]
+    assert sum(1 for u in got.values() for e in u.values() if e.get("fetched")) == len(keys)
+
+
+def test_the_marks_are_folded_once_they_outgrow_the_record_and_a_stale_file_is_void(tmp_path, monkeypatch):
+    import json
+    corpus = tmp_path / "corpus"
+    corpus.mkdir()
+    (corpus / eurlex_dump.INCOMPLETE).write_text(json.dumps(
+        {"it": {f"32000R{i:05d}": {"in_force": "true", "tried": None} for i in range(50)}}))
+    monkeypatch.setattr(eurlex_dump, "FOLD_MIN", 0)
+    size = (corpus / eurlex_dump.INCOMPLETE).stat().st_size
+    for i in range(50):
+        eurlex_dump.mark_fetched(corpus, "it", f"32000R{i:05d}")
+        if not (corpus / eurlex_dump.MARKS).exists():
+            break
+    assert i < 49 and not (corpus / eurlex_dump.MARKS).exists(), "folded once larger than the record"
+    folded = json.loads((corpus / eurlex_dump.INCOMPLETE).read_text())
+    assert all(folded["it"][f"32000R{k:05d}"]["fetched"] for k in range(i + 1)) and size
+    # marks written against a record a build has since replaced (a crash between
+    # the record's write and the marks' removal) are never read again
+    eurlex_dump.mark_tried(corpus, "it", "32000R00049", "a verdict")
+    stale = (corpus / eurlex_dump.MARKS).read_bytes()
+    eurlex_dump._record_incomplete(corpus, {"it": {"32000R00049": "true"}})
+    (corpus / eurlex_dump.MARKS).write_bytes(stale)
+    assert eurlex_dump.incomplete(corpus)["it"]["32000R00049"]["tried"] == "a verdict", "kept by the build"
+    eurlex_dump._record_incomplete(corpus, {"it": {"32000R00049": "true", "32000R00001": "true"}})
+    (corpus / eurlex_dump.MARKS).write_bytes(stale.replace(b"00049", b"00001"))
+    assert not eurlex_dump.incomplete(corpus)["it"]["32000R00001"].get("tried"), "a stale marks file is void"
+
+
+def _reform_corpus(tmp_path) -> tuple[Path, Path]:
+    """A unit held as XHTML whose tree lists a Formex package the dump lacks:
+    recorded by the build to re-form (test_eurlex_package.py)."""
+    from tests.test_eurlex_package import _held_as_xhtml, _packaged_dump
+    corpus = tmp_path / "corpus"
+    unit = _held_as_xhtml(corpus)
+    got = eurlex_dump.build(_packaged_dump(tmp_path / "dump", with_package=False), corpus, ["it"],
+                            log=lambda m: None)["it"]
+    assert got["package-not-in-dump"] == 1
+    return corpus, unit
+
+
+def _no_reads(monkeypatch) -> list[str]:
+    """Every read of a held unit's tree or wrapper, counted."""
+    from app.plugins.eurlex import from_tree as ft
+    read: list[str] = []
+    notice, named = ft.notice, eurlex_dump.held_not_its_name
+    monkeypatch.setattr(ft, "notice", lambda *a, **k: read.append("tree") or notice(*a, **k))
+    monkeypatch.setattr(eurlex_dump, "held_not_its_name", lambda *a: read.append("wrapper") or named(*a))
+    return read
+
+
+def test_a_held_unit_to_re_form_is_judged_by_a_stat_not_read_every_listing(tmp_path, serial, monkeypatch):  # noqa: F811
+    """Reproduced: every listing read and parsed every held re-form unit's
+    tree and wrapper (0.9 ms an entry, ~3.5 min at 232k; measured here
+    1.2-1.4 ms, after 7-8 us)."""
+    from tests.test_eurlex_package import PKG, _package
+    corpus, unit = _reform_corpus(tmp_path)
+    entry = eurlex_dump.incomplete(corpus)["it"][FORMEX[0]]
+    assert entry["lacks"] == [PKG] and entry["held"] == eurlex_dump._sig(unit / rdf.TREE_FILE)
+    read = _no_reads(monkeypatch)
+    for _ in range(3):
+        assert [c for _l, c, _f in eurlex_dump.incomplete_due(corpus, {"it"})] == [FORMEX[0]]
+    assert read == [], "as the build found it: nothing read"
+    (unit / PKG).write_bytes(_package())
+    assert eurlex_dump.incomplete_due(corpus, {"it"}) == [], "held whole now: judged from its files"
+    assert read and set(read) <= {"tree", "wrapper"}
+    read.clear()
+    assert eurlex_dump.incomplete_due(corpus, {"it"}) == [] and read == [], "judged once: a stat again"
+
+
+def test_an_entry_recorded_before_its_state_was_is_judged_once(tmp_path, monkeypatch):
+    import json
+    from tests.test_eurlex_package import _held_as_xhtml
+    corpus = tmp_path / "corpus"
+    _held_as_xhtml(corpus)
+    (corpus / eurlex_dump.INCOMPLETE).write_text(json.dumps(
+        {"it": {FORMEX[0]: {"in_force": "true", "reform": True, "tried": None}}}))
+    read = _no_reads(monkeypatch)
+    assert len(eurlex_dump.incomplete_due(corpus, {"it"})) == 1 and read
+    read.clear()
+    assert len(eurlex_dump.incomplete_due(corpus, {"it"})) == 1 and read == []

@@ -636,11 +636,19 @@ def lacks_package(unit: Path, note) -> bool:
     manifestation served as one zip) that `note` — its own tree's — lists as
     the form to read: a unit landed while `form_of` read such a manifestation
     as XHTML (2026-11-19, 32024R1689), to be re-formed."""
+    return bool(lacked_packages(unit, note))
+
+
+def lacked_packages(unit: Path, note) -> list[str]:
+    """The names of the Formex packages `lacks_package` finds missing, in
+    the tree's order: what the dump build records for a unit to re-form, so
+    the per-unit pass can see by a stat whether it is held since
+    (eurlex_dump.incomplete_due)."""
     from ..plugins.eurlex import formex
     if form_of(note) != "fmx4":
-        return False
-    return any(it.name and formex.is_package(it.name) and not (Path(unit) / it.name).is_file()
-               for it in note.items.get("fmx4", []))
+        return []
+    return [it.name for it in note.items.get("fmx4", [])
+            if it.name and formex.is_package(it.name) and not (Path(unit) / it.name).is_file()]
 
 
 def _current_unit(dest: Path, note_now_mtime: int | None, form: str | None):

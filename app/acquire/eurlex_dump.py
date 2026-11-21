@@ -249,7 +249,36 @@ def _locked(corpus: Path):
             os.close(fd)                    # the lock with it
 
 
-def incomplete(corpus: Path) -> dict[str, dict[str, dict]]:
+#: THE MARKS SINCE THE RECORD WAS WRITTEN (review 2026-11-21, Q5): one JSON
+#: line a mark — `fetched`, `tried`, the state of a unit to re-form — appended
+#: under the lock and folded into the record when the build writes it, or
+#: once the marks outgrow it (`_mark`). Until then every mark rewrote the
+#: whole record: 15.6 MiB at 240k entries, 379 ms under the lock per unit,
+#: ~11 min an hour serialized and ~26 GiB an hour written at 1,695 units an
+#: hour. Its first line names the record it marks (inode, mtime, size): marks
+#: written against a record since replaced were folded into it, or belong to
+#: a build that replaced them, and are read no more. A mark lost to a crash
+#: (no fsync: bookkeeping, not data) costs one more request for its unit.
+#: THE STANDARD, NOT ADOPTED: this is a write-ahead log; SQLite (WAL) would
+#: hold it as a table, at the cost of a schema beside the manifest's for one
+#: record the build rewrites whole
+MARKS = ".eurlex-dump-incomplete.marks"
+#: the marks are folded once they are larger than the record (and this):
+#: each fold rewrites the record after at least as many bytes of marks, so a
+#: mark costs O(1) amortised, and a read at most twice the record
+FOLD_MIN = 1 << 20
+
+
+def _sig(path: Path) -> list[int] | None:
+    """A file's identity as a stat gives it: (inode, mtime ns, size)."""
+    try:
+        st = path.stat()
+    except OSError:
+        return None
+    return [st.st_ino, st.st_mtime_ns, st.st_size]
+
+
+def _read_record(corpus: Path) -> dict:
     import json
     try:
         got = json.loads((Path(corpus) / INCOMPLETE).read_text(encoding="utf-8"))
@@ -258,13 +287,102 @@ def incomplete(corpus: Path) -> dict[str, dict[str, dict]]:
     return got if isinstance(got, dict) else {}
 
 
+def _read_marks(corpus: Path, record: list[int] | None) -> list[dict]:
+    """The marks written against the record `record` names (`_sig`)."""
+    import json
+    try:
+        lines = (Path(corpus) / MARKS).read_bytes().splitlines()
+    except OSError:
+        return []
+    try:
+        head = json.loads(lines[0]) if lines else None
+    except ValueError:
+        return []
+    if record is None or not isinstance(head, dict) or head.get("record") != record:
+        return []
+    out = []
+    for line in lines[1:]:
+        try:
+            m = json.loads(line)
+        except ValueError:
+            continue                        # a line a crash cut
+        if isinstance(m, dict):
+            out.append(m)
+    return out
+
+
+def _fold(record: dict, marks: list[dict]) -> dict:
+    """The marks applied in order to the entries they name; a unit the record
+    no longer names (recorded afresh without it) takes none."""
+    for m in marks:
+        entry = (record.get(m.get("l")) or {}).get(m.get("c"))
+        if not isinstance(entry, dict):
+            continue
+        kind, value = m.get("k"), m.get("v")
+        if kind == "fetched":
+            entry["fetched"] = entry.get("fetched") or value      # the first time it was
+        elif kind == "tried":
+            entry["tried"] = value
+        elif kind == "state" and isinstance(value, dict):
+            entry.update({k: value[k] for k in ("held", "lacks", "whole") if k in value})
+    return record
+
+
+def _current(corpus: Path) -> dict:
+    """The record with its marks; under the lock."""
+    corpus = Path(corpus)
+    return _fold(_read_record(corpus), _read_marks(corpus, _sig(corpus / INCOMPLETE)))
+
+
+def incomplete(corpus: Path) -> dict[str, dict[str, dict]]:
+    """The record as it stands: as the build wrote it, with every mark since."""
+    corpus = Path(corpus)
+    if not (corpus / INCOMPLETE).is_file():
+        return {}
+    with _locked(corpus):
+        return _current(corpus)
+
+
 def _write_incomplete(corpus: Path, data: dict) -> None:
+    """The record written whole, its marks folded into `data`; under the lock."""
     import json
     path = Path(corpus) / INCOMPLETE
     tmp = path.with_name(f".{path.name}.{os.getpid()}.{threading.get_ident()}")
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp.write_text(json.dumps(data, sort_keys=True), encoding="utf-8")
     os.replace(tmp, path)
+    # folded: read no more (its first line names the record just replaced)
+    (Path(corpus) / MARKS).unlink(missing_ok=True)
+
+
+def _mark(corpus: Path, marks: list[tuple[str, str, str, Any]]) -> None:
+    """`(lang, celex, kind, value)` marks appended to the record's in one
+    write: O(1) a mark, whatever the record's size. Nothing where no record
+    is (no build recorded one)."""
+    import json
+    corpus = Path(corpus)
+    if not marks or not (corpus / INCOMPLETE).is_file():
+        return
+    with _locked(corpus):
+        record = _sig(corpus / INCOMPLETE)
+        if record is None:
+            return
+        text = "".join(json.dumps({"l": l, "c": c, "k": k, "v": v}, sort_keys=True, separators=(",", ":"))
+                       + "\n" for l, c, k, v in marks)
+        with open(corpus / MARKS, "a+b") as f:
+            f.seek(0)
+            try:
+                head = json.loads(f.readline() or b"null")
+            except ValueError:
+                head = None
+            if not isinstance(head, dict) or head.get("record") != record:
+                f.truncate(0)               # marks of a record since replaced: folded, or void
+                text = json.dumps({"record": record}) + "\n" + text
+            f.write(text.encode("utf-8"))
+            f.flush()
+            size = os.fstat(f.fileno()).st_size
+        if size > max(record[2], FOLD_MIN):
+            _write_incomplete(corpus, _current(corpus))
 
 
 def _record_incomplete(corpus: Path, found: dict[str, dict[str, str | None]]) -> None:
@@ -272,7 +390,7 @@ def _record_incomplete(corpus: Path, found: dict[str, dict[str, str | None]]) ->
     them, a unit tried before keeping its `tried` (it failed at Cellar too,
     and is not asked again until a newer dump)."""
     with _locked(corpus):
-        had = incomplete(corpus)
+        had = _current(corpus)
         for lang, units in found.items():
             old = had.get(lang) or {}
             had[lang] = {celex: {**(inf if isinstance(inf, dict) else {"in_force": inf}),
@@ -287,29 +405,66 @@ def incomplete_due(corpus: Path, langs) -> list[tuple[str, str, str | None]]:
     """(lang, celex, in_force) of the recorded incomplete units of `langs`
     not held now and not tried: what the per-unit pass asks Cellar for first.
     A unit recorded to RE-FORM (held, lacking the Formex package its tree
-    lists, which the dump does not give) is due while it still lacks it."""
+    lists, which the dump does not give) is due while it still lacks it.
+
+    A HELD UNIT'S STATE BY A STAT (review 2026-11-21, Q5: each listing read
+    and parsed every held re-form unit's tree and wrapper, 0.9 ms an entry,
+    ~3.5 min single-threaded at 232k before the pass asked anything). The
+    build records, with each unit to re-form, its tree's identity (`held`,
+    `_sig`) and the packages it lacked (`lacks`): while the tree is the same
+    file and none of those packages is held, the unit is as the build found
+    it — due — and nothing is read. A unit that changed since (landed again,
+    a package written in), or recorded before its state was, is judged from
+    its files ONCE and its state marked (`whole` where it lacks nothing
+    now), so the next listing is a stat again."""
+    import stat as _stat
     from ..plugins.eurlex import from_tree, rdf
-    from ..plugins.eurlex.source import LANGUAGES, unit_rel
-    from .cellar import lacks_package
+    from ..plugins.eurlex.source import HISTORY, LANGUAGES, unit_rel
+    from .cellar import lacked_packages
+    corpus = Path(corpus)
+    bases = (str(corpus), os.path.join(str(corpus), HISTORY))
     out = []
+    marks: list[tuple[str, str, str, Any]] = []
     for lang, units in sorted(incomplete(corpus).items()):
         if lang not in langs:
             continue
         for celex, entry in sorted(units.items()):
-            entry = entry or {}
+            entry = entry if isinstance(entry, dict) else {}
             if entry.get("tried") or entry.get("fetched"):
                 continue                    # Cellar asked once for it: not again until a newer dump
-            at = _held_at(Path(corpus), unit_rel(lang, celex))
+            # where it is held (`_held_at`), and its tree's identity, from one stat
+            rel = unit_rel(lang, celex)
+            at = sig = None
+            for base in bases:
+                try:
+                    st = os.stat(f"{base}/{rel}/{rdf.TREE_FILE}")
+                except OSError:
+                    continue
+                if _stat.S_ISREG(st.st_mode):
+                    at, sig = f"{base}/{rel}", [st.st_ino, st.st_mtime_ns, st.st_size]
+                    break
             if at is not None:
                 if not entry.get("reform"):
                     continue
-                try:
-                    note = from_tree.notice(rdf.loads((at / rdf.TREE_FILE).read_bytes()), LANGUAGES[lang], celex)
-                except (OSError, ValueError, from_tree.TreeError):
-                    note = None
-                if note is not None and not lacks_package(at, note) and not held_not_its_name(at, celex):
-                    continue
+                held, lacks = entry.get("held"), entry.get("lacks")
+                if held is not None and isinstance(lacks, list) and held == sig \
+                        and not any(os.path.isfile(f"{at}/{n}") for n in lacks):
+                    if entry.get("whole"):
+                        continue            # judged whole, unchanged since
+                else:
+                    unit = Path(at)
+                    try:
+                        note = from_tree.notice(rdf.loads((unit / rdf.TREE_FILE).read_bytes()), LANGUAGES[lang],
+                                                celex)
+                    except (OSError, ValueError, from_tree.TreeError):
+                        note = None
+                    lacked = lacked_packages(unit, note) if note is not None else []
+                    whole = note is not None and not lacked and not held_not_its_name(unit, celex)
+                    marks.append((lang, celex, "state", {"held": sig, "lacks": lacked, "whole": whole}))
+                    if whole:
+                        continue
             out.append((lang, celex, entry.get("in_force")))
+    _mark(corpus, marks)
     # BY ACT, then language (as the listing, `ORDER BY ?celex ?language`): a
     # work's tree is asked once and its other languages take it from
     # work_trees.RecentTrees (6 h). Language by language, one language's
@@ -323,27 +478,15 @@ def incomplete_due(corpus: Path, langs) -> list[tuple[str, str, str | None]]:
 def mark_fetched(corpus: Path, lang: str, celex: str) -> None:
     """A recorded unit Cellar gave: not asked first again (a re-form that
     Cellar serves as wrongly as the dump would otherwise be asked every
-    pass); a newer dump's build records it afresh."""
+    pass); a newer dump's build records it afresh. One line appended (Q5)."""
     import time as _time
-    with _locked(corpus):
-        had = incomplete(corpus)
-        entry = (had.get(lang) or {}).get(celex)
-        if entry is None or entry.get("fetched"):
-            return
-        entry["fetched"] = _time.strftime("%Y-%m-%dT%H:%M:%SZ", _time.gmtime())
-        _write_incomplete(corpus, had)
+    _mark(corpus, [(lang, celex, "fetched", _time.strftime("%Y-%m-%dT%H:%M:%SZ", _time.gmtime()))])
 
 
 def mark_tried(corpus: Path, lang: str, celex: str, why: str) -> None:
     """A recorded incomplete unit Cellar did not give either (a failure that
     is not the endpoint going away): not asked first again."""
-    with _locked(corpus):
-        had = incomplete(corpus)
-        entry = (had.get(lang) or {}).get(celex)
-        if entry is None:
-            return
-        entry["tried"] = why[:300]
-        _write_incomplete(corpus, had)
+    _mark(corpus, [(lang, celex, "tried", why[:300])])
 
 
 def held_not_its_name(unit: Path, celex: str) -> list[str]:
@@ -421,7 +564,7 @@ def build_chunk(mtd_paths: tuple[str, ...], uuids: list[str], langs: list[tuple[
     the dump states modified later is rebuilt from it, where it is held."""
     from ..plugins.eurlex import formex, from_tree, rdf
     from ..plugins.eurlex.source import LANGUAGES, unit_rel
-    from .cellar import form_of, lacks_package, land_many, next_form
+    from .cellar import form_of, lacked_packages, lacks_package, land_many, next_form
     root = Path(corpus)
     counts: dict[str, Counter] = {}
     # GROUP COMMIT (cellar.land_many): units land in batches of LAND_BATCH or
@@ -455,9 +598,19 @@ def build_chunk(mtd_paths: tuple[str, ...], uuids: list[str], langs: list[tuple[
             return None
         return note if lacks_package(at, note) else None
 
-    def record(lang: str, celex: str, note, reform: bool) -> None:
+    def record(lang: str, celex: str, note, reform: bool, at: Path | None = None, held_note=None) -> None:
+        """A unit left to the API; one to re-form with its state as found
+        (`held`: its tree's identity, `lacks`: the packages it lacks), which
+        incomplete_due reads by a stat (Q5)."""
         inf = None if note.in_force is None else ("true" if note.in_force else "false")
-        incomplete_found.setdefault(lang, {})[celex] = {"in_force": inf, "reform": True} if reform else inf
+        if not reform:
+            incomplete_found.setdefault(lang, {})[celex] = inf
+            return
+        entry: dict[str, Any] = {"in_force": inf, "reform": True}
+        if at is not None:
+            entry["held"] = _sig(at / rdf.TREE_FILE)
+            entry["lacks"] = lacked_packages(at, held_note) if held_note is not None else []
+        incomplete_found.setdefault(lang, {})[celex] = entry
     zips = _mtd(mtd_paths)
     for uuid in uuids:
         data = None
@@ -489,12 +642,13 @@ def build_chunk(mtd_paths: tuple[str, ...], uuids: list[str], langs: list[tuple[
             if not held_forms:
                 # a unit the API landed for a language the dump lacks, holding
                 # XHTML for a packaged Formex: the API's to re-form, recorded
-                lacked = package_lacked(_held_at(root, unit_rel(lang, got[1])), code, got[1]) \
-                    if uuid in zipped and not isinstance(got, str) else None
+                at = _held_at(root, unit_rel(lang, got[1])) if uuid in zipped and not isinstance(got, str) \
+                    else None
+                lacked = package_lacked(at, code, got[1]) if at is not None else None
                 if lacked is not None:
                     c["incomplete"] += 1
                     c["package-not-in-dump"] += 1
-                    record(lang, got[1], lacked, True)
+                    record(lang, got[1], lacked, True, at, lacked)
                 else:
                     c["not-in-language"] += 1
                 continue
@@ -510,7 +664,8 @@ def build_chunk(mtd_paths: tuple[str, ...], uuids: list[str], langs: list[tuple[
             # A HELD UNIT LACKING ITS FORMEX PACKAGE (2026-11-19): `form_of`
             # read a manifestation served as one zip as XHTML; it is re-formed
             # from the dump, or recorded for the API where the dump lacks it
-            reform = uuid in zipped and package_lacked(at, code, celex) is not None
+            held_note = package_lacked(at, code, celex) if uuid in zipped else None
+            reform = held_note is not None
             if at is not None and not reform and held_not_its_name(at, celex):
                 # A HELD UNIT WHOSE FILES ARE NOT THEIR NAMES' (2026-11-19: the
                 # dump's 9 acts of 2014–15): the dump gives the same bytes, so
@@ -522,7 +677,7 @@ def build_chunk(mtd_paths: tuple[str, ...], uuids: list[str], langs: list[tuple[
                     continue
                 c["incomplete"] += 1
                 c["dump-not-its-name"] += 1
-                record(lang, celex, note, True)
+                record(lang, celex, note, True, at)
                 continue
             if at is not None and not refresh and not reform:
                 c["held"] += 1
@@ -541,7 +696,7 @@ def build_chunk(mtd_paths: tuple[str, ...], uuids: list[str], langs: list[tuple[
                     # held NEWER than the dump: what changed since it was cut is the API's
                     c["incomplete"] += 1
                     c["package-not-in-dump"] += 1
-                    record(lang, celex, note, True)
+                    record(lang, celex, note, True, at, held_note)
                     continue
                 # the dump's own state: re-formed from it
             form = form_of(note)
@@ -550,7 +705,7 @@ def build_chunk(mtd_paths: tuple[str, ...], uuids: list[str], langs: list[tuple[
                 c["incomplete"] += 1           # the API's (phase 2), never another form
                 if reform:
                     c["package-not-in-dump"] += 1
-                record(lang, celex, note, reform)
+                record(lang, celex, note, reform, at, held_note)
                 continue
             try:
                 files = {it.name: lz.read(held_forms[form][it.name]) for it in listed}
@@ -573,7 +728,7 @@ def build_chunk(mtd_paths: tuple[str, ...], uuids: list[str], langs: list[tuple[
                         continue
                     if any(it.name not in held_forms.get(alt, {}) for it in alt_listed):
                         c["incomplete"] += 1       # that form the API's (phase 2)
-                        record(lang, celex, note, reform)
+                        record(lang, celex, note, reform, at, held_note)
                         continue
                     try:
                         files.update({it.name: lz.read(held_forms[alt][it.name]) for it in alt_listed})
@@ -591,7 +746,7 @@ def build_chunk(mtd_paths: tuple[str, ...], uuids: list[str], langs: list[tuple[
                         # never landed from the dump: the API's (Cellar serves it right)
                         c["incomplete"] += 1
                         c["dump-not-its-name"] += 1
-                        record(lang, celex, note, at is not None)
+                        record(lang, celex, note, at is not None, at, held_note)
                         continue
                 stated = _LG_DOC.search(view[text_wrapper]) if text_wrapper is not None else None
                 if stated and stated.group(1).decode().lower() != lang:
