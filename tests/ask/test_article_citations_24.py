@@ -570,6 +570,54 @@ def test_a_dense_text_in_any_script_stays_linear():
     assert {c["celex"] for c in got} >= {p[1] for p in PROVISIONS.values()}
 
 
+# ---- question forms: what a reader types and the Official Journal never writes ----------------
+
+#: (language, a question as a reader types it, the act, the article) — WRITTEN HERE, not OJ text: none of
+#: these forms stands before an article's number in the five acts' text in its language (`_QUESTION_FORMS`)
+TYPED = (
+    ("en", "Art. 5 of Regulation (EU) 2016/679", "32016R0679", "5"),
+    ("fr", "art. 17 du règlement (UE) 2016/679", "32016R0679", "17"),
+    ("de", "Art. 6 Abs. 1 der Verordnung (EU) 2016/679", "32016R0679", "6"),
+    ("it", "art. 6 del regolamento (UE) 2016/679", "32016R0679", "6"),
+    ("es", "art. 6 del Reglamento (UE) 2016/679", "32016R0679", "6"),
+    ("pt", "art. 6.º do Regulamento (UE) 2016/679", "32016R0679", "6"),
+    ("nl", "art. 6 van Verordening (EU) 2016/679", "32016R0679", "6"),
+    ("da", "art. 6, stk. 1, i forordning (EU) 2016/679", "32016R0679", "6"),
+    ("sv", "art. 6.1 i förordning (EU) 2016/679", "32016R0679", "6"),
+    ("ro", "art. 6 alin. (1) din Regulamentul (UE) 2016/679", "32016R0679", "6"),
+    ("mt", "Art. 6 tar-Regolament (UE) 2016/679", "32016R0679", "6"),
+    ("sk", "čl. 6 ods. 1 nariadenia (EÚ) 2016/679", "32016R0679", "6"),
+    ("hr", "čl. 6. Uredbe (EU) 2016/679", "32016R0679", "6"),
+    ("sl", "čl. 6 Uredbe (EU) 2016/679", "32016R0679", "6"),
+    ("sl", "6. člen Uredbe (EU) 2016/679", "32016R0679", "6"),
+    ("sl", "v 6. členu Uredbe (EU) 2016/679", "32016R0679", "6"),
+    ("bg", "чл. 6 от Регламент (ЕС) 2016/679", "32016R0679", "6"),
+    ("el", "άρθ. 6 του κανονισμού (ΕΕ) 2016/679", "32016R0679", "6"),
+    ("el", "άρθρ. 6 παρ. 1 του κανονισμού (ΕΕ) 2016/679", "32016R0679", "6"),
+    ("el", "αρθρ. 6 του κανονισμου (ΕΕ) 2016/679", "32016R0679", "6"),
+    ("lt", "Reglamento (ES) 2016/679 6 str.", "32016R0679", "6"),
+)
+
+
+@pytest.mark.parametrize("lang, text, celex, article", TYPED, ids=[f"{t[0]}-{t[1][:12]}" for t in TYPED])
+def test_a_question_form_is_read_and_kept_apart_from_the_evidenced_forms(lang, text, celex, article):
+    assert _pairs(text)[:1] == [(celex, article)], text
+    assert any(f.lang == lang for f in eref._QUESTION_FORMS), "a question form, said so"
+    for f in (f for f in eref._FORMS if f.lang == lang):
+        assert not (f.art and re.search(rf"(?:{f.art})\s*\d", text, re.I)), "no evidenced form reads it"
+        assert not (f.after and re.search(f.after, text, re.I)), "no evidenced form reads it"
+
+
+def test_every_question_form_is_tested_and_the_evidenced_ones_hold_none():
+    assert {f.lang for f in eref._QUESTION_FORMS} <= {t[0] for t in TYPED}
+    assert all(f.source.startswith("the OJ writes") for f in eref._QUESTION_FORMS)
+    assert not any(f.R or f.L or f.D or f.conn or f.gap for f in eref._QUESTION_FORMS), \
+        "a reader's word for an article, never for an act"
+    # of the abbreviations, the OJ texts write only cs "čl." and pl "art." before a number
+    abbreviated = {f.lang for f in eref._FORMS if any(a in f.art for a in (r"art\.", r"čl\.", r"чл\.", r"ρθ\."))}
+    assert abbreviated == {"cs", "pl"}
+
+
 # ---- end to end: a Hungarian and a Greek question pin the article from their Work ----------
 
 #: the article's heading as each language's Official Journal writes it (the
