@@ -459,6 +459,56 @@ def test_a_line_that_is_no_final_formula(line):
     assert not rendition._FINAL.match(line)
 
 
+# ---- 7. legacy footnotes ------------------------------------------------------------------------
+
+def test_legacy_footnotes_are_notes_filed_under_the_section_calling_them():
+    """31992L0043 en (legacy HTML): "(1) OJ No C 247 …" … "(5) OJ No L 103 …"
+    after the signatures were "Final"'s (before, Article 24's) text. They are
+    the record's notes; the line without a number continues note (1); each
+    is filed under the section holding its call ("Commission(1),")."""
+    act = _read("31992L0043en.html")
+    assert [n["text"].split(" ", 1)[0] for n in act.notes] == ["(1)", "(2)", "(3)", "(4)", "(5)"]
+    assert act.notes[0]["text"] == "(1) OJ No C 247, 21. 9. 1988, p. 3 and\nOJ No C 195, 3. 8. 1990, p. 1."
+    assert {n["section"] for n in act.notes} == {"Preamble"}
+    assert _sections(act)["Final"] == "Done at Brussels, 21 May 1992.\nFor the Council\nThe President\nArlindo Marques Cunha"
+
+
+def test_legacy_footnotes_in_square_brackets_and_the_lines_without_a_letter_after_them():
+    """32004R0726 ro: "[1] JO C 75 E …"; the page's "-----" and "20040331"
+    after them stay where they are."""
+    act = _read("32004R0726ro.html")
+    assert [(n["section"], n["text"][:8]) for n in act.notes] == [
+        ("Preamble", "[1] JO C"), ("Preamble", "[2] JO C"), ("Preamble", "[3] Aviz")]
+    final = _sections(act)["Final"]
+    assert "[1]" not in final and final.endswith("D. Roche\n--------------------------------------------------\n"
+                                                  "20040331")
+
+
+def _legacy(*texts):
+    return rendition._read([rendition._Line("", t) for t in texts])
+
+
+def test_a_legacy_note_is_filed_under_its_call_wherever_it_stands():
+    """The call after an act's number ("No 2377/90(2)") or a word; never a
+    paragraph's "Article 5(1)"; the next note's call after the last one's."""
+    r = _legacy("Having regard to the proposal from the Commission (1),", "HAS ADOPTED THIS REGULATION:",
+                "Article 1", "Article 5(1) and (2) of Regulation (EEC) No 2377/90(2) are replaced.", "Article 2",
+                "It shall enter into force.", "Done at Brussels, 9 June 1998.", "For the Commission",
+                "(1) OJ C 118, 17. 4. 1998, p. 15.", "(2) OJ L 224, 18. 8. 1990, p. 1.")
+    assert [(n["section"], n["text"][:3]) for n in r.notes] == [("Preamble", "(1)"), ("Article 1", "(2)")]
+    assert dict(r.sections)["Final"] == "Done at Brussels, 9 June 1998.\nFor the Commission"
+
+
+def test_a_numbered_run_that_is_not_a_trailing_run_of_notes_stays_text():
+    """Numbered lines citing no Official Journal (an annex's list), or with
+    text after them, are no notes."""
+    r = _legacy("Article 1", "text", "Done at Brussels, 9 June 1998.", "(1) OJ C 118, 17. 4. 1998, p. 15.",
+                "For the Commission", "ANNEX", "(1) Except bryophytes in Annex II (b).", "(2) Mosses.")
+    assert r.notes == []
+    assert dict(r.sections)["ANNEX"] == "(1) Except bryophytes in Annex II (b).\n(2) Mosses."
+    assert "(1) OJ C 118" in dict(r.sections)["Final"]
+
+
 # ---- coverage -------------------------------------------------------------------------------
 
 class _Nodes(HTMLParser):

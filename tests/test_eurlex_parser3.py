@@ -203,8 +203,9 @@ class _Words(HTMLParser):
 @pytest.mark.parametrize("kind, celex", [("xhtml", "32010D0699"), ("html", "31988D0540")])
 def test_no_word_and_no_attribute_of_an_html_item_is_lost(renditions, kind, celex):
     doc = _doc(renditions, celex)
-    held = set(re.findall(r"\w+", "\n".join(f"{l}\n{b}" for l, b in doc.sections)
-                          + doc.title + json.dumps(doc.extra, ensure_ascii=False)))
+    # the parts apart: the last section's last word not glued to the title's first
+    held = set(re.findall(r"\w+", "\n".join([*(f"{l}\n{b}" for l, b in doc.sections), doc.title,
+                                               json.dumps(doc.extra, ensure_ascii=False)])))
     blob = json.dumps(doc.extra, ensure_ascii=False)
     for p in (FIX / kind / celex).iterdir():
         if p.name == "notice.xml":

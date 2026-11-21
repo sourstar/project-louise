@@ -67,6 +67,7 @@ Commission Decision 2011/833/EU, as above.
 | `32004R0726ro.html` | `32004R0726ro.html` (`641bfaa8…`) | legacy HTML: the single "ANEXĂ", numbered recitals "(1) …", the enacting formula, "TITLUL I" and "TITLUL V" with their titles, the final formula, footnotes [1]–[3] and their calls |
 | `32016R0679en.html` | `L_2016119EN.01000101.doc.html` (`962539af…`) | CONVEX: `cpt_I`, `cpt_III.sct_1`, `cpt_III.sct_2` and an article in each, the final formula, a footnote |
 | `31997L0011en.html` | `31997L0011en.html` (`0ffcc88f…`) | legacy HTML: "'Article 3" closed by a backtick, "'Article 4", then the act's "Article 2"; "'ANNEX I" then the quoted "ANNEX II" |
+| `31992L0043en.html` | `31992L0043en.html` (`b7326d6e…`) | legacy HTML: the visas calling notes (1)–(3), the recitals (4)–(5), the final formula, notes (1)–(5) after it, one on two lines |
 | `32003L0051en.html` | `32003L0051en.html` (`4d4849d5…`) | legacy HTML: '"Article 42e' then the quoted "Article 42f" |
 
 ## What is not here, and how the tests stand in for it
@@ -118,6 +119,7 @@ f0c413c49c5c3d3bb9cc248367a2b634ac3d06253b4b9dea9541837aceaab20a  xhtml/32010D06
 1fe4666bc05086d835da541938c1007c8cb97cdcdd8ab94f88eb419a81f9a722  rendition/31992L0043lt.html
 b8b63946be24b8a58e73e3b8167db1b0ae1064c1808800ab0841678424303718  rendition/31992L0043lv.html
 720cd092d7917bc6c50f63d87d096cdfee0ba2ffe273f38e0d29a3b0caac9bd8  rendition/31992L0043mt.html
+aac111da868aac203024a5916755a69b92197b22208664c7370951320c0e3020  rendition/31992L0043en.html
 319b895a85e9fdb021df785d363e2a99f5f652e308c135a0ed5d049429f16fda  rendition/31997L0011en.html
 da1f60e94392fa5f5322a256a48624ec9bfbc1d388782e1c7ce7230cbe251a87  rendition/32003L0051en.html
 a65d076ea77f70028cac958b6a501a6525c4fbe5395a7f364f6d2a9cb15f454c  rendition/32004R0726ro.html

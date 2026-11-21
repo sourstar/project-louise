@@ -13,9 +13,10 @@ WHAT IS KEPT, every word and every attribute:
     opens one), each annex (a document title after the articles), and the
     rest where it falls. Nothing is dropped. A heading the reader does not
     recognise leaves its words in the section before it;
-  - the FOOTNOTES (the XHTML's `note`, the consolidated text's `footnote`)
-    out of the text and into the record's notes, each with the section that
-    calls it — where formex.Collect puts a Formex NOTE;
+  - the FOOTNOTES (the XHTML's `note`, the consolidated text's `footnote`,
+    the legacy HTML's numbered run after the final formula or ending an
+    annex) out of the text and into the record's notes, each with the
+    section that calls it — where formex.Collect puts a Formex NOTE;
   - the MARKUP: every element's attributes in document order (`markup`,
     as formex.attributes_of keeps Formex's);
   - the HEAD: the title and every <meta> (legacy HTML's Dublin Core: the
@@ -118,6 +119,17 @@ _FINAL = re.compile(
     r"|Ve? [^\W\d_][^\s,]*,? (?:dne )?\d{1,2}\. [^\W\d_]+ (?:1[89]|20)\d\d\.?"
     r"|[^\W\d_][^\s,]*(?: [^\W\d_][^\s,]*)?, (?:\d{1,2}\.? [^\W\d_]+ (?:1[89]|20)\d\d|(?:1[89]|20)\d\d\. gada "
     r"\d{1,2}\. [^\W\d_]+)\.?)$")
+#: LEGACY FOOTNOTES. The legacy HTML marks no footnote: they are the run of
+#: lines that ends a segment — the final formula's, or an annex's — numbered
+#: from "(1)" or "[1]" on, most citing the Official Journal in the
+#: language's own abbreviation ("(1) OJ No C 247 …", "[1] Úř. věst. C 247 …",
+#: "(1) Gu n. C 187 …"; 31992L0043 in 21 languages, 32004R0726 in 22); a
+#: line without a number inside the run continues the note above it. Only
+#: lines without a letter may follow the run ("-----", "19920521").
+_FOOTNOTE = re.compile(r"^[(\[](\d+)[)\]]\s*\S")
+_OJ_CITE = re.compile(r"(?<![^\W\d_])(?:OJ|JO|ABl|GU|Gu|DO|PB|EFT|EUT|EGT|EYVL|EUVL|ΕΕ|Úř\. ?věst|Ú\. ?v|Dz\. ?U|HL|"
+                      r"UL|ELT|EÜT|OV|OL|ĠU|ОВ|SL|IO)(?![a-zà-žα-ωа-я])")
+_HAS_LETTER = re.compile(r"[^\W\d_]")
 #: the marks a quotation opens with, in the 24 languages' typography
 #: (‘…’ en, «…» fr it es pt el, „…“ de bg cs hu lt pl ro sk sl, »…« da,
 #: ”…” fi sv, and the legacy HTML's straight quotes)
@@ -346,8 +358,8 @@ class _Div:
 class _Layout:
     """The sections being laid out, line by line (`_read`)."""
 
-    def __init__(self, dialect: str, recitals: bool) -> None:
-        self.dialect, self.recitals = dialect, recitals
+    def __init__(self, dialect: str, recitals: bool, footnotes: bool = False) -> None:
+        self.dialect, self.recitals, self.footnotes = dialect, recitals, footnotes
         self.preamble: list[Any] = ["Preamble", []]
         self.sections: list[list[Any]] = [self.preamble]
         self.owners: list[tuple[Any, list[Any]]] = []        # (article or annex, its section)
@@ -593,22 +605,86 @@ class _Layout:
 
     # ---- the result -------------------------------------------------------------------------
 
+    def _legacy_notes(self) -> list[dict]:
+        """The legacy HTML's footnotes (`_FOOTNOTE`) out of the sections
+        that end a segment — the one before each annex, and the last —
+        into notes, each filed under the section holding its call "(n)"
+        ("[n]"): the first after the previous note's, from the act's start
+        (an annex's own: in the annex), else where the note stood."""
+        annexes = {id(sec) for owner, sec in self.owners if isinstance(owner, Annex)}
+        recitals = {id(sec) for sec in self.recs}
+        out: list[dict] = []
+        for k, sec in enumerate(self.sections):
+            last = k + 1 == len(self.sections) or id(self.sections[k + 1]) in annexes
+            if not last or sec is self.preamble or id(sec) in recitals:
+                continue
+            body = sec[1]
+            end = len(body)
+            while end and not _HAS_LETTER.search(body[end - 1]):
+                end -= 1
+            first, expect = None, None
+            for i in range(end - 1, -1, -1):
+                m = _FOOTNOTE.match(body[i])
+                if m is None:
+                    if expect is None and not _OJ_CITE.search(body[i]):
+                        break                       # the segment ends with no footnote
+                    continue                        # a note's next line
+                n = int(m[1])
+                if expect is not None and n != expect:
+                    break
+                if n == 1:
+                    first = i
+                    break
+                expect = n - 1
+            if first is None:
+                continue
+            marked = [x for x in body[first:end] if _FOOTNOTE.match(x)]
+            cited = sum(1 for x in marked if _OJ_CITE.search(x))
+            if not cited or (sec[0] != "Final" and 2 * cited < len(marked)):
+                continue                            # numbered text, not notes citing the OJ
+            block: list[list[str]] = []
+            for x in body[first:end]:
+                if _FOOTNOTE.match(x):
+                    block.append([x])
+                else:
+                    block[-1].append(x)
+            del body[first:end]
+            # the calls: in the annex for an annex's notes, else from the start
+            where = [sec] if id(sec) in annexes else self.sections[:k + 1]
+            at, offset = 0, 0
+            for note in block:
+                n = _FOOTNOTE.match(note[0])[1]
+                # "Commission (1),", "No 2377/90(17)", "December 2004(1)", "[1]"; not
+                # "Article 5(1)" (a paragraph)
+                call = re.compile(rf"(?:(?<=[^\s(\[])[ \u00a0]|(?<=[^\s\d(\[])|(?<=/\d\d)|(?<=\d{{4}}))"
+                                  rf"[(\[]{n}[)\]]")
+                label = sec[0]
+                for j in range(at, len(where)):
+                    m = call.search("\n".join(where[j][1]), offset if j == at else 0)
+                    if m:
+                        label, at, offset = where[j][0], j, m.end()
+                        break
+                out.append({"section": label, "text": "\n".join(note)})
+        return out
+
     def read(self) -> _Read:
         self._close(0)
         for d in reversed(self.unused):                 # where they stood, the last first
             sec, at = d.where
             sec[1][at:at] = d.lines
+        notes = [{**note, "section": next((self.placed[x] for x in links if x in self.placed), stands)[0]}
+                 for note, links, stands in self.notes]
+        if self.footnotes and self.dialect == "words":
+            notes += self._legacy_notes()
         for owner, sec in self.owners:
             owner.body = "\n".join(sec[1])
         out = [(label, "\n".join(body)) for label, body in self.sections if body or label != "Preamble"]
-        notes = [{**note, "section": next((self.placed[x] for x in links if x in self.placed), stands)[0]}
-                 for note, links, stands in self.notes]
         return _Read(out, [o for o, _ in self.owners if isinstance(o, Article)],
                      [o for o, _ in self.owners if isinstance(o, Annex)],
                      [(s[0], "\n".join(s[1])) for s in self.recs], notes)
 
 
-def _read(lines: list[_Line], *, recitals: bool = True) -> _Read:
+def _read(lines: list[_Line], *, recitals: bool = True, footnotes: bool = True) -> _Read:
     """The act's sections, articles, annexes, recitals and footnotes from its
     lines in reading order (module docstring: WHAT IS A HEADING).
 
@@ -619,8 +695,10 @@ def _read(lines: list[_Line], *, recitals: bool = True) -> _Read:
     first cell is "(1)") or, in legacy HTML, a paragraph opens with the next
     number. What follows a recital outside its element ("HAVE ADOPTED THIS
     REGULATION:") is the preamble's again. FOOTNOTES go to the notes, each
-    with the section its call stands in (the note's back link)."""
-    lay = _Layout(_dialect(lines), recitals)
+    with the section its call stands in (the note's back link); the legacy
+    HTML's (`footnotes`: not a PDF's, whose notes stand at each page's foot)
+    by `_FOOTNOTE`, filed under their call."""
+    lay = _Layout(_dialect(lines), recitals, footnotes)
     follows_note = False
     for line in lines:
         if line.classes & _NOTE_CLS:
@@ -647,7 +725,7 @@ def _sections(lines: list) -> tuple[list[tuple[str, str]], list[Article], list[A
     """`(sections, articles, annexes)` from lines in reading order — `_Line`s,
     or `(class, text)` pairs (tools/chunker_languages.py) — recitals left in
     the preamble, as a PDF's (`_read` reads the rest)."""
-    r = _read([x if isinstance(x, _Line) else _Line(x[0], x[1]) for x in lines], recitals=False)
+    r = _read([x if isinstance(x, _Line) else _Line(x[0], x[1]) for x in lines], recitals=False, footnotes=False)
     return r.sections, r.articles, r.annexes
 
 
@@ -704,6 +782,6 @@ def parse_pdf(files: dict[str, bytes], names: list[str], *, lang: str, root: str
     # a PDF's lines are its pages' printed lines, each page's footnotes among
     # them: no element bounds a recital there, and its recitals stay in the
     # preamble (as before C11)
-    read = _read(lines, recitals=False)
+    read = _read(lines, recitals=False, footnotes=False)
     title = note.expression_title or ""
     return _act(root, names[0], lang, title, note, read, {"pdf": info, "form": "pdf"}, {}), blank
