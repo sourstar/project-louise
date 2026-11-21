@@ -1427,7 +1427,7 @@ def reconcile(root, from_ref: str, to_ref: str, *, window: int = WINDOW,
                 # writes the new parser's
                 from app import validity as validity_mod
                 for uid in rederive:
-                    validity_mod.forget(con, uid, chain=False)
+                    validity_mod.forget(con, uid)
                 pending = {"rowid": last, "reset": len(stale), "rehashed": len(rehash),
                            "rederived": len(rederive)}
                 db.set_control(con, RECONCILE_KEY,

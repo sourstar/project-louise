@@ -462,6 +462,12 @@ def record(con, uid: str, native_id: int, meta: dict[str, Any], *, day: int | No
     one update per version that moved — at most the versions of one act
     (the codes: about 400), typically one."""
     work = str(meta["work"])
+    # A VERSION THAT MOVES TO ANOTHER WORK (2026-11-21, the review's V2: a
+    # re-parse giving a consolidation another base act) leaves its old
+    # Work's chain to recompute too, or that Work keeps a closure by a
+    # version it no longer holds and shows none
+    was = con.execute("SELECT work FROM validity WHERE uid=?", (uid,)).fetchone()
+    left = str(was[0]) if was is not None and str(was[0]) != work else None
     con.execute(
         "INSERT INTO validity(uid, native_id, work, valid_from, valid_to, has_text, in_force, shown, synced, "
         "start_basis) VALUES(?,?,?,?,NULL,?,?,0,0,?) "
@@ -476,7 +482,7 @@ def record(con, uid: str, native_id: int, meta: dict[str, Any], *, day: int | No
     if "amends" in meta:
         _record_amendments(con, uid, meta.get("amends") or [])
     moved = recompute(con, work, except_uid=uid, day=day)
-    for other in sorted(touched - {work}):
+    for other in sorted((touched | ({left} if left else set())) - {work}):
         moved += recompute(con, other, day=day)
     return moved
 
@@ -488,17 +494,17 @@ def forget(con, uid: str, *, day: int | None = None, chain: bool = True) -> list
     closures and amendments it stated, inside the caller's transaction; its
     Work's chain recomputed. Returns the uids of the other versions that
     moved (their stage marks reset by `recompute`). Nothing when it holds no
-    row: one primary-key read. `chain=False`: the row alone, the chain left
-    to the `record` that writes the version again (the A1c re-derive: a gap
-    of minutes, its neighbours not reset for nothing)."""
+    row: one primary-key read. ALWAYS the chain (2026-11-21, the review's
+    V1: `chain=False` left it to a `record` that writing the version again
+    would bring — a re-parse stating no start, or one refused, never brings
+    it, and the predecessor kept a `valid_to` at a successor gone, the Work
+    out of the in-force filter); `chain` is accepted and ignored."""
     row = con.execute("SELECT work FROM validity WHERE uid=?", (uid,)).fetchone()
     if row is None:
         return []
     touched = _record_closures(con, uid, [])         # its closures go; the Works they keyed
     con.execute("DELETE FROM validity WHERE uid=?", (uid,))
     _record_amendments(con, uid, [])
-    if not chain:
-        return []
     moved = recompute(con, str(row[0]), day=day)
     for other in sorted(touched - {str(row[0])}):
         moved += recompute(con, other, day=day)

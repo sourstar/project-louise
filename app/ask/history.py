@@ -233,7 +233,8 @@ def wanted_versions(listed: list[str], held: set[str], as_of: int | None, histor
 
 
 def fetch(query: str, collections: Iterable, *, as_of: int | None = None, history: bool = False,
-          store=None, query_lang: str | None = None, client=None, halt=None) -> dict[str, Any]:
+          store=None, query_lang: str | None = None, client=None, halt=None,
+          may_parse: bool = True) -> dict[str, Any]:
     """THE WORKER'S: `{"facts": [...], "fetches": [...], "landed": {name:
     [unit, …]}}` for this question (the module docstring) — each version
     landed in the collection's origin. Nothing asked of the origin unless it
@@ -322,9 +323,10 @@ def fetch(query: str, collections: Iterable, *, as_of: int | None = None, histor
                         status, why = _classify(e, bool(stop and stop.is_set()), bound)
                         out["fetches"].append({**entry, "status": status, "why": why})
                         continue
-                    out["fetches"].append({**entry, "status": FETCHED, "why": None})
                     out["landed"].setdefault(collection.name, []).append(str(dest))
-                    fact = _fact(collection, want, dest)
+                    fact, unread = _fact(collection, want, dest, bound=max(0.0, left()), may_parse=may_parse)
+                    # NEVER SILENT: fetched and not read is said with why (2026-11-21, V5)
+                    out["fetches"].append({**entry, "status": FETCHED, "why": unread})
                     if fact is not None:
                         out["facts"].append(fact)
     finally:
@@ -506,7 +508,7 @@ def serve(request: dict, *, halt=None, client=None, register=None) -> dict[str, 
         store = None
     got = fetch(str(request.get("query") or ""), serve_these, as_of=request.get("as_of"),
                 history=bool(request.get("history")), store=store, query_lang=request.get("query_lang"),
-                client=client, halt=halt)
+                client=client, halt=halt, may_parse=node_state.runs(mode, node_state.PARSE))
     if node_state.runs(mode, node_state.PARSE):
         for name, units in got["landed"].items():
             try:
@@ -600,24 +602,53 @@ def _held(corpus: Path, lang: str, celex: str) -> bool:
     return any((b / rel / "tree.json").is_file() for b in (corpus, corpus / HISTORY))
 
 
-def _fact(collection, want, unit: Path) -> dict | None:
-    """The cited article of a version fetched now, as a pinned fact."""
+def _fact(collection, want, unit: Path, *, bound: float, may_parse: bool = True) -> tuple[dict | None, str | None]:
+    """The cited article of a version fetched now, as a pinned fact — and,
+    where there is none, why (2026-11-21, the review's V5: the parse ran in
+    the worker's own process, outside every bound and in any node mode, and
+    a version it could not read was said "fetched" and nothing else). The
+    parse runs on the PARSE POOL (`parallel.compute`, its memory bound and
+    watchdog), awaited at most `bound` — what is left of the question's
+    time — and only where the node's mode parses."""
+    import threading
+    from app import parallel
+    if not may_parse:
+        return None, "fetched; this node parses nothing in its current mode, so its text is not pinned"
     plugin = collection.plugin_instance()
     ref = plugin.ref_of_unit(unit)
     if ref is None:
-        return None
-    try:
-        doc = plugin.parse(plugin.fetch(ref))
-    except Exception:   # noqa: BLE001 — fetched, not readable: the fetch is said, no fact
-        return None
+        return None, "fetched, but the unit did not land whole"
+    # its size, so the pool's admission estimates it (`parallel.peak_of`): a
+    # large act parsed alone in a child, never in this process unmeasured
+    row = {"uid": f"{ref.source_id}:{ref.native_id}", "native_id": ref.native_id, "path": ref.locator,
+           "size": int(getattr(ref, "size", 0) or 0)}
+    box: dict[str, Any] = {}
+
+    def run() -> None:
+        try:
+            box["got"] = parallel.compute("doc", collection, [row])
+        except Exception as e:   # noqa: BLE001 — said below
+            box["error"] = f"{type(e).__name__}: {e}"
+    t = threading.Thread(target=run, name="history-fact", daemon=True)
+    t.start()
+    t.join(bound)
+    if t.is_alive():
+        return None, f"fetched; its text was not read within the question's time ({bound:.0f} s)"
+    if "error" in box:
+        return None, f"fetched; its text could not be read: {box['error']}"[:300]
+    ok, value = box["got"][0]
+    if not ok:
+        return None, f"fetched; its text could not be read: {value.get('msg', value)}"[:300]
+    doc = value
     article = want.citation.article
-    texts = [body for label, body in doc.sections if want.read(label) == article]
+    texts = [body for label, body in doc["sections"] if want.read(label) == article]
     if not texts:
-        return None
-    x = doc.extra or {}
+        return None, f"fetched; it holds no {want.citation.label}"
+    x = doc["extra"]
     return {"entity_id": f"celex:{x.get('celex')}~art{article}", "kind": "article",
             "source_id": collection.name,
-            "label": f"{doc.title} — {want.citation.label} (version of {x.get('valid_from')}, fetched now from Cellar)",
+            "label": f"{doc['title']} — {want.citation.label} (version of {x.get('valid_from')}, fetched now from Cellar)",
             "fields": {"text": "\n".join(texts), "in force from": x.get("valid_from"),
                        "version": f"{collection.plugin}:{ref.native_id}", "fetched": True},
-            "via": None}
+            "via": None}, None
+

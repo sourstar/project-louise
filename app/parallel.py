@@ -698,6 +698,17 @@ def _one(kind: str, collection, row: dict):
                                  "path": path})
         shape = int(getattr(collection.codex, "record_line", 1) or 1)
         return verdict(row["line"], pack_records.canonical_line(record, record_line=shape))
+    if kind == "doc":
+        # one unit's parsed text, plain (app/ask/history.py `_fact`: a version
+        # fetched on request, read under the pool's bounds, never the
+        # worker's own process — 2026-11-21, V5); a unit named in part is
+        # never read (invariant 11)
+        why = plugin_io.stale_unit(plugin, row, collection)
+        if why:
+            raise plugin_io.StaleUnit(f"{row['uid']}: {why}")
+        doc = plugin_io.canonical_doc(plugin, row)
+        return {"title": doc.title or "", "sections": [[a or "", b or ""] for a, b in doc.sections],
+                "extra": dict(doc.extra or {})}
     raise ValueError(f"unknown work kind {kind!r}")
 
 
