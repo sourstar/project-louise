@@ -157,20 +157,69 @@ start — the qualification ends at the report.
 
 *Filled from München's figures as they arrive; M = measured on the node.*
 
-### Phase 0 — baseline (live engine)
+### Phase 0 — baseline (live engine), München 2026-11-21 (M)
 
-| model | load s | at rest MiB | throughput | source |
-|---|---|---|---|---|
-| | | | | |
+Conditions: the node paused throughout (the operator's own pause, 09:46Z);
+the web container stopped for each timed window (10:56–11:36Z and
+11:37–11:38Z are the valid ones; 10:22–10:28Z void for everything but chat
+— the chat runs there hit llama.cpp's prompt cache, 0.04 s first tokens;
+10:32–10:55Z void: ~10.8 GB of the web preload sat on the card);
+`louise-ocr-larex` paused in each window; the card emptied through
+`/backend/shutdown` before every model, the driver reading 0 MiB. Live
+engine `louise-sycl-f16-llama-cpp-281e1ee481b6-stack-7c301a7ba437`. Path
+(A) — the engine's own `llama-server` — cannot run on either engine: the
+backend images carry no `llama-server` (live: `llama-cpp-grpc`,
+`llama-cpp-fallback`, `llama-cpp-rpc-server`; new: `llama-cpp-grpc` only),
+so every encoder row is path (B): Louise's tagged client through LocalAI
+and VeGa, the 24 `bench.json` texts in production-shaped batches, 3 warm
+passes, median. Files: `/root/measure/qual-2026-11-21/phase0/`.
 
-### Phase 1 — the engine
+| model | result | VRAM after (driver) | load |
+|---|---|---|---|
+| vega-nemotron-3-embed-1b (NeuRIS recipe) | 1.33 s per pass, 18.05 chunks/s, 16,216 tok/s | 2,516 MiB | ~7.8 s |
+| vega-qwen3-embedding-4b (gutenberg) | 4.37 s, 5.49 chunks/s, 4,930 tok/s | 2,736 MiB | ~8.1 s |
+| vega-bge-m3 (wikipedia) | 1.24 s, 19.39 chunks/s, 17,423 tok/s | 898 MiB | ~7.9 s |
+| vega-medcpt-query (pubmed, one at a time) | 0.36 s, 66.7 queries/s (ctx 512 truncates the bench texts: tok/s not meaningful) | 483 MiB | ~4.9 s |
+| louise-rerank-nemotron-1b (rerank_bench, jurifindit-speed, 175 queries, concurrency 1) | 2,512 ms median per list, p90 4,478–4,498 ms, cold and warm alike | 3,278 MiB | — |
+| louise-translate-madlad (t5waves; pilot T3 18/18) | **T4 one at a time 375/379 identical to P3's one slot (FAIL)**, 345/379 identical to torch, 0.42 s median per translation; **T3 624/626 identical (FAIL)**; in-wave == alone 610/626 (PASS); 1.06 s per question, p90 1.44 s | 7,221 MiB | — |
+| chat 9B, `louise-chat-qwen3.5-9b-q4-p0` (2 fixed prompts × 5 answers, n_predict 256, seed 0, a unique first line against the cache; client-side stream timing — LocalAI v5 returns no `timings`) | 140 tok: first token 0.121 s, prefill 1,157 tok/s, decode 77.5 tok/s · 2,061 tok: 0.624 s, 3,301 tok/s, 75.5 tok/s | 6,288 MiB | — |
+| the 35B, `louise-chat-qwen3.6-35b-a3b` (the same) | 140 tok: 0.292 s, **480 tok/s, 99.6 tok/s** · 2,061 tok: 2.512 s, **820 tok/s, 97.3 tok/s** | 21,782 MiB | — |
+| omnivoice-cpp (1 warm-up + 3 clips) | 0.79 s, 1.12 s, 1.27 s | 1,369 MiB | — |
+
+The prompts (`phase0/prompts/`): a real Normattiva Ask context, 128 and
+2,048 tokens by the 9B's tokenizer (140 and 2,061 with the run line);
+the 128-token answers read without garbage (both models answer that the
+passages do not cover the question — correctly).
+
+**Finding F1 — MADLAD on the live engine is no longer 379/379.** The
+engine was qualified at 379/379 one-at-a-time and 616/626 in-wave; today
+375/379 and 624/626 (in-wave == alone 610/626 holds). Classification of
+the 4 + 2 differing translations (wrong, or arithmetic order) and whether
+the 375 was already so at this engine's install: asked of München. Phase
+2's bar for P3/P4 on the new engine is set against TODAY's figures.
+
+**Finding F2 — LocalAI's `auto_upgrade_backends` was true** in
+`runtime_settings.json` since 11-08, overriding
+`LOCALAI_AUTO_UPGRADE_BACKENDS=false`; v5.0.1 acted on it today and
+upgraded three non-Louise backends (`intel-sycl-f16-llama-cpp-development`
+08:01 CET, `intel-sycl-f16-ced` 12:03, `intel-transformers` 12:06), with
+~12 more listed (vulkan-parakeet-cpp, intel-sycl-f32-omnivoice-cpp, …);
+none of the `louise-*` / `vega-*` engines touched. München set it back to
+false through `POST /api/settings` (no restart, backup kept). A backend
+that changes under a qualified run is an engine change nobody gated.
+
+### Phase 1 — the engine, München 2026-11-21 (M)
 
 | | |
 |---|---|
-| series tag | |
-| backend name / image digest | |
-| engine (vega.json) | |
-| startup flags read | |
+| built from | commit cb4edac2 (094df03 + the protocol), `INTEL_STACK=intel-stack-2026-11c.conf sh deploy/localai/llama-cpp/build.sh sycl_f16` — the LIVE engine's stack, so that only the series changes; stack digest 7c301a7ba437 (= live) |
+| base + series | LocalAI `dd5780aa904d` + 6 patches; series tag `133ef68669a1`; 14 min; exit 0 |
+| image | `louise-llama-cpp:sycl_f16-133ef68669a1-stack-7c301a7ba437`, sha256 `7c97ad698bed422bac43e8cf4ec4758360b5c8aed3c74ecf0074f8619e151c93`; tar sha256 `c911477dcb4da8cc…`; stack.lock kept |
+| installed as | `louise-sycl-f16-llama-cpp-133ef68669a1-stack-7c301a7ba437`, install-external from the dot-named tar, 12:02:04Z; the live backend untouched |
+| first load | test copy `qual-nemotron-embed-1b-raw.yaml` (the live nemotron YAML on the new backend, no VeGa, no collection): dim 2048 answered |
+| flags | the engine's stderr is not in LocalAI's log at INFO; the binary carries `GGML_SYCL_BMG_VRAM_CHECK`, `GGML_SYCL_MMID_SCHED`, `GGML_SYCL_ENABLE_DNN`; the running engine's environ: `GGML_SYCL_ENABLE_DNN=0`, `GGML_SYCL_FA_ONEDNN=0`, `NEO_CACHE_DIR`; BMG_VRAM_CHECK and MMID_SCHED unset = compiled defaults (1, 1) |
+| VeGa wrapper package | not yet; built for phase 3's `vega-<model>-q` names (`build_vega_package.sh`) |
+| test binaries | the image ships no `test-backend-ops`, `test-chat`, `embedding_tokens_test`: built once from the same tree in the same builder and stack for phase 2 (§2 phase 2, as amended in the work order) |
 
 ### Phase 2 — the series' checks
 
