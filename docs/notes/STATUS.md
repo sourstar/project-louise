@@ -20,6 +20,13 @@ measured (published figures disagree).
 
 ### 2026-11-21
 
+- **The backend qualification is running** (operator, 2026-11-21: "Run unattended, you are in charge of the backend
+  qualification. When done I want a full report of the performance improvement or loss, and how the 35B MoE
+  performs. Test also the tensor layer split as a POC with all the current models (not those used for ocr) plus
+  the 35B replacing the chat model."). The protocol, six phases with their harnesses and acceptance, and the report
+  as it fills: [backend-qualification-2026-11-21.md](backend-qualification-2026-11-21.md). The cloud session
+  holds it; München runs the node's steps and sends each phase's figures back. The live engine serves until the new
+  one is qualified (RULE 1); the cut-over is the operator's to start.
 - **A — the series moved to LocalAI v5.0.1** (operator, 2026-11-21, after the report below): base
   `dd5780a` (llama.cpp `78e0529`); P1, P2 unchanged; P3–P6 regenerated on the new llama.cpp with LocalAI's own
   patch applied first, code unchanged, every hunk exact; P7 deleted (in the base). `fit:off` in every llama.cpp
