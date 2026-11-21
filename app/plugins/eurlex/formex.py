@@ -161,6 +161,14 @@ def not_its_name(files: dict[str, bytes], wrapper: ET.Element, wname: str) -> li
     files too, numbered in their own order."""
     named = [n for n in dict.fromkeys([*main_names(wrapper), *annex_names(wrapper)]) if n in files]
     why = [w for n in [wname, *named] if (w := misnamed(n, files[n][:_HEAD_BYTES])) is not None]
+    # THE WRAPPER BY ITS CONTENT TOO (2026-11-21, 32013D0410 in 24 languages:
+    # the dump's `…01005401.doc.xml` holds ANNEX VII, the wrapper is filed as
+    # `…01005401.xml`, the ACT as `…01005801.xml`; Cellar serves them right)
+    if wrapper.tag != "DOC":
+        why.append(f"{wname} holds <{wrapper.tag}>, not a wrapper")
+    for n, data in files.items():
+        if not is_wrapper(n) and n.lower().endswith(".xml") and root_tag(data[:_HEAD_BYTES]) == "DOC":
+            why.append(f"{n} holds a wrapper (<DOC>)")
     off = swapped({n: stated_place(n, files[n][:_HEAD_BYTES]) for n in named})
     if off:
         why.append("in each other's place: " + ", ".join(off))
@@ -169,6 +177,15 @@ def not_its_name(files: dict[str, bytes], wrapper: ET.Element, wname: str) -> li
 
 #: what `misnamed` and `stated_place` read of a file
 _HEAD_BYTES = 4096
+_FIRST_ELEMENT = re.compile(rb"<([A-Za-z][A-Za-z0-9._-]*)[\s>/]")
+_PROLOG = re.compile(rb"<\?.*?\?>|<!--.*?-->|<!DOCTYPE[^>]*>", re.S)
+
+
+def root_tag(head: bytes) -> str | None:
+    """A file's first element's name, from its first bytes: after the XML
+    declaration, processing instructions and comments; None for no markup."""
+    m = _FIRST_ELEMENT.search(_PROLOG.sub(b"", head))
+    return m.group(1).decode() if m else None
 
 
 def misnamed(name: str, head: bytes) -> str | None:

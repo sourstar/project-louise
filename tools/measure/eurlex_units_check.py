@@ -139,6 +139,14 @@ def check_chunk(chunk: list[tuple[str, str, str]], examples: int) -> dict:
                        if n in heads]
                 places = {n: formex.stated_place(n, heads[n]) for n in own}
                 off = formex.swapped(places)
+                shifted = [w for w in formex.not_its_name(heads, wrapper, _wname)
+                           if "not a wrapper" in w or "holds a wrapper" in w]
+                if shifted:
+                    # 32013D0410: an ANNEX under the wrapper's name, the wrapper under another's
+                    mism["wrapper under another name"] += 1
+                    wrong = True
+                    show("wrapper under another name", f"{unit.parent.parent.name}/{year}/{unit.name}: "
+                         + "; ".join(shifted[:2]))
                 if off:
                     mism["formex file in another's place"] += len(off)
                     wrong = True
