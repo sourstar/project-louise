@@ -193,10 +193,19 @@ passages do not cover the question — correctly).
 
 **Finding F1 — MADLAD on the live engine is no longer 379/379.** The
 engine was qualified at 379/379 one-at-a-time and 616/626 in-wave; today
-375/379 and 624/626 (in-wave == alone 610/626 holds). Classification of
-the 4 + 2 differing translations (wrong, or arithmetic order) and whether
-the 375 was already so at this engine's install: asked of München. Phase
-2's bar for P3/P4 on the new engine is set against TODAY's figures.
+375/379 and 624/626 (in-wave == alone 610/626 holds). **Classified
+(München, 12:10Z):** none of the 4 + 2 is garbage or a truncation; three
+of the four one-at-a-time differences now match torch — the reference
+implementation — exactly, so the live engine moved TOWARDS the reference
+and P3's recorded bytes away from it; one of the four changes a year in
+parentheses (1930 → 1936), a difference of meaning whichever side is
+right — the torch reference decides it; the two in-wave differences are a
+single token each. And **the live engine never had its own MADLAD
+qualification run**: the 11-11 engine switch checked 8 answers, so the
+drop from 379/379 happened at or after that switch and went unmeasured
+until today — a process finding beside the engine one. Phase 2's bar for
+P3/P4 on the new engine is set against TODAY's figures, every newly
+differing translation classified the same way.
 
 **Finding F2 — LocalAI's `auto_upgrade_backends` was true** in
 `runtime_settings.json` since 11-08, overriding
