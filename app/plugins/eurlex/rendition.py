@@ -21,6 +21,23 @@ WHAT IS KEPT, every word and every attribute:
     and the PDF is held in the unit whole.
 Script and style contents are chrome, not the act (invariant 11 (a)).
 
+WHAT IS A HEADING (C11, docs/notes/eurlex-review-2026-11-21.md). Three
+dialects: the OJ's XHTML (fmx2xhtml, CONVEX: `oj-ti-art`, `oj-doc-ti`),
+the consolidated text's XHTML (`title-article-norm`, `title-annex-1`), and
+the legacy HTML and the PDF, read by the headings' own words in the 24
+languages (`_ARTICLE`, `_ANNEX`). In every dialect a heading is NOT an
+article or an annex where it stands
+  - in a table cell: an amending act's quoted article in a list item (32018R0825
+    en: 12 "articles" against 5), a correlation table's "Articolul 12";
+  - in a quotation: its text opens a quote mark, or its class says so
+    (`oj-quotation-ti`: "ANNEX ‘ANNEX Ia");
+  - nested inside the open article's own element (CONVEX's `art_1` div): a
+    quoted article that is no list item (32016D1837's "‘Article 3");
+  - by words alone (no element to tell): after a quoted heading, a heading
+    of its kind numbered above it, until a line closes the quotation
+    (32003L0051's '"Article 42e' then "Article 42f").
+Its words stay in the article that quotes it.
+
 THE STANDARDS NOT ADOPTED: an HTML5 tree builder (html5lib, lxml.html). The
 standard library's `html.parser` reads both the fmx2xhtml XHTML and the
 legacy HTML 4.01 without a new dependency. For PDF: pypdfium2, already the
@@ -29,6 +46,7 @@ node's (PDFium, Chrome's engine).
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
 from html.parser import HTMLParser
 from typing import Any
 
@@ -37,6 +55,7 @@ from .formex import Act, Annex, Article, norm
 #: block elements: each opens and closes a line of text
 _BLOCK = frozenset({"p", "div", "td", "th", "li", "tr", "table", "h1", "h2", "h3", "h4", "h5", "h6",
                     "title", "dt", "dd", "blockquote", "pre", "caption", "br", "hr"})
+_CELL = frozenset({"td", "th"})
 _SKIP = frozenset({"script", "style"})
 #: an article's heading in the 24 languages, alone on its line (the legacy
 #: HTML and the PDF carry no class saying so): "Articolo 1", "Article 5",
@@ -54,36 +73,88 @@ _NUM = r"\d+\s*(?:[.º°o]+|\.?o)?(?:\s*(?:bis|ter|quater|quinquies|sexies|[a-z]
 #: unico", "Artículo único", "Artigo único"
 _ORDINAL = r"(?:Article\s+(?:premier|1er)|(?:Article|Articolo|Artículo|Artigo)\s+(?:unique|unico|único))"
 _ARTICLE = re.compile(rf"^(?:{_WORD_FIRST}\s+{_NUM}|{_ORDINAL}|\d+\s*\.?\s*(?:artikla|cikk|pants|straipsnis))\s*$",
-                      re.I)
+                      re.IGNORECASE)
 #: an annex's heading, alone on its line, after the articles
 _ANNEX = re.compile(r"^(?:ALLEGATO|ANNEX|ANHANG|ANEXO|ANNEXE|ΠΑΡΑΡΤΗΜΑ|ПРИЛОЖЕНИЕ|PŘÍLOHA|PRÍLOHA|"
                     r"PRILOG|PRILOGA|ZAŁĄCZNIK|ANEXA|ANNESS|IARSCRÍBHINN|LISA|LIITE|MELLÉKLET|"
                     r"PIELIKUMS|PRIEDAS|BIJLAGE|BILAG|BILAGA)\b.{0,40}$")
+#: the marks a quotation opens with, in the 24 languages' typography
+#: (‘…’ en, «…» fr it es pt el, „…“ de bg cs hu lt pl ro sk sl, »…« da,
+#: ”…” fi sv, and the legacy HTML's straight quotes)
+_OPENING = ("‘", "“", "„", "«", "»", "”", "‚", "‹", "›", "'", '"')
+#: a line that closes a quotation: a closing mark at its end, its stop after
+#: it (the legacy HTML closes with a backtick: 31997L0011's "Article 4.`;")
+_CLOSING = re.compile(r"[’'\"”»“«‘›‹`]\s*[.;,)]*\s*$")
+#: a heading's number: arabic ("Article 10a", "14 a artikla"), else roman ("ANNEX IV", "Ia LISA")
+_ARABIC = re.compile(r"(\d+)([^\s\d]*)")
+_ROMAN_NUM = re.compile(r"(?:^|\s)([IVXLC]+)([a-z]?)(?=$|[\s.])")
+_ROMAN = {"I": 1, "V": 5, "X": 10, "L": 50, "C": 100}
+#: the classes by dialect (the OJ's XHTML with "oj-" off, the consolidated text's)
+_ART_CLS = {"oj": "ti-art", "cons": "title-article-norm"}
+_STI_CLS = {"oj": "sti-art", "cons": "stitle-article-norm"}
+_QUOTED_CLS = "quotation-ti"
+
+
+def _number(heading: str) -> tuple[int, str] | None:
+    """A heading's number as an ordered pair: "Article 10a" (10, "a"),
+    "Artigo 14.o-A" (14, "oa"), "ANNEX IV" (4, ""), "ANNEX" None."""
+    m = _ARABIC.search(heading)
+    if m:
+        return int(m[1]), re.sub(r"[\W\d_]", "", m[2]).lower()
+    m = _ROMAN_NUM.search(heading)
+    if m is None:
+        return None
+    vals = [_ROMAN[c] for c in m[1]]
+    return sum(-v if i + 1 < len(vals) and v < vals[i + 1] else v for i, v in enumerate(vals)), m[2]
+
+
+@dataclass(frozen=True)
+class _Line:
+    """A line of text and where it stands."""
+    cls: str                                  # the nearest classed block's first class, "oj-" off
+    text: str
+    classes: frozenset = frozenset()          # every class of that block, "oj-" off
+    blocks: tuple = ()                        # the open blocks, outermost first: (serial, tag, id)
+    cell: bool = False                        # inside a table cell
+
+    @property
+    def path(self) -> tuple[int, ...]:
+        return tuple(b[0] for b in self.blocks)
+
+    @property
+    def parent(self) -> int:
+        """The element holding the line's own block (0: the document)."""
+        return self.blocks[-2][0] if len(self.blocks) >= 2 else 0
 
 
 class _Reader(HTMLParser):
-    """Lines of text `(class, text)` in reading order, every element's
-    attributes, the head's title and metas."""
+    """Lines of text (`_Line`) in reading order, every element's attributes,
+    the head's title and metas. `serial` numbers the blocks from there, so
+    the items of one manifestation never share a number."""
 
-    def __init__(self) -> None:
+    def __init__(self, serial: int = 0) -> None:
         super().__init__(convert_charrefs=True)
-        self.lines: list[tuple[str, str]] = []
+        self.lines: list[_Line] = []
         self.markup: list[list] = []
         self.metas: list[dict] = []
         self.title: list[str] = []
+        self.serial = serial
         self._buf: list[str] = []
-        self._classes: list[tuple[str, str]] = []      # (tag, class) of the open blocks
+        # the open blocks: (tag, first class, every class, serial, id)
+        self._classes: list[tuple[str, str, frozenset, int, str]] = []
         self._skip = 0
         self._in_title = False
 
-    def _cls(self) -> str:
-        return next((c for _t, c in reversed(self._classes) if c), "")
+    def _cls(self) -> tuple[str, frozenset]:
+        return next(((c, cs) for _t, c, cs, _s, _i in reversed(self._classes) if c), ("", frozenset()))
 
     def _flush(self) -> None:
         text = norm("".join(self._buf))
         self._buf = []
         if text:
-            self.lines.append((self._cls(), text))
+            cls, classes = self._cls()
+            self.lines.append(_Line(cls, text, classes, tuple((s, t, i) for t, _c, _cs, s, i in self._classes),
+                                    any(t in _CELL for t, *_ in self._classes)))
 
     def handle_starttag(self, tag, attrs):
         a = {k: (v if v is not None else "") for k, v in attrs}
@@ -98,8 +169,10 @@ class _Reader(HTMLParser):
         if tag in _BLOCK:
             self._flush()
             if tag not in ("br", "hr"):
-                cls = re.sub(r"^oj-", "", (a.get("class") or "").split()[0]) if a.get("class") else ""
-                self._classes.append((tag, cls))
+                classes = [re.sub(r"^oj-", "", c) for c in (a.get("class") or "").split()]
+                self.serial += 1
+                self._classes.append((tag, classes[0] if classes else "", frozenset(classes), self.serial,
+                                      a.get("id") or ""))
 
     def handle_startendtag(self, tag, attrs):
         self.handle_starttag(tag, attrs)
@@ -131,86 +204,179 @@ class _Reader(HTMLParser):
         self._flush()
 
 
-def _sections(lines: list[tuple[str, str]]) -> tuple[list[tuple[str, str]], list[Article], list[Annex]]:
-    """`(sections, articles, annexes)` from lines in reading order: by the
-    XHTML's classes where it has them (`ti-art`, `sti-art`, `doc-ti`), else by
-    the headings' own words (`_ARTICLE`, `_ANNEX`)."""
-    classed = any(c == "ti-art" for c, _ in lines)
-    sections: list[list[Any]] = [["Preamble", []]]
-    owners: list[tuple[Any, list[Any]]] = []             # (article or annex, its section)
-    kind = "preamble"
-    partition = ""
-    for cls, text in lines:
-        is_article = cls == "ti-art" if classed else bool(_ARTICLE.match(text))
-        is_annex = (cls == "doc-ti" if classed else bool(_ANNEX.match(text))) and \
-            any(isinstance(o, Article) for o, _ in owners)
-        if is_article:
-            label = f"{partition} › {text}" if partition else text
-            sections.append([label, []])
-            owners.append((Article(identifier=None, num=text, title="", partition=partition, body=""),
-                           sections[-1]))
-            kind = "article"
-            continue
-        if classed and cls == "sti-art" and kind == "article" and not sections[-1][1]:
-            sections[-1][0] = f"{sections[-1][0]} — {text}"
-            owners[-1][0].title = text
-            continue
-        if is_annex:
-            if kind == "annex" and not sections[-1][1]:
-                # a heading on several lines ("Progetto di" / "DECISIONE N. …" /
-                # …): one heading, its lines joined
-                sections[-1][0] = f"{sections[-1][0]} {text}"
-                owners[-1][0].title = sections[-1][0]
+@dataclass
+class _Read:
+    """What `_read` makes of an act's lines."""
+    sections: list[tuple[str, str]]
+    articles: list[Article]
+    annexes: list[Annex]
+
+
+def _dialect(lines: list[_Line]) -> str:
+    """"oj" (the OJ's XHTML), "cons" (a consolidated text's XHTML) or
+    "words" (legacy HTML, PDF: the headings' own words)."""
+    if any(line.cls == _ART_CLS["oj"] for line in lines):
+        return "oj"
+    if any(line.cls == _ART_CLS["cons"] for line in lines):
+        return "cons"
+    return "words"
+
+
+class _Layout:
+    """The sections being laid out, line by line (`_read`)."""
+
+    def __init__(self, dialect: str) -> None:
+        self.dialect = dialect
+        self.preamble: list[Any] = ["Preamble", []]
+        self.sections: list[list[Any]] = [self.preamble]
+        self.owners: list[tuple[Any, list[Any]]] = []        # (article or annex, its section)
+        self.kind = "preamble"
+        self.has_article = False            # an annex heading comes after an article
+        self.partition = ""
+        self.container: int | None = None   # the open article heading's own parent (0: the document)
+        self.quote: str | None = None       # words: a quotation a quoted "article" / "annex" heading opened
+        self.quoted: tuple[int, str] | None = None  # the number of its last heading
+
+    # ---- what a line is ---------------------------------------------------------------------
+
+    def heads(self, line: _Line) -> tuple[bool, bool]:
+        """(an article heading, an annex heading)."""
+        text, cls = line.text, line.cls
+        free = not (line.cell or _QUOTED_CLS in line.classes or text.startswith(_OPENING))
+        nested = self.container not in (None, 0) and self.container in line.path \
+            and line.parent != self.container
+        if self.dialect == "words":
+            article, annex = bool(_ARTICLE.match(text)), bool(_ANNEX.match(text))
+            if not line.cell and text.startswith(_OPENING):
+                # A QUOTED heading opens a quotation: the headings of its kind
+                # that follow, numbered above it, are the quoted text's until
+                # it closes (`after`): 31997L0062's "'ANNEX I" then "ANNEX II",
+                # 31997L0011's "'Article 3" … "'Article 10" then its own "Article 2"
+                bare = text.lstrip("".join(_OPENING)).strip()
+                kind = "article" if _ARTICLE.match(bare) else "annex" if _ANNEX.match(bare) else None
+                if kind:
+                    self.quote, self.quoted = kind, _number(bare)
+            elif self.quote and (article and self.quote == "article" or annex and self.quote == "annex"):
+                n = _number(text)
+                if n is not None and self.quoted is not None and n > self.quoted:
+                    self.quoted, article, annex = n, False, False   # the quotation's next heading
+                else:
+                    self.quote = None                               # the act's own: the quotation ended
+        else:
+            article = cls == _ART_CLS[self.dialect]
+            annex = cls == "doc-ti" if self.dialect == "oj" else cls.startswith("title-annex")
+        return article and free and not nested, annex and free and not nested and self.has_article
+
+    def after(self, line: _Line) -> None:
+        if self.quote and _CLOSING.search(line.text):
+            self.quote = None
+
+    # ---- where it goes ----------------------------------------------------------------------
+
+    def article(self, line: _Line) -> None:
+        label = f"{self.partition} › {line.text}" if self.partition else line.text
+        self.sections.append([label, []])
+        self.owners.append((Article(identifier=None, num=line.text, title="", partition=self.partition, body=""),
+                            self.sections[-1]))
+        self.kind, self.container = "article", line.parent
+        self.has_article = True
+
+    def subtitle(self, line: _Line) -> bool:
+        if self.dialect == "words" or line.cls != _STI_CLS[self.dialect] or self.kind != "article" \
+                or self.sections[-1][1] or line.cell:
+            return False
+        self.sections[-1][0] = f"{self.sections[-1][0]} — {line.text}"
+        self.owners[-1][0].title = line.text
+        return True
+
+    def annex(self, line: _Line) -> None:
+        if self.kind == "annex" and not self.sections[-1][1]:
+            # a heading on several lines ("Progetto di" / "DECISIONE N. …" /
+            # …): one heading, its lines joined
+            self.sections[-1][0] = f"{self.sections[-1][0]} {line.text}"
+            self.owners[-1][0].title = self.sections[-1][0]
+        else:
+            self.sections.append([line.text, []])
+            self.owners.append((Annex(file=None, title=line.text, body=""), self.sections[-1]))
+        # the articles that follow belong to it (an annexed act's own articles)
+        self.partition = self.sections[-1][0]
+        self.kind, self.container = "annex", None
+        if self.quote == "article":
+            self.quote = None
+
+    def body(self, line: _Line) -> None:
+        (self.preamble if self.kind == "preamble" else self.sections[-1])[1].append(line.text)
+
+    # ---- the result -------------------------------------------------------------------------
+
+    def read(self) -> _Read:
+        for owner, sec in self.owners:
+            owner.body = "\n".join(sec[1])
+        out = [(label, "\n".join(body)) for label, body in self.sections if body or label != "Preamble"]
+        return _Read(out, [o for o, _ in self.owners if isinstance(o, Article)],
+                     [o for o, _ in self.owners if isinstance(o, Annex)])
+
+
+def _read(lines: list[_Line]) -> _Read:
+    """The act's sections, articles and annexes from its lines in reading
+    order (module docstring: WHAT IS A HEADING)."""
+    lay = _Layout(_dialect(lines))
+    for line in lines:
+        article, annex = lay.heads(line)
+        if article:
+            lay.article(line)
+        elif not lay.subtitle(line):
+            if annex:
+                lay.annex(line)
             else:
-                sections.append([text, []])
-                owners.append((Annex(file=None, title=text, body=""), sections[-1]))
-            # the articles that follow belong to it (an annexed act's own articles)
-            partition = sections[-1][0]
-            kind = "annex"
-            continue
-        sections[-1][1].append(text)
-    for owner, sec in owners:
-        owner.body = "\n".join(sec[1])
-    out = [(label, "\n".join(body)) for label, body in sections if body or label != "Preamble"]
-    return (out, [o for o, _ in owners if isinstance(o, Article)],
-            [o for o, _ in owners if isinstance(o, Annex)])
+                lay.body(line)
+        lay.after(line)
+    return lay.read()
 
 
-def _act(root: str, body_file: str, lang: str, title: str, note, sections, articles, annexes,
+def _sections(lines: list) -> tuple[list[tuple[str, str]], list[Article], list[Annex]]:
+    """`(sections, articles, annexes)` from lines in reading order — `_Line`s,
+    or `(class, text)` pairs (tools/chunker_languages.py)."""
+    r = _read([x if isinstance(x, _Line) else _Line(x[0], x[1]) for x in lines])
+    return r.sections, r.articles, r.annexes
+
+
+def _act(root: str, body_file: str, lang: str, title: str, note, read: _Read,
          meta: dict, markup: dict) -> Act:
     act = Act(root=root, body_file=body_file, wrapper_file="", language=lang, title=title,
               date=note.date_document, publication_date=note.date_publication, consleg={},
-              base_celex=None, recitals=[], articles=articles, annexes=annexes, meta=meta,
-              notes=[], references=[], modifications=[], instructions=[], wrapper=None,
-              markup=markup, rendered_sections=sections)
+              base_celex=None, recitals=[], articles=read.articles, annexes=read.annexes,
+              meta=meta, notes=[], references=[], modifications=[], instructions=[], wrapper=None,
+              markup=markup, rendered_sections=read.sections)
     return act
 
 
 def parse_html(files: dict[str, bytes], names: list[str], *, lang: str, root: str, note) -> Act:
     """An XHTML or legacy HTML manifestation, its items in `names` order."""
-    lines: list[tuple[str, str]] = []
+    lines: list[_Line] = []
     markup: dict[str, list] = {}
     heads: dict[str, dict] = {}
+    serial = 0
     for name in names:
-        r = _Reader()
+        r = _Reader(serial)
         r.feed(files[name].decode("utf-8", errors="replace"))
         r.close()
+        serial = r.serial
         lines += r.lines
         if r.markup:
             markup[name] = r.markup
         heads[name] = {k: v for k, v in (("title", norm("".join(r.title))), ("meta", r.metas)) if v}
-    sections, articles, annexes = _sections(lines)
-    title = note.expression_title or next((t for c, t in lines if c == "doc-ti"), "") or \
+    read = _read(lines)
+    title = note.expression_title or next((x.text for x in lines if x.cls == "doc-ti"), "") or \
         next((h.get("title", "") for h in heads.values()), "")
-    return _act(root, names[0], lang, title, note, sections, articles, annexes,
-                {"head": heads, "form": "html"}, markup)
+    return _act(root, names[0], lang, title, note, read, {"head": heads, "form": "html"}, markup)
 
 
 def parse_pdf(files: dict[str, bytes], names: list[str], *, lang: str, root: str, note) -> tuple[Act, int]:
     """A PDF manifestation: its text page by page (PDFium), its document
     information. Returns the act and how many pages had no text layer."""
     import pypdfium2 as pdfium
-    lines: list[tuple[str, str]] = []
+    lines: list[_Line] = []
     info: dict[str, Any] = {}
     blank = 0
     for name in names:
@@ -222,10 +388,9 @@ def parse_pdf(files: dict[str, bytes], names: list[str], *, lang: str, root: str
                 text = page.get_textpage().get_text_range()
                 if not text.strip():
                     blank += 1
-                lines += [("", norm(t)) for t in text.splitlines() if norm(t)]
+                lines += [_Line("", norm(t)) for t in text.splitlines() if norm(t)]
         finally:
             doc.close()
-    sections, articles, annexes = _sections(lines)
+    read = _read(lines)
     title = note.expression_title or ""
-    return _act(root, names[0], lang, title, note, sections, articles, annexes,
-                {"pdf": info, "form": "pdf"}, {}), blank
+    return _act(root, names[0], lang, title, note, read, {"pdf": info, "form": "pdf"}, {}), blank
