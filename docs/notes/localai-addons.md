@@ -4,8 +4,8 @@
 Add-ons interface. The idea is to simplify the deployment through localai
 Add-ons." Read in LocalAI's source at v5.0.1 (dd5780a: `docs/content/addons/`,
 `docs/content/features/addon-sdk.md`, `pkg/addons/`) and on the node by
-München (read-only, ~01:40Z). The architecture session's view is still owed;
-it is added here when it arrives. Nothing was changed on the node.*
+München (read-only, ~01:40Z); the architecture session's view, relayed by
+München, is below. Nothing was changed on the node.*
 
 ## What "Add-ons" is in v5
 
@@ -71,15 +71,42 @@ the network reaching :30286 can propose and confirm.
 | leave it on | B possible later without a redeploy | an unconfined-process install open to the LAN |
 | turn sign-in on | B and safety | Louise's calls to LocalAI's admin routes then need an API key; LocalAI reads it only from an env value (R3 in localai-bugs.md), against invariant 8 |
 
+## The architecture session's view (relayed by München, 2026-11-21)
+
+- Add-ons do not fit Louise's deployment: no container ever; a digest pin
+  for add-ons only on a release build, and ours (P1) reads master's mutable
+  index.
+- The owner is a **second install path**: a click in LocalAI's UI can put a
+  backend or an add-on on the node outside every calibration gate (inv. 12);
+  an add-on's secrets would sit on LocalAI's filesystem, readable by every
+  backend (inv. 8); its settings are a third store set by clicks (inv. 10);
+  Louise inside LocalAI's process space breaks the GPU boundary's container
+  separation (inv. 7); add-ons share LocalAI's cgroup with no cap each (the
+  crash and OOM rules); an install finished in the browser is the dialog
+  RULE 2 calls a defect.
+- Recommends `LOCALAI_ADDONS_ENABLED=false` **and**
+  `LOCALAI_ADDONS_BACKEND_LIBRARY=false`; cons: Studio and Talk unavailable,
+  neither used. München has put that switch-off to the operator.
+- Deployment is to be simplified inside Louise's own path (the deploy script,
+  the TrueNAS app YAML, backends built and pinned by us); a step there that an
+  add-on would have made easier goes to architecture.
+
+Where this note differs: B uses only *our* library, whose entries are pinned
+by digest whatever the build, and installs by name from the command line
+(`local-ai library add`, `POST /backends/library/install`), not a browser.
+But it needs the owner on, and so reopens the second path architecture wants
+closed unless sign-in is on (inv. 8, R3). Both readings agree on now.
+
 ## Recommendation
 
 - B is the only Add-ons use that simplifies deployment; A is rejected; C is
   not a deployment matter.
-- B is worth building once the images are pushed: a `deploy/localai/library/
+- Switch the owner off now (architecture and this note agree; München holds
+  the operator's question).
+- B is worth building only if the push to a registry is wanted anyway, and
+  only with the owner gated: once the images are pushed: a `deploy/localai/library/
   index.yaml` (`kind: backend`, digest-pinned, `version` = stated build), a
   workflow that signs each pushed digest, and one gate per backend proving the
   stated engine unchanged.
-- Until B is built, `LOCALAI_ADDONS_ENABLED=false` on the node. If the
-  operator says nothing, that is what is proposed for the next LocalAI app
-  edit (an `additional_envs` entry; see the 1.1.47 template trap in
-  localai-bugs.md).
+- If the operator says nothing, the owner stays on and open (a node action
+  needs the operator's word); B is not built.
