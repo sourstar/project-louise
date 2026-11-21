@@ -131,17 +131,20 @@ def test_the_xhtml_act_is_read_in_articles_and_annexes(renditions):
     labels = [l for l, _ in doc.sections]
     assert doc.extra["form"] == "xhtml" and doc.language == "it"
     # each recital its own section, as Formex's (C11, eurlex-review-2026-11-21)
-    assert labels[:6] == ["Preamble"] + [f"considerando quanto segue ({i})" for i in (1, 2, 3)] + \
-        ["Articolo 1", "Articolo 2"]
-    assert "Articolo 13 — Entrata in vigore" in labels[-3] and labels[-2:] == ["ALLEGATO I", "ALLEGATO II"]
-    assert sum(1 for l in labels if l.startswith("Progetto di DECISIONE")) == 14, \
-        "the annexed draft's 13 articles and its heading, under its title"
+    # each recital its own section, the final formula and signatures one too (C11)
+    assert labels[:7] == ["Preamble"] + [f"considerando quanto segue ({i})" for i in (1, 2, 3)] + \
+        ["Articolo 1", "Articolo 2", "Final"]
+    assert "Articolo 13 — Entrata in vigore" in labels[-4] and labels[-3].endswith(" › Final")
+    assert labels[-2:] == ["ALLEGATO I", "ALLEGATO II"]
+    assert sum(1 for l in labels if l.startswith("Progetto di DECISIONE")) == 15, \
+        "the annexed draft's 13 articles, its heading and its final formula, under its title"
 
 
 def test_the_legacy_html_act_is_read_by_its_headings_words(renditions):
     doc = _doc(renditions, "31988D0540")
     assert doc.extra["form"] == "html"
-    assert [l for l, _ in doc.sections] == ["Preamble", "Articolo 1", "Articolo 2", "Articolo 3", "Articolo 4"]
+    assert [l for l, _ in doc.sections] == ["Preamble", "Articolo 1", "Articolo 2", "Articolo 3", "Articolo 4",
+                                           "Final"]
     metas = doc.extra["formex"]["head"]["31988D0540it.html"]["meta"]
     assert any(m.get("name") == "DC.source" and "L 297" in m.get("content", "") for m in metas), \
         "the Dublin Core head kept: the OJ source"
@@ -158,7 +161,7 @@ def test_the_first_article_named_by_a_word_is_an_article_not_the_preamble(rendit
     page.write_bytes(page.read_bytes().replace(b"<p>Articolo 1</p>", f"<p>{heading}</p>".encode()))
     doc = _doc(renditions, "31988D0540")
     labels = [l for l, _ in doc.sections]
-    assert labels == ["Preamble", heading, "Articolo 2", "Articolo 3", "Articolo 4"]
+    assert labels == ["Preamble", heading, "Articolo 2", "Articolo 3", "Articolo 4", "Final"]
     first = dict(doc.sections)[heading]
     assert "Sono approvati a nome della Comunità" in first
     assert "Sono approvati" not in dict(doc.sections)["Preamble"]
@@ -167,7 +170,7 @@ def test_the_first_article_named_by_a_word_is_an_article_not_the_preamble(rendit
 def test_the_pdf_act_is_read_from_its_text_layer(renditions):
     doc = _doc(renditions, "32004D0411")
     assert doc.extra["form"] == "pdf" and [l for l, _ in doc.sections][:2] == ["Preamble", "Articolo 1"]
-    assert len(doc.sections) == 8
+    assert len(doc.sections) == 9 and "Final" in dict(doc.sections), "the final formula a section (C11)"
     info = doc.extra["formex"]["pdf"]["l_15120040430it00500053.pdf"]
     assert info["pages"] == 4 and info["Producer"].startswith("Acrobat Distiller")
 

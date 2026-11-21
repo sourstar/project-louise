@@ -287,7 +287,8 @@ def test_convex_divisions_label_their_articles_as_formex_labels_them():
         ("CHAPTER III — Rights of the data subject › Section 1 — Transparency and modalities › Article 12 — "
          "Transparent information, communication and modalities for the exercise of the rights of the data subject"),
         ("CHAPTER III — Rights of the data subject › Section 2 — Information and access to personal data › "
-         "Article 13 — Information to be provided where personal data are collected from the data subject")]
+         "Article 13 — Information to be provided where personal data are collected from the data subject"),
+        "Final"]
     assert act.articles[1].partition == \
         "CHAPTER III — Rights of the data subject › Section 1 — Transparency and modalities"
     text = "\n".join(t for _, t in act.rendered_sections)
@@ -388,6 +389,74 @@ def test_a_division_no_article_takes_stays_text_where_it_stands():
     assert dict(sections)["ANNEX I"] == ("LIST OF SERVICES\nSection A\nInvestment services and activities\n"
                                          "(1) Reception and transmission of orders\nSection B\nAncillary services\n"
                                          "(1) Safekeeping")
+
+
+# ---- 6. the final formula ---------------------------------------------------------------------
+
+def test_the_final_formula_and_signatures_are_their_own_section_not_the_last_article_s():
+    """32018R0825 en: "This Regulation shall be binding …", "Done at
+    Strasbourg …" and the signatures were Article 5's text. Formex holds
+    them in FINAL; here a section, "Final", by its element's class."""
+    act = _read("32018R0825en.html")
+    labels = [label for label, _ in act.rendered_sections]
+    assert labels[-3:] == ["Article 5", "Final", "ANNEX"]
+    final = _sections(act)["Final"]
+    assert final.startswith("This Regulation shall be binding in its entirety")
+    assert "Done at Strasbourg, 30 May 2018.\nFor the European Parliament\nThe President\nA. TAJANI" in final
+    assert "Done at" not in _sections(act)["Article 5"] and "TAJANI" not in _sections(act)["Article 5"]
+
+
+def test_the_older_xhtml_s_final_and_an_annexed_act_s_under_its_annex():
+    xhtml = FIX / "xhtml" / "32010D0699"
+    names = sorted(p.name for p in xhtml.glob("*.html"))
+    act = rendition.parse_html({n: (xhtml / n).read_bytes() for n in names}, names, lang="it", root="ACT",
+                               note=NOTE)
+    secs = dict(act.rendered_sections)
+    assert secs["Final"].startswith("Fatto a Lussemburgo, addì 21 ottobre 2010.\nPer il Consiglio")
+    assert "Fatto a" not in secs["Articolo 2"]
+    annexed = [label for label in secs if label.startswith("Progetto di DECISIONE") and label.endswith(" › Final")]
+    assert len(annexed) == 1
+
+
+def test_legacy_html_s_final_runs_from_its_opening_line_to_the_annex():
+    """32004R0726 ro: "Adoptat la Strasburg …" and the signatures were
+    Articolul 90's text."""
+    act = _read("32004R0726ro.html")
+    labels = [label for label, _ in act.rendered_sections]
+    assert labels[-2:] == ["Final", "ANEXĂ"]
+    final = _sections(act)["Final"]
+    assert final.startswith("Adoptat la Strasburg, 31 martie 2004.\nPentru Parlamentul European\nPreședintele")
+    assert "Adoptat la" not in _sections(act)["TITLUL V — DISPOZIȚII GENERALE ȘI FINALE › Articolul 90"]
+
+
+#: the line opening the final formula in the 24 languages, as held: legacy
+#: HTML of 31992L0043 and 32004R0726, CONVEX of 32018R0825 (ga, hr)
+FINALS = [
+    "Съставено в Брюксел на 21 май 1992 година.", "V Bruselu dne 21. května 1992.", "Ve Štrasburku dne 31. března 2004.",
+    "Udfærdiget i Bruxelles, den 21. maj 1992.", "Geschehen zu Brüssel am 21. Mai 1992.", "Βρυξέλλες, 21 Μαΐου 1992.",
+    "Έγινε στο Στρασβούργο, 31 Μαρτίου 2004.", "Done at Brussels, 21 May 1992.", "Done at Strasbourg 31 March 2004.",
+    "Hecho en Bruselas, el 21 de mayo de 1992.", "Brüssel, 21. mai 1992", "Strasbourg, 31. märts 2004",
+    "Tehty Brysselissä 21 päivänä toukokuuta 1992.", "Fait à Bruxelles, le 21 mai 1992.",
+    "Arna dhéanamh in Strasbourg an 30 Bealtaine 2018.", "Sastavljeno u Strasbourgu 30. svibnja 2018.",
+    "Kelt Brüsszelben, 1992. május 21-én.", "Fatto a Bruxelles, addì 21 maggio 1992.",
+    "Priimta Briuselyje, 1992 m. gegužės 21 d.", "Briselē, 1992. gada 21. maijā", "Strasbūrā, 2004. gada 31. martā",
+    "Magħmula fi Brussell, fil-21 ta’ Mejju 1992.", "Magħmul fi Strasburgu fil-31 ta' Marzu 2004.",
+    "Gedaan te Brussel, 21 mei 1992.", "Sporządzono w Brukseli, dnia 21 maja 1992 r.",
+    "Feito em Bruxelas, em 21 de Maio de 1992.", "Adoptat la Strasburg, 31 martie 2004.", "V Bruseli 21. mája 1992",
+    "V Štrasburgu 31. marca 2004", "V Bruslju, 21. maja 1992", "Utfärdat i Bryssel den 21 maj 1992.",
+    "Utfärdad i Strasbourg den 31 mars 2004.",
+]
+
+
+@pytest.mark.parametrize("line", FINALS)
+def test_the_final_formula_s_opening_line_in_every_language(line):
+    assert rendition._FINAL.match(line)
+
+
+@pytest.mark.parametrize("line", ["However, in 1992 the Member States shall", "Brussels, Luxembourg and Strasbourg",
+                                  "Done at the request of the Member State.", "Section 1, 21 May 1992 version"])
+def test_a_line_that_is_no_final_formula(line):
+    assert not rendition._FINAL.match(line)
 
 
 # ---- coverage -------------------------------------------------------------------------------

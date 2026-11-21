@@ -98,6 +98,26 @@ _ANNEX = re.compile(rf"^(?:{_ANNEX_WORD}|{_ANNEX_NUM_FIRST})\b.{{0,40}}$")
 #: a numbered recital's number, alone (an XHTML table's first cell) or
 #: opening its paragraph (legacy HTML): "(12)"
 _RECITAL = re.compile(r"^\((\d+)\)(?:\s+\S.*)?$")
+#: THE FINAL FORMULA AND THE SIGNATURES are a section of their own, "Final",
+#: never the last article's text: in the XHTML its element's class says so
+#: (`oj-final`, `oj-signatory`; the older XHTML's `final`, `signatory`); in
+#: the legacy HTML and the PDF, from the line that opens it to the next annex.
+#: That line in the 24 languages (31992L0043's in 21, 32004R0726's in 22,
+#: 32018R0825's in 24): "Done at", "Fait à", "Geschehen zu", "Fatto a",
+#: "Hecho en", "Feito em", "Gedaan te", "Udfærdiget i", "Utfärdad i",
+#: "Tehty", "Sporządzono w", "Kelt", "Adoptat la", "Съставено в", "Έγινε
+#: στο", "Priimta", "Sastavljeno u", "Magħmul(a) fi", "Arna dhéanamh", and a
+#: date after the year in it; cs, sk, sl "V(e) <city> [dne] <date>"; el, et,
+#: lv the city and the date alone ("Βρυξέλλες, 21 Μαΐου 1992.", "Brüssel,
+#: 21. mai 1992", "Briselē, 1992. gada 21. maijā")
+_FINAL_CLS = frozenset({"final", "signatory"})
+_FINAL = re.compile(
+    r"^(?:(?:Done at|Fait à|Geschehen zu|Fatto a|Hecho en|Feito em|Gedaan te|Udfærdiget i|Utfärda[dt] i|Tehty|"
+    r"Sporządzono w|Kelt|Adoptat la|Съставено в|Έγινε στ\S*|Priimta|Sastavljeno u|Magħmula? fi|Arna dhéanamh)"
+    r"\s.*\b(?:1[89]|20)\d\d\b.*"
+    r"|Ve? [^\W\d_][^\s,]*,? (?:dne )?\d{1,2}\. [^\W\d_]+ (?:1[89]|20)\d\d\.?"
+    r"|[^\W\d_][^\s,]*(?: [^\W\d_][^\s,]*)?, (?:\d{1,2}\.? [^\W\d_]+ (?:1[89]|20)\d\d|(?:1[89]|20)\d\d\. gada "
+    r"\d{1,2}\. [^\W\d_]+)\.?)$")
 #: the marks a quotation opens with, in the 24 languages' typography
 #: (‘…’ en, «…» fr it es pt el, „…“ de bg cs hu lt pl ro sk sl, »…« da,
 #: ”…” fi sv, and the legacy HTML's straight quotes)
@@ -184,6 +204,7 @@ class _Line:
     classes: frozenset = frozenset()          # every class of that block, "oj-" off
     blocks: tuple = ()                        # the open blocks, outermost first: (serial, tag, id)
     cell: bool = False                        # inside a table cell
+    within: frozenset = frozenset()           # the classes of every open block, "oj-" off
     anchors: tuple = ()                       # the <a id|name> it holds
     links: tuple = ()                         # the "#…" targets of its <a href>
 
@@ -227,6 +248,7 @@ class _Reader(HTMLParser):
             cls, classes = self._cls()
             self.lines.append(_Line(cls, text, classes, tuple((s, t, i) for t, _c, _cs, s, i in self._classes),
                                     any(t in _CELL for t, *_ in self._classes),
+                                    frozenset().union(*(cs for _t, _c, cs, _s, _i in self._classes)),
                                     tuple(self._anchors), tuple(self._links)))
             self._anchors, self._links = [], []
 
@@ -547,6 +569,21 @@ class _Layout:
             self.preamble[1].append(text)
             self.cur = self.preamble
 
+    def final(self, line: _Line) -> bool:
+        """The final formula opens here: a section of its own, "Final" (an
+        annexed act's under its annex), till the next annex or article."""
+        if self.kind != "article":
+            return False
+        if self.dialect == "words":
+            if len(line.text) > 160 or not _FINAL.match(line.text):
+                return False
+        elif not line.within & _FINAL_CLS:
+            return False
+        self._close(0)
+        self.sections.append([f"{self.partition} › Final" if self.partition else "Final", [line.text]])
+        self.kind, self.container, self.rec, self.cur = "final", None, None, self.sections[-1]
+        return True
+
     def body(self, line: _Line) -> None:
         if self.kind == "preamble":
             self.in_preamble(line)
@@ -600,7 +637,7 @@ def _read(lines: list[_Line], *, recitals: bool = True) -> _Read:
         elif not lay.subtitle(line):
             if annex:
                 lay.annex(line)
-            else:
+            elif not lay.final(line):
                 lay.body(line)
         lay.after(line)
     return lay.read()
