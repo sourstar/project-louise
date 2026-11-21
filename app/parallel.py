@@ -1112,7 +1112,8 @@ IN_FLIGHT_ROWS = 20
 def _enter(key: int, kind: str, collection, part: list[dict], *, peak: int = 0) -> None:
     with _in_flight_lock:
         _in_flight[key] = {"collection": getattr(collection, "name", None), "kind": kind, "rows": len(part),
-                           "bytes": sum(int(r.get("size") or 0) for r in part), "estimated_peak": peak,
+                           "bytes": sum(int(r.get("size") or 0) for r in part),
+                           "parse_bytes": sum(parse_size_of(r) for r in part), "estimated_peak": peak,
                            "uids": [[r.get("uid"), r.get("size")] for r in part[:IN_FLIGHT_ROWS]]}
 
 
@@ -1250,11 +1251,77 @@ def peak_per_byte(collection) -> float:
 
 
 def peak_of(k: float, row: dict) -> int:
-    """The bytes a parse of `row` is expected to hold (`peak_per_byte` × size)."""
+    """The bytes a parse of `row` is expected to hold (`peak_per_byte` × the
+    bytes its parse reads, `parse_size_of`)."""
     try:
-        return int(k * int(row.get("size") or 0)) if k else 0
+        return int(k * parse_size_of(row)) if k else 0
     except (TypeError, ValueError):
         return 0
+
+
+# WHAT A PARSE READS IS NOT ALWAYS THE ROW'S `size` (2026-11-21, P3 of the
+# review). A unit's `size` is its files' bytes on disk — discovery's change
+# test, and it stays that. A Formex PACKAGE (a .zip the unit holds, opened by
+# app/plugins/eurlex/formex.py `unpack`) deflates ~4.3x, so its estimate was
+# a quarter of what its parse holds: a big package in an uncapped shared
+# child. A plugin may say what its parse reads (`plugin_io.parse_size`: the
+# eurlex source counts a package's members unpacked, from the zip's central
+# directory, without inflating one); asked once per unit and kept, keyed on
+# the unit's PATH and size (physical identity; a unit that changes has
+# another size and is asked again).
+_parse_sizes: "OrderedDict[tuple[str, int], int]" = OrderedDict()
+_parse_sizes_lock = threading.Lock()
+#: the units whose parse size is kept (FIFO): ~150 bytes each
+PARSE_SIZES_KEPT = 65_536
+
+
+def _size_key(row: dict) -> tuple[str, int] | None:
+    path = row.get("path")
+    if not path:
+        return None
+    try:
+        return (str(path), int(row.get("size") or 0))
+    except (TypeError, ValueError):
+        return None
+
+
+def parse_size_of(row: dict) -> int:
+    """The bytes a parse of `row` reads: its plugin's answer where one was
+    learnt (`learn_parse_sizes`), else the row's `size`."""
+    key = _size_key(row)
+    got = _parse_sizes.get(key) if key is not None else None
+    if got is not None:
+        return got
+    return int(row.get("size") or 0)
+
+
+def learn_parse_sizes(collection, rows: list[dict]) -> int:
+    """Ask the plugin what each row's parse reads, for the rows not asked
+    yet — only for a plugin that declares a peak per byte and answers
+    `parse_size`. Never raises (an answer is a hint; `size` stands in).
+    Returns how many rows were asked."""
+    try:
+        from . import plugin_io
+        plugin = collection.plugin_instance()
+    except Exception:   # noqa: BLE001 — no plugin here: the sizes stand
+        return 0
+    if not plugin_io.answers_parse_size(plugin):
+        return 0
+    asked = 0
+    for row in rows:
+        key = _size_key(row)
+        if key is None or key in _parse_sizes:
+            continue
+        try:
+            got = plugin_io.parse_size(plugin, row)
+        except Exception:   # noqa: BLE001 — a unit that cannot be read is the parse's to say
+            got = None
+        asked += 1
+        with _parse_sizes_lock:
+            _parse_sizes[key] = int(got) if got is not None and got >= 0 else key[1]
+            while len(_parse_sizes) > PARSE_SIZES_KEPT:
+                _parse_sizes.popitem(last=False)
+    return asked
 
 
 def _large(k: float, part: list[dict]) -> int:
@@ -1636,6 +1703,8 @@ def compute(kind: str, collection, rows) -> list[tuple[bool, object]]:
         return _stopped_rows(plain)
     ex = pool()
     k = peak_per_byte(collection)
+    if k:
+        learn_parse_sizes(collection, plain)    # a package counted unpacked (P3)
     big = any(peak_of(k, r) >= LARGE_PEAK_BYTES for r in plain)
     if ex is None:
         # serial by configuration: everything here, as always (a large row
@@ -1768,7 +1837,7 @@ def compute(kind: str, collection, rows) -> list[tuple[bool, object]]:
                 gives_of[id(f)] = gives
                 if peak:
                     ext[id(f)] = (time.monotonic() + config.PARSE_TIMEOUT_S
-                                  + LARGE_SECONDS_PER_BYTE * int(part[0].get("size") or 0))
+                                  + LARGE_SECONDS_PER_BYTE * parse_size_of(part[0]))
                 if idle:
                     progress = time.monotonic()   # the watchdog counts from a part in flight
                 _enter(id(f), kind, collection, part, peak=need)
