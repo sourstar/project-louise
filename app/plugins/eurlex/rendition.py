@@ -811,9 +811,13 @@ def parse_pdf(files: dict[str, bytes], names: list[str], *, lang: str, root: str
                 lines += [_Line("", norm(t)) for t in text.splitlines() if norm(t)]
         finally:
             doc.close()
-    # a PDF's lines are its pages' printed lines, each page's footnotes among
-    # them: no element bounds a recital there, and its recitals stay in the
-    # preamble (as before C11)
+    # A PDF'S RECITALS STAY UNSPLIT, in its "Preamble" section, and its
+    # footnotes in the text: its lines are the pages' printed lines, a
+    # recital wrapped over several and each page's footnotes ("1", "GU L 281
+    # …", 32004D0411 it) among them, and no element bounds either — a
+    # recital cut there could end inside a footnote or another recital.
+    # Articles, annexes, divisions and the final formula are read by their
+    # words, as the legacy HTML's.
     read = _read(lines, recitals=False, footnotes=False)
     title = note.expression_title or ""
     return _act(root, names[0], lang, title, note, read, {"pdf": info, "form": "pdf"}, {}), blank
