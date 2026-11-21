@@ -90,6 +90,10 @@ def test_the_estimate_takes_what_the_parse_reads(monkeypatch):
     # a plugin that declares no peak, or answers nothing, is never asked
     other = SimpleNamespace(name="g", plugin_instance=lambda: object())
     assert parallel.learn_parse_sizes(other, [{"uid": "g:1", "path": "/g/1", "size": 1}]) == 0
+    # a task without a size (a discovery hash, app/discovery.py `_hashes`) is
+    # neither asked nor estimated: 0, as before — never sent to the lane
+    task = {"uid": "e:9", "native_id": "9", "path": "/u/1", "ref": None, "held": None}
+    assert parallel.learn_parse_sizes(coll, [task]) == 0 and parallel.peak_of(K, task) == 0
 
 
 def test_compute_sends_an_unpacked_package_to_the_large_lane(monkeypatch):

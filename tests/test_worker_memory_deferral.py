@@ -102,6 +102,28 @@ def test_a_memory_kill_is_held_and_never_written_on_the_document(tmp_path, monke
     assert worker.transient_failure(parallel.MemoryKilled(3, 4, "x"))
 
 
+@pytest.mark.parametrize("why", ["stop", "mode"])
+def test_the_rounds_parse_stops_with_the_worker_and_a_direct_call_does_not(why, tmp_path, monkeypatch,
+                                                                        isolated_config):
+    """P7: in the worker's rounds (`_execute_step`) the stage's parse
+    honours the worker's stop and a mode holding parsing at its next part
+    boundary — a deferral, the row untouched. A direct caller of a stage
+    (`hold deposit add` indexing its document) is not one of the rounds:
+    its parse runs to its end, as before."""
+    import threading
+    c, con, row = _setup(tmp_path, "fts")
+    before = _state(con, row["uid"])
+    event = threading.Event()
+    monkeypatch.setattr(worker, "_stop" if why == "stop" else "_acquire_only", event)
+    event.set()
+    assert worker._execute_step(con, c, "fts", row) is False
+    assert _state(con, row["uid"]) == before, "stopped before it parsed: nothing written"
+    worker.stage_fts(con, row, c)                      # a deposit's call, the event still set
+    if con.in_transaction:
+        con.execute("COMMIT")
+    assert _state(con, row["uid"])[3] == 1, "a direct call is not stopped"
+
+
 def test_a_too_large_document_is_still_its_error(tmp_path, monkeypatch, isolated_config):
     """`TooLarge` is not a deferral: past the most the worker can ever give,
     a person must see it (app/parallel.py `never_fits`)."""

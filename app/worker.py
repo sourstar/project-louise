@@ -370,10 +370,9 @@ def stage_rdf(con, row, collection) -> None:
             (config.MAX_RETRIES, row["uid"], want - 1)).fetchall()
     _prefetch_ahead(con, collection, "rdf", row)
     # the batch's parse goes to the PARSE POOL (amendment 47); the writes
-    # stay here, inside the caller's transaction. It stops at a part
-    # boundary with the worker or its mode (P7, `_parse_stop`)
-    with parallel.controlled(stop=_parse_stop()):
-        metas = parallel.metadata_for_rows(collection, [row, *peers])
+    # stay here, inside the caller's transaction. In the worker's rounds it
+    # stops at a part boundary with the worker or its mode (P7, `_execute_step`)
+    metas = parallel.metadata_for_rows(collection, [row, *peers])
     ok, first = metas[0]
     lead = row
     if not ok:
@@ -975,10 +974,9 @@ def stage_fts(con, row, collection) -> None:
         rows = [_with_rid(con, row), *(dict(p) for p in peers)]
         # the batch's fetch/parse/chunk goes to the PARSE POOL (amendment 47):
         # one (ok, chunks) per row, in order; the selected row's failure IS the
-        # round's, a peer's failure drops the peer. It stops at a part
-        # boundary with the worker or its mode (P7, `_parse_stop`)
-        with parallel.controlled(stop=_parse_stop()):
-            computed = list(zip(rows, parallel.fts_for_rows(collection, rows, names=with_names)))
+        # round's, a peer's failure drops the peer. In the worker's rounds it
+        # stops at a part boundary with the worker or its mode (P7, `_execute_step`)
+        computed = list(zip(rows, parallel.fts_for_rows(collection, rows, names=with_names)))
     # THE BATCH'S TIME, SPLIT (München, 2026-11-09: normattiva-nemo's long
     # documents, batches of 1-2 at 1.6-25 s each, could not be told apart as
     # parse-bound or commit-bound from the total): the parse waited for or
@@ -4737,7 +4735,13 @@ def _execute_step(con, collection, stage, row) -> bool:
     if stage not in _NO_OUTER_TRANSACTION:
         con.execute("BEGIN IMMEDIATE")
     try:
-        STAGES[stage](con, row, collection)
+        # THE WORKER'S ROUNDS STOP WITH THE WORKER (P7 of the 2026-11-21
+        # review): the parse pool's work for rdf and fts honours the worker's
+        # stop and its mode at the next part boundary (`parallel.controlled`);
+        # a direct caller of a stage (a deposit indexing its document) is not
+        # one of the rounds, and its parse runs to its end as before
+        with parallel.controlled(stop=_parse_stop() if stage in ("rdf", "fts") else None):
+            STAGES[stage](con, row, collection)
         if stage == "embed":
             con.execute("DELETE FROM embed_queue WHERE uid=?", (row["uid"],))
         if con.in_transaction:

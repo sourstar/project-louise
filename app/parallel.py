@@ -1276,11 +1276,13 @@ PARSE_SIZES_KEPT = 65_536
 
 
 def _size_key(row: dict) -> tuple[str, int] | None:
-    path = row.get("path")
-    if not path:
+    """A manifest row's unit: its path and size. None for a task that
+    carries no size (a discovery hash's): it is estimated as before, at 0."""
+    path, size = row.get("path"), row.get("size")
+    if not path or size is None:
         return None
     try:
-        return (str(path), int(row.get("size") or 0))
+        return (str(path), int(size))
     except (TypeError, ValueError):
         return None
 
