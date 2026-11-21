@@ -47,6 +47,15 @@ TGZ=/tmp/louise-src.tgz
 COMMIT=$(cat /tmp/louise-commit)
 HOLD=/root/supervise/louise.hold
 PASS_BIN=/root/supervise/bin
+# THE DEPLOY'S TESTS AGAINST THE NODE'S OWN LOAD (München, 2026-11-21: #789's first two
+# tries died at 95 % and 65 % of a 900 s `timeout -s KILL`, the host at 15-16 on 12 cores —
+# worker 215 %, LocalAI 186 %, louise-ocr 98 %, web 76 %; the third passed with the node in
+# acquire-only). Their containers get cgroup v2 cpu.weight above the node's (docker's
+# --cpu-shares 8192 against the default 1024 the node's containers run at — CLAUDE.md: CPU
+# weighting is cgroups v2's), so a busy node yields the CPU to them and keeps running; the
+# kill bound stays, for a run that hangs, at twice the old one
+TEST_CPU_SHARES=${TEST_CPU_SHARES:-8192}
+TEST_BOUND=${TEST_BOUND:-1800}
 say() { printf '\n=== %s %s\n' "$(date -u +%H:%M:%SZ)" "$*"; }
 [ ! -e "$HOLD" ] || { echo "$HOLD exists: Louise is held by the operator; no deploy begins (rm it to deploy)"; exit 1; }
 
@@ -304,7 +313,7 @@ print(' '.join(sorted(x.name for x in c.load_all())))" 2>/dev/null || true)
 echo "live load_all: ${LIVE_NAMES:-(the live web did not answer)}"
 LIVE_MOUNTS=$(docker inspect ix-louise-rag-web-1 \
   --format '{{range .Mounts}}-v {{.Source}}:{{.Destination}}{{if eq .Destination "/config"}}:ro{{else if not .RW}}:ro{{end}} {{end}}')
-docker run --rm -v "$ROOT/src.new:/srv" -w /srv -e PYTHONPATH=/srv $LIVE_MOUNTS \
+docker run --rm --cpu-shares "$TEST_CPU_SHARES" -v "$ROOT/src.new:/srv" -w /srv -e PYTHONPATH=/srv $LIVE_MOUNTS \
   -e CONFIG_DIR=/config -e DATA_DIR=/data -e LIVE_NAMES="$LIVE_NAMES" louise-rag:staged python -c "
 import os
 from app import collections as c
@@ -319,8 +328,8 @@ else:   # annotations collections are not pipeline collections
         assert n in names or n + '.next' in names, (n, names)
 assert not c.refusals(), c.refusals()
 "
-docker run --rm -v "$ROOT/src.new:/srv" -w /srv -e PYTHONPATH=/srv \
-  louise-rag:staged timeout -s KILL 900 python -m pytest -q -p no:cacheprovider \
+docker run --rm --cpu-shares "$TEST_CPU_SHARES" -v "$ROOT/src.new:/srv" -w /srv -e PYTHONPATH=/srv \
+  louise-rag:staged timeout -s KILL "$TEST_BOUND" python -m pytest -q -p no:cacheprovider \
     tests/hold/test_carry.py tests/ask/ tests/test_annotations_from_titles.py tests/test_gutenberg_broken_encoding.py tests/test_unindexable_stability.py tests/test_catalog_index.py tests/share/test_contribute.py tests/share/test_remint_end_to_end.py tests/share/test_accept.py tests/test_gutenberg_scan_signature.py tests/test_users.py tests/deposit/test_openai_stores.py tests/share/test_predecessors_lock.py tests/test_invariant_guards.py tests/test_image_constraints.py tests/test_model_pins.py tests/test_rewrite_drain.py tests/test_model_load.py tests/test_rerank_reasons.py tests/test_dispatch.py tests/test_louise_level.py tests/test_rerank_per_collection.py tests/share/test_possession_part_cache.py \
     tests/test_invariant_8_secrets.py tests/test_identity.py tests/test_node_init.py \
     tests/test_parallel.py tests/test_parallel_exit.py tests/test_issues.py tests/ask/test_figures.py \
@@ -336,24 +345,24 @@ docker run --rm -v "$ROOT/src.new:/srv" -w /srv -e PYTHONPATH=/srv \
     $(cd "$ROOT/src.new" && ls tests/test_node_profile*.py tests/test_cpu_limit*.py 2>/dev/null)
 # test_rename.py in its own run: in one invocation with tests/ask/ its directory's
 # conftest `codex` fixture is not found (2026-10-27; alone and in the full suite it passes)
-docker run --rm -v "$ROOT/src.new:/srv" -w /srv -e PYTHONPATH=/srv \
-  louise-rag:staged timeout -s KILL 900 python -m pytest -q -p no:cacheprovider tests/hold/test_rename.py
+docker run --rm --cpu-shares "$TEST_CPU_SHARES" -v "$ROOT/src.new:/srv" -w /srv -e PYTHONPATH=/srv \
+  louise-rag:staged timeout -s KILL "$TEST_BOUND" python -m pytest -q -p no:cacheprovider tests/hold/test_rename.py
 # tests/hold/test_codex.py the same (its `codex` fixture; 61 errors in the long run, 2026-11-02),
 # with #252's document-instruction tests beside it
-docker run --rm -v "$ROOT/src.new:/srv" -w /srv -e PYTHONPATH=/srv \
-  louise-rag:staged timeout -s KILL 900 python -m pytest -q -p no:cacheprovider \
+docker run --rm --cpu-shares "$TEST_CPU_SHARES" -v "$ROOT/src.new:/srv" -w /srv -e PYTHONPATH=/srv \
+  louise-rag:staged timeout -s KILL "$TEST_BOUND" python -m pytest -q -p no:cacheprovider \
     tests/hold/test_codex.py tests/hold/test_codex_document_instruction.py
-docker run --rm -v "$ROOT/src.new:/srv" -w /srv -e PYTHONPATH=/srv -v "$ROOT/config:/config:ro" \
+docker run --rm --cpu-shares "$TEST_CPU_SHARES" -v "$ROOT/src.new:/srv" -w /srv -e PYTHONPATH=/srv -v "$ROOT/config:/config:ro" \
   -e CONFIG_DIR=/config louise-rag:staged python -c "
 from app import node_profile as np
 print('the live platform.toml, read by the staged code: profile now', np.active())"
-docker run --rm -v "$ROOT/src.new:/srv" -w /srv -e PYTHONPATH=/srv \
-  louise-rag:staged timeout -s KILL 900 python -m pytest -q -p no:cacheprovider \
+docker run --rm --cpu-shares "$TEST_CPU_SHARES" -v "$ROOT/src.new:/srv" -w /srv -e PYTHONPATH=/srv \
+  louise-rag:staged timeout -s KILL "$TEST_BOUND" python -m pytest -q -p no:cacheprovider \
     tests/vega/ tests/test_localai_backends.py
 # the legal chunker's bounded encode, byte for byte the whole one, against the image's OWN pinned
 # tokenizer (2026-11-20, the second OOM hold): required here, never skipped
-docker run --rm -v "$ROOT/src.new:/srv" -w /srv -e PYTHONPATH=/srv -e LOUISE_REQUIRE_PINNED_TOKENIZER=1 \
-  louise-rag:staged timeout -s KILL 900 python -m pytest -q -p no:cacheprovider tests/test_chunking_legal_spans.py
+docker run --rm --cpu-shares "$TEST_CPU_SHARES" -v "$ROOT/src.new:/srv" -w /srv -e PYTHONPATH=/srv -e LOUISE_REQUIRE_PINNED_TOKENIZER=1 \
+  louise-rag:staged timeout -s KILL "$TEST_BOUND" python -m pytest -q -p no:cacheprovider tests/test_chunking_legal_spans.py
 find "$ROOT/src.new" -name '__pycache__' -type d -prune -exec rm -rf {} +
 rm -rf "$ROOT/src.new/tests/fixtures/pubmed-mini/.pack"
 
