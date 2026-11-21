@@ -555,10 +555,14 @@ class ArticleNotes:
     """The words a pinned article's label ends with, in the source's own
     language (docs/notes/legal-chunking-retrieval.md R1, follow-up d): the
     text in force, the text at a date (`{day}` = YYYY-MM-DD), the last text
-    a repealed article had. The default is English, EUR-Lex's."""
+    a repealed article had, and the text an amendment held here replaced
+    from `{day}` while the amended text is not held (2026-11-21, the
+    EUR-Lex5 review's V3: an amended original was "text in force"). The
+    default is English, EUR-Lex's."""
     in_force: str = "text in force"
     as_of: str = "text as of {day}"
     last: str = "last text in force"
+    changed: str = "text until {day}; amended since, the amended text is not held"
 
 
 class LegalReferenceSource(Protocol):

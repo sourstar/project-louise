@@ -3278,6 +3278,33 @@ def _parts_amendments(collection, paths: list[str]):
             fut.cancel()
 
 
+def _rechain_validity(con, collection) -> bool:
+    """ONCE per manifest below validity.CHAIN_VERSION (2026-11-21: a held
+    amendment ends a Work's last version): every Work's chain recomputed
+    from the tables held — nothing parsed — in windows, resumable, stopped
+    by a stop, a pause of the node or of the collection; the versions whose
+    ends move have their text and vector stages reset (`recompute`), which
+    rewrite their index columns. After the amendments' own re-derivation,
+    which it reads."""
+    from app import validity
+    if validity.declared(collection) is None or validity.chain_current(con):
+        return False
+    if not validity.amendments_current(con) or not _maintenance_allowed():
+        return False
+    if collection.name in node_state.paused_collections():
+        return False
+    t0 = time.monotonic()
+    works, moved, done = validity.rechain(
+        con, day=validity.today(collection),
+        should_stop=lambda: (_stop.is_set() or collection.name in node_state.paused_collections()
+                             or not _maintenance_allowed() or time.monotonic() - t0 > 60.0))
+    if works or done:
+        db.log_event(con, "info", "validity",
+                     f"rechain: {works} work(s) recomputed, {moved} version(s) moved"
+                     f"{' — done' if done else ''} in {time.monotonic() - t0:.1f} s")
+    return True
+
+
 def _rederive_amendments(con, collection) -> bool:
     """ONCE per manifest whose `validity_amendments` predates
     validity.AMENDMENTS_VERSION (2026-11-12: `<annex>|<token>`). A plugin
@@ -3616,6 +3643,10 @@ def _index_maintainer() -> None:
                     did = _rederive_amendments(cons[key], c) or did
                 except Exception as e:   # noqa: BLE001 — one re-derivation, not the maintainer
                     db.log_event(cons[key], "warn", "validity", f"amendments: {type(e).__name__}: {e}"[:300])
+                try:
+                    did = _rechain_validity(cons[key], c) or did
+                except Exception as e:   # noqa: BLE001 — one re-chain, not the maintainer
+                    db.log_event(cons[key], "warn", "validity", f"rechain: {type(e).__name__}: {e}"[:300])
                 try:
                     # `shown` to today, once a day (app/validity.py `roll`)
                     from app import validity as _validity

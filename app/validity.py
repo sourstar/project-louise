@@ -304,10 +304,70 @@ def amendments_of_doc(doc, plugin) -> list[tuple]:
     return sorted(out, key=lambda r: (r[0], r[1], r[2], r[3] or 0, r[4]))
 
 
-def _record_amendments(con, by_uid: str, rows) -> None:
+def _record_amendments(con, by_uid: str, rows) -> set[str]:
+    """This version's statements replace what it stated before (delete-then-
+    insert on the stating uid). Returns the Works keyed by any target it
+    states now or stated before: an amendment may end a Work's last version
+    (`first_change`), so their chains are recomputed by the caller."""
+    rows = list(rows)
+    old = {r[0] for r in con.execute("SELECT target FROM validity_amendments WHERE stated_by=?", (by_uid,))}
     con.execute("DELETE FROM validity_amendments WHERE stated_by=?", (by_uid,))
     con.executemany("INSERT OR IGNORE INTO validity_amendments(stated_by, target, article, amending, day, kind) "
                     "VALUES(?,?,?,?,?,?)", [(by_uid, *r) for r in rows])
+    keys = sorted(old | {str(r[0]) for r in rows})
+    out: set[str] = set()
+    for i in range(0, len(keys), 500):
+        part = keys[i:i + 500]
+        out |= {r[0] for r in con.execute(
+            f"SELECT work FROM validity_works WHERE key IN ({','.join('?' for _ in part)})", part)}
+    return out
+
+
+#: the statements that do NOT change a Work's text from a day
+#: (`first_change`): a repeal of the WHOLE act (`article` '') ends it through
+#: `closures` (review §3.2 case 2), never here — the edges' kinds and the
+#: origin's own (Normattiva's `repeal`). Every other kind is a change: the
+#: edges' `amends` / `amended_by`, the origin's `substitution`, `insertion`,
+#: a `repeal` of one article, …
+WHOLE_REPEALS = ("repeals", "repealed_by", "repeal")
+
+
+def first_change(con, work: str, after: int) -> int | None:
+    """The earliest day after `after` from which a held statement says the
+    Work's text changed (2026-11-21, the EUR-Lex5 review's V3/V4): an
+    amending act's own statement on any of the Work's canonical ids — from
+    the day it names, else the day its own validity starts — or a version
+    of the Work naming the act that amended it and the day. That day the
+    NEXT version starts, whether or not this collection holds it: the text
+    held before it is not the text in force after it. An act's statement on
+    itself (a version of the same Work) is not a change from outside.
+    Indexed: the Work's keys (idx_validity_works_work), their statements
+    (the amendments' target index), each stating version by its uid."""
+    r = con.execute(
+        "SELECT MIN(d) FROM (SELECT COALESCE(a.day, CASE WHEN a.amending = '' THEN s.valid_from END) AS d "
+        "FROM validity_works k JOIN validity_amendments a ON a.target = k.key "
+        "LEFT JOIN validity s ON s.uid = a.stated_by "
+        f"WHERE k.work = ? AND (a.kind NOT IN ({','.join('?' for _ in WHOLE_REPEALS)}) OR a.article != '') "
+        "AND (a.amending != '' OR s.work IS NULL OR s.work != ?)) WHERE d > ?",
+        (work, *WHOLE_REPEALS, work, int(after))).fetchone()
+    return None if r is None or r[0] is None else int(r[0])
+
+
+def changed_at(con, work: str, version: dict) -> int | None:
+    """The day the Work's text changed after `version`, where that is what
+    ended it: its last version, ended by a held amendment (`first_change`)
+    and not by a repeal on or before that day. None otherwise."""
+    end = version.get("valid_to")
+    if end is None:
+        return None
+    later = con.execute("SELECT 1 FROM validity WHERE work=? AND valid_from > ? LIMIT 1",
+                        (work, int(version["valid_from"]))).fetchone()
+    if later is not None:
+        return None
+    if first_change(con, work, int(version["valid_from"])) != int(end):
+        return None
+    closed = closed_at(con, work)
+    return None if closed is not None and closed <= int(end) else int(end)
 
 
 def amendments_of(con, keys: Iterable[str], article: str | None = None, *, limit: int = 200,
@@ -444,9 +504,12 @@ def write_amendments(con, pairs: Iterable[tuple[str, list]]) -> int:
     """Each version's rows replaced by `rows`, inside the caller's
     transaction (delete-then-insert on the stating uid, invariant 2)."""
     n = 0
+    touched: set[str] = set()
     for uid, rows in pairs:
-        _record_amendments(con, uid, rows)
+        touched |= _record_amendments(con, uid, rows)
         n += 1
+    for work in sorted(touched):
+        recompute(con, work)       # a statement may end a Work's last version (`first_change`)
     return n
 
 
@@ -480,7 +543,7 @@ def record(con, uid: str, native_id: int, meta: dict[str, Any], *, day: int | No
                     [(str(k), work) for k in meta.get("keys") or []])
     touched = _record_closures(con, uid, meta.get("closes") or [])
     if "amends" in meta:
-        _record_amendments(con, uid, meta.get("amends") or [])
+        touched |= _record_amendments(con, uid, meta.get("amends") or [])
     moved = recompute(con, work, except_uid=uid, day=day)
     for other in sorted((touched | ({left} if left else set())) - {work}):
         moved += recompute(con, other, day=day)
@@ -504,11 +567,64 @@ def forget(con, uid: str, *, day: int | None = None, chain: bool = True) -> list
         return []
     touched = _record_closures(con, uid, [])         # its closures go; the Works they keyed
     con.execute("DELETE FROM validity WHERE uid=?", (uid,))
-    _record_amendments(con, uid, [])
+    touched |= _record_amendments(con, uid, [])
     moved = recompute(con, str(row[0]), day=day)
     for other in sorted(touched - {str(row[0])}):
         moved += recompute(con, other, day=day)
     return moved
+
+
+#: the chain's rule (`recompute`): 1, ends from the next version and a
+#: repeal; 2 (2026-11-21, the EUR-Lex5 review's V3/V4), and a held
+#: amendment's day (`first_change`). A manifest below it has every Work's
+#: chain recomputed ONCE (`rechain`, the index maintainer) — from the tables
+#: it holds, nothing parsed; only the Works whose ends move are re-indexed
+CHAIN_VERSION = 2
+CHAIN_VERSION_KEY = "validity_chain_version"
+CHAIN_CURSOR_KEY = "validity_chain_cursor"
+
+
+def chain_current(con) -> bool:
+    from app import db
+    try:
+        return int(db.get_control(con, CHAIN_VERSION_KEY, 1) or 1) >= CHAIN_VERSION
+    except (TypeError, ValueError):
+        return False
+
+
+def rechain(con, *, day: int | None = None, window: int = 2000,
+            should_stop=lambda: False) -> tuple[int, int, bool]:
+    """Every Work's chain recomputed under CHAIN_VERSION: the Works walked in
+    order from a cursor (idx_validity_work, a covering range — never the
+    table at once), a window a transaction (BEGIN IMMEDIATE: a writer that
+    reads first) with the cursor in it, so a stop between windows resumes
+    after the last one committed (invariant 2); the version marked in the
+    last. Returns (Works recomputed, versions moved, done)."""
+    from app import db
+    works_n = moved_n = 0
+    if chain_current(con):
+        return 0, 0, True
+    while not should_stop():
+        con.execute("BEGIN IMMEDIATE")
+        try:
+            cursor = str(db.get_control(con, CHAIN_CURSOR_KEY, "") or "")
+            works = sorted({r[0] for r in con.execute(
+                "SELECT work FROM validity WHERE work > ? ORDER BY work LIMIT ?", (cursor, int(window)))})
+            if not works:
+                db.set_control(con, CHAIN_VERSION_KEY, str(CHAIN_VERSION))
+                con.execute("DELETE FROM control WHERE key=?", (CHAIN_CURSOR_KEY,))
+                con.execute("COMMIT")
+                return works_n, moved_n, True
+            for work in works:
+                moved_n += len(recompute(con, work, day=day))
+            db.set_control(con, CHAIN_CURSOR_KEY, works[-1])
+            con.execute("COMMIT")
+            works_n += len(works)
+        except BaseException:
+            if con.in_transaction:
+                con.execute("ROLLBACK")
+            raise
+    return works_n, moved_n, False
 
 
 #: the control row holding the day `shown` was last rolled to (`roll`)
@@ -627,8 +743,10 @@ def recompute(con, work: str, *, except_uid: str | None = None, day: int | None 
     """The chain of one Work: versions in order of (valid_from, native_id);
     each ends where the next starts, the last where another Work's version
     states it is repealed (`closed_at`, if later than its start and it has
-    text) or else open; `shown` is the version shown on `day` (`shown_index`;
-    today's UTC day when not given)."""
+    text) or where a held statement says its text changed (`first_change`:
+    the next version starts that day, held or not — 2026-11-21, the review's
+    V3/V4), whichever is first, or else open; `shown` is the version shown
+    on `day` (`shown_index`; today's UTC day when not given)."""
     rows = con.execute(
         "SELECT uid, native_id, valid_from, valid_to, has_text, shown FROM validity "
         "WHERE work=? ORDER BY valid_from, native_id", (work,)).fetchall()
@@ -637,8 +755,12 @@ def recompute(con, work: str, *, except_uid: str | None = None, day: int | None 
     ends: list[int | None] = []
     for i, r in enumerate(rows):
         to = int(rows[i + 1]["valid_from"]) if i + 1 < len(rows) else None
-        if to is None and closed is not None and r["has_text"] and closed > int(r["valid_from"]):
-            to = closed            # review §3.2 case 2: ended from outside its chain
+        if to is None and r["has_text"]:
+            start = int(r["valid_from"])
+            # review §3.2 case 2: ended from outside its chain — a repeal, or
+            # a change whose text this collection does not hold (yet)
+            outside = [d for d in (closed, first_change(con, work, start)) if d is not None and d > start]
+            to = min(outside) if outside else None
         ends.append(to)
     day = int(day) if day is not None else today()
     pick = shown_index([int(r["valid_from"]) for r in rows], ends, [bool(r["has_text"]) for r in rows], day)

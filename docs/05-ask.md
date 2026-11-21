@@ -107,6 +107,22 @@ the last roll (app/validity.py `roll`). The result says which version it
 is (§5.3, `validity`). The snapshot chain keeps its own meaning for it — when the
 origin's state was held — and is not what a date asks of it.
 
+*Amended 2026-11-21* (the EUR-Lex5 review, V3/V4; the legal session, in
+charge by the operator's word). The END of a Work's LAST version is also
+the first day after its start from which a statement this collection holds
+says the text changed — an amending act's own (its `eli:amends` edge, from
+the day it names or else the day its own validity starts), or a version
+naming the act that amended it and the day: the next version starts that
+day, whether or not it is held (app/validity.py `first_change`; a repeal of
+the whole act stays a closure's). EUR-Lex's base holds originals and its
+consolidations only as a history slice: an original amended since was
+shown as the text in force, and a consolidation fetched for one date became
+the open-ended version of every later date. Such a version is still the one
+shown (the latest that started), labelled with its end and "amended since,
+the amended text is not held"; a date after the change admits none of the
+Work's text. A manifest derived under the old rule is re-chained once
+(`validity.CHAIN_VERSION`), from its tables, nothing parsed.
+
 *Amended 2026-11-15* (operator: "we add a 'draft' flag for the in force
 date, and we use the publishing date as draft. When this information is
 correctly published we replace all the draft dates"). Where the origin
