@@ -134,11 +134,14 @@ _HAS_LETTER = re.compile(r"[^\W\d_]")
 #: (‘…’ en, «…» fr it es pt el, „…“ de bg cs hu lt pl ro sk sl, »…« da,
 #: ”…” fi sv, and the legacy HTML's straight quotes)
 _OPENING = ("‘", "“", "„", "«", "»", "”", "‚", "‹", "›", "'", '"')
-#: a line that closes a quotation: a closing mark at its end, its stop after
-#: it (the legacy HTML closes with a backtick: 31997L0011's "Article 4.`;")
-_CLOSING = re.compile(r"[’'\"”»“«‘›‹`]\s*[.;,)]*\s*$")
+#: a line that closes a quotation: a stop, a closing mark, maybe a stop after
+#: it, at its end (the legacy HTML closes with a backtick: 31997L0011's
+#: "Article 4.`;"). A mark right after a word closes a quotation inside the
+#: quoted text: 32004R0869's '(hereinafter referred to as the "IUU list").',
+#: whose close let the quoted "Article 20" … "Article 20e" be articles
+_CLOSING = re.compile(r"[.;:!?)\]]\s?[’'\"”»“«‘›‹`]\s*[.;,)]*\s*$")
 #: a heading's number: arabic ("Article 10a", "14 a artikla"), else roman ("ANNEX IV", "Ia LISA")
-_ARABIC = re.compile(r"(\d+)([^\s\d]*)")
+_ARABIC = re.compile(r"(\d+)(\s?[^\W\d_](?![^\W\d_])|[^\s\d]*)")   # "20 d" as "20d" (32004R0869)
 _ROMAN_NUM = re.compile(r"(?:^|\s)([IVXLC]+)([a-z]?)(?=$|[\s.])")
 _ROMAN = {"I": 1, "V": 5, "X": 10, "L": 50, "C": 100}
 #: the classes by dialect (the OJ's XHTML with "oj-" off, the consolidated text's)
@@ -196,8 +199,8 @@ def _division_level(text: str) -> int | None:
 
 
 def _number(heading: str) -> tuple[int, str] | None:
-    """A heading's number as an ordered pair: "Article 10a" (10, "a"),
-    "Artigo 14.o-A" (14, "oa"), "ANNEX IV" (4, ""), "ANNEX" None."""
+    """A heading's number as an ordered pair: "Article 10a" and "Article 10
+    a" (10, "a"), "Artigo 14.o-A" (14, "oa"), "ANNEX IV" (4, ""), "ANNEX" None."""
     m = _ARABIC.search(heading)
     if m:
         return int(m[1]), re.sub(r"[\W\d_]", "", m[2]).lower()
@@ -376,6 +379,7 @@ class _Layout:
         self.cur = self.preamble            # the section the last line went to
         self.quote: str | None = None       # words: a quotation a quoted "article" / "annex" heading opened
         self.quoted: tuple[int, str] | None = None  # the number of its last heading
+        self.quoting = False                # words: any other quotation open (no division in it)
         self.divs: list[_Div] = []          # the divisions the next article stands in, outermost first
         self.titled: _Div | None = None     # the division whose title the next line may be
         self.unused: list[_Div] = []        # divisions no article took: their words go back as text
@@ -431,7 +435,7 @@ class _Layout:
                 self.titled = None                      # one line: the words' title
             return True
         self.titled = None
-        if not free or nested or (self.dialect == "words" and self.quote):
+        if not free or nested or (self.dialect == "words" and (self.quote or self.quoting)):
             return False
         if self.dialect != "words" and cls not in _DIV_HEAD_CLS:
             return False
@@ -461,14 +465,26 @@ class _Layout:
                 # A QUOTED heading opens a quotation: the headings of its kind
                 # that follow, numbered above it, are the quoted text's until
                 # it closes (`after`): 31997L0062's "'ANNEX I" then "ANNEX II",
-                # 31997L0011's "'Article 3" … "'Article 10" then its own "Article 2"
+                # 31997L0011's "'Article 3" … "'Article 10" then its own "Article
+                # 2". A quoted division's: its articles are the quotation's, the
+                # first whatever its number (32004L0027's '"TITLE VIIIa' then
+                # "Article 88a", 31998R0075's "'TITLE II" then "Article 856a")
+                # (32004R0869's '"CHAPTER II CONTROL AND SURVEILLANCE …', its
+                # title on its line). Any other quoted line holds divisions off
+                # till its quotation closes (31998R0075's "'Privileged
+                # operations" / "TITLE I" / "RETURNED GOODS`;")
                 bare = text.lstrip("".join(_OPENING)).strip()
-                kind = "article" if _ARTICLE.match(bare) else "annex" if _ANNEX.match(bare) else None
-                if kind:
-                    self.quote, self.quoted = kind, _number(bare)
+                words = bare.split()
+                if _ARTICLE.match(bare) or _ANNEX.match(bare):
+                    self.quote = "article" if _ARTICLE.match(bare) else "annex"
+                    self.quoted = _number(bare)
+                elif any(_division_level(" ".join(words[:k])) is not None for k in (len(words), 2, 3)):
+                    self.quote, self.quoted = "article", None
+                else:
+                    self.quoting = True
             elif self.quote and (article and self.quote == "article" or annex and self.quote == "annex"):
                 n = _number(text)
-                if n is not None and self.quoted is not None and n > self.quoted:
+                if n is not None and (self.quoted is None or n > self.quoted):
                     self.quoted, article, annex = n, False, False   # the quotation's next heading
                 else:
                     self.quote = None                               # the act's own: the quotation ended
@@ -480,8 +496,8 @@ class _Layout:
     def after(self, line: _Line) -> None:
         for a in line.anchors:
             self.placed[a] = self.cur
-        if self.quote and _CLOSING.search(line.text):
-            self.quote = None
+        if (self.quote or self.quoting) and _CLOSING.search(line.text):
+            self.quote, self.quoting = None, False
 
     # ---- where it goes ----------------------------------------------------------------------
 
@@ -516,9 +532,25 @@ class _Layout:
         self.kind, self.container, self.rec, self.cur = "article", line.parent, None, self.sections[-1]
         self.has_article = True
 
-    def subtitle(self, line: _Line) -> bool:
-        if self.dialect == "words" or line.cls != _STI_CLS[self.dialect] or self.kind != "article" \
-                or self.sections[-1][1] or line.cell:
+    def subtitle(self, line: _Line, after: str = "") -> bool:
+        """The line after an article heading that titles it: by class; by
+        words (legacy HTML, PDF), a short line, a capital first, ending
+        without a stop, no heading, and not leading into the line `after` it
+        — a list's point, a sentence going on in lower case ("Ai fini della
+        presente direttiva si intende per" / "a) …", 31992L0043 it): "Article
+        1" / "Subject matter", as Formex's STI.ART (32003L0087, 32003L0059,
+        32004L0049, 31998L0020)."""
+        if self.kind != "article" or self.sections[-1][1] or line.cell:
+            return False
+        text = line.text
+        if self.dialect == "words":
+            if len(text.split()) > 15 or re.search(r"[.;:,]$", text) or not text[:1].isupper() \
+                    or _ARTICLE.match(text) or _ANNEX.match(text) or _division_level(text) is not None \
+                    or _FINAL.match(text) or self.quote or not re.match(r"[^\W_]", after) \
+                    or after[:1].islower() or re.match(r"(?:[a-z]|[ivx]+)\)|\([a-z]+\)", after) \
+                    or _ARTICLE.match(after) or _ANNEX.match(after) or _FINAL.match(after):
+                return False                        # (a title has its article's text after it)
+        elif line.cls != _STI_CLS[self.dialect]:
             return False
         self.sections[-1][0] = f"{self.sections[-1][0]} — {line.text}"
         self.owners[-1][0].title = line.text
@@ -700,7 +732,7 @@ def _read(lines: list[_Line], *, recitals: bool = True, footnotes: bool = True) 
     by `_FOOTNOTE`, filed under their call."""
     lay = _Layout(_dialect(lines), recitals, footnotes)
     follows_note = False
-    for line in lines:
+    for i, line in enumerate(lines):
         if line.classes & _NOTE_CLS:
             lay.note(line, follows_note)
             follows_note = True
@@ -712,7 +744,7 @@ def _read(lines: list[_Line], *, recitals: bool = True, footnotes: bool = True) 
         article, annex = lay.heads(line)
         if article:
             lay.article(line)
-        elif not lay.subtitle(line):
+        elif not lay.subtitle(line, lines[i + 1].text if i + 1 < len(lines) else ""):
             if annex:
                 lay.annex(line)
             elif not lay.final(line):

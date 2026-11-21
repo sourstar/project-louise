@@ -68,6 +68,10 @@ Commission Decision 2011/833/EU, as above.
 | `32016R0679en.html` | `L_2016119EN.01000101.doc.html` (`962539af…`) | CONVEX: `cpt_I`, `cpt_III.sct_1`, `cpt_III.sct_2` and an article in each, the final formula, a footnote |
 | `31997L0011en.html` | `31997L0011en.html` (`0ffcc88f…`) | legacy HTML: "'Article 3" closed by a backtick, "'Article 4", then the act's "Article 2"; "'ANNEX I" then the quoted "ANNEX II" |
 | `31992L0043en.html` | `31992L0043en.html` (`b7326d6e…`) | legacy HTML: the visas calling notes (1)–(3), the recitals (4)–(5), the final formula, notes (1)–(5) after it, one on two lines |
+| `31998R0075en.html` | `31998R0075en.html` (`f87d6aad…`) | legacy HTML: "'Privileged operations" / "TITLE I" / "RETURNED GOODS`;", then "'TITLE II" and its "Article 856a" |
+| `32003L0087en.html` | `32003L0087en.html` (`1483d92f…`) | legacy HTML: "Article 1" / "Subject matter" (Formex's STI.ART) |
+| `32004L0027en.html` | `32004L0027en.html` (`c0882ba5…`) | legacy HTML: '"TITLE VIIIa' / "INFORMATION AND ADVERTISING" / "Article 88a" |
+| `32004R0869en.html` | `32004R0869en.html` (`16b97520…`) | legacy HTML: a quoted '"IUU list").', '"CHAPTER II CONTROL …' with its title, "Article 20 d" |
 | `32003L0051en.html` | `32003L0051en.html` (`4d4849d5…`) | legacy HTML: '"Article 42e' then the quoted "Article 42f" |
 
 ## What is not here, and how the tests stand in for it
@@ -122,6 +126,10 @@ b8b63946be24b8a58e73e3b8167db1b0ae1064c1808800ab0841678424303718  rendition/3199
 aac111da868aac203024a5916755a69b92197b22208664c7370951320c0e3020  rendition/31992L0043en.html
 319b895a85e9fdb021df785d363e2a99f5f652e308c135a0ed5d049429f16fda  rendition/31997L0011en.html
 da1f60e94392fa5f5322a256a48624ec9bfbc1d388782e1c7ce7230cbe251a87  rendition/32003L0051en.html
+3a59bad4d28f298e4483fdbdb03611d91ae896786c88b3b0dbb43a001059e27b  rendition/31998R0075en.html
+b4bb89082ca9c99312012a60c9f27bb7d605b979a0749bfba9dfa9c54b06f43f  rendition/32003L0087en.html
+f51a1198f8247da9a2b2a2f040750cdba16e17883e8b5ef0054960f2df2a073f  rendition/32004L0027en.html
+da0bc3b686e1c7670d7808d8f53db75194ed5392213ee50bd14dd306ed28712d  rendition/32004R0869en.html
 a65d076ea77f70028cac958b6a501a6525c4fbe5395a7f364f6d2a9cb15f454c  rendition/32004R0726ro.html
 0761be802244d8b5c7c9016272202891ccc9d83907e9d39a3a030d93c114c559  rendition/32016R0679en.html
 e1a65fafee46fe7ac3f5eaa581aed2b4b594d69f477cae8ce611fdbafb174caa  rendition/32016D1837en.html

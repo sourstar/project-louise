@@ -509,6 +509,63 @@ def test_a_numbered_run_that_is_not_a_trailing_run_of_notes_stays_text():
     assert "(1) OJ C 118" in dict(r.sections)["Final"]
 
 
+# ---- 8. the legacy quotation, against Formex --------------------------------------------------
+
+def test_a_quoted_division_opens_a_quotation_its_article_in_it():
+    """32004L0027 en: '"TITLE VIIIa' / "INFORMATION AND ADVERTISING" /
+    "Article 88a" — the inserted title's article was an article of the
+    amending act. Its Formex has 5 articles; of the 57 legacy amending acts
+    held with their Formex, this and 31998R0075's "'TITLE II" / "Article
+    856a" were two of the three whose articles differed."""
+    act = _read("32004L0027en.html")
+    assert [a.num for a in act.articles] == ["Article 1", "Article 2"]
+    assert "\nArticle 88a\n" in _sections(act)["Article 1"]
+
+
+def test_a_quoted_line_holds_divisions_off_till_its_quotation_closes():
+    """31998R0075 en: "'Privileged operations" / "TITLE I" / "RETURNED
+    GOODS`;" — the quoted title of a Part; its "TITLE I" labelled the act's
+    own Articles 2 to 5."""
+    act = _read("31998R0075en.html")
+    assert [label for label, _ in act.rendered_sections] == ["Preamble", "Article 1", "Article 2"]
+    assert "\nTITLE I\nRETURNED GOODS`;" in _sections(act)["Article 1"]
+
+
+def test_a_closing_mark_after_a_word_closes_no_quotation():
+    """32004R0869 en: '(hereinafter referred to as the "IUU list").' closed
+    the quotation opened by '"Article 19a', and the quoted chapter's
+    "Article 20" … "Article 20e" were articles (12 against Formex's 2); its
+    quoted '"CHAPTER II CONTROL AND SURVEILLANCE …' carries its title on
+    its line; "Article 20 d" is numbered 20d."""
+    act = _read("32004R0869en.html")
+    assert [a.num for a in act.articles] == ["Article 1", "Article 2"]
+    art1 = _sections(act)["Article 1"]
+    assert "\nArticle 20\n" in art1 and "\nArticle 20 d\n" in art1
+    assert rendition._number("Article 20 d") == (20, "d") > rendition._number("Article 20c")
+
+
+def test_legacy_article_titles_are_their_labels_as_formex_s():
+    """32003L0087 en: "Article 1" / "Subject matter" — Formex's "Article 1 —
+    Subject matter"; the four legacy acts whose labels differed only so."""
+    act = _read("32003L0087en.html")
+    assert [label for label, _ in act.rendered_sections] == [
+        "Preamble", "Article 1 — Subject matter", "Article 2 — Scope", "Article 3 — Definitions"]
+    assert act.articles[2].title == "Definitions"
+
+
+@pytest.mark.parametrize("lines", [
+    ("Articolo 1", "Ai fini della presente direttiva si intende per", "a) «conservazione»: un complesso di misure"),
+    ("Artikel 7", "Zur Erstellung seines Gutachtens", "a) prüft der Ausschuss, ob die Angaben"),
+    ("Article 4", "Member States shall ensure that", "the operator holds a permit."),
+    ("Article 2", "This Regulation shall enter into force on the day of its publication", "Article 3"),
+], ids=["it-list", "de-list", "lower-case", "no-stop-sentence"])
+def test_a_line_leading_into_the_next_is_no_title(lines):
+    """31992L0043 it, 32004R0726 de: a lead-in to a list, or a sentence, is
+    the article's text, not its title."""
+    _, articles, _ = rendition._sections([rendition._Line("", t) for t in lines])
+    assert articles[0].title == ""
+
+
 # ---- coverage -------------------------------------------------------------------------------
 
 class _Nodes(HTMLParser):
