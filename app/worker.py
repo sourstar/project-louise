@@ -1056,6 +1056,21 @@ def stage_fts(con, row, collection) -> None:
             continue        # simply re-runs; never poisons the selected row
         marks.append(mark)
         tags[peer["uid"]] = tag
+    if cols:
+        # A MARK FROM THE COLUMNS READ (V6 of the 2026-11-21 review): the
+        # daily roll, or a neighbour's rdf, may have moved a row's validity
+        # columns — and reset its fts_done — since they were read above for
+        # its index rows. Inside this write transaction nothing moves them
+        # now: a row whose columns are not the ones written is left unmarked,
+        # its reset kept, and is indexed again with its new columns
+        nid_of = {r["uid"]: int(r["native_id"]) for r, _ch in batch}
+        moved = validity.moved_since(con, {nid_of[m[1]]: cols[nid_of[m[1]]] for m in marks
+                                           if nid_of.get(m[1]) in cols})
+        if moved:
+            marks = [m for m in marks if nid_of.get(m[1]) not in moved]
+            db.log_event(con, "info", "fts",
+                         f"{len(moved)} document(s) left to index again: their validity columns moved "
+                         f"while they were indexed (the daily roll, or a version recorded)")
     # ONE statement each for the batch (measured: scheduling-log.md,
     # 2026-11-07). Neither can fail for one row and not the others: no column
     # written is in a unique index or carries a check, and the tags are a set
@@ -1236,9 +1251,10 @@ def stage_embed(con, row, collection) -> None:
                                columns=cols, **_given(con, collection, row, chunks))
         if cols:
             # a document whose every vector was kept rewrote no row: the two
-            # columns follow the version table in place (app/validity.py)
+            # columns follow the version table in place (app/validity.py) —
+            # marked synced only while they are still the ones written (V6)
             embeddings.sync_columns(int(row["native_id"]), cols, collection, lock_con=con, refuse=True)
-            validity.mark_synced(con, [int(row["native_id"])])
+            validity.mark_synced_if(con, row["uid"], cols)
     finally:
         stats.recorder().set_in_flight(collection.name, 0)
         _pin_end(pin)
@@ -1249,9 +1265,19 @@ def stage_embed(con, row, collection) -> None:
     # every vector was kept is not encoder work, and is not recorded.
     _record_embedded(collection, started, counts)
     bundle_ledger.clear_verification(con, row["uid"])   # no longer imported provenance
-    con.execute(
-        "UPDATE documents SET embed_done=1,embed_version=?,updated_at=? WHERE uid=?",
-        (config.EMBED_VERSION, int(time.time()), row["uid"]))
+    # V6 (2026-11-21): a versioned record is marked only while its columns
+    # are the ones its vectors were written with, in ONE statement (no
+    # transaction here): a roll or a neighbour's record that reset it
+    # meanwhile keeps its reset, and the next round writes the new columns
+    sql = "UPDATE documents SET embed_done=1,embed_version=?,updated_at=? WHERE uid=?"
+    params: tuple = (config.EMBED_VERSION, int(time.time()), row["uid"])
+    if cols:
+        cond, more = validity.still(row["uid"], cols)
+        sql, params = f"{sql} AND {cond}", params + more
+    if not con.execute(sql, params).rowcount and cols:
+        db.log_event(con, "info", "embed",
+                     "left to embed again: its validity columns moved while it was embedded "
+                     "(the daily roll, or a version recorded)", row["uid"])
     db.log_event(con, "info", "embed",
                  f"embedded {counts.embedded} chunks, reused {counts.reused}"
                  + (f" ({counts.crossed} from other versions)" if counts.crossed else ""), row["uid"])
@@ -2185,6 +2211,8 @@ def _embed_parallel(con, collection, recipe, *, slots: int | None = None,
                     from app import validity
                     nid = int(row["native_id"])
                     cols = validity.columns_for(tcon, collection, [nid]).get(nid)
+                    if cols:
+                        cols_of[row["uid"]] = cols      # its mark is written from them (V6)
                     try:
                         # `stop` bounds SIGTERM to one slice of a long
                         # document (stage_embed's reason: gutenberg 4656 is
@@ -2313,11 +2341,17 @@ def _embed_parallel(con, collection, recipe, *, slots: int | None = None,
     from app import validity as validity_mod
     versioned = validity_mod.declared(collection) is not None
 
+    #: uid -> the validity columns its vectors were written with (`work`):
+    #: its mark is written only while the version table holds them (V6)
+    cols_of: dict[str, dict] = {}
+
     def mark_done(uids) -> None:
         # the rows just written carry the version table's columns: synced
-        # (app/validity.py), as stage_embed marks them
+        # (app/validity.py), as stage_embed marks them — each only while they
+        # are still its columns (V6)
         from app import embed_marks
-        embed_marks.mark_embedded(con, collection, uids, synced=versioned)
+        embed_marks.mark_embedded(con, collection, uids, synced=versioned,
+                                  columns={u: cols_of.pop(u) for u in uids if u in cols_of} or None)
 
     def record_error(uid, err) -> None:
         missing = origin_missing.path_of(err)
