@@ -622,3 +622,73 @@ def test_the_command_exits_130_on_a_stop(tmp_path, monkeypatch):
     a = SimpleNamespace(collection="eurlex5", dump=str(tmp_path), languages="it", carry_from=None)
     assert louise.cmd_dev_eurlex_dump(a) == 130
     assert signal.getsignal(signal.SIGTERM) is before, "its handlers restored"
+
+
+# ---- two builds of one corpus at once: the second never waits ----------------------------------
+# (coordinator, 2026-11-21: the CLI build and the worker's prepare could both land the same units)
+
+def _slow_build(corpus: str, dump: str, started, release) -> None:
+    """A real build whose first chunk waits for `release` (one process)."""
+    from app import parallel
+    parallel.processes = lambda: 1
+    real = eurlex_dump.build_chunk
+
+    def slow(*a):
+        started.set()
+        release.wait(60)
+        return real(*a)
+    eurlex_dump.build_chunk = slow
+    eurlex_dump.build(Path(dump), Path(corpus), ["it"], log=lambda m: None)
+
+
+def _second_build(corpus: str, dump: str, out) -> None:
+    from app import parallel
+    parallel.processes = lambda: 1
+    try:
+        eurlex_dump.build(Path(dump), Path(corpus), ["it"], log=lambda m: None)
+        out.put(("built", ""))
+    except Exception as e:  # noqa: BLE001 — what it raised is the answer
+        out.put((type(e).__name__, str(e)))
+
+
+def test_a_second_build_of_one_corpus_never_waits_and_says_who_holds_it(tmp_path, monkeypatch):
+    import multiprocessing
+    import time
+    from app import collections as collections_mod, louise
+    from app.acquire import datadump
+    from app.acquire.spec import HeldBack
+    from tests.acquire.test_eurlex_dump import _dump
+    corpus = tmp_path / "corpus"
+    dump = _dump(tmp_path / "dump")
+    ctx = multiprocessing.get_context("spawn")
+    started, release, out = ctx.Event(), ctx.Event(), ctx.Queue()
+    first = ctx.Process(target=_slow_build, args=(str(corpus), str(dump), started, release))
+    first.start()
+    try:
+        assert started.wait(60), "the first build is running"
+        second = ctx.Process(target=_second_build, args=(str(corpus), str(dump), out))
+        t0 = time.monotonic()
+        second.start()
+        second.join(60)
+        kind, why = out.get(timeout=5)
+        assert kind == "BuildRunning" and "a dump build is running" in why and f"pid {first.pid}" in why, why
+        assert time.monotonic() - t0 < 30, "never waits"
+        # the CLI: exit 3 (deferred, supervise-pass.sh), saying so
+        coll = SimpleNamespace(plugin="eurlex", corpus_dir=corpus, slices=None,
+                               codex=SimpleNamespace(parser=SimpleNamespace(version=5)))
+        monkeypatch.setattr(collections_mod, "by_name", lambda name: coll)
+        a = SimpleNamespace(collection="eurlex5", dump=str(dump), languages="it", carry_from=None)
+        assert louise.cmd_dev_eurlex_dump(a) == 3
+        # the worker's prepare: held back, said
+        monkeypatch.setattr(datadump, "_DUMPS", datadump.Dumps(dump))
+        pending = [RemoteFile(rel_path=cellar.rel_path("it", FORMEX[0]), remote=cellar.encode(FORMEX[0], "it"),
+                              mtime=1)]
+        with pytest.raises(HeldBack, match="a dump build is running"):
+            cellar.TREE_UNITS.prepare(pending, pending, _coll(corpus), None)
+    finally:
+        release.set()
+        first.join(120)
+    assert first.exitcode == 0 and eurlex_dump.stamp(corpus) == {"it": "2026-11-15T01:00:00+01:00"}
+    eurlex_dump._LANGS.clear()
+    eurlex_dump._MTDS.clear()
+    assert eurlex_dump.build(dump, corpus, ["it"], log=lambda m: None)["it"]["held"] == 2, "released with it"

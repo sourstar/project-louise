@@ -3525,6 +3525,9 @@ def cmd_dev_eurlex_dump(a) -> int:
     before = {sig: signal.signal(sig, lambda *_: stop.set()) for sig in (signal.SIGTERM, signal.SIGINT)}
     try:
         built = eurlex_dump.build(dump, corpus, langs, log=say, stop=stop.is_set)
+    except eurlex_dump.BuildRunning as e:
+        say(f"[eurlex-dump] {e}")
+        return 3                            # deferred: another build of the corpus holds it
     except eurlex_dump.Stopped as e:
         say(f"[eurlex-dump] {e}")
         return 130

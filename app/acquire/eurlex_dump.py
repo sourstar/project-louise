@@ -980,6 +980,43 @@ def _progress_add(corpus: Path, run: str, k: int, counts: dict, found: dict) -> 
         os.close(fd)
 
 
+#: ONE BUILD OF A CORPUS AT A TIME (coordinator, 2026-11-21): the CLI build
+#: (`louise dev eurlex-dump`) and the worker's prepare (build_newer) could
+#: both land the same units, each clearing the other's staging. An exclusive,
+#: NON-BLOCKING flock(2) on this file for the whole build — released by the
+#: kernel when its holder dies — holding the holder's pid; the second build
+#: never waits (BuildRunning)
+BUILD_LOCK = ".eurlex-dump-build.lock"
+
+
+class BuildRunning(HeldBack):
+    """Another build of this corpus holds BUILD_LOCK: this one does not wait.
+    The worker's pass is held back, said (spec.HeldBack); the CLI exits 3,
+    deferred (deploy/supervise-pass.sh asks again later)."""
+
+
+@contextmanager
+def _build_lock(corpus: Path):
+    import fcntl
+    import time as _time
+    path = Path(corpus) / BUILD_LOCK
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o644)
+    try:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            holder = os.pread(fd, 200, 0).decode("utf-8", errors="replace").strip()
+            raise BuildRunning(f"a dump build is running on {corpus} ({holder or 'its pid not written yet'}): "
+                               f"this one does not wait; asked again later") from None
+        os.ftruncate(fd, 0)
+        os.pwrite(fd, f"pid {os.getpid()} since {_time.strftime('%Y-%m-%dT%H:%M:%SZ', _time.gmtime())}\n"
+                  .encode("utf-8"), 0)
+        yield
+    finally:
+        os.close(fd)                        # the lock with it
+
+
 def build(dump_dir: Path, corpus: Path, languages: list[str] | None = None, *,
           log: Callable[[str], None] = print, chunk: int = CHUNK, refresh: bool = False,
           stop: Callable[[], bool] | None = None) -> dict[str, Counter]:
@@ -990,7 +1027,14 @@ def build(dump_dir: Path, corpus: Path, languages: list[str] | None = None, *,
     recorded (PROGRESS), the stamp unwritten — and the next build of the same
     dump resumes after those chunks (review 2026-11-21, Q7: no stop was read
     during a build, and a SIGTERM waited for a ~932k-unit refresh). The
-    chunks in flight in the pool's children finish first: one a child."""
+    chunks in flight in the pool's children finish first: one a child.
+    Another build of the corpus running: BuildRunning at once (BUILD_LOCK)."""
+    with _build_lock(corpus):
+        return _build(dump_dir, corpus, languages, log=log, chunk=chunk, refresh=refresh, stop=stop)
+
+
+def _build(dump_dir: Path, corpus: Path, languages: list[str] | None, *, log: Callable[[str], None],
+           chunk: int, refresh: bool, stop: Callable[[], bool] | None) -> dict[str, Counter]:
     import contextlib
     from .. import parallel
     from .datadump import Dumps
