@@ -36,6 +36,13 @@ EVERY PATH HERE THAT DELETES A DOCUMENT'S LAST ROW then sets its
 2026-11-07): a version with the mark cleared is what the Library paints grey
 as "an earlier version, searched until re-embedded" (app/status.py
 SUPERSEDED). `--unembedded` does it for the whole target manifest.
+
+`--rechunked` (A1k, PROPOSED 2026-11-21 for the architecture session;
+docs/notes/legal-chunker-v4.md §4.3): into a collection with the same records
+whose space differs ONLY by its layers' chunker VERSION. This module checks it
+and copies the manifest as a relayered sister's (A1i: every embed and index
+mark emptied, re-pinned); app/hold/rechunk.py then writes every vector whose
+chunk text the new version cuts again under its new chunk id.
 """
 from __future__ import annotations
 
@@ -103,6 +110,65 @@ def space_differences(a: Codex, b: Codex) -> list[str]:
                 "document.instruction": s.document_instruction}
     fa, fb = fn(a), fn(b)
     return [k for k in fa if fa[k] != fb[k]]
+
+
+def layers_version_only(a: Codex, b: Codex) -> str | None:
+    """A1k: None when `b`'s layers are `a`'s with only their chunkers'
+    VERSION moved (the same number of layers, each the same chunker id,
+    params, rule and input, at least one version other); else why not, in
+    words. The chunk ids carry the version (`<uid>:<seq>:<version>`, 06 §6.3)
+    and `space_id` the layers (09 §9.3), so such a space is another space whose
+    function from cleaned text to vectors is the same one (02 §2.4)."""
+    la, lb = list(a.layers), list(b.layers)
+    if len(la) != len(lb):
+        return f"{len(la)} layer(s) and {len(lb)}: the layer list is fixed at creation"
+    moved = 0
+    for i, (x, y) in enumerate(zip(la, lb)):
+        cx, cy = x.chunker.to_dict(), y.chunker.to_dict()
+        vx, vy = cx.pop("version", None), cy.pop("version", None)
+        if (cx, x.rule, x.form) != (cy, y.rule, y.form):
+            return (f"layer {i} differs in more than its version ({cx} {x.rule!r} {x.form!r} → "
+                    f"{cy} {y.rule!r} {y.form!r})")
+        moved += vx != vy
+    return None if moved else "the layers are the same: there is nothing to re-chunk"
+
+
+def held_here(state: Path) -> bool:
+    """Does THIS process hold the collection's write lock (07 §7.7)? The
+    lock file is flocked and names this pid on this host (app/hold/lock.py
+    writes both; a probe from here contends, as any other opener does)."""
+    import socket
+
+    from . import lock as lock_mod
+    who = lock_mod.holder(Path(state))
+    return bool(who) and who.get("pid") == os.getpid() and who.get("host") == socket.gethostname()
+
+
+def refuse_without_locks(root: Path, names, what: str) -> None:
+    """A writer that needs both collections' write locks refuses, writing
+    nothing, unless this process holds every one (`louise dev carry --yes`
+    takes them in name order)."""
+    from . import lock as lock_mod
+    missing = [n for n in sorted(set(names)) if not held_here(lock_mod.state_dir(Path(root), n))]
+    if missing:
+        raise CodexError(f"{what}: this process does not hold the write lock of {', '.join(missing)} "
+                         f"(07 §7.7: one writer per collection, both held); `louise dev carry ... --yes` "
+                         f"takes them. Nothing was written")
+
+
+def refuse_unless_pinned(lance: Path, manifest: Path, src: Codex, from_name: str) -> None:
+    """The source's vector table is its Codex's space and width, or nothing
+    says what its vectors are: refused (every carry that takes vectors)."""
+    from app import spaces
+    pinned, _dim = _pin(manifest)
+    lance_dim = spaces.known_lance_dim(lance)
+    if pinned not in (None, src.space_id) or (pinned is None and lance_dim is not None):
+        raise CodexError(
+            f"carry: {from_name}'s vector table is pinned to {str(pinned)[:23]}…, not its "
+            f"Codex's space {src.space_id[:23]}…; nothing says what its vectors are")
+    if lance_dim not in (None, src.space.dim):
+        raise CodexError(f"carry: {from_name}'s vector table is {lance_dim}-dimensional "
+                         f"and its space is {src.space.dim}")
 
 
 def _part_entries(snap) -> dict[str, list]:
@@ -663,9 +729,27 @@ def carry_file(root, from_name: str, to_name: str, collection_id: str, *,
 def carry(root, from_ref: str, to_ref: str, *, copy: bool = False, apply: bool = False,
           keep: str | None = None, rebuilt: bool = False, recut: bool = False,
           resliced: bool = False, unembedded: bool = False, sister: bool = False,
-          relayered: bool = False, log: Callable[[str], None] = print) -> dict[str, Any]:
+          relayered: bool = False, rechunked: bool = False,
+          log: Callable[[str], None] = print) -> dict[str, Any]:
     """Carry `from_ref`'s manifest, text index and vector table into `to_ref`
     (G1). `apply=False` checks everything and writes nothing.
+
+    `rechunked` (A1k, PROPOSED 2026-11-21; the shared legal space from
+    `legal_article` 3 to 4, docs/notes/legal-chunker-v4.md): the target's
+    Codex is the source's with its layers' chunker VERSION moved and nothing
+    else that decides a record or the function — `record_differences` "layers"
+    alone and `layers_version_only`, `space_differences` empty (nothing
+    crossed: no query instruction, no cut). The source keeps everything
+    (`copy` required) and its table must be its space's; the target is empty;
+    with `apply`, this process holds both write locks. The manifest is copied
+    as a relayered sister's (A1i's `_sister_reset`: every embed mark and
+    version, every index mark and count, the chunk-hash holders, the queues,
+    the bundles and the gate's state emptied), the catalogue index copied (a
+    function of the same rows), the space re-pinned. No vector crosses here:
+    `hold.rechunk.rekey` writes each one whose text the new version cuts
+    again, under its new id, and marks a document embedded once all of its
+    chunks carried. A second run after it finished changes nothing — the
+    reset would undo the re-key's marks.
 
     `unembedded` (A1h, 2026-10-31; wikidata from jina-v3 to bge-m3, nothing
     embedded or published): the source holds NO vector, so the target's space
@@ -724,7 +808,6 @@ def carry(root, from_ref: str, to_ref: str, *, copy: bool = False, apply: bool =
     `content_hash` in the two snapshots."""
     from . import collection as col
     from .seed import record_differences, records_slicing
-    from app import spaces
 
     root = Path(root)
     from_name, src = col.resolve(root, from_ref)
@@ -733,6 +816,14 @@ def carry(root, from_ref: str, to_ref: str, *, copy: bool = False, apply: bool =
     # which names no run to read it in (09 §9.5, §9.17; München, 2026-11-17)
     from . import origin_run
     origin_run.refuse_without_run(to, f"carry into {to_name} (nothing was written)")
+    if rechunked and (sister or relayered or unembedded or resliced or rebuilt or keep or recut):
+        raise CodexError("carry --rechunked moves the layers' version alone: no --sister, --relayered, "
+                         "--unembedded, --resliced, --rebuilt, --keep or --recut with it")
+    if rechunked and not copy:
+        raise CodexError("carry --rechunked copies: the source keeps its manifest and its vectors, "
+                         "which the re-key reads (hold/rechunk.py)")
+    if rechunked and apply:
+        refuse_without_locks(root, (from_name, to_name), "carry --rechunked")
     if sister and (unembedded or resliced or rebuilt or keep or recut):
         raise CodexError("carry --sister carries no vector: no --unembedded, --resliced, --rebuilt, "
                          "--keep or --recut with it")
@@ -785,6 +876,27 @@ def carry(root, from_ref: str, to_ref: str, *, copy: bool = False, apply: bool =
                 f"carry --sister --relayered: {to.collection_id} and {src.collection_id} differ in "
                 f"{', '.join(other)}, which decide record bytes (02 §2.7) — only the layers and the "
                 f"facets may differ besides the encoder's side, and nothing is carried")
+    elif rechunked:
+        if src.collection_id == to.collection_id:
+            raise CodexError("carry: the source and the target are one collection")
+        other = [d for d in record_differences(src, to) if d != "layers"]
+        if [f.to_dict() for f in src.facets] != [f.to_dict() for f in to.facets]:
+            other.append("facets")
+        if other:
+            raise CodexError(
+                f"carry --rechunked: {to.collection_id} and {src.collection_id} differ in "
+                f"{', '.join(other)} — only the layers' chunker version may differ (A1k), and "
+                f"nothing is carried")
+        why = layers_version_only(src, to)
+        if why:
+            raise CodexError(f"carry --rechunked: {why} (A1k moves the chunker version alone); nothing "
+                             f"is carried")
+        fn = space_differences(src, to)
+        if fn:
+            raise CodexError(
+                f"carry --rechunked: the spaces differ in {', '.join(fn)} as well: the vectors carried "
+                f"by their text are the same function's only (A1k crosses nothing else); nothing is "
+                f"carried")
     else:
         refuse_unless_same_records(src, to, "carry --sister" if sister else
                                    "carry --unembedded" if unembedded else "carry")
@@ -850,7 +962,7 @@ def carry(root, from_ref: str, to_ref: str, *, copy: bool = False, apply: bool =
             f"table cross into a space that differs only by ENGINE or by a declared input "
             f"form (02 §2.4, 03 §3.5); any other difference is another function, and its "
             f"vectors are embedded again, never carried")
-    if not rebuilt and not resliced and not unembedded and not relayered:
+    if not rebuilt and not resliced and not unembedded and not relayered and not rechunked:
         a, b = latest_snapshot(root, from_name), latest_snapshot(root, to_name)
         if _part_entries(a) != _part_entries(b):
             raise CodexError(
@@ -878,24 +990,24 @@ def carry(root, from_ref: str, to_ref: str, *, copy: bool = False, apply: bool =
         claim["sister"] = True
     if relayered:
         claim["relayered"] = True
+    if rechunked:
+        claim["rechunked"] = True
     held = json.loads(marker.read_text(encoding="utf-8")) if marker.is_file() else None
     if held is not None and {k: held.get(k) for k in claim} != claim:
         raise CodexError(f"{marker} records another carry ({held}); this one is {claim}")
 
     plan: dict[str, Any] = {**claim, "from_name": from_name, "to_name": to_name,
                             "space_id": to.space_id, "apply": apply}
+    if rechunked and held is not None and held.get("done"):
+        # A1k: the re-key marks documents embedded after this carry; its reset
+        # run again would undo them. The re-key resumes from its own cursor
+        log(f"[carry] {from_name} → {to_name}: the manifest was carried earlier (--rechunked); "
+            f"the re-key resumes from its cursor")
+        return {**plan, "carried": "earlier"}
     if held is None:
         if not sp["manifest"].is_file():
             raise CodexError(f"carry: {from_name} has no manifest at {sp['manifest']}")
-        pinned, _dim = _pin(sp["manifest"])
-        lance_dim = spaces.known_lance_dim(sp["lance"])
-        if pinned not in (None, src.space_id) or (pinned is None and lance_dim is not None):
-            raise CodexError(
-                f"carry: {from_name}'s vector table is pinned to {str(pinned)[:23]}…, not its "
-                f"Codex's space {src.space_id[:23]}…; nothing says what its vectors are")
-        if lance_dim not in (None, src.space.dim):
-            raise CodexError(f"carry: {from_name}'s vector table is {lance_dim}-dimensional "
-                             f"and its space is {src.space.dim}")
+        refuse_unless_pinned(sp["lance"], sp["manifest"], src, from_name)
         if unembedded:
             why = unembedded_why_not(sp["lance"], sp["manifest"])
             if why:
@@ -919,7 +1031,9 @@ def carry(root, from_ref: str, to_ref: str, *, copy: bool = False, apply: bool =
                 f"({plan['documents']} documents), index/"
                 + (" (no vector: the target makes its own table, A1h)" if unembedded else
                    " (no vector: the source keeps its own, the target embeds in its space, A1i)"
-                   if sister else " and lance/")
+                   if sister else " (its catalogue alone; then the re-key writes every vector whose "
+                   "text the new version cuts again under its new id, A1k)" if rechunked else
+                   " and lance/")
                 + (", state/bundles and state/share — the bundles, coverage rows and torrents "
                    "too (A1f: the same document vectors)" if shares and not copy else "")
                 + f", and re-pin to {to.space_id[:23]}…; nothing written (--yes)")
@@ -935,7 +1049,8 @@ def carry(root, from_ref: str, to_ref: str, *, copy: bool = False, apply: bool =
 
     done: dict[str, Any] = {}
     # A1h: no vector crosses spaces; the target's table is its own, of its width
-    for k in (() if relayered else ("index",) if unembedded or sister else ("lance", "index")):
+    # (A1k: the re-key writes the target's, row by row; its text index is cut again)
+    for k in (() if relayered or rechunked else ("index",) if unembedded or sister else ("lance", "index")):
         if k == "index" and sister:
             # a sister's text index is her sister's byte for byte: LINKED,
             # never copied (operator, 2026-11-10: sisters share one text
@@ -955,6 +1070,11 @@ def carry(root, from_ref: str, to_ref: str, *, copy: bool = False, apply: bool =
         done["dropped"] = [f"index/{ask_facets.CACHE}/{ask_facets.MARKER}"]
     if relayered:
         done["index"] = "not carried (her layers cut other chunks: the worker indexes, A1i)"
+    if rechunked:
+        # the text index stores chunk ids, so it is cut again; the catalogue
+        # (title, authors, subjects by `documents.rowid`, app/catalog.py) is a
+        # function of the manifest rows copied with it: the same bytes (RULE 1)
+        done["index"] = _carry_catalogue(sp["index"], tp["index"])
     if not copy:
         # a source whose table was in the build area keeps a link to nothing
         from app import vector_place
@@ -1006,13 +1126,16 @@ def carry(root, from_ref: str, to_ref: str, *, copy: bool = False, apply: bool =
     # and what is derived from that corpus, the space and the manifest, where
     # what it is keyed on is the target's too (München, 2026-11-17: by hand)
     plan["derived"] = derived_state(root, from_name, to_name, src, to, rebuilt=rebuilt, apply=True, log=log)
-    if sister:
+    if sister or rechunked:
         # A1i: the source's vectors stayed with it; nothing in the copy may
-        # still say this collection holds one
-        plan["reset"] = _sister_reset(tp["manifest"], relayered=relayered,
+        # still say this collection holds one (A1k: until the re-key writes
+        # them under their new ids and marks each document whose every chunk
+        # it carried — in the safe direction, a mark only after its rows)
+        plan["reset"] = _sister_reset(tp["manifest"], relayered=relayered or rechunked,
                                       log=lambda m: log(f"[carry] {to_name}: {m}"))
         log(f"[carry] {to_name}: nothing of {from_name}'s vectors is said held here: "
-            + ", ".join(f"{k} {v}" for k, v in plan["reset"].items()) + " (A1i)")
+            + ", ".join(f"{k} {v}" for k, v in plan["reset"].items())
+            + (" (A1k: the re-key follows)" if rechunked else " (A1i)"))
     if unembedded:
         # A1h: the source holds NO vector (`unembedded_why_not` proved it), so
         # no document of the target holds an earlier version's vectors,
@@ -1043,10 +1166,12 @@ def carry(root, from_ref: str, to_ref: str, *, copy: bool = False, apply: bool =
     if same and not shares:
         final.update(same_space=True, predecessors=_predecessors_of(sp["state"], src.collection_id))
     marker.write_text(json.dumps(final, sort_keys=True), encoding="utf-8")
-    if rebuilt or recut:
+    if rebuilt or recut or rechunked:
         plan["collection_file"] = carry_file(root, from_name, to_name, to.collection_id, log=log)
     log(f"[carry] {from_name} → {to_name}: manifest {done['manifest']}, index/ "
-        f"{done['index']}, lance/ {done.get('lance', 'not carried (A1i)' if sister else 'not carried (A1h)')}"
+        f"{done['index']}, lance/ "
+        + done.get('lance', 'not carried (A1i)' if sister else
+                   'written by the re-key, row by row (A1k)' if rechunked else 'not carried (A1h)')
         + (f", state/bundles {done.get('bundles')}, state/share {done.get('share')}" if shares and not copy else "")
         + f"; space re-pinned to {to.space_id[:23]}…; {cleared} coverage row(s) of {from_name} "
         + ("re-keyed to it (A1f)" if shares else "kept unkeyed (provenance, never its coverage)"
@@ -1063,8 +1188,30 @@ def carry(root, from_ref: str, to_ref: str, *, copy: bool = False, apply: bool =
            f"collection new`, case J); the worker indexes every document again (A1i)" if relayered else
            f"use: its CPU reference and gate (`hold collection new`, case J); its documents are "
            f"embedded in its own space (A1i)" if sister else
+           f"use: the re-key (`dev carry {from_name} {to_name} --rechunked --yes`), the gate for "
+           f"{to_name}'s space and `hold check {to_name} --checks vectors-sample` (A1k)" if rechunked else
            f"use: `hold check {to_name} --checks vectors-sample` (amendment A1)"))
     return plan
+
+
+def _carry_catalogue(src_index: Path, dst_index: Path) -> str:
+    """The source's catalogue index (`index/_catalog`, app/catalog.py) copied
+    whole into the target's `index/` — a reflink where the filesystem has one,
+    to a hidden name renamed into place, so a stop leaves it whole or absent.
+    Repeatable: one already there is an earlier run's."""
+    from app import catalog
+    src, dst = src_index / catalog.DIRNAME, dst_index / catalog.DIRNAME
+    if dst.exists():
+        return "catalogue present"
+    if not src.is_dir():
+        return "no catalogue to carry: the maintainer builds it"
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    tmp = dst.with_name(f".{dst.name}.carry")
+    if tmp.exists():
+        shutil.rmtree(tmp)
+    _copy_tree(src, tmp)
+    os.replace(tmp, dst)
+    return "catalogue copied; the text index is cut again (A1k)"
 
 
 # ---- the derived state a successor takes (RULE 1, 2026-11-17) ---------------
@@ -1113,7 +1260,12 @@ def _carry_cpu_reference(root: Path, from_name: str, to_name: str, src: Codex, t
     base = Path(root) / from_name / "state" / "cpu-reference"
     if not base.is_dir():
         return {**out, "why": "none kept"}
-    if src.space is None or to.space is None or src.space_id != to.space_id:
+    if src.space is None or to.space is None:
+        return {**out, "why": "not carried: the spaces differ, and the reference is the space's encoder's"}
+    if src.space_id != to.space_id and (space_differences(src, to) or layers_version_only(src, to)):
+        # A1k: two spaces that differ by the layers' chunker version alone
+        # have one encoder side, so one reference (a function of the encoder
+        # side and the calibration set, both checked here and below)
         return {**out, "why": "not carried: the spaces differ, and the reference is the space's encoder's"}
     if src.space.calibration.set != to.space.calibration.set:
         return {**out, "why": f"not carried: the calibration set moved ({src.space.calibration.set[:23]}… → "
