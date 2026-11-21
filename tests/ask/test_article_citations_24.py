@@ -467,7 +467,8 @@ def test_the_reversed_look_back_is_the_grammar():
     """`_BEFORE` is the grammar, `_BEFORE_REV` how it is run (one anchored
     match on the reversed window): the same type word, organisation and "No"
     at every number run of every text here, at every window length."""
-    for text in [r[1] for r in ROWS] + [n[2] for n in NEGATIVES] + [q for q, *_ in REAL_TEXT_CASES]:
+    for text in [r[1] for r in ROWS] + [r[1] for r in LISTS] + [n[2] for n in NEGATIVES] \
+            + [q for q, *_ in REAL_TEXT_CASES]:
         for m in eref._NUMBERS.finditer(text):
             for lo in (120, 50, 20, 8):
                 w = text[max(0, m.start() - lo):m.start()]
@@ -506,9 +507,9 @@ REAL_TEXT_CASES = (
     # tests/fixtures/eurlex/eurlex-dumpfirst/formex/31972R1473 (it): a heading, then the sentence — the
     # article nearest the act, never the heading's
     ("Articolo 84 All'articolo 2, ultimo comma del regolamento (CEE, Euratom, CECA) n. 259/68", "31968R0259", "2"),
-    # 32016R0679 (en) recital 103: a list gives its last article, in every language alike
-    ("Article 25(6) or Article 26(4) of Directive 95/46/EC", "31995L0046", "26"),
-    ("čl. 25 odst. 6 nebo čl. 26 odst. 4 směrnice 95/46/ES", "31995L0046", "26"),
+    # 32016R0679 (en) recital 103: a list starts at its first article, in every language alike (LISTS)
+    ("Article 25(6) or Article 26(4) of Directive 95/46/EC", "31995L0046", "25"),
+    ("čl. 25 odst. 6 nebo čl. 26 odst. 4 směrnice 95/46/ES", "31995L0046", "25"),
 )
 
 
@@ -568,6 +569,216 @@ def test_a_dense_text_in_any_script_stays_linear():
     got = eref.citations(dense)
     assert time.perf_counter() - t < 2.0
     assert {c["celex"] for c in got} >= {p[1] for p in PROVISIONS.values()}
+
+
+# ---- a list of articles before (or after) one act: each, in order ---------------------------------
+
+#: the five lists of the five acts, as English reads them (the act and its articles, in the text's order):
+#: a RANGE gives its two ends (`_list_articles` says why)
+LIST_PROVISIONS = {
+    "L1": ("32022R2065 recital 74: 'Articles 6 and 8 of Directive 2011/83/EU'", "32011L0083", ("6", "8")),
+    "L2": ("32022R2065 recital 74: 'Articles 5 and 6 of Directive 2000/31/EC'", "32000L0031", ("5", "6")),
+    "L3": ("32022R2065 recital 53, Art. 16: 'Articles 3 to 7 of Directive 2011/93/EU'", "32011L0093", ("3", "7")),
+    "L4": ("32022R2065 Art. 89(1): 'Articles 12 to 15 of Directive 2000/31/EC'", "32000L0031", ("12", "15")),
+    "L5": ("32016R0679 recital 106: 'Article 25(6) or Article 26(4) of Directive 95/46/EC'", "31995L0046", ("25", "26")),
+}
+#: the Irish text's own "Rialachán" for the directive (32016R0679 recital 106), read as written
+_LIST_ACT = {("ga", "L5"): "31995R0046"}
+
+#: (language, the list as that language's Official Journal writes it, verbatim from the same Cellar items, the list)
+LISTS: tuple[tuple[str, str, str], ...] = (
+    # en
+    ('en', 'out in Articles 6 and 8 of Directive 2011/83/EU', 'L1'),
+    ('en', '2005/29/EC, Articles 5 and 6 of Directive 2000/31/EC', 'L2'),
+    ('en', 'to in Articles 3 to 7 of Directive 2011/93/EU', 'L3'),
+    ('en', '2000/31/EC 1. Articles 12 to 15 of Directive 2000/31/EC', 'L4'),
+    ('en', 'basis of Article 25(6) or Article 26(4) of Directive 95/46/EC', 'L5'),
+    # fr
+    ('fr', 'énoncées aux articles 6 et 8 de la directive 2011/83/UE', 'L1'),
+    ('fr', '2005/29/CE, aux articles 5 et 6 de la directive 2000/31/CE', 'L2'),
+    ('fr', 'visées aux articles 3 à 7 de la directive 2011/93/UE', 'L3'),
+    ('fr', '1. Les articles 12 à 15 de la directive 2000/31/CE', 'L4'),
+    ('fr', "base de l'article 25, paragraphe 6, ou de l'article 26, paragraphe 4, de la directive 95/46/CE", 'L5'),
+    # de
+    ('de', 'gemäß Artikel 6 und 8 der Richtlinie 2011/83/EU', 'L1'),
+    ('de', '2005/29/EG, Artikel 5 und 6 der Richtlinie 2000/31/EG', 'L2'),
+    ('de', 'nach den Artikeln 3 bis 7 der Richtlinie 2011/93/EU', 'L3'),
+    ('de', '(1) Die Artikel 12 bis 15 der Richtlinie 2000/31/EG', 'L4'),
+    ('de', 'Grundlage des Artikels 25 Absatz 6 oder des Artikels 26 Absatz 4 der Richtlinie 95/46/EG', 'L5'),
+    # it
+    ('it', 'agli articoli 6 e 8 della direttiva 2011/83/UE', 'L1'),
+    ('it', 'agli articoli 5 e 6 della direttiva 2000/31/CE', 'L2'),
+    ('it', 'agli articoli da 3 a 7 della direttiva 2011/93/UE', 'L3'),
+    ('it', 'Gli articoli da 12 a 15 della direttiva 2000/31/CE', 'L4'),
+    ('it', "dell'articolo 25, paragrafo 6, o dell'articolo 26, paragrafo 4, della direttiva 95/46/CE", 'L5'),
+    # es
+    ('es', 'los artículos 6 y 8 de la Directiva 2011/83/UE', 'L1'),
+    ('es', 'los artículos 5 y 6 de la Directiva 2000/31/CE', 'L2'),
+    ('es', 'los artículos 3 a 7 de la Directiva 2011/93/UE', 'L3'),
+    ('es', 'los artículos 12 a 15 de la Directiva 2000/31/CE', 'L4'),
+    ('es', 'base del artículo 25, apartado 6, o el artículo 26, apartado 4, de la Directiva 95/46/CE', 'L5'),
+    # pt
+    ('pt', 'estabelecidos nos artigos 6.o e 8.o da Diretiva 2011/83/UE', 'L1'),
+    ('pt', '2005/29/CE, nos artigos 5.o e 6.o da Diretiva 2000/31/CE', 'L2'),
+    ('pt', 'referem os artigos 3.o a 7.o da Diretiva 2011/93/UE', 'L3'),
+    ('pt', '1. Os artigos 12.o a 15.o da Diretiva 2000/31/CE', 'L4'),
+    ('pt', 'base no artigo 25.o, n.o 6, ou no artigo 26.o, n.o 4, da Diretiva 95/46/CE', 'L5'),
+    # nl
+    ('nl', 'van de artikelen 6 en 8 van Richtlijn 2011/83/EU', 'L1'),
+    ('nl', '2005/29/EG, de artikelen 5 en 6 van Richtlijn 2000/31/EG', 'L2'),
+    ('nl', 'in de artikelen 3 tot en met 7 van Richtlijn 2011/93/EU', 'L3'),
+    ('nl', '1. De artikelen 12 tot en met 15 van Richtlijn 2000/31/EG', 'L4'),
+    ('nl', 'grond van artikel 25, lid 6, of artikel 26, lid 4, van Richtlijn 95/46/EG', 'L5'),
+    # da
+    ('da', 'kravene i artikel 6 og 8 i direktiv 2011/83/EU', 'L1'),
+    ('da', '2005/29/EF, artikel 5 og 6 i direktiv 2000/31/EF', 'L2'),
+    ('da', 'omhandlet i artikel 3-7 i Europa-Parlamentets og Rådets direktiv 2011/93/EU', 'L3'),
+    ('da', '2000/31/EF 1. Artikel 12-15 i direktiv 2000/31/EF', 'L4'),
+    ('da', 'grundlag af artikel 25, stk. 6, eller artikel 26, stk. 4, i direktiv 95/46/EF', 'L5'),
+    # sv
+    ('sv', 'anges i artiklarna 6 och 8 i direktiv 2011/83/EU', 'L1'),
+    ('sv', '2005/29/EG, artiklarna 5 och 6 i direktiv 2000/31/EG', 'L2'),
+    ('sv', 'avses i artiklarna 3–7 i Europaparlamentets och rådets direktiv 2011/93/EU', 'L3'),
+    ('sv', '1. Artiklarna 12–15 i direktiv 2000/31/EG', 'L4'),
+    ('sv', 'grundval av artikel 25.6 eller 26.4 i direktiv 95/46/EG', 'L5'),
+    # cs
+    ('cs', 'stanovené v článcích 6 a 8 směrnice 2011/83/EU', 'L1'),
+    ('cs', '2005/29/ES, článcích 5 a 6 směrnice 2000/31/ES', 'L2'),
+    ('cs', 'uvedených v článcích 3 až 7 směrnice Evropského parlamentu a Rady 2011/93/EU', 'L3'),
+    ('cs', '2000/31/ES 1. Články 12 až 15 směrnice 2000/31/ES', 'L4'),
+    ('cs', 'na základě čl. 25 odst. 6 nebo čl. 26 odst. 4 směrnice 95/46/ES', 'L5'),
+    # sk
+    ('sk', 'stanovené v článkoch 6 a 8 smernice 2011/83/EÚ', 'L1'),
+    ('sk', '2005/29/ES, článkoch 5 a 6 smernice 2000/31/ES', 'L2'),
+    ('sk', 'uvedených v článkoch 3 až 7 smernice Európskeho parlamentu a Rady 2011/93/EÚ', 'L3'),
+    ('sk', '2000/31/ES 1. Články 12 až 15 smernice 2000/31/ES', 'L4'),
+    ('sk', 'základe článku 25 ods. 6 alebo článku 26 ods. 4 smernice 95/46/ES', 'L5'),
+    # pl
+    ('pl', 'określonych w art. 6 i 8 dyrektywy 2011/83/UE', 'L1'),
+    ('pl', '2005/29/WE, art. 5 i 6 dyrektywy 2000/31/WE', 'L2'),
+    ('pl', 'których mowa w art. 3–7 dyrektywy Parlamentu Europejskiego i Rady 2011/93/UE', 'L3'),
+    ('pl', 'Uchyla się art. 12–15 dyrektywy 2000/31/WE', 'L4'),
+    ('pl', 'podstawie art. 25 ust. 6 lub art. 26 ust. 4 dyrektywy 95/46/WE', 'L5'),
+    # sl
+    ('sl', 'zahtev iz členov 6 in 8 Direktive 2011/83/EU', 'L1'),
+    ('sl', '2005/29/ES, členov 5 in 6 Direktive 2000/31/ES', 'L2'),
+    ('sl', 'dejanji iz členov 3 do 7 Direktive 2011/93/EU', 'L3'),
+    ('sl', '2000/31/ES 1. Členi 12 do 15 Direktive 2000/31/ES', 'L4'),
+    ('sl', 'podlagi člena 25(6) ali člena 26(4) Direktive 95/46/ES', 'L5'),
+    # hr
+    ('hr', 'utvrđene u člancima 6. i 8. Direktive 2011/83/EU', 'L1'),
+    ('hr', '2005/29/EZ, člancima 5. i 6. Direktive 2000/31/EZ', 'L2'),
+    ('hr', 'iz članaka od 3. do 7. Direktive 2011/93/EU', 'L3'),
+    ('hr', '2000/31/EZ 1. Članci od 12. do 15. Direktive 2000/31/EZ', 'L4'),
+    ('hr', 'temelju članka 25. stavka 6. i članka 26. stavka 4. Direktive 95/46/EZ', 'L5'),
+    # bg
+    ('bg', 'изискванията по членове 6 и 8 от Директива 2011/83/ЕС', 'L1'),
+    ('bg', '2005/29/ЕО, членове 5 и 6 от Директива 2000/31/ЕО', 'L2'),
+    ('bg', 'посочени в членове 3 – 7 от Директива 2011/93/ЕС', 'L3'),
+    ('bg', '2000/31/ЕО 1. Членове 12—15 от Директива 2000/31/ЕО', 'L4'),
+    ('bg', 'основа на член 25, параграф 6 или член 26, параграф 4 от Директива 95/46/ЕО', 'L5'),
+    # el
+    ('el', 'ορίζονται στα άρθρα 6 και 8 της οδηγίας 2011/83/ΕΕ', 'L1'),
+    ('el', '2005/29/ΕΚ, στα άρθρα 5 και 6 της οδηγίας 2000/31/ΕΚ', 'L2'),
+    ('el', 'αναφέρονται στα άρθρα 3 έως 7 της οδηγίας 2011/93/ΕΕ', 'L3'),
+    ('el', '2000/31/ΕΚ 1. Τα άρθρα 12 έως 15 της οδηγίας 2000/31/ΕΚ', 'L4'),
+    ('el', 'βάσει του άρθρου 25 παράγραφος 6 ή του άρθρου 26 παράγραφος 4 της οδηγίας 95/46/ΕΚ', 'L5'),
+    # ro
+    ('ro', 'la articolele 6 și 8 din Directiva 2011/83/UE', 'L1'),
+    ('ro', 'la articolele 5 și 6 din Directiva 2000/31/CE', 'L2'),
+    ('ro', 'la articolele 3-7 din Directiva 2011/93/UE', 'L3'),
+    ('ro', '1. Articolele 12-15 din Directiva 2000/31/CE', 'L4'),
+    ('ro', 'temeiul articolului 25 alineatul (6) sau al articolului 26 alineatul (4) din Directiva 95/46/CE', 'L5'),
+    # mt
+    ('mt', 'stabbiliti fl-Artikoli 6 u 8 tad-Direttiva 2011/83/UE', 'L1'),
+    ('mt', '2005/29/KE, fl-Artikoli 5 u 6 tad-Direttiva 2000/31/KE', 'L2'),
+    ('mt', 'msemmija fl-Artikoli 3 sa 7 tad-Direttiva 2011/93/UE', 'L3'),
+    ('mt', '1. L-Artikoli 12 sa 15 tad-Direttiva 2000/31/KE', 'L4'),
+    ('mt', 'abbażi tal-Artikolu 25(6) jew l-Artikolu 26 (4) tad-Direttiva 95/46/KE', 'L5'),
+    # ga
+    ('ga', 'in Airteagail 6 agus 8 de Threoir 2011/83/AE', 'L1'),
+    ('ga', '2005/29/CE, Airteagail 5 agus 6 de Threoir 2000/31/CE', 'L2'),
+    ('ga', 'in Airteagail 3 go 7 de Threoir 2011/93/AE', 'L3'),
+    ('ga', 'Scriostar Airteagail 12 go 15 de Threoir 2000/31/CE', 'L4'),
+    ('ga', 'bhonn Airteagal 25(6) nó Airteagal 26(4) de Rialachán 95/46/CE', 'L5'),
+    # hu
+    ('hu', 'kötelezettségeiknek, különösen a 2011/83/EU irányelv 6. és 8. cikkében, a', 'L1'),
+    ('hu', '2005/29/EK irányelv 7. cikkében, a 2000/31/EK irányelv 5. és 6. cikkében, valamint', 'L2'),
+    ('hu',
+     'ismeretére vagy tudomására ad okot. A 2011/93/EU európai parlamenti és tanácsi irányelv (26) 3–7. cikkében '
+     'említett', 'L3'),
+    ('hu', '2000/31/EK irányelv módosításai (1) A 2000/31/EK irányelv 12–15. cikkét el', 'L4'),
+    ('hu', 'működésének ellenőrzését, ideértve a 95/46/EK irányelv 25. cikk (6) vagy a 26. cikk (4)', 'L5'),
+    # fi
+    ('fi', 'vaatimuksia, joista säädetään direktiivin 2011/83/EU 6 ja 8 artiklassa, direktiivin', 'L1'),
+    ('fi', '2005/29/EY 7 artiklassa, direktiivin 2000/31/EY 5 ja 6 artiklassa sekä', 'L2'),
+    ('fi', 'parlamentin ja neuvoston direktiivin 2011/93/EU (26) 3–7 artiklassa tarkoitetuista', 'L3'),
+    ('fi', 'muuttaminen 1. Kumotaan direktiivin 2000/31/EY 12–15 artikla. 2.', 'L4'),
+    ('fi', 'koskevien päätösten, kuten direktiivin 95/46/EY 25 artiklan 6 kohdan tai 26 artiklan 4', 'L5'),
+    # et
+    ('et', 'Parlamendi ja nõukogu direktiivi 2011/83/EL artiklites 6 ja 8, direktiivi 2005/29/EÜ', 'L1'),
+    ('et', '2005/29/EÜ artiklis 7, direktiivi 2000/31/EÜ artiklites 5 ja 6 ning direktiivi', 'L2'),
+    ('et', 'Parlamendi ja nõukogu direktiivi 2011/93/EL (26) artiklites 3–7 osutatud süütegudega', 'L3'),
+    ('et',
+     'LÕPPSÄTTED Artikkel 89 Direktiivi 2000/31/EÜ muutmine 1. Direktiivi 2000/31/EÜ artiklid 12–15 jäetakse '
+     'välja.', 'L4'),
+    ('et', 'organisatsioonis, ning direktiivi 95/46/EÜ artikli 25 lõike 6 või artikli 26 lõike 4', 'L5'),
+    # lv
+    ('lv', 'Parlamenta un Padomes Direktīvas 2011/83/ES 6. un 8. pantā, Direktīvas', 'L1'),
+    ('lv', '2005/29/EK 7. pantā, Direktīvas 2000/31/EK 5. un 6. pantā un', 'L2'),
+    ('lv', 'Parlamenta un Padomes Direktīvas 2011/93/ES (26) 3.–7. pantā, minētajiem', 'L3'),
+    ('lv', 'NOTEIKUMI 89. pants Direktīvas 2000/31/EK grozījumi 1. Direktīvas 2000/31/EK 12.–15. pantu svītro.', 'L4'),
+    ('lv', 'pieņemti, pamatojoties uz Direktīvas 95/46/EK 25. panta 6. punktu vai 26. panta 4.', 'L5'),
+    # lt
+    ('lt', 'reikalavimus, išdėstytus Direktyvos 2011/83/ES 6 bei 8 straipsniuose, Direktyvos', 'L1'),
+    ('lt', '2005/29/EB 7 straipsnyje, Direktyvos 2000/31/EB 5 bei 6 straipsniuose ir', 'L2'),
+    ('lt', 'Parlamento ir Tarybos direktyvos 2011/93/ES (26) 3–7 straipsniuose, teikimą,', 'L3'),
+    ('lt', 'daliniai pakeitimai 1. Direktyvos 2000/31/EB 12–15 straipsniai išbraukiami.', 'L4'),
+    ('lt', 'sprendimų, priimtų remiantis Direktyvos 95/46/EB 25 straipsnio 6 dalimi arba 26 straipsnio 4', 'L5'),
+)
+
+
+@pytest.mark.parametrize("lang, text, key", LISTS, ids=[f"{r[0]}-{r[2]}" for r in LISTS])
+def test_each_article_of_a_list_is_cited_in_order(lang, text, key):
+    _where, celex, arts = LIST_PROVISIONS[key]
+    celex = _LIST_ACT.get((lang, key), celex)
+    assert [a for c, a in _pairs(text) if c == celex] == list(arts), (lang, text, _pairs(text))
+
+
+def test_every_language_has_its_five_lists_and_its_words_for_them():
+    counts = collections.Counter(r[0] for r in LISTS)
+    assert set(counts) == {f.lang for f in eref._FORMS} and set(counts.values()) == {5}
+    assert all(f.conj for f in eref._FORMS if f.art), "each language joining articles before the act says how"
+    assert all(f.num_word for f in eref._FORMS if f.after and f.lang != "et"), \
+        "each language numbering an article before its word (hu fi lv lt) names the word"
+
+
+@pytest.mark.parametrize("text", [
+    # 32023R1773 (fr, it, nl) Annex III: a range of PARAGRAPHS is the article's own, never articles
+    "établis à l’article 29, paragraphes 2 à 7 et paragraphe 10, de la directive (UE) 2018/2001",
+    "di cui all’articolo 29, paragrafi da 2 a 7 e 10, della direttiva (UE) 2018/2001",
+    "stgesteld in artikel 29, leden 2 tot en met 7, en lid 10, van Richtlijn (EU) 2018/2001",
+    # (en) the paragraphs first
+    "laid down in paragraphs 2 to 7 and 10 of Article 29 of Directive (EU) 2018/2001",
+])
+def test_a_list_of_paragraphs_is_one_article(text):
+    assert _pairs(text) == [("32018L2001", "29")], text
+    [c] = eref.citations(text)
+    assert [n for _label, n in eref._list_articles(c["art"])] == ["29"], "the paragraphs' numbers are no articles"
+
+
+def test_the_pin_takes_max_articles_of_a_list(tmp_path, isolated_config):
+    """Every article of the list is cited; the pin bounds them downstream
+    (app/ask/articles.py MAX_ARTICLES), in the query's order."""
+    from tests.test_eurlex import build_corpus
+    c, _ = _collection(tmp_path, "eurlex", build_corpus(tmp_path / "eurlex"))
+    q = "Articles 1, 2, 3, 4, 5 and 6 of Regulation (EU) 2016/1036"
+    assert [a for _c, a in _pairs(q)] == ["1", "2", "3", "4", "5", "6"]
+    got = articles.pin(q, [c])
+    assert [f["entity_id"] for f in got] == [f"celex:{ACT}~art{n}" for n in range(1, articles.MAX_ARTICLES + 1)]
+    [f, g] = articles.pin("Articles 5 and 6 of Regulation (EU) 2016/1036", [c])
+    assert (f["entity_id"], g["entity_id"]) == (f"celex:{ACT}~art5", f"celex:{ACT}~art6")
+    assert f["label"].endswith("— Articles 5 (text in force)")
 
 
 # ---- question forms: what a reader types and the Official Journal never writes ----------------
