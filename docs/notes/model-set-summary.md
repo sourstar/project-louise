@@ -102,8 +102,24 @@ GTT for one process, has no timing) or LocalAI's unload-and-reload (the
   ≈ 13.2 GiB with the encoder on the CPU, ≈ 15.5 with it at Q4, + ~1 GiB
   while an image is made; a Q4_K_M DiT (6.7 GiB) would halve it.
 
+**A way not in the table — the MoE cache (checked 2026-11-21 in the latest
+llama.cpp; already at our pin `ddf48f8`; idle-context-brief.md §6):**
+`--cpu-moe` keeps the 35B's experts (≈ 18.4 GB of its 22.1) in host RAM
+and `--moe-cache-mib N` keeps the hottest on the card, so the 35B's
+footprint becomes ≈ 3.4 GiB of non-expert weights + 1.2 context + N +
+floor: **≈ 9 GiB with a 4 GiB cache, ≈ 13 with 8** (E), against 21.6
+resident. With the shared context, today's non-chat weights (≈ 17) + 3.2
++ 9 ≈ 29 GiB — the first arrangement that fits WITH MADLAD and leaves
+Krea 2 a load per use. Its speed is the hit rate's (1.5–2× over experts on
+the CPU alone on CUDA/ROCm cards; nothing reported on SYCL); the experts'
+18.4 GB must live in the host's 22 GB available. To MEASURE on the B70
+before anything is said — the one open measurement that could change
+the conclusion.
+
 ## 4. Open
 
+- The 35B under the MoE cache on the B70 (above): footprint, decode and
+  prefill tok/s, hit rate, host RAM; München, the operator's word.
 - The spill's speed: nothing measured (§2); the estimate stands alone.
 - ~~The link and the RAM~~ READ by the operator 2026-11-19 (node-runbook.md
   §1): the slot link is PCIe 5.0 x16 (the card's upstream bridge `01:00.0`,

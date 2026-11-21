@@ -18,6 +18,19 @@ build at 12 cores, the GPU uncapped. The card's noise (operator): 0.2 sone
 idle, 3.1 sone at full load, coil whine ~0.9 sone; its fan range is being
 measured (published figures disagree).
 
+### 2026-11-21
+
+- **Latest llama.cpp checked against our pin, for the full card** (operator: "check latest llama.cpp"; master b12600
+  of 11-20 against `ddf48f8`). Nothing newer on SYCL, offload or the server; everything relevant is ALREADY AT OUR
+  PIN: the **MoE cache** (`--cpu-moe` + `--moe-cache-mib N` + `--moe-cache-cpu-share F`, merged 11-06/07) — the
+  experts in host RAM, the hottest cached on the card: the 35B would hold ≈ 9 GiB with a 4 GiB cache instead of
+  21.6 (E), the first arrangement in which the wanted set fits with MADLAD; SYCL unreported, to measure on the B70;
+  llama-server's **router mode** with `--models-memory-margin` (measured min/max per model, LRU unload with a fit
+  check) — the standard form of LocalAI's reclaimer + app/resident.py, written down, not adopted; `--fit` (on by
+  default: a model without `-c` takes the largest context that fits); `GGML_OP_OFFLOAD_MIN_BATCH`, which makes
+  partial offload's GPU/CPU path independent of the batch size and so measurable under invariant 12.
+  [idle-context-brief.md](idle-context-brief.md) §6, [model-set-summary.md](model-set-summary.md).
+
 ### 2026-11-17
 
 - **The B70's bus and the host's RAM, and what a VRAM overcommit would cost** (operator, 2026-11-17: the card is

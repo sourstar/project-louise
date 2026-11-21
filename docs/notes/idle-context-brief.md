@@ -697,7 +697,64 @@ probable or open.
   tried, if at all, once, measured with `GGML_SYCL_MEMTRACE=1` beside the
   fdinfo counts (app/gpu_memory.py), before anything depends on it. The
   weights of the Ask set fit without it through this patch (§1.5) — with
-  TODAY's chat; not with the 35B (next bullet).
+  TODAY's chat; not with the 35B (two bullets down).
+- **The other way to hold more model than the card, and what the latest
+  llama.cpp offers — checked 2026-11-21** (operator: "check latest
+  llama.cpp"; master b12600 of 2026-11-20 read against OUR PIN `ddf48f8`,
+  the node's build). Besides the driver's spill (above) there is
+  llama.cpp's own partial offload, `-ngl N`: the layers beyond N keep their
+  weights in host RAM and the scheduler, through the backend's
+  `offload_op` hook (ggml-sycl has it like CUDA), copies those weights to
+  the card per op for a batch of ≥ 32 tokens and computes there, on the
+  CPU below — weight streaming per batch at link speed, serial on one GPU
+  (no double-buffering with a single device). The threshold is an env at
+  our pin, `GGML_OP_OFFLOAD_MIN_BATCH` (default 32): set to 1 every op
+  takes the card's path, set high none does, so the path no longer depends
+  on the batch size — the invariant-12 objection to this way (the gate's
+  short texts on the CPU, the batches on the GPU) is answered by setting
+  it, and the run is then measured like any other. Everything below is
+  ALREADY AT OUR PIN; the 2026-11-20 builds add nothing on SYCL, offload or
+  the server, only a fix for the MoE cache beside a quantized KV cache
+  (#32636, b12569).
+  - **The MoE cache** (`--cpu-moe` / `--n-cpu-moe N` + `--moe-cache-mib N`
+    + `--moe-cache-cpu-share F`; `docs/moe-cache.md`; PRs #30966, #31233,
+    merged 2026-11-06/07): the experts stay in host RAM, the most used ones
+    are kept in a cache of N MiB on the card; a hit runs on the card, a
+    miss is uploaded into the cache or, for a share F once the cache is
+    full, computed on the CPU from the host copy. Built for small batches
+    (decode); "large batches still upload the experts they use". THE
+    35B'S CASE EXACTLY: its 256 × 40 experts are ≈ 18.4 GB of the 22.1 GB
+    file (3 × 2048 × 512 params each, ≈ 1.8 MB at Q4; 320 touched per
+    token ≈ 575 MB), the rest ≈ 3.7 GB. On the card: ≈ 3.4 GiB + the
+    1.2 GiB context + the cache + the 0.26 floor — **≈ 9 GiB with a
+    4 GiB cache, ≈ 13 with 8**, against 21.6 GiB resident (E). The speed
+    is the hit rate's: reported on CUDA/ROCm cards 1.5–2× over `-cmoe`
+    alone (a 2080 Ti 42 → 64.5 tok/s at 6.8 GB cache, share 0.95; a 3070
+    35 → 53 at 3.1 GB, share 0.5), hit rates 60–93 % by cache size on a
+    much larger model; a tuning script, `scripts/moe-cache-tune.py`.
+    **SYCL is named nowhere**, neither supported nor excluded: to measure
+    on the B70 before anything is said. Host RAM holds the experts
+    (18.4 GB, mmap'd by default and then NOT pinned — uploads slower; pinned
+    with `-lm none|mlock|dio`): the host had 22 GB available on 11-18, so
+    it is tight. Not combined with `--fit` (aborts on
+    `tensor_buft_overrides already set`).
+  - **llama-server's router mode** (`--models-dir`, `--models-max`,
+    `--models-memory-margin N`, `--models-autoload`, per-model presets):
+    one llama-server loads and unloads models on demand, LRU, and with the
+    margin set it MEASURES each model's `min` and `max` device memory in a
+    short-lived child and unloads idle models until the new one fits — a
+    model serving requests is never unloaded; host memory is assumed
+    unlimited. The standardized form of LocalAI's reclaimer plus
+    app/resident.py's budget, for llama.cpp models only (not torch,
+    OpenVINO, omnivoice, parakeet). Written down, not adopted: LocalAI
+    stays the sole owner of the card (node-runbook.md §2).
+  - **`--fit`** (`[on|off]`, default ON in llama-server; `--fit-target
+    MiB`, `--fit-ctx N`, `--fit-print`): an instance adjusts its UNSET
+    arguments — the context first — to the device memory free at load. Our
+    YAMLs pin `context_size`, so it does not grow ours; a model started
+    without `-c` takes the largest context that fits, which is how a
+    newcomer fills a card.
+  - `--sleep-idle-seconds` (§3): unchanged, the whole model.
 - **The set the operator wants, costed (2026-11-17)** — today's models, the
   35B MoE (`louise-chat-qwen3.6-35b-a3b`, Qwen3.6-35B-A3B UD-Q4_K_M) in
   place of qwen3-8b, and Krea 2 image generation; STT stays on the iGPU
