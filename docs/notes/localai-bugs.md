@@ -14,6 +14,13 @@ offers only the v5.0.0 template (app 1.1.47).*
 - *The way back: app 1.1.43 with louise-localai:v4.12.1-gpu-intel-p1
   (992f4c6b).*
 - *`LOCALAI_AUTO_UPGRADE_BACKENDS=false` is set explicitly.*
+- *The ADD-ON OWNER is off since 01:48:33Z (operator: "Switch it off";
+  docs/notes/localai-addons.md): `LOCALAI_ADDONS_ENABLED=false`,
+  `LOCALAI_ADDONS_BACKEND_LIBRARY=false`. On by default, in local-owner mode
+  with sign-in off, it let any caller on the LAN install an unconfined
+  process as LocalAI's user, or a backend outside the calibration gates.
+  `/api/addons/resources` now answers 503. The same 96 backends, the
+  fingerprint vectors byte for byte and the rerank were held after it.*
 - *Checked before against after (München):*
   - *96 backends, the same names and digests;*
   - *the sixteen fingerprint texts of NeuRIS and wikipedia, 32 of 32 byte for
