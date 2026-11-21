@@ -374,7 +374,8 @@ class CitationResolver:
 
 #: the word for "article" in the languages the grammar reads (`_ARTICLE`)
 _ART_WORD = r"(?:Article|Artikel|Articolo|Artículo|Articulo|Artigo|Art\.)"
-_ART_NUM = re.compile(rf"(?P<word>{_ART_WORD})\s*(?P<num>\d+[a-z]?)", re.IGNORECASE)
+_ART_NUM = re.compile(rf"(?P<word>{_ART_WORD})\s*(?P<num>\d+(?:\s*-?\s*(?:bis|ter|quater|quinquies|sexies"
+                      rf"|septies|octies|novies|decies)\b|[a-z]\b)?)", re.IGNORECASE)
 
 
 def article_citations(query: str, refs: RefLookup | None = None, facts=()) -> list[ArticleCitation]:
@@ -387,18 +388,57 @@ def article_citations(query: str, refs: RefLookup | None = None, facts=()) -> li
         m = _ART_NUM.match(c["art"] or "")
         if m is None:
             continue
-        out.append(ArticleCitation(keys=(f"celex:{c['celex']}",), article=m.group("num").lower(),
+        out.append(ArticleCitation(keys=(f"celex:{c['celex']}",), article=article_number(m.group("num")),
                                    label=f"{m.group('word')} {m.group('num')}"))
     return out
 
 
 #: a section's label (formex.sections): "[partition › ]Article 5 — title"
-#: — the French Official Journal heads the first article "Article premier"
-_LABEL = re.compile(rf"^\s*{_ART_WORD}\s*(?:(?P<num>\d+[a-z]?)|(?P<first>premier|1er))\b", re.IGNORECASE)
+#: — the French Official Journal heads the first article "Article premier".
+#: IN THE 24 LANGUAGES (2026-11-21, the C11 review: "Articolul 1" and "1. cikk"
+#: read as no article, so a Romanian or Hungarian Work never pinned one): the
+#: heading forms the XHTML reader reads (app/plugins/eurlex/rendition.py
+#: `_WORD_FIRST`, `_NUM_FIRST`, `_ORDINAL`), so a label and a heading agree by
+#: construction, and its number in ONE spelling (`article_number`)
+from ..plugins.eurlex.rendition import _NUM as _R_NUM, _NUM_FIRST as _R_NUM_FIRST, \
+    _WORD_FIRST as _R_WORD_FIRST  # noqa: E402
+_LABEL = re.compile(
+    rf"^\s*(?:Article\s+(?P<first>premier|1er)|(?:Article|Articolo|Artículo|Artigo)\s+(?P<only>unique|unico|único)"
+    rf"|(?:{_R_WORD_FIRST}|Art\.)\s*(?P<num>{_R_NUM})"
+    rf"|(?P<numfirst>{_R_NUM_FIRST}))(?=\s|$|[—–:,-])", re.IGNORECASE)
+#: an inserted article's Latin ordinal, Greek and Cyrillic letter, as its
+#: place in the alphabet: "14 bis" (es fr it nl), "14α" (el), "14а" (bg) are
+#: "14a" (cs da de en … ), so a citation in one language finds the article in
+#: another
+_LATIN_ORDINALS = ("bis", "ter", "quater", "quinquies", "sexies", "septies", "octies", "novies", "decies")
+_ALPHABETS = ("αβγδεζηθικλμ", "абвгдежзиклм")
+_NUMBER = re.compile(r"(\d+)\s*(?:\.?\s*[º°]|\.o\b)?\s*[.\-]?\s*([^\W\d_]*)")
+
+
+def article_number(text: str | None) -> str | None:
+    """An article's number in one spelling: "14", "14a", "14 a", "14.a",
+    "14α", "14а", "14 bis", "14-bis", "14.o-A", "14.º", "14a." → "14" or
+    "14a"; None without a number."""
+    m = _NUMBER.search(str(text or ""))
+    if m is None:
+        return None
+    num, suffix = m.group(1), m.group(2).lower()
+    if suffix in _LATIN_ORDINALS:
+        return num + "abcdefghi"[_LATIN_ORDINALS.index(suffix)]
+    for alphabet in _ALPHABETS:
+        if suffix and all(ch in alphabet for ch in suffix):
+            return num + "".join("abcdefghijkl"[alphabet.index(ch)] for ch in suffix)
+    if suffix and len(suffix) <= 3 and suffix.isascii() and suffix.isalpha():
+        return num + suffix
+    return num            # a word after the number ("1 artikla", "5. cikk"): the number
 
 
 def article_of_label(label: str | None) -> str | None:
     m = _LABEL.match(str(label or "").rsplit(" › ", 1)[-1])
     if m is None:
         return None
-    return "1" if m.group("first") else m.group("num").lower()
+    if m.group("first") or m.group("only"):
+        return "1"
+    if m.group("numfirst"):
+        return article_number(re.sub(r"(?i)\s*(?:artikla|cikk|pants|straipsnis)\s*$", "", m.group("numfirst")))
+    return article_number(m.group("num"))

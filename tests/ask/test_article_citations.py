@@ -473,3 +473,26 @@ def test_the_fact_s_keys_are_the_api_s_whatever_the_source(held):  # noqa: F811
         {"testo", "in vigore dal", "fino al", "versione", "chunk", "modificato da"}
     [then] = articles.pin(q, [c], as_of=19990101, store=store)
     assert then["label"].endswith("(texte au 1999-01-01)")
+
+
+def test_an_article_label_is_read_in_the_24_languages():
+    """2026-11-21 (the C11 review): "Articolul 1" and "1. cikk" read as no
+    article, so a Romanian or Hungarian Work pinned none. The heading forms
+    the XHTML reader reads, in one spelling: an inserted article's Latin
+    ordinal, Greek or Cyrillic letter is its letter, so "14 bis", "14α",
+    "14а" and "14a" are one article."""
+    from app.refs import eurlex as eref
+    want = {"Article 5 — Principles": "5", "TITLE I — X › Article 2 — Definitions": "2",
+            "Articolul 1": "1", "1. cikk": "1", "14a. cikk — Tárgy": "14a", "1 artikla": "1",
+            "14 a artikla": "14a", "1. pants": "1", "14.a pants": "14a", "1 straipsnis": "1",
+            "Άρθρο 14α": "14a", "Член 14а": "14a", "Článek 5": "5", "Článok 5": "5", "Članak 5.": "5",
+            "Člen 5": "5", "Artigo 14.º-A": "14a", "Artigo 4.o": "4", "Articolo 14 bis": "14a",
+            "Artículo 14 ter": "14b", "Article premier — Objet": "1", "Article 1er": "1",
+            "Articolo unico": "1", "Artykuł 3": "3", "L-Artikolu 2": "2", "Artikolu 2": "2",
+            "Airteagal 7": "7", "Artikkel 9": "9", "Artikel 10a": "10a", "Artikel 10 Absatz 2": "10"}
+    got = {label: eref.article_of_label(label) for label in want}
+    assert got == want
+    for label in ("Recital 26", "Whereas (1)", "ANNEX I", "Final", "Preamble", "I. MELLÉKLET"):
+        assert eref.article_of_label(label) is None, label
+    # the citation side spells the number the same way
+    assert eref.article_number("14 bis") == eref.article_number("14a") == eref.article_number("14α") == "14a"
