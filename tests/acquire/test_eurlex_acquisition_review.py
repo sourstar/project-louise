@@ -84,3 +84,47 @@ def test_a_kept_tree_as_recent_as_the_listing_still_serves_without_a_request(tmp
     got = cellar.fetch_unit_from_tree("https://cellar.test", celex, "it", tmp_path / "v", client=object(),
                                       trees=recent2, listed_mtime=None)
     assert got.tree_from == "kept"
+
+
+# ---- Q4: the incomplete record is locked across processes -------------------------------------
+
+def _marker(corpus: str, n: int, start) -> None:
+    start.wait()
+    for i in range(n):
+        eurlex_dump.mark_fetched(Path(corpus), "it", f"32000R{i:05d}")
+
+
+def _builder(corpus: str, n: int, start) -> None:
+    import time
+    start.wait()
+    for k in range(n):
+        eurlex_dump._record_incomplete(Path(corpus), {"fr": {f"32001R{j:05d}": "true" for j in range(k + 1)}})
+        time.sleep(0.01)
+
+
+def test_the_cli_build_and_the_worker_lose_none_of_each_other_s_marks(tmp_path):
+    """The CLI build (`louise dev eurlex-dump`) records its languages while
+    the worker marks the units Cellar gave: a lock per PROCESS lost marks
+    (reproduced: 298 of 300 fetched marks kept, the build's 33 of 40)."""
+    import json
+    import multiprocessing
+    corpus = tmp_path / "corpus"
+    corpus.mkdir()
+    n = 300
+    base = {"it": {f"32000R{i:05d}": {"in_force": "true", "reform": True, "tried": None} for i in range(n)}}
+    for j in range(2000):
+        base["it"][f"39999R{j:05d}"] = {"in_force": "true", "tried": None}
+    (corpus / eurlex_dump.INCOMPLETE).write_text(json.dumps(base))
+    ctx = multiprocessing.get_context("spawn")
+    start = ctx.Event()
+    a = ctx.Process(target=_marker, args=(str(corpus), n, start))
+    b = ctx.Process(target=_builder, args=(str(corpus), 40, start))
+    a.start()
+    b.start()
+    start.set()
+    a.join(120)
+    b.join(120)
+    assert (a.exitcode, b.exitcode) == (0, 0)
+    got = eurlex_dump.incomplete(corpus)
+    fetched = sum(1 for i in range(n) if (got["it"].get(f"32000R{i:05d}") or {}).get("fetched"))
+    assert (fetched, len(got.get("fr") or {})) == (n, 40)

@@ -49,6 +49,7 @@ import re
 import threading
 import zipfile
 from collections import Counter, OrderedDict
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Callable
 
@@ -221,7 +222,31 @@ def _mark_packages(corpus: Path, langs: list[str]) -> None:
 #: (München, 2026-11-16: ~10.5k units waited behind a 24-language listing
 #: of every year since 1952)
 INCOMPLETE = ".eurlex-dump-incomplete.json"
+#: THE RECORD'S LOCK ACROSS PROCESSES (review 2026-11-21, Q4): the CLI build
+#: (`louise dev eurlex-dump`) and the worker's per-unit pass both read, change
+#: and write the record; a lock per process lost the other's marks (300 marks
+#: against 40 builds: 2 marks and 7 of the build's 40 lost). flock(2) on a
+#: file beside it — the standard advisory lock, released by the kernel when
+#: its holder dies, so a killed process leaves no stale lock; Linux, the
+#: node's. The thread lock beside it: one holder per process at a time.
+LOCK = ".eurlex-dump-incomplete.lock"
 _incomplete_lock = threading.Lock()
+
+
+@contextmanager
+def _locked(corpus: Path):
+    """The record held for a read-modify-write, against every thread and
+    process. Never nested (a second open of the lock is a second lock)."""
+    import fcntl
+    path = Path(corpus) / LOCK
+    with _incomplete_lock:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o644)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX)
+            yield
+        finally:
+            os.close(fd)                    # the lock with it
 
 
 def incomplete(corpus: Path) -> dict[str, dict[str, dict]]:
@@ -246,7 +271,7 @@ def _record_incomplete(corpus: Path, found: dict[str, dict[str, str | None]]) ->
     """The languages just built: their incomplete units as this build found
     them, a unit tried before keeping its `tried` (it failed at Cellar too,
     and is not asked again until a newer dump)."""
-    with _incomplete_lock:
+    with _locked(corpus):
         had = incomplete(corpus)
         for lang, units in found.items():
             old = had.get(lang) or {}
@@ -300,7 +325,7 @@ def mark_fetched(corpus: Path, lang: str, celex: str) -> None:
     Cellar serves as wrongly as the dump would otherwise be asked every
     pass); a newer dump's build records it afresh."""
     import time as _time
-    with _incomplete_lock:
+    with _locked(corpus):
         had = incomplete(corpus)
         entry = (had.get(lang) or {}).get(celex)
         if entry is None or entry.get("fetched"):
@@ -312,7 +337,7 @@ def mark_fetched(corpus: Path, lang: str, celex: str) -> None:
 def mark_tried(corpus: Path, lang: str, celex: str, why: str) -> None:
     """A recorded incomplete unit Cellar did not give either (a failure that
     is not the endpoint going away): not asked first again."""
-    with _incomplete_lock:
+    with _locked(corpus):
         had = incomplete(corpus)
         entry = (had.get(lang) or {}).get(celex)
         if entry is None:
