@@ -11,8 +11,9 @@ import httpx
 import pytest
 
 from app.acquire import cellar, eurlex_dump, work_trees
-from app.acquire.spec import RemoteFile
+from app.acquire.spec import Filter, RemoteFile
 from app.plugins.eurlex import from_tree, rdf
+from tests.acquire.test_cellar import _spec, _years, listing_cache, mock, no_wait  # noqa: F401
 from tests.acquire.test_eurlex_dump import FORMEX, MTD, _items, serial  # noqa: F401
 
 
@@ -243,3 +244,67 @@ def test_an_entry_recorded_before_its_state_was_is_judged_once(tmp_path, monkeyp
     assert len(eurlex_dump.incomplete_due(corpus, {"it"})) == 1 and read
     read.clear()
     assert len(eurlex_dump.incomplete_due(corpus, {"it"})) == 1 and read == []
+
+
+# ---- Q2: a due unit failing as an episode never starves the complete listing ------------------
+
+def _incomplete_corpus(tmp_path) -> Path:
+    """A dump build that left 31972R1473 (it) incomplete: its Formex body missing."""
+    from tests.acquire.test_eurlex_dump import _dump
+    corpus = tmp_path / "corpus"
+    eurlex_dump.build(_dump(tmp_path / "dump", drop="L_1972160IT.01000101.xml"), corpus, ["it"],
+                      log=lambda m: None)
+    return corpus
+
+
+def test_a_due_unit_failing_as_an_episode_never_starves_the_complete_listing(tmp_path, serial, mock,  # noqa: F811
+                                                                             monkeypatch):
+    """Reproduced: Cellar answering 500 on the one unit the dump lacked
+    (`_get`'s attempts spent: an episode, no verdict) — 50 passes, the due
+    list every time, the complete listing (every new act) never once."""
+    _years(monkeypatch)
+    corpus = _incomplete_corpus(tmp_path)
+
+    def five_hundred(*a, **kw):
+        raise cellar.TransportError("cellar: 500 to L_1972160IT.01000101.xml of 31972R1473 (ITA) after 5 "
+                                    "attempts (connection timed out: deferred to the next round)")
+    monkeypatch.setattr(cellar, "fetch_unit_from_tree", five_hundred)
+    spec = _spec(mock)
+    inv = cellar.TreeInventory(corpus, "eurlex5")
+    monkeypatch.setattr(inv, "_say", lambda m: None)
+    ep = SimpleNamespace(url="https://cellar.test")
+    listed_at = None
+    for k in range(50):
+        for f in inv.list(spec.endpoints[0], spec, Filter(include=("lang=it/*", "lang=fr/*"))):
+            with pytest.raises(cellar.TransportError):
+                cellar.TREE_UNITS.fetch(ep, f, corpus / f.rel_path)
+        if mock.queries():
+            listed_at = k
+            break
+    assert listed_at == 1, "the pass after the episode lists"
+    entry = eurlex_dump.incomplete(corpus)["it"][FORMEX[0]]
+    assert entry["deferred"]["n"] == 1 and not entry.get("tried"), "an episode is no verdict"
+    at = entry["deferred"]["at"]
+    # due again once the engine's wait for a first failure (60 s) is out, and longer after the next
+    assert eurlex_dump.incomplete_due(corpus, ("it",), now=at + 59) == []
+    assert eurlex_dump.incomplete_due(corpus, ("it",), now=at + 60) == [("it", FORMEX[0], "true")]
+    due = RemoteFile(rel_path=cellar.rel_path("it", FORMEX[0]), mtime=None, remote=cellar.encode(FORMEX[0], "it"))
+    with pytest.raises(cellar.TransportError):
+        cellar.TREE_UNITS.fetch(ep, due, corpus / due.rel_path)
+    entry = eurlex_dump.incomplete(corpus)["it"][FORMEX[0]]
+    assert entry["deferred"]["n"] == 2
+    assert eurlex_dump.incomplete_due(corpus, ("it",), now=entry["deferred"]["at"] + 299) == []
+    assert eurlex_dump.incomplete_due(corpus, ("it",), now=entry["deferred"]["at"] + 300)
+
+
+def test_a_stop_on_a_due_unit_is_neither_a_verdict_nor_an_episode(tmp_path, serial, monkeypatch):  # noqa: F811
+    from app.acquire.spec import TransferAborted
+    corpus = _incomplete_corpus(tmp_path)
+
+    def stopped(*a, **kw):
+        raise TransferAborted("cellar: stopped between requests")
+    monkeypatch.setattr(cellar, "fetch_unit_from_tree", stopped)
+    due = RemoteFile(rel_path=cellar.rel_path("it", FORMEX[0]), mtime=None, remote=cellar.encode(FORMEX[0], "it"))
+    with pytest.raises(TransferAborted):
+        cellar.TREE_UNITS.fetch(SimpleNamespace(url="https://cellar.test"), due, corpus / due.rel_path)
+    assert eurlex_dump.incomplete_due(corpus, ("it",)) == [("it", FORMEX[0], "true")], "due at once"

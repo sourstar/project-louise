@@ -224,7 +224,12 @@ def test_the_endpoint_going_away_is_no_verdict(tmp_path, serial, monkeypatch):  
     monkeypatch.setattr(cellar, "fetch_unit_from_tree", down)
     with pytest.raises(cellar.TransportError):
         cellar.TREE_UNITS.fetch(SimpleNamespace(url="https://cellar.test"), remote, corpus / remote.rel_path)
-    assert eurlex_dump.incomplete_due(corpus, ("it",)) == [("it", FORMEX[0], "true")]
+    entry = eurlex_dump.incomplete(corpus)["it"][FORMEX[0]]
+    assert not entry.get("tried"), "no verdict"
+    # asked first again once the engine's wait is out (review 2026-11-21, Q2: at once,
+    # it kept the complete listing from ever running)
+    assert eurlex_dump.incomplete_due(corpus, ("it",), now=entry["deferred"]["at"] + 60) == \
+        [("it", FORMEX[0], "true")]
 
 
 def test_the_listing_says_each_window(mock):

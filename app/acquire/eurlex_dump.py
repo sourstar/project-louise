@@ -325,6 +325,9 @@ def _fold(record: dict, marks: list[dict]) -> dict:
             entry["tried"] = value
         elif kind == "state" and isinstance(value, dict):
             entry.update({k: value[k] for k in ("held", "lacks", "whole") if k in value})
+        elif kind == "deferred" and isinstance(value, dict):
+            prev = entry.get("deferred") if isinstance(entry.get("deferred"), dict) else {}
+            entry["deferred"] = {"at": value.get("at"), "n": int(prev.get("n") or 0) + 1, "why": value.get("why")}
     return record
 
 
@@ -401,11 +404,18 @@ def _record_incomplete(corpus: Path, found: dict[str, dict[str, str | None]]) ->
         _write_incomplete(corpus, had)
 
 
-def incomplete_due(corpus: Path, langs) -> list[tuple[str, str, str | None]]:
+def incomplete_due(corpus: Path, langs, *, now: float | None = None) -> list[tuple[str, str, str | None]]:
     """(lang, celex, in_force) of the recorded incomplete units of `langs`
     not held now and not tried: what the per-unit pass asks Cellar for first.
     A unit recorded to RE-FORM (held, lacking the Formex package its tree
     lists, which the dump does not give) is due while it still lacks it.
+
+    A UNIT WAITING OUT AN EPISODE IS NOT DUE (review 2026-11-21, Q2): Cellar
+    failing on it as an episode (a 5xx, a timeout — `mark_deferred`) is no
+    verdict, so it is asked again, but after the engine's wait for its n-th
+    failure (engine.retry_wait_s, the one rule of every collection's
+    backoff). Until then a single such unit kept this list non-empty pass
+    after pass, and the complete listing — every new act — never ran.
 
     A HELD UNIT'S STATE BY A STAT (review 2026-11-21, Q5: each listing read
     and parsed every held re-form unit's tree and wrapper, 0.9 ms an entry,
@@ -421,7 +431,10 @@ def incomplete_due(corpus: Path, langs) -> list[tuple[str, str, str | None]]:
     from ..plugins.eurlex import from_tree, rdf
     from ..plugins.eurlex.source import HISTORY, LANGUAGES, unit_rel
     from .cellar import lacked_packages
+    from .engine import retry_wait_s
+    import time as _time
     corpus = Path(corpus)
+    now = _time.time() if now is None else now
     bases = (str(corpus), os.path.join(str(corpus), HISTORY))
     out = []
     marks: list[tuple[str, str, str, Any]] = []
@@ -432,6 +445,10 @@ def incomplete_due(corpus: Path, langs) -> list[tuple[str, str, str | None]]:
             entry = entry if isinstance(entry, dict) else {}
             if entry.get("tried") or entry.get("fetched"):
                 continue                    # Cellar asked once for it: not again until a newer dump
+            waited = entry.get("deferred")
+            if isinstance(waited, dict) and \
+                    now < float(waited.get("at") or 0) + retry_wait_s(int(waited.get("n") or 0)):
+                continue                    # waiting out its episode: the listing has its turn
             # where it is held (`_held_at`), and its tree's identity, from one stat
             rel = unit_rel(lang, celex)
             at = sig = None
@@ -487,6 +504,14 @@ def mark_tried(corpus: Path, lang: str, celex: str, why: str) -> None:
     """A recorded incomplete unit Cellar did not give either (a failure that
     is not the endpoint going away): not asked first again."""
     _mark(corpus, [(lang, celex, "tried", why[:300])])
+
+
+def mark_deferred(corpus: Path, lang: str, celex: str, why: str) -> None:
+    """A recorded unit asked first that Cellar failed as an EPISODE (the
+    endpoint, not the unit): not due again before the engine's wait for its
+    n-th such failure (`incomplete_due`, Q2)."""
+    import time as _time
+    _mark(corpus, [(lang, celex, "deferred", {"at": _time.time(), "why": why[:300]})])
 
 
 def held_not_its_name(unit: Path, celex: str) -> list[str]:

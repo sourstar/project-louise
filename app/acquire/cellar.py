@@ -1155,7 +1155,8 @@ class TreeInventory(CellarInventory):
         Data Dump build recorded as listed and not held whole
         (eurlex_dump.INCOMPLETE), not held now and not tried — those of the
         profile's slices — with no listing at all; the complete listing once
-        none is left. A short listing is safe: nothing reads a unit absent
+        none is left, or once every one left waits out an episode (Q2:
+        eurlex_dump.incomplete_due). A short listing is safe: nothing reads a unit absent
         from it as gone from the origin (engine.py). Bulk first holds: the
         record exists only after the dump was used whole (`held_back`)."""
         from . import eurlex_dump, engine
@@ -1201,12 +1202,18 @@ class TreeUnits(CellarUnits):
         except TransportError as e:
             # a unit the dump lacked that Cellar does not give either: not
             # asked first again (eurlex_dump.mark_tried), so the complete
-            # listing has its turn; the endpoint going away is no verdict
+            # listing has its turn; the endpoint going away is no verdict,
+            # but a unit asked first waits out its episode before it is due
+            # again (eurlex_dump.mark_deferred; review 2026-11-21, Q2: one
+            # such unit kept the complete listing from ever running). A stop
+            # is neither
             from . import eurlex_dump
             from ..transfer.bucket import TransferAborted as _Aborted
-            if not _episode(e) and not isinstance(e, (TransferAborted, _Aborted)):
-                if root is not None:
+            if root is not None and not isinstance(e, (TransferAborted, _Aborted)):
+                if not _episode(e):
                     eurlex_dump.mark_tried(root, unit["lang"], unit["celex"], str(e))
+                elif remote.mtime is None:
+                    eurlex_dump.mark_deferred(root, unit["lang"], unit["celex"], str(e))
             raise
         if remote.mtime is None and root is not None:
             from . import eurlex_dump
