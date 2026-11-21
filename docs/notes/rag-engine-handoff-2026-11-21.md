@@ -1,0 +1,68 @@
+# To architecture: what the EUR-Lex5 review gives the RAG engine, 2026-11-21
+
+The operator, 2026-11-21: "Any improvement here goes to architecture to
+become part of the rag engine api." The review (eurlex-review-2026-11-21.md)
+fixed the collection in the engine's own modules. This note lists every piece
+that is the ENGINE's — a hook, a behaviour, a tool — for architecture to
+review, adopt as API, document in 06/07, rename or generalise. Nothing is
+deployed. The work is on branch `ccr-bbc107f7-4at6fd`, from 3da4f9c7 (#794).
+It goes to `main` as one PR once C11 (the XHTML reader) and P8 (chunker v4)
+land. Until then architecture can review commit by commit.
+
+## 1. Plugin protocol: new optional hooks (read with a default; absent = as before)
+
+| Hook | Where the engine reads it | What it answers | Implemented by | Commit |
+|---|---|---|---|---|
+| `superseded_ids(ref) -> list[str]` | app/discovery.py `_apply_batch` | the ids the unit was held under before (a form change moved its id): discovery retires those rows at the same locator — out of every index, validity forgotten, tombstoned with the reason | eurlex | 8c8f03de |
+| `parse_size(row) -> int \| None` | app/plugin_io.py `parse_size`, app/parallel.py `learn_parse_sizes` | the bytes a parse reads, where `size` misleads (a zip: its members unpacked, from the central directory) — the pool's admission estimate | eurlex | 15b5b5c3, 96d4bb01 |
+| `ArticleNotes.changed` (field) | app/ask/articles.py `_ended_note` | the words for "text until {day}; amended since, the amended text is not held" | the four legal refs | d39e62f1 |
+| `UnitFetcher.prepare` may raise `spec.HeldBack` | app/acquire/engine.py | a bulk that must be used first cannot be: the pass ends, said, the per-unit API never asked; `prepare` runs under the pass's listing bound and stop | eurlex (`TreeUnits`) | 0786761f, 49f59827, 8ae7ad00 |
+
+## 2. Engine behaviour changed (every collection)
+
+- **Validity chains** (app/validity.py; docs/05 amended 2026-11-21):
+  - `forget` always recomputes the chain (V1);
+  - `record` recomputes the Work a version leaves (V2);
+  - CHAIN RULE 2: a Work's last version also ends at the first day a held statement says its text changed (`first_change_detail`). Statements are dated by the FIRST version that states them, and a day from `UNDATED_FROM` (2999-01-01) names none;
+  - recorded and forgotten statements recompute the Works they target;
+  - held manifests are re-chained once by the index maintainer (`CHAIN_VERSION`, `rechain`, worker `_rechain_validity`);
+  - commits 9ca1f22c, d39e62f1, 40ecdee9. Before deploy: `tools/measure/validity_changed_since.py` per manifest. München's first count found the dating defect; the second count is under way.
+- **Parse pool** (app/parallel.py):
+  - P2: a watchdog per part; answers kept; the pool back after 300 s on probation;
+  - P7: a stop honoured within 1 s at part boundaries (`controlled`);
+  - P3: parse sizes;
+  - a `doc` task kind, plain title / sections / extra, for a bounded parse outside the stages (history on request, V5).
+- **Worker** (app/worker.py):
+  - P1: a memory deferral is never an error, and the selected row's peers are written;
+  - V6: the fts and embed marks are written only where the validity columns did not move since read;
+  - #776: a language leaving a group drops the old group's rows at the rdf stage.
+- **Discovery:** P5, a re-scan's language move drops the old group's rows before its commit (8c8f03de).
+- **Text index** (app/fts.py, app/lookahead.py):
+  - `groups_for_lang` and `stored_by_group`;
+  - P6: a `mul` record leaves the groups its chunks no longer reach;
+  - P4: an abandoned look-ahead stops its parse.
+- **Derived check:** `derived_check.verify` reads every group and its strays, and writes under a bounded `_begin` (#776).
+- **Acquisition engine** (app/acquire/engine.py):
+  - Q3: a failed fetch records the version that failed, so the backoff holds across a moved date;
+  - a held file whose newer version fails is not done.
+- **Refs store:** the column check races; it is now done under BEGIN IMMEDIATE (787261aa).
+- **Logs (O1):** app/log_file.py, rotating `/data/logs/worker.log` and `web.log`, 384 MiB at most each; the web runs through app/web_main.py. THE IMAGE MUST BE REBUILT (Dockerfile CMD).
+
+## 3. Patterns built for EUR-Lex that belong in the engine (not generic yet)
+
+Each one is proposed, not built generically. Architecture decides the API.
+
+| Pattern | Built as | Generic form proposed | Pays for |
+|---|---|---|---|
+| **Invariant 11 as a test**: every word of the origin's files in a section, a note or a kept tree | tests/test_eurlex_coverage.py (Formex, 175 real acts), the rendition's coverage test | a harness each plugin feeds with its origin files and its "kept beside" list, run on real fixtures in CI | Normattiva, LEGI, NeuRIS readers: the same 43-acts-of-175 losses were found only by this test |
+| **One unit, one document** | `superseded_ids` + `louise dev retire-superseded` (app/hold/identity.py) | a protocol rule: an id derived from anything that can change (a form, a day) declares its old ids | any plugin whose id is not the origin's own |
+| **The origin's units against their names** | tools/measure/eurlex_units_check.py (a TIFF under `.xml`, files in each other's place, a wrapper under another name) | a check every bulk-fed plugin runs on its corpus | dumps are transports, not origins |
+| **The bulk-first ledger** | eurlex_dump's incomplete record: flock'ed, append-only marks, a build lock, a per-member "the bulk cannot give it" | an engine ledger: what the bulk gave, what it cannot give (with the reason), what the API may fetch and when | NeuRIS, Normattiva (CLAUDE.md "bulk first", once a day) |
+| **History on request** | app/ask/history.py (Cellar) | hooks `versions_of(work)` and `fetch_version(...)`, the bounded fetch and parse in the engine | LEGI, Normattiva past versions |
+| **The chain measured before it moves** | tools/measure/validity_changed_since.py | the maintainer's re-derive passes count what they will move and say it before applying | every one-off re-derive |
+
+## 4. Open, on the same branch
+
+- C11: the XHTML/HTML reader's division headings, final formula, legacy footnotes.
+- P8, chunker v4: the shared legal space's ids carry the chunker version. Moving it re-keys every vector row of the four collections and their snapshots. docs/notes/legal-chunker-v4.md proposes the mechanism; that mechanism is architecture's to approve.
+- Seen, not this review's: `tests/hold/test_block_origin.py` needs `indexed_bzip2`, and `test_process_signals` needs jinja2; neither is in this sandbox.
