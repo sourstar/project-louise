@@ -88,7 +88,7 @@ def test_a_unit_held_and_current_costs_no_request_and_a_stale_one_is_fetched_tre
     unit = _held_unit(corpus, FORMEX[0], "2022-07-22T18:52:20.917+02:00")
     called = []
     monkeypatch.setattr(cellar, "fetch_unit_from_tree",
-                        lambda base, celex, lang, dest, trees=None: called.append((celex, lang, dest))
+                        lambda base, celex, lang, dest, trees=None, **kw: called.append((celex, lang, dest))
                         or cellar.Fetched(files={}, moved=7))
     remote = RemoteFile(rel_path=cellar.rel_path("it", FORMEX[0]), remote=cellar.encode(FORMEX[0], "it"),
                         mtime=cellar._epoch("2022-07-22T16:52:20Z"))
