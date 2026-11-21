@@ -12,7 +12,37 @@ _spec.loader.exec_module(settings)
 
 def test_the_reclaimer_threshold_is_the_operators():
     assert settings.DESIRED == {"memory_reclaimer_enabled": True, "memory_reclaimer_threshold": 0.95,
-                                "watchdog_idle_enabled": False}
+                                "watchdog_idle_enabled": False,
+                                # the operator, 2026-11-21: auto-upgrade off (invariant 12)
+                                "auto_upgrade_backends": False, "auto_upgrade_addons": False}
+
+
+def test_a_runtime_auto_upgrade_is_drift_whatever_the_env_says():
+    """München, 2026-11-21: runtime_settings.json held auto_upgrade_backends
+    true from the UI; it wins over LOCALAI_AUTO_UPGRADE_BACKENDS=false, and v5
+    upgraded three upstream backends by itself."""
+    live = {"memory_reclaimer_enabled": True, "memory_reclaimer_threshold": 0.95, "watchdog_idle_enabled": False,
+            "auto_upgrade_backends": True, "api_keys": ["k"]}
+    assert settings.drift(live) == {"auto_upgrade_backends": True, "auto_upgrade_addons": None}
+    fixed = settings.merged(live)
+    assert settings.drift(fixed) == {} and fixed["api_keys"] == ["k"]
+
+
+def test_the_projection_marker_is_never_written_back():
+    out = settings.merged({"addon_host_settings_authority": "owner_required", "watchdog_busy_timeout": "10m0s"})
+    assert "addon_host_settings_authority" not in out and out["watchdog_busy_timeout"] == "10m0s"
+
+
+def test_check_reads_and_writes_nothing(monkeypatch):
+    calls = []
+
+    def call(url, body=None):
+        calls.append((url, body))
+        return {"auto_upgrade_backends": True, "api_keys": ["secret"]}
+    monkeypatch.setattr(settings, "_call", call)
+    got = settings.check("http://x:1/")
+    assert calls == [("http://x:1/api/settings", None)], "one GET, no POST"
+    assert got["drift"]["auto_upgrade_backends"] is True and "api_keys" not in got and "secret" not in str(got)
 
 
 def test_only_the_managed_keys_change():

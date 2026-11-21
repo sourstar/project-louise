@@ -252,6 +252,7 @@ test -s "$ROOT/src.new/app/worker_guard.py" && grep -q "'app.worker_guard'" "$RO
 grep -q '^def apply(cfg: dict, want: dict' "$ROOT/src.new/deploy/16f/set_commands.py"            # the file's commands reach the live app, in the image's update
 grep -q 'HELD, not restarted' "$ROOT/src.new/deploy/supervise-pass.sh" && test -x "$ROOT/src.new/deploy/release-oom.sh"   # #779: a pass killed for memory is held
 grep -q '^def spans_are_exact(tok: Any) -> bool:' "$ROOT/src.new/app/chunking_legal.py"   # the legal chunker reads a text in bounded spans
+grep -q '"auto_upgrade_backends": False,' "$ROOT/src.new/deploy/vega/stage/localai_settings.py"   # LocalAI's auto-upgrade held off, at every deploy
 grep -q '^_CITE_SHORT = re.compile' "$ROOT/src.new/app/refs/normattiva.py"                        # #219 B: the citation scan
 grep -q '^SHIP_BATCH_RECORDS = 64' "$ROOT/src.new/app/pack/build.py" && grep -q '^orjson==3.13.0' "$ROOT/src.new/constraints.txt"   # #221 C+F: the records child, orjson
 grep -q '^def set_paused(name: str, paused: bool, \*, by: str = "") -> set\[str\]:' "$ROOT/src.new/app/node_state.py"   # #122 (4ef5c49): a pause records who and when
@@ -539,6 +540,14 @@ else
 fi
 docker top ix-louise-rag-worker-1 -eo pid,args | grep 'app.worker_guard' >/dev/null && echo "the guard runs the worker" \
   || { echo "no app.worker_guard process in the worker container"; exit 1; }
+say "6a'. LocalAI's runtime settings Louise depends on (deploy/vega/stage/localai_settings.py)"
+# the WatchDog's line and auto-upgrade OFF (operator, 2026-11-21: LocalAI's runtime settings,
+# written from its UI, win over LOCALAI_AUTO_UPGRADE_BACKENDS=false, and v5 upgraded three
+# upstream backends by itself): applied, idempotent, printed by its managed keys alone (the
+# object carries api_keys), and the deploy fails where LocalAI does not take them
+python3 "$ROOT/src/deploy/vega/stage/localai_settings.py" "${LOCALAI_URL:-http://127.0.0.1:30286}" \
+  || { echo "LocalAI did not take the settings Louise depends on (above)"; exit 1; }
+python3 "$ROOT/src/deploy/vega/stage/localai_settings.py" --check "${LOCALAI_URL:-http://127.0.0.1:30286}"
 say "6b. the secrets by path, the same identity"
 for c in ix-louise-rag-web-1 ix-louise-rag-worker-1; do
   docker exec "$c" sh -c 'test -z "${ADMIN_TOKEN+x}"' && echo "$c: no ADMIN_TOKEN value in the env" || { echo "$c: ADMIN_TOKEN still in the env"; exit 1; }

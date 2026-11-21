@@ -40,6 +40,22 @@ LocalAI's idle watchdog unloaded the chat model after 5 minutes without a
 request (watchdog_idle_timeout 5m0s), so the first question after a pause
 paid its load. Space is claimed through the memory reclaimer above; the busy
 watchdog (a hung backend) stays on.
+
+auto_upgrade_backends, auto_upgrade_addons → false (operator, 2026-11-21, the
+v5 swap: "auto-upgrade off"; invariant 12). The env var
+LOCALAI_AUTO_UPGRADE_BACKENDS=false is NOT enough: LocalAI's runtime settings
+(runtime_settings.json, written from its UI) win over it, and the node's
+held `"auto_upgrade_backends": true` from 2026-11-08 — v4.12.1 never acted on
+it, v5.0.1's upgrade checker did, the same morning: intel-sycl-f16-llama-cpp-
+development, intel-sycl-f16-ced and intel-transformers were upgraded by
+LocalAI itself, outside every gate (München). No Louise engine runs on them;
+the setting is held here, and the deploy applies this file and fails where
+LocalAI does not take it.
+
+    python3 deploy/vega/stage/localai_settings.py --check [URL]
+
+reads the live settings and exits 1 naming each managed key that differs,
+changing nothing.
 """
 from __future__ import annotations
 
@@ -52,14 +68,25 @@ DESIRED: dict[str, Any] = {
     "memory_reclaimer_enabled": True,
     "memory_reclaimer_threshold": 0.95,
     "watchdog_idle_enabled": False,
+    "auto_upgrade_backends": False,
+    "auto_upgrade_addons": False,
 }
+#: what GET answers that POST must not be handed back: v5.0.1's projection
+#: marker while its add-on owner is on (core/http/endpoints/localai/settings.go)
+NOT_SETTINGS = ("addon_host_settings_authority",)
 
 
 def merged(current: dict[str, Any], desired: dict[str, Any] = DESIRED) -> dict[str, Any]:
-    """`current` with the desired keys set, every other key untouched."""
-    out = dict(current)
+    """`current` with the desired keys set, every other key untouched (and
+    no projection marker, `NOT_SETTINGS`)."""
+    out = {k: v for k, v in current.items() if k not in NOT_SETTINGS}
     out.update(desired)
     return out
+
+
+def drift(current: dict[str, Any], desired: dict[str, Any] = DESIRED) -> dict[str, Any]:
+    """The managed keys whose live value is not the desired one: key → live."""
+    return {k: current.get(k) for k, v in desired.items() if current.get(k) != v}
 
 
 def _call(url: str, body: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -83,5 +110,17 @@ def apply(base: str) -> dict[str, Any]:
     return {k: now.get(k) for k in DESIRED} | {"changed": True}
 
 
+def check(base: str) -> dict[str, Any]:
+    """The managed keys as they are live, and what differs; nothing written."""
+    current = _call(base.rstrip("/") + "/api/settings")
+    return {k: current.get(k) for k in DESIRED} | {"drift": drift(current)}
+
+
 if __name__ == "__main__":
-    print(apply(sys.argv[1] if len(sys.argv) > 1 else "http://127.0.0.1:30286"))
+    args = [a for a in sys.argv[1:] if a != "--check"]
+    base = args[0] if args else "http://127.0.0.1:30286"
+    if "--check" in sys.argv[1:]:
+        got = check(base)
+        print(got)
+        sys.exit(1 if got["drift"] else 0)
+    print(apply(base))
