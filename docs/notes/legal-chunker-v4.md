@@ -91,9 +91,23 @@ The tests:
   (tests/fixtures/eurlex/sentences/), read by the plugin's rendition reader, each
   checked verbatim against its fixture and against v3's cut.
 
+**An ordinal its next word continues is no cut** (added 2026-11-21, measured, because
+the space moves once and a v5 would move it again). On 32016R0679 and 32013R0575 from
+Cellar, a number's full stop before a capital was:
+- in German, ~470 of 488 times a date's day ("vom 8. Dezember 1986");
+- in Croatian, ~240 of 388 times an article's or paragraph's number before its act ("člankom 81.
+  Uredbe", "članka 114. UFEU-a");
+- in Slovenian, never (96 of 96 are sentence ends: "iz člena 8. V primeru").
+
+v4 refuses the cut before those words only (`AFTER_ORDINAL_V4`: the German months; the
+Croatian act nouns in the cases that follow a number, never the nominative a sentence
+opens with; "UFEU-", "UEU-"). Refusing a cut only joins two sentences, while cutting one
+breaks it. Every other ordinal before a capital is a cut as in v3 ("stavka 3. Komisija",
+a true start).
+
 **What v4 leaves as v3 had it.** Neither a capital nor an abbreviation decides these, so
 by its own rule v4 does not touch them:
-- an ordinal before a capital ("am 1. Januar", "članak 5. Uredbe") is still a cut;
+- an ordinal before any other capital is still a cut;
 - the lookahead still takes a digit;
 - sentences packed into one piece are still joined by a space.
 

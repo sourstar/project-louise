@@ -113,12 +113,15 @@ def test_the_capitals_are_capitals_of_the_named_blocks_and_hold_v3_s():
 PATTERNS_SHA256 = {"end": "06a5996d0b0c7e07e87c264f693bb0871ec413c09ff0f98f1cb3edfb7751f1b3",
                    "abbreviations": "1ac075b0ede2cc1be77dcd972e50397db00361784306d03a788f6d7350b915b4",
                    "before_number": "681359da2986a57fddc46dee1c58c2d2a4a47f57cec4e6299c5fa29063561fc2",
-                   "point": "02ff0919c338a8c13312f35c99c148add689b3f5a5846af683b73391d01a7a8e"}
+                   "point": "02ff0919c338a8c13312f35c99c148add689b3f5a5846af683b73391d01a7a8e",
+                   "ordinal": "6b50b36cdf62cfe3590cc7ec9c99feac63fd994cbc6e391a97a306d4969971a2",
+                   "after_ordinal": "5de53560b3d10c4d7cdc98b98777d59f8d0b7755002a9190c6fb2dddc96cadfb"}
 
 
 def test_v4_s_patterns_are_pinned():
     got = {"end": cl._SENTENCE_END_V4.pattern, "abbreviations": cl._ABBREVIATIONS_V4.pattern,
-           "before_number": cl._ABBREVIATIONS_V4_NUMBER.pattern, "point": cl.POINT_V4.pattern}
+           "before_number": cl._ABBREVIATIONS_V4_NUMBER.pattern, "point": cl.POINT_V4.pattern,
+           "ordinal": cl._ORDINAL_V4.pattern, "after_ordinal": cl._AFTER_ORDINAL_V4.pattern}
     assert {k: hashlib.sha256(v.encode("utf-8")).hexdigest() for k, v in got.items()} == PATTERNS_SHA256
 
 
@@ -166,6 +169,9 @@ _NEW_FORMS = re.compile("(?<![^\\s(\\[«\"„“‘'/])(?:" + "|".join(
 
 #: a Greek or Cyrillic small letter anywhere: what a point mark of v4's alone needs
 _GREEK_CYRILLIC_SMALL = re.compile("[α-ωа-я]")
+#: an ordinal its next word continues (`AFTER_ORDINAL_V4`): "vom 18. Dezember"
+_NEW_ORDINAL = re.compile("(?<![0-9.,])[0-9]{1,4}\\.\\s+(?:" + "|".join(
+    re.escape(f) for f in sorted(cl.AFTER_ORDINAL_V4, key=lambda f: (-len(f), f))) + ")")
 
 
 def _holds_something_new(text: str) -> bool:
@@ -173,7 +179,7 @@ def _holds_something_new(text: str) -> bool:
     Cyrillic small letter (a point mark of v4's): read off the text alone,
     nothing of the cut's machinery."""
     return (any(c in cl.NEW_CAPITALS_V4 for c in text) or _NEW_FORMS.search(text) is not None
-            or _GREEK_CYRILLIC_SMALL.search(text) is not None)
+            or _GREEK_CYRILLIC_SMALL.search(text) is not None or _NEW_ORDINAL.search(text) is not None)
 
 
 def test_v4_s_sentences_are_v3_s_in_every_fixture_text_that_holds_nothing_new(fixtures):
@@ -274,7 +280,10 @@ def _paragraphs(name: str) -> list[str]:
     from app.plugins.eurlex import rendition
     note = SimpleNamespace(expression_title=None, date_document=None, date_publication=None)
     act = rendition.parse_html({name: (SENTENCES / name).read_bytes()}, [name], lang="", root="", note=note)
-    return [line for _label, body in act.rendered_sections for line in body.split("\n")]
+    # the sections and the notes: the reader files footnotes in the notes
+    # (C11, 2026-11-21), which the text index cuts as the sections are cut
+    return ([line for _label, body in act.rendered_sections for line in body.split("\n")]
+            + [line for n in act.notes for line in str(n.get("text") or "").split("\n")])
 
 
 #: per language: (fixture, does v3 cut it otherwise, the paragraph's sentences as v4
@@ -316,6 +325,10 @@ GOLDEN_V4 = {
         ]),
     ],
     "de": [
+        # "vom 18. Dezember 2000": a date's day (v3: cut before the month)
+        ("32016R0679de.html", True, [
+            "(6) Verordnung (EG) Nr. 45/2001 des Europäischen Parlaments und des Rates vom 18. Dezember 2000 zum Schutz natürlicher Personen bei der Verarbeitung personenbezogener Daten durch die Organe und Einrichtungen der Gemeinschaft und zum freien Datenverkehr (ABl. L 8 vom 12.1.2001, S. 1).",
+        ]),
         ("32016R0679de.html", False, [
             "Der Schutz natürlicher Personen bei der Verarbeitung personenbezogener Daten ist ein Grundrecht.",
             "Gemäß Artikel 8 Absatz 1 der Charta der Grundrechte der Europäischen Union (im Folgenden „Charta“) sowie Artikel 16 Absatz 1 des Vertrags über die Arbeitsweise der Europäischen Union (AEUV) hat jede Person das Recht auf Schutz der sie betreffenden personenbezogenen Daten.",
@@ -394,6 +407,11 @@ GOLDEN_V4 = {
         ]),
     ],
     "hr": [
+        # "Člankom 8. stavkom 1. Povelje": an ordinal its act continues (v3: four pieces)
+        ("32016R0679hr.html", True, [
+            "Zaštita pojedinaca s obzirom na obradu osobnih podataka temeljno je pravo.",
+            "Člankom 8. stavkom 1. Povelje Europske unije o temeljnim pravima („Povelja”) te člankom 16. stavkom 1. Ugovora o funkcioniranju Europske unije (UFEU) utvrđuje se da svatko ima pravo na zaštitu svojih osobnih podataka.",
+        ]),
         ("32016R0679hr.html", True, [
             "Uredba (EZ) br. 45/2001 Europskog parlamenta i Vijeća (6) primjenjuje se na obradu osobnih podataka koju obavljaju institucije, tijela, uredi i agencije Unije.",
             "Uredba (EZ) br. 45/2001 i drugi pravni akti Unije primjenjivi na takvu obradu osobnih podataka trebali bi se prilagoditi načelima i pravilima iz ove Uredbe i primjenjivati s obzirom na ovu Uredbu.",
@@ -619,3 +637,29 @@ def test_v4_chunk_ids_carry_their_version_and_5_is_refused(word):
     assert c["id"] == "eurlex:1:0:4"
     with pytest.raises(cl.LegalChunkerError, match="versions"):
         list(cl.chunk_legal_article("eurlex:1", 1, [("Art. 1", "x")], 5, params))
+
+
+
+def test_an_ordinal_cuts_nothing_only_before_the_words_that_continue_it():
+    """Measured 2026-11-21 on 32016R0679 and 32013R0575 from Cellar: German
+    dates (~470 of 488 candidates in 32013R0575 de) and Croatian ordinals
+    before their act (~240 of 388) are not sentence ends; a sentence start
+    after an ordinal still is, and Slovenian ends its sentences there."""
+    cut = lambda t: cl._sentences(t, 4)     # noqa: E731
+    assert cut("des Rates vom 8. Dezember 1986 über den Jahresabschluss.") == \
+        ["des Rates vom 8. Dezember 1986 über den Jahresabschluss."]
+    assert cut("Bis spätestens 25. Mai 2018 teilt er dies mit.") == ["Bis spätestens 25. Mai 2018 teilt er dies mit."]
+    assert cut("in Kraft gemäß Artikel 5. Die Kommission erlässt.") == \
+        ["in Kraft gemäß Artikel 5.", "Die Kommission erlässt."]
+    for t in ("u skladu s člankom 81. Uredbe (EU) br. 1093/2010, posebno.",
+              "definiran člankom 1. stavkom 2. Direktive 2009/65/EZ Europskog parlamenta.",
+              "na odredbama članka 114. UFEU-a, koji se tumači."):
+        assert cut(t) == [t], t
+    assert cut("Za potrebe stavka 3. Komisija može provedbenim aktima.") == \
+        ["Za potrebe stavka 3.", "Komisija može provedbenim aktima."]
+    assert cut("v skladu s členom 112. Kadar je izpostavljenost preostala.") == \
+        ["v skladu s členom 112.", "Kadar je izpostavljenost preostala."]
+    assert cut("A sentence ends in 2016. Uredba applies.") == ["A sentence ends in 2016.", "Uredba applies."], \
+        "the nominative opens a sentence"
+    # v3 is v3
+    assert cl._sentences("des Rates vom 8. Dezember 1986 über.", 3) == ["des Rates vom 8.", "Dezember 1986 über."]

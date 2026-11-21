@@ -343,6 +343,31 @@ _SENTENCE_END_V4 = re.compile("(?<=[.;:])\\s+(?=[" + CAPITALS_V4 + "0-9«\"„(]
 _ABBREVIATIONS_V4 = re.compile(_V4_LEFT + "(?:" + _alternation(ABBREVIATION_FORMS_V4)
                                + "|[" + NEW_CAPITALS_V4 + "])\\.$")
 _ABBREVIATIONS_V4_NUMBER = re.compile(_V4_LEFT + "(?:" + _alternation(ABBREVIATIONS_V4_BEFORE_NUMBER) + ")\\.$")
+#: AN ORDINAL INSIDE THE SENTENCE (2026-11-21, measured on 32016R0679 and
+#: 32013R0575 from Cellar in de, hr and sl): a number's full stop before a
+#: capital ends no sentence where the number is an ordinal that the next
+#: word continues. German writes a date's day so: of the 488 such candidates
+#: of 32013R0575 de, ~470 are "vom 8. Dezember 1986"; Croatian an article's or
+#: paragraph's number before the act it is of: ~240 of 388 are "člankom 81.
+#: Uredbe", "stavka 2. Direktive", "članka 114. UFEU-a". Refused before THOSE
+#: words only: the rest of Croatian's are sentence starts ("stavka 3.
+#: Komisija …"), and Slovenian ends its sentences there ("iz člena 8. V
+#: primeru …", 96 of 96). The act nouns in the cases that follow a number
+#: (genitive, dative-locative, instrumental), never the nominative a
+#: sentence opens with; refusing a cut only joins two sentences, cutting one
+#: breaks it
+_ORDINAL_V4 = re.compile("(?<![0-9.,])[0-9]{1,4}\\.$")
+AFTER_ORDINAL_V4: tuple[str, ...] = (
+    # de: the months (and the Austrian forms)
+    "Januar", "Jänner", "Februar", "Feber", "März", "April", "Mai", "Juni", "Juli", "August",
+    "September", "Oktober", "November", "Dezember",
+    # hr: regulation, directive, decision, charter, treaty, annex, protocol, convention
+    "Uredbe", "Uredbi", "Uredbom", "Direktive", "Direktivi", "Direktivom", "Odluke", "Odluci", "Odlukom",
+    "Povelje", "Povelji", "Poveljom", "Ugovora", "Ugovoru", "Ugovorom", "Priloga", "Prilogu", "Prilogom",
+    "Protokola", "Protokolu", "Protokolom", "Konvencije", "Konvenciji", "Konvencijom",
+    # hr: the Treaties' acronyms, inflected with a hyphen ("UFEU-a", "UEU-u")
+    "UFEU-", "UEU-")
+_AFTER_ORDINAL_V4 = re.compile("(?:" + _alternation(AFTER_ORDINAL_V4) + ")(?=[\\s,;:.)\\-]|$|(?<=-))")
 #: how far back from a candidate an abbreviation is looked for: past the
 #: longest form of either version (tests/test_chunking_legal_v4.py), so the
 #: look is bounded and a long run of refused candidates stays linear
@@ -509,11 +534,14 @@ def after_abbreviation_v4(text: str, start: int, m: re.Match) -> bool:
     sees the character before `pos` (white space at `start`, which is no word
     character, as a slice's start is none) and every match ends at `endpos`
     within `_V4_LOOKBACK` — or after a form of v4's, or, before a number,
-    after one of its short forms."""
+    after one of its short forms, or after an ordinal its next word
+    continues (`_AFTER_ORDINAL_V4`)."""
     end = m.start()
     lo = max(start, end - _V4_LOOKBACK)
     if _ABBREVIATIONS.search(text, lo, end) or _ABBREVIATIONS_V4.search(text, lo, end):
         return True
+    if _ORDINAL_V4.search(text, lo, end) and _AFTER_ORDINAL_V4.match(text, m.end()):
+        return True                    # "vom 18. Dezember", "člankom 81. Uredbe"
     return (m.end() < len(text) and text[m.end()] in _V4_DIGITS
             and _ABBREVIATIONS_V4_NUMBER.search(text, lo, end) is not None)
 
