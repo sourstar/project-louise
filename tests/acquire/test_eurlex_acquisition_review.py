@@ -406,21 +406,62 @@ def test_an_item_zip_that_does_not_open_stops_the_build_and_stamps_nothing(tmp_p
     assert eurlex_dump.packages_read(corpus) == set()
 
 
-def test_a_member_that_does_not_read_stops_the_build(tmp_path, serial):  # noqa: F811
+def _bad_crc(path: Path) -> str:
+    """The first member of the zip at `path` corrupted in place: the zip
+    opens, that member's CRC-32 no longer matches. Its name."""
     import zipfile
-    from tests.acquire.test_eurlex_dump import _dump
-    corpus = tmp_path / "corpus"
-    dump = _dump(tmp_path / "dump")
-    path = dump / "datadump-it" / "LEG_IT_HTML.zip"
     with zipfile.ZipFile(path) as z:
         info = z.infolist()[0]
     data = bytearray(path.read_bytes())
-    at = info.header_offset + 30 + len(info.filename.encode()) + len(info.extra) + 10
-    data[at] ^= 0xFF                                               # its CRC-32 no longer matches
+    data[info.header_offset + 30 + len(info.filename.encode()) + len(info.extra) + 10] ^= 0xFF
     path.write_bytes(bytes(data))
-    with pytest.raises(eurlex_dump.BulkUnreadable, match="member"):
-        eurlex_dump.build(dump, corpus, ["it"], log=lambda m: None)
-    assert eurlex_dump.stamp(corpus) == {}
+    return info.filename
+
+
+def test_a_member_that_does_not_read_is_that_unit_s_the_api_s_and_the_build_completes(tmp_path, serial,  # noqa: F811
+                                                                                     monkeypatch):
+    """Coordinator, 2026-11-21 (Q6 follow-up): a member whose read fails
+    inside a zip that opens is a fact about ITS unit — the bulk cannot give
+    it — not about the bulk: holding the pass for it stalled EUR-Lex on
+    every pass for one corrupt member. The build goes on, the unit is
+    recorded for Cellar with the reason, the language is stamped."""
+    from app.acquire import datadump
+    from tests.acquire.test_eurlex_dump import HTML, _dump
+    from app.plugins.eurlex import source as src
+    corpus = tmp_path / "corpus"
+    dump = _dump(tmp_path / "dump")
+    member = _bad_crc(dump / "datadump-it" / "LEG_IT_HTML.zip")
+    assert member.startswith(HTML[1])
+    got = eurlex_dump.build(dump, corpus, ["it"], log=lambda m: None)["it"]
+    assert got["built"] == 1 and got["member-unreadable"] == 1 and got["incomplete"] == 1, got
+    assert (corpus / src.unit_rel("it", FORMEX[0]) / rdf.TREE_FILE).is_file(), "the other units landed"
+    assert not (corpus / src.unit_rel("it", HTML[0])).exists()
+    assert eurlex_dump.stamp(corpus) == {"it": "2026-11-15T01:00:00+01:00"}, "the language built, as usual"
+    why = eurlex_dump.incomplete(corpus)["it"][HTML[0]]["why"]
+    assert "LEG_IT_HTML.zip" in why and member in why and "CRC" in why, why
+    assert ("it", HTML[0], "true") in eurlex_dump.incomplete_due(corpus, ("it",)), "offered to Cellar"
+    # the pass is not held back: a newer dump with that member corrupt builds and returns
+    eurlex_dump._stamp(corpus, {"it": "2026-11-01T01:00:00+01:00"})
+    eurlex_dump._LANGS.clear()
+    eurlex_dump._MTDS.clear()
+    monkeypatch.setattr(datadump, "_DUMPS", datadump.Dumps(dump))
+    pending = [RemoteFile(rel_path=cellar.rel_path("it", HTML[0]), remote=cellar.encode(HTML[0], "it"), mtime=1)]
+    assert cellar.TREE_UNITS.prepare(pending, pending, _coll(corpus), None) == []
+    assert eurlex_dump.stamp(corpus) == {"it": "2026-11-15T01:00:00+01:00"}
+
+
+def test_one_work_s_tree_that_does_not_read_in_an_mtd_that_opens_is_counted_and_the_build_completes(
+        tmp_path, serial):  # noqa: F811
+    """Its CELEX is inside the tree that does not read, so it cannot be
+    recorded by unit: counted as a tree that does not parse is, its units the
+    listing's; the build is not held back for it."""
+    from tests.acquire.test_eurlex_dump import _dump
+    corpus = tmp_path / "corpus"
+    dump = _dump(tmp_path / "dump")
+    assert _bad_crc(dump / "datadump-it" / "LEG_MTD.zip").startswith(FORMEX[1])     # the Formex act's tree
+    got = eurlex_dump.build(dump, corpus, ["it"], log=lambda m: None)["it"]
+    assert (got["mtd-member-unreadable"], got["built"]) == (1, 1), got
+    assert eurlex_dump.stamp(corpus) == {"it": "2026-11-15T01:00:00+01:00"}
 
 
 # ---- Q7: a stop ends the build at a chunk boundary; the next build resumes after it ------------

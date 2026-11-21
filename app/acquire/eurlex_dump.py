@@ -82,13 +82,23 @@ _LG_DOC = re.compile(rb"<LG\.DOC>\s*([A-Z]{2})\s*</LG\.DOC>")
 
 
 class BulkUnreadable(HeldBack):
-    """A zip of the dump, or a member of one, that does not read (still being
-    copied, cut, corrupt). BULK FIRST (review 2026-11-21, Q6): the build
-    stops — nothing stamped, nothing recorded for the API — and the pass is
-    held back, said why (spec.HeldBack). Until then an unreadable newer MTD
-    sent the whole pass to Cellar with the bulk unused, and an unreadable
-    item zip was skipped "left to the API" with its language stamped built:
-    its units never in the dump's record, asked of Cellar by the listing."""
+    """A WHOLE zip of the dump that does not open (still being copied, cut:
+    its central directory unread). BULK FIRST (review 2026-11-21, Q6): the
+    build stops — nothing stamped, nothing recorded for the API — and the
+    pass is held back, said why (spec.HeldBack). Until then an unreadable
+    newer MTD sent the whole pass to Cellar with the bulk unused, and an
+    unreadable item zip was skipped "left to the API" with its language
+    stamped built: its units never in the dump's record, asked of Cellar by
+    the listing. A single MEMBER that does not read is not this
+    (MemberUnreadable)."""
+
+
+class MemberUnreadable(Exception):
+    """One member of a zip that opens does not read (a bad CRC-32, a cut
+    member): a fact about ITS unit — the bulk cannot give it — so the unit
+    is the API's, recorded with this reason, and the build goes on
+    (coordinator, 2026-11-21: holding the pass for it stalled EUR-Lex on
+    every pass for one corrupt member)."""
 
 
 def _unreadable(p, e: BaseException) -> BulkUnreadable:
@@ -127,12 +137,13 @@ class LangZips:
 
     def read(self, ref: tuple[int, zipfile.ZipInfo]) -> bytes:
         """The member's bytes, its CRC-32 checked; one that does not read
-        raises BulkUnreadable (Q6), never leaves its unit to the API."""
+        raises MemberUnreadable naming the zip, the member and the error."""
         i, info = ref
         try:
             return self.zips[i].read(info)
         except (zipfile.BadZipFile, OSError, EOFError) as e:
-            raise _unreadable(f"{self.paths[i]} member {info.filename}", e) from e
+            raise MemberUnreadable(f"{self.paths[i]} member {info.filename}: {type(e).__name__}: "
+                                   f"{e}"[:400]) from e
 
     def close(self) -> None:
         for z in self.zips:
@@ -668,15 +679,17 @@ def build_chunk(mtd_paths: tuple[str, ...], uuids: list[str], langs: list[tuple[
             return None
         return note if lacks_package(at, note) else None
 
-    def record(lang: str, celex: str, note, reform: bool, at: Path | None = None, held_note=None) -> None:
+    def record(lang: str, celex: str, note, reform: bool, at: Path | None = None, held_note=None,
+               why: str | None = None) -> None:
         """A unit left to the API; one to re-form with its state as found
         (`held`: its tree's identity, `lacks`: the packages it lacks), which
-        incomplete_due reads by a stat (Q5)."""
+        incomplete_due reads by a stat (Q5); `why` where the dump holds it
+        and does not give it (a member that does not read)."""
         inf = None if note.in_force is None else ("true" if note.in_force else "false")
         if not reform:
-            incomplete_found.setdefault(lang, {})[celex] = inf
+            incomplete_found.setdefault(lang, {})[celex] = {"in_force": inf, "why": why} if why else inf
             return
-        entry: dict[str, Any] = {"in_force": inf, "reform": True}
+        entry: dict[str, Any] = {"in_force": inf, "reform": True, **({"why": why} if why else {})}
         if at is not None:
             entry["held"] = _sig(at / rdf.TREE_FILE)
             entry["lacks"] = lacked_packages(at, held_note) if held_note is not None else []
@@ -684,14 +697,22 @@ def build_chunk(mtd_paths: tuple[str, ...], uuids: list[str], langs: list[tuple[
     zips = _mtd(mtd_paths)
     for uuid in uuids:
         data = None
+        cut = False
         for z in zips:
             try:
                 data = z.read(f"{uuid}/tree_non_inferred.rdf")
                 break
             except KeyError:
                 continue
-            except (zipfile.BadZipFile, OSError, EOFError) as e:
-                raise _unreadable(f"{z.filename} member {uuid}/tree_non_inferred.rdf", e) from e
+            except (zipfile.BadZipFile, OSError, EOFError):
+                # one work's tree that does not read, in an MTD that opens: as a
+                # tree that does not parse (below), counted; its CELEX is in it,
+                # so its units are the listing's, never held back for it
+                cut = True
+                break
+        if cut:
+            trees[uuid] = "mtd-member-unreadable"
+            continue
         if data is None:
             trees[uuid] = "mtd-missing"
             continue
@@ -779,8 +800,15 @@ def build_chunk(mtd_paths: tuple[str, ...], uuids: list[str], langs: list[tuple[
                     c["package-not-in-dump"] += 1
                 record(lang, celex, note, reform, at, held_note)
                 continue
-            # a member that does not read stops the build (LangZips.read, Q6)
-            files = {it.name: lz.read(held_forms[form][it.name]) for it in listed}
+            try:
+                files = {it.name: lz.read(held_forms[form][it.name]) for it in listed}
+            except MemberUnreadable as e:
+                # the dump holds it and cannot give it: the API's, with the
+                # reason; a held unit (refreshed, re-formed) stays as held
+                c["incomplete"] += 1
+                c["member-unreadable"] += 1
+                record(lang, celex, note, at is not None, at, held_note, str(e))
+                continue
             if form == "fmx4":
                 try:
                     view = formex.unpack(files)[0]      # a package read through
@@ -799,7 +827,13 @@ def build_chunk(mtd_paths: tuple[str, ...], uuids: list[str], langs: list[tuple[
                         c["incomplete"] += 1       # that form the API's (phase 2)
                         record(lang, celex, note, reform, at, held_note)
                         continue
-                    files.update({it.name: lz.read(held_forms[alt][it.name]) for it in alt_listed})
+                    try:
+                        files.update({it.name: lz.read(held_forms[alt][it.name]) for it in alt_listed})
+                    except MemberUnreadable as e:
+                        c["incomplete"] += 1
+                        c["member-unreadable"] += 1
+                        record(lang, celex, note, at is not None, at, held_note, str(e))
+                        continue
                     c["formex-not-this-act"] += 1
                 # a text in another language under this one's expression is
                 # held as the origin files it (operator, 2026-11-16, B): the
