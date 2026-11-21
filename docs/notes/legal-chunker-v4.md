@@ -191,10 +191,12 @@ steps except one new carry.
    - The bundles are exported again by the node and fetched. Alternatively, a peer runs
      the same carry over the vectors it holds: 06 §6.3's map is local.
 
-**Published?** RULE 1 allows a re-creation only for a collection that nothing official
-was published from. STATUS says so for Normattiva (2026-11-15) and for EUR-Lex4/5. For
-legi_F and NeuRIS5 it is owed from the node (their snapshots' sidecars). If either one
-was published, it becomes a sister and its predecessor stays.
+**Published? None of the four** (München, from the node's own records, read-only,
+2026-11-21). Normattiva, legi_F and NeuRIS hold one signed snapshot each (2026-10, written
+11-13 to 11-16); EUR-Lex5 holds none. None of the 124 published attestations names any
+of the four, and their manifests hold no bundles, bundle evidence, genesis imports or
+providers. The two peers last made contact on 10-21 and 10-25, before any of the snapshots.
+RULE 1 therefore re-creates all four; no sister is needed.
 
 **By the book** each of the four would instead be parsed, cut, indexed and embedded in
 full. Normattiva's ~8.2 M chunks alone, at ~30 chunks/s, take about 3 card-days
