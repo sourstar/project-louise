@@ -7,6 +7,75 @@ against the model pool (`model-pool-prior-art.md`@c572c3b); the patches and
 requests come from `model-pool-over-localai.md`@c572c3b, accepted
 2026-10-03.*
 
+*LIVE ON THE NODE since 2026-11-21 01:23:44Z: v5.0.1 with P1
+(v5.0.1-1-g105104c32; operator: "Re-patch, then update"), image tagged
+quay.io/go-skynet/local-ai:v5.0.0-gpu-intel because the TrueNAS catalog
+offers only the v5.0.0 template (app 1.1.47).*
+- *The way back: app 1.1.43 with louise-localai:v4.12.1-gpu-intel-p1
+  (992f4c6b).*
+- *`LOCALAI_AUTO_UPGRADE_BACKENDS=false` is set explicitly.*
+- *The ADD-ON OWNER is off since 01:48:33Z (operator: "Switch it off";
+  docs/notes/localai-addons.md): `LOCALAI_ADDONS_ENABLED=false`,
+  `LOCALAI_ADDONS_BACKEND_LIBRARY=false`. On by default, in local-owner mode
+  with sign-in off, it let any caller on the LAN install an unconfined
+  process as LocalAI's user, or a backend outside the calibration gates.
+  `/api/addons/resources` now answers 503. The same 96 backends, the
+  fingerprint vectors byte for byte and the rerank were held after it.*
+- *Checked before against after (München):*
+  - *96 backends, the same names and digests;*
+  - *the sixteen fingerprint texts of NeuRIS and wikipedia, 32 of 32 byte for
+    byte, the same runs;*
+  - *the reranker's scores identical;*
+  - *load_options for 5 of 5 loaded models, none changed;*
+  - *the pin back, Ask answering.*
+- *Two traps, for the next one:*
+  - *the 1.1.47 template defines `LOCALAI_DOWNLOAD_STAGING_PATH` itself, and an
+    `additional_envs` entry repeating it makes `app.upgrade` refuse;*
+  - *`app.rollback` leaves the app STOPPED (LocalAI was down 01:17-01:20Z).*
+- *A false difference to discount: v4.12.1's `/system` listed 38 `*.backup`
+  entries that lived only in the old container's layer.*
+- *v5.0.1's own endpoints tests fail 48 cases (Postgres testcontainers among
+  them) identically with and without P1: upstream's, not ours.*
+
+*Checked against v5.0.0 (2026-11-18, 1d08354) and v5.0.1 (2026-11-20,
+dd5780a), 2026-11-21, read in the source against Louise's surface:*
+- *Every endpoint Louise calls is there, its handler unchanged and behind
+  the same `adminMiddleware`:*
+  - *`/v1/embeddings`, `/v1/rerank`, `/v1/chat/completions`,
+    `/v1/completions`, `/v1/tokenize`, `/v1/models`;*
+  - *`/v1/audio/transcriptions`, `/v1/audio/speech`;*
+  - *`/system`, `/backend/shutdown`, `/models/toggle-pinned`,
+    `/api/models/config-json`, `/models/import`, `/backends`.*
+
+  *`core/schema/localai.go` only adds fields.*
+- *`backend.proto` only adds things: the `Forecast` RPC and its messages,
+  and an `api_key` field; nothing is renumbered or removed. v5.0.1 does not
+  touch it. Louise's backends (VeGa's wrapper, louise-python, the patched
+  llama.cpp builds) still speak to it.*
+- *Every environment variable the node sets is still read.
+  `LOCALAI_AUTO_UPGRADE_BACKENDS` still defaults to false, so upgrading
+  the app alone leaves every installed backend, and so every stated engine
+  (invariant 12), as it is.*
+- *The model-YAML fields Louise's models use are all read: `context_size`
+  is only realigned in `LLMConfig`. The removed fields are the agent
+  runtime's.*
+- *Fixed upstream: B3 (`pkg/model/watchdog.go`: a backend whose stop fails
+  is tracked again, "model could not be stopped, tracking it again") and B15
+  (#13186: the OCI staging falls back to the OS temp folder).*
+- *Unchanged, so still standing: B4, B11 (the reclaimer), B9 (no NaN
+  handling in `/v1/embeddings`) and B14 (upstream's llama.cpp `Embedding`
+  still ignores the token ids; P2 is ours).*
+- *v5.0's own changes are not on Louise's path:*
+  - *the agent runtime and chat page replaced (`/api/agents*` answer 404);*
+  - *Studio and Talk as add-ons;*
+  - *`backend: liquid-audio` gone;*
+  - *`LOCALAI_AGENT_POOL_*` renamed;*
+  - *its upstream llama.cpp bumped, which is not the engine our backends
+    build.*
+- *v5.0.1 adds native Windows, process liveness and downloader fixes. On
+  Linux its system-backends default resolves as before
+  (`/var/lib/local-ai/backends`).*
+
 *Checked against v4.12.1 (2026-10-27; 308 commits from v4.11.0, read in
 the source):*
 - *The watchdog and reclaimer are unchanged (`pkg/model/watchdog*.go`), and
@@ -26,7 +95,7 @@ the source):*
 |---|---|---|---|---|
 | B1 | defect | transformers backend, OpenVINO: the device test is always true, so the GPU-only settings never apply | — | not filed |
 | B2 | defect | transformers backend, OpenVINO: embedding models are re-exported at every load, so OpenVINO's compile cache never applies | — | not filed |
-| B3 | defect | watchdog: a backend whose eviction fails keeps running, no longer counted or evicted | availability | not filed |
+| B3 | defect | watchdog: a backend whose eviction fails keeps running, no longer counted or evicted | availability | **fixed in v5.0.0** (a backend whose stop fails is tracked again); live on the node since 2026-11-21 (v5.0.1) |
 | B4 | defect | memory reclaimer: memory held by another process makes it evict every model, one per 500 ms | availability: the B70 is shared | not filed |
 | B5 | defect | startup: `LOAD_TO_MEMORY` is silently ignored with `max_active_backends = 1` | — | not filed |
 | B6 | defect | distributed scheduler: evicts one model and places the new one there whether or not it now fits; an estimate of 0 skips the VRAM check | — (one node) | not filed |
@@ -37,9 +106,9 @@ the source):*
 | B12 | defect | `intel-transformers` (v4.11.0's, as the gallery installed it 2026-10-05): optimum-intel 1.15.0 imports `openvino.runtime`, which the openvino 2026.4.1 beside it no longer has, so EVERY `OVModel*` type fails to load (`ModuleNotFoundError`, checked on the node 2026-10-17). `intel-rerankers` has optimum-intel 2.2.0 and is not affected | none since louise-python (docs/notes/backend-consolidation.md, U4) | not filed |
 | B13 | defect | transformers backend, `Embedding`: prints every input in full to stderr ("Calculated embeddings for: …"), a whole document per line in LocalAI's log | — (U3) | not filed |
 | B14 | defect | llama.cpp backend, `Embedding`: ignores `EmbeddingTokens`, which `/v1/embeddings` fills when given token ids; it embeds the empty text beside them and refuses it ("Input content cannot be empty"), so no client can embed tokens | **blocking** for a space that cuts by tokens: without token ids an input cannot always be cut to exactly its first N tokens (3 of 512 at 1,024 on the AMD peer); P2 | not filed; found 2026-10-18, source in §B14 |
-| B15 | defect | `v4.12.1`: backend downloads are staged at `${basepath}/downloading` = `//downloading`, unwritable by LocalAI's user, so every backend install and auto-upgrade fails | backend updates (the operator wants them); set `LOCALAI_DOWNLOAD_STAGING_PATH` | not filed; §B15 |
+| B15 | defect | `v4.12.1`: backend downloads are staged at `${basepath}/downloading` = `//downloading`, unwritable by LocalAI's user, so every backend install and auto-upgrade fails | backend updates (the operator wants them); set `LOCALAI_DOWNLOAD_STAGING_PATH` | **fixed in v5.0.0** (#13186: staging falls back to the OS temp folder); live on the node since 2026-11-21 (v5.0.1) |
 | B16 | defect | llama.cpp backend (llama-server's code): never runs the encoder of an encoder-decoder model; a T5-family GGUF is decoded as if decoder-only and answers garbage (`<2cs><2cs>…`) | MADLAD cannot run on llama.cpp, so it runs on torch (17–38 s cold); P3 | upstream llama.cpp #5763 / #26565, no fix; §P3 |
-| **P1** | **patch we carry** | `GET /system` lists the options each loaded model was given, with their hash | none since VeGa: the wrapper receives `LoadModel` itself (vega.md §1). It was blocking for the model pool; kept for upstream. NOT in the node's LocalAI (v4.12.1, upstream core; München 2026-11-12): its `/system` rows carry no `load_options`, so Louise reads a model's options from the answering run's statement (`model_load.note_run_options`) | not filed; [`deploy/localai/patches/0001-system-list-load-options.patch`](../../deploy/localai/patches/0001-system-list-load-options.patch) |
+| **P1** | **patch we carry** | `GET /system` lists the options each loaded model was given, with their hash | none since VeGa: the wrapper receives `LoadModel` itself (vega.md §1). It was blocking for the model pool; kept for upstream. IN the node's LocalAI again since 2026-11-21 (v5.0.1 + P1, cherry-picked as 105104c32; operator: "Re-patch, then update"): its `/system` rows carry `load_options` (5 of 5 loaded models, as the runs state them). Before it, v4.12.1 upstream core carried none, and Louise read a model's options from the answering run's statement (`model_load.note_run_options`), as it still can | not filed; [`deploy/localai/patches/0001-system-list-load-options.patch`](../../deploy/localai/patches/0001-system-list-load-options.patch) |
 | **P2** | **patch we carry** | llama.cpp backend: `Embedding` embeds `EmbeddingTokens`, with the special tokens a text gets (B14) | **blocking** for the token cut: VeGa's wrapper sends a cut as its first tokens to a backend that embeds them (`Gate._probe`) | not filed; [`deploy/localai/patches/0002-llama-cpp-embed-token-ids.patch`](../../deploy/localai/patches/0002-llama-cpp-embed-token-ids.patch) |
 | **P3** | **patch we carry** | llama.cpp backend: the encoder of an encoder-decoder model runs (B16), as a llama.cpp patch in the backend's own `patches/` | MADLAD on llama.cpp (operator, 2026-10-27: "we need anyway a patched llama.cpp") | not filed; [`deploy/localai/patches/0003-llama-cpp-encoder-decoder.patch`](../../deploy/localai/patches/0003-llama-cpp-encoder-decoder.patch) |
 | **P4** | **patch we carry** | llama.cpp backend: encoder-decoder slots are encoded together, in WAVES, and decode in one batch (on P3, which ran one slot) | MADLAD on llama.cpp at torch's speed: a question's 7 languages in one wave instead of 7 × 3 s | not filed; [`deploy/localai/patches/0004-llama-cpp-encoder-decoder-waves.patch`](../../deploy/localai/patches/0004-llama-cpp-encoder-decoder-waves.patch) |
