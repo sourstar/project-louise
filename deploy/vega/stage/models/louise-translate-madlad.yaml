@@ -39,6 +39,7 @@
   "threads": 6,
   "known_usecases": ["completion"],
   "options": [
+    "fit:off",
     "parallel:7",
     "cache_ram:0",
     "ubatch:1024"

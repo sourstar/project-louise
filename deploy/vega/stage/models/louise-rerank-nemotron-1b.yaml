@@ -31,6 +31,7 @@
   "mmap": true,
   "name": "louise-rerank-nemotron-1b",
   "options": [
+    "fit:off",
     "parallel:1",
     "cache_ram:0",
     "ubatch:3072"

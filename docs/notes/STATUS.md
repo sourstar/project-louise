@@ -20,6 +20,13 @@ measured (published figures disagree).
 
 ### 2026-11-21
 
+- **A — the series moved to LocalAI v5.0.1** (operator, 2026-11-21, after the report below): base
+  `dd5780a` (llama.cpp `78e0529`); P1, P2 unchanged; P3–P6 regenerated on the new llama.cpp with LocalAI's own
+  patch applied first, code unchanged, every hunk exact; P7 deleted (in the base). `fit:off` in every llama.cpp
+  encoder, reranker and MADLAD YAML. Not built, not deployed: München's steps are in
+  [llama-cpp-update-2026-11-21.md](llama-cpp-update-2026-11-21.md) §8 — build, the series' checks, room before
+  every load (a buffer that does not fit is refused now), the re-gate of every space, the 35B measured with and
+  without the MoE cache.
 - **What updating the llama.cpp backend to LocalAI 5.0.1's pin gains — the report** (operator: "run unattended,
   give me a report later"): [llama-cpp-update-2026-11-21.md](llama-cpp-update-2026-11-21.md). For the 35B MoE: the
   SYCL device-side MoE scheduler (#30156: prefill +23 % at 2k tokens, +136 % at short prompts, B60) and the completed

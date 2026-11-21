@@ -144,3 +144,57 @@ releases v5.0.0 and v5.0.1, `backend/cpp/llama-cpp/` at v5.0.1 and at our
 base `16acc89`. Our patches: `deploy/localai/patches/`, their inner
 llama.cpp diffs extracted and applied with `git apply --3way` and
 `patch -p1 --dry-run` on the three trees.
+
+## 8. The operator chose A (2026-11-21) — done on the repository side
+
+- **The series** (`deploy/localai/patches/series`): base LocalAI v5.0.1
+  `dd5780aa904d132c784867d37fc713df8d984c8a` (llama.cpp `78e0529`). P1, P2
+  unchanged; P3–P6 regenerated on `78e0529` with LocalAI's own
+  `0001-add-server-task-type-score.patch` applied first, the way
+  `prepare.sh` applies `patches/` (`ls` order, `patch -p1`): added and
+  removed lines identical, context and offsets refreshed, every hunk exact
+  on a fresh tree; `git am` of the six succeeds on a fresh v5.0.1. P7
+  deleted (in the base). Each regenerated patch's message carries the
+  rebase line. `tests/test_localai_patches.py` holds series, files and
+  localai-bugs.md to each other.
+- **`fit:off`** in the options of every llama.cpp-backed encoder, reranker
+  and MADLAD YAML (13 files, `deploy/vega/stage/models/`): LocalAI's backend
+  defaults `fit_params` to true at both bases. The chat YAMLs set layers
+  and context and are left alone.
+- **A refused load is already a deferral**: `app/embeddings.py` treats any
+  endpoint answer that is not an input refusal as the endpoint's — busy or
+  wrong — never the document's (CLAUDE.md), so the BMG VRAM check's
+  `nullptr` → LocalAI's load error → `EndpointDeferred`. No app change.
+
+### For München, on the node, in a granted window
+
+1. Build: `sh deploy/localai/llama-cpp/build.sh sycl_f16 <out>` from this
+   branch — the tag is the new series digest (`NAME_ONLY=1` prints it). The
+   build applies the series with `git am` and LocalAI builds llama.cpp
+   `78e0529` with `patches/` through `prepare.sh`. Then the stage package
+   (`deploy/vega/stage/build_vega_package.sh`) as for every engine.
+2. The series' checks on the new engine, before any model serves: P2's
+   `embedding_tokens_test`; P3/P4: MADLAD 379/379 and in-wave equal to
+   alone (the `0003`/`0004` entries of localai-bugs.md); P5:
+   `test-backend-ops -o MUL_MAT -p "type_a=f16,type_b=f32"` 0 FAIL on the
+   card, and the KQ shapes; P6: `test-chat`.
+3. Room BEFORE every load: the resident budget must hold (`louise node
+   resident show`), since a buffer that does not fit is now refused, not
+   spilled; keep `GGML_SYCL_BMG_VRAM_CHECK` at its default 1. The first
+   loads after the deploy: with the card emptied (node paused), one model
+   at a time, each read from the driver.
+4. Re-gate every space (invariant 12): the gate runs per encoder and
+   reranker on first use; expect bytes to move for some (#31465, #32213) —
+   the gate says `exact` / `near-exact` / fail, nothing is forced.
+5. Measure, then record (docs/notes/measuring.md §6): the 35B on the new
+   engine (prefill and decode at 128 and 2048 prompt tokens, against the
+   11-03 figures 606.5 / 92.2 tok/s), then the 35B under the MoE cache
+   (`--cpu-moe`, `moe_cache_mib` 4096 and 8192, `moe_cache_cpu_share` 0 and
+   0.5): footprint, tok/s, hit rate (`scripts/moe-cache-tune.py`), host RAM
+   — the row that decides whether the wanted set fits. Then
+   `GGML_SYCL_MMID_SCHED=0` once, to see the scheduler's share.
+6. MADLAD's f32 KV cache: one run of the F16 cache's S1 case on the new
+   engine (#31536) — kept at f32 unless it passes.
+7. The spill's speed, if the operator wants it measured: one timed 35B
+   switch with `GGML_SYCL_BMG_VRAM_CHECK=0` on that model alone and
+   `GGML_SYCL_MEMTRACE=1`, the card otherwise idle; then back to 1.

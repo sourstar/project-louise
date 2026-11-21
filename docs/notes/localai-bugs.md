@@ -49,7 +49,7 @@ the source):*
 | **P10 (staged; LIVE on its own backend)** | **patch staged, built into a separate backend, LIVE 2026-11-11** | llama.cpp: nvidia/llama-nemotron-rerank-1b-v2 ranks (`LlamaBidirectionalForSequenceClassification`: bidirectional Llama 3.2 1B, mean-pooled, a `score` head). Ported from ggml-org/llama.cpp#24083 (open) onto ddf48f8: converter class, the optional `cls.output` in llama-embed, BOS for a rerank template's prompt; this base pools before the head when the GGUF says classifier pooling mean, so no graph change | the reranker benchmark's arm A3 (operator, 2026-11-10: "Patch llama.cpp to support nemo reranker, tomorrow I want to see its benchmarks too") | upstream #24083 open; [`deploy/localai/patches/staged/0008-llama-cpp-nemotron-rerank.patch`](../../deploy/localai/patches/staged/0008-llama-cpp-nemotron-rerank.patch), built only from [`staged/nemotron-rerank.series`](../../deploy/localai/patches/staged/nemotron-rerank.series) into its own backend; joins the series only if A3 earns it. A3 earned it (operator, 11-11: B): the `[reranker]` of five collections on `louise-sycl-f16-llama-cpp-9d17b8a39845` (STATUS 11-11); joining the main series waits for the next engine change |
 | **P11 (staged)** | **patch staged, not in the series yet** | llama.cpp backend: CONTEXT ON DEMAND — a model loaded with the option `context_on_demand` keeps its weights, and a request that carries `metadata.keep_context_ms` has its context (KV cache and compute buffers) freed that long after its answer; the next request creates it again. A request that carries none leaves the context loaded, as ever (the option `keep_context_ms:N` gives such requests a keep). No RPC reads the `llama_context` any more (it is null while the model is idle) | the card holds ~34 GB of models on 32.6 GB, ~10 GB of it context that works seconds a day (operator, 2026-11-11: "when llama.cpp gets a request it allocates the context memory; when the processing is done it frees it"; "Implement it") — [idle-context-brief.md](idle-context-brief.md) | not filed — PREPARED for the operator to file himself (2026-11-11: "prepare everything for upstream, I will upload it eventually"; [`deploy/localai/upstream/llama-cpp-context-on-demand/`](../../deploy/localai/upstream/llama-cpp-context-on-demand/READING-GUIDE.md), [`localai-context-on-demand/`](../../deploy/localai/upstream/localai-context-on-demand/READING-GUIDE.md)); [`deploy/localai/patches/staged/0009-llama-cpp-context-on-demand.patch`](../../deploy/localai/patches/staged/0009-llama-cpp-context-on-demand.patch), built only from [`staged/context-on-demand.series`](../../deploy/localai/patches/staged/context-on-demand.series); CPU checks passed 2026-11-11, card gates not run |
 | **P6** | **patch we carry** | llama.cpp (common/chat): Command R7B / Command A ("Command 3") tool calls are parsed by llama.cpp's own Cohere2 MoE parser; before, the autoparser preserved `<\|START_THINKING\|><\|END_THINKING\|><\|START_ACTION\|>` as ONE token string, the server dropped the three markers, and every R7B tool call was an HTTP 500 | Command R7B as a chat candidate (operator, 2026-11-03: "B, check vllm parser before reinventing") | **to file at ggml-org/llama.cpp as a PR** once proven on the node (#20786, closed unreproduced, was this); [`deploy/localai/patches/0006-llama-cpp-chat-cohere-command3.patch`](../../deploy/localai/patches/0006-llama-cpp-chat-cohere-command3.patch); in the series since 2026-11-06: engine ea2417d91dcc, every live model byte-identical, every gate passed |
-| **P7** | **upstream, carried ahead of the pin** | llama.cpp (ggml-sycl, dmmv.cpp): upstream's "sycl: dmmv code cleanup" (ggml-org/llama.cpp#31325, commit 5e18eb02, merged 2026-11-02, after our pin ddf48f8): the q8_0 reorder dmmv folded into the generic template, the non-K launchers templated, +41/−411, "a no-op for performance" | the operator, 2026-11-07: "Add the patch 1 as well", in the same engine as the B70 AOT build and the pinned Intel stack, so every space is gated once | **upstream**; drops out of the series when LocalAI's pin passes 5e18eb02; [`deploy/localai/patches/0007-llama-cpp-sycl-dmmv-cleanup.patch`](../../deploy/localai/patches/0007-llama-cpp-sycl-dmmv-cleanup.patch); gated with the a+b engine (quantized dmmv bytes can move: the chat models' decode) |
+| **P7** (retired 2026-11-21) | **upstream, in the base** | llama.cpp (ggml-sycl, dmmv.cpp): upstream's "sycl: dmmv code cleanup" (ggml-org/llama.cpp#31325, commit 5e18eb02, merged 2026-11-02, after our pin ddf48f8): the q8_0 reorder dmmv folded into the generic template, the non-K launchers templated, +41/−411, "a no-op for performance" | the operator, 2026-11-07: "Add the patch 1 as well", in the same engine as the B70 AOT build and the pinned Intel stack, so every space is gated once | **upstream**; dropped from the series 2026-11-21: LocalAI v5.0.1's llama.cpp `78e0529` carries 5e18eb02; was [`deploy/localai/patches/0007-llama-cpp-sycl-dmmv-cleanup.patch`](../../deploy/localai/patches/0007-llama-cpp-sycl-dmmv-cleanup.patch); gated with the a+b engine (quantized dmmv bytes can move: the chat models' decode) |
 | R1 | request | a response header naming the backend instance (pid and start time) that answered | optional: the model pool checks before and after instead | not filed |
 | R2 | request | a batched `Embedding` call: one backend call for N texts, where `/v1/embeddings` now makes N in sequence | only if the node measures a loss (model-pool-over-localai.md@c572c3b §8.2) | not filed |
 | R3 | request | read API keys from a file, not only from `LOCALAI_API_KEY` | only if LocalAI's own UI is published (invariant 8) | not filed |
@@ -458,6 +458,26 @@ their code unchanged, and pass the P3/P4 CPU checks again at `ddf48f8` (each
 entry below). The series as committed applies with no fuzz and no rejected
 hunk at every level. P6 and P9 (staged) are NOT rebased yet.
 
+**Base since 2026-11-21: LocalAI v5.0.1
+[`dd5780a`](https://github.com/mudler/LocalAI/tree/dd5780aa904d132c784867d37fc713df8d984c8a)**
+(`LLAMA_VERSION` `78e0529`, llama.cpp of 2026-11-18). Operator, 2026-11-21,
+choice A: the series moves to the latest backend
+(docs/notes/llama-cpp-update-2026-11-21.md says what it gains). P1 and P2
+apply unchanged. P3, P4, P5 and P6 were regenerated on llama.cpp `78e0529`
+with LocalAI's own `0001-add-server-task-type-score.patch` applied first, as
+its `prepare.sh` does (`ls patches`, `patch -p1`): their added and removed
+lines are identical, only context lines and hunk offsets moved (P4: two
+hunks had taken fuzz around upstream's per-task LoRA handling; P6: two in
+`tests/test-chat.cpp`). Applied that way on a fresh `78e0529` every hunk is
+exact, and `git am` of the six on a fresh v5.0.1 succeeds. The former P7 is
+in the base and retired (below). The series' own checks — P2's
+`embedding_tokens_test`, P3's 379/379 MADLAD decode and P4's in-wave
+equality, P5's `test-backend-ops` case, P6's chat tests — are run on the
+node before the engine serves anything (every space re-gated, invariant
+12). Every encoder, reranker and MADLAD YAML now carries `fit:off`: LocalAI's
+backend defaults `fit_params` to true at both bases, and a model's placement
+must not depend on what else was on the card when it loaded.
+
 **The series digest — what an engine is named by** (`build.sh`: the series
 file's bytes, then each patch's, in order; first twelve hex of the sha256).
 `NAME_ONLY=1 sh deploy/localai/llama-cpp/build.sh <variant> <out>` prints it
@@ -678,7 +698,7 @@ refused, as before.
 
 ### P3. llama.cpp backend: the encoder of encoder-decoder models runs
 
-*Base: master `16acc89` (llama.cpp `ddf48f8`) since 2026-11-02, re-anchored,
+*Base since 2026-11-21: LocalAI v5.0.1 (`dd5780a`, llama.cpp `78e0529`), context refreshed, code unchanged (above). Before:* *master `16acc89` (llama.cpp `ddf48f8`) since 2026-11-02, re-anchored,
 the code unchanged; `v4.12.1` (`ec92740`) before. After P1 and P2. File:
 `0003-llama-cpp-encoder-decoder.patch`. It adds
 `backend/cpp/llama-cpp/patches/0003-server-encoder-decoder.patch`, a
@@ -758,7 +778,7 @@ as one JSON prompt (translator-choice.md, "Code changes").
 
 ### P4. llama.cpp backend: encoder-decoder slots are encoded in waves
 
-*Base: master `16acc89` (llama.cpp `ddf48f8`) since 2026-11-02: two hunks
+*Base since 2026-11-21: LocalAI v5.0.1 (`dd5780a`, llama.cpp `78e0529`), context refreshed, code unchanged (above). Before:* *master `16acc89` (llama.cpp `ddf48f8`) since 2026-11-02: two hunks
 re-placed by hand in `release()` and in the loop that picks the generating
 slots, around upstream's new audio-stream and realtime conditions, the code
 unchanged; `v4.12.1` (`ec92740`) before. After P1–P3. File:
@@ -930,7 +950,7 @@ oneMKL path. The f32 cache stays until the P5 tar passes its gates.
 
 ### P5. llama.cpp backend (ggml-sycl): the batched F16 matmul converts src1 for the GEMM that runs
 
-*Base: master `16acc89` since 2026-11-02 (unchanged bytes; at `ddf48f8` its
+*Base since 2026-11-21: LocalAI v5.0.1 (`dd5780a`, llama.cpp `78e0529`), context refreshed, code unchanged (above). Before:* *master `16acc89` since 2026-11-02 (unchanged bytes; at `ddf48f8` its
 hunks apply with offsets, no fuzz); `v4.12.1` (`ec92740`) before. After P1–P4 (independent of them: a ggml-sycl
 file). File: [`deploy/localai/patches/0005-llama-cpp-sycl-batched-mul-mat-src1.patch`](../../deploy/localai/patches/0005-llama-cpp-sycl-batched-mul-mat-src1.patch),
 which adds `backend/cpp/llama-cpp/patches/0005-sycl-batched-mul-mat-src1-strides.patch`
@@ -1129,7 +1149,7 @@ SET_ROWS,GET_ROWS` on the node for F32, which the device store relies on.
 
 ### P6. llama.cpp (common/chat): Command R7B / Command A tool calls parse
 
-*Base: master `16acc89` (llama.cpp `ddf48f8`), after P1–P5 (independent of
+*Base since 2026-11-21: LocalAI v5.0.1 (`dd5780a`, llama.cpp `78e0529`), context refreshed, code unchanged (above). Before:* *master `16acc89` (llama.cpp `ddf48f8`), after P1–P5 (independent of
 them: common/chat). File:
 `deploy/localai/patches/0006-llama-cpp-chat-cohere-command3.patch`,
 which adds `backend/cpp/llama-cpp/patches/0008-chat-cohere-command3-parser.patch`
@@ -1182,7 +1202,16 @@ difference = the full re-gate). (2) Command R7B walked (no `tools_failed`)
 and piloted (15 answers), read before any whole run.
 
 
-### P7. llama.cpp (ggml-sycl, dmmv.cpp): upstream's dmmv cleanup, carried ahead of the pin
+## Patches retired into the base
+
+*A patch leaves the series when upstream merges it (above). Its entry stays
+here, with its verification, for the record.*
+
+### P7. llama.cpp (ggml-sycl, dmmv.cpp): upstream's dmmv cleanup, carried ahead of the pin — RETIRED 2026-11-21
+
+*Retired with the move to LocalAI v5.0.1 (llama.cpp `78e0529`, which carries
+upstream's 5e18eb02); `0007-llama-cpp-sycl-dmmv-cleanup.patch` deleted from
+the series. What follows is the entry as it stood.*
 
 *Base: master `16acc89` (llama.cpp `ddf48f8`), after P1–P6 (independent of
 them: dmmv.cpp only; P5 is in ggml-sycl.cpp). File:

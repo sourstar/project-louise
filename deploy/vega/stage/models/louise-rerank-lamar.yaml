@@ -18,6 +18,7 @@
   "mmap": true,
   "name": "louise-rerank-lamar",
   "options": [
+    "fit:off",
     "parallel:1",
     "cache_ram:0",
     "ubatch:2560"
