@@ -375,8 +375,16 @@ def stage_rdf(con, row, collection) -> None:
     with parallel.controlled(stop=_parse_stop()):
         metas = parallel.metadata_for_rows(collection, [row, *peers])
     ok, first = metas[0]
+    lead = row
     if not ok:
-        parallel.raise_for(first)            # unguarded: its failure IS the round's
+        if not _deferred_row(first) or not any(o for o, _m in metas[1:]):
+            parallel.raise_for(first)        # unguarded: its failure IS the round's
+        # THE SELECTED ROW DEFERRED (P1 of the 2026-11-21 review): it stays
+        # pending, untouched, and costs itself — never its batch, which a
+        # large act deferred round after round would otherwise hold back for
+        # as long as the lane is busy. The first peer that answered leads
+        i = next(i for i, (o, _m) in enumerate(metas) if o)
+        lead, first = peers[i - 1], metas[i][1]
     # THE WRITE LOCK BEGINS HERE, not before the parse (CLAUDE.md: long
     # non-DB work stays outside the transaction). The pool round trip above
     # is the batch's long part — 51.7 s for 2,000 documents, measured on the
@@ -389,14 +397,14 @@ def stage_rdf(con, row, collection) -> None:
     if not con.in_transaction:               # direct callers wrap the stage
         con.execute("BEGIN IMMEDIATE")
     left: dict[str, list[int]] = {}       # group -> the documents whose language left it
-    entries = [_rdf_one(con, row, collection, plugin, now, meta=first, left=left)]
+    entries = [_rdf_one(con, lead, collection, plugin, now, meta=first, left=left)]
     # the origin's inconsistencies each read met (06 §6.1, amended
     # 2026-10-25), recorded in this same transaction for the codes the read
     # checks — `None` when a plugin's lazy read says nothing about them
-    found = [(row["uid"], first["issues"])] if first.get("issues") is not None else []
+    found = [(lead["uid"], first["issues"])] if first.get("issues") is not None else []
     n = 1
     for peer, (ok, meta) in zip(peers, metas[1:]):
-        if not ok:
+        if not ok or peer is lead:
             continue                        # a peer never fails the round
         try:
             entries.append(_rdf_one(con, peer, collection, plugin, now, meta=meta, left=left))
@@ -410,7 +418,7 @@ def stage_rdf(con, row, collection) -> None:
                                checked=plugin_io.metadata_checks(plugin), now=now)
     # a sister reading a shared text index copies these documents' marks once
     # this commits (`_execute_step`, text_index.parsed)
-    _committed.rdf = [row["uid"], *(p["uid"] for p in peers)]
+    _committed.rdf = [*([row["uid"]] if lead is row else []), *(p["uid"] for p in peers)]
     # the rows of a language's old group go, that writer committed before the
     # marks (as the catalog below): a rollback leaves rdf pending, and the
     # next pass finds the same old language and deletes again (a no-op)
@@ -423,8 +431,10 @@ def stage_rdf(con, row, collection) -> None:
     took = time.monotonic() - t0
     sizing.sizer().record(_batch_key(collection, "rdf"), n, took)
     _batch_log(con, "rdf", collection,
-               f"extracted {n} documents in one transaction ({took:.1f}s)",
-               docs=n, secs=took, emit=n > 1)
+               f"extracted {n} documents in one transaction ({took:.1f}s)"
+               + ("" if lead is row else f"; {row['uid']} deferred, left pending "
+                                         f"({str(metas[0][1].get('msg', ''))[:200]})"),
+               docs=n, secs=took, emit=n > 1 or lead is not row)
 
 # Every peer query carries the row's ROWID (`rid`): the marks find each row
 # by it (`_MARK_INDEXED`), never by a descent of the uid index.
@@ -822,6 +832,10 @@ def drop_fts_ahead(collection=None) -> None:
 #: the uids a stage's batch wrote, for what runs after its commit
 #: (`_execute_step`): the shared text index's pushes (app/text_index.py)
 _committed = threading.local()
+#: whether this thread's last step was deferred for MEMORY (`_execute_step`):
+#: its pipeline thread waits WORKER_IDLE_SLEEP before it selects again, where
+#: a row the pool cannot take now would otherwise be asked for in a loop
+_deferral = threading.local()
 
 
 def _parse_stop():
@@ -831,6 +845,13 @@ def _parse_stop():
     (scheduling.md pitfall 16). Read at call time: a test's or a reload's
     events are the ones in force."""
     return _AnyStop(_stop, _parse_held)
+
+
+def _deferred_row(err) -> bool:
+    """A per-row result the pool deferred — the large lane or the pool's
+    memory (MemoryWait), or its batch stopped (Stopped): the row is left
+    pending, untouched, and the batch's other rows are written."""
+    return isinstance(err, dict) and err.get("type") in ("MemoryWait", "Stopped")
 
 
 def _reads_shared(collection) -> bool:
@@ -955,12 +976,24 @@ def stage_fts(con, row, collection) -> None:
         entities_of[r["uid"]] = value["entities"]
         return value["chunks"]
     first_row, (ok, first) = computed[0]
+    rest = computed[1:]
+    deferred = None                     # the selected row, deferred (P1)
     if not ok:
-        parallel.raise_for(first)
+        if not _deferred_row(first) or not any(o for _r, (o, _v) in rest):
+            parallel.raise_for(first)
+        # THE SELECTED ROW DEFERRED (P1 of the 2026-11-21 review): it stays
+        # pending, untouched, and costs itself — never its batch, which a
+        # large act deferred round after round would otherwise hold back for
+        # as long as the lane is busy. The first peer that answered leads; the
+        # deferred row goes back to the look-ahead with the rows not written
+        deferred = (first_row, first)
+        i = next(i for i, (_r, (o, _v)) in enumerate(rest) if o)
+        first_row, (ok, first) = rest[i]
+        rest = rest[i + 1:]
     chunks = _unpack(first_row, first)
     batch = [(first_row, chunks)]
     n_chunks = len(chunks)
-    for peer, (ok, peer_value) in computed[1:]:
+    for peer, (ok, peer_value) in rest:
         # the chunk cap, and the batch's own size: what the look-ahead hands
         # over is whole links, and may hold more rows than a batch takes
         if n_chunks >= budget or len(batch) >= want:
@@ -1046,8 +1079,11 @@ def stage_fts(con, row, collection) -> None:
     _batch_log(con, "fts", collection,
                f"indexed {len(batch)} documents / {n_chunks} chunks in one commit ({took:.1f}s: "
                f"parse {parse_s:.1f}, index {index_s:.1f}, the rest {max(0.0, took - parse_s - index_s):.1f}"
-               + (", parsed ahead)" if ahead else ")"),
-               docs=len(batch), chunks=n_chunks, secs=took, emit=len(batch) > 1, waited=parse_s)
+               + (", parsed ahead)" if ahead else ")")
+               + (f"; {deferred[0]['uid']} deferred, left pending ({str(deferred[1].get('msg', ''))[:200]})"
+                  if deferred else ""),
+               docs=len(batch), chunks=n_chunks, secs=took, emit=len(batch) > 1 or deferred is not None,
+               waited=parse_s)
 
 #: how long a collection's embed stage stays idle before its encoder's pin
 #: is restored (app/model_pins.py): the idle boundary of the stage (two
@@ -4647,6 +4683,7 @@ def _execute_step(con, collection, stage, row) -> bool:
     """
     t0 = time.time()
     _committed.rdf = _committed.fts = ()
+    _deferral.memory = False
     if stage not in _NO_OUTER_TRANSACTION:
         con.execute("BEGIN IMMEDIATE")
     try:
@@ -4675,6 +4712,19 @@ def _execute_step(con, collection, stage, row) -> bool:
             db.log_event(con, "info", stage,
                          f"{stage} interrupted — the node is stopping, or its mode no longer "
                          f"parses; the document is untouched ({e})"[:500])
+            return False
+        if isinstance(e, parallel.MemoryWait):
+            # A DEFERRAL, NEVER AN ERROR (P1 of the 2026-11-21 review): the
+            # large lane or the pool's memory could not take the selected row
+            # now, and `error=…, retries=1` took the large acts out of every
+            # selection. The row stays pending, untouched. A memory KILL is a
+            # MemoryWait too (MemoryKilled): the worker's hold is already
+            # written and its stop begun (app/oom_hold.py, `_on_oom_kill`);
+            # nothing of it is written on the document either
+            _deferral.memory = True
+            db.log_event(con, "warn", stage,
+                         f"{stage} deferred — {e}; the document is untouched and will be "
+                         f"retried"[:500], row["uid"])
             return False
         if manifest_contended(e):
             # Another writer had the manifest. Nothing is wrong with this
@@ -5356,7 +5406,8 @@ def _pipeline_worker(collection, gone: threading.Event) -> None:
                         last_idle = time.time()
                     time.sleep(config.WORKER_IDLE_SLEEP)
                     continue
-                if _execute_step(con, collection, stage, row) and stage == "fts":
+                did = _execute_step(con, collection, stage, row)
+                if did and stage == "fts":
                     # A document just became embeddable. ANNOUNCE it (§10,
                     # B2) instead of leaving the encoder rotation to find
                     # out on its next sweep: a collection that becomes
@@ -5364,6 +5415,11 @@ def _pipeline_worker(collection, gone: threading.Event) -> None:
                     # a whole rotation to say so.
                     sched.scheduler().demand(embed_resource(collection),
                                              collection.name)
+                elif not did and getattr(_deferral, "memory", False):
+                    # the selected row deferred for memory with nothing else
+                    # written (P1): the same row is the next selection, so the
+                    # pool is given an idle beat to free room, never a loop
+                    time.sleep(config.WORKER_IDLE_SLEEP)
             except Exception as e:   # noqa: BLE001 — a pipeline thread must outlive any step
                 if manifest_contended(e):
                     # a writer outside _execute_step's own handling (queue
