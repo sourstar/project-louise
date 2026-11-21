@@ -67,6 +67,7 @@ What is here, and why it is kept:
 | `madlad-bugs-report.md` | the report of every bug found in the MADLAD-on-llama.cpp development (2026-10-27 → 28), one row each: where, what, how found, status ours and upstream, record; the earlier B70 bugs re-examined; what was not a bug |
 | `localai-bugs.md` | every action item for the LocalAI team in one place: the defects found while studying its scheduler (with line references and how sure each is), the patches we carry (`deploy/localai/patches/`) and the requests — for the operator to file upstream |
 | `localai-addons.md` | LocalAI 5.0.1's Add-ons (supervised add-ons, and digest-pinned backend libraries) evaluated against Louise's deployment: what fits (our backends from a backend library), what does not (Louise as an add-on), and the add-on owner open on the node with sign-in off |
+| `llama-cpp-b70-upstream-2026-11-21.md` | llama.cpp's SYCL commits since our pin ddf48f8, read for the B70: the MoE speed-up for the 35B-A3B chat, the VRAM-check behaviour change, the AOT >4 GB flag |
 | `STATUS.md`, `implementation-prompts.md` | where things stood at the last update, and the task prompts used to build them |
 | `migration-plan.md` | DELETED 2026-10-08, the last step landed: `git show 7f84d44:docs/notes/migration-plan.md`; what it left open is in STATUS.md |
 
