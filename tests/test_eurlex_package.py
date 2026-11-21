@@ -28,11 +28,19 @@ PKG = "31972R1473.ita.fmx4.zip"
 XHTML = "L_1972160IT.01000101.doc.html"
 
 
+#: the package's members' modification time: fixed, as a package Cellar serves
+#: has one. A member written by name takes the clock's (zipfile stamps
+#: `time.localtime()`, two-second DOS time), so two calls a boundary apart
+#: gave other bytes: the re-form test compared the package the dump held with
+#: one built after it, and failed about 1 run in 30
+_STAMP = (2026, 11, 15, 1, 0, 0)
+
+
 def _package(files: dict[str, bytes] | None = None) -> bytes:
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
         for n, b in (files if files is not None else _items(FX)).items():
-            z.writestr(n, b)
+            z.writestr(zipfile.ZipInfo(n, date_time=_STAMP), b, compress_type=zipfile.ZIP_DEFLATED)
     return buf.getvalue()
 
 
@@ -56,6 +64,17 @@ def _scoped(mtd: bytes) -> bytes:
 
 def _note(mtd: bytes):
     return from_tree.notice(rdf.scope(rdf.read(mtd), "ITA"), "ITA", CELEX)
+
+
+def test_the_package_fixture_is_the_same_bytes_whatever_the_clock(monkeypatch):
+    """The re-form test's flake (1 run in 30): the package was rebuilt after
+    the dump had landed one, and the clock had moved past a two-second
+    boundary between them. Its members' time is now the fixture's own."""
+    import time
+    first = _package()
+    real = time.time
+    monkeypatch.setattr(time, "time", lambda: real() + 3600)
+    assert _package() == first
 
 
 # ---- reading a package ---------------------------------------------------------------------
