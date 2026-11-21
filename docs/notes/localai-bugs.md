@@ -53,9 +53,20 @@ dd5780a), 2026-11-21, read in the source against Louise's surface:*
   touch it. Louise's backends (VeGa's wrapper, louise-python, the patched
   llama.cpp builds) still speak to it.*
 - *Every environment variable the node sets is still read.
-  `LOCALAI_AUTO_UPGRADE_BACKENDS` still defaults to false, so upgrading
-  the app alone leaves every installed backend, and so every stated engine
-  (invariant 12), as it is.*
+  `LOCALAI_AUTO_UPGRADE_BACKENDS` still defaults to false.*
+- *CORRECTED the same day (München): the env var is NOT enough. LocalAI's
+  runtime settings (`runtime_settings.json`, written from its UI) win over
+  it. The node's held `"auto_upgrade_backends": true` from 2026-11-08:
+  v4.12.1 never acted on it, but v5.0.1's upgrade checker did, the same
+  morning. LocalAI itself upgraded intel-sycl-f16-llama-cpp-development,
+  intel-sycl-f16-ced and intel-transformers, outside every gate, and logged
+  "upgrade available" for about twelve more. No Louise engine runs on them:
+  every model the repo stages is on a `vega-louise-*` or `louise-sycl-*`
+  backend, and a changed engine states another run, which Louise refuses
+  per answer (invariant 1). Now `auto_upgrade_backends` and
+  `auto_upgrade_addons` are held false by
+  deploy/vega/stage/localai_settings.py, which the deploy applies and
+  checks (step 6a'), failing where LocalAI does not take them.*
 - *The model-YAML fields Louise's models use are all read: `context_size`
   is only realigned in `LLMConfig`. The removed fields are the agent
   runtime's.*
