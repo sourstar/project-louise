@@ -634,17 +634,43 @@ def _act_of(celex: str) -> str:
 #: an original's CELEX (sector 3) and its year
 _ORIGINAL_YEAR = re.compile(r"^3(\d{4})")
 #: the year of the OJ a wrapper's PUBLICATION.REF names
-_PUB_YEAR = re.compile(rb"<PUBLICATION\.REF\b.*?<DATE ISO=\"(\d{4})\d{4}\"", re.S)
+#: the OJ a wrapper is of, by its OWN NAME — "L_1998326HR.01003501.doc.xml"
+#: is OJ L 326 of 1998, "P_1959007HR.01018501.doc.xml" OJ P 7 of 1959 (a
+#: Croatian Special Edition's file keeps the original OJ's name) — else its
+#: PUBLICATION.REF's date, that element exactly (2026-11-22, München: the old
+#: `PUBLICATION\.REF\b` also matched PUBLICATION.REF.SE and ran on to the
+#: act's adoption DATE, 1958-12-22, refusing 31959R0005 and 31964D0732 hr)
+_OJ_NAME_YEAR = re.compile(r"^[A-Z]{1,2}_(\d{4})\d{3}")
+_PUB_YEAR = re.compile(rb"<PUBLICATION\.REF(?=[\s>])[^>]*>(?:(?!</PUBLICATION\.REF>).)*?"
+                       rb"<DATE ISO=\"(\d{4})\d{4}\"", re.S)
 
 
-def own_wrapper(names, celex: str | None, read) -> str:
+def oj_year(name: str, data: bytes) -> int | None:
+    """The year of the OJ a wrapper is of (`_OJ_NAME_YEAR`, `_PUB_YEAR`)."""
+    m = _OJ_NAME_YEAR.match(name.rsplit("/", 1)[-1])
+    if m:
+        return int(m.group(1))
+    m = _PUB_YEAR.search(data)
+    return int(m.group(1)) if m else None
+
+
+def own_wrapper(names, celex: str | None, read, listed=None) -> str:
     """The wrapper of THIS act's text among a manifestation's items: the only
     one, or — several (München, 2026-11-16: a Croatian Special Edition
     volume, one fmx4 manifestation whose items are the files of two acts
     sharing its FIN.ID, 1,241 Croatian works) — the one whose NO.CELEX is the
     act's own, and only when exactly one is. The other act's files stay items
     of the unit (the origin lists them under this manifestation: invariant
-    11); only this one is read. `read(name)` gives a wrapper's bytes."""
+    11); only this one is read. `read(name)` gives a wrapper's bytes.
+
+    `listed`: the names the expression's own tree lists for its Formex
+    manifestation (a package's members counted as listed). The ORIGIN'S
+    LISTING OUTRANKS A LABEL inside one of its files (2026-11-22, München:
+    31958D1006(02) en, the decision printed a second time at OJ P 17/1958
+    p. 419, its wrapper's NO.CELEX saying (01); Cellar lists these exact
+    files as (02)'s): a lone wrapper the tree lists is this act's whatever
+    its NO.CELEX names — the caller says the disagreement — and an OJ older
+    than the act still refuses it."""
     wrappers = sorted(n for n in names if is_wrapper(n))
     if not wrappers:
         raise FormexError("no wrapper (….doc.xml) among the manifestation's items")
@@ -657,12 +683,13 @@ def own_wrapper(names, celex: str | None, read) -> str:
         if celex:
             data = read(w)
             stated = {m.group(1).decode() for m in _NO_CELEX.finditer(data)}
-            if stated and _act_of(celex) not in {_act_of(x) for x in stated}:
+            in_tree = listed is not None and w in listed
+            if stated and _act_of(celex) not in {_act_of(x) for x in stated} and not in_tree:
                 raise FormexError(f"the only wrapper {w} names {', '.join(sorted(stated))}, not {celex}")
             year = _ORIGINAL_YEAR.match(celex)
-            pub = _PUB_YEAR.search(data)
-            if year and pub and int(pub.group(1)) < int(year.group(1)):
-                raise FormexError(f"the only wrapper {w} is of an OJ of {pub.group(1)}, older than the act "
+            pub = oj_year(w, data)
+            if year and pub is not None and pub < int(year.group(1)):
+                raise FormexError(f"the only wrapper {w} is of an OJ of {pub}, older than the act "
                                   f"{celex}")
         return w
     want = (celex or "").encode()
@@ -673,8 +700,13 @@ def own_wrapper(names, celex: str | None, read) -> str:
     return own[0]
 
 
-def wrapper_of(files: dict[str, bytes], celex: str | None = None) -> tuple[str, ET.Element]:
-    name = own_wrapper(files, celex, files.__getitem__)
+def wrapper_labels(data: bytes) -> set[str]:
+    """The NO.CELEX a wrapper states (`own_wrapper`)."""
+    return {m.group(1).decode() for m in _NO_CELEX.finditer(data)}
+
+
+def wrapper_of(files: dict[str, bytes], celex: str | None = None, listed=None) -> tuple[str, ET.Element]:
+    name = own_wrapper(files, celex, files.__getitem__, listed)
     return name, _parse(files[name], name)
 
 
@@ -980,11 +1012,11 @@ def attributes_of(root: ET.Element) -> list[list]:
     return [[e.tag, dict(e.attrib)] for e in root.iter() if isinstance(e.tag, str) and e.attrib]
 
 
-def parse(files: dict[str, bytes], celex: str | None = None) -> Act:
+def parse(files: dict[str, bytes], celex: str | None = None, listed=None) -> Act:
     """The manifestation's items by name → the act (`celex`'s, where the
     items hold more than one act: `own_wrapper`). Raises FormexError when
     the wrapper, the body or an annex it names is missing or unreadable."""
-    wname, wrapper = wrapper_of(files, celex)
+    wname, wrapper = wrapper_of(files, celex, listed)
     # A FILE UNDER ANOTHER'S NAME is never read as what its name says: the
     # record would be another file's text in its place, every check passing
     wrong = not_its_name(files, wrapper, wname)

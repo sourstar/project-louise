@@ -156,3 +156,39 @@ def test_a_lone_wrapper_of_another_act_is_not_this_act_s():
     base = {**files, w: files[w].replace(b"<BIB.DOC>", b"<BIB.DOC><NO.CELEX>32016R0997</NO.CELEX>", 1)}
     assert formex.own_wrapper(base, "02016R0997-20200101", base.__getitem__) == w
     assert formex.own_wrapper(base, "32016R0997R(01)", base.__getitem__) == w
+
+
+def test_a_wrapper_s_oj_is_read_from_its_name_never_from_the_act_s_date():
+    """München, 2026-11-22: 31959R0005 and 31964D0732 hr (Croatian Special
+    Edition packages) refused as "of an OJ of 1958/1963, older than the
+    act": the year read was the act's ADOPTION date, the regex running from
+    PUBLICATION.REF.SE to BIB.DOC's DATE. The OJ is the file's own name."""
+    assert formex.oj_year("P_1959007HR.01018501.doc.xml", b"") == 1959
+    assert formex.oj_year("L_1998326HR.01003501.doc.xml", b"") == 1998
+    se = (b'<DOC><BIB.DOC><NO.CELEX>31959R0005</NO.CELEX><DATE ISO="19581222">22.12.1958</DATE></BIB.DOC>'
+          b'<PUBLICATION.REF.SE><COLL>DD</COLL><DATE ISO="20130701"/></PUBLICATION.REF.SE></DOC>')
+    assert formex.oj_year("wrapper.doc.xml", se) is None, "PUBLICATION.REF.SE is no PUBLICATION.REF"
+    oj = b'<DOC><PUBLICATION.REF FILE="x"><COLL>L</COLL><DATE ISO="20160623">23.6.2016</DATE></PUBLICATION.REF></DOC>'
+    assert formex.oj_year("wrapper.doc.xml", oj) == 2016
+    files = _files("32016R0997_en")
+    w = next(n for n in files if formex.is_wrapper(n))
+    sen = {**{n: b for n, b in files.items() if n != w}, "P_1959007HR.01018501.doc.xml": se}
+    assert formex.own_wrapper(sen, "31959R0005", sen.__getitem__) == "P_1959007HR.01018501.doc.xml"
+
+
+def test_the_origin_s_listing_outranks_the_wrapper_s_label():
+    """München, 2026-11-22: 31958D1006(02) en, the decision printed a second
+    time (OJ P 17/1958 p. 419; (01) at p. 390), its wrapper's NO.CELEX
+    saying (01), Cellar's tree listing these files as (02)'s. Listed by the
+    tree: this act's. Not listed: refused as before. An OJ older than the
+    act refuses it either way (the hr acts of 2009-11 holding a 1998 act's
+    package)."""
+    files = _files("32016R0997_en")
+    w = next(n for n in files if formex.is_wrapper(n))
+    other = {**files, w: files[w].replace(b"<BIB.DOC>", b"<BIB.DOC><NO.CELEX>32016R0997(01)</NO.CELEX>", 1)}
+    with pytest.raises(formex.FormexError, match=r"names 32016R0997\(01\), not 32016R0997\(02\)"):
+        formex.own_wrapper(other, "32016R0997(02)", other.__getitem__)
+    assert formex.own_wrapper(other, "32016R0997(02)", other.__getitem__, listed={w}) == w
+    assert formex.parse(other, "32016R0997(02)", listed={w}).articles
+    with pytest.raises(formex.FormexError, match="older than the act"):
+        formex.own_wrapper(other, "32019R0001", other.__getitem__, listed={w})

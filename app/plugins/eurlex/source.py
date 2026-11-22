@@ -292,6 +292,9 @@ ISSUES = {
                             "is held and takes no part in the validity filter",
     "item-not-held": "the Formex wrapper names a file the expression's manifestation does not list: "
                      "the record holds the rest, and names it",
+    "formex-wrapper-names-another-act": "the act's lone Formex wrapper names another CELEX as its "
+                                        "NO.CELEX, and the expression's own tree lists it as this act's: "
+                                        "the origin's listing is read (31958D1006(02), printed twice)",
     "formex-not-this-act": "the expression's Formex holds no wrapper of this act (none naming its "
                            "CELEX, or only other acts'): the text is read from the next form the "
                            "tree lists; the Formex items are held beside it",
@@ -822,9 +825,19 @@ class EurlexSource:
         except formex.FormexError as e:
             raise UnindexableDocument(f"{unit}: {e}") from None
         form = "fmx4" if any(formex.is_wrapper(n) for n in view) else _form_held(note, files)
+        # the Formex items the expression's own tree lists, a listed package's
+        # members with it: the origin's word on which files are this act's
+        # (formex.own_wrapper `listed`; 31958D1006(02))
+        tree_fmx = {it.name for it in note.items.get("fmx4", []) if it.name}
+        listed = tree_fmx | {m for m, pkg in packed.items() if pkg in tree_fmx}
         if form == "fmx4":
             try:
-                formex.own_wrapper(view, celex, view.__getitem__)
+                own = formex.own_wrapper(view, celex, view.__getitem__, listed)
+                labels = formex.wrapper_labels(view[own])
+                if labels and formex._act_of(celex) not in {formex._act_of(x) for x in labels}:
+                    found.append(Issue("formex-wrapper-names-another-act",
+                                       f"{own} names {', '.join(sorted(labels))}; the expression's tree lists "
+                                       f"it as {celex}'s, which is read"))
             except formex.FormexError as e:
                 # no wrapper of THIS act (München, 2026-11-16: 32011R0540 hr,
                 # 32004D0382 bg/ro …): its text from the next form the tree
@@ -837,7 +850,7 @@ class EurlexSource:
         stated_lang = notice_mod.CODE_OF.get(note.display_language or "", lang)
         try:
             if form == "fmx4":
-                act = formex.parse(view, celex)
+                act = formex.parse(view, celex, listed)
                 for name in act.missing:
                     found.append(Issue("item-not-held", f"{act.wrapper_file} names {name}"))
             elif form in ("xhtml", "html"):
