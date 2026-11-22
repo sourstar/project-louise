@@ -443,6 +443,19 @@ successor).
 | the manifests, text indexes and SEARCHED vector tables | random, queries | | ssd4 |
 | origins, SHARDs, bundles, exports | sequential, archive | | tank, then tank1 |
 
+*Restated 2026-11-22* (the operator, choosing the claim index's seek table, B):
+"we can consider 2 kind of caching on storage devices: 1. disk cache (ssd3,
+SSD technology caching HDD, big but slower than nvem anyway much faster than
+mechanical hdd; use it for things like parsing, indexing, anything that can
+benefit from copying large amount of data from hdd) 2. RAM cache (ssd5, nvem
+gen5, the fastest storage device we have. the indexing caching currently
+stored in RAM for instance? But this is more your call)". So what a process
+would otherwise hold decoded in its heap — an index it looks up at random —
+goes to ssd5, mmapped, and its pages are the page cache's and the ARC's, never
+the heap's. The first index moved out of the web's heap by it: the claim
+index's seek table (app/hold/claim_index.py), which replaced every part's pack
+index held decoded (+485 MiB a question, München).
+
 **Which kind goes where** is app/derived.py's `FILES`, by how a kind is READ:
 the four packs are decompressed archives; everything else is read at random or
 memory-mapped. A pack on ssd3 costs a parse only where the parse waits on it:
@@ -555,3 +568,21 @@ tank is never touched; the downloads stay there without expiry (2026-11-14).
   network file's cookie, and tank is a local pool.
 - A new reader of a bulk file asks whether it reads at random or more than once.
   If it does, it opens the file through `staged`.
+
+## 12. ssd4 is for LanceDB only (operator, 2026-11-22)
+
+"Ssd4 is for lancedb only." Today ssd4 (`/mnt/ssd4/apps/louise-rag`) also
+holds what §10's table puts there with the vector tables: every collection's
+manifest (`state/manifest.sqlite`, the authoritative state, SQLite WAL), its
+text indexes (`index/`, tantivy), the rest of its `state/` (the share caches,
+the runs), the node's `state/` (`node.sqlite`, trust, `new/`,
+`cpu-reference/`), acquisition `staging/` and `hub/`, and `config/` and
+`secrets/`. Each of those moves off it. Where each goes is put to the operator
+as options, from München's read-only inventory (sizes, free space on ssd3 and
+ssd5, the manifests' write rate), with these constraints:
+- the authoritative state never goes to a cache (invariant 6: the archive and
+  the authoritative state never go under `LOUISE_CACHE_DIR`);
+- ssd3 is QLC (Samsung 870 QVO, an 18 GB SLC cache, 158 MiB/s past it, §9),
+  and a manifest is random small writes;
+- a text index is derived but costs days to rebuild for pubmed: it moves as
+  the same bytes (RULE 1), never rebuilt.
