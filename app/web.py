@@ -3859,48 +3859,12 @@ def _p2p_refresh_async(collection, key: str) -> None:
 
 
 def _p2p_compute(collection) -> dict | None:
-    """`_p2p_summary`'s value, computed (~0.4 s for 1,600 parts warm; the
-    coverage over every part after a bundle lands)."""
-    from contextlib import closing
-    codex = collection.codex
-    now = time.time()
-    out: dict | None = None
-    try:
-        from app.hold import collection as col
-        from app.share import contribute, counting, coverage as cov, peers, seeder
-        root = collections_mod.louise_root() / "collections"
-        snap = seeder.cached_snapshot(col.shard_dir_of(root, collection.name))
-        if snap is not None and (root / collection.name / "state" / "manifest.sqlite").is_file():
-            with closing(cov.manifest(root, collection.name)) as mcon:
-                rows = cov.rows(mcon)
-                view = cov.shards_view(codex, snap, rows, now=now,
-                                       **counting.view_kwargs(root, collection.name, codex, mcon, rows))
-                chunks = sum(v["chunks"] for v in view)
-                covered = sum(v["covered"] for v in view)
-                accepted = [r for r in rows if r["accepted_at"]]
-                out = {"parts": len(view), "open": sum(1 for v in view if v["open"]),
-                       "covered_pct": round(100.0 * covered / chunks, 1) if chunks else 0.0,
-                       "from_here": sum(r["chunks"] for r in accepted if r["source"] == cov.LOCAL),
-                       "from_peers": sum(r["chunks"] for r in accepted if r["source"] != cov.LOCAL),
-                       "leads": None, "left": None, "peers": 0}
-                try:
-                    from app import identity
-                    own = identity.own()
-                except Exception:   # noqa: BLE001 — the web may hold no key: the bounty line stays
-                    own = None
-                if own:
-                    with closing(peers.connect()) as ncon:
-                        ncon.execute("PRAGMA busy_timeout = 250")
-                        live = cov.live_peers(codex, ncon, now=now, own_key=own,
-                                              own_benchmarks=cov.own_benchmarks(root, collection.name, codex, own))
-                    out["peers"] = len(live)
-                    if live and out["open"]:
-                        lead = contribute.leaders(codex, snap, mcon, live=live, now=now)
-                        out["leads"] = sum(1 for k in lead.values() if k == own)
-                        out["left"] = sum(1 for k in lead.values() if k is not None and k != own)
-    except Exception:   # noqa: BLE001 — a card line, never a failed page
-        out = None
-    return out
+    """`_p2p_summary`'s value, computed IN A CHILD PROCESS of its own
+    (app/library_p2p.py; 2026-11-22: the refreshes, pure Python in this
+    process, cost 9 of a warm page's 10.6 s by holding the GIL every request
+    waits for)."""
+    from . import library_p2p
+    return library_p2p.compute(collection)
 
 
 @admin_router.get("/library/{name}/terms")
