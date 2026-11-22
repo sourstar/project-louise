@@ -424,11 +424,41 @@ Also in `phase3/GAPS`: NeuRIS's missing CPU reference (the gate will meet it
 at cut-over too; Legal's collection), qwen3-4b's repro bound (3 h at window
 8191).
 
-**Second pass (the rebuilt engine):**
+**Second pass — the rebuilt engine `c3294e050ff2`, München 2026-11-22,
+07:25–10:27Z (M): everything that ran PASSED.** Node paused at every one of
+the 18 rows (`phase3-r/holders.txt`: mode and holders per row), web
+stopped, OCR paused. The only refusal is NeuRIS's gate, for want of a
+CPU-reference copy — the collection's, not the engine's. P11 is counted
+now and the gates admit the run.
 
-| model | gate | bytes vs live | throughput live → new | Δ | source |
-|---|---|---|---|---|---|
-| | | | | | |
+| encoder (collection) | gate | repro, 3 loads × 2 passes + sweep 512 | throughput, median, new vs phase 0 | 16 fingerprints, bytes vs live |
+|---|---|---|---|---|
+| bge-m3 (wikipedia) | **PASS** | bit-identical 528/528 | 1.203 s vs 1.238 (−2.8 %) | 16/16 identical |
+| nemotron-3-embed-1b (NeuRIS) | refused: no CPU-reference copy for the collection | bit-identical 528/528 | 1.28 s vs 1.33 (−3.8 %) | 16/16 identical |
+| qwen3-embedding-4b (gutenberg) | **PASS** | bit-identical 528/528, in 78 min (3 h bound) | 4.285 s vs 4.374 (−2.0 %) | 16/16 identical |
+| medcpt-query (pubmed) | **PASS** | bit-identical 528/528 | 0.35 s vs 0.360 (−2.8 %) | 16/16 identical |
+
+**louise-rerank-nemotron-1b** on the rebuilt engine loads, and: parity
+against torch (20 queries, `nemotron_rerank_parity.py`) **pass** —
+same_top1 1.0, median and min τ 1.0, max |Δ| 0.049, the engine reproduces
+itself; p50 354 ms per query, the first query 7.6 s cold. `rerank_bench`,
+175 queries, concurrency 1: Q3 cold 175/175 and warm 175/175; **scores
+identical to phase 0's live warm run in 175/175 lists (max |Δ| 0.0)**;
+median 2,468 ms warm / 2,461 cold against 2,512 (−1.8 %); total 481.7 s
+against 491.0. (The script's comparison line printed `None` — wrong field
+names; München read the jsonl directly: a small tool defect to fix.)
+
+**NeuRIS's reference gap (F5, the collection's):** the node store holds
+nemotron's CPU reference for the same weights (wikidata's, carried to
+legi_F), but the gate reads only per-collection copies. The operator
+cancelled a one-off copy and ordered that the engine resolve a reference
+per model through its API and inherit it at creation, with no
+per-collection code — with the architecture session now; NeuRIS waits for
+it, and will meet the same refusal at cut-over until then.
+
+Files: `/root/measure/qual-2026-11-21/phase3-r/` (`log.txt`,
+`holders.txt`, `parity.json`, `qual-r-p3-rr/`). The node restored to
+`running`, the web up; phase 4 starts when Legal's CPU jobs end.
 
 ### Phase 4 — the 35B
 
