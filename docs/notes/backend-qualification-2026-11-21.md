@@ -40,7 +40,11 @@ bge-m3, medcpt-query.
 
 Every phase writes under `/root/measure/qual-2026-11-21/<phase>/` on the
 node: the command, its stdout, the driver's memory reads, `GET /system`
-before and after, free space before and after. A phase's figures come back
+before and after, free space before and after. **Every timed row carries
+the node's MODE (`paused` is the only one measuring.md §10 allows for a
+speed figure) and the card's other holders at its start, from the driver**
+(added 2026-11-22 after F3: a reboot handed the mode back to `running` and
+a loaded card was compared with a paused one). A phase's figures come back
 here as a table with their source file; the note's tables below are filled
 from them.
 
@@ -288,11 +292,31 @@ would be cut; none in what is kept. Read here: both servers post
 `NEXT_RESPONSE` while a slot is processing, so P4's 50 ms gather is
 re-entered every ms on both — the loop's wait is not the mechanism; the
 BMG VRAM check runs on model-buffer allocations only — not per request.
-**So F3 is in the wave/slot path itself**, and the next measurement is
-the per-request breakdown (wall, prompt eval, eval/token, the residual
-server wait) on T4 for: the new engine as is; with `LLAMA_ENC_DEC_WAVE_MS=0`;
-with `parallel:1`; and the live engine as reference. Graph-off and
-check-off controls dropped.
+The per-request breakdown on T4 (München, 03:31Z, **the node in mode
+`running` — the worker shared the card; comparable among themselves, not
+with phase 0's paused rows**; `phase2/f3/t4-*.row.json`):
+
+| run | median wall | prompt eval ms | eval ms/token | tokens | residual wait ms | vs P3 / vs torch |
+|---|---|---|---|---|---|---|
+| live engine | 1.19 s | 45.3 | 43.7 | 10 | 758 | 375/379 / 345 |
+| new engine, as is | 1.26 s | 39.9 | 41.3 | 16.5 | 429 | 375/379 / 345 |
+| new, `LLAMA_ENC_DEC_WAVE_MS=0` | 1.11 s | 52.6 | 44.8 | 11 | 409 | 375/379 / 345 |
+| new, `parallel:1` | 1.31 s | 73.2 | 62.9 | 10 | 569 | 375/379 / 345 |
+| new, the pilot of 3 (card still free) | 0.50 s | 18.5 | 16.9 | 25 | 33 | 18/18 |
+
+**Reading: F3 is most likely LOAD, not the engine.** Under the same
+running node the two engines are within 6 %; the pilot on the new engine
+reads the paused-card speed (0.50 s, 16.9 ms/token); the residual waits
+are the worker's share of the card. Phase 2's MADLAD run on the new engine
+(00:1x–00:39Z, after the reboot) is suspected to have run with the node
+back in `running` — asked of München; if so it compared a loaded card
+against phase 0's paused one. **A paused rerun** of the four rows and of
+the two 6400 controls (the loaded controls read bge-m3 2.23 s and nemotron
+3.26 s against phase 0's 1.24 / 1.33 — load) is queued after the night's
+deploy and decides F3: within 5 % → closed, phase 2 fully green. Lesson
+written into the protocol: every timed row carries the node's mode and the
+card's other holders at its start — a reboot can hand the mode back to
+`running` unnoticed. Graph-off and check-off controls dropped.
 
 **Conditions changed between phases**: the host's DDR5 runs at **6400
 MT/s** since the operator's second reboot (2026-11-21 ~22:31Z, EXPO;
