@@ -65,17 +65,19 @@ one.
 
 ```
 louise hold
-  collection  new <plugin> --recipe FILE --name N --encoder URL --cpu-model T [--api A] [--embed-model M]
+  collection  new <plugin> --recipe FILE --name N --encoder URL [--cpu-model T] [--api A] [--embed-model M]
                                                                        A NEW COLLECTION, ONE WORKFLOW (operator, 2026-11-06): case A of docs/notes/new-collection.md,
                                                                        its steps declared in app/hold/workflow.py, every input from the recipe: resolve (the recipe's
                                                                        ctx, cut, instruction, set, weights, engine; the CPU twin must state a CPU run of the weights);
                                                                        check (an existing collection of that name held to the recipe by space_id, engine and set,
                                                                        before anything is measured); calibrate against the twin (the CPU lane kept in the node's
-                                                                       store); tolerance (the recipe's must be the measured one); make; cpu-reference from the store;
+                                                                       store); tolerance (the recipe's must be the measured one); make; cpu-reference, INHERITED where the
+                                                                       node's store holds the space's key, else made once for the node (operator, 2026-11-22; the CPU
+                                                                       twin is the encoder's model with -cpu unless --cpu-model names it);
                                                                        gate. Exit 0 only on a pass; embedding stays off. Kept: <collection>/state/calibration.json and
                                                                        the run's progress, <LOUISE_ROOT>/state/new/<name>.json (run again: a done step is checked, not
                                                                        redone). A space.query.encoder is case B, refused until phase 3; the other cases: the note
-              new <plugin> --recipe FILE --name N --re-create --cpu-model T [--sample N] [--encoder URL] [--api A] [--embed-model M] [--dry-run]
+              new <plugin> --recipe FILE --name N --re-create [--cpu-model T] [--sample N] [--encoder URL] [--api A] [--embed-model M] [--dry-run]
                                                                        case F, A RE-CREATION (RULE 1; added 2026-11-07, normattiva): the collection held under --name is the
                                                                        predecessor; the recipe must make its space_id and its records (another engine, refused otherwise,
                                                                        before anything is measured); its endpoint, model and platform image are the predecessor's unless
@@ -93,12 +95,12 @@ louise hold
                                                                        that differ (the engine alone expected), the space_id kept, the documents, vector rows and
                                                                        bytes to carry counted from the predecessor with the time the count took, the room (short: exit
                                                                        2, the carry's refusal), the sample and its seed. It writes nothing and takes no lock
-              new <plugin> --name N --space-from C [--recipe FILE] --cpu-model T [--encoder URL] [--api A] [--embed-model M] [--dry-run]
+              new <plugin> --name N --space-from C [--recipe FILE] [--cpu-model T] [--encoder URL] [--api A] [--embed-model M] [--dry-run]
                                                                        case E, a SECOND COLLECTION IN A HELD SPACE (added 2026-11-08, the legal collections): the space,
                                                                        its layers, calibration set and CPU reference are the held collection C's; the recipe gives the
                                                                        rest (origin, work), and a field of the space it states must equal C's
-              new <plugin> --name N --sister-of S --space-from C --cpu-model T [--encoder URL] [--api A] [--embed-model M] [--dry-run]
-              new <plugin> --name N --sister-of S --layer-param KEY=VALUE [--layer-param …] --cpu-model T [--dry-run]
+              new <plugin> --name N --sister-of S --space-from C [--cpu-model T] [--encoder URL] [--api A] [--embed-model M] [--dry-run]
+              new <plugin> --name N --sister-of S --layer-param KEY=VALUE [--layer-param …] [--cpu-model T] [--dry-run]
                 (a sister in S's space with a layer param changed: a new space, S's encoder, run and reference;
                  only a param S's chunker states, to another value; the chunker measurements, 2026-11-14)
                                                                        case J, a SISTER INTO A HELD SPACE (added 2026-11-08, normattiva-nemo): `derive` of her sister S
@@ -273,9 +275,13 @@ louise hold
   embedder    check <collection>                                       the calibration gate (§3.3) against the run the endpoint states; a pass validates it and keeps its signed statement in `state/`
   embedder    tree-diff <before> <after>                               what differs between two backend trees, path by path: digests read from VEGA_URL or JSON files (vega.md §12); exit 1 when they differ
               benchmark <collection>                                   tokens per second on the calibration set
-              cpu-reference <collection> --model M [--query-model Q] [--again]   the calibration set as the encoder's CPU twin embeds it, kept for every later gate to compare
-                                                                       its run with (near-exact-runs.md §2); refused unless the twin states a CPU run and gives
-                                                                       back its own bytes; writes (added 2026-10-31)
+              cpu-reference <collection> [--model M] [--query-model Q] [--again]   the calibration set as the encoder's CPU twin embeds it, kept for every later gate to compare
+                                                                       its run with (near-exact-runs.md §2); refused unless the twin states a CPU run of the space's
+                                                                       weights and gives back its own bytes; writes (added 2026-10-31). PER MODEL, NOT PER COLLECTION
+                                                                       (operator, 2026-11-22): kept once in the node's store, <LOUISE_ROOT>/state/cpu-reference/<key>/,
+                                                                       keyed on the weights, set, ctx, cut, instruction and role, and resolved there by every
+                                                                       collection of those inputs through RAGE's API (app/rage/reference.py); no collection holds a
+                                                                       copy. --model / --query-model default to the encoder's model with -cpu
   rage-settings show <collection> [--card D:V:P]                       every signer's recommended RAGE settings in the SHARD (09 §9.19), the entry this node's
                                                                        card type takes, and what the collection file states (its keys win); exit 1 when a file was set aside
               record <collection> [--batch N] [--concurrency M] [--busy F] [--chunks-per-s F] [--window-s S] [--card D:V:P]
@@ -433,6 +439,12 @@ louise dev                                                             operator 
                                                                        chunks > 0) that hold no vector — never embedded again, missing from dense search — with --apply marked not
                                                                        embedded (embed_done 0, embed_version 0), guarded `embed_done = 1` and the version read; its own cursor
                                                                        (added 2026-11-07)
+  cpu-reference-legacy                                                 the CPU references collections kept under <collection>/state/cpu-reference/ before the node's
+                                                                       store (2026-11-06), each held to the store by the space's key: identical (redundant), differs
+                                                                       (the store's is what every gate reads), unproven (the store holds none: never filed under a key,
+                                                                       since the copy names no inputs — wikidata's held characters-cut vectors for a tokens space),
+                                                                       refused (another set, unreadable, not a CPU run's); read-only; exit 1 on unproven or differs
+                                                                       (added 2026-11-22; the deploy prints it)
   rederive <collection> [--yes] [--again] [--verify [--every N] [--limit N]] [--ids FILE]
                                                                        every document's derived marks reset, so the worker parses each again at the collection's parser
                                                                        and writes its validity, catalogue and text-index rows again, its vectors kept (app/hold/carry.py;

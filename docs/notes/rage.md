@@ -63,6 +63,7 @@ rewrite — each still sits beside the code it calls).
 | feed | the documents, the lanes, the window of documents in flight | `app/worker.py` `_embed_producer`, `_embed_parallel` |
 | fill | requests filled across documents | `app/embeddings.py` `Coalescer`, `coalescing`, `batch_size` |
 | admission | the gate, and the run check before each write | `app/run_check.py`, `app/hold/runs.py` |
+| CPU reference | the encoder's CPU twin's answers to the set, the model's and not a collection's: kept once in the node's store by the space's key and resolved there by every caller (the gate, `cpu-reference`, `collection new`, which inherits it); the twin's name determined (`<model>-cpu`) (operator, 2026-11-22) | `app/rage/reference.py`; the files `app/hold/cpu_reference.py`; near-exact-runs.md §2 |
 | bench | one collection's row for a window (busy, chunks/s, lost, gaps, alone); searches under corpus load; the card per minute | `app/rage/bench.py` (`louise dev schedule-report --bench`), `tools/measure/query_under_load.py`, `louise dev schedule-report --gpu` |
 
 The standards it uses instead of its own inventions: dynamic batching as

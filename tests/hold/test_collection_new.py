@@ -120,8 +120,8 @@ def test_every_input_comes_from_the_recipe_and_the_steps_run_in_order(tmp_path, 
     assert (reference.model, reference.weights, against[0].model) == ("vega-nemo", WEIGHTS, "vega-nemo-cpu")
     assert steps["order"] == ["calibrate", "create", "cpu-reference", "gate"]
     assert steps["created"][1]["space"]["tolerance"] == "0.999995", "the measured tolerance, into create"
-    assert steps["cpu_args"].refresh and not steps["cpu_args"].again, \
-        "the collection's copy written again from the store, never recomputed"
+    assert steps["cpu_args"].model == "vega-nemo-cpu" and not steps["cpu_args"].again, \
+        "the node's reference, inherited where held (the command resolves it), never recomputed"
     kept = json.loads((tmp_path / "wd" / "state" / "calibration.json").read_text())
     assert (kept["tolerance"], kept["ctx"], kept["cut"], kept["instruction"]) == ("0.999995", 8191, "tokens",
                                                                                   "passage: ")

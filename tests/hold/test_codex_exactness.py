@@ -100,9 +100,10 @@ def test_the_gate_holds_a_node_to_the_codex_whatever_its_own_setting(monkeypatch
     monkeypatch.setattr(run_check, "contributing", lambda r: None)
     # no context per request here: what is held is the exactness (run_check.creates_per_request)
     monkeypatch.setattr(run_check, "fresh_contexts", lambda *a, **k: None)
-    from app.hold import cpu_reference
-    # a card run is gated only with its CPU twin's reference stored (invariant 12)
-    monkeypatch.setattr(cpu_reference, "find", lambda *a, **k: SimpleNamespace(
+    from app.rage import reference as rage_reference
+    # a card run is gated only with its CPU twin's reference stored (invariant 12),
+    # resolved through RAGE's API (app/rage/reference.py)
+    monkeypatch.setattr(rage_reference, "resolve", lambda *a, **k: SimpleNamespace(
         run_id="sha256:" + "c0" * 32, vectors=[[1.0]] * 512))
     monkeypatch.setattr(run_check.runs_mod, "validate",
                         lambda *a, **k: seen.setdefault("exactness", k["exactness"]) and {"run": "r"})

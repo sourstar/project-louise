@@ -190,7 +190,7 @@ grep -q "^def small_fragments(collection)" "$ROOT/src.new/app/vector_index.py"  
 grep -q "^VECTOR_INDEX_LIGHT_CHECK_S = " "$ROOT/src.new/app/config.py"                       # #109
 grep -q "^def _as_candidate(recipe, a):" "$ROOT/src.new/app/louise.py"                         # 5388ade: `hold embedder check --model` gates a candidate model name
 grep -q '^TREE_TYPES = ("file", "dir", "link", "setting")$' "$ROOT/src.new/app/vega/service.py"   # #116 (f1fd164): the receipts service takes the wrapper's `setting` entry, BEFORE the wrappers move
-grep -q "^def find(root: Path, name: str, role: str, \*, weights: str, set_id: str," "$ROOT/src.new/app/hold/cpu_reference.py"   # #119 (bbf6628): the stored CPU reference, statement version 5, own bytes enforced
+grep -q "^def node_find(d: Path, \*, set_id: str, count: int" "$ROOT/src.new/app/hold/cpu_reference.py"   # #119 (bbf6628): the stored CPU reference, statement version 5, own bytes enforced (in the node's store since 2026-11-22)
 grep -q "^def fresh_loads(texts: Sequence, embed_one, reload: " "$ROOT/src.new/app/hold/embedder.py"   # #120 (5f49e24): the multi-load gate, `exactness = "near"` opt-in
 grep -q '^IDLE, RUNNING, HELD, BLOCKED = "idle", "running", "held", "blocked"$' "$ROOT/src.new/app/status.py"   # #126 (2c765fa): a stage the profile pauses says so — in app/status.py since one status (2026-11-07)
 grep -q "^def _merge_by_relevance(lists: list\[tuple\[list\[dict\], Any\]\]) -> list\[dict\]:" "$ROOT/src.new/app/retrieval.py"   # #128 (a46fe9b): lists merged on calibrated relevance (off until a calibration)
@@ -242,7 +242,7 @@ grep -q "RELAY_RETRY_MS=500" "$ROOT/src.new/app/templates/ask.html"   # #189: th
 grep -q '    mode: str = "running"' "$ROOT/src.new/app/node_profile.py"   # #192/#193: a profile takes a mode (quiet = acquire-only, 12 cores)
 grep -q 'processing suspended' "$ROOT/src.new/app/cpu_limit.py"   # #192: the quiet window says it once
 grep -q 'rows = rows.filter(pc.is_in(rows.column("id"), value_set=wanted))' "$ROOT/src.new/app/embeddings.py"   # vectors_by_chunk_id keeps the asked ids in Arrow (the bakeoff pool's OOM)
-grep -q '^def kept(root: Path, name: str, role: str' "$ROOT/src.new/app/hold/cpu_reference.py"   # cpu-reference skips a role its run already kept
+grep -q '^def obtain(d: Path, role: str' "$ROOT/src.new/app/hold/cpu_reference.py"   # cpu-reference skips a role its run already kept (the node's store)
 test -s "$ROOT/src.new/app/embed_select.py" && grep -q 'waiting for the embed selection' "$ROOT/src.new/app/worker.py"   # #200: wikipedia's smart embedding
 grep -q 'Embed which' "$ROOT/src.new/app/templates/library.html"                                  # #204: the Library's embed-which select
 grep -q '^MEASURED_CPU_WORST: dict\[str, float\] = {' "$ROOT/src.new/app/hold/embedder.py"       # #205: the 16-bit review line
@@ -253,6 +253,7 @@ grep -q '^def apply(cfg: dict, want: dict' "$ROOT/src.new/deploy/16f/set_command
 grep -q 'HELD, not restarted' "$ROOT/src.new/deploy/supervise-pass.sh" && test -x "$ROOT/src.new/deploy/release-oom.sh"   # #779: a pass killed for memory is held
 grep -q '^def spans_are_exact(tok: Any) -> bool:' "$ROOT/src.new/app/chunking_legal.py"   # the legal chunker reads a text in bounded spans
 grep -q '"auto_upgrade_backends": False,' "$ROOT/src.new/deploy/vega/stage/localai_settings.py"   # LocalAI's auto-upgrade held off, at every deploy
+grep -q '^def resolve(codex, role: str, weights: str, count: int)' "$ROOT/src.new/app/rage/reference.py"   # the CPU reference resolved by its key, through RAGE
 grep -q '^_CITE_SHORT = re.compile' "$ROOT/src.new/app/refs/normattiva.py"                        # #219 B: the citation scan
 grep -q '^SHIP_BATCH_RECORDS = 64' "$ROOT/src.new/app/pack/build.py" && grep -q '^orjson==3.13.0' "$ROOT/src.new/constraints.txt"   # #221 C+F: the records child, orjson
 grep -q '^def set_paused(name: str, paused: bool, \*, by: str = "") -> set\[str\]:' "$ROOT/src.new/app/node_state.py"   # #122 (4ef5c49): a pause records who and when
@@ -271,7 +272,7 @@ grep -q ':root\[data-theme="kelsch"\]' "$ROOT/src.new/app/static/admin.css"     
 test -s "$ROOT/src.new/deploy/vega/stage/models/louise-translate-madlad-torch.yaml"        # 931887e
 ! grep -q 'cache_type_' "$ROOT/src.new/deploy/vega/stage/models/louise-translate-madlad.yaml"   # d372ba5: the F16 cache (P5); b68820c had f32
 test ! -e "$ROOT/src.new/deploy/reference"
-grep -q '^def journal(root: Path, name: str, role: str' "$ROOT/src.new/app/hold/cpu_reference.py"   # #231: the CPU reference's roles journalled
+grep -q '^def journal_in(d: Path' "$ROOT/src.new/app/hold/cpu_reference.py"   # #231: the CPU reference's roles journalled (in the node's store)
 grep -q '^_NATIVE = None if _louise_cdc is None' "$ROOT/src.new/app/chunking.py" && test -s "$ROOT/src.new/native/louise_cdc/Cargo.lock"   # D: the compiled cdc loop (cdc_identity IDENTICAL, 100,000 wikipedia records, 2026-11-02)
 test -s "$ROOT/src.new/app/plugins/wikidata/pure.py" && test -s "$ROOT/src.new/requirements-build.txt"   # E: the compiled textifier (textify_identity IDENTICAL, 100,018 entities, 2026-11-02)
 grep -q '^def near_exact_relaxed' "$ROOT/src.new/deploy/vega/vega_wrapper.py"   # #241: one setting of a vendor's mode declared near-exact
@@ -548,6 +549,13 @@ say "6a'. LocalAI's runtime settings Louise depends on (deploy/vega/stage/locala
 python3 "$ROOT/src/deploy/vega/stage/localai_settings.py" "${LOCALAI_URL:-http://127.0.0.1:30286}" \
   || { echo "LocalAI did not take the settings Louise depends on (above)"; exit 1; }
 python3 "$ROOT/src/deploy/vega/stage/localai_settings.py" --check "${LOCALAI_URL:-http://127.0.0.1:30286}"
+say "6a''. the CPU references collections kept before the node's store, held to it (read-only)"
+# operator, 2026-11-22: "The CPU reference is per model, not per collection" — RAGE resolves it by
+# its key from the node's store alone (app/rage/reference.py). A collection's own copy names no
+# inputs and is never filed under a key; one the store does not hold is said here: that encoder's
+# validated runs go on, its next new run waits for `hold embedder cpu-reference`
+docker exec ix-louise-rag-worker-1 python -m app.louise dev cpu-reference-legacy \
+  || echo "NOTE: a collection keeps a CPU reference the node's store does not hold (above): its encoder's next new run is not gated until one is made for the node"
 say "6b. the secrets by path, the same identity"
 for c in ix-louise-rag-web-1 ix-louise-rag-worker-1; do
   docker exec "$c" sh -c 'test -z "${ADMIN_TOKEN+x}"' && echo "$c: no ADMIN_TOKEN value in the env" || { echo "$c: ADMIN_TOKEN still in the env"; exit 1; }
