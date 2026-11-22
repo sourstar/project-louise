@@ -624,6 +624,10 @@ VECTOR_INDEX_MAX_INDICES = int(os.getenv("VECTOR_INDEX_MAX_INDICES", "4"))
 # 2026-11-12: 4.5 GiB of deleted files pinned after six hours). 0 runs them
 # in-process: the same commits, and the leak.
 LANCE_CHILD = os.getenv("LANCE_CHILD", "1") not in ("0", "false", "no", "off")
+# The Library cards' p2p lines are computed in one child process of the web
+# (app/library_p2p.py; 2026-11-22: in the web process they held the GIL for 9
+# of a warm page's 10.6 s). 0 computes them in the web process, as before.
+LIBRARY_P2P_CHILD = os.getenv("LIBRARY_P2P_CHILD", "1") not in ("0", "false", "no", "off")
 #: a gate measures on its own load of the model, `<model>--gate`, and never
 #: holds the shared one (operator, 2026-11-12: "gating a collection cannot
 #: monopolize the GPU"; app/gate_twin.py). Off only to measure without it.
