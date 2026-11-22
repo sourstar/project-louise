@@ -93,3 +93,61 @@ def test_the_lamar_candidate_is_the_bge_reranker_s_strict_configuration():
     for body in (bge, lamar):
         body.pop("name"); body["parameters"].pop("model"); body.pop("pinned", None)
     assert lamar == bge
+
+
+
+# --- the add-on owner on (2026-11-22: the deploy of 2f26d6d rolled back) -------
+
+OWNER_ON = {"memory_reclaimer_enabled": True, "memory_reclaimer_threshold": 0.95, "watchdog_idle_enabled": False,
+            "auto_upgrade_backends": False, "api_keys": [],
+            "addon_host_settings_authority": "owner_required"}       # v5.0.1's projection, no auto_upgrade_addons
+
+
+class _LocalAI:
+    """v5.0.1's /api/settings with its add-on owner running: a POST that
+    carries a key the owner holds is refused with LocalAI's own 409."""
+
+    def __init__(self, current):
+        self.current, self.posted = dict(current), []
+
+    def __call__(self, url, body=None):
+        import io
+        import urllib.error
+        if body is None:
+            return dict(self.current)
+        self.posted.append(body)
+        if "auto_upgrade_addons" in body:
+            raise urllib.error.HTTPError(url, 409, "Conflict", {}, io.BytesIO(
+                b'{"success":false,"error":"auto_upgrade_addons is set on the add-on owner, not through '
+                b'/api/settings","restart_required":false}'))
+        self.current.update({k: v for k, v in body.items() if k in settings.DESIRED})
+        return {"success": True}
+
+
+def test_with_the_addon_owner_on_its_key_is_neither_written_nor_drift(monkeypatch):
+    server = _LocalAI({**OWNER_ON, "auto_upgrade_backends": True})
+    monkeypatch.setattr(settings, "_call", server)
+    got = settings.apply("http://x:1")
+    assert got["changed"] is True and got["auto_upgrade_backends"] is False
+    assert got["held_by_the_addon_owner"] == ["auto_upgrade_addons"]
+    (body,) = server.posted
+    assert "auto_upgrade_addons" not in body and "addon_host_settings_authority" not in body
+    assert settings.check("http://x:1")["drift"] == {}
+
+
+def test_with_the_owner_on_the_backends_key_stays_strict(monkeypatch):
+    class Stubborn(_LocalAI):
+        def __call__(self, url, body=None):
+            if body is not None:
+                self.posted.append(body)
+                return {"success": True}                  # says yes, takes nothing
+            return dict(self.current)
+    monkeypatch.setattr(settings, "_call", Stubborn({**OWNER_ON, "auto_upgrade_backends": True}))
+    import pytest
+    with pytest.raises(SystemExit, match="auto_upgrade_backends"):
+        settings.apply("http://x:1")
+
+
+def test_with_the_owner_off_both_keys_are_managed():
+    assert settings.desired_for({"auto_upgrade_backends": False}) == settings.DESIRED
+    assert "auto_upgrade_addons" not in settings.desired_for(OWNER_ON)
