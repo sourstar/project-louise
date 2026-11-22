@@ -166,6 +166,16 @@ llama.cpp diffs extracted and applied with `git apply --3way` and
   wrong — never the document's (CLAUDE.md), so the BMG VRAM check's
   `nullptr` → LocalAI's load error → `EndpointDeferred`. No app change.
 
+**Amended 2026-11-22 (the qualification's finding F4):** the series above
+lacked what was LIVE — P10 (the nemotron reranker) on its own backend and
+P11 (context on demand) on the node's engine were "staged" in the
+repository but built into the live engines from candidate `.series` files.
+The series is now P1–P6 + P7 (nemotron rerank, was P10) + P8 (context on
+demand, was P11), eight patches on v5.0.1; §4's table holds for P1–P6, and
+P10/P11's rows become: applied (P10 as it was; P11's LocalAI half with one
+hunk re-placed by hand, its llama.cpp half in the upstream form).
+backend-qualification-2026-11-21.md §3 phase 3.
+
 ### For München, on the node, in a granted window
 
 1. Build: `sh deploy/localai/llama-cpp/build.sh sycl_f16 <out>` from this

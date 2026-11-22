@@ -5,6 +5,10 @@
 # 2026-11-21: the series moves to the latest backend). 0003-0006 rebased onto
 # it, their llama.cpp patches' context refreshed, their code unchanged; the
 # former 0007 (upstream's dmmv cleanup, #31325) is in the base and dropped.
+# 0007 (nemotron rerank, was staged P10, live on its own backend since
+# 2026-11-11) and 0008 (context on demand, was staged P11, live on the node's
+# engine since the 2026-11-12 trial) enter the series 2026-11-22: the
+# qualification's finding F4 — the file had not recorded what was live.
 base dd5780aa904d132c784867d37fc713df8d984c8a
 0001-system-list-load-options.patch
 0002-llama-cpp-embed-token-ids.patch
@@ -12,3 +16,5 @@ base dd5780aa904d132c784867d37fc713df8d984c8a
 0004-llama-cpp-encoder-decoder-waves.patch
 0005-llama-cpp-sycl-batched-mul-mat-src1.patch
 0006-llama-cpp-chat-cohere-command3.patch
+0007-llama-cpp-nemotron-rerank.patch
+0008-llama-cpp-context-on-demand.patch

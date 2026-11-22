@@ -101,7 +101,8 @@ def test_p7_upstreams_dmmv_cleanup_left_the_series_with_the_base_that_carries_it
     assert "base dd5780aa904d132c784867d37fc713df8d984c8a" in series.split("\n")
     assert "0007-llama-cpp-sycl-dmmv-cleanup.patch" not in series
     assert not (patches / "0007-llama-cpp-sycl-dmmv-cleanup.patch").exists()
-    assert not list(patches.glob("0007-*.patch"))
+    # 2026-11-22: the number is taken again by the nemotron reranker (was staged P10), nothing dmmv
+    assert not any("dmmv" in p.name for p in patches.glob("*.patch"))
     # the retirement is on record where the action items live
     actions = (HERE.parents[2] / "docs" / "notes" / "localai-bugs.md").read_text(encoding="utf-8")
     assert "## Patches retired into the base" in actions

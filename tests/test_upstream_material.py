@@ -25,7 +25,8 @@ LLAMA = [LLAMA_DIR / name for name in (
     "1-context-on-demand.diff", "2-context-create-report.diff", "3-context-canary.diff")]
 LOCALAI = LOCALAI_DIR / "context-on-demand.diff"
 GUIDE = "READING-GUIDE.md"
-STAGED = PATCHES / "staged" / "llama.cpp" / "0011-server-context-on-demand.patch"
+CARRIED = PATCHES / "0008-llama-cpp-context-on-demand.patch"  # P8 since 2026-11-22; staged P11 before
+INNER = "backend/cpp/llama-cpp/patches/0011-server-context-on-demand.patch"
 
 # every line of `git diff`'s output starts with one of these: anything else is prose
 DIFF_LINE = re.compile(
@@ -43,6 +44,13 @@ def _paths(path: Path) -> list[str]:
 
 def _tests_added(text: str) -> list[str]:
     return re.findall(r"^\+def (test_\w+)\(", text, re.M)
+
+
+def _inner(text: str) -> str:
+    """The llama.cpp patch the series patch adds as a file: its lines, the leading + removed."""
+    m = re.search(r"^\+\+\+ b/" + re.escape(INNER) + r"\n@@[^\n]*\n((?:\+[^\n]*\n|\n)*?)(?=^diff --git |\Z)", text, re.M)
+    assert m, INNER
+    return "".join(line[1:] + "\n" for line in m.group(1).splitlines() if line.startswith("+"))
 
 
 def test_the_material_is_there_and_nothing_else():
@@ -88,10 +96,10 @@ def test_the_parts_stand_on_each_other():
     assert [len(_tests_added(_text(path))) for path in LLAMA] == [14, 2, 5]
 
 
-def test_the_parts_hold_the_tests_of_the_staged_patch():
-    """The node builds from the staged patch; what is filed is the same
-    feature. One changed without the other shows here."""
-    staged = _tests_added(_text(STAGED))
+def test_the_parts_hold_the_tests_of_the_carried_patch():
+    """The node builds from the series patch (P8, the llama.cpp half it adds);
+    what is filed is the same feature. One changed without the other shows here."""
+    staged = _tests_added(_inner(_text(CARRIED)))
     parts = [name for path in LLAMA for name in _tests_added(_text(path))]
     assert len(parts) == len(set(parts))
     assert set(parts) == set(staged) and len(staged) == 21

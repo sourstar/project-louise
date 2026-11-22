@@ -20,6 +20,15 @@ measured (published figures disagree).
 
 ### 2026-11-21
 
+- **2026-11-22, the qualification's finding F4 — the series file did not record what was live.** The first v5.0.1
+  engine lacked P10 (the nemotron reranker's architecture) and P11 (context on demand): both were "staged" in the
+  repository while the node's live engines were built from candidate `.series` files carrying them. The gate refused
+  the new engine for every `context_on_demand` encoder and the reranker's GGUF did not load. Fixed: P10 and P11 are
+  series 0007 and 0008 on v5.0.1 (eight patches, every hunk exact, `git am` verified), the staged copies and their
+  `.series` files removed, localai-bugs.md renumbered (P7 nemotron rerank, P8 context on demand; the staged
+  encoder-decoder pair P9/P10). The engine is rebuilt and phase 3 rerun. Phases 0–2 stand: the series' checks
+  green, MADLAD −2 % against live when paused (F3 closed as a loaded-card artifact), bytes identical to live on every
+  encoder measured so far. [backend-qualification-2026-11-21.md](backend-qualification-2026-11-21.md).
 - **The backend qualification is running** (operator, 2026-11-21: "Run unattended, you are in charge of the backend
   qualification. When done I want a full report of the performance improvement or loss, and how the 35B MoE
   performs. Test also the tensor layer split as a POC with all the current models (not those used for ocr) plus

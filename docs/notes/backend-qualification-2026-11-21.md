@@ -355,6 +355,46 @@ before phase 3's first row.
 
 ### Phase 3 — per model, new engine against live
 
+**First pass, München 2026-11-22 (M), STOPPED on two engine findings** (node
+paused for every row, the card holding only the model under test, web
+stopped, OCR paused; `phase3/holders.txt`, `log.txt`, `log-gates.txt`):
+
+| model (collection, window) | (1) gate, `hold embedder check --remeasure`, no `--accept` | (1b) `vega_repro_check` loads 3 × repeats 2 + sweep 512 | (2) median s, new / phase 0 | (3) 16 fingerprints, bytes vs live |
+|---|---|---|---|---|
+| bge-m3 (wikipedia, 1024) | **refused**: "its backend said what it did with its context for 0 of 50 calls — an engine before P11's count" | 528/528 bit-identical | 1.204 / 1.238 (−2.7 %) | 16/16 identical |
+| nemotron-3-embed-1b (NeuRIS, 8191) | not run: no stored CPU reference for the document side's weights (run f68e1beb…) — a gap of the collection, not the engine; Legal's | 528/528 | 1.277 / 1.330 (−4.0 %) | 16/16 |
+| qwen3-embedding-4b (gutenberg, 8191) | **refused**: P11 | no verdict: the 1 h bound at window 8191 (give it 3 h) | 4.311 / 4.374 (−1.4 %) | 16/16 |
+| medcpt-query (pubmed, 512) | **PASS, exact**; CPU worst 0.999951; whole set worst 0.999649 | 528/528 | 0.347 / 0.360 (−3.6 %) | 16/16 |
+| louise-rerank-nemotron-1b | **fails to load**: `done_getting_tensors: wrong number of tensors` | — | — | — |
+
+**Finding F4 — the series file did not record what was live.** The first
+v5.0.1 engine (`133ef68669a1`, from 094df03) carries neither P11 (context on
+demand) nor P10 (the nemotron reranker's architecture): the repository's
+`series` held P1–P7, and both were "staged" there, yet the node's live
+engine `281e1ee481b6` was built from `staged/context-on-demand.series`
+(P1–P7 + 0009) and the live reranker's `10aa8b1851d7` from
+`staged/nemotron-rerank.series` (P1–P7 + 0008) — München's reading of the
+node's build records, sha256 per patch. So the gate refused the new engine
+for every `context_on_demand` model (idle-context-brief.md §10: an engine
+that does not say what it did with its context is not admitted), and the
+reranker's GGUF did not load. **Fixed in the repository the same day:** P10
+and P11 enter the series as 0007 and 0008 on v5.0.1 (P10 as it was, offsets
+only; P11's LocalAI half with one hunk re-placed by hand, its llama.cpp half
+in the upstream form, which differs from the staged one in comments only),
+every inner hunk exact in `prepare.sh`'s order, `git am` of the eight
+verified on a fresh v5.0.1; the staged copies and their candidate `.series`
+files removed; localai-bugs.md renumbered. **The engine is rebuilt from the
+new commit and phase 3 is rerun in full under the same conditions.** What
+stands from this pass, to be repeated on the rebuilt engine: bytes 16/16
+identical to live on all four encoders, repro 528/528 on three, throughput
+−1.4 to −4.0 % (faster) on the real path, medcpt-query's gate exact.
+
+Also in `phase3/GAPS`: NeuRIS's missing CPU reference (the gate will meet it
+at cut-over too; Legal's collection), qwen3-4b's repro bound (3 h at window
+8191).
+
+**Second pass (the rebuilt engine):**
+
 | model | gate | bytes vs live | throughput live → new | Δ | source |
 |---|---|---|---|---|---|
 | | | | | | |
