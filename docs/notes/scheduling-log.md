@@ -3216,10 +3216,18 @@ a throwaway web container with the live image and env, one question:
 - The worker's env only: `VECTOR_INDEX_REFRESH_MAX_ROWS=65000` (~256 MiB of 1,024-d float32) and `VECTOR_INDEX_REFRESH_ROWS=40000`, then a restart. No code.
 - Wikidata's 353 k and pubmed's 45 k tails are due at its next pass; after that, wikidata about every 1.4 h at today's rate.
 
-**AFTER.** To be completed by München:
-- each refresh's rows, duration and any merge that followed, with the worker's anon;
-- the unindexed counts after;
-- the same 5 questions: anon after each and the time;
-- over ~3 h of wikidata embedding, how many refreshes and their durations.
+**AFTER, first part (live from 20:44Z; München).**
+- Both settings were unset before (500,000 / 50,000). They were set in the worker's env only, through app.update after a config backup. The web has neither.
+- The first refresh came 33 min after the restart, at the worker's first maintenance turn:
+  - wikidata, 21:17:00Z: 398,035 unindexed of 20,240,873 (45 fragments) folded in **in 90 s**; 1,301 remain; 4 deltas merged into one (2 indexes).
+  - pubmed, 21:19:41Z: 45,474 of 41,434,034 (58 fragments) folded in **in 8 s**; 0 remain; 4 deltas merged into one (2 indexes).
+  - ~0.23 ms a row for wikidata, against normattiva's 0.16 (2026-10-23).
+  - The worker's anon at refresh: not read (the sampler took docker-init's pid).
+- The same 5 /api/search questions, live:
+  - the web started cold at 123 MiB, restarted by the same app.update;
+  - 55.9 s (the cold first), then 22.1 / 22.0 / 25.7 / 20.5 s, against 24.5–34.0 s;
+  - anon after each 795 / 1,283 / 1,254 / 1,595 / 1,400 MiB, against 1,610 / 1,286 / 2,127 / 2,096 / 1,873.
+  - The scenario differs from BEFORE: the web was freshly restarted here, and the node was running before phase 4.
+- Still to come (München's night watch to 07:00Z, /root/measure/index-trial/night-log.txt): the refreshes over hours of wikidata embedding, how many, and their durations. Embedding resumes after phase 4 and M1/M2.
 
 Then the permanent form goes to the operator: a byte cap on the tail, which also folds a quiet table's whole tail.
