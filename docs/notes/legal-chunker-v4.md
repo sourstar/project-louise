@@ -150,6 +150,28 @@ Expected: "to embed" near 0 for Normattiva, legi_F and NeuRIS5, where only the n
 it/fr/de forms in paragraphs past the window move a cut. For EUR-Lex5 it is the
 paragraphs past the window in the other 20 languages.
 
+**Measured** (München, 2026-11-22, tool at 550c4be9, read-only, 8g cap, 4 processes;
+errors 0; JSONs in `/root/measure/chunker-v4/` on the node):
+
+| collection | documents | chunks v3 → v4 | documents differ | to embed | dropped | windowed v3 → v4 (documents) | wall | peak |
+|---|---|---|---|---|---|---|---|---|
+| Normattiva | 342,082 | 7,958,578 → 7,958,446 | 324 | 1,133 | 1,265 | 13,012 → 13,054 (2,982 → 3,003) | 4,546 s | 4.1 GB |
+| legi_F | 2,393,707 | 2,708,261 → 2,708,261 | 55 | 87 | 87 | 5,238 → 5,238 | 1,474 s | 2.7 GB |
+| NeuRIS | 5,536 | 82,670 → 82,678 | 35 | 142 | 134 | 203 → 222 (40 → 42) | 83 s | 0.7 GB |
+
+The three collections in service cost **1,362 chunks** of encoder time. Every other
+vector carries under its new id. legi_F skipped 75 documents that are out of scope
+or errored, as its stages do.
+
+Normattiva and NeuRIS fall back to token windows a little more often at v4
+(+42 and +19 chunks). A cut v3 made inside a sentence ("D.Lgs. | 2 gennaio", "vom
+18. | Dezember") joins it again. Where the joined sentence passes the 8,175-token
+window, it is windowed: in either version it is a run of text with no sentence end
+in reach, so this is no regression.
+
+EUR-Lex5's TOML is out of service (the operator: "make it not even searchable"),
+so its count runs with `--toml` (35f303c7): pilot first, then whole.
+
 ## 4. What moving the shared space to v4 takes
 
 ### 4.1 What moves
