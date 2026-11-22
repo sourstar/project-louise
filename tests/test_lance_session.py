@@ -136,8 +136,12 @@ def test_the_web_role_shares_one_session_at_its_own_budget(tmp_path, monkeypatch
 def test_the_web_takes_its_role_at_start(isolated_config, monkeypatch):
     from fastapi.testclient import TestClient
 
+    from app import warmup
     from app.api import app
     monkeypatch.setattr(embeddings, "_shared", None)
+    # the start's model warm-up is not this test's: a thread of it left running
+    # allocates under the next test's heap measurement
+    monkeypatch.setattr(warmup, "start", lambda *a, **k: None)
     with TestClient(app) as c:
         c.get("/healthz")
     assert embeddings._shared == "web"

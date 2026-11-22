@@ -631,12 +631,9 @@ VECTOR_INDEX_MAX_INDICES = int(os.getenv("VECTOR_INDEX_MAX_INDICES", "4"))
 # 2026-11-12: 4.5 GiB of deleted files pinned after six hours). 0 runs them
 # in-process: the same commits, and the leak.
 LANCE_CHILD = os.getenv("LANCE_CHILD", "1") not in ("0", "false", "no", "off")
-# THE WEB GIVES BACK ITS FREED HEAP WHEN IDLE (app/idle_trim.py; operator,
-# 2026-11-22: "B plus C after a timeout"): glibc's malloc_trim(0), once per
-# idle period, after this many seconds without a request; 0 never. Measured
-# (München, the live image): warm 677 MiB anon, 237 MiB after a 12 ms trim, the
-# next pass at the same speed.
-WEB_IDLE_TRIM_S = float(os.getenv("WEB_IDLE_TRIM_S", "300"))
+# THE WEB GIVES BACK ITS FREED HEAP WHEN IDLE (app/idle_trim.py): its timeout
+# is desired state, platform.toml's `[web] idle_trim_s` (invariant 10), read
+# by `idle_trim.timeout_s`, never an environment value.
 #: a gate measures on its own load of the model, `<model>--gate`, and never
 #: holds the shared one (operator, 2026-11-12: "gating a collection cannot
 #: monopolize the GPU"; app/gate_twin.py). Off only to measure without it.

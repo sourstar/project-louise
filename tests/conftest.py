@@ -304,8 +304,8 @@ def serial_parse_pool(monkeypatch):
     # the web's idle trim (app/idle_trim.py) starts no timer thread per
     # TestClient; its own tests drive it. And the process's Lance role is the
     # test's: a web started by one test does not share its Session with the next
-    monkeypatch.setattr(config, "WEB_IDLE_TRIM_S", 0.0)
-    from app import embeddings
+    from app import embeddings, idle_trim
+    monkeypatch.setattr(idle_trim, "_started", True)
     monkeypatch.setattr(embeddings, "_shared", None)
     monkeypatch.setattr(embeddings, "_session", None)
     monkeypatch.setattr(embeddings, "_session_budget", 0)

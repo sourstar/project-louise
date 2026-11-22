@@ -50,7 +50,7 @@ async def lifespan(app: FastAPI):
     fdlimit.raise_soft()                 # the soft open-files limit to the hard one (app/fdlimit.py)
     # THE WEB'S MEMORY (operator, 2026-11-22: "less than 1GB"): one Lance
     # Session for the process, before any table is opened, and its freed heap
-    # given back once idle (app/idle_trim.py, config.WEB_IDLE_TRIM_S)
+    # given back after a while without a question (app/idle_trim.py; platform.toml [web] idle_trim_s)
     embeddings.use_web_caches()
     idle_trim.start()
     try:
