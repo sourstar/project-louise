@@ -353,6 +353,37 @@ stressapptest 12 GB × 60 min PASS, 0 MCE/EDAC); phase 0 ran at 5200. A
 control re-run of two phase-0 rows on the live engine at 6400 is ordered
 before phase 3's first row.
 
+### The rebuilt engine (after F4) — phases 1 and 2 again, München 2026-11-22 (M)
+
+Files: `qual-2026-11-21/rebuild/`. Built from 41fb62a2 as phase 1
+(`INTEL_STACK=intel-stack-2026-11c.conf build.sh sycl_f16`, stack
+7c301a7ba437): `louise-llama-cpp:sycl_f16-c3294e050ff2-stack-7c301a7ba437`
+from `dd5780aa904d` + **8 patches**, 13 min; tar sha256 `238527aad8dcadb1…`,
+image sha256 `e569c9fbe285be6a4d494ecf1a06ba7cd413354cf3f3a83c05a923c4e1aafad6`;
+installed beside the live engine as
+`louise-sycl-f16-llama-cpp-c3294e050ff2-stack-7c301a7ba437`, the live one
+untouched, `133ef68669a1` kept as history. The binary now carries P11's
+strings (`llama-context-created-us`, `context_on_demand`; the fallback too)
+and P10's (21 nemotron strings). `vega-louise-llama-cpp-q` repointed at it
+(wrapper rev a6e20fe, the live one's; its file-digests cache dropped).
+
+Phase 2, short form, on the tree LocalAI `dd5780aa` + 8 patches by `git am`,
+llama.cpp `78e05298`; node paused, web stopped, OCR paused, card emptied
+(`rebuild/holders.txt`):
+
+| check | result |
+|---|---|
+| P5: `test-backend-ops -o MUL_MAT -p type_a=f16,type_b=f32` | 235/235, 0 FAIL |
+| KQ shapes (`GGML_TEST_KQ_SHAPES=1`) | 272/272, 0 FAIL |
+| the whole MUL_MAT group in one run | exit 139 at start — the fp8 abort seen in phase 2 on `133ef` too (SYCL aborts on f8_e4m3 instead of skipping); not ours, not new |
+| P6: `test-chat` | All tests passed |
+| P2: `embedding_tokens_test` | exit 0 |
+| **P11: `context_on_demand_test`** | exit 0 |
+| the VRAM check (a 35B test copy, ctx 1,048,576) | refused: `cannot allocate 18432 MiB: 20583 MiB already allocated, 11760 MiB usable…`; HTTP 500; 0 kernel OOM lines |
+| MADLAD T4, paused, 60 | 375/379 against P3's aged record, 345/379 torch, **379/379 identical to the live engine**, median **0.42 s** (live 0.43) |
+
+Phase 3 reruns on this engine (below, "second pass").
+
 ### Phase 3 — per model, new engine against live
 
 **First pass, München 2026-11-22 (M), STOPPED on two engine findings** (node
