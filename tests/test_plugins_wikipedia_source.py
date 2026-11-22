@@ -15,6 +15,16 @@ from app.plugins.wikipedia.source import native_id_of, split_locator
 from app.plugins.wikipedia.wikitext import to_sections
 from tests import wikipedia_props
 
+
+@pytest.fixture(autouse=True)
+def _files_cache_floor_not_this_tests(monkeypatch):
+    """The files cache's free-space floor (derived.STAGE_FREE, 10 % of the
+    disk) is tests/test_derived_staged.py's. Here it read THIS machine's
+    disk: a run that filled it past 90 % skipped the copy these tests read
+    (2026-11-22, a sandbox at 11 % free). A copy still has to fit."""
+    from app import derived
+    monkeypatch.setattr(derived, "STAGE_FREE", 0.0)
+
 ARTICLE_MOON = """'''The Moon''' is [[Earth]]'s only natural satellite.
 
 == Orbit ==
