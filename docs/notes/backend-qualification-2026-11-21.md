@@ -307,10 +307,12 @@ with phase 0's paused rows**; `phase2/f3/t4-*.row.json`):
 **Reading: F3 is most likely LOAD, not the engine.** Under the same
 running node the two engines are within 6 %; the pilot on the new engine
 reads the paused-card speed (0.50 s, 16.9 ms/token); the residual waits
-are the worker's share of the card. Phase 2's MADLAD run on the new engine
-(00:1x–00:39Z, after the reboot) is suspected to have run with the node
-back in `running` — asked of München; if so it compared a loaded card
-against phase 0's paused one. **A paused rerun** of the four rows and of
+are the worker's share of the card. **Confirmed (München): phase 2's MADLAD run on the new
+engine (23:54–00:39Z) ran with the node in `running`** — resumed at
+23:43Z after the memtest, nothing paused it; the web was stopped, the OCR
+paused and the card emptied at the start, but the worker put its encoders
+back on the card. So F3 compared a loaded card against phase 0's paused
+one; the mode of each run is now in `phase2/f3/README`. **A paused rerun** of the four rows and of
 the two 6400 controls (the loaded controls read bge-m3 2.23 s and nemotron
 3.26 s against phase 0's 1.24 / 1.33 — load) is queued after the night's
 deploy and decides F3: within 5 % → closed, phase 2 fully green. Lesson
