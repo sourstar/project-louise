@@ -111,12 +111,25 @@ minutes; a step whose numbers are wrong stops the next.
    duplicates retired (expected 37,695).
 3. EUR-Lex5's TOML `acquire_enabled = false` (desired state: nothing
    fetched, no dump build) — then the collection unpaused, still unserved.
-4. The PROBLEM SLICE first, `louise dev rederive EUR-Lex5 --ids problem.txt
-   --yes`: the 1,909 indexed with no chunk, every corrigendum (`CORR`
-   bodies), every unit the units check counts not its name (swapped,
-   shifted, misnamed), every Formex package, the 200 largest units, and the
-   kept row of each retired duplicate. Checked when drained: 0 chunkless,
-   0 errors but the stated refusals, the coverage of a sample read.
+4. The PROBLEM SLICE first. Build both lists, read-only:
+   - `tools/measure/eurlex_units_check.py <corpus> --list-flagged flagged.tsv`;
+   - `tools/measure/eurlex_problem_slice.py EUR-Lex5 --toml <its stopped
+     TOML> --units flagged.tsv --largest 200 --out-dir <dir>`.
+
+   The slice holds:
+   - the kept row of each duplicate;
+   - the 1,909 indexed with no chunk;
+   - every corrigendum;
+   - every errored document;
+   - every text issue (`formex-not-this-act`, `item-not-held`, …);
+   - every unit the units check flags: package, misnamed, in another's place, wrapper under another name, included document, package lacked;
+   - the 200 largest.
+
+   Then `louise dev rederive EUR-Lex5 --ids problem.txt --retry-errors --yes`.
+   `--retry-errors` clears a listed document's error, so the corrected reader
+   reads it again (C9's refusals were the acts' own text); a tombstone keeps its
+   error. Checked when drained: 0 chunkless, 0 errors but the stated refusals,
+   and the coverage of a sample read.
 5. Then the rest: `--ids rest.txt` (every other live uid), never the whole
    collection again (RULE 1: the slice is not derived twice).
 6. Only then `acquire_enabled = true` (the re-forms, the per-unit pass), and

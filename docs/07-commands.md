@@ -436,7 +436,7 @@ louise dev                                                             operator 
   retire-superseded <collection> [--yes]                               a unit held under two ids keeps the one it has now; the other rows are retired from every index
                                                                        and tombstoned (app/hold/identity.py; one unit, one document, 2026-11-21); a dry run without
                                                                        --yes; with it, the collection's write lock (exit 2 when held)
-  rederive <collection> [--yes] [--again] [--verify [--every N] [--limit N]] [--ids FILE]
+  rederive <collection> [--yes] [--again] [--verify [--every N] [--limit N]] [--ids FILE [--retry-errors]]
                                                                        every document's derived marks reset, so the worker parses each again at the collection's parser
                                                                        and writes its validity, catalogue and text-index rows again, its vectors kept (app/hold/carry.py;
                                                                        the A1c repair where no source snapshot is left); --verify instead resets only the documents whose

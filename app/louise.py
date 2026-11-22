@@ -3578,7 +3578,8 @@ def cmd_dev_rederive(a) -> int:
         for sig in (signal.SIGTERM, signal.SIGINT):
             signal.signal(sig, lambda *_: stop.set())
         lines = Path(a.ids).read_text(encoding="utf-8").splitlines()
-        out = carry_mod.rederive_listed(a.root, a.collection, lines, apply=a.yes, stop=stop, log=say)
+        out = carry_mod.rederive_listed(a.root, a.collection, lines, apply=a.yes, stop=stop, log=say,
+                                        retry_errors=bool(getattr(a, "retry_errors", False)))
         _print({"rederive": out})
         return 130 if stop.is_set() else 0
     if a.verify:
@@ -8707,6 +8708,9 @@ def build_parser() -> argparse.ArgumentParser:
                    help="only the documents FILE lists, a uid or a document's path a line (the EUR-Lex "
                         "units check's --list-included); their embedding too where the collection holds no "
                         "records")
+    p.add_argument("--retry-errors", action="store_true",
+                   help="with --ids: a listed document's error cleared too, so its unit is read again "
+                        "(never a superseded row's); the restart's problem slice")
     p.set_defaults(fn=cmd_dev_rederive)
     p = dverbs.add_parser("carry", help="a collection's manifest, text index and vector table into a new "
                                         "collection with the same records (amendment A1); writes "

@@ -3,6 +3,8 @@ names (32015D1735: a TIFF filed as the body's `.xml`, the body's XML as a
 `.tif`), the wrapper's named files' roots, and the Formex packages lacked."""
 from __future__ import annotations
 
+from pathlib import Path
+
 from app.plugins.eurlex import rdf
 from app.plugins.eurlex import source as src
 from tests.acquire.test_eurlex_dump import FORMEX, MTD, _items
@@ -128,3 +130,18 @@ def test_the_check_counts_a_wrapper_under_another_name(tmp_path):
     got = chk.check_chunk(chk.units(tmp_path, None), 3)
     assert got["misnamed"]["wrapper under another name"] == 1
     assert got["counts"]["units-with-a-file-not-its-name"] == 1
+
+
+def test_every_flagged_unit_is_listed_with_its_reasons(tmp_path):
+    """The restart's problem slice (tools/measure/eurlex_problem_slice.py)
+    reads the units check's flagged units: each with every reason it met."""
+    _unit(tmp_path / "a", CELEX, {**_swapped_unit_files(), rdf.TREE_FILE: _scoped((FX / MTD).read_bytes())})
+    _unit(tmp_path / "b", CELEX, {XHTML: b"<html/>", rdf.TREE_FILE: _scoped(_packaged_mtd())})
+    _unit(tmp_path / "c", CELEX, {**_items(FX), rdf.TREE_FILE: _scoped((FX / MTD).read_bytes())})
+    got = {Path(p).parent.parent.parent.name: r
+           for root in "abc" for p, r in chk.check_chunk(chk.units(tmp_path / root, None), 3)["flagged"]}
+    assert "in another's place" in got["a"] and got["b"] == ["package lacked"] and "c" not in got
+    out = tmp_path / "flagged.tsv"
+    assert chk.main([str(tmp_path / "a"), "--list-flagged", str(out)]) == 0
+    (line,) = out.read_text(encoding="utf-8").splitlines()
+    assert "in another's place" in line.split("\t")[1] and CELEX in line.split("\t")[0]

@@ -1688,7 +1688,7 @@ def _unit_key(path: str) -> str:
 
 
 def rederive_listed(root, name: str, lines: list[str], *, apply: bool = False, stop=None,
-                    log: Callable[[str], None] = print) -> dict[str, Any]:
+                    log: Callable[[str], None] = print, retry_errors: bool = False) -> dict[str, Any]:
     """THE DOCUMENTS A LIST NAMES derived again (2026-11-20, EUR-Lex5: the
     36,393 units the units check lists as holding an included Formex document,
     `--list-included`, whose text parser 5 now reads where it stands — Annex I
@@ -1735,6 +1735,14 @@ def rederive_listed(root, name: str, lines: list[str], *, apply: bool = False, s
         unmatched = len(wanted) - len({w for w in wanted if w in named or _unit_key(w) in named})
         marks = REDERIVE_MARKS + ("" if records else
                                   ", embed_done=CASE WHEN embed_done=1 THEN 0 ELSE embed_done END")
+        if retry_errors:
+            # `--retry-errors` (2026-11-22, the EUR-Lex5 restart's problem
+            # slice): a LISTED document's error cleared, so the reader the
+            # review corrected reads its unit again (C9: units refused for
+            # another act's wrapper were the act's own). A tombstone — a row
+            # discovery or retire-superseded retired — keeps its error
+            marks += (", error=CASE WHEN error LIKE 'superseded%' THEN error ELSE NULL END, "
+                      "retries=CASE WHEN error LIKE 'superseded%' THEN retries ELSE 0 END")
         out = {"collection": name, "listed": len(wanted), "documents": len(hit), "unmatched": unmatched,
                "embedded": embedded, "vectors": "kept: the records'" if records else
                "embedded again: the collection holds no records", "marks": marks}
