@@ -336,9 +336,13 @@ held to (P3's one-slot bytes) came from the 10-28 engine, and three of the
 four differences moved towards torch. The standing reference for MADLAD
 becomes torch's translations (345/379, no garbage, in-wave == alone), and
 P3's byte record is re-cut from the adopted engine at the cut-over, dated.
-Open for the record: which year torch gives in the one translation whose
-year changed (1930 → 1936) — if torch's is 1930, that one is a wrong
-translation on both current engines, one of 379. Lesson
+**Settled (München):** torch gives 1936, as both current engines do; the
+old P3 record said 1930, and the Italian query names no year — the engine
+was right, the record wrong. Of the four against P3's record, three move to
+torch (ja WQ2266122-no; fr WQ27912-de "en rimes" against P3's ungrammatical
+"rimée"; fi 1936) and one moves away by word order with the same meaning
+(en WQ2984121-fi). **None of the 379 is wrong on either engine; new == live
+on all 379, byte for byte.** Written in `phase2/f3/README`. Lesson
 written into the protocol: every timed row carries the node's mode and the
 card's other holders at its start — a reboot can hand the mode back to
 `running` unnoticed. Graph-off and check-off controls dropped.
