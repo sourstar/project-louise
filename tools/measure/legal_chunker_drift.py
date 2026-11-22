@@ -38,6 +38,7 @@ kills for memory ends the pass (`parallel.each_part`, the OOM rule), and
 from __future__ import annotations
 
 import argparse
+import re
 import json
 import sys
 import time
@@ -118,9 +119,10 @@ def cut_window(collection, lo: int, hi: int, to_version: int, keep: int) -> dict
     kept: Counter = Counter()
     skipped = Counter()
     first_error: dict[str, str] = {}
+    errors: list[dict] = []
     con = db.read_only_connect(collection)
     if con is None:
-        return {"langs": {}, "examples": [], "skipped": {"no manifest": 1}, "first_error": {}}
+        return {"langs": {}, "examples": [], "skipped": {"no manifest": 1}, "first_error": {}, "errors": []}
     try:
         rows = [dict(r) for r in con.execute(
             "SELECT * FROM documents WHERE rowid > ? AND rowid <= ? ORDER BY rowid", (lo, hi))]
@@ -138,6 +140,10 @@ def cut_window(collection, lo: int, hi: int, to_version: int, keep: int) -> dict
         except Exception as e:   # noqa: BLE001 — counted per language, the pass goes on
             c["errors"] += 1
             first_error.setdefault(lang, f"{row['uid']}: {type(e).__name__}: {e}"[:300])
+            # EVERY ONE, not the first a language (2026-11-22, EUR-Lex5's pilot:
+            # 3 in 2,000 refused by the Formex wrapper rules — the units to read)
+            errors.append({"uid": row["uid"], "lang": lang, "path": row.get("path"),
+                           "error": f"{type(e).__name__}: {e}"[:300]})
             continue
         if got is None:
             skipped["another chunker's layer"] += 1
@@ -158,7 +164,7 @@ def cut_window(collection, lo: int, hi: int, to_version: int, keep: int) -> dict
             kept[lang] += 1
             examples.append(_example(row["uid"], lang, now, then))
     return {"langs": {k: dict(v) for k, v in per.items()}, "examples": examples, "skipped": dict(skipped),
-            "first_error": first_error}
+            "first_error": first_error, "errors": errors}
 
 
 def _processes(asked: int | None) -> tuple[int | None, str]:
@@ -200,6 +206,7 @@ def measure(collection, *, to_version: int = 4, window: int = 5000, examples: in
     out_examples: list[dict] = []
     skipped: Counter = Counter()
     first_error: dict[str, str] = {}
+    errors: list[dict] = []
     t0 = time.monotonic()
     for k, got in enumerate(parallel.each_part(me.cut_window, tasks, limit=cores), 1):
         for lang, counts in got["langs"].items():
@@ -211,6 +218,7 @@ def measure(collection, *, to_version: int = 4, window: int = 5000, examples: in
         skipped.update(got["skipped"])
         for lang, msg in got["first_error"].items():
             first_error.setdefault(lang, msg)
+        errors += got.get("errors", [])
         if k % 20 == 0:
             log(f"[drift] {k}/{len(tasks)} windows, {sum(c['documents'] for c in per.values())} documents, "
                 f"{time.monotonic() - t0:.0f} s")
@@ -218,7 +226,18 @@ def measure(collection, *, to_version: int = 4, window: int = 5000, examples: in
     totals = {f: sum(v[f] for v in langs.values()) for f in FIELDS}
     return {"collection": collection.name, "to": int(to_version), "languages": langs, "totals": totals,
             "skipped": dict(skipped), "first_error": first_error, "examples": out_examples,
+            "errors": errors, "errors_by_reason": dict(reasons(errors).most_common()),
             "seconds": round(time.monotonic() - t0, 1)}
+
+
+#: what makes two errors one reason: their ids, CELEX numbers, file names and
+#: years blanked ("31958D1006(02)'s only wrapper P_1958017EN.01041901.doc.xml
+#: names 31958D1006(01)" → "#'s only wrapper # names #")
+_PARTICULAR = re.compile(r"[\w.():/-]*\d[\w.():/-]*")
+
+
+def reasons(errors: list[dict]) -> Counter:
+    return Counter(_PARTICULAR.sub("#", e["error"]) for e in errors)
 
 
 def table(result: dict) -> str:
@@ -273,7 +292,8 @@ def main(argv: list[str] | None = None) -> int:
                   processes=a.processes)
     for lang, v in got["languages"].items():
         print(json.dumps({"lang": lang, **v}, ensure_ascii=False))
-    print(json.dumps({k: got[k] for k in ("collection", "to", "totals", "skipped", "first_error", "seconds")},
+    print(json.dumps({k: got[k] for k in ("collection", "to", "totals", "skipped", "first_error",
+                                         "errors_by_reason", "seconds")},
                      ensure_ascii=False))
     for ex in got["examples"]:
         print(json.dumps({"example": ex}, ensure_ascii=False))

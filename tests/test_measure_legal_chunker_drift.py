@@ -134,3 +134,20 @@ def test_a_stopped_collection_is_read_from_its_toml_never_put_back(collection, m
     assert drift.main(["legi", "--examples", "1", "--toml", str(toml)]) == 0
     assert drift.main(["other", "--toml", str(toml)]) == 2, "the file names another collection"
     assert "is the collection 'legi', not 'other'" in capsys.readouterr().err
+
+
+def test_every_error_is_listed_with_its_reason(collection, monkeypatch):
+    """EUR-Lex5's pilot: 3 errors in 2,000, the first a language only kept.
+    Every one is listed (uid, language, path, error) and counted by reason,
+    its particulars blanked."""
+    real = drift.cut_both
+
+    def refuse(coll, row, plugin, to_version):
+        if "LEGIARTI000000000201" in row["path"] or "LEGIARTI000000000202" in row["path"]:
+            raise ValueError(f"{row['uid']}'s only wrapper P_1958017EN.01041901.doc.xml names 31958D1006(01)")
+        return real(coll, row, plugin, to_version)
+    monkeypatch.setattr(drift, "cut_both", refuse)
+    got = drift.measure(collection, to_version=4, window=3, examples=0, log=lambda m: None)
+    assert got["totals"]["errors"] == 2 and len(got["errors"]) == 2
+    assert {e["lang"] for e in got["errors"]} == {"el", "fr"} and all(e["path"] for e in got["errors"])
+    assert got["errors_by_reason"] == {"ValueError: #'s only wrapper # names #": 2}
