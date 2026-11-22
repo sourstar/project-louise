@@ -4256,6 +4256,8 @@ def _effective_config() -> dict:
         "transfer.segments_per_file": pc.transfer.segments_per_file,
         "ask.latency_budget_ms": pc.ask.latency_budget_ms,
         "ask.translate_share": f"{pc.ask.translate_share:.0%}",
+        # the resolution the web's timer reads (app/idle_trim.py `timeout_s`)
+        "web.idle_trim_s": _idle_trim_said(),
     }
     if pc.embed_defaults:
         # still parsed, so an older platform.toml loads — and said to be
@@ -4272,6 +4274,12 @@ def _effective_config() -> dict:
              "bandwidth override (state/node.sqlite, expires)":
                  _rate(override) if override else "(none)"}
     return {"tier1": tier1, "tier2": tier2, "tier2_platform": tier2_platform, "tier3": tier3}
+
+
+def _idle_trim_said() -> str:
+    from . import idle_trim
+    s = idle_trim.timeout_s()
+    return "never" if s <= 0 else f"{s:.0f} s without a question"
 
 
 def _ping(url: str) -> bool:

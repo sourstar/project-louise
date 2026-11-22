@@ -209,7 +209,16 @@ def show() -> dict[str, Any]:
             # the historical reader's tables, or that none is synced (RULE 2;
             # app/reading.py `status`)
             "historical_reading": _reading_status(loaded),
+            # the web gives back its freed memory after this many seconds
+            # without a question (platform.toml [web] idle_trim_s; 0 never):
+            # the value its timer reads, from its one resolution
+            "web": {"idle_trim_s": _idle_trim_s()},
             "last_round": last_round(loaded)}
+
+
+def _idle_trim_s() -> float:
+    from app import idle_trim
+    return idle_trim.timeout_s()
 
 
 def _cascade() -> list[dict[str, Any]]:

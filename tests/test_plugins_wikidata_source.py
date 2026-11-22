@@ -16,6 +16,16 @@ from app.plugins.base import DiscoverState
 from app.plugins.wikidata import dump as dump_mod, ids, pack, textify
 from app.plugins.wikidata.source import WikidataSource, find_dumps, split_locator
 
+
+@pytest.fixture(autouse=True)
+def _files_cache_floor_not_this_tests(monkeypatch):
+    """The files cache's free-space floor (derived.STAGE_FREE, 10 % of the
+    disk) is tests/test_derived_staged.py's. Here it read THIS machine's
+    disk: a run that filled it past 90 % skipped the copy these tests read
+    (2026-11-22, a sandbox at 11 % free). A copy still has to fit."""
+    from app import derived
+    monkeypatch.setattr(derived, "STAGE_FREE", 0.0)
+
 FIXTURES = Path(__file__).parent / "fixtures" / "wikidata-mini"
 
 

@@ -189,6 +189,11 @@ services:
       DISCOVER_INTERVAL_MIN: '360'
       # ── platform ──
       ADMIN_TOKEN_FILE: /run/louise/admin/admin-token
+      # glibc's cap on its per-thread heaps, for the web too (operator,
+      # 2026-11-22: the web "should be less than 1GB"): 1,780 -> 983 MiB anon
+      # warm on the same queries (München, the live image). The worker sets
+      # its own below; its reasons are there
+      MALLOC_ARENA_MAX: '2'
     volumes:
       - /mnt/tank/media/public/books/project_gutenberg:/corpus:ro
       - /mnt/ssd4/apps/louise-rag/data:/data

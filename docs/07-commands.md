@@ -2084,6 +2084,11 @@ variable, a file, a log line or a message.
              # MAIN languages: its one-language text indexes, largest first by documents, until they hold this
              # share of the collection (0 < share <= 1; 1.0 is every one of them). The others are searched by
              # the vector leg, and by text only in the query's own language (05 §5.2; amended 2026-10-10)
+[web]        idle_trim_s = 900                          # after this many seconds without a QUESTION (an Ask request:
+             # the Ask page's routes, /api/search, /api/ask/…, /v1/chat/completions), the web gives back the heap
+             # it freed, once, with glibc's malloc_trim(0); 0 never. Read at every check, so an edit needs no
+             # restart; `node show` and the System page show the value in force (app/idle_trim.py `timeout_s`;
+             # operator, 2026-11-22: the web under 1 GB, "after 15 minutes without a question")
 [models]     load_timeout_s = 120                       # the bound on LOADING a model its runner reports as not
              # loaded (LocalAI's GET /system): Louise warms it with a minimal request first, so no request's
              # budget or timeout holds a cold start; a model measured on the node has its own bound
