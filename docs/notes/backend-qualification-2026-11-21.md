@@ -459,7 +459,27 @@ phase 4 says so.*
 | 35B prefill, 2,061-token prompt | 820 tok/s, first token 2.51 s | **P ≈ 880–1,010 tok/s**, ≈ 2.0–2.3 s | the same PR at 2048 tokens: +23 % (B60), +7 % (B70 user) |
 | 35B decode, 1 stream | 99.6 / 97.3 tok/s | **P ≈ 95–100 tok/s** | #30156: −4.6 % at short prompts, flat at 2048; nothing else upstream touches dense-path decode |
 | 35B footprint | 21,782 MiB | **M 21,642 MiB (phase 2, the check's own count)**; under the cache **P ≈ 9 GiB** with 4 GiB of cache | the cache: experts (≈ 18.4 GB) in host RAM |
-| 35B decode under the MoE cache | — (never run) | **P ≈ 45–75 tok/s** at 4–8 GiB cache, share 0–0.5 | community, Qwen3.6-35B-A3B Q6_K_XL on CUDA: 42 → 67 tok/s (2080 Ti, 6.8 GB cache, share 0.95), 44 → 74 (5060 Ti); SYCL unreported; the cache trades speed for room, it does not beat the resident 99.6 |
+| 35B decode under the MoE cache | — (never run) | **P ≈ 45–75 tok/s** by the community's cards; **P ≈ 60–80 tok/s for THIS host** at 60–80 % hits (E, modelled below) | community, Qwen3.6-35B-A3B Q6_K_XL on CUDA: 42 → 67 tok/s (2080 Ti, PCIe 3.0, 6.8 GB cache, share 0.95), 44 → 74 (5060 Ti, PCIe 5.0 x8); their RAM unknown — slower links than ours, so not our DDR5-6400 or Gen5 x16. SYCL unreported; the cache trades speed for room, it does not beat the resident 99.6 |
+
+*The MoE cache against this host's RAM and link (E, 2026-11-22).* Per token
+the 35B touches 8 experts × 40 layers = 320 of its 10,240, ≈ 1.8 MB each at
+Q4: ≈ 575 MB. With a hit rate h the misses are (1 − h) × 575 MB per token,
+served two ways: uploaded to the card — PCIe 5.0 x16, ~45 GB/s practical,
+the host reading them at DRAM speed, which at 6400 (~80 GB/s practical) is
+not the limit — or computed on the CPU from host RAM (`moe_cache_cpu_share`),
+which IS DRAM-bound: the Ryzen 7600 reads ≈ 70–80 GB/s at 6400 against
+≈ 57–65 at 5200, so the 6400 profile lifts the CPU share's ceiling by about a
+fifth and makes a CPU-computed miss slightly cheaper than an uploaded one.
+Lower bounds per token at h = 0.6 / 0.8: misses 230 / 115 MB → 5.1 / 2.6 ms
+uploaded, 3.3 / 1.6 ms on the CPU, beside the card's own ≈ 10 ms (99.6 tok/s
+resident); serialised, ≈ 13–15 ms → **65–80 tok/s**, overlapped better.
+What decides it is the hit rate on OUR prompts (upstream saw 61–93 % by
+cache size on a larger model) and whether the host experts are PINNED:
+mmap'd (the default) they are not, and upstream's docs say the uploads then
+run below link speed — phase 4's cache rows run twice, `mlock` on and off.
+The host's DRAM copy bandwidth itself has never been measured here
+(stressapptest was a stability test): one 6-process copy measurement goes
+into phase 4's conditions.
 | MADLAD, one translation / one 7-language question | 0.43 s / 1.06 s | **M 0.42 s** (−2 %); bytes identical 379/379 | phase 2 rerun, paused |
 | encoders, 24 texts through LocalAI + VeGa | bge-m3 1.238 s · nemotron 1.330 · qwen3-4b 4.374 · medcpt-query 0.360 | **M 1.204 · 1.277 · 4.311 · 0.347** (−2.7 / −4.0 / −1.4 / −3.6 %); bytes 16/16 identical; medcpt's gate exact | phase 3 first pass on `133ef68`; repeated on `c3294e` |
 | nemotron-1b reranker, per list | 2,512 ms median | **P ≈ 2,500 ms** (no upstream claim on this path) | phase 3 second pass measures it |
