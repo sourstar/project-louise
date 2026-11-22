@@ -143,7 +143,8 @@ def test_the_parse_pool_builds_the_bytes_one_process_builds(tmp_path, monkeypatc
         out = claim_index.build(tree)
         assert out["claims"] == 1200 and out["parts"] == 4
         files[procs] = {p.name: p.read_bytes() for p in sorted(claim_index.Path(out["place"]).iterdir())}
-    assert files[1] == files[2] and sum(n.endswith(".npy") for n in files[1]) == 5
+    assert files[1] == files[2] and sum(n.endswith(".npy") for n in files[1]) == \
+        len(claim_index.ARRAYS) + len(claim_index.SEEK), "the claims' arrays and the seek table, the same bytes"
 
 
 def test_the_worker_keeps_them_in_a_thread_that_leaves_at_the_stop(tmp_path, monkeypatch):
@@ -232,6 +233,7 @@ def _stand_in(monkeypatch, tmp_path, parts=6, frames=5, records=400, line=b"x" *
     monkeypatch.setattr(pack_records, "read_frame", read_frame)
     d = claim_index.DiskClaimIndex.__new__(claim_index.DiskClaimIndex)
     d.shard_tree, d.parts = tmp_path, [f"part{i}.jsonl.zst" for i in range(parts)]
+    d.dest, d.seek, d._sized, d._seek_looked = tmp_path / "no-index", None, {}, 0.0   # no seek table
     d._lock, d._frames, d._frame_bytes, d._indexes = threading.Lock(), OrderedDict(), 0, OrderedDict()
     return d, reads
 
@@ -270,3 +272,113 @@ def test_a_frame_over_the_budget_is_still_answered(tmp_path, monkeypatch):
     d, _reads = _stand_in(monkeypatch, tmp_path)
     assert d._lines(0, 0) == [b"x" * 200] * 10
     assert len(d._frames) == 1, "the one in hand is kept until another comes"
+
+
+
+# ---- the seek table (the operator, 2026-11-22: "B"): a part's frames found in
+# fixed-width arrays on the fast cache, read in place; no part index decoded ----
+
+def _wide(tmp_path, monkeypatch, claims=1600):
+    from tests.hold.test_annotations_stream import a_wide_target, star_claims
+    from tests.hold.test_annotations_update_stream import create
+    monkeypatch.setattr(ann, "SHARD_RECORDS", 300)
+    monkeypatch.setattr(config, "CACHE_DIR", str(tmp_path / "fast"))
+    a_wide_target(tmp_path, claims, per_part=300)
+    create(tmp_path, star_claims(claims))
+    tree = col.shard_dir_of(tmp_path, "same")
+    from app.share import seeder
+    snap = seeder.cached_snapshot(tree)
+    claim_index.build(tree, snap)
+    return tree, snap
+
+
+def _no_part_index(monkeypatch):
+    from app.pack import records as pack_records
+
+    def refused(p):
+        raise AssertionError(f"a part's pack index decoded at search: {p}")
+    monkeypatch.setattr(pack_records, "read_index", refused)
+
+
+def test_a_lookup_reads_its_frame_from_the_seek_table_and_decodes_no_part_index(tmp_path, monkeypatch):
+    tree, snap = _wide(tmp_path, monkeypatch)
+    dest = claim_index.place(tree, snap.hash)
+    assert str(tmp_path / "fast") in str(dest), "derived: on the fast cache (LOUISE_CACHE_DIR, ssd5)"
+    assert claim_index.has_seek(dest) and all((dest / f"{n}.npy").is_file() for n in claim_index.SEEK)
+    disk = claim_index.load(tree, snap)
+    assert disk.seek is not None and len(disk.parts) > 2, "several parts"
+    from app.pack import records as pack_records
+    want = {}
+    for part in range(len(disk.parts)):
+        index = pack_records.read_index(tree / disk.parts[part])
+        want[part] = [pack_records.read_frame(tree / disk.parts[part], index, f) for f in range(len(index.frames))]
+    _no_part_index(monkeypatch)
+    for part, frames in want.items():
+        for f, lines in enumerate(frames):
+            assert disk._lines(part, f) == lines, (part, f)
+    assert not disk._indexes, "no part's index held"
+
+
+def test_the_seek_tables_answers_are_the_memory_indexs(tmp_path, monkeypatch):
+    tree, snap = _wide(tmp_path, monkeypatch, claims=900)
+    ann._indexes.clear()
+    monkeypatch.setattr(claim_index, "LARGE", 10 ** 9)          # the in-memory index, for comparison
+    mem = ann.index_of(tree)
+    disk = claim_index.load(tree, snap)
+    _no_part_index(monkeypatch)
+    uids = sorted(set(mem.by_target) | set(mem.graph))
+    assert uids
+    for uid in uids[:200]:
+        assert _ids(disk.by_target.get(uid)) == _ids(mem.by_target.get(uid, ())), uid
+        assert _ids(disk.graph.get(uid)) == _ids(mem.graph.get(uid, ())), uid
+
+
+def test_an_index_built_before_it_is_given_its_seek_table_by_the_worker(tmp_path, monkeypatch):
+    tree, snap = _wide(tmp_path, monkeypatch)
+    dest = claim_index.place(tree, snap.hash)
+    kept = {n: (dest / f"{n}.npy").read_bytes() for n in claim_index.ARRAYS}
+    (dest / "seek.json").unlink()
+    for n in claim_index.SEEK:
+        (dest / f"{n}.npy").unlink()
+    disk = claim_index.load(tree, snap)
+    assert disk.seek is None
+    first = disk._lines(0, 0)
+    assert disk._indexes, "meanwhile through the part's own index, bounded"
+    got = claim_index.add_seek(tree, dest)
+    assert got["seek"] == len(disk.parts) and claim_index.has_seek(dest)
+    assert {n: (dest / f"{n}.npy").read_bytes() for n in claim_index.ARRAYS} == kept, "the claims' arrays kept"
+    assert claim_index.add_seek(tree, dest)["skipped"], "once"
+    monkeypatch.setattr(claim_index, "SEEK_LOOK_S", 0.0)
+    _no_part_index(monkeypatch)
+    disk._frames.clear()
+    disk._indexes.clear()
+    assert disk._lines(0, 0) == first and disk.seek is not None, "the web picks it up without a restart"
+
+
+def test_the_workers_pass_adds_the_seek_table_once(tmp_path, monkeypatch):
+    root = _held_root(tmp_path, monkeypatch)
+    _make(root, claims_file(a_claim(), a_claim("pubmed:3", "pubmed:1"), a_claim("pubmed:2", "pubmed:4")),
+          lambda m: None)
+    from app.share import seeder
+    tree = col.shard_dir_of(root, "same")
+    dest = claim_index.place(tree, seeder.cached_snapshot(tree).hash)
+    (dest / "seek.json").unlink()
+    said: list[str] = []
+    assert claim_index.maintain(root, log=said.append) == []
+    assert claim_index.has_seek(dest) and any("seek table written" in m for m in said)
+    said.clear()
+    claim_index.maintain(root, log=said.append)
+    assert said == [], "once"
+
+
+def test_a_part_that_is_not_the_one_the_table_was_made_from_is_read_through_its_own_index(tmp_path, monkeypatch):
+    tree, snap = _wide(tmp_path, monkeypatch)
+    disk = claim_index.load(tree, snap)
+    sizes = disk.seek["part_bytes"].copy()
+    sizes[0] += 1
+    disk.seek = {**disk.seek, "part_bytes": sizes}
+    from app.pack import records as pack_records
+    p = tree / disk.parts[0]
+    index = pack_records.read_index(p)
+    assert disk._lines(0, 0) == pack_records.read_frame(p, index, 0)
+    assert disk._sized[0] is False and 0 in disk._indexes, "its own index, not the table's rows"

@@ -17,12 +17,32 @@ tree's path and the snapshot's hash:
 - `end_part.npy`, `end_frame.npy`, `end_line.npy`: where that claim's record
   sits in the snapshot's parts (09 §9.5's pack index: part, frame, line);
 - `parts.json`: the parts' paths, in `end_part`'s numbering; `meta.json`: the
-  snapshot hash, the counts.
+  snapshot hash, the counts;
+- THE SEEK TABLE (2026-11-22, the operator's choice B): every part's frame
+  table as fixed-width arrays, `frame_offset`, `frame_csize`, `frame_rsize`
+  (int64) and `frame_lines` (int32), all parts end to end, `part_frame_start`
+  (int64, a part's first row, one past the last at the end) and `part_bytes`
+  (int64, the part's size, checked before it is read); `seek.json` written
+  last. A lookup finds its frame there and reads it (`pack_records.
+  read_frame_at`): no part's pack index is decoded in the process.
 
 A lookup hashes the uid, finds its run in `end_hash` (a binary search on a
 memory-mapped array), reads each claim's frame (one pread + one decompress,
 cached), and keeps a claim only if the uid IS one of its ends — so a hash
 collision can never put a claim on a record it does not name.
+
+THE SEEK TABLE'S STANDARD: the zstd seekable format's seek table
+(contrib/seekable_format: fixed-width little-endian entries of compressed and
+decompressed sizes, read without decoding), here with absolute offsets so a
+row is found without a sum, and Parquet's OffsetIndex for the same purpose.
+It replaces what LevelDB does (each open table's whole index held in memory,
+bounded by a file count) by what RocksDB's partitioned index does (only the
+slice a lookup needs is touched). It is DERIVED, so it lives where the rest
+of this index lives, under LOUISE_CACHE_DIR (ssd5 on the node, the fast
+cache, app/derived.py; invariant 6), mmapped: its pages sit in the page
+cache, reclaimable, never in the web's heap (the operator, 2026-11-22: ssd5
+for what would otherwise be held in RAM). A part's index was kept decoded
+before: +485 MiB a question (München, the same day).
 
 STANDARD NOT ADOPTED, written down (CLAUDE.md): a key-value store (LMDB,
 RocksDB) would serve the same lookups; sorted NumPy arrays memory-mapped are
@@ -49,6 +69,11 @@ KIND = "annotation-claim-index"
 LARGE = 250_000
 WORK, GRAPH = 0, 1
 ARRAYS = ("end_hash", "end_kind", "end_part", "end_frame", "end_line")
+#: the seek table's arrays (module docstring); `seek.json` says they are whole
+SEEK = ("frame_offset", "frame_csize", "frame_rsize", "frame_lines", "part_frame_start", "part_bytes")
+SEEK_VERSION = 1
+#: how often an index without its seek table looks for the worker's, seconds
+SEEK_LOOK_S = 60.0
 #: FRAMES KEPT DECOMPRESSED, per process, by the bytes their lines hold: 256
 #: frames of 1,000 claims each held ~88 MiB in the web (München, 2026-11-22,
 #: tracemalloc between two questions; operator: the web "should be less than
@@ -84,6 +109,7 @@ def index_part(path: str, gone: frozenset) -> dict[str, Any]:
     from array import array
     p = Path(path)
     index = pack_records.read_index(p)
+    seek = _part_seek(p, index)
     h, k, fr, ln = array("q"), array("b"), array("i"), array("i")
     claims = 0
     for f in range(len(index.frames)):
@@ -100,7 +126,79 @@ def index_part(path: str, gone: frozenset) -> dict[str, Any]:
                 fr.append(f)
                 ln.append(line_no)
     return {"hash": h.tobytes(), "kind": k.tobytes(), "frame": fr.tobytes(), "line": ln.tobytes(),
-            "claims": claims}
+            "claims": claims, "seek": seek}
+
+
+def _part_seek(p: Path, index) -> dict[str, Any]:
+    """One part's rows of the seek table: each frame's offset, compressed and
+    raw size and lines, and the part's size. A Parquet part's row groups have
+    no byte offsets here: their sizes are -1, and such a part is read through
+    its own index (`DiskClaimIndex._lines`)."""
+    from array import array
+    off, cs, rs, n = array("q"), array("q"), array("q"), array("i")
+    parquet = str(p).endswith(".parquet")
+    for frame in index.frames:
+        off.append(-1 if parquet else int(frame[0]))
+        cs.append(-1 if parquet else int(frame[1]))
+        rs.append(-1 if parquet else int(frame[2]))
+        n.append(int(frame[3]))
+    return {"offset": off.tobytes(), "csize": cs.tobytes(), "rsize": rs.tobytes(), "lines": n.tobytes(),
+            "bytes": int(p.stat().st_size)}
+
+
+def part_seek(path: str) -> dict[str, Any]:
+    """A task of `add_seek`: one part's rows of the seek table."""
+    from app.pack import records as pack_records
+    p = Path(path)
+    return _part_seek(p, pack_records.read_index(p))
+
+
+def _write_seek(dest: Path, seeks: list[dict[str, Any]]) -> None:
+    """The seek table's arrays, then `seek.json`, each written whole."""
+    cat = (lambda key, t: np.concatenate([np.frombuffer(s[key], dtype=t) for s in seeks])
+           if seeks else np.zeros(0, dtype=t))
+    counts = [len(s["lines"]) // 4 for s in seeks]
+    got = {"frame_offset": cat("offset", np.int64), "frame_csize": cat("csize", np.int64),
+           "frame_rsize": cat("rsize", np.int64), "frame_lines": cat("lines", np.int32),
+           "part_frame_start": np.concatenate([[0], np.cumsum(counts, dtype=np.int64)]).astype(np.int64),
+           "part_bytes": np.asarray([s["bytes"] for s in seeks], dtype=np.int64)}
+    for name in SEEK:
+        tmp = dest / f"{name}.tmp.npy"
+        np.save(tmp, got[name])
+        tmp.replace(dest / f"{name}.npy")
+    tmp = dest / "seek.json.tmp"
+    tmp.write_text(json.dumps({"version": SEEK_VERSION, "parts": len(seeks), "frames": int(sum(counts))}))
+    tmp.replace(dest / "seek.json")
+
+
+def has_seek(dest: Path) -> bool:
+    try:
+        return json.loads((Path(dest) / "seek.json").read_text()).get("version") == SEEK_VERSION
+    except (OSError, ValueError):
+        return False
+
+
+def add_seek(shard_tree: Path, dest: Path, *, stop=None) -> dict[str, Any]:
+    """The seek table for an index built without one (before 2026-11-22):
+    one pack index read a part, on the parse pool, the claims untouched
+    (RULE 1: the arrays already built are kept). `stop()` between parts
+    ends it with nothing written."""
+    from app import parallel
+    dest = Path(dest)
+    if has_seek(dest):
+        return {"skipped": "has its seek table", "place": str(dest)}
+    parts = json.loads((dest / "parts.json").read_text())
+    seeks: list[dict[str, Any]] = []
+    results = parallel.each_part(part_seek, [(str(Path(shard_tree) / p),) for p in parts])
+    for i, got in enumerate(results):
+        if stop is not None and stop():
+            results.close()
+            return {"stopped": f"after {i} of {len(parts)} part(s)", "place": str(dest)}
+        seeks.append(got)
+    with derived.building(dest / "seek"):
+        if not has_seek(dest):
+            _write_seek(dest, seeks)
+    return {"seek": len(parts), "place": str(dest)}
 
 
 def build(shard_tree: Path, snap=None, *, stop=None, dest: Path | None = None) -> dict[str, Any]:
@@ -135,6 +233,7 @@ def build(shard_tree: Path, snap=None, *, stop=None, dest: Path | None = None) -
     frames_n: list[np.ndarray] = []
     lines_n: list[np.ndarray] = []
     claims = 0
+    seeks: list[dict[str, Any]] = []
     results = parallel.each_part(index_part, tasks)
     for part_i, got in enumerate(results):
         if stop is not None and stop():
@@ -146,6 +245,7 @@ def build(shard_tree: Path, snap=None, *, stop=None, dest: Path | None = None) -
         parts_n.append(np.full(len(h), part_i, dtype=np.int32))
         frames_n.append(np.frombuffer(got["frame"], dtype=np.int32))
         lines_n.append(np.frombuffer(got["line"], dtype=np.int32))
+        seeks.append(got["seek"])
         claims += got["claims"]
     parts = held
     cat = (lambda xs, t: np.concatenate(xs) if xs else np.zeros(0, dtype=t))
@@ -163,6 +263,7 @@ def build(shard_tree: Path, snap=None, *, stop=None, dest: Path | None = None) -
             np.save(tmp, got[name])
             tmp.replace(dest / f"{name}.npy")
         (dest / "parts.json").write_text(json.dumps(parts))
+        _write_seek(dest, seeks)
         meta = {"snapshot_id": snap.snapshot_id, "snapshot_hash": snap.hash, "claims": claims,
                 "ends": int(len(end_hash)), "parts": len(parts)}
         tmp = dest / "meta.json.tmp"
@@ -236,7 +337,25 @@ def maintain(root: Path, *, stop=None, log=print, failed: dict[str, str] | None 
             snap = seeder.cached_snapshot(tree)
         except Exception:   # noqa: BLE001 — an unreadable snapshot is its own check's to name
             continue
-        if not is_large(snap) or (place(tree, snap.hash) / "meta.json").is_file():
+        if not is_large(snap):
+            continue
+        dest = place(tree, snap.hash)
+        if (dest / "meta.json").is_file():
+            # built before the seek table (2026-11-22): the table added, the
+            # claims' arrays kept (RULE 1)
+            if not has_seek(dest) and f"{tree}@{snap.hash}#seek" not in failed:
+                try:
+                    got = add_seek(tree, dest, stop=stop)
+                except Exception as e:   # noqa: BLE001 — said once; the parts' own indexes serve meanwhile
+                    failed[f"{tree}@{snap.hash}#seek"] = f"{type(e).__name__}: {e}"
+                    log(f"[annotations] {c.name}: the claim index's seek table could not be written "
+                        f"({e}); its parts are read through their own indexes")
+                    continue
+                if "stopped" in got:
+                    break
+                if "seek" in got:
+                    log(f"[annotations] {c.name}: the claim index's seek table written ({got['seek']} parts): "
+                        f"no part's index is decoded at search")
             continue
         key = f"{tree}@{snap.hash}"
         if key in failed:
@@ -278,6 +397,14 @@ class DiskClaimIndex:
         self.shard_tree, self.dest, self.snapshot_id = Path(shard_tree), Path(dest), snapshot_id
         self.arrays = {name: np.load(dest / f"{name}.npy", mmap_mode="r") for name in ARRAYS}
         self.parts = json.loads((dest / "parts.json").read_text())
+        #: the seek table, mmapped, where the index has one (else every part
+        #: is read through its own pack index, the bounded caches below)
+        self.seek = ({name: np.load(dest / f"{name}.npy", mmap_mode="r") for name in SEEK}
+                     if has_seek(dest) else None)
+        #: parts whose size was checked against the seek table: True when it
+        #: matches, False when the part is read through its own index instead
+        self._sized: dict[int, bool] = {}
+        self._seek_looked = 0.0
         self.by_target = _Ends(self, WORK)
         self.graph = _Ends(self, GRAPH)
         self._lock = threading.Lock()
@@ -306,13 +433,18 @@ class DiskClaimIndex:
             if index is not None:
                 self._indexes.move_to_end(part)
         p = self.shard_tree / self.parts[part]
-        if index is None:
+        row = self._seek_row(part, frame, p) if index is None else None
+        if row is not None:
+            lines = pack_records.read_frame_at(p, *row, k=frame)
+            index = False                    # read through the seek table: no part index held
+        elif index is None:
             index = _frame_table(pack_records.read_index(p))
             with self._lock:
                 self._indexes[part] = index
                 while len(self._indexes) > INDEX_CACHE:
                     self._indexes.popitem(last=False)
-        lines = pack_records.read_frame(p, index, frame)
+        if index is not False:
+            lines = pack_records.read_frame(p, index, frame)
         size = _held_bytes(lines)
         with self._lock:
             if key not in self._frames:
@@ -322,6 +454,46 @@ class DiskClaimIndex:
                 _, (_, gone) = self._frames.popitem(last=False)
                 self._frame_bytes -= gone
         return lines
+
+    def _seek_row(self, part: int, frame: int, p: Path) -> tuple[int, int, int, int] | None:
+        """(offset, csize, rsize, lines) of the frame from the seek table, or
+        None: no table, a Parquet part, or a part whose size is not the one
+        the table was made from (read through its own index instead)."""
+        s = self.seek
+        if s is None:
+            s = self._seek_now()
+            if s is None:
+                return None
+        sized = self._sized.get(part)
+        if sized is None:
+            try:
+                sized = int(p.stat().st_size) == int(s["part_bytes"][part])
+            except OSError:
+                sized = False
+            self._sized[part] = sized
+        if not sized:
+            return None
+        i = int(s["part_frame_start"][part]) + frame
+        if i >= int(s["part_frame_start"][part + 1]) or int(s["frame_csize"][i]) < 0:
+            return None
+        return (int(s["frame_offset"][i]), int(s["frame_csize"][i]), int(s["frame_rsize"][i]),
+                int(s["frame_lines"][i]))
+
+    def _seek_now(self):
+        """The seek table once the worker has added it (an index built before
+        it): looked for at most every SEEK_LOOK_S, then kept."""
+        import time
+        now = time.monotonic()
+        if now - self._seek_looked < SEEK_LOOK_S:
+            return None
+        self._seek_looked = now
+        if not has_seek(self.dest):
+            return None
+        try:
+            self.seek = {name: np.load(self.dest / f"{name}.npy", mmap_mode="r") for name in SEEK}
+        except (OSError, ValueError):
+            return None
+        return self.seek
 
     def claims_of(self, uid: str, kind: int) -> list:
         from app.hold import annotations as ann
