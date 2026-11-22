@@ -49,8 +49,14 @@ KIND = "annotation-claim-index"
 LARGE = 250_000
 WORK, GRAPH = 0, 1
 ARRAYS = ("end_hash", "end_kind", "end_part", "end_frame", "end_line")
-#: frames kept decompressed, per process
-FRAME_CACHE = 256
+#: FRAMES KEPT DECOMPRESSED, per process, by the bytes their lines hold: 256
+#: frames of 1,000 claims each held ~88 MiB in the web (München, 2026-11-22,
+#: tracemalloc between two questions; operator: the web "should be less than
+#: 1GB"). A frame read again costs one pread + one decompress (~1 ms)
+FRAME_CACHE_BYTES = 32 << 20
+#: PARTS WHOSE FRAME TABLE IS KEPT, per process, least recently used first out.
+#: The table alone: a part's uid map is never kept (`_frame_table`)
+INDEX_CACHE = 1024
 
 
 def uid_hash(uid: str) -> int:
@@ -275,28 +281,46 @@ class DiskClaimIndex:
         self.by_target = _Ends(self, WORK)
         self.graph = _Ends(self, GRAPH)
         self._lock = threading.Lock()
+        #: (part, frame) -> (its lines, their bytes), within FRAME_CACHE_BYTES
         self._frames: OrderedDict = OrderedDict()
-        self._indexes: dict[int, Any] = {}
+        self._frame_bytes = 0
+        #: part -> its frame table, within INDEX_CACHE parts
+        self._indexes: OrderedDict = OrderedDict()
 
     def _lines(self, part: int, frame: int) -> list[bytes]:
+        """The lines of one frame of one part. BOUNDED (2026-11-22, München:
+        five questions took the web to 4,060 MiB anon, 3,470 after a trim):
+        every part's WHOLE pack index was kept for the process's life, its uid
+        map of every record in the part included, +485 MiB a question decoded
+        from JSON (`pack_records.read_index`). Now a part keeps its frame table
+        alone, the least recently used parts go past INDEX_CACHE, and the
+        frames kept are bounded by their bytes."""
         from app.pack import records as pack_records
         key = (part, frame)
         with self._lock:
             hit = self._frames.get(key)
             if hit is not None:
                 self._frames.move_to_end(key)
-                return hit
+                return hit[0]
             index = self._indexes.get(part)
+            if index is not None:
+                self._indexes.move_to_end(part)
         p = self.shard_tree / self.parts[part]
         if index is None:
-            index = pack_records.read_index(p)
+            index = _frame_table(pack_records.read_index(p))
             with self._lock:
                 self._indexes[part] = index
+                while len(self._indexes) > INDEX_CACHE:
+                    self._indexes.popitem(last=False)
         lines = pack_records.read_frame(p, index, frame)
+        size = _held_bytes(lines)
         with self._lock:
-            self._frames[key] = lines
-            while len(self._frames) > FRAME_CACHE:
-                self._frames.popitem(last=False)
+            if key not in self._frames:
+                self._frames[key] = (lines, size)
+                self._frame_bytes += size
+            while self._frame_bytes > FRAME_CACHE_BYTES and len(self._frames) > 1:
+                _, (_, gone) = self._frames.popitem(last=False)
+                self._frame_bytes -= gone
         return lines
 
     def claims_of(self, uid: str, kind: int) -> list:
@@ -319,6 +343,21 @@ class DiskClaimIndex:
             if uid in ann.record_ends(c):        # a hash collision never names a record
                 out.append(ann.Claim(r["uid"], c))
         return out
+
+
+def _frame_table(index):
+    """A part's pack index as a lookup needs it: its frames (offset, sizes,
+    count, first uid), its uid map dropped. A lookup finds the frame from the
+    built index's arrays, never from the part's uids; the map is every record
+    of the part, the bulk of the index (wikipedia-articles: 12.3 M claims)."""
+    import dataclasses
+    return dataclasses.replace(index, uids={})
+
+
+def _held_bytes(lines: list[bytes]) -> int:
+    """What a frame's lines hold in memory: their bytes and each object's
+    own overhead (CPython: 33 bytes a bytes object, 8 a list slot)."""
+    return sum(len(line) for line in lines) + 41 * len(lines) + 56
 
 
 def load(shard_tree: Path, snap) -> DiskClaimIndex | None:

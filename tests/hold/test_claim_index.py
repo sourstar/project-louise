@@ -202,3 +202,71 @@ def test_the_workers_build_runs_in_a_process_of_its_own(tmp_path, monkeypatch):
     shutil.rmtree(dest)
     got = claim_index.build_isolated(tree, snap, stop=lambda: True, poll_s=0.0)
     assert "stopped" in got and not (dest / "meta.json").exists(), "a stop publishes nothing"
+
+
+# ---- what a lookup keeps is bounded (München, 2026-11-22: five questions took
+# the web to 4,060 MiB anon; every part's whole pack index, its uid map of every
+# record included, was kept for the process's life) -------------------------------
+
+def _stand_in(monkeypatch, tmp_path, parts=6, frames=5, records=400, line=b"x" * 200):
+    """A DiskClaimIndex over `parts` stand-in parts of `frames` frames, every
+    part's pack index carrying a uid map of `records` uids, and the reads
+    counted."""
+    import threading
+    from collections import OrderedDict
+
+    from app.pack import records as pack_records
+    reads = {"index": 0, "frame": 0}
+
+    def read_index(p):
+        reads["index"] += 1
+        return pack_records.ShardIndex(path=p, mtime_ns=0, records=records, chunks=0,
+                                       frames=[[k * 10, 10, 10, records // frames, f"u{k}"] for k in range(frames)],
+                                       uids={f"{p.name}:{i}": [i // (records // frames), 0] for i in range(records)})
+
+    def read_frame(p, index, k):
+        reads["frame"] += 1
+        assert index.frames[k][0] == k * 10, "the frame found by its own table"
+        return [line] * 10
+    monkeypatch.setattr(pack_records, "read_index", read_index)
+    monkeypatch.setattr(pack_records, "read_frame", read_frame)
+    d = claim_index.DiskClaimIndex.__new__(claim_index.DiskClaimIndex)
+    d.shard_tree, d.parts = tmp_path, [f"part{i}.jsonl.zst" for i in range(parts)]
+    d._lock, d._frames, d._frame_bytes, d._indexes = threading.Lock(), OrderedDict(), 0, OrderedDict()
+    return d, reads
+
+
+def test_a_part_keeps_its_frame_table_never_its_uid_map(tmp_path, monkeypatch):
+    d, reads = _stand_in(monkeypatch, tmp_path)
+    for part in range(6):
+        for frame in range(5):
+            assert d._lines(part, frame) == [b"x" * 200] * 10
+    assert reads["index"] == 6, "each part's index read once"
+    assert all(ix.uids == {} for ix in d._indexes.values()), "no uid map kept"
+    assert all(len(ix.frames) == 5 for ix in d._indexes.values()), "the frame table kept"
+
+
+def test_the_parts_and_frames_kept_are_bounded(tmp_path, monkeypatch):
+    monkeypatch.setattr(claim_index, "INDEX_CACHE", 2)
+    one = claim_index._held_bytes([b"x" * 200] * 10)
+    monkeypatch.setattr(claim_index, "FRAME_CACHE_BYTES", 3 * one)
+    d, reads = _stand_in(monkeypatch, tmp_path)
+    for part in range(6):
+        for frame in range(5):
+            d._lines(part, frame)
+    assert len(d._indexes) == 2 and list(d._indexes) == [4, 5], "the least recently used parts go"
+    assert len(d._frames) == 3 and d._frame_bytes == 3 * one <= claim_index.FRAME_CACHE_BYTES
+    before = dict(reads)
+    d._lines(5, 4)
+    assert reads == before, "a frame kept is not read again"
+    d._lines(0, 0)
+    assert reads["index"] == before["index"] + 1 and reads["frame"] == before["frame"] + 1, \
+        "a part let go is read again when asked"
+    assert len(d._indexes) == 2 and len(d._frames) == 3
+
+
+def test_a_frame_over_the_budget_is_still_answered(tmp_path, monkeypatch):
+    monkeypatch.setattr(claim_index, "FRAME_CACHE_BYTES", 1)
+    d, _reads = _stand_in(monkeypatch, tmp_path)
+    assert d._lines(0, 0) == [b"x" * 200] * 10
+    assert len(d._frames) == 1, "the one in hand is kept until another comes"
