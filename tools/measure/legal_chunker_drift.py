@@ -6,7 +6,7 @@ differ and those chunks, and the chunks that fell to `_windows` (a sentence
 past the window, cut mid-sentence) at each version — with a few examples.
 
     python -m tools.measure.legal_chunker_drift <collection> [--to 4] [--window 5000]
-        [--examples 3] [--limit N] [--processes N] [--out FILE]
+        [--examples 3] [--limit N] [--processes N] [--out FILE] [--toml FILE]
 
 The cut is the text index stage's: each document's `[title, sections]`
 through `record_source.title_sections_and_source` (its fresh record, the
@@ -242,15 +242,32 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--limit", type=int, default=None, help="only rowids up to this one (a pilot)")
     p.add_argument("--processes", type=int, default=None, help="fewer processes than the profile allows")
     p.add_argument("--out", type=Path, default=None, help="the whole result as JSON, here too")
+    p.add_argument("--toml", type=Path, default=None,
+                   help="the collection's TOML file, where it is out of the served set (EUR-Lex5 in "
+                        "config/collections-stopped/, 2026-11-21: never put back to be measured); its "
+                        "name must be the one given")
     a = p.parse_args(argv)
     from app import chunking_legal as cl
     from app import collections as collections_mod
     if a.to not in cl.VERSIONS:
         print(f"legal_chunker_drift: legal_article has versions {list(cl.VERSIONS)}", file=sys.stderr)
         return 2
-    coll = collections_mod.by_name(a.collection)
+    if a.toml is not None:
+        # READ FROM ITS FILE, NOT SERVED: a stopped collection's TOML is read
+        # where it lies; nothing is moved or written
+        try:
+            coll = collections_mod._load_one(a.toml)
+        except Exception as e:   # noqa: BLE001 — a file that does not load: said, exit 2
+            print(f"legal_chunker_drift: {a.toml}: {type(e).__name__}: {e}", file=sys.stderr)
+            return 2
+        if coll.name != a.collection:
+            print(f"legal_chunker_drift: {a.toml} is the collection {coll.name!r}, not {a.collection!r}",
+                  file=sys.stderr)
+            return 2
+    else:
+        coll = collections_mod.by_name(a.collection)
     if coll is None:
-        print(f"legal_chunker_drift: no collection {a.collection!r}", file=sys.stderr)
+        print(f"legal_chunker_drift: no collection {a.collection!r} (a stopped one: --toml FILE)", file=sys.stderr)
         return 2
     got = measure(coll, to_version=a.to, window=a.window, examples=a.examples, limit=a.limit,
                   processes=a.processes)

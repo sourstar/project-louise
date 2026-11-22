@@ -119,3 +119,18 @@ def test_the_command_prints_a_line_a_language_then_the_totals(collection, monkey
     assert [x["lang"] for x in lines[:2]] == ["el", "fr"]
     assert lines[2]["totals"]["documents_differ"] == 1 and "example" in lines[3]
     assert drift.main(["nope"]) == 2 and drift.main(["legi", "--to", "9"]) == 2
+
+
+def test_a_stopped_collection_is_read_from_its_toml_never_put_back(collection, monkeypatch, tmp_path, capsys):
+    """EUR-Lex5's TOML is in config/collections-stopped/ (the operator:
+    "make it not even searchable"): `by_name` does not see it, and putting
+    it back to be measured would serve it. --toml reads it where it lies."""
+    toml = tmp_path / "stopped" / "legi.toml"
+    toml.parent.mkdir()
+    toml.write_text("name = 'legi'\n")
+    monkeypatch.setattr(collections_mod, "by_name", lambda name: None)
+    monkeypatch.setattr(collections_mod, "_load_one", lambda path: collection if path == toml else None)
+    assert drift.main(["legi", "--examples", "1"]) == 2, "not served: not found by name"
+    assert drift.main(["legi", "--examples", "1", "--toml", str(toml)]) == 0
+    assert drift.main(["other", "--toml", str(toml)]) == 2, "the file names another collection"
+    assert "is the collection 'legi', not 'other'" in capsys.readouterr().err
