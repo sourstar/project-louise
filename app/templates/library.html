@@ -8,7 +8,7 @@
 <h1>Library</h1>
 <div class="panel">
   <span class="dot {{ 'running' if worker_state=='running' else 'paused' }}"></span>
-  worker: <b>{{ worker_state }}</b>
+  worker: <b>{{ dict(mode_labels).get(worker_state, worker_state) }}</b>
   <div class="actions">
     {# The accent marks the state the node IS in. It used to mark every
        state it was NOT in, so the current mode was the one button that
@@ -586,16 +586,20 @@ async function libDiscover(name,quiet){
   if(!quiet){toast('rescanned '+name);location.reload()}
 }
 const EMBED_LABELS={off:'off',lazy:'on-demand',all:'all local',p2p:'all p2p'};
+// the Library loaded again, by name, so a browser test can stand in for it
+function reloadLibrary(){location.reload()}
 async function setEmbedMode(name,mode,shared){
   // all p2p publishes what it embeds, so it comes with sharing: asked, never done behind the operator's back (07 §7.8)
   if(mode==='p2p'&&!shared&&!confirm(name+': all p2p publishes the bundles it embeds, so sharing will be enabled for this collection. Proceed?')){location.reload();return}
   try{const d=await postJSON('/admin/library/'+name+'/embed-mode',{mode});
     // RULE 2 (2026-11-06): saved is not embedding — what still stops it is
-    // said, and OK reloads the card, which shows it beside the setting
+    // said, and OK reloads the card, which shows it beside the setting. OK
+    // CLOSES the dialog first (2026-11-22, legi_F: the dialog stayed open
+    // for as long as the Library took to load again)
     if(mode!=='off'&&(d.blocked||[]).length){
       showModal(`<h2>${esc(name)}: embed mode → ${esc(EMBED_LABELS[mode]||mode)}</h2>
         <div class="note">${esc(d.note)}</div>
-        <div class="actions"><button class="primary" onclick="location.reload()">OK</button></div>`);
+        <div class="actions"><button class="primary" onclick="hideModal();reloadLibrary()">OK</button></div>`);
       return}
     toast(name+': embed mode → '+(EMBED_LABELS[mode]||mode)+(d.share_enabled?' — sharing enabled':'')+' — saved to collections/'+name+'.toml');
     if(d.share_enabled){location.reload()}}
