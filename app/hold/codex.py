@@ -966,7 +966,7 @@ class Codex:
         what a digest advertises (§9.9). Per-peer, never an identity."""
         return digest(self.canonical())
 
-    @property
+    @cached_property
     def space_id(self) -> str:
         """§9.3. The encoder function and what is fed to it, and nothing
         about the contract around it: not `tolerance`, not `calibration`,
@@ -985,7 +985,11 @@ class Codex:
         written cannot be moved.
 
         NONE for an annotations Codex, which has no space: nothing pins it,
-        and it is in no space's ranked list (02 §2.10)."""
+        and it is in no space's ranked list (02 §2.10).
+
+        Computed once per Codex, as `collection_id` is (frozen; `replace`
+        makes a new one): the Library's p2p refresh asked it 76,517 times
+        for one page, 12.6 s of a cold profile (München, 2026-11-22)."""
         sp = self.space
         if sp is None:
             return None                                 # type: ignore[return-value]
@@ -1018,7 +1022,7 @@ class Codex:
             "space": space,
         }))
 
-    @property
+    @cached_property
     def space_segment(self) -> str:
         """The `<space>` segment of a path or a member name: the first 16
         hexadecimal digits of `space_id` (§9.3); None without a space."""
