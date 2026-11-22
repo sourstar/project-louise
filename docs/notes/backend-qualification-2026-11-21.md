@@ -312,10 +312,33 @@ engine (23:54–00:39Z) ran with the node in `running`** — resumed at
 23:43Z after the memtest, nothing paused it; the web was stopped, the OCR
 paused and the card emptied at the start, but the worker put its encoders
 back on the card. So F3 compared a loaded card against phase 0's paused
-one; the mode of each run is now in `phase2/f3/README`. **A paused rerun** of the four rows and of
-the two 6400 controls (the loaded controls read bge-m3 2.23 s and nemotron
-3.26 s against phase 0's 1.24 / 1.33 — load) is queued after the night's
-deploy and decides F3: within 5 % → closed, phase 2 fully green. Lesson
+one; the mode of each run is now in `phase2/f3/README`. **The paused rerun (München, 04:10Z, after deploy b40d19e; the node
+paused by the script; the card's only holder the model under test,
+69,404 KiB; web stopped, OCR paused; `f3/t4p-*`, `f3/t4p-holders.txt`):**
+
+| run | median wall | prompt eval ms | eval ms/token | tokens | residual ms | vs P3 / vs torch |
+|---|---|---|---|---|---|---|
+| live engine | 0.43 s | 17.7 | 14.9 | 13.5 | 211 | 375/379 / 345 |
+| new engine, as is | **0.42 s** | 17.9 | 16.6 | 24 | −13 | 375/379 / 345 |
+| new, `LLAMA_ENC_DEC_WAVE_MS=0` | 0.37 s | 16.5 | 14.9 | 24 | −20 | 375/379 / 345 |
+| new, `parallel:1` | 0.37 s | 15.9 | 14.7 | 16.5 | 112 | 375/379 / 345 |
+
+**F3 CLOSED: a measurement artifact.** The new engine is −2 % against the
+live one on MADLAD, paused; the loaded controls (bge-m3 2.23 s, nemotron
+3.26 s under the running node) against the paused ones at 6400 (bge-m3
+1.233 s vs phase 0's 1.238; nemotron 1.329 vs 1.33): **DDR5 at 6400
+changes nothing on the (B) path**, and phase 0's rows stand as the
+baseline. **Phase 2 is fully green.**
+
+**The 375/379 decided:** not a fail of the new engine — identical to the
+live engine's bytes, 345/379 identical to torch on both; the record it is
+held to (P3's one-slot bytes) came from the 10-28 engine, and three of the
+four differences moved towards torch. The standing reference for MADLAD
+becomes torch's translations (345/379, no garbage, in-wave == alone), and
+P3's byte record is re-cut from the adopted engine at the cut-over, dated.
+Open for the record: which year torch gives in the one translation whose
+year changed (1930 → 1936) — if torch's is 1930, that one is a wrong
+translation on both current engines, one of 379. Lesson
 written into the protocol: every timed row carries the node's mode and the
 card's other holders at its start — a reboot can hand the mode back to
 `running` unnoticed. Graph-off and check-off controls dropped.
