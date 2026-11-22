@@ -57,12 +57,15 @@ def test_the_command_writes_both_lists(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(identity, "plan", lambda con, plugin, log=print: ({}, [("e:old", "e:keep")]))
     monkeypatch.setattr(collections_mod, "by_name", lambda name: c if name == "EUR-Lex5" else None)
     units = tmp_path / "flagged.tsv"
-    units.write_text("/corpus/lang=it/2021/32021R1971\tpackage, included document\n", encoding="utf-8")
+    units.write_text("/corpus/lang=it/2021/32021R1971\tpackage, included document\n"
+                     "/corpus/lang=bg/2004/32004D0382\tpackage lacked\n", encoding="utf-8")
     out = tmp_path / "out"
     assert ps.main(["EUR-Lex5", "--units", str(units), "--largest", "1", "--out-dir", str(out)]) == 0
     problem = set((out / "problem.txt").read_text().split())
     rest = set((out / "rest.txt").read_text().split())
-    assert problem == {"e:keep", "e:chunkless", "e:corr", "e:err", "e:issue", "e:pkg"}
-    assert rest == {"e:ok"} and not problem & rest
+    reform = set((out / "reform.txt").read_text().split())
+    assert reform == {"e:issue"}, "a unit to re-form waits for its files: derived when they land, once"
+    assert problem == {"e:keep", "e:chunkless", "e:corr", "e:err", "e:pkg"}
+    assert rest == {"e:ok"} and not problem & rest and not reform & (problem | rest)
     assert '"retired_by_retire_superseded": 1' in capsys.readouterr().out
     assert ps.main(["nope", "--out-dir", str(out)]) == 2

@@ -21,7 +21,11 @@ A live document (no `superseded …` tombstone) is in the problem slice for any 
     lacked, an unreadable wrapper or tree;
   * `largest`: the `--largest` N largest units, by `documents.size`.
 
-Writes `problem.txt` and `rest.txt` (one uid a line) and prints the counts:
+Writes `problem.txt`, `rest.txt` and `reform.txt` (one uid a line) and prints
+the counts. `reform.txt` holds the units to RE-FORM (a Formex package their tree
+lists and they lack): they are in neither of the other two, and are derived when
+the re-form lands their files (discovery resets them). Deriving them first would
+derive them twice. Then the counts:
 per reason, the slice, the rest, the overlaps. The manifest is opened
 read-only; a stopped collection is named by its TOML (`--toml`, as
 legal_chunker_drift).
@@ -49,6 +53,9 @@ TEXT_ISSUES = ("formex-not-this-act", "item-not-held", "formex-wrapper-names-ano
                "form-disagrees-with-celex", "consolidation-start-disagrees")
 _CORRIGENDUM = re.compile(r"R\(\d{2}\)")
 SUPERSEDED = "superseded"
+#: the units check's reason for a unit whose tree lists a Formex package it
+#: lacks: re-formed first (reform.txt), derived when its files land
+REFORM = "unit:package lacked"
 
 
 def _celex_of(path: str | None) -> str:
@@ -139,17 +146,24 @@ def main(argv: list[str] | None = None) -> int:
                                           largest=a.largest)
     finally:
         con.close()
-    problem = set().union(*reasons.values()) if reasons else set()
-    rest = live - problem
+    # A UNIT TO RE-FORM is derived when its re-formed files land (discovery
+    # resets it), never before: derived now from its old form it would be
+    # derived twice (RULE 1) and its first text replaced (2026-11-22, München:
+    # 126,652 units whose tree lists a Formex package they lack)
+    reform = set(reasons.get(REFORM, set()))
+    problem = (set().union(*reasons.values()) if reasons else set()) - reform
+    rest = live - problem - reform
     a.out_dir.mkdir(parents=True, exist_ok=True)
     (a.out_dir / "problem.txt").write_text("".join(f"{u}\n" for u in sorted(problem)), encoding="utf-8")
     (a.out_dir / "rest.txt").write_text("".join(f"{u}\n" for u in sorted(rest)), encoding="utf-8")
+    (a.out_dir / "reform.txt").write_text("".join(f"{u}\n" for u in sorted(reform)), encoding="utf-8")
     many = Counter(sum(1 for r in reasons.values() if u in r) for u in problem)
     print(json.dumps({"collection": coll.name, "live": len(live), "retired_by_retire_superseded": len(retired),
-                      "problem": len(problem), "rest": len(rest),
+                      "problem": len(problem), "rest": len(rest), "reform": len(reform),
                       "by_reason": {k: len(v) for k, v in sorted(reasons.items(), key=lambda kv: -len(kv[1]))},
                       "reasons_per_document": dict(sorted(many.items())),
-                      "files": [str(a.out_dir / "problem.txt"), str(a.out_dir / "rest.txt")]}, indent=1))
+                      "files": [str(a.out_dir / n) for n in ("problem.txt", "rest.txt", "reform.txt")]},
+                     indent=1))
     return 0
 
 

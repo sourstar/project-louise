@@ -102,38 +102,41 @@ collections and their snapshots (docs/notes/legal-chunker-v4.md, owed).
 ## The restart (after every row is fixed and deployed)
 
 Each step is München's, on the legal session's word, reported every 5
-minutes; a step whose numbers are wrong stops the next.
+minutes; a step whose numbers are wrong stops the next. EVERY DOCUMENT IS
+DERIVED ONCE (RULE 1), which fixes the order.
 
-1. Read-only first: `tools/measure/validity_changed_since.py` on every legal
-   manifest (what the re-chain moves); `tools/measure/eurlex_units_check.py`
-   on EUR-Lex5's corpus with `--list-included` (the problem list's units).
-2. `louise dev retire-superseded EUR-Lex5` (dry run), then `--yes`: the
-   duplicates retired (expected 37,695).
-3. EUR-Lex5's TOML `acquire_enabled = false` (desired state: nothing
-   fetched, no dump build) — then the collection unpaused, still unserved.
-4. The PROBLEM SLICE first. Build both lists, read-only:
-   - `tools/measure/eurlex_units_check.py <corpus> --list-flagged flagged.tsv`;
-   - `tools/measure/eurlex_problem_slice.py EUR-Lex5 --toml <its stopped
-     TOML> --units flagged.tsv --largest 200 --out-dir <dir>`.
+Measured read-only on the node (2026-11-22, the units check and the problem
+slice from 6d933d04; /root/measure/eu5-restart/):
+- 932,731 live documents, and 37,695 duplicates that retire-superseded tombstones;
+- the problem slice: 300,093 (by reason: package lacked 126,652, package 105,495, corrigendum 49,769, duplicate-kept 37,695, included document 36,250, chunkless 1,909, unreadable or not this act's wrapper 630, errored 460, no-text-layer 418, largest 200, item-not-held 130, in another's place 82, form-disagrees 15, misnamed 14, formex-not-this-act 7);
+- the rest: 632,638.
 
-   The slice holds:
-   - the kept row of each duplicate;
-   - the 1,909 indexed with no chunk;
-   - every corrigendum;
-   - every errored document;
-   - every text issue (`formex-not-this-act`, `item-not-held`, …);
-   - every unit the units check flags: package, misnamed, in another's place, wrapper under another name, included document, package lacked;
-   - the 200 largest.
+1. **After the deploy, the v4 move first** (docs/notes/legal-chunker-v4.md;
+   A1k, once architecture approves). EUR-Lex5 holds no vectors (embed off),
+   so it is re-created at v4 and derived ONCE at v4. Derived at v3 first, its
+   932k documents would be derived again for v4.
+2. `louise dev retire-superseded EUR-Lex5` (dry run, then `--yes`): the
+   37,695 duplicates retired.
+3. **The re-forms**: the 126,652 units whose tree lists a Formex package
+   they lack (`reform.txt`; ~2,175 a language of 2025 among them). Bulk
+   first: the Data Dump's re-form build, then Cellar for what the dump does
+   not hold (the incomplete record, Q1–Q8). Each unit is derived when its
+   files land (discovery resets it), so they are in neither list below:
+   derived now, they would be derived twice and their first text replaced.
+4. **The problem slice**: `louise dev rederive EUR-Lex5 --ids problem.txt
+   --retry-errors --yes` (`reform.txt`'s units out of it).
+   - `--retry-errors` clears a listed document's error, so the corrected reader
+     reads it again (C9's refusals were the acts' own text); a tombstone keeps
+     its error.
+   - Checked when drained: 0 chunkless, 0 errors but the stated refusals, and
+     the coverage of a sample read.
+5. **The rest**: `--ids rest.txt`. Never the whole collection again.
+6. Only then `acquire_enabled = true` for the routine passes, and EUR-Lex5
+   served again.
 
-   Then `louise dev rederive EUR-Lex5 --ids problem.txt --retry-errors --yes`.
-   `--retry-errors` clears a listed document's error, so the corrected reader
-   reads it again (C9's refusals were the acts' own text); a tombstone keeps its
-   error. Checked when drained: 0 chunkless, 0 errors but the stated refusals,
-   and the coverage of a sample read.
-5. Then the rest: `--ids rest.txt` (every other live uid), never the whole
-   collection again (RULE 1: the slice is not derived twice).
-6. Only then `acquire_enabled = true` (the re-forms, the per-unit pass), and
-   EUR-Lex5 served again.
+Rebuild the lists after step 2 and before step 4, because the re-form moves
+units: `eurlex_units_check --list-flagged`, then `eurlex_problem_slice
+--toml <its stopped TOML> --units flagged.tsv --largest 200 --out-dir <dir>`.
 
 ## Order
 
