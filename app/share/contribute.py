@@ -452,6 +452,16 @@ def predecessors(root: Path, name: str) -> list[str]:
     nothing beyond possession (uid + content_hash, app/share/possession.py)."""
     import json
     state = Path(root) / name / "state"
+    # READ ONCE PER CHANGE OF EITHER FILE (2026-11-22): the Library's p2p
+    # refresh asked this 16,426 times for one page, two files opened and
+    # parsed each time, by way of `possession.prefixes` once per part. Keyed
+    # on the files' physical identity (CLAUDE.md: caches key on a path):
+    # inode, size and mtime, so `add_predecessor`'s replace and a carry's
+    # rewrite are seen at the next call
+    sig = (_file_sig(state / "carry.json"), _file_sig(state / PREDECESSORS))
+    hit = _predecessors_memo.get(str(state))
+    if hit is not None and hit[0] == sig:
+        return list(hit[1])
     out: list[str] = []
     try:
         held = json.loads((state / "carry.json").read_text(encoding="utf-8"))
@@ -463,7 +473,23 @@ def predecessors(root: Path, name: str) -> list[str]:
         out += [c for c in json.loads((state / PREDECESSORS).read_text(encoding="utf-8")) if isinstance(c, str)]
     except (OSError, ValueError, TypeError):
         pass
-    return list(dict.fromkeys(out))
+    out = list(dict.fromkeys(out))
+    _predecessors_memo[str(state)] = (sig, out)
+    return list(out)
+
+
+#: `predecessors` per state directory: (the two files' signatures, the list)
+_predecessors_memo: dict[str, tuple[tuple, list[str]]] = {}
+
+
+def _file_sig(p: Path) -> tuple[int, int, int] | None:
+    """A file's physical identity and version — inode, size, mtime in ns —
+    or None when it is not there."""
+    try:
+        st = p.stat()
+    except OSError:
+        return None
+    return (st.st_ino, st.st_size, st.st_mtime_ns)
 
 
 def add_predecessor(root: Path, name: str, collection_id: str) -> bool:
