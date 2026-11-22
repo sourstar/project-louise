@@ -50,18 +50,21 @@ def test_a_config_it_does_not_recognise_is_left_untouched():
     assert "mem_limit" not in cfg["services"]["web"]
 
 
-def test_the_worker_gets_the_arena_cap_and_the_token_stays():
+def test_both_services_get_the_arena_cap_and_the_token_stays():
+    """The web too since 2026-11-22 (operator: "less than 1GB")."""
     cfg = a_config()
-    assert sml.apply_env(cfg) == {"worker": {"MALLOC_ARENA_MAX": None}}
+    web_before = dict(cfg["services"]["web"]["environment"])
+    assert sml.apply_env(cfg) == {"worker": {"MALLOC_ARENA_MAX": None}, "web": {"MALLOC_ARENA_MAX": None}}
     assert cfg["services"]["worker"]["environment"] == {"ADMIN_TOKEN": "s3cret", "MALLOC_ARENA_MAX": "2"}
-    assert "MALLOC_ARENA_MAX" not in cfg["services"]["web"]["environment"]
-    assert sml.apply_env(cfg) == {"worker": {"MALLOC_ARENA_MAX": "2"}}, "idempotent"
+    assert cfg["services"]["web"]["environment"] == {**web_before, "MALLOC_ARENA_MAX": "2"}
+    assert sml.apply_env(cfg) == {"worker": {"MALLOC_ARENA_MAX": "2"}, "web": {"MALLOC_ARENA_MAX": "2"}}, \
+        "idempotent"
 
 
 def test_a_list_environment_stays_a_list_and_a_stale_value_is_replaced():
     cfg = a_config()
     cfg["services"]["worker"]["environment"] = ["ADMIN_TOKEN=s3cret", "MALLOC_ARENA_MAX=8"]
-    assert sml.apply_env(cfg) == {"worker": {"MALLOC_ARENA_MAX": "8"}}
+    assert sml.apply_env(cfg)["worker"] == {"MALLOC_ARENA_MAX": "8"}
     assert cfg["services"]["worker"]["environment"] == ["ADMIN_TOKEN=s3cret", "MALLOC_ARENA_MAX=2"]
 
 
@@ -70,6 +73,9 @@ def test_the_arena_cap_is_the_repository_yaml_s():
     worker = text.split("\n  worker:\n", 1)[1].split("\n  # ", 1)[0]
     for k, v in sml.ENV["worker"].items():
         assert f"{k}: '{v}'" in worker
+    web = text.split("\n  web:\n", 1)[1].split("\n  worker:\n", 1)[0]
+    for k, v in sml.ENV["web"].items():
+        assert f"{k}: '{v}'" in web
 
 
 def test_both_services_get_the_open_file_limit_and_other_limits_stay():

@@ -29,7 +29,10 @@ KEYS = ("mem_limit", "memswap_limit")
 #: per-thread heaps (mallopt M_ARENA_MAX). München, 2026-11-07: the worker's
 #: ~100 threads held 47 arenas, 2.9 GB, main 2.4 -> 7.1 GB and OOM-killed; at 2,
 #: main 1.6-3.8 GB over an hour, 0 kills, the rates unchanged
-ENV = {"worker": {"MALLOC_ARENA_MAX": "2"}}
+ENV = {"worker": {"MALLOC_ARENA_MAX": "2"},
+       # the web too (operator, 2026-11-22: "less than 1GB"): 1,780 -> 983 MiB
+       # anon warm, the same queries, +0-25 % (München, the live image)
+       "web": {"MALLOC_ARENA_MAX": "2"}}
 #: deploy/truenas-app.yaml's open-file limits (2026-11-16): Docker's default
 #: soft nofile is 1024; a chunker pilot's tantivy writers died three times on
 #: EMFILE at it, and the worker builds the same indexes. Hard = the daemon's own

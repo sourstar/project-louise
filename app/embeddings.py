@@ -64,20 +64,38 @@ _dbs: dict[str, "lancedb.DBConnection"] = {}
 #: batches on three tables, flat with the bound — docs/notes/STATUS.md).
 #:   - the WORKER (`use_worker_caches`, called at its start): ONE Session for
 #:     every connection of the process;
-#:   - any other process (the web's search): a Session PER CONNECTION, as
+#:   - the WEB (`use_web_caches`, at its start; operator, 2026-11-22: the web
+#:     "should be less than 1GB"): ONE Session too, at its own smaller budget;
+#:   - any other process (a command's search): a Session PER CONNECTION, as
 #:     before, at the library's index cache, its metadata cache bounded (a
 #:     reader grows by the versions it opens: 544 MiB after 1,200).
 _session: "lancedb.Session | None" = None
 _session_budget = 0                  # the bytes `_session` was made with, both caches
 _session_lock = threading.Lock()
-_worker_caches = False
+#: the role whose budget this process's ONE Session takes ("worker", "web"),
+#: or None: a Session per connection
+_shared: str | None = None
 
 
 def use_worker_caches() -> None:
     """This process is the worker: its connections share ONE bounded Session.
     Called by `worker.run_forever` before any vector table is opened."""
-    global _worker_caches
-    _worker_caches = True
+    global _shared
+    _shared = "worker"
+
+
+def use_web_caches() -> None:
+    """This process is the web: its connections share ONE Session at the
+    web's budget (`config.WEB_LANCE_CACHE_BYTES`). Called at the web's start,
+    before any vector table is opened. München, 2026-11-22, the live image,
+    8 collections x 3 queries warm, with MALLOC_ARENA_MAX=2: 983 MiB anon with
+    a Session per connection, 559 MiB with one shared, the same speed."""
+    global _shared
+    _shared = "web"
+
+
+def _shared_budget() -> tuple[int, int]:
+    return config.WEB_LANCE_CACHE_BYTES if _shared == "web" else config.WORKER_LANCE_CACHE_BYTES
 
 
 def _budget(role: tuple[int, int]) -> tuple[int, int]:
@@ -87,24 +105,25 @@ def _budget(role: tuple[int, int]) -> tuple[int, int]:
 
 
 def lance_session() -> "lancedb.Session":
-    """The Session a new connection takes: the worker's one, made on first
-    use; elsewhere a new one each call (one per connection)."""
+    """The Session a new connection takes: the process's one (the worker's,
+    the web's), made on first use; elsewhere a new one each call (one per
+    connection)."""
     global _session, _session_budget
-    if not _worker_caches:
+    if _shared is None:
         index, metadata = _budget(config.SEARCH_LANCE_CACHE_BYTES)
         return lancedb.Session(index_cache_size_bytes=index, metadata_cache_size_bytes=metadata)
     with _session_lock:
         if _session is None:
-            index, metadata = _budget(config.WORKER_LANCE_CACHE_BYTES)
+            index, metadata = _budget(_shared_budget())
             _session = lancedb.Session(index_cache_size_bytes=index, metadata_cache_size_bytes=metadata)
             _session_budget = index + metadata
         return _session
 
 
 def lance_cache_stats() -> dict | None:
-    """What the worker's Lance caches hold — `{"bytes", "items", "budget"}`
-    — or None before any connection made them, or in another role. For a
-    periodic reporter."""
+    """What the process's one Session holds (the worker's, the web's) —
+    `{"bytes", "items", "budget"}` — or None before any connection made it,
+    or with a Session per connection. For a periodic reporter."""
     with _session_lock:
         s, budget = _session, _session_budget
     if s is None:

@@ -572,19 +572,26 @@ READ_CACHE_BYTES = int(os.getenv("READ_CACHE_BYTES", str(256 << 20)))
 #   stages read (pubmed's 40 M rows, estimated ~0.6 GB). Below the working
 #   set it re-reads manifests and footers: +10 % a batch at 512 MiB on a
 #   fixture of thousands of uncompacted fragments.
-# - ANY OTHER PROCESS (the web's search): a Session per connection, as
+# - ANY OTHER PROCESS (a command's search): a Session per connection, as
 #   before, at the library's index cache (6 GiB: wikipedia's 57 ms search
 #   was measured on it) and a metadata cache of 256 MiB (a search 191.4 ms
 #   against 190.5 ms unbounded at 32 MiB, interleaved, on a fixture of 1,200
 #   versions).
 # LANCE_INDEX_CACHE_BYTES / LANCE_METADATA_CACHE_BYTES, when set, replace
-# the role's figure (the worker's for the process, the others' per
-# connection). Read at import.
+# the role's figure (the worker's and the web's for the process, the others'
+# per connection). Read at import.
 LANCE_INDEX_CACHE_BYTES = int(os.environ["LANCE_INDEX_CACHE_BYTES"]) \
     if os.getenv("LANCE_INDEX_CACHE_BYTES") else None
 LANCE_METADATA_CACHE_BYTES = int(os.environ["LANCE_METADATA_CACHE_BYTES"]) \
     if os.getenv("LANCE_METADATA_CACHE_BYTES") else None
 WORKER_LANCE_CACHE_BYTES = (1 << 30, 1 << 30)              # (index, metadata), the process's
+# - THE WEB (`embeddings.use_web_caches`, at its start; operator, 2026-11-22:
+#   the web's budget "should be less than 1GB", "ZFS cache is there for a
+#   reason"): ONE Session for the process too, 128 MiB + 64 MiB. Measured
+#   (München, the live image, 8 collections x 3 queries warm, MALLOC_ARENA_MAX
+#   =2): 983 MiB anon with a Session per connection, 559 MiB with one, the
+#   same speed.
+WEB_LANCE_CACHE_BYTES = (128 << 20, 64 << 20)              # (index, metadata), the web process's
 SEARCH_LANCE_CACHE_BYTES = (6 << 30, 256 << 20)            # (index, metadata), per connection
 
 # The local VECTOR INDEX (app/vector_index.py; pack-format.md §5, appendix
@@ -624,6 +631,9 @@ VECTOR_INDEX_MAX_INDICES = int(os.getenv("VECTOR_INDEX_MAX_INDICES", "4"))
 # 2026-11-12: 4.5 GiB of deleted files pinned after six hours). 0 runs them
 # in-process: the same commits, and the leak.
 LANCE_CHILD = os.getenv("LANCE_CHILD", "1") not in ("0", "false", "no", "off")
+# THE WEB GIVES BACK ITS FREED HEAP WHEN IDLE (app/idle_trim.py): its timeout
+# is desired state, platform.toml's `[web] idle_trim_s` (invariant 10), read
+# by `idle_trim.timeout_s`, never an environment value.
 #: a gate measures on its own load of the model, `<model>--gate`, and never
 #: holds the shared one (operator, 2026-11-12: "gating a collection cannot
 #: monopolize the GPU"; app/gate_twin.py). Off only to measure without it.
