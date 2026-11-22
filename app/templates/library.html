@@ -233,8 +233,6 @@
     {% endif %}
     {% if c.p2p is not none and c.p2p.counting %}
     <div class="note">p2p: the coverage of its parts is being counted; it shows on a later view</div>
-    {% elif c.p2p is not none and c.p2p.lost %}
-    <div class="note">p2p: not counted — the process that counts it ended while counting {{ c.p2p.lost.collection }} at {{ c.p2p.lost.at }} (its last peak: {{ c.p2p.lost.peak }}), and is not started again until the web restarts</div>
     {% elif c.p2p is not none %}
     <div class="note" title="the bounty list is the open parts of the current snapshot (04 §4.5); a part is covered by the bundles accepted here (09 §9.10)">
       p2p: {{ c.p2p.covered_pct }} % of chunks covered by bundles ·
