@@ -444,6 +444,36 @@ at cut-over too; Legal's collection), qwen3-4b's repro bound (3 h at window
 |---|---|---|---|---|
 | | | | | |
 
+## 3b. Old engine measured against the new engine as upstream's claims project it
+
+*Written 2026-11-22 before phase 4, at the operator's request, so that the
+report can set each projection beside its measurement. M = measured on the
+node (phase 0 on the live engine `281e1ee`; phase 3's first pass on
+`133ef68`, same kernels as the rebuilt engine); P = projected from
+upstream's figures, with the hardware they were taken on — not ours until
+phase 4 says so.*
+
+| model, quantity | old engine (M) | new engine | basis |
+|---|---|---|---|
+| 35B prefill, 140-token prompt | 480 tok/s, first token 0.29 s | **P ≈ 500–1,130 tok/s**, first token ≈ 0.12–0.28 s | #30156 on a B60, Qwen3-30B-A3B Q4_K_M, 128 tokens: +136 %; a user's Arc Pro B70 on another MoE: +5–7 % — the range is the claim's spread; our ubatch is 512, the PR's 2048 |
+| 35B prefill, 2,061-token prompt | 820 tok/s, first token 2.51 s | **P ≈ 880–1,010 tok/s**, ≈ 2.0–2.3 s | the same PR at 2048 tokens: +23 % (B60), +7 % (B70 user) |
+| 35B decode, 1 stream | 99.6 / 97.3 tok/s | **P ≈ 95–100 tok/s** | #30156: −4.6 % at short prompts, flat at 2048; nothing else upstream touches dense-path decode |
+| 35B footprint | 21,782 MiB | **M 21,642 MiB (phase 2, the check's own count)**; under the cache **P ≈ 9 GiB** with 4 GiB of cache | the cache: experts (≈ 18.4 GB) in host RAM |
+| 35B decode under the MoE cache | — (never run) | **P ≈ 45–75 tok/s** at 4–8 GiB cache, share 0–0.5 | community, Qwen3.6-35B-A3B Q6_K_XL on CUDA: 42 → 67 tok/s (2080 Ti, 6.8 GB cache, share 0.95), 44 → 74 (5060 Ti); SYCL unreported; the cache trades speed for room, it does not beat the resident 99.6 |
+| MADLAD, one translation / one 7-language question | 0.43 s / 1.06 s | **M 0.42 s** (−2 %); bytes identical 379/379 | phase 2 rerun, paused |
+| encoders, 24 texts through LocalAI + VeGa | bge-m3 1.238 s · nemotron 1.330 · qwen3-4b 4.374 · medcpt-query 0.360 | **M 1.204 · 1.277 · 4.311 · 0.347** (−2.7 / −4.0 / −1.4 / −3.6 %); bytes 16/16 identical; medcpt's gate exact | phase 3 first pass on `133ef68`; repeated on `c3294e` |
+| nemotron-1b reranker, per list | 2,512 ms median | **P ≈ 2,500 ms** (no upstream claim on this path) | phase 3 second pass measures it |
+| chat 9B prefill / decode | 1,157 / 3,301 tok/s · 77.5 / 75.5 tok/s | **P unchanged** (dense; no claim) | phase 4 measures it alongside |
+| a model that does not fit | the driver spills to host RAM, silently | **M refused** (HTTP 500, no spill, nothing killed) | #31285, phase 2 |
+| idle context (P11) | given back after the keep | **M carried** (`context_on_demand_test` exit 0; the gate admits the engine) | the rebuilt engine |
+
+Reading: the one place the new engine should be visibly faster is the
+35B's prefill — first token at the 2k-token Ask prompt — by somewhere
+between +7 % and +23 % by the two SYCL datapoints; everything dense is
+within a few per cent either way, and the MoE cache is a room gain
+(21.6 → ~9 GiB) paid in decode, to be measured on SYCL for the first time
+here.
+
 ## 4. Report
 
 *Written when the phases are in: the performance improvement or loss per
