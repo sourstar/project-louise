@@ -20,6 +20,7 @@ from app.hold import carry as carry_mod
 from app.hold import cpu_reference as cpu_ref
 from app.plugins.wikipedia import archive
 from app.plugins.wikipedia import source as wsrc
+from app.rage import reference as rage
 from tests.hold import wiki_runs
 from tests.hold.conftest import PLATFORM
 from tests.hold.test_origin_reach import build
@@ -48,10 +49,12 @@ def pair(isolated_config, data_dir, config_dir, monkeypatch):
                                        archives=(wsrc.ARCHIVE_ID,))
     assert w5.space_id == w6.space_id and w5.collection_id != w6.collection_id
     run = {"driver": "cpu", "weights": w6.space.encoder.weights, "engine": "sha256:" + "cd" * 32}
-    kept = cpu_ref.write(root, "wikipedia", "document", run_id=RUN_ID, run=run,
-                         set_id=w6.space.calibration.set, vectors=[[1.0, 0.0], [0.0, 1.0]])
-    other = cpu_ref.write(root, "wikipedia", "query", run_id=RUN_ID, run=run,
-                          set_id="sha256:" + "ee" * 32, vectors=[[1.0, 0.0]])
+    # kept by the collection, as before the node's store (2026-11-06)
+    kept = cpu_ref.write_in(cpu_ref.legacy_directory(root, "wikipedia", "document"), "document",
+                            run_id=RUN_ID, run=run, set_id=w6.space.calibration.set,
+                            vectors=[[1.0, 0.0], [0.0, 1.0]])
+    other = cpu_ref.write_in(cpu_ref.legacy_directory(root, "wikipedia", "query"), "query",
+                             run_id=RUN_ID, run=run, set_id="sha256:" + "ee" * 32, vectors=[[1.0, 0.0]])
     return root, corpus, w6, w5, kept, other
 
 
@@ -67,19 +70,29 @@ def test_the_carry_takes_what_it_can_prove_and_says_what_it_leaves(pair, monkeyp
     np.save(ids / ("0" * 32 + ".npy"), np.arange(3))
     said: list[str] = []
     plan = carry_mod.carry(root, "wikipedia", "wikipedia.next", rebuilt=True, apply=False, log=said.append)
-    assert plan["derived"]["cpu-reference"]["carried"] == 1 and not (root / "wikipedia.next" / "state"
-                                                                     / "cpu-reference").exists()
+    w = w5.space.encoder.weights
+    assert plan["derived"]["cpu-reference"]["unproven"] == ["document/" + kept.name]
+    assert rage.resolve(w5, "document", w, 2) is None
     assert any("derived state would carry" in m for m in said)
     plan = carry_mod.carry(root, "wikipedia", "wikipedia.next", rebuilt=True, apply=True, copy=True,
                            log=said.append)
     got = plan["derived"]
-    # the CPU reference: the same space and set, its bytes; another set's refused, named
-    dst = cpu_ref.directory(root, "wikipedia.next", "document") / kept.name
-    assert dst.read_bytes() == kept.read_bytes() and got["cpu-reference"]["carried"] == 1
-    assert got["cpu-reference"]["refused"] and not (cpu_ref.directory(root, "wikipedia.next", "query")
-                                                    / other.name).exists()
-    assert cpu_ref.find(root, "wikipedia.next", "document", weights=w5.space.encoder.weights,
-                        set_id=w5.space.calibration.set) is not None, "what the target's gate reads"
+    # the CPU reference (operator, 2026-11-22: "per model, not per collection"): nothing
+    # copied, nothing written. The old collection's copy names no inputs, so it is never
+    # filed under a key: said (unproven), never what the target's gate reads; another
+    # set's refused, named
+    assert got["cpu-reference"]["unproven"] == ["document/" + kept.name] and got["cpu-reference"]["refused"]
+    assert rage.resolve(w5, "document", w, 2) is None
+    assert not (root / "wikipedia.next" / "state" / "cpu-reference").exists(), "no collection copy"
+    assert kept.is_file() and other.is_file(), "the old collection's files are left as they were"
+    # once the node's store holds it (made for the node), the target resolves it and the
+    # old copy is said to be the same bytes
+    rage.put(w5, "document", run_id=RUN_ID, run=cpu_ref.read(kept).run_object,
+             vectors=cpu_ref.read(kept).vectors)
+    again = carry_mod.carry(root, "wikipedia", "wikipedia.next", rebuilt=True, apply=True, copy=True,
+                            log=said.append)["derived"]["cpu-reference"]
+    assert again["present"] == 1 and again["unproven"] == []
+    assert rage.resolve(w5, "document", w, 2) is not None, "what the target's gate reads"
     # the archive's ids: each current shard's, under its physical key; the stale one left
     mine = root / "wikipedia.next" / "state" / archive.IDS_DIR
     assert sorted(p.name for p in mine.glob("*.npy")) == held

@@ -561,13 +561,13 @@ def gating_elsewhere(collection) -> str | None:
 def no_cpu_reference(name: str, role: str, stated) -> str:
     """Why a card run is not gated: no stored CPU reference for its weights,
     and the command that makes one (once per node, kept, 07 §7.3)."""
-    flag = "--query-model" if role == "query" else "--model"
-    return (f"{name}: no stored CPU reference for the {role} side's weights "
-            f"{str(stated.weights)[:23]}… on run {str(stated.run_id)[:23]}… "
-            f"({stated.driver}): every card run is held to its CPU twin (CLAUDE.md "
-            f"invariant 12), so the gate is not run without one. Make it once: "
-            f"`louise hold embedder cpu-reference {name} {flag} <its CPU twin>` "
-            f"(docs/notes/near-exact-runs.md §2), then the gate runs by itself")
+    return (f"{name}: this node holds no CPU reference for the {role} side's weights "
+            f"{str(stated.weights)[:23]}… with this space's inputs (set, ctx, cut, instruction), "
+            f"made for any collection, on run {str(stated.run_id)[:23]}… ({stated.driver}): every "
+            f"card run is held to its CPU twin (CLAUDE.md invariant 12), so the gate is not run "
+            f"without one. Make it once for the node: `louise hold embedder cpu-reference {name}` "
+            f"(its CPU twin is the encoder's name with -cpu; docs/notes/near-exact-runs.md §2), "
+            f"then every collection of these inputs is gated by itself")
 
 
 def validate(root: Path, name: str, codex: Codex, recipe, *, role: str = "document",
@@ -767,10 +767,12 @@ def _validate(root: Path, name: str, codex: Codex, recipe, *, role: str = "docum
         # read it, so a text space fails here exactly as it did
         items = calibration_items(root, name, codex)
         # the stored CPU reference for these weights, when one was made
-        # (docs/notes/near-exact-runs.md §2): every answer is held to it
-        from .hold import cpu_reference as cpu_ref
-        cpu = cpu_ref.find(root, name, role, weights=stated.weights,
-                           set_id=codex.space.calibration.set, count=len(reference_vectors))
+        # (docs/notes/near-exact-runs.md §2): every answer is held to it,
+        # BY ITS KEY, whichever collection made it, through RAGE's API
+        # (operator, 2026-11-22: "the CPU reference is per model, not per
+        # collection"; app/rage/reference.py)
+        from .rage import reference as rage_reference
+        cpu = rage_reference.resolve(codex, role, stated.weights, len(reference_vectors))
         # NO CARD RUN IS GATED WITHOUT IT (invariant 12: every run "reaches the
         # stored CPU reference at 0.999; a run that does not FAILS"). Until
         # 2026-11-12 a run with no stored reference passed without that half
@@ -938,14 +940,14 @@ def rechecked(codex: Codex, role: str, run_id: str, body: dict[str, Any]) -> boo
 
 def cpu_reference_for(root: Path, name: str, codex: Codex, role: str, body: dict[str, Any],
                       count: int):
-    """The CPU reference this collection stores for the statement's weights
-    and the space's set — what the gate holds the run to (`_validate`)."""
-    from .hold import cpu_reference as cpu_ref
+    """The CPU reference the node holds for the statement's weights and this
+    space's inputs — what the gate holds the run to (`_validate`), by its key
+    (`app.rage.reference.resolve`)."""
+    from .rage import reference as rage_reference
     weights = body.get("encoder_weights")
     if not weights:
         return None
-    return cpu_ref.find(root, name, role, weights=str(weights), set_id=codex.space.calibration.set,
-                        count=count)
+    return rage_reference.resolve(codex, role, str(weights), count)
 
 
 def recheck(root: Path, name: str, codex: Codex, recipe, run_id: str, *,

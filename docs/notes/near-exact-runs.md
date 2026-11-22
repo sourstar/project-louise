@@ -51,9 +51,9 @@ Each flip stays within cosine ≥ 0.999999 of the other answers. Turning it off 
 
 - **What it is.** For one space and role, the vectors of the calibration set's 512 items, computed by the encoder's **CPU twin**: the same weights, engine and options, `gpu_layers: 0`, `no_op_offload: true`, the device hidden (approved-encoders.md "Cross-device bar").
 - **Required (2026-11-12).** No CARD run is gated without one: with no reference for its weights, the gate is not run and says which command makes it (`run_check.no_cpu_reference`, a rule in the way, exit 2, not a deferral; the card is not asked the set). Until then such a run passed without this half of the check, while a run with a reference could fail it (new-collection.md, "What the review found"). A run on the CPU is exempt: it is the reference's own kind. A run already validated keeps its statement while no reference is stored for its weights. *Amended the same evening (München: pubmed's two new references reached a statement only through `--remeasure`):* once one is stored, a statement that holds no comparison with it is not relied on. The worker and `hold embedder check` gate the run against it, once (`run_check._recheck`), and a statement of the space that did compare it replaces a collection's own that did not, so the space is gated once, not once per collection (`runs.statements_for_space`). On the node that day three roles had none: gutenberg's query side, pubmed's document and query sides, each with a CPU twin.
-- **Where it lives.** `<collection>/calibration/cpu-reference/<role>/<run>.json`, where `<run>` is the CPU twin's run id. That run id names the driver ("cpu"), the engine image and the weights, so a new CPU build or new weights is a new file and nothing is silently reused.
+- **Where it lives.** In the node's store only (2026-11-22, below): `<LOUISE_ROOT>/state/cpu-reference/<key>/<run>.json`, where `<run>` is the CPU twin's run id. That run id names the driver ("cpu"), the engine image and the weights, so a new CPU build or new weights is a new file and nothing is silently reused.
 - **Its format.** The run object, the set id, and the vectors as base64 float32, plus a digest of the whole.
-- **How it is made, once.** `louise hold embedder cpu-reference <collection> --model <cpu twin> [--query-model <cpu twin>]`, an operator verb. On the CPU it takes hours for qwen3-4b, which is why it is stored. The verb embeds the sixteen fingerprint texts twice, in reverse order, and refuses if the CPU twin does not give back its own bytes. It asks ONE TEXT A REQUEST, each bounded at 300 s per 1,024 tokens of the space's window times the requests queued at the twin (`cpu_reference.request_timeout`): the card's flat 300 s and the collection's `[encoder] batch` made wikidata's (ctx 8,191, batch 16) time out three times on 2026-11-01.
+- **How it is made, once.** `louise hold embedder cpu-reference <collection> [--model <cpu twin>] [--query-model <cpu twin>]`, an operator verb; the twin is the encoder's model with `-cpu` unless named, and must run the space's weights. On the CPU it takes hours for qwen3-4b, which is why it is stored. The verb embeds the sixteen fingerprint texts twice, in reverse order, and refuses if the CPU twin does not give back its own bytes. It asks ONE TEXT A REQUEST, each bounded at 300 s per 1,024 tokens of the space's window times the requests queued at the twin (`cpu_reference.request_timeout`): the card's flat 300 s and the collection's `[encoder] batch` made wikidata's (ctx 8,191, batch 16) time out three times on 2026-11-01.
 - **Resumable (2026-11-02).** A role already kept by the same run on the same set is skipped (`--again` makes it again). A role in progress is journalled eight texts at a time, beside the reference, as `<run>.<set>.partial.jsonl`. A stop, a kill or a deferral costs the window in flight, never the role. Exit 3 (deferred: VeGa away, a receipt expired, the twin busy) keeps the journal, and the next start asks only what it does not hold. The journal keeps float32 bytes, as the reference does, so a resumed pass writes the bytes a whole pass would (tests/hold/test_cpu_reference.py). The cause: gutenberg's query role held 352 of 512 answers in memory when one request came back after a 5 h `docker pause` with its receipt expired. The pass exited 1 and ~4.6 h of CPU was lost.
 - **Once per node, not once per command (operator, 2026-11-06:** "I
   already asked to save the cpu reference values so that we don't have to
@@ -73,12 +73,34 @@ Each flip stays within cosine ≥ 0.999999 of the other answers. Turning it off 
     computed again and kept beside the first.
   - **The computation is journalled and checked as before:** one text a
     request, the twin's reproduction of its own bytes.
-  - **Each collection keeps its own copy**, which is what its gate reads. A
-    collection's journal from before the store is taken over.
+  - ~~Each collection keeps its own copy, which is what its gate reads.~~
+    *Replaced 2026-11-22, below.*
   - **Not saved by this:** wikidata's stage 2 of 2026-11-06 ran on the code
     before, so its document role is computed once more, in stage 10. From
     then on, gutenberg-nemo and wikipedia-nemo take it from the store, if
     their window and instruction are the same.
+- **Per model, not per collection (operator, 2026-11-22:** "The CPU
+  reference is per model, not per collection. This must be in the rag engine
+  API"; "A collection then inherits the reference cpu model upon creation if
+  already present on the node"; "never spaghetti code within the
+  collection"**).** One resolution, `app/rage/reference.py` `resolve(codex,
+  role, weights, count)`, keyed on the space's inputs alone. The gate, the
+  re-check, `hold embedder cpu-reference` and `hold collection new` all ask
+  it, and nothing else looks.
+  - **No collection holds a copy**, and `carry` copies none. A second copy
+    was a second truth: wikidata's held the characters-cut vectors while the
+    store's key was right.
+  - **A collection inherits it.** `hold embedder cpu-reference` takes a role
+    whose key the store holds without asking the twin, whichever collection
+    made it. So `collection new` on an encoder the node already holds a
+    reference for spends no CPU (NeuRIS, 2026-11-22).
+  - **The copies from before the store are never filed under a key.** Such a
+    file names no inputs (ctx, cut, instruction), so its key would be a
+    guess. `louise dev cpu-reference-legacy` holds each to the store:
+    identical, differs, or unproven. The inventory on the node that day:
+    9 identical, 1 unproven (wikipedia's bge-m3 document role, run
+    c19ca7b8…, which its gate passed against that morning). Its statement
+    names the reference's run and cosines, not its bytes.
 - **How the gate uses it.** Every gate pass already embeds all 512 items. With a CPU reference present, it also reports each item's cosine to it:
   - worst **< 0.995** (the review line, operator 2026-10-18): the run FAILS. Review means it writes nothing until a human has looked.
   - **Quantised weights: a line per quantization level, measured** (operator, 2026-11-01: "calculate a reasonable threshold per quantization level, do not just assume it is the same as the full precision"; `embedder.cpu_review_line`).

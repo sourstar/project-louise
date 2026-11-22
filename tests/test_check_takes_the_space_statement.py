@@ -9,10 +9,9 @@ before. The worker would have admitted the collection on that statement
 (#574: the batching record comes with it). The command line now does the
 same, re-checking the statement's sixteen texts on this load; `--remeasure`
 gates it again when that is what is wanted."""
-import shutil
 
 from app import collections as collections_mod, louise, run_check
-from app.hold import collection as col, cpu_reference as cpu_ref, runs as hold_runs
+from app.hold import collection as col, runs as hold_runs
 from tests.hold.conftest import KEY, NOW, PLATFORM
 from tests.hold.test_template import recipe as a_recipe
 from tests.test_run_check import (DOC_URL, QUERY_URL, endpoint, node,  # noqa: F401
@@ -29,9 +28,8 @@ def _second_in_the_space(root, tmp_path, codex):
         f'codex = "{made.collection_id}"\nembed = "on-demand"\n'
         f'[encoder]\nurl = "{DOC_URL}"\nquery_url = "{QUERY_URL}"\n'
         f'embed_model = "medcpt-article"\nquery_model = "medcpt-query"\n', encoding="utf-8")
-    for role in ("document", "query"):
-        shutil.copytree(cpu_ref.directory(root, "gutenberg", role),
-                        cpu_ref.directory(root, "neuris", role))
+    # NO COPY of the CPU reference: the node's store holds it by the space's
+    # key and neuris resolves it there (app/rage/reference.py, operator 2026-11-22)
     return made
 
 

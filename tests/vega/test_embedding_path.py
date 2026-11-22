@@ -427,12 +427,11 @@ def node(tmp_path, monkeypatch, localai):
     assert collections_mod.recipe_for(collection).api == "vega"
     # the CPU twin's reference for the run's weights (invariant 12): without
     # one no card run is gated (tests/test_run_check.py)
-    from app.hold import cpu_reference as cpu_ref
+    from app.rage import reference as rage
     items = run_check.calibration_items(root / "collections", "gutenberg", codex)
-    cpu_ref.write(root / "collections", "gutenberg", "document", run_id="sha256:" + "c0" * 32,
-                  run={"driver": "cpu", "engine": {}, "weights": R1_OBJ["weights"]},
-                  set_id=codex.space.calibration.set,
-                  vectors=opening(emb.gate_texts(codex, "document", items)))
+    rage.put(codex, "document", run_id="sha256:" + "c0" * 32,
+             run={"driver": "cpu", "engine": {}, "weights": R1_OBJ["weights"]},
+             vectors=opening(emb.gate_texts(codex, "document", items)))
     return root / "collections", collection, codex
 
 

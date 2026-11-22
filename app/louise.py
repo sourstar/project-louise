@@ -718,7 +718,10 @@ def cmd_collection_new(a) -> int:
                 recipe that states none takes it.
       make      create (07 §7.3), or the collection already made, held to the
                 measured tolerance.
-      cpu-reference  written from the store entry calibrate made.
+      cpu-reference  INHERITED where the node's store holds the space's key
+                (operator, 2026-11-22; app/rage/reference.py), else made once
+                for the node; the CPU twin is the encoder's model with -cpu
+                unless --cpu-model names it (RULE 2).
       gate      `hold embedder check`.
     The measurement is kept as `<collection>/state/calibration.json`, the
     run's progress as `<LOUISE_ROOT>/state/new/<name>.json`. Embedding is not
@@ -807,9 +810,6 @@ def cmd_collection_new(a) -> int:
         raise CodexError(f"{a.recipe}: the space names a question encoder (space.query.encoder): that is "
                          f"case B of docs/notes/new-collection.md, whose question side is measured too, "
                          f"and the workflow does not run it yet (phase 3). Nothing was asked or measured")
-    if not a.cpu_model:
-        raise CodexError("--cpu-model names the encoder's CPU twin (gpu_layers 0, the device "
-                         "hidden): the tolerance and the CPU reference are measured against it")
     if re_create:
         _recreate_encoder(a)
     elif source is not None:
@@ -818,6 +818,11 @@ def cmd_collection_new(a) -> int:
         raise CodexError("--encoder URL names the endpoint of the recipe's encoder")
     api = check_api(a.api)
     model = model_keys(a.encoder, embed_model=a.embed_model)[0]
+    # THE CPU TWIN IS DETERMINED (RULE 2; operator, 2026-11-22): the encoder's
+    # name with -cpu where none is given, held below to a CPU run of the
+    # recipe's own weights
+    from app.rage import reference as rage_reference
+    a.cpu_model = a.cpu_model or rage_reference.twin(model)
     inputs = {"plugin": a.plugin, "recipe": given, "name": a.name, "encoder": a.encoder, "api": api,
               "embed_model": model, "cpu_model": a.cpu_model, "platform_image": a.platform_image}
     if re_create:
@@ -1050,12 +1055,16 @@ def _new_reference_and_gate(a, run, name: str, say) -> tuple[int, bool]:
     `(rc, stopped)` — stopped when the CPU reference did not exit 0. Each runs
     in this process and its write lock is released when it returns
     (`_sub_command`): normattiva's swap, 2026-11-07, found the collection held
-    by the gate of its own run."""
+    by the gate of its own run. The new collection INHERITS the reference
+    where the node holds it for her space's inputs (operator, 2026-11-22: "A
+    collection then inherits the reference cpu model upon creation if already
+    present on the node"): `cpu-reference` resolves it through RAGE's API and
+    asks no twin (app/rage/reference.py)."""
     import argparse
-    run.at("cpu-reference", "from the node's store")
+    run.at("cpu-reference", "the node's, inherited where it holds the space's key; else made once for the node")
     with _sub_command():
         rc = cmd_embedder_cpu_reference(argparse.Namespace(root=a.root, collection=name, model=a.cpu_model,
-                                                           query_model=None, again=False, refresh=True))
+                                                           query_model=None, again=False))
     if rc != 0:
         say(f"stopped at cpu-reference: it exited {rc}")
         return rc, True
@@ -1238,6 +1247,8 @@ def _sister_new(a, say) -> int:
     _space_from_encoder(a, source_name)
     api = check_api(a.api)
     model = model_keys(a.encoder, embed_model=a.embed_model)[0]
+    from app.rage import reference as rage_reference
+    a.cpu_model = a.cpu_model or rage_reference.twin(model)      # RULE 2, as `new`
     inputs = {"plugin": a.plugin, "name": a.name, "sister_of": her_sister.collection_id,
               "space_from": source_name, "space_id": source.space_id, "encoder": a.encoder, "api": api,
               "embed_model": model, "cpu_model": a.cpu_model, "recut": recut,
@@ -3522,6 +3533,26 @@ def cmd_dev_eurlex_dump(a) -> int:
         out["carried"] = dict(eurlex_dump.carry(Path(a.carry_from), corpus, log=say))
     _print(out)
     return 0
+
+
+def cmd_dev_cpu_reference_legacy(a) -> int:
+    """`louise dev cpu-reference-legacy` (operator, 2026-11-22: "The CPU
+    reference is per model, not per collection"): what each collection kept
+    under its own state before the node's store (2026-11-06), held to the
+    store RAGE resolves from (app/rage/reference.py `legacy`). Read-only:
+    such a copy names no inputs, so it is never filed under a key. Exit 1
+    when a copy is one the store does not hold (`unproven`: that encoder's
+    next new run is not gated until `hold embedder cpu-reference` makes it
+    for the node) or holds otherwise (`differs`), 0 otherwise."""
+    from app.hold import collection as col
+    from app.rage import reference as rage_reference
+    rows = [rage_reference.legacy(a.root, name, codex)
+            for name, codex in col._held(a.root) if codex.space is not None]
+    rows = [r for r in rows if r["identical"] or r["differs"] or r["unproven"] or r["refused"]]
+    _print({"collections": rows, "identical": sum(r["identical"] for r in rows),
+            "unproven": sum(len(r["unproven"]) for r in rows),
+            "differs": sum(len(r["differs"]) for r in rows)})
+    return 1 if any(r["unproven"] or r["differs"] for r in rows) else 0
 
 
 def cmd_dev_rederive(a) -> int:
@@ -6647,36 +6678,57 @@ def _embedder_check_runs(a, name, codex) -> int:
 
 
 def cmd_embedder_cpu_reference(a) -> int:
-    """`hold embedder cpu-reference <collection> --model M [--query-model Q]`
+    """`hold embedder cpu-reference <collection> [--model M] [--query-model Q]`
     (operator, 2026-10-31; docs/notes/near-exact-runs.md §2): the 512
     calibration items as the encoder's CPU TWIN embeds them, kept so that
     every gate compares its run with them without the CPU's hours. The twin
     must state a CPU run and give back its own bytes (the sixteen fingerprint
-    texts, one at a time, again in reverse order). Exit 0 when kept, 1 when
-    the twin is not reproducible, 2 when it is not a CPU run, 3 when it could
-    not be asked."""
+    texts, one at a time, again in reverse order). PER MODEL, NOT PER
+    COLLECTION (operator, 2026-11-22): kept once in the node's store by its
+    key, through RAGE's API (app/rage/reference.py); a role whose key the
+    store holds is taken from it, whichever collection made it, and no twin
+    is asked. The twin is the encoder's model with -cpu unless --model names
+    it, and must run the space's weights. Exit 0 when kept, 1 when the twin is
+    not reproducible, 2 when it is not a CPU run of the space's weights, 3
+    when it could not be asked."""
     import httpx
 
     from app import config, embeddings, encoder_use, run_check
     from app.hold import collection as col, cpu_reference as cpu_ref, embedder as emb
+    from app.rage import reference as rage_reference
     name, codex = col.resolve(a.root, a.collection)
-    if not a.model:
-        print("louise: --model names the encoder's CPU twin (gpu_layers 0, the device "
-              "hidden): a CPU reference is the CPU's answers", file=sys.stderr)
-        return 2
-    roles = ["document"] + (["query"] if a.query_model else [])
     if a.query_model and codex.space.query.encoder is None:
         print(f"louise: {name}: --query-model names a query side, and this space has none",
               file=sys.stderr)
         return 2
     try:
-        recipe = _as_candidate(_recipe_for(codex, name), a)
+        base = _recipe_for(codex, name)
+        # THE CPU TWIN IS DETERMINED (RULE 2; operator, 2026-11-22): the
+        # encoder's own name with -cpu where none is given, held below to a
+        # CPU run of the space's own weights
+        if not a.model:
+            a.model = rage_reference.twin(base.model)
+        if codex.space.query.encoder is not None and not a.query_model:
+            a.query_model = rage_reference.twin(base.query_model or base.model)
+        roles = ["document"] + (["query"] if a.query_model else [])
+        recipe = _as_candidate(base, a)
     except emb.GateDeferred as e:
         print(f"louise: deferred: {e}", file=sys.stderr)
         return 3
     items = run_check.calibration_items(a.root, name, codex)
     for role in roles:
         query = role == "query"
+        # THE NODE HOLDS IT ALREADY (operator, 2026-11-22: "A collection then
+        # inherits the reference cpu model upon creation if already present on
+        # the node"): resolved by the space's key through RAGE's API, the one
+        # lookup every gate makes; no twin asked. `--again` makes it anew
+        want = (codex.space.query.encoder.weights if query and codex.space.query.encoder
+                else codex.space.encoder.weights)
+        held = None if getattr(a, "again", False) else rage_reference.resolve(codex, role, want, len(items))
+        if held is not None:
+            print(f"kept  {role}  run {held.run_id[:23]}…  {len(held.vectors)} vectors  "
+                  f"(inherited: the node's store holds it for these inputs: {held.path})")
+            continue
         try:
             # the twin leased for the role's whole pass: one call is the 512
             # items on the CPU, hours, past any lease renewed per batch
@@ -6688,22 +6740,14 @@ def cmd_embedder_cpu_reference(a) -> int:
                     print(f"louise: {role}: the model states a run on {stated.driver!r}, not the "
                           f"CPU: a CPU reference is made by the CPU twin", file=sys.stderr)
                     return 2
-                # A ROLE THIS RUN ALREADY KEPT IS NOT MADE AGAIN (RULE 1: the same
-                # run on the same set gives the same bytes, invariant 12). Before
-                # this, a pass stopped in its query role redid the document role's
-                # 6.7 h on its next start (gutenberg, 2026-11-02)
+                # A TWIN IS THE SAME WEIGHTS: a reference of others would be kept
+                # under their key, where no gate of this space looks
+                if stated.weights != want:
+                    print(f"louise: {role}: {recipe.query_model if query else recipe.model} runs weights "
+                          f"{str(stated.weights)[:23]}…, the space's are {str(want)[:23]}…: a CPU twin "
+                          f"is the same weights", file=sys.stderr)
+                    return 2
                 set_id = codex.space.calibration.set
-                if getattr(a, "again", False):
-                    cpu_ref.discard_journal(a.root, name, role, run_id=stated.run_id,
-                                            set_id=set_id)
-                # `refresh` (`hold collection new`): the collection's copy is
-                # written again from the node's store, never trusted as it is
-                done = (None if getattr(a, "again", False) or getattr(a, "refresh", False) else
-                        cpu_ref.kept(a.root, name, role, run_id=stated.run_id,
-                                     set_id=set_id, count=len(items)))
-                if done is not None:
-                    print(f"kept already  {role}  run {stated.run_id[:23]}…  {done}")
-                    continue
                 texts = emb.gate_texts(codex, role, items)
                 # ONE TEXT A REQUEST, each bounded by the space's window: the
                 # collection's `[encoder] batch` is the card's (wikidata's 16
@@ -6715,20 +6759,13 @@ def cmd_embedder_cpu_reference(a) -> int:
                 embed = run_check.answers(cpu, query=query, name=name, timeout=timeout)
                 one = run_check.answers(cpu, how="one", query=query, name=name,
                                         timeout=timeout)
-                # THE NODE'S STORE (operator, 2026-11-06): what `hold embedder
-                # calibrate` or another collection of this encoder already
-                # made is taken, never made again; journalled a window at a
-                # time, so a stop costs the window in flight (gutenberg's query
-                # role lost 352 answers, 2026-11-02)
-                instruction = (getattr(recipe, "document_instruction", None) if role == "document"
-                               else getattr(codex.space.query, "instruction", None))
-                store = cpu_ref.node_directory(cpu_ref.node_key(
-                    weights=stated.weights, set_id=set_id, ctx=recipe.ctx,
-                    instruction=instruction, role=role,
-                    cut=getattr(recipe, "cut", "characters")))
-                cpu_ref.adopt_journal(cpu_ref.journal(a.root, name, role, run_id=stated.run_id,
-                                                      set_id=set_id),
-                                      store, run_id=stated.run_id, set_id=set_id)
+                # THE NODE'S STORE, BY ITS KEY, through RAGE's API (operator,
+                # 2026-11-06 and 2026-11-22): what `hold embedder calibrate` or
+                # another collection of this encoder already made is taken
+                # (this run's file, or carried when its sixteen fingerprint
+                # answers are its bytes), never made again; journalled a
+                # window at a time, so a stop costs the window in flight
+                store = rage_reference.store(codex, role, stated.weights)
                 got = cpu_ref.obtain(store, role, set_id=set_id, texts=texts,
                                      run_id=stated.run_id,
                                      run={"driver": stated.driver, "engine": stated.engine,
@@ -6745,9 +6782,9 @@ def cmd_embedder_cpu_reference(a) -> int:
         except cpu_ref.NotReproducible as e:
             print(f"louise: {e}", file=sys.stderr)
             return 1
-        path = cpu_ref.write(a.root, name, role, run_id=got.run_id, run=got.run,
-                             set_id=set_id, vectors=got.vectors)
-        print(f"kept  {role}  run {got.run_id[:23]}…  {len(got.vectors)} vectors  {path}  "
+        # the node's store only: every collection of this key finds it there
+        # (app/rage/reference.py), none keeps a copy
+        print(f"kept  {role}  run {got.run_id[:23]}…  {len(got.vectors)} vectors  "
               f"({got.how}; the node's store: {got.path})")
     return 0
 
@@ -7628,8 +7665,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--encoder", default=None, metavar="URL",
                    help="the endpoint of the recipe's encoder (required; with --re-create, the "
                         "predecessor's file's unless given)")
-    p.add_argument("--cpu-model", required=True, metavar="NAME",
-                   help="its CPU twin (gpu_layers 0): the tolerance and the CPU reference")
+    p.add_argument("--cpu-model", default=None, metavar="NAME",
+                   help="its CPU twin (gpu_layers 0): the tolerance and the CPU reference (default: the "
+                        "encoder's name with -cpu, held to a CPU run of the same weights)")
     p.add_argument("--platform-image", default=None)
     p.add_argument("--re-create", dest="re_create", action="store_true",
                    help="case F: re-create the collection held under --name (RULE 1): its parts, "
@@ -8169,8 +8207,10 @@ def build_parser() -> argparse.ArgumentParser:
                           help="keep the calibration set as the encoder's CPU twin embeds it "
                                "(every gate compares its run with it)")
     root_arg(p); p.add_argument("collection")
-    p.add_argument("--model", metavar="NAME", help="the CPU twin's model name")
-    p.add_argument("--query-model", metavar="NAME", help="the query side's CPU twin")
+    p.add_argument("--model", metavar="NAME", help="the CPU twin's model name (default: the encoder's "
+                                                    "with -cpu, held to a CPU run of the same weights)")
+    p.add_argument("--query-model", metavar="NAME", help="the query side's CPU twin (default: its "
+                                                          "encoder's with -cpu, where the space has one)")
     p.add_argument("--again", action="store_true",
                    help="make a role again even where this run already kept it")
     p.set_defaults(fn=cmd_embedder_cpu_reference)
@@ -8592,6 +8632,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--carry-from", dest="carry_from", default=None,
                    help="an earlier eurlex corpus: its units the dump did not give, linked in")
     p.set_defaults(fn=cmd_dev_eurlex_dump)
+    p = dverbs.add_parser("cpu-reference-legacy", help="the CPU references collections kept before the "
+                                                      "node's store, held to it (read-only): exit 1 when "
+                                                      "one is not in the store")
+    root_arg(p)
+    p.set_defaults(fn=cmd_dev_cpu_reference_legacy)
     p = dverbs.add_parser("rederive", help="every document derived again at the collection's parser "
                                            "(validity, catalogue, text index; its vectors kept): the "
                                            "A1c repair where no source snapshot is left; writes only with --yes")

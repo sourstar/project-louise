@@ -1108,37 +1108,23 @@ DERIVED = ("cpu-reference", "archive ids (the plugin's carry_state)", "scan curs
 
 def _carry_cpu_reference(root: Path, from_name: str, to_name: str, src: Codex, to: Codex, *,
                          apply: bool) -> dict[str, Any]:
-    from . import cpu_reference as cpu_ref
+    """THE REFERENCE IS THE MODEL'S, NOT THE COLLECTION'S (operator,
+    2026-11-22): nothing is copied, nothing written. The node's store holds
+    it by its key (app/rage/reference.py), where the new one's gate finds it
+    — the same space, the same key. What the old collection kept before the
+    store (2026-11-06) is said, held to the store (`legacy`): a copy the
+    store does not hold is never filed under a key it does not name."""
+    from app.rage import reference as rage_reference
     out: dict[str, Any] = {"carried": 0, "present": 0, "refused": []}
-    base = Path(root) / from_name / "state" / "cpu-reference"
-    if not base.is_dir():
-        return {**out, "why": "none kept"}
     if src.space is None or to.space is None or src.space_id != to.space_id:
         return {**out, "why": "not carried: the spaces differ, and the reference is the space's encoder's"}
     if src.space.calibration.set != to.space.calibration.set:
         return {**out, "why": f"not carried: the calibration set moved ({src.space.calibration.set[:23]}… → "
                               f"{to.space.calibration.set[:23]}…), and the reference is of the set"}
-    for d in sorted(p for p in base.iterdir() if p.is_dir()):
-        for f in sorted(d.glob("*.json")):
-            try:
-                ref = cpu_ref.read(f)
-            except (OSError, ValueError, KeyError, CodexError) as e:
-                out["refused"].append(f"{d.name}/{f.name}: {e}"[:160])
-                continue
-            if ref.role != d.name or ref.set_id != to.space.calibration.set:
-                out["refused"].append(f"{d.name}/{f.name}: of another role or set")
-                continue
-            dst = cpu_ref.directory(Path(root), to_name, d.name) / f.name
-            if dst.is_file() and dst.read_bytes() == f.read_bytes():
-                out["present"] += 1
-                continue
-            out["carried"] += 1
-            if apply:
-                dst.parent.mkdir(parents=True, exist_ok=True)
-                tmp = dst.with_name(f".{dst.name}.{os.getpid()}.tmp")
-                shutil.copyfile(f, tmp)
-                os.replace(tmp, dst)
-    return out
+    got = rage_reference.legacy(Path(root), from_name, src)
+    return {**out, "present": got["identical"], "unproven": got["unproven"], "differs": got["differs"],
+            "refused": got["refused"],
+            "why": "the node's store holds it by its key: nothing to copy into the collection"}
 
 
 def _carry_cursors(root: Path, from_name: str, to_name: str, src: Codex, to: Codex, *,
@@ -1188,6 +1174,8 @@ def derived_state(root, from_name: str, to_name: str, src: Codex, to: Codex, *, 
         n = v.get("carried")
         n = len(n) if isinstance(n, list) else n
         said.append(f"{k} {n}" + (f" ({v['why']})" if v.get("why") else "")
+                    + (f", {len(v['unproven'])} kept by the collection alone, not in the node's store"
+                       if v.get("unproven") else "")
                     + (f", {v['present']} already there" if v.get("present") else "")
                     + (f", {v['stale']} of shards no longer there left" if v.get("stale") else "")
                     + (f", {len(v['refused'])} refused" if v.get("refused") else ""))
