@@ -528,6 +528,24 @@ pools), media 2.74 T, louise-corpora 912 G (wikivec 525, wikidata 184), apps
 Dump copies until 11-20/21. At that pace tank is not near full; a daily log
 (/root/measure/tank-growth.log, 05:00) gives the rate from now on.
 
+## 11. ssd4 is for LanceDB only (operator, 2026-11-22)
+
+"Ssd4 is for lancedb only." Today ssd4 (`/mnt/ssd4/apps/louise-rag`) also
+holds what §10's table puts there with the vector tables: every collection's
+manifest (`state/manifest.sqlite`, the authoritative state, SQLite WAL), its
+text indexes (`index/`, tantivy), the rest of its `state/` (the share caches,
+the runs), the node's `state/` (`node.sqlite`, trust, `new/`,
+`cpu-reference/`), acquisition `staging/` and `hub/`, and `config/` and
+`secrets/`. Each of those moves off it. Where each goes is put to the operator
+as options, from München's read-only inventory (sizes, free space on ssd3 and
+ssd5, the manifests' write rate), with these constraints:
+- the authoritative state never goes to a cache (invariant 6: the archive and
+  the authoritative state never go under `LOUISE_CACHE_DIR`);
+- ssd3 is QLC (Samsung 870 QVO, an 18 GB SLC cache, 158 MiB/s past it, §9),
+  and a manifest is random small writes;
+- a text index is derived but costs days to rebuild for pubmed: it moves as
+  the same bytes (RULE 1), never rebuilt.
+
 ## 11. An origin's bulk files, read from ssd3: the norm (operator, 2026-11-15)
 
 "Whatever reading is actively ongoing on bulk, you can use ssd3 as cache", then
