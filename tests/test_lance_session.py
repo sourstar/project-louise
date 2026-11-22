@@ -72,7 +72,7 @@ def fresh_session(monkeypatch):
     previous state comes back after (monkeypatch)."""
     monkeypatch.setattr(embeddings, "_session", None)
     monkeypatch.setattr(embeddings, "_session_budget", embeddings._session_budget)
-    monkeypatch.setattr(embeddings, "_worker_caches", True)
+    monkeypatch.setattr(embeddings, "_shared", "worker")
 
     def make(index: int, metadata: int):
         monkeypatch.setattr(config, "WORKER_LANCE_CACHE_BYTES", (index, metadata))
@@ -104,7 +104,7 @@ def test_the_worker_role_defaults_to_one_bounded_session(tmp_path, monkeypatch, 
     made, seen = made_sessions
     monkeypatch.setattr(embeddings, "_session", None)
     monkeypatch.setattr(embeddings, "_session_budget", 0)
-    monkeypatch.setattr(embeddings, "_worker_caches", False)
+    monkeypatch.setattr(embeddings, "_shared", None)
     monkeypatch.setattr(config, "LANCE_INDEX_CACHE_BYTES", None)
     monkeypatch.setattr(config, "LANCE_METADATA_CACHE_BYTES", None)
     embeddings.use_worker_caches()
@@ -115,13 +115,41 @@ def test_the_worker_role_defaults_to_one_bounded_session(tmp_path, monkeypatch, 
     assert embeddings.lance_cache_stats()["budget"] == 2 << 30
 
 
-def test_the_search_role_keeps_the_librarys_index_cache_per_connection(tmp_path, monkeypatch,
-                                                                       made_sessions):
-    """The web: a Session per connection, as before, at Lance's 6 GiB index
+def test_the_web_role_shares_one_session_at_its_own_budget(tmp_path, monkeypatch, made_sessions):
+    """The operator, 2026-11-22: the web "should be less than 1GB". München
+    measured 983 MiB anon warm with a Session per connection, 559 MiB with
+    one shared, the same speed: one Session, 128 MiB + 64 MiB."""
+    made, seen = made_sessions
+    monkeypatch.setattr(embeddings, "_session", None)
+    monkeypatch.setattr(embeddings, "_session_budget", 0)
+    monkeypatch.setattr(embeddings, "_shared", None)
+    monkeypatch.setattr(config, "LANCE_INDEX_CACHE_BYTES", None)
+    monkeypatch.setattr(config, "LANCE_METADATA_CACHE_BYTES", None)
+    embeddings.use_web_caches()
+    for name in ("alpha", "beta", "gamma"):
+        embeddings._conn(_coll(tmp_path, name))
+    assert made == [{"index_cache_size_bytes": 128 << 20, "metadata_cache_size_bytes": 64 << 20}]
+    assert seen[0][1] is seen[1][1] is seen[2][1], "one Session for the web"
+    assert embeddings.lance_cache_stats()["budget"] == 192 << 20
+
+
+def test_the_web_takes_its_role_at_start(isolated_config, monkeypatch):
+    from fastapi.testclient import TestClient
+
+    from app.api import app
+    monkeypatch.setattr(embeddings, "_shared", None)
+    with TestClient(app) as c:
+        c.get("/healthz")
+    assert embeddings._shared == "web"
+
+
+def test_a_command_keeps_the_librarys_index_cache_per_connection(tmp_path, monkeypatch,
+                                                                 made_sessions):
+    """Any other process (a command's search): a Session per connection, as before, at Lance's 6 GiB index
     cache (the search measured on it), its metadata cache bounded — a reader
     grows by the versions it opens."""
     made, seen = made_sessions
-    monkeypatch.setattr(embeddings, "_worker_caches", False)
+    monkeypatch.setattr(embeddings, "_shared", None)
     monkeypatch.setattr(config, "LANCE_INDEX_CACHE_BYTES", None)
     monkeypatch.setattr(config, "LANCE_METADATA_CACHE_BYTES", None)
     for name in ("alpha", "beta"):
@@ -130,12 +158,12 @@ def test_the_search_role_keeps_the_librarys_index_cache_per_connection(tmp_path,
     assert seen[0][1] is not seen[1][1], "a Session per connection"
 
 
-@pytest.mark.parametrize("worker_role", [True, False])
-def test_the_environment_replaces_the_roles_figures(tmp_path, monkeypatch, made_sessions, worker_role):
+@pytest.mark.parametrize("role", ["worker", "web", None])
+def test_the_environment_replaces_the_roles_figures(tmp_path, monkeypatch, made_sessions, role):
     made, _seen = made_sessions
     monkeypatch.setattr(embeddings, "_session", None)
     monkeypatch.setattr(embeddings, "_session_budget", 0)
-    monkeypatch.setattr(embeddings, "_worker_caches", worker_role)
+    monkeypatch.setattr(embeddings, "_shared", role)
     monkeypatch.setattr(config, "LANCE_INDEX_CACHE_BYTES", 5 << 20)
     monkeypatch.setattr(config, "LANCE_METADATA_CACHE_BYTES", 7 << 20)
     embeddings._conn(_coll(tmp_path, "alpha"))
