@@ -275,6 +275,25 @@ until moved). Then the 9B chat on the new engine (engine-wide or MADLAD's
 path alone). The new engine's differing translations: to classify after
 phase 3.
 
+*F3 diagnostics so far (München, phase2/f3/):* C — one request on each
+engine with `GGML_SCHED_DEBUG=1` (the split list is not printed at
+llama-server's log level; the server's own `print_timing` compared
+instead): same text, same 19 tokens, identical output; prompt eval 63.7 vs
+63.8 ms; eval 60.1 vs 53.0 ms/token — the new engine ~12 % faster per token
+(absolute speeds are the debug env's, which prints on every compute);
+graphs reused 0 / reallocs 0 on BOTH, so SYCL graphs are not the
+difference. B — `GGML_SYCL_DEBUG=1`: the per-op trace runs; LocalAI's log
+buffer keeps 1,000 lines, so a "disabling SYCL graphs" line at graph build
+would be cut; none in what is kept. Read here: both servers post
+`NEXT_RESPONSE` while a slot is processing, so P4's 50 ms gather is
+re-entered every ms on both — the loop's wait is not the mechanism; the
+BMG VRAM check runs on model-buffer allocations only — not per request.
+**So F3 is in the wave/slot path itself**, and the next measurement is
+the per-request breakdown (wall, prompt eval, eval/token, the residual
+server wait) on T4 for: the new engine as is; with `LLAMA_ENC_DEC_WAVE_MS=0`;
+with `parallel:1`; and the live engine as reference. Graph-off and
+check-off controls dropped.
+
 **Conditions changed between phases**: the host's DDR5 runs at **6400
 MT/s** since the operator's second reboot (2026-11-21 ~22:31Z, EXPO;
 stressapptest 12 GB × 60 min PASS, 0 MCE/EDAC); phase 0 ran at 5200. A
