@@ -230,11 +230,56 @@ that changes under a qualified run is an engine change nobody gated.
 | VeGa wrapper package | not yet; built for phase 3's `vega-<model>-q` names (`build_vega_package.sh`) |
 | test binaries | the image ships no `test-backend-ops`, `test-chat`, `embedding_tokens_test`: built once from the same tree in the same builder and stack for phase 2 (§2 phase 2, as amended in the work order) |
 
-### Phase 2 — the series' checks
+### Phase 2 — the series' checks, München 2026-11-21/22 (M)
 
-| patch | result |
+Test binaries built once from the engine's own tree (LocalAI `dd5780aa` +
+the 6 patches by `git am`, llama.cpp `78e05298` with `prepare.sh`'s
+patches) in the engine's builder `louise-base-grpc-intel:7c301a7ba437`, a
+throwaway container never installed; the KQ-shapes diag patch applied to
+the test only (fuzz 2, offset 962); `test-chat` needed
+`LLAMA_BUILD_TOOLS=ON` (mtmd.h), `embedding_tokens_test` needed
+`CMAKE_PREFIX_PATH=/opt/grpc` and libjpeg-dev. Card SYCL0,
+`GGML_SYCL_ENABLE_DNN=0`, `GGML_SYCL_FA_ONEDNN=0`, BMG_VRAM_CHECK and
+MMID_SCHED at their defaults. Files: `phase2/` (`build*.log`, `byop.txt`,
+`op-<OP>.log`, `card-holders.txt`).
+
+| check | result |
 |---|---|
-| | |
+| P5: `test-backend-ops -o MUL_MAT -p type_a=f16,type_b=f32` | **235/235, 0 FAIL** |
+| `GGML_TEST_KQ_SHAPES=1 -o MUL_MAT` | **272/272** |
+| P6: `test-chat` (CPU) | All tests passed |
+| P2: `embedding_tokens_test` (CPU) | exit 0 |
+| the full suite, op by op (119 ops; one run aborted at SET_ROWS f16→f8_e4m3, exit 139) | 5 ops abort (139) ON f8_e4m3 after every earlier case passed (ADD 149 OK, CPY 109, FLASH_ATTN_EXT 4,277, MUL_MAT 159, MUL_MAT_ID 150): SYCL aborts on fp8 instead of skipping — no model of ours uses it. Numeric FAILs, none on our paths: SIGMOID/HARDSIGMOID bf16 (ERR 1.0–3.7e-7 against 1e-7), GROUP_NORM ne=[3,1,1,65537] (4.0), PAD_REFLECT_1D 16,777,217 (2.0), ROLL with a permute (1.9), TIMESTEP_EMBEDDING dim=1 (1.0) — edge shapes and diffusion ops. "0/0" for five `-o` names that match no case. Condition: 4,024 MiB of the live engine stayed on the card (correctness only) |
+| (e) the VRAM check, on purpose: the live set resident (12 models, 25,078 MiB, GTT 2,366 MiB), a test copy of the 35B on the new engine | **HTTP 500 in 3.0 s**: `ggml_sycl_free_mem_enough: SYCL0: cannot allocate 18543 MiB: 0 MiB already allocated, 4607 MiB usable (4607 MiB free of 32656 MiB), set GGML_SYCL_BMG_VRAM_CHECK=0 to disable this check; [SYCL-MEMTRACE] alloc FAILED`; LocalAI: "Backend process exited unexpectedly", "Failed to load model"; **GTT 2,366 MiB before and after — no spill; nothing killed; the 12 models still loaded** |
+
+**(f) MADLAD P3/P4 on the new engine** (t5waves as phase 0; pilot 18/18;
+card emptied, web stopped, OCR paused; run 2026-11-22 00:1x–00:39Z, the
+first attempt interrupted by the operator's reboot):
+
+| | live engine (phase 0) | new engine | bar |
+|---|---|---|---|
+| T4 one at a time vs P3's bytes | 375/379 | 375/379 | ≥ 375 MET |
+| T4 vs torch | 345/379 | 345/379 | — |
+| T3 same group twice | 624/626 | 625/626 | ≥ 624 MET |
+| in-wave == alone | 610/626 | 612/626 | ≥ 610 MET |
+| median per translation (T4) | 0.42 s | **1.01 s** | — |
+| median per question (T3) | 1.06 s, p90 1.44 | **2.19 s, p90 3.05** | — |
+
+**Finding F3 — MADLAD is 2.4× slower on the new engine, bytes no worse.**
+As it stands this fails the adoption bar. First diagnostic ordered: the
+same run with `GGML_SYCL_BMG_VRAM_CHECK=0` — the 500 above shows the check
+(`ggml_sycl_free_mem_enough`, a Level Zero memory query) inside the
+allocation path, and MADLAD's waves allocate per request; if the speed
+returns, F3 is the check's placement (upstream bug, env in MADLAD's YAML
+until moved). Then the 9B chat on the new engine (engine-wide or MADLAD's
+path alone). The new engine's differing translations: to classify after
+phase 3.
+
+**Conditions changed between phases**: the host's DDR5 runs at **6400
+MT/s** since the operator's second reboot (2026-11-21 ~22:31Z, EXPO;
+stressapptest 12 GB × 60 min PASS, 0 MCE/EDAC); phase 0 ran at 5200. A
+control re-run of two phase-0 rows on the live engine at 6400 is ordered
+before phase 3's first row.
 
 ### Phase 3 — per model, new engine against live
 
