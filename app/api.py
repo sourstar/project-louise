@@ -1129,15 +1129,11 @@ async def audio_speech(request: Request):
     header = request.headers.get("louise-reading")
     reading, n = speech.reading_turn(header)
     last = speech.reading_last(header)
-    # the voice the asker's account keeps, where the request names none — an
-    # admin's; anyone else hears the synthetic voice of the text's language
+    # the voice the asker's account keeps, where the request names none
     from . import auth, users
-    viewer = getattr(request.state, "viewer", None)
-    admin = auth.admin(viewer)
-    mine = users.voice_of(auth.account(viewer)) if admin else None
+    mine = users.voice_of(auth.account(getattr(request.state, "viewer", None)))
     status, content, ctype, timing = await run_in_threadpool(
-        lambda: speech.synthesize_timed(body, reading=reading, n=n, last=last, account_voice=mine,
-                                        admin=admin))
+        lambda: speech.synthesize_timed(body, reading=reading, n=n, last=last, account_voice=mine))
     from . import transcribe
     headers = {"Server-Timing": transcribe.server_timing(timing)} if timing else {}
     return Response(content=content, status_code=status, media_type=ctype, headers=headers)
