@@ -262,7 +262,6 @@ def node_directory(key: dict[str, Any], *, make: bool = True) -> Path:
     return d
 
 
-
 def node_find(d: Path, *, set_id: str, count: int, run_id: str | None = None) -> CpuReference | None:
     """This run's kept file in the store, else the newest readable one."""
     if run_id is not None:
