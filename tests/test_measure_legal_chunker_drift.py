@@ -98,10 +98,10 @@ def test_to_embed_and_dropped_count_the_texts_a_document_holds_not_their_multipl
 def test_the_pass_runs_on_the_parse_pool_at_the_profile_s_cores(collection, monkeypatch):
     seen = {}
 
-    def each_part(fn, tasks, *, limit=None):
+    def each_part_unordered(fn, tasks, *, limit=None):
         seen.update(fn=fn, limit=limit, tasks=len(tasks))
-        return (fn(*t) for t in tasks)
-    monkeypatch.setattr(parallel, "each_part", each_part)
+        return ((i, fn(*t)) for i, t in enumerate(tasks))
+    monkeypatch.setattr(parallel, "each_part_unordered", each_part_unordered)
     monkeypatch.setattr(cpu_limit, "current", lambda: cpu_limit.Limit(6, "day"))
     drift.measure(collection, window=2, log=lambda m: None)
     assert seen["fn"] is drift.cut_window and seen["limit"] == 6 and seen["tasks"] > 1
@@ -151,3 +151,46 @@ def test_every_error_is_listed_with_its_reason(collection, monkeypatch):
     assert got["totals"]["errors"] == 2 and len(got["errors"]) == 2
     assert {e["lang"] for e in got["errors"]} == {"el", "fr"} and all(e["path"] for e in got["errors"])
     assert got["errors_by_reason"] == {"ValueError: #'s only wrapper # names #": 2}
+
+
+
+def test_a_pass_stopped_resumes_from_its_progress_file_to_the_same_result(collection, tmp_path, monkeypatch):
+    """EUR-Lex5's whole run on 4 processes ran on one core (2026-11-22): its
+    restart onto the fix must not repeat the 600,000 documents done."""
+    whole = drift.measure(collection, window=2, examples=0, log=lambda m: None)
+    prog = tmp_path / "p.jsonl"
+    real = drift.cut_window
+    calls = []
+
+    def stop_after_two(*t):
+        calls.append(t[1])
+        if len(calls) > 2:
+            raise KeyboardInterrupt
+        return real(*t)
+    monkeypatch.setattr(drift, "cut_window", stop_after_two)
+    monkeypatch.setattr(parallel, "processes", lambda: 1)
+    with pytest.raises(KeyboardInterrupt):
+        drift.measure(collection, window=2, examples=0, progress=prog, log=lambda m: None)
+    assert len(prog.read_text().splitlines()) == 1 + 2, "the header and the two windows answered"
+    monkeypatch.setattr(drift, "cut_window", real)
+    calls.clear()
+    again = drift.measure(collection, window=2, examples=0, progress=prog, log=lambda m: None)
+    assert again["totals"] == whole["totals"] and again["languages"] == whole["languages"]
+    with pytest.raises(SystemExit, match="another pass"):
+        drift.measure(collection, window=3, examples=0, progress=prog, log=lambda m: None)
+
+
+def test_no_part_waits_for_a_slow_one():
+    """parallel.each_part_unordered: a slow first part does not hold the
+    others (each_part, in order, held them: one core of four)."""
+    got = [i for i, _ in parallel.each_part_unordered(_sleepy, [(0.6,), (0.0,), (0.0,), (0.0,)], limit=2)]
+    if parallel.processes() > 1:
+        assert got[-1] == 0 and sorted(got) == [0, 1, 2, 3], "the slow one last, every one answered"
+    else:
+        assert got == [0, 1, 2, 3], "one process: in order"
+
+
+def _sleepy(s):
+    import time as _t
+    _t.sleep(s)
+    return s

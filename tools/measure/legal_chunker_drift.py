@@ -179,9 +179,16 @@ def _processes(asked: int | None) -> tuple[int | None, str]:
 
 
 def measure(collection, *, to_version: int = 4, window: int = 5000, examples: int = 3,
-            limit: int | None = None, processes: int | None = None,
+            limit: int | None = None, processes: int | None = None, progress: Path | None = None,
             log=lambda m: print(m, file=sys.stderr, flush=True)) -> dict:
-    """The pass: every window of the manifest on the parse pool, in order."""
+    """The pass: every window of the manifest on the parse pool, AS EACH ENDS
+    (`parallel.each_part_unordered`: the windows are independent counters,
+    and in order a large act's window held the other children idle — EUR-Lex5,
+    2026-11-22, one core of four for 17,425 s). With `progress`, each window's
+    answer is appended there as it ends and a run started again takes the
+    windows answered from it (the same collection, window, limit and
+    version, else refused): a stop costs the windows in flight, never the
+    pass."""
     from app import db, parallel
     from tools.measure import legal_chunker_drift as me      # by name: a spawned child imports it
     con = db.read_only_connect(collection)
@@ -199,6 +206,25 @@ def measure(collection, *, to_version: int = 4, window: int = 5000, examples: in
                          f"--processes N runs it anyway")
     tasks = [(collection, lo, min(lo + window, top), int(to_version), int(examples))
              for lo in range(0, top, window)]
+    head = {"collection": collection.name, "window": int(window), "top": int(top), "to": int(to_version)}
+    answered: dict[int, dict] = {}
+    if progress is not None and progress.exists():
+        lines = progress.read_text(encoding="utf-8").splitlines()
+        if not lines or json.loads(lines[0]) != head:
+            raise SystemExit(f"legal_chunker_drift: {progress} is another pass's ({lines[0] if lines else 'empty'}), "
+                             f"not {head}")
+        for line in lines[1:]:
+            try:
+                rec = json.loads(line)
+            except ValueError:
+                continue                    # a line cut by a stop: its window again
+            answered[int(rec["lo"])] = rec["got"]
+    elif progress is not None:
+        progress.parent.mkdir(parents=True, exist_ok=True)
+        progress.write_text(json.dumps(head) + "\n", encoding="utf-8")
+    todo = [t for t in tasks if t[1] not in answered]
+    if answered:
+        log(f"[drift] {collection.name}: {len(answered)} window(s) answered in {progress}, {len(todo)} to go")
     log(f"[drift] {collection.name}: {top} rowids in {len(tasks)} window(s), at most "
         f"{cores or parallel.processes()} process(es) ({says})")
     per: dict[str, Counter] = {}
@@ -208,7 +234,19 @@ def measure(collection, *, to_version: int = 4, window: int = 5000, examples: in
     first_error: dict[str, str] = {}
     errors: list[dict] = []
     t0 = time.monotonic()
-    for k, got in enumerate(parallel.each_part(me.cut_window, tasks, limit=cores), 1):
+    def answers():
+        yield from answered.values()
+        sink = progress.open("a", encoding="utf-8") if progress is not None else None
+        try:
+            for i, got in parallel.each_part_unordered(me.cut_window, todo, limit=cores):
+                if sink is not None:
+                    sink.write(json.dumps({"lo": todo[i][1], "got": got}, ensure_ascii=False) + "\n")
+                    sink.flush()
+                yield got
+        finally:
+            if sink is not None:
+                sink.close()
+    for k, got in enumerate(answers(), 1):
         for lang, counts in got["langs"].items():
             per.setdefault(lang, Counter()).update(counts)
         for ex in got["examples"]:
@@ -261,6 +299,9 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--limit", type=int, default=None, help="only rowids up to this one (a pilot)")
     p.add_argument("--processes", type=int, default=None, help="fewer processes than the profile allows")
     p.add_argument("--out", type=Path, default=None, help="the whole result as JSON, here too")
+    p.add_argument("--progress", type=Path, default=None,
+                   help="each window's answer appended here; a run started again resumes from it "
+                        "(default: beside --out, <out>.progress.jsonl)")
     p.add_argument("--toml", type=Path, default=None,
                    help="the collection's TOML file, where it is out of the served set (EUR-Lex5 in "
                         "config/collections-stopped/, 2026-11-21: never put back to be measured); its "
@@ -288,8 +329,9 @@ def main(argv: list[str] | None = None) -> int:
     if coll is None:
         print(f"legal_chunker_drift: no collection {a.collection!r} (a stopped one: --toml FILE)", file=sys.stderr)
         return 2
+    progress = a.progress or (a.out.with_name(a.out.name + ".progress.jsonl") if a.out else None)
     got = measure(coll, to_version=a.to, window=a.window, examples=a.examples, limit=a.limit,
-                  processes=a.processes)
+                  processes=a.processes, progress=progress)
     for lang, v in got["languages"].items():
         print(json.dumps({"lang": lang, **v}, ensure_ascii=False))
     print(json.dumps({k: got[k] for k in ("collection", "to", "totals", "skipped", "first_error",

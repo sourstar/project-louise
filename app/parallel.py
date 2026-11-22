@@ -306,6 +306,68 @@ def each_part(fn, tasks: list[tuple], *, limit: int | None = None):
             ex.shutdown(wait=True, cancel_futures=True)
 
 
+def each_part_unordered(fn, tasks: list[tuple], *, limit: int | None = None):
+    """`(i, fn(*tasks[i]))` for every task, AS EACH ENDS — for a pass whose
+    parts are independent (counters, lists), so no part waits for another.
+
+    `each_part` yields in the tasks' order with at most 2n parts in flight or
+    done and not yet taken: a slow part at the head holds the rest, and its
+    children sit idle once 2n are queued (2026-11-22, München: EUR-Lex5's v4
+    drift on 4 processes ran on ONE core, two children waiting on their
+    pipes, for 17,425 s; CLAUDE.md "Multi-threading is a must"). Here the
+    same bound, 2n in flight, is refilled as any part ends. The same
+    recovery: a child the kernel killed sends the unanswered parts again on
+    half the pool, the memory killer ends the pass (MemoryKilled). A part's
+    own exception ends the pass, as in `each_part`."""
+    n = processes() if limit is None else max(1, min(int(limit), processes()))
+    if n <= 1 or len(tasks) <= 1:
+        for i, t in enumerate(tasks):
+            yield i, fn(*t)
+        return
+    from collections import deque
+    from . import oom_hold
+    oom_hold.baseline()                     # read BEFORE a child can be killed
+    ex = ProcessPoolExecutor(max_workers=n, mp_context=multiprocessing.get_context("spawn"),
+                             initializer=watch_parent)
+    todo: deque = deque(range(len(tasks)))
+    inflight: dict = {}
+    try:
+        while todo or inflight:
+            if ex is None:                  # down to this process
+                while todo:
+                    i = todo.popleft()
+                    yield i, fn(*tasks[i])
+                break
+            while todo and len(inflight) < 2 * n:
+                i = todo.popleft()
+                inflight[ex.submit(fn, *tasks[i])] = i
+            finished, _ = wait(list(inflight), return_when=FIRST_COMPLETED)
+            broken = None
+            for f in finished:
+                i = inflight.pop(f)
+                try:
+                    got = f.result()
+                except BrokenProcessPool as e:
+                    broken = e
+                    todo.appendleft(i)
+                    continue
+                yield i, got
+            if broken is not None:
+                ex.shutdown(wait=False, cancel_futures=True)
+                todo = deque(sorted(set(todo) | set(inflight.values())))
+                inflight.clear()
+                _raise_if_killed(f"{len(todo)} part(s) of {getattr(fn, '__name__', fn)} unanswered", broken)
+                n //= 2
+                print(f"[parse pool] a child was killed: {len(todo)} part(s) go again "
+                      + (f"on {n} process(es)" if n > 1 else "in this process"), file=sys.stderr, flush=True)
+                ex = (ProcessPoolExecutor(max_workers=n, mp_context=multiprocessing.get_context("spawn"),
+                                          initializer=watch_parent)
+                      if n > 1 else None)
+    finally:
+        if ex is not None:
+            ex.shutdown(wait=True, cancel_futures=True)
+
+
 def pool() -> ProcessPoolExecutor | None:
     """The executor, created on first use; None when serial or DISABLED."""
     global _pool, _pool_size

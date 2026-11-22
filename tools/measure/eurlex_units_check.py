@@ -224,7 +224,9 @@ def main(argv: list[str] | None = None) -> int:
     shown: dict[str, list[str]] = defaultdict(list)
     included: list[str] = []
     flagged: list[tuple[str, list[str]]] = []
-    for got in parallel.each_part(check_chunk, tasks):
+    # as each chunk ends: the chunks are independent counters, and in order a
+    # large unit's chunk held the other children idle (parallel.each_part_unordered)
+    for _i, got in parallel.each_part_unordered(check_chunk, tasks):
         flagged += [tuple(x) for x in got.get("flagged", [])]
         for k in total:
             total[k].update(got[k])
