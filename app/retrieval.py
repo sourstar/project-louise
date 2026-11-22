@@ -37,6 +37,9 @@ from typing import Any
 import httpx
 from . import (cancel, catalog, collections as collections_mod, config, copy_state, db,
                embeddings, model_load, fts, httpc, language_plan, refs, work_dedup)
+# the refusal check by its own name: a test that swaps `httpc` for an httpx
+# client (tests/test_localai_backends.py) keeps it (#798, 2026-11-22)
+from .httpc import raise_for_status as _raise_for_status
 from .rage import dispatch
 from .language_plan import LanguagePlan
 from .refs.resolver import row_of
@@ -753,7 +756,7 @@ def _rerank_call(recipe, body: dict, timeout: float, deadline: float) -> dict:
                 timeout = left
                 continue
         try:
-            httpc.raise_for_status(r)         # the server's reason with the status
+            _raise_for_status(r)              # the server's reason with the status
         except httpx.HTTPStatusError as e:
             e.retried = attempt == 2          # what the reason says
             raise
