@@ -443,6 +443,19 @@ successor).
 | the manifests, text indexes and SEARCHED vector tables | random, queries | | ssd4 |
 | origins, SHARDs, bundles, exports | sequential, archive | | tank, then tank1 |
 
+*Restated 2026-11-22* (the operator, choosing the claim index's seek table, B):
+"we can consider 2 kind of caching on storage devices: 1. disk cache (ssd3,
+SSD technology caching HDD, big but slower than nvem anyway much faster than
+mechanical hdd; use it for things like parsing, indexing, anything that can
+benefit from copying large amount of data from hdd) 2. RAM cache (ssd5, nvem
+gen5, the fastest storage device we have. the indexing caching currently
+stored in RAM for instance? But this is more your call)". So what a process
+would otherwise hold decoded in its heap — an index it looks up at random —
+goes to ssd5, mmapped, and its pages are the page cache's and the ARC's, never
+the heap's. The first index moved out of the web's heap by it: the claim
+index's seek table (app/hold/claim_index.py), which replaced every part's pack
+index held decoded (+485 MiB a question, München).
+
 **Which kind goes where** is app/derived.py's `FILES`, by how a kind is READ:
 the four packs are decompressed archives; everything else is read at random or
 memory-mapped. A pack on ssd3 costs a parse only where the parse waits on it:
