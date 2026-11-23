@@ -1207,7 +1207,8 @@ LARGE_PEAK_BYTES = 2 * 2 ** 30
 #: 204,218,240 bytes, alone, times four for the children it shares the cores with
 LARGE_SECONDS_PER_BYTE = 4 * 63.1 / 204_218_240
 #: how long a large row waits for the lane and for room before it is
-#: deferred: bounded, and short enough that a stop is honoured soon after
+#: deferred: bounded, and short enough that a stop is honoured soon after.
+#: Once: a row deferred is asked again, never waited for (`deferred_before`)
 LARGE_WAIT_S = 120.0
 _large_lane = threading.BoundedSemaphore(1)
 
@@ -1650,6 +1651,62 @@ def reserved() -> int:
         return _reserved
 
 
+# A ROW DEFERRED IS ASKED AGAIN, NEVER WAITED FOR AGAIN (2026-11-23, defect 3
+# of the EUR-Lex5 review). A row the lane or the pool's memory deferred stays
+# pending and untouched, so the next round selects it FIRST again
+# (`_RDF_PENDING`, `_FTS_FRESH`, the look-ahead's carry): part 0, nothing of
+# its batch in flight, and the admission below waited LARGE_WAIT_S for it
+# EVERY round while other large parses held the lane — the batch's other rows
+# with it — and taking the lane is a poll, not a turn: the wait bought it no
+# place. A part holding such a row is now ASKED (one try of the lane and the
+# room, no wait) and, refused, deferred at once; the rows behind it go on. A
+# fresh row still waits once, bounded, as before. Kept per row, keyed on the
+# manifest's path and the uid (physical identity, `_row_key`), until the row
+# is admitted; FIFO-bounded.
+# Not taken, "put it last in the next batch": the admission waits for a large
+# part whenever nothing of its batch is in flight, so at the batch's end it
+# would wait LARGE_WAIT_S all the same, the other rows' answers held unwritten.
+# Standardised alternative for the TURN itself, not taken: a fair (FIFO)
+# semaphore for the lane (Java's `Semaphore(1, true)`, a ticket lock); a
+# deferred row would have to hold its ticket across rounds, between which it
+# waits for nothing — worth it only if a deferred row is seen starved.
+_deferred_rows: "OrderedDict[tuple[str, str], None]" = OrderedDict()
+_deferred_rows_lock = threading.Lock()
+#: the rows remembered as deferred (FIFO): ~150 bytes each
+DEFERRED_KEPT = 4_096
+
+
+def deferred_before(collection, part: list[dict]) -> bool:
+    """Whether a row of `part` was deferred by the lane or the pool's memory
+    and has not been admitted since."""
+    with _deferred_rows_lock:
+        return any(_row_key(collection, r) in _deferred_rows for r in part)
+
+
+def _note_deferred(collection, part: list[dict], deferred: bool = True) -> None:
+    with _deferred_rows_lock:
+        for r in part:
+            key = _row_key(collection, r)
+            if not deferred:
+                _deferred_rows.pop(key, None)
+                continue
+            _deferred_rows[key] = None
+            _deferred_rows.move_to_end(key)
+        while len(_deferred_rows) > DEFERRED_KEPT:
+            _deferred_rows.popitem(last=False)
+
+
+def forget_deferred() -> None:
+    """Tests: no row deferred."""
+    with _deferred_rows_lock:
+        _deferred_rows.clear()
+
+
+def _waited(again: bool) -> str:
+    """How long a deferred part was waited for, for its message."""
+    return "now (deferred before: asked again, not waited for)" if again else f"within {LARGE_WAIT_S:.0f} s"
+
+
 def _take_lane(peak: int, *, wait: bool, until: float) -> bool:
     """The large lane, with room for `peak`: at once, or — `wait` — until
     `until`. False when it is not to be had."""
@@ -1865,16 +1922,21 @@ def compute(kind: str, collection, rows) -> list[tuple[bool, object]]:
                     nxt += 1
                     continue
                 gives: list = []                  # this part's one-shot releases
+                # a part the pool deferred before is asked, never waited for
+                # again (`deferred_before`; defect 3 of the EUR-Lex5 review)
+                again = bool(k) and deferred_before(collection, part)
                 if peak:
                     # one large part in flight in the process, with room for
                     # its peak: wait for it only when nothing else is in
                     # flight here to drain meanwhile
-                    if not _take_lane(peak, wait=not futures, until=time.monotonic() + LARGE_WAIT_S):
+                    if not _take_lane(peak, wait=not futures and not again,
+                                      until=time.monotonic() + LARGE_WAIT_S):
                         if futures or _stopped():
                             break
+                        _note_deferred(collection, part)
                         futures.append((part, _deferred(kind, collection, part,
-                                                        f"no room for a {peak / 2 ** 30:.1f} GB parse within "
-                                                        f"{LARGE_WAIT_S:.0f} s")))
+                                                        f"no room for a {peak / 2 ** 30:.1f} GB parse "
+                                                        f"{_waited(again)}")))
                         nxt += 1
                         continue
                     gives.append(_lane_releaser())
@@ -1882,7 +1944,8 @@ def compute(kind: str, collection, rows) -> list[tuple[bool, object]]:
                 if need:
                     # THE POOL'S MEMORY: the estimates of every part in flight
                     # within the budget, waited for as the lane is
-                    if not _reserve(need, wait=not futures, until=time.monotonic() + LARGE_WAIT_S):
+                    if not _reserve(need, wait=not futures and not again,
+                                    until=time.monotonic() + LARGE_WAIT_S):
                         for give in gives:
                             give()
                         if futures or _stopped():
@@ -1890,12 +1953,15 @@ def compute(kind: str, collection, rows) -> list[tuple[bool, object]]:
                         # deferred with nothing of its batch in flight: where the
                         # cgroup has no room, the children's keep is what holds it
                         short_of_room = short_of_room or not _measured_room(need)
+                        _note_deferred(collection, part)
                         futures.append((part, _deferred(kind, collection, part,
                                                         f"no room in the parse pool's memory for a part estimated "
-                                                        f"at {need / 2 ** 30:.1f} GB within {LARGE_WAIT_S:.0f} s")))
+                                                        f"at {need / 2 ** 30:.1f} GB {_waited(again)}")))
                         nxt += 1
                         continue
                     gives.append(_reservation_releaser(need))
+                if again:
+                    _note_deferred(collection, part, deferred=False)     # admitted: forgotten
                 lanes.extend(gives)
                 idle = _in_flight_count(futures) == 0
                 try:

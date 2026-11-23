@@ -87,6 +87,135 @@ def test_a_deferred_selected_row_costs_itself_never_its_batch(stage, tmp_path, m
     assert _state(con, row["uid"])[col] == 1
 
 
+@pytest.mark.parametrize("stage,where", [("rdf", "_rdf_one"), ("fts", "index_books"), ("fts", "marks")])
+def test_the_leads_failure_is_recorded_on_the_lead_never_on_the_deferred_row(stage, where, tmp_path, monkeypatch,
+                                                                             isolated_config):
+    """The EUR-Lex5 review's probe (defect 2): the selected row deferred, a
+    peer leading, and the lead's work raising — its own `_rdf_one`, the
+    batch's `fts.index_books`, the marks. `_execute_step`'s error path wrote
+    the failure onto the SELECTED row's uid: the deferred row ended ("rdf:
+    lead's own failure", 1, 0, 0), out of every selection, and the failing
+    lead untouched."""
+    c, con, row = _setup(tmp_path, stage)
+    before = _state(con, row["uid"])
+    batch: list = []
+    if stage == "rdf":
+        real = parallel.metadata_for_rows
+
+        def meta(collection, rows):
+            batch[:] = [r["uid"] for r in rows]
+            got = real(collection, rows)
+            return [DEFER if r["uid"] == row["uid"] else g for r, g in zip(rows, got)]
+        monkeypatch.setattr(parallel, "metadata_for_rows", meta)
+        real_one = worker._rdf_one
+
+        def rdf_one(con_, r, *a, **kw):
+            if r["uid"] == batch[1]:
+                raise RuntimeError("lead's own failure")
+            return real_one(con_, r, *a, **kw)
+        monkeypatch.setattr(worker, "_rdf_one", rdf_one)
+    else:
+        real = parallel.fts_for_rows
+
+        def fts_rows(collection, rows, *, names):
+            batch[:] = [r["uid"] for r in rows]
+            got = real(collection, rows, names=names)
+            return [DEFER if r["uid"] == row["uid"] else g for r, g in zip(rows, got)]
+        monkeypatch.setattr(parallel, "fts_for_rows", fts_rows)
+
+        def fail(*a, **kw):
+            raise RuntimeError("lead's own failure")
+        if where == "index_books":
+            monkeypatch.setattr(worker.fts, "index_books", fail)
+        else:
+            monkeypatch.setattr(worker, "_mark_indexed_many", fail)
+    assert worker._execute_step(con, c, stage, row) is True, "an attempt: its failure recorded"
+    lead = batch[1]
+    assert lead != row["uid"]
+    assert _state(con, row["uid"]) == before, "the deferred row stays deferred: no error, its retries unchanged"
+    err, retries, rdf_done, fts_done = _state(con, lead)
+    assert err == f"{stage}: lead's own failure" and retries == 1, "the failure is the lead's"
+    assert (rdf_done if stage == "rdf" else fts_done) == 0
+    assert all(_state(con, u)[0] is None for u in batch[2:]), "no other row blamed"
+
+
+@pytest.mark.parametrize("stage", ["rdf", "fts"])
+def test_a_deferred_large_head_never_makes_the_round_wait_on_the_lane(stage, tmp_path, monkeypatch,
+                                                                      isolated_config):
+    """Defect 3 of the EUR-Lex5 review: the deferred large row stays pending,
+    so each round selects it first again (`_RDF_PENDING`, `_FTS_FRESH`), part
+    0 with nothing in flight, and `_take_lane(wait=True)` held the whole round
+    LARGE_WAIT_S while other large parses held the lane. Now its first round
+    waits once, bounded, as before; every round after asks the lane without a
+    wait, and the peer behind it leads and is written at once."""
+    import time
+
+    from app import config, db, scheduled_checks
+    from tests.test_parallel_large_lane import BIG, K, _Pool
+    c, con, _row = _setup(tmp_path, stage)
+    monkeypatch.setattr(config, "PARSE_PROCESSES", 4)
+    monkeypatch.setattr(parallel, "pool", lambda: _Pool())
+    monkeypatch.setattr(parallel, "peak_per_byte", lambda collection: K)
+    monkeypatch.setattr(scheduled_checks, "cgroup_memory", lambda cgroup=None: None)
+    monkeypatch.setattr(parallel, "LARGE_WAIT_S", 0.5)
+    monkeypatch.setattr(parallel, "WAIT_SLICE_S", 0.02)
+    monkeypatch.setattr(worker, "batch_docs", lambda collection, stage_, default: 2)
+    monkeypatch.setattr(worker, "fts_sizes", lambda collection: (2, 10 ** 9))
+    asked: list = []
+    real = parallel._take_lane
+
+    def take(peak, *, wait, until):
+        t0 = time.monotonic()
+        got = real(peak, wait=wait, until=until)
+        asked.append((wait, time.monotonic() - t0))
+        return got
+    monkeypatch.setattr(parallel, "_take_lane", take)
+    scope = db.get_scope(con)
+    selected, head = worker._next_book(con, scope, embed_allowed=False, collection=c)
+    assert selected == stage
+    con.execute("UPDATE documents SET size=? WHERE uid=?", (BIG, head["uid"]))
+    con.commit()
+    before = _state(con, head["uid"])
+    col = 2 if stage == "rdf" else 3
+    assert parallel._large_lane.acquire(blocking=False), "another collection's large parse holds the lane"
+    try:
+        for n in (1, 2):
+            selected, row = worker._next_book(con, scope, embed_allowed=False, collection=c)
+            assert (selected, row["uid"]) == (stage, head["uid"]), "still pending, untouched: selected again"
+            t0 = time.monotonic()
+            assert worker._execute_step(con, c, stage, row) is True, "its peer led and was written"
+            took = time.monotonic() - t0
+            assert len(asked) == n
+            done = [u for (u,) in con.execute("SELECT uid FROM documents WHERE uid<>?", (head["uid"],))
+                    if _state(con, u)[col] == 1]
+            assert len(done) == n, f"round {n}: the peer behind it written"
+    finally:
+        parallel._large_lane.release()
+    assert asked[0][0] is True and asked[0][1] >= 0.5, "a fresh large row waits once, bounded, as before"
+    assert asked[1][0] is False and asked[1][1] < 0.1, f"deferred: asked, never waited for ({asked})"
+    assert took < 0.5, f"the second round did not wait LARGE_WAIT_S ({took:.2f} s)"
+    assert _state(con, head["uid"]) == before, "the deferred head left pending, untouched"
+
+
+def test_a_row_deferred_round_after_round_is_said_once_a_wait(tmp_path, monkeypatch, isolated_config):
+    """Defect 3's consequence: a deferred row alone in its batch is asked
+    again every WORKER_IDLE_SLEEP, no longer once per LARGE_WAIT_S. Its
+    deferral is said at the cadence the wait gave it, not every few seconds
+    into the event log's last 5,000 lines."""
+    c, con, row = _setup(tmp_path, "fts")
+    _patch(monkeypatch, "fts", lambda r: DEFER)
+
+    def said():
+        return con.execute("SELECT COUNT(*) FROM events WHERE level='warn' AND doc_uid=? "
+                           "AND message LIKE 'fts deferred%'", (row["uid"],)).fetchone()[0]
+    for _ in range(3):
+        assert worker._execute_step(con, c, "fts", row) is False
+    assert said() == 1, "the same deferral, said once"
+    monkeypatch.setattr(parallel, "LARGE_WAIT_S", 0.0)
+    assert worker._execute_step(con, c, "fts", row) is False
+    assert said() == 2, "said again once LARGE_WAIT_S has passed"
+
+
 def test_a_memory_kill_is_held_and_never_written_on_the_document(tmp_path, monkeypatch, isolated_config):
     """The operator's rule of 2026-11-19 (#779): the first memory kill is not
     computed again; the worker's hold is written by its handler. The row it

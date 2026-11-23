@@ -167,6 +167,43 @@ def test_without_room_a_large_row_waits_bounded_then_is_deferred(fake_compute, m
     parallel._large_lane.release()
 
 
+def test_a_row_deferred_before_is_asked_never_waited_for(fake_compute, monkeypatch):
+    """Defect 3 of the EUR-Lex5 review: a deferred large row stays pending, so
+    the next round selects it first again, as part 0 with nothing in flight,
+    and `_take_lane(wait=True)` waited LARGE_WAIT_S every round while other
+    large parses held the lane — a poll, not a turn. A fresh row still waits
+    once, bounded; deferred, it is asked again without a wait, and the rows
+    behind it go on at once. Admitted, it is forgotten."""
+    import time
+    pool = _Pool()
+    monkeypatch.setattr(parallel, "pool", lambda: pool)
+    monkeypatch.setattr(parallel, "LARGE_WAIT_S", 0.3)
+    monkeypatch.setattr(parallel, "WAIT_SLICE_S", 0.02)
+    asked: list = []
+    real = parallel._take_lane
+
+    def take(peak, *, wait, until):
+        t0 = time.monotonic()
+        got = real(peak, wait=wait, until=until)
+        asked.append((wait, time.monotonic() - t0))
+        return got
+    monkeypatch.setattr(parallel, "_take_lane", take)
+    rows = _rows([BIG, 1, 1])
+    assert parallel._large_lane.acquire(blocking=False), "another batch's large parse holds the lane"
+    try:
+        first = parallel.compute("chunks", _coll(), rows)
+        second = parallel.compute("chunks", _coll(), rows)
+    finally:
+        parallel._large_lane.release()
+    for got in (first, second):
+        assert got[0][0] is False and got[0][1]["type"] == "MemoryWait" and got[1:] == [(True, "e:1"), (True, "e:2")]
+    assert asked[0][0] is True and asked[0][1] >= 0.3, "a fresh row waits once, bounded, as before"
+    assert asked[1][0] is False and asked[1][1] < 0.1, f"deferred before: asked, never waited for ({asked})"
+    assert "not waited for" in second[0][1]["msg"]
+    assert parallel.compute("chunks", _coll(), rows) == [(True, r["uid"]) for r in rows], "the lane free: admitted"
+    assert not parallel.deferred_before(_coll(), rows[:1]), "admitted: forgotten"
+
+
 def test_the_worker_defers_a_memory_wait_and_never_errors_the_document():
     with pytest.raises(parallel.MemoryWait):
         parallel.raise_for({"type": "MemoryWait", "msg": "a large document waits"})

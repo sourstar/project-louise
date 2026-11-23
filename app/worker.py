@@ -355,7 +355,8 @@ def stage_rdf(con, row, collection) -> None:
 
     Invariant 2 holds because the enclosing transaction is all-or-nothing:
     a crash mid-batch marks nothing, and a re-run repeats delete-then-insert
-    keyed on uid. Only `row` may fail the round — a peer that cannot be
+    keyed on uid. Only `row` may fail the round — or, `row` deferred, the
+    peer that leads in its place (`_lead`) — a peer that cannot be
     parsed is skipped, keeps its pending state, and records its own error
     when its own turn comes. Peers arrive in insertion order (no ORDER BY),
     which is discovery order, which is container order — so the container
@@ -383,9 +384,11 @@ def stage_rdf(con, row, collection) -> None:
         # THE SELECTED ROW DEFERRED (P1 of the 2026-11-21 review): it stays
         # pending, untouched, and costs itself — never its batch, which a
         # large act deferred round after round would otherwise hold back for
-        # as long as the lane is busy. The first peer that answered leads
+        # as long as the lane is busy. The first peer that answered leads, and
+        # answers for the batch's failure in its place (`_lead`)
         i = next(i for i, (o, _m) in enumerate(metas) if o)
         lead, first = peers[i - 1], metas[i][1]
+        _lead.uid = lead["uid"]
     # THE WRITE LOCK BEGINS HERE, not before the parse (CLAUDE.md: long
     # non-DB work stays outside the transaction). The pool round trip above
     # is the batch's long part — 51.7 s for 2,000 documents, measured on the
@@ -861,6 +864,31 @@ _committed = threading.local()
 #: its pipeline thread waits WORKER_IDLE_SLEEP before it selects again, where
 #: a row the pool cannot take now would otherwise be asked for in a loop
 _deferral = threading.local()
+#: THE ROW A BATCH'S FAILURE IS RECORDED ON, when it is not the selected row
+#: (`uid`; defect 2 of the EUR-Lex5 review, 2026-11-23): the selected row
+#: deferred, the peer that leads in its place (P1). Its failure — its own, or
+#: the batch's (an index commit, the marks), which the lead always answered
+#: for — was written by `_execute_step` onto the SELECTED row's uid: the
+#: deferred row errored out of every selection, the failing lead untouched.
+#: Set by `stage_rdf` / `stage_fts`, reset and read by `_execute_step`
+_lead = threading.local()
+#: the last memory deferral said, per stage and manifest (its path): (uid,
+#: when). A row the pool deferred before is asked again each round WITHOUT a
+#: wait (app/parallel.py `deferred_before`, defect 3 of the EUR-Lex5 review):
+#: alone in its batch, every WORKER_IDLE_SLEEP. The same row's deferral is
+#: said again only after LARGE_WAIT_S, the cadence the wait gave it
+_deferral_said: dict[str, tuple[str, float]] = {}
+
+
+def _deferral_news(collection, stage: str, uid: str) -> bool:
+    """Whether this row's memory deferral is to be said now (`_deferral_said`)."""
+    key = f"{stage}:{getattr(collection, 'manifest_path', None) or getattr(collection, 'name', '')}"
+    now = time.monotonic()
+    last = _deferral_said.get(key)
+    if last is not None and last[0] == uid and now - last[1] < parallel.LARGE_WAIT_S:
+        return False
+    _deferral_said[key] = (uid, now)
+    return True
 
 
 def _parse_stop():
@@ -942,7 +970,8 @@ def stage_fts(con, row, collection) -> None:
     lossless, and truthful about what is actually done. Marking before the
     commit is the one ordering that would lose data.
 
-    Only `row` may fail the round. A peer that cannot load its chunks, or
+    Only `row` may fail the round — or, `row` deferred, the peer that leads
+    in its place (`_lead`). A peer that cannot load its chunks, or
     cannot be entity-tagged, is dropped rather than blamed on `row`: it keeps
     its pending state and records its own error when its own turn comes.
 
@@ -1008,12 +1037,14 @@ def stage_fts(con, row, collection) -> None:
         # THE SELECTED ROW DEFERRED (P1 of the 2026-11-21 review): it stays
         # pending, untouched, and costs itself — never its batch, which a
         # large act deferred round after round would otherwise hold back for
-        # as long as the lane is busy. The first peer that answered leads; the
-        # deferred row goes back to the look-ahead with the rows not written
+        # as long as the lane is busy. The first peer that answered leads, and
+        # answers for the batch's failure in its place (`_lead`); the deferred
+        # row goes back to the look-ahead with the rows not written
         deferred = (first_row, first)
         i = next(i for i, (_r, (o, _v)) in enumerate(rest) if o)
         first_row, (ok, first) = rest[i]
         rest = rest[i + 1:]
+        _lead.uid = first_row["uid"]
     chunks = _unpack(first_row, first)
     batch = [(first_row, chunks)]
     n_chunks = len(chunks)
@@ -4774,6 +4805,7 @@ def _execute_step(con, collection, stage, row) -> bool:
     t0 = time.time()
     _committed.rdf = _committed.fts = ()
     _deferral.memory = False
+    _lead.uid = None
     if stage not in _NO_OUTER_TRANSACTION:
         con.execute("BEGIN IMMEDIATE")
     try:
@@ -4816,11 +4848,14 @@ def _execute_step(con, collection, stage, row) -> bool:
             # selection. The row stays pending, untouched. A memory KILL is a
             # MemoryWait too (MemoryKilled): the worker's hold is already
             # written and its stop begun (app/oom_hold.py, `_on_oom_kill`);
-            # nothing of it is written on the document either
+            # nothing of it is written on the document either. The same row
+            # deferred again is said once a LARGE_WAIT_S (`_deferral_news`); a
+            # kill always
             _deferral.memory = True
-            db.log_event(con, "warn", stage,
-                         f"{stage} deferred — {e}; the document is untouched and will be "
-                         f"retried"[:500], row["uid"])
+            if isinstance(e, parallel.MemoryKilled) or _deferral_news(collection, stage, row["uid"]):
+                db.log_event(con, "warn", stage,
+                             f"{stage} deferred — {e}; the document is untouched and will be "
+                             f"retried"[:500], row["uid"])
             return False
         if manifest_contended(e):
             # Another writer had the manifest. Nothing is wrong with this
@@ -4902,6 +4937,11 @@ def _execute_step(con, collection, stage, row) -> bool:
             # document, the fault of none — deferred, said once a while
             _say_platform_missing(con, collection, stage, e)
             return False
+        # what is written from here is written on the row that FAILED: the
+        # selected row, or the peer that led its batch in its place, the
+        # selected row deferred (`_lead`) — never the deferred row, which
+        # stays pending and untouched (defect 2 of the EUR-Lex5 review)
+        failed = getattr(_lead, "uid", None) or row["uid"]
         if isinstance(e, plugin_base.UnindexableDocument):
             # a CORPUS fact surfaced mid-stage (the mirror ships no text for
             # this entry): recorded UNPREFIXED, like discovery writes it, so
@@ -4912,11 +4952,11 @@ def _execute_step(con, collection, stage, row) -> bool:
             # 2026-10-22: the error alone left its markup in the lexical leg)
             from . import unindexable
             try:
-                unindexable.withdraw(con, collection, row["uid"])
+                unindexable.withdraw(con, collection, failed)
             except Exception as w:  # noqa: BLE001 — an index busy: deferred, nothing recorded
                 db.log_event(con, "warn", stage,
                              f"{stage} deferred — not indexable, but its index entries could "
-                             f"not be withdrawn yet ({type(w).__name__}: {w})", row["uid"])
+                             f"not be withdrawn yet ({type(w).__name__}: {w})", failed)
                 return False
             # its vectors went with the withdraw, whole (`delete_book`): it is
             # not embedded and holds no earlier version — embed_done 0, version
@@ -4929,18 +4969,18 @@ def _execute_step(con, collection, stage, row) -> bool:
                 "embed_done=CASE WHEN embed_done=1 THEN 0 ELSE embed_done END, "
                 "embed_version=CASE WHEN embed_done IN (0, 1) THEN 0 ELSE embed_version END "
                 "WHERE uid=?",
-                (str(e)[:500], int(time.time()), row["uid"]))
+                (str(e)[:500], int(time.time()), failed))
             db.log_event(con, "info", stage,
-                         f"not indexable: {e}", row["uid"])
+                         f"not indexable: {e}", failed)
             return True
         missing = origin_missing.path_of(e)
         con.execute(
             "UPDATE documents SET retries=retries+1, error=?, updated_at=? WHERE uid=?",
             (f"{stage}: {origin_missing.message(missing) if missing else e}"[:500],
-             int(time.time()), row["uid"]))
+             int(time.time()), failed))
         if missing:
             _say_origin_missing(con, collection, stage, missing)
-        db.log_event(con, "error", stage, f"{type(e).__name__}: {e}", row["uid"])
+        db.log_event(con, "error", stage, f"{type(e).__name__}: {e}", failed)
         return True
     if stage == "embed":
         _endpoint_answered(con, collection)

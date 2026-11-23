@@ -101,6 +101,9 @@ def fresh_worker_state():
     parallel.forget_prefetched()
     parallel.forget_users()
     parallel.reset_failures()
+    # the rows the lane deferred are asked, never waited for, again: one
+    # test's deferral must not decide the next test's wait
+    parallel.forget_deferred()
     # the node profile's cached limit and each collection's watch of it
     cpu_limit.reset()
     worker._cpu_watches.clear()
