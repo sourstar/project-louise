@@ -378,8 +378,9 @@ def test_a_pass_stopped_between_parts_resumes_after_them(held, monkeypatch, why)
     con, c = held.con, held.c
     real = validity.write_amendments
 
-    def once_then_halt(con_, pairs):
-        n = real(con_, pairs)
+    def once_then_halt(con_, pairs, **kw):
+        assert kw == {"day": validity.today(c)}, "the pass recomputes on the collection's day (defect 6)"
+        n = real(con_, pairs, **kw)
         if why == "stop":
             worker._stop.set()
         else:
@@ -444,7 +445,7 @@ def test_from_version_2_only_the_versions_in_the_old_form_are_rewritten(held, mo
     written: list[str] = []
     real = validity.write_amendments
     monkeypatch.setattr(validity, "write_amendments",
-                        lambda cn, pairs: (written.extend(u for u, _ in pairs), real(cn, pairs))[1])
+                        lambda cn, pairs, **kw: (written.extend(u for u, _ in pairs), real(cn, pairs, **kw))[1])
     assert worker._rederive_amendments(con, c) is True
     assert written == ["normattiva:2"], "only the version still in the old form"
     assert ("normattiva:2", "Norme|227") in _rows(con) and ("normattiva:1", "CODICE CIVILE|2043") in _rows(con)
