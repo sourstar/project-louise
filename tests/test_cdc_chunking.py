@@ -135,7 +135,9 @@ def test_only_wikipedia_is_mutable_today():
     # wikidata (2026-10-19): an entity is revised in place between dumps (a
     # dated dump is immutable, the collection pins one) — and it declares its
     # own chunker, wikidata-text, so it does NOT get CDC either
-    assert mutable == {"wikipedia", "normattiva", "wikidata", "legi", "neuris", "eurlex"}
+    # wikisource (2026-11-23): a page is revised in place; its works are
+    # books, CDC-cut as gutenberg's pieces are (its own `default_layers`)
+    assert mutable == {"wikipedia", "normattiva", "wikidata", "legi", "neuris", "eurlex", "wikisource"}
     # normattiva akn_article; legi, neuris and eurlex the shared legal
     # layer's legal_article (2026-11-08): neither gets CDC
     assert chunking.chunker_name(collections_mod.PLUGIN_REGISTRY["normattiva"].chunking_profile,
