@@ -305,3 +305,25 @@ def test_a_window_s_updates_look_up_their_rowids_never_scan_a_column_s_index(iso
     for sql, params in sent:
         plan = " ".join(r[3] for r in con.execute("EXPLAIN QUERY PLAN " + sql, params).fetchall())
         assert "INTEGER PRIMARY KEY" in plan and "USING INDEX" not in plan, (sql, plan)
+
+
+def test_a_row_rederive_first_holds_stays_held_and_its_release_is_narrowed_again(isolated_config, tmp_path):
+    """`dev rederive --first` holds rows at in_scope 2 (db.SCOPE_HELD) while
+    the listed are derived first: the slice pass neither widens nor narrows
+    them; on `--release` they are 1 again, the scope applied, and the pass,
+    sent back to its start, narrows the one whose slice is not held."""
+    c = _col(tmp_path, ["family=person"])
+    con = db.connect(c)
+    _rows(con, FAMILY)
+    con.execute("UPDATE documents SET in_scope=? WHERE native_id IN ('1','2')", (db.SCOPE_HELD,))
+    con.commit()
+    _apply(con, c)
+    got = _scope(con)
+    assert (got[1], got[2]) == (db.SCOPE_HELD, db.SCOPE_HELD), "held, in a held slice and in another"
+    assert (got[3], got[4]) == (1, 0), "the rest as the slices say"
+    con.execute("UPDATE documents SET in_scope=1 WHERE in_scope=?", (db.SCOPE_HELD,))   # --release
+    discovery.apply_scope(con)
+    con.commit()
+    assert slice_scope.ready(con, c) is False, "the stages wait for the pass again"
+    _apply(con, c)
+    assert _scope(con) == {1: 1, 2: 0, 3: 1, 4: 0, 5: 0, 6: 0}

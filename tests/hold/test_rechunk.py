@@ -658,3 +658,27 @@ def test_a_sister_derived_at_v4_is_the_carry_s_target(isolated_config, tmp_path)
     t = got["totals"]
     assert got["done"] and t["carried"] == len(table) > 0 and t["documents"] == 3
     assert (col.shard_dir_of(root, "v4") / "snapshots" / "2026-11.json").is_file(), "its parts and snapshot"
+
+
+def test_a_source_holding_no_vector_and_no_snapshot_moves_with_nothing_carried(isolated_config, tmp_path):
+    """EUR-Lex5's M1 (2026-11-23): its manifest holds documents, but no
+    vector and no snapshot. The sister at v4 takes the carry anyway, with
+    nothing carried: every chunk is to embed, and the restart derives it
+    again before any records are built."""
+    from app.hold import codex as cx
+    corpus = _greek_corpus(tmp_path)
+    root = tmp_path / "collections"
+    v3 = _create(root, "v3", 3)
+    rec.build(root, "v3", corpus_dir=corpus, records_per_shard=2, log=quiet)
+    assert not (col.shard_dir_of(root, "v3") / "snapshots").exists()
+    layers_v4 = tuple(cx.layer_from_dict(l, i) for i, l in enumerate(_layer(4)))
+    col.derive(root, v3.collection_id, layers=layers_v4, embed=fake_embed,
+               embed_query=fake_query_embed, key=KEY, now=NOW, name="v4")
+    with Locks(root):
+        dry = rechunk.rekey(root, "v3", "v4", apply=False, log=quiet)
+    out, got = _carried(root)
+    t = got["totals"]
+    assert got["done"] and t["carried"] == 0 and t["documents"] == 3
+    assert t == dry["totals"], "the dry run counted what the run did"
+    assert not _table(root), "no row in the target's table"
+    assert {m[0] for m in _marks(root).values()} == {0}, "every document to embed"
