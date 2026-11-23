@@ -39,6 +39,14 @@ FILES_CACHE_DIR = Path(os.getenv("LOUISE_FILES_CACHE_DIR")) if os.getenv("LOUISE
 # swap). Unset: every vector table stays beside its collection, as before.
 # Identity tier: this node's path.
 BUILD_DIR = Path(os.getenv("LOUISE_BUILD_DIR")) if os.getenv("LOUISE_BUILD_DIR") else None
+# THE LANCE ROOT (operator, 2026-11-22: "Ssd4 is for lancedb only"; 2026-11-23:
+# "A", docs/notes/storage-tiering.md §12): every SEARCHED vector table lives
+# under it, `<LOUISE_LANCE_ROOT>/<name>`, behind the collection's own `lance`
+# path (app/vector_place.py, the one module that resolves it), so the rest of a
+# collection's folder (its manifest, text index, state) can live elsewhere.
+# Unset: a searched table is the directory beside its collection, as before.
+# Identity tier: this node's path.
+LANCE_ROOT = Path(os.getenv("LOUISE_LANCE_ROOT")) if os.getenv("LOUISE_LANCE_ROOT") else None
 #: the tokenizer files a token-cutting chunker names by sha256 (wikidata-text,
 #: 06 §6.3): `<dir>/<hex>.json`, fetched by the platform image at build from
 #: the Hub at a pinned revision and checked against the layer's sha256

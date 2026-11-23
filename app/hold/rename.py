@@ -101,7 +101,7 @@ def plan(root: Path, old: str, new: str) -> dict[str, Any]:
         raise CodexError(f"rename: a move of {old}'s vector table is begun (`hold vectors move`): finish "
                          f"it first, then rename")
     t = _link_target(src / vector_place.TABLE_DIR)
-    if t is not None and vector_place.in_area(t) and t.name == old:
+    if t is not None and (vector_place.in_area(t) or vector_place.in_hot_root(t)) and t.name == old:
         moves["lance"] = [str(t), str(t.with_name(new))]
     origins = os.getenv("ORIGINS_ROOT", "").strip()
     t = _link_target(src / "origin")
@@ -260,7 +260,7 @@ def rename(root: Path, old: str, new: str, *, dry_run: bool = False) -> dict[str
     # moves it (Normattiva, 2026-11-13: renamed onto the searched name, read
     # from ssd3 for a day, nothing saying so)
     from app import vector_place
-    if "lance" in moves:
+    if "lance" in moves and vector_place.in_area(moves["lance"][1]):
         out["vector_table"] = (
             f"still in the build area ({vector_place.physical(vector_place.table_dir(root, new))}): the "
             f"worker moves it to the data pool once nothing has written it for a pass, unless {new} is "

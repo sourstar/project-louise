@@ -33,6 +33,17 @@ Chosen over a placement recorded in the collection's state because:
   write lock), so a move does not move them;
 - unset, nothing is a link and every path is today's, byte for byte.
 
+THE LANCE ROOT (operator, 2026-11-22: "Ssd4 is for lancedb only"; 2026-11-23:
+"A", storage-tiering.md §12): with `LOUISE_LANCE_ROOT` set, a SEARCHED table
+is the same kind of link, to `<LOUISE_LANCE_ROOT>/<name>`, so a collection's
+folder (its manifest, text index, state) can live on another pool while its
+vectors stay on the one searches read. `tier` tells the two links apart by
+their target: under the Lance root, `hot`; in the build area, `build`; a plain
+directory is `hot`, as before. A new table, a take-over from the build area
+and `hold vectors move --to hot` land in the Lance root; a table that is
+still the directory beside its collection is ADOPTED by the same command, a
+rename on its own filesystem, never a copy (`adopt_into_root`).
+
 A CACHE KEYED ON THE PATH, ACROSS A MOVE: its key is the same before and
 after, and what it holds — a connection, a table at a version, whether an
 index exists — describes bytes that are the same before and after (the copy
@@ -137,6 +148,47 @@ def area() -> Path | None:
     return Path(config.BUILD_DIR) if config.BUILD_DIR is not None else None
 
 
+def lance_root() -> Path | None:
+    """`LOUISE_LANCE_ROOT`, or None when searched tables stay beside their
+    collections."""
+    return Path(config.LANCE_ROOT) if config.LANCE_ROOT is not None else None
+
+
+def hot_home(name: str) -> Path | None:
+    """`<LOUISE_LANCE_ROOT>/<name>`, or None without a Lance root."""
+    r = lance_root()
+    return r / name if r is not None else None
+
+
+def in_hot_root(path) -> bool:
+    """`path` is a table folder of the Lance root, `<LOUISE_LANCE_ROOT>/<x>`."""
+    r = lance_root()
+    return r is not None and os.path.dirname(os.path.normpath(path)) == os.path.normpath(r)
+
+
+def hot_applies(root) -> bool:
+    """Whether a searched table of a collection under `root` lives in the
+    Lance root: one is named, and `root` is the node's own (as `applies`)."""
+    if config.LANCE_ROOT is None:
+        return False
+    try:
+        return Path(root).resolve() == (config.louise_root() / "collections").resolve()
+    except OSError:
+        return False
+
+
+def hot_mounted() -> Path:
+    """The Lance root, refused when it is not a directory: an unmounted path
+    is the container's own storage, and no searched table goes there."""
+    r = lance_root()
+    if r is None:
+        raise PlaceError("LOUISE_LANCE_ROOT is not set (07 §7.8)")
+    if not r.is_dir():
+        raise PlaceError(f"LOUISE_LANCE_ROOT {r} is not a directory — is its storage mounted? No vector "
+                         f"table goes to a container's own storage (07 §7.8)")
+    return r
+
+
 def table_dir(root, name: str) -> Path:
     """THE PATH OF A COLLECTION'S VECTOR TABLE, `<root>/<name>/lance`: what
     every reader and writer opens, wherever the bytes are (a link into the
@@ -155,8 +207,13 @@ def physical(path) -> Path:
 
 
 def tier(path) -> str:
-    """`build` when the table is behind a link (the build area), else `hot`."""
-    return BUILD if Path(path).is_symlink() else HOT
+    """`build` when the table is behind a link into the build area; `hot`
+    for a link into the Lance root and for the directory itself. A link to
+    anywhere else stays `build`, as every link was before the Lance root."""
+    p = Path(path)
+    if not p.is_symlink():
+        return HOT
+    return HOT if in_hot_root(physical(p)) else BUILD
 
 
 def home(name: str) -> Path | None:
@@ -202,6 +259,9 @@ def unreachable(path) -> str | None:
     target is not there — the build area not mounted, or its folder gone."""
     p = Path(path)
     if p.is_symlink() and not p.exists():
+        if in_hot_root(physical(p)):
+            return (f"its vector table is in the Lance root at {physical(p)}, which is not there — is "
+                    f"LOUISE_LANCE_ROOT's storage mounted? (07 §7.8)")
         return (f"its vector table is in the build area at {physical(p)}, which is not there — is "
                 f"LOUISE_BUILD_DIR's storage mounted? (07 §7.8)")
     return None
@@ -214,13 +274,34 @@ def ensure(path) -> None:
     why = unreachable(path)
     if why:
         raise PlaceError(f"{path}: {why}")
-    Path(path).mkdir(parents=True, exist_ok=True)
+    p = Path(path)
+    if _gone(p) and p.name == TABLE_DIR and hot_applies(p.parent.parent):
+        # a table that does not exist yet is made where searched tables live
+        _link_into(p, hot_mounted() / p.parent.name)
+        return
+    p.mkdir(parents=True, exist_ok=True)
+
+
+def _link_into(link: Path, target: Path) -> None:
+    """`link` made a link to `target` (made if missing), through a temporary
+    name renamed over it, so a reader never finds half of it."""
+    target.mkdir(parents=True, exist_ok=True)
+    link.parent.mkdir(parents=True, exist_ok=True)
+    tmp = link.with_name(PLACE)
+    if tmp.is_symlink():
+        tmp.unlink()
+    tmp.symlink_to(target, target_is_directory=True)
+    os.replace(tmp, link)
 
 
 def destination_for_new(root, name: str) -> Path:
     """Where a collection `new` is about to make will hold its table's bytes
     (the dry run's room): the build area when it applies, else beside it."""
-    return home(name) if applies(root) else table_dir(root, name)  # type: ignore[return-value]
+    if applies(root):
+        return home(name)  # type: ignore[return-value]
+    if hot_applies(root):
+        return hot_home(name)  # type: ignore[return-value]
+    return table_dir(root, name)
 
 
 # ---- the atomic exchange -----------------------------------------------------
@@ -295,13 +376,17 @@ def place_new(root, name: str) -> Path | None:
     """`new` (cases A and F): the collection's table built in the build area —
     `<root>/<name>/lance` a link to `<LOUISE_BUILD_DIR>/lance/<name>`, made
     BEFORE the collection's file exists, so no writer can have begun a table
-    elsewhere. Returns the folder, or None where no build area applies.
-    Repeatable: the link already made is kept. Refused (nothing made) when
-    the area is not mounted, or when either side already holds a table."""
-    if not applies(root):
+    elsewhere. Without a build area and with a Lance root, the link goes to
+    `<LOUISE_LANCE_ROOT>/<name>` the same way. Returns the folder, or None
+    where neither applies. Repeatable: the link already made is kept.
+    Refused (nothing made) when the area or the root is not mounted, or when
+    either side already holds a table."""
+    if applies(root):
+        link, target = table_dir(root, name), mounted() / KIND / name
+    elif hot_applies(root):
+        link, target = table_dir(root, name), hot_mounted() / name
+    else:
         return None
-    a = mounted()
-    link, target = table_dir(root, name), a / KIND / name
     settle(link.parent)
     if link.is_symlink():
         if physical(link) != target:
@@ -341,7 +426,7 @@ def unplace_new(root, name: str) -> None:
     link and its folder go while the folder is empty, and the collection's
     directory if nothing else is in it."""
     link = table_dir(root, name)
-    if not link.is_symlink() or physical(link) != home(name):
+    if not link.is_symlink() or physical(link) not in (home(name), hot_home(name)):
         return
     target = physical(link)
     if target.is_dir() and any(target.iterdir()):
@@ -427,6 +512,91 @@ def discard_move(root, name: str) -> list[str]:
     for f in (STATE, JOURNAL):
         (base / "state" / f).unlink(missing_ok=True)
     return gone
+
+
+def adopt_into_root(root, name: str, *, log=None) -> dict[str, Any]:
+    """A searched table that is still the directory beside its collection
+    taken into the Lance root BY A RENAME, on its own filesystem: nothing is
+    copied (RULE 1). The name is never absent: a link to the folder's new
+    place takes the name in one exchange with the directory (it dangles for
+    the instant before the directory is renamed under it, and a reader that
+    finds it so is refused, never handed a new empty table: `ensure`), then
+    the directory is renamed to that place. Another filesystem is refused:
+    `move` copies across one. The caller holds the collection's write lock
+    with the collection paused, as for every move."""
+    say = log or (lambda _m: None)
+    base = Path(root) / name
+    link = table_dir(root, name)
+    settle(base)
+    if not hot_applies(root):
+        raise PlaceError(f"{root}: no Lance root applies (LOUISE_LANCE_ROOT, the node's own root)")
+    finished = _finish_adopt(root, name)
+    if finished is not None:
+        say(f"[vectors move] {name}: an adoption a stop interrupted, finished: {finished}")
+        return {"collection": name, "adopted": True, "tier": HOT, "path": finished, "switch": "resumed"}
+    if link.is_symlink() or not link.is_dir():
+        return {"collection": name, "nothing": "the table is not the directory beside it", "tier": tier(link),
+                "path": str(physical(link))}
+    target = hot_mounted() / name
+    if not _gone(target) and not _empty_dir(target):
+        raise PlaceError(f"{target} already holds files: nothing is adopted over it")
+    if not _same_fs(link, target.parent):
+        raise PlaceError(f"{name}: its table ({link}) and the Lance root ({target.parent}) are on two "
+                         f"filesystems: `louise hold vectors move {name} --to hot --apply` copies it")
+    if _empty_dir(target):
+        target.rmdir()
+    held = link.with_name(PLACE)
+    if held.is_symlink():
+        held.unlink()
+    held.symlink_to(target, target_is_directory=True)
+    how = exchange(held, link)                 # the link takes the name; the directory is `lance.place`
+    _at("adopt-exchanged")
+    os.rename(held, target)                    # the directory to its place: the link resolves
+    rows = None
+    try:
+        from . import spaces
+        rows = spaces.known_lance_rows(link)
+    except Exception:   # noqa: BLE001, S110 — a count is said, never needed
+        pass
+    say(f"[vectors move] {name}: its vector table is in the Lance root now ({target}), by a rename "
+        f"({how}); {rows} rows")
+    return {"collection": name, "adopted": True, "tier": HOT, "path": str(target), "switch": how, "rows": rows}
+
+
+def _same_fs(a: Path, b: Path) -> bool:
+    return os.stat(a).st_dev == os.stat(b).st_dev
+
+
+def _finish_adopt(root, name: str) -> str | None:
+    """An adoption a stop cut between its exchange and its rename, finished:
+    the name a link to `<LOUISE_LANCE_ROOT>/<name>`, which is not there, and
+    the directory still at `lance.place`. Returns the folder, or None."""
+    base = Path(root) / name
+    link, held = table_dir(root, name), base / PLACE
+    target = hot_home(name)
+    if (target is None or not link.is_symlink() or physical(link) != target or not _gone(target)
+            or held.is_symlink() or not held.is_dir()):
+        return None
+    os.rename(held, target)
+    return str(target)
+
+
+def held_in_hot_root(root, name: str) -> list[Path]:
+    """The Lance root's folders that are this collection's and go with it:
+    the target of its table's link and of every link beside it when it lies
+    in the Lance root, and `<LOUISE_LANCE_ROOT>/<name>` — any that another
+    collection's table links is left."""
+    base = Path(root) / name
+    out: list[Path] = []
+    for link in (base / TABLE_DIR, base / MOVING, base / PLACE, *sorted(base.glob("lance.*"))):
+        if link.is_symlink():
+            t = physical(link)
+            if in_hot_root(t) and t not in out:
+                out.append(t)
+    h = hot_home(name)
+    if h is not None and (h.exists() or h.is_symlink()) and h not in out:
+        out.append(h)
+    return [t for t in out if not _linked_by_others(root, name, t)]
 
 
 # ---- the move ---------------------------------------------------------------------
@@ -599,9 +769,17 @@ def _where(root, name: str, to: str) -> tuple[Path, Path, Path]:
         if not applies(root):
             raise PlaceError(f"{root} is not this node's root ({config.louise_root() / 'collections'}): "
                              f"the build area holds the node's own collections, a folder per name")
+    elif hot_applies(root):
+        stage = hot_mounted() / name            # the Lance root: the staging IS its folder
     else:
         stage = link.with_name(MOVING)
     return link, src, stage
+
+
+def _linked(root, to: str) -> bool:
+    """Whether a table moved to `to` is reached by a link (the build area,
+    or the Lance root), not by its directory."""
+    return to == BUILD or (to == HOT and hot_applies(root))
 
 
 def plan(root, name: str, to: str) -> dict[str, Any]:
@@ -619,6 +797,14 @@ def plan(root, name: str, to: str) -> dict[str, Any]:
         raise PlaceError(f"{name}: a move to {state.get('to')} is begun: finish it "
                          f"(`louise hold vectors move {name} --to {state.get('to')} --apply`) first")
     if now == to and not state:
+        if to == HOT and hot_applies(root) and not link.is_symlink() and link.is_dir():
+            files, _l, _d = _listing(link)
+            out.update(adopt=True, tier=now, path=str(link), to={"tier": HOT, "path": str(hot_home(name))},
+                       bytes=sum(sz for sz, _ in files.values()),
+                       say=(f"{name}: its vector table, the directory beside it, goes into the Lance root "
+                            f"({hot_home(name)}) by a rename on its own filesystem: nothing is copied"),
+                       next=f"louise node pause {name}; louise hold vectors move {name} --to hot --apply")
+            return out
         out.update(nothing="the table is already there", tier=now, path=str(physical(link)))
         return out
     if now == to:
@@ -681,6 +867,11 @@ def move(root, name: str, to: str, *, collection=None, stop: threading.Event | N
     base = Path(root) / name
     state_dir = base / "state"
     settle(base)
+    if hot_applies(root) and not begun(state_dir):
+        finished = _finish_adopt(root, name)
+        if finished is not None:
+            say(f"[vectors move] {name}: an adoption a stop interrupted, finished: {finished}")
+            return {"collection": name, "adopted": True, "tier": HOT, "path": finished, "switch": "resumed"}
     link = table_dir(root, name)
     state = begun(state_dir)
     if state and state.get("to") != to:
@@ -688,6 +879,8 @@ def move(root, name: str, to: str, *, collection=None, stop: threading.Event | N
                          f"(`louise hold vectors move {name} --to {state.get('to')} --apply`) first")
     if tier(link) == to:
         if not state:
+            if to == HOT and hot_applies(root) and not link.is_symlink() and link.is_dir():
+                return adopt_into_root(root, name, log=say)
             return {"collection": name, "nothing": "the table is already there", "tier": to,
                     "path": str(physical(link))}
         return _finish(root, name, to, state, say, t0)
@@ -896,7 +1089,7 @@ def _switch(root, name: str, to: str, link: Path, src: Path, stage: Path, jpath:
             if {r: e[:2] for r, e in journal.items()} != files:
                 return None
             new = stage
-            if to == BUILD:
+            if _linked(root, to):
                 new = link.with_name(MOVING)
                 if new.is_symlink() and physical(new) != stage:
                     new.unlink()

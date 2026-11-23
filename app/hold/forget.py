@@ -248,6 +248,8 @@ def shared_folders(root: Path, name: str) -> tuple[list[Path], list[Path]]:
     # folder there, and a begun move's, go with the collection
     from app import vector_place
     removed += [t for t in vector_place.held_in_area(root, name) if t not in removed]
+    # and its searched table's folder in the Lance root (LOUISE_LANCE_ROOT)
+    removed += [t for t in vector_place.held_in_hot_root(root, name) if t not in removed]
     return removed, kept
 
 

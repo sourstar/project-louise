@@ -839,7 +839,15 @@ reader needs at the command line:
   exits 130, a kill anywhere leaves one valid table under the name, and a
   run again goes on from the journal. A table already where `--to` says is
   nothing to do. `rename` refuses while a move is begun; `forget` takes the
-  build area's folder with the collection.
+  build area's folder with the collection. With a LANCE ROOT set
+  (`LOUISE_LANCE_ROOT`, §7.8, *amended 2026-11-23*), `hot` is the root:
+  a table built in the build area moves there, and a table that is still
+  the directory beside its collection is ADOPTED by `--to hot --apply` — a
+  rename on its own filesystem, nothing copied: a link into the root takes
+  the name in one exchange with the directory, then the directory is
+  renamed under it (a stop between the two leaves the link dangling, the
+  collection refused meanwhile, and a run again finishes it). On two
+  filesystems the adoption is refused (exit 2) and names the copy.
 - **`vectors show`.** Prints the coverage map (09 §9.10): per part of
   the current snapshot the chunks accepted here, whether it is open, and
   — among the live peers whose digests carry a benchmark for the space,
@@ -2003,7 +2011,7 @@ one home.
 
 | tier | carries | changes by |
 |---|---|---|
-| **environment** — identity | `LOUISE_ROOT` (the one directory), `LOUISE_BUILD_DIR` (the build area, *amended 2026-11-07*), `NODE_KEY_PATH`, `NODE_PUBLIC_KEY_PATH`, `ADMIN_TOKEN_FILE`, `DEPOSIT_TOKEN_FILE`, `GIT_PRIVATE_KEY_FILE`, `CHAT_URL`, `TRANSLATE_URL`, `TRANSLATE_MODEL` (the model TRANSLATE_URL's server is asked for, as `CHAT_MODEL` is for chat; amended 2026-10-09), `RERANK_URL`, `GPU_PROBE_URL`, `VEGA_URL` | restart |
+| **environment** — identity | `LOUISE_ROOT` (the one directory), `LOUISE_BUILD_DIR` (the build area, *amended 2026-11-07*), `LOUISE_LANCE_ROOT` (the searched vector tables' root, *amended 2026-11-23*), `NODE_KEY_PATH`, `NODE_PUBLIC_KEY_PATH`, `ADMIN_TOKEN_FILE`, `DEPOSIT_TOKEN_FILE`, `GIT_PRIVATE_KEY_FILE`, `CHAT_URL`, `TRANSLATE_URL`, `TRANSLATE_MODEL` (the model TRANSLATE_URL's server is asked for, as `CHAT_MODEL` is for chat; amended 2026-10-09), `RERANK_URL`, `GPU_PROBE_URL`, `VEGA_URL` | restart |
 | **files** — desired state | `platform.toml` and `collections/<name>.toml` under `LOUISE_ROOT` | editing the file; `hold config apply` |
 | **files** — desired state | `users.toml` beside `platform.toml` (*amended 2026-10-22*): the users of §7.4, each token as its SHA-256 only; when each was last seen is `state/users-seen.json`, not desired state | `louise user …`, the admin API — never by hand |
 | **files** — desired state | `recipes/<plugin>.toml` beside `collections/` (*amended 2026-10-25, RULE 2*): this node's recipe for a plugin (06 §6.6) — what the Library's *new collection*, which names a plugin and a local name only, creates from | editing the file |
@@ -2350,7 +2358,7 @@ collection is another name.
 │       ├── shard/           the copy, the SHARD (`drag/` until 2026-10-11): exactly the tree of 02 §2.6 — what `share` serves, and nothing else; the bytes may live on other storage, mounted here
 │       ├── state/           manifest.sqlite (with the origin's flagged issues, 06 §6.1), cursor, ack.json, attestations/, bundles/, lock — this peer's alone; frozen/: while the collection is frozen, the newer snapshot its alignment is read against, never in the copy (04 §4.3, added 2026-11-07)
 │       ├── index/           the text index of the parts held, and the facet values (05 §5.7); a sister sharing her text index keeps only her catalogue and facets here (state/text-index.json names the shared one, below)
-│       ├── lance/           the vector table search reads; while it is built, a link into the build area (`LOUISE_BUILD_DIR`, below)
+│       ├── lance/           the vector table search reads; while it is built, a link into the build area (`LOUISE_BUILD_DIR`, below); with a Lance root, a link into it (`LOUISE_LANCE_ROOT`, below)
 │       └── origin/          the origin files the records are parsed from — 06 §6.2's corpus directory, kept for records-vs-origin; the bytes may live on other storage, mounted here
 │   └── .text-index/<identity>/  ONE text index for sisters whose index would be the same byte for byte, written by one (`writer.json`), read by the others; formed, joined and left at the worker's boot (02 §2.7, amended 2026-11-10; app/text_index.py)
 ├── state/                   node.sqlite: the catalogue, coverage maps (09 §9.10), peers seen, runtime overrides; trust.json; web-sources-ack.json (09 §9.13); working-state.json (`node checkpoint`, §7.3); resident-budget.json (the resident budget's measured margin, at-rest and largest model sizes, card total and eviction penalty, written by the worker, read by `node resident show`; §7.3, 2026-11-08)
@@ -2432,6 +2440,23 @@ container's own storage; a collection whose `lance` link reaches nothing
 — the area not mounted — is refused, named in the refusals, never served
 with an empty table in its place. Unset, every table stays beside its
 collection, as before.
+
+A Lance root for the searched vector tables (*amended 2026-11-23*,
+operator: "Ssd4 is for lancedb only", then "A";
+docs/notes/storage-tiering.md §12): with `LOUISE_LANCE_ROOT` set
+(environment: this node's path; app/vector_place.py alone resolves it),
+the data pool's tier (`hot`) is `<LOUISE_LANCE_ROOT>/<name>`, behind the
+same `<name>/lance` link, so a collection's folder — its manifest, text
+index and state — can live on another pool while its vectors stay on
+theirs. A table made since (a new collection's without a build area, the
+first of a collection that had none) is placed there; a table built in
+the build area moves there when it takes over; a table that is the
+directory beside its collection stays so until `hold vectors move <name>
+--to hot --apply` adopts it, by a rename. Nothing moves by itself; only
+the node's own root is placed; `rename` carries the root's folder with
+the name and `forget` removes it. Set but not a directory: nothing is
+placed (exit 2), and a collection whose link reaches nothing is refused,
+named in the refusals, never served with an empty table.
 
 `dev mark-embedded <collection> [--dry-run]` (amended 2026-10-19): the
 documents whose every chunk has a vector here and whose manifest row still

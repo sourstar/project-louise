@@ -597,3 +597,129 @@ def test_rename_says_the_table_stays_in_the_build_area_and_what_moves_it(node):
     out = rename_mod.rename(node.root, "c", "d")
     assert "still in the build area" in out["vector_table"]
     assert "louise hold vectors move d --to hot --apply" in out["vector_table"]
+
+
+# ---- the Lance root (operator, 2026-11-22: "Ssd4 is for lancedb only";
+# 2026-11-23: "A", docs/notes/storage-tiering.md §12): a searched table
+# behind a link into LOUISE_LANCE_ROOT, so the collection's folder can live
+# on another pool ---------------------------------------------------------------
+
+@pytest.fixture
+def rooted(node, tmp_path, monkeypatch):
+    """`node`, with a Lance root on the same filesystem as the collections."""
+    lr = tmp_path / "ssd4-lance"
+    lr.mkdir()
+    monkeypatch.setattr(config, "LANCE_ROOT", lr)
+    node.lance_root = lr
+    return node
+
+
+def _inodes(top: Path) -> dict[str, int]:
+    return {p.relative_to(top).as_posix(): p.stat().st_ino for p in top.rglob("*") if p.is_file()}
+
+
+def test_a_link_into_the_lance_root_is_hot_and_one_into_the_build_area_is_build(rooted, tmp_path):
+    assert vector_place.tier(rooted.link) == vector_place.HOT, "the directory beside it: hot, as before"
+    hot = tmp_path / "x" / "lance"
+    hot.parent.mkdir()
+    hot.symlink_to(rooted.lance_root / "x", target_is_directory=True)
+    assert vector_place.tier(hot) == vector_place.HOT
+    build = tmp_path / "y" / "lance"
+    build.parent.mkdir()
+    build.symlink_to(rooted.build / "lance" / "y", target_is_directory=True)
+    assert vector_place.tier(build) == vector_place.BUILD
+    assert "LOUISE_LANCE_ROOT" in vector_place.unreachable(hot), "a link whose Lance root is not there, said"
+
+
+def test_the_directory_beside_it_is_adopted_by_a_rename_never_a_copy(rooted):
+    before = _inodes(rooted.link)
+    plan = vector_place.plan(rooted.root, "c", vector_place.HOT)
+    assert plan["adopt"] and "nothing is copied" in plan["say"]
+    out = vector_place.move(rooted.root, "c", vector_place.HOT, collection=rooted.coll)
+    assert out["adopted"] and out["rows"] == rooted.rows
+    assert rooted.link.is_symlink() and vector_place.physical(rooted.link) == rooted.lance_root / "c"
+    assert vector_place.tier(rooted.link) == vector_place.HOT
+    assert _inodes(rooted.lance_root / "c") == before, "the same files, renamed: not one byte copied"
+    _one_valid_table(rooted)
+    assert vector_place.move(rooted.root, "c", vector_place.HOT)["nothing"], "there already"
+
+
+def test_an_adoption_cut_between_its_two_steps_is_refused_meanwhile_and_finished(rooted, monkeypatch):
+    _kill_at(monkeypatch, "adopt-exchanged")
+    with pytest.raises(Killed):
+        vector_place.move(rooted.root, "c", vector_place.HOT, collection=rooted.coll)
+    monkeypatch.setattr(vector_place, "_hook", None)
+    assert rooted.link.is_symlink() and not rooted.link.exists(), "the name dangles: never absent"
+    with pytest.raises(vector_place.PlaceError, match="Lance root"):
+        vector_place.ensure(rooted.link)                 # a reader: refused, never a new empty table
+    out = vector_place.move(rooted.root, "c", vector_place.HOT, collection=rooted.coll)
+    assert out["adopted"] and out["switch"] == "resumed"
+    _one_valid_table(rooted)
+
+
+def test_two_filesystems_are_refused_the_copy_is_named(rooted, monkeypatch):
+    monkeypatch.setattr(vector_place, "_same_fs", lambda a, b: False)
+    with pytest.raises(vector_place.PlaceError, match="two filesystems.*--to hot --apply"):
+        vector_place.adopt_into_root(rooted.root, "c")
+    assert rooted.link.is_dir() and not rooted.link.is_symlink(), "nothing touched"
+    _one_valid_table(rooted)
+
+
+def test_a_new_table_is_made_in_the_lance_root(rooted):
+    link = vector_place.table_dir(rooted.root, "fresh")
+    assert vector_place.destination_for_new(rooted.root, "fresh") == rooted.build / "lance" / "fresh", \
+        "with a build area, a collection new makes builds there first"
+    vector_place.ensure(link)
+    assert link.is_symlink() and vector_place.physical(link) == rooted.lance_root / "fresh"
+    assert (rooted.lance_root / "fresh").is_dir()
+
+
+def test_without_a_build_area_new_goes_to_the_lance_root(rooted, monkeypatch):
+    monkeypatch.setattr(config, "BUILD_DIR", None)
+    assert vector_place.destination_for_new(rooted.root, "fresh") == rooted.lance_root / "fresh"
+
+
+def test_an_unmounted_lance_root_is_refused_never_the_containers_disk(rooted, monkeypatch, tmp_path):
+    monkeypatch.setattr(config, "LANCE_ROOT", tmp_path / "not-mounted")
+    link = vector_place.table_dir(rooted.root, "fresh")
+    with pytest.raises(vector_place.PlaceError, match="not a directory"):
+        vector_place.ensure(link)
+    assert not link.exists() and not link.is_symlink()
+
+
+def test_a_take_over_from_the_build_area_lands_in_the_lance_root(rooted):
+    vector_place.move(rooted.root, "c", vector_place.HOT, collection=rooted.coll)     # adopted
+    digest = recreate.tree_digest(rooted.link)
+    _to_build(rooted)
+    assert vector_place.tier(rooted.link) == vector_place.BUILD
+    assert not (rooted.lance_root / "c").exists(), "the Lance root's folder went with the move out"
+    back = vector_place.move(rooted.root, "c", vector_place.HOT, collection=rooted.coll)
+    assert back["moved"] and vector_place.physical(rooted.link) == rooted.lance_root / "c"
+    assert recreate.tree_digest(rooted.link) == digest
+    assert not (rooted.build / "lance" / "c").exists(), "the build area's folder removed"
+    _one_valid_table(rooted)
+
+
+def test_forget_removes_the_lance_roots_folder_and_rename_carries_it(rooted):
+    from app.hold import forget as forget_mod, rename as rename_mod
+    vector_place.move(rooted.root, "c", vector_place.HOT, collection=rooted.coll)
+    (rooted.root / "c" / "shard").mkdir()
+    moves = rename_mod.plan(rooted.root, "c", "d")
+    assert moves["lance"] == [str(rooted.lance_root / "c"), str(rooted.lance_root / "d")]
+    out = rename_mod.rename(rooted.root, "c", "d")
+    assert "vector_table" not in out, "it is not in the build area: nothing to say about moving it"
+    link = vector_place.table_dir(rooted.root, "d")
+    assert vector_place.physical(link) == rooted.lance_root / "d" and not (rooted.lance_root / "c").exists()
+    assert spaces.known_lance_rows(link) == rooted.rows
+    plan = forget_mod.forget(rooted.root, "d", dry_run=True)
+    assert str(rooted.lance_root / "d") in plan["would_remove"]
+    forget_mod.forget(rooted.root, "d")
+    assert not (rooted.lance_root / "d").exists()
+
+
+def test_an_idle_table_in_the_lance_root_is_never_taken_over(rooted, monkeypatch):
+    from app import vector_index
+    vector_place.move(rooted.root, "c", vector_place.HOT, collection=rooted.coll)
+    coll = _collection(rooted.root, "c")
+    assert vector_index.take_over_due(coll, {"rows": rooted.rows}) is False, \
+        "a link into the Lance root is the searched table, not one being built"
