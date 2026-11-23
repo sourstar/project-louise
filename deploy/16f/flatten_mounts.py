@@ -45,6 +45,29 @@ SERVICES = ("web", "worker")
 BUILD_HOST: str | None = "/mnt/ssd3/louise-build"
 BUILD_TARGET = "/build"
 
+#: THE LANCE ROOT (operator, 2026-11-22: "Ssd4 is for lancedb only"; 2026-11-23:
+#: "A", then "B", storage-tiering.md §12): the searched vector tables, in this
+#: folder of the ssd4 dataset, bound at /data/lance in web and worker with
+#: LOUISE_LANCE_ROOT=/data/lance (app/vector_place.py), while /data itself is
+#: ssd3/louise-data since 2026-11-23 04:57Z (München). The deploy owns the bind:
+#: lost, /data/lance would still be a directory — the empty mount point on
+#: ssd3 — every collection refused and a new one's table made on ssd3.
+LANCE_HOST: str | None = "/mnt/ssd4/apps/louise-rag/data/lance"
+LANCE_TARGET = "/data/lance"
+
+
+def lance_root(host: str | None = None, *, isdir=None) -> tuple[tuple, dict]:
+    """`(shared, env)` for `apply`: the Lance root's bind and its variable
+    when `host` (else LANCE_HOST) is a directory on this host, else nothing
+    (a node without one: every table beside its collection, as before).
+    `isdir` (tests): `os.path.isdir` by default."""
+    import os
+    host = host or LANCE_HOST
+    if not host or not (isdir or os.path.isdir)(host):
+        return (), {}
+    return ((host, LANCE_TARGET, False),), {"LOUISE_LANCE_ROOT": LANCE_TARGET}
+
+
 #: THE TWO CACHE AREAS (operator, 2026-11-14: "For very fast caching (like
 #: embedding) use ssd5, for bulk caching use ssd3"; then "You need 2 caches, one
 #: for fast mmap operations (like vectors caching) and one for things like files

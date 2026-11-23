@@ -641,3 +641,11 @@ The trial datasets and the ssd4 baseline (53.3 + 26.2 + 13 GB, and their copies 
 4. Re-run M1 against the copy before the switch, since the copy is at 16K and M1's index copy may not have been. Text hits must be greater than 0.
 5. Mount the new dataset at `/data` and `/mnt/ssd4/apps/louise-rag/lance` at `/data/lance`, in web and worker, with the nested mounts that exist today kept (`/data/cache` ssd5, `/data/files-cache`, `/data/pubmed-pack`). Start the app and run the deploy's stage-6 checks. Every collection must be served (`hold collection show`: no refusal), and each must answer a text and a vector search.
 6. The old copies on ssd4 are deleted only after step 5 holds for a day, with the operator's word.
+
+**Done (München, 2026-11-23; the operator: "B", all of it now; the website down 03:40–04:57Z):**
+- Step 2: 11 tables adopted, each "by a rename (exchanged)". The row counts were unchanged, and each table answered a vector search through its link. `--apply` needs the collection paused BY NAME; `node pause` alone leaves the worker holding it.
+- Step 3: the copy took 2,863 s (573 GB logical, 157 MB/s steady), and a second dry pass was empty. The two sides agree on 151,454 files and 574,784,082,677 bytes, and symlink targets hash equal. sha256 of 106 files (1 in 2000, plus every `.sqlite`/`.db` whole): 0 differ. The GPU governor writes `node.sqlite` every heartbeat, so it was stopped and `state/` copied again. On disk: 429 GB (lz4 1.24×).
+- Step 4, the 16K copy (72 searches, 0 failed, text hits 20): fts p50 392.5 / p95 1,113 ms, against M1's 128K copy at 406 / 1,162. **Not slower at 16K.**
+- Step 5: `/mnt/ssd3/louise-data:/data` and `/mnt/ssd4/apps/louise-rag/data/lance:/data/lance` in web and worker. The governor's `/data/state` was moved by stage 8's own code. There are no refusals, and every collection gives text hits and vector search with the same row counts.
+- Since then the deploy owns the Lance root's bind (`flatten_mounts.lance_root`). Stage 6 checks that the containers' `/data/lance` IS the host's folder (device and inode), never the empty mount point under it.
+- Left on ssd4 besides `data/lance`: `config/`, `secrets/`, `src/` (KB, and the deploy's code). Moving them changes the deploy's `ROOT` and ~25 host paths; that is not done yet.
