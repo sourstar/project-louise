@@ -177,6 +177,37 @@ Wikidata carries a genre (P136) on fewer than 5 % of sitelinked items. So:
    - a page that is not proofread, kept with its level;
    - `records-vs-origin` both ways (by Range, and by revision id after the
      run is gone).
+
+   *Built so far* (2026-11-23): the source (works index, discover, fetch,
+   parse), the run's acquisition, and **the run's tables** (branch
+   `wikisource-tables`, `tables.py`). Categories and page properties come
+   from the run's `categorylinks.sql.gz` and `page_props.sql.gz`, plus
+   `linktarget.sql.gz`, never from the wikitext.
+   - *The schema, read from the origin* (by Range, 2026-11-23): every run
+     served, it.wikisource 20260701–20261101 and the other four languages'
+     20261101, has MediaWiki 1.45's `categorylinks`. `cl_to` is gone;
+     `cl_target_id` points into `linktarget (lt_id, lt_namespace, lt_title)`.
+     Another column list fails the file.
+   - *A second statement layout*: from the 20261001 runs every SQL dump
+     writes one tuple a line. Wikipedia's page_props reader read such a file
+     as empty, silently. It now reads both layouts (its pack version is 2).
+   - *What a record holds*: every page it reads (work, subpages, scan pages)
+     keeps its category rows (each column but `cl_from`, as stated) and its
+     properties in `extra.pages`. The WORK's categories are those of its page
+     and its subpages, each name once, in MediaWiki's text form: they are
+     `subjects` and `extra.categories`. A scan page's (ProofreadPage's quality
+     tracking) stays its own. The work page's item is `extra.wikidata` and the
+     key `wikidata:Q…`; its other properties are `extra.page_props`. An
+     author's record works the same way.
+   - *The unit*: after the pages, each page's page_props and categorylinks
+     unit, then the linktarget rows they name. Each piece is framed and
+     length-prefixed, so `origin_hash` covers them. The discovery signature
+     covers the three files.
+   - *Missing or refused tables*: a run missing a table, or holding one the
+     reader refuses, is deferred as the container's report.
+   - `PARSER_VERSION` stays 1: no collection exists.
+   - Not yet: `origin_of` (the keyed origin naming the tables) and
+     records-vs-origin.
 2. **The collection**, it first:
    - `hold collection create` from a recipe (the dated run pinned);
    - the acknowledgement;

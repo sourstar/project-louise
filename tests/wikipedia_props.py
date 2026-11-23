@@ -1,7 +1,8 @@
 """A dump run's `page_props` table for the wikipedia fixtures (parser 5),
 written the way dumps.wikimedia.org's are: MariaDB's header, then extended
 INSERT statements of `(pp_page,'pp_propname','pp_value',pp_sortkey)` in
-primary-key order (the header copied from trwiki-20260801-page_props.sql.gz).
+primary-key order (the header copied from trwiki-20260801-page_props.sql.gz),
+one INSERT a line or, as the runs from 20261001 write them, one tuple a line.
 """
 from __future__ import annotations
 
@@ -45,15 +46,20 @@ def tuple_of(page: int, name: str, value: str, sortkey: str = "NULL") -> bytes:
     return f"({page},'{name}','{esc}',{sortkey})".encode("utf-8")
 
 
-def write(dump: Path, rows=(), *, per_statement: int = 1000) -> Path:
+def write(dump: Path, rows=(), *, per_statement: int = 1000, layout: str = "statement") -> Path:
     """`<run>-page_props.sql.gz` beside `dump`: `rows` are (page, name, value)
-    or (page, name, value, sortkey), sorted here into primary-key order."""
+    or (page, name, value, sortkey), sorted here into primary-key order.
+    `layout`: "statement", one INSERT a line (the runs up to 20260901), or
+    "lines", `VALUES` alone on its line then one tuple a line (from 20261001)."""
     rows = sorted(rows, key=lambda r: (r[0], r[1]))
     body = b""
     for i in range(0, len(rows), per_statement):
         part = rows[i:i + per_statement]
-        body += (b"INSERT INTO `page_props` VALUES "
-                 + b",".join(tuple_of(*r) for r in part) + b";\n")
+        if layout == "lines":
+            body += b"INSERT INTO `page_props` VALUES\n" + b",\n".join(tuple_of(*r) for r in part) + b";\n"
+        else:
+            body += (b"INSERT INTO `page_props` VALUES "
+                     + b",".join(tuple_of(*r) for r in part) + b";\n")
     path = page_props.props_path_of(dump)
     path.write_bytes(gzip.compress(HEADER + body + FOOTER))
     return path

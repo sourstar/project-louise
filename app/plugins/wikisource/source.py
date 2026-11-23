@@ -21,21 +21,44 @@ dated form a verifier can re-fetch; it is the per-unit path only for a
 revision checked after its run is gone, §1), and our own OCR of the scans
 (it would throw away the proofreading, which is the point of Wikisource).
 
+THE SAME RUN'S TABLES (design note §2, bulk first; tables.py): what the
+origin states about a page beside its text comes from the run's own
+`categorylinks` (with `linktarget`, which names each category since
+MediaWiki 1.45) and `page_props` SQL dumps, never from the page's wikitext
+(a category a template adds is in the table and not in the text) and never
+from another collection. For EVERY page a record reads — the work's page,
+its subpages and the scan pages they transclude — `extra.pages` keeps its
+category links (each row as the table states it) and its properties. The
+WORK's categories are its own pages' — the work page's and its subpages':
+a subpage is part of the work (a chapter, a poem), so what the origin
+files it under is filed about the work, and the old wikitext reading took
+them too; a scan page's (ProofreadPage's quality categories among them)
+stay in its `extra.pages` entry. They are the record's `subjects` and
+`extra.categories`, each name once, as MediaWiki shows it (the title with
+spaces), sorted. The work page's Wikidata item is `extra.wikidata` and the
+key `wikidata:Q…`; its other properties are `extra.page_props` (Wikipedia's
+parser 5). An author's record takes its page's alike.
+
 A record names its pages, never bytes: `origin` is
 `<wiki>/pages-articles-multistream.xml.bz2#<work page id>` (Wikipedia's
 parser-6 form), read in the run the snapshot names; `extra.pages` lists
 every page used in reading order with its revision id and the dump's
 `sha1`; `origin_hash` is over those pages as ElementTree writes them
-(Wikipedia's `page_bytes`), so every field the record keeps of a page is
-covered.
+(Wikipedia's `page_bytes`), then each page's rows of page_props and
+categorylinks and the linktarget rows they name, as the decompressed tables
+hold them (`frame`) — so every field the record keeps of a page is covered.
+(`origin_of`, naming the tables beside the dump in that keyed form, comes
+with records-vs-origin, design step 1, not built yet.)
 
-Locator (this node's, in the manifest): `<dump path>::<work page id>`.
+Locator (this node's, in the manifest): `<dump path>::<work page id>`; the
+discovery signature covers the dump and the run's three tables.
 """
 from __future__ import annotations
 
 import bz2
 import hashlib
 import json
+import re
 from pathlib import Path
 
 from app import derived
@@ -43,7 +66,8 @@ from app.backend import OriginForm, Template
 from ... import chunking
 from ..base import (CanonicalDoc, DiscoverState, DocRef, Erasure, Issue, LicenseClass, Modality, Mutability,
                     PROTOCOL_VERSION, PrivacyClass, RawDoc)
-from . import dump as dump_mod, index as index_mod, proofread, render, work
+from ..wikipedia import page_props as pp
+from . import dump as dump_mod, index as index_mod, proofread, render, tables as tables_mod, work
 
 #: the collection's languages, their order fixed for the life of its ids
 LANGS = ("it", "en", "fr", "de", "es")
@@ -54,6 +78,12 @@ ID_BASE = 10 ** 10
 #: its authors in the main namespace and has none
 AUTHOR_NS = {"it": "Autore", "en": "Author", "fr": "Auteur", "es": "Autor"}
 _MARK = b"\0wikisource-page\0"
+#: a page's rows of a table, after the pages (`frame`); the tables' bytes
+#: hold no NUL (mysqldump escapes it), nor does an XML page
+_PROPS_MARK = b"\0page_props\0"
+_LINKS_MARK = b"\0categorylinks\0"
+_TARGET_MARK = b"\0linktarget\0"
+_MARKS = (_MARK, _PROPS_MARK, _LINKS_MARK, _TARGET_MARK)
 _NOT_AVAILABLE = "not available"
 
 
@@ -92,24 +122,63 @@ def _streams(dump: Path, rows: list[dict]) -> dict[int, dump_mod.Page]:
     return out
 
 
-def frame(pages: list[dump_mod.Page]) -> bytes:
-    """The pages a record is parsed from, in reading order, each as
-    ElementTree writes it: what `origin_hash` is over."""
-    return b"".join(_MARK + len(p.xml).to_bytes(8, "big") + p.xml for p in pages)
+def _frame(mark: bytes, payload: bytes) -> bytes:
+    return mark + len(payload).to_bytes(8, "big") + payload
 
 
-def unframe(data: bytes) -> list[dump_mod.Page]:
+def frame(pages: list[dump_mod.Page], rows: tables_mod.PageRows | None = None) -> bytes:
+    """What `origin_hash` is over: the pages a record is parsed from, in
+    reading order, each as ElementTree writes it; then, page by page in the
+    same order, its page_props unit and its categorylinks unit where it has
+    rows; then each linktarget row those links name, in the order first
+    named. Every piece is its mark and its length (8 bytes, big-endian)."""
+    out = [_frame(_MARK, p.xml) for p in pages]
+    if rows is not None:
+        for p in pages:
+            if p.id in rows.props:
+                out.append(_frame(_PROPS_MARK, rows.props[p.id]))
+            if p.id in rows.links:
+                out.append(_frame(_LINKS_MARK, rows.links[p.id]))
+        out += [_frame(_TARGET_MARK, t) for t in rows.targets]
+    return b"".join(out)
+
+
+def unframe(data: bytes) -> tuple[list[dump_mod.Page], tables_mod.PageRows]:
+    """`frame` read back: the pages, and their rows of the tables."""
     import xml.etree.ElementTree as ET
-    out, at = [], 0
+    pages: list[dump_mod.Page] = []
+    rows = tables_mod.PageRows({}, {}, [])
+    at = 0
     while at < len(data):
-        if data[at:at + len(_MARK)] != _MARK:
+        mark = next((m for m in _MARKS if data.startswith(m, at)), None)
+        if mark is None:
             raise ValueError("not a Wikisource unit: its frame is broken")
-        at += len(_MARK)
+        at += len(mark)
         n = int.from_bytes(data[at:at + 8], "big")
         at += 8
-        out.append(dump_mod.page_of(ET.fromstring(data[at:at + n])))
+        payload = data[at:at + n]
+        if len(payload) != n:
+            raise ValueError(f"a piece of {len(payload)} bytes, {n} declared")
         at += n
-    return out
+        if mark is _MARK:
+            pages.append(dump_mod.page_of(ET.fromstring(payload)))
+        elif mark is _TARGET_MARK:
+            rows.targets.append(payload)
+        else:
+            (rows.props if mark is _PROPS_MARK else rows.links)[tables_mod.page_of_unit(payload)] = payload
+    held = {p.id for p in pages}
+    stray = sorted((set(rows.props) | set(rows.links)) - held)
+    if stray:
+        raise ValueError(f"table rows of pages {stray} the unit does not read")
+    return pages, rows
+
+
+def _signature(files) -> tuple[int, int]:
+    """Discovery's (mtime, size) of a run: the dump's and its tables' — a
+    record holds rows of each, so a new file must rebuild it
+    (tests/origin_coverage.py)."""
+    sts = [Path(f).stat() for f in files]
+    return int(max(st.st_mtime for st in sts)), sum(st.st_size for st in sts)
 
 
 class WikisourceSource:
@@ -123,11 +192,16 @@ class WikisourceSource:
     chunking_profile = "book"
     mutability = Mutability.MUTABLE            # pages are revised in place
     #: app/backend.py: a page is a member of a bz2 stream; the works index is a
-    #: pack derived from the whole dump in one pass
+    #: pack derived from the whole dump in one pass; each of the run's SQL
+    #: tables is a gzip read from its pack (tables.py)
     backend = (OriginForm("the pages-articles multistream dump", Template.MEMBER),
-               OriginForm("the works index", Template.DUMP_PACK, ("wikisource-works",)))
+               OriginForm("the works index", Template.DUMP_PACK, ("wikisource-works",)),
+               OriginForm("the categorylinks SQL dump", Template.CONTAINER_PACK, ("wikisource-categorylinks",)),
+               OriginForm("the linktarget SQL dump", Template.CONTAINER_PACK, ("wikisource-linktarget",)),
+               OriginForm("the page_props SQL dump", Template.CONTAINER_PACK, ("wikisource-page-props",)))
     protocol_version = PROTOCOL_VERSION
-    #: 1 (2026-11-23): the first; no collection exists
+    #: 1 (2026-11-23): the first; no collection exists (so the run's tables,
+    #: categories and page properties, joined it without a bump)
     PARSER_VERSION = 1
     #: 06 §6.2: every page's earlier revisions stay fetchable by revision id
     origin_versions = "history"
@@ -146,6 +220,8 @@ class WikisourceSource:
         "pages-attribute-unread": "a <pages> tag carries an attribute this parser does not read",
         "page-missing": "a scan page a work transcludes is not in the dump",
         "no-header": "the work page carries no header template",
+        "category-target-missing": "a category link names a target the run's linktarget does not hold as a "
+                                   "category (the tables are dumped at different moments)",
     }
 
     # ---- discovery ----------------------------------------------------------
@@ -176,6 +252,22 @@ class WikisourceSource:
                 yield DocRef(self.source_id, dump.name, str(dump), scope="container",
                              error=f"multistream index missing for {dump.name}")
                 continue
+            # THE RUN'S TABLES: a run without one of them waits — deferred,
+            # never an error on its documents (its records cannot be whole yet)
+            run_tables = tables_mod.tables_of(dump)
+            missing = [p.name for p in run_tables.files() if not p.is_file()]
+            if missing:
+                yield DocRef(self.source_id, dump.name, str(dump), scope="container",
+                             error=f"{', '.join(missing)} missing: {dump.name}'s works wait for the run's tables")
+                continue
+            try:
+                tables_mod.ensure(run_tables)
+            except Exception as e:  # noqa: BLE001 — a table that cannot be read: one report, never a dead scan
+                yield DocRef(self.source_id, dump.name, str(dump), scope="container",
+                             error=f"{dump.name}: the run's tables cannot be read "
+                                   f"({type(e).__name__}: {e})"[:300])
+                continue
+            sig = _signature((dump, *run_tables.files()))
             try:
                 works = index_mod.Works(index_mod.ensure(dump, log=print))
             except derived.Busy as e:
@@ -183,21 +275,21 @@ class WikisourceSource:
                              error=f"{e}: discovery resumes at the next scan")
                 continue
             try:
-                yield from self._refs(dump, lang, works)
+                yield from self._refs(dump, lang, works, sig)
             finally:
                 works.close()
 
-    def _refs(self, dump: Path, lang: str, works: index_mod.Works):
+    def _refs(self, dump: Path, lang: str, works: index_mod.Works, sig: tuple[int, int]):
         for root_title, _pages in sorted(work.works(works.main_titles()).items()):
             row = works.page(0, root_title)
             yield DocRef(self.source_id, str(native_id_of(lang, row["id"])), f"{dump}::{row['id']}",
-                         extra={"lang": lang, "kind": "work", "title": root_title})
+                         mtime=sig[0], size=sig[1], extra={"lang": lang, "kind": "work", "title": root_title})
         ns = works.ns_named(AUTHOR_NS.get(lang, "")) if AUTHOR_NS.get(lang) else None
         if ns is not None:
             for (pid, title) in works._con.execute(
                     "SELECT id, title FROM pages WHERE ns = ? AND redirect IS NULL ORDER BY title", (ns,)):
                 yield DocRef(self.source_id, str(native_id_of(lang, pid)), f"{dump}::{pid}",
-                             extra={"lang": lang, "kind": "author", "title": title})
+                             mtime=sig[0], size=sig[1], extra={"lang": lang, "kind": "author", "title": title})
 
     # ---- a unit -----------------------------------------------------------------
 
@@ -239,22 +331,36 @@ class WikisourceSource:
             works.close()
 
     def fetch(self, ref: DocRef) -> RawDoc:
+        """The unit's pages, then their rows of the run's tables (`frame`)."""
         dump, page_id = split_locator(ref.locator)
-        data = frame(self._unit(dump, page_id))
+        pages = self._unit(dump, page_id)
+        rows = tables_mod.rows_for(tables_mod.tables_of(dump), [p.id for p in pages])
+        data = frame(pages, rows)
         return RawDoc(ref=ref, raw_hash=hashlib.blake2b(data, digest_size=16).hexdigest(), data=data)
 
     # ---- the record ---------------------------------------------------------------
 
     def parse(self, raw: RawDoc) -> CanonicalDoc:
         lang, page_id = decode_native_id(int(raw.ref.native_id))
-        pages = unframe(raw.data)
+        pages, rows = unframe(raw.data)
         first = pages[0]
         uid = f"{self.source_id}:{raw.ref.native_id}"
+        titles = tables_mod.titles_of(rows.targets)
+        links = {pid: tables_mod.category_rows(u, titles) for pid, u in rows.links.items()}
+        props = {pid: tables_mod.props_of(u) for pid, u in rows.props.items()}
+        issues: list[Issue] = [Issue("category-target-missing", f"target {t}") for t in sorted(
+            {r["target_id"] for rs in links.values() for r in rs if "title" not in r})]
         meta = [{"id": p.id, "ns": p.ns, "title": p.title, "rev_id": p.rev_id, "sha1": p.sha1,
                  "timestamp": p.timestamp, "editor": p.editor, "comment": p.comment,
-                 **({"level": proofread.parts(p.text).level} if p.is_scan else {})} for p in pages]
+                 **({"level": proofread.parts(p.text).level} if p.is_scan else {}),
+                 **({"categories": links[p.id]} if p.id in links else {}),
+                 **({"page_props": props[p.id]} if p.id in props else {})} for p in pages]
+        # the record's page's properties, as Wikipedia's parser 5 holds them:
+        # `wikidata` (its `wikibase_item`) and `page_props` (every other one)
+        own = pp.fields_of(rows.props.get(first.id))
         if first.ns != 0:
-            return self._author(uid, lang, first, meta, raw.raw_hash)
+            return self._author(uid, lang, first, meta, raw.raw_hash, _names(links.get(first.id, [])), own,
+                                issues)
         work_pages = [p for p in pages if p.ns == 0]
         scans = {p.title: p.text for p in pages if p.is_scan}
         scan_name = next((p.title.split(":", 1)[0] for p in pages if p.is_scan), "")
@@ -263,7 +369,6 @@ class WikisourceSource:
             idx, _, n = t.split(":", 1)[1].rpartition("/")
             if n.isdigit():
                 last[idx] = max(last.get(idx, 0), int(n))
-        issues: list[Issue] = []
         sections: list[tuple[str, str]] = []
         indexes: list[str] = []
         for p in work_pages:
@@ -276,25 +381,26 @@ class WikisourceSource:
         head = work.header(first.text, lang)
         if head.template is None:
             issues.append(Issue("no-header", first.title))
-        cats = sorted({c for p in work_pages for c in _categories(p.text)})
+        cats = _names([r for p in work_pages for r in links.get(p.id, [])])
         return CanonicalDoc(
             uid=uid, title=head.fields.get("title") or first.title,
             creators=[head.fields["author"]] if head.fields.get("author") else [],
-            language=lang, date=head.fields.get("year") or None, subjects=cats, keys=[],
+            language=lang, date=head.fields.get("year") or None, subjects=cats, keys=_keys(own),
             extra={"kind": "work", "page_title": first.title, "page_id": first.id,
                    "header": head.to_dict(), "header_fields": head.fields, "categories": cats,
                    "indexes": indexes, "pages": meta,
-                   "proofread": _proofread_summary(meta)},
+                   "proofread": _proofread_summary(meta), **own},
             sections=sections, raw_hash=raw.raw_hash, issues=issues)
 
-    def _author(self, uid, lang, page, meta, raw_hash) -> CanonicalDoc:
+    def _author(self, uid, lang, page, meta, raw_hash, cats, own, issues) -> CanonicalDoc:
         name = page.title.split(":", 1)[1] if ":" in page.title else page.title
         text = render.to_text(page.text)
         return CanonicalDoc(uid=uid, title=name, creators=[], language=lang, date=None,
-                            subjects=sorted(_categories(page.text)), keys=[],
+                            subjects=cats, keys=_keys(own),
                             extra={"kind": "author", "page_title": page.title, "page_id": page.id,
-                                   "pages": meta, "template": _author_template(page.text)},
-                            sections=[("", text)] if text else [], raw_hash=raw_hash)
+                                   "pages": meta, "template": _author_template(page.text),
+                                   "categories": cats, **own},
+                            sections=[("", text)] if text else [], raw_hash=raw_hash, issues=issues)
 
     def relations(self, doc: CanonicalDoc):
         return iter(())
@@ -309,10 +415,16 @@ def _scan_namespace(works: index_mod.Works) -> tuple[int | None, str]:
     return row[0], works.namespaces.get(row[0], "")
 
 
-def _categories(text: str) -> list[str]:
-    import re
-    return [m.strip() for m in re.findall(r"\[\[\s*(?:Categoria|Category|Catégorie|Kategorie|Categoría)\s*:\s*"
-                                          r"([^\]|]+)", text, re.I)]
+def _names(links: list[dict]) -> list[str]:
+    """The categories of these category-link rows, each once, as MediaWiki
+    shows them, sorted: what `subjects` and `extra.categories` hold."""
+    return sorted({n for r in links if (n := tables_mod.category_name(r.get("title"))) is not None})
+
+
+def _keys(own: dict) -> list[str]:
+    """`wikidata:Q…` for the page's Wikidata item (09 §9.5 `keys`, 06 §6.5)."""
+    qid = own.get("wikidata")
+    return [f"wikidata:{qid}"] if isinstance(qid, str) and re.fullmatch(r"Q[1-9]\d*", qid) else []
 
 
 def _author_template(text: str) -> dict | None:
