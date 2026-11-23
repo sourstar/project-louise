@@ -623,7 +623,21 @@ The live write load on ssd4 (München, the evening before, 10 min in normal embe
 
 The trial datasets and the ssd4 baseline (53.3 + 26.2 + 13 GB, and their copies on tank) are no longer needed for the decision.
 
-**How the move is made** is the operator's choice, put on 2026-11-23:
-- A: one root for the searched vector tables on ssd4 (`LOUISE_LANCE_ROOT`), reached by a link from each collection's folder, which then moves whole to ssd3. `vector_place` must tell that link from one into the build area: today every link reads as `build`, and `take_over` would move the table back into the folder.
+**How the move is made** was put on 2026-11-23:
+- A: one root for the searched vector tables on ssd4 (`LOUISE_LANCE_ROOT`), reached by a link from each collection's folder, which then moves whole to ssd3.
 - B: per-collection bind mounts.
 - C: code roots for state and index (128 and 14 hand-built paths).
+
+**Decided (operator, 2026-11-23): "A".** Built (07 §7.3, §7.8; app/vector_place.py, tests/test_vector_place.py):
+- `LOUISE_LANCE_ROOT`, identity tier, resolved by vector_place alone (tests/test_invariant_6_storage.py);
+- a link into the root is `hot`, one into the build area `build`, so `take_over` leaves the first alone;
+- `hold vectors move <c> --to hot --apply` adopts a table that is still the directory beside its collection by a RENAME: nothing copied (RULE 1), the name never absent, a stop between its two steps finished by the next run; two filesystems are refused;
+- with the root set, a table made since goes there; `forget` and `rename` follow it.
+
+**The procedure (the node, with the operator's word; each step checked before the next):**
+1. `mkdir /mnt/ssd4/apps/louise-rag/lance`; set `LOUISE_LANCE_ROOT=/data/lance` in web and worker; deploy. Stage 6 checks it is a directory in both. The root is inside the /data dataset, so the adoptions are renames.
+2. `node pause`; then, per collection, `hold vectors move <c> --to hot` (the dry run says "adopt"), then `--apply`. `find /mnt/ssd4/apps/louise-rag/collections -maxdepth 2 -name lance -type d` must print nothing: a table left as a directory would move to ssd3 with its folder. Searches answer as before, through the links.
+3. The app stopped. One ssd3 dataset for all of /data (`atime=off`, `compression=lz4`, `recordsize=16K`: the operator's figure for SQLite). Copy everything but `lance/` and the caches already mounted elsewhere, keeping symlinks as symlinks (`rsync -aHAX --exclude=/lance/`). Compare the two sides by count, bytes and a sha256 sample.
+4. Re-run M1 against the copy before the switch, since the copy is at 16K and M1's index copy may not have been. Text hits must be greater than 0.
+5. Mount the new dataset at `/data` and `/mnt/ssd4/apps/louise-rag/lance` at `/data/lance`, in web and worker, with the nested mounts that exist today kept (`/data/cache` ssd5, `/data/files-cache`, `/data/pubmed-pack`). Start the app and run the deploy's stage-6 checks. Every collection must be served (`hold collection show`: no refusal), and each must answer a text and a vector search.
+6. The old copies on ssd4 are deleted only after step 5 holds for a day, with the operator's word.
