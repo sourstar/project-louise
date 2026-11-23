@@ -208,8 +208,9 @@ def test_a_speech_request_naming_no_model_or_voice_gets_the_nodes(cfgdir, monkey
     monkeypatch.setattr(speech.model_pins, "release", lambda holder: None)
     monkeypatch.setattr(speech, "_profiles", (0.0, []))
     assert speech.synthesize({"input": "Dante wrote it [3]."}, url="http://ai")[0] == 200
+    # too few words to tell its language: the engine's auto, never the profile's own tag
     assert calls[-1] == {"input": "Dante wrote it.", "model": "omnivoice-cpp",
-                         "voice": "localai://voice-profiles/aaaa1111"}
+                         "voice": "localai://voice-profiles/aaaa1111", "language": speech.AUTO}
     assert pins == ["omnivoice-cpp"], "the node's model pinned while it speaks"
     speech.synthesize({"input": "Dante.", "model": "kokoro", "voice": "alloy"}, url="http://ai")
     assert (calls[-1]["model"], calls[-1]["voice"]) == ("kokoro", "alloy"), "a client's own choice is kept"
