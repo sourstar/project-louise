@@ -163,11 +163,11 @@ Wikidata carries a genre (P136) on fewer than 5 % of sitelinked items. So:
 
 ## Built in order
 
-0. **Review and merge Codex 12** (`annotates[].select`) from
-   `ccr-8a5c4013-0oqgjh`, with its own tests. The branch shares no history
-   with main, so it is ported, not merged. The port carries the operator's
-   answer to its open wire-format question (2026-11-23, "A", below): the
-   selection rule's file travels inside the SHARD.
+0. **Codex 12** (`annotates[].select`): DONE 2026-11-23, ported from
+   `ccr-8a5c4013-0oqgjh` (b026bce5, de8146c7; the branch shares no history
+   with main) with the operator's "A" built: each pinned rule is the SHARD
+   member `select/<sha256 hex>.toml` (09 §9.4, §9.16), checked by `roots`
+   (tests/hold/test_codex_select.py).
 1. **The plugin** `app/plugins/wikisource/`. It covers the dump reader
    (shared with Wikipedia's), the transclusion expansion, the work assembly,
    the header and category fields, and the author records. Its origin-form

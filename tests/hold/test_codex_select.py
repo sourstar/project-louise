@@ -101,10 +101,80 @@ def test_create_writes_a_version_12_collection_and_resumes_it(tmp_path):
     a_target(tmp_path)
     data = claims_file(a_claim(), a_claim("pubmed:3", "pubmed:1", confidence="0.73"))
     kw = dict(target_ref="pubmed", from_snapshot=TARGET_SNAPSHOT, claims=data, platform_image=PLATFORM,
-              snapshot_id="2026-09", key=KEY, now=NOW, nonce="0f" * 16, log=lambda m: None, selects=[SEL])
+              snapshot_id="2026-09", key=KEY, now=NOW, nonce="0f" * 16, log=lambda m: None, selects=[SEL],
+              select_rules={SEL.sha256: RULE})
     codex, snap = ann.create(tmp_path, "selected", **kw)
     assert codex.version == 12 and codex.annotates[0].select == SEL and snap.shards
     again, _ = ann.create(tmp_path, "selected", **kw)
     assert again.collection_id == codex.collection_id
     with pytest.raises(ann.AnnotationsError, match="one --select per"):
         ann.create(tmp_path, "other", **{**kw, "selects": [SEL, None]})
+
+
+# ---- the rule travels in the SHARD (operator, 2026-11-23: "A"; 09 §9.4, §9.16) ----
+
+def _made(tmp_path, **over):
+    from app.hold import collection as col
+    a_target(tmp_path)
+    data = claims_file(a_claim(), a_claim("pubmed:3", "pubmed:1", confidence="0.73"))
+    kw = dict(target_ref="pubmed", from_snapshot=TARGET_SNAPSHOT, claims=data, platform_image=PLATFORM,
+              snapshot_id="2026-09", key=KEY, now=NOW, nonce="0f" * 16, log=lambda m: None, selects=[SEL],
+              select_rules={SEL.sha256: RULE}, **over)
+    codex, snap = ann.create(tmp_path, "selected", **kw)
+    return codex, snap, col.shard_dir_of(tmp_path, "selected")
+
+
+def test_the_rule_is_a_member_of_the_shard_listed_in_files(tmp_path):
+    from app.hold import shard as shard_mod
+    from app.share import holdings, members
+    codex, snap, tree = _made(tmp_path)
+    member = f"select/{SEL.sha256}.toml"
+    assert (tree / member).read_bytes() == RULE, "the rule's bytes as given, never re-encoded"
+    assert snap.files[member] == {"root": shard_mod.pieces_root(RULE), "bytes": len(RULE)}
+    got = [m for m in members._whole_collection_members(snap.files) if m.name == "select"]
+    assert len(got) == 1 and [f.path for f in got[0].files] == [member]
+    assert holdings.kind_of("select") == "select" and "select" in holdings.WHOLE_KINDS
+
+
+def test_a_pin_with_no_rule_bytes_is_refused_and_nothing_is_written(tmp_path):
+    from app.hold import collection as col
+    a_target(tmp_path)
+    data = claims_file(a_claim())
+    kw = dict(target_ref="pubmed", from_snapshot=TARGET_SNAPSHOT, claims=data, platform_image=PLATFORM,
+              snapshot_id="2026-09", key=KEY, now=NOW, nonce="0f" * 16, log=lambda m: None, selects=[SEL])
+    with pytest.raises(ann.AnnotationsError, match="no rule's bytes were given"):
+        ann.create(tmp_path, "selected", **kw)
+    with pytest.raises(ann.AnnotationsError, match="hashes otherwise"):
+        ann.create(tmp_path, "selected", **kw, select_rules={SEL.sha256: RULE + b"#"})
+    assert not (col.shard_dir_of(tmp_path, "selected") / col.CODEX_FILE).exists(), "refused before the Codex"
+
+
+def test_a_resumed_create_keeps_the_member_without_the_bytes_again(tmp_path):
+    codex, _snap, tree = _made(tmp_path)
+    again, _ = ann.create(tmp_path, "selected", target_ref="pubmed", from_snapshot=TARGET_SNAPSHOT,
+                          claims=claims_file(a_claim(), a_claim("pubmed:3", "pubmed:1", confidence="0.73")),
+                          platform_image=PLATFORM, snapshot_id="2026-09", key=KEY, now=NOW, nonce="0f" * 16,
+                          log=lambda m: None, selects=[SEL])
+    assert again.collection_id == codex.collection_id and (tree / f"select/{SEL.sha256}.toml").is_file()
+
+
+@pytest.mark.parametrize("damage", ["missing", "hash"])
+def test_roots_fails_a_copy_whose_rule_is_missing_or_another(tmp_path, damage):
+    from app.hold import check
+    codex, snap, tree = _made(tmp_path)
+    report = check.run(tmp_path, "selected", codex, snap, seed=b"s" * 32, checks=["roots"])
+    assert report.outcomes[0].result == "pass"
+    member = tree / f"select/{SEL.sha256}.toml"
+    if damage == "missing":
+        member.unlink()
+    else:
+        member.write_bytes(RULE + b"# another rule\n")
+    report = check.run(tmp_path, "selected", codex, snap, seed=b"s" * 32, checks=["roots"])
+    o = report.outcomes[0]
+    assert o.result == "fail" and f"select/{SEL.sha256}.toml:{damage}" in o.detail["failed"], o
+
+
+def test_select_rules_reads_each_named_file_once(tmp_path):
+    p = tmp_path / "rule.toml"
+    p.write_bytes(RULE)
+    assert ann.select_rules([str(p), "-", None]) == {SEL.sha256: RULE}

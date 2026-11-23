@@ -311,6 +311,7 @@ def cmd_create_annotations(a) -> int:
               "inconclusive until a key signs it", file=sys.stderr)
     codex, snap = ann.create(
         a.root, a.name, targets=targets, container=container, selects=selects,
+        select_rules=ann.select_rules(getattr(a, "select", None) or ()),
         claims=Path(a.claims), platform_image=preflight_create({}, a.platform_image),
         title=a.title, summary=a.summary, annotator=a.annotator, snapshot_id=a.snapshot,
         key=key, now=_utc_now(), log=lambda m: print(m, file=sys.stderr),

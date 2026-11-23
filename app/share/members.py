@@ -201,7 +201,7 @@ class Member:
 
 
 def _whole_collection_members(files: dict[str, Any]) -> list[Member]:
-    """`validation`, `terms`, `slicing`, `calibration-<set>` and
+    """`validation`, `terms`, `slicing`, `select`, `calibration-<set>` and
     `seals-<id>` from the snapshot's `files` (09 §9.4); a null entry (a
     green collection's terms) is no member."""
     out: list[Member] = []
@@ -209,6 +209,7 @@ def _whole_collection_members(files: dict[str, Any]) -> list[Member]:
     calibration: dict[str, list[MemberFile]] = {}
     seals: dict[str, list[MemberFile]] = {}
     lists: list[MemberFile] = []
+    rules: list[MemberFile] = []
     for path in sorted(files, key=lambda p: p.encode("utf-8")):
         entry = files[path]
         if entry is None:
@@ -219,6 +220,10 @@ def _whole_collection_members(files: dict[str, Any]) -> list[Member]:
         elif path.startswith("slicing/") and path.endswith(".json"):
             # the family map a slicing names (09 §9.4, §9.16, amended 2026-10-24)
             out.append(Member("slicing", (mf,)))
+        elif path.startswith("select/") and path.endswith(".toml"):
+            # the selection rules an annotations Codex pins (09 §9.4, §9.16,
+            # amended 2026-11-23): one member, a file per rule
+            rules.append(mf)
         elif path.startswith("calibration/"):
             stem = Path(path).name.split(".", 1)[0]
             calibration.setdefault(f"calibration-{stem}", []).append(mf)
@@ -228,6 +233,8 @@ def _whole_collection_members(files: dict[str, Any]) -> list[Member]:
             seals.setdefault(shard_mod.seals_member(Path(path).stem), []).append(mf)
         else:
             raise MemberError(f"{path}: not a whole-collection member 09 §9.16 names")
+    if rules:
+        out.append(Member("select", tuple(rules)))
     for name in sorted(calibration):
         out.append(Member(name, tuple(calibration[name])))
     if lists and not seals:

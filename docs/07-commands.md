@@ -150,7 +150,9 @@ louise hold
                                                                        wikidata claims whole, a matcher claim only where its books are not one work yet)
                                                                        --select FILE, one per --annotates ('-' for a target taken whole): the rule
                                                                        choosing which of that target's records the claims are about, pinned in the
-                                                                       Codex as {id, version, sha256 of the file} (09 §9.3, version 12; 2026-11-18)
+                                                                       Codex as {id, version, sha256 of the file} (09 §9.3, version 12; 2026-11-18), and
+                                                                       the file itself written into the SHARD as `select/<sha256 hex>.toml` (09 §9.4,
+                                                                       §9.16; 2026-11-23): a pin whose bytes are not given is refused before a byte is written
               derive <codex> [--space-from CODEX | --space FILE] [--layers FILE] [--update FILE] [--work FILE] [--archives ID …] --accept
                                                                        a sister: same corpus, new space or new schedule; refuses one that differs in nothing.
                                                                        Prints what would be inherited — vectors, coverage, credits — and waits for --accept;
