@@ -315,4 +315,5 @@ def test_v3_with_counts_that_add_cuts_as_v2_did(bpe):
 
 
 def test_the_shared_layer_is_v3():
-    assert cl.CHUNK_VERSION == 3 and cl.SHARED_LAYER["chunker"]["version"] == 3
+    assert cl.CHUNK_VERSION == 4 and cl.SHARED_LAYER["chunker"]["version"] == 4, \
+        "S4 since 2026-11-23 (legal-chunker-v4.md M1)"

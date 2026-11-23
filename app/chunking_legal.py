@@ -130,8 +130,13 @@ from collections import OrderedDict
 from typing import Any, Iterator, Sequence
 
 #: the version a layer that names none is cut at, and the shared legal
-#: space's (SHARED_LAYER): moving it moves that space (legal-chunker-v4.md)
-CHUNK_VERSION = 3
+#: space's (SHARED_LAYER): moving it moves that space (legal-chunker-v4.md).
+#: 4 since 2026-11-23 (operator, M1 = "A": the four legal collections move to
+#: S4 in one window, before EUR-Lex5's restart). It is what a NEW legal
+#: collection's Codex declares; a held one keeps the version its Codex pins
+#: (every Codex layer names one), and one whose space moved would be refused
+#: at start by its space pin, never re-cut in place (invariant 3)
+CHUNK_VERSION = 4
 VERSIONS = (1, 2, 3, 4)
 NAME = "legal_article"
 
