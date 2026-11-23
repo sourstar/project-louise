@@ -833,15 +833,46 @@ def tie_key(chunk_id: str) -> tuple:
     except (IndexError, ValueError):
         return (text.encode("utf-8"), 0, text)
 
+class TextLegError(RuntimeError):
+    """A text index that could not be searched (it does not open, its lock
+    cannot be taken, a segment does not read): the leg's failure, said, never
+    an empty list that reads as "no match" (the operator, 2026-11-23: "A")."""
+
+
+#: (index path, error kind) already logged by this process: a broken index
+#: says so once, not on every question
+_logged_failures: set[tuple[str, str]] = set()
+
+
+def _say_failure(group: str, collection, e: Exception) -> str:
+    name = getattr(collection, "name", None) or "?"
+    why = f"the text index {group} could not be searched: {type(e).__name__}: {e}"[:300]
+    key = (f"{name}/{group}", type(e).__name__)
+    if key not in _logged_failures:
+        _logged_failures.add(key)
+        import sys
+        import time
+        print(f"{time.strftime('%H:%M:%S')} [{name} warn:text] {why}", file=sys.stderr, flush=True)
+    return why
+
+
 def search(group: str, query: str, limit: int = 20, collection=None,
            book_ids: list[int] | None = None, langs: list[str] | None = None,
-           validity: dict | None = None) -> list[dict]:
+           validity: dict | None = None, raise_errors: bool = False) -> list[dict]:
     """book_ids, when given, is a hard prefilter (Tantivy term-set query
     ANDed with the text query) — the facet filters' restriction (05 §5.2:
     "a filter restricts; nothing boosts"), and the one a resolved
     identifier's would be.
     `langs` is the same kind of prefilter on the stored `lang`, for the
-    mixed groups (cjk, other) when a query is restricted to languages."""
+    mixed groups (cjk, other) when a query is restricted to languages.
+
+    AN INDEX THAT CANNOT BE SEARCHED IS SAID (2026-11-23): with
+    `raise_errors` the failure is a `TextLegError` the search names in its
+    `legs_withheld` (leg "text"); without it the leg answers [] as before,
+    for the callers that only look a record up. Either way it is logged once,
+    with the collection. Until then it was an empty list: a copy mounted
+    read-only, whose lock tantivy takes to read, answered nothing to every
+    question, and a measurement read it as a fast search (München)."""
     try:
         idx = get_index(group, collection)
         idx.reload()
@@ -912,7 +943,10 @@ def search(group: str, query: str, limit: int = 20, collection=None,
         # deterministic secondary key so results are reproducible, then cut.
         out.sort(key=lambda h: (-h["score"], tie_key(h["chunk_id"])))
         return out[:limit]
-    except Exception:
+    except Exception as e:   # noqa: BLE001 — the leg's failure, said (above), never the search's
+        why = _say_failure(group, collection, e)
+        if raise_errors:
+            raise TextLegError(why) from e
         return []
 
 

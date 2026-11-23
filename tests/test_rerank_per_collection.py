@@ -244,7 +244,7 @@ def test_every_leg_goes_as_deep_as_the_reranker_needs(isolated_config, monkeypat
     c = collections_mod.default_collection()
     monkeypatch.setattr(fts, "existing_groups", lambda collection=None: ["en"])
     asked = []
-    monkeypatch.setattr(fts, "search", lambda group, q, limit=20, collection=None, langs=None:
+    monkeypatch.setattr(fts, "search", lambda group, q, limit=20, collection=None, langs=None, **_kw:
                         asked.append(("fts", limit)) or [])
     monkeypatch.setattr(embeddings, "search",
                         lambda q, k=20, langs=None, collection=None, book_ids=None:
