@@ -200,6 +200,16 @@ class Sources:
         return got, unknown
 
 
+
+#: what a withheld leg means for the answer, by leg (05 §5.3): the vector leg
+#: alone leaves a text search; the text or catalogue leg missing leaves the
+#: others (the operator, 2026-11-23: a failed text leg is said, "A")
+LEG_WITHHELD_SAYS = {
+    "vector": "Searched on its text only",
+    "text": "Searched without its full-text index",
+    "catalog": "Searched without its catalogue",
+}
+
 def shown_search(query: str, result: dict[str, Any], sources: Sources, *,
                  translated: bool = True, question: str | None = None,
                  answer_lang: str | None = None, reads: list | None = None) -> str:
@@ -257,8 +267,8 @@ def shown_search(query: str, result: dict[str, Any], sources: Sources, *,
     for w in result.get("withheld", []) or []:
         blocks.append(f"Withheld here: {w.get('collection') or w.get('collection_id')} ({w.get('reason')})")
     for w in result.get("legs_withheld", []) or []:
-        blocks.append(f"Searched on its text only: {w.get('collection') or w.get('collection_id')} "
-                      f"({w.get('reason')})")
+        blocks.append(f"{LEG_WITHHELD_SAYS.get(w.get('leg'), 'Searched with a leg missing')}: "
+                      f"{w.get('collection') or w.get('collection_id')} ({w.get('reason')})")
     if result.get("unresolved"):
         blocks.append("No reference row for: " + ", ".join(map(str, result["unresolved"])))
     fetches = (result.get("history") or {}).get("fetches") or []

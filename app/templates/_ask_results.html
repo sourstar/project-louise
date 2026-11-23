@@ -23,6 +23,20 @@
     matched — this is not an empty result.</div>{% endif %}
 </div>
 {% endif %}
+{# A LEG THAT DID NOT ANSWER (05 §5.3 `legs_withheld`; the operator,
+   2026-11-23: "A"): the collection WAS searched, one leg of it was not —
+   its vector leg (a run not gated), its catalogue, or a text index that
+   could not be searched. Said here, since its list is not the whole of
+   what the collection holds. #}
+{% if result.legs_withheld %}
+<div class="panel" id="legs-withheld">
+  <b>Some collections were searched with a part missing.</b>
+  {% for w in result.legs_withheld %}
+  <div class="note"><span class="badge brass">{{ label(w.collection) if w.collection else w.collection_id }}</span>
+    {{ {'vector': 'no meaning search (vectors)', 'text': 'no full-text search', 'catalog': 'no catalogue search'}.get(w.leg, w.leg) }}: {{ w.reason }}</div>
+  {% endfor %}
+</div>
+{% endif %}
 <div class="note">
   {% for k,v in (result.timings or {}).items() if k != 'per_collection' %}<span class="badge">{{ k }} {{ v }} ms</span>{% endfor %}
   {# how many languages the question went out in, and who translated it —
