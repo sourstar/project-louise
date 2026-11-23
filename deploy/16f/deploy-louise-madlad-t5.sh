@@ -593,11 +593,16 @@ for i in $(seq 1 30); do c=$(curl -s -o /dev/null -w "%{http_code}" http://127.0
 echo "GET /ask -> $c"; [ "$c" = "$want" ]
 
 say "8. the GPU governor app from deploy/truenas-gpu-governor.yaml (hwmon writable, /config ro, TZ)"
-python3 - "$ROOT/src/deploy/truenas-gpu-governor.yaml" <<'PY'
+python3 - "$ROOT/src/deploy/truenas-gpu-governor.yaml" "$ROOT/src/deploy/16f" <<'PY'
 import sys, yaml
+sys.path.insert(0, sys.argv[2])
+import flatten_mounts as fm
 from truenas_api_client import Client
 want = yaml.safe_load(open(sys.argv[1]))
 with Client() as c:
+    # its /data/state from the louise-rag app's own /data, wherever /data is (storage-tiering.md §12)
+    want, said = fm.governor_config(want, c.call("app.config", fm.APP))
+    print("\n".join(said) or "gpu-governor: /data/state already the louise-rag app's")
     have = c.call("app.config", "louise-gpu-governor")
     s = want["services"]["gpu-governor"]
     print("volumes:", have["services"]["gpu-governor"].get("volumes"), "->", s["volumes"])
