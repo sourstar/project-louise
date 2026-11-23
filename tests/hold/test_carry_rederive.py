@@ -558,4 +558,23 @@ def test_dev_rederive_first_needs_its_list_and_release_takes_none(tmp_path, caps
     assert "--first holds every row but" in capsys.readouterr().err
     ids = tmp_path / "ids.txt"
     ids.write_text("x:1\n")
-    assert louise.main(["dev", "rederive", "x", "--release", "--ids", str(ids), "--root", str(tmp_path)]) == 2
+    assert louise.main(["dev", "rederive", "x", "--release", "--verify", "--root", str(tmp_path)]) == 2
+
+
+
+def test_release_can_keep_the_units_to_re_form_held(pair, corpus_dir, monkeypatch):  # noqa: F811
+    """EUR-Lex's units to re-form wait days for their package from Cellar:
+    released with the rest they would be derived from their old form and
+    again when re-formed. `--release --ids reform.txt` keeps them held."""
+    root, coll, uids, _ids, _rows, _out = _reconciled(pair, corpus_dir, monkeypatch)
+    carry.rederive_listed(root, "re", [uids[0]], apply=True, log=quiet, first=True)
+    got = carry.release_first(root, "re", apply=True, keep=[uids[1]], log=quiet)
+    assert got["released"] == len(uids) - 2 and got["kept_held"] == 1
+    c = db.connect(coll)
+    try:
+        scope = {r["uid"]: r["in_scope"] for r in c.execute("SELECT uid, in_scope FROM documents")}
+        assert scope[uids[1]] == db.SCOPE_HELD and all(scope[u] == 1 for u in uids if u != uids[1])
+        assert '"held": 1' in db.get_control(c, carry.FIRST_KEY), "the hold stands for the kept"
+    finally:
+        c.close()
+    assert carry.release_first(root, "re", apply=True, log=quiet)["released"] == 1

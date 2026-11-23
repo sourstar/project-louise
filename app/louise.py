@@ -3615,10 +3615,11 @@ def cmd_dev_rederive(a) -> int:
     say = lambda m: print(m, file=sys.stderr)              # noqa: E731
     if getattr(a, "release", False):
         # `--first`'s hold lifted: the held rows back in every stage's selection
-        if a.ids or a.verify or a.again:
-            print("louise dev rederive: --release takes no --ids, --verify or --again", file=sys.stderr)
+        if a.verify or a.again:
+            print("louise dev rederive: --release takes no --verify or --again", file=sys.stderr)
             return 2
-        _print({"release": carry_mod.release_first(a.root, a.collection, apply=a.yes, log=say)})
+        keep = Path(a.ids).read_text(encoding="utf-8").splitlines() if a.ids else None
+        _print({"release": carry_mod.release_first(a.root, a.collection, apply=a.yes, keep=keep, log=say)})
         return 0
     if getattr(a, "first", False) and not a.ids:
         print("louise dev rederive: --first holds every row but the ones --ids FILE lists; it takes --ids",
@@ -8801,7 +8802,8 @@ def build_parser() -> argparse.ArgumentParser:
                    help="with --ids: every OTHER row held out of every stage until --release, so the "
                         "listed are derived first (EUR-Lex's restart: the problem slice first)")
     p.add_argument("--release", action="store_true",
-                   help="the rows --first held back in every stage's selection, the scope applied again")
+                   help="the rows --first held back in every stage's selection, the scope applied again; "
+                        "with --ids FILE the rows FILE lists stay held (EUR-Lex's units to re-form)")
     p.set_defaults(fn=cmd_dev_rederive)
     p = dverbs.add_parser("carry", help="a collection's manifest, text index and vector table into a new "
                                         "collection with the same records (amendment A1); writes "

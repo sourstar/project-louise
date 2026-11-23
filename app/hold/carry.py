@@ -1791,12 +1791,19 @@ def rederive_listed(root, name: str, lines: list[str], *, apply: bool = False, s
         con.close()
 
 
-def release_first(root, name: str, *, apply: bool = False, log: Callable[[str], None] = print) -> dict[str, Any]:
+def release_first(root, name: str, *, apply: bool = False, keep: list[str] | None = None,
+                  log: Callable[[str], None] = print) -> dict[str, Any]:
     """`rederive --release`: the rows `--first` held go back into the
     stages' selection (in_scope 1), the collection's scope applied again
     (discovery.apply_scope: what its scope keeps out stays out), the hold's
     control row removed. Indexed (idx_documents_scope, in_scope = the held
-    value), a window a transaction. Nothing held: said, nothing written."""
+    value), a window a transaction. Nothing held: said, nothing written.
+
+    `keep` (`--release --ids FILE`): the rows FILE lists (a uid or a unit's
+    path a line) STAY held, every other one goes back, and the hold stands
+    for them — EUR-Lex's units to re-form, whose package comes from Cellar
+    over days: released with the rest they would be derived from their old
+    form and again when re-formed (RULE 1). A later `--release` frees them."""
     from app import db, discovery
     from . import collection as col
     from .derived_check import _begin
@@ -1812,6 +1819,27 @@ def release_first(root, name: str, *, apply: bool = False, log: Callable[[str], 
         if not apply or (not hold and not held):
             return out
         released = 0
+        if keep:
+            wanted = {ln.strip() for ln in keep if ln.strip()}
+            keys = {_unit_key(w) for w in wanted}
+            go = [r["rowid"] for r in con.execute(
+                f"SELECT rowid, uid, path FROM documents WHERE in_scope={db.SCOPE_HELD}")
+                if not (r["uid"] in wanted or (r["path"] and _unit_key(r["path"]) in keys))]
+            for i in range(0, len(go), 500):
+                part = go[i:i + 500]
+                _begin(con, None)
+                released += con.execute(f"UPDATE documents SET in_scope=1 WHERE rowid IN "
+                                        f"({','.join('?' * len(part))}) AND +in_scope={db.SCOPE_HELD}",
+                                        part).rowcount
+                con.execute("COMMIT")
+            still = int(held) - released
+            _begin(con, None)
+            discovery.apply_scope(con)
+            state = json.loads(hold) if hold else {}
+            db.set_control(con, FIRST_KEY, json.dumps({**state, "held": still, "kept": len(wanted)}))
+            con.execute("COMMIT")
+            log(f"[carry] {name}: {released} held document(s) back; {still} kept held")
+            return {**out, "released": released, "kept_held": still}
         while True:
             _begin(con, None)
             ids = [r[0] for r in con.execute(f"SELECT rowid FROM documents WHERE in_scope={db.SCOPE_HELD} "
