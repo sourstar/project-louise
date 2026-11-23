@@ -11,7 +11,8 @@ _spec.loader.exec_module(settings)
 
 
 def test_the_reclaimer_threshold_is_the_operators():
-    assert settings.DESIRED == {"memory_reclaimer_enabled": True, "memory_reclaimer_threshold": 0.95,
+    # the operator, 2026-11-23: 0.98, with the keeper's working-memory reserve (app/resident.py)
+    assert settings.DESIRED == {"memory_reclaimer_enabled": True, "memory_reclaimer_threshold": 0.98,
                                 "watchdog_idle_enabled": False,
                                 # the operator, 2026-11-21: auto-upgrade off (invariant 12)
                                 "auto_upgrade_backends": False, "auto_upgrade_addons": False}
@@ -21,12 +22,21 @@ def test_a_runtime_auto_upgrade_is_drift_whatever_the_env_says():
     """München, 2026-11-21: runtime_settings.json held auto_upgrade_backends
     true from the UI; it wins over LOCALAI_AUTO_UPGRADE_BACKENDS=false, and v5
     upgraded three upstream backends by itself."""
-    live = {"memory_reclaimer_enabled": True, "memory_reclaimer_threshold": 0.95, "watchdog_idle_enabled": False,
+    live = {"memory_reclaimer_enabled": True, "memory_reclaimer_threshold": 0.98, "watchdog_idle_enabled": False,
             "auto_upgrade_backends": True, "api_keys": ["k"]}
     assert settings.drift(live) == {"auto_upgrade_backends": True, "auto_upgrade_addons": None}
     fixed = settings.merged(live)
     assert settings.drift(fixed) == {} and fixed["api_keys"] == ["k"]
 
+
+def test_the_line_of_before_is_drift_and_the_deploy_moves_it():
+    """The node held 0.95 until the deploy carrying the keeper's reserve: the
+    deploy's apply sets 0.98, nothing is set by hand (a value set through
+    /api/settings alone would be put back by the next deploy)."""
+    live = {"memory_reclaimer_enabled": True, "memory_reclaimer_threshold": 0.95, "watchdog_idle_enabled": False,
+            "auto_upgrade_backends": False, "auto_upgrade_addons": False}
+    assert settings.drift(live) == {"memory_reclaimer_threshold": 0.95}
+    assert settings.merged(live)["memory_reclaimer_threshold"] == 0.98
 
 def test_the_projection_marker_is_never_written_back():
     out = settings.merged({"addon_host_settings_authority": "owner_required", "watchdog_busy_timeout": "10m0s"})
@@ -49,7 +59,7 @@ def test_only_the_managed_keys_change():
     current = {"memory_reclaimer_threshold": 0.68, "memory_reclaimer_enabled": True, "watchdog_idle_enabled": True,
                "api_keys": ["k"], "p2p_token": "t", "watchdog_busy_timeout": "10m0s"}
     out = settings.merged(current)
-    assert out["memory_reclaimer_threshold"] == 0.95
+    assert out["memory_reclaimer_threshold"] == 0.98
     assert out["watchdog_idle_enabled"] is False and out["watchdog_busy_timeout"] == "10m0s"
     assert {k: v for k, v in out.items() if k not in settings.DESIRED} == \
         {k: v for k, v in current.items() if k not in settings.DESIRED}
@@ -98,7 +108,7 @@ def test_the_lamar_candidate_is_the_bge_reranker_s_strict_configuration():
 
 # --- the add-on owner on (2026-11-22: the deploy of 2f26d6d rolled back) -------
 
-OWNER_ON = {"memory_reclaimer_enabled": True, "memory_reclaimer_threshold": 0.95, "watchdog_idle_enabled": False,
+OWNER_ON = {"memory_reclaimer_enabled": True, "memory_reclaimer_threshold": 0.98, "watchdog_idle_enabled": False,
             "auto_upgrade_backends": False, "api_keys": [],
             "addon_host_settings_authority": "owner_required"}       # v5.0.1's projection, no auto_upgrade_addons
 
