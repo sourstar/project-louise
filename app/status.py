@@ -257,7 +257,7 @@ def full_scan_sql(spans: list[tuple[int, int]]) -> tuple[str, dict]:
     # while counting twelve numbers more, its own numbers identical
     # (SQLite 3.45; the image's Debian SQLite is >= 3.40, FILTER is 3.30's).
     return f"""
-        SELECT COUNT(*) total, SUM(in_scope) in_scope,
+        SELECT COUNT(*) total, COUNT(*) FILTER (WHERE in_scope=1) in_scope,
           COUNT(*) FILTER (WHERE in_scope=1 AND rdf_done=1) rdf_done,
           COUNT(*) FILTER (WHERE in_scope=1 AND fts_done=1) fts_done,
           COUNT(*) FILTER (WHERE in_scope=1 AND embed_done=1) embed_done,

@@ -20,6 +20,7 @@ import pytest
 
 from app import db, embeddings, fts, validity
 from app.hold import carry
+from app.hold.codex import CodexError
 from tests.hold.test_carry import _build_and_freeze, _local, _rebuilt_pair, pair, quiet  # noqa: F401
 
 
@@ -509,3 +510,71 @@ def test_a_snapshot_that_does_not_load_is_never_read_as_no_records(pair, corpus_
         p.write_text("{not json")
     got = carry.rederive_listed(root, "re", [uids[0]], apply=True, log=quiet)
     assert "records" in got["vectors"] and _marks(coll, uids[0]) == (0, 0, 1), "its vectors kept"
+
+
+def test_first_holds_every_other_row_until_release(pair, corpus_dir, monkeypatch):  # noqa: F811
+    """Operator, 2026-11-22: "A, problem slice first" — EUR-Lex's restart
+    starts from the problematic parts. `--first` holds every other row out
+    of every stage's selection (in_scope 2); the scope pass leaves them held;
+    `--release` puts them back, the scope applied again."""
+    from app import discovery, worker
+    root, coll, uids, _ids, _rows, _out = _reconciled(pair, corpus_dir, monkeypatch)
+    _set(coll, "UPDATE documents SET fts_done=0")            # the carry's reset: every row fts-pending
+    dry = carry.rederive_listed(root, "re", [uids[0]], log=quiet, first=True)
+    assert dry["held"] == len(uids) - 1 and "would_reset" in dry
+    got = carry.rederive_listed(root, "re", [uids[0]], apply=True, log=quiet, first=True)
+    assert got["held"] == len(uids) - 1 and got["reset"] == 1
+    c = db.connect(coll)
+    try:
+        scope = {r["uid"]: r["in_scope"] for r in c.execute("SELECT uid, in_scope FROM documents")}
+        assert scope[uids[0]] == 1 and all(scope[u] == db.SCOPE_HELD for u in uids[1:])
+        rdf = c.execute(worker._RDF_PENDING, (99,)).fetchall()
+        assert [r["uid"] for r in rdf] == [uids[0]], "the listed one is the only rdf work"
+        fts = c.execute(worker._FTS_FRESH, (99,) * worker._FTS_FRESH.count("?")).fetchall() \
+            if worker._FTS_FRESH.count("?") else c.execute(worker._FTS_FRESH).fetchall()
+        assert not [r for r in fts if r["uid"] in uids[1:]], "no held row is fts work"
+        discovery.apply_scope(c)
+        c.commit()
+        assert {r["in_scope"] for r in c.execute("SELECT in_scope FROM documents WHERE uid!=?", (uids[0],))} \
+            == {db.SCOPE_HELD}, "the scope pass leaves the held held"
+    finally:
+        c.close()
+    with pytest.raises(CodexError, match="holds rows already"):
+        carry.rederive_listed(root, "re", [uids[1]], apply=True, log=quiet, first=True)
+    rel = carry.release_first(root, "re", apply=True, log=quiet)
+    assert rel["released"] == len(uids) - 1 and rel["hold"]["listed"] == 1
+    c = db.connect(coll)
+    try:
+        assert {r["in_scope"] for r in c.execute("SELECT in_scope FROM documents")} == {1}
+        assert db.get_control(c, carry.FIRST_KEY) is None
+    finally:
+        c.close()
+    assert carry.release_first(root, "re", apply=True, log=quiet)["held"] == 0, "nothing held: nothing done"
+
+
+def test_dev_rederive_first_needs_its_list_and_release_takes_none(tmp_path, capsys):
+    from app import louise
+    assert louise.main(["dev", "rederive", "x", "--first", "--root", str(tmp_path)]) == 2
+    assert "--first holds every row but" in capsys.readouterr().err
+    ids = tmp_path / "ids.txt"
+    ids.write_text("x:1\n")
+    assert louise.main(["dev", "rederive", "x", "--release", "--verify", "--root", str(tmp_path)]) == 2
+
+
+
+def test_release_can_keep_the_units_to_re_form_held(pair, corpus_dir, monkeypatch):  # noqa: F811
+    """EUR-Lex's units to re-form wait days for their package from Cellar:
+    released with the rest they would be derived from their old form and
+    again when re-formed. `--release --ids reform.txt` keeps them held."""
+    root, coll, uids, _ids, _rows, _out = _reconciled(pair, corpus_dir, monkeypatch)
+    carry.rederive_listed(root, "re", [uids[0]], apply=True, log=quiet, first=True)
+    got = carry.release_first(root, "re", apply=True, keep=[uids[1]], log=quiet)
+    assert got["released"] == len(uids) - 2 and got["kept_held"] == 1
+    c = db.connect(coll)
+    try:
+        scope = {r["uid"]: r["in_scope"] for r in c.execute("SELECT uid, in_scope FROM documents")}
+        assert scope[uids[1]] == db.SCOPE_HELD and all(scope[u] == 1 for u in uids if u != uids[1])
+        assert '"held": 1' in db.get_control(c, carry.FIRST_KEY), "the hold stands for the kept"
+    finally:
+        c.close()
+    assert carry.release_first(root, "re", apply=True, log=quiet)["released"] == 1
