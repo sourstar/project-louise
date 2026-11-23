@@ -433,7 +433,15 @@ taught, in order:
 5. `hold records build <name>.next --records-from <name>`, validation, snapshot. EUR-Lex5
    holds no records, so it skips this step. Its records are built once, after Legal's
    restart.
-6. The S4 gate, once, on NeuRIS.next. 7. `hold check --checks vectors-sample`.
+6. The S4 gate, once, on NeuRIS.next.
+7. `hold check <name>.next --checks roots,chunks,vectors-sample`, BEFORE the swap. A
+   collection whose roots and chunks were never checked on this peer is quarantined:
+   it is indexed but not embedded until they pass. legi_F was swapped after
+   vectors-sample alone (2026-11-23), and its 527,341 chunks waited for the check.
+   Steps 5 and 7 run in their own memory-capped container under supervise-pass, never
+   by `docker exec` in the worker: legi_F's records build there shared the worker's
+   cgroup, a pool child was killed, and the worker was held 74 minutes. The build
+   still ended whole: a killed child's part is handed out again.
 8. `forget <name> --yes`, `rename <name>.next <name>` (the pause moves with the name),
    `node resume <name>`, then `hold config apply <name> --set embed=<the predecessor's>`,
    the operator's own value. EUR-Lex5 stops before this step, paused for its restart.
