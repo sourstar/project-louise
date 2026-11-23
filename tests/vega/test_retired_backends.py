@@ -541,3 +541,56 @@ def test_the_codex_count_says_which_name_an_engine(node):
     assert sorted({e.collection for e in engines}) == ["gutenberg", "pubmed"]
     rc, out = _run(backends, models, proc)
     assert "codexes: 3 read (2 with an engine, 1 without: gutenberg-book-editions)" in out, out
+
+
+# ---- the worker's collections, from its own /data bind (storage-tiering.md §12, 2026-11-23) ----
+
+class _Done:
+    def __init__(self, rc, out="", err=""):
+        self.returncode, self.stdout, self.stderr = rc, out, err
+
+
+def test_the_workers_collections_are_its_data_binds_wherever_it_is():
+    asked = []
+
+    def run(cmd, **kw):
+        asked.append(cmd)
+        return _Done(0, "/mnt/ssd3/louise-data\n")
+    assert rb.worker_collections(run) == Path("/mnt/ssd3/louise-data/collections")
+    assert asked[0][:3] == ["docker", "inspect", rb.WORKER] and '"/data"' in asked[0][-1]
+
+
+@pytest.mark.parametrize("answer", [_Done(1, err="Error: No such object"), _Done(0, "\n"), OSError("no docker")])
+def test_a_worker_whose_data_is_not_known_is_undecidable(answer):
+    def run(cmd, **kw):
+        if isinstance(answer, Exception):
+            raise answer
+        return answer
+    with pytest.raises(rb.Undecidable, match="the worker's /data is not known"):
+        rb.worker_collections(run)
+
+
+def test_without_collections_given_a_deletion_refuses_when_the_worker_is_not_known(node, monkeypatch, capsys):
+    """Never a path written in the code: the stale copy of a moved /data
+    would name too few engines and retire one in use."""
+    backends, models, proc = node
+    monkeypatch.setattr(rb, "worker_collections",
+                        lambda run=None: (_ for _ in ()).throw(rb.Undecidable("the worker's /data is not known")))
+    t = backends.parent
+    rc = rb.main(["--backends", str(backends), "--models", str(models), "--proc", str(proc), "--delete",
+                  "--shards", str(t / "shards"), "--container-shards", "/no-such-shards",
+                  "--archive", str(t / "archive")])
+    err = capsys.readouterr().err
+    assert rc == 2 and "nothing removed" in err and "the worker's /data is not known" in err, err
+    assert (backends / OLD).is_dir()
+
+
+def test_without_collections_given_the_workers_are_read(node, monkeypatch):
+    import dataclasses
+    backends, models, proc = node
+    t = backends.parent
+    monkeypatch.setattr(rb, "worker_collections", lambda run=None: t / "collections")
+    out = io.StringIO()
+    rc = rb.run(backends, models, "/backends", proc, delete=False,
+                codex=dataclasses.replace(_codexes(backends), collections=None), out=out)
+    assert rc == 0 and f"under {t / 'collections'}" in out.getvalue(), out.getvalue()

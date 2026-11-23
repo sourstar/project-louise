@@ -155,3 +155,52 @@ def test_the_fast_area_needs_a_whole_copy_and_the_files_area_none():
 def test_the_deploy_s_files_kinds_are_derived_s():
     from app import derived
     assert fm.FILES_KINDS == derived.FILES
+
+
+# ---- the GPU governor's state, from the louise-rag app's /data (storage-tiering.md §12) ----
+
+def _governor():
+    import yaml
+    return yaml.safe_load((Path(__file__).resolve().parent.parent / "deploy" / "truenas-gpu-governor.yaml")
+                          .read_text())
+
+
+def _louise(data_src):
+    return {"services": {"worker": {"volumes": [f"{data_src}:/data", "/mnt/ssd4/apps/louise-rag/config:/config"]},
+                         "web": {"volumes": [f"{data_src}:/data"]}}}
+
+
+def test_the_governors_state_follows_the_apps_data_wherever_it_is():
+    want, said = fm.governor_config(_governor(), _louise("/mnt/ssd3/louise-data"))
+    vols = want["services"]["gpu-governor"]["volumes"]
+    assert "/mnt/ssd3/louise-data/state:/data/state" in vols
+    assert not any(v.startswith("/mnt/ssd4/apps/louise-rag/data/") for v in vols), vols
+    assert said and "becomes /mnt/ssd3/louise-data/state" in said[0]
+    assert [v for v in vols if not v.endswith(":/data/state")] == \
+        [v for v in _governor()["services"]["gpu-governor"]["volumes"] if not v.endswith(":/data/state")], \
+        "every other bind as the file says"
+
+
+def test_the_governors_state_today_is_unchanged_and_said_so():
+    want, said = fm.governor_config(_governor(), _louise("/mnt/ssd4/apps/louise-rag/data"))
+    assert "/mnt/ssd4/apps/louise-rag/data/state:/data/state" in want["services"]["gpu-governor"]["volumes"]
+    assert said == []
+
+
+def test_the_governor_keeps_a_binds_options_and_a_dict_form():
+    g = _governor()
+    g["services"]["gpu-governor"]["volumes"] = ["/old/state:/data/state:rw",
+                                                {"type": "bind", "source": "/old/state", "target": "/data/state"}]
+    want, _ = fm.governor_config(g, _louise("/new"))
+    assert want["services"]["gpu-governor"]["volumes"] == [
+        "/new/state:/data/state:rw", {"type": "bind", "source": "/new/state", "target": "/data/state"}]
+
+
+def test_without_the_apps_data_bind_nothing_is_applied():
+    import pytest
+    with pytest.raises(ValueError, match="binds no /data"):
+        fm.governor_config(_governor(), {"services": {"worker": {"volumes": []}}})
+    g = _governor()
+    g["services"]["gpu-governor"]["volumes"] = ["/x:/config"]
+    with pytest.raises(ValueError, match="binds no /data/state"):
+        fm.governor_config(g, _louise("/new"))

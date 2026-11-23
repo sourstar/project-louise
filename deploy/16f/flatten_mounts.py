@@ -116,6 +116,44 @@ def data_host(cfg: dict) -> str | None:
     return None
 
 
+#: THE GPU GOVERNOR'S STATE (storage-tiering.md §12, 2026-11-23): the governor
+#: app binds the node's `state/` itself, `<the louise-rag app's /data>/state`.
+#: Its file (deploy/truenas-gpu-governor.yaml) names the folder as it was when
+#: written; the deploy applies it at every run, so the folder is taken from
+#: the louise-rag app's own /data mount instead, wherever /data has moved — a
+#: governor writing a stale copy of the node's state is never put back.
+GOVERNOR_STATE = "/data/state"
+
+
+def governor_config(want: dict, louise_cfg: dict) -> tuple[dict, list[str]]:
+    """`want` (the governor app's file) with its `/data/state` bind taken from
+    the louise-rag app's /data (`data_host`); `said`, the change if any.
+    Refused (ValueError, nothing applied) when the app has no /data bind."""
+    data = data_host(louise_cfg)
+    if not data:
+        raise ValueError("the louise-rag app's worker binds no /data: the governor's state is not placed")
+    svc = (want.get("services") or {}).get("gpu-governor")
+    if not isinstance(svc, dict) or not isinstance(svc.get("volumes"), list):
+        raise ValueError("the governor's file has no gpu-governor volume list; not applied")
+    said, vols = [], []
+    for v in svc["volumes"]:
+        src, dst = _parts(v)
+        if dst == GOVERNOR_STATE:
+            host = f"{data.rstrip('/')}/state"
+            new = ({**v, "source": host} if isinstance(v, dict) else
+                   ":".join([host, GOVERNOR_STATE, *v.split(":", 2)[2:]]))
+            if new != v:
+                said.append(f"gpu-governor: {src} -> {GOVERNOR_STATE} becomes {data.rstrip('/')}/state "
+                            f"(the louise-rag app's /data)")
+            vols.append(new)
+        else:
+            vols.append(v)
+    if not any(_parts(v)[1] == GOVERNOR_STATE for v in vols):
+        raise ValueError(f"the governor's file binds no {GOVERNOR_STATE}; not applied")
+    svc["volumes"] = vols
+    return want, said
+
+
 def missing(area_cache: str, old_cache: str | None, *, files: bool, there, listdir, isdir) -> list[str]:
     """Every `<kind>/<tag>` the node's cache holds today (`old_cache`, on the
     host) of the kinds this area takes — the FILES kinds, or every other —
