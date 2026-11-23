@@ -145,3 +145,39 @@ def test_a_first_scan_never_asks_which_ids_a_unit_supersedes(tmp_path, isolated_
         assert len(asked) == 1, "a held manifest: asked for the new id only"
     finally:
         con.close()
+
+
+def test_a_row_the_worker_indexes_between_the_withdrawal_and_the_tombstone_is_withdrawn_again(tmp_path, isolated_config):
+    """Architecture's review of #799, defect 7: the retirement is decided and
+    withdrawn outside the write lock, so the worker's text-index stage could
+    write the old row again before the tombstone commits. Withdrawn once
+    more after the commit, from which no stage selects it."""
+    coll = _coll(tmp_path)
+    unit = coll.corpus_dir / src.unit_rel("it", CELEX)
+    unit.mkdir(parents=True)
+    (unit / rdf.TREE_FILE).write_bytes(_scoped((FORMEX[2] / MTD).read_bytes()))
+    (unit / "L_1972160IT.01000101.doc.html").write_bytes(b"<html><body><p>Articolo 1</p></body></html>")
+    con = db.connect(coll)
+    try:
+        (old,), _ = _scan(con, coll)
+        uid_old = f"eurlex:{old.native_id}"
+        con.execute("UPDATE documents SET rdf_done=1, fts_done=1, lang='it' WHERE uid=?", (uid_old,))
+        con.commit()
+        chunk = [{"id": f"{uid_old}:0:1", "chapter": "", "text": "Articolo 1"}]
+        fts.index_book("it", int(old.native_id), chunk, coll)
+        for n, b in _items(FORMEX[2]).items():
+            (unit / n).write_bytes(b)
+        calls = []
+
+        def racing(c, uids):
+            unindexable.withdraw_many(c, coll, uids)
+            if not calls:
+                fts.index_book("it", int(old.native_id), chunk, coll)   # the worker, in between
+            calls.append(list(uids))
+        refs = [r for r in SOURCE.discover(DiscoverState(corpus_root=coll.corpus_dir)) if r.scope == "document"]
+        counts = {k: 0 for k in KEYS}
+        assert discovery._apply_batch(con, SOURCE, refs, counts, None, wait=True, withdraw=racing, collection=coll)
+        assert counts["retired"] == 1 and len(calls) == 2
+        assert fts.books_held("it", [int(old.native_id)], coll) == 0, "nothing of the retired row is left"
+    finally:
+        con.close()

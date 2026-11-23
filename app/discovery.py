@@ -690,6 +690,30 @@ def _apply_batch(con, plugin, batch: list, counts: dict, stop, *, wait: bool,
                              f"is intact and will be retried")
                 waited = True
             time.sleep(2)
+    # ONCE MORE AFTER THE COMMIT (architecture's review of #799, defect 7): the
+    # rows above were decided outside the write lock and withdrawn before it,
+    # so the worker's text-index stage could index a retired row, or a moved
+    # one into its old group, in between. From this commit on it cannot: a
+    # tombstone carries an error (no stage selects it) and a moved row's
+    # language is its new one. Both are idempotent; a failure here leaves at
+    # most a stray row, which `dev rederive --verify` deletes (its strays)
+    if to_withdraw and withdraw is not None:
+        try:
+            withdraw(con, to_withdraw)
+        except Exception as e:  # noqa: BLE001 — committed already: said, verify's to repair
+            db.log_event(con, "warn", "discover", f"{len(to_withdraw)} retired document(s): their second "
+                                                  f"withdrawal failed ({type(e).__name__}: {e}); "
+                                                  f"`dev rederive --verify` removes any stray row"[:400])
+    if regroup:
+        from app import fts
+        try:
+            for g, books in sorted(regroup.items()):
+                fts.delete_books(g, books, collection)
+        except Exception as e:  # noqa: BLE001 — as above
+            db.log_event(con, "warn", "discover", f"the old text-index groups of {sum(map(len, regroup.values()))} "
+                                                  f"moved document(s): their second deletion failed "
+                                                  f"({type(e).__name__}: {e}); `dev rederive --verify` "
+                                                  f"removes any stray row"[:400])
     for k, v in local.items():
         counts[k] += v
     return True
