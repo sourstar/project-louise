@@ -1,5 +1,5 @@
-"""hold.rechunk — amendment A1k (PROPOSED 2026-11-21, for the architecture
-session; docs/notes/legal-chunker-v4.md §4.3): the vectors of a collection
+"""hold.rechunk — amendment A1k (proposed 2026-11-21, ADOPTED by architecture
+2026-11-23 under RULE 1; docs/notes/legal-chunker-v4.md §4.3): the vectors of a collection
 carried into its successor whose space differs ONLY by its layers' chunker
 VERSION, every vector whose chunk text the new version cuts again kept
 under its new chunk id.

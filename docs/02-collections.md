@@ -756,8 +756,10 @@ anyone from the Codex alone (`admitted_spaces`). Its bundles pass T0 (03
 changes and nobody fetches them again; the carry moves `state/bundles` and
 `state/share` too and re-keys the coverage rows to the new collection
 instead of clearing them. Gutenberg's 43 GB of bundles are the case.
-*Amendment A1k (RULE 1, PROPOSED 2026-11-21 for the architecture session,
-not in force until approved; docs/notes/legal-chunker-v4.md §4.3):* the space
+*Amendment A1k (RULE 1; proposed 2026-11-21, ADOPTED by architecture
+2026-11-23 under RULE 1, the operator told; docs/notes/legal-chunker-v4.md
+§4.3. When the shared legal space moves is the operator's decision, M1 of
+§4.4):* the space
 may also differ by its layers' chunker VERSION, and only that way — the same
 records but for the layers, each layer the same chunker, parameters, rule and
 input, and the function equal (`space_differences` empty: the query

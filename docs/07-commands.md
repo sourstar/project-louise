@@ -535,7 +535,7 @@ louise dev                                                             operator 
                                                                        target whose origin holds another corpus; --share-origin does that alone, for a carry finished
                                                                        before it did (2026-11-15)
   carry <from> <to> --rechunked [--dry-run | --yes] [--window N] [--processes N]
-                                                                       A1k (02 §2.4; PROPOSED 2026-11-21, for the architecture session; app/hold/rechunk.py,
+                                                                       A1k (02 §2.4; adopted by architecture 2026-11-23; app/hold/rechunk.py,
                                                                        docs/notes/legal-chunker-v4.md §4.3): into a successor whose space differs ONLY by its layers'
                                                                        chunker version — the same records but for the layers, each layer the same chunker, params,
                                                                        rule and input, the space's function equal (nothing crossed, not even the query instruction or

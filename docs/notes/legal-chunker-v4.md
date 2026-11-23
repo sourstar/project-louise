@@ -306,6 +306,17 @@ full. Normattiva's ~8.2 M chunks alone, at ~30 chunks/s, take about 3 card-days
 Recommendation: A. If the operator says nothing, nothing moves until the drift numbers
 (§3) are in, and then A.
 
+**Decided (operator, 2026-11-23): "A"** — all four in one window, before EUR-Lex5's
+restart (whose order is the review note's "The restart": M1, retire-superseded, the
+re-forms, the problem slice, the rest, serving). Drift measured on the node (München,
+read-only): Normattiva, legi_F and NeuRIS 1,362 chunks to embed; EUR-Lex5 13,649
+documents that differ and no vectors. RULE 1 re-creates the four: the bundles the worker
+announced to the test peers on 2026-11-23 (Normattiva 178 parts, Normattiva-DAR 52,
+legi_F 44) are not an official publication (operator, 2026-10-30: the peers' "only
+purpose is to test the architecture"; architecture's reading, put to the operator with
+this choice). M2 and M3 take their recommendations (C, A), as the operator said nothing
+of them. The creation side (§4.6) is built as A before the move.
+
 **M2 — the re-key.** This is how the four vector tables take their v4 ids.
 
 | choice | effect | pros | cons |

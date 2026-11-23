@@ -409,6 +409,23 @@ class CorpusSource(Protocol):
     # docs/notes/normattiva-multivigenza-review.md §3.2, case 2).
     def closures(self, doc: CanonicalDoc) -> Iterator[tuple[str, str]]: ...
 
+    # ---- adopted as engine API from the EUR-Lex5 review (2026-11-23; 06
+    # §6.1; docs/notes/rag-engine-handoff-2026-11-21.md §1). Each is read with
+    # a default (`getattr`), so a plugin without it behaves as before.
+
+    # Optional: the ids this unit was held under before (a form or a day its
+    # id derives from moved): discovery retires those rows at this locator,
+    # out of every index, tombstoned (app/discovery.py `_apply_batch`).
+    def superseded_ids(self, ref: DocRef) -> list[str]: ...
+
+    # Optional: the bytes a parse of this row reads where `size` misleads (a
+    # zip's members unpacked): the parse pool's admission (app/plugin_io.py).
+    def parse_size(self, row) -> int | None: ...
+
+    # Optional: the validity base holds originals, so a held amendment ends
+    # the text it replaced (05 §5.1 chain rule 2; app/validity.py).
+    VALIDITY_ENDS_AT_AMENDMENT: bool
+
 
 @dataclass(frozen=True)
 class RefColumn:

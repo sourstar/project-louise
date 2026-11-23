@@ -37,7 +37,7 @@ EVERY PATH HERE THAT DELETES A DOCUMENT'S LAST ROW then sets its
 as "an earlier version, searched until re-embedded" (app/status.py
 SUPERSEDED). `--unembedded` does it for the whole target manifest.
 
-`--rechunked` (A1k, PROPOSED 2026-11-21 for the architecture session;
+`--rechunked` (A1k, proposed 2026-11-21, adopted by architecture 2026-11-23;
 docs/notes/legal-chunker-v4.md §4.3): into a collection with the same records
 whose space differs ONLY by its layers' chunker VERSION. This module checks it
 and copies the manifest as a relayered sister's (A1i: every embed and index
@@ -734,7 +734,7 @@ def carry(root, from_ref: str, to_ref: str, *, copy: bool = False, apply: bool =
     """Carry `from_ref`'s manifest, text index and vector table into `to_ref`
     (G1). `apply=False` checks everything and writes nothing.
 
-    `rechunked` (A1k, PROPOSED 2026-11-21; the shared legal space from
+    `rechunked` (A1k, adopted 2026-11-23; the shared legal space from
     `legal_article` 3 to 4, docs/notes/legal-chunker-v4.md): the target's
     Codex is the source's with its layers' chunker VERSION moved and nothing
     else that decides a record or the function — `record_differences` "layers"

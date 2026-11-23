@@ -322,15 +322,22 @@ def test_the_text_index_is_cut_again_and_the_space_re_pinned(move):
 
 def test_the_cpu_reference_crosses_with_the_function(move):
     """The note's step 1: the reference is a function of the encoder side
-    and the set, which A1k does not move."""
-    from app.hold import cpu_reference as cpu_ref
-    root, v3, _v4, _vectors = move
-    run = {"driver": "cpu", "weights": v3.space.encoder.weights, "engine": "sha256:" + "cd" * 32}
-    kept = cpu_ref.write(root, "v3", "document", run_id="sha256:" + "ab" * 32, run=run,
-                         set_id=v3.space.calibration.set, vectors=[[1.0, 0.0], [0.0, 1.0]])
+    and the set, which A1k does not move. Since the reference is the model's
+    (app/rage/reference.py, 2026-11-22) nothing is copied: the node's store
+    holds it under ONE key for both spaces, so v4's gate resolves the
+    reference v3's made, and the carry says so without refusing it."""
+    from app.rage import reference as rage
+    root, v3, v4, _vectors = move
+    weights = v3.space.encoder.weights
+    assert v3.space_id != v4.space_id
+    assert rage.key(v3, "document", weights) == rage.key(v4, "document", weights), "one key for an A1k pair"
+    rage.put(v3, "document", run_id="sha256:" + "ab" * 32,
+             run={"driver": "cpu", "weights": weights, "engine": "sha256:" + "cd" * 32},
+             vectors=[[1.0, 0.0], [0.0, 1.0]])
+    assert rage.resolve(v4, "document", weights, 2) is not None, "v4 finds the reference v3 made"
     out, _got = _carried(root)
-    assert out["derived"]["cpu-reference"]["carried"] == 1
-    assert (cpu_ref.directory(root, "v4", "document") / kept.name).read_bytes() == kept.read_bytes()
+    ref = out["derived"]["cpu-reference"]
+    assert ref["carried"] == 0 and "spaces differ" not in str(ref.get("why") or ""), ref
 
 
 def test_a_versioned_collection_s_rows_carry_its_columns_and_its_chunk_hashes(move, monkeypatch):
