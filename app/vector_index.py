@@ -354,9 +354,16 @@ def take_over_due(collection, st: dict | None) -> bool:
     behind a link into the build area, the node runs the collection (the
     maintainer skips a paused one, so case F's successor waits for its
     swap), and no write touched it for a whole pass (`_idle`). Tried again
-    a pass after a refusal (no room, a writer), not on every turn."""
+    a pass after a refusal (no room, a writer), not on every turn.
+
+    Only a link INTO THE BUILD AREA itself: a link to anywhere else — a
+    Lance root's folder while `LOUISE_LANCE_ROOT` is unset, say (storage-
+    tiering.md §12) — is never moved by itself, or a lost setting would copy
+    every searched table into its collection's folder unattended."""
     from . import vector_place
-    if vector_place.tier(collection.lance_dir) != vector_place.BUILD or not st:
+    lance = collection.lance_dir
+    if vector_place.tier(lance) != vector_place.BUILD or not st \
+            or not vector_place.in_area(vector_place.physical(lance)):
         return False
     last = _take_over_tried.get(str(collection.lance_dir))
     if last is not None and time.monotonic() - last < config.VECTOR_INDEX_REFRESH_S:

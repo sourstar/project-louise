@@ -522,6 +522,9 @@ for c in ix-louise-rag-web-1 ix-louise-rag-worker-1; do
   v=$(docker exec "$c" printenv LOUISE_CACHE_DIR || true); echo "$c LOUISE_CACHE_DIR $v"; [ "$v" = "/data/cache" ]
   b=$(docker exec "$c" printenv LOUISE_BUILD_DIR || true); echo "$c LOUISE_BUILD_DIR ${b:-unset}"
   if [ -n "$b" ]; then docker exec "$c" test -d "$b" || { echo "$c: LOUISE_BUILD_DIR $b is not a directory: the build area is not mounted"; exit 1; }; fi
+  # THE LANCE ROOT (operator 2026-11-22: "Ssd4 is for lancedb only"; storage-tiering.md §12)
+  l=$(docker exec "$c" printenv LOUISE_LANCE_ROOT || true); echo "$c LOUISE_LANCE_ROOT ${l:-unset}"
+  if [ -n "$l" ]; then docker exec "$c" test -d "$l" || { echo "$c: LOUISE_LANCE_ROOT $l is not a directory: the Lance root is not mounted"; exit 1; }; fi
 done
 for i in $(seq 1 60); do w=$(curl -s -m 5 -o /dev/null -w "%{http_code}" http://127.0.0.1:30042/healthz); [ "$w" = 200 ] && break; sleep 2; done
 echo "web /healthz $w, worker $(docker inspect -f '{{.State.Status}}' ix-louise-rag-worker-1)"; [ "$w" = 200 ]

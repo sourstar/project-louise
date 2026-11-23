@@ -1752,6 +1752,10 @@ def _new_dry_run(a, run, recipe: dict, pred, dry, changed: list[str], existing, 
         out(f"  vectors     built in the build area, {vector_place.home(made_as)}; "
             + ("moved to the data pool at the swap" if re_create else
                f"`louise hold vectors move {made_as} --to hot` when it takes over"))
+    elif existing is None and vector_place.hot_applies(a.root):
+        vector_place.hot_mounted()
+        out(f"  vectors     built in the Lance root, {vector_place.hot_home(made_as)} "
+            f"(no build area: LOUISE_BUILD_DIR is unset)")
     elif existing is None:
         out(f"  vectors     built beside the collection, {vector_place.table_dir(a.root, made_as)} "
             f"(no build area: LOUISE_BUILD_DIR is unset, or this is not the node's root)")
@@ -2127,9 +2131,10 @@ def _recreate_take_over(root: Path, name: str, codex, say) -> dict:
 
     from app import node_state, vector_place
     from app.hold import lock as lock_mod, records as rec
-    if vector_place.tier(vector_place.table_dir(root, name)) != vector_place.BUILD \
-            and not vector_place.begun(lock_mod.state_dir(root, name)):
-        return {"nothing": "the vector table is on the data pool"}
+    link = vector_place.table_dir(root, name)
+    in_area = vector_place.tier(link) == vector_place.BUILD and vector_place.in_area(vector_place.physical(link))
+    if not in_area and not vector_place.begun(lock_mod.state_dir(root, name)):
+        return {"nothing": "the vector table is on the data pool"}   # or not in the build area: never moved here
     if name not in node_state.paused_collections() and node_state.worker_state() != "paused":
         raise CodexError(f"swap: {name} is not paused, and its vector table moves from the build area "
                          f"now: `louise node pause {name}`, then run this again")
@@ -5667,8 +5672,12 @@ def cmd_vectors_reembed(a) -> int:
 def cmd_vectors_move(a) -> int:
     """`hold vectors move <collection> --to hot|build [--apply]` (07 §7.3;
     storage-tiering.md §8, operator 2026-11-07): the collection's vector
-    table moved between the data pool (`hot`, where searches read it) and
-    the build area (`build`, LOUISE_BUILD_DIR) — app/vector_place.py. A dry
+    table moved between the data pool (`hot`, where searches read it: beside
+    the collection, or in the Lance root, LOUISE_LANCE_ROOT, where one is
+    set) and the build area (`build`, LOUISE_BUILD_DIR) — app/vector_place.py.
+    With a Lance root set, `--to hot` of a table that is still the directory
+    beside its collection ADOPTS it into the root by a rename, nothing
+    copied (storage-tiering.md §12, operator 2026-11-23: "A"). A dry
     run by default: the bytes, the room on the destination, the time at the
     rates measured on the node, and the bytes the source's removal frees
     (exit 2 when it would be refused). `--apply` needs the collection paused
@@ -8404,7 +8413,9 @@ def build_parser() -> argparse.ArgumentParser:
                                "source removed; a dry run unless --apply (the collection paused)")
     root_arg(p); p.add_argument("collection")
     p.add_argument("--to", required=True, choices=("hot", "build"),
-                   help="hot: beside the collection, where searches read it; build: the build area")
+                   help="hot: where searches read it, beside the collection or in the Lance root "
+                        "(LOUISE_LANCE_ROOT: a table beside its collection is adopted by a rename); "
+                        "build: the build area")
     p.add_argument("--apply", action="store_true",
                    help="move it (the collection must be paused); without it, what it would move, "
                         "the room, the time and the bytes freed")
