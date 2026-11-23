@@ -480,6 +480,11 @@ from truenas_api_client import Client
 shared, build_env = fm.build_area(os.environ.get("LOUISE_BUILD_HOST") or None)
 print(f"build area: {shared[0][0]} -> {shared[0][1]}" if shared else
       "build area: no ssd3 dataset named or mounted, LOUISE_BUILD_DIR left unset")
+# THE LANCE ROOT (storage-tiering.md §12): the ssd4 folder of the searched vector tables
+lance, lance_env = fm.lance_root(os.environ.get("LOUISE_LANCE_HOST") or None)
+print(f"Lance root: {lance[0][0]} -> {lance[0][1]}" if lance else
+      "Lance root: none on this host, LOUISE_LANCE_ROOT left as it is")
+shared, build_env = tuple(shared) + tuple(lance), {**build_env, **lance_env}
 # THE TWO CACHE AREAS (operator 2026-11-14, storage-tiering.md §10): ssd5 for what is
 # read at random or memory-mapped, ssd3 for the decompressed archives a parse streams
 # through; each once its copy is compared and READY, the fast one only beside the files one
@@ -513,6 +518,7 @@ echo "state after start: $s"; [ "$s" = "RUNNING" ]
 say "6. web and worker run the same, new image"
 sleep 5
 WEB=$(docker inspect ix-louise-rag-web-1 --format '{{.Image}}'); WRK=$(docker inspect ix-louise-rag-worker-1 --format '{{.Image}}')
+LANCE_HOST=${LOUISE_LANCE_HOST:-$(python3 -c "import sys; sys.path.insert(0, sys.argv[1]); import flatten_mounts as fm; print(fm.LANCE_HOST or '')" "$ROOT/src/deploy/16f")}
 echo "web $WEB"; echo "worker $WRK"
 [ "$WEB" = "$WRK" ] && [ "$WEB" = "$NEW_ID" ]
 for c in ix-louise-rag-web-1 ix-louise-rag-worker-1; do
@@ -525,6 +531,12 @@ for c in ix-louise-rag-web-1 ix-louise-rag-worker-1; do
   # THE LANCE ROOT (operator 2026-11-22: "Ssd4 is for lancedb only"; storage-tiering.md §12)
   l=$(docker exec "$c" printenv LOUISE_LANCE_ROOT || true); echo "$c LOUISE_LANCE_ROOT ${l:-unset}"
   if [ -n "$l" ]; then docker exec "$c" test -d "$l" || { echo "$c: LOUISE_LANCE_ROOT $l is not a directory: the Lance root is not mounted"; exit 1; }; fi
+  # and it IS the host's Lance root folder (device and inode), never the empty mount point beneath it
+  if [ -n "$l" ] && [ -d "$LANCE_HOST" ]; then
+    have=$(docker exec "$c" stat -c '%d %i' "$l"); want=$(stat -c '%d %i' "$LANCE_HOST")
+    echo "$c LOUISE_LANCE_ROOT is $have, $LANCE_HOST is $want"
+    [ "$have" = "$want" ] || { echo "$c: $l is not $LANCE_HOST: the Lance root's bind is missing"; exit 1; }
+  fi
 done
 for i in $(seq 1 60); do w=$(curl -s -m 5 -o /dev/null -w "%{http_code}" http://127.0.0.1:30042/healthz); [ "$w" = 200 ] && break; sleep 2; done
 echo "web /healthz $w, worker $(docker inspect -f '{{.State.Status}}' ix-louise-rag-worker-1)"; [ "$w" = 200 ]

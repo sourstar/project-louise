@@ -204,3 +204,35 @@ def test_without_the_apps_data_bind_nothing_is_applied():
     g["services"]["gpu-governor"]["volumes"] = ["/x:/config"]
     with pytest.raises(ValueError, match="binds no /data/state"):
         fm.governor_config(g, _louise("/new"))
+
+
+# ---- the Lance root's bind, owned by the deploy (storage-tiering.md §12, 2026-11-23) ----
+
+def test_the_lance_root_is_bound_in_web_and_worker_and_named():
+    assert fm.LANCE_HOST == "/mnt/ssd4/apps/louise-rag/data/lance", "München's folder, 2026-11-23"
+    shared, env = fm.lance_root(isdir=lambda p: True)
+    assert env == {"LOUISE_LANCE_ROOT": "/data/lance"}
+    c = cfg()
+    said = fm.apply(c, shared=shared, env={"LOUISE_CACHE_DIR": "/data/cache", **env})
+    for name in ("web", "worker"):
+        svc = c["services"][name]
+        assert "/mnt/ssd4/apps/louise-rag/data/lance:/data/lance" in svc["volumes"], "read and written, as /data is"
+        assert svc["environment"]["LOUISE_LANCE_ROOT"] == "/data/lance"
+    assert any("/data/lance" in line for line in said)
+    assert fm.apply(c, shared=shared, env={"LOUISE_CACHE_DIR": "/data/cache", **env}) == [], "idempotent"
+
+
+def test_a_bind_already_there_is_kept_as_it_is():
+    c = cfg()
+    for name in ("web", "worker"):
+        c["services"][name]["volumes"].append("/mnt/ssd4/apps/louise-rag/data/lance:/data/lance")
+    shared, env = fm.lance_root(isdir=lambda p: True)
+    fm.apply(c, shared=shared, env=env)
+    for name in ("web", "worker"):
+        assert [v for v in c["services"][name]["volumes"] if v.endswith(":/data/lance")] == \
+            ["/mnt/ssd4/apps/louise-rag/data/lance:/data/lance"], "one bind, never two"
+
+
+def test_no_lance_folder_on_this_host_sets_nothing():
+    assert fm.lance_root(isdir=lambda p: False) == ((), {})
+    assert fm.lance_root("/mnt/elsewhere", isdir=lambda p: False) == ((), {})
