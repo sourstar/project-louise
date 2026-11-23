@@ -93,7 +93,7 @@ def test_the_own_language_list_reaches_the_fusion_as_the_readers_own_words(
     # English finishes LAST of the three, so a list placed by finishing order
     # would put it where French belongs
     book, late = {"de": 1, "en": 2, "fr": 3}, {"de": 0.0, "en": 0.2, "fr": 0.1}
-    monkeypatch.setattr(fts, "search", lambda group, q, limit=20, collection=None, langs=None:
+    monkeypatch.setattr(fts, "search", lambda group, q, limit=20, collection=None, langs=None, **_kw:
                         time.sleep(late[group]) or ran.append((group, q))
                         or [{"chunk_id": f"g:{book[group]}:0:1", "book_id": book[group],
                              "source": f"fts:{group}", "text": q}])

@@ -87,7 +87,7 @@ def test_every_variant_reaches_the_fusion_as_its_own_list(isolated_config, monke
     hits = {"en:whale": [h("gutenberg:1", 0, "fts:en")],
             "la:whale": [h("gutenberg:2", 0, "fts:other")],
             "eo:whale": [h("gutenberg:3", 0, "fts:other"), h("gutenberg:2", 5, "fts:other")]}
-    monkeypatch.setattr(fts, "search", lambda group, q, limit=20, collection=None, langs=None:
+    monkeypatch.setattr(fts, "search", lambda group, q, limit=20, collection=None, langs=None, **_kw:
                         hits.get(q, []))
     seen = []
     real = retrieval._merge_rrf
@@ -138,7 +138,7 @@ def test_the_search_marks_the_variant_that_is_the_query_as_typed(isolated_config
                         lambda q: llm.Reading([], q, "en"))
     monkeypatch.setattr(llm, "translate_query",
                         lambda q, langs: {"de": "Walfang", "en": "whaling"})
-    monkeypatch.setattr(fts, "search", lambda group, q, limit=20, collection=None, langs=None:
+    monkeypatch.setattr(fts, "search", lambda group, q, limit=20, collection=None, langs=None, **_kw:
                         [hl("g:1" if group == "de" else "g:9", f"fts:{group}", group)])
     seen = {}
     real = retrieval._merge_rrf
@@ -167,7 +167,7 @@ def test_a_title_the_catalogue_finds_is_a_variant_of_the_text_leg(isolated_confi
 
     lookups: list[list[int]] = []
 
-    def search(group, q, limit=20, collection=None, langs=None, book_ids=None, validity=None):
+    def search(group, q, limit=20, collection=None, langs=None, book_ids=None, validity=None, **_kw):
         if not book_ids:
             return [anthology]
         lookups.append(list(book_ids))
@@ -204,7 +204,7 @@ def test_the_catalogue_lookup_asks_a_crowded_out_record_alone_and_keeps_each_rec
     monkeypatch.setattr(retrieval, "CATALOG_CHUNKS_PER_RECORD", 2)
     calls: list[list[int]] = []
 
-    def search(group, q, limit=20, collection=None, book_ids=None, validity=None):
+    def search(group, q, limit=20, collection=None, book_ids=None, validity=None, **_kw):
         calls.append(list(book_ids))
         if book_ids == [3]:
             return [h("g:3", 7, "fts:en")]
