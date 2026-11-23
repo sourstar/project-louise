@@ -176,7 +176,9 @@ def test_a_withdrawn_page_leaves_the_manifest_through_discovery(wp):
         con.close()
     bread = rows[str(native_id_of("tr", 21))]
     assert bread["error"].startswith("withdrawn:") and bread["embed_done"] == 0
-    assert withdrawn == [f"wikipedia:{native_id_of('tr', 21)}"]
+    # before the tombstone commits, and once more after it (discovery.py, the
+    # review of #799's defect 7): a stage that indexed it in between is undone
+    assert withdrawn == [f"wikipedia:{native_id_of('tr', 21)}"] * 2
     cheese = rows[str(native_id_of("tr", 20))]
     assert cheese["error"] is None and "/20261101/" in cheese["path"]
 

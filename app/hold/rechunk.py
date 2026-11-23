@@ -280,6 +280,25 @@ def _commit(con, fn) -> None:
         raise
 
 
+def _dry_target(root: Path, from_name: str, to_name: str, to):
+    """The dry run's target, as its --yes reads it. The --yes carries the
+    source's licence acknowledgement before the re-key (recreate.carry_ack),
+    so a yellow- or red-class target holding none yet is read under that
+    one: the data the pass uses is the source's, gated by THE resolution on
+    the source above. One the --yes could not carry stops the dry run
+    there (2026-11-23: legi_F.next's dry run was refused for an ack only its
+    --yes would have carried)."""
+    from . import records as rec, recreate
+    _, state_dir, _ = rec._paths(root, to_name)
+    if to.license.cls == "green" or (state_dir / "ack.json").is_file():
+        return rec._local_collection(root, to_name, to)
+    why = recreate.ack_not_carried(root, from_name, to_name, to)
+    if why:
+        raise CodexError(f"carry --rechunked: {to_name}'s licence acknowledgement would not be carried: "
+                         f"{why}; nothing was written")
+    return rec._local_collection(root, to_name, to, ack_dir=Path(root) / from_name / "state")
+
+
 def rekey(root, from_ref: str, to_ref: str, *, apply: bool = False, window: int = WINDOW,
           batch_rows: int = BATCH_ROWS, processes: int | None = None, stop=None,
           log: Callable[[str], None] = print) -> dict[str, Any]:
@@ -313,7 +332,7 @@ def rekey(root, from_ref: str, to_ref: str, *, apply: bool = False, window: int 
     s_coll = rec.local_collection(root, from_name, src)            # its data is used: gated (invariant 9)
     # the target's records are the source's byte for byte (the carry's
     # refusals); its licence acknowledgement is carried before a real run
-    t_coll = (rec.local_collection if apply else rec._local_collection)(root, to_name, to)
+    t_coll = rec.local_collection(root, to_name, to) if apply else _dry_target(root, from_name, to_name, to)
     sc = sqlite3.connect(f"file:{sp['manifest'].as_posix()}?mode=ro", uri=True)
     try:
         top = int(sc.execute("SELECT MAX(rowid) FROM documents").fetchone()[0] or 0)
