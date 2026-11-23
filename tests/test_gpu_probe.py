@@ -145,6 +145,27 @@ def test_the_label_names_what_the_process_serves(argv, expected, tmp_path):
     assert gp.label(argv, tmp_path) == expected
 
 
+# LocalAI starts a backend through the loader the backend ships (the node,
+# 2026-11-23: "pushed off the card: ld.so")
+_B = "/backends/louise-sycl-f16-llama-cpp-281e1ee481b6-stack-7c301a7ba437"
+
+
+@pytest.mark.parametrize("argv,expected,command", [
+    ([f"{_B}/lib/ld.so", f"{_B}/llama-cpp-fallback", "--addr", "127.0.0.1:42245"],
+     "llama-cpp-fallback", "llama-cpp-fallback"),
+    ([f"{_B}/lib/ld.so", "--library-path", f"{_B}/lib", "--inhibit-cache", "--argv0", "x",
+      f"{_B}/llama-cpp-fallback", "--addr", "127.0.0.1:1"], "llama-cpp-fallback", "llama-cpp-fallback"),
+    (["/lib64/ld-linux-x86-64.so.2", "/app/llama-server", "-m", "/models/bge-m3-FP16.gguf"],
+     "bge-m3-FP16", "llama-server"),
+    (["/lib/ld-musl-x86_64.so.1", "/usr/bin/some-monitor"], "some-monitor", "some-monitor"),
+    ([f"{_B}/lib/ld.so"], "ld.so", "ld.so"),
+    ([f"{_B}/lib/ld.so", "--list"], "ld.so", "ld.so"),
+])
+def test_a_program_a_loader_ran_is_labelled_as_itself(argv, expected, command, tmp_path):
+    assert gp.label(argv, tmp_path) == expected
+    assert gp._command(argv) == command
+
+
 def test_an_ollama_blob_is_named_by_its_manifest(proc):
     root = proc / "1034812" / "root"
     blob = f"/root/.ollama/models/blobs/sha256-{BLOB}"

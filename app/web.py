@@ -4539,4 +4539,6 @@ def system_gpu_fragment(request: Request):
     return TEMPLATES.TemplateResponse(request, "_fragments/gpu.html",
                                        probed
                                        | {"governor": gpu.governor(), "cards": cards,
-                                          "models": models, "model_bar": gpu_models.bar})
+                                          "models": models, "model_bar": gpu_models.bar,
+                                          "process_name": lambda p: gpu_models.process_name(
+                                              p, models.get("rows"))})
