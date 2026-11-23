@@ -263,17 +263,23 @@ def _check_snapshot_id(s: Any) -> str:
 
 
 def _check_shard(s: Any) -> str:
-    """`"<slice>/<n>"` — one shard per bundle (§9.7)."""
+    """`"<slice>/<n>"` — one shard per bundle (§9.7). The slice is ONE OR
+    MORE path segments (§9.3: wikipedia's `lang=de/pages=0M`, legi's
+    `kind=…/year=…`), so the number is the LAST segment, after a slice of
+    non-empty segments. Until 2026-11-23 exactly one `/` was required, which
+    refused every part of a two-segment slice: wikipedia's publish pass
+    failed on `lang=de/pages=0M/00001` (München, the worker log, 00:52:04Z),
+    as the coverage map's `slice_and_n` had for legi on 2026-11-13."""
     _check_string("shard", s)
-    if s.count("/") != 1:
+    if "/" not in s:
         raise BundleError(
             f"shard is {s!r}; §9.7 fixes `\"<slice>/<n>\"`, and one shard per "
             f"bundle is a hard constraint — a bundle spanning two shards has "
             f"no single entry in the coverage map (§9.10)")
-    slice_, n = s.split("/")
-    if not slice_ or not n.isdigit():
-        raise BundleError(f"shard is {s!r}; the part after `/` is the shard "
-                          f"number")
+    slice_, n = s.rsplit("/", 1)
+    if not slice_ or not n.isdigit() or "" in slice_.split("/"):
+        raise BundleError(f"shard is {s!r}; the last segment is the shard "
+                          f"number, after a slice of non-empty segments")
     return s
 
 

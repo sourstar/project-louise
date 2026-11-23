@@ -586,3 +586,44 @@ ssd5, the manifests' write rate), with these constraints:
   and a manifest is random small writes;
 - a text index is derived but costs days to rebuild for pubmed: it moves as
   the same bytes (RULE 1), never rebuilt.
+
+**The operator's choices (2026-11-22):**
+- text indexes: "B but measure", to ssd3;
+- SQLite state: "A but measure", to ssd3 in its own dataset at recordsize 16K;
+- the rest: "Delete or move at your discretion". Done 23:13Z: `data/cache` deleted (808 MB); the measurement folders and `hub/` moved to `ssd3/attic/<name>`, each compared.
+
+**Measured (München, 2026-11-23 00:49–01:31Z, the node and OCR paused; /root/measure/ssd3-trial2/).** A first run was invalid, and the reasons are kept as lessons:
+- a copy of a text index mounted read-only cannot be searched, because tantivy takes its lock to read;
+- a replay that sets a column to itself writes no page in SQLite.
+
+M1, gutenberg's text index (51 GB), 72 searches each, 0 failed, the copy's text hits checked before each run:
+
+| | fts p50 | fts p95 | total p50 |
+|---|---|---|---|
+| ssd4, live | 860 ms | 1,786 ms | 8,433 ms |
+| ssd3 copy, primarycache=all | 406 ms | 1,162 ms | 6,353 ms |
+| ssd3 copy, primarycache=metadata, page cache dropped | 405 ms | 1,749 ms (max 3,182) | 6,414 ms |
+
+ssd4's own run gave 407 / 1,150 the night before, so it moves 2× between runs. The runs were made once each, in that order. **ssd3 is not slower than ssd4 for the text leg, uncached included; no gain is shown.** The total is the reranker's (3–5 s).
+
+fio on ssd3:
+- 30 GB sequential at 157 MB/s (942 for the first 5 s, the SLC, then a steady 155);
+- 4k random writes with an fsync each: 523 IOPS, fsync p50 0.73 ms, p99 7.9 ms.
+
+M2, wikidata's manifest (35.5 GB), copied by SQLite's online backup, caches dropped before each run. The replay was 2,000 commits of 500 random rows (updated_at+1), with a checkpoint every 100 (206 MB of WAL each), then 10 M rows in windows of 50 k:
+
+| | commit p50 | p99 | checkpoint p50 / max | 10 M rows |
+|---|---|---|---|---|
+| ssd3, recordsize 16K | 119 ms | 1,214 ms | 3.26 / 3.63 s | 105 s (95 k/s), pool 8–90 MB/s |
+| ssd4, the live pool | 124 ms | 2,469 ms | 4.09 / 20.8 s | 178 s (56 k/s), pool up to 256 MB/s |
+
+The medians are equal; **ssd3 has the shorter tails and writes about a third of the bytes.** Confounds: the recordsizes differ, ssd4 ran second beside the live web and its snapshots, and each was run once.
+
+The live write load on ssd4 (München, the evening before, 10 min in normal embedding): about 1.2 MB/s, 4.3 GB/h, Lance's writes included. That is far inside ssd3's 18 GB SLC cache.
+
+The trial datasets and the ssd4 baseline (53.3 + 26.2 + 13 GB, and their copies on tank) are no longer needed for the decision.
+
+**How the move is made** is the operator's choice, put on 2026-11-23:
+- A: one root for the searched vector tables on ssd4 (`LOUISE_LANCE_ROOT`), reached by a link from each collection's folder, which then moves whole to ssd3. `vector_place` must tell that link from one into the build area: today every link reads as `build`, and `take_over` would move the table back into the folder.
+- B: per-collection bind mounts.
+- C: code roots for state and index (128 and 14 hand-built paths).

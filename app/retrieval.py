@@ -1079,6 +1079,7 @@ def _search_one_collection(con, collection, query: str, k: int, mode: str, trans
     cancel.checkpoint()
     t0 = time.time()
     # as deep as the text leg's other variants: it is one of them (§5.1)
+    text_why = None
     catalog_hits, catalog_why = (
         catalog_leg(con, core, limit=max(k, depth, 20), langs=limited_langs(collection, plan.only),
                     collection=collection)
@@ -1113,13 +1114,21 @@ def _search_one_collection(con, collection, query: str, k: int, mode: str, trans
                 tasks.append((group, q))
         cancel.checkpoint()
 
+        #: the text indexes that could not be searched, each said once, named
+        #: in `legs_withheld` (leg "text"; the operator, 2026-11-23: "A")
+        text_failed: dict[str, str] = {}
+
         def one(task: tuple[str, str]) -> list[dict]:
             group, q = task
             cancel.checkpoint()            # one group per language: a query can fan out wide
             # deep enough to hold `limit` RECORDS, not chunks (05 §5.1,
             # amended 2026-10-10: app/leg_depth.py)
-            return fts.search_records(group, q, limit, collection=collection,
-                                      langs=plan.lang_filter(group), **restrict)
+            try:
+                return fts.search_records(group, q, limit, collection=collection,
+                                          langs=plan.lang_filter(group), raise_errors=True, **restrict)
+            except fts.TextLegError as e:
+                text_failed.setdefault(group, str(e))
+                return []
         # THE GROUPS AND THEIR VARIANTS AT ONCE (CLAUDE.md: multi-threading is
         # a must; München, 2026-11-09: wikipedia's ten language indexes, one
         # after the other, 13.2 s a variant and 19-25 s an Ask — en alone
@@ -1163,6 +1172,11 @@ def _search_one_collection(con, collection, query: str, k: int, mode: str, trans
                 own.add(len(lists))
                 lists.append(variant)
         timings["fts"] = round((time.time() - t0) * 1000, 1)
+        if text_failed:
+            searched = len({g for g, _ in tasks})
+            text_why = (f"{len(text_failed)} of its {searched} text index(es) could not be searched"
+                        + ("; the others answered" if len(text_failed) < searched else "")
+                        + ": " + "; ".join(text_failed[g] for g in sorted(text_failed)))[:600]
 
     if mode in ("hybrid", "dense"):
         # F1-D6: this leg used to be gated on scope["embed_mode"] != "off",
@@ -1239,7 +1253,7 @@ def _search_one_collection(con, collection, query: str, k: int, mode: str, trans
 
     return {"catalog": catalog_hits[:CATALOG_PROMPT], "merged": merged, "translations": plan.translations,
             "timings": timings, "scope": scope, "vector_leg": vector_leg,
-            "catalog_leg": catalog_why,
+            "catalog_leg": catalog_why, "text_leg": text_why,
             "filtered": len(book_ids) if book_ids is not None else None}
 
 
@@ -1263,6 +1277,8 @@ def _legs_withheld(collection, partial: dict) -> list[dict]:
         out.append(_leg_withheld(collection, partial["vector_leg"]))
     if partial.get("catalog_leg"):
         out.append(_leg_withheld(collection, partial["catalog_leg"], leg="catalog"))
+    if partial.get("text_leg"):
+        out.append(_leg_withheld(collection, partial["text_leg"], leg="text"))
     return out
 
 
