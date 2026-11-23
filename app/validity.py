@@ -384,7 +384,31 @@ CHANGES_SQL = (
     f"WHERE k.work = ? AND (a.kind NOT IN ({','.join('?' for _ in WHOLE_REPEALS)}) OR a.article != '')")
 
 
-def first_change_detail(con, work: str, after: int) -> tuple[int, dict] | None:
+#: one key's statements of change (`first_change_detail` with a cache): the
+#: Works of one target share its keys — EUR-Lex: 24 language Works on one
+#: `celex:` key — so a batch reads each key's statements once
+KEY_CHANGES_SQL = (
+    "SELECT a.stated_by, a.target, a.article, a.amending, a.day, a.kind, s.work, s.valid_from "
+    "FROM validity_amendments a LEFT JOIN validity s ON s.uid = a.stated_by "
+    f"WHERE a.target = ? AND (a.kind NOT IN ({','.join('?' for _ in WHOLE_REPEALS)}) OR a.article != '')")
+
+
+def _statements(con, work: str, cache: dict | None) -> list:
+    """The Work's statements of change: by one query (CHANGES_SQL) without a
+    cache; with one, each of its keys' statements read once for the cache's
+    life (KEY_CHANGES_SQL), which the caller bounds to a span in which no
+    statement is written (`recompute_many`)."""
+    if cache is None:
+        return con.execute(CHANGES_SQL, (work, *WHOLE_REPEALS)).fetchall()
+    out: list = []
+    for (key,) in con.execute("SELECT key FROM validity_works WHERE work=?", (work,)):
+        if key not in cache:
+            cache[key] = con.execute(KEY_CHANGES_SQL, (key, *WHOLE_REPEALS)).fetchall()
+        out += cache[key]
+    return out
+
+
+def first_change_detail(con, work: str, after: int, cache: dict | None = None) -> tuple[int, dict] | None:
     """`(day, statement)` of the earliest change after `after` that a held
     statement says the Work's text underwent (2026-11-21, the EUR-Lex5
     review's V3/V4): an amending act's own statement on any of the Work's
@@ -406,7 +430,7 @@ def first_change_detail(con, work: str, after: int) -> tuple[int, dict] | None:
     outside. Indexed: the Work's keys (idx_validity_works_work), their
     statements (the amendments' target index), each stating version by its
     uid; grouped here (a Work's statements: tens, a code's thousands)."""
-    rows = con.execute(CHANGES_SQL, (work, *WHOLE_REPEALS)).fetchall()
+    rows = _statements(con, work, cache)
     first: dict[tuple, tuple[int, dict]] = {}
     for stated_by, target, article, amending, day, kind, s_work, s_from in rows:
         if amending:                                   # passive: the Work's own version names its amender
@@ -427,9 +451,9 @@ def first_change_detail(con, work: str, after: int) -> tuple[int, dict] | None:
     return min(later, key=lambda v: (v[0], str(v[1]["stated_by"]))) if later else None
 
 
-def first_change(con, work: str, after: int) -> int | None:
+def first_change(con, work: str, after: int, cache: dict | None = None) -> int | None:
     """The day of `first_change_detail`, or None."""
-    got = first_change_detail(con, work, after)
+    got = first_change_detail(con, work, after, cache)
     return got[0] if got is not None else None
 
 
@@ -589,14 +613,14 @@ def write_amendments(con, pairs: Iterable[tuple[str, list]]) -> int:
         touched |= _record_amendments(con, uid, rows)
         n += 1
     if changes_end(con):
-        for work in sorted(touched):
-            recompute(con, work)   # a statement may end a Work's last version (`first_change`)
+        recompute_many(con, touched)   # a statement may end a Work's last version (`first_change`)
     return n
 
 
 # ---- the manifest's version table -------------------------------------------
 
-def record(con, uid: str, native_id: int, meta: dict[str, Any], *, day: int | None = None) -> list[str]:
+def record(con, uid: str, native_id: int, meta: dict[str, Any], *, day: int | None = None,
+           targets: set[str] | None = None) -> list[str]:
     """Upsert one version and recompute its Work's chain, inside the caller's
     transaction (the rdf stage's). Returns the uids of the OTHER versions
     whose (valid_to, shown) moved; their stage marks are reset here so
@@ -604,7 +628,15 @@ def record(con, uid: str, native_id: int, meta: dict[str, Any], *, day: int | No
 
     Cost: one indexed read of the Work's versions (idx_validity_work) and
     one update per version that moved — at most the versions of one act
-    (the codes: about 400), typically one."""
+    (the codes: about 400), typically one.
+
+    `targets`: the OTHER Works this version's statements and closures touch
+    are added to it, for the caller to recompute ONCE each at its batch's
+    end (`recompute_many`), never here (2026-11-23, architecture's review of
+    #799: each recorded version recomputed every Work of each target, each
+    re-reading every statement on the target — quadratic per target inside
+    rdf's transaction: 40 amending acts in 24 languages, 27 s; ~200, minutes).
+    Without it, they are recomputed here, as before."""
     work = str(meta["work"])
     # A VERSION THAT MOVES TO ANOTHER WORK (2026-11-21, the review's V2: a
     # re-parse giving a consolidation another base act) leaves its old
@@ -626,12 +658,27 @@ def record(con, uid: str, native_id: int, meta: dict[str, Any], *, day: int | No
         declare_changes_end(con, bool(meta["changes_end"]))
     touched = _record_closures(con, uid, meta.get("closes") or [])
     if "amends" in meta:
-        targets = _record_amendments(con, uid, meta.get("amends") or [])
+        stated = _record_amendments(con, uid, meta.get("amends") or [])
         if changes_end(con):
-            touched |= targets       # an amendment ends a target's last version (rule 2)
+            touched |= stated        # an amendment ends a target's last version (rule 2)
     moved = recompute(con, work, except_uid=uid, day=day)
-    for other in sorted((touched | ({left} if left else set())) - {work}):
+    others = (touched | ({left} if left else set())) - {work}
+    if targets is not None:
+        targets |= others
+        return moved
+    for other in sorted(others):
         moved += recompute(con, other, day=day)
+    return moved
+
+
+def recompute_many(con, works: Iterable[str], *, day: int | None = None) -> list[str]:
+    """Each Work's chain once, the statements of each key read once for all
+    of them (`_statements`' cache, alive for this call: the caller writes no
+    statement during it). Returns the versions that moved."""
+    cache: dict = {}
+    moved: list[str] = []
+    for work in sorted(set(works)):
+        moved += recompute(con, work, day=day, cache=cache)
     return moved
 
 
@@ -717,8 +764,7 @@ def rechain(con, *, day: int | None = None, window: int = 2000, should_stop=lamb
                 con.execute("DELETE FROM control WHERE key=?", (CHAIN_CURSOR_KEY,))
                 con.execute("COMMIT")
                 return works_n, moved_n, True
-            for work in works:
-                moved_n += len(recompute(con, work, day=day))
+            moved_n += len(recompute_many(con, works, day=day))     # a window's keys read once
             db.set_control(con, CHAIN_CURSOR_KEY, works[-1])
             con.execute("COMMIT")
             works_n += len(works)
@@ -761,8 +807,7 @@ def roll(con, collection, *, now=None) -> int:
         con.execute("BEGIN IMMEDIATE")
     try:
         works = sorted({r[0] for r in con.execute(q, params)})
-        for work in works:
-            recompute(con, work, day=day)
+        recompute_many(con, works, day=day)
         con.execute("INSERT INTO control(key, value) VALUES(?, ?) ON CONFLICT(key) DO UPDATE SET "
                     "value=excluded.value", (ROLLED, str(day)))
         if own:
@@ -841,7 +886,8 @@ def shown_index(starts: list[int], ends: list[int | None], has_text: list[bool],
     return text[0] if text else None
 
 
-def recompute(con, work: str, *, except_uid: str | None = None, day: int | None = None) -> list[str]:
+def recompute(con, work: str, *, except_uid: str | None = None, day: int | None = None,
+              cache: dict | None = None) -> list[str]:
     """The chain of one Work: versions in order of (valid_from, native_id);
     each ends where the next starts, the last where another Work's version
     states it is repealed (`closed_at`, if later than its start and it has
@@ -863,7 +909,7 @@ def recompute(con, work: str, *, except_uid: str | None = None, day: int | None 
             start = int(r["valid_from"])
             # review §3.2 case 2: ended from outside its chain — a repeal, or
             # a change whose text this collection does not hold (yet)
-            change = first_change(con, work, start) if by_change else None
+            change = first_change(con, work, start, cache) if by_change else None
             outside = [d for d in (closed, change) if d is not None and d > start]
             to = min(outside) if outside else None
         ends.append(to)

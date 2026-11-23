@@ -261,3 +261,59 @@ def test_the_declaration_turned_on_rechains_the_manifest(tmp_path):
     assert _row(con, "e:orig") == (20130628, None, 1)
     works, moved, done = validity.rechain(con, day=DAY, ends_at_amendment_=True)
     assert done and moved == 1 and _row(con, "e:orig") == (20130628, 20190627, 1)
+
+
+def _fanout(tmp_path, n_acts, langs=("en", "fr", "de"), *, batch):
+    """One target in `langs`; n_acts amending acts in each, recorded in ONE
+    transaction — with the rdf stage's batch set, or one version at a time."""
+    from collections import Counter
+    c = collections_mod.Collection(name="t", plugin="eurlex", profile=None, embed_mode_default=None,
+                                   corpus_dir=tmp_path / "c", manifest_path=tmp_path / "m.db",
+                                   fts_dir=tmp_path / "f", lance_dir=tmp_path / "l")
+    con = db.connect(c)
+    nid = 1
+    for lang in langs:
+        validity.record(con, f"t:{lang}", nid, {**_version(20130101, work=f"T/{lang}", keys=["celex:T"])}, day=DAY)
+        nid += 1
+    con.commit()
+    calls: Counter = Counter()
+    reads = []
+    con.set_trace_callback(lambda q: reads.append(q) if "WHERE a.target = ?" in q else None)
+    real = validity.recompute
+
+    def counted(con_, work, **k):
+        calls[work] += 1
+        return real(con_, work, **k)
+    validity.recompute = counted
+    try:
+        con.execute("BEGIN IMMEDIATE")
+        targets = set() if batch else None
+        for a in range(n_acts):
+            for lang in langs:
+                validity.record(con, f"a{a}:{lang}", nid,
+                                _version(20140101 + a, work=f"A{a}/{lang}", keys=[f"celex:A{a}"], amends=["celex:T"]),
+                                day=DAY, targets=targets)
+                nid += 1
+        if batch:
+            validity.recompute_many(con, targets, day=DAY)
+        con.execute("COMMIT")
+    finally:
+        validity.recompute = real
+        con.set_trace_callback(None)
+    ends = {r[0]: (r[1], r[2]) for r in con.execute("SELECT uid, valid_to, shown FROM validity")}
+    return calls, reads, ends
+
+
+def test_a_batch_recomputes_each_target_once_and_reads_each_key_once(tmp_path):
+    """Architecture's review of #799 (2026-11-23): each recorded version
+    recomputed every Work of each target, each re-reading every statement on
+    the target — quadratic per target inside rdf's transaction (40 amending
+    acts in 24 languages: 27 s; the batch: 0.12 s). The batch's chains are the
+    per-version path's, each target Work recomputed once, each key read once."""
+    calls, reads, ends = _fanout(tmp_path / "batch", 8, batch=True)
+    per_calls, _r, per_ends = _fanout(tmp_path / "per", 8, batch=False)
+    assert ends == per_ends, "the same chains"
+    assert all(calls[f"T/{lang}"] == 1 for lang in ("en", "fr", "de")), calls
+    assert all(per_calls[f"T/{lang}"] == 8 * 3 for lang in ("en", "fr", "de")), "the old path: per version"
+    assert sum("'celex:T'" in q or "celex:T" in q for q in reads) <= 1, "the target's statements read once"
+    assert ends["t:en"][0] == 20140101

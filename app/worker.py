@@ -203,7 +203,7 @@ def _batch_log(con, stage: str, collection, msg: str, *, docs: int = 0, chunks: 
 
 
 def _rdf_one(con, row, collection, plugin, now: int, meta: dict | None = None,
-             left: dict[str, list[int]] | None = None) -> tuple:
+             left: dict[str, list[int]] | None = None, targets: set[str] | None = None) -> tuple:
     if meta is None:
         meta = plugin_io.metadata(plugin, row)
     # A LANGUAGE THAT LEAVES ITS TEXT-INDEX GROUP (architecture's review of
@@ -229,8 +229,10 @@ def _rdf_one(con, row, collection, plugin, now: int, meta: dict | None = None,
         # Work's chain; a neighbour whose end or `shown` moved has its stage
         # marks reset here, in this transaction, so its index rows follow
         from app import validity
+        # the other Works its statements touch wait for the batch's end, each
+        # recomputed once (`targets`; validity.recompute_many)
         validity.record(con, row["uid"], int(row["native_id"]), meta["validity"],
-                        day=validity.today(collection))
+                        day=validity.today(collection), targets=targets)
     else:
         # a re-parse that states no start any more leaves the chain (one
         # primary-key read when it held none; app/validity.py `forget`)
@@ -396,7 +398,12 @@ def stage_rdf(con, row, collection) -> None:
     if not con.in_transaction:               # direct callers wrap the stage
         con.execute("BEGIN IMMEDIATE")
     left: dict[str, list[int]] = {}       # group -> the documents whose language left it
-    entries = [_rdf_one(con, lead, collection, plugin, now, meta=first, left=left)]
+    # the Works the batch's statements and closures touch, recomputed ONCE each
+    # after the batch (architecture's review of #799, 2026-11-23: recomputed
+    # per recorded version, each re-reading every statement on the target,
+    # 40 amending acts in 24 languages took 27 s inside this transaction)
+    targets: set[str] = set()
+    entries = [_rdf_one(con, lead, collection, plugin, now, meta=first, left=left, targets=targets)]
     # the origin's inconsistencies each read met (06 §6.1, amended
     # 2026-10-25), recorded in this same transaction for the codes the read
     # checks — `None` when a plugin's lazy read says nothing about them
@@ -406,12 +413,15 @@ def stage_rdf(con, row, collection) -> None:
         if not ok or peer is lead:
             continue                        # a peer never fails the round
         try:
-            entries.append(_rdf_one(con, peer, collection, plugin, now, meta=meta, left=left))
+            entries.append(_rdf_one(con, peer, collection, plugin, now, meta=meta, left=left, targets=targets))
             n += 1
         except Exception:   # noqa: BLE001
             continue
         if meta.get("issues") is not None:
             found.append((peer["uid"], meta["issues"]))
+    if targets:
+        from app import validity
+        validity.recompute_many(con, targets, day=validity.today(collection))
     if found:
         issues_mod.record_many(con, found, codes=issues_mod.declared(plugin),
                                checked=plugin_io.metadata_checks(plugin), now=now)
