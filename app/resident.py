@@ -81,7 +81,7 @@ busy; one question then paid two chat cold starts of 11–15 s, and the
 back-off backed off the chat itself. So the set is fitted to a budget
 first, which the system decides (RULE 2: no list typed):
 
-    budget = threshold × total − the working margin − the eviction penalty
+    budget = threshold × total − max(the working margin, the reserve) − the eviction penalty
 
   and the set is counted AT REST: each model at the bytes its load left it
   holding, before a request grows its buffers.
@@ -272,6 +272,16 @@ MIB = 1 << 20
 #: measured in the window: the node, 2026-11-08, ~28.4 GB at rest with 11
 #: models, the reclaimer reading 95.9 % of 32.7 GB = 31.36 GB: ~2.96 GB grown
 DEFAULT_MARGIN = 3072 * MIB
+#: THE WORKING MEMORY'S RESERVE (operator, 2026-11-23, B: "Whats left are
+#: models and weights"): the budget counts the models at rest, their weights,
+#: and never less than this is kept free under the line for what requests
+#: grow (contexts made on demand, KV and compute buffers), however quiet the
+#: margin's window was. A quiet 6 h measured a margin of 0, the budget filled
+#: the card to the reclaimer's line, and the next burst evicted an idle model.
+#: The size is the peak context held at once by the models running in the same
+#: second, 3,262 MiB (docs/notes/shared-context.md §2, the card record of
+#: 2026-11-10/11); a margin measured above it counts instead
+CONTEXT_RESERVE = 3262 * MIB
 #: the eviction penalty halves after each this long without another eviction
 PENALTY_HALVING_S = 2 * 3600.0
 #: A READING BELOW THIS SHARE OF THE MODEL'S LARGEST IS NOT "AT REST" — the
@@ -834,10 +844,17 @@ class Plan:
     measured: bool
     median: int | None
     penalty: int = 0
+    reserve: int = 0
+
+    @property
+    def kept(self) -> int:
+        """What the budget keeps free under the line for working memory: the
+        margin, never less than the reserve."""
+        return max(self.margin, self.reserve)
 
     @property
     def budget(self) -> int | None:
-        return None if self.line is None else self.line - self.margin - self.penalty
+        return None if self.line is None else self.line - self.kept - self.penalty
 
     @property
     def fitting(self) -> frozenset[tuple[str, str]]:
@@ -850,8 +867,11 @@ class Plan:
                "the default: nothing measured in the last "
                f"{MARGIN_WINDOW_S / 3600:.0f} h")
         pen = f" − {self.penalty // MIB:,} MiB for evictions" if self.penalty else ""
+        kept = (f"margin {self.margin // MIB:,} MiB, {how}" if self.margin >= self.reserve else
+                f"the working memory's reserve {self.reserve // MIB:,} MiB (the margin, "
+                f"{self.margin // MIB:,} MiB {how}, is under it)")
         return (f"the budget is {max(0, self.budget) // MIB:,} MiB (the {self.threshold:.2f} line "
-                f"{self.line // MIB:,} MiB − margin {self.margin // MIB:,} MiB, {how}{pen})")
+                f"{self.line // MIB:,} MiB − {kept}{pen})")
 
 
 def _ago(seconds: float) -> str:
@@ -863,7 +883,8 @@ def _ago(seconds: float) -> str:
 
 
 def plan(want: Iterable[Resident], mem: Memory, *, threshold: float,
-         used: dict[tuple[str, str], float], now: float, reserved: int = 0) -> Plan:
+         used: dict[tuple[str, str], float], now: float, reserved: int = 0,
+         reserve: int | None = None) -> Plan:
     """THE BUDGET, filled: the set in priority order (`tier_of`; within a
     tier the most recently used first, then the never used, smaller first),
     each at its AT-REST size (never seen: the median of the set's known
@@ -884,14 +905,15 @@ def plan(want: Iterable[Resident], mem: Memory, *, threshold: float,
     ranked = sorted(want, key=order)
     margin, measured = mem.margin(now)
     penalty = mem.penalty_now(now) + int(reserved)
+    keep = CONTEXT_RESERVE if reserve is None else int(reserve)
     line = None if not mem.total else int(threshold * mem.total)
-    budget = None if line is None else line - margin - penalty
+    budget = None if line is None else line - max(margin, keep) - penalty
     uses: dict[int, list[float]] = {}
     for r in ranked:
         if used.get(r.key) is not None:
             uses.setdefault(tier_of(r)[0], []).append(used[r.key])
     taken, placed = 0, []
-    head = Plan((), line, threshold, margin, measured, median, penalty)
+    head = Plan((), line, threshold, margin, measured, median, penalty, keep)
     for rank, r in enumerate(ranked, 1):
         tier, size, need, t = tier_of(r)[0], sizes[r.key], counted[r.key], used.get(r.key)
         seen = ("on another card: costs this one nothing" if r.key in mem.elsewhere else
@@ -918,7 +940,7 @@ def plan(want: Iterable[Resident], mem: Memory, *, threshold: float,
                       + " — loaded at its first request, then left to the reclaimer's LRU")
             fits, why = False, f"not preloaded — {head.says()}; {detail}"
         placed.append(Placed(r, rank, tier, size, _size(r, mem), need, t, fits, why, detail))
-    return Plan(tuple(placed), line, threshold, margin, measured, median, penalty)
+    return Plan(tuple(placed), line, threshold, margin, measured, median, penalty, keep)
 
 
 def _plan_now(want: Iterable[Resident], mem: Memory | None = None) -> Plan:
@@ -1466,6 +1488,11 @@ def show() -> dict[str, Any]:
                               if p.measured else
                               f"the default {DEFAULT_MARGIN // MIB:,} MiB: nothing measured in the last "
                               f"{MARGIN_WINDOW_S / 3600:.0f} h"),
+                   "reserve_mib": p.reserve // MIB,
+                   "reserve": (f"{p.reserve // MIB:,} MiB kept for working memory whatever the margin "
+                               f"(operator, 2026-11-23, B); "
+                               + ("the margin is above it and counts" if p.margin >= p.reserve else
+                                  "it counts, the margin being under it")),
                    "penalty_mib": p.penalty // MIB,
                    "penalty": (f"{p.penalty // MIB:,} MiB for the reclaimer's evictions of preloaded models, "
                                f"the last at "

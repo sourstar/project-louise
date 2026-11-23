@@ -106,3 +106,25 @@ wheel" (CLAUDE.md), the case is solved simply and the standard written down:
   CUDA or ROCm card, kvcached is the off-the-shelf answer for the KV share;
   or if kvcached lands for llama.cpp (its roadmap), at least on the card we
   run.
+
+
+## 2026-11-23: the reserve (operator, B)
+
+The operator's definition: "Whats left are models and weights". The keeper's
+budget counts each model at rest (its weights), and the working memory —
+contexts made on demand, KV and compute buffers — is kept outside it:
+`app/resident.py` `CONTEXT_RESERVE`, this note's §2 peak, 3,262 MiB, is kept
+free under the reclaimer's line however quiet the margin's 6 h window was
+(a margin measured above it counts instead). The reclaimer's line moves to
+0.98 in LocalAI's settings (`memory_reclaimer_threshold`), which the keeper
+reads; between the line and the card's full 100 %, 650 MiB stay a safety
+net. On the B70 (32,656 MiB): the budget 0.98 × 32,656 − 3,262 = 28,741
+MiB, against 31,020 before, when a quiet window had measured a margin of 0.
+
+Open, measured before the reserve is sized again: the three on-demand
+embedders (bge-m3, nemotron-3-embed-1b, qwen3-embedding-4b) read the same
+size at rest and at their largest. Either the keeper's once-a-minute
+samples never catch a context that lives for a request plus a 20 ms keep,
+or the freed memory is not given back to the card, and the reserve then
+counts it twice. vega-bge-m3's backend, sampled every 50 ms (xe fdinfo)
+idle, through a burst and after, tells which.
