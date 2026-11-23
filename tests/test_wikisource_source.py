@@ -78,3 +78,17 @@ def test_parse_reads_nothing_fetch_did_not_hash(tmp_path, isolated_config):
     ref = _refs(tmp_path)[0]
     assert_covered(SRC, ref, tmp_path,
                    discover_state=lambda: DiscoverState(corpus_root=tmp_path, snapshot="20261101"))
+
+
+def test_the_acquisition_takes_a_runs_dump_and_index_per_language_behind_the_terms():
+    """Bulk first (design note §2): the dated dump and its index of each
+    language, two connections, yellow, the plugin's terms byte-exact."""
+    from app.acquire import specs
+    from app.plugins.base import LicenseClass
+    spec = specs.ACQUIRE_REGISTRY["wikisource"]
+    assert [f.rel_path for f in spec.snapshot_files("20261101") if f.rel_path.startswith("itwikisource/")] == [
+        "itwikisource/20261101/itwikisource-20261101-pages-articles-multistream.xml.bz2",
+        "itwikisource/20261101/itwikisource-20261101-pages-articles-multistream-index.txt.bz2"]
+    assert spec.endpoints[0].max_conns == 2 and spec.license_class is LicenseClass.YELLOW
+    assert spec.terms_text_path.read_bytes().startswith(b"Wikisource text is licensed under")
+    assert spec.slice_profiles["lang=it"] == "it" and SRC.license_class is LicenseClass.YELLOW
