@@ -175,16 +175,23 @@ def test_the_governors_state_follows_the_apps_data_wherever_it_is():
     vols = want["services"]["gpu-governor"]["volumes"]
     assert "/mnt/ssd3/louise-data/state:/data/state" in vols
     assert not any(v.startswith("/mnt/ssd4/apps/louise-rag/data/") for v in vols), vols
-    assert said and "becomes /mnt/ssd3/louise-data/state" in said[0]
     assert [v for v in vols if not v.endswith(":/data/state")] == \
         [v for v in _governor()["services"]["gpu-governor"]["volumes"] if not v.endswith(":/data/state")], \
         "every other bind as the file says"
 
 
 def test_the_governors_state_today_is_unchanged_and_said_so():
+    """The file names the live /data (ssd3 since 2026-11-23): stage 8 says
+    "already", never a change it does not make (München, #821's deploy)."""
+    want, said = fm.governor_config(_governor(), _louise("/mnt/ssd3/louise-data"))
+    assert "/mnt/ssd3/louise-data/state:/data/state" in want["services"]["gpu-governor"]["volumes"]
+    assert said == []
+
+
+def test_the_governor_follows_data_back_too():
     want, said = fm.governor_config(_governor(), _louise("/mnt/ssd4/apps/louise-rag/data"))
     assert "/mnt/ssd4/apps/louise-rag/data/state:/data/state" in want["services"]["gpu-governor"]["volumes"]
-    assert said == []
+    assert said and "becomes /mnt/ssd4/apps/louise-rag/data/state" in said[0]
 
 
 def test_the_governor_keeps_a_binds_options_and_a_dict_form():
