@@ -155,6 +155,12 @@ def test_a_deferred_large_head_never_makes_the_round_wait_on_the_lane(stage, tmp
     c, con, _row = _setup(tmp_path, stage)
     monkeypatch.setattr(config, "PARSE_PROCESSES", 4)
     monkeypatch.setattr(parallel, "pool", lambda: _Pool())
+    # _Pool runs a child's task (`_compute_heavy`) in THIS process: its
+    # give-back (gc.collect + malloc_trim above TRIM_ABOVE_BYTES) is a child's,
+    # on a part's heap. Here it would collect the test process's — ~1.7 GB
+    # resident late in the whole suite, ~0.1-0.2 s a round — and the round's
+    # timing below would measure the suite's heap, not the lane's wait
+    monkeypatch.setattr(parallel, "_give_back", lambda: None)
     monkeypatch.setattr(parallel, "peak_per_byte", lambda collection: K)
     monkeypatch.setattr(scheduled_checks, "cgroup_memory", lambda cgroup=None: None)
     monkeypatch.setattr(parallel, "LARGE_WAIT_S", 0.5)
