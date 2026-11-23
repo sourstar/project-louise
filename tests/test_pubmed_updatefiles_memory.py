@@ -111,7 +111,8 @@ def test_the_heap_stays_flat_over_many_update_files(tmp_path, isolated_config, s
             peaks.append(tracemalloc.get_traced_memory()[1])
             after.append(_held_by_the_path(tracemalloc.take_snapshot()))
         tracemalloc.stop()
-        assert withdrawn[0] == FILES * (PER_FILE // 20), "every DeleteCitation withdrawn"
+        # twice each: before the tombstone commits and after it (discovery.py, defect 7)
+        assert withdrawn[0] == 2 * FILES * (PER_FILE // 20), "every DeleteCitation withdrawn"
         pending = con.execute("SELECT COUNT(*) FROM documents WHERE error IS NULL AND "
                               "(rdf_done=0 OR fts_done=0)").fetchone()[0]
         assert pending == 0, "every revision and new citation indexed"

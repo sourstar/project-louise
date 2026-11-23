@@ -407,6 +407,37 @@ follows, the two tests that pin 3 move to 4) and the three recipes' `version = 4
 line each), so that a legal collection created after the move lands in S4. Recommendation:
 A. If the operator says nothing: nothing moves until the drift numbers are in (M1), then A.
 
+### 4.7 The hand route as run (M1, from 2026-11-23)
+
+The operator chose M1 = A: all four collections move to v4, one at a time (NeuRIS, legi_F,
+Normattiva, then EUR-Lex5), by §4.6 C, each successor a sister. NeuRIS was the pilot,
+swapped at 17:17Z: 82,536 carried, 134 dropped, 142 to embed, the S4 gate exact. What it
+taught, in order:
+
+1. `node pause <name>.next`, then `node pause <name>`. A name not yet held may be paused.
+2. The layers: the predecessor's Codex layers with the chunker version set to 4.
+3. `hold collection derive <name> --layers FILE --name <name>.next --accept`. A
+   layers-only sister inherits her sister's calibration member, so nothing is embedded.
+   She also inherits her sister's [encoder]. Until 2026-11-23 she did not: legi_F.next
+   was refused for having no [encoder].
+   3b. Her file becomes the predecessor's, with `recreate.carried_file`, as re-create's
+   swap does it: every key as the operator left it, `codex` replaced, embed "off".
+4. `dev carry <name> <name>.next --rechunked [--dry-run | --yes]`, BEFORE the records
+   build: the carry refuses a target whose manifest holds documents.
+   - The dry run reads the target under the acknowledgement its --yes carries.
+     Until 2026-11-23 a yellow-class target with no ack was refused.
+   - On a fully embedded source the dry run counts what the drift tool (§3) already
+     counted. Once NeuRIS's agreed with its drift line, the drift count stood in for the
+     dry run on legi_F and Normattiva, a whole pass each (RULE 1). The --yes totals are
+     checked against it before step 5.
+5. `hold records build <name>.next --records-from <name>`, validation, snapshot. EUR-Lex5
+   holds no records, so it skips this step. Its records are built once, after Legal's
+   restart.
+6. The S4 gate, once, on NeuRIS.next. 7. `hold check --checks vectors-sample`.
+8. `forget <name> --yes`, `rename <name>.next <name>` (the pause moves with the name),
+   `node resume <name>`, then `hold config apply <name> --set embed=<the predecessor's>`,
+   the operator's own value. EUR-Lex5 stops before this step, paused for its restart.
+
 ## 5. Conclusion
 
 Moving the shared space to v4 replaces S3 with a new space S4 and re-creates the four
