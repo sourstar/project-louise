@@ -573,7 +573,9 @@
 
   async function synth(r, it) {
     const s = it.text;
-    const body = { input: s }; if (r.lang) body.language = r.lang;
+    // the answer's language where the page shows it in one; else the answer so far, for the node to
+    // tell its language when this sentence alone cannot (app/speech.py `context`)
+    const body = { input: s }; if (r.lang) body.language = r.lang; else if (r.text) body.context = r.text.slice(0, 2000);
     if (r.voice) body.voice = r.voice;
     it.t.sent = now();
     // the reading's order: the node sends sentence n once n - 1 is back

@@ -2626,11 +2626,19 @@ def _held_file(root, name: str) -> Path:
 def _inherited_encoder(root, sister: cx.Codex, her_sister: cx.Codex,
                        space_from: cx.Codex | None) -> dict:
     """A sister derived with no --encoder: the [encoder] of the collection
-    whose SPACE she is in — her sister's, or the `--space-from` source's —
-    from its file; that endpoint already serves her space. `{}` when she is
-    in neither's (the file then names none, and says so)."""
+    whose ENCODER she has — her sister's, or the `--space-from` source's —
+    from its file; that endpoint already serves her encoder. The same space
+    has it, and so has a space that differs from it only outside the
+    encoder and its query side: a layers-only sister, M1's successor at
+    chunker v4 (2026-11-23: legi_F.next was refused for want of an
+    [encoder] its sister's file named). `{}` when she shares neither's
+    encoder (the file then names none, and says so)."""
+    def serves(source: cx.Codex) -> bool:
+        return source.space_id == sister.space_id or (
+            source.space.encoder == sister.space.encoder and source.space.query == sister.space.query)
+
     for source in (her_sister, space_from):
-        if source is None or source.space_id != sister.space_id:
+        if source is None or not serves(source):
             continue
         path = _held_file(root, col.name_of(root, source.collection_id))
         if not path.is_file():
@@ -2640,7 +2648,7 @@ def _inherited_encoder(root, sister: cx.Codex, her_sister: cx.Codex,
             return {"encoder": enc["url"], "query_encoder": enc.get("query_url"),
                     "api": enc.get("api") or "openai", "embed_model": enc.get("embed_model"),
                     "query_model": enc.get("query_model")}
-    print(f"note: {sister.collection_id[:23]}… is in a space no collection held here "
+    print(f"note: {sister.collection_id[:23]}… has an encoder no collection held here "
           f"serves, and no --encoder was given: its file names no [encoder] and is "
           f"refused until one is added (07 §7.8)", file=sys.stderr)
     return {}

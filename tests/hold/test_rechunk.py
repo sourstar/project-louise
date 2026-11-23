@@ -682,3 +682,55 @@ def test_a_source_holding_no_vector_and_no_snapshot_moves_with_nothing_carried(i
     assert t == dry["totals"], "the dry run counted what the run did"
     assert not _table(root), "no row in the target's table"
     assert {m[0] for m in _marks(root).values()} == {0}, "every document to embed"
+
+
+# ---- a yellow-class pair: the dry run reads its target under the ack the --yes
+# carries (2026-11-23: legi_F.next's dry run was refused for want of it) ----------
+
+def _yellow(tmp_path) -> dict:
+    import hashlib
+    body = b"Terms both collections pin.\n"
+    p = tmp_path / "TERMS.txt"
+    p.write_bytes(body)
+    return {"class": "yellow", "terms_sha256": "sha256:" + hashlib.sha256(body).hexdigest(),
+            "terms_path": str(p)}
+
+
+def test_a_yellow_pair_s_dry_run_reads_the_target_under_the_ack_its_yes_carries(
+        isolated_config, tmp_path, capsys):
+    from app import louise
+    corpus = _greek_corpus(tmp_path)
+    root = tmp_path / "collections"
+    lic = _yellow(tmp_path)
+    v3 = _create(root, "v3", 3, license=lic)
+    assert louise.main(["hold", "collection", "ack", "v3", "--root", str(root), "--yes"]) == 0
+    rec.build(root, "v3", corpus_dir=corpus, records_per_shard=2, log=quiet)
+    rec.write_validation(root, "v3")
+    sn.create(root, "v3", snapshot_id="2026-11", log=quiet)
+    _create(root, "v4", 4, license=lic)
+    _embedded(root, v3)
+    capsys.readouterr()
+    assert not (root / "v4" / "state" / "ack.json").exists(), "the target holds no ack before its --yes"
+    before = _files(root / "v3", root / "v4")
+    assert louise.main(["dev", "carry", "v3", "v4", "--root", str(root), "--rechunked", "--dry-run"]) == 0
+    dry = json.loads(capsys.readouterr().out)["rechunked"]
+    assert _files(root / "v3", root / "v4") == before, "the dry run writes nothing, no ack either"
+    assert louise.main(["dev", "carry", "v3", "v4", "--root", str(root), "--rechunked", "--yes"]) == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out["ack"] == "carried" and out["rechunked"]["done"]
+    assert out["rechunked"]["totals"] == dry["totals"] and dry["totals"]["carried"] > 0
+    assert (root / "v4" / "state" / "ack.json").read_bytes() == (root / "v3" / "state" / "ack.json").read_bytes()
+
+
+def test_an_ack_the_yes_would_not_carry_is_said_without_writing(tmp_path):
+    from types import SimpleNamespace
+
+    from app.hold import recreate
+    codex = SimpleNamespace(license=SimpleNamespace(terms_sha256="sha256:" + "ab" * 32))
+    assert "holds no acknowledgement" in recreate.ack_not_carried(tmp_path, "v3", "v4", codex)
+    (tmp_path / "v3" / "state").mkdir(parents=True)
+    (tmp_path / "v3" / "state" / "ack.json").write_text(json.dumps({"terms_sha256": "sha256:" + "cd" * 32}))
+    assert "the Codex pins" in recreate.ack_not_carried(tmp_path, "v3", "v4", codex)
+    (tmp_path / "v3" / "state" / "ack.json").write_text(json.dumps({"terms_sha256": "sha256:" + "ab" * 32}))
+    assert recreate.ack_not_carried(tmp_path, "v3", "v4", codex) is None
+    assert not (tmp_path / "v4").exists()

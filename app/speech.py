@@ -443,6 +443,19 @@ def synthesize(body: dict[str, Any], url: str | None = None) -> tuple[int, bytes
     return synthesize_timed(body, url)[:3]
 
 
+#: what a recorded voice is told to speak when no language is known: OmniVoice's
+#: auto ("none": the engine reads the language from the text), never the
+#: profile's own tag. LocalAI v4.11.0 (core/http/endpoints/localai/tts.go) uses a
+#: request's `language` and, where it has none, the profile's, which is the
+#: language the RECORDING is in ("it-IT"); OmniVoice conditions the whole
+#: synthesis on that one tag, and an English sentence came out with a thick
+#: Italian accent (operator, 2026-11-23: "change it accordingly to the language
+#: they have to speak")
+AUTO = "none"
+#: how much of the answer the page sends as `context` is read for its language
+CONTEXT_CHARS = 2000
+
+
 def synthesize_timed(body: dict[str, Any], url: str | None = None, *,
                      reading: str | None = None, n: int | None = None,
                      last: bool = False, account_voice: str | None = None) -> tuple[int, bytes, str, list]:
@@ -458,10 +471,15 @@ def synthesize_timed(body: dict[str, Any], url: str | None = None, *,
     if not text:
         return 400, b'{"error": {"message": "no text to speak once its citations are removed"}}', \
             "application/json", []
-    out = {**body, "input": text}
+    # `context`: the answer so far (app/static/voice.js), Louise's alone and
+    # never relayed. A sentence too short to tell its language is spoken in
+    # the language of the answer it is part of
+    context = str(body.get("context") or "")[:CONTEXT_CHARS]
+    out = {k: v for k, v in body.items() if k != "context"}
+    out["input"] = text
     if model:
         out["model"] = model
-    lang = language(text)
+    lang = language(text) or (language(context) if context else None)
     held = profiles(url)
     # the reader's voice — the request's (the Ask page's choice, a client's
     # own), else the one the asker's account keeps (app/users.py) — unless it
@@ -470,12 +488,14 @@ def synthesize_timed(body: dict[str, Any], url: str | None = None, *,
     asked = next((v for v in (body.get("voice") or None, account_voice or None)
                   if v and held_profile(v, held)), None)
     voice = voice_for(asked or node.tts_voice or None, held)
-    if voice:
-        out["voice"] = voice
-    else:
-        out.pop("voice", None)
     if lang and "language" not in out:
         out["language"] = lang
+    if voice:
+        out["voice"] = voice
+        if str(voice).startswith(PROFILE_PREFIX) and not out.get("language"):
+            out["language"] = AUTO
+    else:
+        out.pop("voice", None)
     # NUMBERS AND DATES IN THE TEXT'S OWN WORDS (operator, 2026-11-08, A): the
     # one voice reads digits as it learned them, in Italian (app/speech_numbers.py)
     from app import speech_numbers

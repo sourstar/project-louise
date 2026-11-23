@@ -1659,9 +1659,14 @@ The MCP server's `initialize` gives the same text as its
 **Speech** (*added 2026-11-06, -07*; `app/speech.py`, `app/transcribe.py`,
 `app/voice.py`). OpenAI's two audio endpoints, relayed to the node's model
 server with what only Louise knows. `POST /v1/audio/speech` `{input, model,
-voice, language}`: nothing in square brackets is read (a citation, in
+voice, language, context}`: nothing in square brackets is read (a citation, in
 whatever shape the language writes it), one voice for every language, the
-text's language sent as `language`, the model pinned from the first
+text's language sent as `language`. Where the sentence alone cannot tell its
+language, `context` (the answer so far, which the page sends when it shows
+the answer in its original language; never relayed) tells it. A recorded
+voice with no language known is sent `language = "none"`, OmniVoice's auto,
+never left to its profile's own tag, which is the recording's language and
+read every language with its accent (*2026-11-23*). The model is pinned from the first
 sentence until 120 s after the end of the last; a request naming no model
 or voice gets `[speech] tts_model` and `tts_voice` (§7.8), and one naming a
 voice profile the model server no longer holds gets `tts_voice` too (the

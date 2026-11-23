@@ -298,3 +298,33 @@ def test_every_sentence_the_last_included_keeps_the_question_open_five_minutes(s
 def test_markdown_is_not_read(text, said):
     assert speech.speakable(text) == said
     assert "*" not in speech.speakable(text) and "#" not in speech.speakable(text)
+
+
+# ---- the language a recorded voice speaks (operator, 2026-11-23: "change it
+# accordingly to the language they have to speak otherwise they have a thick
+# italian accent"): LocalAI takes the profile's own tag where the request names
+# no language, and the profile's tag is the recording's ---------------------------
+
+def test_a_short_sentence_is_spoken_in_the_language_of_its_answer(server):
+    calls, _ = server
+    context = "The poem was written by Dante in the fourteenth century. It is read in every school."
+    speech.synthesize({"model": "omnivoice-cpp", "input": "Dante.", "voice": PHILIPPE, "context": context},
+                      url="http://ai:8080")
+    sent = calls[-1][1]
+    assert sent["language"] == "en", "the answer's language, where the sentence alone cannot say"
+    assert "context" not in sent, "the answer so far is Louise's alone, never relayed"
+
+
+def test_a_recorded_voice_is_never_left_to_its_profile_s_own_tag(server):
+    calls, _ = server
+    speech.synthesize({"model": "omnivoice-cpp", "input": "Dante.", "voice": PHILIPPE}, url="http://ai:8080")
+    assert calls[-1][1]["language"] == speech.AUTO, "no language known: the engine's auto, not the recording's"
+    speech.synthesize({"model": "omnivoice-cpp", "input": "Dante.", "voice": PHILIPPE, "language": "de"},
+                      url="http://ai:8080")
+    assert calls[-1][1]["language"] == "de", "the page's language stands"
+
+
+def test_a_model_s_own_voice_is_sent_as_before(server):
+    calls, _ = server
+    speech.synthesize({"model": "kokoro", "input": "Dante.", "voice": "alloy"}, url="http://ai:8080")
+    assert "language" not in calls[-1][1], "no profile, no tag to override: nothing added"
