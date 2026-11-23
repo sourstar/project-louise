@@ -14,8 +14,9 @@ closing one of its last — `[start, end)`, the member its locator names. A
 page whose rows straddle two INSERT statements takes the statement break
 with them, as the dump wrote it.
 
-TWO STATEMENT LAYOUTS, read alike. Runs up to 20260901 write each INSERT on
-one line, `INSERT INTO `t` VALUES (…),(…);`; from 20261001 dumps.wikimedia.org
+TWO STATEMENT LAYOUTS, read alike. Runs up to 20260801 write each INSERT on
+one line, `INSERT INTO `t` VALUES (…),(…);` (trwiki 20260701, 20260801);
+from the 20260901 runs on (itwiki 20260901, 20261101) dumps.wikimedia.org
 writes `INSERT INTO `t` VALUES` alone on its line and then one tuple a line,
 each ending in `,` and the statement's last in `;` (read from the runs'
 own files by Range, 2026-11-23). The old reader matched only the first

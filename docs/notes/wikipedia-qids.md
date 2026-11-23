@@ -53,10 +53,11 @@ Measured on trwiki-20260801: 22 MB, 1,278,431 pages with rows, 1,127,794 QIDs,
 pack built in 4.8 s (enwiki, ~20× the bytes, about 100 s), every unit equal
 to its byte slice of the decompressed file.
 
-**Two statement layouts (found 2026-11-23).** Runs up to 20260901 write each
-INSERT on one line. From 20261001, dumps.wikimedia.org writes `INSERT …
-VALUES` alone on its line, then one tuple a line; this was read by Range from
-itwiki's and itwikisource's 20261001 and 20261101 files. The first reader
+**Two statement layouts (found 2026-11-23).** Runs up to 20260801 write each
+INSERT on one line (trwiki 20260701 and 20260801, read by Range). From the
+20260901 runs on, dumps.wikimedia.org writes `INSERT … VALUES` alone on its
+line, then one tuple a line (itwiki 20260901 and 20261101, itwikisource
+20261001 and 20261101, read by Range). The first reader
 matched only the first layout and read a new-layout file as a table with no
 row: on the real itwikisource-20261101 file it gave 0 units, with no error,
 so every page of such a run would have lost its QID. `iter_units` now reads
