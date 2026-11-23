@@ -87,6 +87,58 @@ def test_a_deferred_selected_row_costs_itself_never_its_batch(stage, tmp_path, m
     assert _state(con, row["uid"])[col] == 1
 
 
+@pytest.mark.parametrize("stage,where", [("rdf", "_rdf_one"), ("fts", "index_books"), ("fts", "marks")])
+def test_the_leads_failure_is_recorded_on_the_lead_never_on_the_deferred_row(stage, where, tmp_path, monkeypatch,
+                                                                             isolated_config):
+    """The EUR-Lex5 review's probe (defect 2): the selected row deferred, a
+    peer leading, and the lead's work raising — its own `_rdf_one`, the
+    batch's `fts.index_books`, the marks. `_execute_step`'s error path wrote
+    the failure onto the SELECTED row's uid: the deferred row ended ("rdf:
+    lead's own failure", 1, 0, 0), out of every selection, and the failing
+    lead untouched."""
+    c, con, row = _setup(tmp_path, stage)
+    before = _state(con, row["uid"])
+    batch: list = []
+    if stage == "rdf":
+        real = parallel.metadata_for_rows
+
+        def meta(collection, rows):
+            batch[:] = [r["uid"] for r in rows]
+            got = real(collection, rows)
+            return [DEFER if r["uid"] == row["uid"] else g for r, g in zip(rows, got)]
+        monkeypatch.setattr(parallel, "metadata_for_rows", meta)
+        real_one = worker._rdf_one
+
+        def rdf_one(con_, r, *a, **kw):
+            if r["uid"] == batch[1]:
+                raise RuntimeError("lead's own failure")
+            return real_one(con_, r, *a, **kw)
+        monkeypatch.setattr(worker, "_rdf_one", rdf_one)
+    else:
+        real = parallel.fts_for_rows
+
+        def fts_rows(collection, rows, *, names):
+            batch[:] = [r["uid"] for r in rows]
+            got = real(collection, rows, names=names)
+            return [DEFER if r["uid"] == row["uid"] else g for r, g in zip(rows, got)]
+        monkeypatch.setattr(parallel, "fts_for_rows", fts_rows)
+
+        def fail(*a, **kw):
+            raise RuntimeError("lead's own failure")
+        if where == "index_books":
+            monkeypatch.setattr(worker.fts, "index_books", fail)
+        else:
+            monkeypatch.setattr(worker, "_mark_indexed_many", fail)
+    assert worker._execute_step(con, c, stage, row) is True, "an attempt: its failure recorded"
+    lead = batch[1]
+    assert lead != row["uid"]
+    assert _state(con, row["uid"]) == before, "the deferred row stays deferred: no error, its retries unchanged"
+    err, retries, rdf_done, fts_done = _state(con, lead)
+    assert err == f"{stage}: lead's own failure" and retries == 1, "the failure is the lead's"
+    assert (rdf_done if stage == "rdf" else fts_done) == 0
+    assert all(_state(con, u)[0] is None for u in batch[2:]), "no other row blamed"
+
+
 def test_a_memory_kill_is_held_and_never_written_on_the_document(tmp_path, monkeypatch, isolated_config):
     """The operator's rule of 2026-11-19 (#779): the first memory kill is not
     computed again; the worker's hold is written by its handler. The row it
