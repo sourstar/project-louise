@@ -213,7 +213,7 @@ grep -q "^def prefetch_held(collection, rows: list\[dict\]) -> None:" "$ROOT/src
 grep -q "^def _columns_of(buf: list\[dict\], lines: list) -> tuple | None:" "$ROOT/src.new/app/pack/build.py"   # #150 (5487524): a part to its writer as columns and one bytes object
 grep -q "^def _reparse_many_from(codex, name: str, origin_dir" "$ROOT/src.new/app/louise.py"   # #152 (a2100c5): records-vs-origin re-parses in the parse pool
 grep -q "^def _compared_in_part(ctx: Ctx, ran, keep, size_of: dict, per_unit: dict," "$ROOT/src.new/app/hold/check.py"   # #153 (698dcfd): a heavy origin unit is compared in part, by the seed
-grep -q '^WHOLE_KINDS = ("terms", "validation", "slicing", "calibration", "seals")' "$ROOT/src.new/app/share/holdings.py"   # a8fa256: the family map is a whole-collection member
+grep -q '^WHOLE_KINDS = ("terms", "validation", "slicing", "select", "calibration", "seals")' "$ROOT/src.new/app/share/holdings.py"   # a8fa256: the family map is a whole-collection member; 2026-11-23: the selection rules too
 grep -q '^SHOWN_ONLY = ("origin",)' "$ROOT/src.new/app/copy_state.py"   # #154 (28b265f): records-vs-origin is optional and gates nothing (operator 2026-11-01)
 grep -q '^TABLE_KEYS: dict\[str, str\] = {}' "$ROOT/src.new/app/pack/slicing.py"   # #155 (b7d54a7): per-value vector tables, INERT while no key is declared; grow fix (bb0a391)
 grep -q "^def settle_stopped(collection, state_dir: Path, con, log=None) -> bool:" "$ROOT/src.new/app/share/seeder.py"   # #156 (0333c15): the SHARE box's graceful stop
