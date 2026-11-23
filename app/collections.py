@@ -17,7 +17,7 @@ from typing import Any
 
 from . import config, vector_place
 from .plugins import (deposit, embedded, eurlex, gutenberg, legi, neuris, normattiva, pubmed,
-                      wikidata, wikipedia)
+                      wikidata, wikipedia, wikisource)
 from .plugins.base import CorpusSource
 
 # `genome` and `packed` were boxed on 2026-09-14 and removed on 2026-11-01
@@ -34,6 +34,8 @@ PLUGIN_REGISTRY: dict[str, CorpusSource] = {
     "pubmed": pubmed.SOURCE,
     "wikidata": wikidata.SOURCE,
     "wikipedia": wikipedia.SOURCE,
+    # Wikisource's works, every language a slice (docs/notes/wikisource-design.md)
+    "wikisource": wikisource.SOURCE,
 }
 
 

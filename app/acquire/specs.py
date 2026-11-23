@@ -229,6 +229,59 @@ WIKIPEDIA_SPEC = AcquisitionSpec(
 )
 
 
+#: WIKISOURCE (docs/notes/wikisource-design.md §2: bulk first): each
+#: language's multistream dump and its index of a pinned run, the only files
+#: its records read today. The compressed text dumps' sizes as the planning
+#: session measured them (2026-11-19).
+_WIKISOURCE_DUMP_BYTES: dict[str, int] = {
+    "it": 450_000_000, "en": 3_440_000_000, "fr": 2_600_000_000, "de": 580_000_000, "es": 250_000_000,
+}
+WIKISOURCES = tuple(f"{lang}wikisource" for lang in _WIKISOURCE_DUMP_BYTES)
+
+
+def _wikisource_files(wiki: str, snapshot: str = "latest") -> tuple[RemoteFile, ...]:
+    """A Wikisource run's multistream dump and its index, dated, as
+    `_wiki_files` names Wikipedia's (an immutable URL per run)."""
+    base = f"{wiki}/{snapshot}/{wiki}-{snapshot}-pages-articles-multistream"
+    return (RemoteFile(rel_path=f"{base}.xml.bz2"), RemoteFile(rel_path=f"{base}-index.txt.bz2"))
+
+
+def _wikisource_snapshot_files(snapshot: str) -> tuple[RemoteFile, ...]:
+    return sum((_wikisource_files(w, snapshot) for w in WIKISOURCES), ())
+
+
+def wikisource_snapshots(timeout: float = 30.0) -> tuple[str, ...]:
+    """The runs dumps.wikimedia.org offers for it.wikisource, newest first."""
+    return wikipedia_snapshots("itwikisource", timeout=timeout)
+
+
+WIKISOURCE_SPEC = AcquisitionSpec(
+    source_id="wikisource",
+    transport=Transport.HTTPS,
+    endpoints=(
+        Endpoint(transport=Transport.HTTPS, url="https://dumps.wikimedia.org",
+                 max_conns=2,   # dumps.wikimedia.org etiquette: max 2 connections
+                 static_files=sum((_wikisource_files(w) for w in WIKISOURCES), ())),
+    ),
+    layout="container-files",
+    filters=("*multistream.xml.bz2", "*multistream-index.txt.bz2"),
+    checksums=ChecksumSource(kind="none"),
+    delta=DeltaSpec(mode="dated-dumps"),
+    snapshot_files=_wikisource_snapshot_files,
+    snapshot_index=wikisource_snapshots,
+    profiles={
+        # a language per profile, combining: the native id carries the language
+        **{lang: Filter(include=(f"{lang}wikisource/*",)) for lang in _WIKISOURCE_DUMP_BYTES},
+        "all": Filter(),
+    },
+    profile_mode="additive",
+    slice_profiles={f"lang={lang}": lang for lang in _WIKISOURCE_DUMP_BYTES},
+    estimated_bytes={**dict(_WIKISOURCE_DUMP_BYTES), "all": sum(_WIKISOURCE_DUMP_BYTES.values())},
+    license_class=LicenseClass.YELLOW,          # CC BY-SA (design note §5)
+    terms_text_path=Path(__file__).parent.parent / "plugins" / "wikisource" / "TERMS.txt",
+)
+
+
 # ~4.4 KB per row (633 GB / 144M rows, dataset card); per-language row
 # counts from the card. Profiles select a LANGUAGE — each is a complete,
 # self-contained corpus, and the pre-embedded vectors make even "en" a
@@ -688,4 +741,5 @@ ACQUIRE_REGISTRY: dict[str, AcquisitionSpec] = {
     "pubmed": PUBMED_SPEC,
     "wikidata": WIKIDATA_SPEC,
     "wikipedia": WIKIPEDIA_SPEC,
+    "wikisource": WIKISOURCE_SPEC,
 }

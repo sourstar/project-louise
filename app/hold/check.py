@@ -441,6 +441,12 @@ def check_roots(ctx: Ctx) -> Outcome:
                                                     r.root) for r in rels])):
         if ok is not None and not ok:
             failed.append(f"relations/{r.slice}/{r.n:05d}")
+    # THE SELECTION RULES an annotations Codex pins (09 §9.4, operator
+    # 2026-11-23: "A"): carried in the SHARD and hashing to their pins, or
+    # what the claims are about cannot be read from the copy
+    if getattr(ctx.codex, "annotates", None) is not None:
+        from . import annotations as ann_mod
+        failed += ann_mod.select_failures(ctx.shard_tree, ctx.codex)
     if not held:
         return Outcome("roots", INCONCLUSIVE,
                        why="this peer holds none of the snapshot's shards")

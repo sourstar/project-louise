@@ -90,6 +90,19 @@ def gutenberg_slice(doc: CanonicalDoc, native_id: int) -> str:
     return f"lang={doc.language or 'und'}"
 
 
+def wikisource_slice(doc: CanonicalDoc, native_id: int) -> str:
+    """The wiki's language, then the record's kind: a language's works and
+    its authors are slices a node holds or not (docs/notes/
+    wikisource-design.md §3). The native id carries the language."""
+    from ..plugins.wikisource.source import decode_native_id
+    try:
+        lang, _page = decode_native_id(int(native_id))
+    except (IndexError, ValueError):
+        lang = doc.language or "und"
+    kind = (doc.extra or {}).get("kind") or "work"
+    return f"lang={lang}/kind={'authors' if kind == 'author' else 'works'}"
+
+
 #: the Wikidata id range a part holds: 10⁷ ids (docs/notes/wikidata-build-plan.md
 #: §2 "Slicing and parts"); every property in one range of its own
 _WD_RANGE = 10_000_000
@@ -420,6 +433,10 @@ SCHEMES: dict[str, SliceScheme] = {
         keys=("lang", "pages"), records_per_shard=2_000,
         describe={"keys": ["lang", "pages"], "pages": {"field": "page_id", "bin": _PAGE_BIN}},
         slice_of=wikipedia_slice),
+    "wikisource": SliceScheme(
+        keys=("lang", "kind"), records_per_shard=2_000,
+        describe={"keys": ["lang", "kind"], "kind": {"field": "extra.kind", "values": ["works", "authors"]}},
+        slice_of=wikisource_slice),
     "embedded": SliceScheme(
         keys=("lang", "pages"), records_per_shard=2_000,
         describe={"keys": ["lang", "pages"], "pages": {"field": "article_id", "bin": _PAGE_BIN}},
