@@ -3613,6 +3613,18 @@ def cmd_dev_rederive(a) -> int:
     left, 2026-11-19). A dry run without --yes; its vectors are kept."""
     from app.hold import carry as carry_mod
     say = lambda m: print(m, file=sys.stderr)              # noqa: E731
+    if getattr(a, "release", False):
+        # `--first`'s hold lifted: the held rows back in every stage's selection
+        if a.verify or a.again:
+            print("louise dev rederive: --release takes no --verify or --again", file=sys.stderr)
+            return 2
+        keep = Path(a.ids).read_text(encoding="utf-8").splitlines() if a.ids else None
+        _print({"release": carry_mod.release_first(a.root, a.collection, apply=a.yes, keep=keep, log=say)})
+        return 0
+    if getattr(a, "first", False) and not a.ids:
+        print("louise dev rederive: --first holds every row but the ones --ids FILE lists; it takes --ids",
+              file=sys.stderr)
+        return 2
     if a.ids:
         # the documents a list names: a uid or a document's path a line (the
         # EUR-Lex units check's --list-included); their embedding too where
@@ -3628,7 +3640,8 @@ def cmd_dev_rederive(a) -> int:
             signal.signal(sig, lambda *_: stop.set())
         lines = Path(a.ids).read_text(encoding="utf-8").splitlines()
         out = carry_mod.rederive_listed(a.root, a.collection, lines, apply=a.yes, stop=stop, log=say,
-                                        retry_errors=bool(getattr(a, "retry_errors", False)))
+                                        retry_errors=bool(getattr(a, "retry_errors", False)),
+                                        first=bool(getattr(a, "first", False)))
         _print({"rederive": out})
         return 130 if stop.is_set() else 0
     if a.verify:
@@ -8785,6 +8798,12 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--retry-errors", action="store_true",
                    help="with --ids: a listed document's error cleared too, so its unit is read again "
                         "(never a superseded row's); the restart's problem slice")
+    p.add_argument("--first", action="store_true",
+                   help="with --ids: every OTHER row held out of every stage until --release, so the "
+                        "listed are derived first (EUR-Lex's restart: the problem slice first)")
+    p.add_argument("--release", action="store_true",
+                   help="the rows --first held back in every stage's selection, the scope applied again; "
+                        "with --ids FILE the rows FILE lists stay held (EUR-Lex's units to re-form)")
     p.set_defaults(fn=cmd_dev_rederive)
     p = dverbs.add_parser("carry", help="a collection's manifest, text index and vector table into a new "
                                         "collection with the same records (amendment A1); writes "
