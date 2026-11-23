@@ -801,17 +801,22 @@ def build_codex(target: Codex | None, from_snapshot: str | None, *, title: str, 
                 annotator: str, platform_image: str, nonce: str | None = None,
                 attribution: str | None = None, erasure: str = "retractable",
                 targets: Sequence[tuple[Codex, str]] | None = None, container: str = cx.JSONL,
-                graph: bool = False) -> Codex:
+                graph: bool = False, selects: Sequence[cx.Select | None] | None = None) -> Codex:
     """02 §2.10's Codex: every field present, the space and work null,
     no layers, the target(s) and the snapshot the claims hold from. Version
     7 for one target, JSONL parts and the two 2026-10-09 claim types; the
     GRAPH_VERSION list where there are several targets, a Parquet container
-    or a graph claim type (`graph`) — 09 §9.3's version rule, so the
-    collections already written keep their bytes."""
+    or a graph claim type (`graph`); SELECT_VERSION where a target declares
+    its selection rule (`selects`, one per target, None for a target taken
+    whole) — 09 §9.3's version rule, so the collections already written keep
+    their bytes."""
     pairs = tuple(targets) if targets else ((target, from_snapshot),)
+    sels = tuple(selects) if selects else (None,) * len(pairs)
+    if len(sels) != len(pairs):
+        raise AnnotationsError(f"{len(sels)} selection(s) for {len(pairs)} target(s): one per target, "
+                               f"none for a target taken whole")
     cx.refuse_unbuilt_container(container)
-    version = (cx.GRAPH_VERSION if len(pairs) > 1 or container != cx.JSONL or graph
-               else cx.ANNOTATIONS_VERSION)
+    version = _version(len(pairs), container, graph, any(x is not None for x in sels))
     slicing: dict[str, Any] = {"keys": [], "unknown": SLICE, "shard_records": SHARD_RECORDS,
                                "order": "numeric"}
     if version >= cx.GRAPH_VERSION:
@@ -844,7 +849,7 @@ def build_codex(target: Codex | None, from_snapshot: str | None, *, title: str, 
         facets=(),
         version=version,
         record_line=1,
-        annotates=tuple(cx.Annotates(t.collection_id, snap) for t, snap in pairs),
+        annotates=tuple(cx.Annotates(t.collection_id, snap, sel) for (t, snap), sel in zip(pairs, sels)),
     )
     cx.validate(codex)
     return codex
@@ -892,14 +897,17 @@ def _write_part(shard_tree: Path, n: int, part: Sequence[dict[str, Any]], snapsh
                                    edges=len(lines), bytes=len(rraw))
 
 
-def files_of(shard_tree: Path, snapshot_id: str) -> dict[str, Any]:
+def files_of(shard_tree: Path, snapshot_id: str, codex: Codex | None = None) -> dict[str, Any]:
     """09 §9.4's `files` for an annotations collection: `validation.json`,
-    `LICENSE-TERMS` (null: green) and the seals file (null: open). It has
-    no calibration member — no space (09 §9.4, amended 2026-10-09)."""
+    `LICENSE-TERMS` (null: green), the seals file (null: open) and, for a
+    Codex whose targets pin a selection rule, each rule's member
+    `select/<sha256 hex>.toml` (required: 2026-11-23). It has no calibration
+    member — no space (09 §9.4, amended 2026-10-09)."""
     from . import shard as shard_mod
     out: dict[str, Any] = {}
+    rules = [(select_member(sel), True) for sel in (selects_of(codex) if codex is not None else ())]
     for name, required in ((shard_mod.VALIDATION_PATH, True), (shard_mod.TERMS_PATH, False),
-                           (shard_mod.seals_path(snapshot_id), False)):
+                           (shard_mod.seals_path(snapshot_id), False), *rules):
         p = Path(shard_tree) / name
         if p.is_file():
             raw = p.read_bytes()
@@ -956,7 +964,7 @@ def write_snapshot(shard_tree: Path, staging: Path, codex: Codex,
         shards=shards,
         # `compute_delta(None, {uid: content_hash})`: every uid added, once, sorted
         delta=sn.Delta(_sorted_once(uids), (), ()),
-        relations=relations, figures=(), files=files_of(shard_tree, snapshot_id))
+        relations=relations, figures=(), files=files_of(shard_tree, snapshot_id, codex))
     uids.clear()                                # the delta holds them now
     # the canonical bytes once: a first snapshot lists every claim in its delta
     # (12.3 M uids for wikipedia's), and `hash` re-serialises at each call
@@ -1245,15 +1253,136 @@ class Streamed:
         return parts
 
 
-def _version_for(targets: Sequence[Target], container: str, graph: bool) -> int:
-    """`build_codex`'s version rule: 7 for one target, JSONL parts and the
-    2026-10-09 claim types; GRAPH_VERSION otherwise."""
-    return (cx.GRAPH_VERSION if len(targets) > 1 or container != cx.JSONL or graph
+def _version(n_targets: int, container: str, graph: bool, selected: bool) -> int:
+    """09 §9.3's version rule for an annotations Codex: SELECT_VERSION where a
+    target declares a selection; else GRAPH_VERSION for several targets, a
+    Parquet container or a graph claim type; else 7."""
+    if selected:
+        return cx.SELECT_VERSION
+    return (cx.GRAPH_VERSION if n_targets > 1 or container != cx.JSONL or graph
             else cx.ANNOTATIONS_VERSION)
 
 
+def select_of(path: Path) -> cx.Select:
+    """A selection rule file (09 §9.3 SELECT_VERSION) as the Codex pins it:
+    the file is TOML with top-level `id` and `version`; the pin is those two
+    and the sha256 of the file's bytes, exactly as read (never re-encoded:
+    one changed byte is another rule)."""
+    import hashlib
+    import tomllib
+    data = Path(path).read_bytes()
+    try:
+        rule = tomllib.loads(data.decode("utf-8"))
+    except (UnicodeDecodeError, tomllib.TOMLDecodeError) as e:
+        raise AnnotationsError(f"{path}: a selection rule is a TOML file ({e})") from e
+    rid, ver = rule.get("id"), rule.get("version")
+    if not isinstance(rid, str) or not rid or not isinstance(ver, int) or isinstance(ver, bool) or ver < 1:
+        raise AnnotationsError(f"{path}: a selection rule names itself, id = \"…\" and version = <n ≥ 1>")
+    return cx.Select(rid, ver, hashlib.sha256(data).hexdigest())
+
+
+#: THE SELECTION RULE TRAVELS IN THE SHARD (operator, 2026-11-23: "A";
+#: docs/notes/wikisource-design.md): each rule a target's `select` pins is a
+#: whole-collection member `select/<sha256 hex>.toml`, its bytes as given,
+#: listed in every snapshot's `files` (09 §9.4) — so a peer checks the pin
+#: and reads which records the claims are about from what it downloaded, as
+#: `LICENSE-TERMS` is read (09 §9.13); the family map's member is the model
+#: (`slicing/<sha256 hex>.json`).
+SELECT_DIR = "select"
+
+
+def select_member(sel: cx.Select) -> str:
+    """`select/<sha256 hex>.toml`: the member that carries the rule `sel` pins."""
+    if len(sel.sha256) != 64 or any(c not in "0123456789abcdef" for c in sel.sha256):
+        raise AnnotationsError(f"a selection rule is named by its sha256, not {sel.sha256!r}")
+    return f"{SELECT_DIR}/{sel.sha256}.toml"
+
+
+def selects_of(codex: Codex) -> list[cx.Select]:
+    """The rules the Codex's targets pin, once each, in target order."""
+    out: list[cx.Select] = []
+    for t in cx.targets_of(codex) or ():
+        sel = getattr(t, "select", None)
+        if sel is not None and sel not in out:
+            out.append(sel)
+    return out
+
+
+def select_rules(paths: Sequence[str | Path | None]) -> dict[str, bytes]:
+    """`{sha256 hex: bytes}` of the rule files named (None or '-': a target
+    taken whole), each read once, as `select_of` pins it."""
+    import hashlib
+    out: dict[str, bytes] = {}
+    for p in paths:
+        if p is None or str(p) == "-":
+            continue
+        data = Path(p).read_bytes()
+        out[hashlib.sha256(data).hexdigest()] = data
+    return out
+
+
+def write_select_rules(shard_tree: Path, codex: Codex, rules: Mapping[str, bytes] | None, *,
+                       write: bool = True) -> None:
+    """Every rule the Codex pins written as its member, byte for byte, checked
+    against the pin first; a member already there with the pinned bytes is
+    kept (a resumed create). A pin with no bytes to write is refused before
+    any part is: a SHARD that names a rule it does not carry is one no peer
+    can check. `write=False`: the same refusals, nothing written (`create`
+    asks before its Codex is written, so a refusal leaves nothing behind)."""
+    import hashlib
+    for sel in selects_of(codex):
+        dst = Path(shard_tree) / select_member(sel)
+        raw = (rules or {}).get(sel.sha256)
+        if raw is None:
+            if dst.is_file() and hashlib.sha256(dst.read_bytes()).hexdigest() == sel.sha256:
+                continue
+            raise AnnotationsError(
+                f"the Codex pins the selection rule {sel.id} v{sel.version} ({sel.sha256[:16]}…) and no "
+                f"rule's bytes were given: its member {select_member(sel)} cannot be written "
+                f"(--select FILE)")
+        if hashlib.sha256(raw).hexdigest() != sel.sha256:
+            raise AnnotationsError(f"the selection rule given hashes otherwise than {sel.sha256[:16]}…: "
+                                   f"{select_member(sel)} is not written")
+        if not write or (dst.is_file() and dst.read_bytes() == raw):
+            continue
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        tmp = dst.with_suffix(".tmp")
+        tmp.write_bytes(raw)
+        tmp.replace(dst)
+
+
+def select_failures(shard_tree: Path, codex: Codex) -> list[str]:
+    """What `hold check`'s `roots` says of the rule members: each pinned rule
+    present and hashing to its pin, else `select/<hex>.toml:missing|hash`."""
+    import hashlib
+    out = []
+    for sel in selects_of(codex):
+        p = Path(shard_tree) / select_member(sel)
+        if not p.is_file():
+            out.append(f"{select_member(sel)}:missing")
+        elif hashlib.sha256(p.read_bytes()).hexdigest() != sel.sha256:
+            out.append(f"{select_member(sel)}:hash")
+    return out
+
+
+def _any_select(selects: Sequence[cx.Select | None] | None, n_targets: int) -> bool:
+    """Does a target declare a selection? One entry per target, or none."""
+    if selects is None:
+        return False
+    if len(selects) != n_targets:
+        raise AnnotationsError(f"{len(selects)} selection(s) for {n_targets} target(s): one --select per "
+                               f"--annotates, '-' for a target taken whole")
+    return any(x is not None for x in selects)
+
+
+def _version_for(targets: Sequence[Target], container: str, graph: bool, selected: bool = False) -> int:
+    """`build_codex`'s version rule (`_version`), for the targets read."""
+    return _version(len(targets), container, graph, selected)
+
+
 def _checked_stream(ts: tuple[Target, ...], src, *, annotator: str | None, container: str,
-                    work: Path | None, sort: bool = False, repin: bool = False) -> Streamed:
+                    work: Path | None, sort: bool = False, repin: bool = False,
+                    selected: bool = False) -> Streamed:
     """`_checked`, streaming (app/hold/annotations_stream.py), for the
     targets `ts` (`_targets`, the first check): the same checks in the same
     order, so the same refusal — the claims file, every claim's ends in the
@@ -1275,7 +1404,7 @@ def _checked_stream(ts: tuple[Target, ...], src, *, annotator: str | None, conta
         ends.summaries = None                       # read: the parts are found
     tables = held if work is None else held.save(work)
     del held
-    version = _version_for(ts, container, sv.graph)
+    version = _version_for(ts, container, sv.graph, selected)
     snapshots = {p: t.from_snapshot for p, t in by_plugin.items()}
     codices = {p: t.codex for p, t in by_plugin.items()}
     order = st.ExternalSort(work) if sort and work is not None else None
@@ -1301,7 +1430,7 @@ def _method_name(m: dict[str, Any]) -> str:
 def preview(root: Path, *, target_ref: str | None = None, from_snapshot: str | None = None,
             claims: bytes | Path, annotator: str | None = None,
             targets: Sequence[tuple[str, str]] | None = None, container: str = cx.JSONL,
-            repin: bool = False) -> dict[str, Any]:
+            repin: bool = False, selects: Sequence[cx.Select | None] | None = None) -> dict[str, Any]:
     """`create annotations --dry-run`: the claims checked against the target
     snapshot(s) exactly as `create` checks them, counted, nothing written —
     for a file of thousands of claims about a live collection, the measure
@@ -1317,7 +1446,8 @@ def preview(root: Path, *, target_ref: str | None = None, from_snapshot: str | N
     with (nullcontext() if bytes_given else st.workspace(root, f"preview.{secrets.token_hex(6)}")) as work, \
             st.ClaimsSource(claims) as src:
         try:
-            ch = _checked_stream(ts, src, annotator=annotator, container=container, work=work, repin=repin)
+            ch = _checked_stream(ts, src, annotator=annotator, container=container, work=work, repin=repin,
+                                 selected=_any_select(selects, len(ts)))
         finally:
             st.forget()
     first = ch.targets[0]
@@ -1340,13 +1470,17 @@ def create(root: Path, name: str, *, target_ref: str | None = None, from_snapsho
            annotator: str | None = None, snapshot_id: str | None = None,
            key=None, now: str | None = None, nonce: str | None = None,
            log=print, targets: Sequence[tuple[str, str]] | None = None,
-           container: str = cx.JSONL, repin: bool = False, _in_memory: bool = False) -> tuple[Codex, Any]:
+           container: str = cx.JSONL, repin: bool = False, selects: Sequence[cx.Select | None] | None = None,
+           select_rules: Mapping[str, bytes] | None = None, _in_memory: bool = False) -> tuple[Codex, Any]:
     """`hold collection create annotations` (07 §7.3): the Codex, the
     claims kept as this collection's origin, the record and relations
     parts, `validation.json`, the first snapshot (signed when this peer has
     a key) and the collection file. `targets` — (collection, from_snapshot)
     pairs, `--annotates` and `--from-snapshot` repeated — or the one
-    `target_ref` / `from_snapshot`.
+    `target_ref` / `from_snapshot`. `selects`: each target's selection rule
+    (`--select`, 09 §9.3 SELECT_VERSION), None for a target taken whole;
+    `select_rules`, their bytes by sha256 (`select_rules`), written into the
+    SHARD as members (operator, 2026-11-23: "A").
 
     The claims are checked first and the targets read before anything is
     written, so a refused file leaves nothing behind. A name already
@@ -1385,7 +1519,7 @@ def create(root: Path, name: str, *, target_ref: str | None = None, from_snapsho
         return _write_collection(
             root, name, ch.targets, ch.annotator, ch.graph, hold, container=container, title=title,
             summary=summary, platform_image=platform_image, nonce=nonce, snapshot_id=snapshot_id, key=key,
-            now=now, log=log, version=None, records=lambda version: records_of(ch.pinned, ch.submitted,
+            now=now, log=log, version=None, selects=selects, select_rules=select_rules, records=lambda version: records_of(ch.pinned, ch.submitted,
                                                                                version=version),
             count=len(ch.pinned), install=lambda dst: dst.write_bytes(claims))
     ts = _targets(root, _refs(target_ref, from_snapshot, targets))
@@ -1393,14 +1527,14 @@ def create(root: Path, name: str, *, target_ref: str | None = None, from_snapsho
     with st.workspace(root, f"create.{name}") as work, st.private_source(claims, work) as src:
         try:
             cs = _checked_stream(ts, src, annotator=annotator, container=container, work=work, sort=True,
-                                 repin=repin)
+                                 repin=repin, selected=_any_select(selects, len(ts)))
             if repin:
                 log(f"[annotations] {name}: re-pinned against {', '.join(t.name for t in cs.targets)}: "
                     + (", ".join(f"{k} {v:,}" for k, v in (cs.moved or {}).items()) or "nothing moved"))
             return _write_collection(
                 root, name, cs.targets, cs.annotator, cs.graph, hold, container=container, title=title,
                 summary=summary, platform_image=platform_image, nonce=nonce, snapshot_id=snapshot_id, key=key,
-                now=now, log=log, version=cs.version, records=lambda version: cs.records(src),
+                now=now, log=log, version=cs.version, selects=selects, select_rules=select_rules, records=lambda version: cs.records(src),
                 count=cs.survey.count, install=src.install)
         finally:
             st.forget()
@@ -1417,7 +1551,9 @@ def _write_collection(root: Path, name: str, targets: Sequence[Target], annotato
                       hold, *,
                       container: str, title: str | None, summary: str | None, platform_image: str,
                       nonce: str | None, snapshot_id: str | None, key, now: str | None, log,
-                      version: int | None, records, count: int, install) -> tuple[Codex, Any]:
+                      version: int | None, records, count: int, install,
+                      selects: Sequence[cx.Select | None] | None = None,
+                      select_rules: Mapping[str, bytes] | None = None) -> tuple[Codex, Any]:
     """What `create` writes once the claims are checked: the Codex (`hold`
     makes it, or the one the name holds is resumed), the parts and the first snapshot from
     `records(the Codex's version)`, the claims file as the origin
@@ -1438,7 +1574,7 @@ def _write_collection(root: Path, name: str, targets: Sequence[Target], annotato
     names = ", ".join(t.name for t in targets)
     wanted = build_codex(
         None, None, targets=[(t.codex, t.from_snapshot) for t in targets], container=container,
-        graph=graph,
+        graph=graph, selects=selects,
         title=title or f"Annotations on {tt}",
         summary=summary or (f"Claims about the records of {names} "
                             f"({first.codex.collection_id[:19]}…) from snapshot "
@@ -1446,6 +1582,7 @@ def _write_collection(root: Path, name: str, targets: Sequence[Target], annotato
                             f"attached to its search results as facts, never ranked."),
         annotator=annotator, platform_image=platform_image, nonce=nonce)
 
+    write_select_rules(col.shard_dir_of(root, name), wanted, select_rules, write=False)
     p = col.shard_dir_of(root, name) / col.CODEX_FILE
     if p.is_file():
         existing = cx.loads(p.read_bytes())
@@ -1462,6 +1599,7 @@ def _write_collection(root: Path, name: str, targets: Sequence[Target], annotato
         raise AnnotationsError(f"the claims were ordered for version {version} and the Codex is "
                                f"{codex.version}: nothing is written")
     shard_tree = col.shard_dir_of(root, name)
+    write_select_rules(shard_tree, codex, select_rules)      # before any part: a pin with no rule is refused
     if snapshot_id is None:
         snapshot_id = sn.snapshot_id_for(datetime.now(ZoneInfo(codex.origin.clock)),
                                          codex.update.cadence)
@@ -1970,7 +2108,7 @@ def _update_finish(plan: _UpdatePlan, *, shards, relations, delta, dropped: Sequ
     snap = sn.Snapshot(
         collection_id=codex.collection_id, snapshot_id=sid, previous=prev.hash,
         shards=shards, delta=delta, relations=relations, figures=(),
-        files=files_of(shard_tree, sid))
+        files=files_of(shard_tree, sid, codex))
     # the canonical bytes once (`write_snapshot`): a delta may list millions
     raw = snap.canonical()
     object.__setattr__(snap, "_raw_hash", cx.digest(raw))
