@@ -34,6 +34,15 @@ every tick with all of them loaded; at 0.95 they stay with 2.3 % (≈750 MiB)
 below the line, so a load-time peak above it still evicts the least
 recently used unpinned model.
 
+memory_reclaimer_threshold, 0.95 → 0.98 (operator, 2026-11-23, B: "Whats left
+are models and weights"; "0.98" to München the same evening). The keeper's
+budget (app/resident.py) counts the models' weights and keeps CONTEXT_RESERVE,
+3,262 MiB, free under this line for working memory, so the line no longer has
+to leave that room itself. 0.98 × 32,656 MiB = 32,002 MiB: a budget of 28,741
+MiB for weights, the reserve above it, and 650 MiB between the line and the
+card's full 100 % as the reclaimer's safety net. It ships with the reserve
+(one deploy); alone it would widen the budget into the room the contexts need.
+
 watchdog_idle_enabled → false (operator, 2026-11-08, relayed by the node:
 "nothing is evicted only because it's idle, only if space is claimed").
 LocalAI's idle watchdog unloaded the chat model after 5 minutes without a
@@ -66,7 +75,7 @@ from typing import Any
 
 DESIRED: dict[str, Any] = {
     "memory_reclaimer_enabled": True,
-    "memory_reclaimer_threshold": 0.95,
+    "memory_reclaimer_threshold": 0.98,
     "watchdog_idle_enabled": False,
     "auto_upgrade_backends": False,
     "auto_upgrade_addons": False,
