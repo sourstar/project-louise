@@ -122,3 +122,26 @@ def test_a_unit_registered_by_the_worker_withdraws_its_old_row_too(tmp_path, iso
         assert fts.books_held("it", [int(old.native_id)], coll) == 0, "out of THIS collection's text index"
     finally:
         con.close()
+
+
+def test_a_first_scan_never_asks_which_ids_a_unit_supersedes(tmp_path, isolated_config, monkeypatch):
+    """Architecture's review of #799 (2026-11-23): `superseded_ids` was asked
+    for every new ref — for EUR-Lex the package unpacked and the tree parsed
+    again, doubling a first scan on its one thread — where a manifest empty
+    when the scan began can hold no row under another id."""
+    coll = _coll(tmp_path)
+    unit = coll.corpus_dir / src.unit_rel("it", CELEX)
+    shutil.copytree(FORMEX[2], unit, ignore=shutil.ignore_patterns("notice.xml", "LEG_MTD*"))
+    asked = []
+    real = type(SOURCE).superseded_ids
+    monkeypatch.setattr(type(SOURCE), "superseded_ids", lambda self, ref: asked.append(ref) or real(self, ref))
+    con = db.connect(coll)
+    try:
+        got = discovery.sync_collection(con, coll)
+        assert got["added"] == 1 and asked == [], "a first scan: nothing to supersede, nothing asked"
+        con.execute("UPDATE documents SET native_id='1', uid='eurlex:1'")      # a later scan meets a new id
+        con.commit()
+        discovery.sync_collection(con, coll)
+        assert len(asked) == 1, "a held manifest: asked for the new id only"
+    finally:
+        con.close()

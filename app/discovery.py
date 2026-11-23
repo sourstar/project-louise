@@ -164,6 +164,8 @@ def sync_collection(con, collection, *, stop=None, adopt: bool = False) -> dict:
               "superseded": 0, "withdrawn": 0}
 
     withdraw = withdrawer(collection)
+    # a manifest empty when the scan begins holds no row a new id supersedes
+    superseded = con.execute("SELECT 1 FROM documents LIMIT 1").fetchone() is not None
     interrupted = False
     applied = 0                 # refs durably written so far
     batch: list[DocRef] = []
@@ -183,7 +185,7 @@ def sync_collection(con, collection, *, stop=None, adopt: bool = False) -> dict:
         # arrival order exact: the later ref sees the earlier one committed.
         if batch and (uid in batch_uids or len(batch) >= DISCOVER_BATCH_REFS):
             if not _apply_batch(con, plugin, batch, counts, stop, wait=True, adopt=adopt,
-                                withdraw=withdraw, collection=collection):
+                                withdraw=withdraw, collection=collection, superseded=superseded):
                 interrupted = True      # stop arrived while the manifest was contended
                 batch = []
                 break
@@ -198,7 +200,7 @@ def sync_collection(con, collection, *, stop=None, adopt: bool = False) -> dict:
         # stopping — a contended manifest must not hold SIGTERM past its
         # grace; what is not committed is simply re-enumerated next scan
         if _apply_batch(con, plugin, batch, counts, stop, wait=not interrupted, adopt=adopt,
-                        withdraw=withdraw, collection=collection):
+                        withdraw=withdraw, collection=collection, superseded=superseded):
             applied += len(batch)
             _signal_committed(state, applied)
         else:
@@ -387,7 +389,7 @@ def _forget_validity(con, uid: str) -> None:
 
 
 def _apply_batch(con, plugin, batch: list, counts: dict, stop, *, wait: bool,
-                 withdraw, collection, adopt: bool = False) -> bool:
+                 withdraw, collection, adopt: bool = False, superseded: bool = True) -> bool:
     """Apply one batch of refs to the manifest. Two phases, so the write
     lock is held only for the writes:
 
@@ -533,7 +535,11 @@ def _apply_batch(con, plugin, batch: list, counts: dict, stop, *, wait: bool,
             # retired — out of every index, their validity row forgotten,
             # tombstoned with the reason. Asked of new ids only: nothing in
             # steady state, a primary-key read each when a form changes.
-            alts = getattr(plugin, "superseded_ids", None)
+            # asked only where a row can be held under another id: a manifest
+            # empty when the scan began holds none (architecture's review of
+            # #799, 2026-11-23: EUR-Lex's answer unpacks the package and
+            # parses the tree again, doubling a first scan on its one thread)
+            alts = getattr(plugin, "superseded_ids", None) if superseded else None
             for alt in (alts(ref) if alts is not None else ()):
                 uid_alt = f"{ref.source_id}:{alt}"
                 if uid_alt == uid:
