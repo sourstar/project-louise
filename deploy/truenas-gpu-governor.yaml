@@ -51,7 +51,7 @@ services:
     volumes:
       # the source is replaced at every deploy by the louise-rag app's own /data + /state
       # (deploy/16f/flatten_mounts.py governor_config; storage-tiering.md §12)
-      - /mnt/ssd4/apps/louise-rag/data/state:/data/state
+      - /mnt/ssd3/louise-data/state:/data/state      # /data on ssd3 since 2026-11-23
       - /mnt/ssd4/apps/louise-rag/config:/config:ro
       - /sys/class/drm/card0/device/tile0/gt0/freq0:/gpufreq
       - /sys/class/drm/card0/device/hwmon:/gpuhwmon
