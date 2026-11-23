@@ -34,6 +34,15 @@ class Page:
     model: str
     text: str
     redirect: str | None = None
+    #: the revision's instant, its disclosed editor (`{username, id}`, or "not
+    #: available": an anonymous editor's IP is kept by nothing, as Wikipedia's
+    #: operator rule of 2026-09-14) and its summary
+    timestamp: str = ""
+    editor: object = None
+    comment: str = ""
+    #: the page as ElementTree writes it: what a record's `origin_hash` covers
+    #: (Wikipedia's form, `page_bytes`), so every field the record keeps of it
+    xml: bytes = b""
 
     @property
     def is_scan(self) -> bool:
@@ -58,9 +67,12 @@ def page_of(el) -> Page:
     rev = [c for c in el if _local(c.tag) == "revision"]
     if not rev:
         raise ValueError(f"page {(_child(el, 'title').text or '')!r} has no revision")
+    from ..wikipedia.source import _comment, _editor
     r = rev[-1]
     text_el = _child(r, "text")
     redirect = _child(el, "redirect")
+    plain = _plain(el)
+    rp = plain.find("revision")
     return Page(id=int(_child(el, "id").text), ns=int(_child(el, "ns").text),
                 title=_child(el, "title").text or "",
                 rev_id=int(_child(r, "id").text),
@@ -68,7 +80,18 @@ def page_of(el) -> Page:
                 model=(_child(r, "model").text or "wikitext").strip() if _child(r, "model") is not None
                 else "wikitext",
                 text=(text_el.text or "") if text_el is not None else "",
-                redirect=redirect.get("title") if redirect is not None else None)
+                redirect=redirect.get("title") if redirect is not None else None,
+                timestamp=(rp.findtext("timestamp") or "").strip(), editor=_editor(rp), comment=_comment(rp),
+                xml=ET.tostring(plain, encoding="unicode").encode("utf-8"))
+
+
+def _plain(el):
+    """The element with the export namespace taken off its tags, as
+    Wikipedia's plugin reads pages (`revision/timestamp`, not `{…}revision`)."""
+    for e in el.iter():
+        if "}" in e.tag:
+            e.tag = e.tag.rsplit("}", 1)[1]
+    return el
 
 
 _OPEN = re.compile(rb"<mediawiki\b[^>]*>")
