@@ -605,6 +605,19 @@ for i in $(seq 1 30); do c=$(curl -s -o /dev/null -w "%{http_code}" http://127.0
 echo "GET /ask -> $c"; [ "$c" = "$want" ]
 
 say "8. the GPU governor app from deploy/truenas-gpu-governor.yaml (hwmon writable, /config ro, TZ)"
+# THE CARD BY ITS ADDRESS (2026-11-23: card numbers swap across boots): the
+# colon-free links the file binds, made to point at the B70's PCI address
+# every deploy; a card not at that address stops here, the governor as it was
+GOVERNOR_GPU_PCI=${GOVERNOR_GPU_PCI:-0000:03:00.0}
+GOVERNOR_LINKS=/mnt/ssd5/apps/louise-rage
+mkdir -p "$GOVERNOR_LINKS"
+for pair in "tile0/gt0/freq0 gpufreq" "hwmon gpuhwmon"; do
+  set -- $pair
+  src="/sys/bus/pci/devices/$GOVERNOR_GPU_PCI/$1"
+  [ -d "$src" ] || { echo "governor: $src is not there: is the B70 at $GOVERNOR_GPU_PCI? (GOVERNOR_GPU_PCI)"; exit 1; }
+  ln -sfn "$src" "$GOVERNOR_LINKS/$2"
+  echo "governor: $GOVERNOR_LINKS/$2 -> $(readlink "$GOVERNOR_LINKS/$2")"
+done
 python3 - "$ROOT/src/deploy/truenas-gpu-governor.yaml" "$ROOT/src/deploy/16f" <<'PY'
 import sys, yaml
 sys.path.insert(0, sys.argv[2])
