@@ -107,6 +107,29 @@ the last roll (app/validity.py `roll`). The result says which version it
 is (§5.3, `validity`). The snapshot chain keeps its own meaning for it — when the
 origin's state was held — and is not what a date asks of it.
 
+*Amended 2026-11-21* (the EUR-Lex5 review, V3/V4; the legal session, in
+charge by the operator's word). In a collection whose plugin declares that
+it holds an act's ORIGINAL and not every version the origin publishes
+(`VALIDITY_ENDS_AT_AMENDMENT`: EUR-Lex, its consolidations a slice), the END
+of a Work's LAST version is also the first day after its start from which a
+statement this collection holds says the text changed — an amending act's own (its `eli:amends` edge, from
+the day it names or else the day its own validity starts), or a version
+naming the act that amended it and the day: the next version starts that
+day, whether or not it is held (app/validity.py `first_change`; a repeal of
+the whole act stays a closure's). EUR-Lex's base holds originals and its
+consolidations only as a history slice: an original amended since was
+shown as the text in force, and a consolidation fetched for one date became
+the open-ended version of every later date. Such a version is still the one
+shown (the latest that started), labelled with its end and "amended since,
+the amended text is not held"; a date after the change admits none of the
+Work's text. A statement is dated by the first version of the amending act
+that states it; a day from 2999-01-01 names none. A collection whose origin
+dates every version itself (Normattiva's vigenza, LEGI's DATE_FIN, NeuRIS's
+expressions) keeps the origin's word: no other act's statement ends one of
+its versions (München's count: 20,365 and 14,382 versions would have been
+ended against their origin). A manifest derived under the old rule is
+re-chained once (`validity.CHAIN_VERSION`), from its tables, nothing parsed.
+
 *Amended 2026-11-15* (operator: "we add a 'draft' flag for the in force
 date, and we use the publishing date as draft. When this information is
 correctly published we replace all the draft dates"). Where the origin

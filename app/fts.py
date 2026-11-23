@@ -382,15 +382,36 @@ def index_books(entries, collection=None) -> None:
         raise ReaderWrite(f"{collection.name} reads the text index its sister "
                           f"{text_index.role(collection).writer} writes: it never indexes")
     by_group: dict[str, list] = {}
+    languages = section_languages(collection)
+    mul_groups: list[str] | None = None   # the groups a `mul` record can be in, held on disk
     for entry in entries:
         lang, book_id, chunks = entry[0], entry[1], entry[2]
         extra = entry[3] if len(entry) > 3 else None     # app/validity.py's columns
         names = entry[4] if len(entry) > 4 else None
-        parts = by_section_language(lang, chunks, section_languages(collection))
+        parts = by_section_language(lang, chunks, languages)
+        reached: set[str] = set()
         for k, (part_lang, part) in enumerate(parts):
             # the names ride on the record's first part (its first chunk)
+            reached.add(group_for(part_lang))
             by_group.setdefault(group_for(part_lang), []).append(
                 (part_lang, book_id, part, extra, names if k == 0 else None))
+        if (lang or "") == MULTILINGUAL and languages:
+            # A `mul` RECORD THAT LOST A SECTION LANGUAGE (P6 of the 2026-11-21
+            # review), or every chunk: its rows in the groups its new chunks do
+            # not reach went nowhere, and stayed. The groups it CAN be in are
+            # known — each declared language's and `other` (`groups_for_lang`)
+            # — so the record is deleted in each of those its chunks do not
+            # reach: a delete by book_id, in the same commit as the batch's
+            # writes there; a group with no index on disk holds nothing and is
+            # not created. Bounded by the declared languages, never a read of
+            # the index (a per-batch read of every group was 2026-11-08's
+            # 73 GB pattern)
+            if mul_groups is None:
+                mul_groups = [g for g in groups_for_lang(collection, MULTILINGUAL)
+                              if (base_of(collection) / g / "meta.json").is_file()]
+            for g in mul_groups:
+                if g not in reached:
+                    by_group.setdefault(g, []).append((MULTILINGUAL, book_id, [], None, None))
     for group, items in by_group.items():
         idx = get_index(group, collection)
         algorithm = pystem_algorithm(group)

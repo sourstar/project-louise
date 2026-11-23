@@ -450,7 +450,10 @@ louise dev                                                             operator 
                                                                        since the copy names no inputs — wikidata's held characters-cut vectors for a tokens space),
                                                                        refused (another set, unreadable, not a CPU run's); read-only; exit 1 on unproven or differs
                                                                        (added 2026-11-22; the deploy prints it)
-  rederive <collection> [--yes] [--again] [--verify [--every N] [--limit N]] [--ids FILE]
+  retire-superseded <collection> [--yes]                               a unit held under two ids keeps the one it has now; the other rows are retired from every index
+                                                                       and tombstoned (app/hold/identity.py; one unit, one document, 2026-11-21); a dry run without
+                                                                       --yes; with it, the collection's write lock (exit 2 when held)
+  rederive <collection> [--yes] [--again] [--verify [--every N] [--limit N]] [--ids FILE [--retry-errors]]
                                                                        every document's derived marks reset, so the worker parses each again at the collection's parser
                                                                        and writes its validity, catalogue and text-index rows again, its vectors kept (app/hold/carry.py;
                                                                        the A1c repair where no source snapshot is left); --verify instead resets only the documents whose
@@ -531,6 +534,25 @@ louise dev                                                             operator 
                                                                        source's corpus, removes `create`'s empty folder and re-roots the copied paths, and refuses a
                                                                        target whose origin holds another corpus; --share-origin does that alone, for a carry finished
                                                                        before it did (2026-11-15)
+  carry <from> <to> --rechunked [--dry-run | --yes] [--window N] [--processes N]
+                                                                       A1k (02 §2.4; adopted by architecture 2026-11-23; app/hold/rechunk.py,
+                                                                       docs/notes/legal-chunker-v4.md §4.3): into a successor whose space differs ONLY by its layers'
+                                                                       chunker version — the same records but for the layers, each layer the same chunker, params,
+                                                                       rule and input, the space's function equal (nothing crossed, not even the query instruction or
+                                                                       the cut). Refused, nothing written, for any other difference, a target not empty, a source
+                                                                       table not its space's, or without both write locks. Always copies: the manifest as a relayered
+                                                                       sister's (every embed and index mark and count emptied, the chunk-hash holders, queues, bundles
+                                                                       and gate state too; A1i), the catalogue index, the CPU reference (the same encoder side and
+                                                                       set), the space re-pinned; then the RE-KEY: the source's documents in windows of --window
+                                                                       rowids (500) from a cursor, each cut at the target's layers on the parse pool at the profile's
+                                                                       cores (--processes asks fewer), and every new chunk whose text a row of the same document holds
+                                                                       (by its BLAKE2b-128, never its position) written with that row's vector bytes under its new id;
+                                                                       a document whose every chunk carried marked embedded, every other left to the embed stage. A
+                                                                       window's range is committed before its first write and its marks and cursor after its last; a
+                                                                       stop in between is undone by the next run; SIGTERM at a window boundary (exit 130); the end
+                                                                       holds the table to the rows carried (exit 1). Per language: documents, chunks, carried, to
+                                                                       embed, dropped. --dry-run: the same refusals and the same pass, nothing written; without --yes
+                                                                       or --dry-run, the refusals and the plan
   pin-run <collection> [--run YYYYMMDD] [--dry-run | --yes]            an UNPUBLISHED collection whose dated-dump Codex names no run (wikidata.next, München,
                                                                        2026-11-17) given the Codex that names the run its records were read in, IN PLACE (RULE 1;
                                                                        amends §7.8's "a name holds one collection for its life" for a collection whose id never left

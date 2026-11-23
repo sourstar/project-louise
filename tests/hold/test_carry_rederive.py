@@ -466,6 +466,29 @@ def test_without_records_a_listed_embedded_document_is_embedded_again(pair, corp
     assert all(_marks(coll, u) == (1, 1, 1) for u in uids[2:])
 
 
+def test_retry_errors_clears_a_listed_document_s_error_never_a_tombstone_s(pair, corpus_dir, monkeypatch):  # noqa: F811
+    """The EUR-Lex5 restart's problem slice (2026-11-22): a unit the old
+    reader refused (C9) keeps its error, out of every selection, unless the
+    listing clears it; a superseded row keeps its tombstone."""
+    root, coll, uids, _ids, _rows, _out = _reconciled(pair, corpus_dir, monkeypatch)
+    _set(coll, "UPDATE documents SET error='rdf: UnindexableDocument: the only wrapper names another act', "
+               "retries=3 WHERE uid=?", uids[0])
+    _set(coll, "UPDATE documents SET error='superseded by x: the same unit under another id', retries=0 "
+               "WHERE uid=?", uids[1])
+
+    def error_of(uid):
+        c = db.connect(coll)
+        try:
+            return tuple(c.execute("SELECT error, retries FROM documents WHERE uid=?", (uid,)).fetchone())
+        finally:
+            c.close()
+    carry.rederive_listed(root, "re", [uids[0], uids[1]], apply=True, log=quiet)
+    assert error_of(uids[0])[0] is not None, "without --retry-errors the error stays"
+    carry.rederive_listed(root, "re", [uids[0], uids[1]], apply=True, log=quiet, retry_errors=True)
+    assert error_of(uids[0]) == (None, 0)
+    assert error_of(uids[1])[0].startswith("superseded"), "a tombstone stays one"
+
+
 def test_dev_rederive_ids_takes_no_whole_collection_flags(tmp_path, capsys):
     from app import louise
     ids = tmp_path / "ids.txt"

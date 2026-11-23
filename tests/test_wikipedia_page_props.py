@@ -123,6 +123,41 @@ def test_a_row_the_reader_does_not_know_fails_the_file(line):
         list(page_props.iter_units(iter([line])))
 
 
+def _units_of(path):
+    raw = gzip.decompress(path.read_bytes())
+    return raw, list(page_props.iter_units(iter(raw.splitlines(keepends=True))))
+
+
+def test_the_one_tuple_a_line_layout_of_the_runs_from_20261001_reads_the_same_rows(tmp_path):
+    """dumps.wikimedia.org writes `INSERT … VALUES` alone on its line and one
+    tuple a line since its 20261001 runs (read by Range from itwikisource's
+    and itwiki's files, 2026-11-23); the first reader matched only one
+    INSERT a line, and read such a file as a table with no row."""
+    dump = tmp_path / f"{DUMP}.xml.bz2"
+    got = {}
+    for layout in ("statement", "lines"):
+        raw, units = _units_of(wikipedia_props.write(dump, ROWS, per_statement=2, layout=layout))
+        assert all(raw[start:end] == unit for _p, start, end, unit in units)
+        got[layout] = {p: page_props.fields_of(u) for p, _s, _e, u in units}
+    assert got["lines"] == got["statement"] and set(got["lines"]) == {10, 20, 21}
+    raw, units = _units_of(page_props.props_path_of(dump))
+    assert units[0][3].count(b"\n") == 3 and b";\nINSERT INTO `page_props` VALUES\n(10," in units[0][3], \
+        "page 10's rows straddle a statement break, its line breaks with them"
+
+
+@pytest.mark.parametrize("lines", [
+    [b"INSERT INTO `page_props` VALUES\n", b"(1,'a','b',NULL),\n"],                 # the file ends inside it
+    [b"INSERT INTO `page_props` VALUES\n", b"(1,'a','b',NULL),\n", b"-- a comment\n", b"(2,'a','b',NULL);\n"],
+    [b"(1,'a','b',NULL);\n"],                                                         # a tuple and no statement
+    [b"INSERT INTO `page_props` VALUES(1,'a','b',NULL);\n"],
+    [b"CREATE TABLE `page_props` (\n", b"  `pp_page` int(10) unsigned NOT NULL,\n", b"  `pp_value` blob,\n",
+     b") ENGINE=InnoDB;\n"],                                                          # other columns
+])
+def test_a_layout_or_a_schema_the_reader_does_not_know_fails_the_file(lines):
+    with pytest.raises(page_props.TableError):
+        list(page_props.iter_units(iter(lines)))
+
+
 def test_a_sortkey_in_any_float_form_reads():
     line = b"INSERT INTO `page_props` VALUES (1,'a','1',1),(1,'b','x',-2.5e-05),(2,'c','y',3.0E+20);\n"
     assert [u[0] for u in page_props.iter_units(iter([line]))] == [1, 2]

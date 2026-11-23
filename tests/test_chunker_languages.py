@@ -21,6 +21,7 @@ from tests.test_legal_pilot import (
     built,  # noqa: F401 — the fixture: a held collection to search as
 )
 from tools import chunker_languages as cl
+from app import chunking_legal
 from tools import chunker_mode as cm
 
 SHA = "sha256:" + "ef" * 32
@@ -118,7 +119,7 @@ def test_the_arms_cut_by_structure_or_by_windows_and_never_write_the_title():
         cl.arm_of('h={"chunker": "legal_article", "params": {"tokenizer": "' + SHA + '", "max_tokens": 400, '
                   '"header": true}}', BASE)
     with pytest.raises(SystemExit, match="cut the same"):
-        cl.arms_of(["structure", "s2=" + json.dumps({"chunker": "legal_article", "version": 3,
+        cl.arms_of(["structure", "s2=" + json.dumps({"chunker": "legal_article", "version": chunking_legal.CHUNK_VERSION,
                                                      "params": {**BASE, "header": False, "outline": False}})], BASE)
     with pytest.raises(SystemExit, match="unknown arm"):
         cl.arm_of("whatever", BASE)

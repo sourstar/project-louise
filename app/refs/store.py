@@ -16,7 +16,7 @@ def connect(path: Path | None = None) -> sqlite3.Connection:
     path.parent.mkdir(parents=True, exist_ok=True)
     con = sqlite3.connect(path, timeout=30, isolation_level=None)
     con.row_factory = sqlite3.Row
-    con.execute("PRAGMA journal_mode=WAL")
+    _wal(con)
     con.execute("PRAGMA synchronous=NORMAL")
     con.execute("PRAGMA busy_timeout=15000")
     con.execute(
@@ -25,9 +25,50 @@ def connect(path: Path | None = None) -> sqlite3.Connection:
     # the input's own mtime at the last sync, for a source that knows its input
     # (`input_mtime`): compared exactly, where `synced_at` is a truncated clock
     # and an input written in the same second as the sync would never re-sync
-    if "input_mtime" not in {r[1] for r in con.execute("PRAGMA table_info('ref_meta')")}:
-        con.execute("ALTER TABLE ref_meta ADD COLUMN input_mtime REAL")
+    if not _has_input_mtime(con):
+        # A WRITER THAT READS FIRST TAKES BEGIN IMMEDIATE (CLAUDE.md): two
+        # processes opening the store at once both saw the column missing and
+        # the second ALTER failed, "duplicate column name" (2026-11-21, the
+        # engine review's run of test_two_collections_progress_concurrently).
+        # Checked again under the write lock; the common case reads only
+        con.execute("BEGIN IMMEDIATE")
+        try:
+            if not _has_input_mtime(con):
+                con.execute("ALTER TABLE ref_meta ADD COLUMN input_mtime REAL")
+            con.execute("COMMIT")
+        except BaseException:
+            if con.in_transaction:
+                con.execute("ROLLBACK")
+            raise
     return con
+
+
+#: tries of the WAL switch while another opener holds the file (`_wal`)
+WAL_TRIES = 100
+WAL_WAIT_S = 0.05
+
+
+def _wal(con: sqlite3.Connection) -> None:
+    """WAL, the store's mode (invariant 6). SWITCHING a file not yet in WAL
+    needs it exclusively, and SQLite answers "database is locked" AT ONCE —
+    the busy handler is not run for a journal-mode change — when another
+    opener holds it: a new store opened by the worker and the web together
+    on a first boot (2026-11-21, 8 openers at once: 40 % of rounds). Bounded:
+    WAL_TRIES × WAL_WAIT_S, then the error. A store already in WAL answers
+    at once (the mode persists in the file)."""
+    import time
+    for attempt in range(WAL_TRIES):
+        try:
+            con.execute("PRAGMA journal_mode=WAL")
+            return
+        except sqlite3.OperationalError as e:
+            if "locked" not in str(e) and "busy" not in str(e) or attempt == WAL_TRIES - 1:
+                raise
+            time.sleep(WAL_WAIT_S)
+
+
+def _has_input_mtime(con: sqlite3.Connection) -> bool:
+    return "input_mtime" in {r[1] for r in con.execute("PRAGMA table_info('ref_meta')")}
 
 
 class RefSchemaError(RuntimeError):

@@ -69,8 +69,12 @@ def forget(collection) -> None:
                 table.pop(k, None)
 
 
+#: the catalog index's directory in the collection's text index directory
+DIRNAME = "_catalog"
+
+
 def path_for(collection) -> Path:
-    return Path(collection.fts_dir) / "_catalog"
+    return Path(collection.fts_dir) / DIRNAME
 
 
 def _schema() -> tantivy.Schema:

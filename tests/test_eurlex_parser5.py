@@ -68,16 +68,19 @@ def test_every_main_file_is_read_and_the_act_is_the_body_wherever_it_stands():
     act = formex.parse({WRAPPER: _wrapper(["T.xml", "A.xml"]), "T.xml": TABLE, "A.xml": ACT})
     assert act.root == "ACT" and act.body_file == "A.xml"
     labels = [l for l, _ in formex.sections(act)]
-    assert labels == ["Article 1", "Contents", "Grades"]
+    # the other main file under its own title (2026-11-21: its title was in no section)
+    assert labels == ["Article 1", "Table of grades › Grades", "Table of grades › Contents"], "in document order"
     text = dict(formex.sections(act))
-    assert text["Grades"] == "A1 | Director" and text["Contents"] == "Applies from 1 January."
+    assert text["Table of grades › Grades"] == "A1 | Director"
+    assert text["Table of grades › Contents"] == "Applies from 1 January."
     assert act.meta["main_documents"][0]["file"] == "T.xml", "the table kept whole too"
 
 
 def test_a_general_document_alone_is_read_by_its_groups():
     act = formex.parse({WRAPPER: _wrapper(["T.xml"]), "T.xml": TABLE})
     assert act.root == "GENERAL" and act.title == "Table of grades"
-    assert formex.sections(act) == [("Contents", "Applies from 1 January."), ("Grades", "A1 | Director")]
+    # in document order: the group, then the paragraph after it
+    assert formex.sections(act) == [("Grades", "A1 | Director"), ("Contents", "Applies from 1 January.")]
 
 
 def test_an_agreement_is_read_as_an_act():
