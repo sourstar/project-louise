@@ -15,12 +15,22 @@
 #   down until the service was removed.
 # An optional helper must not share an app with what it helps.
 #
-# Its paths. The card's frequency directory, by its /sys/class/drm link, has
-# no colons; the daemon resolves the link on the host. Find the Arc's card
-# with `ls -l /sys/class/drm/card*/device` (it is the xe one, 0000:03:00.0).
-# If the numbering changes after a reboot, this app fails to start and the
-# System tab shows "not running"; Louise is untouched. It also mounts the
-# node store's directory for the claim and its heartbeat.
+# Its paths, BY THE CARD'S ADDRESS, NEVER A CARD NUMBER. DRM card numbers are
+# handed out in load order and swap across boots: the B70 went card0 -> card1
+# on 2026-09-22 (RAGE's clock, f1b9dfc) and again at the reboot of 2026-11-23
+# 10:17Z, when this app would not start ("error while creating mount source
+# path '/sys/class/drm/card0/device/tile0/gt0/freq0': ... operation not
+# permitted": card0 was the Radeon). The address is the stable name, but it
+# has colons and TrueNAS splits a bind on them (the long form too). So each
+# bind names a colon-free SYMLINK on the pool, pointing at the address —
+#   /mnt/ssd5/apps/louise-gpu-governor/gpufreq  -> /sys/bus/pci/devices/0000:03:00.0/tile0/gt0/freq0
+#   /mnt/ssd5/apps/louise-gpu-governor/gpuhwmon -> /sys/bus/pci/devices/0000:03:00.0/hwmon
+# made by the deploy's stage 8 before this file is applied (GOVERNOR_GPU_PCI,
+# deploy-louise-madlad-t5.sh), and Docker resolves them. If the card is not
+# at that address the deploy says so and the app stays as it was; Louise is
+# untouched. It also mounts the node store's directory for the claim and its
+# heartbeat. (München's hand-made links of 10:17Z, under the model pool's old
+# folder, are left for the operator to remove once a deploy has made these.)
 #
 # The profile's GPU level (2026-10-27, docs/notes/node-profiles-design.md;
 # app/gpu_level.py). It reads platform.toml's [schedule] (the config
@@ -53,6 +63,6 @@ services:
       # (deploy/16f/flatten_mounts.py governor_config; storage-tiering.md §12)
       - /mnt/ssd3/louise-data/state:/data/state      # /data on ssd3 since 2026-11-23
       - /mnt/ssd4/apps/louise-rag/config:/config:ro
-      - /sys/class/drm/card0/device/tile0/gt0/freq0:/gpufreq
-      - /sys/class/drm/card0/device/hwmon:/gpuhwmon
+      - /mnt/ssd5/apps/louise-gpu-governor/gpufreq:/gpufreq
+      - /mnt/ssd5/apps/louise-gpu-governor/gpuhwmon:/gpuhwmon
     stop_grace_period: 10s
