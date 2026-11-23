@@ -76,6 +76,14 @@ _PYTHON = re.compile(r"python[\d.]*$")
 #: a script named like this says nothing; its directory names the server
 _GENERIC_SCRIPTS = {"server", "main", "app", "serve", "run", "__main__"}
 _MODEL_SUFFIXES = {".gguf", ".bin", ".safetensors", ".onnx", ".xml", ".pt"}
+#: THE DYNAMIC LOADER RUN AS THE PROGRAM: LocalAI starts a backend through the
+#: loader the backend ships, `…/lib/ld.so …/llama-cpp-fallback --addr …`, so
+#: argv[0] is the loader and the panel said "pushed off the card: ld.so"
+#: (the operator, 2026-11-23). The program is the loader's first operand
+#: (ld.so(8)); these of its options take a value.
+_LOADER = re.compile(r"ld(-linux[\w.-]*|-musl[\w.-]*)?\.so(\.\d+)*")
+_LOADER_VALUED = {"--library-path", "--preload", "--argv0", "--audit", "--inhibit-rpath",
+                  "--glibc-hwcaps-prepend", "--glibc-hwcaps-mask"}
 
 
 def _read(path: Path) -> str | None:
@@ -264,11 +272,30 @@ def ollama_name(root: Path, blob: PurePosixPath) -> str | None:
     return None
 
 
+def past_loader(args: list[str]) -> list[str]:
+    """The program's own argv when a loader ran it: the loader's options
+    (`--library-path X`, `--inhibit-cache`, …) skipped to its first operand."""
+    skip = False
+    for i, arg in enumerate(args):
+        if skip:
+            skip = False
+        elif arg in _LOADER_VALUED:
+            skip = True
+        elif not arg.startswith("--"):
+            return args[i:]
+    return []
+
+
 def label(argv: list[str], root: Path) -> str:
-    """What the process serves, from its command line."""
+    """What the process serves, from its command line. A LocalAI backend
+    names no model there (it arrives by the LoadModel call): the panel names
+    it from LocalAI's own list (app/gpu_models.py `process_name`)."""
     if not argv:
         return "?"
     exe, args = PurePosixPath(argv[0]).name, argv[1:]
+    if _LOADER.fullmatch(exe):
+        program = past_loader(args)
+        return label(program, root) if program else exe
     if _PYTHON.fullmatch(exe):
         # A PYTHON SERVER THAT NAMES ITS WEIGHTS IS LABELLED BY THEM, as
         # llama-server is. The model pool started its torch and OpenVINO servers through
@@ -475,12 +502,23 @@ def scan(denied: list[int] | None = None) -> dict[str, list[GpuProcess]]:
         ram, mapped = host_memory(pid_dir)
         out.setdefault(pdev, []).append(GpuProcess(
             pid=pid, label=label(argv, pid_dir / "root"),
-            command=PurePosixPath(argv[0]).name if argv else "?",
+            command=_command(argv),
             container=container(pid_dir), vram=vram, host=host, ram=ram, mapped=mapped,
             ns_pid=ns_pid(pid_dir), ns_ancestors=ns_ancestors(pid_dir)))
     for procs in out.values():
         procs.sort(key=lambda p: (-p.vram, -p.host, p.pid))
     return out
+
+
+def _command(argv: list[str]) -> str:
+    """The program's name, the loader's own operand where a loader ran it."""
+    if not argv:
+        return "?"
+    exe = PurePosixPath(argv[0]).name
+    if _LOADER.fullmatch(exe):
+        program = past_loader(argv[1:])
+        return PurePosixPath(program[0]).name if program else exe
+    return exe
 
 
 def holder(pid_dir: Path) -> gpu_busy.Holder | None:

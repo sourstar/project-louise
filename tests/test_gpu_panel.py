@@ -253,3 +253,22 @@ def test_the_memory_legend_is_one_entry_a_line(client, monkeypatch):
     legend = re.search(r'<div class="legend note">(.*?)</div></div>', html, re.S).group(1)
     entries = re.findall(r'<div><span class="swatch [a-z]+"></span>[^<]+</div>', legend + "</div>")
     assert len(entries) >= 2 and entries[0].startswith("<div>")
+
+
+
+def test_a_localai_backend_pushed_off_is_named_by_its_model_never_its_loader(client, monkeypatch):
+    """The operator, 2026-11-23: "pushed off the card: ld.so". LocalAI starts
+    its backends through their loader and gives the model by RPC: the badge
+    names the model LocalAI lists at that backend's pid."""
+    from app import gpu_models
+    from dataclasses import replace
+    off = gpu.GpuProcess(371292, "llama-cpp-fallback", "llama-cpp-fallback", "localai",
+                         416 * 1024, 423928 * 1024, ns_pid=301)
+    _probe(monkeypatch, gpu.GpuSnapshot(devices=(replace(ARC, processes=(ARC.processes[0], off)),)))
+    monkeypatch.setattr(config, "CHAT_URL", "http://nas:30286/v1")
+    monkeypatch.setattr(gpu_models, "_get_json", lambda url: {"loaded_models": [
+        {"id": "vega-medcpt-article", "backend": "louise-sycl-f16-llama-cpp", "size_vram": 416 * 1024,
+         "process": {"pid": 301}}]})
+    html = client.get("/admin/system/gpu").text
+    assert "pushed off the card: vega-medcpt-article</span>" in html
+    assert "ld.so" not in html
