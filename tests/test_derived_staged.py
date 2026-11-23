@@ -27,6 +27,11 @@ def caches(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "CACHE_DIR", fast)
     monkeypatch.setattr(config, "FILES_CACHE_DIR", files)
     monkeypatch.setattr(config, "PUBMED_PACK_DIR", None, raising=False)
+    # the files cache's room is the test's, never the machine's: under
+    # STAGE_FREE free the copy is declined (as it should be), and every test
+    # but the no-room one asserts a copy (2026-11-23: red at 7.3 % free)
+    roomy = shutil._ntuple_diskusage(total=1000, used=100, free=900)
+    monkeypatch.setattr(derived.shutil, "disk_usage", lambda p: roomy)
     derived._touched.clear()
     return files
 
