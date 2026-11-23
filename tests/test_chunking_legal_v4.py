@@ -77,10 +77,11 @@ def test_versions_1_to_3_cut_every_fixture_as_before_v4(fixtures, version):
     assert _digest(fixtures, version) == GOLDEN[version]
 
 
-def test_the_shared_layer_stays_at_3_until_the_space_moves():
-    """Moving it moves the shared legal space (legal-chunker-v4.md): not here."""
-    assert cl.CHUNK_VERSION == 3 and cl.SHARED_LAYER["chunker"]["version"] == 3
-    assert 4 in cl.VERSIONS
+def test_the_shared_layer_is_4_since_the_space_moved():
+    """Moving it moves the shared legal space (legal-chunker-v4.md): the
+    operator's M1 = "A", 2026-11-23. Every version stays readable."""
+    assert cl.CHUNK_VERSION == 4 and cl.SHARED_LAYER["chunker"]["version"] == 4
+    assert cl.VERSIONS == (1, 2, 3, 4)
 
 
 # ---- the frozen class -----------------------------------------------------------------------------

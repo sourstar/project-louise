@@ -626,3 +626,35 @@ def test_the_command_plans_counts_then_carries(move, capsys):
                         "producer:x"]) == 2
     assert louise.main(["dev", "carry", "v3", "v4", "--root", str(root), "--rechunked", "--dry-run",
                         "--yes"]) == 2
+
+
+# ---- M1's hand route (operator, 2026-11-23: M1 = "A"; legal-chunker-v4.md §4.5,
+# §4.6 C): the successor is a SISTER derived at v4 — no recipe makes Normattiva's
+# Codex — its records rebuilt from the predecessor's lines, then the carry ----
+
+def test_a_sister_derived_at_v4_is_the_carry_s_target(isolated_config, tmp_path):
+    from app.hold import codex as cx
+    corpus = _greek_corpus(tmp_path)
+    root = tmp_path / "collections"
+    v3 = _create(root, "v3", 3)
+    rec.build(root, "v3", corpus_dir=corpus, records_per_shard=2, log=quiet)
+    rec.write_validation(root, "v3")
+    sn.create(root, "v3", snapshot_id="2026-11", log=quiet)
+    vectors = _embedded(root, v3)
+    layers_v4 = tuple(cx.layer_from_dict(l, i) for i, l in enumerate(_layer(4)))
+    sister = col.derive(root, v3.collection_id, layers=layers_v4, embed=fake_embed,
+                        embed_query=fake_query_embed, key=KEY, now=NOW, name="v4")
+    assert carry.layers_version_only(v3, sister) is None and not carry.space_differences(v3, sister)
+    # THE ORDER: the carry first (it refuses a target whose manifest holds
+    # documents, which a records build writes), then the parts from v3's lines
+    out, got = _carried(root)
+    rec.build(root, "v4", corpus_dir=corpus, records_from="v3", records_per_shard=2, log=quiet)
+    rec.write_validation(root, "v4")
+    sn.create(root, "v4", snapshot_id="2026-11", log=quiet)
+    table, by_text = _table(root), {t[2]: t for t in _table(root, "v3").values()}
+    assert table and all(cid.endswith(":4") for cid in table), "every row under a v4 id"
+    assert all(vec == by_text[text][3] for _seq, _ch, text, vec, _src in table.values()), \
+        "each row the v3 vector bytes of the same text"
+    t = got["totals"]
+    assert got["done"] and t["carried"] == len(table) > 0 and t["documents"] == 3
+    assert (col.shard_dir_of(root, "v4") / "snapshots" / "2026-11.json").is_file(), "its parts and snapshot"
