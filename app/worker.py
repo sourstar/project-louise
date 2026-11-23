@@ -3477,7 +3477,7 @@ def _rederive_amendments(con, collection) -> bool:
             pairs = [(u, rows) for u, rows in value if u in versions]
             con.execute("BEGIN IMMEDIATE")
             try:
-                validity.write_amendments(con, pairs)
+                validity.write_amendments(con, pairs, day=validity.today(collection))
                 before.add(path)
                 db.set_control(con, AMENDMENTS_PARTS_KEY, json.dumps(sorted(before)))
                 con.execute("COMMIT")

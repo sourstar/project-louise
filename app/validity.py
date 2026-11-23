@@ -604,7 +604,7 @@ def amendments_of_part(collection, path: str) -> tuple[bool, Any]:
         return False, f"{type(e).__name__}: {e}"[:300]
 
 
-def write_amendments(con, pairs: Iterable[tuple[str, list]]) -> int:
+def write_amendments(con, pairs: Iterable[tuple[str, list]], *, day: int | None = None) -> int:
     """Each version's rows replaced by `rows`, inside the caller's
     transaction (delete-then-insert on the stating uid, invariant 2)."""
     n = 0
@@ -613,7 +613,7 @@ def write_amendments(con, pairs: Iterable[tuple[str, list]]) -> int:
         touched |= _record_amendments(con, uid, rows)
         n += 1
     if changes_end(con):
-        recompute_many(con, touched)   # a statement may end a Work's last version (`first_change`)
+        recompute_many(con, touched, day=day)   # a statement may end a Work's last version
     return n
 
 

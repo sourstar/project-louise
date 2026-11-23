@@ -1566,8 +1566,9 @@ def reconcile(root, from_ref: str, to_ref: str, *, window: int = WINDOW,
                 # the old parser's row never served meanwhile); the rdf stage
                 # writes the new parser's
                 from app import validity as validity_mod
+                vday = validity_mod.today(coll)      # `shown` on the collection's day
                 for uid in rederive:
-                    validity_mod.forget(con, uid)
+                    validity_mod.forget(con, uid, day=vday)
                 pending = {"rowid": last, "reset": len(stale), "rehashed": len(rehash),
                            "rederived": len(rederive)}
                 db.set_control(con, RECONCILE_KEY,

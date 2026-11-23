@@ -381,11 +381,11 @@ def _hashes(plugin, collection, need: list) -> dict[str, tuple[str, str | None]]
     return {t["uid"]: tuple(v) for t, (ok, v) in zip(tasks, got) if ok}
 
 
-def _forget_validity(con, uid: str) -> None:
+def _forget_validity(con, uid: str, day: int | None = None) -> None:
     """A retired document's validity row out, its Work's chain recomputed
-    (inside the batch's transaction)."""
+    on the collection's day (inside the batch's transaction)."""
     from app import validity
-    validity.forget(con, uid)
+    validity.forget(con, uid, day=day)
 
 
 def _apply_batch(con, plugin, batch: list, counts: dict, stop, *, wait: bool,
@@ -416,6 +416,10 @@ def _apply_batch(con, plugin, batch: list, counts: dict, stop, *, wait: bool,
     contended, `wait=False`, or a withdrawal the indexes refused); the
     caller then treats the scan as interrupted — nothing half-applied,
     nothing in the cursor past it."""
+    # `shown` on the COLLECTION's day (its Codex's clock), as the rdf stage
+    # recomputes a chain (architecture's review of #799: the UTC day here)
+    from app import validity as _validity
+    vday = _validity.today(collection) if collection is not None else None
     now = int(time.time())
     local = {k: 0 for k in counts}
     writes: list[tuple[str, tuple]] = []
@@ -551,7 +555,7 @@ def _apply_batch(con, plugin, batch: list, counts: dict, stop, *, wait: bool,
                     continue
                 if held["rdf_done"] or held["fts_done"] or held["embed_done"]:
                     to_withdraw.append(uid_alt)
-                writes.append((_forget_validity, (uid_alt,)))
+                writes.append((_forget_validity, (uid_alt, vday)))
                 writes.append((
                     "UPDATE documents SET error=?,rdf_done=0,fts_done=0,embed_done=0,summary_done=0,"
                     "updated_at=? WHERE uid=?",

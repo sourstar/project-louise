@@ -67,7 +67,7 @@ def apply(con, collection, retire: list[tuple[str, str]], *, window: int = 500) 
         unindexable.withdraw_many(con, collection, [u for u, _k in part])
         _begin(con, None)
         for uid, keep in part:
-            validity.forget(con, uid)
+            validity.forget(con, uid, day=validity.today(collection))
             con.execute("UPDATE documents SET error=?, rdf_done=0, fts_done=0, embed_done=0, "
                         "summary_done=0 WHERE uid=?", (REASON.format(keep=keep), uid))
         con.execute("COMMIT")
