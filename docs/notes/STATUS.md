@@ -20,6 +20,11 @@ measured (published figures disagree).
 
 ### 2026-11-23
 
+- **tests/test_pubmed_updatefiles_memory.py was order-dependent — FIXED (the measure).** Its +7.7 MB at the
+  12th file, after a test that started the web app, was CPython's interned-string table moving to 2**19
+  slots (7,689,584 bytes), fed by pathlib's `sys.intern` of every path component; the old table predated
+  `tracemalloc.start`. Left out of the held bytes and the peaks by its exact size; a 16-byte-a-record leak
+  still fails it. measuring.md §14.
 - **ssd4 for LanceDB only: the Lance root (`LOUISE_LANCE_ROOT`), operator "A" — built, not deployed.**
   A searched table lives at `<LOUISE_LANCE_ROOT>/<name>` behind each collection's `lance` link; `hold
   vectors move <c> --to hot --apply` adopts a beside-the-folder table by a rename. The node's procedure is

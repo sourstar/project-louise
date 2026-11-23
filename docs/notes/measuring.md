@@ -307,3 +307,32 @@ answer.
   the wire stopped with exit 3, and no pilot ran. Live Ask, reranking and
   translation failed the same way. Before a night's runs, check that
   `curl -s -o /dev/null -w '%{http_code}' <server>/v1/models` answers 200.
+
+## 14. Added 2026-11-23 — tracemalloc shows a table it did not see built
+
+tests/test_pubmed_updatefiles_memory.py passed alone and failed after any
+test that started the web app: flat for 11 files, then +7.7 MB at the 12th.
+
+- **The 7.7 MB was the interpreter's interned-string table**, a str-keyed
+  dict of 2**19 slots: 7,689,584 bytes, one block.
+  - pathlib interns every path component it parses (`sys.intern` in
+    `PurePath._parse_path`): 2-3 new names an update file on 3.12, ~5,700
+    slots a file on 3.13, where interned strings are mortal and come back as
+    new entries.
+  - When the table's slots run out it moves to a new one. The old one was
+    built before `tracemalloc.start` and never traced, so the whole new one
+    shows as growth, charged to pathlib's line.
+  - Which file, if any: how full the table was when tracing began. The web
+    app's start interned ~6,450 more strings (3.12, measured).
+- **The general rule:** anything built before `tracemalloc.start` and
+  replaced inside the window is counted whole and never subtracted. A heap
+  bound that a single process-wide table can cross is order-dependent.
+  - Find it by size: a block equal to `32 + 4·2**k + 16·⌊2·2**k/3⌋` is a
+    str-keyed dict table at 2**k slots.
+  - Reproduce it by interning fresh strings to just below the table's next
+    move before tracing starts. Here the table moved at the file chosen.
+- The test now leaves that table out of the held bytes and the peaks.
+  A 16-byte-a-record leak still fails it (9.0 KiB a file against 6), with
+  the table moving in the window, on 3.12 and 3.13.
+- Still exposed: the scalar peak bounds of tests/share/test_possession_*.py
+  and the other `get_traced_memory` checks. None has failed this way yet.
