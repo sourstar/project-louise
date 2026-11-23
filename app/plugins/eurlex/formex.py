@@ -707,8 +707,8 @@ def own_wrapper(names, celex: str | None, read, listed=None, adopted: str | None
     than the act still refuses it.
 
     `adopted`: the act's own date as its tree states it (`date_document`).
-    An OJ older than THAT is another act's; the CELEX's year is the basis
-    only where no date is given (2026-11-23, München: 32000D0007(01) hr,
+    An OJ older than both it and the CELEX's year is another act's
+    (2026-11-23, München: 32000D0007(01) hr,
     adopted and published in 1999, its CELEX of 2000, refused; 6 hr units
     holding 1998, 2002 and 2003 packages for acts of 2004-11, and 32014R1322
     holding a 2013 Syria corrigendum, refused rightly either way)."""
@@ -728,8 +728,13 @@ def own_wrapper(names, celex: str | None, read, listed=None, adopted: str | None
             if stated and _act_of(celex) not in {_act_of(x) for x in stated} and not in_tree:
                 raise FormexError(f"the only wrapper {w} names {', '.join(sorted(stated))}, not {celex}")
             year = _ORIGINAL_YEAR.match(celex)
-            act_year = int(adopted[:4]) if adopted and adopted[:4].isdigit() else \
-                (int(year.group(1)) if year else None)
+            # the EARLIEST date known of the act: an OJ older than every one
+            # of them is another act's. A date_document a notice gives wrong
+            # (later than the act) never refuses the act's own wrapper
+            known = [int(year.group(1))] if year else []
+            if adopted and adopted[:4].isdigit():
+                known.append(int(adopted[:4]))
+            act_year = min(known) if known else None
             pub = oj_year(w, data)
             if year and act_year is not None and pub is not None and pub < act_year:
                 raise FormexError(f"the only wrapper {w} is of an OJ of {pub}, older than the act "
