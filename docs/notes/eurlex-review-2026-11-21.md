@@ -92,6 +92,8 @@ fixed by the legal session now (operator, 2026-11-21).
 
 | e3c94810 | C9 corrected on München's reading of the 3 units the v4 pilot refused (each act's own text in its files): a lone wrapper's OJ read from its name, never from the act's adoption DATE (31959R0005, 31964D0732 hr: Special Edition packages); a lone wrapper the expression's own tree lists is that act's whatever its NO.CELEX says, said as `formex-wrapper-names-another-act` (31958D1006(02), the decision printed twice); an OJ older than the act still refuses (the 2009-11 hr acts holding a 1998 act's package). The pilot on e3c94810: 0 errors in 2,000 | tests/test_eurlex_coverage.py |
 
+| af61348c, 70235cbb | the 76 errors of EUR-Lex5's whole v4 drift, read by München: 27 packages refused "over 1 GiB" were TIFF figures (1.09-9.77 GB beside 59-942 KB of XML) — a package's figures are now held by their first bytes and its true size, the cap bounds the text read; 32000D0007(01) hr (1999, CELEX 2000) was its own — an OJ refuses only when older than every date known of the act. Left, rightly refused: 27 files in each other's place (fetched again from Cellar), 21 other acts' packages (6 hr units, 32014R1322's 2013 corrigendum) | tests/test_eurlex_coverage.py |
+
 NeuRIS's 0 amendments, checked (München, read-only, 2026-11-21): 0 of 5,536 records hold `active_modifications`, and 0 of the corpus's 15,785 LegalDocML files (zip members included) holds `activeModifications`, `passiveModifications`, `textualMod` or an `analysis` block (control: `akn:meta` in 15,785 of 15,785, `akn:lifecycle` in 5,551). The test-phase origin states none; the reader drops nothing.
 
 In progress: P8, choice A: chunker v4 built behind its
