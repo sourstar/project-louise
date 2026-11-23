@@ -164,8 +164,10 @@ Wikidata carries a genre (P136) on fewer than 5 % of sitelinked items. So:
 ## Built in order
 
 0. **Review and merge Codex 12** (`annotates[].select`) from
-   `ccr-8a5c4013-0oqgjh`, with its own tests; the select file travelling with
-   the SHARD is that branch's open wire-format question for the operator.
+   `ccr-8a5c4013-0oqgjh`, with its own tests. The branch shares no history
+   with main, so it is ported, not merged. The port carries the operator's
+   answer to its open wire-format question (2026-11-23, "A", below): the
+   selection rule's file travels inside the SHARD.
 1. **The plugin** `app/plugins/wikisource/`. It covers the dump reader
    (shared with Wikipedia's), the transclusion expansion, the work assembly,
    the header and category fields, and the author records. Its origin-form
@@ -194,6 +196,17 @@ Wikidata carries a genre (P136) on fewer than 5 % of sitelinked items. So:
 1. Scans: "Names + hashes (Recommended)". The `scans` kind is not fetched.
 2. Wikimedia terms: "Acknowledge (Recommended)". The acknowledgement is
    recorded, byte-exact, when the plugin's first fetch runs (invariant 9).
+
+**Decided (operator, 2026-11-23): "A".** The selection rule's file (the one
+`annotates[].select` names by its sha256, Codex 12) travels INSIDE the
+annotations collection's SHARD, as `LICENSE-TERMS` does (09 §9.13): a peer
+checks the file against the Codex's hash and reads which records the claims
+are about from what it downloaded alone, never from our repository. 09 is
+amended, with its test, when Codex 12 is ported (step 0), before the first
+publication of `gutenberg-wikisource-editions` or of any annotations
+collection that names a selection. Put as: A, the file in the SHARD (a peer
+verifies the selection; a wire-format amendment and a test) against B, the
+hash only (no wire change; the selection unverifiable without our repo).
 
 The choices as they were put:
 
