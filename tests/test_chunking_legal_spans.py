@@ -133,9 +133,35 @@ def test_a_tokenizer_not_declared_exact_is_encoded_whole(small_spans):
 
 
 def test_a_run_with_no_safe_space_is_one_span(small_spans):
+    """The 500 x's are never cut inside; the cut is the first safe space past
+    SPAN_CHARS, before the y. (Until 2026-11-23 this expected the whole text
+    as one span, and passed only when the tokenizer inherited the verdict of
+    the previous test's non-exact one at the same id: `spans_are_exact`.)"""
     tok = _words()
+    assert cl.spans_are_exact(tok)
     text = "x" * 500 + " y"
-    assert cl._spans(tok, text) == [(0, len(text))]
+    assert cl._spans(tok, text) == [(0, 500), (500, len(text))]
+    assert cl._count(tok, text) == len(tok.encode(text, add_special_tokens=False).ids)
+
+
+def test_a_verdict_is_never_inherited_by_another_tokenizer_at_the_same_id(small_spans):
+    """`id()` is reused once an object is collected (München, 2026-11-23: 2
+    failed in 6 staged runs). The verdict is the tokenizer's own: an entry
+    for its id that holds another object is judged again."""
+    exact, other = _words(), Tokenizer(models.WordLevel({"[UNK]": 0}, unk_token="[UNK]"))
+    other.pre_tokenizer = pre_tokenizers.Metaspace()
+    assert cl.spans_are_exact(exact)
+    cl._exact[id(other)] = (exact, True)                 # what a dead exact tokenizer at this id left
+    assert not cl.spans_are_exact(other)
+    assert cl._exact[id(other)][0] is other
+
+
+def test_the_verdicts_hold_their_tokenizers_and_are_bounded(small_spans):
+    toks = [_words() for _ in range(cl._EXACT_HELD + 5)]
+    for t in toks:
+        assert cl.spans_are_exact(t)
+    assert len(cl._exact) <= cl._EXACT_HELD
+    assert all(cl._exact[id(t)][0] is t for t in toks[-cl._EXACT_HELD:]), "held while their verdict stands"
 
 
 def test_the_identity_tool_compares_the_two_reads(monkeypatch):

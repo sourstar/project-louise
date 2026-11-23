@@ -92,6 +92,8 @@ A pure function of (sections, version, params) and the pinned tokenizer
 from __future__ import annotations
 
 import re
+import threading
+from collections import OrderedDict
 from typing import Any, Iterator, Sequence
 
 CHUNK_VERSION = 3
@@ -173,7 +175,19 @@ _SAFE_CUT = re.compile(r"(?<=\S) (?=\S)")
 _EXACT_SPLIT = ("[^\\r\\n\\p{L}\\p{N}]?[\\p{Lu}\\p{Lt}\\p{Lm}\\p{Lo}\\p{M}]*[\\p{Ll}\\p{Lm}\\p{Lo}\\p{M}]+|"
                 "[^\\r\\n\\p{L}\\p{N}]?[\\p{Lu}\\p{Lt}\\p{Lm}\\p{Lo}\\p{M}]+[\\p{Ll}\\p{Lm}\\p{Lo}\\p{M}]*|"
                 "\\p{N}| ?[^\\s\\p{L}\\p{N}]+[\\r\\n/]*|\\s*[\\r\\n]+|\\s+(?!\\S)|\\s+")
-_exact: dict[int, bool] = {}
+#: `id(tok)` -> (tok, verdict). The entry HOLDS the tokenizer it judged: an
+#: id is reused once its object is collected, and a verdict keyed on the id
+#: alone was inherited by the next tokenizer at that address — an exact
+#: tokenizer's, for one that is not, cutting its texts in spans (other chunks,
+#: invariant 3; München, 2026-11-23: test_chunking_legal_spans.py 2 failed in
+#: 6 staged runs). Held, the object cannot die while its verdict stands, and
+#: the `is` check is belt and braces. A `tokenizers.Tokenizer` takes no weak
+#: reference, so the cache is bounded instead (the node holds a few pinned
+#: tokenizers, alive in their registry for the process anyway: plugins/
+#: wikidata/chunker.py `_tokenizers`); an evicted entry is gone with its id.
+_exact: OrderedDict[int, tuple[Any, bool]] = OrderedDict()
+_EXACT_HELD = 32
+_exact_lock = threading.Lock()
 
 
 def spans_are_exact(tok: Any) -> bool:
@@ -181,10 +195,16 @@ def spans_are_exact(tok: Any) -> bool:
     the text cut at a space between two non-spaces (`_SAFE_CUT`)? Read off
     the tokenizer's own declaration (`to_str`), once per tokenizer."""
     key = id(tok)
-    got = _exact.get(key)
-    if got is None:
-        got = _declared_exact(tok)
-        _exact[key] = got
+    with _exact_lock:
+        hit = _exact.get(key)
+    if hit is not None and hit[0] is tok:
+        return hit[1]
+    got = _declared_exact(tok)
+    with _exact_lock:
+        _exact[key] = (tok, got)
+        _exact.move_to_end(key)
+        while len(_exact) > _EXACT_HELD:
+            _exact.popitem(last=False)
     return got
 
 
