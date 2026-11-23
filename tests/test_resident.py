@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import inspect
 import json
+import time
 from dataclasses import replace
 from types import SimpleNamespace
 
@@ -982,6 +983,33 @@ def test_the_margin_is_the_growth_over_the_at_rest_sizes(tmp_path, node, monkeyp
     p = resident._plan_now([_r("louise-chat", "chat")])
     assert p.placed[0].counted == 6_000 * MIB and p.placed[0].largest == 8_500 * MIB
 
+
+def test_after_a_resume_the_card_settles_before_the_margin_is_sampled(tmp_path, node, monkeypatch):
+    """2026-11-23: phase 4's exit emptied the card, resumed the node and
+    reloaded the live set; 9 s after its 35B container exited, the first beat
+    read a margin of 16,759 MiB, the budget fell to 14,262 MiB for 6 h. For
+    SETTLE_S after a resume no sample is taken; the sizes are still read."""
+    sizes = {"louise-chat": 6_000}
+    node.held |= set(sizes)
+    _system(monkeypatch, node, sizes)
+    card = _card(monkeypatch, 32_656, 6_000)
+    _beat([])
+    assert resident.read_memory().margin(resident._wall()) == (0, True)
+    node_state.set_worker_state("paused", by="louise node pause (phase 4)")
+    node_state.set_worker_state("running", by="louise node resume (phase 4's exit)")
+    assert resident._settling()
+    card["used"] = 6_000 + 16_759                                      # what the window left on the card
+    _beat([])
+    mem = resident.read_memory()
+    assert mem.margin(resident._wall()) == (0, True), "the window's leftovers are not the margin"
+    assert mem.rest[(SERVER, "louise-chat")] == 6_000 * MIB, "the sizes are still read"
+    assert not resident._settling(time.time() + resident.SETTLE_S), "settled one bucket later"
+    monkeypatch.setattr(resident, "SETTLE_S", 0.0)
+    card["used"] = 6_000 + 1_200                                       # settled: a question's growth
+    _beat([])
+    assert resident.read_memory().margin(resident._wall()) == (1_200 * MIB, True)
+    node_state.set_worker_state("running", by="a write that changes nothing")
+    assert not resident._settling(), "running after running is no resume"
 
 def test_the_night_s_set_drops_its_lowest_tier_and_keeps_the_rest():
     """2026-11-08, 03:25: 11 models, ~28.4 GB at rest on the B70 (32,656 MiB,

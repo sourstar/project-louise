@@ -103,7 +103,9 @@ first, which the system decides (RULE 2: no list typed):
   Its peak per MARGIN_BUCKET_S is kept in the file for MARGIN_WINDOW_S
   (6 h); the margin is the peak of the window. No sample while this
   keeper's own load runs (that model is counted in the budget already),
-  nor where a runner gives no per-model sizes. Nothing measured in the
+  nor for SETTLE_S after the node resumes (a benchmark window's exit empties
+  and refills the card, 2026-11-23), nor where a runner gives no per-model
+  sizes. Nothing measured in the
   window: DEFAULT_MARGIN, 3.0 GiB — the node's night: ~28.4 GB at rest
   with 11 models, and the reclaimer read 95.9 % of 32.7 GB = 31.36 GB,
   ~2.96 GB of growth. With it, that night's set (28.4 + 3.0 > 31.0 GB)
@@ -298,6 +300,13 @@ REST_FLOOR = 0.5            # = app/model_load.py REST_FLOOR, where the readings
 #: the margin's samples are kept under this basis; peaks of another (the
 #: at-rest sizes before REST_FLOOR) are dropped when the file is read
 MARGIN_BASIS = 2
+#: AFTER A RESUME THE CARD IS NOT YET LOUISE'S (2026-11-23): phase 4's exit
+#: emptied the card, resumed the node, and reloaded the live set; 9 s after its
+#: 35B container exited, the first beat read a margin of 16,759 MiB, and the
+#: budget fell from 31,020 to 14,262 MiB for the window's 6 h, five encoders
+#: out of it. No margin sample this long after the node turns from a mode that
+#: preloads nothing to one that does (one bucket: the next one is its own)
+SETTLE_S = 600.0
 #: the margin is the peak of the samples this recent (restarts included)
 MARGIN_WINDOW_S = 6 * 3600.0
 #: one peak kept per this many seconds of the window
@@ -1001,24 +1010,41 @@ def _held_now(servers: Iterable[str], mem: Memory) -> dict[tuple, int] | None:
     return out
 
 
+def _settling(now: float | None = None) -> bool:
+    """Whether the node RESUMED less than SETTLE_S ago: its last mode write
+    turned a mode that preloads nothing into one that does (node_state's
+    history; its clock is the wall's)."""
+    from app import node_state
+    hist = node_state.mode_history()
+    if len(hist) < 2:
+        return False
+    last, prev = hist[-1], hist[-2]
+    at = float(last.get("at") or 0)
+    now = time.time() if now is None else now
+    return (last.get("state") in PRELOADING_MODES and prev.get("state") not in PRELOADING_MODES
+            and 0 <= now - at < SETTLE_S)
+
+
 def _remember(want: list[Resident]) -> Memory:
     """The beat's part of the budget: the set's sizes as this process saw
     them merged into the memory (the largest and the fewest kept), the
     card's total, one sample of the margin — the card's count minus the
     at-rest sizes of what LocalAI lists loaded, read before and after it —
-    unless this keeper's own load runs; peaks older than the window
-    dropped; the file written when anything changed."""
+    unless this keeper's own load runs or the node resumed less than
+    SETTLE_S ago; peaks older than the window dropped; the file written when
+    anything changed."""
     from app import model_load
     mem = _memory_now()
     servers = {r.server for r in want}
     with _lock:
         loading = _warm_thread is not None and _warm_thread.is_alive()
+    settling = _settling()
     card = sample = None
     moved: dict[tuple[str, str], bool] = {}
     if servers:
         with _lock:
             frozen = mem.copy()
-        before = None if loading else _held_now(servers, frozen)
+        before = None if loading or settling else _held_now(servers, frozen)
         card = _card()
         with _lock:
             here, there = _pids_seen
