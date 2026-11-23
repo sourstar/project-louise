@@ -609,7 +609,7 @@ say "8. the GPU governor app from deploy/truenas-gpu-governor.yaml (hwmon writab
 # colon-free links the file binds, made to point at the B70's PCI address
 # every deploy; a card not at that address stops here, the governor as it was
 GOVERNOR_GPU_PCI=${GOVERNOR_GPU_PCI:-0000:03:00.0}
-GOVERNOR_LINKS=/mnt/ssd5/apps/louise-rage
+GOVERNOR_LINKS=/mnt/ssd5/apps/louise-gpu-governor
 mkdir -p "$GOVERNOR_LINKS"
 for pair in "tile0/gt0/freq0 gpufreq" "hwmon gpuhwmon"; do
   set -- $pair
