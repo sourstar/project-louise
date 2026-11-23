@@ -462,7 +462,29 @@ Files: `/root/measure/qual-2026-11-21/phase3-r/` (`log.txt`,
 
 ### Phase 4 — the 35B
 
-(the table of §2 phase 4, filled)
+**Pilot and first rows, München 2026-11-22 21:32–21:37Z (M)** — engine
+`c3294e`, node paused, web stopped, card empty; the two fixed prompts, 5
+answers median. The pilot's answers (p128, rows 1 and 3) are coherent and
+without garbage: Italian, one English answer and two English words inside
+Italian at temperature 0.7 — sampling, not the engine. Rows 2–8 and the 9B
+wait for the next window (the pilot's go was not given in time).
+
+| row | footprint | p128: first token / prefill / decode | p2048: first token / prefill / decode | host RAM available |
+|---|---|---|---|---|
+| 0 — the host's DRAM copy bandwidth, 6 processes | — | **38 GB/s** (37 / 38 / 40) — 2 × 32 GB rated 5600, configured 6400; half the dual-channel figure modelled in §3b (caveats: the docker `--cpus 6` quota, a numpy copy with first-touch faults, a single-CCD Ryzen whose fabric caps writes) | | |
+| 1 — new engine, defaults | (invalid: the script read the wrong process; redone) | 0.277 s / **505** / 97.5 tok/s | 2.50 s / **824** / 96.3 | — |
+| phase 0, the live engine, same prompts | 21,782 MiB | 0.292 s / 480 / 99.6 | 2.51 s / 820 / 97.3 | — |
+| 3 — `cpu_moe` + cache 4096 MiB, share 0, mlock off | (invalid, redone) | 0.507 s / 276 / **68.8** | 3.00 s / 687 / **64.5** | 21,442 → 3,762 MiB when loaded (the experts mmap'd, ~17.7 GB) |
+
+Reading so far: the device-side MoE scheduler gives the 35B **+5 % prefill
+at 140 tokens and +0.5 % at 2,061**, decode −2 / −1 % — the B70 user's
+end of upstream's range (+5–7 %), not the B60's +23 / +136 %. Under the
+cache (4 GiB, uploads only) decode falls to **69 / 65 tok/s** (−29 / −33 %)
+and prefill to 276 / 687 — the room is bought at a third of the speed; the
+hit rate (logged by llama.cpp only when the cache is destroyed, at unload)
+and the footprint come with the rerun. The host's 38 GB/s halves the CPU
+share's ceiling against §3b's model, so the upload path should stay the
+better miss path. Rows 2, 4–8 and the 9B follow.
 
 ### Phase 5 — the POC
 
