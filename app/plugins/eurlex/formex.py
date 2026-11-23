@@ -225,7 +225,7 @@ def unpack(files: dict[str, bytes]) -> tuple[dict[str, bytes], dict[str, str]]:
     bytes determine."""
     import io
     import zipfile
-    out = {n: b for n, b in files.items() if not (is_package(n) and b[:4] == _ZIP_MAGIC)}
+    out = Members({n: b for n, b in files.items() if not (is_package(n) and b[:4] == _ZIP_MAGIC)})
     came: dict[str, str] = {}
     for name in sorted(files):
         data = files[name]
@@ -234,19 +234,53 @@ def unpack(files: dict[str, bytes]) -> tuple[dict[str, bytes], dict[str, str]]:
         try:
             with zipfile.ZipFile(io.BytesIO(data)) as z:
                 infos = [i for i in z.infolist() if not i.is_dir()]
-                if sum(i.file_size for i in infos) > PACKAGE_MAX:
-                    raise FormexError(f"{name}: its members are over {PACKAGE_MAX} bytes")
+                # WHAT IS READ is bounded, not what is held (2026-11-22, München:
+                # 27 EUR-Lex5 packages refused "over 1 GiB" were TIFF figures,
+                # 1.09-9.77 GB, beside 59-942 KB of XML; the act's text was lost
+                # to a guard against what the reader never reads)
+                if sum(i.file_size for i in infos if _read_whole(i.filename)) > PACKAGE_MAX:
+                    raise FormexError(f"{name}: its text members are over {PACKAGE_MAX} bytes")
                 for i in infos:
                     if not _MEMBER_NAME.match(i.filename) or i.filename in (".", ".."):
                         raise FormexError(f"{name}: member {i.filename!r} is not a plain file name")
-                    got = z.read(i)
-                    if i.filename in out and out[i.filename] != got:
+                    if _read_whole(i.filename):
+                        got = z.read(i)            # its CRC-32 checked
+                    else:
+                        # a figure: its first bytes only, what the checks of a
+                        # name against its content read (misnamed, root_tag);
+                        # its size from the central directory
+                        with z.open(i) as f:
+                            got = f.read(_HEAD_BYTES)
+                    held = out.get(i.filename)
+                    if held is not None and held[:len(got)] != got[:len(held)]:
                         raise FormexError(f"{name}: member {i.filename} differs from the item of that name")
                     out[i.filename] = got
+                    out.sizes[i.filename] = i.file_size
                     came[i.filename] = name
         except (zipfile.BadZipFile, zipfile.LargeZipFile, OSError, EOFError) as e:
             raise FormexError(f"{name}: not a readable zip: {e}") from None
     return out, came
+
+
+class Members(dict):
+    """`unpack`'s view: name → bytes, a package's figures by their first
+    bytes only; `sizes` each package member's true size (the central
+    directory's), which a record's `items` states."""
+
+    def __init__(self, *a, **k) -> None:
+        super().__init__(*a, **k)
+        self.sizes: dict[str, int] = {}
+
+    def size(self, name: str) -> int:
+        return self.sizes.get(name, len(self[name]))
+
+
+#: the members the reader reads WHOLE: its text (`unpack`)
+_TEXT_MEMBERS = (".xml",)
+
+
+def _read_whole(name: str) -> bool:
+    return name.lower().endswith(_TEXT_MEMBERS)
 
 
 def norm(text: str | None) -> str:
@@ -654,7 +688,7 @@ def oj_year(name: str, data: bytes) -> int | None:
     return int(m.group(1)) if m else None
 
 
-def own_wrapper(names, celex: str | None, read, listed=None) -> str:
+def own_wrapper(names, celex: str | None, read, listed=None, adopted: str | None = None) -> str:
     """The wrapper of THIS act's text among a manifestation's items: the only
     one, or — several (München, 2026-11-16: a Croatian Special Edition
     volume, one fmx4 manifestation whose items are the files of two acts
@@ -670,7 +704,14 @@ def own_wrapper(names, celex: str | None, read, listed=None) -> str:
     p. 419, its wrapper's NO.CELEX saying (01); Cellar lists these exact
     files as (02)'s): a lone wrapper the tree lists is this act's whatever
     its NO.CELEX names — the caller says the disagreement — and an OJ older
-    than the act still refuses it."""
+    than the act still refuses it.
+
+    `adopted`: the act's own date as its tree states it (`date_document`).
+    An OJ older than THAT is another act's; the CELEX's year is the basis
+    only where no date is given (2026-11-23, München: 32000D0007(01) hr,
+    adopted and published in 1999, its CELEX of 2000, refused; 6 hr units
+    holding 1998, 2002 and 2003 packages for acts of 2004-11, and 32014R1322
+    holding a 2013 Syria corrigendum, refused rightly either way)."""
     wrappers = sorted(n for n in names if is_wrapper(n))
     if not wrappers:
         raise FormexError("no wrapper (….doc.xml) among the manifestation's items")
@@ -687,10 +728,12 @@ def own_wrapper(names, celex: str | None, read, listed=None) -> str:
             if stated and _act_of(celex) not in {_act_of(x) for x in stated} and not in_tree:
                 raise FormexError(f"the only wrapper {w} names {', '.join(sorted(stated))}, not {celex}")
             year = _ORIGINAL_YEAR.match(celex)
+            act_year = int(adopted[:4]) if adopted and adopted[:4].isdigit() else \
+                (int(year.group(1)) if year else None)
             pub = oj_year(w, data)
-            if year and pub is not None and pub < int(year.group(1)):
+            if year and act_year is not None and pub is not None and pub < act_year:
                 raise FormexError(f"the only wrapper {w} is of an OJ of {pub}, older than the act "
-                                  f"{celex}")
+                                  f"{celex}" + (f" (of {adopted})" if adopted else ""))
         return w
     want = (celex or "").encode()
     own = [n for n in wrappers if want and want in {m.group(1) for m in _NO_CELEX.finditer(read(n))}]
@@ -705,8 +748,9 @@ def wrapper_labels(data: bytes) -> set[str]:
     return {m.group(1).decode() for m in _NO_CELEX.finditer(data)}
 
 
-def wrapper_of(files: dict[str, bytes], celex: str | None = None, listed=None) -> tuple[str, ET.Element]:
-    name = own_wrapper(files, celex, files.__getitem__, listed)
+def wrapper_of(files: dict[str, bytes], celex: str | None = None, listed=None,
+               adopted: str | None = None) -> tuple[str, ET.Element]:
+    name = own_wrapper(files, celex, files.__getitem__, listed, adopted)
     return name, _parse(files[name], name)
 
 
@@ -1012,11 +1056,11 @@ def attributes_of(root: ET.Element) -> list[list]:
     return [[e.tag, dict(e.attrib)] for e in root.iter() if isinstance(e.tag, str) and e.attrib]
 
 
-def parse(files: dict[str, bytes], celex: str | None = None, listed=None) -> Act:
+def parse(files: dict[str, bytes], celex: str | None = None, listed=None, adopted: str | None = None) -> Act:
     """The manifestation's items by name → the act (`celex`'s, where the
     items hold more than one act: `own_wrapper`). Raises FormexError when
     the wrapper, the body or an annex it names is missing or unreadable."""
-    wname, wrapper = wrapper_of(files, celex, listed)
+    wname, wrapper = wrapper_of(files, celex, listed, adopted)
     # A FILE UNDER ANOTHER'S NAME is never read as what its name says: the
     # record would be another file's text in its place, every check passing
     wrong = not_its_name(files, wrapper, wname)

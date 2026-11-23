@@ -832,7 +832,7 @@ class EurlexSource:
         listed = tree_fmx | {m for m, pkg in packed.items() if pkg in tree_fmx}
         if form == "fmx4":
             try:
-                own = formex.own_wrapper(view, celex, view.__getitem__, listed)
+                own = formex.own_wrapper(view, celex, view.__getitem__, listed, note.date_document)
                 labels = formex.wrapper_labels(view[own])
                 if labels and formex._act_of(celex) not in {formex._act_of(x) for x in labels}:
                     found.append(Issue("formex-wrapper-names-another-act",
@@ -850,7 +850,7 @@ class EurlexSource:
         stated_lang = notice_mod.CODE_OF.get(note.display_language or "", lang)
         try:
             if form == "fmx4":
-                act = formex.parse(view, celex, listed)
+                act = formex.parse(view, celex, listed, note.date_document)
                 for name in act.missing:
                     found.append(Issue("item-not-held", f"{act.wrapper_file} names {name}"))
             elif form in ("xhtml", "html"):
@@ -998,7 +998,8 @@ class EurlexSource:
             "last_modified": note.last_modified,
             # the Formex manifestation, every assertion beside the text
             "items": [{"name": n, "bytes": len(b)} for n, b in sorted(files.items())]
-                     + [{"name": n, "bytes": len(view[n]), "in": packed[n]} for n in sorted(packed)],
+                     + [{"name": n, "bytes": view.size(n) if hasattr(view, "size") else len(view[n]),
+                         "in": packed[n]} for n in sorted(packed)],
             "body_file": act.body_file,
             "wrapper_file": act.wrapper_file,
             "formex_wrapper": act.wrapper,

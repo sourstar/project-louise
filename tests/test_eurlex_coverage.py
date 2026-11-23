@@ -192,3 +192,45 @@ def test_the_origin_s_listing_outranks_the_wrapper_s_label():
     assert formex.parse(other, "32016R0997(02)", listed={w}).articles
     with pytest.raises(formex.FormexError, match="older than the act"):
         formex.own_wrapper(other, "32019R0001", other.__getitem__, listed={w})
+
+
+def test_an_oj_older_than_the_act_is_judged_by_the_act_s_own_date():
+    """München, 2026-11-23: 32000D0007(01) hr, adopted and published in 1999,
+    its CELEX of 2000 — its own wrapper (L_1999314HR) refused against the
+    CELEX year. Against its tree's date_document it is its own; a 2003
+    package for an act of 2004 (32004D0474 hr) is not, either way."""
+    files = _files("32016R0997_en")
+    w = next(n for n in files if formex.is_wrapper(n))
+    own = {**{n: b for n, b in files.items() if n != w}, "L_1999314HR.01003401.doc.xml": files[w]}
+    with pytest.raises(formex.FormexError, match="older than the act"):
+        formex.own_wrapper(own, "32000D0007(01)", own.__getitem__)
+    assert formex.own_wrapper(own, "32000D0007(01)", own.__getitem__, adopted="1999-10-12") == \
+        "L_1999314HR.01003401.doc.xml"
+    other = {**{n: b for n, b in files.items() if n != w}, "L_2003156HR.01007401.doc.xml": files[w]}
+    with pytest.raises(formex.FormexError, match="older than the act 32004D0474 \\(of 2004-04-29\\)"):
+        formex.own_wrapper(other, "32004D0474", other.__getitem__, adopted="2004-04-29")
+
+
+def test_a_package_s_figures_are_held_by_their_first_bytes_and_never_bound_its_text():
+    """München, 2026-11-23: 27 packages refused "over 1 GiB" were TIFF figures
+    (1.09-9.77 GB) beside 59-942 KB of XML. What is read is bounded; a
+    figure is held by its first bytes and its true size."""
+    import io
+    import zipfile
+    files = _files("32016R0997_en")
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+        for n, b in files.items():
+            z.writestr(n, b)
+        z.writestr("L_2016164EN.01000101.0001.tif", b"II*\x00" + b"\x00" * 300_000)
+    pkg = {"L_2016164EN.01000101.fmx4.zip": buf.getvalue()}
+    real = formex.PACKAGE_MAX
+    try:
+        formex.PACKAGE_MAX = sum(len(b) for n, b in files.items() if n.lower().endswith(".xml")) + 10
+        view, came = formex.unpack(pkg)
+    finally:
+        formex.PACKAGE_MAX = real
+    tif = "L_2016164EN.01000101.0001.tif"
+    assert len(view[tif]) == formex._HEAD_BYTES and view.size(tif) == 300_004 and came[tif].endswith(".zip")
+    assert formex.misnamed(tif, view[tif]) is None, "its first bytes say what it is"
+    assert formex.parse(view, "32016R0997").articles, "the act's text read"
