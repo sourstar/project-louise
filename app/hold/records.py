@@ -521,7 +521,7 @@ def local_collection(root, name: str, codex, *, corpus_dir=None):
     return local
 
 
-def _local_collection(root, name: str, codex, *, corpus_dir=None):
+def _local_collection(root, name: str, codex, *, corpus_dir=None, ack_dir=None):
     """This peer's LOCAL side of a Codex collection, as 07 §7.8 lays it out.
 
     A Codex says what a collection IS; the manifest, the text index and the
@@ -549,7 +549,9 @@ def _local_collection(root, name: str, codex, *, corpus_dir=None):
         fts_dir=Path(root) / name / "index",
         lance_dir=vector_place.table_dir(root, name),
         acquire_enabled=False,
-        license_ack=_ack_of(codex, state_dir),
+        # `ack_dir`: another collection's state, for `carry --rechunked --dry-run`
+        # alone — the target read under the ack its --yes carries (rechunk.py)
+        license_ack=_ack_of(codex, ack_dir or state_dir),
         # THE CODEX'S LAYERS, and the Codex itself — the worker's loader
         # passes both (app/collections.py) and this did not, so every stage
         # reaching a collection through here cut documents with the

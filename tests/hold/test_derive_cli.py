@@ -95,6 +95,28 @@ def test_a_sister_in_her_sisters_space_inherits_the_member_and_the_encoder(node,
     assert held["encoder"]["url"] == HER_SISTER_URL, "her sister's endpoint serves her space"
 
 
+def test_a_layers_only_sister_inherits_her_sister_s_encoder(node, tmp_path, capsys):
+    """M1 (2026-11-23): legi_F.next, derived at chunker v4 with no
+    --encoder, was in a new space whose encoder is her sister's — and its
+    file named no [encoder], so the node refused it. Her sister's endpoint
+    serves her encoder whatever her layers are."""
+    root, her_sister, calls = node
+    codex = json.loads((col.shard_dir_of(root, "her-sister") / "codex.json").read_text(encoding="utf-8"))
+    layers = codex["layers"]
+    layers[0]["chunker"]["version"] += 1
+    f = tmp_path / "layers.json"
+    f.write_text(json.dumps(layers), encoding="utf-8")
+    assert louise.main(["hold", "collection", "derive", "her-sister", "--root", str(root),
+                        "--layers", str(f), "--name", "rechunked", "--accept"]) == 0
+    out = capsys.readouterr()
+    sister = col.read(root, out.out.strip().splitlines()[-1])
+    assert sister.space_id != her_sister.space_id and sister.space.encoder == her_sister.space.encoder
+    assert calls == [], "her sister's reference: nothing embedded"
+    held = tomllib.loads((root / "rechunked.toml").read_text(encoding="utf-8"))
+    assert held["encoder"]["url"] == HER_SISTER_URL, "her sister's endpoint serves her encoder"
+    assert "no [encoder]" not in out.err
+
+
 def test_a_sister_in_a_new_space_without_an_encoder_is_refused_and_nothing_is_written(
         node, tmp_path, capsys):
     root, her_sister, _calls = node
