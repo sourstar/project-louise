@@ -486,6 +486,77 @@ and the footprint come with the rerun. The host's 38 GB/s halves the CPU
 share's ceiling against §3b's model, so the upload path should stay the
 better miss path. Rows 2, 4–8 and the 9B follow.
 
+**The rerun, complete — München 2026-11-23 21:30–21:58Z (M).** Engine
+`c3294e`, the 35B's YAML as it is (ctx 16,384, FA on, batch 2048 / ubatch
+512, parallel 1); node paused, web stopped, OCR paused, the card emptied
+before each row; LocalAI's debug on for the window and off again. Footprint
+= VRAM and GTT summed over the backend's DRM clients (a backend has two;
+the pilot read one) after the 5th answer. No row skipped: every cache row
+met its host-RAM floor. Files: `phase4b/` (`log.txt`, `chat-*.json`,
+`ring-*.txt`, `holders.txt`, `moe-cache-tune.out`).
+
+| row | p128: first token s / prefill / decode tok/s | p2048: first token / prefill / decode | VRAM MiB | system memory held by the driver (GTT) MiB |
+|---|---|---|---|---|
+| phase 0 — the LIVE engine | 0.292 / 480 / 99.6 | 2.512 / 820 / 97.3 | 21,782 | — |
+| 1 — new engine, defaults | **0.274 / 510.3 / 100.4** | **2.494 / 826.3 / 97.9** | 21,782 | 618 |
+| 2 — `GGML_SYCL_MMID_SCHED=0` | 0.274 / 510.4 / 100.4 | 2.497 / 825.4 / 97.9 | 21,782 | 618 |
+| 3 — `cpu_moe`, cache 4096, share 0 | 0.496 / 282.2 / **69.7** | 2.955 / 697.4 / **65.3** | **7,474** | 19,280 |
+| 4 — cache 4096, share 0.5 | 0.552 / 253.8 / 59.4 | 3.081 / 668.9 / 55.1 | 7,470 | 19,280 |
+| 5 — cache 8192, share 0 | 0.477 / 293.4 / **84.3** | 2.890 / 713.1 / **80.6** | **11,562** | 19,280 |
+| 6 — cache 8192, share 0.5 | 0.492 / 284.7 / 74.7 | 2.942 / 700.5 / 72.8 | 11,552 | 19,280 |
+| 8 — defaults, 8 streams, p128, once | 1,249 tokens out in 8.84 s = **141.3 tok/s** in total | | 22,214 | 626 |
+| the 9B on the new engine (dense control; phase 0: 0.121 / 1,157 / 77.5 · 0.624 / 3,301 / 75.5 · 6,288 MiB) | 0.107 / **1,305.6** / 77.7 | 0.604 / **3,413.4** / 75.7 | 6,284 | 664 |
+
+Each cache row ran with `mlock` off and on: equal within noise (row 3 on:
+0.518 / 270.5 / 69.4 · 2.995 / 688.0 / 65.0; rows 4–6 within 1 %).
+
+Row 7, `scripts/moe-cache-tune.py` (the engine's own `llama-server`,
+`--max-mib 10240`, ~9 min): measured 1,856 MiB — share 0: 42.5 t/s, hits
+**64 %**; 0.5: 53.0, 68 %; 0.95: 59.6, 58 % · 5,568 MiB — share 0: 70.0,
+hits **90 %**; 0.5: 67.2, 86 %; 0.95: 72.7, 84 %. Its fit of the machine:
+"uploads **16.2 GiB/s**, CPU 52.7 GiB/s, CPU part 0.98 ms, rest 10.72 ms
+per token, fit within 0.5 %"; 18,662 MiB of experts. Predicted, warm cache,
+share 0: 896 MiB 34.9 · 1,856 44.4 · 3,712 59.5 · 5,568 70.7 · 7,424 78.5 ·
+9,280 83.9 · 18,882 (every expert cached) 93.2 t/s; a CPU share helps only
+below ~5.5 GiB of cache (3,712: 67.6 at share 0.8). Its last line: "all
+experts fit on SYCL0: drop `-cmoe`".
+
+What phase 4 says:
+- **The new engine on the 35B, resident: prefill +6.3 % at 140 tokens and
+  +0.8 % at 2,061, decode +0.8 / +0.6 %, first token −6 % / −0.7 %, the same
+  21,782 MiB.** Upstream's +23 / +136 % (a B60, another model, ubatch 2048)
+  does not appear here.
+- **The device-side MoE scheduler does nothing for this model at these
+  settings**: row 2 equals row 1 to the token. Whether it is not eligible
+  (the width heuristic at ubatch 512) or simply no faster is not known; one
+  row with `GGML_SYCL_MMID_SCHED=3` (the override bit) and one with
+  `ubatch:2048` are added to phase 5's window.
+- **Offloaded, the 35B frees 14.3 GiB of the card at a third of the decode,
+  or 10.2 GiB at a sixth**: 7,474 MiB with a 4 GiB cache (69.7 / 65.3
+  tok/s, −31 / −33 %), 11,562 MiB with 8 GiB (84.3 / 80.6, −16 / −18 %);
+  prefill −45 % at short prompts and −14 to −16 % at 2k; first token 0.5 s
+  and 2.9–3.0 s. Share 0 wins at both sizes on the real path.
+- **The price is host memory, not card memory: 19.3 GiB of system memory
+  held by the driver in every `cpu_moe` row, whatever the cache.** The
+  experts are not in the process (RSS ~650 MB, `VmLck` 0) but in the card's
+  GTT, so `mlock` pins nothing and changes nothing; that memory is not
+  reclaimable while the model is loaded. It pushed the ZFS ARC from 16.3 to
+  2.2 GiB once. With the node running (22 GB available on 11-18) the
+  offloaded 35B leaves the host a few GB plus whatever the ARC gives back.
+- **The hit rate reaches no log through LocalAI** (0 `llama_moe_cache`
+  lines in the ring or in the container's log with debug on: the backend
+  is killed at shutdown before its destructor prints). The tuning script
+  gives it: 64 % at 1.9 GiB, 90 % at 5.6 GiB.
+- **Two of my estimates were wrong, both too high**: the host's DRAM copy
+  reads 38 GB/s (I modelled 75–85), and the upload path 16.2 GiB/s by the
+  script's fit (I used ~45 GB/s). The spill's swap estimate is corrected
+  with it in idle-context-brief.md §6: a 35B switch is ~1.3 s for the
+  inbound copy alone and up to ~2.7 s with the outbound, not 1.3 s in all.
+- 8 streams give 141 tok/s in total on short prompts (not comparable with
+  the 11-08 summary run's 68: those were long prompts).
+- **The dense control is faster too**: the 9B's prefill +12.8 % at 140
+  tokens and +3.4 % at 2,061, decode +0.3 %.
+
 ### Phase 5 — the POC
 
 | configuration that fit | sum MiB | free MiB | host RAM | refusals |
@@ -546,8 +617,125 @@ within a few per cent either way, and the MoE cache is a room gain
 (21.6 → ~9 GiB) paid in decode, to be measured on SYCL for the first time
 here.
 
-## 4. Report
+## 4. Report (phases 0–4; the POC, phase 5, follows)
 
-*Written when the phases are in: the performance improvement or loss per
-model, how the 35B performs (plain, with the scheduler off, under the cache),
-what the POC costs, and whether the engine is adopted.*
+*2026-11-23. Every figure is München's, measured on the node with the node
+paused, the web stopped and the card holding only the model under test,
+unless marked E. Old = the live engines (`281e1ee481b6`, llama.cpp
+`ddf48f8` + P1–P7 + P11; the reranker's `10aa8b1851d7` with P10). New =
+`louise-sycl-f16-llama-cpp-c3294e050ff2-stack-7c301a7ba437`: LocalAI v5.0.1,
+llama.cpp `78e0529`, the eight-patch series of commit 41fb62a, the same
+Intel stack.*
+
+### 4.1 Verdict
+
+**The new engine is QUALIFIED.** The series' own checks pass (P5
+`test-backend-ops` 235/235 and the KQ shapes 272/272, `test-chat`,
+`embedding_tokens_test`, `context_on_demand_test`); every gate that could
+run passes (bge-m3, qwen3-embedding-4b, medcpt-query; NeuRIS's is refused
+for the collection's missing reference copy, not for the engine); every
+encoder is bit-identical over three fresh loads, two orders and a 512-step
+sweep, and gives the LIVE engine's bytes on all sixteen fingerprints; the
+reranker's scores equal the live ones in 175 of 175 lists and match torch;
+MADLAD equals the live engine on 379 of 379 translations; no model is
+slower. Nothing was re-embedded and nothing serves on it yet: the cut-over
+is the operator's to start (§4.5).
+
+### 4.2 Performance, old against new
+
+| model | quantity | old | new | change |
+|---|---|---|---|---|
+| vega-bge-m3 | 24 texts through LocalAI + VeGa, median | 1.238 s | 1.203 s | **−2.8 %** |
+| vega-nemotron-3-embed-1b | the same | 1.330 s | 1.28 s | **−3.8 %** |
+| vega-qwen3-embedding-4b | the same | 4.374 s | 4.285 s | **−2.0 %** |
+| vega-medcpt-query | the same, one at a time | 0.360 s | 0.35 s | **−2.8 %** |
+| louise-rerank-nemotron-1b | per list, median of 175 | 2,512 ms | 2,468 ms | **−1.8 %** |
+| louise-translate-madlad | per translation, median | 0.43 s | 0.42 s | **−2 %** |
+| chat 9B | prefill at 140 / 2,061 tokens | 1,157 / 3,301 tok/s | 1,306 / 3,413 | **+12.8 % / +3.4 %** |
+| chat 9B | decode | 77.5 / 75.5 tok/s | 77.7 / 75.7 | +0.3 % |
+| the 35B, resident | prefill at 140 / 2,061 tokens | 480 / 820 tok/s | 510 / 826 | **+6.3 % / +0.8 %** |
+| the 35B, resident | decode | 99.6 / 97.3 tok/s | 100.4 / 97.9 | +0.8 % / +0.6 % |
+| the 35B, resident | first token | 0.292 / 2.512 s | 0.274 / 2.494 s | −6 % / −0.7 % |
+| every model | card memory | — | the same within 0.1 % | none |
+
+No loss anywhere. The gains are small and real: 2–4 % on the encoders,
+the reranker and MADLAD, 3–13 % on chat prefill. omnivoice (its own
+backend), dar-legal-it (torch) and the OpenVINO pair do not run on this
+engine and are unchanged. The engine-only path could not be measured on
+either engine (the backend images ship no `llama-server`), so every figure
+is the real path Louise uses.
+
+Two things change that are not speed: a model that does not fit is REFUSED
+(HTTP 500 in 3 s, no spill to host RAM, nothing killed) where the old
+engine let the driver spill it silently; and the series now records what
+runs (finding F4).
+
+### 4.3 How the 35B performs
+
+| configuration | decode, short / 2k prompt | prefill | first token | on the card | on the host |
+|---|---|---|---|---|---|
+| resident (as today's YAML) | 100.4 / 97.9 tok/s | 510 / 826 tok/s | 0.27 / 2.49 s | 21,782 MiB | — |
+| experts in host RAM, 8 GiB cache | 84.3 / 80.6 (−16 / −18 %) | 293 / 713 | 0.48 / 2.89 s | 11,562 MiB | 19.3 GiB held by the driver |
+| experts in host RAM, 4 GiB cache | 69.7 / 65.3 (−31 / −33 %) | 282 / 697 | 0.50 / 2.96 s | 7,474 MiB | 19.3 GiB held by the driver |
+| for scale: the 9B | 77.7 / 75.7 | 1,306 / 3,413 | 0.11 / 0.60 s | 6,284 MiB | — |
+
+- Resident, the 35B decodes faster than the 9B (100 against 78 tok/s) and
+  takes four times longer to its first token on a 2k-token Ask prompt (2.5 s
+  against 0.6 s); eight streams give 141 tok/s in total.
+- Offloaded, it works and stays usable: a 4 GiB cache holds it in 7.3 GiB
+  of the card at 65–70 tok/s, an 8 GiB cache in 11.3 GiB at 81–84 tok/s.
+  Misses are best uploaded (share 0); computing them on the CPU loses at
+  both sizes; `mlock` is a no-op. Hit rate 64 % at 1.9 GiB of cache, 90 % at
+  5.6 GiB (the tuning script's runs).
+- The cost of offloading is the HOST: 19.3 GiB of system memory the driver
+  holds for the experts for as long as the model is loaded, on a 61 GB
+  machine that had 22 GB available with the node running. The ZFS ARC was
+  pushed from 16 to 2 GiB once during the runs.
+- The update itself brings the 35B +6 % prefill on short prompts and
+  under 1 % elsewhere. The device-side MoE scheduler, the change upstream
+  credits with +23 to +136 %, makes no difference here (on or off: the
+  same to the token); two more rows in phase 5's window say whether it can
+  be made to engage.
+
+### 4.4 Findings
+
+| | finding | state |
+|---|---|---|
+| F1 | MADLAD on the live engine no longer matched its 379/379 record (375/379) | the record had aged: three of four differences move to torch, none is wrong; the reference becomes torch, the byte record is re-cut at cut-over. The live engine had never had its own MADLAD run |
+| F2 | LocalAI's `auto_upgrade_backends` was true since 11-08 and v5.0.1 upgraded three non-Louise backends | set back to false by München |
+| F3 | MADLAD read 2.4× slower on the new engine | a measurement artifact: the node had gone back to `running` after a reboot; paused, −2 %. Every timed row now records the node's mode and the card's holders |
+| F4 | the repository's series did not hold what was live (P10, P11 were "staged") | fixed: both in the series (41fb62a), the engine rebuilt, phases 1–3 rerun |
+| F5 | NeuRIS has no CPU-reference copy, so its gate cannot run | the collection's; with the architecture session by the operator's order. NeuRIS cannot be cut over until then |
+| F6 | the device-side MoE scheduler has no effect on the 35B at our settings | two rows queued (override bit, ubatch 2048) |
+| F7 | with `cpu_moe` the experts live in driver-held system memory (19.3 GiB), not in the process: `mlock` does nothing, the memory is not reclaimable | a cost to budget, §4.3 |
+| F8 | the MoE cache's statistics reach no log through LocalAI (the backend is killed before its destructor prints) | the tuning script is the way to read hit rates |
+| F9 | `rerank_bench`'s comparison line prints `None` (wrong field names) | a tool defect, to fix |
+| F10 | my estimates of the host were too high: DRAM copy 38 GB/s measured (75–85 modelled), uploads 16.2 GiB/s (45 GB/s used) | the spill's swap estimate corrected in idle-context-brief.md §6 |
+
+### 4.5 What is left
+
+- **Phase 5, the POC** (everything resident with the 35B as chat): not
+  run. It needs about 1.5 h with the website off, after the node's current
+  collection migration; München asks the operator for the window. By the
+  measured sizes the set leaves the 35B roughly 6–7 GiB of the card, so a
+  3–4 GiB cache: about 60–70 tok/s (E), with 19.3 GiB of host memory held.
+  The POC says whether that holds with every model loaded, and what each
+  model loses beside the others.
+- **The cut-over**, the operator's to start, in a window: BACKOUT written
+  first; one run per model, gated once with its acceptance recorded;
+  MADLAD's byte record re-cut from the adopted engine; the YAMLs with
+  `fit:off` (094df03); room made BEFORE every load, since the engine now
+  refuses what does not fit and today's set at rest fills the card; NeuRIS
+  after its reference (F5).
+
+| choice for the chat model | pros | cons |
+|---|---|---|
+| keep the 9B (the status quo) | 0.6 s to the first token; 6.3 GiB; nothing to decide | the smaller model |
+| the 35B resident | 100 tok/s; the larger model | 21.8 GiB: the rest of the set does not stay on the card, so models are evicted and reloaded around it (28.6 s to reload the 35B itself); 2.5 s to the first token |
+| the 35B offloaded, 4 GiB cache | the larger model in 7.3 GiB of the card; the whole set may stay resident (the POC confirms) | 65–70 tok/s; 3.0 s to the first token; 19.3 GiB of host memory held, the ARC squeezed |
+
+Recommendation: adopt the engine (it is faster everywhere and equal byte
+for byte); decide the chat model after the POC and the chat contest's
+quality scores, since performance alone does not choose between a 9B at
+0.6 s and a 35B at 3 s. If the operator says nothing, nothing changes: the
+live engines keep serving and the 9B stays the chat model.

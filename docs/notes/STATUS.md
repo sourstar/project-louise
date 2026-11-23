@@ -20,6 +20,15 @@ measured (published figures disagree).
 
 ### 2026-11-21
 
+- **2026-11-23, the new llama.cpp engine is QUALIFIED — the report** ([backend-qualification-2026-11-21.md](backend-qualification-2026-11-21.md) §4). Engine `c3294e050ff2` (LocalAI
+  v5.0.1, llama.cpp `78e0529`, the eight-patch series): the series' checks pass, every gate that could run passes,
+  every encoder bit-identical and equal to the live engine's bytes, the reranker's scores equal in 175/175 lists,
+  MADLAD equal on 379/379. No model slower: encoders, reranker and MADLAD 2–4 % faster, chat prefill +3 to +13 %.
+  The 35B resident: 100.4 / 97.9 tok/s, 21,782 MiB (+6 % prefill on short prompts, otherwise under 1 %; the
+  device-side MoE scheduler changes nothing here). The 35B offloaded: 7,474 MiB on the card at 69.7 / 65.3 tok/s
+  with a 4 GiB cache, 11,562 MiB at 84.3 / 80.6 with 8 GiB, and 19.3 GiB of host memory held by the driver either
+  way. Not done: the POC (phase 5, needs a window) and the cut-over (the operator's to start; NeuRIS waits for its
+  CPU reference).
 - **2026-11-22, the qualification's finding F4 — the series file did not record what was live.** The first v5.0.1
   engine lacked P10 (the nemotron reranker's architecture) and P11 (context on demand): both were "staged" in the
   repository while the node's live engines were built from candidate `.series` files carrying them. The gate refused

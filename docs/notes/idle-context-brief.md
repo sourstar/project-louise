@@ -677,7 +677,14 @@ probable or open.
   (12.7 GiB): ~0.8 s; a 1–2 GB encoder or reranker: <0.1 s — against
   28.6 s for the 35B's load to its first token (measured), 13.4 s for the
   old chat (7.4 GB) and 8.5 s for MADLAD cold through LocalAI's
-  unload-and-reload (ask-card-workflow.md). Once its buffers are back on
+  unload-and-reload (ask-card-workflow.md). **CORRECTED 2026-11-23 by two
+  measurements (backend-qualification-2026-11-21.md, phase 4): the host's
+  DRAM copy reads 38 GB/s, not the ~70 modelled, and uploads to the card
+  run at 16.2 GiB/s by llama.cpp's own fit, not ~35–45 GB/s. A 35B switch
+  is therefore ~1.3 s for the inbound copy ALONE and up to ~2.7 s with the
+  outbound one; MADLAD ~0.3–0.6 s. Still far below the 28.6 s reload, still
+  an estimate of the swap itself. And the new engine refuses the spill by
+  default (`GGML_SYCL_BMG_VRAM_CHECK`).** Once its buffers are back on
   the card a model runs at the card's 608 GB/s; nothing is lost but the
   switch. THE CLIFF: when the active model's working set — weights, its KV
   cache and compute buffers, plus whatever another process's running job

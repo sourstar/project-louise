@@ -112,9 +112,13 @@ resident. With the shared context, today's non-chat weights (≈ 17) + 3.2
 + 9 ≈ 29 GiB — the first arrangement that fits WITH MADLAD and leaves
 Krea 2 a load per use. Its speed is the hit rate's (1.5–2× over experts on
 the CPU alone on CUDA/ROCm cards; nothing reported on SYCL); the experts'
-18.4 GB must live in the host's 22 GB available. To MEASURE on the B70
-before anything is said — the one open measurement that could change
-the conclusion.
+18.4 GB must live in the host's 22 GB available. **MEASURED 2026-11-23 on the new engine (backend-qualification-2026-11-21.md
+phase 4): 7,474 MiB on the card with a 4 GiB cache at 69.7 / 65.3 tok/s,
+11,562 MiB with 8 GiB at 84.3 / 80.6, against 21,782 MiB and 100.4 / 97.9
+resident; in every case 19.3 GiB of system memory held by the driver for
+the experts. So the card side is better than estimated and the HOST is the
+limit: 19.3 GiB of a machine with 22 GB available when the node runs. The
+POC (phase 5) says whether the whole set then stays resident.**
 
 ## 4. Open
 
