@@ -862,6 +862,23 @@ _deferral = threading.local()
 #: deferred row errored out of every selection, the failing lead untouched.
 #: Set by `stage_rdf` / `stage_fts`, reset and read by `_execute_step`
 _lead = threading.local()
+#: the last memory deferral said, per stage and manifest (its path): (uid,
+#: when). A row the pool deferred before is asked again each round WITHOUT a
+#: wait (app/parallel.py `deferred_before`, defect 3 of the EUR-Lex5 review):
+#: alone in its batch, every WORKER_IDLE_SLEEP. The same row's deferral is
+#: said again only after LARGE_WAIT_S, the cadence the wait gave it
+_deferral_said: dict[str, tuple[str, float]] = {}
+
+
+def _deferral_news(collection, stage: str, uid: str) -> bool:
+    """Whether this row's memory deferral is to be said now (`_deferral_said`)."""
+    key = f"{stage}:{getattr(collection, 'manifest_path', None) or getattr(collection, 'name', '')}"
+    now = time.monotonic()
+    last = _deferral_said.get(key)
+    if last is not None and last[0] == uid and now - last[1] < parallel.LARGE_WAIT_S:
+        return False
+    _deferral_said[key] = (uid, now)
+    return True
 
 
 def _parse_stop():
@@ -4821,11 +4838,14 @@ def _execute_step(con, collection, stage, row) -> bool:
             # selection. The row stays pending, untouched. A memory KILL is a
             # MemoryWait too (MemoryKilled): the worker's hold is already
             # written and its stop begun (app/oom_hold.py, `_on_oom_kill`);
-            # nothing of it is written on the document either
+            # nothing of it is written on the document either. The same row
+            # deferred again is said once a LARGE_WAIT_S (`_deferral_news`); a
+            # kill always
             _deferral.memory = True
-            db.log_event(con, "warn", stage,
-                         f"{stage} deferred — {e}; the document is untouched and will be "
-                         f"retried"[:500], row["uid"])
+            if isinstance(e, parallel.MemoryKilled) or _deferral_news(collection, stage, row["uid"]):
+                db.log_event(con, "warn", stage,
+                             f"{stage} deferred — {e}; the document is untouched and will be "
+                             f"retried"[:500], row["uid"])
             return False
         if manifest_contended(e):
             # Another writer had the manifest. Nothing is wrong with this
