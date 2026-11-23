@@ -163,13 +163,7 @@ def sync_collection(con, collection, *, stop=None, adopt: bool = False) -> dict:
               "container_errors": 0, "relocated": 0, "resigned": 0, "retired": 0,
               "superseded": 0, "withdrawn": 0}
 
-    def withdraw(c, uids) -> None:
-        """06 §6.1's deletion signal: what the origin retracted leaves every
-        index it is in (app/unindexable.py) — before the batch writing its
-        tombstone commits, so a stop in between re-enumerates and withdraws
-        it again, never leaves one marked that still answers."""
-        from . import unindexable
-        unindexable.withdraw_many(c, collection, uids)
+    withdraw = withdrawer(collection)
     interrupted = False
     applied = 0                 # refs durably written so far
     batch: list[DocRef] = []
@@ -245,6 +239,18 @@ def sync_collection(con, collection, *, stop=None, adopt: bool = False) -> dict:
     return stats
 
 
+def withdrawer(collection):
+    """06 §6.1's deletion signal for `_apply_batch`: what the origin
+    retracted, or a row a unit no longer yields, leaves every index it is in
+    (app/unindexable.py) — before the batch writing its tombstone commits,
+    so a stop in between re-enumerates and withdraws it again, never leaves
+    one marked that still answers."""
+    def withdraw(c, uids) -> None:
+        from . import unindexable
+        unindexable.withdraw_many(c, collection, uids)
+    return withdraw
+
+
 def register(con, collection, refs: list[DocRef], *, stop=None) -> dict:
     """The given refs into the manifest as a scan applies them
     (`_apply_batch`), and nothing else: a cost per ref, never a walk of the
@@ -258,7 +264,12 @@ def register(con, collection, refs: list[DocRef], *, stop=None) -> dict:
     if not refs:
         return counts
     plugin = collection.plugin_instance()
-    if not _apply_batch(con, plugin, refs, counts, stop, wait=True):
+    # its retirements and its language moves withdraw from THIS collection's
+    # indexes, as a scan's do (architecture's review of #799, 2026-11-23: called
+    # without either, a retired row's index rows stayed, and a regroup read
+    # the default collection's)
+    if not _apply_batch(con, plugin, refs, counts, stop, wait=True,
+                        withdraw=withdrawer(collection), collection=collection):
         counts["interrupted"] = True
         return counts
     scope = db.get_scope(con)
@@ -376,7 +387,7 @@ def _forget_validity(con, uid: str) -> None:
 
 
 def _apply_batch(con, plugin, batch: list, counts: dict, stop, *, wait: bool,
-                 adopt: bool = False, withdraw=None, collection=None) -> bool:
+                 withdraw, collection, adopt: bool = False) -> bool:
     """Apply one batch of refs to the manifest. Two phases, so the write
     lock is held only for the writes:
 

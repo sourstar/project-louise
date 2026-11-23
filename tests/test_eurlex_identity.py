@@ -93,3 +93,32 @@ def test_the_units_held_twice_already_are_repaired(tmp_path, isolated_config):
         assert identity.plan(con, SOURCE, log=lambda m: None)[0]["shared_units"] == 0, "repaired once"
     finally:
         con.close()
+
+
+def test_a_unit_registered_by_the_worker_withdraws_its_old_row_too(tmp_path, isolated_config):
+    """Architecture's review of #799 (2026-11-23): `register` (the history's
+    adopt path) called `_apply_batch` with neither `withdraw` nor the
+    collection: the retired row was tombstoned with its text-index rows
+    left, and nothing repairs a tombstone. Now it withdraws from THIS
+    collection's indexes, as a scan does."""
+    coll = _coll(tmp_path)
+    unit = coll.corpus_dir / src.unit_rel("it", CELEX)
+    unit.mkdir(parents=True)
+    (unit / rdf.TREE_FILE).write_bytes(_scoped((FORMEX[2] / MTD).read_bytes()))
+    (unit / "L_1972160IT.01000101.doc.html").write_bytes(b"<html><body><p>Articolo 1</p></body></html>")
+    con = db.connect(coll)
+    try:
+        (old,), _ = _scan(con, coll)
+        uid_old = f"eurlex:{old.native_id}"
+        con.execute("UPDATE documents SET rdf_done=1, fts_done=1, lang='it' WHERE uid=?", (uid_old,))
+        con.commit()
+        fts.index_book("it", int(old.native_id), [{"id": f"{uid_old}:0:1", "chapter": "", "text": "Articolo 1"}],
+                       coll)
+        for n, b in _items(FORMEX[2]).items():
+            (unit / n).write_bytes(b)
+        new = next(r for r in SOURCE.discover(DiscoverState(corpus_root=coll.corpus_dir)) if r.scope == "document")
+        counts = discovery.register(con, coll, [new])
+        assert counts["retired"] == 1 and counts["added"] == 1, counts
+        assert fts.books_held("it", [int(old.native_id)], coll) == 0, "out of THIS collection's text index"
+    finally:
+        con.close()
