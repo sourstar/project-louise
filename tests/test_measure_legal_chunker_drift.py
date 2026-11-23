@@ -23,6 +23,18 @@ GREEK = " ".join(f"Η Επιτροπή εξετάζει το ζήτημα του
 FRENCH = " ".join("La Commission examine la question du règlement et de ses mesures." for _ in range(800))
 
 
+@pytest.fixture(autouse=True)
+def held_at_v3(monkeypatch):
+    """The four legal collections are held at v3 until M1, and the drift
+    tool measures v3 -> v4; the shared layer's default is 4 since
+    2026-11-23, so these fixtures' collections (which declare no layer and
+    take the plugin's) are held at 3 here — the same dict the plugins'
+    `default_layers` hold."""
+    from app import chunking_legal as cl
+    monkeypatch.setitem(cl.SHARED_LAYER["chunker"], "version", 3)
+    monkeypatch.setattr(cl, "CHUNK_VERSION", 3)
+
+
 @pytest.fixture
 def collection(tmp_path, isolated_config):
     root = tmp_path / "legi"
