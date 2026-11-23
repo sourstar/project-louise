@@ -464,6 +464,17 @@ class TransportError(RuntimeError):
     """A transport-level failure (network, subprocess, protocol)."""
 
 
+class HeldBack(RuntimeError):
+    """A pass held back before the origin is asked anything, said why: a
+    BULK the pass must use first is there and cannot be used — a newer dump
+    that does not read, or whose build failed (CLAUDE.md, bulk first: "until
+    the bulk download is not fully used no cherry picking is allowed"). A
+    `UnitFetcher.prepare` raises it; the engine ends the pass for that
+    collection, deferred (a warning naming the reason, a "stopped" result),
+    and never goes on to the origin's per-unit API (review 2026-11-21, Q6).
+    Not a TransportError: no file failed, nothing is recorded against one."""
+
+
 class TransferAborted(TransportError):
     """A stop event (SIGTERM) fired mid-transfer.
 

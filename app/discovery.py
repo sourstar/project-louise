@@ -160,16 +160,12 @@ def sync_collection(con, collection, *, stop=None, adopt: bool = False) -> dict:
     # scan resumable: rows written so far stand, and the plugin's cursor is
     # only advanced past containers whose rows are committed.
     counts = {"seen": 0, "added": 0, "changed": 0, "missing": 0,
-              "container_errors": 0, "relocated": 0, "resigned": 0,
+              "container_errors": 0, "relocated": 0, "resigned": 0, "retired": 0,
               "superseded": 0, "withdrawn": 0}
 
-    def withdraw(c, uids) -> None:
-        """06 §6.1's deletion signal: what the origin retracted leaves every
-        index it is in (app/unindexable.py) — before the batch writing its
-        tombstone commits, so a stop in between re-enumerates and withdraws
-        it again, never leaves one marked that still answers."""
-        from . import unindexable
-        unindexable.withdraw_many(c, collection, uids)
+    withdraw = withdrawer(collection)
+    # a manifest empty when the scan begins holds no row a new id supersedes
+    superseded = con.execute("SELECT 1 FROM documents LIMIT 1").fetchone() is not None
     interrupted = False
     applied = 0                 # refs durably written so far
     batch: list[DocRef] = []
@@ -189,7 +185,7 @@ def sync_collection(con, collection, *, stop=None, adopt: bool = False) -> dict:
         # arrival order exact: the later ref sees the earlier one committed.
         if batch and (uid in batch_uids or len(batch) >= DISCOVER_BATCH_REFS):
             if not _apply_batch(con, plugin, batch, counts, stop, wait=True, adopt=adopt,
-                                withdraw=withdraw, collection=collection):
+                                withdraw=withdraw, collection=collection, superseded=superseded):
                 interrupted = True      # stop arrived while the manifest was contended
                 batch = []
                 break
@@ -204,7 +200,7 @@ def sync_collection(con, collection, *, stop=None, adopt: bool = False) -> dict:
         # stopping — a contended manifest must not hold SIGTERM past its
         # grace; what is not committed is simply re-enumerated next scan
         if _apply_batch(con, plugin, batch, counts, stop, wait=not interrupted, adopt=adopt,
-                        withdraw=withdraw, collection=collection):
+                        withdraw=withdraw, collection=collection, superseded=superseded):
             applied += len(batch)
             _signal_committed(state, applied)
         else:
@@ -245,6 +241,18 @@ def sync_collection(con, collection, *, stop=None, adopt: bool = False) -> dict:
     return stats
 
 
+def withdrawer(collection):
+    """06 §6.1's deletion signal for `_apply_batch`: what the origin
+    retracted, or a row a unit no longer yields, leaves every index it is in
+    (app/unindexable.py) — before the batch writing its tombstone commits,
+    so a stop in between re-enumerates and withdraws it again, never leaves
+    one marked that still answers."""
+    def withdraw(c, uids) -> None:
+        from . import unindexable
+        unindexable.withdraw_many(c, collection, uids)
+    return withdraw
+
+
 def register(con, collection, refs: list[DocRef], *, stop=None) -> dict:
     """The given refs into the manifest as a scan applies them
     (`_apply_batch`), and nothing else: a cost per ref, never a walk of the
@@ -252,12 +260,18 @@ def register(con, collection, refs: list[DocRef], *, stop=None) -> dict:
     `adopt`). A scope config that narrows anything is re-applied; the slice
     pass (app/slice_scope.py) is the caller's, as after a scan."""
     counts = {"seen": 0, "added": 0, "changed": 0, "missing": 0, "container_errors": 0, "relocated": 0,
+              "retired": 0,
               "resigned": 0, "superseded": 0, "withdrawn": 0}
     refs = [r for r in refs if r is not None]
     if not refs:
         return counts
     plugin = collection.plugin_instance()
-    if not _apply_batch(con, plugin, refs, counts, stop, wait=True):
+    # its retirements and its language moves withdraw from THIS collection's
+    # indexes, as a scan's do (architecture's review of #799, 2026-11-23: called
+    # without either, a retired row's index rows stayed, and a regroup read
+    # the default collection's)
+    if not _apply_batch(con, plugin, refs, counts, stop, wait=True,
+                        withdraw=withdrawer(collection), collection=collection):
         counts["interrupted"] = True
         return counts
     scope = db.get_scope(con)
@@ -367,8 +381,15 @@ def _hashes(plugin, collection, need: list) -> dict[str, tuple[str, str | None]]
     return {t["uid"]: tuple(v) for t, (ok, v) in zip(tasks, got) if ok}
 
 
+def _forget_validity(con, uid: str, day: int | None = None) -> None:
+    """A retired document's validity row out, its Work's chain recomputed
+    on the collection's day (inside the batch's transaction)."""
+    from app import validity
+    validity.forget(con, uid, day=day)
+
+
 def _apply_batch(con, plugin, batch: list, counts: dict, stop, *, wait: bool,
-                 adopt: bool = False, withdraw=None, collection=None) -> bool:
+                 withdraw, collection, adopt: bool = False, superseded: bool = True) -> bool:
     """Apply one batch of refs to the manifest. Two phases, so the write
     lock is held only for the writes:
 
@@ -395,11 +416,16 @@ def _apply_batch(con, plugin, batch: list, counts: dict, stop, *, wait: bool,
     contended, `wait=False`, or a withdrawal the indexes refused); the
     caller then treats the scan as interrupted — nothing half-applied,
     nothing in the cursor past it."""
+    # `shown` on the COLLECTION's day (its Codex's clock), as the rdf stage
+    # recomputes a chain (architecture's review of #799: the UTC day here)
+    from app import validity as _validity
+    vday = _validity.today(collection) if collection is not None else None
     now = int(time.time())
     local = {k: 0 for k in counts}
     writes: list[tuple[str, tuple]] = []
     order = getattr(plugin, "origin_order", None)
     to_withdraw: list[str] = []
+    regroup: dict[str, list[int]] = {}       # group -> documents whose language left it
     # THE ROWS AND THE HASHES FIRST: every document's row read once, and the
     # fetch-and-hash of those whose signature moved done for the whole batch
     # at once on the parse pool (`_hashes`) — the per-ref decisions below are
@@ -411,7 +437,8 @@ def _apply_batch(con, plugin, batch: list, counts: dict, stop, *, wait: bool,
         if ref.scope == "container" or ref.error:
             continue
         uid = f"{ref.source_id}:{ref.native_id}"
-        row = con.execute("SELECT path,mtime,size,txt_hash FROM documents WHERE uid=?", (uid,)).fetchone()
+        row = con.execute("SELECT path,mtime,size,txt_hash,lang,fts_done,fts_version,native_id,error "
+                          "FROM documents WHERE uid=?", (uid,)).fetchone()
         rows_of[uid] = row
         if row is None or adopt or _superseded(order, ref, row):
             continue
@@ -481,11 +508,21 @@ def _apply_batch(con, plugin, batch: list, counts: dict, stop, *, wait: bool,
         # one that could not.
         lang = ref.extra.get("lang")
         row = rows_of[uid] if uid in rows_of else con.execute(
-            "SELECT path,mtime,size,txt_hash FROM documents WHERE uid=?",
+            "SELECT path,mtime,size,txt_hash,lang,fts_done,fts_version,native_id,error FROM documents "
+            "WHERE uid=?",
             (uid,)).fetchone()
         if _superseded(order, ref, row):
             local["superseded"] += 1
             continue
+        revived = row is not None and str(row["error"] or "").startswith("superseded")
+        if revived:
+            # a unit whose form came back to an id it had: that row is the
+            # document again, derived afresh; its sibling is retired below
+            writes.append((
+                "UPDATE documents SET path=?,txt_name=?,mtime=?,size=?,txt_hash=NULL,error=NULL,retries=0,"
+                "rdf_done=0,fts_done=0,embed_done=0,summary_done=0,updated_at=? WHERE uid=?",
+                (ref.locator, txt_name, ref.mtime, ref.size, now, uid)))
+            local["changed"] += 1
         if row is None:
             writes.append((
                 "INSERT INTO documents(uid,source,native_id,path,txt_name,lang,"
@@ -493,6 +530,38 @@ def _apply_batch(con, plugin, batch: list, counts: dict, stop, *, wait: bool,
                 (uid, ref.source_id, ref.native_id, ref.locator, txt_name, lang,
                  ref.mtime, ref.size, now)))
             local["added"] += 1
+        if row is None or revived:
+            # ONE UNIT, ONE DOCUMENT (2026-11-21: EUR-Lex5 held 37,695 units
+            # twice — a unit re-formed into a Formex package took its id from
+            # the wrapper's OJ day, its old row the tree's, and nothing ever
+            # retired the old one). A new id at a unit: the ids the plugin says
+            # the same unit could have had, held at this very locator, are
+            # retired — out of every index, their validity row forgotten,
+            # tombstoned with the reason. Asked of new ids only: nothing in
+            # steady state, a primary-key read each when a form changes.
+            # asked only where a row can be held under another id: a manifest
+            # empty when the scan began holds none (architecture's review of
+            # #799, 2026-11-23: EUR-Lex's answer unpacks the package and
+            # parses the tree again, doubling a first scan on its one thread)
+            alts = getattr(plugin, "superseded_ids", None) if superseded else None
+            for alt in (alts(ref) if alts is not None else ()):
+                uid_alt = f"{ref.source_id}:{alt}"
+                if uid_alt == uid:
+                    continue
+                held = con.execute("SELECT path,error,rdf_done,fts_done,embed_done FROM documents "
+                                   "WHERE uid=?", (uid_alt,)).fetchone()
+                if held is None or held["path"] != ref.locator or str(held["error"] or "").startswith(
+                        "superseded"):
+                    continue
+                if held["rdf_done"] or held["fts_done"] or held["embed_done"]:
+                    to_withdraw.append(uid_alt)
+                writes.append((_forget_validity, (uid_alt, vday)))
+                writes.append((
+                    "UPDATE documents SET error=?,rdf_done=0,fts_done=0,embed_done=0,summary_done=0,"
+                    "updated_at=? WHERE uid=?",
+                    (f"superseded by {uid}: the same unit under another id (one unit, one document)",
+                     now, uid_alt)))
+                local["retired"] += 1
         elif adopt and (row["mtime"] != ref.mtime or row["size"] != ref.size
                         or row["path"] != ref.locator):
             # A1d: the new parser's signature and locator, as a fresh scan
@@ -512,6 +581,16 @@ def _apply_batch(con, plugin, batch: list, counts: dict, stop, *, wait: bool,
                 held_of = None if row["txt_hash"] else _held_hash(plugin, ref, row)
             held_hash = row["txt_hash"] or held_of
             if raw_hash != held_hash:
+                # A LANGUAGE THAT LEAVES ITS GROUP here, not in the rdf stage
+                # (2026-11-21: discovery wrote the new `lang` in this same
+                # UPDATE, so the rdf stage saw no move and the old group's
+                # rows stayed — the pubmed duplicate by another path)
+                old = row["lang"]
+                if (lang and old and lang != old and (row["fts_done"] or (row["fts_version"] or 0) > 0)
+                        and row["native_id"] is not None):
+                    from app import fts
+                    for g in set(fts.groups_for_lang(collection, old)) - set(fts.groups_for_lang(collection, lang)):
+                        regroup.setdefault(g, []).append(int(row["native_id"]))
                 writes.append((
                     "UPDATE documents SET path=?,txt_name=?,lang=COALESCE(?,lang),"
                     "mtime=?,size=?,txt_hash=?,"
@@ -572,12 +651,27 @@ def _apply_batch(con, plugin, batch: list, counts: dict, stop, *, wait: bool,
                          f"and retried next scan"[:400])
             return False
         local["withdrawn"] += len(to_withdraw)
+    if regroup:
+        # the old group's rows go before the marks commit (#769's order): a
+        # stop between leaves rows a later scan or verify finds again
+        from app import fts
+        try:
+            for g, books in sorted(regroup.items()):
+                fts.delete_books(g, books, collection)
+        except Exception as e:  # noqa: BLE001 — an index busy: deferred, nothing written
+            db.log_event(con, "warn", "discover",
+                         f"{sum(map(len, regroup.values()))} document(s) whose language changed could not "
+                         f"leave their old text-index group yet ({type(e).__name__}: {e}); deferred"[:400])
+            return False
     waited = False
     while True:
         try:
             con.execute("BEGIN IMMEDIATE")
             for sql, params in writes:
-                con.execute(sql, params)
+                if callable(sql):
+                    sql(con, *params)
+                else:
+                    con.execute(sql, params)
             con.execute("COMMIT")
             break
         except sqlite3.OperationalError as e:
@@ -596,6 +690,30 @@ def _apply_batch(con, plugin, batch: list, counts: dict, stop, *, wait: bool,
                              f"is intact and will be retried")
                 waited = True
             time.sleep(2)
+    # ONCE MORE AFTER THE COMMIT (architecture's review of #799, defect 7): the
+    # rows above were decided outside the write lock and withdrawn before it,
+    # so the worker's text-index stage could index a retired row, or a moved
+    # one into its old group, in between. From this commit on it cannot: a
+    # tombstone carries an error (no stage selects it) and a moved row's
+    # language is its new one. Both are idempotent; a failure here leaves at
+    # most a stray row, which `dev rederive --verify` deletes (its strays)
+    if to_withdraw and withdraw is not None:
+        try:
+            withdraw(con, to_withdraw)
+        except Exception as e:  # noqa: BLE001 — committed already: said, verify's to repair
+            db.log_event(con, "warn", "discover", f"{len(to_withdraw)} retired document(s): their second "
+                                                  f"withdrawal failed ({type(e).__name__}: {e}); "
+                                                  f"`dev rederive --verify` removes any stray row"[:400])
+    if regroup:
+        from app import fts
+        try:
+            for g, books in sorted(regroup.items()):
+                fts.delete_books(g, books, collection)
+        except Exception as e:  # noqa: BLE001 — as above
+            db.log_event(con, "warn", "discover", f"the old text-index groups of {sum(map(len, regroup.values()))} "
+                                                  f"moved document(s): their second deletion failed "
+                                                  f"({type(e).__name__}: {e}); `dev rederive --verify` "
+                                                  f"removes any stray row"[:400])
     for k, v in local.items():
         counts[k] += v
     return True

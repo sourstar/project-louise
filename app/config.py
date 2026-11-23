@@ -542,8 +542,15 @@ PARSE_TASKS_PER_CHILD = int(os.getenv("PARSE_TASKS_PER_CHILD", "500"))
 # but finite.
 PARSE_TIMEOUT_S = float(os.getenv("PARSE_TIMEOUT_S", "120"))
 # Consecutive pool failures after which this process stops using children
-# altogether and computes in-process until the next restart.
+# for PARSE_RETRY_S, computing in-process meanwhile (a heavy document is
+# deferred, never parsed in the main process). Then the pool is tried again
+# on probation: one more failure and it is off for twice as long, up to
+# PARSE_RETRY_MAX_S; an answered batch clears it (app/parallel.py). Until
+# 2026-11-21 it was off until the next restart, and EUR-Lex5's text index
+# crawled on one core (0.7 -> 73 ms/doc, P2 of the review).
 PARSE_MAX_FAILURES = int(os.getenv("PARSE_MAX_FAILURES", "3"))
+PARSE_RETRY_S = float(os.getenv("PARSE_RETRY_S", "300"))
+PARSE_RETRY_MAX_S = float(os.getenv("PARSE_RETRY_MAX_S", "3600"))
 # An idle parse pool is RELEASED after this many seconds with no caller
 # inside it (app/parallel.release_idle): its children hold the plugin caches
 # they grew while parsing — measured 10.8 GiB in 12 children, resident 26-42
@@ -771,6 +778,25 @@ def ensure_dirs():
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     FTS_DIR.mkdir(parents=True, exist_ok=True)
     LANCE_DIR.mkdir(parents=True, exist_ok=True)
+
+
+# THE PROCESSES' OWN LOG FILES (2026-11-21, O1 of the EUR-Lex review): the
+# worker kept no log file, and Docker's log dies with its container — every
+# deploy and the 01:56Z kernel panic erased the evidence of 2026-11-19/20.
+# The worker's (written by its guard, its children's lines included) and the
+# web's lines go to `<log_dir()>/worker.log` and `web.log` as well as to the
+# container's log, rotated at LOG_FILE_BYTES with LOG_FILE_BACKUPS kept:
+# at most (backups + 1) x bytes each, 384 MiB by default (app/log_file.py).
+# LOG_FILE_BYTES=0 turns them off. Identity tier: this node's paths.
+LOG_FILE_BYTES = int(os.getenv("LOG_FILE_BYTES", str(64 << 20)))
+LOG_FILE_BACKUPS = int(os.getenv("LOG_FILE_BACKUPS", "5"))
+
+
+def log_dir() -> Path:
+    """`$LOG_DIR`, else `<DATA_DIR>/logs`: on the node's own data, a local
+    filesystem (invariant 6). Read at CALL time, as `louise_root`."""
+    value = os.getenv("LOG_DIR")
+    return Path(value) if value else DATA_DIR / "logs"
 
 
 def louise_root() -> Path:

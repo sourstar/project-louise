@@ -87,7 +87,9 @@ RUN python -m tools.measure.cdc_identity --generated 300 --long 20000 --jobs 1 >
 # the image's own contents are never exercised there.
 COPY calibration ./calibration
 EXPOSE 8742
-CMD ["uvicorn", "app.api:app", "--host", "0.0.0.0", "--port", "8742"]
+# uvicorn's command line behind the web's log file (app/web_main.py: its lines
+# also to /data/logs/web.log, rotated; O1 of the 2026-11-21 review)
+CMD ["python", "-m", "app.web_main", "app.api:app", "--host", "0.0.0.0", "--port", "8742"]
 
 # THE NATIVE BUILD (2026-11-02, docs/notes/python-hot-spots.md "E"): wikidata's
 # textifier and its formatter compiled to C by mypyc (tools/build_native.py),

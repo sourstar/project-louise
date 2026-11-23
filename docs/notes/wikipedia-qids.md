@@ -53,6 +53,21 @@ Measured on trwiki-20260801: 22 MB, 1,278,431 pages with rows, 1,127,794 QIDs,
 pack built in 4.8 s (enwiki, ~20× the bytes, about 100 s), every unit equal
 to its byte slice of the decompressed file.
 
+**Two statement layouts (found 2026-11-23).** Runs up to 20260801 write each
+INSERT on one line (trwiki 20260701 and 20260801, read by Range). From the
+20260901 runs on, dumps.wikimedia.org writes `INSERT … VALUES` alone on its
+line, then one tuple a line (itwiki 20260901 and 20261101, itwikisource
+20261001 and 20261101, read by Range). The first reader
+matched only the first layout and read a new-layout file as a table with no
+row: on the real itwikisource-20261101 file it gave 0 units, with no error,
+so every page of such a run would have lost its QID. `iter_units` now reads
+both layouts. It stays strict: a tuple outside a statement, a statement the
+file leaves open, or a `CREATE TABLE` with other columns fails the file.
+PACK_VERSION went to 2, so any pack the first reader built is rebuilt. The
+rebuild is about 4 minutes of single-pass work for the eleven wikis, from
+the trwiki figure above. Wikisource's categorylinks and linktarget are read
+by the same code (`iter_rows`, `PageTable`).
+
 ## 3. The switch on the node — RULE 1, and its order
 
 The live collection: Codex version 2 (`b8ff5fab…`, its `space_id` holding the

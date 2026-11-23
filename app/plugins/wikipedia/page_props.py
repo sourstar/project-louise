@@ -14,6 +14,16 @@ closing one of its last — `[start, end)`, the member its locator names. A
 page whose rows straddle two INSERT statements takes the statement break
 with them, as the dump wrote it.
 
+TWO STATEMENT LAYOUTS, read alike. Runs up to 20260801 write each INSERT on
+one line, `INSERT INTO `t` VALUES (…),(…);` (trwiki 20260701, 20260801);
+from the 20260901 runs on (itwiki 20260901, 20261101) dumps.wikimedia.org
+writes `INSERT INTO `t` VALUES` alone on its line and then one tuple a line,
+each ending in `,` and the statement's last in `;` (read from the runs'
+own files by Range, 2026-11-23). The old reader matched only the first
+layout and read a new-layout file as a table with no row — silently: every
+page of such a run would have lost its QID. PACK_VERSION 2 rebuilds any
+pack it wrote.
+
 THE PACK. gzip is not seekable, so a page is never read from the file: a
 derived Parquet (`page`, `start`, `end`, `rows`), built once per file by one
 streaming pass and rebuilt when the file's (size, mtime) or PACK_VERSION
@@ -23,9 +33,16 @@ an origin that cannot be written (a read-only mount at check time), in the
 system's temporary directory. The `.sql.gz` stays the origin.
 
 STRICT. Every byte between two tuples of a statement must be the comma the
-dump writes, and every statement must end in `);`. A row this reader does
-not recognise fails the file, loudly, rather than being skipped: a skipped
-row would be a property the record silently lacks.
+dump writes (and, in the second layout, the line break after it), every
+statement must end in `);`, and a `CREATE TABLE` naming other columns than
+the reader's fails the file. A row this reader does not recognise fails the
+file, loudly, rather than being skipped: a skipped row would be a property
+the record silently lacks.
+
+THE SAME READER for any MediaWiki table dumped the same way (`iter_rows`,
+`iter_units`, `PageTable`): Wikisource's categorylinks, linktarget and
+page_props (app/plugins/wikisource/tables.py), each with its own tuple form
+and its own pack.
 """
 from __future__ import annotations
 
@@ -36,24 +53,30 @@ import tempfile
 import threading
 from bisect import bisect_right
 from pathlib import Path
+from typing import Callable, Iterator
 
+from app import derived
 from app.backend import read_cache
 from app.container_pack import ContainerPack, signature
 
-PACK_VERSION = 1
+#: 2 (2026-11-23): the one-tuple-a-line layout read; a pack 1 wrote from such
+#: a file holds no row
+PACK_VERSION = 2
 ROW_GROUP = 20_000
 SUFFIX = "-page_props.sql.gz"
 PACK_SUFFIX = ".pack.parquet"
-#: the INSERT statements' head, as mysqldump and MariaDB's dump write it
-_INSERT = b"INSERT INTO `page_props` VALUES "
+TABLE = b"page_props"
 #: one row: (pp_page, 'pp_propname', 'pp_value', pp_sortkey)
 _TUPLE = re.compile(
     rb"\((\d+),'((?:[^'\\]|\\.)*)','((?:[^'\\]|\\.)*)',"
     rb"(NULL|-?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?)\)", re.S)
+COLUMNS = ("pp_page", "pp_propname", "pp_value", "pp_sortkey")
 #: mysqldump's escapes; any other `\x` is `x` (MySQL's own rule)
 _ESCAPES = {b"0": b"\0", b"'": b"'", b'"': b'"', b"b": b"\b", b"n": b"\n",
             b"r": b"\r", b"t": b"\t", b"Z": b"\x1a", b"\\": b"\\"}
 _ESCAPED = re.compile(rb"\\(.)", re.S)
+#: a column of a CREATE TABLE: its name, backquoted, first on its line
+_COLUMN = re.compile(rb"^\s+`([^`]+)`")
 #: the property whose home is `extra.wikidata`
 WIKIBASE_ITEM = "wikibase_item"
 
@@ -62,8 +85,12 @@ _META_SIZE = b"louise.source_size"
 _META_MTIME = b"louise.source_mtime_ns"
 
 
-class PagePropsError(ValueError):
-    """The file holds bytes this reader does not recognise as page_props rows."""
+class TableError(ValueError):
+    """The file holds bytes this reader does not recognise as its table's rows."""
+
+
+#: the name page_props' callers know
+PagePropsError = TableError
 
 
 def props_path_of(dump: Path) -> Path:
@@ -93,6 +120,10 @@ def _text(raw: bytes):
         return {"base64": base64.b64encode(b).decode("ascii")}
 
 
+#: a dumped value as a record holds it — Wikisource's tables read theirs alike
+value = _text
+
+
 def parse_rows(unit: bytes) -> list[tuple[str, object]]:
     """`[(pp_propname, pp_value), …]` of one page's unit, in the dump's order.
     `pp_page` is the page itself; `pp_sortkey` is MediaWiki's float copy of a
@@ -116,86 +147,125 @@ def fields_of(unit: bytes | None) -> dict:
     return {k: v for k, v in {"wikidata": qid, "page_props": rest}.items() if v}
 
 
-def iter_units(f):
-    """`(page, start, end, unit bytes)` per page, streaming the decompressed
-    SQL `f` (a binary file object) line by line. Pages strictly ascending, or
-    PagePropsError."""
+def iter_rows(f, *, table: bytes = TABLE, row: re.Pattern = _TUPLE,
+              columns: tuple[str, ...] | None = COLUMNS) -> Iterator[tuple[re.Match, int]]:
+    """`(match, offset of the match's line)` for every tuple of every
+    `INSERT INTO `table`` statement of the decompressed SQL `f` (a binary
+    file object, read line by line), in the dump's order, in either layout
+    (the module's docstring). TableError on a byte that is not a tuple of
+    `row`, its separating comma, a line break after one, or the `;` that
+    ends a statement; on a statement the file leaves open; on a `CREATE
+    TABLE` of `table` whose columns are not `columns`."""
+    head = b"INSERT INTO `" + table + b"` VALUES"
+    create = b"CREATE TABLE `" + table + b"` ("
     pos = 0
-    cur = None            # [page, start, parts, line, line_from, end_in_line, line_pos]
-    last_page = -1
+    open_ = False                 # inside a statement: the next tuple may start a line
+    named: list[str] | None = None
     for line in f:
-        if line.startswith(_INSERT):
-            at = len(_INSERT)
-            for m in _TUPLE.finditer(line, at):
-                if m.start() != at:
-                    raise PagePropsError(f"unparsed bytes at offset {pos + at}: "
-                                         f"{line[at:at + 60]!r}")
-                page = int(m.group(1))
-                if cur is not None and cur[0] == page:
-                    if cur[3] is not line:
-                        cur[2].append(cur[3][cur[4]:])
-                        cur[3], cur[4], cur[6] = line, 0, pos
-                    cur[5] = m.end()
-                else:
-                    if cur is not None:
-                        yield _close(cur)
-                    if page <= last_page:
-                        raise PagePropsError(f"page {page} after {last_page}: the rows are "
-                                             f"not in primary-key order")
-                    last_page = page
-                    cur = [page, pos + m.start(), [], line, m.start(), m.end(), pos]
-                at = m.end()
-                if line[at:at + 1] == b",":
-                    at += 1
-            tail = line[at:].rstrip(b"\r\n")
-            if tail != b";" or line[at - 1:at] != b")":
-                raise PagePropsError(f"statement at offset {pos} ends in {line[at - 1:at + 20]!r}")
+        at = 0
+        if not open_:
+            if named is not None:                                # inside CREATE TABLE
+                m = _COLUMN.match(line)
+                if m:
+                    named.append(m.group(1).decode("utf-8", errors="replace"))
+                elif line.lstrip().startswith(b")"):
+                    if columns is not None and tuple(named) != tuple(columns):
+                        raise TableError(f"`{table.decode()}` has the columns {tuple(named)}, this reader "
+                                         f"reads {tuple(columns)}")
+                    named = None
+                pos += len(line)
+                continue
+            if line.startswith(create):
+                named = []
+                pos += len(line)
+                continue
+            if not line.startswith(head):
+                if line.startswith(b"("):
+                    raise TableError(f"a tuple outside any statement at offset {pos}: {line[:60]!r}")
+                pos += len(line)
+                continue
+            at = len(head)
+            open_ = True
+            if line[at:at + 1] == b" ":
+                at += 1
+            elif line[at:].rstrip(b"\r\n") == b"":
+                pos += len(line)
+                continue                                         # its tuples start on the next line
+            else:
+                raise TableError(f"statement at offset {pos} begins {line[:len(head) + 20]!r}")
+        while True:
+            m = row.match(line, at)
+            if m is None:
+                raise TableError(f"unparsed bytes at offset {pos + at}: {line[at:at + 60]!r}")
+            yield m, pos
+            at = m.end()
+            sep = line[at:at + 1]
+            if sep == b",":
+                at += 1
+                if _line_ends(line, at):
+                    break                                        # the next tuple starts the next line
+                continue
+            if sep == b";" and _line_ends(line, at + 1):
+                open_ = False
+                break
+            raise TableError(f"statement at offset {pos} ends in {line[at - 1:at + 20]!r}")
         pos += len(line)
+    if open_:
+        raise TableError(f"the file ends inside a `{table.decode()}` statement")
+
+
+def _line_ends(line: bytes, at: int) -> bool:
+    """Nothing but the line break from `at` on — in constant time: a
+    first-layout statement is one line of a megabyte, read tuple by tuple."""
+    c = line[at:at + 1]
+    return c in (b"", b"\n") or (c == b"\r" and line[at + 1:at + 2] in (b"", b"\n"))
+
+
+def iter_units(f, *, table: bytes = TABLE, row: re.Pattern = _TUPLE,
+               columns: tuple[str, ...] | None = COLUMNS) -> Iterator[tuple[int, int, int, bytes]]:
+    """`(page, start, end, unit bytes)` per page — the first column of `row`
+    — streaming the decompressed SQL `f` (`iter_rows`). Pages strictly
+    ascending, or TableError: the rows of a table whose primary key leads
+    with the page are one run per page."""
+    seen: list[tuple[int, bytes]] = []     # every line from the open unit's first to the one read now
+
+    def lines():
+        pos = 0
+        for line in f:
+            seen.append((pos, line))
+            pos += len(line)
+            yield line
+    cur: list | None = None                # [page, start, end]
+    last_page = -1
+    for m, line_pos in iter_rows(lines(), table=table, row=row, columns=columns):
+        page = int(m.group(1))
+        if cur is not None and cur[0] == page:
+            cur[2] = line_pos + m.end()
+            continue
+        if cur is not None:
+            yield _close(cur, seen)
+        del seen[:-1]                      # the new unit starts on the line read now
+        if page <= last_page:
+            raise TableError(f"page {page} after {last_page}: the rows are not in primary-key order")
+        last_page = page
+        cur = [page, line_pos + m.start(), line_pos + m.end()]
     if cur is not None:
-        yield _close(cur)
+        yield _close(cur, seen)
 
 
-def _close(cur) -> tuple[int, int, int, bytes]:
-    page, start, parts, line, line_from, end_in_line, line_pos = cur
-    unit = b"".join(parts) + line[line_from:end_in_line]
-    return page, start, line_pos + end_in_line, unit
+def _close(cur: list, seen: list[tuple[int, bytes]]) -> tuple[int, int, int, bytes]:
+    """The unit `[start, end)` cut from the lines that hold it: from its own
+    line when it fits in one (a long first-layout statement is never copied
+    per page), from the lines joined when it spans several — the statement
+    break between them included, as the dump wrote it."""
+    page, start, end = cur
+    p, line = seen[0]
+    if end <= p + len(line):
+        return page, start, end, line[start - p:end - p]
+    return page, start, end, b"".join(b for _, b in seen)[start - p:end - p]
 
 
 # ---- the pack ---------------------------------------------------------------
-
-#: the CONTAINER_PACK template's machinery (app/container_pack.py): freshness,
-#: one builder across processes, the pack written whole
-_PACK = ContainerPack("wikipedia page_props", "pages", _META_VERSION)
-
-
-def _signature(path: Path) -> tuple[int, int]:
-    return signature(path)
-
-
-def _pack_dirs(props: Path) -> list[Path]:
-    """The fast drive's `wikipedia-page-props/<tag of the props' folder>/`
-    when the node names one (LOUISE_CACHE_DIR, app/derived.py), else
-    `.pack/` beside the props; then the temporary directory."""
-    from app import derived
-    first = derived.place("wikipedia-page-props", props.parent) or props.parent / derived.BESIDE
-    return [first, Path(tempfile.gettempdir()) / "louise-page-props"]
-
-
-def _candidates(props: Path) -> list[Path]:
-    # the temporary one is keyed by the origin's full path: two corpora can
-    # hold a file of the same name (caches key on physical identity)
-    from app import derived
-    tag = derived.tag(props) + "-"
-    first, second = _pack_dirs(props)
-    beside = props.parent / derived.BESIDE / (props.name + PACK_SUFFIX)
-    if first != beside.parent:
-        derived.adopt(beside, first / (props.name + PACK_SUFFIX))   # a pack built beside the props, carried once
-    return [first / (props.name + PACK_SUFFIX), second / (tag + props.name + PACK_SUFFIX)]
-
-
-def _is_fresh(props: Path, pack: Path) -> bool:
-    return _PACK.is_fresh(props, pack, PACK_VERSION)
-
 
 _SCHEMA = None
 
@@ -209,18 +279,12 @@ def _schema():
     return _SCHEMA
 
 
-def build(props: Path, dest: Path) -> int:
-    """One streaming pass over `props` into `dest`, written whole
-    (app/container_pack.py)."""
-    return _PACK.write(props, dest, _schema(), _tables(props), PACK_VERSION)
-
-
-def _tables(props: Path):
-    """The props' units as tables of ROW_GROUP rows."""
+def _tables(props: Path, units: Callable = iter_units):
+    """`units(file)`'s units of the gzip `props`, as tables of ROW_GROUP rows."""
     import pyarrow as pa
     cols: dict[str, list] = {"page": [], "start": [], "end": [], "rows": []}
     with gzip.open(props, "rb") as f:
-        for page, start, end, unit in iter_units(f):
+        for page, start, end, unit in units(f):
             cols["page"].append(page)
             cols["start"].append(start)
             cols["end"].append(end)
@@ -233,45 +297,126 @@ def _tables(props: Path):
 
 
 _lock = threading.Lock()
+_bounds: dict[str, list[int]] = {}             # pack path -> first page of each row group
+
+
+class PageTable:
+    """A dumped table packed by its leading key — the CONTAINER_PACK template
+    (app/container_pack.py `pack`: freshness, one builder, the pack written
+    whole) over `units` (`iter_units` here). Wikipedia's page_props is one
+    (this module's functions); Wikisource's categorylinks, linktarget and
+    page_props are others, each placed under its own kind
+    (app/plugins/wikisource/tables.py). `dirs(origin)`: the fast drive's
+    place or `.pack/` beside the origin, then the temporary directory;
+    `where(origin)`: what decides them, cheap (`derived.place_kept`)."""
+
+    def __init__(self, pack: ContainerPack, version: int, *, dirs: Callable[[Path], list[Path]],
+                 where: Callable[[Path], object], units: Callable = iter_units):
+        self.pack, self.version, self.dirs, self.where, self.units = pack, version, dirs, where, units
+        #: (pack path, group) -> {page: (start, end, rows)}, in the process's one
+        #: read budget (app/backend.py `READ_CACHE`)
+        self.groups = read_cache(pack.label)
+
+    def candidates(self, origin: Path) -> list[Path]:
+        # the temporary one is keyed by the origin's full path: two corpora can
+        # hold a file of the same name (caches key on physical identity)
+        first, second = self.dirs(origin)
+        beside = origin.parent / derived.BESIDE / (origin.name + PACK_SUFFIX)
+        if first != beside.parent:
+            derived.adopt(beside, first / (origin.name + PACK_SUFFIX))   # a pack built beside, carried once
+        return [first / (origin.name + PACK_SUFFIX),
+                second / (derived.tag(origin) + "-" + origin.name + PACK_SUFFIX)]
+
+    def is_fresh(self, origin: Path, pack: Path) -> bool:
+        return self.pack.is_fresh(origin, pack, self.version)
+
+    def build(self, origin: Path, dest: Path) -> int:
+        """One streaming pass over `origin` into `dest`, written whole."""
+        return self.pack.write(origin, dest, _schema(), _tables(origin, self.units), self.version)
+
+    def ensure(self, origin: Path) -> Path:
+        """The pack of `origin`, built if missing or stale; one builder across
+        threads and processes."""
+        return self.pack.ensure(origin, lambda: self.candidates(origin), version=self.version,
+                                build=lambda o, d: self.build(o, d), ready=self._ready,
+                                where=self.where(origin))
+
+    def _ready(self, pack: Path) -> None:
+        """A pack newly confirmed or built: what was cached from an older one goes."""
+        with _lock:
+            _bounds.pop(str(pack), None)
+        self.groups.forget(lambda k: k[0] == str(pack))
+
+    def unit_of(self, origin: Path, page: int) -> tuple[int, int, bytes] | None:
+        """`(start, end, unit)` of `page` in `origin`, or None when the table
+        has no row for it."""
+        return _lookup(self.ensure(origin), page, self.groups)
+
+    def reader(self, origin: Path):
+        """`unit_of` over one file for a whole scan: the pack confirmed once,
+        not stat-ed per page."""
+        pack = self.ensure(origin)
+        return lambda page: _lookup(pack, page, self.groups)
+
+
+def _signature(path: Path) -> tuple[int, int]:
+    return signature(path)
+
+
+def _pack_dirs(props: Path) -> list[Path]:
+    """The fast drive's `wikipedia-page-props/<tag of the props' folder>/`
+    when the node names one (LOUISE_CACHE_DIR, app/derived.py), else
+    `.pack/` beside the props; then the temporary directory."""
+    first = derived.place("wikipedia-page-props", props.parent) or props.parent / derived.BESIDE
+    return [first, Path(tempfile.gettempdir()) / "louise-page-props"]
+
+
+#: the CONTAINER_PACK template's machinery (app/container_pack.py): freshness,
+#: one builder across processes, the pack written whole
+_PACK = ContainerPack("wikipedia page_props", "pages", _META_VERSION)
+_TABLE = PageTable(_PACK, PACK_VERSION, dirs=lambda p: _pack_dirs(p),
+                   where=lambda p: derived.place_kept("wikipedia-page-props", p.parent))
 #: (props, where) -> (signature, version, pack path) of the pack found fresh
 _fresh = _PACK.fresh
-_bounds: dict[str, list[int]] = {}             # pack path -> first page of each row group
-#: (pack path, group) -> {page: (start, end, rows)}, in the process's one read
-#: budget (app/backend.py `READ_CACHE`); it held 4 groups, then 64 MiB of its own
-_groups = read_cache("wikipedia page_props")
+#: wikipedia's read cache, "wikipedia page_props" (it held 4 groups, then 64 MiB of its own)
+_groups = _TABLE.groups
+
+
+def _candidates(props: Path) -> list[Path]:
+    return _TABLE.candidates(props)
+
+
+def _is_fresh(props: Path, pack: Path) -> bool:
+    return _TABLE.is_fresh(props, pack)
+
+
+def build(props: Path, dest: Path) -> int:
+    """One streaming pass over `props` into `dest`, written whole
+    (app/container_pack.py)."""
+    return _TABLE.build(props, dest)
 
 
 def ensure(props: Path) -> Path:
     """The pack of `props`, built if missing or stale; one builder across
     threads and processes (app/container_pack.py)."""
-    from app import derived
-    return _PACK.ensure(props, lambda: _candidates(props), version=PACK_VERSION,
-                        build=lambda o, d: build(o, d), ready=_ready,
-                        where=derived.place_kept("wikipedia-page-props", props.parent))
-
-
-def _ready(pack: Path) -> None:
-    """A pack newly confirmed or built: what was cached from an older one goes."""
-    with _lock:
-        _bounds.pop(str(pack), None)
-    _groups.forget(lambda k: k[0] == str(pack))
+    return _TABLE.ensure(props)
 
 
 def unit_of(props: Path, page: int) -> tuple[int, int, bytes] | None:
     """`(start, end, unit)` of `page` in `props`, or None when the table has
     no row for it."""
-    return _lookup(ensure(props), page)
+    return _TABLE.unit_of(props, page)
 
 
 def reader(props: Path):
     """`unit_of` over one file for a whole scan: the pack confirmed once,
     not stat-ed per page."""
-    pack = ensure(props)
-    return lambda page: _lookup(pack, page)
+    return _TABLE.reader(props)
 
 
-def _lookup(pack: Path, page: int) -> tuple[int, int, bytes] | None:
+def _lookup(pack: Path, page: int, groups=None) -> tuple[int, int, bytes] | None:
     import pyarrow.parquet as pq
+    groups = _groups if groups is None else groups
     pk = str(pack)
     with _lock:
         bounds = _bounds.get(pk)
@@ -286,11 +431,11 @@ def _lookup(pack: Path, page: int) -> tuple[int, int, bytes] | None:
     g = bisect_right(bounds, page) - 1
     if g < 0:
         return None
-    group = _groups.get((pk, g))
+    group = groups.get((pk, g))
     if group is None:
         with pq.ParquetFile(pack) as pf:
             t = pf.read_row_group(g)
-        group = _groups.put((pk, g), {p: (s, e, r) for p, s, e, r in zip(
+        group = groups.put((pk, g), {p: (s, e, r) for p, s, e, r in zip(
             t.column("page").to_pylist(), t.column("start").to_pylist(),
             t.column("end").to_pylist(), t.column("rows").to_pylist())}, t.nbytes)
     return group.get(page)

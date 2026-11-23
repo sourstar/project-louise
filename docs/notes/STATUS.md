@@ -25,6 +25,34 @@ measured (published figures disagree).
   vectors move <c> --to hot --apply` adopts a beside-the-folder table by a rename. The node's procedure is
   storage-tiering.md §12.
 
+### 2026-11-21
+
+- **The worker and the web keep a log file — BUILT, not deployed** (O1 of
+  [eurlex-review-2026-11-21.md](eurlex-review-2026-11-21.md); app/log_file.py). Docker's log dies with
+  each container: every deploy and the 01:56Z kernel panic erased the evidence of 11-19/20. Every line
+  still goes to the container's log, and also to `/data/logs/worker.log` and `/data/logs/web.log`
+  (`$LOG_DIR` names another directory; `config.log_dir()`), each line behind its UTC date and time.
+  Rotated by size with the standard library's `logging.handlers.RotatingFileHandler`: `LOG_FILE_BYTES`
+  (64 MiB) a file, `LOG_FILE_BACKUPS` (5) kept — at most 384 MiB per process; `LOG_FILE_BYTES=0` turns
+  them off. One writer per file: `worker.log` is written by the worker's GUARD (`python -m
+  app.worker_guard`, the container's command), which reads the worker's merged stdout and stderr — the
+  parse pool's children and native code included — and outlives it, so a memory kill's "not relaunched"
+  is in it; a worker run without its guard (`python -m app.worker`, docker-compose.yaml) writes its own
+  lines (not its children's). `web.log` is written by the web's new entry point (`python -m
+  app.web_main app.api:app …`: uvicorn's own command line, behind the file; the Dockerfile's CMD and
+  `node start`'s web). A file that cannot be written is said once and never stops the process. Read the
+  last kill's context with `tail -n 200 /data/logs/worker.log` (rotated files: `worker.log.1` … `.5`).
+  Deploy: rebuild the image (the web's CMD changed); nothing to migrate.
+
+- **The parse engine after the EUR-Lex5 review — BUILT, not deployed** (P1–P4, P6, P7, V6 of the
+  review): a pool deferral is never a document's error and costs its row alone (P1); the pool's
+  watchdog is per part, answered parts are kept, nothing heavy is parsed in the main process, a
+  disabled pool comes back after `PARSE_RETRY_S` on probation (P2); a Formex package is estimated by
+  its members unpacked (`parse_size`, P3); an abandoned look-ahead link stops its parse and frees the
+  lane, a beating one is waited for (P4); a `mul` record leaves the groups its chunks left (P6); a stop
+  is honoured at part boundaries, every wait a slice of ≤ 1 s (P7); a stage's mark keeps the daily
+  roll's reset (V6). The commits carry the numbers.
+
 ### 2026-11-19
 
 - **EUR-Lex: the Data Dump files 9 acts' contents under other files' names — FIXED, not deployed**

@@ -66,7 +66,7 @@ def _held(corpus: Path, tree: dict) -> Path:
 def test_a_manifestation_replaced_after_the_held_tree_is_fetched_and_a_current_unit_is_not(tmp_path, monkeypatch):
     called = []
     monkeypatch.setattr(cellar, "fetch_unit_from_tree",
-                        lambda base, celex, lang, dest, trees=None: called.append(celex)
+                        lambda base, celex, lang, dest, trees=None, **kw: called.append(celex)
                         or cellar.Fetched(files={}, moved=1))
     ep = SimpleNamespace(url="https://cellar.test")
     rel = cellar.rel_path("it", FORMEX[0])

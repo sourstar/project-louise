@@ -335,7 +335,10 @@ def test_a_deleted_citation_leaves_its_part_and_its_year_leaves_at_the_next_base
     _container(corpus / UPDATES_SUBDIR / "pubmed26n0004.xml.gz", _delete(31000002),
                _article(31000005, "Another new citation."))
     _scan(root, corpus)
-    assert withdrawn == [("pubmed:31000002", None)], "out of every index BEFORE its tombstone commits"
+    # out of every index BEFORE its tombstone commits, and once more AFTER it
+    # (the review of #799, defect 7: a text-index write in between cannot
+    # leave an orphan; idempotent)
+    assert withdrawn == [("pubmed:31000002", None), ("pubmed:31000002", "deleted (DeleteCitation)")]
     from app import db
     con = db.connect(_source(root, corpus))
     try:

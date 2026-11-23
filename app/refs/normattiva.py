@@ -187,7 +187,8 @@ class NormattivaRefSource:
     namespaces = NAMESPACES
     eli_jurisdiction = ELI_JURISDICTION
     #: a pinned article's note, in Italian (app/ask/articles.py)
-    article_notes = ArticleNotes("testo vigente", "testo al {day}", "ultimo testo in vigore")
+    article_notes = ArticleNotes("testo vigente", "testo al {day}", "ultimo testo in vigore",
+                                 "testo fino al {day}; modificato da allora, il testo modificato non è disponibile")
 
     def article_repealed(self, text: str) -> bool:
         return article_repealed(text)

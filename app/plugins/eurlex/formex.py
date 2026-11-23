@@ -48,11 +48,16 @@ from typing import Any
 _WRAPPER = re.compile(r"\.doc(?:\.fmx)?\.xml$", re.IGNORECASE)
 
 #: elements whose content is laid out as lines of their own
-_BLOCKS = {"PARAG", "ALINEA", "LIST", "ITEM", "NP", "P", "SUBDIV", "GR.SEQ", "TBL", "GR.TBL",
+_BLOCKS = {"PARAG", "ALINEA", "LIST", "ITEM", "NP", "P", "SUBDIV", "GR.SEQ", "TBL", "GR.TBL", "DLIST",
+           "DLIST.ITEM",
            "ROW", "CONTENTS", "DIVISION", "ARTICLE", "CONSID", "VISA", "QUOT.S", "GR.NOTES",
            "TXT.COL", "FORMULA.S", "CORPUS", "BLK", "GR.VISA", "GR.CONSID"}
 #: inline elements standing for one character (U+ the CODE attribute)
 _CHAR_MARKS = {"QUOT.START", "QUOT.END"}
+#: elements whose words are kept apart from their neighbours' on one line
+#: (2026-11-21: "SFCWHSCSpecific fuel consumption" — a DLIST's term and its
+#: definition, a table's cells, glued)
+_SPACED = {"CELL", "TERM", "DEFINITION", "DLIST.ITEM", "ROW", "ITEM", "TI.BLK", "STI.BLK"}
 _PI_ATTR = re.compile(r'([A-Za-z_.:-]+)="([^"]*)"')
 #: the number of a numbered unit, followed by a space where it stands inline
 _NUMBERS = {"NO.P", "NO.PARAG"}
@@ -220,7 +225,7 @@ def unpack(files: dict[str, bytes]) -> tuple[dict[str, bytes], dict[str, str]]:
     bytes determine."""
     import io
     import zipfile
-    out = {n: b for n, b in files.items() if not (is_package(n) and b[:4] == _ZIP_MAGIC)}
+    out = Members({n: b for n, b in files.items() if not (is_package(n) and b[:4] == _ZIP_MAGIC)})
     came: dict[str, str] = {}
     for name in sorted(files):
         data = files[name]
@@ -229,19 +234,53 @@ def unpack(files: dict[str, bytes]) -> tuple[dict[str, bytes], dict[str, str]]:
         try:
             with zipfile.ZipFile(io.BytesIO(data)) as z:
                 infos = [i for i in z.infolist() if not i.is_dir()]
-                if sum(i.file_size for i in infos) > PACKAGE_MAX:
-                    raise FormexError(f"{name}: its members are over {PACKAGE_MAX} bytes")
+                # WHAT IS READ is bounded, not what is held (2026-11-22, München:
+                # 27 EUR-Lex5 packages refused "over 1 GiB" were TIFF figures,
+                # 1.09-9.77 GB, beside 59-942 KB of XML; the act's text was lost
+                # to a guard against what the reader never reads)
+                if sum(i.file_size for i in infos if _read_whole(i.filename)) > PACKAGE_MAX:
+                    raise FormexError(f"{name}: its text members are over {PACKAGE_MAX} bytes")
                 for i in infos:
                     if not _MEMBER_NAME.match(i.filename) or i.filename in (".", ".."):
                         raise FormexError(f"{name}: member {i.filename!r} is not a plain file name")
-                    got = z.read(i)
-                    if i.filename in out and out[i.filename] != got:
+                    if _read_whole(i.filename):
+                        got = z.read(i)            # its CRC-32 checked
+                    else:
+                        # a figure: its first bytes only, what the checks of a
+                        # name against its content read (misnamed, root_tag);
+                        # its size from the central directory
+                        with z.open(i) as f:
+                            got = f.read(_HEAD_BYTES)
+                    held = out.get(i.filename)
+                    if held is not None and held[:len(got)] != got[:len(held)]:
                         raise FormexError(f"{name}: member {i.filename} differs from the item of that name")
                     out[i.filename] = got
+                    out.sizes[i.filename] = i.file_size
                     came[i.filename] = name
         except (zipfile.BadZipFile, zipfile.LargeZipFile, OSError, EOFError) as e:
             raise FormexError(f"{name}: not a readable zip: {e}") from None
     return out, came
+
+
+class Members(dict):
+    """`unpack`'s view: name → bytes, a package's figures by their first
+    bytes only; `sizes` each package member's true size (the central
+    directory's), which a record's `items` states."""
+
+    def __init__(self, *a, **k) -> None:
+        super().__init__(*a, **k)
+        self.sizes: dict[str, int] = {}
+
+    def size(self, name: str) -> int:
+        return self.sizes.get(name, len(self[name]))
+
+
+#: the members the reader reads WHOLE: its text (`unpack`)
+_TEXT_MEMBERS = (".xml",)
+
+
+def _read_whole(name: str) -> bool:
+    return name.lower().endswith(_TEXT_MEMBERS)
 
 
 def norm(text: str | None) -> str:
@@ -326,17 +365,64 @@ def inline(e: ET.Element, col: Collect | None = None) -> str:
             continue
         if c.tag == "NOTE":
             if col is not None:
-                col.note(c, inline(c, None))
+                _note(c, col)
         elif c.tag in _CHAR_MARKS:
             parts.append(_char(c))
+        elif c.tag in ("TBL", "GR.TBL"):
+            # a table inside a line (a CELL): its rows in order, once
+            parts.append(" " + " / ".join(_rows(c, col)) + " ")
         else:
             words = inline(c, col)
             if c.tag.startswith("REF.") and col is not None:
                 col.reference(c, words)
-            parts.append(" " + words + " " if c.tag in _BLOCKS
+            parts.append(" " + words + " " if c.tag in _BLOCKS or c.tag in _SPACED
                          else words + " " if c.tag in _NUMBERS else words)
         parts.append(c.tail or "")
     return norm("".join(parts))
+
+
+def _note(e: ET.Element, col: Collect) -> None:
+    """A footnote: its words to the record's notes; the processing
+    instructions inside it (a consolidation's marks) collected as anywhere."""
+    for x in e.iter():
+        if x.tag is ET.ProcessingInstruction:
+            col.pi(x)
+    col.note(e, inline(e, None))
+
+
+def _rows(tbl: ET.Element, col: Collect | None) -> list[str]:
+    """A table's lines in document order, each row once: its TITLE, each
+    ROW's cells joined by " | ", a BLK's title (TI.BLK) before its rows, a
+    nested table's rows in place, anything else as its words."""
+    out: list[str] = []
+
+    def walk(e: ET.Element) -> None:
+        for c in e:
+            if not isinstance(c.tag, str):
+                if col is not None:
+                    col.pi(c)
+            elif c.tag == "ROW":
+                cells = [inline(cell, col) for cell in c if isinstance(cell.tag, str) and cell.tag == "CELL"]
+                for x in c:
+                    if not isinstance(x.tag, str) and col is not None:
+                        col.pi(x)
+                if any(cells):
+                    out.append(" | ".join(cells))
+            elif c.tag in ("CORPUS", "BLK", "TBL", "GR.TBL"):
+                walk(c)
+            elif c.tag in ("TI.BLK", "STI.BLK", "TITLE"):
+                t = heading(c, col) if c.tag == "TITLE" else inline(c, col)
+                if t:
+                    out.append(t)
+            elif c.tag == "NOTE":
+                if col is not None:
+                    _note(c, col)
+            else:
+                t = inline(c, col)
+                if t:
+                    out.append(t)
+    walk(tbl)
+    return out
 
 
 def lines(e: ET.Element, depth: int, col: Collect, lead: str = "") -> list[str]:
@@ -344,29 +430,18 @@ def lines(e: ET.Element, depth: int, col: Collect, lead: str = "") -> list[str]:
     pad = "   " * depth
     tag = e.tag
     if tag == "NOTE":
-        col.note(e, inline(e, None))
+        _note(e, col)
         return []
     if tag in ("TBL", "GR.TBL"):
-        out: list[str] = []
-        for child in e:
-            if child.tag == "TITLE":
-                out.append(pad + inline(child, col))
-            elif child.tag == "CORPUS":
-                for row in child.iter("ROW"):
-                    cells = [inline(cell, col) for cell in row if cell.tag == "CELL"]
-                    if any(cells):
-                        out.append(pad + " | ".join(cells))
-            elif child.tag in ("TBL", "GR.TBL"):
-                out += lines(child, depth, col)
-            elif isinstance(child.tag, str):
-                text = inline(child, col)
-                if text:
-                    out.append(pad + text)
-        return out
-    if tag == "LIST":
-        out = []
+        # the words before the table first (2026-11-21: "the row for tariff
+        # quota … is replaced by the following:" was dropped before its TBL)
+        return ([pad + lead] if lead else []) + [pad + r for r in _rows(e, col)]
+    if tag in ("LIST", "DLIST"):
+        out = [pad + lead] if lead else []
         for item in e:
-            if isinstance(item.tag, str):
+            if not isinstance(item.tag, str):
+                col.pi(item)
+            else:
                 out += lines(item, depth, col)
         return out
     numbered = {"NP": "NO.P", "PARAG": "NO.PARAG"}.get(tag)
@@ -384,12 +459,12 @@ def lines(e: ET.Element, depth: int, col: Collect, lead: str = "") -> list[str]:
             buf.append(c.tail or "")
             continue
         if c.tag == "NOTE":
-            col.note(c, inline(c, None))
+            _note(c, col)
         elif c.tag in _CHAR_MARKS:
             buf.append(_char(c))
         elif c.tag in _BLOCKS or c.tag in ("TITLE", "TI", "STI"):
             text = norm("".join(buf))
-            if c.tag == "LIST":
+            if c.tag in ("LIST", "DLIST"):
                 if text:
                     out.append(pad + text)
                 out += lines(c, depth + 1, col)
@@ -409,7 +484,7 @@ def lines(e: ET.Element, depth: int, col: Collect, lead: str = "") -> list[str]:
             words = inline(c, col)
             if c.tag.startswith("REF."):
                 col.reference(c, words)
-            buf.append(words)
+            buf.append(f" {words} " if c.tag in _SPACED else words)
         buf.append(c.tail or "")
     text = norm("".join(buf))
     if text:
@@ -421,9 +496,16 @@ def heading(e: ET.Element | None, col: Collect | None = None) -> str:
     """A TITLE's words: its TI, then its STI, joined by " — "."""
     if e is None:
         return ""
+    if col is not None:
+        for c in e:                         # a consolidation's mark beside the title's words
+            if c.tag is ET.ProcessingInstruction:
+                col.pi(c)
     if e.tag in ("TI", "STI", "TI.ART", "STI.ART"):
-        return " ".join(norm(inline(p, col)) for p in e) if len(e) and all(
-            c.tag == "P" for c in e) else inline(e, col)
+        kids = [c for c in e if isinstance(c.tag, str)]
+        if kids and all(c.tag == "P" for c in kids) and not norm(e.text) and not any(
+                norm(c.tail) for c in e):
+            return " ".join(norm(inline(p, col)) for p in kids)
+        return inline(e, col)
     parts = [heading(c, col) for c in e if c.tag in ("TI", "STI")]
     if not parts:
         return inline(e, col)
@@ -573,21 +655,91 @@ def annex_names(wrapper: ET.Element) -> list[str]:
 
 
 _NO_CELEX = re.compile(rb"<NO\.CELEX>\s*([^<\s]+)\s*</NO\.CELEX>")
+def _act_of(celex: str) -> str:
+    """The act a CELEX is of: a consolidation's (`02016R1036-20180608` →
+    `32016R1036`) and a corrigendum's (`32019L1922R(01)` → `32019L1922`)
+    base act, as a wrapper's NO.CELEX may name either."""
+    c = celex.strip()
+    if c[:1] == "0" and len(c) > 1:
+        c = "3" + c[1:].split("-", 1)[0]
+    return re.sub(r"R\(\d+\)$", "", c)
 
 
-def own_wrapper(names, celex: str | None, read) -> str:
+#: an original's CELEX (sector 3) and its year
+_ORIGINAL_YEAR = re.compile(r"^3(\d{4})")
+#: the year of the OJ a wrapper's PUBLICATION.REF names
+#: the OJ a wrapper is of, by its OWN NAME — "L_1998326HR.01003501.doc.xml"
+#: is OJ L 326 of 1998, "P_1959007HR.01018501.doc.xml" OJ P 7 of 1959 (a
+#: Croatian Special Edition's file keeps the original OJ's name) — else its
+#: PUBLICATION.REF's date, that element exactly (2026-11-22, München: the old
+#: `PUBLICATION\.REF\b` also matched PUBLICATION.REF.SE and ran on to the
+#: act's adoption DATE, 1958-12-22, refusing 31959R0005 and 31964D0732 hr)
+_OJ_NAME_YEAR = re.compile(r"^[A-Z]{1,2}_(\d{4})\d{3}")
+_PUB_YEAR = re.compile(rb"<PUBLICATION\.REF(?=[\s>])[^>]*>(?:(?!</PUBLICATION\.REF>).)*?"
+                       rb"<DATE ISO=\"(\d{4})\d{4}\"", re.S)
+
+
+def oj_year(name: str, data: bytes) -> int | None:
+    """The year of the OJ a wrapper is of (`_OJ_NAME_YEAR`, `_PUB_YEAR`)."""
+    m = _OJ_NAME_YEAR.match(name.rsplit("/", 1)[-1])
+    if m:
+        return int(m.group(1))
+    m = _PUB_YEAR.search(data)
+    return int(m.group(1)) if m else None
+
+
+def own_wrapper(names, celex: str | None, read, listed=None, adopted: str | None = None) -> str:
     """The wrapper of THIS act's text among a manifestation's items: the only
     one, or — several (München, 2026-11-16: a Croatian Special Edition
     volume, one fmx4 manifestation whose items are the files of two acts
     sharing its FIN.ID, 1,241 Croatian works) — the one whose NO.CELEX is the
     act's own, and only when exactly one is. The other act's files stay items
     of the unit (the origin lists them under this manifestation: invariant
-    11); only this one is read. `read(name)` gives a wrapper's bytes."""
+    11); only this one is read. `read(name)` gives a wrapper's bytes.
+
+    `listed`: the names the expression's own tree lists for its Formex
+    manifestation (a package's members counted as listed). The ORIGIN'S
+    LISTING OUTRANKS A LABEL inside one of its files (2026-11-22, München:
+    31958D1006(02) en, the decision printed a second time at OJ P 17/1958
+    p. 419, its wrapper's NO.CELEX saying (01); Cellar lists these exact
+    files as (02)'s): a lone wrapper the tree lists is this act's whatever
+    its NO.CELEX names — the caller says the disagreement — and an OJ older
+    than the act still refuses it.
+
+    `adopted`: the act's own date as its tree states it (`date_document`).
+    An OJ older than both it and the CELEX's year is another act's
+    (2026-11-23, München: 32000D0007(01) hr,
+    adopted and published in 1999, its CELEX of 2000, refused; 6 hr units
+    holding 1998, 2002 and 2003 packages for acts of 2004-11, and 32014R1322
+    holding a 2013 Syria corrigendum, refused rightly either way)."""
     wrappers = sorted(n for n in names if is_wrapper(n))
     if not wrappers:
         raise FormexError("no wrapper (….doc.xml) among the manifestation's items")
     if len(wrappers) == 1:
-        return wrappers[0]
+        # ONE wrapper is this act's unless it says otherwise (2026-11-21: three
+        # hr acts of 2009–11 hold a 1998 act's package): one naming only other
+        # acts as its NO.CELEX, or an original's published in an OJ older than
+        # the act's own year (its CELEX's), is another act's
+        w = wrappers[0]
+        if celex:
+            data = read(w)
+            stated = {m.group(1).decode() for m in _NO_CELEX.finditer(data)}
+            in_tree = listed is not None and w in listed
+            if stated and _act_of(celex) not in {_act_of(x) for x in stated} and not in_tree:
+                raise FormexError(f"the only wrapper {w} names {', '.join(sorted(stated))}, not {celex}")
+            year = _ORIGINAL_YEAR.match(celex)
+            # the EARLIEST date known of the act: an OJ older than every one
+            # of them is another act's. A date_document a notice gives wrong
+            # (later than the act) never refuses the act's own wrapper
+            known = [int(year.group(1))] if year else []
+            if adopted and adopted[:4].isdigit():
+                known.append(int(adopted[:4]))
+            act_year = min(known) if known else None
+            pub = oj_year(w, data)
+            if year and act_year is not None and pub is not None and pub < act_year:
+                raise FormexError(f"the only wrapper {w} is of an OJ of {pub}, older than the act "
+                                  f"{celex}" + (f" (of {adopted})" if adopted else ""))
+        return w
     want = (celex or "").encode()
     own = [n for n in wrappers if want and want in {m.group(1) for m in _NO_CELEX.finditer(read(n))}]
     if len(own) != 1:
@@ -596,8 +748,14 @@ def own_wrapper(names, celex: str | None, read) -> str:
     return own[0]
 
 
-def wrapper_of(files: dict[str, bytes], celex: str | None = None) -> tuple[str, ET.Element]:
-    name = own_wrapper(files, celex, files.__getitem__)
+def wrapper_labels(data: bytes) -> set[str]:
+    """The NO.CELEX a wrapper states (`own_wrapper`)."""
+    return {m.group(1).decode() for m in _NO_CELEX.finditer(data)}
+
+
+def wrapper_of(files: dict[str, bytes], celex: str | None = None, listed=None,
+               adopted: str | None = None) -> tuple[str, ET.Element]:
+    name = own_wrapper(files, celex, files.__getitem__, listed, adopted)
     return name, _parse(files[name], name)
 
 
@@ -608,33 +766,58 @@ def _date_iso(e: ET.Element | None) -> str | None:
 
 
 def _recitals(preamble: ET.Element | None, col: Collect) -> tuple[list[tuple[str, str]], dict]:
+    """The preamble: each recital a section ("Whereas (1)"), a divided
+    group's headings (DIV.CONSID: "1. PROCEDURE › 1.1. Initiation") before
+    its recitals' labels (2026-11-21: 32019R1286's 219 recitals were in no
+    section); any other paragraph of the preamble (an agreement's
+    "CONSIDERING that …" written as P) a "Preamble" section of its own. The
+    citations (GR.VISA) and the opening and closing formulas stay beside
+    the text, as trees."""
     if preamble is None:
         return [], {}
     meta: dict[str, Any] = {}
     out: list[tuple[str, str]] = []
+    loose: list[str] = []
+
+    def consids(e: ET.Element, init: str, heads: list[str]) -> None:
+        for c in e:
+            if not isinstance(c.tag, str):
+                col.pi(c)
+            elif c.tag == "GR.CONSID.INIT":
+                init = inline(c, col)
+                meta["consid_init"] = init
+            elif c.tag == "CONSID":
+                num = norm("".join(n.text or "" for n in c.iter("NO.P")))
+                own = " ".join(x for x in (init.rstrip(":").strip(), num) if x) or "Recital"
+                label = " › ".join([*heads, own])
+                col.section = label
+                out.append((label, "\n".join(lines(c, 0, col))))
+            elif c.tag == "DIV.CONSID":
+                t = c.find("TITLE")
+                head = heading(t, col) if t is not None else ""
+                consids([x for x in c if x is not t], init, heads + ([head] if head else []))
+            elif c.tag != "TITLE":
+                col.section = " › ".join(heads) or "Preamble"
+                text = "\n".join(lines(c, 0, col))
+                if text:
+                    out.append((col.section, text))
     for child in preamble:
-        if child.tag == "PREAMBLE.INIT":
+        if not isinstance(child.tag, str):
+            col.pi(child)
+        elif child.tag == "PREAMBLE.INIT":
             meta["init"] = inline(child, col)
         elif child.tag == "GR.VISA":
             col.section = "preamble"
             meta.setdefault("visas", []).extend(inline(v, col) for v in child if v.tag == "VISA")
         elif child.tag == "GR.CONSID":
-            init = ""
-            for c in child:
-                if c.tag == "GR.CONSID.INIT":
-                    init = inline(c, col)
-                    meta["consid_init"] = init
-                elif c.tag == "CONSID":
-                    num = norm("".join(n.text or "" for n in c.iter("NO.P")))
-                    label = " ".join(x for x in (init.rstrip(":").strip(), num) if x) or "Recital"
-                    col.section = label
-                    out.append((label, "\n".join(lines(c, 0, col))))
-                elif isinstance(c.tag, str):
-                    meta.setdefault("other", []).append({c.tag: tree(c)})
+            consids(child, "", [])
         elif child.tag == "PREAMBLE.FINAL":
             meta["final"] = inline(child, col)
-        elif isinstance(child.tag, str):
-            meta.setdefault("other", []).append({child.tag: tree(child)})
+        else:
+            col.section = "Preamble"
+            loose += lines(child, 0, col)
+    if loose:
+        out.insert(0, ("Preamble", "\n".join(x for x in loose if x.strip())))
     return out, meta
 
 
@@ -707,55 +890,156 @@ _ACT_ROOTS = ("ACT", "CONS.ACT", "AGR")
 
 def _corrections(root: ET.Element, col: Collect) -> list[tuple[str, str]]:
     """A corrigendum's corrections (CORR/CONTENTS.CORR/CORRECTION), one
-    section each: labelled by where it applies (DESCRIPTION), its text the
-    old reading then the new, in the origin's own words."""
+    section each: labelled by where it applies — the first paragraph of its
+    DESCRIPTION ("On page 7, Article 2 is replaced by the following:") —
+    its text what follows, in the origin's own words: the replacement the
+    DESCRIPTION quotes (2026-11-21: a real corrigendum's text is inside
+    DESCRIPTION, a QUOT.S, a table; only OLD/NEW.CORR were read and every
+    Formex corrigendum read empty), then OLD.CORR / NEW.CORR where it has
+    them."""
     out: list[tuple[str, str]] = []
     for i, c in enumerate(root.iter("CORRECTION"), 1):
+        label, body = "", []
         where = c.find("DESCRIPTION")
-        label = norm(inline(where, col)) if where is not None else ""
-        body: list[str] = []
+        if where is not None:
+            kids = [k for k in where if isinstance(k.tag, str)]
+            first = kids[0] if kids and kids[0].tag == "P" else None
+            label = norm(inline(first, col)) if first is not None else ""
+            col.section = label or f"Correction {i}"
+            for k in where:
+                if not isinstance(k.tag, str):
+                    col.pi(k)
+                elif k is not first:
+                    body += lines(k, 0, col)
+            if first is None and (where.text or "").strip():
+                body.insert(0, norm(where.text))
         for part in c:
-            if isinstance(part.tag, str) and part.tag != "DESCRIPTION":
+            if not isinstance(part.tag, str):
+                col.pi(part)
+            elif part.tag != "DESCRIPTION":
                 body += lines(part, 0, col)
-        out.append((label or f"Correction {i}", "\n".join(x for x in body if x.strip())))
+        text = "\n".join(x for x in body if x.strip())
+        if not text and label:
+            label, text = f"Correction {i}", label     # a description alone is the correction
+        out.append((label or f"Correction {i}", text))
     if not out:
         out = _contents(root, col)
     return out
 
 
 def _contents(root: ET.Element, col: Collect) -> list[tuple[str, str]]:
-    """Any other body (GENERAL …): its CONTENTS (or the root's own blocks)
-    by group — a GR.SEQ's TITLE labels its text — and what stands outside a
-    group as one section, so no word is left out."""
-    holder = root.find("CONTENTS")
-    holder = holder if holder is not None else root
+    """Any other body (GENERAL …): every part of it in order — its CONTENTS
+    by group (a GR.SEQ's TITLE labels its text), and what stands outside a
+    group, a PROLOG before the CONTENTS included (2026-11-21: 32010Q0702(03)
+    it, the consolidation's PROLOG was in no section because only CONTENTS
+    was read where one existed) — so no word is left out."""
     out: list[tuple[str, str]] = []
     loose: list[str] = []
-    for c in holder:
-        if not isinstance(c.tag, str) or c.tag in ("BIB.INSTANCE", "TITLE"):
-            continue
-        if c.tag == "GR.SEQ":
-            t = c.find("TITLE")
-            label = norm(heading(t, col)) if t is not None else ""
-            body = [x for part in c if isinstance(part.tag, str) and part is not t for x in lines(part, 0, col)]
-            out.append((label or "Contents", "\n".join(x for x in body if x.strip())))
-        else:
-            loose += lines(c, 0, col)
+
+    def take(holder: ET.Element) -> None:
+        nonlocal loose
+        for c in holder:
+            if not isinstance(c.tag, str):
+                col.pi(c)
+                continue
+            if c.tag in ("BIB.INSTANCE", "TITLE"):
+                continue
+            if c.tag == "CONTENTS":
+                take(c)
+            elif c.tag == "GR.SEQ":
+                if loose:
+                    out.append(("Contents", "\n".join(x for x in loose if x.strip())))
+                    loose = []
+                t = c.find("TITLE")
+                label = norm(heading(t, col)) if t is not None else ""
+                col.section = label or "Contents"
+                body = [x for part in c if isinstance(part.tag, str) and part is not t for x in lines(part, 0, col)]
+                for part in c:
+                    if not isinstance(part.tag, str):
+                        col.pi(part)
+                out.append((label or "Contents", "\n".join(x for x in body if x.strip())))
+            else:
+                col.section = "Contents"
+                loose += lines(c, 0, col)
+    take(root)
     if loose:
-        out.insert(0, ("Contents", "\n".join(x for x in loose if x.strip())))
+        out.append(("Contents", "\n".join(x for x in loose if x.strip())))
     return out
 
 
-def _rendered(own: list | None, recitals: list, articles: list, more: list, annexes: list) -> list | None:
+def _rendered(own: list | None, recitals: list, articles: list, more: list, annexes: list,
+              extra: list | None = None, tail: list | None = None) -> list | None:
     """The sections where parser 5 reads more than an act's (a body that is
-    not an act, other main files): None where an act alone was read, so
-    `sections` reads it as before."""
-    if own is None and not more:
+    not an act, other main files, the body's own parts outside its known
+    blocks, an annexed document that is not an ANNEX): None where an act and
+    its ANNEX files alone were read, so `sections` reads it as before.
+    `tail`: the annexes and annexed documents in the wrapper's order, where
+    one of them is not an ANNEX."""
+    if own is None and not more and not extra and tail is None:
         return None
     out = list(own) if own is not None else list(recitals) + [
         (" › ".join(x for x in (a.partition, " — ".join(y for y in (a.num, a.title) if y)) if x)
          or "Enacting terms", a.body) for a in articles]
-    return out + list(more) + [(a.title or "Annex", a.body) for a in annexes]
+    return (out + list(extra or []) + list(more)
+            + (list(tail) if tail is not None else [(a.title or "Annex", a.body) for a in annexes]))
+
+
+#: an act's parts read as its text, the rest beside it
+_READ_PARTS = {"BIB.INSTANCE", "TITLE", "PREAMBLE", "ENACTING.TERMS", "FINAL", "CONS.ANNEX", "FAM.COMP"}
+
+
+def _body_parts(doc: ET.Element, col: Collect) -> list[tuple[str, str]]:
+    """An act's parts outside its title, preamble, enacting terms, final
+    provisions and annexes, as sections in their order (2026-11-21: an
+    agreement by exchange of letters, COLL.LETTERS, read as nothing; a
+    draft's GR.ANNOTATION): each LETTER a section under its own title, any
+    other part a section of its own."""
+    out: list[tuple[str, str]] = []
+    for c in doc:
+        if not isinstance(c.tag, str):
+            col.pi(c)
+            continue
+        if c.tag in _READ_PARTS:
+            continue
+        if c.tag == "COLL.LETTERS":
+            for i, letter in enumerate((x for x in c if isinstance(x.tag, str)), 1):
+                t = letter.find("TITLE")
+                label = (heading(t, col) if t is not None else "") or f"Letter {i}"
+                col.section = label
+                body = [x for k in letter if isinstance(k.tag, str) and k is not t for x in lines(k, 0, col)]
+                out.append((label, "\n".join(x for x in body if x.strip())))
+            continue
+        label = {"GR.ANNOTATION": "Annotation"}.get(c.tag, c.tag)
+        col.section = label
+        text = "\n".join(x for x in lines(c, 0, col) if x.strip())
+        if text:
+            out.append((label, text))
+    return out
+
+
+def _document_sections(root: ET.Element, col: Collect) -> list[tuple[str, str]]:
+    """Any Formex document read as sections under its own title: an act or
+    an agreement by its recitals, articles and other parts, a corrigendum by
+    its corrections, anything else by its contents (2026-11-21: an annexed
+    draft decision — an ACT — and annexed joint declarations — GENERAL —
+    were kept only as trees)."""
+    t = root.find("TITLE")
+    title = heading(t, col) if t is not None else ""
+    if root.tag == "CORR":
+        secs = _corrections(root, col)
+    elif root.tag in ("ACT", "AGR"):
+        recs, _meta = _recitals(root.find("PREAMBLE"), col)
+        arts = _articles(root.find("ENACTING.TERMS"), col)
+        secs = recs + [(" › ".join(x for x in (a.partition, " — ".join(y for y in (a.num, a.title) if y)) if x)
+                        or "Enacting terms", a.body) for a in arts] + _body_parts(root, col)
+        secs += [(a.title or "Annex", a.body) for a in (_annex(x, None, col) for x in root.iterfind("CONS.ANNEX"))]
+    else:
+        secs = _contents(root, col)
+    if not secs:
+        return [(title or root.tag, "")]
+    return [(" › ".join(x for x in (title, label) if x) or root.tag, text) for label, text in secs]
+
+
 _CONS_KNOWN = {"INFO.CONSLEG", "INFO.PROD", "CONS.DOC"}
 _CONS_DOC_KNOWN = {"BIB.INSTANCE", "FAM.COMP", "TITLE", "PREAMBLE", "ENACTING.TERMS", "FINAL",
                    "CONS.ANNEX"}
@@ -777,11 +1061,11 @@ def attributes_of(root: ET.Element) -> list[list]:
     return [[e.tag, dict(e.attrib)] for e in root.iter() if isinstance(e.tag, str) and e.attrib]
 
 
-def parse(files: dict[str, bytes], celex: str | None = None) -> Act:
+def parse(files: dict[str, bytes], celex: str | None = None, listed=None, adopted: str | None = None) -> Act:
     """The manifestation's items by name → the act (`celex`'s, where the
     items hold more than one act: `own_wrapper`). Raises FormexError when
     the wrapper, the body or an annex it names is missing or unreadable."""
-    wname, wrapper = wrapper_of(files, celex)
+    wname, wrapper = wrapper_of(files, celex, listed, adopted)
     # A FILE UNDER ANOTHER'S NAME is never read as what its name says: the
     # record would be another file's text in its place, every check passing
     wrong = not_its_name(files, wrapper, wname)
@@ -829,6 +1113,9 @@ def parse(files: dict[str, bytes], celex: str | None = None) -> Act:
         fam = doc.find("FAM.COMP")
         if fam is not None:
             meta["fam_comp"] = tree(fam)
+            for x in fam.iter():           # its marks too: the tree keeps no processing instruction
+                if x.tag is ET.ProcessingInstruction:
+                    col.pi(x)
             got = fam.find("./BIB.DATA/NO.CELEX")
             base_celex = norm(got.text) if got is not None else None
     else:
@@ -857,6 +1144,11 @@ def parse(files: dict[str, bytes], celex: str | None = None) -> Act:
     if preamble:
         meta["preamble"] = preamble
     articles = _articles(doc.find("ENACTING.TERMS"), col)
+    extra = _body_parts(doc, col) if rendered is None else []
+    if rendered is not None:
+        for c in doc:
+            if not isinstance(c.tag, str):
+                col.pi(c)                  # a mark between its parts (`_body_parts` takes them otherwise)
     final = _final(doc.find("FINAL"), col)
     if final is not None:
         meta["final"] = final
@@ -864,6 +1156,7 @@ def parse(files: dict[str, bytes], celex: str | None = None) -> Act:
         if isinstance(c.tag, str) and c.tag not in known:
             meta.setdefault("other", []).append({c.tag: tree(c)})
     annexes = [_annex(a, bname, col) for a in doc.iterfind("CONS.ANNEX")]
+    n_cons = len(annexes)
     missing = [n for n in mains if n not in files]
     # the other main files, read as text after the body, in the wrapper's order
     more: list[tuple[str, str]] = []
@@ -873,7 +1166,9 @@ def parse(files: dict[str, bytes], celex: str | None = None) -> Act:
         other = parsed[name]
         markup[name] = attributes_of(other)
         meta.setdefault("main_documents", []).append({"file": name, other.tag: tree(other)})
-        more += _corrections(other, col) if other.tag == "CORR" else _contents(other, col)
+        more += _document_sections(other, col)
+    tail: list[tuple[str, str]] = []
+    subs = False
     for name in annex_names(wrapper):
         if name not in files:
             # parser 5: a file the wrapper names and the origin's manifestation
@@ -885,8 +1180,11 @@ def parse(files: dict[str, bytes], celex: str | None = None) -> Act:
         markup[name] = attributes_of(a)
         if a.tag != "ANNEX":
             meta.setdefault("sub_documents", []).append({"file": name, a.tag: tree(a)})
+            tail += _document_sections(a, col)
+            subs = True
             continue
         annexes.append(_annex(a, name, col))
+        tail.append((annexes[-1].title or "Annex", annexes[-1].body))
     # every other XML item the manifestation holds (the OJ issue's `toc`):
     # kept as a tree, never dropped; a non-XML item (an image) is held in
     # the unit and named in the record's `items`
@@ -910,7 +1208,9 @@ def parse(files: dict[str, bytes], celex: str | None = None) -> Act:
                meta=meta, notes=col.notes, references=col.references,
                modifications=col.modifications, instructions=col.instructions,
                wrapper=tree(wrapper), markup={k: v for k, v in markup.items() if v},
-               rendered_sections=_rendered(rendered, recitals, articles, more, annexes),
+               rendered_sections=_rendered(rendered, recitals, articles, more, annexes, extra,
+                                           [*[(a.title or "Annex", a.body) for a in annexes[:n_cons]], *tail]
+                                           if subs else None),
                missing=missing)
 
 

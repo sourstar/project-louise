@@ -106,7 +106,8 @@ def test_the_same_bytes_restamped_somewhere_else_take_the_new_path_in_one_scan(t
                  locator=f"{root.as_posix()}/data/de/000.parquet::0::15", mtime=200, size=7)
     counts = {k: 0 for k in ("seen", "added", "changed", "missing", "container_errors",
                              "relocated", "resigned")}
-    assert discovery._apply_batch(con, plugin, [ref], counts, None, wait=True)
+    assert discovery._apply_batch(con, plugin, [ref], counts, None, wait=True,
+                                  withdraw=discovery.withdrawer(c), collection=c)
     row = con.execute("SELECT path,mtime,rdf_done,embed_done FROM documents").fetchone()
     assert row["path"] == ref.locator and row["mtime"] == 200
     assert (row["rdf_done"], row["embed_done"]) == (1, 1), "the same bytes: nothing redone"

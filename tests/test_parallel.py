@@ -1272,3 +1272,21 @@ def test_a_lane_task_in_its_own_process_answers_as_the_pool(isolated_config, tmp
     want = parallel._compute("chunks", c, [row])
     t = parallel._LaneTask("chunks", c, [row], 2 << 30)
     assert t.result(timeout=300) == want
+
+
+def test_an_unordered_pass_survives_a_child_the_kernel_killed_and_ends_on_a_memory_kill(tmp_path, monkeypatch):
+    """`each_part_unordered` (2026-11-22: no part waits for a slow one) keeps
+    `each_part`'s recovery: a SIGKILL sends the unanswered parts again on half
+    the pool, every part answered once; the memory killer ends the pass."""
+    monkeypatch.setattr(config, "PARSE_PROCESSES", 4)
+    marker = str(tmp_path / "killed")
+    got = dict(parallel.each_part_unordered(_dies_once, [(marker, i) for i in range(12)]))
+    assert got == {i: i * i for i in range(12)} and Path(marker).exists()
+    from app import oom_hold
+    cg = tmp_path / "cgroup"
+    cg.mkdir()
+    (cg / "memory.events").write_text("oom_kill 7\n")
+    monkeypatch.setattr(oom_hold, "CGROUP_DIR", str(cg))
+    with pytest.raises(parallel.MemoryKilled, match="oom_kill 7 -> 8"):
+        for _ in parallel.each_part_unordered(_dies_for_memory, [(str(cg / "memory.events"), i) for i in range(12)]):
+            pass

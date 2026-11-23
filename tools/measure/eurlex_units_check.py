@@ -100,6 +100,9 @@ def check_chunk(chunk: list[tuple[str, str, str]], examples: int) -> dict:
     lacked: Counter = Counter()
     shown: dict[str, list[str]] = defaultdict(list)
     included: list[str] = []
+    #: every unit flagged, with its reasons (`--list-flagged`: the restart's
+    #: problem slice, tools/measure/eurlex_problem_slice.py)
+    flagged: list[tuple[str, list[str]]] = []
 
     def show(key: str, what: str) -> None:
         if len(shown[key]) < examples:
@@ -114,6 +117,9 @@ def check_chunk(chunk: list[tuple[str, str, str]], examples: int) -> dict:
             continue
         heads: dict[str, bytes] = {}
         wrong = False
+        why: list[str] = []
+        if any(formex.is_package(e.name) for e in entries):
+            why.append("package")
         for e in entries:
             if e.name in (src.NOTICE, rdf.TREE_FILE):
                 continue
@@ -127,6 +133,7 @@ def check_chunk(chunk: list[tuple[str, str, str]], examples: int) -> dict:
                 show(f"{ext} holds {got}", f"{unit.parent.parent.name}/{year}/{unit.name}/{e.name}")
         if any(EXPECT.get(os.path.splitext(n)[1].lower()) not in (None, kind(h)) for n, h in heads.items()):
             c["units-with-a-misnamed-file"] += 1
+            why.append("misnamed file")
         # the act's own wrapper: what its named files are
         try:
             files = {n: (unit / n).read_bytes() for n in heads if formex.is_wrapper(n)}
@@ -143,11 +150,13 @@ def check_chunk(chunk: list[tuple[str, str, str]], examples: int) -> dict:
                            if "not a wrapper" in w or "holds a wrapper" in w]
                 if shifted:
                     # 32013D0410: an ANNEX under the wrapper's name, the wrapper under another's
+                    why.append("wrapper under another name")
                     mism["wrapper under another name"] += 1
                     wrong = True
                     show("wrapper under another name", f"{unit.parent.parent.name}/{year}/{unit.name}: "
                          + "; ".join(shifted[:2]))
                 if off:
+                    why.append("in another's place")
                     mism["formex file in another's place"] += len(off)
                     wrong = True
                     show("in another's place", f"{unit.parent.parent.name}/{year}/{unit.name}: "
@@ -158,6 +167,7 @@ def check_chunk(chunk: list[tuple[str, str, str]], examples: int) -> dict:
                 unnamed = [n for n in heads if n.lower().endswith(".xml") and n not in named
                            and not n.lower().endswith(".toc.xml") and not formex.is_wrapper(n)]
                 if unnamed:
+                    why.append("included document")
                     c["units-with-an-included-document"] += 1
                     included.append(path)
                     show("included document", f"{unit.parent.parent.name}/{year}/{unit.name}: {unnamed[0]}")
@@ -173,6 +183,7 @@ def check_chunk(chunk: list[tuple[str, str, str]], examples: int) -> dict:
                         show(f"annex is {tag if tag else kind(heads[n])}", f"{unit.name} {lang} {n}")
         except (OSError, formex.FormexError):
             c["formex-unreadable-wrapper"] += 1
+            why.append("formex unreadable or not this act's")
         if wrong:
             c["units-with-a-file-not-its-name"] += 1
             c[f"not-its-name {lang}"] += 1
@@ -181,12 +192,16 @@ def check_chunk(chunk: list[tuple[str, str, str]], examples: int) -> dict:
             note = from_tree.notice(rdf.loads((unit / rdf.TREE_FILE).read_bytes()), src.LANGUAGES[lang], unit.name)
         except (OSError, ValueError, KeyError, from_tree.TreeError):
             c["tree-unreadable"] += 1
+            flagged.append((path, why + ["tree unreadable"]))
             continue
         if lacks_package(unit, note):
+            why.append("package lacked")
             lacked[f"{lang} {year}"] += 1
             show("package lacked", f"{unit.parent.parent.name}/{year}/{unit.name}")
+        if why:
+            flagged.append((path, why))
     return {"counts": c, "misnamed": mism, "roots": roots, "package_lacked": lacked, "examples": dict(shown),
-            "included": included}
+            "included": included, "flagged": flagged}
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -198,6 +213,8 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--chunk", type=int, default=2000)
     p.add_argument("--list-included", default=None, metavar="FILE",
                    help="write the unit paths holding an included Formex document, one a line")
+    p.add_argument("--list-flagged", default=None, metavar="FILE",
+                   help="write every flagged unit, '<path>\\t<reason>[, <reason>…]' a line")
     a = p.parse_args(argv)
     from app import parallel
     langs = set(a.lang.split(",")) if a.lang else None
@@ -206,7 +223,11 @@ def main(argv: list[str] | None = None) -> int:
     total = {"counts": Counter(), "misnamed": Counter(), "roots": Counter(), "package_lacked": Counter()}
     shown: dict[str, list[str]] = defaultdict(list)
     included: list[str] = []
-    for got in parallel.each_part(check_chunk, tasks):
+    flagged: list[tuple[str, list[str]]] = []
+    # as each chunk ends: the chunks are independent counters, and in order a
+    # large unit's chunk held the other children idle (parallel.each_part_unordered)
+    for _i, got in parallel.each_part_unordered(check_chunk, tasks):
+        flagged += [tuple(x) for x in got.get("flagged", [])]
         for k in total:
             total[k].update(got[k])
         included += got["included"]
@@ -217,6 +238,8 @@ def main(argv: list[str] | None = None) -> int:
         by_lang[k.split()[0]] += v
     out = {"corpus": a.corpus, "every": a.every, **{k: dict(v.most_common()) for k, v in total.items()},
            "package_lacked_by_language": dict(by_lang.most_common()), "examples": dict(shown)}
+    if a.list_flagged:
+        Path(a.list_flagged).write_text("".join(f"{u}\t{', '.join(r)}\n" for u, r in flagged), encoding="utf-8")
     if a.list_included:
         Path(a.list_included).write_text("".join(f"{u}\n" for u in included), encoding="utf-8")
     print(json.dumps(out, indent=1, sort_keys=False))

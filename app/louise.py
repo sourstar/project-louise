@@ -36,6 +36,7 @@
     louise node health [<collection>] [--errors]
     louise dev genesis recheck <collection> | recount <collection> [--yes]
     louise dev carry <from> <to> [--copy] [--keep producer:ARCHIVE] [--rebuilt|--reconcile|--resign|--recut] [--yes]
+    louise dev carry <from> <to> --rechunked [--dry-run | --yes] [--window N] [--processes N]
 
 The previous tree (`python -m app.cli`, 07 §7.6) is retired (2026-10-08):
 every name it had that is still useful is one of these.
@@ -3528,7 +3529,12 @@ def cmd_dev_eurlex_dump(a) -> int:
     held ones the dump holds; the dump is `EURLEX_DATADUMP_DIR` unless --dump.
     `--carry-from`: then an earlier corpus's units the dump did not give are
     linked in without their notice (RULE 1), in the base or the history
-    slice. Resumable: a landed unit is never written again."""
+    slice. Resumable: a landed unit is never written again. SIGTERM or
+    SIGINT: the build stops at its next chunk boundary, what it built landed
+    and its chunks recorded, the stamp unwritten, exit 130; the next run
+    resumes after the chunks done (invariant 2; review 2026-11-21, Q7)."""
+    import signal
+    import threading
     from app.acquire import datadump, eurlex_dump
     from app import collections as collections_mod
     c = collections_mod.by_name(a.collection)
@@ -3547,14 +3553,38 @@ def cmd_dev_eurlex_dump(a) -> int:
         from app.acquire import cellar
         langs = cellar.held_languages(c)
     corpus = Path(c.corpus_dir)
-    out: dict = {"built": {l: dict(n) for l, n in
-                           eurlex_dump.build(dump, corpus, langs, log=say).items()}}
+    stop = threading.Event()
+    before = {sig: signal.signal(sig, lambda *_: stop.set()) for sig in (signal.SIGTERM, signal.SIGINT)}
+    try:
+        built = eurlex_dump.build(dump, corpus, langs, log=say, stop=stop.is_set)
+    except eurlex_dump.BuildRunning as e:
+        say(f"[eurlex-dump] {e}")
+        return 3                            # deferred: another build of the corpus holds it
+    except eurlex_dump.Stopped as e:
+        say(f"[eurlex-dump] {e}")
+        return 130
+    finally:
+        for sig, handler in before.items():
+            signal.signal(sig, handler)
+    out: dict = {"built": {l: dict(n) for l, n in built.items()}}
     if a.carry_from:
         out["carried"] = dict(eurlex_dump.carry(Path(a.carry_from), corpus, log=say))
     _print(out)
     return 0
 
 
+def cmd_dev_retire_superseded(a) -> int:
+    """`louise dev retire-superseded <collection> [--yes]`: a unit held under
+    two ids keeps the one it has now; the other rows are retired from every
+    index and tombstoned (app/hold/identity.py; 2026-11-21, EUR-Lex5's
+    37,695). A dry run without --yes; with it, the collection's write lock."""
+    from app.hold import identity
+    name, _ = col.resolve(a.root, a.collection)
+    if a.yes:
+        _take_write_lock(a.root, name, "louise dev retire-superseded", exit_code=2)
+    say = lambda m: print(m, file=sys.stderr)              # noqa: E731
+    _print({"retire_superseded": identity.retire_superseded(a.root, name, apply_it=a.yes, log=say)})
+    return 0
 def cmd_dev_cpu_reference_legacy(a) -> int:
     """`louise dev cpu-reference-legacy` (operator, 2026-11-22: "The CPU
     reference is per model, not per collection"): what each collection kept
@@ -3597,7 +3627,8 @@ def cmd_dev_rederive(a) -> int:
         for sig in (signal.SIGTERM, signal.SIGINT):
             signal.signal(sig, lambda *_: stop.set())
         lines = Path(a.ids).read_text(encoding="utf-8").splitlines()
-        out = carry_mod.rederive_listed(a.root, a.collection, lines, apply=a.yes, stop=stop, log=say)
+        out = carry_mod.rederive_listed(a.root, a.collection, lines, apply=a.yes, stop=stop, log=say,
+                                        retry_errors=bool(getattr(a, "retry_errors", False)))
         _print({"rederive": out})
         return 130 if stop.is_set() else 0
     if a.verify:
@@ -3631,6 +3662,11 @@ def cmd_dev_carry(a) -> int:
         for name in sorted({from_name, to_name}):
             _take_write_lock(a.root, name, "louise dev carry", exit_code=2)
     say = lambda m: print(m, file=sys.stderr)              # noqa: E731
+    if getattr(a, "rechunked", False):
+        return _dev_carry_rechunked(a, from_name, to_name, say)
+    if getattr(a, "dry_run", False):
+        raise CodexError("--dry-run is --rechunked's whole pass with nothing written; every other carry's "
+                         "dry run is the command without --yes")
     if getattr(a, "predecessor_rows", False):
         _print({"predecessor_rows": carry_mod.keep_predecessor_rows(a.root, from_name, to_name,
                                                                     apply=a.yes, log=say)})
@@ -3693,6 +3729,61 @@ def cmd_dev_carry(a) -> int:
         say(f"[carry] licence acknowledgement: {out['ack']}")
     _print(out)
     return 0
+
+
+#: what `dev carry --rechunked` takes nothing else with: each is another carry
+_NOT_WITH_RECHUNKED = ("keep", "rebuilt", "recut", "resliced", "unembedded", "reconcile", "resign", "scan",
+                       "predecessor_rows", "share_origin")
+
+
+def _dev_carry_rechunked(a, from_name: str, to_name: str, say) -> int:
+    """`louise dev carry <from> <to> --rechunked [--dry-run | --yes]` (A1k,
+    PROPOSED 2026-11-21; app/hold/rechunk.py): into a successor whose space
+    differs only by its layers' chunker version. Without --yes, the refusals
+    and the plan; with --dry-run, the whole pass — per language, the chunks
+    carried, to embed and dropped — writing nothing; with --yes (both write
+    locks, taken above), the manifest copied, the licence acknowledgement
+    carried, then the re-key, resumable, SIGTERM at a window boundary (exit
+    130). Always copies: the source keeps everything until its forget."""
+    import signal
+    import threading
+
+    from app.hold import carry as carry_mod, rechunk, recreate
+    others = [f"--{f.replace('_', '-')}" for f in _NOT_WITH_RECHUNKED if getattr(a, f, None)]
+    if others:
+        raise CodexError(f"--rechunked moves the layers' version alone: no {', '.join(others)} with it")
+    if getattr(a, "dry_run", False) and a.yes:
+        raise CodexError("--dry-run writes nothing and --yes writes: one or the other")
+    window = int(getattr(a, "window", None) or rechunk.WINDOW)
+    processes = getattr(a, "processes", None)
+    if getattr(a, "dry_run", False):
+        _print({"rechunked": rechunk.rekey(a.root, from_name, to_name, apply=False, window=window,
+                                           processes=processes, log=say)})
+        return 0
+    if not a.yes:
+        _print({"carry": carry_mod.carry(a.root, from_name, to_name, copy=True, rechunked=True, apply=False,
+                                         log=say)})
+        say("[carry] then the re-key writes every vector whose text the new version cuts again under its new "
+            "id; `--dry-run` counts it per language, `--yes` does both (A1k)")
+        return 0
+    stop = threading.Event()
+    before = {sig: signal.getsignal(sig) for sig in (signal.SIGTERM, signal.SIGINT)}
+    for sig in before:
+        signal.signal(sig, lambda *_: stop.set())
+    try:
+        out: dict = {"carry": carry_mod.carry(a.root, from_name, to_name, copy=True, rechunked=True,
+                                              apply=True, log=say)}
+        # the acknowledgement BEFORE the re-key, which uses the target's data (invariant 9)
+        _, to_codex = col.resolve(a.root, to_name)
+        out["ack"] = recreate.carry_ack(a.root, from_name, to_name, to_codex)
+        say(f"[carry] licence acknowledgement: {out['ack']}")
+        out["rechunked"] = rechunk.rekey(a.root, from_name, to_name, apply=True, window=window,
+                                         processes=processes, stop=stop, log=say)
+    finally:
+        for sig, handler in before.items():
+            signal.signal(sig, handler)
+    _print(out)
+    return 130 if stop.is_set() else 0
 
 
 def cmd_dev_pin_run(a) -> int:
@@ -3901,7 +3992,7 @@ def cmd_node_resident(a) -> int:
 
 #: The web process `node start` runs beside the worker: the image's own
 #: command (Dockerfile), so one node started either way serves the same app.
-WEB_COMMAND = ("-m", "uvicorn", "app.api:app", "--host", "0.0.0.0")
+WEB_COMMAND = ("-m", "app.web_main", "app.api:app", "--host", "0.0.0.0")
 WEB_STOP_WAIT_S = 30.0
 
 
@@ -8659,6 +8750,13 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--carry-from", dest="carry_from", default=None,
                    help="an earlier eurlex corpus: its units the dump did not give, linked in")
     p.set_defaults(fn=cmd_dev_eurlex_dump)
+    p = dverbs.add_parser("retire-superseded", help="a unit held under two ids keeps the one it has now; "
+                                                    "the others leave every index, tombstoned (one unit, "
+                                                    "one document); writes only with --yes")
+    root_arg(p)
+    p.add_argument("collection")
+    p.add_argument("--yes", action="store_true")
+    p.set_defaults(fn=cmd_dev_retire_superseded)
     p = dverbs.add_parser("cpu-reference-legacy", help="the CPU references collections kept before the "
                                                       "node's store, held to it (read-only): exit 1 when "
                                                       "one is not in the store")
@@ -8680,6 +8778,9 @@ def build_parser() -> argparse.ArgumentParser:
                    help="only the documents FILE lists, a uid or a document's path a line (the EUR-Lex "
                         "units check's --list-included); their embedding too where the collection holds no "
                         "records")
+    p.add_argument("--retry-errors", action="store_true",
+                   help="with --ids: a listed document's error cleared too, so its unit is read again "
+                        "(never a superseded row's); the restart's problem slice")
     p.set_defaults(fn=cmd_dev_rederive)
     p = dverbs.add_parser("carry", help="a collection's manifest, text index and vector table into a new "
                                         "collection with the same records (amendment A1); writes "
@@ -8723,6 +8824,18 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--scan", action="store_true",
                    help="with --keep: one pass over the vector table instead of a walk by "
                         "document — for a table too large to visit document by document")
+    p.add_argument("--rechunked", action="store_true",
+                   help="into a successor whose space differs ONLY by its layers' chunker version (A1k, "
+                        "proposed): the manifest copied with every embed and index mark emptied, then every "
+                        "vector whose chunk text the new version cuts again written under its new id; the "
+                        "rest is the embed stage's. Always copies")
+    p.add_argument("--dry-run", action="store_true", dest="dry_run",
+                   help="with --rechunked: the whole pass, per language — chunks carried, to embed, "
+                        "dropped — and nothing written")
+    p.add_argument("--window", type=int, default=None, metavar="N",
+                   help="with --rechunked: documents (rowids) a task of the parse pool (default 500)")
+    p.add_argument("--processes", type=int, default=None, metavar="N",
+                   help="with --rechunked: fewer processes than the node profile allows, never more")
     p.add_argument("--yes", action="store_true", help="do it; without it, the checks and the plan")
     p.set_defaults(fn=cmd_dev_carry)
     p = dverbs.add_parser("pin-run", help="an unpublished collection whose dated-dump Codex names no run "

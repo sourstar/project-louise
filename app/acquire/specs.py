@@ -230,20 +230,30 @@ WIKIPEDIA_SPEC = AcquisitionSpec(
 
 
 #: WIKISOURCE (docs/notes/wikisource-design.md §2: bulk first): each
-#: language's multistream dump and its index of a pinned run, the only files
-#: its records read today. The compressed text dumps' sizes as the planning
-#: session measured them (2026-11-19).
+#: language's multistream dump and its index of a pinned run, and the same
+#: run's categorylinks, linktarget and page_props tables — every file its
+#: records read (app/plugins/wikisource/tables.py). The compressed text dumps'
+#: sizes as the planning session measured them (2026-11-19).
 _WIKISOURCE_DUMP_BYTES: dict[str, int] = {
     "it": 450_000_000, "en": 3_440_000_000, "fr": 2_600_000_000, "de": 580_000_000, "es": 250_000_000,
 }
+#: the three tables of a run together (categorylinks + linktarget +
+#: page_props), as dumps.wikimedia.org's 20261101 listings state them
+#: (2026-11-23)
+_WIKISOURCE_TABLE_BYTES: dict[str, int] = {
+    "it": 45_100_000, "en": 194_800_000, "fr": 164_100_000, "de": 38_400_000, "es": 20_500_000,
+}
 WIKISOURCES = tuple(f"{lang}wikisource" for lang in _WIKISOURCE_DUMP_BYTES)
+#: a run's tables a Wikisource record reads beside its pages
+WIKISOURCE_TABLES = ("categorylinks", "linktarget", "page_props")
 
 
 def _wikisource_files(wiki: str, snapshot: str = "latest") -> tuple[RemoteFile, ...]:
-    """A Wikisource run's multistream dump and its index, dated, as
-    `_wiki_files` names Wikipedia's (an immutable URL per run)."""
+    """A Wikisource run's multistream dump and its index, then its tables,
+    dated, as `_wiki_files` names Wikipedia's (an immutable URL per run)."""
     base = f"{wiki}/{snapshot}/{wiki}-{snapshot}-pages-articles-multistream"
-    return (RemoteFile(rel_path=f"{base}.xml.bz2"), RemoteFile(rel_path=f"{base}-index.txt.bz2"))
+    return (RemoteFile(rel_path=f"{base}.xml.bz2"), RemoteFile(rel_path=f"{base}-index.txt.bz2"),
+            *(RemoteFile(rel_path=f"{wiki}/{snapshot}/{wiki}-{snapshot}-{t}.sql.gz") for t in WIKISOURCE_TABLES))
 
 
 def _wikisource_snapshot_files(snapshot: str) -> tuple[RemoteFile, ...]:
@@ -264,7 +274,8 @@ WIKISOURCE_SPEC = AcquisitionSpec(
                  static_files=sum((_wikisource_files(w) for w in WIKISOURCES), ())),
     ),
     layout="container-files",
-    filters=("*multistream.xml.bz2", "*multistream-index.txt.bz2"),
+    filters=("*multistream.xml.bz2", "*multistream-index.txt.bz2",
+             *(f"*-{t}.sql.gz" for t in WIKISOURCE_TABLES)),
     checksums=ChecksumSource(kind="none"),
     delta=DeltaSpec(mode="dated-dumps"),
     snapshot_files=_wikisource_snapshot_files,
@@ -276,7 +287,8 @@ WIKISOURCE_SPEC = AcquisitionSpec(
     },
     profile_mode="additive",
     slice_profiles={f"lang={lang}": lang for lang in _WIKISOURCE_DUMP_BYTES},
-    estimated_bytes={**dict(_WIKISOURCE_DUMP_BYTES), "all": sum(_WIKISOURCE_DUMP_BYTES.values())},
+    estimated_bytes={**{lang: n + _WIKISOURCE_TABLE_BYTES[lang] for lang, n in _WIKISOURCE_DUMP_BYTES.items()},
+                     "all": sum(_WIKISOURCE_DUMP_BYTES.values()) + sum(_WIKISOURCE_TABLE_BYTES.values())},
     license_class=LicenseClass.YELLOW,          # CC BY-SA (design note §5)
     terms_text_path=Path(__file__).parent.parent / "plugins" / "wikisource" / "TERMS.txt",
 )

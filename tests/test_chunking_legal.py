@@ -241,7 +241,7 @@ def test_v1_cuts_as_it_always_did():
 def test_an_unknown_version_is_refused():
     from app import chunking_legal as cl
     with pytest.raises(cl.LegalChunkerError, match="versions"):
-        _cut(4)
+        _cut(5)          # 4 exists since 2026-11-21 (tests/test_chunking_legal_v4.py)
 
 
 # ---- version 3 (2026-11-08): units packed linearly, every piece held to the bound ---------------
@@ -315,4 +315,5 @@ def test_v3_with_counts_that_add_cuts_as_v2_did(bpe):
 
 
 def test_the_shared_layer_is_v3():
-    assert cl.CHUNK_VERSION == 3 and cl.SHARED_LAYER["chunker"]["version"] == 3
+    assert cl.CHUNK_VERSION == 4 and cl.SHARED_LAYER["chunker"]["version"] == 4, \
+        "S4 since 2026-11-23 (legal-chunker-v4.md M1)"

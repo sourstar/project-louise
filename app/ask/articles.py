@@ -348,6 +348,19 @@ def _ended(version: dict, as_of: int | None, *, today: Callable[[], int] = _toda
     return as_of is None and end is not None and int(end) <= today()
 
 
+def _ended_note(con, work: str, version: dict, notes: ArticleNotes) -> str:
+    """An ended version's words: the text an amendment held here replaced,
+    the amended text not held (`validity.changed_at`; 2026-11-21, V3) — or
+    the last text in force (a repeal, an expiry)."""
+    from app import validity
+    try:
+        day = validity.changed_at(con, work, version)
+    except Exception:   # noqa: BLE001 — the plainer words, never a failed pin
+        day = None
+    changed = getattr(notes, "changed", None) or _DEFAULT_NOTES.changed
+    return changed.format(day=_day(day)) if day is not None else notes.last
+
+
 def _work_facts(collection, con, key: str, want: Cited, group: list[tuple],
                 as_of: int | None) -> list[dict]:
     """The article's facts from each of `group`'s Works: the chosen
@@ -358,8 +371,8 @@ def _work_facts(collection, con, key: str, want: Cited, group: list[tuple],
         ch, holders, annexes = _read_article(collection, v["native_id"], want)
         changes = _changes(con, work, c.article, annexes, holders)
         if ch is not None:
-            note = (notes.last if _ended(v, as_of) else notes.in_force) if as_of is None \
-                else notes.as_of.format(day=_day(as_of))
+            note = (_ended_note(con, work, v, notes) if _ended(v, as_of) else notes.in_force) \
+                if as_of is None else notes.as_of.format(day=_day(as_of))
             out.append(_fact(collection, key, act_label, c, v, ch, note, changes))
         if ch is None or want.repealed(str(ch.get("text") or "")):
             for older in reversed([x for x in versions if x["valid_from"] < v["valid_from"]]):

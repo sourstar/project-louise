@@ -67,6 +67,39 @@ tokenizer merges across a join). So no piece is ever longer than the window,
 as before, and a piece may be a little shorter than v2's where the sum
 over-counts. Its cut differs from v2's, hence the version (invariant 3).
 
+VERSION 4 (2026-11-21, P8 of docs/notes/eurlex-review-2026-11-21.md;
+docs/notes/legal-chunker-v4.md): the SENTENCE level of the 24 EU languages.
+v3 saw a sentence start only in a Latin-1 capital, so a paragraph past the
+window in el, bg, cs, sk, sl, hr, pl, hu, ro, lt, lv or mt was never split at
+its sentences and fell to `_windows`, mid-sentence; and it knew only it/de/
+fr/en abbreviations, so "čl. 5", "stk. 2", "αριθ. 1093/2010" or "Úř. věst. L"
+were cut after the abbreviation (the lookahead takes a digit). v4:
+  * a sentence may start with any capital of the Latin, Greek and Cyrillic
+    blocks the 24 languages write in — CAPITALS_V4, a FROZEN literal (never
+    read off the interpreter's Unicode tables: invariant 3), pinned by its
+    sha256 in tests/test_chunking_legal_v4.py;
+  * no cut after the abbreviations the 24 languages' legal text writes for
+    article, paragraph, point, letter, number, page, the Official Journal,
+    "see", "for example", "that is" (ABBREVIATIONS_V4, each checked against
+    the Interinstitutional Style Guide and real EUR-Lex text:
+    docs/notes/legal-chunker-v4-abbreviations.md), nor after an initial in a
+    new capital; seven short forms that are also units or words ("s",
+    seconds; "т", tonnes; "σ"; "vol", "% vol."; "cap", "kap", "Kap") only
+    before a number (ABBREVIATIONS_V4_BEFORE_NUMBER);
+  * a Greek or Bulgarian point, "α)", "(β)", "а)", is a point (POINT_V4):
+    v3's POINT knew ASCII letters only, so such a paragraph skipped its
+    points for its sentences.
+IDENTICAL TO v3 BY CONSTRUCTION wherever a text holds none of them: v4's
+sentence candidates are v3's plus those before a new capital, each decided
+by the text around it alone, and v4 refuses a candidate wherever v3 did,
+adding refusals only after the new abbreviations; its point marks are v3's
+plus the Greek and Cyrillic ones; levels 0 and 3 are v3's. So v4 cuts a
+text differently from v3 only where it holds a new capital, a new
+abbreviation or a Greek or Cyrillic point mark, and only in a section or
+outline past the window (levels 1 and 2 are reached nowhere else). Version
+3 cuts as it always did; `CHUNK_VERSION` stays 3 — the shared legal space's
+— until the space moves (the note: what moving it takes).
+
 The TITLE is the record's (09 §9.5), passed by every caller that cuts
 (`layers.chunks_for_document(..., title=)`, guarded by
 tests/test_chunking_legal.py): invariant 3's "cleaned text" is
@@ -96,8 +129,15 @@ import threading
 from collections import OrderedDict
 from typing import Any, Iterator, Sequence
 
-CHUNK_VERSION = 3
-VERSIONS = (1, 2, 3)
+#: the version a layer that names none is cut at, and the shared legal
+#: space's (SHARED_LAYER): moving it moves that space (legal-chunker-v4.md).
+#: 4 since 2026-11-23 (operator, M1 = "A": the four legal collections move to
+#: S4 in one window, before EUR-Lex5's restart). It is what a NEW legal
+#: collection's Codex declares; a held one keeps the version its Codex pins
+#: (every Codex layer names one), and one whose space moved would be refused
+#: at start by its space pin, never re-cut in place (invariant 3)
+CHUNK_VERSION = 4
+VERSIONS = (1, 2, 3, 4)
 NAME = "legal_article"
 
 #: 1. a paragraph's number at the start of a line, in the four systems
@@ -111,6 +151,14 @@ POINT = re.compile(
     r"|\([a-z]{1,4}\)\s"                                  # (a)  (iv)          (EU)
     r"|\d+°\s?"                                           # 1°                 (FR)
     r"|\d+\)\s)")                                         # 1)                 (IT numero)
+#: 2, from version 4: the points of the Greek and the Bulgarian acts too —
+#: "α)", "στ)", "(β)", "а)", "(б)" (the Joint Practical Guide's "(a)" in their
+#: alphabets), their small letters by code point, U+03B1-U+03C9 and
+#: U+0430-U+044F: v3 read such a point as none and went on to its sentences
+POINT_V4 = re.compile(
+    r"^(?:[a-z]{1,2}\)\s|\([a-z]{1,4}\)\s|\d+°\s?|\d+\)\s"       # v3's, as they are
+    "|[α-ωа-я]{1,2}\\)\\s"                    # α)  στ)  а)
+    "|\\([α-ωа-я]{1,4}\\)\\s)")               # (β)  (б)
 #: 3. a sentence ends at . ; : followed by space and a capital, a digit or a
 #: quote — not after the abbreviations legal text is full of
 _SENTENCE_END = re.compile(r"(?<=[.;:])\s+(?=[A-ZÀ-ÖØ-Þ0-9«\"„(])")
@@ -118,6 +166,219 @@ _ABBREVIATIONS = re.compile(
     r"(?:\b(?:art|artt|Art|Abs|Nr|n|nn|lett|co|comma|cod|c|cfr|Buchst|Satz|S|vgl|ggf|bzw|z\.B|"
     r"al|Al|para|paras|No|no|p|pp|ch|chap|Dir|Reg|Rn|Rdnr|Ziff|lit|ss|seq|etc|ca|ex|op|cit|"
     r"L|R|D|A|LO|Bd|Hrsg|St|Cass|Cost|gg|v|vs)\.|\b[A-Z]\.)$")
+
+# ---- version 4: the sentence level of the 24 EU languages (2026-11-21) -------
+#
+# THE CAPITALS, FROZEN. Every letter of Unicode category Lu or Lt in the
+# blocks the 24 official languages write in — Basic Latin, Latin-1
+# Supplement, Latin Extended-A and -B, Greek and Coptic (its Coptic letters
+# U+03E2-U+03EF left out), Cyrillic — one line a block. UAX #29's sentence
+# rules (Unicode's own segmentation) take a sentence start the same way, an
+# `Upper` after a full stop and a space; this is that class over these
+# blocks, written out ONCE from Python 3.12's tables (Unicode 15.0; 3.13's
+# 15.1 gives the same 403 letters) and never read from the interpreter's
+# again: `str.isupper()` at import would move a cut with the Unicode database
+# (invariant 3). Its sha256 is pinned in tests/test_chunking_legal_v4.py; the
+# script that wrote it is in that commit's message. A letter is wider than a
+# language's alphabet on purpose: a sentence opening on a name or a quotation
+# in another of these scripts is a sentence start too, and a text holding
+# none of them cuts as v3 whatever the class holds.
+CAPITALS_V4 = (
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+    "ÀÁÂÃÄÅÆÇÈÉÊËÌÍÎÏÐÑÒÓÔÕÖØÙÚÛÜÝÞ"
+    "ĀĂĄĆĈĊČĎĐĒĔĖĘĚĜĞĠĢĤĦĨĪĬĮİĲĴĶĹĻĽĿŁŃŅŇŊŌŎŐŒŔŖŘŚŜŞŠŢŤŦŨŪŬŮŰŲŴŶŸŹŻŽ"
+    "ƁƂƄƆƇƉƊƋƎƏƐƑƓƔƖƗƘƜƝƟƠƢƤƦƧƩƬƮƯƱƲƳƵƷƸƼǄǅǇǈǊǋǍǏǑǓǕǗǙǛǞǠǢǤǦǨǪǬǮǱǲǴǶǷǸǺǼǾȀȂȄȆȈȊȌȎȐȒȔȖȘȚȜȞȠȢȤȦȨȪȬȮȰȲȺȻȽȾ"
+    "ɁɃɄɅɆɈɊɌɎ"
+    "ͰͲͶͿΆΈΉΊΌΎΏΑΒΓΔΕΖΗΘΙΚΛΜΝΞΟΠΡΣΤΥΦΧΨΩΪΫϏϒϓϔϘϚϜϞϠϴϷϹϺϽϾϿ"
+    "ЀЁЂЃЄЅІЇЈЉЊЋЌЍЎЏАБВГДЕЖЗИЙКЛМНОПРСТУФХЦЧШЩЪЫЬЭЮЯѠѢѤѦѨѪѬѮѰѲѴѶѸѺѼѾҀҊҌҎҐҒҔҖҘҚҜҞҠҢҤҦҨҪҬҮҰҲҴҶҸҺҼҾ"
+    "ӀӁӃӅӇӉӋӍӐӒӔӖӘӚӜӞӠӢӤӦӨӪӬӮӰӲӴӶӸӺӼӾ")
+
+
+def _v3_capital(c: str) -> bool:
+    """In v3's class `A-ZÀ-ÖØ-Þ`: compared by code point, no table read."""
+    return "A" <= c <= "Z" or "À" <= c <= "Ö" or "Ø" <= c <= "Þ"
+
+
+#: the capitals v3 did not see: an initial in one of them is an abbreviation
+NEW_CAPITALS_V4 = "".join(c for c in CAPITALS_V4 if not _v3_capital(c))
+
+# THE ABBREVIATIONS, by language: each form as written before its full stop
+# (an inner space is any white space), what it stands for, and WHERE IT IS
+# WRITTEN SO. CHECKED (2026-11-21) against the Interinstitutional Style Guide
+# in each language (style-guide.europa.eu, the edition of 18.11.2026: § 3.1
+# the Official Journal, § 3.2.2-3.2.3 references to acts and their
+# subdivisions, § 2.7, § 5.9, Part Four and Annex A3), and against real text:
+# 143 Cellar items (six acts in the 24 languages), the fixtures under
+# tests/fixtures/ (EUR-Lex, Normattiva, LEGI, NeuRIS). "§" below is the
+# language's Guide section, "×n" the occurrences before a digit or a capital
+# in the Cellar items; the per-language tables, every form removed and why:
+# docs/notes/legal-chunker-v4-abbreviations.md. A form neither the Guide nor
+# the text writes with a full stop is not here: EU acts write the
+# subdivisions in full in el, bg, de, es, fr, it, nl, pt, ro, hr, sl, lt,
+# lv, mt, ga, hu (each Guide's § 3.2.3; el § 10.10(c): abbreviating them "is
+# expressly forbidden"); only cs (čl., odst., písm.: § 10.8), sk (ods.,
+# písm.), pl (ust.) and da (stk.) abbreviate them. Estonian writes its
+# abbreviations without a full stop (§ 3.1 "EÜT L 32, 6.2.1968, lk 6"; "nr",
+# "lk" ×195 bare, none dotted), so it has none here.
+# LEFT OUT ON PURPOSE: a form that ends a sentence as often as it continues
+# one — "etc." and "et seq." and their counterparts (atd., itd., и др., κ.λπ.,
+# stb., ff., suiv., segg., köv. …), "lpp."/"o." after a page number,
+# "Sb."/"Z. z." after an act's number — where taking it would join two
+# sentences; a form that is a word or a unit elsewhere ("sal", Spanish salt;
+# "por", Hungarian powder; "i", a Danish and Swedish preposition that ends a
+# sentence: "som de indgår i."; the year "г." is also the Bulgarian gram, the
+# Lithuanian year "m." the metre, so neither is here, while the Polish year
+# "r." and the Lithuanian day "d." are: a date before a capital continues its
+# sentence in 18 of 21 and 81 of 84 cases); and every form v3 already knows
+# (`_ABBREVIATIONS`: art., Nr., p., lit., v. …).
+ABBREVIATIONS_V4: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("bg", ("стр",                           # страница, page: "ОВ L 32, 6.2.1968 г., стр. 6" (§ 3.1; ×89)
+            "бр",                            # брой, issue: "бр. 1—2" (§ 10.1.8)
+            "вж", "Вж",                      # виж, see (§ 2.7, § 3.2.1, § 5.9.1)
+            "срв",                           # сравни, cf. (§ 10.4.2, Annex A3)
+            "напр",                          # например (§ 3.1, § 10.1.1)
+            "т.е", "т.нар")),                # тоест, така наречен (§ 10.1.1, § 10.4.2)
+    ("cs", ("čl", "Čl",                      # článek (§ 3.2.3, § 10.8; ×392, ×425)
+            "odst",                          # odstavec (§ 3.2.3, § 10.8; ×822)
+            "písm",                          # písmeno (§ 3.2.3, § 10.8)
+            "č",                             # číslo: "nařízení (EU) č. 127/2010" (§ 3.2.2; ×103)
+            "věst",                          # "Úř. věst. L 32, 6.2.1968, s. 6" (§ 3.1; ×89)
+            "např", "Např",                  # například (Annex A3)
+            "tj", "tzv",                     # to jest, takzvaný (§ 3.1, § 3.2.4)
+            "srov")),                        # srovnej, cf. (§ 3.3.1)
+    ("da", ("stk", "Stk",                    # stykke: "artikel 1, stk. 2" (§ 3.2.3; ×1134), "Stk. 1 berører" (×10)
+            "nr",                            # nummer: "forordning (EU) nr. 127/2010" (§ 3.2.2; ×118)
+            "pr",                            # per: "indført pr. 1. januar 1968" (§ 3.1)
+            "jf", "f.eks", "dvs", "bl.a")),  # jævnfør, for eksempel, det vil sige, blandt andet
+    ("de", ("ABl",                           # Amtsblatt: "ABl. L 32 vom 6.2.1968, S. 6" (§ 3.1; ×90)
+            "BGBl",                          # Bundesgesetzblatt: "BGBl. I 2020, 1234" (NeuRIS fixture)
+            "z",                             # "z. B." spaced (§ 3.2.1, § 10.1; ×16); v3 knows "z.B."
+            "d.h", "d. h",                   # das heißt (§ 3.1, § 3.2.1)
+            "u. a")),                        # unter anderem: "u. a. Bedingungen" (§ 10.1; 32016R1036)
+    ("el", ("αριθ",                          # αριθμός: "κανονισμός (ΕΕ) αριθ. 127/2010" (§ 3.2.2; ×112)
+            "σελ",                           # σελίδα, page: "σ." is the Guide's (§ 3.1), "σελ." Union texts
+                                             # write too ("όπως και η συντομογραφία σελ.", Annex A3)
+            "βλ", "Βλ",                      # βλέπε, see (§ 2.7, § 5.9.1, § 10.1.2)
+            "π.χ", "δηλ")),                  # παραδείγματος χάριν, δηλαδή (Annex A3)
+    ("en", ("e.g", "i.e",                    # (§ 10.8; fixtures)
+            "Rev",                           # revision: "UN/ECE Regulation 49 Rev. 06" (fixtures)
+            "Vol")),                         # volume: "Vol. 34, Issue 3" (§ 5.9.4)
+    ("es", ("párr", "arts", "p. ej")),       # párrafo, artículos, por ejemplo (Annex A3)
+    ("et", ()),
+    ("fi", ("ks", "Ks",                      # katso, see (§ 2.7, § 3.2.1, § 5.9.1)
+            "vrt", "Vrt",                    # vertaa, cf. (§ 10.8)
+            "esim", "Esim")),                # esimerkiksi (§ 3.1, § 3.2.1, § 3.2.2)
+    ("fr", ("cf",)),                         # confer (Part Four, Annexe B; LEGI fixture)
+    ("ga", ("Uimh",                          # Uimhir: "Rialachán (AE) Uimh. 1234/2010" (§ 3.2.2; ×97)
+            "lch")),                         # leathanach: "IO L 32, 6.2.1968, lch. 6" (§ 3.1; ×79)
+                                             # (and "e.g.", § 10.5, which is en's)
+    ("hr", ("br",                            # broj: "Uredba (EU) br. 127/2010" (§ 3.2.2; ×103)
+            "str",                           # stranica: "SL L 32, 6.2.1968., str. 6." (§ 3.1; ×90)
+            "npr", "tj")),                   # na primjer, to jest (§ 3.1, § 10.1.12)
+    ("hu", ("sz",                            # szám: "29. sz. (1930)" (§ 5.9.3, § 10.1.8; ×8)
+            "pl", "vö", "ún")),              # például, vesd össze, úgynevezett (§ 3.2.1, § 10.3)
+    ("it", ("pag",                           # pagina: "GU L 32 del 6.2.1968, pag. 6" (§ 3.1; ×93)
+            "pagg",                          # pagine (§ 5.9.3, Annex A3)
+            "D.Lgs")),                       # decreto legislativo: "Il D.Lgs. 2 gennaio 2018" (Normattiva fixture)
+    ("lt", ("žr", "Žr",                      # žiūrėk, see (§ 2.7, § 5.9.1)
+            "pvz", "Pvz",                    # pavyzdžiui (§ 10.1.1, Annex A3)
+            "plg",                           # palygink, cf. (§ 10.1.6, Annex A3)
+            "t. y",                          # tai yra (§ 3.2.2, § 10.1.1)
+            "str",                           # straipsnis (Annex A3)
+            "d")),                           # diena, the date's day: "2016 m. balandžio 27 d. Europos
+                                             # Parlamento ir Tarybos reglamentas" (§ 3.2.2, § 10.1.1;
+                                             # 81 of 84 continue their sentence)
+    ("lv", ("sk", "Sk",                      # skatīt, see (§ 2.7, § 3.2.1, § 5.9.1)
+            "piem",                          # piemēram (§ 10.1.1, Annex A3)
+            "t.i", "t. i",                   # tas ir: "t. i." (§ 10.6, § 10.7), "t.i.," (31992L0043 lv ×3)
+            "Lpp")),                         # lappuse, in the legacy header "L 206, 22/07/1992 Lpp. 0007"
+    ("mt", ("eż",                            # eżempju (§ 10.1.1, Annex A3); paragrafu is "para." (v3)
+            "Vol")),                         # volum (§ 5.9.4)
+    ("nl", ("nr",                            # nummer: "Verordening (EU) nr. 127/2010" (§ 3.2.2; ×111)
+            "blz",                           # bladzijde: "PB L 32 van 6.2.1968, blz. 6" (§ 3.1; ×92)
+            "bv",                            # bijvoorbeeld, "afgekort als bv. (en niet bijv.)" (§ 10.4.1, § 3.1)
+            "d.w.z", "o.a")),                # dat wil zeggen, onder andere (§ 3.2.2, § 10.1)
+    ("pl", ("ust", "Ust",                    # ustęp: "art. 1 ust. 2 lit. a)" (§ 3.2.3; ×1135, ×12)
+            "str",                           # strona, in the special edition: "Dz.U. C 75 …, str. 12." (31992L0043)
+            "poz",                           # pozycja: "Dz.U. 2020 poz. 1024" (Annex A3)
+            "Dz",                            # "Dz. U." spaced (§ 9.5.3); "Dz.U." is v3's
+            "ds",                            # do spraw: "Grupę Roboczą ds. Ochrony" (§ 10.3.1; ×80)
+            "zob", "Zob",                    # zobacz, see (§ 2.7, § 3.2.1)
+            "np", "tj", "tzn", "m.in",       # na przykład, to jest, to znaczy, między innymi (§ 10.3.1)
+            "r")),                           # rok, the date's year: "do dnia 9 czerwca 2020 r. Komisja dokonuje"
+                                             # (§ 3.1; ×18 of 21 continue, as "(dotychczas nieopublikowane)")
+    ("pt", ("cf",)),                         # confira (§ 10.4.12, Annex A3)
+    ("ro", ("nr",                            # numărul: "Regulamentul (UE) nr. 127/2010" (§ 3.2.2; ×104)
+            "alin",                          # alineatul (Annex A3)
+            "cf")),                          # confer (§ 10.1.1)
+    ("sk", ("ods",                           # odsek: "článok 1 ods. 2 písm. a)" (§ 3.2.3; ×798)
+            "písm",                          # písmeno (§ 3.2.3)
+            "č",                             # číslo: "nariadenie (ES) č. 1292/96" (§ 3.2.2; ×104)
+            "napr", "tzv", "t. j", "resp")), # napríklad, takzvaný, to jest, respektíve (§ 10.1.4, Annex A3)
+    ("sl", ("št",                            # številka: "Uredba (EU) št. 127/2010" (§ 3.2.2; ×104)
+            "str",                           # stran: "UL L 32, 6.2.1968, str. 6" (§ 3.1; ×93)
+            "npr", "tj", "t. i")),           # na primer, to je, tako imenovani (§ 3.1, § 3.2.3, § 10.1.7)
+    ("sv", ("s.k", "dvs", "bl.a")),          # så kallad, det vill säga, bland annat (§ 10.4.2, § 10.4.10)
+)
+#: forms that are a unit or a word elsewhere, refused as a cut only where a
+#: NUMBER follows: "s. 6" is the page in cs, da, fi, pl, sk, sv (§ 3.1; "10 s.
+#: The" is ten seconds), "т. 19" a Bulgarian точка (§ 5.9.3; "т" tonnes), "σ. 6"
+#: the Greek page (§ 3.1), "vol. 34" a volume in es, fr, it, pt, ro (§ 5.9.4;
+#: "% vol." the alcoholic strength ends a sentence), "cap. 6" a Romanian
+#: capitol (§ 3.1; es, pt Annex A3; "cap" an English word), "kap." a Danish,
+#: Swedish (Annex A3) and Maltese (§ 10.1.1) chapter, "Kap." the Maltese
+#: (Annex A3) — "kap" ends a Hungarian sentence ("… t kap. A …"), "Kap" is a
+#: German cape
+ABBREVIATIONS_V4_BEFORE_NUMBER: tuple[str, ...] = ("s", "т", "σ", "vol", "cap", "kap", "Kap")
+
+_V4_DIGITS = "0123456789"
+#: what may stand before an abbreviation of v4: white space or an opening
+#: mark, or the start of the text (a negative lookbehind: it holds there too).
+#: Written out, so no word-character table is read (v3's `\b` reads Python's)
+_V4_LEFT = "(?<![^\\s(\\[«\"„“‘'/])"
+
+
+def _alternation(forms) -> str:
+    """The forms as one alternation, longest first, an inner space any white space."""
+    return "|".join(re.escape(f).replace("\\ ", "\\s")
+                    for f in sorted(set(forms), key=lambda f: (-len(f), f)))
+
+
+#: every form of v4 once, sorted (the table above names the languages)
+ABBREVIATION_FORMS_V4 = tuple(sorted({f for _lang, forms in ABBREVIATIONS_V4 for f in forms}))
+_SENTENCE_END_V4 = re.compile("(?<=[.;:])\\s+(?=[" + CAPITALS_V4 + "0-9«\"„(])")
+_ABBREVIATIONS_V4 = re.compile(_V4_LEFT + "(?:" + _alternation(ABBREVIATION_FORMS_V4)
+                               + "|[" + NEW_CAPITALS_V4 + "])\\.$")
+_ABBREVIATIONS_V4_NUMBER = re.compile(_V4_LEFT + "(?:" + _alternation(ABBREVIATIONS_V4_BEFORE_NUMBER) + ")\\.$")
+#: AN ORDINAL INSIDE THE SENTENCE (2026-11-21, measured on 32016R0679 and
+#: 32013R0575 from Cellar in de, hr and sl): a number's full stop before a
+#: capital ends no sentence where the number is an ordinal that the next
+#: word continues. German writes a date's day so: of the 488 such candidates
+#: of 32013R0575 de, ~470 are "vom 8. Dezember 1986"; Croatian an article's or
+#: paragraph's number before the act it is of: ~240 of 388 are "člankom 81.
+#: Uredbe", "stavka 2. Direktive", "članka 114. UFEU-a". Refused before THOSE
+#: words only: the rest of Croatian's are sentence starts ("stavka 3.
+#: Komisija …"), and Slovenian ends its sentences there ("iz člena 8. V
+#: primeru …", 96 of 96). The act nouns in the cases that follow a number
+#: (genitive, dative-locative, instrumental), never the nominative a
+#: sentence opens with; refusing a cut only joins two sentences, cutting one
+#: breaks it
+_ORDINAL_V4 = re.compile("(?<![0-9.,])[0-9]{1,4}\\.$")
+AFTER_ORDINAL_V4: tuple[str, ...] = (
+    # de: the months (and the Austrian forms)
+    "Januar", "Jänner", "Februar", "Feber", "März", "April", "Mai", "Juni", "Juli", "August",
+    "September", "Oktober", "November", "Dezember",
+    # hr: regulation, directive, decision, charter, treaty, annex, protocol, convention
+    "Uredbe", "Uredbi", "Uredbom", "Direktive", "Direktivi", "Direktivom", "Odluke", "Odluci", "Odlukom",
+    "Povelje", "Povelji", "Poveljom", "Ugovora", "Ugovoru", "Ugovorom", "Priloga", "Prilogu", "Prilogom",
+    "Protokola", "Protokolu", "Protokolom", "Konvencije", "Konvenciji", "Konvencijom",
+    # hr: the Treaties' acronyms, inflected with a hyphen ("UFEU-a", "UEU-u")
+    "UFEU-", "UEU-")
+_AFTER_ORDINAL_V4 = re.compile("(?:" + _alternation(AFTER_ORDINAL_V4) + ")(?=[\\s,;:.)\\-]|$|(?<=-))")
+#: how far back from a candidate an abbreviation is looked for: past the
+#: longest form of either version (tests/test_chunking_legal_v4.py), so the
+#: look is bounded and a long run of refused candidates stays linear
+_V4_LOOKBACK = 64
 
 
 #: Nemotron-3-Embed-1B-BF16's tokenizer.json at revision c0c9fea9 (17,077,678
@@ -274,11 +535,52 @@ def _lines_split(text: str, mark: re.Pattern) -> list[str]:
     return [u for u in units if u.strip()]
 
 
-def _sentences(text: str) -> list[str]:
+def _sentences(text: str, version: int = 3) -> list[str]:
+    """`text` cut at its sentence ends: v3's class and abbreviations up to
+    version 3 (exactly as always), the 24 languages' from 4 (`_sentences_v4`)."""
+    if int(version) >= 4:
+        return _sentences_v4(text)
     out: list[str] = []
     start = 0
     for m in _SENTENCE_END.finditer(text):
         if _ABBREVIATIONS.search(text[start:m.start()]):
+            continue
+        out.append(text[start:m.start()])
+        start = m.end()
+    out.append(text[start:])
+    return [s for s in out if s.strip()]
+
+
+def after_abbreviation_v4(text: str, start: int, m: re.Match) -> bool:
+    """Is the candidate `m` of `_SENTENCE_END_V4` (its white space) refused
+    as a cut, the current sentence having begun at `start`? Where v3 would
+    refuse it — `_ABBREVIATIONS` over `text[start:m.start()]`, read here with
+    `pos`/`endpos` instead of a slice: the same match, since the pattern
+    sees the character before `pos` (white space at `start`, which is no word
+    character, as a slice's start is none) and every match ends at `endpos`
+    within `_V4_LOOKBACK` — or after a form of v4's, or, before a number,
+    after one of its short forms, or after an ordinal its next word
+    continues (`_AFTER_ORDINAL_V4`)."""
+    end = m.start()
+    lo = max(start, end - _V4_LOOKBACK)
+    if _ABBREVIATIONS.search(text, lo, end) or _ABBREVIATIONS_V4.search(text, lo, end):
+        return True
+    if _ORDINAL_V4.search(text, lo, end) and _AFTER_ORDINAL_V4.match(text, m.end()):
+        return True                    # "vom 18. Dezember", "člankom 81. Uredbe"
+    return (m.end() < len(text) and text[m.end()] in _V4_DIGITS
+            and _ABBREVIATIONS_V4_NUMBER.search(text, lo, end) is not None)
+
+
+def _sentences_v4(text: str) -> list[str]:
+    """v4's sentences: v3's cut, and a cut before a capital of CAPITALS_V4,
+    refused after an abbreviation of either version (`after_abbreviation_v4`).
+    Each candidate decided by the text around it alone, so the cuts are
+    v3's wherever the text holds no new capital after a candidate and no new
+    abbreviation before one (tests/test_chunking_legal_v4.py)."""
+    out: list[str] = []
+    start = 0
+    for m in _SENTENCE_END_V4.finditer(text):
+        if after_abbreviation_v4(text, start, m):
             continue
         out.append(text[start:m.start()])
         start = m.end()
@@ -378,6 +680,7 @@ def split(tok: Any, text: str, budget: int, level: int = 0, *, version: int = CH
     """`text` as pieces of at most `budget` tokens, cut at the highest level
     of its structure that makes them fit; joined, the pieces are the text.
     `version` 3 packs linearly (`_pack_linear`), 1 and 2 as they always did;
+    4 packs as 3 and cuts its sentences in the 24 languages (`_sentences_v4`);
     `count`: the text's token count where the caller has it already."""
     count = count if count is not None else _count(tok, text)
     if count <= budget:
@@ -385,9 +688,9 @@ def split(tok: Any, text: str, budget: int, level: int = 0, *, version: int = CH
     if level == 0:
         units, sep = _lines_split(text, PARAGRAPH), "\n"
     elif level == 1:
-        units, sep = _lines_split(text, POINT), "\n"
+        units, sep = _lines_split(text, POINT_V4 if int(version) >= 4 else POINT), "\n"
     elif level == 2:
-        units, sep = _sentences(text), " "
+        units, sep = _sentences(text, version), " "
     else:
         return _windows(tok, text, budget)
     if len(units) <= 1:

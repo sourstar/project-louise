@@ -409,6 +409,23 @@ class CorpusSource(Protocol):
     # docs/notes/normattiva-multivigenza-review.md §3.2, case 2).
     def closures(self, doc: CanonicalDoc) -> Iterator[tuple[str, str]]: ...
 
+    # ---- adopted as engine API from the EUR-Lex5 review (2026-11-23; 06
+    # §6.1; docs/notes/rag-engine-handoff-2026-11-21.md §1). Each is read with
+    # a default (`getattr`), so a plugin without it behaves as before.
+
+    # Optional: the ids this unit was held under before (a form or a day its
+    # id derives from moved): discovery retires those rows at this locator,
+    # out of every index, tombstoned (app/discovery.py `_apply_batch`).
+    def superseded_ids(self, ref: DocRef) -> list[str]: ...
+
+    # Optional: the bytes a parse of this row reads where `size` misleads (a
+    # zip's members unpacked): the parse pool's admission (app/plugin_io.py).
+    def parse_size(self, row) -> int | None: ...
+
+    # Optional: the validity base holds originals, so a held amendment ends
+    # the text it replaced (05 §5.1 chain rule 2; app/validity.py).
+    VALIDITY_ENDS_AT_AMENDMENT: bool
+
 
 @dataclass(frozen=True)
 class RefColumn:
@@ -555,10 +572,14 @@ class ArticleNotes:
     """The words a pinned article's label ends with, in the source's own
     language (docs/notes/legal-chunking-retrieval.md R1, follow-up d): the
     text in force, the text at a date (`{day}` = YYYY-MM-DD), the last text
-    a repealed article had. The default is English, EUR-Lex's."""
+    a repealed article had, and the text an amendment held here replaced
+    from `{day}` while the amended text is not held (2026-11-21, the
+    EUR-Lex5 review's V3: an amended original was "text in force"). The
+    default is English, EUR-Lex's."""
     in_force: str = "text in force"
     as_of: str = "text as of {day}"
     last: str = "last text in force"
+    changed: str = "text until {day}; amended since, the amended text is not held"
 
 
 class LegalReferenceSource(Protocol):

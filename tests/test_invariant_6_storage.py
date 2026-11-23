@@ -200,6 +200,8 @@ _DERIVED_WRITERS = {
     "app/plugins/wikipedia/stream_index.py": "a run's page id → stream table, rebuilt from the multistream index",
     "app/plugins/wikisource/index.py": "a run's works index (every page by namespace and title, its stream), "
                                        "rebuilt from the dump in one pass",
+    "app/plugins/wikisource/tables.py": "a run's categorylinks, linktarget and page_props packs (a page's rows, "
+                                        "a category's title), rebuilt from the run's SQL dumps",
     "app/plugins/wikidata/pack.py": "the pack and label table, rebuilt from the dump",
     "app/plugins/legi/pack.py": "the per-tarball pack and the scan's facts, rebuilt from the tarballs",
     "app/ask/part_cache.py": "per-part search facts, rebuilt from the part on a miss",

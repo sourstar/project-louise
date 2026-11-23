@@ -197,15 +197,23 @@ class RecentTrees:
         with self._guard:
             return self._locks.setdefault(celex, threading.Lock())
 
-    def get(self, celex: str, ask: Callable[[], bytes]) -> tuple[bytes, str]:
+    def get(self, celex: str, ask: Callable[[], bytes],
+            current: Callable[[bytes], bool] | None = None) -> tuple[bytes, str]:
         """The work's tree as Cellar served it, and where it came from:
-        `kept` (served within the window) or `cellar` (`ask()`, then kept)."""
+        `kept` (served within the window, and `current(tree)` where given)
+        or `cellar` (`ask()`, then kept). `current`: whether a kept tree is
+        as recent as what the caller knows of the unit (review 2026-11-21,
+        Q1: a tree kept 13:00 landed a unit the 16:00 listing dated 15:38,
+        and the engine recorded it current for good) — a kept tree that is
+        not is asked of Cellar again, under the work's lock."""
         import zlib
         path = self._path(celex)
         with self._lock(celex):
             try:
                 if self.clock() - path.stat().st_mtime <= self.window_s:
-                    return gzip.decompress(path.read_bytes()), "kept"
+                    data = gzip.decompress(path.read_bytes())
+                    if current is None or current(data):
+                        return data, "kept"
             except (OSError, EOFError, zlib.error):
                 pass                        # none, or not whole: asked of Cellar
             data = ask()
