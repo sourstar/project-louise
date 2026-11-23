@@ -723,3 +723,30 @@ def test_an_idle_table_in_the_lance_root_is_never_taken_over(rooted, monkeypatch
     coll = _collection(rooted.root, "c")
     assert vector_index.take_over_due(coll, {"rows": rooted.rows}) is False, \
         "a link into the Lance root is the searched table, not one being built"
+
+
+def test_a_lost_lance_root_setting_never_moves_the_tables_by_itself(rooted, monkeypatch):
+    """The setting unset after the move: its links read as `build`, as every
+    link did before the Lance root, but the worker's take-over moves only a
+    table behind a link into the build area itself — never every searched
+    table into its collection's folder, unattended."""
+    from app import vector_index
+    vector_place.move(rooted.root, "c", vector_place.HOT, collection=rooted.coll)
+    clock = _maintainer_clock(monkeypatch)
+    vector_index.ensure(rooted.coll)
+    clock[0] += 1800
+    monkeypatch.setattr(config, "LANCE_ROOT", None)
+    assert vector_place.tier(rooted.link) == vector_place.BUILD
+    assert not vector_index.take_over_due(rooted.coll, vector_index.stats(rooted.coll))
+
+
+def test_with_a_lance_root_a_table_in_the_build_area_is_still_taken_over(rooted, monkeypatch):
+    from app import vector_index
+    _to_build(rooted)
+    clock = _maintainer_clock(monkeypatch)
+    vector_index.ensure(rooted.coll)
+    clock[0] += 1800
+    assert vector_index.take_over_due(rooted.coll, vector_index.stats(rooted.coll))
+    out = vector_index.take_over(rooted.coll)
+    assert out["moved"] and vector_place.physical(rooted.link) == rooted.lance_root / "c", out
+    _one_valid_table(rooted)
