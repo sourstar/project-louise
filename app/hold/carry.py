@@ -1676,8 +1676,14 @@ def _unit_key(path: str) -> str:
     return os.path.normpath(path)
 
 
+#: `rederive --ids FILE --first`: the hold on every other live row, while the
+#: listed are derived first (operator, 2026-11-22, "A, problem slice first")
+FIRST_KEY = "rederive_first"
+
+
 def rederive_listed(root, name: str, lines: list[str], *, apply: bool = False, stop=None,
-                    log: Callable[[str], None] = print, retry_errors: bool = False) -> dict[str, Any]:
+                    log: Callable[[str], None] = print, retry_errors: bool = False,
+                    first: bool = False) -> dict[str, Any]:
     """THE DOCUMENTS A LIST NAMES derived again (2026-11-20, EUR-Lex5: the
     36,393 units the units check lists as holding an included Formex document,
     `--list-included`, whose text parser 5 now reads where it stands — Annex I
@@ -1693,7 +1699,16 @@ def rederive_listed(root, name: str, lines: list[str], *, apply: bool = False, s
     a document whose bytes changed. Where it holds records, its vectors are
     the records' and stay. Marks only, as `derived_check.verify`: a document
     stays in search until its stages replace its rows. Safe to run again —
-    it resets again; the dry run counts."""
+    it resets again; the dry run counts.
+
+    `first` (operator, 2026-11-22: "A, problem slice first"; EUR-Lex's "any
+    further run has to start from the problematic parts"): every OTHER row in
+    scope is HELD out of every stage's selection (`in_scope` = db.SCOPE_HELD:
+    the stages select `in_scope=1`, the scope pass widens only 0), the hold
+    recorded in the manifest's control (FIRST_KEY), until `release_first`.
+    The listed are then the only work the worker has. A hold already
+    standing refuses another, so two lists never mix."""
+    from app import db
     from . import collection as col
     from .derived_check import _begin
     root = Path(root)
@@ -1710,17 +1725,23 @@ def rederive_listed(root, name: str, lines: list[str], *, apply: bool = False, s
     con.row_factory = sqlite3.Row
     try:
         con.execute("PRAGMA journal_mode=WAL")
+        if first and db.get_control(con, FIRST_KEY):
+            raise CodexError(f"rederive --first: {name} holds rows already "
+                             f"({db.get_control(con, FIRST_KEY)}); `--release` them first")
         hit: list[str] = []
         named: set[str] = set()
         embedded = 0
+        others: list[int] = []              # with `first`: the rowids held
         # one walk of the manifest: the list is matched in memory, never a
         # `path IN (…)` per window, which no index answers
-        for row in con.execute("SELECT uid, path, embed_done FROM documents"):
+        for row in con.execute("SELECT rowid, uid, path, embed_done, in_scope FROM documents"):
             k = _unit_key(row["path"]) if row["path"] else None
             if row["uid"] in wanted or (k is not None and k in keys):
                 hit.append(row["uid"])
                 named.add(row["uid"] if row["uid"] in wanted else k)
                 embedded += row["embed_done"] == 1
+            elif first and row["in_scope"] == 1:
+                others.append(row["rowid"])
         unmatched = len(wanted) - len({w for w in wanted if w in named or _unit_key(w) in named})
         marks = REDERIVE_MARKS + ("" if records else
                                   ", embed_done=CASE WHEN embed_done=1 THEN 0 ELSE embed_done END")
@@ -1735,8 +1756,24 @@ def rederive_listed(root, name: str, lines: list[str], *, apply: bool = False, s
         out = {"collection": name, "listed": len(wanted), "documents": len(hit), "unmatched": unmatched,
                "embedded": embedded, "vectors": "kept: the records'" if records else
                "embedded again: the collection holds no records", "marks": marks}
+        if first:
+            out["held"] = len(others)
         if not apply:
             return {**out, "would_reset": len(hit)}
+        if first:
+            # THE HOLD BEFORE THE RESET: a stop between them leaves the rest
+            # held and the listed not yet pending, which a run again completes
+            for i in range(0, len(others), 500):
+                part = others[i:i + 500]
+                _begin(con, stop)
+                con.execute(f"UPDATE documents SET in_scope={db.SCOPE_HELD} WHERE rowid IN "
+                            f"({','.join('?' * len(part))}) AND +in_scope=1", part)
+                con.execute("COMMIT")
+            _begin(con, stop)
+            db.set_control(con, FIRST_KEY, json.dumps({"listed": len(hit), "held": len(others),
+                                                       "since": int(time.time())}))
+            con.execute("COMMIT")
+            log(f"[carry] {name}: {len(others)} document(s) held out of every stage until `--release`")
         reset = 0
         for i in range(0, len(hit), 500):
             if stop is not None and stop.is_set():
@@ -1750,6 +1787,75 @@ def rederive_listed(root, name: str, lines: list[str], *, apply: bool = False, s
             + ("; its vectors kept (the records')" if records else
                f"; {embedded} embedded one(s) embedded again (no records: its vectors are its chunks')"))
         return {**out, "reset": reset, "done": reset == len(hit)}
+    finally:
+        con.close()
+
+
+def release_first(root, name: str, *, apply: bool = False, keep: list[str] | None = None,
+                  log: Callable[[str], None] = print) -> dict[str, Any]:
+    """`rederive --release`: the rows `--first` held go back into the
+    stages' selection (in_scope 1), the collection's scope applied again
+    (discovery.apply_scope: what its scope keeps out stays out), the hold's
+    control row removed. Indexed (idx_documents_scope, in_scope = the held
+    value), a window a transaction. Nothing held: said, nothing written.
+
+    `keep` (`--release --ids FILE`): the rows FILE lists (a uid or a unit's
+    path a line) STAY held, every other one goes back, and the hold stands
+    for them — EUR-Lex's units to re-form, whose package comes from Cellar
+    over days: released with the rest they would be derived from their old
+    form and again when re-formed (RULE 1). A later `--release` frees them."""
+    from app import db, discovery
+    from . import collection as col
+    from .derived_check import _begin
+    root = Path(root)
+    name, _codex = col.resolve(root, name)
+    con = sqlite3.connect(_paths(root, name)["manifest"], timeout=60)
+    con.row_factory = sqlite3.Row
+    try:
+        con.execute("PRAGMA journal_mode=WAL")
+        hold = db.get_control(con, FIRST_KEY)
+        held = con.execute(f"SELECT COUNT(*) FROM documents WHERE in_scope={db.SCOPE_HELD}").fetchone()[0]
+        out = {"collection": name, "hold": json.loads(hold) if hold else None, "held": int(held)}
+        if not apply or (not hold and not held):
+            return out
+        released = 0
+        if keep:
+            wanted = {ln.strip() for ln in keep if ln.strip()}
+            keys = {_unit_key(w) for w in wanted}
+            go = [r["rowid"] for r in con.execute(
+                f"SELECT rowid, uid, path FROM documents WHERE in_scope={db.SCOPE_HELD}")
+                if not (r["uid"] in wanted or (r["path"] and _unit_key(r["path"]) in keys))]
+            for i in range(0, len(go), 500):
+                part = go[i:i + 500]
+                _begin(con, None)
+                released += con.execute(f"UPDATE documents SET in_scope=1 WHERE rowid IN "
+                                        f"({','.join('?' * len(part))}) AND +in_scope={db.SCOPE_HELD}",
+                                        part).rowcount
+                con.execute("COMMIT")
+            still = int(held) - released
+            _begin(con, None)
+            discovery.apply_scope(con)
+            state = json.loads(hold) if hold else {}
+            db.set_control(con, FIRST_KEY, json.dumps({**state, "held": still, "kept": len(wanted)}))
+            con.execute("COMMIT")
+            log(f"[carry] {name}: {released} held document(s) back; {still} kept held")
+            return {**out, "released": released, "kept_held": still}
+        while True:
+            _begin(con, None)
+            ids = [r[0] for r in con.execute(f"SELECT rowid FROM documents WHERE in_scope={db.SCOPE_HELD} "
+                                             f"LIMIT 500")]
+            if not ids:
+                con.execute("COMMIT")
+                break
+            released += con.execute(f"UPDATE documents SET in_scope=1 WHERE rowid IN "
+                                    f"({','.join('?' * len(ids))})", ids).rowcount
+            con.execute("COMMIT")
+        _begin(con, None)
+        discovery.apply_scope(con)
+        con.execute("DELETE FROM control WHERE key=?", (FIRST_KEY,))
+        con.execute("COMMIT")
+        log(f"[carry] {name}: {released} held document(s) back in the stages' selection")
+        return {**out, "released": released}
     finally:
         con.close()
 
