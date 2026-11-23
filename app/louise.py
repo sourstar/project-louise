@@ -2131,9 +2131,10 @@ def _recreate_take_over(root: Path, name: str, codex, say) -> dict:
 
     from app import node_state, vector_place
     from app.hold import lock as lock_mod, records as rec
-    if vector_place.tier(vector_place.table_dir(root, name)) != vector_place.BUILD \
-            and not vector_place.begun(lock_mod.state_dir(root, name)):
-        return {"nothing": "the vector table is on the data pool"}
+    link = vector_place.table_dir(root, name)
+    in_area = vector_place.tier(link) == vector_place.BUILD and vector_place.in_area(vector_place.physical(link))
+    if not in_area and not vector_place.begun(lock_mod.state_dir(root, name)):
+        return {"nothing": "the vector table is on the data pool"}   # or not in the build area: never moved here
     if name not in node_state.paused_collections() and node_state.worker_state() != "paused":
         raise CodexError(f"swap: {name} is not paused, and its vector table moves from the build area "
                          f"now: `louise node pause {name}`, then run this again")

@@ -750,3 +750,15 @@ def test_with_a_lance_root_a_table_in_the_build_area_is_still_taken_over(rooted,
     out = vector_index.take_over(rooted.coll)
     assert out["moved"] and vector_place.physical(rooted.link) == rooted.lance_root / "c", out
     _one_valid_table(rooted)
+
+
+def test_a_lost_lance_root_setting_is_not_moved_by_a_swap_either(rooted, monkeypatch):
+    """Case F's swap moves a table from the build area only (louise.py
+    `_recreate_take_over`): a link elsewhere is nothing to do there."""
+    from app import louise
+    vector_place.move(rooted.root, "c", vector_place.HOT, collection=rooted.coll)
+    monkeypatch.setattr(config, "LANCE_ROOT", None)
+    said = []
+    out = louise._recreate_take_over(rooted.root, "c", None, said.append)
+    assert "nothing" in out and said == [], out
+    assert vector_place.physical(rooted.link) == rooted.lance_root / "c"
