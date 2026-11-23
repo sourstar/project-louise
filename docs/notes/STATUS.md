@@ -18,6 +18,13 @@ build at 12 cores, the GPU uncapped. The card's noise (operator): 0.2 sone
 idle, 3.1 sone at full load, coil whine ~0.9 sone; its fan range is being
 measured (published figures disagree).
 
+### 2026-11-23
+
+- **ssd4 for LanceDB only: the Lance root (`LOUISE_LANCE_ROOT`), operator "A" — built, not deployed.**
+  A searched table lives at `<LOUISE_LANCE_ROOT>/<name>` behind each collection's `lance` link; `hold
+  vectors move <c> --to hot --apply` adopts a beside-the-folder table by a rename. The node's procedure is
+  storage-tiering.md §12.
+
 ### 2026-11-21
 
 - **The worker and the web keep a log file — BUILT, not deployed** (O1 of

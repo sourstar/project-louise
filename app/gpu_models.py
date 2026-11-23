@@ -111,6 +111,25 @@ def rows_from(system: dict, uses: dict[str, list[str]], seen: set | None = None)
     return rows
 
 
+def process_name(p, rows) -> str:
+    """The model a card's process serves, as LocalAI names it: the row whose
+    backend pid is the process's own (`ns_pid`) or, for a wrapper's, its
+    nearest ancestor's (`ns_ancestors`) — what `by_card` places models by. A
+    LocalAI backend's command line names no model (the operator, 2026-11-23:
+    "pushed off the card: ld.so"). No row: the probe's label — a model its
+    command line named — or, where the label is only the program, the
+    program and its container ("llama-cpp-fallback in localai")."""
+    for pid in (getattr(p, "ns_pid", None), *(getattr(p, "ns_ancestors", ()) or ())):
+        if pid is None:
+            continue
+        named = [r.model for r in rows or () if r.pid == pid]
+        if named:
+            return ", ".join(dict.fromkeys(named))
+    where = getattr(p, "container", "") or ""
+    only_program = p.label == getattr(p, "command", None)
+    return f"{p.label} in {where}" if only_program and where and where != "host" else p.label
+
+
 def by_card(models: dict, devices) -> dict:
     """Each model ON ITS CARD (operator, 2026-11-11: "Add a CPU card with the
     models loaded"; a model on the processor's Radeon is the Radeon's, not the

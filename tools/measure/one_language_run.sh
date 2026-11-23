@@ -3,14 +3,16 @@
 # on the node: the live web container's image, network namespace and env
 # (tokens left out), with EVERY mount read-only — /data as the web sees it,
 # the SHARDs, the config, and /root/onelang (the script and the queries).
+# /data and /config are the web container's own binds, its nested ones
+# included (/data/lance on ssd4 since 2026-11-23, storage-tiering.md §12).
 # Results go to stdout; nothing is written on the node.
 # Usage: ssh node 'sh /root/onelang/one_language_run.sh' < /dev/null > results.jsonl
 set -e
 IMG=$(docker inspect ix-louise-rag-web-1 --format '{{.Image}}')
 docker run --rm --name onelang-search --network container:ix-louise-rag-web-1 \
   --env-file /dev/stdin \
-  -v /mnt/ssd4/apps/louise-rag/data:/data:ro \
-  -v /mnt/ssd4/apps/louise-rag/config:/config:ro \
+  $(docker inspect ix-louise-rag-web-1 --format '{{range .Mounts}}{{println .Source .Destination}}{{end}}' \
+    | awk '$2 == "/data" || $2 == "/config" || index($2, "/data/") == 1 {printf "-v %s:%s:ro ", $1, $2}') \
   -v /mnt/tank/apps/louise-shard/gutenberg:/data/collections/gutenberg/shard:ro \
   -v /mnt/tank/apps/louise-shard/pubmed:/data/collections/pubmed/shard:ro \
   -v /mnt/tank/apps/louise-shard/wikipedia:/data/collections/wikipedia/shard:ro \

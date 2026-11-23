@@ -92,12 +92,11 @@ def node(tmp_path, monkeypatch, endpoint):
     collection = next(c for c in collections_mod.load_all() if c.name == "pairs")
     # the node keeps its CPU twin's reference for the weights it gates: no card
     # run is gated without one (invariant 12; tests/test_run_check.py's node)
-    from app.hold import cpu_reference as cpu_ref
+    from app.rage import reference as rage
     for role in ("document", "query"):
-        cpu_ref.write(root / "collections", "pairs", role, run_id="sha256:" + "c0" * 32,
-                      run={"driver": "cpu", "engine": {}, "weights": R1_OBJ["weights"]},
-                      set_id=codex.space.calibration.set,
-                      vectors=run_check.reference(root / "collections", "pairs", codex, role))
+        rage.put(codex, role, run_id="sha256:" + "c0" * 32,
+                 run={"driver": "cpu", "engine": {}, "weights": R1_OBJ["weights"]},
+                 vectors=run_check.reference(root / "collections", "pairs", codex, role))
     return root / "collections", collection, codex
 
 

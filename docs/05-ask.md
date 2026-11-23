@@ -513,6 +513,15 @@ reason — beside `withheld`, which names only what was left out whole. A
 result list from such a copy is a text-leg list, and a reader has to be
 able to tell.
 
+*Amended 2026-11-23* (the operator: "A"). The other legs are named the same
+way when they cannot answer: `leg` is `"vector"`, `"catalog"` (its index not
+complete or not readable, amended 2026-10-21) or `"text"` (a text index that
+could not be searched: it does not open, its lock cannot be taken, a segment
+does not read; the reason names each index and says whether the others
+answered). Until then a text index that failed answered an empty list,
+indistinguishable from no match. The Ask page shows every entry above the
+results, and the answer's sources say it.
+
 Facts are placed beside the lists, never in them. Every fact names the
 reference source and its `ref_version` (§6.5), the table, the canonical
 id, the row's columns, and — when *expand* reached it — the link it was
@@ -582,7 +591,7 @@ louise_search(query, collections?, annotations?, space?, filters?, limit?,
     → {lists: [{space_id, question, hits: [<result, §5.3>]}],   -- question is "relevance" (§5.1)
        facts: [<fact, §5.3>], unresolved: [<canonical id>],
        withheld: [{collection_id, shards, reason}],
-       legs_withheld: [{collection_id, leg, reason}],     -- leg is "vector"; the copy IS searched, on its text leg (§5.3)
+       legs_withheld: [{collection_id, leg, reason}],     -- leg is "vector", "catalog" or "text"; the copy IS searched, on its other legs (§5.3, amended 2026-11-23)
        translations: [...],   -- shards: a list, or "all" for a copy in quarantine (§5.3)
        history: {requested, limit, timeout_s,
                  fetches: [{collection, act, language, version, status, why}]} | null}   -- §5.3, amended 2026-11-16

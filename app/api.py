@@ -40,7 +40,7 @@ from starlette.concurrency import run_in_threadpool
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from . import auth, cancel, collections as collections_mod, query_service, web
 from . import config, db, discovery, retrieval, llm, summarize, embeddings, fts, spaces
-from . import node_state, speech
+from . import idle_trim, node_state, speech
 
 STATIC = Path(__file__).parent / "static"
 
@@ -48,6 +48,11 @@ STATIC = Path(__file__).parent / "static"
 async def lifespan(app: FastAPI):
     from . import fdlimit
     fdlimit.raise_soft()                 # the soft open-files limit to the hard one (app/fdlimit.py)
+    # THE WEB'S MEMORY (operator, 2026-11-22: "less than 1GB"): one Lance
+    # Session for the process, before any table is opened, and its freed heap
+    # given back after a while without a question (app/idle_trim.py; platform.toml [web] idle_trim_s)
+    embeddings.use_web_caches()
+    idle_trim.start()
     try:
         # PER-COLLECTION (invariant 1): one collection whose space does not
         # match is not served, and the node keeps the rest. The web process
@@ -68,6 +73,8 @@ app = FastAPI(title="louise-rag", lifespan=lifespan)
 # who is asking, on every request; Ask closed to nobody-in-particular once a
 # user exists (07 §7.4, amended 2026-10-22; app/users.py)
 app.add_middleware(auth.ViewerGate)
+# every request notes the time, for the idle trim (app/idle_trim.py)
+app.add_middleware(idle_trim.IdleClock)
 
 def _con():
     # one connection per request keeps things simple; SQLite WAL handles it

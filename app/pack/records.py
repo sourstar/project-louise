@@ -503,6 +503,15 @@ def read_frame(path: Path, index: ShardIndex, k: int) -> list[bytes]:
     if is_parquet(path):
         return _parquet_frame(path, index, k)
     offset, csize, rsize, n, _first = index.frames[k]
+    return read_frame_at(path, offset, csize, rsize, n, k)
+
+
+def read_frame_at(path: Path, offset: int, csize: int, rsize: int, n: int, k: int | None = None) -> list[bytes]:
+    """The lines of the zstd frame at `offset` (`csize` bytes, `rsize`
+    decompressed, `n` lines): one pread + one decompress, from a frame table
+    held elsewhere (app/hold/claim_index.py's seek table) as from the part's
+    own index."""
+    path = Path(path)
     with open(path, "rb") as f:
         f.seek(offset)
         comp = f.read(csize)
@@ -511,7 +520,8 @@ def read_frame(path: Path, index: ShardIndex, k: int) -> list[bytes]:
     if lines and lines[-1] == b"":
         lines.pop()
     if len(lines) != n:
-        raise ShardFormatError(f"{path.name}: frame {k} holds {len(lines)} lines, index says {n}")
+        where = f"frame {k}" if k is not None else f"the frame at {offset}"
+        raise ShardFormatError(f"{path.name}: {where} holds {len(lines)} lines, its table says {n}")
     return lines
 
 

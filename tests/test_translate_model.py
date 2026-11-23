@@ -239,7 +239,7 @@ def test_each_mixed_group_is_searched_in_every_language_it_holds(isolated_config
     monkeypatch.setattr(fts, "group_languages",
                         lambda g, collection=None: ["eo", "la"] if g == "other" else [g])
     ran = []
-    monkeypatch.setattr(fts, "search", lambda group, q, limit=20, collection=None, langs=None:
+    monkeypatch.setattr(fts, "search", lambda group, q, limit=20, collection=None, langs=None, **_kw:
                         ran.append(q) or [])
     monkeypatch.setattr(llm, "language_restriction", lambda q: ([], q))
     _server(monkeypatch)

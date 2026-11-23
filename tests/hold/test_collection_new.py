@@ -120,8 +120,8 @@ def test_every_input_comes_from_the_recipe_and_the_steps_run_in_order(tmp_path, 
     assert (reference.model, reference.weights, against[0].model) == ("vega-nemo", WEIGHTS, "vega-nemo-cpu")
     assert steps["order"] == ["calibrate", "create", "cpu-reference", "gate"]
     assert steps["created"][1]["space"]["tolerance"] == "0.999995", "the measured tolerance, into create"
-    assert steps["cpu_args"].refresh and not steps["cpu_args"].again, \
-        "the collection's copy written again from the store, never recomputed"
+    assert steps["cpu_args"].model == "vega-nemo-cpu" and not steps["cpu_args"].again, \
+        "the node's reference, inherited where held (the command resolves it), never recomputed"
     kept = json.loads((tmp_path / "wd" / "state" / "calibration.json").read_text())
     assert (kept["tolerance"], kept["ctx"], kept["cut"], kept["instruction"]) == ("0.999995", 8191, "tokens",
                                                                                   "passage: ")
@@ -323,6 +323,41 @@ def test_without_a_build_area_the_table_is_beside_the_collection(tmp_path, steps
     assert f"vectors     built beside the collection, {root / 'wd' / 'lance'}" in capsys.readouterr().out
     assert _new_at(root, _recipe(tmp_path)) == 0
     assert not (root / "wd" / "lance").is_symlink()
+
+
+def test_with_a_lance_root_and_no_build_area_the_table_is_made_in_the_root(tmp_path, steps, monkeypatch, capsys):
+    """storage-tiering.md §12 (operator, 2026-11-23: "A"): the link into
+    the Lance root is placed before the collection's file exists, as the
+    build area's is."""
+    from app import config, vector_place
+    root = tmp_path / "louise" / "collections"
+    root.mkdir(parents=True)
+    lr = tmp_path / "ssd4-lance"
+    lr.mkdir()
+    monkeypatch.setattr(config, "LANCE_ROOT", lr)
+    assert _new_at(root, _recipe(tmp_path), "--dry-run") == 0
+    assert f"vectors     built in the Lance root, {lr / 'wd'}" in capsys.readouterr().out
+    assert not (root / "wd").exists() and not (lr / "wd").exists(), "the dry run made nothing"
+    assert _new_at(root, _recipe(tmp_path)) == 0
+    link = root / "wd" / "lance"
+    assert link.is_symlink() and vector_place.physical(link) == lr / "wd"
+    assert vector_place.tier(link) == vector_place.HOT, "searched from there: nothing to move"
+
+
+def test_a_create_that_fails_takes_its_lance_root_placement_back(tmp_path, steps, monkeypatch):
+    from app import config
+    from app.hold.codex import CodexError
+    root = tmp_path / "louise" / "collections"
+    root.mkdir(parents=True)
+    lr = tmp_path / "ssd4-lance"
+    lr.mkdir()
+    monkeypatch.setattr(config, "LANCE_ROOT", lr)
+
+    def refused(*a, **k):
+        raise CodexError("refused by create")
+    monkeypatch.setattr(louise, "create_from", refused)
+    assert _new_at(root, _recipe(tmp_path)) == 2
+    assert not (root / "wd").exists() and not (lr / "wd").exists()
 
 
 def test_a_create_that_fails_takes_its_placement_back(tmp_path, steps, monkeypatch):

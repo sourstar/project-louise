@@ -43,7 +43,7 @@ CODEX_VERSION = 5
 #: so inside `collection_id` — changing it does not upgrade a collection, it
 #: names a different one" (§9.3). So 1 and 2 are read forever and never
 #: rewritten.
-CODEX_VERSIONS = (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11)
+CODEX_VERSIONS = (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12)
 
 #: THE ENGINE AMENDMENT (0d85f7f; 02 §2.4, 09 §9.3). From this version a
 #: space's encoder is `{weights, engine, label}`: the ENGINE the reference
@@ -168,6 +168,22 @@ EXACT_REQUIRED = "exact"
 #: prefix on one half would be a function nobody else could name.
 DOCUMENT_VERSION = 11
 
+#: THE SELECTION AMENDMENT (operator, 2026-11-18, option A; docs/notes/
+#: wiki-gutenberg-claude-plan.md §12). An annotations collection may make
+#: claims about PART of a target only — wiki-gutenberg about gutenberg's
+#: history books and memoirs, by a rule the operator decided — and invariant
+#: 11 asks that such a rule be written in the Codex before it applies. A
+#: target of `annotates` states it: `select` `{id, version, sha256}` — the
+#: rule's name and version and the sha256 of its bytes (for wiki-gutenberg,
+#: docs/notes/wiki-gutenberg-selection.toml). A selection, not a pruning:
+#: every target record stays; the claims are made about the selected ones.
+#: Inside `collection_id`, so another rule names another collection (RULE 1
+#: re-creates it, the claims carried). ABSENT, never null, on a target that
+#: declares none, so no Codex already written moves. Written for an
+#: annotations Codex with at least one selected target ALONE: a version-12
+#: Codex is the version-9 annotations object plus `select`; it has no space.
+SELECT_VERSION = 12
+
 #: The two containers (09 §9.5); absent below GRAPH_VERSION means JSONL.
 JSONL, PARQUET = "jsonl", "parquet"
 CONTAINERS = (JSONL, PARQUET)
@@ -235,6 +251,7 @@ RECORD_LINE_BUILT = 1
 RECORD_LINES_WRITABLE = (1, 2)
 
 _DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
+_HEX64_RE = re.compile(r"^[0-9a-f]{64}$")
 _KEY_RE = re.compile(r"^ed25519:[0-9a-f]{64}$")
 _DECIMAL_RE = re.compile(r"^-?(0|[1-9][0-9]*)(\.[0-9]+)?$")
 _ANCHOR_RE = re.compile(r"^https://[^\s/]+/.+$")
@@ -304,15 +321,17 @@ def digest(data: bytes) -> str:
     return "sha256:" + hashlib.sha256(data).hexdigest()
 
 
-def _only(d: dict[str, Any], allowed: tuple[str, ...], where: str) -> dict[str, Any]:
+def _only(d: dict[str, Any], allowed: tuple[str, ...], where: str,
+          optional: tuple[str, ...] = ()) -> dict[str, Any]:
     """§9.18: a field the schema does not list is refused on any hashed or
     signed object. Refused, never ignored — ignoring it would let two peers
-    hash the same collection differently."""
+    hash the same collection differently. `optional`: the keys ABSENT where
+    not declared (never null), the rest required."""
     unknown = sorted(set(d) - set(allowed))
     if unknown:
         raise CodexError(f"{where}: unknown field(s) {', '.join(unknown)}; "
                          f"a Codex carries exactly the fields of 09 §9.3")
-    missing = sorted(set(allowed) - set(d))
+    missing = sorted(set(allowed) - set(d) - set(optional))
     if missing:
         raise CodexError(f"{where}: missing field(s) {', '.join(missing)}; "
                          f"every field is present, a field not in use is null")
@@ -698,6 +717,20 @@ class Facet:
 
 
 @dataclass(frozen=True)
+class Select:
+    """09 §9.3's `annotates[].select` (SELECT_VERSION): the rule that chooses
+    which records of the target the claims are about — its id, its version and
+    the sha256 of its bytes, so that a peer holding the same bytes selects the
+    same records."""
+    id: str
+    version: int
+    sha256: str              # 64 hex digits, of the rule's bytes
+
+    def to_dict(self) -> dict[str, Any]:
+        return {"id": self.id, "version": self.version, "sha256": self.sha256}
+
+
+@dataclass(frozen=True)
 class Annotates:
     """09 §9.3's `annotates` (ANNOTATIONS_VERSION): the TARGET collection an
     annotations collection makes claims about, and the target snapshot from
@@ -707,10 +740,16 @@ class Annotates:
     from an earlier one."""
     collection_id: str       # the target's `collection_id`
     from_snapshot: str       # a target snapshot id, `YYYY-MM` or `YYYY-Www`
+    #: SELECT_VERSION: the rule choosing which target records the claims are
+    #: about; None — the key ABSENT — for a target the claims may take whole.
+    select: Select | None = None
 
     def to_dict(self) -> dict[str, Any]:
-        return {"collection_id": self.collection_id,
-                "from_snapshot": self.from_snapshot}
+        out: dict[str, Any] = {"collection_id": self.collection_id,
+                               "from_snapshot": self.from_snapshot}
+        if self.select is not None:
+            out["select"] = self.select.to_dict()
+        return out
 
 
 #: 09 §9.3's three kinds of debt, in the order they sort.
@@ -966,7 +1005,7 @@ class Codex:
         what a digest advertises (§9.9). Per-peer, never an identity."""
         return digest(self.canonical())
 
-    @property
+    @cached_property
     def space_id(self) -> str:
         """§9.3. The encoder function and what is fed to it, and nothing
         about the contract around it: not `tolerance`, not `calibration`,
@@ -985,7 +1024,11 @@ class Codex:
         written cannot be moved.
 
         NONE for an annotations Codex, which has no space: nothing pins it,
-        and it is in no space's ranked list (02 §2.10)."""
+        and it is in no space's ranked list (02 §2.10).
+
+        Computed once per Codex, as `collection_id` is (frozen; `replace`
+        makes a new one): the Library's p2p refresh asked it 76,517 times
+        for one page, 12.6 s of a cold profile (München, 2026-11-22)."""
         sp = self.space
         if sp is None:
             return None                                 # type: ignore[return-value]
@@ -1018,7 +1061,7 @@ class Codex:
             "space": space,
         }))
 
-    @property
+    @cached_property
     def space_segment(self) -> str:
         """The `<space>` segment of a path or a member name: the first 16
         hexadecimal digits of `space_id` (§9.3); None without a space."""
@@ -1197,6 +1240,9 @@ def validate(codex: Codex, predecessor: Codex | None = None) -> None:
     `continues` / `derived_from` / `replaces.codex`, when the caller has it;
     the rules that need it are skipped otherwise and re-checked on adoption.
     """
+    if codex.version == SELECT_VERSION and codex.annotates is None:
+        raise CodexError(f"a version {SELECT_VERSION} Codex is an annotations Codex with a selected "
+                         f"target (09 §9.3, amended 2026-11-18)")
     if not codex.plugin:
         raise CodexError("plugin is required")
     if not codex.descriptive.title.strip():
@@ -1291,11 +1337,30 @@ def _validate_annotations(codex: Codex) -> None:
     annotations Codex can pretend to a space, a lineage or a plan it cannot
     have. One target at ANNOTATIONS_VERSION; a list of distinct targets at
     GRAPH_VERSION."""
-    if codex.version not in (ANNOTATIONS_VERSION, GRAPH_VERSION) or not codex.annotates:
+    if codex.version not in (ANNOTATIONS_VERSION, GRAPH_VERSION, SELECT_VERSION) or not codex.annotates:
         raise CodexError(
-            f"`annotates` is carried at Codex version {ANNOTATIONS_VERSION} (one target) and "
-            f"{GRAPH_VERSION} (a list of targets), and a version {ANNOTATIONS_VERSION} Codex is "
-            f"an annotations Codex (09 §9.3)")
+            f"`annotates` is carried at Codex version {ANNOTATIONS_VERSION} (one target), "
+            f"{GRAPH_VERSION} (a list of targets) and {SELECT_VERSION} (a list with a selection), "
+            f"and a version {ANNOTATIONS_VERSION} Codex is an annotations Codex (09 §9.3)")
+    # THE SELECTION (SELECT_VERSION): declared exactly at 12, on at least one target
+    selected = [a for a in codex.annotates if a.select is not None]
+    if bool(selected) != (codex.version == SELECT_VERSION):
+        raise CodexError(
+            f"a target's `select` is declared exactly in a version {SELECT_VERSION} Codex, and a "
+            f"version {SELECT_VERSION} Codex declares one on at least one target (09 §9.3, "
+            f"amended 2026-11-18); this one is version {codex.version} with {len(selected)}")
+    for i, a in enumerate(codex.annotates):
+        if a.select is None:
+            continue
+        sel = a.select
+        if not isinstance(sel.id, str) or not sel.id or sel.id != sel.id.strip():
+            raise CodexError(f"annotates[{i}].select.id is the rule's name, a non-empty string; "
+                             f"got {sel.id!r}")
+        if not isinstance(sel.version, int) or isinstance(sel.version, bool) or sel.version < 1:
+            raise CodexError(f"annotates[{i}].select.version is a positive integer; got {sel.version!r}")
+        if not isinstance(sel.sha256, str) or not _HEX64_RE.match(sel.sha256):
+            raise CodexError(f"annotates[{i}].select.sha256 is the sha256 of the rule's bytes, "
+                             f"64 lowercase hex digits; got {sel.sha256!r}")
     if codex.version == ANNOTATIONS_VERSION and len(codex.annotates) != 1:
         raise CodexError(f"a version {ANNOTATIONS_VERSION} Codex annotates ONE collection; several "
                          f"targets are version {GRAPH_VERSION}'s list (09 §9.3, amended 2026-10-20)")
@@ -2023,6 +2088,9 @@ def from_dict(d: dict[str, Any]) -> Codex:
         raise CodexError(f"space and work are null only on an annotations Codex "
                          f"(version {ANNOTATIONS_VERSION}, or {GRAPH_VERSION} with `annotates`; "
                          f"09 §9.3)")
+    if version == SELECT_VERSION and not annotations:
+        raise CodexError(f"a version {SELECT_VERSION} Codex is an annotations Codex with a selected "
+                         f"target (09 §9.3, amended 2026-11-18)")
     if graph and annotations and d["space"] is not None:
         raise CodexError(f"a version {GRAPH_VERSION} Codex carries `annotates` exactly when it is "
                          f"an annotations Codex, whose space is null (09 §9.3, amended 2026-10-20)")
@@ -2088,7 +2156,9 @@ def from_dict(d: dict[str, Any]) -> Codex:
             raise CodexError(f"a version {GRAPH_VERSION} annotations Codex carries `annotates` as a "
                              f"list of targets, at least one (09 §9.3, amended 2026-10-20); got "
                              f"{type(d['annotates']).__name__}")
-        an = [_only(t, ("collection_id", "from_snapshot"), f"annotates[{i}]")
+        # `select` from SELECT_VERSION, where declared; below it an unknown key
+        tkeys = ("collection_id", "from_snapshot") + (("select",) if version >= SELECT_VERSION else ())
+        an = [_only(t, tkeys, f"annotates[{i}]", optional=("select",) if version >= SELECT_VERSION else ())
               if isinstance(t, dict) else _bad_target(i, t) for i, t in enumerate(d["annotates"])]
     va = _only(d["validation"], ("checks", "sample", "required"), "validation")
     li = _only(d["license"], ("class", "terms_sha256"), "license")
@@ -2131,9 +2201,21 @@ def from_dict(d: dict[str, Any]) -> Codex:
         profile=d["profile"],
         version=version,
         record_line=record_line,
-        annotates=None if an is None else tuple(Annotates(t["collection_id"], t["from_snapshot"])
-                                                 for t in an),
+        annotates=None if an is None else tuple(Annotates(t["collection_id"], t["from_snapshot"],
+                                                           _select(t.get("select"), i))
+                                                 for i, t in enumerate(an)),
     )
+
+
+def _select(sel: Any, i: int) -> Select | None:
+    """`annotates[i].select` as written (SELECT_VERSION): `{id, version, sha256}`."""
+    if sel is None:
+        return None
+    s = _only(sel, ("id", "version", "sha256"), f"annotates[{i}].select") if isinstance(sel, dict) else None
+    if s is None:
+        raise CodexError(f"annotates[{i}].select is {{id, version, sha256}} (09 §9.3), got "
+                         f"{type(sel).__name__}")
+    return Select(s["id"], s["version"], s["sha256"])
 
 
 def _bad_target(i: int, t: Any) -> dict[str, Any]:

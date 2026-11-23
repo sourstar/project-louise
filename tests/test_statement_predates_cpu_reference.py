@@ -5,14 +5,13 @@ on: the run is gated against the reference, once for the space (München,
 than they, was taken and the check printed "no stored CPU reference").
 Invariant 12: every card run reaches the stored CPU reference."""
 import json
-import shutil
 
 from app import collections as collections_mod, db, louise, run_check
-from app.hold import cpu_reference as cpu_ref, embedder as emb, envelope as env, runs as hold_runs
+from app.hold import embedder as emb, envelope as env, runs as hold_runs
 from app.verify import backend_gate
 from tests.hold.conftest import KEY
 from tests.test_check_takes_the_space_statement import _second_in_the_space
-from tests.test_run_check import R1, endpoint, node  # noqa: F401
+from tests.test_run_check import R1, drop_cpu_reference, endpoint, node  # noqa: F401
 
 
 def _without_cpu_comparison(root, name, run_id, role="document"):
@@ -58,7 +57,7 @@ def test_with_no_reference_stored_the_statement_is_taken_as_before(node, monkeyp
     assert backend_gate.embed_allowed(con, collection) is True
     _without_cpu_comparison(root, "gutenberg", R1)
     for role in ("document", "query"):
-        shutil.rmtree(cpu_ref.directory(root, "gutenberg", role))
+        drop_cpu_reference(codex, role)
     calls = _measured(monkeypatch)
     assert backend_gate.embed_allowed(con, collection) is True and calls == []
 

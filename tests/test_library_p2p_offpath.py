@@ -48,15 +48,43 @@ def test_a_stale_value_is_served_at_once_and_refreshed_once_behind_it(slow):
     assert web._p2p_summary(c) == {"parts": 1}
 
 
-def test_a_cold_cache_waits_a_bounded_time_then_renders_without_the_line(slow):
+def test_a_cold_cache_never_waits_and_says_it_is_counting(slow):
+    """2 s a card on every view while a big collection's refresh ran: 8.55 s
+    of a warm 14.9 s Library (München, 2026-11-22)."""
     c, calls, gate = slow
     t0 = time.perf_counter()
-    assert web._p2p_summary(c) is None
-    assert time.perf_counter() - t0 < 1.0
+    got = [web._p2p_summary(c) for _ in range(5)]
+    assert time.perf_counter() - t0 < 0.1, "no wait, on the first view or the next"
+    assert got == [web.P2P_COUNTING] * 5
     gate.set()
+    for _ in range(100):
+        if c.manifest_path in web._p2p_cache:
+            break
+        time.sleep(0.02)
+    assert web._p2p_summary(c) == {"parts": 1} and len(calls) == 1, "one refresh, then its value"
 
 
 def test_no_codex_no_line_and_no_work(slow):
     c, calls, gate = slow
     assert web._p2p_summary(SimpleNamespace(name="x", manifest_path="/y", codex=None)) is None
     assert calls == []
+
+
+def test_a_local_archives_shards_are_walked_once_a_ttl_per_corpus_path(monkeypatch, tmp_path):
+    """The card walked the whole corpus for `*.parquet` on every view: 1.57 s
+    of a warm Library (München, 2026-11-22)."""
+    monkeypatch.setattr(web, "_shard_totals", {})
+    walks: list[str] = []
+
+    def walk(c):
+        walks.append(str(c.corpus_dir))
+        return ("a.parquet", "b.parquet")
+    a = SimpleNamespace(corpus_dir=tmp_path / "a")
+    b = SimpleNamespace(corpus_dir=tmp_path / "b")
+    assert [web._local_shard_total(a, walk) for _ in range(20)] == [2] * 20
+    assert web._local_shard_total(b, walk) == 2
+    assert walks == [str(a.corpus_dir), str(b.corpus_dir)], "once per corpus path"
+    stamp, n = web._shard_totals[str(a.corpus_dir)]
+    web._shard_totals[str(a.corpus_dir)] = (stamp - web._SHARD_TOTAL_TTL_S - 1, n)
+    web._local_shard_total(a, walk)
+    assert len(walks) == 3, "walked again once the count is older than its TTL"

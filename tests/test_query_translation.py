@@ -49,7 +49,7 @@ def test_the_query_goes_out_in_every_language_the_indexes_hold(isolated_config, 
     groups = ["ar", "cjk", "de", "en", "fr", "it", "other"]
     monkeypatch.setattr(fts, "existing_groups", lambda collection=None: groups)
     ran = []
-    monkeypatch.setattr(fts, "search", lambda group, q, limit=20, collection=None, langs=None:
+    monkeypatch.setattr(fts, "search", lambda group, q, limit=20, collection=None, langs=None, **_kw:
                         ran.append((group, q, langs)) or [])
     asked = []
     monkeypatch.setattr(llm, "language_restriction", lambda q: ([], q))
@@ -77,7 +77,7 @@ def test_a_single_language_collection_is_translated_too(isolated_config, monkeyp
     c = collections_mod.default_collection()
     monkeypatch.setattr(fts, "existing_groups", lambda collection=None: ["en"])
     ran = []
-    monkeypatch.setattr(fts, "search", lambda group, q, limit=20, collection=None, langs=None:
+    monkeypatch.setattr(fts, "search", lambda group, q, limit=20, collection=None, langs=None, **_kw:
                         ran.append(q) or [])
     monkeypatch.setattr(llm, "language_restriction", lambda q: ([], q))
     monkeypatch.setattr(llm, "translate_query", lambda q, langs: {"en": "whale hunt"})
@@ -129,7 +129,7 @@ def test_a_query_that_names_languages_restricts_every_leg(isolated_config, monke
     monkeypatch.setattr(fts, "existing_groups",
                         lambda collection=None: ["de", "en", "other"])
     ran = []
-    monkeypatch.setattr(fts, "search", lambda group, q, limit=20, collection=None, langs=None:
+    monkeypatch.setattr(fts, "search", lambda group, q, limit=20, collection=None, langs=None, **_kw:
                         ran.append((group, q, langs)) or [])
     dense = []
     monkeypatch.setattr(retrieval.embeddings, "search",

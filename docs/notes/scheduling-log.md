@@ -3184,3 +3184,50 @@ over a night, and `hold collection show <it>` says it is held.
 - kills over 24 h;
 - MemoryWait and TooLarge from the lane, per day;
 - the lane's spawn cost per large row, against its parse time.
+
+## 2026-11-22 — the vector index's unindexed tail, refreshed sooner: a trial on the existing thresholds (`VECTOR_INDEX_REFRESH_MAX_ROWS`, `VECTOR_INDEX_REFRESH_ROWS`) — BEFORE (trial pending)
+
+**Why.** Every dense search scans a table's unindexed rows flat, in the
+asking process. In the web that is the question's memory peak (operator,
+2026-11-22: the web "should be less than 1GB"). München, c40eb74 (live #812),
+a throwaway web container with the live image and env, one question:
+- memray, wikidata: peak 1.543 GB, 75.6 % in Lance's native threads;
+- one leg at a time, peak / held / after a trim:
+  - wikidata dense: +1,670 / +1,060 / +129 MiB in 11.9 s;
+  - wikidata hybrid at depth 50: +1,783 / +1,275 / +44 MiB;
+  - pubmed dense: +328 / +328 / +221 MiB in 10.0 s;
+  - the fts legs: +150–200 MiB.
+- Unindexed (index_stats):
+  - wikidata 353,401 of 20,196,239: 353 k × 1,024 × 4 B ≈ 1.4 GB, matching its dense peak;
+  - pubmed 45,474 of 41,434,034;
+  - wikipedia and gutenberg 0.
+- By design (`vector_index.refresh_due`): a delta is due at max(50 k, min(2 % of the table, 500 k)) unindexed rows. That is 404 k for wikidata and 500 k for pubmed. A QUIET table (no new rows for a pass) refreshes only at the 50 k floor, so pubmed's 45 k stays scanned by every question. The 500 k cap was set on 2026-11-08 for latency (~0.72 ms a 1 k rows); its memory was not weighed.
+
+**BEFORE (live, 2026-11-22 ~19:00–19:20Z).**
+- Scenario: the node running, wikidata embedding, the EUR-Lex5 drift run on 8 CPUs beside it.
+- The same 5 /api/search questions:
+  - web anon 968 MiB before, then 1,610 / 1,286 / 2,127 / 2,096 / 1,873 MiB after each;
+  - 30.9 / 27.7 / 24.5 / 34.0 / 25.5 s each;
+  - the idle trim then took it to 729 MiB.
+- Embed rates over 10 min: wikidata +7,881 rows (~47 k rows/h; the batches at 15–22 chunks/s), pubmed +0.
+- A delta refresh's duration on these tables: not in any surviving log. The deploys recreated the worker. The only point of comparison is normattiva on 2026-10-23, 93 s for 591,591 rows.
+
+**The trial.** The operator, 2026-11-22: "Trial".
+- The worker's env only: `VECTOR_INDEX_REFRESH_MAX_ROWS=65000` (~256 MiB of 1,024-d float32) and `VECTOR_INDEX_REFRESH_ROWS=40000`, then a restart. No code.
+- Wikidata's 353 k and pubmed's 45 k tails are due at its next pass; after that, wikidata about every 1.4 h at today's rate.
+
+**AFTER, first part (live from 20:44Z; München).**
+- Both settings were unset before (500,000 / 50,000). They were set in the worker's env only, through app.update after a config backup. The web has neither.
+- The first refresh came 33 min after the restart, at the worker's first maintenance turn:
+  - wikidata, 21:17:00Z: 398,035 unindexed of 20,240,873 (45 fragments) folded in **in 90 s**; 1,301 remain; 4 deltas merged into one (2 indexes).
+  - pubmed, 21:19:41Z: 45,474 of 41,434,034 (58 fragments) folded in **in 8 s**; 0 remain; 4 deltas merged into one (2 indexes).
+  - ~0.23 ms a row for wikidata, against normattiva's 0.16 (2026-10-23).
+  - The worker's anon at refresh: not read (the sampler took docker-init's pid).
+- The same 5 /api/search questions, live:
+  - the web started cold at 123 MiB, restarted by the same app.update;
+  - 55.9 s (the cold first), then 22.1 / 22.0 / 25.7 / 20.5 s, against 24.5–34.0 s;
+  - anon after each 795 / 1,283 / 1,254 / 1,595 / 1,400 MiB, against 1,610 / 1,286 / 2,127 / 2,096 / 1,873.
+  - The scenario differs from BEFORE: the web was freshly restarted here, and the node was running before phase 4.
+- Still to come (München's night watch to 07:00Z, /root/measure/index-trial/night-log.txt): the refreshes over hours of wikidata embedding, how many, and their durations. Embedding resumes after phase 4 and M1/M2.
+
+Then the permanent form goes to the operator: a byte cap on the tail, which also folds a quiet table's whole tail.

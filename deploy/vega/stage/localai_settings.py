@@ -74,19 +74,49 @@ DESIRED: dict[str, Any] = {
 #: what GET answers that POST must not be handed back: v5.0.1's projection
 #: marker while its add-on owner is on (core/http/endpoints/localai/settings.go)
 NOT_SETTINGS = ("addon_host_settings_authority",)
+#: the managed keys LocalAI's ADD-ON OWNER holds while it runs (v5.0.1
+#: `addonHostSettingsKeys`): GET leaves them out, POST refuses them, 409 "…
+#: is set on the add-on owner, not through /api/settings" — the deploy of
+#: 2f26d6d, rolled back on it (München, 2026-11-22: the operator had add-ons
+#: on again). The owner's own policy defaults to false
+#: (core/services/addons/hostsettings/policy.go) and is set in LocalAI's
+#: Settings, through the owner's revisioned protocol: here such a key is
+#: neither written nor checked, and said to be the owner's.
+OWNER_KEYS = ("auto_upgrade_addons",)
 
 
-def merged(current: dict[str, Any], desired: dict[str, Any] = DESIRED) -> dict[str, Any]:
+def owner_holds(current: dict[str, Any]) -> bool:
+    """Is LocalAI's add-on owner running, holding OWNER_KEYS?"""
+    return current.get("addon_host_settings_authority") == "owner_required"
+
+
+def desired_for(current: dict[str, Any]) -> dict[str, Any]:
+    """DESIRED, less what the add-on owner holds while it runs."""
+    if not owner_holds(current):
+        return dict(DESIRED)
+    return {k: v for k, v in DESIRED.items() if k not in OWNER_KEYS}
+
+
+def merged(current: dict[str, Any], desired: dict[str, Any] | None = None) -> dict[str, Any]:
     """`current` with the desired keys set, every other key untouched (and
-    no projection marker, `NOT_SETTINGS`)."""
+    no projection marker, `NOT_SETTINGS`, nor a key the add-on owner holds)."""
+    desired = desired_for(current) if desired is None else desired
     out = {k: v for k, v in current.items() if k not in NOT_SETTINGS}
     out.update(desired)
     return out
 
 
-def drift(current: dict[str, Any], desired: dict[str, Any] = DESIRED) -> dict[str, Any]:
+def drift(current: dict[str, Any], desired: dict[str, Any] | None = None) -> dict[str, Any]:
     """The managed keys whose live value is not the desired one: key → live."""
+    desired = desired_for(current) if desired is None else desired
     return {k: current.get(k) for k, v in desired.items() if current.get(k) != v}
+
+
+def _said(current: dict[str, Any]) -> dict[str, Any]:
+    out = {k: current.get(k) for k in desired_for(current)}
+    if owner_holds(current):
+        out["held_by_the_addon_owner"] = list(OWNER_KEYS)
+    return out
 
 
 def _call(url: str, body: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -100,20 +130,20 @@ def _call(url: str, body: dict[str, Any] | None = None) -> dict[str, Any]:
 def apply(base: str) -> dict[str, Any]:
     url = base.rstrip("/") + "/api/settings"
     current = _call(url)
-    if all(current.get(k) == v for k, v in DESIRED.items()):
-        return {k: current.get(k) for k in DESIRED} | {"changed": False}
+    if not drift(current):
+        return _said(current) | {"changed": False}
     _call(url, merged(current))
     now = _call(url)
-    wrong = {k: now.get(k) for k, v in DESIRED.items() if now.get(k) != v}
+    wrong = drift(now)
     if wrong:
         raise SystemExit(f"LocalAI did not take the settings: {wrong}")
-    return {k: now.get(k) for k in DESIRED} | {"changed": True}
+    return _said(now) | {"changed": True}
 
 
 def check(base: str) -> dict[str, Any]:
     """The managed keys as they are live, and what differs; nothing written."""
     current = _call(base.rstrip("/") + "/api/settings")
-    return {k: current.get(k) for k in DESIRED} | {"drift": drift(current)}
+    return _said(current) | {"drift": drift(current)}
 
 
 if __name__ == "__main__":

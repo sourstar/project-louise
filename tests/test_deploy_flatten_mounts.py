@@ -155,3 +155,91 @@ def test_the_fast_area_needs_a_whole_copy_and_the_files_area_none():
 def test_the_deploy_s_files_kinds_are_derived_s():
     from app import derived
     assert fm.FILES_KINDS == derived.FILES
+
+
+# ---- the GPU governor's state, from the louise-rag app's /data (storage-tiering.md §12) ----
+
+def _governor():
+    import yaml
+    return yaml.safe_load((Path(__file__).resolve().parent.parent / "deploy" / "truenas-gpu-governor.yaml")
+                          .read_text())
+
+
+def _louise(data_src):
+    return {"services": {"worker": {"volumes": [f"{data_src}:/data", "/mnt/ssd4/apps/louise-rag/config:/config"]},
+                         "web": {"volumes": [f"{data_src}:/data"]}}}
+
+
+def test_the_governors_state_follows_the_apps_data_wherever_it_is():
+    want, said = fm.governor_config(_governor(), _louise("/mnt/ssd3/louise-data"))
+    vols = want["services"]["gpu-governor"]["volumes"]
+    assert "/mnt/ssd3/louise-data/state:/data/state" in vols
+    assert not any(v.startswith("/mnt/ssd4/apps/louise-rag/data/") for v in vols), vols
+    assert [v for v in vols if not v.endswith(":/data/state")] == \
+        [v for v in _governor()["services"]["gpu-governor"]["volumes"] if not v.endswith(":/data/state")], \
+        "every other bind as the file says"
+
+
+def test_the_governors_state_today_is_unchanged_and_said_so():
+    """The file names the live /data (ssd3 since 2026-11-23): stage 8 says
+    "already", never a change it does not make (München, #821's deploy)."""
+    want, said = fm.governor_config(_governor(), _louise("/mnt/ssd3/louise-data"))
+    assert "/mnt/ssd3/louise-data/state:/data/state" in want["services"]["gpu-governor"]["volumes"]
+    assert said == []
+
+
+def test_the_governor_follows_data_back_too():
+    want, said = fm.governor_config(_governor(), _louise("/mnt/ssd4/apps/louise-rag/data"))
+    assert "/mnt/ssd4/apps/louise-rag/data/state:/data/state" in want["services"]["gpu-governor"]["volumes"]
+    assert said and "becomes /mnt/ssd4/apps/louise-rag/data/state" in said[0]
+
+
+def test_the_governor_keeps_a_binds_options_and_a_dict_form():
+    g = _governor()
+    g["services"]["gpu-governor"]["volumes"] = ["/old/state:/data/state:rw",
+                                                {"type": "bind", "source": "/old/state", "target": "/data/state"}]
+    want, _ = fm.governor_config(g, _louise("/new"))
+    assert want["services"]["gpu-governor"]["volumes"] == [
+        "/new/state:/data/state:rw", {"type": "bind", "source": "/new/state", "target": "/data/state"}]
+
+
+def test_without_the_apps_data_bind_nothing_is_applied():
+    import pytest
+    with pytest.raises(ValueError, match="binds no /data"):
+        fm.governor_config(_governor(), {"services": {"worker": {"volumes": []}}})
+    g = _governor()
+    g["services"]["gpu-governor"]["volumes"] = ["/x:/config"]
+    with pytest.raises(ValueError, match="binds no /data/state"):
+        fm.governor_config(g, _louise("/new"))
+
+
+# ---- the Lance root's bind, owned by the deploy (storage-tiering.md §12, 2026-11-23) ----
+
+def test_the_lance_root_is_bound_in_web_and_worker_and_named():
+    assert fm.LANCE_HOST == "/mnt/ssd4/apps/louise-rag/data/lance", "München's folder, 2026-11-23"
+    shared, env = fm.lance_root(isdir=lambda p: True)
+    assert env == {"LOUISE_LANCE_ROOT": "/data/lance"}
+    c = cfg()
+    said = fm.apply(c, shared=shared, env={"LOUISE_CACHE_DIR": "/data/cache", **env})
+    for name in ("web", "worker"):
+        svc = c["services"][name]
+        assert "/mnt/ssd4/apps/louise-rag/data/lance:/data/lance" in svc["volumes"], "read and written, as /data is"
+        assert svc["environment"]["LOUISE_LANCE_ROOT"] == "/data/lance"
+    assert any("/data/lance" in line for line in said)
+    assert fm.apply(c, shared=shared, env={"LOUISE_CACHE_DIR": "/data/cache", **env}) == [], "idempotent"
+
+
+def test_a_bind_already_there_is_kept_as_it_is():
+    c = cfg()
+    for name in ("web", "worker"):
+        c["services"][name]["volumes"].append("/mnt/ssd4/apps/louise-rag/data/lance:/data/lance")
+    shared, env = fm.lance_root(isdir=lambda p: True)
+    fm.apply(c, shared=shared, env=env)
+    for name in ("web", "worker"):
+        assert [v for v in c["services"][name]["volumes"] if v.endswith(":/data/lance")] == \
+            ["/mnt/ssd4/apps/louise-rag/data/lance:/data/lance"], "one bind, never two"
+
+
+def test_no_lance_folder_on_this_host_sets_nothing():
+    assert fm.lance_root(isdir=lambda p: False) == ((), {})
+    assert fm.lance_root("/mnt/elsewhere", isdir=lambda p: False) == ((), {})

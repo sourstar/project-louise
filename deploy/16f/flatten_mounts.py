@@ -45,6 +45,29 @@ SERVICES = ("web", "worker")
 BUILD_HOST: str | None = "/mnt/ssd3/louise-build"
 BUILD_TARGET = "/build"
 
+#: THE LANCE ROOT (operator, 2026-11-22: "Ssd4 is for lancedb only"; 2026-11-23:
+#: "A", then "B", storage-tiering.md §12): the searched vector tables, in this
+#: folder of the ssd4 dataset, bound at /data/lance in web and worker with
+#: LOUISE_LANCE_ROOT=/data/lance (app/vector_place.py), while /data itself is
+#: ssd3/louise-data since 2026-11-23 04:57Z (München). The deploy owns the bind:
+#: lost, /data/lance would still be a directory — the empty mount point on
+#: ssd3 — every collection refused and a new one's table made on ssd3.
+LANCE_HOST: str | None = "/mnt/ssd4/apps/louise-rag/data/lance"
+LANCE_TARGET = "/data/lance"
+
+
+def lance_root(host: str | None = None, *, isdir=None) -> tuple[tuple, dict]:
+    """`(shared, env)` for `apply`: the Lance root's bind and its variable
+    when `host` (else LANCE_HOST) is a directory on this host, else nothing
+    (a node without one: every table beside its collection, as before).
+    `isdir` (tests): `os.path.isdir` by default."""
+    import os
+    host = host or LANCE_HOST
+    if not host or not (isdir or os.path.isdir)(host):
+        return (), {}
+    return ((host, LANCE_TARGET, False),), {"LOUISE_LANCE_ROOT": LANCE_TARGET}
+
+
 #: THE TWO CACHE AREAS (operator, 2026-11-14: "For very fast caching (like
 #: embedding) use ssd5, for bulk caching use ssd3"; then "You need 2 caches, one
 #: for fast mmap operations (like vectors caching) and one for things like files
@@ -114,6 +137,44 @@ def data_host(cfg: dict) -> str | None:
         if dst == "/data":
             return src
     return None
+
+
+#: THE GPU GOVERNOR'S STATE (storage-tiering.md §12, 2026-11-23): the governor
+#: app binds the node's `state/` itself, `<the louise-rag app's /data>/state`.
+#: Its file (deploy/truenas-gpu-governor.yaml) names the folder as it was when
+#: written; the deploy applies it at every run, so the folder is taken from
+#: the louise-rag app's own /data mount instead, wherever /data has moved — a
+#: governor writing a stale copy of the node's state is never put back.
+GOVERNOR_STATE = "/data/state"
+
+
+def governor_config(want: dict, louise_cfg: dict) -> tuple[dict, list[str]]:
+    """`want` (the governor app's file) with its `/data/state` bind taken from
+    the louise-rag app's /data (`data_host`); `said`, the change if any.
+    Refused (ValueError, nothing applied) when the app has no /data bind."""
+    data = data_host(louise_cfg)
+    if not data:
+        raise ValueError("the louise-rag app's worker binds no /data: the governor's state is not placed")
+    svc = (want.get("services") or {}).get("gpu-governor")
+    if not isinstance(svc, dict) or not isinstance(svc.get("volumes"), list):
+        raise ValueError("the governor's file has no gpu-governor volume list; not applied")
+    said, vols = [], []
+    for v in svc["volumes"]:
+        src, dst = _parts(v)
+        if dst == GOVERNOR_STATE:
+            host = f"{data.rstrip('/')}/state"
+            new = ({**v, "source": host} if isinstance(v, dict) else
+                   ":".join([host, GOVERNOR_STATE, *v.split(":", 2)[2:]]))
+            if new != v:
+                said.append(f"gpu-governor: {src} -> {GOVERNOR_STATE} becomes {data.rstrip('/')}/state "
+                            f"(the louise-rag app's /data)")
+            vols.append(new)
+        else:
+            vols.append(v)
+    if not any(_parts(v)[1] == GOVERNOR_STATE for v in vols):
+        raise ValueError(f"the governor's file binds no {GOVERNOR_STATE}; not applied")
+    svc["volumes"] = vols
+    return want, said
 
 
 def missing(area_cache: str, old_cache: str | None, *, files: bool, there, listdir, isdir) -> list[str]:
