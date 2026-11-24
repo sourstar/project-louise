@@ -67,6 +67,19 @@ run.
 What the rule is careful about, each from a measurement or a review:
 - **the keeper's preloads keep today's unload** (the architecture session:
   a preload is never urgent and must not push what is in use off the card);
+- **never further over the card than was measured** (the architecture
+  session's blocking point): a model whose context is made on demand
+  reserves it from the card at each request, and a reservation the card
+  refuses KILLS its backend — `UR_RESULT_ERROR_OUT_OF_DEVICE_MEMORY` at
+  ggml-sycl's pool, seen against the 35B's system-allocated pages. The
+  driver fills the card before it pages, so the keeper cannot hold the
+  working-memory reserve FREE there; it holds the measured envelope
+  instead: the loaded models at their largest plus the load may exceed the
+  card by `page_over_gib` at most — 3, where S5 held 3.5 with a 1.9 GiB
+  context made on demand in it; the largest such context, 3.26 GiB, was not
+  in that run — and the host keeps a context's worth (3,262 MiB) above its
+  floor. Whether a reservation can be refused against ORDINARY paged-out
+  buffers under more pressure is not measured either way (München);
 - **the host's floor**: under it, or the host unread, the load unloads as
   before. The default, 12 GiB, is a placeholder: on 11-24 the node had 4.7
   GB available under load, where the rule never pages. To be measured
@@ -97,6 +110,12 @@ operator's word there; nothing here does it):
    (it names a reclaimer left on and a host under its floor);
 5. a soak the POC never had: the Ask's models and a corpus pass together
    for 30 minutes, the card over its size, no abort and no kernel line.
+
+**What would let the bound rise:** a row on the node with the largest
+on-demand context created on a card committed further over; and an engine
+that REFUSES a context it cannot reserve instead of dying — the design of
+context on demand says "refused, never an abort" (idle-context-brief.md
+§1.2), the pool underneath aborts.
 
 **Not built:** paging for the keeper's preloads (a preload beyond the card
 would only be loaded to be paged out), a rule for which model the driver

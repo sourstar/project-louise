@@ -205,6 +205,14 @@ class ModelsConfig:
     #: OOM killer is what stands under it (2026-11-24: 4.7 GB available under
     #: load, where nothing may be paged)
     page_floor_gib: int = 12
+    #: in "page", the most the card may be committed OVER its size once the
+    #: load is in, in GiB — the loaded models at their largest plus the load,
+    #: less the card. 3: what was measured holds 3.5 (S5 part 2: a model whose
+    #: context is made on demand loaded and answered there, a 1.9 GiB
+    #: context); further over, nobody has seen a context's reservation
+    #: succeed, and a refused one kills its backend. Raised only by a
+    #: measurement
+    page_over_gib: int = 3
 
 
 #: `[models] make_room`
@@ -738,7 +746,8 @@ def _load_one(path: Path) -> PlatformConfig:
         chat=(models_raw.get("chat") or "").strip() or None,
         translate=(models_raw.get("translate") or "").strip() or None,
         make_room=make_room,
-        page_floor_gib=_positive_int(models_raw, "page_floor_gib", ModelsConfig().page_floor_gib))
+        page_floor_gib=_positive_int(models_raw, "page_floor_gib", ModelsConfig().page_floor_gib),
+        page_over_gib=_positive_int(models_raw, "page_over_gib", ModelsConfig().page_over_gib))
 
     speech = _speech(raw.get("speech", {}) or {})
 

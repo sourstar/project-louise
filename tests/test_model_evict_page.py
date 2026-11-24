@@ -49,16 +49,18 @@ def _full(card) -> Runner:
 # ---- the setting -------------------------------------------------------------
 
 def test_the_rule_is_the_files_and_unload_unless_it_says_page(isolated_config, config_dir):
-    assert platform_config.load().models.make_room == "unload" and model_evict.rule() == ("unload", 12 * GIB)
-    (config_dir / "platform.toml").write_text('[models]\nmake_room = "page"\npage_floor_gib = 20\n', encoding="utf-8")
-    assert model_evict.rule() == ("page", 20 * GIB)
+    assert platform_config.load().models.make_room == "unload" and model_evict.rule() == ("unload", 12 * GIB, 3 * GIB)
+    (config_dir / "platform.toml").write_text('[models]\nmake_room = "page"\npage_floor_gib = 20\npage_over_gib = 5\n',
+                                           encoding="utf-8")
+    assert model_evict.rule() == ("page", 20 * GIB, 5 * GIB)
     for bad, says in (('make_room = "swap"', 'models.make_room is "unload" or "page"'),
                       ("make_room = true", 'models.make_room is "unload" or "page"'),
-                      ('make_room = "page"\npage_floor_gib = 0', "page_floor_gib: must be >= 1")):
+                      ('make_room = "page"\npage_floor_gib = 0', "page_floor_gib: must be >= 1"),
+                      ('make_room = "page"\npage_over_gib = "all"', "page_over_gib: expected an integer")):
         (config_dir / "platform.toml").write_text(f"[models]\n{bad}\n", encoding="utf-8")
         with pytest.raises(ScheduleError, match=re.escape(says)):
             platform_config.load()
-        assert model_evict.rule() == ("unload", 0), "a file that does not load changes nothing"
+        assert model_evict.rule() == ("unload", 0, 0), "a file that does not load changes nothing"
 
 
 # ---- the rule ----------------------------------------------------------------
@@ -77,7 +79,7 @@ def test_work_that_does_not_fit_unloads_nothing_while_the_host_can_hold_the_diff
     assert out.fits and r.unloaded == [] and r.calls["shutdown"] == 0
     free = int(0.95 * 32_656 * MIB) - (5_000 + 1_700 + 21_250) * MIB
     assert out.paged == 6_000 * MIB - free and out.why == "paged"
-    assert r.calls["system"] == 0, "nothing is read to choose a victim: there is none"
+    assert r.calls["system"] == 1, "one read, to count what the card is committed to; no victim is chosen"
     said = [s for s in paging.said if "nothing unloaded for louise-translate-madlad" in s]
     assert len(said) == 1 and "the driver pages" in said[0] and "floor 12,288" in said[0]
 
@@ -108,6 +110,51 @@ def test_only_counted_work_asks_to_page(paging, monkeypatch):
     with model_use.not_work():
         model_evict.before_load(S, "louise-translate-madlad")
     assert asked == [True, False], "a request's load, then Louise's own (a warm, a check, a gate)"
+
+
+def test_never_further_over_the_card_than_was_measured(paging):
+    """The architecture session's blocking point: a model whose context is
+    made on demand reserves it from the card at each request, and a refused
+    reservation kills its backend. The driver fills the card before it
+    pages, so the reserve cannot be kept free; the measured envelope can be
+    kept — 3 GiB over the card at most (S5 held 3.5, a 1.9 GiB context made
+    on demand in it)."""
+    r = paging({"louise-chat": 20_000, "vega-qwen3-embedding-4b": 9_000})
+    _used(louise_chat=1, vega_qwen3_embedding_4b=9)
+    kw = dict(horizon=NOW, for_what="louise-translate-madlad", exclude=("louise-translate-madlad",), page=True)
+    # 29,000 + 6,700 − 32,656 = 3,044 MiB over: inside the 3 GiB
+    assert model_evict.make_room(S, need=6_700 * MIB, **kw).paged and r.unloaded == []
+    # 29,000 + 6,800 − 32,656 = 3,144 MiB over: past it — the oldest real use is unloaded instead
+    out = model_evict.make_room(S, need=6_800 * MIB, **kw)
+    assert out.fits and out.paged == 0 and r.unloaded == ["vega-qwen3-embedding-4b"]
+    said = [s for s in paging.said if "is not paged" in s]
+    assert len(said) == 1 and "3,144 MiB over its size, past the 3,072 MiB that were measured to hold" in said[0]
+
+
+def test_a_model_paged_out_or_idle_on_demand_counts_at_the_largest_it_was_seen(paging, monkeypatch):
+    """A paged-out model reads small on the card, and a model whose context
+    is made on demand holds it only while it works: the commitment is what
+    they COULD take back, not what they hold this second."""
+    r = paging({"louise-chat": 20_000, "vega-qwen3-embedding-4b": 2_700})
+    monkeypatch.setattr(model_load, "size_vram",
+                        lambda server, model: 5_685 * MIB if model == "vega-qwen3-embedding-4b" else None)
+    assert model_evict.committed(S) == (20_000 + 5_685) * MIB
+    assert r.unloaded == []
+
+
+def test_the_host_keeps_its_floor_and_a_contexts_worth_above_it(paging):
+    """A context made on a full card pushes as much of something else to
+    the host: the keeper's working-memory reserve is kept there too."""
+    _full(paging)
+    free = int(0.95 * 32_656 * MIB) - (5_000 + 1_700 + 21_250) * MIB
+    short = 6_000 * MIB - free
+    enough = 12 * GIB + short + resident.CONTEXT_RESERVE
+    kw = dict(need=6_000 * MIB, horizon=NOW, for_what="m", exclude=("m",), page=True)
+    paging.host["available"] = enough
+    assert model_evict.make_room(S, **kw).paged
+    paging.host["available"] = enough - 1
+    assert model_evict.make_room(S, **kw).paged == 0
+    assert any("plus a context's 3,262" in s for s in paging.said)
 
 
 @pytest.mark.parametrize("available_gib, why", [(14, "would be under its floor"), (None, "cannot be read")])
@@ -173,8 +220,9 @@ def test_show_says_the_rule_and_what_it_stands_on(paging, monkeypatch):
     assert resident._make_room_shown([])["rule"] == "page"
     shown = resident._make_room_shown([])
     assert shown["host_floor_mib"] == 12 * 1024 and shown["host_available_mib"] == 40 * 1024 and "notes" not in shown
-    paging.host["available"] = 8 * GIB
-    assert "under its floor now" in resident._make_room_shown([])["notes"][0]
+    assert shown["over_the_card_at_most_mib"] == 3 * 1024 and shown["context_reserve_mib"] == 3_262
+    paging.host["available"] = 14 * GIB
+    assert "under its floor plus a context's reserve now" in resident._make_room_shown([])["notes"][0]
     want = [resident.Resident(S, "m", ("chat",), ())]
     notes = resident._make_room_shown(want)["notes"]
     assert any("memory reclaimer is not readable" in n or "memory reclaimer is ON" in n for n in notes), \

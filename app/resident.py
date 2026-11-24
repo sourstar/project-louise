@@ -1401,7 +1401,7 @@ def _make_room_shown(want: list[Resident]) -> dict[str, Any]:
     stands on — the host's memory against the floor, and LocalAI's reclaimer,
     which must be off (app/model_evict.py)."""
     from app import httpc, model_evict
-    mode, floor = model_evict.rule()
+    mode, floor, over_max = model_evict.rule()
     out: dict[str, Any] = {"rule": mode}
     if mode != "page":
         out["says"] = ("a load that does not fit unloads the model with the oldest real use "
@@ -1409,14 +1409,15 @@ def _make_room_shown(want: list[Resident]) -> dict[str, Any]:
         return out
     avail = model_evict.host_available()
     out |= {"host_floor_mib": floor // MIB, "host_available_mib": None if avail is None else avail // MIB,
+            "context_reserve_mib": CONTEXT_RESERVE // MIB, "over_the_card_at_most_mib": over_max // MIB,
             "says": "a load work is waiting on that does not fit unloads nothing while the host stays above "
                     "its floor: the driver pages idle models' memory out; the keeper's preloads unload as before"}
     notes = []
     if avail is None:
         notes.append("the host's memory cannot be read here: every load unloads as before")
-    elif avail < floor:
-        notes.append(f"the host is under its floor now ({avail // MIB:,} of {floor // MIB:,} MiB): "
-                     f"a load unloads as before")
+    elif avail < floor + CONTEXT_RESERVE:
+        notes.append(f"the host is under its floor plus a context's reserve now ({avail // MIB:,} of "
+                     f"{(floor + CONTEXT_RESERVE) // MIB:,} MiB): a load unloads as before")
     for server in sorted({r.server for r in want}):
         try:
             r = httpc.get(f"{server}/api/settings", timeout=SETTINGS_TIMEOUT_S)

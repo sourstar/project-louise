@@ -64,6 +64,21 @@ unload, 1.3–1.8 s on the 35B. So, in "page":
   order. Said in the node's log, once a load;
 - the host unread, or too short: today's rule, the oldest real use
   unloaded — the host's own OOM killer is what the floor stands above;
+- NEVER FURTHER OVER THE CARD THAN WAS MEASURED, AND NEVER INTO A CONTEXT'S
+  ROOM (the architecture session's blocking point, 2026-11-24). A model
+  whose context is made on demand reserves it from the card at each
+  request, and a reservation the card refuses KILLS its backend
+  (`UR_RESULT_ERROR_OUT_OF_DEVICE_MEMORY` at ggml-sycl's pool: München,
+  against the 35B's system-allocated pages). The driver pages lazily — it
+  fills the card first — so no rule here can keep the working-memory
+  reserve FREE on the card; what can be held is the envelope that was
+  measured: the loaded models at their largest plus the load may exceed
+  the card by `page_over_gib` at most (3; S5 held 3.5 with a 1.9 GiB
+  context made on demand in it), and the host must keep its floor AND a
+  context's worth above it (`resident.CONTEXT_RESERVE`), since a context
+  made on a full card pushes as much of something else to the host. Past
+  either, the unload. The bound is raised by a measurement, the engine's
+  refusal made survivable by a patch — neither is here;
 - THE CALLER SAYS IT (the architecture session's review): the keeper's own
   preload, a run check's and a gate's load keep today's rule — a preload is
   never urgent, and what is preloaded must not push what is in use off the
@@ -221,22 +236,38 @@ def host_available() -> int | None:
     return None
 
 
-def rule() -> tuple[str, int]:
-    """(`[models] make_room`, the host floor in bytes) as the node's file
-    says now; a file that does not load is today's rule."""
+def rule() -> tuple[str, int, int]:
+    """(`[models] make_room`, the host floor, the most over the card — both
+    in bytes) as the node's file says now; a file that does not load is
+    today's rule."""
     from app import platform_config
     try:
         m = platform_config.load().models
-        return m.make_room, m.page_floor_gib * GIB
+        return m.make_room, m.page_floor_gib * GIB, m.page_over_gib * GIB
     except Exception:   # noqa: BLE001 — unread: nothing changes
-        return "unload", 0
+        return "unload", 0, 0
 
 
-def _page(server: str, *, need: int, free: int, t: float, for_what: str,
+def committed(server: str) -> int | None:
+    """The card as its loaded models could fill it: each at the LARGEST it
+    was seen holding (a paged-out model reads small now, and a model whose
+    context is made on demand holds it only while it works), those on
+    another card left out; None where the runner gives no sizes."""
+    from app import model_load, resident
+    held = model_load.held_sizes(server, max_age_s=model_load.INTERACTIVE_TTL_S)
+    if held is None:
+        return None
+    mem = resident._memory_now()
+    return sum(max(int(size or 0), mem.sizes.get((server, m)) or 0, model_load.size_vram(server, m) or 0)
+               for m, (_pid, size) in held.items() if (server, m) not in mem.elsewhere)
+
+
+def _page(server: str, *, need: int, free: int, total: int, used: int, t: float, for_what: str,
           loading: Iterable[str]) -> Outcome | None:
     """PAGE INSTEAD OF UNLOAD (the module's docstring): the Outcome of a
     load let over the line, or None where today's rule applies."""
-    mode, floor = rule()
+    from app import resident
+    mode, floor, over_max = rule()
     if mode != "page":
         return None
     keys = [(server, m) for m in loading]
@@ -244,12 +275,20 @@ def _page(server: str, *, need: int, free: int, t: float, for_what: str,
     if any(now - _no_page.get(k, float("-inf")) < PAGE_AGAIN_S for k in keys):
         return None                               # said when it failed
     short = need - free
+    reserve = resident.CONTEXT_RESERVE
     avail = host_available()
-    if avail is None or avail - short < floor:
+    held = committed(server)
+    # what the driver counts now stands under the sum: memory on the card that is no model of this runner
+    over = None if held is None else max(held, used) + need - total
+    why = ("the runner gives no sizes to count the card's commitment from" if over is None else
+           f"the card would be committed {over // MIB:,} MiB over its size, past the {over_max // MIB:,} MiB "
+           f"that were measured to hold" if over > over_max else
+           "the host's memory cannot be read" if avail is None else
+           f"the host has {avail // MIB:,} MiB available and would be under its floor of {floor // MIB:,} MiB "
+           f"plus a context's {reserve // MIB:,}" if avail - short - reserve < floor else None)
+    if why is not None:
         _say("info", f"card: {for_what} is {short // MIB:,} MiB over the {t:.2f} line and is not paged — "
-                     + ("the host's memory cannot be read" if avail is None else
-                        f"the host has {avail // MIB:,} MiB available and would be under its floor of "
-                        f"{floor // MIB:,} MiB") + ": room is made by unloading, as before")
+                     f"{why}: room is made by unloading, as before")
         return None
     _paged.update(keys)
     _say("info", f"card: nothing unloaded for {for_what} — {need // MIB:,} MiB needed, {max(0, free) // MIB:,} "
@@ -319,7 +358,8 @@ def make_room(server: str, *, need: int, horizon: float | None, for_what: str,
         if need <= free:
             return Outcome(True, need, free)
         if page:
-            paged = _page(server, need=need, free=free, t=t, for_what=for_what, loading=tuple(exclude))
+            paged = _page(server, need=need, free=free, total=total, used=used, t=t, for_what=for_what,
+                          loading=tuple(exclude))
             if paged is not None:
                 return paged
         # THE one `/system` read — or the cold load's own, a moment ago
